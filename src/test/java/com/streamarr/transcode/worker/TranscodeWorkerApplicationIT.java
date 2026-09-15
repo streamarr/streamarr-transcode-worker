@@ -12,14 +12,20 @@ import com.streamarr.transcode.worker.support.WorkerApplicationControlPlane;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.lang.management.ManagementFactory;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse.BodyHandlers;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardWatchEventKinds;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 import lombok.Builder;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -33,6 +39,47 @@ import org.junit.jupiter.params.provider.EnumSource;
 class TranscodeWorkerApplicationIT {
 
   @TempDir Path tempDir;
+
+  @Test
+  @DisplayName("Should serve Actuator liveness when the worker application starts")
+  void shouldServeActuatorLivenessWhenTheWorkerApplicationStarts() throws Exception {
+    try (var controlPlane = WorkerApplicationControlPlane.builder().build();
+        var client = HttpClient.newHttpClient()) {
+      var fixture =
+          ApplicationFixture.builder()
+              .port(controlPlane.port())
+              .ffprobe(versionOnlyFfprobe())
+              .build();
+      var processBuilder = applicationProcess(fixture);
+      processBuilder.environment().put("SERVER_PORT", "0");
+      var process = processBuilder.start();
+      try {
+        controlPlane.awaitRegistration();
+        var announcedPort =
+            Pattern.compile("Tomcat started on port (\\d+)")
+                .matcher(Files.readString(tempDir.resolve("worker.log")));
+        assertThat(announcedPort.find())
+            .as("the application reports its ephemeral HTTP port before registering")
+            .isTrue();
+        var response =
+            client.send(
+                HttpRequest.newBuilder(
+                        URI.create(
+                            "http://localhost:"
+                                + announcedPort.group(1)
+                                + "/actuator/health/liveness"))
+                    .timeout(Duration.ofSeconds(5))
+                    .GET()
+                    .build(),
+                BodyHandlers.ofString());
+
+        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(response.body()).contains("\"status\":\"UP\"");
+      } finally {
+        stop(process);
+      }
+    }
+  }
 
   @Test
   @DisplayName("Should return a source failure when a POSIX worker receives a Unicode source")
@@ -433,7 +480,7 @@ class TranscodeWorkerApplicationIT {
                 Map.entry(
                     "TRANSCODE_WORKER_SEGMENT_BASE_PATH", tempDir.resolve("segments").toString()),
                 Map.entry("TRANSCODE_WORKER_PLAINTEXT", "true"),
-                Map.entry("TRANSCODE_WORKER_HEALTH_PORT", "0"),
+                Map.entry("SERVER_PORT", "0"),
                 Map.entry("TRANSCODE_WORKER_FFMPEG_PATH", ffmpeg.toString()),
                 Map.entry("TRANSCODE_WORKER_FFPROBE_PATH", fixture.ffprobe().toString())));
     if (fixture.mutualTls()) {

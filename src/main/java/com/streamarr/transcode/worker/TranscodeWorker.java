@@ -77,7 +77,7 @@ public final class TranscodeWorker implements AutoCloseable {
   private WorkerSessionAccepted workerSession;
   private WorkerProbeSession probeSession;
   private CompletableFuture<Void> disconnected;
-  private final AtomicReference<WorkerHealthServer> healthServer = new AtomicReference<>();
+  private volatile WorkerResponseObserver responseObserver;
 
   public TranscodeWorker(TranscodeWorkerConfiguration configuration, FfmpegTranscodeEngine engine) {
     this(configuration, engine, Optional.empty(), new GrpcWorkerRuntime());
@@ -112,9 +112,6 @@ public final class TranscodeWorker implements AutoCloseable {
 
     var channelBuilder =
         runtime.channelBuilder(configuration, InetSocketAddress.createUnresolved(host, port));
-    var sessionHealth = new WorkerHealthServer(configuration.healthPort());
-    healthServer.set(sessionHealth);
-    sessionHealth.start();
     executor = Executors.newVirtualThreadPerTaskExecutor();
     // Client keepalive detects a half-open control-plane connection (server power loss, dropped
     // NAT mapping); without it an idle worker would wait on a dead session until TCP gives up.
@@ -133,22 +130,16 @@ public final class TranscodeWorker implements AutoCloseable {
             .executor(runtime.newProbeScope())
             .build();
     disconnected = new CompletableFuture<>();
-    requests =
-        TranscodeWorkerServiceGrpc.newStub(channel)
-            .establishWorkerSession(
-                new WorkerResponseObserver(accepted, sessionHealth, probeSession));
+    responseObserver = new WorkerResponseObserver(accepted, probeSession);
+    requests = TranscodeWorkerServiceGrpc.newStub(channel).establishWorkerSession(responseObserver);
     sessionRequests.set(requests);
     send(registration());
     accepted.get(CONNECTION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
   }
 
-  public int healthPort() {
-    var server = healthServer.get();
-    if (server == null) {
-      throw new IllegalStateException("Worker health server is not started");
-    }
-
-    return server.port();
+  public boolean hasAcceptedSession() {
+    var observer = responseObserver;
+    return observer != null && observer.sessionAccepted && !observer.sessionDisconnected.isDone();
   }
 
   public void awaitDisconnection() throws InterruptedException {
@@ -517,10 +508,7 @@ public final class TranscodeWorker implements AutoCloseable {
   }
 
   private synchronized Optional<WorkerProbeSession> closeConnection() {
-    var server = healthServer.get();
-    if (server != null) {
-      server.close();
-    }
+    responseObserver = null;
 
     if (channel == null) {
       return Optional.empty();
@@ -556,16 +544,13 @@ public final class TranscodeWorker implements AutoCloseable {
       implements StreamObserver<EstablishWorkerSessionResponse> {
 
     private final CompletableFuture<WorkerSessionAccepted> accepted;
-    private final WorkerHealthServer sessionHealth;
+    private volatile boolean sessionAccepted;
     private final WorkerProbeSession sessionProbes;
     private final CompletableFuture<Void> sessionDisconnected = disconnected;
 
     private WorkerResponseObserver(
-        CompletableFuture<WorkerSessionAccepted> accepted,
-        WorkerHealthServer sessionHealth,
-        WorkerProbeSession sessionProbes) {
+        CompletableFuture<WorkerSessionAccepted> accepted, WorkerProbeSession sessionProbes) {
       this.accepted = accepted;
-      this.sessionHealth = sessionHealth;
       this.sessionProbes = sessionProbes;
     }
 
@@ -573,7 +558,7 @@ public final class TranscodeWorker implements AutoCloseable {
     public void onNext(EstablishWorkerSessionResponse response) {
       if (response.hasSessionAccepted()) {
         workerSession = response.getSessionAccepted();
-        sessionHealth.sessionAccepted();
+        sessionAccepted = true;
         accepted.complete(workerSession);
         return;
       }
@@ -624,7 +609,7 @@ public final class TranscodeWorker implements AutoCloseable {
 
     @Override
     public void onError(Throwable throwable) {
-      sessionHealth.sessionDisconnected();
+      sessionAccepted = false;
       accepted.completeExceptionally(throwable);
       sessionProbes.shutdown();
       endSession(sessionProbes);
@@ -633,7 +618,7 @@ public final class TranscodeWorker implements AutoCloseable {
 
     @Override
     public void onCompleted() {
-      sessionHealth.sessionDisconnected();
+      sessionAccepted = false;
       sessionProbes.shutdown();
       if (!accepted.isDone()) {
         accepted.completeExceptionally(new IllegalStateException("Worker session closed"));

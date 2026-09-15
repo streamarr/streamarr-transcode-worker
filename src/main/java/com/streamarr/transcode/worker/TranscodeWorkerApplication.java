@@ -8,14 +8,36 @@ import com.streamarr.transcode.probe.FfprobeExecutor;
 import java.io.IOException;
 import java.lang.ProcessBuilder.Redirect;
 import java.nio.file.Path;
+import org.springframework.boot.ApplicationRunner;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.annotation.Bean;
+import org.springframework.core.NestedExceptionUtils;
 
-public final class TranscodeWorkerApplication {
+@SpringBootApplication(proxyBeanMethods = false)
+public class TranscodeWorkerApplication {
 
-  private TranscodeWorkerApplication() {}
+  public static void main(String[] args) throws InterruptedException {
+    try (var application = SpringApplication.run(TranscodeWorkerApplication.class, args)) {
+      application.getBean(TranscodeWorker.class).awaitDisconnection();
+    } catch (RuntimeException failure) {
+      if (NestedExceptionUtils.getMostSpecificCause(failure)
+          instanceof InterruptedException interruption) {
+        Thread.currentThread().interrupt();
+        throw interruption;
+      }
 
-  @SuppressWarnings("java:S1172") // The JVM entry-point signature requires the argument.
-  public static void main(String[] args) throws Exception {
-    var settings = TranscodeWorkerSettings.fromEnvironment(System.getenv());
+      throw failure;
+    }
+  }
+
+  @Bean
+  TranscodeWorkerSettings workerSettings() {
+    return TranscodeWorkerSettings.fromEnvironment(System.getenv());
+  }
+
+  @Bean(destroyMethod = "close")
+  TranscodeWorker transcodeWorker(TranscodeWorkerSettings settings) throws Exception {
     var capabilities =
         new TranscodeCapabilityService(
             settings.ffmpegPath(), command -> new ProcessBuilder(command).start());
@@ -33,13 +55,12 @@ public final class TranscodeWorkerApplication {
             new LocalFfmpegProcessManager(),
             capabilities);
     var ffprobe = FfprobeExecutor.forBinary(Path.of(settings.ffprobePath()));
-    try (var worker = new TranscodeWorker(settings.workerConfiguration(), engine, ffprobe)) {
-      var shutdownHook =
-          Thread.ofPlatform().name("transcode-worker-shutdown").unstarted(worker::close);
-      Runtime.getRuntime().addShutdownHook(shutdownHook);
-      worker.start(settings.controlPlaneHost(), settings.controlPlanePort());
-      worker.awaitDisconnection();
-    }
+    return new TranscodeWorker(settings.workerConfiguration(), engine, ffprobe);
+  }
+
+  @Bean
+  ApplicationRunner workerConnection(TranscodeWorker worker, TranscodeWorkerSettings settings) {
+    return _ -> worker.start(settings.controlPlaneHost(), settings.controlPlanePort());
   }
 
   private static void requireFfprobe(String ffprobePath) throws IOException, InterruptedException {

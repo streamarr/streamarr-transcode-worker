@@ -1,0 +1,24 @@
+spring:
+  application:
+    name: transcode-worker
+  threads:
+    virtual:
+      enabled: true
+
+server:
+  port: 9091
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      group:
+        liveness:
+          include: livenessState
+        readiness:
+          include: readinessState,workerSession

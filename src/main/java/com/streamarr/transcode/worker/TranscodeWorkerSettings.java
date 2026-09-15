@@ -28,7 +28,6 @@ record TranscodeWorkerSettings(
             .bootId(UUID.randomUUID())
             .availableSlots(positiveInteger(environment, PREFIX + "SLOTS", 1))
             .plaintext(plaintext)
-            .healthPort(integer(environment, PREFIX + "HEALTH_PORT", 9091))
             .tlsIdentity(tlsIdentity)
             .sourceNamespaces(Map.of(sourceNamespaceId, path(environment, PREFIX + "SOURCE_ROOT")))
             .segmentBasePath(

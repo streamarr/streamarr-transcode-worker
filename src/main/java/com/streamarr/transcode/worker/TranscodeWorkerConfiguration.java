@@ -14,7 +14,6 @@ public record TranscodeWorkerConfiguration(
     @NonNull UUID workerId,
     @NonNull UUID bootId,
     int availableSlots,
-    int healthPort,
     boolean plaintext,
     @NonNull Optional<PemTlsIdentity> tlsIdentity,
     @NonNull Map<UUID, Path> sourceNamespaces,
@@ -36,10 +35,6 @@ public record TranscodeWorkerConfiguration(
 
     if (plaintext && tlsIdentity.isPresent()) {
       throw new IllegalArgumentException("Plaintext workers must not configure a TLS identity");
-    }
-
-    if (healthPort < 0 || healthPort > 65_535) {
-      throw new IllegalArgumentException("Worker health port must be between 0 and 65535");
     }
 
     sourceNamespaces = Map.copyOf(sourceNamespaces);
