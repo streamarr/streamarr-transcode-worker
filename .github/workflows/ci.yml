@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify worker
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: zulu
+          java-version: '25'
+          cache: maven
+      - uses: ./.github/actions/prepare-ffmpeg
+      - name: Verify redistribution tooling
+        run: node --test --experimental-test-coverage --test-coverage-lines=90 --test-coverage-branches=90 --test-coverage-functions=90 buildpacks/ffmpeg/test/*.test.mjs
+      - name: Build and test the executable worker
+        run: ./mvnw -B clean verify
+
+  smoke:
+    name: Verify real FFmpeg execution
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: zulu
+          java-version: '25'
+          cache: maven
+      - uses: ./.github/actions/setup-ffmpeg
+      - name: Exercise the worker with real media processes
+        run: ./mvnw -B test -Dtest=WorkerMediaSmokeTest -Dsurefire.excludedGroups=
+
+  build:
+    name: build
+    if: always()
+    needs: [verify, smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require successful verification and smoke tests
+        env:
+          VERIFY_RESULT: ${{ needs.verify.result }}
+          SMOKE_RESULT: ${{ needs.smoke.result }}
+        run: |
+          test "$VERIFY_RESULT" = success
+          test "$SMOKE_RESULT" = success
