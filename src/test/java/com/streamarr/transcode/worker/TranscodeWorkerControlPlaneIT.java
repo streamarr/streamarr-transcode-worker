@@ -2,7 +2,6 @@ package com.streamarr.transcode.worker;
 
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.SOURCE_NAMESPACE_ID;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.remuxEngine;
-import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.tlsResource;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.workerConfigurationBuilder;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
@@ -38,9 +37,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.streamarr.transcode.fakes.FakeFfmpegProcessManager;
 import io.grpc.Server;
-import io.grpc.netty.shaded.io.grpc.netty.GrpcSslContexts;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
-import io.grpc.netty.shaded.io.netty.handler.ssl.ClientAuth;
 import io.grpc.stub.StreamObserver;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -378,15 +375,7 @@ class TranscodeWorkerControlPlaneIT {
     }
 
     private void start() throws Exception {
-      var sslContext =
-          GrpcSslContexts.forServer(
-                  tlsResource("server-cert.pem").toFile(),
-                  tlsResource("server-key.fixture").toFile())
-              .trustManager(tlsResource("ca-cert.pem").toFile())
-              .clientAuth(ClientAuth.REQUIRE)
-              .build();
-      server =
-          NettyServerBuilder.forPort(0).sslContext(sslContext).addService(service).build().start();
+      server = NettyServerBuilder.forPort(0).addService(service).build().start();
     }
 
     private int port() {

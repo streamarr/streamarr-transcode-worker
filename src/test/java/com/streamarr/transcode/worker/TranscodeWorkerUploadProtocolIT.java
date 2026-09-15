@@ -32,15 +32,11 @@ import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
 import com.streamarr.transcode.engine.TranscodeCapabilityService;
 import com.streamarr.transcode.fakes.FakeFfmpegProcessManager;
 import com.streamarr.transcode.fakes.FakeSegmentProducingFfmpegProcessManager;
-import com.streamarr.transcode.tls.PemTlsIdentity;
 import io.grpc.Server;
-import io.grpc.netty.shaded.io.grpc.netty.GrpcSslContexts;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
-import io.grpc.netty.shaded.io.netty.handler.ssl.ClientAuth;
 import io.grpc.stub.ServerCallStreamObserver;
 import io.grpc.stub.StreamObserver;
 import java.io.IOException;
-import java.net.URISyntaxException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
@@ -165,24 +161,16 @@ class TranscodeWorkerUploadProtocolIT {
   }
 
   private TranscodeWorker worker(
-      FakeSegmentProducingFfmpegProcessManager processManager, Path mediaRoot)
-      throws URISyntaxException {
+      FakeSegmentProducingFfmpegProcessManager processManager, Path mediaRoot) {
     return worker(remuxEngine(processManager), mediaRoot);
   }
 
-  private TranscodeWorker worker(FfmpegTranscodeEngine engine, Path mediaRoot)
-      throws URISyntaxException {
+  private TranscodeWorker worker(FfmpegTranscodeEngine engine, Path mediaRoot) {
     var configuration =
         TranscodeWorkerConfiguration.builder()
             .workerId(WORKER_ID)
             .bootId(UUID.randomUUID())
             .availableSlots(1)
-            .tlsIdentity(
-                PemTlsIdentity.builder()
-                    .certificate(resource("worker-cert.pem"))
-                    .privateKey(resource("worker-key.fixture"))
-                    .trustBundle(resource("ca-cert.pem"))
-                    .build())
             .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, mediaRoot))
             .segmentBasePath(tempDir.resolve("segments"))
             .build();
@@ -240,12 +228,6 @@ class TranscodeWorkerUploadProtocolIT {
         .setMostSignificantBits(value.getMostSignificantBits())
         .setLeastSignificantBits(value.getLeastSignificantBits())
         .build();
-  }
-
-  private Path resource(String name) throws URISyntaxException {
-    var url = getClass().getResource("/tls/" + name);
-    assertThat(url).as("TLS resource %s must exist", name).isNotNull();
-    return Path.of(url.toURI());
   }
 
   private static final class ControllableUploadService
@@ -381,14 +363,7 @@ class TranscodeWorkerUploadProtocolIT {
     }
 
     private void start() throws Exception {
-      var sslContext =
-          GrpcSslContexts.forServer(
-                  resource("server-cert.pem").toFile(), resource("server-key.fixture").toFile())
-              .trustManager(resource("ca-cert.pem").toFile())
-              .clientAuth(ClientAuth.REQUIRE)
-              .build();
-      server =
-          NettyServerBuilder.forPort(0).sslContext(sslContext).addService(service).build().start();
+      server = NettyServerBuilder.forPort(0).addService(service).build().start();
     }
 
     private int port() {
