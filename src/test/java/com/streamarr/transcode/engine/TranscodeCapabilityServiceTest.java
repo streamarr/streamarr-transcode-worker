@@ -3,10 +3,17 @@ package com.streamarr.transcode.engine;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
+import java.util.ArrayDeque;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
+import lombok.Builder;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 
 @Tag("UnitTest")
 @DisplayName("Transcode Capability Service Tests")
@@ -180,6 +187,175 @@ class TranscodeCapabilityServiceTest {
   }
 
   @Test
+  @DisplayName("Should use software when a compiled hardware encoder cannot encode frames")
+  void shouldUseSoftwareWhenACompiledHardwareEncoderCannotEncodeFrames() {
+    var outputs =
+        Map.of(
+            "ffmpeg", createProcess("ffmpeg version 8.1.2", 0),
+            "encoders", createProcess("V....D h264_vaapi VAAPI H.264 encoder", 0),
+            "hwaccels", createProcess("Hardware acceleration methods:\nvaapi\n", 0),
+            "h264_vaapi", createProcess("No usable device", 218));
+    var service =
+        new TranscodeCapabilityService("ffmpeg", command -> resolveProcess(command, outputs));
+
+    service.detectCapabilities();
+
+    assertThat(service.isFfmpegAvailable()).isTrue();
+    assertThat(service.getHardwareEncodingCapability().available()).isFalse();
+    assertThat(service.getHardwareEncodingCapability().encoders()).isEmpty();
+    assertThat(service.resolveEncoder("h264")).isEqualTo("libx264");
+  }
+
+  @Test
+  @DisplayName("Should retain usable hardware when another compiled encoder fails")
+  void shouldRetainUsableHardwareWhenAnotherCompiledEncoderFails() {
+    var outputs =
+        Map.of(
+            "ffmpeg", createProcess("ffmpeg version 8.1.2", 0),
+            "encoders",
+                createProcess(
+                    """
+                V....D h264_vaapi VAAPI H.264 encoder
+                V....D h264_nvenc NVENC H.264 encoder
+                """,
+                    0),
+            "hwaccels", createProcess("Hardware acceleration methods:\ncuda\n", 0),
+            "h264_vaapi", createProcess("No usable device", 218),
+            "h264_nvenc", createProcess("", 0));
+    var service =
+        new TranscodeCapabilityService("ffmpeg", command -> resolveProcess(command, outputs));
+
+    service.detectCapabilities();
+
+    assertThat(service.getHardwareEncodingCapability().available()).isTrue();
+    assertThat(service.getHardwareEncodingCapability().encoders()).containsExactly("h264_nvenc");
+    assertThat(service.resolveEncoder("h264")).isEqualTo("h264_nvenc");
+  }
+
+  @Test
+  @DisplayName("Should terminate encoder validation when it exceeds its deadline")
+  void shouldTerminateEncoderValidationWhenItExceedsItsDeadline() {
+    var encoderProcess = TimedEncoderProcess.builder().interrupted(false).build();
+    var outputs =
+        Map.of(
+            "ffmpeg", createProcess("ffmpeg version 8.1.2", 0),
+            "encoders", createProcess("V....D h264_nvenc NVENC H.264 encoder", 0),
+            "h264_nvenc", encoderProcess);
+    var service =
+        new TranscodeCapabilityService("ffmpeg", command -> resolveProcess(command, outputs));
+
+    service.detectCapabilities();
+
+    assertThat(encoderProcess.isAlive()).isFalse();
+    assertThat(service.resolveEncoder("h264")).isEqualTo("libx264");
+  }
+
+  @Test
+  @ExtendWith(OutputCaptureExtension.class)
+  @DisplayName("Should report incomplete cleanup when encoder validation does not terminate")
+  void shouldReportIncompleteCleanupWhenEncoderValidationDoesNotTerminate(CapturedOutput output) {
+    var encoderProcess = TimedEncoderProcess.builder().ignoresTermination(true).build();
+    var outputs =
+        Map.of(
+            "ffmpeg", createProcess("ffmpeg version 8.1.2", 0),
+            "encoders", createProcess("V....D h264_nvenc NVENC H.264 encoder", 0),
+            "h264_nvenc", encoderProcess);
+    var service =
+        new TranscodeCapabilityService("ffmpeg", command -> resolveProcess(command, outputs));
+
+    service.detectCapabilities();
+
+    assertThat(service.resolveEncoder("h264")).isEqualTo("libx264");
+    assertThat(output).contains("Hardware encoder validation did not exit after termination");
+  }
+
+  @Test
+  @DisplayName("Should terminate encoder validation when detection is interrupted")
+  void shouldTerminateEncoderValidationWhenDetectionIsInterrupted() {
+    var encoderProcess = TimedEncoderProcess.builder().interrupted(true).build();
+    var outputs =
+        Map.of(
+            "ffmpeg", createProcess("ffmpeg version 8.1.2", 0),
+            "encoders", createProcess("V....D h264_nvenc NVENC H.264 encoder", 0),
+            "h264_nvenc", encoderProcess);
+    var service =
+        new TranscodeCapabilityService("ffmpeg", command -> resolveProcess(command, outputs));
+
+    try {
+      service.detectCapabilities();
+
+      assertThat(Thread.currentThread().isInterrupted()).isTrue();
+      assertThat(encoderProcess.isAlive()).isFalse();
+      assertThat(service.resolveEncoder("h264")).isEqualTo("libx264");
+    } finally {
+      Thread.interrupted();
+    }
+  }
+
+  @Test
+  @DisplayName("Should leave remaining encoders unstarted when validation is interrupted")
+  void shouldLeaveRemainingEncodersUnstartedWhenValidationIsInterrupted() {
+    var validationProcesses =
+        new ArrayDeque<Process>(
+            List.of(TimedEncoderProcess.builder().interrupted(true).build(), createProcess("", 0)));
+    var outputs =
+        Map.of(
+            "ffmpeg", createProcess("ffmpeg version 8.1.2", 0),
+            "encoders",
+                createProcess(
+                    """
+                V....D h264_nvenc NVENC H.264 encoder
+                V....D h264_qsv QSV H.264 encoder
+                """,
+                    0),
+            "hwaccels", createProcess("Hardware acceleration methods:\ncuda\nqsv\n", 0));
+    var service =
+        new TranscodeCapabilityService(
+            "ffmpeg",
+            command -> {
+              if (List.of(command).contains("-c:v")) {
+                return validationProcesses.removeFirst();
+              }
+
+              return resolveProcess(command, outputs);
+            });
+
+    try {
+      service.detectCapabilities();
+
+      assertThat(validationProcesses).hasSize(1);
+      assertThat(Thread.currentThread().isInterrupted()).isTrue();
+      assertThat(service.getHardwareEncodingCapability().encoders()).isEmpty();
+    } finally {
+      Thread.interrupted();
+    }
+  }
+
+  @Test
+  @DisplayName("Should use software when encoder validation cannot start")
+  void shouldUseSoftwareWhenEncoderValidationCannotStart() {
+    var outputs =
+        Map.of(
+            "ffmpeg", createProcess("ffmpeg version 8.1.2", 0),
+            "encoders", createProcess("V....D h264_nvenc NVENC H.264 encoder", 0));
+    var service =
+        new TranscodeCapabilityService(
+            "ffmpeg",
+            command -> {
+              if (List.of(command).contains("-c:v")) {
+                throw new IOException("Cannot launch validation process");
+              }
+
+              return resolveProcess(command, outputs);
+            });
+
+    service.detectCapabilities();
+
+    assertThat(service.isFfmpegAvailable()).isTrue();
+    assertThat(service.resolveEncoder("h264")).isEqualTo("libx264");
+  }
+
+  @Test
   @DisplayName("Should detect NVENC capability when NVENC encoders are available")
   void shouldDetectNvencCapabilityWhenNvencEncodersAreAvailable() {
     var encoderOutput =
@@ -297,6 +473,11 @@ class TranscodeCapabilityServiceTest {
 
     if (cmdStr.contains("-encoders")) {
       return outputs.get("encoders");
+    }
+
+    var encoderIndex = List.of(command).indexOf("-c:v");
+    if (encoderIndex >= 0) {
+      return outputs.getOrDefault(command[encoderIndex + 1], createProcess("", 0));
     }
 
     return createProcess("", 1);
@@ -431,5 +612,44 @@ class TranscodeCapabilityServiceTest {
 
   private Process createProcess(String stdout, int exitCode) {
     return new FakeProcess(stdout, exitCode);
+  }
+
+  private static final class TimedEncoderProcess extends FakeProcess {
+
+    private final boolean interrupted;
+    private final boolean ignoresTermination;
+    private boolean alive = true;
+    private boolean terminationRequested;
+
+    @Builder
+    private TimedEncoderProcess(boolean interrupted, boolean ignoresTermination) {
+      super("", 0);
+      this.interrupted = interrupted;
+      this.ignoresTermination = ignoresTermination;
+    }
+
+    @Override
+    public boolean waitFor(long timeout, TimeUnit unit) throws InterruptedException {
+      if (terminationRequested && !ignoresTermination) {
+        alive = false;
+        return true;
+      }
+
+      if (interrupted) {
+        throw new InterruptedException("Encoder validation interrupted");
+      }
+
+      return false;
+    }
+
+    @Override
+    public boolean isAlive() {
+      return alive;
+    }
+
+    @Override
+    public void destroy() {
+      terminationRequested = true;
+    }
   }
 }

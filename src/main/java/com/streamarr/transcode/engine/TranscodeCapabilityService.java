@@ -7,6 +7,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
@@ -179,7 +180,14 @@ public class TranscodeCapabilityService {
       }
 
       process.waitFor();
-      return Set.copyOf(encoders);
+      var usableEncoders = new HashSet<String>();
+      for (var encoder : encoders) {
+        if (canEncodeCpuFrames(encoder)) {
+          usableEncoders.add(encoder);
+        }
+      }
+
+      return Set.copyOf(usableEncoders);
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       log.debug("Hardware encoder detection interrupted", e);
@@ -187,6 +195,56 @@ public class TranscodeCapabilityService {
     } catch (Exception e) {
       log.debug("Hardware encoder detection failed", e);
       return Set.of();
+    }
+  }
+
+  private boolean canEncodeCpuFrames(String encoder) throws InterruptedException {
+    try {
+      // Match the command builder's CPU scaling path. Compiled encoders may need unavailable
+      // devices.
+      var process =
+          processFactory.create(
+              new String[] {
+                ffmpegPath,
+                "-nostdin",
+                "-v",
+                "quiet",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=size=320x240:rate=30",
+                "-vf",
+                "scale=-2:240",
+                "-frames:v",
+                "1",
+                "-an",
+                "-c:v",
+                encoder,
+                "-f",
+                "null",
+                "-"
+              });
+      try {
+        return process.waitFor(10, TimeUnit.SECONDS) && process.exitValue() == 0;
+      } finally {
+        terminateValidation(process);
+      }
+    } catch (InterruptedException e) {
+      throw e;
+    } catch (Exception e) {
+      log.debug("Hardware encoder validation failed for {}", encoder, e);
+      return false;
+    }
+  }
+
+  private void terminateValidation(Process process) throws InterruptedException {
+    if (!process.isAlive()) {
+      return;
+    }
+
+    process.destroyForcibly();
+    if (!process.waitFor(1, TimeUnit.SECONDS)) {
+      log.warn("Hardware encoder validation did not exit after termination");
     }
   }
 
