@@ -3,10 +3,11 @@
 
 set -euo pipefail
 
-image="${1:?Usage: verify-ffmpeg-image.sh <image> <version> <source> <revision>}"
-expected_version="${2:?Usage: verify-ffmpeg-image.sh <image> <version> <source> <revision>}"
-expected_source="${3:?Usage: verify-ffmpeg-image.sh <image> <version> <source> <revision>}"
-expected_revision="${4:?Usage: verify-ffmpeg-image.sh <image> <version> <source> <revision>}"
+image="${1:?Usage: verify-ffmpeg-image.sh <image> <version> <source> <revision> <contract>}"
+expected_version="${2:?Usage: verify-ffmpeg-image.sh <image> <version> <source> <revision> <contract>}"
+expected_source="${3:?Usage: verify-ffmpeg-image.sh <image> <version> <source> <revision> <contract>}"
+expected_revision="${4:?Usage: verify-ffmpeg-image.sh <image> <version> <source> <revision> <contract>}"
+expected_contract="${5:?Usage: verify-ffmpeg-image.sh <image> <version> <source> <revision> <contract>}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repository_root="$(cd "${script_dir}/../../.." && pwd)"
 lock_file="${repository_root}/buildpacks/ffmpeg/ffmpeg.lock"
@@ -37,6 +38,7 @@ verify_label() {
 verify_label org.opencontainers.image.version "${expected_version}"
 verify_label org.opencontainers.image.source "${expected_source}"
 verify_label org.opencontainers.image.revision "${expected_revision}"
+verify_label org.streamarr.contract.version "${expected_contract}"
 
 EXPECTED_FFMPEG_VERSION="${expected_ffmpeg_version}" \
   docker run --rm --interactive --env EXPECTED_FFMPEG_VERSION \

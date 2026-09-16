@@ -22,4 +22,4 @@ pack build "$image" \
   --path .
 
 .github/actions/pack-build/verify-ffmpeg-image.sh "$image" "$revision" \
-  https://github.com/streamarr/streamarr-transcode-worker "$revision"
+  https://github.com/streamarr/streamarr-transcode-worker "$revision" "$contract"

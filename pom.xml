@@ -328,6 +328,7 @@
                 <configuration>
                     <argLine>@{failsafe.jacoco.args} ${native.access.args}</argLine>
                     <excludedGroups>${failsafe.excludedGroups}</excludedGroups>
+                    <failIfNoTests>true</failIfNoTests>
                 </configuration>
                 <executions>
                     <execution>

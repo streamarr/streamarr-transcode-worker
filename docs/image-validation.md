@@ -17,12 +17,13 @@ Build and validate a local image with Java 25, the Node version in
 
 The build validates FFmpeg notices and checksums, preserves the license and source materials,
 and checks H.264/AAC HLS and AV1 encoding inside the resulting image. OCI labels record the
-source commit and the pinned Buf SDK version. These commands do not publish the image.
+source commit. The `org.streamarr.contract.version` label records the pinned Buf SDK version.
+Validation checks these labels against the expected values. These commands do not publish the image.
 
 `WorkerImageIT` starts the actual Boot image beside a scripted control plane in the same network
 namespace. It leaves the worker endpoint unset to exercise `127.0.0.1:9090`. It verifies:
 
-- Readiness stays down until the control plane accepts registration. Liveness stays up.
+- Readiness is down before the control plane accepts registration and up afterward. Liveness is up.
 - The image probes a real media file mounted read-only.
 - Remuxing and transcoding upload segments that decode successfully and have the expected dimensions.
 - A mounted executable can inject a typed transcode failure without making the worker unready.
@@ -30,7 +31,7 @@ namespace. It leaves the worker endpoint unset to exercise `127.0.0.1:9090`. It 
 
 The existing JVM smoke tests remain separate. The image tests carry the `ImageTest` tag and are
 excluded from ordinary Maven runs. CI runs them explicitly against native amd64 and arm64 images.
-The required `build` check includes both image jobs.
+The aggregate `build` check includes both image jobs.
 
 After human review and merge, a push to `main` publishes each tested native image to Docker Hub
 `streamarr/streamarr-transcode-worker`. The publishing steps reuse the tested image without rebuilding.

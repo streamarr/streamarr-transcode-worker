@@ -35,7 +35,7 @@ jobs:
         run: node --test --experimental-test-coverage --test-coverage-lines=90 --test-coverage-branches=90 --test-coverage-functions=90 buildpacks/ffmpeg/test/*.test.mjs
       - name: Verify image publication boundaries
         run: |
-          node --test .github/actions/pack-build/publication.test.mjs
+          node --test .github/actions/pack-build/*.test.mjs
           docker buildx imagetools create --help | grep -q -- --metadata-file
       - name: Verify analysis failure handling
         run: node --test .github/actions/sonar/test/*.test.mjs
