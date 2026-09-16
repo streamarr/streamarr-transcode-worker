@@ -10,14 +10,12 @@ FFmpeg tooling uses the Node version in `buildpacks/ffmpeg/.nvmrc`. The FFmpeg b
 
 ## Run locally
 
-Start Streamarr with its colocated worker listener enabled. Mount the same media directory in both processes. Then configure the worker and run the executable jar:
+Start Streamarr with its worker session listener bound to loopback. Mount the same media directory in both processes. Then configure the worker and run the executable jar:
 
 ```sh
 export TRANSCODE_WORKER_ID=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
 export TRANSCODE_WORKER_SOURCE_NAMESPACE_ID=cccccccc-cccc-cccc-cccc-cccccccccccc
 export TRANSCODE_WORKER_SOURCE_ROOT=/media
-export TRANSCODE_WORKER_CONTROL_PLANE_HOST=127.0.0.1
-export TRANSCODE_WORKER_PLAINTEXT=true
 java -jar target/transcode-worker-0.1.0-SNAPSHOT.jar
 ```
 
@@ -25,7 +23,9 @@ The source namespace must match the server's configuration. FFmpeg and ffprobe d
 
 Actuator listens on port 9091, configurable with Spring Boot's standard `SERVER_PORT`. `/actuator/health/liveness` follows process liveness. `/actuator/health/readiness` requires an accepted worker session. A full worker remains ready. Session loss ends active work and the process exits for its supervisor to restart it.
 
-The baseline retains the previous application TLS configuration for compatibility while the mesh follow-up is reviewed. Colocated Compose uses plaintext loopback in a shared network namespace. The mesh follow-up removes the transport flags and application certificates together.
+The worker connects to `127.0.0.1:9090` by default using plaintext gRPC. `TRANSCODE_WORKER_CONTROL_PLANE_HOST` and `TRANSCODE_WORKER_CONTROL_PLANE_PORT` set an explicit endpoint. Colocated Compose shares the server's network namespace and does not publish the worker port.
+
+Distributed Kubernetes deployments must protect the configured endpoint with mesh-enforced mTLS and worker ServiceAccount authorization. The application does not load certificates or select a transport mode. Worker UUIDs identify instances within that shared trust boundary. An authorized worker can claim another worker's UUID and replace its session. Use [the server's Kubernetes deployment](https://github.com/streamarr/streamarr-server/blob/main/deploy/kubernetes/distributed-transcoding.yaml) with the corresponding mesh transport change.
 
 ## Real media tests
 
@@ -49,4 +49,4 @@ Server-coupled integration tests and the 14 server playback/recovery smoke cases
 
 ## Architecture
 
-[ADR 0033](https://github.com/streamarr/streamarr-adr/blob/main/adr/0033-transcode-worker-is-a-separate-service.adoc) is the accepted extraction baseline. [ADR PR 14](https://github.com/streamarr/streamarr-adr/pull/14) proposes Spring Boot, Actuator health endpoints, and mesh protection for distributed worker connections. The extraction is delivered before the mesh transport follow-up. Server sources remain in place until a verified worker image is available.
+[ADR 0033](https://github.com/streamarr/streamarr-adr/blob/main/adr/0033-transcode-worker-is-a-separate-service.adoc) is the accepted extraction baseline. [ADR PR 14](https://github.com/streamarr/streamarr-adr/pull/14) proposes Spring Boot, Actuator health endpoints, and mesh protection for distributed worker connections. This transport follow-up depends on the independently reviewable extraction baseline. Server sources remain in place until a verified worker image is available.

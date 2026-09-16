@@ -1,19 +1,14 @@
 package com.streamarr.transcode.fixtures;
 
-import static org.assertj.core.api.Assertions.assertThat;
-
 import com.streamarr.transcode.engine.FfmpegCommandBuilder;
 import com.streamarr.transcode.engine.FfmpegProcessManager;
 import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
 import com.streamarr.transcode.engine.TranscodeCapabilityService;
-import com.streamarr.transcode.tls.PemTlsIdentity;
 import com.streamarr.transcode.worker.TranscodeWorkerConfiguration;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.UUID;
 
@@ -25,27 +20,9 @@ public final class RemoteWorkerFixtures {
 
   private RemoteWorkerFixtures() {}
 
-  public static Path tlsResource(String name) throws URISyntaxException {
-    var url = RemoteWorkerFixtures.class.getResource("/tls/" + name);
-    assertThat(url).as("TLS resource %s must exist", name).isNotNull();
-    return Path.of(url.toURI());
-  }
-
-  public static PemTlsIdentity tlsIdentity(String certificate, String privateKey)
-      throws URISyntaxException {
-    return PemTlsIdentity.builder()
-        .certificate(tlsResource(certificate))
-        .privateKey(tlsResource(privateKey))
-        .trustBundle(tlsResource("ca-cert.pem"))
-        .build();
-  }
-
   public static TranscodeWorkerConfiguration.TranscodeWorkerConfigurationBuilder
-      workerConfigurationBuilder() throws URISyntaxException {
-    return TranscodeWorkerConfiguration.builder()
-        .workerId(WORKER_ID)
-        .bootId(UUID.randomUUID())
-        .tlsIdentity(tlsIdentity("worker-cert.pem", "worker-key.fixture"));
+      workerConfigurationBuilder() {
+    return TranscodeWorkerConfiguration.builder().workerId(WORKER_ID).bootId(UUID.randomUUID());
   }
 
   public static FfmpegTranscodeEngine remuxEngine(FfmpegProcessManager processManager) {
