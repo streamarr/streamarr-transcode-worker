@@ -1,10 +1,8 @@
 package com.streamarr.transcode.worker;
 
-import com.streamarr.transcode.tls.PemTlsIdentity;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 import lombok.Builder;
 import lombok.NonNull;
@@ -14,8 +12,6 @@ public record TranscodeWorkerConfiguration(
     @NonNull UUID workerId,
     @NonNull UUID bootId,
     int availableSlots,
-    boolean plaintext,
-    @NonNull Optional<PemTlsIdentity> tlsIdentity,
     @NonNull Map<UUID, Path> sourceNamespaces,
     @NonNull Path segmentBasePath,
     Duration keepAliveTime,
@@ -29,34 +25,12 @@ public record TranscodeWorkerConfiguration(
       throw new IllegalArgumentException("Available slots must be positive");
     }
 
-    if (!plaintext && tlsIdentity.isEmpty()) {
-      throw new IllegalArgumentException("Mutual TLS worker identity is required");
-    }
-
-    if (plaintext && tlsIdentity.isPresent()) {
-      throw new IllegalArgumentException("Plaintext workers must not configure a TLS identity");
-    }
-
     sourceNamespaces = Map.copyOf(sourceNamespaces);
     if (keepAliveTime == null) {
       keepAliveTime = DEFAULT_KEEPALIVE_TIME;
     }
     if (keepAliveTimeout == null) {
       keepAliveTimeout = DEFAULT_KEEPALIVE_TIMEOUT;
-    }
-  }
-
-  public static class TranscodeWorkerConfigurationBuilder {
-    private Optional<PemTlsIdentity> tlsIdentity = Optional.empty();
-
-    public TranscodeWorkerConfigurationBuilder tlsIdentity(@NonNull PemTlsIdentity identity) {
-      return tlsIdentity(Optional.of(identity));
-    }
-
-    public TranscodeWorkerConfigurationBuilder tlsIdentity(
-        @NonNull Optional<PemTlsIdentity> identity) {
-      tlsIdentity = identity;
-      return this;
     }
   }
 }

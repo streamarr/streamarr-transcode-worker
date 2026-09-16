@@ -1,7 +1,6 @@
 package com.streamarr.transcode.worker;
 
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.SOURCE_NAMESPACE_ID;
-import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.tlsResource;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -223,15 +222,14 @@ class TranscodeWorkerApplicationIT {
 
   @Test
   @DisplayName(
-      "Should connect an environment-configured worker process over mTLS when starting a worker")
-  void shouldConnectEnvironmentConfiguredWorkerProcessOverMtlsWhenStartingWorker()
+      "Should connect an environment-configured worker process when starting with the local default")
+  void shouldConnectEnvironmentConfiguredWorkerProcessWhenStartingWithTheLocalDefault()
       throws Exception {
-    try (var controlPlane = WorkerApplicationControlPlane.builder().mutualTls(true).build()) {
+    try (var controlPlane = WorkerApplicationControlPlane.builder().build()) {
       var fixture =
           ApplicationFixture.builder()
               .port(controlPlane.port())
               .ffprobe(versionOnlyFfprobe())
-              .mutualTls(true)
               .build();
       var processBuilder = applicationProcess(fixture);
       var workerId = UUID.fromString(processBuilder.environment().get("TRANSCODE_WORKER_ID"));
@@ -251,12 +249,11 @@ class TranscodeWorkerApplicationIT {
   @Test
   @DisplayName("Should exit the worker process when the control plane disconnects")
   void shouldExitWorkerProcessWhenControlPlaneDisconnects() throws Exception {
-    try (var controlPlane = WorkerApplicationControlPlane.builder().mutualTls(true).build()) {
+    try (var controlPlane = WorkerApplicationControlPlane.builder().build()) {
       var fixture =
           ApplicationFixture.builder()
               .port(controlPlane.port())
               .ffprobe(versionOnlyFfprobe())
-              .mutualTls(true)
               .build();
       var process = applicationProcess(fixture).start();
       try {
@@ -472,30 +469,15 @@ class TranscodeWorkerApplicationIT {
         .environment()
         .putAll(
             Map.ofEntries(
-                Map.entry("TRANSCODE_WORKER_CONTROL_PLANE_HOST", "localhost"),
                 Map.entry("TRANSCODE_WORKER_CONTROL_PLANE_PORT", String.valueOf(fixture.port())),
                 Map.entry("TRANSCODE_WORKER_ID", UUID.randomUUID().toString()),
                 Map.entry("TRANSCODE_WORKER_SOURCE_NAMESPACE_ID", SOURCE_NAMESPACE_ID.toString()),
                 Map.entry("TRANSCODE_WORKER_SOURCE_ROOT", tempDir.toString()),
                 Map.entry(
                     "TRANSCODE_WORKER_SEGMENT_BASE_PATH", tempDir.resolve("segments").toString()),
-                Map.entry("TRANSCODE_WORKER_PLAINTEXT", "true"),
                 Map.entry("SERVER_PORT", "0"),
                 Map.entry("TRANSCODE_WORKER_FFMPEG_PATH", ffmpeg.toString()),
                 Map.entry("TRANSCODE_WORKER_FFPROBE_PATH", fixture.ffprobe().toString())));
-    if (fixture.mutualTls()) {
-      process.environment().put("TRANSCODE_WORKER_PLAINTEXT", "false");
-      process
-          .environment()
-          .put("TRANSCODE_WORKER_TLS_CERTIFICATE", tlsResource("worker-cert.pem").toString());
-      process
-          .environment()
-          .put("TRANSCODE_WORKER_TLS_PRIVATE_KEY", tlsResource("worker-key.fixture").toString());
-      process
-          .environment()
-          .put("TRANSCODE_WORKER_TLS_TRUST_BUNDLE", tlsResource("ca-cert.pem").toString());
-    }
-
     return process;
   }
 
@@ -534,7 +516,7 @@ class TranscodeWorkerApplicationIT {
   }
 
   @Builder
-  private record ApplicationFixture(int port, Path ffprobe, boolean mutualTls) {}
+  private record ApplicationFixture(int port, Path ffprobe) {}
 
   public static final class InterruptedStartup {
 
