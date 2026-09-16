@@ -18,4 +18,8 @@ The App's Client ID is on its settings page. Generate a private key there and sa
 
 ## Images
 
-CI publishes the exact tested amd64 and arm64 images after merges to `main`. Images remain pinned by commit and immutable digest. Release Please creates version tags and GitHub releases. It does not rebuild or retag container images. See [image validation](image-validation.md) for the published image records.
+CI publishes the exact tested amd64 and arm64 images after merges to `main`, with commit tags and recorded immutable digests. Release Please creates version tags and GitHub releases.
+
+The Release Publisher follows the server's release workflow. A published GitHub release triggers native amd64 and arm64 rebuilds from its validated tag. The tag must be stable `vX.Y.Z`, match the Maven version, and identify a commit already on `main`. Each rebuilt image passes media validation and `WorkerImageIT` before Docker Hub authentication and publication. The workflow publishes `X.Y.Z-amd64`, `X.Y.Z-arm64`, and the multi-architecture `X.Y.Z` tag. It updates `latest` only when GitHub identifies that release as latest.
+
+To retry publication, manually run Release Publisher with the existing published release tag. Retries rebuild the release and can replace its image tags. Consumers needing an immutable reference should pin the image digest. See [image validation](image-validation.md) for local validation and CI image records.
