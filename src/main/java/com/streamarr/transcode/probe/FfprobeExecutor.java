@@ -1,5 +1,7 @@
 package com.streamarr.transcode.probe;
 
+import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
+
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeContainerInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
@@ -17,10 +19,12 @@ import java.util.concurrent.Future;
 import java.util.function.Function;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 @RequiredArgsConstructor
+@Slf4j
 public final class FfprobeExecutor {
 
   public static final int PROBE_VERSION = 1;
@@ -68,7 +72,12 @@ public final class FfprobeExecutor {
 
     try {
       return execute(new Attempt(source, result));
-    } catch (Exception _) {
+    } catch (Exception failure) {
+      log.warn(
+          "ffprobe attempt {} failed for source {}",
+          fromProto(request.getProbeAttemptId()),
+          source,
+          failure);
       return result.setFailure(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED).build();
     }
   }
@@ -91,7 +100,7 @@ public final class FfprobeExecutor {
       throws ExecutionException {
     try {
       var exitCode = process.waitFor();
-      return interpret(objectMapper.readTree(output.get()), exitCode, attempt);
+      return readResult(output.get(), exitCode, attempt);
     } catch (InterruptedException _) {
       Thread.currentThread().interrupt();
       return attempt.result().setFailure(ProbeFailure.PROBE_FAILURE_CANCELLED).build();
@@ -107,14 +116,37 @@ public final class FfprobeExecutor {
     process.onExit().join();
   }
 
+  private ProbeAttemptResult readResult(byte[] output, int exitCode, Attempt attempt) {
+    try {
+      return interpret(objectMapper.readTree(output), exitCode, attempt);
+    } catch (Exception failure) {
+      log.warn(
+          "ffprobe attempt {} for source {} returned unusable output with exit code {}",
+          fromProto(attempt.result().getProbeAttemptId()),
+          attempt.source(),
+          exitCode,
+          failure);
+      return attempt.result().setFailure(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED).build();
+    }
+  }
+
   private ProbeAttemptResult interpret(JsonNode json, int exitCode, Attempt attempt) {
     var result = attempt.result();
     if (json == null || !json.isObject()) {
-      return result.setFailure(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED).build();
+      throw new IllegalArgumentException("ffprobe returned no result object");
     }
 
     if (exitCode != 0) {
-      return result.setFailure(failureFor(json.path("error").path("code").asInt())).build();
+      var error = json.path("error");
+      var errorCode = error.path("code").asInt();
+      log.warn(
+          "ffprobe attempt {} for source {} exited with code {}: error {} ({})",
+          fromProto(result.getProbeAttemptId()),
+          attempt.source(),
+          exitCode,
+          errorCode,
+          error.path("string").asString());
+      return result.setFailure(failureFor(errorCode)).build();
     }
 
     var media = parseMedia(json);
