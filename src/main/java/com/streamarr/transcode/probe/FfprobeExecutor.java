@@ -67,18 +67,17 @@ public final class FfprobeExecutor {
     }
 
     try {
-      var process = processFactory.apply(source);
-      return execute(process, result);
+      return execute(new Attempt(source, result));
     } catch (Exception _) {
       return result.setFailure(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED).build();
     }
   }
 
-  private ProbeAttemptResult execute(Process process, ProbeAttemptResult.Builder result)
-      throws ExecutionException {
+  private ProbeAttemptResult execute(Attempt attempt) throws ExecutionException {
+    var process = processFactory.apply(attempt.source());
     try (var readers = Executors.newVirtualThreadPerTaskExecutor()) {
       var output = readers.submit(() -> readOutput(process));
-      return collect(process, output, result);
+      return collect(process, output, attempt);
     }
   }
 
@@ -88,15 +87,14 @@ public final class FfprobeExecutor {
     }
   }
 
-  private ProbeAttemptResult collect(
-      Process process, Future<byte[]> output, ProbeAttemptResult.Builder result)
+  private ProbeAttemptResult collect(Process process, Future<byte[]> output, Attempt attempt)
       throws ExecutionException {
     try {
       var exitCode = process.waitFor();
-      return interpret(objectMapper.readTree(output.get()), exitCode, result);
+      return interpret(objectMapper.readTree(output.get()), exitCode, attempt);
     } catch (InterruptedException _) {
       Thread.currentThread().interrupt();
-      return result.setFailure(ProbeFailure.PROBE_FAILURE_CANCELLED).build();
+      return attempt.result().setFailure(ProbeFailure.PROBE_FAILURE_CANCELLED).build();
     } finally {
       if (process.isAlive()) {
         terminate(process);
@@ -109,8 +107,8 @@ public final class FfprobeExecutor {
     process.onExit().join();
   }
 
-  private ProbeAttemptResult interpret(
-      JsonNode json, int exitCode, ProbeAttemptResult.Builder result) {
+  private ProbeAttemptResult interpret(JsonNode json, int exitCode, Attempt attempt) {
+    var result = attempt.result();
     if (json == null || !json.isObject()) {
       return result.setFailure(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED).build();
     }
@@ -216,4 +214,6 @@ public final class FfprobeExecutor {
         .setNanos((int) (millis % 1000) * 1_000_000)
         .build();
   }
+
+  private record Attempt(Path source, ProbeAttemptResult.Builder result) {}
 }
