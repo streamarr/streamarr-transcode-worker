@@ -1,0 +1,7 @@
+target/
+.gitnexus/
+.DS_Store
+.idea/
+*.iml
+.env
+/buildpacks/ffmpeg/generated/

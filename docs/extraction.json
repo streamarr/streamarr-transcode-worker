@@ -1,0 +1,26 @@
+{
+  "sourceRepository": "https://github.com/streamarr/streamarr-server",
+  "sourceRevision": "3fe7b46021cdee200bc8dfbde74bf254b21235f6",
+  "historyTool": "git-filter-repo 2.47.0",
+  "historyPaths": "extraction-paths.txt",
+  "commitMap": "extraction-commit-map.txt",
+  "retainedServerIntegrationTests": [
+    "TranscodeWorkerIT",
+    "TranscodeWorkerProbeIT",
+    "TranscodeWorkerKeepaliveIT",
+    "TranscodeWorkerShutdownIT",
+    "PlaintextTranscodeWorkerIT",
+    "TranscodeWorkerHealthIT"
+  ],
+  "retainedServerSmokeTests": [
+    "HlsStreamingSmokeTest",
+    "HlsRecoveryContinuitySmokeTest"
+  ],
+  "contract": {
+    "module": "buf.build/streamarr-org/transcode",
+    "commit": "f6fcaec276f544c1b548adbd291c17e9",
+    "grpcJava": "1.84.0.2.20260914130423.f6fcaec276f5"
+  },
+  "filteredHistoryRevision": "833195f7c2c3b1a268018da8ce5517cb31944d46",
+  "historyCommits": 137
+}
