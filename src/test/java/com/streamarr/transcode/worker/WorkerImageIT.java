@@ -27,6 +27,7 @@ import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Duration;
 import java.util.UUID;
 import lombok.Builder;
+import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -35,12 +36,14 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.testcontainers.containers.BindMode;
 import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.containers.output.Slf4jLogConsumer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.utility.MountableFile;
 import tools.jackson.databind.ObjectMapper;
 
 @Tag("ImageTest")
 @DisplayName("Worker Image Tests")
+@Slf4j
 class WorkerImageIT {
 
   @TempDir Path media;
@@ -61,7 +64,11 @@ class WorkerImageIT {
       await()
           .atMost(Duration.ofSeconds(10))
           .untilAsserted(() -> assertThat(image.health("readiness").statusCode()).isEqualTo(200));
-      assertThat(image.worker.execInContainer("id", "-u").getStdout().trim()).isNotEqualTo("0");
+      var identity = image.worker.execInContainer("id", "-u");
+      assertThat(identity.getExitCode()).as("id -u failed: %s", identity.getStderr()).isZero();
+      var uid = identity.getStdout().trim();
+      assertThat(uid).as("id -u output").matches("[0-9]+");
+      assertThat(Long.parseLong(uid)).as("worker UID").isPositive();
     }
   }
 
@@ -239,6 +246,7 @@ class WorkerImageIT {
     return "/media/scripted-ffmpeg";
   }
 
+  @DisplayName("Worker Image Fixture")
   private static final class ImageFixture implements AutoCloseable {
 
     private final UUID workerId = UUID.randomUUID();
@@ -257,6 +265,7 @@ class WorkerImageIT {
       controlPlane =
           new GenericContainer<>(image)
               .withImagePullPolicy(_ -> false)
+              .withLogConsumer(new Slf4jLogConsumer(log).withPrefix("control-plane-" + workerId))
               .withCopyFileToContainer(
                   MountableFile.forHostPath("target/test-classes"), "/test-classes")
               .withExposedPorts(8082, 9091)
@@ -273,6 +282,7 @@ class WorkerImageIT {
       worker =
           new GenericContainer<>(image)
               .withImagePullPolicy(_ -> false)
+              .withLogConsumer(new Slf4jLogConsumer(log).withPrefix("worker-" + workerId))
               .withNetworkMode("container:" + controlPlane.getContainerId())
               .withEnv("TRANSCODE_WORKER_ID", workerId.toString())
               .withEnv("TRANSCODE_WORKER_SOURCE_NAMESPACE_ID", SOURCE_NAMESPACE_ID.toString())
@@ -315,7 +325,9 @@ class WorkerImageIT {
                   .POST(HttpRequest.BodyPublishers.ofByteArray(body))
                   .build(),
               HttpResponse.BodyHandlers.ofByteArray());
-      assertThat(response.statusCode()).isEqualTo(200);
+      assertThat(response.statusCode())
+          .as("Command %s failed: %s", path, new String(response.body(), StandardCharsets.UTF_8))
+          .isEqualTo(200);
       return response.body();
     }
 

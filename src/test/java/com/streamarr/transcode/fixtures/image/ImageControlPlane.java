@@ -22,6 +22,7 @@ import com.sun.net.httpserver.HttpServer;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.grpc.stub.StreamObserver;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
@@ -31,7 +32,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import lombok.extern.slf4j.Slf4j;
 
+@Slf4j
 public final class ImageControlPlane
     extends TranscodeWorkerServiceGrpc.TranscodeWorkerServiceImplBase {
 
@@ -62,13 +65,21 @@ public final class ImageControlPlane
     }
   }
 
-  private void exchange(HttpExchange exchange) {
-    try (exchange) {
-      var body = respond(exchange);
-      exchange.sendResponseHeaders(200, body.length);
-      exchange.getResponseBody().write(body);
+  private void exchange(HttpExchange exchange) throws IOException {
+    byte[] body;
+    var status = 200;
+    try {
+      body = respond(exchange);
     } catch (Exception failure) {
-      throw new IllegalStateException("Image control-plane request failed", failure);
+      log.warn(
+          "Image control-plane command {} failed", exchange.getRequestURI().getPath(), failure);
+      status = 500;
+      body = failure.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    try (exchange) {
+      exchange.sendResponseHeaders(status, body.length);
+      exchange.getResponseBody().write(body);
     }
   }
 
@@ -149,10 +160,19 @@ public final class ImageControlPlane
         }
         if (request.hasJobAttemptCompleted()) {
           completed.complete(request.getJobAttemptCompleted());
+          var cause =
+              new IllegalStateException(
+                  "Job completed before the expected result: " + request.getJobAttemptCompleted());
+          failed.completeExceptionally(cause);
+          started.completeExceptionally(cause);
         }
         if (request.hasJobAttemptFailed()) {
           failed.complete(request.getJobAttemptFailed());
-          completed.completeExceptionally(new AssertionError(request.getJobAttemptFailed()));
+          var cause =
+              new IllegalStateException(
+                  "Job failed before the expected result: " + request.getJobAttemptFailed());
+          completed.completeExceptionally(cause);
+          started.completeExceptionally(cause);
         }
         if (request.hasJobAttemptStarted()) {
           started.complete(request.getJobAttemptStarted());
@@ -161,17 +181,25 @@ public final class ImageControlPlane
 
       @Override
       public void onError(Throwable failure) {
-        disconnected.complete(true);
-        probe.completeExceptionally(failure);
-        completed.completeExceptionally(failure);
+        terminateSession(failure);
       }
 
       @Override
       public void onCompleted() {
-        disconnected.complete(true);
+        terminateSession(
+            new IllegalStateException("Worker session completed before the expected result"));
         responses.onCompleted();
       }
     };
+  }
+
+  private void terminateSession(Throwable failure) {
+    registration.completeExceptionally(failure);
+    probe.completeExceptionally(failure);
+    completed.completeExceptionally(failure);
+    failed.completeExceptionally(failure);
+    started.completeExceptionally(failure);
+    disconnected.complete(true);
   }
 
   @Override
