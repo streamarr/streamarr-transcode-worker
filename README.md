@@ -8,6 +8,8 @@ Use Java 25 and run `./mvnw verify`. The build runs independent unit and integra
 
 FFmpeg tooling uses the Node version in `buildpacks/ffmpeg/.nvmrc`. The FFmpeg buildpack, version lock, redistribution notices, and Node tests are retained together.
 
+[Release automation](docs/releases.md) manages Maven versions and GitHub releases. [Image validation](docs/image-validation.md) covers container tests and publication to Docker Hub.
+
 ## Run locally
 
 Start Streamarr with its worker session listener bound to loopback. Mount the same media directory in both processes. Then configure the worker and run the executable jar:
@@ -16,7 +18,8 @@ Start Streamarr with its worker session listener bound to loopback. Mount the sa
 export TRANSCODE_WORKER_ID=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
 export TRANSCODE_WORKER_SOURCE_NAMESPACE_ID=cccccccc-cccc-cccc-cccc-cccccccccccc
 export TRANSCODE_WORKER_SOURCE_ROOT=/media
-java -jar target/transcode-worker-0.1.0-SNAPSHOT.jar
+worker_version="$(./mvnw help:evaluate -Dexpression=project.version -q -DforceStdout)"
+java -jar "target/transcode-worker-${worker_version}.jar"
 ```
 
 The source namespace must match the server's configuration. FFmpeg and ffprobe default to executables on `PATH`. `TRANSCODE_WORKER_FFMPEG_PATH` and `TRANSCODE_WORKER_FFPROBE_PATH` accept explicit executable paths. Output defaults to a separate temporary directory and can be set with `TRANSCODE_WORKER_SEGMENT_BASE_PATH`.

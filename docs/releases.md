@@ -1,0 +1,21 @@
+# Releases
+
+Release Please manages the Maven version, changelog, and GitHub releases using the `streamarr-release` GitHub App. Stable release PRs require human review and merge. Only generated snapshot-version PRs are queued for automatic squash merge after required checks pass.
+
+The first release is `0.1.0`. Its changelog starts after the worker baseline at `a1ef061ef706bb5b5c59cb95417145d66636b8a7`, excluding imported server history. The manifest starts empty because the worker has no previous release. Keep release PR titles, bodies, and labels intact so Release Please can recognize merged releases.
+
+On each push to `main`, the workflow publishes any merged release before preparing the next version PR. A merged release that still has `autorelease: pending` stops the workflow with recovery instructions. After a stable release, the Maven strategy prepares the next `-SNAPSHOT` version.
+
+Use the repository's `behavioral:` and `structural:` commit subjects. Both appear in release notes alongside conventional feature, fix, performance, dependency, build, and revert entries. Release notes omit commit-author attribution. Generated version PRs use `chore(main): release ...` subjects and an empty squash commit body.
+
+## Repository setup
+
+- Include this repository in the `streamarr-release` App installation. The App needs Contents, Pull requests, and Issues write permissions.
+- Make `ORG_STREAMARR_RELEASE_CLIENT_ID` and `ORG_STREAMARR_RELEASE_PRIVATE_KEY` available as organization Actions secrets with access to this repository. The latter must contain the App's complete private-key PEM.
+- Enable repository auto-merge and require the aggregate `build` check on `main`. Keep the release App outside ruleset bypass lists. The aggregate check includes verification, SonarCloud, smoke tests, and both native image jobs.
+
+The App's Client ID is on its settings page. Generate a private key there and save the complete downloaded PEM as the private-key secret. Do not use a client secret in its place.
+
+## Images
+
+CI publishes the exact tested amd64 and arm64 images after merges to `main`. Images remain pinned by commit and immutable digest. Release Please creates version tags and GitHub releases. It does not rebuild or retag container images. See [image validation](image-validation.md) for the published image records.
