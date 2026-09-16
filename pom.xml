@@ -24,7 +24,8 @@
         <jacoco.version>0.8.15</jacoco.version>
         <surefire-failsafe-plugin.version>3.6.0</surefire-failsafe-plugin.version>
         <surefire.excludedGroups>SmokeTest</surefire.excludedGroups>
-        <failsafe.excludedGroups>SmokeTest</failsafe.excludedGroups>
+        <failsafe.excludedGroups>SmokeTest,ImageTest</failsafe.excludedGroups>
+        <testcontainers.version>2.0.5</testcontainers.version>
         <spotless.version>3.10.2</spotless.version>
         <checkstyle.version>13.11.0</checkstyle.version>
         <maven-checkstyle-plugin.version>3.6.0</maven-checkstyle-plugin.version>
@@ -47,6 +48,12 @@
         </repository>
     </repositories>
     <dependencies>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <version>${testcontainers.version}</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter</artifactId>

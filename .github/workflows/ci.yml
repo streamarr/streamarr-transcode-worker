@@ -52,16 +52,59 @@ jobs:
       - name: Exercise the worker with real media processes
         run: ./mvnw -B test -Dtest=WorkerMediaSmokeTest -Dsurefire.excludedGroups=
 
+  image:
+    name: Verify ${{ matrix.architecture }} worker image
+    needs: [verify, smoke]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            runner: ubuntu-24.04
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      WORKER_IMAGE: streamarr-worker:tested-${{ matrix.architecture }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: zulu
+          java-version: '25'
+          cache: maven
+      - uses: ./.github/actions/prepare-ffmpeg
+      - uses: buildpacks/github-actions/setup-pack@e3b14c6e906f91da358e01dc2849ce068188107f # v5.12.5
+      - name: Build the unpublished image and verify its media runtime
+        run: .github/actions/pack-build/build-worker-image.sh "$WORKER_IMAGE"
+      - name: Exercise the packaged worker through its public interfaces
+        run: >-
+          ./mvnw -B verify -Dtest=none -Dsurefire.failIfNoSpecifiedTests=false
+          -Dit.test=WorkerImageIT -Dfailsafe.excludedGroups=SmokeTest
+          -Dworker.image="$WORKER_IMAGE" -Djacoco.skip=true
+      - name: Preserve image test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: image-tests-${{ matrix.architecture }}
+          path: target/failsafe-reports
+          if-no-files-found: ignore
+
   build:
     name: build
     if: always()
-    needs: [verify, smoke]
+    needs: [verify, smoke, image]
     runs-on: ubuntu-latest
     steps:
       - name: Require successful verification and smoke tests
         env:
           VERIFY_RESULT: ${{ needs.verify.result }}
           SMOKE_RESULT: ${{ needs.smoke.result }}
+          IMAGE_RESULT: ${{ needs.image.result }}
         run: |
           test "$VERIFY_RESULT" = success
           test "$SMOKE_RESULT" = success
+          test "$IMAGE_RESULT" = success
