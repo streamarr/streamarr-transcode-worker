@@ -30,7 +30,6 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 import tools.jackson.databind.ObjectMapper;
 
@@ -42,8 +41,6 @@ public final class WorkerProbeFixtures {
     return TranscodeWorker.builder()
         .configuration(
             workerConfigurationBuilder()
-                .plaintext(true)
-                .tlsIdentity(Optional.empty())
                 .availableSlots(2)
                 .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, root))
                 .segmentBasePath(root.resolve("segments"))

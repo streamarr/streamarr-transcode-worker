@@ -1,14 +1,11 @@
 package com.streamarr.transcode.worker;
 
-import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.workerConfigurationBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.streamarr.transcode.tls.PemTlsIdentity;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -21,6 +18,21 @@ class TranscodeWorkerSettingsTest {
   private static final UUID WORKER_ID = UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
   private static final UUID SOURCE_NAMESPACE_ID =
       UUID.fromString("cccccccc-cccc-cccc-cccc-cccccccccccc");
+
+  @Test
+  @DisplayName("Should use the local endpoint when only worker identity and media are configured")
+  void shouldUseTheLocalEndpointWhenOnlyWorkerIdentityAndMediaAreConfigured() {
+    var environment =
+        Map.of(
+            "TRANSCODE_WORKER_ID", WORKER_ID.toString(),
+            "TRANSCODE_WORKER_SOURCE_NAMESPACE_ID", SOURCE_NAMESPACE_ID.toString(),
+            "TRANSCODE_WORKER_SOURCE_ROOT", "/media");
+
+    var settings = TranscodeWorkerSettings.fromEnvironment(environment);
+
+    assertThat(settings.controlPlaneHost()).isEqualTo("127.0.0.1");
+    assertThat(settings.controlPlanePort()).isEqualTo(9090);
+  }
 
   @Test
   @DisplayName(
@@ -36,39 +48,6 @@ class TranscodeWorkerSettingsTest {
     assertThat(worker.availableSlots()).isEqualTo(1);
     assertThat(worker.sourceNamespaces()).containsEntry(SOURCE_NAMESPACE_ID, Path.of("/media"));
     assertThat(worker.segmentBasePath().toString()).contains("streamarr-worker-segments");
-    assertThat(worker.tlsIdentity().orElseThrow().certificate())
-        .isEqualTo(Path.of("/tls/worker.crt"));
-    assertThat(worker.tlsIdentity().orElseThrow().privateKey())
-        .isEqualTo(Path.of("/tls/worker.key"));
-    assertThat(worker.tlsIdentity().orElseThrow().trustBundle()).isEqualTo(Path.of("/tls/ca.crt"));
-  }
-
-  @Test
-  @DisplayName("Should require exactly one transport mode when building worker configuration")
-  void shouldRequireExactlyOneTransportModeWhenBuildingWorkerConfiguration() throws Exception {
-    var builder =
-        workerConfigurationBuilder()
-            .availableSlots(1)
-            .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, Path.of("/media")))
-            .segmentBasePath(Path.of("/segments"))
-            .plaintext(true);
-
-    assertThatThrownBy(builder::build)
-        .isInstanceOf(IllegalArgumentException.class)
-        .hasMessage("Plaintext workers must not configure a TLS identity");
-
-    builder.plaintext(false).tlsIdentity(Optional.empty());
-
-    assertThatThrownBy(builder::build)
-        .isInstanceOf(IllegalArgumentException.class)
-        .hasMessage("Mutual TLS worker identity is required");
-  }
-
-  @Test
-  @DisplayName("Should reject an ambiguous transport mode when loading settings")
-  void shouldRejectAmbiguousTransportModeWhenLoadingSettings() {
-    assertInvalidSetting(
-        "TRANSCODE_WORKER_PLAINTEXT", "yes", "TRANSCODE_WORKER_PLAINTEXT must be true or false");
   }
 
   @Test
@@ -81,17 +60,6 @@ class TranscodeWorkerSettingsTest {
         .isEqualTo(second.workerConfiguration().workerId());
     assertThat(first.workerConfiguration().bootId())
         .isNotEqualTo(second.workerConfiguration().bootId());
-  }
-
-  @Test
-  @DisplayName("Should fail fast when the control plane host is missing")
-  void shouldFailFastWhenControlPlaneHostIsMissing() {
-    var environment = new HashMap<>(requiredEnvironment());
-    environment.remove("TRANSCODE_WORKER_CONTROL_PLANE_HOST");
-
-    assertThatThrownBy(() -> TranscodeWorkerSettings.fromEnvironment(environment))
-        .isInstanceOf(IllegalArgumentException.class)
-        .hasMessage("TRANSCODE_WORKER_CONTROL_PLANE_HOST is required");
   }
 
   @Test
@@ -124,12 +92,6 @@ class TranscodeWorkerSettingsTest {
             .workerId(UUID.randomUUID())
             .bootId(UUID.randomUUID())
             .availableSlots(0)
-            .tlsIdentity(
-                PemTlsIdentity.builder()
-                    .certificate(Path.of("worker.crt"))
-                    .privateKey(Path.of("worker.key"))
-                    .trustBundle(Path.of("ca.crt"))
-                    .build())
             .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, Path.of("/media")))
             .segmentBasePath(Path.of("/segments"));
 
@@ -197,12 +159,13 @@ class TranscodeWorkerSettingsTest {
 
   private Map<String, String> requiredEnvironment() {
     return Map.of(
-        "TRANSCODE_WORKER_CONTROL_PLANE_HOST", "streamarr-server",
-        "TRANSCODE_WORKER_ID", WORKER_ID.toString(),
-        "TRANSCODE_WORKER_SOURCE_NAMESPACE_ID", SOURCE_NAMESPACE_ID.toString(),
-        "TRANSCODE_WORKER_SOURCE_ROOT", "/media",
-        "TRANSCODE_WORKER_TLS_CERTIFICATE", "/tls/worker.crt",
-        "TRANSCODE_WORKER_TLS_PRIVATE_KEY", "/tls/worker.key",
-        "TRANSCODE_WORKER_TLS_TRUST_BUNDLE", "/tls/ca.crt");
+        "TRANSCODE_WORKER_CONTROL_PLANE_HOST",
+        "streamarr-server",
+        "TRANSCODE_WORKER_ID",
+        WORKER_ID.toString(),
+        "TRANSCODE_WORKER_SOURCE_NAMESPACE_ID",
+        SOURCE_NAMESPACE_ID.toString(),
+        "TRANSCODE_WORKER_SOURCE_ROOT",
+        "/media");
   }
 }

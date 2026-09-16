@@ -1,9 +1,7 @@
 package com.streamarr.transcode.worker;
 
-import com.streamarr.transcode.tls.PemTlsIdentity;
 import java.nio.file.Path;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 import lombok.Builder;
 
@@ -19,16 +17,11 @@ record TranscodeWorkerSettings(
 
   static TranscodeWorkerSettings fromEnvironment(Map<String, String> environment) {
     var sourceNamespaceId = uuid(environment, PREFIX + "SOURCE_NAMESPACE_ID");
-    var plaintext = plaintext(environment);
-    var tlsIdentity =
-        plaintext ? Optional.<PemTlsIdentity>empty() : Optional.of(tlsIdentity(environment));
     var workerConfiguration =
         TranscodeWorkerConfiguration.builder()
             .workerId(uuid(environment, PREFIX + "ID"))
             .bootId(UUID.randomUUID())
             .availableSlots(positiveInteger(environment, PREFIX + "SLOTS", 1))
-            .plaintext(plaintext)
-            .tlsIdentity(tlsIdentity)
             .sourceNamespaces(Map.of(sourceNamespaceId, path(environment, PREFIX + "SOURCE_ROOT")))
             .segmentBasePath(
                 optionalPath(
@@ -37,27 +30,11 @@ record TranscodeWorkerSettings(
                     Path.of(System.getProperty("java.io.tmpdir"), "streamarr-worker-segments")))
             .build();
     return TranscodeWorkerSettings.builder()
-        .controlPlaneHost(required(environment, PREFIX + "CONTROL_PLANE_HOST"))
+        .controlPlaneHost(optional(environment, PREFIX + "CONTROL_PLANE_HOST", "127.0.0.1"))
         .controlPlanePort(port(environment, PREFIX + "CONTROL_PLANE_PORT", 9090))
         .ffmpegPath(optional(environment, PREFIX + "FFMPEG_PATH", "ffmpeg"))
         .ffprobePath(optional(environment, PREFIX + "FFPROBE_PATH", "ffprobe"))
         .workerConfiguration(workerConfiguration)
-        .build();
-  }
-
-  private static boolean plaintext(Map<String, String> environment) {
-    return switch (optional(environment, PREFIX + "PLAINTEXT", "false")) {
-      case "true" -> true;
-      case "false" -> false;
-      default -> throw new IllegalArgumentException(PREFIX + "PLAINTEXT must be true or false");
-    };
-  }
-
-  private static PemTlsIdentity tlsIdentity(Map<String, String> environment) {
-    return PemTlsIdentity.builder()
-        .certificate(path(environment, PREFIX + "TLS_CERTIFICATE"))
-        .privateKey(path(environment, PREFIX + "TLS_PRIVATE_KEY"))
-        .trustBundle(path(environment, PREFIX + "TLS_TRUST_BUNDLE"))
         .build();
   }
 

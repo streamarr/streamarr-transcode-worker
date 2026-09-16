@@ -18,7 +18,6 @@ import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
-import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -94,8 +93,6 @@ class WorkerProbeFailureTest {
         .thenReturn(tempDir.toRealPath());
     var configuration =
         workerConfigurationBuilder()
-            .plaintext(true)
-            .tlsIdentity(Optional.empty())
             .availableSlots(1)
             .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, root))
             .segmentBasePath(tempDir.resolve("segments"))
