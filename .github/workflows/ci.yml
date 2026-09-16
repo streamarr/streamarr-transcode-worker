@@ -17,6 +17,9 @@ concurrency:
 jobs:
   verify:
     name: Verify worker
+    permissions:
+      contents: read
+      pull-requests: read
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -31,6 +34,21 @@ jobs:
           java-version: '25'
           cache: maven
       - uses: ./.github/actions/prepare-ffmpeg
+      - name: Detect FFmpeg input changes
+        id: ffmpeg_inputs
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            changed:
+              - 'buildpacks/ffmpeg/release'
+              - 'buildpacks/ffmpeg/ffmpeg.lock'
+              - 'buildpacks/ffmpeg/bin/update-lock'
+              - 'buildpacks/ffmpeg/lib/**'
+      - name: Verify FFmpeg lock against upstream
+        if: steps.ffmpeg_inputs.outputs.changed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: buildpacks/ffmpeg/bin/update-lock --verify-upstream
       - name: Verify redistribution tooling
         run: node --test --experimental-test-coverage --test-coverage-lines=90 --test-coverage-branches=90 --test-coverage-functions=90 buildpacks/ffmpeg/test/*.test.mjs
       - name: Verify image publication boundaries

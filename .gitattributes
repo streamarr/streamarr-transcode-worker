@@ -1,0 +1,4 @@
+buildpacks/ffmpeg/notices/** -text
+buildpacks/ffmpeg/LICENSE.txt -text
+buildpacks/ffmpeg/SOURCE.txt text eol=lf
+buildpacks/ffmpeg/ffmpeg.lock text eol=lf
