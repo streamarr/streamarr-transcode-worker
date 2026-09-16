@@ -37,6 +37,8 @@
         <sonar.projectKey>streamarr_streamarr-transcode-worker</sonar.projectKey>
         <sonar.organization>streamarr</sonar.organization>
         <sonar.host.url>https://sonarcloud.io</sonar.host.url>
+        <sonar.java.jdkHome>${java.home}</sonar.java.jdkHome>
+        <sonar-maven-plugin.version>5.8.0.7211</sonar-maven-plugin.version>
         <sonar.coverage.jacoco.xmlReportPaths>target/site/jacoco-merged-test-coverage-report/jacoco.xml</sonar.coverage.jacoco.xmlReportPaths>
         <surefire.jacoco.args />
         <failsafe.jacoco.args />
@@ -142,6 +144,11 @@
             </resource>
         </resources>
         <plugins>
+            <plugin>
+                <groupId>org.sonarsource.scanner.maven</groupId>
+                <artifactId>sonar-maven-plugin</artifactId>
+                <version>${sonar-maven-plugin.version}</version>
+            </plugin>
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>

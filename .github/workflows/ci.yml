@@ -24,6 +24,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: zulu
@@ -36,8 +37,20 @@ jobs:
         run: |
           node --test .github/actions/pack-build/publication.test.mjs
           docker buildx imagetools create --help | grep -q -- --metadata-file
+      - name: Verify analysis failure handling
+        run: node --test .github/actions/sonar/test/*.test.mjs
       - name: Build and test the executable worker
         run: ./mvnw -B clean verify
+      - name: Analyze coverage and require the SonarCloud quality gate
+        if: >-
+          (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') ||
+          (github.event_name == 'pull_request' &&
+           github.event.pull_request.head.repo.full_name == github.repository &&
+           github.actor != 'dependabot[bot]')
+        env:
+          SONAR_TOKEN: ${{ secrets.ORG_SONAR_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: .github/actions/sonar/analyze.sh
 
   smoke:
     name: Verify real FFmpeg execution
