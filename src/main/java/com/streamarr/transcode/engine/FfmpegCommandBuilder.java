@@ -99,7 +99,7 @@ public class FfmpegCommandBuilder {
     }
 
     cmd.addAll(List.of("-c:v", job.videoEncoder()));
-    addScaleAndBitrateArgs(cmd, job.request());
+    addScaleAndBitrateArgs(cmd, job);
     addAudioArgs(cmd, decision.audioDecision());
   }
 
@@ -118,9 +118,17 @@ public class FfmpegCommandBuilder {
     cmd.addAll(List.of("-b:a", audio.bitrate() / 1000 + "k"));
   }
 
-  private void addScaleAndBitrateArgs(List<String> cmd, TranscodeRequest request) {
+  private void addScaleAndBitrateArgs(List<String> cmd, TranscodeJob job) {
+    var request = job.request();
     cmd.addAll(List.of("-vf", "scale=-2:" + request.height()));
     var bitrate = String.valueOf(request.bitrate());
+    // SVT-AV1 supports a bitrate cap only in CRF mode. Its default CRF is 35.
+    if ("libsvtav1".equals(job.videoEncoder())) {
+      cmd.addAll(
+          List.of("-crf", "35", "-maxrate", bitrate, "-svtav1-params", "mbr-overshoot-pct=0"));
+      return;
+    }
+
     cmd.addAll(
         List.of(
             "-b:v", bitrate,

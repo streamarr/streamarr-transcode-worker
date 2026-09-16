@@ -7,6 +7,8 @@ import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variant
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import build.buf.gen.streamarr.transcode.v1.AudioMode;
+import build.buf.gen.streamarr.transcode.v1.ContainerFormat;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptCompleted;
@@ -153,6 +155,86 @@ class WorkerMediaSmokeTest {
                 assertThat(video.getHeight()).isEqualTo(expectedHeight);
                 assertThat(video.getWidth()).isEqualTo(expectedHeight * 16 / 9);
               });
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should upload decodable AV1 within the bitrate budget when transcoding an H264 file")
+  void shouldUploadDecodableAv1WithinTheBitrateBudgetWhenTranscodingAnH264File() throws Exception {
+    copyMedia();
+    var capabilities =
+        new TranscodeCapabilityService("ffmpeg", command -> new ProcessBuilder(command).start());
+    capabilities.detectCapabilities();
+    var engine =
+        new FfmpegTranscodeEngine(
+            new FfmpegCommandBuilder("ffmpeg"), new LocalFfmpegProcessManager(), capabilities);
+    try (var controlPlane = new MediaControlPlane();
+        var worker = workerBuilder(root).engine(engine).build()) {
+      worker.start("127.0.0.1", controlPlane.port());
+      var job = variantJobBuilder();
+      job.getDecisionBuilder()
+          .setMode(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE)
+          .setVideoCodecFamily("av1")
+          .setContainer(ContainerFormat.CONTAINER_FORMAT_FMP4)
+          .getAudioBuilder()
+          .setMode(AudioMode.AUDIO_MODE_TRANSCODE)
+          .setCodec("aac")
+          .setChannels(1)
+          .setBitrateBitsPerSecond(64_000);
+      job.getVariantBuilder().setWidth(320).setHeight(180).setBitrateBitsPerSecond(32_000);
+      var request = job.build();
+      var registeredWorker = controlPlane.registration.get(5, TimeUnit.SECONDS).getWorker();
+      controlPlane.responses.onNext(
+          EstablishWorkerSessionResponse.newBuilder()
+              .setStartVariant(
+                  StartVariantCommand.newBuilder().setTarget(registeredWorker).setJob(request))
+              .build());
+
+      assertThat(controlPlane.completed.get(30, TimeUnit.SECONDS).getJobAttemptId())
+          .isEqualTo(request.getJobAttemptId());
+      assertThat(controlPlane.segments).containsKeys("init.mp4", "segment0.m4s", "segment1.m4s");
+      // Six- and four-second segments at 32 kbps video + 64 kbps audio, with 20% HLS headroom.
+      assertThat(controlPlane.segments.get("segment0.m4s")).hasSizeLessThanOrEqualTo(86_400);
+      assertThat(controlPlane.segments.get("segment1.m4s")).hasSizeLessThanOrEqualTo(57_600);
+      var uploaded = new ByteArrayOutputStream();
+      uploaded.writeBytes(controlPlane.segments.get("init.mp4"));
+      uploaded.writeBytes(controlPlane.segments.get("segment0.m4s"));
+      uploaded.writeBytes(controlPlane.segments.get("segment1.m4s"));
+      var segment = root.resolve("uploaded.mp4");
+      Files.write(segment, uploaded.toByteArray());
+      var result =
+          FfprobeExecutor.forBinary(Path.of("ffprobe")).probe(segment, requestBuilder().build());
+      assertThat(result.getMedia().getStreamsList())
+          .filteredOn(stream -> "video".equals(stream.getCodecType()))
+          .singleElement()
+          .satisfies(
+              video -> {
+                assertThat(video.getCodec()).isEqualTo("av1");
+                assertThat(video.getWidth()).isEqualTo(320);
+                assertThat(video.getHeight()).isEqualTo(180);
+              });
+      assertThat(result.getMedia().getStreamsList())
+          .filteredOn(stream -> "audio".equals(stream.getCodecType()))
+          .singleElement()
+          .satisfies(
+              audio -> {
+                assertThat(audio.getCodec()).isEqualTo("aac");
+                assertThat(audio.getChannels()).isEqualTo(1);
+              });
+      var output = root.resolve("decoded.log");
+      var decode =
+          new ProcessBuilder(
+                  "ffmpeg", "-v", "error", "-xerror", "-i", segment.toString(), "-f", "null", "-")
+              .redirectErrorStream(true)
+              .redirectOutput(output.toFile())
+              .start();
+      try {
+        assertThat(decode.waitFor(30, TimeUnit.SECONDS)).as("AV1 decode completed").isTrue();
+        assertThat(decode.exitValue()).as(Files.readString(output)).isZero();
+      } finally {
+        decode.destroyForcibly();
+      }
     }
   }
 
