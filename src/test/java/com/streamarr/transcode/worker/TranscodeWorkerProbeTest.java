@@ -173,6 +173,42 @@ class TranscodeWorkerProbeTest {
     }
   }
 
+  @Test
+  @DisplayName("Should withhold the cancellation result when the probe process has not exited")
+  void shouldWithholdCancellationResultWhenProbeProcessHasNotExited() throws Exception {
+    Files.writeString(tempDir.resolve("movie.mkv"), "media");
+    var runtime = new ScriptedWorkerRuntime();
+    var process = processBuilder().running(true).deferredTermination(true).build();
+    var producer = new FfprobeExecutor(new ObjectMapper(), _ -> process);
+    var request = requestBuilder().build();
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).ffprobe(producer).build()) {
+      try {
+        worker.start("localhost", 1);
+        var connection = runtime.connection();
+        start(connection, request);
+        var running = runtime.probes().runNext();
+        process.awaitStarted();
+
+        cancel(connection, request);
+        process.awaitTerminationRequested();
+        process.awaitExitWait();
+
+        assertThat(process.isAlive()).isTrue();
+        assertThat(connection.results())
+            .as("cancellation must not release server capacity before process exit")
+            .isEmpty();
+        assertThat(running.isDone()).isFalse();
+        process.finish();
+        running.get(5, TimeUnit.SECONDS);
+        assertThat(connection.results())
+            .containsExactly(failure(request, ProbeFailure.PROBE_FAILURE_CANCELLED));
+      } finally {
+        process.finish();
+      }
+    }
+  }
+
   @ParameterizedTest
   @EnumSource(IdentityMismatch.class)
   @DisplayName("Should ignore a probe start when it targets another worker or boot")

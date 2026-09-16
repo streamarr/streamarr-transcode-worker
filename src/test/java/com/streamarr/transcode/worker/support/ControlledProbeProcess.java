@@ -16,7 +16,15 @@ public final class ControlledProbeProcess extends Process {
   private final boolean deferredTermination;
   private final CompletableFuture<Void> started = new CompletableFuture<>();
   private final CompletableFuture<Void> terminationRequested = new CompletableFuture<>();
-  private final CompletableFuture<Process> terminated = new CompletableFuture<>();
+  private final CompletableFuture<Void> awaitingExit = new CompletableFuture<>();
+  private final CompletableFuture<Process> terminated =
+      new CompletableFuture<>() {
+        @Override
+        public Process join() {
+          awaitingExit.complete(null);
+          return super.join();
+        }
+      };
 
   @Builder
   private ControlledProbeProcess(
@@ -35,6 +43,10 @@ public final class ControlledProbeProcess extends Process {
 
   public void awaitTerminationRequested() throws Exception {
     terminationRequested.get(5, TimeUnit.SECONDS);
+  }
+
+  public void awaitExitWait() throws Exception {
+    awaitingExit.get(5, TimeUnit.SECONDS);
   }
 
   public void finish() {
