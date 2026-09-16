@@ -32,6 +32,21 @@ The existing JVM smoke tests remain separate. The image tests carry the `ImageTe
 excluded from ordinary Maven runs. CI runs them explicitly against native amd64 and arm64 images.
 The required `build` check includes both image jobs.
 
+After human review and merge, a push to `main` publishes each tested native image to Docker Hub
+`streamarr/streamarr-transcode-worker`. The publishing steps reuse the tested image without rebuilding.
+Pull requests and manual runs do not authenticate or publish. The workflow uses the existing
+`DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` organization secrets and a read-only GitHub token.
+
+Each native job records its registry digest. After both jobs pass, the final job combines those exact
+digests into a multi-architecture index. It records the created index digest, source commit, Buf SDK
+version, and native digests in the `worker-image-<source SHA>` artifact. Tags have the form
+`sha-<full source SHA>` and `sha-<full source SHA>-<architecture>`. Consumers pin the recorded
+`streamarr/streamarr-transcode-worker@sha256:...` reference because tags can be replaced.
+
+Publication tests use a local registry fake that preserves image contents through tagging and push.
+They verify rejected events and revisions, exact tested-image promotion, native receipt validation,
+and digest records even if an image tag changes. They never authenticate or contact a registry.
+
 Hardware encoder support and redistribution materials remain in the moved buildpack. Ordinary
 CI runners prove CPU operation. They do not claim to exercise GPU devices or drivers.
 
