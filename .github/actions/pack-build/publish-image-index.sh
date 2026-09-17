@@ -37,3 +37,17 @@ jq -n --arg source "$GITHUB_SHA" --arg contract "$contract" \
   --arg image "streamarr/streamarr-transcode-worker@$digest" --arg amd64 "$amd64" --arg arm64 "$arm64" \
   '{sourceRevision: $source, contractRevision: $contract, image: $image, nativeImages: {amd64: $amd64, arm64: $arm64}}' > worker-image.json
 cat worker-image.json >> "$GITHUB_STEP_SUMMARY"
+
+version=$(python3 -c 'import xml.etree.ElementTree as E; print(E.parse("pom.xml").find("{*}version").text)')
+if [[ $version =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-SNAPSHOT$ ]]; then
+  main_revision=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')
+  if [[ ! $main_revision =~ ^[a-f0-9]{40}$ ]]; then
+    echo 'GitHub did not return a valid main revision.' >&2
+    exit 1
+  fi
+  if [[ $main_revision != "$GITHUB_SHA" ]]; then
+    echo "Keeping $version unchanged because main has advanced to $main_revision."
+    exit 0
+  fi
+  docker buildx imagetools create --tag "streamarr/streamarr-transcode-worker:$version" "$amd64" "$arm64"
+fi

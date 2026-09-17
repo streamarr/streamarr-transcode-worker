@@ -8,6 +8,7 @@ import { test } from 'node:test';
 
 const nativeScript = fileURLToPath(new URL('./publish-verified-image.sh', import.meta.url));
 const indexScript = fileURLToPath(new URL('./publish-image-index.sh', import.meta.url));
+const fakeGithub = fileURLToPath(new URL('./test-fixtures/gh.mjs', import.meta.url));
 const fakeDocker = fileURLToPath(new URL('./test-fixtures/docker.mjs', import.meta.url));
 const revision = 'a'.repeat(40);
 const digest = `sha256:${'b'.repeat(64)}`;
@@ -16,10 +17,11 @@ const imageRepository = 'streamarr/streamarr-transcode-worker';
 const testedImage = { digest, source: revision, architecture: 'amd64' };
 const armImage = { digest: `sha256:${'d'.repeat(64)}`, source: revision, architecture: 'arm64' };
 
-function publication({ mode = 'native', environment = {}, architecture = 'amd64', indexDigest = manifestDigest, indexOverride, changedTags = false, changedIndexTag = false, receiptOverrides = {} } = {}) {
+function publication({ mode = 'native', environment = {}, architecture = 'amd64', indexDigest = manifestDigest, indexOverride, changedTags = false, changedIndexTag = false, receiptOverrides = {}, version = '0.1.0', mainRevision = revision, indexes = {} } = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'worker-image-publication-'));
   const registry = join(directory, 'registry.json');
   symlinkSync(fakeDocker, join(directory, 'docker'));
+  symlinkSync(fakeGithub, join(directory, 'gh'));
   writeFileSync(registry, JSON.stringify({
     local: {
       'worker-image:tested': architecture === 'arm64' ? armImage : testedImage,
@@ -31,7 +33,7 @@ function publication({ mode = 'native', environment = {}, architecture = 'amd64'
       [`${imageRepository}@${testedImage.digest}`]: testedImage,
       [`${imageRepository}@${armImage.digest}`]: armImage,
     } : {},
-    indexes: {}, indexDigest, indexOverride, changedIndexTag,
+    indexes, indexDigest, indexOverride, changedIndexTag,
   }));
   for (const image of mode === 'index' ? [testedImage, armImage] : []) {
     writeFileSync(join(directory, `${image.architecture}-image.json`), JSON.stringify({
@@ -39,14 +41,14 @@ function publication({ mode = 'native', environment = {}, architecture = 'amd64'
       image: `${imageRepository}@${image.digest}`, ...receiptOverrides[image.architecture],
     }));
   }
-  writeFileSync(join(directory, 'pom.xml'), '<project><properties><buf.sdk.version>sdk-revision</buf.sdk.version></properties></project>');
+  writeFileSync(join(directory, 'pom.xml'), `<project><version>${version}</version><properties><buf.sdk.version>sdk-revision</buf.sdk.version></properties></project>`);
   const args = mode === 'index' ? [indexScript] : [nativeScript, 'worker-image:tested', architecture];
   const result = spawnSync('bash', args, {
     cwd: directory,
     encoding: 'utf8',
     env: { ...process.env, PATH: `${directory}:${process.env.PATH}`,
       GITHUB_SHA: revision, GITHUB_REF: 'refs/heads/main', GITHUB_EVENT_NAME: 'push',
-      GITHUB_REPOSITORY: imageRepository, FAKE_REGISTRY: registry,
+      GITHUB_REPOSITORY: imageRepository, FAKE_REGISTRY: registry, FAKE_MAIN_REVISION: mainRevision,
       GITHUB_STEP_SUMMARY: join(directory, 'summary'), ...environment },
   });
   const read = (name) => { try { return readFileSync(join(directory, name), 'utf8'); } catch { return ''; } };
@@ -157,4 +159,50 @@ test('records and inspects the created digest when the index tag is replaced', (
   assert.equal(result.status, 0, result.stderr);
   assert.equal(JSON.parse(result.receipt).image, `${imageRepository}@${manifestDigest}`);
   assert.deepEqual(JSON.parse(result.index).manifests.map((entry) => entry.digest), [testedImage.digest, armImage.digest]);
+});
+
+
+test('Should publish the exact Maven snapshot tag when the tested main build has a snapshot version', () => {
+  const result = publication({ mode: 'index', version: '0.1.0-SNAPSHOT' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.state.indexes, {
+    [`${imageRepository}:sha-${revision}`]: [testedImage, armImage],
+    [`${imageRepository}:0.1.0-SNAPSHOT`]: [testedImage, armImage],
+  });
+});
+
+
+test('Should preserve the newer snapshot when an older main run is retried', () => {
+  const newerImages = [testedImage, armImage].map((image) => ({ ...image, source: 'c'.repeat(40) }));
+  const snapshot = `${imageRepository}:0.1.0-SNAPSHOT`;
+  const result = publication({ mode: 'index', version: '0.1.0-SNAPSHOT',
+    mainRevision: 'c'.repeat(40), indexes: { [snapshot]: newerImages } });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.state.indexes[snapshot], newerImages);
+  assert.deepEqual(result.state.indexes[`${imageRepository}:sha-${revision}`], [testedImage, armImage]);
+});
+
+for (const mainRevision of ['', 'null', 'abc123']) {
+  test(`Should fail snapshot publication when GitHub returns an invalid main revision (${mainRevision || 'empty'})`, () => {
+    const result = publication({ mode: 'index', version: '0.1.0-SNAPSHOT', mainRevision });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /valid main revision/);
+    assert.equal(result.state.indexes[`${imageRepository}:0.1.0-SNAPSHOT`], undefined);
+  });
+}
+
+for (const version of ['0.1.0', '0.1.0-RC1', '0.1.0-SNAPSHOT-SNAPSHOT']) {
+  test(`Should leave version tags to the release workflow when Maven is not a valid snapshot (${version})`, () => {
+    const result = publication({ mode: 'index', version });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(result.state.indexes, { [`${imageRepository}:sha-${revision}`]: [testedImage, armImage] });
+  });
+}
+
+test('Should fail without promoting the snapshot when GitHub is unavailable', () => {
+  const result = publication({ mode: 'index', version: '0.1.0-SNAPSHOT',
+    environment: { FAKE_GITHUB_UNAVAILABLE: 'true' } });
+  assert.equal(result.status, 23);
+  assert.match(result.stderr, /GitHub unavailable/);
+  assert.equal(result.state.indexes[`${imageRepository}:0.1.0-SNAPSHOT`], undefined);
 });

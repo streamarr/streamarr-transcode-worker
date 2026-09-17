@@ -12,7 +12,7 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   verify:
@@ -164,6 +164,9 @@ jobs:
 
   publish:
     name: Publish verified multi-architecture image
+    concurrency:
+      group: publish-snapshot-images
+      cancel-in-progress: false
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-24.04
@@ -181,6 +184,8 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Publish the index from this run's verified native digests
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: .github/actions/pack-build/publish-image-index.sh
       - name: Preserve the immutable worker image reference
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

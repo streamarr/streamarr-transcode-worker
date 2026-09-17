@@ -296,6 +296,26 @@ class FfmpegAutomationWorkflowTest {
     assertThat(Path.of("buildpacks/ffmpeg/.nvmrc")).isRegularFile();
   }
 
+  @Test
+  @DisplayName(
+      "Should serialize snapshot publication without cancellation when main builds overlap")
+  void shouldSerializeSnapshotPublicationWithoutCancellationWhenMainBuildsOverlap()
+      throws IOException {
+    var workflow = yaml(".github/workflows/ci.yml");
+    var publish = map(map(workflow.get("jobs")).get("publish"));
+
+    assertThat(map(workflow.get("concurrency")))
+        .containsEntry("cancel-in-progress", "${{ github.ref != 'refs/heads/main' }}");
+    assertThat(map(publish.get("concurrency")))
+        .containsEntry("group", "publish-snapshot-images")
+        .containsEntry("cancel-in-progress", false);
+    var publication =
+        stepNamed(
+            listOfMaps(publish.get("steps")),
+            "Publish the index from this run's verified native digests");
+    assertThat(map(publication.get("env"))).containsEntry("GH_TOKEN", "${{ github.token }}");
+  }
+
   private static Stream<JsonNode> nodes(JsonNode values) {
     return StreamSupport.stream(values.spliterator(), false);
   }

@@ -42,8 +42,11 @@ Pull requests and manual CI runs do not authenticate or publish. The workflow us
 Each native job records its registry digest. After both jobs pass, the final job combines those exact
 digests into a multi-architecture index. It records the created index digest, source commit, Buf SDK
 version, and native digests in the `worker-image-<source SHA>` artifact. Tags have the form
-`sha-<full source SHA>` and `sha-<full source SHA>-<architecture>`. Consumers pin the recorded
-`streamarr/streamarr-transcode-worker@sha256:...` reference because tags can be replaced.
+`sha-<full source SHA>` and `sha-<full source SHA>-<architecture>`. When the Maven version is
+`X.Y.Z-SNAPSHOT`, the current `main` build also publishes that exact snapshot tag from the same
+verified native digests. Publication is serialized, and stale reruns leave the snapshot tag unchanged.
+Stable version tags remain owned by Release Publisher. Consumers pin a tag and digest, such as
+`streamarr/streamarr-transcode-worker:0.1.0-SNAPSHOT@sha256:...`, because tags can be replaced.
 
 Publication tests use a local registry fake that preserves image contents through tagging and push.
 They verify rejected events and revisions, exact tested-image promotion, native receipt validation,
