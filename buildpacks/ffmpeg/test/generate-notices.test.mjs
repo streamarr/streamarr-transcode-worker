@@ -93,6 +93,25 @@ function run(root, ...args) {
     return { status: result.status, output: result.stdout + result.stderr };
 }
 
+test("Should reproduce checked-in redistribution materials from clean inputs", (t) => {
+    const source = fileURLToPath(new URL("..", import.meta.url));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "ffmpeg-notices-clean-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    fs.cpSync(source, root, {
+        recursive: true,
+        filter: (file) => file !== path.join(source, "generated"),
+    });
+
+    const validation = run(root, "--validate");
+
+    assert.equal(validation.status, 0, validation.output);
+    assert.equal(fs.existsSync(path.join(root, "generated")), false);
+    const generation = run(root);
+    assert.equal(generation.status, 0, generation.output);
+    const verification = run(root, "--check");
+    assert.equal(verification.status, 0, verification.output);
+});
+
 test("Should preserve verbatim notices once and normalize redundant document extensions", (t) => {
     const { root, text } = fixture(t);
 

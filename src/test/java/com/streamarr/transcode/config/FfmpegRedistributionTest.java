@@ -5,8 +5,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.MessageDigest;
-import java.util.HexFormat;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -28,27 +26,6 @@ class FfmpegRedistributionTest {
             "buildpacks/ffmpeg/notices/** -text", "buildpacks/ffmpeg/LICENSE.txt -text",
             "buildpacks/ffmpeg/SOURCE.txt text eol=lf",
                 "buildpacks/ffmpeg/ffmpeg.lock text eol=lf");
-  }
-
-  @Test
-  @DisplayName("Should retain reviewed notice contents when shipping inventoried components")
-  void shouldRetainReviewedNoticeContentsWhenShippingInventoriedComponents() throws Exception {
-    var inventory = new ObjectMapper().readTree(Files.readString(NOTICES.resolve("sources.json")));
-    var digest = MessageDigest.getInstance("SHA-256");
-
-    assertThat(inventory.isArray()).isTrue();
-    assertThat(inventory.isEmpty()).isFalse();
-    for (var component : inventory) {
-      assertThat(component.path("notices").isEmpty()).isFalse();
-      for (var notice : component.path("notices")) {
-        var path = NOTICES.resolve(notice.path("file").asString()).normalize();
-        assertThat(path).startsWith(NOTICES).isRegularFile();
-        var checksum = HexFormat.of().formatHex(digest.digest(Files.readAllBytes(path)));
-        assertThat(checksum)
-            .as("Notice checksum: %s", path)
-            .isEqualTo(notice.path("sha256").asString());
-      }
-    }
   }
 
   @Test

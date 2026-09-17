@@ -41,7 +41,6 @@ class FfmpegPackagingScriptsTest {
 
   @BeforeAll
   static void prepareRedistributionMaterials() throws Exception {
-    FfmpegTestToolchain.requireNode();
     var process =
         new ProcessBuilder("buildpacks/ffmpeg/bin/prepare").redirectErrorStream(true).start();
     var output = new String(process.getInputStream().readAllBytes());
@@ -483,6 +482,7 @@ class FfmpegPackagingScriptsTest {
     assertThat(buildpack.layer().resolve("bin/ffmpeg")).exists().isExecutable();
     assertThat(Files.readString(buildpack.layers().resolve("ffmpeg.toml")))
         .contains("launch = true", "cache = true");
+    assertThat(buildpack.layer().resolve("env.launch")).doesNotExist();
 
     var sbom =
         new ObjectMapper()
@@ -521,19 +521,6 @@ class FfmpegPackagingScriptsTest {
         new ObjectMapper()
             .readTree(Files.readString(buildpack.layers().resolve("ffmpeg.sbom.cdx.json")));
     assertThat(sbom.path("components").get(0).path("version").asString()).isEqualTo(futureVersion);
-  }
-
-  @Test
-  @DisplayName("Should expose FFmpeg through the launch layer bin directory when buildpack runs")
-  void shouldExposeFfmpegThroughTheLaunchLayerBinDirectoryWhenBuildpackRuns() throws Exception {
-    var buildpack = buildpack();
-    var result = buildpack.execute();
-
-    assertThat(result.exitCode()).isZero();
-    assertThat(buildpack.layer().resolve("bin/ffmpeg")).exists().isExecutable();
-    assertThat(Files.readString(buildpack.layers().resolve("ffmpeg.toml")))
-        .contains("launch = true");
-    assertThat(buildpack.layer().resolve("env.launch")).doesNotExist();
   }
 
   @Test

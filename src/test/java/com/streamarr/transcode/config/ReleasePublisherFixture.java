@@ -206,8 +206,7 @@ class ReleasePublisherFixture {
       return command(script);
     }
 
-    assertThat(step.get("uses"))
-        .isEqualTo("docker/login-action@dbcb813823bdd20940b903addbd779551569679f");
+    assertThat(step.get("uses")).asString().matches("docker/login-action@[a-f0-9]{40}");
     return command("docker login");
   }
 

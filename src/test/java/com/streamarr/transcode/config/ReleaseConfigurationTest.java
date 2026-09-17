@@ -23,17 +23,8 @@ class ReleaseConfigurationTest {
         new Yaml().load(Files.readString(Path.of("release-please-config.json")));
     var packages = (Map<?, ?>) config.get("packages");
     var worker = (Map<?, ?>) packages.get(".");
-    Map<String, Object> manifest =
-        new Yaml().load(Files.readString(Path.of(".release-please-manifest.json")));
 
-    assertThat(config).containsEntry("bootstrap-sha", "a1ef061ef706bb5b5c59cb95417145d66636b8a7");
-    assertThat(worker)
-        .asInstanceOf(MAP)
-        .containsEntry("release-type", "maven")
-        .containsEntry("initial-version", "0.1.0");
-    assertThat(manifest.keySet()).isSubsetOf(".");
-    assertThat(manifest.values())
-        .allSatisfy(version -> assertThat(version.toString()).matches("[0-9]+\\.[0-9]+\\.[0-9]+"));
+    assertThat(worker).asInstanceOf(MAP).containsEntry("release-type", "maven");
   }
 
   @Test

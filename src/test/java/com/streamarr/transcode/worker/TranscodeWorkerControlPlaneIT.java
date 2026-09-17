@@ -161,9 +161,10 @@ class TranscodeWorkerControlPlaneIT {
     try (var server = new TestServer(service);
         var worker = worker(preparedMediaRoot())) {
       server.start();
-      worker.start("localhost", server.port());
+      var port = server.port();
+      worker.start("localhost", port);
 
-      assertThatThrownBy(() -> worker.start("localhost", server.port()))
+      assertThatThrownBy(() -> worker.start("localhost", port))
           .isInstanceOf(IllegalStateException.class)
           .hasMessage("Transcode worker is already started");
     }
@@ -754,7 +755,9 @@ class TranscodeWorkerControlPlaneIT {
         }
 
         @Override
-        public void onError(Throwable failure) {}
+        public void onError(Throwable failure) {
+          // Failed uploads are not recorded or acknowledged.
+        }
 
         @Override
         public void onCompleted() {

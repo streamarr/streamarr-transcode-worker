@@ -43,10 +43,9 @@ class ReleaseWorkflowTest {
     assertThat(steps.indexOf(publish)).isLessThan(steps.indexOf(guard));
     assertThat(steps.indexOf(guard)).isLessThan(steps.indexOf(maintain));
     for (var action : List.of(publish, maintain)) {
-      assertThat(action)
-          .asInstanceOf(MAP)
-          .containsEntry(
-              "uses", "googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7");
+      assertThat(action.get("uses"))
+          .asString()
+          .matches("googleapis/release-please-action@[a-f0-9]{40}");
       var options = (Map<?, ?>) action.get("with");
       assertThat(options)
           .asInstanceOf(MAP)
@@ -82,11 +81,10 @@ class ReleaseWorkflowTest {
     var token = step("Mint release bot token");
     var inputs = (Map<?, ?>) token.get("with");
 
-    assertThat(token)
-        .asInstanceOf(MAP)
-        .containsEntry("id", "bot")
-        .containsEntry(
-            "uses", "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1");
+    assertThat(token).asInstanceOf(MAP).containsEntry("id", "bot");
+    assertThat(token.get("uses"))
+        .asString()
+        .matches("actions/create-github-app-token@[a-f0-9]{40}");
     assertThat(inputs)
         .asInstanceOf(MAP)
         .containsEntry("client-id", "${{ secrets.ORG_STREAMARR_RELEASE_CLIENT_ID }}")

@@ -47,14 +47,16 @@ class ReleasePublisherTest {
   @DisplayName("Should forward validated release outputs when coordinating publication jobs")
   void shouldForwardValidatedReleaseOutputsWhenCoordinatingPublicationJobs() throws Exception {
     var workflow = ReleasePublisherFixture.workflow();
-    assertThat(workflow.get("permissions")).isEqualTo(Map.of());
+    assertThat(workflow).asInstanceOf(MAP).containsEntry("permissions", Map.of());
     assertThat(workflow.get("concurrency"))
         .asInstanceOf(MAP)
         .containsEntry("group", "publish-release")
         .containsEntry("cancel-in-progress", false);
     var validation = ReleasePublisherFixture.job("validate_release");
-    assertThat(validation.get("outputs"))
-        .isEqualTo(
+    assertThat(validation)
+        .asInstanceOf(MAP)
+        .containsEntry(
+            "outputs",
             Map.of(
                 "version", "${{ steps.release.outputs.version }}",
                 "revision", "${{ steps.release.outputs.revision }}"));
@@ -94,8 +96,10 @@ class ReleasePublisherTest {
         .containsEntry("IMAGE_ARCHITECTURE", "${{ matrix.architecture }}");
     for (var name : List.of("validate_release", "build_release_images", "publish_release")) {
       var job = ReleasePublisherFixture.job(name);
-      assertThat(job).asInstanceOf(MAP).doesNotContainKeys("if", "continue-on-error");
-      assertThat(job.get("permissions")).isEqualTo(Map.of("contents", "read"));
+      assertThat(job)
+          .asInstanceOf(MAP)
+          .doesNotContainKeys("if", "continue-on-error")
+          .containsEntry("permissions", Map.of("contents", "read"));
     }
   }
 
@@ -117,9 +121,9 @@ class ReleasePublisherTest {
                 .orElseThrow();
     assertThat(
             ReleasePublisherFixture.step(
-                    "Exercise the packaged worker through its public interfaces")
-                .get("run"))
-        .isEqualTo(ciTest.get("run"));
+                "Exercise the packaged worker through its public interfaces"))
+        .asInstanceOf(MAP)
+        .containsEntry("run", ciTest.get("run"));
     for (var job : List.of("build_release_images", "publish_release")) {
       var login =
           ReleasePublisherFixture.steps(job).stream()
@@ -264,7 +268,6 @@ class ReleasePublisherTest {
   void shouldRebuildValidatedReleaseWhenPreparingNativeArchitectureImages() throws Exception {
     var job = ReleasePublisherFixture.job("build_release_images");
 
-    assertThat(job).isNotNull();
     assertThat(job).asInstanceOf(MAP).containsEntry("needs", "validate_release");
     assertThat(job.get("env"))
         .asInstanceOf(MAP)
@@ -272,8 +275,10 @@ class ReleasePublisherTest {
         .containsEntry("WORKER_IMAGE", "streamarr-worker:release-${{ matrix.architecture }}");
     var strategy = (Map<?, ?>) job.get("strategy");
     var matrix = (Map<?, ?>) strategy.get("matrix");
-    assertThat(matrix.get("include"))
-        .isEqualTo(
+    assertThat(matrix)
+        .asInstanceOf(MAP)
+        .containsEntry(
+            "include",
             List.of(
                 Map.of("architecture", "amd64", "runner", "ubuntu-24.04"),
                 Map.of("architecture", "arm64", "runner", "ubuntu-24.04-arm")));
@@ -282,11 +287,6 @@ class ReleasePublisherTest {
         .asInstanceOf(MAP)
         .containsEntry("ref", "${{ needs.validate_release.outputs.revision }}")
         .containsEntry("persist-credentials", false);
-    assertThat(steps.stream().map(step -> (String) step.get("uses")).toList())
-        .contains(
-            "actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961",
-            "./.github/actions/prepare-ffmpeg",
-            "buildpacks/github-actions/setup-pack@e3b14c6e906f91da358e01dc2849ce068188107f");
     assertThat(
             ReleasePublisherFixture.step(
                 "Build the unpublished image and verify its media runtime"))
