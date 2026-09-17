@@ -1,0 +1,45 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "gitIgnoredAuthors": [
+    "streamarr-release[bot]@users.noreply.github.com",
+    "327604351+streamarr-release[bot]@users.noreply.github.com"
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Compare Jellyfin's fourth numeric component as a stable packaging revision; default SemVer treats the hyphen suffix as a prerelease",
+      "managerFilePatterns": [
+        "/^buildpacks/ffmpeg/release$/"
+      ],
+      "matchStrings": [
+        "^(?<currentValue>v\\d+\\.\\d+\\.\\d+-\\d+)\\n?$"
+      ],
+      "depNameTemplate": "jellyfin/jellyfin-ffmpeg",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "regex:^v(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)-(?<build>\\d+)$"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Keep FFmpeg runtime updates isolated for lock synchronization",
+      "matchDepNames": [
+        "jellyfin/jellyfin-ffmpeg"
+      ],
+      "groupName": "FFmpeg runtime",
+      "automerge": false
+    },
+    {
+      "description": "Require explicit dashboard approval before proposing a new FFmpeg major",
+      "matchDepNames": [
+        "jellyfin/jellyfin-ffmpeg"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "dependencyDashboardApproval": true
+    }
+  ],
+  "enabledManagers": [
+    "custom.regex"
+  ]
+}

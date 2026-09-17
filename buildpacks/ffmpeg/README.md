@@ -60,7 +60,7 @@ does not require Node 24, but Maven enforces native test-coverage thresholds who
 [CLI flags were introduced in Node 22.8](https://nodejs.org/docs/latest-v24.x/api/cli.html#--test-coverage-linesthreshold).
 That API floor is not a claim that we test every subsequent Node release.
 Node is developer/CI tooling only, not a requirement inside the FFmpeg buildpack
-or the server image. Keep the pin here, not at the application root:
+or the worker image. Keep the pin here, not at the application root:
 [Paketo Node Engine](https://github.com/paketo-buildpacks/node-engine/blob/v8.5.2/detect.go)
 self-requires Node for a root `.nvmrc` or `.node-version`.
 

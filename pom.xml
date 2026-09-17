@@ -24,7 +24,8 @@
         <jacoco.version>0.8.15</jacoco.version>
         <surefire-failsafe-plugin.version>3.6.0</surefire-failsafe-plugin.version>
         <surefire.excludedGroups>SmokeTest</surefire.excludedGroups>
-        <failsafe.excludedGroups>SmokeTest</failsafe.excludedGroups>
+        <failsafe.excludedGroups>SmokeTest,ImageTest</failsafe.excludedGroups>
+        <testcontainers.version>2.0.5</testcontainers.version>
         <spotless.version>3.10.2</spotless.version>
         <checkstyle.version>13.11.0</checkstyle.version>
         <maven-checkstyle-plugin.version>3.6.0</maven-checkstyle-plugin.version>
@@ -36,6 +37,8 @@
         <sonar.projectKey>streamarr_streamarr-transcode-worker</sonar.projectKey>
         <sonar.organization>streamarr</sonar.organization>
         <sonar.host.url>https://sonarcloud.io</sonar.host.url>
+        <sonar.java.jdkHome>${java.home}</sonar.java.jdkHome>
+        <sonar-maven-plugin.version>5.8.0.7211</sonar-maven-plugin.version>
         <sonar.coverage.jacoco.xmlReportPaths>target/site/jacoco-merged-test-coverage-report/jacoco.xml</sonar.coverage.jacoco.xmlReportPaths>
         <surefire.jacoco.args />
         <failsafe.jacoco.args />
@@ -47,6 +50,12 @@
         </repository>
     </repositories>
     <dependencies>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <version>${testcontainers.version}</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter</artifactId>
@@ -135,6 +144,11 @@
             </resource>
         </resources>
         <plugins>
+            <plugin>
+                <groupId>org.sonarsource.scanner.maven</groupId>
+                <artifactId>sonar-maven-plugin</artifactId>
+                <version>${sonar-maven-plugin.version}</version>
+            </plugin>
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
@@ -314,6 +328,7 @@
                 <configuration>
                     <argLine>@{failsafe.jacoco.args} ${native.access.args}</argLine>
                     <excludedGroups>${failsafe.excludedGroups}</excludedGroups>
+                    <failIfNoTests>true</failIfNoTests>
                 </configuration>
                 <executions>
                     <execution>
