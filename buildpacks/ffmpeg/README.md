@@ -13,6 +13,7 @@ buildpacks/ffmpeg/bin/update-lock
 buildpacks/ffmpeg/bin/update-lock --release v8.1.2-4
 buildpacks/ffmpeg/bin/update-lock --check
 buildpacks/ffmpeg/bin/update-lock --verify-upstream
+buildpacks/ffmpeg/bin/review-release
 ```
 
 The resolver requires Bash, `curl`, and `jq`. Offline input validation also requires
@@ -50,12 +51,22 @@ the pinned recipes. It is not a list of every build script or of external GPU dr
 
 [`notices/manifest`](notices/manifest) binds that review to the release, source revision
 and both archive digests. Offline validation and the buildpack reject a mismatch.
-After an update, review both binaries and their dependencies, update the notices and
-source instructions, then update the manifest. The lock resolver deliberately does
-not mark new notices as reviewed. Neither does the notice generator: it never writes
-`notices/manifest`. Tests check notice contents against the inventory and verify their
+Neither the lock resolver nor the notice generator marks notices as reviewed: they never
+write `notices/manifest`. Tests check notice contents against the inventory and verify their
 inclusion in fresh and cached layers. Full license texts and attribution remain in
 the image, not just links to them.
+
+`bin/review-release` carries a review forward only when it can show that the inventory is
+unchanged. It compares the reviewed and locked upstream revisions and requires the locked
+revision to descend from the reviewed one, the change list to be complete, and every changed
+path to lie outside the inventory: Jellyfin's FFmpeg patches and changelog, the package
+version, and files used only by macOS or Windows builds. It then rebinds `notices/manifest`,
+the `ffmpeg` entry of `notices/sources.json` and `SOURCE.txt` to the locked release. The
+buildpack supplies the rest of the evidence by rejecting a binary whose `-buildconf` differs
+from the reviewed capture. A changed dependency recipe, toolchain image, licence text or
+FFmpeg source file instead exits with status 3, names the paths and changes nothing. Then
+review both binaries and their dependencies, update the notices and source instructions,
+and update the manifest by hand.
 
 The [tooling pin](.nvmrc) selects Node.js 24 LTS as the tested toolchain. CI selects
 that exact version; local tooling accepts the same major. The generator itself
