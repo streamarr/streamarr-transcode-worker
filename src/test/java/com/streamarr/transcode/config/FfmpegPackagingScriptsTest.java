@@ -6,10 +6,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
 import java.util.stream.Stream;
 import lombok.Builder;
 import org.junit.jupiter.api.BeforeAll;
@@ -422,7 +418,7 @@ class FfmpegPackagingScriptsTest {
             .formatted(
                 release, amd64Asset, amd64Digest, amd64Asset, arm64Asset, arm64Digest, arm64Asset));
     var commands = Files.createDirectory(temporaryDirectory.resolve("commands"));
-    writeCommand(
+    ScriptCommand.writeFake(
         commands,
         "curl",
         """
@@ -902,7 +898,7 @@ class FfmpegPackagingScriptsTest {
     var layers = Files.createDirectory(temporaryDirectory.resolve("layers"));
     var layer = layers.resolve("ffmpeg");
     var tarArguments = temporaryDirectory.resolve("tar-arguments");
-    writeCommand(
+    ScriptCommand.writeFake(
         commands,
         "curl",
         """
@@ -928,7 +924,7 @@ class FfmpegPackagingScriptsTest {
         done
         : > "${archive}"
         """);
-    writeCommand(
+    ScriptCommand.writeFake(
         commands,
         "sha256sum",
         """
@@ -938,7 +934,7 @@ class FfmpegPackagingScriptsTest {
         cat >/dev/null
         exit "${FAKE_SHA256_EXIT:-0}"
         """);
-    writeCommand(
+    ScriptCommand.writeFake(
         commands,
         "tar",
         """
@@ -1039,7 +1035,7 @@ class FfmpegPackagingScriptsTest {
   @DisplayName("Should reject nonfree runtime when verifying packaged image")
   void shouldRejectNonfreeRuntimeWhenVerifyingPackagedImage() throws Exception {
     var verifier = imageVerifier();
-    writeCommand(
+    ScriptCommand.writeFake(
         verifier.runtime(),
         "ffmpeg",
         """
@@ -1047,7 +1043,7 @@ class FfmpegPackagingScriptsTest {
           'ffmpeg version 8.2.0-Jellyfin Copyright' \\
           'configuration: --enable-gpl --disable-libfdk-aac --enable-nonfree'
         """);
-    writeCommand(verifier.runtime(), "ffprobe", ":");
+    ScriptCommand.writeFake(verifier.runtime(), "ffprobe", ":");
 
     var result = verifier.command().execute();
 
@@ -1070,7 +1066,7 @@ class FfmpegPackagingScriptsTest {
     Files.writeString(buildpackDirectory.resolve("ffmpeg.lock"), futureLock);
     var commands = Files.createDirectory(temporaryDirectory.resolve("commands"));
     var runtime = Files.createDirectories(temporaryDirectory.resolve("runtime/bin"));
-    writeCommand(
+    ScriptCommand.writeFake(
         commands,
         "docker",
         """
@@ -1107,7 +1103,7 @@ class FfmpegPackagingScriptsTest {
       throws Exception {
     var verifier = imageVerifier();
     var probes = temporaryDirectory.resolve("completed-probes");
-    writeCommand(
+    ScriptCommand.writeFake(
         verifier.runtime(),
         "ffmpeg",
         """
@@ -1126,7 +1122,7 @@ class FfmpegPackagingScriptsTest {
         printf segment >"${directory}/init.mp4"
         printf segment >"${directory}/segment0.m4s"
         """);
-    writeCommand(
+    ScriptCommand.writeFake(
         verifier.runtime(),
         "ffprobe",
         """
@@ -1148,67 +1144,20 @@ class FfmpegPackagingScriptsTest {
     assertThat(Files.readAllLines(probes)).containsExactly("hls", "av1");
   }
 
-  private CommandFixture command(Path script) {
-    return new CommandFixture(script);
+  private ScriptCommand command(Path script) {
+    return ScriptCommand.of(script);
   }
 
-  private static void writeCommand(Path directory, String name, String body) throws IOException {
-    var command = directory.resolve(name);
-    Files.writeString(command, "#!/bin/bash\nset -euo pipefail\n" + body);
-    assertThat(command.toFile().setExecutable(true)).isTrue();
-  }
+  private record LockUpdaterFixture(Path lock, Path releaseJson, ScriptCommand command) {}
 
-  private record ExecutionResult(int exitCode, String output) {}
-
-  private record LockUpdaterFixture(Path lock, Path releaseJson, CommandFixture command) {}
-
-  private record ImageVerifierFixture(Path runtime, CommandFixture command) {}
+  private record ImageVerifierFixture(Path runtime, ScriptCommand command) {}
 
   @Builder
   private record BuildpackFixture(
-      Path layers, Path layer, Path tarArguments, CommandFixture command) {
+      Path layers, Path layer, Path tarArguments, ScriptCommand command) {
 
-    private ExecutionResult execute() throws IOException, InterruptedException {
+    private ScriptCommand.Result execute() throws IOException, InterruptedException {
       return command.execute();
-    }
-  }
-
-  private static final class CommandFixture {
-
-    private final List<String> command = new ArrayList<>();
-    private final Map<String, String> environment = new HashMap<>();
-    private Path prependedPath;
-
-    private CommandFixture(Path script) {
-      command.add(script.toString());
-    }
-
-    private CommandFixture argument(String argument) {
-      command.add(argument);
-      return this;
-    }
-
-    private CommandFixture environment(String name, String value) {
-      environment.put(name, value);
-      return this;
-    }
-
-    private CommandFixture prependPath(Path path) {
-      prependedPath = path;
-      return this;
-    }
-
-    private ExecutionResult execute() throws IOException, InterruptedException {
-      var processBuilder = new ProcessBuilder(command).redirectErrorStream(true);
-      processBuilder.environment().putAll(environment);
-      if (prependedPath != null) {
-        var systemPath = processBuilder.environment().get("PATH");
-        processBuilder.environment().put("PATH", prependedPath + ":" + systemPath);
-      }
-
-      var process = processBuilder.start();
-      var output = new String(process.getInputStream().readAllBytes());
-      return new ExecutionResult(process.waitFor(), output);
     }
   }
 }
