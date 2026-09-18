@@ -20,3 +20,24 @@ ffmpeg_curl() {
     sleep "${attempt}"
   done
 }
+
+ffmpeg_github_api_get() {
+  local url="$1"
+  local destination="$2"
+  local arguments=(
+    --fail
+    --location
+    --proto '=https'
+    --proto-redir '=https'
+    --retry 3
+    --silent
+    --show-error
+    --header 'Accept: application/vnd.github+json'
+    --header 'X-GitHub-Api-Version: 2022-11-28'
+    --user-agent 'streamarr-ffmpeg-lock-updater'
+  )
+  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    arguments+=(--header "Authorization: Bearer ${GITHUB_TOKEN}")
+  fi
+  ffmpeg_curl "${arguments[@]}" "${url}" --output "${destination}"
+}
