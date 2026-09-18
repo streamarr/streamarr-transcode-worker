@@ -297,23 +297,33 @@ class FfmpegAutomationWorkflowTest {
   }
 
   @Test
-  @DisplayName(
-      "Should serialize snapshot publication without cancellation when main builds overlap")
-  void shouldSerializeSnapshotPublicationWithoutCancellationWhenMainBuildsOverlap()
-      throws IOException {
+  @DisplayName("Should delegate verified snapshot receipts when main verification succeeds")
+  void shouldDelegateVerifiedSnapshotReceiptsWhenMainVerificationSucceeds() throws IOException {
     var workflow = yaml(".github/workflows/ci.yml");
-    var publish = map(map(workflow.get("jobs")).get("publish"));
+    var jobs = map(workflow.get("jobs"));
+    var publish = map(jobs.get("publish"));
 
     assertThat(map(workflow.get("concurrency")))
         .containsEntry("cancel-in-progress", "${{ github.ref != 'refs/heads/main' }}");
-    assertThat(map(publish.get("concurrency")))
-        .containsEntry("group", "publish-snapshot-images")
-        .containsEntry("cancel-in-progress", false);
-    var publication =
-        stepNamed(
-            listOfMaps(publish.get("steps")),
-            "Publish the index from this run's verified native digests");
-    assertThat(map(publication.get("env"))).containsEntry("GH_TOKEN", "${{ github.token }}");
+    assertThat(publish)
+        .containsEntry("needs", List.of("build", "verify"))
+        .containsEntry("if", "github.event_name == 'push' && github.ref == 'refs/heads/main'");
+    assertThat(publish.get("uses").toString())
+        .matches("streamarr/streamarr-workflows/.github/workflows/publish-image.yml@[a-f0-9]{40}");
+    assertThat(map(publish.get("with")))
+        .containsEntry("image-repository", "streamarr/streamarr-transcode-worker")
+        .containsEntry("source-revision", "${{ github.sha }}")
+        .containsEntry("version", "${{ needs.verify.outputs.version }}")
+        .containsEntry("artifact-pattern", "worker-native-*-${{ github.sha }}")
+        .containsEntry("publication-kind", "snapshot");
+    assertThat(map(publish.get("secrets")))
+        .containsEntry("dockerhub-username", "${{ secrets.DOCKERHUB_USERNAME }}")
+        .containsEntry("dockerhub-token", "${{ secrets.DOCKERHUB_TOKEN }}");
+    var verify = map(jobs.get("verify"));
+    assertThat(map(verify.get("outputs")))
+        .containsEntry("version", "${{ steps.version.outputs.version }}");
+    assertThat(stepNamed(listOfMaps(verify.get("steps")), "Read Maven version"))
+        .containsEntry("id", "version");
   }
 
   private static Stream<JsonNode> nodes(JsonNode values) {

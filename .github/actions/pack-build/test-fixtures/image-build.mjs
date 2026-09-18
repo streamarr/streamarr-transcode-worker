@@ -9,6 +9,10 @@ const output = (value) => process.stdout.write(`${value}\n`);
 
 switch (basename(process.argv[1])) {
   case 'mvnw':
+    if (args.includes('-Dexpression=project.version')) {
+      output(state.version);
+      break;
+    }
     if (!args.includes('-Dexpression=buf.sdk.version')) process.exit(81);
     output(state.contract);
     break;
