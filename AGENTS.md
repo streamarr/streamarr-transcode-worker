@@ -162,7 +162,7 @@ read is a check-then-act race. Check and act inside one synchronized section, as
 
 ## FFmpeg Runtime and Redistribution
 - `buildpacks/ffmpeg/release` is the only Renovate-owned input. `generated/` is Git-ignored — commit reviewed inputs, never reproducible outputs
-- `notices/manifest` records a human review of both binaries and their dependencies. No tool writes it, and regeneration never substitutes for that review — after a release change, review, update notices and `SOURCE.txt`, then update the manifest
+- `notices/manifest` binds the reviewed inventory to a release, source revision and both archive digests. Only `buildpacks/ffmpeg/bin/review-release` writes it, and only after showing that upstream changed nothing inside the inventory; the synchronization workflow runs it from the trusted base. Exit status 3 means a person must review both binaries and their dependencies, update notices and `SOURCE.txt`, then update the manifest. The lock resolver and notice generator never write it, and regeneration never substitutes for that review
 - `notices/` must contain only inventoried inputs. Stray files such as `.DS_Store` fail the inventory check
 - Streamarr selects FFmpeg's native `aac` encoder, not `libfdk_aac`, and the runtime must not enable `--enable-nonfree`
 - Do not publish a binary whose Corresponding Source is unavailable
