@@ -141,15 +141,19 @@ component uses the `build` capture group: `-10` sorts after `-9`, and packaging-
 are stable patch updates, not SemVer prereleases. Updates have their own PR and are not
 automerged. Major-version updates additionally require Dependency Dashboard approval.
 Renovate still proposes eligible minor and packaging updates automatically; their
-notice review must complete before CI and image packaging can pass.
+notice review must complete before CI and image packaging can pass. The synchronization
+workflow completes it when `bin/review-release` confirms an unchanged inventory; otherwise
+it annotates the run with the paths that need a person and leaves the review inputs alone.
 
 `.github/workflows/sync-ffmpeg-lock.yml` uses `pull_request_target` only for same-repository
-Renovate PRs. It executes resolver code from the trusted PR base, reads the proposed release
-from a Git object as data, and generates the lock entirely in the trusted checkout. It never
-executes proposed code with write credentials. Only after detecting a changed lock and
-verifying the head SHA does it mint a short-lived GitHub App token.
+Renovate PRs. It executes resolver and review code from the trusted PR base, reads the proposed
+release from a Git object as data, and generates the lock and any carried-forward review
+entirely in the trusted checkout. It never executes proposed code with write credentials, and
+it never runs the downloaded binaries: ordinary CI checks their build configuration. Only after
+detecting a change and verifying the head SHA does it mint a short-lived GitHub App token.
 
-GitHub's `createCommitOnBranch` API creates a signed commit containing only the generated lock.
+GitHub's `createCommitOnBranch` API creates a signed commit containing only the generated lock
+and, after a confirmed review, `notices/manifest`, `notices/sources.json` and `SOURCE.txt`.
 Its `expectedHeadOid` check rejects a moved branch atomically. The App token triggers normal
 PR checks after the commit; the default Actions token would suppress those runs.
 
