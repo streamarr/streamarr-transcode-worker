@@ -147,9 +147,9 @@ class FfmpegAutomationWorkflowTest {
         .doesNotContain("proposed/buildpacks/ffmpeg/bin/update-lock");
     assertThat((String) prepare.get("run"))
         .contains(
-            "git -C proposed hash-object -w",
-            "git -C proposed rev-parse \"HEAD:${lock_path}\"",
-            "lock-blob=${lock_blob}",
+            "git -C proposed hash-object -w \"${GITHUB_WORKSPACE}/trusted/${path}\"",
+            "git -C proposed rev-parse \"HEAD:${path}\"",
+            "blobs=${blobs}",
             "changed=true");
     assertThat((String) verifyHead.get("run"))
         .contains(
@@ -177,12 +177,55 @@ class FfmpegAutomationWorkflowTest {
             "createCommitOnBranch",
             "expectedHeadOid: $expectedHead",
             "git cat-file blob",
-            "buildpacks/ffmpeg/ffmpeg.lock",
+            "fileChanges: {additions: $additions[0]}",
             "gh api graphql")
-        .doesNotContain("git commit", "git push", "git config", "proposed/buildpacks/");
+        .doesNotContain("git commit", "git push", "git config", "proposed/buildpacks/", "trusted/");
     assertThat(map(commit.get("env")))
         .containsEntry("EXPECTED_HEAD_SHA", "${{ github.event.pull_request.head.sha }}")
-        .containsEntry("GH_TOKEN", "${{ steps.lock_bot.outputs.token }}");
+        .containsEntry("GH_TOKEN", "${{ steps.lock_bot.outputs.token }}")
+        .containsEntry("BLOBS", "${{ steps.changes.outputs.blobs }}")
+        .containsEntry("HEADLINE", "${{ steps.changes.outputs.headline }}");
+  }
+
+  @Test
+  @DisplayName("Should carry the notice review forward only when trusted code confirms it")
+  void shouldCarryTheNoticeReviewForwardOnlyWhenTrustedCodeConfirmsIt() throws IOException {
+    var workflowPath = ".github/workflows/sync-ffmpeg-lock.yml";
+    var job = map(map(yaml(workflowPath).get("jobs")).get("sync_ffmpeg_lock"));
+    var steps = listOfMaps(job.get("steps"));
+    var names = steps.stream().map(step -> step.get("name")).toList();
+    var review = stepNamed(steps, "Review locked release from trusted code");
+    var prepare = stepNamed(steps, "Prepare synchronized lock");
+    var reviewedInputs =
+        List.of(
+            "buildpacks/ffmpeg/notices/manifest",
+            "buildpacks/ffmpeg/notices/sources.json",
+            "buildpacks/ffmpeg/SOURCE.txt");
+    var prepareRun = (String) prepare.get("run");
+    var unreviewedPaths =
+        prepareRun.substring(0, prepareRun.indexOf("if [[ \"${REVIEWED}\" == 'true' ]]; then"));
+
+    assertThat(names)
+        .containsSubsequence(
+            "Resolve FFmpeg lock from trusted code",
+            "Review locked release from trusted code",
+            "Prepare synchronized lock",
+            "Mint lock bot token");
+    assertThat((String) review.get("run"))
+        .contains(
+            "trusted/buildpacks/ffmpeg/bin/review-release",
+            "--root \"${GITHUB_WORKSPACE}/trusted\"",
+            "0) echo \"reviewed=true\"",
+            "3) echo \"reviewed=false\"",
+            "*) exit \"${status}\"",
+            "GITHUB_STEP_SUMMARY")
+        .doesNotContain("proposed/");
+    assertThat(map(prepare.get("env")))
+        .containsEntry("REVIEWED", "${{ steps.review.outputs.reviewed }}");
+    assertThat(unreviewedPaths)
+        .contains("buildpacks/ffmpeg/ffmpeg.lock")
+        .doesNotContain(reviewedInputs);
+    assertThat(prepareRun).contains(reviewedInputs);
   }
 
   @Test

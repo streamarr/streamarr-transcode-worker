@@ -1,0 +1,169 @@
+#!/bin/bash
+# shellcheck source-path=SCRIPTDIR
+
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repository_root="$(cd "${script_dir}/../../.." && pwd)"
+# shellcheck source=../lib/http.sh
+. "${script_dir}/../lib/http.sh"
+# shellcheck source=../lib/lock.sh
+. "${script_dir}/../lib/lock.sh"
+
+human_review_required=3
+# GitHub's comparison lists at most this many files, so a full list may be incomplete.
+comparison_file_limit=300
+
+# Upstream paths that cannot alter which third-party code the Linux portable binaries link,
+# nor any notice text vendored under notices/. Jellyfin's FFmpeg patches stay covered by the
+# ffmpeg component's notices. Every other path needs a person to review the inventory.
+paths_outside_inventory=(
+  '^\.github/'
+  '^debian/changelog$'
+  '^debian/patches/'
+  '^build\.yaml$'
+  '^builder/images/macos/'
+  '^builder/images/base-win64/'
+  '^msys2/'
+  '^README\.md$'
+  '^CONTRIBUTING\.md$'
+)
+
+usage() {
+  echo "Usage: $0 [--root REPOSITORY]" >&2
+  exit 2
+}
+
+while (( $# > 0 )); do
+  case "$1" in
+    --root)
+      (( $# >= 2 )) || usage
+      repository_root="$(cd "$2" && pwd)"
+      shift 2
+      ;;
+    *)
+      usage
+      ;;
+  esac
+done
+
+buildpack_dir="${repository_root}/buildpacks/ffmpeg"
+lock_file="${buildpack_dir}/ffmpeg.lock"
+manifest="${buildpack_dir}/notices/manifest"
+inventory="${buildpack_dir}/notices/sources.json"
+source_access="${buildpack_dir}/SOURCE.txt"
+manifest_keys=(release source_revision amd64_sha256 arm64_sha256)
+
+require_human_review() {
+  echo "FFmpeg notice inventory needs human review: $1"
+  exit "${human_review_required}"
+}
+
+path_is_outside_inventory() {
+  local path="$1"
+  local pattern
+  if [[ ! "${path}" =~ ^[A-Za-z0-9._/+-]+$ || "/${path}/" == *"/../"* ]]; then
+    return 1
+  fi
+
+  for pattern in "${paths_outside_inventory[@]}"; do
+    if [[ "${path}" =~ ${pattern} ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+replace_in_file() {
+  local file="$1"
+  local reviewed="$2"
+  local locked="$3"
+  sed "s|${reviewed//./\\.}|${locked}|g" "${file}" >"${file}.replaced"
+  mv "${file}.replaced" "${file}"
+}
+
+ffmpeg_lock_validate "${lock_file}"
+bound=true
+for key in "${manifest_keys[@]}"; do
+  if [[ "$(ffmpeg_lock_value "${manifest}" "${key}")" != "$(ffmpeg_lock_value "${lock_file}" "${key}")" ]]; then
+    bound=false
+  fi
+done
+if [[ "${bound}" == true ]]; then
+  echo "FFmpeg notice inventory is already bound to the locked release"
+  exit 0
+fi
+
+reviewed_release="$(ffmpeg_lock_value "${manifest}" release)"
+reviewed_revision="$(ffmpeg_lock_value "${manifest}" source_revision)"
+locked_release="$(ffmpeg_lock_value "${lock_file}" release)"
+locked_revision="$(ffmpeg_lock_value "${lock_file}" source_revision)"
+if [[ ! "${reviewed_release}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$ \
+  || ! "${reviewed_revision}" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "FFmpeg notice manifest does not name an exact release and full source revision" >&2
+  exit 1
+fi
+if [[ "${reviewed_revision}" == "${locked_revision}" ]]; then
+  require_human_review "release assets changed without a source revision change"
+fi
+
+temporary_directory="$(mktemp -d)"
+trap 'rm -rf "${temporary_directory}"' EXIT
+comparison="${temporary_directory}/comparison.json"
+# curl's own exit statuses must never be mistaken for the human-review status.
+if ! ffmpeg_github_api_get \
+  "https://api.github.com/repos/jellyfin/jellyfin-ffmpeg/compare/${reviewed_revision}...${locked_revision}" \
+  "${comparison}"; then
+  echo "Unable to compare the reviewed and locked upstream revisions" >&2
+  exit 1
+fi
+if ! jq -e '(.status | type == "string") and (.files | type == "array")' "${comparison}" >/dev/null; then
+  echo "Expected an upstream comparison with a status and a change list" >&2
+  exit 1
+fi
+
+status="$(jq -r '.status' "${comparison}")"
+if [[ "${status}" != ahead ]]; then
+  require_human_review "locked revision ${locked_revision} is ${status} relative to reviewed revision ${reviewed_revision}"
+fi
+file_count="$(jq '.files | length' "${comparison}")"
+if (( file_count >= comparison_file_limit )); then
+  require_human_review "upstream change list is truncated at ${file_count} files"
+fi
+
+inventoried_paths=()
+while IFS= read -r encoded_path; do
+  # A JSON escape leaves a backslash behind, so unusual names stay inside the inventory.
+  path="${encoded_path#\"}"
+  path="${path%\"}"
+  if ! path_is_outside_inventory "${path}"; then
+    inventoried_paths+=("${encoded_path}")
+  fi
+done < <(jq -c '.files[] | .filename, (.previous_filename // empty)' "${comparison}")
+if (( ${#inventoried_paths[@]} > 0 )); then
+  require_human_review "upstream changed $(IFS=' '; echo "${inventoried_paths[*]}")"
+fi
+
+cp "${inventory}" "${temporary_directory}/sources.json"
+cp "${source_access}" "${temporary_directory}/SOURCE.txt"
+replace_in_file "${temporary_directory}/sources.json" "${reviewed_revision}" "${locked_revision}"
+replace_in_file "${temporary_directory}/SOURCE.txt" "${reviewed_revision}" "${locked_revision}"
+replace_in_file "${temporary_directory}/SOURCE.txt" \
+  "releases/tag/${reviewed_release}" "releases/tag/${locked_release}"
+if ! jq -e --arg revision "${locked_revision}" \
+  '[.[] | select(.id == "ffmpeg")] | length == 1 and .[0].revision == $revision' \
+  "${temporary_directory}/sources.json" >/dev/null \
+  || ! grep -Fq "releases/tag/${locked_release}" "${temporary_directory}/SOURCE.txt" \
+  || ! grep -Fq "${locked_revision}" "${temporary_directory}/SOURCE.txt"; then
+  echo "Reviewed inputs do not reference the reviewed release as expected; bind them by hand" >&2
+  exit 1
+fi
+for key in "${manifest_keys[@]}"; do
+  printf '%s=%s\n' "${key}" "$(ffmpeg_lock_value "${lock_file}" "${key}")"
+done >"${temporary_directory}/manifest"
+
+mv "${temporary_directory}/sources.json" "${inventory}"
+mv "${temporary_directory}/SOURCE.txt" "${source_access}"
+mv "${temporary_directory}/manifest" "${manifest}"
+echo "FFmpeg notice inventory is unchanged from ${reviewed_release} to ${locked_release}:" \
+  "${file_count} upstream files changed, all outside the inventory"

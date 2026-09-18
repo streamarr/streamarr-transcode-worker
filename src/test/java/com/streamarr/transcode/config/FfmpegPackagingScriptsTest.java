@@ -6,10 +6,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
 import java.util.stream.Stream;
 import lombok.Builder;
 import org.junit.jupiter.api.BeforeAll;
@@ -422,7 +418,7 @@ class FfmpegPackagingScriptsTest {
             .formatted(
                 release, amd64Asset, amd64Digest, amd64Asset, arm64Asset, arm64Digest, arm64Asset));
     var commands = Files.createDirectory(temporaryDirectory.resolve("commands"));
-    writeCommand(
+    ScriptCommand.writeFake(
         commands,
         "curl",
         """
@@ -546,6 +542,22 @@ class FfmpegPackagingScriptsTest {
 
     assertThat(result.exitCode()).isEqualTo(1);
     assertThat(result.output()).contains("Expected Jellyfin FFmpeg runtime version");
+  }
+
+  @Test
+  @DisplayName("Should reject runtime when its build configuration differs from the reviewed one")
+  void shouldRejectRuntimeWhenItsBuildConfigurationDiffersFromTheReviewedOne() throws Exception {
+    var buildpack = buildpack();
+    var reviewed = Files.readString(Path.of("buildpacks/ffmpeg/notices/buildconf-amd64.txt"));
+    var unreviewed = temporaryDirectory.resolve("unreviewed-buildconf.txt");
+    Files.writeString(unreviewed, reviewed.replace("--enable-gpl", "--enable-gpl --enable-libnew"));
+
+    var result =
+        buildpack.command().environment("FAKE_FFMPEG_BUILDCONF", unreviewed.toString()).execute();
+
+    assertThat(result.exitCode()).isEqualTo(1);
+    assertThat(result.output())
+        .contains("FFmpeg build configuration differs from notices/buildconf-amd64.txt");
   }
 
   @Test
@@ -902,7 +914,7 @@ class FfmpegPackagingScriptsTest {
     var layers = Files.createDirectory(temporaryDirectory.resolve("layers"));
     var layer = layers.resolve("ffmpeg");
     var tarArguments = temporaryDirectory.resolve("tar-arguments");
-    writeCommand(
+    ScriptCommand.writeFake(
         commands,
         "curl",
         """
@@ -928,7 +940,7 @@ class FfmpegPackagingScriptsTest {
         done
         : > "${archive}"
         """);
-    writeCommand(
+    ScriptCommand.writeFake(
         commands,
         "sha256sum",
         """
@@ -938,7 +950,7 @@ class FfmpegPackagingScriptsTest {
         cat >/dev/null
         exit "${FAKE_SHA256_EXIT:-0}"
         """);
-    writeCommand(
+    ScriptCommand.writeFake(
         commands,
         "tar",
         """
@@ -957,6 +969,16 @@ class FfmpegPackagingScriptsTest {
         if [[ "$*" == *"muxer=hls"* ]]; then
           printf '%s\n' '-hls_segment_options'
         fi
+        if [[ "$*" == *"-buildconf"* ]]; then
+          if [[ -n "${FAKE_FFMPEG_BANNER_PREFIX:-}" ]]; then
+            printf '%s\n' "${FAKE_FFMPEG_BANNER_PREFIX}"
+          fi
+          case "${CNB_TARGET_ARCH}" in
+            arm64 | aarch64) reviewed=buildconf-arm64.txt ;;
+            *) reviewed=buildconf-amd64.txt ;;
+          esac
+          cat "${FAKE_FFMPEG_BUILDCONF:-${FAKE_FFMPEG_NOTICES}/${reviewed}}"
+        fi
         SCRIPT
         cp "${FAKE_FFMPEG_LAYER}/bin/ffmpeg" "${FAKE_FFMPEG_LAYER}/bin/ffprobe"
         chmod +x "${FAKE_FFMPEG_LAYER}/bin/ffmpeg" "${FAKE_FFMPEG_LAYER}/bin/ffprobe"
@@ -973,7 +995,10 @@ class FfmpegPackagingScriptsTest {
                 .environment("CNB_TARGET_ARCH", "amd64")
                 .environment("FAKE_FFMPEG_LAYER", layer.toString())
                 .environment("FAKE_TAR_ARGUMENTS", tarArguments.toString())
-                .environment("FAKE_FFMPEG_VERSION", ffmpegVersion))
+                .environment("FAKE_FFMPEG_VERSION", ffmpegVersion)
+                .environment(
+                    "FAKE_FFMPEG_NOTICES",
+                    Path.of("buildpacks/ffmpeg/notices").toAbsolutePath().toString()))
         .build();
   }
 
@@ -1039,7 +1064,7 @@ class FfmpegPackagingScriptsTest {
   @DisplayName("Should reject nonfree runtime when verifying packaged image")
   void shouldRejectNonfreeRuntimeWhenVerifyingPackagedImage() throws Exception {
     var verifier = imageVerifier();
-    writeCommand(
+    ScriptCommand.writeFake(
         verifier.runtime(),
         "ffmpeg",
         """
@@ -1047,7 +1072,7 @@ class FfmpegPackagingScriptsTest {
           'ffmpeg version 8.2.0-Jellyfin Copyright' \\
           'configuration: --enable-gpl --disable-libfdk-aac --enable-nonfree'
         """);
-    writeCommand(verifier.runtime(), "ffprobe", ":");
+    ScriptCommand.writeFake(verifier.runtime(), "ffprobe", ":");
 
     var result = verifier.command().execute();
 
@@ -1070,7 +1095,7 @@ class FfmpegPackagingScriptsTest {
     Files.writeString(buildpackDirectory.resolve("ffmpeg.lock"), futureLock);
     var commands = Files.createDirectory(temporaryDirectory.resolve("commands"));
     var runtime = Files.createDirectories(temporaryDirectory.resolve("runtime/bin"));
-    writeCommand(
+    ScriptCommand.writeFake(
         commands,
         "docker",
         """
@@ -1107,7 +1132,7 @@ class FfmpegPackagingScriptsTest {
       throws Exception {
     var verifier = imageVerifier();
     var probes = temporaryDirectory.resolve("completed-probes");
-    writeCommand(
+    ScriptCommand.writeFake(
         verifier.runtime(),
         "ffmpeg",
         """
@@ -1126,7 +1151,7 @@ class FfmpegPackagingScriptsTest {
         printf segment >"${directory}/init.mp4"
         printf segment >"${directory}/segment0.m4s"
         """);
-    writeCommand(
+    ScriptCommand.writeFake(
         verifier.runtime(),
         "ffprobe",
         """
@@ -1148,67 +1173,20 @@ class FfmpegPackagingScriptsTest {
     assertThat(Files.readAllLines(probes)).containsExactly("hls", "av1");
   }
 
-  private CommandFixture command(Path script) {
-    return new CommandFixture(script);
+  private ScriptCommand command(Path script) {
+    return ScriptCommand.of(script);
   }
 
-  private static void writeCommand(Path directory, String name, String body) throws IOException {
-    var command = directory.resolve(name);
-    Files.writeString(command, "#!/bin/bash\nset -euo pipefail\n" + body);
-    assertThat(command.toFile().setExecutable(true)).isTrue();
-  }
+  private record LockUpdaterFixture(Path lock, Path releaseJson, ScriptCommand command) {}
 
-  private record ExecutionResult(int exitCode, String output) {}
-
-  private record LockUpdaterFixture(Path lock, Path releaseJson, CommandFixture command) {}
-
-  private record ImageVerifierFixture(Path runtime, CommandFixture command) {}
+  private record ImageVerifierFixture(Path runtime, ScriptCommand command) {}
 
   @Builder
   private record BuildpackFixture(
-      Path layers, Path layer, Path tarArguments, CommandFixture command) {
+      Path layers, Path layer, Path tarArguments, ScriptCommand command) {
 
-    private ExecutionResult execute() throws IOException, InterruptedException {
+    private ScriptCommand.Result execute() throws IOException, InterruptedException {
       return command.execute();
-    }
-  }
-
-  private static final class CommandFixture {
-
-    private final List<String> command = new ArrayList<>();
-    private final Map<String, String> environment = new HashMap<>();
-    private Path prependedPath;
-
-    private CommandFixture(Path script) {
-      command.add(script.toString());
-    }
-
-    private CommandFixture argument(String argument) {
-      command.add(argument);
-      return this;
-    }
-
-    private CommandFixture environment(String name, String value) {
-      environment.put(name, value);
-      return this;
-    }
-
-    private CommandFixture prependPath(Path path) {
-      prependedPath = path;
-      return this;
-    }
-
-    private ExecutionResult execute() throws IOException, InterruptedException {
-      var processBuilder = new ProcessBuilder(command).redirectErrorStream(true);
-      processBuilder.environment().putAll(environment);
-      if (prependedPath != null) {
-        var systemPath = processBuilder.environment().get("PATH");
-        processBuilder.environment().put("PATH", prependedPath + ":" + systemPath);
-      }
-
-      var process = processBuilder.start();
-      var output = new String(process.getInputStream().readAllBytes());
-      return new ExecutionResult(process.waitFor(), output);
     }
   }
 }
