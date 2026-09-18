@@ -28,6 +28,9 @@ The buildpack verifies the downloaded archive against the locked checksum before
 its root-level `ffmpeg` and `ffprobe` binaries. Jellyfin's banner omits the packaging revision:
 package `8.1.2-4` reports `8.1.2-Jellyfin`; the checksum pins the exact build. The runtime must
 enable GPL, omit the `--enable-nonfree` build flag, and support `hls_segment_options`.
+Its `-buildconf` output, from the banner onward, must also equal the reviewed
+`notices/buildconf-<architecture>.txt` capture byte for byte: the notice inventory starts from
+that capture, so a binary with another toolchain, flag set or library version is unreviewed.
 This flag check does not cover FDK-AAC: Jellyfin's GPL build includes stripped FDK-AAC
 without setting `--enable-nonfree`. Streamarr selects FFmpeg's native `aac` encoder,
 not `libfdk_aac`; the latter is nevertheless present in the distributed binary.

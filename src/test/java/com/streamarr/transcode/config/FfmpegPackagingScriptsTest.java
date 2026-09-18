@@ -545,6 +545,22 @@ class FfmpegPackagingScriptsTest {
   }
 
   @Test
+  @DisplayName("Should reject runtime when its build configuration differs from the reviewed one")
+  void shouldRejectRuntimeWhenItsBuildConfigurationDiffersFromTheReviewedOne() throws Exception {
+    var buildpack = buildpack();
+    var reviewed = Files.readString(Path.of("buildpacks/ffmpeg/notices/buildconf-amd64.txt"));
+    var unreviewed = temporaryDirectory.resolve("unreviewed-buildconf.txt");
+    Files.writeString(unreviewed, reviewed.replace("--enable-gpl", "--enable-gpl --enable-libnew"));
+
+    var result =
+        buildpack.command().environment("FAKE_FFMPEG_BUILDCONF", unreviewed.toString()).execute();
+
+    assertThat(result.exitCode()).isEqualTo(1);
+    assertThat(result.output())
+        .contains("FFmpeg build configuration differs from notices/buildconf-amd64.txt");
+  }
+
+  @Test
   @DisplayName("Should accept version banner when prefixed by diagnostic output")
   void shouldAcceptVersionBannerWhenPrefixedByDiagnosticOutput() throws Exception {
     var buildpack = buildpack();
@@ -953,6 +969,16 @@ class FfmpegPackagingScriptsTest {
         if [[ "$*" == *"muxer=hls"* ]]; then
           printf '%s\n' '-hls_segment_options'
         fi
+        if [[ "$*" == *"-buildconf"* ]]; then
+          if [[ -n "${FAKE_FFMPEG_BANNER_PREFIX:-}" ]]; then
+            printf '%s\n' "${FAKE_FFMPEG_BANNER_PREFIX}"
+          fi
+          case "${CNB_TARGET_ARCH}" in
+            arm64 | aarch64) reviewed=buildconf-arm64.txt ;;
+            *) reviewed=buildconf-amd64.txt ;;
+          esac
+          cat "${FAKE_FFMPEG_BUILDCONF:-${FAKE_FFMPEG_NOTICES}/${reviewed}}"
+        fi
         SCRIPT
         cp "${FAKE_FFMPEG_LAYER}/bin/ffmpeg" "${FAKE_FFMPEG_LAYER}/bin/ffprobe"
         chmod +x "${FAKE_FFMPEG_LAYER}/bin/ffmpeg" "${FAKE_FFMPEG_LAYER}/bin/ffprobe"
@@ -969,7 +995,10 @@ class FfmpegPackagingScriptsTest {
                 .environment("CNB_TARGET_ARCH", "amd64")
                 .environment("FAKE_FFMPEG_LAYER", layer.toString())
                 .environment("FAKE_TAR_ARGUMENTS", tarArguments.toString())
-                .environment("FAKE_FFMPEG_VERSION", ffmpegVersion))
+                .environment("FAKE_FFMPEG_VERSION", ffmpegVersion)
+                .environment(
+                    "FAKE_FFMPEG_NOTICES",
+                    Path.of("buildpacks/ffmpeg/notices").toAbsolutePath().toString()))
         .build();
   }
 
