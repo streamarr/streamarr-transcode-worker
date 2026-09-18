@@ -17,7 +17,7 @@ Build and validate a local image with Java 25, the Node version in
 
 The build validates FFmpeg notices and checksums, preserves the license and source materials,
 and checks H.264/AAC HLS and AV1 encoding inside the resulting image. OCI labels record the
-source commit. The OCI version label defaults to that commit. An optional second argument to
+source commit. The OCI version label defaults to the Maven project version. An optional second argument to
 `build-worker-image.sh` supplies the release version. The `org.streamarr.contract.version` label records the pinned Buf SDK version.
 Validation checks these labels against the expected values. These commands do not publish the image.
 
@@ -39,19 +39,24 @@ After human review and merge, a push to `main` publishes each tested native imag
 Pull requests and manual CI runs do not authenticate or publish. The workflow uses the existing
 `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` organization secrets and a read-only GitHub token.
 
-Each native job records its registry digest. After both jobs pass, the final job combines those exact
-digests into a multi-architecture index. It records the created index digest, source commit, Buf SDK
-version, and native digests in the `worker-image-<source SHA>` artifact. Tags have the form
-`sha-<full source SHA>` and `sha-<full source SHA>-<architecture>`. Consumers pin the recorded
-`streamarr/streamarr-transcode-worker@sha256:...` reference because tags can be replaced.
+Each native job records its registry digest. After both jobs pass, the shared publication workflow
+combines those exact digests into a multi-architecture index. The `published-image-<source SHA>`
+artifact contains `image.json`, the registry index and metadata, and both native receipts.
+`image.json` records the immutable image reference, source commit, Maven version, and native digests.
+The Buf SDK version remains in the image's `org.streamarr.contract.version` label. Tags have the form
+`sha-<full source SHA>` and `sha-<full source SHA>-<architecture>`. When the Maven version is
+`X.Y.Z-SNAPSHOT`, the current `main` build also publishes that exact snapshot tag from the same
+verified native digests. Publication is serialized, and stale reruns leave the snapshot tag unchanged.
+Stable version tags remain owned by Release Publisher. Consumers pin a tag and digest, such as
+`streamarr/streamarr-transcode-worker:0.1.0-SNAPSHOT@sha256:...`, because tags can be replaced.
 
-Publication tests use a local registry fake that preserves image contents through tagging and push.
-They verify rejected events and revisions, exact tested-image promotion, native receipt validation,
-and digest records even if an image tag changes. They never authenticate or contact a registry.
+Local publication tests use a registry fake to verify that native publication promotes the tested
+image. Tests in `streamarr/streamarr-workflows` cover receipt validation, multi-architecture publication,
+and tag promotion. These tests never authenticate or contact a registry.
 
 Published GitHub releases also trigger Release Publisher, which rebuilds the tagged revision on
 both native runners. It runs the same media checks and `WorkerImageIT` command before Docker Hub
-authentication, then publishes versioned native tags and a multi-architecture version tag.
+authentication, then publishes native commit tags and a multi-architecture version tag.
 Only GitHub's latest release updates `latest`. See [releases](releases.md) for validation and retry behavior.
 
 Hardware encoder support and redistribution materials remain in the moved buildpack. Ordinary

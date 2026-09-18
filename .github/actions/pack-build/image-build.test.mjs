@@ -27,7 +27,7 @@ function buildImage({ version } = {}) {
     for (const tool of ['pack', 'docker']) symlinkSync(fakeTools, join(bin, tool));
     symlinkSync(fakeTools, join(directory, 'mvnw'));
     const statePath = join(directory, 'build-state.json');
-    writeFileSync(statePath, JSON.stringify({ contract, images: {} }));
+    writeFileSync(statePath, JSON.stringify({ contract, version: '0.1.0-SNAPSHOT', images: {} }));
     const env = {
       ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_BUILD_STATE: statePath,
       GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null',
@@ -58,9 +58,9 @@ test('records the release version and source revision when building a versioned 
   });
 });
 
-test('keeps the source revision as the image version when CI supplies no release version', () => {
+test('Should record the Maven version and source revision when CI supplies no release version', () => {
   const result = buildImage();
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.labels['org.opencontainers.image.version'], result.revision);
+  assert.equal(result.labels['org.opencontainers.image.version'], '0.1.0-SNAPSHOT');
   assert.equal(result.labels['org.opencontainers.image.revision'], result.revision);
 });

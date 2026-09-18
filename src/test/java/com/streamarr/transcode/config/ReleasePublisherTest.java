@@ -14,7 +14,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
-import org.junit.jupiter.params.provider.ValueSource;
 import org.yaml.snakeyaml.Yaml;
 
 @Tag("UnitTest")
@@ -22,25 +21,36 @@ import org.yaml.snakeyaml.Yaml;
 class ReleasePublisherTest {
 
   @Test
-  @DisplayName("Should retain latest when GitHub cannot identify the latest release")
-  void shouldRetainLatestWhenGitHubCannotIdentifyLatestRelease(@TempDir Path directory)
-      throws Exception {
-    var fixture = new ReleasePublisherFixture(directory);
-    fixture.publishedRelease();
-    fixture.publishedNativeImages();
-    fixture.releaseState(
-        """
-        {"unavailable":true}
-        """);
+  @DisplayName("Should delegate validated receipts when native release images pass")
+  void shouldDelegateValidatedReceiptsWhenNativeReleaseImagesPass() throws Exception {
+    var validation = ReleasePublisherFixture.job("validate_release");
+    var publish = ReleasePublisherFixture.job("publish_release");
 
-    var result = fixture.runStep("Publish latest multi-architecture image");
-
-    assertThat(result.exitCode()).as(result.output()).isEqualTo(23);
-    assertThat(fixture.registry().get("indexes"))
+    assertThat(validation.get("uses"))
+        .asString()
+        .matches(
+            "streamarr/streamarr-workflows/.github/workflows/validate-release.yml@[a-f0-9]{40}");
+    assertThat(validation.get("with"))
         .asInstanceOf(MAP)
+        .containsEntry("tag", "${{ inputs.tag || '' }}");
+    assertThat(publish.get("uses"))
+        .asString()
+        .matches("streamarr/streamarr-workflows/.github/workflows/publish-image.yml@[a-f0-9]{40}");
+    assertThat(publish)
+        .asInstanceOf(MAP)
+        .containsEntry("needs", List.of("validate_release", "build_release_images"));
+    assertThat(publish.get("with"))
+        .asInstanceOf(MAP)
+        .containsEntry("image-repository", "streamarr/streamarr-transcode-worker")
+        .containsEntry("source-revision", "${{ needs.validate_release.outputs.revision }}")
+        .containsEntry("version", "${{ needs.validate_release.outputs.version }}")
         .containsEntry(
-            "index.docker.io/streamarr/streamarr-transcode-worker:latest",
-            List.of(Map.of("version", "1.2.2")));
+            "artifact-pattern", "worker-release-*-${{ needs.validate_release.outputs.revision }}")
+        .containsEntry("publication-kind", "release");
+    assertThat(publish.get("secrets"))
+        .asInstanceOf(MAP)
+        .containsEntry("dockerhub-username", "${{ secrets.DOCKERHUB_USERNAME }}")
+        .containsEntry("dockerhub-token", "${{ secrets.DOCKERHUB_TOKEN }}");
   }
 
   @Test
@@ -52,48 +62,20 @@ class ReleasePublisherTest {
         .asInstanceOf(MAP)
         .containsEntry("group", "publish-release")
         .containsEntry("cancel-in-progress", false);
-    var validation = ReleasePublisherFixture.job("validate_release");
-    assertThat(validation)
-        .asInstanceOf(MAP)
-        .containsEntry(
-            "outputs",
-            Map.of(
-                "version", "${{ steps.release.outputs.version }}",
-                "revision", "${{ steps.release.outputs.revision }}"));
-    var release = ReleasePublisherFixture.step("Verify tagged Maven version");
-    assertThat(release).asInstanceOf(MAP).containsEntry("id", "release");
-    assertThat(release.get("env"))
-        .asInstanceOf(MAP)
-        .containsEntry("GH_TOKEN", "${{ github.token }}")
-        .containsEntry(
-            "RELEASE_TAG",
-            "${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.release.tag_name }}");
-    assertThat(ReleasePublisherFixture.steps("validate_release").getFirst().get("with"))
-        .asInstanceOf(MAP)
-        .containsEntry(
-            "ref",
-            "${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.sha }}")
-        .containsEntry("fetch-depth", 0)
-        .containsEntry("persist-credentials", false);
     assertThat(ReleasePublisherFixture.job("publish_release"))
         .asInstanceOf(MAP)
         .containsEntry("needs", List.of("validate_release", "build_release_images"));
-    for (var name :
-        List.of(
-            "Publish immutable multi-architecture image",
-            "Publish latest multi-architecture image")) {
-      var step = ReleasePublisherFixture.step(name);
-      assertThat(step).asInstanceOf(MAP).doesNotContainKeys("if", "continue-on-error");
-      assertThat(step.get("env"))
-          .asInstanceOf(MAP)
-          .containsEntry("IMAGE_VERSION", "${{ needs.validate_release.outputs.version }}");
-    }
-    assertThat(ReleasePublisherFixture.step("Publish latest multi-architecture image").get("env"))
-        .asInstanceOf(MAP)
-        .containsEntry("GH_TOKEN", "${{ github.token }}");
     assertThat(ReleasePublisherFixture.step("Publish the verified native image").get("env"))
         .asInstanceOf(MAP)
-        .containsEntry("IMAGE_ARCHITECTURE", "${{ matrix.architecture }}");
+        .containsEntry("IMAGE_ARCHITECTURE", "${{ matrix.architecture }}")
+        .containsEntry("SOURCE_REVISION", "${{ needs.validate_release.outputs.revision }}");
+    assertThat(ReleasePublisherFixture.step("Preserve the native image digest").get("with"))
+        .asInstanceOf(MAP)
+        .containsEntry(
+            "name",
+            "worker-release-${{ matrix.architecture }}-${{ needs.validate_release.outputs.revision }}")
+        .containsEntry("path", "${{ matrix.architecture }}-image.json")
+        .containsEntry("if-no-files-found", "error");
     for (var name : List.of("validate_release", "build_release_images", "publish_release")) {
       var job = ReleasePublisherFixture.job(name);
       assertThat(job)
@@ -124,101 +106,15 @@ class ReleasePublisherTest {
                 "Exercise the packaged worker through its public interfaces"))
         .asInstanceOf(MAP)
         .containsEntry("run", ciTest.get("run"));
-    for (var job : List.of("build_release_images", "publish_release")) {
-      var login =
-          ReleasePublisherFixture.steps(job).stream()
-              .filter(step -> "Login to Docker Hub".equals(step.get("name")))
-              .findFirst()
-              .orElseThrow();
-      assertThat(login.get("with"))
-          .asInstanceOf(MAP)
-          .containsEntry("username", "${{ secrets.DOCKERHUB_USERNAME }}")
-          .containsEntry("password", "${{ secrets.DOCKERHUB_TOKEN }}");
-    }
+    assertThat(ReleasePublisherFixture.step("Login to Docker Hub").get("with"))
+        .asInstanceOf(MAP)
+        .containsEntry("username", "${{ secrets.DOCKERHUB_USERNAME }}")
+        .containsEntry("password", "${{ secrets.DOCKERHUB_TOKEN }}");
     assertThat(
             steps.indexOf(
                 ReleasePublisherFixture.step(
                     "Exercise the packaged worker through its public interfaces")))
         .isLessThan(steps.indexOf(ReleasePublisherFixture.step("Login to Docker Hub")));
-  }
-
-  @ParameterizedTest
-  @CsvSource({"v1.2.3, true", "v1.2.4, false"})
-  @DisplayName("Should update latest only when GitHub identifies the published version as latest")
-  void shouldUpdateLatestOnlyWhenGitHubIdentifiesPublishedVersionAsLatest(
-      String latest, boolean update, @TempDir Path directory) throws Exception {
-    var fixture = new ReleasePublisherFixture(directory);
-    fixture.publishedRelease();
-    fixture.publishedNativeImages();
-    fixture.releaseState(
-        """
-        {"latest":"%s"}
-        """
-            .formatted(latest));
-
-    var result = fixture.runStep("Publish latest multi-architecture image");
-
-    assertThat(result.exitCode()).as(result.output()).isZero();
-    var expected =
-        update
-            ? List.of(
-                Map.of("version", "1.2.3", "architecture", "amd64"),
-                Map.of("version", "1.2.3", "architecture", "arm64"))
-            : List.of(Map.of("version", "1.2.2"));
-    assertThat(fixture.registry().get("indexes"))
-        .asInstanceOf(MAP)
-        .containsEntry("index.docker.io/streamarr/streamarr-transcode-worker:latest", expected);
-  }
-
-  @Test
-  @DisplayName("Should preserve Docker failure when inspection emits both expected platforms")
-  void shouldPreserveDockerFailureWhenInspectionEmitsBothExpectedPlatforms(@TempDir Path directory)
-      throws Exception {
-    var fixture = new ReleasePublisherFixture(directory);
-    fixture.publishedNativeImages();
-    var command = fixture.stepCommand("Publish immutable multi-architecture image");
-    command.environment().put("INSPECTION_STATUS", "23");
-
-    var result = fixture.run(command);
-
-    assertThat(result.exitCode()).as(result.output()).isEqualTo(23);
-  }
-
-  @ParameterizedTest
-  @ValueSource(strings = {"amd64", "arm64"})
-  @DisplayName("Should fail publication when the registry index lacks a supported platform")
-  void shouldFailPublicationWhenRegistryIndexLacksSupportedPlatform(
-      String architecture, @TempDir Path directory) throws Exception {
-    var fixture = new ReleasePublisherFixture(directory);
-    fixture.publishedNativeImages();
-    fixture.registryInspection(
-        """
-        {"manifests":[{"platform":{"os":"linux","architecture":"%s"}}]}
-        """
-            .formatted(architecture));
-
-    var result = fixture.runStep("Publish immutable multi-architecture image");
-
-    assertThat(result.exitCode()).as(result.output()).isEqualTo(1);
-  }
-
-  @Test
-  @DisplayName("Should publish the versioned index when both native release images are available")
-  void shouldPublishVersionedIndexWhenBothNativeReleaseImagesAreAvailable(@TempDir Path directory)
-      throws Exception {
-    var fixture = new ReleasePublisherFixture(directory);
-    fixture.publishedNativeImages();
-
-    var result = fixture.runStep("Publish immutable multi-architecture image");
-
-    assertThat(result.exitCode()).as(result.output()).isZero();
-    assertThat(fixture.registry().get("indexes"))
-        .asInstanceOf(MAP)
-        .containsEntry(
-            "index.docker.io/streamarr/streamarr-transcode-worker:1.2.3",
-            List.of(
-                Map.of("version", "1.2.3", "architecture", "amd64"),
-                Map.of("version", "1.2.3", "architecture", "arm64")));
   }
 
   @ParameterizedTest
@@ -230,8 +126,8 @@ class ReleasePublisherTest {
     fixture.registryState(
         """
         {"authenticated":false,"local":{
-          "streamarr-worker:release-amd64":{"source":"release-revision","version":"1.2.3","architecture":"amd64"},
-          "streamarr-worker:release-arm64":{"source":"release-revision","version":"1.2.3","architecture":"arm64"}
+          "streamarr-worker:release-amd64":{"source":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","version":"1.2.3","architecture":"amd64"},
+          "streamarr-worker:release-arm64":{"source":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","version":"1.2.3","architecture":"arm64"}
         },"registry":{},"indexes":{}}
         """);
 
@@ -239,6 +135,7 @@ class ReleasePublisherTest {
         fixture.publishNativeImage(
             ReleasePublisherFixture.ImageTestScenario.builder()
                 .architecture(architecture)
+                .sourceRevision("a".repeat(40))
                 .status(status)
                 .build());
 
@@ -247,20 +144,28 @@ class ReleasePublisherTest {
     var published = (Map<?, ?>) fixture.registry().get("registry");
     if (status != 0) {
       assertThat(published).isEmpty();
+      assertThat(fixture.nativeReceipt(architecture)).isEmpty();
       return;
     }
 
     assertThat(published)
         .isEqualTo(
             Map.of(
-                "index.docker.io/streamarr/streamarr-transcode-worker:1.2.3-" + architecture,
+                "index.docker.io/streamarr/streamarr-transcode-worker:sha-"
+                    + "a".repeat(40)
+                    + "-"
+                    + architecture,
                 Map.of(
-                    "source",
-                    "release-revision",
-                    "version",
-                    "1.2.3",
-                    "architecture",
-                    architecture)));
+                    "source", "a".repeat(40), "version", "1.2.3", "architecture", architecture)));
+    assertThat(fixture.nativeReceipt(architecture))
+        .isEqualTo(
+            Map.of(
+                "sourceRevision",
+                "a".repeat(40),
+                "architecture",
+                architecture,
+                "image",
+                "streamarr/streamarr-transcode-worker@sha256:" + "d".repeat(64)));
   }
 
   @Test
@@ -294,116 +199,6 @@ class ReleasePublisherTest {
         .containsEntry(
             "run",
             ".github/actions/pack-build/build-worker-image.sh \"$WORKER_IMAGE\" \"$IMAGE_VERSION\"");
-  }
-
-  @ParameterizedTest
-  @ValueSource(
-      strings = {
-        """
-      {"releases":{"v1.2.3":{"draft":true}}}
-      """,
-        """
-      {"releases":{"v1.2.3":{"draft":null}}}
-      """,
-        """
-      {"releases":{}}
-      """,
-        """
-      {"unavailable":true}
-      """
-      })
-  @DisplayName("Should withhold image builds when GitHub cannot confirm a published release")
-  void shouldWithholdImageBuildsWhenGitHubCannotConfirmPublishedRelease(
-      String state, @TempDir Path directory) throws Exception {
-    var fixture = new ReleasePublisherFixture(directory);
-    fixture.publishedRelease();
-    fixture.releaseState(state);
-
-    var result = fixture.runStep("Verify tagged Maven version");
-
-    assertThat(result.exitCode()).as(result.output()).isNotZero();
-    assertThat(fixture.outputs()).isEmpty();
-  }
-
-  @Test
-  @DisplayName("Should reject version drift when Maven differs from the release tag")
-  void shouldRejectVersionDriftWhenMavenDiffersFromReleaseTag(@TempDir Path directory)
-      throws Exception {
-    var fixture = new ReleasePublisherFixture(directory);
-    fixture.publishedRelease();
-    fixture.mavenVersion("1.2.4-SNAPSHOT");
-
-    var result = fixture.runStep("Verify tagged Maven version");
-
-    assertThat(result.exitCode()).isEqualTo(1);
-    assertThat(result.output()).contains("Release tag and Maven version must agree");
-    assertThat(fixture.outputs()).isEmpty();
-  }
-
-  @ParameterizedTest
-  @ValueSource(strings = {"01.2.3", "1.2", "1.2.3-SNAPSHOT", "1.2.3-rc.1", "1.2.3+build"})
-  @DisplayName("Should reject the release when its tag is not stable SemVer")
-  void shouldRejectReleaseWhenTagIsNotStableSemver(String version, @TempDir Path directory)
-      throws Exception {
-    var fixture = new ReleasePublisherFixture(directory);
-    fixture.publishedRelease();
-    fixture.git("tag", "v" + version);
-    fixture.mavenVersion(version);
-    var command =
-        fixture.command(
-            (String) ReleasePublisherFixture.step("Verify tagged Maven version").get("run"));
-    command.environment().put("RELEASE_TAG", "v" + version);
-
-    var result = fixture.run(command);
-
-    assertThat(result.exitCode()).isEqualTo(1);
-    assertThat(result.output()).contains("Release tag must be stable SemVer");
-    assertThat(fixture.outputs()).isEmpty();
-  }
-
-  @Test
-  @DisplayName("Should reject an unmerged release when the tagged commit is outside main")
-  void shouldRejectUnmergedReleaseWhenTaggedCommitIsOutsideMain(@TempDir Path directory)
-      throws Exception {
-    var fixture = new ReleasePublisherFixture(directory);
-    fixture.publishedRelease();
-    fixture.git("commit", "--quiet", "--allow-empty", "-m", "unmerged revision");
-    fixture.git("tag", "--force", "v1.2.3");
-
-    var result = fixture.runStep("Verify tagged Maven version");
-
-    assertThat(result.exitCode()).isEqualTo(1);
-    assertThat(result.output()).contains("Release revision is not an ancestor of main");
-    assertThat(fixture.outputs()).isEmpty();
-  }
-
-  @Test
-  @DisplayName("Should reject a different checkout when the release tag names another revision")
-  void shouldRejectDifferentCheckoutWhenReleaseTagNamesAnotherRevision(@TempDir Path directory)
-      throws Exception {
-    var fixture = new ReleasePublisherFixture(directory);
-    fixture.publishedRelease();
-    fixture.git("commit", "--quiet", "--allow-empty", "-m", "later revision");
-
-    var result = fixture.runStep("Verify tagged Maven version");
-
-    assertThat(result.exitCode()).isEqualTo(1);
-    assertThat(result.output()).contains("Release tag does not match the checked-out revision");
-    assertThat(fixture.outputs()).isEmpty();
-  }
-
-  @Test
-  @DisplayName("Should export the version and revision when the published release matches Maven")
-  void shouldExportVersionAndRevisionWhenPublishedReleaseMatchesMaven(@TempDir Path directory)
-      throws Exception {
-    var fixture = new ReleasePublisherFixture(directory);
-    fixture.publishedRelease();
-
-    var result = fixture.runStep("Verify tagged Maven version");
-
-    assertThat(result.exitCode()).as(result.output()).isZero();
-    assertThat(fixture.outputs())
-        .isEqualTo("version=1.2.3\nrevision=" + fixture.git("rev-parse", "HEAD") + "\n");
   }
 
   @Test

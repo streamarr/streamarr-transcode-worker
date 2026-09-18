@@ -12,11 +12,13 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   verify:
     name: Verify worker
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     permissions:
       contents: read
       pull-requests: read
@@ -33,6 +35,9 @@ jobs:
           distribution: zulu
           java-version: '25'
           cache: maven
+      - name: Read Maven version
+        id: version
+        run: echo "version=$(./mvnw -q help:evaluate -Dexpression=project.version -DforceStdout)" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/prepare-ffmpeg
       - name: Detect FFmpeg input changes
         id: ffmpeg_inputs
@@ -54,7 +59,6 @@ jobs:
       - name: Verify image publication boundaries
         run: |
           node --test .github/actions/pack-build/*.test.mjs
-          docker buildx imagetools create --help | grep -q -- --metadata-file
       - name: Verify analysis failure handling
         run: node --test .github/actions/sonar/test/*.test.mjs
       - name: Build and test the executable worker
@@ -165,31 +169,14 @@ jobs:
   publish:
     name: Publish verified multi-architecture image
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: build
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          pattern: worker-native-*-${{ github.sha }}
-          merge-multiple: true
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Publish the index from this run's verified native digests
-        run: .github/actions/pack-build/publish-image-index.sh
-      - name: Preserve the immutable worker image reference
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: worker-image-${{ github.sha }}
-          path: |
-            worker-image.json
-            image-index.json
-            image-metadata.json
-            amd64-image.json
-            arm64-image.json
-          if-no-files-found: error
+    needs: [build, verify]
+    uses: streamarr/streamarr-workflows/.github/workflows/publish-image.yml@4f248f00cffecd547583dc70a0abab492775eecf
+    with:
+      image-repository: streamarr/streamarr-transcode-worker
+      source-revision: ${{ github.sha }}
+      version: ${{ needs.verify.outputs.version }}
+      artifact-pattern: worker-native-*-${{ github.sha }}
+      publication-kind: snapshot
+    secrets:
+      dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
+      dockerhub-token: ${{ secrets.DOCKERHUB_TOKEN }}

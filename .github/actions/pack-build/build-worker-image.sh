@@ -5,7 +5,7 @@ image=${1:?Supply the local image name}
 repository=$(cd "$(dirname "$0")/../../.." && pwd)
 cd "$repository"
 revision=$(git rev-parse HEAD)
-version=${2:-$revision}
+version=${2:-$(./mvnw -q help:evaluate -Dexpression=project.version -DforceStdout)}
 contract=$(./mvnw -q help:evaluate -Dexpression=buf.sdk.version -DforceStdout)
 buildpacks/ffmpeg/bin/prepare
 
