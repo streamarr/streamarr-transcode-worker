@@ -584,6 +584,29 @@ function noticeFiles(directory, prefix = "") {
     );
 }
 
+function writeInputs({ writes, referenced, components, source }) {
+    for (const [file, text] of writes) {
+        const target = path.join(root, "notices", file);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, text);
+    }
+    for (const file of noticeFiles(path.join(root, "notices"))) {
+        if (referenced.has(file)) continue;
+        fs.rmSync(path.join(root, "notices", file));
+        for (
+            let directory = path.dirname(path.join(root, "notices", file));
+            fs.readdirSync(directory).length === 0;
+            directory = path.dirname(directory)
+        )
+            fs.rmdirSync(directory);
+    }
+    fs.writeFileSync(
+        path.join(root, "notices/sources.json"),
+        `${JSON.stringify(components, null, 2)}\n`,
+    );
+    fs.writeFileSync(path.join(root, "SOURCE.txt"), source);
+}
+
 // The report compares upstream with notices/sources.json, which is the reviewed inventory only
 // while it names the FFmpeg revision that notices/manifest binds; the tool's own output moves it.
 function verdict(manifest, inventory, changed) {
@@ -753,26 +776,7 @@ async function main() {
     say(verdict(manifest, inventory, summary.length > 0));
     if (values["dry-run"]) return;
 
-    for (const [file, text] of writes) {
-        const target = path.join(root, "notices", file);
-        fs.mkdirSync(path.dirname(target), { recursive: true });
-        fs.writeFileSync(target, text);
-    }
-    for (const file of noticeFiles(path.join(root, "notices"))) {
-        if (referenced.has(file)) continue;
-        fs.rmSync(path.join(root, "notices", file));
-        for (
-            let directory = path.dirname(path.join(root, "notices", file));
-            fs.readdirSync(directory).length === 0;
-            directory = path.dirname(directory)
-        )
-            fs.rmdirSync(directory);
-    }
-    fs.writeFileSync(
-        path.join(root, "notices/sources.json"),
-        `${JSON.stringify(components, null, 2)}\n`,
-    );
-    fs.writeFileSync(path.join(root, "SOURCE.txt"), source);
+    writeInputs({ writes, referenced, components, source });
 }
 
 try {
