@@ -1098,6 +1098,13 @@ test("Should not claim to have rebound anything when it only reports an unchange
     assert.equal(result.output.trimEnd().split("\n").at(-1), "Inventory content unchanged since the review of v8.1.2-4; nothing but the FFmpeg revision differs.");
 });
 
+// A GitHub repository pinned at ALPHA_2 that the tool can propose as a component.
+function serveProposal({ serve }, name) {
+    serve(`${API}/example/${name}/git/trees/${ALPHA_2}?recursive=1`, { truncated: false, tree: [{ path: "COPYING", type: "blob" }] });
+    serve(`${API}/example/${name}/license`, { license: { spdx_id: "MIT" } });
+    serve(`${RAW}/example/${name}/${ALPHA_2}/COPYING`, "Proposed license\n");
+}
+
 for (const [name, arrange, message] of [
     [
         "a license file is missing at the new pin",
@@ -1192,6 +1199,42 @@ for (const [name, arrange, message] of [
         "a gained pin would take the id of a reviewed component",
         ({ recipes, serveRecipes }) => serveRecipes(LOCKED, new Map(recipes).set("50-alpha.sh", recipe([["https://github.com/example/alpha", ALPHA_1], ["https://github.com/fork/Beta", ALPHA_2]], "--enable-libalpha"))),
         /builder\/scripts\.d\/50-alpha\.sh pins https:\/\/github\.com\/fork\/Beta, whose id beta belongs to a reviewed component/,
+    ],
+    [
+        "a new recipe takes the id of a reviewed component",
+        (context) => {
+            context.serveRecipes(LOCKED, new Map(context.recipes).set("99-alpha.sh", recipe([["https://github.com/example/other", ALPHA_2]])));
+            serveProposal(context, "other");
+        },
+        /builder\/scripts\.d\/99-alpha\.sh pins https:\/\/github\.com\/example\/other, whose id alpha belongs to a reviewed component/,
+    ],
+    [
+        "a new recipe derives an id the generator would refuse",
+        (context) => {
+            context.serveRecipes(LOCKED, new Map(context.recipes).set("50-zeta.lib.sh", recipe([["https://github.com/example/zeta", ALPHA_2]])));
+            serveProposal(context, "zeta");
+        },
+        /builder\/scripts\.d\/50-zeta\.lib\.sh pins https:\/\/github\.com\/example\/zeta, whose id zeta\.lib is not a valid component id/,
+    ],
+    [
+        "two pins of a new recipe derive the same id",
+        (context) => {
+            context.serveRecipes(LOCKED, new Map(context.recipes).set("50-zeta.sh", recipe([["https://github.com/example/zeta-headers", ALPHA_2], ["https://github.com/example/Zeta", ALPHA_2]])));
+            serveProposal(context, "zeta-headers");
+            serveProposal(context, "Zeta");
+        },
+        /builder\/scripts\.d\/50-zeta\.sh pins https:\/\/github\.com\/example\/Zeta, whose id zeta belongs to another proposed component/,
+    ],
+    [
+        "two new recipes derive the same id",
+        (context) => {
+            context.serveRecipes(LOCKED, new Map(context.recipes)
+                .set("45-zeta.sh", recipe([["https://github.com/example/zeta-headers", ALPHA_2]]))
+                .set("50-zeta.sh", recipe([["https://github.com/example/zeta", ALPHA_2]])));
+            serveProposal(context, "zeta-headers");
+            serveProposal(context, "zeta");
+        },
+        /builder\/scripts\.d\/50-zeta\.sh pins https:\/\/github\.com\/example\/zeta, whose id zeta belongs to another proposed component/,
     ],
     [
         "a new dependency is hosted where license files cannot be listed",

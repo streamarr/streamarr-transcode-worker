@@ -128,9 +128,11 @@ shows its flag, while one without flags stays out until upstream gives it a new 
 plain `echo --enable-...` line counts as a flag, and an unclaimed pin of such a recipe is
 proposed again on every run until a component records it: a dependency that is only a build
 input is recorded with the `build-input` distribution. A proposed component gets the
-architectures that rule names, its licence files come from the repository listing, and the tool
-fails rather than reuse the id of a reviewed component. New `DEPS` entries and submodules are
-not discovered: they are followed only for components the inventory already records.
+architectures that rule names and its licence files come from the repository listing. Its id
+comes from the recipe name, or from the repository name for a later pin, and also names its
+notice directory: the tool fails rather than propose an id that the generator would refuse or
+that a reviewed or another proposed component holds. New `DEPS` entries and submodules are not
+discovered: they are followed only for components the inventory already records.
 
 Notices whose texts were byte-identical at review share one file, within a component (OpenMPT's
 two licence files, ffnvcodec's header excerpts) or across components. When some of them change,

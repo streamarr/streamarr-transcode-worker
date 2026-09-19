@@ -350,8 +350,22 @@ function builtFor({ flags, citing, unreviewed }, buildconf) {
     return flags.length || !unreviewed ? [] : Object.keys(buildconf);
 }
 
+// Upstream's names choose the id of a proposal. It has to be one the generator accepts and that no
+// component holds, because the id also names the directory the proposal's notices are written to.
+function reserveId(ids, { id, repository }, file) {
+    if (!/^[a-z0-9-]+$/.test(id))
+        throw new Error(
+            `${file} pins ${repository}, whose id ${id} is not a valid component id`,
+        );
+    if (ids.has(id))
+        throw new Error(
+            `${file} pins ${repository}, whose id ${id} belongs to ${ids.get(id)}`,
+        );
+    ids.set(id, "another proposed component");
+}
+
 // Proposes a component for every pin of the recipe that no component claims.
-async function newComponents({ recipe, flags, architectures, claimed, reviewed }) {
+async function newComponents({ recipe, flags, architectures, claimed, ids }) {
     const pins = recipePins(recipe.text)
         .map(({ repository, revision }, index) => ({
             repository,
@@ -364,12 +378,9 @@ async function newComponents({ recipe, flags, architectures, claimed, reviewed }
                 .replace(/_/g, "-"),
         }))
         .filter(({ repository }) => !claimed.has(repository));
+    for (const pin of pins) reserveId(ids, pin, recipe.file);
     return Promise.all(
         pins.map(async ({ repository, revision, id }) => {
-            if (reviewed.some((component) => component.id === id))
-                throw new Error(
-                    `${recipe.file} pins ${repository}, whose id ${id} belongs to a reviewed component`,
-                );
             let files;
             try {
                 files = await licenseFiles(repository, revision);
@@ -595,6 +606,7 @@ async function main() {
 
     // Every pin of a recipe that is in the binaries is claimed by a component or proposed as one.
     const claimed = new Set(components.map((component) => normalize(component.repository)));
+    const ids = new Map(inventory.map((component) => [component.id, "a reviewed component"]));
     for (const file of lockedPaths) {
         const citing = components.filter((component) => component.recipe === file);
         const unreviewed = !reviewedPaths.includes(file);
@@ -609,7 +621,7 @@ async function main() {
             flags,
             architectures,
             claimed,
-            reviewed: inventory,
+            ids,
         });
         for (const component of added) claimed.add(component.repository);
         components.push(...added);
