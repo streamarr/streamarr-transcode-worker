@@ -164,7 +164,8 @@ index is generated from the inventory. It never writes `notices/manifest`, chang
 it cannot follow a pin, and ends by stating whether inventory content changed. Pins, paths and
 transfer diagnostics in the report come from upstream, so control characters and line breaks in
 them are printed as `\uXXXX` escapes: only the tool's own closing line of a successful run starts
-with `Inventory content`, and a failed run has no such line. The comparison is with
+with `Inventory content`. The report is printed only after the inputs are written, so a failed
+run, including one that fails while writing, has no such line. The comparison is with
 `notices/sources.json` in the working tree, which is the reviewed inventory only while its `ffmpeg`
 entry names the revision that `notices/manifest` binds. The tool's own output moves that entry, so
 a further run on a regenerated inventory, `--dry-run` included, states that the content was not

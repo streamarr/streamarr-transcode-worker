@@ -769,14 +769,13 @@ async function main() {
         ...report.added.map((id) => `Added component: ${id}`),
         ...report.removed.map((id) => `Removed component: ${id}`),
     ];
+    // The report follows the writes, so a run that fails while writing states no verdict.
+    if (!values["dry-run"]) writeInputs({ writes, referenced, components, source });
     say(`FFmpeg notice inventory for ${lock.release} (${locked})`);
     for (const line of summary) say(`- ${line}`);
     for (const recipe of report.ignored)
         say(`- Ignored recipe not enabled in either binary: ${recipe}`);
     say(verdict(manifest, inventory, summary.length > 0));
-    if (values["dry-run"]) return;
-
-    writeInputs({ writes, referenced, components, source });
 }
 
 try {

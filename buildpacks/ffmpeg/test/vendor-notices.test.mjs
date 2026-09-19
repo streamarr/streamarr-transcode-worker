@@ -1733,3 +1733,21 @@ for (const [name, status, arrange] of [
         assert.match(result.output, /\\u000a::error|\\u2028Inventory content unchanged.*\\u009b2J/, "the value is still reported");
     });
 }
+
+for (const [name, file, listing] of [
+    ["a proposed notice directory is a file in notices", "50-manifest.sh", ["COPYING"]],
+    ["one proposed notice file is the directory of another", "50-delta.sh", ["COPYING", "COPYING.txt/LICENSE"]],
+]) {
+    test(`Should state no verdict when writing the regenerated inputs fails because ${name}`, (t) => {
+        const { recipes, run, serve, serveRecipes } = fixture(t);
+        serveRecipes(LOCKED, new Map(recipes).set(file, recipe([["https://github.com/example/delta", ALPHA_2]])));
+        serve(`${API}/example/delta/git/trees/${ALPHA_2}?recursive=1`, { truncated: false, tree: listing.map((entry) => ({ path: entry, type: "blob" })) });
+        serve(`${API}/example/delta/license`, { license: { spdx_id: "MIT" } });
+        for (const entry of listing) serve(`${RAW}/example/delta/${ALPHA_2}/${entry}`, `${entry}\n`);
+
+        const result = run();
+
+        assert.equal(result.status, 1, result.output);
+        assert.deepEqual(result.output.split("\n").filter((line) => line.startsWith("Inventory content")), [], result.output);
+    });
+}
