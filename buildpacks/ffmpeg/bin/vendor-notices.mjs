@@ -257,6 +257,17 @@ function ownFile(component, url, revision) {
     return file;
 }
 
+// A toolchain revision is built from a version that the reviewed role may name as well.
+function toolchainRole(component, revision) {
+    const prefix = TOOLCHAIN[component.id]?.prefix;
+    if (!prefix) return component.role;
+    return replaceToken(
+        component.role,
+        component.revision.slice(prefix.length),
+        revision.slice(prefix.length),
+    );
+}
+
 async function repin(component, pin) {
     const { repository, revision } = pin;
     const relocated = repository !== normalize(component.repository);
@@ -274,9 +285,12 @@ async function repin(component, pin) {
                     `Notice URL of ${component.id} does not name revision ${component.revision}`,
                 );
             const text = await download(url);
+            const located = Object.hasOwn(notice, "upstreamSha256")
+                ? { ...notice, url, upstreamSha256: checksum(text) }
+                : { ...notice, url };
             // Every view returns its own output unchanged, so a file equal to the reviewed bytes
             // is unchanged under whichever view was reviewed, without fetching the reviewed origin.
-            if (checksum(text) === notice.sha256) return { ...notice, url };
+            if (checksum(text) === notice.sha256) return located;
             const reviewed = await download(notice.url);
             const extract = EXTRACTIONS.find(
                 (candidate) => checksum(candidate(reviewed)) === notice.sha256,
@@ -286,11 +300,12 @@ async function repin(component, pin) {
                     `No known extraction reproduces ${notice.file} from ${notice.url}`,
                 );
             const extracted = extract(text);
-            if (checksum(extracted) === notice.sha256) return { ...notice, url };
-            return { ...notice, url, sha256: checksum(extracted), text: extracted };
+            if (checksum(extracted) === notice.sha256) return located;
+            return { ...located, sha256: checksum(extracted), text: extracted };
         }),
     );
-    return { ...component, repository, revision, notices };
+    const role = toolchainRole(component, revision);
+    return { ...component, repository, revision, role, notices };
 }
 
 async function licenseFiles(repository, revision) {

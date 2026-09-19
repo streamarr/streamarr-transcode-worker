@@ -436,6 +436,69 @@ test("Should normalize line endings the same way as the reviewed text", (t) => {
     assert.equal(inventory()[0].notices[0].sha256, checksum("Alpha\nlicense v2\n"));
 });
 
+// Models amf and openmpt: the origin has CRLF line endings, so the notice also records the origin's checksum.
+for (const [name, locked, vendored, reported] of [
+    ["a normalized license text changes", "Alpha\r\nlicense 2027\r\n", "Alpha\nlicense 2027\n", /License text changed: alpha/],
+    ["only the line endings of the origin change", "Alpha\nlicense\n", "Alpha\nlicense\n", /Pin moved, license text unchanged: alpha/],
+]) {
+    test(`Should record the origin checksum of the new pin when ${name}`, (t) => {
+        const { components, inventory, read, recipes, run, serve, serveRecipes, validate, write, writeInventory } = fixture(t);
+        const moved = `${RAW}/example/alpha/${ALPHA_2}/COPYING`;
+        components[0].notices[0] = { ...components[0].notices[0], sha256: checksum("Alpha\nlicense\n"), upstreamSha256: checksum("Alpha\r\nlicense\r\n") };
+        writeInventory();
+        write("notices/alpha/COPYING.txt", "Alpha\nlicense\n");
+        serve(`${RAW}/example/alpha/${ALPHA_1}/COPYING`, "Alpha\r\nlicense\r\n");
+        serveRecipes(LOCKED, new Map(recipes).set("50-alpha.sh", recipe([["https://github.com/example/alpha", ALPHA_2]], "--enable-libalpha")));
+        serve(moved, locked);
+
+        const result = run();
+
+        assert.equal(result.status, 0, result.output);
+        assert.match(result.output, reported);
+        assert.deepEqual(inventory().find((component) => component.id === "alpha").notices, [
+            { url: moved, sha256: checksum(vendored), file: "alpha/COPYING.txt", upstreamSha256: checksum(locked) },
+        ]);
+        assert.equal(read("notices/alpha/COPYING.txt"), vendored);
+        assert.equal(validate().status, 0);
+    });
+}
+
+// Models gcc-runtime, whose role names the GCC version, and glibc-startup, whose role does not.
+test("Should name the new toolchain version in a role when the toolchain pin moves", (t) => {
+    const { components, inventory, read, run, serve, validate, write, writeInventory } = fixture(t);
+    const toolchain = (id, repository, revision, role) => ({
+        ...components[0],
+        id,
+        repository,
+        revision,
+        recipe: "builder/images/base-linux64/ct-ng-config; builder/images/base-linuxarm64/ct-ng-config",
+        role,
+        notices: [{ url: `${repository.replace("https://github.com", RAW)}/${revision}/COPYING`, sha256: checksum(LICENSE), file: `${id}/COPYING.txt` }],
+        distribution: "embedded",
+    });
+    components.push(
+        toolchain("gcc-runtime", "https://github.com/gcc-mirror/gcc", "releases/gcc-15.2.0", "Statically linked GCC 15.2.0 runtime libraries (libgcc/libstdc++)."),
+        toolchain("glibc-startup", "https://github.com/bminor/glibc", "glibc-2.28", "glibc startup support from the cross-toolchain."),
+    );
+    writeInventory();
+    write("notices/gcc-runtime/COPYING.txt", LICENSE);
+    write("notices/glibc-startup/COPYING.txt", LICENSE);
+    for (const image of ["base-linux64", "base-linuxarm64"])
+        serve(`${RAW}/jellyfin/jellyfin-ffmpeg/${LOCKED}/builder/images/${image}/ct-ng-config`, 'CT_GLIBC_VERSION="2.31"\nCT_GCC_VERSION="16.1.0"\n');
+    serve(`${RAW}/gcc-mirror/gcc/releases/gcc-16.1.0/COPYING`, LICENSE);
+    serve(`${RAW}/bminor/glibc/glibc-2.31/COPYING`, LICENSE);
+
+    const result = run();
+
+    assert.equal(result.status, 0, result.output);
+    const written = Object.fromEntries(inventory().map(({ id, revision, role }) => [id, { revision, role }]));
+    assert.deepEqual(written["gcc-runtime"], { revision: "releases/gcc-16.1.0", role: "Statically linked GCC 16.1.0 runtime libraries (libgcc/libstdc++)." });
+    assert.deepEqual(written["glibc-startup"], { revision: "glibc-2.31", role: "glibc startup support from the cross-toolchain." });
+    assert.match(read("SOURCE.txt"), /gcc-runtime \(amd64, arm64\)\n {2}Statically linked GCC 16\.1\.0 runtime libraries \(libgcc\/libstdc\+\+\)\.\n.*\n {2}Revision: releases\/gcc-16\.1\.0\n/);
+    assert.doesNotMatch(read("SOURCE.txt"), /15\.2\.0|2\.28/);
+    assert.equal(validate().status, 0);
+});
+
 test("Should decode base64 source views before comparing license text", (t) => {
     const { components, inventory, recipes, run, serve, serveRecipes, writeInventory } = fixture(t);
     components[0].repository = "https://chromium.googlesource.com/alpha";
