@@ -321,16 +321,6 @@ function toolchainRole(component, revision) {
     );
 }
 
-// A person's role can name the version in a shorter form, such as its major, which no rewrite finds.
-function namesToolchainVersion(component) {
-    const prefix = TOOLCHAIN[component.id]?.prefix;
-    if (!prefix) return false;
-    const parts = component.revision.slice(prefix.length).split(".");
-    return parts.some((_, index) =>
-        token(parts.slice(0, index + 1).join(".")).test(component.role),
-    );
-}
-
 async function repin(component, pin) {
     const { repository, revision } = pin;
     const relocated = repository !== normalize(component.repository);
@@ -730,8 +720,8 @@ async function main() {
         const repinned = await repin(component, pin);
         context.pinned.set(component.id, repinned);
         components.push(repinned);
-        if (namesToolchainVersion(component))
-            report.roles.push(`${component.id} (${repinned.role})`);
+        // A person can name the toolchain version in a role in any wording, which no rewrite finds.
+        if (TOOLCHAIN[component.id]) report.roles.push(`${component.id} (${repinned.role})`);
         if (relocated)
             report.relocated.push(
                 `${component.id} (${component.repository} -> ${pin.repository})`,

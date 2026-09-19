@@ -527,18 +527,26 @@ for (const [name, locked, vendored, reported] of [
 }
 
 // Models gcc-runtime, whose role names the GCC version, and glibc-startup, whose role does not.
-for (const [name, roles, written, reviewed] of [
+for (const [name, roles, written] of [
     [
-        "one role names the exact version",
+        "one role names the exact version and the other names none",
         ["Statically linked GCC 15.2.0 runtime libraries (libgcc/libstdc++).", "glibc startup support from the cross-toolchain."],
         ["Statically linked GCC 16.1.0 runtime libraries (libgcc/libstdc++).", "glibc startup support from the cross-toolchain."],
-        ["gcc-runtime"],
     ],
     [
         "the roles name a shorter form of the version or the version inside a longer one",
         ["Statically linked GCC 15 runtime libraries.", "glibc 2.28 startup support for Linux 4.2.28 kernels."],
         ["Statically linked GCC 15 runtime libraries.", "glibc 2.31 startup support for Linux 4.2.28 kernels."],
-        ["gcc-runtime", "glibc-startup"],
+    ],
+    [
+        "the roles name the version after a letter or with a wildcard",
+        ["Statically linked GCC v15.2.0 runtime libraries.", "glibc 2.x startup support."],
+        ["Statically linked GCC v15.2.0 runtime libraries.", "glibc 2.x startup support."],
+    ],
+    [
+        "the roles run the version into the name of the toolchain",
+        ["gcc15 runtime libraries.", "glibc2 startup support."],
+        ["gcc15 runtime libraries.", "glibc2 startup support."],
     ],
 ]) {
     test(`Should name the new toolchain version in a role and report the role for review when ${name}`, (t) => {
@@ -575,9 +583,9 @@ for (const [name, roles, written, reviewed] of [
         assert.match(source, /gcc-runtime \(amd64, arm64\)\n.*\n.*\n {2}Revision: releases\/gcc-16\.1\.0\n/);
         for (const role of written) assert.equal(source.includes(`\n  ${role}\n`), true, source);
         assert.doesNotMatch(source, /releases\/gcc-15\.2\.0|glibc-2\.28/);
-        assert.deepEqual(result.output.match(/(?<=^- Toolchain role to review: )\S+/gm) ?? [], reviewed);
+        assert.deepEqual(result.output.match(/(?<=^- Toolchain role to review: )\S+/gm) ?? [], ["gcc-runtime", "glibc-startup"]);
         for (const [index, id] of ["gcc-runtime", "glibc-startup"].entries())
-            if (reviewed.includes(id)) assert.equal(result.output.includes(`- Toolchain role to review: ${id} (${written[index]})\n`), true, result.output);
+            assert.equal(result.output.includes(`- Toolchain role to review: ${id} (${written[index]})\n`), true, result.output);
         assert.equal(validate().status, 0);
     });
 }
