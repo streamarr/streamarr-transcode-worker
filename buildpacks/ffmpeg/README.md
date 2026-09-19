@@ -145,7 +145,12 @@ index is generated from the inventory. It never writes `notices/manifest`, chang
 it cannot follow a pin, and ends by stating whether inventory content changed. Pins, paths and
 transfer diagnostics in the report come from upstream, so control characters and line breaks in
 them are printed as `\uXXXX` escapes: only the tool's own closing line of a successful run starts
-with `Inventory content`, and a failed run has no such line. Generated roles,
+with `Inventory content`, and a failed run has no such line. The comparison is with
+`notices/sources.json` in the working tree, which is the reviewed inventory only while its `ffmpeg`
+entry names the revision that `notices/manifest` binds. The tool's own output moves that entry, so
+a further run on a regenerated inventory, `--dry-run` included, states that the content was not
+compared with the review instead of calling it unchanged: review the regenerated inputs against
+the reviewed commit. Generated roles,
 `LicenseRef-<component>` fallbacks and discovered licence files are proposals for the reviewer.
 Refresh the buildconf captures first when the binaries' configuration changed. `--dry-run`
 reports without writing.

@@ -1058,6 +1058,46 @@ test("Should remove a component and its unshared files when upstream drops the r
     assert.equal(validate().status, 0);
 });
 
+function changeAlphaLicense({ recipes, serve, serveRecipes }) {
+    serveRecipes(LOCKED, new Map(recipes).set("50-alpha.sh", recipe([["https://github.com/example/alpha", ALPHA_2]], "--enable-libalpha")));
+    serve(`${RAW}/example/alpha/${ALPHA_2}/COPYING`, "Alpha license v2\n");
+}
+
+for (const [name, args, arrange, firstVerdict] of [
+    ["reported again with --dry-run", ["--dry-run"], changeAlphaLicense, /^Inventory content changed/m],
+    ["regenerated a second time", [], changeAlphaLicense, /^Inventory content changed/m],
+    ["reported again after a run that moved only the FFmpeg revision", ["--dry-run"], () => {}, /^Inventory content unchanged/m],
+]) {
+    test(`Should not call a regenerated inventory unchanged while the manifest still binds the reviewed release when it is ${name}`, (t) => {
+        const context = fixture(t);
+        const { read, run } = context;
+        const inputs = ["notices/sources.json", "SOURCE.txt", "notices/alpha/COPYING.txt", "notices/manifest"];
+        const manifest = read("notices/manifest");
+        arrange(context);
+        const first = run();
+        assert.equal(first.status, 0, first.output);
+        assert.match(first.output, firstVerdict);
+        const regenerated = inputs.map(read);
+
+        const second = run(...args);
+
+        assert.equal(second.status, 0, second.output);
+        assert.equal(read("notices/manifest"), manifest, "the regenerated inventory is still unreviewed");
+        assert.deepEqual(inputs.map(read), regenerated, "the second run changes nothing");
+        assert.doesNotMatch(second.output, /Inventory content unchanged|was rebound/);
+        assert.match(second.output.trimEnd().split("\n").at(-1), /^Inventory content was not compared with the review of v8\.1\.2-4: /);
+    });
+}
+
+test("Should not claim to have rebound anything when it only reports an unchanged inventory", (t) => {
+    const { run } = fixture(t);
+
+    const result = run("--dry-run");
+
+    assert.equal(result.status, 0, result.output);
+    assert.equal(result.output.trimEnd().split("\n").at(-1), "Inventory content unchanged since the review of v8.1.2-4; nothing but the FFmpeg revision differs.");
+});
+
 for (const [name, arrange, message] of [
     [
         "a license file is missing at the new pin",
@@ -1173,7 +1213,7 @@ for (const [name, arrange, message] of [
     });
 }
 
-const UNCHANGED = "Inventory content unchanged; only the FFmpeg revision was rebound.";
+const UNCHANGED = "Inventory content unchanged since the review of v8.1.2-4; nothing but the FFmpeg revision differs.";
 const SPANNING = `\n${UNCHANGED}\n::error title=forged::annotation from upstream\n`;
 const TOOLCHAIN_IMAGES = "builder/images/base-linux64/ct-ng-config; builder/images/base-linuxarm64/ct-ng-config";
 

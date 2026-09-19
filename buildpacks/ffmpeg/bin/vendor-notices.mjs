@@ -498,6 +498,22 @@ function noticeFiles(directory, prefix = "") {
     );
 }
 
+// The report compares upstream with notices/sources.json, which is the reviewed inventory only
+// while it names the FFmpeg revision that notices/manifest binds; the tool's own output moves it.
+function verdict(manifest, inventory, changed) {
+    const bound = inventory.find((component) => component.id === "ffmpeg")?.revision;
+    if (bound !== manifest.source_revision)
+        return (
+            `Inventory content was not compared with the review of ${manifest.release}: notices/sources.json ` +
+            `names FFmpeg revision ${bound}, not the reviewed ${manifest.source_revision}, so this report ` +
+            "covers only what moved since it was regenerated. A maintainer must review it against the " +
+            "reviewed inventory before notices/manifest is rebound."
+        );
+    return changed
+        ? `Inventory content changed since the review of ${manifest.release}; a maintainer must review this diff before notices/manifest is rebound.`
+        : `Inventory content unchanged since the review of ${manifest.release}; nothing but the FFmpeg revision differs.`;
+}
+
 async function main() {
     const lock = keyValues(fs.readFileSync(path.join(root, "ffmpeg.lock"), "utf8"));
     const manifest = keyValues(
@@ -646,11 +662,7 @@ async function main() {
     for (const line of summary) say(`- ${line}`);
     for (const recipe of report.ignored)
         say(`- Ignored recipe not enabled in either binary: ${recipe}`);
-    say(
-        summary.length
-            ? "Inventory content changed; a maintainer must review this diff before notices/manifest is rebound."
-            : "Inventory content unchanged; only the FFmpeg revision was rebound.",
-    );
+    say(verdict(manifest, inventory, summary.length > 0));
     if (values["dry-run"]) return;
 
     for (const [file, text] of writes) {
