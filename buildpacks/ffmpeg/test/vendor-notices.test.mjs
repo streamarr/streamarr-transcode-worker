@@ -1506,7 +1506,8 @@ for (const [name, repository, license, stale] of [
     test(`Should update source instructions that name a dependency pin outside the component index when the pin moves ${name}`, (t) => {
         const { read, recipes, run, serve, serveRecipes, validate, write } = fixture(t);
         const instructions = (source, revision) =>
-            `For alpha, check out ${revision} from the listed URL.\nIts patched tree: ${source}/tree/${revision}\n`;
+            `For alpha, check out ${revision} from the listed URL.\nIts patched tree: ${source}/tree/${revision}\n` +
+            `Its archive: ${source}/archive/${revision}.tar.gz\n`;
         write("SOURCE.txt", instructions("https://github.com/example/alpha", ALPHA_1) + read("SOURCE.txt"));
         serveRecipes(LOCKED, new Map(recipes).set("50-alpha.sh", recipe([[repository, ALPHA_2]], "--enable-libalpha")));
         serve(...license);

@@ -512,11 +512,12 @@ async function newComponents({ recipe, flags, architectures, claimed, ids }) {
     );
 }
 
-// A whole token only, so a revision or version is never found inside a longer one: a dot counts as
-// part of the token when a letter or digit is on its other side, as in "4.2.28".
+// A whole token only, so a revision or version is never found inside a longer one: a dot with a digit
+// on its other side continues a version, as in "4.2.28", while a file extension, as in
+// "<revision>.tar.gz", does not.
 const token = (text) =>
     new RegExp(
-        `(?<![0-9A-Za-z]|[0-9A-Za-z]\\.)${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![0-9A-Za-z]|\\.[0-9A-Za-z])`,
+        `(?<![0-9A-Za-z]|[0-9]\\.)${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![0-9A-Za-z]|\\.[0-9])`,
         "g",
     );
 

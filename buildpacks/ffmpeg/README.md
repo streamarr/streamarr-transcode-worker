@@ -117,8 +117,10 @@ view still yields the reviewed bytes; when they find different new texts, the to
 files are never decoded: a file that is not UTF-8, or that starts with a byte order
 mark, is hashed, excerpted and written as upstream's bytes. Whatever else describes the pin moves with it: a notice that records `upstreamSha256`, the
 checksum of an origin whose bytes differ from the vendored text, gets the checksum of the new
-origin, and a toolchain component's role that names the old version as a whole token names the
-new one; a version inside a longer dotted one, such as `2.28` in `4.2.28`, is left alone. The role
+origin, and a toolchain component's role, like the prose of `SOURCE.txt` for any pin, names the
+new version or revision where it named the old one as a whole token. A version inside a longer
+dotted one, such as `2.28` in `4.2.28`, is left alone, but a file extension does not make a token
+longer: `<revision>.tar.gz` names the new revision. The role
 of every moved toolchain component is listed as a toolchain role to review, because a person can
 name the version in any wording, such as `GCC 15`, `v15.2.0` or `gcc15`, that no rewrite finds.
 Every other role and `version_note` is a person's wording and stays as reviewed. A recipe that swaps a dependency's
