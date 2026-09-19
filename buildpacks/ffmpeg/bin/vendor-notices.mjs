@@ -425,17 +425,21 @@ async function newComponents({ recipe, flags, architectures, claimed, ids }) {
     );
 }
 
+// Replaces whole tokens only, so a revision is never rewritten inside a longer one.
+function replaceToken(text, reviewed, locked) {
+    const token = reviewed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return text.replace(
+        new RegExp(`(?<![0-9A-Za-z])${token}(?![0-9A-Za-z])`, "g"),
+        locked,
+    );
+}
+
 function sourceAccess(source, components, replacements) {
     if (!source.includes(INDEX))
         throw new Error("SOURCE.txt has no component source index");
     let prose = source.slice(0, source.indexOf(INDEX));
-    for (const [reviewed, locked] of replacements) {
-        const token = reviewed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        prose = prose.replace(
-            new RegExp(`(?<![0-9A-Za-z])${token}(?![0-9A-Za-z])`, "g"),
-            locked,
-        );
-    }
+    for (const [reviewed, locked] of replacements)
+        prose = replaceToken(prose, reviewed, locked);
     const index = components.map(
         (component) =>
             `${component.id} (${component.architectures.join(", ")})\n  ${component.role}\n` +
