@@ -4,8 +4,9 @@
 #   change     <line>    a line that section adds or removes
 # Targets lose their first path component, because `quilt push` applies patches with -p1.
 #
-# The grammar is deliberately narrower than what patch(1) accepts: whatever patch(1) could read
-# differently ends the summary with an `ambiguous` record and exit status 1.
+# The grammar is closed: every line is a file header or belongs to a hunk. patch(1) searches the
+# text a reader skips for further diffs, so any other line ends the summary with an `ambiguous`
+# record and exit status 1.
 
 function ambiguous(reason) {
   printf "ambiguous\t%s at line %d\n", reason, NR
@@ -109,6 +110,10 @@ expected == "new name" {
   if (section == "" || header != "") {
     ambiguous("hunk outside a file section")
   }
+  # patch(1) creates a missing file when a hunk says the old one had no lines.
+  if ($0 ~ /^@@ -0+[, ]/) {
+    record_created()
+  }
   split($0, fields, " ")
   old_remaining = hunk_size(fields[2])
   new_remaining = hunk_size(fields[3])
@@ -121,7 +126,7 @@ expected == "hunk" {
 }
 
 /^Index: / || /^diff --git / {
-  # An Index: line alone also names the file for the normal and ed diffs this grammar ignores.
+  # An Index: line alone also names the file for the normal and ed diffs this grammar refuses.
   if (header == "index") {
     ambiguous("file header without a file section")
   }
@@ -144,11 +149,25 @@ expected == "hunk" {
   next
 }
 
-/^new file mode / {
-  if (header != "git") {
-    ambiguous("file mode outside a file section")
+header == "index" && /^=+$/ {
+  next
+}
+
+header == "git" && /^index [0-9a-f]+[.][.][0-9a-f]+( [0-7]+)?$/ {
+  split($2, blobs, "[.][.]")
+  # patch(1) also creates a missing file when the old blob is absent or empty.
+  if (blobs[1] ~ /^0+$/ || index("e69de29bb2d1d6434b8b29ae775ad8c2e48c5391", blobs[1]) == 1) {
+    record_created()
   }
+  next
+}
+
+header == "git" && /^new file mode [0-7]+$/ {
   record_created()
+  next
+}
+
+header == "git" && /^(old|new|deleted file) mode [0-7]+$/ {
   next
 }
 
@@ -161,8 +180,13 @@ expected == "hunk" {
   next
 }
 
-# patch(1) also accepts indented patches, context diffs, renames, copies and binary patches.
-/^[ \t]*([+][+][+] |--- |[*][*][*] |Index:|diff --git |@@ |rename |copy |GIT binary patch|Binary files )/ {
+section != "" && header == "" && /^\\ / {
+  next
+}
+
+# Free text, indented or nested headers, renames, copies, binary patches, and context, normal and
+# ed diffs all arrive here.
+{
   ambiguous("unsupported patch syntax")
 }
 

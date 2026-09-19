@@ -77,13 +77,17 @@ hides which files a modified patch touches. It exits with status 3, naming the p
 file, when:
 
 - an added patch creates a file, or edits a file named `configure`, `LICENSE*` or `COPYING*`
-  in any directory and letter case;
+  in any directory and letter case. A `/dev/null` old name, a hunk whose old range starts at
+  line 0, git's `new file mode` and a git `index` line whose old blob is absent or empty all
+  make `patch` create the file;
 - a modified or renamed patch creates a file that its reviewed version did not, or the lines
   it adds to or removes from those files differ from the reviewed version;
 - a removed patch edited one of those files;
-- a patch cannot be downloaded or is not an unambiguous unified diff (indented patches,
-  context diffs, renames, copies, binary patches and file sections naming two files all
-  count), its change status is unknown, or any other file changes under `debian/patches/`.
+- a patch cannot be downloaded or holds anything but unified-diff file headers and hunks,
+  because `patch` searches whatever text a reader skips for further diffs: a description,
+  indented or nested headers, context, normal and ed diffs, renames, copies, binary patches
+  and file sections naming two files all count. The same applies when its change status is
+  unknown, or any other file changes under `debian/patches/`.
 
 A patch that only edits existing FFmpeg source files stays automatic, since that code remains
 covered by the `ffmpeg` component's notices. The check selects the changes most likely to

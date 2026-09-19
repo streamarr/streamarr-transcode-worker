@@ -192,6 +192,40 @@ class FfmpegReleaseReviewTest {
         diff --git a/libavcodec/bsf/trim.c b/libavcodec/bsf/trim.c
         new file mode 100644
         index 0000000000..e69de29bb2
+        """,
+        """
+        Index: FFmpeg/libavcodec/bsf/trim.c
+        ===================================================================
+        --- FFmpeg.orig/libavcodec/bsf/trim.c
+        +++ FFmpeg/libavcodec/bsf/trim.c
+        @@ -0,0 +1,2 @@
+        +/* Copyright (c) 2026 Some Third Party */
+        +int trim;
+        """,
+        """
+        --- FFmpeg.orig/libavcodec/bsf/trim.c\t1970-01-01 00:00:00.000000000 +0000
+        +++ FFmpeg/libavcodec/bsf/trim.c\t2026-01-01 00:00:00.000000000 +0000
+        @@ -0,0 +1,2 @@
+        +/* Copyright (c) 2026 Some Third Party */
+        +int trim;
+        """,
+        """
+        diff --git a/libavcodec/bsf/trim.c b/libavcodec/bsf/trim.c
+        index 0000000000..0fd9f0a1c5 100644
+        --- a/libavcodec/bsf/trim.c
+        +++ b/libavcodec/bsf/trim.c
+        @@ -1,0 +1,2 @@
+        +/* Copyright (c) 2026 Some Third Party */
+        +int trim;
+        """,
+        """
+        diff --git a/libavcodec/bsf/trim.c b/libavcodec/bsf/trim.c
+        index e69de29bb2..0fd9f0a1c5 100644
+        --- a/libavcodec/bsf/trim.c
+        +++ b/libavcodec/bsf/trim.c
+        @@ -1,0 +1,2 @@
+        +/* Copyright (c) 2026 Some Third Party */
+        +int trim;
         """
       })
   @DisplayName("Should require human review when an added patch creates a file")
@@ -449,6 +483,55 @@ class FfmpegReleaseReviewTest {
         @@ -1 +1 @@
         -old
         +new
+        """,
+        """
+        --- FFmpeg.orig/libavcodec/qsvdec.c
+        +++ FFmpeg/libavcodec/qsvdec.c
+        @@ -1 +1 @@
+        -old
+        +new
+        X--- FFmpeg.orig/configure
+        X+++ FFmpeg/configure
+        X@@ -1 +1,2 @@
+        X unchanged
+        X+enable nonfree
+        """,
+        """
+        --- FFmpeg.orig/libavcodec/qsvdec.c
+        +++ FFmpeg/libavcodec/qsvdec.c
+        @@ -1 +1 @@
+        -old
+        +new
+        - --- FFmpeg.orig/configure
+        - +++ FFmpeg/configure
+        @@ -1 +1,2 @@
+         unchanged
+        +enable nonfree
+        """,
+        """
+        Description: export HDR side data
+        --- FFmpeg.orig/libavcodec/qsvdec.c
+        +++ FFmpeg/libavcodec/qsvdec.c
+        @@ -1 +1 @@
+        -old
+        +new
+        """,
+        """
+        --- FFmpeg.orig/libavcodec/qsvdec.c
+        +++ FFmpeg/libavcodec/qsvdec.c
+        @@ -1 +1 @@
+        -old
+        +new
+
+        """,
+        """
+        diff --git a/libavcodec/qsvdec.c b/libavcodec/qsvdec.c
+        index e69de29bb2,0fd9f0a1c5..c301f4a0c9
+        --- a/libavcodec/qsvdec.c
+        +++ b/libavcodec/qsvdec.c
+        @@ -1 +1 @@
+        -old
+        +new
         """
       })
   @DisplayName("Should require human review when a changed patch cannot be read unambiguously")
@@ -460,6 +543,42 @@ class FfmpegReleaseReviewTest {
     var result =
         review
             .upstreamPatch(PatchChange.builder().status("added").path(PATCH).locked(body).build())
+            .execute();
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(HUMAN_REVIEW_REQUIRED);
+    assertThat(result.output()).contains(PATCH + " cannot be read unambiguously");
+    assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        """
+        8a9
+        > enable nonfree
+        """,
+        """
+        8a
+        enable nonfree
+        .
+        """
+      })
+  @DisplayName("Should require human review when a changed patch gains an edit outside its hunks")
+  void shouldRequireHumanReviewWhenAChangedPatchGainsAnEditOutsideItsHunks(String edit)
+      throws Exception {
+    var review = review();
+    var reviewedInputs = review.reviewedInputs();
+    var reviewed = modifying("configure", "require_pkg_config rkmpp");
+
+    var result =
+        review
+            .upstreamPatch(
+                PatchChange.builder()
+                    .status("modified")
+                    .path(PATCH)
+                    .reviewed(reviewed)
+                    .locked(reviewed.replaceFirst("=+\n", edit))
+                    .build())
             .execute();
 
     assertThat(result.exitCode()).as(result.output()).isEqualTo(HUMAN_REVIEW_REQUIRED);
@@ -496,6 +615,38 @@ class FfmpegReleaseReviewTest {
             .execute();
 
     assertThat(result.exitCode()).as(result.output()).isZero();
+  }
+
+  @Test
+  @DisplayName("Should carry the review forward when an added git patch changes only sources")
+  void shouldCarryTheReviewForwardWhenAnAddedGitPatchChangesOnlySources() throws Exception {
+    var review = review();
+
+    var result =
+        review
+            .upstreamPatch(
+                PatchChange.builder()
+                    .status("added")
+                    .path(PATCH)
+                    .locked(
+                        """
+                        diff --git a/libavfilter/vf_scale_d3d11.c b/libavfilter/vf_scale_d3d11.c
+                        index c301f4a0c9..aab98c8cec 100644
+                        --- a/libavfilter/vf_scale_d3d11.c
+                        +++ b/libavfilter/vf_scale_d3d11.c
+                        @@ -1,2 +1,3 @@
+                         unchanged
+                        +scale the visible source rectangle
+                         unchanged
+                        diff --git a/tests/fate-run.sh b/tests/fate-run.sh
+                        old mode 100644
+                        new mode 100755
+                        """)
+                    .build())
+            .execute();
+
+    assertThat(result.exitCode()).as(result.output()).isZero();
+    assertThat(Files.readString(review.manifest())).contains("release=" + LOCKED_RELEASE);
   }
 
   @ParameterizedTest
