@@ -963,6 +963,22 @@ test("Should add a newly pinned dependency that the binaries enable and ignore o
     assert.equal(validate().status, 0);
 });
 
+for (const [name, text] of [
+    ["its enable flags run together on one short line", recipe([["https://github.com/example/delta", ALPHA_2]], `${"--enable-a".repeat(40)}!`)],
+    ["it holds a long run of blank lines", `${recipe([["https://github.com/example/delta", ALPHA_2]])}${"\n".repeat(400000)}`],
+]) {
+    test(`Should finish reading a new recipe when ${name}`, (t) => {
+        const context = fixture(t);
+        context.serveRecipes(LOCKED, new Map(context.recipes).set("50-delta.sh", text));
+        serveProposal(context, "delta");
+
+        const result = context.run("--dry-run");
+
+        assert.equal(result.status, 0, result.output);
+        assert.match(result.output, /Added component: delta/);
+    });
+}
+
 // Models 45-x11/30-libxcb.sh: reviewed, left out of the inventory, and switched on by a later release.
 for (const [name, reviewedHasRecipe] of [
     ["is new since the review", false],

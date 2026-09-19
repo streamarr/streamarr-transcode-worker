@@ -350,10 +350,13 @@ async function licenseExpression(id, repository) {
     }
 }
 
+// Upstream writes the recipe, so reading it has to stay linear in its length: the line is taken
+// by a pattern that cannot match one text two ways, and its words are checked one by one.
 const configureFlags = (text) =>
-    [...text.matchAll(/^\s*echo ((?:--enable-[a-z0-9-]+ ?)+)$/gm)].flatMap((match) =>
-        match[1].trim().split(" "),
-    );
+    [...text.matchAll(/^[ \t]*echo (.+)$/gm)]
+        .map((match) => match[1].trimEnd().split(" "))
+        .filter((words) => words.every((word) => /^--enable-[a-z0-9-]+$/.test(word)))
+        .flat();
 
 // The binaries that contain what a recipe builds: those whose reviewed build configuration has one
 // of its flags, else those of the components already built from it, else, for a recipe without
