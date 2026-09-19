@@ -39,6 +39,33 @@ jobs:
         id: version
         run: echo "version=$(./mvnw -q help:evaluate -Dexpression=project.version -DforceStdout)" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/prepare-ffmpeg
+      - name: Build and test the executable worker
+        run: ./mvnw -B clean verify
+      - name: Analyze coverage and require the SonarCloud quality gate
+        if: >-
+          (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') ||
+          (github.event_name == 'pull_request' &&
+           github.event.pull_request.head.repo.full_name == github.repository &&
+           github.actor != 'dependabot[bot]')
+        env:
+          SONAR_TOKEN: ${{ secrets.ORG_SONAR_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: .github/actions/sonar/analyze.sh
+
+  tooling:
+    name: Verify build and release tooling
+    permissions:
+      contents: read
+      pull-requests: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: ./.github/actions/prepare-ffmpeg
       - name: Detect FFmpeg input changes
         id: ffmpeg_inputs
         uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
@@ -61,18 +88,6 @@ jobs:
           node --test .github/actions/pack-build/*.test.mjs
       - name: Verify analysis failure handling
         run: node --test .github/actions/sonar/test/*.test.mjs
-      - name: Build and test the executable worker
-        run: ./mvnw -B clean verify
-      - name: Analyze coverage and require the SonarCloud quality gate
-        if: >-
-          (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') ||
-          (github.event_name == 'pull_request' &&
-           github.event.pull_request.head.repo.full_name == github.repository &&
-           github.actor != 'dependabot[bot]')
-        env:
-          SONAR_TOKEN: ${{ secrets.ORG_SONAR_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: .github/actions/sonar/analyze.sh
 
   smoke:
     name: Verify real FFmpeg execution
@@ -93,7 +108,7 @@ jobs:
 
   image:
     name: Verify ${{ matrix.architecture }} worker image
-    needs: [verify, smoke]
+    needs: [verify, tooling, smoke]
     strategy:
       fail-fast: false
       matrix:
@@ -153,16 +168,18 @@ jobs:
   build:
     name: build
     if: always()
-    needs: [verify, smoke, image]
+    needs: [verify, tooling, smoke, image]
     runs-on: ubuntu-latest
     steps:
       - name: Require successful verification and smoke tests
         env:
           VERIFY_RESULT: ${{ needs.verify.result }}
+          TOOLING_RESULT: ${{ needs.tooling.result }}
           SMOKE_RESULT: ${{ needs.smoke.result }}
           IMAGE_RESULT: ${{ needs.image.result }}
         run: |
           test "$VERIFY_RESULT" = success
+          test "$TOOLING_RESULT" = success
           test "$SMOKE_RESULT" = success
           test "$IMAGE_RESULT" = success
 

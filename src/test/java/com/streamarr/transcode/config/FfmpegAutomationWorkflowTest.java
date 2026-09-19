@@ -189,14 +189,14 @@ class FfmpegAutomationWorkflowTest {
   @DisplayName("Should keep offline validation unconditional when upstream inputs are unchanged")
   void shouldKeepOfflineValidationUnconditionalWhenUpstreamInputsAreUnchanged() throws IOException {
     var workflow = yaml(".github/workflows/ci.yml");
-    var steps = listOfMaps(map(map(workflow.get("jobs")).get("verify")).get("steps"));
+    var tooling = map(map(workflow.get("jobs")).get("tooling"));
+    var steps = listOfMaps(tooling.get("steps"));
     var offline =
         steps.stream()
             .filter(step -> "./.github/actions/prepare-ffmpeg".equals(step.get("uses")))
             .findFirst()
             .orElseThrow();
-    var verify = map(map(workflow.get("jobs")).get("verify"));
-    assertThat(map(verify.get("permissions")))
+    assertThat(map(tooling.get("permissions")))
         .containsOnly(Map.entry("contents", "read"), Map.entry("pull-requests", "read"));
     var inputs = stepNamed(steps, "Detect FFmpeg input changes");
     var upstream = stepNamed(steps, "Verify FFmpeg lock against upstream");
@@ -240,6 +240,8 @@ class FfmpegAutomationWorkflowTest {
         Map.of(
                 "verify",
                 "Build and test the executable worker",
+                "tooling",
+                "Verify redistribution tooling",
                 "image",
                 "Build the unpublished image and verify its media runtime")
             .entrySet()) {
@@ -252,6 +254,22 @@ class FfmpegAutomationWorkflowTest {
       assertThat(steps.indexOf(offline))
           .isLessThan(steps.indexOf(stepNamed(steps, entry.getValue())));
     }
+  }
+
+  @Test
+  @DisplayName("Should withhold worker images when tooling verification fails")
+  void shouldWithholdWorkerImagesWhenToolingVerificationFails() throws IOException {
+    var jobs = map(yaml(".github/workflows/ci.yml").get("jobs"));
+    var build = map(jobs.get("build"));
+    var gate =
+        stepNamed(
+            listOfMaps(build.get("steps")), "Require successful verification and smoke tests");
+
+    assertThat(map(jobs.get("image")))
+        .containsEntry("needs", List.of("verify", "tooling", "smoke"));
+    assertThat(build).containsEntry("needs", List.of("verify", "tooling", "smoke", "image"));
+    assertThat(map(gate.get("env"))).containsEntry("TOOLING_RESULT", "${{ needs.tooling.result }}");
+    assertThat(gate.get("run").toString()).contains("test \"$TOOLING_RESULT\" = success");
   }
 
   @Test
