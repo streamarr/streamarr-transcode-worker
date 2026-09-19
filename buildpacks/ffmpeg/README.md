@@ -125,6 +125,9 @@ mirror is followed to the new repository. A
 recipe that upstream renames or regroups is followed by repository, to the recipe that pins it
 first or else to the only one that pins it, and reported as moved: the reviewed entry keeps
 everything but its recipe path, and the `DEPS` entries and submodules resolved through it stay.
+A recipe that another reviewed component of the same repository is still built from is not
+followed to: it builds that component's library from another branch, as `50-rkmpp.sh` and
+`50-rkrga.sh` both pin `rk-mirrors`.
 A component that no recipe pins any more moves with the components built with it when they all
 moved to one recipe, and a repository swapped there is followed as it is in place. The tool fails
 when several recipes qualify. Any other component whose recipe is gone counts as dropped: it is

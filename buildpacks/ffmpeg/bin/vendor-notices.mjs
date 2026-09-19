@@ -196,14 +196,22 @@ const builtByRecipe = (component) =>
     component.revisionEvidence !== "notice-only" && RECIPE.test(component.recipe);
 
 // Upstream renumbers and regroups recipes. The component follows its repository to the recipe that
-// pins it first, or else to the one that pins it at all.
-function followRecipe(component, recipes) {
+// pins it first, or else to the one that pins it at all. A recipe that another reviewed component
+// of that repository is still built from builds that component's library, from another branch.
+function followRecipe(component, inventory, recipes) {
     if (!builtByRecipe(component) || recipes.has(component.recipe)) return component;
+    const repository = normalize(component.repository);
+    const builtThere = (file) =>
+        inventory.some(
+            (other) => other.recipe === file && normalize(other.repository) === repository,
+        );
     const pinnedBy = (relevant) =>
-        [...recipes.keys()].filter((file) =>
-            relevant(recipePins(recipes.get(file))).some(
-                (pin) => pin.repository === normalize(component.repository),
-            ),
+        [...recipes.keys()].filter(
+            (file) =>
+                !builtThere(file) &&
+                relevant(recipePins(recipes.get(file))).some(
+                    (pin) => pin.repository === repository,
+                ),
         );
     const first = pinnedBy((pins) => pins.slice(0, 1));
     const candidates = first.length ? first : pinnedBy((pins) => pins);
@@ -219,7 +227,10 @@ function followRecipe(component, recipes) {
 // dropped it.
 function followRecipes(inventory, recipes) {
     const byRepository = new Map(
-        inventory.map((component) => [component.id, followRecipe(component, recipes)]),
+        inventory.map((component) => [
+            component.id,
+            followRecipe(component, inventory, recipes),
+        ]),
     );
     return new Map(
         inventory.map((component) => {

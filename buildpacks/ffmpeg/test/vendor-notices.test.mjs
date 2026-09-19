@@ -1403,6 +1403,60 @@ test("Should follow a regrouped recipe to the recipe that pins the repository fi
     assert.doesNotMatch(result.output, /(Added|Removed) component|Pin moved/);
 });
 
+// Models 50-rkmpp.sh and 50-rkrga.sh, which pin rk-mirrors on the branches of two libraries.
+function buildTwoLibrariesFromOneRepository({ components, recipes, serve, serveRecipes, write, writeInventory }) {
+    const reviewed = new Map(recipes);
+    for (const [id, revision] of [["gamma-mpp", "7".repeat(40)], ["gamma-rga", "8".repeat(40)]]) {
+        components.push({
+            ...components[0],
+            id,
+            repository: RK_MIRRORS,
+            revision,
+            recipe: `builder/scripts.d/50-${id}.sh`,
+            notices: [{ url: `${RAW}/example/rk-mirrors/${revision}/COPYING`, sha256: checksum(LICENSE), file: `${id}/COPYING.txt` }],
+        });
+        write(`notices/${id}/COPYING.txt`, LICENSE);
+        serve(`${RAW}/example/rk-mirrors/${revision}/COPYING`, LICENSE);
+        reviewed.set(`50-${id}.sh`, recipe([[RK_MIRRORS, revision]]));
+    }
+    writeInventory();
+    serveRecipes(REVIEWED, reviewed);
+    return reviewed;
+}
+
+test("Should remove a component when upstream drops its recipe while another recipe still pins its repository for another library", (t) => {
+    const context = fixture(t);
+    const { buildpack, components, inventory, run, serveRecipes, validate } = context;
+    const remaining = buildTwoLibrariesFromOneRepository(context);
+    remaining.delete("50-gamma-rga.sh");
+    serveRecipes(LOCKED, remaining);
+
+    const result = run();
+
+    assert.equal(result.status, 0, result.output);
+    assert.match(result.output, /Removed component: gamma-rga\n/);
+    assert.doesNotMatch(result.output, /Recipe moved|Pin moved/);
+    assert.equal(inventory().some((component) => component.id === "gamma-rga"), false);
+    assert.deepEqual(inventory().find((component) => component.id === "gamma-mpp"), components[3]);
+    assert.equal(fs.existsSync(path.join(buildpack, "notices/gamma-rga")), false);
+    assert.equal(validate().status, 0);
+});
+
+test("Should follow a regrouped recipe when another recipe still pins its repository for another library", (t) => {
+    const context = fixture(t);
+    const { components, inventory, run, serveRecipes, validate } = context;
+    serveRecipes(LOCKED, regrouped(buildTwoLibrariesFromOneRepository(context), "50-gamma-rga.sh", "47-rk/50-gamma-rga.sh"));
+
+    const result = run();
+
+    assert.equal(result.status, 0, result.output);
+    assert.match(result.output, /Recipe moved: gamma-rga \(builder\/scripts\.d\/50-gamma-rga\.sh -> builder\/scripts\.d\/47-rk\/50-gamma-rga\.sh\)\n/);
+    assert.doesNotMatch(result.output, /(Added|Removed) component|Pin moved|Recipe moved: gamma-mpp/);
+    assert.deepEqual(inventory().find((component) => component.id === "gamma-rga"), { ...components[4], recipe: "builder/scripts.d/47-rk/50-gamma-rga.sh" });
+    assert.deepEqual(inventory().find((component) => component.id === "gamma-mpp"), components[3]);
+    assert.equal(validate().status, 0);
+});
+
 test("Should leave every file and directory alone when a dry run reports changed, added and removed texts", (t) => {
     const context = fixture(t);
     const { buildpack, recipes, run, serve, serveRecipes } = context;
