@@ -8,11 +8,13 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.yaml.snakeyaml.Yaml;
@@ -26,6 +28,14 @@ class FfmpegAutomationWorkflowTest {
   private static final String DEPENDENCY = "jellyfin/jellyfin-ffmpeg";
   private static final String LOCK_BOT_EMAIL =
       "327604351+streamarr-release[bot]@users.noreply.github.com";
+  private static final String LOCK = "buildpacks/ffmpeg/ffmpeg.lock";
+  private static final List<String> REVIEWED_INPUTS =
+      List.of(
+          "buildpacks/ffmpeg/notices/manifest",
+          "buildpacks/ffmpeg/notices/sources.json",
+          "buildpacks/ffmpeg/SOURCE.txt");
+
+  @TempDir Path temporaryDirectory;
 
   @Test
   @DisplayName("Should isolate exact FFmpeg release updates when synchronizing the lock")
@@ -221,11 +231,63 @@ class FfmpegAutomationWorkflowTest {
             "GITHUB_STEP_SUMMARY")
         .doesNotContain("proposed/");
     assertThat(map(prepare.get("env")))
-        .containsEntry("REVIEWED", "${{ steps.review.outputs.reviewed }}");
+        .containsEntry("REVIEWED", "${{ steps.review.outputs.reviewed }}")
+        .containsEntry("SENDER", "${{ github.event.sender.login }}");
     assertThat(unreviewedPaths)
         .contains("buildpacks/ffmpeg/ffmpeg.lock")
         .doesNotContain(reviewedInputs);
     assertThat(prepareRun).contains(reviewedInputs);
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+    "true, renovate[bot], true",
+    "true, streamarr-release[bot], false",
+    "true, a-maintainer, false",
+    "false, renovate[bot], false"
+  })
+  @DisplayName(
+      "Should replace pushed reviewed inputs only when Renovate started a confirmed review")
+  void shouldReplacePushedReviewedInputsOnlyWhenRenovateStartedAConfirmedReview(
+      String reviewed, String sender, boolean replaced) throws Exception {
+    var workspace = workspaceWhoseHeadDiffersFromTheTrustedCheckout();
+    var outputs = temporaryDirectory.resolve("outputs");
+    var steps =
+        listOfMaps(
+            map(map(yaml(".github/workflows/sync-ffmpeg-lock.yml").get("jobs"))
+                    .get("sync_ffmpeg_lock"))
+                .get("steps"));
+    ScriptCommand.writeFake(
+        temporaryDirectory,
+        "prepare-synchronized-lock",
+        "cd \"${GITHUB_WORKSPACE}\"\n" + stepNamed(steps, "Prepare synchronized lock").get("run"));
+
+    var result =
+        ScriptCommand.of(temporaryDirectory.resolve("prepare-synchronized-lock"))
+            .environment("GITHUB_WORKSPACE", workspace.toString())
+            .environment("GITHUB_OUTPUT", outputs.toString())
+            .environment("REVIEWED", reviewed)
+            .environment("SENDER", sender)
+            .execute();
+
+    assertThat(result.exitCode()).as(result.output()).isZero();
+    var blobs = new ObjectMapper().readTree(output(outputs, "blobs"));
+    var replacedPaths = nodes(blobs).map(blob -> blob.path("path").asString()).toList();
+    var keptAgainstTheReview = reviewed.equals("true") && !replaced;
+    assertThat(replacedPaths)
+        .containsExactlyElementsOf(
+            replaced
+                ? Stream.concat(Stream.of(LOCK), REVIEWED_INPUTS.stream()).toList()
+                : List.of(LOCK));
+    assertThat(output(outputs, "headline"))
+        .isEqualTo(
+            replaced
+                ? "behavioral: synchronize FFmpeg lock and unchanged notice review"
+                : "behavioral: synchronize FFmpeg lock");
+    assertThat(result.output().lines().filter(line -> line.startsWith("::warning ")))
+        .hasSize(keptAgainstTheReview ? REVIEWED_INPUTS.size() : 0)
+        .allSatisfy(
+            warning -> assertThat(warning).containsAnyOf(REVIEWED_INPUTS.toArray(String[]::new)));
   }
 
   @Test
@@ -385,6 +447,41 @@ class FfmpegAutomationWorkflowTest {
         .containsEntry("version", "${{ steps.version.outputs.version }}");
     assertThat(stepNamed(listOfMaps(verify.get("steps")), "Read Maven version"))
         .containsEntry("id", "version");
+  }
+
+  private Path workspaceWhoseHeadDiffersFromTheTrustedCheckout() throws Exception {
+    var workspace = Files.createDirectory(temporaryDirectory.resolve("workspace"));
+    for (var path : Stream.concat(Stream.of(LOCK), REVIEWED_INPUTS.stream()).toList()) {
+      for (var checkout : List.of("trusted", "proposed")) {
+        var file = workspace.resolve(checkout).resolve(path);
+        Files.createDirectories(file.getParent());
+        Files.writeString(file, "%s as the %s checkout holds it\n".formatted(path, checkout));
+      }
+    }
+    ScriptCommand.writeFake(
+        temporaryDirectory,
+        "commit-proposed-head",
+        """
+        cd "$1"
+        export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+        git init --quiet
+        git add .
+        git -c user.name=Renovate -c user.email=renovate@example.invalid commit --quiet -m head
+        """);
+    var seeded =
+        ScriptCommand.of(temporaryDirectory.resolve("commit-proposed-head"))
+            .argument(workspace.resolve("proposed").toString())
+            .execute();
+    assertThat(seeded.exitCode()).as(seeded.output()).isZero();
+    return workspace;
+  }
+
+  private static String output(Path outputs, String name) throws IOException {
+    var prefix = name + "=";
+    return Files.readAllLines(outputs).stream()
+        .filter(line -> line.startsWith(prefix))
+        .map(line -> line.substring(prefix.length()))
+        .collect(Collectors.joining());
   }
 
   private static Stream<JsonNode> nodes(JsonNode values) {

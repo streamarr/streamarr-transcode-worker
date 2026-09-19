@@ -71,8 +71,10 @@ jobs:
         id: changes
         env:
           REVIEWED: ${{ steps.review.outputs.reviewed }}
+          SENDER: ${{ github.event.sender.login }}
         run: |
-          paths=(buildpacks/ffmpeg/ffmpeg.lock)
+          lock=buildpacks/ffmpeg/ffmpeg.lock
+          paths=("${lock}")
           headline='behavioral: synchronize FFmpeg lock'
           if [[ "${REVIEWED}" == 'true' ]]; then
             paths+=(
@@ -80,6 +82,14 @@ jobs:
               buildpacks/ffmpeg/notices/sources.json
               buildpacks/ffmpeg/SOURCE.txt
             )
+          fi
+          # The lock is a function of the release. The reviewed inputs are maintained by hand and
+          # the carried-forward copies derive from the base, so they may only replace a head that
+          # nobody has edited: Renovate rebuilds its branch from the base, anyone else's push may
+          # carry a correction or an un-bound manifest.
+          carries_review=false
+          if [[ "${REVIEWED}" == 'true' && "${SENDER}" == 'renovate[bot]' ]]; then
+            carries_review=true
             headline='behavioral: synchronize FFmpeg lock and unchanged notice review'
           fi
 
@@ -87,10 +97,16 @@ jobs:
           for path in "${paths[@]}"; do
             blob="$(git -C proposed hash-object -w "${GITHUB_WORKSPACE}/trusted/${path}")"
             current_blob="$(git -C proposed rev-parse "HEAD:${path}" 2>/dev/null || true)"
-            if [[ "${blob}" != "${current_blob}" ]]; then
-              blobs="$(jq -c --arg path "${path}" --arg blob "${blob}" \
-                '. + [{path: $path, blob: $blob}]' <<<"${blobs}")"
+            if [[ "${blob}" == "${current_blob}" ]]; then
+              continue
             fi
+            if [[ "${path}" != "${lock}" && "${carries_review}" == false ]]; then
+              echo "::warning title=FFmpeg notice review::${path} differs from the carried-forward review and stays as pushed"
+              continue
+            fi
+
+            blobs="$(jq -c --arg path "${path}" --arg blob "${blob}" \
+              '. + [{path: $path, blob: $blob}]' <<<"${blobs}")"
           done
 
           echo "blobs=${blobs}" >>"${GITHUB_OUTPUT}"

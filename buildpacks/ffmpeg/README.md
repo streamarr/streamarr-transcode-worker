@@ -176,9 +176,13 @@ it never runs the downloaded binaries: ordinary CI checks their build configurat
 detecting a change and verifying the head SHA does it mint a short-lived GitHub App token.
 
 GitHub's `createCommitOnBranch` API creates a signed commit containing only the generated lock
-and, after a confirmed review, `notices/manifest`, `notices/sources.json` and `SOURCE.txt`.
-Its `expectedHeadOid` check rejects a moved branch atomically. The App token triggers normal
-PR checks after the commit; the default Actions token would suppress those runs.
+and, after a confirmed review on a run started by Renovate's own push, `notices/manifest`,
+`notices/sources.json` and `SOURCE.txt`. Renovate rebuilds its branch from the base, so only
+then are the head's copies of those hand-maintained files known to be untouched. Every other
+push, such as a maintainer's correction or a reverted manifest, still synchronizes the lock but
+keeps those three files as pushed; the run warns when they differ from the carried-forward
+review. Its `expectedHeadOid` check rejects a moved branch atomically. The App token triggers
+normal PR checks after the commit; the default Actions token would suppress those runs.
 
 Install a GitHub App on this repository with repository contents read/write access and configure
 these Actions secrets:
