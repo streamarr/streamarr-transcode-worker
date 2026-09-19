@@ -1678,6 +1678,33 @@ for (const [name, arrange, message] of [
         },
         /notices\/alpha\/src\/LICENSE\.BSD\.txt would not hold the text recorded for alpha/,
     ],
+    // macOS checkouts fold letter case, so these paths name the reviewed file that still holds LICENSE.
+    ...[
+        ["is named after the reviewed file", "copying.txt", "alpha/COPYING.txt", /notices\/alpha\/copying\.txt and notices\/alpha\/COPYING\.txt differ only by letter case/],
+        ["shares a reviewed file named after no notice", "LICENSE", "alpha/license.txt", /notices\/alpha\/LICENSE\.txt and notices\/alpha\/license\.txt differ only by letter case/],
+    ].map(([name, changed, shared, message]) => [
+        `a changed text would move to a file whose name differs only by letter case from a reviewed file still in use, as a notice that ${name}`,
+        ({ components, recipes, serve, serveRecipes, write, writeInventory }) => {
+            components[0].notices = ["COPYING", changed].map((upstream) => ({ url: `${RAW}/example/alpha/${ALPHA_1}/${upstream}`, sha256: checksum(LICENSE), file: shared }));
+            writeInventory();
+            write(`notices/${shared}`, LICENSE);
+            serveRecipes(LOCKED, new Map(recipes).set("50-alpha.sh", recipe([["https://github.com/example/alpha", ALPHA_2]], "--enable-libalpha")));
+            serve(`${RAW}/example/alpha/${ALPHA_1}/${changed}`, LICENSE);
+            serve(`${RAW}/example/alpha/${ALPHA_2}/COPYING`, LICENSE);
+            serve(`${RAW}/example/alpha/${ALPHA_2}/${changed}`, "Alpha license 2027\n");
+        },
+        message,
+    ]),
+    [
+        "upstream names license files of a new component that differ only by letter case",
+        ({ recipes, serve, serveRecipes }) => {
+            serveRecipes(LOCKED, new Map(recipes).set("50-delta.sh", recipe([["https://github.com/example/delta", ALPHA_2]])));
+            serve(`${API}/example/delta/git/trees/${ALPHA_2}?recursive=1`, { truncated: false, tree: ["COPYING", "copying"].map((listed) => ({ path: listed, type: "blob" })) });
+            serve(`${RAW}/example/delta/${ALPHA_2}/COPYING`, "Delta license\n");
+            serve(`${RAW}/example/delta/${ALPHA_2}/copying`, "Delta copying\n");
+        },
+        /notices\/delta\/copying\.txt and notices\/delta\/COPYING\.txt differ only by letter case/,
+    ],
     [
         "a recipe is regrouped and swaps its repository in the same release",
         ({ recipes, serveRecipes }) => serveRecipes(LOCKED, regrouped(new Map(recipes).set("50-alpha.sh", recipe([["https://github.com/example/renamed", ALPHA_1]], "--enable-libalpha")), "50-alpha.sh", "47-group/50-Alpha.sh")),

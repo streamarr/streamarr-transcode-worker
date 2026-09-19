@@ -572,10 +572,19 @@ function placeNotices(components) {
     return writes;
 }
 
-// A planned file must hold the recorded text of every notice that will reference it.
+// A planned file must hold the recorded text of every notice that will reference it. A checkout on a
+// case-insensitive filesystem, as macOS uses by default, holds paths that differ only by letter case
+// as one file, so they are one file here too.
 function requireRecordedTexts(components, writes) {
+    const spellings = new Map();
     for (const component of components) {
         for (const { file, sha256 } of component.notices) {
+            const spelling = spellings.get(file.toLowerCase()) ?? file;
+            if (spelling !== file)
+                throw new Error(
+                    `notices/${file} and notices/${spelling} differ only by letter case`,
+                );
+            spellings.set(file.toLowerCase(), file);
             if (writes.has(file) && checksum(writes.get(file)) !== sha256)
                 throw new Error(
                     `notices/${file} would not hold the text recorded for ${component.id}`,
