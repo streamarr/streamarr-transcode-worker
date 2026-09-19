@@ -113,8 +113,12 @@ dropped recipe removes its component, and notice files that nothing references a
 Every pin of a recipe that is in the binaries must be claimed by a component, matched by
 repository across the whole inventory, or the tool proposes it as a new component. That covers
 a pin an inventoried recipe gains, as `20-libiconv.sh` gained gnulib. A recipe is in the
-binaries when a component is already built from it, or when it is new since the review and the
-reviewed build configurations enable one of its `--enable-*` flags or it has none. A
+binaries when a component is already built from it, when the reviewed build configurations
+enable one of the `--enable-*` flags it echoes, or when it has none and is new since the review.
+A recipe that a review left out is therefore proposed once a refreshed capture shows its flag,
+while one without flags stays out. Only a plain `echo --enable-...` line counts as a flag, and an
+unclaimed pin of such a recipe is proposed again on every run until a component records it: a
+dependency that is only a build input is recorded with the `build-input` distribution. A
 proposed component gets the architectures that rule names, its licence files come from the
 repository listing, and the tool fails rather than reuse the id of a reviewed component. New
 `DEPS` entries and submodules are not discovered: they are followed only for components the

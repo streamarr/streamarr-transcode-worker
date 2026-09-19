@@ -318,8 +318,9 @@ const configureFlags = (text) =>
 
 // The binaries that contain what a recipe builds: those whose reviewed build configuration has one
 // of its flags, else those of the components already built from it, else, for a recipe without
-// flags, all of them. A recipe that enables nothing in either configuration is not in the binaries.
-function builtFor({ flags, citing }, buildconf) {
+// flags that no review has seen, all of them. A recipe that enables nothing in either
+// configuration is not in the binaries, and neither is one without flags that a review left out.
+function builtFor({ flags, citing, unreviewed }, buildconf) {
     const flagged = Object.keys(buildconf).filter((architecture) =>
         flags.some((flag) => buildconf[architecture].split(/\s+/).includes(flag)),
     );
@@ -328,7 +329,7 @@ function builtFor({ flags, citing }, buildconf) {
         return Object.keys(buildconf).filter((architecture) =>
             citing.some((component) => component.architectures.includes(architecture)),
         );
-    return flags.length ? [] : Object.keys(buildconf);
+    return flags.length || !unreviewed ? [] : Object.keys(buildconf);
 }
 
 // Proposes a component for every pin of the recipe that no component claims.
@@ -554,11 +555,11 @@ async function main() {
     const claimed = new Set(components.map((component) => normalize(component.repository)));
     for (const file of lockedPaths) {
         const citing = components.filter((component) => component.recipe === file);
-        if (!citing.length && reviewedPaths.includes(file)) continue;
+        const unreviewed = !reviewedPaths.includes(file);
         const flags = configureFlags(recipes.get(file));
-        const architectures = builtFor({ flags, citing }, buildconf);
+        const architectures = builtFor({ flags, citing, unreviewed }, buildconf);
         if (!architectures.length) {
-            report.ignored.push(file);
+            if (unreviewed) report.ignored.push(file);
             continue;
         }
         const added = await newComponents({

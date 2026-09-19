@@ -780,6 +780,54 @@ test("Should add a newly pinned dependency that the binaries enable and ignore o
     assert.equal(validate().status, 0);
 });
 
+// Models 45-x11/30-libxcb.sh: reviewed, left out of the inventory, and switched on by a later release.
+for (const [name, reviewedHasRecipe] of [
+    ["is new since the review", false],
+    ["already existed at the reviewed revision without being inventoried", true],
+]) {
+    test(`Should add a dependency the refreshed build configurations enable when its recipe ${name}`, (t) => {
+        const { inventory, recipes, run, serve, serveRecipes, validate, write } = fixture(t);
+        const pinned = "f".repeat(40);
+        const enabled = recipe([["https://github.com/example/mfx", pinned]], "--enable-libmfx");
+        if (reviewedHasRecipe) serveRecipes(REVIEWED, new Map(recipes).set("50-mfx.sh", `${enabled}ffbuild_enabled() {\n    return -1\n}\n`));
+        serveRecipes(LOCKED, new Map(recipes).set("50-mfx.sh", enabled));
+        serve(`${API}/example/mfx/git/trees/${pinned}?recursive=1`, { truncated: false, tree: [{ path: "LICENSE", type: "blob" }] });
+        serve(`${API}/example/mfx/license`, { license: { spdx_id: "MIT" } });
+        serve(`${RAW}/example/mfx/${pinned}/LICENSE`, "Mfx license\n");
+        write("notices/buildconf-amd64.txt", "ffmpeg version 9.0.0-Jellyfin\n  configuration: --enable-gpl --enable-libalpha --enable-libmfx\n");
+
+        const result = run();
+
+        assert.equal(result.status, 0, result.output);
+        assert.match(result.output, /Added component: mfx/);
+        assert.match(result.output, /Inventory content changed/);
+        assert.doesNotMatch(result.output, /Inventory content unchanged/);
+        const mfx = inventory().find((component) => component.id === "mfx");
+        assert.deepEqual(mfx.architectures, ["amd64"]);
+        assert.equal(mfx.recipe, "builder/scripts.d/50-mfx.sh");
+        assert.equal(validate().status, 0);
+    });
+}
+
+for (const [name, flag] of [
+    ["has no configure flag", undefined],
+    ["has a configure flag that neither build configuration enables", "--enable-libxcb"],
+]) {
+    test(`Should report an unchanged inventory when a recipe the review left out ${name}`, (t) => {
+        const { inventory, recipes, run, serveRecipes } = fixture(t);
+        const leftOut = new Map(recipes).set("45-x11/30-libxcb.sh", recipe([["https://gitlab.example/xorg/libxcb", "v1.17"]], flag));
+        serveRecipes(REVIEWED, leftOut);
+        serveRecipes(LOCKED, leftOut);
+
+        const result = run();
+
+        assert.equal(result.status, 0, result.output);
+        assert.match(result.output, /Inventory content unchanged/);
+        assert.doesNotMatch(result.output, /libxcb/);
+        assert.deepEqual(inventory().map((component) => component.id), ["alpha", "beta", "ffmpeg"]);
+    });
+}
+
 // Models 20-libiconv.sh, which gained SCRIPT_REPO2 (gnulib) beside a pin that did not move.
 function serveGainedPin({ serve }, pinned) {
     serve(`${API}/example/gained/git/trees/${pinned}?recursive=1`, { truncated: false, tree: [{ path: "COPYING", type: "blob" }] });
