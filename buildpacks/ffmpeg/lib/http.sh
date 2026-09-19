@@ -25,6 +25,10 @@ ffmpeg_github_api_get() {
   ffmpeg_github_api_request 'application/vnd.github+json' "$@"
 }
 
+ffmpeg_github_api_get_raw() {
+  ffmpeg_github_api_request 'application/vnd.github.raw+json' "$@"
+}
+
 ffmpeg_github_api_request() {
   local media_type="$1"
   local url="$2"

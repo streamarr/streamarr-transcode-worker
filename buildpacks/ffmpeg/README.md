@@ -59,14 +59,36 @@ the image, not just links to them.
 `bin/review-release` carries a review forward only when it can show that the inventory is
 unchanged. It compares the reviewed and locked upstream revisions and requires the locked
 revision to descend from the reviewed one, the change list to be complete, and every changed
-path to lie outside the inventory: Jellyfin's FFmpeg patches and changelog, the package
+path to lie outside the inventory: Jellyfin's changelog and patch series, the package
 version, and files used only by macOS or Windows builds. It then rebinds `notices/manifest`,
 the `ffmpeg` entry of `notices/sources.json` and `SOURCE.txt` to the locked release. The
 buildpack supplies the rest of the evidence by rejecting a binary whose `-buildconf` differs
-from the reviewed capture. A changed dependency recipe, toolchain image, licence text or
-FFmpeg source file instead exits with status 3, names the paths and changes nothing. Then
-review both binaries and their dependencies, update the notices and source instructions,
-and update the manifest by hand.
+from the reviewed capture. A dependency recipe, toolchain image, licence text or FFmpeg
+source file that upstream changes directly instead exits with status 3, names the paths and
+changes nothing. Then review both binaries and their dependencies, update the notices and
+source instructions, and update the manifest by hand.
+
+Jellyfin's quilt patches under `debian/patches/` are judged by what they do, not by their
+path: upstream's Linux build applies them to the FFmpeg tree before compiling, so a patch can
+edit `configure`, a licence file, or add third-party source. For every added, modified,
+renamed or removed `*.patch`, the script downloads the whole patch at the locked revision,
+and at the reviewed revision when it existed there, because the comparison's diff of a diff
+hides which files a modified patch touches. It exits with status 3, naming the patch and the
+file, when:
+
+- an added patch creates a file, or edits a file named `configure`, `LICENSE*` or `COPYING*`
+  in any directory and letter case;
+- a modified or renamed patch creates a file that its reviewed version did not, or the lines
+  it adds to or removes from those files differ from the reviewed version;
+- a removed patch edited one of those files;
+- a patch cannot be downloaded or is not an unambiguous unified diff (indented patches,
+  context diffs, renames, copies, binary patches and file sections naming two files all
+  count), its change status is unknown, or any other file changes under `debian/patches/`.
+
+A patch that only edits existing FFmpeg source files stays automatic, since that code remains
+covered by the `ffmpeg` component's notices. The check selects the changes most likely to
+need a new notice; it is not a licence scan and does not read the text a patch adds to an
+existing source file.
 
 The [tooling pin](.nvmrc) selects Node.js 24 LTS as the tested toolchain. CI selects
 that exact version; local tooling accepts the same major. The generator itself
@@ -143,7 +165,8 @@ automerged. Major-version updates additionally require Dependency Dashboard appr
 Renovate still proposes eligible minor and packaging updates automatically; their
 notice review must complete before CI and image packaging can pass. The synchronization
 workflow completes it when `bin/review-release` confirms an unchanged inventory; otherwise
-it annotates the run with the paths that need a person and leaves the review inputs alone.
+it annotates the run with the paths and patches that need a person and leaves the review
+inputs alone.
 
 `.github/workflows/sync-ffmpeg-lock.yml` uses `pull_request_target` only for same-repository
 Renovate PRs. It executes resolver and review code from the trusted PR base, reads the proposed

@@ -7,15 +7,21 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
+import java.util.stream.Stream;
+import lombok.Builder;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ArrayNode;
 
 @Tag("UnitTest")
 @DisplayName("FFmpeg Release Review Tests")
@@ -29,6 +35,9 @@ class FfmpegReleaseReviewTest {
   private static final String LOCKED_REVISION = "c".repeat(40);
   private static final String LOCKED_AMD64_SHA256 = "d".repeat(64);
   private static final String LOCKED_ARM64_SHA256 = "e".repeat(64);
+  private static final String PATCH = "debian/patches/0099-fix-qsv-av1-hdr-side-data.patch";
+  private static final String CONTENTS_URL =
+      "https://api.github.com/repos/jellyfin/jellyfin-ffmpeg/contents";
 
   @TempDir Path temporaryDirectory;
 
@@ -42,11 +51,16 @@ class FfmpegReleaseReviewTest {
         review
             .upstreamChanges(
                 "debian/changelog",
-                "debian/patches/0100-backport-trim-bitstream-filter.patch",
                 "debian/patches/series",
                 "build.yaml",
                 "builder/images/macos/00-dep.sh",
                 ".github/workflows/_meta_mac_portable.yaml")
+            .upstreamPatch(
+                PatchChange.builder()
+                    .status("added")
+                    .path(PATCH)
+                    .locked(modifying("libavcodec/qsvdec.c", "export HDR side data"))
+                    .build())
             .execute();
 
     assertThat(result.exitCode()).as(result.output()).isZero();
@@ -89,7 +103,10 @@ class FfmpegReleaseReviewTest {
         "configure",
         "libavcodec/aacdec.c",
         "debian/patches/../../LICENSE.md",
-        "debian/patches/odd name.patch"
+        "debian/patches/odd name.patch",
+        "debian/patches/README",
+        "debian/patches/0101-vendor-codec.diff",
+        "debian/patches/nested/0101-vendor-codec.patch"
       })
   @DisplayName("Should require human review when upstream changes a path inside the inventory")
   void shouldRequireHumanReviewWhenUpstreamChangesAPathInsideTheInventory(String path)
@@ -123,6 +140,410 @@ class FfmpegReleaseReviewTest {
 
     assertThat(result.exitCode()).as(result.output()).isEqualTo(HUMAN_REVIEW_REQUIRED);
     assertThat(result.output()).contains("builder/scripts.d/50-x264.sh");
+    assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "configure",
+        "LICENSE.md",
+        "COPYING.GPLv3",
+        "libavcodec/thirdparty/COPYING",
+        "libavcodec/thirdparty/license.txt"
+      })
+  @DisplayName("Should require human review when an added patch changes a licensing file")
+  void shouldRequireHumanReviewWhenAnAddedPatchChangesALicensingFile(String target)
+      throws Exception {
+    var review = review();
+    var reviewedInputs = review.reviewedInputs();
+
+    var result =
+        review
+            .upstreamChanges("debian/changelog", "debian/patches/series")
+            .upstreamPatch(
+                PatchChange.builder()
+                    .status("added")
+                    .path(PATCH)
+                    .locked(
+                        modifying("libavcodec/qsvdec.c", "export HDR side data")
+                            + modifying(target, "All advertising must display an acknowledgement"))
+                    .build())
+            .execute();
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(HUMAN_REVIEW_REQUIRED);
+    assertThat(result.output()).contains(PATCH + " changes " + target);
+    assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        """
+        Index: FFmpeg/libavcodec/bsf/trim.c
+        ===================================================================
+        --- /dev/null
+        +++ FFmpeg/libavcodec/bsf/trim.c
+        @@ -0,0 +1,2 @@
+        +/* Copyright (c) 2026 Some Third Party */
+        +int trim;
+        """,
+        """
+        diff --git a/libavcodec/bsf/trim.c b/libavcodec/bsf/trim.c
+        new file mode 100644
+        index 0000000000..e69de29bb2
+        """
+      })
+  @DisplayName("Should require human review when an added patch creates a file")
+  void shouldRequireHumanReviewWhenAnAddedPatchCreatesAFile(String creation) throws Exception {
+    var review = review();
+    var reviewedInputs = review.reviewedInputs();
+
+    var result =
+        review
+            .upstreamPatch(
+                PatchChange.builder()
+                    .status("added")
+                    .path(PATCH)
+                    .locked(modifying("libavcodec/bsf/Makefile", "bsf/trim.o") + creation)
+                    .build())
+            .execute();
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(HUMAN_REVIEW_REQUIRED);
+    assertThat(result.output()).contains(PATCH + " creates libavcodec/bsf/trim.c");
+    assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"modified", "renamed"})
+  @DisplayName("Should carry the review forward when a changed patch keeps its licensing edits")
+  void shouldCarryTheReviewForwardWhenAChangedPatchKeepsItsLicensingEdits(String status)
+      throws Exception {
+    var review = review();
+    var previousPath = "debian/patches/0098-fix-qsv-av1-hdr-side-data.patch";
+    var unchanged = modifying("configure", "require_pkg_config rkmpp") + creating("libavutil/rk.c");
+
+    var result =
+        review
+            .upstreamPatch(
+                PatchChange.builder()
+                    .status(status)
+                    .path(PATCH)
+                    .previousPath(status.equals("renamed") ? previousPath : null)
+                    .reviewed(unchanged + modifying("libavcodec/qsvdec.c", "export HDR side data"))
+                    .locked(
+                        modifying("libavcodec/qsvdec.c", "export HDR10+ side data")
+                            + unchanged.replace("@@ -1,2 +1,3 @@", "@@ -11,2 +11,3 @@"))
+                    .build())
+            .execute();
+
+    assertThat(result.exitCode()).as(result.output()).isZero();
+    assertThat(review.upstreamRequests())
+        .contains(
+            "%s/%s?ref=%s"
+                .formatted(
+                    CONTENTS_URL,
+                    status.equals("renamed") ? previousPath : PATCH,
+                    reviewed("source_revision")),
+            "%s/%s?ref=%s".formatted(CONTENTS_URL, PATCH, LOCKED_REVISION));
+    assertThat(Files.readString(review.manifest())).contains("release=" + LOCKED_RELEASE);
+  }
+
+  @ParameterizedTest
+  @MethodSource("changedLicensingEdits")
+  @DisplayName("Should require human review when a changed patch alters its licensing edits")
+  void shouldRequireHumanReviewWhenAChangedPatchAltersItsLicensingEdits(
+      String reviewed, String locked) throws Exception {
+    var review = review();
+    var reviewedInputs = review.reviewedInputs();
+
+    var result =
+        review
+            .upstreamPatch(
+                PatchChange.builder()
+                    .status("modified")
+                    .path(PATCH)
+                    .reviewed(reviewed)
+                    .locked(locked)
+                    .build())
+            .execute();
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(HUMAN_REVIEW_REQUIRED);
+    assertThat(result.output()).contains(PATCH + " changes its edits to configure");
+    assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
+  }
+
+  private static Stream<Arguments> changedLicensingEdits() {
+    var source = modifying("libavcodec/qsvdec.c", "export HDR side data");
+    var gated = modifying("configure", "EXTERNAL_LIBRARY_NONFREE_LIST=libfdk_aac");
+    var ungated = modifying("configure", "EXTERNAL_LIBRARY_LIST=libfdk_aac");
+    return Stream.of(
+        Arguments.of(source + gated, source + ungated),
+        Arguments.of(source, source + ungated),
+        Arguments.of(source + gated, source));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"modified", "renamed"})
+  @DisplayName("Should require human review when a changed patch creates another file")
+  void shouldRequireHumanReviewWhenAChangedPatchCreatesAnotherFile(String status) throws Exception {
+    var review = review();
+    var reviewedInputs = review.reviewedInputs();
+    var reviewed = creating("libavutil/rk.c");
+
+    var result =
+        review
+            .upstreamPatch(
+                PatchChange.builder()
+                    .status(status)
+                    .path(PATCH)
+                    .previousPath(status.equals("renamed") ? "debian/patches/0098-rk.patch" : null)
+                    .reviewed(reviewed)
+                    .locked(reviewed + creating("libavutil/thirdparty/rga.c"))
+                    .build())
+            .execute();
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(HUMAN_REVIEW_REQUIRED);
+    assertThat(result.output())
+        .contains(PATCH + " creates libavutil/thirdparty/rga.c")
+        .doesNotContain("creates libavutil/rk.c");
+    assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
+  }
+
+  @Test
+  @DisplayName("Should require human review when a removed patch changed a licensing file")
+  void shouldRequireHumanReviewWhenARemovedPatchChangedALicensingFile() throws Exception {
+    var review = review();
+    var reviewedInputs = review.reviewedInputs();
+
+    var result =
+        review
+            .upstreamPatch(
+                PatchChange.builder()
+                    .status("removed")
+                    .path(PATCH)
+                    .reviewed(modifying("configure", "EXTERNAL_LIBRARY_LIST=libfdk_aac"))
+                    .build())
+            .execute();
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(HUMAN_REVIEW_REQUIRED);
+    assertThat(result.output()).contains("removed " + PATCH + " changed configure");
+    assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
+  }
+
+  @Test
+  @DisplayName("Should carry the review forward when a removed patch changed only FFmpeg sources")
+  void shouldCarryTheReviewForwardWhenARemovedPatchChangedOnlyFfmpegSources() throws Exception {
+    var review = review();
+
+    var result =
+        review
+            .upstreamPatch(
+                PatchChange.builder()
+                    .status("removed")
+                    .path(PATCH)
+                    .reviewed(
+                        modifying("libavcodec/qsvdec.c", "export HDR side data")
+                            + creating("libavcodec/qsv_hdr.c"))
+                    .build())
+            .execute();
+
+    assertThat(result.exitCode()).as(result.output()).isZero();
+    assertThat(Files.readString(review.manifest())).contains("release=" + LOCKED_RELEASE);
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {HUMAN_REVIEW_REQUIRED, 22})
+  @DisplayName("Should require human review when a changed patch cannot be fetched")
+  void shouldRequireHumanReviewWhenAChangedPatchCannotBeFetched(int curlExitCode) throws Exception {
+    var review = review();
+    var reviewedInputs = review.reviewedInputs();
+
+    var result =
+        review
+            .upstreamPatch(PatchChange.builder().status("added").path(PATCH).build())
+            .patchFailure(curlExitCode)
+            .execute();
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(HUMAN_REVIEW_REQUIRED);
+    assertThat(result.output()).contains(PATCH + " could not be fetched");
+    assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "",
+        """
+        {"type": "file", "encoding": "base64", "content": "SW5kZXg6IEZGbXBlZy9jb25maWd1cmUK"}
+        """,
+        """
+        --- FFmpeg.orig/libavcodec/qsvdec.c
+        @@ -1 +1 @@
+        -old
+        +new
+        """,
+        """
+        --- FFmpeg.orig/libavcodec/qsvdec.c
+        +++ FFmpeg/libavcodec/qsvdec.c
+        @@ -1,3 +1,3 @@
+        -old
+        +new
+        """,
+        """
+        Index: FFmpeg/LICENSE.md
+        ===================================================================
+        1c1
+        < old
+        ---
+        > new
+        """,
+        """
+        Index: FFmpeg/LICENSE.md
+        ===================================================================
+        --- FFmpeg.orig/libavcodec/qsvdec.c
+        +++ FFmpeg/libavcodec/qsvdec.c
+        @@ -1 +1 @@
+        -old
+        +new
+        """,
+        """
+          --- FFmpeg.orig/LICENSE.md
+          +++ FFmpeg/LICENSE.md
+          @@ -1 +1 @@
+          -old
+          +new
+        """,
+        """
+        *** FFmpeg.orig/LICENSE.md
+        --- FFmpeg/LICENSE.md
+        ***************
+        *** 1 ****
+        ! old
+        --- 1 ----
+        ! new
+        """,
+        """
+        diff --git a/libavcodec/qsvdec.c b/LICENSE.md
+        similarity index 100%
+        rename from libavcodec/qsvdec.c
+        rename to LICENSE.md
+        """,
+        """
+        diff --git a/libavcodec/logo.png b/libavcodec/logo.png
+        index e69de29bb2..0fd9f0a1c5 100644
+        GIT binary patch
+        literal 4
+        LcmZQzU|;|M00aO5
+        """,
+        """
+        --- "FFmpeg.orig/LICENSE.md"
+        +++ "FFmpeg/LICENSE.md"
+        @@ -1 +1 @@
+        -old
+        +new
+        """,
+        """
+        --- LICENSE.md
+        +++ LICENSE.md
+        @@ -1 +1 @@
+        -old
+        +new
+        """
+      })
+  @DisplayName("Should require human review when a changed patch cannot be read unambiguously")
+  void shouldRequireHumanReviewWhenAChangedPatchCannotBeReadUnambiguously(String body)
+      throws Exception {
+    var review = review();
+    var reviewedInputs = review.reviewedInputs();
+
+    var result =
+        review
+            .upstreamPatch(PatchChange.builder().status("added").path(PATCH).locked(body).build())
+            .execute();
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(HUMAN_REVIEW_REQUIRED);
+    assertThat(result.output()).contains(PATCH + " cannot be read unambiguously");
+    assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
+  }
+
+  @Test
+  @DisplayName("Should read an unmarked blank hunk line as context when a patch is added")
+  void shouldReadAnUnmarkedBlankHunkLineAsContextWhenAPatchIsAdded() throws Exception {
+    var review = review();
+
+    var result =
+        review
+            .upstreamPatch(
+                PatchChange.builder()
+                    .status("added")
+                    .path(PATCH)
+                    .locked(
+                        """
+                        Index: FFmpeg/libavcodec/videotoolbox.c
+                        ===================================================================
+                        --- FFmpeg.orig/libavcodec/videotoolbox.c
+                        +++ FFmpeg/libavcodec/videotoolbox.c
+                        @@ -124,4 +124,4 @@ static int videotoolbox_postproc_frame(v
+                        -        return AVERROR_EXTERNAL;
+                        +        return 0;
+                             }
+
+                             frame->crop_right = 0;
+                        \\ No newline at end of file
+                        """)
+                    .build())
+            .execute();
+
+    assertThat(result.exitCode()).as(result.output()).isZero();
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"copied", "changed", "unchanged"})
+  @DisplayName("Should require human review when a patch has an unsupported change status")
+  void shouldRequireHumanReviewWhenAPatchHasAnUnsupportedChangeStatus(String status)
+      throws Exception {
+    var review = review();
+    var reviewedInputs = review.reviewedInputs();
+    var body = modifying("libavcodec/qsvdec.c", "export HDR side data");
+
+    var result =
+        review
+            .upstreamPatch(
+                PatchChange.builder()
+                    .status(status)
+                    .path(PATCH)
+                    .reviewed(body)
+                    .locked(body)
+                    .build())
+            .execute();
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(HUMAN_REVIEW_REQUIRED);
+    assertThat(result.output()).contains(PATCH, status);
+    assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
+  }
+
+  @Test
+  @DisplayName("Should require human review when a patch is renamed from another kind of file")
+  void shouldRequireHumanReviewWhenAPatchIsRenamedFromAnotherKindOfFile() throws Exception {
+    var review = review();
+    var reviewedInputs = review.reviewedInputs();
+    var body = modifying("libavcodec/qsvdec.c", "export HDR side data");
+
+    var result =
+        review
+            .upstreamPatch(
+                PatchChange.builder()
+                    .status("renamed")
+                    .path(PATCH)
+                    .previousPath("debian/changelog")
+                    .reviewed(body)
+                    .locked(body)
+                    .build())
+            .execute();
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(HUMAN_REVIEW_REQUIRED);
+    assertThat(result.output()).contains(PATCH, "debian/changelog");
     assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
   }
 
@@ -251,10 +672,17 @@ class FfmpegReleaseReviewTest {
         """
         url=
         output=
+        media_type=
         while (( $# > 0 )); do
           case "$1" in
             --output)
               output="$2"
+              shift 2
+              ;;
+            --header)
+              if [[ "$2" == 'Accept: '* ]]; then
+                media_type="${2#Accept: }"
+              fi
               shift 2
               ;;
             https://*)
@@ -270,11 +698,29 @@ class FfmpegReleaseReviewTest {
         if [[ -n "${FAKE_UPSTREAM_EXIT:-}" ]]; then
           exit "${FAKE_UPSTREAM_EXIT}"
         fi
-        if [[ "${url}" != "${FAKE_COMPARISON_URL}" ]]; then
+        if [[ "${url}" == "${FAKE_COMPARISON_URL}" ]]; then
+          cp "${FAKE_COMPARISON}" "${output}"
+          exit 0
+        fi
+
+        content="${url#"${FAKE_CONTENTS_URL}/"}"
+        if [[ "${content}" == "${url}" ]]; then
           echo "Unexpected URL: ${url}" >&2
           exit 1
         fi
-        cp "${FAKE_COMPARISON}" "${output}"
+        if [[ -n "${FAKE_CONTENTS_EXIT:-}" ]]; then
+          exit "${FAKE_CONTENTS_EXIT}"
+        fi
+        file="${FAKE_CONTENTS}/${content#*\\?ref=}/${content%%\\?ref=*}"
+        if [[ ! -f "${file}" ]]; then
+          echo "curl: (22) The requested URL returned error: 404" >&2
+          exit 22
+        fi
+        if [[ "${media_type}" != application/vnd.github.raw+json ]]; then
+          printf '{"type": "file", "encoding": "base64"}\\n' >"${output}"
+          exit 0
+        fi
+        cp "${file}" "${output}"
         """);
     return new ReviewFixture(repository, commands, temporaryDirectory);
   }
@@ -285,6 +731,33 @@ class FfmpegReleaseReviewTest {
         .filter(line -> line.startsWith(prefix))
         .map(line -> line.substring(prefix.length()))
         .collect(Collectors.joining());
+  }
+
+  private static String modifying(String target, String addedLine) {
+    return """
+        Index: FFmpeg/%1$s
+        ===================================================================
+        --- FFmpeg.orig/%1$s
+        +++ FFmpeg/%1$s
+        @@ -1,2 +1,3 @@
+         unchanged
+        +%2$s
+         unchanged
+        """
+        .formatted(target, addedLine);
+  }
+
+  private static String creating(String target) {
+    return """
+        Index: FFmpeg/%1$s
+        ===================================================================
+        --- /dev/null
+        +++ FFmpeg/%1$s
+        @@ -0,0 +1,2 @@
+        +/* This file is part of FFmpeg. */
+        +int created;
+        """
+        .formatted(target);
   }
 
   private static void copyReviewedInputs(Path buildpack) throws IOException {
@@ -302,11 +775,18 @@ class FfmpegReleaseReviewTest {
     }
   }
 
+  @Builder
+  private record PatchChange(
+      String status, String path, String previousPath, String reviewed, String locked) {}
+
   private static final class ReviewFixture {
 
+    private final ObjectMapper mapper = new ObjectMapper();
+    private final ArrayNode files = mapper.createArrayNode();
     private final Path repository;
     private final Path upstreamRequests;
     private final Path comparison;
+    private final Path contents;
     private final ScriptCommand command;
 
     private ReviewFixture(Path repository, Path commands, Path temporaryDirectory)
@@ -314,6 +794,7 @@ class FfmpegReleaseReviewTest {
       this.repository = repository;
       upstreamRequests = Files.createFile(temporaryDirectory.resolve("upstream-requests"));
       comparison = temporaryDirectory.resolve("comparison.json");
+      contents = Files.createDirectory(temporaryDirectory.resolve("contents"));
       command =
           ScriptCommand.of(REVIEWER)
               .argument("--root")
@@ -324,13 +805,36 @@ class FfmpegReleaseReviewTest {
               .environment(
                   "FAKE_COMPARISON_URL",
                   "https://api.github.com/repos/jellyfin/jellyfin-ffmpeg/compare/%s...%s"
-                      .formatted(reviewed("source_revision"), LOCKED_REVISION));
+                      .formatted(reviewed("source_revision"), LOCKED_REVISION))
+              .environment("FAKE_CONTENTS", contents.toString())
+              .environment("FAKE_CONTENTS_URL", CONTENTS_URL);
     }
 
     private ReviewFixture upstreamChanges(String... paths) throws IOException {
-      var mapper = new ObjectMapper();
-      var files = mapper.createArrayNode();
       List.of(paths).forEach(path -> files.addObject().put("filename", path));
+      return upstreamChangeList();
+    }
+
+    private ReviewFixture upstreamPatch(PatchChange change) throws IOException {
+      var previousPath = Optional.ofNullable(change.previousPath());
+      var file = files.addObject().put("filename", change.path()).put("status", change.status());
+      previousPath.ifPresent(path -> file.put("previous_filename", path));
+      serve(reviewed("source_revision"), previousPath.orElse(change.path()), change.reviewed());
+      serve(LOCKED_REVISION, change.path(), change.locked());
+      return upstreamChangeList();
+    }
+
+    private void serve(String revision, String path, String body) throws IOException {
+      if (body == null) {
+        return;
+      }
+
+      var file = contents.resolve(revision).resolve(path);
+      Files.createDirectories(file.getParent());
+      Files.writeString(file, body);
+    }
+
+    private ReviewFixture upstreamChangeList() throws IOException {
       var body = mapper.createObjectNode().put("status", "ahead");
       body.set("files", files);
       return upstreamComparison(mapper.writeValueAsString(body));
@@ -343,6 +847,11 @@ class FfmpegReleaseReviewTest {
 
     private ReviewFixture upstreamFailure(int curlExitCode) {
       command.environment("FAKE_UPSTREAM_EXIT", Integer.toString(curlExitCode));
+      return this;
+    }
+
+    private ReviewFixture patchFailure(int curlExitCode) {
+      command.environment("FAKE_CONTENTS_EXIT", Integer.toString(curlExitCode));
       return this;
     }
 
