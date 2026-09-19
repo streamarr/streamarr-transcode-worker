@@ -459,6 +459,24 @@ for (const [view, origin, excerpt] of [
     });
 }
 
+// Models the ffnvcodec, libdrm and glibc-startup excerpts, which both the leading-comment and the
+// license-comment views reproduce from their reviewed origins.
+test("Should report a changed license text when an excerpt that two views reproduce gains a license comment only one of them reads", (t) => {
+    const { inventory, read, recipes, run, serve, serveRecipes, validate } = fixture(t);
+    const terms = "/* License: no commercial redistribution without permission. */\n";
+    serveRecipes(LOCKED, new Map(recipes).set("50-beta.sh", recipe([["https://gitlab.example/group/beta", "v2.0"]])));
+    serve("https://gitlab.example/group/beta/-/raw/v2.0/include/beta.h", `${HEADER}${terms}int beta(void);\n`);
+
+    const result = run();
+
+    assert.equal(result.status, 0, result.output);
+    assert.match(result.output, /License text changed: beta \(beta\/include\/beta\.h\.txt\)/);
+    assert.doesNotMatch(result.output, /Pin moved, license text unchanged: beta/);
+    assert.equal(read("notices/beta/include/beta.h.txt"), `${HEADER}\n${terms}`);
+    assert.equal(inventory().find((component) => component.id === "beta").notices[0].sha256, checksum(`${HEADER}\n${terms}`));
+    assert.equal(validate().status, 0);
+});
+
 test("Should normalize line endings the same way as the reviewed text", (t) => {
     const { components, inventory, read, recipes, run, serve, serveRecipes, write, writeInventory } = fixture(t);
     components[0].notices[0].sha256 = checksum("Alpha\nlicense\n");
@@ -1464,6 +1482,14 @@ for (const [name, arrange, message] of [
             serve(`${RAW}/example/alpha/${ALPHA_2}/COPYING`, "Alpha license v2\n");
         },
         /No known extraction reproduces alpha\/COPYING\.txt/,
+    ],
+    [
+        "the views that reproduce a reviewed excerpt find different texts at the new pin",
+        ({ recipes, serve, serveRecipes }) => {
+            serveRecipes(LOCKED, new Map(recipes).set("50-beta.sh", recipe([["https://gitlab.example/group/beta", "v2.0"]])));
+            serve("https://gitlab.example/group/beta/-/raw/v2.0/include/beta.h", `${CONTRIBUTORS}/* License: no commercial redistribution. */\nint beta(void);\n`);
+        },
+        /The views that reproduce beta\/include\/beta\.h\.txt from .*\/v1\.0\/include\/beta\.h find different texts at .*\/v2\.0\/include\/beta\.h/,
     ],
     [
         "a recipe replaces the recorded repository with more than one candidate",

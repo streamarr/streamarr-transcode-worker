@@ -28,12 +28,12 @@ const TOOLCHAIN = {
 };
 const comments = (text) =>
     [...text.matchAll(/\/\*[\s\S]*?\*\//g)].map((match) => match[0]);
-// Every reviewed text is one of these views of its origin. A new pin is read only through the
-// first view that reproduces the reviewed bytes from the reviewed origin, so a text is unchanged
-// only when that view still yields those bytes.
-const EXTRACTIONS = [
-    (text) => text,
-    (text) => text.replace(/\r\n/g, "\n"),
+// Every reviewed text is one of these views of its origin. A text that a whole-file view reproduces
+// from the reviewed origin was reviewed as that file and is read with that view alone. Several
+// excerpt views can reproduce one excerpt, and nothing records which the review used, so a new pin
+// is read with all of them: the text is unchanged only while each still yields the reviewed bytes.
+const WHOLE_FILE = [(text) => text, (text) => text.replace(/\r\n/g, "\n")];
+const EXCERPTS = [
     (text) => `${text.match(/^\/\*[\s\S]*?\*\//)?.[0] ?? ""}\n`,
     (text) =>
         `${comments(text)
@@ -330,19 +330,30 @@ async function repin(component, pin) {
                 ? { ...notice, url, upstreamSha256: checksum(origin) }
                 : { ...notice, url };
             // Every view returns its own output unchanged, so a file equal to the reviewed bytes
-            // is unchanged under whichever view was reviewed, without fetching the reviewed origin.
+            // is unchanged under every view that reproduces them, without fetching the reviewed origin.
             if (checksum(origin) === notice.sha256) return located;
             const reviewed = await download(notice.url);
-            const extract = EXTRACTIONS.find(
-                (candidate) => checksum(view(candidate, reviewed)) === notice.sha256,
-            );
-            if (!extract)
+            const reproduces = (extract) => checksum(view(extract, reviewed)) === notice.sha256;
+            const whole = WHOLE_FILE.find(reproduces);
+            const readings = whole ? [whole] : EXCERPTS.filter(reproduces);
+            if (!readings.length)
                 throw new Error(
                     `No known extraction reproduces ${notice.file} from ${notice.url}`,
                 );
-            const extracted = view(extract, origin);
-            if (checksum(extracted) === notice.sha256) return located;
-            return { ...located, sha256: checksum(extracted), text: extracted };
+            const texts = new Map(
+                readings.map((extract) => {
+                    const extracted = view(extract, origin);
+                    return [checksum(extracted), extracted];
+                }),
+            );
+            texts.delete(notice.sha256);
+            if (texts.size > 1)
+                throw new Error(
+                    `The views that reproduce ${notice.file} from ${notice.url} find different texts at ${url}`,
+                );
+            if (!texts.size) return located;
+            const [[sha256, text]] = texts;
+            return { ...located, sha256, text };
         }),
     );
     const role = toolchainRole(component, revision);
