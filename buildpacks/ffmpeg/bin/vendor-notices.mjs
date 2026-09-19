@@ -28,10 +28,11 @@ const TOOLCHAIN = {
 };
 const comments = (text) =>
     [...text.matchAll(/\/\*[\s\S]*?\*\//g)].map((match) => match[0]);
-// Every reviewed text is one of these views of its origin. A text that a whole-file view reproduces
-// from the reviewed origin was reviewed as that file and is read with that view alone. Several
-// excerpt views can reproduce one excerpt, and nothing records which the review used, so a new pin
-// is read with all of them: the text is unchanged only while each still yields the reviewed bytes.
+// Every reviewed text is one of these views of its origin. The inventory marks an excerpt, because a
+// moved tag can make the reviewed origin serve other bytes than the review read. A whole file is read
+// with the first whole-file view that reproduces it from the reviewed origin. Several excerpt views
+// can reproduce one excerpt, and nothing records which the review used, so a new pin is read with all
+// of them: the text is unchanged only while each still yields the reviewed bytes.
 const WHOLE_FILE = [(text) => text, (text) => text.replace(/\r\n/g, "\n")];
 const EXCERPTS = [
     (text) => `${text.match(/^\/\*[\s\S]*?\*\//)?.[0] ?? ""}\n`,
@@ -355,8 +356,9 @@ async function repin(component, pin) {
             if (checksum(origin) === notice.sha256) return located;
             const reviewed = await download(notice.url);
             const reproduces = (extract) => checksum(view(extract, reviewed)) === notice.sha256;
-            const whole = WHOLE_FILE.find(reproduces);
-            const readings = whole ? [whole] : EXCERPTS.filter(reproduces);
+            const readings = notice.excerpt
+                ? EXCERPTS.filter(reproduces)
+                : WHOLE_FILE.filter(reproduces).slice(0, 1);
             if (!readings.length)
                 throw new Error(
                     `No known extraction reproduces ${notice.file} from ${notice.url}`,

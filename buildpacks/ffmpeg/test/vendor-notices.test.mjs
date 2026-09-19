@@ -1663,6 +1663,22 @@ for (const [name, arrange, message] of [
         },
         /The views that reproduce beta\/include\/beta\.h\.txt from .*\/v1\.0\/include\/beta\.h find different texts at .*\/v2\.0\/include\/beta\.h/,
     ],
+    // A tag can be moved, so the reviewed origin may no longer serve the bytes the review saw.
+    ...[
+        ["behind an excerpt marker", LICENSE, `${LICENSE}/** @file placeholder */\n`, `${LICENSE}/** @file */\nADDITIONAL TERMS: no commercial redistribution.\n`],
+        ["after its leading comment", "/* Beta license */\n", "/* Beta license */\n\n", "/* Beta license */\nADDITIONAL TERMS: no commercial redistribution.\n"],
+    ].map(([name, reviewed, moved, locked]) => [
+        `the reviewed tag of a license reviewed as the whole file now serves more text ${name}`,
+        ({ components, recipes, serve, serveRecipes, write, writeInventory }) => {
+            components[1].notices = [{ url: "https://gitlab.example/group/beta/-/raw/v1.0/COPYING", sha256: checksum(reviewed), file: "beta/COPYING.txt" }];
+            writeInventory();
+            write("notices/beta/COPYING.txt", reviewed);
+            serveRecipes(LOCKED, new Map(recipes).set("50-beta.sh", recipe([["https://gitlab.example/group/beta", "v2.0"]])));
+            serve("https://gitlab.example/group/beta/-/raw/v1.0/COPYING", moved);
+            serve("https://gitlab.example/group/beta/-/raw/v2.0/COPYING", locked);
+        },
+        /No known extraction reproduces beta\/COPYING\.txt from https:\/\/gitlab\.example\/group\/beta\/-\/raw\/v1\.0\/COPYING/,
+    ]),
     [
         "a recipe replaces the recorded repository with more than one candidate",
         ({ recipes, serveRecipes }) => serveRecipes(LOCKED, new Map(recipes).set("50-alpha.sh", recipe([["https://github.com/example/renamed", ALPHA_2], ["https://github.com/example/other", ALPHA_2]]))),

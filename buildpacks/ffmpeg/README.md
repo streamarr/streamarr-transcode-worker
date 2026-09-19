@@ -104,13 +104,14 @@ changelog as a patch or reverse a patch with `-R`.
 change. For the locked revision it reads the pin of every component from its recorded evidence:
 the `SCRIPT_REPO`/`SCRIPT_COMMIT` pair of a `builder/scripts.d` recipe matched by repository, a
 parent's `DEPS` file or submodule link, or the toolchain images' `ct-ng-config`. A moved pin has
-its notice URLs rewritten and each text fetched again. A text that the whole file, or the whole
-file with LF line endings, reproduces from the reviewed origin was reviewed as the whole file and
-is read with the first of those views only: a licence file that gains terms after a comment or
-marker, or whose vendored bytes change their line endings, is a changed text. Any other text is
-an excerpt, and several excerpt views (leading comment, licence comment blocks, text before
-`/** @file`) can reproduce it from the reviewed origin; nothing records which one the review used,
-so the new text is read with every one that does. It is unchanged only while each of them still
+its notice URLs rewritten and each text fetched again. A notice without `"excerpt": true` in the
+inventory was reviewed as the whole file and is read with the first view, the whole file or the
+whole file with LF line endings, that reproduces it from the reviewed origin: a licence file that
+gains terms after a comment or marker, or whose vendored bytes change their line endings, is a
+changed text. The tool fails when neither view reproduces it, as when a moved tag serves more than
+the review read. Several excerpt views (leading comment, licence comment blocks, text before
+`/** @file`) can reproduce an excerpt from the reviewed origin; nothing records which one the
+review used, so the new text is read with every one that does. It is unchanged only while each of them still
 yields the reviewed bytes. When they find one new text, that text is vendored even if another
 view still yields the reviewed bytes; when they find different new texts, the tool fails. Licence
 files are never decoded: a file that is not UTF-8, or that starts with a byte order
