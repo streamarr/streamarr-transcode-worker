@@ -769,12 +769,18 @@ async function main() {
         ...report.added.map((id) => `Added component: ${id}`),
         ...report.removed.map((id) => `Removed component: ${id}`),
     ];
+    // The report's baseline is notices/sources.json. A rewrite for a new release moves its ffmpeg
+    // entry away from the revision notices/manifest binds, which marks it unreviewed; a rewrite at
+    // the bound release would not, and the next run would take it for the reviewed inventory.
+    const bound = locked === manifest.source_revision;
     // The report follows the writes, so a run that fails while writing states no verdict.
-    if (!values["dry-run"]) writeInputs({ writes, referenced, components, source });
+    if (!values["dry-run"] && !bound) writeInputs({ writes, referenced, components, source });
     say(`FFmpeg notice inventory for ${lock.release} (${locked})`);
     for (const line of summary) say(`- ${line}`);
     for (const recipe of report.ignored)
         say(`- Ignored recipe not enabled in either binary: ${recipe}`);
+    if (!values["dry-run"] && bound)
+        say(`- Nothing written: notices/manifest binds ${manifest.release}, the locked release, whose reviewed inputs a person changes`);
     say(verdict(manifest, inventory, summary.length > 0));
 }
 

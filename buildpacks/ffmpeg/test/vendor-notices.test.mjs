@@ -1461,6 +1461,71 @@ test("Should not claim to have rebound anything when it only reports an unchange
     assert.equal(result.output.trimEnd().split("\n").at(-1), "Inventory content unchanged since the review of v8.1.2-4; nothing but the FFmpeg revision differs.");
 });
 
+// The lock names the release that notices/manifest binds, as it does after every completed review.
+function lockReviewedRelease({ read, write }) {
+    const manifest = read("notices/manifest");
+    write("ffmpeg.lock", manifest.replace(/^release=v8\.1\.2-4$/m, "release=v8.1.2-4\nversion=8.1.2-4"));
+}
+
+for (const [name, arrange] of [
+    [
+        "the build configurations enable a recipe the review left out",
+        (context) => {
+            context.serveRecipes(REVIEWED, new Map(context.recipes).set("50-delta.sh", recipe([["https://github.com/example/delta", ALPHA_2]], "--enable-libdelta")));
+            serveProposal(context, "delta");
+        },
+    ],
+    [
+        "an inventoried recipe pins a dependency the review did not record",
+        (context) => {
+            context.serveRecipes(REVIEWED, new Map(context.recipes).set("50-alpha.sh", recipe([["https://github.com/example/alpha", ALPHA_1], ["https://github.com/example/delta", ALPHA_2]], "--enable-libalpha")));
+            serveProposal(context, "delta");
+        },
+    ],
+]) {
+    test(`Should report every run against the reviewed inventory when ${name} at the release the manifest binds`, (t) => {
+        const context = fixture(t);
+        const { buildpack, read, run } = context;
+        lockReviewedRelease(context);
+        arrange(context);
+        const inputs = ["notices/sources.json", "SOURCE.txt", "notices/alpha/COPYING.txt", "notices/manifest"];
+        const reviewed = inputs.map(read);
+
+        const first = run();
+        const second = run("--dry-run");
+
+        for (const result of [first, second]) {
+            assert.equal(result.status, 0, result.output);
+            assert.match(result.output, /Added component: delta\n/);
+            assert.equal(result.output.trimEnd().split("\n").at(-1), "Inventory content changed since the review of v8.1.2-4; a maintainer must review this diff before notices/manifest is rebound.");
+        }
+        assert.match(first.output, /- Nothing written: notices\/manifest binds v8\.1\.2-4, the locked release, whose reviewed inputs a person changes\n/);
+        assert.deepEqual(inputs.map(read), reviewed, "the reviewed inventory is not rewritten");
+        assert.equal(fs.existsSync(path.join(buildpack, "notices/delta")), false);
+    });
+}
+
+test("Should not call an inventory regenerated for another release unchanged when the lock returns to the release the manifest binds", (t) => {
+    const context = fixture(t);
+    const { read, run } = context;
+    changeAlphaLicense(context);
+    assert.equal(run().status, 0);
+    const regenerated = ["notices/sources.json", "SOURCE.txt", "notices/alpha/COPYING.txt"].map(read);
+    lockReviewedRelease(context);
+    context.serve(`${RAW}/jellyfin/jellyfin-ffmpeg/${REVIEWED}/LICENSE.md`, "FFmpeg license\n");
+
+    const returned = run();
+    const reported = run("--dry-run");
+
+    for (const result of [returned, reported]) {
+        assert.equal(result.status, 0, result.output);
+        assert.doesNotMatch(result.output, /Inventory content unchanged/);
+        assert.match(result.output.trimEnd().split("\n").at(-1), /^Inventory content was not compared with the review of v8\.1\.2-4: /);
+    }
+    assert.deepEqual(["notices/sources.json", "SOURCE.txt", "notices/alpha/COPYING.txt"].map(read), regenerated, "a person restores the reviewed inputs");
+    assert.match(read("SOURCE.txt"), /releases\/tag\/v9\.0\.0-1/);
+});
+
 // A GitHub repository pinned at ALPHA_2 that the tool can propose as a component.
 function serveProposal({ serve }, name) {
     serve(`${API}/example/${name}/git/trees/${ALPHA_2}?recursive=1`, { truncated: false, tree: [{ path: "COPYING", type: "blob" }] });

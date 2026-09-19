@@ -167,10 +167,13 @@ them are printed as `\uXXXX` escapes: only the tool's own closing line of a succ
 with `Inventory content`. The report is printed only after the inputs are written, so a failed
 run, including one that fails while writing, has no such line. The comparison is with
 `notices/sources.json` in the working tree, which is the reviewed inventory only while its `ffmpeg`
-entry names the revision that `notices/manifest` binds. The tool's own output moves that entry, so
-a further run on a regenerated inventory, `--dry-run` included, states that the content was not
-compared with the review instead of calling it unchanged: review the regenerated inputs against
-the reviewed commit. Generated roles,
+entry names the revision that `notices/manifest` binds. The tool writes only for a release the
+manifest does not bind, and its output moves that entry, so a further run on a regenerated
+inventory, `--dry-run` included, states that the content was not compared with the review instead
+of calling it unchanged: review the regenerated inputs against the reviewed commit. At the release
+the manifest binds, a run only reports, even without `--dry-run`, because a rewritten inventory
+there would still name the bound revision and pass for the reviewed one: a person records a change
+it reports, or restores the reviewed inputs when the lock returns to that release. Generated roles,
 `LicenseRef-<component>` fallbacks and discovered licence files are proposals for the reviewer.
 Refresh the buildconf captures first when the binaries' configuration changed. `--dry-run`
 reports without writing.
