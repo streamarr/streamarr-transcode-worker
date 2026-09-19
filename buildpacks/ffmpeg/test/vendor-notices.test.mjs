@@ -1335,6 +1335,19 @@ for (const [name, arrange, message] of [
         },
         /Unsafe notice path from upstream: delta\/LICENSE \(old\)\.txt/,
     ],
+    ...[
+        ["outside the notice directory", "../../LICENSE.txt"],
+        ["through a current-directory segment", "./LICENSE"],
+        ["through an empty segment", "docs//LICENSE"],
+    ].map(([name, listed]) => [
+        `upstream names a license file ${name}`,
+        ({ recipes, serve, serveRecipes }) => {
+            serveRecipes(LOCKED, new Map(recipes).set("50-delta.sh", recipe([["https://github.com/example/delta", ALPHA_2]])));
+            serve(`${API}/example/delta/git/trees/${ALPHA_2}?recursive=1`, { truncated: false, tree: [{ path: listed, type: "blob" }] });
+            serve(`${RAW}/example/delta/${ALPHA_2}/${listed}`, "Upstream bytes\n");
+        },
+        new RegExp(`Unsafe notice path from upstream: delta/${listed.replaceAll(".", "\\.")}`),
+    ]),
     [
         "a changed text would replace a reviewed text that another notice still uses",
         ({ components, recipes, serve, serveRecipes, write, writeInventory }) => {
@@ -1414,7 +1427,7 @@ for (const [name, arrange, message] of [
 ]) {
     test(`Should change nothing and fail when ${name}`, (t) => {
         const context = fixture(t);
-        const inputs = ["notices/sources.json", "SOURCE.txt", "notices/alpha/COPYING.txt"];
+        const inputs = ["notices/sources.json", "SOURCE.txt", "notices/alpha/COPYING.txt", "LICENSE.txt"];
         arrange(context);
         const arranged = inputs.map(context.read);
 
