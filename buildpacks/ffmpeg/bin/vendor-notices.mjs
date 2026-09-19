@@ -217,15 +217,20 @@ async function upstreamRevision(component, context) {
 const upstreamFile = (url, revision) =>
     url.split(`${revision}/`)[1].split("?")[0];
 
+function namedAfter(component, url, revision) {
+    const file = `${component.id}/${upstreamFile(url, revision)}`;
+    return /\.(txt|md)$/i.test(file) ? file : `${file}.txt`;
+}
+
 // Upstream names the file, so it must satisfy the generator's input-path rule before use.
 function ownFile(component, url, revision) {
-    const file = `${component.id}/${upstreamFile(url, revision)}`;
+    const file = namedAfter(component, url, revision);
     if (
         !/^[a-zA-Z0-9_+./-]+$/.test(file) ||
         file.split("/").some((part) => ["", ".", ".."].includes(part))
     )
         throw new Error(`Unsafe notice path from upstream: ${file}`);
-    return /\.(txt|md)$/i.test(file) ? file : `${file}.txt`;
+    return file;
 }
 
 async function repin(component, pin) {
@@ -389,6 +394,56 @@ function sourceAccess(source, components, replacements) {
     return prose + INDEX + index.join("\n");
 }
 
+const reviewedBytes = (file) => fs.readFileSync(path.join(root, "notices", file));
+
+// The file belongs to the notice it is named after, or else to the first in its component's directory.
+function fileOwner(file, holders) {
+    return (
+        holders.find(
+            ({ component, notice }) =>
+                namedAfter(component, notice.url, component.revision) === file,
+        ) ?? holders.find(({ component }) => file.startsWith(`${component.id}/`))
+    );
+}
+
+// Notices whose texts were identical at review share one file. Each distinct text of such a group
+// ends in one file: the owner's text stays, or the reviewed text when no owner remains, and every
+// other text moves to the file named after the first notice carrying it.
+function placeGroup(file, holders, writes) {
+    const staying = fileOwner(file, holders) ?? holders.find(({ notice }) => !hasText(notice));
+    for (const [sha256, sharers] of Map.groupBy(holders, ({ notice }) => notice.sha256)) {
+        const [{ component, notice }] = sharers;
+        const stays = staying?.notice.sha256 === sha256;
+        const target = stays ? file : ownFile(component, notice.url, component.revision);
+        if (hasText(notice) || !stays)
+            writes.set(target, Buffer.from(notice.text ?? reviewedBytes(file)));
+        for (const sharer of sharers) sharer.notice.file = target;
+    }
+}
+
+function placeNotices(components) {
+    const writes = new Map();
+    const holders = components.flatMap((component) =>
+        component.notices.map((notice) => ({ component, notice })),
+    );
+    for (const [file, group] of Map.groupBy(holders, ({ notice }) => notice.file)) {
+        if (group.some(({ notice }) => hasText(notice))) placeGroup(file, group, writes);
+    }
+    return writes;
+}
+
+// A planned file must hold the recorded text of every notice that will reference it.
+function requireRecordedTexts(components, writes) {
+    for (const component of components) {
+        for (const { file, sha256 } of component.notices) {
+            if (writes.has(file) && checksum(writes.get(file)) !== sha256)
+                throw new Error(
+                    `notices/${file} would not hold the text recorded for ${component.id}`,
+                );
+        }
+    }
+}
+
 function noticeFiles(directory, prefix = "") {
     return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) =>
         entry.isDirectory()
@@ -437,7 +492,7 @@ async function main() {
     const report = {
         moved: [],
         relocated: [],
-        changed: [],
+        changed: new Set(),
         added: [],
         removed: [],
         ignored: [],
@@ -483,41 +538,17 @@ async function main() {
         report.added.push(...added.map((component) => component.id));
     }
 
-    // A rewritten file may still hold the reviewed text of another component.
-    const writes = new Map();
-    const holders = (file) =>
-        components.flatMap((component) =>
-            component.notices
-                .filter((notice) => notice.file === file)
-                .map((notice) => ({ component, notice })),
-        );
+    const writes = placeNotices(
+        components.filter((component) => !report.added.includes(component.id)),
+    );
     for (const component of components) {
         for (const notice of component.notices.filter(hasText)) {
-            const text = notice.text;
+            if (report.added.includes(component.id)) writes.set(notice.file, notice.text);
+            else report.changed.add(`${component.id} (${notice.file})`);
             delete notice.text;
-            if (report.added.includes(component.id)) {
-                writes.set(notice.file, text);
-                continue;
-            }
-            report.changed.push(`${component.id} (${notice.file})`);
-            if (!notice.file.startsWith(`${component.id}/`)) {
-                notice.file = ownFile(component, notice.url, component.revision);
-                writes.set(notice.file, text);
-                continue;
-            }
-            const reviewed = fs.readFileSync(path.join(root, "notices", notice.file));
-            for (const other of holders(notice.file)) {
-                if (other.notice === notice) continue;
-                other.notice.file = ownFile(
-                    other.component,
-                    other.notice.url,
-                    other.component.revision,
-                );
-                writes.set(other.notice.file, reviewed);
-            }
-            writes.set(notice.file, text);
         }
     }
+    requireRecordedTexts(components, writes);
 
     components.sort((left, right) => (left.id < right.id ? -1 : 1));
     const replacements = [
@@ -544,7 +575,7 @@ async function main() {
     const summary = [
         ...report.moved.map((id) => `Pin moved, license text unchanged: ${id}`),
         ...report.relocated.map((entry) => `Repository moved: ${entry}`),
-        ...report.changed.map((entry) => `License text changed: ${entry}`),
+        ...[...report.changed].map((entry) => `License text changed: ${entry}`),
         ...report.added.map((id) => `Added component: ${id}`),
         ...report.removed.map((id) => `Removed component: ${id}`),
     ];

@@ -496,6 +496,186 @@ test("Should write a changed text to its own file when the reviewed file belongs
     assert.equal(validate().status, 0);
 });
 
+// Models openmpt: LICENSE and src/mpt/LICENSE.BSD-3-Clause.txt were byte-identical at review and
+// share the file named after the first.
+function shareAlphaLicense({ components, recipes, serve, serveRecipes, writeInventory }, texts) {
+    const origin = (revision, upstream) => `${RAW}/example/alpha/${revision}/${upstream}`;
+    components[0].notices = Object.keys(texts).map((upstream) => ({ url: origin(ALPHA_1, upstream), sha256: checksum(LICENSE), file: "alpha/COPYING.txt" }));
+    writeInventory();
+    serveRecipes(LOCKED, new Map(recipes).set("50-alpha.sh", recipe([["https://github.com/example/alpha", ALPHA_2]], "--enable-libalpha")));
+    for (const [upstream, updated] of Object.entries(texts)) {
+        serve(origin(ALPHA_1, upstream), LICENSE);
+        serve(origin(ALPHA_2, upstream), updated);
+    }
+}
+
+for (const [name, texts, expected, reported] of [
+    [
+        "rewrite the shared file once when both origins change to the same text",
+        { COPYING: "Alpha license 2026\n", "src/LICENSE.BSD": "Alpha license 2026\n" },
+        ["alpha/COPYING.txt", "alpha/COPYING.txt"],
+        ["alpha/COPYING.txt"],
+    ],
+    [
+        "keep the reviewed text in place when only the notice borrowing the file changes",
+        { COPYING: LICENSE, "src/LICENSE.BSD": "Alpha license 2027\n" },
+        ["alpha/COPYING.txt", "alpha/src/LICENSE.BSD.txt"],
+        ["alpha/src/LICENSE.BSD.txt"],
+    ],
+    [
+        "keep the file for the notice it is named after when both origins change differently",
+        { "src/LICENSE.BSD": "Alpha BSD license 2026\n", COPYING: "Alpha license 2026\n" },
+        ["alpha/src/LICENSE.BSD.txt", "alpha/COPYING.txt"],
+        ["alpha/src/LICENSE.BSD.txt", "alpha/COPYING.txt"],
+    ],
+]) {
+    test(`Should ${name}`, (t) => {
+        const context = fixture(t);
+        shareAlphaLicense(context, texts);
+
+        const result = context.run();
+
+        assert.equal(result.status, 0, result.output);
+        const { notices } = context.inventory().find((component) => component.id === "alpha");
+        assert.deepEqual(notices.map((notice) => notice.file), expected);
+        for (const [index, updated] of Object.values(texts).entries()) {
+            assert.equal(notices[index].sha256, checksum(updated));
+            assert.equal(context.read(`notices/${expected[index]}`), updated);
+        }
+        assert.deepEqual(result.output.match(/(?<=License text changed: alpha \()[^)]+/g), reported);
+        const validation = context.validate();
+        assert.equal(validation.status, 0, validation.stderr);
+    });
+}
+
+const BETA_HEADERS = ["beta.h", "beta_decode.h", "beta_parse.h"];
+const CONTRIBUTORS = "/* Copyright Beta and contributors */\n";
+
+// Models ffnvcodec: header excerpts that were byte-identical at review share the first header's file.
+function shareBetaExcerpt({ components, recipes, serve, serveRecipes, writeInventory }, comments) {
+    const origin = (revision, header) => `https://gitlab.example/group/beta/-/raw/${revision}/include/${header}`;
+    components[1].notices = BETA_HEADERS.map((header) => ({ url: origin("v1.0", header), sha256: checksum(HEADER), file: "beta/include/beta.h.txt", excerpt: true }));
+    writeInventory();
+    serveRecipes(LOCKED, new Map(recipes).set("50-beta.sh", recipe([["https://gitlab.example/group/beta", "v2.0"]])));
+    for (const [index, header] of BETA_HEADERS.entries()) {
+        serve(origin("v1.0", header), `${HEADER}int reviewed(void);\n`);
+        serve(origin("v2.0", header), `${comments[index]}int locked(void);\n`);
+    }
+}
+
+for (const [name, comments, expected] of [
+    [
+        "give a changed header excerpt its own file when the headers sharing its reviewed file did not change",
+        [HEADER, CONTRIBUTORS, HEADER],
+        ["beta/include/beta.h.txt", "beta/include/beta_decode.h.txt", "beta/include/beta.h.txt"],
+    ],
+    [
+        "move the reviewed excerpt to one file for the headers still using it when the header it is named after changes",
+        [CONTRIBUTORS, HEADER, HEADER],
+        ["beta/include/beta.h.txt", "beta/include/beta_decode.h.txt", "beta/include/beta_decode.h.txt"],
+    ],
+    [
+        "share one new file between header excerpts that change to the same text",
+        [HEADER, CONTRIBUTORS, CONTRIBUTORS],
+        ["beta/include/beta.h.txt", "beta/include/beta_decode.h.txt", "beta/include/beta_decode.h.txt"],
+    ],
+    [
+        "rewrite the shared excerpt in place when every header changes to the same text",
+        [CONTRIBUTORS, CONTRIBUTORS, CONTRIBUTORS],
+        ["beta/include/beta.h.txt", "beta/include/beta.h.txt", "beta/include/beta.h.txt"],
+    ],
+]) {
+    test(`Should ${name}`, (t) => {
+        const context = fixture(t);
+        shareBetaExcerpt(context, comments);
+
+        const result = context.run();
+
+        assert.equal(result.status, 0, result.output);
+        const { notices } = context.inventory().find((component) => component.id === "beta");
+        assert.deepEqual(notices.map((notice) => notice.file), expected);
+        for (const [index, comment] of comments.entries()) {
+            assert.equal(notices[index].sha256, checksum(comment));
+            assert.equal(context.read(`notices/${expected[index]}`), comment);
+        }
+        const validation = context.validate();
+        assert.equal(validation.status, 0, validation.stderr);
+    });
+}
+
+test("Should rewrite both texts when a component and the component sharing its file change together", (t) => {
+    const { components, inventory, read, recipes, run, serve, serveRecipes, validate, writeInventory } = fixture(t);
+    components.push({
+        ...components[0],
+        id: "gamma",
+        repository: "https://github.com/example/gamma",
+        recipe: "builder/scripts.d/50-gamma.sh",
+        notices: [{ url: `${RAW}/example/gamma/${ALPHA_1}/LICENSE.md`, sha256: checksum(LICENSE), file: "alpha/COPYING.txt" }],
+    });
+    writeInventory();
+    serveRecipes(REVIEWED, new Map(recipes).set("50-gamma.sh", recipe([["https://github.com/example/gamma", ALPHA_1]])));
+    serveRecipes(LOCKED, new Map(recipes)
+        .set("50-alpha.sh", recipe([["https://github.com/example/alpha", ALPHA_2]], "--enable-libalpha"))
+        .set("50-gamma.sh", recipe([["https://github.com/example/gamma", ALPHA_2]])));
+    serve(`${RAW}/example/alpha/${ALPHA_2}/COPYING`, "Alpha license v2\n");
+    serve(`${RAW}/example/gamma/${ALPHA_1}/LICENSE.md`, LICENSE);
+    serve(`${RAW}/example/gamma/${ALPHA_2}/LICENSE.md`, "Gamma license v2\n");
+
+    const result = run();
+
+    assert.equal(result.status, 0, result.output);
+    assert.equal(read("notices/alpha/COPYING.txt"), "Alpha license v2\n");
+    const gamma = inventory().find((component) => component.id === "gamma");
+    assert.deepEqual(gamma.notices, [
+        { url: `${RAW}/example/gamma/${ALPHA_2}/LICENSE.md`, sha256: checksum("Gamma license v2\n"), file: "gamma/LICENSE.md" },
+    ]);
+    assert.equal(read("notices/gamma/LICENSE.md"), "Gamma license v2\n");
+    const validation = validate();
+    assert.equal(validation.status, 0, validation.stderr);
+});
+
+test("Should rewrite a changed text in place when its reviewed file is not named after the upstream path", (t) => {
+    const { components, inventory, read, recipes, run, serve, serveRecipes, validate, writeInventory } = fixture(t);
+    components[0].notices[0].url = `${RAW}/example/alpha/${ALPHA_1}/trunk/alpha/COPYING`;
+    writeInventory();
+    serveRecipes(LOCKED, new Map(recipes).set("50-alpha.sh", recipe([["https://github.com/example/alpha", ALPHA_2]], "--enable-libalpha")));
+    serve(`${RAW}/example/alpha/${ALPHA_1}/trunk/alpha/COPYING`, LICENSE);
+    serve(`${RAW}/example/alpha/${ALPHA_2}/trunk/alpha/COPYING`, "Alpha license v2\n");
+
+    const result = run();
+
+    assert.equal(result.status, 0, result.output);
+    assert.equal(inventory().find((component) => component.id === "alpha").notices[0].file, "alpha/COPYING.txt");
+    assert.equal(read("notices/alpha/COPYING.txt"), "Alpha license v2\n");
+    assert.equal(validate().status, 0);
+});
+
+test("Should move a changed text out of a file left behind by a removed component", (t) => {
+    const { buildpack, components, inventory, read, recipes, run, serve, serveRecipes, validate, writeInventory } = fixture(t);
+    components.push({
+        ...components[0],
+        id: "gamma",
+        repository: "https://github.com/example/gamma",
+        recipe: "builder/scripts.d/50-gamma.sh",
+        notices: [{ url: `${RAW}/example/gamma/${ALPHA_1}/LICENSE.md`, sha256: checksum(LICENSE), file: "alpha/COPYING.txt" }],
+    });
+    writeInventory();
+    serveRecipes(REVIEWED, new Map(recipes).set("50-gamma.sh", recipe([["https://github.com/example/gamma", ALPHA_1]])));
+    const remaining = new Map(recipes).set("50-gamma.sh", recipe([["https://github.com/example/gamma", ALPHA_2]]));
+    remaining.delete("50-alpha.sh");
+    serveRecipes(LOCKED, remaining);
+    serve(`${RAW}/example/gamma/${ALPHA_1}/LICENSE.md`, LICENSE);
+    serve(`${RAW}/example/gamma/${ALPHA_2}/LICENSE.md`, "Gamma license v2\n");
+
+    const result = run();
+
+    assert.equal(result.status, 0, result.output);
+    assert.equal(inventory().find((component) => component.id === "gamma").notices[0].file, "gamma/LICENSE.md");
+    assert.equal(read("notices/gamma/LICENSE.md"), "Gamma license v2\n");
+    assert.equal(fs.existsSync(path.join(buildpack, "notices/alpha")), false);
+    assert.equal(validate().status, 0);
+});
+
 test("Should resolve secondary, dependency-file, submodule and toolchain pins from their recorded evidence", (t) => {
     const { components, inventory, recipes, run, serve, serveRecipes, writeInventory } = fixture(t);
     const child = (id, recipePath, revision, repository = `https://github.com/example/${id}`) => ({
@@ -675,6 +855,23 @@ for (const [name, arrange, message] of [
             serve(`${RAW}/example/delta/${ALPHA_2}/LICENSE (old).txt`, LICENSE);
         },
         /Unsafe notice path from upstream: delta\/LICENSE \(old\)\.txt/,
+    ],
+    [
+        "a changed text would replace a reviewed text that another notice still uses",
+        ({ components, recipes, serve, serveRecipes, write, writeInventory }) => {
+            components[0].notices.push(
+                { url: `${RAW}/example/alpha/${ALPHA_1}/src/LICENSE.BSD`, sha256: checksum(LICENSE), file: "alpha/COPYING.txt" },
+                { url: `${RAW}/example/alpha/${ALPHA_1}/NOTICE`, sha256: checksum("Alpha notice\n"), file: "alpha/src/LICENSE.BSD.txt" },
+            );
+            writeInventory();
+            write("notices/alpha/src/LICENSE.BSD.txt", "Alpha notice\n");
+            serveRecipes(LOCKED, new Map(recipes).set("50-alpha.sh", recipe([["https://github.com/example/alpha", ALPHA_2]], "--enable-libalpha")));
+            serve(`${RAW}/example/alpha/${ALPHA_1}/src/LICENSE.BSD`, LICENSE);
+            serve(`${RAW}/example/alpha/${ALPHA_2}/COPYING`, LICENSE);
+            serve(`${RAW}/example/alpha/${ALPHA_2}/src/LICENSE.BSD`, "Alpha license 2027\n");
+            serve(`${RAW}/example/alpha/${ALPHA_2}/NOTICE`, "Alpha notice\n");
+        },
+        /notices\/alpha\/src\/LICENSE\.BSD\.txt would not hold the text recorded for alpha/,
     ],
     [
         "a new dependency is hosted where license files cannot be listed",

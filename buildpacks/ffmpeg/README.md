@@ -110,8 +110,15 @@ before `/** @file`) reproduces the reviewed bytes, so an excerpt is re-extracted
 reviewed. A recipe that swaps a dependency's mirror is followed to the new repository. A new
 recipe becomes a component when the reviewed build configurations enable one of its
 `--enable-*` flags, or it has none; its licence files come from the repository listing. A
-dropped recipe removes its component, and notice files that nothing references are deleted. A
-shared text is never overwritten: the component whose text changed gets its own file.
+dropped recipe removes its component, and notice files that nothing references are deleted.
+
+Notices whose texts were byte-identical at review share one file, within a component (OpenMPT's
+two licence files, ffnvcodec's header excerpts) or across components. When some of them change,
+every distinct text of the group ends in one file. The file keeps the text of the notice it is
+named after, or else of the first notice in its component's directory; when neither remains, it
+keeps the reviewed text. Every other text, including a reviewed text that is still in use, moves to
+the file named after the first notice that carries it. The tool changes nothing if a planned file
+would not hold the text recorded for every notice that references it.
 
 The tool writes `notices/sources.json`, the notice files and `SOURCE.txt`, whose component
 index is generated from the inventory. It never writes `notices/manifest`, changes nothing when
