@@ -391,6 +391,35 @@ test("Should re-extract a changed header excerpt with the rule that produced the
     assert.equal(validate().status, 0);
 });
 
+for (const [name, reviewed, locked] of [
+    ["gains terms behind an excerpt marker", LICENSE, `${LICENSE}/** @file */\nADDITIONAL TERMS: no commercial redistribution.\n`],
+    ["gains terms after its leading comment", "/* Alpha license */\n", "/* Alpha license */\nADDITIONAL TERMS: no commercial redistribution.\n"],
+    ["gains terms after its license comments", "/* Alpha license */\n\n/* Copyright Alpha */\n", "/* Alpha license */\n\n/* Copyright Alpha */\nADDITIONAL TERMS\n"],
+    ["switches to CRLF line endings", LICENSE, "Alpha license\r\n"],
+]) {
+    test(`Should report a changed license text when a license reviewed as the whole file ${name}`, (t) => {
+        const { components, inventory, read, recipes, run, serve, serveRecipes, validate, write, writeInventory } = fixture(t);
+        const moved = `${RAW}/example/alpha/${ALPHA_2}/COPYING`;
+        components[0].notices[0].sha256 = checksum(reviewed);
+        writeInventory();
+        write("notices/alpha/COPYING.txt", reviewed);
+        serve(`${RAW}/example/alpha/${ALPHA_1}/COPYING`, reviewed);
+        serveRecipes(LOCKED, new Map(recipes).set("50-alpha.sh", recipe([["https://github.com/example/alpha", ALPHA_2]], "--enable-libalpha")));
+        serve(moved, locked);
+
+        const result = run();
+
+        assert.equal(result.status, 0, result.output);
+        assert.match(result.output, /License text changed: alpha \(alpha\/COPYING\.txt\)/);
+        assert.doesNotMatch(result.output, /Pin moved, license text unchanged: alpha/);
+        assert.deepEqual(inventory().find((component) => component.id === "alpha").notices, [
+            { url: moved, sha256: checksum(locked), file: "alpha/COPYING.txt" },
+        ]);
+        assert.equal(read("notices/alpha/COPYING.txt"), locked);
+        assert.equal(validate().status, 0);
+    });
+}
+
 test("Should normalize line endings the same way as the reviewed text", (t) => {
     const { components, inventory, read, recipes, run, serve, serveRecipes, write, writeInventory } = fixture(t);
     components[0].notices[0].sha256 = checksum("Alpha\nlicense\n");

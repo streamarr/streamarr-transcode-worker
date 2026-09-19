@@ -28,8 +28,9 @@ const TOOLCHAIN = {
 };
 const comments = (text) =>
     [...text.matchAll(/\/\*[\s\S]*?\*\//g)].map((match) => match[0]);
-// Every reviewed text is one of these views of its origin; a new pin reuses the view that
-// reproduces the reviewed bytes, so excerpts and newline handling never depend on memory.
+// Every reviewed text is one of these views of its origin. A new pin is read only through the
+// first view that reproduces the reviewed bytes from the reviewed origin, so a text is unchanged
+// only when that view still yields those bytes.
 const EXTRACTIONS = [
     (text) => text,
     (text) => text.replace(/\r\n/g, "\n"),
@@ -265,12 +266,9 @@ async function repin(component, pin) {
                     `Notice URL of ${component.id} does not name revision ${component.revision}`,
                 );
             const text = await download(url);
-            if (
-                EXTRACTIONS.some(
-                    (extract) => checksum(extract(text)) === notice.sha256,
-                )
-            )
-                return { ...notice, url };
+            // Every view returns its own output unchanged, so a file equal to the reviewed bytes
+            // is unchanged under whichever view was reviewed, without fetching the reviewed origin.
+            if (checksum(text) === notice.sha256) return { ...notice, url };
             const reviewed = await download(notice.url);
             const extract = EXTRACTIONS.find(
                 (candidate) => checksum(candidate(reviewed)) === notice.sha256,
@@ -279,12 +277,9 @@ async function repin(component, pin) {
                 throw new Error(
                     `No known extraction reproduces ${notice.file} from ${notice.url}`,
                 );
-            return {
-                ...notice,
-                url,
-                sha256: checksum(extract(text)),
-                text: extract(text),
-            };
+            const extracted = extract(text);
+            if (checksum(extracted) === notice.sha256) return { ...notice, url };
+            return { ...notice, url, sha256: checksum(extracted), text: extracted };
         }),
     );
     return { ...component, repository, revision, notices };

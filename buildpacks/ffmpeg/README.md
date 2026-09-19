@@ -104,10 +104,13 @@ changelog as a patch or reverse a patch with `-R`.
 change. For the locked revision it reads the pin of every component from its recorded evidence:
 the `SCRIPT_REPO`/`SCRIPT_COMMIT` pair of a `builder/scripts.d` recipe matched by repository, a
 parent's `DEPS` file or submodule link, or the toolchain images' `ct-ng-config`. A moved pin has
-its notice URLs rewritten and each text fetched again. The text is taken with whichever known
-view of the origin (whole file, LF line endings, leading comment, licence comment blocks, text
-before `/** @file`) reproduces the reviewed bytes, so an excerpt is re-extracted the way it was
-reviewed. A recipe that swaps a dependency's mirror is followed to the new repository. A
+its notice URLs rewritten and each text fetched again. The text is taken with the first known
+view (whole file, LF line endings, leading comment, licence comment blocks, text before
+`/** @file`) that reproduces the reviewed bytes from the reviewed origin, and with that view
+only: an excerpt is re-extracted the way it was reviewed, and a text counts as unchanged only
+when the view it was reviewed with still yields the reviewed bytes. A licence reviewed as the
+whole file that gains terms after a comment or marker, or changes its line endings, is a changed
+text. A recipe that swaps a dependency's mirror is followed to the new repository. A
 recipe that upstream renames or regroups is followed by repository, to the recipe that pins it
 first or else to the only one that pins it, and reported as moved: the reviewed entry keeps
 everything but its recipe path, and the `DEPS` entries and submodules resolved through it stay.
