@@ -132,10 +132,12 @@ another recipe records. A recipe is in the
 binaries when a component is already built from it, when the reviewed build configurations
 enable one of the `--enable-*` flags it echoes, or when it has none and its path is new since
 the review. A recipe that a review left out is therefore proposed once a refreshed capture
-shows its flag, while one without flags stays out until upstream gives it a new path. Only a
-plain `echo --enable-...` line counts as a flag, and an unclaimed pin of such a recipe is
-proposed again on every run until a component records it: a dependency that is only a build
-input is recorded with the `build-input` distribution. A proposed component gets the
+shows its flag, while one without flags stays out until upstream gives it a new path. A line
+counts as flags when an `echo` starts it or follows `&&` or `||`, as in
+`[[ $TARGET == linux* ]] && echo --enable-vaapi`, and prints nothing but `--enable-*` flags,
+quoted or not. An unclaimed pin of a recipe in the binaries is proposed again on every run until
+a component records it: a dependency that is only a build input is recorded with the
+`build-input` distribution. A proposed component gets the
 architectures that rule names and its licence files come from the repository listing. Its id
 comes from the recipe name, or from the repository name for a later pin, and also names its
 notice directory: the tool fails rather than propose an id that the generator would refuse or

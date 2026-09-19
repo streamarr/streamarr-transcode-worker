@@ -352,11 +352,12 @@ async function licenseExpression(id, repository) {
     }
 }
 
-// Upstream writes the recipe, so reading it has to stay linear in its length: the line is taken
-// by a pattern that cannot match one text two ways, and its words are checked one by one.
+// Upstream writes the recipe, so reading it has to stay linear in its length: the rest of the line
+// after an echo that starts it or follows a condition is taken by a pattern that cannot match one
+// text two ways, and its words are checked one by one.
 const configureFlags = (text) =>
-    [...text.matchAll(/^[ \t]*echo (.+)$/gm)]
-        .map((match) => match[1].trimEnd().split(" "))
+    [...text.matchAll(/(?:^|&&|\|\|)[ \t]*echo (.+)$/gm)]
+        .map((match) => match[1].replace(/["']/g, "").trimEnd().split(" "))
         .filter((words) => words.every((word) => /^--enable-[a-z0-9-]+$/.test(word)))
         .flat();
 

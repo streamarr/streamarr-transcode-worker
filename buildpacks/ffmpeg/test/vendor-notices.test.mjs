@@ -1016,15 +1016,19 @@ for (const [name, text] of [
     });
 }
 
-// Models 45-x11/30-libxcb.sh: reviewed, left out of the inventory, and switched on by a later release.
-for (const [name, reviewedHasRecipe] of [
-    ["is new since the review", false],
-    ["already existed at the reviewed revision without being inventoried", true],
+// Models 45-x11/30-libxcb.sh, and 50-mfx.sh and 50-vaapi/50-libva.sh, which echo their flag behind a
+// target condition: reviewed, left out of the inventory, and switched on by a later release.
+for (const [name, reviewedHasRecipe, configure] of [
+    ["is new since the review", false, "echo --enable-libmfx"],
+    ["already existed at the reviewed revision without being inventoried", true, "echo --enable-libmfx"],
+    ["already existed at the reviewed revision and echoes its flag behind a condition", true, "[[ $TARGET != *arm64 ]] && echo --enable-libmfx"],
+    ["already existed at the reviewed revision and echoes its flag unless a condition holds", true, "[[ $TARGET == *arm64 ]] || echo --enable-libmfx"],
+    ["already existed at the reviewed revision and echoes its flag in quotes", true, 'echo "--enable-libmfx"'],
 ]) {
     test(`Should add a dependency the refreshed build configurations enable when its recipe ${name}`, (t) => {
         const { inventory, recipes, run, serve, serveRecipes, validate, write } = fixture(t);
         const pinned = "f".repeat(40);
-        const enabled = recipe([["https://github.com/example/mfx", pinned]], "--enable-libmfx");
+        const enabled = `${recipe([["https://github.com/example/mfx", pinned]])}ffbuild_configure() {\n    ${configure}\n}\n`;
         if (reviewedHasRecipe) serveRecipes(REVIEWED, new Map(recipes).set("50-mfx.sh", `${enabled}ffbuild_enabled() {\n    return -1\n}\n`));
         serveRecipes(LOCKED, new Map(recipes).set("50-mfx.sh", enabled));
         serve(`${API}/example/mfx/git/trees/${pinned}?recursive=1`, { truncated: false, tree: [{ path: "LICENSE", type: "blob" }] });
