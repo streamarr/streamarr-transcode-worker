@@ -146,6 +146,29 @@ class FfmpegReleaseReviewTest {
   @ParameterizedTest
   @ValueSource(
       strings = {
+        """
+        {"status": "ahead", "files": [{"filename": ""}]}
+        """,
+        """
+        {"status": "ahead", "files": [{"filename": "debian/changelog", "previous_filename": ""}]}
+        """
+      })
+  @DisplayName("Should require human review when an upstream change names an empty path")
+  void shouldRequireHumanReviewWhenAnUpstreamChangeNamesAnEmptyPath(String comparison)
+      throws Exception {
+    var review = review();
+    var reviewedInputs = review.reviewedInputs();
+
+    var result = review.upstreamComparison(comparison).execute();
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(HUMAN_REVIEW_REQUIRED);
+    assertThat(result.output()).contains("upstream changed \"\"");
+    assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
         "configure",
         "LICENSE.md",
         "COPYING.GPLv3",

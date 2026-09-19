@@ -90,13 +90,21 @@ examine_change() {
   local encoded_path="$1"
   local encoded_previous_path="$2"
   local encoded_status="$3"
+  local encoded_paths=("${encoded_path}")
+  local previous_path=
   local encoded
   local path
   local changes_patch=false
-  for encoded in "${encoded_path}" "${encoded_previous_path}"; do
+  # jq prints null for a name that is absent; a JSON string, even an empty one, keeps its quotes.
+  if [[ "${encoded_previous_path}" != null ]]; then
+    encoded_paths+=("${encoded_previous_path}")
+    previous_path="$(json_text "${encoded_previous_path}")"
+  fi
+
+  for encoded in "${encoded_paths[@]}"; do
     # A JSON escape leaves a backslash behind, so unusual names stay inside the inventory.
     path="$(json_text "${encoded}")"
-    if [[ "${encoded}" == '""' ]] || path_is_outside_inventory "${path}"; then
+    if path_is_outside_inventory "${path}"; then
       continue
     fi
     if path_is_jellyfin_patch "${path}"; then
@@ -111,7 +119,7 @@ examine_change() {
   fi
 
   patch_paths+=("$(json_text "${encoded_path}")")
-  patch_previous_paths+=("$(json_text "${encoded_previous_path}")")
+  patch_previous_paths+=("${previous_path}")
   patch_statuses+=("${encoded_status}")
 }
 
@@ -275,7 +283,7 @@ fi
 
 # A process substitution would discard jq's status and approve an unexamined change list.
 changes="${temporary_directory}/changes"
-if ! jq -c '.files[] | .filename, (.previous_filename // ""), (.status // "")' \
+if ! jq -c '.files[] | .filename, .previous_filename, .status' \
   "${comparison}" >"${changes}"; then
   echo "Expected every upstream change to be an object naming a file" >&2
   exit 1
