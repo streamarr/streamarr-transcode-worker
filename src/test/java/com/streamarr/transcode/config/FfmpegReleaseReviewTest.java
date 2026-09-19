@@ -609,6 +609,41 @@ class FfmpegReleaseReviewTest {
     assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
   }
 
+  @ParameterizedTest(name = "{displayName} [{0}]")
+  @MethodSource("patchesHoldingANulByte")
+  @DisplayName("Should require human review when a changed patch holds a NUL byte")
+  void shouldRequireHumanReviewWhenAChangedPatchHoldsANulByte(
+      String status, String reviewed, String locked) throws Exception {
+    var review = review();
+    var reviewedInputs = review.reviewedInputs();
+
+    var result =
+        review
+            .upstreamPatch(
+                PatchChange.builder()
+                    .status(status)
+                    .path(PATCH)
+                    .reviewed(reviewed)
+                    .locked(locked)
+                    .build())
+            .execute();
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(HUMAN_REVIEW_REQUIRED);
+    assertThat(result.output()).contains(PATCH + " cannot be read unambiguously");
+    assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
+  }
+
+  private static Stream<Arguments> patchesHoldingANulByte() {
+    var nul = '\0';
+    return Stream.of(
+        Arguments.of(
+            "modified",
+            modifying("configure", "EXTERNAL_LIBRARY_LIST=" + nul + "libx264"),
+            modifying("configure", "EXTERNAL_LIBRARY_LIST=" + nul + "libfdk_aac")),
+        Arguments.of(
+            "added", null, modifying("libavcodec/qsvdec.c", "export HDR side data" + nul)));
+  }
+
   @Test
   @DisplayName("Should read an unmarked blank hunk line as context when a patch is added")
   void shouldReadAnUnmarkedBlankHunkLineAsContextWhenAPatchIsAdded() throws Exception {

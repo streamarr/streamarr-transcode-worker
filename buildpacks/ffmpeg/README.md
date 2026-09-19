@@ -86,13 +86,18 @@ file, when:
 - a patch cannot be downloaded or holds anything but unified-diff file headers and hunks,
   because `patch` searches whatever text a reader skips for further diffs: a description,
   indented or nested headers, context, normal and ed diffs, renames, copies, binary patches
-  and file sections naming two files all count. The same applies when its change status is
-  unknown, or any other file changes under `debian/patches/`.
+  and file sections naming two files all count. So does a NUL byte, because some `awk`
+  implementations end the line there while `patch` applies the bytes after it. The same
+  applies when its change status is unknown, or any other file changes under
+  `debian/patches/`.
 
 A patch that only edits existing FFmpeg source files stays automatic, since that code remains
 covered by the `ffmpeg` component's notices. The check selects the changes most likely to
-need a new notice; it is not a licence scan and does not read the text a patch adds to an
-existing source file.
+need a new notice; it is not a licence scan and does not read the text a patch adds to a
+source file, including a file that its reviewed version already created. The changelog and
+patch series are outside the inventory by decision, not because they are harmless: quilt
+applies whatever the series names with the options it gives, so an entry could apply the
+changelog as a patch or reverse a patch with `-R`.
 
 The [tooling pin](.nvmrc) selects Node.js 24 LTS as the tested toolchain. CI selects
 that exact version; local tooling accepts the same major. The generator itself

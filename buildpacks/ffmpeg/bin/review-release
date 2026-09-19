@@ -14,10 +14,13 @@ human_review_required=3
 # GitHub's comparison lists at most this many files, so a full list may be incomplete.
 comparison_file_limit=300
 
-# Upstream paths that cannot alter which third-party code the Linux portable binaries link,
-# nor any notice text vendored under notices/. Every other path needs a person to review the
-# inventory, except a Jellyfin patch: upstream applies those to the FFmpeg tree before
-# compiling, so what each changed patch does to that tree decides.
+# Upstream paths outside the inventory. The changelog and patch series are exempt by decision,
+# not because they are harmless: quilt applies whatever the series names with the options it
+# gives, so an entry could apply the changelog as a patch or reverse a patch with -R. The rest of
+# this list cannot alter which third-party code the Linux portable binaries link, nor any notice
+# text vendored under notices/. Any path not listed needs a person to review the inventory,
+# except a Jellyfin patch: upstream applies those to the FFmpeg tree before compiling, so what
+# each changed patch does to that tree decides.
 paths_outside_inventory=(
   '^\.github/'
   '^debian/changelog$'
@@ -132,6 +135,12 @@ summarize_patch() {
     "https://api.github.com/repos/jellyfin/jellyfin-ffmpeg/contents/${path}?ref=${revision}" \
     "${summary}.patch"; then
     review_reasons+=("${path} could not be fetched at ${revision}")
+    return 1
+  fi
+  # Some awk implementations end a line at a NUL byte, and patch(1) applies the bytes after it.
+  if ! LC_ALL=C tr -d '\000' <"${summary}.patch" >"${summary}.text" \
+    || ! cmp -s "${summary}.text" "${summary}.patch"; then
+    review_reasons+=("${path} cannot be read unambiguously (a NUL byte)")
     return 1
   fi
   if ! LC_ALL=C awk -f "${patch_summary}" "${summary}.patch" >"${summary}"; then
