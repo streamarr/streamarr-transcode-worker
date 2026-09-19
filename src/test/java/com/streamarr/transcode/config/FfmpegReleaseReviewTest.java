@@ -860,6 +860,32 @@ class FfmpegReleaseReviewTest {
     assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
   }
 
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        """
+        {"status": "ahead", "files": [
+          {"filename": "debian/changelog"}, "unexpected-entry", {"filename": "LICENSE.md"}]}
+        {"status": "", "files": []}
+        """,
+        """
+        {"status": "ahead", "files": [{"filename": "debian/changelog"}, 7, \
+        {"filename": "configure"}]}{"status": "", "files": []}
+        """
+      })
+  @DisplayName("Should fail without approving anything when the comparison is several documents")
+  void shouldFailWithoutApprovingAnythingWhenTheComparisonIsSeveralDocuments(String comparison)
+      throws Exception {
+    var review = review();
+    var reviewedInputs = review.reviewedInputs();
+
+    var result = review.upstreamComparison(comparison).execute();
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(1);
+    assertThat(result.output()).doesNotContain("inventory is unchanged");
+    assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
+  }
+
   private ReviewFixture review() throws IOException {
     return review(LOCKED_RELEASE);
   }

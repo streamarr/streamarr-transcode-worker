@@ -257,8 +257,10 @@ if ! ffmpeg_github_api_get \
   echo "Unable to compare the reviewed and locked upstream revisions" >&2
   exit 1
 fi
-if ! jq -e '(.status | type == "string") and (.files | type == "array")' "${comparison}" >/dev/null; then
-  echo "Expected an upstream comparison with a status and a change list" >&2
+# jq's status reflects only the last document it reads, so a second one would hide a failure.
+if ! jq -e -s 'length == 1 and (.[0] | (.status | type == "string") and (.files | type == "array"))' \
+  "${comparison}" >/dev/null; then
+  echo "Expected a single upstream comparison with a status and a change list" >&2
   exit 1
 fi
 
