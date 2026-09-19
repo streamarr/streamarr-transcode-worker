@@ -34,13 +34,19 @@ paths_outside_inventory=(
 )
 jellyfin_patch='^debian/patches/[A-Za-z0-9._+-]+\.patch$'
 
+approved=false
+
 usage() {
-  echo "Usage: $0 [--root REPOSITORY]" >&2
+  echo "Usage: $0 [--approved] [--root REPOSITORY]" >&2
   exit 2
 }
 
 while (( $# > 0 )); do
   case "$1" in
+    --approved)
+      approved=true
+      shift
+      ;;
     --root)
       (( $# >= 2 )) || usage
       repository_root="$(cd "$2" && pwd)"
@@ -251,6 +257,31 @@ if [[ "${bound}" == true ]]; then
   exit 0
 fi
 
+write_manifest() {
+  local key
+  for key in "${manifest_keys[@]}"; do
+    printf '%s=%s\n' "${key}" "$(ffmpeg_lock_value "${lock_file}" "${key}")"
+  done >"$1"
+}
+
+# A maintainer's approval covers inputs that already describe the locked release.
+if [[ "${approved}" == true ]]; then
+  approved_release="$(ffmpeg_lock_value "${lock_file}" release)"
+  approved_revision="$(ffmpeg_lock_value "${lock_file}" source_revision)"
+  if ! jq -e --arg revision "${approved_revision}" \
+    '[.[] | select(.id == "ffmpeg")] | length == 1 and .[0].revision == $revision' \
+    "${inventory}" >/dev/null \
+    || ! grep -Fq "releases/tag/${approved_release}" "${source_access}" \
+    || ! grep -Fq "${approved_revision}" "${source_access}"; then
+    echo "Reviewed inputs do not describe the locked release; regenerate them before approving" >&2
+    exit 1
+  fi
+  write_manifest "${manifest}.approved"
+  mv "${manifest}.approved" "${manifest}"
+  echo "FFmpeg notice inventory is bound to ${approved_release} by maintainer approval"
+  exit 0
+fi
+
 reviewed_release="$(ffmpeg_lock_value "${manifest}" release)"
 reviewed_revision="$(ffmpeg_lock_value "${manifest}" source_revision)"
 locked_release="$(ffmpeg_lock_value "${lock_file}" release)"
@@ -336,9 +367,7 @@ if ! jq -e --arg revision "${locked_revision}" \
   echo "Reviewed inputs do not reference the reviewed release as expected; bind them by hand" >&2
   exit 1
 fi
-for key in "${manifest_keys[@]}"; do
-  printf '%s=%s\n' "${key}" "$(ffmpeg_lock_value "${lock_file}" "${key}")"
-done >"${temporary_directory}/manifest"
+write_manifest "${temporary_directory}/manifest"
 
 mv "${temporary_directory}/sources.json" "${inventory}"
 mv "${temporary_directory}/SOURCE.txt" "${source_access}"

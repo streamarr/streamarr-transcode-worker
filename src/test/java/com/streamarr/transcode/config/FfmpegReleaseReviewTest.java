@@ -889,6 +889,55 @@ class FfmpegReleaseReviewTest {
     assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
   }
 
+  @Test
+  @DisplayName("Should bind the manifest without upstream access when a maintainer approved")
+  void shouldBindTheManifestWithoutUpstreamAccessWhenAMaintainerApproved() throws Exception {
+    var review = review();
+    var reviewedRevision = reviewed("source_revision");
+    for (var input : List.of(review.inventory(), review.sourceAccess())) {
+      Files.writeString(
+          input,
+          Files.readString(input)
+              .replace(reviewedRevision, LOCKED_REVISION)
+              .replace("releases/tag/" + reviewed("release"), "releases/tag/" + LOCKED_RELEASE));
+    }
+
+    var result = review.approved().execute();
+
+    assertThat(result.exitCode()).as(result.output()).isZero();
+    assertThat(Files.readString(review.manifest()))
+        .isEqualTo(
+            """
+            release=%s
+            source_revision=%s
+            amd64_sha256=%s
+            arm64_sha256=%s
+            """
+                .formatted(
+                    LOCKED_RELEASE, LOCKED_REVISION, LOCKED_AMD64_SHA256, LOCKED_ARM64_SHA256));
+    assertThat(review.upstreamRequests()).isEmpty();
+    var offlineValidation =
+        ScriptCommand.of(LOCK_UPDATER)
+            .argument("--check")
+            .argument("--root")
+            .argument(review.repository().toString())
+            .execute();
+    assertThat(offlineValidation.exitCode()).as(offlineValidation.output()).isZero();
+  }
+
+  @Test
+  @DisplayName("Should refuse an approval when the reviewed inputs describe another release")
+  void shouldRefuseAnApprovalWhenTheReviewedInputsDescribeAnotherRelease() throws Exception {
+    var review = review();
+    var reviewedInputs = review.reviewedInputs();
+
+    var result = review.approved().execute();
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(1);
+    assertThat(result.output()).contains("do not describe the locked release");
+    assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
+  }
+
   @ParameterizedTest
   @ValueSource(
       strings = {
@@ -1162,6 +1211,11 @@ class FfmpegReleaseReviewTest {
 
     private ReviewFixture upstreamComparison(String json) throws IOException {
       Files.writeString(comparison, json);
+      return this;
+    }
+
+    private ReviewFixture approved() {
+      command.argument("--approved");
       return this;
     }
 
