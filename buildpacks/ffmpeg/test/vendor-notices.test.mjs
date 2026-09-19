@@ -83,7 +83,7 @@ deliver(fs.readFileSync(file));
     const serve = (url, body) =>
         fs.writeFileSync(
             path.join(upstream, checksum(url)),
-            typeof body === "string" ? body : JSON.stringify(body),
+            typeof body === "string" || Buffer.isBuffer(body) ? body : JSON.stringify(body),
         );
     const unserve = (url) => fs.rmSync(path.join(upstream, checksum(url)));
     // The next transfer of this URL delivers only its first bytes and ends as curl's exit 18.
@@ -105,6 +105,7 @@ deliver(fs.readFileSync(file));
     };
     const read = (relative) =>
         fs.readFileSync(path.join(buildpack, relative), "utf8");
+    const readBytes = (relative) => fs.readFileSync(path.join(buildpack, relative));
 
     const components = [
         {
@@ -256,6 +257,7 @@ deliver(fs.readFileSync(file));
         interrupt,
         inventory,
         read,
+        readBytes,
         recipes,
         requests,
         run,
@@ -515,6 +517,95 @@ test("Should decode base64 source views before comparing license text", (t) => {
     assert.equal(result.status, 0, result.output);
     assert.equal(inventory()[0].revision, ALPHA_2);
     assert.equal(inventory()[0].notices[0].sha256, checksum(LICENSE));
+});
+
+const LATIN_1 = Buffer.from("Alpha license v2\nCopyright Lo\xEFc\n", "latin1");
+const BYTE_ORDER_MARK = Buffer.from([0xef, 0xbb, 0xbf]);
+
+for (const [name, origin] of [
+    ["is not UTF-8", LATIN_1],
+    ["starts with a byte order mark", Buffer.concat([BYTE_ORDER_MARK, Buffer.from("Alpha license v2\n")])],
+]) {
+    test(`Should vendor a changed license text byte for byte when upstream's file ${name}`, (t) => {
+        const { inventory, readBytes, recipes, run, serve, serveRecipes, validate } = fixture(t);
+        serveRecipes(LOCKED, new Map(recipes).set("50-alpha.sh", recipe([["https://github.com/example/alpha", ALPHA_2]], "--enable-libalpha")));
+        serve(`${RAW}/example/alpha/${ALPHA_2}/COPYING`, origin);
+
+        const result = run();
+
+        assert.equal(result.status, 0, result.output);
+        assert.match(result.output, /License text changed: alpha/);
+        assert.deepEqual(readBytes("notices/alpha/COPYING.txt"), origin);
+        assert.equal(inventory()[0].notices[0].sha256, checksum(origin));
+        assert.equal(validate().status, 0);
+    });
+}
+
+test("Should follow a moved pin when the reviewed text was vendored byte for byte from an origin that is not UTF-8", (t) => {
+    const { components, inventory, readBytes, recipes, run, serve, serveRecipes, validate, write, writeInventory } = fixture(t);
+    components[0].notices[0].sha256 = checksum(LATIN_1);
+    writeInventory();
+    write("notices/alpha/COPYING.txt", LATIN_1);
+    serve(`${RAW}/example/alpha/${ALPHA_1}/COPYING`, LATIN_1);
+    serveRecipes(LOCKED, new Map(recipes).set("50-alpha.sh", recipe([["https://github.com/example/alpha", ALPHA_2]], "--enable-libalpha")));
+    serve(`${RAW}/example/alpha/${ALPHA_2}/COPYING`, LATIN_1);
+
+    const result = run();
+
+    assert.equal(result.status, 0, result.output);
+    assert.match(result.output, /Pin moved, license text unchanged: alpha/);
+    assert.equal(inventory()[0].revision, ALPHA_2);
+    assert.deepEqual(readBytes("notices/alpha/COPYING.txt"), LATIN_1);
+    assert.equal(validate().status, 0);
+});
+
+test("Should re-extract a changed header excerpt byte for byte when the header is not UTF-8", (t) => {
+    const { components, inventory, readBytes, recipes, run, serve, serveRecipes, validate, write, writeInventory } = fixture(t);
+    const header = (holder) => Buffer.from(`/* Copyright ${holder} */\n`, "latin1");
+    components[1].notices[0].sha256 = checksum(header("Lo\xEFc"));
+    writeInventory();
+    write("notices/beta/include/beta.h.txt", header("Lo\xEFc"));
+    serve("https://gitlab.example/group/beta/-/raw/v1.0/include/beta.h", Buffer.concat([header("Lo\xEFc"), Buffer.from("int beta(void);\n")]));
+    serveRecipes(LOCKED, new Map(recipes).set("50-beta.sh", recipe([["https://gitlab.example/group/beta", "v2.0"]])));
+    serve("https://gitlab.example/group/beta/-/raw/v2.0/include/beta.h", Buffer.concat([header("Lo\xEFc and M\xE5ns"), Buffer.from("int beta(int);\n")]));
+
+    const result = run();
+
+    assert.equal(result.status, 0, result.output);
+    assert.deepEqual(readBytes("notices/beta/include/beta.h.txt"), header("Lo\xEFc and M\xE5ns"));
+    assert.equal(inventory().find((component) => component.id === "beta").notices[0].sha256, checksum(header("Lo\xEFc and M\xE5ns")));
+    assert.equal(validate().status, 0);
+});
+
+test("Should keep bytes that are not UTF-8 when decoding a base64 source view", (t) => {
+    const { inventory, readBytes, recipes, run, serve, serveRecipes, validate } = fixture(t);
+    const mirror = "https://chromium.googlesource.com/mirror/alpha";
+    serveRecipes(LOCKED, new Map(recipes).set("50-alpha.sh", recipe([[mirror, ALPHA_2]], "--enable-libalpha")));
+    serve(`${mirror}/+/${ALPHA_2}/COPYING?format=TEXT`, `${LATIN_1.toString("base64")}\n`);
+
+    const result = run();
+
+    assert.equal(result.status, 0, result.output);
+    assert.deepEqual(readBytes("notices/alpha/COPYING.txt"), LATIN_1);
+    assert.equal(inventory()[0].notices[0].sha256, checksum(LATIN_1));
+    assert.equal(validate().status, 0);
+});
+
+test("Should vendor the authors file of a new component byte for byte when it is not UTF-8", (t) => {
+    const { inventory, readBytes, recipes, run, serve, serveRecipes, validate } = fixture(t);
+    const delta = "f".repeat(40);
+    const authors = Buffer.from("Lo\xEFc Example\nM\xE5ns Example\n", "latin1");
+    serveRecipes(LOCKED, new Map(recipes).set("50-delta.sh", recipe([["https://github.com/example/delta", delta]], "--enable-libdelta")));
+    serve(`${API}/example/delta/git/trees/${delta}?recursive=1`, { truncated: false, tree: [{ path: "AUTHORS", type: "blob" }] });
+    serve(`${API}/example/delta/license`, { license: { spdx_id: "BSD-3-Clause" } });
+    serve(`${RAW}/example/delta/${delta}/AUTHORS`, authors);
+
+    const result = run();
+
+    assert.equal(result.status, 0, result.output);
+    assert.deepEqual(readBytes("notices/delta/AUTHORS.txt"), authors);
+    assert.equal(inventory().find((component) => component.id === "delta").notices[0].sha256, checksum(authors));
+    assert.equal(validate().status, 0);
 });
 
 test("Should follow a dependency to its new repository when the recipe replaces the pin", (t) => {

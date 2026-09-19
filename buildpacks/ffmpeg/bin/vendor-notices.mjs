@@ -42,8 +42,12 @@ const EXTRACTIONS = [
             .join("\n\n")}\n`,
     (text) => text.split("/** @file")[0],
 ];
+// A vendored text is upstream's bytes, whatever their encoding. The views look only for ASCII, so
+// they read the bytes as latin1, which maps every byte to one character and back.
+const view = (extract, bytes) =>
+    Buffer.from(extract(bytes.toString("latin1")), "latin1");
 
-const checksum = (text) => createHash("sha256").update(text).digest("hex");
+const checksum = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const hasText = (notice) => Object.hasOwn(notice, "text");
 const normalize = (repository) => repository.replace(/\.git$|\/$/g, "");
 const keyValues = (text) =>
@@ -81,10 +85,10 @@ async function request(url) {
     const body = path.join(scratch, checksum(url));
     try {
         await run("bash", ["-c", `. "$1"; ${command}`, "--", httpLibrary, url, body]);
-        const text = new TextDecoder().decode(fs.readFileSync(body));
+        const response = fs.readFileSync(body);
         return url.includes("format=TEXT")
-            ? Buffer.from(text.trim(), "base64").toString()
-            : text;
+            ? Buffer.from(response.toString("latin1").trim(), "base64")
+            : response;
     } catch (error) {
         throw new Error(
             `Unable to fetch ${url}: ${String(error.stderr ?? error.message).trim()}`,
@@ -93,7 +97,7 @@ async function request(url) {
 }
 
 // Recipes, toolchain configurations, dependency files and listings are read, never vendored.
-const readable = (url) => download(url);
+const readable = async (url) => new TextDecoder().decode(await download(url));
 const json = async (url) => JSON.parse(await readable(url));
 
 function rawUrl(repository, revision, file) {
@@ -286,22 +290,22 @@ async function repin(component, pin) {
                 throw new Error(
                     `Notice URL of ${component.id} does not name revision ${component.revision}`,
                 );
-            const text = await download(url);
+            const origin = await download(url);
             const located = Object.hasOwn(notice, "upstreamSha256")
-                ? { ...notice, url, upstreamSha256: checksum(text) }
+                ? { ...notice, url, upstreamSha256: checksum(origin) }
                 : { ...notice, url };
             // Every view returns its own output unchanged, so a file equal to the reviewed bytes
             // is unchanged under whichever view was reviewed, without fetching the reviewed origin.
-            if (checksum(text) === notice.sha256) return located;
+            if (checksum(origin) === notice.sha256) return located;
             const reviewed = await download(notice.url);
             const extract = EXTRACTIONS.find(
-                (candidate) => checksum(candidate(reviewed)) === notice.sha256,
+                (candidate) => checksum(view(candidate, reviewed)) === notice.sha256,
             );
             if (!extract)
                 throw new Error(
                     `No known extraction reproduces ${notice.file} from ${notice.url}`,
                 );
-            const extracted = extract(text);
+            const extracted = view(extract, origin);
             if (checksum(extracted) === notice.sha256) return located;
             return { ...located, sha256: checksum(extracted), text: extracted };
         }),
@@ -489,7 +493,7 @@ function placeGroup(file, holders, writes) {
         const stays = staying?.notice.sha256 === sha256;
         const target = stays ? file : ownFile(component, notice.url, component.revision);
         if (hasText(notice) || !stays)
-            writes.set(target, Buffer.from(notice.text ?? reviewedBytes(file)));
+            writes.set(target, notice.text ?? reviewedBytes(file));
         for (const sharer of sharers) sharer.notice.file = target;
     }
 }

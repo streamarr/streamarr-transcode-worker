@@ -110,7 +110,8 @@ view (whole file, LF line endings, leading comment, licence comment blocks, text
 only: an excerpt is re-extracted the way it was reviewed, and a text counts as unchanged only
 when the view it was reviewed with still yields the reviewed bytes. A licence reviewed as the
 whole file that gains terms after a comment or marker, or changes its line endings, is a changed
-text. Whatever else describes the pin moves with it: a notice that records `upstreamSha256`, the
+text. Licence files are never decoded: a file that is not UTF-8, or that starts with a byte order
+mark, is hashed, excerpted and written as upstream's bytes. Whatever else describes the pin moves with it: a notice that records `upstreamSha256`, the
 checksum of an origin whose bytes differ from the vendored text, gets the checksum of the new
 origin, and the role of a toolchain component names the new version. Every other role and
 `version_note` is a person's wording and stays as reviewed. A recipe that swaps a dependency's
