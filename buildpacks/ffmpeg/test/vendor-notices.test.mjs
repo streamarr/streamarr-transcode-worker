@@ -1636,6 +1636,18 @@ for (const [name, arrange, message] of [
         new RegExp(`Unsafe notice path from upstream: delta/${listed.replaceAll(".", "\\.")}`),
     ]),
     [
+        "a relocated repository names a changed notice that leaves its shared file outside the notice directory",
+        ({ components, recipes, serve, serveRecipes, writeInventory }) => {
+            components[0].notices.push({ url: `${RAW}/example/alpha/${ALPHA_1}/LICENSE`, sha256: checksum(LICENSE), file: "alpha/COPYING.txt" });
+            writeInventory();
+            serveRecipes(LOCKED, new Map(recipes).set("50-alpha.sh", recipe([["https://github.com/a/X/../../LICENSE.txt?", "X"]], "--enable-libalpha")));
+            serve(`${RAW}/example/alpha/${ALPHA_1}/LICENSE`, LICENSE);
+            serve(`${RAW}/a/X/../../LICENSE.txt?/X/COPYING`, LICENSE);
+            serve(`${RAW}/a/X/../../LICENSE.txt?/X/LICENSE`, "Upstream bytes\n");
+        },
+        /Unsafe notice path from upstream: alpha\/\.\.\/\.\.\/LICENSE\.txt/,
+    ],
+    [
         "a changed text would replace a reviewed text that another notice still uses",
         ({ components, recipes, serve, serveRecipes, write, writeInventory }) => {
             components[0].notices.push(
