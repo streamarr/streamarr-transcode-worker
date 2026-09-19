@@ -213,8 +213,14 @@ async function upstreamRevision(component, context) {
 const upstreamFile = (url, revision) =>
     url.split(`${revision}/`)[1].split("?")[0];
 
+// Upstream names the file, so it must satisfy the generator's input-path rule before use.
 function ownFile(component, url, revision) {
     const file = `${component.id}/${upstreamFile(url, revision)}`;
+    if (
+        !/^[a-zA-Z0-9_+./-]+$/.test(file) ||
+        file.split("/").some((part) => ["", ".", ".."].includes(part))
+    )
+        throw new Error(`Unsafe notice path from upstream: ${file}`);
     return /\.(txt|md)$/i.test(file) ? file : `${file}.txt`;
 }
 
