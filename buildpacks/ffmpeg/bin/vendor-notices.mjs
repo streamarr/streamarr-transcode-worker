@@ -178,8 +178,8 @@ function recipePin(component, context) {
         (candidate) => candidate.repository === normalize(component.repository),
     );
     if (pin?.revision) return pin;
-    const claimed = context.inventory
-        .filter((other) => other.recipe === component.recipe)
+    const claimed = [...context.followed.values()]
+        .filter((other) => other?.recipe === component.recipe)
         .map((other) => normalize(other.repository));
     const unclaimed = pins.filter(
         (candidate) =>
@@ -196,7 +196,7 @@ const builtByRecipe = (component) =>
     component.revisionEvidence !== "notice-only" && RECIPE.test(component.recipe);
 
 // Upstream renumbers and regroups recipes. The component follows its repository to the recipe that
-// pins it first, or else to the one that pins it at all; undefined means upstream dropped it.
+// pins it first, or else to the one that pins it at all.
 function followRecipe(component, recipes) {
     if (!builtByRecipe(component) || recipes.has(component.recipe)) return component;
     const pinnedBy = (relevant) =>
@@ -214,6 +214,33 @@ function followRecipe(component, recipes) {
     return candidates.length ? { ...component, recipe: candidates[0] } : undefined;
 }
 
+// A component that no recipe pins by its repository moved with the components built with it when
+// they all moved to one recipe, which may have swapped its repository; undefined means upstream
+// dropped it.
+function followRecipes(inventory, recipes) {
+    const byRepository = new Map(
+        inventory.map((component) => [component.id, followRecipe(component, recipes)]),
+    );
+    return new Map(
+        inventory.map((component) => {
+            if (byRepository.get(component.id))
+                return [component.id, byRepository.get(component.id)];
+            const destinations = new Set(
+                inventory
+                    .filter((other) => other.recipe === component.recipe)
+                    .map((other) => byRepository.get(other.id)?.recipe)
+                    .filter(Boolean),
+            );
+            return [
+                component.id,
+                destinations.size === 1
+                    ? { ...component, recipe: [...destinations][0] }
+                    : undefined,
+            ];
+        }),
+    );
+}
+
 // Returns what upstream now builds, or undefined when the component is gone.
 async function upstreamPin(component, context) {
     if (builtByRecipe(component)) return recipePin(component, context);
@@ -229,12 +256,18 @@ async function upstreamRevision(component, context) {
         component.recipe.match(SUBMODULE) ??
         component.recipe.match(DEPENDENCY_FILE) ??
         [];
-    if (!context.inventory.some((candidate) => candidate.id === parentId))
+    const reviewedParent = context.inventory.find((candidate) => candidate.id === parentId);
+    if (!reviewedParent)
         throw new Error(
             `Cannot resolve the upstream pin of ${component.id} from "${component.recipe}"`,
         );
     const parent = context.pinned.get(parentId);
-    if (!parent) return undefined;
+    // A recipe renamed together with a swap of its repository looks dropped; removing it would drop
+    // the dependencies it still links.
+    if (!parent)
+        throw new Error(
+            `${component.id} is resolved through ${parentId}, but no recipe pins ${reviewedParent.repository}`,
+        );
     if (submodule) return submodulePin(parent, parent.revision, submodule);
     const dependencies = await readable(
         rawUrl(parent.repository, parent.revision, "DEPS"),
@@ -587,7 +620,8 @@ async function main() {
         ),
     );
 
-    const context = { locked, recipes, inventory, pinned: new Map() };
+    const followed = followRecipes(inventory, recipes);
+    const context = { locked, recipes, inventory, followed, pinned: new Map() };
     const report = {
         regrouped: [],
         moved: [],
@@ -604,7 +638,7 @@ async function main() {
         ...inventory.filter((candidate) => !derived(candidate)),
         ...inventory.filter(derived),
     ]) {
-        const component = followRecipe(reviewed, recipes);
+        const component = followed.get(reviewed.id);
         const pin = component && (await upstreamPin(component, context));
         if (!pin) {
             report.removed.push(reviewed.id);

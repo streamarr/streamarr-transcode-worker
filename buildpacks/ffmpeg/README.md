@@ -119,9 +119,13 @@ mirror is followed to the new repository. A
 recipe that upstream renames or regroups is followed by repository, to the recipe that pins it
 first or else to the only one that pins it, and reported as moved: the reviewed entry keeps
 everything but its recipe path, and the `DEPS` entries and submodules resolved through it stay.
-The tool fails when several recipes qualify, or when a recipe moves and swaps its repository at
-once. A dropped recipe removes its component and the components resolved through it, and notice
-files that nothing references are deleted.
+A component that no recipe pins any more moves with the components built with it when they all
+moved to one recipe, and a repository swapped there is followed as it is in place. The tool fails
+when several recipes qualify. Any other component whose recipe is gone counts as dropped: it is
+removed, and notice files that nothing references are deleted. A recipe renamed together with a
+swap of its repository looks the same, so it is reported as a removed and an added component,
+and the tool fails when the added id is a reviewed one or when `DEPS` entries or submodules are
+resolved through the removed component, rather than drop dependencies that are still linked.
 
 Every pin of a recipe that is in the binaries must be claimed by a component, matched by
 repository and revision across the whole inventory, or the tool proposes it as a new component.

@@ -1278,6 +1278,44 @@ test("Should follow a regrouped recipe for every component built from it and sti
     );
 });
 
+// Models 45-opencl.sh regrouped while the ICD loader it pins second is swapped for another repository.
+test("Should follow a component to the recipe the components built with it moved to when upstream also swaps its repository", (t) => {
+    const { components, inventory, read, recipes, run, serve, serveRecipes, validate, write, writeInventory } = fixture(t);
+    const loader = "3".repeat(40);
+    const mirror = "https://github.com/mirror/icd-loader";
+    components.push({
+        ...components[0],
+        id: "alpha-loader",
+        repository: "https://github.com/example/alpha-loader",
+        revision: loader,
+        architectures: ["arm64"],
+        role: "Reviewed loader role.",
+        notices: [{ url: `${RAW}/example/alpha-loader/${loader}/COPYING`, sha256: checksum("Loader license\n"), file: "alpha-loader/COPYING.txt" }],
+        distribution: "embedded",
+    });
+    writeInventory();
+    write("notices/alpha-loader/COPYING.txt", "Loader license\n");
+    serveRecipes(REVIEWED, new Map(recipes).set("50-alpha.sh", recipe([["https://github.com/example/alpha", ALPHA_1], ["https://github.com/example/alpha-loader", loader]], "--enable-libalpha")));
+    serveRecipes(LOCKED, regrouped(new Map(recipes).set("50-alpha.sh", recipe([["https://github.com/example/alpha", ALPHA_1], [mirror, loader]], "--enable-libalpha")), "50-alpha.sh", "45-alpha.sh"));
+    serve(`${RAW}/mirror/icd-loader/${loader}/COPYING`, "Loader license\n");
+    serve(`${API}/mirror/icd-loader/git/trees/${loader}?recursive=1`, { truncated: false, tree: [{ path: "COPYING", type: "blob" }] });
+
+    const result = run();
+
+    assert.equal(result.status, 0, result.output);
+    assert.match(result.output, /Recipe moved: alpha-loader \(builder\/scripts\.d\/50-alpha\.sh -> builder\/scripts\.d\/45-alpha\.sh\)/);
+    assert.match(result.output, /Repository moved: alpha-loader \(https:\/\/github\.com\/example\/alpha-loader -> https:\/\/github\.com\/mirror\/icd-loader\)/);
+    assert.doesNotMatch(result.output, /(Added|Removed) component/);
+    assert.deepEqual(inventory().find((component) => component.id === "alpha-loader"), {
+        ...components[3],
+        repository: mirror,
+        recipe: "builder/scripts.d/45-alpha.sh",
+        notices: [{ ...components[3].notices[0], url: `${RAW}/mirror/icd-loader/${loader}/COPYING` }],
+    });
+    assert.equal(read("notices/alpha-loader/COPYING.txt"), "Loader license\n");
+    assert.equal(validate().status, 0);
+});
+
 // Models 45-vulkan-headers.sh: the loader's recipe pins the same repository second.
 test("Should follow a regrouped recipe to the recipe that pins the repository first", (t) => {
     const { components, inventory, recipes, run, serve, serveRecipes, writeInventory } = fixture(t);
@@ -1506,6 +1544,25 @@ for (const [name, arrange, message] of [
         "a recipe is regrouped and swaps its repository in the same release",
         ({ recipes, serveRecipes }) => serveRecipes(LOCKED, regrouped(new Map(recipes).set("50-alpha.sh", recipe([["https://github.com/example/renamed", ALPHA_1]], "--enable-libalpha")), "50-alpha.sh", "47-group/50-Alpha.sh")),
         /builder\/scripts\.d\/47-group\/50-Alpha\.sh pins https:\/\/github\.com\/example\/renamed, whose id alpha belongs to a reviewed component/,
+    ],
+    [
+        "a recipe is renamed and swaps the repository of a component that another is resolved through",
+        ({ components, recipes, serve, serveRecipes, writeInventory }) => {
+            components.push({
+                ...components[0],
+                id: "dep-tools",
+                repository: "https://github.com/example/dep-tools",
+                revision: "4".repeat(40),
+                recipe: "alpha/DEPS",
+                notices: [{ url: `${RAW}/example/dep-tools/${"4".repeat(40)}/COPYING`, sha256: checksum(LICENSE), file: "dep-tools/COPYING.txt" }],
+            });
+            writeInventory();
+            const swapped = new Map(recipes).set("50-alpha.sh", recipe([["https://github.com/mirror/alpha", ALPHA_1]], "--enable-libalpha"));
+            serveRecipes(LOCKED, regrouped(swapped, "50-alpha.sh", "47-group/50-libalpha.sh"));
+            serve(`${API}/mirror/alpha/git/trees/${ALPHA_1}?recursive=1`, { truncated: false, tree: [{ path: "COPYING", type: "blob" }] });
+            serve(`${RAW}/mirror/alpha/${ALPHA_1}/COPYING`, LICENSE);
+        },
+        /dep-tools is resolved through alpha, but no recipe pins https:\/\/github\.com\/example\/alpha/,
     ],
     [
         "a regrouped recipe leaves several recipes pinning the repository",
