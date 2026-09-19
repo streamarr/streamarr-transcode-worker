@@ -177,13 +177,14 @@ class FfmpegAutomationWorkflowTest {
             "createCommitOnBranch",
             "expectedHeadOid: $expectedHead",
             "git cat-file blob",
-            "fileChanges: {additions: $additions[0]}",
+            "fileChanges: {additions: $additions[0], deletions: $deletions}",
             "gh api graphql")
         .doesNotContain("git commit", "git push", "git config", "proposed/buildpacks/", "trusted/");
     assertThat(map(commit.get("env")))
         .containsEntry("EXPECTED_HEAD_SHA", "${{ github.event.pull_request.head.sha }}")
         .containsEntry("GH_TOKEN", "${{ steps.lock_bot.outputs.token }}")
         .containsEntry("BLOBS", "${{ steps.changes.outputs.blobs }}")
+        .containsEntry("DELETIONS", "${{ steps.changes.outputs.deletions }}")
         .containsEntry("HEADLINE", "${{ steps.changes.outputs.headline }}");
   }
 
@@ -196,14 +197,7 @@ class FfmpegAutomationWorkflowTest {
     var names = steps.stream().map(step -> step.get("name")).toList();
     var review = stepNamed(steps, "Review locked release from trusted code");
     var prepare = stepNamed(steps, "Prepare synchronized lock");
-    var reviewedInputs =
-        List.of(
-            "buildpacks/ffmpeg/notices/manifest",
-            "buildpacks/ffmpeg/notices/sources.json",
-            "buildpacks/ffmpeg/SOURCE.txt");
     var prepareRun = (String) prepare.get("run");
-    var unreviewedPaths =
-        prepareRun.substring(0, prepareRun.indexOf("if [[ \"${REVIEWED}\" == 'true' ]]; then"));
 
     assertThat(names)
         .containsSubsequence(
@@ -222,10 +216,139 @@ class FfmpegAutomationWorkflowTest {
         .doesNotContain("proposed/");
     assertThat(map(prepare.get("env")))
         .containsEntry("REVIEWED", "${{ steps.review.outputs.reviewed }}");
-    assertThat(unreviewedPaths)
-        .contains("buildpacks/ffmpeg/ffmpeg.lock")
-        .doesNotContain(reviewedInputs);
-    assertThat(prepareRun).contains(reviewedInputs);
+    assertThat(prepareRun)
+        .contains(
+            "manifest='buildpacks/ffmpeg/notices/manifest'",
+            "if [[ \"${path}\" == \"${manifest}\" && \"${REVIEWED}\" != 'true' ]]; then",
+            "find buildpacks/ffmpeg/ffmpeg.lock buildpacks/ffmpeg/SOURCE.txt",
+            "buildpacks/ffmpeg/notices -type f -print0",
+            "ls-tree -r --name-only HEAD -- buildpacks/ffmpeg/notices");
+  }
+
+  @Test
+  @DisplayName("Should run the downloaded binary only where no secret or write permission exists")
+  void shouldRunTheDownloadedBinaryOnlyWhereNoSecretOrWritePermissionExists() throws IOException {
+    var jobs = map(yaml(".github/workflows/sync-ffmpeg-lock.yml").get("jobs"));
+    var capture = map(jobs.get("capture_buildconf"));
+    var captureSteps = listOfMaps(capture.get("steps"));
+    var sync = map(jobs.get("sync_ffmpeg_lock"));
+    var syncSteps = listOfMaps(sync.get("steps"));
+    var adopt = (String) stepNamed(syncSteps, "Adopt captured build configurations").get("run");
+
+    assertThat(capture).doesNotContainKey("permissions");
+    assertThat(captureSteps.toString())
+        .contains("trusted/buildpacks/ffmpeg/bin/capture-buildconf")
+        .doesNotContain("secrets.", "create-github-app-token", "proposed/buildpacks/");
+    assertThat(capture.get("strategy").toString())
+        .contains("architecture=amd64", "runner=ubuntu-24.04", "architecture=arm64")
+        .contains("runner=ubuntu-24.04-arm");
+    assertThat((String) sync.get("needs")).isEqualTo("capture_buildconf");
+    assertThat((String) sync.get("if"))
+        .contains("!cancelled()", "github.event.pull_request.user.login == 'renovate[bot]'");
+    assertThat(syncSteps.toString()).doesNotContain("bin/capture-buildconf", " -buildconf");
+    assertThat(adopt)
+        .contains(
+            "-L \"${capture}\"",
+            "> 65536",
+            "[^[:print:][:space:]]",
+            "'ffmpeg version '*",
+            "ffmpeg-uncaptured")
+        .doesNotContain("bash \"${capture}\"", "source ", "eval ");
+  }
+
+  @Test
+  @DisplayName("Should withhold the manifest and request review when the inventory changed")
+  void shouldWithholdTheManifestAndRequestReviewWhenTheInventoryChanged() throws IOException {
+    var workflow = yaml(".github/workflows/sync-ffmpeg-lock.yml");
+    var sync = map(map(workflow.get("jobs")).get("sync_ffmpeg_lock"));
+    var steps = listOfMaps(sync.get("steps"));
+    var regenerate = stepNamed(steps, "Regenerate notice inputs from trusted code");
+    var review = (String) stepNamed(steps, "Review locked release from trusted code").get("run");
+    var request = stepNamed(steps, "Request maintainer review of a changed inventory");
+
+    assertThat(map(workflow.get("env"))).containsEntry("REVIEW_LABEL", "ffmpeg-notices-review");
+    assertThat(map(sync.get("permissions")))
+        .containsOnly(
+            Map.entry("contents", "read"),
+            Map.entry("issues", "write"),
+            Map.entry("pull-requests", "write"));
+    assertThat((String) regenerate.get("run"))
+        .contains(
+            "if ! node trusted/buildpacks/ffmpeg/bin/vendor-notices.mjs",
+            "--root \"${GITHUB_WORKSPACE}/trusted/buildpacks/ffmpeg\"",
+            "Notice inputs could not be regenerated")
+        .doesNotContain("proposed/");
+    assertThat(review)
+        .contains(
+            "grep -q '^Inventory content unchanged'",
+            "git -C trusted diff --quiet -- 'buildpacks/ffmpeg/notices/buildconf-*.txt'",
+            "status=3",
+            "if [[ \"${unchanged}\" == 'true' ]]; then");
+    assertThat((String) request.get("if"))
+        .isEqualTo(
+            "steps.review.outputs.reviewed != 'true' && steps.changes.outputs.approved != 'true'");
+    assertThat(map(request.get("env"))).containsEntry("GH_TOKEN", "${{ github.token }}");
+    assertThat((String) request.get("run"))
+        .contains(
+            "gh label create \"${REVIEW_LABEL}\"",
+            "--add-label \"${REVIEW_LABEL}\"",
+            "approving review",
+            "gh pr comment");
+  }
+
+  @Test
+  @DisplayName("Should bind the manifest only when a maintainer approves the current labelled head")
+  void shouldBindTheManifestOnlyWhenAMaintainerApprovesTheCurrentLabelledHead() throws IOException {
+    var workflowPath = ".github/workflows/approve-ffmpeg-notices.yml";
+    var source = Files.readString(Path.of(workflowPath));
+    var workflow = yaml(workflowPath);
+    var job = map(map(workflow.get("jobs")).get("bind_ffmpeg_notices"));
+    var steps = listOfMaps(job.get("steps"));
+    var names = steps.stream().map(step -> step.get("name")).toList();
+    var current = stepNamed(steps, "Require approval of the current head");
+    var bind =
+        (String) stepNamed(steps, "Bind approved notice inventory from trusted code").get("run");
+    var commit = (String) stepNamed(steps, "Commit approved manifest").get("run");
+    var tokenIndex = names.indexOf("Mint lock bot token");
+
+    assertThat(source).contains("pull_request_review:", "types: [ submitted ]");
+    assertThat(map(workflow.get("permissions"))).containsOnly(Map.entry("contents", "read"));
+    assertThat((String) job.get("if"))
+        .contains(
+            "github.event.review.state == 'approved'",
+            "contains(fromJSON('[\"OWNER\", \"MEMBER\", \"COLLABORATOR\"]'),"
+                + " github.event.review.author_association)",
+            "github.event.pull_request.user.login == 'renovate[bot]'",
+            "github.event.pull_request.head.repo.full_name == github.repository",
+            "startsWith(github.event.pull_request.head.ref, 'renovate/')",
+            "contains(github.event.pull_request.labels.*.name, 'ffmpeg-notices-review')");
+    assertThat(map(stepNamed(steps, "Check out trusted reviewer").get("with")))
+        .containsEntry("ref", "${{ github.event.pull_request.base.sha }}")
+        .containsEntry("persist-credentials", false);
+    assertThat(map(current.get("env")))
+        .containsEntry("APPROVED_SHA", "${{ github.event.review.commit_id }}")
+        .containsEntry("EXPECTED_HEAD_SHA", "${{ github.event.pull_request.head.sha }}");
+    assertThat((String) current.get("run"))
+        .contains("\"${APPROVED_SHA}\" != \"${EXPECTED_HEAD_SHA}\"", "current_head_sha");
+    assertThat(bind)
+        .contains(
+            "trusted/buildpacks/ffmpeg/bin/review-release --approved",
+            "--root \"${GITHUB_WORKSPACE}/proposed\"")
+        .doesNotContain("proposed/buildpacks/ffmpeg/bin", "proposed/buildpacks/ffmpeg/lib");
+    assertThat(names)
+        .containsSubsequence(
+            "Require approval of the current head",
+            "Bind approved notice inventory from trusted code",
+            "Mint lock bot token",
+            "Commit approved manifest",
+            "Clear the review request");
+    assertThat(steps.subList(0, tokenIndex).toString()).doesNotContain("secrets.");
+    assertThat(commit)
+        .contains(
+            "createCommitOnBranch",
+            "expectedHeadOid: $expectedHead",
+            "additions: [{path: \"buildpacks/ffmpeg/notices/manifest\", contents: $contents}]")
+        .doesNotContain("git commit", "git push", "deletions");
   }
 
   @Test
