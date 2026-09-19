@@ -14,6 +14,7 @@ buildpacks/ffmpeg/bin/update-lock --release v8.1.2-4
 buildpacks/ffmpeg/bin/update-lock --check
 buildpacks/ffmpeg/bin/update-lock --verify-upstream
 buildpacks/ffmpeg/bin/review-release
+node buildpacks/ffmpeg/bin/vendor-notices.mjs --dry-run
 ```
 
 The resolver requires Bash, `curl`, and `jq`. Offline input validation also requires
@@ -98,6 +99,26 @@ source file, including a file that its reviewed version already created. The cha
 patch series are outside the inventory by decision, not because they are harmless: quilt
 applies whatever the series names with the options it gives, so an entry could apply the
 changelog as a patch or reverse a patch with `-R`.
+
+`bin/vendor-notices.mjs` regenerates the reviewed inputs from upstream when the inventory did
+change. For the locked revision it reads every dependency pin from its recorded evidence: the
+`SCRIPT_REPO`/`SCRIPT_COMMIT` pair of a `builder/scripts.d` recipe matched by repository, a
+parent's `DEPS` file or submodule link, or the toolchain images' `ct-ng-config`. A moved pin has
+its notice URLs rewritten and each text fetched again. The text is taken with whichever known
+view of the origin (whole file, LF line endings, leading comment, licence comment blocks, text
+before `/** @file`) reproduces the reviewed bytes, so an excerpt is re-extracted the way it was
+reviewed. A recipe that swaps a dependency's mirror is followed to the new repository. A new
+recipe becomes a component when the reviewed build configurations enable one of its
+`--enable-*` flags, or it has none; its licence files come from the repository listing. A
+dropped recipe removes its component, and notice files that nothing references are deleted. A
+shared text is never overwritten: the component whose text changed gets its own file.
+
+The tool writes `notices/sources.json`, the notice files and `SOURCE.txt`, whose component
+index is generated from the inventory. It never writes `notices/manifest`, changes nothing when
+it cannot follow a pin, and ends by stating whether inventory content changed. Generated roles,
+`LicenseRef-<component>` fallbacks and discovered licence files are proposals for the reviewer.
+Refresh the buildconf captures first when the binaries' configuration changed. `--dry-run`
+reports without writing.
 
 The [tooling pin](.nvmrc) selects Node.js 24 LTS as the tested toolchain. CI selects
 that exact version; local tooling accepts the same major. The generator itself
