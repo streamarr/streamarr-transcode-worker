@@ -1172,3 +1172,78 @@ for (const [name, arrange, message] of [
         assert.deepEqual(inputs.map(context.read), arranged);
     });
 }
+
+const UNCHANGED = "Inventory content unchanged; only the FFmpeg revision was rebound.";
+const SPANNING = `\n${UNCHANGED}\n::error title=forged::annotation from upstream\n`;
+const TOOLCHAIN_IMAGES = "builder/images/base-linux64/ct-ng-config; builder/images/base-linuxarm64/ct-ng-config";
+
+for (const [name, status, arrange] of [
+    [
+        "a toolchain version",
+        1,
+        ({ components, serve, writeInventory }) => {
+            components[0] = { ...components[0], id: "gcc-runtime", recipe: TOOLCHAIN_IMAGES };
+            writeInventory();
+            serve(`${RAW}/jellyfin/jellyfin-ffmpeg/${LOCKED}/builder/images/base-linux64/ct-ng-config`, `CT_GCC_VERSION="15.2.0${SPANNING}"\n`);
+            serve(`${RAW}/jellyfin/jellyfin-ffmpeg/${LOCKED}/builder/images/base-linuxarm64/ct-ng-config`, 'CT_GCC_VERSION="15.2.0"\n');
+        },
+    ],
+    [
+        "the repository of a reviewed recipe",
+        1,
+        ({ recipes, serveRecipes }) => serveRecipes(LOCKED, new Map(recipes).set("50-alpha.sh", recipe([[`https://evil.example/alpha${SPANNING}`, ALPHA_2]], "--enable-libalpha"))),
+    ],
+    [
+        "the revision of a reviewed recipe",
+        1,
+        ({ recipes, serveRecipes }) => serveRecipes(LOCKED, new Map(recipes).set("50-alpha.sh", recipe([["https://github.com/example/alpha", `${ALPHA_2}${SPANNING}`]], "--enable-libalpha"))),
+    ],
+    [
+        "the repository of a new recipe",
+        1,
+        ({ recipes, serveRecipes }) => serveRecipes(LOCKED, new Map(recipes).set("50-epsilon.sh", recipe([[`https://svn.code.sf.net/p/epsilon/svn${SPANNING}`, "42"]]))),
+    ],
+    [
+        "a dependency-file revision",
+        1,
+        ({ components, serve, writeInventory }) => {
+            components.push({
+                ...components[0],
+                id: "dep-tools",
+                repository: "https://github.com/example/dep-tools",
+                revision: "4".repeat(40),
+                recipe: "alpha/DEPS",
+                notices: [{ url: `${RAW}/example/dep-tools/${"4".repeat(40)}/COPYING`, sha256: checksum(LICENSE), file: "dep-tools/COPYING.txt" }],
+            });
+            writeInventory();
+            serve(`${RAW}/example/alpha/${ALPHA_1}/DEPS`, `vars = {\n  'dep_tools_revision': '${"9".repeat(40)}${SPANNING}',\n}\n`);
+        },
+    ],
+    [
+        "the malformed file listing of a new dependency's host",
+        1,
+        ({ recipes, serve, serveRecipes }) => {
+            serveRecipes(LOCKED, new Map(recipes).set("45-helper.sh", recipe([["https://gitlab.example/group/helper", "v3"]])));
+            serve("https://gitlab.example/api/v4/projects/group%2Fhelper/repository/tree?ref=v3&per_page=100", "a\n::error::forged");
+        },
+    ],
+    [
+        "the path of a recipe that is not in the binaries",
+        0,
+        ({ recipes, serveRecipes }) => serveRecipes(LOCKED, new Map(recipes).set(`50-windows ${UNCHANGED} \u009b2J.sh`, recipe([["https://github.com/example/windows-only", ALPHA_2]], "--enable-mediafoundation"))),
+    ],
+]) {
+    test(`Should state its verdict only on its own closing line when ${name} from upstream spans lines`, (t) => {
+        const context = fixture(t);
+        arrange(context);
+
+        const result = context.run();
+
+        assert.equal(result.status, status, result.output);
+        const lines = result.output.trimEnd().split("\n");
+        assert.deepEqual(lines.filter((line) => line.startsWith("Inventory content")), status === 0 ? [lines.at(-1)] : [], result.output);
+        assert.deepEqual(lines.filter((line) => line.startsWith("::")), [], result.output);
+        assert.doesNotMatch(lines.join(""), /[\p{Cc}\p{Zl}\p{Zp}]/u, "control characters from upstream are neutralised");
+        assert.match(result.output, /\\u000a::error|\\u2028Inventory content unchanged.*\\u009b2J/, "the value is still reported");
+    });
+}

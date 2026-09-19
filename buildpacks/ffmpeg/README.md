@@ -142,7 +142,10 @@ would not hold the text recorded for every notice that references it.
 
 The tool writes `notices/sources.json`, the notice files and `SOURCE.txt`, whose component
 index is generated from the inventory. It never writes `notices/manifest`, changes nothing when
-it cannot follow a pin, and ends by stating whether inventory content changed. Generated roles,
+it cannot follow a pin, and ends by stating whether inventory content changed. Pins, paths and
+transfer diagnostics in the report come from upstream, so control characters and line breaks in
+them are printed as `\uXXXX` escapes: only the tool's own closing line of a successful run starts
+with `Inventory content`, and a failed run has no such line. Generated roles,
 `LicenseRef-<component>` fallbacks and discovered licence files are proposals for the reviewer.
 Refresh the buildconf captures first when the binaries' configuration changed. `--dry-run`
 reports without writing.

@@ -53,6 +53,14 @@ const keyValues = (text) =>
             .split("\n")
             .map((line) => line.split("=")),
     );
+// Pins, paths and transfer diagnostics come from upstream and end up in the report. Its lines are
+// read by people and by scripts, so nothing in one may break the line or drive a terminal.
+const oneLine = (text) =>
+    text.replace(
+        /[\p{Cc}\p{Zl}\p{Zp}]/gu,
+        (character) => `\\u${character.codePointAt(0).toString(16).padStart(4, "0")}`,
+    );
+const say = (line) => console.log(oneLine(line));
 const downloads = new Map();
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "ffmpeg-vendor-"));
 process.on("exit", () =>
@@ -634,11 +642,11 @@ async function main() {
         ...report.added.map((id) => `Added component: ${id}`),
         ...report.removed.map((id) => `Removed component: ${id}`),
     ];
-    console.log(`FFmpeg notice inventory for ${lock.release} (${locked})`);
-    for (const line of summary) console.log(`- ${line}`);
+    say(`FFmpeg notice inventory for ${lock.release} (${locked})`);
+    for (const line of summary) say(`- ${line}`);
     for (const recipe of report.ignored)
-        console.log(`- Ignored recipe not enabled in either binary: ${recipe}`);
-    console.log(
+        say(`- Ignored recipe not enabled in either binary: ${recipe}`);
+    say(
         summary.length
             ? "Inventory content changed; a maintainer must review this diff before notices/manifest is rebound."
             : "Inventory content unchanged; only the FFmpeg revision was rebound.",
@@ -670,6 +678,6 @@ async function main() {
 try {
     await main();
 } catch (error) {
-    console.error(error.message);
+    console.error(oneLine(String(error.message)));
     process.exit(1);
 }
