@@ -22,8 +22,13 @@ ffmpeg_curl() {
 }
 
 ffmpeg_github_api_get() {
-  local url="$1"
-  local destination="$2"
+  ffmpeg_github_api_request 'application/vnd.github+json' "$@"
+}
+
+ffmpeg_github_api_request() {
+  local media_type="$1"
+  local url="$2"
+  local destination="$3"
   local arguments=(
     --fail
     --location
@@ -32,7 +37,7 @@ ffmpeg_github_api_get() {
     --retry 3
     --silent
     --show-error
-    --header 'Accept: application/vnd.github+json'
+    --header "Accept: ${media_type}"
     --header 'X-GitHub-Api-Version: 2022-11-28'
     --user-agent 'streamarr-ffmpeg-lock-updater'
   )
