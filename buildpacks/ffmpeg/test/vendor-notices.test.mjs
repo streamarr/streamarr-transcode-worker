@@ -1117,7 +1117,8 @@ test("Should give a dependency gained by a recipe without configure flags the ar
     assert.equal(gained.role, "Static dependency built by builder/scripts.d/50-beta.sh.");
 });
 
-test("Should report an unchanged inventory when a recipe pins a repository that another recipe's component claims", (t) => {
+// Models Vulkan-Headers, which the loader's recipe pins second at the headers recipe's revision.
+test("Should report an unchanged inventory when a recipe pins a repository at the revision another recipe's component claims", (t) => {
     const { components, inventory, recipes, run, serve, serveRecipes, writeInventory } = fixture(t);
     components.push({
         ...components[0],
@@ -1129,7 +1130,7 @@ test("Should report an unchanged inventory when a recipe pins a repository that 
     writeInventory();
     const pinned = new Map(recipes)
         .set("45-gamma-headers.sh", recipe([["https://github.com/example/gamma-headers", ALPHA_1]]))
-        .set("50-alpha.sh", recipe([["https://github.com/example/alpha", ALPHA_1], ["https://github.com/example/gamma-headers", "v1.4"]], "--enable-libalpha"));
+        .set("50-alpha.sh", recipe([["https://github.com/example/alpha", ALPHA_1], ["https://github.com/example/gamma-headers", ALPHA_1]], "--enable-libalpha"));
     serveRecipes(REVIEWED, pinned);
     serveRecipes(LOCKED, pinned);
     serve(`${RAW}/example/gamma-headers/${ALPHA_1}/LICENSE.md`, LICENSE);
@@ -1140,6 +1141,55 @@ test("Should report an unchanged inventory when a recipe pins a repository that 
     assert.match(result.output, /Inventory content unchanged/);
     assert.deepEqual(inventory().map((component) => component.id), ["alpha", "beta", "ffmpeg", "gamma-headers"]);
 });
+
+// Models nyanmisaka/rk-mirrors, one repository whose branches hold rkmpp and rkrga at different commits.
+const RK_MIRRORS = "https://github.com/example/rk-mirrors";
+const RKRGA = "3".repeat(40);
+
+for (const [name, file, text, proposed] of [
+    [
+        "an inventoried recipe gains a pin of a repository that another component claims at another revision",
+        "50-alpha.sh",
+        recipe([["https://github.com/example/alpha", ALPHA_1], [RK_MIRRORS, ALPHA_2]], "--enable-libalpha"),
+        "rk-mirrors",
+    ],
+    [
+        "a recipe gains a second pin of its own component's repository at another revision",
+        "50-rkrga.sh",
+        recipe([[RK_MIRRORS, RKRGA], [RK_MIRRORS, ALPHA_2]], "--enable-libalpha"),
+        "rk-mirrors",
+    ],
+    ["a new recipe pins a claimed repository at another revision", "45-rkaiq.sh", recipe([[RK_MIRRORS, ALPHA_2]]), "rkaiq"],
+]) {
+    test(`Should propose a dependency when ${name}`, (t) => {
+        const context = fixture(t);
+        const { components, inventory, recipes, run, serveRecipes, validate, write, writeInventory } = context;
+        components.push({
+            ...components[0],
+            id: "rkrga",
+            repository: RK_MIRRORS,
+            revision: RKRGA,
+            recipe: "builder/scripts.d/50-rkrga.sh",
+            notices: [{ url: `${RAW}/example/rk-mirrors/${RKRGA}/COPYING`, sha256: checksum(LICENSE), file: "rkrga/COPYING.txt" }],
+        });
+        writeInventory();
+        write("notices/rkrga/COPYING.txt", LICENSE);
+        const reviewed = new Map(recipes).set("50-rkrga.sh", recipe([[RK_MIRRORS, RKRGA]], "--enable-libalpha"));
+        serveRecipes(REVIEWED, reviewed);
+        serveRecipes(LOCKED, new Map(reviewed).set(file, text));
+        serveProposal(context, "rk-mirrors");
+
+        const result = run();
+
+        assert.equal(result.status, 0, result.output);
+        assert.match(result.output, new RegExp(`Added component: ${proposed}\\n`));
+        assert.match(result.output, /Inventory content changed/);
+        const added = inventory().find((component) => component.id === proposed);
+        assert.deepEqual([added.repository, added.revision, added.recipe], [RK_MIRRORS, ALPHA_2, `builder/scripts.d/${file}`]);
+        assert.equal(inventory().find((component) => component.id === "rkrga").revision, RKRGA);
+        assert.equal(validate().status, 0);
+    });
+}
 
 const regrouped = (recipes, from, to) => {
     const moved = new Map(recipes).set(to, recipes.get(from));
@@ -1236,7 +1286,7 @@ test("Should follow a regrouped recipe to the recipe that pins the repository fi
     });
     writeInventory();
     const pinned = new Map(recipes)
-        .set("50-alpha.sh", recipe([["https://github.com/example/alpha", ALPHA_1], ["https://github.com/example/gamma-headers", "v1.4"]], "--enable-libalpha"))
+        .set("50-alpha.sh", recipe([["https://github.com/example/alpha", ALPHA_1], ["https://github.com/example/gamma-headers", ALPHA_1]], "--enable-libalpha"))
         .set("50-group/45-gamma-headers.sh", recipe([["https://github.com/example/gamma-headers", ALPHA_1]]));
     serveRecipes(REVIEWED, pinned);
     serveRecipes(LOCKED, regrouped(pinned, "50-group/45-gamma-headers.sh", "47-group/45-gamma-headers.sh"));

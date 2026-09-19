@@ -50,6 +50,8 @@ const view = (extract, bytes) =>
 const checksum = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const hasText = (notice) => Object.hasOwn(notice, "text");
 const normalize = (repository) => repository.replace(/\.git$|\/$/g, "");
+// One repository can hold several libraries on its branches, so a pin names a source only with its revision.
+const sourceOf = ({ repository, revision }) => `${normalize(repository)}@${revision}`;
 const keyValues = (text) =>
     Object.fromEntries(
         text
@@ -401,7 +403,7 @@ async function newComponents({ recipe, flags, architectures, claimed, ids }) {
                 .toLowerCase()
                 .replace(/_/g, "-"),
         }))
-        .filter(({ repository }) => !claimed.has(repository));
+        .filter((pin) => !claimed.has(sourceOf(pin)));
     for (const pin of pins) reserveId(ids, pin, recipe.file);
     return Promise.all(
         pins.map(async ({ repository, revision, id }) => {
@@ -633,7 +635,7 @@ async function main() {
     }
 
     // Every pin of a recipe that is in the binaries is claimed by a component or proposed as one.
-    const claimed = new Set(components.map((component) => normalize(component.repository)));
+    const claimed = new Set(components.map(sourceOf));
     const ids = new Map(inventory.map((component) => [component.id, "a reviewed component"]));
     for (const file of lockedPaths) {
         const citing = components.filter((component) => component.recipe === file);
@@ -651,7 +653,7 @@ async function main() {
             claimed,
             ids,
         });
-        for (const component of added) claimed.add(component.repository);
+        for (const component of added) claimed.add(sourceOf(component));
         components.push(...added);
         report.added.push(...added.map((component) => component.id));
     }

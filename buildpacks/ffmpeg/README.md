@@ -124,8 +124,11 @@ once. A dropped recipe removes its component and the components resolved through
 files that nothing references are deleted.
 
 Every pin of a recipe that is in the binaries must be claimed by a component, matched by
-repository across the whole inventory, or the tool proposes it as a new component. That covers
-a pin an inventoried recipe gains, as `20-libiconv.sh` gained gnulib. A recipe is in the
+repository and revision across the whole inventory, or the tool proposes it as a new component.
+The revision counts because one repository can hold several libraries on its branches, as
+`rk-mirrors` holds rkmpp and rkrga. That covers a pin an inventoried recipe gains, as
+`20-libiconv.sh` gained gnulib, and a pin that moves away from the revision a component of
+another recipe records. A recipe is in the
 binaries when a component is already built from it, when the reviewed build configurations
 enable one of the `--enable-*` flags it echoes, or when it has none and its path is new since
 the review. A recipe that a review left out is therefore proposed once a refreshed capture
