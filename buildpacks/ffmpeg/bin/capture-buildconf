@@ -1,0 +1,50 @@
+#!/bin/bash
+# shellcheck source-path=SCRIPTDIR
+
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repository_root="$(cd "${script_dir}/../../.." && pwd)"
+# shellcheck source=../lib/http.sh
+. "${script_dir}/../lib/http.sh"
+# shellcheck source=../lib/lock.sh
+. "${script_dir}/../lib/lock.sh"
+# shellcheck source=../lib/checksum.sh
+. "${script_dir}/../lib/checksum.sh"
+# shellcheck source=../lib/runtime.sh
+. "${script_dir}/../lib/runtime.sh"
+requested_architecture=
+output=
+
+usage() {
+  echo "Usage: $0 --architecture ARCHITECTURE --output FILE [--root REPOSITORY]" >&2
+  exit 2
+}
+
+while (( $# > 0 )); do
+  (( $# >= 2 )) || usage
+  case "$1" in
+    --architecture) requested_architecture="$2" ;;
+    --output) output="$2" ;;
+    --root) repository_root="$(cd "$2" && pwd)" ;;
+    *) usage ;;
+  esac
+  shift 2
+done
+if [[ -z "${requested_architecture}" || -z "${output}" ]]; then
+  usage
+fi
+
+lock_file="${repository_root}/buildpacks/ffmpeg/ffmpeg.lock"
+ffmpeg_lock_validate "${lock_file}"
+architecture="$(ffmpeg_runtime_architecture "${requested_architecture}")"
+runtime="$(mktemp -d)"
+trap 'rm -rf "${runtime}"' EXIT
+
+ffmpeg_runtime_extract "${lock_file}" "${architecture}" "${runtime}" ffmpeg
+ffmpeg_runtime_buildconf "${runtime}/ffmpeg" >"${runtime}/buildconf" || true
+if [[ ! -s "${runtime}/buildconf" ]]; then
+  echo "The locked ${architecture} binary did not print a build configuration" >&2
+  exit 1
+fi
+mv "${runtime}/buildconf" "${output}"
