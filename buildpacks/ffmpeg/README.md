@@ -116,8 +116,11 @@ view still yields the reviewed bytes; when they find different new texts, the to
 files are never decoded: a file that is not UTF-8, or that starts with a byte order
 mark, is hashed, excerpted and written as upstream's bytes. Whatever else describes the pin moves with it: a notice that records `upstreamSha256`, the
 checksum of an origin whose bytes differ from the vendored text, gets the checksum of the new
-origin, and the role of a toolchain component names the new version. Every other role and
-`version_note` is a person's wording and stays as reviewed. A recipe that swaps a dependency's
+origin, and a toolchain component's role that names the old version as a whole token names the
+new one; a version inside a longer dotted one, such as `2.28` in `4.2.28`, is left alone. A moved
+toolchain component whose reviewed role names its version in any form, the major alone included,
+is listed as a toolchain role to review. Every other role and `version_note` is a person's wording
+and stays as reviewed. A recipe that swaps a dependency's
 mirror is followed to the new repository. A
 recipe that upstream renames or regroups is followed by repository, to the recipe that pins it
 first or else to the only one that pins it, and reported as moved: the reviewed entry keeps

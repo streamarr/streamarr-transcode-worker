@@ -309,6 +309,16 @@ function toolchainRole(component, revision) {
     );
 }
 
+// A person's role can name the version in a shorter form, such as its major, which no rewrite finds.
+function namesToolchainVersion(component) {
+    const prefix = TOOLCHAIN[component.id]?.prefix;
+    if (!prefix) return false;
+    const parts = component.revision.slice(prefix.length).split(".");
+    return parts.some((_, index) =>
+        token(parts.slice(0, index + 1).join(".")).test(component.role),
+    );
+}
+
 async function repin(component, pin) {
     const { repository, revision } = pin;
     const relocated = repository !== normalize(component.repository);
@@ -496,13 +506,16 @@ async function newComponents({ recipe, flags, architectures, claimed, ids }) {
     );
 }
 
-// Replaces whole tokens only, so a revision is never rewritten inside a longer one.
-function replaceToken(text, reviewed, locked) {
-    const token = reviewed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return text.replace(
-        new RegExp(`(?<![0-9A-Za-z])${token}(?![0-9A-Za-z])`, "g"),
-        locked,
+// A whole token only, so a revision or version is never found inside a longer one: a dot counts as
+// part of the token when a letter or digit is on its other side, as in "4.2.28".
+const token = (text) =>
+    new RegExp(
+        `(?<![0-9A-Za-z]|[0-9A-Za-z]\\.)${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![0-9A-Za-z]|\\.[0-9A-Za-z])`,
+        "g",
     );
+
+function replaceToken(text, reviewed, locked) {
+    return text.replace(token(reviewed), locked);
 }
 
 function sourceAccess(source, components, replacements) {
@@ -659,6 +672,7 @@ async function main() {
     const report = {
         regrouped: [],
         moved: [],
+        roles: [],
         relocated: [],
         changed: new Set(),
         added: [],
@@ -691,6 +705,8 @@ async function main() {
         const repinned = await repin(component, pin);
         context.pinned.set(component.id, repinned);
         components.push(repinned);
+        if (namesToolchainVersion(component))
+            report.roles.push(`${component.id} (${repinned.role})`);
         if (relocated)
             report.relocated.push(
                 `${component.id} (${component.repository} -> ${pin.repository})`,
@@ -764,6 +780,7 @@ async function main() {
     const summary = [
         ...report.regrouped.map((entry) => `Recipe moved: ${entry}`),
         ...report.moved.map((id) => `Pin moved, license text unchanged: ${id}`),
+        ...report.roles.map((entry) => `Toolchain role to review: ${entry}`),
         ...report.relocated.map((entry) => `Repository moved: ${entry}`),
         ...[...report.changed].map((entry) => `License text changed: ${entry}`),
         ...report.added.map((id) => `Added component: ${id}`),
