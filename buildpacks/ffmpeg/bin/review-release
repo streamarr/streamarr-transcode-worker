@@ -209,11 +209,16 @@ review_patch_change() {
   esac
 }
 
+# A release tag ends in digits, so v8.1.2-4 is also how v8.1.2-40 starts.
+whole_value() {
+  printf '%s([^0-9A-Za-z]|$)' "${1//./\\.}"
+}
+
 replace_in_file() {
   local file="$1"
   local reviewed="$2"
   local locked="$3"
-  sed "s|${reviewed//./\\.}|${locked}|g" "${file}" >"${file}.replaced"
+  sed -E "s#$(whole_value "${reviewed}")#${locked}\\1#g" "${file}" >"${file}.replaced"
   mv "${file}.replaced" "${file}"
 }
 
@@ -306,7 +311,8 @@ replace_in_file "${temporary_directory}/SOURCE.txt" \
 if ! jq -e --arg revision "${locked_revision}" \
   '[.[] | select(.id == "ffmpeg")] | length == 1 and .[0].revision == $revision' \
   "${temporary_directory}/sources.json" >/dev/null \
-  || ! grep -Fq "releases/tag/${locked_release}" "${temporary_directory}/SOURCE.txt" \
+  || ! grep -Eq "$(whole_value "releases/tag/${locked_release}")" \
+    "${temporary_directory}/SOURCE.txt" \
   || ! grep -Fq "${locked_revision}" "${temporary_directory}/SOURCE.txt"; then
   echo "Reviewed inputs do not reference the reviewed release as expected; bind them by hand" >&2
   exit 1

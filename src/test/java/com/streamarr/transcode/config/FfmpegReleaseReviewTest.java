@@ -601,6 +601,47 @@ class FfmpegReleaseReviewTest {
   }
 
   @Test
+  @DisplayName("Should name the locked release exactly when an interrupted bind is repeated")
+  void shouldNameTheLockedReleaseExactlyWhenAnInterruptedBindIsRepeated() throws Exception {
+    var lockedRelease = reviewed("release") + "0";
+    var review = review(lockedRelease).upstreamChanges("debian/changelog");
+    var reviewedManifest = Files.readString(review.manifest());
+    var firstBind = review.execute();
+    assertThat(firstBind.exitCode()).as(firstBind.output()).isZero();
+    // The manifest is moved last, so an interrupted bind leaves it naming the reviewed release.
+    Files.writeString(review.manifest(), reviewedManifest);
+
+    var result = review.execute();
+
+    assertThat(result.exitCode()).as(result.output()).isZero();
+    assertThat(Files.readAllLines(review.sourceAccess()))
+        .filteredOn(line -> line.startsWith("Binary release:"))
+        .containsExactly(
+            "Binary release: https://github.com/jellyfin/jellyfin-ffmpeg/releases/tag/"
+                + lockedRelease);
+    assertThat(Files.readString(review.manifest())).contains("release=" + lockedRelease + "\n");
+  }
+
+  @Test
+  @DisplayName("Should fail without approving anything when the source offer names a longer tag")
+  void shouldFailWithoutApprovingAnythingWhenTheSourceOfferNamesALongerTag() throws Exception {
+    var review = review(reviewed("release") + "0").upstreamChanges("debian/changelog");
+    Files.writeString(
+        review.sourceAccess(),
+        Files.readString(review.sourceAccess())
+            .replace(
+                "releases/tag/" + reviewed("release"),
+                "releases/tag/" + reviewed("release") + "00"));
+    var reviewedInputs = review.reviewedInputs();
+
+    var result = review.execute();
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(1);
+    assertThat(result.output()).contains("bind them by hand");
+    assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
+  }
+
+  @Test
   @DisplayName("Should leave reviewed inputs untouched when they are already bound to the lock")
   void shouldLeaveReviewedInputsUntouchedWhenTheyAreAlreadyBoundToTheLock() throws Exception {
     var review = review();
@@ -669,11 +710,15 @@ class FfmpegReleaseReviewTest {
   }
 
   private ReviewFixture review() throws IOException {
+    return review(LOCKED_RELEASE);
+  }
+
+  private ReviewFixture review(String lockedRelease) throws IOException {
     var repository = Files.createDirectories(temporaryDirectory.resolve("repository"));
     var buildpack = Files.createDirectories(repository.resolve(BUILDPACK));
     copyReviewedInputs(buildpack);
-    var version = LOCKED_RELEASE.substring(1);
-    Files.writeString(buildpack.resolve("release"), LOCKED_RELEASE + "\n");
+    var version = lockedRelease.substring(1);
+    Files.writeString(buildpack.resolve("release"), lockedRelease + "\n");
     Files.writeString(
         buildpack.resolve("ffmpeg.lock"),
         """
@@ -687,7 +732,7 @@ class FfmpegReleaseReviewTest {
         arm64_sha256=%s
         """
             .formatted(
-                LOCKED_RELEASE,
+                lockedRelease,
                 version,
                 LOCKED_REVISION,
                 version,
