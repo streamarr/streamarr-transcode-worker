@@ -882,6 +882,7 @@ class FfmpegPackagingScriptsTest {
         Path.of("buildpacks/ffmpeg/lib/materials.sh"), buildpackLibrary.resolve("materials.sh"));
     Files.copy(
         Path.of("buildpacks/ffmpeg/lib/checksum.sh"), buildpackLibrary.resolve("checksum.sh"));
+    Files.copy(Path.of("buildpacks/ffmpeg/lib/runtime.sh"), buildpackLibrary.resolve("runtime.sh"));
     Files.copy(
         BUILDPACK.getParent().getParent().resolve("LICENSE.txt"),
         buildpackRoot.resolve("LICENSE.txt"));
