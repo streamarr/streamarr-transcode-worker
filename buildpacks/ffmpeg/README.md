@@ -172,8 +172,11 @@ inputs alone.
 Renovate PRs. It executes resolver and review code from the trusted PR base, reads the proposed
 release from a Git object as data, and generates the lock and any carried-forward review
 entirely in the trusted checkout. It never executes proposed code with write credentials, and
-it never runs the downloaded binaries: ordinary CI checks their build configuration. Only after
-detecting a change and verifying the head SHA does it mint a short-lived GitHub App token.
+it never runs the downloaded binaries: ordinary CI checks their build configuration. The review
+quotes upstream file names, which the runner would read for workflow commands, so the step
+pauses command processing behind a random token while the review prints, escapes the text it
+repeats as the annotation, and fences it in the job summary. Only after detecting a change and
+verifying the head SHA does it mint a short-lived GitHub App token.
 
 GitHub's `createCommitOnBranch` API creates a signed commit containing only the generated lock
 and, after a confirmed review on a run started by Renovate's own push, `notices/manifest`,

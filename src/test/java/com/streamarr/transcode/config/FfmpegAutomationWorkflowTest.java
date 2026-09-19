@@ -5,8 +5,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -17,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.yaml.snakeyaml.Yaml;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -290,6 +293,44 @@ class FfmpegAutomationWorkflowTest {
             warning -> assertThat(warning).containsAnyOf(REVIEWED_INPUTS.toArray(String[]::new)));
   }
 
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "zz ##[stop-commands]resume-token",
+        "zz ##[error title=FFmpeg notice review]inventory unchanged, safe to merge",
+        "zz ##[add-mask]x264%0Aneeds human review%0A",
+        "zz <img src=https://example.invalid/pixel>"
+      })
+  @DisplayName("Should log upstream names as inert data when the review needs a person")
+  void shouldLogUpstreamNamesAsInertDataWhenTheReviewNeedsAPerson(String upstreamName)
+      throws Exception {
+    var review =
+        "FFmpeg notice inventory needs human review: upstream changed \"%s\""
+            .formatted(upstreamName);
+
+    var step = reviewStep().reviewerPrinting(review).reviewerExitingWith(3).execute();
+
+    assertThat(step.result().exitCode()).as(step.result().output()).isZero();
+    assertThat(output(step.outputs(), "reviewed")).isEqualTo("false");
+    assertThat(linesTheRunnerReadsForCommands(step.result().output()))
+        .containsExactly("::warning title=FFmpeg notice review::" + review.replace("%", "%25"));
+    assertThat(step.result().output()).containsPattern("(?m)^::stop-commands::[0-9a-f]{32}$");
+    assertThat(Files.readAllLines(step.summary())).containsExactly("```text", review, "```");
+  }
+
+  @Test
+  @DisplayName("Should resume runner commands before failing when the review fails")
+  void shouldResumeRunnerCommandsBeforeFailingWhenTheReviewFails() throws Exception {
+    var diagnostic = "jq: error: Cannot iterate over string (\"##[add-mask]x264\")";
+
+    var step = reviewStep().reviewerFailingWith(diagnostic).reviewerExitingWith(1).execute();
+
+    assertThat(step.result().exitCode()).as(step.result().output()).isEqualTo(1);
+    assertThat(step.result().output()).contains(diagnostic);
+    assertThat(linesTheRunnerReadsForCommands(step.result().output())).isEmpty();
+    assertThat(step.outputs()).doesNotExist();
+  }
+
   @Test
   @DisplayName("Should keep offline validation unconditional when upstream inputs are unchanged")
   void shouldKeepOfflineValidationUnconditionalWhenUpstreamInputsAreUnchanged() throws IOException {
@@ -474,6 +515,90 @@ class FfmpegAutomationWorkflowTest {
             .execute();
     assertThat(seeded.exitCode()).as(seeded.output()).isZero();
     return workspace;
+  }
+
+  private ReviewStep reviewStep() throws IOException {
+    var workspace = Files.createDirectory(temporaryDirectory.resolve("workspace"));
+    var commands = Files.createDirectories(workspace.resolve("trusted/buildpacks/ffmpeg/bin"));
+    ScriptCommand.writeFake(
+        commands,
+        "review-release",
+        """
+        printf '%s' "${FAKE_REVIEW:-}"
+        printf '%s' "${FAKE_DIAGNOSTIC:-}" >&2
+        exit "${FAKE_REVIEW_EXIT}"
+        """);
+    var steps =
+        listOfMaps(
+            map(map(yaml(".github/workflows/sync-ffmpeg-lock.yml").get("jobs"))
+                    .get("sync_ffmpeg_lock"))
+                .get("steps"));
+    ScriptCommand.writeFake(
+        temporaryDirectory,
+        "review-locked-release",
+        "cd \"${GITHUB_WORKSPACE}\"\n"
+            + stepNamed(steps, "Review locked release from trusted code").get("run"));
+    return new ReviewStep(
+        ScriptCommand.of(temporaryDirectory.resolve("review-locked-release"))
+            .environment("GITHUB_WORKSPACE", workspace.toString())
+            .environment("RUNNER_TEMP", temporaryDirectory.toString())
+            .environment("GITHUB_OUTPUT", temporaryDirectory.resolve("outputs").toString())
+            .environment("GITHUB_STEP_SUMMARY", temporaryDirectory.resolve("summary").toString()),
+        temporaryDirectory);
+  }
+
+  // The runner reads `::command::` at the start of a line and the legacy `##[command]` anywhere
+  // in one, except between `::stop-commands::<token>` and `::<token>::`. A line that parses as
+  // the former is never read for the latter.
+  private static List<String> linesTheRunnerReadsForCommands(String log) {
+    var read = new ArrayList<String>();
+    var resume = Optional.<String>empty();
+    for (var line : log.lines().toList()) {
+      if (resume.isPresent()) {
+        resume = resume.filter(token -> !line.equals("::" + token + "::"));
+        continue;
+      }
+      if (line.startsWith("::stop-commands::")) {
+        resume = Optional.of(line.substring("::stop-commands::".length()));
+        continue;
+      }
+
+      read.add(line);
+    }
+    return read;
+  }
+
+  private record ReviewStep(ScriptCommand command, Path temporaryDirectory) {
+
+    private ReviewStep reviewerPrinting(String review) {
+      command.environment("FAKE_REVIEW", review + "\n");
+      return this;
+    }
+
+    private ReviewStep reviewerFailingWith(String diagnostic) {
+      command.environment("FAKE_DIAGNOSTIC", diagnostic + "\n");
+      return this;
+    }
+
+    private ReviewStep reviewerExitingWith(int exitCode) {
+      command.environment("FAKE_REVIEW_EXIT", Integer.toString(exitCode));
+      return this;
+    }
+
+    private ExecutedReviewStep execute() throws IOException, InterruptedException {
+      return new ExecutedReviewStep(command.execute(), temporaryDirectory);
+    }
+  }
+
+  private record ExecutedReviewStep(ScriptCommand.Result result, Path temporaryDirectory) {
+
+    private Path outputs() {
+      return temporaryDirectory.resolve("outputs");
+    }
+
+    private Path summary() {
+      return temporaryDirectory.resolve("summary");
+    }
   }
 
   private static String output(Path outputs, String name) throws IOException {
