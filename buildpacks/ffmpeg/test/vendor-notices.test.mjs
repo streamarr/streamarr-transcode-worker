@@ -422,6 +422,43 @@ for (const [name, reviewed, locked] of [
     });
 }
 
+// Each reviewed origin is reproduced by exactly one view, as the gcc-runtime, libdrm and srt excerpts are.
+for (const [view, origin, excerpt] of [
+    [
+        "its leading comment",
+        (holder) => `/* Copyright ${holder} */\nint beta(void);\n/* Permission is granted by ${holder}. */\n`,
+        (holder) => `/* Copyright ${holder} */\n`,
+    ],
+    [
+        "its license comment blocks",
+        (holder) => `/* beta.h */\n#pragma once\n/* Copyright ${holder} */\nint beta(void);\n/* Permission is granted. */\n/* helper */\n/* License: none of the first four */\n`,
+        (holder) => `/* Copyright ${holder} */\n\n/* Permission is granted. */\n`,
+    ],
+    [
+        "the text before /** @file",
+        (holder) => `// Copyright ${holder}\n//\n// Runtime exception applies.\n\n/** @file beta.h\n *  Internal header.\n */\nint beta(void);\n`,
+        (holder) => `// Copyright ${holder}\n//\n// Runtime exception applies.\n\n`,
+    ],
+]) {
+    test(`Should re-extract a changed excerpt that was reviewed as ${view}`, (t) => {
+        const { components, inventory, read, recipes, run, serve, serveRecipes, validate, write, writeInventory } = fixture(t);
+        components[1].notices[0].sha256 = checksum(excerpt("Beta"));
+        writeInventory();
+        write("notices/beta/include/beta.h.txt", excerpt("Beta"));
+        serve("https://gitlab.example/group/beta/-/raw/v1.0/include/beta.h", origin("Beta"));
+        serveRecipes(LOCKED, new Map(recipes).set("50-beta.sh", recipe([["https://gitlab.example/group/beta", "v2.0"]])));
+        serve("https://gitlab.example/group/beta/-/raw/v2.0/include/beta.h", origin("Beta and contributors"));
+
+        const result = run();
+
+        assert.equal(result.status, 0, result.output);
+        assert.match(result.output, /License text changed: beta \(beta\/include\/beta\.h\.txt\)/);
+        assert.equal(read("notices/beta/include/beta.h.txt"), excerpt("Beta and contributors"));
+        assert.equal(inventory().find((component) => component.id === "beta").notices[0].sha256, checksum(excerpt("Beta and contributors")));
+        assert.equal(validate().status, 0);
+    });
+}
+
 test("Should normalize line endings the same way as the reviewed text", (t) => {
     const { components, inventory, read, recipes, run, serve, serveRecipes, write, writeInventory } = fixture(t);
     components[0].notices[0].sha256 = checksum("Alpha\nlicense\n");
@@ -1210,6 +1247,52 @@ test("Should follow a regrouped recipe to the recipe that pins the repository fi
     assert.equal(result.status, 0, result.output);
     assert.equal(inventory().find((component) => component.id === "gamma-headers").recipe, "builder/scripts.d/47-group/45-gamma-headers.sh");
     assert.doesNotMatch(result.output, /(Added|Removed) component|Pin moved/);
+});
+
+test("Should leave every file alone when a dry run reports changed, added and removed texts", (t) => {
+    const context = fixture(t);
+    const { buildpack, recipes, run, serve, serveRecipes } = context;
+    const locked = new Map(recipes)
+        .set("50-alpha.sh", recipe([["https://github.com/example/alpha", ALPHA_2]], "--enable-libalpha"))
+        .set("50-delta.sh", recipe([["https://github.com/example/delta", ALPHA_2]], "--enable-libdelta"));
+    locked.delete("50-beta.sh");
+    serveRecipes(LOCKED, locked);
+    serve(`${RAW}/example/alpha/${ALPHA_2}/COPYING`, "Alpha license v2\n");
+    serveProposal(context, "delta");
+    const files = () =>
+        fs
+            .readdirSync(buildpack, { recursive: true, withFileTypes: true })
+            .filter((entry) => entry.isFile())
+            .map((entry) => path.join(entry.parentPath, entry.name))
+            .sort()
+            .map((file) => [path.relative(buildpack, file), fs.readFileSync(file, "utf8")]);
+    const before = files();
+
+    const result = run("--dry-run");
+
+    assert.equal(result.status, 0, result.output);
+    assert.match(result.output, /License text changed: alpha \(alpha\/COPYING\.txt\)/);
+    assert.match(result.output, /Added component: delta/);
+    assert.match(result.output, /Removed component: beta/);
+    assert.deepEqual(files(), before);
+});
+
+// Models the LAME "svn checkout -r" line and the fdk-aac-stripped tree URL in the real instructions.
+test("Should update source instructions that name a dependency pin outside the component index", (t) => {
+    const { read, recipes, run, serve, serveRecipes, validate, write } = fixture(t);
+    const mirror = "https://chromium.googlesource.com/mirror/alpha";
+    const instructions = (repository, revision) =>
+        `For alpha, check out ${revision} from the listed URL.\nIts patched tree: ${repository}/tree/${revision}\n`;
+    write("SOURCE.txt", instructions("https://github.com/example/alpha", ALPHA_1) + read("SOURCE.txt"));
+    serveRecipes(LOCKED, new Map(recipes).set("50-alpha.sh", recipe([[mirror, ALPHA_2]], "--enable-libalpha")));
+    serve(`${mirror}/+/${ALPHA_2}/COPYING?format=TEXT`, Buffer.from(LICENSE).toString("base64"));
+
+    const result = run();
+
+    assert.equal(result.status, 0, result.output);
+    assert.equal(read("SOURCE.txt").startsWith(instructions(mirror, ALPHA_2)), true, read("SOURCE.txt"));
+    assert.doesNotMatch(read("SOURCE.txt"), new RegExp(`${ALPHA_1}|github\\.com/example/alpha`));
+    assert.equal(validate().status, 0);
 });
 
 test("Should remove a component and its unshared files when upstream drops the recipe", (t) => {
