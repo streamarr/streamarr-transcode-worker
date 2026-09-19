@@ -53,6 +53,11 @@ function fixture(t) {
 const fs = require("node:fs");
 const { createHash } = require("node:crypto");
 const url = process.argv.findLast((argument) => argument.startsWith("https://"));
+const output = process.argv[process.argv.indexOf("--output") + 1];
+if (process.argv.includes("--output") && output !== "-") {
+    console.error("curl: (23) Failure writing output to destination " + output);
+    process.exit(23);
+}
 fs.appendFileSync(process.env.FAKE_UPSTREAM + "/requests", url + "\\n");
 const file = process.env.FAKE_UPSTREAM + "/" + createHash("sha256").update(url).digest("hex");
 if (!fs.existsSync(file)) {

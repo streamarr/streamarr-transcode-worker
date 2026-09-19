@@ -60,7 +60,7 @@ function download(url) {
 
 async function request(url) {
     const command = url.startsWith("https://api.github.com/")
-        ? 'ffmpeg_github_api_get "$2" /dev/stdout'
+        ? 'ffmpeg_github_api_get "$2" -'
         : 'ffmpeg_curl --fail --location --proto =https --proto-redir =https --silent --show-error --max-time 60 "$2"';
     try {
         const { stdout } = await run(
