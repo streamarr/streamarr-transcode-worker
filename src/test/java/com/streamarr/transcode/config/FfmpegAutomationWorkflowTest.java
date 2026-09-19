@@ -265,9 +265,9 @@ class FfmpegAutomationWorkflowTest {
         stepNamed(
             listOfMaps(build.get("steps")), "Require successful verification and smoke tests");
 
-    assertThat(map(jobs.get("image")).get("needs"))
-        .isEqualTo(List.of("verify", "tooling", "smoke"));
-    assertThat(build.get("needs")).isEqualTo(List.of("verify", "tooling", "smoke", "image"));
+    assertThat(map(jobs.get("image")))
+        .containsEntry("needs", List.of("verify", "tooling", "smoke"));
+    assertThat(build).containsEntry("needs", List.of("verify", "tooling", "smoke", "image"));
     assertThat(map(gate.get("env"))).containsEntry("TOOLING_RESULT", "${{ needs.tooling.result }}");
     assertThat(gate.get("run").toString()).contains("test \"$TOOLING_RESULT\" = success");
   }
