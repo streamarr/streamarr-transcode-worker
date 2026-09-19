@@ -92,7 +92,9 @@ async function request(url) {
     }
 }
 
-const json = async (url) => JSON.parse(await download(url));
+// Recipes, toolchain configurations, dependency files and listings are read, never vendored.
+const readable = (url) => download(url);
+const json = async (url) => JSON.parse(await readable(url));
 
 function rawUrl(repository, revision, file) {
     if (repository.startsWith("https://github.com/"))
@@ -152,7 +154,7 @@ async function toolchainPin(component, locked) {
     const { key, prefix } = TOOLCHAIN[component.id];
     const versions = await Promise.all(
         component.recipe.split("; ").map(async (file) => {
-            const config = await download(`${FFMPEG_RAW}/${locked}/${file}`);
+            const config = await readable(`${FFMPEG_RAW}/${locked}/${file}`);
             return config.match(new RegExp(`^${key}="([^"]+)"`, "m"))?.[1];
         }),
     );
@@ -228,7 +230,7 @@ async function upstreamRevision(component, context) {
     const parent = context.pinned.get(parentId);
     if (!parent) return undefined;
     if (submodule) return submodulePin(parent, parent.revision, submodule);
-    const dependencies = await download(
+    const dependencies = await readable(
         rawUrl(parent.repository, parent.revision, "DEPS"),
     );
     return dependencies.match(
@@ -570,7 +572,7 @@ async function main() {
         await Promise.all(
             lockedPaths.map(async (file) => [
                 file,
-                await download(`${FFMPEG_RAW}/${locked}/${file}`),
+                await readable(`${FFMPEG_RAW}/${locked}/${file}`),
             ]),
         ),
     );
