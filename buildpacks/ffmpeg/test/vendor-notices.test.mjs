@@ -905,6 +905,114 @@ test("Should report an unchanged inventory when a recipe pins a repository that 
     assert.deepEqual(inventory().map((component) => component.id), ["alpha", "beta", "ffmpeg", "gamma-headers"]);
 });
 
+const regrouped = (recipes, from, to) => {
+    const moved = new Map(recipes).set(to, recipes.get(from));
+    moved.delete(from);
+    return moved;
+};
+
+// Models 50-vulkan/50-shaderc.sh -> 47-vulkan/50-shaderc.sh, whose DEPS file pins glslang and spirv-tools.
+test("Should follow a regrouped recipe and keep the dependencies resolved through its component", (t) => {
+    const { buildpack, components, inventory, read, recipes, run, serve, serveRecipes, validate, write, writeInventory } = fixture(t);
+    const tools = "4".repeat(40);
+    components.push({
+        ...components[0],
+        id: "dep-tools",
+        repository: "https://github.com/example/dep-tools",
+        revision: tools,
+        recipe: "alpha/DEPS",
+        notices: [{ url: `${RAW}/example/dep-tools/${tools}/COPYING`, sha256: checksum(LICENSE), file: "dep-tools/COPYING.txt" }],
+    });
+    writeInventory();
+    write("notices/dep-tools/COPYING.txt", LICENSE);
+    serveRecipes(LOCKED, regrouped(recipes, "50-alpha.sh", "47-group/50-alpha.sh"));
+    serve(`${RAW}/example/alpha/${ALPHA_1}/DEPS`, `vars = {\n  'dep_tools_revision': '${tools}',\n}\n`);
+
+    const result = run();
+
+    assert.equal(result.status, 0, result.output);
+    assert.match(result.output, /Recipe moved: alpha \(builder\/scripts\.d\/50-alpha\.sh -> builder\/scripts\.d\/47-group\/50-alpha\.sh\)/);
+    assert.doesNotMatch(result.output, /(Added|Removed) component/);
+    assert.match(result.output, /Inventory content changed/);
+    assert.deepEqual(inventory(), [
+        { ...components[0], recipe: "builder/scripts.d/47-group/50-alpha.sh" },
+        components[1],
+        components[3],
+        { ...components[2], revision: LOCKED, notices: [{ ...components[2].notices[0], url: `${RAW}/jellyfin/jellyfin-ffmpeg/${LOCKED}/LICENSE.md` }] },
+    ]);
+    assert.equal(fs.existsSync(path.join(buildpack, "notices/dep-tools/COPYING.txt")), true);
+    assert.match(read("SOURCE.txt"), /Recipe: builder\/scripts\.d\/47-group\/50-alpha\.sh/);
+    assert.equal(validate().status, 0);
+});
+
+// Models 45-libNE10.sh -> 45-libne10.sh: an arm64-only entry whose role and excerpt a person wrote.
+test("Should keep the reviewed entry of a component when upstream only renames its recipe", (t) => {
+    const { components, inventory, read, recipes, run, serveRecipes, validate } = fixture(t);
+    serveRecipes(LOCKED, regrouped(recipes, "50-beta.sh", "50-Beta.sh"));
+
+    const result = run();
+
+    assert.equal(result.status, 0, result.output);
+    assert.deepEqual(inventory().find((component) => component.id === "beta"), { ...components[1], recipe: "builder/scripts.d/50-Beta.sh" });
+    assert.equal(read("notices/beta/include/beta.h.txt"), HEADER);
+    assert.match(result.output, /Recipe moved: beta/);
+    assert.equal(validate().status, 0);
+});
+
+// Models 45-opencl.sh, which pins the headers first and the loader second.
+test("Should follow a regrouped recipe for every component built from it and still follow their pins", (t) => {
+    const { components, inventory, recipes, run, serve, serveRecipes, writeInventory } = fixture(t);
+    const loader = "3".repeat(40);
+    components.push({
+        ...components[0],
+        id: "alpha-loader",
+        repository: "https://github.com/example/alpha-loader",
+        revision: loader,
+        notices: [{ url: `${RAW}/example/alpha-loader/${loader}/COPYING`, sha256: checksum(LICENSE), file: "alpha/COPYING.txt" }],
+    });
+    writeInventory();
+    const pins = (revision) => recipe([["https://github.com/example/alpha", revision], ["https://github.com/example/alpha-loader", loader]], "--enable-libalpha");
+    serveRecipes(REVIEWED, new Map(recipes).set("50-alpha.sh", pins(ALPHA_1)));
+    serveRecipes(LOCKED, regrouped(new Map(recipes).set("50-alpha.sh", pins(ALPHA_2)), "50-alpha.sh", "45-alpha.sh"));
+    serve(`${RAW}/example/alpha/${ALPHA_2}/COPYING`, LICENSE);
+
+    const result = run();
+
+    assert.equal(result.status, 0, result.output);
+    assert.match(result.output, /Recipe moved: alpha \(/);
+    assert.match(result.output, /Recipe moved: alpha-loader \(/);
+    assert.match(result.output, /Pin moved, license text unchanged: alpha\n/);
+    assert.deepEqual(
+        inventory().map(({ id, recipe: built, revision }) => [id, built, revision]).filter(([id]) => id.startsWith("alpha")),
+        [["alpha", "builder/scripts.d/45-alpha.sh", ALPHA_2], ["alpha-loader", "builder/scripts.d/45-alpha.sh", loader]],
+    );
+});
+
+// Models 45-vulkan-headers.sh: the loader's recipe pins the same repository second.
+test("Should follow a regrouped recipe to the recipe that pins the repository first", (t) => {
+    const { components, inventory, recipes, run, serve, serveRecipes, writeInventory } = fixture(t);
+    components.push({
+        ...components[0],
+        id: "gamma-headers",
+        repository: "https://github.com/example/gamma-headers",
+        recipe: "builder/scripts.d/50-group/45-gamma-headers.sh",
+        notices: [{ url: `${RAW}/example/gamma-headers/${ALPHA_1}/LICENSE.md`, sha256: checksum(LICENSE), file: "alpha/COPYING.txt" }],
+    });
+    writeInventory();
+    const pinned = new Map(recipes)
+        .set("50-alpha.sh", recipe([["https://github.com/example/alpha", ALPHA_1], ["https://github.com/example/gamma-headers", "v1.4"]], "--enable-libalpha"))
+        .set("50-group/45-gamma-headers.sh", recipe([["https://github.com/example/gamma-headers", ALPHA_1]]));
+    serveRecipes(REVIEWED, pinned);
+    serveRecipes(LOCKED, regrouped(pinned, "50-group/45-gamma-headers.sh", "47-group/45-gamma-headers.sh"));
+    serve(`${RAW}/example/gamma-headers/${ALPHA_1}/LICENSE.md`, LICENSE);
+
+    const result = run();
+
+    assert.equal(result.status, 0, result.output);
+    assert.equal(inventory().find((component) => component.id === "gamma-headers").recipe, "builder/scripts.d/47-group/45-gamma-headers.sh");
+    assert.doesNotMatch(result.output, /(Added|Removed) component|Pin moved/);
+});
+
 test("Should remove a component and its unshared files when upstream drops the recipe", (t) => {
     const { buildpack, inventory, read, recipes, run, serveRecipes, validate } = fixture(t);
     const remaining = new Map(recipes);
@@ -997,6 +1105,19 @@ for (const [name, arrange, message] of [
             serve(`${RAW}/example/alpha/${ALPHA_2}/NOTICE`, "Alpha notice\n");
         },
         /notices\/alpha\/src\/LICENSE\.BSD\.txt would not hold the text recorded for alpha/,
+    ],
+    [
+        "a recipe is regrouped and swaps its repository in the same release",
+        ({ recipes, serveRecipes }) => serveRecipes(LOCKED, regrouped(new Map(recipes).set("50-alpha.sh", recipe([["https://github.com/example/renamed", ALPHA_1]], "--enable-libalpha")), "50-alpha.sh", "47-group/50-Alpha.sh")),
+        /builder\/scripts\.d\/47-group\/50-Alpha\.sh pins https:\/\/github\.com\/example\/renamed, whose id alpha belongs to a reviewed component/,
+    ],
+    [
+        "a regrouped recipe leaves several recipes pinning the repository",
+        ({ recipes, serveRecipes }) => {
+            const moved = regrouped(recipes, "50-alpha.sh", "47-group/50-alpha.sh");
+            serveRecipes(LOCKED, moved.set("48-group/50-alpha.sh", moved.get("47-group/50-alpha.sh")));
+        },
+        /builder\/scripts\.d\/50-alpha\.sh is gone and several recipes pin https:\/\/github\.com\/example\/alpha: builder\/scripts\.d\/47-group\/50-alpha\.sh, builder\/scripts\.d\/48-group\/50-alpha\.sh/,
     ],
     [
         "a gained pin would take the id of a reviewed component",

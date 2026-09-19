@@ -108,21 +108,26 @@ its notice URLs rewritten and each text fetched again. The text is taken with wh
 view of the origin (whole file, LF line endings, leading comment, licence comment blocks, text
 before `/** @file`) reproduces the reviewed bytes, so an excerpt is re-extracted the way it was
 reviewed. A recipe that swaps a dependency's mirror is followed to the new repository. A
-dropped recipe removes its component, and notice files that nothing references are deleted.
+recipe that upstream renames or regroups is followed by repository, to the recipe that pins it
+first or else to the only one that pins it, and reported as moved: the reviewed entry keeps
+everything but its recipe path, and the `DEPS` entries and submodules resolved through it stay.
+The tool fails when several recipes qualify, or when a recipe moves and swaps its repository at
+once. A dropped recipe removes its component and the components resolved through it, and notice
+files that nothing references are deleted.
 
 Every pin of a recipe that is in the binaries must be claimed by a component, matched by
 repository across the whole inventory, or the tool proposes it as a new component. That covers
 a pin an inventoried recipe gains, as `20-libiconv.sh` gained gnulib. A recipe is in the
 binaries when a component is already built from it, when the reviewed build configurations
-enable one of the `--enable-*` flags it echoes, or when it has none and is new since the review.
-A recipe that a review left out is therefore proposed once a refreshed capture shows its flag,
-while one without flags stays out. Only a plain `echo --enable-...` line counts as a flag, and an
-unclaimed pin of such a recipe is proposed again on every run until a component records it: a
-dependency that is only a build input is recorded with the `build-input` distribution. A
-proposed component gets the architectures that rule names, its licence files come from the
-repository listing, and the tool fails rather than reuse the id of a reviewed component. New
-`DEPS` entries and submodules are not discovered: they are followed only for components the
-inventory already records.
+enable one of the `--enable-*` flags it echoes, or when it has none and its path is new since
+the review. A recipe that a review left out is therefore proposed once a refreshed capture
+shows its flag, while one without flags stays out until upstream gives it a new path. Only a
+plain `echo --enable-...` line counts as a flag, and an unclaimed pin of such a recipe is
+proposed again on every run until a component records it: a dependency that is only a build
+input is recorded with the `build-input` distribution. A proposed component gets the
+architectures that rule names, its licence files come from the repository listing, and the tool
+fails rather than reuse the id of a reviewed component. New `DEPS` entries and submodules are
+not discovered: they are followed only for components the inventory already records.
 
 Notices whose texts were byte-identical at review share one file, within a component (OpenMPT's
 two licence files, ffnvcodec's header excerpts) or across components. When some of them change,

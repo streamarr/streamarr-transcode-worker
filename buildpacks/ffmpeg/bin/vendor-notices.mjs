@@ -175,16 +175,31 @@ function recipePin(component, context) {
     return unclaimed[0];
 }
 
+const builtByRecipe = (component) =>
+    component.revisionEvidence !== "notice-only" && RECIPE.test(component.recipe);
+
+// Upstream renumbers and regroups recipes. The component follows its repository to the recipe that
+// pins it first, or else to the one that pins it at all; undefined means upstream dropped it.
+function followRecipe(component, recipes) {
+    if (!builtByRecipe(component) || recipes.has(component.recipe)) return component;
+    const pinnedBy = (relevant) =>
+        [...recipes.keys()].filter((file) =>
+            relevant(recipePins(recipes.get(file))).some(
+                (pin) => pin.repository === normalize(component.repository),
+            ),
+        );
+    const first = pinnedBy((pins) => pins.slice(0, 1));
+    const candidates = first.length ? first : pinnedBy((pins) => pins);
+    if (candidates.length > 1)
+        throw new Error(
+            `${component.recipe} is gone and several recipes pin ${component.repository}: ${candidates.join(", ")}`,
+        );
+    return candidates.length ? { ...component, recipe: candidates[0] } : undefined;
+}
+
 // Returns what upstream now builds, or undefined when the component is gone.
 async function upstreamPin(component, context) {
-    if (
-        component.revisionEvidence !== "notice-only" &&
-        RECIPE.test(component.recipe)
-    ) {
-        return context.recipes.has(component.recipe)
-            ? recipePin(component, context)
-            : undefined;
-    }
+    if (builtByRecipe(component)) return recipePin(component, context);
     const revision = await upstreamRevision(component, context);
     return revision && { repository: normalize(component.repository), revision };
 }
@@ -338,10 +353,12 @@ async function newComponents({ recipe, flags, architectures, claimed, reviewed }
         .map(({ repository, revision }, index) => ({
             repository,
             revision,
-            id:
-                index === 0
-                    ? path.basename(recipe.file, ".sh").replace(/^\d+-/, "")
-                    : path.basename(repository).toLowerCase().replace(/_/g, "-"),
+            id: (index === 0
+                ? path.basename(recipe.file, ".sh").replace(/^\d+-/, "")
+                : path.basename(repository)
+            )
+                .toLowerCase()
+                .replace(/_/g, "-"),
         }))
         .filter(({ repository }) => !claimed.has(repository));
     return Promise.all(
@@ -511,6 +528,7 @@ async function main() {
 
     const context = { locked, recipes, inventory, pinned: new Map() };
     const report = {
+        regrouped: [],
         moved: [],
         relocated: [],
         changed: new Set(),
@@ -521,15 +539,20 @@ async function main() {
     const derived = (component) =>
         SUBMODULE.test(component.recipe) || DEPENDENCY_FILE.test(component.recipe);
     const components = [];
-    for (const component of [
+    for (const reviewed of [
         ...inventory.filter((candidate) => !derived(candidate)),
         ...inventory.filter(derived),
     ]) {
-        const pin = await upstreamPin(component, context);
+        const component = followRecipe(reviewed, recipes);
+        const pin = component && (await upstreamPin(component, context));
         if (!pin) {
-            report.removed.push(component.id);
+            report.removed.push(reviewed.id);
             continue;
         }
+        if (component.recipe !== reviewed.recipe)
+            report.regrouped.push(
+                `${component.id} (${reviewed.recipe} -> ${component.recipe})`,
+            );
         const relocated = pin.repository !== normalize(component.repository);
         if (!relocated && pin.revision === component.revision) {
             context.pinned.set(component.id, component);
@@ -609,6 +632,7 @@ async function main() {
     );
 
     const summary = [
+        ...report.regrouped.map((entry) => `Recipe moved: ${entry}`),
         ...report.moved.map((id) => `Pin moved, license text unchanged: ${id}`),
         ...report.relocated.map((entry) => `Repository moved: ${entry}`),
         ...[...report.changed].map((entry) => `License text changed: ${entry}`),
