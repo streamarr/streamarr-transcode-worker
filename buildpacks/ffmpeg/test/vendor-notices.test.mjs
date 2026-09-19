@@ -572,6 +572,15 @@ for (const [name, arrange, message] of [
         /Toolchain images disagree about CT_GCC_VERSION: 15\.2\.0, 16\.1\.0/,
     ],
     [
+        "upstream names a license file the generator would refuse to read",
+        ({ recipes, serve, serveRecipes }) => {
+            serveRecipes(LOCKED, new Map(recipes).set("50-delta.sh", recipe([["https://github.com/example/delta", ALPHA_2]])));
+            serve(`${API}/example/delta/git/trees/${ALPHA_2}?recursive=1`, { truncated: false, tree: [{ path: "LICENSE (old).txt", type: "blob" }] });
+            serve(`${RAW}/example/delta/${ALPHA_2}/LICENSE (old).txt`, LICENSE);
+        },
+        /Unsafe notice path from upstream: delta\/LICENSE \(old\)\.txt/,
+    ],
+    [
         "a new dependency is hosted where license files cannot be listed",
         ({ recipes, serveRecipes }) => serveRecipes(LOCKED, new Map(recipes).set("50-epsilon.sh", recipe([["https://svn.code.sf.net/p/epsilon/svn", "42"]]))),
         /Cannot list license files of new component epsilon/,
