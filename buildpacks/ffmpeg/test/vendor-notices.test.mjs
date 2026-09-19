@@ -1060,19 +1060,32 @@ for (const [name, text] of [
     });
 }
 
+const configuring = (line) => `ffbuild_configure() {\n    ${line}\n}\n`;
+
 // Models 45-x11/30-libxcb.sh, and 50-mfx.sh and 50-vaapi/50-libva.sh, which echo their flag behind a
-// target condition: reviewed, left out of the inventory, and switched on by a later release.
+// target condition: reviewed, left out of the inventory, and switched on by a later release. 10-mingw.sh
+// echoes a disable flag beside an enable flag.
 for (const [name, reviewedHasRecipe, configure] of [
-    ["is new since the review", false, "echo --enable-libmfx"],
-    ["already existed at the reviewed revision without being inventoried", true, "echo --enable-libmfx"],
-    ["already existed at the reviewed revision and echoes its flag behind a condition", true, "[[ $TARGET != *arm64 ]] && echo --enable-libmfx"],
-    ["already existed at the reviewed revision and echoes its flag unless a condition holds", true, "[[ $TARGET == *arm64 ]] || echo --enable-libmfx"],
-    ["already existed at the reviewed revision and echoes its flag in quotes", true, 'echo "--enable-libmfx"'],
+    ["is new since the review", false, configuring("echo --enable-libmfx")],
+    ["already existed at the reviewed revision without being inventoried", true, configuring("echo --enable-libmfx")],
+    ["already existed at the reviewed revision and echoes its flag behind a condition", true, configuring("[[ $TARGET != *arm64 ]] && echo --enable-libmfx")],
+    ["already existed at the reviewed revision and echoes its flag unless a condition holds", true, configuring("[[ $TARGET == *arm64 ]] || echo --enable-libmfx")],
+    ["already existed at the reviewed revision and echoes its flag in quotes", true, configuring('echo "--enable-libmfx"')],
+    ["already existed at the reviewed revision and echoes its flag after a disable flag", true, configuring("echo --disable-mfx-legacy --enable-libmfx")],
+    ["already existed at the reviewed revision and echoes its flags two spaces apart", true, configuring("echo --enable-libvpl  --enable-libmfx")],
+    ["already existed at the reviewed revision and ends its echo with a semicolon", true, configuring("echo --enable-libmfx;")],
+    ["already existed at the reviewed revision and ends its echo with a comment", true, configuring("echo --enable-libmfx # Quick Sync Video")],
+    ["already existed at the reviewed revision and echoes its flag in a one-line function", true, "ffbuild_configure() { echo --enable-libmfx; }\n"],
+    ["already existed at the reviewed revision and echoes its flag in a one-line if", true, configuring("if [[ $TARGET != *arm64 ]]; then echo --enable-libmfx; fi")],
+    ["already existed at the reviewed revision and echoes its flag after a tab", true, configuring("echo\t--enable-libmfx")],
+    ["already existed at the reviewed revision and echoes its flag after an option", true, configuring("echo -n --enable-libmfx")],
+    ["already existed at the reviewed revision and continues its echo on the next line", true, configuring("echo --enable-libvpl \\\n        --enable-libmfx")],
+    ["already existed at the reviewed revision and prints its flag with printf", true, configuring("printf '%s\\n' --enable-libmfx")],
 ]) {
     test(`Should add a dependency the refreshed build configurations enable when its recipe ${name}`, (t) => {
         const { inventory, recipes, run, serve, serveRecipes, validate, write } = fixture(t);
         const pinned = "f".repeat(40);
-        const enabled = `${recipe([["https://github.com/example/mfx", pinned]])}ffbuild_configure() {\n    ${configure}\n}\n`;
+        const enabled = `${recipe([["https://github.com/example/mfx", pinned]])}${configure}`;
         if (reviewedHasRecipe) serveRecipes(REVIEWED, new Map(recipes).set("50-mfx.sh", `${enabled}ffbuild_enabled() {\n    return -1\n}\n`));
         serveRecipes(LOCKED, new Map(recipes).set("50-mfx.sh", enabled));
         serve(`${API}/example/mfx/git/trees/${pinned}?recursive=1`, { truncated: false, tree: [{ path: "LICENSE", type: "blob" }] });
@@ -1093,13 +1106,18 @@ for (const [name, reviewedHasRecipe, configure] of [
     });
 }
 
-for (const [name, flag] of [
-    ["has no configure flag", undefined],
-    ["has a configure flag that neither build configuration enables", "--enable-libxcb"],
+const LIBXCB = [["https://gitlab.example/xorg/libxcb", "v1.17"]];
+
+// Models the 45-x11 recipes, which pass --enable-* options to their own configure scripts.
+for (const [name, text] of [
+    ["has no configure flag", recipe(LIBXCB)],
+    ["has a configure flag that neither build configuration enables", recipe(LIBXCB, "--enable-libxcb")],
+    ["passes an option the build configurations enable to its own build", `${recipe(LIBXCB)}ffbuild_dockerbuild() {\n    echo building\n    ./configure \\\n        --enable-libalpha\n}\n`],
+    ["echoes a flag the build configurations enable only in a comment", `${recipe(LIBXCB)}${configuring("return 0 # echo --enable-libalpha")}# echo --enable-libalpha\n`],
 ]) {
     test(`Should report an unchanged inventory when a recipe the review left out ${name}`, (t) => {
         const { inventory, recipes, run, serveRecipes } = fixture(t);
-        const leftOut = new Map(recipes).set("45-x11/30-libxcb.sh", recipe([["https://gitlab.example/xorg/libxcb", "v1.17"]], flag));
+        const leftOut = new Map(recipes).set("45-x11/30-libxcb.sh", text);
         serveRecipes(REVIEWED, leftOut);
         serveRecipes(LOCKED, leftOut);
 

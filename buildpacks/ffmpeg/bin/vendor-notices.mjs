@@ -406,14 +406,17 @@ async function licenseExpression(id, repository) {
     }
 }
 
-// Upstream writes the recipe, so reading it has to stay linear in its length: the rest of the line
-// after an echo that starts it or follows a condition is taken by a pattern that cannot match one
-// text two ways, and its words are checked one by one.
+// A recipe prints its flags for FFmpeg's configure and passes others to its own build, so a flag is
+// an --enable-* word on a line that runs echo or printf, wherever the command stands and whatever else
+// it prints. Upstream writes the recipe, so every pattern here matches in time linear in its length.
 const configureFlags = (text) =>
-    [...text.matchAll(/(?:^|&&|\|\|)[ \t]*echo (.+)$/gm)]
-        .map((match) => match[1].replace(/["']/g, "").trimEnd().split(" "))
-        .filter((words) => words.every((word) => /^--enable-[a-z0-9-]+$/.test(word)))
-        .flat();
+    text
+        .replace(/\\\r?\n/g, " ")
+        .split("\n")
+        .map((line) => line.replace(/(?:^|\s)#.*/, ""))
+        .filter((line) => /(?:^|[\s;&|({`])(?:echo|printf)(?:\s|$)/.test(line))
+        .flatMap((line) => line.split(/[\s"';&|(){}`]+/))
+        .filter((word) => /^--enable-[a-z0-9-]+$/.test(word));
 
 // The binaries that contain what a recipe builds: those whose reviewed build configuration has one
 // of its flags, else those of the components already built from it, else, for a recipe without
