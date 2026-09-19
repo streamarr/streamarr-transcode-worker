@@ -266,6 +266,14 @@ if (( file_count >= comparison_file_limit )); then
   require_human_review "upstream change list is truncated at ${file_count} files"
 fi
 
+# A process substitution would discard jq's status and approve an unexamined change list.
+changes="${temporary_directory}/changes"
+if ! jq -c '.files[] | .filename, (.previous_filename // ""), (.status // "")' \
+  "${comparison}" >"${changes}"; then
+  echo "Expected every upstream change to be an object naming a file" >&2
+  exit 1
+fi
+
 inventoried_paths=()
 patch_paths=()
 patch_previous_paths=()
@@ -275,8 +283,7 @@ while IFS= read -r encoded_path \
   && IFS= read -r encoded_previous_path \
   && IFS= read -r encoded_status; do
   examine_change "${encoded_path}" "${encoded_previous_path}" "${encoded_status}"
-done < <(jq -c \
-  '.files[] | .filename, (.previous_filename // ""), (.status // "")' "${comparison}")
+done <"${changes}"
 if (( ${#inventoried_paths[@]} > 0 )); then
   require_human_review "upstream changed $(IFS=' '; echo "${inventoried_paths[*]}")"
 fi

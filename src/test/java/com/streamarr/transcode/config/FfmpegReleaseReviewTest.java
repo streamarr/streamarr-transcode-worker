@@ -639,6 +639,35 @@ class FfmpegReleaseReviewTest {
     assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
   }
 
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        """
+        {"status": "ahead", "files": [
+          {"filename": "debian/changelog"}, "unexpected-entry", {"filename": "LICENSE.md"}]}
+        """,
+        """
+        {"status": "ahead", "files": [
+          {"filename": "debian/changelog"}, 7, {"filename": "builder/scripts.d/50-x264.sh"}]}
+        """,
+        """
+        {"status": "ahead", "files": [
+          {"filename": "debian/changelog"}, ["nested"], {"filename": "configure"}]}
+        """
+      })
+  @DisplayName("Should fail without approving anything when a change list entry is malformed")
+  void shouldFailWithoutApprovingAnythingWhenAChangeListEntryIsMalformed(String comparison)
+      throws Exception {
+    var review = review();
+    var reviewedInputs = review.reviewedInputs();
+
+    var result = review.upstreamComparison(comparison).execute();
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(1);
+    assertThat(result.output()).doesNotContain("inventory is unchanged");
+    assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
+  }
+
   private ReviewFixture review() throws IOException {
     var repository = Files.createDirectories(temporaryDirectory.resolve("repository"));
     var buildpack = Files.createDirectories(repository.resolve(BUILDPACK));
