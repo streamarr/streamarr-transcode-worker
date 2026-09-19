@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
@@ -52,23 +53,26 @@ const keyValues = (text) =>
             .map((line) => line.split("=")),
     );
 const downloads = new Map();
+const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "ffmpeg-vendor-"));
+process.on("exit", () =>
+    fs.rmSync(scratch, { recursive: true, force: true, maxRetries: 3 }),
+);
 
 function download(url) {
     if (!downloads.has(url)) downloads.set(url, request(url));
     return downloads.get(url);
 }
 
+// ffmpeg_curl repeats a transfer that failed part-way; only a destination file, which every
+// attempt truncates, keeps the bytes of the failed attempt out of the body.
 async function request(url) {
     const command = url.startsWith("https://api.github.com/")
-        ? 'ffmpeg_github_api_get "$2" -'
-        : 'ffmpeg_curl --fail --location --proto =https --proto-redir =https --silent --show-error --max-time 60 "$2"';
+        ? 'ffmpeg_github_api_get "$2" "$3"'
+        : 'ffmpeg_curl --fail --location --proto =https --proto-redir =https --silent --show-error --max-time 60 "$2" --output "$3"';
+    const body = path.join(scratch, checksum(url));
     try {
-        const { stdout } = await run(
-            "bash",
-            ["-c", `. "$1"; ${command}`, "--", httpLibrary, url],
-            { encoding: "buffer", maxBuffer: 64 * 1024 * 1024 },
-        );
-        const text = new TextDecoder().decode(stdout);
+        await run("bash", ["-c", `. "$1"; ${command}`, "--", httpLibrary, url, body]);
+        const text = new TextDecoder().decode(fs.readFileSync(body));
         return url.includes("format=TEXT")
             ? Buffer.from(text.trim(), "base64").toString()
             : text;
