@@ -272,29 +272,47 @@ component uses the `build` capture group: `-10` sorts after `-9`, and packaging-
 are stable patch updates, not SemVer prereleases. Updates have their own PR and are not
 automerged. Major-version updates additionally require Dependency Dashboard approval.
 Renovate still proposes eligible minor and packaging updates automatically; their
-notice review must complete before CI and image packaging can pass. The synchronization
-workflow completes it when `bin/review-release` confirms an unchanged inventory; otherwise
-it annotates the run with the paths and patches that need a person and leaves the review
-inputs alone.
+notice review must complete before CI and image packaging can pass.
+
+The synchronization workflow does the mechanical work and leaves the judgement to a person:
+
+1. An unprivileged job per architecture downloads the locked archive, verifies it and captures
+   its `-buildconf` with `bin/capture-buildconf`. It is the only job that runs upstream's binary;
+   it holds no secret and no write permission, and hands over a text artifact.
+2. The synchronization job checks those captures as data, regenerates the notice inputs with
+   `bin/vendor-notices.mjs`, and runs `bin/review-release` when nothing in the inventory or the
+   build configurations changed.
+3. An unchanged inventory is bound and committed with the lock. A changed one is committed
+   without `notices/manifest`, so CI stays red; the pull request gets the
+   `ffmpeg-notices-review` label and a comment listing what changed. A pin the tool cannot
+   follow, or a capture that failed, degrades to a lock-only commit with the same request.
+   Only a run started by Renovate's own push replaces anything but the lock: every other push
+   may carry a correction, so its files stay as pushed and the run warns where they differ.
+4. `.github/workflows/approve-ffmpeg-notices.yml` binds the manifest when a repository owner,
+   member or collaborator submits an **approving review** of the labelled pull request's
+   current head. `review-release --approved` writes only the manifest, and only when the
+   approved inputs already describe the locked release. A later synchronization never undoes
+   that approval and does not ask again while the head still validates.
+
+Renovate rebuilds its branch when it rebases, which discards the bot's commits; the workflow
+then regenerates them, and a changed inventory needs a fresh approval.
 
 `.github/workflows/sync-ffmpeg-lock.yml` uses `pull_request_target` only for same-repository
-Renovate PRs. It executes resolver and review code from the trusted PR base, reads the proposed
-release from a Git object as data, and generates the lock and any carried-forward review
-entirely in the trusted checkout. It never executes proposed code with write credentials, and
-it never runs the downloaded binaries: ordinary CI checks their build configuration. The review
-quotes upstream file names, which the runner would read for workflow commands, so the step
-pauses command processing behind a random token while the review prints, escapes the text it
-repeats as the annotation, and fences it in the job summary. Only after detecting a change and
-verifying the head SHA does it mint a short-lived GitHub App token.
+Renovate PRs. It executes resolver, capture, regeneration and review code from the trusted PR
+base, reads the proposed release from a Git object as data, and generates everything in the
+trusted checkout. It never executes proposed code, and the job that mints credentials never
+runs the downloaded binaries. The review quotes upstream file names, which the runner would
+read for workflow commands, so the step pauses command processing behind a random token while
+the review prints, escapes the text it repeats as the annotation, and fences it in the job
+summary. Only after detecting a change and verifying the head SHA does it mint a short-lived
+GitHub App token. Labels and comments use the workflow token, which cannot
+trigger further workflows. The approval workflow runs on `pull_request_review`, which has no
+base-only variant, so it likewise checks out and executes only the base revision's scripts.
 
-GitHub's `createCommitOnBranch` API creates a signed commit containing only the generated lock
-and, after a confirmed review on a run started by Renovate's own push, `notices/manifest`,
-`notices/sources.json` and `SOURCE.txt`. Renovate rebuilds its branch from the base, so only
-then are the head's copies of those hand-maintained files known to be untouched. Every other
-push, such as a maintainer's correction or a reverted manifest, still synchronizes the lock but
-keeps those three files as pushed; the run warns when they differ from the carried-forward
-review. Its `expectedHeadOid` check rejects a moved branch atomically. The App token triggers
-normal PR checks after the commit; the default Actions token would suppress those runs.
+GitHub's `createCommitOnBranch` API creates a signed commit limited to the lock, `SOURCE.txt`
+and `notices/`; `notices/manifest` is included only after a confirmed or approved review.
+Its `expectedHeadOid` check rejects a moved branch atomically. The App token triggers normal
+PR checks after the commit; the default Actions token would suppress those runs.
 
 Install a GitHub App on this repository with repository contents read/write access and configure
 these Actions secrets:

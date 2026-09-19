@@ -32,11 +32,11 @@ class FfmpegAutomationWorkflowTest {
   private static final String LOCK_BOT_EMAIL =
       "327604351+streamarr-release[bot]@users.noreply.github.com";
   private static final String LOCK = "buildpacks/ffmpeg/ffmpeg.lock";
+  private static final String MANIFEST = "buildpacks/ffmpeg/notices/manifest";
   private static final List<String> REVIEWED_INPUTS =
-      List.of(
-          "buildpacks/ffmpeg/notices/manifest",
-          "buildpacks/ffmpeg/notices/sources.json",
-          "buildpacks/ffmpeg/SOURCE.txt");
+      List.of(MANIFEST, "buildpacks/ffmpeg/notices/sources.json", "buildpacks/ffmpeg/SOURCE.txt");
+  private static final List<String> REGENERATED_INPUTS =
+      List.of("buildpacks/ffmpeg/SOURCE.txt", "buildpacks/ffmpeg/notices/sources.json", MANIFEST);
 
   @TempDir Path temporaryDirectory;
 
@@ -190,13 +190,14 @@ class FfmpegAutomationWorkflowTest {
             "createCommitOnBranch",
             "expectedHeadOid: $expectedHead",
             "git cat-file blob",
-            "fileChanges: {additions: $additions[0]}",
+            "fileChanges: {additions: $additions[0], deletions: $deletions}",
             "gh api graphql")
         .doesNotContain("git commit", "git push", "git config", "proposed/buildpacks/", "trusted/");
     assertThat(map(commit.get("env")))
         .containsEntry("EXPECTED_HEAD_SHA", "${{ github.event.pull_request.head.sha }}")
         .containsEntry("GH_TOKEN", "${{ steps.lock_bot.outputs.token }}")
         .containsEntry("BLOBS", "${{ steps.changes.outputs.blobs }}")
+        .containsEntry("DELETIONS", "${{ steps.changes.outputs.deletions }}")
         .containsEntry("HEADLINE", "${{ steps.changes.outputs.headline }}");
   }
 
@@ -209,14 +210,7 @@ class FfmpegAutomationWorkflowTest {
     var names = steps.stream().map(step -> step.get("name")).toList();
     var review = stepNamed(steps, "Review locked release from trusted code");
     var prepare = stepNamed(steps, "Prepare synchronized lock");
-    var reviewedInputs =
-        List.of(
-            "buildpacks/ffmpeg/notices/manifest",
-            "buildpacks/ffmpeg/notices/sources.json",
-            "buildpacks/ffmpeg/SOURCE.txt");
     var prepareRun = (String) prepare.get("run");
-    var unreviewedPaths =
-        prepareRun.substring(0, prepareRun.indexOf("if [[ \"${REVIEWED}\" == 'true' ]]; then"));
 
     assertThat(names)
         .containsSubsequence(
@@ -236,23 +230,155 @@ class FfmpegAutomationWorkflowTest {
     assertThat(map(prepare.get("env")))
         .containsEntry("REVIEWED", "${{ steps.review.outputs.reviewed }}")
         .containsEntry("SENDER", "${{ github.event.sender.login }}");
-    assertThat(unreviewedPaths)
-        .contains("buildpacks/ffmpeg/ffmpeg.lock")
-        .doesNotContain(reviewedInputs);
-    assertThat(prepareRun).contains(reviewedInputs);
+    assertThat(prepareRun)
+        .contains(
+            "manifest=buildpacks/ffmpeg/notices/manifest",
+            "if [[ \"${path}\" == \"${manifest}\" && \"${REVIEWED}\" != 'true' ]]; then",
+            "if [[ \"${path}\" != \"${lock}\" && \"${SENDER}\" != 'renovate[bot]' ]]; then",
+            "find buildpacks/ffmpeg/ffmpeg.lock buildpacks/ffmpeg/SOURCE.txt",
+            "buildpacks/ffmpeg/notices -type f -print0",
+            "ls-tree -r --name-only HEAD -- buildpacks/ffmpeg/notices");
+  }
+
+  @Test
+  @DisplayName("Should run the downloaded binary only where no secret or write permission exists")
+  void shouldRunTheDownloadedBinaryOnlyWhereNoSecretOrWritePermissionExists() throws IOException {
+    var jobs = map(yaml(".github/workflows/sync-ffmpeg-lock.yml").get("jobs"));
+    var capture = map(jobs.get("capture_buildconf"));
+    var captureSteps = listOfMaps(capture.get("steps"));
+    var sync = map(jobs.get("sync_ffmpeg_lock"));
+    var syncSteps = listOfMaps(sync.get("steps"));
+    var adopt = (String) stepNamed(syncSteps, "Adopt captured build configurations").get("run");
+
+    assertThat(capture).doesNotContainKey("permissions");
+    assertThat(captureSteps.toString())
+        .contains("trusted/buildpacks/ffmpeg/bin/capture-buildconf")
+        .doesNotContain("secrets.", "create-github-app-token", "proposed/buildpacks/");
+    assertThat(capture.get("strategy").toString())
+        .contains("architecture=amd64", "runner=ubuntu-24.04", "architecture=arm64")
+        .contains("runner=ubuntu-24.04-arm");
+    assertThat((String) sync.get("needs")).isEqualTo("capture_buildconf");
+    assertThat((String) sync.get("if"))
+        .contains("!cancelled()", "github.event.pull_request.user.login == 'renovate[bot]'");
+    assertThat(syncSteps.toString()).doesNotContain("bin/capture-buildconf", " -buildconf");
+    assertThat(adopt)
+        .contains(
+            "-L \"${capture}\"",
+            "> 65536",
+            "[^[:print:][:space:]]",
+            "'ffmpeg version '*",
+            "ffmpeg-uncaptured")
+        .doesNotContain("bash \"${capture}\"", "source ", "eval ");
+  }
+
+  @Test
+  @DisplayName("Should withhold the manifest and request review when the inventory changed")
+  void shouldWithholdTheManifestAndRequestReviewWhenTheInventoryChanged() throws IOException {
+    var workflow = yaml(".github/workflows/sync-ffmpeg-lock.yml");
+    var sync = map(map(workflow.get("jobs")).get("sync_ffmpeg_lock"));
+    var steps = listOfMaps(sync.get("steps"));
+    var regenerate = stepNamed(steps, "Regenerate notice inputs from trusted code");
+    var review = (String) stepNamed(steps, "Review locked release from trusted code").get("run");
+    var request = stepNamed(steps, "Request maintainer review of a changed inventory");
+
+    assertThat(map(workflow.get("env"))).containsEntry("REVIEW_LABEL", "ffmpeg-notices-review");
+    assertThat(map(sync.get("permissions")))
+        .containsOnly(
+            Map.entry("contents", "read"),
+            Map.entry("issues", "write"),
+            Map.entry("pull-requests", "write"));
+    assertThat((String) regenerate.get("run"))
+        .contains(
+            "if ! node trusted/buildpacks/ffmpeg/bin/vendor-notices.mjs",
+            "--root \"${GITHUB_WORKSPACE}/trusted/buildpacks/ffmpeg\"",
+            "Notice inputs could not be regenerated")
+        .doesNotContain("proposed/");
+    assertThat(review)
+        .contains(
+            "grep -q '^Inventory content unchanged'",
+            "git -C trusted diff --quiet -- 'buildpacks/ffmpeg/notices/buildconf-*.txt'",
+            "status=3",
+            "if [[ \"${unchanged}\" == 'true' ]]; then");
+    assertThat((String) request.get("if"))
+        .isEqualTo(
+            "steps.review.outputs.reviewed != 'true' && steps.changes.outputs.approved != 'true'");
+    assertThat(map(request.get("env"))).containsEntry("GH_TOKEN", "${{ github.token }}");
+    assertThat((String) request.get("run"))
+        .contains(
+            "gh label create \"${REVIEW_LABEL}\"",
+            "--add-label \"${REVIEW_LABEL}\"",
+            "approving review",
+            "gh pr comment");
+  }
+
+  @Test
+  @DisplayName("Should bind the manifest only when a maintainer approves the current labelled head")
+  void shouldBindTheManifestOnlyWhenAMaintainerApprovesTheCurrentLabelledHead() throws IOException {
+    var workflowPath = ".github/workflows/approve-ffmpeg-notices.yml";
+    var source = Files.readString(Path.of(workflowPath));
+    var workflow = yaml(workflowPath);
+    var job = map(map(workflow.get("jobs")).get("bind_ffmpeg_notices"));
+    var steps = listOfMaps(job.get("steps"));
+    var names = steps.stream().map(step -> step.get("name")).toList();
+    var current = stepNamed(steps, "Require approval of the current head");
+    var bind =
+        (String) stepNamed(steps, "Bind approved notice inventory from trusted code").get("run");
+    var commit = (String) stepNamed(steps, "Commit approved manifest").get("run");
+    var tokenIndex = names.indexOf("Mint lock bot token");
+
+    assertThat(source).contains("pull_request_review:", "types: [ submitted ]");
+    assertThat(map(workflow.get("permissions"))).containsOnly(Map.entry("contents", "read"));
+    assertThat((String) job.get("if"))
+        .contains(
+            "github.event.review.state == 'approved'",
+            "contains(fromJSON('[\"OWNER\", \"MEMBER\", \"COLLABORATOR\"]'),"
+                + " github.event.review.author_association)",
+            "github.event.pull_request.user.login == 'renovate[bot]'",
+            "github.event.pull_request.head.repo.full_name == github.repository",
+            "startsWith(github.event.pull_request.head.ref, 'renovate/')",
+            "contains(github.event.pull_request.labels.*.name, 'ffmpeg-notices-review')");
+    assertThat(map(stepNamed(steps, "Check out trusted reviewer").get("with")))
+        .containsEntry("ref", "${{ github.event.pull_request.base.sha }}")
+        .containsEntry("persist-credentials", false);
+    assertThat(map(current.get("env")))
+        .containsEntry("APPROVED_SHA", "${{ github.event.review.commit_id }}")
+        .containsEntry("EXPECTED_HEAD_SHA", "${{ github.event.pull_request.head.sha }}");
+    assertThat((String) current.get("run"))
+        .contains("\"${APPROVED_SHA}\" != \"${EXPECTED_HEAD_SHA}\"", "current_head_sha");
+    assertThat(bind)
+        .contains(
+            "trusted/buildpacks/ffmpeg/bin/review-release --approved",
+            "--root \"${GITHUB_WORKSPACE}/proposed\"")
+        .doesNotContain("proposed/buildpacks/ffmpeg/bin", "proposed/buildpacks/ffmpeg/lib");
+    assertThat(names)
+        .containsSubsequence(
+            "Require approval of the current head",
+            "Bind approved notice inventory from trusted code",
+            "Mint lock bot token",
+            "Commit approved manifest",
+            "Clear the review request");
+    assertThat(steps.subList(0, tokenIndex).toString()).doesNotContain("secrets.");
+    assertThat(commit)
+        .contains(
+            "createCommitOnBranch",
+            "expectedHeadOid: $expectedHead",
+            "additions: [{path: \"buildpacks/ffmpeg/notices/manifest\", contents: $contents}]")
+        .doesNotContain("git commit", "git push", "deletions");
   }
 
   @ParameterizedTest
   @CsvSource({
-    "true, renovate[bot], true",
-    "true, streamarr-release[bot], false",
-    "true, a-maintainer, false",
-    "false, renovate[bot], false"
+    "true, renovate[bot], true, true",
+    "true, streamarr-release[bot], false, false",
+    "true, a-maintainer, false, false",
+    "false, renovate[bot], true, false",
+    "false, a-maintainer, false, false"
   })
   @DisplayName(
       "Should replace pushed reviewed inputs only when Renovate started a confirmed review")
   void shouldReplacePushedReviewedInputsOnlyWhenRenovateStartedAConfirmedReview(
-      String reviewed, String sender, boolean replaced) throws Exception {
+      String reviewed, String sender, boolean replaced, boolean carriesTheManifest)
+      throws Exception {
     var workspace = workspaceWhoseHeadDiffersFromTheTrustedCheckout();
     var outputs = temporaryDirectory.resolve("outputs");
     var steps =
@@ -276,19 +402,18 @@ class FfmpegAutomationWorkflowTest {
     assertThat(result.exitCode()).as(result.output()).isZero();
     var blobs = new ObjectMapper().readTree(output(outputs, "blobs"));
     var replacedPaths = nodes(blobs).map(blob -> blob.path("path").asString()).toList();
-    var keptAgainstTheReview = reviewed.equals("true") && !replaced;
+    var regenerated =
+        REGENERATED_INPUTS.stream().filter(path -> carriesTheManifest || !path.equals(MANIFEST));
     assertThat(replacedPaths)
         .containsExactlyElementsOf(
-            replaced
-                ? Stream.concat(Stream.of(LOCK), REVIEWED_INPUTS.stream()).toList()
-                : List.of(LOCK));
+            replaced ? Stream.concat(Stream.of(LOCK), regenerated).toList() : List.of(LOCK));
     assertThat(output(outputs, "headline"))
         .isEqualTo(
-            replaced
+            reviewed.equals("true")
                 ? "behavioral: synchronize FFmpeg lock and unchanged notice review"
-                : "behavioral: synchronize FFmpeg lock");
+                : "behavioral: synchronize FFmpeg lock and notice inputs for review");
     assertThat(result.output().lines().filter(line -> line.startsWith("::warning ")))
-        .hasSize(keptAgainstTheReview ? REVIEWED_INPUTS.size() : 0)
+        .hasSize(replaced ? 0 : REVIEWED_INPUTS.size() - (reviewed.equals("true") ? 0 : 1))
         .allSatisfy(
             warning -> assertThat(warning).containsAnyOf(REVIEWED_INPUTS.toArray(String[]::new)));
   }
@@ -313,9 +438,12 @@ class FfmpegAutomationWorkflowTest {
     assertThat(step.result().exitCode()).as(step.result().output()).isZero();
     assertThat(output(step.outputs(), "reviewed")).isEqualTo("false");
     assertThat(linesTheRunnerReadsForCommands(step.result().output()))
-        .containsExactly("::warning title=FFmpeg notice review::" + review.replace("%", "%25"));
+        .containsExactly(
+            "::warning title=FFmpeg notice review::"
+                + (REGENERATED + "\n" + review).replace("%", "%25").replace("\n", "%0A"));
     assertThat(step.result().output()).containsPattern("(?m)^::stop-commands::[0-9a-f]{32}$");
-    assertThat(Files.readAllLines(step.summary())).containsExactly("```text", review, "```");
+    assertThat(Files.readAllLines(step.summary()))
+        .containsExactly("```text", REGENERATED, review, "```");
   }
 
   @Test
@@ -517,9 +645,13 @@ class FfmpegAutomationWorkflowTest {
     return workspace;
   }
 
-  private ReviewStep reviewStep() throws IOException {
+  private static final String REGENERATED =
+      "Inventory content unchanged; only the FFmpeg revision was rebound.";
+
+  private ReviewStep reviewStep() throws Exception {
     var workspace = Files.createDirectory(temporaryDirectory.resolve("workspace"));
     var commands = Files.createDirectories(workspace.resolve("trusted/buildpacks/ffmpeg/bin"));
+    Files.writeString(temporaryDirectory.resolve("ffmpeg-review"), REGENERATED + "\n");
     ScriptCommand.writeFake(
         commands,
         "review-release",
@@ -528,6 +660,25 @@ class FfmpegAutomationWorkflowTest {
         printf '%s' "${FAKE_DIAGNOSTIC:-}" >&2
         exit "${FAKE_REVIEW_EXIT}"
         """);
+    var trusted = workspace.resolve("trusted");
+    for (var arguments :
+        List.of(
+            List.of("git", "init", "--quiet"),
+            List.of("git", "add", "-A"),
+            List.of(
+                "git",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "commit",
+                "--no-gpg-sign",
+                "--quiet",
+                "-m",
+                "trusted"))) {
+      var process = new ProcessBuilder(arguments).directory(trusted.toFile()).start();
+      assertThat(process.waitFor()).isZero();
+    }
     var steps =
         listOfMaps(
             map(map(yaml(".github/workflows/sync-ffmpeg-lock.yml").get("jobs"))
