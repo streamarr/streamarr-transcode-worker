@@ -311,24 +311,44 @@ async function licenseExpression(id, repository) {
     }
 }
 
-// A recipe that enables nothing in either reviewed build configuration is not in the binaries.
-async function newComponents(recipe, text, buildconf) {
-    const flags = [...text.matchAll(/^\s*echo ((?:--enable-[a-z0-9-]+ ?)+)$/gm)]
-        .flatMap((match) => match[1].trim().split(" "));
-    const architectures = Object.keys(buildconf).filter(
-        (architecture) =>
-            !flags.length ||
-            flags.some((flag) =>
-                buildconf[architecture].split(/\s+/).includes(flag),
-            ),
+const configureFlags = (text) =>
+    [...text.matchAll(/^\s*echo ((?:--enable-[a-z0-9-]+ ?)+)$/gm)].flatMap((match) =>
+        match[1].trim().split(" "),
     );
-    if (!architectures.length) return [];
-    return Promise.all(
-        recipePins(text).map(async ({ repository, revision }, index) => {
-            const id =
+
+// The binaries that contain what a recipe builds: those whose reviewed build configuration has one
+// of its flags, else those of the components already built from it, else, for a recipe without
+// flags, all of them. A recipe that enables nothing in either configuration is not in the binaries.
+function builtFor({ flags, citing }, buildconf) {
+    const flagged = Object.keys(buildconf).filter((architecture) =>
+        flags.some((flag) => buildconf[architecture].split(/\s+/).includes(flag)),
+    );
+    if (flagged.length) return flagged;
+    if (citing.length)
+        return Object.keys(buildconf).filter((architecture) =>
+            citing.some((component) => component.architectures.includes(architecture)),
+        );
+    return flags.length ? [] : Object.keys(buildconf);
+}
+
+// Proposes a component for every pin of the recipe that no component claims.
+async function newComponents({ recipe, flags, architectures, claimed, reviewed }) {
+    const pins = recipePins(recipe.text)
+        .map(({ repository, revision }, index) => ({
+            repository,
+            revision,
+            id:
                 index === 0
-                    ? path.basename(recipe, ".sh").replace(/^\d+-/, "")
-                    : path.basename(repository).toLowerCase().replace(/_/g, "-");
+                    ? path.basename(recipe.file, ".sh").replace(/^\d+-/, "")
+                    : path.basename(repository).toLowerCase().replace(/_/g, "-"),
+        }))
+        .filter(({ repository }) => !claimed.has(repository));
+    return Promise.all(
+        pins.map(async ({ repository, revision, id }) => {
+            if (reviewed.some((component) => component.id === id))
+                throw new Error(
+                    `${recipe.file} pins ${repository}, whose id ${id} belongs to a reviewed component`,
+                );
             let files;
             try {
                 files = await licenseFiles(repository, revision);
@@ -359,11 +379,11 @@ async function newComponents(recipe, text, buildconf) {
                 id,
                 repository,
                 revision,
-                recipe,
+                recipe: recipe.file,
                 architectures,
                 role: flags.length
                     ? `Static library (${flags.join(" ")}).`
-                    : `Static dependency built by ${recipe}.`,
+                    : `Static dependency built by ${recipe.file}.`,
                 notices,
                 licenseExpression: await licenseExpression(id, repository),
                 distribution: "runtime",
@@ -530,10 +550,25 @@ async function main() {
             report.moved.push(component.id);
     }
 
-    const known = new Set([...reviewedPaths, ...inventory.map((c) => c.recipe)]);
-    for (const recipe of lockedPaths.filter((file) => !known.has(file))) {
-        const added = await newComponents(recipe, recipes.get(recipe), buildconf);
-        if (!added.length) report.ignored.push(recipe);
+    // Every pin of a recipe that is in the binaries is claimed by a component or proposed as one.
+    const claimed = new Set(components.map((component) => normalize(component.repository)));
+    for (const file of lockedPaths) {
+        const citing = components.filter((component) => component.recipe === file);
+        if (!citing.length && reviewedPaths.includes(file)) continue;
+        const flags = configureFlags(recipes.get(file));
+        const architectures = builtFor({ flags, citing }, buildconf);
+        if (!architectures.length) {
+            report.ignored.push(file);
+            continue;
+        }
+        const added = await newComponents({
+            recipe: { file, text: recipes.get(file) },
+            flags,
+            architectures,
+            claimed,
+            reviewed: inventory,
+        });
+        for (const component of added) claimed.add(component.repository);
         components.push(...added);
         report.added.push(...added.map((component) => component.id));
     }

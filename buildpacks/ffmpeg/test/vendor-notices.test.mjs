@@ -780,6 +780,83 @@ test("Should add a newly pinned dependency that the binaries enable and ignore o
     assert.equal(validate().status, 0);
 });
 
+// Models 20-libiconv.sh, which gained SCRIPT_REPO2 (gnulib) beside a pin that did not move.
+function serveGainedPin({ serve }, pinned) {
+    serve(`${API}/example/gained/git/trees/${pinned}?recursive=1`, { truncated: false, tree: [{ path: "COPYING", type: "blob" }] });
+    serve(`${API}/example/gained/license`, { license: { spdx_id: "LGPL-2.1-or-later" } });
+    serve(`${RAW}/example/gained/${pinned}/COPYING`, "Gained license\n");
+}
+
+test("Should propose a dependency that an inventoried recipe starts to pin", (t) => {
+    const context = fixture(t);
+    const { components, inventory, read, recipes, run, serveRecipes, validate } = context;
+    const pinned = "8".repeat(40);
+    serveRecipes(LOCKED, new Map(recipes).set("50-alpha.sh", recipe([["https://github.com/example/alpha", ALPHA_1], ["https://github.com/example/gained", pinned]], "--enable-libalpha")));
+    serveGainedPin(context, pinned);
+
+    const result = run();
+
+    assert.equal(result.status, 0, result.output);
+    assert.match(result.output, /Added component: gained/);
+    assert.match(result.output, /Inventory content changed/);
+    assert.doesNotMatch(result.output, /Inventory content unchanged/);
+    assert.deepEqual(inventory().find((component) => component.id === "gained"), {
+        id: "gained",
+        repository: "https://github.com/example/gained",
+        revision: pinned,
+        recipe: "builder/scripts.d/50-alpha.sh",
+        architectures: ["amd64", "arm64"],
+        role: "Static library (--enable-libalpha).",
+        notices: [{ url: `${RAW}/example/gained/${pinned}/COPYING`, sha256: checksum("Gained license\n"), file: "gained/COPYING.txt" }],
+        licenseExpression: "LGPL-2.1-or-later",
+        distribution: "runtime",
+        revisionEvidence: "source",
+    });
+    assert.deepEqual(inventory().find((component) => component.id === "alpha"), components[0]);
+    assert.equal(read("notices/gained/COPYING.txt"), "Gained license\n");
+    assert.match(read("SOURCE.txt"), /gained \(amd64, arm64\)/);
+    assert.equal(validate().status, 0);
+});
+
+test("Should give a dependency gained by a recipe without configure flags the architectures built from that recipe", (t) => {
+    const context = fixture(t);
+    const { inventory, recipes, run, serveRecipes } = context;
+    const pinned = "8".repeat(40);
+    serveRecipes(LOCKED, new Map(recipes).set("50-beta.sh", recipe([["https://gitlab.example/group/beta", "v1.0"], ["https://github.com/example/gained", pinned]])));
+    serveGainedPin(context, pinned);
+
+    const result = run();
+
+    assert.equal(result.status, 0, result.output);
+    const gained = inventory().find((component) => component.id === "gained");
+    assert.deepEqual(gained.architectures, ["arm64"]);
+    assert.equal(gained.role, "Static dependency built by builder/scripts.d/50-beta.sh.");
+});
+
+test("Should report an unchanged inventory when a recipe pins a repository that another recipe's component claims", (t) => {
+    const { components, inventory, recipes, run, serve, serveRecipes, writeInventory } = fixture(t);
+    components.push({
+        ...components[0],
+        id: "gamma-headers",
+        repository: "https://github.com/example/gamma-headers",
+        recipe: "builder/scripts.d/45-gamma-headers.sh",
+        notices: [{ url: `${RAW}/example/gamma-headers/${ALPHA_1}/LICENSE.md`, sha256: checksum(LICENSE), file: "alpha/COPYING.txt" }],
+    });
+    writeInventory();
+    const pinned = new Map(recipes)
+        .set("45-gamma-headers.sh", recipe([["https://github.com/example/gamma-headers", ALPHA_1]]))
+        .set("50-alpha.sh", recipe([["https://github.com/example/alpha", ALPHA_1], ["https://github.com/example/gamma-headers", "v1.4"]], "--enable-libalpha"));
+    serveRecipes(REVIEWED, pinned);
+    serveRecipes(LOCKED, pinned);
+    serve(`${RAW}/example/gamma-headers/${ALPHA_1}/LICENSE.md`, LICENSE);
+
+    const result = run();
+
+    assert.equal(result.status, 0, result.output);
+    assert.match(result.output, /Inventory content unchanged/);
+    assert.deepEqual(inventory().map((component) => component.id), ["alpha", "beta", "ffmpeg", "gamma-headers"]);
+});
+
 test("Should remove a component and its unshared files when upstream drops the recipe", (t) => {
     const { buildpack, inventory, read, recipes, run, serveRecipes, validate } = fixture(t);
     const remaining = new Map(recipes);
@@ -872,6 +949,11 @@ for (const [name, arrange, message] of [
             serve(`${RAW}/example/alpha/${ALPHA_2}/NOTICE`, "Alpha notice\n");
         },
         /notices\/alpha\/src\/LICENSE\.BSD\.txt would not hold the text recorded for alpha/,
+    ],
+    [
+        "a gained pin would take the id of a reviewed component",
+        ({ recipes, serveRecipes }) => serveRecipes(LOCKED, new Map(recipes).set("50-alpha.sh", recipe([["https://github.com/example/alpha", ALPHA_1], ["https://github.com/fork/Beta", ALPHA_2]], "--enable-libalpha"))),
+        /builder\/scripts\.d\/50-alpha\.sh pins https:\/\/github\.com\/fork\/Beta, whose id beta belongs to a reviewed component/,
     ],
     [
         "a new dependency is hosted where license files cannot be listed",
