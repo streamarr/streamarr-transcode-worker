@@ -435,6 +435,11 @@ for (const [view, origin, excerpt] of [
         (holder) => `/* Copyright ${holder} */\n\n/* Permission is granted. */\n`,
     ],
     [
+        "its license comment blocks, the fourth naming only its license",
+        (holder) => `/* beta.h */\n/* Copyright ${holder} */\nint beta(void);\n/* helper */\n/* SPDX-License-Identifier: MIT */\n`,
+        (holder) => `/* Copyright ${holder} */\n\n/* SPDX-License-Identifier: MIT */\n`,
+    ],
+    [
         "the text before /** @file",
         (holder) => `// Copyright ${holder}\n//\n// Runtime exception applies.\n\n/** @file beta.h\n *  Internal header.\n */\nint beta(void);\n`,
         (holder) => `// Copyright ${holder}\n//\n// Runtime exception applies.\n\n`,
@@ -1380,7 +1385,7 @@ test("Should follow a regrouped recipe to the recipe that pins the repository fi
     assert.doesNotMatch(result.output, /(Added|Removed) component|Pin moved/);
 });
 
-test("Should leave every file alone when a dry run reports changed, added and removed texts", (t) => {
+test("Should leave every file and directory alone when a dry run reports changed, added and removed texts", (t) => {
     const context = fixture(t);
     const { buildpack, recipes, run, serve, serveRecipes } = context;
     const locked = new Map(recipes)
@@ -1393,10 +1398,9 @@ test("Should leave every file alone when a dry run reports changed, added and re
     const files = () =>
         fs
             .readdirSync(buildpack, { recursive: true, withFileTypes: true })
-            .filter((entry) => entry.isFile())
-            .map((entry) => path.join(entry.parentPath, entry.name))
-            .sort()
-            .map((file) => [path.relative(buildpack, file), fs.readFileSync(file, "utf8")]);
+            .map((entry) => [path.join(entry.parentPath, entry.name), entry.isFile()])
+            .sort(([left], [right]) => (left < right ? -1 : 1))
+            .map(([file, isFile]) => [path.relative(buildpack, file), isFile ? fs.readFileSync(file, "utf8") : "directory"]);
     const before = files();
 
     const result = run("--dry-run");
@@ -1408,23 +1412,33 @@ test("Should leave every file alone when a dry run reports changed, added and re
     assert.deepEqual(files(), before);
 });
 
-// Models the LAME "svn checkout -r" line and the fdk-aac-stripped tree URL in the real instructions.
-test("Should update source instructions that name a dependency pin outside the component index", (t) => {
-    const { read, recipes, run, serve, serveRecipes, validate, write } = fixture(t);
-    const mirror = "https://chromium.googlesource.com/mirror/alpha";
-    const instructions = (repository, revision) =>
-        `For alpha, check out ${revision} from the listed URL.\nIts patched tree: ${repository}/tree/${revision}\n`;
-    write("SOURCE.txt", instructions("https://github.com/example/alpha", ALPHA_1) + read("SOURCE.txt"));
-    serveRecipes(LOCKED, new Map(recipes).set("50-alpha.sh", recipe([[mirror, ALPHA_2]], "--enable-libalpha")));
-    serve(`${mirror}/+/${ALPHA_2}/COPYING?format=TEXT`, Buffer.from(LICENSE).toString("base64"));
+// Models the LAME "svn checkout -r" line and the fdk-aac-stripped tree URL in the real instructions,
+// whose pins move in place, and a pin that moves to a mirror.
+for (const [name, repository, license, stale] of [
+    ["in place", "https://github.com/example/alpha", [`${RAW}/example/alpha/${ALPHA_2}/COPYING`, LICENSE], new RegExp(ALPHA_1)],
+    [
+        "to a mirror",
+        "https://chromium.googlesource.com/mirror/alpha",
+        [`https://chromium.googlesource.com/mirror/alpha/+/${ALPHA_2}/COPYING?format=TEXT`, Buffer.from(LICENSE).toString("base64")],
+        new RegExp(`${ALPHA_1}|github\\.com/example/alpha`),
+    ],
+]) {
+    test(`Should update source instructions that name a dependency pin outside the component index when the pin moves ${name}`, (t) => {
+        const { read, recipes, run, serve, serveRecipes, validate, write } = fixture(t);
+        const instructions = (source, revision) =>
+            `For alpha, check out ${revision} from the listed URL.\nIts patched tree: ${source}/tree/${revision}\n`;
+        write("SOURCE.txt", instructions("https://github.com/example/alpha", ALPHA_1) + read("SOURCE.txt"));
+        serveRecipes(LOCKED, new Map(recipes).set("50-alpha.sh", recipe([[repository, ALPHA_2]], "--enable-libalpha")));
+        serve(...license);
 
-    const result = run();
+        const result = run();
 
-    assert.equal(result.status, 0, result.output);
-    assert.equal(read("SOURCE.txt").startsWith(instructions(mirror, ALPHA_2)), true, read("SOURCE.txt"));
-    assert.doesNotMatch(read("SOURCE.txt"), new RegExp(`${ALPHA_1}|github\\.com/example/alpha`));
-    assert.equal(validate().status, 0);
-});
+        assert.equal(result.status, 0, result.output);
+        assert.equal(read("SOURCE.txt").startsWith(instructions(repository, ALPHA_2)), true, read("SOURCE.txt"));
+        assert.doesNotMatch(read("SOURCE.txt"), stale);
+        assert.equal(validate().status, 0);
+    });
+}
 
 test("Should remove a component and its unshared files when upstream drops the recipe", (t) => {
     const { buildpack, inventory, read, recipes, run, serveRecipes, validate } = fixture(t);
