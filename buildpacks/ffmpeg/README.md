@@ -142,7 +142,12 @@ resolved through the removed component, rather than drop dependencies that are s
 Every pin of a recipe that is in the binaries must be claimed by a component, matched by
 repository and revision across the whole inventory, or the tool proposes it as a new component.
 The revision counts because one repository can hold several libraries on its branches, as
-`rk-mirrors` holds rkmpp and rkrga. That covers a pin an inventoried recipe gains, as
+`rk-mirrors` holds rkmpp and rkrga. The architectures count because a recipe puts what it builds
+in every binary it is in: a component claims a pin only when it covers every architecture the
+recipe is built for, so a component built for one binary, as amf and libvpl are for amd64 and
+libne10, rkmpp and rkrga for arm64, does not account for that source in the other. A component
+the review built from this recipe claims its own pin whatever architectures it records, because
+the review read that recipe. That covers a pin an inventoried recipe gains, as
 `20-libiconv.sh` gained gnulib, and a pin that moves away from the revision a component of
 another recipe records. A recipe is in the
 binaries when a component is already built from it, when the reviewed build configurations
@@ -158,7 +163,8 @@ a component records it: a dependency that is only a build input is recorded with
 architectures that rule names and its licence files come from the repository listing. Its id
 comes from the recipe name, or from the repository name for a later pin, and also names its
 notice directory: the tool fails rather than propose an id that the generator would refuse or
-that a reviewed or another proposed component holds. New `DEPS` entries and submodules are not
+that a reviewed or another proposed component holds, or a pin that names a branch instead of a
+commit and so names no source to read a licence text from. New `DEPS` entries and submodules are not
 discovered: they are followed only for components the inventory already records.
 
 Notices whose texts were byte-identical at review share one file, within a component (OpenMPT's

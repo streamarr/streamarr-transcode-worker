@@ -1265,6 +1265,88 @@ for (const [name, file, text, proposed] of [
     });
 }
 
+// Models rkrga, which upstream builds for arm64 alone. A recipe that is in both binaries and pins its
+// source puts that source in the amd64 binary too, which the arm64-only component does not account for.
+function claimArm64Only({ components, recipes, serveRecipes, write, writeInventory }, locked) {
+    components.push({
+        ...components[0],
+        id: "rkrga",
+        repository: RK_MIRRORS,
+        revision: RKRGA,
+        architectures: ["arm64"],
+        recipe: "builder/scripts.d/50-rkrga.sh",
+        notices: [{ url: `${RAW}/example/rk-mirrors/${RKRGA}/COPYING`, sha256: checksum(LICENSE), file: "rkrga/COPYING.txt" }],
+    });
+    writeInventory();
+    write("notices/rkrga/COPYING.txt", LICENSE);
+    const reviewed = new Map(recipes).set("50-rkrga.sh", recipe([[RK_MIRRORS, RKRGA]]));
+    serveRecipes(REVIEWED, reviewed);
+    serveRecipes(LOCKED, locked(reviewed));
+}
+
+function serveRkMirrors({ serve }) {
+    serve(`${API}/example/rk-mirrors/git/trees/${RKRGA}?recursive=1`, { truncated: false, tree: [{ path: "COPYING", type: "blob" }] });
+    serve(`${API}/example/rk-mirrors/license`, { license: { spdx_id: "MIT" } });
+    serve(`${RAW}/example/rk-mirrors/${RKRGA}/COPYING`, LICENSE);
+}
+
+for (const [name, file, text, proposed, architectures] of [
+    [
+        "an inventoried recipe in both binaries gains a pin at the revision an arm64-only component claims",
+        "50-alpha.sh",
+        recipe([["https://github.com/example/alpha", ALPHA_1], [RK_MIRRORS, RKRGA]], "--enable-libalpha"),
+        "rk-mirrors",
+        ["amd64", "arm64"],
+    ],
+    [
+        "a new recipe in both binaries pins the revision an arm64-only component claims",
+        "50-newlib.sh",
+        recipe([[RK_MIRRORS, RKRGA]], "--enable-libdelta"),
+        "newlib",
+        ["amd64", "arm64"],
+    ],
+    [
+        "a new recipe in the amd64 binary alone pins the revision an arm64-only component claims",
+        "50-mfx.sh",
+        recipe([[RK_MIRRORS, RKRGA]], "--enable-libmfx"),
+        "mfx",
+        ["amd64"],
+    ],
+]) {
+    test(`Should propose a dependency when ${name}`, (t) => {
+        const context = fixture(t);
+        const { inventory, run, validate, write } = context;
+        claimArm64Only(context, (reviewed) => new Map(reviewed).set(file, text));
+        write("notices/buildconf-amd64.txt", "ffmpeg version 9.0.0-Jellyfin\n  configuration: --enable-gpl --enable-libalpha --enable-libdelta --enable-libmfx\n");
+        serveRkMirrors(context);
+
+        const result = run();
+
+        assert.equal(result.status, 0, result.output);
+        assert.match(result.output, new RegExp(`Added component: ${proposed}\\n`));
+        assert.match(result.output, /Inventory content changed/);
+        assert.doesNotMatch(result.output, /Inventory content unchanged/);
+        const added = inventory().find((component) => component.id === proposed);
+        assert.deepEqual([added.repository, added.revision, added.recipe], [RK_MIRRORS, RKRGA, `builder/scripts.d/${file}`]);
+        assert.deepEqual(added.architectures, architectures);
+        assert.deepEqual(inventory().find((component) => component.id === "rkrga").architectures, ["arm64"]);
+        assert.equal(validate().status, 0);
+    });
+}
+
+test("Should report an unchanged inventory when a recipe pins a repository at the revision a component claims for every architecture the recipe is built for", (t) => {
+    const context = fixture(t);
+    const { inventory, run } = context;
+    claimArm64Only(context, (reviewed) =>
+        new Map(reviewed).set("50-beta.sh", recipe([["https://gitlab.example/group/beta", "v1.0"], [RK_MIRRORS, RKRGA]])));
+
+    const result = run();
+
+    assert.equal(result.status, 0, result.output);
+    assert.match(result.output, /Inventory content unchanged/);
+    assert.deepEqual(inventory().map((component) => component.id), ["alpha", "beta", "ffmpeg", "rkrga"]);
+});
+
 const regrouped = (recipes, from, to) => {
     const moved = new Map(recipes).set(to, recipes.get(from));
     moved.delete(from);
@@ -1846,6 +1928,16 @@ for (const [name, arrange, message] of [
             serveRecipes(LOCKED, moved.set("48-group/50-alpha.sh", moved.get("47-group/50-alpha.sh")));
         },
         /builder\/scripts\.d\/50-alpha\.sh is gone and several recipes pin https:\/\/github\.com\/example\/alpha: builder\/scripts\.d\/47-group\/50-alpha\.sh, builder\/scripts\.d\/48-group\/50-alpha\.sh/,
+    ],
+    // Upstream can pin a branch instead of a commit, which names no source the tool can read.
+    [
+        "a gained pin names no revision",
+        ({ recipes, serveRecipes }) =>
+            serveRecipes(LOCKED, new Map(recipes).set(
+                "50-alpha.sh",
+                `${recipe([["https://github.com/example/alpha", ALPHA_1]], "--enable-libalpha")}SCRIPT_REPO2="https://github.com/example/gained.git"\nSCRIPT_BRANCH2="main"\n`,
+            )),
+        /builder\/scripts\.d\/50-alpha\.sh pins https:\/\/github\.com\/example\/gained without a revision/,
     ],
     [
         "a gained pin would take the id of a reviewed component",

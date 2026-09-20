@@ -451,6 +451,20 @@ function reserveId(ids, { id, repository }, file) {
     ids.set(id, "another proposed component");
 }
 
+// A component the review built from this recipe claims its pin, architectures and all: the review
+// read that recipe and recorded where what it builds ends up. Any other component claims a pin only
+// for the architectures it records, because a recipe that puts that source in a binary the component
+// does not cover puts a dependency there that no SBOM and no notice of that binary accounts for.
+const claimedFor = ({ citing, components, architectures }) => (pin) =>
+    components.some(
+        (component) =>
+            sourceOf(component) === sourceOf(pin) &&
+            (citing.includes(component) ||
+                architectures.every((architecture) =>
+                    component.architectures.includes(architecture),
+                )),
+    );
+
 // Proposes a component for every pin of the recipe that no component claims.
 async function newComponents({ recipe, flags, architectures, claimed, ids }) {
     const pins = recipePins(recipe.text)
@@ -464,8 +478,15 @@ async function newComponents({ recipe, flags, architectures, claimed, ids }) {
                 .toLowerCase()
                 .replace(/_/g, "-"),
         }))
-        .filter((pin) => !claimed.has(sourceOf(pin)));
-    for (const pin of pins) reserveId(ids, pin, recipe.file);
+        .filter((pin) => !claimed(pin));
+    for (const pin of pins) {
+        // Upstream can pin a moving branch, which names no source to read a licence text from.
+        if (!pin.revision)
+            throw new Error(
+                `${recipe.file} pins ${pin.repository} without a revision`,
+            );
+        reserveId(ids, pin, recipe.file);
+    }
     return Promise.all(
         pins.map(async ({ repository, revision, id }) => {
             let files;
@@ -735,8 +756,8 @@ async function main() {
             report.moved.push(component.id);
     }
 
-    // Every pin of a recipe that is in the binaries is claimed by a component or proposed as one.
-    const claimed = new Set(components.map(sourceOf));
+    // Every pin of a recipe that is in the binaries is claimed by a component that covers those
+    // binaries, or proposed as one.
     const ids = new Map(inventory.map((component) => [component.id, "a reviewed component"]));
     for (const file of lockedPaths) {
         const citing = components.filter((component) => component.recipe === file);
@@ -751,10 +772,9 @@ async function main() {
             recipe: { file, text: recipes.get(file) },
             flags,
             architectures,
-            claimed,
+            claimed: claimedFor({ citing, components, architectures }),
             ids,
         });
-        for (const component of added) claimed.add(sourceOf(component));
         components.push(...added);
         report.added.push(...added.map((component) => component.id));
     }
