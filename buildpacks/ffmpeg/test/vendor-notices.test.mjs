@@ -1887,6 +1887,53 @@ for (const [name, arrange, message] of [
         },
         message,
     ]),
+    // notices/ keeps one spelling of every path, and the sweep removes every file no notice
+    // references: a changed text written under the other spelling lands in the file that holds it
+    // and is removed with it, leaving an inventory whose text is gone.
+    [
+        "a changed text would move to a file left behind by a removed component that it differs from only by letter case",
+        ({ components, recipes, serve, serveRecipes, write, writeInventory }) => {
+            components[0].notices.push({ url: `${RAW}/example/alpha/${ALPHA_1}/LICENSE`, sha256: checksum(LICENSE), file: "alpha/COPYING.txt" });
+            components.push({
+                ...components[0],
+                id: "gamma",
+                repository: "https://github.com/example/gamma",
+                recipe: "builder/scripts.d/50-gamma.sh",
+                notices: [{ url: `${RAW}/example/gamma/${ALPHA_1}/LICENSE`, sha256: checksum(LICENSE), file: "alpha/license.txt" }],
+            });
+            writeInventory();
+            write("notices/alpha/license.txt", LICENSE);
+            serveRecipes(REVIEWED, new Map(recipes).set("50-gamma.sh", recipe([["https://github.com/example/gamma", ALPHA_1]])));
+            serveRecipes(LOCKED, new Map(recipes).set("50-alpha.sh", recipe([["https://github.com/example/alpha", ALPHA_2]], "--enable-libalpha")));
+            serve(`${RAW}/example/alpha/${ALPHA_1}/LICENSE`, LICENSE);
+            serve(`${RAW}/example/alpha/${ALPHA_2}/COPYING`, LICENSE);
+            serve(`${RAW}/example/alpha/${ALPHA_2}/LICENSE`, "Alpha license 2027\n");
+        },
+        /notices\/alpha\/LICENSE\.txt and notices\/alpha\/license\.txt differ only by letter case/,
+    ],
+    [
+        "a reviewed notice names a file that notices holds under another letter case",
+        ({ components, writeInventory }) => {
+            components[0].notices[0].file = "alpha/Copying.txt";
+            writeInventory();
+        },
+        /notices\/alpha\/Copying\.txt and notices\/alpha\/COPYING\.txt differ only by letter case/,
+    ],
+    // A case-insensitive checkout of upstream paths that differ only by the letter case of a
+    // directory holds both notices in one directory, which the other spelling never names.
+    [
+        "a reviewed notice names a directory that notices holds under another letter case",
+        ({ components, write, writeInventory }) => {
+            components[0].notices = [
+                { url: `${RAW}/example/alpha/${ALPHA_1}/Src/LICENSE`, sha256: checksum(LICENSE), file: "alpha/Src/LICENSE.txt" },
+                { url: `${RAW}/example/alpha/${ALPHA_1}/src/COPYING`, sha256: checksum(LICENSE), file: "alpha/src/COPYING.txt" },
+            ];
+            writeInventory();
+            write("notices/alpha/Src/LICENSE.txt", LICENSE);
+            write("notices/alpha/Src/COPYING.txt", LICENSE);
+        },
+        /notices\/alpha\/src and notices\/alpha\/Src differ only by letter case/,
+    ],
     [
         "upstream names license files of a new component that differ only by letter case",
         ({ recipes, serve, serveRecipes }) => {

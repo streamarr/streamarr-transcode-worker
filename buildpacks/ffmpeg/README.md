@@ -173,9 +173,12 @@ every distinct text of the group ends in one file. The file keeps the text of th
 named after, or else of the first notice in its component's directory; when neither remains, it
 keeps the reviewed text. Every other text, including a reviewed text that is still in use, moves to
 the file named after the first notice that carries it. The tool changes nothing if a planned file
-would not hold the text recorded for every notice that references it, or if two notice files,
-including those of a proposed component, differ only by letter case: a checkout on a
-case-insensitive filesystem, as on macOS, holds them as one file.
+would not hold the text recorded for every notice that references it, or if two paths of the
+planned tree, including those of a proposed component, or a path and one `notices/` already
+holds, differ only by letter case: a checkout on a case-insensitive filesystem, as on macOS,
+holds two spellings of a file, and of a directory above it, as one, so a text written under the
+second spelling would land in the file that holds the first and be deleted with it, because
+nothing references the spelling that file is read under.
 
 The tool writes `notices/sources.json`, the notice files and `SOURCE.txt`, whose component
 index is generated from the inventory. It never writes `notices/manifest`, changes nothing when

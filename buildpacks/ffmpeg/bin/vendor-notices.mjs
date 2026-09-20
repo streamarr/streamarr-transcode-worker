@@ -600,19 +600,35 @@ function placeNotices(components) {
     return writes;
 }
 
-// A planned file must hold the recorded text of every notice that will reference it. A checkout on a
-// case-insensitive filesystem, as macOS uses by default, holds paths that differ only by letter case
-// as one file, so they are one file here too.
+const prefixes = (file) =>
+    file.split("/").map((_, depth, segments) => segments.slice(0, depth + 1).join("/"));
+
+// A checkout on a case-insensitive filesystem, as macOS uses by default, holds paths that differ
+// only by letter case as one file and one directory, so notices/ keeps one spelling of every path
+// and of every directory above it. A text written under a second spelling lands in the file that
+// holds the first, which the cleanup sweep then removes because no notice names it.
+function requireOneSpelling(spellings, file) {
+    for (const prefix of prefixes(file)) {
+        const spelling = spellings.get(prefix.toLowerCase()) ?? prefix;
+        if (spelling !== prefix)
+            throw new Error(
+                `notices/${prefix} and notices/${spelling} differ only by letter case`,
+            );
+        spellings.set(prefix.toLowerCase(), prefix);
+    }
+}
+
+// A planned file must hold the recorded text of every notice that will reference it, under the
+// spelling notices/ already holds.
 function requireRecordedTexts(components, writes) {
-    const spellings = new Map();
+    const spellings = new Map(
+        noticeFiles(path.join(root, "notices"))
+            .flatMap(prefixes)
+            .map((prefix) => [prefix.toLowerCase(), prefix]),
+    );
     for (const component of components) {
         for (const { file, sha256 } of component.notices) {
-            const spelling = spellings.get(file.toLowerCase()) ?? file;
-            if (spelling !== file)
-                throw new Error(
-                    `notices/${file} and notices/${spelling} differ only by letter case`,
-                );
-            spellings.set(file.toLowerCase(), file);
+            requireOneSpelling(spellings, file);
             if (writes.has(file) && checksum(writes.get(file)) !== sha256)
                 throw new Error(
                     `notices/${file} would not hold the text recorded for ${component.id}`,
