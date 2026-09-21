@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import lombok.Builder;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -144,9 +145,15 @@ class FfmpegBuildconfCaptureTest {
             .prependPath(commands)
             .environment("FAKE_REQUESTS", requests.toString())
             .environment("FAKE_BUILDCONF", buildconf.toString());
-    return new CaptureFixture(command, output, requests, buildconf);
+    return CaptureFixture.builder()
+        .command(command)
+        .output(output)
+        .requests(requests)
+        .buildconf(buildconf)
+        .build();
   }
 
+  @Builder
   private record CaptureFixture(
       ScriptCommand command, Path output, Path requests, Path buildconf) {}
 }
