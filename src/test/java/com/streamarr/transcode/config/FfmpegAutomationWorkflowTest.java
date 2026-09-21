@@ -557,8 +557,9 @@ class FfmpegAutomationWorkflowTest {
     var carried =
         REGENERATED_INPUTS.stream()
             .filter(path -> path.equals(MANIFEST) ? carriesTheManifest : replaced);
+    // The step walks the trusted checkout with find, whose directory order is the filesystem's.
     assertThat(pathsOf(outputs, "blobs"))
-        .containsExactlyElementsOf(Stream.concat(Stream.of(LOCK), carried).toList());
+        .containsExactlyInAnyOrderElementsOf(Stream.concat(Stream.of(LOCK), carried).toList());
     assertThat(output(outputs, "headline"))
         .isEqualTo(
             reviewed.equals("true")
