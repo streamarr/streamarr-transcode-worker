@@ -37,6 +37,10 @@ class FfmpegAutomationWorkflowTest {
       List.of(MANIFEST, "buildpacks/ffmpeg/notices/sources.json", "buildpacks/ffmpeg/SOURCE.txt");
   private static final List<String> REGENERATED_INPUTS =
       List.of("buildpacks/ffmpeg/SOURCE.txt", "buildpacks/ffmpeg/notices/sources.json", MANIFEST);
+  private static final String CAPTURED_BUILDCONF = "buildpacks/ffmpeg/notices/buildconf-amd64.txt";
+  private static final String UNCAPTURED_BUILDCONF =
+      "buildpacks/ffmpeg/notices/buildconf-arm64.txt";
+  private static final String HEAD_ONLY_NOTICE = "buildpacks/ffmpeg/notices/x264/COPYING";
 
   @TempDir Path temporaryDirectory;
 
@@ -381,6 +385,7 @@ class FfmpegAutomationWorkflowTest {
       throws Exception {
     var workspace = workspaceWhoseHeadDiffersFromTheTrustedCheckout();
     var outputs = temporaryDirectory.resolve("outputs");
+    recordRegeneratedInputs();
 
     var result =
         prepareStep(workspace)
@@ -404,6 +409,43 @@ class FfmpegAutomationWorkflowTest {
         .hasSize(replaced ? 0 : REVIEWED_INPUTS.size() - (reviewed.equals("true") ? 0 : 1))
         .allSatisfy(
             warning -> assertThat(warning).containsAnyOf(REVIEWED_INPUTS.toArray(String[]::new)));
+  }
+
+  @ParameterizedTest
+  @CsvSource({"true,true", "true,false", "false,true", "false,false"})
+  @DisplayName("Should commit only what this run produced when a regeneration or capture failed")
+  void shouldCommitOnlyWhatThisRunProducedWhenARegenerationOrCaptureFailed(
+      boolean regenerated, boolean captured) throws Exception {
+    var workspace =
+        workspaceWhoseHeadDiffersFromTheTrustedCheckout(
+            List.of(CAPTURED_BUILDCONF, UNCAPTURED_BUILDCONF), List.of(HEAD_ONLY_NOTICE));
+    var outputs = temporaryDirectory.resolve("outputs");
+    if (captured) {
+      recordCapturedBuildConfiguration(CAPTURED_BUILDCONF);
+    }
+    if (regenerated) {
+      recordRegeneratedInputs();
+    }
+
+    var result =
+        prepareStep(workspace)
+            .environment("REVIEWED", "false")
+            .environment("SENDER", "renovate[bot]")
+            .execute();
+
+    assertThat(result.exitCode()).as(result.output()).isZero();
+    assertThat(pathsOf(outputs, "blobs"))
+        .containsExactlyInAnyOrderElementsOf(
+            Stream.of(
+                    Stream.of(LOCK),
+                    captured ? Stream.of(CAPTURED_BUILDCONF) : Stream.<String>empty(),
+                    regenerated
+                        ? REGENERATED_INPUTS.stream().filter(path -> !path.equals(MANIFEST))
+                        : Stream.<String>empty())
+                .flatMap(paths -> paths)
+                .toList());
+    assertThat(pathsOf(outputs, "deletions"))
+        .containsExactlyElementsOf(regenerated ? List.of(HEAD_ONLY_NOTICE) : List.of());
   }
 
   @ParameterizedTest
@@ -658,7 +700,16 @@ class FfmpegAutomationWorkflowTest {
             + stepNamed(syncSteps(), "Prepare synchronized lock").get("run"));
     return ScriptCommand.of(temporaryDirectory.resolve("prepare-synchronized-lock"))
         .environment("GITHUB_WORKSPACE", workspace.toString())
+        .environment("RUNNER_TEMP", temporaryDirectory.toString())
         .environment("GITHUB_OUTPUT", temporaryDirectory.resolve("outputs").toString());
+  }
+
+  private void recordRegeneratedInputs() throws IOException {
+    Files.createFile(temporaryDirectory.resolve("ffmpeg-regenerated"));
+  }
+
+  private void recordCapturedBuildConfiguration(String path) throws IOException {
+    Files.writeString(temporaryDirectory.resolve("ffmpeg-captured"), path + "\n");
   }
 
   private static List<Map<String, Object>> syncSteps() throws IOException {

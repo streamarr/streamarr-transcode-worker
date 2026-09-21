@@ -145,6 +145,8 @@ jobs:
               exit 1
             fi
             cp "${capture}" "trusted/buildpacks/ffmpeg/notices/buildconf-${architecture}.txt"
+            echo "buildpacks/ffmpeg/notices/buildconf-${architecture}.txt" \
+              >>"${RUNNER_TEMP}/ffmpeg-captured"
           done
 
       - name: Select the declared Node toolchain
@@ -163,7 +165,9 @@ jobs:
             | tee "${RUNNER_TEMP}/ffmpeg-review"; then
             echo "- Notice inputs could not be regenerated; run vendor-notices.mjs locally" \
               >>"${RUNNER_TEMP}/ffmpeg-review"
+            exit 0
           fi
+          : >"${RUNNER_TEMP}/ffmpeg-regenerated"
 
       - name: Review locked release from trusted code
         id: review
@@ -216,6 +220,8 @@ jobs:
         run: |
           lock=buildpacks/ffmpeg/ffmpeg.lock
           manifest=buildpacks/ffmpeg/notices/manifest
+          regenerated="${RUNNER_TEMP}/ffmpeg-regenerated"
+          captured="${RUNNER_TEMP}/ffmpeg-captured"
           headline='behavioral: synchronize FFmpeg lock and notice inputs for review'
           if [[ "${REVIEWED}" == 'true' ]]; then
             headline='behavioral: synchronize FFmpeg lock and unchanged notice review'
@@ -227,6 +233,15 @@ jobs:
             if [[ "${path}" == "${manifest}" && "${REVIEWED}" != 'true' ]]; then
               continue
             fi
+            # The trusted checkout still holds the base's copy of everything this run did not
+            # write, so only what it produced may replace the head.
+            case "${path}" in
+              "${lock}") ;;
+              buildpacks/ffmpeg/notices/buildconf-*.txt)
+                grep -qxF "${path}" "${captured}" 2>/dev/null || continue ;;
+              *) [[ -e "${regenerated}" ]] || continue ;;
+            esac
+
             blob="$(git -C proposed hash-object -w "${GITHUB_WORKSPACE}/trusted/${path}")"
             current_blob="$(git -C proposed rev-parse "HEAD:${path}" 2>/dev/null || true)"
             if [[ "${blob}" == "${current_blob}" ]]; then
@@ -245,12 +260,15 @@ jobs:
           done < <(cd trusted && find buildpacks/ffmpeg/ffmpeg.lock buildpacks/ffmpeg/SOURCE.txt \
             buildpacks/ffmpeg/notices -type f -print0)
 
+          # Only a regenerated inventory says which notices no longer belong to it.
           deletions='[]'
-          while IFS= read -r path; do
-            if [[ ! -e "trusted/${path}" ]]; then
-              deletions="$(jq -c --arg path "${path}" '. + [{path: $path}]' <<<"${deletions}")"
-            fi
-          done < <(git -C proposed ls-tree -r --name-only HEAD -- buildpacks/ffmpeg/notices)
+          if [[ -e "${regenerated}" ]]; then
+            while IFS= read -r path; do
+              if [[ ! -e "trusted/${path}" ]]; then
+                deletions="$(jq -c --arg path "${path}" '. + [{path: $path}]' <<<"${deletions}")"
+              fi
+            done < <(git -C proposed ls-tree -r --name-only HEAD -- buildpacks/ffmpeg/notices)
+          fi
 
           approved=false
           lock="$(git -C proposed hash-object "${GITHUB_WORKSPACE}/trusted/buildpacks/ffmpeg/ffmpeg.lock")"
