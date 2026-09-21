@@ -38,9 +38,8 @@ class FfmpegAutomationWorkflowTest {
   private static final List<String> REGENERATED_INPUTS =
       List.of("buildpacks/ffmpeg/SOURCE.txt", "buildpacks/ffmpeg/notices/sources.json", MANIFEST);
   private static final String APPROVAL_WORKFLOW = ".github/workflows/approve-ffmpeg-notices.yml";
-  private static final String CAPTURED_BUILDCONF = "buildpacks/ffmpeg/notices/buildconf-amd64.txt";
-  private static final String UNCAPTURED_BUILDCONF =
-      "buildpacks/ffmpeg/notices/buildconf-arm64.txt";
+  private static final String CAPTURED_BUILDCONF = buildconfNotice("amd64");
+  private static final String UNCAPTURED_BUILDCONF = buildconfNotice("arm64");
   private static final String HEAD_ONLY_NOTICE = "buildpacks/ffmpeg/notices/x264/COPYING";
 
   @TempDir Path temporaryDirectory;
@@ -1054,6 +1053,10 @@ class FfmpegAutomationWorkflowTest {
   private static Pattern renovatePattern(String value) {
     var lastSlash = value.lastIndexOf('/');
     return Pattern.compile(value.substring(1, lastSlash));
+  }
+
+  private static String buildconfNotice(String architecture) {
+    return "buildpacks/ffmpeg/notices/buildconf-%s.txt".formatted(architecture);
   }
 
   private static Map<String, Object> yaml(String file) throws IOException {
