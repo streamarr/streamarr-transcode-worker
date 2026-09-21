@@ -708,6 +708,11 @@ class FfmpegAutomationWorkflowTest {
     for (var path : onlyOnTheHead) {
       writeCheckoutCopy(workspace.resolve("proposed"), path);
     }
+    seedProposedHead(workspace);
+    return workspace;
+  }
+
+  private void seedProposedHead(Path workspace) throws Exception {
     ScriptCommand.writeFake(
         temporaryDirectory,
         "commit-proposed-head",
@@ -723,7 +728,6 @@ class FfmpegAutomationWorkflowTest {
             .argument(workspace.resolve("proposed").toString())
             .execute();
     assertThat(seeded.exitCode()).as(seeded.output()).isZero();
-    return workspace;
   }
 
   private static void writeCheckoutCopy(Path checkout, String path) throws IOException {
