@@ -137,9 +137,11 @@ jobs:
                 >>"${RUNNER_TEMP}/ffmpeg-uncaptured"
               continue
             fi
+            # grep reads a NUL byte as a line terminator, so it never matches one. Count the
+            # bytes outside the banner's alphabet instead of asking whether one matches.
             if [[ ! -f "${capture}" || -L "${capture}" ]] \
               || (( $(wc -c <"${capture}") > 65536 )) \
-              || LC_ALL=C grep -q '[^[:print:][:space:]]' "${capture}" \
+              || (( $(LC_ALL=C tr -d '[:print:]\n' <"${capture}" | wc -c) > 0 )) \
               || [[ "$(head -n 1 "${capture}")" != 'ffmpeg version '* ]]; then
               echo "Unexpected ${architecture} build configuration capture" >&2
               exit 1

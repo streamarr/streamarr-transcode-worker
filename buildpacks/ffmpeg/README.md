@@ -279,9 +279,11 @@ The synchronization workflow does the mechanical work and leaves the judgement t
 1. An unprivileged job per architecture downloads the locked archive, verifies it and captures
    its `-buildconf` with `bin/capture-buildconf`. It is the only job that runs upstream's binary;
    it holds no secret and no write permission, and hands over a text artifact.
-2. The synchronization job checks those captures as data, regenerates the notice inputs with
-   `bin/vendor-notices.mjs`, and runs `bin/review-release` when nothing in the inventory or the
-   build configurations changed.
+2. The synchronization job adopts those captures as data: each is a regular file of at most
+   64 KiB that starts with the banner and holds nothing but printable bytes and newlines, so an
+   adopted capture stays a text the review reads as a diff. It then regenerates the notice inputs
+   with `bin/vendor-notices.mjs`, and runs `bin/review-release` when nothing in the inventory or
+   the build configurations changed.
 3. An unchanged inventory is bound and committed with the lock. A changed one is committed
    without a binding: an approval covers only the content it was submitted on, so a commit that
    carries anything else restores the base's `notices/manifest` in that same commit. That

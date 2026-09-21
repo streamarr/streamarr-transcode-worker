@@ -269,10 +269,44 @@ class FfmpegAutomationWorkflowTest {
         .contains(
             "-L \"${capture}\"",
             "> 65536",
-            "[^[:print:][:space:]]",
+            "LC_ALL=C tr -d '[:print:]\\n' <\"${capture}\" | wc -c",
             "'ffmpeg version '*",
             "ffmpeg-uncaptured")
         .doesNotContain("bash \"${capture}\"", "source ", "eval ");
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {0x00, 0x0b, 0x0c, 0x0d, 0x1b, 0xe9})
+  @DisplayName("Should refuse a captured build configuration holding a byte the banner never has")
+  void shouldRefuseACapturedBuildConfigurationHoldingAByteTheBannerNeverHas(int unprintable)
+      throws Exception {
+    captureHolding("amd64", "--enable-gpl%c --enable-libx264".formatted(unprintable));
+    captureHolding("arm64", "--enable-gpl");
+
+    var result = adoptStep().execute();
+
+    assertThat(result.exitCode()).as(result.output()).isNotZero();
+    assertThat(adoptedNotices()).isEmptyDirectory();
+    assertThat(temporaryDirectory.resolve("ffmpeg-captured")).doesNotExist();
+  }
+
+  @Test
+  @DisplayName("Should adopt the captured build configurations that the reviewed notices hold")
+  void shouldAdoptTheCapturedBuildConfigurationsThatTheReviewedNoticesHold() throws Exception {
+    var architectures = List.of("amd64", "arm64");
+    for (var architecture : architectures) {
+      captureCopiedFrom(architecture, Path.of(buildconfNotice(architecture)));
+    }
+
+    var result = adoptStep().execute();
+
+    assertThat(result.exitCode()).as(result.output()).isZero();
+    assertThat(Files.readAllLines(temporaryDirectory.resolve("ffmpeg-captured")))
+        .containsExactly(CAPTURED_BUILDCONF, UNCAPTURED_BUILDCONF);
+    for (var architecture : architectures) {
+      assertThat(adoptedNotices().resolve(buildconfFile(architecture)))
+          .hasSameBinaryContentAs(Path.of(buildconfNotice(architecture)));
+    }
   }
 
   @Test
@@ -873,6 +907,37 @@ class FfmpegAutomationWorkflowTest {
         .environment("GITHUB_OUTPUT", temporaryDirectory.resolve("outputs").toString());
   }
 
+  private void captureHolding(String architecture, String configuration) throws IOException {
+    Files.writeString(
+        capturePath(architecture),
+        "ffmpeg version 7.1.1-Jellyfin\nconfiguration: %s\n".formatted(configuration));
+  }
+
+  private void captureCopiedFrom(String architecture, Path reviewed) throws IOException {
+    Files.copy(reviewed, capturePath(architecture));
+  }
+
+  private Path capturePath(String architecture) throws IOException {
+    return Files.createDirectories(temporaryDirectory.resolve("buildconf"))
+        .resolve(buildconfFile(architecture));
+  }
+
+  private Path adoptedNotices() {
+    return temporaryDirectory.resolve("workspace/trusted/buildpacks/ffmpeg/notices");
+  }
+
+  private ScriptCommand adoptStep() throws IOException {
+    Files.createDirectories(adoptedNotices());
+    ScriptCommand.writeFake(
+        temporaryDirectory,
+        "adopt-captured-build-configurations",
+        "cd \"${GITHUB_WORKSPACE}\"\n"
+            + stepNamed(syncSteps(), "Adopt captured build configurations").get("run"));
+    return ScriptCommand.of(temporaryDirectory.resolve("adopt-captured-build-configurations"))
+        .environment("GITHUB_WORKSPACE", temporaryDirectory.resolve("workspace").toString())
+        .environment("RUNNER_TEMP", temporaryDirectory.toString());
+  }
+
   private ScriptCommand maintainingApproverStep() throws IOException {
     ScriptCommand.writeFake(
         temporaryDirectory,
@@ -1055,8 +1120,12 @@ class FfmpegAutomationWorkflowTest {
     return Pattern.compile(value.substring(1, lastSlash));
   }
 
+  private static String buildconfFile(String architecture) {
+    return "buildconf-%s.txt".formatted(architecture);
+  }
+
   private static String buildconfNotice(String architecture) {
-    return "buildpacks/ffmpeg/notices/buildconf-%s.txt".formatted(architecture);
+    return "buildpacks/ffmpeg/notices/" + buildconfFile(architecture);
   }
 
   private static Map<String, Object> yaml(String file) throws IOException {
