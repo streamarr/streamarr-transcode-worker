@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.stream.Collectors;
 import lombok.Builder;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -41,6 +42,21 @@ class FfmpegBuildconfCaptureTest {
     assertThat(Files.readString(capture.requests()))
         .contains("portable_" + asset + "-gpl.tar.xz")
         .doesNotContain(asset.equals("linux64") ? "linuxarm64" : "linux64-");
+  }
+
+  @ParameterizedTest
+  @CsvSource({"amd64,amd64", "x86_64,amd64", "arm64,arm64", "aarch64,arm64"})
+  @DisplayName("Should verify the archive against the locked digest of the requested architecture")
+  void shouldVerifyTheArchiveAgainstTheLockedDigestOfTheRequestedArchitecture(
+      String architecture, String locked) throws Exception {
+    var capture = capture(architecture);
+
+    var result = capture.command().execute();
+
+    assertThat(result.exitCode()).as(result.output()).isZero();
+    assertThat(Files.readString(capture.verified()))
+        .startsWith(lockValue(locked + "_sha256") + "  ")
+        .endsWith("/" + lockValue(locked + "_asset") + "\n");
   }
 
   @Test
@@ -86,6 +102,7 @@ class FfmpegBuildconfCaptureTest {
     var commands = Files.createDirectory(temporaryDirectory.resolve("commands"));
     var requests = temporaryDirectory.resolve("requests");
     var buildconf = temporaryDirectory.resolve("buildconf");
+    var verified = temporaryDirectory.resolve("verified");
     var output = temporaryDirectory.resolve("captured.txt");
     Files.writeString(buildconf, BUILDCONF);
     ScriptCommand.writeFake(
@@ -112,7 +129,7 @@ class FfmpegBuildconfCaptureTest {
         commands,
         "sha256sum",
         """
-        cat >/dev/null
+        cat >"${FAKE_VERIFIED}"
         exit "${FAKE_SHA256_EXIT:-0}"
         """);
     ScriptCommand.writeFake(
@@ -144,16 +161,26 @@ class FfmpegBuildconfCaptureTest {
             .argument(output.toString())
             .prependPath(commands)
             .environment("FAKE_REQUESTS", requests.toString())
+            .environment("FAKE_VERIFIED", verified.toString())
             .environment("FAKE_BUILDCONF", buildconf.toString());
     return CaptureFixture.builder()
         .command(command)
         .output(output)
         .requests(requests)
+        .verified(verified)
         .buildconf(buildconf)
         .build();
   }
 
+  private static String lockValue(String key) throws IOException {
+    var prefix = key + "=";
+    return Files.readAllLines(BUILDPACK.resolve("ffmpeg.lock")).stream()
+        .filter(line -> line.startsWith(prefix))
+        .map(line -> line.substring(prefix.length()))
+        .collect(Collectors.joining());
+  }
+
   @Builder
   private record CaptureFixture(
-      ScriptCommand command, Path output, Path requests, Path buildconf) {}
+      ScriptCommand command, Path output, Path requests, Path verified, Path buildconf) {}
 }
