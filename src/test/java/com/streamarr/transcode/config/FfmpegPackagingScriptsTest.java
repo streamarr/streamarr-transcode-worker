@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import tools.jackson.databind.ObjectMapper;
@@ -712,6 +713,22 @@ class FfmpegPackagingScriptsTest {
   }
 
   @ParameterizedTest
+  @CsvSource({"amd64,amd64", "x86_64,amd64", "arm64,arm64", "aarch64,arm64"})
+  @DisplayName("Should verify the archive against the locked digest of the requested architecture")
+  void shouldVerifyTheArchiveAgainstTheLockedDigestOfTheRequestedArchitecture(
+      String architecture, String locked) throws Exception {
+    var buildpack = buildpack();
+
+    var result = buildpack.command().environment("CNB_TARGET_ARCH", architecture).execute();
+
+    assertThat(result.exitCode()).as(result.output()).isZero();
+    var lock = Path.of("buildpacks/ffmpeg/ffmpeg.lock");
+    assertThat(Files.readString(buildpack.verified()))
+        .startsWith(lockValue(lock, locked + "_sha256") + "  ")
+        .endsWith("/" + lockValue(lock, locked + "_asset") + "\n");
+  }
+
+  @ParameterizedTest
   @ValueSource(
       strings = {
         "SOURCE.txt",
@@ -915,6 +932,7 @@ class FfmpegPackagingScriptsTest {
     var layers = Files.createDirectory(temporaryDirectory.resolve("layers"));
     var layer = layers.resolve("ffmpeg");
     var tarArguments = temporaryDirectory.resolve("tar-arguments");
+    var verified = temporaryDirectory.resolve("verified");
     ScriptCommand.writeFake(
         commands,
         "curl",
@@ -948,7 +966,11 @@ class FfmpegPackagingScriptsTest {
         if [[ "$*" == *"generated/SHA256SUMS"* ]]; then
           exec shasum -a 256 "$@"
         fi
-        cat >/dev/null
+        if [[ " $* " != *" --check "* ]]; then
+          echo 'Reading a digest is not verifying one' >&2
+          exit 1
+        fi
+        cat >"${FAKE_VERIFIED}"
         exit "${FAKE_SHA256_EXIT:-0}"
         """);
     ScriptCommand.writeFake(
@@ -989,6 +1011,7 @@ class FfmpegPackagingScriptsTest {
         .layers(layers)
         .layer(layer)
         .tarArguments(tarArguments)
+        .verified(verified)
         .command(
             command(buildpackScript)
                 .prependPath(commands)
@@ -996,6 +1019,7 @@ class FfmpegPackagingScriptsTest {
                 .environment("CNB_TARGET_ARCH", "amd64")
                 .environment("FAKE_FFMPEG_LAYER", layer.toString())
                 .environment("FAKE_TAR_ARGUMENTS", tarArguments.toString())
+                .environment("FAKE_VERIFIED", verified.toString())
                 .environment("FAKE_FFMPEG_VERSION", ffmpegVersion)
                 .environment(
                     "FAKE_FFMPEG_NOTICES",
@@ -1184,7 +1208,7 @@ class FfmpegPackagingScriptsTest {
 
   @Builder
   private record BuildpackFixture(
-      Path layers, Path layer, Path tarArguments, ScriptCommand command) {
+      Path layers, Path layer, Path tarArguments, Path verified, ScriptCommand command) {
 
     private ScriptCommand.Result execute() throws IOException, InterruptedException {
       return command.execute();

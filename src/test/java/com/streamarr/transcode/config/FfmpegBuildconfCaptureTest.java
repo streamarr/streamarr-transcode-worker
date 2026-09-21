@@ -129,6 +129,10 @@ class FfmpegBuildconfCaptureTest {
         commands,
         "sha256sum",
         """
+        if [[ " $* " != *" --check "* ]]; then
+          echo 'Reading a digest is not verifying one' >&2
+          exit 1
+        fi
         cat >"${FAKE_VERIFIED}"
         exit "${FAKE_SHA256_EXIT:-0}"
         """);
