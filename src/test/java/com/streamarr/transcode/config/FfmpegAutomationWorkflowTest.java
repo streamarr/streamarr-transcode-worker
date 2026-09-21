@@ -38,6 +38,11 @@ class FfmpegAutomationWorkflowTest {
   private static final List<String> REGENERATED_INPUTS =
       List.of("buildpacks/ffmpeg/SOURCE.txt", "buildpacks/ffmpeg/notices/sources.json", MANIFEST);
   private static final String APPROVAL_WORKFLOW = ".github/workflows/approve-ffmpeg-notices.yml";
+  private static final String RENOVATE_HEAD =
+      "github.event.pull_request.user.login == 'renovate[bot]'"
+          + " && github.event.pull_request.head.repo.full_name == github.repository"
+          + " && startsWith(github.event.pull_request.head.ref, 'renovate/')";
+  private static final String SYNCHRONIZED_RENOVATE_HEAD = "!cancelled() && " + RENOVATE_HEAD;
   private static final String CAPTURED_BUILDCONF = buildconfNotice("amd64");
   private static final String UNCAPTURED_BUILDCONF = buildconfNotice("arm64");
   private static final String HEAD_ONLY_NOTICE = "buildpacks/ffmpeg/notices/x264/COPYING";
@@ -142,11 +147,7 @@ class FfmpegAutomationWorkflowTest {
     assertThat(map(workflow.get("permissions"))).containsOnly(Map.entry("contents", "read"));
     assertThat(workflow).containsKey("defaults");
     assertThat(map(map(workflow.get("defaults")).get("run"))).containsEntry("shell", "bash");
-    assertThat((String) job.get("if"))
-        .contains(
-            "github.event.pull_request.user.login == 'renovate[bot]'",
-            "github.event.pull_request.head.repo.full_name == github.repository",
-            "startsWith(github.event.pull_request.head.ref, 'renovate/')");
+    assertThat((String) job.get("if")).isEqualTo(SYNCHRONIZED_RENOVATE_HEAD);
     assertThat(map(trustedCheckout.get("with")))
         .containsEntry("ref", "${{ github.event.pull_request.base.sha }}")
         .containsEntry("path", "trusted")
@@ -261,9 +262,9 @@ class FfmpegAutomationWorkflowTest {
     assertThat(capture.get("strategy").toString())
         .contains("architecture=amd64", "runner=ubuntu-24.04", "architecture=arm64")
         .contains("runner=ubuntu-24.04-arm");
+    assertThat((String) capture.get("if")).isEqualTo(RENOVATE_HEAD);
     assertThat((String) sync.get("needs")).isEqualTo("capture_buildconf");
-    assertThat((String) sync.get("if"))
-        .contains("!cancelled()", "github.event.pull_request.user.login == 'renovate[bot]'");
+    assertThat((String) sync.get("if")).isEqualTo(SYNCHRONIZED_RENOVATE_HEAD);
     assertThat(syncSteps.toString()).doesNotContain("bin/capture-buildconf", " -buildconf");
     assertThat(adopt)
         .contains(
@@ -364,15 +365,14 @@ class FfmpegAutomationWorkflowTest {
     var tokenIndex = names.indexOf("Mint lock bot token");
 
     assertThat(source).contains("pull_request_review:", "types: [ submitted ]");
+    assertThat(steps.toString()).doesNotContain("author_association");
     assertThat(map(workflow.get("permissions"))).containsOnly(Map.entry("contents", "read"));
     assertThat((String) job.get("if"))
-        .doesNotContain("author_association")
-        .contains(
-            "github.event.review.state == 'approved'",
-            "github.event.pull_request.user.login == 'renovate[bot]'",
-            "github.event.pull_request.head.repo.full_name == github.repository",
-            "startsWith(github.event.pull_request.head.ref, 'renovate/')",
-            "contains(github.event.pull_request.labels.*.name, 'ffmpeg-notices-review')");
+        .isEqualTo(
+            "github.event.review.state == 'approved' && "
+                + RENOVATE_HEAD
+                + " && contains(github.event.pull_request.labels.*.name,"
+                + " 'ffmpeg-notices-review')");
     assertThat(map(stepNamed(steps, "Check out trusted reviewer").get("with")))
         .containsEntry("ref", "${{ github.event.pull_request.base.sha }}")
         .containsEntry("persist-credentials", false);
