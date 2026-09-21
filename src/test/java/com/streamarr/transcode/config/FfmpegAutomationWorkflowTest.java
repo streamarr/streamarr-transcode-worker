@@ -531,6 +531,53 @@ class FfmpegAutomationWorkflowTest {
   }
 
   @ParameterizedTest
+  @CsvSource({"the branch,false", "the checkout,false", "nothing,true"})
+  @DisplayName("Should commit only the Renovate head the branch and checkout agree on")
+  void shouldCommitOnlyTheRenovateHeadTheBranchAndCheckoutAgreeOn(String moved, boolean unchanged)
+      throws Exception {
+    var workspace = workspaceWhoseHeadDiffersFromTheTrustedCheckout();
+    var commands = Files.createDirectory(temporaryDirectory.resolve("commands"));
+    ScriptCommand.writeFake(commands, "gh", "printf '%s\\n' \"${FAKE_HEAD_SHA}\"");
+    // The checked-out revision is the one this run cannot restate, so moving it moves the rest.
+    var expected = moved.equals("the checkout") ? ANOTHER_HEAD : headOf(workspace);
+
+    var result =
+        unchangedHeadStep(workspace)
+            .prependPath(commands)
+            .environment("EXPECTED_HEAD_SHA", expected)
+            .environment("FAKE_HEAD_SHA", moved.equals("the branch") ? ANOTHER_HEAD : expected)
+            .execute();
+
+    if (unchanged) {
+      assertThat(result.exitCode()).as(result.output()).isZero();
+      return;
+    }
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(1);
+    assertThat(result.output()).contains("Renovate head moved while resolving the FFmpeg lock");
+  }
+
+  @Test
+  @DisplayName("Should refuse a branch name git will not accept before asking for its head")
+  void shouldRefuseABranchNameGitWillNotAcceptBeforeAskingForItsHead() throws Exception {
+    var workspace = workspaceWhoseHeadDiffersFromTheTrustedCheckout();
+    var commands = Files.createDirectory(temporaryDirectory.resolve("commands"));
+    var requests = temporaryDirectory.resolve("requests");
+    ScriptCommand.writeFake(commands, "gh", "printf '%s\\n' \"$*\" >>\"${FAKE_REQUESTS}\"");
+
+    var result =
+        unchangedHeadStep(workspace)
+            .prependPath(commands)
+            .environment("FAKE_REQUESTS", requests.toString())
+            .environment("HEAD_REF", "renovate/..")
+            .environment("EXPECTED_HEAD_SHA", headOf(workspace))
+            .execute();
+
+    assertThat(result.exitCode()).as(result.output()).isNotZero();
+    assertThat(requests).doesNotExist();
+  }
+
+  @ParameterizedTest
   @CsvSource({
     "true, renovate[bot], true, true",
     "true, streamarr-release[bot], false, false",
@@ -1248,6 +1295,20 @@ class FfmpegAutomationWorkflowTest {
         "cd \"${GITHUB_WORKSPACE}\"\n"
             + stepNamed(approvalSteps(), "Require approval of the current head").get("run"));
     return ScriptCommand.of(temporaryDirectory.resolve("require-approval-of-the-current-head"))
+        .environment("GITHUB_WORKSPACE", workspace.toString())
+        .environment("GH_TOKEN", "the workflow token")
+        .environment("GITHUB_REPOSITORY", "streamarr/streamarr-transcode-worker")
+        .environment("HEAD_REF", "renovate/jellyfin-ffmpeg")
+        .environment("PR_NUMBER", "21");
+  }
+
+  private ScriptCommand unchangedHeadStep(Path workspace) throws IOException {
+    ScriptCommand.writeFake(
+        temporaryDirectory,
+        "verify-renovate-head-is-unchanged",
+        "cd \"${GITHUB_WORKSPACE}\"\n"
+            + stepNamed(syncSteps(), "Verify Renovate head is unchanged").get("run"));
+    return ScriptCommand.of(temporaryDirectory.resolve("verify-renovate-head-is-unchanged"))
         .environment("GITHUB_WORKSPACE", workspace.toString())
         .environment("GH_TOKEN", "the workflow token")
         .environment("GITHUB_REPOSITORY", "streamarr/streamarr-transcode-worker")
