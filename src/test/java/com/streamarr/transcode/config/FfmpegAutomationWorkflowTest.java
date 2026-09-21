@@ -327,7 +327,7 @@ class FfmpegAutomationWorkflowTest {
             Map.entry("pull-requests", "write"));
     assertThat((String) regenerate.get("run"))
         .contains(
-            "if ! node trusted/buildpacks/ffmpeg/bin/vendor-notices.mjs",
+            "node trusted/buildpacks/ffmpeg/bin/vendor-notices.mjs",
             "--root \"${GITHUB_WORKSPACE}/trusted/buildpacks/ffmpeg\"",
             "Notice inputs could not be regenerated")
         .doesNotContain("proposed/");
@@ -668,6 +668,43 @@ class FfmpegAutomationWorkflowTest {
             "Submit an **approving review** to bind `notices/manifest`; CI stays red until then.");
   }
 
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "zz ##[stop-commands]resume-token",
+        "zz ##[error title=FFmpeg notice review]inventory unchanged, safe to merge",
+        "zz ##[add-mask]x264"
+      })
+  @DisplayName("Should log a regeneration report as inert data when upstream names its lines")
+  void shouldLogARegenerationReportAsInertDataWhenUpstreamNamesItsLines(String upstreamName)
+      throws Exception {
+    var report = "- Pin moved, license text unchanged: %s".formatted(upstreamName);
+
+    var result = regenerateStep().generatorReporting(report).generatorExitingWith(0).execute();
+
+    assertThat(result.exitCode()).as(result.output()).isZero();
+    assertThat(linesTheRunnerReadsForCommands(result.output())).isEmpty();
+    assertThat(result.output()).containsPattern("(?m)^::stop-commands::[0-9a-f]{32}$");
+    assertThat(Files.readAllLines(temporaryDirectory.resolve("ffmpeg-review")))
+        .containsExactly(report);
+    assertThat(temporaryDirectory.resolve("ffmpeg-regenerated")).exists();
+  }
+
+  @Test
+  @DisplayName("Should keep a failed regeneration's diagnostics away from the runner")
+  void shouldKeepAFailedRegenerationsDiagnosticsAwayFromTheRunner() throws Exception {
+    var diagnostic = "Unable to fetch https://example.invalid/x264/##[add-mask]COPYING";
+
+    var result = regenerateStep().generatorReporting(diagnostic).generatorExitingWith(1).execute();
+
+    assertThat(result.exitCode()).as(result.output()).isZero();
+    assertThat(linesTheRunnerReadsForCommands(result.output())).isEmpty();
+    assertThat(Files.readAllLines(temporaryDirectory.resolve("ffmpeg-review")))
+        .containsExactly(
+            diagnostic, "- Notice inputs could not be regenerated; run vendor-notices.mjs locally");
+    assertThat(temporaryDirectory.resolve("ffmpeg-regenerated")).doesNotExist();
+  }
+
   @Test
   @DisplayName("Should bound the posted report when upstream floods it with one long line")
   void shouldBoundThePostedReportWhenUpstreamFloodsItWithOneLongLine() throws Exception {
@@ -979,6 +1016,29 @@ class FfmpegAutomationWorkflowTest {
         .environment("RUNNER_TEMP", temporaryDirectory.toString());
   }
 
+  private GeneratorStep regenerateStep() throws IOException {
+    var commands = Files.createDirectory(temporaryDirectory.resolve("commands"));
+    ScriptCommand.writeFake(
+        commands,
+        "node",
+        """
+        printf '%s\\n' "${FAKE_REPORT}"
+        exit "${FAKE_GENERATOR_EXIT}"
+        """);
+    ScriptCommand.writeFake(
+        temporaryDirectory,
+        "regenerate-notice-inputs",
+        "cd \"${GITHUB_WORKSPACE}\"\n"
+            + stepNamed(syncSteps(), "Regenerate notice inputs from trusted code").get("run"));
+    return new GeneratorStep(
+        ScriptCommand.of(temporaryDirectory.resolve("regenerate-notice-inputs"))
+            .prependPath(commands)
+            .environment(
+                "GITHUB_WORKSPACE",
+                Files.createDirectory(temporaryDirectory.resolve("workspace")).toString())
+            .environment("RUNNER_TEMP", temporaryDirectory.toString()));
+  }
+
   private ScriptCommand maintainingApproverStep() throws IOException {
     ScriptCommand.writeFake(
         temporaryDirectory,
@@ -1124,6 +1184,23 @@ class FfmpegAutomationWorkflowTest {
       }
     }
     return rendered;
+  }
+
+  private record GeneratorStep(ScriptCommand command) {
+
+    private GeneratorStep generatorReporting(String report) {
+      command.environment("FAKE_REPORT", report);
+      return this;
+    }
+
+    private GeneratorStep generatorExitingWith(int exitCode) {
+      command.environment("FAKE_GENERATOR_EXIT", Integer.toString(exitCode));
+      return this;
+    }
+
+    private ScriptCommand.Result execute() throws IOException, InterruptedException {
+      return command.execute();
+    }
   }
 
   private record ReviewStep(ScriptCommand command, Path temporaryDirectory) {

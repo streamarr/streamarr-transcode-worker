@@ -162,9 +162,16 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          if ! node trusted/buildpacks/ffmpeg/bin/vendor-notices.mjs \
+          # The report quotes upstream file names, and the runner reads `##[command]` anywhere
+          # in a logged line. Both streams share the pipe so that none of it outlives the pause.
+          status=0
+          resume="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+          echo "::stop-commands::${resume}"
+          node trusted/buildpacks/ffmpeg/bin/vendor-notices.mjs \
             --root "${GITHUB_WORKSPACE}/trusted/buildpacks/ffmpeg" 2>&1 \
-            | tee "${RUNNER_TEMP}/ffmpeg-review"; then
+            | tee "${RUNNER_TEMP}/ffmpeg-review" || status=$?
+          echo "::${resume}::"
+          if (( status != 0 )); then
             echo "- Notice inputs could not be regenerated; run vendor-notices.mjs locally" \
               >>"${RUNNER_TEMP}/ffmpeg-review"
             exit 0
