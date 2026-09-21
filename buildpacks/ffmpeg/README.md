@@ -285,9 +285,11 @@ The synchronization workflow does the mechanical work and leaves the judgement t
 3. An unchanged inventory is bound and committed with the lock. A changed one is committed
    without `notices/manifest`, so CI stays red; the pull request gets the
    `ffmpeg-notices-review` label and a comment listing what changed. A commit carries only what
-   the run produced: a pin the tool cannot follow degrades to a lock-only commit with the same
-   request, leaving every notice input and `SOURCE.txt` as the head holds them and deleting none,
-   and a capture that failed leaves that architecture's `buildconf` alone.
+   the run produced: a pin the tool cannot follow degrades to a lock-only commit, leaving every
+   notice input and `SOURCE.txt` as the head holds them and deleting none, and its comment asks
+   for a regeneration pushed to the branch first, because an approval binds only inputs that
+   describe the locked release; a capture that failed leaves that architecture's `buildconf`
+   alone.
    Only a run started by Renovate's own push replaces anything but the lock: every other push
    may carry a correction, so its files stay as pushed and the run warns where they differ.
 4. `.github/workflows/approve-ffmpeg-notices.yml` binds the manifest when a repository owner,

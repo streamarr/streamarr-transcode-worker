@@ -369,9 +369,21 @@ jobs:
           ```
           MARKDOWN
             cat "${RUNNER_TEMP}/ffmpeg-review"
-            cat <<'MARKDOWN'
-          ```
+            printf '%s\n\n' '```'
+            # An approval binds only inputs that describe the locked release, so a run that
+            # regenerated none has to ask for them before it can ask for the review.
+            if [[ ! -e "${RUNNER_TEMP}/ffmpeg-regenerated" ]]; then
+              cat <<'MARKDOWN'
+          This run committed only `buildpacks/ffmpeg/ffmpeg.lock` and left `notices/` and
+          `SOURCE.txt` as this branch holds them. Regenerate them on the locked release and push
+          them to this branch, which later runs keep as pushed:
 
+              nvm use "$(cat buildpacks/ffmpeg/.nvmrc)"
+              node buildpacks/ffmpeg/bin/vendor-notices.mjs
+
+          MARKDOWN
+            fi
+            cat <<'MARKDOWN'
           Read this pull request's diff of `buildpacks/ffmpeg/notices` and `SOURCE.txt`.
           Submit an **approving review** to bind `notices/manifest`; CI stays red until then.
           MARKDOWN

@@ -449,6 +449,47 @@ class FfmpegAutomationWorkflowTest {
   }
 
   @ParameterizedTest
+  @ValueSource(booleans = {true, false})
+  @DisplayName("Should ask for a local regeneration when this run could not regenerate the inputs")
+  void shouldAskForALocalRegenerationWhenThisRunCouldNotRegenerateTheInputs(boolean regenerated)
+      throws Exception {
+    var review = "- Build configuration changed; compare notices/buildconf-*.txt";
+    Files.writeString(temporaryDirectory.resolve("ffmpeg-review"), review + "\n");
+    var requests = temporaryDirectory.resolve("requests");
+    var commands = Files.createDirectory(temporaryDirectory.resolve("commands"));
+    ScriptCommand.writeFake(commands, "gh", "printf '%s\\n' \"$*\" >>\"${FAKE_REQUESTS}\"");
+    if (regenerated) {
+      recordRegeneratedInputs();
+    }
+
+    var result =
+        requestReviewStep()
+            .prependPath(commands)
+            .environment("FAKE_REQUESTS", requests.toString())
+            .execute();
+
+    assertThat(result.exitCode()).as(result.output()).isZero();
+    var comment = Files.readString(temporaryDirectory.resolve("ffmpeg-comment.md"));
+    assertThat(comment).contains("```\n" + review + "\n```", "**approving review**");
+    assertThat(Files.readAllLines(requests))
+        .anySatisfy(request -> assertThat(request).contains("--add-label ffmpeg-notices-review"))
+        .anySatisfy(
+            request ->
+                assertThat(request)
+                    .contains(
+                        "pr comment 21",
+                        "--body-file " + temporaryDirectory.resolve("ffmpeg-comment.md")));
+    if (regenerated) {
+      assertThat(comment).doesNotContain("vendor-notices");
+      return;
+    }
+
+    assertThat(comment)
+        .contains(
+            "buildpacks/ffmpeg/ffmpeg.lock", "    node buildpacks/ffmpeg/bin/vendor-notices.mjs");
+  }
+
+  @ParameterizedTest
   @ValueSource(
       strings = {
         "zz ##[stop-commands]resume-token",
@@ -702,6 +743,23 @@ class FfmpegAutomationWorkflowTest {
         .environment("GITHUB_WORKSPACE", workspace.toString())
         .environment("RUNNER_TEMP", temporaryDirectory.toString())
         .environment("GITHUB_OUTPUT", temporaryDirectory.resolve("outputs").toString());
+  }
+
+  private ScriptCommand requestReviewStep() throws IOException {
+    ScriptCommand.writeFake(
+        temporaryDirectory,
+        "request-maintainer-review",
+        (String)
+            stepNamed(syncSteps(), "Request maintainer review of a changed inventory").get("run"));
+    return ScriptCommand.of(temporaryDirectory.resolve("request-maintainer-review"))
+        .environment("RUNNER_TEMP", temporaryDirectory.toString())
+        .environment("GH_TOKEN", "the workflow token")
+        .environment("GITHUB_REPOSITORY", "streamarr/streamarr-transcode-worker")
+        .environment("PR_NUMBER", "21")
+        .environment(
+            "REVIEW_LABEL",
+            (String)
+                map(yaml(".github/workflows/sync-ffmpeg-lock.yml").get("env")).get("REVIEW_LABEL"));
   }
 
   private void recordRegeneratedInputs() throws IOException {
