@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.yaml.snakeyaml.Yaml;
 import tools.jackson.databind.JsonNode;
@@ -47,6 +48,7 @@ class FfmpegAutomationWorkflowTest {
   private static final String UNCAPTURED_BUILDCONF = buildconfNotice("arm64");
   private static final String HEAD_ONLY_NOTICE = "buildpacks/ffmpeg/notices/x264/COPYING";
   private static final String ANOTHER_HEAD = "0".repeat(40);
+  private static final List<String> ARCHITECTURES = List.of("amd64", "arm64");
 
   @TempDir Path temporaryDirectory;
 
@@ -289,6 +291,26 @@ class FfmpegAutomationWorkflowTest {
 
     assertThat(result.exitCode()).as(result.output()).isNotZero();
     assertThat(adoptedNotices()).isEmptyDirectory();
+    assertThat(temporaryDirectory.resolve("ffmpeg-captured")).doesNotExist();
+  }
+
+  @ParameterizedTest
+  @EnumSource(HostileCapture.class)
+  @DisplayName("Should hold the reviewed build configuration when a capture is not a banner")
+  void shouldHoldTheReviewedBuildConfigurationWhenACaptureIsNotABanner(HostileCapture shape)
+      throws Exception {
+    reviewedBuildConfigurations();
+    captureHolding("arm64", "--enable-gpl");
+    captureShapedAs(shape);
+
+    var result = adoptStep().execute();
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(1);
+    assertThat(result.output()).contains("Unexpected amd64 build configuration capture");
+    for (var architecture : ARCHITECTURES) {
+      assertThat(adoptedNotices().resolve(buildconfFile(architecture)))
+          .hasSameBinaryContentAs(Path.of(buildconfNotice(architecture)));
+    }
     assertThat(temporaryDirectory.resolve("ffmpeg-captured")).doesNotExist();
   }
 
@@ -1012,6 +1034,36 @@ class FfmpegAutomationWorkflowTest {
         .environment("GITHUB_WORKSPACE", workspace.toString())
         .environment("RUNNER_TEMP", temporaryDirectory.toString())
         .environment("GITHUB_OUTPUT", temporaryDirectory.resolve("outputs").toString());
+  }
+
+  private enum HostileCapture {
+    NUL_BYTE,
+    OVERSIZED,
+    FOREIGN_BANNER,
+    SYMBOLIC_LINK
+  }
+
+  private void captureShapedAs(HostileCapture shape) throws IOException {
+    var capture = capturePath("amd64");
+    switch (shape) {
+      case NUL_BYTE -> captureHolding("amd64", "--enable-gpl\u0000 --enable-libx264");
+      case OVERSIZED -> captureHolding("amd64", " --enable-libx264".repeat(4096));
+      case FOREIGN_BANNER -> Files.writeString(capture, "<html>ffmpeg version 7.1.1</html>\n");
+      case SYMBOLIC_LINK -> {
+        captureHolding("amd64", "--enable-gpl");
+        Files.createSymbolicLink(
+            capture, Files.move(capture, temporaryDirectory.resolve("capture-elsewhere")));
+      }
+    }
+  }
+
+  private void reviewedBuildConfigurations() throws IOException {
+    Files.createDirectories(adoptedNotices());
+    for (var architecture : ARCHITECTURES) {
+      Files.copy(
+          Path.of(buildconfNotice(architecture)),
+          adoptedNotices().resolve(buildconfFile(architecture)));
+    }
   }
 
   private void captureHolding(String architecture, String configuration) throws IOException {
