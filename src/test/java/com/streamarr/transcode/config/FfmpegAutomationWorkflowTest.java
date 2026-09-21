@@ -691,6 +691,40 @@ class FfmpegAutomationWorkflowTest {
   }
 
   @ParameterizedTest
+  @EnumSource(UnconfirmedReview.class)
+  @DisplayName("Should withhold the notice review when this run could not confirm the inventory")
+  void shouldWithholdTheNoticeReviewWhenThisRunCouldNotConfirmTheInventory(
+      UnconfirmedReview withheld) throws Exception {
+    var confirmation = "Inventory content unchanged from v8.1.2-4 to v8.1.2-5";
+    var reviewer = reviewStep().reviewerPrinting(confirmation).reviewerExitingWith(0);
+
+    var withholding =
+        switch (withheld) {
+          case CHANGED_INVENTORY -> reviewer.regenerationReportingAChangedInventory();
+          case UNCAPTURED_ARCHITECTURE -> reviewer.architectureNotCaptured();
+          case CHANGED_BUILD_CONFIGURATION -> reviewer.buildConfigurationChangedSinceTheReview();
+        };
+
+    var step = withholding.execute();
+
+    assertThat(step.result().exitCode()).as(step.result().output()).isZero();
+    assertThat(output(step.outputs(), "reviewed")).isEqualTo("false");
+    assertThat(Files.readAllLines(step.summary())).doesNotContain(confirmation);
+  }
+
+  @Test
+  @DisplayName("Should confirm the notice review when trusted code reviewed the locked release")
+  void shouldConfirmTheNoticeReviewWhenTrustedCodeReviewedTheLockedRelease() throws Exception {
+    var confirmation = "Inventory content unchanged from v8.1.2-4 to v8.1.2-5";
+
+    var step = reviewStep().reviewerPrinting(confirmation).reviewerExitingWith(0).execute();
+
+    assertThat(step.result().exitCode()).as(step.result().output()).isZero();
+    assertThat(output(step.outputs(), "reviewed")).isEqualTo("true");
+    assertThat(Files.readAllLines(step.summary())).contains(confirmation);
+  }
+
+  @ParameterizedTest
   @ValueSource(strings = {"```", "   ``` ", "````", "```````"})
   @DisplayName("Should read an upstream fence as report text when asking a maintainer to approve")
   void shouldReadAnUpstreamFenceAsReportTextWhenAskingAMaintainerToApprove(String fence)
@@ -1035,6 +1069,12 @@ class FfmpegAutomationWorkflowTest {
         .environment("GITHUB_OUTPUT", temporaryDirectory.resolve("outputs").toString());
   }
 
+  private enum UnconfirmedReview {
+    CHANGED_INVENTORY,
+    UNCAPTURED_ARCHITECTURE,
+    CHANGED_BUILD_CONFIGURATION
+  }
+
   private enum HostileCapture {
     NUL_BYTE,
     OVERSIZED,
@@ -1325,6 +1365,27 @@ class FfmpegAutomationWorkflowTest {
     private ReviewStep regenerationReporting(String report) throws IOException {
       Files.writeString(
           temporaryDirectory.resolve("ffmpeg-review"), REGENERATED + "\n" + report + "\n");
+      return this;
+    }
+
+    private ReviewStep regenerationReportingAChangedInventory() throws IOException {
+      Files.writeString(
+          temporaryDirectory.resolve("ffmpeg-review"),
+          "Inventory content changed: upstream added mbedtls/LICENSE\n");
+      return this;
+    }
+
+    private ReviewStep architectureNotCaptured() throws IOException {
+      Files.writeString(
+          temporaryDirectory.resolve("ffmpeg-uncaptured"),
+          "- Build configuration of arm64 could not be captured\n");
+      return this;
+    }
+
+    private ReviewStep buildConfigurationChangedSinceTheReview() throws IOException {
+      Files.writeString(
+          temporaryDirectory.resolve("workspace/trusted").resolve(CAPTURED_BUILDCONF),
+          "ffmpeg version 7.1.1-Jellyfin\nconfiguration: --enable-gpl --enable-nonfree\n");
       return this;
     }
 
