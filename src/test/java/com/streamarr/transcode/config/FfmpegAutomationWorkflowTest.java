@@ -317,8 +317,7 @@ class FfmpegAutomationWorkflowTest {
   @Test
   @DisplayName("Should adopt the captured build configurations that the reviewed notices hold")
   void shouldAdoptTheCapturedBuildConfigurationsThatTheReviewedNoticesHold() throws Exception {
-    var architectures = List.of("amd64", "arm64");
-    for (var architecture : architectures) {
+    for (var architecture : ARCHITECTURES) {
       captureCopiedFrom(architecture, Path.of(buildconfNotice(architecture)));
     }
 
@@ -327,7 +326,7 @@ class FfmpegAutomationWorkflowTest {
     assertThat(result.exitCode()).as(result.output()).isZero();
     assertThat(Files.readAllLines(temporaryDirectory.resolve("ffmpeg-captured")))
         .containsExactly(CAPTURED_BUILDCONF, UNCAPTURED_BUILDCONF);
-    for (var architecture : architectures) {
+    for (var architecture : ARCHITECTURES) {
       assertThat(adoptedNotices().resolve(buildconfFile(architecture)))
           .hasSameBinaryContentAs(Path.of(buildconfNotice(architecture)));
     }
