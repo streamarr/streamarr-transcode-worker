@@ -18,8 +18,10 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.yaml.snakeyaml.Yaml;
 import tools.jackson.databind.JsonNode;
@@ -295,23 +297,43 @@ class FfmpegAutomationWorkflowTest {
   }
 
   @ParameterizedTest
-  @EnumSource(HostileCapture.class)
+  @MethodSource("hostileCaptures")
   @DisplayName("Should hold the reviewed build configuration when a capture is not a banner")
-  void shouldHoldTheReviewedBuildConfigurationWhenACaptureIsNotABanner(HostileCapture shape)
-      throws Exception {
+  void shouldHoldTheReviewedBuildConfigurationWhenACaptureIsNotABanner(
+      String architecture, HostileCapture shape) throws Exception {
     reviewedBuildConfigurations();
-    captureHolding("arm64", "--enable-gpl");
-    captureShapedAs(shape);
+    for (var companion : otherArchitectures(architecture)) {
+      captureHolding(companion, "--enable-gpl");
+    }
+    captureShapedAs(architecture, shape);
 
     var result = adoptStep().execute();
 
     assertThat(result.exitCode()).as(result.output()).isEqualTo(1);
-    assertThat(result.output()).contains("Unexpected amd64 build configuration capture");
-    for (var architecture : ARCHITECTURES) {
-      assertThat(adoptedNotices().resolve(buildconfFile(architecture)))
-          .hasSameBinaryContentAs(Path.of(buildconfNotice(architecture)));
+    assertThat(result.output())
+        .contains("Unexpected %s build configuration capture".formatted(architecture));
+    assertThat(adoptedNotices().resolve(buildconfFile(architecture)))
+        .hasSameBinaryContentAs(Path.of(buildconfNotice(architecture)));
+    assertThat(recordedLines("ffmpeg-captured")).doesNotContain(buildconfNotice(architecture));
+  }
+
+  @ParameterizedTest
+  @MethodSource("architectures")
+  @DisplayName("Should report the architecture whose build configuration never arrived")
+  void shouldReportTheArchitectureWhoseBuildConfigurationNeverArrived(String architecture)
+      throws Exception {
+    reviewedBuildConfigurations();
+    for (var captured : otherArchitectures(architecture)) {
+      captureCopiedFrom(captured, Path.of(buildconfNotice(captured)));
     }
-    assertThat(temporaryDirectory.resolve("ffmpeg-captured")).doesNotExist();
+
+    var result = adoptStep().execute();
+
+    assertThat(result.exitCode()).as(result.output()).isZero();
+    assertThat(recordedLines("ffmpeg-uncaptured"))
+        .containsExactly(
+            "- Build configuration of %s could not be captured".formatted(architecture));
+    assertThat(recordedLines("ffmpeg-captured")).doesNotContain(buildconfNotice(architecture));
   }
 
   @Test
@@ -712,6 +734,26 @@ class FfmpegAutomationWorkflowTest {
     assertThat(Files.readAllLines(step.summary())).doesNotContain(confirmation);
   }
 
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "- vendored x264 from upstream file \"notes: Inventory content unchanged\"",
+        "  Inventory content unchanged; only the FFmpeg revision was rebound."
+      })
+  @DisplayName("Should withhold the notice review when upstream text only quotes the confirmation")
+  void shouldWithholdTheNoticeReviewWhenUpstreamTextOnlyQuotesTheConfirmation(String quoted)
+      throws Exception {
+    var step =
+        reviewStep()
+            .regenerationQuoting(quoted)
+            .reviewerPrinting(REGENERATED)
+            .reviewerExitingWith(0)
+            .execute();
+
+    assertThat(step.result().exitCode()).as(step.result().output()).isZero();
+    assertThat(output(step.outputs(), "reviewed")).isEqualTo("false");
+  }
+
   @Test
   @DisplayName("Should confirm the notice review when trusted code reviewed the locked release")
   void shouldConfirmTheNoticeReviewWhenTrustedCodeReviewedTheLockedRelease() throws Exception {
@@ -1082,18 +1124,38 @@ class FfmpegAutomationWorkflowTest {
     SYMBOLIC_LINK
   }
 
-  private void captureShapedAs(HostileCapture shape) throws IOException {
-    var capture = capturePath("amd64");
+  private static Stream<Arguments> hostileCaptures() {
+    return ARCHITECTURES.stream()
+        .flatMap(
+            architecture ->
+                Stream.of(HostileCapture.values()).map(shape -> Arguments.of(architecture, shape)));
+  }
+
+  private static Stream<String> architectures() {
+    return ARCHITECTURES.stream();
+  }
+
+  private static List<String> otherArchitectures(String architecture) {
+    return ARCHITECTURES.stream().filter(each -> !each.equals(architecture)).toList();
+  }
+
+  private void captureShapedAs(String architecture, HostileCapture shape) throws IOException {
+    var capture = capturePath(architecture);
     switch (shape) {
-      case NUL_BYTE -> captureHolding("amd64", "--enable-gpl\u0000 --enable-libx264");
-      case OVERSIZED -> captureHolding("amd64", " --enable-libx264".repeat(4096));
+      case NUL_BYTE -> captureHolding(architecture, "--enable-gpl\u0000 --enable-libx264");
+      case OVERSIZED -> captureHolding(architecture, " --enable-libx264".repeat(4096));
       case FOREIGN_BANNER -> Files.writeString(capture, "<html>ffmpeg version 7.1.1</html>\n");
       case SYMBOLIC_LINK -> {
-        captureHolding("amd64", "--enable-gpl");
+        captureHolding(architecture, "--enable-gpl");
         Files.createSymbolicLink(
             capture, Files.move(capture, temporaryDirectory.resolve("capture-elsewhere")));
       }
     }
+  }
+
+  private List<String> recordedLines(String record) throws IOException {
+    var recorded = temporaryDirectory.resolve(record);
+    return Files.exists(recorded) ? Files.readAllLines(recorded) : List.of();
   }
 
   private void reviewedBuildConfigurations() throws IOException {
@@ -1365,6 +1427,11 @@ class FfmpegAutomationWorkflowTest {
     private ReviewStep regenerationReporting(String report) throws IOException {
       Files.writeString(
           temporaryDirectory.resolve("ffmpeg-review"), REGENERATED + "\n" + report + "\n");
+      return this;
+    }
+
+    private ReviewStep regenerationQuoting(String upstreamText) throws IOException {
+      Files.writeString(temporaryDirectory.resolve("ffmpeg-review"), upstreamText + "\n");
       return this;
     }
 
