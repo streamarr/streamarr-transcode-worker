@@ -37,6 +37,7 @@ class FfmpegAutomationWorkflowTest {
       List.of(MANIFEST, "buildpacks/ffmpeg/notices/sources.json", "buildpacks/ffmpeg/SOURCE.txt");
   private static final List<String> REGENERATED_INPUTS =
       List.of("buildpacks/ffmpeg/SOURCE.txt", "buildpacks/ffmpeg/notices/sources.json", MANIFEST);
+  private static final String APPROVAL_WORKFLOW = ".github/workflows/approve-ffmpeg-notices.yml";
   private static final String CAPTURED_BUILDCONF = "buildpacks/ffmpeg/notices/buildconf-amd64.txt";
   private static final String UNCAPTURED_BUILDCONF =
       "buildpacks/ffmpeg/notices/buildconf-arm64.txt";
@@ -318,11 +319,10 @@ class FfmpegAutomationWorkflowTest {
   @Test
   @DisplayName("Should bind the manifest only when a maintainer approves the current labelled head")
   void shouldBindTheManifestOnlyWhenAMaintainerApprovesTheCurrentLabelledHead() throws IOException {
-    var workflowPath = ".github/workflows/approve-ffmpeg-notices.yml";
-    var source = Files.readString(Path.of(workflowPath));
-    var workflow = yaml(workflowPath);
+    var source = Files.readString(Path.of(APPROVAL_WORKFLOW));
+    var workflow = yaml(APPROVAL_WORKFLOW);
     var job = map(map(workflow.get("jobs")).get("bind_ffmpeg_notices"));
-    var steps = listOfMaps(job.get("steps"));
+    var steps = approvalSteps();
     var names = steps.stream().map(step -> step.get("name")).toList();
     var current = stepNamed(steps, "Require approval of the current head");
     var bind =
@@ -842,6 +842,11 @@ class FfmpegAutomationWorkflowTest {
 
   private void recordCapturedBuildConfiguration(String path) throws IOException {
     Files.writeString(temporaryDirectory.resolve("ffmpeg-captured"), path + "\n");
+  }
+
+  private static List<Map<String, Object>> approvalSteps() throws IOException {
+    return listOfMaps(
+        map(map(yaml(APPROVAL_WORKFLOW).get("jobs")).get("bind_ffmpeg_notices")).get("steps"));
   }
 
   private static List<Map<String, Object>> syncSteps() throws IOException {
