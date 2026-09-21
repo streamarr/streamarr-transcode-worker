@@ -51,8 +51,11 @@ The inventory starts with each shipped Linux GPL binary's `-buildconf` output, t
 traces transitive static libraries, embedded headers and generated loaders through
 the pinned recipes. It is not a list of every build script or of external GPU drivers.
 
-[`notices/manifest`](notices/manifest) binds that review to the release, source revision
-and both archive digests. Offline validation and the buildpack reject a mismatch.
+[`notices/manifest`](notices/manifest) binds that review to the release, source revision,
+both archive digests and the reviewed content itself: `inventory_sha256` digests every file
+under `notices/` except the manifest, together with `SOURCE.txt`. Offline validation and the
+buildpack reject a mismatch, so an inventory, notice text, build configuration or source
+offer edited after the binding no longer inherits it and needs an approval of its own.
 Neither the lock resolver nor the notice generator marks notices as reviewed: they never
 write `notices/manifest`. Tests check notice contents against the inventory and verify their
 inclusion in fresh and cached layers. Full license texts and attribution remain in
@@ -295,10 +298,11 @@ The synchronization workflow does the mechanical work and leaves the judgement t
    manifest names the previous release, so CI stays red until an approval of the new head binds
    it; the pull request gets the `ffmpeg-notices-review` label and a comment listing what
    changed. A commit carries only what the run produced: a pin the tool cannot follow degrades
-   to the lock and that withdrawal, leaving every notice input and `SOURCE.txt` as the head
-   holds them and deleting none, and its comment asks for a regeneration pushed to the branch
-   first, because an approval binds only inputs that describe the locked release; a capture
-   that failed leaves that architecture's `buildconf` alone.
+   to the lock, the captures this run adopted and that withdrawal, leaving
+   `notices/sources.json` and `SOURCE.txt` as the head holds them and deleting none, and its
+   comment asks for a regeneration pushed to the branch first, because an approval binds only
+   inputs that describe the locked release; a capture that failed leaves that architecture's
+   `buildconf` alone.
    Only a run started by Renovate's own push replaces anything but the lock: every other push
    may carry a correction, so its files stay as pushed and the run warns where they differ.
 4. `.github/workflows/approve-ffmpeg-notices.yml` binds the manifest when someone whose

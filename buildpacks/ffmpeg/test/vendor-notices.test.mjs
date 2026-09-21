@@ -6,6 +6,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { inventoryDigest } from "./inventory-digest.mjs";
 
 const vendor = fileURLToPath(
     new URL("../bin/vendor-notices.mjs", import.meta.url),
@@ -244,7 +245,7 @@ deliver(fs.readFileSync(file));
     const validate = () => {
         write(
             "notices/manifest",
-            `release=v9.0.0-1\nsource_revision=${LOCKED}\namd64_sha256=${"d".repeat(64)}\narm64_sha256=${"e".repeat(64)}\n`,
+            `release=v9.0.0-1\nsource_revision=${LOCKED}\namd64_sha256=${"d".repeat(64)}\narm64_sha256=${"e".repeat(64)}\ninventory_sha256=${inventoryDigest(buildpack)}\n`,
         );
         return spawnSync(process.execPath, [generator, "--root", buildpack, "--validate"], {
             encoding: "utf8",

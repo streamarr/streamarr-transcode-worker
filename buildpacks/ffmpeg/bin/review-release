@@ -9,6 +9,10 @@ repository_root="$(cd "${script_dir}/../../.." && pwd)"
 . "${script_dir}/../lib/http.sh"
 # shellcheck source=../lib/lock.sh
 . "${script_dir}/../lib/lock.sh"
+# shellcheck source=../lib/checksum.sh
+. "${script_dir}/../lib/checksum.sh"
+# shellcheck source=../lib/notices.sh
+. "${script_dir}/../lib/notices.sh"
 
 human_review_required=3
 # GitHub's comparison lists at most this many files, so a full list may be incomplete.
@@ -252,6 +256,11 @@ for key in "${manifest_keys[@]}"; do
     bound=false
   fi
 done
+# A binding covers the content it was written for, so an edited inventory is no longer bound.
+if [[ "$(ffmpeg_lock_value "${manifest}" inventory_sha256)" \
+  != "$(ffmpeg_notices_digest "${buildpack_dir}")" ]]; then
+  bound=false
+fi
 if [[ "${bound}" == true ]]; then
   echo "FFmpeg notice inventory is already bound to the locked release"
   exit 0
@@ -259,9 +268,14 @@ fi
 
 write_manifest() {
   local key
-  for key in "${manifest_keys[@]}"; do
-    printf '%s=%s\n' "${key}" "$(ffmpeg_lock_value "${lock_file}" "${key}")"
-  done >"$1"
+  local digest
+  digest="$(ffmpeg_notices_digest "${buildpack_dir}")"
+  {
+    for key in "${manifest_keys[@]}"; do
+      printf '%s=%s\n' "${key}" "$(ffmpeg_lock_value "${lock_file}" "${key}")"
+    done
+    printf 'inventory_sha256=%s\n' "${digest}"
+  } >"$1"
 }
 
 # A maintainer's approval covers inputs that already describe the locked release.
@@ -368,10 +382,9 @@ if ! jq -e --arg revision "${locked_revision}" \
     "regenerate them and bind with an approving review" >&2
   exit 1
 fi
-write_manifest "${temporary_directory}/manifest"
-
 mv "${temporary_directory}/sources.json" "${inventory}"
 mv "${temporary_directory}/SOURCE.txt" "${source_access}"
+write_manifest "${temporary_directory}/manifest"
 mv "${temporary_directory}/manifest" "${manifest}"
 echo "FFmpeg notice inventory is unchanged from ${reviewed_release} to ${locked_release}:" \
   "${file_count} upstream files changed, none of them inside the inventory"

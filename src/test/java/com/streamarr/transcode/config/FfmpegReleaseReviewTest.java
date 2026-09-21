@@ -71,9 +71,14 @@ class FfmpegReleaseReviewTest {
             source_revision=%s
             amd64_sha256=%s
             arm64_sha256=%s
+            inventory_sha256=%s
             """
                 .formatted(
-                    LOCKED_RELEASE, LOCKED_REVISION, LOCKED_AMD64_SHA256, LOCKED_ARM64_SHA256));
+                    LOCKED_RELEASE,
+                    LOCKED_REVISION,
+                    LOCKED_AMD64_SHA256,
+                    LOCKED_ARM64_SHA256,
+                    FfmpegInventoryDigest.of(review.buildpack())));
     assertThat(Files.readString(review.inventory()))
         .contains(
             "https://raw.githubusercontent.com/jellyfin/jellyfin-ffmpeg/%s/LICENSE.md"
@@ -912,9 +917,14 @@ class FfmpegReleaseReviewTest {
             source_revision=%s
             amd64_sha256=%s
             arm64_sha256=%s
+            inventory_sha256=%s
             """
                 .formatted(
-                    LOCKED_RELEASE, LOCKED_REVISION, LOCKED_AMD64_SHA256, LOCKED_ARM64_SHA256));
+                    LOCKED_RELEASE,
+                    LOCKED_REVISION,
+                    LOCKED_AMD64_SHA256,
+                    LOCKED_ARM64_SHA256,
+                    FfmpegInventoryDigest.of(review.buildpack())));
     assertThat(review.upstreamRequests()).isEmpty();
     var offlineValidation =
         ScriptCommand.of(LOCK_UPDATER)
@@ -1288,6 +1298,10 @@ class FfmpegReleaseReviewTest {
 
     private Path lock() {
       return repository.resolve(BUILDPACK).resolve("ffmpeg.lock");
+    }
+
+    private Path buildpack() {
+      return repository.resolve(BUILDPACK);
     }
 
     private Path manifest() {

@@ -16,6 +16,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import tools.jackson.databind.ObjectMapper;
@@ -71,6 +72,21 @@ class FfmpegPackagingScriptsTest {
 
     assertThat(result.exitCode()).isEqualTo(1);
     assertThat(result.output()).contains("FFmpeg notice inventory is stale", "source_revision");
+  }
+
+  @ParameterizedTest
+  @EnumSource(UnreviewedEdit.class)
+  @DisplayName("Should reject a reviewed input edited after the manifest bound the inventory")
+  void shouldRejectAReviewedInputEditedAfterTheManifestBoundTheInventory(UnreviewedEdit edit)
+      throws Exception {
+    var updater = lockUpdater();
+    assertThat(updater.command().execute().exitCode()).isZero();
+    edit.applyTo(updater.lock().getParent());
+
+    var result = updater.command().argument("--check").execute();
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(1);
+    assertThat(result.output()).contains("FFmpeg notice inventory changed since it was bound");
   }
 
   @Test
@@ -379,8 +395,9 @@ class FfmpegPackagingScriptsTest {
         source_revision=%s
         amd64_sha256=%s
         arm64_sha256=%s
+        inventory_sha256=%s
         """
-            .formatted(release, fullRevision, amd64Digest, arm64Digest));
+            .formatted(release, fullRevision, amd64Digest, arm64Digest, "0".repeat(64)));
     Files.writeString(buildpack.resolve("release"), release + "\n");
     var lock = buildpack.resolve("ffmpeg.lock");
     Files.copy(Path.of("buildpacks/ffmpeg/LICENSE.txt"), buildpack.resolve("LICENSE.txt"));
@@ -507,7 +524,7 @@ class FfmpegPackagingScriptsTest {
                         line ->
                             line.matches("(release|source_revision|amd64_sha256|arm64_sha256)=.*"))
                     .toList())
-            + "\n");
+            + "\ninventory_sha256=%s\n".formatted("0".repeat(64)));
     generateFixtureMaterials(buildpackRoot);
     var buildpack = buildpack(buildpackScript);
 
@@ -966,9 +983,12 @@ class FfmpegPackagingScriptsTest {
         if [[ "$*" == *"generated/SHA256SUMS"* ]]; then
           exec shasum -a 256 "$@"
         fi
-        if [[ " $* " != *" --check "* ]]; then
+        if [[ " $* " == *" --strict "* && " $* " != *" --check "* ]]; then
           echo 'Reading a digest is not verifying one' >&2
           exit 1
+        fi
+        if [[ " $* " != *" --check "* ]]; then
+          exec shasum -a 256 "$@"
         fi
         cat >"${FAKE_VERIFIED}"
         exit "${FAKE_SHA256_EXIT:-0}"
@@ -1053,6 +1073,12 @@ class FfmpegPackagingScriptsTest {
         source,
         Files.readString(source)
             .replace(currentRevision, lockValue(root.resolve("ffmpeg.lock"), "source_revision")));
+    var manifest = root.resolve("notices/manifest");
+    Files.writeString(
+        manifest,
+        Files.readString(manifest)
+            .replaceAll(
+                "(?m)^inventory_sha256=.*$", "inventory_sha256=" + FfmpegInventoryDigest.of(root)));
     var result =
         command(Path.of("node"))
             .argument("buildpacks/ffmpeg/bin/generate-notices.mjs")
@@ -1200,6 +1226,34 @@ class FfmpegPackagingScriptsTest {
 
   private ScriptCommand command(Path script) {
     return ScriptCommand.of(script);
+  }
+
+  private enum UnreviewedEdit {
+    SOURCE_OFFER,
+    BUILD_CONFIGURATION,
+    LICENCE_EXPRESSION;
+
+    private void applyTo(Path buildpack) throws IOException {
+      switch (this) {
+        case SOURCE_OFFER ->
+            append(buildpack.resolve("SOURCE.txt"), "Ask for the source by post instead.\n");
+        case BUILD_CONFIGURATION ->
+            append(buildpack.resolve("notices/buildconf-amd64.txt"), " --enable-libunreviewed\n");
+        case LICENCE_EXPRESSION -> {
+          var inventory = buildpack.resolve("notices/sources.json");
+          Files.writeString(
+              inventory,
+              Files.readString(inventory)
+                  .replace(
+                      "\"licenseExpression\": \"MIT\"",
+                      "\"licenseExpression\": \"LicenseRef-unreviewed\""));
+        }
+      }
+    }
+
+    private static void append(Path input, String unreviewed) throws IOException {
+      Files.writeString(input, Files.readString(input) + unreviewed);
+    }
   }
 
   private record LockUpdaterFixture(Path lock, Path releaseJson, ScriptCommand command) {}

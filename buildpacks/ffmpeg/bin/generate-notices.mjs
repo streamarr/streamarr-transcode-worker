@@ -137,7 +137,8 @@ if (values.validate) {
         "bash",
         [
             "-c",
-            '. "$1/lock.sh"; . "$1/notices.sh"; ffmpeg_notices_validate "$2/ffmpeg.lock" "$2"',
+            '. "$1/lock.sh"; . "$1/checksum.sh"; . "$1/notices.sh"; ' +
+                'ffmpeg_notices_validate "$2/ffmpeg.lock" "$2" && ffmpeg_notices_bound "$2"',
             "--",
             fileURLToPath(new URL("../lib", import.meta.url)),
             root,
