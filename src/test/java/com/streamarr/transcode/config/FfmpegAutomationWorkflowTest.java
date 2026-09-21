@@ -576,7 +576,8 @@ class FfmpegAutomationWorkflowTest {
   void shouldAskForALocalRegenerationWhenThisRunCouldNotRegenerateTheInputs(boolean regenerated)
       throws Exception {
     var review = "- Build configuration changed; compare notices/buildconf-*.txt";
-    Files.writeString(temporaryDirectory.resolve("ffmpeg-review"), review + "\n");
+    Files.writeString(
+        temporaryDirectory.resolve("ffmpeg-review-block"), "```text\n" + review + "\n```\n");
     var requests = temporaryDirectory.resolve("requests");
     var commands = Files.createDirectory(temporaryDirectory.resolve("commands"));
     ScriptCommand.writeFake(commands, "gh", "printf '%s\\n' \"$*\" >>\"${FAKE_REQUESTS}\"");
@@ -592,7 +593,7 @@ class FfmpegAutomationWorkflowTest {
 
     assertThat(result.exitCode()).as(result.output()).isZero();
     var comment = Files.readString(temporaryDirectory.resolve("ffmpeg-comment.md"));
-    assertThat(comment).contains("```\n" + review + "\n```", "**approving review**");
+    assertThat(comment).contains("```text\n" + review + "\n```", "**approving review**");
     assertThat(Files.readAllLines(requests))
         .anySatisfy(request -> assertThat(request).contains("--add-label ffmpeg-notices-review"))
         .anySatisfy(
@@ -637,6 +638,46 @@ class FfmpegAutomationWorkflowTest {
     assertThat(step.result().output()).containsPattern("(?m)^::stop-commands::[0-9a-f]{32}$");
     assertThat(Files.readAllLines(step.summary()))
         .containsExactly("```text", REGENERATED, review, "```");
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"```", "   ``` ", "````", "```````"})
+  @DisplayName("Should read an upstream fence as report text when asking a maintainer to approve")
+  void shouldReadAnUpstreamFenceAsReportTextWhenAskingAMaintainerToApprove(String fence)
+      throws Exception {
+    var report =
+        """
+        %s
+        ### Inventory content unchanged
+        Upstream changed nothing. **Approve now to bind `notices/manifest`.**"""
+            .formatted(fence);
+    recordRegeneratedInputs();
+    var commands = Files.createDirectory(temporaryDirectory.resolve("commands"));
+    ScriptCommand.writeFake(commands, "gh", ":");
+
+    var reviewed = reviewStep().regenerationReporting(report).reviewerExitingWith(3).execute();
+    var requested = requestReviewStep().prependPath(commands).execute();
+
+    assertThat(reviewed.result().exitCode()).as(reviewed.result().output()).isZero();
+    assertThat(requested.exitCode()).as(requested.output()).isZero();
+    assertThat(linesRenderedAsMarkdown(reviewed.summary())).isEmpty();
+    assertThat(linesRenderedAsMarkdown(temporaryDirectory.resolve("ffmpeg-comment.md")))
+        .containsExactly(
+            "### FFmpeg notice inventory needs a maintainer review",
+            "Read this pull request's diff of `buildpacks/ffmpeg/notices` and `SOURCE.txt`.",
+            "Submit an **approving review** to bind `notices/manifest`; CI stays red until then.");
+  }
+
+  @Test
+  @DisplayName("Should bound the posted report when upstream floods it with one long line")
+  void shouldBoundThePostedReportWhenUpstreamFloodsItWithOneLongLine() throws Exception {
+    var flood = "Unable to fetch https://example.invalid/" + "x".repeat(200_000);
+
+    var reviewed = reviewStep().regenerationReporting(flood).reviewerExitingWith(3).execute();
+
+    assertThat(reviewed.result().exitCode()).as(reviewed.result().output()).isZero();
+    assertThat(Files.size(reviewed.summary())).isLessThan(20_000);
+    assertThat(Files.readAllLines(reviewed.summary())).endsWith("[report truncated]", "```");
   }
 
   @Test
@@ -1060,7 +1101,38 @@ class FfmpegAutomationWorkflowTest {
     return read;
   }
 
+  // CommonMark: a fence of N backticks opens a code block, and only a line of N or more backticks
+  // indented at most three spaces and followed by nothing else closes it. Everything else a reader
+  // sees is Markdown the document author wrote.
+  private static List<String> linesRenderedAsMarkdown(Path document) throws IOException {
+    var rendered = new ArrayList<String>();
+    var open = 0;
+    for (var line : Files.readAllLines(document)) {
+      var text = line.stripLeading();
+      var backticks = text.length() - text.replaceFirst("^`+", "").length();
+      var fence = line.length() - text.length() <= 3 && backticks >= Math.max(open, 3);
+      if (open > 0) {
+        open = fence && text.substring(backticks).isBlank() ? 0 : open;
+        continue;
+      }
+      if (fence) {
+        open = backticks;
+        continue;
+      }
+      if (!line.isBlank()) {
+        rendered.add(line);
+      }
+    }
+    return rendered;
+  }
+
   private record ReviewStep(ScriptCommand command, Path temporaryDirectory) {
+
+    private ReviewStep regenerationReporting(String report) throws IOException {
+      Files.writeString(
+          temporaryDirectory.resolve("ffmpeg-review"), REGENERATED + "\n" + report + "\n");
+      return this;
+    }
 
     private ReviewStep reviewerPrinting(String review) {
       command.environment("FAKE_REVIEW", review + "\n");

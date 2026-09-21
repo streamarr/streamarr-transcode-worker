@@ -201,11 +201,31 @@ jobs:
               --root "${GITHUB_WORKSPACE}/trusted" 2>&1 | tee -a "${review}" || status=$?
             echo "::${resume}::"
           fi
-          {
-            echo '```text'
-            cat "${review}"
-            echo '```'
-          } >>"${GITHUB_STEP_SUMMARY}"
+          # The report quotes upstream text, so a reader has to meet it as data: a fence longer
+          # than any run of backticks inside it cannot be closed from within, and a bounded
+          # excerpt fits a comment. The review request posts this same block.
+          LC_ALL=C awk -v limit=16384 '
+            {
+              if (bytes >= limit) { truncated = 1; next }
+              line = substr($0, 1, limit - bytes)
+              if (line != $0) truncated = 1
+              bytes += length($0) + 1
+              held[++count] = line
+              while (match(line, /`+/)) {
+                if (RLENGTH > longest) longest = RLENGTH
+                line = substr(line, RSTART + RLENGTH)
+              }
+            }
+            END {
+              width = longest < 3 ? 3 : longest + 1
+              while (length(fence) < width) fence = fence "`"
+              print fence "text"
+              for (i = 1; i <= count; i++) print held[i]
+              if (truncated) print "[report truncated]"
+              print fence
+            }
+          ' "${review}" >"${RUNNER_TEMP}/ffmpeg-review-block"
+          cat "${RUNNER_TEMP}/ffmpeg-review-block" >>"${GITHUB_STEP_SUMMARY}"
           case "${status}" in
             0) echo "reviewed=true" >>"${GITHUB_OUTPUT}" ;;
             3) echo "reviewed=false" >>"${GITHUB_OUTPUT}"
@@ -380,10 +400,9 @@ jobs:
             cat <<'MARKDOWN'
           ### FFmpeg notice inventory needs a maintainer review
 
-          ```
           MARKDOWN
-            cat "${RUNNER_TEMP}/ffmpeg-review"
-            printf '%s\n\n' '```'
+            cat "${RUNNER_TEMP}/ffmpeg-review-block"
+            printf '\n'
             # An approval binds only inputs that describe the locked release, so a run that
             # regenerated none has to ask for them before it can ask for the review.
             if [[ ! -e "${RUNNER_TEMP}/ffmpeg-regenerated" ]]; then

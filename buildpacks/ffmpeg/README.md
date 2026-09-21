@@ -314,8 +314,11 @@ base, reads the proposed release from a Git object as data, and generates everyt
 trusted checkout. It never executes proposed code, and the job that mints credentials never
 runs the downloaded binaries. The review quotes upstream file names, which the runner would
 read for workflow commands, so the step pauses command processing behind a random token while
-the review prints, escapes the text it repeats as the annotation, and fences it in the job
-summary. Only after detecting a change and verifying the head SHA does it mint a short-lived
+the review prints and escapes the text it repeats as the annotation. The report reaches people
+as one code block, fenced by more backticks than any run inside it and cut off at 16 KiB, so no
+upstream line can close it and a flooded report still posts; the job summary and the review
+request carry that same block. Only after detecting a change and verifying the head SHA does it
+mint a short-lived
 GitHub App token. Labels and comments use the workflow token, which cannot
 trigger further workflows. The approval workflow runs on `pull_request_review`, which has no
 base-only variant, so it likewise checks out and executes only the base revision's scripts.
