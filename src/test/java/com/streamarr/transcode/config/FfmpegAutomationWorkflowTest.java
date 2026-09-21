@@ -381,27 +381,15 @@ class FfmpegAutomationWorkflowTest {
       throws Exception {
     var workspace = workspaceWhoseHeadDiffersFromTheTrustedCheckout();
     var outputs = temporaryDirectory.resolve("outputs");
-    var steps =
-        listOfMaps(
-            map(map(yaml(".github/workflows/sync-ffmpeg-lock.yml").get("jobs"))
-                    .get("sync_ffmpeg_lock"))
-                .get("steps"));
-    ScriptCommand.writeFake(
-        temporaryDirectory,
-        "prepare-synchronized-lock",
-        "cd \"${GITHUB_WORKSPACE}\"\n" + stepNamed(steps, "Prepare synchronized lock").get("run"));
 
     var result =
-        ScriptCommand.of(temporaryDirectory.resolve("prepare-synchronized-lock"))
-            .environment("GITHUB_WORKSPACE", workspace.toString())
-            .environment("GITHUB_OUTPUT", outputs.toString())
+        prepareStep(workspace)
             .environment("REVIEWED", reviewed)
             .environment("SENDER", sender)
             .execute();
 
     assertThat(result.exitCode()).as(result.output()).isZero();
-    var blobs = new ObjectMapper().readTree(output(outputs, "blobs"));
-    var replacedPaths = nodes(blobs).map(blob -> blob.path("path").asString()).toList();
+    var replacedPaths = pathsOf(outputs, "blobs");
     var regenerated =
         REGENERATED_INPUTS.stream().filter(path -> carriesTheManifest || !path.equals(MANIFEST));
     assertThat(replacedPaths)
@@ -619,13 +607,23 @@ class FfmpegAutomationWorkflowTest {
   }
 
   private Path workspaceWhoseHeadDiffersFromTheTrustedCheckout() throws Exception {
+    return workspaceWhoseHeadDiffersFromTheTrustedCheckout(List.of(), List.of());
+  }
+
+  private Path workspaceWhoseHeadDiffersFromTheTrustedCheckout(
+      List<String> alsoInBothCheckouts, List<String> onlyOnTheHead) throws Exception {
     var workspace = Files.createDirectory(temporaryDirectory.resolve("workspace"));
-    for (var path : Stream.concat(Stream.of(LOCK), REVIEWED_INPUTS.stream()).toList()) {
+    var shared =
+        Stream.of(Stream.of(LOCK), REVIEWED_INPUTS.stream(), alsoInBothCheckouts.stream())
+            .flatMap(paths -> paths)
+            .toList();
+    for (var path : shared) {
       for (var checkout : List.of("trusted", "proposed")) {
-        var file = workspace.resolve(checkout).resolve(path);
-        Files.createDirectories(file.getParent());
-        Files.writeString(file, "%s as the %s checkout holds it".formatted(path, checkout) + "\n");
+        writeCheckoutCopy(workspace.resolve(checkout), path);
       }
+    }
+    for (var path : onlyOnTheHead) {
+      writeCheckoutCopy(workspace.resolve("proposed"), path);
     }
     ScriptCommand.writeFake(
         temporaryDirectory,
@@ -643,6 +641,36 @@ class FfmpegAutomationWorkflowTest {
             .execute();
     assertThat(seeded.exitCode()).as(seeded.output()).isZero();
     return workspace;
+  }
+
+  private static void writeCheckoutCopy(Path checkout, String path) throws IOException {
+    var file = checkout.resolve(path);
+    Files.createDirectories(file.getParent());
+    Files.writeString(
+        file, "%s as the %s checkout holds it\n".formatted(path, checkout.getFileName()));
+  }
+
+  private ScriptCommand prepareStep(Path workspace) throws IOException {
+    ScriptCommand.writeFake(
+        temporaryDirectory,
+        "prepare-synchronized-lock",
+        "cd \"${GITHUB_WORKSPACE}\"\n"
+            + stepNamed(syncSteps(), "Prepare synchronized lock").get("run"));
+    return ScriptCommand.of(temporaryDirectory.resolve("prepare-synchronized-lock"))
+        .environment("GITHUB_WORKSPACE", workspace.toString())
+        .environment("GITHUB_OUTPUT", temporaryDirectory.resolve("outputs").toString());
+  }
+
+  private static List<Map<String, Object>> syncSteps() throws IOException {
+    return listOfMaps(
+        map(map(yaml(".github/workflows/sync-ffmpeg-lock.yml").get("jobs")).get("sync_ffmpeg_lock"))
+            .get("steps"));
+  }
+
+  private static List<String> pathsOf(Path outputs, String name) throws IOException {
+    return nodes(new ObjectMapper().readTree(output(outputs, name)))
+        .map(entry -> entry.path("path").asString())
+        .toList();
   }
 
   private static final String REGENERATED =
@@ -679,16 +707,11 @@ class FfmpegAutomationWorkflowTest {
       var process = new ProcessBuilder(arguments).directory(trusted.toFile()).start();
       assertThat(process.waitFor()).isZero();
     }
-    var steps =
-        listOfMaps(
-            map(map(yaml(".github/workflows/sync-ffmpeg-lock.yml").get("jobs"))
-                    .get("sync_ffmpeg_lock"))
-                .get("steps"));
     ScriptCommand.writeFake(
         temporaryDirectory,
         "review-locked-release",
         "cd \"${GITHUB_WORKSPACE}\"\n"
-            + stepNamed(steps, "Review locked release from trusted code").get("run"));
+            + stepNamed(syncSteps(), "Review locked release from trusted code").get("run"));
     return new ReviewStep(
         ScriptCommand.of(temporaryDirectory.resolve("review-locked-release"))
             .environment("GITHUB_WORKSPACE", workspace.toString())
