@@ -21,10 +21,11 @@ env:
 jobs:
   bind_ffmpeg_notices:
     name: Bind approved FFmpeg notices
-    # Only a maintainer's approval of a labelled, same-repository Renovate update binds anything.
+    # Only an approval of a labelled, same-repository Renovate update binds anything, and who
+    # approved is decided by the first step: author_association reports organization membership,
+    # which carries no permission on this repository.
     if: >-
       github.event.review.state == 'approved' &&
-      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.review.author_association) &&
       github.event.pull_request.user.login == 'renovate[bot]' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       startsWith(github.event.pull_request.head.ref, 'renovate/') &&
@@ -36,6 +37,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Require a maintaining approver
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPROVER: ${{ github.event.review.user.login }}
+        run: |
+          role="$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${APPROVER}/permission" \
+            --jq '.role_name')"
+          case "${role}" in
+            admin | maintain) ;;
+            *)
+              echo "${APPROVER} holds ${role} on ${GITHUB_REPOSITORY};" \
+                "only admin or maintain may approve FFmpeg notices" >&2
+              exit 1
+              ;;
+          esac
+
       - name: Check out trusted reviewer
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:

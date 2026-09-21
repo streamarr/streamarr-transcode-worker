@@ -333,10 +333,9 @@ class FfmpegAutomationWorkflowTest {
     assertThat(source).contains("pull_request_review:", "types: [ submitted ]");
     assertThat(map(workflow.get("permissions"))).containsOnly(Map.entry("contents", "read"));
     assertThat((String) job.get("if"))
+        .doesNotContain("author_association")
         .contains(
             "github.event.review.state == 'approved'",
-            "contains(fromJSON('[\"OWNER\", \"MEMBER\", \"COLLABORATOR\"]'),"
-                + " github.event.review.author_association)",
             "github.event.pull_request.user.login == 'renovate[bot]'",
             "github.event.pull_request.head.repo.full_name == github.repository",
             "startsWith(github.event.pull_request.head.ref, 'renovate/')",
@@ -344,6 +343,9 @@ class FfmpegAutomationWorkflowTest {
     assertThat(map(stepNamed(steps, "Check out trusted reviewer").get("with")))
         .containsEntry("ref", "${{ github.event.pull_request.base.sha }}")
         .containsEntry("persist-credentials", false);
+    assertThat(map(stepNamed(steps, "Require a maintaining approver").get("env")))
+        .containsEntry("GH_TOKEN", "${{ github.token }}")
+        .containsEntry("APPROVER", "${{ github.event.review.user.login }}");
     assertThat(map(current.get("env")))
         .containsEntry("APPROVED_SHA", "${{ github.event.review.commit_id }}")
         .containsEntry("EXPECTED_HEAD_SHA", "${{ github.event.pull_request.head.sha }}");
@@ -356,6 +358,7 @@ class FfmpegAutomationWorkflowTest {
         .doesNotContain("proposed/buildpacks/ffmpeg/bin", "proposed/buildpacks/ffmpeg/lib");
     assertThat(names)
         .containsSubsequence(
+            "Require a maintaining approver",
             "Require approval of the current head",
             "Bind approved notice inventory from trusted code",
             "Mint lock bot token",
@@ -368,6 +371,58 @@ class FfmpegAutomationWorkflowTest {
             "expectedHeadOid: $expectedHead",
             "additions: [{path: \"buildpacks/ffmpeg/notices/manifest\", contents: $contents}]")
         .doesNotContain("git commit", "git push", "deletions");
+  }
+
+  @ParameterizedTest
+  @CsvSource({"admin,true", "maintain,true", "write,false", "triage,false", "read,false"})
+  @DisplayName("Should let only an approver who maintains this repository bind the inventory")
+  void shouldLetOnlyAnApproverWhoMaintainsThisRepositoryBindTheInventory(String role, boolean binds)
+      throws Exception {
+    var requests = temporaryDirectory.resolve("requests");
+    var commands = Files.createDirectory(temporaryDirectory.resolve("commands"));
+    ScriptCommand.writeFake(
+        commands,
+        "gh",
+        """
+        printf '%s\\n' "$*" >>"${FAKE_REQUESTS}"
+        printf '%s\\n' "${FAKE_ROLE}"
+        """);
+
+    var result =
+        maintainingApproverStep()
+            .prependPath(commands)
+            .environment("FAKE_REQUESTS", requests.toString())
+            .environment("FAKE_ROLE", role)
+            .execute();
+
+    assertThat(Files.readAllLines(requests))
+        .containsExactly(
+            "api repos/streamarr/streamarr-transcode-worker/collaborators/an-approver/permission"
+                + " --jq .role_name");
+    if (binds) {
+      assertThat(result.exitCode()).as(result.output()).isZero();
+      return;
+    }
+
+    assertThat(result.exitCode()).as(result.output()).isNotZero();
+    assertThat(result.output()).contains("an-approver", role);
+  }
+
+  @Test
+  @DisplayName("Should refuse the approval when the approver's permission cannot be read")
+  void shouldRefuseTheApprovalWhenTheApproversPermissionCannotBeRead() throws Exception {
+    var commands = Files.createDirectory(temporaryDirectory.resolve("commands"));
+    ScriptCommand.writeFake(
+        commands,
+        "gh",
+        """
+        printf 'gh: Not Found (HTTP 404)\\n' >&2
+        exit 1
+        """);
+
+    var result = maintainingApproverStep().prependPath(commands).execute();
+
+    assertThat(result.exitCode()).as(result.output()).isNotZero();
   }
 
   @ParameterizedTest
@@ -817,6 +872,17 @@ class FfmpegAutomationWorkflowTest {
         .environment("GITHUB_WORKSPACE", workspace.toString())
         .environment("RUNNER_TEMP", temporaryDirectory.toString())
         .environment("GITHUB_OUTPUT", temporaryDirectory.resolve("outputs").toString());
+  }
+
+  private ScriptCommand maintainingApproverStep() throws IOException {
+    ScriptCommand.writeFake(
+        temporaryDirectory,
+        "require-maintaining-approver",
+        (String) stepNamed(approvalSteps(), "Require a maintaining approver").get("run"));
+    return ScriptCommand.of(temporaryDirectory.resolve("require-maintaining-approver"))
+        .environment("GH_TOKEN", "the workflow token")
+        .environment("GITHUB_REPOSITORY", "streamarr/streamarr-transcode-worker")
+        .environment("APPROVER", "an-approver");
   }
 
   private ScriptCommand requestReviewStep() throws IOException {

@@ -294,9 +294,11 @@ The synchronization workflow does the mechanical work and leaves the judgement t
    that failed leaves that architecture's `buildconf` alone.
    Only a run started by Renovate's own push replaces anything but the lock: every other push
    may carry a correction, so its files stay as pushed and the run warns where they differ.
-4. `.github/workflows/approve-ffmpeg-notices.yml` binds the manifest when a repository owner,
-   member or collaborator submits an **approving review** of the labelled pull request's
-   current head. `review-release --approved` writes only the manifest, and only when the
+4. `.github/workflows/approve-ffmpeg-notices.yml` binds the manifest when someone whose
+   permission on this repository is `admin` or `maintain` submits an **approving review** of
+   the labelled pull request's current head. Its first step asks the API for that role, because
+   a review's `author_association` reports organization membership, which carries no permission
+   here. `review-release --approved` writes only the manifest, and only when the
    approved inputs already describe the locked release. A later synchronization that finds
    nothing to commit keeps that approval and does not ask again; one that produces anything
    the approval did not cover withdraws the binding along with it.
