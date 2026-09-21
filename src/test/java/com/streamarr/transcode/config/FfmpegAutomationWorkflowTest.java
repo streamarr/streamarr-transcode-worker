@@ -375,8 +375,8 @@ class FfmpegAutomationWorkflowTest {
     "true, renovate[bot], true, true",
     "true, streamarr-release[bot], false, false",
     "true, a-maintainer, false, false",
-    "false, renovate[bot], true, false",
-    "false, a-maintainer, false, false"
+    "false, renovate[bot], true, true",
+    "false, a-maintainer, false, true"
   })
   @DisplayName(
       "Should replace pushed reviewed inputs only when Renovate started a confirmed review")
@@ -394,12 +394,11 @@ class FfmpegAutomationWorkflowTest {
             .execute();
 
     assertThat(result.exitCode()).as(result.output()).isZero();
-    var replacedPaths = pathsOf(outputs, "blobs");
-    var regenerated =
-        REGENERATED_INPUTS.stream().filter(path -> carriesTheManifest || !path.equals(MANIFEST));
-    assertThat(replacedPaths)
-        .containsExactlyElementsOf(
-            replaced ? Stream.concat(Stream.of(LOCK), regenerated).toList() : List.of(LOCK));
+    var carried =
+        REGENERATED_INPUTS.stream()
+            .filter(path -> path.equals(MANIFEST) ? carriesTheManifest : replaced);
+    assertThat(pathsOf(outputs, "blobs"))
+        .containsExactlyElementsOf(Stream.concat(Stream.of(LOCK), carried).toList());
     assertThat(output(outputs, "headline"))
         .isEqualTo(
             reviewed.equals("true")
@@ -437,7 +436,7 @@ class FfmpegAutomationWorkflowTest {
     assertThat(pathsOf(outputs, "blobs"))
         .containsExactlyInAnyOrderElementsOf(
             Stream.of(
-                    Stream.of(LOCK),
+                    Stream.of(LOCK, MANIFEST),
                     captured ? Stream.of(CAPTURED_BUILDCONF) : Stream.<String>empty(),
                     regenerated
                         ? REGENERATED_INPUTS.stream().filter(path -> !path.equals(MANIFEST))
@@ -446,6 +445,41 @@ class FfmpegAutomationWorkflowTest {
                 .toList());
     assertThat(pathsOf(outputs, "deletions"))
         .containsExactlyElementsOf(regenerated ? List.of(HEAD_ONLY_NOTICE) : List.of());
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {true, false})
+  @DisplayName("Should withdraw a bound manifest when an unreviewed run commits an inventory")
+  void shouldWithdrawABoundManifestWhenAnUnreviewedRunCommitsAnInventory(boolean producedAnything)
+      throws Exception {
+    var workspace =
+        producedAnything
+            ? workspaceWhoseHeadDiffersFromTheTrustedCheckout()
+            : workspaceWhoseHeadMatchesTheTrustedCheckout();
+    var outputs = temporaryDirectory.resolve("outputs");
+    recordRegeneratedInputs();
+
+    var result =
+        prepareStep(workspace)
+            .environment("REVIEWED", "false")
+            .environment("SENDER", "renovate[bot]")
+            .execute();
+
+    assertThat(result.exitCode()).as(result.output()).isZero();
+    if (!producedAnything) {
+      assertThat(pathsOf(outputs, "blobs")).isEmpty();
+      assertThat(pathsOf(outputs, "deletions")).isEmpty();
+      assertThat(output(outputs, "changed")).isEqualTo("false");
+      assertThat(output(outputs, "approved")).isEqualTo("true");
+      return;
+    }
+
+    assertThat(pathsOf(outputs, "blobs")).contains(MANIFEST);
+    assertThat(contentCommittedFor(workspace, outputs, MANIFEST))
+        .isEqualTo(Files.readString(workspace.resolve("trusted").resolve(MANIFEST)))
+        .isNotEqualTo(Files.readString(workspace.resolve("proposed").resolve(MANIFEST)));
+    assertThat(output(outputs, "changed")).isEqualTo("true");
+    assertThat(output(outputs, "approved")).isEqualTo("false");
   }
 
   @ParameterizedTest
@@ -710,6 +744,42 @@ class FfmpegAutomationWorkflowTest {
     }
     seedProposedHead(workspace);
     return workspace;
+  }
+
+  private Path workspaceWhoseHeadMatchesTheTrustedCheckout() throws Exception {
+    var workspace = Files.createDirectory(temporaryDirectory.resolve("workspace"));
+    for (var path : Stream.concat(Stream.of(LOCK), REVIEWED_INPUTS.stream()).toList()) {
+      for (var checkout : List.of("trusted", "proposed")) {
+        var file = workspace.resolve(checkout).resolve(path);
+        Files.createDirectories(file.getParent());
+        Files.writeString(file, "%s as both checkouts hold it\n".formatted(path));
+      }
+    }
+    ScriptCommand.writeFake(
+        Files.createDirectories(workspace.resolve("trusted/buildpacks/ffmpeg/bin")),
+        "update-lock",
+        "exit 0");
+    seedProposedHead(workspace);
+    return workspace;
+  }
+
+  private String contentCommittedFor(Path workspace, Path outputs, String path) throws Exception {
+    ScriptCommand.writeFake(
+        temporaryDirectory, "read-proposed-blob", "git -C \"$1\" cat-file blob \"$2\"");
+    var blob =
+        nodes(new ObjectMapper().readTree(output(outputs, "blobs")))
+            .filter(entry -> path.equals(entry.path("path").asString()))
+            .map(entry -> entry.path("blob").asString())
+            .findFirst()
+            .orElseThrow();
+    var read =
+        ScriptCommand.of(temporaryDirectory.resolve("read-proposed-blob"))
+            .argument(workspace.resolve("proposed").toString())
+            .argument(blob)
+            .execute();
+
+    assertThat(read.exitCode()).as(read.output()).isZero();
+    return read.output();
   }
 
   private void seedProposedHead(Path workspace) throws Exception {

@@ -283,20 +283,23 @@ The synchronization workflow does the mechanical work and leaves the judgement t
    `bin/vendor-notices.mjs`, and runs `bin/review-release` when nothing in the inventory or the
    build configurations changed.
 3. An unchanged inventory is bound and committed with the lock. A changed one is committed
-   without `notices/manifest`, so CI stays red; the pull request gets the
-   `ffmpeg-notices-review` label and a comment listing what changed. A commit carries only what
-   the run produced: a pin the tool cannot follow degrades to a lock-only commit, leaving every
-   notice input and `SOURCE.txt` as the head holds them and deleting none, and its comment asks
-   for a regeneration pushed to the branch first, because an approval binds only inputs that
-   describe the locked release; a capture that failed leaves that architecture's `buildconf`
-   alone.
+   without a binding: an approval covers only the content it was submitted on, so a commit that
+   carries anything else restores the base's `notices/manifest` in that same commit. That
+   manifest names the previous release, so CI stays red until an approval of the new head binds
+   it; the pull request gets the `ffmpeg-notices-review` label and a comment listing what
+   changed. A commit carries only what the run produced: a pin the tool cannot follow degrades
+   to the lock and that withdrawal, leaving every notice input and `SOURCE.txt` as the head
+   holds them and deleting none, and its comment asks for a regeneration pushed to the branch
+   first, because an approval binds only inputs that describe the locked release; a capture
+   that failed leaves that architecture's `buildconf` alone.
    Only a run started by Renovate's own push replaces anything but the lock: every other push
    may carry a correction, so its files stay as pushed and the run warns where they differ.
 4. `.github/workflows/approve-ffmpeg-notices.yml` binds the manifest when a repository owner,
    member or collaborator submits an **approving review** of the labelled pull request's
    current head. `review-release --approved` writes only the manifest, and only when the
-   approved inputs already describe the locked release. A later synchronization never undoes
-   that approval and does not ask again while the head still validates.
+   approved inputs already describe the locked release. A later synchronization that finds
+   nothing to commit keeps that approval and does not ask again; one that produces anything
+   the approval did not cover withdraws the binding along with it.
 
 Renovate rebuilds its branch when it rebases, which discards the bot's commits; the workflow
 then regenerates them, and a changed inventory needs a fresh approval.
@@ -314,7 +317,8 @@ trigger further workflows. The approval workflow runs on `pull_request_review`, 
 base-only variant, so it likewise checks out and executes only the base revision's scripts.
 
 GitHub's `createCommitOnBranch` API creates a signed commit limited to the lock, `SOURCE.txt`
-and `notices/`; `notices/manifest` is included only after a confirmed or approved review.
+and `notices/`; `notices/manifest` is bound only by a confirmed or approved review, and an
+unreviewed commit may only withdraw it.
 Its `expectedHeadOid` check rejects a moved branch atomically. The App token triggers normal
 PR checks after the commit; the default Actions token would suppress those runs.
 

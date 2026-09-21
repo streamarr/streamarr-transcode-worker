@@ -227,7 +227,7 @@ jobs:
             headline='behavioral: synchronize FFmpeg lock and unchanged notice review'
           fi
 
-          # An unreviewed run never touches the manifest, so it cannot undo a maintainer's approval.
+          # Only a confirmed review writes the manifest here; an unreviewed run may only withdraw it.
           blobs='[]'
           while IFS= read -r -d '' path; do
             if [[ "${path}" == "${manifest}" && "${REVIEWED}" != 'true' ]]; then
@@ -268,6 +268,18 @@ jobs:
                 deletions="$(jq -c --arg path "${path}" '. + [{path: $path}]' <<<"${deletions}")"
               fi
             done < <(git -C proposed ls-tree -r --name-only HEAD -- buildpacks/ffmpeg/notices)
+          fi
+
+          # An approval covers the content it was submitted on, so a commit that adds anything else
+          # withdraws the binding in the same commit: the base's manifest names the previous
+          # release, CI goes red again, and the next approval binds this head for real.
+          if [[ "${REVIEWED}" != 'true' && ( "${blobs}" != '[]' || "${deletions}" != '[]' ) ]]; then
+            bound="$(git -C proposed rev-parse "HEAD:${manifest}" 2>/dev/null || true)"
+            blob="$(git -C proposed hash-object -w "${GITHUB_WORKSPACE}/trusted/${manifest}")"
+            if [[ "${blob}" != "${bound}" ]]; then
+              blobs="$(jq -c --arg path "${manifest}" --arg blob "${blob}" \
+                '. + [{path: $path, blob: $blob}]' <<<"${blobs}")"
+            fi
           fi
 
           approved=false
