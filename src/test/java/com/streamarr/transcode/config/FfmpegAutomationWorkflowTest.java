@@ -46,6 +46,7 @@ class FfmpegAutomationWorkflowTest {
   private static final String CAPTURED_BUILDCONF = buildconfNotice("amd64");
   private static final String UNCAPTURED_BUILDCONF = buildconfNotice("arm64");
   private static final String HEAD_ONLY_NOTICE = "buildpacks/ffmpeg/notices/x264/COPYING";
+  private static final String ANOTHER_HEAD = "0".repeat(40);
 
   @TempDir Path temporaryDirectory;
 
@@ -456,6 +457,34 @@ class FfmpegAutomationWorkflowTest {
     var result = maintainingApproverStep().prependPath(commands).execute();
 
     assertThat(result.exitCode()).as(result.output()).isNotZero();
+  }
+
+  @ParameterizedTest
+  @CsvSource({"the approval,false", "the branch,false", "the checkout,false", "nothing,true"})
+  @DisplayName("Should bind only the Renovate head the approval, branch and checkout agree on")
+  void shouldBindOnlyTheRenovateHeadTheApprovalBranchAndCheckoutAgreeOn(
+      String moved, boolean covered) throws Exception {
+    var workspace = approvedWorkspace();
+    var commands = Files.createDirectory(temporaryDirectory.resolve("commands"));
+    ScriptCommand.writeFake(commands, "gh", "printf '%s\\n' \"${FAKE_HEAD_SHA}\"");
+    // The checked-out revision is the one this run cannot restate, so moving it moves the rest.
+    var expected = moved.equals("the checkout") ? ANOTHER_HEAD : headOf(workspace);
+
+    var result =
+        currentHeadStep(workspace)
+            .prependPath(commands)
+            .environment("APPROVED_SHA", moved.equals("the approval") ? ANOTHER_HEAD : expected)
+            .environment("EXPECTED_HEAD_SHA", expected)
+            .environment("FAKE_HEAD_SHA", moved.equals("the branch") ? ANOTHER_HEAD : expected)
+            .execute();
+
+    if (covered) {
+      assertThat(result.exitCode()).as(result.output()).isZero();
+      return;
+    }
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(1);
+    assertThat(result.output()).contains("The approval does not cover the current Renovate head");
   }
 
   @ParameterizedTest
@@ -1037,6 +1066,39 @@ class FfmpegAutomationWorkflowTest {
                 "GITHUB_WORKSPACE",
                 Files.createDirectory(temporaryDirectory.resolve("workspace")).toString())
             .environment("RUNNER_TEMP", temporaryDirectory.toString()));
+  }
+
+  private Path approvedWorkspace() throws Exception {
+    var workspace = Files.createDirectory(temporaryDirectory.resolve("workspace"));
+    writeCheckoutCopy(workspace.resolve("proposed"), LOCK);
+    seedProposedHead(workspace);
+    return workspace;
+  }
+
+  private String headOf(Path workspace) throws Exception {
+    ScriptCommand.writeFake(
+        temporaryDirectory, "read-proposed-head", "git -C \"$1/proposed\" rev-parse HEAD");
+    var read =
+        ScriptCommand.of(temporaryDirectory.resolve("read-proposed-head"))
+            .argument(workspace.toString())
+            .execute();
+
+    assertThat(read.exitCode()).as(read.output()).isZero();
+    return read.output().strip();
+  }
+
+  private ScriptCommand currentHeadStep(Path workspace) throws IOException {
+    ScriptCommand.writeFake(
+        temporaryDirectory,
+        "require-approval-of-the-current-head",
+        "cd \"${GITHUB_WORKSPACE}\"\n"
+            + stepNamed(approvalSteps(), "Require approval of the current head").get("run"));
+    return ScriptCommand.of(temporaryDirectory.resolve("require-approval-of-the-current-head"))
+        .environment("GITHUB_WORKSPACE", workspace.toString())
+        .environment("GH_TOKEN", "the workflow token")
+        .environment("GITHUB_REPOSITORY", "streamarr/streamarr-transcode-worker")
+        .environment("HEAD_REF", "renovate/jellyfin-ffmpeg")
+        .environment("PR_NUMBER", "21");
   }
 
   private ScriptCommand maintainingApproverStep() throws IOException {
