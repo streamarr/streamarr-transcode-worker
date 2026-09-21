@@ -964,6 +964,26 @@ class FfmpegReleaseReviewTest {
   }
 
   @Test
+  @DisplayName("Should refuse an approval when the source offer names a longer release tag")
+  void shouldRefuseAnApprovalWhenTheSourceOfferNamesALongerReleaseTag() throws Exception {
+    var review = review();
+    rebindRevision(review.inventory());
+    rebindRevision(review.sourceAccess());
+    Files.writeString(
+        review.sourceAccess(),
+        Files.readString(review.sourceAccess())
+            .replace(
+                "releases/tag/" + reviewed("release"), "releases/tag/" + LOCKED_RELEASE + "0"));
+    var reviewedInputs = review.reviewedInputs();
+
+    var result = review.approved().execute();
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(1);
+    assertThat(result.output()).contains("do not describe the locked release");
+    assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
+  }
+
+  @Test
   @DisplayName("Should refuse an approval when the source offer omits the locked source revision")
   void shouldRefuseAnApprovalWhenTheSourceOfferOmitsTheLockedSourceRevision() throws Exception {
     var review = review();

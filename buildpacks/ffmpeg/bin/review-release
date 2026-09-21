@@ -285,7 +285,7 @@ if [[ "${approved}" == true ]]; then
   if ! jq -e --arg revision "${approved_revision}" \
     '[.[] | select(.id == "ffmpeg")] | length == 1 and .[0].revision == $revision' \
     "${inventory}" >/dev/null \
-    || ! grep -Fq "releases/tag/${approved_release}" "${source_access}" \
+    || ! grep -Eq "$(whole_value "releases/tag/${approved_release}")" "${source_access}" \
     || ! grep -Fq "${approved_revision}" "${source_access}"; then
     echo "Reviewed inputs do not describe the locked release; regenerate them before approving" >&2
     exit 1
