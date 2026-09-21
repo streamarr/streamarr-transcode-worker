@@ -938,6 +938,39 @@ class FfmpegReleaseReviewTest {
     assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
   }
 
+  @Test
+  @DisplayName("Should refuse an approval when the source offer still names the reviewed release")
+  void shouldRefuseAnApprovalWhenTheSourceOfferStillNamesTheReviewedRelease() throws Exception {
+    var review = review();
+    rebindRevision(review.inventory());
+    rebindRevision(review.sourceAccess());
+    var reviewedInputs = review.reviewedInputs();
+
+    var result = review.approved().execute();
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(1);
+    assertThat(result.output()).contains("do not describe the locked release");
+    assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
+  }
+
+  @Test
+  @DisplayName("Should refuse an approval when the source offer omits the locked source revision")
+  void shouldRefuseAnApprovalWhenTheSourceOfferOmitsTheLockedSourceRevision() throws Exception {
+    var review = review();
+    rebindRevision(review.inventory());
+    Files.writeString(
+        review.sourceAccess(),
+        Files.readString(review.sourceAccess())
+            .replace("releases/tag/" + reviewed("release"), "releases/tag/" + LOCKED_RELEASE));
+    var reviewedInputs = review.reviewedInputs();
+
+    var result = review.approved().execute();
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(1);
+    assertThat(result.output()).contains("do not describe the locked release");
+    assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
+  }
+
   @ParameterizedTest
   @ValueSource(
       strings = {
@@ -1085,6 +1118,11 @@ class FfmpegReleaseReviewTest {
         cp "${file}" "${output}"
         """);
     return new ReviewFixture(repository, commands, temporaryDirectory);
+  }
+
+  private static void rebindRevision(Path input) throws IOException {
+    Files.writeString(
+        input, Files.readString(input).replace(reviewed("source_revision"), LOCKED_REVISION));
   }
 
   private static String reviewed(String key) throws IOException {
