@@ -364,7 +364,8 @@ if ! jq -e --arg revision "${locked_revision}" \
   || ! grep -Eq "$(whole_value "releases/tag/${locked_release}")" \
     "${temporary_directory}/SOURCE.txt" \
   || ! grep -Fq "${locked_revision}" "${temporary_directory}/SOURCE.txt"; then
-  echo "Reviewed inputs do not reference the reviewed release as expected; bind them by hand" >&2
+  echo "Reviewed inputs do not reference the reviewed release as expected;" \
+    "regenerate them and bind with an approving review" >&2
   exit 1
 fi
 write_manifest "${temporary_directory}/manifest"

@@ -846,7 +846,7 @@ class FfmpegReleaseReviewTest {
     var result = review.execute();
 
     assertThat(result.exitCode()).as(result.output()).isEqualTo(1);
-    assertThat(result.output()).contains("bind them by hand");
+    assertThat(result.output()).contains("regenerate them and bind with an approving review");
     assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
   }
 

@@ -14,6 +14,7 @@ buildpacks/ffmpeg/bin/update-lock --release v8.1.2-4
 buildpacks/ffmpeg/bin/update-lock --check
 buildpacks/ffmpeg/bin/update-lock --verify-upstream
 buildpacks/ffmpeg/bin/review-release
+buildpacks/ffmpeg/bin/review-release --approved
 node buildpacks/ffmpeg/bin/vendor-notices.mjs --dry-run
 ```
 
@@ -66,8 +67,12 @@ the `ffmpeg` entry of `notices/sources.json` and `SOURCE.txt` to the locked rele
 buildpack supplies the rest of the evidence by rejecting a binary whose `-buildconf` differs
 from the reviewed capture. A dependency recipe, toolchain image, licence text or FFmpeg
 source file that upstream changes directly instead exits with status 3, names the paths and
-changes nothing. Then review both binaries and their dependencies, update the notices and
-source instructions, and update the manifest by hand.
+changes nothing. Then review both binaries and their dependencies, regenerate the notices and
+source instructions with `bin/vendor-notices.mjs` and the captures with `bin/capture-buildconf`,
+review the diff, and bind `notices/manifest` with an approving review of the labelled Renovate
+pull request (see [Renovate synchronization](#renovate-synchronization)), or with
+`bin/review-release --approved` for a change Renovate did not propose. Never edit
+`notices/manifest` by hand.
 
 Jellyfin's quilt patches under `debian/patches/` are judged by what they do, not by their
 path: upstream's Linux build applies them to the FFmpeg tree before compiling, so a patch can
