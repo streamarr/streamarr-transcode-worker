@@ -1221,6 +1221,10 @@ class FfmpegAutomationWorkflowTest {
         exit "${FAKE_REVIEW_EXIT}"
         """);
     var trusted = workspace.resolve("trusted");
+    Files.copy(
+        Path.of(CAPTURED_BUILDCONF),
+        Files.createDirectories(trusted.resolve("buildpacks/ffmpeg/notices"))
+            .resolve(buildconfFile("amd64")));
     for (var arguments :
         List.of(
             List.of("git", "init", "--quiet"),
