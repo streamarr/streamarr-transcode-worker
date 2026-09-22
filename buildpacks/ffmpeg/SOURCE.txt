@@ -1,7 +1,7 @@
 FFmpeg / Jellyfin binary redistribution materials
 
-Binary release: https://github.com/jellyfin/jellyfin-ffmpeg/releases/tag/v8.1.2-4
-FFmpeg source revision: 6c051dec38eb0e88d2d4d3c54b13014bf69f9799
+Binary release: https://github.com/jellyfin/jellyfin-ffmpeg/releases/tag/v8.1.2-5
+FFmpeg source revision: 5b16ac4eeef9559e652faac4a5907c3de6e15eb8
 Targets: portable Linux GPL, amd64 and arm64
 
 Corresponding Source
@@ -9,9 +9,9 @@ Corresponding Source
 The source code for FFmpeg, the bundled libraries, and the scripts controlling
 compilation is available without charge at the upstream repositories and exact
 revisions listed below. Obtain FFmpeg and its Jellyfin patches/build recipes at:
-https://github.com/jellyfin/jellyfin-ffmpeg/tree/6c051dec38eb0e88d2d4d3c54b13014bf69f9799
+https://github.com/jellyfin/jellyfin-ffmpeg/tree/5b16ac4eeef9559e652faac4a5907c3de6e15eb8
 Source archive:
-https://codeload.github.com/jellyfin/jellyfin-ffmpeg/tar.gz/6c051dec38eb0e88d2d4d3c54b13014bf69f9799
+https://codeload.github.com/jellyfin/jellyfin-ffmpeg/tar.gz/5b16ac4eeef9559e652faac4a5907c3de6e15eb8
 
 Follow the upstream builder/README.md. From builder/, run ./makeimage.sh linux64 gpl
 and ./build.sh linux64 gpl; use linuxarm64 instead of linux64 for ARM. The
@@ -103,7 +103,7 @@ fdk-aac-stripped (amd64, arm64)
 ffmpeg (amd64, arm64)
   FFmpeg and ffprobe executables, including Jellyfin patches.
   Repository: https://github.com/jellyfin/jellyfin-ffmpeg
-  Revision: 6c051dec38eb0e88d2d4d3c54b13014bf69f9799
+  Revision: 5b16ac4eeef9559e652faac4a5907c3de6e15eb8
   Recipe: builder
   Notices: see notices/sources.json (ffmpeg)
 
