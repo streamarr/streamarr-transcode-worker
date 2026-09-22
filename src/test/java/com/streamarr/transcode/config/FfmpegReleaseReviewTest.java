@@ -600,7 +600,7 @@ class FfmpegReleaseReviewTest {
                     .status("modified")
                     .path(PATCH)
                     .reviewed(reviewed)
-                    .locked(reviewed.replaceFirst("=++\n", edit))
+                    .locked(withEditOutsideHunks(reviewed, edit))
                     .build())
             .execute();
 
@@ -1044,6 +1044,13 @@ class FfmpegReleaseReviewTest {
         .filter(line -> line.startsWith(prefix))
         .map(line -> line.substring(prefix.length()))
         .collect(Collectors.joining());
+  }
+
+  // The separator line follows Index:, so replacing it puts the edit outside every hunk.
+  private static String withEditOutsideHunks(String patch, String edit) {
+    var separatorStart = patch.indexOf("\n=") + 1;
+    var separatorEnd = patch.indexOf('\n', separatorStart) + 1;
+    return patch.substring(0, separatorStart) + edit + patch.substring(separatorEnd);
   }
 
   private static String modifying(String target, String addedLine) {
