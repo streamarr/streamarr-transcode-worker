@@ -14,6 +14,7 @@ buildpacks/ffmpeg/bin/update-lock --release v8.1.2-4
 buildpacks/ffmpeg/bin/update-lock --check
 buildpacks/ffmpeg/bin/update-lock --verify-upstream
 buildpacks/ffmpeg/bin/review-release
+node buildpacks/ffmpeg/bin/vendor-notices.mjs --dry-run
 ```
 
 The resolver requires Bash, `curl`, and `jq`. Offline input validation also requires
@@ -98,6 +99,105 @@ source file, including a file that its reviewed version already created. The cha
 patch series are outside the inventory by decision, not because they are harmless: quilt
 applies whatever the series names with the options it gives, so an entry could apply the
 changelog as a patch or reverse a patch with `-R`.
+
+`bin/vendor-notices.mjs` regenerates the reviewed inputs from upstream when the inventory did
+change. For the locked revision it reads the pin of every component from its recorded evidence:
+the `SCRIPT_REPO`/`SCRIPT_COMMIT` pair of a `builder/scripts.d` recipe matched by repository, a
+parent's `DEPS` file or submodule link, or the toolchain images' `ct-ng-config`. A moved pin has
+its notice URLs rewritten and each text fetched again. A notice without `"excerpt": true` in the
+inventory was reviewed as the whole file and is read with the first view, the whole file or the
+whole file with LF line endings, that reproduces it from the reviewed origin: a licence file that
+gains terms after a comment or marker, or whose vendored bytes change their line endings, is a
+changed text. The tool fails when neither view reproduces it, as when a moved tag serves more than
+the review read. Several excerpt views (leading comment, licence comment blocks, text before
+`/** @file`) can reproduce an excerpt from the reviewed origin; nothing records which one the
+review used, so the new text is read with every one that does. It is unchanged only while each of them still
+yields the reviewed bytes. When they find one new text, that text is vendored even if another
+view still yields the reviewed bytes; when they find different new texts, the tool fails. Licence
+files are never decoded: a file that is not UTF-8, or that starts with a byte order
+mark, is hashed, excerpted and written as upstream's bytes. Whatever else describes the pin moves with it: a notice that records `upstreamSha256`, the
+checksum of an origin whose bytes differ from the vendored text, gets the checksum of the new
+origin, and a toolchain component's role, like the prose of `SOURCE.txt` for any pin, names the
+new version or revision where it named the old one as a whole token. A version inside a longer
+dotted one, such as `2.28` in `4.2.28`, is left alone, but a file extension does not make a token
+longer: `<revision>.tar.gz` names the new revision. The role
+of every moved toolchain component is listed as a toolchain role to review, because a person can
+name the version in any wording, such as `GCC 15`, `v15.2.0` or `gcc15`, that no rewrite finds.
+Every other role and `version_note` is a person's wording and stays as reviewed. A recipe that swaps a dependency's
+mirror is followed to the new repository. A
+recipe that upstream renames or regroups is followed by repository, to the recipe that pins it
+first or else to the only one that pins it, and reported as moved: the reviewed entry keeps
+everything but its recipe path, and the `DEPS` entries and submodules resolved through it stay.
+A recipe that another reviewed component of the same repository is still built from is not
+followed to: it builds that component's library from another branch, as `50-rkmpp.sh` and
+`50-rkrga.sh` both pin `rk-mirrors`.
+A component that no recipe pins any more moves with the components built with it when they all
+moved to one recipe, and a repository swapped there is followed as it is in place. The tool fails
+when several recipes qualify. Any other component whose recipe is gone counts as dropped: it is
+removed, and notice files that nothing references are deleted. A recipe renamed together with a
+swap of its repository looks the same, so it is reported as a removed and an added component,
+and the tool fails when the added id is a reviewed one or when `DEPS` entries or submodules are
+resolved through the removed component, rather than drop dependencies that are still linked.
+
+Every pin of a recipe that is in the binaries must be claimed by a component, matched by
+repository and revision across the whole inventory, or the tool proposes it as a new component.
+The revision counts because one repository can hold several libraries on its branches, as
+`rk-mirrors` holds rkmpp and rkrga. The architectures count because a recipe puts what it builds
+in every binary it is in: a component claims a pin only when it covers every architecture the
+recipe is built for, so a component built for one binary, as amf and libvpl are for amd64 and
+libne10, rkmpp and rkrga for arm64, does not account for that source in the other. A component
+the review built from this recipe claims its own pin whatever architectures it records, because
+the review read that recipe. That covers a pin an inventoried recipe gains, as
+`20-libiconv.sh` gained gnulib, and a pin that moves away from the revision a component of
+another recipe records. A recipe is in the
+binaries when a component is already built from it, when the reviewed build configurations
+enable one of the `--enable-*` flags it echoes, or when it has none and its path is new since
+the review. A recipe that a review left out is therefore proposed once a refreshed capture
+shows its flag, while one without flags stays out until upstream gives it a new path. A recipe's
+flags are the `--enable-*` words of every line that runs `echo` or `printf`, wherever the command
+stands on the line and whatever else it prints, as in `[[ $TARGET == linux* ]] && echo --enable-vaapi`
+or `echo --disable-w32threads --enable-pthreads`. A line continued with a backslash counts as one
+line, a comment is not read, and options a recipe passes to its own build are not flags. An unclaimed pin of a recipe in the binaries is proposed again on every run until
+a component records it: a dependency that is only a build input is recorded with the
+`build-input` distribution. A proposed component gets the
+architectures that rule names and its licence files come from the repository listing. Its id
+comes from the recipe name, or from the repository name for a later pin, and also names its
+notice directory: the tool fails rather than propose an id that the generator would refuse or
+that a reviewed or another proposed component holds, or a pin that names a branch instead of a
+commit and so names no source to read a licence text from. New `DEPS` entries and submodules are not
+discovered: they are followed only for components the inventory already records.
+
+Notices whose texts were byte-identical at review share one file, within a component (OpenMPT's
+two licence files, ffnvcodec's header excerpts) or across components. When some of them change,
+every distinct text of the group ends in one file. The file keeps the text of the notice it is
+named after, or else of the first notice in its component's directory; when neither remains, it
+keeps the reviewed text. Every other text, including a reviewed text that is still in use, moves to
+the file named after the first notice that carries it. The tool changes nothing if a planned file
+would not hold the text recorded for every notice that references it, or if two paths of the
+planned tree, including those of a proposed component, or a path and one `notices/` already
+holds, differ only by letter case: a checkout on a case-insensitive filesystem, as on macOS,
+holds two spellings of a file, and of a directory above it, as one, so a text written under the
+second spelling would land in the file that holds the first and be deleted with it, because
+nothing references the spelling that file is read under.
+
+The tool writes `notices/sources.json`, the notice files and `SOURCE.txt`, whose component
+index is generated from the inventory. It never writes `notices/manifest`, changes nothing when
+it cannot follow a pin, and ends by stating whether inventory content changed. Pins, paths and
+transfer diagnostics in the report come from upstream, so control characters and line breaks in
+them are printed as `\uXXXX` escapes: only the tool's own closing line of a successful run starts
+with `Inventory content`. The report is printed only after the inputs are written, so a failed
+run, including one that fails while writing, has no such line. The comparison is with
+`notices/sources.json` in the working tree, which is the reviewed inventory only while its `ffmpeg`
+entry names the revision that `notices/manifest` binds. The tool writes only for a release the
+manifest does not bind, and its output moves that entry, so a further run on a regenerated
+inventory, `--dry-run` included, states that the content was not compared with the review instead
+of calling it unchanged: review the regenerated inputs against the reviewed commit. At the release
+the manifest binds, a run only reports, even without `--dry-run`, because a rewritten inventory
+there would still name the bound revision and pass for the reviewed one: a person records a change
+it reports, or restores the reviewed inputs when the lock returns to that release. Generated roles,
+`LicenseRef-<component>` fallbacks and discovered licence files are proposals for the reviewer.
+Refresh the buildconf captures first when the binaries' configuration changed. `--dry-run`
+reports without writing.
 
 The [tooling pin](.nvmrc) selects Node.js 24 LTS as the tested toolchain. CI selects
 that exact version; local tooling accepts the same major. The generator itself
