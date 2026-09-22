@@ -409,26 +409,31 @@ async function licenseExpression(id, repository) {
     }
 }
 
-// A recipe prints its flags for FFmpeg's configure and passes others to its own build, so a flag is
-// an --enable-* word on a line that runs echo or printf, wherever the command stands and whatever else
-// it prints. Upstream writes the recipe, so every pattern here matches in time linear in its length.
-const configureFlags = (text) =>
+// A recipe is read line by line: a line continued with a backslash counts as one, and a comment is
+// not read. Upstream writes the recipe, so every pattern here matches in time linear in its length.
+const commandLines = (text) =>
     text
         .replace(/\\\r?\n/g, " ")
         .split("\n")
-        .map((line) => line.replace(/(?:^|\s)#.*/, ""))
-        .filter((line) => /(?:^|[\s;&|({`])(?:echo|printf)(?:\s|$)/.test(line))
+        .map((line) => line.replace(/(?:^|\s)#.*/, ""));
+
+// Whether the line runs one of the commands, wherever it stands on the line.
+const runs = (line, commands) =>
+    new RegExp(`(?:^|[\\s;&|({\`])(?:${commands})(?:\\s|$)`).test(line);
+
+// A recipe prints its flags for FFmpeg's configure and passes others to its own build, so a flag is
+// an --enable-* word on a line that runs echo or printf, whatever else it prints.
+const configureFlags = (text) =>
+    commandLines(text)
+        .filter((line) => runs(line, "echo|printf"))
         .flatMap((line) => line.split(/[\s"';&|(){}`]+/))
         .filter((word) => /^--enable-[a-z0-9-]+$/.test(word));
 
 // A recipe that runs gen-implib builds its library shared, generates Implib stubs that dlopen it and
 // deletes the shared library, so the binaries carry only its headers and the stubs and load the
-// system library at run time. Comments are not read, and only a command word counts.
+// system library at run time.
 const generatesImportShims = (text) =>
-    text
-        .split("\n")
-        .map((line) => line.replace(/(?:^|\s)#.*/, ""))
-        .some((line) => /(?:^|[\s;&|({`])gen-implib(?:\s|$)/.test(line));
+    commandLines(text).some((line) => runs(line, "gen-implib"));
 
 // The binaries that contain what a recipe builds: those whose reviewed build configuration has one
 // of its flags, else those of the components already built from it, else, for a recipe without
