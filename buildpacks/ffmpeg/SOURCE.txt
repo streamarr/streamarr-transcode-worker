@@ -283,6 +283,13 @@ libunibreak (amd64, arm64)
   Recipe: builder/scripts.d/45-libunibreak.sh
   Notices: see notices/sources.json (libunibreak)
 
+libva (amd64, arm64)
+  VA-API headers used with generated import shims; system libva and its drivers are not bundled.
+  Repository: https://github.com/intel/libva
+  Revision: 710eb465c6277ee2cac3e6948767b01eebe7e77a
+  Recipe: builder/scripts.d/50-vaapi/50-libva.sh
+  Notices: see notices/sources.json (libva)
+
 libvorbis (amd64, arm64)
   Static audio codec (--enable-libvorbis).
   Repository: https://github.com/xiph/vorbis
