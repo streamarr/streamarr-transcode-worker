@@ -303,6 +303,40 @@ class FfmpegReleaseReviewTest {
   }
 
   @Test
+  @DisplayName(
+      "Should report what a patch creates when upstream also changes a path inside the inventory")
+  void shouldReportWhatAPatchCreatesWhenUpstreamAlsoChangesAPathInsideTheInventory()
+      throws Exception {
+    var recipe = "builder/scripts.d/50-x264.sh";
+    var review =
+        review()
+            .upstreamChanges("debian/changelog", recipe)
+            .upstreamPatch(
+                PatchChange.builder()
+                    .status("added")
+                    .path(PATCH)
+                    .locked(
+                        modifying("libavcodec/bsf/Makefile", "bsf/trim.o")
+                            + creating("libavcodec/bsf/trim.c"))
+                    .build());
+    var reviewedInputs = review.reviewedInputs();
+    var realRun = review.execute();
+
+    var dryRun = review.dryRun().execute();
+
+    assertThat(realRun.exitCode()).as(realRun.output()).isEqualTo(HUMAN_REVIEW_REQUIRED);
+    assertThat(dryRun.exitCode()).as(dryRun.output()).isEqualTo(HUMAN_REVIEW_REQUIRED);
+    assertThat(dryRun.output())
+        .isEqualTo(realRun.output())
+        .contains(
+            new ObjectMapper().writeValueAsString(recipe),
+            PATCH + " creates libavcodec/bsf/trim.c");
+    assertThat(review.upstreamRequests())
+        .contains("%s/%s?ref=%s".formatted(CONTENTS_URL, PATCH, LOCKED_REVISION));
+    assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
+  }
+
+  @Test
   @DisplayName("Should leave the reviewed inputs unwritten when a dry run finds nothing changed")
   void shouldLeaveTheReviewedInputsUnwrittenWhenADryRunFindsNothingChanged() throws Exception {
     var review = review().upstreamChanges("debian/changelog", "debian/patches/series");

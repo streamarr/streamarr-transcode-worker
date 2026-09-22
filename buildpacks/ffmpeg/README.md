@@ -77,7 +77,10 @@ them, so a person can read what the inspection found; it does not combine with `
 buildpack supplies the rest of the evidence by rejecting a binary whose `-buildconf` differs
 from the reviewed capture. A dependency recipe, toolchain image, licence text or FFmpeg
 source file that upstream changes directly instead exits with status 3, names the paths and
-changes nothing. Then review both binaries and their dependencies, regenerate the notices and
+changes nothing. That does not skip the patch inspection below: the script collects every
+reason and exits once, naming what the patches do before the paths, because the
+synchronization workflow cuts a long report short and a change list can hold hundreds of
+paths. Then review both binaries and their dependencies, regenerate the notices and
 source instructions with `bin/vendor-notices.mjs` and the captures with `bin/capture-buildconf`,
 review the diff, and bind `notices/manifest` with an approving review of the labelled Renovate
 pull request (see [Renovate synchronization](#renovate-synchronization)), or with

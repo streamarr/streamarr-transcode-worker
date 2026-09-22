@@ -362,17 +362,25 @@ while IFS= read -r encoded_path \
   && IFS= read -r encoded_status; do
   examine_change "${encoded_path}" "${encoded_previous_path}" "${encoded_status}"
 done <"${changes}"
-if (( ${#inventoried_paths[@]} > 0 )); then
-  require_human_review "upstream changed $(IFS=' '; echo "${inventoried_paths[*]}")"
-fi
 
+# An inventoried path already needs a person, but only this inspection can say what a patch
+# creates, so every reason joins one report. The patch findings come first because the
+# synchronization workflow cuts a long report short, and a change list can hold hundreds of paths.
+findings=()
 for (( patch = 0; patch < ${#patch_paths[@]}; patch += 1 )); do
   review_patch_change \
     "${patch_paths[patch]}" "${patch_previous_paths[patch]}" "${patch_statuses[patch]}"
 done
 if (( ${#review_reasons[@]} > 0 )); then
   printf -v reasons '%s; ' "${review_reasons[@]}"
-  require_human_review "upstream changed what its patches do: ${reasons%; }"
+  findings+=("upstream changed what its patches do: ${reasons%; }")
+fi
+if (( ${#inventoried_paths[@]} > 0 )); then
+  findings+=("upstream changed $(IFS=' '; echo "${inventoried_paths[*]}")")
+fi
+if (( ${#findings[@]} > 0 )); then
+  printf -v reasons '%s; ' "${findings[@]}"
+  require_human_review "${reasons%; }"
 fi
 
 cp "${inventory}" "${temporary_directory}/sources.json"
