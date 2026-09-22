@@ -409,17 +409,31 @@ async function licenseExpression(id, repository) {
     }
 }
 
-// A recipe prints its flags for FFmpeg's configure and passes others to its own build, so a flag is
-// an --enable-* word on a line that runs echo or printf, wherever the command stands and whatever else
-// it prints. Upstream writes the recipe, so every pattern here matches in time linear in its length.
-const configureFlags = (text) =>
+// A recipe is read line by line: a line continued with a backslash counts as one, and a comment is
+// not read. Upstream writes the recipe, so every pattern here matches in time linear in its length.
+const commandLines = (text) =>
     text
         .replace(/\\\r?\n/g, " ")
         .split("\n")
-        .map((line) => line.replace(/(?:^|\s)#.*/, ""))
-        .filter((line) => /(?:^|[\s;&|({`])(?:echo|printf)(?:\s|$)/.test(line))
+        .map((line) => line.replace(/(?:^|\s)#.*/, ""));
+
+// Whether the line runs one of the commands, wherever it stands on the line.
+const runs = (line, commands) =>
+    new RegExp(`(?:^|[\\s;&|({\`])(?:${commands})(?:\\s|$)`).test(line);
+
+// A recipe prints its flags for FFmpeg's configure and passes others to its own build, so a flag is
+// an --enable-* word on a line that runs echo or printf, whatever else it prints.
+const configureFlags = (text) =>
+    commandLines(text)
+        .filter((line) => runs(line, "echo|printf"))
         .flatMap((line) => line.split(/[\s"';&|(){}`]+/))
         .filter((word) => /^--enable-[a-z0-9-]+$/.test(word));
+
+// A recipe that runs gen-implib builds its library shared, generates Implib stubs that dlopen it and
+// deletes the shared library, so the binaries carry only its headers and the stubs and load the
+// system library at run time.
+const generatesImportShims = (text) =>
+    commandLines(text).some((line) => runs(line, "gen-implib"));
 
 // The binaries that contain what a recipe builds: those whose reviewed build configuration has one
 // of its flags, else those of the components already built from it, else, for a recipe without
@@ -465,8 +479,23 @@ const claimedFor = ({ citing, components, architectures }) => (pin) =>
                 )),
     );
 
+// The role and distribution a proposal gets: what a recipe builds is in the binaries as a static
+// library, or, when the recipe generates import shims, as compiled-in headers alone.
+function proposedShape({ recipe, flags, shims }) {
+    const built = flags.length ? `(${flags.join(" ")})` : `built by ${recipe.file}`;
+    if (shims)
+        return {
+            role: `Headers used with generated import shims ${built}; the system library is not bundled.`,
+            distribution: "embedded",
+        };
+    return {
+        role: flags.length ? `Static library ${built}.` : `Static dependency ${built}.`,
+        distribution: "runtime",
+    };
+}
+
 // Proposes a component for every pin of the recipe that no component claims.
-async function newComponents({ recipe, flags, architectures, claimed, ids }) {
+async function newComponents({ recipe, flags, shims, architectures, claimed, ids }) {
     const pins = recipePins(recipe.text)
         .map(({ repository, revision }, index) => ({
             repository,
@@ -515,18 +544,17 @@ async function newComponents({ recipe, flags, architectures, claimed, ids }) {
             );
             if (!notices.length)
                 throw new Error(`No license files found for new component ${id}`);
+            const { role, distribution } = proposedShape({ recipe, flags, shims });
             return {
                 id,
                 repository,
                 revision,
                 recipe: recipe.file,
                 architectures,
-                role: flags.length
-                    ? `Static library (${flags.join(" ")}).`
-                    : `Static dependency built by ${recipe.file}.`,
+                role,
                 notices,
                 licenseExpression: await licenseExpression(id, repository),
-                distribution: "runtime",
+                distribution,
                 revisionEvidence: "source",
             };
         }),
@@ -728,7 +756,7 @@ async function main() {
         roles: [],
         relocated: [],
         changed: new Set(),
-        added: [],
+        added: new Map(),
         removed: [],
         ignored: [],
     };
@@ -784,23 +812,26 @@ async function main() {
             if (unreviewed) report.ignored.push(file);
             continue;
         }
+        const shims = generatesImportShims(recipes.get(file));
         const added = await newComponents({
             recipe: { file, text: recipes.get(file) },
             flags,
+            shims,
             architectures,
             claimed: claimedFor({ citing, components, architectures }),
             ids,
         });
         components.push(...added);
-        report.added.push(...added.map((component) => component.id));
+        for (const component of added)
+            report.added.set(component.id, shims ? " (import shim)" : "");
     }
 
     const writes = placeNotices(
-        components.filter((component) => !report.added.includes(component.id)),
+        components.filter((component) => !report.added.has(component.id)),
     );
     for (const component of components) {
         for (const notice of component.notices.filter(hasText)) {
-            if (report.added.includes(component.id)) writes.set(notice.file, notice.text);
+            if (report.added.has(component.id)) writes.set(notice.file, notice.text);
             else report.changed.add(`${component.id} (${notice.file})`);
             delete notice.text;
         }
@@ -835,7 +866,7 @@ async function main() {
         ...report.roles.map((entry) => `Toolchain role to review: ${entry}`),
         ...report.relocated.map((entry) => `Repository moved: ${entry}`),
         ...[...report.changed].map((entry) => `License text changed: ${entry}`),
-        ...report.added.map((id) => `Added component: ${id}`),
+        ...[...report.added].map(([id, kind]) => `Added component: ${id}${kind}`),
         ...report.removed.map((id) => `Removed component: ${id}`),
     ];
     // The report's baseline is notices/sources.json. A rewrite for a new release moves its ffmpeg

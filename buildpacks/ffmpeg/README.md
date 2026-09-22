@@ -14,6 +14,7 @@ buildpacks/ffmpeg/bin/update-lock --release v8.1.2-4
 buildpacks/ffmpeg/bin/update-lock --check
 buildpacks/ffmpeg/bin/update-lock --verify-upstream
 buildpacks/ffmpeg/bin/review-release
+buildpacks/ffmpeg/bin/review-release --dry-run
 buildpacks/ffmpeg/bin/review-release --approved
 node buildpacks/ffmpeg/bin/vendor-notices.mjs --dry-run
 ```
@@ -70,7 +71,9 @@ about to bind to be the ones the manifest bound: a carry-forward may move only t
 and source revision inside them, so undoing that substitution must reproduce the bound content.
 An input edited since the binding exits with status 3, so nothing a working tree carries can
 inherit the review the manifest records. It then rebinds `notices/manifest`,
-the `ffmpeg` entry of `notices/sources.json` and `SOURCE.txt` to the locked release. The
+the `ffmpeg` entry of `notices/sources.json` and `SOURCE.txt` to the locked release.
+`--dry-run` makes the same checks with the same report and exit status and writes none of
+them, so a person can read what the inspection found; it does not combine with `--approved`. The
 buildpack supplies the rest of the evidence by rejecting a binary whose `-buildconf` differs
 from the reviewed capture. A dependency recipe, toolchain image, licence text or FFmpeg
 source file that upstream changes directly instead exits with status 3, names the paths and
@@ -176,8 +179,17 @@ architectures that rule names and its licence files come from the repository lis
 comes from the recipe name, or from the repository name for a later pin, and also names its
 notice directory: the tool fails rather than propose an id that the generator would refuse or
 that a reviewed or another proposed component holds, or a pin that names a branch instead of a
-commit and so names no source to read a licence text from. New `DEPS` entries and submodules are not
-discovered: they are followed only for components the inventory already records.
+commit and so names no source to read a licence text from. A proposal's role and distribution
+follow what its recipe does with the library. A recipe that runs `gen-implib`, as
+`50-vaapi/40-libdrm.sh` and `50-vaapi/50-libva.sh` do, builds the library shared, generates import
+shims (Implib stubs that `dlopen` it) and deletes the shared library, so the binaries carry only the
+stubs and the headers compiled into them and load the system library at run time: its pins are
+proposed with the `embedded` distribution and a role that names the import shims and says the
+system library is not bundled, as libdrm and libva are inventoried, and their licence notices are
+still vendored because the headers are compiled in. The report lists such a proposal as
+`Added component: <id> (import shim)`. The command is read as flags are, on a line of the recipe and
+not in a comment. Any other pin is proposed as a static `runtime` library. New `DEPS` entries and
+submodules are not discovered: they are followed only for components the inventory already records.
 
 Notices whose texts were byte-identical at review share one file, within a component (OpenMPT's
 two licence files, ffnvcodec's header excerpts) or across components. When some of them change,
@@ -294,14 +306,16 @@ The synchronization workflow does the mechanical work and leaves the judgement t
 2. The synchronization job adopts those captures as data: each is a regular file of at most
    64 KiB that starts with the banner and holds nothing but printable bytes and newlines, so an
    adopted capture stays a text the review reads as a diff. It then regenerates the notice inputs
-   with `bin/vendor-notices.mjs`, and runs `bin/review-release` when nothing in the inventory or
-   the build configurations changed.
+   with `bin/vendor-notices.mjs` and runs `bin/review-release`: for real when nothing in the
+   inventory or the build configurations changed, and with `--dry-run` otherwise, so that what
+   upstream's patches do reaches the report even when a person has to review anyway.
 3. An unchanged inventory is bound and committed with the lock. A changed one is committed
    without a binding: an approval covers only the content it was submitted on, so a commit that
    carries anything else restores the base's `notices/manifest` in that same commit. That
    manifest names the previous release, so CI stays red until an approval of the new head binds
    it; the pull request gets the `ffmpeg-notices-review` label and a comment listing what
-   changed. A commit carries only what the run produced: a pin the tool cannot follow degrades
+   changed, including what the patch inspection found. A commit carries only what the run
+   produced: a pin the tool cannot follow degrades
    to the lock, the captures this run adopted and that withdrawal, leaving
    `notices/sources.json` and `SOURCE.txt` as the head holds them and deleting none, and its
    comment asks for a regeneration pushed to the branch first, because an approval binds only

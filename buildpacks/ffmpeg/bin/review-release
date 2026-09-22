@@ -39,9 +39,10 @@ paths_outside_inventory=(
 jellyfin_patch='^debian/patches/[A-Za-z0-9._+-]+\.patch$'
 
 approved=false
+dry_run=false
 
 usage() {
-  echo "Usage: $0 [--approved] [--root REPOSITORY]" >&2
+  echo "Usage: $0 [--approved | --dry-run] [--root REPOSITORY]" >&2
   exit 2
 }
 
@@ -49,6 +50,10 @@ while (( $# > 0 )); do
   case "$1" in
     --approved)
       approved=true
+      shift
+      ;;
+    --dry-run)
+      dry_run=true
       shift
       ;;
     --root)
@@ -61,6 +66,10 @@ while (( $# > 0 )); do
       ;;
   esac
 done
+# An approval exists to write the manifest, so a dry run of it has nothing to report.
+if [[ "${approved}" == true && "${dry_run}" == true ]]; then
+  usage
+fi
 
 buildpack_dir="${repository_root}/buildpacks/ffmpeg"
 lock_file="${buildpack_dir}/ffmpeg.lock"
@@ -398,9 +407,11 @@ if [[ "$(ffmpeg_notices_digest "${carried}")" \
   != "$(ffmpeg_lock_value "${manifest}" inventory_sha256)" ]]; then
   require_human_review "reviewed inputs changed since ${reviewed_release} was bound"
 fi
-mv "${temporary_directory}/sources.json" "${inventory}"
-mv "${temporary_directory}/SOURCE.txt" "${source_access}"
-write_manifest "${temporary_directory}/manifest"
-mv "${temporary_directory}/manifest" "${manifest}"
+if [[ "${dry_run}" == false ]]; then
+  mv "${temporary_directory}/sources.json" "${inventory}"
+  mv "${temporary_directory}/SOURCE.txt" "${source_access}"
+  write_manifest "${temporary_directory}/manifest"
+  mv "${temporary_directory}/manifest" "${manifest}"
+fi
 echo "FFmpeg notice inventory is unchanged from ${reviewed_release} to ${locked_release}:" \
   "${file_count} upstream files changed, none of them inside the inventory"
