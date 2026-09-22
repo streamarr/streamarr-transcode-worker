@@ -524,7 +524,9 @@ class FfmpegPackagingScriptsTest {
                         line ->
                             line.matches("(release|source_revision|amd64_sha256|arm64_sha256)=.*"))
                     .toList())
-            + "\ninventory_sha256=%s\n".formatted("0".repeat(64)));
+            + "\ninventory_sha256="
+            + "0".repeat(64)
+            + "\n");
     generateFixtureMaterials(buildpackRoot);
     var buildpack = buildpack(buildpackScript);
 

@@ -1153,7 +1153,7 @@ class FfmpegAutomationWorkflowTest {
       for (var checkout : List.of("trusted", "proposed")) {
         var file = workspace.resolve(checkout).resolve(path);
         Files.createDirectories(file.getParent());
-        Files.writeString(file, "%s as both checkouts hold it\n".formatted(path));
+        Files.writeString(file, "%s as both checkouts hold it".formatted(path) + "\n");
       }
     }
     ScriptCommand.writeFake(
@@ -1224,7 +1224,7 @@ class FfmpegAutomationWorkflowTest {
     var file = checkout.resolve(path);
     Files.createDirectories(file.getParent());
     Files.writeString(
-        file, "%s as the %s checkout holds it\n".formatted(path, checkout.getFileName()));
+        file, "%s as the %s checkout holds it".formatted(path, checkout.getFileName()) + "\n");
   }
 
   private ScriptCommand prepareStep(Path workspace) throws IOException {
@@ -1281,8 +1281,8 @@ class FfmpegAutomationWorkflowTest {
     }
   }
 
-  private List<String> recordedLines(String record) throws IOException {
-    var recorded = temporaryDirectory.resolve(record);
+  private List<String> recordedLines(String fileName) throws IOException {
+    var recorded = temporaryDirectory.resolve(fileName);
     return Files.exists(recorded) ? Files.readAllLines(recorded) : List.of();
   }
 
@@ -1298,7 +1298,7 @@ class FfmpegAutomationWorkflowTest {
   private void captureHolding(String architecture, String configuration) throws IOException {
     Files.writeString(
         capturePath(architecture),
-        "ffmpeg version 7.1.1-Jellyfin\nconfiguration: %s\n".formatted(configuration));
+        "ffmpeg version 7.1.1-Jellyfin\nconfiguration: " + configuration + "\n");
   }
 
   private void captureCopiedFrom(String architecture, Path reviewed) throws IOException {
