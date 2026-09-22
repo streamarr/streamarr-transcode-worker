@@ -11,11 +11,12 @@ Quick reference for all GitNexus MCP tools, resources, and the knowledge graph s
 
 For any task involving code understanding, debugging, impact analysis, or refactoring:
 
-1. **Read `gitnexus://repo/{name}/context`** — codebase overview + check index freshness
-2. **Match your task to a skill below** and **read that skill file**
-3. **Follow the skill's workflow and checklist**
+1. **Bind the repository with `list_repos`** — select the intended registered path; follow the pagination instructions below if more entries are needed to resolve ambiguity
+2. **Read `gitnexus://repo/{name}/context`** for that repository — codebase overview + check index freshness
+3. **Match your task to a skill below** and **read that skill file**
+4. **Follow the skill's workflow and checklist**
 
-> If step 1 warns the index is stale, run `node .gitnexus/run.cjs analyze` in the terminal first.
+> If step 2 warns the index is stale, run `node .gitnexus/run.cjs analyze --index-only` in the terminal first.
 
 ## Skills
 
@@ -98,7 +99,7 @@ A repo indexed without `--pdg` returns a clear "no taint layer" note. Caveats: c
 - `pdg_query { mode: "controls", target: "..." }` — CDG: "under what condition does X run?". Each edge is a controlling predicate block → dependent block with the branch sense (`'T'`/`'F'`) in `reason`; an edge into an early `return`/`throw` is flagged `guard: true` (guard-clause discovery — the sense depends on the predicate, so don't filter guards by a fixed label).
 - `pdg_query { mode: "flows", target: "...", variable?: "..." }` — REACHING_DEF def→use edges within the function; pass `variable` to trace one binding.
 
-A repo indexed without `--pdg` returns a "no PDG layer" note (or "status unknown" when the layer can't be confirmed). Intra-procedural only — cross-function flow is taint's domain (`explain`). The raw CDG/REACHING_DEF edges are also queryable via `cypher`. See the `gitnexus-pdg-query` skill for the full query surface.
+A repo indexed without `--pdg` returns a "no PDG layer" note (or "status unknown" when the layer can't be confirmed). Intra-procedural only — cross-function flow is taint's domain (`explain`). The raw CDG/REACHING_DEF edges are also queryable via `cypher`. Consult the `pdg_query` tool schema for the complete parameters and result contract.
 
 ### Shortest path between two symbols (`trace`)
 

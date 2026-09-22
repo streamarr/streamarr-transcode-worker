@@ -35,17 +35,21 @@ written, so read them as a confirmation of identity.
 MCP server was not launched from; otherwise `git diff` runs in the wrong
 checkout and reports nothing changed, which reads as a verified refactor.
 
+In the examples below, `boundRepo` is the selected repository name, or its
+registered absolute path when names collide. Add `worktree` to each
+`detect_changes` call when required by the checkout context above.
+
 ## Workflow
 
 ```
 0. list_repos {}                                  → Bind repo (and worktree)
-1. impact({target: "X", direction: "upstream"})  → Map all dependents
-2. query({search_query: "X"})                            → Find execution flows involving X
-3. context({name: "X"})                           → See all incoming/outgoing refs
+1. impact({target: "X", direction: "upstream", repo: boundRepo}) → Map all dependents
+2. query({search_query: "X", repo: boundRepo}) → Find execution flows involving X
+3. context({name: "X", repo: boundRepo}) → See all incoming/outgoing refs
 4. Plan update order: interfaces → implementations → callers → tests
 ```
 
-> If "Index is stale" → run `node .gitnexus/run.cjs analyze` in terminal.
+> If "Index is stale" → run `node .gitnexus/run.cjs analyze --index-only` in terminal.
 
 ## Checklists
 
@@ -53,11 +57,12 @@ checkout and reports nothing changed, which reads as a verified refactor.
 
 ```
 - [ ] list_repos {} — bind repo; explicit repo when >1 indexed, ask if ambiguous
-- [ ] rename({symbol_name: "oldName", new_name: "newName", dry_run: true}) — preview all edits
+- [ ] impact({target: "oldName", direction: "upstream", repo: boundRepo}) — assess dependents before editing
+- [ ] rename({symbol_name: "oldName", new_name: "newName", repo: boundRepo, dry_run: true}) — preview all edits
 - [ ] Confirm the previewed file paths are in the bound repository/worktree
 - [ ] Review graph edits (high confidence) and text_search edits (review carefully)
-- [ ] If satisfied: rename({..., dry_run: false}) — apply edits
-- [ ] detect_changes() — verify only expected files changed
+- [ ] If satisfied: rename({symbol_name: "oldName", new_name: "newName", repo: boundRepo, dry_run: false}) — apply edits
+- [ ] detect_changes({scope: "all", repo: boundRepo}) — verify staged and unstaged changes
 - [ ] Run tests for affected processes
 ```
 
@@ -65,11 +70,11 @@ checkout and reports nothing changed, which reads as a verified refactor.
 
 ```
 - [ ] list_repos {} — bind repo; explicit repo when >1 indexed, ask if ambiguous
-- [ ] context({name: target}) — see all incoming/outgoing refs
-- [ ] impact({target, direction: "upstream"}) — find all external callers
+- [ ] context({name: target, repo: boundRepo}) — see all incoming/outgoing refs
+- [ ] impact({target, direction: "upstream", repo: boundRepo}) — find all external callers
 - [ ] Define new module interface
 - [ ] Extract code, update imports
-- [ ] detect_changes() — verify affected scope
+- [ ] detect_changes({scope: "all", repo: boundRepo}) — verify staged and unstaged changes
 - [ ] Run tests for affected processes
 ```
 
@@ -77,12 +82,12 @@ checkout and reports nothing changed, which reads as a verified refactor.
 
 ```
 - [ ] list_repos {} — bind repo; explicit repo when >1 indexed, ask if ambiguous
-- [ ] context({name: target}) — understand all callees
+- [ ] context({name: target, repo: boundRepo}) — understand all callees
 - [ ] Group callees by responsibility
-- [ ] impact({target, direction: "upstream"}) — map callers to update
+- [ ] impact({target, direction: "upstream", repo: boundRepo}) — map callers to update
 - [ ] Create new functions/services
 - [ ] Update callers
-- [ ] detect_changes() — verify affected scope
+- [ ] detect_changes({scope: "all", repo: boundRepo}) — verify staged and unstaged changes
 - [ ] Run tests for affected processes
 ```
 
@@ -108,7 +113,7 @@ impact({target: "validateUser", repo: "my-app", direction: "upstream"})
 **detect_changes** — verify your changes after refactoring:
 
 ```
-detect_changes({scope: "all"})
+detect_changes({scope: "all", repo: boundRepo})
 → Changed: 8 files, 12 symbols
 → Affected processes: LoginFlow, TokenRefresh
 → Risk: MEDIUM
@@ -145,16 +150,19 @@ RETURN caller.name, caller.filePath ORDER BY caller.filePath
 0. list_repos {}
    → total: 2 (my-app, billing-api) — both define validateUser, so bind explicitly
 
-1. rename({symbol_name: "validateUser", new_name: "authenticateUser", repo: "my-app", dry_run: true})
+1. impact({target: "validateUser", direction: "upstream", repo: "my-app"})
+   → Review affected callers and processes; report risk before applying edits
+
+2. rename({symbol_name: "validateUser", new_name: "authenticateUser", repo: "my-app", dry_run: true})
    → 12 edits: 10 graph (safe), 2 text_search (review)
    → Files: validator.ts, login.ts, middleware.ts, config.json...
 
-2. Review text_search edits (config.json: dynamic reference!)
+3. Review text_search edits (config.json: dynamic reference!)
 
-3. rename({symbol_name: "validateUser", new_name: "authenticateUser", repo: "my-app", dry_run: false})
+4. rename({symbol_name: "validateUser", new_name: "authenticateUser", repo: "my-app", dry_run: false})
    → Applied 12 edits across 8 files
 
-4. detect_changes({scope: "all", repo: "my-app"})
+5. detect_changes({scope: "all", repo: "my-app"})
    → Affected: LoginFlow, TokenRefresh
    → Risk: MEDIUM — run tests for these flows
    Repository: my-app (/abs/path/my-app)  Worktree: same  Index: current
