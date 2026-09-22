@@ -292,11 +292,17 @@ jobs:
           # Only a regenerated inventory says which notices no longer belong to it, and removing
           # one replaces the head as much as rewriting one does, so the same push decides both.
           deletions='[]'
-          if [[ -e "${regenerated}" && "${SENDER}" == 'renovate[bot]' ]]; then
+          if [[ -e "${regenerated}" ]]; then
             while IFS= read -r path; do
-              if [[ ! -e "trusted/${path}" ]]; then
-                deletions="$(jq -c --arg path "${path}" '. + [{path: $path}]' <<<"${deletions}")"
+              if [[ -e "trusted/${path}" ]]; then
+                continue
               fi
+              if [[ "${SENDER}" != 'renovate[bot]' ]]; then
+                echo "::warning title=FFmpeg notice review::${path} is not in this run's output and stays as pushed"
+                continue
+              fi
+
+              deletions="$(jq -c --arg path "${path}" '. + [{path: $path}]' <<<"${deletions}")"
             done < <(git -C proposed ls-tree -r --name-only HEAD -- buildpacks/ffmpeg/notices)
           fi
 

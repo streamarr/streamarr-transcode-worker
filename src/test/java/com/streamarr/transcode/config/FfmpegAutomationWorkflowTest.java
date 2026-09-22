@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -673,6 +674,28 @@ class FfmpegAutomationWorkflowTest {
     assertThat(pathsOf(outputs, "deletions")).isEmpty();
   }
 
+  @Test
+  @DisplayName("Should keep an approved binding when the approval's own commit reran the run")
+  void shouldKeepAnApprovedBindingWhenTheApprovalsOwnCommitReranTheRun() throws Exception {
+    var workspace = workspaceWhoseApprovedHeadHoldsANoticeTheBaseDoesNot();
+    var outputs = temporaryDirectory.resolve("outputs");
+    recordRegeneratedInputs();
+
+    var result =
+        prepareStep(workspace)
+            .environment("REVIEWED", "false")
+            .environment("SENDER", "streamarr-release[bot]")
+            .execute();
+
+    assertThat(result.exitCode()).as(result.output()).isZero();
+    assertThat(result.output().lines().filter(line -> line.startsWith("::warning ")))
+        .anySatisfy(warning -> assertThat(warning).contains(HEAD_ONLY_NOTICE, "stays as pushed"));
+    assertThat(pathsOf(outputs, "blobs")).isEmpty();
+    assertThat(pathsOf(outputs, "deletions")).isEmpty();
+    assertThat(output(outputs, "changed")).isEqualTo("false");
+    assertThat(output(outputs, "approved")).isEqualTo("true");
+  }
+
   @ParameterizedTest
   @ValueSource(booleans = {true, false})
   @DisplayName("Should withdraw a bound manifest when an unreviewed run commits an inventory")
@@ -1117,6 +1140,25 @@ class FfmpegAutomationWorkflowTest {
         Files.createDirectories(workspace.resolve("trusted/buildpacks/ffmpeg/bin")),
         "update-lock",
         "exit 0");
+    seedProposedHead(workspace);
+    return workspace;
+  }
+
+  private Path workspaceWhoseApprovedHeadHoldsANoticeTheBaseDoesNot() throws Exception {
+    var workspace = Files.createDirectory(temporaryDirectory.resolve("workspace"));
+    var trusted = workspace.resolve("trusted");
+    var proposed = workspace.resolve("proposed");
+    for (var path : Stream.concat(Stream.of(LOCK), REVIEWED_INPUTS.stream()).toList()) {
+      for (var checkout : List.of(trusted, proposed)) {
+        writeCheckoutCopy(checkout, path);
+      }
+    }
+    // An earlier run already synchronized the lock, and an approving review bound the inventory
+    // the maintainer pushed, so only the notice they added is missing from the base.
+    Files.copy(trusted.resolve(LOCK), proposed.resolve(LOCK), StandardCopyOption.REPLACE_EXISTING);
+    writeCheckoutCopy(proposed, HEAD_ONLY_NOTICE);
+    ScriptCommand.writeFake(
+        Files.createDirectories(trusted.resolve("buildpacks/ffmpeg/bin")), "update-lock", "exit 0");
     seedProposedHead(workspace);
     return workspace;
   }
