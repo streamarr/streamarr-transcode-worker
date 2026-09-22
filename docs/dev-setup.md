@@ -54,6 +54,20 @@ Settings are read from the environment at startup. The three variables in the ex
 | `TRANSCODE_WORKER_SEGMENT_BASE_PATH` | `streamarr-worker-segments` under Java's temporary directory | Temporary segment storage; use a separate directory for each worker |
 | `SERVER_PORT` | `9091` | HTTP port for health checks |
 
+### Filename Locale
+
+The worker must run under a UTF-8 locale. Java resolves source keys and passes media paths to FFprobe and FFmpeg using `sun.jnu.encoding`, which follows the process locale rather than `file.encoding`. Under an ASCII locale such as `POSIX`, media with non-ASCII names cannot be opened and probes fail as `PROBE_FAILURE_SOURCE_UNAVAILABLE`.
+
+The published image defaults `LANG` to `C.UTF-8`. `LC_ALL` and `LC_CTYPE` override `LANG`; if you set either, use a UTF-8 value such as `C.UTF-8`. When the effective encoding is not UTF-8, the worker logs a warning at startup that names the variable responsible.
+
+To check a running container's effective encoding:
+
+```shell
+docker exec <worker-container> /cnb/lifecycle/launcher java -XshowSettings:properties -version 2>&1 | grep sun.jnu.encoding
+```
+
+It should report `UTF-8`. To recover, correct the locale and restart the worker. The worker treats source keys as literal filename text, so do not rename media or rewrite the server's stored library paths; the server retries failed probes against the same files.
+
 ### Health and Shutdown
 
 Spring Boot Actuator serves `/actuator/health/liveness` and `/actuator/health/readiness` on port `9091`. Readiness requires an accepted server session; a worker with all slots occupied remains ready.
