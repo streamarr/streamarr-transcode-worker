@@ -32,6 +32,13 @@ public class TranscodeWorkerApplication {
   }
 
   @Bean
+  ApplicationRunner nativeFilenameEncodingCheck() {
+    return _ ->
+        new NativeFilenameEncodingCheck(System.getProperty("sun.jnu.encoding", ""), System.getenv())
+            .warnUnlessUtf8();
+  }
+
+  @Bean
   TranscodeWorkerSettings workerSettings() {
     return TranscodeWorkerSettings.fromEnvironment(System.getenv());
   }
