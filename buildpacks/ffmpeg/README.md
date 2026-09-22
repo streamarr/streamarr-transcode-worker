@@ -65,7 +65,11 @@ the image, not just links to them.
 unchanged. It compares the reviewed and locked upstream revisions and requires the locked
 revision to descend from the reviewed one, the change list to be complete, and every changed
 path to lie outside the inventory: Jellyfin's changelog and patch series, the package
-version, and files used only by macOS or Windows builds. It then rebinds `notices/manifest`,
+version, and files used only by macOS or Windows builds. It also requires the inputs it is
+about to bind to be the ones the manifest bound: a carry-forward may move only the release tag
+and source revision inside them, so undoing that substitution must reproduce the bound content.
+An input edited since the binding exits with status 3, so nothing a working tree carries can
+inherit the review the manifest records. It then rebinds `notices/manifest`,
 the `ffmpeg` entry of `notices/sources.json` and `SOURCE.txt` to the locked release. The
 buildpack supplies the rest of the evidence by rejecting a binary whose `-buildconf` differs
 from the reviewed capture. A dependency recipe, toolchain image, licence text or FFmpeg

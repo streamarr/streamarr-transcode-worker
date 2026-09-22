@@ -837,6 +837,23 @@ class FfmpegReleaseReviewTest {
   }
 
   @Test
+  @DisplayName("Should require human review when a reviewed input changed since it was bound")
+  void shouldRequireHumanReviewWhenAReviewedInputChangedSinceItWasBound() throws Exception {
+    var review = review().upstreamChanges("debian/changelog");
+    Files.writeString(
+        review.sourceAccess(),
+        Files.readString(review.sourceAccess())
+            .replace("https://codeload.github.com/", "https://mirror.invalid/"));
+    var reviewedInputs = review.reviewedInputs();
+
+    var result = review.execute();
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(HUMAN_REVIEW_REQUIRED);
+    assertThat(result.output()).contains("changed since " + reviewed("release") + " was bound");
+    assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
+  }
+
+  @Test
   @DisplayName("Should fail without approving anything when the source offer names a longer tag")
   void shouldFailWithoutApprovingAnythingWhenTheSourceOfferNamesALongerTag() throws Exception {
     var review = review(reviewed("release") + "0").upstreamChanges("debian/changelog");

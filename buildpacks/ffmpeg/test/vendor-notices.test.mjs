@@ -291,6 +291,21 @@ test("Should rebind only the FFmpeg revision when no upstream pin moved", (t) =>
     assert.equal(validation.status, 0, validation.stderr);
 });
 
+// The carry-forward binds a regenerated tree only while undoing those two substitutions restores
+// the content the manifest bound, so a rewrite of anything else would send every bump to review.
+test("Should leave a regenerated inventory a carry-forward can restore when no pin moved", (t) => {
+    const { buildpack, read, run, write } = fixture(t);
+    const bound = inventoryDigest(buildpack);
+
+    const result = run();
+
+    assert.equal(result.status, 0, result.output);
+    assert.match(result.output, /Inventory content unchanged/);
+    for (const input of ["notices/sources.json", "SOURCE.txt"])
+        write(input, read(input).replaceAll(LOCKED, REVIEWED).replaceAll("releases/tag/v9.0.0-1", "releases/tag/v8.1.2-4"));
+    assert.equal(inventoryDigest(buildpack), bound);
+});
+
 test("Should follow a moved pin without touching an unchanged license text", (t) => {
     const { inventory, read, recipes, run, serve, serveRecipes, validate } = fixture(t);
     serveRecipes(LOCKED, new Map(recipes).set("50-alpha.sh", recipe([["https://github.com/example/alpha", ALPHA_2]], "--enable-libalpha")));

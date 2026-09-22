@@ -382,6 +382,22 @@ if ! jq -e --arg revision "${locked_revision}" \
     "regenerate them and bind with an approving review" >&2
   exit 1
 fi
+# A carry-forward inherits a review, so it may move only the release tag and source revision
+# inside the reviewed inputs: undoing that substitution must reproduce the content the manifest
+# bound. The inputs already name the locked release when a bind was interrupted or the
+# synchronization workflow regenerated them, so their digest alone cannot tell that from an edit.
+carried="${temporary_directory}/carried"
+mkdir "${carried}"
+cp -R "${buildpack_dir}/notices" "${carried}/notices"
+cp "${source_access}" "${carried}/SOURCE.txt"
+replace_in_file "${carried}/notices/sources.json" "${locked_revision}" "${reviewed_revision}"
+replace_in_file "${carried}/SOURCE.txt" "${locked_revision}" "${reviewed_revision}"
+replace_in_file "${carried}/SOURCE.txt" \
+  "releases/tag/${locked_release}" "releases/tag/${reviewed_release}"
+if [[ "$(ffmpeg_notices_digest "${carried}")" \
+  != "$(ffmpeg_lock_value "${manifest}" inventory_sha256)" ]]; then
+  require_human_review "reviewed inputs changed since ${reviewed_release} was bound"
+fi
 mv "${temporary_directory}/sources.json" "${inventory}"
 mv "${temporary_directory}/SOURCE.txt" "${source_access}"
 write_manifest "${temporary_directory}/manifest"
