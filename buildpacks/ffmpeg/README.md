@@ -306,14 +306,16 @@ The synchronization workflow does the mechanical work and leaves the judgement t
 2. The synchronization job adopts those captures as data: each is a regular file of at most
    64 KiB that starts with the banner and holds nothing but printable bytes and newlines, so an
    adopted capture stays a text the review reads as a diff. It then regenerates the notice inputs
-   with `bin/vendor-notices.mjs`, and runs `bin/review-release` when nothing in the inventory or
-   the build configurations changed.
+   with `bin/vendor-notices.mjs` and runs `bin/review-release`: for real when nothing in the
+   inventory or the build configurations changed, and with `--dry-run` otherwise, so that what
+   upstream's patches do reaches the report even when a person has to review anyway.
 3. An unchanged inventory is bound and committed with the lock. A changed one is committed
    without a binding: an approval covers only the content it was submitted on, so a commit that
    carries anything else restores the base's `notices/manifest` in that same commit. That
    manifest names the previous release, so CI stays red until an approval of the new head binds
    it; the pull request gets the `ffmpeg-notices-review` label and a comment listing what
-   changed. A commit carries only what the run produced: a pin the tool cannot follow degrades
+   changed, including what the patch inspection found. A commit carries only what the run
+   produced: a pin the tool cannot follow degrades
    to the lock, the captures this run adopted and that withdrawal, leaving
    `notices/sources.json` and `SOURCE.txt` as the head holds them and deleting none, and its
    comment asks for a regeneration pushed to the branch first, because an approval binds only

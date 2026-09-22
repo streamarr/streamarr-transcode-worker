@@ -381,8 +381,9 @@ class FfmpegAutomationWorkflowTest {
         .contains(
             "grep -q '^Inventory content unchanged'",
             "git -C trusted diff --quiet -- 'buildpacks/ffmpeg/notices/buildconf-*.txt'",
+            "if [[ \"${unchanged}\" != 'true' ]]; then",
             "status=3",
-            "if [[ \"${unchanged}\" == 'true' ]]; then");
+            "--dry-run");
     assertThat((String) request.get("if"))
         .isEqualTo(
             "steps.review.outputs.reviewed != 'true' && steps.changes.outputs.approved != 'true'");
@@ -840,7 +841,36 @@ class FfmpegAutomationWorkflowTest {
 
     assertThat(step.result().exitCode()).as(step.result().output()).isZero();
     assertThat(output(step.outputs(), "reviewed")).isEqualTo("false");
-    assertThat(Files.readAllLines(step.summary())).doesNotContain(confirmation);
+    assertThat(step.reviewerInvocations())
+        .containsExactly("--root " + step.trustedCheckout() + " --dry-run");
+  }
+
+  @Test
+  @DisplayName("Should report what a patch does without binding when the inventory also changed")
+  void shouldReportWhatAPatchDoesWithoutBindingWhenTheInventoryAlsoChanged() throws Exception {
+    var inspection =
+        "FFmpeg notice inventory needs human review: upstream changed what its patches do:"
+            + " debian/patches/0100-backport-trim-bitstream-filter.patch creates"
+            + " libavcodec/bsf/##[add-mask]trim.c";
+
+    var step =
+        reviewStep()
+            .regenerationReportingAChangedInventory()
+            .reviewerPrinting(inspection)
+            .reviewerExitingWith(3)
+            .execute();
+
+    assertThat(step.result().exitCode()).as(step.result().output()).isZero();
+    assertThat(output(step.outputs(), "reviewed")).isEqualTo("false");
+    assertThat(step.reviewerInvocations())
+        .containsExactly("--root " + step.trustedCheckout() + " --dry-run");
+    assertThat(Files.readAllLines(step.summary()))
+        .containsExactly("```text", CHANGED, inspection, "```");
+    assertThat(linesTheRunnerReadsForCommands(step.result().output()))
+        .containsExactly(
+            "::warning title=FFmpeg notice review::"
+                + (CHANGED + "\n" + inspection).replace("%", "%25").replace("\n", "%0A"));
+    assertThat(step.result().output()).containsPattern("(?m)^::stop-commands::[0-9a-f]{32}$");
   }
 
   @ParameterizedTest
@@ -872,6 +902,7 @@ class FfmpegAutomationWorkflowTest {
 
     assertThat(step.result().exitCode()).as(step.result().output()).isZero();
     assertThat(output(step.outputs(), "reviewed")).isEqualTo("true");
+    assertThat(step.reviewerInvocations()).containsExactly("--root " + step.trustedCheckout());
     assertThat(Files.readAllLines(step.summary())).contains(confirmation);
   }
 
@@ -1451,6 +1482,7 @@ class FfmpegAutomationWorkflowTest {
 
   private static final String REGENERATED =
       "Inventory content unchanged; only the FFmpeg revision was rebound.";
+  private static final String CHANGED = "Inventory content changed: upstream added mbedtls/LICENSE";
 
   private ReviewStep reviewStep() throws Exception {
     var workspace = Files.createDirectory(temporaryDirectory.resolve("workspace"));
@@ -1460,6 +1492,7 @@ class FfmpegAutomationWorkflowTest {
         commands,
         "review-release",
         """
+        printf '%s\\n' "$*" >>"${FAKE_REVIEW_INVOCATIONS}"
         printf '%s' "${FAKE_REVIEW:-}"
         printf '%s' "${FAKE_DIAGNOSTIC:-}" >&2
         exit "${FAKE_REVIEW_EXIT}"
@@ -1497,7 +1530,10 @@ class FfmpegAutomationWorkflowTest {
             .environment("GITHUB_WORKSPACE", workspace.toString())
             .environment("RUNNER_TEMP", temporaryDirectory.toString())
             .environment("GITHUB_OUTPUT", temporaryDirectory.resolve("outputs").toString())
-            .environment("GITHUB_STEP_SUMMARY", temporaryDirectory.resolve("summary").toString()),
+            .environment("GITHUB_STEP_SUMMARY", temporaryDirectory.resolve("summary").toString())
+            .environment(
+                "FAKE_REVIEW_INVOCATIONS",
+                temporaryDirectory.resolve("review-invocations").toString()),
         temporaryDirectory);
   }
 
@@ -1578,9 +1614,7 @@ class FfmpegAutomationWorkflowTest {
     }
 
     private ReviewStep regenerationReportingAChangedInventory() throws IOException {
-      Files.writeString(
-          temporaryDirectory.resolve("ffmpeg-review"),
-          "Inventory content changed: upstream added mbedtls/LICENSE\n");
+      Files.writeString(temporaryDirectory.resolve("ffmpeg-review"), CHANGED + "\n");
       return this;
     }
 
@@ -1626,6 +1660,14 @@ class FfmpegAutomationWorkflowTest {
 
     private Path summary() {
       return temporaryDirectory.resolve("summary");
+    }
+
+    private List<String> reviewerInvocations() throws IOException {
+      return Files.readAllLines(temporaryDirectory.resolve("review-invocations"));
+    }
+
+    private String trustedCheckout() {
+      return temporaryDirectory.resolve("workspace/trusted").toString();
     }
   }
 
