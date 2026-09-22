@@ -18,6 +18,9 @@ import org.springframework.core.NestedExceptionUtils;
 public class TranscodeWorkerApplication {
 
   public static void main(String[] args) throws InterruptedException {
+    // Settings parse path-bearing variables, which fail under a non-UTF-8 locale.
+    new NativeFilenameEncodingCheck(System.getProperty("sun.jnu.encoding", ""), System.getenv())
+        .warnUnlessUtf8();
     try (var application = SpringApplication.run(TranscodeWorkerApplication.class, args)) {
       application.getBean(TranscodeWorker.class).awaitDisconnection();
     } catch (RuntimeException failure) {
@@ -37,7 +40,8 @@ public class TranscodeWorkerApplication {
   }
 
   @Bean(destroyMethod = "close")
-  TranscodeWorker transcodeWorker(TranscodeWorkerSettings settings) throws Exception {
+  TranscodeWorker transcodeWorker(TranscodeWorkerSettings settings)
+      throws IOException, InterruptedException {
     var capabilities =
         new TranscodeCapabilityService(
             settings.ffmpegPath(), command -> new ProcessBuilder(command).start());

@@ -41,7 +41,8 @@ function buildImage({ version } = {}) {
     const result = spawnSync('bash', [join(directory, '.github/actions/pack-build/build-worker-image.sh'), image, ...version ? [version] : []], {
       cwd: directory, env, encoding: 'utf8',
     });
-    return { ...result, revision, labels: JSON.parse(readFileSync(statePath, 'utf8')).images[image] };
+    const state = JSON.parse(readFileSync(statePath, 'utf8'));
+    return { ...result, revision, labels: state.images[image], environment: state.environments?.[image] };
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -63,4 +64,10 @@ test('Should record the Maven version and source revision when CI supplies no re
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.labels['org.opencontainers.image.version'], '0.1.0-SNAPSHOT');
   assert.equal(result.labels['org.opencontainers.image.revision'], result.revision);
+});
+
+test('Should default the runtime locale to UTF-8 when building the image', () => {
+  const result = buildImage();
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.environment.BPE_DEFAULT_LANG, 'C.UTF-8');
 });

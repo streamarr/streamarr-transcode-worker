@@ -112,6 +112,42 @@ class WorkerMediaSourceResolverTest {
     assertThat(resolver.resolve(source("日本語/%2e%2e/映画.mkv"))).isEqualTo(mediaFile.toRealPath());
   }
 
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "Café Meridian (2006)/Café Meridian (2006).mkv",
+        "Amélie’s Journey.mkv",
+        "기생충 (2019).mkv",
+        "Treble 𝄞 Clef 🎬.mkv",
+        "Ame\u0301lie (2001).mkv",
+        "100%23 Legit + Bonus #1.mkv",
+        "Tricky %2F ..%2F %2E%2E dir/name.mkv"
+      })
+  @DisplayName("Should resolve the literal file when a source key contains Unicode or percents")
+  void shouldResolveLiteralFileWhenSourceKeyContainsUnicodeOrPercents(String relativeKey)
+      throws Exception {
+    var mediaRoot = Files.createDirectory(tempDir.resolve("media"));
+    var mediaFile = mediaRoot.resolve(relativeKey);
+    Files.createDirectories(mediaFile.getParent());
+    Files.writeString(mediaFile, "test media");
+    var resolver = new WorkerMediaSourceResolver(Map.of(SOURCE_NAMESPACE_ID, mediaRoot));
+
+    assertThat(resolver.resolve(source(relativeKey))).isEqualTo(mediaFile.toRealPath());
+  }
+
+  @Test
+  @DisplayName("Should not percent-decode a source key when only the decoded name exists")
+  void shouldNotPercentDecodeSourceKeyWhenOnlyDecodedNameExists() throws Exception {
+    var mediaRoot = Files.createDirectory(tempDir.resolve("media"));
+    Files.writeString(mediaRoot.resolve("100#1.mkv"), "test media");
+    var resolver = new WorkerMediaSourceResolver(Map.of(SOURCE_NAMESPACE_ID, mediaRoot));
+    var source = source("100%231.mkv");
+
+    assertThatThrownBy(() -> resolver.resolve(source))
+        .isInstanceOf(WorkerJobException.class)
+        .hasMessage("Media source is unavailable");
+  }
+
   @Test
   @DisplayName("Should reject a relative key containing NUL when resolving a source")
   void shouldRejectRelativeKeyContainingNulWhenResolvingSource() throws Exception {

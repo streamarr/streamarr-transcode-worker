@@ -3,8 +3,10 @@ package com.streamarr.transcode.worker;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.SOURCE_NAMESPACE_ID;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.requestBuilder;
+import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.sourceBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variantJobBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 
 import build.buf.gen.streamarr.transcode.v1.JobAttemptCompleted;
@@ -12,6 +14,7 @@ import build.buf.gen.streamarr.transcode.v1.JobAttemptFailed;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptStarted;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
+import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.TranscodeMode;
 import build.buf.gen.streamarr.transcode.v1.WorkerRegistration;
 import com.streamarr.transcode.fixtures.image.ImageControlPlane;
@@ -25,6 +28,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Duration;
+import java.util.Base64;
+import java.util.List;
 import java.util.UUID;
 import lombok.Builder;
 import lombok.extern.slf4j.Slf4j;
@@ -35,8 +40,11 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.testcontainers.containers.BindMode;
+import org.testcontainers.containers.ContainerLaunchException;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.output.Slf4jLogConsumer;
+import org.testcontainers.containers.output.ToStringConsumer;
+import org.testcontainers.containers.startupcheck.OneShotStartupCheckStrategy;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.utility.MountableFile;
 import tools.jackson.databind.ObjectMapper;
@@ -45,6 +53,11 @@ import tools.jackson.databind.ObjectMapper;
 @DisplayName("Worker Image Tests")
 @Slf4j
 class WorkerImageIT {
+
+  // A decomposed (NFD) accent, literal percent sequences, and names outside the BMP must all reach
+  // FFprobe and FFmpeg unchanged.
+  private static final String UNICODE_KEY =
+      "東京 Café’s 🎬 %2F ..%2F dir/Ame\u0301lie’s 100%23 #1 한국 𝄞 (2001).mkv";
 
   @TempDir Path media;
 
@@ -167,10 +180,111 @@ class WorkerImageIT {
     }
   }
 
-  private void copyMedia() throws Exception {
+  @Test
+  @DisplayName(
+      "Should probe and stream a Unicode source key when the image runs with its default locale")
+  void shouldProbeAndStreamUnicodeSourceKeyWhenImageRunsWithItsDefaultLocale() throws Exception {
+    copyMedia(UNICODE_KEY);
+    var ffmpeg = recordingExecutable("ffmpeg");
+    var ffprobe = recordingExecutable("ffprobe");
+    try (var image =
+        ImageFixture.builder().media(media).ffmpegPath(ffmpeg).ffprobePath(ffprobe).build()) {
+      image.accept();
+      var probeRequest = requestBuilder().setSource(sourceBuilder().setRelativeKey(UNICODE_KEY));
+
+      var probe =
+          ProbeAttemptResult.parseFrom(image.command("probe", probeRequest.build().toByteArray()));
+
+      assertThat(probe.getMedia().getStreamsList())
+          .filteredOn(stream -> "video".equals(stream.getCodecType()))
+          .singleElement()
+          .satisfies(video -> assertThat(video.getCodec()).isEqualTo("h264"));
+      assertThat(image.recordedArguments("ffprobe")).contains("/media/" + UNICODE_KEY);
+
+      var job = variantJobBuilder().setSource(sourceBuilder().setRelativeKey(UNICODE_KEY)).build();
+
+      var completed = JobAttemptCompleted.parseFrom(image.command("job", job.toByteArray()));
+
+      assertThat(completed.getJobAttemptId()).isEqualTo(job.getJobAttemptId());
+      assertThat(image.command("segment", new byte[0])).isNotEmpty();
+      assertThat(image.recordedArguments("ffmpeg")).contains("/media/" + UNICODE_KEY);
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should diagnose the locale and fail the probe for retry when the image runs under POSIX")
+  void shouldDiagnoseLocaleAndFailProbeForRetryWhenImageRunsUnderPosix() throws Exception {
+    copyMedia(UNICODE_KEY);
+    try (var image = ImageFixture.builder().media(media).filenameLocale("POSIX").build()) {
+      image.accept();
+      var request = requestBuilder().setSource(sourceBuilder().setRelativeKey(UNICODE_KEY)).build();
+
+      var result = ProbeAttemptResult.parseFrom(image.command("probe", request.toByteArray()));
+
+      assertThat(result.getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_SOURCE_UNAVAILABLE);
+      assertThat(image.worker.getLogs())
+          .contains("rather than UTF-8")
+          .contains("the effective locale is LC_ALL=POSIX");
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should diagnose the locale before startup fails when a POSIX worker has a non-ASCII root")
+  void shouldDiagnoseLocaleBeforeStartupFailsWhenPosixWorkerHasNonAsciiRoot() {
+    // A container that fails to launch no longer serves getLogs(), so collect output as it streams.
+    var output = new ToStringConsumer();
+    try (var worker =
+        new GenericContainer<>(workerImage())
+            .withImagePullPolicy(_ -> false)
+            .withLogConsumer(
+                output.andThen(new Slf4jLogConsumer(log).withPrefix("posix-root-worker")))
+            .withEnv("LC_ALL", "POSIX")
+            .withEnv("TRANSCODE_WORKER_ID", UUID.randomUUID().toString())
+            .withEnv("TRANSCODE_WORKER_SOURCE_NAMESPACE_ID", SOURCE_NAMESPACE_ID.toString())
+            .withEnv("TRANSCODE_WORKER_SOURCE_ROOT", "/media/Café")
+            .withStartupCheckStrategy(
+                new OneShotStartupCheckStrategy().withTimeout(Duration.ofMinutes(1)))) {
+      assertThatThrownBy(worker::start).isInstanceOf(ContainerLaunchException.class);
+
+      assertThat(output.toUtf8String())
+          .containsSubsequence(
+              "the effective locale is LC_ALL=POSIX", "InvalidPathException", "/media/Caf");
+    }
+  }
+
+  private void copyMedia(String relativeKey) throws Exception {
     var source = getClass().getResource("/BigBuckBunny_320x180_10s.mp4");
     assertThat(source).isNotNull();
-    Files.copy(Path.of(source.toURI()), media.resolve("movie.mkv"));
+    var target = media.resolve(relativeKey);
+    Files.createDirectories(target.getParent());
+    Files.setPosixFilePermissions(target.getParent(), PosixFilePermissions.fromString("rwxr-xr-x"));
+    Files.copy(Path.of(source.toURI()), target);
+  }
+
+  private static String workerImage() {
+    var image = System.getProperty("worker.image");
+    assertThat(image).as("Run image tests with -Dworker.image=<locally built image>").isNotBlank();
+    return image;
+  }
+
+  private String recordingExecutable(String name) throws Exception {
+    var script = media.resolve("recording-" + name);
+    Files.writeString(
+        script,
+        """
+        #!/bin/bash
+        printf '%%s\\0' "$@" > /tmp/%s-arguments
+        exec %s "$@"
+        """
+            .formatted(name, name));
+    Files.setPosixFilePermissions(script, PosixFilePermissions.fromString("rwxr-xr-x"));
+    return "/media/recording-" + name;
+  }
+
+  private void copyMedia() throws Exception {
+    copyMedia("movie.mkv");
   }
 
   @Test
@@ -256,12 +370,10 @@ class WorkerImageIT {
         HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
     @Builder
-    private ImageFixture(Path media, String ffmpegPath) throws IOException {
+    private ImageFixture(Path media, String ffmpegPath, String ffprobePath, String filenameLocale)
+        throws IOException {
       Files.setPosixFilePermissions(media, PosixFilePermissions.fromString("rwxr-xr-x"));
-      var image = System.getProperty("worker.image");
-      assertThat(image)
-          .as("Run image tests with -Dworker.image=<locally built image>")
-          .isNotBlank();
+      var image = workerImage();
       controlPlane =
           new GenericContainer<>(image)
               .withImagePullPolicy(_ -> false)
@@ -292,6 +404,14 @@ class WorkerImageIT {
               .waitingFor(Wait.forLogMessage(".*Started TranscodeWorkerApplication.*", 1));
       if (ffmpegPath != null) {
         worker.withEnv("TRANSCODE_WORKER_FFMPEG_PATH", ffmpegPath);
+      }
+
+      if (ffprobePath != null) {
+        worker.withEnv("TRANSCODE_WORKER_FFPROBE_PATH", ffprobePath);
+      }
+
+      if (filenameLocale != null) {
+        worker.withEnv("LC_ALL", filenameLocale);
       }
       try {
         worker.start();
@@ -329,6 +449,16 @@ class WorkerImageIT {
           .as("Command %s failed: %s", path, new String(response.body(), StandardCharsets.UTF_8))
           .isEqualTo(200);
       return response.body();
+    }
+
+    // Read as base64 so no charset on the exec path can alter the recorded filename bytes.
+    private List<String> recordedArguments(String executable) throws Exception {
+      var recorded = worker.execInContainer("base64", "-w0", "/tmp/" + executable + "-arguments");
+      assertThat(recorded.getExitCode()).as(recorded.getStderr()).isZero();
+      var arguments =
+          new String(
+              Base64.getDecoder().decode(recorded.getStdout().trim()), StandardCharsets.UTF_8);
+      return List.of(arguments.split("\\x00"));
     }
 
     private HttpResponse<String> health(String group) throws Exception {
