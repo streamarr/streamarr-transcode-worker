@@ -352,7 +352,8 @@ public final class TranscodeWorker implements AutoCloseable {
         return Optional.of(segmentPath);
       }
       if (!isAttemptProducing(job)) {
-        return Optional.empty();
+        // FFmpeg may have written the segment and exited after the check above.
+        return Optional.of(segmentPath).filter(Files::isRegularFile);
       }
       try {
         Thread.sleep(50);
