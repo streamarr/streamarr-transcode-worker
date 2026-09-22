@@ -284,9 +284,7 @@ class WorkerImageIT {
   }
 
   private void copyMedia() throws Exception {
-    var source = getClass().getResource("/BigBuckBunny_320x180_10s.mp4");
-    assertThat(source).isNotNull();
-    Files.copy(Path.of(source.toURI()), media.resolve("movie.mkv"));
+    copyMedia("movie.mkv");
   }
 
   @Test
