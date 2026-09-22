@@ -5,16 +5,21 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.yaml.snakeyaml.Yaml;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -26,6 +31,14 @@ class FfmpegAutomationWorkflowTest {
   private static final String DEPENDENCY = "jellyfin/jellyfin-ffmpeg";
   private static final String LOCK_BOT_EMAIL =
       "327604351+streamarr-release[bot]@users.noreply.github.com";
+  private static final String LOCK = "buildpacks/ffmpeg/ffmpeg.lock";
+  private static final List<String> REVIEWED_INPUTS =
+      List.of(
+          "buildpacks/ffmpeg/notices/manifest",
+          "buildpacks/ffmpeg/notices/sources.json",
+          "buildpacks/ffmpeg/SOURCE.txt");
+
+  @TempDir Path temporaryDirectory;
 
   @Test
   @DisplayName("Should isolate exact FFmpeg release updates when synchronizing the lock")
@@ -147,9 +160,9 @@ class FfmpegAutomationWorkflowTest {
         .doesNotContain("proposed/buildpacks/ffmpeg/bin/update-lock");
     assertThat((String) prepare.get("run"))
         .contains(
-            "git -C proposed hash-object -w",
-            "git -C proposed rev-parse \"HEAD:${lock_path}\"",
-            "lock-blob=${lock_blob}",
+            "git -C proposed hash-object -w \"${GITHUB_WORKSPACE}/trusted/${path}\"",
+            "git -C proposed rev-parse \"HEAD:${path}\"",
+            "blobs=${blobs}",
             "changed=true");
     assertThat((String) verifyHead.get("run"))
         .contains(
@@ -177,12 +190,145 @@ class FfmpegAutomationWorkflowTest {
             "createCommitOnBranch",
             "expectedHeadOid: $expectedHead",
             "git cat-file blob",
-            "buildpacks/ffmpeg/ffmpeg.lock",
+            "fileChanges: {additions: $additions[0]}",
             "gh api graphql")
-        .doesNotContain("git commit", "git push", "git config", "proposed/buildpacks/");
+        .doesNotContain("git commit", "git push", "git config", "proposed/buildpacks/", "trusted/");
     assertThat(map(commit.get("env")))
         .containsEntry("EXPECTED_HEAD_SHA", "${{ github.event.pull_request.head.sha }}")
-        .containsEntry("GH_TOKEN", "${{ steps.lock_bot.outputs.token }}");
+        .containsEntry("GH_TOKEN", "${{ steps.lock_bot.outputs.token }}")
+        .containsEntry("BLOBS", "${{ steps.changes.outputs.blobs }}")
+        .containsEntry("HEADLINE", "${{ steps.changes.outputs.headline }}");
+  }
+
+  @Test
+  @DisplayName("Should carry the notice review forward only when trusted code confirms it")
+  void shouldCarryTheNoticeReviewForwardOnlyWhenTrustedCodeConfirmsIt() throws IOException {
+    var workflowPath = ".github/workflows/sync-ffmpeg-lock.yml";
+    var job = map(map(yaml(workflowPath).get("jobs")).get("sync_ffmpeg_lock"));
+    var steps = listOfMaps(job.get("steps"));
+    var names = steps.stream().map(step -> step.get("name")).toList();
+    var review = stepNamed(steps, "Review locked release from trusted code");
+    var prepare = stepNamed(steps, "Prepare synchronized lock");
+    var reviewedInputs =
+        List.of(
+            "buildpacks/ffmpeg/notices/manifest",
+            "buildpacks/ffmpeg/notices/sources.json",
+            "buildpacks/ffmpeg/SOURCE.txt");
+    var prepareRun = (String) prepare.get("run");
+    var unreviewedPaths =
+        prepareRun.substring(0, prepareRun.indexOf("if [[ \"${REVIEWED}\" == 'true' ]]; then"));
+
+    assertThat(names)
+        .containsSubsequence(
+            "Resolve FFmpeg lock from trusted code",
+            "Review locked release from trusted code",
+            "Prepare synchronized lock",
+            "Mint lock bot token");
+    assertThat((String) review.get("run"))
+        .contains(
+            "trusted/buildpacks/ffmpeg/bin/review-release",
+            "--root \"${GITHUB_WORKSPACE}/trusted\"",
+            "0) echo \"reviewed=true\"",
+            "3) echo \"reviewed=false\"",
+            "*) exit \"${status}\"",
+            "GITHUB_STEP_SUMMARY")
+        .doesNotContain("proposed/");
+    assertThat(map(prepare.get("env")))
+        .containsEntry("REVIEWED", "${{ steps.review.outputs.reviewed }}")
+        .containsEntry("SENDER", "${{ github.event.sender.login }}");
+    assertThat(unreviewedPaths)
+        .contains("buildpacks/ffmpeg/ffmpeg.lock")
+        .doesNotContain(reviewedInputs);
+    assertThat(prepareRun).contains(reviewedInputs);
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+    "true, renovate[bot], true",
+    "true, streamarr-release[bot], false",
+    "true, a-maintainer, false",
+    "false, renovate[bot], false"
+  })
+  @DisplayName(
+      "Should replace pushed reviewed inputs only when Renovate started a confirmed review")
+  void shouldReplacePushedReviewedInputsOnlyWhenRenovateStartedAConfirmedReview(
+      String reviewed, String sender, boolean replaced) throws Exception {
+    var workspace = workspaceWhoseHeadDiffersFromTheTrustedCheckout();
+    var outputs = temporaryDirectory.resolve("outputs");
+    var steps =
+        listOfMaps(
+            map(map(yaml(".github/workflows/sync-ffmpeg-lock.yml").get("jobs"))
+                    .get("sync_ffmpeg_lock"))
+                .get("steps"));
+    ScriptCommand.writeFake(
+        temporaryDirectory,
+        "prepare-synchronized-lock",
+        "cd \"${GITHUB_WORKSPACE}\"\n" + stepNamed(steps, "Prepare synchronized lock").get("run"));
+
+    var result =
+        ScriptCommand.of(temporaryDirectory.resolve("prepare-synchronized-lock"))
+            .environment("GITHUB_WORKSPACE", workspace.toString())
+            .environment("GITHUB_OUTPUT", outputs.toString())
+            .environment("REVIEWED", reviewed)
+            .environment("SENDER", sender)
+            .execute();
+
+    assertThat(result.exitCode()).as(result.output()).isZero();
+    var blobs = new ObjectMapper().readTree(output(outputs, "blobs"));
+    var replacedPaths = nodes(blobs).map(blob -> blob.path("path").asString()).toList();
+    var keptAgainstTheReview = reviewed.equals("true") && !replaced;
+    assertThat(replacedPaths)
+        .containsExactlyElementsOf(
+            replaced
+                ? Stream.concat(Stream.of(LOCK), REVIEWED_INPUTS.stream()).toList()
+                : List.of(LOCK));
+    assertThat(output(outputs, "headline"))
+        .isEqualTo(
+            replaced
+                ? "behavioral: synchronize FFmpeg lock and unchanged notice review"
+                : "behavioral: synchronize FFmpeg lock");
+    assertThat(result.output().lines().filter(line -> line.startsWith("::warning ")))
+        .hasSize(keptAgainstTheReview ? REVIEWED_INPUTS.size() : 0)
+        .allSatisfy(
+            warning -> assertThat(warning).containsAnyOf(REVIEWED_INPUTS.toArray(String[]::new)));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "zz ##[stop-commands]resume-token",
+        "zz ##[error title=FFmpeg notice review]inventory unchanged, safe to merge",
+        "zz ##[add-mask]x264%0Aneeds human review%0A",
+        "zz <img src=https://example.invalid/pixel>"
+      })
+  @DisplayName("Should log upstream names as inert data when the review needs a person")
+  void shouldLogUpstreamNamesAsInertDataWhenTheReviewNeedsAPerson(String upstreamName)
+      throws Exception {
+    var review =
+        "FFmpeg notice inventory needs human review: upstream changed \"%s\""
+            .formatted(upstreamName);
+
+    var step = reviewStep().reviewerPrinting(review).reviewerExitingWith(3).execute();
+
+    assertThat(step.result().exitCode()).as(step.result().output()).isZero();
+    assertThat(output(step.outputs(), "reviewed")).isEqualTo("false");
+    assertThat(linesTheRunnerReadsForCommands(step.result().output()))
+        .containsExactly("::warning title=FFmpeg notice review::" + review.replace("%", "%25"));
+    assertThat(step.result().output()).containsPattern("(?m)^::stop-commands::[0-9a-f]{32}$");
+    assertThat(Files.readAllLines(step.summary())).containsExactly("```text", review, "```");
+  }
+
+  @Test
+  @DisplayName("Should resume runner commands before failing when the review fails")
+  void shouldResumeRunnerCommandsBeforeFailingWhenTheReviewFails() throws Exception {
+    var diagnostic = "jq: error: Cannot iterate over string (\"##[add-mask]x264\")";
+
+    var step = reviewStep().reviewerFailingWith(diagnostic).reviewerExitingWith(1).execute();
+
+    assertThat(step.result().exitCode()).as(step.result().output()).isEqualTo(1);
+    assertThat(step.result().output()).contains(diagnostic);
+    assertThat(linesTheRunnerReadsForCommands(step.result().output())).isEmpty();
+    assertThat(step.outputs()).doesNotExist();
   }
 
   @Test
@@ -342,6 +488,125 @@ class FfmpegAutomationWorkflowTest {
         .containsEntry("version", "${{ steps.version.outputs.version }}");
     assertThat(stepNamed(listOfMaps(verify.get("steps")), "Read Maven version"))
         .containsEntry("id", "version");
+  }
+
+  private Path workspaceWhoseHeadDiffersFromTheTrustedCheckout() throws Exception {
+    var workspace = Files.createDirectory(temporaryDirectory.resolve("workspace"));
+    for (var path : Stream.concat(Stream.of(LOCK), REVIEWED_INPUTS.stream()).toList()) {
+      for (var checkout : List.of("trusted", "proposed")) {
+        var file = workspace.resolve(checkout).resolve(path);
+        Files.createDirectories(file.getParent());
+        Files.writeString(file, "%s as the %s checkout holds it".formatted(path, checkout) + "\n");
+      }
+    }
+    ScriptCommand.writeFake(
+        temporaryDirectory,
+        "commit-proposed-head",
+        """
+        cd "$1"
+        export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+        git init --quiet
+        git add .
+        git -c user.name=Renovate -c user.email=renovate@example.invalid commit --quiet -m head
+        """);
+    var seeded =
+        ScriptCommand.of(temporaryDirectory.resolve("commit-proposed-head"))
+            .argument(workspace.resolve("proposed").toString())
+            .execute();
+    assertThat(seeded.exitCode()).as(seeded.output()).isZero();
+    return workspace;
+  }
+
+  private ReviewStep reviewStep() throws IOException {
+    var workspace = Files.createDirectory(temporaryDirectory.resolve("workspace"));
+    var commands = Files.createDirectories(workspace.resolve("trusted/buildpacks/ffmpeg/bin"));
+    ScriptCommand.writeFake(
+        commands,
+        "review-release",
+        """
+        printf '%s' "${FAKE_REVIEW:-}"
+        printf '%s' "${FAKE_DIAGNOSTIC:-}" >&2
+        exit "${FAKE_REVIEW_EXIT}"
+        """);
+    var steps =
+        listOfMaps(
+            map(map(yaml(".github/workflows/sync-ffmpeg-lock.yml").get("jobs"))
+                    .get("sync_ffmpeg_lock"))
+                .get("steps"));
+    ScriptCommand.writeFake(
+        temporaryDirectory,
+        "review-locked-release",
+        "cd \"${GITHUB_WORKSPACE}\"\n"
+            + stepNamed(steps, "Review locked release from trusted code").get("run"));
+    return new ReviewStep(
+        ScriptCommand.of(temporaryDirectory.resolve("review-locked-release"))
+            .environment("GITHUB_WORKSPACE", workspace.toString())
+            .environment("RUNNER_TEMP", temporaryDirectory.toString())
+            .environment("GITHUB_OUTPUT", temporaryDirectory.resolve("outputs").toString())
+            .environment("GITHUB_STEP_SUMMARY", temporaryDirectory.resolve("summary").toString()),
+        temporaryDirectory);
+  }
+
+  // The runner reads `::command::` at the start of a line and the legacy `##[command]` anywhere
+  // in one, except between `::stop-commands::<token>` and `::<token>::`. A line that parses as
+  // the former is never read for the latter.
+  private static List<String> linesTheRunnerReadsForCommands(String log) {
+    var read = new ArrayList<String>();
+    var resume = Optional.<String>empty();
+    for (var line : log.lines().toList()) {
+      if (resume.isPresent()) {
+        resume = resume.filter(token -> !line.equals("::" + token + "::"));
+        continue;
+      }
+      if (line.startsWith("::stop-commands::")) {
+        resume = Optional.of(line.substring("::stop-commands::".length()));
+        continue;
+      }
+
+      read.add(line);
+    }
+    return read;
+  }
+
+  private record ReviewStep(ScriptCommand command, Path temporaryDirectory) {
+
+    private ReviewStep reviewerPrinting(String review) {
+      command.environment("FAKE_REVIEW", review + "\n");
+      return this;
+    }
+
+    private ReviewStep reviewerFailingWith(String diagnostic) {
+      command.environment("FAKE_DIAGNOSTIC", diagnostic + "\n");
+      return this;
+    }
+
+    private ReviewStep reviewerExitingWith(int exitCode) {
+      command.environment("FAKE_REVIEW_EXIT", Integer.toString(exitCode));
+      return this;
+    }
+
+    private ExecutedReviewStep execute() throws IOException, InterruptedException {
+      return new ExecutedReviewStep(command.execute(), temporaryDirectory);
+    }
+  }
+
+  private record ExecutedReviewStep(ScriptCommand.Result result, Path temporaryDirectory) {
+
+    private Path outputs() {
+      return temporaryDirectory.resolve("outputs");
+    }
+
+    private Path summary() {
+      return temporaryDirectory.resolve("summary");
+    }
+  }
+
+  private static String output(Path outputs, String name) throws IOException {
+    var prefix = name + "=";
+    return Files.readAllLines(outputs).stream()
+        .filter(line -> line.startsWith(prefix))
+        .map(line -> line.substring(prefix.length()))
+        .collect(Collectors.joining());
   }
 
   private static Stream<JsonNode> nodes(JsonNode values) {

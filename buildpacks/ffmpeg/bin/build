@@ -99,6 +99,14 @@ if grep -Fq -- "--enable-nonfree" <<<"${version_output}"; then
 fi
 "${layer}/bin/ffmpeg" -hide_banner -h muxer=hls 2>&1 \
   | grep -F -- "-hls_segment_options" >/dev/null
+# The notice inventory starts from this capture, so a differing binary is unreviewed.
+reviewed_buildconf="notices/buildconf-${sbom_arch}.txt"
+if ! "${layer}/bin/ffmpeg" -buildconf 2>&1 \
+  | sed -n '/^ffmpeg version /,$p' \
+  | cmp -s - "${buildpack_dir}/${reviewed_buildconf}"; then
+  echo "FFmpeg build configuration differs from ${reviewed_buildconf}; review the notice inventory" >&2
+  exit 1
+fi
 
 cp "${buildpack_dir}/LICENSE.txt" "${layer}/LICENSE.txt"
 cp "${buildpack_dir}/SOURCE.txt" "${layer}/SOURCE.txt"

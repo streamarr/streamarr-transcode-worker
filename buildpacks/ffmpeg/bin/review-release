@@ -1,0 +1,347 @@
+#!/bin/bash
+# shellcheck source-path=SCRIPTDIR
+
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repository_root="$(cd "${script_dir}/../../.." && pwd)"
+# shellcheck source=../lib/http.sh
+. "${script_dir}/../lib/http.sh"
+# shellcheck source=../lib/lock.sh
+. "${script_dir}/../lib/lock.sh"
+
+human_review_required=3
+# GitHub's comparison lists at most this many files, so a full list may be incomplete.
+comparison_file_limit=300
+
+# Upstream paths outside the inventory. The changelog and patch series are exempt by decision,
+# not because they are harmless: quilt applies whatever the series names with the options it
+# gives, so an entry could apply the changelog as a patch or reverse a patch with -R. The rest of
+# this list cannot alter which third-party code the Linux portable binaries link, nor any notice
+# text vendored under notices/. Any path not listed needs a person to review the inventory,
+# except a Jellyfin patch: upstream applies those to the FFmpeg tree before compiling, so what
+# each changed patch does to that tree decides.
+paths_outside_inventory=(
+  '^\.github/'
+  '^debian/changelog$'
+  '^debian/patches/series$'
+  '^build\.yaml$'
+  '^builder/images/macos/'
+  '^builder/images/base-win64/'
+  '^msys2/'
+  '^README\.md$'
+  '^CONTRIBUTING\.md$'
+)
+jellyfin_patch='^debian/patches/[A-Za-z0-9._+-]+\.patch$'
+
+usage() {
+  echo "Usage: $0 [--root REPOSITORY]" >&2
+  exit 2
+}
+
+while (( $# > 0 )); do
+  case "$1" in
+    --root)
+      (( $# >= 2 )) || usage
+      repository_root="$(cd "$2" && pwd)"
+      shift 2
+      ;;
+    *)
+      usage
+      ;;
+  esac
+done
+
+buildpack_dir="${repository_root}/buildpacks/ffmpeg"
+lock_file="${buildpack_dir}/ffmpeg.lock"
+manifest="${buildpack_dir}/notices/manifest"
+inventory="${buildpack_dir}/notices/sources.json"
+source_access="${buildpack_dir}/SOURCE.txt"
+patch_summary="${script_dir}/../lib/patch-summary.awk"
+manifest_keys=(release source_revision amd64_sha256 arm64_sha256)
+
+require_human_review() {
+  echo "FFmpeg notice inventory needs human review: $1"
+  exit "${human_review_required}"
+}
+
+path_is_outside_inventory() {
+  local path="$1"
+  local pattern
+  if [[ ! "${path}" =~ ^[A-Za-z0-9._/+-]+$ || "/${path}/" == *"/../"* ]]; then
+    return 1
+  fi
+
+  for pattern in "${paths_outside_inventory[@]}"; do
+    if [[ "${path}" =~ ${pattern} ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+path_is_jellyfin_patch() {
+  [[ "$1" =~ ${jellyfin_patch} ]]
+}
+
+json_text() {
+  local text="${1#\"}"
+  printf '%s' "${text%\"}"
+}
+
+examine_change() {
+  local encoded_path="$1"
+  local encoded_previous_path="$2"
+  local encoded_status="$3"
+  local encoded_paths=("${encoded_path}")
+  local previous_path=
+  local encoded
+  local path
+  local changes_patch=false
+  # jq prints null for a name that is absent; a JSON string, even an empty one, keeps its quotes.
+  if [[ "${encoded_previous_path}" != null ]]; then
+    encoded_paths+=("${encoded_previous_path}")
+    previous_path="$(json_text "${encoded_previous_path}")"
+  fi
+
+  for encoded in "${encoded_paths[@]}"; do
+    # A JSON escape leaves a backslash behind, so unusual names stay inside the inventory.
+    path="$(json_text "${encoded}")"
+    if path_is_outside_inventory "${path}"; then
+      continue
+    fi
+    if path_is_jellyfin_patch "${path}"; then
+      changes_patch=true
+      continue
+    fi
+
+    inventoried_paths+=("${encoded}")
+  done
+  if [[ "${changes_patch}" == false ]]; then
+    return
+  fi
+
+  patch_paths+=("$(json_text "${encoded_path}")")
+  patch_previous_paths+=("${previous_path}")
+  patch_statuses+=("${encoded_status}")
+}
+
+# A failure is recorded as a reason for human review and leaves no summary to act on.
+summarize_patch() {
+  local revision="$1"
+  local path="$2"
+  local summary="$3"
+  if ! ffmpeg_github_api_get_raw \
+    "https://api.github.com/repos/jellyfin/jellyfin-ffmpeg/contents/${path}?ref=${revision}" \
+    "${summary}.patch"; then
+    review_reasons+=("${path} could not be fetched at ${revision}")
+    return 1
+  fi
+  # Some awk implementations end a line at a NUL byte, and patch(1) applies the bytes after it.
+  if ! LC_ALL=C tr -d '\000' <"${summary}.patch" >"${summary}.text" \
+    || ! cmp -s "${summary}.text" "${summary}.patch"; then
+    review_reasons+=("${path} cannot be read unambiguously (a NUL byte)")
+    return 1
+  fi
+  if ! LC_ALL=C awk -f "${patch_summary}" "${summary}.patch" >"${summary}"; then
+    review_reasons+=("${path} cannot be read unambiguously ($(
+      awk -F '\t' '$1 == "ambiguous" { print $2 }' "${summary}"))")
+    return 1
+  fi
+}
+
+summarized_targets() {
+  local kind="$1"
+  local summary="$2"
+  awk -F '\t' -v kind="${kind}" '$1 == kind { print $2 }' "${summary}" | LC_ALL=C sort -u
+}
+
+require_review_of_targets() {
+  local finding="$1"
+  local targets="$2"
+  local target
+  while IFS= read -r target; do
+    review_reasons+=("${finding} ${target}")
+  done <"${targets}"
+}
+
+review_added_patch() {
+  local path="$1"
+  local locked="${temporary_directory}/locked-patch"
+  summarize_patch "${locked_revision}" "${path}" "${locked}" || return 0
+
+  summarized_targets created "${locked}" >"${locked}.created"
+  summarized_targets sensitive "${locked}" >"${locked}.sensitive"
+  require_review_of_targets "${path} creates" "${locked}.created"
+  require_review_of_targets "${path} changes" "${locked}.sensitive"
+}
+
+review_removed_patch() {
+  local path="$1"
+  local reviewed="${temporary_directory}/reviewed-patch"
+  summarize_patch "${reviewed_revision}" "${path}" "${reviewed}" || return 0
+
+  summarized_targets sensitive "${reviewed}" >"${reviewed}.sensitive"
+  require_review_of_targets "removed ${path} changed" "${reviewed}.sensitive"
+}
+
+review_changed_patch() {
+  local path="$1"
+  local reviewed_path="$2"
+  local reviewed="${temporary_directory}/reviewed-patch"
+  local locked="${temporary_directory}/locked-patch"
+  summarize_patch "${reviewed_revision}" "${reviewed_path}" "${reviewed}" || return 0
+  summarize_patch "${locked_revision}" "${path}" "${locked}" || return 0
+
+  summarized_targets created "${reviewed}" >"${reviewed}.created"
+  summarized_targets created "${locked}" >"${locked}.created"
+  LC_ALL=C comm -13 "${reviewed}.created" "${locked}.created" >"${locked}.newly-created"
+  require_review_of_targets "${path} creates" "${locked}.newly-created"
+
+  # Context and line numbers move when upstream rebases a patch; only its edits are compared.
+  awk -F '\t' '
+    $1 == "sensitive" { target = $2; targets[target] }
+    $1 == "sensitive" || $1 == "change" { edits[version, target] = edits[version, target] $0 "\n" }
+    END { for (target in targets) if (edits[1, target] != edits[2, target]) print target }
+  ' version=1 "${reviewed}" version=2 "${locked}" | LC_ALL=C sort >"${locked}.sensitive"
+  require_review_of_targets "${path} changes its edits to" "${locked}.sensitive"
+}
+
+review_patch_change() {
+  local path="$1"
+  local previous_path="$2"
+  local encoded_status="$3"
+  if ! path_is_jellyfin_patch "${path}" \
+    || { [[ -n "${previous_path}" ]] && ! path_is_jellyfin_patch "${previous_path}"; }; then
+    review_reasons+=("a patch moved between ${previous_path} and ${path}")
+    return
+  fi
+
+  case "$(json_text "${encoded_status}"):${previous_path:+previous}" in
+    added:) review_added_patch "${path}" ;;
+    removed:) review_removed_patch "${path}" ;;
+    modified:) review_changed_patch "${path}" "${path}" ;;
+    renamed:previous) review_changed_patch "${path}" "${previous_path}" ;;
+    *) review_reasons+=("${path} has unsupported change status ${encoded_status}") ;;
+  esac
+}
+
+# A release tag ends in digits, so v8.1.2-4 is also how v8.1.2-40 starts.
+whole_value() {
+  printf '%s([^0-9A-Za-z]|$)' "${1//./\\.}"
+}
+
+replace_in_file() {
+  local file="$1"
+  local reviewed="$2"
+  local locked="$3"
+  sed -E "s#$(whole_value "${reviewed}")#${locked}\\1#g" "${file}" >"${file}.replaced"
+  mv "${file}.replaced" "${file}"
+}
+
+ffmpeg_lock_validate "${lock_file}"
+bound=true
+for key in "${manifest_keys[@]}"; do
+  if [[ "$(ffmpeg_lock_value "${manifest}" "${key}")" != "$(ffmpeg_lock_value "${lock_file}" "${key}")" ]]; then
+    bound=false
+  fi
+done
+if [[ "${bound}" == true ]]; then
+  echo "FFmpeg notice inventory is already bound to the locked release"
+  exit 0
+fi
+
+reviewed_release="$(ffmpeg_lock_value "${manifest}" release)"
+reviewed_revision="$(ffmpeg_lock_value "${manifest}" source_revision)"
+locked_release="$(ffmpeg_lock_value "${lock_file}" release)"
+locked_revision="$(ffmpeg_lock_value "${lock_file}" source_revision)"
+if [[ ! "${reviewed_release}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$ \
+  || ! "${reviewed_revision}" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "FFmpeg notice manifest does not name an exact release and full source revision" >&2
+  exit 1
+fi
+if [[ "${reviewed_revision}" == "${locked_revision}" ]]; then
+  require_human_review "release assets changed without a source revision change"
+fi
+
+temporary_directory="$(mktemp -d)"
+trap 'rm -rf "${temporary_directory}"' EXIT
+comparison="${temporary_directory}/comparison.json"
+# curl's own exit statuses must never be mistaken for the human-review status.
+if ! ffmpeg_github_api_get \
+  "https://api.github.com/repos/jellyfin/jellyfin-ffmpeg/compare/${reviewed_revision}...${locked_revision}" \
+  "${comparison}"; then
+  echo "Unable to compare the reviewed and locked upstream revisions" >&2
+  exit 1
+fi
+# jq's status reflects only the last document it reads, so a second one would hide a failure.
+if ! jq -e -s 'length == 1 and (.[0] | (.status | type == "string") and (.files | type == "array"))' \
+  "${comparison}" >/dev/null; then
+  echo "Expected a single upstream comparison with a status and a change list" >&2
+  exit 1
+fi
+
+status="$(jq -r '.status' "${comparison}")"
+if [[ "${status}" != ahead ]]; then
+  require_human_review "locked revision ${locked_revision} is ${status} relative to reviewed revision ${reviewed_revision}"
+fi
+file_count="$(jq '.files | length' "${comparison}")"
+if (( file_count >= comparison_file_limit )); then
+  require_human_review "upstream change list is truncated at ${file_count} files"
+fi
+
+# A process substitution would discard jq's status and approve an unexamined change list.
+changes="${temporary_directory}/changes"
+if ! jq -c '.files[] | .filename, .previous_filename, .status' \
+  "${comparison}" >"${changes}"; then
+  echo "Expected every upstream change to be an object naming a file" >&2
+  exit 1
+fi
+
+inventoried_paths=()
+patch_paths=()
+patch_previous_paths=()
+patch_statuses=()
+review_reasons=()
+while IFS= read -r encoded_path \
+  && IFS= read -r encoded_previous_path \
+  && IFS= read -r encoded_status; do
+  examine_change "${encoded_path}" "${encoded_previous_path}" "${encoded_status}"
+done <"${changes}"
+if (( ${#inventoried_paths[@]} > 0 )); then
+  require_human_review "upstream changed $(IFS=' '; echo "${inventoried_paths[*]}")"
+fi
+
+for (( patch = 0; patch < ${#patch_paths[@]}; patch += 1 )); do
+  review_patch_change \
+    "${patch_paths[patch]}" "${patch_previous_paths[patch]}" "${patch_statuses[patch]}"
+done
+if (( ${#review_reasons[@]} > 0 )); then
+  printf -v reasons '%s; ' "${review_reasons[@]}"
+  require_human_review "upstream changed what its patches do: ${reasons%; }"
+fi
+
+cp "${inventory}" "${temporary_directory}/sources.json"
+cp "${source_access}" "${temporary_directory}/SOURCE.txt"
+replace_in_file "${temporary_directory}/sources.json" "${reviewed_revision}" "${locked_revision}"
+replace_in_file "${temporary_directory}/SOURCE.txt" "${reviewed_revision}" "${locked_revision}"
+replace_in_file "${temporary_directory}/SOURCE.txt" \
+  "releases/tag/${reviewed_release}" "releases/tag/${locked_release}"
+if ! jq -e --arg revision "${locked_revision}" \
+  '[.[] | select(.id == "ffmpeg")] | length == 1 and .[0].revision == $revision' \
+  "${temporary_directory}/sources.json" >/dev/null \
+  || ! grep -Eq "$(whole_value "releases/tag/${locked_release}")" \
+    "${temporary_directory}/SOURCE.txt" \
+  || ! grep -Fq "${locked_revision}" "${temporary_directory}/SOURCE.txt"; then
+  echo "Reviewed inputs do not reference the reviewed release as expected; bind them by hand" >&2
+  exit 1
+fi
+for key in "${manifest_keys[@]}"; do
+  printf '%s=%s\n' "${key}" "$(ffmpeg_lock_value "${lock_file}" "${key}")"
+done >"${temporary_directory}/manifest"
+
+mv "${temporary_directory}/sources.json" "${inventory}"
+mv "${temporary_directory}/SOURCE.txt" "${source_access}"
+mv "${temporary_directory}/manifest" "${manifest}"
+echo "FFmpeg notice inventory is unchanged from ${reviewed_release} to ${locked_release}:" \
+  "${file_count} upstream files changed, none of them inside the inventory"

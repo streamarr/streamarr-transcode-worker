@@ -50,15 +50,78 @@ jobs:
             --root "${GITHUB_WORKSPACE}/trusted" \
             --release-file "${release_file}"
 
+      - name: Review locked release from trusted code
+        id: review
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          review="${RUNNER_TEMP}/ffmpeg-review"
+          status=0
+          # The review quotes upstream file names, and the runner reads `##[command]` anywhere in
+          # a logged line. Both streams share the pipe so that none of it outlives the pause.
+          resume="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+          echo "::stop-commands::${resume}"
+          trusted/buildpacks/ffmpeg/bin/review-release \
+            --root "${GITHUB_WORKSPACE}/trusted" 2>&1 | tee "${review}" || status=$?
+          echo "::${resume}::"
+          {
+            echo '```text'
+            cat "${review}"
+            echo '```'
+          } >>"${GITHUB_STEP_SUMMARY}"
+          case "${status}" in
+            0) echo "reviewed=true" >>"${GITHUB_OUTPUT}" ;;
+            3) echo "reviewed=false" >>"${GITHUB_OUTPUT}"
+               message="$(jq -Rrs 'rtrimstr("\n") | gsub("%"; "%25") | gsub("\r"; "%0D") | gsub("\n"; "%0A")' "${review}")"
+               echo "::warning title=FFmpeg notice review::${message}" ;;
+            *) exit "${status}" ;;
+          esac
+
       - name: Prepare synchronized lock
         id: changes
+        env:
+          REVIEWED: ${{ steps.review.outputs.reviewed }}
+          SENDER: ${{ github.event.sender.login }}
         run: |
-          lock_path='buildpacks/ffmpeg/ffmpeg.lock'
-          generated_lock="${GITHUB_WORKSPACE}/trusted/${lock_path}"
-          lock_blob="$(git -C proposed hash-object -w "${generated_lock}")"
-          current_lock_blob="$(git -C proposed rev-parse "HEAD:${lock_path}" 2>/dev/null || true)"
-          echo "lock-blob=${lock_blob}" >>"${GITHUB_OUTPUT}"
-          if [[ "${lock_blob}" == "${current_lock_blob}" ]]; then
+          lock=buildpacks/ffmpeg/ffmpeg.lock
+          paths=("${lock}")
+          headline='behavioral: synchronize FFmpeg lock'
+          if [[ "${REVIEWED}" == 'true' ]]; then
+            paths+=(
+              buildpacks/ffmpeg/notices/manifest
+              buildpacks/ffmpeg/notices/sources.json
+              buildpacks/ffmpeg/SOURCE.txt
+            )
+          fi
+          # The lock is a function of the release. The reviewed inputs are maintained by hand and
+          # the carried-forward copies derive from the base, so they may only replace a head that
+          # nobody has edited: Renovate rebuilds its branch from the base, anyone else's push may
+          # carry a correction or an un-bound manifest.
+          carries_review=false
+          if [[ "${REVIEWED}" == 'true' && "${SENDER}" == 'renovate[bot]' ]]; then
+            carries_review=true
+            headline='behavioral: synchronize FFmpeg lock and unchanged notice review'
+          fi
+
+          blobs='[]'
+          for path in "${paths[@]}"; do
+            blob="$(git -C proposed hash-object -w "${GITHUB_WORKSPACE}/trusted/${path}")"
+            current_blob="$(git -C proposed rev-parse "HEAD:${path}" 2>/dev/null || true)"
+            if [[ "${blob}" == "${current_blob}" ]]; then
+              continue
+            fi
+            if [[ "${path}" != "${lock}" && "${carries_review}" == false ]]; then
+              echo "::warning title=FFmpeg notice review::${path} differs from the carried-forward review and stays as pushed"
+              continue
+            fi
+
+            blobs="$(jq -c --arg path "${path}" --arg blob "${blob}" \
+              '. + [{path: $path, blob: $blob}]' <<<"${blobs}")"
+          done
+
+          echo "blobs=${blobs}" >>"${GITHUB_OUTPUT}"
+          echo "headline=${headline}" >>"${GITHUB_OUTPUT}"
+          if [[ "${blobs}" == '[]' ]]; then
             echo "changed=false" >>"${GITHUB_OUTPUT}"
             exit 0
           fi
@@ -97,18 +160,28 @@ jobs:
           GH_TOKEN: ${{ steps.lock_bot.outputs.token }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          LOCK_BLOB: ${{ steps.changes.outputs.lock-blob }}
+          BLOBS: ${{ steps.changes.outputs.blobs }}
+          HEADLINE: ${{ steps.changes.outputs.headline }}
         run: |
-          contents="$(git cat-file blob "${LOCK_BLOB}" | base64 -w 0)"
+          additions="${RUNNER_TEMP}/ffmpeg-additions.json"
+          contents="${RUNNER_TEMP}/ffmpeg-contents"
+          echo '[]' >"${additions}"
+          while IFS=$'\t' read -r path blob; do
+            git cat-file blob "${blob}" | base64 -w 0 >"${contents}"
+            jq --arg path "${path}" --rawfile contents "${contents}" \
+              '. + [{path: $path, contents: $contents}]' "${additions}" >"${additions}.next"
+            mv "${additions}.next" "${additions}"
+          done < <(jq -r '.[] | [.path, .blob] | @tsv' <<<"${BLOBS}")
           jq -n \
             --arg repository "${GITHUB_REPOSITORY}" \
             --arg branch "${HEAD_REF}" \
             --arg expectedHead "${EXPECTED_HEAD_SHA}" \
-            --arg contents "${contents}" \
+            --arg headline "${HEADLINE}" \
+            --slurpfile additions "${additions}" \
             '{query: "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid url } } }",
               variables: {input: {
                 branch: {repositoryNameWithOwner: $repository, branchName: $branch},
                 expectedHeadOid: $expectedHead,
-                message: {headline: "behavioral: synchronize FFmpeg lock"},
-                fileChanges: {additions: [{path: "buildpacks/ffmpeg/ffmpeg.lock", contents: $contents}]}
+                message: {headline: $headline},
+                fileChanges: {additions: $additions[0]}
               }}}' | gh api graphql --input - --jq '.data.createCommitOnBranch.commit | {oid, url}'

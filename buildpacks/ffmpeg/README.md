@@ -13,6 +13,7 @@ buildpacks/ffmpeg/bin/update-lock
 buildpacks/ffmpeg/bin/update-lock --release v8.1.2-4
 buildpacks/ffmpeg/bin/update-lock --check
 buildpacks/ffmpeg/bin/update-lock --verify-upstream
+buildpacks/ffmpeg/bin/review-release
 ```
 
 The resolver requires Bash, `curl`, and `jq`. Offline input validation also requires
@@ -28,6 +29,9 @@ The buildpack verifies the downloaded archive against the locked checksum before
 its root-level `ffmpeg` and `ffprobe` binaries. Jellyfin's banner omits the packaging revision:
 package `8.1.2-4` reports `8.1.2-Jellyfin`; the checksum pins the exact build. The runtime must
 enable GPL, omit the `--enable-nonfree` build flag, and support `hls_segment_options`.
+Its `-buildconf` output, from the banner onward, must also equal the reviewed
+`notices/buildconf-<architecture>.txt` capture byte for byte: the notice inventory starts from
+that capture, so a binary with another toolchain, flag set or library version is unreviewed.
 This flag check does not cover FDK-AAC: Jellyfin's GPL build includes stripped FDK-AAC
 without setting `--enable-nonfree`. Streamarr selects FFmpeg's native `aac` encoder,
 not `libfdk_aac`; the latter is nevertheless present in the distributed binary.
@@ -47,12 +51,53 @@ the pinned recipes. It is not a list of every build script or of external GPU dr
 
 [`notices/manifest`](notices/manifest) binds that review to the release, source revision
 and both archive digests. Offline validation and the buildpack reject a mismatch.
-After an update, review both binaries and their dependencies, update the notices and
-source instructions, then update the manifest. The lock resolver deliberately does
-not mark new notices as reviewed. Neither does the notice generator: it never writes
-`notices/manifest`. Tests check notice contents against the inventory and verify their
+Neither the lock resolver nor the notice generator marks notices as reviewed: they never
+write `notices/manifest`. Tests check notice contents against the inventory and verify their
 inclusion in fresh and cached layers. Full license texts and attribution remain in
 the image, not just links to them.
+
+`bin/review-release` carries a review forward only when it can show that the inventory is
+unchanged. It compares the reviewed and locked upstream revisions and requires the locked
+revision to descend from the reviewed one, the change list to be complete, and every changed
+path to lie outside the inventory: Jellyfin's changelog and patch series, the package
+version, and files used only by macOS or Windows builds. It then rebinds `notices/manifest`,
+the `ffmpeg` entry of `notices/sources.json` and `SOURCE.txt` to the locked release. The
+buildpack supplies the rest of the evidence by rejecting a binary whose `-buildconf` differs
+from the reviewed capture. A dependency recipe, toolchain image, licence text or FFmpeg
+source file that upstream changes directly instead exits with status 3, names the paths and
+changes nothing. Then review both binaries and their dependencies, update the notices and
+source instructions, and update the manifest by hand.
+
+Jellyfin's quilt patches under `debian/patches/` are judged by what they do, not by their
+path: upstream's Linux build applies them to the FFmpeg tree before compiling, so a patch can
+edit `configure`, a licence file, or add third-party source. For every added, modified,
+renamed or removed `*.patch`, the script downloads the whole patch at the locked revision,
+and at the reviewed revision when it existed there, because the comparison's diff of a diff
+hides which files a modified patch touches. It exits with status 3, naming the patch and the
+file, when:
+
+- an added patch creates a file, or edits a file named `configure`, `LICENSE*` or `COPYING*`
+  in any directory and letter case. A `/dev/null` old name, a hunk whose old range starts at
+  line 0, git's `new file mode` and a git `index` line whose old blob is absent or empty all
+  make `patch` create the file;
+- a modified or renamed patch creates a file that its reviewed version did not, or the lines
+  it adds to or removes from those files differ from the reviewed version;
+- a removed patch edited one of those files;
+- a patch cannot be downloaded or holds anything but unified-diff file headers and hunks,
+  because `patch` searches whatever text a reader skips for further diffs: a description,
+  indented or nested headers, context, normal and ed diffs, renames, copies, binary patches
+  and file sections naming two files all count. So does a NUL byte, because some `awk`
+  implementations end the line there while `patch` applies the bytes after it. The same
+  applies when its change status is unknown, or any other file changes under
+  `debian/patches/`.
+
+A patch that only edits existing FFmpeg source files stays automatic, since that code remains
+covered by the `ffmpeg` component's notices. The check selects the changes most likely to
+need a new notice; it is not a licence scan and does not read the text a patch adds to a
+source file, including a file that its reviewed version already created. The changelog and
+patch series are outside the inventory by decision, not because they are harmless: quilt
+applies whatever the series names with the options it gives, so an entry could apply the
+changelog as a patch or reverse a patch with `-R`.
 
 The [tooling pin](.nvmrc) selects Node.js 24 LTS as the tested toolchain. CI selects
 that exact version; local tooling accepts the same major. The generator itself
@@ -127,17 +172,29 @@ component uses the `build` capture group: `-10` sorts after `-9`, and packaging-
 are stable patch updates, not SemVer prereleases. Updates have their own PR and are not
 automerged. Major-version updates additionally require Dependency Dashboard approval.
 Renovate still proposes eligible minor and packaging updates automatically; their
-notice review must complete before CI and image packaging can pass.
+notice review must complete before CI and image packaging can pass. The synchronization
+workflow completes it when `bin/review-release` confirms an unchanged inventory; otherwise
+it annotates the run with the paths and patches that need a person and leaves the review
+inputs alone.
 
 `.github/workflows/sync-ffmpeg-lock.yml` uses `pull_request_target` only for same-repository
-Renovate PRs. It executes resolver code from the trusted PR base, reads the proposed release
-from a Git object as data, and generates the lock entirely in the trusted checkout. It never
-executes proposed code with write credentials. Only after detecting a changed lock and
+Renovate PRs. It executes resolver and review code from the trusted PR base, reads the proposed
+release from a Git object as data, and generates the lock and any carried-forward review
+entirely in the trusted checkout. It never executes proposed code with write credentials, and
+it never runs the downloaded binaries: ordinary CI checks their build configuration. The review
+quotes upstream file names, which the runner would read for workflow commands, so the step
+pauses command processing behind a random token while the review prints, escapes the text it
+repeats as the annotation, and fences it in the job summary. Only after detecting a change and
 verifying the head SHA does it mint a short-lived GitHub App token.
 
-GitHub's `createCommitOnBranch` API creates a signed commit containing only the generated lock.
-Its `expectedHeadOid` check rejects a moved branch atomically. The App token triggers normal
-PR checks after the commit; the default Actions token would suppress those runs.
+GitHub's `createCommitOnBranch` API creates a signed commit containing only the generated lock
+and, after a confirmed review on a run started by Renovate's own push, `notices/manifest`,
+`notices/sources.json` and `SOURCE.txt`. Renovate rebuilds its branch from the base, so only
+then are the head's copies of those hand-maintained files known to be untouched. Every other
+push, such as a maintainer's correction or a reverted manifest, still synchronizes the lock but
+keeps those three files as pushed; the run warns when they differ from the carried-forward
+review. Its `expectedHeadOid` check rejects a moved branch atomically. The App token triggers
+normal PR checks after the commit; the default Actions token would suppress those runs.
 
 Install a GitHub App on this repository with repository contents read/write access and configure
 these Actions secrets:
