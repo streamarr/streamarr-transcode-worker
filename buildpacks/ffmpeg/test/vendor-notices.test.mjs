@@ -1133,6 +1133,26 @@ for (const [name, text] of [
     });
 }
 
+// A recipe that generates import shims but pins several repositories, as 20-libiconv.sh pins gnulib
+// beside libiconv, does not say which pin the stubs stand for: neither is proposed as a shim.
+test("Should propose every pin as a static runtime library and ask for a classification when a recipe that generates import shims pins several repositories", (t) => {
+    const context = fixture(t);
+    context.serveRecipes(LOCKED, new Map(context.recipes).set("50-delta.sh", recipe([["https://github.com/example/delta", ALPHA_2], ["https://github.com/example/epsilon", ALPHA_2]], "--enable-libdelta", "libdelta")));
+    serveProposal(context, "delta");
+    serveProposal(context, "epsilon");
+
+    const result = context.run();
+
+    assert.equal(result.status, 0, result.output);
+    for (const id of ["delta", "epsilon"]) {
+        assert.match(result.output, new RegExp(`Added component: ${id} \\(generates import shims; classify by hand\\)\\n`));
+        const component = context.inventory().find((candidate) => candidate.id === id);
+        assert.equal(component.role, "Static library (--enable-libdelta).");
+        assert.equal(component.distribution, "runtime");
+    }
+    assert.match(context.read("SOURCE.txt"), /epsilon \(amd64, arm64\)\n {2}Static library \(--enable-libdelta\)\./);
+});
+
 for (const [name, text] of [
     ["its enable flags run together on one short line", recipe([["https://github.com/example/delta", ALPHA_2]], `${"--enable-a".repeat(40)}!`)],
     ["it holds a long run of blank lines", `${recipe([["https://github.com/example/delta", ALPHA_2]])}${"\n".repeat(400000)}`],

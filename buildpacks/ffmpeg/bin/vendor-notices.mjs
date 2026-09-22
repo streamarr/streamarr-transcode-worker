@@ -431,9 +431,19 @@ const configureFlags = (text) =>
 
 // A recipe that runs gen-implib builds its library shared, generates Implib stubs that dlopen it and
 // deletes the shared library, so the binaries carry only its headers and the stubs and load the
-// system library at run time.
-const generatesImportShims = (text) =>
-    commandLines(text).some((line) => runs(line, "gen-implib"));
+// system library at run time. The text proves that for a recipe with one pin only: with several, it
+// does not say which pin the stubs stand for, so a person classifies every pin.
+function importShims(text) {
+    if (!commandLines(text).some((line) => runs(line, "gen-implib"))) return "none";
+    return recipePins(text).length === 1 ? "shim" : "unproven";
+}
+
+// What the report says beside a proposal about import shims.
+const SHIM_NOTE = {
+    shim: " (import shim)",
+    unproven: " (generates import shims; classify by hand)",
+    none: "",
+};
 
 // The binaries that contain what a recipe builds: those whose reviewed build configuration has one
 // of its flags, else those of the components already built from it, else, for a recipe without
@@ -483,7 +493,7 @@ const claimedFor = ({ citing, components, architectures }) => (pin) =>
 // library, or, when the recipe generates import shims, as compiled-in headers alone.
 function proposedShape({ recipe, flags, shims }) {
     const built = flags.length ? `(${flags.join(" ")})` : `built by ${recipe.file}`;
-    if (shims)
+    if (shims === "shim")
         return {
             role: `Headers used with generated import shims ${built}; the system library is not bundled.`,
             distribution: "embedded",
@@ -812,7 +822,7 @@ async function main() {
             if (unreviewed) report.ignored.push(file);
             continue;
         }
-        const shims = generatesImportShims(recipes.get(file));
+        const shims = importShims(recipes.get(file));
         const added = await newComponents({
             recipe: { file, text: recipes.get(file) },
             flags,
@@ -823,7 +833,7 @@ async function main() {
         });
         components.push(...added);
         for (const component of added)
-            report.added.set(component.id, shims ? " (import shim)" : "");
+            report.added.set(component.id, SHIM_NOTE[shims]);
     }
 
     const writes = placeNotices(
