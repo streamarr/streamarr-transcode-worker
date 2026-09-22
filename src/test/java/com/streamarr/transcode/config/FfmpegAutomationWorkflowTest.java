@@ -696,6 +696,26 @@ class FfmpegAutomationWorkflowTest {
     assertThat(output(outputs, "approved")).isEqualTo("true");
   }
 
+  @Test
+  @DisplayName("Should ask for a review when a run that commits nothing leaves a rejected head")
+  void shouldAskForAReviewWhenARunThatCommitsNothingLeavesARejectedHead() throws Exception {
+    var workspace = workspaceWhoseApprovedHeadHoldsANoticeTheBaseDoesNot();
+    var outputs = temporaryDirectory.resolve("outputs");
+    recordRegeneratedInputs();
+    ScriptCommand.writeFake(
+        workspace.resolve("trusted/buildpacks/ffmpeg/bin"), "update-lock", "exit 1");
+
+    var result =
+        prepareStep(workspace)
+            .environment("REVIEWED", "false")
+            .environment("SENDER", "a-maintainer")
+            .execute();
+
+    assertThat(result.exitCode()).as(result.output()).isZero();
+    assertThat(output(outputs, "changed")).isEqualTo("false");
+    assertThat(output(outputs, "approved")).isEqualTo("false");
+  }
+
   @ParameterizedTest
   @ValueSource(booleans = {true, false})
   @DisplayName("Should withdraw a bound manifest when an unreviewed run commits an inventory")
