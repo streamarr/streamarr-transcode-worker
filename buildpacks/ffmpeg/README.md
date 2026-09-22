@@ -14,6 +14,7 @@ buildpacks/ffmpeg/bin/update-lock --release v8.1.2-4
 buildpacks/ffmpeg/bin/update-lock --check
 buildpacks/ffmpeg/bin/update-lock --verify-upstream
 buildpacks/ffmpeg/bin/review-release
+buildpacks/ffmpeg/bin/review-release --dry-run
 buildpacks/ffmpeg/bin/review-release --approved
 node buildpacks/ffmpeg/bin/vendor-notices.mjs --dry-run
 ```
@@ -70,7 +71,9 @@ about to bind to be the ones the manifest bound: a carry-forward may move only t
 and source revision inside them, so undoing that substitution must reproduce the bound content.
 An input edited since the binding exits with status 3, so nothing a working tree carries can
 inherit the review the manifest records. It then rebinds `notices/manifest`,
-the `ffmpeg` entry of `notices/sources.json` and `SOURCE.txt` to the locked release. The
+the `ffmpeg` entry of `notices/sources.json` and `SOURCE.txt` to the locked release.
+`--dry-run` makes the same checks with the same report and exit status and writes none of
+them, so a person can read what the inspection found; it does not combine with `--approved`. The
 buildpack supplies the rest of the evidence by rejecting a binary whose `-buildconf` differs
 from the reviewed capture. A dependency recipe, toolchain image, licence text or FFmpeg
 source file that upstream changes directly instead exits with status 3, names the paths and

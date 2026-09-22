@@ -276,6 +276,52 @@ class FfmpegReleaseReviewTest {
     assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
   }
 
+  @Test
+  @DisplayName("Should report the same finding without writing when a dry run inspects a patch")
+  void shouldReportTheSameFindingWithoutWritingWhenADryRunInspectsAPatch() throws Exception {
+    var review =
+        review()
+            .upstreamPatch(
+                PatchChange.builder()
+                    .status("added")
+                    .path(PATCH)
+                    .locked(
+                        modifying("libavcodec/bsf/Makefile", "bsf/trim.o")
+                            + creating("libavcodec/bsf/trim.c"))
+                    .build());
+    var reviewedInputs = review.reviewedInputs();
+    var realRun = review.execute();
+
+    var dryRun = review.dryRun().execute();
+
+    assertThat(realRun.exitCode()).as(realRun.output()).isEqualTo(HUMAN_REVIEW_REQUIRED);
+    assertThat(dryRun.exitCode()).as(dryRun.output()).isEqualTo(HUMAN_REVIEW_REQUIRED);
+    assertThat(dryRun.output())
+        .isEqualTo(realRun.output())
+        .contains(PATCH + " creates libavcodec/bsf/trim.c");
+    assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
+  }
+
+  @Test
+  @DisplayName("Should leave the reviewed inputs unwritten when a dry run finds nothing changed")
+  void shouldLeaveTheReviewedInputsUnwrittenWhenADryRunFindsNothingChanged() throws Exception {
+    var review = review().upstreamChanges("debian/changelog", "debian/patches/series");
+    var reviewedInputs = review.reviewedInputs();
+
+    var result = review.dryRun().execute();
+
+    assertThat(result.exitCode()).as(result.output()).isZero();
+    assertThat(result.output())
+        .contains(
+            "FFmpeg notice inventory is unchanged from %s to %s"
+                .formatted(reviewed("release"), LOCKED_RELEASE));
+    assertThat(review.upstreamRequests())
+        .contains(
+            "https://api.github.com/repos/jellyfin/jellyfin-ffmpeg/compare/%s...%s"
+                .formatted(reviewed("source_revision"), LOCKED_REVISION));
+    assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
+  }
+
   @ParameterizedTest
   @ValueSource(strings = {"modified", "renamed"})
   @DisplayName("Should carry the review forward when a changed patch keeps its licensing edits")
@@ -953,6 +999,26 @@ class FfmpegReleaseReviewTest {
   }
 
   @Test
+  @DisplayName("Should refuse a dry run combined with an approval before touching anything")
+  void shouldRefuseADryRunCombinedWithAnApprovalBeforeTouchingAnything() throws Exception {
+    var review = review();
+    rebindRevision(review.inventory());
+    rebindRevision(review.sourceAccess());
+    Files.writeString(
+        review.sourceAccess(),
+        Files.readString(review.sourceAccess())
+            .replace("releases/tag/" + reviewed("release"), "releases/tag/" + LOCKED_RELEASE));
+    var reviewedInputs = review.reviewedInputs();
+
+    var result = review.approved().dryRun().execute();
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(2);
+    assertThat(result.output()).contains("Usage:");
+    assertThat(review.upstreamRequests()).isEmpty();
+    assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
+  }
+
+  @Test
   @DisplayName("Should refuse an approval when the reviewed inputs describe another release")
   void shouldRefuseAnApprovalWhenTheReviewedInputsDescribeAnotherRelease() throws Exception {
     var review = review();
@@ -1301,6 +1367,11 @@ class FfmpegReleaseReviewTest {
 
     private ReviewFixture approved() {
       command.argument("--approved");
+      return this;
+    }
+
+    private ReviewFixture dryRun() {
+      command.argument("--dry-run");
       return this;
     }
 
