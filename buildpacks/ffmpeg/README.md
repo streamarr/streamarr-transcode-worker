@@ -176,8 +176,17 @@ architectures that rule names and its licence files come from the repository lis
 comes from the recipe name, or from the repository name for a later pin, and also names its
 notice directory: the tool fails rather than propose an id that the generator would refuse or
 that a reviewed or another proposed component holds, or a pin that names a branch instead of a
-commit and so names no source to read a licence text from. New `DEPS` entries and submodules are not
-discovered: they are followed only for components the inventory already records.
+commit and so names no source to read a licence text from. A proposal's role and distribution
+follow what its recipe does with the library. A recipe that runs `gen-implib`, as
+`50-vaapi/40-libdrm.sh` and `50-vaapi/50-libva.sh` do, builds the library shared, generates import
+shims (Implib stubs that `dlopen` it) and deletes the shared library, so the binaries carry only the
+stubs and the headers compiled into them and load the system library at run time: its pins are
+proposed with the `embedded` distribution and a role that names the import shims and says the
+system library is not bundled, as libdrm and libva are inventoried, and their licence notices are
+still vendored because the headers are compiled in. The report lists such a proposal as
+`Added component: <id> (import shim)`. The command is read as flags are, on a line of the recipe and
+not in a comment. Any other pin is proposed as a static `runtime` library. New `DEPS` entries and
+submodules are not discovered: they are followed only for components the inventory already records.
 
 Notices whose texts were byte-identical at review share one file, within a component (OpenMPT's
 two licence files, ffnvcodec's header excerpts) or across components. When some of them change,

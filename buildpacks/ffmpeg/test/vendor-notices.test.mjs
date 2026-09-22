@@ -26,7 +26,9 @@ const LICENSE = "Alpha license\n";
 const HEADER = "/* Copyright Beta */\n";
 const INDEX = "Component source index\n======================\n\n";
 
-function recipe(pins, flag) {
+// A shim names the library the recipe builds shared and replaces with generated import stubs, as
+// 50-vaapi/50-libva.sh does for libva.
+function recipe(pins, flag, shim) {
     const lines = pins.flatMap(([repository, revision], index) => {
         const suffix = index === 0 ? "" : String(index + 1);
         return [
@@ -34,10 +36,19 @@ function recipe(pins, flag) {
             `SCRIPT_COMMIT${suffix}="${revision}"`,
         ];
     });
+    const build = shim
+        ? "ffbuild_dockerbuild() {\n" +
+          `    git-mini-clone "$SCRIPT_REPO" "$SCRIPT_COMMIT" ${shim}\n` +
+          "    # This works around an issue of our libxcb-dri3 implib-wrapper not exporting data symbols.\n" +
+          "    meson setup --default-library=shared ..\n    ninja install\n" +
+          "    if [[ $TARGET == linux* ]]; then\n" +
+          `        gen-implib "$FFBUILD_PREFIX"/lib/{${shim}.so.2,${shim}.a}\n` +
+          `        rm "$FFBUILD_PREFIX"/lib/${shim}.so*\n    fi\n}\n\n`
+        : "";
     const configure = flag
         ? `ffbuild_configure() {\n    echo ${flag}\n}\n`
         : "";
-    return `#!/bin/bash\n\n${lines.join("\n")}\n\n${configure}`;
+    return `#!/bin/bash\n\n${lines.join("\n")}\n\n${build}${configure}`;
 }
 
 function fixture(t) {
@@ -1067,6 +1078,60 @@ test("Should add a newly pinned dependency that the binaries enable and ignore o
     assert.match(result.output, /Ignored recipe not enabled in either binary: builder\/scripts\.d\/50-windows-only\.sh/);
     assert.equal(validate().status, 0);
 });
+
+// Models 50-vaapi/50-libva.sh: the recipe builds libva shared, generates Implib dlopen stubs with
+// gen-implib and deletes the shared library, so the binaries carry only its headers and load the
+// system libva at run time.
+test("Should propose a dependency as embedded headers with its licence vendored when its recipe generates import shims", (t) => {
+    const { inventory, read, recipes, run, serve, serveRecipes, validate, write } = fixture(t);
+    const libva = "7".repeat(40);
+    serveRecipes(LOCKED, new Map(recipes).set("50-vaapi/50-libva.sh", recipe([["https://github.com/example/libva", libva]], "--enable-vaapi", "libva")));
+    serve(`${API}/example/libva/git/trees/${libva}?recursive=1`, { truncated: false, tree: [{ path: "COPYING", type: "blob" }, { path: "va/va.h", type: "blob" }] });
+    serve(`${API}/example/libva/license`, { license: { spdx_id: "MIT" } });
+    serve(`${RAW}/example/libva/${libva}/COPYING`, "Libva license\n");
+    for (const architecture of ["amd64", "arm64"])
+        write(`notices/buildconf-${architecture}.txt`, "ffmpeg version 9.0.0-Jellyfin\n  configuration: --enable-gpl --enable-libalpha --enable-vaapi\n");
+
+    const result = run();
+
+    assert.equal(result.status, 0, result.output);
+    assert.match(result.output, /Added component: libva \(import shim\)\n/);
+    assert.match(result.output, /Inventory content changed/);
+    assert.deepEqual(inventory().find((component) => component.id === "libva"), {
+        id: "libva",
+        repository: "https://github.com/example/libva",
+        revision: libva,
+        recipe: "builder/scripts.d/50-vaapi/50-libva.sh",
+        architectures: ["amd64", "arm64"],
+        role: "Headers used with generated import shims (--enable-vaapi); the system library is not bundled.",
+        notices: [{ url: `${RAW}/example/libva/${libva}/COPYING`, sha256: checksum("Libva license\n"), file: "libva/COPYING.txt" }],
+        licenseExpression: "MIT",
+        distribution: "embedded",
+        revisionEvidence: "source",
+    });
+    assert.equal(read("notices/libva/COPYING.txt"), "Libva license\n");
+    assert.match(read("SOURCE.txt"), /libva \(amd64, arm64\)\n {2}Headers used with generated import shims \(--enable-vaapi\); the system library is not bundled\./);
+    assert.equal(validate().status, 0);
+});
+
+for (const [name, text] of [
+    ["links its library statically", recipe([["https://github.com/example/delta", ALPHA_2]], "--enable-libdelta")],
+    ["names gen-implib only in a comment", `${recipe([["https://github.com/example/delta", ALPHA_2]], "--enable-libdelta")}# gen-implib is not run: the library links statically\n`],
+]) {
+    test(`Should propose a dependency as a static runtime library when its recipe ${name}`, (t) => {
+        const context = fixture(t);
+        context.serveRecipes(LOCKED, new Map(context.recipes).set("50-delta.sh", text));
+        serveProposal(context, "delta");
+
+        const result = context.run();
+
+        assert.equal(result.status, 0, result.output);
+        assert.match(result.output, /Added component: delta\n/);
+        const delta = context.inventory().find((component) => component.id === "delta");
+        assert.equal(delta.role, "Static library (--enable-libdelta).");
+        assert.equal(delta.distribution, "runtime");
+    });
+}
 
 for (const [name, text] of [
     ["its enable flags run together on one short line", recipe([["https://github.com/example/delta", ALPHA_2]], `${"--enable-a".repeat(40)}!`)],
