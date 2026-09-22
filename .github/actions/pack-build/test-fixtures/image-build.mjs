@@ -30,6 +30,7 @@ switch (basename(process.argv[1])) {
       'org.opencontainers.image.revision': environment.BP_OCI_REVISION,
       ...Object.fromEntries(environment.BP_IMAGE_LABELS.split(' ').map((label) => label.split('='))),
     };
+    state.environments = { ...state.environments, [args[1]]: environment };
     writeFileSync(path, JSON.stringify(state));
     break;
   }

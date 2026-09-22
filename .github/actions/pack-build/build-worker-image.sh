@@ -20,6 +20,7 @@ pack build "$image" \
   --env "BP_IMAGE_LABELS=org.streamarr.contract.version=$contract" \
   --env 'BPE_APPEND_JAVA_TOOL_OPTIONS=--enable-native-access=ALL-UNNAMED' \
   --env 'BPE_DELIM_JAVA_TOOL_OPTIONS= ' \
+  --env BPE_DEFAULT_LANG=C.UTF-8 \
   --path .
 
 .github/actions/pack-build/verify-ffmpeg-image.sh "$image" "$version" \
