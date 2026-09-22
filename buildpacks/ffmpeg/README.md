@@ -14,6 +14,7 @@ buildpacks/ffmpeg/bin/update-lock --release v8.1.2-4
 buildpacks/ffmpeg/bin/update-lock --check
 buildpacks/ffmpeg/bin/update-lock --verify-upstream
 buildpacks/ffmpeg/bin/review-release
+buildpacks/ffmpeg/bin/review-release --approved
 node buildpacks/ffmpeg/bin/vendor-notices.mjs --dry-run
 ```
 
@@ -50,8 +51,11 @@ The inventory starts with each shipped Linux GPL binary's `-buildconf` output, t
 traces transitive static libraries, embedded headers and generated loaders through
 the pinned recipes. It is not a list of every build script or of external GPU drivers.
 
-[`notices/manifest`](notices/manifest) binds that review to the release, source revision
-and both archive digests. Offline validation and the buildpack reject a mismatch.
+[`notices/manifest`](notices/manifest) binds that review to the release, source revision,
+both archive digests and the reviewed content itself: `inventory_sha256` digests every file
+under `notices/` except the manifest, together with `SOURCE.txt`. Offline validation and the
+buildpack reject a mismatch, so an inventory, notice text, build configuration or source
+offer edited after the binding no longer inherits it and needs an approval of its own.
 Neither the lock resolver nor the notice generator marks notices as reviewed: they never
 write `notices/manifest`. Tests check notice contents against the inventory and verify their
 inclusion in fresh and cached layers. Full license texts and attribution remain in
@@ -61,13 +65,21 @@ the image, not just links to them.
 unchanged. It compares the reviewed and locked upstream revisions and requires the locked
 revision to descend from the reviewed one, the change list to be complete, and every changed
 path to lie outside the inventory: Jellyfin's changelog and patch series, the package
-version, and files used only by macOS or Windows builds. It then rebinds `notices/manifest`,
+version, and files used only by macOS or Windows builds. It also requires the inputs it is
+about to bind to be the ones the manifest bound: a carry-forward may move only the release tag
+and source revision inside them, so undoing that substitution must reproduce the bound content.
+An input edited since the binding exits with status 3, so nothing a working tree carries can
+inherit the review the manifest records. It then rebinds `notices/manifest`,
 the `ffmpeg` entry of `notices/sources.json` and `SOURCE.txt` to the locked release. The
 buildpack supplies the rest of the evidence by rejecting a binary whose `-buildconf` differs
 from the reviewed capture. A dependency recipe, toolchain image, licence text or FFmpeg
 source file that upstream changes directly instead exits with status 3, names the paths and
-changes nothing. Then review both binaries and their dependencies, update the notices and
-source instructions, and update the manifest by hand.
+changes nothing. Then review both binaries and their dependencies, regenerate the notices and
+source instructions with `bin/vendor-notices.mjs` and the captures with `bin/capture-buildconf`,
+review the diff, and bind `notices/manifest` with an approving review of the labelled Renovate
+pull request (see [Renovate synchronization](#renovate-synchronization)), or with
+`bin/review-release --approved` for a change Renovate did not propose. Never edit
+`notices/manifest` by hand.
 
 Jellyfin's quilt patches under `debian/patches/` are judged by what they do, not by their
 path: upstream's Linux build applies them to the FFmpeg tree before compiling, so a patch can
@@ -272,29 +284,64 @@ component uses the `build` capture group: `-10` sorts after `-9`, and packaging-
 are stable patch updates, not SemVer prereleases. Updates have their own PR and are not
 automerged. Major-version updates additionally require Dependency Dashboard approval.
 Renovate still proposes eligible minor and packaging updates automatically; their
-notice review must complete before CI and image packaging can pass. The synchronization
-workflow completes it when `bin/review-release` confirms an unchanged inventory; otherwise
-it annotates the run with the paths and patches that need a person and leaves the review
-inputs alone.
+notice review must complete before CI and image packaging can pass.
+
+The synchronization workflow does the mechanical work and leaves the judgement to a person:
+
+1. An unprivileged job per architecture downloads the locked archive, verifies it and captures
+   its `-buildconf` with `bin/capture-buildconf`. It is the only job that runs upstream's binary;
+   it holds no secret and no write permission, and hands over a text artifact.
+2. The synchronization job adopts those captures as data: each is a regular file of at most
+   64 KiB that starts with the banner and holds nothing but printable bytes and newlines, so an
+   adopted capture stays a text the review reads as a diff. It then regenerates the notice inputs
+   with `bin/vendor-notices.mjs`, and runs `bin/review-release` when nothing in the inventory or
+   the build configurations changed.
+3. An unchanged inventory is bound and committed with the lock. A changed one is committed
+   without a binding: an approval covers only the content it was submitted on, so a commit that
+   carries anything else restores the base's `notices/manifest` in that same commit. That
+   manifest names the previous release, so CI stays red until an approval of the new head binds
+   it; the pull request gets the `ffmpeg-notices-review` label and a comment listing what
+   changed. A commit carries only what the run produced: a pin the tool cannot follow degrades
+   to the lock, the captures this run adopted and that withdrawal, leaving
+   `notices/sources.json` and `SOURCE.txt` as the head holds them and deleting none, and its
+   comment asks for a regeneration pushed to the branch first, because an approval binds only
+   inputs that describe the locked release; a capture that failed leaves that architecture's
+   `buildconf` alone.
+   Only a run started by Renovate's own push replaces or deletes anything but the lock: every
+   other push may carry a correction, so its files stay as pushed and the run warns where they
+   differ from its own output and where the head holds a notice that output does not.
+4. `.github/workflows/approve-ffmpeg-notices.yml` binds the manifest when someone whose
+   permission on this repository is `admin` or `maintain` submits an **approving review** of
+   the labelled pull request's current head. Its first step asks the API for that role, because
+   a review's `author_association` reports organization membership, which carries no permission
+   here. `review-release --approved` writes only the manifest, and only when the
+   approved inputs already describe the locked release. A later synchronization that finds
+   nothing to commit keeps that approval and does not ask again; one that produces anything
+   the approval did not cover withdraws the binding along with it.
+
+Renovate rebuilds its branch when it rebases, which discards the bot's commits; the workflow
+then regenerates them, and a changed inventory needs a fresh approval.
 
 `.github/workflows/sync-ffmpeg-lock.yml` uses `pull_request_target` only for same-repository
-Renovate PRs. It executes resolver and review code from the trusted PR base, reads the proposed
-release from a Git object as data, and generates the lock and any carried-forward review
-entirely in the trusted checkout. It never executes proposed code with write credentials, and
-it never runs the downloaded binaries: ordinary CI checks their build configuration. The review
-quotes upstream file names, which the runner would read for workflow commands, so the step
-pauses command processing behind a random token while the review prints, escapes the text it
-repeats as the annotation, and fences it in the job summary. Only after detecting a change and
-verifying the head SHA does it mint a short-lived GitHub App token.
+Renovate PRs. It executes resolver, capture, regeneration and review code from the trusted PR
+base, reads the proposed release from a Git object as data, and generates everything in the
+trusted checkout. It never executes proposed code, and the job that mints credentials never
+runs the downloaded binaries. The regeneration and the review quote upstream file names, which
+the runner would read for workflow commands, so each step pauses command processing behind a
+random token while its output prints and escapes the text it repeats as the annotation. The
+report reaches people as one code block, fenced by more backticks than any run inside it and
+cut off at 16 KiB, so no upstream line can close it and a flooded report still posts; the job
+summary and the review request carry that same block. Only after detecting a change and
+verifying the head SHA does it mint a short-lived
+GitHub App token. Labels and comments use the workflow token, which cannot
+trigger further workflows. The approval workflow runs on `pull_request_review`, which has no
+base-only variant, so it likewise checks out and executes only the base revision's scripts.
 
-GitHub's `createCommitOnBranch` API creates a signed commit containing only the generated lock
-and, after a confirmed review on a run started by Renovate's own push, `notices/manifest`,
-`notices/sources.json` and `SOURCE.txt`. Renovate rebuilds its branch from the base, so only
-then are the head's copies of those hand-maintained files known to be untouched. Every other
-push, such as a maintainer's correction or a reverted manifest, still synchronizes the lock but
-keeps those three files as pushed; the run warns when they differ from the carried-forward
-review. Its `expectedHeadOid` check rejects a moved branch atomically. The App token triggers
-normal PR checks after the commit; the default Actions token would suppress those runs.
+GitHub's `createCommitOnBranch` API creates a signed commit limited to the lock, `SOURCE.txt`
+and `notices/`; `notices/manifest` is bound only by a confirmed or approved review, and an
+unreviewed commit may only withdraw it.
+Its `expectedHeadOid` check rejects a moved branch atomically. The App token triggers normal
+PR checks after the commit; the default Actions token would suppress those runs.
 
 Install a GitHub App on this repository with repository contents read/write access and configure
 these Actions secrets:

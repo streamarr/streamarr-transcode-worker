@@ -71,9 +71,14 @@ class FfmpegReleaseReviewTest {
             source_revision=%s
             amd64_sha256=%s
             arm64_sha256=%s
+            inventory_sha256=%s
             """
                 .formatted(
-                    LOCKED_RELEASE, LOCKED_REVISION, LOCKED_AMD64_SHA256, LOCKED_ARM64_SHA256));
+                    LOCKED_RELEASE,
+                    LOCKED_REVISION,
+                    LOCKED_AMD64_SHA256,
+                    LOCKED_ARM64_SHA256,
+                    FfmpegInventoryDigest.of(review.buildpack())));
     assertThat(Files.readString(review.inventory()))
         .contains(
             "https://raw.githubusercontent.com/jellyfin/jellyfin-ffmpeg/%s/LICENSE.md"
@@ -832,6 +837,23 @@ class FfmpegReleaseReviewTest {
   }
 
   @Test
+  @DisplayName("Should require human review when a reviewed input changed since it was bound")
+  void shouldRequireHumanReviewWhenAReviewedInputChangedSinceItWasBound() throws Exception {
+    var review = review().upstreamChanges("debian/changelog");
+    Files.writeString(
+        review.sourceAccess(),
+        Files.readString(review.sourceAccess())
+            .replace("https://codeload.github.com/", "https://mirror.invalid/"));
+    var reviewedInputs = review.reviewedInputs();
+
+    var result = review.execute();
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(HUMAN_REVIEW_REQUIRED);
+    assertThat(result.output()).contains("changed since " + reviewed("release") + " was bound");
+    assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
+  }
+
+  @Test
   @DisplayName("Should fail without approving anything when the source offer names a longer tag")
   void shouldFailWithoutApprovingAnythingWhenTheSourceOfferNamesALongerTag() throws Exception {
     var review = review(reviewed("release") + "0").upstreamChanges("debian/changelog");
@@ -846,7 +868,7 @@ class FfmpegReleaseReviewTest {
     var result = review.execute();
 
     assertThat(result.exitCode()).as(result.output()).isEqualTo(1);
-    assertThat(result.output()).contains("bind them by hand");
+    assertThat(result.output()).contains("regenerate them and bind with an approving review");
     assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
   }
 
@@ -886,6 +908,113 @@ class FfmpegReleaseReviewTest {
     var result = review.upstreamComparison("{\"status\": \"ahead\"}\n").execute();
 
     assertThat(result.exitCode()).as(result.output()).isEqualTo(1);
+    assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
+  }
+
+  @Test
+  @DisplayName("Should bind the manifest without upstream access when a maintainer approved")
+  void shouldBindTheManifestWithoutUpstreamAccessWhenAMaintainerApproved() throws Exception {
+    var review = review();
+    var reviewedRevision = reviewed("source_revision");
+    for (var input : List.of(review.inventory(), review.sourceAccess())) {
+      Files.writeString(
+          input,
+          Files.readString(input)
+              .replace(reviewedRevision, LOCKED_REVISION)
+              .replace("releases/tag/" + reviewed("release"), "releases/tag/" + LOCKED_RELEASE));
+    }
+
+    var result = review.approved().execute();
+
+    assertThat(result.exitCode()).as(result.output()).isZero();
+    assertThat(Files.readString(review.manifest()))
+        .isEqualTo(
+            """
+            release=%s
+            source_revision=%s
+            amd64_sha256=%s
+            arm64_sha256=%s
+            inventory_sha256=%s
+            """
+                .formatted(
+                    LOCKED_RELEASE,
+                    LOCKED_REVISION,
+                    LOCKED_AMD64_SHA256,
+                    LOCKED_ARM64_SHA256,
+                    FfmpegInventoryDigest.of(review.buildpack())));
+    assertThat(review.upstreamRequests()).isEmpty();
+    var offlineValidation =
+        ScriptCommand.of(LOCK_UPDATER)
+            .argument("--check")
+            .argument("--root")
+            .argument(review.repository().toString())
+            .execute();
+    assertThat(offlineValidation.exitCode()).as(offlineValidation.output()).isZero();
+  }
+
+  @Test
+  @DisplayName("Should refuse an approval when the reviewed inputs describe another release")
+  void shouldRefuseAnApprovalWhenTheReviewedInputsDescribeAnotherRelease() throws Exception {
+    var review = review();
+    var reviewedInputs = review.reviewedInputs();
+
+    var result = review.approved().execute();
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(1);
+    assertThat(result.output()).contains("do not describe the locked release");
+    assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
+  }
+
+  @Test
+  @DisplayName("Should refuse an approval when the source offer still names the reviewed release")
+  void shouldRefuseAnApprovalWhenTheSourceOfferStillNamesTheReviewedRelease() throws Exception {
+    var review = review();
+    rebindRevision(review.inventory());
+    rebindRevision(review.sourceAccess());
+    var reviewedInputs = review.reviewedInputs();
+
+    var result = review.approved().execute();
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(1);
+    assertThat(result.output()).contains("do not describe the locked release");
+    assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
+  }
+
+  @Test
+  @DisplayName("Should refuse an approval when the source offer names a longer release tag")
+  void shouldRefuseAnApprovalWhenTheSourceOfferNamesALongerReleaseTag() throws Exception {
+    var review = review();
+    rebindRevision(review.inventory());
+    rebindRevision(review.sourceAccess());
+    Files.writeString(
+        review.sourceAccess(),
+        Files.readString(review.sourceAccess())
+            .replace(
+                "releases/tag/" + reviewed("release"), "releases/tag/" + LOCKED_RELEASE + "0"));
+    var reviewedInputs = review.reviewedInputs();
+
+    var result = review.approved().execute();
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(1);
+    assertThat(result.output()).contains("do not describe the locked release");
+    assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
+  }
+
+  @Test
+  @DisplayName("Should refuse an approval when the source offer omits the locked source revision")
+  void shouldRefuseAnApprovalWhenTheSourceOfferOmitsTheLockedSourceRevision() throws Exception {
+    var review = review();
+    rebindRevision(review.inventory());
+    Files.writeString(
+        review.sourceAccess(),
+        Files.readString(review.sourceAccess())
+            .replace("releases/tag/" + reviewed("release"), "releases/tag/" + LOCKED_RELEASE));
+    var reviewedInputs = review.reviewedInputs();
+
+    var result = review.approved().execute();
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(1);
+    assertThat(result.output()).contains("do not describe the locked release");
     assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
   }
 
@@ -1038,6 +1167,11 @@ class FfmpegReleaseReviewTest {
     return new ReviewFixture(repository, commands, temporaryDirectory);
   }
 
+  private static void rebindRevision(Path input) throws IOException {
+    Files.writeString(
+        input, Files.readString(input).replace(reviewed("source_revision"), LOCKED_REVISION));
+  }
+
   private static String reviewed(String key) throws IOException {
     var prefix = key + "=";
     return Files.readAllLines(BUILDPACK.resolve("notices/manifest")).stream()
@@ -1165,6 +1299,11 @@ class FfmpegReleaseReviewTest {
       return this;
     }
 
+    private ReviewFixture approved() {
+      command.argument("--approved");
+      return this;
+    }
+
     private ReviewFixture upstreamFailure(int curlExitCode) {
       command.environment("FAKE_UPSTREAM_EXIT", Integer.toString(curlExitCode));
       return this;
@@ -1196,6 +1335,10 @@ class FfmpegReleaseReviewTest {
 
     private Path lock() {
       return repository.resolve(BUILDPACK).resolve("ffmpeg.lock");
+    }
+
+    private Path buildpack() {
+      return repository.resolve(BUILDPACK);
     }
 
     private Path manifest() {

@@ -6,6 +6,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { inventoryDigest } from "./inventory-digest.mjs";
 
 const vendor = fileURLToPath(
     new URL("../bin/vendor-notices.mjs", import.meta.url),
@@ -244,7 +245,7 @@ deliver(fs.readFileSync(file));
     const validate = () => {
         write(
             "notices/manifest",
-            `release=v9.0.0-1\nsource_revision=${LOCKED}\namd64_sha256=${"d".repeat(64)}\narm64_sha256=${"e".repeat(64)}\n`,
+            `release=v9.0.0-1\nsource_revision=${LOCKED}\namd64_sha256=${"d".repeat(64)}\narm64_sha256=${"e".repeat(64)}\ninventory_sha256=${inventoryDigest(buildpack)}\n`,
         );
         return spawnSync(process.execPath, [generator, "--root", buildpack, "--validate"], {
             encoding: "utf8",
@@ -288,6 +289,21 @@ test("Should rebind only the FFmpeg revision when no upstream pin moved", (t) =>
     assert.match(result.output, /Inventory content unchanged/);
     const validation = validate();
     assert.equal(validation.status, 0, validation.stderr);
+});
+
+// The carry-forward binds a regenerated tree only while undoing those two substitutions restores
+// the content the manifest bound, so a rewrite of anything else would send every bump to review.
+test("Should leave a regenerated inventory a carry-forward can restore when no pin moved", (t) => {
+    const { buildpack, read, run, write } = fixture(t);
+    const bound = inventoryDigest(buildpack);
+
+    const result = run();
+
+    assert.equal(result.status, 0, result.output);
+    assert.match(result.output, /Inventory content unchanged/);
+    for (const input of ["notices/sources.json", "SOURCE.txt"])
+        write(input, read(input).replaceAll(LOCKED, REVIEWED).replaceAll("releases/tag/v9.0.0-1", "releases/tag/v8.1.2-4"));
+    assert.equal(inventoryDigest(buildpack), bound);
 });
 
 test("Should follow a moved pin without touching an unchanged license text", (t) => {

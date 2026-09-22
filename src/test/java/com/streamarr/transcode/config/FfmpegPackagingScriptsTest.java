@@ -15,6 +15,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import tools.jackson.databind.ObjectMapper;
@@ -70,6 +72,21 @@ class FfmpegPackagingScriptsTest {
 
     assertThat(result.exitCode()).isEqualTo(1);
     assertThat(result.output()).contains("FFmpeg notice inventory is stale", "source_revision");
+  }
+
+  @ParameterizedTest
+  @EnumSource(UnreviewedEdit.class)
+  @DisplayName("Should reject a reviewed input edited after the manifest bound the inventory")
+  void shouldRejectAReviewedInputEditedAfterTheManifestBoundTheInventory(UnreviewedEdit edit)
+      throws Exception {
+    var updater = lockUpdater();
+    assertThat(updater.command().execute().exitCode()).isZero();
+    edit.applyTo(updater.lock().getParent());
+
+    var result = updater.command().argument("--check").execute();
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(1);
+    assertThat(result.output()).contains("FFmpeg notice inventory changed since it was bound");
   }
 
   @Test
@@ -378,8 +395,9 @@ class FfmpegPackagingScriptsTest {
         source_revision=%s
         amd64_sha256=%s
         arm64_sha256=%s
+        inventory_sha256=%s
         """
-            .formatted(release, fullRevision, amd64Digest, arm64Digest));
+            .formatted(release, fullRevision, amd64Digest, arm64Digest, "0".repeat(64)));
     Files.writeString(buildpack.resolve("release"), release + "\n");
     var lock = buildpack.resolve("ffmpeg.lock");
     Files.copy(Path.of("buildpacks/ffmpeg/LICENSE.txt"), buildpack.resolve("LICENSE.txt"));
@@ -506,6 +524,8 @@ class FfmpegPackagingScriptsTest {
                         line ->
                             line.matches("(release|source_revision|amd64_sha256|arm64_sha256)=.*"))
                     .toList())
+            + "\ninventory_sha256="
+            + "0".repeat(64)
             + "\n");
     generateFixtureMaterials(buildpackRoot);
     var buildpack = buildpack(buildpackScript);
@@ -712,6 +732,22 @@ class FfmpegPackagingScriptsTest {
   }
 
   @ParameterizedTest
+  @CsvSource({"amd64,amd64", "x86_64,amd64", "arm64,arm64", "aarch64,arm64"})
+  @DisplayName("Should verify the archive against the locked digest of the requested architecture")
+  void shouldVerifyTheArchiveAgainstTheLockedDigestOfTheRequestedArchitecture(
+      String architecture, String locked) throws Exception {
+    var buildpack = buildpack();
+
+    var result = buildpack.command().environment("CNB_TARGET_ARCH", architecture).execute();
+
+    assertThat(result.exitCode()).as(result.output()).isZero();
+    var lock = Path.of("buildpacks/ffmpeg/ffmpeg.lock");
+    assertThat(Files.readString(buildpack.verified()))
+        .startsWith(lockValue(lock, locked + "_sha256") + "  ")
+        .endsWith("/" + lockValue(lock, locked + "_asset") + "\n");
+  }
+
+  @ParameterizedTest
   @ValueSource(
       strings = {
         "SOURCE.txt",
@@ -882,6 +918,7 @@ class FfmpegPackagingScriptsTest {
         Path.of("buildpacks/ffmpeg/lib/materials.sh"), buildpackLibrary.resolve("materials.sh"));
     Files.copy(
         Path.of("buildpacks/ffmpeg/lib/checksum.sh"), buildpackLibrary.resolve("checksum.sh"));
+    Files.copy(Path.of("buildpacks/ffmpeg/lib/runtime.sh"), buildpackLibrary.resolve("runtime.sh"));
     Files.copy(
         BUILDPACK.getParent().getParent().resolve("LICENSE.txt"),
         buildpackRoot.resolve("LICENSE.txt"));
@@ -914,6 +951,7 @@ class FfmpegPackagingScriptsTest {
     var layers = Files.createDirectory(temporaryDirectory.resolve("layers"));
     var layer = layers.resolve("ffmpeg");
     var tarArguments = temporaryDirectory.resolve("tar-arguments");
+    var verified = temporaryDirectory.resolve("verified");
     ScriptCommand.writeFake(
         commands,
         "curl",
@@ -947,7 +985,14 @@ class FfmpegPackagingScriptsTest {
         if [[ "$*" == *"generated/SHA256SUMS"* ]]; then
           exec shasum -a 256 "$@"
         fi
-        cat >/dev/null
+        if [[ " $* " == *" --strict "* && " $* " != *" --check "* ]]; then
+          echo 'Reading a digest is not verifying one' >&2
+          exit 1
+        fi
+        if [[ " $* " != *" --check "* ]]; then
+          exec shasum -a 256 "$@"
+        fi
+        cat >"${FAKE_VERIFIED}"
         exit "${FAKE_SHA256_EXIT:-0}"
         """);
     ScriptCommand.writeFake(
@@ -988,6 +1033,7 @@ class FfmpegPackagingScriptsTest {
         .layers(layers)
         .layer(layer)
         .tarArguments(tarArguments)
+        .verified(verified)
         .command(
             command(buildpackScript)
                 .prependPath(commands)
@@ -995,6 +1041,7 @@ class FfmpegPackagingScriptsTest {
                 .environment("CNB_TARGET_ARCH", "amd64")
                 .environment("FAKE_FFMPEG_LAYER", layer.toString())
                 .environment("FAKE_TAR_ARGUMENTS", tarArguments.toString())
+                .environment("FAKE_VERIFIED", verified.toString())
                 .environment("FAKE_FFMPEG_VERSION", ffmpegVersion)
                 .environment(
                     "FAKE_FFMPEG_NOTICES",
@@ -1028,6 +1075,12 @@ class FfmpegPackagingScriptsTest {
         source,
         Files.readString(source)
             .replace(currentRevision, lockValue(root.resolve("ffmpeg.lock"), "source_revision")));
+    var manifest = root.resolve("notices/manifest");
+    Files.writeString(
+        manifest,
+        Files.readString(manifest)
+            .replaceAll(
+                "(?m)^inventory_sha256=.*$", "inventory_sha256=" + FfmpegInventoryDigest.of(root)));
     var result =
         command(Path.of("node"))
             .argument("buildpacks/ffmpeg/bin/generate-notices.mjs")
@@ -1177,13 +1230,41 @@ class FfmpegPackagingScriptsTest {
     return ScriptCommand.of(script);
   }
 
+  private enum UnreviewedEdit {
+    SOURCE_OFFER,
+    BUILD_CONFIGURATION,
+    LICENCE_EXPRESSION;
+
+    private void applyTo(Path buildpack) throws IOException {
+      switch (this) {
+        case SOURCE_OFFER ->
+            append(buildpack.resolve("SOURCE.txt"), "Ask for the source by post instead.\n");
+        case BUILD_CONFIGURATION ->
+            append(buildpack.resolve("notices/buildconf-amd64.txt"), " --enable-libunreviewed\n");
+        case LICENCE_EXPRESSION -> {
+          var inventory = buildpack.resolve("notices/sources.json");
+          Files.writeString(
+              inventory,
+              Files.readString(inventory)
+                  .replace(
+                      "\"licenseExpression\": \"MIT\"",
+                      "\"licenseExpression\": \"LicenseRef-unreviewed\""));
+        }
+      }
+    }
+
+    private static void append(Path input, String unreviewed) throws IOException {
+      Files.writeString(input, Files.readString(input) + unreviewed);
+    }
+  }
+
   private record LockUpdaterFixture(Path lock, Path releaseJson, ScriptCommand command) {}
 
   private record ImageVerifierFixture(Path runtime, ScriptCommand command) {}
 
   @Builder
   private record BuildpackFixture(
-      Path layers, Path layer, Path tarArguments, ScriptCommand command) {
+      Path layers, Path layer, Path tarArguments, Path verified, ScriptCommand command) {
 
     private ScriptCommand.Result execute() throws IOException, InterruptedException {
       return command.execute();

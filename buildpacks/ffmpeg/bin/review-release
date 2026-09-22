@@ -9,6 +9,10 @@ repository_root="$(cd "${script_dir}/../../.." && pwd)"
 . "${script_dir}/../lib/http.sh"
 # shellcheck source=../lib/lock.sh
 . "${script_dir}/../lib/lock.sh"
+# shellcheck source=../lib/checksum.sh
+. "${script_dir}/../lib/checksum.sh"
+# shellcheck source=../lib/notices.sh
+. "${script_dir}/../lib/notices.sh"
 
 human_review_required=3
 # GitHub's comparison lists at most this many files, so a full list may be incomplete.
@@ -34,13 +38,19 @@ paths_outside_inventory=(
 )
 jellyfin_patch='^debian/patches/[A-Za-z0-9._+-]+\.patch$'
 
+approved=false
+
 usage() {
-  echo "Usage: $0 [--root REPOSITORY]" >&2
+  echo "Usage: $0 [--approved] [--root REPOSITORY]" >&2
   exit 2
 }
 
 while (( $# > 0 )); do
   case "$1" in
+    --approved)
+      approved=true
+      shift
+      ;;
     --root)
       (( $# >= 2 )) || usage
       repository_root="$(cd "$2" && pwd)"
@@ -246,8 +256,43 @@ for key in "${manifest_keys[@]}"; do
     bound=false
   fi
 done
+# A binding covers the content it was written for, so an edited inventory is no longer bound.
+if [[ "$(ffmpeg_lock_value "${manifest}" inventory_sha256)" \
+  != "$(ffmpeg_notices_digest "${buildpack_dir}")" ]]; then
+  bound=false
+fi
 if [[ "${bound}" == true ]]; then
   echo "FFmpeg notice inventory is already bound to the locked release"
+  exit 0
+fi
+
+write_manifest() {
+  local key
+  local digest
+  digest="$(ffmpeg_notices_digest "${buildpack_dir}")"
+  {
+    for key in "${manifest_keys[@]}"; do
+      printf '%s=%s\n' "${key}" "$(ffmpeg_lock_value "${lock_file}" "${key}")"
+    done
+    printf 'inventory_sha256=%s\n' "${digest}"
+  } >"$1"
+}
+
+# A maintainer's approval covers inputs that already describe the locked release.
+if [[ "${approved}" == true ]]; then
+  approved_release="$(ffmpeg_lock_value "${lock_file}" release)"
+  approved_revision="$(ffmpeg_lock_value "${lock_file}" source_revision)"
+  if ! jq -e --arg revision "${approved_revision}" \
+    '[.[] | select(.id == "ffmpeg")] | length == 1 and .[0].revision == $revision' \
+    "${inventory}" >/dev/null \
+    || ! grep -Eq "$(whole_value "releases/tag/${approved_release}")" "${source_access}" \
+    || ! grep -Fq "${approved_revision}" "${source_access}"; then
+    echo "Reviewed inputs do not describe the locked release; regenerate them before approving" >&2
+    exit 1
+  fi
+  write_manifest "${manifest}.approved"
+  mv "${manifest}.approved" "${manifest}"
+  echo "FFmpeg notice inventory is bound to ${approved_release} by maintainer approval"
   exit 0
 fi
 
@@ -333,15 +378,29 @@ if ! jq -e --arg revision "${locked_revision}" \
   || ! grep -Eq "$(whole_value "releases/tag/${locked_release}")" \
     "${temporary_directory}/SOURCE.txt" \
   || ! grep -Fq "${locked_revision}" "${temporary_directory}/SOURCE.txt"; then
-  echo "Reviewed inputs do not reference the reviewed release as expected; bind them by hand" >&2
+  echo "Reviewed inputs do not reference the reviewed release as expected;" \
+    "regenerate them and bind with an approving review" >&2
   exit 1
 fi
-for key in "${manifest_keys[@]}"; do
-  printf '%s=%s\n' "${key}" "$(ffmpeg_lock_value "${lock_file}" "${key}")"
-done >"${temporary_directory}/manifest"
-
+# A carry-forward inherits a review, so it may move only the release tag and source revision
+# inside the reviewed inputs: undoing that substitution must reproduce the content the manifest
+# bound. The inputs already name the locked release when a bind was interrupted or the
+# synchronization workflow regenerated them, so their digest alone cannot tell that from an edit.
+carried="${temporary_directory}/carried"
+mkdir "${carried}"
+cp -R "${buildpack_dir}/notices" "${carried}/notices"
+cp "${source_access}" "${carried}/SOURCE.txt"
+replace_in_file "${carried}/notices/sources.json" "${locked_revision}" "${reviewed_revision}"
+replace_in_file "${carried}/SOURCE.txt" "${locked_revision}" "${reviewed_revision}"
+replace_in_file "${carried}/SOURCE.txt" \
+  "releases/tag/${locked_release}" "releases/tag/${reviewed_release}"
+if [[ "$(ffmpeg_notices_digest "${carried}")" \
+  != "$(ffmpeg_lock_value "${manifest}" inventory_sha256)" ]]; then
+  require_human_review "reviewed inputs changed since ${reviewed_release} was bound"
+fi
 mv "${temporary_directory}/sources.json" "${inventory}"
 mv "${temporary_directory}/SOURCE.txt" "${source_access}"
+write_manifest "${temporary_directory}/manifest"
 mv "${temporary_directory}/manifest" "${manifest}"
 echo "FFmpeg notice inventory is unchanged from ${reviewed_release} to ${locked_release}:" \
   "${file_count} upstream files changed, none of them inside the inventory"

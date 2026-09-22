@@ -18,47 +18,21 @@ lock_file="${buildpack_dir}/ffmpeg.lock"
 . "${buildpack_dir}/lib/materials.sh"
 # shellcheck source=../lib/checksum.sh
 . "${buildpack_dir}/lib/checksum.sh"
-
-download() {
-  local url="$1"
-  local destination="$2"
-  local arguments=(
-    --fail
-    --location
-    --proto '=https'
-    --proto-redir '=https'
-    --retry 3
-    --silent
-    --show-error
-  )
-  ffmpeg_curl "${arguments[@]}" "${url}" --output "${destination}"
-}
+# shellcheck source=../lib/runtime.sh
+. "${buildpack_dir}/lib/runtime.sh"
 
 ffmpeg_lock_validate "${lock_file}"
 ffmpeg_notices_validate "${lock_file}" "${buildpack_dir}"
 ffmpeg_materials_validate "${buildpack_dir}"
+ffmpeg_notices_bound "${buildpack_dir}"
 release="$(ffmpeg_lock_value "${lock_file}" release)"
 version="$(ffmpeg_lock_value "${lock_file}" version)"
 source_revision="$(ffmpeg_lock_value "${lock_file}" source_revision)"
 
-case "${target_arch}" in
-  amd64 | x86_64)
-    sbom_arch=amd64
-    asset="$(ffmpeg_lock_value "${lock_file}" amd64_asset)"
-    checksum="$(ffmpeg_lock_value "${lock_file}" amd64_sha256)"
-    ;;
-  arm64 | aarch64)
-    sbom_arch=arm64
-    asset="$(ffmpeg_lock_value "${lock_file}" arm64_asset)"
-    checksum="$(ffmpeg_lock_value "${lock_file}" arm64_sha256)"
-    ;;
-  *)
-    echo "Unsupported FFmpeg target architecture: ${target_arch}" >&2
-    exit 1
-    ;;
-esac
+sbom_arch="$(ffmpeg_runtime_architecture "${target_arch}")"
+asset="$(ffmpeg_lock_value "${lock_file}" "${sbom_arch}_asset")"
+checksum="$(ffmpeg_lock_value "${lock_file}" "${sbom_arch}_sha256")"
 
-download_url="https://github.com/jellyfin/jellyfin-ffmpeg/releases/download/${release}/${asset}"
 layer="${layers_dir}/ffmpeg"
 layer_metadata="${layers_dir}/ffmpeg.toml"
 cache_key="${release}/${asset}/${checksum}"
@@ -66,20 +40,7 @@ cache_key="${release}/${asset}/${checksum}"
 if [[ ! -x "${layer}/bin/ffmpeg" ]] || ! grep -Fq "cache_key = \"${cache_key}\"" "${layer_metadata}" 2>/dev/null; then
   rm -rf "${layer}"
   mkdir -p "${layer}/bin"
-
-  download_dir="$(mktemp -d)"
-  trap 'rm -rf "${download_dir}"' EXIT
-  archive="${download_dir}/${asset}"
-
-  download "${download_url}" "${archive}"
-  printf '%s  %s\n' "${checksum}" "${archive}" | ffmpeg_sha256_check --check --strict
-
-  tar \
-    --extract \
-    --xz \
-    --file "${archive}" \
-    --directory "${layer}/bin" \
-    ffmpeg ffprobe
+  ffmpeg_runtime_extract "${lock_file}" "${sbom_arch}" "${layer}/bin" ffmpeg ffprobe
 fi
 
 rm -rf "${layer}/env.launch"
@@ -101,8 +62,7 @@ fi
   | grep -F -- "-hls_segment_options" >/dev/null
 # The notice inventory starts from this capture, so a differing binary is unreviewed.
 reviewed_buildconf="notices/buildconf-${sbom_arch}.txt"
-if ! "${layer}/bin/ffmpeg" -buildconf 2>&1 \
-  | sed -n '/^ffmpeg version /,$p' \
+if ! ffmpeg_runtime_buildconf "${layer}/bin/ffmpeg" \
   | cmp -s - "${buildpack_dir}/${reviewed_buildconf}"; then
   echo "FFmpeg build configuration differs from ${reviewed_buildconf}; review the notice inventory" >&2
   exit 1

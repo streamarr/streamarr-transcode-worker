@@ -6,6 +6,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { inventoryDigest } from "./inventory-digest.mjs";
 
 const generator = fileURLToPath(
     new URL("../bin/generate-notices.mjs", import.meta.url),
@@ -60,10 +61,6 @@ function fixture(t) {
         ].join("\n") + "\n",
     );
     fs.writeFileSync(
-        path.join(root, "notices/manifest"),
-        `release=v8.1.2-4\nsource_revision=${"1".repeat(40)}\namd64_sha256=${"a".repeat(64)}\narm64_sha256=${"b".repeat(64)}\n`,
-    );
-    fs.writeFileSync(
         path.join(root, "SOURCE.txt"),
         `Corresponding Source: ${component.repository} ${component.revision}\n`,
     );
@@ -74,13 +71,20 @@ function fixture(t) {
             `configuration: ${arch}\n`,
         );
     }
-    const writeInventory = () =>
+    const bindManifest = () =>
+        fs.writeFileSync(
+            path.join(root, "notices/manifest"),
+            `release=v8.1.2-4\nsource_revision=${"1".repeat(40)}\namd64_sha256=${"a".repeat(64)}\narm64_sha256=${"b".repeat(64)}\ninventory_sha256=${inventoryDigest(root)}\n`,
+        );
+    const writeInventory = () => {
         fs.writeFileSync(
             path.join(root, "notices/sources.json"),
             JSON.stringify(components),
         );
+        bindManifest();
+    };
     writeInventory();
-    return { root, text, components, writeInventory };
+    return { root, text, components, writeInventory, bindManifest };
 }
 
 function run(root, ...args) {
@@ -217,6 +221,7 @@ test("Should validate source inputs without requiring or writing generated artif
             `source_revision=${"1".repeat(40)}`,
             `amd64_sha256=${"a".repeat(64)}`,
             `arm64_sha256=${"b".repeat(64)}`,
+            `inventory_sha256=${inventoryDigest(root)}`,
         ].join("\n") + "\n";
     fs.writeFileSync(path.join(root, "notices/manifest"), manifest);
 
@@ -462,13 +467,13 @@ test("Should report recipe and build-configuration changes without updating revi
     assert.equal(run(root).status, 0);
     const snapshot = path.join(root, "generated/review-inputs.json");
     const before = fs.readFileSync(snapshot);
-    const manifest = fs.readFileSync(path.join(root, "notices/manifest"));
     components[1].recipe = "changed-build-recipe";
     writeInventory();
     fs.appendFileSync(
         path.join(root, "notices/buildconf-arm64.txt"),
         "--enable-extra\n",
     );
+    const manifest = fs.readFileSync(path.join(root, "notices/manifest"));
 
     const result = run(root, "--compare", snapshot);
 
@@ -514,7 +519,7 @@ test("Should reject unrecognized approval-manifest entries during offline valida
     const result = run(root, "--validate");
 
     assert.notEqual(result.status, 0);
-    assert.match(result.output, /notice manifest.*four entries/);
+    assert.match(result.output, /notice manifest.*five entries/);
 });
 
 test("Should map component declarations and exact source notices in both generated formats", (t) => {

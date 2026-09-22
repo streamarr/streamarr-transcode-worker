@@ -1,0 +1,140 @@
+name: Approve FFmpeg notices
+
+on:
+  pull_request_review:
+    types: [ submitted ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  REVIEW_LABEL: ffmpeg-notices-review
+
+jobs:
+  bind_ffmpeg_notices:
+    name: Bind approved FFmpeg notices
+    # Only an approval of a labelled, same-repository Renovate update binds anything, and who
+    # approved is decided by the first step: author_association reports organization membership,
+    # which carries no permission on this repository.
+    if: >-
+      github.event.review.state == 'approved' &&
+      github.event.pull_request.user.login == 'renovate[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.event.pull_request.head.ref, 'renovate/') &&
+      contains(github.event.pull_request.labels.*.name, 'ffmpeg-notices-review')
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Require a maintaining approver
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPROVER: ${{ github.event.review.user.login }}
+        run: |
+          role="$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${APPROVER}/permission" \
+            --jq '.role_name')"
+          case "${role}" in
+            admin | maintain) ;;
+            *)
+              echo "${APPROVER} holds ${role} on ${GITHUB_REPOSITORY};" \
+                "only admin or maintain may approve FFmpeg notices" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Check out trusted reviewer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted
+          persist-credentials: false
+
+      - name: Check out approved Renovate head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: proposed
+          persist-credentials: false
+
+      - name: Require approval of the current head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPROVED_SHA: ${{ github.event.review.commit_id }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          git check-ref-format "refs/heads/${HEAD_REF}"
+          current_head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          if [[ "${APPROVED_SHA}" != "${EXPECTED_HEAD_SHA}" \
+            || "${current_head_sha}" != "${EXPECTED_HEAD_SHA}" \
+            || "$(git -C proposed rev-parse HEAD)" != "${EXPECTED_HEAD_SHA}" ]]; then
+            echo "The approval does not cover the current Renovate head" >&2
+            exit 1
+          fi
+
+      # Trusted code reads the approved inputs as data and writes only the manifest.
+      - name: Bind approved notice inventory from trusted code
+        id: binding
+        run: |
+          trusted/buildpacks/ffmpeg/bin/review-release --approved \
+            --root "${GITHUB_WORKSPACE}/proposed" | tee -a "${GITHUB_STEP_SUMMARY}"
+          blob="$(git -C proposed hash-object -w \
+            "${GITHUB_WORKSPACE}/proposed/buildpacks/ffmpeg/notices/manifest")"
+          echo "blob=${blob}" >>"${GITHUB_OUTPUT}"
+          if [[ "${blob}" == "$(git -C proposed rev-parse HEAD:buildpacks/ffmpeg/notices/manifest)" ]]; then
+            echo "changed=false" >>"${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          echo "changed=true" >>"${GITHUB_OUTPUT}"
+
+      - name: Mint lock bot token
+        if: steps.binding.outputs.changed == 'true'
+        id: lock_bot
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.ORG_STREAMARR_RELEASE_CLIENT_ID }}
+          private-key: ${{ secrets.ORG_STREAMARR_RELEASE_PRIVATE_KEY }}
+          permission-contents: write
+
+      - name: Commit approved manifest
+        if: steps.binding.outputs.changed == 'true'
+        working-directory: proposed
+        env:
+          GH_TOKEN: ${{ steps.lock_bot.outputs.token }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BLOB: ${{ steps.binding.outputs.blob }}
+          APPROVER: ${{ github.event.review.user.login }}
+        run: |
+          jq -n \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg branch "${HEAD_REF}" \
+            --arg expectedHead "${EXPECTED_HEAD_SHA}" \
+            --arg body "Approved by ${APPROVER} in a review of ${EXPECTED_HEAD_SHA}." \
+            --arg contents "$(git cat-file blob "${BLOB}" | base64 -w 0)" \
+            '{query: "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid url } } }",
+              variables: {input: {
+                branch: {repositoryNameWithOwner: $repository, branchName: $branch},
+                expectedHeadOid: $expectedHead,
+                message: {headline: "behavioral: bind FFmpeg notice manifest after maintainer approval", body: $body},
+                fileChanges: {additions: [{path: "buildpacks/ffmpeg/notices/manifest", contents: $contents}]}
+              }}}' | gh api graphql --input - --jq '.data.createCommitOnBranch.commit | {oid, url}'
+
+      - name: Clear the review request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr edit "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --remove-label "${REVIEW_LABEL}"
