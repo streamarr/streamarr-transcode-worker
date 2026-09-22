@@ -409,17 +409,21 @@ async function licenseExpression(id, repository) {
     }
 }
 
-// A recipe is read line by line: a line continued with a backslash counts as one, and a comment is
-// not read. Upstream writes the recipe, so every pattern here matches in time linear in its length.
+// A recipe is read line by line: a line continued with a backslash counts as one, and a comment,
+// which a # starts at the beginning of a word, is not read. Upstream writes the recipe, so every
+// pattern here matches in time linear in its length.
 const commandLines = (text) =>
     text
         .replace(/\\\r?\n/g, " ")
         .split("\n")
-        .map((line) => line.replace(/(?:^|\s)#.*/, ""));
+        .map((line) => line.replace(/(?:^|[\s;&|(])#.*/, ""));
 
-// Whether the line runs one of the commands, wherever it stands on the line.
+// Whether the line runs one of the commands, wherever it stands on the line. A quoted word, as in
+// a diagnostic, runs nothing.
 const runs = (line, commands) =>
-    new RegExp(`(?:^|[\\s;&|({\`])(?:${commands})(?:\\s|$)`).test(line);
+    new RegExp(`(?:^|[\\s;&|({\`])(?:${commands})(?:\\s|$)`).test(
+        line.replace(/"[^"]*"|'[^']*'/g, ""),
+    );
 
 // A recipe prints its flags for FFmpeg's configure and passes others to its own build, so a flag is
 // an --enable-* word on a line that runs echo or printf, whatever else it prints.

@@ -1114,9 +1114,14 @@ test("Should propose a dependency as embedded headers with its licence vendored 
     assert.equal(validate().status, 0);
 });
 
+const STATIC_DELTA = recipe([["https://github.com/example/delta", ALPHA_2]], "--enable-libdelta");
+
 for (const [name, text] of [
-    ["links its library statically", recipe([["https://github.com/example/delta", ALPHA_2]], "--enable-libdelta")],
-    ["names gen-implib only in a comment", `${recipe([["https://github.com/example/delta", ALPHA_2]], "--enable-libdelta")}# gen-implib is not run: the library links statically\n`],
+    ["links its library statically", STATIC_DELTA],
+    ["names gen-implib only in a comment", `${STATIC_DELTA}# gen-implib is not run: the library links statically\n`],
+    ["names gen-implib only in a comment behind a command", `${STATIC_DELTA}ffbuild_dockerbuild() {\n    true;# gen-implib "$FFBUILD_PREFIX"/lib/{libdelta.so.2,libdelta.a}\n}\n`],
+    ["names gen-implib only in a quoted diagnostic", `${STATIC_DELTA}ffbuild_dockerbuild() {\n    echo "run gen-implib later"\n}\n`],
+    ["names gen-implib only in a quoted assignment", `${STATIC_DELTA}NOTE=' gen-implib is not used by this recipe '\n`],
 ]) {
     test(`Should propose a dependency as a static runtime library when its recipe ${name}`, (t) => {
         const context = fixture(t);
@@ -1262,6 +1267,8 @@ for (const [name, text] of [
     ["has a configure flag that neither build configuration enables", recipe(LIBXCB, "--enable-libxcb")],
     ["passes an option the build configurations enable to its own build", `${recipe(LIBXCB)}ffbuild_dockerbuild() {\n    echo building\n    ./configure \\\n        --enable-libalpha\n}\n`],
     ["echoes a flag the build configurations enable only in a comment", `${recipe(LIBXCB)}${configuring("return 0 # echo --enable-libalpha")}# echo --enable-libalpha\n`],
+    ["echoes a flag the build configurations enable only in a comment behind a command", `${recipe(LIBXCB)}${configuring("return 0;# echo --enable-libalpha")}`],
+    ["names echo and a flag the build configurations enable only inside quotes", `${recipe(LIBXCB)}${configuring('true " echo --enable-libalpha"')}`],
 ]) {
     test(`Should report an unchanged inventory when a recipe the review left out ${name}`, (t) => {
         const { inventory, recipes, run, serveRecipes } = fixture(t);

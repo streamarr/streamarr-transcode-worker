@@ -172,7 +172,9 @@ shows its flag, while one without flags stays out until upstream gives it a new 
 flags are the `--enable-*` words of every line that runs `echo` or `printf`, wherever the command
 stands on the line and whatever else it prints, as in `[[ $TARGET == linux* ]] && echo --enable-vaapi`
 or `echo --disable-w32threads --enable-pthreads`. A line continued with a backslash counts as one
-line, a comment is not read, and options a recipe passes to its own build are not flags. An unclaimed pin of a recipe in the binaries is proposed again on every run until
+line, a comment, which a `#` starts at the beginning of a word (after whitespace, `;`, `&`, `|` or
+`(`), is not read, a quoted `echo`, as in a diagnostic, runs nothing, and options a recipe passes to
+its own build are not flags. An unclaimed pin of a recipe in the binaries is proposed again on every run until
 a component records it: a dependency that is only a build input is recorded with the
 `build-input` distribution. A proposed component gets the
 architectures that rule names and its licence files come from the repository listing. Its id
@@ -187,8 +189,9 @@ stubs and the headers compiled into them and load the system library at run time
 proposed with the `embedded` distribution and a role that names the import shims and says the
 system library is not bundled, as libdrm and libva are inventoried, and their licence notices are
 still vendored because the headers are compiled in. The report lists such a proposal as
-`Added component: <id> (import shim)`. The command is read as flags are, on a line of the recipe and
-not in a comment. The text proves that only for a recipe with one pin that runs `rm` on a `.so`,
+`Added component: <id> (import shim)`. The command is read as flags are, on a line of the recipe,
+outside quotes and not in a comment: a diagnostic or comment that names `gen-implib` runs nothing.
+The text proves that only for a recipe with one pin that runs `rm` on a `.so`,
 wherever the line names it, as `45-x11/30-libxcb.sh` removes every library it built through a loop
 variable: one that runs `gen-implib` but pins several repositories, as `20-libiconv.sh` pins gnulib
 beside libiconv, does not say which pin the stubs stand for, and one that keeps the shared library
