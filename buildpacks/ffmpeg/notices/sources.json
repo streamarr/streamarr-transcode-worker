@@ -863,6 +863,27 @@
     "revisionEvidence": "source"
   },
   {
+    "id": "libva",
+    "repository": "https://github.com/intel/libva",
+    "revision": "710eb465c6277ee2cac3e6948767b01eebe7e77a",
+    "recipe": "builder/scripts.d/50-vaapi/50-libva.sh",
+    "architectures": [
+      "amd64",
+      "arm64"
+    ],
+    "role": "VA-API headers used with generated import shims; system libva and its drivers are not bundled.",
+    "notices": [
+      {
+        "url": "https://raw.githubusercontent.com/intel/libva/710eb465c6277ee2cac3e6948767b01eebe7e77a/COPYING",
+        "sha256": "c86a782ee845b52472dae9b9d79fb915d333628ac0efe49cdce63644814931de",
+        "file": "libva/COPYING.txt"
+      }
+    ],
+    "licenseExpression": "MIT",
+    "distribution": "embedded",
+    "revisionEvidence": "source"
+  },
+  {
     "id": "libvorbis",
     "recipe": "builder/scripts.d/45-libvorbis.sh",
     "repository": "https://github.com/xiph/vorbis",
