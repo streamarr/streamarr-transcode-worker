@@ -289,9 +289,10 @@ jobs:
           done < <(cd trusted && find buildpacks/ffmpeg/ffmpeg.lock buildpacks/ffmpeg/SOURCE.txt \
             buildpacks/ffmpeg/notices -type f -print0)
 
-          # Only a regenerated inventory says which notices no longer belong to it.
+          # Only a regenerated inventory says which notices no longer belong to it, and removing
+          # one replaces the head as much as rewriting one does, so the same push decides both.
           deletions='[]'
-          if [[ -e "${regenerated}" ]]; then
+          if [[ -e "${regenerated}" && "${SENDER}" == 'renovate[bot]' ]]; then
             while IFS= read -r path; do
               if [[ ! -e "trusted/${path}" ]]; then
                 deletions="$(jq -c --arg path "${path}" '. + [{path: $path}]' <<<"${deletions}")"

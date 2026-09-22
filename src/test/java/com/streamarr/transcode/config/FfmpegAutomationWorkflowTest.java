@@ -655,6 +655,24 @@ class FfmpegAutomationWorkflowTest {
         .containsExactlyElementsOf(regenerated ? List.of(HEAD_ONLY_NOTICE) : List.of());
   }
 
+  @Test
+  @DisplayName("Should keep a notice only the head carries when a maintainer started the run")
+  void shouldKeepANoticeOnlyTheHeadCarriesWhenAMaintainerStartedTheRun() throws Exception {
+    var workspace =
+        workspaceWhoseHeadDiffersFromTheTrustedCheckout(List.of(), List.of(HEAD_ONLY_NOTICE));
+    var outputs = temporaryDirectory.resolve("outputs");
+    recordRegeneratedInputs();
+
+    var result =
+        prepareStep(workspace)
+            .environment("REVIEWED", "false")
+            .environment("SENDER", "a-maintainer")
+            .execute();
+
+    assertThat(result.exitCode()).as(result.output()).isZero();
+    assertThat(pathsOf(outputs, "deletions")).isEmpty();
+  }
+
   @ParameterizedTest
   @ValueSource(booleans = {true, false})
   @DisplayName("Should withdraw a bound manifest when an unreviewed run commits an inventory")

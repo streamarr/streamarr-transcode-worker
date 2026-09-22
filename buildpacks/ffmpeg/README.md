@@ -303,8 +303,9 @@ The synchronization workflow does the mechanical work and leaves the judgement t
    comment asks for a regeneration pushed to the branch first, because an approval binds only
    inputs that describe the locked release; a capture that failed leaves that architecture's
    `buildconf` alone.
-   Only a run started by Renovate's own push replaces anything but the lock: every other push
-   may carry a correction, so its files stay as pushed and the run warns where they differ.
+   Only a run started by Renovate's own push replaces or deletes anything but the lock: every
+   other push may carry a correction, so its files stay as pushed and the run warns where they
+   differ.
 4. `.github/workflows/approve-ffmpeg-notices.yml` binds the manifest when someone whose
    permission on this repository is `admin` or `maintain` submits an **approving review** of
    the labelled pull request's current head. Its first step asks the API for that role, because
