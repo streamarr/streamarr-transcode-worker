@@ -496,7 +496,7 @@ class FfmpegAutomationWorkflowTest {
       for (var checkout : List.of("trusted", "proposed")) {
         var file = workspace.resolve(checkout).resolve(path);
         Files.createDirectories(file.getParent());
-        Files.writeString(file, "%s as the %s checkout holds it\n".formatted(path, checkout));
+        Files.writeString(file, "%s as the %s checkout holds it".formatted(path, checkout) + "\n");
       }
     }
     ScriptCommand.writeFake(

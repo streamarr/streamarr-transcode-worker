@@ -600,7 +600,7 @@ class FfmpegReleaseReviewTest {
                     .status("modified")
                     .path(PATCH)
                     .reviewed(reviewed)
-                    .locked(reviewed.replaceFirst("=+\n", edit))
+                    .locked(reviewed.replaceFirst("=++\n", edit))
                     .build())
             .execute();
 
@@ -914,7 +914,9 @@ class FfmpegReleaseReviewTest {
     var result = review.upstreamComparison(comparison).execute();
 
     assertThat(result.exitCode()).as(result.output()).isEqualTo(1);
-    assertThat(result.output()).doesNotContain("inventory is unchanged");
+    assertThat(result.output())
+        .contains("Expected every upstream change to be an object naming a file")
+        .doesNotContain("inventory is unchanged");
     assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
   }
 
@@ -940,7 +942,9 @@ class FfmpegReleaseReviewTest {
     var result = review.upstreamComparison(comparison).execute();
 
     assertThat(result.exitCode()).as(result.output()).isEqualTo(1);
-    assertThat(result.output()).doesNotContain("inventory is unchanged");
+    assertThat(result.output())
+        .contains("Expected a single upstream comparison with a status and a change list")
+        .doesNotContain("inventory is unchanged");
     assertThat(review.reviewedInputs()).isEqualTo(reviewedInputs);
   }
 
