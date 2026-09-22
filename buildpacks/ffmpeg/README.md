@@ -188,11 +188,13 @@ proposed with the `embedded` distribution and a role that names the import shims
 system library is not bundled, as libdrm and libva are inventoried, and their licence notices are
 still vendored because the headers are compiled in. The report lists such a proposal as
 `Added component: <id> (import shim)`. The command is read as flags are, on a line of the recipe and
-not in a comment. The text proves that only for a recipe with one pin: one that runs `gen-implib`
-but pins several repositories, as `20-libiconv.sh` pins gnulib beside libiconv, does not say which
-pin the stubs stand for, so every pin of it is proposed as a static `runtime` library and the report
-says `Added component: <id> (generates import shims; classify by hand)` for a person to classify.
-Any other pin is proposed as a static `runtime` library. New `DEPS` entries and
+not in a comment. The text proves that only for a recipe with one pin that runs `rm` on a `.so`,
+wherever the line names it, as `45-x11/30-libxcb.sh` removes every library it built through a loop
+variable: one that runs `gen-implib` but pins several repositories, as `20-libiconv.sh` pins gnulib
+beside libiconv, does not say which pin the stubs stand for, and one that keeps the shared library
+does not say what the binaries carry, so every pin of such a recipe is proposed as a static
+`runtime` library and the report says `Added component: <id> (generates import shims; classify by
+hand)` for a person to classify. Any other pin is proposed as a static `runtime` library. New `DEPS` entries and
 submodules are not discovered: they are followed only for components the inventory already records.
 
 Notices whose texts were byte-identical at review share one file, within a component (OpenMPT's

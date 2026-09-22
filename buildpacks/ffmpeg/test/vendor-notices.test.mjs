@@ -1153,6 +1153,45 @@ test("Should propose every pin as a static runtime library and ask for a classif
     assert.match(context.read("SOURCE.txt"), /epsilon \(amd64, arm64\)\n {2}Static library \(--enable-libdelta\)\./);
 });
 
+// A recipe that generates import shims but keeps the shared library it built does not say what the
+// binaries carry: the pin keeps the static proposal and a person classifies it.
+test("Should propose a dependency as a static runtime library and ask for a classification when a recipe that generates import shims keeps the shared library", (t) => {
+    const context = fixture(t);
+    const keeping = recipe([["https://github.com/example/delta", ALPHA_2]], "--enable-libdelta", "libdelta").replace(/ *rm .*\n/, "");
+    context.serveRecipes(LOCKED, new Map(context.recipes).set("50-delta.sh", keeping));
+    serveProposal(context, "delta");
+
+    const result = context.run();
+
+    assert.equal(result.status, 0, result.output);
+    assert.match(result.output, /Added component: delta \(generates import shims; classify by hand\)\n/);
+    const delta = context.inventory().find((component) => component.id === "delta");
+    assert.equal(delta.role, "Static library (--enable-libdelta).");
+    assert.equal(delta.distribution, "runtime");
+});
+
+// Models 45-x11/30-libxcb.sh, which generates the shims and removes the shared objects of every
+// library it built through a loop variable, naming none of them.
+test("Should propose a dependency as embedded headers when its recipe generates import shims and removes the shared objects through a loop variable", (t) => {
+    const context = fixture(t);
+    const looping =
+        `${recipe([["https://github.com/example/delta", ALPHA_2]], "--enable-libdelta")}ffbuild_dockerbuild() {\n` +
+        '    for LIBNAME in "$FFBUILD_PREFIX"/lib/libdelta*.so.?; do\n' +
+        '        gen-implib "$LIBNAME" "${LIBNAME%%.*}.a"\n' +
+        '        rm "${LIBNAME%%.*}"{.so*,.la}\n' +
+        "    done\n}\n";
+    context.serveRecipes(LOCKED, new Map(context.recipes).set("50-delta.sh", looping));
+    serveProposal(context, "delta");
+
+    const result = context.run();
+
+    assert.equal(result.status, 0, result.output);
+    assert.match(result.output, /Added component: delta \(import shim\)\n/);
+    const delta = context.inventory().find((component) => component.id === "delta");
+    assert.equal(delta.role, "Headers used with generated import shims (--enable-libdelta); the system library is not bundled.");
+    assert.equal(delta.distribution, "embedded");
+});
+
 for (const [name, text] of [
     ["its enable flags run together on one short line", recipe([["https://github.com/example/delta", ALPHA_2]], `${"--enable-a".repeat(40)}!`)],
     ["it holds a long run of blank lines", `${recipe([["https://github.com/example/delta", ALPHA_2]])}${"\n".repeat(400000)}`],

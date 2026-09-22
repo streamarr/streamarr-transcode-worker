@@ -431,11 +431,16 @@ const configureFlags = (text) =>
 
 // A recipe that runs gen-implib builds its library shared, generates Implib stubs that dlopen it and
 // deletes the shared library, so the binaries carry only its headers and the stubs and load the
-// system library at run time. The text proves that for a recipe with one pin only: with several, it
-// does not say which pin the stubs stand for, so a person classifies every pin.
+// system library at run time. The text proves that for a recipe with one pin that removes a shared
+// object: with several pins it does not say which pin the stubs stand for, and with the shared
+// library kept it does not say what the binaries carry, so a person classifies every pin.
 function importShims(text) {
-    if (!commandLines(text).some((line) => runs(line, "gen-implib"))) return "none";
-    return recipePins(text).length === 1 ? "shim" : "unproven";
+    const lines = commandLines(text);
+    if (!lines.some((line) => runs(line, "gen-implib"))) return "none";
+    const removesSharedObject = lines.some(
+        (line) => runs(line, "rm") && /\.so(?![A-Za-z0-9_])/.test(line),
+    );
+    return recipePins(text).length === 1 && removesSharedObject ? "shim" : "unproven";
 }
 
 // What the report says beside a proposal about import shims.
