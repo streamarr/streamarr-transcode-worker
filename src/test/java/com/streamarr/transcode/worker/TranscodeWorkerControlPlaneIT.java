@@ -46,6 +46,7 @@ import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.grpc.stub.StreamObserver;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -299,6 +300,32 @@ class TranscodeWorkerControlPlaneIT {
       assertThat(failure.getFailure())
           .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
       assertThat(service.uploads).isEmpty();
+    }
+  }
+
+  @Test
+  @DisplayName("Should upload the segment when the media process writes it just before exiting")
+  void shouldUploadSegmentWhenMediaProcessWritesItJustBeforeExiting() throws Exception {
+    var service = new ControllableWorkerService();
+    var bytes = "last segment".getBytes(StandardCharsets.UTF_8);
+    var processes = new ExitingAfterLastSegmentProcessManager("segment0.ts", bytes);
+    var job = variantJob();
+    try (var server = new TestServer(service);
+        var worker = worker(preparedMediaRoot(), processes)) {
+      server.start();
+      worker.start("localhost", server.port());
+
+      service.sendStart(service.registeredWorker(), job);
+      service.awaitStarted(job);
+      service.awaitCompleted(job);
+
+      assertThat(service.uploads)
+          .singleElement()
+          .satisfies(
+              upload -> {
+                assertThat(upload.metadata().getSegmentName()).isEqualTo("segment0.ts");
+                assertThat(upload.bytes()).isEqualTo(bytes);
+              });
     }
   }
 
@@ -876,6 +903,41 @@ class TranscodeWorkerControlPlaneIT {
       var process = super.startProcess(session, variant, command, directory);
       stopProcess(session, variant);
       return process;
+    }
+  }
+
+  // Writes its segment and exits when first asked whether it is running, so both happen after the
+  // worker last looked for the segment and before it learns that the process ended.
+  private static final class ExitingAfterLastSegmentProcessManager
+      extends FakeFfmpegProcessManager {
+    private final String segmentName;
+    private final byte[] segment;
+    private Path outputDirectory;
+
+    private ExitingAfterLastSegmentProcessManager(String segmentName, byte[] segment) {
+      this.segmentName = segmentName;
+      this.segment = segment.clone();
+    }
+
+    @Override
+    public Process startProcess(
+        UUID session, String variant, List<String> command, Path directory) {
+      outputDirectory = directory;
+      return super.startProcess(session, variant, command, directory);
+    }
+
+    @Override
+    public boolean isRunning(UUID session, String variant) {
+      if (super.isRunning(session, variant)) {
+        try {
+          Files.write(outputDirectory.resolve(segmentName), segment);
+        } catch (IOException e) {
+          throw new UncheckedIOException(e);
+        }
+        stopProcess(session, variant);
+      }
+
+      return super.isRunning(session, variant);
     }
   }
 
