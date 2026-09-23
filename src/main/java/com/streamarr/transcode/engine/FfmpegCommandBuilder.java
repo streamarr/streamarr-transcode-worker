@@ -150,7 +150,7 @@ public class FfmpegCommandBuilder {
 
   // The rate the frame-count GOP is computed from; without -fps_mode FFmpeg then emits the
   // constant-rate frames the GOP counts, and -copyts keeps a seek's first timestamp.
-  private void addFrameRateArgs(List<String> cmd, TranscodeRequest request) {
+  private static void addFrameRateArgs(List<String> cmd, TranscodeRequest request) {
     cmd.addAll(List.of("-r:v:0", String.valueOf(request.framerate())));
   }
 
