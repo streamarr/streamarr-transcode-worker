@@ -1,5 +1,6 @@
 package com.streamarr.transcode.engine;
 
+import static com.streamarr.transcode.fixtures.FfmpegMuxerHelpFixtures.FRAGMENTED_MP4_MUXER_HELP;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
@@ -222,14 +223,14 @@ class FfmpegTranscodeEngineTest {
   }
 
   @Test
-  @DisplayName("Should reject producer start when FFmpeg lacks required HLS capabilities")
-  void shouldRejectProducerStartWhenFfmpegLacksRequiredHlsCapabilities() {
+  @DisplayName("Should reject producer start when FFmpeg cannot fragment mp4 output")
+  void shouldRejectProducerStartWhenFfmpegCannotFragmentMp4Output() {
     var capabilityService =
         new TranscodeCapabilityService(
             "ffmpeg",
             command -> {
-              if (String.join(" ", command).contains("muxer=hls")) {
-                return new FakeProcess("Muxer hls [Apple HTTP Live Streaming]:", 0);
+              if (String.join(" ", command).contains("muxer=mp4")) {
+                return new FakeProcess("Muxer mp4 [MP4 (MPEG-4 Part 14)]:", 0);
               }
 
               return new FakeProcess("ffmpeg version 4.4.2", 0);
@@ -247,7 +248,9 @@ class FfmpegTranscodeEngineTest {
     assertThat(processManager.getStarted()).doesNotContain(request.sessionId());
     assertThat(thrown)
         .isInstanceOf(TranscodeException.class)
-        .hasMessage("FFmpeg is unavailable: Missing hls_segment_options");
+        .hasMessage(
+            "FFmpeg is unavailable: Missing mp4 muxer options: "
+                + "-frag_duration, cmaf, delay_moov, skip_trailer, frag_keyframe, frag_discont");
   }
 
   @Test
@@ -293,7 +296,7 @@ class FfmpegTranscodeEngineTest {
     var outputs =
         Map.of(
             "ffmpeg", (Process) new FakeProcess("ffmpeg version 7.0", 0),
-            "hls", (Process) new FakeProcess("-hls_segment_options <dictionary>", 0),
+            "mp4", (Process) new FakeProcess(FRAGMENTED_MP4_MUXER_HELP, 0),
             "hwaccels",
                 (Process)
                     new FakeProcess(
@@ -312,8 +315,8 @@ class FfmpegTranscodeEngineTest {
                 return outputs.get("ffmpeg");
               }
 
-              if (cmdStr.contains("muxer=hls")) {
-                return outputs.get("hls");
+              if (cmdStr.contains("muxer=mp4")) {
+                return outputs.get("mp4");
               }
 
               if (cmdStr.contains("-hwaccels")) {

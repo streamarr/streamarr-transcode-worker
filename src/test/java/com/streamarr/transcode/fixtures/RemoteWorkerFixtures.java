@@ -32,7 +32,9 @@ public final class RemoteWorkerFixtures {
             "ffmpeg",
             command ->
                 new CompatibleFfmpegProcess(
-                    Arrays.asList(command).contains("muxer=hls") ? "hls_segment_options" : ""));
+                    Arrays.asList(command).contains("muxer=mp4")
+                        ? FfmpegMuxerHelpFixtures.FRAGMENTED_MP4_MUXER_HELP
+                        : ""));
     capabilityService.detectCapabilities();
 
     return new FfmpegTranscodeEngine(

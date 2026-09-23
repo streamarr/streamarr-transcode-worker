@@ -32,7 +32,7 @@ public class FfmpegCommandBuilder {
   private static final Set<String> FORCE_KEYFRAME_ENCODERS =
       Set.of("libx264", "libx265", "h264_vaapi", "hevc_vaapi", "av1_vaapi");
 
-  private static final List<String> MP4_MOVFLAGS =
+  static final List<String> MP4_MOVFLAGS =
       List.of("cmaf", "delay_moov", "skip_trailer", "frag_keyframe", "frag_discont");
 
   public List<String> buildCommand(TranscodeJob job) {
