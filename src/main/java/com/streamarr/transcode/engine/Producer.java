@@ -3,6 +3,7 @@ package com.streamarr.transcode.engine;
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.engine.AttemptOutcome.Failed;
 import java.io.IOException;
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -20,7 +21,11 @@ public final class Producer {
   /** The server's segment cap, which bounds the initialization segment and every media segment. */
   public static final long MAXIMUM_SEGMENT_BYTES = 16L * 1024 * 1024;
 
+  private static final Duration ERROR_OUTPUT_WAIT = Duration.ofSeconds(1);
+  private static final int ERROR_OUTPUT_DETAIL_LIMIT = 2000;
+
   private final Process process;
+  private final StderrDrainer errorOutput;
   private final FragmentedMp4Reader reader;
   private final SegmentGrouper grouper;
   private final SegmentSink sink;
@@ -28,6 +33,7 @@ public final class Producer {
 
   private Producer(Process process, SegmentGrouper grouper, SegmentSink sink) {
     this.process = process;
+    this.errorOutput = new StderrDrainer(process.getErrorStream());
     this.reader = new FragmentedMp4Reader(process.getInputStream(), MAXIMUM_SEGMENT_BYTES);
     this.grouper = grouper;
     this.sink = sink;
@@ -65,9 +71,13 @@ public final class Producer {
   }
 
   private void produce() {
-    switch (readAndDeliver()) {
-      case EndOfOutput _ -> settleAtExit();
-      case Abandoned(var failure) -> settleAfterEndingProcess(failure);
+    try {
+      switch (readAndDeliver()) {
+        case EndOfOutput _ -> settleAtExit();
+        case Abandoned(var failure) -> settleAfterEndingProcess(failure);
+      }
+    } finally {
+      errorOutput.close();
     }
   }
 
@@ -91,8 +101,25 @@ public final class Producer {
   }
 
   private void settleAtExit() {
-    process.onExit().join();
-    outcome.complete(new Completed());
+    outcome.complete(outcomeAtExit(process.onExit().join().exitValue()));
+  }
+
+  private AttemptOutcome outcomeAtExit(int exitCode) {
+    if (exitCode != 0) {
+      return new Failed(ProducerFailure.PROCESS_EXITED_WITH_ERROR, exitDetail(exitCode));
+    }
+
+    return new Completed();
+  }
+
+  /** FFmpeg reports why it failed at the end of its error output. */
+  private String exitDetail(int exitCode) {
+    var recentErrorOutput = String.join("\n", errorOutput.awaitRecentOutput(ERROR_OUTPUT_WAIT));
+    var tailStart = Math.max(0, recentErrorOutput.length() - ERROR_OUTPUT_DETAIL_LIMIT);
+    return "FFmpeg exited with exit code "
+        + exitCode
+        + ": "
+        + recentErrorOutput.substring(tailStart);
   }
 
   private void settleAfterEndingProcess(Failed failure) {

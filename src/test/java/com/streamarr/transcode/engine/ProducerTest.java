@@ -110,6 +110,24 @@ class ProducerTest {
   }
 
   @Test
+  @DisplayName("Should fail the attempt with FFmpeg's last error output when FFmpeg exits non-zero")
+  void shouldFailTheAttemptWithFfmpegsLastErrorOutputWhenFfmpegExitsNonZero() {
+    var recording = recording(WHOLE_RUN);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(WHOLE_RUN))
+            .exitCode(1)
+            .stderr("frame=  264 fps=0.0 q=-1.0 size=N/A\nConversion failed!\n")
+            .build();
+
+    var producer = producerFor(process, recording).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.PROCESS_EXITED_WITH_ERROR);
+    assertThat(failure.detail()).contains("exit code 1").endsWith("Conversion failed!");
+  }
+
+  @Test
   @DisplayName("Should fail the attempt and end FFmpeg when its output cannot be read")
   void shouldFailTheAttemptAndEndFfmpegWhenItsOutputCannotBeRead() {
     var recording = recording(WHOLE_RUN);
