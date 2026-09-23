@@ -211,18 +211,7 @@ class FfmpegCommandBuilderTest {
   }
 
   @ParameterizedTest(name = "{0}")
-  @ValueSource(
-      strings = {
-        "libx264",
-        "libx265",
-        "libsvtav1",
-        "h264_nvenc",
-        "hevc_qsv",
-        "av1_amf",
-        "h264_vaapi",
-        "hevc_rkmpp",
-        "h264_videotoolbox"
-      })
+  @MethodSource("everyEncoder")
   @DisplayName("Should force an IDR keyframe at every segment period when any encoder runs")
   void shouldForceAnIdrKeyframeAtEverySegmentPeriodWhenAnyEncoderRuns(String encoder) {
     var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), encoder);
@@ -240,20 +229,59 @@ class FfmpegCommandBuilderTest {
     assertThat(cmd).containsSequence("-sc_threshold:v:0", "0");
   }
 
-  @Test
-  @DisplayName("Should use GOP size when encoder is NVENC")
-  void shouldUseGopSizeWhenEncoderIsNvenc() {
-    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), "h264_nvenc");
+  static Stream<String> everyEncoder() {
+    return Stream.of(
+        "libx264",
+        "libx265",
+        "libsvtav1",
+        "h264_nvenc",
+        "hevc_qsv",
+        "av1_amf",
+        "h264_vaapi",
+        "hevc_rkmpp",
+        "h264_videotoolbox");
+  }
 
-    assertThat(cmd).isNotEmpty().contains("-g:v:0");
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("everyEncoder")
+  @DisplayName(
+      "Should round the GOP down to whole frames in a segment period when any encoder runs")
+  void shouldRoundTheGopDownToWholeFramesInASegmentPeriodWhenAnyEncoderRuns(String encoder) {
+    var cmd =
+        command(request(TranscodeMode.FULL_TRANSCODE).framerate(24000.0 / 1001.0).build(), encoder);
+
+    assertThat(cmd).containsSequence("-g:v:0", "143");
   }
 
   @Test
-  @DisplayName("Should use GOP size when encoder is libsvtav1")
-  void shouldUseGopSizeWhenEncoderIsLibsvtav1() {
-    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), "libsvtav1");
+  @DisplayName(
+      "Should keep every frame of the period in the GOP when the period spans whole frames")
+  void shouldKeepEveryFrameOfThePeriodInTheGopWhenThePeriodSpansWholeFrames() {
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).framerate(25.0).build(), "libx264");
 
-    assertThat(cmd).contains("-g:v:0");
+    assertThat(cmd).containsSequence("-g:v:0", "150");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"libsvtav1", "h264_nvenc", "hevc_qsv", "av1_amf", "hevc_rkmpp"})
+  @DisplayName(
+      "Should fix the minimum keyframe interval to the GOP when the encoder has a fixed GOP")
+  void shouldFixTheMinimumKeyframeIntervalToTheGopWhenTheEncoderHasAFixedGop(String encoder) {
+    var cmd =
+        command(request(TranscodeMode.FULL_TRANSCODE).framerate(24000.0 / 1001.0).build(), encoder);
+
+    assertThat(cmd).containsSequence("-keyint_min:v:0", "143");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"libx264", "libx265", "h264_vaapi", "h264_videotoolbox"})
+  @DisplayName(
+      "Should leave the minimum keyframe interval to the encoder when the encoder has no fixed GOP")
+  void shouldLeaveTheMinimumKeyframeIntervalToTheEncoderWhenTheEncoderHasNoFixedGop(
+      String encoder) {
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), encoder);
+
+    assertThat(cmd).doesNotContain("-keyint_min:v:0");
   }
 
   @Test

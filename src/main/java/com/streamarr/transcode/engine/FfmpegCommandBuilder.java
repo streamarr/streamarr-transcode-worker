@@ -155,25 +155,21 @@ public class FfmpegCommandBuilder {
   }
 
   private void addKeyframeArgs(List<String> cmd, TranscodeJob job) {
+    var gopSize = String.valueOf(periodFrameCount(job.request()));
+
     cmd.addAll(List.of("-forced-idr", "1"));
     addForceKeyframeExprArgs(cmd, job);
+    cmd.addAll(List.of("-g:v:0", gopSize));
 
     if (FIXED_GOP_ENCODERS.contains(job.videoEncoder())) {
-      addGopSizeArgs(cmd, job);
+      cmd.addAll(List.of("-keyint_min:v:0", gopSize));
     }
   }
 
-  /**
-   * One GOP (group of pictures — the keyframe interval) per segment, so every segment starts on a
-   * keyframe.
-   */
-  private void addGopSizeArgs(List<String> cmd, TranscodeJob job) {
-    var gopSize =
-        (int) Math.ceil(job.request().targetSegmentDuration() * job.request().framerate());
-    cmd.addAll(
-        List.of(
-            "-g:v:0", String.valueOf(gopSize),
-            "-keyint_min:v:0", String.valueOf(gopSize)));
+  // Rounded down, never up: an encoder that ignores the forced keyframe then still places a
+  // keyframe inside every segment interval, occasionally two, and never skips a segment.
+  private static int periodFrameCount(TranscodeRequest request) {
+    return (int) Math.floor(request.targetSegmentDuration() * request.framerate());
   }
 
   private void addForceKeyframeExprArgs(List<String> cmd, TranscodeJob job) {
