@@ -2,6 +2,7 @@ package com.streamarr.transcode.engine;
 
 import java.nio.ByteBuffer;
 import java.util.List;
+import java.util.OptionalInt;
 import lombok.NonNull;
 
 /**
@@ -12,26 +13,36 @@ public final class ProducedSegment {
 
   private static final String INITIALIZATION_SEGMENT_NAME = "init.mp4";
 
-  private final String name;
+  private final OptionalInt sequenceNumber;
   private final List<byte[]> parts;
 
-  private ProducedSegment(@NonNull String name, @NonNull List<byte[]> parts) {
-    this.name = name;
+  private ProducedSegment(@NonNull OptionalInt sequenceNumber, @NonNull List<byte[]> parts) {
+    this.sequenceNumber = sequenceNumber;
     this.parts = List.copyOf(parts);
   }
 
   static ProducedSegment of(@NonNull InitializationSegment segment) {
-    return new ProducedSegment(INITIALIZATION_SEGMENT_NAME, List.of(segment.bytes()));
+    return new ProducedSegment(OptionalInt.empty(), List.of(segment.bytes()));
   }
 
   static ProducedSegment of(@NonNull MediaSegment segment) {
     return new ProducedSegment(
-        "segment" + segment.sequenceNumber() + ".m4s",
+        OptionalInt.of(segment.sequenceNumber()),
         segment.fragments().stream().flatMap(fragment -> fragment.boxes().stream()).toList());
   }
 
+  /** The media segment's sequence number; empty for the initialization segment. */
+  public OptionalInt sequenceNumber() {
+    return sequenceNumber;
+  }
+
+  /** The segment's name in the variant's HLS playlist. */
   public String name() {
-    return name;
+    if (sequenceNumber.isEmpty()) {
+      return INITIALIZATION_SEGMENT_NAME;
+    }
+
+    return "segment" + sequenceNumber.getAsInt() + ".m4s";
   }
 
   public long byteLength() {
@@ -45,6 +56,6 @@ public final class ProducedSegment {
 
   @Override
   public String toString() {
-    return "ProducedSegment[" + name + ", " + byteLength() + " bytes]";
+    return "ProducedSegment[" + name() + ", " + byteLength() + " bytes]";
   }
 }

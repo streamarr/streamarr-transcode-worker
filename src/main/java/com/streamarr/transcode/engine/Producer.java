@@ -2,6 +2,7 @@ package com.streamarr.transcode.engine;
 
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.engine.AttemptOutcome.Failed;
+import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
@@ -30,6 +31,7 @@ public final class Producer {
   private final SegmentGrouper grouper;
   private final SegmentSink sink;
   private final CompletableFuture<AttemptOutcome> outcome = new CompletableFuture<>();
+  private boolean mediaSegmentDelivered;
 
   private Producer(Process process, SegmentGrouper grouper, SegmentSink sink) {
     this.process = process;
@@ -73,7 +75,7 @@ public final class Producer {
   private void produce() {
     try {
       switch (readAndDeliver()) {
-        case EndOfOutput _ -> settleAtExit();
+        case EndOfOutput(var truncation) -> settleAtExit(truncation);
         case Abandoned(var failure) -> settleAfterEndingProcess(failure);
       }
     } finally {
@@ -90,23 +92,69 @@ public final class Producer {
                   Optional.of(ProducedSegment.of(initializationSegment));
               case Fragment fragment -> grouper.accept(fragment).map(ProducedSegment::of);
             };
-        closed.ifPresent(sink::deliver);
+        closed.ifPresent(this::deliver);
       }
 
-      grouper.finish().map(ProducedSegment::of).ifPresent(sink::deliver);
-      return new EndOfOutput();
+      grouper.finish().map(ProducedSegment::of).ifPresent(this::deliver);
+      return new EndOfOutput(Optional.empty());
+    } catch (FragmentedMp4Exception e) {
+      return endingOf(e);
     } catch (IOException e) {
       return new Abandoned(new Failed(ProducerFailure.OUTPUT_UNREADABLE, e.toString()));
     }
   }
 
-  private void settleAtExit() {
-    outcome.complete(outcomeAtExit(process.onExit().join().exitValue()));
+  private void deliver(ProducedSegment segment) {
+    sink.deliver(segment);
+    if (segment.sequenceNumber().isPresent()) {
+      mediaSegmentDelivered = true;
+    }
   }
 
-  private AttemptOutcome outcomeAtExit(int exitCode) {
+  /** The output ends where it cannot be delivered; a truncated output has already ended. */
+  private static Ending endingOf(FragmentedMp4Exception exception) {
+    var failure = new Failed(failureOf(exception.getReason()), exception.getMessage());
+    if (failure.reason() == ProducerFailure.TRUNCATED_OUTPUT) {
+      return new EndOfOutput(Optional.of(failure));
+    }
+
+    return new Abandoned(failure);
+  }
+
+  private static ProducerFailure failureOf(Reason reason) {
+    return switch (reason) {
+      case END_OF_FILE_IN_BOX_HEADER, END_OF_FILE_IN_BOX_BODY, END_OF_FILE_AFTER_MOVIE_FRAGMENT ->
+          ProducerFailure.TRUNCATED_OUTPUT;
+      case EXCEEDS_SEGMENT_CAP -> ProducerFailure.SEGMENT_CAP_EXCEEDED;
+      case SKIPPED_SEGMENT_NUMBER -> ProducerFailure.SKIPPED_SEGMENT_NUMBER;
+      case UNSIZED_BOX,
+          MALFORMED_BOX,
+          MISSING_INITIALIZATION_SEGMENT,
+          MISPLACED_INITIALIZATION_SEGMENT,
+          UNEXPECTED_BOX,
+          MULTIPLE_VIDEO_TRACKS,
+          PRESENTATION_TIME_REGRESSED ->
+          ProducerFailure.MALFORMED_OUTPUT;
+    };
+  }
+
+  private void settleAtExit(Optional<Failed> truncation) {
+    outcome.complete(outcomeAtExit(process.onExit().join().exitValue(), truncation));
+  }
+
+  /** A non-zero exit explains a truncated output, so it takes precedence. */
+  private AttemptOutcome outcomeAtExit(int exitCode, Optional<Failed> truncation) {
     if (exitCode != 0) {
       return new Failed(ProducerFailure.PROCESS_EXITED_WITH_ERROR, exitDetail(exitCode));
+    }
+
+    if (truncation.isPresent()) {
+      return truncation.orElseThrow();
+    }
+
+    if (!mediaSegmentDelivered) {
+      return new Failed(
+          ProducerFailure.NO_MEDIA_SEGMENT, "FFmpeg exited cleanly without a media segment");
     }
 
     return new Completed();
@@ -131,8 +179,8 @@ public final class Producer {
   /** Why the producer stopped reading FFmpeg's output. */
   private sealed interface Ending {}
 
-  /** The output ended on a box boundary. */
-  private record EndOfOutput() implements Ending {}
+  /** The output ended, on a box boundary unless it was truncated. */
+  private record EndOfOutput(Optional<Failed> truncation) implements Ending {}
 
   /** The attempt failed while FFmpeg may still be writing. */
   private record Abandoned(Failed failure) implements Ending {}

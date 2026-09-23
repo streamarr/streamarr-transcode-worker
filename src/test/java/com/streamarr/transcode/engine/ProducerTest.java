@@ -13,6 +13,7 @@ import com.streamarr.transcode.engine.RecordingSegmentSink.Accepted;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Stream;
@@ -21,6 +22,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 
@@ -128,6 +130,121 @@ class ProducerTest {
   }
 
   @Test
+  @DisplayName("Should fail the attempt when the output ends inside a box and FFmpeg exits cleanly")
+  void shouldFailTheAttemptWhenTheOutputEndsInsideABoxAndFfmpegExitsCleanly() {
+    var recording = recording(WHOLE_RUN);
+    var process = ScriptedProcess.builder().output(truncated(bytesOf(WHOLE_RUN))).build();
+
+    var producer = producerFor(process, recording).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.TRUNCATED_OUTPUT);
+    assertThat(failure.detail()).contains("END_OF_FILE_IN_BOX_BODY");
+    assertThat(sink.acceptedNames())
+        .hasSize(recording.segments().size())
+        .doesNotContain("segment10.m4s");
+  }
+
+  @Test
+  @DisplayName(
+      "Should report FFmpeg's exit when the output ends inside a box and FFmpeg exits non-zero")
+  void shouldReportFfmpegsExitWhenTheOutputEndsInsideABoxAndFfmpegExitsNonZero() {
+    var recording = recording(WHOLE_RUN);
+    var process =
+        ScriptedProcess.builder()
+            .output(truncated(bytesOf(WHOLE_RUN)))
+            .exitCode(234)
+            .stderr("Error writing trailer of pipe:1: Broken pipe")
+            .build();
+
+    var producer = producerFor(process, recording).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.PROCESS_EXITED_WITH_ERROR);
+    assertThat(failure.detail()).contains("exit code 234");
+  }
+
+  @Test
+  @DisplayName("Should fail the attempt and end FFmpeg when a box exceeds the segment cap")
+  void shouldFailTheAttemptAndEndFfmpegWhenABoxExceedsTheSegmentCap() {
+    var recording = recording(WHOLE_RUN);
+    var recorded = bytesOf(WHOLE_RUN);
+    var output =
+        IsoBoxes.concat(
+            Arrays.copyOf(recorded, recording.initializationSegment().byteLength()),
+            IsoBoxes.header(Producer.MAXIMUM_SEGMENT_BYTES + 1, "moof"),
+            new byte[64]);
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer = producerFor(process, recording).start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.SEGMENT_CAP_EXCEEDED);
+    assertThat(process.wasDestroyedForcibly()).isTrue();
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt and end FFmpeg when source keyframes are further apart than the"
+          + " period")
+  void shouldFailTheAttemptAndEndFfmpegWhenSourceKeyframesAreFurtherApartThanThePeriod() {
+    var recording = recording("10-copy-gop-exceeds-period.fmp4");
+    var process = ScriptedProcess.builder().output(bytesOf(recording.file())).build();
+
+    var producer = producerFor(process, recording).start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.SKIPPED_SEGMENT_NUMBER);
+    assertThat(process.wasDestroyedForcibly()).isTrue();
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+  }
+
+  @Test
+  @DisplayName("Should fail the attempt and end FFmpeg when the output does not begin with a movie")
+  void shouldFailTheAttemptAndEndFfmpegWhenTheOutputDoesNotBeginWithAMovie() {
+    var output = IsoBoxes.concat(IsoBoxes.box("free", new byte[16]), bytesOf(WHOLE_RUN));
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer = producerFor(process, recording(WHOLE_RUN)).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.MALFORMED_OUTPUT);
+    assertThat(failure.detail()).contains("MISSING_INITIALIZATION_SEGMENT");
+    assertThat(process.wasDestroyedForcibly()).isTrue();
+    assertThat(sink.acceptedNames()).isEmpty();
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("outputsWithoutAMediaSegment")
+  @DisplayName("Should fail the attempt when FFmpeg exits cleanly without a media segment")
+  void shouldFailTheAttemptWhenFfmpegExitsCleanlyWithoutAMediaSegment(
+      String description, byte[] output, Recording recording) {
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer = producerFor(process, recording).start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.NO_MEDIA_SEGMENT);
+    assertThat(sink.accepted()).noneMatch(accepted -> accepted.name().startsWith("segment"));
+  }
+
+  static Stream<Arguments> outputsWithoutAMediaSegment() {
+    var wholeRun = recording(WHOLE_RUN);
+    var restart = recording("07-copy-seek30.fmp4");
+    var prerollEnd =
+        restart.initializationSegment().byteLength()
+            + restart.discardedPreroll().stream().mapToLong(SegmentSummary::byteLength).sum();
+    return Stream.of(
+        Arguments.of("no output", new byte[0], wholeRun),
+        Arguments.of(
+            "an initialization segment alone",
+            Arrays.copyOf(bytesOf(WHOLE_RUN), wholeRun.initializationSegment().byteLength()),
+            wholeRun),
+        Arguments.of(
+            "preroll alone",
+            Arrays.copyOf(bytesOf(restart.file()), Math.toIntExact(prerollEnd)),
+            restart));
+  }
+
+  @Test
   @DisplayName("Should fail the attempt and end FFmpeg when its output cannot be read")
   void shouldFailTheAttemptAndEndFfmpegWhenItsOutputCannotBeRead() {
     var recording = recording(WHOLE_RUN);
@@ -159,6 +276,11 @@ class ProducerTest {
         .succeedsWithin(OUTCOME_LIMIT)
         .asInstanceOf(InstanceOfAssertFactories.type(Failed.class))
         .actual();
+  }
+
+  /** The output without the last bytes of its final box. */
+  private static byte[] truncated(byte[] output) {
+    return Arrays.copyOf(output, output.length - 100);
   }
 
   private static List<Accepted> expectedDeliveries(Recording recording) {
