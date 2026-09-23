@@ -14,7 +14,7 @@ public class FfmpegCommandBuilder {
   @NonNull private final String ffmpegPath;
   @NonNull private final Duration fragmentationTarget;
 
-  private static final Set<String> GOP_ONLY_ENCODERS =
+  private static final Set<String> FIXED_GOP_ENCODERS =
       Set.of(
           "libsvtav1",
           "h264_nvenc",
@@ -162,7 +162,7 @@ public class FfmpegCommandBuilder {
 
     cmd.addAll(List.of("-forced-idr", "1"));
 
-    if (GOP_ONLY_ENCODERS.contains(encoder)) {
+    if (FIXED_GOP_ENCODERS.contains(encoder)) {
       addGopSizeArgs(cmd, job);
       return;
     }
