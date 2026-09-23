@@ -145,6 +145,17 @@ read is a check-then-act race. Check and act inside one synchronized section, as
 - The Actuator port serves orchestrator health checks only. The server never dials it, and readiness (`workerSession`) requires an accepted session — a fully occupied worker remains ready
 - ArchUnit is on the test classpath, but no `ArchitectureTest` exists yet — these rules are upheld by review until one does
 
+## Domain Language
+- The shared glossary is [`CONTEXT.md`](https://github.com/streamarr/streamarr-adr/blob/main/CONTEXT.md) in the canonical
+  [`streamarr/streamarr-adr`](https://github.com/streamarr/streamarr-adr) repository, next to the ADRs. It is one vocabulary
+  for the server, the transcode worker, and the web and Apple clients, so this repository keeps no `CONTEXT.md` of its own.
+- Read it before naming a concept, and use its terms in code, tests, issues, and pull requests; each term's `_Avoid_` list
+  names the words not to use. Read it from the sibling checkout `../streamarr-adr/CONTEXT.md` when one exists; otherwise
+  fetch it from GitHub.
+- A new or sharpened term is a pull request to `streamarr-adr`, together with an ADR when the term settles a decision. Never
+  add a local glossary here: the agent skills treat a root `CONTEXT.md` as the glossary, and a partial local copy would
+  become the wrong source of truth.
+
 ## Settled Decisions (do not revisit without an ADR)
 - Architectural decisions are recorded in the canonical
   [`streamarr/streamarr-adr`](https://github.com/streamarr/streamarr-adr) repository.
