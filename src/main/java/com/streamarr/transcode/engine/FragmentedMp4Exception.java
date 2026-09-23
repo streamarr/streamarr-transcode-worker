@@ -21,7 +21,9 @@ final class FragmentedMp4Exception extends RuntimeException {
     MISPLACED_INITIALIZATION_SEGMENT,
     /** A top-level box other than the {@code moof} and {@code mdat} pair of the next fragment. */
     UNEXPECTED_BOX,
-    MULTIPLE_VIDEO_TRACKS
+    MULTIPLE_VIDEO_TRACKS,
+    SKIPPED_SEGMENT_NUMBER,
+    PRESENTATION_TIME_REGRESSED
   }
 
   private final Reason reason;
