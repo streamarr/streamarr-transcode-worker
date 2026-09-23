@@ -183,6 +183,32 @@ class FfmpegCommandBuilderTest {
     assertThat(cmd).containsSequence("-c:v", "libsvtav1");
   }
 
+  @ParameterizedTest
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"VIDEO_TRANSCODE", "FULL_TRANSCODE"})
+  @DisplayName("Should encode at the probed frame rate when video is transcoded")
+  void shouldEncodeAtTheProbedFrameRateWhenVideoIsTranscoded(TranscodeMode mode) {
+    var cmd = command(request(mode).framerate(24000.0 / 1001.0).build(), "libx264");
+
+    assertThat(cmd)
+        .containsSequence("-r:v:0", "23.976023976023978")
+        .noneMatch(argument -> argument.startsWith("-fps_mode"));
+  }
+
+  @ParameterizedTest
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"REMUX", "AUDIO_TRANSCODE"})
+  @DisplayName("Should keep the source frame timing when video is copied")
+  void shouldKeepTheSourceFrameTimingWhenVideoIsCopied(TranscodeMode mode) {
+    var cmd = command(request(mode).build(), "copy");
+
+    assertThat(cmd)
+        .doesNotContain("-r:v:0")
+        .noneMatch(argument -> argument.startsWith("-fps_mode"));
+  }
+
   @Test
   @DisplayName("Should use force keyframes when encoder is libx264")
   void shouldUseForceKeyframesWhenEncoderIsLibx264() {

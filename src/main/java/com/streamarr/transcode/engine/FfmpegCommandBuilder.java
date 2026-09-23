@@ -46,6 +46,7 @@ public class FfmpegCommandBuilder {
     addCodecArgs(cmd, job);
 
     if (mode == TranscodeMode.VIDEO_TRANSCODE || mode == TranscodeMode.FULL_TRANSCODE) {
+      addFrameRateArgs(cmd, job.request());
       addKeyframeArgs(cmd, job);
     }
 
@@ -148,6 +149,12 @@ public class FfmpegCommandBuilder {
             "-b:v", bitrate,
             "-maxrate", bitrate,
             "-bufsize", String.valueOf(request.bitrate() * 2)));
+  }
+
+  // The rate the frame-count GOP is computed from; without -fps_mode FFmpeg then emits the
+  // constant-rate frames the GOP counts, and -copyts keeps a seek's first timestamp.
+  private void addFrameRateArgs(List<String> cmd, TranscodeRequest request) {
+    cmd.addAll(List.of("-r:v:0", String.valueOf(request.framerate())));
   }
 
   private void addKeyframeArgs(List<String> cmd, TranscodeJob job) {
