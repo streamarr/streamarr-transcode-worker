@@ -92,11 +92,17 @@ public final class Producer {
                   Optional.of(ProducedSegment.of(initializationSegment));
               case Fragment fragment -> grouper.accept(fragment).map(ProducedSegment::of);
             };
-        closed.ifPresent(this::deliver);
+        var interruption = closed.flatMap(this::deliver);
+        if (interruption.isPresent()) {
+          return interruption.orElseThrow();
+        }
       }
 
-      grouper.finish().map(ProducedSegment::of).ifPresent(this::deliver);
-      return new EndOfOutput(Optional.empty());
+      return grouper
+          .finish()
+          .map(ProducedSegment::of)
+          .flatMap(this::deliver)
+          .orElseGet(() -> new EndOfOutput(Optional.empty()));
     } catch (FragmentedMp4Exception e) {
       return endingOf(e);
     } catch (IOException e) {
@@ -104,11 +110,20 @@ public final class Producer {
     }
   }
 
-  private void deliver(ProducedSegment segment) {
-    sink.deliver(segment);
+  /** Empty once the sink has accepted the segment; otherwise why reading ends. */
+  private Optional<Ending> deliver(ProducedSegment segment) {
+    try {
+      sink.deliver(segment);
+    } catch (RuntimeException e) {
+      return Optional.of(
+          new Abandoned(new Failed(ProducerFailure.SEGMENT_NOT_ACCEPTED, segment + ": " + e)));
+    }
+
     if (segment.sequenceNumber().isPresent()) {
       mediaSegmentDelivered = true;
     }
+
+    return Optional.empty();
   }
 
   /** The output ends where it cannot be delivered; a truncated output has already ended. */

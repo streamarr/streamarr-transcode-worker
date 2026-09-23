@@ -245,6 +245,24 @@ class ProducerTest {
   }
 
   @Test
+  @DisplayName(
+      "Should fail the attempt and deliver nothing further when the sink does not accept a"
+          + " segment")
+  void shouldFailTheAttemptAndDeliverNothingFurtherWhenTheSinkDoesNotAcceptASegment() {
+    var recording = recording(WHOLE_RUN);
+    var process = ScriptedProcess.builder().output(bytesOf(WHOLE_RUN)).build();
+    sink.refusing(3);
+
+    var producer = producerFor(process, recording).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.SEGMENT_NOT_ACCEPTED);
+    assertThat(failure.detail()).contains("segment2.m4s");
+    assertThat(process.wasDestroyedForcibly()).isTrue();
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
+  }
+
+  @Test
   @DisplayName("Should fail the attempt and end FFmpeg when its output cannot be read")
   void shouldFailTheAttemptAndEndFfmpegWhenItsOutputCannotBeRead() {
     var recording = recording(WHOLE_RUN);

@@ -6,6 +6,8 @@ public enum ProducerFailure {
   PROCESS_EXITED_WITH_ERROR,
   /** FFmpeg exited with status 0 without producing a media segment. */
   NO_MEDIA_SEGMENT,
+  /** The sink did not accept a segment the producer closed. */
+  SEGMENT_NOT_ACCEPTED,
   /** The output ended inside a box header, inside a box body, or after a moof with no mdat. */
   TRUNCATED_OUTPUT,
   /** The initialization segment or a media segment would exceed the server's segment cap. */
