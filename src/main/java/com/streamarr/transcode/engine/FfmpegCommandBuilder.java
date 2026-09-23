@@ -113,13 +113,23 @@ public class FfmpegCommandBuilder {
     }
 
     if (audio.mode() == AudioMode.COPY) {
-      cmd.addAll(List.of("-c:a", "copy"));
+      cmd.addAll(copiedAudioArgs(audio.codec()));
       return;
     }
 
     cmd.addAll(List.of("-c:a", audio.codec()));
     cmd.addAll(List.of("-ac", String.valueOf(audio.channels())));
     cmd.addAll(List.of("-b:a", audio.bitrate() / 1000 + "k"));
+  }
+
+  private static List<String> copiedAudioArgs(String codec) {
+    // delay_moov stops the mp4 muxer from inserting this filter itself, and a copy of the ADTS
+    // AAC that MPEG-TS sources carry fails without it. Raw AAC passes through unchanged.
+    if ("aac".equals(codec)) {
+      return List.of("-c:a", "copy", "-bsf:a", "aac_adtstoasc");
+    }
+
+    return List.of("-c:a", "copy");
   }
 
   private void addScaleAndBitrateArgs(List<String> cmd, TranscodeJob job) {

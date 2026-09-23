@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 
 @Tag("UnitTest")
@@ -412,6 +413,37 @@ class FfmpegCommandBuilderTest {
         .contains("-forced-idr", "1")
         .doesNotContain("-g:v:0")
         .noneMatch(s -> s.startsWith("-force_key_frames"));
+  }
+
+  @ParameterizedTest
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"REMUX", "VIDEO_TRANSCODE"})
+  @DisplayName("Should convert ADTS framing when AAC audio is copied")
+  void shouldConvertAdtsFramingWhenAacAudioIsCopied(TranscodeMode mode) {
+    var cmd = command(request(mode).build(), "libx264");
+
+    assertThat(cmd).containsSequence("-c:a", "copy", "-bsf:a", "aac_adtstoasc");
+  }
+
+  @Test
+  @DisplayName("Should leave copied audio unfiltered when it is not AAC")
+  void shouldLeaveCopiedAudioUnfilteredWhenItIsNotAac() {
+    var cmd =
+        command(
+            request(decision(TranscodeMode.REMUX).audioDecision(copiedAudio("ac3")).build())
+                .build(),
+            "copy");
+
+    assertThat(cmd).contains("-c:a", "copy").doesNotContain("-bsf:a");
+  }
+
+  @Test
+  @DisplayName("Should leave encoded AAC audio unfiltered when audio is transcoded")
+  void shouldLeaveEncodedAacAudioUnfilteredWhenAudioIsTranscoded() {
+    var cmd = command(request(TranscodeMode.AUDIO_TRANSCODE).build(), "copy");
+
+    assertThat(cmd).containsSequence("-c:a", "aac").doesNotContain("-bsf:a");
   }
 
   // --- Video-only (no audio) ---
