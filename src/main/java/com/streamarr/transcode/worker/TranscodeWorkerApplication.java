@@ -55,7 +55,7 @@ public class TranscodeWorkerApplication {
     requireFfprobe(settings.ffprobePath());
     var engine =
         new FfmpegTranscodeEngine(
-            new FfmpegCommandBuilder(settings.ffmpegPath()),
+            new FfmpegCommandBuilder(settings.ffmpegPath(), settings.fragmentationTarget()),
             new LocalFfmpegProcessManager(),
             capabilities);
     var ffprobe = FfprobeExecutor.forBinary(Path.of(settings.ffprobePath()));

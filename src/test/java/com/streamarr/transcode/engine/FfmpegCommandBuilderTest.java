@@ -3,6 +3,7 @@ package com.streamarr.transcode.engine;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -26,15 +27,19 @@ class FfmpegCommandBuilderTest {
   private static final AudioDecision NO_AUDIO =
       AudioDecision.builder().mode(AudioMode.NONE).codec(null).channels(0).bitrate(0L).build();
 
-  private final FfmpegCommandBuilder builder = new FfmpegCommandBuilder("ffmpeg");
+  private final FfmpegCommandBuilder builder =
+      new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1));
 
   private List<String> command(TranscodeRequest request, String videoEncoder) {
-    return builder.buildCommand(
-        TranscodeJob.builder()
-            .request(request)
-            .videoEncoder(videoEncoder)
-            .outputDir(Path.of("/tmp/session-123"))
-            .build());
+    return builder.buildCommand(job(request, videoEncoder));
+  }
+
+  private static TranscodeJob job(TranscodeRequest request, String videoEncoder) {
+    return TranscodeJob.builder()
+        .request(request)
+        .videoEncoder(videoEncoder)
+        .outputDir(Path.of("/tmp/session-123"))
+        .build();
   }
 
   private static TranscodeRequest.TranscodeRequestBuilder request(TranscodeMode mode) {
@@ -69,8 +74,7 @@ class FfmpegCommandBuilderTest {
         .transcodeMode(mode)
         .videoCodecFamily("h264")
         .audioDecision(audio)
-        .subtitleDecision(EXCLUDED_SUBTITLES)
-        .containerFormat(ContainerFormat.MPEGTS);
+        .subtitleDecision(EXCLUDED_SUBTITLES);
   }
 
   private static AudioDecision copiedAudio(String codec) {
@@ -160,33 +164,22 @@ class FfmpegCommandBuilderTest {
   }
 
   @Test
-  @DisplayName("Should include H264 MPEGTS args when full transcode targets H264")
-  void shouldIncludeH264MpegtsArgsWhenFullTranscodeTargetsH264() {
+  @DisplayName("Should encode H264 video and AAC audio when full transcode targets H264")
+  void shouldEncodeH264VideoAndAacAudioWhenFullTranscodeTargetsH264() {
     var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), "libx264");
 
     assertThat(cmd)
         .containsSubsequence("-c:v", "libx264")
         .containsSubsequence("-c:a", "aac")
-        .containsSubsequence("-b:a", "128k")
-        .containsSubsequence("-hls_segment_type", "mpegts");
+        .containsSubsequence("-b:a", "128k");
   }
 
   @Test
-  @DisplayName("Should include AV1 fMP4 args when full transcode targets AV1")
-  void shouldIncludeAv1Fmp4ArgsWhenFullTranscodeTargetsAv1() {
-    var cmd =
-        command(
-            request(
-                    decision(TranscodeMode.FULL_TRANSCODE)
-                        .containerFormat(ContainerFormat.FMP4)
-                        .build())
-                .build(),
-            "libsvtav1");
+  @DisplayName("Should encode AV1 video when full transcode targets AV1")
+  void shouldEncodeAv1VideoWhenFullTranscodeTargetsAv1() {
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), "libsvtav1");
 
-    assertThat(cmd)
-        .contains("-c:v", "libsvtav1")
-        .contains("-hls_segment_type", "fmp4")
-        .contains("-hls_fmp4_init_filename", "init.mp4");
+    assertThat(cmd).containsSequence("-c:v", "libsvtav1");
   }
 
   @Test
@@ -211,14 +204,7 @@ class FfmpegCommandBuilderTest {
   @Test
   @DisplayName("Should use GOP size when encoder is libsvtav1")
   void shouldUseGopSizeWhenEncoderIsLibsvtav1() {
-    var cmd =
-        command(
-            request(
-                    decision(TranscodeMode.FULL_TRANSCODE)
-                        .containerFormat(ContainerFormat.FMP4)
-                        .build())
-                .build(),
-            "libsvtav1");
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), "libsvtav1");
 
     assertThat(cmd).contains("-g:v:0");
   }
@@ -244,21 +230,6 @@ class FfmpegCommandBuilderTest {
   }
 
   @Test
-  @DisplayName("Should include fMP4 segment options when container is fMP4")
-  void shouldIncludeFmp4SegmentOptionsWhenContainerIsFmp4() {
-    var cmd =
-        command(
-            request(
-                    decision(TranscodeMode.FULL_TRANSCODE)
-                        .containerFormat(ContainerFormat.FMP4)
-                        .build())
-                .build(),
-            "libsvtav1");
-
-    assertThat(cmd).contains("-hls_segment_options", "movflags=+frag_discont");
-  }
-
-  @Test
   @DisplayName("Should include common flags when mode is full transcode")
   void shouldIncludeCommonFlagsWhenModeIsFullTranscode() {
     var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), "libx264");
@@ -272,45 +243,11 @@ class FfmpegCommandBuilderTest {
   }
 
   @Test
-  @DisplayName("Should include HLS temp file flag when building command")
-  void shouldIncludeHlsTempFileFlagWhenBuildingCommand() {
-    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), "libx264");
-
-    assertThat(cmd).isNotEmpty().anyMatch(s -> s.contains("temp_file"));
-  }
-
-  @Test
   @DisplayName("Should start with FFmpeg binary when building command")
   void shouldStartWithFfmpegBinaryWhenBuildingCommand() {
     var cmd = command(request(TranscodeMode.REMUX).build(), "copy");
 
     assertThat(cmd.getFirst()).isEqualTo("ffmpeg");
-  }
-
-  @Test
-  @DisplayName("Should set TS segment filename pattern when container is MPEGTS")
-  void shouldSetTsSegmentFilenamePatternWhenContainerIsMpegts() {
-    var cmd = command(request(TranscodeMode.REMUX).build(), "copy");
-
-    assertThat(cmd).contains("-hls_segment_filename");
-    int idx = cmd.indexOf("-hls_segment_filename");
-    assertThat(cmd.get(idx + 1)).contains("segment%d.ts");
-  }
-
-  @Test
-  @DisplayName("Should set m4s segment filename pattern when container is fMP4")
-  void shouldSetM4sSegmentFilenamePatternWhenContainerIsFmp4() {
-    var cmd =
-        command(
-            request(
-                    decision(TranscodeMode.FULL_TRANSCODE)
-                        .containerFormat(ContainerFormat.FMP4)
-                        .build())
-                .build(),
-            "libsvtav1");
-
-    int idx = cmd.indexOf("-hls_segment_filename");
-    assertThat(cmd.get(idx + 1)).contains("segment%d.m4s");
   }
 
   @Test
@@ -326,24 +263,54 @@ class FfmpegCommandBuilderTest {
   }
 
   @Test
-  @DisplayName("Should output to HLS format when building command")
-  void shouldOutputToHlsFormatWhenBuildingCommand() {
+  @DisplayName("Should write fragmented MP4 to standard output when building command")
+  void shouldWriteFragmentedMp4ToStandardOutputWhenBuildingCommand() {
     var cmd = command(request(TranscodeMode.REMUX).build(), "copy");
 
-    assertThat(cmd).contains("-f", "hls");
+    assertThat(cmd)
+        .containsSequence("-f", "mp4")
+        .containsSequence("-movflags", "cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont")
+        .doesNotContain("-min_frag_duration", "-max_delay")
+        .endsWith("pipe:1");
+  }
+
+  @Test
+  @DisplayName("Should cut fragments at the fragmentation target when building command")
+  void shouldCutFragmentsAtTheFragmentationTargetWhenBuildingCommand() {
+    var targetedBuilder = new FfmpegCommandBuilder("ffmpeg", Duration.ofMillis(1500));
+
+    var cmd = targetedBuilder.buildCommand(job(request(TranscodeMode.REMUX).build(), "copy"));
+
+    assertThat(cmd).containsSequence("-frag_duration", "1500000", "pipe:1");
+  }
+
+  @Test
+  @DisplayName("Should leave out the HLS muxer when a replacement attempt starts mid-stream")
+  void shouldLeaveOutTheHlsMuxerWhenAReplacementAttemptStartsMidStream() {
+    var cmd =
+        command(
+            request(TranscodeMode.REMUX).seekPosition(30).startSequenceNumber(5).build(), "copy");
+
+    assertThat(cmd)
+        .doesNotContain("-start_number")
+        .noneMatch(argument -> argument.startsWith("-hls_"))
+        .noneMatch(argument -> argument.contains("/tmp/session-123"));
+  }
+
+  @Test
+  @DisplayName("Should measure media time from the source start when an attempt seeks")
+  void shouldMeasureMediaTimeFromTheSourceStartWhenAnAttemptSeeks() {
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).seekPosition(300).build(), "libx264");
+
+    assertThat(cmd)
+        .contains("-copyts", "-start_at_zero")
+        .containsSequence("-avoid_negative_ts", "disabled");
   }
 
   @Test
   @DisplayName("Should use force keyframes when encoder is libx265")
   void shouldUseForceKeyframesWhenEncoderIsLibx265() {
-    var cmd =
-        command(
-            request(
-                    decision(TranscodeMode.FULL_TRANSCODE)
-                        .containerFormat(ContainerFormat.FMP4)
-                        .build())
-                .build(),
-            "libx265");
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), "libx265");
 
     assertThat(cmd)
         .isNotEmpty()
@@ -365,30 +332,6 @@ class FfmpegCommandBuilderTest {
     var cmd = command(request(TranscodeMode.REMUX).build(), "copy");
 
     assertThat(cmd).isNotEmpty().contains("-y").doesNotContain("-nostdin");
-  }
-
-  @Test
-  @DisplayName("Should set HLS time when building command")
-  void shouldSetHlsTimeWhenBuildingCommand() {
-    var cmd = command(request(TranscodeMode.REMUX).build(), "copy");
-
-    assertThat(cmd).contains("-hls_time", "6");
-  }
-
-  @Test
-  @DisplayName("Should include start number when start number is non-zero")
-  void shouldIncludeStartNumberWhenStartNumberIsNonZero() {
-    var cmd = command(request(TranscodeMode.REMUX).startSequenceNumber(5).build(), "copy");
-
-    assertThat(cmd).contains("-start_number", "5");
-  }
-
-  @Test
-  @DisplayName("Should not include start number when start number is zero")
-  void shouldNotIncludeStartNumberWhenStartNumberIsZero() {
-    var cmd = command(request(TranscodeMode.REMUX).build(), "copy");
-
-    assertThat(cmd).isNotEmpty().doesNotContain("-start_number");
   }
 
   @Test

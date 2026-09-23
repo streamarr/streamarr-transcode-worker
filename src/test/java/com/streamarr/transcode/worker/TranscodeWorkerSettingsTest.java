@@ -4,12 +4,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 @Tag("UnitTest")
 @DisplayName("Transcode Worker Settings Tests")
@@ -146,6 +149,45 @@ class TranscodeWorkerSettingsTest {
     var settings = TranscodeWorkerSettings.fromEnvironment(environment);
 
     assertThat(settings.ffprobePath()).isEqualTo("/usr/local/bin/ffprobe");
+  }
+
+  @Test
+  @DisplayName("Should target one-second fragments when the fragmentation target is not configured")
+  void shouldTargetOneSecondFragmentsWhenTheFragmentationTargetIsNotConfigured() {
+    var settings = TranscodeWorkerSettings.fromEnvironment(requiredEnvironment());
+
+    assertThat(settings.fragmentationTarget()).isEqualTo(Duration.ofSeconds(1));
+  }
+
+  @Test
+  @DisplayName("Should use the configured fragmentation target when loading settings")
+  void shouldUseTheConfiguredFragmentationTargetWhenLoadingSettings() {
+    var environment = new HashMap<>(requiredEnvironment());
+    environment.put("TRANSCODE_WORKER_FRAGMENTATION_TARGET", "250ms");
+
+    var settings = TranscodeWorkerSettings.fromEnvironment(environment);
+
+    assertThat(settings.fragmentationTarget()).isEqualTo(Duration.ofMillis(250));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"0s", "-1s", "500ns"})
+  @DisplayName(
+      "Should reject a fragmentation target shorter than a microsecond when loading settings")
+  void shouldRejectAFragmentationTargetShorterThanAMicrosecondWhenLoadingSettings(String target) {
+    assertInvalidSetting(
+        "TRANSCODE_WORKER_FRAGMENTATION_TARGET",
+        target,
+        "TRANSCODE_WORKER_FRAGMENTATION_TARGET must be at least 1 microsecond");
+  }
+
+  @Test
+  @DisplayName("Should explain a fragmentation target that is not a duration when loading settings")
+  void shouldExplainAFragmentationTargetThatIsNotADurationWhenLoadingSettings() {
+    assertInvalidSetting(
+        "TRANSCODE_WORKER_FRAGMENTATION_TARGET",
+        "soon",
+        "TRANSCODE_WORKER_FRAGMENTATION_TARGET must be a duration such as 1s or 500ms");
   }
 
   private void assertInvalidSetting(String key, String value, String expectedMessage) {

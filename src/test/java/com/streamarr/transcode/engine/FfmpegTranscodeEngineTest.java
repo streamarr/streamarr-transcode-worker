@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 
 import com.streamarr.transcode.fakes.FakeFfmpegProcessManager;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -28,7 +29,7 @@ class FfmpegTranscodeEngineTest {
   @BeforeEach
   void setUp() {
     processManager = new FakeFfmpegProcessManager();
-    var commandBuilder = new FfmpegCommandBuilder("ffmpeg");
+    var commandBuilder = new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1));
 
     var hwCapability =
         HardwareEncodingCapability.builder()
@@ -151,7 +152,9 @@ class FfmpegTranscodeEngineTest {
 
     executor =
         new FfmpegTranscodeEngine(
-            new FfmpegCommandBuilder("ffmpeg"), processManager, capabilityService);
+            new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)),
+            processManager,
+            capabilityService);
 
     var request = createRequest(TranscodeMode.FULL_TRANSCODE, "av1");
 
@@ -211,7 +214,9 @@ class FfmpegTranscodeEngineTest {
 
     executor =
         new FfmpegTranscodeEngine(
-            new FfmpegCommandBuilder("ffmpeg"), processManager, capabilityService);
+            new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)),
+            processManager,
+            capabilityService);
 
     assertThat(executor.isHealthy()).isFalse();
   }
@@ -232,7 +237,9 @@ class FfmpegTranscodeEngineTest {
     capabilityService.detectCapabilities();
     executor =
         new FfmpegTranscodeEngine(
-            new FfmpegCommandBuilder("ffmpeg"), processManager, capabilityService);
+            new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)),
+            processManager,
+            capabilityService);
     var request = createRequest(TranscodeMode.FULL_TRANSCODE, "av1");
 
     var thrown = catchThrowable(() -> executor.start(request, tempDir));

@@ -39,6 +39,7 @@ import io.grpc.stub.StreamObserver;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -186,7 +187,9 @@ class TranscodeWorkerUploadProtocolIT {
             });
     capabilities.detectCapabilities();
     return new FfmpegTranscodeEngine(
-        new FfmpegCommandBuilder("ffmpeg"), new FakeFfmpegProcessManager(), capabilities);
+        new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)),
+        new FakeFfmpegProcessManager(),
+        capabilities);
   }
 
   private VariantJob variantJob() {

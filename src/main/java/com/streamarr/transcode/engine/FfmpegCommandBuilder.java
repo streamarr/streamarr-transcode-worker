@@ -1,14 +1,18 @@
 package com.streamarr.transcode.engine;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
+import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 
 @RequiredArgsConstructor
 public class FfmpegCommandBuilder {
 
-  private final String ffmpegPath;
+  @NonNull private final String ffmpegPath;
+  @NonNull private final Duration fragmentationTarget;
 
   private static final Set<String> GOP_ONLY_ENCODERS =
       Set.of(
@@ -28,6 +32,9 @@ public class FfmpegCommandBuilder {
   private static final Set<String> FORCE_KEYFRAME_ENCODERS =
       Set.of("libx264", "libx265", "h264_vaapi", "hevc_vaapi", "av1_vaapi");
 
+  private static final List<String> MP4_MOVFLAGS =
+      List.of("cmaf", "delay_moov", "skip_trailer", "frag_keyframe", "frag_discont");
+
   public List<String> buildCommand(TranscodeJob job) {
     var cmd = new ArrayList<String>();
     var decision = job.request().transcodeDecision();
@@ -42,9 +49,7 @@ public class FfmpegCommandBuilder {
       addKeyframeArgs(cmd, job);
     }
 
-    addHlsArgs(cmd, job);
-
-    cmd.add(job.outputDir().resolve("stream.m3u8").toString());
+    addFragmentedMp4Output(cmd);
 
     return List.copyOf(cmd);
   }
@@ -82,10 +87,9 @@ public class FfmpegCommandBuilder {
             "-copyts",
             "-avoid_negative_ts",
             "disabled",
+            "-start_at_zero",
             "-max_muxing_queue_size",
-            "128",
-            "-max_delay",
-            "5000000"));
+            "128"));
   }
 
   private void addCodecArgs(List<String> cmd, TranscodeJob job) {
@@ -175,33 +179,15 @@ public class FfmpegCommandBuilder {
     }
   }
 
-  @SuppressWarnings("java:S1301") // exhaustive enum switch preferred over if/else per project style
-  private void addHlsArgs(List<String> cmd, TranscodeJob job) {
-    var request = job.request();
-    var decision = request.transcodeDecision();
-    var container = decision.containerFormat();
-    var extension = container.segmentExtension();
-
-    cmd.addAll(List.of("-f", "hls"));
-    cmd.addAll(List.of("-hls_time", String.valueOf(request.targetSegmentDuration())));
-    cmd.addAll(List.of("-hls_list_size", "0"));
-    cmd.addAll(List.of("-hls_flags", "temp_file"));
-
-    if (request.startSequenceNumber() > 0) {
-      cmd.addAll(List.of("-start_number", String.valueOf(request.startSequenceNumber())));
-    }
-
-    switch (container) {
-      case FMP4 -> {
-        cmd.addAll(List.of("-hls_segment_type", "fmp4"));
-        cmd.addAll(List.of("-hls_fmp4_init_filename", "init.mp4"));
-        cmd.addAll(List.of("-hls_segment_options", "movflags=+frag_discont"));
-      }
-      case MPEGTS -> cmd.addAll(List.of("-hls_segment_type", "mpegts"));
-    }
-
+  private void addFragmentedMp4Output(List<String> cmd) {
     cmd.addAll(
         List.of(
-            "-hls_segment_filename", job.outputDir().resolve("segment%d" + extension).toString()));
+            "-f",
+            "mp4",
+            "-movflags",
+            String.join("+", MP4_MOVFLAGS),
+            "-frag_duration",
+            String.valueOf(TimeUnit.MICROSECONDS.convert(fragmentationTarget)),
+            "pipe:1"));
   }
 }

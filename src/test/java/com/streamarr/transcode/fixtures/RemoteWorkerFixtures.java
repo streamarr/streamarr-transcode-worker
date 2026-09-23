@@ -9,6 +9,7 @@ import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.UUID;
 
@@ -35,7 +36,9 @@ public final class RemoteWorkerFixtures {
     capabilityService.detectCapabilities();
 
     return new FfmpegTranscodeEngine(
-        new FfmpegCommandBuilder("ffmpeg"), processManager, capabilityService);
+        new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)),
+        processManager,
+        capabilityService);
   }
 
   private static class CompatibleFfmpegProcess extends Process {

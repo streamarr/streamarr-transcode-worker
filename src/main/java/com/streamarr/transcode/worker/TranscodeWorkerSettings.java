@@ -1,9 +1,12 @@
 package com.streamarr.transcode.worker;
 
 import java.nio.file.Path;
+import java.time.Duration;
+import java.time.temporal.ChronoUnit;
 import java.util.Map;
 import java.util.UUID;
 import lombok.Builder;
+import org.springframework.boot.convert.DurationStyle;
 
 @Builder
 record TranscodeWorkerSettings(
@@ -11,9 +14,11 @@ record TranscodeWorkerSettings(
     int controlPlanePort,
     String ffmpegPath,
     String ffprobePath,
+    Duration fragmentationTarget,
     TranscodeWorkerConfiguration workerConfiguration) {
 
   private static final String PREFIX = "TRANSCODE_WORKER_";
+  private static final String DEFAULT_FRAGMENTATION_TARGET = "1s";
 
   static TranscodeWorkerSettings fromEnvironment(Map<String, String> environment) {
     var sourceNamespaceId = uuid(environment, PREFIX + "SOURCE_NAMESPACE_ID");
@@ -34,6 +39,7 @@ record TranscodeWorkerSettings(
         .controlPlanePort(port(environment, PREFIX + "CONTROL_PLANE_PORT", 9090))
         .ffmpegPath(optional(environment, PREFIX + "FFMPEG_PATH", "ffmpeg"))
         .ffprobePath(optional(environment, PREFIX + "FFPROBE_PATH", "ffprobe"))
+        .fragmentationTarget(fragmentationTarget(environment, PREFIX + "FRAGMENTATION_TARGET"))
         .workerConfiguration(workerConfiguration)
         .build();
   }
@@ -65,6 +71,25 @@ record TranscodeWorkerSettings(
       return UUID.fromString(value);
     } catch (IllegalArgumentException e) {
       throw new IllegalArgumentException(key + " must be a UUID", e);
+    }
+  }
+
+  // FFmpeg reads the target in whole microseconds, and treats zero as no target.
+  private static Duration fragmentationTarget(Map<String, String> environment, String key) {
+    var target =
+        duration(environment, key, DEFAULT_FRAGMENTATION_TARGET).truncatedTo(ChronoUnit.MICROS);
+    if (!target.isPositive()) {
+      throw new IllegalArgumentException(key + " must be at least 1 microsecond");
+    }
+    return target;
+  }
+
+  private static Duration duration(
+      Map<String, String> environment, String key, String defaultValue) {
+    try {
+      return DurationStyle.detectAndParse(optional(environment, key, defaultValue));
+    } catch (IllegalArgumentException e) {
+      throw new IllegalArgumentException(key + " must be a duration such as 1s or 500ms", e);
     }
   }
 

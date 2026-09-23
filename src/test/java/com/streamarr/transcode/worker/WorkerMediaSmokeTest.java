@@ -33,6 +33,7 @@ import java.io.ByteArrayOutputStream;
 import java.net.InetSocketAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -123,7 +124,9 @@ class WorkerMediaSmokeTest {
     assertThat(capabilities.isFfmpegAvailable()).isTrue();
     var engine =
         new FfmpegTranscodeEngine(
-            new FfmpegCommandBuilder("ffmpeg"), new LocalFfmpegProcessManager(), capabilities);
+            new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)),
+            new LocalFfmpegProcessManager(),
+            capabilities);
     try (var controlPlane = new MediaControlPlane();
         var worker = workerBuilder(root).engine(engine).build()) {
       worker.start("127.0.0.1", controlPlane.port());
@@ -168,7 +171,9 @@ class WorkerMediaSmokeTest {
     capabilities.detectCapabilities();
     var engine =
         new FfmpegTranscodeEngine(
-            new FfmpegCommandBuilder("ffmpeg"), new LocalFfmpegProcessManager(), capabilities);
+            new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)),
+            new LocalFfmpegProcessManager(),
+            capabilities);
     try (var controlPlane = new MediaControlPlane();
         var worker = workerBuilder(root).engine(engine).build()) {
       worker.start("127.0.0.1", controlPlane.port());
