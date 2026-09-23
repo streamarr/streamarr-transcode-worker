@@ -29,9 +29,6 @@ public class FfmpegCommandBuilder {
           "h264_rkmpp",
           "hevc_rkmpp");
 
-  private static final Set<String> FORCE_KEYFRAME_ENCODERS =
-      Set.of("libx264", "libx265", "h264_vaapi", "hevc_vaapi", "av1_vaapi");
-
   static final List<String> MP4_MOVFLAGS =
       List.of("cmaf", "delay_moov", "skip_trailer", "frag_keyframe", "frag_discont");
 
@@ -158,17 +155,11 @@ public class FfmpegCommandBuilder {
   }
 
   private void addKeyframeArgs(List<String> cmd, TranscodeJob job) {
-    var encoder = job.videoEncoder();
-
     cmd.addAll(List.of("-forced-idr", "1"));
+    addForceKeyframeExprArgs(cmd, job);
 
-    if (FIXED_GOP_ENCODERS.contains(encoder)) {
+    if (FIXED_GOP_ENCODERS.contains(job.videoEncoder())) {
       addGopSizeArgs(cmd, job);
-      return;
-    }
-
-    if (FORCE_KEYFRAME_ENCODERS.contains(encoder)) {
-      addForceKeyframeExprArgs(cmd, job);
     }
   }
 

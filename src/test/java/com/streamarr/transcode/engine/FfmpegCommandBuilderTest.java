@@ -16,6 +16,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 @Tag("UnitTest")
 @DisplayName("FFmpeg Command Builder Tests")
@@ -209,15 +210,34 @@ class FfmpegCommandBuilderTest {
         .noneMatch(argument -> argument.startsWith("-fps_mode"));
   }
 
-  @Test
-  @DisplayName("Should use force keyframes when encoder is libx264")
-  void shouldUseForceKeyframesWhenEncoderIsLibx264() {
-    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), "libx264");
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(
+      strings = {
+        "libx264",
+        "libx265",
+        "libsvtav1",
+        "h264_nvenc",
+        "hevc_qsv",
+        "av1_amf",
+        "h264_vaapi",
+        "hevc_rkmpp",
+        "h264_videotoolbox"
+      })
+  @DisplayName("Should force an IDR keyframe at every segment period when any encoder runs")
+  void shouldForceAnIdrKeyframeAtEverySegmentPeriodWhenAnyEncoderRuns(String encoder) {
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), encoder);
 
     assertThat(cmd)
-        .isNotEmpty()
-        .anyMatch(s -> s.startsWith("expr:gte(t,n_forced*"))
-        .contains("-sc_threshold:v:0", "0");
+        .containsSequence("-forced-idr", "1")
+        .containsSequence("-force_key_frames:0", "expr:gte(t,n_forced*6)");
+  }
+
+  @Test
+  @DisplayName("Should disable scene-cut keyframes when encoder is libx264")
+  void shouldDisableSceneCutKeyframesWhenEncoderIsLibx264() {
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), "libx264");
+
+    assertThat(cmd).containsSequence("-sc_threshold:v:0", "0");
   }
 
   @Test
@@ -225,7 +245,7 @@ class FfmpegCommandBuilderTest {
   void shouldUseGopSizeWhenEncoderIsNvenc() {
     var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), "h264_nvenc");
 
-    assertThat(cmd).isNotEmpty().contains("-g:v:0").doesNotContain("-force_key_frames:0");
+    assertThat(cmd).isNotEmpty().contains("-g:v:0");
   }
 
   @Test
@@ -335,22 +355,11 @@ class FfmpegCommandBuilderTest {
   }
 
   @Test
-  @DisplayName("Should use force keyframes when encoder is libx265")
-  void shouldUseForceKeyframesWhenEncoderIsLibx265() {
+  @DisplayName("Should leave scene-cut detection to the encoder when encoder is libx265")
+  void shouldLeaveSceneCutDetectionToTheEncoderWhenEncoderIsLibx265() {
     var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), "libx265");
 
-    assertThat(cmd)
-        .isNotEmpty()
-        .anyMatch(s -> s.startsWith("expr:gte(t,n_forced*"))
-        .doesNotContain("-sc_threshold:v:0");
-  }
-
-  @Test
-  @DisplayName("Should use force keyframes when encoder is VAAPI")
-  void shouldUseForceKeyframesWhenEncoderIsVaapi() {
-    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), "h264_vaapi");
-
-    assertThat(cmd).isNotEmpty().anyMatch(s -> s.startsWith("expr:gte(t,n_forced*"));
+    assertThat(cmd).doesNotContain("-sc_threshold:v:0");
   }
 
   @Test
@@ -427,18 +436,6 @@ class FfmpegCommandBuilderTest {
             "libx264");
 
     assertThat(cmd).contains("-forced-idr", "1");
-  }
-
-  @Test
-  @DisplayName("Should only add forced IDR when encoder is in neither keyframe set")
-  void shouldOnlyAddForcedIdrWhenEncoderIsInNeitherKeyframeSet() {
-    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), "h264_videotoolbox");
-
-    assertThat(cmd)
-        .isNotEmpty()
-        .contains("-forced-idr", "1")
-        .doesNotContain("-g:v:0")
-        .noneMatch(s -> s.startsWith("-force_key_frames"));
   }
 
   @ParameterizedTest
