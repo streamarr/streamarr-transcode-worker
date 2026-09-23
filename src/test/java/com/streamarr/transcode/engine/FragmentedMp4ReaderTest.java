@@ -400,6 +400,50 @@ class FragmentedMp4ReaderTest {
   }
 
   @Test
+  @DisplayName("Should read the tfhd default flags when every optional tfhd field precedes them")
+  void shouldReadTheTfhdDefaultFlagsWhenEveryOptionalTfhdFieldPrecedesThem() throws IOException {
+    var moov = moov(Track.video().defaultSampleFlags(SYNC_SAMPLE_FLAGS).build());
+    var tfhd =
+        fullBox(
+            "tfhd",
+            0x00003B,
+            u32(VIDEO_TRACK_ID),
+            u64(4096),
+            u32(1),
+            u32(1001),
+            u32(100),
+            u32(NON_SYNC_SAMPLE_FLAGS));
+    var trun = fullBox("trun", 1 << 24, u32(1));
+
+    assertThat(videoStartOf(moov, box("moof", box("traf", tfhd, tfdt(3003), trun))))
+        .contains(new VideoStart(3003, VIDEO_TIMESCALE, false));
+  }
+
+  @Test
+  @DisplayName("Should read the first sample's flags and offset when every per-sample field is set")
+  void shouldReadTheFirstSamplesFlagsAndOffsetWhenEveryPerSampleFieldIsSet() throws IOException {
+    var trun =
+        fullBox(
+            "trun",
+            1 << 24 | 0x000F01,
+            u32(2),
+            u32(0),
+            u32(1001),
+            u32(100),
+            u32(NON_SYNC_SAMPLE_FLAGS),
+            u32(-1001),
+            u32(1001),
+            u32(90),
+            u32(SYNC_SAMPLE_FLAGS),
+            u32(0));
+    var moov = moov(Track.video().defaultSampleFlags(SYNC_SAMPLE_FLAGS).build());
+    var traf = box("traf", tfhd(VIDEO_TRACK_ID), tfdt(3003), trun);
+
+    assertThat(videoStartOf(moov, box("moof", traf)))
+        .contains(new VideoStart(2002, VIDEO_TIMESCALE, false));
+  }
+
+  @Test
   @DisplayName("Should read the video start when an audio traf precedes the video traf")
   void shouldReadTheVideoStartWhenAnAudioTrafPrecedesTheVideoTraf() throws IOException {
     var moof =
