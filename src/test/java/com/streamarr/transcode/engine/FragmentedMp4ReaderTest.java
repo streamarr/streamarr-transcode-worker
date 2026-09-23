@@ -27,6 +27,7 @@ import com.streamarr.transcode.engine.IsoBoxes.Track;
 import com.streamarr.transcode.engine.IsoBoxes.TrackFragment;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -260,6 +261,18 @@ class FragmentedMp4ReaderTest {
     var reader = readerOf(concat(ftyp(), videoAndAudioMoov(), box(type)));
 
     assertFailure(reader, Reason.UNEXPECTED_BOX);
+  }
+
+  @Test
+  @DisplayName("Should describe an unprintable box type with printable characters when it fails")
+  void shouldDescribeAnUnprintableBoxTypeWithPrintableCharactersWhenItFails() {
+    var type = concat(new byte[] {'\n', (byte) 0xC3}, "o!".getBytes(StandardCharsets.ISO_8859_1));
+    var unexpected = concat(ftyp(), videoAndAudioMoov(), u32(8), type);
+
+    assertThatExceptionOfType(FragmentedMp4Exception.class)
+        .isThrownBy(() -> readToEnd(readerOf(unexpected)))
+        .withMessageContaining("??o!")
+        .withMessageNotContaining("\n");
   }
 
   @Test

@@ -4,7 +4,6 @@ import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
 import lombok.NonNull;
@@ -129,8 +128,9 @@ final class FragmentedMp4Reader {
     }
 
     requireHeaderBytes(compact.length, COMPACT_HEADER_BYTES);
-    var size = Integer.toUnsignedLong(ByteBuffer.wrap(compact).getInt());
-    var type = new String(compact, 4, 4, StandardCharsets.ISO_8859_1);
+    var fields = new BoxFields("box header", ByteBuffer.wrap(compact));
+    var size = fields.u32();
+    var type = fields.fourcc();
     if (size == UNSIZED) {
       throw new FragmentedMp4Exception(
           Reason.UNSIZED_BOX, type + " extends to the end of the stream");

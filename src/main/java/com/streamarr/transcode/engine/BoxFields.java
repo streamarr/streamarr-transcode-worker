@@ -1,7 +1,6 @@
 package com.streamarr.transcode.engine;
 
 import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 
 /** Reads a box's big-endian fields in order; reading past the box fails as a malformed box. */
@@ -39,11 +38,15 @@ final class BoxFields {
     return buffer.getLong();
   }
 
+  /** Reads a four-character box type; an unprintable byte reads as {@code ?}. */
   String fourcc() {
     require(4);
-    var bytes = new byte[4];
-    buffer.get(bytes);
-    return new String(bytes, StandardCharsets.ISO_8859_1);
+    var type = new StringBuilder(4);
+    for (var character = 0; character < 4; character++) {
+      type.append(printable(buffer.get()));
+    }
+
+    return type.toString();
   }
 
   BoxFields skip(int bytes) {
@@ -66,6 +69,15 @@ final class BoxFields {
     }
 
     return Optional.empty();
+  }
+
+  private static char printable(byte value) {
+    var character = (char) Byte.toUnsignedInt(value);
+    if (character < ' ' || character > '~') {
+      return '?';
+    }
+
+    return character;
   }
 
   private void require(int bytes) {
