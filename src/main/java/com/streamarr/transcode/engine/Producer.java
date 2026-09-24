@@ -311,18 +311,19 @@ public final class Producer {
   }
 
   private void watchForStall() {
-    var stall =
-        new Failed(
-            ProducerFailure.ENCODER_STALLED,
-            "FFmpeg wrote no output for " + stallTimeout + " while the producer read it");
-    if (watchdog.awaitStall() && tryDecide(stall)) {
-      terminateAndSettle(stall);
+    if (watchdog.awaitStall()) {
+      failAndTerminateFfmpeg(
+          new Failed(
+              ProducerFailure.ENCODER_STALLED,
+              "FFmpeg wrote no output for " + stallTimeout + " while the producer read it"));
     }
   }
 
-  // Settles a failure this thread decided once FFmpeg has exited: it asks FFmpeg to terminate and
-  // destroys it after the grace period, because a hung FFmpeg can ignore termination.
-  private void terminateAndSettle(Failed failure) {
+  private void failAndTerminateFfmpeg(Failed failure) {
+    if (!tryDecide(failure)) {
+      return;
+    }
+
     cancelDeliveryInFlight();
     process.destroy();
     awaitExitWithinGracePeriod();
@@ -379,24 +380,16 @@ public final class Producer {
 
   private void settleAtExit(AttemptOutcome outcomeOnCleanExit) {
     if (!tryAwaitExitWithinGracePeriod()) {
-      failAsNotExited();
+      failAndTerminateFfmpeg(
+          new Failed(
+              ProducerFailure.PROCESS_DID_NOT_EXIT,
+              "FFmpeg did not exit within " + gracePeriod + " after its output ended"));
       return;
     }
 
     var atExit = outcomeAtExit(outcomeOnCleanExit);
     if (tryDecide(atExit)) {
       settle(atExit);
-    }
-  }
-
-  // FFmpeg closed its output without exiting, so it is ended as a stalled FFmpeg is.
-  private void failAsNotExited() {
-    var notExited =
-        new Failed(
-            ProducerFailure.PROCESS_DID_NOT_EXIT,
-            "FFmpeg did not exit within " + gracePeriod + " after its output ended");
-    if (tryDecide(notExited)) {
-      terminateAndSettle(notExited);
     }
   }
 
