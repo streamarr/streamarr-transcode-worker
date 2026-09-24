@@ -35,8 +35,6 @@ class FfmpegTranscodeEngineTest {
 
   @BeforeEach
   void setUp() {
-    var commandBuilder = new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1));
-
     var hwCapability =
         HardwareEncodingCapability.builder()
             .available(true)
@@ -46,7 +44,7 @@ class FfmpegTranscodeEngineTest {
 
     var capabilityService = createCapabilityService(true, hwCapability);
 
-    executor = new FfmpegTranscodeEngine(commandBuilder, capabilityService);
+    executor = engineLaunching(runningProcess(), capabilityService);
   }
 
   private TranscodeRequest createRequest(TranscodeMode mode, String codecFamily) {
@@ -237,9 +235,7 @@ class FfmpegTranscodeEngineTest {
             false,
             HardwareEncodingCapability.builder().available(false).encoders(Set.of()).build());
 
-    executor =
-        new FfmpegTranscodeEngine(
-            new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)), capabilityService);
+    executor = engineLaunching(runningProcess(), capabilityService);
 
     assertThat(executor.isHealthy()).isFalse();
   }

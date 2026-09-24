@@ -20,15 +20,6 @@ public class FfmpegTranscodeEngine {
   private final ProcessLauncher launcher;
   private final Duration encoderStallTimeout;
 
-  public FfmpegTranscodeEngine(
-      FfmpegCommandBuilder commandBuilder, TranscodeCapabilityService capabilityService) {
-    this(
-        commandBuilder,
-        capabilityService,
-        new ProcessBuilderLauncher(),
-        DEFAULT_ENCODER_STALL_TIMEOUT);
-  }
-
   /**
    * @param encoderStallTimeout how long FFmpeg may write nothing to its standard output while its
    *     producer reads it before the producer fails the attempt
