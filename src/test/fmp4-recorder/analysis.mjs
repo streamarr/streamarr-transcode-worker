@@ -4,7 +4,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { readFiles, signed, videoSamples, videoStart } from './fmp4.mjs';
+import { Mp4FormatError, readFiles, signed, videoSamples, videoStart } from './fmp4.mjs';
 import { groupOnGrid } from './grid.mjs';
 import { Decimal } from './json.mjs';
 import { Rational } from './rational.mjs';
@@ -48,6 +48,7 @@ export function recordingFacts(stream, { period, startSequenceNumber }) {
       tracks: [...stream.tracks.values()].map((track) => ({
         trackId: track.trackId,
         handler: track.handler,
+        sampleEntry: track.sampleEntry,
         timescale: track.timescale,
         editList: track.edits,
         trexDefaultSampleFlags: track.trexFlags ?? null,
@@ -309,6 +310,50 @@ export function checkSourceKeyframes({ mode, stream, source, timescale }) {
   };
 }
 
+const NAL_UNIT_TYPE = {
+  avc1: { of: (header) => header & 0x1f, isPicture: (type) => type >= 1 && type <= 5 },
+  hvc1: { of: (header) => (header >> 1) & 0x3f, isPicture: (type) => type <= 31 },
+  hev1: { of: (header) => (header >> 1) & 0x3f, isPicture: (type) => type <= 31 },
+};
+const HEVC_RASL = new Set([8, 9]);
+
+/** The NAL unit types of one length-prefixed sample, in order. */
+function nalUnitTypesOf(stream, sample, { nalLengthSize, sampleEntry }) {
+  const types = [];
+  const end = sample.offset + sample.size;
+  let position = sample.offset;
+  while (position < end) {
+    const length = end - position < nalLengthSize ? Infinity : stream.data.readUIntBE(position, nalLengthSize);
+    if (length === 0 || length > end - position - nalLengthSize) {
+      throw new Mp4FormatError(`a NAL unit at ${position} runs past its sample`);
+    }
+    types.push(NAL_UNIT_TYPE[sampleEntry].of(stream.data[position + nalLengthSize]));
+    position += nalLengthSize + length;
+  }
+  return types;
+}
+
+/**
+ * For an H.264 or HEVC video track: the NAL unit type of the first picture of every keyframe (5 is
+ * an H.264 IDR; 19 and 20 are HEVC IDR, 21 an HEVC CRA, which opens a GOP), and for HEVC the
+ * number of RASL pictures, which reference the GOP before a CRA. Null for other codecs.
+ */
+export function videoPictures(stream) {
+  const track = [...stream.tracks.values()].find((entry) => entry.handler === 'vide');
+  const nalUnitType = NAL_UNIT_TYPE[track.sampleEntry];
+  if (nalUnitType === undefined) {
+    return null;
+  }
+  const pictureOf = (sample) => nalUnitTypesOf(stream, sample, track).find(nalUnitType.isPicture);
+  const samples = videoSamples(stream);
+  const keyframeTypes = new Set(samples.filter((sample) => sample.sync).map(pictureOf));
+  return {
+    sampleEntry: track.sampleEntry,
+    keyframeNalUnitTypes: [...keyframeTypes].sort((a, b) => a - b),
+    raslPictures: track.sampleEntry === 'avc1' ? null : samples.filter((sample) => HEVC_RASL.has(pictureOf(sample))).length,
+  };
+}
+
 function everyKeyframeStartsAFragment(stream) {
   const samples = videoSamples(stream);
   const withKeyframes = new Set(samples.filter((sample) => sample.sync).map((sample) => sample.fragmentIndex));
@@ -354,6 +399,7 @@ export function diagnostics(stream) {
     firstVideoPresentationTime: starts[0],
     firstAudioBaseMediaDecodeTimeUnsigned: audio?.baseMediaDecodeTime ?? null,
     startPlusDurationsMissesNextStartByTicks: startPlusDurationMisses(video),
+    videoPictures: videoPictures(stream),
   };
 }
 

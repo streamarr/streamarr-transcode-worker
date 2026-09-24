@@ -158,6 +158,33 @@ function editList(data, trakBody, trakStop) {
   return edits;
 }
 
+const NAL_LENGTH_AT = { avc1: ['avcC', 4], hvc1: ['hvcC', 21], hev1: ['hvcC', 21] };
+const VISUAL_SAMPLE_ENTRY_BYTES = 78;
+
+/**
+ * The type of the track's first sample entry, and for H.264 and HEVC the byte length of the NAL
+ * unit lengths its decoder configuration declares.
+ */
+function sampleEntryOf(data, mdia) {
+  const minf = child(data, mdia[0], mdia[1], 'minf');
+  const stbl = minf === null ? null : child(data, minf[0], minf[1], 'stbl');
+  const stsd = stbl === null ? null : child(data, stbl[0], stbl[1], 'stsd');
+  if (stsd === null) {
+    return { sampleEntry: null, nalLengthSize: null };
+  }
+  const { fields } = fullBox(data, stsd, 'stsd');
+  fields.skip(4);
+  const [entry] = boxes(data, fields.position, stsd[1]);
+  const [type, , entryBody, entryEnd] = required(entry ?? null, 'sample entry');
+  if (!(type in NAL_LENGTH_AT)) {
+    return { sampleEntry: type, nalLengthSize: null };
+  }
+  const [configurationType, lengthAt] = NAL_LENGTH_AT[type];
+  const configuration = required(child(data, entryBody + VISUAL_SAMPLE_ENTRY_BYTES, entryEnd, configurationType), configurationType);
+  const lengthSizeMinusOne = new Fields(data, configuration, configurationType).skip(lengthAt).u8() & 0x3;
+  return { sampleEntry: type, nalLengthSize: lengthSizeMinusOne + 1 };
+}
+
 /** The moov's tracks by track id, in trak order. */
 export function parseMoov(data, body, stop) {
   const tracks = new Map();
@@ -170,7 +197,13 @@ export function parseMoov(data, body, stop) {
     const timescale = headerField(data, required(child(data, mdia[0], mdia[1], 'mdhd'), 'mdhd'), 'mdhd');
     const hdlr = new Fields(data, required(child(data, mdia[0], mdia[1], 'hdlr'), 'hdlr'), 'hdlr');
     const handler = hdlr.skip(8).fourcc();
-    tracks.set(trackId, { trackId, handler, timescale, edits: editList(data, trakBody, trakStop) });
+    tracks.set(trackId, {
+      trackId,
+      handler,
+      timescale,
+      edits: editList(data, trakBody, trakStop),
+      ...sampleEntryOf(data, mdia),
+    });
   }
   const mvex = child(data, body, stop, 'mvex');
   if (mvex !== null) {

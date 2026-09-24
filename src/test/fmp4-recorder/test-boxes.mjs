@@ -34,8 +34,26 @@ export function ftyp() {
   return box('ftyp', Buffer.from('iso6', 'latin1'), u32(512), Buffer.from('iso6cmfc', 'latin1'));
 }
 
-/** A trak with a v0 tkhd and mdhd, an optional elst entry, and its trex defaults. */
-export function track({ trackId, handler, timescale, defaultFlags = 0, defaultSize = 0, edit = null, editVersion = 0 }) {
+/** A visual sample entry of the given type whose decoder configuration declares 4-byte NAL lengths. */
+export function visualSampleEntry(type) {
+  const configuration =
+    type === 'avc1'
+      ? box('avcC', Buffer.from([1, 100, 0, 30, 0xff, 0xe0, 0]))
+      : box('hvcC', Buffer.alloc(21), Buffer.from([0x0f, 0]));
+  return box(type, Buffer.alloc(78), configuration);
+}
+
+/** A trak with a v0 tkhd and mdhd, an optional elst entry and sample entry, and its trex defaults. */
+export function track({
+  trackId,
+  handler,
+  timescale,
+  defaultFlags = 0,
+  defaultSize = 0,
+  edit = null,
+  editVersion = 0,
+  sampleEntry = null,
+}) {
   const entry = editVersion === 1 ? [u64(edit?.[0] ?? 0), u64(edit?.[1] ?? 0)] : [u32(edit?.[0] ?? 0), u32(edit?.[1] ?? 0)];
   const edts = edit === null ? [] : [box('edts', fullBox('elst', editVersion, 0, u32(1), ...entry, u32(1 << 16)))];
   const trak = box(
@@ -46,6 +64,7 @@ export function track({ trackId, handler, timescale, defaultFlags = 0, defaultSi
       'mdia',
       fullBox('mdhd', 0, 0, u32(0), u32(0), u32(timescale), u32(0), u32(0)),
       fullBox('hdlr', 0, 0, u32(0), Buffer.from(handler, 'latin1'), Buffer.alloc(12), Buffer.from('name\0', 'latin1')),
+      ...(sampleEntry === null ? [] : [box('minf', box('stbl', fullBox('stsd', 0, 0, u32(1), sampleEntry)))]),
     ),
   );
   const trex = fullBox('trex', 0, 0, u32(trackId), u32(1), u32(0), u32(defaultSize), u32(defaultFlags));
@@ -115,7 +134,8 @@ function runBytes(run) {
 
 /**
  * A moof of trafs ({ trackId, decodeTime, defaultFlags, tfdtVersion, runs: [trun options] }) and
- * the mdat that holds their samples, each run's data offset pointing at its own bytes.
+ * the mdat that holds their samples, each run's data offset pointing at its own bytes. A run's
+ * payload option gives its sample bytes; otherwise they are filler.
  */
 export function fragment(...trafs) {
   const build = (offsets) =>
@@ -133,7 +153,9 @@ export function fragment(...trafs) {
       return at;
     }),
   );
-  const payload = Array.from({ length: position - dataStart }, (_, index) => index & 0xff);
+  const payload = trafs.flatMap((spec) =>
+    spec.runs.flatMap((run) => run.payload ?? Array.from({ length: runBytes(run) }, (_, index) => index & 0xff)),
+  );
   return Buffer.concat([build(offsets), mdat(payload)]);
 }
 
@@ -148,6 +170,11 @@ export function videoFragment({ decodeTime, sync, compositionOffset = 0, size = 
 
 export function audioFragment({ decodeTime, size = 1 }) {
   return fragment({ trackId: AUDIO.trackId, decodeTime, runs: [{ samples: [{ duration: 1024, size }] }] });
+}
+
+/** A length-prefixed access unit of NAL units given as their header bytes. */
+export function accessUnit(...nalUnits) {
+  return [...Buffer.concat(nalUnits.map((header) => Buffer.concat([u32(header.length), Buffer.from(header)])))];
 }
 
 export function initialization() {

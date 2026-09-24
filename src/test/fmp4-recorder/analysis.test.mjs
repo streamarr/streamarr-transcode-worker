@@ -17,12 +17,27 @@ import {
   recordingFacts,
   sourceKeyframes,
   sourceStart,
+  videoPictures,
   violatedClaims,
 } from './analysis.mjs';
-import { readStream, videoSamples, videoStart } from './fmp4.mjs';
+import { Mp4FormatError, readStream, videoSamples, videoStart } from './fmp4.mjs';
 import { Decimal } from './json.mjs';
 import { Rational } from './rational.mjs';
-import { NON_SYNC, SYNC, VIDEO, audioFragment, fragment, initialization, videoFragment } from './test-boxes.mjs';
+import {
+  AUDIO,
+  NON_SYNC,
+  SYNC,
+  VIDEO,
+  accessUnit,
+  audioFragment,
+  fragment,
+  ftyp,
+  initialization,
+  moov,
+  track,
+  videoFragment,
+  visualSampleEntry,
+} from './test-boxes.mjs';
 
 const RECORDING = new URL('../resources/fmp4/07-copy-start0.fmp4', import.meta.url).pathname;
 const seconds = (text) => Rational.parseDecimal(text);
@@ -130,6 +145,7 @@ describe('recording facts', () => {
       firstVideoPresentationTime: 0n,
       firstAudioBaseMediaDecodeTimeUnsigned: 0n,
       startPlusDurationsMissesNextStartByTicks: { min: 0n, max: 1001n },
+      videoPictures: null,
     });
   });
 
@@ -355,6 +371,53 @@ describe('source files', () => {
       source.keyframes.map((keyframe) => String(keyframe.minus(source.start))),
       ['0', '1001/500'],
     );
+  });
+});
+
+describe('video pictures', () => {
+  const HEVC = { IDR_W_RADL: [0x26, 0x01], CRA: [0x2a, 0x01], RASL_N: [0x10, 0x01], TRAIL_R: [0x02, 0x01], AUD: [0x46, 0x01] };
+  const sample = (payload, flags) => ({ duration: 1001, size: payload.length, flags });
+  const pictures = (sampleEntry, units) => {
+    const run = {
+      samples: units.map(([bytes, sync]) => sample(bytes, sync ? SYNC : NON_SYNC)),
+      payload: units.flatMap(([bytes]) => bytes),
+    };
+    const bytes = Buffer.concat([
+      ftyp(),
+      moov(track({ ...VIDEO, sampleEntry: visualSampleEntry(sampleEntry) }), track(AUDIO)),
+      fragment({ trackId: VIDEO.trackId, decodeTime: 0, runs: [run] }),
+    ]);
+    return videoPictures(readStream(bytes));
+  };
+
+  it('names the NAL unit type that starts each HEVC keyframe and counts the RASL pictures', () => {
+    assert.deepEqual(
+      pictures('hvc1', [
+        [accessUnit(HEVC.AUD, HEVC.IDR_W_RADL), true],
+        [accessUnit(HEVC.TRAIL_R), false],
+        [accessUnit(HEVC.CRA), true],
+        [accessUnit(HEVC.AUD, HEVC.RASL_N), false],
+      ]),
+      { sampleEntry: 'hvc1', keyframeNalUnitTypes: [19, 21], raslPictures: 1 },
+    );
+  });
+
+  it('names the NAL unit type that starts each H.264 keyframe', () => {
+    assert.deepEqual(
+      pictures('avc1', [
+        [accessUnit([0x09, 0xf0], [0x67, 0x64], [0x65, 0x88]), true],
+        [accessUnit([0x41, 0x9a]), false],
+      ]),
+      { sampleEntry: 'avc1', keyframeNalUnitTypes: [5], raslPictures: null },
+    );
+  });
+
+  it('reads no pictures of a track whose samples are not NAL units', () => {
+    assert.equal(videoPictures(readStream(Buffer.concat([initialization(), videoFragment({ decodeTime: 0, sync: true })]))), null);
+  });
+
+  it('fails on a NAL unit that runs past its sample', () => {
+    assert.throws(() => pictures('avc1', [[[0, 0, 0, 9, 0x65], true]]), Mp4FormatError);
   });
 });
 

@@ -24,6 +24,7 @@ import {
   u32,
   u64,
   videoFragment,
+  visualSampleEntry,
 } from './test-boxes.mjs';
 
 const FIXTURES = new URL('../resources/fmp4/', import.meta.url);
@@ -69,6 +70,26 @@ describe('fmp4 box reader', () => {
     assert.deepEqual(stream.tracks.get(1).edits, [[1n << 40n, -1n]]);
     assert.equal(stream.tracks.get(1).trexFlags, SYNC);
     assert.deepEqual([...stream.tracks.keys()], [1]);
+  });
+
+  it('reads the sample entry of each track and the NAL length its decoder configuration declares', () => {
+    const stream = streamOf(
+      ftyp(),
+      moov(track({ ...VIDEO, sampleEntry: visualSampleEntry('hvc1') }), track({ ...AUDIO, trackId: 3, sampleEntry: box('mp4a') })),
+    );
+
+    assert.deepEqual(
+      [...stream.tracks.values()].map(({ sampleEntry, nalLengthSize }) => [sampleEntry, nalLengthSize]),
+      [
+        ['hvc1', 4],
+        ['mp4a', null],
+      ],
+    );
+    assert.equal(streamOf(initialization()).tracks.get(1).sampleEntry, null);
+    assert.throws(
+      () => streamOf(ftyp(), moov(track({ ...VIDEO, sampleEntry: Buffer.alloc(0) }))),
+      Mp4FormatError,
+    );
   });
 
   it('reads the tracks of a moov that declares no defaults', () => {

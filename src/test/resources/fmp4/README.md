@@ -100,6 +100,10 @@ every invocation. Neither moves a keyframe or a cut. Nothing else differs from t
   owns, not the grouping.
 - `endsWithAudioOnlyFragments` / `trailingAudioOnlyFragmentCount` describe fragments with no video
   `traf` after the last video sample.
+- `diagnostics.videoPictures` names, for H.264 and HEVC, the NAL unit type of the first picture of
+  every keyframe (5: H.264 IDR; 19 or 20: HEVC IDR; 21: HEVC CRA, which opens a GOP) and, for HEVC,
+  how many RASL pictures (which reference the GOP before a CRA) the recording holds. It is null for
+  AV1.
 - `hlsOracles[]` holds the HLS muxer's segment starts mapped onto this recording, whether they agree,
   `frameIdentity` (how many video packets equal the recording's, and whether the run shares its
   video arguments) and `hlsencModel` (see below). `sourceKeyframeCheck` (copy recordings) confirms that every recorded

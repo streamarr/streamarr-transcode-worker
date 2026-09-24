@@ -32,6 +32,7 @@
           {
             "trackId": 1,
             "handler": "vide",
+            "sampleEntry": "avc1",
             "timescale": 24000,
             "editList": [
               [
@@ -45,6 +46,7 @@
           {
             "trackId": 2,
             "handler": "soun",
+            "sampleEntry": "mp4a",
             "timescale": 48000,
             "editList": [
               [
@@ -166,6 +168,13 @@
         "startPlusDurationsMissesNextStartByTicks": {
           "min": -3003,
           "max": 4004
+        },
+        "videoPictures": {
+          "sampleEntry": "avc1",
+          "keyframeNalUnitTypes": [
+            5
+          ],
+          "raslPictures": null
         }
       },
       "hlsOracles": [
@@ -401,6 +410,7 @@
           {
             "trackId": 1,
             "handler": "vide",
+            "sampleEntry": "avc1",
             "timescale": 24000,
             "editList": [
               [
@@ -414,6 +424,7 @@
           {
             "trackId": 2,
             "handler": "soun",
+            "sampleEntry": "mp4a",
             "timescale": 48000,
             "editList": [
               [
@@ -495,6 +506,13 @@
         "startPlusDurationsMissesNextStartByTicks": {
           "min": -3003,
           "max": 2002
+        },
+        "videoPictures": {
+          "sampleEntry": "avc1",
+          "keyframeNalUnitTypes": [
+            5
+          ],
+          "raslPictures": null
         }
       },
       "hlsOracles": [
@@ -712,6 +730,7 @@
           {
             "trackId": 1,
             "handler": "vide",
+            "sampleEntry": "avc1",
             "timescale": 12288,
             "editList": [
               [
@@ -725,6 +744,7 @@
           {
             "trackId": 2,
             "handler": "soun",
+            "sampleEntry": "mp4a",
             "timescale": 48000,
             "editList": [
               [
@@ -861,6 +881,13 @@
         "startPlusDurationsMissesNextStartByTicks": {
           "min": 0,
           "max": 0
+        },
+        "videoPictures": {
+          "sampleEntry": "avc1",
+          "keyframeNalUnitTypes": [
+            5
+          ],
+          "raslPictures": null
         }
       },
       "hlsOracles": [
@@ -1028,6 +1055,7 @@
           {
             "trackId": 1,
             "handler": "vide",
+            "sampleEntry": "avc1",
             "timescale": 24000,
             "editList": [
               [
@@ -1041,6 +1069,7 @@
           {
             "trackId": 2,
             "handler": "soun",
+            "sampleEntry": "mp4a",
             "timescale": 48000,
             "editList": [
               [
@@ -1162,6 +1191,13 @@
         "startPlusDurationsMissesNextStartByTicks": {
           "min": -3003,
           "max": 3003
+        },
+        "videoPictures": {
+          "sampleEntry": "avc1",
+          "keyframeNalUnitTypes": [
+            5
+          ],
+          "raslPictures": null
         }
       },
       "hlsOracles": [
@@ -1421,6 +1457,7 @@
           {
             "trackId": 1,
             "handler": "vide",
+            "sampleEntry": "avc1",
             "timescale": 24000,
             "editList": [
               [
@@ -1434,6 +1471,7 @@
           {
             "trackId": 2,
             "handler": "soun",
+            "sampleEntry": "mp4a",
             "timescale": 48000,
             "editList": [
               [
@@ -1579,6 +1617,13 @@
         "startPlusDurationsMissesNextStartByTicks": {
           "min": -2002,
           "max": 2002
+        },
+        "videoPictures": {
+          "sampleEntry": "avc1",
+          "keyframeNalUnitTypes": [
+            5
+          ],
+          "raslPictures": null
         }
       },
       "hlsOracles": [
@@ -1758,6 +1803,7 @@
           {
             "trackId": 1,
             "handler": "vide",
+            "sampleEntry": "avc1",
             "timescale": 24000,
             "editList": [
               [
@@ -1771,6 +1817,7 @@
           {
             "trackId": 2,
             "handler": "soun",
+            "sampleEntry": "mp4a",
             "timescale": 48000,
             "editList": [
               [
@@ -1852,6 +1899,13 @@
         "startPlusDurationsMissesNextStartByTicks": {
           "min": -3003,
           "max": 4004
+        },
+        "videoPictures": {
+          "sampleEntry": "avc1",
+          "keyframeNalUnitTypes": [
+            5
+          ],
+          "raslPictures": null
         }
       },
       "hlsOracles": [
@@ -2023,6 +2077,7 @@
           {
             "trackId": 1,
             "handler": "vide",
+            "sampleEntry": "avc1",
             "timescale": 90000,
             "editList": [
               [
@@ -2036,6 +2091,7 @@
           {
             "trackId": 2,
             "handler": "soun",
+            "sampleEntry": "mp4a",
             "timescale": 48000,
             "editList": [
               [
@@ -2128,6 +2184,13 @@
         "startPlusDurationsMissesNextStartByTicks": {
           "min": -1,
           "max": 0
+        },
+        "videoPictures": {
+          "sampleEntry": "avc1",
+          "keyframeNalUnitTypes": [
+            5
+          ],
+          "raslPictures": null
         }
       },
       "hlsOracles": [
@@ -2247,6 +2310,7 @@
           {
             "trackId": 1,
             "handler": "vide",
+            "sampleEntry": "avc1",
             "timescale": 24000,
             "editList": [
               [
@@ -2260,6 +2324,7 @@
           {
             "trackId": 2,
             "handler": "soun",
+            "sampleEntry": "mp4a",
             "timescale": 48000,
             "editList": [
               [
@@ -2325,6 +2390,13 @@
         "startPlusDurationsMissesNextStartByTicks": {
           "min": -3003,
           "max": 4004
+        },
+        "videoPictures": {
+          "sampleEntry": "avc1",
+          "keyframeNalUnitTypes": [
+            5
+          ],
+          "raslPictures": null
         }
       },
       "hlsOracles": [
@@ -2436,6 +2508,7 @@
           {
             "trackId": 1,
             "handler": "vide",
+            "sampleEntry": "avc1",
             "timescale": 24000,
             "editList": [
               [
@@ -2449,6 +2522,7 @@
           {
             "trackId": 2,
             "handler": "soun",
+            "sampleEntry": "mp4a",
             "timescale": 48000,
             "editList": [
               [
@@ -2607,6 +2681,13 @@
         "startPlusDurationsMissesNextStartByTicks": {
           "min": -1001,
           "max": 1001
+        },
+        "videoPictures": {
+          "sampleEntry": "avc1",
+          "keyframeNalUnitTypes": [
+            5
+          ],
+          "raslPictures": null
         }
       },
       "hlsOracles": [
@@ -2774,6 +2855,7 @@
           {
             "trackId": 1,
             "handler": "vide",
+            "sampleEntry": "avc1",
             "timescale": 24000,
             "editList": [
               [
@@ -2787,6 +2869,7 @@
           {
             "trackId": 2,
             "handler": "soun",
+            "sampleEntry": "mp4a",
             "timescale": 48000,
             "editList": [
               [
@@ -2900,6 +2983,13 @@
         "startPlusDurationsMissesNextStartByTicks": {
           "min": -1001,
           "max": 1001
+        },
+        "videoPictures": {
+          "sampleEntry": "avc1",
+          "keyframeNalUnitTypes": [
+            5
+          ],
+          "raslPictures": null
         }
       },
       "hlsOracles": [
@@ -3067,6 +3157,7 @@
           {
             "trackId": 1,
             "handler": "vide",
+            "sampleEntry": "av01",
             "timescale": 24000,
             "editList": [
               [
@@ -3080,6 +3171,7 @@
           {
             "trackId": 2,
             "handler": "soun",
+            "sampleEntry": "mp4a",
             "timescale": 48000,
             "editList": [
               [
@@ -3201,7 +3293,8 @@
         "startPlusDurationsMissesNextStartByTicks": {
           "min": 0,
           "max": 0
-        }
+        },
+        "videoPictures": null
       },
       "hlsOracles": [
         {
@@ -3533,6 +3626,7 @@
           {
             "trackId": 1,
             "handler": "vide",
+            "sampleEntry": "av01",
             "timescale": 24000,
             "editList": [
               [
@@ -3546,6 +3640,7 @@
           {
             "trackId": 2,
             "handler": "soun",
+            "sampleEntry": "mp4a",
             "timescale": 48000,
             "editList": [
               [
@@ -3627,7 +3722,8 @@
         "startPlusDurationsMissesNextStartByTicks": {
           "min": 0,
           "max": 0
-        }
+        },
+        "videoPictures": null
       },
       "hlsOracles": [
         {
@@ -3806,6 +3902,7 @@
           {
             "trackId": 1,
             "handler": "vide",
+            "sampleEntry": "avc1",
             "timescale": 24000,
             "editList": [
               [
@@ -3819,6 +3916,7 @@
           {
             "trackId": 2,
             "handler": "soun",
+            "sampleEntry": "mp4a",
             "timescale": 48000,
             "editList": [
               [
@@ -3881,6 +3979,13 @@
         "startPlusDurationsMissesNextStartByTicks": {
           "min": 0,
           "max": 0
+        },
+        "videoPictures": {
+          "sampleEntry": "avc1",
+          "keyframeNalUnitTypes": [
+            5
+          ],
+          "raslPictures": null
         }
       },
       "hlsOracles": [
