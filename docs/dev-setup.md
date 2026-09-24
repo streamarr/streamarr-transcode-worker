@@ -48,7 +48,7 @@ Settings are read from the environment at startup. The three variables in the ex
 | --- | --- | --- |
 | `TRANSCODE_WORKER_CONTROL_PLANE_HOST` | `127.0.0.1` | Server's worker listener host |
 | `TRANSCODE_WORKER_CONTROL_PLANE_PORT` | `9090` | Server's worker listener port |
-| `TRANSCODE_WORKER_SLOTS` | `1` | Number of execution slots advertised to the server. The worker refuses a job while every slot holds an active job attempt, and holds at most 32 MiB of FFmpeg's output per slot, two segments at the server's 16 MiB cap, plus a 64 KiB read buffer for each FFmpeg process; FFmpeg's own memory comes on top |
+| `TRANSCODE_WORKER_SLOTS` | `1` | Number of execution slots advertised to the server. The worker refuses a job while every slot holds an active job attempt, and holds at most 32 MiB of FFmpeg's output per slot, two segments at the server's 16 MiB cap, plus a 64 KiB read buffer for each FFmpeg process. FFmpeg's own memory, the kernel's buffer for each FFmpeg process's output pipe and gRPC's flow-control window for each upload come on top |
 | `TRANSCODE_WORKER_FFMPEG_PATH` | `ffmpeg` | FFmpeg executable |
 | `TRANSCODE_WORKER_FFPROBE_PATH` | `ffprobe` | ffprobe executable |
 | `TRANSCODE_WORKER_FRAGMENTATION_TARGET` | `1s` | Fragmentation target: the media duration after which FFmpeg starts a new fragment at the next packet: a whole number with a unit from `ns` to `h`, such as `1s` or `500ms`. Keep it well below the segment period |
