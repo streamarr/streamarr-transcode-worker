@@ -395,8 +395,9 @@ class TranscodeWorkerJobAttemptTest {
   @DisplayName(
       "Should upload the segments before the skipped number, then fail the attempt and end FFmpeg,"
           + " when source keyframes are further apart than the period")
-  void shouldUploadTheSegmentsBeforeTheSkippedNumberThenFailWhenSourceKeyframesAreSparse()
-      throws Exception {
+  void
+      shouldUploadTheSegmentsBeforeTheSkippedNumberThenFailTheAttemptAndEndFfmpegWhenSourceKeyframesAreFurtherApartThanThePeriod()
+          throws Exception {
     var recording = recording("10-copy-gop-exceeds-period.fmp4");
     var launcher = ScriptedProcessLauncher.writing(recording.file());
     var jobBuilder = variantJobBuilder();

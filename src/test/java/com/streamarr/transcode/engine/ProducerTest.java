@@ -70,8 +70,9 @@ class ProducerTest {
   @DisplayName(
       "Should discard the period before the first segment and deliver that segment from its"
           + " boundary when an encoded replacement attempt seeks one period early")
-  void shouldDiscardThePeriodBeforeTheFirstSegmentWhenAnEncodedReplacementAttemptSeeksEarly(
-      String file) throws IOException {
+  void
+      shouldDiscardThePeriodBeforeTheFirstSegmentAndDeliverThatSegmentFromItsBoundaryWhenAnEncodedReplacementAttemptSeeksOnePeriodEarly(
+          String file) throws IOException {
     var recording = recording(file);
     var process = ScriptedProcess.builder().output(bytesOf(file)).build();
 
@@ -249,7 +250,8 @@ class ProducerTest {
   @DisplayName(
       "Should deliver the closed segment, then fail the attempt and end FFmpeg, when source"
           + " keyframes are further apart than the period")
-  void shouldDeliverTheClosedSegmentThenFailWhenSourceKeyframesAreFurtherApartThanThePeriod() {
+  void
+      shouldDeliverTheClosedSegmentThenFailTheAttemptAndEndFfmpegWhenSourceKeyframesAreFurtherApartThanThePeriod() {
     var recording = recording("10-copy-gop-exceeds-period.fmp4");
     var process = ScriptedProcess.builder().output(bytesOf(recording.file())).build();
 

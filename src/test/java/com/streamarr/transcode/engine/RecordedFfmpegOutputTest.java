@@ -209,8 +209,9 @@ class RecordedFfmpegOutputTest {
   @DisplayName(
       "Should open every segment on the start-0 attempt's frame when an encoded replacement attempt"
           + " seeks one period early")
-  void shouldOpenEverySegmentOnTheStartZeroAttemptsFrameWhenAnEncodedReplacementAttemptSeeksEarly(
-      String replacementAttempt, String startZeroAttempt) throws IOException {
+  void
+      shouldOpenEverySegmentOnTheStartZeroAttemptsFrameWhenAnEncodedReplacementAttemptSeeksOnePeriodEarly(
+          String replacementAttempt, String startZeroAttempt) throws IOException {
     var replacement = cutPoints(group(recording(replacementAttempt)));
     var startZero = cutPoints(group(recording(startZeroAttempt)));
 
@@ -222,8 +223,9 @@ class RecordedFfmpegOutputTest {
   @DisplayName(
       "Should start at the seek point and discard that period when an encoded replacement attempt"
           + " seeks one period before its first segment")
-  void shouldStartAtTheSeekPointAndDiscardThatPeriodWhenAnEncodedReplacementAttemptSeeksEarly(
-      String file) throws IOException {
+  void
+      shouldStartAtTheSeekPointAndDiscardThatPeriodWhenAnEncodedReplacementAttemptSeeksOnePeriodBeforeItsFirstSegment(
+          String file) throws IOException {
     var grouping = group(recording(file));
     var firstFragment = grouping.units().fragments().getFirst();
 

@@ -57,7 +57,9 @@ class FfmpegCommandBuilderRecipeTest {
   @DisplayName(
       "Should build the command a recording ran, without its fixture-only additions, when the"
           + " recording follows the recipe")
-  void shouldBuildTheCommandARecordingRanWhenTheRecordingFollowsTheRecipe(Recording recording) {
+  void
+      shouldBuildTheCommandARecordingRanWithoutItsFixtureOnlyAdditionsWhenTheRecordingFollowsTheRecipe(
+          Recording recording) {
     var builder =
         new FfmpegCommandBuilder(
             "ffmpeg", Duration.of(recording.fragmentationTargetMicros(), ChronoUnit.MICROS));

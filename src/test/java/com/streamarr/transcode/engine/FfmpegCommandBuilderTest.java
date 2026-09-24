@@ -222,8 +222,9 @@ class FfmpegCommandBuilderTest {
   @DisplayName(
       "Should force keyframes from the attempt's first segment to the last advertised one when a"
           + " replacement attempt starts mid-stream")
-  void shouldForceKeyframesFromTheAttemptsFirstSegmentWhenAReplacementAttemptStartsMidStream(
-      TranscodeMode mode) {
+  void
+      shouldForceKeyframesFromTheAttemptsFirstSegmentToTheLastAdvertisedOneWhenAReplacementAttemptStartsMidStream(
+          TranscodeMode mode) {
     var cmd =
         command(
             request(mode)
