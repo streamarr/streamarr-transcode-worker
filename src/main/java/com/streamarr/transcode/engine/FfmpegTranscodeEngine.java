@@ -3,7 +3,9 @@ package com.streamarr.transcode.engine;
 import java.time.Duration;
 import lombok.Builder;
 import lombok.NonNull;
+import lombok.extern.slf4j.Slf4j;
 
+@Slf4j
 public class FfmpegTranscodeEngine {
 
   // How long a stop waits for FFmpeg to exit after asking it to quit.
@@ -37,15 +39,27 @@ public class FfmpegTranscodeEngine {
   public Producer startProducer(TranscodeRequest request, SegmentSink sink) {
     requireAvailableFfmpeg();
     var job = TranscodeJob.builder().request(request).videoEncoder(resolveEncoder(request)).build();
-    return Producer.builder()
-        .launcher(launcher)
-        .command(commandBuilder.buildCommand(job))
-        .jobAttemptId(request.attemptId())
-        .periodSeconds(request.targetSegmentDuration())
-        .startSequenceNumber(request.startSequenceNumber())
-        .gracePeriod(STOP_GRACE_PERIOD)
-        .sink(sink)
-        .start();
+    var command = commandBuilder.buildCommand(job);
+    log.debug(
+        "FFmpeg command for job attempt {}: {}", request.attemptId(), String.join(" ", command));
+    var producer =
+        Producer.builder()
+            .launcher(launcher)
+            .command(command)
+            .jobAttemptId(request.attemptId())
+            .periodSeconds(request.targetSegmentDuration())
+            .startSequenceNumber(request.startSequenceNumber())
+            .gracePeriod(STOP_GRACE_PERIOD)
+            .sink(sink)
+            .start();
+    log.info(
+        "Started transcode for session {} variant {} job attempt {} (encoder: {}, PID: {})",
+        request.sessionId(),
+        request.variantLabel(),
+        request.attemptId(),
+        job.videoEncoder(),
+        producer.pid());
+    return producer;
   }
 
   public boolean isHealthy() {

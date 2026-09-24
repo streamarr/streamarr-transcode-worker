@@ -87,6 +87,10 @@ public final class Producer {
     return producer;
   }
 
+  long pid() {
+    return process.pid();
+  }
+
   /** Completes once with the attempt's outcome, after FFmpeg has exited. */
   public CompletableFuture<AttemptOutcome> outcome() {
     return outcome.copy();
