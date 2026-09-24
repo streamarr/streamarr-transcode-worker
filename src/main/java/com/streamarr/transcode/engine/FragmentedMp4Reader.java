@@ -169,8 +169,8 @@ final class FragmentedMp4Reader {
     }
 
     if (header.size() < header.bytes().length) {
-      throw new FragmentedMp4Exception(
-          Reason.MALFORMED_BOX, header.type() + " declares " + header.size() + " bytes");
+      throw FragmentedMp4Exception.malformed(
+          header.type() + " declares " + header.size() + " bytes");
     }
 
     var box = new byte[(int) header.size()];

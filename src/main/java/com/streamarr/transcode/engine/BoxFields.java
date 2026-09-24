@@ -82,7 +82,7 @@ final class BoxFields {
 
   private void require(int bytes) {
     if (buffer.remaining() < bytes) {
-      throw NestedBox.malformed(type + " ends before its fields do");
+      throw FragmentedMp4Exception.malformed(type + " ends before its fields do");
     }
   }
 }

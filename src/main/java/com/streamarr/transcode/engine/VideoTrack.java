@@ -58,7 +58,8 @@ record VideoTrack(long trackId, long timescale, int defaultSampleFlags) {
             .map(TrackExtends::of)
             .filter(trex -> trex.trackId() == trackId)
             .findFirst()
-            .orElseThrow(() -> NestedBox.malformed("mvex holds no trex for track " + trackId));
+            .orElseThrow(
+                () -> FragmentedMp4Exception.malformed("mvex holds no trex for track " + trackId));
     return new VideoTrack(trackId, timescale, trackExtends.defaultSampleFlags());
   }
 
@@ -77,7 +78,7 @@ record VideoTrack(long trackId, long timescale, int defaultSampleFlags) {
     var version = fields.u8();
     var timescale = fields.skip(3).skip(creationAndModificationTimeBytes(version)).u32();
     if (timescale == 0) {
-      throw NestedBox.malformed("mdhd declares a timescale of zero");
+      throw FragmentedMp4Exception.malformed("mdhd declares a timescale of zero");
     }
 
     return timescale;
@@ -163,7 +164,7 @@ record VideoTrack(long trackId, long timescale, int defaultSampleFlags) {
     try {
       return Math.addExact(decodeTime, compositionOffset);
     } catch (ArithmeticException _) {
-      throw NestedBox.malformed("presentation time overflows a signed 64-bit value");
+      throw FragmentedMp4Exception.malformed("presentation time overflows a signed 64-bit value");
     }
   }
 

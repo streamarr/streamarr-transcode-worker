@@ -32,4 +32,8 @@ final class FragmentedMp4Exception extends RuntimeException {
     super(reason + ": " + detail);
     this.reason = reason;
   }
+
+  static FragmentedMp4Exception malformed(String detail) {
+    return new FragmentedMp4Exception(Reason.MALFORMED_BOX, detail);
+  }
 }

@@ -1,6 +1,5 @@
 package com.streamarr.transcode.engine;
 
-import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
@@ -36,15 +35,12 @@ record NestedBox(@NonNull String type, @NonNull ByteBuffer body) {
   }
 
   NestedBox requiredChild(String childType) {
-    return child(childType).orElseThrow(() -> malformed(type + " holds no " + childType));
+    return child(childType)
+        .orElseThrow(() -> FragmentedMp4Exception.malformed(type + " holds no " + childType));
   }
 
   BoxFields fields() {
     return new BoxFields(type, body.duplicate());
-  }
-
-  static FragmentedMp4Exception malformed(String detail) {
-    return new FragmentedMp4Exception(Reason.MALFORMED_BOX, detail);
   }
 
   private NestedBox readChild(ByteBuffer content) {
@@ -59,7 +55,8 @@ record NestedBox(@NonNull String type, @NonNull ByteBuffer body) {
 
     var bodyBytes = size - headerBytes;
     if (bodyBytes < 0 || bodyBytes > content.remaining()) {
-      throw malformed(childType + " in " + type + " declares " + size + " bytes");
+      throw FragmentedMp4Exception.malformed(
+          childType + " in " + type + " declares " + size + " bytes");
     }
 
     var childBody = content.slice(content.position(), (int) bodyBytes);
