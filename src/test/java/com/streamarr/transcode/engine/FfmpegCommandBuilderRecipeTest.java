@@ -9,8 +9,6 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Optional;
-import java.util.OptionalInt;
 import java.util.UUID;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
@@ -39,10 +37,6 @@ class FfmpegCommandBuilderRecipeTest {
           .build();
   private static final AudioDecision COPIED_AUDIO =
       AudioDecision.builder().mode(AudioMode.COPY).codec("aac").channels(1).bitrate(0L).build();
-  private static final SubtitleDecision EXCLUDED_SUBTITLES =
-      new SubtitleDecision(
-          SubtitleMode.EXCLUDE, Optional.empty(), OptionalInt.empty(), Optional.empty());
-
   // The fixture-only additions the fixture README lists: quiet, non-interactive logging and a
   // single-threaded encoder, so that a re-recording reproduces the same bytes.
   private static final List<List<String>> FIXTURE_ONLY_OPTIONS =
@@ -78,7 +72,7 @@ class FfmpegCommandBuilderRecipeTest {
   @DisplayName(
       "Should pin each verified encoder and the stream copy when recordings follow the recipe")
   void shouldPinEachVerifiedEncoderAndTheStreamCopyWhenRecordingsFollowTheRecipe() {
-    assertThat(recordingsOfTheRecipe().map(recording -> recording.encoder().orElse("copy")))
+    assertThat(recordingsOfTheRecipe().map(recording -> recording.videoEncoder()))
         .contains("libx264", "libsvtav1", "copy");
   }
 
@@ -95,14 +89,11 @@ class FfmpegCommandBuilderRecipeTest {
             .height(RECORDED_HEIGHT)
             .bitrate(RECORDED_VIDEO_BITRATE)
             .build();
-    return TranscodeJob.builder()
-        .request(request)
-        .videoEncoder(recording.encoder().orElse("copy"))
-        .build();
+    return TranscodeJob.builder().request(request).videoEncoder(recording.videoEncoder()).build();
   }
 
   private static TranscodeDecision decisionRecordedAs(Recording recording) {
-    var decision = TranscodeDecision.builder().subtitleDecision(EXCLUDED_SUBTITLES);
+    var decision = TranscodeDecision.builder().subtitleDecision(SubtitleDecisions.EXCLUDED);
     return switch (recording.mode()) {
       case ENCODE ->
           decision.transcodeMode(TranscodeMode.FULL_TRANSCODE).audioDecision(ENCODED_AUDIO).build();

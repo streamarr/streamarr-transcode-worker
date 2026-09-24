@@ -12,8 +12,6 @@ import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Map;
-import java.util.Optional;
-import java.util.OptionalInt;
 import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -75,12 +73,7 @@ class FfmpegTranscodeEngineTest {
                         .channels(2)
                         .bitrate(128_000L)
                         .build())
-                .subtitleDecision(
-                    new SubtitleDecision(
-                        SubtitleMode.EXCLUDE,
-                        Optional.empty(),
-                        OptionalInt.empty(),
-                        Optional.empty()))
+                .subtitleDecision(SubtitleDecisions.EXCLUDED)
                 .needsKeyframeAlignment(mode != TranscodeMode.FULL_TRANSCODE)
                 .build())
         .width(1920)

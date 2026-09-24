@@ -5,8 +5,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
-import java.util.Optional;
-import java.util.OptionalInt;
 import java.util.UUID;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
@@ -22,10 +20,6 @@ import org.junit.jupiter.params.provider.ValueSource;
 @Tag("UnitTest")
 @DisplayName("FFmpeg Command Builder Tests")
 class FfmpegCommandBuilderTest {
-
-  private static final SubtitleDecision EXCLUDED_SUBTITLES =
-      new SubtitleDecision(
-          SubtitleMode.EXCLUDE, Optional.empty(), OptionalInt.empty(), Optional.empty());
 
   private static final AudioDecision NO_AUDIO =
       AudioDecision.builder().mode(AudioMode.NONE).codec(null).channels(0).bitrate(0L).build();
@@ -74,7 +68,7 @@ class FfmpegCommandBuilderTest {
         .transcodeMode(mode)
         .videoCodecFamily("h264")
         .audioDecision(audio)
-        .subtitleDecision(EXCLUDED_SUBTITLES);
+        .subtitleDecision(SubtitleDecisions.EXCLUDED);
   }
 
   private static AudioDecision copiedAudio(String codec) {

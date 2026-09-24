@@ -79,6 +79,11 @@ public final class FfmpegRecordings {
       int trailingAudioOnlyFragmentCount,
       List<HlsRun> hlsComparisons) {
 
+    /** The encoder a job names for the recording: its video encoder, or copy for a stream copy. */
+    public String videoEncoder() {
+      return encoder().orElse("copy");
+    }
+
     @Override
     public String toString() {
       return file;
