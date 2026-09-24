@@ -214,15 +214,19 @@ public final class Producer {
   }
 
   private void awaitExitWithinGracePeriod() {
+    if (!tryAwaitExitWithinGracePeriod()) {
+      endProcessForcibly();
+    }
+  }
+
+  // False when FFmpeg has not exited within the grace period, or an interrupt ended the wait.
+  private boolean tryAwaitExitWithinGracePeriod() {
     try {
-      if (process.waitFor(gracePeriod.toNanos(), TimeUnit.NANOSECONDS)) {
-        return;
-      }
+      return process.waitFor(gracePeriod.toNanos(), TimeUnit.NANOSECONDS);
     } catch (InterruptedException _) {
       Thread.currentThread().interrupt();
+      return false;
     }
-
-    endProcessForcibly();
   }
 
   private void endProcessForcibly() {
@@ -304,11 +308,17 @@ public final class Producer {
             ProducerFailure.ENCODER_STALLED,
             "FFmpeg wrote no output for " + stallTimeout + " while the producer read it");
     if (watchdog.awaitStall() && tryDecide(stall)) {
-      cancelDeliveryInFlight();
-      process.destroy();
-      awaitExitWithinGracePeriod();
-      settle(stall);
+      terminateAndSettle(stall);
     }
+  }
+
+  // Settles a failure this thread decided once FFmpeg has exited: it asks FFmpeg to terminate and
+  // destroys it after the grace period, because a hung FFmpeg can ignore termination.
+  private void terminateAndSettle(Failed failure) {
+    cancelDeliveryInFlight();
+    process.destroy();
+    awaitExitWithinGracePeriod();
+    settle(failure);
   }
 
   // The reader waits for the producer rather than FFmpeg, so the stall watchdog pauses meanwhile
