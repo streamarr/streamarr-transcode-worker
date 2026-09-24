@@ -51,7 +51,7 @@ public class FfmpegCommandBuilder {
     addCommonFlags(cmd);
     addCodecArgs(cmd, job);
 
-    if (mode == TranscodeMode.VIDEO_TRANSCODE || mode == TranscodeMode.FULL_TRANSCODE) {
+    if (encodesVideo(mode)) {
       addFrameRateArgs(cmd, job.request());
       addKeyframeArgs(cmd, job);
     }
@@ -59,6 +59,10 @@ public class FfmpegCommandBuilder {
     addFragmentedMp4Output(cmd);
 
     return List.copyOf(cmd);
+  }
+
+  private static boolean encodesVideo(TranscodeMode mode) {
+    return mode == TranscodeMode.VIDEO_TRANSCODE || mode == TranscodeMode.FULL_TRANSCODE;
   }
 
   private void addInputArgs(List<String> cmd, TranscodeRequest request) {
