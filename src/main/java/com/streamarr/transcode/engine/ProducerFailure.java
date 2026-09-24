@@ -19,6 +19,11 @@ public enum ProducerFailure {
   SEGMENT_CAP_EXCEEDED,
   /** A keyframe skipped a segment number, so the source has no keyframe inside that interval. */
   SKIPPED_SEGMENT_NUMBER,
+  /**
+   * An attempt that encodes video wrote a video sample shorter than half a frame at the rate it
+   * forced, which FFmpeg writes when the encoder emits packets out of decode order.
+   */
+  SHORT_VIDEO_SAMPLE,
   /** The output is not fragmented MP4 that the producer can group into media segments. */
   MALFORMED_OUTPUT,
   /** Reading FFmpeg's standard output failed. */
@@ -38,6 +43,7 @@ public enum ProducerFailure {
           TRUNCATED_OUTPUT;
       case EXCEEDS_SEGMENT_CAP -> SEGMENT_CAP_EXCEEDED;
       case SKIPPED_SEGMENT_NUMBER -> SKIPPED_SEGMENT_NUMBER;
+      case SHORT_VIDEO_SAMPLE -> SHORT_VIDEO_SAMPLE;
       case UNSIZED_BOX,
           MALFORMED_BOX,
           SAMPLE_DATA_OUTSIDE_MDAT,

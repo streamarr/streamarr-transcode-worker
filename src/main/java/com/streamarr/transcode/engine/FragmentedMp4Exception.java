@@ -31,7 +31,12 @@ final class FragmentedMp4Exception extends RuntimeException {
     UNEXPECTED_BOX,
     MULTIPLE_VIDEO_TRACKS,
     SKIPPED_SEGMENT_NUMBER,
-    PRESENTATION_TIME_REGRESSED
+    PRESENTATION_TIME_REGRESSED,
+    /**
+     * A video sample of an encoded output lasts less than half the frame duration of the rate the
+     * encode forced.
+     */
+    SHORT_VIDEO_SAMPLE
   }
 
   private final Reason reason;

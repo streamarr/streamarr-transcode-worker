@@ -114,6 +114,30 @@ final class IsoBoxes {
     return box("moof", fullBox("mfhd", 0, u32(1)), concat(trafs));
   }
 
+  /**
+   * An initialization segment and one keyframe fragment a frame past each second, at 24000/1001
+   * frames per second in the 24 kHz video timescale, whose video samples last as given, so that
+   * fragment {@code n} opens segment {@code n} of a 1 s period.
+   */
+  static byte[] oneSecondKeyframeFragments(List<List<Integer>> sampleDurationsOfEachFragment) {
+    var output = new ByteArrayOutputStream();
+    output.writeBytes(ftyp());
+    output.writeBytes(videoAndAudioMoov());
+    for (var index = 0; index < sampleDurationsOfEachFragment.size(); index++) {
+      var durations = sampleDurationsOfEachFragment.get(index);
+      output.writeBytes(
+          moof(
+              videoTraf()
+                  .baseMediaDecodeTime(index * 24_024L)
+                  .firstSampleFlags(SYNC_SAMPLE_FLAGS)
+                  .sampleDurations(durations)
+                  .build()));
+      output.writeBytes(mdat(durations.size() * SAMPLE_BYTES));
+    }
+
+    return output.toByteArray();
+  }
+
   static byte[] mdat(int payloadBytes) {
     var payload = new byte[payloadBytes];
     Arrays.fill(payload, (byte) 0x5A);

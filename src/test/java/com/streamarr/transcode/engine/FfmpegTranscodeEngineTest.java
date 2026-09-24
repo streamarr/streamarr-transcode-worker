@@ -7,13 +7,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
+import com.streamarr.transcode.engine.AttemptOutcome.Failed;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -112,6 +115,52 @@ class FfmpegTranscodeEngineTest {
             "segment8.m4s",
             "segment9.m4s",
             "segment10.m4s");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"VIDEO_TRANSCODE", "FULL_TRANSCODE"})
+  @DisplayName(
+      "Should fail the attempt as a short video sample when it encodes video and its output holds a"
+          + " sample shorter than half a frame")
+  void shouldFailTheAttemptAsAShortVideoSampleWhenItEncodesVideoAndItsOutputHoldsOne(
+      TranscodeMode mode) {
+    var producer = startProducerOverAOneTickVideoSample(mode);
+
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .asInstanceOf(InstanceOfAssertFactories.type(Failed.class))
+        .extracting(Failed::reason)
+        .isEqualTo(ProducerFailure.SHORT_VIDEO_SAMPLE);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"REMUX", "AUDIO_TRANSCODE"})
+  @DisplayName(
+      "Should complete the attempt when it copies the video and its output holds a sample shorter"
+          + " than half a frame")
+  void shouldCompleteTheAttemptWhenItCopiesTheVideoAndItsOutputHoldsAShortSample(
+      TranscodeMode mode) {
+    var producer = startProducerOverAOneTickVideoSample(mode);
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+  }
+
+  // FFmpeg writes three 1 s segments of 23.976 fps video whose second holds a 1-tick sample.
+  private Producer startProducerOverAOneTickVideoSample(TranscodeMode mode) {
+    var output =
+        IsoBoxes.oneSecondKeyframeFragments(
+            List.of(List.of(1001, 1001), List.of(1001, 1, 1001), List.of(1001)));
+    executor =
+        engineLaunching(
+            ScriptedProcess.builder().output(output).build(),
+            createCapabilityService(true, noHardware()));
+    var request =
+        requestBuilder(mode, "h264").targetSegmentDuration(1).framerate(24_000.0 / 1001).build();
+    return executor.startProducer(request, new RecordingSegmentSink());
   }
 
   @Test

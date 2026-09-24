@@ -14,6 +14,7 @@ import java.io.OutputStream;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalDouble;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -57,6 +58,7 @@ public final class Producer {
   private final SegmentSink sink;
   private final Duration gracePeriod;
   private final Duration stallTimeout;
+  private final OptionalDouble encodedFrameRate;
   private final String threadName;
   private final CompletableFuture<AttemptOutcome> outcome = new CompletableFuture<>();
   private final Object lock = new Object();
@@ -81,6 +83,7 @@ public final class Producer {
     this.sink = settings.sink();
     this.gracePeriod = settings.gracePeriod();
     this.stallTimeout = settings.stallTimeout();
+    this.encodedFrameRate = settings.encodedFrameRate();
     this.threadName = "producer-" + settings.jobAttemptId();
   }
 
@@ -90,6 +93,9 @@ public final class Producer {
    * @param gracePeriod how long a stop waits for FFmpeg to exit after asking it to quit, and a
    *     stall after asking it to terminate
    * @param stallTimeout how long FFmpeg may write nothing while the reader reads its output
+   * @param encodedFrameRate the frame rate an attempt that encodes video forces on its output, so
+   *     that the producer fails an output holding a video sample shorter than half a frame; empty
+   *     when the attempt copies the video, whose sample durations follow the source
    * @throws TranscodeException when FFmpeg cannot be started
    */
   @Builder(buildMethodName = "start")
@@ -101,6 +107,7 @@ public final class Producer {
       int startSequenceNumber,
       @NonNull Duration gracePeriod,
       @NonNull Duration stallTimeout,
+      @NonNull OptionalDouble encodedFrameRate,
       @NonNull SegmentSink sink) {
     var settings =
         Settings.builder()
@@ -109,6 +116,7 @@ public final class Producer {
             .sink(sink)
             .gracePeriod(gracePeriod)
             .stallTimeout(stallTimeout)
+            .encodedFrameRate(encodedFrameRate)
             .build();
     Process process;
     try {
@@ -427,8 +435,36 @@ public final class Producer {
     return switch (unit) {
       case InitializationSegment initializationSegment ->
           handOff(ProducedSegment.of(initializationSegment));
-      case Fragment fragment -> deliverClosedBy(grouper.accept(fragment));
+      case Fragment fragment ->
+          deliverClosedBy(grouper.accept(requireNoShortVideoSample(fragment)));
     };
+  }
+
+  // An encoder that emits packets out of decode order, as SVT-AV1 4.x can (upstream #2385), leaves
+  // FFmpeg to rewrite their timestamps into samples of a tick or so; the output then fails to
+  // decode or skips segment numbers, even when FFmpeg exits cleanly. Nothing after such a sample is
+  // delivered, not even the segment it would close.
+  private Fragment requireNoShortVideoSample(Fragment fragment) {
+    var timescale = fragment.videoStart().map(VideoStart::timescale);
+    var shortest = fragment.shortestVideoSampleDuration();
+    if (encodedFrameRate.isEmpty() || timescale.isEmpty() || shortest.isEmpty()) {
+      return fragment;
+    }
+
+    var halfFrame = timescale.orElseThrow() / encodedFrameRate.getAsDouble() / 2;
+    if (shortest.getAsLong() >= halfFrame) {
+      return fragment;
+    }
+
+    throw new FragmentedMp4Exception(
+        Reason.SHORT_VIDEO_SAMPLE,
+        "a video sample of "
+            + shortest.getAsLong()
+            + " ticks lasts less than half a frame of "
+            + 2 * halfFrame
+            + " ticks at "
+            + encodedFrameRate.getAsDouble()
+            + " frames per second");
   }
 
   private Optional<Ending> deliverClosedBy(GroupingOutcome grouping) {
@@ -544,6 +580,7 @@ public final class Producer {
           ProducerFailure.TRUNCATED_OUTPUT;
       case EXCEEDS_SEGMENT_CAP -> ProducerFailure.SEGMENT_CAP_EXCEEDED;
       case SKIPPED_SEGMENT_NUMBER -> ProducerFailure.SKIPPED_SEGMENT_NUMBER;
+      case SHORT_VIDEO_SAMPLE -> ProducerFailure.SHORT_VIDEO_SAMPLE;
       case UNSIZED_BOX,
           MALFORMED_BOX,
           SAMPLE_DATA_OUTSIDE_MDAT,
@@ -655,5 +692,10 @@ public final class Producer {
       SegmentGrouper grouper,
       SegmentSink sink,
       Duration gracePeriod,
-      Duration stallTimeout) {}
+      Duration stallTimeout,
+      OptionalDouble encodedFrameRate) {}
+
+  public static class ProducerBuilder {
+    private OptionalDouble encodedFrameRate = OptionalDouble.empty();
+  }
 }

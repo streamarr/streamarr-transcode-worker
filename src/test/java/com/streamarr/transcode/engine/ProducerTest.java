@@ -21,6 +21,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.OptionalDouble;
 import java.util.UUID;
 import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.CyclicBarrier;
@@ -757,6 +758,54 @@ class ProducerTest {
     assertThat(outcomes).hasAtLeastOneElementOfType(Failed.class);
   }
 
+  @Test
+  @DisplayName(
+      "Should fail an encoded attempt as a short video sample and end FFmpeg when a video sample"
+          + " lasts less than half a frame")
+  void shouldFailAnEncodedAttemptAsAShortVideoSampleWhenAVideoSampleLastsLessThanHalfAFrame() {
+    var process = ScriptedProcess.builder().output(outputWithAOneTickVideoSample()).build();
+
+    var producer =
+        producerOfOneSecondSegments(process)
+            .encodedFrameRate(OptionalDouble.of(24_000.0 / 1001))
+            .start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.SHORT_VIDEO_SAMPLE);
+    assertThat(failure.detail()).contains("sample of 1 ticks");
+    assertThat(process.wasDestroyedForcibly()).isTrue();
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+  }
+
+  @Test
+  @DisplayName("Should deliver a short video sample when the attempt copies the video")
+  void shouldDeliverAShortVideoSampleWhenTheAttemptCopiesTheVideo() {
+    var process = ScriptedProcess.builder().output(outputWithAOneTickVideoSample()).build();
+
+    var producer = producerOfOneSecondSegments(process).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(sink.acceptedNames())
+        .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
+  }
+
+  @Test
+  @DisplayName(
+      "Should complete an encoded attempt when its shortest video sample lasts half a frame")
+  void shouldCompleteAnEncodedAttemptWhenItsShortestVideoSampleLastsHalfAFrame() {
+    var output =
+        IsoBoxes.oneSecondKeyframeFragments(
+            List.of(List.of(1001, 1001), List.of(1001, 501, 1001), List.of(1001)));
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer =
+        producerOfOneSecondSegments(process)
+            .encodedFrameRate(OptionalDouble.of(24_000.0 / 1001))
+            .start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+  }
+
   @ParameterizedTest(name = "FFmpeg ignores termination: {0}")
   @ValueSource(booleans = {false, true})
   @DisplayName(
@@ -917,8 +966,15 @@ class ProducerTest {
     return await().atMost(OUTCOME_LIMIT).pollInterval(POLL_INTERVAL);
   }
 
+  // An encoded recording's producer checks its video samples against the frame rate it forced.
   private Producer.ProducerBuilder producerFor(ScriptedProcess process, Recording recording) {
+    var encodedFrameRate = OptionalDouble.empty();
+    if (recording.encoder().isPresent()) {
+      encodedFrameRate = OptionalDouble.of(recording.source().videoFrameRate());
+    }
+
     return Producer.builder()
+        .encodedFrameRate(encodedFrameRate)
         .launcher((command, jobAttemptId) -> process)
         .command(List.of("ffmpeg"))
         .jobAttemptId(JOB_ATTEMPT_ID)
@@ -953,6 +1009,13 @@ class ProducerTest {
     var buffer = ByteBuffer.wrap(output);
     var moofLength = buffer.getInt(offset);
     return moofLength + buffer.getInt(offset + moofLength);
+  }
+
+  // Three 1 s segments of 23.976 fps video in which the second segment's first fragment holds a
+  // 1-tick sample, as FFmpeg writes after SVT-AV1 emits packets out of decode order.
+  private static byte[] outputWithAOneTickVideoSample() {
+    return IsoBoxes.oneSecondKeyframeFragments(
+        List.of(List.of(1001, 1001), List.of(1001, 1, 1001), List.of(1001)));
   }
 
   // Three 1 s segments of three 5 MiB keyframe fragments each, nearly the segment cap: while the
