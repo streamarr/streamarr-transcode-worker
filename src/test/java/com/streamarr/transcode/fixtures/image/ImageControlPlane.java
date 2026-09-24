@@ -97,7 +97,9 @@ public final class ImageControlPlane
       case "/job" -> job(VariantJob.parseFrom(exchange.getRequestBody()));
       case "/failed-job" -> failedJob(VariantJob.parseFrom(exchange.getRequestBody()));
       case "/start-job" -> startJob(VariantJob.parseFrom(exchange.getRequestBody()));
-      case "/stopped-job" -> stoppedJob(VariantJob.parseFrom(exchange.getRequestBody()));
+      case "/job-awaiting-acknowledgement" ->
+          jobAwaitingAcknowledgement(VariantJob.parseFrom(exchange.getRequestBody()));
+      case "/stop-job" -> stopJob(VariantJob.parseFrom(exchange.getRequestBody()));
       case "/disconnected" ->
           disconnected.get(10, TimeUnit.SECONDS).toString().getBytes(StandardCharsets.UTF_8);
       case "/segment" -> firstMediaSegment();
@@ -149,12 +151,16 @@ public final class ImageControlPlane
     return started.get(30, TimeUnit.SECONDS).toByteArray();
   }
 
-  // Withholds every upload's acknowledgement, stops the job once an upload awaits one, and answers
-  // with the worker's report of the stop.
-  private byte[] stoppedJob(VariantJob request) throws Exception {
+  // Withholds every upload's acknowledgement and answers once an upload of the job awaits one.
+  private byte[] jobAwaitingAcknowledgement(VariantJob request) throws Exception {
     withholdAcknowledgements = true;
     dispatch(request);
     uploadAwaitsAcknowledgement.get(30, TimeUnit.SECONDS);
+    return new byte[0];
+  }
+
+  // Stops the job and answers with the worker's report of the stop.
+  private byte[] stopJob(VariantJob request) throws Exception {
     responses.onNext(
         EstablishWorkerSessionResponse.newBuilder()
             .setStopVariant(

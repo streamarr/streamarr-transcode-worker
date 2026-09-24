@@ -126,9 +126,19 @@ class ImageControlPlaneIT {
             .event(failed)
             .cause("JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED")
             .build(),
-        JobOutcome.builder().command("stopped-job").event(completed).cause("completed").build(),
         JobOutcome.builder()
-            .command("stopped-job")
+            .command("job-awaiting-acknowledgement")
+            .event(completed)
+            .cause("completed")
+            .build(),
+        JobOutcome.builder()
+            .command("job-awaiting-acknowledgement")
+            .event(failed)
+            .cause("JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED")
+            .build(),
+        JobOutcome.builder().command("stop-job").event(completed).cause("completed").build(),
+        JobOutcome.builder()
+            .command("stop-job")
             .event(failed)
             .cause("JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED")
             .build());
@@ -171,7 +181,13 @@ class ImageControlPlaneIT {
 
   private static Stream<SessionOutcome> sessionOutcomes() {
     var afterRegistration =
-        Stream.of("probe", "job", "failed-job", "start-job", "stopped-job")
+        Stream.of(
+                "probe",
+                "job",
+                "failed-job",
+                "start-job",
+                "job-awaiting-acknowledgement",
+                "stop-job")
             .flatMap(
                 command ->
                     Stream.of(false, true)
@@ -205,7 +221,9 @@ class ImageControlPlaneIT {
                   new StreamObserver<>() {
                     @Override
                     public void onNext(EstablishWorkerSessionResponse value) {
-                      if (value.hasStartVariant() || value.hasStartProbe()) {
+                      if (value.hasStartVariant()
+                          || value.hasStartProbe()
+                          || value.hasStopVariant()) {
                         command.complete(null);
                       }
                     }

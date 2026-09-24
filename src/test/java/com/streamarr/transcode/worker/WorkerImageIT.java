@@ -356,28 +356,33 @@ class WorkerImageIT {
   void shouldLetFfmpegExitAndReportTheStopWhenTheImageStopsAJobWhoseUploadAwaitsAcknowledgement()
       throws Exception {
     copyMedia();
-    // FFmpeg runs as this wrapper's child and the wrapper records its exit status, which a forced
-    // kill of the wrapper would never write. With every acknowledgement withheld, the pipe holds
-    // the remux's output back by the time the stop arrives.
+    // FFmpeg reads the source at its native rate, so it is still remuxing when the stop arrives. It
+    // runs as this wrapper's child, and the wrapper records its exit status, which a forced kill of
+    // the wrapper would never write.
+    var exitFile = "/tmp/worker-image-ffmpeg-exit";
     var script =
         scriptedFfmpeg(
             """
-        ffmpeg "$@"
+        ffmpeg -re "$@"
         status=$?
-        printf '%s' "$status" > /tmp/worker-image-ffmpeg-exit
+        printf '%%s' "$status" > %s
         exit "$status"
-        """);
+        """
+                .formatted(exitFile));
     try (var image = ImageFixture.builder().media(media).ffmpegPath(script).build()) {
       image.accept();
       var request = variantJobBuilder().build();
+      image.command("job-awaiting-acknowledgement", request.toByteArray());
+      assertThat(image.worker.execInContainer("test", "-e", exitFile).getExitCode())
+          .as("FFmpeg was still running when the stop was sent")
+          .isNotZero();
 
-      var stopped =
-          JobAttemptStopped.parseFrom(image.command("stopped-job", request.toByteArray()));
+      var stopped = JobAttemptStopped.parseFrom(image.command("stop-job", request.toByteArray()));
 
       assertThat(stopped.getJobAttemptId()).isEqualTo(request.getJobAttemptId());
-      var exitStatus = image.worker.execInContainer("cat", "/tmp/worker-image-ffmpeg-exit");
+      var exitStatus = image.worker.execInContainer("cat", exitFile);
       assertThat(exitStatus.getExitCode())
-          .as("FFmpeg exited on its own before the worker reported the stop")
+          .as("the wrapper recorded FFmpeg's exit, so no forced kill ended it")
           .isZero();
       assertThat(exitStatus.getStdout()).containsPattern("^[0-9]+$");
       assertThat(image.health("readiness").statusCode()).isEqualTo(200);
