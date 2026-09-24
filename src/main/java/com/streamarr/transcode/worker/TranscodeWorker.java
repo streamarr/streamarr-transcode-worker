@@ -76,7 +76,7 @@ public final class TranscodeWorker implements AutoCloseable {
   private final WorkerVariantJobMapper jobMapper;
   private final Optional<FfprobeExecutor> ffprobe;
   private final WorkerRuntime runtime;
-  private final Map<UUID, Producer> activeAttempts = new HashMap<>();
+  private final Map<UUID, ActiveAttempt> activeAttempts = new HashMap<>();
   private final Set<Thread> stoppingAttempts = new HashSet<>();
 
   private ManagedChannel channel;
@@ -213,7 +213,8 @@ public final class TranscodeWorker implements AutoCloseable {
       return new Refused();
     }
 
-    activeAttempts.put(fromProto(job.getJobAttemptId()), producer);
+    var attempt = new ActiveAttempt(job, producer);
+    activeAttempts.put(fromProto(job.getJobAttemptId()), attempt);
     try {
       send(jobAttemptStarted(job.getJobAttemptId()));
     } catch (RuntimeException e) {
@@ -223,7 +224,7 @@ public final class TranscodeWorker implements AutoCloseable {
       return new Orphaned(producer);
     }
 
-    producer.outcome().thenAccept(outcome -> settleAttempt(job, producer, outcome));
+    producer.outcome().thenAccept(outcome -> settleAttempt(attempt, outcome));
     return new Started();
   }
 
@@ -348,9 +349,9 @@ public final class TranscodeWorker implements AutoCloseable {
   }
 
   // Reports the producer's outcome unless a stop or the session's end has already claimed it.
-  private synchronized void settleAttempt(
-      VariantJob job, Producer producer, AttemptOutcome outcome) {
-    if (!activeAttempts.remove(fromProto(job.getJobAttemptId()), producer)) {
+  private synchronized void settleAttempt(ActiveAttempt attempt, AttemptOutcome outcome) {
+    var job = attempt.job();
+    if (!activeAttempts.remove(fromProto(job.getJobAttemptId()), attempt)) {
       return;
     }
 
@@ -382,12 +383,12 @@ public final class TranscodeWorker implements AutoCloseable {
       return;
     }
 
-    var producer = activeAttempts.remove(fromProto(command.getJobAttemptId()));
-    if (producer == null) {
+    var attempt = activeAttempts.remove(fromProto(command.getJobAttemptId()));
+    if (attempt == null) {
       return;
     }
 
-    var stop = new ClaimedStop(producer, requests);
+    var stop = new ClaimedStop(attempt, requests);
     var stopping =
         Thread.ofVirtual()
             .name("stop-" + fromProto(command.getJobAttemptId()))
@@ -398,7 +399,7 @@ public final class TranscodeWorker implements AutoCloseable {
 
   private void finishStop(ClaimedStop stop, Uuid jobAttemptId) {
     try {
-      stop.producer().stop();
+      stop.attempt().producer().stop();
       reportStopped(stop, jobAttemptId);
     } catch (RuntimeException e) {
       log.error("Stopping job attempt {} failed", fromProto(jobAttemptId), e);
@@ -507,7 +508,7 @@ public final class TranscodeWorker implements AutoCloseable {
   }
 
   private synchronized List<Producer> claimActiveAttempts() {
-    var producers = List.copyOf(activeAttempts.values());
+    var producers = activeAttempts.values().stream().map(ActiveAttempt::producer).toList();
     activeAttempts.clear();
     return producers;
   }
@@ -731,8 +732,10 @@ public final class TranscodeWorker implements AutoCloseable {
 
   private record ClosedSession(WorkerProbeSession probes, List<Producer> attempts) {}
 
+  private record ActiveAttempt(VariantJob job, Producer producer) {}
+
   private record ClaimedStop(
-      Producer producer, StreamObserver<EstablishWorkerSessionRequest> session) {}
+      ActiveAttempt attempt, StreamObserver<EstablishWorkerSessionRequest> session) {}
 
   private sealed interface AttemptStart {}
 
