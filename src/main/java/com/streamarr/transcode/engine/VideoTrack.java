@@ -4,6 +4,7 @@ import static com.streamarr.transcode.engine.BoxFields.isSet;
 
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.engine.TrackRun.FirstSample;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -30,11 +31,12 @@ record VideoTrack(long trackId, long timescale, int defaultSampleFlags) {
   }
 
   /**
-   * Reads the presentation time and sync status of this track's first sample in a {@code moof};
-   * empty when the fragment carries no sample of this track.
+   * Reads the presentation time and sync status of this track's first sample in a fragment's {@code
+   * traf}s; empty when the fragment carries no sample of this track.
    */
-  Optional<VideoStart> startOf(BoxView moof) {
-    return moof.children("traf").stream()
+  Optional<VideoStart> startOf(List<TrackFragmentBox> trackFragments) {
+    return trackFragments.stream()
+        .filter(trackFragment -> trackFragment.header().trackId() == trackId)
         .map(this::startOfTrackFragment)
         .flatMap(Optional::stream)
         .findFirst();
@@ -82,23 +84,19 @@ record VideoTrack(long trackId, long timescale, int defaultSampleFlags) {
     return 8;
   }
 
-  private Optional<VideoStart> startOfTrackFragment(BoxView traf) {
-    var header = TrackFragmentHeader.of(traf.requiredChild("tfhd"));
-    if (header.trackId() != trackId) {
-      return Optional.empty();
-    }
-
-    var runs = traf.children("trun").stream().map(TrackRun::of).toList();
-    return runs.stream()
+  private Optional<VideoStart> startOfTrackFragment(TrackFragmentBox trackFragment) {
+    return trackFragment.runs().stream()
         .map(TrackRun::firstSample)
         .flatMap(Optional::stream)
         .findFirst()
-        .map(sample -> videoStart(traf, header, sample));
+        .map(sample -> videoStart(trackFragment, sample));
   }
 
-  private VideoStart videoStart(BoxView traf, TrackFragmentHeader header, FirstSample sample) {
-    var flags = sample.flags().or(header::defaultSampleFlags).orElse(defaultSampleFlags);
-    var presentationTime = addExact(baseMediaDecodeTimeOf(traf), sample.compositionOffset());
+  private VideoStart videoStart(TrackFragmentBox trackFragment, FirstSample sample) {
+    var flags =
+        sample.flags().or(trackFragment.header()::defaultSampleFlags).orElse(defaultSampleFlags);
+    var presentationTime =
+        addExact(baseMediaDecodeTimeOf(trackFragment.traf()), sample.compositionOffset());
     return new VideoStart(presentationTime, timescale, !isSet(flags, SAMPLE_IS_NON_SYNC_SAMPLE));
   }
 

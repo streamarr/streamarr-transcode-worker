@@ -90,14 +90,14 @@ final class FragmentedMp4Reader {
                     new FragmentedMp4Exception(
                         Reason.END_OF_FILE_AFTER_MOVIE_FRAGMENT, "no mdat follows the moof"));
     var mdat = readBox(requireType(mdatHeader, "mdat", Reason.UNEXPECTED_BOX), moof.length);
-    var moofView = viewOf(moofHeader, moof);
+    var trackFragments = TrackFragmentBox.allOf(viewOf(moofHeader, moof));
     var mediaData =
         new MediaData(
             moofPosition,
             (long) moof.length + mdatHeader.length(),
             (long) moof.length + mdat.length);
-    sampleRanges.orElseThrow().requireInside(moofView, mediaData);
-    var videoStart = videoTrack.flatMap(track -> track.startOf(moofView));
+    sampleRanges.orElseThrow().requireInside(trackFragments, mediaData);
+    var videoStart = videoTrack.flatMap(track -> track.startOf(trackFragments));
     return Optional.of(new Fragment(List.of(moof, mdat), videoStart));
   }
 

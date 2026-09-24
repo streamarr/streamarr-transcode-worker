@@ -2,6 +2,7 @@ package com.streamarr.transcode.engine;
 
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.function.LongSupplier;
@@ -41,20 +42,20 @@ final class SampleRanges {
    * @throws FragmentedMp4Exception when a run that holds bytes lies outside the {@code mdat}'s
    *     body, or when a run's samples need a default size that no box declares
    */
-  void requireInside(BoxView moof, MediaData mediaData) {
+  void requireInside(List<TrackFragmentBox> trackFragments, MediaData mediaData) {
     var previousTrafEnd = 0L;
-    for (var traf : moof.children("traf")) {
-      previousTrafEnd = requireTrackFragmentInside(traf, previousTrafEnd, mediaData);
+    for (var trackFragment : trackFragments) {
+      previousTrafEnd = requireTrackFragmentInside(trackFragment, previousTrafEnd, mediaData);
     }
   }
 
   /** Returns where the {@code traf}'s data ends, measured from the {@code moof}'s first byte. */
-  private long requireTrackFragmentInside(BoxView traf, long previousTrafEnd, MediaData mediaData) {
-    var header = TrackFragmentHeader.of(traf.requiredChild("tfhd"));
+  private long requireTrackFragmentInside(
+      TrackFragmentBox trackFragment, long previousTrafEnd, MediaData mediaData) {
+    var header = trackFragment.header();
     var base = baseOf(header, previousTrafEnd, mediaData);
     var runEnd = base;
-    for (var trun : traf.children("trun")) {
-      var run = TrackRun.of(trun);
+    for (var run : trackFragment.runs()) {
       var start = runEnd;
       var dataOffset = run.dataOffset();
       if (dataOffset.isPresent()) {
