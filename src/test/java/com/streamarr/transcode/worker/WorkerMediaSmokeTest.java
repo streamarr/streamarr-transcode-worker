@@ -62,6 +62,7 @@ class WorkerMediaSmokeTest {
   private static final int LONG_SOURCE_SECONDS = 1003;
 
   private static final Duration JOB_LIMIT = Duration.ofMinutes(5);
+  private static final int PERMITTED_KEEPALIVE_SECONDS = 10;
 
   @TempDir static Path longSources;
 
@@ -405,8 +406,12 @@ class WorkerMediaSmokeTest {
     private StreamObserver<EstablishWorkerSessionResponse> responses;
 
     private MediaControlPlane() throws Exception {
+      // As Streamarr's session listener does, so that a job longer than the default ping
+      // allowance keeps its session.
       server =
           NettyServerBuilder.forAddress(new InetSocketAddress("127.0.0.1", 0))
+              .permitKeepAliveTime(PERMITTED_KEEPALIVE_SECONDS, TimeUnit.SECONDS)
+              .permitKeepAliveWithoutCalls(true)
               .addService(this)
               .build()
               .start();
