@@ -90,8 +90,8 @@ class ProducerTest {
 
     var producer = producerFor(process, recording).start();
 
-    awaiting().until(process::hasReadToEndOfOutput);
-    assertThat(sink.accepted()).hasSize(recording.segments().size() + 1);
+    awaiting().until(() -> sink.accepted().size() == recording.segments().size() + 1);
+    assertThat(process.hasReadToEndOfOutput()).isTrue();
     assertThat(producer.outcome()).isNotDone();
     process.exit();
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
