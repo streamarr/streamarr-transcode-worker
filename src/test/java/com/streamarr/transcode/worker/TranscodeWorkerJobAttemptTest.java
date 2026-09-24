@@ -171,7 +171,7 @@ class TranscodeWorkerJobAttemptTest {
 
       startVariant(connection, job);
 
-      var process = launcher.process(fromProto(job.getJobAttemptId()));
+      var process = processOf(launcher, job);
       assertThat(process.isAlive()).isFalse();
       assertThat(process.stdinText()).isEqualTo("q");
       assertThat(eventsOf(connection)).isEmpty();
@@ -259,7 +259,7 @@ class TranscodeWorkerJobAttemptTest {
       var connection = runtime.connection();
       startVariant(connection, stopped);
       startVariant(connection, running);
-      var quitting = launcher.process(fromProto(stopped.getJobAttemptId()));
+      var quitting = processOf(launcher, stopped);
       stopVariant(connection, stopped);
       await().atMost(EVENT_LIMIT).until(() -> quitting.stdinText().equals("q"));
 
@@ -273,8 +273,8 @@ class TranscodeWorkerJobAttemptTest {
               EventCase.JOB_ATTEMPT_STARTED);
       assertThat(launcher.hasLaunched(fromProto(next.getJobAttemptId()))).isTrue();
       quitting.exit();
-      launcher.process(fromProto(running.getJobAttemptId())).exit();
-      launcher.process(fromProto(next.getJobAttemptId())).exit();
+      processOf(launcher, running).exit();
+      processOf(launcher, next).exit();
     }
   }
 
@@ -309,12 +309,14 @@ class TranscodeWorkerJobAttemptTest {
       worker.start("localhost", 1);
       var connection = runtime.connection();
       connection.withholdAcknowledgements();
-      var running = startJobs(connection, started);
+      var running = startJobs(connection);
+      started.addAll(running);
       awaitEachReaderAt(launcher, running, readerWaits);
       for (var burst = 0; burst < BURSTS; burst++) {
         var stopped = running;
         stopJobs(connection, stopped);
-        running = startJobs(connection, started);
+        running = startJobs(connection);
+        started.addAll(running);
 
         awaitEachReaderAt(launcher, running, readerWaits);
         assertThat(stopped)
@@ -336,15 +338,13 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
-  // Starts a job in each advertised slot.
-  private static List<VariantJob> startJobs(
-      ScriptedWorkerRuntime.Connection connection, List<VariantJob> started) throws Exception {
+  private static List<VariantJob> startJobs(ScriptedWorkerRuntime.Connection connection)
+      throws Exception {
     var jobs = IntStream.range(0, BURST_SLOTS).mapToObj(_ -> variantJobBuilder().build()).toList();
     for (var job : jobs) {
       startVariant(connection, job);
     }
 
-    started.addAll(jobs);
     return jobs;
   }
 
@@ -355,7 +355,6 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
-  // Each job's reader takes FFmpeg's output up to the offset and waits there.
   private static void awaitEachReaderAt(
       ScriptedProcessLauncher launcher, List<VariantJob> jobs, int offset) {
     jobs.forEach(job -> promptly().until(() -> processOf(launcher, job).bytesTaken() == offset));
@@ -574,8 +573,7 @@ class TranscodeWorkerJobAttemptTest {
       awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_FAILED);
       assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
           .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
-      assertThat(launcher.process(fromProto(job.getJobAttemptId())).wasDestroyedForcibly())
-          .isTrue();
+      assertThat(processOf(launcher, job).wasDestroyedForcibly()).isTrue();
     }
   }
 
@@ -609,8 +607,7 @@ class TranscodeWorkerJobAttemptTest {
       var uploaded = new ByteArrayOutputStream();
       connection.uploads().forEach(upload -> uploaded.writeBytes(upload.content()));
       assertThat(uploaded.toByteArray()).isEqualTo(deliveredBytesOf(recording));
-      assertThat(launcher.process(fromProto(job.getJobAttemptId())).wasDestroyedForcibly())
-          .isTrue();
+      assertThat(processOf(launcher, job).wasDestroyedForcibly()).isTrue();
     }
   }
 
@@ -632,7 +629,7 @@ class TranscodeWorkerJobAttemptTest {
       worker.start("localhost", 1);
       var connection = runtime.connection();
       startVariant(connection, job);
-      var process = launcher.process(fromProto(job.getJobAttemptId()));
+      var process = processOf(launcher, job);
 
       stopVariant(connection, job);
 
@@ -660,7 +657,7 @@ class TranscodeWorkerJobAttemptTest {
       worker.start("localhost", 1);
       var connection = runtime.connection();
       startVariant(connection, job);
-      var process = launcher.process(fromProto(job.getJobAttemptId()));
+      var process = processOf(launcher, job);
       stopVariant(connection, job);
       await().atMost(EVENT_LIMIT).until(() -> process.stdinText().equals("q"));
 
@@ -688,7 +685,7 @@ class TranscodeWorkerJobAttemptTest {
       connection.withholdUploadReadiness();
       startVariant(connection, job);
       await().atMost(EVENT_LIMIT).until(() -> connection.uploads().size() == 1);
-      var process = launcher.process(fromProto(job.getJobAttemptId()));
+      var process = processOf(launcher, job);
 
       stopVariant(connection, job);
 
@@ -726,7 +723,7 @@ class TranscodeWorkerJobAttemptTest {
               () ->
                   connection.uploads().size() == 1
                       && connection.uploads().getFirst().awaitsAcknowledgement());
-      var process = launcher.process(fromProto(job.getJobAttemptId()));
+      var process = processOf(launcher, job);
 
       stopVariant(connection, job);
 
@@ -861,7 +858,7 @@ class TranscodeWorkerJobAttemptTest {
       awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_FAILED);
       assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
           .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
-      assertThat(launcher.process(fromProto(job.getJobAttemptId())).wasTerminated()).isTrue();
+      assertThat(processOf(launcher, job).wasTerminated()).isTrue();
     }
   }
 
@@ -887,7 +884,7 @@ class TranscodeWorkerJobAttemptTest {
       assertThat(connection.uploads())
           .extracting(upload -> upload.metadata().getSegmentName())
           .containsExactlyElementsOf(uploadNames(recording));
-      var process = launcher.process(fromProto(job.getJobAttemptId()));
+      var process = processOf(launcher, job);
       assertThat(process.wasTerminated()).isTrue();
       assertThat(process.wasDestroyedForcibly()).isFalse();
     }
@@ -940,7 +937,7 @@ class TranscodeWorkerJobAttemptTest {
       worker.start("localhost", 1);
       var firstSession = runtime.connection();
       startVariant(firstSession, job);
-      var process = launcher.process(fromProto(job.getJobAttemptId()));
+      var process = processOf(launcher, job);
       stopVariant(firstSession, job);
       await().atMost(EVENT_LIMIT).until(() -> process.stdinText().equals("q"));
       var closing = CompletableFuture.runAsync(worker::close);
@@ -978,7 +975,7 @@ class TranscodeWorkerJobAttemptTest {
       worker.start("localhost", 1);
       var connection = runtime.connection();
       startVariant(connection, job);
-      var process = launcher.process(fromProto(job.getJobAttemptId()));
+      var process = processOf(launcher, job);
       promptly().until(process::hasReachedPause);
       stopVariant(connection, job);
       promptly().until(() -> process.stdinText().equals("q"));
@@ -1017,7 +1014,7 @@ class TranscodeWorkerJobAttemptTest {
       worker.start("localhost", 1);
       var connection = runtime.connection();
       startVariant(connection, job);
-      var process = launcher.process(fromProto(job.getJobAttemptId()));
+      var process = processOf(launcher, job);
       promptly().until(process::wasDestroyedForcibly);
 
       stopVariant(connection, job);
@@ -1060,7 +1057,7 @@ class TranscodeWorkerJobAttemptTest {
         var job = variantJobBuilder().build();
         jobs.add(job);
         startVariant(connection, job);
-        var process = launcher.process(fromProto(job.getJobAttemptId()));
+        var process = processOf(launcher, job);
         promptly().until(process::hasReachedPause);
         var start = new CyclicBarrier(2);
         var failing = Thread.ofVirtual().start(() -> resumeAt(start, process));
@@ -1117,9 +1114,7 @@ class TranscodeWorkerJobAttemptTest {
               job -> {
                 assertThat(terminalEventsOf(connection, job))
                     .containsExactly(EventCase.JOB_ATTEMPT_STOPPED);
-                assertThat(
-                        launcher.process(fromProto(job.getJobAttemptId())).wasDestroyedForcibly())
-                    .isFalse();
+                assertThat(processOf(launcher, job).wasDestroyedForcibly()).isFalse();
               });
     }
   }
