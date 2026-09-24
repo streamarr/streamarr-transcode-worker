@@ -242,13 +242,19 @@ public final class Producer {
     return switch (grouping) {
       case NothingClosed _ -> Optional.empty();
       case SegmentClosed(var segment) -> deliver(ProducedSegment.of(segment));
-      case SegmentNumberSkipped skipped ->
-          skipped
-              .closedSegment()
-              .map(ProducedSegment::of)
-              .flatMap(this::deliver)
-              .or(() -> Optional.of(endingOf(skipped.failure())));
+      case SegmentNumberSkipped skipped -> deliverThenFail(skipped);
     };
+  }
+
+  // The skipping fragment closes a complete segment, which is delivered before the skip fails the
+  // attempt; a stop or a failed delivery ends reading first.
+  private Optional<Ending> deliverThenFail(SegmentNumberSkipped skipped) {
+    var deliveryEnding = skipped.closedSegment().map(ProducedSegment::of).flatMap(this::deliver);
+    if (deliveryEnding.isPresent()) {
+      return deliveryEnding;
+    }
+
+    return Optional.of(endingOf(skipped.failure()));
   }
 
   // Empty once the sink has accepted the segment; otherwise why reading ends.
