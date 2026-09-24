@@ -37,11 +37,11 @@ FPS=23.976023976023978
 GOP_VERIFIED=145                      # ceil(P * FPS) + 1: ADR 0037's backstop for an encoder verified to honour forced keyframes
 GOP_FLOOR=143                         # floor(P * FPS): ADR 0037's GOP for an encoder not verified to (libx265 until worker #23, hardware until worker #14)
 GOP_CEIL=144                          # ceil(P * FPS): the HLS recipe's frame-count GOP
-# The HLS recipe's forced keyframes: an expression whose t counts from the run's first frame.
+# The HLS recipe's forced keyframes: an expression whose t counts from the attempt's first frame.
 FORCED_EVERY_PERIOD="expr:gte(t,n_forced*$P)"
 # The pipe recipe forces its keyframes from a list of absolute media times that run() fills in
-# for this placeholder: every boundary k * P, in whole seconds, from the run's start sequence number
-# up to the media segment count the server advertises for the source.
+# for this placeholder: every boundary k * P, in whole seconds, from the recorded attempt's start
+# sequence number up to the media segment count the server advertises for the source.
 BOUNDARIES=@BOUNDARIES@
 # Fixture-only additions: quiet, non-interactive logging (FF's -hide_banner -nostdin -loglevel error)
 # and single-threaded encoders (-threads 1, and lp=1 for SVT-AV1, whose output otherwise differs on
@@ -105,7 +105,7 @@ fill_boundaries() {  # LIST ARGS...
 #   KIND hls:  the HLS muxer (fMP4 segments) into hls/NAME/; "hls-recipe" swaps in the HLS recipe's common
 #              flags (no -start_at_zero, -max_delay), "video" maps the video stream only.
 #   start=N    the start sequence number: the first forced keyframe time, and the HLS muxer's -start_number.
-#   number=N   the HLS muxer's -start_number instead: the preroll's number when the run seeks one period early.
+#   number=N   the HLS muxer's -start_number instead: the preroll's number when the recorded attempt seeks one period early.
 #   duration=D reads only the source's first D seconds.
 #   skip=T     leaves the time T out of the forced keyframe times.
 run() {

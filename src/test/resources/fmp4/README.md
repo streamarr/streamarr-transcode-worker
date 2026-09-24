@@ -246,7 +246,7 @@ places keyframes.
 ## The HLS muxer as differential evidence
 
 For every fixture the same source was also run through the HLS muxer (`-f hls -hls_segment_type fmp4`):
-- `*.hls-recipe`: the HLS muxer recipe that ADR 0037 replaces, as `FfmpegCommandBuilder` built it (no `-start_at_zero`, `-max_delay`, its keyframe arguments, with audio). It forces keyframes with the expression `expr:gte(t,n_forced*6)`, whose `t` counts from the run's first frame.
+- `*.hls-recipe`: the HLS muxer recipe that ADR 0037 replaces, as `FfmpegCommandBuilder` built it (no `-start_at_zero`, `-max_delay`, its keyframe arguments, with audio). It forces keyframes with the expression `expr:gte(t,n_forced*6)`, whose `t` counts from the attempt's first frame.
 - `*.video-only`: the pipe recipe's own flags and keyframe arguments (the same list), video only; for
   fixtures 11–13 over the same first 30 s of the source.
 - `*.pipe-keyframes-with-audio` (1, 5a, 9): the pipe recipe's own flags and keyframe arguments, with audio.
@@ -279,7 +279,7 @@ Agreement, exact in ticks:
 | 11, 12, 12b, 13, 13b, 13c | – | agrees | the first video frame is at zero, so hlsenc measures from the grid's zero |
 
 The list anchors the pipe recipe's keyframes on the zero-based timeline, while hlsenc and the HLS
-recipe's expression both measure from the run's first frame. Before the list, the pipe recipe forced
+recipe's expression both measure from the attempt's first frame. Before the list, the pipe recipe forced
 keyframes with the same expression, and the encodes that start after zero (3, 5a, 9) and the encoded
 seeks (1b, 9b) agreed with their own HLS runs; they now disagree for the reasons below. The HLS
 recipe's own runs of a replacement attempt seek to 30 s and hold a period fewer frames than 1b and 9b,
@@ -362,8 +362,8 @@ Reproduced:
   - It has a keyframe in every interval after a seek, with no padding.
 - Grouping against the HLS muxer:
   - Under the verified GOP, grouping reproduces the HLS muxer's cut points exactly for the constant
-    23.976 fps encode (1) and the stream copy (7), and an encoded seek (1b) reproduces the start-0
-    run's HLS cut points on every segment it delivers.
+    23.976 fps encode (1) and the stream copy (7), and an encoded replacement attempt (1b)
+    reproduces the start-0 recording's HLS cut points on every segment it delivers.
 - Audio and muxer flags:
   - An MPEG-TS AAC copy without `-bsf:a aac_adtstoasc` exits 255 with "Malformed AAC bitstream
     detected".
@@ -373,7 +373,7 @@ Reproduced:
 Did not reproduce exactly (mechanism in each case; none is a grouping error):
 - **"… reproduced the HLS muxer's cut points … 11 into 11 for the variable-frame-rate encode" and
   "the two rules agree … at 23.976 fps for encode, stream copy and a seek"** held while the pipe
-  recipe forced keyframes with the expression, which measures from the run's first frame as hlsenc
+  recipe forced keyframes with the expression, which measures from the attempt's first frame as hlsenc
   does. Under the list the variable-frame-rate encode (3) still delivers 11 segments, one keyframe
   each, but on the first frame at or after each boundary, where hlsenc, measuring from 41.7 ms,
   cannot cut; an encoded seek likewise disagrees with its own HLS run (references 1 and 2).

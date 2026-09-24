@@ -212,10 +212,11 @@ class RecordedFfmpegOutputTest {
   void
       shouldOpenEverySegmentOnTheStartZeroAttemptsFrameWhenAnEncodedReplacementAttemptSeeksOnePeriodEarly(
           String replacementAttempt, String startZeroAttempt) throws IOException {
-    var replacement = cutPoints(group(recording(replacementAttempt)));
-    var startZero = cutPoints(group(recording(startZeroAttempt)));
+    var replacementAttemptCuts = cutPoints(group(recording(replacementAttempt)));
+    var startZeroAttemptCuts = cutPoints(group(recording(startZeroAttempt)));
 
-    assertThat(replacement).containsExactlyElementsOf(startZero.subList(5, 11));
+    assertThat(replacementAttemptCuts)
+        .containsExactlyElementsOf(startZeroAttemptCuts.subList(5, 11));
   }
 
   @ParameterizedTest(name = "{0}")
