@@ -1,15 +1,15 @@
 #!/usr/bin/env node
-// Derives expected.json from the recorded pipe streams and the HLS muxer oracle runs.
+// Derives expected.json from the recorded pipe streams and the HLS muxer runs over the same sources.
 //
 // Independent of the worker's Java code:
 //   * fmp4.mjs reads the boxes of every recording;
 //   * grid.mjs applies ADR 0037's grouping rules to the pipe stream;
-//   * each HLS oracle run is read the same way, and each HLS segment's first video sample is mapped
+//   * each HLS muxer run is read the same way, and each HLS segment's first video sample is mapped
 //     to the pipe recording by its ordinal in decode order. Where the runs share their video
 //     arguments (every copy, and every run with the pipe recipe's keyframe arguments), every packet
 //     must be byte-identical (size and SHA-256), which proves the ordinal names the same frame; the
 //     HLS recipe's own encodes use other keyframe arguments, so there only the packet count is
-//     checked (see evaluateOracle). Converting the HLS files' own timestamps is not reliable: with
+//     checked (see compareHlsRun). Converting the HLS files' own timestamps is not reliable: with
 //     frag_discont the mp4 muxer rebases the first fragment on pts 0 and snaps every later
 //     fragment's dts to the running duration sum, so HLS segment timestamps drift from the
 //     source's on the variable-frame-rate copy;
@@ -24,7 +24,7 @@ import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
   checkSourceKeyframes,
-  evaluateOracle,
+  compareHlsRun,
   initializationSegmentPair,
   loadSource,
   readHls,
@@ -42,7 +42,7 @@ const FRAGMENTATION_TARGET_MICROS = 1_000_000;
  * reference: the pipe recording that decodes the same frames as the HLS run (default: the fixture).
  * restrict: compare only segment numbers >= the fixture's startSequenceNumber.
  */
-function oracle(run, flags, { audio = true, reference = null, restrict = false, expect = true } = {}) {
+function hlsComparison(run, flags, { audio = true, reference = null, restrict = false, expect = true } = {}) {
   return { run, flags, audio, reference, restrict, expect };
 }
 
@@ -52,10 +52,10 @@ const FIXTURES = [
     proves: 'Constant 23.976 fps libx264 encode of 66 s under the verified-encoder GOP of ceil(6 x 23.976) + 1 = ' +
       '145 frames: every forced keyframe (frames 0, 144, 288, ..., 1007, 1151, ...) opens a segment and the ' +
       'frame-count GOP never fires, so every segment holds exactly one keyframe-first fragment.',
-    oracles: [
-      oracle('01-encode-cfr.hls-recipe', 'hls-recipe'),
-      oracle('01-encode-cfr.video-only', 'pipe-recipe', { audio: false }),
-      oracle('01-encode-cfr.pipe-keyframes-with-audio', 'pipe-recipe'),
+    hlsComparisons: [
+      hlsComparison('01-encode-cfr.hls-recipe', 'hls-recipe'),
+      hlsComparison('01-encode-cfr.video-only', 'pipe-recipe', { audio: false }),
+      hlsComparison('01-encode-cfr.pipe-keyframes-with-audio', 'pipe-recipe'),
     ],
   },
   {
@@ -64,10 +64,10 @@ const FIXTURES = [
       'segment 5), pads nothing from zero, and has no preroll. force_key_frames measures t from the run\'s ' +
       'first frame, so from segment 7 on its forced keyframes sit one frame after the start-0 recording\'s ' +
       '(42.042 s against 42.0003 s), inside the same intervals.',
-    oracles: [
-      oracle('01-encode-cfr-seek30.hls-recipe', 'hls-recipe'),
-      oracle('01-encode-cfr-seek30.video-only', 'pipe-recipe', { audio: false }),
-      oracle('01-encode-cfr.hls-recipe', 'hls-recipe', { reference: '01-encode-cfr', restrict: true, expect: false }),
+    hlsComparisons: [
+      hlsComparison('01-encode-cfr-seek30.hls-recipe', 'hls-recipe'),
+      hlsComparison('01-encode-cfr-seek30.video-only', 'pipe-recipe', { audio: false }),
+      hlsComparison('01-encode-cfr.hls-recipe', 'hls-recipe', { reference: '01-encode-cfr', restrict: true, expect: false }),
     ],
   },
   {
@@ -75,9 +75,9 @@ const FIXTURES = [
     proves: 'Stream copy of a 24 fps source with keyframes only at 0, 6.5, 12, 18, 24.5, 30, 36.5, 42, ' +
       '48, 54.5 and 60 s over 66 s (12, 18, 30, 42, 48 and 60 s sit exactly on a boundary and open that ' +
       "boundary's segment): 11 segments, one keyframe each.",
-    oracles: [
-      oracle('02-copy-irregular-keyframes.hls-recipe', 'hls-recipe'),
-      oracle('02-copy-irregular-keyframes.video-only', 'pipe-recipe', { audio: false }),
+    hlsComparisons: [
+      hlsComparison('02-copy-irregular-keyframes.hls-recipe', 'hls-recipe'),
+      hlsComparison('02-copy-irregular-keyframes.video-only', 'pipe-recipe', { audio: false }),
     ],
   },
   {
@@ -85,18 +85,18 @@ const FIXTURES = [
     proves: 'Variable-frame-rate source (avg 16.2 fps on a 23.976 grid) encoded with libx264 under ' +
       '-r 23.976 and no -fps_mode: constant-rate output starting at the first source frame (41.7 ms), ' +
       'one keyframe in every interval.',
-    oracles: [
-      oracle('03-encode-vfr.hls-recipe', 'hls-recipe'),
-      oracle('03-encode-vfr.video-only', 'pipe-recipe', { audio: false }),
+    hlsComparisons: [
+      hlsComparison('03-encode-vfr.hls-recipe', 'hls-recipe'),
+      hlsComparison('03-encode-vfr.video-only', 'pipe-recipe', { audio: false }),
     ],
   },
   {
     name: '04-copy-vfr-bframes', source: 'vfr.mp4', mode: 'copy', encoder: null, seek: 0, start: 0,
     proves: 'Variable-frame-rate stream copy with B-frames and one or two keyframes per interval: ' +
       'segments open only at a sync-first fragment inside a new interval, whatever the frame spacing.',
-    oracles: [
-      oracle('04-copy-vfr-bframes.hls-recipe', 'hls-recipe', { expect: false }),
-      oracle('04-copy-vfr-bframes.video-only', 'pipe-recipe', { audio: false, expect: false }),
+    hlsComparisons: [
+      hlsComparison('04-copy-vfr-bframes.hls-recipe', 'hls-recipe', { expect: false }),
+      hlsComparison('04-copy-vfr-bframes.video-only', 'pipe-recipe', { audio: false, expect: false }),
     ],
   },
   {
@@ -104,35 +104,35 @@ const FIXTURES = [
     proves: 'MPEG-TS source whose timestamps begin at 12 s: -start_at_zero puts media time zero at the ' +
       'container start (the AAC priming frame, 21.3 ms before the first video frame), so the first ' +
       'fragment is segment 0, not segment 2.',
-    oracles: [
-      oracle('05-encode-late-start.hls-recipe', 'hls-recipe'),
-      oracle('05-encode-late-start.video-only', 'pipe-recipe', { audio: false }),
+    hlsComparisons: [
+      hlsComparison('05-encode-late-start.hls-recipe', 'hls-recipe'),
+      hlsComparison('05-encode-late-start.video-only', 'pipe-recipe', { audio: false }),
     ],
   },
   {
     name: '05-copy-late-start', source: 'late.ts', mode: 'copy', encoder: null, seek: 0, start: 0,
     proves: 'Stream copy of the same 12 s-origin MPEG-TS source with -bsf:a aac_adtstoasc: the first ' +
       "fragment is segment 0 and every keyframe's media time is its source timestamp minus the container start.",
-    oracles: [
-      oracle('05-copy-late-start.hls-recipe-adtstoasc', 'hls-recipe'),
-      oracle('05-copy-late-start.video-only', 'pipe-recipe', { audio: false }),
+    hlsComparisons: [
+      hlsComparison('05-copy-late-start.hls-recipe-adtstoasc', 'hls-recipe'),
+      hlsComparison('05-copy-late-start.video-only', 'pipe-recipe', { audio: false }),
     ],
   },
   {
     name: '06-encode-audio-tail', source: 'tail.mp4', mode: 'encode', encoder: 'libx264', seek: 0, start: 0,
     proves: 'Audio outlasts video by 3.5 s: the recording ends in audio-only fragments (no video traf), which ' +
       'join the last open segment; none precedes the first segment.',
-    oracles: [
-      oracle('06-encode-audio-tail.hls-recipe', 'hls-recipe'),
-      oracle('06-encode-audio-tail.video-only', 'pipe-recipe', { audio: false }),
+    hlsComparisons: [
+      hlsComparison('06-encode-audio-tail.hls-recipe', 'hls-recipe'),
+      hlsComparison('06-encode-audio-tail.video-only', 'pipe-recipe', { audio: false }),
     ],
   },
   {
     name: '07-copy-start0', source: 'cfr.mp4', mode: 'copy', encoder: null, seek: 0, start: 0,
     proves: 'Stream copy of a 2.002 s-GOP 23.976 fps source from the start: three keyframes per segment.',
-    oracles: [
-      oracle('07-copy-start0.hls-recipe', 'hls-recipe'),
-      oracle('07-copy-start0.video-only', 'pipe-recipe', { audio: false }),
+    hlsComparisons: [
+      hlsComparison('07-copy-start0.hls-recipe', 'hls-recipe'),
+      hlsComparison('07-copy-start0.video-only', 'pipe-recipe', { audio: false }),
     ],
   },
   {
@@ -140,9 +140,9 @@ const FIXTURES = [
     proves: 'Stream-copy replacement attempt at -ss 30 (start sequence number 5): the seek lands on the keyframe at ' +
       '28.028 s (segment 4), which is preroll and is discarded with the non-sync fragment after it; ' +
       "segments 5 to 10 carry the start-0 recording's video samples at the same ticks (audio packets regroup by one AAC frame).",
-    oracles: [
-      oracle('07-copy-start0.hls-recipe', 'hls-recipe', { reference: '07-copy-start0', restrict: true }),
-      oracle('07-copy-seek30.hls-recipe', 'hls-recipe', { expect: false }),
+    hlsComparisons: [
+      hlsComparison('07-copy-start0.hls-recipe', 'hls-recipe', { reference: '07-copy-start0', restrict: true }),
+      hlsComparison('07-copy-seek30.hls-recipe', 'hls-recipe', { expect: false }),
     ],
   },
   {
@@ -150,19 +150,19 @@ const FIXTURES = [
     proves: 'Irregular variable-frame-rate source through SVT-AV1 with -r 23.976, the verified-encoder GOP of ' +
       '145 frames and time-based forced keyframes: one keyframe in every interval, on the same frames libx264 ' +
       'chose in 03.',
-    oracles: [
-      oracle('09-svtav1-vfr.video-only', 'pipe-recipe', { audio: false }),
-      oracle('09-svtav1-vfr.hls-recipe', 'hls-recipe', { expect: false }),
-      oracle('09-svtav1-vfr.pipe-keyframes-with-audio', 'pipe-recipe', { expect: true }),
+    hlsComparisons: [
+      hlsComparison('09-svtav1-vfr.video-only', 'pipe-recipe', { audio: false }),
+      hlsComparison('09-svtav1-vfr.hls-recipe', 'hls-recipe', { expect: false }),
+      hlsComparison('09-svtav1-vfr.pipe-keyframes-with-audio', 'pipe-recipe', { expect: true }),
     ],
   },
   {
     name: '09-svtav1-vfr-seek30', source: 'vfr.mp4', mode: 'encode', encoder: 'libsvtav1', seek: 30, start: 5,
     proves: 'The same SVT-AV1 recipe after -ss 30: starts at the first source frame after the seek point ' +
       '(30.072 s), pads nothing from zero, one keyframe in every interval.',
-    oracles: [
-      oracle('09-svtav1-vfr-seek30.video-only', 'pipe-recipe', { audio: false }),
-      oracle('09-svtav1-vfr-seek30.hls-recipe', 'hls-recipe'),
+    hlsComparisons: [
+      hlsComparison('09-svtav1-vfr-seek30.video-only', 'pipe-recipe', { audio: false }),
+      hlsComparison('09-svtav1-vfr-seek30.hls-recipe', 'hls-recipe'),
     ],
   },
   {
@@ -170,7 +170,7 @@ const FIXTURES = [
     proves: 'Stream copy with a keyframe every 10.01 s: interval 2 holds no keyframe. The sync-first ' +
       'fragment at 20.02 s (segment 3) closes segment 1, which is delivered complete with segment 0, and ' +
       'then grouping fails with a skipped segment number; nothing from that fragment on is grouped.',
-    oracles: [oracle('10-copy-gop-exceeds-period.hls-recipe', 'hls-recipe', { expect: false })],
+    hlsComparisons: [hlsComparison('10-copy-gop-exceeds-period.hls-recipe', 'hls-recipe', { expect: false })],
   },
   {
     name: '11-encode-cfr-floored-gop', source: 'cfr.mp4', mode: 'encode', encoder: 'libx264', seek: 0, start: 0,
@@ -178,34 +178,34 @@ const FIXTURES = [
       'an encoder not verified to honour forced keyframes: the GOP keyframe one frame before every later boundary ' +
       '(frames 143, 287, 431, 575) and on the last frame (719) is a 1-frame keyframe-first fragment that joins the ' +
       'earlier segment, so each segment holds two keyframes and still groups on the grid.',
-    oracles: [],
+    hlsComparisons: [],
   },
   {
     name: '12-encode-cfr-missed-forced-keyframe', source: 'cfr.mp4', mode: 'encode', encoder: 'libx264', seek: 0, start: 0,
     proves: 'libx264 over the first 30 s under the verified GOP of 145 frames with the forced keyframe for 18 s ' +
       'suppressed: the GOP count restarts at the forced keyframe at 12.012 s (frame 288), so the backstop keyframe ' +
       'lands 145 frames later at 18.060 s (frame 433), inside interval 3, and no segment number is skipped.',
-    oracles: [],
+    hlsComparisons: [],
   },
   {
     name: '12-svtav1-cfr-missed-forced-keyframe', source: 'cfr.mp4', mode: 'encode', encoder: 'libsvtav1', seek: 0, start: 0,
     proves: 'The same suppressed forced keyframe through SVT-AV1: its GOP count also restarts at the forced keyframe ' +
       'at frame 288, and the backstop keyframe lands at frame 433 (18.060 s), inside interval 3.',
-    oracles: [],
+    hlsComparisons: [],
   },
   {
     name: '13-x265-cfr', source: 'cfr.mp4', mode: 'encode', encoder: 'libx265', seek: 0, start: 0,
     proves: 'libx265 with the worker\'s arguments (open GOP by default) under the 145-frame GOP: it honours every ' +
       'time-based forced keyframe (frames 144, 288, 432, 576), but despite -forced-idr 1 each one is a CRA ' +
       '(NAL type 21); only frame 0 is an IDR (type 20). No RASL picture follows them here.',
-    oracles: [],
+    hlsComparisons: [],
   },
   {
     name: '13-x265-cfr-missed-forced-keyframe', source: 'cfr.mp4', mode: 'encode', encoder: 'libx265', seek: 0, start: 0,
     proves: 'libx265 with the forced keyframe for 18 s suppressed: its GOP count restarts at the forced keyframe at ' +
       'frame 288 and the backstop lands at frame 433 (18.060 s), inside interval 3, but as a CRA whose RASL ' +
       'picture (frame 432) references the previous GOP, so the segment it opens cannot be decoded on its own.',
-    oracles: [],
+    hlsComparisons: [],
   },
 ];
 
@@ -245,8 +245,8 @@ function fixtureRecord({ fixture, record, source, pipe, work }) {
     period: PERIOD,
     startSequenceNumber: fixture.start,
   });
-  const oracles = fixture.oracles.map((spec) =>
-    evaluateOracle({
+  const comparisons = fixture.hlsComparisons.map((spec) =>
+    compareHlsRun({
       fixture,
       // A copy passes the source's packets through, and a pipe-recipe run encodes with the
       // recording's own video arguments; the HLS recipe's encodes use other keyframe arguments.
@@ -279,7 +279,7 @@ function fixtureRecord({ fixture, record, source, pipe, work }) {
     ...facts,
     sourceKeyframeCheck: checkSourceKeyframes({ mode: fixture.mode, stream, source, timescale: videoTimescale }),
     diagnostics,
-    hlsOracles: oracles,
+    hlsComparisons: comparisons,
   };
 }
 

@@ -177,7 +177,7 @@
           "raslPictures": null
         }
       },
-      "hlsOracles": [
+      "hlsComparisons": [
         {
           "hlsRun": "01-encode-cfr.hls-recipe",
           "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
@@ -515,7 +515,7 @@
           "raslPictures": null
         }
       },
-      "hlsOracles": [
+      "hlsComparisons": [
         {
           "hlsRun": "01-encode-cfr-seek30.hls-recipe",
           "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
@@ -869,7 +869,7 @@
           "raslPictures": null
         }
       },
-      "hlsOracles": [
+      "hlsComparisons": [
         {
           "hlsRun": "02-copy-irregular-keyframes.hls-recipe",
           "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
@@ -1179,7 +1179,7 @@
           "raslPictures": null
         }
       },
-      "hlsOracles": [
+      "hlsComparisons": [
         {
           "hlsRun": "03-encode-vfr.hls-recipe",
           "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
@@ -1513,7 +1513,7 @@
           "raslPictures": null
         }
       },
-      "hlsOracles": [
+      "hlsComparisons": [
         {
           "hlsRun": "04-copy-vfr-bframes.hls-recipe",
           "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
@@ -1787,7 +1787,7 @@
           "raslPictures": null
         }
       },
-      "hlsOracles": [
+      "hlsComparisons": [
         {
           "hlsRun": "05-encode-late-start.hls-recipe",
           "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
@@ -2020,7 +2020,7 @@
           "raslPictures": null
         }
       },
-      "hlsOracles": [
+      "hlsComparisons": [
         {
           "hlsRun": "05-copy-late-start.hls-recipe-adtstoasc",
           "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
@@ -2226,7 +2226,7 @@
           "raslPictures": null
         }
       },
-      "hlsOracles": [
+      "hlsComparisons": [
         {
           "hlsRun": "06-encode-audio-tail.hls-recipe",
           "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
@@ -2517,7 +2517,7 @@
           "raslPictures": null
         }
       },
-      "hlsOracles": [
+      "hlsComparisons": [
         {
           "hlsRun": "07-copy-start0.hls-recipe",
           "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
@@ -2819,7 +2819,7 @@
           "raslPictures": null
         }
       },
-      "hlsOracles": [
+      "hlsComparisons": [
         {
           "hlsRun": "07-copy-start0.hls-recipe",
           "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
@@ -3123,7 +3123,7 @@
         },
         "videoPictures": null
       },
-      "hlsOracles": [
+      "hlsComparisons": [
         {
           "hlsRun": "09-svtav1-vfr.video-only",
           "flags": "the pipe recipe's common flags (-start_at_zero)",
@@ -3476,7 +3476,7 @@
         },
         "videoPictures": null
       },
-      "hlsOracles": [
+      "hlsComparisons": [
         {
           "hlsRun": "09-svtav1-vfr-seek30.video-only",
           "flags": "the pipe recipe's common flags (-start_at_zero)",
@@ -3687,7 +3687,7 @@
           "raslPictures": null
         }
       },
-      "hlsOracles": [
+      "hlsComparisons": [
         {
           "hlsRun": "10-copy-gop-exceeds-period.hls-recipe",
           "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
@@ -3855,7 +3855,7 @@
           "raslPictures": null
         }
       },
-      "hlsOracles": []
+      "hlsComparisons": []
     },
     {
       "name": "12-encode-cfr-missed-forced-keyframe",
@@ -3980,7 +3980,7 @@
           "raslPictures": null
         }
       },
-      "hlsOracles": []
+      "hlsComparisons": []
     },
     {
       "name": "12-svtav1-cfr-missed-forced-keyframe",
@@ -4099,7 +4099,7 @@
         },
         "videoPictures": null
       },
-      "hlsOracles": []
+      "hlsComparisons": []
     },
     {
       "name": "13-x265-cfr",
@@ -4225,7 +4225,7 @@
           "raslPictures": 0
         }
       },
-      "hlsOracles": []
+      "hlsComparisons": []
     },
     {
       "name": "13-x265-cfr-missed-forced-keyframe",
@@ -4351,7 +4351,7 @@
           "raslPictures": 1
         }
       },
-      "hlsOracles": []
+      "hlsComparisons": []
     }
   ],
   "initializationSegmentIdentityPairs": [

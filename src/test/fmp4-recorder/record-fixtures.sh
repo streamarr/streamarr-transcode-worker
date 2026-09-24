@@ -10,7 +10,7 @@
 # It writes the recordings and expected.json into src/test/resources/fmp4, wherever it is run from:
 #
 #   src/test/fmp4-recorder/record-fixtures.sh                  # re-record in place
-#   WORK=/some/dir src/test/fmp4-recorder/record-fixtures.sh   # keep the sources, logs and HLS oracle outputs
+#   WORK=/some/dir src/test/fmp4-recorder/record-fixtures.sh   # keep the sources, logs and HLS muxer outputs
 #   WORKER_IMAGE=streamarr-worker:local src/test/fmp4-recorder/record-fixtures.sh   # record with another image
 #
 # Sources are synthesized with lavfi inside the container; nothing is downloaded.
@@ -178,7 +178,7 @@ run hls 05-encode-late-start.hls-recipe hls-recipe src/late.ts -- "${X264[@]}" "
 run hls 05-encode-late-start.video-only video src/late.ts -- "${X264[@]}" "${KEY_X264_PIPE[@]}"
 # The HLS recipe's exact copy fails on ADTS audio in fMP4 (kept to record the exit status) ...
 run hls 05-copy-late-start.hls-recipe hls-recipe src/late.ts -- "${COPY_HLS[@]}"
-# ... so the copy oracle adds the bitstream filter.
+# ... so the copy's HLS comparison adds the bitstream filter.
 run hls 05-copy-late-start.hls-recipe-adtstoasc hls-recipe src/late.ts -- "${COPY_PIPE[@]}"
 run hls 05-copy-late-start.video-only video src/late.ts -- "${COPY_PIPE[@]}"
 
@@ -246,4 +246,4 @@ docker run --rm --entrypoint /cnb/lifecycle/launcher -v "$WORK":/work "$IMAGE" b
   > "$WORK/launcher.log" 2>&1 || { cat "$WORK/launcher.log"; exit 1; }
 
 node "$HERE/analyze.mjs" --work "$WORK" --out "$FIXTURES" --image "$IMAGE"
-echo "recorded into $FIXTURES (sources, logs and HLS oracle outputs in $WORK)"
+echo "recorded into $FIXTURES (sources, logs and HLS muxer outputs in $WORK)"

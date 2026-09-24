@@ -2,9 +2,9 @@
 
 Recorded standard-output streams of ADR 0037's FFmpeg recipe, with the media segments that the
 zero-based grid rule groups them into. The recordings pin that rule. Fixtures 1–10 also run the same
-source through FFmpeg's HLS muxer as differential evidence, not as the oracle: wherever its cut
-points differ from the grid, `expected.json` records each differing segment and this file explains
-the cause.
+source through FFmpeg's HLS muxer as differential evidence, not as an oracle: each HLS comparison
+in `expected.json` records every segment whose cut point differs from the grid, and this file
+explains the cause.
 `RecordedFfmpegOutputTest` runs the real `FragmentedMp4Reader` and `SegmentGrouper` over every
 recording and asserts `expected.json`, so the reader and grouper are pinned to the worker's own
 FFmpeg output (ADR "Tests substitute the process"). `FfmpegRecordings` loads a recording and its
@@ -13,9 +13,9 @@ expectations for any test, such as one that replays the bytes through a scripted
 | File | What it is |
 |---|---|
 | `NN-*.fmp4` | A recorded `pipe:1` stream: `ftyp` + `moov`, then `moof` + `mdat` fragments, exactly as FFmpeg wrote them |
-| `expected.json` | Per fixture: expected segments, discarded preroll, skip failure, audio-only tail, initialization-segment digest, HLS oracle comparison; plus initialization-segment identity pairs and ADR side claims |
+| `expected.json` | Per fixture: expected segments, discarded preroll, skip failure, audio-only tail, initialization-segment digest, HLS comparisons; plus initialization-segment identity pairs and ADR side claims |
 | `../../fmp4-recorder/record-fixtures.sh` | Regenerates everything from scratch in the pinned worker image (about 15 s) |
-| `../../fmp4-recorder/analyze.mjs` | Groups the recordings by the ADR rules (`grid.mjs`), evaluates the HLS oracles (`analysis.mjs`), writes `expected.json` |
+| `../../fmp4-recorder/analyze.mjs` | Groups the recordings by the ADR rules (`grid.mjs`), compares the HLS muxer runs with the grid (`analysis.mjs`), writes `expected.json` |
 | `../../fmp4-recorder/fmp4.mjs` | Standalone box reader (`node fmp4.mjs FILE`), independent of the worker's Java code |
 | `../../fmp4-recorder/check-expectations.mjs` | Offline drift check: re-derives `expected.json` from the committed recordings (no Docker) |
 
@@ -31,7 +31,7 @@ CI's tooling job runs the recorder's node tests and
 `node src/test/fmp4-recorder/check-expectations.mjs`, without Docker or FFmpeg. The check re-reads
 every committed `.fmp4`, re-derives with the grid model everything that a recording's own bytes
 decide (tracks, initialization segment, media segments, preroll, failure, audio-only tail,
-diagnostics, a copy's keyframes, each HLS oracle's disagreements with the grid, the
+diagnostics, a copy's keyframes, each HLS comparison's disagreements with the grid, the
 initialization-segment pairs), and fails on every fact `expected.json` states differently, on a
 recording it does not describe, and on a described recording that is missing. The HLS muxer's own
 cuts, the sources and the ADR side claims need a recording run, so it takes those as recorded.
@@ -42,7 +42,7 @@ From the repository root (Docker, and Node with no packages):
 
 ```
 src/test/fmp4-recorder/record-fixtures.sh                                # re-record in place
-WORK=/tmp/fx src/test/fmp4-recorder/record-fixtures.sh                   # keep sources, FFmpeg logs and HLS oracle outputs
+WORK=/tmp/fx src/test/fmp4-recorder/record-fixtures.sh                   # keep sources, FFmpeg logs and HLS muxer outputs
 WORKER_IMAGE=streamarr-worker:local src/test/fmp4-recorder/record-fixtures.sh   # record with another worker image
 ```
 
@@ -51,7 +51,7 @@ what a re-recording changed and `RecordedFfmpegOutputTest` then checks the reade
 against it. Re-record after an FFmpeg lock update with an image built from that lock (see
 [Image validation](../../../../docs/image-validation.md)), and review every changed expectation.
 After writing, the recorder exits with status 1 and names each claim a recording contradicts: an
-HLS oracle's expected agreement, the hlsenc model, a copy's source keyframes, a keyframe that does
+HLS comparison's expected agreement, the hlsenc model, a copy's source keyframes, a keyframe that does
 not start a fragment, the initialization-segment pairs, or an ADR side claim.
 
 Every FFmpeg and ffprobe invocation happens inside
@@ -119,7 +119,7 @@ None moves a keyframe or a cut. Nothing else differs from the recipe.
   every keyframe (5: H.264 IDR; 19 or 20: HEVC IDR; 21: HEVC CRA, which opens a GOP) and, for HEVC,
   how many RASL pictures (which reference the GOP before a CRA) the recording holds. It is null for
   AV1.
-- `hlsOracles[]` holds the HLS muxer's segment starts mapped onto this recording, whether they agree,
+- `hlsComparisons[]` holds the HLS muxer's segment starts mapped onto this recording, whether they agree,
   `frameIdentity` (how many video packets equal the recording's, and whether the run shares its
   video arguments) and `hlsencModel` (see below). `sourceKeyframeCheck` (copy recordings) confirms that every recorded
   keyframe is the source's own keyframe, at a media time equal to its source timestamp minus the
@@ -211,7 +211,7 @@ re-implements hlsenc.c's cut rule (FFmpeg n8.1 source, lines 2440–2489):
 - a later keyframe cuts when `pts − start_pts ≥ hls_time × number` in the video time base.
 
 It applies that rule to the HLS run's own keyframes, with `start_pts` = the pts of the first packet
-the muxer receives. The model reproduces the observed HLS cut list in all 28 oracle runs
+the muxer receives. The model reproduces the observed HLS cut list in all 28 HLS comparisons
 (`reproducesHlsCuts: true`). Its reference differs from the grid's zero in three ways:
 
 1. **First video frame after zero** (3, 4, 5a, 9: video starts 41 or 41.7 ms after the container

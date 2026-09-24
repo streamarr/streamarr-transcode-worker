@@ -37,8 +37,8 @@ describe('offline expectation check', () => {
       fixture(expected, '10-copy-gop-exceeds-period').failure.fragmentIndex = 21;
       fixture(expected, '06-encode-audio-tail').diagnostics.videoSamples -= 1;
       fixture(expected, '05-copy-late-start').sourceKeyframeCheck.keyframePresentationTimes.pop();
-      fixture(expected, '02-copy-irregular-keyframes').hlsOracles[0].mismatches.push({ number: 11, grouping: null, hls: 1 });
-      fixture(expected, '04-copy-vfr-bframes').hlsOracles[1].agrees = true;
+      fixture(expected, '02-copy-irregular-keyframes').hlsComparisons[0].mismatches.push({ number: 11, grouping: null, hls: 1 });
+      fixture(expected, '04-copy-vfr-bframes').hlsComparisons[1].agrees = true;
       expected.initializationSegmentIdentityPairs[0].sha256[1] = '0';
     });
 

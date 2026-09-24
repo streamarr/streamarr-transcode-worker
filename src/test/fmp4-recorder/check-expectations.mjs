@@ -2,7 +2,7 @@
 // Checks expected.json against the committed recordings offline: no Docker, no FFmpeg. It re-reads
 // every .fmp4, re-derives with the grid model everything that the recording's own bytes decide
 // (tracks, initialization segment, media segments, preroll, failure, audio-only tail, diagnostics,
-// a copy's keyframes, each HLS oracle's disagreements with the grid, the initialization-segment
+// a copy's keyframes, each HLS comparison's disagreements with the grid, the initialization-segment
 // pairs), and names every fact expected.json states differently. What only a recording run can
 // decide (the HLS muxer's own cuts, the sources, the ADR side claims) it takes as recorded.
 //
@@ -36,11 +36,11 @@ function fixtureDisagreements(fixture, stream) {
   }
   const found = differing.map((key) => `${fixture.name}: ${key} in expected.json does not match the recording`);
   const grid = asRecorded(facts.segments);
-  for (const oracle of fixture.hlsOracles) {
-    const derived = mismatches(grid, oracle.segments);
-    if (!same(oracle.mismatches, derived) || oracle.agrees !== (derived.length === 0)) {
+  for (const comparison of fixture.hlsComparisons) {
+    const derived = mismatches(grid, comparison.segments);
+    if (!same(comparison.mismatches, derived) || comparison.agrees !== (derived.length === 0)) {
       found.push(
-        `${fixture.name} / ${oracle.hlsRun}: mismatches or agrees in expected.json does not match the grid segments`,
+        `${fixture.name} / ${comparison.hlsRun}: mismatches or agrees in expected.json does not match the grid segments`,
       );
     }
   }

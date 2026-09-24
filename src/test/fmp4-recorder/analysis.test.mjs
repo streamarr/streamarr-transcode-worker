@@ -6,7 +6,7 @@ import {
   checkSourceKeyframes,
   describeSegment,
   diagnostics,
-  evaluateOracle,
+  compareHlsRun,
   group,
   hlsencCuts,
   initializationSegmentPair,
@@ -211,7 +211,7 @@ function hlsOutput(cuts) {
   return folder;
 }
 
-describe('HLS oracle', () => {
+describe('HLS comparison', () => {
   const stream = readStream(readFileSync(RECORDING));
   const reference = { name: '07-copy-start0', stream, videoTimescale: 24000 };
   const grid = group(stream, 6, 0);
@@ -221,7 +221,7 @@ describe('HLS oracle', () => {
     stream.fragments.findIndex((fragment) => videoTrafOf(fragment)?.firstPresentationTime === ticks);
   const spec = { run: 'run', flags: 'pipe-recipe', audio: false, reference: null, restrict: false, expect: true, samePackets: true };
   const evaluate = (folder, overrides = {}) =>
-    evaluateOracle({
+    compareHlsRun({
       fixture: { name: reference.name, start: 0 },
       spec,
       reference,
@@ -233,56 +233,56 @@ describe('HLS oracle', () => {
     });
 
   it('Should agree with the grid when the HLS muxer cuts where the grid does', () => {
-    const oracle = evaluate(hlsOutput(gridCuts));
+    const comparison = evaluate(hlsOutput(gridCuts));
 
-    assert.equal(oracle.agrees, true);
-    assert.deepEqual(oracle.mismatches, []);
-    assert.deepEqual(oracle.frameIdentity, {
+    assert.equal(comparison.agrees, true);
+    assert.deepEqual(comparison.mismatches, []);
+    assert.deepEqual(comparison.frameIdentity, {
       hlsVideoSamples: 1583,
       pipeVideoSamples: 1583,
       identicalPackets: 1583,
       sharesVideoArguments: true,
     });
-    assert.equal(oracle.hlsOwnTimestampsMatchPipe, true);
-    assert.equal(oracle.hlsencModel.reproducesHlsCuts, true);
-    assert.deepEqual(oracle.hlsencModel.referenceOnZeroBasedTimelineSeconds, new Decimal(0));
-    assert.equal(oracle.hlsExitStatus, 0);
+    assert.equal(comparison.hlsOwnTimestampsMatchPipe, true);
+    assert.equal(comparison.hlsencModel.reproducesHlsCuts, true);
+    assert.deepEqual(comparison.hlsencModel.referenceOnZeroBasedTimelineSeconds, new Decimal(0));
+    assert.equal(comparison.hlsExitStatus, 0);
   });
 
   it('Should report the segment when the HLS muxer starts it one keyframe later', () => {
     const cuts = [...gridCuts];
     cuts[1] = keyframeAt(192192n);
-    const oracle = evaluate(hlsOutput(cuts));
+    const comparison = evaluate(hlsOutput(cuts));
 
-    assert.deepEqual(oracle.mismatches, [{ number: 1, grouping: 144144n, hls: 192192n }]);
-    assert.equal(oracle.agrees, false);
-    assert.equal(oracle.hlsencModel.reproducesHlsCuts, false);
+    assert.deepEqual(comparison.mismatches, [{ number: 1, grouping: 144144n, hls: 192192n }]);
+    assert.equal(comparison.agrees, false);
+    assert.equal(comparison.hlsencModel.reproducesHlsCuts, false);
   });
 
   it('Should take the first audio packet as the reference when its decode time precedes the video', () => {
-    const oracle = evaluate(hlsOutput(gridCuts), { spec: { ...spec, audio: true } });
+    const comparison = evaluate(hlsOutput(gridCuts), { spec: { ...spec, audio: true } });
 
     assert.equal(
-      oracle.hlsencModel.reference,
+      comparison.hlsencModel.reference,
       "first audio packet: pts -1024 at 1/48000 (-0.021333 s), read by hlsenc at the video's 1/24000",
     );
-    assert.deepEqual(oracle.hlsencModel.referenceOnZeroBasedTimelineSeconds, new Decimal(-0.042667));
-    assert.equal(oracle.streams, 'video and audio');
+    assert.deepEqual(comparison.hlsencModel.referenceOnZeroBasedTimelineSeconds, new Decimal(-0.042667));
+    assert.equal(comparison.streams, 'video and audio');
   });
 
   it("Should move the run by the source start and compare only the attempt's numbers when it uses the HLS recipe", () => {
-    const oracle = evaluate(hlsOutput(gridCuts), {
+    const comparison = evaluate(hlsOutput(gridCuts), {
       fixture: { name: reference.name, start: 7 },
       spec: { ...spec, flags: 'hls-recipe', restrict: true },
       source: { start: seconds('0.5') },
     });
 
     assert.deepEqual(
-      oracle.segments.map((segment) => segment.number),
+      comparison.segments.map((segment) => segment.number),
       [7, 8, 9, 10],
     );
-    assert.equal(oracle.hlsOwnTimestampsMatchPipe, false);
-    assert.match(oracle.flags, /no -start_at_zero/);
+    assert.equal(comparison.hlsOwnTimestampsMatchPipe, false);
+    assert.match(comparison.flags, /no -start_at_zero/);
   });
 
   it('Should count a packet as not identical when its bytes differ at the same size', () => {
@@ -293,15 +293,15 @@ describe('HLS oracle', () => {
     const [firstVideoSample] = videoSamples(readStream(Buffer.concat([initializationSegment, segment])));
     segment[firstVideoSample.offset - initializationSegment.length] ^= 0xff;
     writeFileSync(path, segment);
-    const oracle = evaluate(folder, { spec: { ...spec, samePackets: false } });
+    const comparison = evaluate(folder, { spec: { ...spec, samePackets: false } });
 
-    assert.deepEqual(oracle.frameIdentity, {
+    assert.deepEqual(comparison.frameIdentity, {
       hlsVideoSamples: 1583,
       pipeVideoSamples: 1583,
       identicalPackets: 1582,
       sharesVideoArguments: false,
     });
-    assert.equal(oracle.agrees, true);
+    assert.equal(comparison.agrees, true);
   });
 
   it('Should refuse an HLS run when it did not encode the same number of frames', () => {
@@ -318,7 +318,7 @@ describe('violated claims', () => {
       fixtures: [
         {
           name: 'f',
-          hlsOracles: [
+          hlsComparisons: [
             {
               hlsRun: 'r',
               agrees: false,

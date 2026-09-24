@@ -237,7 +237,7 @@ function hlsencReference({ spec, hls, ptsRaw, timescale }) {
  * the packet count is checked, and the ordinal rests on both encoders receiving the same
  * constant-rate frames in the same order.
  */
-export function evaluateOracle({ fixture, spec, reference, grouped, source, hls, period }) {
+export function compareHlsRun({ fixture, spec, reference, grouped, source, hls, period }) {
   const refSamples = withDigests(reference.stream);
   const timescale = reference.videoTimescale;
   const identity = {
@@ -433,15 +433,15 @@ function packetViolations({ hlsVideoSamples, identicalPackets, sharesVideoArgume
   ];
 }
 
-function oracleViolations(fixture) {
-  return fixture.hlsOracles.flatMap((oracle) =>
+function hlsComparisonViolations(fixture) {
+  return fixture.hlsComparisons.flatMap((comparison) =>
     [
-      ...(oracle.agrees === oracle.expectedToAgree
+      ...(comparison.agrees === comparison.expectedToAgree
         ? []
-        : [`agrees=${pythonBoolean(oracle.agrees)}, expected ${pythonBoolean(oracle.expectedToAgree)}`]),
-      ...packetViolations(oracle.frameIdentity),
-      ...(oracle.hlsencModel.reproducesHlsCuts ? [] : ['the hlsenc model does not reproduce the HLS cuts']),
-    ].map((violation) => `${fixture.name} / ${oracle.hlsRun}: ${violation}`),
+        : [`agrees=${pythonBoolean(comparison.agrees)}, expected ${pythonBoolean(comparison.expectedToAgree)}`]),
+      ...packetViolations(comparison.frameIdentity),
+      ...(comparison.hlsencModel.reproducesHlsCuts ? [] : ['the hlsenc model does not reproduce the HLS cuts']),
+    ].map((violation) => `${fixture.name} / ${comparison.hlsRun}: ${violation}`),
   );
 }
 
@@ -490,7 +490,7 @@ function sideClaimViolations(expected) {
 /** Every claim in expected.json that the recordings contradict; any one fails the recorder. */
 export function violatedClaims(expected) {
   return [
-    ...expected.fixtures.flatMap((fixture) => [...oracleViolations(fixture), ...recordingViolations(fixture)]),
+    ...expected.fixtures.flatMap((fixture) => [...hlsComparisonViolations(fixture), ...recordingViolations(fixture)]),
     ...sideClaimViolations(expected),
   ];
 }

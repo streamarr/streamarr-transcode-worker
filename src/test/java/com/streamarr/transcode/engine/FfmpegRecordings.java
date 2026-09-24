@@ -59,7 +59,7 @@ final class FfmpegRecordings {
       List<SegmentSummary> discardedPreroll,
       Optional<ExpectedFailure> failure,
       int trailingAudioOnlyFragmentCount,
-      List<HlsRun> hlsOracles) {
+      List<HlsRun> hlsComparisons) {
 
     @Override
     public String toString() {

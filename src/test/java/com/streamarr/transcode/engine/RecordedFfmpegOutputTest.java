@@ -56,7 +56,7 @@ class RecordedFfmpegOutputTest {
     return recordings()
         .flatMap(
             recording ->
-                recording.hlsOracles().stream().map(hlsRun -> Arguments.of(recording, hlsRun)));
+                recording.hlsComparisons().stream().map(hlsRun -> Arguments.of(recording, hlsRun)));
   }
 
   @ParameterizedTest(name = "{0}")
