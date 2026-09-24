@@ -24,6 +24,11 @@ record VideoTrack(long trackId, long timescale, int defaultSampleFlags) {
   private static final int TRUN_SAMPLE_SIZE = 0x000200;
   private static final int TRUN_SAMPLE_FLAGS = 0x000400;
   private static final int TRUN_SAMPLE_COMPOSITION_TIME_OFFSET = 0x000800;
+  private static final int PER_SAMPLE_FIELDS =
+      TRUN_SAMPLE_DURATION
+          | TRUN_SAMPLE_SIZE
+          | TRUN_SAMPLE_FLAGS
+          | TRUN_SAMPLE_COMPOSITION_TIME_OFFSET;
 
   /** Finds the single video track of a {@code moov}; empty when it declares none. */
   static Optional<VideoTrack> of(BoxView moov) {
@@ -98,8 +103,8 @@ record VideoTrack(long trackId, long timescale, int defaultSampleFlags) {
       return Optional.empty();
     }
 
-    return traf.children("trun").stream()
-        .map(VideoTrack::firstSampleOf)
+    var firstSamples = traf.children("trun").stream().map(VideoTrack::firstSampleOf).toList();
+    return firstSamples.stream()
         .flatMap(Optional::stream)
         .findFirst()
         .map(sample -> videoStart(traf, header, sample));
@@ -120,6 +125,7 @@ record VideoTrack(long trackId, long timescale, int defaultSampleFlags) {
         fields
             .skipIf(isSet(flags, TRUN_DATA_OFFSET), 4)
             .s32If(isSet(flags, TRUN_FIRST_SAMPLE_FLAGS));
+    requireSampleTable(fields, flags, sampleCount);
     if (sampleCount == 0) {
       return Optional.empty();
     }
@@ -131,6 +137,22 @@ record VideoTrack(long trackId, long timescale, int defaultSampleFlags) {
             .s32If(isSet(flags, TRUN_SAMPLE_FLAGS));
     var compositionOffset = compositionOffsetOf(fields, flags, version);
     return Optional.of(new FirstSample(firstSampleFlags.or(() -> sampleFlags), compositionOffset));
+  }
+
+  /** Every declared sample's entry must fit in the box; the first one is all the reader reads. */
+  private static void requireSampleTable(BoxFields fields, int flags, long sampleCount) {
+    var entryBytes = 4L * Integer.bitCount(flags & PER_SAMPLE_FIELDS);
+    var tableBytes = sampleCount * entryBytes;
+    if (tableBytes > fields.remaining()) {
+      throw FragmentedMp4Exception.malformed(
+          "trun declares "
+              + sampleCount
+              + " samples of "
+              + entryBytes
+              + " bytes in "
+              + fields.remaining()
+              + " bytes");
+    }
   }
 
   private static long compositionOffsetOf(BoxFields fields, int flags, int version) {

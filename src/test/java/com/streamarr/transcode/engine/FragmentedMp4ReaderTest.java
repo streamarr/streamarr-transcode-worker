@@ -573,6 +573,36 @@ class FragmentedMp4ReaderTest {
         Reason.MALFORMED_BOX);
   }
 
+  @ParameterizedTest
+  @ValueSource(longs = {3, 0xFFFF_FFFFL})
+  @DisplayName("Should fail when a video trun declares more samples than its table holds")
+  void shouldFailWhenAVideoTrunDeclaresMoreSamplesThanItsTableHolds(long sampleCount) {
+    var trun =
+        fullBox(
+            "trun",
+            VERSION_1 | TRUN_FIRST_SAMPLE_FLAGS | TRUN_SAMPLE_SIZE,
+            u32(sampleCount),
+            u32(SYNC_SAMPLE_FLAGS),
+            u32(100),
+            u32(100));
+    var traf = box("traf", tfhd(VIDEO_TRACK_ID), tfdt(0), trun);
+
+    assertFailure(
+        readerOf(concat(ftyp(), videoAndAudioMoov(), box("moof", traf), mdat(8))),
+        Reason.MALFORMED_BOX);
+  }
+
+  @Test
+  @DisplayName("Should fail when a later video trun overruns its table after one that has samples")
+  void shouldFailWhenALaterVideoTrunOverrunsItsTableAfterOneThatHasSamples() {
+    var overrun = fullBox("trun", VERSION_1 | TRUN_SAMPLE_SIZE, u32(2), u32(100));
+    var traf = box("traf", tfhd(VIDEO_TRACK_ID), tfdt(0), syncRun(), overrun);
+
+    assertFailure(
+        readerOf(concat(ftyp(), videoAndAudioMoov(), box("moof", traf), mdat(8))),
+        Reason.MALFORMED_BOX);
+  }
+
   @Test
   @DisplayName("Should fail when the video start does not fit a signed 64-bit time")
   void shouldFailWhenTheVideoStartDoesNotFitASigned64BitTime() {

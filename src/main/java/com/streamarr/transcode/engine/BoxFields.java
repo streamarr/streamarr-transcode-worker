@@ -52,6 +52,10 @@ final class BoxFields {
     return type.toString();
   }
 
+  int remaining() {
+    return buffer.remaining();
+  }
+
   BoxFields skip(int bytes) {
     require(bytes);
     buffer.position(buffer.position() + bytes);

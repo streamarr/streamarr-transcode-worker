@@ -3,6 +3,7 @@ package com.streamarr.transcode.engine;
 import static com.streamarr.transcode.engine.FfmpegRecordings.bytesOf;
 import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 import com.streamarr.transcode.engine.FfmpegRecordings.CutPoint;
 import com.streamarr.transcode.engine.FfmpegRecordings.ExpectedFailure;
@@ -12,6 +13,8 @@ import com.streamarr.transcode.engine.FfmpegRecordings.SegmentSummary;
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -207,6 +210,22 @@ class RecordedFfmpegOutputTest {
     assertThat(grouping.failure()).contains(new Failure(Reason.SKIPPED_SEGMENT_NUMBER, 20));
   }
 
+  @Test
+  @DisplayName(
+      "Should fail as a malformed box when a recorded trun declares one sample more than it holds")
+  void shouldFailAsAMalformedBoxWhenARecordedTrunDeclaresOneSampleMoreThanItHolds() {
+    var recorded = bytesOf("01-encode-cfr.fmp4");
+    var fields = ByteBuffer.wrap(recorded);
+    var sampleCount = positionOf(recorded, "trun") + 8;
+    assertThat(fields.getInt(sampleCount)).isEqualTo(24);
+    fields.putInt(sampleCount, 25);
+
+    assertThatExceptionOfType(FragmentedMp4Exception.class)
+        .isThrownBy(() -> Mp4Stream.read(Mp4Stream.readerOf(recorded)))
+        .extracting(FragmentedMp4Exception::getReason)
+        .isEqualTo(Reason.MALFORMED_BOX);
+  }
+
   private static Mp4Stream read(String file) throws IOException {
     return Mp4Stream.read(Mp4Stream.readerOf(bytesOf(file)));
   }
@@ -266,6 +285,16 @@ class RecordedFfmpegOutputTest {
   private static Failure failureOf(ExpectedFailure expected) {
     var reason = Reason.valueOf(expected.reason().toUpperCase(Locale.ROOT).replace(' ', '_'));
     return new Failure(reason, expected.fragment());
+  }
+
+  private static int positionOf(byte[] bytes, String type) {
+    var fourcc = type.getBytes(StandardCharsets.ISO_8859_1);
+    return IntStream.range(0, bytes.length - fourcc.length)
+        .filter(
+            position ->
+                Arrays.equals(bytes, position, position + fourcc.length, fourcc, 0, fourcc.length))
+        .findFirst()
+        .orElseThrow();
   }
 
   private static byte[] concat(Stream<byte[]> parts) {
