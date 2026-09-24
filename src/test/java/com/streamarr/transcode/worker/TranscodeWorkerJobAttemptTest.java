@@ -830,6 +830,82 @@ class TranscodeWorkerJobAttemptTest {
 
   @Test
   @DisplayName(
+      "Should report the stop without a forced kill when FFmpeg's output breaks after the stop")
+  void shouldReportTheStopWithoutAForcedKillWhenFfmpegsOutputBreaksAfterTheStop() throws Exception {
+    var failureOffset = recording(ENCODED_RECORDING).initializationSegment().byteLength() + 100;
+    var launcher =
+        new ScriptedProcessLauncher(
+            _ ->
+                ScriptedProcess.builder()
+                    .output(bytesOf(ENCODED_RECORDING))
+                    .pauseAfter(failureOffset)
+                    .failReadAfter(failureOffset)
+                    .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+                    .build());
+    var job = variantJobBuilder().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+      var process = launcher.process(fromProto(job.getJobAttemptId()));
+      promptly().until(process::hasReachedPause);
+      stopVariant(connection, job);
+      promptly().until(() -> process.stdinText().equals("q"));
+
+      process.resume();
+
+      await()
+          .during(Duration.ofMillis(200))
+          .atMost(EVENT_LIMIT)
+          .until(() -> eventsOf(connection).equals(List.of(EventCase.JOB_ATTEMPT_STARTED)));
+      process.exit();
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_STOPPED);
+      assertThat(process.wasDestroyedForcibly()).isFalse();
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should report the recorded failure without asking FFmpeg to quit when stopped before the"
+          + " failure settles")
+  void shouldReportTheRecordedFailureWithoutAskingFfmpegToQuitWhenStoppedBeforeTheFailureSettles()
+      throws Exception {
+    var failureOffset = recording(ENCODED_RECORDING).initializationSegment().byteLength() + 100;
+    var launcher =
+        new ScriptedProcessLauncher(
+            _ ->
+                ScriptedProcess.builder()
+                    .output(bytesOf(ENCODED_RECORDING))
+                    .failReadAfter(failureOffset)
+                    .lingersAfterKill(true)
+                    .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+                    .build());
+    var job = variantJobBuilder().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+      var process = launcher.process(fromProto(job.getJobAttemptId()));
+      promptly().until(process::wasDestroyedForcibly);
+
+      stopVariant(connection, job);
+
+      await()
+          .during(Duration.ofMillis(200))
+          .atMost(EVENT_LIMIT)
+          .until(() -> eventsOf(connection).equals(List.of(EventCase.JOB_ATTEMPT_STARTED)));
+      process.exit();
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
+      assertThat(process.stdinText()).isEmpty();
+    }
+  }
+
+  @Test
+  @DisplayName(
       "Should report once, and as whichever the producer recorded first, when a stop races a"
           + " failure")
   void shouldReportOnceAsWhicheverTheProducerRecordedFirstWhenAStopRacesAFailure()
@@ -858,13 +934,7 @@ class TranscodeWorkerJobAttemptTest {
         var process = launcher.process(fromProto(job.getJobAttemptId()));
         promptly().until(process::hasReachedPause);
         var start = new CyclicBarrier(2);
-        var failing =
-            Thread.ofVirtual()
-                .start(
-                    () -> {
-                      awaitBarrier(start);
-                      process.resume();
-                    });
+        var failing = Thread.ofVirtual().start(() -> resumeAt(start, process));
 
         awaitBarrier(start);
         stopVariant(connection, job);
@@ -877,10 +947,13 @@ class TranscodeWorkerJobAttemptTest {
       }
 
       assertThat(jobs).allSatisfy(job -> assertThat(terminalEventsOf(connection, job)).hasSize(1));
-      assertThat(jobs)
-          .extracting(job -> terminalEventsOf(connection, job).getFirst())
-          .contains(EventCase.JOB_ATTEMPT_STOPPED, EventCase.JOB_ATTEMPT_FAILED);
     }
+  }
+
+  // Lets the paused FFmpeg's output continue into its failure once the race's other side is ready.
+  private static void resumeAt(CyclicBarrier start, ScriptedProcess process) {
+    awaitBarrier(start);
+    process.resume();
   }
 
   @Test

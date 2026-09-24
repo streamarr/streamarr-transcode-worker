@@ -18,7 +18,6 @@ import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.OptionalDouble;
@@ -818,11 +817,36 @@ class ProducerTest {
 
   @Test
   @DisplayName(
+      "Should keep the recorded failure without asking FFmpeg to quit when stopped before the"
+          + " failure settles")
+  void shouldKeepTheRecordedFailureWithoutAskingFfmpegToQuitWhenStoppedBeforeTheFailureSettles()
+      throws InterruptedException {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .lingersAfterKill(true)
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    sink.refusing(1);
+    var producer = producerFor(process, recording).start();
+    awaiting().until(process::wasDestroyedForcibly);
+
+    var stopping = Thread.ofVirtual().start(producer::stop);
+
+    assertThat(stopping.join(Duration.ofMillis(200))).isFalse();
+    process.exit();
+    assertThat(stopping.join(OUTCOME_LIMIT)).isTrue();
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.SEGMENT_NOT_ACCEPTED);
+    assertThat(process.stdinText()).isEmpty();
+  }
+
+  @Test
+  @DisplayName(
       "Should settle whichever of a stop and a failure is recorded first, and let the other take"
           + " no effect, when they race")
   void shouldSettleWhicheverOfAStopAndAFailureIsRecordedFirstWhenTheyRace() throws Exception {
     var recording = recording(ENCODED_RECORDING);
-    var outcomes = new ArrayList<AttemptOutcome>();
 
     for (var iteration = 0; iteration < RACE_ITERATIONS; iteration++) {
       var process =
@@ -832,14 +856,8 @@ class ProducerTest {
               .resumesOnQuit(true)
               .build();
       var start = new CyclicBarrier(2);
-      SegmentSink refusingTheFirstMediaSegment =
-          (segment, _) -> {
-            if (segment.name().equals("segment0.m4s")) {
-              awaitBarrier(start);
-              throw new IllegalStateException("the server refused " + segment.name());
-            }
-          };
-      var producer = producerFor(process, recording).sink(refusingTheFirstMediaSegment).start();
+      var producer =
+          producerFor(process, recording).sink(refusingTheFirstMediaSegmentAt(start)).start();
 
       awaitBarrier(start);
       producer.stop();
@@ -858,12 +876,19 @@ class ProducerTest {
             .extracting(Failed::reason)
             .isEqualTo(ProducerFailure.SEGMENT_NOT_ACCEPTED);
       }
-
-      outcomes.add(outcome);
     }
+  }
 
-    assertThat(outcomes).hasAtLeastOneElementOfType(Stopped.class);
-    assertThat(outcomes).hasAtLeastOneElementOfType(Failed.class);
+  // A sink that refuses the first media segment once the race's other side is ready.
+  private static SegmentSink refusingTheFirstMediaSegmentAt(CyclicBarrier start) {
+    return (segment, _) -> {
+      if (!segment.name().equals("segment0.m4s")) {
+        return;
+      }
+
+      awaitBarrier(start);
+      throw new IllegalStateException("the server refused " + segment.name());
+    };
   }
 
   @Test
