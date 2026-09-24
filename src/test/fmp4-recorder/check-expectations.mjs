@@ -4,14 +4,21 @@
 // (tracks, initialization segment, media segments, preroll, failure, audio-only tail, diagnostics,
 // a copy's keyframes, each HLS comparison's disagreements with the grid, the initialization-segment
 // pairs), and names every fact expected.json states differently. What only a recording run can
-// decide (the HLS muxer's own cuts, the sources, the ADR side claims) it takes as recorded.
+// decide (the HLS muxer's own cuts, the sources, the ADR side claims) it takes as recorded, and it
+// names every claim of the recorder that those recorded facts contradict.
 //
 //   node check-expectations.mjs [FIXTURES_DIR]   (default: src/test/resources/fmp4)
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { initializationSegmentPair, mismatches, recordedKeyframes, recordingFacts } from './analysis.mjs';
+import {
+  initializationSegmentPair,
+  mismatches,
+  recordedKeyframes,
+  recordingFacts,
+  violatedClaims,
+} from './analysis.mjs';
 import { readStream } from './fmp4.mjs';
 import { formatJson, parseJson } from './json.mjs';
 
@@ -85,6 +92,7 @@ export function checkExpectations(directory) {
       .filter((file) => file.endsWith('.fmp4') && !described.has(file))
       .sort()
       .map((file) => `${file}: no fixture in expected.json describes this recording`),
+    ...violatedClaims(expected).map((violation) => `violated claim: ${violation}`),
   ];
 }
 

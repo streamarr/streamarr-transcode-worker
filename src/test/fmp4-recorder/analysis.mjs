@@ -477,7 +477,7 @@ function sideClaimViolations(expected) {
     found.push('-max_delay changes mp4 output');
   }
   const cfr = claims.seekWithFpsModeCfr;
-  if (cfr.firstVideoPresentationTime !== 0n || cfr.videoSamples <= cfr.videoSamplesWithoutFpsMode) {
+  if (BigInt(cfr.firstVideoPresentationTime) !== 0n || cfr.videoSamples <= cfr.videoSamplesWithoutFpsMode) {
     found.push('an explicit -fps_mode cfr after a seek no longer pads from zero');
   }
   return found;
