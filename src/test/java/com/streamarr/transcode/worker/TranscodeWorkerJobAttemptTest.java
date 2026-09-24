@@ -17,7 +17,6 @@ import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest.EventCase;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
 import build.buf.gen.streamarr.transcode.v1.SegmentContentType;
-import build.buf.gen.streamarr.transcode.v1.TranscodeExecution;
 import build.buf.gen.streamarr.transcode.v1.TranscodeMode;
 import build.buf.gen.streamarr.transcode.v1.VariantJob;
 import com.streamarr.transcode.engine.FfmpegRecordings.Recording;
@@ -243,6 +242,59 @@ class TranscodeWorkerJobAttemptTest {
                     .mapToObj(framerate -> Arguments.of(mode, framerate)));
   }
 
+  @ParameterizedTest(name = "{0}, {1} media segments from segment {2}")
+  @MethodSource("jobsAdvertisingNoMediaSegmentFromTheirStart")
+  @DisplayName(
+      "Should refuse the job as an invalid specification when no advertised media segment follows"
+          + " its start")
+  void shouldRefuseTheJobAsAnInvalidSpecificationWhenNoAdvertisedMediaSegmentFollowsItsStart(
+      TranscodeMode mode, int mediaSegmentCount, int startSequenceNumber) throws Exception {
+    var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
+    var job = variantJobBuilder();
+    job.getDecisionBuilder().setMode(mode);
+    job.getExecutionBuilder()
+        .setMediaSegmentCount(mediaSegmentCount)
+        .setStartSequenceNumber(startSequenceNumber);
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
+      assertThat(launcher.hasLaunchedAny()).isFalse();
+    }
+  }
+
+  static Stream<Arguments> jobsAdvertisingNoMediaSegmentFromTheirStart() {
+    return Stream.of(
+            TranscodeMode.TRANSCODE_MODE_REMUX, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE)
+        .flatMap(
+            mode ->
+                Stream.of(
+                    Arguments.of(mode, 0, 0), Arguments.of(mode, 5, 5), Arguments.of(mode, 4, 5)));
+  }
+
+  @Test
+  @DisplayName("Should run the job when the last advertised media segment is the one it starts at")
+  void shouldRunTheJobWhenTheLastAdvertisedMediaSegmentIsTheOneItStartsAt() throws Exception {
+    var recording = recording("07-copy-seek30.fmp4");
+    var job = variantJobBuilder();
+    job.getExecutionBuilder()
+        .setStartSequenceNumber(recording.startSequenceNumber())
+        .setMediaSegmentCount(recording.startSequenceNumber() + 1);
+
+    try (var worker = worker(ScriptedProcessLauncher.writing(recording.file()))) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_COMPLETED);
+    }
+  }
+
   @ParameterizedTest(name = "{0}")
   @EnumSource(
       value = TranscodeMode.class,
@@ -322,13 +374,12 @@ class TranscodeWorkerJobAttemptTest {
       throws Exception {
     var recording = recording("10-copy-gop-exceeds-period.fmp4");
     var launcher = ScriptedProcessLauncher.writing(recording.file());
-    var job =
-        variantJobBuilder()
-            .setExecution(
-                TranscodeExecution.newBuilder()
-                    .setTargetSegmentDurationSeconds(recording.period())
-                    .setStartSequenceNumber(recording.startSequenceNumber()))
-            .build();
+    var jobBuilder = variantJobBuilder();
+    jobBuilder
+        .getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(recording.period())
+        .setStartSequenceNumber(recording.startSequenceNumber());
+    var job = jobBuilder.build();
 
     try (var worker = worker(launcher)) {
       worker.start("localhost", 1);

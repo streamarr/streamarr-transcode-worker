@@ -224,7 +224,14 @@ public final class TranscodeWorker implements AutoCloseable {
     var job = command.getJob();
     return command.getTarget().equals(identity())
         && job.getDecision().getContainer() == ContainerFormat.CONTAINER_FORMAT_FMP4
-        && hasUsableFrameRate(job);
+        && hasUsableFrameRate(job)
+        && startsAtAnAdvertisedMediaSegment(job);
+  }
+
+  // The server advertises the variant's media segment count to every job attempt; zero is unset.
+  private static boolean startsAtAnAdvertisedMediaSegment(VariantJob job) {
+    var execution = job.getExecution();
+    return execution.getMediaSegmentCount() > execution.getStartSequenceNumber();
   }
 
   // The worker encodes video at the probed frame rate and counts its GOP from that rate.

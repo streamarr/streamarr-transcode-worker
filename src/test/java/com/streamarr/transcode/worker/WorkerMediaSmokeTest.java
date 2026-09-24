@@ -141,6 +141,7 @@ class WorkerMediaSmokeTest {
     var job = variantJobBuilder();
     job.getDecisionBuilder().setMode(mode);
     job.getVariantBuilder().setWidth(160).setHeight(90).setBitrateBitsPerSecond(500_000);
+    job.getExecutionBuilder().setMediaSegmentCount(FIXTURE_SEGMENT_COUNT);
 
     var uploads = execute(engine(realCapabilities()), root, job.build());
 
@@ -169,6 +170,7 @@ class WorkerMediaSmokeTest {
         root.resolve("movie.ts"));
     var job = variantJobBuilder();
     job.getSourceBuilder().setRelativeKey("movie.ts");
+    job.getExecutionBuilder().setMediaSegmentCount(FIXTURE_SEGMENT_COUNT);
     job.getDecisionBuilder()
         .setMode(TranscodeMode.TRANSCODE_MODE_REMUX)
         .getAudioBuilder()
@@ -201,6 +203,7 @@ class WorkerMediaSmokeTest {
         .setChannels(1)
         .setBitrateBitsPerSecond(64_000);
     job.getVariantBuilder().setWidth(320).setHeight(180).setBitrateBitsPerSecond(32_000);
+    job.getExecutionBuilder().setMediaSegmentCount(FIXTURE_SEGMENT_COUNT);
 
     var uploads = execute(engine(realCapabilities()), root, job.build());
 
@@ -245,7 +248,10 @@ class WorkerMediaSmokeTest {
         .setMode(AudioMode.AUDIO_MODE_COPY)
         .setCodec("aac");
     job.getVariantBuilder().setWidth(64).setHeight(36).setBitrateBitsPerSecond(20_000);
-    job.getExecutionBuilder().setTargetSegmentDurationSeconds(1).setFramerate(24000.0 / 1001);
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(1)
+        .setFramerate(24000.0 / 1001)
+        .setMediaSegmentCount(LONG_SOURCE_SECONDS);
 
     var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
 

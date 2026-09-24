@@ -645,7 +645,10 @@ class TranscodeWorkerControlPlaneIT {
                 .setHeight(1080)
                 .setBitrateBitsPerSecond(5_000_000))
         .setExecution(
-            TranscodeExecution.newBuilder().setTargetSegmentDurationSeconds(6).setFramerate(23.976))
+            TranscodeExecution.newBuilder()
+                .setTargetSegmentDurationSeconds(6)
+                .setFramerate(23.976)
+                .setMediaSegmentCount(11))
         .build();
   }
 

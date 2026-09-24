@@ -59,6 +59,9 @@ class WorkerImageIT {
   private static final String UNICODE_KEY =
       "東京 Café’s 🎬 %2F ..%2F dir/Ame\u0301lie’s 100%23 #1 한국 𝄞 (2001).mkv";
 
+  // The 10 s fixture at the default 6 s period: the server advertises segments 0 and 1.
+  private static final int MEDIA_SEGMENT_COUNT = 2;
+
   @TempDir Path media;
 
   @Test
@@ -132,6 +135,7 @@ class WorkerImageIT {
       var job = variantJobBuilder();
       job.getDecisionBuilder().setMode(mode);
       job.getVariantBuilder().setWidth(160).setHeight(90).setBitrateBitsPerSecond(500_000);
+      job.getExecutionBuilder().setMediaSegmentCount(MEDIA_SEGMENT_COUNT);
       var request = job.build();
 
       var completed = JobAttemptCompleted.parseFrom(image.command("job", request.toByteArray()));
@@ -201,7 +205,9 @@ class WorkerImageIT {
           .satisfies(video -> assertThat(video.getCodec()).isEqualTo("h264"));
       assertThat(image.recordedArguments("ffprobe")).contains("/media/" + UNICODE_KEY);
 
-      var job = variantJobBuilder().setSource(sourceBuilder().setRelativeKey(UNICODE_KEY)).build();
+      var jobBuilder = variantJobBuilder().setSource(sourceBuilder().setRelativeKey(UNICODE_KEY));
+      jobBuilder.getExecutionBuilder().setMediaSegmentCount(MEDIA_SEGMENT_COUNT);
+      var job = jobBuilder.build();
 
       var completed = JobAttemptCompleted.parseFrom(image.command("job", job.toByteArray()));
 

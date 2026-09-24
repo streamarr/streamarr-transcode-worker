@@ -138,7 +138,10 @@ public final class WorkerProbeFixtures {
                 .setContainer(ContainerFormat.CONTAINER_FORMAT_FMP4))
         .setVariant(VariantSpec.newBuilder().setVariantLabel("original"))
         .setExecution(
-            TranscodeExecution.newBuilder().setTargetSegmentDurationSeconds(6).setFramerate(24));
+            TranscodeExecution.newBuilder()
+                .setTargetSegmentDurationSeconds(6)
+                .setFramerate(24)
+                .setMediaSegmentCount(11));
   }
 
   public static FfprobeExecutor fileContentsProducer() {
