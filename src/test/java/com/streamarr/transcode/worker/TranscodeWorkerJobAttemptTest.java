@@ -46,6 +46,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.function.IntUnaryOperator;
 import java.util.stream.DoubleStream;
 import java.util.stream.Stream;
 import org.awaitility.core.ConditionFactory;
@@ -1125,26 +1126,32 @@ class TranscodeWorkerJobAttemptTest {
         .toList();
   }
 
-  // The recording with its first media data box grown past two upload data messages, which the
-  // producer reads without looking inside.
+  // The recording with its first media data box grown past two upload data messages.
   private static byte[] withLargeFirstMediaData(byte[] recording) {
+    return withPaddedMediaData(recording, fragment -> fragment == 0 ? 3 * UPLOAD_MESSAGE_BYTES : 0);
+  }
+
+  // The recording with the media data box of each fragment, counted from 0, grown by the padding
+  // for that fragment, which the producer reads without looking inside.
+  private static byte[] withPaddedMediaData(byte[] recording, IntUnaryOperator paddingOfFragment) {
     var grown = new ByteArrayOutputStream();
     var buffer = ByteBuffer.wrap(recording);
-    var padded = false;
+    var fragment = 0;
     while (buffer.hasRemaining()) {
       var size = buffer.getInt(buffer.position());
       var type = new String(recording, buffer.position() + 4, 4, StandardCharsets.US_ASCII);
       var box = new byte[size];
       buffer.get(box);
-      if (padded || !type.equals("mdat")) {
+      if (!type.equals("mdat")) {
         grown.writeBytes(box);
         continue;
       }
 
-      grown.writeBytes(ByteBuffer.allocate(4).putInt(size + 3 * UPLOAD_MESSAGE_BYTES).array());
+      var padding = paddingOfFragment.applyAsInt(fragment);
+      fragment++;
+      grown.writeBytes(ByteBuffer.allocate(4).putInt(size + padding).array());
       grown.writeBytes(Arrays.copyOfRange(box, 4, size));
-      grown.writeBytes(new byte[3 * UPLOAD_MESSAGE_BYTES]);
-      padded = true;
+      grown.writeBytes(new byte[padding]);
     }
 
     return grown.toByteArray();
