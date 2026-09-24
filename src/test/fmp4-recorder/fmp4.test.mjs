@@ -21,6 +21,7 @@ import {
   traf,
   trun,
   u32,
+  u64,
   videoFragment,
 } from './test-boxes.mjs';
 
@@ -165,6 +166,42 @@ describe('fmp4 box reader', () => {
     for (const [name, bytes] of cases) {
       assert.throws(() => readStream(bytes), Mp4FormatError, name);
     }
+  });
+});
+
+describe('fmp4 box structure', () => {
+  const failures = (bytes) => assert.throws(() => readStream(Buffer.concat([initialization(), bytes])), Mp4FormatError);
+
+  it('fails on a box whose size is smaller than its header even when the bytes after it parse', () => {
+    failures(Buffer.concat([u32(4), u32(8), Buffer.from('free', 'latin1')]));
+    failures(Buffer.concat([u32(1), Buffer.from('free', 'latin1'), u64(12), Buffer.from('skip', 'latin1'), Buffer.alloc(4)]));
+  });
+
+  it('fails on a 64-bit box header that does not fit inside its parent', () => {
+    failures(Buffer.concat([u32(1), Buffer.from('free', 'latin1')]));
+  });
+
+  it('fails on a tfhd whose flags promise a field its box does not hold', () => {
+    const tfhd = fullBox('tfhd', 0, 0x020020, u32(VIDEO.trackId));
+    const run = trun({ samples: [{ size: 1 }], firstSampleFlags: SYNC });
+
+    failures(Buffer.concat([moof(box('traf', tfhd, fullBox('tfdt', 1, 0, u64(0)), run)), mdat([1])]));
+  });
+
+  it('fails on a trun that declares more samples than its box holds', () => {
+    const run = fullBox('trun', 1, 0x200, u32(3), u32(1));
+    const trailing = fullBox('free', 0, 0, u32(1), u32(1), u32(1), u32(1));
+
+    failures(Buffer.concat([moof(traf({ trackId: VIDEO.trackId, decodeTime: 0, runs: [run, trailing] })), mdat([1])]));
+  });
+
+  it('fails on a handler box too short to name its handler', () => {
+    const shortHandler = track(VIDEO);
+    const hdlrAt = shortHandler.trak.indexOf('hdlr', 0, 'latin1') - 4;
+    const truncated = Buffer.from(shortHandler.trak);
+    truncated.writeUInt32BE(12, hdlrAt);
+
+    assert.throws(() => readStream(Buffer.concat([ftyp(), box('moov', truncated)])), Mp4FormatError);
   });
 });
 

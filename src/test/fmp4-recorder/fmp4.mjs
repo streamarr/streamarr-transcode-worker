@@ -23,7 +23,63 @@ const TWO_TO_64 = 1n << 64n;
 
 export class Mp4FormatError extends Error {}
 
-/** Yields [type, start, bodyStart, end] for each box between start and end. */
+/** Reads a box's big-endian fields in order; reading past the box's end is a format error. */
+class Fields {
+  constructor(data, [start, end], owner) {
+    this.data = data;
+    this.position = start;
+    this.end = end;
+    this.owner = owner;
+  }
+
+  take(bytes) {
+    if (this.end - this.position < bytes) {
+      throw new Mp4FormatError(`${this.owner} ends before its fields do`);
+    }
+    const at = this.position;
+    this.position += bytes;
+    return at;
+  }
+
+  skip(bytes) {
+    this.take(bytes);
+    return this;
+  }
+
+  u8() {
+    return this.data.readUInt8(this.take(1));
+  }
+
+  u24() {
+    return this.data.readUIntBE(this.take(3), 3);
+  }
+
+  u32() {
+    return this.data.readUInt32BE(this.take(4));
+  }
+
+  s32() {
+    return this.data.readInt32BE(this.take(4));
+  }
+
+  u64() {
+    return this.data.readBigUInt64BE(this.take(8));
+  }
+
+  s64() {
+    return this.data.readBigInt64BE(this.take(8));
+  }
+
+  fourcc() {
+    const at = this.take(4);
+    return this.data.toString('latin1', at, at + 4);
+  }
+}
+
+/**
+ * Yields [type, start, bodyStart, end] for each box between start and end. Every box's header and
+ * declared size fit inside that range, and no size is smaller than its header.
+ */
 export function* boxes(data, start, end) {
   let position = start;
   while (position < end) {
@@ -34,12 +90,18 @@ export function* boxes(data, start, end) {
     const type = data.toString('latin1', position + 4, position + 8);
     let header = 8;
     if (size === 1) {
+      if (end - position < 16) {
+        throw new Mp4FormatError(`truncated 64-bit box header of '${type}' at ${position}`);
+      }
       const large = data.readBigUInt64BE(position + 8);
       size = large > BigInt(Number.MAX_SAFE_INTEGER) ? Infinity : Number(large);
       header = 16;
     }
     if (size === 0) {
       throw new Mp4FormatError(`size-0 (to end of file) box '${type}' at ${position}`);
+    }
+    if (size < header) {
+      throw new Mp4FormatError(`box '${type}' at ${position} declares ${size} bytes, less than its ${header}-byte header`);
     }
     if (position + size > end) {
       throw new Mp4FormatError(`box '${type}' at ${position} overruns its parent`);
@@ -65,13 +127,15 @@ function required(box, type) {
   return box;
 }
 
-function fullBox(data, body) {
-  return [data.readUInt8(body), data.readUIntBE(body + 1, 3), body + 4];
+/** A full box's version and flags, and the fields that follow them. */
+function fullBox(data, box, owner) {
+  const fields = new Fields(data, box, owner);
+  return { version: fields.u8(), flags: fields.u24(), fields };
 }
 
-function headerField(data, box) {
-  const [version, , position] = fullBox(data, box[0]);
-  return data.readUInt32BE(position + (version === 1 ? 16 : 8));
+function headerField(data, box, owner) {
+  const { version, fields } = fullBox(data, box, owner);
+  return fields.skip(version === 1 ? 16 : 8).u32();
 }
 
 function editList(data, trakBody, trakStop) {
@@ -79,20 +143,16 @@ function editList(data, trakBody, trakStop) {
   if (edts === null) {
     return [];
   }
-  const elst = required(child(data, edts[0], edts[1], 'elst'), 'elst');
-  let [version, , position] = fullBox(data, elst[0]);
-  const count = data.readUInt32BE(position);
-  position += 4;
+  const { version, fields } = fullBox(data, required(child(data, edts[0], edts[1], 'elst'), 'elst'), 'elst');
+  const count = fields.u32();
   const edits = [];
   for (let entry = 0; entry < count; entry++) {
     if (version === 1) {
-      edits.push([data.readBigUInt64BE(position), data.readBigInt64BE(position + 8)]);
-      position += 16;
+      edits.push([fields.u64(), fields.s64()]);
     } else {
-      edits.push([BigInt(data.readUInt32BE(position)), BigInt(data.readInt32BE(position + 4))]);
-      position += 8;
+      edits.push([BigInt(fields.u32()), BigInt(fields.s32())]);
     }
-    position += 4;
+    fields.skip(4);
   }
   return edits;
 }
@@ -104,25 +164,25 @@ export function parseMoov(data, body, stop) {
     if (type !== 'trak') {
       continue;
     }
-    const trackId = headerField(data, required(child(data, trakBody, trakStop, 'tkhd'), 'tkhd'));
+    const trackId = headerField(data, required(child(data, trakBody, trakStop, 'tkhd'), 'tkhd'), 'tkhd');
     const mdia = required(child(data, trakBody, trakStop, 'mdia'), 'mdia');
-    const timescale = headerField(data, required(child(data, mdia[0], mdia[1], 'mdhd'), 'mdhd'));
-    const hdlr = required(child(data, mdia[0], mdia[1], 'hdlr'), 'hdlr');
-    const handler = data.toString('latin1', hdlr[0] + 8, hdlr[0] + 12);
+    const timescale = headerField(data, required(child(data, mdia[0], mdia[1], 'mdhd'), 'mdhd'), 'mdhd');
+    const hdlr = new Fields(data, required(child(data, mdia[0], mdia[1], 'hdlr'), 'hdlr'), 'hdlr');
+    const handler = hdlr.skip(8).fourcc();
     tracks.set(trackId, { trackId, handler, timescale, edits: editList(data, trakBody, trakStop) });
   }
   const mvex = child(data, body, stop, 'mvex');
   if (mvex !== null) {
-    for (const [type, , trexBody] of boxes(data, mvex[0], mvex[1])) {
+    for (const [type, , trexBody, trexStop] of boxes(data, mvex[0], mvex[1])) {
       if (type !== 'trex') {
         continue;
       }
-      const [, , position] = fullBox(data, trexBody);
-      const track = tracks.get(data.readUInt32BE(position));
+      const { fields } = fullBox(data, [trexBody, trexStop], 'trex');
+      const track = tracks.get(fields.u32());
+      fields.skip(4);
+      const defaults = { trexDuration: fields.u32(), trexSize: fields.u32(), trexFlags: fields.u32() };
       if (track !== undefined) {
-        track.trexDuration = data.readUInt32BE(position + 8);
-        track.trexSize = data.readUInt32BE(position + 12);
-        track.trexFlags = data.readUInt32BE(position + 16);
+        Object.assign(track, defaults);
       }
     }
   }
@@ -130,10 +190,8 @@ export function parseMoov(data, body, stop) {
 }
 
 function trackFragmentHeader(data, body, stop, tracks) {
-  const [, flags, start] = fullBox(data, required(child(data, body, stop, 'tfhd'), 'tfhd')[0]);
-  let position = start;
-  const trackId = data.readUInt32BE(position);
-  position += 4;
+  const { flags, fields } = fullBox(data, required(child(data, body, stop, 'tfhd'), 'tfhd'), 'tfhd');
+  const trackId = fields.u32();
   const track = tracks.get(trackId);
   if (track === undefined) {
     throw new Mp4FormatError(`traf for undeclared track ${trackId}`);
@@ -143,54 +201,43 @@ function trackFragmentHeader(data, body, stop, tracks) {
     size: track.trexSize ?? 0,
     flags: track.trexFlags ?? 0,
   };
-  position += (flags & 0x1 ? 8 : 0) + (flags & 0x2 ? 4 : 0);
+  fields.skip((flags & 0x1 ? 8 : 0) + (flags & 0x2 ? 4 : 0));
   if (flags & 0x8) {
-    defaults.duration = data.readUInt32BE(position);
-    position += 4;
+    defaults.duration = fields.u32();
   }
   if (flags & 0x10) {
-    defaults.size = data.readUInt32BE(position);
-    position += 4;
+    defaults.size = fields.u32();
   }
   if (flags & 0x20) {
-    defaults.flags = data.readUInt32BE(position);
+    defaults.flags = fields.u32();
   }
   return { track, defaults };
 }
 
 function baseMediaDecodeTime(data, body, stop) {
-  const [version, , position] = fullBox(data, required(child(data, body, stop, 'tfdt'), 'tfdt')[0]);
-  return version === 1 ? data.readBigUInt64BE(position) : BigInt(data.readUInt32BE(position));
+  const { version, fields } = fullBox(data, required(child(data, body, stop, 'tfdt'), 'tfdt'), 'tfdt');
+  return version === 1 ? fields.u64() : BigInt(fields.u32());
 }
 
-function trackRunSamples(data, trunBody, defaults) {
-  const [version, flags, start] = fullBox(data, trunBody);
-  let position = start;
-  const count = data.readUInt32BE(position);
-  position += 4 + (flags & 0x1 ? 4 : 0);
-  let firstFlags = null;
-  if (flags & 0x4) {
-    firstFlags = data.readUInt32BE(position);
-    position += 4;
-  }
+function trackRunSamples(data, trun, defaults) {
+  const { version, flags, fields } = fullBox(data, trun, 'trun');
+  const count = fields.u32();
+  fields.skip(flags & 0x1 ? 4 : 0);
+  const firstFlags = flags & 0x4 ? fields.u32() : null;
   const samples = [];
   for (let index = 0; index < count; index++) {
     const sample = { duration: defaults.duration, flags: defaults.flags, compositionOffset: 0, size: defaults.size };
     if (flags & 0x100) {
-      sample.duration = data.readUInt32BE(position);
-      position += 4;
+      sample.duration = fields.u32();
     }
     if (flags & 0x200) {
-      sample.size = data.readUInt32BE(position);
-      position += 4;
+      sample.size = fields.u32();
     }
     if (flags & 0x400) {
-      sample.flags = data.readUInt32BE(position);
-      position += 4;
+      sample.flags = fields.u32();
     }
     if (flags & 0x800) {
-      sample.compositionOffset = version === 1 ? data.readInt32BE(position) : data.readUInt32BE(position);
-      position += 4;
+      sample.compositionOffset = version === 1 ? fields.s32() : fields.u32();
     }
     if (index === 0 && firstFlags !== null) {
       sample.flags = firstFlags;
@@ -208,9 +255,9 @@ function parseTraf(data, body, stop, tracks) {
   const { track, defaults } = trackFragmentHeader(data, body, stop, tracks);
   const base = baseMediaDecodeTime(data, body, stop);
   const samples = [];
-  for (const [type, , trunBody] of boxes(data, body, stop)) {
+  for (const [type, , trunBody, trunStop] of boxes(data, body, stop)) {
     if (type === 'trun') {
-      samples.push(...trackRunSamples(data, trunBody, defaults));
+      samples.push(...trackRunSamples(data, [trunBody, trunStop], defaults));
     }
   }
   const first = samples[0] ?? null;
