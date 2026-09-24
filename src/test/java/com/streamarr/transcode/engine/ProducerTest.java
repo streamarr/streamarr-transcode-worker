@@ -757,6 +757,107 @@ class ProducerTest {
     assertThat(outcomes).hasAtLeastOneElementOfType(Failed.class);
   }
 
+  @ParameterizedTest(name = "FFmpeg ignores termination: {0}")
+  @ValueSource(booleans = {false, true})
+  @DisplayName(
+      "Should fail the attempt as an encoder stall, escalating to a forced kill only when FFmpeg"
+          + " ignores termination, when FFmpeg writes nothing while the producer reads")
+  void shouldFailTheAttemptAsAnEncoderStallWhenFfmpegWritesNothingWhileTheProducerReads(
+      boolean ignoresTermination) {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .ignoresTermination(ignoresTermination)
+            .build();
+
+    var producer =
+        producerFor(process, recording)
+            .stallTimeout(Duration.ofMillis(200))
+            .gracePeriod(Duration.ofMillis(200))
+            .start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.ENCODER_STALLED);
+    assertThat(process.wasTerminated()).isTrue();
+    assertThat(process.wasDestroyedForcibly()).isEqualTo(ignoresTermination);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+  }
+
+  @Test
+  @DisplayName(
+      "Should not fail the attempt as an encoder stall while a segment awaits acceptance and the"
+          + " reader waits for it")
+  void shouldNotFailTheAttemptAsAnEncoderStallWhileASegmentAwaitsAcceptance() {
+    var recording = recording(ENCODED_RECORDING);
+    var process = ScriptedProcess.builder().output(bytesOf(ENCODED_RECORDING)).build();
+    sink.holding(1);
+    var producer = producerFor(process, recording).stallTimeout(Duration.ofMillis(100)).start();
+    awaiting().until(sink::isHolding);
+
+    await()
+        .during(Duration.ofMillis(500))
+        .atMost(OUTCOME_LIMIT)
+        .until(() -> !producer.outcome().isDone() && !process.wasTerminated());
+    sink.release();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+  }
+
+  @Test
+  @DisplayName("Should not fail the attempt as an encoder stall once it is stopped")
+  void shouldNotFailTheAttemptAsAnEncoderStallOnceItIsStopped() throws InterruptedException {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    var producer =
+        producerFor(process, recording)
+            .stallTimeout(Duration.ofMillis(300))
+            .gracePeriod(Duration.ofMinutes(10))
+            .start();
+    awaiting().until(process::hasReachedPause);
+    var stopping = Thread.ofVirtual().start(producer::stop);
+    awaiting().until(() -> process.stdinText().equals("q"));
+
+    await()
+        .during(Duration.ofMillis(600))
+        .atMost(OUTCOME_LIMIT)
+        .until(() -> !process.wasTerminated() && !process.wasDestroyedForcibly());
+    process.exit();
+
+    assertThat(stopping.join(OUTCOME_LIMIT)).isTrue();
+    assertThat(producer.outcome()).isCompletedWithValue(new Stopped());
+  }
+
+  @Test
+  @DisplayName("Should settle the stop only once FFmpeg has exited after a forced kill")
+  void shouldSettleTheStopOnlyOnceFfmpegHasExitedAfterAForcedKill() throws InterruptedException {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .lingersAfterKill(true)
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    var producer = producerFor(process, recording).gracePeriod(Duration.ofMillis(100)).start();
+    awaiting().until(process::hasReachedPause);
+
+    var stopping = Thread.ofVirtual().start(producer::stop);
+
+    awaiting().until(process::wasDestroyedForcibly);
+    assertThat(stopping.join(Duration.ofMillis(200))).isFalse();
+    assertThat(producer.outcome()).isNotDone();
+    process.exit();
+    assertThat(stopping.join(OUTCOME_LIMIT)).isTrue();
+    assertThat(producer.outcome()).isCompletedWithValue(new Stopped());
+  }
+
   @Test
   @DisplayName(
       "Should return from a second stop only after the first settles when stopped twice"
@@ -824,6 +925,7 @@ class ProducerTest {
         .periodSeconds(recording.period())
         .startSequenceNumber(recording.startSequenceNumber())
         .gracePeriod(Duration.ofSeconds(5))
+        .stallTimeout(Duration.ofMinutes(1))
         .sink(sink);
   }
 
@@ -876,6 +978,7 @@ class ProducerTest {
         .periodSeconds(1)
         .startSequenceNumber(0)
         .gracePeriod(Duration.ofSeconds(5))
+        .stallTimeout(Duration.ofMinutes(1))
         .sink(sink);
   }
 

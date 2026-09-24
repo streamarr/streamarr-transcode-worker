@@ -23,6 +23,11 @@ public enum ProducerFailure {
   MALFORMED_OUTPUT,
   /** Reading FFmpeg's standard output failed. */
   OUTPUT_UNREADABLE,
+  /**
+   * FFmpeg wrote nothing to its standard output for the stall timeout while the producer was
+   * reading it, so the producer ended FFmpeg.
+   */
+  ENCODER_STALLED,
   /** The producer met a throwable it does not expect, such as a defect or an exhausted heap. */
   UNEXPECTED_ERROR;
 

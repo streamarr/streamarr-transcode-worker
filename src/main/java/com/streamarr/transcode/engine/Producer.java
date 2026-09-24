@@ -7,7 +7,9 @@ import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.engine.GroupingOutcome.NothingClosed;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentClosed;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentNumberSkipped;
+import java.io.FilterInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.time.Duration;
 import java.util.List;
@@ -30,6 +32,10 @@ import lombok.extern.slf4j.Slf4j;
  * sink's acceptance and what the reader holds for the next. It admits each box's bytes before it
  * reads them, so when the budget is full, or when a second segment closes while the first still
  * awaits acceptance, the reader stops reading and the pipe holds FFmpeg back.
+ *
+ * <p>A watchdog fails the attempt when FFmpeg writes nothing for the stall timeout while the reader
+ * is reading; waiting for the sink pauses it. It asks FFmpeg to terminate and destroys it after the
+ * grace period, because a hung FFmpeg can ignore termination.
  */
 @Slf4j
 public final class Producer {
@@ -50,6 +56,7 @@ public final class Producer {
   private final SegmentGrouper grouper;
   private final SegmentSink sink;
   private final Duration gracePeriod;
+  private final Duration stallTimeout;
   private final String threadName;
   private final CompletableFuture<AttemptOutcome> outcome = new CompletableFuture<>();
   private final Object lock = new Object();
@@ -59,22 +66,30 @@ public final class Producer {
   private Optional<Delivery> deliveryInFlight = Optional.empty();
   private long readerHeldBytes;
   private boolean mediaSegmentDelivered;
+  private boolean readerWaiting;
+
+  // When FFmpeg last wrote output, or the reader last resumed reading.
+  private volatile long lastOutputNanos = System.nanoTime();
 
   private Producer(Process process, Settings settings) {
     this.process = process;
     this.errorOutput = new StderrDrainer(process.getErrorStream());
     this.reader =
-        new FragmentedMp4Reader(process.getInputStream(), MAXIMUM_SEGMENT_BYTES, this::admit);
+        new FragmentedMp4Reader(
+            new WatchedOutput(process.getInputStream()), MAXIMUM_SEGMENT_BYTES, this::admit);
     this.grouper = settings.grouper();
     this.sink = settings.sink();
     this.gracePeriod = settings.gracePeriod();
+    this.stallTimeout = settings.stallTimeout();
     this.threadName = "producer-" + settings.jobAttemptId();
   }
 
   /**
    * Starts FFmpeg and reads its output until the attempt settles.
    *
-   * @param gracePeriod how long a stop waits for FFmpeg to exit after asking it to quit
+   * @param gracePeriod how long a stop waits for FFmpeg to exit after asking it to quit, and a
+   *     stall after asking it to terminate
+   * @param stallTimeout how long FFmpeg may write nothing while the reader reads its output
    * @throws TranscodeException when FFmpeg cannot be started
    */
   @Builder(buildMethodName = "start")
@@ -85,13 +100,16 @@ public final class Producer {
       int periodSeconds,
       int startSequenceNumber,
       @NonNull Duration gracePeriod,
+      @NonNull Duration stallTimeout,
       @NonNull SegmentSink sink) {
     var settings =
-        new Settings(
-            jobAttemptId,
-            new SegmentGrouper(periodSeconds, startSequenceNumber, MAXIMUM_SEGMENT_BYTES),
-            sink,
-            gracePeriod);
+        Settings.builder()
+            .jobAttemptId(jobAttemptId)
+            .grouper(new SegmentGrouper(periodSeconds, startSequenceNumber, MAXIMUM_SEGMENT_BYTES))
+            .sink(sink)
+            .gracePeriod(gracePeriod)
+            .stallTimeout(stallTimeout)
+            .build();
     Process process;
     try {
       process = launcher.launch(command, jobAttemptId);
@@ -104,6 +122,10 @@ public final class Producer {
         .name(producer.threadName)
         .uncaughtExceptionHandler(producer::failReaderUnexpectedly)
         .start(producer::produce);
+    Thread.ofVirtual()
+        .name(producer.threadName + "-watchdog")
+        .uncaughtExceptionHandler(producer::failWatchdogUnexpectedly)
+        .start(producer::watchForStall);
     return producer;
   }
 
@@ -216,6 +238,75 @@ public final class Producer {
     }
   }
 
+  private void watchForStall() {
+    var stall =
+        new Failed(
+            ProducerFailure.ENCODER_STALLED,
+            "FFmpeg wrote no output for " + stallTimeout + " while the producer read it");
+    if (tryDecideStall(stall)) {
+      process.destroy();
+      awaitExitWithinGracePeriod();
+      settle(stall);
+    }
+  }
+
+  // Records the stall once the reader has read nothing for the stall timeout; false once the
+  // attempt's outcome is decided otherwise.
+  private boolean tryDecideStall(Failed stall) {
+    synchronized (lock) {
+      while (decision.isEmpty()) {
+        var silence = System.nanoTime() - lastOutputNanos;
+        if (!readerWaiting && silence >= stallTimeout.toNanos()) {
+          return tryDecide(stall);
+        }
+
+        if (!tryAwaitWatchdogWake(silence)) {
+          return false;
+        }
+      }
+
+      return false;
+    }
+  }
+
+  // Holds lock. False when interrupted, which nothing does, and the watchdog then stops watching.
+  private boolean tryAwaitWatchdogWake(long silence) {
+    try {
+      if (readerWaiting) {
+        lock.wait();
+        return true;
+      }
+
+      TimeUnit.NANOSECONDS.timedWait(lock, stallTimeout.toNanos() - silence);
+      return true;
+    } catch (InterruptedException _) {
+      Thread.currentThread().interrupt();
+      return false;
+    }
+  }
+
+  // The reader waits for the producer rather than FFmpeg, so the stall watchdog pauses meanwhile
+  // and counts afresh once the reader resumes.
+  private void awaitReaderWhile(BooleanSupplier condition) {
+    synchronized (lock) {
+      if (!condition.getAsBoolean()) {
+        return;
+      }
+
+      readerWaiting = true;
+    }
+
+    try {
+      awaitWhile(condition);
+    } finally {
+      synchronized (lock) {
+        readerWaiting = false;
+        lastOutputNanos = System.nanoTime();
+        lock.notifyAll();
+      }
+    }
+  }
+
   private void produce() {
     try {
       conclude(readAndDeliver());
@@ -266,7 +357,7 @@ public final class Producer {
 
   // False when the attempt was decided while the delivery awaited acceptance.
   private boolean awaitAcceptanceOfDeliveryInFlight() {
-    awaitWhile(() -> deliveryInFlight.isPresent() && decision.isEmpty());
+    awaitReaderWhile(() -> deliveryInFlight.isPresent() && decision.isEmpty());
     return !isDecided();
   }
 
@@ -275,6 +366,11 @@ public final class Producer {
     if (!tryFailWithProcessEnded(unexpected(error))) {
       discardRemainingOutput();
     }
+  }
+
+  private void failWatchdogUnexpectedly(Thread watchdogThread, Throwable error) {
+    log.error("{} failed unexpectedly", watchdogThread.getName(), error);
+    tryFailWithProcessEnded(unexpected(error));
   }
 
   private void failDeliveryUnexpectedly(Thread deliveryThread, Throwable error) {
@@ -356,7 +452,7 @@ public final class Producer {
 
   // Admits a box's bytes while the reader's and the delivery's holdings fit in the budget.
   private void admit(long boxBytes) {
-    awaitWhile(() -> decision.isEmpty() && heldBytes() + boxBytes > BUDGET_BYTES);
+    awaitReaderWhile(() -> decision.isEmpty() && heldBytes() + boxBytes > BUDGET_BYTES);
     synchronized (lock) {
       if (decision.isPresent()) {
         throw new AdmissionRefused();
@@ -382,7 +478,7 @@ public final class Producer {
   // Starts the segment's delivery once the previous one was accepted; empty once it starts, and
   // the attempt's end when the attempt is decided first.
   private Optional<Ending> handOff(ProducedSegment segment) {
-    awaitWhile(() -> deliveryInFlight.isPresent() && decision.isEmpty());
+    awaitReaderWhile(() -> deliveryInFlight.isPresent() && decision.isEmpty());
     Delivery delivery;
     synchronized (lock) {
       if (decision.isPresent()) {
@@ -525,6 +621,39 @@ public final class Producer {
     }
   }
 
+  // FFmpeg's standard output, noting when each byte arrives for the stall watchdog.
+  private final class WatchedOutput extends FilterInputStream {
+
+    private WatchedOutput(InputStream output) {
+      super(output);
+    }
+
+    @Override
+    public int read() throws IOException {
+      var value = super.read();
+      if (value >= 0) {
+        lastOutputNanos = System.nanoTime();
+      }
+
+      return value;
+    }
+
+    @Override
+    public int read(byte[] buffer, int offset, int length) throws IOException {
+      var read = super.read(buffer, offset, length);
+      if (read > 0) {
+        lastOutputNanos = System.nanoTime();
+      }
+
+      return read;
+    }
+  }
+
+  @Builder
   private record Settings(
-      UUID jobAttemptId, SegmentGrouper grouper, SegmentSink sink, Duration gracePeriod) {}
+      UUID jobAttemptId,
+      SegmentGrouper grouper,
+      SegmentSink sink,
+      Duration gracePeriod,
+      Duration stallTimeout) {}
 }

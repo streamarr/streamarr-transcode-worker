@@ -98,6 +98,31 @@ class ProcessBuilderLauncherTest {
   }
 
   @Test
+  @DisplayName(
+      "Should kill a launched process that stops writing and ignores termination, and fail the"
+          + " attempt as an encoder stall")
+  void shouldKillALaunchedProcessThatStopsWritingAndIgnoresTerminationAndFailTheAttempt()
+      throws IOException {
+    var recordingFile = Files.write(tempDir.resolve(ENCODED_RECORDING), bytesOf(ENCODED_RECORDING));
+    var initializationSegmentLength =
+        recording(ENCODED_RECORDING).initializationSegment().byteLength();
+    // Ignoring SIGTERM survives the exec, as a hung FFmpeg ignores it.
+    var producer =
+        producerRunning(
+                "head -c " + initializationSegmentLength + " \"$0\"; trap '' TERM; exec sleep 60",
+                recordingFile.toString())
+            .stallTimeout(Duration.ofMillis(300))
+            .gracePeriod(Duration.ofMillis(300))
+            .start();
+
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .asInstanceOf(InstanceOfAssertFactories.type(Failed.class))
+        .extracting(Failed::reason)
+        .isEqualTo(ProducerFailure.ENCODER_STALLED);
+  }
+
+  @Test
   @DisplayName("Should refuse to start the attempt when the process cannot be launched")
   void shouldRefuseToStartTheAttemptWhenTheProcessCannotBeLaunched() {
     var producer =
@@ -108,6 +133,7 @@ class ProcessBuilderLauncherTest {
             .periodSeconds(6)
             .startSequenceNumber(0)
             .gracePeriod(Duration.ofSeconds(5))
+            .stallTimeout(Duration.ofMinutes(1))
             .sink(sink);
 
     assertThatThrownBy(producer::start)
@@ -124,6 +150,7 @@ class ProcessBuilderLauncherTest {
         .periodSeconds(6)
         .startSequenceNumber(0)
         .gracePeriod(Duration.ofSeconds(5))
+        .stallTimeout(Duration.ofMinutes(1))
         .sink(sink);
   }
 }
