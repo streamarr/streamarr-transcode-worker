@@ -132,51 +132,67 @@ class GroupingFailure(Exception):
         self.detail = detail
 
 
+class Grouping:
+    """ADR 0037 grouping of one stream's fragments, fed in arrival order by fragment index."""
+
+    def __init__(self, period, start):
+        self.period, self.start = period, start
+        self.delivered, self.preroll, self.waiting = [], [], []
+        self.open = None
+        self.last_sync_time = None
+
+    def accept(self, index, video):
+        if video is None or not video["firstSync"]:
+            self.join(index)
+            return
+        time = video["firstPresentationTime"]
+        if self.last_sync_time is not None and time < self.last_sync_time:
+            raise GroupingFailure("presentation time moved backwards", fragment=index, presentationTime=time)
+        self.last_sync_time = time
+        number = time // (self.period * video["timescale"])
+        if self.open is not None and number == self.open["number"]:
+            self.join(index)
+            return
+        expected = self.next_deliverable()
+        if number > expected:
+            raise GroupingFailure("skipped segment number", fragment=index, expectedNumber=expected,
+                                  actualNumber=number, presentationTime=time)
+        self.close()
+        self.open = {"number": number, "firstVideoPresentationTime": time, "fragments": self.waiting + [index]}
+        self.waiting = []
+
+    def join(self, index):
+        if self.open is None:
+            self.waiting.append(index)
+            return
+        self.open["fragments"].append(index)
+
+    def next_deliverable(self):
+        """The start number until a segment opens, then the start number or one past the open segment."""
+        if self.open is None:
+            return self.start
+        return max(self.start, self.open["number"] + 1)
+
+    def close(self):
+        if self.open is None:
+            return
+        closed, self.open = self.open, None
+        if closed["number"] < self.start:
+            self.preroll.append(closed)
+            return
+        self.delivered.append(closed)
+
+
 def group(stream, period, start):
     """ADR 0037 grouping. Returns (delivered segments, discarded preroll, failure or None)."""
-    delivered, preroll = [], []
-    open_segment = None
-    waiting = []
-    delivered_any = False
-    last_sync_time = None
-
-    def close(segment):
-        nonlocal delivered_any
-        if segment["number"] < start:
-            preroll.append(segment)
-            return
-        delivered.append(segment)
-        delivered_any = True
-
+    grouping = Grouping(period, start)
     try:
         for index, fragment in enumerate(stream["fragments"]):
-            video = fmp4dump.video_start(fragment)
-            if video is None or not video["firstSync"]:
-                (waiting if open_segment is None else open_segment["fragments"]).append(index)
-                continue
-            time = video["firstPresentationTime"]
-            if last_sync_time is not None and time < last_sync_time:
-                raise GroupingFailure("presentation time moved backwards", fragment=index, presentationTime=time)
-            last_sync_time = time
-            number = time // (period * video["timescale"])
-            if open_segment is not None and number == open_segment["number"]:
-                open_segment["fragments"].append(index)
-                continue
-            if number >= start:
-                first = not delivered_any and (open_segment is None or open_segment["number"] < start)
-                expected = start if first else max(start, open_segment["number"] + 1)
-                if number > expected:
-                    raise GroupingFailure("skipped segment number", fragment=index, expectedNumber=expected,
-                                          actualNumber=number, presentationTime=time)
-            if open_segment is not None:
-                close(open_segment)
-            open_segment = {"number": number, "firstVideoPresentationTime": time, "fragments": waiting + [index]}
-            waiting = []
-        if open_segment is not None:
-            close(open_segment)
-        return delivered, preroll, None
+            grouping.accept(index, fmp4dump.video_start(fragment))
+        grouping.close()
     except GroupingFailure as failure:
-        return delivered, preroll, failure
+        return grouping.delivered, grouping.preroll, failure
+    return grouping.delivered, grouping.preroll, None
 
 
 def describe(segment, stream):
