@@ -241,7 +241,7 @@ public final class Producer {
           new Abandoned(new Failed(ProducerFailure.SEGMENT_NOT_ACCEPTED, segment + ": " + e)));
     }
 
-    if (segment.sequenceNumber().isPresent()) {
+    if (segment instanceof ProducedSegment.Media) {
       mediaSegmentDelivered = true;
     }
 
