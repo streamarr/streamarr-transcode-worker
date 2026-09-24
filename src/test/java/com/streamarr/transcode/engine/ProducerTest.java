@@ -3,6 +3,7 @@ package com.streamarr.transcode.engine;
 import static com.streamarr.transcode.engine.FfmpegRecordings.bytesOf;
 import static com.streamarr.transcode.engine.FfmpegRecordings.deliveredBytesOf;
 import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
+import static com.streamarr.transcode.fixtures.Races.awaitStart;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -22,11 +23,9 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.OptionalDouble;
 import java.util.UUID;
-import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.stream.Stream;
 import org.assertj.core.api.InstanceOfAssertFactories;
 import org.awaitility.core.ConditionFactory;
@@ -140,11 +139,7 @@ class ProducerTest {
 
     var producer = producerFor(process, recording).start();
 
-    awaiting().until(() -> process.bytesTaken() == closingFragmentEnd);
-    await()
-        .during(Duration.ofMillis(200))
-        .atMost(OUTCOME_LIMIT)
-        .until(() -> process.bytesTaken() == closingFragmentEnd);
+    assertReaderStopsAt(process, closingFragmentEnd);
     assertThat(sink.acceptedNames()).containsExactly("init.mp4");
     sink.release();
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
@@ -159,11 +154,7 @@ class ProducerTest {
 
     var producer = producerOfOneSecondSegments(process).start();
 
-    awaiting().until(() -> process.bytesTaken() == NEARLY_CAPPED_BUDGET_STOP);
-    await()
-        .during(Duration.ofMillis(200))
-        .atMost(OUTCOME_LIMIT)
-        .until(() -> process.bytesTaken() == NEARLY_CAPPED_BUDGET_STOP);
+    assertReaderStopsAt(process, NEARLY_CAPPED_BUDGET_STOP);
     assertThat(
             (long) process.bytesTaken()
                 - IsoBoxes.ftyp().length
@@ -229,11 +220,7 @@ class ProducerTest {
             + 3 * keyframeFragment(0).length
             + keyframeMoof(24_000).length
             + 8;
-    awaiting().until(() -> nextProcess.bytesTaken() == workerBudgetStop);
-    await()
-        .during(Duration.ofMillis(200))
-        .atMost(OUTCOME_LIMIT)
-        .until(() -> nextProcess.bytesTaken() == workerBudgetStop);
+    assertReaderStopsAt(nextProcess, workerBudgetStop);
     stoppedSink.release();
     assertThat(next.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
     assertThat(stoppedProcess.isAlive()).isTrue();
@@ -266,11 +253,7 @@ class ProducerTest {
     var producer = producerOfOneSecondSegments(process).startSequenceNumber(1).start();
 
     var budgetStop = preroll.length + NEARLY_CAPPED_BUDGET_STOP;
-    awaiting().until(() -> process.bytesTaken() == budgetStop);
-    await()
-        .during(Duration.ofMillis(200))
-        .atMost(OUTCOME_LIMIT)
-        .until(() -> process.bytesTaken() == budgetStop);
+    assertReaderStopsAt(process, budgetStop);
     sink.release();
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
     assertThat(sink.acceptedNames())
@@ -902,7 +885,7 @@ class ProducerTest {
       var producer =
           producerFor(process, recording).sink(refusingTheFirstMediaSegmentAt(start)).start();
 
-      awaitBarrier(start);
+      awaitStart(start);
       producer.stop();
 
       var outcome = producer.outcome().get(OUTCOME_LIMIT.toSeconds(), TimeUnit.SECONDS);
@@ -929,7 +912,7 @@ class ProducerTest {
         return;
       }
 
-      awaitBarrier(start);
+      awaitStart(start);
       throw new IllegalStateException("the server refused " + segment.name());
     };
   }
@@ -1230,17 +1213,6 @@ class ProducerTest {
     assertThat(producer.outcome()).isCompletedWithValue(new Stopped());
   }
 
-  private static void awaitBarrier(CyclicBarrier barrier) {
-    try {
-      barrier.await(OUTCOME_LIMIT.toSeconds(), TimeUnit.SECONDS);
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-      throw new AssertionError("interrupted at the race's start", e);
-    } catch (BrokenBarrierException | TimeoutException e) {
-      throw new AssertionError("the race never started", e);
-    }
-  }
-
   private static void awaitLatch(CountDownLatch latch) {
     try {
       assertThat(latch.await(OUTCOME_LIMIT.toSeconds(), TimeUnit.SECONDS))
@@ -1250,6 +1222,16 @@ class ProducerTest {
       Thread.currentThread().interrupt();
       throw new AssertionError("interrupted while awaiting a latch", e);
     }
+  }
+
+  // The reader takes FFmpeg's output up to this offset and no further, so FFmpeg blocks on the
+  // pipe.
+  private static void assertReaderStopsAt(ScriptedProcess process, int offset) {
+    awaiting().until(() -> process.bytesTaken() == offset);
+    await()
+        .during(Duration.ofMillis(200))
+        .atMost(OUTCOME_LIMIT)
+        .until(() -> process.bytesTaken() == offset);
   }
 
   private static ConditionFactory awaiting() {
@@ -1263,13 +1245,18 @@ class ProducerTest {
       encodedFrameRate = OptionalDouble.of(recording.source().videoFrameRate());
     }
 
-    return Producer.builder()
+    return producerLaunching(process)
         .encodedFrameRate(encodedFrameRate)
+        .periodSeconds(recording.period())
+        .startSequenceNumber(recording.startSequenceNumber());
+  }
+
+  // A producer of this process's output, with its own budget and generous bounds, to adjust.
+  private Producer.ProducerBuilder producerLaunching(ScriptedProcess process) {
+    return Producer.builder()
         .launcher((command, jobAttemptId) -> process)
         .command(List.of("ffmpeg"))
         .jobAttemptId(JOB_ATTEMPT_ID)
-        .periodSeconds(recording.period())
-        .startSequenceNumber(recording.startSequenceNumber())
         .gracePeriod(Duration.ofSeconds(5))
         .stallTimeout(Duration.ofMinutes(1))
         .memoryBudget(SegmentMemoryBudget.forSlots(1))
@@ -1343,16 +1330,7 @@ class ProducerTest {
   }
 
   private Producer.ProducerBuilder producerOfOneSecondSegments(ScriptedProcess process) {
-    return Producer.builder()
-        .launcher((command, jobAttemptId) -> process)
-        .command(List.of("ffmpeg"))
-        .jobAttemptId(JOB_ATTEMPT_ID)
-        .periodSeconds(1)
-        .startSequenceNumber(0)
-        .gracePeriod(Duration.ofSeconds(5))
-        .stallTimeout(Duration.ofMinutes(1))
-        .memoryBudget(SegmentMemoryBudget.forSlots(1))
-        .sink(sink);
+    return producerLaunching(process).periodSeconds(1).startSequenceNumber(0);
   }
 
   private static byte[] keyframeFragment(long presentationTime) {

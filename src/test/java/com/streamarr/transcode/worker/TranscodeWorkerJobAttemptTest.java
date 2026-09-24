@@ -3,6 +3,7 @@ package com.streamarr.transcode.worker;
 import static com.streamarr.transcode.engine.FfmpegRecordings.bytesOf;
 import static com.streamarr.transcode.engine.FfmpegRecordings.deliveredBytesOf;
 import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
+import static com.streamarr.transcode.fixtures.Races.awaitStart;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.uploadNames;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.SOURCE_NAMESPACE_ID;
@@ -41,12 +42,10 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.stream.DoubleStream;
 import java.util.stream.Stream;
 import org.awaitility.core.ConditionFactory;
@@ -934,7 +933,7 @@ class TranscodeWorkerJobAttemptTest {
         var start = new CyclicBarrier(2);
         var failing = Thread.ofVirtual().start(() -> resumeAt(start, process));
 
-        awaitBarrier(start);
+        awaitStart(start);
         stopVariant(connection, job);
 
         assertThat(failing.join(EVENT_LIMIT)).isTrue();
@@ -950,7 +949,7 @@ class TranscodeWorkerJobAttemptTest {
 
   // Lets the paused FFmpeg's output continue into its failure once the race's other side is ready.
   private static void resumeAt(CyclicBarrier start, ScriptedProcess process) {
-    awaitBarrier(start);
+    awaitStart(start);
     process.resume();
   }
 
@@ -1070,17 +1069,6 @@ class TranscodeWorkerJobAttemptTest {
 
   private static ConditionFactory promptly() {
     return await().atMost(EVENT_LIMIT).pollInterval(Duration.ofMillis(5));
-  }
-
-  private static void awaitBarrier(CyclicBarrier barrier) {
-    try {
-      barrier.await(EVENT_LIMIT.toSeconds(), TimeUnit.SECONDS);
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-      throw new AssertionError("interrupted at the race's start", e);
-    } catch (BrokenBarrierException | TimeoutException e) {
-      throw new AssertionError("the race never started", e);
-    }
   }
 
   private static void awaitEvents(
