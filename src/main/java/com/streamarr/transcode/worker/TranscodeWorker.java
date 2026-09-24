@@ -18,6 +18,7 @@ import build.buf.gen.streamarr.transcode.v1.SegmentUploadMetadata;
 import build.buf.gen.streamarr.transcode.v1.StartProbeCommand;
 import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
 import build.buf.gen.streamarr.transcode.v1.StopVariantCommand;
+import build.buf.gen.streamarr.transcode.v1.TranscodeMode;
 import build.buf.gen.streamarr.transcode.v1.TranscodeWorkerServiceGrpc;
 import build.buf.gen.streamarr.transcode.v1.UploadSegmentRequest;
 import build.buf.gen.streamarr.transcode.v1.UploadSegmentResponse;
@@ -220,8 +221,25 @@ public final class TranscodeWorker implements AutoCloseable {
   }
 
   private boolean isRunnableHere(StartVariantCommand command) {
+    var job = command.getJob();
     return command.getTarget().equals(identity())
-        && command.getJob().getDecision().getContainer() == ContainerFormat.CONTAINER_FORMAT_FMP4;
+        && job.getDecision().getContainer() == ContainerFormat.CONTAINER_FORMAT_FMP4
+        && hasUsableFrameRate(job);
+  }
+
+  // The worker encodes video at the probed frame rate and counts its GOP from that rate.
+  private static boolean hasUsableFrameRate(VariantJob job) {
+    if (!encodesVideo(job.getDecision().getMode())) {
+      return true;
+    }
+
+    var framerate = job.getExecution().getFramerate();
+    return framerate > 0 && Double.isFinite(framerate);
+  }
+
+  private static boolean encodesVideo(TranscodeMode mode) {
+    return mode == TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE
+        || mode == TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE;
   }
 
   private static void logStartupFailure(VariantJob job, RuntimeException failure) {

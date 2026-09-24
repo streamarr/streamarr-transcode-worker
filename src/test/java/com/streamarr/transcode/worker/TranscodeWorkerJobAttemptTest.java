@@ -15,6 +15,7 @@ import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest.EventCase;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
 import build.buf.gen.streamarr.transcode.v1.SegmentContentType;
+import build.buf.gen.streamarr.transcode.v1.TranscodeMode;
 import build.buf.gen.streamarr.transcode.v1.VariantJob;
 import com.streamarr.transcode.engine.FfmpegRecordings.Recording;
 import com.streamarr.transcode.fakes.ScriptedProcess;
@@ -30,6 +31,7 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.DoubleStream;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -38,6 +40,9 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 @Tag("UnitTest")
@@ -199,6 +204,60 @@ class TranscodeWorkerJobAttemptTest {
       assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
           .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
       assertThat(launcher.hasLaunchedAny()).isFalse();
+    }
+  }
+
+  @ParameterizedTest(name = "{0} at {1} fps")
+  @MethodSource("videoEncodingsWithoutAUsableFrameRate")
+  @DisplayName(
+      "Should refuse the job as an invalid specification when it encodes video without a usable"
+          + " frame rate")
+  void shouldRefuseTheJobAsAnInvalidSpecificationWhenItEncodesVideoWithoutAUsableFrameRate(
+      TranscodeMode mode, double framerate) throws Exception {
+    var launcher = ScriptedProcessLauncher.writing(WHOLE_RUN);
+    var job = variantJobBuilder();
+    job.getDecisionBuilder().setMode(mode);
+    job.getExecutionBuilder().setFramerate(framerate);
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
+      assertThat(launcher.hasLaunchedAny()).isFalse();
+    }
+  }
+
+  static Stream<Arguments> videoEncodingsWithoutAUsableFrameRate() {
+    return Stream.of(
+            TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE,
+            TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE)
+        .flatMap(
+            mode ->
+                DoubleStream.of(0, -24, Double.NaN, Double.POSITIVE_INFINITY)
+                    .mapToObj(framerate -> Arguments.of(mode, framerate)));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"TRANSCODE_MODE_REMUX", "TRANSCODE_MODE_AUDIO_TRANSCODE"})
+  @DisplayName("Should run the job when it copies the video without a probed frame rate")
+  void shouldRunTheJobWhenItCopiesTheVideoWithoutAProbedFrameRate(TranscodeMode mode)
+      throws Exception {
+    var job = variantJobBuilder();
+    job.getDecisionBuilder().setMode(mode);
+    job.getExecutionBuilder().setFramerate(0);
+
+    try (var worker = worker(ScriptedProcessLauncher.writing(WHOLE_RUN))) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_COMPLETED);
     }
   }
 
