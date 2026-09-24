@@ -144,7 +144,7 @@ read is a check-then-act race. Check and act inside one synchronized section, as
 - Media sources arrive as a namespace id and relative key. `WorkerMediaSourceResolver` resolves them under the configured source root and rejects anything that escapes it, including through symlinks. Never pass a server-supplied path to a process unresolved
 - Settings are read once at startup by `TranscodeWorkerSettings.fromEnvironment`, which fails fast on a missing or malformed value. FFmpeg and ffprobe are validated before the worker registers, so a worker never advertises a capability it cannot run
 - The Actuator port serves orchestrator health checks only. The server never dials it, and readiness (`workerSession`) requires an accepted session — a fully occupied worker remains ready
-- ArchUnit is on the test classpath, but no `ArchitectureTest` exists yet — these rules are upheld by review until one does
+- `ArchitectureTest` (ArchUnit) enforces the Spring rule; the other rules are upheld by review until it covers them
 
 ## Domain Language
 - The shared glossary is [`CONTEXT.md`](https://github.com/streamarr/streamarr-adr/blob/main/CONTEXT.md) in the canonical

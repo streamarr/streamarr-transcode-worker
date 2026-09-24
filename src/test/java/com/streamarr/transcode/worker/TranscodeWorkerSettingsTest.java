@@ -12,6 +12,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 @Tag("UnitTest")
@@ -177,12 +178,26 @@ class TranscodeWorkerSettingsTest {
         "TRANSCODE_WORKER_FRAGMENTATION_TARGET must be at least 1 microsecond");
   }
 
-  @Test
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({"1500us, PT0.0015S", "250ms, PT0.25S", "2s, PT2S", "1m, PT1M", "1h, PT1H"})
+  @DisplayName("Should read the fragmentation target in its unit when loading settings")
+  void shouldReadTheFragmentationTargetInItsUnitWhenLoadingSettings(
+      String target, Duration expected) {
+    var environment = new HashMap<>(requiredEnvironment());
+    environment.put("TRANSCODE_WORKER_FRAGMENTATION_TARGET", target);
+
+    var settings = TranscodeWorkerSettings.fromEnvironment(environment);
+
+    assertThat(settings.fragmentationTarget()).isEqualTo(expected);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"soon", "1000", "1.5s", "PT1S", "1 s", "99999999999999999999s"})
   @DisplayName("Should explain a fragmentation target that is not a duration when loading settings")
-  void shouldExplainAFragmentationTargetThatIsNotADurationWhenLoadingSettings() {
+  void shouldExplainAFragmentationTargetThatIsNotADurationWhenLoadingSettings(String target) {
     assertInvalidSetting(
         "TRANSCODE_WORKER_FRAGMENTATION_TARGET",
-        "soon",
+        target,
         "TRANSCODE_WORKER_FRAGMENTATION_TARGET must be a duration such as 1s or 500ms");
   }
 

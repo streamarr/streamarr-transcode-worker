@@ -5,8 +5,8 @@ import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import lombok.Builder;
-import org.springframework.boot.convert.DurationStyle;
 
 @Builder
 record TranscodeWorkerSettings(
@@ -19,6 +19,15 @@ record TranscodeWorkerSettings(
 
   private static final String PREFIX = "TRANSCODE_WORKER_";
   private static final String DEFAULT_FRAGMENTATION_TARGET = "1s";
+  private static final Pattern DURATION = Pattern.compile("(-?\\d+)(ns|us|ms|s|m|h)");
+  private static final Map<String, ChronoUnit> DURATION_UNITS =
+      Map.of(
+          "ns", ChronoUnit.NANOS,
+          "us", ChronoUnit.MICROS,
+          "ms", ChronoUnit.MILLIS,
+          "s", ChronoUnit.SECONDS,
+          "m", ChronoUnit.MINUTES,
+          "h", ChronoUnit.HOURS);
 
   static TranscodeWorkerSettings fromEnvironment(Map<String, String> environment) {
     var sourceNamespaceId = uuid(environment, PREFIX + "SOURCE_NAMESPACE_ID");
@@ -72,16 +81,27 @@ record TranscodeWorkerSettings(
     if (!target.isPositive()) {
       throw new IllegalArgumentException(key + " must be at least 1 microsecond");
     }
+
     return target;
   }
 
+  // A whole number of one unit, from nanoseconds to hours, such as 1s or 500ms.
   private static Duration duration(
       Map<String, String> environment, String key, String defaultValue) {
-    try {
-      return DurationStyle.detectAndParse(optional(environment, key, defaultValue));
-    } catch (IllegalArgumentException e) {
-      throw new IllegalArgumentException(key + " must be a duration such as 1s or 500ms", e);
+    var matcher = DURATION.matcher(optional(environment, key, defaultValue));
+    if (!matcher.matches()) {
+      throw invalidDuration(key);
     }
+
+    try {
+      return Duration.of(Long.parseLong(matcher.group(1)), DURATION_UNITS.get(matcher.group(2)));
+    } catch (NumberFormatException | ArithmeticException _) {
+      throw invalidDuration(key);
+    }
+  }
+
+  private static IllegalArgumentException invalidDuration(String key) {
+    return new IllegalArgumentException(key + " must be a duration such as 1s or 500ms");
   }
 
   private static int positiveInteger(

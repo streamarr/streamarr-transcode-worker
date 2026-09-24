@@ -51,7 +51,7 @@ Settings are read from the environment at startup. The three variables in the ex
 | `TRANSCODE_WORKER_SLOTS` | `1` | Number of execution slots advertised to the server |
 | `TRANSCODE_WORKER_FFMPEG_PATH` | `ffmpeg` | FFmpeg executable |
 | `TRANSCODE_WORKER_FFPROBE_PATH` | `ffprobe` | ffprobe executable |
-| `TRANSCODE_WORKER_FRAGMENTATION_TARGET` | `1s` | Fragmentation target: the media duration after which FFmpeg starts a new fragment at the next packet, such as `1s` or `500ms`. Keep it well below the segment period |
+| `TRANSCODE_WORKER_FRAGMENTATION_TARGET` | `1s` | Fragmentation target: the media duration after which FFmpeg starts a new fragment at the next packet: a whole number with a unit from `ns` to `h`, such as `1s` or `500ms`. Keep it well below the segment period |
 | `SERVER_PORT` | `9091` | HTTP port for health checks |
 
 ### Filename Locale
