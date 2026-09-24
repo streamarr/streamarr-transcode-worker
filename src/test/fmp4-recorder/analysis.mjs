@@ -438,15 +438,11 @@ function hlsComparisonViolations(fixture) {
     [
       ...(comparison.agrees === comparison.expectedToAgree
         ? []
-        : [`agrees=${pythonBoolean(comparison.agrees)}, expected ${pythonBoolean(comparison.expectedToAgree)}`]),
+        : [`agrees=${comparison.agrees}, expected ${comparison.expectedToAgree}`]),
       ...packetViolations(comparison.frameIdentity),
       ...(comparison.hlsencModel.reproducesHlsCuts ? [] : ['the hlsenc model does not reproduce the HLS cuts']),
     ].map((violation) => `${fixture.name} / ${comparison.hlsRun}: ${violation}`),
   );
-}
-
-function pythonBoolean(value) {
-  return value ? 'True' : 'False';
 }
 
 function recordingViolations(fixture) {

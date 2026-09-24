@@ -356,7 +356,7 @@ describe('violated claims', () => {
     };
 
     assert.deepEqual(violatedClaims(expected), [
-      'f / r: agrees=False, expected True',
+      'f / r: agrees=false, expected true',
       'f / r: 1 of 3 video packets differ from the pipe recording, whose video arguments it shares',
       'f / r: the hlsenc model does not reproduce the HLS cuts',
       "f: a recorded keyframe is not the source's own keyframe",
