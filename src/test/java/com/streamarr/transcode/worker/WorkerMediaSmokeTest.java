@@ -8,16 +8,17 @@ import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerB
 import static org.assertj.core.api.Assertions.assertThat;
 
 import build.buf.gen.streamarr.transcode.v1.AudioMode;
-import build.buf.gen.streamarr.transcode.v1.ContainerFormat;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptCompleted;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
+import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
 import build.buf.gen.streamarr.transcode.v1.TranscodeMode;
 import build.buf.gen.streamarr.transcode.v1.TranscodeWorkerServiceGrpc;
 import build.buf.gen.streamarr.transcode.v1.UploadSegmentRequest;
 import build.buf.gen.streamarr.transcode.v1.UploadSegmentResponse;
+import build.buf.gen.streamarr.transcode.v1.VariantJob;
 import build.buf.gen.streamarr.transcode.v1.WorkerRegistration;
 import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
 import com.streamarr.transcode.engine.FfmpegCommandBuilder;
@@ -33,21 +34,38 @@ import java.net.InetSocketAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.IntStream;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 @Tag("SmokeTest")
 @DisplayName("Worker Media Smoke Tests")
 class WorkerMediaSmokeTest {
+
+  /** The 10 s fixture at the default 6 s period: the server advertises segments 0 and 1. */
+  private static final int FIXTURE_SEGMENT_COUNT = 2;
+
+  /** Media time of the long source; at a 1 s period it spans segments 0 to 1002. */
+  private static final int LONG_SOURCE_SECONDS = 1003;
+
+  private static final Duration JOB_LIMIT = Duration.ofMinutes(5);
+
+  @TempDir static Path longSources;
+
+  private static Path longSource;
 
   @TempDir Path root;
 
@@ -113,52 +131,58 @@ class WorkerMediaSmokeTest {
   @EnumSource(
       value = TranscodeMode.class,
       names = {"TRANSCODE_MODE_REMUX", "TRANSCODE_MODE_FULL_TRANSCODE"})
-  @DisplayName("Should upload decodable segments when a worker executes a real media job")
-  void shouldUploadDecodableSegmentsWhenAWorkerExecutesARealMediaJob(TranscodeMode mode)
+  @DisplayName(
+      "Should upload every advertised segment through the pipe when a worker executes a real"
+          + " media job")
+  void shouldUploadEveryAdvertisedSegmentThroughThePipeWhenAWorkerExecutesARealMediaJob(
+      TranscodeMode mode) throws Exception {
+    copyMedia();
+    var job = variantJobBuilder();
+    job.getDecisionBuilder().setMode(mode);
+    job.getVariantBuilder().setWidth(160).setHeight(90).setBitrateBitsPerSecond(500_000);
+
+    var uploads = execute(engine(realCapabilities()), root, job.build());
+
+    assertThat(uploads.names()).containsExactlyElementsOf(uploadNames(FIXTURE_SEGMENT_COUNT));
+    var media = playable(uploads.contentOf(uploads.names()));
+    assertDecodes(media);
+    assertThat(video(media))
+        .satisfies(
+            video -> {
+              assertThat(video.getCodec()).isEqualTo("h264");
+              var expectedHeight = mode == TranscodeMode.TRANSCODE_MODE_REMUX ? 180 : 90;
+              assertThat(video.getHeight()).isEqualTo(expectedHeight);
+              assertThat(video.getWidth()).isEqualTo(expectedHeight * 16 / 9);
+            });
+  }
+
+  @Test
+  @DisplayName(
+      "Should upload every advertised segment when a worker copies an MPEG-TS source with AAC"
+          + " audio")
+  void shouldUploadEveryAdvertisedSegmentWhenAWorkerCopiesAnMpegTsSourceWithAacAudio()
       throws Exception {
     copyMedia();
-    var capabilities =
-        new TranscodeCapabilityService("ffmpeg", command -> new ProcessBuilder(command).start());
-    capabilities.detectCapabilities();
-    assertThat(capabilities.isFfmpegAvailable()).isTrue();
-    var engine =
-        new FfmpegTranscodeEngine(
-            new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)), capabilities);
-    try (var controlPlane = new MediaControlPlane();
-        var worker = workerBuilder(root).engine(engine).build()) {
-      worker.start("127.0.0.1", controlPlane.port());
-      var job = variantJobBuilder();
-      job.getDecisionBuilder().setMode(mode);
-      job.getVariantBuilder().setWidth(160).setHeight(90).setBitrateBitsPerSecond(500_000);
-      var request = job.build();
-      var registeredWorker = controlPlane.registration.get(5, TimeUnit.SECONDS).getWorker();
-      controlPlane.responses.onNext(
-          EstablishWorkerSessionResponse.newBuilder()
-              .setStartVariant(
-                  StartVariantCommand.newBuilder().setTarget(registeredWorker).setJob(request))
-              .build());
+    runFfmpeg(
+        List.of("-i", root.resolve("movie.mkv").toString(), "-c", "copy", "-f", "mpegts"),
+        root.resolve("movie.ts"));
+    var job = variantJobBuilder();
+    job.getSourceBuilder().setRelativeKey("movie.ts");
+    job.getDecisionBuilder()
+        .setMode(TranscodeMode.TRANSCODE_MODE_REMUX)
+        .getAudioBuilder()
+        .setMode(AudioMode.AUDIO_MODE_COPY)
+        .setCodec("aac");
 
-      assertThat(controlPlane.completed.get(30, TimeUnit.SECONDS).getJobAttemptId())
-          .isEqualTo(request.getJobAttemptId());
-      assertThat(controlPlane.segments).containsKeys("init.mp4", "segment0.m4s");
-      var segment = root.resolve("uploaded.mp4");
-      var uploaded = new ByteArrayOutputStream();
-      uploaded.writeBytes(controlPlane.segments.get("init.mp4"));
-      uploaded.writeBytes(controlPlane.segments.get("segment0.m4s"));
-      Files.write(segment, uploaded.toByteArray());
-      var media =
-          FfprobeExecutor.forBinary(Path.of("ffprobe")).probe(segment, requestBuilder().build());
-      assertThat(media.getMedia().getStreamsList())
-          .filteredOn(stream -> "video".equals(stream.getCodecType()))
-          .singleElement()
-          .satisfies(
-              video -> {
-                assertThat(video.getCodec()).isEqualTo("h264");
-                var expectedHeight = mode == TranscodeMode.TRANSCODE_MODE_REMUX ? 180 : 90;
-                assertThat(video.getHeight()).isEqualTo(expectedHeight);
-                assertThat(video.getWidth()).isEqualTo(expectedHeight * 16 / 9);
-              });
-    }
+    var uploads = execute(engine(realCapabilities()), root, job.build());
+
+    assertThat(uploads.names()).containsExactlyElementsOf(uploadNames(FIXTURE_SEGMENT_COUNT));
+    var media = playable(uploads.contentOf(uploads.names()));
+    assertDecodes(media);
+    assertThat(streams(media))
+        .filteredOn(stream -> "audio".equals(stream.getCodecType()))
+        .singleElement()
+        .satisfies(audio -> assertThat(audio.getCodec()).isEqualTo("aac"));
   }
 
   @Test
@@ -166,79 +190,192 @@ class WorkerMediaSmokeTest {
       "Should upload decodable AV1 within the bitrate budget when transcoding an H264 file")
   void shouldUploadDecodableAv1WithinTheBitrateBudgetWhenTranscodingAnH264File() throws Exception {
     copyMedia();
-    var capabilities =
-        new TranscodeCapabilityService("ffmpeg", command -> new ProcessBuilder(command).start());
-    capabilities.detectCapabilities();
-    var engine =
-        new FfmpegTranscodeEngine(
-            new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)), capabilities);
+    var job = variantJobBuilder();
+    job.getDecisionBuilder()
+        .setMode(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE)
+        .setVideoCodecFamily("av1")
+        .getAudioBuilder()
+        .setMode(AudioMode.AUDIO_MODE_TRANSCODE)
+        .setCodec("aac")
+        .setChannels(1)
+        .setBitrateBitsPerSecond(64_000);
+    job.getVariantBuilder().setWidth(320).setHeight(180).setBitrateBitsPerSecond(32_000);
+
+    var uploads = execute(engine(realCapabilities()), root, job.build());
+
+    assertThat(uploads.names()).containsExactlyElementsOf(uploadNames(FIXTURE_SEGMENT_COUNT));
+    // Six- and four-second segments at 32 kbps video + 64 kbps audio, with 20% HLS headroom.
+    assertThat(uploads.segments().get("segment0.m4s")).hasSizeLessThanOrEqualTo(86_400);
+    assertThat(uploads.segments().get("segment1.m4s")).hasSizeLessThanOrEqualTo(57_600);
+    var media = playable(uploads.contentOf(uploads.names()));
+    assertDecodes(media);
+    assertThat(video(media))
+        .satisfies(
+            video -> {
+              assertThat(video.getCodec()).isEqualTo("av1");
+              assertThat(video.getWidth()).isEqualTo(320);
+              assertThat(video.getHeight()).isEqualTo(180);
+            });
+    assertThat(streams(media))
+        .filteredOn(stream -> "audio".equals(stream.getCodecType()))
+        .singleElement()
+        .satisfies(
+            audio -> {
+              assertThat(audio.getCodec()).isEqualTo("aac");
+              assertThat(audio.getChannels()).isEqualTo(1);
+            });
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"h264", "hevc", "av1"})
+  @DisplayName(
+      "Should upload more than a thousand segments without skipping an interval when a software"
+          + " encoder runs a long job")
+  void
+      shouldUploadMoreThanAThousandSegmentsWithoutSkippingAnIntervalWhenASoftwareEncoderRunsALongJob(
+          String codecFamily) throws Exception {
+    var source = longSource();
+    var job = variantJobBuilder();
+    job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
+    job.getDecisionBuilder()
+        .setMode(TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE)
+        .setVideoCodecFamily(codecFamily)
+        .getAudioBuilder()
+        .setMode(AudioMode.AUDIO_MODE_COPY)
+        .setCodec("aac");
+    job.getVariantBuilder().setWidth(64).setHeight(36).setBitrateBitsPerSecond(20_000);
+    job.getExecutionBuilder().setTargetSegmentDurationSeconds(1).setFramerate(24000.0 / 1001);
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(uploads.names()).hasSizeGreaterThan(1001);
+    assertThat(uploads.names()).containsExactlyElementsOf(uploadNames(uploads.names().size() - 1));
+    var start = playable(uploads.contentOf(List.of("init.mp4", "segment0.m4s")));
+    assertThat(video(start).getCodec()).isEqualTo(codecFamily);
+  }
+
+  private MediaUploads execute(FfmpegTranscodeEngine engine, Path sourceRoot, VariantJob job)
+      throws Exception {
     try (var controlPlane = new MediaControlPlane();
-        var worker = workerBuilder(root).engine(engine).build()) {
+        var worker = workerBuilder(sourceRoot).engine(engine).build()) {
       worker.start("127.0.0.1", controlPlane.port());
-      var job = variantJobBuilder();
-      job.getDecisionBuilder()
-          .setMode(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE)
-          .setVideoCodecFamily("av1")
-          .setContainer(ContainerFormat.CONTAINER_FORMAT_FMP4)
-          .getAudioBuilder()
-          .setMode(AudioMode.AUDIO_MODE_TRANSCODE)
-          .setCodec("aac")
-          .setChannels(1)
-          .setBitrateBitsPerSecond(64_000);
-      job.getVariantBuilder().setWidth(320).setHeight(180).setBitrateBitsPerSecond(32_000);
-      var request = job.build();
       var registeredWorker = controlPlane.registration.get(5, TimeUnit.SECONDS).getWorker();
       controlPlane.responses.onNext(
           EstablishWorkerSessionResponse.newBuilder()
               .setStartVariant(
-                  StartVariantCommand.newBuilder().setTarget(registeredWorker).setJob(request))
+                  StartVariantCommand.newBuilder().setTarget(registeredWorker).setJob(job))
               .build());
 
-      assertThat(controlPlane.completed.get(30, TimeUnit.SECONDS).getJobAttemptId())
-          .isEqualTo(request.getJobAttemptId());
-      assertThat(controlPlane.segments).containsKeys("init.mp4", "segment0.m4s", "segment1.m4s");
-      // Six- and four-second segments at 32 kbps video + 64 kbps audio, with 20% HLS headroom.
-      assertThat(controlPlane.segments.get("segment0.m4s")).hasSizeLessThanOrEqualTo(86_400);
-      assertThat(controlPlane.segments.get("segment1.m4s")).hasSizeLessThanOrEqualTo(57_600);
-      var uploaded = new ByteArrayOutputStream();
-      uploaded.writeBytes(controlPlane.segments.get("init.mp4"));
-      uploaded.writeBytes(controlPlane.segments.get("segment0.m4s"));
-      uploaded.writeBytes(controlPlane.segments.get("segment1.m4s"));
-      var segment = root.resolve("uploaded.mp4");
-      Files.write(segment, uploaded.toByteArray());
-      var result =
-          FfprobeExecutor.forBinary(Path.of("ffprobe")).probe(segment, requestBuilder().build());
-      assertThat(result.getMedia().getStreamsList())
-          .filteredOn(stream -> "video".equals(stream.getCodecType()))
-          .singleElement()
-          .satisfies(
-              video -> {
-                assertThat(video.getCodec()).isEqualTo("av1");
-                assertThat(video.getWidth()).isEqualTo(320);
-                assertThat(video.getHeight()).isEqualTo(180);
-              });
-      assertThat(result.getMedia().getStreamsList())
-          .filteredOn(stream -> "audio".equals(stream.getCodecType()))
-          .singleElement()
-          .satisfies(
-              audio -> {
-                assertThat(audio.getCodec()).isEqualTo("aac");
-                assertThat(audio.getChannels()).isEqualTo(1);
-              });
-      var output = root.resolve("decoded.log");
-      var decode =
-          new ProcessBuilder(
-                  "ffmpeg", "-v", "error", "-xerror", "-i", segment.toString(), "-f", "null", "-")
-              .redirectErrorStream(true)
-              .redirectOutput(output.toFile())
-              .start();
-      try {
-        assertThat(decode.waitFor(30, TimeUnit.SECONDS)).as("AV1 decode completed").isTrue();
-        assertThat(decode.exitValue()).as(Files.readString(output)).isZero();
-      } finally {
-        decode.destroyForcibly();
-      }
+      assertThat(controlPlane.completed.get(JOB_LIMIT.toSeconds(), TimeUnit.SECONDS))
+          .extracting(JobAttemptCompleted::getJobAttemptId)
+          .isEqualTo(job.getJobAttemptId());
+      return new MediaUploads(List.copyOf(controlPlane.names), Map.copyOf(controlPlane.segments));
     }
+  }
+
+  private static List<String> uploadNames(int mediaSegmentCount) {
+    return Stream.concat(
+            Stream.of("init.mp4"),
+            IntStream.range(0, mediaSegmentCount).mapToObj(number -> "segment" + number + ".m4s"))
+        .toList();
+  }
+
+  private static FfmpegTranscodeEngine engine(TranscodeCapabilityService capabilities) {
+    capabilities.detectCapabilities();
+    assertThat(capabilities.isFfmpegAvailable()).as(capabilities.getUnavailableReason()).isTrue();
+    return new FfmpegTranscodeEngine(
+        new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)), capabilities);
+  }
+
+  private static TranscodeCapabilityService realCapabilities() {
+    return new TranscodeCapabilityService("ffmpeg", command -> new ProcessBuilder(command).start());
+  }
+
+  /** Lists no hardware encoder, so that each codec family runs its software encoder. */
+  private static TranscodeCapabilityService softwareCapabilities() {
+    return new TranscodeCapabilityService(
+        "ffmpeg",
+        command -> {
+          if (List.of(command).contains("-encoders")) {
+            return new ProcessBuilder("true").start();
+          }
+
+          return new ProcessBuilder(command).start();
+        });
+  }
+
+  /** A tiny H.264 and AAC source for more than a thousand 1 s segments, recorded once. */
+  private static synchronized Path longSource() throws Exception {
+    if (longSource == null) {
+      var source = longSources.resolve("long.mp4");
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24000/1001",
+              "-f",
+              "lavfi",
+              "-i",
+              "anullsrc=channel_layout=mono:sample_rate=48000",
+              "-t",
+              String.valueOf(LONG_SOURCE_SECONDS),
+              "-c:v",
+              "libx264",
+              "-preset",
+              "ultrafast",
+              "-c:a",
+              "aac",
+              "-b:a",
+              "16k"),
+          source);
+      longSource = source;
+    }
+
+    return longSource;
+  }
+
+  private static void runFfmpeg(List<String> arguments, Path output) throws Exception {
+    var command =
+        Stream.of(
+                List.of("ffmpeg", "-nostdin", "-v", "error", "-y"),
+                arguments,
+                List.of(output.toString()))
+            .flatMap(List::stream)
+            .toList();
+    var log = Files.createTempFile(longSources, "ffmpeg", ".log");
+    var process =
+        new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(log.toFile()).start();
+    try {
+      assertThat(process.waitFor(2, TimeUnit.MINUTES)).as("FFmpeg finished").isTrue();
+      assertThat(process.exitValue()).as(Files.readString(log)).isZero();
+    } finally {
+      process.destroyForcibly();
+    }
+  }
+
+  private Path playable(byte[] content) throws Exception {
+    var media = Files.createTempFile(root, "uploaded", ".mp4");
+    Files.write(media, content);
+    return media;
+  }
+
+  private static void assertDecodes(Path media) throws Exception {
+    runFfmpeg(List.of("-xerror", "-i", media.toString(), "-f", "null"), Path.of("-"));
+  }
+
+  private static List<ProbeStreamInfo> streams(Path media) throws Exception {
+    return FfprobeExecutor.forBinary(Path.of("ffprobe"))
+        .probe(media, requestBuilder().build())
+        .getMedia()
+        .getStreamsList();
+  }
+
+  private static ProbeStreamInfo video(Path media) throws Exception {
+    var videos =
+        streams(media).stream().filter(stream -> "video".equals(stream.getCodecType())).toList();
+    assertThat(videos).hasSize(1);
+    return videos.getFirst();
   }
 
   private void copyMedia() throws Exception {
@@ -247,12 +384,23 @@ class WorkerMediaSmokeTest {
     Files.copy(Path.of(source.toURI()), root.resolve("movie.mkv"));
   }
 
+  /** What the control plane accepted, in upload order. */
+  private record MediaUploads(List<String> names, Map<String, byte[]> segments) {
+
+    private byte[] contentOf(List<String> uploadNames) {
+      var content = new ByteArrayOutputStream();
+      uploadNames.forEach(name -> content.writeBytes(segments.get(name)));
+      return content.toByteArray();
+    }
+  }
+
   private static final class MediaControlPlane
       extends TranscodeWorkerServiceGrpc.TranscodeWorkerServiceImplBase implements AutoCloseable {
 
     private final CompletableFuture<WorkerRegistration> registration = new CompletableFuture<>();
     private final CompletableFuture<JobAttemptCompleted> completed = new CompletableFuture<>();
     private final Map<String, byte[]> segments = new ConcurrentHashMap<>();
+    private final List<String> names = new CopyOnWriteArrayList<>();
     private final Server server;
     private StreamObserver<EstablishWorkerSessionResponse> responses;
 
@@ -331,6 +479,7 @@ class WorkerMediaSmokeTest {
         @Override
         public void onCompleted() {
           segments.put(name, content.toByteArray());
+          names.add(name);
           responseObserver.onNext(
               UploadSegmentResponse.newBuilder().setAcceptedLengthBytes(content.size()).build());
           responseObserver.onCompleted();
