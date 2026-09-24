@@ -35,6 +35,8 @@ import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 @Tag("UnitTest")
 @DisplayName("Transcode Worker Job Attempt Tests")
@@ -120,6 +122,28 @@ class TranscodeWorkerJobAttemptTest {
       awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_COMPLETED);
       assertThat(connection.uploadMessagesSentWhileNotReady()).isZero();
       assertThat(connection.uploadMessageCount()).isEqualTo(expectedMessages);
+    }
+  }
+
+  @ParameterizedTest(name = "container value {0}")
+  @ValueSource(ints = {0, 1, Integer.MAX_VALUE})
+  @DisplayName(
+      "Should refuse the job as an invalid specification when it asks for another container")
+  void shouldRefuseTheJobAsAnInvalidSpecificationWhenItAsksForAnotherContainer(int container)
+      throws Exception {
+    var launcher = ScriptedProcessLauncher.writing(WHOLE_RUN);
+    var job = variantJobBuilder();
+    job.getDecisionBuilder().setContainerValue(container);
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
+      assertThat(launcher.hasLaunchedAny()).isFalse();
     }
   }
 

@@ -4,6 +4,7 @@ import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
 
 import build.buf.gen.streamarr.transcode.v1.CancelProbeCommand;
+import build.buf.gen.streamarr.transcode.v1.ContainerFormat;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptCompleted;
@@ -187,7 +188,7 @@ public final class TranscodeWorker implements AutoCloseable {
   /** Returns a producer that started without becoming active, which the caller must stop. */
   private synchronized Optional<Producer> startAttempt(StartVariantCommand command) {
     var job = command.getJob();
-    if (!command.getTarget().equals(identity())) {
+    if (!isRunnableHere(command)) {
       reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
       return Optional.empty();
     }
@@ -213,6 +214,12 @@ public final class TranscodeWorker implements AutoCloseable {
 
     producer.outcome().thenAccept(outcome -> settleAttempt(job, producer, outcome));
     return Optional.empty();
+  }
+
+  /** Addressed to this worker boot and asking for the only container the worker delivers. */
+  private boolean isRunnableHere(StartVariantCommand command) {
+    return command.getTarget().equals(identity())
+        && command.getJob().getDecision().getContainer() == ContainerFormat.CONTAINER_FORMAT_FMP4;
   }
 
   private static void logStartupFailure(VariantJob job, RuntimeException failure) {
