@@ -257,7 +257,7 @@ public final class Producer {
       lock.notifyAll();
     }
 
-    reader.abandon();
+    reader.cancel();
     watchdog.end();
     memoryBudget.release(readerReleasedBytes);
     return true;
@@ -465,7 +465,7 @@ public final class Producer {
       return endingOf(e);
     } catch (IOException e) {
       return new Abandoned(new Failed(ProducerFailure.OUTPUT_UNREADABLE, e.toString()));
-    } catch (FragmentedMp4Reader.Abandoned _) {
+    } catch (FragmentedMp4Reader.ReadingCancelled _) {
       return new Decided();
     }
   }

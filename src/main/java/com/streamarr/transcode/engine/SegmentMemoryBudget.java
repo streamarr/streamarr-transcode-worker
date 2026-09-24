@@ -38,13 +38,13 @@ public final class SegmentMemoryBudget {
     return true;
   }
 
-  // Waits until the bytes fit and reserves them; false once the waiter abandons them first. A
-  // producer that abandons its reservation wakes the budget through release. Nothing interrupts a
+  // Waits until the bytes fit and reserves them; false once the reservation is withdrawn first. A
+  // producer that withdraws its reservation wakes the budget through release. Nothing interrupts a
   // producer's reader, and its caller learns of an interrupt once the wait ends.
-  synchronized boolean tryReserve(long bytes, BooleanSupplier abandoned) {
+  synchronized boolean tryReserve(long bytes, BooleanSupplier withdrawn) {
     var interrupted = false;
     var reserved = tryReserveAtOnce(bytes);
-    while (!reserved && !abandoned.getAsBoolean()) {
+    while (!reserved && !withdrawn.getAsBoolean()) {
       interrupted |= !tryWait();
       reserved = tryReserveAtOnce(bytes);
     }

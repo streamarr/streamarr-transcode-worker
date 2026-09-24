@@ -33,7 +33,7 @@ final class FragmentedMp4Reader {
    *     rejects any box that would exceed it before allocating memory for that box
    * @param admission admits each box's bytes after the reader has checked the box against the cap
    *     and before it allocates memory for the box; when it refuses a box, the reader ends reading
-   *     with {@link Abandoned}
+   *     with {@link ReadingCancelled}
    */
   FragmentedMp4Reader(
       @NonNull InputStream stream, long maximumSegmentBytes, @NonNull BoxAdmission admission) {
@@ -52,11 +52,11 @@ final class FragmentedMp4Reader {
 
   /**
    * Drops the boxes of the unit being read, from any thread, and ends reading with {@link
-   * Abandoned} instead of returning that unit. A read that blocks on the stream meanwhile ends
-   * reading once it returns.
+   * ReadingCancelled} instead of returning that unit. A read that blocks on the stream meanwhile
+   * ends reading once it returns.
    */
-  void abandon() {
-    unitBoxes.abandon();
+  void cancel() {
+    unitBoxes.cancel();
   }
 
   /**
@@ -64,7 +64,7 @@ final class FragmentedMp4Reader {
    * on a box boundary.
    *
    * @throws FragmentedMp4Exception when the stream cannot be delivered, with the named reason
-   * @throws Abandoned when the admission refused a box or the reader was abandoned
+   * @throws ReadingCancelled when the admission refused a box or reading was cancelled
    */
   Optional<Mp4Unit> next() throws IOException {
     try {
@@ -215,7 +215,7 @@ final class FragmentedMp4Reader {
     }
 
     if (!admission.tryAdmit(header.size())) {
-      throw new Abandoned();
+      throw new ReadingCancelled();
     }
 
     unitBoxes.begin(header, scratch);
@@ -249,28 +249,28 @@ final class FragmentedMp4Reader {
   private record Movie(Optional<VideoTrack> videoTrack, SampleRanges sampleRanges) {}
 
   /**
-   * Ends reading when the admission refuses a box or the reader is abandoned; the reader then holds
+   * Ends reading when the admission refuses a box or reading is cancelled; the reader then holds
    * none of its unit.
    */
-  static final class Abandoned extends RuntimeException {
-    Abandoned() {
+  static final class ReadingCancelled extends RuntimeException {
+    ReadingCancelled() {
       super(null, null, false, false);
     }
   }
 
   // The boxes of the unit being read. The reader holds them only here until the unit is complete,
-  // never in a local variable while it reads from the stream, so abandoning the unit from another
+  // never in a local variable while it reads from the stream, so cancelling reading from another
   // thread drops them even while a read blocks.
   private static final class UnitBoxes {
 
     // Guarded by this monitor.
     private final List<byte[]> boxes = new ArrayList<>();
     private int filledBytes;
-    private boolean abandoned;
+    private boolean cancelled;
 
     // Starts a box with the header bytes at the start of the scratch buffer.
     synchronized void begin(BoxHeader header, byte[] scratch) {
-      requireNotAbandoned();
+      requireNotCancelled();
       var box = new byte[Math.toIntExact(header.size())];
       System.arraycopy(scratch, 0, box, 0, header.length());
       boxes.add(box);
@@ -279,14 +279,14 @@ final class FragmentedMp4Reader {
 
     // Appends the first bytes of the scratch buffer to the box begun last.
     synchronized void append(byte[] scratch, int length) {
-      requireNotAbandoned();
+      requireNotCancelled();
       System.arraycopy(scratch, 0, boxes.getLast(), filledBytes, length);
       filledBytes += length;
     }
 
     // Hands over the unit's boxes in the order they were read.
     synchronized List<byte[]> take() {
-      requireNotAbandoned();
+      requireNotCancelled();
       var taken = List.copyOf(boxes);
       boxes.clear();
       return taken;
@@ -296,15 +296,15 @@ final class FragmentedMp4Reader {
       boxes.clear();
     }
 
-    synchronized void abandon() {
-      abandoned = true;
+    synchronized void cancel() {
+      cancelled = true;
       boxes.clear();
     }
 
     // Holds this monitor.
-    private void requireNotAbandoned() {
-      if (abandoned) {
-        throw new Abandoned();
+    private void requireNotCancelled() {
+      if (cancelled) {
+        throw new ReadingCancelled();
       }
     }
   }

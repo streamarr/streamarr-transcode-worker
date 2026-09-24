@@ -247,15 +247,15 @@ class FragmentedMp4ReaderTest {
     var stream = new ByteArrayInputStream(concat(ftyp(), videoAndAudioMoov()));
     var reader = new FragmentedMp4Reader(stream, Mp4Stream.SEGMENT_CAP, _ -> false);
 
-    assertThatExceptionOfType(FragmentedMp4Reader.Abandoned.class).isThrownBy(reader::next);
+    assertThatExceptionOfType(FragmentedMp4Reader.ReadingCancelled.class).isThrownBy(reader::next);
   }
 
   @ParameterizedTest(name = "{0} bytes after the moof")
   @ValueSource(ints = {0, 100})
   @DisplayName(
-      "Should end reading without returning the fragment when abandoned while the reader waits"
-          + " inside it")
-  void shouldEndReadingWithoutReturningTheFragmentWhenAbandonedWhileTheReaderWaitsInsideIt(
+      "Should end reading without returning the fragment when reading is cancelled while the"
+          + " reader waits inside it")
+  void shouldEndReadingWithoutReturningTheFragmentWhenReadingIsCancelledWhileTheReaderWaitsInsideIt(
       int bytesAfterMoof) throws IOException {
     var initialization = concat(ftyp(), videoAndAudioMoov());
     var moof = videoMoof(0);
@@ -271,13 +271,13 @@ class FragmentedMp4ReaderTest {
       var reading = executor.submit(reader::next);
       await().atMost(Duration.ofSeconds(10)).until(process::hasReachedPause);
 
-      reader.abandon();
+      reader.cancel();
       process.resume();
 
       assertThat(reading)
           .failsWithin(Duration.ofSeconds(10))
           .withThrowableOfType(ExecutionException.class)
-          .withCauseInstanceOf(FragmentedMp4Reader.Abandoned.class);
+          .withCauseInstanceOf(FragmentedMp4Reader.ReadingCancelled.class);
     }
   }
 
