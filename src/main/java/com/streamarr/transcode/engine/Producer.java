@@ -32,8 +32,9 @@ import lombok.extern.slf4j.Slf4j;
  * sink's acceptance and what the reader holds for the next. It admits each box's bytes before it
  * reads them, within its own budget and within the worker's, so when either budget is full, or when
  * a second segment closes while the first still awaits acceptance, the reader stops reading and the
- * pipe holds FFmpeg back. Once the attempt has an outcome, the producer releases what the reader
- * holds at once and the delivery in flight once that delivery returns.
+ * pipe holds FFmpeg back. Once the attempt has an outcome, the producer drops and releases what the
+ * reader holds at once, even while the reader waits on the pipe, and the delivery in flight once
+ * that delivery returns.
  *
  * <p>A watchdog fails the attempt when FFmpeg writes nothing for the stall timeout while the reader
  * is reading; waiting for the sink pauses it, and it ends once the reader stops reading. Once the
@@ -57,7 +58,10 @@ public final class Producer {
   private final Process process;
   private final StderrDrainer errorOutput;
   private final FragmentedMp4Reader reader;
+
+  // Guarded by lock, because a decision discards the fragments it holds.
   private final SegmentGrouper grouper;
+
   private final SegmentSink sink;
   private final SegmentMemoryBudget memoryBudget;
   private final Duration gracePeriod;
@@ -237,7 +241,8 @@ public final class Producer {
 
   // Records the attempt's outcome unless another is already recorded; the caller that records it
   // settles it once FFmpeg has exited, or starts the thread that does. The reader admits and
-  // delivers nothing afterwards, so what it holds is released at once.
+  // delivers nothing afterwards, so what it holds is dropped and released at once, even while it
+  // waits on the pipe.
   private boolean tryDecide(AttemptOutcome decided) {
     long readerReleasedBytes;
     synchronized (lock) {
@@ -246,11 +251,13 @@ public final class Producer {
       }
 
       decision = Optional.of(decided);
+      grouper.discardOpenFragments();
       readerReleasedBytes = readerHeldBytes;
       readerHeldBytes = 0;
       lock.notifyAll();
     }
 
+    reader.abandon();
     watchdog.end();
     memoryBudget.release(readerReleasedBytes);
     return true;
@@ -345,7 +352,7 @@ public final class Producer {
     try {
       var ending = readAndDeliver();
       watchdog.end();
-      grouper.discardOpenFragments();
+      discardOpenFragments();
       holdOnlyTheAssemblingSegment();
       conclude(ending);
     } finally {
@@ -413,7 +420,7 @@ public final class Producer {
 
   private void failReaderUnexpectedly(Thread readerThread, Throwable error) {
     log.error("{} failed unexpectedly", readerThread.getName(), error);
-    grouper.discardOpenFragments();
+    discardOpenFragments();
     if (!tryFailWithProcessEnded(unexpected(error))) {
       discardRemainingOutput();
     }
@@ -478,25 +485,54 @@ public final class Producer {
   private Optional<Ending> deliverNextUnit() throws IOException {
     var unit = reader.next();
     if (unit.isEmpty()) {
-      return Optional.of(
-          grouper
-              .finish()
-              .map(ProducedSegment::of)
-              .flatMap(this::handOff)
-              .orElseGet(EndOfOutput::new));
+      return Optional.of(deliverLastSegment());
     }
 
     return deliverClosedSegment(unit.orElseThrow());
   }
 
-  // Empty unless the unit ends reading, by closing a segment whose delivery ends it or by
-  // skipping a segment number.
+  // Empty unless the unit ends reading, by closing a segment whose delivery ends it, by skipping a
+  // segment number, or because the attempt was decided.
   private Optional<Ending> deliverClosedSegment(Mp4Unit unit) {
     return switch (unit) {
       case InitializationSegment initializationSegment ->
           handOff(ProducedSegment.of(initializationSegment));
-      case Fragment fragment -> deliverClosedBy(grouper.accept(checkedForShortSamples(fragment)));
+      case Fragment fragment -> groupAndDeliver(checkedForShortSamples(fragment));
     };
+  }
+
+  // The grouper takes a fragment only while the attempt is undecided, because the decision
+  // discards what the grouper holds.
+  private Optional<Ending> groupAndDeliver(Fragment fragment) {
+    GroupingOutcome grouping;
+    synchronized (lock) {
+      if (decision.isPresent()) {
+        return Optional.of(new Decided());
+      }
+
+      grouping = grouper.accept(fragment);
+    }
+
+    return deliverClosedBy(grouping);
+  }
+
+  private Ending deliverLastSegment() {
+    Optional<MediaSegment> lastSegment;
+    synchronized (lock) {
+      if (decision.isPresent()) {
+        return new Decided();
+      }
+
+      lastSegment = grouper.finish();
+    }
+
+    return lastSegment.map(ProducedSegment::of).flatMap(this::handOff).orElseGet(EndOfOutput::new);
+  }
+
+  private void discardOpenFragments() {
+    synchronized (lock) {
+      grouper.discardOpenFragments();
+    }
   }
 
   // Nothing after a short video sample is delivered, not even the segment it would close.

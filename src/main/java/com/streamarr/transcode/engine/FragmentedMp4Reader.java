@@ -51,11 +51,20 @@ final class FragmentedMp4Reader {
   }
 
   /**
+   * Drops the boxes of the unit being read, from any thread, and ends reading with {@link
+   * Abandoned} instead of returning that unit. A read that blocks on the stream meanwhile ends
+   * reading once it returns.
+   */
+  void abandon() {
+    unitBoxes.abandon();
+  }
+
+  /**
    * Returns the initialization segment first, then each fragment, and empty at a clean end of file
    * on a box boundary.
    *
    * @throws FragmentedMp4Exception when the stream cannot be delivered, with the named reason
-   * @throws Abandoned when the admission refused a box
+   * @throws Abandoned when the admission refused a box or the reader was abandoned
    */
   Optional<Mp4Unit> next() throws IOException {
     try {
@@ -239,7 +248,10 @@ final class FragmentedMp4Reader {
   /** What the initialization segment's {@code moov} declares for reading every fragment. */
   private record Movie(Optional<VideoTrack> videoTrack, SampleRanges sampleRanges) {}
 
-  /** Ends reading when the admission refuses a box; the reader then holds none of its unit. */
+  /**
+   * Ends reading when the admission refuses a box or the reader is abandoned; the reader then holds
+   * none of its unit.
+   */
   static final class Abandoned extends RuntimeException {
     Abandoned() {
       super(null, null, false, false);
@@ -247,14 +259,18 @@ final class FragmentedMp4Reader {
   }
 
   // The boxes of the unit being read. The reader holds them only here until the unit is complete,
-  // never in a local variable while it reads from the stream.
+  // never in a local variable while it reads from the stream, so abandoning the unit from another
+  // thread drops them even while a read blocks.
   private static final class UnitBoxes {
 
+    // Guarded by this monitor.
     private final List<byte[]> boxes = new ArrayList<>();
     private int filledBytes;
+    private boolean abandoned;
 
     // Starts a box with the header bytes at the start of the scratch buffer.
-    void begin(BoxHeader header, byte[] scratch) {
+    synchronized void begin(BoxHeader header, byte[] scratch) {
+      requireNotAbandoned();
       var box = new byte[Math.toIntExact(header.size())];
       System.arraycopy(scratch, 0, box, 0, header.length());
       boxes.add(box);
@@ -262,20 +278,34 @@ final class FragmentedMp4Reader {
     }
 
     // Appends the first bytes of the scratch buffer to the box begun last.
-    void append(byte[] scratch, int length) {
+    synchronized void append(byte[] scratch, int length) {
+      requireNotAbandoned();
       System.arraycopy(scratch, 0, boxes.getLast(), filledBytes, length);
       filledBytes += length;
     }
 
     // Hands over the unit's boxes in the order they were read.
-    List<byte[]> take() {
+    synchronized List<byte[]> take() {
+      requireNotAbandoned();
       var taken = List.copyOf(boxes);
       boxes.clear();
       return taken;
     }
 
-    void clear() {
+    synchronized void clear() {
       boxes.clear();
+    }
+
+    synchronized void abandon() {
+      abandoned = true;
+      boxes.clear();
+    }
+
+    // Holds this monitor.
+    private void requireNotAbandoned() {
+      if (abandoned) {
+        throw new Abandoned();
+      }
     }
   }
 }

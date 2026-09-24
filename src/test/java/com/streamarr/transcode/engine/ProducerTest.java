@@ -17,6 +17,7 @@ import com.streamarr.transcode.engine.RecordingSegmentSink.Accepted;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
 import java.io.IOException;
+import java.lang.management.ManagementFactory;
 import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.Arrays;
@@ -226,6 +227,47 @@ class ProducerTest {
     assertThat(stoppedProcess.isAlive()).isTrue();
     stoppedProcess.exit();
     assertThat(stopped.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Stopped());
+  }
+
+  @Test
+  @DisplayName(
+      "Should free the segment it was assembling at the stop when a hung FFmpeg leaves the reader"
+          + " waiting inside a fragment")
+  void
+      shouldFreeTheSegmentItWasAssemblingAtTheStopWhenAHungFfmpegLeavesTheReaderWaitingInsideAFragment() {
+    // Segment 0's three 5 MiB fragments and the first MiB of the next fragment's mdat, after which
+    // FFmpeg writes nothing more and ignores the quit.
+    var hangOffset =
+        IsoBoxes.ftyp().length
+            + IsoBoxes.videoAndAudioMoov().length
+            + 3 * keyframeFragment(0).length
+            + keyframeMoof(24_000).length
+            + 8
+            + 1024 * 1024;
+    var process =
+        ScriptedProcess.builder()
+            .output(nearlyCappedSegments())
+            .pauseAfter(hangOffset)
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    var heldBeforeReading = liveHeapBytes();
+    var producer = producerOfOneSecondSegments(process).gracePeriod(Duration.ofMinutes(10)).start();
+    awaiting().until(process::hasReachedPause);
+    assertThat(liveHeapBytes())
+        .as("the reader holds three fragments and all of the next fragment's mdat")
+        .isGreaterThan(heldBeforeReading + 18L * 1024 * 1024);
+
+    producer.requestStop();
+
+    await()
+        .atMost(OUTCOME_LIMIT)
+        .pollInterval(Duration.ofMillis(100))
+        .until(() -> liveHeapBytes() <= heldBeforeReading + 2L * 1024 * 1024);
+    assertThat(process.bytesTaken()).isEqualTo(hangOffset);
+    assertThat(process.isAlive()).isTrue();
+    process.resume();
+    process.exit();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Stopped());
   }
 
   @Test
@@ -1283,6 +1325,13 @@ class ProducerTest {
         .during(Duration.ofMillis(200))
         .atMost(OUTCOME_LIMIT)
         .until(() -> process.bytesTaken() == offset);
+  }
+
+  // The heap that live objects occupy once a full collection has freed every unreachable one.
+  private static long liveHeapBytes() {
+    var memory = ManagementFactory.getMemoryMXBean();
+    memory.gc();
+    return memory.getHeapMemoryUsage().getUsed();
   }
 
   private static ConditionFactory awaiting() {
