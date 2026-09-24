@@ -1,8 +1,18 @@
 // Writes ISOBMFF boxes for the recorder's tests.
 
-export const SYNC = 0x02000000;
-export const NON_SYNC = 0x01010000;
+export const SYNC_SAMPLE_FLAGS = 0x02000000;
+export const NON_SYNC_SAMPLE_FLAGS = 0x01010000;
+
+export const TFHD_BASE_DATA_OFFSET = 0x000001;
+export const TFHD_DEFAULT_SAMPLE_FLAGS = 0x000020;
 export const TFHD_DEFAULT_BASE_IS_MOOF = 0x020000;
+export const TRUN_DATA_OFFSET = 0x000001;
+export const TRUN_FIRST_SAMPLE_FLAGS = 0x000004;
+export const TRUN_SAMPLE_DURATION = 0x000100;
+export const TRUN_SAMPLE_SIZE = 0x000200;
+export const TRUN_SAMPLE_FLAGS = 0x000400;
+export const TRUN_SAMPLE_COMPOSITION_TIME_OFFSET = 0x000800;
+const COMPACT_HEADER_BYTES = 8;
 
 export function u32(value) {
   const bytes = Buffer.alloc(4);
@@ -80,8 +90,8 @@ export function moov(...tracks) {
   );
 }
 
-export const VIDEO = { trackId: 1, handler: 'vide', timescale: 24000, defaultFlags: NON_SYNC };
-export const AUDIO = { trackId: 2, handler: 'soun', timescale: 48000, defaultFlags: SYNC };
+export const VIDEO = { trackId: 1, handler: 'vide', timescale: 24000, defaultFlags: NON_SYNC_SAMPLE_FLAGS };
+export const AUDIO = { trackId: 2, handler: 'soun', timescale: 48000, defaultFlags: SYNC_SAMPLE_FLAGS };
 
 /**
  * A trun of samples [{ duration, size, flags, compositionOffset }]; each field is written per sample
@@ -90,8 +100,8 @@ export const AUDIO = { trackId: 2, handler: 'soun', timescale: 48000, defaultFla
 export function trun({ version = 1, samples, dataOffset = null, firstSampleFlags = null }) {
   const first = samples[0] ?? {};
   const fields = ['duration', 'size', 'flags', 'compositionOffset'];
-  const bits = [0x100, 0x200, 0x400, 0x800];
-  let flags = (dataOffset === null ? 0 : 0x1) | (firstSampleFlags === null ? 0 : 0x4);
+  const bits = [TRUN_SAMPLE_DURATION, TRUN_SAMPLE_SIZE, TRUN_SAMPLE_FLAGS, TRUN_SAMPLE_COMPOSITION_TIME_OFFSET];
+  let flags = (dataOffset === null ? 0 : TRUN_DATA_OFFSET) | (firstSampleFlags === null ? 0 : TRUN_FIRST_SAMPLE_FLAGS);
   fields.forEach((field, index) => {
     if (first[field] !== undefined) {
       flags |= bits[index];
@@ -115,7 +125,7 @@ export function traf({ trackId, decodeTime, runs, defaultFlags = null, tfdtVersi
   const tfhd =
     defaultFlags === null
       ? fullBox('tfhd', 0, TFHD_DEFAULT_BASE_IS_MOOF, u32(trackId))
-      : fullBox('tfhd', 0, TFHD_DEFAULT_BASE_IS_MOOF | 0x20, u32(trackId), u32(defaultFlags));
+      : fullBox('tfhd', 0, TFHD_DEFAULT_BASE_IS_MOOF | TFHD_DEFAULT_SAMPLE_FLAGS, u32(trackId), u32(defaultFlags));
   const tfdt = tfdtVersion === 1 ? fullBox('tfdt', 1, 0, u64(decodeTime)) : fullBox('tfdt', 0, 0, u32(decodeTime));
   return box('traf', tfhd, tfdt, ...runs);
 }
@@ -128,6 +138,15 @@ export function mdat(bytes) {
   return box('mdat', Buffer.from(bytes));
 }
 
+/**
+ * The moof a builder writes for the position where the body of the mdat after it starts, when that
+ * mdat has a compact header: pass the moof's stream position for a tfhd base-data-offset, or 0 for
+ * data offsets that count from the moof.
+ */
+export function moofPointingAtItsMdat(moofPosition, moofWithDataAt) {
+  return moofWithDataAt(moofPosition + moofWithDataAt(0).length + COMPACT_HEADER_BYTES);
+}
+
 function runBytes(run) {
   return run.samples.reduce((sum, sample) => sum + (sample.size ?? 0), 0);
 }
@@ -138,25 +157,25 @@ function runBytes(run) {
  * payload option gives its sample bytes; otherwise they are filler.
  */
 export function fragment(...trafs) {
-  const build = (offsets) =>
-    moof(
+  const build = (dataStart) => {
+    let position = dataStart;
+    const offsets = trafs.map((spec) =>
+      spec.runs.map((run) => {
+        const at = position;
+        position += runBytes(run);
+        return at;
+      }),
+    );
+    return moof(
       ...trafs.map((spec, index) =>
         traf({ ...spec, runs: spec.runs.map((run, position) => trun({ ...run, dataOffset: offsets[index][position] })) }),
       ),
     );
-  const dataStart = build(trafs.map((spec) => spec.runs.map(() => 0))).length + 8;
-  let position = dataStart;
-  const offsets = trafs.map((spec) =>
-    spec.runs.map((run) => {
-      const at = position;
-      position += runBytes(run);
-      return at;
-    }),
-  );
+  };
   const payload = trafs.flatMap((spec) =>
     spec.runs.flatMap((run) => run.payload ?? Array.from({ length: runBytes(run) }, (_, index) => index & 0xff)),
   );
-  return Buffer.concat([build(offsets), mdat(payload)]);
+  return Buffer.concat([moofPointingAtItsMdat(0, build), mdat(payload)]);
 }
 
 /** A video fragment of one sample whose sync status is its first-sample flags. */
@@ -164,7 +183,12 @@ export function videoFragment({ decodeTime, sync, compositionOffset = 0, size = 
   return fragment({
     trackId: VIDEO.trackId,
     decodeTime,
-    runs: [{ samples: [{ duration: 1001, size, compositionOffset }], firstSampleFlags: sync ? SYNC : NON_SYNC }],
+    runs: [
+      {
+        samples: [{ duration: 1001, size, compositionOffset }],
+        firstSampleFlags: sync ? SYNC_SAMPLE_FLAGS : NON_SYNC_SAMPLE_FLAGS,
+      },
+    ],
   });
 }
 

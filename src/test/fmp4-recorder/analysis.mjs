@@ -4,7 +4,16 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { Mp4FormatError, readFiles, signed, videoSamples, videoStart } from './fmp4.mjs';
+import {
+  Mp4FormatError,
+  audioTrackOf,
+  firstAudioTraf,
+  readFiles,
+  signed,
+  videoSamples,
+  videoTrackOf,
+  videoTrafOf,
+} from './fmp4.mjs';
 import { groupOnGrid } from './grid.mjs';
 import { Decimal } from './json.mjs';
 import { Rational } from './rational.mjs';
@@ -12,7 +21,7 @@ import { Rational } from './rational.mjs';
 /** The grid model's view of each fragment: its first video sample, when it has one. */
 export function gridFragments(stream) {
   return stream.fragments.map((fragment) => {
-    const traf = videoStart(fragment);
+    const traf = videoTrafOf(fragment);
     if (traf === null) {
       return { video: null };
     }
@@ -35,16 +44,16 @@ export function sha256(bytes) {
  * initialization segment, the media segments and preroll the grid groups it into, and any failure.
  */
 export function recordingFacts(stream, { period, startSequenceNumber }) {
-  const videoTrack = [...stream.tracks.values()].find((track) => track.handler === 'vide');
+  const videoTrack = videoTrackOf(stream);
   const { delivered, preroll, failure } = group(stream, period, startSequenceNumber);
-  const lastVideo = stream.fragments.findLastIndex((fragment) => videoStart(fragment) !== null);
+  const lastVideo = stream.fragments.findLastIndex((fragment) => videoTrafOf(fragment) !== null);
   return {
     videoTrackId: videoTrack.trackId,
     videoTimescale: videoTrack.timescale,
     byteLength: stream.data.length,
     initializationSegment: {
-      byteLength: stream.initByteLength,
-      sha256: sha256(stream.initBytes),
+      byteLength: stream.initializationSegmentByteLength,
+      sha256: sha256(stream.initializationSegmentBytes),
       tracks: [...stream.tracks.values()].map((track) => ({
         trackId: track.trackId,
         handler: track.handler,
@@ -55,8 +64,8 @@ export function recordingFacts(stream, { period, startSequenceNumber }) {
         trexDefaultSampleDuration: track.trexDuration ?? null,
       })),
     },
-    segments: delivered.map((segment) => describe(segment, stream)),
-    discardedPreroll: preroll.map((segment) => describe(segment, stream)),
+    segments: delivered.map((segment) => describeSegment(segment, stream)),
+    discardedPreroll: preroll.map((segment) => describeSegment(segment, stream)),
     failure,
     endsWithAudioOnlyFragments: lastVideo < stream.fragments.length - 1,
     trailingAudioOnlyFragmentCount: stream.fragments.length - 1 - lastVideo,
@@ -66,8 +75,8 @@ export function recordingFacts(stream, { period, startSequenceNumber }) {
 
 /** Whether two recordings' initialization segments are byte-identical, and their digests. */
 export function initializationSegmentPair(label, [firstName, first], [secondName, second]) {
-  const a = first.initBytes;
-  const b = second.initBytes;
+  const a = first.initializationSegmentBytes;
+  const b = second.initializationSegmentBytes;
   return {
     label,
     files: [`${firstName}.fmp4`, `${secondName}.fmp4`],
@@ -77,14 +86,14 @@ export function initializationSegmentPair(label, [firstName, first], [secondName
   };
 }
 
-export function describe(segment, stream) {
+export function describeSegment(segment, stream) {
   const fragments = segment.fragments.map((index) => stream.fragments[index]);
   return {
     number: segment.number,
     firstVideoPresentationTime: segment.firstVideoPresentationTime,
     firstFragmentIndex: segment.fragments[0],
     fragmentCount: fragments.length,
-    syncFirstFragmentCount: fragments.filter((fragment) => videoStart(fragment)?.firstSync === true).length,
+    syncFirstFragmentCount: fragments.filter((fragment) => videoTrafOf(fragment)?.firstSync === true).length,
     byteLength: fragments.reduce((sum, fragment) => sum + fragment.byteLength, 0),
   };
 }
@@ -96,25 +105,26 @@ export function describe(segment, stream) {
 export function sourceStart(probe) {
   const video = probe.streams.find((stream) => stream.codec_type === 'video');
   const [num, den] = video.time_base.split('/').map((part) => BigInt(part));
+  const timeBase = new Rational(num, den);
   const micros = Rational.parseDecimal(probe.format.start_time).times(1_000_000n);
-  const ticks = micros.times(den).dividedBy(num * 1_000_000n).roundHalfEven();
-  return { start: new Rational(ticks * num, den), startMicros: micros.truncate(), video, num, den };
+  const ticks = micros.dividedBy(timeBase.times(1_000_000n)).roundHalfEven();
+  return { start: timeBase.times(ticks), startMicros: micros.truncate(), video, timeBase };
 }
 
-/** Each "pts,flags" line of ffprobe's keyframe listing, as seconds. */
-export function sourceKeyframes(csv, num, den) {
+/** Each "pts,flags" line of ffprobe's keyframe listing, as seconds at the stream's time base. */
+export function sourceKeyframes(csv, timeBase) {
   return csv
     .split('\n')
     .filter((line) => line.trim() !== '')
-    .map((line) => new Rational(BigInt(line.split(',')[0]) * num, den));
+    .map((line) => timeBase.times(BigInt(line.split(',')[0])));
 }
 
 export function loadSource(work, source) {
   const folder = join(work, 'src');
   const probe = JSON.parse(readFileSync(join(folder, `${source}.probe.json`), 'utf8'));
-  const { start, startMicros, video, num, den } = sourceStart(probe);
+  const { start, startMicros, video, timeBase } = sourceStart(probe);
   const csv = readFileSync(join(folder, `${source}.keyframes.csv`), 'utf8');
-  return { start, startMicros, video, keyframes: sourceKeyframes(csv, num, den) };
+  return { start, startMicros, video, keyframes: sourceKeyframes(csv, timeBase) };
 }
 
 /** The SHA-256 of one sample's bytes in the stream that holds it. */
@@ -133,20 +143,20 @@ export function readHls(folder) {
   const playlist = readFileSync(join(folder, 'stream.m3u8'), 'utf8');
   const sequence = Number(/#EXT-X-MEDIA-SEQUENCE:(\d+)/.exec(playlist)[1]);
   const uris = playlist.split(/\r?\n/).filter((line) => line !== '' && !line.startsWith('#'));
-  const init = join(folder, 'init.mp4');
-  const tracks = [...readFiles([init]).tracks.values()];
-  const videoTrack = tracks.find((track) => track.handler === 'vide');
-  const audioTrack = tracks.find((track) => track.handler === 'soun') ?? null;
+  const initializationSegment = join(folder, 'init.mp4');
+  const initialized = readFiles([initializationSegment]);
+  const videoTrack = videoTrackOf(initialized);
+  const audioTrack = audioTrackOf(initialized);
   const edit = videoTrack.edits.map(([, mediaTime]) => mediaTime).find((mediaTime) => mediaTime >= 0n) ?? 0n;
   const samples = [];
   const segments = [];
   let audioFirst = null;
   uris.forEach((uri, offset) => {
-    const stream = readFiles([init, join(folder, uri)]);
-    const video = stream.fragments.map(videoStart).find((traf) => traf !== null);
+    const stream = readFiles([initializationSegment, join(folder, uri)]);
+    const video = stream.fragments.map(videoTrafOf).find((traf) => traf !== null);
     if (audioFirst === null) {
-      const audio = stream.fragments.flatMap((fragment) => fragment.trafs).find((traf) => traf.handler === 'soun');
-      audioFirst = audio === undefined ? null : signed(audio.baseMediaDecodeTime);
+      const audio = firstAudioTraf(stream.fragments);
+      audioFirst = audio === null ? null : signed(audio.baseMediaDecodeTime);
     }
     segments.push({
       number: sequence + offset,
@@ -171,7 +181,7 @@ export function readHls(folder) {
  * when (pts - start_pts) >= hls_time * number in the video time base, and number counts segments.
  * ptsRaw and reference are Rationals in seconds at the video time base.
  */
-export function hlsencCuts(keyframeOrdinals, ptsRaw, reference, period) {
+export function hlsencCuts({ keyframeOrdinals, ptsRaw, reference, period }) {
   const cuts = [0];
   let number = 1;
   let current = ptsRaw[0];
@@ -247,19 +257,19 @@ export function evaluateOracle({ fixture, spec, reference, grouped, source, hls,
   const converted = [];
   let directAgrees = true;
   for (const segment of hls.segments) {
-    const pts = refSamples[segment.ordinal].presentationTime;
-    directAgrees = directAgrees && new Rational(segment.ownPresentation).minus(offsetTicks).equals(pts);
+    const presentationTime = refSamples[segment.ordinal].presentationTime;
+    directAgrees = directAgrees && new Rational(segment.ownPresentation).minus(offsetTicks).equals(presentationTime);
     if (spec.restrict && segment.number < fixture.start) {
       continue;
     }
-    converted.push({ number: segment.number, firstVideoPresentationTime: pts });
+    converted.push({ number: segment.number, firstVideoPresentationTime: presentationTime });
   }
   const found = mismatches(grouped, converted);
 
   const ptsRaw = refSamples.map((sample) => new Rational(sample.presentationTime, timescale).plus(offset));
   const { reference: start, from } = hlsencReference({ spec, hls, ptsRaw, timescale });
   const keyframes = hls.samples.flatMap((sample, index) => (sample.sync ? [index] : []));
-  const modeled = hlsencCuts(keyframes, ptsRaw, start, period);
+  const modeled = hlsencCuts({ keyframeOrdinals: keyframes, ptsRaw, reference: start, period });
   const observed = hls.segments.map((segment) => segment.ordinal);
   return {
     hlsRun: spec.run,
@@ -284,12 +294,22 @@ export function evaluateOracle({ fixture, spec, reference, grouped, source, hls,
   };
 }
 
+function compareBigInt(a, b) {
+  if (a < b) {
+    return -1;
+  }
+  if (a > b) {
+    return 1;
+  }
+  return 0;
+}
+
 /** The presentation time of every video sync sample, in ascending order. */
 export function recordedKeyframes(stream) {
   return videoSamples(stream)
     .filter((sample) => sample.sync)
     .map((sample) => sample.presentationTime)
-    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    .sort(compareBigInt);
 }
 
 /** For a stream copy: whether every recorded keyframe is the source's own, moved to media time. */
@@ -301,7 +321,7 @@ export function checkSourceKeyframes({ mode, stream, source, timescale }) {
   const expected = [
     ...new Set(source.keyframes.map((keyframe) => keyframe.minus(source.start).times(timescale).truncate())),
   ]
-    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+    .sort(compareBigInt)
     .filter((keyframe) => keyframe >= recorded[0]);
   return {
     recordedKeyframesEqualSourceKeyframes:
@@ -339,7 +359,7 @@ function nalUnitTypesOf(stream, sample, { nalLengthSize, sampleEntry }) {
  * number of RASL pictures, which reference the GOP before a CRA. Null for other codecs.
  */
 export function videoPictures(stream) {
-  const track = [...stream.tracks.values()].find((entry) => entry.handler === 'vide');
+  const track = videoTrackOf(stream);
   const nalUnitType = NAL_UNIT_TYPE[track.sampleEntry];
   if (nalUnitType === undefined) {
     return null;
@@ -358,7 +378,7 @@ function everyKeyframeStartsAFragment(stream) {
   const samples = videoSamples(stream);
   const withKeyframes = new Set(samples.filter((sample) => sample.sync).map((sample) => sample.fragmentIndex));
   return [...withKeyframes].every((index) => {
-    const start = videoStart(stream.fragments[index]);
+    const start = videoTrafOf(stream.fragments[index]);
     const keyframes = samples.filter((sample) => sample.fragmentIndex === index && sample.sync).length;
     return start.firstSync && start.sampleCount > 0 && keyframes === 1;
   });
@@ -384,9 +404,9 @@ function startPlusDurationMisses(video) {
 
 export function diagnostics(stream) {
   const fragments = stream.fragments;
-  const video = fragments.map(videoStart);
+  const video = fragments.map(videoTrafOf);
   const starts = video.filter((traf) => traf !== null).map((traf) => traf.firstPresentationTime);
-  const audio = fragments.flatMap((fragment) => fragment.trafs).find((traf) => traf.handler === 'soun');
+  const audio = firstAudioTraf(fragments);
   return {
     fragmentCount: fragments.length,
     syncFirstFragments: video.filter((traf) => traf?.firstSync === true).length,

@@ -32,8 +32,10 @@ function keyframesOf(fragments, period) {
 }
 
 function firstRegression(keyframes) {
-  return keyframes.find(
-    (keyframe, position) => position > 0 && keyframe.presentationTime < keyframes[position - 1].presentationTime,
+  return (
+    keyframes.find(
+      (keyframe, position) => position > 0 && keyframe.presentationTime < keyframes[position - 1].presentationTime,
+    ) ?? null
   );
 }
 
@@ -64,7 +66,7 @@ function failureOf(skip, regression) {
       presentationTime: skip.opening.presentationTime,
     };
   }
-  if (regression !== undefined) {
+  if (regression !== null) {
     return {
       reason: 'PRESENTATION_TIME_REGRESSED',
       fragmentIndex: regression.index,
@@ -86,7 +88,7 @@ function range(from, to) {
 export function groupOnGrid(fragments, { period, startSequenceNumber }) {
   const keyframes = keyframesOf(fragments, period);
   const regression = firstRegression(keyframes);
-  const ordered = regression === undefined ? keyframes : keyframes.slice(0, keyframes.indexOf(regression));
+  const ordered = regression === null ? keyframes : keyframes.slice(0, keyframes.indexOf(regression));
   const openings = openingsOf(ordered);
   const skip = firstSkip(openings, startSequenceNumber);
   const failure = failureOf(skip, regression);
@@ -97,7 +99,7 @@ export function groupOnGrid(fragments, { period, startSequenceNumber }) {
     firstVideoPresentationTime: opening.presentationTime,
     fragments: range(position === 0 ? 0 : opening.index, opened[position + 1]?.index ?? end),
   }));
-  const closed = regression !== undefined && skip === null ? segments.slice(0, -1) : segments;
+  const closed = regression !== null && skip === null ? segments.slice(0, -1) : segments;
   return {
     delivered: closed.filter((segment) => segment.number >= startSequenceNumber),
     preroll: closed.filter((segment) => segment.number < startSequenceNumber),

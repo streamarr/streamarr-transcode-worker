@@ -88,16 +88,19 @@ export function checkExpectations(directory) {
   ];
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
-  const directory = process.argv[2] ?? fileURLToPath(new URL('../resources/fmp4/', import.meta.url));
+function main(directory) {
   const found = checkExpectations(directory);
   for (const disagreement of found) {
     process.stderr.write(`DRIFT ${disagreement}\n`);
   }
   if (found.length > 0) {
     process.exitCode = 1;
-  } else {
-    const count = readdirSync(directory).filter((file) => file.endsWith('.fmp4')).length;
-    process.stdout.write(`expected.json agrees with all ${count} recordings in ${directory}\n`);
+    return;
   }
+  const count = readdirSync(directory).filter((file) => file.endsWith('.fmp4')).length;
+  process.stdout.write(`expected.json agrees with all ${count} recordings in ${directory}\n`);
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+  main(process.argv[2] ?? fileURLToPath(new URL('../resources/fmp4/', import.meta.url)));
 }

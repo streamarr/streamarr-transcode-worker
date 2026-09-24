@@ -2,11 +2,15 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
-import { Mp4FormatError, readFiles, readStream, signed, videoSamples, videoStart } from './fmp4.mjs';
+import { Mp4FormatError, readFiles, readStream, signed, videoSamples, videoTrafOf } from './fmp4.mjs';
 import {
   AUDIO,
-  NON_SYNC,
-  SYNC,
+  NON_SYNC_SAMPLE_FLAGS,
+  SYNC_SAMPLE_FLAGS,
+  TFHD_BASE_DATA_OFFSET,
+  TFHD_DEFAULT_BASE_IS_MOOF,
+  TFHD_DEFAULT_SAMPLE_FLAGS,
+  TRUN_SAMPLE_SIZE,
   VIDEO,
   audioFragment,
   box,
@@ -17,6 +21,7 @@ import {
   largeBox,
   mdat,
   moof,
+  moofPointingAtItsMdat,
   moov,
   track,
   traf,
@@ -38,19 +43,19 @@ function streamOf(...parts) {
 }
 
 function firstVideo(...fragmentParts) {
-  return videoStart(streamOf(initialization(), ...fragmentParts).fragments[0]);
+  return videoTrafOf(streamOf(initialization(), ...fragmentParts).fragments[0]);
 }
 
 describe('fmp4 box reader', () => {
   it('reads the tracks of the initialization segment in trak order', () => {
     const stream = streamOf(initialization());
 
-    assert.equal(stream.initByteLength, initialization().length);
+    assert.equal(stream.initializationSegmentByteLength, initialization().length);
     assert.deepEqual(
       [...stream.tracks.values()].map(({ trackId, handler, timescale, trexFlags }) => [trackId, handler, timescale, trexFlags]),
       [
-        [1, 'vide', 24000, NON_SYNC],
-        [2, 'soun', 48000, SYNC],
+        [1, 'vide', 24000, NON_SYNC_SAMPLE_FLAGS],
+        [2, 'soun', 48000, SYNC_SAMPLE_FLAGS],
       ],
     );
   });
@@ -62,13 +67,13 @@ describe('fmp4 box reader', () => {
   });
 
   it('reads a version 1 edit list and only the trex boxes of mvex', () => {
-    const video = track({ ...VIDEO, defaultFlags: SYNC, edit: [1n << 40n, -1n], editVersion: 1 });
+    const video = track({ ...VIDEO, defaultFlags: SYNC_SAMPLE_FLAGS, edit: [1n << 40n, -1n], editVersion: 1 });
     const undeclared = track({ ...AUDIO, trackId: 9 }).trex;
     const movie = box('moov', video.trak, box('mvex', fullBox('mehd', 0, 0, u32(0)), video.trex, undeclared));
     const stream = streamOf(ftyp(), movie);
 
     assert.deepEqual(stream.tracks.get(1).edits, [[1n << 40n, -1n]]);
-    assert.equal(stream.tracks.get(1).trexFlags, SYNC);
+    assert.equal(stream.tracks.get(1).trexFlags, SYNC_SAMPLE_FLAGS);
     assert.deepEqual([...stream.tracks.keys()], [1]);
   });
 
@@ -106,14 +111,14 @@ describe('fmp4 box reader', () => {
   });
 
   it('reads the composition offset of a version 0 trun as unsigned', () => {
-    const run = { version: 0, samples: [{ size: 1, compositionOffset: 0x80000000 }], firstSampleFlags: SYNC };
+    const run = { version: 0, samples: [{ size: 1, compositionOffset: 0x80000000 }], firstSampleFlags: SYNC_SAMPLE_FLAGS };
     const start = firstVideo(fragment({ trackId: 1, decodeTime: 0, runs: [run] }));
 
     assert.equal(start.firstPresentationTime, 2147483648n);
   });
 
   it('reads a version 0 tfdt as an unsigned 32-bit decode time', () => {
-    const run = { samples: [{ size: 1 }], firstSampleFlags: SYNC };
+    const run = { samples: [{ size: 1 }], firstSampleFlags: SYNC_SAMPLE_FLAGS };
     const start = firstVideo(fragment({ trackId: 1, decodeTime: 0xfffffff0, tfdtVersion: 0, runs: [run] }));
 
     assert.equal(start.firstPresentationTime, 4294967280n);
@@ -121,9 +126,9 @@ describe('fmp4 box reader', () => {
 
   it('reads sync from the first sample flags, then the sample flags, then tfhd, then trex', () => {
     const cases = [
-      [{ firstSampleFlags: SYNC, samples: [{ size: 1, flags: NON_SYNC }] }, null, true],
-      [{ samples: [{ size: 1, flags: NON_SYNC }] }, SYNC, false],
-      [{ samples: [{ size: 1 }] }, SYNC, true],
+      [{ firstSampleFlags: SYNC_SAMPLE_FLAGS, samples: [{ size: 1, flags: NON_SYNC_SAMPLE_FLAGS }] }, null, true],
+      [{ samples: [{ size: 1, flags: NON_SYNC_SAMPLE_FLAGS }] }, SYNC_SAMPLE_FLAGS, false],
+      [{ samples: [{ size: 1 }] }, SYNC_SAMPLE_FLAGS, true],
       [{ samples: [{ size: 1 }] }, null, false],
     ];
     for (const [run, defaultFlags, sync] of cases) {
@@ -135,7 +140,7 @@ describe('fmp4 box reader', () => {
     const emptyVideo = fragment({ trackId: 1, decodeTime: 0, runs: [{ samples: [] }] });
     const stream = streamOf(initialization(), audioFragment({ decodeTime: 0 }), emptyVideo);
 
-    assert.deepEqual(stream.fragments.map(videoStart), [null, null]);
+    assert.deepEqual(stream.fragments.map(videoTrafOf), [null, null]);
   });
 
   it('lists every video sample in decode order with its presentation time and fragment', () => {
@@ -144,7 +149,7 @@ describe('fmp4 box reader', () => {
         { duration: 1001, size: 3, compositionOffset: 2002 },
         { duration: 1001, size: 4, compositionOffset: 0 },
       ],
-      firstSampleFlags: SYNC,
+      firstSampleFlags: SYNC_SAMPLE_FLAGS,
     };
     const bytes = Buffer.concat([initialization(), audioFragment({ decodeTime: 0 }), fragment({ trackId: 1, decodeTime: 1001, runs: [run] })]);
     const payload = bytes.length - 7;
@@ -159,11 +164,15 @@ describe('fmp4 box reader', () => {
     const large = (dataOffset) =>
       largeBox(
         'moof',
-        largeBox('traf', fullBox('tfhd', 0, 0x020000, u32(1)), fullBox('tfdt', 0, 0, u32(7)), trun({ samples: [{ size: 1 }], dataOffset, firstSampleFlags: SYNC })),
+        largeBox(
+          'traf',
+          fullBox('tfhd', 0, TFHD_DEFAULT_BASE_IS_MOOF, u32(1)),
+          fullBox('tfdt', 0, 0, u32(7)),
+          trun({ samples: [{ size: 1 }], dataOffset, firstSampleFlags: SYNC_SAMPLE_FLAGS }),
+        ),
       );
-    const moofBytes = large(large(0).length + 8);
 
-    assert.equal(firstVideo(moofBytes, mdat([1])).firstPresentationTime, 7n);
+    assert.equal(firstVideo(moofPointingAtItsMdat(0, large), mdat([1])).firstPresentationTime, 7n);
   });
 
   it('reads a decode time of 2^64 - 1024 as the signed -1024 FFmpeg wrote', () => {
@@ -202,14 +211,14 @@ describe('fmp4 box structure', () => {
   });
 
   it('fails on a tfhd whose flags promise a field its box does not hold', () => {
-    const tfhd = fullBox('tfhd', 0, 0x020020, u32(VIDEO.trackId));
-    const run = trun({ samples: [{ size: 1 }], firstSampleFlags: SYNC });
+    const tfhd = fullBox('tfhd', 0, TFHD_DEFAULT_BASE_IS_MOOF | TFHD_DEFAULT_SAMPLE_FLAGS, u32(VIDEO.trackId));
+    const run = trun({ samples: [{ size: 1 }], firstSampleFlags: SYNC_SAMPLE_FLAGS });
 
     failures(Buffer.concat([moof(box('traf', tfhd, fullBox('tfdt', 1, 0, u64(0)), run)), mdat([1])]));
   });
 
   it('fails on a trun that declares more samples than its box holds', () => {
-    const run = fullBox('trun', 1, 0x200, u32(3), u32(1));
+    const run = fullBox('trun', 1, TRUN_SAMPLE_SIZE, u32(3), u32(1));
     const trailing = fullBox('free', 0, 0, u32(1), u32(1), u32(1), u32(1));
 
     failures(Buffer.concat([moof(traf({ trackId: VIDEO.trackId, decodeTime: 0, runs: [run, trailing] })), mdat([1])]));
@@ -227,18 +236,18 @@ describe('fmp4 box structure', () => {
 
 describe('fmp4 sample data', () => {
   const tfdt = fullBox('tfdt', 1, 0, u64(0));
-  const videoRun = (options = {}) => trun({ samples: [{ size: 2 }], firstSampleFlags: SYNC, ...options });
+  const videoRun = (options = {}) => trun({ samples: [{ size: 2 }], firstSampleFlags: SYNC_SAMPLE_FLAGS, ...options });
   const audioRun = (options = {}) => trun({ samples: [{ size: 3 }], ...options });
 
   /** A moof whose video traf starts its data at an absolute base and whose audio traf follows it. */
   function explicitBase(shift) {
     const build = (base) =>
       moof(
-        box('traf', fullBox('tfhd', 0, 0x1, u32(VIDEO.trackId), u64(base)), tfdt, videoRun()),
+        box('traf', fullBox('tfhd', 0, TFHD_BASE_DATA_OFFSET, u32(VIDEO.trackId), u64(base + shift)), tfdt, videoRun()),
         box('traf', fullBox('tfhd', 0, 0, u32(AUDIO.trackId)), tfdt, audioRun()),
       );
-    const start = initialization().length + build(0).length + 8;
-    return Buffer.concat([initialization(), build(start + shift), mdat([1, 2, 3, 4, 5])]);
+    const moofBytes = moofPointingAtItsMdat(initialization().length, build);
+    return Buffer.concat([initialization(), moofBytes, mdat([1, 2, 3, 4, 5])]);
   }
 
   it('fails on a video run whose data offset points at its moof instead of its mdat', () => {
@@ -266,7 +275,7 @@ describe('fmp4 sample data', () => {
   it('reads a second run of a traf after the first run when it declares no data offset', () => {
     const build = (dataOffset) =>
       moof(traf({ trackId: VIDEO.trackId, decodeTime: 0, runs: [videoRun({ dataOffset }), trun({ samples: [{ size: 3 }] })] }));
-    const valid = build(build(0).length + 8);
+    const valid = moofPointingAtItsMdat(0, build);
 
     assert.equal(readStream(Buffer.concat([initialization(), valid, mdat([1, 2, 3, 4, 5])])).fragments[0].trafs[0].sampleCount, 2);
     assert.throws(() => readStream(Buffer.concat([initialization(), valid, mdat([1, 2, 3, 4])])), Mp4FormatError);
@@ -276,7 +285,7 @@ describe('fmp4 sample data', () => {
 describe('fmp4 box reader over the recordings', () => {
   it('reads the stream-copy replacement attempt from its preroll keyframe at 28.028 s', () => {
     const stream = recording('07-copy-seek30.fmp4');
-    const first = videoStart(stream.fragments[0]);
+    const first = videoTrafOf(stream.fragments[0]);
 
     assert.equal(first.timescale, 24000);
     assert.equal(first.firstPresentationTime, 672672n);
@@ -292,7 +301,7 @@ describe('fmp4 box reader over the recordings', () => {
   });
 
   it('reads the fragment that skips a segment number at 20.02 s in the 10 s-GOP copy', () => {
-    const start = videoStart(recording('10-copy-gop-exceeds-period.fmp4').fragments[20]);
+    const start = videoTrafOf(recording('10-copy-gop-exceeds-period.fmp4').fragments[20]);
 
     assert.equal(start.firstPresentationTime, 480480n);
     assert.equal(start.firstSync, true);
@@ -303,7 +312,7 @@ describe('fmp4 box reader over the recordings', () => {
     const stream = readFiles([path]);
 
     assert.equal(
-      stream.initByteLength + stream.fragments.reduce((sum, fragment) => sum + fragment.byteLength, 0),
+      stream.initializationSegmentByteLength + stream.fragments.reduce((sum, fragment) => sum + fragment.byteLength, 0),
       readFileSync(path).length,
     );
   });
@@ -318,7 +327,7 @@ describe('fmp4 box reader command line', () => {
     const dump = JSON.parse(run.stdout);
 
     assert.equal(run.status, 0, run.stderr);
-    assert.equal(dump.initByteLength, 1348);
+    assert.equal(dump.initializationSegmentByteLength, 1348);
     assert.deepEqual(Object.keys(dump.tracks), ['1', '2']);
     assert.equal(dump.fragments[20].trafs[0].firstPresentationTime, 480480);
     assert.equal(dump.fragments[20].trafs[0].samples, undefined);

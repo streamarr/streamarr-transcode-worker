@@ -31,7 +31,7 @@ import {
   recordingFacts,
   violatedClaims,
 } from './analysis.mjs';
-import { readFiles, videoSamples } from './fmp4.mjs';
+import { readFiles, videoSamples, videoTrackOf } from './fmp4.mjs';
 import { formatJson } from './json.mjs';
 
 const PERIOD = 6;
@@ -336,7 +336,7 @@ function main() {
   for (const fixture of FIXTURES) {
     const path = join(args.work, 'out', `${fixture.name}.fmp4`);
     const stream = readFiles([path]);
-    const videoTrack = [...stream.tracks.values()].find((track) => track.handler === 'vide');
+    const videoTrack = videoTrackOf(stream);
     pipe.set(fixture.name, {
       name: fixture.name,
       stream,

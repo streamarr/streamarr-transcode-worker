@@ -92,7 +92,13 @@ export class Rational {
   compare(other) {
     const o = Rational.of(other);
     const difference = this.numerator * o.denominator - o.numerator * this.denominator;
-    return difference === 0n ? 0 : difference < 0n ? -1 : 1;
+    if (difference < 0n) {
+      return -1;
+    }
+    if (difference > 0n) {
+      return 1;
+    }
+    return 0;
   }
 
   equals(other) {

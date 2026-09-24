@@ -18,7 +18,22 @@ import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { formatJson } from './json.mjs';
 
-export const NON_SYNC = 0x00010000;
+export const VIDEO_HANDLER = 'vide';
+export const AUDIO_HANDLER = 'soun';
+
+const TFHD_BASE_DATA_OFFSET = 0x000001;
+const TFHD_SAMPLE_DESCRIPTION_INDEX = 0x000002;
+const TFHD_DEFAULT_SAMPLE_DURATION = 0x000008;
+const TFHD_DEFAULT_SAMPLE_SIZE = 0x000010;
+const TFHD_DEFAULT_SAMPLE_FLAGS = 0x000020;
+const TFHD_DEFAULT_BASE_IS_MOOF = 0x020000;
+const TRUN_DATA_OFFSET = 0x000001;
+const TRUN_FIRST_SAMPLE_FLAGS = 0x000004;
+const TRUN_SAMPLE_DURATION = 0x000100;
+const TRUN_SAMPLE_SIZE = 0x000200;
+const TRUN_SAMPLE_FLAGS = 0x000400;
+const TRUN_SAMPLE_COMPOSITION_TIME_OFFSET = 0x000800;
+const SAMPLE_IS_NON_SYNC_SAMPLE = 0x00010000;
 const TWO_TO_63 = 1n << 63n;
 const TWO_TO_64 = 1n << 64n;
 
@@ -148,14 +163,18 @@ function editList(data, trakBody, trakStop) {
   const count = fields.u32();
   const edits = [];
   for (let entry = 0; entry < count; entry++) {
-    if (version === 1) {
-      edits.push([fields.u64(), fields.s64()]);
-    } else {
-      edits.push([BigInt(fields.u32()), BigInt(fields.s32())]);
-    }
+    edits.push(editOf(fields, version));
     fields.skip(4);
   }
   return edits;
+}
+
+/** One elst entry's segment duration and media time. */
+function editOf(fields, version) {
+  if (version === 1) {
+    return [fields.u64(), fields.s64()];
+  }
+  return [BigInt(fields.u32()), BigInt(fields.s32())];
 }
 
 const NAL_LENGTH_AT = { avc1: ['avcC', 4], hvc1: ['hvcC', 21], hev1: ['hvcC', 21] };
@@ -223,9 +242,6 @@ export function parseMoov(data, body, stop) {
   return tracks;
 }
 
-const TFHD_BASE_DATA_OFFSET = 0x1;
-const TFHD_DEFAULT_BASE_IS_MOOF = 0x020000;
-
 function trackFragmentHeader(data, body, stop, tracks) {
   const { flags, fields } = fullBox(data, required(child(data, body, stop, 'tfhd'), 'tfhd'), 'tfhd');
   const trackId = fields.u32();
@@ -240,14 +256,14 @@ function trackFragmentHeader(data, body, stop, tracks) {
   };
   const baseDataOffset = flags & TFHD_BASE_DATA_OFFSET ? Number(fields.u64()) : null;
   const defaultBaseIsMoof = (flags & TFHD_DEFAULT_BASE_IS_MOOF) !== 0;
-  fields.skip(flags & 0x2 ? 4 : 0);
-  if (flags & 0x8) {
+  fields.skip(flags & TFHD_SAMPLE_DESCRIPTION_INDEX ? 4 : 0);
+  if (flags & TFHD_DEFAULT_SAMPLE_DURATION) {
     defaults.duration = fields.u32();
   }
-  if (flags & 0x10) {
+  if (flags & TFHD_DEFAULT_SAMPLE_SIZE) {
     defaults.size = fields.u32();
   }
-  if (flags & 0x20) {
+  if (flags & TFHD_DEFAULT_SAMPLE_FLAGS) {
     defaults.flags = fields.u32();
   }
   return { track, defaults, baseDataOffset, defaultBaseIsMoof };
@@ -261,21 +277,21 @@ function baseMediaDecodeTime(data, body, stop) {
 function trackRun(data, trun, defaults) {
   const { version, flags, fields } = fullBox(data, trun, 'trun');
   const count = fields.u32();
-  const dataOffset = flags & 0x1 ? fields.s32() : null;
-  const firstFlags = flags & 0x4 ? fields.u32() : null;
+  const dataOffset = flags & TRUN_DATA_OFFSET ? fields.s32() : null;
+  const firstFlags = flags & TRUN_FIRST_SAMPLE_FLAGS ? fields.u32() : null;
   const samples = [];
   for (let index = 0; index < count; index++) {
     const sample = { duration: defaults.duration, flags: defaults.flags, compositionOffset: 0, size: defaults.size };
-    if (flags & 0x100) {
+    if (flags & TRUN_SAMPLE_DURATION) {
       sample.duration = fields.u32();
     }
-    if (flags & 0x200) {
+    if (flags & TRUN_SAMPLE_SIZE) {
       sample.size = fields.u32();
     }
-    if (flags & 0x400) {
+    if (flags & TRUN_SAMPLE_FLAGS) {
       sample.flags = fields.u32();
     }
-    if (flags & 0x800) {
+    if (flags & TRUN_SAMPLE_COMPOSITION_TIME_OFFSET) {
       sample.compositionOffset = version === 1 ? fields.s32() : fields.u32();
     }
     if (index === 0 && firstFlags !== null) {
@@ -287,7 +303,7 @@ function trackRun(data, trun, defaults) {
 }
 
 export function isSync(flags) {
-  return (flags & NON_SYNC) === 0;
+  return (flags & SAMPLE_IS_NON_SYNC_SAMPLE) === 0;
 }
 
 /**
@@ -362,49 +378,65 @@ function requireDataInside(fragment, [bodyStart, end]) {
 
 /** Reads one stream: the initialization segment's tracks, then every moof + mdat fragment. */
 export function readStream(data) {
-  let initEnd = null;
-  let tracks = null;
-  const fragments = [];
-  let pendingMoof = null;
-  for (const [type, start, body, stop] of boxes(data, 0, data.length)) {
-    if (type === 'moov') {
-      tracks = parseMoov(data, body, stop);
-      initEnd = stop;
-    } else if (type === 'moof') {
-      if (tracks === null) {
-        throw new Mp4FormatError('moof before moov');
-      }
-      if (pendingMoof !== null) {
-        throw new Mp4FormatError(`moof at ${start} follows a moof with no mdat`);
-      }
-      const trafs = [];
-      const layout = { moofStart: start, previousTrafEnd: start };
-      for (const [child, , trafBody, trafStop] of boxes(data, body, stop)) {
-        if (child === 'traf') {
-          trafs.push(parseTraf(data, [trafBody, trafStop], { tracks, layout }));
-        }
-      }
-      pendingMoof = { offset: start, trafs };
-    } else if (type === 'mdat') {
-      if (pendingMoof === null) {
-        throw new Mp4FormatError(`mdat at ${start} without moof`);
-      }
-      requireDataInside(pendingMoof, [body, stop]);
-      pendingMoof.byteLength = stop - pendingMoof.offset;
-      fragments.push(pendingMoof);
-      pendingMoof = null;
-    }
+  const state = { data, initializationSegmentEnd: null, tracks: null, fragments: [], pendingMoof: null };
+  for (const box of boxes(data, 0, data.length)) {
+    readTopLevelBox(state, box);
   }
-  if (pendingMoof !== null) {
+  if (state.pendingMoof !== null) {
     throw new Mp4FormatError('stream ends after a moof with no mdat');
   }
+  const end = state.initializationSegmentEnd;
   return {
-    initByteLength: initEnd,
-    initBytes: initEnd === null ? data : data.subarray(0, initEnd),
-    tracks,
-    fragments,
+    initializationSegmentByteLength: end,
+    initializationSegmentBytes: end === null ? data : data.subarray(0, end),
+    tracks: state.tracks,
+    fragments: state.fragments,
     data,
   };
+}
+
+function readTopLevelBox(state, [type, start, body, stop]) {
+  switch (type) {
+    case 'moov':
+      state.tracks = parseMoov(state.data, body, stop);
+      state.initializationSegmentEnd = stop;
+      return;
+    case 'moof':
+      state.pendingMoof = readMoof(state, [start, body, stop]);
+      return;
+    case 'mdat':
+      state.fragments.push(closeFragment(state.pendingMoof, [start, body, stop]));
+      state.pendingMoof = null;
+      return;
+    default:
+      return;
+  }
+}
+
+function readMoof({ data, tracks, pendingMoof }, [start, body, stop]) {
+  if (tracks === null) {
+    throw new Mp4FormatError('moof before moov');
+  }
+  if (pendingMoof !== null) {
+    throw new Mp4FormatError(`moof at ${start} follows a moof with no mdat`);
+  }
+  const trafs = [];
+  const layout = { moofStart: start, previousTrafEnd: start };
+  for (const [child, , trafBody, trafStop] of boxes(data, body, stop)) {
+    if (child === 'traf') {
+      trafs.push(parseTraf(data, [trafBody, trafStop], { tracks, layout }));
+    }
+  }
+  return { offset: start, trafs };
+}
+
+/** The fragment a moof and the mdat after it form, once every sample lies inside that mdat. */
+function closeFragment(moof, [start, body, stop]) {
+  if (moof === null) {
+    throw new Mp4FormatError(`mdat at ${start} without moof`);
+  }
+  requireDataInside(moof, [body, stop]);
+  return { ...moof, byteLength: stop - moof.offset };
 }
 
 /** Reads several files as one concatenated stream. */
@@ -417,7 +449,7 @@ export function videoSamples(stream) {
   const result = [];
   stream.fragments.forEach((fragment, index) => {
     for (const traf of fragment.trafs) {
-      if (traf.handler !== 'vide') {
+      if (traf.handler !== VIDEO_HANDLER) {
         continue;
       }
       let decode = traf.baseMediaDecodeTime;
@@ -442,14 +474,29 @@ export function signed(value) {
 }
 
 /** The fragment's video traf when it carries video samples, else null. */
-export function videoStart(fragment) {
-  return fragment.trafs.find((traf) => traf.handler === 'vide' && traf.sampleCount > 0) ?? null;
+export function videoTrafOf(fragment) {
+  return fragment.trafs.find((traf) => traf.handler === VIDEO_HANDLER && traf.sampleCount > 0) ?? null;
+}
+
+/** The first audio traf among the fragments, else null. */
+export function firstAudioTraf(fragments) {
+  return fragments.flatMap((fragment) => fragment.trafs).find((traf) => traf.handler === AUDIO_HANDLER) ?? null;
+}
+
+/** The stream's video track. */
+export function videoTrackOf(stream) {
+  return [...stream.tracks.values()].find((track) => track.handler === VIDEO_HANDLER);
+}
+
+/** The stream's audio track, else null. */
+export function audioTrackOf(stream) {
+  return [...stream.tracks.values()].find((track) => track.handler === AUDIO_HANDLER) ?? null;
 }
 
 /** The dump the command line prints: every box fact except the bytes and the sample tables. */
 export function describeStream(stream) {
   return {
-    initByteLength: stream.initByteLength,
+    initializationSegmentByteLength: stream.initializationSegmentByteLength,
     tracks: Object.fromEntries(
       [...stream.tracks].map(([trackId, track]) => [
         String(trackId),
