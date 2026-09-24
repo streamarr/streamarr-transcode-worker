@@ -17,6 +17,11 @@ final class FragmentedMp4Exception extends RuntimeException {
     UNSIZED_BOX,
     /** A box's declared size or fields do not fit the bytes that hold it. */
     MALFORMED_BOX,
+    /**
+     * A run's samples, where its {@code moof} places them, do not lie inside the body of the {@code
+     * mdat} that follows that {@code moof}.
+     */
+    SAMPLE_DATA_OUTSIDE_MDAT,
     END_OF_FILE_IN_BOX_HEADER,
     END_OF_FILE_IN_BOX_BODY,
     END_OF_FILE_AFTER_MOVIE_FRAGMENT,

@@ -1,6 +1,7 @@
 package com.streamarr.transcode.engine;
 
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
+import com.streamarr.transcode.engine.SampleRanges.MediaData;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
@@ -17,7 +18,9 @@ final class FragmentedMp4Reader {
   private final long maximumSegmentBytes;
   private final byte[] headerBytes = new byte[BoxHeader.LARGE_LENGTH];
   private boolean initialized;
+  private long position;
   private Optional<VideoTrack> videoTrack = Optional.empty();
+  private Optional<SampleRanges> sampleRanges = Optional.empty();
 
   /**
    * @param maximumSegmentBytes the largest initialization segment or fragment the reader admits; it
@@ -63,13 +66,16 @@ final class FragmentedMp4Reader {
             .map(header -> requireType(header, "moov", missing))
             .orElseThrow(() -> unexpected(missing, "moov", "the end of the stream"));
     var moov = readBox(moovHeader, ftyp.length);
-    videoTrack = VideoTrack.of(viewOf(moovHeader, moov));
+    var moovView = viewOf(moovHeader, moov);
+    videoTrack = VideoTrack.of(moovView);
+    sampleRanges = Optional.of(SampleRanges.of(moovView));
     initialized = true;
     var bytes = ByteBuffer.allocate(ftyp.length + moov.length).put(ftyp).put(moov).array();
     return Optional.of(new InitializationSegment(bytes));
   }
 
   private Optional<Mp4Unit> readFragment() throws IOException {
+    var moofPosition = position;
     var nextHeader = readHeader();
     if (nextHeader.isEmpty()) {
       return Optional.empty();
@@ -84,7 +90,14 @@ final class FragmentedMp4Reader {
                     new FragmentedMp4Exception(
                         Reason.END_OF_FILE_AFTER_MOVIE_FRAGMENT, "no mdat follows the moof"));
     var mdat = readBox(requireType(mdatHeader, "mdat", Reason.UNEXPECTED_BOX), moof.length);
-    var videoStart = videoTrack.flatMap(track -> track.startOf(viewOf(moofHeader, moof)));
+    var moofView = viewOf(moofHeader, moof);
+    var mediaData =
+        new MediaData(
+            moofPosition,
+            (long) moof.length + mdatHeader.length(),
+            (long) moof.length + mdat.length);
+    sampleRanges.orElseThrow().requireInside(moofView, mediaData);
+    var videoStart = videoTrack.flatMap(track -> track.startOf(moofView));
     return Optional.of(new Fragment(List.of(moof, mdat), videoStart));
   }
 
@@ -112,6 +125,7 @@ final class FragmentedMp4Reader {
   /** Reads the next header into {@link #headerBytes}, where {@link #readBox} copies it from. */
   private Optional<BoxHeader> readHeader() throws IOException {
     var read = stream.readNBytes(headerBytes, 0, BoxHeader.COMPACT_LENGTH);
+    position += read;
     if (read == 0) {
       return Optional.empty();
     }
@@ -120,7 +134,9 @@ final class FragmentedMp4Reader {
     var length = BoxHeader.COMPACT_LENGTH;
     if (BoxHeader.declaresLargeSize(headerBytes)) {
       length = BoxHeader.LARGE_LENGTH;
-      read += stream.readNBytes(headerBytes, read, length - read);
+      var largeSize = stream.readNBytes(headerBytes, read, length - read);
+      position += largeSize;
+      read += largeSize;
       requireHeaderBytes(read, length);
     }
 
@@ -164,6 +180,7 @@ final class FragmentedMp4Reader {
     var headerLength = header.length();
     System.arraycopy(headerBytes, 0, box, 0, headerLength);
     var read = stream.readNBytes(box, headerLength, box.length - headerLength);
+    position += read;
     if (read < box.length - headerLength) {
       throw new FragmentedMp4Exception(
           Reason.END_OF_FILE_IN_BOX_BODY,

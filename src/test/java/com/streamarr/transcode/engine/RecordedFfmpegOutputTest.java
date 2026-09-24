@@ -2,6 +2,7 @@ package com.streamarr.transcode.engine;
 
 import static com.streamarr.transcode.engine.FfmpegRecordings.bytesOf;
 import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
+import static com.streamarr.transcode.engine.IsoBoxes.TRUN_DATA_OFFSET;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
@@ -271,6 +272,25 @@ class RecordedFfmpegOutputTest {
         .isEqualTo(Reason.MALFORMED_BOX);
   }
 
+  @ParameterizedTest(name = "trun {0} at data offset {1}")
+  @CsvSource({"0, 0", "1, 1000000"})
+  @DisplayName(
+      "Should fail with sample data outside the mdat when a recorded trun points outside its"
+          + " fragment's mdat")
+  void shouldFailWithSampleDataOutsideTheMdatWhenARecordedTrunPointsOutsideItsFragmentsMdat(
+      int trun, int dataOffset) {
+    var recorded = bytesOf("01-encode-cfr.fmp4");
+    var fields = ByteBuffer.wrap(recorded);
+    var run = positionOf(recorded, "trun", trun);
+    assertThat(fields.getInt(run + 4) & TRUN_DATA_OFFSET).isEqualTo(TRUN_DATA_OFFSET);
+    fields.putInt(run + 12, dataOffset);
+
+    assertThatExceptionOfType(FragmentedMp4Exception.class)
+        .isThrownBy(() -> Mp4Stream.read(Mp4Stream.readerOf(recorded)))
+        .extracting(FragmentedMp4Exception::getReason)
+        .isEqualTo(Reason.SAMPLE_DATA_OUTSIDE_MDAT);
+  }
+
   private static Mp4Stream read(String file) throws IOException {
     return Mp4Stream.read(Mp4Stream.readerOf(bytesOf(file)));
   }
@@ -365,12 +385,19 @@ class RecordedFfmpegOutputTest {
     return new Failure(expected.reason(), expected.fragmentIndex());
   }
 
+  /** The position of a box type's first four-character code; a full box's flags follow it. */
   private static int positionOf(byte[] bytes, String type) {
+    return positionOf(bytes, type, 0);
+  }
+
+  /** The position of a box type's four-character code in its occurrence counted from 0. */
+  private static int positionOf(byte[] bytes, String type, int occurrence) {
     var fourcc = type.getBytes(StandardCharsets.ISO_8859_1);
     return IntStream.range(0, bytes.length - fourcc.length)
         .filter(
             position ->
                 Arrays.equals(bytes, position, position + fourcc.length, fourcc, 0, fourcc.length))
+        .skip(occurrence)
         .findFirst()
         .orElseThrow();
   }

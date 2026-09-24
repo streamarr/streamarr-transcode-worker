@@ -1,6 +1,7 @@
 package com.streamarr.transcode.engine;
 
 import java.util.Optional;
+import java.util.function.LongSupplier;
 
 /**
  * A {@code trun}'s header and its sample table, which {@link #of} checks fits inside the box before
@@ -52,6 +53,41 @@ final class TrackRun {
             .s32If(header.has(SAMPLE_FLAGS));
     var compositionOffset = header.compositionOffsetOf(fields);
     return Optional.of(new FirstSample(firstSampleFlags.or(() -> sampleFlags), compositionOffset));
+  }
+
+  /** The run's data offset from its {@code traf}'s base, when the run declares one. */
+  Optional<Integer> dataOffset() {
+    return box.fields().skip(HEADER_BYTES).s32If(header.has(DATA_OFFSET));
+  }
+
+  /**
+   * The bytes the run's samples occupy: each sample's own size, else the default size.
+   *
+   * @throws ArithmeticException when the sizes add up beyond a signed 64-bit count
+   */
+  long sampleBytes(LongSupplier defaultSampleSize) {
+    if (header.sampleCount() == 0) {
+      return 0;
+    }
+
+    if (!header.has(SAMPLE_SIZE)) {
+      return Math.multiplyExact(header.sampleCount(), defaultSampleSize.getAsLong());
+    }
+
+    var fields =
+        box.fields()
+            .skip(HEADER_BYTES)
+            .skipIf(header.has(DATA_OFFSET), 4)
+            .skipIf(header.has(FIRST_SAMPLE_FLAGS), 4);
+    var afterSize =
+        4 * Integer.bitCount(header.flags() & (SAMPLE_FLAGS | SAMPLE_COMPOSITION_TIME_OFFSET));
+    var bytes = 0L;
+    for (var sample = 0L; sample < header.sampleCount(); sample++) {
+      bytes += fields.skipIf(header.has(SAMPLE_DURATION), 4).u32();
+      fields.skip(afterSize);
+    }
+
+    return bytes;
   }
 
   /** A run's first sample: its flags, when the run declares any, and its composition offset. */

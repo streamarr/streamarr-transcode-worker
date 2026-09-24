@@ -651,6 +651,187 @@ class FragmentedMp4ReaderTest {
         readerOf(concat(ftyp(), videoAndAudioMoov(), moof, mdat(8))), Reason.MALFORMED_BOX);
   }
 
+  @Test
+  @DisplayName("Should fail when a video run's data offset points into its moof")
+  void shouldFailWhenAVideoRunsDataOffsetPointsIntoItsMoof() {
+    var run =
+        fullBox(
+            "trun",
+            VERSION_1 | TRUN_DATA_OFFSET | TRUN_FIRST_SAMPLE_FLAGS | TRUN_SAMPLE_SIZE,
+            u32(1),
+            u32(0),
+            u32(SYNC_SAMPLE_FLAGS),
+            u32(4));
+    var moof = box("moof", box("traf", tfhd(VIDEO_TRACK_ID), tfdt(0), run));
+
+    assertFailure(
+        readerOf(concat(ftyp(), videoAndAudioMoov(), moof, mdat(8))),
+        Reason.SAMPLE_DATA_OUTSIDE_MDAT);
+  }
+
+  @Test
+  @DisplayName("Should fail when an audio run's samples end past its mdat")
+  void shouldFailWhenAnAudioRunsSamplesEndPastItsMdat() {
+    var moof =
+        moof(
+            syncVideoTraf().baseMediaDecodeTime(0L).build(),
+            audioTraf().baseMediaDecodeTime(0L).sampleCount(3).build());
+
+    assertFailure(
+        readerOf(concat(ftyp(), videoAndAudioMoov(), moof, mdat(3))),
+        Reason.SAMPLE_DATA_OUTSIDE_MDAT);
+  }
+
+  @Test
+  @DisplayName("Should read a fragment whose samples fill its mdat exactly")
+  void shouldReadAFragmentWhoseSamplesFillItsMdatExactly() throws IOException {
+    var moof =
+        moof(
+            syncVideoTraf().baseMediaDecodeTime(0L).build(),
+            audioTraf().baseMediaDecodeTime(0L).sampleCount(3).build());
+    var reader = readerOf(concat(ftyp(), videoAndAudioMoov(), moof, mdat(4)));
+
+    reader.next();
+
+    assertThat(nextFragment(reader).videoStart())
+        .contains(new VideoStart(0, VIDEO_TIMESCALE, true));
+  }
+
+  @ParameterizedTest
+  @CsvSource({"0, true", "-1, false"})
+  @DisplayName("Should place a traf's data at its tfhd base when the tfhd declares one")
+  void shouldPlaceATrafsDataAtItsTfhdBaseWhenTheTfhdDeclaresOne(long shift, boolean inside)
+      throws IOException {
+    var moov = videoAndAudioMoov();
+    LongFunction<byte[]> moofWithDataAt =
+        baseDataOffset ->
+            box(
+                "moof",
+                box(
+                    "traf",
+                    fullBox(
+                        "tfhd",
+                        TFHD_BASE_DATA_OFFSET | TFHD_DEFAULT_SAMPLE_SIZE,
+                        u32(VIDEO_TRACK_ID),
+                        u64(baseDataOffset),
+                        u32(8)),
+                    tfdt(0),
+                    syncRun()));
+    var mdatBody = ftyp().length + moov.length + moofWithDataAt.apply(0).length + 8L;
+    var reader = readerOf(concat(ftyp(), moov, moofWithDataAt.apply(mdatBody + shift), mdat(8)));
+
+    reader.next();
+
+    if (inside) {
+      assertThat(nextFragment(reader).videoStart()).isPresent();
+      return;
+    }
+
+    assertFailure(reader, Reason.SAMPLE_DATA_OUTSIDE_MDAT);
+  }
+
+  @ParameterizedTest
+  @CsvSource({"5, true", "4, false"})
+  @DisplayName(
+      "Should continue a run and a traf after the previous one's data when they declare no offset")
+  void shouldContinueARunAndATrafAfterThePreviousOnesDataWhenTheyDeclareNoOffset(
+      int mdatBytes, boolean inside) throws IOException {
+    var sizedRun = VERSION_1 | TRUN_SAMPLE_SIZE;
+    IntFunction<byte[]> moofWithDataAt =
+        dataOffset ->
+            box(
+                "moof",
+                box(
+                    "traf",
+                    tfhd(VIDEO_TRACK_ID),
+                    tfdt(0),
+                    fullBox(
+                        "trun",
+                        sizedRun | TRUN_DATA_OFFSET | TRUN_FIRST_SAMPLE_FLAGS,
+                        u32(1),
+                        u32(dataOffset),
+                        u32(SYNC_SAMPLE_FLAGS),
+                        u32(1)),
+                    fullBox("trun", sizedRun, u32(1), u32(1))),
+                box(
+                    "traf",
+                    fullBox("tfhd", 0, u32(IsoBoxes.AUDIO_TRACK_ID)),
+                    tfdt(0),
+                    fullBox("trun", sizedRun, u32(1), u32(3))));
+    var moof = moofWithDataAt.apply(moofWithDataAt.apply(0).length + 8);
+    var reader = readerOf(concat(ftyp(), videoAndAudioMoov(), moof, mdat(mdatBytes)));
+
+    reader.next();
+
+    if (inside) {
+      assertThat(nextFragment(reader).videoStart()).isPresent();
+      return;
+    }
+
+    assertFailure(reader, Reason.SAMPLE_DATA_OUTSIDE_MDAT);
+  }
+
+  @Test
+  @DisplayName("Should start a traf's data at its moof when no offset or base places it")
+  void shouldStartATrafsDataAtItsMoofWhenNoOffsetOrBasePlacesIt() {
+    var traf =
+        box(
+            "traf",
+            fullBox("tfhd", 0, u32(VIDEO_TRACK_ID)),
+            tfdt(0),
+            fullBox("trun", VERSION_1 | TRUN_SAMPLE_SIZE, u32(1), u32(1)));
+
+    assertFailure(
+        readerOf(concat(ftyp(), videoAndAudioMoov(), box("moof", traf), mdat(8))),
+        Reason.SAMPLE_DATA_OUTSIDE_MDAT);
+  }
+
+  @Test
+  @DisplayName("Should fail when a run's samples need a default size no box declares")
+  void shouldFailWhenARunsSamplesNeedADefaultSizeNoBoxDeclares() {
+    var undeclaredTrack =
+        box("traf", tfhd(IsoBoxes.AUDIO_TRACK_ID), tfdt(0), fullBox("trun", VERSION_1, u32(1)));
+
+    assertFailure(
+        readerOf(
+            concat(ftyp(), moov(Track.video().build()), box("moof", undeclaredTrack), mdat(8))),
+        Reason.MALFORMED_BOX);
+  }
+
+  @Test
+  @DisplayName("Should fail when a tfhd base lies beyond any stream position")
+  void shouldFailWhenATfhdBaseLiesBeyondAnyStreamPosition() {
+    var tfhd =
+        fullBox(
+            "tfhd",
+            TFHD_BASE_DATA_OFFSET | TFHD_DEFAULT_SAMPLE_SIZE,
+            u32(VIDEO_TRACK_ID),
+            u64(Long.MIN_VALUE),
+            u32(8));
+    var moof = box("moof", box("traf", tfhd, tfdt(0), syncRun()));
+
+    assertFailure(
+        readerOf(concat(ftyp(), videoAndAudioMoov(), moof, mdat(8))),
+        Reason.SAMPLE_DATA_OUTSIDE_MDAT);
+  }
+
+  @Test
+  @DisplayName("Should fail when a run declares more sample bytes than any mdat could hold")
+  void shouldFailWhenARunDeclaresMoreSampleBytesThanAnyMdatCouldHold() {
+    var tfhd =
+        fullBox(
+            "tfhd",
+            IsoBoxes.TFHD_DEFAULT_BASE_IS_MOOF | TFHD_DEFAULT_SAMPLE_SIZE,
+            u32(VIDEO_TRACK_ID),
+            u32(0xFFFF_FFFFL));
+    var run = fullBox("trun", VERSION_1, u32(0xFFFF_FFFFL));
+    var moof = box("moof", box("traf", tfhd, tfdt(0), run));
+
+    assertFailure(
+        readerOf(concat(ftyp(), videoAndAudioMoov(), moof, mdat(8))),
+        Reason.SAMPLE_DATA_OUTSIDE_MDAT);
+  }
+
   private static void assertFailure(FragmentedMp4Reader reader, Reason reason) {
     assertThatExceptionOfType(FragmentedMp4Exception.class)
         .isThrownBy(() -> Mp4Stream.read(reader))
