@@ -30,10 +30,10 @@ import com.streamarr.transcode.engine.FfmpegRecordings.SegmentSummary;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
+import com.streamarr.transcode.fixtures.TopLevelBoxes;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -367,19 +367,12 @@ class TranscodeWorkerJobAttemptTest {
 
   // Where the fragment at this position after the initialization segment ends.
   private static int endOfFragment(byte[] output, int fragmentIndex) {
-    var buffer = ByteBuffer.wrap(output);
-    var offset = 0;
-    var mediaDataSeen = 0;
-    while (mediaDataSeen <= fragmentIndex) {
-      var size = buffer.getInt(offset);
-      if (new String(output, offset + 4, 4, StandardCharsets.US_ASCII).equals("mdat")) {
-        mediaDataSeen++;
-      }
-
-      offset += size;
-    }
-
-    return offset;
+    return TopLevelBoxes.of(output).stream()
+        .filter(box -> box.type().equals("mdat"))
+        .skip(fragmentIndex)
+        .findFirst()
+        .orElseThrow()
+        .end();
   }
 
   @ParameterizedTest(name = "container value {0}")
@@ -1245,22 +1238,17 @@ class TranscodeWorkerJobAttemptTest {
   // for that fragment, which the producer reads without looking inside.
   private static byte[] withPaddedMediaData(byte[] recording, IntUnaryOperator paddingOfFragment) {
     var grown = new ByteArrayOutputStream();
-    var buffer = ByteBuffer.wrap(recording);
     var fragment = 0;
-    while (buffer.hasRemaining()) {
-      var size = buffer.getInt(buffer.position());
-      var type = new String(recording, buffer.position() + 4, 4, StandardCharsets.US_ASCII);
-      var box = new byte[size];
-      buffer.get(box);
-      if (!type.equals("mdat")) {
-        grown.writeBytes(box);
+    for (var box : TopLevelBoxes.of(recording)) {
+      if (!box.type().equals("mdat")) {
+        grown.write(recording, box.start(), box.size());
         continue;
       }
 
       var padding = paddingOfFragment.applyAsInt(fragment);
       fragment++;
-      grown.writeBytes(ByteBuffer.allocate(4).putInt(size + padding).array());
-      grown.writeBytes(Arrays.copyOfRange(box, 4, size));
+      grown.writeBytes(ByteBuffer.allocate(4).putInt(box.size() + padding).array());
+      grown.write(recording, box.start() + 4, box.size() - 4);
       grown.writeBytes(new byte[padding]);
     }
 

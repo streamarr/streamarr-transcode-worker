@@ -16,11 +16,11 @@ import com.streamarr.transcode.engine.FfmpegRecordings.SegmentSummary;
 import com.streamarr.transcode.engine.RecordingSegmentSink.Accepted;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
+import com.streamarr.transcode.fixtures.TopLevelBoxes;
+import com.streamarr.transcode.fixtures.TopLevelBoxes.Box;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
-import java.nio.ByteBuffer;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.OptionalDouble;
@@ -146,8 +146,7 @@ class ProducerTest {
     var process = ScriptedProcess.builder().output(recorded).build();
     sink.holding(1);
     var firstThirdSegmentFragment = offsetOfMediaSegment(recording, 2);
-    var closingFragmentEnd =
-        firstThirdSegmentFragment + fragmentLengthAt(recorded, firstThirdSegmentFragment);
+    var closingFragmentEnd = endOfFragmentAt(recorded, firstThirdSegmentFragment);
 
     var producer = producerFor(process, recording).start();
 
@@ -248,7 +247,7 @@ class ProducerTest {
       shouldKeepWithinTheWorkersBudgetAndLetEveryNewAttemptProceedWhenStopsAndStartsArriveInBursts()
           throws InterruptedException {
     var output = nearlyCappedSegments();
-    var layout = topLevelBoxesOf(output);
+    var layout = TopLevelBoxes.of(output);
     var workerBudget = SegmentMemoryBudget.forSlots(BURST_SLOTS);
     var capacity = BURST_SLOTS * 2 * SERVER_SEGMENT_CAP_BYTES;
     var attempts = new CopyOnWriteArrayList<BurstAttempt>();
@@ -1479,24 +1478,11 @@ class ProducerTest {
   // every box it has begun to read that no returned delivery carried; a stopped attempt holds only
   // its deliveries that have not returned. Every charge is read before any release, so the bound
   // holds at the moment the charges are read.
-  private static long chargedAtLeast(List<BurstAttempt> attempts, List<BoxSpan> layout) {
+  private static long chargedAtLeast(List<BurstAttempt> attempts, List<Box> layout) {
     var snapshot = List.copyOf(attempts);
     var charged = snapshot.stream().mapToLong(attempt -> attempt.chargedBefore(layout)).sum();
     var released = snapshot.stream().mapToLong(attempt -> attempt.sink().returnedBytes()).sum();
     return charged - released;
-  }
-
-  private static List<BoxSpan> topLevelBoxesOf(byte[] output) {
-    var buffer = ByteBuffer.wrap(output);
-    var boxes = new ArrayList<BoxSpan>();
-    var start = 0;
-    while (start < output.length) {
-      var size = buffer.getInt(start);
-      boxes.add(new BoxSpan(start, size));
-      start += size;
-    }
-
-    return boxes;
   }
 
   // The heap that live objects occupy once a full collection has freed every unreachable one.
@@ -1565,14 +1551,16 @@ class ProducerTest {
               assertThat(preroll.fragmentCount()).isGreaterThan(2);
             });
     var firstPrerollFragment = Math.toIntExact(recording.initializationSegment().byteLength());
-    return firstPrerollFragment + fragmentLengthAt(recorded, firstPrerollFragment) + 10;
+    return endOfFragmentAt(recorded, firstPrerollFragment) + 10;
   }
 
-  // The length of the moof at this offset and the mdat that follows it.
-  private static int fragmentLengthAt(byte[] output, int offset) {
-    var buffer = ByteBuffer.wrap(output);
-    var moofLength = buffer.getInt(offset);
-    return moofLength + buffer.getInt(offset + moofLength);
+  // Where the mdat that follows the moof at this offset ends.
+  private static int endOfFragmentAt(byte[] output, int moofOffset) {
+    return TopLevelBoxes.of(output).stream()
+        .filter(box -> box.start() > moofOffset && box.type().equals("mdat"))
+        .findFirst()
+        .orElseThrow()
+        .end();
   }
 
   // Three 1 s segments of 23.976 fps video in which the second segment's first fragment holds a
@@ -1608,15 +1596,6 @@ class ProducerTest {
   @Builder
   private record BurstStart(byte[] output, SegmentMemoryBudget budget, int burst) {}
 
-  private record BoxSpan(int start, int size) {
-
-    // Whether a reader that took this many bytes has begun to read the box's body, which it admits
-    // only after reading its 8-byte header.
-    boolean isAdmittedAfter(int bytesTaken) {
-      return bytesTaken > start + 8;
-    }
-  }
-
   // An attempt of the burst test. The test marks it stopped before it asks the producer to stop, so
   // that the lower bound stops counting the reader's share no later than the producer releases it.
   private record BurstAttempt(
@@ -1631,16 +1610,13 @@ class ProducerTest {
     }
 
     // What the attempt charges before its returned deliveries are subtracted.
-    long chargedBefore(List<BoxSpan> layout) {
+    long chargedBefore(List<Box> layout) {
       if (stopped.get()) {
         return sink.startedBytes();
       }
 
       var taken = process.bytesTaken();
-      return layout.stream()
-          .filter(box -> box.isAdmittedAfter(taken))
-          .mapToLong(BoxSpan::size)
-          .sum();
+      return layout.stream().filter(box -> box.hasBodyBegunAfter(taken)).mapToLong(Box::size).sum();
     }
   }
 
