@@ -14,11 +14,7 @@ public class FfmpegTranscodeEngine {
   private final TranscodeCapabilityService capabilityService;
 
   public TranscodeHandle start(TranscodeRequest request, Path outputDirectory) {
-    if (!capabilityService.isFfmpegAvailable()) {
-      throw new TranscodeException(
-          "FFmpeg is unavailable: " + capabilityService.getUnavailableReason());
-    }
-
+    requireAvailableFfmpeg();
     var job =
         TranscodeJob.builder()
             .request(request)
@@ -58,6 +54,13 @@ public class FfmpegTranscodeEngine {
 
   public boolean isHealthy() {
     return capabilityService.isFfmpegAvailable();
+  }
+
+  private void requireAvailableFfmpeg() {
+    if (!capabilityService.isFfmpegAvailable()) {
+      throw new TranscodeException(
+          "FFmpeg is unavailable: " + capabilityService.getUnavailableReason());
+    }
   }
 
   private String resolveEncoder(TranscodeRequest request) {
