@@ -10,6 +10,7 @@ import {
   VIDEO,
   audioFragment,
   box,
+  fragment,
   ftyp,
   fullBox,
   initialization,
@@ -84,15 +85,15 @@ describe('fmp4 box reader', () => {
   });
 
   it('reads the composition offset of a version 0 trun as unsigned', () => {
-    const run = trun({ version: 0, samples: [{ size: 1, compositionOffset: 0x80000000 }], firstSampleFlags: SYNC });
-    const start = firstVideo(moof(traf({ trackId: 1, decodeTime: 0, runs: [run] })), mdat([1]));
+    const run = { version: 0, samples: [{ size: 1, compositionOffset: 0x80000000 }], firstSampleFlags: SYNC };
+    const start = firstVideo(fragment({ trackId: 1, decodeTime: 0, runs: [run] }));
 
     assert.equal(start.firstPresentationTime, 2147483648n);
   });
 
   it('reads a version 0 tfdt as an unsigned 32-bit decode time', () => {
-    const run = trun({ samples: [{ size: 1 }], firstSampleFlags: SYNC });
-    const start = firstVideo(moof(traf({ trackId: 1, decodeTime: 0xfffffff0, tfdtVersion: 0, runs: [run] })), mdat([1]));
+    const run = { samples: [{ size: 1 }], firstSampleFlags: SYNC };
+    const start = firstVideo(fragment({ trackId: 1, decodeTime: 0xfffffff0, tfdtVersion: 0, runs: [run] }));
 
     assert.equal(start.firstPresentationTime, 4294967280n);
   });
@@ -105,33 +106,26 @@ describe('fmp4 box reader', () => {
       [{ samples: [{ size: 1 }] }, null, false],
     ];
     for (const [run, defaultFlags, sync] of cases) {
-      const fragment = moof(traf({ trackId: 1, decodeTime: 0, defaultFlags, runs: [trun(run)] }));
-
-      assert.equal(firstVideo(fragment, mdat([1])).firstSync, sync, JSON.stringify(run));
+      assert.equal(firstVideo(fragment({ trackId: 1, decodeTime: 0, defaultFlags, runs: [run] })).firstSync, sync, JSON.stringify(run));
     }
   });
 
   it('gives a fragment no video start when it carries only audio or an empty video run', () => {
-    const emptyVideo = moof(traf({ trackId: 1, decodeTime: 0, runs: [trun({ samples: [] })] }));
-    const stream = streamOf(initialization(), audioFragment({ decodeTime: 0 }), emptyVideo, mdat([]));
+    const emptyVideo = fragment({ trackId: 1, decodeTime: 0, runs: [{ samples: [] }] });
+    const stream = streamOf(initialization(), audioFragment({ decodeTime: 0 }), emptyVideo);
 
     assert.deepEqual(stream.fragments.map(videoStart), [null, null]);
   });
 
   it('lists every video sample in decode order with its presentation time and fragment', () => {
-    const run = trun({
+    const run = {
       samples: [
         { duration: 1001, size: 3, compositionOffset: 2002 },
         { duration: 1001, size: 4, compositionOffset: 0 },
       ],
       firstSampleFlags: SYNC,
-    });
-    const stream = streamOf(
-      initialization(),
-      audioFragment({ decodeTime: 0 }),
-      moof(traf({ trackId: 1, decodeTime: 1001, runs: [run] })),
-      mdat([1, 2, 3, 4, 5, 6, 7]),
-    );
+    };
+    const stream = streamOf(initialization(), audioFragment({ decodeTime: 0 }), fragment({ trackId: 1, decodeTime: 1001, runs: [run] }));
 
     assert.deepEqual(videoSamples(stream), [
       { presentationTime: 3003n, sync: true, size: 3, fragmentIndex: 1 },
@@ -140,10 +134,14 @@ describe('fmp4 box reader', () => {
   });
 
   it('reads boxes that declare a 64-bit size', () => {
-    const run = trun({ samples: [{ size: 1 }], firstSampleFlags: SYNC });
-    const fragment = largeBox('moof', largeBox('traf', fullBox('tfhd', 0, 0x020000, u32(1)), fullBox('tfdt', 0, 0, u32(7)), run));
+    const large = (dataOffset) =>
+      largeBox(
+        'moof',
+        largeBox('traf', fullBox('tfhd', 0, 0x020000, u32(1)), fullBox('tfdt', 0, 0, u32(7)), trun({ samples: [{ size: 1 }], dataOffset, firstSampleFlags: SYNC })),
+      );
+    const moofBytes = large(large(0).length + 8);
 
-    assert.equal(firstVideo(fragment, mdat([1])).firstPresentationTime, 7n);
+    assert.equal(firstVideo(moofBytes, mdat([1])).firstPresentationTime, 7n);
   });
 
   it('reads a decode time of 2^64 - 1024 as the signed -1024 FFmpeg wrote', () => {

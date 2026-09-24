@@ -20,7 +20,7 @@ import {
 import { readStream, videoStart } from './fmp4.mjs';
 import { Decimal } from './json.mjs';
 import { Rational } from './rational.mjs';
-import { NON_SYNC, SYNC, VIDEO, audioFragment, initialization, mdat, moof, traf, trun, videoFragment } from './test-boxes.mjs';
+import { NON_SYNC, SYNC, VIDEO, audioFragment, fragment, initialization, videoFragment } from './test-boxes.mjs';
 
 const RECORDING = new URL('../resources/fmp4/07-copy-start0.fmp4', import.meta.url).pathname;
 const seconds = (text) => Rational.parseDecimal(text);
@@ -81,13 +81,11 @@ describe('grid and HLS comparison', () => {
 
 describe('recording facts', () => {
   const keyframeRun = (decodeTime) =>
-    moof(
-      traf({
-        trackId: VIDEO.trackId,
-        decodeTime,
-        runs: [trun({ samples: [{ duration: 1001, size: 1, flags: NON_SYNC }, { duration: 1001, size: 1, flags: SYNC }] })],
-      }),
-    );
+    fragment({
+      trackId: VIDEO.trackId,
+      decodeTime,
+      runs: [{ samples: [{ duration: 1001, size: 1, flags: NON_SYNC }, { duration: 1001, size: 1, flags: SYNC }] }],
+    });
 
   it('describes a stream copy whose keyframes are the source keyframes moved to media time', () => {
     const stream = readStream(
@@ -112,7 +110,7 @@ describe('recording facts', () => {
         initialization(),
         audioFragment({ decodeTime: 0 }),
         videoFragment({ decodeTime: 0, sync: true }),
-        videoFragment({ decodeTime: 1001, sync: false, payload: [1, 2, 3] }),
+        videoFragment({ decodeTime: 1001, sync: false, size: 3 }),
         videoFragment({ decodeTime: 3003, sync: true }),
         audioFragment({ decodeTime: 18446744073709550592n }),
       ]),
@@ -135,7 +133,7 @@ describe('recording facts', () => {
 
   it('reports a keyframe that does not start its fragment', () => {
     const stream = readStream(
-      Buffer.concat([initialization(), keyframeRun(0), mdat([1, 2]), keyframeRun(2002), mdat([1, 2])]),
+      Buffer.concat([initialization(), keyframeRun(0), keyframeRun(2002)]),
     );
 
     assert.equal(diagnostics(stream).everyKeyframeStartsAFragment, false);

@@ -109,25 +109,45 @@ export function mdat(bytes) {
   return box('mdat', Buffer.from(bytes));
 }
 
-/** A video fragment of one sample whose sync status is its first-sample flags. */
-export function videoFragment({ decodeTime, sync, compositionOffset = 0, payload = [1] }) {
-  return Buffer.concat([
-    moof(
-      traf({
-        trackId: VIDEO.trackId,
-        decodeTime,
-        runs: [trun({ samples: [{ duration: 1001, size: payload.length, compositionOffset }], firstSampleFlags: sync ? SYNC : NON_SYNC })],
-      }),
-    ),
-    mdat(payload),
-  ]);
+function runBytes(run) {
+  return run.samples.reduce((sum, sample) => sum + (sample.size ?? 0), 0);
 }
 
-export function audioFragment({ decodeTime, payload = [2] }) {
-  return Buffer.concat([
-    moof(traf({ trackId: AUDIO.trackId, decodeTime, runs: [trun({ samples: [{ duration: 1024, size: payload.length }] })] })),
-    mdat(payload),
-  ]);
+/**
+ * A moof of trafs ({ trackId, decodeTime, defaultFlags, tfdtVersion, runs: [trun options] }) and
+ * the mdat that holds their samples, each run's data offset pointing at its own bytes.
+ */
+export function fragment(...trafs) {
+  const build = (offsets) =>
+    moof(
+      ...trafs.map((spec, index) =>
+        traf({ ...spec, runs: spec.runs.map((run, position) => trun({ ...run, dataOffset: offsets[index][position] })) }),
+      ),
+    );
+  const dataStart = build(trafs.map((spec) => spec.runs.map(() => 0))).length + 8;
+  let position = dataStart;
+  const offsets = trafs.map((spec) =>
+    spec.runs.map((run) => {
+      const at = position;
+      position += runBytes(run);
+      return at;
+    }),
+  );
+  const payload = Array.from({ length: position - dataStart }, (_, index) => index & 0xff);
+  return Buffer.concat([build(offsets), mdat(payload)]);
+}
+
+/** A video fragment of one sample whose sync status is its first-sample flags. */
+export function videoFragment({ decodeTime, sync, compositionOffset = 0, size = 1 }) {
+  return fragment({
+    trackId: VIDEO.trackId,
+    decodeTime,
+    runs: [{ samples: [{ duration: 1001, size, compositionOffset }], firstSampleFlags: sync ? SYNC : NON_SYNC }],
+  });
+}
+
+export function audioFragment({ decodeTime, size = 1 }) {
+  return fragment({ trackId: AUDIO.trackId, decodeTime, runs: [{ samples: [{ duration: 1024, size }] }] });
 }
 
 export function initialization() {
