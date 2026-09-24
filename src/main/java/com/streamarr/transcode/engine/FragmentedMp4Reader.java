@@ -21,7 +21,7 @@ final class FragmentedMp4Reader {
   private final long maximumSegmentBytes;
   private final BoxAdmission admission;
 
-  // Every read from the stream lands here first, box headers and body chunks alike, so a read that
+  // Every read from the stream lands here first, box headers and body reads alike, so a read that
   // blocks on the stream references no box.
   private final byte[] scratch = new byte[SCRATCH_BYTES];
   private final UnitBoxes unitBoxes = new UnitBoxes();
@@ -79,22 +79,22 @@ final class FragmentedMp4Reader {
   }
 
   private Optional<Mp4Unit> readInitializationSegment() throws IOException {
-    var ftypHeader = readHeader();
-    if (ftypHeader.isEmpty()) {
+    var firstHeader = readHeader();
+    if (firstHeader.isEmpty()) {
       return Optional.empty();
     }
 
     var missing = Reason.MISSING_INITIALIZATION_SEGMENT;
-    var ftypBoxHeader = requireType(ftypHeader.orElseThrow(), "ftyp", missing);
-    readBox(ftypBoxHeader, 0);
+    var ftypHeader = requireType(firstHeader.orElseThrow(), "ftyp", missing);
+    readBox(ftypHeader, 0);
     var moovHeader =
         readHeader()
             .map(header -> requireType(header, "moov", missing))
             .orElseThrow(() -> unexpected(missing, "moov", "the end of the stream"));
-    readBox(moovHeader, ftypBoxHeader.size());
-    var boxes = unitBoxes.take();
-    var ftyp = boxes.getFirst();
-    var moov = boxes.getLast();
+    readBox(moovHeader, ftypHeader.size());
+    var boxes = unitBoxes.takePair();
+    var ftyp = boxes.first();
+    var moov = boxes.second();
     var moovView = viewOf(moovHeader, moov);
     var trackExtends = TrackExtends.byTrackIdIn(moovView);
     movie =
@@ -120,9 +120,9 @@ final class FragmentedMp4Reader {
                     new FragmentedMp4Exception(
                         Reason.END_OF_FILE_AFTER_MOVIE_FRAGMENT, "no mdat follows the moof"));
     readBox(requireType(mdatHeader, "mdat", Reason.UNEXPECTED_BOX), moofHeader.size());
-    var boxes = unitBoxes.take();
-    var moof = boxes.getFirst();
-    var mdat = boxes.getLast();
+    var boxes = unitBoxes.takePair();
+    var moof = boxes.first();
+    var mdat = boxes.second();
     var trackFragments = TrackFragmentBox.allOf(viewOf(moofHeader, moof));
     var mediaData =
         new MediaData(
@@ -258,6 +258,10 @@ final class FragmentedMp4Reader {
     }
   }
 
+  // The two boxes of a unit: ftyp and moov, or moof and mdat.
+  @SuppressWarnings("java:S6218") // Carries the boxes to the reader; nothing compares pairs.
+  private record BoxPair(byte[] first, byte[] second) {}
+
   // The boxes of the unit being read. The reader holds them only here until the unit is complete,
   // never in a local variable while it reads from the stream, so cancelling reading from another
   // thread drops them even while a read blocks.
@@ -284,12 +288,11 @@ final class FragmentedMp4Reader {
       filledBytes += length;
     }
 
-    // Hands over the unit's boxes in the order they were read.
-    synchronized List<byte[]> take() {
+    synchronized BoxPair takePair() {
       requireNotCancelled();
-      var taken = List.copyOf(boxes);
+      var pair = new BoxPair(boxes.getFirst(), boxes.getLast());
       boxes.clear();
-      return taken;
+      return pair;
     }
 
     synchronized void clear() {
