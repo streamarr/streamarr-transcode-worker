@@ -1393,34 +1393,36 @@ class ProducerTest {
   }
 
   // Starts one attempt per slot, each filling its own budget while its sink holds its first media
-  // segment. Alternate attempts hold that delivery past its cancellation, as an upload slow to
-  // abandon would, when a later burst stops them.
+  // segment.
   private List<BurstAttempt> startBurst(BurstStart burst) {
-    return IntStream.range(0, BURST_SLOTS)
-        .mapToObj(
-            slot -> {
-              var process =
-                  ScriptedProcess.builder()
-                      .output(burst.output())
-                      .exitTiming(ExitTiming.WHEN_TEST_EXITS)
-                      .build();
-              var cancelsSlowly = (burst.burst() + slot) % 2 == 0;
-              var attemptSink = new RecordingSegmentSink();
-              if (cancelsSlowly) {
-                attemptSink.holdingPastCancellation(1);
-              } else {
-                attemptSink.holding(1);
-              }
+    return IntStream.range(0, BURST_SLOTS).mapToObj(slot -> startAttempt(burst, slot)).toList();
+  }
 
-              var producer =
-                  producerOfOneSecondSegments(process)
-                      .sink(attemptSink)
-                      .memoryBudget(burst.budget())
-                      .gracePeriod(Duration.ofMinutes(10))
-                      .start();
-              return new BurstAttempt(process, attemptSink, producer, new AtomicBoolean());
-            })
-        .toList();
+  private BurstAttempt startAttempt(BurstStart burst, int slot) {
+    var process =
+        ScriptedProcess.builder()
+            .output(burst.output())
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    var attemptSink = sinkHoldingTheFirstMediaSegment(burst, slot);
+    var producer =
+        producerOfOneSecondSegments(process)
+            .sink(attemptSink)
+            .memoryBudget(burst.budget())
+            .gracePeriod(Duration.ofMinutes(10))
+            .start();
+    return BurstAttempt.builder().process(process).sink(attemptSink).producer(producer).build();
+  }
+
+  // Alternate attempts hold that delivery past its cancellation, as an upload slow to abandon
+  // would, when a later burst stops them.
+  private static RecordingSegmentSink sinkHoldingTheFirstMediaSegment(BurstStart burst, int slot) {
+    var attemptSink = new RecordingSegmentSink();
+    if ((burst.burst() + slot) % 2 == 0) {
+      return attemptSink.holdingPastCancellation(1);
+    }
+
+    return attemptSink.holding(1);
   }
 
   // Stops the attempts on another thread while the next ones start, as a burst of seeks does.
@@ -1463,7 +1465,6 @@ class ProducerTest {
             });
   }
 
-  // Each stopped attempt settles as stopped once its FFmpeg, alive until now, exits.
   private static void endStoppedAttempts(List<BurstAttempt> stopped) {
     stopped.forEach(attempt -> attempt.process().exit());
     assertThat(stopped)
@@ -1598,11 +1599,31 @@ class ProducerTest {
 
   // An attempt of the burst test. The test marks it stopped before it asks the producer to stop, so
   // that the lower bound stops counting the reader's share no later than the producer releases it.
-  private record BurstAttempt(
-      ScriptedProcess process,
-      RecordingSegmentSink sink,
-      Producer producer,
-      AtomicBoolean stopped) {
+  private static final class BurstAttempt {
+
+    private final ScriptedProcess process;
+    private final RecordingSegmentSink sink;
+    private final Producer producer;
+    private final AtomicBoolean stopped = new AtomicBoolean();
+
+    @Builder
+    private BurstAttempt(ScriptedProcess process, RecordingSegmentSink sink, Producer producer) {
+      this.process = process;
+      this.sink = sink;
+      this.producer = producer;
+    }
+
+    ScriptedProcess process() {
+      return process;
+    }
+
+    RecordingSegmentSink sink() {
+      return sink;
+    }
+
+    Producer producer() {
+      return producer;
+    }
 
     void stop() {
       stopped.set(true);
