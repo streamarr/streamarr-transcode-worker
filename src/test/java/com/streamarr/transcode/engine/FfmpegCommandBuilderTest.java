@@ -37,11 +37,7 @@ class FfmpegCommandBuilderTest {
   }
 
   private static TranscodeJob job(TranscodeRequest request, String videoEncoder) {
-    return TranscodeJob.builder()
-        .request(request)
-        .videoEncoder(videoEncoder)
-        .outputDir(Path.of("/tmp/session-123"))
-        .build();
+    return TranscodeJob.builder().request(request).videoEncoder(videoEncoder).build();
   }
 
   private static TranscodeRequest.TranscodeRequestBuilder request(TranscodeMode mode) {

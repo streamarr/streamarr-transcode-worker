@@ -2,7 +2,6 @@ package com.streamarr.transcode.worker;
 
 import com.streamarr.transcode.engine.FfmpegCommandBuilder;
 import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
-import com.streamarr.transcode.engine.LocalFfmpegProcessManager;
 import com.streamarr.transcode.engine.TranscodeCapabilityService;
 import com.streamarr.transcode.probe.FfprobeExecutor;
 import java.io.IOException;
@@ -56,7 +55,6 @@ public class TranscodeWorkerApplication {
     var engine =
         new FfmpegTranscodeEngine(
             new FfmpegCommandBuilder(settings.ffmpegPath(), settings.fragmentationTarget()),
-            new LocalFfmpegProcessManager(),
             capabilities);
     var ffprobe = FfprobeExecutor.forBinary(Path.of(settings.ffprobePath()));
     return new TranscodeWorker(settings.workerConfiguration(), engine, ffprobe);

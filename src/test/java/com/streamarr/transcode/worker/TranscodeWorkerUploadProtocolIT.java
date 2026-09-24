@@ -29,7 +29,6 @@ import build.buf.gen.streamarr.transcode.v1.WorkerIdentity;
 import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
 import com.streamarr.transcode.engine.FfmpegCommandBuilder;
 import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
-import com.streamarr.transcode.engine.LocalFfmpegProcessManager;
 import com.streamarr.transcode.engine.TranscodeCapabilityService;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
@@ -189,7 +188,6 @@ class TranscodeWorkerUploadProtocolIT {
     capabilities.detectCapabilities();
     return FfmpegTranscodeEngine.builder()
         .commandBuilder(new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)))
-        .processManager(new LocalFfmpegProcessManager())
         .capabilityService(capabilities)
         .launcher(ScriptedProcessLauncher.running())
         .build();

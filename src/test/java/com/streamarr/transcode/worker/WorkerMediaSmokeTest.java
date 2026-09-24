@@ -22,7 +22,6 @@ import build.buf.gen.streamarr.transcode.v1.WorkerRegistration;
 import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
 import com.streamarr.transcode.engine.FfmpegCommandBuilder;
 import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
-import com.streamarr.transcode.engine.LocalFfmpegProcessManager;
 import com.streamarr.transcode.engine.TranscodeCapabilityService;
 import com.streamarr.transcode.probe.FfprobeExecutor;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
@@ -124,9 +123,7 @@ class WorkerMediaSmokeTest {
     assertThat(capabilities.isFfmpegAvailable()).isTrue();
     var engine =
         new FfmpegTranscodeEngine(
-            new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)),
-            new LocalFfmpegProcessManager(),
-            capabilities);
+            new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)), capabilities);
     try (var controlPlane = new MediaControlPlane();
         var worker = workerBuilder(root).engine(engine).build()) {
       worker.start("127.0.0.1", controlPlane.port());
@@ -174,9 +171,7 @@ class WorkerMediaSmokeTest {
     capabilities.detectCapabilities();
     var engine =
         new FfmpegTranscodeEngine(
-            new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)),
-            new LocalFfmpegProcessManager(),
-            capabilities);
+            new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)), capabilities);
     try (var controlPlane = new MediaControlPlane();
         var worker = workerBuilder(root).engine(engine).build()) {
       worker.start("127.0.0.1", controlPlane.port());

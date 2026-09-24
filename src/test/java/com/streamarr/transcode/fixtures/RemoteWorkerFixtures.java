@@ -2,7 +2,6 @@ package com.streamarr.transcode.fixtures;
 
 import com.streamarr.transcode.engine.FfmpegCommandBuilder;
 import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
-import com.streamarr.transcode.engine.LocalFfmpegProcessManager;
 import com.streamarr.transcode.engine.ProcessLauncher;
 import com.streamarr.transcode.engine.TranscodeCapabilityService;
 import com.streamarr.transcode.worker.TranscodeWorkerConfiguration;
@@ -41,7 +40,6 @@ public final class RemoteWorkerFixtures {
 
     return FfmpegTranscodeEngine.builder()
         .commandBuilder(new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)))
-        .processManager(new LocalFfmpegProcessManager())
         .capabilityService(capabilityService)
         .launcher(launcher)
         .build();
