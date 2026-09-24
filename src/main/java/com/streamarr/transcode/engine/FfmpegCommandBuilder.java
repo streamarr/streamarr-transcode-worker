@@ -3,8 +3,9 @@ package com.streamarr.transcode.engine;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import lombok.Builder;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 
@@ -14,25 +15,40 @@ public class FfmpegCommandBuilder {
   @NonNull private final String ffmpegPath;
   @NonNull private final Duration fragmentationTarget;
 
-  // Encoders whose recordings show every time-based forced keyframe as a sync sample that starts a
-  // closed GOP, with the GOP count restarting there (src/test/resources/fmp4/README.md, "Verified
-  // encoders"; ADR 0037 as amended). libx265 and the hardware encoders are not verified yet.
-  private static final Set<String> VERIFIED_ENCODERS = Set.of("libx264", "libsvtav1");
+  private static final EncoderTraits UNLISTED_ENCODER = EncoderTraits.builder().build();
+  private static final EncoderTraits FIXED_GOP = EncoderTraits.builder().fixedGop(true).build();
 
-  private static final Set<String> FIXED_GOP_ENCODERS =
-      Set.of(
-          "libsvtav1",
-          "h264_nvenc",
-          "hevc_nvenc",
-          "av1_nvenc",
-          "h264_qsv",
-          "hevc_qsv",
-          "av1_qsv",
-          "h264_amf",
-          "hevc_amf",
-          "av1_amf",
-          "h264_rkmpp",
-          "hevc_rkmpp");
+  // What the command passes each encoder differently; an encoder not listed has none of it. A
+  // keyframe-verified encoder's recordings show every forced keyframe as a sync sample that starts
+  // a closed GOP, with its GOP count restarting there (ADR 0037 as amended;
+  // src/test/resources/fmp4/README.md, "Verified encoders"); libx265 and the hardware encoders are
+  // not keyframe-verified yet.
+  private static final Map<String, EncoderTraits> ENCODER_TRAITS =
+      Map.ofEntries(
+          Map.entry(
+              "libx264",
+              EncoderTraits.builder()
+                  .keyframeVerified(true)
+                  .disablesSceneCutsByThreshold(true)
+                  .build()),
+          Map.entry(
+              "libsvtav1",
+              EncoderTraits.builder()
+                  .keyframeVerified(true)
+                  .fixedGop(true)
+                  .capsBitrateOnlyInCrfMode(true)
+                  .build()),
+          Map.entry("h264_nvenc", FIXED_GOP),
+          Map.entry("hevc_nvenc", FIXED_GOP),
+          Map.entry("av1_nvenc", FIXED_GOP),
+          Map.entry("h264_qsv", FIXED_GOP),
+          Map.entry("hevc_qsv", FIXED_GOP),
+          Map.entry("av1_qsv", FIXED_GOP),
+          Map.entry("h264_amf", FIXED_GOP),
+          Map.entry("hevc_amf", FIXED_GOP),
+          Map.entry("av1_amf", FIXED_GOP),
+          Map.entry("h264_rkmpp", FIXED_GOP),
+          Map.entry("hevc_rkmpp", FIXED_GOP));
 
   static final List<String> MP4_MOVFLAGS =
       List.of("cmaf", "delay_moov", "skip_trailer", "frag_keyframe", "frag_discont");
@@ -158,7 +174,7 @@ public class FfmpegCommandBuilder {
     cmd.addAll(List.of("-vf", "scale=-2:" + request.height()));
     var bitrate = String.valueOf(request.bitrate());
     // SVT-AV1 supports a bitrate cap only in CRF mode. Its default CRF is 35.
-    if ("libsvtav1".equals(job.videoEncoder())) {
+    if (traitsOf(job).capsBitrateOnlyInCrfMode()) {
       cmd.addAll(
           List.of("-crf", "35", "-maxrate", bitrate, "-svtav1-params", "mbr-overshoot-pct=0"));
       return;
@@ -184,7 +200,7 @@ public class FfmpegCommandBuilder {
     addForcedKeyframeArgs(cmd, job);
     cmd.addAll(List.of("-g:v:0", gopSize));
 
-    if (FIXED_GOP_ENCODERS.contains(job.videoEncoder())) {
+    if (traitsOf(job).fixedGop()) {
       cmd.addAll(List.of("-keyint_min:v:0", gopSize));
     }
   }
@@ -194,7 +210,7 @@ public class FfmpegCommandBuilder {
     var periodFrames = request.targetSegmentDuration() * request.framerate();
     // One frame past the forced keyframes' gap, so the GOP never fires while forcing works, and a
     // keyframe it places for a dropped forced one still lands inside that interval.
-    if (VERIFIED_ENCODERS.contains(job.videoEncoder())) {
+    if (traitsOf(job).keyframeVerified()) {
       return (int) Math.ceil(periodFrames) + 1;
     }
 
@@ -206,7 +222,7 @@ public class FfmpegCommandBuilder {
   private void addForcedKeyframeArgs(List<String> cmd, TranscodeJob job) {
     cmd.addAll(List.of("-force_key_frames:0", forcedKeyframeTimes(job.request())));
 
-    if ("libx264".equals(job.videoEncoder())) {
+    if (traitsOf(job).disablesSceneCutsByThreshold()) {
       cmd.addAll(List.of("-sc_threshold:v:0", "0"));
     }
   }
@@ -233,6 +249,10 @@ public class FfmpegCommandBuilder {
     return times.toString();
   }
 
+  private static EncoderTraits traitsOf(TranscodeJob job) {
+    return ENCODER_TRAITS.getOrDefault(job.videoEncoder(), UNLISTED_ENCODER);
+  }
+
   private void addFragmentedMp4Output(List<String> cmd) {
     cmd.addAll(
         List.of(
@@ -244,4 +264,11 @@ public class FfmpegCommandBuilder {
             String.valueOf(TimeUnit.MICROSECONDS.convert(fragmentationTarget)),
             "pipe:1"));
   }
+
+  @Builder
+  private record EncoderTraits(
+      boolean keyframeVerified,
+      boolean fixedGop,
+      boolean disablesSceneCutsByThreshold,
+      boolean capsBitrateOnlyInCrfMode) {}
 }
