@@ -1,7 +1,6 @@
 package com.streamarr.transcode.engine;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.Optional;
 import lombok.NonNull;
 
 /**
@@ -10,34 +9,42 @@ import lombok.NonNull;
  */
 public final class DeliveryCancellation {
 
-  private final List<Runnable> actions = new ArrayList<>();
+  private Optional<Runnable> action = Optional.empty();
   private boolean cancelled;
 
-  /** Runs the action when the producer cancels the delivery, or at once when it already has. */
-  public void onCancel(@NonNull Runnable action) {
+  /**
+   * Registers the delivery's one cancellation action, which runs when the producer cancels the
+   * delivery, or at once when it already has.
+   *
+   * @throws IllegalStateException when the delivery already has a cancellation action
+   */
+  public void onCancel(@NonNull Runnable cancellationAction) {
     synchronized (this) {
+      if (action.isPresent()) {
+        throw new IllegalStateException("The delivery already has a cancellation action");
+      }
+
       if (!cancelled) {
-        actions.add(action);
+        action = Optional.of(cancellationAction);
         return;
       }
     }
 
-    action.run();
+    cancellationAction.run();
   }
 
-  // The actions run outside the monitor, so an action may block briefly without holding it.
+  // The action runs outside the monitor, so it may block briefly without holding it.
   void cancel() {
-    List<Runnable> registered;
+    Optional<Runnable> registered;
     synchronized (this) {
       if (cancelled) {
         return;
       }
 
       cancelled = true;
-      registered = List.copyOf(actions);
-      actions.clear();
+      registered = action;
     }
 
-    registered.forEach(Runnable::run);
+    registered.ifPresent(Runnable::run);
   }
 }
