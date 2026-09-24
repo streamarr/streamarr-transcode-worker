@@ -36,7 +36,7 @@ To build and run the worker from source, see [Developer Setup](docs/dev-setup.md
 
 ## Architecture
 
-The worker runs as a separate Java service. It connects to the server over gRPC, reads files from a shared media library, and uploads HLS segments back to the server. Workers can run alongside the server or on other machines.
+The worker runs as a separate Java service. It connects to the server over gRPC, reads files from a shared media library, reads FFmpeg's fragmented MP4 output from a pipe, and uploads each HLS media segment back to the server. Workers can run alongside the server or on other machines.
 
 The server owns the worker protocol; this repository consumes its published Java SDK. See the [Architecture Decision Records](https://github.com/streamarr/streamarr-adr) for the design rationale.
 

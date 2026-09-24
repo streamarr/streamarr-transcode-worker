@@ -378,7 +378,7 @@ the release, lock, resolver, or shared resolver libraries change. Ordinary read-
 this is distinct from the privileged synchronization workflow's trusted-base boundary.
 Release builds use offline metadata validation and verify the binary checksum at download time.
 
-The `SmokeTest` group (including `HlsStreamingSmokeTest`) uses the locked runtime in
+The `SmokeTest` group (`WorkerMediaSmokeTest`) uses the locked runtime in
 the amd64 application job. Packaging changes also run that group on an arm64 host;
 the packaging matrix does not repeat the amd64 host run. Separately, both native
 images are built and verified in-container for runtime identity, H.264/AAC fragmented

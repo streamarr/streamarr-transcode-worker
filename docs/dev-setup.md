@@ -38,7 +38,7 @@ java -jar "target/transcode-worker-${worker_version}.jar"
 
 Replace the media path with your own directory. The server and worker must use the same namespace UUID, with the same files beneath their respective source roots. The root paths may differ. Give each running worker a distinct worker UUID; reusing one replaces that worker's session.
 
-FFmpeg and ffprobe must be on `PATH`, or configured with the executable paths below. The worker checks both before connecting to the server. Keep source media read-only and temporary output in a separate writable directory.
+FFmpeg and ffprobe must be on `PATH`, or configured with the executable paths below. The worker checks both before connecting to the server. Keep source media read-only: the worker writes no media files, because it reads FFmpeg's output from a pipe.
 
 ### Configuration
 
@@ -52,7 +52,6 @@ Settings are read from the environment at startup. The three variables in the ex
 | `TRANSCODE_WORKER_FFMPEG_PATH` | `ffmpeg` | FFmpeg executable |
 | `TRANSCODE_WORKER_FFPROBE_PATH` | `ffprobe` | ffprobe executable |
 | `TRANSCODE_WORKER_FRAGMENTATION_TARGET` | `1s` | Fragmentation target: the media duration after which FFmpeg starts a new fragment at the next packet, such as `1s` or `500ms`. Keep it well below the segment period |
-| `TRANSCODE_WORKER_SEGMENT_BASE_PATH` | `streamarr-worker-segments` under Java's temporary directory | Temporary segment storage; use a separate directory for each worker |
 | `SERVER_PORT` | `9091` | HTTP port for health checks |
 
 ### Filename Locale
@@ -73,7 +72,7 @@ It should report `UTF-8`. To recover, correct the locale and restart the worker.
 
 Spring Boot Actuator serves `/actuator/health/liveness` and `/actuator/health/readiness` on port `9091`. Readiness requires an accepted server session; a worker with all slots occupied remains ready.
 
-Losing the server session stops active work and exits the worker process. A deployment supervisor should restart it. During shutdown, the worker stops its media processes and cleans up temporary output.
+Losing the server session stops active work and exits the worker process. A deployment supervisor should restart it. During shutdown, the worker asks each FFmpeg process to quit and waits for it to exit.
 
 ### Deploying Beyond Local Development
 
@@ -91,7 +90,7 @@ Use the server's [Distributed Transcoding](https://github.com/streamarr/streamar
 ./mvnw verify
 ```
 
-Smoke tests use real FFmpeg and ffprobe to exercise probing, corrupt-media handling, remuxing, transcoding, and segment uploads. With both executables on `PATH`, run:
+Smoke tests use real FFmpeg and ffprobe to exercise probing, corrupt-media handling, remuxing, transcoding, and segment uploads through the pipe, including runs of more than a thousand segments through libx264, libx265 and libsvtav1. With both executables on `PATH`, run:
 
 ```sh
 ./mvnw test -Dtest=WorkerMediaSmokeTest -Dsurefire.excludedGroups=

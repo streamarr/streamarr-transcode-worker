@@ -80,15 +80,15 @@ All PRs must pass these conditions on new code:
 
 Choose the simplest mechanism that fits the operation:
 
-- **Virtual threads are the async model**: `Executors.newVirtualThreadPerTaskExecutor()` in try-with-resources, plus `spring.threads.virtual.enabled: true`. No `@Async`, no reactive/actor frameworks. When a task's failure must be visible, use `execute` with a terminal catch rather than `submit` — a throwable captured in a `Future` nobody reads vanishes (see `TranscodeWorker.startVariant`).
+- **Virtual threads are the async model**: `Executors.newVirtualThreadPerTaskExecutor()` in try-with-resources, plus `spring.threads.virtual.enabled: true`. No `@Async`, no reactive/actor frameworks. When a task's failure must be visible, use `execute` with a terminal catch rather than `submit` — a throwable captured in a `Future` nobody reads vanishes (see `WorkerProbeSession`'s probe attempts).
 - **One monitor per session owner**: `TranscodeWorker` guards its channel, control stream, accepted session, and active job attempts with its own monitor; `WorkerProbeSession` does the same for probe attempts. gRPC `StreamObserver`s are not thread-safe, so every message on the control stream goes through the synchronized `TranscodeWorker.send`.
 - **Fence stale sessions by identity**: callbacks that outlive their session compare the session object they captured with the current one and return when they differ (`sendProbeResult`, `endSession`). A disconnected or replaced session must never publish results, upload segments, or stop the next session's work. Commands whose target is not this worker id and boot id are rejected or ignored.
-- **Don't join work that needs the monitor while holding it**: the upload loop polls for segments and uploads them on a virtual thread, taking the worker monitor only for brief state checks. Probe completion needs the worker monitor, so `close()` joins probe work only after `closeConnection()` releases it.
-- **Every started process has an owner that stops it**: a failure after `engine.start()` must stop the process and drop its attempt, or FFmpeg leaks. Session loss stops all active attempts, and the server learns of their end from the disconnect. Restore the interrupt flag when catching `InterruptedException`.
+- **Don't join work that needs the monitor while holding it**: each job attempt's producer uploads on its own virtual thread and takes the worker monitor only to check that its attempt is still active, so a stop claims the attempt under the monitor and waits for FFmpeg to exit after releasing it. Probe completion needs the worker monitor, so `close()` joins probe work only after `closeConnection()` releases it.
+- **Every started process has an owner that stops it**: a failure after `engine.startProducer()` must stop the producer and drop its attempt, or FFmpeg leaks. Session loss stops all active attempts, and the server learns of their end from the disconnect. Restore the interrupt flag when catching `InterruptedException`.
 
 **Anti-pattern:** reading session or attempt state, releasing the monitor, then acting on what was
 read is a check-then-act race. Check and act inside one synchronized section, as
-`finishEndedVariant` and `stopVariant` do.
+`settleAttempt` and `claimStoppedAttempt` do.
 
 ### Defensive Programming
 - Fail fast with meaningful exceptions at system boundaries
@@ -136,7 +136,7 @@ read is a check-then-act race. Check and act inside one synchronized section, as
 - Use text blocks (`"""`) for multi-line strings in tests (ffprobe JSON fixtures, scripted executables)
 
 ## Architecture Rules
-- Four packages under `com.streamarr.transcode`: `engine` (FFmpeg command building, process management, capability detection), `probe` (ffprobe execution and result mapping), `protocol` (contract helpers such as `ProtoUuid` and `WorkerIdentityMetadata`), and `worker` (session, job mapping, settings, Spring Boot application, Actuator health)
+- Four packages under `com.streamarr.transcode`: `engine` (FFmpeg command building, the producer that reads FFmpeg's fragmented MP4 output, capability detection), `probe` (ffprobe execution and result mapping), `protocol` (contract helpers such as `ProtoUuid` and `WorkerIdentityMetadata`), and `worker` (session, job mapping, settings, Spring Boot application, Actuator health)
 - `worker` depends on `engine`, `probe`, and `protocol`; those three depend on nothing in this repository — not on `worker` and not on each other
 - `engine` must NEVER import Spring, gRPC, or the generated contract SDK (`build.buf.gen.streamarr.transcode.v1`). `WorkerVariantJobMapper` translates a contract `VariantJob` into the engine's own `TranscodeRequest`; contract types stop there
 - Spring stays in `worker` (`TranscodeWorkerApplication`, `WorkerActuatorConfiguration`). Everything else is plain Java constructed by those beans
@@ -192,7 +192,7 @@ read is a check-then-act race. Check and act inside one synchronized section, as
 ### Strategy (Hexagonal)
 - Test behavior at the highest public API — the **worker session**: drive `TranscodeWorker` with the commands a control plane sends and assert the messages, uploads, and process effects it produces; test inputs → outputs, not internal wiring
 - Use the lightest test that proves the behavior:
-    - **Unit tests with Fakes** for business logic, orchestration, and behavioral contracts — fast, no Spring context, no socket (`ScriptedWorkerRuntime`, `FakeFfmpegProcessManager`, `ControlledProbeProcess`, `QueuedProbeExecutor`)
+    - **Unit tests with Fakes** for business logic, orchestration, and behavioral contracts — fast, no Spring context, no socket (`ScriptedWorkerRuntime`, `ScriptedProcessLauncher` replaying recorded FFmpeg output through the real producer, `ControlledProbeProcess`, `QueuedProbeExecutor`)
     - **Mockito stubs** when Fakes can't reach a code path (e.g., `mock(Path.class)` for a filesystem failure) — stubs provide canned answers ([Mocks Aren't Stubs](https://martinfowler.com/articles/mocksArentStubs.html))
     - **Integration tests** when behavior depends on the real gRPC transport, the Spring Boot application, or the packaged jar — a scripted control plane built from the contract stubs listens on an ephemeral port
     - **Image tests** (Testcontainers) when behavior depends on the shipped image: the Boot process, its health probes, the locked FFmpeg runtime, and termination
@@ -202,7 +202,7 @@ read is a check-then-act race. Check and act inside one synchronized section, as
 - **Configuration tests** in `src/test/java/com/streamarr/transcode/config` pin workflows, release configuration, and packaging scripts
 
 ### Hard Rules
-- Mockito **mocks for verification** are banned — no `verify()`, no `ArgumentCaptor`. Observe outcomes through Fakes (e.g., `FakeFfmpegProcessManager`) instead
+- Mockito **mocks for verification** are banned — no `verify()`, no `ArgumentCaptor`. Observe outcomes through Fakes (e.g., `ScriptedProcessLauncher`) instead
 - NEVER make a method public or package-private solely for testing, break encapsulation via reflection (`FieldUtils.writeField`), or test implementation details that would break on refactoring
 - Tests never start the Streamarr server or a database. The server's tests cross the boundary through the published worker image; this repository's tests use a scripted control plane
 - Normal builds never require FFmpeg, ffprobe, Docker, or a registry; tests that exercise scripts put scripted `docker` and `curl` executables on `PATH`. Anything that needs the real thing carries `SmokeTest` or `ImageTest`
@@ -220,9 +220,9 @@ read is a check-then-act race. Check and act inside one synchronized section, as
 We follow these factors from the Twelve-Factor App methodology:
 
 - **III. Config** — All environment-specific config via environment variables, never hardcoded. `TRANSCODE_WORKER_*` variables are parsed once into `TranscodeWorkerSettings`; Spring's standard `SERVER_PORT` sets the Actuator port.
-- **IV. Backing Services** — The control plane, the source media mount, and segment scratch storage are attached resources swappable via config. No code changes to point at a different server, media root, or output directory.
-- **VI. Processes** — The worker is stateless. Job attempts live only in memory and end with the session; the server owns recovery and redispatch. Workers mount source media read-only and write temporary output to separate storage.
-- **IX. Disposability** — Fast startup and graceful shutdown. Startup validates FFmpeg and ffprobe before registering. Shutdown sends FFmpeg its graceful quit command, closes the session, and cleans up temporary files. Session loss ends active work and the process exits for its supervisor to restart it.
+- **IV. Backing Services** — The control plane and the source media mount are attached resources swappable via config. No code changes to point at a different server or media root.
+- **VI. Processes** — The worker is stateless. Job attempts live only in memory and end with the session; the server owns recovery and redispatch. Workers mount source media read-only and write no media files: FFmpeg's output reaches the worker through a pipe.
+- **IX. Disposability** — Fast startup and graceful shutdown. Startup validates FFmpeg and ffprobe before registering. Shutdown sends FFmpeg its graceful quit command, waits for it to exit, and closes the session. Session loss ends active work and the process exits for its supervisor to restart it.
 - **X. Dev/Prod Parity** — Image tests run the actual Boot image with the locked FFmpeg runtime, and CI publishes that same tested image. No distro FFmpeg substitutes in CI.
 - **XI. Logs** — Treat logs as event streams. No file-based logging; the process writes to stdout and the platform collects it. FFmpeg stderr is drained into a bounded buffer and surfaced only as failure diagnostics.
 
@@ -231,7 +231,7 @@ We follow these factors from the Twelve-Factor App methodology:
 - gRPC (`grpc-netty-shaded`) with the Buf-generated `streamarr-org_transcode_grpc_java` SDK for the worker protocol
 - Spring Boot Actuator over Spring MVC for health probes only; virtual threads for concurrency
 - FFmpeg and ffprobe through `ProcessBuilder`, shipped by the locked Jellyfin FFmpeg buildpack in a Paketo-built, non-root image
-- The worker probes media and runs remux and transcode jobs dispatched by the server, uploading HLS segments back over gRPC.
+- The worker probes media and runs remux and transcode jobs dispatched by the server, reading FFmpeg's fragmented MP4 from its standard output and uploading each HLS media segment back over gRPC.
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
