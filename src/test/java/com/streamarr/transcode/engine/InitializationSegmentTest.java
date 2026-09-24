@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalLong;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -31,7 +32,8 @@ class InitializationSegmentTest {
   @Test
   @DisplayName("Should differ from a fragment when the fragment carries the same bytes")
   void shouldDifferFromAFragmentWhenTheFragmentCarriesTheSameBytes() {
-    Mp4Unit fragment = new Fragment(List.of(new byte[] {1, 2, 3}), Optional.empty());
+    Mp4Unit fragment =
+        new Fragment(List.of(new byte[] {1, 2, 3}), Optional.empty(), OptionalLong.empty());
 
     assertThat(new InitializationSegment(new byte[] {1, 2, 3})).isNotEqualTo(fragment);
   }

@@ -20,10 +20,6 @@ record Fragment(
     boxes = List.copyOf(boxes);
   }
 
-  Fragment(List<byte[]> boxes, Optional<VideoStart> videoStart) {
-    this(boxes, videoStart, OptionalLong.empty());
-  }
-
   long byteLength() {
     return boxes.stream().mapToLong(box -> box.length).sum();
   }
