@@ -9,8 +9,9 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class FfmpegTranscodeEngine {
 
-  // How long a stop waits for FFmpeg to exit after asking it to quit.
-  private static final Duration STOP_GRACE_PERIOD = Duration.ofSeconds(5);
+  // How long FFmpeg may take to exit after a stop asks it to quit, or after a stall asks it to
+  // terminate, before the producer destroys it.
+  private static final Duration GRACE_PERIOD = Duration.ofSeconds(5);
 
   /** How long FFmpeg may write nothing while its producer reads its output, unless configured. */
   public static final Duration DEFAULT_ENCODER_STALL_TIMEOUT = Duration.ofSeconds(30);
@@ -56,7 +57,7 @@ public class FfmpegTranscodeEngine {
             .jobAttemptId(request.attemptId())
             .periodSeconds(request.targetSegmentDuration())
             .startSequenceNumber(request.startSequenceNumber())
-            .gracePeriod(STOP_GRACE_PERIOD)
+            .gracePeriod(GRACE_PERIOD)
             .stallTimeout(encoderStallTimeout)
             .encodedFrameRate(encodedFrameRateOf(request))
             .memoryBudget(memoryBudget)
