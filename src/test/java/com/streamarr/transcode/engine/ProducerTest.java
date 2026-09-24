@@ -1475,14 +1475,18 @@ class ProducerTest {
                     .isEqualTo(new Stopped()));
   }
 
-  // A lower bound of what the attempts charge the worker's budget. An active attempt's reader holds
-  // every box it has begun to read that no returned delivery carried; a stopped attempt holds only
-  // its deliveries that have not returned. Every charge is read before any release, so the bound
-  // holds at the moment the charges are read.
+  // A lower bound of what the attempts charge the worker's budget at the moment between reading
+  // every reader's progress and reading any stop flag. An active attempt's reader holds every box
+  // it has begun to read that no returned delivery carried; a stopped attempt holds only its
+  // deliveries that have not returned. A flag still clear after that moment means the attempt was
+  // active at it, and returns counted later only lower the bound.
   private static long chargedAtLeast(List<BurstAttempt> attempts, List<Box> layout) {
-    var snapshot = List.copyOf(attempts);
-    var charged = snapshot.stream().mapToLong(attempt -> attempt.chargedBefore(layout)).sum();
-    var released = snapshot.stream().mapToLong(attempt -> attempt.sink().returnedBytes()).sum();
+    var progress =
+        List.copyOf(attempts).stream()
+            .map(attempt -> new ReaderProgress(attempt, attempt.process().bytesTaken()))
+            .toList();
+    var charged = progress.stream().mapToLong(read -> read.chargedBefore(layout)).sum();
+    var released = progress.stream().mapToLong(read -> read.attempt().sink().returnedBytes()).sum();
     return charged - released;
   }
 
@@ -1597,6 +1601,22 @@ class ProducerTest {
   @Builder
   private record BurstStart(byte[] output, SegmentMemoryBudget budget, int burst) {}
 
+  // How many bytes of FFmpeg's output an attempt's reader had taken when the sampler read it.
+  private record ReaderProgress(BurstAttempt attempt, int bytesTaken) {
+
+    // What the attempt charges before its returned deliveries are subtracted.
+    long chargedBefore(List<Box> layout) {
+      if (attempt.isStopped()) {
+        return attempt.sink().startedBytes();
+      }
+
+      return layout.stream()
+          .filter(box -> box.hasBodyBegunAfter(bytesTaken))
+          .mapToLong(Box::size)
+          .sum();
+    }
+  }
+
   // An attempt of the burst test. The test marks it stopped before it asks the producer to stop, so
   // that the lower bound stops counting the reader's share no later than the producer releases it.
   private static final class BurstAttempt {
@@ -1630,14 +1650,8 @@ class ProducerTest {
       producer.requestStop();
     }
 
-    // What the attempt charges before its returned deliveries are subtracted.
-    long chargedBefore(List<Box> layout) {
-      if (stopped.get()) {
-        return sink.startedBytes();
-      }
-
-      var taken = process.bytesTaken();
-      return layout.stream().filter(box -> box.hasBodyBegunAfter(taken)).mapToLong(Box::size).sum();
+    boolean isStopped() {
+      return stopped.get();
     }
   }
 
