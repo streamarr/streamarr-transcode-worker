@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import {
@@ -24,6 +23,7 @@ import {
 import { Mp4FormatError, readStream, videoSamples, videoTrafOf } from './fmp4.mjs';
 import { Decimal } from './json.mjs';
 import { Rational } from './rational.mjs';
+import { temporaryDirectory } from './temporary-directories.mjs';
 import {
   AUDIO,
   NON_SYNC_SAMPLE_FLAGS,
@@ -48,19 +48,19 @@ function probe(startTime, timeBase) {
 }
 
 describe('source start', () => {
-  it('rounds the container start to the nearest tick of the video time base', () => {
+  it('Should round the container start to the nearest tick when the video time base is coarser than a microsecond', () => {
     const { start, startMicros } = sourceStart(probe('11.978667', '1/90000'));
 
     assert.equal(String(start), '4492/375');
     assert.equal(startMicros, 11978667n);
   });
 
-  it('rounds a start half a tick from two ticks to the even tick', () => {
+  it('Should round the start to the even tick when it lies half a tick from two ticks', () => {
     assert.equal(String(sourceStart(probe('0.75', '1/2')).start), '1');
     assert.equal(String(sourceStart(probe('0.25', '1/2')).start), '0');
   });
 
-  it('reads each keyframe of the ffprobe listing in seconds', () => {
+  it('Should read each keyframe in seconds when ffprobe lists it in time-base ticks', () => {
     assert.deepEqual(sourceKeyframes('0,K__\n180180,K__\n\n', new Rational(1n, 90000n)).map(String), ['0', '1001/500']);
   });
 });
@@ -68,14 +68,14 @@ describe('source start', () => {
 describe('hlsenc model', () => {
   const ptsRaw = ['0', '6', '6.5', '12', '12.5'].map(seconds);
 
-  it('cuts at the first keyframe whose time from the reference reaches the next multiple of the period', () => {
+  it('Should cut at the first keyframe when its time from the reference reaches the next multiple of the period', () => {
     const keyframeOrdinals = [0, 1, 2, 3, 4];
 
     assert.deepEqual(hlsencCuts({ keyframeOrdinals, ptsRaw, reference: seconds('0'), period: 6 }), [0, 1, 3]);
     assert.deepEqual(hlsencCuts({ keyframeOrdinals, ptsRaw, reference: seconds('0.25'), period: 6 }), [0, 2, 4]);
   });
 
-  it('never cuts at a keyframe that does not advance past the last cut', () => {
+  it('Should not cut at a keyframe when it does not advance past the last cut', () => {
     const ptsRaw = ['0', '0', '6'].map(seconds);
 
     assert.deepEqual(hlsencCuts({ keyframeOrdinals: [0, 1, 2], ptsRaw, reference: seconds('-6'), period: 6 }), [0, 2]);
@@ -83,7 +83,7 @@ describe('hlsenc model', () => {
 });
 
 describe('grid and HLS comparison', () => {
-  it('lists every number whose first video sample differs, with the side that lacks it as null', () => {
+  it('Should list every segment number with the missing side as null when the grid and the HLS muxer start it differently', () => {
     const grid = [
       { number: 0, firstVideoPresentationTime: 0n },
       { number: 1, firstVideoPresentationTime: 144144n },
@@ -109,7 +109,7 @@ describe('recording facts', () => {
       runs: [{ samples: [{ duration: 1001, size: 1, flags: NON_SYNC_SAMPLE_FLAGS }, { duration: 1001, size: 1, flags: SYNC_SAMPLE_FLAGS }] }],
     });
 
-  it('describes a stream copy whose keyframes are the source keyframes moved to media time', () => {
+  it("Should confirm a stream copy's keyframes when they are the source keyframes moved to media time", () => {
     const stream = readStream(
       Buffer.concat([initialization(), videoFragment({ decodeTime: 0, sync: true }), videoFragment({ decodeTime: 48048, sync: true })]),
     );
@@ -126,7 +126,7 @@ describe('recording facts', () => {
     );
   });
 
-  it('lists the recorded keyframes in presentation order when the stream holds them out of order', () => {
+  it('Should list the recorded keyframes in presentation order when the stream holds them out of order', () => {
     const stream = readStream(
       Buffer.concat([
         initialization(),
@@ -139,7 +139,7 @@ describe('recording facts', () => {
     assert.deepEqual(recordedKeyframes(stream), [0n, 48048n, 48048n]);
   });
 
-  it('counts the fragment kinds, their sizes and how far a start plus durations misses the next start', () => {
+  it('Should count the fragment kinds, their sizes and how far a start plus durations misses the next start when diagnosing a stream', () => {
     const stream = readStream(
       Buffer.concat([
         initialization(),
@@ -167,7 +167,7 @@ describe('recording facts', () => {
     });
   });
 
-  it('reports a keyframe that does not start its fragment', () => {
+  it("Should report that a keyframe does not start a fragment when a run's second sample is a keyframe", () => {
     const stream = readStream(
       Buffer.concat([initialization(), keyframeRun(0), keyframeRun(2002)]),
     );
@@ -175,7 +175,7 @@ describe('recording facts', () => {
     assert.equal(diagnostics(stream).everyKeyframeStartsAFragment, false);
   });
 
-  it('describes a segment by its fragments, keyframes and bytes', () => {
+  it('Should describe a segment by its fragments, keyframes and bytes when the grid delivers it', () => {
     const stream = readStream(
       Buffer.concat([initialization(), videoFragment({ decodeTime: 0, sync: true }), videoFragment({ decodeTime: 1001, sync: false }), audioFragment({ decodeTime: 0 })]),
     );
@@ -196,7 +196,7 @@ describe('recording facts', () => {
 function hlsOutput(cuts) {
   const bytes = readFileSync(RECORDING);
   const stream = readStream(bytes);
-  const folder = mkdtempSync(join(tmpdir(), 'hls-'));
+  const folder = temporaryDirectory('hls-');
   writeFileSync(join(folder, 'init.mp4'), bytes.subarray(0, stream.initializationSegmentByteLength));
   const ends = [...cuts.slice(1), stream.fragments.length];
   const lines = ['#EXTM3U', '#EXT-X-MEDIA-SEQUENCE:0'];
@@ -232,7 +232,7 @@ describe('HLS oracle', () => {
       ...overrides,
     });
 
-  it('agrees with the grid when the HLS muxer cut where the grid does', () => {
+  it('Should agree with the grid when the HLS muxer cuts where the grid does', () => {
     const oracle = evaluate(hlsOutput(gridCuts));
 
     assert.equal(oracle.agrees, true);
@@ -249,7 +249,7 @@ describe('HLS oracle', () => {
     assert.equal(oracle.hlsExitStatus, 0);
   });
 
-  it('reports the segment the HLS muxer started one keyframe later', () => {
+  it('Should report the segment when the HLS muxer starts it one keyframe later', () => {
     const cuts = [...gridCuts];
     cuts[1] = keyframeAt(192192n);
     const oracle = evaluate(hlsOutput(cuts));
@@ -259,7 +259,7 @@ describe('HLS oracle', () => {
     assert.equal(oracle.hlsencModel.reproducesHlsCuts, false);
   });
 
-  it('takes the first audio packet as the reference when its decode time precedes the video', () => {
+  it('Should take the first audio packet as the reference when its decode time precedes the video', () => {
     const oracle = evaluate(hlsOutput(gridCuts), { spec: { ...spec, audio: true } });
 
     assert.equal(
@@ -270,7 +270,7 @@ describe('HLS oracle', () => {
     assert.equal(oracle.streams, 'video and audio');
   });
 
-  it('moves the HLS recipe run by the source start and compares only the attempt numbers', () => {
+  it("Should move the run by the source start and compare only the attempt's numbers when it uses the HLS recipe", () => {
     const oracle = evaluate(hlsOutput(gridCuts), {
       fixture: { name: reference.name, start: 7 },
       spec: { ...spec, flags: 'hls-recipe', restrict: true },
@@ -285,7 +285,7 @@ describe('HLS oracle', () => {
     assert.match(oracle.flags, /no -start_at_zero/);
   });
 
-  it('counts a packet whose bytes differ at the same size as not identical', () => {
+  it('Should count a packet as not identical when its bytes differ at the same size', () => {
     const folder = hlsOutput(gridCuts);
     const path = join(folder, 'segment3.m4s');
     const initializationSegment = readFileSync(join(folder, 'init.mp4'));
@@ -304,7 +304,7 @@ describe('HLS oracle', () => {
     assert.equal(oracle.agrees, true);
   });
 
-  it('refuses an HLS run that did not encode the same number of frames', () => {
+  it('Should refuse an HLS run when it did not encode the same number of frames', () => {
     const folder = hlsOutput(gridCuts);
     writeFileSync(join(folder, 'stream.m3u8'), '#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:0\nsegment0.m4s\n');
 
@@ -313,7 +313,7 @@ describe('HLS oracle', () => {
 });
 
 describe('violated claims', () => {
-  it('names every claim the recordings contradict', () => {
+  it('Should name every claim when the recordings contradict it', () => {
     const expected = {
       fixtures: [
         {
@@ -372,8 +372,8 @@ describe('violated claims', () => {
 });
 
 describe('source files', () => {
-  it('reads the source probe and keyframe listing of a recording run', () => {
-    const work = mkdtempSync(join(tmpdir(), 'work-'));
+  it('Should read the source probe and keyframe listing when a recording run wrote them', () => {
+    const work = temporaryDirectory('work-');
     mkdirSync(join(work, 'src'));
     const probed = { ...probe('11.978667', '1/90000') };
     probed.streams[1].r_frame_rate = '24000/1001';
@@ -407,7 +407,7 @@ describe('video pictures', () => {
     return videoPictures(readStream(bytes));
   };
 
-  it('names the NAL unit type that starts each HEVC keyframe and counts the RASL pictures', () => {
+  it('Should name the NAL unit type that starts each keyframe and count the RASL pictures when the track is HEVC', () => {
     assert.deepEqual(
       pictures('hvc1', [
         [accessUnit(HEVC.AUD, HEVC.IDR_W_RADL), true],
@@ -419,7 +419,7 @@ describe('video pictures', () => {
     );
   });
 
-  it('names the NAL unit type that starts each H.264 keyframe', () => {
+  it('Should name the NAL unit type that starts each keyframe when the track is H.264', () => {
     assert.deepEqual(
       pictures('avc1', [
         [accessUnit([0x09, 0xf0], [0x67, 0x64], [0x65, 0x88]), true],
@@ -429,11 +429,11 @@ describe('video pictures', () => {
     );
   });
 
-  it('reads no pictures of a track whose samples are not NAL units', () => {
+  it("Should read no pictures when the track's samples are not NAL units", () => {
     assert.equal(videoPictures(readStream(Buffer.concat([initialization(), videoFragment({ decodeTime: 0, sync: true })]))), null);
   });
 
-  it('fails on a NAL unit that runs past its sample', () => {
+  it('Should fail when a NAL unit runs past its sample', () => {
     assert.throws(() => pictures('avc1', [[[0, 0, 0, 9, 0x65], true]]), Mp4FormatError);
   });
 });
@@ -441,7 +441,7 @@ describe('video pictures', () => {
 describe('recording facts of the committed recordings', () => {
   const read = (name) => readStream(readFileSync(new URL(`../resources/fmp4/${name}.fmp4`, import.meta.url)));
 
-  it('finds one initialization segment across a stream-copy start and its replacement attempt', () => {
+  it('Should find one initialization segment when a stream copy starts at zero and its replacement attempt seeks', () => {
     const pair = initializationSegmentPair('copy', ['07-copy-start0', read('07-copy-start0')], ['07-copy-seek30', read('07-copy-seek30')]);
 
     assert.equal(pair.identical, true);
@@ -453,7 +453,7 @@ describe('recording facts of the committed recordings', () => {
     );
   });
 
-  it('groups the 10 s-GOP copy until the keyframe at 20.02 s skips segment 2', () => {
+  it('Should group the 10 s-GOP copy until the keyframe at 20.02 s when that keyframe skips segment 2', () => {
     const facts = recordingFacts(read('10-copy-gop-exceeds-period'), { period: 6, startSequenceNumber: 0 });
 
     assert.equal(facts.videoTimescale, 24000);

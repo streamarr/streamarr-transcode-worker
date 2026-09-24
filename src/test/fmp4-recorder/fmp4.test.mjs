@@ -47,7 +47,7 @@ function firstVideo(...fragmentParts) {
 }
 
 describe('fmp4 box reader', () => {
-  it('reads the tracks of the initialization segment in trak order', () => {
+  it('Should read the tracks in trak order when reading the initialization segment', () => {
     const stream = streamOf(initialization());
 
     assert.equal(stream.initializationSegmentByteLength, initialization().length);
@@ -60,13 +60,13 @@ describe('fmp4 box reader', () => {
     );
   });
 
-  it('reads an edit list entry as its duration and media time', () => {
+  it('Should read an edit list entry as its duration and media time when a trak declares one', () => {
     const stream = streamOf(ftyp(), moov(track({ ...VIDEO, edit: [0, 2002] })));
 
     assert.deepEqual(stream.tracks.get(1).edits, [[0n, 2002n]]);
   });
 
-  it('reads a version 1 edit list and only the trex boxes of mvex', () => {
+  it('Should read a version 1 edit list and only the trex boxes of mvex when mvex holds other boxes', () => {
     const video = track({ ...VIDEO, defaultFlags: SYNC_SAMPLE_FLAGS, edit: [1n << 40n, -1n], editVersion: 1 });
     const undeclared = track({ ...AUDIO, trackId: 9 }).trex;
     const movie = box('moov', video.trak, box('mvex', fullBox('mehd', 0, 0, u32(0)), video.trex, undeclared));
@@ -77,7 +77,7 @@ describe('fmp4 box reader', () => {
     assert.deepEqual([...stream.tracks.keys()], [1]);
   });
 
-  it('reads the sample entry of each track and the NAL length its decoder configuration declares', () => {
+  it("Should read each track's sample entry and NAL length when its decoder configuration declares one", () => {
     const stream = streamOf(
       ftyp(),
       moov(track({ ...VIDEO, sampleEntry: visualSampleEntry('hvc1') }), track({ ...AUDIO, trackId: 3, sampleEntry: box('mp4a') })),
@@ -97,34 +97,34 @@ describe('fmp4 box reader', () => {
     );
   });
 
-  it('reads the tracks of a moov that declares no defaults', () => {
+  it('Should read the tracks when the moov declares no defaults', () => {
     const stream = streamOf(ftyp(), box('moov', track(VIDEO).trak));
 
     assert.equal(stream.tracks.get(1).trexFlags, undefined);
   });
 
-  it('starts a fragment at tfdt plus the signed composition offset of a version 1 trun', () => {
+  it('Should start a fragment at tfdt plus the signed composition offset when the trun is version 1', () => {
     const start = firstVideo(videoFragment({ decodeTime: 48048, sync: true, compositionOffset: -2002 }));
 
     assert.equal(start.firstPresentationTime, 46046n);
     assert.equal(start.firstSync, true);
   });
 
-  it('reads the composition offset of a version 0 trun as unsigned', () => {
+  it('Should read the composition offset as unsigned when the trun is version 0', () => {
     const run = { version: 0, samples: [{ size: 1, compositionOffset: 0x80000000 }], firstSampleFlags: SYNC_SAMPLE_FLAGS };
     const start = firstVideo(fragment({ trackId: 1, decodeTime: 0, runs: [run] }));
 
     assert.equal(start.firstPresentationTime, 2147483648n);
   });
 
-  it('reads a version 0 tfdt as an unsigned 32-bit decode time', () => {
+  it('Should read an unsigned 32-bit decode time when the tfdt is version 0', () => {
     const run = { samples: [{ size: 1 }], firstSampleFlags: SYNC_SAMPLE_FLAGS };
     const start = firstVideo(fragment({ trackId: 1, decodeTime: 0xfffffff0, tfdtVersion: 0, runs: [run] }));
 
     assert.equal(start.firstPresentationTime, 4294967280n);
   });
 
-  it('reads sync from the first sample flags, then the sample flags, then tfhd, then trex', () => {
+  it('Should read sync from the first sample flags, then the sample flags, then tfhd, then trex when each declares it', () => {
     const cases = [
       [{ firstSampleFlags: SYNC_SAMPLE_FLAGS, samples: [{ size: 1, flags: NON_SYNC_SAMPLE_FLAGS }] }, null, true],
       [{ samples: [{ size: 1, flags: NON_SYNC_SAMPLE_FLAGS }] }, SYNC_SAMPLE_FLAGS, false],
@@ -136,14 +136,14 @@ describe('fmp4 box reader', () => {
     }
   });
 
-  it('gives a fragment no video start when it carries only audio or an empty video run', () => {
+  it('Should give a fragment no video start when it carries only audio or an empty video run', () => {
     const emptyVideo = fragment({ trackId: 1, decodeTime: 0, runs: [{ samples: [] }] });
     const stream = streamOf(initialization(), audioFragment({ decodeTime: 0 }), emptyVideo);
 
     assert.deepEqual(stream.fragments.map(videoTrafOf), [null, null]);
   });
 
-  it('lists every video sample in decode order with its presentation time and fragment', () => {
+  it('Should list every video sample in decode order with its presentation time when a fragment holds several', () => {
     const run = {
       samples: [
         { duration: 1001, size: 3, compositionOffset: 2002 },
@@ -160,7 +160,7 @@ describe('fmp4 box reader', () => {
     ]);
   });
 
-  it('reads boxes that declare a 64-bit size', () => {
+  it('Should read boxes when they declare a 64-bit size', () => {
     const large = (dataOffset) =>
       largeBox(
         'moof',
@@ -175,12 +175,12 @@ describe('fmp4 box reader', () => {
     assert.equal(firstVideo(moofPointingAtItsMdat(0, large), mdat([1])).firstPresentationTime, 7n);
   });
 
-  it('reads a decode time of 2^64 - 1024 as the signed -1024 FFmpeg wrote', () => {
+  it('Should read the signed -1024 FFmpeg wrote when a decode time is 2^64 - 1024', () => {
     assert.equal(signed(18446744073709550592n), -1024n);
     assert.equal(signed(1024n), 1024n);
   });
 
-  it('fails on a stream that breaks the box structure', () => {
+  it('Should fail when a stream breaks the box structure', () => {
     const cases = [
       ['a truncated box header', Buffer.concat([initialization(), Buffer.alloc(4)])],
       ['a box of size 0', Buffer.concat([initialization(), u32(0), Buffer.from('mdat')])],
@@ -201,30 +201,30 @@ describe('fmp4 box reader', () => {
 describe('fmp4 box structure', () => {
   const failures = (bytes) => assert.throws(() => readStream(Buffer.concat([initialization(), bytes])), Mp4FormatError);
 
-  it('fails on a box whose size is smaller than its header even when the bytes after it parse', () => {
+  it("Should fail when a box's size is smaller than its header even though the bytes after it parse", () => {
     failures(Buffer.concat([u32(4), u32(8), Buffer.from('free', 'latin1')]));
     failures(Buffer.concat([u32(1), Buffer.from('free', 'latin1'), u64(12), Buffer.from('skip', 'latin1'), Buffer.alloc(4)]));
   });
 
-  it('fails on a 64-bit box header that does not fit inside its parent', () => {
+  it('Should fail when a 64-bit box header does not fit inside its parent', () => {
     failures(Buffer.concat([u32(1), Buffer.from('free', 'latin1')]));
   });
 
-  it('fails on a tfhd whose flags promise a field its box does not hold', () => {
+  it("Should fail when a tfhd's flags promise a field its box does not hold", () => {
     const tfhd = fullBox('tfhd', 0, TFHD_DEFAULT_BASE_IS_MOOF | TFHD_DEFAULT_SAMPLE_FLAGS, u32(VIDEO.trackId));
     const run = trun({ samples: [{ size: 1 }], firstSampleFlags: SYNC_SAMPLE_FLAGS });
 
     failures(Buffer.concat([moof(box('traf', tfhd, fullBox('tfdt', 1, 0, u64(0)), run)), mdat([1])]));
   });
 
-  it('fails on a trun that declares more samples than its box holds', () => {
+  it('Should fail when a trun declares more samples than its box holds', () => {
     const run = fullBox('trun', 1, TRUN_SAMPLE_SIZE, u32(3), u32(1));
     const trailing = fullBox('free', 0, 0, u32(1), u32(1), u32(1), u32(1));
 
     failures(Buffer.concat([moof(traf({ trackId: VIDEO.trackId, decodeTime: 0, runs: [run, trailing] })), mdat([1])]));
   });
 
-  it('fails on a handler box too short to name its handler', () => {
+  it('Should fail when a handler box is too short to name its handler', () => {
     const shortHandler = track(VIDEO);
     const hdlrAt = shortHandler.trak.indexOf('hdlr', 0, 'latin1') - 4;
     const truncated = Buffer.from(shortHandler.trak);
@@ -250,20 +250,20 @@ describe('fmp4 sample data', () => {
     return Buffer.concat([initialization(), moofBytes, mdat([1, 2, 3, 4, 5])]);
   }
 
-  it('fails on a video run whose data offset points at its moof instead of its mdat', () => {
+  it("Should fail when a video run's data offset points at its moof instead of its mdat", () => {
     const fragment = Buffer.concat([moof(traf({ trackId: VIDEO.trackId, decodeTime: 0, runs: [videoRun({ dataOffset: 0 })] })), mdat([1, 2])]);
 
     assert.throws(() => readStream(Buffer.concat([initialization(), fragment])), Mp4FormatError);
   });
 
-  it('fails on an audio run whose samples end past its mdat', () => {
+  it("Should fail when an audio run's samples end past its mdat", () => {
     const fourByteSample = audioFragment({ decodeTime: 0, size: 4 });
     const moofOnly = fourByteSample.subarray(0, fourByteSample.length - 12);
 
     assert.throws(() => readStream(Buffer.concat([initialization(), moofOnly, mdat([1, 2, 3])])), Mp4FormatError);
   });
 
-  it('reads runs that follow the previous run and traf when they declare no data offset', () => {
+  it('Should read runs after the previous run and traf when they declare no data offset', () => {
     assert.deepEqual(
       readStream(explicitBase(0)).fragments[0].trafs.map((entry) => entry.sampleCount),
       [1, 1],
@@ -272,7 +272,7 @@ describe('fmp4 sample data', () => {
     assert.throws(() => readStream(explicitBase(-1)), Mp4FormatError);
   });
 
-  it('reads a second run of a traf after the first run when it declares no data offset', () => {
+  it("Should read a traf's second run after the first when it declares no data offset", () => {
     const build = (dataOffset) =>
       moof(traf({ trackId: VIDEO.trackId, decodeTime: 0, runs: [videoRun({ dataOffset }), trun({ samples: [{ size: 3 }] })] }));
     const valid = moofPointingAtItsMdat(0, build);
@@ -283,7 +283,7 @@ describe('fmp4 sample data', () => {
 });
 
 describe('fmp4 box reader over the recordings', () => {
-  it('reads the stream-copy replacement attempt from its preroll keyframe at 28.028 s', () => {
+  it('Should read the stream-copy replacement attempt from its preroll keyframe at 28.028 s when it seeks to 30 s', () => {
     const stream = recording('07-copy-seek30.fmp4');
     const first = videoTrafOf(stream.fragments[0]);
 
@@ -292,7 +292,7 @@ describe('fmp4 box reader over the recordings', () => {
     assert.equal(first.firstSync, true);
   });
 
-  it('reads the AAC priming as the unsigned wrap of -1024 in the first audio tfdt', () => {
+  it('Should read the AAC priming as the unsigned wrap of -1024 when reading the first audio tfdt', () => {
     const audio = recording('01-encode-cfr.fmp4')
       .fragments.flatMap((fragment) => fragment.trafs)
       .find((entry) => entry.handler === 'soun');
@@ -300,14 +300,14 @@ describe('fmp4 box reader over the recordings', () => {
     assert.equal(audio.baseMediaDecodeTime, 18446744073709550592n);
   });
 
-  it('reads the fragment that skips a segment number at 20.02 s in the 10 s-GOP copy', () => {
+  it('Should read the fragment at 20.02 s when the 10 s-GOP copy skips a segment number there', () => {
     const start = videoTrafOf(recording('10-copy-gop-exceeds-period.fmp4').fragments[20]);
 
     assert.equal(start.firstPresentationTime, 480480n);
     assert.equal(start.firstSync, true);
   });
 
-  it('reads every byte of a recording as its initialization segment and fragments', () => {
+  it('Should read every byte as the initialization segment and fragments when reading a recording', () => {
     const path = new URL('07-copy-start0.fmp4', FIXTURES).pathname;
     const stream = readFiles([path]);
 
@@ -319,7 +319,7 @@ describe('fmp4 box reader over the recordings', () => {
 });
 
 describe('fmp4 box reader command line', () => {
-  it('prints every box fact of a recording except its bytes and sample tables', () => {
+  it('Should print every box fact except the bytes and sample tables when run from the command line', () => {
     const script = new URL('fmp4.mjs', import.meta.url).pathname;
     const run = spawnSync(process.execPath, [script, new URL('10-copy-gop-exceeds-period.fmp4', FIXTURES).pathname], {
       encoding: 'utf8',

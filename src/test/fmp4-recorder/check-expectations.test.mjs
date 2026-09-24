@@ -1,19 +1,19 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { copyFileSync, cpSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import { checkExpectations } from './check-expectations.mjs';
 import { formatJson, parseJson } from './json.mjs';
+import { temporaryDirectory } from './temporary-directories.mjs';
 
 const FIXTURES = fileURLToPath(new URL('../resources/fmp4/', import.meta.url));
 const SCRIPT = fileURLToPath(new URL('check-expectations.mjs', import.meta.url));
 
 /** A copy of the committed fixtures whose expected.json the edit may change in place. */
 function copyWith(edit = () => {}) {
-  const directory = mkdtempSync(join(tmpdir(), 'fmp4-'));
+  const directory = temporaryDirectory('fmp4-');
   cpSync(FIXTURES, directory, { recursive: true });
   const expected = parseJson(readFileSync(join(directory, 'expected.json'), 'utf8'));
   edit(expected, directory);
@@ -26,11 +26,11 @@ function fixture(expected, name) {
 }
 
 describe('offline expectation check', () => {
-  it('finds expected.json in agreement with every committed recording', () => {
+  it('Should find no disagreement when expected.json describes every committed recording', () => {
     assert.deepEqual(checkExpectations(FIXTURES), []);
   });
 
-  it('names every recorded fact that expected.json misstates', () => {
+  it('Should name every recorded fact when expected.json misstates it', () => {
     const directory = copyWith((expected) => {
       fixture(expected, '01-encode-cfr').segments[1].byteLength += 1;
       fixture(expected, '07-copy-seek30').discardedPreroll = [];
@@ -54,7 +54,7 @@ describe('offline expectation check', () => {
     ]);
   });
 
-  it('names a recording that expected.json does not describe and a described recording that is missing', () => {
+  it('Should name a recording when expected.json does not describe it or it is missing', () => {
     const directory = copyWith((_expected, folder) => {
       copyFileSync(join(folder, '07-copy-start0.fmp4'), join(folder, '99-unlisted.fmp4'));
       rmSync(join(folder, '06-encode-audio-tail.fmp4'));
@@ -68,7 +68,7 @@ describe('offline expectation check', () => {
     ]);
   });
 
-  it('exits with the disagreements as its failure when run from the command line', () => {
+  it('Should exit with the disagreements as its failure when run from the command line', () => {
     const agreeing = spawnSync(process.execPath, [SCRIPT], { encoding: 'utf8' });
     const drifted = spawnSync(
       process.execPath,
