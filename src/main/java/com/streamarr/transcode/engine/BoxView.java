@@ -9,10 +9,6 @@ import lombok.NonNull;
 /** A box's type and the body bytes the reader already holds, viewed without copying them. */
 record BoxView(@NonNull String type, @NonNull ByteBuffer body) {
 
-  private static final int COMPACT_HEADER_BYTES = 8;
-  private static final int LARGE_HEADER_BYTES = 16;
-  private static final long LARGE_SIZE = 1;
-
   BoxView {
     body = body.slice();
   }
@@ -44,23 +40,15 @@ record BoxView(@NonNull String type, @NonNull ByteBuffer body) {
   }
 
   private BoxView readChild(ByteBuffer content) {
-    var fields = new BoxFields(type, content);
-    var size = fields.u32();
-    var childType = fields.fourcc();
-    var headerBytes = COMPACT_HEADER_BYTES;
-    if (size == LARGE_SIZE) {
-      size = fields.s64();
-      headerBytes = LARGE_HEADER_BYTES;
-    }
-
-    var bodyBytes = size - headerBytes;
+    var header = BoxHeader.read(new BoxFields(type, content));
+    var bodyBytes = header.size() - header.length();
     if (bodyBytes < 0 || bodyBytes > content.remaining()) {
       throw FragmentedMp4Exception.malformed(
-          childType + " in " + type + " declares " + size + " bytes");
+          header.type() + " in " + type + " declares " + header.size() + " bytes");
     }
 
     var childBody = content.slice(content.position(), (int) bodyBytes);
     content.position(content.position() + (int) bodyBytes);
-    return new BoxView(childType, childBody);
+    return new BoxView(header.type(), childBody);
   }
 }

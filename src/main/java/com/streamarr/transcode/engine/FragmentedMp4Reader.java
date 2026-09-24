@@ -11,14 +11,11 @@ import lombok.NonNull;
 /** Reads the top-level ISOBMFF boxes of FFmpeg's fragmented MP4 output from a byte stream. */
 final class FragmentedMp4Reader {
 
-  private static final int COMPACT_HEADER_BYTES = 8;
-  private static final int LARGE_HEADER_BYTES = 16;
-  private static final int LARGE_SIZE = 1;
-  private static final int UNSIZED = 0;
   private static final long MAXIMUM_ARRAY_BYTES = Integer.MAX_VALUE - 8L;
 
   private final InputStream stream;
   private final long maximumSegmentBytes;
+  private final byte[] headerBytes = new byte[BoxHeader.LARGE_LENGTH];
   private boolean initialized;
   private Optional<VideoTrack> videoTrack = Optional.empty();
 
@@ -59,29 +56,17 @@ final class FragmentedMp4Reader {
       return Optional.empty();
     }
 
-    var ftyp = readBox(requireInitializationBox(ftypHeader.orElseThrow(), "ftyp"), 0);
+    var missing = Reason.MISSING_INITIALIZATION_SEGMENT;
+    var ftyp = readBox(requireType(ftypHeader.orElseThrow(), "ftyp", missing), 0);
     var moovHeader =
-        requireInitializationBox(
-            readHeader().orElseThrow(() -> missingInitialization("moov", "the end of the stream")),
-            "moov");
+        readHeader()
+            .map(header -> requireType(header, "moov", missing))
+            .orElseThrow(() -> unexpected(missing, "moov", "the end of the stream"));
     var moov = readBox(moovHeader, ftyp.length);
     videoTrack = VideoTrack.of(viewOf(moovHeader, moov));
     initialized = true;
     var bytes = ByteBuffer.allocate(ftyp.length + moov.length).put(ftyp).put(moov).array();
     return Optional.of(new InitializationSegment(bytes));
-  }
-
-  private static BoxHeader requireInitializationBox(BoxHeader header, String type) {
-    if (!header.type().equals(type)) {
-      throw missingInitialization(type, header.type());
-    }
-
-    return header;
-  }
-
-  private static FragmentedMp4Exception missingInitialization(String expected, String found) {
-    return new FragmentedMp4Exception(
-        Reason.MISSING_INITIALIZATION_SEGMENT, "expected " + expected + ", found " + found);
   }
 
   private Optional<Mp4Unit> readFragment() throws IOException {
@@ -98,7 +83,7 @@ final class FragmentedMp4Reader {
                 () ->
                     new FragmentedMp4Exception(
                         Reason.END_OF_FILE_AFTER_MOVIE_FRAGMENT, "no mdat follows the moof"));
-    var mdat = readBox(requireType(mdatHeader, "mdat"), moof.length);
+    var mdat = readBox(requireType(mdatHeader, "mdat", Reason.UNEXPECTED_BOX), moof.length);
     var videoStart = videoTrack.flatMap(track -> track.startOf(viewOf(moofHeader, moof)));
     return Optional.of(new Fragment(List.of(moof, mdat), videoStart));
   }
@@ -108,43 +93,45 @@ final class FragmentedMp4Reader {
       case "ftyp", "moov" ->
           throw new FragmentedMp4Exception(
               Reason.MISPLACED_INITIALIZATION_SEGMENT, header.type() + " follows a fragment");
-      default -> requireType(header, "moof");
+      default -> requireType(header, "moof", Reason.UNEXPECTED_BOX);
     };
   }
 
-  private static BoxHeader requireType(BoxHeader header, String type) {
+  private static BoxHeader requireType(BoxHeader header, String type, Reason reason) {
     if (!header.type().equals(type)) {
-      throw new FragmentedMp4Exception(
-          Reason.UNEXPECTED_BOX, "expected " + type + ", found " + header.type());
+      throw unexpected(reason, type, header.type());
     }
 
     return header;
   }
 
+  private static FragmentedMp4Exception unexpected(Reason reason, String expected, String found) {
+    return new FragmentedMp4Exception(reason, "expected " + expected + ", found " + found);
+  }
+
+  /** Reads the next header into {@link #headerBytes}, where {@link #readBox} copies it from. */
   private Optional<BoxHeader> readHeader() throws IOException {
-    var compact = stream.readNBytes(COMPACT_HEADER_BYTES);
-    if (compact.length == 0) {
+    var read = stream.readNBytes(headerBytes, 0, BoxHeader.COMPACT_LENGTH);
+    if (read == 0) {
       return Optional.empty();
     }
 
-    requireHeaderBytes(compact.length, COMPACT_HEADER_BYTES);
-    var fields = new BoxFields("box header", ByteBuffer.wrap(compact));
-    var size = fields.u32();
-    var type = fields.fourcc();
-    if (size == UNSIZED) {
+    requireHeaderBytes(read, BoxHeader.COMPACT_LENGTH);
+    var length = BoxHeader.COMPACT_LENGTH;
+    if (BoxHeader.declaresLargeSize(headerBytes)) {
+      length = BoxHeader.LARGE_LENGTH;
+      read += stream.readNBytes(headerBytes, read, length - read);
+      requireHeaderBytes(read, length);
+    }
+
+    var header =
+        BoxHeader.read(new BoxFields("box header", ByteBuffer.wrap(headerBytes, 0, length)));
+    if (header.isUnsized()) {
       throw new FragmentedMp4Exception(
-          Reason.UNSIZED_BOX, type + " extends to the end of the stream");
+          Reason.UNSIZED_BOX, header.type() + " extends to the end of the stream");
     }
 
-    if (size != LARGE_SIZE) {
-      return Optional.of(new BoxHeader(compact, type, size));
-    }
-
-    var large = new byte[LARGE_HEADER_BYTES];
-    System.arraycopy(compact, 0, large, 0, COMPACT_HEADER_BYTES);
-    var read = stream.readNBytes(large, COMPACT_HEADER_BYTES, COMPACT_HEADER_BYTES);
-    requireHeaderBytes(COMPACT_HEADER_BYTES + read, LARGE_HEADER_BYTES);
-    return Optional.of(new BoxHeader(large, type, ByteBuffer.wrap(large).getLong(8)));
+    return Optional.of(header);
   }
 
   private static void requireHeaderBytes(int read, int headerLength) {
@@ -168,14 +155,14 @@ final class FragmentedMp4Reader {
               + maximumSegmentBytes);
     }
 
-    if (header.size() < header.bytes().length) {
+    if (header.size() < header.length()) {
       throw FragmentedMp4Exception.malformed(
           header.type() + " declares " + header.size() + " bytes");
     }
 
     var box = new byte[(int) header.size()];
-    var headerLength = header.bytes().length;
-    System.arraycopy(header.bytes(), 0, box, 0, headerLength);
+    var headerLength = header.length();
+    System.arraycopy(headerBytes, 0, box, 0, headerLength);
     var read = stream.readNBytes(box, headerLength, box.length - headerLength);
     if (read < box.length - headerLength) {
       throw new FragmentedMp4Exception(
@@ -187,10 +174,8 @@ final class FragmentedMp4Reader {
   }
 
   private static BoxView viewOf(BoxHeader header, byte[] box) {
-    var headerLength = header.bytes().length;
+    var headerLength = header.length();
     return new BoxView(
         header.type(), ByteBuffer.wrap(box, headerLength, box.length - headerLength));
   }
-
-  private record BoxHeader(byte[] bytes, String type, long size) {}
 }
