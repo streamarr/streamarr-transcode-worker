@@ -1277,6 +1277,35 @@ class ProducerTest {
   }
 
   @Test
+  @DisplayName(
+      "Should settle only the stop without terminating FFmpeg when a stop arrives while FFmpeg"
+          + " outlives the grace period after its output ended")
+  void
+      shouldSettleOnlyTheStopWithoutTerminatingFfmpegWhenAStopArrivesWhileFfmpegOutlivesTheGracePeriodAfterItsOutputEnded() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .lingersAfterKill(true)
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    var producer = producerFor(process, recording).gracePeriod(Duration.ofMillis(200)).start();
+    awaiting().until(process::hasReadToEndOfOutput);
+
+    producer.requestStop();
+
+    // The exit wait that began when the output ended expires before the stop's forced kill.
+    awaiting().until(process::wasDestroyedForcibly);
+    await()
+        .atMost(OUTCOME_LIMIT)
+        .during(Duration.ofMillis(200))
+        .until(() -> !process.wasTerminated());
+    process.exit();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Stopped());
+    assertThat(process.stdinText()).isEqualTo("q");
+  }
+
+  @Test
   @DisplayName("Should not fail the attempt as an encoder stall once it is stopped")
   void shouldNotFailTheAttemptAsAnEncoderStallOnceItIsStopped() throws InterruptedException {
     var recording = recording(ENCODED_RECORDING);
