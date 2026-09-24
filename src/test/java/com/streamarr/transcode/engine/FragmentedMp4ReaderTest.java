@@ -2,6 +2,18 @@ package com.streamarr.transcode.engine;
 
 import static com.streamarr.transcode.engine.IsoBoxes.NON_SYNC_SAMPLE_FLAGS;
 import static com.streamarr.transcode.engine.IsoBoxes.SYNC_SAMPLE_FLAGS;
+import static com.streamarr.transcode.engine.IsoBoxes.TFHD_BASE_DATA_OFFSET;
+import static com.streamarr.transcode.engine.IsoBoxes.TFHD_DEFAULT_SAMPLE_DURATION;
+import static com.streamarr.transcode.engine.IsoBoxes.TFHD_DEFAULT_SAMPLE_FLAGS;
+import static com.streamarr.transcode.engine.IsoBoxes.TFHD_DEFAULT_SAMPLE_SIZE;
+import static com.streamarr.transcode.engine.IsoBoxes.TFHD_SAMPLE_DESCRIPTION_INDEX;
+import static com.streamarr.transcode.engine.IsoBoxes.TRUN_DATA_OFFSET;
+import static com.streamarr.transcode.engine.IsoBoxes.TRUN_FIRST_SAMPLE_FLAGS;
+import static com.streamarr.transcode.engine.IsoBoxes.TRUN_SAMPLE_COMPOSITION_TIME_OFFSET;
+import static com.streamarr.transcode.engine.IsoBoxes.TRUN_SAMPLE_DURATION;
+import static com.streamarr.transcode.engine.IsoBoxes.TRUN_SAMPLE_FLAGS;
+import static com.streamarr.transcode.engine.IsoBoxes.TRUN_SAMPLE_SIZE;
+import static com.streamarr.transcode.engine.IsoBoxes.VERSION_1;
 import static com.streamarr.transcode.engine.IsoBoxes.VIDEO_TRACK_ID;
 import static com.streamarr.transcode.engine.IsoBoxes.audioTraf;
 import static com.streamarr.transcode.engine.IsoBoxes.box;
@@ -14,10 +26,14 @@ import static com.streamarr.transcode.engine.IsoBoxes.largeSizeHeader;
 import static com.streamarr.transcode.engine.IsoBoxes.mdat;
 import static com.streamarr.transcode.engine.IsoBoxes.moof;
 import static com.streamarr.transcode.engine.IsoBoxes.moov;
+import static com.streamarr.transcode.engine.IsoBoxes.tfdt;
+import static com.streamarr.transcode.engine.IsoBoxes.tfhd;
 import static com.streamarr.transcode.engine.IsoBoxes.u32;
 import static com.streamarr.transcode.engine.IsoBoxes.u64;
 import static com.streamarr.transcode.engine.IsoBoxes.videoAndAudioMoov;
 import static com.streamarr.transcode.engine.IsoBoxes.videoTraf;
+import static com.streamarr.transcode.engine.Mp4Stream.nextFragment;
+import static com.streamarr.transcode.engine.Mp4Stream.readerOf;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
@@ -28,11 +44,8 @@ import com.streamarr.transcode.engine.IsoBoxes.TrackFragment;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
 import java.util.Optional;
-import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -43,7 +56,6 @@ import org.junit.jupiter.params.provider.ValueSource;
 @Tag("UnitTest")
 class FragmentedMp4ReaderTest {
 
-  private static final long SEGMENT_CAP = 16L * 1024 * 1024;
   private static final long VIDEO_TIMESCALE = 24_000;
 
   @Test
@@ -270,7 +282,7 @@ class FragmentedMp4ReaderTest {
     var unexpected = concat(ftyp(), videoAndAudioMoov(), u32(8), type);
 
     assertThatExceptionOfType(FragmentedMp4Exception.class)
-        .isThrownBy(() -> readToEnd(readerOf(unexpected)))
+        .isThrownBy(() -> Mp4Stream.read(readerOf(unexpected)))
         .withMessageContaining("??o!")
         .withMessageNotContaining("\n");
   }
@@ -403,17 +415,28 @@ class FragmentedMp4ReaderTest {
   @DisplayName("Should read the tfhd default flags when every optional tfhd field precedes them")
   void shouldReadTheTfhdDefaultFlagsWhenEveryOptionalTfhdFieldPrecedesThem() throws IOException {
     var moov = moov(Track.video().defaultSampleFlags(SYNC_SAMPLE_FLAGS).build());
+    var everyField =
+        TFHD_BASE_DATA_OFFSET
+            | TFHD_SAMPLE_DESCRIPTION_INDEX
+            | TFHD_DEFAULT_SAMPLE_DURATION
+            | TFHD_DEFAULT_SAMPLE_SIZE
+            | TFHD_DEFAULT_SAMPLE_FLAGS;
+    var baseDataOffset = u64(4096);
+    var sampleDescriptionIndex = u32(1);
+    var defaultDuration = u32(1001);
+    var defaultSize = u32(100);
+    var defaultFlags = u32(NON_SYNC_SAMPLE_FLAGS);
     var tfhd =
         fullBox(
             "tfhd",
-            0x00003B,
+            everyField,
             u32(VIDEO_TRACK_ID),
-            u64(4096),
-            u32(1),
-            u32(1001),
-            u32(100),
-            u32(NON_SYNC_SAMPLE_FLAGS));
-    var trun = fullBox("trun", 1 << 24, u32(1));
+            baseDataOffset,
+            sampleDescriptionIndex,
+            defaultDuration,
+            defaultSize,
+            defaultFlags);
+    var trun = fullBox("trun", VERSION_1, u32(1));
 
     assertThat(videoStartOf(moov, box("moof", box("traf", tfhd, tfdt(3003), trun))))
         .contains(new VideoStart(3003, VIDEO_TIMESCALE, false));
@@ -422,20 +445,19 @@ class FragmentedMp4ReaderTest {
   @Test
   @DisplayName("Should read the first sample's flags and offset when every per-sample field is set")
   void shouldReadTheFirstSamplesFlagsAndOffsetWhenEveryPerSampleFieldIsSet() throws IOException {
-    var trun =
-        fullBox(
-            "trun",
-            1 << 24 | 0x000F01,
-            u32(2),
-            u32(0),
-            u32(1001),
-            u32(100),
-            u32(NON_SYNC_SAMPLE_FLAGS),
-            u32(-1001),
-            u32(1001),
-            u32(90),
-            u32(SYNC_SAMPLE_FLAGS),
-            u32(0));
+    var everyField =
+        VERSION_1
+            | TRUN_DATA_OFFSET
+            | TRUN_SAMPLE_DURATION
+            | TRUN_SAMPLE_SIZE
+            | TRUN_SAMPLE_FLAGS
+            | TRUN_SAMPLE_COMPOSITION_TIME_OFFSET;
+    var sampleCount = u32(2);
+    var dataOffset = u32(0);
+    // Each entry holds the duration, size, flags and composition offset, in that order.
+    var firstSample = concat(u32(1001), u32(100), u32(NON_SYNC_SAMPLE_FLAGS), u32(-1001));
+    var secondSample = concat(u32(1001), u32(90), u32(SYNC_SAMPLE_FLAGS), u32(0));
+    var trun = fullBox("trun", everyField, sampleCount, dataOffset, firstSample, secondSample);
     var moov = moov(Track.video().defaultSampleFlags(SYNC_SAMPLE_FLAGS).build());
     var traf = box("traf", tfhd(VIDEO_TRACK_ID), tfdt(3003), trun);
 
@@ -485,8 +507,15 @@ class FragmentedMp4ReaderTest {
   @Test
   @DisplayName("Should read the first sample of the next run when an earlier run has no samples")
   void shouldReadTheFirstSampleOfTheNextRunWhenAnEarlierRunHasNoSamples() throws IOException {
-    var emptyRun = fullBox("trun", 1 << 24 | 0x000004, u32(0), u32(NON_SYNC_SAMPLE_FLAGS));
-    var run = fullBox("trun", 1 << 24 | 0x000804, u32(1), u32(SYNC_SAMPLE_FLAGS), u32(-1001));
+    var emptyRun =
+        fullBox("trun", VERSION_1 | TRUN_FIRST_SAMPLE_FLAGS, u32(0), u32(NON_SYNC_SAMPLE_FLAGS));
+    var run =
+        fullBox(
+            "trun",
+            VERSION_1 | TRUN_FIRST_SAMPLE_FLAGS | TRUN_SAMPLE_COMPOSITION_TIME_OFFSET,
+            u32(1),
+            u32(SYNC_SAMPLE_FLAGS),
+            u32(-1001));
     var traf = box("traf", tfhd(VIDEO_TRACK_ID), tfdt(3003), emptyRun, run);
 
     assertThat(videoStartOf(videoAndAudioMoov(), box("moof", traf)))
@@ -537,7 +566,7 @@ class FragmentedMp4ReaderTest {
   @Test
   @DisplayName("Should fail when a video traf's fields end before its flags promise")
   void shouldFailWhenAVideoTrafsFieldsEndBeforeItsFlagsPromise() {
-    var traf = box("traf", fullBox("tfhd", 0x000020, u32(VIDEO_TRACK_ID)));
+    var traf = box("traf", fullBox("tfhd", TFHD_DEFAULT_SAMPLE_FLAGS, u32(VIDEO_TRACK_ID)));
 
     assertFailure(
         readerOf(concat(ftyp(), videoAndAudioMoov(), box("moof", traf), mdat(8))),
@@ -572,34 +601,17 @@ class FragmentedMp4ReaderTest {
 
   private static void assertFailure(FragmentedMp4Reader reader, Reason reason) {
     assertThatExceptionOfType(FragmentedMp4Exception.class)
-        .isThrownBy(() -> readToEnd(reader))
+        .isThrownBy(() -> Mp4Stream.read(reader))
         .extracting(FragmentedMp4Exception::getReason)
         .isEqualTo(reason);
-  }
-
-  private static List<Mp4Unit> readToEnd(FragmentedMp4Reader reader) throws IOException {
-    var units = new ArrayList<Mp4Unit>();
-    for (var unit = reader.next(); unit.isPresent(); unit = reader.next()) {
-      units.add(unit.orElseThrow());
-    }
-
-    return units;
   }
 
   private static TrackFragment.TrackFragmentBuilder syncVideoTraf() {
     return videoTraf().firstSampleFlags(SYNC_SAMPLE_FLAGS);
   }
 
-  private static byte[] tfhd(int trackId) {
-    return fullBox("tfhd", 0x020000, u32(trackId));
-  }
-
-  private static byte[] tfdt(long baseMediaDecodeTime) {
-    return fullBox("tfdt", 1 << 24, u64(baseMediaDecodeTime));
-  }
-
   private static byte[] syncRun() {
-    return fullBox("trun", 1 << 24 | 0x000004, u32(1), u32(SYNC_SAMPLE_FLAGS));
+    return fullBox("trun", VERSION_1 | TRUN_FIRST_SAMPLE_FLAGS, u32(1), u32(SYNC_SAMPLE_FLAGS));
   }
 
   private static Optional<VideoStart> videoStartOf(TrackFragment.TrackFragmentBuilder videoTraf)
@@ -616,16 +628,5 @@ class FragmentedMp4ReaderTest {
 
   private static byte[] videoMoof(long baseMediaDecodeTime) {
     return moof(videoTraf().baseMediaDecodeTime(baseMediaDecodeTime).build());
-  }
-
-  private static Fragment nextFragment(FragmentedMp4Reader reader) throws IOException {
-    return assertThat(reader.next())
-        .get()
-        .asInstanceOf(InstanceOfAssertFactories.type(Fragment.class))
-        .actual();
-  }
-
-  private static FragmentedMp4Reader readerOf(byte[] bytes) {
-    return new FragmentedMp4Reader(new ByteArrayInputStream(bytes), SEGMENT_CAP);
   }
 }

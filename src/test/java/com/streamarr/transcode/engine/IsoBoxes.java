@@ -14,6 +14,25 @@ final class IsoBoxes {
   static final int SYNC_SAMPLE_FLAGS = 0x0200_0000;
   static final int NON_SYNC_SAMPLE_FLAGS = 0x0101_0000;
 
+  /** A full box's version 1, to combine with its flags. */
+  static final int VERSION_1 = 1 << 24;
+
+  static final int TFHD_BASE_DATA_OFFSET = 0x000001;
+  static final int TFHD_SAMPLE_DESCRIPTION_INDEX = 0x000002;
+  static final int TFHD_DEFAULT_SAMPLE_DURATION = 0x000008;
+  static final int TFHD_DEFAULT_SAMPLE_SIZE = 0x000010;
+  static final int TFHD_DEFAULT_SAMPLE_FLAGS = 0x000020;
+  static final int TFHD_DEFAULT_BASE_IS_MOOF = 0x020000;
+
+  static final int TRUN_DATA_OFFSET = 0x000001;
+  static final int TRUN_FIRST_SAMPLE_FLAGS = 0x000004;
+  static final int TRUN_SAMPLE_DURATION = 0x000100;
+  static final int TRUN_SAMPLE_SIZE = 0x000200;
+  static final int TRUN_SAMPLE_FLAGS = 0x000400;
+  static final int TRUN_SAMPLE_COMPOSITION_TIME_OFFSET = 0x000800;
+
+  private static final int TKHD_ENABLED_IN_MOVIE = 0x000003;
+
   private IsoBoxes() {}
 
   static byte[] box(String type, byte[]... payloads) {
@@ -60,6 +79,16 @@ final class IsoBoxes {
     var payload = new byte[payloadBytes];
     Arrays.fill(payload, (byte) 0x5A);
     return box("mdat", payload);
+  }
+
+  /** A {@code tfhd} whose data offsets are relative to the {@code moof}, with no default fields. */
+  static byte[] tfhd(int trackId) {
+    return fullBox("tfhd", TFHD_DEFAULT_BASE_IS_MOOF, u32(trackId));
+  }
+
+  /** A version 1 {@code tfdt}, whose decode time is a signed 64-bit value. */
+  static byte[] tfdt(long baseMediaDecodeTime) {
+    return fullBox("tfdt", VERSION_1, u64(baseMediaDecodeTime));
   }
 
   static TrackFragment.TrackFragmentBuilder videoTraf() {
@@ -117,7 +146,7 @@ final class IsoBoxes {
     }
 
     private byte[] tkhd() {
-      var versionAndFlags = headerVersion << 24 | 0x000003;
+      var versionAndFlags = headerVersion << 24 | TKHD_ENABLED_IN_MOVIE;
       if (headerVersion == 1) {
         return fullBox("tkhd", versionAndFlags, u64(0), u64(0), u32(trackId), new byte[68]);
       }
@@ -127,7 +156,7 @@ final class IsoBoxes {
 
     private byte[] mdhd() {
       if (headerVersion == 1) {
-        return fullBox("mdhd", 1 << 24, u64(0), u64(0), u32(timescale), u64(0), u32(0));
+        return fullBox("mdhd", VERSION_1, u64(0), u64(0), u32(timescale), u64(0), u32(0));
       }
 
       return fullBox("mdhd", 0, u32(0), u32(0), u32(timescale), u32(0), u32(0));
@@ -143,28 +172,32 @@ final class IsoBoxes {
    * muxer omits them when the flag that announces them is clear.
    */
   @Builder
-  record TrackFragment(
-      int trackId,
-      Integer defaultSampleFlags,
-      Long baseMediaDecodeTime,
-      int decodeTimeVersion,
-      int runVersion,
-      Integer sampleCount,
-      Integer firstSampleFlags,
-      Integer sampleFlags,
-      Integer compositionOffset) {
+  static final class TrackFragment {
+
+    private final int trackId;
+    private final Integer defaultSampleFlags;
+    private final Long baseMediaDecodeTime;
+    private final int decodeTimeVersion;
+    private final int runVersion;
+    private final Integer sampleCount;
+    private final Integer firstSampleFlags;
+    private final Integer sampleFlags;
+    private final Integer compositionOffset;
 
     byte[] traf() {
       return box("traf", tfhd(), tfdt(), trun());
     }
 
     private byte[] tfhd() {
-      var defaultBaseIsMoof = 0x020000;
       if (defaultSampleFlags == null) {
-        return fullBox("tfhd", defaultBaseIsMoof, u32(trackId));
+        return IsoBoxes.tfhd(trackId);
       }
 
-      return fullBox("tfhd", defaultBaseIsMoof | 0x000020, u32(trackId), u32(defaultSampleFlags));
+      return fullBox(
+          "tfhd",
+          TFHD_DEFAULT_BASE_IS_MOOF | TFHD_DEFAULT_SAMPLE_FLAGS,
+          u32(trackId),
+          u32(defaultSampleFlags));
     }
 
     private byte[] tfdt() {
@@ -176,22 +209,32 @@ final class IsoBoxes {
         return fullBox("tfdt", 0, u32(baseMediaDecodeTime));
       }
 
-      return fullBox("tfdt", 1 << 24, u64(baseMediaDecodeTime));
+      return IsoBoxes.tfdt(baseMediaDecodeTime);
     }
 
     private byte[] trun() {
-      var samples = sampleCount == null ? 1 : sampleCount;
-      var flags = 0x000001 | 0x000200;
+      var samples = 1;
+      if (sampleCount != null) {
+        samples = sampleCount;
+      }
+
+      var flags = TRUN_DATA_OFFSET | TRUN_SAMPLE_SIZE;
       var header = new ByteArrayOutputStream();
       header.writeBytes(u32(samples));
       header.writeBytes(u32(0));
       if (firstSampleFlags != null) {
-        flags |= 0x000004;
+        flags |= TRUN_FIRST_SAMPLE_FLAGS;
         header.writeBytes(u32(firstSampleFlags));
       }
 
-      flags |= sampleFlags == null ? 0 : 0x000400;
-      flags |= compositionOffset == null ? 0 : 0x000800;
+      if (sampleFlags != null) {
+        flags |= TRUN_SAMPLE_FLAGS;
+      }
+
+      if (compositionOffset != null) {
+        flags |= TRUN_SAMPLE_COMPOSITION_TIME_OFFSET;
+      }
+
       for (var sample = 0; sample < samples; sample++) {
         header.writeBytes(sampleEntry(sample));
       }
@@ -206,10 +249,16 @@ final class IsoBoxes {
         entry.writeBytes(u32(sampleFlags));
       }
 
-      if (compositionOffset != null) {
-        entry.writeBytes(u32(sample == 0 ? compositionOffset : 0));
+      if (compositionOffset == null) {
+        return entry.toByteArray();
       }
 
+      var offset = 0;
+      if (sample == 0) {
+        offset = compositionOffset;
+      }
+
+      entry.writeBytes(u32(offset));
       return entry.toByteArray();
     }
   }

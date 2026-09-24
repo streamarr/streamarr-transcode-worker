@@ -10,7 +10,6 @@ import com.streamarr.transcode.engine.FfmpegRecordings.HlsRun;
 import com.streamarr.transcode.engine.FfmpegRecordings.Recording;
 import com.streamarr.transcode.engine.FfmpegRecordings.SegmentSummary;
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -20,7 +19,6 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
-import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -31,8 +29,6 @@ import org.junit.jupiter.params.provider.MethodSource;
 
 @Tag("UnitTest")
 class RecordedFfmpegOutputTest {
-
-  private static final long SEGMENT_CAP = 16L * 1024 * 1024;
 
   static Stream<Recording> recordings() {
     return FfmpegRecordings.recordings().stream();
@@ -211,23 +207,8 @@ class RecordedFfmpegOutputTest {
     assertThat(grouping.failure()).contains(new Failure(Reason.SKIPPED_SEGMENT_NUMBER, 20));
   }
 
-  private static RecordedUnits read(String file) throws IOException {
-    var reader = new FragmentedMp4Reader(new ByteArrayInputStream(bytesOf(file)), SEGMENT_CAP);
-    var initializationSegment =
-        assertThat(reader.next())
-            .get()
-            .asInstanceOf(InstanceOfAssertFactories.type(InitializationSegment.class))
-            .actual();
-    var fragments = new ArrayList<Fragment>();
-    for (var unit = reader.next(); unit.isPresent(); unit = reader.next()) {
-      fragments.add(
-          assertThat(unit)
-              .get()
-              .asInstanceOf(InstanceOfAssertFactories.type(Fragment.class))
-              .actual());
-    }
-
-    return new RecordedUnits(initializationSegment, fragments);
+  private static Mp4Stream read(String file) throws IOException {
+    return Mp4Stream.read(Mp4Stream.readerOf(bytesOf(file)));
   }
 
   private static Grouping group(Recording recording) throws IOException {
@@ -293,20 +274,8 @@ class RecordedFfmpegOutputTest {
     return bytes.toByteArray();
   }
 
-  private record RecordedUnits(
-      InitializationSegment initializationSegment, List<Fragment> fragments) {
-
-    /** The position after the initialization segment at which the reader returned this fragment. */
-    int indexOf(Fragment fragment) {
-      return IntStream.range(0, fragments.size())
-          .filter(index -> fragments.get(index) == fragment)
-          .findFirst()
-          .orElseThrow();
-    }
-  }
-
   private record Failure(Reason reason, int fragmentIndex) {}
 
   private record Grouping(
-      RecordedUnits units, List<MediaSegment> delivered, Optional<Failure> failure) {}
+      Mp4Stream units, List<MediaSegment> delivered, Optional<Failure> failure) {}
 }
