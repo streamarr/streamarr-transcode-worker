@@ -21,7 +21,8 @@ import lombok.NonNull;
  *
  * <p>The output can pause at one offset until the test or a {@code q} on standard input resumes it,
  * and can fail with an I/O error at another. The process exits at the end of its output, at launch,
- * or when the test says so. A forcible destroy ends the output where it stands and exits with 137.
+ * on {@code q}, or when the test says so. A forcible destroy ends the output where it stands and
+ * exits with 137.
  */
 public final class ScriptedProcess extends Process {
 
@@ -36,7 +37,12 @@ public final class ScriptedProcess extends Process {
     /** Immediately, with the whole output still unread, as if held in the pipe. */
     AT_LAUNCH,
     /** Only when the test calls {@link #exit()}. */
-    WHEN_TEST_EXITS
+    WHEN_TEST_EXITS,
+    /**
+     * When {@code q} arrives on standard input, as FFmpeg quits; the output keeps whatever the
+     * reader has not read.
+     */
+    AT_QUIT
   }
 
   private final byte[] output;
@@ -271,8 +277,16 @@ public final class ScriptedProcess extends Process {
         stdin.write(value);
       }
 
-      if (value == 'q' && resumesOnQuit) {
+      if (value != 'q') {
+        return;
+      }
+
+      if (resumesOnQuit) {
         resume();
+      }
+
+      if (exitTiming == ExitTiming.AT_QUIT) {
+        exit();
       }
     }
   }

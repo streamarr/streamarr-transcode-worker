@@ -143,9 +143,12 @@ class WorkerMediaSmokeTest {
 
       assertThat(controlPlane.completed.get(30, TimeUnit.SECONDS).getJobAttemptId())
           .isEqualTo(request.getJobAttemptId());
-      assertThat(controlPlane.segments).containsKey("segment0.ts");
-      var segment = root.resolve("uploaded.ts");
-      Files.write(segment, controlPlane.segments.get("segment0.ts"));
+      assertThat(controlPlane.segments).containsKeys("init.mp4", "segment0.m4s");
+      var segment = root.resolve("uploaded.mp4");
+      var uploaded = new ByteArrayOutputStream();
+      uploaded.writeBytes(controlPlane.segments.get("init.mp4"));
+      uploaded.writeBytes(controlPlane.segments.get("segment0.m4s"));
+      Files.write(segment, uploaded.toByteArray());
       var media =
           FfprobeExecutor.forBinary(Path.of("ffprobe")).probe(segment, requestBuilder().build());
       assertThat(media.getMedia().getStreamsList())

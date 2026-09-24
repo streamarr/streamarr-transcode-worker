@@ -94,9 +94,17 @@ public final class ImageControlPlane
       case "/start-job" -> startJob(VariantJob.parseFrom(exchange.getRequestBody()));
       case "/disconnected" ->
           disconnected.get(10, TimeUnit.SECONDS).toString().getBytes(StandardCharsets.UTF_8);
-      case "/segment" -> segments.getOrDefault("segment0.ts", new byte[0]);
+      case "/segment" -> firstMediaSegment();
       default -> throw new IllegalArgumentException("Unknown image-test command");
     };
+  }
+
+  /** The first media segment behind its initialization segment, so that it decodes alone. */
+  private byte[] firstMediaSegment() {
+    var segment = new ByteArrayOutputStream();
+    segment.writeBytes(segments.getOrDefault("init.mp4", new byte[0]));
+    segment.writeBytes(segments.getOrDefault("segment0.m4s", new byte[0]));
+    return segment.toByteArray();
   }
 
   private byte[] accept() throws Exception {

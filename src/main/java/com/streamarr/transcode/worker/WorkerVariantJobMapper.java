@@ -28,6 +28,7 @@ final class WorkerVariantJobMapper {
     var execution = job.getExecution();
     return TranscodeRequest.builder()
         .sessionId(fromProto(job.getStreamSessionId()))
+        .attemptId(fromProto(job.getJobAttemptId()))
         .sourcePath(sourceResolver.resolve(job.getSource()))
         .seekPosition(execution.getSeekPositionSeconds())
         .targetSegmentDuration(execution.getTargetSegmentDurationSeconds())

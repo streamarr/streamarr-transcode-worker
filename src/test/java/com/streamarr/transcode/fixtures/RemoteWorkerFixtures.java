@@ -1,8 +1,9 @@
 package com.streamarr.transcode.fixtures;
 
 import com.streamarr.transcode.engine.FfmpegCommandBuilder;
-import com.streamarr.transcode.engine.FfmpegProcessManager;
 import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
+import com.streamarr.transcode.engine.LocalFfmpegProcessManager;
+import com.streamarr.transcode.engine.ProcessLauncher;
 import com.streamarr.transcode.engine.TranscodeCapabilityService;
 import com.streamarr.transcode.worker.TranscodeWorkerConfiguration;
 import java.io.ByteArrayInputStream;
@@ -26,7 +27,8 @@ public final class RemoteWorkerFixtures {
     return TranscodeWorkerConfiguration.builder().workerId(WORKER_ID).bootId(UUID.randomUUID());
   }
 
-  public static FfmpegTranscodeEngine remuxEngine(FfmpegProcessManager processManager) {
+  /** An engine with a compatible FFmpeg that launches FFmpeg through the launcher. */
+  public static FfmpegTranscodeEngine engine(ProcessLauncher launcher) {
     var capabilityService =
         new TranscodeCapabilityService(
             "ffmpeg",
@@ -37,10 +39,12 @@ public final class RemoteWorkerFixtures {
                         : ""));
     capabilityService.detectCapabilities();
 
-    return new FfmpegTranscodeEngine(
-        new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)),
-        processManager,
-        capabilityService);
+    return FfmpegTranscodeEngine.builder()
+        .commandBuilder(new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)))
+        .processManager(new LocalFfmpegProcessManager())
+        .capabilityService(capabilityService)
+        .launcher(launcher)
+        .build();
   }
 
   private static class CompatibleFfmpegProcess extends Process {

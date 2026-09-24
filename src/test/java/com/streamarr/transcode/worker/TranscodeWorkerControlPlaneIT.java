@@ -1,7 +1,9 @@
 package com.streamarr.transcode.worker;
 
+import static com.streamarr.transcode.engine.FfmpegRecordings.bytesOf;
+import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.SOURCE_NAMESPACE_ID;
-import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.remuxEngine;
+import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engine;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.workerConfigurationBuilder;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
@@ -17,6 +19,7 @@ import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailed;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
 import build.buf.gen.streamarr.transcode.v1.MediaSourceRef;
+import build.buf.gen.streamarr.transcode.v1.SegmentContentType;
 import build.buf.gen.streamarr.transcode.v1.SegmentUploadMetadata;
 import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
 import build.buf.gen.streamarr.transcode.v1.StopVariantCommand;
@@ -35,10 +38,11 @@ import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
-import ch.qos.logback.core.AppenderBase;
 import ch.qos.logback.core.read.ListAppender;
-import com.streamarr.transcode.fakes.FakeFfmpegProcessManager;
-import com.streamarr.transcode.fakes.FakeSegmentProducingFfmpegProcessManager;
+import com.streamarr.transcode.engine.FfmpegRecordings.Recording;
+import com.streamarr.transcode.fakes.ScriptedProcess;
+import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
+import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import io.grpc.Server;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
@@ -46,23 +50,23 @@ import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.grpc.stub.StreamObserver;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.UncheckedIOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.UnaryOperator;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -72,6 +76,8 @@ import org.slf4j.LoggerFactory;
 @Tag("IntegrationTest")
 @DisplayName("Transcode Worker Control Plane Integration Tests")
 class TranscodeWorkerControlPlaneIT {
+
+  private static final String WHOLE_RUN = "01-encode-cfr.fmp4";
 
   @TempDir Path tempDir;
 
@@ -172,13 +178,13 @@ class TranscodeWorkerControlPlaneIT {
   }
 
   @Test
-  @DisplayName("Should stop the active media process when the worker closes")
-  void shouldStopActiveMediaProcessWhenWorkerCloses() throws Exception {
+  @DisplayName("Should ask the active FFmpeg to quit when the worker closes")
+  void shouldAskTheActiveFfmpegToQuitWhenTheWorkerCloses() throws Exception {
     var service = new ControllableWorkerService();
-    var processes = new FakeFfmpegProcessManager();
+    var launcher = ScriptedProcessLauncher.running();
     var job = variantJob();
     try (var server = new TestServer(service);
-        var worker = worker(preparedMediaRoot(), processes)) {
+        var worker = worker(preparedMediaRoot(), launcher)) {
       server.start();
       worker.start("localhost", server.port());
       service.sendStart(service.registeredWorker(), job);
@@ -186,7 +192,7 @@ class TranscodeWorkerControlPlaneIT {
 
       worker.close();
 
-      assertThat(processes.isRunning(fromProto(job.getStreamSessionId()))).isFalse();
+      assertQuitGracefully(launcher.process(fromProto(job.getJobAttemptId())));
     }
   }
 
@@ -194,7 +200,7 @@ class TranscodeWorkerControlPlaneIT {
   @DisplayName("Should preserve the other variant when the control plane stops one attempt")
   void shouldPreserveOtherVariantWhenControlPlaneStopsOneAttempt() throws Exception {
     var service = new ControllableWorkerService();
-    var processes = new FakeFfmpegProcessManager();
+    var launcher = ScriptedProcessLauncher.running();
     var stopped = variantJob();
     var surviving =
         stopped.toBuilder()
@@ -202,7 +208,7 @@ class TranscodeWorkerControlPlaneIT {
             .setVariant(stopped.getVariant().toBuilder().setVariantLabel("1080p"))
             .build();
     try (var server = new TestServer(service);
-        var worker = worker(preparedMediaRoot(), processes)) {
+        var worker = worker(preparedMediaRoot(), launcher)) {
       server.start();
       worker.start("localhost", server.port());
       service.sendStart(service.registeredWorker(), stopped);
@@ -213,8 +219,8 @@ class TranscodeWorkerControlPlaneIT {
       service.sendStop(service.registeredWorker(), stopped);
       service.awaitStopped(stopped);
 
-      assertThat(processes.isRunning(fromProto(stopped.getStreamSessionId()), "720p")).isFalse();
-      assertThat(processes.isRunning(fromProto(surviving.getStreamSessionId()), "1080p")).isTrue();
+      assertQuitGracefully(launcher.process(fromProto(stopped.getJobAttemptId())));
+      assertThat(launcher.process(fromProto(surviving.getJobAttemptId())).isAlive()).isTrue();
     }
   }
 
@@ -222,10 +228,10 @@ class TranscodeWorkerControlPlaneIT {
   @DisplayName("Should preserve command order when replacing the same variant repeatedly")
   void shouldPreserveCommandOrderWhenReplacingSameVariantRepeatedly() throws Exception {
     var service = new ControllableWorkerService();
-    var processes = new FakeFfmpegProcessManager();
+    var launcher = ScriptedProcessLauncher.running();
     var current = variantJob();
     try (var server = new TestServer(service);
-        var worker = worker(preparedMediaRoot(), processes)) {
+        var worker = worker(preparedMediaRoot(), launcher)) {
       server.start();
       worker.start("localhost", server.port());
       service.sendStart(service.registeredWorker(), current);
@@ -245,7 +251,7 @@ class TranscodeWorkerControlPlaneIT {
         service.awaitStarted(replacements.get(index + 1));
       }
 
-      assertThat(processes.isRunning(fromProto(current.getStreamSessionId()), "720p")).isTrue();
+      assertThat(launcher.process(fromProto(current.getJobAttemptId())).isAlive()).isTrue();
     }
   }
 
@@ -253,15 +259,17 @@ class TranscodeWorkerControlPlaneIT {
   @DisplayName("Should upload the requested sequence when resuming a job mid-timeline")
   void shouldUploadRequestedSequenceWhenResumingJobMidTimeline() throws Exception {
     var service = new ControllableWorkerService();
-    var bytes = "resumed segment".getBytes(StandardCharsets.UTF_8);
-    var processes = new EndingProcessManager(Map.of("segment7.ts", bytes));
+    var recording = recording("07-copy-seek30.fmp4");
     var initial = variantJob();
     var resumed =
         initial.toBuilder()
-            .setExecution(initial.getExecution().toBuilder().setStartSequenceNumber(7))
+            .setExecution(
+                initial.getExecution().toBuilder()
+                    .setStartSequenceNumber(recording.startSequenceNumber()))
             .build();
     try (var server = new TestServer(service);
-        var worker = worker(preparedMediaRoot(), processes)) {
+        var worker =
+            worker(preparedMediaRoot(), ScriptedProcessLauncher.writing(recording.file()))) {
       server.start();
       worker.start("localhost", server.port());
 
@@ -270,25 +278,30 @@ class TranscodeWorkerControlPlaneIT {
       service.awaitCompleted(resumed);
 
       assertThat(service.uploads)
-          .singleElement()
-          .satisfies(
-              upload -> {
-                assertThat(upload.metadata().getSegmentName()).isEqualTo("segment7.ts");
-                assertThat(upload.metadata().getJobAttemptId())
-                    .isEqualTo(resumed.getJobAttemptId());
-                assertThat(upload.bytes()).isEqualTo(bytes);
-              });
+          .extracting(upload -> upload.metadata().getSegmentName())
+          .containsExactlyElementsOf(uploadNames(recording))
+          .startsWith("init.mp4", "segment5.m4s");
+      assertThat(service.uploads)
+          .allSatisfy(
+              upload ->
+                  assertThat(upload.metadata().getJobAttemptId())
+                      .isEqualTo(resumed.getJobAttemptId()));
     }
   }
 
   @Test
-  @DisplayName("Should fail the attempt when the media process exits without a segment")
-  void shouldFailAttemptWhenMediaProcessExitsWithoutASegment() throws Exception {
+  @DisplayName("Should fail the attempt when FFmpeg exits cleanly without a media segment")
+  void shouldFailTheAttemptWhenFfmpegExitsCleanlyWithoutAMediaSegment() throws Exception {
     var service = new ControllableWorkerService();
-    var processes = new EndingProcessManager(Map.of());
+    var recording = recording(WHOLE_RUN);
+    var initializationOnly =
+        Arrays.copyOf(bytesOf(WHOLE_RUN), recording.initializationSegment().byteLength());
+    var launcher =
+        new ScriptedProcessLauncher(
+            _ -> ScriptedProcess.builder().output(initializationOnly).build());
     var job = variantJob();
     try (var server = new TestServer(service);
-        var worker = worker(preparedMediaRoot(), processes)) {
+        var worker = worker(preparedMediaRoot(), launcher)) {
       server.start();
       worker.start("localhost", server.port());
 
@@ -299,19 +312,27 @@ class TranscodeWorkerControlPlaneIT {
       assertThat(failure.getJobAttemptId()).isEqualTo(job.getJobAttemptId());
       assertThat(failure.getFailure())
           .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
-      assertThat(service.uploads).isEmpty();
+      assertThat(service.uploads)
+          .extracting(upload -> upload.metadata().getSegmentName())
+          .containsExactly("init.mp4");
     }
   }
 
   @Test
-  @DisplayName("Should upload the segment when the media process writes it just before exiting")
-  void shouldUploadSegmentWhenMediaProcessWritesItJustBeforeExiting() throws Exception {
+  @DisplayName("Should upload every segment when FFmpeg exits before the worker reads its output")
+  void shouldUploadEverySegmentWhenFfmpegExitsBeforeTheWorkerReadsItsOutput() throws Exception {
     var service = new ControllableWorkerService();
-    var bytes = "last segment".getBytes(StandardCharsets.UTF_8);
-    var processes = new ExitingAfterLastSegmentProcessManager("segment0.ts", bytes);
+    var recording = recording(WHOLE_RUN);
+    var launcher =
+        new ScriptedProcessLauncher(
+            _ ->
+                ScriptedProcess.builder()
+                    .output(bytesOf(WHOLE_RUN))
+                    .exitTiming(ExitTiming.AT_LAUNCH)
+                    .build());
     var job = variantJob();
     try (var server = new TestServer(service);
-        var worker = worker(preparedMediaRoot(), processes)) {
+        var worker = worker(preparedMediaRoot(), launcher)) {
       server.start();
       worker.start("localhost", server.port());
 
@@ -320,12 +341,8 @@ class TranscodeWorkerControlPlaneIT {
       service.awaitCompleted(job);
 
       assertThat(service.uploads)
-          .singleElement()
-          .satisfies(
-              upload -> {
-                assertThat(upload.metadata().getSegmentName()).isEqualTo("segment0.ts");
-                assertThat(upload.bytes()).isEqualTo(bytes);
-              });
+          .extracting(upload -> upload.metadata().getSegmentName())
+          .containsExactlyElementsOf(uploadNames(recording));
     }
   }
 
@@ -333,11 +350,20 @@ class TranscodeWorkerControlPlaneIT {
   @DisplayName("Should accept the next valid job when a media process fails to start")
   void shouldAcceptNextValidJobWhenMediaProcessFailsToStart() throws Exception {
     var service = new ControllableWorkerService();
-    var processes = new FirstStartFailingProcessManager();
+    var firstLaunch = new AtomicBoolean(true);
+    var launcher =
+        new ScriptedProcessLauncher(
+            _ -> {
+              if (firstLaunch.getAndSet(false)) {
+                throw new IOException("FFmpeg failed to start");
+              }
+
+              return ScriptedProcessLauncher.runningProcessBuilder().build();
+            });
     var failed = variantJob();
     var next = variantJob();
     try (var server = new TestServer(service);
-        var worker = worker(preparedMediaRoot(), processes)) {
+        var worker = worker(preparedMediaRoot(), launcher)) {
       server.start();
       worker.start("localhost", server.port());
       service.sendStart(service.registeredWorker(), failed);
@@ -349,8 +375,8 @@ class TranscodeWorkerControlPlaneIT {
       service.sendStart(service.registeredWorker(), next);
       service.awaitStarted(next);
 
-      assertThat(processes.isRunning(fromProto(next.getStreamSessionId()))).isTrue();
-      assertThat(processes.isRunning(fromProto(failed.getStreamSessionId()))).isFalse();
+      assertThat(launcher.process(fromProto(next.getJobAttemptId())).isAlive()).isTrue();
+      assertThat(launcher.hasLaunched(fromProto(failed.getJobAttemptId()))).isFalse();
     }
   }
 
@@ -358,36 +384,33 @@ class TranscodeWorkerControlPlaneIT {
   @DisplayName("Should accept a valid job when earlier decisions contain invalid enum values")
   void shouldAcceptValidJobWhenEarlierDecisionsContainInvalidEnumValues() throws Exception {
     var service = new ControllableWorkerService();
-    var processes = new FakeFfmpegProcessManager();
+    var launcher = ScriptedProcessLauncher.running();
     try (var server = new TestServer(service);
-        var worker = worker(preparedMediaRoot(), processes)) {
+        var worker = worker(preparedMediaRoot(), launcher)) {
       server.start();
       worker.start("localhost", server.port());
       for (var malformed : malformedVariantJobs()) {
         service.sendStart(service.registeredWorker(), malformed);
         assertThat(service.awaitFailure().getJobAttemptId()).isEqualTo(malformed.getJobAttemptId());
-        assertThat(processes.getStarted())
-            .doesNotContain(fromProto(malformed.getStreamSessionId()));
+        assertThat(launcher.hasLaunched(fromProto(malformed.getJobAttemptId()))).isFalse();
       }
 
       var valid = variantJob();
       service.sendStart(service.registeredWorker(), valid);
       service.awaitStarted(valid);
 
-      assertThat(processes.isRunning(fromProto(valid.getStreamSessionId()))).isTrue();
+      assertThat(launcher.process(fromProto(valid.getJobAttemptId())).isAlive()).isTrue();
     }
   }
 
   @Test
-  @DisplayName(
-      "Should log abandoned attempts and stop their processes when the control plane fails")
-  void shouldLogAbandonedAttemptsAndStopTheirProcessesWhenControlPlaneFails() throws Exception {
+  @DisplayName("Should ask the active FFmpeg to quit when the control plane fails")
+  void shouldAskTheActiveFfmpegToQuitWhenTheControlPlaneFails() throws Exception {
     var service = new ControllableWorkerService();
-    var processes = new FakeFfmpegProcessManager();
+    var launcher = ScriptedProcessLauncher.running();
     var job = variantJob();
-    try (var capture = new WorkerLogCapture("abandoned job attempt");
-        var server = new TestServer(service);
-        var worker = worker(preparedMediaRoot(), processes)) {
+    try (var server = new TestServer(service);
+        var worker = worker(preparedMediaRoot(), launcher)) {
       server.start();
       worker.start("localhost", server.port());
       service.sendStart(service.registeredWorker(), job);
@@ -399,24 +422,25 @@ class TranscodeWorkerControlPlaneIT {
           .isInstanceOf(WorkerJobException.class)
           .hasMessage("Worker session failed")
           .hasRootCauseInstanceOf(StatusRuntimeException.class);
-      assertThat(processes.isRunning(fromProto(job.getStreamSessionId()))).isFalse();
-      assertThat(capture.event.get(5, TimeUnit.SECONDS).getFormattedMessage())
-          .contains(fromProto(job.getJobAttemptId()).toString());
+      assertQuitGracefully(launcher.process(fromProto(job.getJobAttemptId())));
     }
   }
 
   @Test
-  @DisplayName("Should log the unreported failure when the worker closes during an upload")
-  void shouldLogUnreportedFailureWhenWorkerClosesDuringUpload() throws Exception {
+  @DisplayName("Should ask FFmpeg to quit gracefully when the worker closes during an upload")
+  void shouldAskFfmpegToQuitGracefullyWhenTheWorkerClosesDuringAnUpload() throws Exception {
     var service = new ControllableWorkerService();
     service.acknowledgeUploads = false;
-    var processes =
-        new FakeSegmentProducingFfmpegProcessManager(
-            "segment0.ts", "pending segment".getBytes(StandardCharsets.UTF_8));
+    var launcher =
+        new ScriptedProcessLauncher(
+            _ ->
+                ScriptedProcess.builder()
+                    .output(bytesOf(WHOLE_RUN))
+                    .exitTiming(ExitTiming.AT_QUIT)
+                    .build());
     var job = variantJob();
-    try (var capture = new WorkerLogCapture("Could not report job attempt failure");
-        var server = new TestServer(service);
-        var worker = worker(preparedMediaRoot(), processes)) {
+    try (var server = new TestServer(service);
+        var worker = worker(preparedMediaRoot(), launcher)) {
       server.start();
       worker.start("localhost", server.port());
       service.sendStart(service.registeredWorker(), job);
@@ -425,76 +449,74 @@ class TranscodeWorkerControlPlaneIT {
 
       worker.close();
 
-      assertThat(capture.event.get(5, TimeUnit.SECONDS).getFormattedMessage())
-          .contains(fromProto(job.getStreamSessionId()).toString());
-      assertThat(processes.isRunning(fromProto(job.getStreamSessionId()))).isFalse();
+      assertQuitGracefully(launcher.process(fromProto(job.getJobAttemptId())));
     }
   }
 
   @Test
-  @DisplayName(
-      "Should stop the newly started process before deleting its output when the control plane disconnects during startup")
-  void shouldStopNewlyStartedProcessBeforeDeletingOutputWhenControlPlaneDisconnectsDuringStartup()
-      throws Exception {
+  @DisplayName("Should ask FFmpeg to quit when the control plane disconnects while it starts")
+  void shouldAskFfmpegToQuitWhenTheControlPlaneDisconnectsWhileItStarts() throws Exception {
     var service = new ControllableWorkerService();
-    var processes = new DisconnectingProcessManager(service);
+    var launcher =
+        new ScriptedProcessLauncher(
+            _ -> {
+              service.failSession();
+              return ScriptedProcessLauncher.runningProcessBuilder().build();
+            });
+    var job = variantJob();
     try (var server = new TestServer(service);
-        var worker = worker(preparedMediaRoot(), processes)) {
+        var worker = worker(preparedMediaRoot(), launcher)) {
       server.start();
       worker.start("localhost", server.port());
 
-      service.sendStart(service.registeredWorker(), variantJob());
+      service.sendStart(service.registeredWorker(), job);
 
-      assertThat(processes.outputExistedAtTermination.get(5, TimeUnit.SECONDS))
-          .as("the media process must stop before its working directory is removed")
-          .isTrue();
+      assertThatThrownBy(worker::awaitDisconnection).isInstanceOf(WorkerJobException.class);
+      assertQuitGracefully(launcher.process(fromProto(job.getJobAttemptId())));
     }
   }
 
   @Test
   @DisplayName(
-      "Should remove the uploaded segment only when the control plane acknowledges its bytes")
-  void shouldRemoveUploadedSegmentOnlyWhenControlPlaneAcknowledgesItsBytes() throws Exception {
+      "Should read no further output while the control plane has not acknowledged a segment")
+  void shouldReadNoFurtherOutputWhileTheControlPlaneHasNotAcknowledgedASegment() throws Exception {
     var service = new ControllableWorkerService();
     service.acknowledgeUploads = false;
-    var bytes = "uploaded segment".getBytes(StandardCharsets.UTF_8);
-    var processes = new FakeSegmentProducingFfmpegProcessManager("segment0.ts", bytes);
+    var recording = recording(WHOLE_RUN);
+    var launcher = ScriptedProcessLauncher.writing(WHOLE_RUN);
     var job = variantJob();
-    var output =
-        tempDir
-            .resolve("segments")
-            .resolve(fromProto(job.getJobAttemptId()).toString())
-            .resolve("segment0.ts");
     try (var server = new TestServer(service);
-        var worker = worker(preparedMediaRoot(), processes)) {
+        var worker = worker(preparedMediaRoot(), launcher)) {
       server.start();
       worker.start("localhost", server.port());
       service.sendStart(service.registeredWorker(), job);
       service.awaitStarted(job);
       assertThat(service.uploadReceived.await(5, TimeUnit.SECONDS)).isTrue();
-      assertThat(output).hasBinaryContent(bytes);
+      var process = launcher.process(fromProto(job.getJobAttemptId()));
+
       assertThat(service.uploads)
-          .singleElement()
-          .satisfies(upload -> assertThat(upload.bytes()).isEqualTo(bytes));
+          .extracting(upload -> upload.metadata().getSegmentName())
+          .containsExactly("init.mp4");
+      assertThat(process.hasReadToEndOfOutput()).isFalse();
 
+      service.acknowledgeUploads = true;
       service.acknowledgePendingUpload();
+      service.awaitCompleted(job);
 
-      await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> assertThat(output).doesNotExist());
+      assertThat(service.uploads)
+          .extracting(upload -> upload.metadata().getSegmentName())
+          .containsExactlyElementsOf(uploadNames(recording));
     }
   }
 
   @Test
-  @DisplayName(
-      "Should finish and remove attempt output when every produced segment is acknowledged")
-  void shouldFinishAndRemoveAttemptOutputWhenEveryProducedSegmentIsAcknowledged() throws Exception {
+  @DisplayName("Should complete the attempt when the control plane acknowledges every segment")
+  void shouldCompleteTheAttemptWhenTheControlPlaneAcknowledgesEverySegment() throws Exception {
     var service = new ControllableWorkerService();
-    var first = "first segment".getBytes(StandardCharsets.UTF_8);
-    var second = "second segment".getBytes(StandardCharsets.UTF_8);
-    var processes = new EndingProcessManager(Map.of("segment0.ts", first, "segment1.ts", second));
+    var recording = recording(WHOLE_RUN);
     var job = variantJob();
-    var output = tempDir.resolve("segments").resolve(fromProto(job.getJobAttemptId()).toString());
     try (var server = new TestServer(service);
-        var worker = worker(preparedMediaRoot(), processes)) {
+        var worker = worker(preparedMediaRoot(), ScriptedProcessLauncher.writing(WHOLE_RUN))) {
       server.start();
       worker.start("localhost", server.port());
 
@@ -503,17 +525,33 @@ class TranscodeWorkerControlPlaneIT {
       service.awaitCompleted(job);
 
       assertThat(service.uploads)
-          .satisfiesExactly(
+          .extracting(upload -> upload.metadata().getSegmentName())
+          .containsExactlyElementsOf(uploadNames(recording));
+      assertThat(service.uploads)
+          .allSatisfy(
               upload -> {
-                assertThat(upload.metadata().getSegmentName()).isEqualTo("segment0.ts");
-                assertThat(upload.bytes()).isEqualTo(first);
-              },
-              upload -> {
-                assertThat(upload.metadata().getSegmentName()).isEqualTo("segment1.ts");
-                assertThat(upload.bytes()).isEqualTo(second);
+                assertThat(upload.metadata().getContentType())
+                    .isEqualTo(SegmentContentType.SEGMENT_CONTENT_TYPE_VIDEO_MP4);
+                assertThat(upload.metadata().getContentLengthBytes())
+                    .isEqualTo(upload.bytes().length);
               });
-      await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> assertThat(output).doesNotExist());
+      var uploaded = new ByteArrayOutputStream();
+      service.uploads.forEach(upload -> uploaded.writeBytes(upload.bytes()));
+      assertThat(uploaded.toByteArray()).isEqualTo(bytesOf(WHOLE_RUN));
     }
+  }
+
+  private static void assertQuitGracefully(ScriptedProcess process) {
+    await().atMost(5, TimeUnit.SECONDS).until(() -> !process.isAlive());
+    assertThat(process.stdinText()).isEqualTo("q");
+    assertThat(process.wasDestroyedForcibly()).isFalse();
+  }
+
+  private static List<String> uploadNames(Recording recording) {
+    return Stream.concat(
+            Stream.of("init.mp4"),
+            recording.segments().stream().map(segment -> "segment" + segment.number() + ".m4s"))
+        .toList();
   }
 
   private Path preparedMediaRoot() throws IOException {
@@ -527,11 +565,11 @@ class TranscodeWorkerControlPlaneIT {
     var mediaRoot = Files.createDirectory(tempDir.resolve("media"));
     Files.writeString(mediaRoot.resolve("movie.mkv"), "test media");
     var service = new ControllableWorkerService();
-    var processManager = new FakeFfmpegProcessManager();
+    var launcher = ScriptedProcessLauncher.running();
     var job = variantJob();
 
     try (var server = new TestServer(service);
-        var worker = worker(mediaRoot, processManager)) {
+        var worker = worker(mediaRoot, launcher)) {
       server.start();
       worker.start("localhost", server.port());
 
@@ -541,7 +579,7 @@ class TranscodeWorkerControlPlaneIT {
       assertThat(failure.getJobAttemptId()).isEqualTo(job.getJobAttemptId());
       assertThat(failure.getFailure())
           .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
-      assertThat(processManager.getStarted()).isEmpty();
+      assertThat(launcher.hasLaunchedAny()).isFalse();
     }
   }
 
@@ -550,12 +588,12 @@ class TranscodeWorkerControlPlaneIT {
     var mediaRoot = Files.createDirectory(tempDir.resolve("media"));
     Files.writeString(mediaRoot.resolve("movie.mkv"), "test media");
     var service = new ControllableWorkerService();
-    var processManager = new FakeFfmpegProcessManager();
+    var launcher = ScriptedProcessLauncher.running();
     var protectedJob = variantJob();
     var orderingBarrierJob = variantJob();
 
     try (var server = new TestServer(service);
-        var worker = worker(mediaRoot, processManager)) {
+        var worker = worker(mediaRoot, launcher)) {
       server.start();
       worker.start("localhost", server.port());
       service.sendStart(service.registeredWorker(), protectedJob);
@@ -565,20 +603,17 @@ class TranscodeWorkerControlPlaneIT {
       service.sendStart(service.registeredWorker(), orderingBarrierJob);
       service.awaitStarted(orderingBarrierJob);
 
-      assertThat(
-              processManager.isRunning(
-                  fromProto(protectedJob.getStreamSessionId()),
-                  protectedJob.getVariant().getVariantLabel()))
+      assertThat(launcher.process(fromProto(protectedJob.getJobAttemptId())).isAlive())
           .as("a command for another worker must not stop this worker's active attempt")
           .isTrue();
     }
   }
 
   private TranscodeWorker worker(Path mediaRoot) throws Exception {
-    return worker(mediaRoot, new FakeFfmpegProcessManager());
+    return worker(mediaRoot, ScriptedProcessLauncher.running());
   }
 
-  private TranscodeWorker worker(Path mediaRoot, FakeFfmpegProcessManager processManager)
+  private TranscodeWorker worker(Path mediaRoot, ScriptedProcessLauncher launcher)
       throws Exception {
     var configuration =
         workerConfigurationBuilder()
@@ -586,7 +621,7 @@ class TranscodeWorkerControlPlaneIT {
             .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, mediaRoot))
             .segmentBasePath(tempDir.resolve("segments"))
             .build();
-    return new TranscodeWorker(configuration, remuxEngine(processManager));
+    return new TranscodeWorker(configuration, engine(launcher));
   }
 
   private static VariantJob variantJob() {
@@ -610,7 +645,7 @@ class TranscodeWorkerControlPlaneIT {
                         .setBitrateBitsPerSecond(128_000))
                 .setSubtitle(
                     SubtitleDecision.newBuilder().setMode(SubtitleMode.SUBTITLE_MODE_EXCLUDE))
-                .setContainer(ContainerFormat.CONTAINER_FORMAT_MPEG_TS)
+                .setContainer(ContainerFormat.CONTAINER_FORMAT_FMP4)
                 .setAlignKeyframesToSegments(true))
         .setVariant(
             VariantSpec.newBuilder()
@@ -705,7 +740,7 @@ class TranscodeWorkerControlPlaneIT {
     private StreamObserver<EstablishWorkerSessionResponse> responses;
     private final ConcurrentLinkedQueue<UploadedSegment> uploads = new ConcurrentLinkedQueue<>();
     private final CountDownLatch uploadReceived = new CountDownLatch(1);
-    private boolean acknowledgeUploads = true;
+    private volatile boolean acknowledgeUploads = true;
     private StreamObserver<UploadSegmentResponse> pendingUpload;
     private int pendingLength;
 
@@ -891,121 +926,4 @@ class TranscodeWorkerControlPlaneIT {
   }
 
   private record UploadedSegment(SegmentUploadMetadata metadata, byte[] bytes) {}
-
-  private static final class EndingProcessManager extends FakeSegmentProducingFfmpegProcessManager {
-    private EndingProcessManager(Map<String, byte[]> segments) {
-      super(segments);
-    }
-
-    @Override
-    public Process startProcess(
-        UUID session, String variant, List<String> command, Path directory) {
-      var process = super.startProcess(session, variant, command, directory);
-      stopProcess(session, variant);
-      return process;
-    }
-  }
-
-  // Writes its segment and exits when first asked whether it is running, so both happen after the
-  // worker last looked for the segment and before it learns that the process ended.
-  private static final class ExitingAfterLastSegmentProcessManager
-      extends FakeFfmpegProcessManager {
-    private final String segmentName;
-    private final byte[] segment;
-    private Path outputDirectory;
-
-    private ExitingAfterLastSegmentProcessManager(String segmentName, byte[] segment) {
-      this.segmentName = segmentName;
-      this.segment = segment.clone();
-    }
-
-    @Override
-    public Process startProcess(
-        UUID session, String variant, List<String> command, Path directory) {
-      outputDirectory = directory;
-      return super.startProcess(session, variant, command, directory);
-    }
-
-    @Override
-    public boolean isRunning(UUID session, String variant) {
-      if (super.isRunning(session, variant)) {
-        try {
-          Files.write(outputDirectory.resolve(segmentName), segment);
-        } catch (IOException e) {
-          throw new UncheckedIOException(e);
-        }
-        stopProcess(session, variant);
-      }
-
-      return super.isRunning(session, variant);
-    }
-  }
-
-  private static final class DisconnectingProcessManager extends FakeFfmpegProcessManager {
-    private final ControllableWorkerService controlPlane;
-    private final CompletableFuture<Boolean> outputExistedAtTermination = new CompletableFuture<>();
-    private Path outputDirectory;
-
-    private DisconnectingProcessManager(ControllableWorkerService controlPlane) {
-      this.controlPlane = controlPlane;
-    }
-
-    @Override
-    public Process startProcess(
-        UUID session, String variant, List<String> command, Path directory) {
-      outputDirectory = directory;
-      controlPlane.failSession();
-      return super.startProcess(session, variant, command, directory);
-    }
-
-    @Override
-    public void stopProcess(UUID session, String variant) {
-      var exists = Files.exists(outputDirectory);
-      super.stopProcess(session, variant);
-      outputExistedAtTermination.complete(exists);
-    }
-  }
-
-  private static final class FirstStartFailingProcessManager extends FakeFfmpegProcessManager {
-    private boolean first = true;
-
-    @Override
-    public Process startProcess(
-        UUID session, String variant, List<String> command, Path directory) {
-      if (first) {
-        first = false;
-        throw new IllegalStateException("FFmpeg failed to start");
-      }
-      return super.startProcess(session, variant, command, directory);
-    }
-  }
-
-  private static final class WorkerLogCapture extends AppenderBase<ILoggingEvent>
-      implements AutoCloseable {
-    private final CompletableFuture<ILoggingEvent> event = new CompletableFuture<>();
-    private final Logger logger = (Logger) LoggerFactory.getLogger(TranscodeWorker.class);
-    private final Level previous = logger.getLevel();
-    private final String message;
-
-    private WorkerLogCapture(String message) {
-      this.message = message;
-      logger.setLevel(Level.DEBUG);
-      start();
-      logger.addAppender(this);
-    }
-
-    @Override
-    protected void append(ILoggingEvent loggingEvent) {
-      if (loggingEvent.getFormattedMessage().contains(message)) {
-        event.complete(loggingEvent);
-      }
-    }
-
-    @Override
-    public void close() {
-      logger.detachAppender(this);
-      logger.setLevel(previous);
-      stop();
-    }
-  }
 }

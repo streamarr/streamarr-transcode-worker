@@ -1,6 +1,6 @@
 package com.streamarr.transcode.worker;
 
-import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.remuxEngine;
+import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engine;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variantJobBuilder;
@@ -10,7 +10,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
 import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
 import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
-import com.streamarr.transcode.fakes.FakeFfmpegProcessManager;
+import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
 import java.net.Inet4Address;
 import java.net.NetworkInterface;
@@ -198,9 +198,8 @@ class WorkerHealthServerIT {
   void shouldRemainReadyWhenEveryAdvertisedExecutionSlotIsOccupied() throws Exception {
     Files.writeString(directory.resolve("movie.mkv"), "media");
     var runtime = new ScriptedWorkerRuntime();
-    var processes = new FakeFfmpegProcessManager();
-    try (var worker =
-            workerBuilder(directory).runtime(runtime).engine(remuxEngine(processes)).build();
+    var launcher = ScriptedProcessLauncher.running();
+    try (var worker = workerBuilder(directory).runtime(runtime).engine(engine(launcher)).build();
         var application = healthApplication(worker);
         var client = HttpClient.newHttpClient()) {
       worker.start("localhost", 1);
@@ -217,10 +216,7 @@ class WorkerHealthServerIT {
                             .setTarget(registration.getWorker())
                             .setJob(job))
                     .build());
-        assertThat(
-                processes.isRunning(
-                    fromProto(job.getStreamSessionId()), job.getVariant().getVariantLabel()))
-            .isTrue();
+        assertThat(launcher.process(fromProto(job.getJobAttemptId())).isAlive()).isTrue();
       }
 
       assertThat(health(client, endpoint(application, "/actuator/health/readiness")).statusCode())

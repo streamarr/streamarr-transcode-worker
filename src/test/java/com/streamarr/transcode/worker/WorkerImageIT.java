@@ -139,7 +139,7 @@ class WorkerImageIT {
       assertThat(completed.getJobAttemptId()).isEqualTo(request.getJobAttemptId());
       var segment = image.command("segment", new byte[0]);
       assertThat(segment).isNotEmpty();
-      var uploaded = media.resolve("uploaded.ts");
+      var uploaded = media.resolve("uploaded.mp4");
       Files.write(uploaded, segment);
       var probe =
           image.worker.execInContainer(
@@ -155,7 +155,7 @@ class WorkerImageIT {
               "json",
               "-o",
               "/tmp/uploaded.json",
-              "/media/uploaded.ts");
+              "/media/uploaded.mp4");
       assertThat(probe.getExitCode()).as(probe.getStderr()).isZero();
       var output = image.worker.execInContainer("cat", "/tmp/uploaded.json");
       assertThat(output.getExitCode()).as(output.getStderr()).isZero();
@@ -172,7 +172,7 @@ class WorkerImageIT {
               "error",
               "-xerror",
               "-i",
-              "/media/uploaded.ts",
+              "/media/uploaded.mp4",
               "-f",
               "null",
               "-");

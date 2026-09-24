@@ -1,6 +1,6 @@
 package com.streamarr.transcode.worker;
 
-import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.remuxEngine;
+import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engine;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -29,9 +29,10 @@ import build.buf.gen.streamarr.transcode.v1.WorkerIdentity;
 import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
 import com.streamarr.transcode.engine.FfmpegCommandBuilder;
 import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
+import com.streamarr.transcode.engine.LocalFfmpegProcessManager;
 import com.streamarr.transcode.engine.TranscodeCapabilityService;
-import com.streamarr.transcode.fakes.FakeFfmpegProcessManager;
-import com.streamarr.transcode.fakes.FakeSegmentProducingFfmpegProcessManager;
+import com.streamarr.transcode.fakes.ScriptedProcess;
+import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import io.grpc.Server;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.grpc.stub.ServerCallStreamObserver;
@@ -57,6 +58,7 @@ class TranscodeWorkerUploadProtocolIT {
   private static final UUID WORKER_ID = UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
   private static final UUID SOURCE_NAMESPACE_ID =
       UUID.fromString("cccccccc-cccc-cccc-cccc-cccccccccccc");
+  private static final String RECORDING = "01-encode-cfr.fmp4";
 
   @TempDir Path tempDir;
 
@@ -65,19 +67,19 @@ class TranscodeWorkerUploadProtocolIT {
   void shouldCancelUploadRpcWhenAcknowledgementTimesOut() throws Exception {
     var mediaRoot = Files.createDirectory(tempDir.resolve("media"));
     Files.writeString(mediaRoot.resolve("movie.mkv"), "test media");
-    var processManager =
-        new FakeSegmentProducingFfmpegProcessManager("segment0.ts", "segment".getBytes());
+    var launcher = ScriptedProcessLauncher.writing(RECORDING);
     var service = ControllableUploadService.leavesUploadRpcOpen();
+    var job = variantJob();
 
     try (var server = new TestServer(service);
-        var worker = worker(processManager, mediaRoot)) {
+        var worker = worker(engine(launcher), mediaRoot)) {
       server.start();
       worker.start("localhost", server.port());
-      service.dispatch(variantJob());
+      service.dispatch(job);
 
       assertThat(service.uploadCompleted.await(5, TimeUnit.SECONDS)).isTrue();
-      await().atMost(8, TimeUnit.SECONDS).until(() -> processManager.getStopped().size() == 1);
-      assertThat(service.failureReported.await(1, TimeUnit.SECONDS)).isTrue();
+      assertThat(service.failureReported.await(8, TimeUnit.SECONDS)).isTrue();
+      assertEnded(launcher.process(fromProto(job.getJobAttemptId())));
 
       assertThat(service.uploadCancelled.await(1, TimeUnit.SECONDS))
           .as("abandoned upload must be cancelled once the acknowledgement times out")
@@ -91,13 +93,12 @@ class TranscodeWorkerUploadProtocolIT {
   void shouldFailVariantWhenServerAcknowledgesFewerBytesThanWorkerUploaded() throws Exception {
     var mediaRoot = Files.createDirectory(tempDir.resolve("media"));
     Files.writeString(mediaRoot.resolve("movie.mkv"), "test media");
-    var processManager =
-        new FakeSegmentProducingFfmpegProcessManager("segment0.ts", "segment".getBytes());
+    var launcher = ScriptedProcessLauncher.writing(RECORDING);
     var service = ControllableUploadService.acknowledgesFewerBytes();
     var job = variantJob();
 
     try (var server = new TestServer(service);
-        var worker = worker(processManager, mediaRoot)) {
+        var worker = worker(engine(launcher), mediaRoot)) {
       server.start();
       worker.start("localhost", server.port());
       service.dispatch(job);
@@ -106,7 +107,7 @@ class TranscodeWorkerUploadProtocolIT {
       assertThat(service.failure.get().getJobAttemptId()).isEqualTo(job.getJobAttemptId());
       assertThat(service.failure.get().getFailure())
           .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
-      assertThat(processManager.getStopped()).contains(fromProto(job.getStreamSessionId()));
+      assertEnded(launcher.process(fromProto(job.getJobAttemptId())));
     }
   }
 
@@ -116,13 +117,12 @@ class TranscodeWorkerUploadProtocolIT {
   void shouldFailVariantPromptlyWhenUploadStreamClosesBeforeAcknowledgement() throws Exception {
     var mediaRoot = Files.createDirectory(tempDir.resolve("media"));
     Files.writeString(mediaRoot.resolve("movie.mkv"), "test media");
-    var processManager =
-        new FakeSegmentProducingFfmpegProcessManager("segment0.ts", "segment".getBytes());
+    var launcher = ScriptedProcessLauncher.writing(RECORDING);
     var service = ControllableUploadService.closesWithoutResponse();
     var job = variantJob();
 
     try (var server = new TestServer(service);
-        var worker = worker(processManager, mediaRoot)) {
+        var worker = worker(engine(launcher), mediaRoot)) {
       server.start();
       worker.start("localhost", server.port());
       service.dispatch(job);
@@ -134,7 +134,7 @@ class TranscodeWorkerUploadProtocolIT {
       assertThat(service.failure.get().getJobAttemptId()).isEqualTo(job.getJobAttemptId());
       assertThat(service.failure.get().getFailure())
           .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
-      assertThat(processManager.getStopped()).contains(fromProto(job.getStreamSessionId()));
+      assertEnded(launcher.process(fromProto(job.getJobAttemptId())));
     }
   }
 
@@ -161,9 +161,10 @@ class TranscodeWorkerUploadProtocolIT {
     }
   }
 
-  private TranscodeWorker worker(
-      FakeSegmentProducingFfmpegProcessManager processManager, Path mediaRoot) {
-    return worker(remuxEngine(processManager), mediaRoot);
+  // FFmpeg is still writing when the upload fails, so the worker has to end it.
+  private static void assertEnded(ScriptedProcess process) {
+    await().atMost(5, TimeUnit.SECONDS).until(() -> !process.isAlive());
+    assertThat(process.wasDestroyedForcibly()).isTrue();
   }
 
   private TranscodeWorker worker(FfmpegTranscodeEngine engine, Path mediaRoot) {
@@ -186,10 +187,12 @@ class TranscodeWorkerUploadProtocolIT {
               throw new IOException("FFmpeg disappeared");
             });
     capabilities.detectCapabilities();
-    return new FfmpegTranscodeEngine(
-        new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)),
-        new FakeFfmpegProcessManager(),
-        capabilities);
+    return FfmpegTranscodeEngine.builder()
+        .commandBuilder(new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)))
+        .processManager(new LocalFfmpegProcessManager())
+        .capabilityService(capabilities)
+        .launcher(ScriptedProcessLauncher.running())
+        .build();
   }
 
   private VariantJob variantJob() {
@@ -213,7 +216,7 @@ class TranscodeWorkerUploadProtocolIT {
                         .setBitrateBitsPerSecond(128_000))
                 .setSubtitle(
                     SubtitleDecision.newBuilder().setMode(SubtitleMode.SUBTITLE_MODE_EXCLUDE))
-                .setContainer(ContainerFormat.CONTAINER_FORMAT_MPEG_TS)
+                .setContainer(ContainerFormat.CONTAINER_FORMAT_FMP4)
                 .setAlignKeyframesToSegments(true))
         .setVariant(
             VariantSpec.newBuilder()

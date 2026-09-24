@@ -1,10 +1,10 @@
 package com.streamarr.transcode.worker;
 
-import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.remuxEngine;
+import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engine;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.workerConfigurationBuilder;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.streamarr.transcode.fakes.FakeFfmpegProcessManager;
+import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import com.streamarr.transcode.worker.support.WorkerApplicationControlPlane;
 import io.grpc.StatusRuntimeException;
 import java.io.IOException;
@@ -74,7 +74,7 @@ class TranscodeWorkerKeepaliveIT {
             .keepAliveTime(Duration.ofSeconds(10))
             .keepAliveTimeout(Duration.ofSeconds(2))
             .build();
-    return new TranscodeWorker(configuration, remuxEngine(new FakeFfmpegProcessManager()));
+    return new TranscodeWorker(configuration, engine(ScriptedProcessLauncher.running()));
   }
 
   private static final class FreezableRelay implements AutoCloseable {

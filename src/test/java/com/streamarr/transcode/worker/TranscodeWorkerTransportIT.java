@@ -1,11 +1,11 @@
 package com.streamarr.transcode.worker;
 
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.SOURCE_NAMESPACE_ID;
-import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.remuxEngine;
+import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engine;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.streamarr.transcode.fakes.FakeFfmpegProcessManager;
+import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import com.streamarr.transcode.worker.support.WorkerApplicationControlPlane;
 import java.net.Inet4Address;
 import java.net.NetworkInterface;
@@ -47,7 +47,7 @@ class TranscodeWorkerTransportIT {
 
     try (var controlPlane = WorkerApplicationControlPlane.builder().build();
         var worker =
-            new TranscodeWorker(configuration, remuxEngine(new FakeFfmpegProcessManager()))) {
+            new TranscodeWorker(configuration, engine(ScriptedProcessLauncher.running()))) {
       worker.start(networkAddress.getHostAddress(), controlPlane.port());
 
       var registration = controlPlane.awaitRegistration();

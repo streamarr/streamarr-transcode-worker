@@ -6,7 +6,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
+import build.buf.gen.streamarr.transcode.v1.SegmentUploadMetadata;
 import build.buf.gen.streamarr.transcode.v1.TranscodeWorkerServiceGrpc;
+import build.buf.gen.streamarr.transcode.v1.UploadSegmentRequest;
+import build.buf.gen.streamarr.transcode.v1.UploadSegmentResponse;
 import build.buf.gen.streamarr.transcode.v1.WorkerRegistration;
 import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
 import com.streamarr.transcode.worker.TranscodeWorkerConfiguration;
@@ -20,11 +23,13 @@ import io.grpc.Metadata;
 import io.grpc.MethodDescriptor;
 import io.grpc.Status;
 import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
+import java.io.ByteArrayOutputStream;
 import java.net.InetSocketAddress;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 
@@ -59,10 +64,46 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
   public static final class Connection extends ManagedChannel {
 
     private final SessionCall call = new SessionCall();
+    private final List<UploadCall> uploads = new CopyOnWriteArrayList<>();
+    private final UploadReadiness readiness = new UploadReadiness();
     private boolean shutdown;
 
     public WorkerRegistration registration() throws Exception {
       return call.registration.get(5, TimeUnit.SECONDS);
+    }
+
+    /** Every message the worker has sent on its session stream, in order. */
+    public List<EstablishWorkerSessionRequest> events() {
+      return List.copyOf(call.events);
+    }
+
+    /** Every segment upload the worker has opened, in order. */
+    public List<UploadCall> uploads() {
+      return List.copyOf(uploads);
+    }
+
+    /**
+     * From now on an upload call reports that it is ready for one more message only after each
+     * {@link #grantUploadMessage()}.
+     */
+    public void withholdUploadReadiness() {
+      readiness.withhold();
+    }
+
+    /** Lets the worker send one more upload message. */
+    public void grantUploadMessage() {
+      readiness.grant();
+      uploads.forEach(UploadCall::signalReady);
+    }
+
+    /** The number of messages the worker has sent on all its upload calls. */
+    public int uploadMessageCount() {
+      return uploads.stream().mapToInt(upload -> upload.messages.size()).sum();
+    }
+
+    /** The number of upload messages the worker sent while its call reported it was not ready. */
+    public int uploadMessagesSentWhileNotReady() {
+      return readiness.violations();
     }
 
     public List<ProbeAttemptResult> results() {
@@ -86,14 +127,20 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
 
     @Override
     public <Q, R> ClientCall<Q, R> newCall(MethodDescriptor<Q, R> method, CallOptions options) {
+      if (method.equals(TranscodeWorkerServiceGrpc.getUploadSegmentMethod())) {
+        var upload = new UploadCall(readiness);
+        uploads.add(upload);
+        return typed(upload);
+      }
+
       assertThat(method).isEqualTo(TranscodeWorkerServiceGrpc.getEstablishWorkerSessionMethod());
-      return sessionCall();
+      return typed(call);
     }
 
     @SuppressWarnings("unchecked")
-    private <Q, R> ClientCall<Q, R> sessionCall() {
-      // newCall checks the descriptor, so these type parameters are the session envelope types.
-      return (ClientCall<Q, R>) call;
+    private static <Q, R> ClientCall<Q, R> typed(ClientCall<?, ?> scripted) {
+      // newCall checks the descriptor, so these type parameters are the method's message types.
+      return (ClientCall<Q, R>) scripted;
     }
 
     @Override
@@ -189,6 +236,109 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     @Override
     public void halfClose() {
       // Server completion is controlled independently from the client's half-close.
+    }
+  }
+
+  /**
+   * Whether an upload call is ready for another message: always, unless the test withholds
+   * readiness and grants it one message at a time.
+   */
+  private static final class UploadReadiness {
+
+    private boolean withheld;
+    private int grants;
+    private int violations;
+
+    private synchronized void withhold() {
+      withheld = true;
+    }
+
+    private synchronized void grant() {
+      grants++;
+    }
+
+    private synchronized boolean isReady() {
+      return !withheld || grants > 0;
+    }
+
+    private synchronized void consume() {
+      if (!isReady()) {
+        violations++;
+        return;
+      }
+
+      if (withheld) {
+        grants--;
+      }
+    }
+
+    private synchronized int violations() {
+      return violations;
+    }
+  }
+
+  /** A segment upload that records what the worker sent and acknowledges every byte. */
+  public static final class UploadCall
+      extends ClientCall<UploadSegmentRequest, UploadSegmentResponse> {
+
+    private final UploadReadiness readiness;
+    private final List<UploadSegmentRequest> messages = new CopyOnWriteArrayList<>();
+    private volatile Listener<UploadSegmentResponse> responses;
+
+    private UploadCall(UploadReadiness readiness) {
+      this.readiness = readiness;
+    }
+
+    public SegmentUploadMetadata metadata() {
+      return messages.getFirst().getMetadata();
+    }
+
+    public byte[] content() {
+      var content = new ByteArrayOutputStream();
+      messages.stream()
+          .filter(UploadSegmentRequest::hasData)
+          .forEach(message -> content.writeBytes(message.getData().toByteArray()));
+      return content.toByteArray();
+    }
+
+    private void signalReady() {
+      var listener = responses;
+      if (listener != null && readiness.isReady()) {
+        listener.onReady();
+      }
+    }
+
+    @Override
+    public void start(Listener<UploadSegmentResponse> listener, Metadata headers) {
+      responses = listener;
+    }
+
+    @Override
+    public void request(int messages) {
+      // The single acknowledgement is delivered when the worker half-closes the upload.
+    }
+
+    @Override
+    public boolean isReady() {
+      return readiness.isReady();
+    }
+
+    @Override
+    public void sendMessage(UploadSegmentRequest message) {
+      readiness.consume();
+      messages.add(message);
+    }
+
+    @Override
+    public void halfClose() {
+      responses.onMessage(
+          UploadSegmentResponse.newBuilder().setAcceptedLengthBytes(content().length).build());
+      responses.onClose(Status.OK, new Metadata());
+    }
+
+    @Override
+    public void cancel(String message, Throwable cause) {
+      // Every upload is acknowledged when it half-closes, so nothing is left to cancel.
     }
   }
 }
