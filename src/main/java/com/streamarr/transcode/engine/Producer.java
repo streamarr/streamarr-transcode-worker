@@ -228,22 +228,26 @@ public final class Producer {
         .orElseGet(EndOfOutput::new);
   }
 
-  // Empty unless the unit closed a segment whose delivery ends reading.
+  // Empty unless the unit ends reading, by closing a segment whose delivery ends it or by
+  // skipping a segment number.
   private Optional<Ending> deliverClosedSegment(Mp4Unit unit) {
-    var closed =
-        switch (unit) {
-          case InitializationSegment initializationSegment ->
-              Optional.of(ProducedSegment.of(initializationSegment));
-          case Fragment fragment -> closedBy(grouper.accept(fragment));
-        };
-    return closed.flatMap(this::deliver);
+    return switch (unit) {
+      case InitializationSegment initializationSegment ->
+          deliver(ProducedSegment.of(initializationSegment));
+      case Fragment fragment -> deliverClosedBy(grouper.accept(fragment));
+    };
   }
 
-  private static Optional<ProducedSegment> closedBy(GroupingOutcome grouping) {
+  private Optional<Ending> deliverClosedBy(GroupingOutcome grouping) {
     return switch (grouping) {
       case NothingClosed _ -> Optional.empty();
-      case SegmentClosed(var segment) -> Optional.of(ProducedSegment.of(segment));
-      case SegmentNumberSkipped skipped -> throw skipped.failure();
+      case SegmentClosed(var segment) -> deliver(ProducedSegment.of(segment));
+      case SegmentNumberSkipped skipped ->
+          skipped
+              .closedSegment()
+              .map(ProducedSegment::of)
+              .flatMap(this::deliver)
+              .or(() -> Optional.of(endingOf(skipped.failure())));
     };
   }
 

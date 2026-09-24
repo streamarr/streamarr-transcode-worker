@@ -17,6 +17,7 @@ import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest.EventCase;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
 import build.buf.gen.streamarr.transcode.v1.SegmentContentType;
+import build.buf.gen.streamarr.transcode.v1.TranscodeExecution;
 import build.buf.gen.streamarr.transcode.v1.TranscodeMode;
 import build.buf.gen.streamarr.transcode.v1.VariantJob;
 import com.streamarr.transcode.engine.FfmpegRecordings.Recording;
@@ -314,6 +315,42 @@ class TranscodeWorkerJobAttemptTest {
   }
 
   @Test
+  @DisplayName(
+      "Should upload the segments before the skipped number, then fail the attempt and end FFmpeg,"
+          + " when source keyframes are further apart than the period")
+  void shouldUploadTheSegmentsBeforeTheSkippedNumberThenFailWhenSourceKeyframesAreSparse()
+      throws Exception {
+    var recording = recording("10-copy-gop-exceeds-period.fmp4");
+    var launcher = ScriptedProcessLauncher.writing(recording.file());
+    var job =
+        variantJobBuilder()
+            .setExecution(
+                TranscodeExecution.newBuilder()
+                    .setTargetSegmentDurationSeconds(recording.period())
+                    .setStartSequenceNumber(recording.startSequenceNumber()))
+            .build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
+      assertThat(connection.uploads())
+          .extracting(upload -> upload.metadata().getSegmentName())
+          .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
+      var uploaded = new ByteArrayOutputStream();
+      connection.uploads().forEach(upload -> uploaded.writeBytes(upload.content()));
+      assertThat(uploaded.toByteArray())
+          .isEqualTo(Arrays.copyOf(bytesOf(recording.file()), uploadedLength(recording)));
+      assertThat(launcher.process(fromProto(job.getJobAttemptId())).wasDestroyedForcibly())
+          .isTrue();
+    }
+  }
+
+  @Test
   @DisplayName("Should report the stopped attempt only after FFmpeg has exited when stopped")
   void shouldReportTheStoppedAttemptOnlyAfterFfmpegHasExitedWhenStopped() throws Exception {
     var launcher =
@@ -444,6 +481,10 @@ class TranscodeWorkerJobAttemptTest {
             Stream.of((long) recording.initializationSegment().byteLength()),
             recording.segments().stream().map(segment -> segment.byteLength()))
         .toList();
+  }
+
+  private static int uploadedLength(Recording recording) {
+    return Math.toIntExact(expectedLengths(recording).stream().mapToLong(Long::longValue).sum());
   }
 
   // The recording with its first media data box grown past two upload data messages, which the

@@ -190,9 +190,9 @@ class ProducerTest {
 
   @Test
   @DisplayName(
-      "Should fail the attempt and end FFmpeg when source keyframes are further apart than the"
-          + " period")
-  void shouldFailTheAttemptAndEndFfmpegWhenSourceKeyframesAreFurtherApartThanThePeriod() {
+      "Should deliver the closed segment, then fail the attempt and end FFmpeg, when source"
+          + " keyframes are further apart than the period")
+  void shouldDeliverTheClosedSegmentThenFailWhenSourceKeyframesAreFurtherApartThanThePeriod() {
     var recording = recording("10-copy-gop-exceeds-period.fmp4");
     var process = ScriptedProcess.builder().output(bytesOf(recording.file())).build();
 
@@ -200,7 +200,8 @@ class ProducerTest {
 
     assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.SKIPPED_SEGMENT_NUMBER);
     assertThat(process.wasDestroyedForcibly()).isTrue();
-    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+    assertThat(sink.accepted()).containsExactlyElementsOf(expectedDeliveries(recording));
+    assertThat(sink.acceptedBytes()).isEqualTo(deliveredBytesOf(recording));
   }
 
   @Test
@@ -611,13 +612,16 @@ class ProducerTest {
         .toList();
   }
 
-  // The recording without the preroll the producer discards between the two.
+  // The recording's initialization segment and media segments, without the preroll the producer
+  // discards between the two or anything after the last media segment.
   private static byte[] deliveredBytesOf(Recording recording) {
     var recorded = bytesOf(recording.file());
     var initializationSegmentLength = recording.initializationSegment().byteLength();
     var prerollLength =
         recording.discardedPreroll().stream().mapToLong(SegmentSummary::byteLength).sum();
-    var delivered = new byte[Math.toIntExact(recorded.length - prerollLength)];
+    var mediaSegmentsLength =
+        recording.segments().stream().mapToLong(SegmentSummary::byteLength).sum();
+    var delivered = new byte[Math.toIntExact(initializationSegmentLength + mediaSegmentsLength)];
     System.arraycopy(recorded, 0, delivered, 0, initializationSegmentLength);
     System.arraycopy(
         recorded,
