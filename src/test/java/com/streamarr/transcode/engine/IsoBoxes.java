@@ -32,6 +32,8 @@ final class IsoBoxes {
   static final int TRUN_SAMPLE_COMPOSITION_TIME_OFFSET = 0x000800;
 
   private static final int TKHD_ENABLED_IN_MOVIE = 0x000003;
+  private static final int SAMPLE_BYTES = 1;
+  private static final int COMPACT_HEADER_BYTES = 8;
 
   private IsoBoxes() {}
 
@@ -70,8 +72,28 @@ final class IsoBoxes {
     return moov(Track.video().build(), Track.audio().build());
   }
 
+  /**
+   * A moof whose runs point at their samples, one byte each and track by track, in an mdat that
+   * starts right after it with a compact header.
+   */
   static byte[] moof(TrackFragment... trackFragments) {
-    var trafs = Arrays.stream(trackFragments).map(TrackFragment::traf).toArray(byte[][]::new);
+    return moofFollowedBy(COMPACT_HEADER_BYTES, trackFragments);
+  }
+
+  /** A moof whose runs point at their samples in an mdat whose header has the given length. */
+  static byte[] moofFollowedBy(int mdatHeaderBytes, TrackFragment... trackFragments) {
+    var moofBytes = moofWithDataAt(0, trackFragments).length;
+    return moofWithDataAt(moofBytes + mdatHeaderBytes, trackFragments);
+  }
+
+  private static byte[] moofWithDataAt(int dataStart, TrackFragment... trackFragments) {
+    var trafs = new byte[trackFragments.length][];
+    var dataOffset = dataStart;
+    for (var index = 0; index < trackFragments.length; index++) {
+      trafs[index] = trackFragments[index].traf(dataOffset);
+      dataOffset += trackFragments[index].sampleBytes();
+    }
+
     return box("moof", fullBox("mfhd", 0, u32(1)), concat(trafs));
   }
 
@@ -184,8 +206,20 @@ final class IsoBoxes {
     private final Integer sampleFlags;
     private final Integer compositionOffset;
 
-    byte[] traf() {
-      return box("traf", tfhd(), tfdt(), trun());
+    byte[] traf(int dataOffset) {
+      return box("traf", tfhd(), tfdt(), trun(dataOffset));
+    }
+
+    int sampleBytes() {
+      return samples() * SAMPLE_BYTES;
+    }
+
+    private int samples() {
+      if (sampleCount == null) {
+        return 1;
+      }
+
+      return sampleCount;
     }
 
     private byte[] tfhd() {
@@ -212,16 +246,12 @@ final class IsoBoxes {
       return IsoBoxes.tfdt(baseMediaDecodeTime);
     }
 
-    private byte[] trun() {
-      var samples = 1;
-      if (sampleCount != null) {
-        samples = sampleCount;
-      }
-
+    private byte[] trun(int dataOffset) {
+      var samples = samples();
       var flags = TRUN_DATA_OFFSET | TRUN_SAMPLE_SIZE;
       var header = new ByteArrayOutputStream();
       header.writeBytes(u32(samples));
-      header.writeBytes(u32(0));
+      header.writeBytes(u32(dataOffset));
       if (firstSampleFlags != null) {
         flags |= TRUN_FIRST_SAMPLE_FLAGS;
         header.writeBytes(u32(firstSampleFlags));
@@ -244,7 +274,7 @@ final class IsoBoxes {
 
     private byte[] sampleEntry(int sample) {
       var entry = new ByteArrayOutputStream();
-      entry.writeBytes(u32(100));
+      entry.writeBytes(u32(SAMPLE_BYTES));
       if (sampleFlags != null) {
         entry.writeBytes(u32(sampleFlags));
       }
