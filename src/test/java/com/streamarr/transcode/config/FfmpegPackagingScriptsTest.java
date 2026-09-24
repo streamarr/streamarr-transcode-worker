@@ -1239,6 +1239,29 @@ class FfmpegPackagingScriptsTest {
     assertThat(probes).doesNotExist();
   }
 
+  @Test
+  @DisplayName(
+      "Should name the missing option when the image's mp4 muxer cannot fragment the worker's"
+          + " output")
+  void shouldNameTheMissingOptionWhenTheImagesMp4MuxerCannotFragmentTheWorkersOutput()
+      throws Exception {
+    var verifier = imageVerifier();
+    writeImageRuntime(verifier);
+
+    var result =
+        verifier
+            .command()
+            .environment("STDIN_ENCODER", "none")
+            .environment("COMPLETED_PROBES", temporaryDirectory.resolve("probes").toString())
+            .environment(
+                "FAKE_MP4_MUXER_OPTIONS",
+                "-frag_duration cmaf delay_moov skip_trailer frag_keyframe")
+            .execute();
+
+    assertThat(result.exitCode()).isEqualTo(1);
+    assertThat(result.output()).contains("FFmpeg's mp4 muxer lacks frag_discont");
+  }
+
   // FFmpeg and ffprobe inside the image: FFmpeg writes a fragmented MP4 stand-in to its standard
   // output and a file anywhere else, and ffprobe records which output it recognized.
   private static void writeImageRuntime(ImageVerifierFixture verifier) throws IOException {
@@ -1251,7 +1274,7 @@ class FfmpegPackagingScriptsTest {
             printf '%s\\n' 'ffmpeg version 8.2.0-Jellyfin Copyright' 'configuration: --enable-gpl'
             exit 0 ;;
           *' muxer=mp4 '*)
-            printf '%s\\n' -frag_duration cmaf delay_moov skip_trailer frag_keyframe frag_discont
+            printf '%s\\n' ${FAKE_MP4_MUXER_OPTIONS:--frag_duration cmaf delay_moov skip_trailer frag_keyframe frag_discont}
             exit 0 ;;
         esac
         if [[ " $* " == *" -c:v ${STDIN_ENCODER} "* && " $* " != *' -nostdin '* ]]; then

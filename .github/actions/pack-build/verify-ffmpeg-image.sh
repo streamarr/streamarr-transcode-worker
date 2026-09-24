@@ -60,7 +60,10 @@ EXPECTED_FFMPEG_VERSION="${expected_ffmpeg_version}" \
 
   mp4_muxer_help="$("${ffmpeg}" -hide_banner -h muxer=mp4 2>&1)"
   for option in ${REQUIRED_MP4_MUXER_OPTIONS}; do
-    grep -F -- "${option}" <<<"${mp4_muxer_help}" >/dev/null
+    if ! grep -Fq -- "${option}" <<<"${mp4_muxer_help}"; then
+      echo "FFmpeg's mp4 muxer lacks ${option}" >&2
+      exit 1
+    fi
   done
 
   # The worker reads fragmented MP4 from FFmpeg's standard output.
