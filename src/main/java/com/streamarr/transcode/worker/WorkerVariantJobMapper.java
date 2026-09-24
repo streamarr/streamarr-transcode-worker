@@ -29,7 +29,6 @@ final class WorkerVariantJobMapper {
         .sessionId(fromProto(job.getStreamSessionId()))
         .attemptId(fromProto(job.getJobAttemptId()))
         .sourcePath(sourceResolver.resolve(job.getSource()))
-        .seekPosition(execution.getSeekPositionSeconds())
         .targetSegmentDuration(execution.getTargetSegmentDurationSeconds())
         .framerate(execution.getFramerate())
         .transcodeDecision(decision(job.getDecision()))
@@ -37,6 +36,8 @@ final class WorkerVariantJobMapper {
         .height(variant.getHeight())
         .bitrate(variant.getBitrateBitsPerSecond())
         .variantLabel(variant.getVariantLabel())
+        // The start sequence number also decides the seek, so the job's seek position, which
+        // the server sets to that segment's boundary, is not read.
         .startSequenceNumber(execution.getStartSequenceNumber())
         .mediaSegmentCount(execution.getMediaSegmentCount())
         .build();

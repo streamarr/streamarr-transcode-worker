@@ -64,7 +64,6 @@ public final class FfmpegRecordings {
       String mode,
       Optional<String> encoder,
       Source source,
-      int seekSeconds,
       int period,
       long fragmentationTargetMicros,
       List<String> ffmpegArguments,

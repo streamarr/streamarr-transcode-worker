@@ -87,7 +87,6 @@ class FfmpegCommandBuilderRecipeTest {
         TranscodeRequest.builder()
             .sessionId(UUID.randomUUID())
             .sourcePath(Path.of("src", recording.source().file()))
-            .seekPosition(recording.seekSeconds())
             .startSequenceNumber(recording.startSequenceNumber())
             .mediaSegmentCount(recording.mediaSegmentCount())
             .targetSegmentDuration(recording.period())

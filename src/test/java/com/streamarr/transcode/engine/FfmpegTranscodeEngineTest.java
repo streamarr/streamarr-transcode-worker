@@ -62,7 +62,6 @@ class FfmpegTranscodeEngineTest {
     return TranscodeRequest.builder()
         .sessionId(UUID.randomUUID())
         .sourcePath(Path.of("/media/movie.mkv"))
-        .seekPosition(0)
         .targetSegmentDuration(6)
         .framerate(23.976)
         .transcodeDecision(
@@ -100,7 +99,6 @@ class FfmpegTranscodeEngineTest {
     var request =
         requestBuilder(TranscodeMode.FULL_TRANSCODE, "h264")
             .attemptId(UUID.randomUUID())
-            .seekPosition(30)
             .startSequenceNumber(recording.startSequenceNumber())
             .build();
     var sink = new RecordingSegmentSink();

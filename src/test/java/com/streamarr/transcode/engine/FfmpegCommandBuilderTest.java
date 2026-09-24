@@ -234,7 +234,6 @@ class FfmpegCommandBuilderTest {
         command(
             request(mode)
                 .targetSegmentDuration(4)
-                .seekPosition(20)
                 .startSequenceNumber(5)
                 .mediaSegmentCount(9)
                 .build(),
@@ -421,7 +420,7 @@ class FfmpegCommandBuilderTest {
           + " mid-stream")
   void shouldSeekOnePeriodBeforeItsFirstSegmentWhenAnEncodedReplacementAttemptStartsMidStream(
       TranscodeMode mode) {
-    var cmd = command(request(mode).seekPosition(30).startSequenceNumber(5).build(), "libsvtav1");
+    var cmd = command(request(mode).startSequenceNumber(5).build(), "libsvtav1");
 
     assertThat(cmd).containsSubsequence("-ss", "24", "-i");
   }
@@ -434,7 +433,7 @@ class FfmpegCommandBuilderTest {
       "Should read from the start when an encoded replacement attempt starts at the second segment")
   void shouldReadFromTheStartWhenAnEncodedReplacementAttemptStartsAtTheSecondSegment(
       TranscodeMode mode) {
-    var cmd = command(request(mode).seekPosition(6).startSequenceNumber(1).build(), "libx264");
+    var cmd = command(request(mode).startSequenceNumber(1).build(), "libx264");
 
     assertThat(cmd)
         .doesNotContain("-ss")
@@ -532,9 +531,7 @@ class FfmpegCommandBuilderTest {
   @Test
   @DisplayName("Should leave out the HLS muxer when a replacement attempt starts mid-stream")
   void shouldLeaveOutTheHlsMuxerWhenAReplacementAttemptStartsMidStream() {
-    var cmd =
-        command(
-            request(TranscodeMode.REMUX).seekPosition(30).startSequenceNumber(5).build(), "copy");
+    var cmd = command(request(TranscodeMode.REMUX).startSequenceNumber(5).build(), "copy");
 
     assertThat(cmd)
         .doesNotContain("-start_number")
@@ -545,7 +542,8 @@ class FfmpegCommandBuilderTest {
   @Test
   @DisplayName("Should measure media time from the source start when an attempt seeks")
   void shouldMeasureMediaTimeFromTheSourceStartWhenAnAttemptSeeks() {
-    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).seekPosition(300).build(), "libx264");
+    var cmd =
+        command(request(TranscodeMode.FULL_TRANSCODE).startSequenceNumber(50).build(), "libx264");
 
     assertThat(cmd)
         .contains("-copyts", "-start_at_zero")
