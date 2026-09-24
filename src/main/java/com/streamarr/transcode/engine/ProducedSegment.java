@@ -6,19 +6,19 @@ import java.util.OptionalInt;
 import lombok.NonNull;
 
 /**
- * A segment the producer delivers: its name in the variant's HLS playlist and the bytes FFmpeg
- * wrote for it, which the producer never copies.
+ * A segment the producer delivers: the name the worker uploads it under and the bytes FFmpeg wrote
+ * for it, which the producer never copies.
  */
 public final class ProducedSegment {
 
   private static final String INITIALIZATION_SEGMENT_NAME = "init.mp4";
 
   private final OptionalInt sequenceNumber;
-  private final List<byte[]> parts;
+  private final List<byte[]> boxes;
 
-  private ProducedSegment(@NonNull OptionalInt sequenceNumber, @NonNull List<byte[]> parts) {
+  private ProducedSegment(@NonNull OptionalInt sequenceNumber, @NonNull List<byte[]> boxes) {
     this.sequenceNumber = sequenceNumber;
-    this.parts = List.copyOf(parts);
+    this.boxes = List.copyOf(boxes);
   }
 
   static ProducedSegment of(@NonNull InitializationSegment segment) {
@@ -36,7 +36,7 @@ public final class ProducedSegment {
     return sequenceNumber;
   }
 
-  /** The segment's name in the variant's HLS playlist. */
+  /** The name the worker uploads the segment under. */
   public String name() {
     if (sequenceNumber.isEmpty()) {
       return INITIALIZATION_SEGMENT_NAME;
@@ -46,12 +46,12 @@ public final class ProducedSegment {
   }
 
   public long byteLength() {
-    return parts.stream().mapToLong(part -> part.length).sum();
+    return boxes.stream().mapToLong(box -> box.length).sum();
   }
 
   /** The segment's bytes in order, as fresh read-only views on every call. */
   public List<ByteBuffer> content() {
-    return parts.stream().map(part -> ByteBuffer.wrap(part).asReadOnlyBuffer()).toList();
+    return boxes.stream().map(box -> ByteBuffer.wrap(box).asReadOnlyBuffer()).toList();
   }
 
   @Override

@@ -95,9 +95,9 @@ final class RecordingSegmentSink implements SegmentSink {
     segment
         .content()
         .forEach(
-            part -> {
-              var copy = new byte[part.remaining()];
-              part.get(copy);
+            view -> {
+              var copy = new byte[view.remaining()];
+              view.get(copy);
               bytes.writeBytes(copy);
             });
     return bytes.toByteArray();
