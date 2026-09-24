@@ -230,6 +230,37 @@ class ProducerTest {
 
   @Test
   @DisplayName(
+      "Should admit a reader waiting for the worker's memory before a later attempt's reader whose"
+          + " boxes would fit when both share the worker's budget")
+  void
+      shouldAdmitAReaderWaitingForTheWorkersMemoryBeforeALaterAttemptsReaderWhoseBoxesWouldFitWhenBothShareTheWorkersBudget() {
+    var workerBudget = SegmentMemoryBudget.forSlots(1);
+    var stopped = stopHoldingItsCancelledDelivery(workerBudget);
+    var waitingProcess = ScriptedProcess.builder().output(nearlyCappedSegments()).build();
+    var waiting = producerOfOneSecondSegments(waitingProcess).memoryBudget(workerBudget).start();
+    assertReaderStopsAt(waitingProcess, BEHIND_A_HELD_STOP);
+    var laterProcess = ScriptedProcess.builder().output(bytesOf(ENCODED_RECORDING)).build();
+    var laterSink = new RecordingSegmentSink();
+
+    var later =
+        producerFor(laterProcess, recording(ENCODED_RECORDING))
+            .sink(laterSink)
+            .memoryBudget(workerBudget)
+            .start();
+
+    // The whole recording would fit in what the waiting reader leaves free, but the later reader
+    // takes only its first box header until the waiting reader has its memory.
+    assertReaderStopsAt(laterProcess, 8);
+    stopped.sink().release();
+    assertThat(waiting.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(later.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(laterSink.acceptedNames()).contains("init.mp4");
+    stopped.process().exit();
+    assertThat(stopped.producer().outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Stopped());
+  }
+
+  @Test
+  @DisplayName(
       "Should keep within the worker's budget and let every new attempt proceed when stops and"
           + " starts arrive in bursts")
   void
