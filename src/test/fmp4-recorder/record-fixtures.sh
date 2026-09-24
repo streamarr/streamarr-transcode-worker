@@ -89,33 +89,33 @@ boundaries() {  # START COUNT [SKIP]
   seq "$(($1 * P))" "$P" "$((($2 - 1) * P))" | { grep -vx -- "${3:--1}" || true; } | paste -sd, -
 }
 
-# Sets FILLED to the arguments after the first, with the first in place of $BOUNDARIES.
+# Sets ARGS_WITH_BOUNDARIES to the arguments after the first, with the first in place of $BOUNDARIES.
 fill_boundaries() {  # LIST ARGS...
   local list=$1 arg; shift
-  FILLED=()
+  ARGS_WITH_BOUNDARIES=()
   for arg in "$@"; do
     [ "$arg" = "$BOUNDARIES" ] && arg=$list
-    FILLED+=("$arg")
+    ARGS_WITH_BOUNDARIES+=("$arg")
   done
 }
 
-# run KIND NAME [start=N] [number=N] [seek=S] [duration=D] [skip=T] [hls-recipe] [video] SRC -- CODEC/KEYFRAME ARGS...
+# run KIND NAME [start=N] [hls-start=N] [seek=S] [duration=D] [skip=T] [hls-recipe] [video] SRC -- CODEC/KEYFRAME ARGS...
 #   KIND pipe: ADR 0037's recipe to pipe:1, recorded as out/NAME.fmp4, its command line one argument per
 #              line in out/NAME.args and the media segment count it forces keyframes up to in out/NAME.count
 #   KIND hls:  the HLS muxer (fMP4 segments) into hls/NAME/; "hls-recipe" swaps in the HLS recipe's common
 #              flags (no -start_at_zero, -max_delay), "video" maps the video stream only.
-#   start=N    the start sequence number: the first forced keyframe time, and the HLS muxer's -start_number.
-#   number=N   the HLS muxer's -start_number instead: the preroll's number when the recorded attempt seeks one period early.
-#   duration=D reads only the source's first D seconds.
-#   skip=T     leaves the time T out of the forced keyframe times.
+#   start=N     the start sequence number: the first forced keyframe time, and the HLS muxer's -start_number.
+#   hls-start=N the HLS muxer's -start_number instead: the preroll's number when the recorded attempt seeks one period early.
+#   duration=D  reads only the source's first D seconds.
+#   skip=T      leaves the time T out of the forced keyframe times.
 run() {
   local kind=$1 name=$2; shift 2
   local start=0 seek=() common=("${COMMON_PIPE[@]}") maps=(-map 0:v:0 -map 0:a:0)
-  local duration=() seconds="" skip="" first=""
+  local duration=() seconds="" skip="" hls_start_number=""
   while [ "$1" != "--" ] && [ $# -gt 1 ]; do
     case "$1" in
       start=*) start=${1#start=} ;;
-      number=*) first=${1#number=} ;;
+      hls-start=*) hls_start_number=${1#hls-start=} ;;
       seek=*) seek=(-ss "${1#seek=}") ;;
       duration=*) seconds=${1#duration=}; duration=(-t "$seconds") ;;
       skip=*) skip=${1#skip=} ;;
@@ -131,18 +131,18 @@ run() {
   if [ "$kind" = pipe ]; then
     # -map -0:s: the worker excludes subtitle streams; these sources have none.
     local command=("${FF[@]}" -y "${seek[@]}" "${duration[@]}" -i "$src" "${maps[@]}" -map -0:s "${common[@]}" \
-      "${FILLED[@]}" "${DET[@]}" -f mp4 -movflags "$MOVFLAGS" -frag_duration "$FRAG_US" pipe:1)
+      "${ARGS_WITH_BOUNDARIES[@]}" "${DET[@]}" -f mp4 -movflags "$MOVFLAGS" -frag_duration "$FRAG_US" pipe:1)
     printf '%s\n' "${command[@]}" > "out/$name.args"
     echo "$count" > "out/$name.count"
     "${command[@]}" > "out/$name.fmp4" 2> "logs/$name.log"
     return
   fi
-  first=${first:-$start}
-  local number=(); [ "$first" -gt 0 ] && number=(-start_number "$first")
+  hls_start_number=${hls_start_number:-$start}
+  local start_number=(); [ "$hls_start_number" -gt 0 ] && start_number=(-start_number "$hls_start_number")
   mkdir -p "hls/$name"
   local status=0
-  "${FF[@]}" -y "${seek[@]}" "${duration[@]}" -i "$src" "${maps[@]}" "${common[@]}" "${FILLED[@]}" "${DET[@]}" \
-    -f hls -hls_time "$P" -hls_list_size 0 -hls_flags temp_file "${number[@]}" \
+  "${FF[@]}" -y "${seek[@]}" "${duration[@]}" -i "$src" "${maps[@]}" "${common[@]}" "${ARGS_WITH_BOUNDARIES[@]}" "${DET[@]}" \
+    -f hls -hls_time "$P" -hls_list_size 0 -hls_flags temp_file "${start_number[@]}" \
     -hls_segment_type fmp4 -hls_fmp4_init_filename init.mp4 -hls_segment_options movflags=+frag_discont \
     -hls_segment_filename "hls/$name/segment%d.m4s" "hls/$name/stream.m3u8" 2> "logs/hls-$name.log" || status=$?
   echo "$status" > "hls/$name/exit-status"
@@ -198,7 +198,7 @@ run pipe 01-encode-cfr src/cfr.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[
 run pipe 01-encode-cfr-seek30 start=5 seek=24 src/cfr.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}"
 run hls 01-encode-cfr.hls-recipe hls-recipe src/cfr.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_HLS[@]}"
 run hls 01-encode-cfr.video-only video src/cfr.mp4 -- "${X264[@]}" "${KEY_X264_PIPE[@]}"
-run hls 01-encode-cfr-seek30.video-only video start=5 number=4 seek=24 src/cfr.mp4 -- "${X264[@]}" "${KEY_X264_PIPE[@]}"
+run hls 01-encode-cfr-seek30.video-only video start=5 hls-start=4 seek=24 src/cfr.mp4 -- "${X264[@]}" "${KEY_X264_PIPE[@]}"
 run hls 01-encode-cfr.pipe-keyframes-with-audio src/cfr.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}"
 
 # ------------------------------------------------------------------ 2. stream copy, irregular keyframes
@@ -246,7 +246,7 @@ run pipe 09-svtav1-vfr src/vfr.mp4 -- "${SVT[@]}" "${AAC[@]}" "${KEY_SVT_PIPE[@]
 run pipe 09-svtav1-vfr-seek30 start=5 seek=24 src/vfr.mp4 -- "${SVT[@]}" "${AAC[@]}" "${KEY_SVT_PIPE[@]}"
 run hls 09-svtav1-vfr.hls-recipe hls-recipe src/vfr.mp4 -- "${SVT[@]}" "${AAC[@]}" "${KEY_SVT_HLS[@]}"
 run hls 09-svtav1-vfr.video-only video src/vfr.mp4 -- "${SVT[@]}" "${KEY_SVT_PIPE[@]}"
-run hls 09-svtav1-vfr-seek30.video-only video start=5 number=4 seek=24 src/vfr.mp4 -- "${SVT[@]}" "${KEY_SVT_PIPE[@]}"
+run hls 09-svtav1-vfr-seek30.video-only video start=5 hls-start=4 seek=24 src/vfr.mp4 -- "${SVT[@]}" "${KEY_SVT_PIPE[@]}"
 run hls 09-svtav1-vfr.pipe-keyframes-with-audio src/vfr.mp4 -- "${SVT[@]}" "${AAC[@]}" "${KEY_SVT_PIPE[@]}"
 
 # ------------------------------------------------------------------ 10. keyframe gap wider than the period
@@ -278,7 +278,7 @@ claim() {
   local name=$1 start=$2; shift 2
   fill_boundaries "$(boundaries "$start" "$(segment_count src/cfr.mp4)")" "$@"
   local status=0
-  "${FF[@]}" -y "${FILLED[@]}" "${DET[@]}" -f mp4 -movflags "$MOVFLAGS" -frag_duration "$FRAG_US" pipe:1 \
+  "${FF[@]}" -y "${ARGS_WITH_BOUNDARIES[@]}" "${DET[@]}" -f mp4 -movflags "$MOVFLAGS" -frag_duration "$FRAG_US" pipe:1 \
     > "claims/$name.fmp4" 2> "claims/$name.log" || status=$?
   echo "$status" > "claims/$name.exit-status"
 }
