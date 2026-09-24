@@ -1241,6 +1241,31 @@ class FfmpegPackagingScriptsTest {
 
   @Test
   @DisplayName(
+      "Should force keyframes from a list of times, as the worker does, when the image writes"
+          + " fragmented MP4 to its standard output")
+  void
+      shouldForceKeyframesFromAListOfTimesAsTheWorkerDoesWhenTheImageWritesFragmentedMp4ToItsStandardOutput()
+          throws Exception {
+    var verifier = imageVerifier();
+    var pipeArguments = temporaryDirectory.resolve("pipe-arguments");
+    writeImageRuntime(verifier);
+
+    var result =
+        verifier
+            .command()
+            .environment("STDIN_ENCODER", "none")
+            .environment("COMPLETED_PROBES", temporaryDirectory.resolve("probes").toString())
+            .environment("PIPE_ARGUMENTS", pipeArguments.toString())
+            .execute();
+
+    assertThat(result.exitCode()).as(result.output()).isZero();
+    assertThat(Files.readAllLines(pipeArguments))
+        .containsSequence("-force_key_frames:0", "0,1,2")
+        .noneMatch(argument -> argument.startsWith("expr:"));
+  }
+
+  @Test
+  @DisplayName(
       "Should name the missing option when the image's mp4 muxer cannot fragment the worker's"
           + " output")
   void shouldNameTheMissingOptionWhenTheImagesMp4MuxerCannotFragmentTheWorkersOutput()
@@ -1263,7 +1288,8 @@ class FfmpegPackagingScriptsTest {
   }
 
   // FFmpeg and ffprobe inside the image: FFmpeg writes a fragmented MP4 stand-in to its standard
-  // output and a file anywhere else, and ffprobe records which output it recognized.
+  // output, and its arguments to PIPE_ARGUMENTS when set, and a file anywhere else; ffprobe records
+  // which output it recognized.
   private static void writeImageRuntime(ImageVerifierFixture verifier) throws IOException {
     ScriptCommand.writeFake(
         verifier.runtime(),
@@ -1282,6 +1308,9 @@ class FfmpegPackagingScriptsTest {
         fi
         output="${!#}"
         if [[ "${output}" == pipe:1 ]]; then
+          if [[ -n "${PIPE_ARGUMENTS:-}" ]]; then
+            printf '%s\n' "$@" >"${PIPE_ARGUMENTS}"
+          fi
           printf '%s' "${FAKE_PIPE_OUTPUT:-ftypmoovmoofmdat}"
           exit 0
         fi

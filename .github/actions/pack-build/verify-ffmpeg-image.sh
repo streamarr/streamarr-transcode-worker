@@ -66,7 +66,8 @@ EXPECTED_FFMPEG_VERSION="${expected_ffmpeg_version}" \
     fi
   done
 
-  # The worker reads fragmented MP4 from FFmpeg's standard output.
+  # The worker reads fragmented MP4 from FFmpeg's standard output and forces its keyframes from a
+  # list of media times.
   output_dir="$(mktemp -d)"
   "${ffmpeg}" \
     -nostdin \
@@ -79,7 +80,7 @@ EXPECTED_FFMPEG_VERSION="${expected_ffmpeg_version}" \
     -t 3 \
     -c:v libx264 \
     -pix_fmt yuv420p \
-    -force_key_frames:0 "expr:gte(t,n_forced*1)" \
+    -force_key_frames:0 0,1,2 \
     -c:a aac \
     -f mp4 \
     -movflags cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont \
