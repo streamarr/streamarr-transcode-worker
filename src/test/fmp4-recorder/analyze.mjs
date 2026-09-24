@@ -165,8 +165,9 @@ const FIXTURES = [
   },
   {
     name: '10-copy-gop-exceeds-period', source: 'gop10.mp4', mode: 'copy', encoder: null, seek: 0, start: 0,
-    proves: 'Stream copy with a keyframe every 10.01 s: interval 2 holds no keyframe, so grouping ' +
-      'fails with a skipped segment number at the sync-first fragment at 20.02 s (segment 3).',
+    proves: 'Stream copy with a keyframe every 10.01 s: interval 2 holds no keyframe. The sync-first ' +
+      'fragment at 20.02 s (segment 3) closes segment 1, which is delivered complete with segment 0, and ' +
+      'then grouping fails with a skipped segment number; nothing from that fragment on is grouped.',
     oracles: [oracle('10-copy-gop-exceeds-period.hls-recipe', 'hls-recipe', { expect: false })],
   },
 ];
@@ -192,7 +193,8 @@ const RULES =
   'with a sync sample opens segment floor(presentationTime / (P * timescale)), or joins it when that segment is ' +
   'already open; every other fragment joins the open segment (or waits for the first one). Segments numbered ' +
   'below startSequenceNumber are discarded preroll; a sync-first fragment beyond the next deliverable number ' +
-  'fails with a skipped segment number. firstVideoPresentationTime = tfdt + first sample\'s composition offset, ' +
+  'closes the open segment (delivered, or discarded when preroll) and then fails with a skipped segment ' +
+  'number, grouping nothing from that fragment on. firstVideoPresentationTime = tfdt + first sample\'s composition offset, ' +
   'in videoTimescale ticks, no edit list.';
 
 function fixtureRecord({ fixture, record, source, pipe, work }) {

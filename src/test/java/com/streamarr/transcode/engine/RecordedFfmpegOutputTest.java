@@ -12,6 +12,9 @@ import com.streamarr.transcode.engine.FfmpegRecordings.HlsRun;
 import com.streamarr.transcode.engine.FfmpegRecordings.Recording;
 import com.streamarr.transcode.engine.FfmpegRecordings.SegmentSummary;
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
+import com.streamarr.transcode.engine.GroupingOutcome.NothingClosed;
+import com.streamarr.transcode.engine.GroupingOutcome.SegmentClosed;
+import com.streamarr.transcode.engine.GroupingOutcome.SegmentNumberSkipped;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -226,13 +229,16 @@ class RecordedFfmpegOutputTest {
 
   @Test
   @DisplayName(
-      "Should fail with a skipped segment number when source keyframes are further apart than the"
-          + " period")
-  void shouldFailWithASkippedSegmentNumberWhenSourceKeyframesAreFurtherApartThanThePeriod()
+      "Should deliver the segment the skipping keyframe closed, then fail, when source keyframes are"
+          + " further apart than the period")
+  void shouldDeliverTheSegmentTheSkippingKeyframeClosedThenFailWhenSourceKeyframesAreFurtherApart()
       throws IOException {
     var grouping = group(recording("10-copy-gop-exceeds-period.fmp4"));
+    var lastDelivered = grouping.delivered().getLast();
 
-    assertThat(grouping.delivered()).extracting(MediaSegment::sequenceNumber).containsExactly(0);
+    assertThat(grouping.delivered()).extracting(MediaSegment::sequenceNumber).containsExactly(0, 1);
+    assertThat(firstVideoPresentationTime(lastDelivered)).isEqualTo(240_240);
+    assertThat(grouping.units().indexOf(lastDelivered.fragments().getLast())).isEqualTo(19);
     assertThat(grouping.failure()).contains(new Failure(Reason.SKIPPED_SEGMENT_NUMBER, 20));
   }
 
@@ -281,7 +287,14 @@ class RecordedFfmpegOutputTest {
     var delivered = new ArrayList<MediaSegment>();
     for (var index = 0; index < units.fragments().size(); index++) {
       try {
-        grouper.accept(units.fragments().get(index)).ifPresent(delivered::add);
+        switch (grouper.accept(units.fragments().get(index))) {
+          case NothingClosed _ -> {}
+          case SegmentClosed(var segment) -> delivered.add(segment);
+          case SegmentNumberSkipped skipped -> {
+            skipped.closedSegment().ifPresent(delivered::add);
+            throw skipped.failure();
+          }
+        }
       } catch (FragmentedMp4Exception e) {
         return new Grouping(units, delivered, Optional.of(new Failure(e.getReason(), index)));
       }

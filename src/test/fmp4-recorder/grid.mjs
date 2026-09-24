@@ -13,8 +13,10 @@
 //     number, whichever is larger; the first opening beyond that skips a segment number;
 //   * media time never moves backwards from one keyframe fragment to the next.
 //
-// A failure ends the grouping at the failing fragment: nothing from that fragment on is grouped,
-// and the segment that is still open when it arrives is not delivered.
+// A failure ends the grouping at the failing fragment: nothing from that fragment on is grouped.
+// A keyframe that skips a segment number still marks where the open segment ends, so that segment
+// is complete and is delivered (or discarded, when it is preroll) before the failure. A keyframe
+// that moves media time backwards leaves the open segment's end unknown, so it is not delivered.
 
 import { floorDiv } from './rational.mjs';
 
@@ -95,7 +97,7 @@ export function groupOnGrid(fragments, { period, startSequenceNumber }) {
     firstVideoPresentationTime: opening.presentationTime,
     fragments: range(position === 0 ? 0 : opening.index, opened[position + 1]?.index ?? end),
   }));
-  const closed = failure === null ? segments : segments.slice(0, -1);
+  const closed = regression !== undefined && skip === null ? segments.slice(0, -1) : segments;
   return {
     delivered: closed.filter((segment) => segment.number >= startSequenceNumber),
     preroll: closed.filter((segment) => segment.number < startSequenceNumber),

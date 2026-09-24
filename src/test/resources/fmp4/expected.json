@@ -4,7 +4,7 @@
     "ffmpeg": "ffmpeg version 8.1.2-Jellyfin Copyright (c) 2000-2026 the FFmpeg developers"
   },
   "recipe": "ffmpeg -y [-ss S] -i SRC -map 0:v:0 -map 0:a:0 -map_metadata -1 -map_chapters -1 -copyts -avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128 <codec args> [-bsf:a aac_adtstoasc when copying AAC] [encode: -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 expr:gte(t,n_forced*6) -g:v:0 143 (-keyint_min:v:0 143 for SVT-AV1) (-sc_threshold:v:0 0 for libx264)] -threads 1 -f mp4 -movflags cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont -frag_duration 1000000 pipe:1",
-  "rules": "ADR 0037: segment N = [N*P, (N+1)*P) on the zero-based timeline. A fragment whose video traf starts with a sync sample opens segment floor(presentationTime / (P * timescale)), or joins it when that segment is already open; every other fragment joins the open segment (or waits for the first one). Segments numbered below startSequenceNumber are discarded preroll; a sync-first fragment beyond the next deliverable number fails with a skipped segment number. firstVideoPresentationTime = tfdt + first sample's composition offset, in videoTimescale ticks, no edit list.",
+  "rules": "ADR 0037: segment N = [N*P, (N+1)*P) on the zero-based timeline. A fragment whose video traf starts with a sync sample opens segment floor(presentationTime / (P * timescale)), or joins it when that segment is already open; every other fragment joins the open segment (or waits for the first one). Segments numbered below startSequenceNumber are discarded preroll; a sync-first fragment beyond the next deliverable number closes the open segment (delivered, or discarded when preroll) and then fails with a skipped segment number, grouping nothing from that fragment on. firstVideoPresentationTime = tfdt + first sample's composition offset, in videoTimescale ticks, no edit list.",
   "fixtures": [
     {
       "name": "01-encode-cfr",
@@ -3783,7 +3783,7 @@
     {
       "name": "10-copy-gop-exceeds-period",
       "file": "10-copy-gop-exceeds-period.fmp4",
-      "proves": "Stream copy with a keyframe every 10.01 s: interval 2 holds no keyframe, so grouping fails with a skipped segment number at the sync-first fragment at 20.02 s (segment 3).",
+      "proves": "Stream copy with a keyframe every 10.01 s: interval 2 holds no keyframe. The sync-first fragment at 20.02 s (segment 3) closes segment 1, which is delivered complete with segment 0, and then grouping fails with a skipped segment number; nothing from that fragment on is grouped.",
       "mode": "copy",
       "encoder": null,
       "source": {
@@ -3839,6 +3839,14 @@
           "fragmentCount": 10,
           "syncFirstFragmentCount": 1,
           "byteLength": 14254
+        },
+        {
+          "number": 1,
+          "firstVideoPresentationTime": 240240,
+          "firstFragmentIndex": 10,
+          "fragmentCount": 10,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 14719
         }
       ],
       "discardedPreroll": [],
@@ -3905,11 +3913,6 @@
           "agrees": false,
           "expectedToAgree": false,
           "mismatches": [
-            {
-              "number": 1,
-              "grouping": null,
-              "hls": 240240
-            },
             {
               "number": 2,
               "grouping": null,

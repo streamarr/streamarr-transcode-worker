@@ -3,8 +3,12 @@ package com.streamarr.transcode.engine;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
+import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
+import com.streamarr.transcode.engine.GroupingOutcome.NothingClosed;
+import com.streamarr.transcode.engine.GroupingOutcome.SegmentClosed;
+import com.streamarr.transcode.engine.GroupingOutcome.SegmentNumberSkipped;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
@@ -21,13 +25,14 @@ class SegmentGrouperTest {
   private static final long MILLISECONDS = 1000;
   private static final long SEGMENT_CAP = Mp4Stream.SEGMENT_CAP;
   private static final long FRAGMENT_BYTES = 2;
+  private static final GroupingOutcome NOTHING_CLOSED = new NothingClosed();
 
   @Test
   @DisplayName("Should deliver nothing when the first keyframe opens a segment")
   void shouldDeliverNothingWhenTheFirstKeyframeOpensASegment() {
     var grouper = new SegmentGrouper(PERIOD_SECONDS, 0, SEGMENT_CAP);
 
-    assertThat(grouper.accept(keyframeAt(0))).isEmpty();
+    assertThat(grouper.accept(keyframeAt(0))).isEqualTo(NOTHING_CLOSED);
   }
 
   @Test
@@ -40,7 +45,7 @@ class SegmentGrouperTest {
     grouper.accept(first);
     grouper.accept(second);
 
-    assertThat(grouper.accept(keyframeAt(6_006))).contains(segment(0, first, second));
+    assertThat(grouper.accept(keyframeAt(6_006))).isEqualTo(closed(segment(0, first, second)));
   }
 
   @Test
@@ -54,9 +59,9 @@ class SegmentGrouperTest {
 
     grouper.accept(first);
 
-    assertThat(grouper.accept(gopKeyframe)).isEmpty();
+    assertThat(grouper.accept(gopKeyframe)).isEqualTo(NOTHING_CLOSED);
     assertThat(grouper.accept(keyframeAt(144_144, timescale)))
-        .contains(segment(0, first, gopKeyframe));
+        .isEqualTo(closed(segment(0, first, gopKeyframe)));
   }
 
   @Test
@@ -69,8 +74,9 @@ class SegmentGrouperTest {
 
     grouper.accept(keyframe);
 
-    assertThat(grouper.accept(lateNonSync)).isEmpty();
-    assertThat(grouper.accept(keyframeAt(7_500))).contains(segment(0, keyframe, lateNonSync));
+    assertThat(grouper.accept(lateNonSync)).isEqualTo(NOTHING_CLOSED);
+    assertThat(grouper.accept(keyframeAt(7_500)))
+        .isEqualTo(closed(segment(0, keyframe, lateNonSync)));
   }
 
   @Test
@@ -97,10 +103,10 @@ class SegmentGrouperTest {
     var third = nonSyncAt(7_000);
 
     grouper.accept(first);
-    var closed = grouper.accept(second);
+    var closedByKeyframe = grouper.accept(second);
     grouper.accept(third);
 
-    assertThat(closed).contains(segment(0, first));
+    assertThat(closedByKeyframe).isEqualTo(closed(segment(0, first)));
     assertThat(grouper.finish()).contains(segment(1, second, third));
   }
 
@@ -138,7 +144,7 @@ class SegmentGrouperTest {
 
     grouper.accept(keyframe);
 
-    assertThat(grouper.accept(keyframeAt(36_000))).contains(segment(5, keyframe));
+    assertThat(grouper.accept(keyframeAt(36_000))).isEqualTo(closed(segment(5, keyframe)));
   }
 
   @Test
@@ -147,11 +153,11 @@ class SegmentGrouperTest {
     var grouper = new SegmentGrouper(PERIOD_SECONDS, 5, SEGMENT_CAP);
     var startKeyframe = keyframeAt(30_030);
 
-    assertThat(grouper.accept(keyframeAt(27_000))).isEmpty();
-    assertThat(grouper.accept(nonSyncAt(28_000))).isEmpty();
-    assertThat(grouper.accept(audioOnly())).isEmpty();
-    assertThat(grouper.accept(startKeyframe)).isEmpty();
-    assertThat(grouper.accept(keyframeAt(36_000))).contains(segment(5, startKeyframe));
+    assertThat(grouper.accept(keyframeAt(27_000))).isEqualTo(NOTHING_CLOSED);
+    assertThat(grouper.accept(nonSyncAt(28_000))).isEqualTo(NOTHING_CLOSED);
+    assertThat(grouper.accept(audioOnly())).isEqualTo(NOTHING_CLOSED);
+    assertThat(grouper.accept(startKeyframe)).isEqualTo(NOTHING_CLOSED);
+    assertThat(grouper.accept(keyframeAt(36_000))).isEqualTo(closed(segment(5, startKeyframe)));
   }
 
   @Test
@@ -160,10 +166,10 @@ class SegmentGrouperTest {
     var grouper = new SegmentGrouper(PERIOD_SECONDS, 5, SEGMENT_CAP);
     var startKeyframe = keyframeAt(30_000);
 
-    assertThat(grouper.accept(keyframeAt(9_000))).isEmpty();
-    assertThat(grouper.accept(keyframeAt(21_000))).isEmpty();
-    assertThat(grouper.accept(keyframeAt(27_000))).isEmpty();
-    assertThat(grouper.accept(startKeyframe)).isEmpty();
+    assertThat(grouper.accept(keyframeAt(9_000))).isEqualTo(NOTHING_CLOSED);
+    assertThat(grouper.accept(keyframeAt(21_000))).isEqualTo(NOTHING_CLOSED);
+    assertThat(grouper.accept(keyframeAt(27_000))).isEqualTo(NOTHING_CLOSED);
+    assertThat(grouper.accept(startKeyframe)).isEqualTo(NOTHING_CLOSED);
     assertThat(grouper.finish()).contains(segment(5, startKeyframe));
   }
 
@@ -197,39 +203,79 @@ class SegmentGrouperTest {
     var grouper = new SegmentGrouper(PERIOD_SECONDS, 0, SEGMENT_CAP);
     var zero = keyframeAt(0);
 
-    assertThat(grouper.accept(keyframeAt(-6_001))).isEmpty();
-    assertThat(grouper.accept(keyframeAt(-1))).isEmpty();
-    assertThat(grouper.accept(zero)).isEmpty();
+    assertThat(grouper.accept(keyframeAt(-6_001))).isEqualTo(NOTHING_CLOSED);
+    assertThat(grouper.accept(keyframeAt(-1))).isEqualTo(NOTHING_CLOSED);
+    assertThat(grouper.accept(zero)).isEqualTo(NOTHING_CLOSED);
     assertThat(grouper.finish()).contains(segment(0, zero));
   }
 
   @Test
-  @DisplayName("Should fail when a keyframe skips a segment number")
-  void shouldFailWhenAKeyframeSkipsASegmentNumber() {
+  @DisplayName(
+      "Should report the open segment with the skip when a keyframe skips a segment number")
+  void shouldReportTheOpenSegmentWithTheSkipWhenAKeyframeSkipsASegmentNumber() {
+    var grouper = new SegmentGrouper(PERIOD_SECONDS, 0, SEGMENT_CAP);
+    var first = keyframeAt(0);
+    var second = keyframeAt(6_000);
+    var secondNonSync = nonSyncAt(7_000);
+
+    grouper.accept(first);
+    grouper.accept(nonSyncAt(1_000));
+    grouper.accept(second);
+    grouper.accept(secondNonSync);
+
+    assertThat(grouper.accept(keyframeAt(18_000)))
+        .isEqualTo(new SegmentNumberSkipped(Optional.of(segment(1, second, secondNonSync)), 2, 3));
+  }
+
+  @Test
+  @DisplayName("Should fail with a skipped segment number when a producer reads the skip")
+  void shouldFailWithASkippedSegmentNumberWhenAProducerReadsTheSkip() {
+    var skipped = new SegmentNumberSkipped(Optional.empty(), 2, 3);
+
+    assertThat(skipped.failure())
+        .extracting(FragmentedMp4Exception::getReason)
+        .isEqualTo(Reason.SKIPPED_SEGMENT_NUMBER);
+    assertThat(skipped.failure())
+        .hasMessageContaining("segment 3")
+        .hasMessageContaining("segment 2");
+  }
+
+  @Test
+  @DisplayName("Should take no further fragment when a keyframe skipped a segment number")
+  void shouldTakeNoFurtherFragmentWhenAKeyframeSkippedASegmentNumber() {
     var grouper = new SegmentGrouper(PERIOD_SECONDS, 0, SEGMENT_CAP);
     grouper.accept(keyframeAt(0));
-    var skipping = keyframeAt(12_000);
+    grouper.accept(keyframeAt(12_000));
+    var later = audioOnly();
 
-    assertFailure(() -> grouper.accept(skipping), Reason.SKIPPED_SEGMENT_NUMBER);
+    assertThatIllegalStateException().isThrownBy(() -> grouper.accept(later));
+    assertThatIllegalStateException().isThrownBy(grouper::finish);
   }
 
   @Test
-  @DisplayName("Should fail when the first keyframe lies past the start sequence number")
-  void shouldFailWhenTheFirstKeyframeLiesPastTheStartSequenceNumber() {
+  @DisplayName(
+      "Should report the skip with no segment when the first keyframe lies past the start"
+          + " sequence number")
+  void shouldReportTheSkipWithNoSegmentWhenTheFirstKeyframeLiesPastTheStartSequenceNumber() {
     var grouper = new SegmentGrouper(PERIOD_SECONDS, 5, SEGMENT_CAP);
-    var skipping = keyframeAt(36_000);
+    grouper.accept(audioOnly());
 
-    assertFailure(() -> grouper.accept(skipping), Reason.SKIPPED_SEGMENT_NUMBER);
+    assertThat(grouper.accept(keyframeAt(36_000)))
+        .isEqualTo(new SegmentNumberSkipped(Optional.empty(), 5, 6));
   }
 
   @Test
-  @DisplayName("Should fail when the preroll's next keyframe lies past the start sequence number")
-  void shouldFailWhenThePrerollsNextKeyframeLiesPastTheStartSequenceNumber() {
+  @DisplayName(
+      "Should discard the preroll with the skip when the preroll's next keyframe lies past the start"
+          + " sequence number")
+  void
+      shouldDiscardThePrerollWithTheSkipWhenThePrerollsNextKeyframeLiesPastTheStartSequenceNumber() {
     var grouper = new SegmentGrouper(PERIOD_SECONDS, 5, SEGMENT_CAP);
     grouper.accept(keyframeAt(27_000));
-    var skipping = keyframeAt(36_000);
+    grouper.accept(nonSyncAt(28_000));
 
-    assertFailure(() -> grouper.accept(skipping), Reason.SKIPPED_SEGMENT_NUMBER);
+    assertThat(grouper.accept(keyframeAt(36_000)))
+        .isEqualTo(new SegmentNumberSkipped(Optional.empty(), 5, 6));
   }
 
   @ParameterizedTest
@@ -354,6 +400,10 @@ class SegmentGrouperTest {
         .isThrownBy(accept::run)
         .extracting(FragmentedMp4Exception::getReason)
         .isEqualTo(reason);
+  }
+
+  private static GroupingOutcome closed(MediaSegment segment) {
+    return new SegmentClosed(segment);
   }
 
   private static MediaSegment segment(int sequenceNumber, Fragment... fragments) {

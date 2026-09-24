@@ -92,7 +92,12 @@ every invocation. Neither moves a keyframe or a cut. Nothing else differs from t
   segment's `moof`+`mdat` bytes, concatenated in arrival order). Fragment indexes count fragments
   after the initialization segment, from 0.
 - `discardedPreroll` lists segments numbered below `startSequenceNumber`, which are never delivered.
-  `failure` names the named-reason failure (fixture 10) and the segments delivered before it.
+  `failure` names the named-reason failure (fixture 10) and the fragment that fails; `segments` then
+  lists what is delivered before the failure. A keyframe that skips a segment number still marks the
+  end of the open segment, so that segment is complete: it is delivered (or discarded, when it is
+  preroll) and the attempt then fails. The skipping fragment and everything after it are never
+  grouped. Whether a segment that long may be served at all is a duration policy that server #66
+  owns, not the grouping.
 - `endsWithAudioOnlyFragments` / `trailingAudioOnlyFragmentCount` describe fragments with no video
   `traf` after the last video sample.
 - `hlsOracles[]` holds the HLS muxer's segment starts mapped onto this recording, whether they agree,
@@ -120,7 +125,7 @@ Timescale 24000 unless stated. `n@t` means segment n starts at t seconds.
 | 8 | (pairs over 1, 7, 9) | – | `initializationSegmentIdentityPairs`: `ftyp`+`moov` is byte-identical between the start-0 and seek recordings for libx264 (1348 B), stream copy (1348 B) and SVT-AV1 (1334 B). `initializationSegmentDifferencePairs`: the encode and copy initialization segments of the same source differ. Each initialization segment has a zero edit list and zero `trex` defaults. |
 | 9 | `09-svtav1-vfr.fmp4` | 0 | The VFR source through SVT-AV1 (143-frame GOP + time-based forced keyframes): 1582 frames, a keyframe in every interval, segment starts on exactly the ticks of 3 (libx264). SVT-AV1 honours the forced keyframe. No B-frame reordering, so composition offsets are 0. |
 | 9b | `09-svtav1-vfr-seek30.fmp4` | 5 | The same after `-ss 30`: starts at 30.0717 s (the first source frame after 30 s), 862 frames, no padding, no preroll. |
-| 10 | `10-copy-gop-exceeds-period.fmp4` | 0 | A copy with a keyframe every 10.01 s. Segment 0 is delivered. The sync-first fragment at 20.02 s (fragment 20) is segment 3 while 2 is expected: `SKIPPED_SEGMENT_NUMBER`. |
+| 10 | `10-copy-gop-exceeds-period.fmp4` | 0 | A copy with a keyframe every 10.01 s. The sync-first fragment at 20.02 s (fragment 20) is segment 3 while 2 is expected. It closes segment 1 (10.01–20.02 s, fragments 10–19), so segments 0 and 1 are delivered, then grouping fails with `SKIPPED_SEGMENT_NUMBER` and fragment 20 onwards is never grouped. |
 
 Box facts every recording shares (useful for the reader):
 - Top-level boxes are only `ftyp`, `moov`, `moof` and `mdat`, in that order, with no `largesize`, `styp` or `sidx`.

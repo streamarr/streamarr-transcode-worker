@@ -87,10 +87,13 @@ describe('grid model', () => {
     assert.deepEqual(result.delivered, [[0, [2]]]);
   });
 
-  it('fails at the keyframe that skips a segment number and delivers no segment still open', () => {
+  it('fails at the keyframe that skips a segment number after delivering the segment it closed', () => {
     const result = grouped([K(0), N(1000), K(6000), N(7000), K(18000), N(19000)]);
 
-    assert.deepEqual(result.delivered, [[0, [0, 1]]]);
+    assert.deepEqual(result.delivered, [
+      [0, [0, 1]],
+      [1, [2, 3]],
+    ]);
     assert.deepEqual(result.failure, {
       reason: 'SKIPPED_SEGMENT_NUMBER',
       fragmentIndex: 4,
@@ -108,15 +111,26 @@ describe('grid model', () => {
     assert.equal(result.failure.expectedNumber, 5);
   });
 
-  it('fails when the keyframe after the preroll lies past the start sequence number', () => {
-    const result = grouped([K(27000), K(36000)], 5);
+  it('discards the preroll the skipping keyframe closed when it lies past the start sequence number', () => {
+    const result = grouped([K(27000), N(28000), K(36000)], 5);
 
-    assert.deepEqual(result.preroll, []);
+    assert.deepEqual(result.preroll, [[4, [0, 1]]]);
+    assert.deepEqual(result.delivered, []);
     assert.equal(result.failure.reason, 'SKIPPED_SEGMENT_NUMBER');
     assert.equal(result.failure.actualNumber, 6);
   });
 
-  it('fails when a keyframe starts before the previous keyframe', () => {
+  it('delivers nothing when the first keyframe skips the start sequence number', () => {
+    const result = grouped([A(), N(35000), K(36000)], 5);
+
+    assert.deepEqual(result, {
+      delivered: [],
+      preroll: [],
+      failure: { reason: 'SKIPPED_SEGMENT_NUMBER', fragmentIndex: 2, expectedNumber: 5, actualNumber: 6, presentationTime: 36000n },
+    });
+  });
+
+  it('fails when a keyframe starts before the previous keyframe and delivers no segment still open', () => {
     const result = grouped([K(0), K(6000), N(7000), K(5999), K(12000)]);
 
     assert.deepEqual(result.delivered, [[0, [0]]]);
