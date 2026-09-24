@@ -6,19 +6,19 @@ import java.util.List;
 import java.util.Optional;
 import lombok.NonNull;
 
-/** A box inside a top-level box the reader already holds, viewed without copying its bytes. */
-record NestedBox(@NonNull String type, @NonNull ByteBuffer body) {
+/** A box's type and the body bytes the reader already holds, viewed without copying them. */
+record BoxView(@NonNull String type, @NonNull ByteBuffer body) {
 
   private static final int COMPACT_HEADER_BYTES = 8;
   private static final int LARGE_HEADER_BYTES = 16;
   private static final long LARGE_SIZE = 1;
 
-  NestedBox {
+  BoxView {
     body = body.slice();
   }
 
-  List<NestedBox> children(String childType) {
-    var children = new ArrayList<NestedBox>();
+  List<BoxView> children(String childType) {
+    var children = new ArrayList<BoxView>();
     var content = body.duplicate();
     while (content.hasRemaining()) {
       var child = readChild(content);
@@ -30,11 +30,11 @@ record NestedBox(@NonNull String type, @NonNull ByteBuffer body) {
     return children;
   }
 
-  Optional<NestedBox> child(String childType) {
+  Optional<BoxView> child(String childType) {
     return children(childType).stream().findFirst();
   }
 
-  NestedBox requiredChild(String childType) {
+  BoxView requiredChild(String childType) {
     return child(childType)
         .orElseThrow(() -> FragmentedMp4Exception.malformed(type + " holds no " + childType));
   }
@@ -43,7 +43,7 @@ record NestedBox(@NonNull String type, @NonNull ByteBuffer body) {
     return new BoxFields(type, body.duplicate());
   }
 
-  private NestedBox readChild(ByteBuffer content) {
+  private BoxView readChild(ByteBuffer content) {
     var fields = new BoxFields(type, content);
     var size = fields.u32();
     var childType = fields.fourcc();
@@ -61,6 +61,6 @@ record NestedBox(@NonNull String type, @NonNull ByteBuffer body) {
 
     var childBody = content.slice(content.position(), (int) bodyBytes);
     content.position(content.position() + (int) bodyBytes);
-    return new NestedBox(childType, childBody);
+    return new BoxView(childType, childBody);
   }
 }

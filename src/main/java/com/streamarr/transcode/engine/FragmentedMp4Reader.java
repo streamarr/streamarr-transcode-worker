@@ -65,7 +65,7 @@ final class FragmentedMp4Reader {
             readHeader().orElseThrow(() -> missingInitialization("moov", "the end of the stream")),
             "moov");
     var moov = readBox(moovHeader, ftyp.length);
-    videoTrack = VideoTrack.of(nested(moovHeader, moov));
+    videoTrack = VideoTrack.of(viewOf(moovHeader, moov));
     initialized = true;
     var bytes = ByteBuffer.allocate(ftyp.length + moov.length).put(ftyp).put(moov).array();
     return Optional.of(new InitializationSegment(bytes));
@@ -99,7 +99,7 @@ final class FragmentedMp4Reader {
                     new FragmentedMp4Exception(
                         Reason.END_OF_FILE_AFTER_MOVIE_FRAGMENT, "no mdat follows the moof"));
     var mdat = readBox(requireType(mdatHeader, "mdat"), moof.length);
-    var videoStart = videoTrack.flatMap(track -> track.startOf(nested(moofHeader, moof)));
+    var videoStart = videoTrack.flatMap(track -> track.startOf(viewOf(moofHeader, moof)));
     return Optional.of(new Fragment(List.of(moof, mdat), videoStart));
   }
 
@@ -186,9 +186,9 @@ final class FragmentedMp4Reader {
     return box;
   }
 
-  private static NestedBox nested(BoxHeader header, byte[] box) {
+  private static BoxView viewOf(BoxHeader header, byte[] box) {
     var headerLength = header.bytes().length;
-    return new NestedBox(
+    return new BoxView(
         header.type(), ByteBuffer.wrap(box, headerLength, box.length - headerLength));
   }
 

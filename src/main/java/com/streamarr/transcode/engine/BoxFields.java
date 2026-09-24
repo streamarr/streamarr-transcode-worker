@@ -6,11 +6,14 @@ import java.util.Optional;
 /** Reads a box's big-endian fields in order; reading past the box fails as a malformed box. */
 final class BoxFields {
 
-  private final String type;
+  private final String owner;
   private final ByteBuffer buffer;
 
-  BoxFields(String type, ByteBuffer buffer) {
-    this.type = type;
+  /**
+   * @param owner names the box or box header the fields belong to in failure details
+   */
+  BoxFields(String owner, ByteBuffer buffer) {
+    this.owner = owner;
     this.buffer = buffer;
   }
 
@@ -82,7 +85,7 @@ final class BoxFields {
 
   private void require(int bytes) {
     if (buffer.remaining() < bytes) {
-      throw FragmentedMp4Exception.malformed(type + " ends before its fields do");
+      throw FragmentedMp4Exception.malformed(owner + " ends before its fields do");
     }
   }
 }
