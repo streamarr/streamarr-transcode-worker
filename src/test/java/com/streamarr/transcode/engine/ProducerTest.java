@@ -477,6 +477,47 @@ class ProducerTest {
     assertThat(producer.outcome()).isCompletedWithValue(new Stopped());
   }
 
+  @Test
+  @DisplayName("Should return from a second stop only once the first stop has settled")
+  void shouldReturnFromASecondStopOnlyOnceTheFirstStopHasSettled() throws InterruptedException {
+    var recording = recording(WHOLE_RUN);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(WHOLE_RUN))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .build();
+    var producer = producerFor(process, recording).gracePeriod(Duration.ofMinutes(10)).start();
+    awaiting().until(process::hasReachedPause);
+    var firstStop = Thread.ofVirtual().start(producer::stop);
+    awaiting().until(() -> process.stdinText().equals("q"));
+    var secondStop = Thread.ofVirtual().start(producer::stop);
+
+    assertThat(secondStop.join(Duration.ofMillis(200))).isFalse();
+    firstStop.interrupt();
+
+    assertThat(secondStop.join(OUTCOME_LIMIT)).isTrue();
+    assertThat(producer.outcome()).isCompletedWithValue(new Stopped());
+    assertThat(process.stdinText()).isEqualTo("q");
+  }
+
+  @Test
+  @DisplayName(
+      "Should settle the stop when stopped while the sink holds the last segment of an exited"
+          + " FFmpeg")
+  void shouldSettleTheStopWhenStoppedWhileTheSinkHoldsTheLastSegmentOfAnExitedFfmpeg() {
+    var recording = recording(WHOLE_RUN);
+    var process = ScriptedProcess.builder().output(bytesOf(WHOLE_RUN)).build();
+    sink.holding(recording.segments().size());
+    var producer = producerFor(process, recording).start();
+    awaiting().until(sink::isHolding);
+
+    producer.stop();
+    sink.release();
+
+    assertThat(process.stdinText()).isEmpty();
+    assertThat(producer.outcome()).isCompletedWithValue(new Stopped());
+  }
+
   private static ConditionFactory awaiting() {
     return await().atMost(OUTCOME_LIMIT).pollInterval(POLL_INTERVAL);
   }
