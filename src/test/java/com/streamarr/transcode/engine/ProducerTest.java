@@ -1123,6 +1123,51 @@ class ProducerTest {
   }
 
   @Test
+  @DisplayName(
+      "Should fail the attempt and terminate FFmpeg when FFmpeg does not exit within the grace"
+          + " period after its output ends")
+  void
+      shouldFailTheAttemptAndTerminateFfmpegWhenFfmpegDoesNotExitWithinTheGracePeriodAfterItsOutputEnds() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+
+    var producer = producerFor(process, recording).gracePeriod(Duration.ofMillis(100)).start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.PROCESS_DID_NOT_EXIT);
+    assertThat(process.wasTerminated()).isTrue();
+    assertThat(process.wasDestroyedForcibly()).isFalse();
+    assertThat(sink.accepted()).containsExactlyElementsOf(expectedDeliveries(recording));
+  }
+
+  @Test
+  @DisplayName(
+      "Should destroy FFmpeg and settle the failure only once it has exited when FFmpeg ignores"
+          + " termination after its output ends")
+  void
+      shouldDestroyFfmpegAndSettleTheFailureOnlyOnceItHasExitedWhenFfmpegIgnoresTerminationAfterItsOutputEnds() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .ignoresTermination(true)
+            .lingersAfterKill(true)
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+
+    var producer = producerFor(process, recording).gracePeriod(Duration.ofMillis(100)).start();
+
+    awaiting().until(process::wasDestroyedForcibly);
+    assertThat(process.wasTerminated()).isTrue();
+    assertThat(producer.outcome()).isNotDone();
+    process.exit();
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.PROCESS_DID_NOT_EXIT);
+  }
+
+  @Test
   @DisplayName("Should not fail the attempt as an encoder stall once it is stopped")
   void shouldNotFailTheAttemptAsAnEncoderStallOnceItIsStopped() throws InterruptedException {
     var recording = recording(ENCODED_RECORDING);

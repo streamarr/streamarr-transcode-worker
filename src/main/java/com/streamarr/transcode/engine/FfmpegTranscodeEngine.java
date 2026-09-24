@@ -9,8 +9,8 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class FfmpegTranscodeEngine {
 
-  // How long FFmpeg may take to exit after a stop asks it to quit, or after a stall asks it to
-  // terminate, before the producer destroys it.
+  // How long FFmpeg may take to exit once its output ends or a stop asks it to quit, and after the
+  // producer asks it to terminate, before the producer ends it.
   private static final Duration GRACE_PERIOD = Duration.ofSeconds(5);
 
   /** How long FFmpeg may write nothing while its producer reads its output, unless configured. */

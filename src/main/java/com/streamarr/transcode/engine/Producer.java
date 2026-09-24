@@ -36,9 +36,10 @@ import lombok.extern.slf4j.Slf4j;
  * holds at once and the delivery in flight once that delivery returns.
  *
  * <p>A watchdog fails the attempt when FFmpeg writes nothing for the stall timeout while the reader
- * is reading; waiting for the sink pauses it, and it ends once the reader stops reading. It asks
- * FFmpeg to terminate and destroys it after the grace period, because a hung FFmpeg can ignore
- * termination.
+ * is reading; waiting for the sink pauses it, and it ends once the reader stops reading. Once the
+ * output ends, FFmpeg must exit within the grace period, or the producer fails the attempt too. In
+ * both cases it asks FFmpeg to terminate and destroys it after the grace period, because a hung
+ * FFmpeg can ignore termination.
  */
 @Slf4j
 public final class Producer {
@@ -92,8 +93,8 @@ public final class Producer {
   /**
    * Starts FFmpeg and reads its output until the attempt settles.
    *
-   * @param gracePeriod how long a stop waits for FFmpeg to exit after asking it to quit, and a
-   *     stall after asking it to terminate
+   * @param gracePeriod how long FFmpeg may take to exit once its output ends, after a stop asks it
+   *     to quit, and after the producer asks it to terminate
    * @param stallTimeout how long FFmpeg may write nothing while the reader reads its output
    * @param encodedFrameRate the frame rate an attempt that encodes video forces on its output, so
    *     that the producer fails an output holding a video sample shorter than half a frame; empty
@@ -370,9 +371,25 @@ public final class Producer {
   }
 
   private void settleAtExit(AttemptOutcome outcomeOnCleanExit) {
+    if (!tryAwaitExitWithinGracePeriod()) {
+      failAsNotExited();
+      return;
+    }
+
     var atExit = outcomeAtExit(outcomeOnCleanExit);
     if (tryDecide(atExit)) {
       settle(atExit);
+    }
+  }
+
+  // FFmpeg closed its output without exiting, so it is ended as a stalled FFmpeg is.
+  private void failAsNotExited() {
+    var notExited =
+        new Failed(
+            ProducerFailure.PROCESS_DID_NOT_EXIT,
+            "FFmpeg did not exit within " + gracePeriod + " after its output ended");
+    if (tryDecide(notExited)) {
+      terminateAndSettle(notExited);
     }
   }
 

@@ -33,6 +33,11 @@ public enum ProducerFailure {
    * reading it, so the producer ended FFmpeg.
    */
   ENCODER_STALLED,
+  /**
+   * FFmpeg did not exit within the grace period after its output ended, so the producer ended
+   * FFmpeg.
+   */
+  PROCESS_DID_NOT_EXIT,
   /** The producer met a throwable it does not expect, such as a defect or an exhausted heap. */
   UNEXPECTED_ERROR;
 

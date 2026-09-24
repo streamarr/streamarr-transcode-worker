@@ -763,6 +763,34 @@ class TranscodeWorkerJobAttemptTest {
 
   @Test
   @DisplayName(
+      "Should fail the attempt as a transcode failure and terminate FFmpeg when FFmpeg does not"
+          + " exit within the grace period after its output ends")
+  void
+      shouldFailTheAttemptAsATranscodeFailureAndTerminateFfmpegWhenFfmpegDoesNotExitWithinTheGracePeriodAfterItsOutputEnds()
+          throws Exception {
+    var recording = recording(ENCODED_RECORDING);
+    var launcher = writingUntilTheTestExits();
+    var job = variantJobBuilder().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
+      assertThat(connection.uploads())
+          .extracting(upload -> upload.metadata().getSegmentName())
+          .containsExactlyElementsOf(uploadNames(recording));
+      var process = launcher.process(fromProto(job.getJobAttemptId()));
+      assertThat(process.wasTerminated()).isTrue();
+      assertThat(process.wasDestroyedForcibly()).isFalse();
+    }
+  }
+
+  @Test
+  @DisplayName(
       "Should complete the attempt when the receiver withholds readiness longer than the stall"
           + " timeout")
   void shouldCompleteTheAttemptWhenTheReceiverWithholdsReadinessLongerThanTheStallTimeout()
