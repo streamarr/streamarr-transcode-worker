@@ -4,6 +4,9 @@ import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.engine.AttemptOutcome.Failed;
 import com.streamarr.transcode.engine.AttemptOutcome.Stopped;
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
+import com.streamarr.transcode.engine.GroupingOutcome.NothingClosed;
+import com.streamarr.transcode.engine.GroupingOutcome.SegmentClosed;
+import com.streamarr.transcode.engine.GroupingOutcome.SegmentNumberSkipped;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.time.Duration;
@@ -24,7 +27,8 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public final class Producer {
 
-  // The server's segment cap; the reader admits no initialization segment or fragment above it.
+  // The server's segment cap; the reader admits no initialization segment or fragment above it,
+  // and the grouper assembles no media segment above it.
   private static final long MAXIMUM_SEGMENT_BYTES = 16L * 1024 * 1024;
 
   private static final Duration ERROR_OUTPUT_WAIT = Duration.ofSeconds(1);
@@ -71,7 +75,10 @@ public final class Producer {
       @NonNull Duration gracePeriod,
       @NonNull SegmentSink sink) {
     var settings =
-        new Settings(new SegmentGrouper(periodSeconds, startSequenceNumber), sink, gracePeriod);
+        new Settings(
+            new SegmentGrouper(periodSeconds, startSequenceNumber, MAXIMUM_SEGMENT_BYTES),
+            sink,
+            gracePeriod);
     Process process;
     try {
       process = launcher.launch(command, jobAttemptId);
@@ -227,9 +234,17 @@ public final class Producer {
         switch (unit) {
           case InitializationSegment initializationSegment ->
               Optional.of(ProducedSegment.of(initializationSegment));
-          case Fragment fragment -> grouper.accept(fragment).map(ProducedSegment::of);
+          case Fragment fragment -> closedBy(grouper.accept(fragment));
         };
     return closed.flatMap(this::deliver);
+  }
+
+  private static Optional<ProducedSegment> closedBy(GroupingOutcome grouping) {
+    return switch (grouping) {
+      case NothingClosed _ -> Optional.empty();
+      case SegmentClosed(var segment) -> Optional.of(ProducedSegment.of(segment));
+      case SegmentNumberSkipped skipped -> throw skipped.failure();
+    };
   }
 
   // Empty once the sink has accepted the segment; otherwise why reading ends.
@@ -270,6 +285,7 @@ public final class Producer {
       case SKIPPED_SEGMENT_NUMBER -> ProducerFailure.SKIPPED_SEGMENT_NUMBER;
       case UNSIZED_BOX,
           MALFORMED_BOX,
+          SAMPLE_DATA_OUTSIDE_MDAT,
           MISSING_INITIALIZATION_SEGMENT,
           MISPLACED_INITIALIZATION_SEGMENT,
           UNEXPECTED_BOX,
