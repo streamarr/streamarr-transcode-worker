@@ -358,8 +358,7 @@ class WorkerImageIT {
     copyMedia();
     // FFmpeg runs as this wrapper's child and the wrapper records its exit status, which a forced
     // kill of the wrapper would never write. With every acknowledgement withheld, the pipe holds
-    // the
-    // remux's output back by the time the stop arrives.
+    // the remux's output back by the time the stop arrives.
     var script =
         scriptedFfmpeg(
             """
