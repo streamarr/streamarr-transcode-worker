@@ -11,26 +11,37 @@ public class FfmpegTranscodeEngine {
   // How long a stop waits for FFmpeg to exit after asking it to quit.
   private static final Duration STOP_GRACE_PERIOD = Duration.ofSeconds(5);
 
-  // How long FFmpeg may write nothing while its producer reads its output.
-  private static final Duration ENCODER_STALL_TIMEOUT = Duration.ofSeconds(30);
+  // How long FFmpeg may write nothing while its producer reads its output, unless configured.
+  private static final Duration DEFAULT_ENCODER_STALL_TIMEOUT = Duration.ofSeconds(30);
 
   private final FfmpegCommandBuilder commandBuilder;
   private final TranscodeCapabilityService capabilityService;
   private final ProcessLauncher launcher;
+  private final Duration encoderStallTimeout;
 
   public FfmpegTranscodeEngine(
       FfmpegCommandBuilder commandBuilder, TranscodeCapabilityService capabilityService) {
-    this(commandBuilder, capabilityService, new ProcessBuilderLauncher());
+    this(
+        commandBuilder,
+        capabilityService,
+        new ProcessBuilderLauncher(),
+        DEFAULT_ENCODER_STALL_TIMEOUT);
   }
 
+  /**
+   * @param encoderStallTimeout how long FFmpeg may write nothing to its standard output while its
+   *     producer reads it before the producer fails the attempt
+   */
   @Builder
   private FfmpegTranscodeEngine(
       @NonNull FfmpegCommandBuilder commandBuilder,
       @NonNull TranscodeCapabilityService capabilityService,
-      @NonNull ProcessLauncher launcher) {
+      @NonNull ProcessLauncher launcher,
+      @NonNull Duration encoderStallTimeout) {
     this.commandBuilder = commandBuilder;
     this.capabilityService = capabilityService;
     this.launcher = launcher;
+    this.encoderStallTimeout = encoderStallTimeout;
   }
 
   /**
@@ -53,7 +64,7 @@ public class FfmpegTranscodeEngine {
             .periodSeconds(request.targetSegmentDuration())
             .startSequenceNumber(request.startSequenceNumber())
             .gracePeriod(STOP_GRACE_PERIOD)
-            .stallTimeout(ENCODER_STALL_TIMEOUT)
+            .stallTimeout(encoderStallTimeout)
             .sink(sink)
             .start();
     log.info(
@@ -83,5 +94,9 @@ public class FfmpegTranscodeEngine {
     }
 
     return capabilityService.resolveEncoder(request.transcodeDecision().videoCodecFamily());
+  }
+
+  public static class FfmpegTranscodeEngineBuilder {
+    private Duration encoderStallTimeout = DEFAULT_ENCODER_STALL_TIMEOUT;
   }
 }

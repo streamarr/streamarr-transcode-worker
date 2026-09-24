@@ -46,11 +46,13 @@ import io.grpc.stub.ClientResponseObserver;
 import io.grpc.stub.StreamObserver;
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CancellationException;
@@ -276,7 +278,9 @@ public final class TranscodeWorker implements AutoCloseable {
   private void uploadSegment(
       VariantJob job, ProducedSegment segment, DeliveryCancellation cancellation)
       throws InterruptedException, ExecutionException, TimeoutException {
-    var upload = new SegmentUpload();
+    var upload =
+        new SegmentUpload(
+            configuration.uploadReadinessTimeout(), configuration.uploadAcknowledgementTimeout());
     var metadataBuilder = openUpload(job, upload);
     cancellation.onCancel(
         () -> upload.cancel(new CancellationException("The job attempt stopped")));
@@ -320,7 +324,7 @@ public final class TranscodeWorker implements AutoCloseable {
   }
 
   private static void sendContent(SegmentUpload upload, ProducedSegment segment)
-      throws InterruptedException {
+      throws InterruptedException, TimeoutException {
     var pending = ByteString.EMPTY;
     for (var box : segment.content()) {
       // The producer never changes a segment it delivered, so wrapping its boxes copies nothing.
@@ -334,7 +338,7 @@ public final class TranscodeWorker implements AutoCloseable {
 
   // Sends every full-sized data message and returns the remainder.
   private static ByteString sendWholeDataMessages(SegmentUpload upload, ByteString content)
-      throws InterruptedException {
+      throws InterruptedException, TimeoutException {
     var remaining = content;
     while (remaining.size() >= UPLOAD_MESSAGE_BYTES) {
       upload.send(dataMessage(remaining.substring(0, UPLOAD_MESSAGE_BYTES)));
@@ -661,14 +665,26 @@ public final class TranscodeWorker implements AutoCloseable {
     }
   }
 
-  // One segment's upload call, which sends a message only when the call is ready for it. Every
+  // One segment's upload call, which sends a message only when the call is ready for it. It fails
+  // when the call is not ready within the readiness timeout, or when the server has not
+  // acknowledged the segment within the acknowledgement timeout of the first message sent. Every
   // call method runs under this object's monitor, so a cancellation from the thread that stops the
   // attempt never interleaves with a send.
   private static final class SegmentUpload
       implements ClientResponseObserver<UploadSegmentRequest, UploadSegmentResponse> {
 
     private final CompletableFuture<UploadSegmentResponse> response = new CompletableFuture<>();
+    private final Duration readinessTimeout;
+    private final Duration acknowledgementTimeout;
     private ClientCallStreamObserver<UploadSegmentRequest> call;
+
+    // Guarded by this monitor.
+    private OptionalLong acknowledgementDeadline = OptionalLong.empty();
+
+    private SegmentUpload(Duration readinessTimeout, Duration acknowledgementTimeout) {
+      this.readinessTimeout = readinessTimeout;
+      this.acknowledgementTimeout = acknowledgementTimeout;
+    }
 
     @Override
     public void beforeStart(ClientCallStreamObserver<UploadSegmentRequest> call) {
@@ -677,14 +693,57 @@ public final class TranscodeWorker implements AutoCloseable {
     }
 
     // Sends nothing once the server has answered or the upload was cancelled; that decides it.
-    private synchronized void send(UploadSegmentRequest message) throws InterruptedException {
+    private synchronized void send(UploadSegmentRequest message)
+        throws InterruptedException, TimeoutException {
+      var readinessDeadline = System.nanoTime() + readinessTimeout.toNanos();
       while (!call.isReady() && !response.isDone()) {
-        wait();
+        TimeUnit.NANOSECONDS.timedWait(this, nanosUntilADeadline(readinessDeadline));
       }
 
-      if (!response.isDone()) {
-        call.onNext(message);
+      if (response.isDone()) {
+        return;
       }
+
+      if (acknowledgementDeadline.isEmpty()) {
+        acknowledgementDeadline =
+            OptionalLong.of(System.nanoTime() + acknowledgementTimeout.toNanos());
+      }
+
+      call.onNext(message);
+    }
+
+    // Holds this monitor. The time left before the first of the readiness deadline and the
+    // acknowledgement deadline passes.
+    private long nanosUntilADeadline(long readinessDeadline) throws TimeoutException {
+      var now = System.nanoTime();
+      var untilReady = readinessDeadline - now;
+      if (untilReady <= 0) {
+        throw new TimeoutException(
+            "The upload was not ready for its next message within " + readinessTimeout);
+      }
+
+      return Math.min(untilReady, nanosUntilAcknowledgementDeadline(now));
+    }
+
+    // Holds this monitor.
+    private long nanosUntilAcknowledgementDeadline(long now) throws TimeoutException {
+      if (acknowledgementDeadline.isEmpty()) {
+        return Long.MAX_VALUE;
+      }
+
+      var untilAcknowledged = acknowledgementDeadline.getAsLong() - now;
+      if (untilAcknowledged <= 0) {
+        throw acknowledgementTimedOut();
+      }
+
+      return untilAcknowledged;
+    }
+
+    private TimeoutException acknowledgementTimedOut() {
+      return new TimeoutException(
+          "The server did not acknowledge the upload within "
+              + acknowledgementTimeout
+              + " of its first message");
     }
 
     private synchronized void signalReadiness() {
@@ -699,7 +758,15 @@ public final class TranscodeWorker implements AutoCloseable {
 
     private UploadSegmentResponse awaitAcknowledgement()
         throws InterruptedException, ExecutionException, TimeoutException {
-      return response.get(CONNECTION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+      try {
+        return response.get(nanosUntilAcknowledgementDeadline(), TimeUnit.NANOSECONDS);
+      } catch (TimeoutException _) {
+        throw acknowledgementTimedOut();
+      }
+    }
+
+    private synchronized long nanosUntilAcknowledgementDeadline() throws TimeoutException {
+      return nanosUntilAcknowledgementDeadline(System.nanoTime());
     }
 
     private synchronized void cancel(Throwable failure) {

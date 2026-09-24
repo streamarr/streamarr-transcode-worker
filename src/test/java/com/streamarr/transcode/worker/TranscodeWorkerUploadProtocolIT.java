@@ -59,6 +59,9 @@ class TranscodeWorkerUploadProtocolIT {
   private static final UUID SOURCE_NAMESPACE_ID =
       UUID.fromString("cccccccc-cccc-cccc-cccc-cccccccccccc");
 
+  // Short enough that a test outlives it, long enough that a clean close fails well before it.
+  private static final Duration ACKNOWLEDGEMENT_TIMEOUT = Duration.ofSeconds(5);
+
   @TempDir Path tempDir;
 
   @Test
@@ -173,6 +176,7 @@ class TranscodeWorkerUploadProtocolIT {
             .bootId(UUID.randomUUID())
             .availableSlots(1)
             .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, mediaRoot))
+            .uploadAcknowledgementTimeout(ACKNOWLEDGEMENT_TIMEOUT)
             .build();
     return new TranscodeWorker(configuration, engine);
   }

@@ -5,7 +5,10 @@ import static com.streamarr.transcode.engine.FfmpegRecordings.deliveredBytesOf;
 import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.uploadNames;
+import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.SOURCE_NAMESPACE_ID;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engine;
+import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engineBuilder;
+import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.workerConfigurationBuilder;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.startVariant;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.stopVariant;
@@ -36,10 +39,12 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.stream.DoubleStream;
@@ -530,6 +535,197 @@ class TranscodeWorkerJobAttemptTest {
 
   @Test
   @DisplayName(
+      "Should let FFmpeg exit without a forced kill and report the stop when stopped while an"
+          + " upload awaits acknowledgement")
+  void shouldLetFfmpegExitAndReportTheStopWhenStoppedWhileAnUploadAwaitsAcknowledgement()
+      throws Exception {
+    var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
+    var job = variantJobBuilder().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.withholdAcknowledgements();
+      startVariant(connection, job);
+      await()
+          .atMost(EVENT_LIMIT)
+          .until(
+              () ->
+                  connection.uploads().size() == 1
+                      && connection.uploads().getFirst().awaitsAcknowledgement());
+      var process = launcher.process(fromProto(job.getJobAttemptId()));
+
+      stopVariant(connection, job);
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_STOPPED);
+      assertThat(connection.uploads())
+          .singleElement()
+          .satisfies(upload -> assertThat(upload.wasCancelled()).isTrue());
+      assertThat(process.stdinText()).isEqualTo("q");
+      assertThat(process.hasReadToEndOfOutput()).isTrue();
+      assertThat(process.wasDestroyedForcibly()).isFalse();
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt within the readiness bound when the receiver never reports"
+          + " readiness")
+  void shouldFailTheAttemptWithinTheReadinessBoundWhenTheReceiverNeverReportsReadiness()
+      throws Exception {
+    var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
+    var job = variantJobBuilder().build();
+    var configuration =
+        configurationBuilder().uploadReadinessTimeout(Duration.ofMillis(200)).build();
+
+    try (var worker =
+        workerBuilder(tempDir)
+            .runtime(runtime)
+            .engine(engine(launcher))
+            .configuration(configuration)
+            .build()) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.withholdUploadReadiness();
+      startVariant(connection, job);
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
+      assertThat(connection.uploadMessageCount()).isZero();
+      assertThat(connection.uploads())
+          .singleElement()
+          .satisfies(upload -> assertThat(upload.wasCancelled()).isTrue());
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt within the acknowledgement deadline when the receiver never"
+          + " acknowledges")
+  void shouldFailTheAttemptWithinTheAcknowledgementDeadlineWhenTheReceiverNeverAcknowledges()
+      throws Exception {
+    var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
+    var job = variantJobBuilder().build();
+    var configuration =
+        configurationBuilder().uploadAcknowledgementTimeout(Duration.ofMillis(200)).build();
+
+    try (var worker =
+        workerBuilder(tempDir)
+            .runtime(runtime)
+            .engine(engine(launcher))
+            .configuration(configuration)
+            .build()) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.withholdAcknowledgements();
+      startVariant(connection, job);
+
+      await()
+          .atMost(Duration.ofSeconds(2))
+          .untilAsserted(
+              () ->
+                  assertThat(eventsOf(connection))
+                      .containsExactly(
+                          EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_FAILED));
+      assertThat(connection.uploads())
+          .singleElement()
+          .satisfies(upload -> assertThat(upload.wasCancelled()).isTrue());
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should count the acknowledgement deadline from the upload's first byte when the receiver"
+          + " grants readiness slowly")
+  void shouldCountTheAcknowledgementDeadlineFromTheFirstByteWhenReadinessComesSlowly()
+      throws Exception {
+    var output = withLargeFirstMediaData(bytesOf(ENCODED_RECORDING));
+    var launcher =
+        new ScriptedProcessLauncher(_ -> ScriptedProcess.builder().output(output).build());
+    var job = variantJobBuilder().build();
+    var configuration =
+        configurationBuilder().uploadAcknowledgementTimeout(Duration.ofMillis(300)).build();
+
+    try (var worker =
+            workerBuilder(tempDir)
+                .runtime(runtime)
+                .engine(engine(launcher))
+                .configuration(configuration)
+                .build();
+        var receiver = Executors.newSingleThreadScheduledExecutor()) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.withholdUploadReadiness();
+      startVariant(connection, job);
+
+      // Each message waits 100 ms for readiness; the first media segment's messages need longer
+      // than the deadline in all.
+      receiver.scheduleAtFixedRate(connection::grantUploadMessage, 0, 100, TimeUnit.MILLISECONDS);
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(connection.uploads())
+          .extracting(upload -> upload.metadata().getSegmentName())
+          .containsExactly("init.mp4", "segment0.m4s");
+      assertThat(connection.uploads().getLast().wasCancelled()).isTrue();
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as a transcode failure and terminate FFmpeg when FFmpeg writes"
+          + " nothing for the stall timeout")
+  void shouldFailTheAttemptAndTerminateFfmpegWhenFfmpegWritesNothingForTheStallTimeout()
+      throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJobBuilder().build();
+    var engine = engineBuilder(launcher).encoderStallTimeout(Duration.ofMillis(200)).build();
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).engine(engine).build()) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
+      assertThat(launcher.process(fromProto(job.getJobAttemptId())).wasTerminated()).isTrue();
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should complete the attempt when the receiver withholds readiness for longer than the"
+          + " stall timeout")
+  void shouldCompleteTheAttemptWhenTheReceiverWithholdsReadinessLongerThanTheStallTimeout()
+      throws Exception {
+    var job = variantJobBuilder().build();
+    var engine =
+        engineBuilder(ScriptedProcessLauncher.writing(ENCODED_RECORDING))
+            .encoderStallTimeout(Duration.ofMillis(100))
+            .build();
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).engine(engine).build()) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.withholdUploadReadiness();
+      startVariant(connection, job);
+      await().atMost(EVENT_LIMIT).until(() -> connection.uploads().size() == 1);
+
+      await()
+          .during(Duration.ofMillis(500))
+          .atMost(EVENT_LIMIT)
+          .until(() -> eventsOf(connection).equals(List.of(EventCase.JOB_ATTEMPT_STARTED)));
+      for (var granted = 0; granted < 100; granted++) {
+        connection.grantUploadMessage();
+      }
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_COMPLETED);
+    }
+  }
+
+  @Test
+  @DisplayName(
       "Should report the stop to its own session and not to the next when the worker reconnects"
           + " after FFmpeg quits")
   void shouldReportTheStopToItsOwnSessionAndNotToTheNextWhenTheWorkerReconnects() throws Exception {
@@ -632,6 +828,13 @@ class TranscodeWorkerJobAttemptTest {
           .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
       assertThat(launcher.hasLaunchedAny()).isFalse();
     }
+  }
+
+  // The worker configuration the fixture worker uses, to adjust.
+  private TranscodeWorkerConfiguration.TranscodeWorkerConfigurationBuilder configurationBuilder() {
+    return workerConfigurationBuilder()
+        .availableSlots(2)
+        .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, tempDir));
   }
 
   private TranscodeWorker worker(ScriptedProcessLauncher launcher) throws Exception {

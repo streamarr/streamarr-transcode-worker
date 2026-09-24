@@ -28,6 +28,12 @@ public final class RemoteWorkerFixtures {
 
   /** An engine with a compatible FFmpeg that launches FFmpeg through the launcher. */
   public static FfmpegTranscodeEngine engine(ProcessLauncher launcher) {
+    return engineBuilder(launcher).build();
+  }
+
+  /** A builder for an engine with a compatible FFmpeg that launches FFmpeg through the launcher. */
+  public static FfmpegTranscodeEngine.FfmpegTranscodeEngineBuilder engineBuilder(
+      ProcessLauncher launcher) {
     var capabilityService =
         new TranscodeCapabilityService(
             "ffmpeg",
@@ -41,8 +47,7 @@ public final class RemoteWorkerFixtures {
     return FfmpegTranscodeEngine.builder()
         .commandBuilder(new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)))
         .capabilityService(capabilityService)
-        .launcher(launcher)
-        .build();
+        .launcher(launcher);
   }
 
   private static class CompatibleFfmpegProcess extends Process {
