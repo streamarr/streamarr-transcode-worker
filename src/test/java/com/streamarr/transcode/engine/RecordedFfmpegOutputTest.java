@@ -114,10 +114,11 @@ class RecordedFfmpegOutputTest {
 
   @Test
   @DisplayName(
-      "Should discard the preroll when a stream-copy restart lands on a keyframe before its first"
-          + " segment")
-  void shouldDiscardThePrerollWhenAStreamCopyRestartLandsOnAKeyframeBeforeItsFirstSegment()
-      throws IOException {
+      "Should discard the preroll when a stream-copy replacement attempt lands on a keyframe before"
+          + " its first segment")
+  void
+      shouldDiscardThePrerollWhenAStreamCopyReplacementAttemptLandsOnAKeyframeBeforeItsFirstSegment()
+          throws IOException {
     var grouping = group(recording("07-copy-seek30.fmp4"));
     var firstDelivered = grouping.delivered().getFirst();
 
@@ -166,12 +167,12 @@ class RecordedFfmpegOutputTest {
     "09-svtav1-vfr.fmp4, 09-svtav1-vfr-seek30.fmp4"
   })
   @DisplayName(
-      "Should read identical initialization segments when a start-0 run and a seek run share an"
-          + " encoder backend")
-  void shouldReadIdenticalInitializationSegmentsWhenAStartZeroRunAndASeekRunShareAnEncoderBackend(
-      String startZeroRun, String seekRun) throws IOException {
-    assertThat(read(seekRun).initializationSegment())
-        .isEqualTo(read(startZeroRun).initializationSegment());
+      "Should read identical initialization segments when a replacement attempt keeps the encoder"
+          + " backend")
+  void shouldReadIdenticalInitializationSegmentsWhenAReplacementAttemptKeepsTheEncoderBackend(
+      String firstAttempt, String replacementAttempt) throws IOException {
+    assertThat(read(replacementAttempt).initializationSegment())
+        .isEqualTo(read(firstAttempt).initializationSegment());
   }
 
   @Test

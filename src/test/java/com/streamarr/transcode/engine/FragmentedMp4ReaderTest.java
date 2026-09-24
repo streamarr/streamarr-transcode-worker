@@ -483,8 +483,8 @@ class FragmentedMp4ReaderTest {
   }
 
   @Test
-  @DisplayName("Should read the first sample of the first run that has samples")
-  void shouldReadTheFirstSampleOfTheFirstRunThatHasSamples() throws IOException {
+  @DisplayName("Should read the first sample of the next run when an earlier run has no samples")
+  void shouldReadTheFirstSampleOfTheNextRunWhenAnEarlierRunHasNoSamples() throws IOException {
     var emptyRun = fullBox("trun", 1 << 24 | 0x000004, u32(0), u32(NON_SYNC_SAMPLE_FLAGS));
     var run = fullBox("trun", 1 << 24 | 0x000804, u32(1), u32(SYNC_SAMPLE_FLAGS), u32(-1001));
     var traf = box("traf", tfhd(VIDEO_TRACK_ID), tfdt(3003), emptyRun, run);

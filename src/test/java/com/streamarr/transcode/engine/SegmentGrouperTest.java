@@ -112,8 +112,9 @@ class SegmentGrouperTest {
   }
 
   @Test
-  @DisplayName("Should add fragments that arrive before any segment opens to the first segment")
-  void shouldAddFragmentsThatArriveBeforeAnySegmentOpensToTheFirstSegment() {
+  @DisplayName(
+      "Should add waiting fragments to the first segment when they arrive before any segment opens")
+  void shouldAddWaitingFragmentsToTheFirstSegmentWhenTheyArriveBeforeAnySegmentOpens() {
     var grouper = new SegmentGrouper(PERIOD_SECONDS, 0);
     var audio = audioOnly();
     var nonSync = nonSyncAt(0);
@@ -188,8 +189,8 @@ class SegmentGrouperTest {
   }
 
   @Test
-  @DisplayName("Should place a negative presentation time in the interval below zero")
-  void shouldPlaceANegativePresentationTimeInTheIntervalBelowZero() {
+  @DisplayName("Should place a keyframe below segment zero when its presentation time is negative")
+  void shouldPlaceAKeyframeBelowSegmentZeroWhenItsPresentationTimeIsNegative() {
     var grouper = new SegmentGrouper(PERIOD_SECONDS, 0);
     var zero = keyframeAt(0);
 
