@@ -11,8 +11,7 @@ import lombok.NonNull;
  */
 public final class ProcessBuilderLauncher implements ProcessLauncher {
 
-  /** The environment variable that holds the job attempt's id. */
-  public static final String JOB_ATTEMPT_ID_VARIABLE = "STREAMARR_JOB_ATTEMPT_ID";
+  private static final String JOB_ATTEMPT_ID_VARIABLE = "STREAMARR_JOB_ATTEMPT_ID";
 
   @Override
   public Process launch(@NonNull List<String> command, @NonNull UUID jobAttemptId)

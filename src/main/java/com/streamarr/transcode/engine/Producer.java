@@ -22,8 +22,8 @@ import lombok.NonNull;
  */
 public final class Producer {
 
-  /** The server's segment cap; the reader admits no initialization segment or fragment above it. */
-  public static final long MAXIMUM_SEGMENT_BYTES = 16L * 1024 * 1024;
+  // The server's segment cap; the reader admits no initialization segment or fragment above it.
+  private static final long MAXIMUM_SEGMENT_BYTES = 16L * 1024 * 1024;
 
   private static final Duration ERROR_OUTPUT_WAIT = Duration.ofSeconds(1);
   private static final int ERROR_OUTPUT_DETAIL_LIMIT = 2000;
@@ -37,22 +37,20 @@ public final class Producer {
   private final CompletableFuture<AttemptOutcome> outcome = new CompletableFuture<>();
   private final Object lock = new Object();
 
-  /** Guarded by {@link #lock}. */
+  // Guarded by lock.
   private boolean stopRequested;
-
-  /** Guarded by {@link #lock}. */
   private boolean settled;
 
-  /** Confined to the reader thread. */
+  // Confined to the reader thread.
   private boolean mediaSegmentDelivered;
 
-  private Producer(Process process, Attempt attempt) {
+  private Producer(Process process, Settings settings) {
     this.process = process;
     this.errorOutput = new StderrDrainer(process.getErrorStream());
     this.reader = new FragmentedMp4Reader(process.getInputStream(), MAXIMUM_SEGMENT_BYTES);
-    this.grouper = attempt.grouper();
-    this.sink = attempt.sink();
-    this.gracePeriod = attempt.gracePeriod();
+    this.grouper = settings.grouper();
+    this.sink = settings.sink();
+    this.gracePeriod = settings.gracePeriod();
   }
 
   /**
@@ -70,8 +68,8 @@ public final class Producer {
       int startSequenceNumber,
       @NonNull Duration gracePeriod,
       @NonNull SegmentSink sink) {
-    var attempt =
-        new Attempt(new SegmentGrouper(periodSeconds, startSequenceNumber), sink, gracePeriod);
+    var settings =
+        new Settings(new SegmentGrouper(periodSeconds, startSequenceNumber), sink, gracePeriod);
     Process process;
     try {
       process = launcher.launch(command, jobAttemptId);
@@ -79,7 +77,7 @@ public final class Producer {
       throw new TranscodeException(TranscodeException.GENERIC_MESSAGE, e);
     }
 
-    var producer = new Producer(process, attempt);
+    var producer = new Producer(process, settings);
     Thread.ofVirtual().name("producer-" + jobAttemptId).start(producer::produce);
     return producer;
   }
@@ -151,9 +149,9 @@ public final class Producer {
     }
   }
 
-  /** Once a stop is recorded, only the stop settles the attempt. */
   private boolean tryClaimSettlement(AttemptOutcome settledOutcome) {
     synchronized (lock) {
+      // Once a stop is recorded, only the stop settles the attempt.
       var preemptedByStop = stopRequested && !(settledOutcome instanceof Stopped);
       if (settled || preemptedByStop) {
         return false;
@@ -166,37 +164,25 @@ public final class Producer {
 
   private void produce() {
     try {
-      switch (readAndDeliver()) {
-        case EndOfOutput _ -> settleAtExit(outcomeOfCompleteOutput());
-        case TruncatedOutput(var failure) -> settleAtExit(failure);
-        case Abandoned(var failure) -> settleAfterEndingProcess(failure);
-        case StopObserved _ -> discardRemainingOutput();
-      }
+      outcomeOf(readAndDeliver()).ifPresent(this::settle);
     } finally {
       errorOutput.close();
     }
   }
 
+  // Empty when the stop settles the attempt.
+  private Optional<AttemptOutcome> outcomeOf(Ending ending) {
+    return switch (ending) {
+      case EndOfOutput _ -> Optional.of(outcomeAtExit(outcomeOfCompleteOutput()));
+      case TruncatedOutput(var failure) -> Optional.of(outcomeAtExit(failure));
+      case Abandoned(var failure) -> outcomeAfterEndingProcess(failure);
+      case StopObserved _ -> discardRemainingOutput();
+    };
+  }
+
   private Ending readAndDeliver() {
     try {
-      for (var unit = reader.next(); unit.isPresent(); unit = reader.next()) {
-        var closed =
-            switch (unit.orElseThrow()) {
-              case InitializationSegment initializationSegment ->
-                  Optional.of(ProducedSegment.of(initializationSegment));
-              case Fragment fragment -> grouper.accept(fragment).map(ProducedSegment::of);
-            };
-        var interruption = closed.flatMap(this::deliver);
-        if (interruption.isPresent()) {
-          return interruption.orElseThrow();
-        }
-      }
-
-      return grouper
-          .finish()
-          .map(ProducedSegment::of)
-          .flatMap(this::deliver)
-          .orElseGet(EndOfOutput::new);
+      return deliverEachSegment();
     } catch (FragmentedMp4Exception e) {
       return endingOf(e);
     } catch (IOException e) {
@@ -204,7 +190,33 @@ public final class Producer {
     }
   }
 
-  /** Empty once the sink has accepted the segment; otherwise why reading ends. */
+  private Ending deliverEachSegment() throws IOException {
+    for (var unit = reader.next(); unit.isPresent(); unit = reader.next()) {
+      var interruption = deliverClosedSegment(unit.orElseThrow());
+      if (interruption.isPresent()) {
+        return interruption.orElseThrow();
+      }
+    }
+
+    return grouper
+        .finish()
+        .map(ProducedSegment::of)
+        .flatMap(this::deliver)
+        .orElseGet(EndOfOutput::new);
+  }
+
+  // Empty unless the unit closed a segment whose delivery ends reading.
+  private Optional<Ending> deliverClosedSegment(Mp4Unit unit) {
+    var closed =
+        switch (unit) {
+          case InitializationSegment initializationSegment ->
+              Optional.of(ProducedSegment.of(initializationSegment));
+          case Fragment fragment -> grouper.accept(fragment).map(ProducedSegment::of);
+        };
+    return closed.flatMap(this::deliver);
+  }
+
+  // Empty once the sink has accepted the segment; otherwise why reading ends.
   private Optional<Ending> deliver(ProducedSegment segment) {
     if (isStopRequested()) {
       return Optional.of(new StopObserved());
@@ -224,7 +236,7 @@ public final class Producer {
     return Optional.empty();
   }
 
-  /** The output ends where it cannot be delivered; a truncated output has already ended. */
+  // The output ends where it cannot be delivered; a truncated output has already ended.
   private static Ending endingOf(FragmentedMp4Exception exception) {
     var failure = new Failed(failureOf(exception.getReason()), exception.getMessage());
     if (failure.reason() == ProducerFailure.TRUNCATED_OUTPUT) {
@@ -260,18 +272,17 @@ public final class Producer {
     return new Completed();
   }
 
-  /** A non-zero exit explains whatever the output lacks, so it takes precedence. */
-  private void settleAtExit(AttemptOutcome outcomeOnCleanExit) {
+  // A non-zero exit explains whatever the output lacks, so it takes precedence.
+  private AttemptOutcome outcomeAtExit(AttemptOutcome outcomeOnCleanExit) {
     var exitCode = process.onExit().join().exitValue();
     if (exitCode != 0) {
-      settle(new Failed(ProducerFailure.PROCESS_EXITED_WITH_ERROR, exitDetail(exitCode)));
-      return;
+      return new Failed(ProducerFailure.PROCESS_EXITED_WITH_ERROR, exitDetail(exitCode));
     }
 
-    settle(outcomeOnCleanExit);
+    return outcomeOnCleanExit;
   }
 
-  /** FFmpeg reports why it failed at the end of its error output. */
+  // FFmpeg reports why it failed at the end of its error output.
   private String exitDetail(int exitCode) {
     var recentErrorOutput = String.join("\n", errorOutput.awaitRecentOutput(ERROR_OUTPUT_WAIT));
     var tailStart = Math.max(0, recentErrorOutput.length() - ERROR_OUTPUT_DETAIL_LIMIT);
@@ -281,41 +292,43 @@ public final class Producer {
         + recentErrorOutput.substring(tailStart);
   }
 
-  /** A stop in progress lets FFmpeg flush and quit rather than destroying it. */
-  private void settleAfterEndingProcess(Failed failure) {
+  // A stop in progress lets FFmpeg flush and quit rather than destroying it.
+  private Optional<AttemptOutcome> outcomeAfterEndingProcess(Failed failure) {
     if (isStopRequested()) {
-      discardRemainingOutput();
-      return;
+      return discardRemainingOutput();
     }
 
     process.destroyForcibly();
     process.onExit().join();
-    settle(failure);
+    return Optional.of(failure);
   }
 
-  /** Reading to the end lets FFmpeg flush its last fragment and exit after a quit. */
-  private void discardRemainingOutput() {
+  // Reading to the end lets FFmpeg flush its last fragment and exit after a quit; the stop, not
+  // the reader, settles the attempt.
+  private Optional<AttemptOutcome> discardRemainingOutput() {
     try {
       process.getInputStream().transferTo(OutputStream.nullOutputStream());
     } catch (IOException _) {
-      // The stop settles the attempt; nothing read after it matters.
+      // Nothing read after a stop matters.
     }
+
+    return Optional.empty();
   }
 
-  /** Why the producer stopped reading FFmpeg's output. */
+  // Why the producer stopped reading FFmpeg's output.
   private sealed interface Ending {}
 
-  /** The output ended on a box boundary. */
+  // The output ended on a box boundary.
   private record EndOfOutput() implements Ending {}
 
-  /** The output ended inside a box or after a moof with no mdat. */
+  // The output ended inside a box or after a moof with no mdat.
   private record TruncatedOutput(Failed failure) implements Ending {}
 
-  /** The attempt failed while FFmpeg may still be writing. */
+  // The attempt failed while FFmpeg may still be writing.
   private record Abandoned(Failed failure) implements Ending {}
 
-  /** A stop was recorded before the next delivery. */
+  // A stop was recorded before the next delivery.
   private record StopObserved() implements Ending {}
 
-  private record Attempt(SegmentGrouper grouper, SegmentSink sink, Duration gracePeriod) {}
+  private record Settings(SegmentGrouper grouper, SegmentSink sink, Duration gracePeriod) {}
 }

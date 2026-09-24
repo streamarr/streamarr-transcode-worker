@@ -37,6 +37,7 @@ class ProducerTest {
   private static final UUID JOB_ATTEMPT_ID =
       UUID.fromString("0f6a3a9e-4c6b-4f59-9d0e-1c2b3a4d5e6f");
   private static final String WHOLE_RUN = "01-encode-cfr.fmp4";
+  private static final long SERVER_SEGMENT_CAP_BYTES = 16L * 1024 * 1024;
 
   private final RecordingSegmentSink sink = new RecordingSegmentSink();
 
@@ -176,7 +177,7 @@ class ProducerTest {
     var output =
         IsoBoxes.concat(
             Arrays.copyOf(recorded, recording.initializationSegment().byteLength()),
-            IsoBoxes.header(Producer.MAXIMUM_SEGMENT_BYTES + 1, "moof"),
+            IsoBoxes.header(SERVER_SEGMENT_CAP_BYTES + 1, "moof"),
             new byte[64]);
     var process = ScriptedProcess.builder().output(output).build();
 

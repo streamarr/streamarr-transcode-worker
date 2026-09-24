@@ -6,7 +6,7 @@ import lombok.NonNull;
 
 public class FfmpegTranscodeEngine {
 
-  /** How long a stop waits for FFmpeg to exit after asking it to quit. */
+  // How long a stop waits for FFmpeg to exit after asking it to quit.
   private static final Duration STOP_GRACE_PERIOD = Duration.ofSeconds(5);
 
   private final FfmpegCommandBuilder commandBuilder;
