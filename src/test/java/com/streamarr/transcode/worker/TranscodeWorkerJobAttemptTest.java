@@ -46,7 +46,7 @@ class TranscodeWorkerJobAttemptTest {
 
   private static final String WHOLE_RUN = "01-encode-cfr.fmp4";
   private static final Duration EVENT_LIMIT = Duration.ofSeconds(10);
-  private static final int CHUNK = 64 * 1024;
+  private static final int UPLOAD_MESSAGE_BYTES = 64 * 1024;
 
   @TempDir Path tempDir;
 
@@ -100,8 +100,9 @@ class TranscodeWorkerJobAttemptTest {
   }
 
   @Test
-  @DisplayName("Should upload a segment larger than a chunk in whole chunks when it is delivered")
-  void shouldUploadASegmentLargerThanAChunkInWholeChunksWhenItIsDelivered() throws Exception {
+  @DisplayName(
+      "Should upload a segment in full-sized data messages when it is larger than one message")
+  void shouldUploadASegmentInFullSizedDataMessagesWhenItIsLargerThanOneMessage() throws Exception {
     var output = withLargeFirstMediaData(bytesOf(WHOLE_RUN));
     var launcher =
         new ScriptedProcessLauncher(_ -> ScriptedProcess.builder().output(output).build());
@@ -114,11 +115,13 @@ class TranscodeWorkerJobAttemptTest {
 
       awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_COMPLETED);
       var firstMediaSegment = connection.uploads().get(1);
-      assertThat(firstMediaSegment.chunkLengths())
+      assertThat(firstMediaSegment.dataMessageLengths())
           .hasSizeGreaterThan(2)
           .last()
-          .satisfies(length -> assertThat(length).isPositive().isLessThanOrEqualTo(CHUNK));
-      assertThat(firstMediaSegment.chunkLengths().subList(0, 2)).containsOnly(CHUNK);
+          .satisfies(
+              length -> assertThat(length).isPositive().isLessThanOrEqualTo(UPLOAD_MESSAGE_BYTES));
+      assertThat(firstMediaSegment.dataMessageLengths().subList(0, 2))
+          .containsOnly(UPLOAD_MESSAGE_BYTES);
       assertThat(firstMediaSegment.metadata().getContentLengthBytes())
           .isEqualTo(firstMediaSegment.content().length);
       var uploaded = new ByteArrayOutputStream();
@@ -160,7 +163,7 @@ class TranscodeWorkerJobAttemptTest {
       connection.withholdUploadReadiness();
       startVariant(connection, job);
 
-      // The metadata and one chunk of content for the initialization segment and each segment.
+      // The metadata and one data message for the initialization segment and each segment.
       var expectedMessages = 2 * (recording.segments().size() + 1);
       for (var granted = 1; granted <= expectedMessages; granted++) {
         connection.grantUploadMessage();
@@ -355,10 +358,8 @@ class TranscodeWorkerJobAttemptTest {
         .toList();
   }
 
-  /**
-   * The recording with its first media data box grown past two upload chunks, which the producer
-   * reads without looking inside.
-   */
+  // The recording with its first media data box grown past two upload data messages, which the
+  // producer reads without looking inside.
   private static byte[] withLargeFirstMediaData(byte[] recording) {
     var grown = new ByteArrayOutputStream();
     var buffer = ByteBuffer.wrap(recording);
@@ -373,9 +374,9 @@ class TranscodeWorkerJobAttemptTest {
         continue;
       }
 
-      grown.writeBytes(ByteBuffer.allocate(4).putInt(size + 3 * CHUNK).array());
+      grown.writeBytes(ByteBuffer.allocate(4).putInt(size + 3 * UPLOAD_MESSAGE_BYTES).array());
       grown.writeBytes(Arrays.copyOfRange(box, 4, size));
-      grown.writeBytes(new byte[3 * CHUNK]);
+      grown.writeBytes(new byte[3 * UPLOAD_MESSAGE_BYTES]);
       padded = true;
     }
 

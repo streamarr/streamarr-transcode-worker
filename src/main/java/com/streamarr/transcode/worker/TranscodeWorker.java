@@ -36,6 +36,7 @@ import com.streamarr.transcode.engine.AttemptOutcome.Stopped;
 import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
 import com.streamarr.transcode.engine.ProducedSegment;
 import com.streamarr.transcode.engine.Producer;
+import com.streamarr.transcode.engine.ProducerFailure;
 import com.streamarr.transcode.probe.FfprobeExecutor;
 import com.streamarr.transcode.protocol.ProtoUuid;
 import io.grpc.ManagedChannel;
@@ -63,7 +64,7 @@ import lombok.extern.slf4j.Slf4j;
 public final class TranscodeWorker implements AutoCloseable {
 
   private static final int CONNECTION_TIMEOUT_SECONDS = 5;
-  private static final int SEGMENT_CHUNK_BYTES = 64 * 1024;
+  private static final int UPLOAD_MESSAGE_BYTES = 64 * 1024;
 
   private final TranscodeWorkerConfiguration configuration;
   private final FfmpegTranscodeEngine engine;
@@ -182,24 +183,26 @@ public final class TranscodeWorker implements AutoCloseable {
 
   @SuppressWarnings("java:S3398") // Job lifecycle belongs to the worker, not its gRPC observer.
   private void startVariant(StartVariantCommand command) {
-    startAttempt(command).ifPresent(Producer::stop);
+    // The stop waits for FFmpeg to exit, so it runs without the monitor that uploads need.
+    if (startAttempt(command) instanceof Orphaned(var producer)) {
+      producer.stop();
+    }
   }
 
-  /** Returns a producer that started without becoming active, which the caller must stop. */
-  private synchronized Optional<Producer> startAttempt(StartVariantCommand command) {
+  private synchronized AttemptStart startAttempt(StartVariantCommand command) {
     var job = command.getJob();
     if (!isRunnableHere(command)) {
       reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
-      return Optional.empty();
+      return new Refused();
     }
 
     Producer producer;
     try {
-      producer = engine.startProducer(jobMapper.map(job), segment -> upload(job, segment));
+      producer = engine.startProducer(jobMapper.map(job), segment -> deliverToServer(job, segment));
     } catch (RuntimeException e) {
       logStartupFailure(job, e);
       reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED);
-      return Optional.empty();
+      return new Refused();
     }
 
     activeAttempts.put(fromProto(job.getJobAttemptId()), producer);
@@ -209,14 +212,13 @@ public final class TranscodeWorker implements AutoCloseable {
       logStartupFailure(job, e);
       activeAttempts.remove(fromProto(job.getJobAttemptId()));
       reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED);
-      return Optional.of(producer);
+      return new Orphaned(producer);
     }
 
     producer.outcome().thenAccept(outcome -> settleAttempt(job, producer, outcome));
-    return Optional.empty();
+    return new Started();
   }
 
-  /** Addressed to this worker boot and asking for the only container the worker delivers. */
   private boolean isRunnableHere(StartVariantCommand command) {
     return command.getTarget().equals(identity())
         && command.getJob().getDecision().getContainer() == ContainerFormat.CONTAINER_FORMAT_FMP4;
@@ -230,8 +232,8 @@ public final class TranscodeWorker implements AutoCloseable {
         failure);
   }
 
-  /** The attempt's producer delivers each segment here and waits until the server accepts it. */
-  private void upload(VariantJob job, ProducedSegment segment) {
+  // The attempt's producer delivers each segment here and waits until the server accepts it.
+  private void deliverToServer(VariantJob job, ProducedSegment segment) {
     try {
       uploadSegment(job, segment);
     } catch (InterruptedException e) {
@@ -267,7 +269,7 @@ public final class TranscodeWorker implements AutoCloseable {
     }
   }
 
-  /** Opens the upload call while the attempt is still active in this session. */
+  // Opens the upload call while the attempt is still active in this session.
   private synchronized SegmentUploadMetadata.Builder openUpload(
       VariantJob job, SegmentUpload upload) {
     if (!activeAttempts.containsKey(fromProto(job.getJobAttemptId()))) {
@@ -289,31 +291,31 @@ public final class TranscodeWorker implements AutoCloseable {
     var pending = ByteString.EMPTY;
     for (var box : segment.content()) {
       // The producer never changes a segment it delivered, so wrapping its boxes copies nothing.
-      pending = sendWholeChunks(upload, pending.concat(UnsafeByteOperations.unsafeWrap(box)));
+      pending = sendWholeDataMessages(upload, pending.concat(UnsafeByteOperations.unsafeWrap(box)));
     }
 
     if (!pending.isEmpty()) {
-      upload.send(chunk(pending));
+      upload.send(dataMessage(pending));
     }
   }
 
-  /** Sends every whole chunk and returns the remainder. */
-  private static ByteString sendWholeChunks(SegmentUpload upload, ByteString content)
+  // Sends every full-sized data message and returns the remainder.
+  private static ByteString sendWholeDataMessages(SegmentUpload upload, ByteString content)
       throws InterruptedException {
     var remaining = content;
-    while (remaining.size() >= SEGMENT_CHUNK_BYTES) {
-      upload.send(chunk(remaining.substring(0, SEGMENT_CHUNK_BYTES)));
-      remaining = remaining.substring(SEGMENT_CHUNK_BYTES);
+    while (remaining.size() >= UPLOAD_MESSAGE_BYTES) {
+      upload.send(dataMessage(remaining.substring(0, UPLOAD_MESSAGE_BYTES)));
+      remaining = remaining.substring(UPLOAD_MESSAGE_BYTES);
     }
 
     return remaining;
   }
 
-  private static UploadSegmentRequest chunk(ByteString data) {
+  private static UploadSegmentRequest dataMessage(ByteString data) {
     return UploadSegmentRequest.newBuilder().setData(data).build();
   }
 
-  /** Reports the producer's outcome unless a stop or the session's end has already claimed it. */
+  // Reports the producer's outcome unless a stop or the session's end has already claimed it.
   private synchronized void settleAttempt(
       VariantJob job, Producer producer, AttemptOutcome outcome) {
     if (!activeAttempts.remove(fromProto(job.getJobAttemptId()), producer)) {
@@ -323,18 +325,19 @@ public final class TranscodeWorker implements AutoCloseable {
     tryReport(
         switch (outcome) {
           case Completed _ -> jobAttemptCompleted(job.getJobAttemptId());
-          case Failed failed -> transcodeFailure(job, failed);
+          case Failed(var reason, var detail) -> transcodeFailure(job, reason, detail);
           case Stopped _ -> jobAttemptStopped(job.getJobAttemptId());
         });
   }
 
-  private static EstablishWorkerSessionRequest transcodeFailure(VariantJob job, Failed failure) {
+  private static EstablishWorkerSessionRequest transcodeFailure(
+      VariantJob job, ProducerFailure reason, String detail) {
     log.warn(
         "Variant {} of stream session {} failed ({}): {}",
         job.getVariant().getVariantLabel(),
         fromProto(job.getStreamSessionId()),
-        failure.reason(),
-        failure.detail());
+        reason,
+        detail);
     return jobAttemptFailed(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
   }
 
@@ -349,7 +352,7 @@ public final class TranscodeWorker implements AutoCloseable {
             });
   }
 
-  /** Claims the attempt so that its producer's own outcome is never reported. */
+  // Claims the attempt so that its producer's own outcome is never reported.
   private synchronized Optional<Producer> claimStoppedAttempt(StopVariantCommand command) {
     if (!command.getTarget().equals(identity())) {
       return Optional.empty();
@@ -434,7 +437,7 @@ public final class TranscodeWorker implements AutoCloseable {
     return producers;
   }
 
-  /** Stops the producers together and returns once every FFmpeg has exited. */
+  // Stops the producers together and returns once every FFmpeg has exited.
   private static void stopAll(List<Producer> producers) {
     try (var stops = Executors.newVirtualThreadPerTaskExecutor()) {
       producers.forEach(producer -> stops.execute(producer::stop));
@@ -454,7 +457,7 @@ public final class TranscodeWorker implements AutoCloseable {
             });
   }
 
-  /** Returns the closed session's probes and any attempt that started after the stops began. */
+  // Returns the closed session's probes and any attempt that started after the stops began.
   private synchronized Optional<ClosedSession> closeConnection() {
     responseObserver = null;
 
@@ -574,7 +577,7 @@ public final class TranscodeWorker implements AutoCloseable {
     }
   }
 
-  /** One segment's upload call, which sends a message only when the call is ready for it. */
+  // One segment's upload call, which sends a message only when the call is ready for it.
   private static final class SegmentUpload
       implements ClientResponseObserver<UploadSegmentRequest, UploadSegmentResponse> {
 
@@ -588,7 +591,7 @@ public final class TranscodeWorker implements AutoCloseable {
       call.setOnReadyHandler(this::signalReadiness);
     }
 
-    /** Sends nothing once the server has answered; the answer decides the upload. */
+    // Sends nothing once the server has answered; the answer decides the upload.
     private void send(UploadSegmentRequest message) throws InterruptedException {
       awaitReadiness();
       if (!response.isDone()) {
@@ -647,11 +650,20 @@ public final class TranscodeWorker implements AutoCloseable {
     private Optional<FfprobeExecutor> ffprobe = Optional.empty();
     private WorkerRuntime runtime = new GrpcWorkerRuntime();
 
-    public TranscodeWorkerBuilder ffprobe(@NonNull FfprobeExecutor producer) {
-      ffprobe = Optional.of(producer);
+    public TranscodeWorkerBuilder ffprobe(@NonNull FfprobeExecutor executor) {
+      ffprobe = Optional.of(executor);
       return this;
     }
   }
 
   private record ClosedSession(WorkerProbeSession probes, List<Producer> attempts) {}
+
+  private sealed interface AttemptStart {}
+
+  private record Started() implements AttemptStart {}
+
+  private record Refused() implements AttemptStart {}
+
+  // The producer started, but the worker could not report the start and must stop it.
+  private record Orphaned(Producer producer) implements AttemptStart {}
 }

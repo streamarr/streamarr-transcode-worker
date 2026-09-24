@@ -303,8 +303,8 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
       return messages.getFirst().getMetadata();
     }
 
-    /** The length of each chunk of content, in order. */
-    public List<Integer> chunkLengths() {
+    /** The length of each data message's content, in order. */
+    public List<Integer> dataMessageLengths() {
       return messages.stream()
           .filter(UploadSegmentRequest::hasData)
           .map(message -> message.getData().size())
