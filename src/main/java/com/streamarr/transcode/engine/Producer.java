@@ -290,6 +290,7 @@ public final class Producer {
             ProducerFailure.ENCODER_STALLED,
             "FFmpeg wrote no output for " + stallTimeout + " while the producer read it");
     if (watchdog.awaitStall() && tryDecide(stall)) {
+      cancelDeliveryInFlight();
       process.destroy();
       awaitExitWithinGracePeriod();
       settle(stall);
@@ -396,6 +397,7 @@ public final class Producer {
       return false;
     }
 
+    cancelDeliveryInFlight();
     endProcessForcibly();
     settle(failure);
     return true;

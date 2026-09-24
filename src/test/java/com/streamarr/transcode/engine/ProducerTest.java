@@ -970,6 +970,62 @@ class ProducerTest {
 
   @Test
   @DisplayName(
+      "Should cancel the delivery in flight before FFmpeg exits when FFmpeg stalls while the next"
+          + " segment assembles")
+  void
+      shouldCancelTheDeliveryInFlightBeforeFfmpegExitsWhenFfmpegStallsWhileTheNextSegmentAssembles() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .ignoresTermination(true)
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    sink.holding(1);
+    var producer =
+        producerFor(process, recording)
+            .stallTimeout(Duration.ofMillis(200))
+            .gracePeriod(Duration.ofMinutes(10))
+            .start();
+
+    awaiting().until(sink::wasCancelled);
+
+    assertThat(process.wasTerminated()).isTrue();
+    assertThat(process.isAlive()).isTrue();
+    process.exit();
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.ENCODER_STALLED);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+  }
+
+  @Test
+  @DisplayName(
+      "Should cancel the delivery in flight before FFmpeg exits when reading its output throws"
+          + " unexpectedly")
+  void shouldCancelTheDeliveryInFlightBeforeFfmpegExitsWhenReadingItsOutputThrowsUnexpectedly() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .failReadAfter(insideThirdMediaSegment(recording))
+            .failReadWith(new IllegalStateException("scripted defect"))
+            .lingersAfterKill(true)
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    sink.holding(1);
+    var producer = producerFor(process, recording).start();
+
+    awaiting().until(sink::wasCancelled);
+
+    assertThat(process.wasDestroyedForcibly()).isTrue();
+    assertThat(process.isAlive()).isTrue();
+    process.exit();
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.UNEXPECTED_ERROR);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+  }
+
+  @Test
+  @DisplayName(
       "Should not fail the attempt as an encoder stall while a segment awaits acceptance and the"
           + " reader waits for it")
   void shouldNotFailTheAttemptAsAnEncoderStallWhileASegmentAwaitsAcceptance() {
