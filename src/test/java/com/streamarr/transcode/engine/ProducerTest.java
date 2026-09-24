@@ -198,6 +198,42 @@ class ProducerTest {
 
   @Test
   @DisplayName(
+      "Should hold none of the discarded preroll against the budget when the preroll of a"
+          + " replacement attempt outgrows the segment cap")
+  void
+      shouldHoldNoneOfTheDiscardedPrerollAgainstTheBudgetWhenThePrerollOfAReplacementAttemptOutgrowsTheSegmentCap() {
+    // Four 5 MiB keyframe fragments in segment 0, which an attempt from segment 1 discards.
+    var preroll =
+        IsoBoxes.concat(
+            keyframeFragment(0),
+            keyframeFragment(6_000),
+            keyframeFragment(12_000),
+            keyframeFragment(18_000));
+    var output =
+        IsoBoxes.concat(
+            IsoBoxes.ftyp(),
+            IsoBoxes.videoAndAudioMoov(),
+            preroll,
+            nearlyCappedFragmentsFrom(24_000));
+    var process = ScriptedProcess.builder().output(output).build();
+    sink.holding(1);
+
+    var producer = producerOfOneSecondSegments(process).startSequenceNumber(1).start();
+
+    var budgetStop = preroll.length + NEARLY_CAPPED_BUDGET_STOP;
+    awaiting().until(() -> process.bytesTaken() == budgetStop);
+    await()
+        .during(Duration.ofMillis(200))
+        .atMost(OUTCOME_LIMIT)
+        .until(() -> process.bytesTaken() == budgetStop);
+    sink.release();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(sink.acceptedNames())
+        .containsExactly("init.mp4", "segment1.m4s", "segment2.m4s", "segment3.m4s");
+  }
+
+  @Test
+  @DisplayName(
       "Should not complete the attempt when the output has ended but FFmpeg has not exited")
   void shouldNotCompleteTheAttemptWhenTheOutputHasEndedButFfmpegHasNotExited() {
     var recording = recording(ENCODED_RECORDING);
