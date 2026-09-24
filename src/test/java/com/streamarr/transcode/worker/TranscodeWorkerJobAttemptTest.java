@@ -282,6 +282,40 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
+  @Test
+  @DisplayName(
+      "Should not report the stopped attempt to a new session when the worker reconnects while"
+          + " FFmpeg quits")
+  void shouldNotReportTheStoppedAttemptToANewSessionWhenTheWorkerReconnectsWhileFfmpegQuits()
+      throws Exception {
+    var launcher =
+        new ScriptedProcessLauncher(
+            _ ->
+                ScriptedProcessLauncher.runningProcessBuilder()
+                    .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+                    .build());
+    var job = variantJobBuilder().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var firstSession = runtime.connection();
+      startVariant(firstSession, job);
+      var process = launcher.process(fromProto(job.getJobAttemptId()));
+      var stop = CompletableFuture.runAsync(() -> deliverStop(firstSession, job));
+      await().atMost(EVENT_LIMIT).until(() -> process.stdinText().equals("q"));
+
+      worker.close();
+      worker.start("localhost", 1);
+      var nextSession = runtime.connection();
+      nextSession.registration();
+      process.exit();
+
+      assertThat(stop).succeedsWithin(EVENT_LIMIT);
+      assertThat(process.wasDestroyedForcibly()).isFalse();
+      assertThat(eventsOf(nextSession)).isEmpty();
+    }
+  }
+
   @RepeatedTest(20)
   @DisplayName("Should settle the attempt once when a stop races FFmpeg's failure")
   void shouldSettleTheAttemptOnceWhenAStopRacesFfmpegsFailure() throws Exception {

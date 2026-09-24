@@ -346,19 +346,29 @@ public final class TranscodeWorker implements AutoCloseable {
     // The stop waits for FFmpeg to exit, so it runs without the monitor that uploads need.
     claimStoppedAttempt(command)
         .ifPresent(
-            producer -> {
-              producer.stop();
-              tryReport(jobAttemptStopped(command.getJobAttemptId()));
+            stop -> {
+              stop.producer().stop();
+              reportStopped(stop, command.getJobAttemptId());
             });
   }
 
   // Claims the attempt so that its producer's own outcome is never reported.
-  private synchronized Optional<Producer> claimStoppedAttempt(StopVariantCommand command) {
+  private synchronized Optional<ClaimedStop> claimStoppedAttempt(StopVariantCommand command) {
     if (!command.getTarget().equals(identity())) {
       return Optional.empty();
     }
 
-    return Optional.ofNullable(activeAttempts.remove(fromProto(command.getJobAttemptId())));
+    return Optional.ofNullable(activeAttempts.remove(fromProto(command.getJobAttemptId())))
+        .map(producer -> new ClaimedStop(producer, requests));
+  }
+
+  // A stop that outlives its session reports nothing; the server learned of the end on disconnect.
+  private synchronized void reportStopped(ClaimedStop stop, Uuid jobAttemptId) {
+    if (requests != stop.session()) {
+      return;
+    }
+
+    tryReport(jobAttemptStopped(jobAttemptId));
   }
 
   private void reportFailure(VariantJob job, JobAttemptFailure failure) {
@@ -657,6 +667,9 @@ public final class TranscodeWorker implements AutoCloseable {
   }
 
   private record ClosedSession(WorkerProbeSession probes, List<Producer> attempts) {}
+
+  private record ClaimedStop(
+      Producer producer, StreamObserver<EstablishWorkerSessionRequest> session) {}
 
   private sealed interface AttemptStart {}
 
