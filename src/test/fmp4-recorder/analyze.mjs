@@ -207,6 +207,15 @@ const FIXTURES = [
       'picture (frame 432) references the previous GOP, so the segment it opens cannot be decoded on its own.',
     hlsComparisons: [hlsComparison('13-x265-cfr-missed-forced-keyframe.video-only', 'pipe-recipe', { audio: false })],
   },
+  {
+    name: '13-x265-cfr-floored-gop', source: 'cfr.mp4', mode: 'encode', encoder: 'libx265', seek: 0, start: 0,
+    proves: 'libx265 with the worker\'s arguments under the floored GOP of 143 frames that it gets while unverified: ' +
+      'as in 11, the GOP keyframe one frame before every later boundary (frames 143, 287, 431, 575) and on the last ' +
+      'frame (719) joins the earlier segment, so each of the 5 segments holds two keyframes and opens at its forced ' +
+      'keyframe. Every keyframe after frame 0 is a CRA; the GOP keyframes at frames 143 and 287 lead two RASL ' +
+      'pictures each inside the earlier segment, and no RASL picture follows a forced keyframe that opens a segment.',
+    hlsComparisons: [hlsComparison('13-x265-cfr-floored-gop.video-only', 'pipe-recipe', { audio: false })],
+  },
 ];
 
 const INITIALIZATION_SEGMENT_IDENTITY_PAIRS = [
@@ -223,8 +232,9 @@ const RECIPE =
   '-avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128 <codec args> [-bsf:a aac_adtstoasc ' +
   'when copying AAC] [encode: -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 expr:gte(t,n_forced*6) ' +
   '-g:v:0 145 = ceil(6 x 23.976) + 1 for an encoder verified to honour forced keyframes (libx264, SVT-AV1), else ' +
-  '143 = floor(6 x 23.976) (fixture 11) (-keyint_min:v:0 with the same value for SVT-AV1) (-sc_threshold:v:0 0 for ' +
-  'libx264); fixtures 13 and 13b give libx265, not verified, 145 to test whether it qualifies] ' +
+  '143 = floor(6 x 23.976) (fixtures 11 and 13c) (-keyint_min:v:0 with the same value for SVT-AV1) ' +
+  '(-sc_threshold:v:0 0 for libx264); fixtures 13 and 13b give libx265, not verified, 145 to test whether it ' +
+  'qualifies] ' +
   '[fixtures 11 to 13 only: -t 30] -threads 1 -f mp4 -movflags ' +
   'cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont -frag_duration 1000000 pipe:1';
 

@@ -245,13 +245,14 @@ class RecordedFfmpegOutputTest {
         .allSatisfy(segment -> assertThat(syncFirstFragmentCount(segment)).isOne());
   }
 
-  @Test
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({"11-encode-cfr-floored-gop.fmp4", "13-x265-cfr-floored-gop.fmp4"})
   @DisplayName(
       "Should keep both keyframes in one segment when an unverified encoder's floored GOP fires one"
           + " frame early")
-  void shouldKeepBothKeyframesInOneSegmentWhenAnUnverifiedEncodersFlooredGopFiresOneFrameEarly()
-      throws IOException {
-    var grouping = group(recording("11-encode-cfr-floored-gop.fmp4"));
+  void shouldKeepBothKeyframesInOneSegmentWhenAnUnverifiedEncodersFlooredGopFiresOneFrameEarly(
+      String file) throws IOException {
+    var grouping = group(recording(file));
 
     assertThat(grouping.delivered())
         .extracting(MediaSegment::sequenceNumber)

@@ -69,6 +69,7 @@ KEY_SVT_PIPE=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$FORCED_EVERY_PER
 KEY_SVT_PIPE_MISSED=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$FORCED_EXCEPT_18" -g:v:0 "$GOP_VERIFIED" -keyint_min:v:0 "$GOP_VERIFIED")
 KEY_X265_PIPE=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$FORCED_EVERY_PERIOD" -g:v:0 "$GOP_VERIFIED")
 KEY_X265_PIPE_MISSED=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$FORCED_EXCEPT_18" -g:v:0 "$GOP_VERIFIED")
+KEY_X265_PIPE_FLOORED=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$FORCED_EVERY_PERIOD" -g:v:0 "$GOP_FLOOR")
 
 # run KIND NAME [start=N] [seek=S] [duration=D] [hls-recipe] [video] SRC -- CODEC/KEYFRAME ARGS...
 #   KIND pipe: ADR 0037's recipe to pipe:1, recorded as out/NAME.fmp4
@@ -219,11 +220,13 @@ run hls 12-encode-cfr-missed-forced-keyframe.video-only video duration=30 src/cf
 run pipe 12-svtav1-cfr-missed-forced-keyframe duration=30 src/cfr.mp4 -- "${SVT[@]}" "${AAC[@]}" "${KEY_SVT_PIPE_MISSED[@]}"
 run hls 12-svtav1-cfr-missed-forced-keyframe.video-only video duration=30 src/cfr.mp4 -- "${SVT[@]}" "${KEY_SVT_PIPE_MISSED[@]}"
 
-# ------------------------------------------------------------------ 13. libx265 under the verified-encoder GOP, with and without a missed forced keyframe
+# ------------------------------------------------------------------ 13. libx265 under the verified-encoder GOP, with and without a missed forced keyframe, and under its own floored GOP
 run pipe 13-x265-cfr duration=30 src/cfr.mp4 -- "${X265[@]}" "${AAC[@]}" "${KEY_X265_PIPE[@]}"
 run hls 13-x265-cfr.video-only video duration=30 src/cfr.mp4 -- "${X265[@]}" "${KEY_X265_PIPE[@]}"
 run pipe 13-x265-cfr-missed-forced-keyframe duration=30 src/cfr.mp4 -- "${X265[@]}" "${AAC[@]}" "${KEY_X265_PIPE_MISSED[@]}"
 run hls 13-x265-cfr-missed-forced-keyframe.video-only video duration=30 src/cfr.mp4 -- "${X265[@]}" "${KEY_X265_PIPE_MISSED[@]}"
+run pipe 13-x265-cfr-floored-gop duration=30 src/cfr.mp4 -- "${X265[@]}" "${AAC[@]}" "${KEY_X265_PIPE_FLOORED[@]}"
+run hls 13-x265-cfr-floored-gop.video-only video duration=30 src/cfr.mp4 -- "${X265[@]}" "${KEY_X265_PIPE_FLOORED[@]}"
 
 # ------------------------------------------------------------------ side claims of ADR 0037 (recorded, not delivered)
 mkdir -p claims

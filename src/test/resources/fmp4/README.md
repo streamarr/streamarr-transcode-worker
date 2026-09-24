@@ -83,7 +83,7 @@ ffmpeg -y [-ss 30] -i SRC -map 0:v:0 -map 0:a:0 -map_metadata -1 -map_chapters -
   x265:   -c:v libx265 -vf scale=-2:36 -b:v 6000 -maxrate 6000 -bufsize 12000
           -x265-params pools=none:frame-threads=1:log-level=error -c:a aac -ac 1 -b:a 8k
           -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 expr:gte(t,n_forced*6)
-          -g:v:0 145
+          -g:v:0 145                                           (fixture 13c: -g:v:0 143)
   -threads 1
   -f mp4 -movflags cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont -frag_duration 1000000 pipe:1
 ```
@@ -91,8 +91,9 @@ ffmpeg -y [-ss 30] -i SRC -map 0:v:0 -map 0:a:0 -map_metadata -1 -map_chapters -
 The frame-count GOP follows ADR 0037's amended ceiling: 145 = ceil(6 × 23.976) + 1 for an encoder
 verified to honour time-based forced keyframes and to restart its GOP count at each one (libx264 and
 SVT-AV1; see [Verified encoders](#verified-encoders)), and 143 = floor(6 × 23.976) for one that is
-not, which fixture 11 stands in for. The libx265 recordings (13) pass the worker's libx265 arguments
-with the verified ceiling to test whether libx265 qualifies. Fixtures 11–13 read only the source's
+not, which fixture 11 stands in for. The libx265 recordings pass the worker's libx265 arguments: 13
+and 13b with the verified ceiling to test whether libx265 qualifies, and 13c with the floored GOP it
+gets while it does not. Fixtures 11–13 read only the source's
 first 30 s (input `-t 30`), and fixtures 12, 12b and 13b replace the forced-keyframe expression with
 `expr:gte(t,(n_forced+gte(n_forced,3))*6)`, which forces 0, 6, 12, 24, 30 … s and never 18 s.
 
@@ -158,6 +159,7 @@ Timescale 24000 unless stated. `n@t` means segment n starts at t seconds.
 | 12b | `12-svtav1-cfr-missed-forced-keyframe.fmp4` | 0 | The same through SVT-AV1: its backstop also lands at frame 433 (18.060 s). |
 | 13 | `13-x265-cfr.fmp4` | 0 | libx265 with the worker's arguments (default open GOP, sample entry `hev1`) under the 145-frame GOP, first 30 s: keyframes only at the forced frames 0, 144, 288, 432 and 576, one per segment. Frame 0 is an IDR (NAL type 20); every forced keyframe after it is a CRA (type 21) despite `-forced-idr 1`. No RASL picture follows them here. |
 | 13b | `13-x265-cfr-missed-forced-keyframe.fmp4` | 0 | libx265 with the forced keyframe for 18 s suppressed: its GOP count restarts at frame 288 as well, and the backstop lands at frame 433 inside interval 3, but as a CRA followed in decode order by one RASL picture (frame 432, presented before it), which references the previous GOP. |
+| 13c | `13-x265-cfr-floored-gop.fmp4` | 0 | libx265 with the worker's arguments under the floored GOP of 143 frames it gets while unverified, first 30 s. As in 11, the GOP keyframe one frame before every later boundary (frames 143, 287, 431, 575) and on the last frame (719) joins the earlier segment: 5 segments of two keyframes, each opening at its forced keyframe. Every keyframe after frame 0 is a CRA; the GOP's CRAs at frames 143 and 287 lead two RASL pictures each inside the earlier segment, and no RASL picture follows a forced CRA that opens a segment. |
 
 Box facts every recording shares (useful for the reader):
 - Top-level boxes are only `ftyp`, `moov`, `moof` and `mdat`, in that order, with no `largesize`, `styp` or `sidx`.
@@ -173,14 +175,14 @@ ADR 0037, as amended, gives an encoder verified by recording to honour time-base
 and to restart its GOP count at each one, a frame-count GOP of ceil(P × fps) + 1 (145 at 23.976 fps).
 While forcing works that GOP never fires; if a forced keyframe were ever dropped, the backstop lands
 just past that boundary, inside its interval. An encoder not verified keeps floor(P × fps) (143),
-which places a second keyframe one frame before most boundaries: before every later boundary of 11,
-and before 9 of 10 in the earlier 66 s floored recording of 1.
+which places a second keyframe one frame before most boundaries: before every later boundary of 11
+and 13c, and before 9 of 10 in the earlier 66 s floored recording of 1.
 
 | Encoder | Honours the forced keyframe | Restarts its GOP count there | Keyframe picture | Verdict |
 |---|---|---|---|---|
 | libx264 | yes: 1, 1b, 3, 5a, 6 key only the forced frames, one per segment | yes: 12's backstop at frame 433 = 288 + 145 | an IDR (NAL type 5) at every keyframe of every H.264 recording, 12's backstop included | verified: 145 |
 | SVT-AV1 | yes: 9, 9b, on the frames libx264 chose in 3 | yes: 12b's backstop at frame 433 | a shown key frame at every keyframe of 9, 9b and 12b, 12b's backstop included | verified: 145 |
-| libx265, default open GOP | yes: 13 keys only the forced frames | yes: 13b's backstop at frame 433 | a CRA (type 21) at every keyframe after frame 0 despite `-forced-idr 1`; 13b's backstop CRA at frame 433 leads a RASL picture | not verified: keep 143 until worker #23 closes libx265's GOPs, then record 13 again |
+| libx265, default open GOP | yes: 13 keys only the forced frames | yes: 13b's backstop at frame 433 | a CRA (type 21) at every keyframe after frame 0 despite `-forced-idr 1`; 13b's backstop CRA at frame 433 leads a RASL picture | not verified: keep 143 (13c) until worker #23 closes libx265's GOPs, then record 13 again |
 | hardware encoders | not recorded | not recorded | not recorded | not verified: 143 until worker #14 |
 
 ## The HLS muxer as differential evidence
@@ -212,7 +214,7 @@ Agreement, exact in ticks:
 | 9 | differs on 7–10 | agrees | a different encode (4 below); its pipe-keyframes-with-audio run agrees |
 | 4 | differs on segment 3 | differs on segment 3 | reference 1 below |
 | 10 | differs on segment 2 | – | the HLS muxer numbers sequentially and never skips |
-| 11, 12, 12b, 13, 13b | – | agrees | the first video frame is at zero, so hlsenc measures from the grid's zero |
+| 11, 12, 12b, 13, 13b, 13c | – | agrees | the first video frame is at zero, so hlsenc measures from the grid's zero |
 
 Every disagreement is explained by where hlsenc measures from, or by an HLS run that encodes other
 keyframes, not by the grouping. `hlsencModel`
@@ -221,7 +223,7 @@ re-implements hlsenc.c's cut rule (FFmpeg n8.1 source, lines 2440–2489):
 - a later keyframe cuts when `pts − start_pts ≥ hls_time × number` in the video time base.
 
 It applies that rule to the HLS run's own keyframes, with `start_pts` = the pts of the first packet
-the muxer receives. The model reproduces the observed HLS cut list in all 33 HLS comparisons
+the muxer receives. The model reproduces the observed HLS cut list in all 34 HLS comparisons
 (`reproducesHlsCuts: true`). Its reference differs from the grid's zero in three ways:
 
 1. **First video frame after zero** (3, 4, 5a, 9: video starts 41 or 41.7 ms after the container
@@ -328,10 +330,12 @@ settle what, if anything, changes because of them.
   reverse join shows it twice. Under the floored GOP the replacement attempt's GOP keyframe at frame
   1007 happened to match the first attempt's boundary and hid this. Forcing keyframes on the absolute grid rather than from the attempt's first
   frame would remove it; nothing here decides that.
-- **libx265 under the worker's arguments keys its forced keyframes as CRA pictures** (13, 13b), not
-  as IDR, although the worker passes `-forced-idr 1`. With no RASL picture after them (13) they
+- **libx265 under the worker's arguments keys its forced keyframes as CRA pictures** (13, 13b, 13c),
+  not as IDR, although the worker passes `-forced-idr 1`. With no RASL picture after them (13) they
   behave as clean random-access points, but the GOP backstop CRA in 13b leads a RASL picture, so the
-  segment it opens cannot be decoded on its own. Closing libx265's GOPs is worker #23's work, and the
+  segment it opens cannot be decoded on its own. Under the floored GOP libx265 gets while unverified
+  (13c), the RASL pictures follow the GOP's CRAs one frame before a boundary, inside the earlier
+  segment, and every segment still opens at a forced CRA that no RASL picture follows. Closing libx265's GOPs is worker #23's work, and the
   `hvc1` tag (the recordings carry `hev1`) is worker #18's.
 - **Under the floored GOP an encode can end in a 1-frame segment past the source's content.** 5a's
   last constant-rate frame, at 30.030 s, was a GOP keyframe and formed a segment 5 holding one frame;
