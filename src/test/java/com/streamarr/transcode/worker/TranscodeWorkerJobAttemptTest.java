@@ -48,6 +48,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.function.IntUnaryOperator;
 import java.util.stream.DoubleStream;
+import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import org.awaitility.core.ConditionFactory;
 import org.junit.jupiter.api.BeforeEach;
@@ -68,6 +69,11 @@ class TranscodeWorkerJobAttemptTest {
   private static final Duration EVENT_LIMIT = Duration.ofSeconds(10);
   private static final int UPLOAD_MESSAGE_BYTES = 64 * 1024;
   private static final int RACE_ITERATIONS = 100;
+  private static final int BURSTS = 10;
+  private static final int BURST_SLOTS = 2;
+
+  // Six such fragments make a segment of about 15 MiB, within the server's 16 MiB cap.
+  private static final int GROWN_MEDIA_DATA_BYTES = 5 * 512 * 1024;
 
   @TempDir Path tempDir;
 
@@ -270,6 +276,110 @@ class TranscodeWorkerJobAttemptTest {
       launcher.process(fromProto(running.getJobAttemptId())).exit();
       launcher.process(fromProto(next.getJobAttemptId())).exit();
     }
+  }
+
+  @Test
+  @DisplayName(
+      "Should start each job in a slot a stop freed and let its reader take its memory while the"
+          + " stopped attempts' FFmpeg still runs when stops and starts arrive in bursts")
+  void
+      shouldStartEachJobInASlotAStopFreedAndLetItsReaderTakeItsMemoryWhileTheStoppedAttemptsFfmpegStillRunsWhenStopsAndStartsArriveInBursts()
+          throws Exception {
+    // Each attempt holds its first segment of about 15 MiB and the fragment that closed it while
+    // the server never acknowledges the initialization segment, so the stopped attempts would hold
+    // more than the worker's budget leaves the new ones unless each stop releases its share.
+    var recording = recording(ENCODED_RECORDING);
+    var firstFragmentOfSegment1 = recording.segments().get(1).firstFragmentIndex();
+    var output =
+        withPaddedMediaData(
+            bytesOf(ENCODED_RECORDING),
+            fragment -> fragment <= firstFragmentOfSegment1 + 2 ? GROWN_MEDIA_DATA_BYTES : 0);
+    var readerWaits = endOfFragment(output, firstFragmentOfSegment1);
+    var launcher =
+        new ScriptedProcessLauncher(
+            _ ->
+                ScriptedProcess.builder()
+                    .output(
+                        Arrays.copyOf(output, endOfFragment(output, firstFragmentOfSegment1 + 2)))
+                    .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+                    .build());
+    var started = new ArrayList<VariantJob>();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.withholdAcknowledgements();
+      var running = startJobs(connection, started);
+      awaitEachReaderAt(launcher, running, readerWaits);
+      for (var burst = 0; burst < BURSTS; burst++) {
+        var stopped = running;
+        stopJobs(connection, stopped);
+        running = startJobs(connection, started);
+
+        awaitEachReaderAt(launcher, running, readerWaits);
+        assertThat(stopped)
+            .allSatisfy(job -> assertThat(processOf(launcher, job).isAlive()).isTrue());
+        stopped.forEach(job -> processOf(launcher, job).exit());
+        stopped.forEach(job -> awaitTerminalEvent(connection, job));
+      }
+
+      stopJobs(connection, running);
+      running.forEach(job -> processOf(launcher, job).exit());
+      running.forEach(job -> awaitTerminalEvent(connection, job));
+      assertThat(started)
+          .hasSize((BURSTS + 1) * BURST_SLOTS)
+          .allSatisfy(
+              job ->
+                  assertThat(terminalEventsOf(connection, job))
+                      .containsExactly(EventCase.JOB_ATTEMPT_STOPPED));
+      assertThat(eventsOf(connection)).doesNotContain(EventCase.JOB_ATTEMPT_FAILED);
+    }
+  }
+
+  // Starts a job in each advertised slot.
+  private static List<VariantJob> startJobs(
+      ScriptedWorkerRuntime.Connection connection, List<VariantJob> started) throws Exception {
+    var jobs = IntStream.range(0, BURST_SLOTS).mapToObj(_ -> variantJobBuilder().build()).toList();
+    for (var job : jobs) {
+      startVariant(connection, job);
+    }
+
+    started.addAll(jobs);
+    return jobs;
+  }
+
+  private static void stopJobs(ScriptedWorkerRuntime.Connection connection, List<VariantJob> jobs)
+      throws Exception {
+    for (var job : jobs) {
+      stopVariant(connection, job);
+    }
+  }
+
+  // Each job's reader takes FFmpeg's output up to the offset and waits there.
+  private static void awaitEachReaderAt(
+      ScriptedProcessLauncher launcher, List<VariantJob> jobs, int offset) {
+    jobs.forEach(job -> promptly().until(() -> processOf(launcher, job).bytesTaken() == offset));
+  }
+
+  private static ScriptedProcess processOf(ScriptedProcessLauncher launcher, VariantJob job) {
+    return launcher.process(fromProto(job.getJobAttemptId()));
+  }
+
+  // Where the fragment at this position after the initialization segment ends.
+  private static int endOfFragment(byte[] output, int fragmentIndex) {
+    var buffer = ByteBuffer.wrap(output);
+    var offset = 0;
+    var mediaDataSeen = 0;
+    while (mediaDataSeen <= fragmentIndex) {
+      var size = buffer.getInt(offset);
+      if (new String(output, offset + 4, 4, StandardCharsets.US_ASCII).equals("mdat")) {
+        mediaDataSeen++;
+      }
+
+      offset += size;
+    }
+
+    return offset;
   }
 
   @ParameterizedTest(name = "container value {0}")
