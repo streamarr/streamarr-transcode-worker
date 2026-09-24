@@ -302,6 +302,35 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"TRANSCODE_MODE_REMUX", "TRANSCODE_MODE_AUDIO_TRANSCODE"})
+  @DisplayName(
+      "Should seek a stream copy to its start sequence number's boundary when the job's seek"
+          + " position names another time")
+  void
+      shouldSeekAStreamCopyToItsStartSequenceNumbersBoundaryWhenTheJobsSeekPositionNamesAnotherTime(
+          TranscodeMode mode) throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJobBuilder();
+    job.getDecisionBuilder().setMode(mode);
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(6)
+        .setStartSequenceNumber(5)
+        .setSeekPositionSeconds(17);
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(launcher.command(fromProto(job.getJobAttemptId())))
+          .containsSubsequence("-ss", "30", "-i");
+    }
+  }
+
   @Test
   @DisplayName("Should run the job when the last advertised media segment is the one it starts at")
   void shouldRunTheJobWhenTheLastAdvertisedMediaSegmentIsTheOneItStartsAt() throws Exception {

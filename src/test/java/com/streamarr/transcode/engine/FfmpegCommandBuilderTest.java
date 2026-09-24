@@ -449,15 +449,15 @@ class FfmpegCommandBuilderTest {
       "Should seek to its first segment when a stream-copy replacement attempt starts mid-stream")
   void shouldSeekToItsFirstSegmentWhenAStreamCopyReplacementAttemptStartsMidStream(
       TranscodeMode mode) {
-    var cmd = command(request(mode).seekPosition(30).startSequenceNumber(5).build(), "copy");
+    var cmd = command(request(mode).startSequenceNumber(5).build(), "copy");
 
     assertThat(cmd).containsSubsequence("-ss", "30", "-i");
   }
 
   @Test
-  @DisplayName("Should place seek before input when seek position is non-zero")
-  void shouldPlaceSeekBeforeInputWhenSeekPositionIsNonZero() {
-    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).seekPosition(300).build(), "libx264");
+  @DisplayName("Should place seek before input when the attempt starts after segment zero")
+  void shouldPlaceSeekBeforeInputWhenTheAttemptStartsAfterSegmentZero() {
+    var cmd = command(request(TranscodeMode.REMUX).startSequenceNumber(50).build(), "copy");
 
     int ssIndex = cmd.indexOf("-ss");
     int iIndex = cmd.indexOf("-i");
@@ -467,8 +467,8 @@ class FfmpegCommandBuilderTest {
   }
 
   @Test
-  @DisplayName("Should not include seek when position is zero")
-  void shouldNotIncludeSeekWhenPositionIsZero() {
+  @DisplayName("Should not include seek when the attempt starts at segment zero")
+  void shouldNotIncludeSeekWhenTheAttemptStartsAtSegmentZero() {
     var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), "libx264");
 
     assertThat(cmd).isNotEmpty().doesNotContain("-ss");
