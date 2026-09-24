@@ -26,6 +26,7 @@ import static com.streamarr.transcode.engine.IsoBoxes.largeSizeHeader;
 import static com.streamarr.transcode.engine.IsoBoxes.mdat;
 import static com.streamarr.transcode.engine.IsoBoxes.moof;
 import static com.streamarr.transcode.engine.IsoBoxes.moofFollowedBy;
+import static com.streamarr.transcode.engine.IsoBoxes.moofPointingAtItsMdat;
 import static com.streamarr.transcode.engine.IsoBoxes.moov;
 import static com.streamarr.transcode.engine.IsoBoxes.tfdt;
 import static com.streamarr.transcode.engine.IsoBoxes.tfhd;
@@ -47,8 +48,6 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Optional;
-import java.util.function.IntFunction;
-import java.util.function.LongFunction;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -429,27 +428,27 @@ class FragmentedMp4ReaderTest {
     var defaultSize = u32(8);
     var defaultFlags = u32(NON_SYNC_SAMPLE_FLAGS);
     var trun = fullBox("trun", VERSION_1, u32(1));
-    LongFunction<byte[]> moofWithDataAt =
-        baseDataOffset ->
-            box(
-                "moof",
+    var moof =
+        moofPointingAtItsMdat(
+            ftyp().length + moov.length,
+            baseDataOffset ->
                 box(
-                    "traf",
-                    fullBox(
-                        "tfhd",
-                        everyField,
-                        u32(VIDEO_TRACK_ID),
-                        u64(baseDataOffset),
-                        sampleDescriptionIndex,
-                        defaultDuration,
-                        defaultSize,
-                        defaultFlags),
-                    tfdt(3003),
-                    trun));
-    var mdatBody = ftyp().length + moov.length + moofWithDataAt.apply(0).length + 8L;
+                    "moof",
+                    box(
+                        "traf",
+                        fullBox(
+                            "tfhd",
+                            everyField,
+                            u32(VIDEO_TRACK_ID),
+                            u64(baseDataOffset),
+                            sampleDescriptionIndex,
+                            defaultDuration,
+                            defaultSize,
+                            defaultFlags),
+                        tfdt(3003),
+                        trun)));
 
-    assertThat(videoStartOf(moov, moofWithDataAt.apply(mdatBody)))
-        .contains(new VideoStart(3003, VIDEO_TIMESCALE, false));
+    assertThat(videoStartOf(moov, moof)).contains(new VideoStart(3003, VIDEO_TIMESCALE, false));
   }
 
   @Test
@@ -467,24 +466,25 @@ class FragmentedMp4ReaderTest {
     var firstSample = concat(u32(1001), u32(5), u32(NON_SYNC_SAMPLE_FLAGS), u32(-1001));
     var secondSample = concat(u32(1001), u32(3), u32(SYNC_SAMPLE_FLAGS), u32(0));
     var moov = moov(Track.video().defaultSampleFlags(SYNC_SAMPLE_FLAGS).build());
-    IntFunction<byte[]> moofWithDataAt =
-        dataOffset ->
-            box(
-                "moof",
+    var moof =
+        moofPointingAtItsMdat(
+            0,
+            dataOffset ->
                 box(
-                    "traf",
-                    tfhd(VIDEO_TRACK_ID),
-                    tfdt(3003),
-                    fullBox(
-                        "trun",
-                        everyField,
-                        sampleCount,
-                        u32(dataOffset),
-                        firstSample,
-                        secondSample)));
+                    "moof",
+                    box(
+                        "traf",
+                        tfhd(VIDEO_TRACK_ID),
+                        tfdt(3003),
+                        fullBox(
+                            "trun",
+                            everyField,
+                            sampleCount,
+                            u32(dataOffset),
+                            firstSample,
+                            secondSample))));
 
-    assertThat(videoStartOf(moov, moofWithDataAt.apply(moofWithDataAt.apply(0).length + 8)))
-        .contains(new VideoStart(2002, VIDEO_TIMESCALE, false));
+    assertThat(videoStartOf(moov, moof)).contains(new VideoStart(2002, VIDEO_TIMESCALE, false));
   }
 
   @Test
@@ -683,8 +683,8 @@ class FragmentedMp4ReaderTest {
   }
 
   @Test
-  @DisplayName("Should read a fragment whose samples fill its mdat exactly")
-  void shouldReadAFragmentWhoseSamplesFillItsMdatExactly() throws IOException {
+  @DisplayName("Should read the fragment when its samples fill its mdat exactly")
+  void shouldReadTheFragmentWhenItsSamplesFillItsMdatExactly() throws IOException {
     var moof =
         moof(
             syncVideoTraf().baseMediaDecodeTime(0L).build(),
@@ -697,76 +697,42 @@ class FragmentedMp4ReaderTest {
         .contains(new VideoStart(0, VIDEO_TIMESCALE, true));
   }
 
-  @ParameterizedTest
-  @CsvSource({"0, true", "-1, false"})
+  @Test
   @DisplayName("Should place a traf's data at its tfhd base when the tfhd declares one")
-  void shouldPlaceATrafsDataAtItsTfhdBaseWhenTheTfhdDeclaresOne(long shift, boolean inside)
-      throws IOException {
-    var moov = videoAndAudioMoov();
-    LongFunction<byte[]> moofWithDataAt =
-        baseDataOffset ->
-            box(
-                "moof",
-                box(
-                    "traf",
-                    fullBox(
-                        "tfhd",
-                        TFHD_BASE_DATA_OFFSET | TFHD_DEFAULT_SAMPLE_SIZE,
-                        u32(VIDEO_TRACK_ID),
-                        u64(baseDataOffset),
-                        u32(8)),
-                    tfdt(0),
-                    syncRun()));
-    var mdatBody = ftyp().length + moov.length + moofWithDataAt.apply(0).length + 8L;
-    var reader = readerOf(concat(ftyp(), moov, moofWithDataAt.apply(mdatBody + shift), mdat(8)));
+  void shouldPlaceATrafsDataAtItsTfhdBaseWhenTheTfhdDeclaresOne() throws IOException {
+    var reader =
+        readerOf(concat(ftyp(), videoAndAudioMoov(), moofWithTfhdBaseShiftedBy(0), mdat(8)));
 
     reader.next();
 
-    if (inside) {
-      assertThat(nextFragment(reader).videoStart()).isPresent();
-      return;
-    }
+    assertThat(nextFragment(reader).videoStart()).isPresent();
+  }
+
+  @Test
+  @DisplayName("Should fail when a tfhd base places a traf's data before its mdat body")
+  void shouldFailWhenATfhdBasePlacesATrafsDataBeforeItsMdatBody() {
+    var reader =
+        readerOf(concat(ftyp(), videoAndAudioMoov(), moofWithTfhdBaseShiftedBy(-1), mdat(8)));
 
     assertFailure(reader, Reason.SAMPLE_DATA_OUTSIDE_MDAT);
   }
 
-  @ParameterizedTest
-  @CsvSource({"5, true", "4, false"})
+  @Test
   @DisplayName(
       "Should continue a run and a traf after the previous one's data when they declare no offset")
-  void shouldContinueARunAndATrafAfterThePreviousOnesDataWhenTheyDeclareNoOffset(
-      int mdatBytes, boolean inside) throws IOException {
-    var sizedRun = VERSION_1 | TRUN_SAMPLE_SIZE;
-    IntFunction<byte[]> moofWithDataAt =
-        dataOffset ->
-            box(
-                "moof",
-                box(
-                    "traf",
-                    tfhd(VIDEO_TRACK_ID),
-                    tfdt(0),
-                    fullBox(
-                        "trun",
-                        sizedRun | TRUN_DATA_OFFSET | TRUN_FIRST_SAMPLE_FLAGS,
-                        u32(1),
-                        u32(dataOffset),
-                        u32(SYNC_SAMPLE_FLAGS),
-                        u32(1)),
-                    fullBox("trun", sizedRun, u32(1), u32(1))),
-                box(
-                    "traf",
-                    fullBox("tfhd", 0, u32(IsoBoxes.AUDIO_TRACK_ID)),
-                    tfdt(0),
-                    fullBox("trun", sizedRun, u32(1), u32(3))));
-    var moof = moofWithDataAt.apply(moofWithDataAt.apply(0).length + 8);
-    var reader = readerOf(concat(ftyp(), videoAndAudioMoov(), moof, mdat(mdatBytes)));
+  void shouldContinueARunAndATrafAfterThePreviousOnesDataWhenTheyDeclareNoOffset()
+      throws IOException {
+    var reader = readerOf(concat(ftyp(), videoAndAudioMoov(), moofOfRunsWithoutOffsets(), mdat(5)));
 
     reader.next();
 
-    if (inside) {
-      assertThat(nextFragment(reader).videoStart()).isPresent();
-      return;
-    }
+    assertThat(nextFragment(reader).videoStart()).isPresent();
+  }
+
+  @Test
+  @DisplayName("Should fail when a run that continues the previous one's data ends past its mdat")
+  void shouldFailWhenARunThatContinuesThePreviousOnesDataEndsPastItsMdat() {
+    var reader = readerOf(concat(ftyp(), videoAndAudioMoov(), moofOfRunsWithoutOffsets(), mdat(4)));
 
     assertFailure(reader, Reason.SAMPLE_DATA_OUTSIDE_MDAT);
   }
@@ -837,6 +803,55 @@ class FragmentedMp4ReaderTest {
         .isThrownBy(() -> Mp4Stream.read(reader))
         .extracting(FragmentedMp4Exception::getReason)
         .isEqualTo(reason);
+  }
+
+  /** A moof whose tfhd base lies the given number of bytes after the mdat body it precedes. */
+  private static byte[] moofWithTfhdBaseShiftedBy(long shift) {
+    return moofPointingAtItsMdat(
+        ftyp().length + videoAndAudioMoov().length,
+        mdatBody ->
+            box(
+                "moof",
+                box(
+                    "traf",
+                    fullBox(
+                        "tfhd",
+                        TFHD_BASE_DATA_OFFSET | TFHD_DEFAULT_SAMPLE_SIZE,
+                        u32(VIDEO_TRACK_ID),
+                        u64(mdatBody + shift),
+                        u32(8)),
+                    tfdt(0),
+                    syncRun())));
+  }
+
+  /**
+   * A moof whose video traf's second run and whose audio traf declare no data offset: 1 video byte
+   * at the first run's offset, 1 after it, then 3 audio bytes.
+   */
+  private static byte[] moofOfRunsWithoutOffsets() {
+    var sizedRun = VERSION_1 | TRUN_SAMPLE_SIZE;
+    return moofPointingAtItsMdat(
+        0,
+        dataOffset ->
+            box(
+                "moof",
+                box(
+                    "traf",
+                    tfhd(VIDEO_TRACK_ID),
+                    tfdt(0),
+                    fullBox(
+                        "trun",
+                        sizedRun | TRUN_DATA_OFFSET | TRUN_FIRST_SAMPLE_FLAGS,
+                        u32(1),
+                        u32(dataOffset),
+                        u32(SYNC_SAMPLE_FLAGS),
+                        u32(1)),
+                    fullBox("trun", sizedRun, u32(1), u32(1))),
+                box(
+                    "traf",
+                    fullBox("tfhd", 0, u32(IsoBoxes.AUDIO_TRACK_ID)),
+                    tfdt(0),
+                    fullBox("trun", sizedRun, u32(1), u32(3)))));
   }
 
   private static TrackFragment.TrackFragmentBuilder syncVideoTraf() {

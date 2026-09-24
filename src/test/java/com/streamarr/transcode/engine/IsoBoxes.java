@@ -4,6 +4,7 @@ import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.function.LongFunction;
 import lombok.Builder;
 
 /** Writes the ISOBMFF boxes of a fragmented MP4 stream for reader tests. */
@@ -82,13 +83,28 @@ final class IsoBoxes {
 
   /** A moof whose runs point at their samples in an mdat whose header has the given length. */
   static byte[] moofFollowedBy(int mdatHeaderBytes, TrackFragment... trackFragments) {
-    var moofBytes = moofWithDataAt(0, trackFragments).length;
-    return moofWithDataAt(moofBytes + mdatHeaderBytes, trackFragments);
+    return pointedAtMdatBody(
+        0, mdatHeaderBytes, dataStart -> moofWithDataAt(dataStart, trackFragments));
   }
 
-  private static byte[] moofWithDataAt(int dataStart, TrackFragment... trackFragments) {
+  /**
+   * The moof a builder writes for the position where the body of the mdat after it starts, when
+   * that mdat has a compact header: pass the moof's stream position for a tfhd base-data-offset, or
+   * 0 for data offsets that count from the moof.
+   */
+  static byte[] moofPointingAtItsMdat(long moofPosition, LongFunction<byte[]> moofWithDataAt) {
+    return pointedAtMdatBody(moofPosition, COMPACT_HEADER_BYTES, moofWithDataAt);
+  }
+
+  private static byte[] pointedAtMdatBody(
+      long moofPosition, int mdatHeaderBytes, LongFunction<byte[]> moofWithDataAt) {
+    var moofBytes = moofWithDataAt.apply(0).length;
+    return moofWithDataAt.apply(moofPosition + moofBytes + mdatHeaderBytes);
+  }
+
+  private static byte[] moofWithDataAt(long dataStart, TrackFragment... trackFragments) {
     var trafs = new byte[trackFragments.length][];
-    var dataOffset = dataStart;
+    var dataOffset = Math.toIntExact(dataStart);
     for (var index = 0; index < trackFragments.length; index++) {
       trafs[index] = trackFragments[index].traf(dataOffset);
       dataOffset += trackFragments[index].sampleBytes();
