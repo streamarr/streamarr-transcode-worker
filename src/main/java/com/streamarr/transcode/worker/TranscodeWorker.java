@@ -203,6 +203,17 @@ public final class TranscodeWorker implements AutoCloseable {
       return new Refused();
     }
 
+    // Only active attempts hold a slot: a stopped attempt's producer delivers and holds nothing
+    // more, and the server freed its slot when it sent the stop.
+    if (activeAttempts.size() >= configuration.availableSlots()) {
+      log.warn(
+          "Refusing job attempt {}: all {} advertised slots are occupied",
+          fromProto(job.getJobAttemptId()),
+          configuration.availableSlots());
+      reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED);
+      return new Refused();
+    }
+
     Producer producer;
     try {
       producer =

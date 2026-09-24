@@ -201,6 +201,77 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
+  @Test
+  @DisplayName(
+      "Should refuse a job beyond the advertised slots as a startup failure without launching"
+          + " FFmpeg")
+  void shouldRefuseAJobBeyondTheAdvertisedSlotsAsAStartupFailureWithoutLaunchingFfmpeg()
+      throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var first = variantJobBuilder().build();
+    var second = variantJobBuilder().build();
+    var beyond = variantJobBuilder().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      assertThat(connection.registration().getAvailableSlots()).isEqualTo(2);
+      startVariant(connection, first);
+      startVariant(connection, second);
+
+      startVariant(connection, beyond);
+
+      assertThat(eventsOf(connection))
+          .containsExactly(
+              EventCase.JOB_ATTEMPT_STARTED,
+              EventCase.JOB_ATTEMPT_STARTED,
+              EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getJobAttemptId())
+          .isEqualTo(beyond.getJobAttemptId());
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED);
+      assertThat(launcher.hasLaunched(fromProto(beyond.getJobAttemptId()))).isFalse();
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should run a job in the slot a stopped attempt freed while its FFmpeg is still quitting")
+  void shouldRunAJobInTheSlotAStoppedAttemptFreedWhileItsFfmpegIsStillQuitting() throws Exception {
+    var launcher =
+        new ScriptedProcessLauncher(
+            _ ->
+                ScriptedProcessLauncher.runningProcessBuilder()
+                    .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+                    .build());
+    var stopped = variantJobBuilder().build();
+    var running = variantJobBuilder().build();
+    var next = variantJobBuilder().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, stopped);
+      startVariant(connection, running);
+      var quitting = launcher.process(fromProto(stopped.getJobAttemptId()));
+      stopVariant(connection, stopped);
+      await().atMost(EVENT_LIMIT).until(() -> quitting.stdinText().equals("q"));
+
+      startVariant(connection, next);
+
+      assertThat(quitting.isAlive()).isTrue();
+      assertThat(eventsOf(connection))
+          .containsExactly(
+              EventCase.JOB_ATTEMPT_STARTED,
+              EventCase.JOB_ATTEMPT_STARTED,
+              EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(launcher.hasLaunched(fromProto(next.getJobAttemptId()))).isTrue();
+      quitting.exit();
+      launcher.process(fromProto(running.getJobAttemptId())).exit();
+      launcher.process(fromProto(next.getJobAttemptId())).exit();
+    }
+  }
+
   @ParameterizedTest(name = "container value {0}")
   @ValueSource(ints = {0, 1, Integer.MAX_VALUE})
   @DisplayName(
