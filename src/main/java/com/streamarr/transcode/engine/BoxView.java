@@ -3,7 +3,6 @@ package com.streamarr.transcode.engine;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import lombok.NonNull;
 
 /** A box's type and the body bytes the reader already holds, viewed without copying them. */
@@ -26,12 +25,9 @@ record BoxView(@NonNull String type, @NonNull ByteBuffer body) {
     return children;
   }
 
-  Optional<BoxView> child(String childType) {
-    return children(childType).stream().findFirst();
-  }
-
   BoxView requiredChild(String childType) {
-    return child(childType)
+    return children(childType).stream()
+        .findFirst()
         .orElseThrow(() -> FragmentedMp4Exception.malformed(type + " holds no " + childType));
   }
 
