@@ -79,7 +79,7 @@ public final class TranscodeWorker implements AutoCloseable {
   private final Optional<FfprobeExecutor> ffprobe;
   private final WorkerRuntime runtime;
   private final Map<UUID, ActiveAttempt> activeAttempts = new HashMap<>();
-  private final Set<Thread> stoppingAttempts = new HashSet<>();
+  private final Set<Thread> stopThreads = new HashSet<>();
 
   private ManagedChannel channel;
   private StreamObserver<EstablishWorkerSessionRequest> requests;
@@ -410,31 +410,32 @@ public final class TranscodeWorker implements AutoCloseable {
     var stopping =
         Thread.ofVirtual()
             .name("stop-" + fromProto(command.getJobAttemptId()))
-            .unstarted(() -> finishStop(stop, command.getJobAttemptId()));
-    stoppingAttempts.add(stopping);
+            .unstarted(() -> finishStop(stop));
+    stopThreads.add(stopping);
     stopping.start();
   }
 
   // The producer settles the stop unless it had already recorded another outcome, which the worker
   // then reports instead: a failure recorded before the stop stays a failure.
-  private void finishStop(ClaimedStop stop, Uuid jobAttemptId) {
+  private void finishStop(ClaimedStop stop) {
     try {
       var producer = stop.attempt().producer();
       producer.stop();
       reportClaimed(stop, producer.outcome().join());
     } catch (RuntimeException e) {
-      log.error("Stopping job attempt {} failed", fromProto(jobAttemptId), e);
+      log.error(
+          "Stopping job attempt {} failed", fromProto(stop.attempt().job().getJobAttemptId()), e);
     } finally {
       releaseStop();
     }
   }
 
   private synchronized void releaseStop() {
-    stoppingAttempts.remove(Thread.currentThread());
+    stopThreads.remove(Thread.currentThread());
   }
 
   private synchronized List<Thread> stopsInProgress() {
-    return List.copyOf(stoppingAttempts);
+    return List.copyOf(stopThreads);
   }
 
   private void awaitStopsInProgress() {
@@ -708,7 +709,7 @@ public final class TranscodeWorker implements AutoCloseable {
         throws InterruptedException, TimeoutException {
       var readinessDeadline = System.nanoTime() + readinessTimeout.toNanos();
       while (!call.isReady() && !response.isDone()) {
-        TimeUnit.NANOSECONDS.timedWait(this, nanosUntilADeadline(readinessDeadline));
+        TimeUnit.NANOSECONDS.timedWait(this, nanosUntilNextDeadline(readinessDeadline));
       }
 
       if (response.isDone()) {
@@ -725,7 +726,7 @@ public final class TranscodeWorker implements AutoCloseable {
 
     // Holds this monitor. The time left before the first of the readiness deadline and the
     // acknowledgement deadline passes.
-    private long nanosUntilADeadline(long readinessDeadline) throws TimeoutException {
+    private long nanosUntilNextDeadline(long readinessDeadline) throws TimeoutException {
       var now = System.nanoTime();
       var untilReady = readinessDeadline - now;
       if (untilReady <= 0) {
