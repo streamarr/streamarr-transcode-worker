@@ -58,14 +58,7 @@ if grep -Fq -- "--enable-nonfree" <<<"${version_output}"; then
   echo "FFmpeg must not include nonfree components" >&2
   exit 1
 fi
-# The worker writes fragmented MP4 to a pipe with these mp4 muxer options.
-mp4_muxer_help="$("${layer}/bin/ffmpeg" -hide_banner -h muxer=mp4 2>&1)"
-for option in -frag_duration cmaf delay_moov skip_trailer frag_keyframe frag_discont; do
-  if ! grep -Fq -- "${option}" <<<"${mp4_muxer_help}"; then
-    echo "FFmpeg's mp4 muxer lacks ${option}" >&2
-    exit 1
-  fi
-done
+ffmpeg_runtime_require_mp4_muxer_options "$("${layer}/bin/ffmpeg" -hide_banner -h muxer=mp4 2>&1)"
 # The notice inventory starts from this capture, so a differing binary is unreviewed.
 reviewed_buildconf="notices/buildconf-${sbom_arch}.txt"
 if ! ffmpeg_runtime_buildconf "${layer}/bin/ffmpeg" \

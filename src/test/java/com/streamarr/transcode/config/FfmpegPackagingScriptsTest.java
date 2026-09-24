@@ -32,6 +32,8 @@ class FfmpegPackagingScriptsTest {
       Path.of("buildpacks/ffmpeg/lib/lock.sh").toAbsolutePath();
   private static final Path HTTP_LIBRARY =
       Path.of("buildpacks/ffmpeg/lib/http.sh").toAbsolutePath();
+  private static final Path RUNTIME_LIBRARY =
+      Path.of("buildpacks/ffmpeg/lib/runtime.sh").toAbsolutePath();
   private static final Path IMAGE_VERIFIER =
       Path.of(".github/actions/pack-build/verify-ffmpeg-image.sh").toAbsolutePath();
 
@@ -1160,6 +1162,7 @@ class FfmpegPackagingScriptsTest {
     var buildpackDirectory = Files.createDirectories(verifierRoot.resolve("buildpacks/ffmpeg"));
     var buildpackLibrary = Files.createDirectory(buildpackDirectory.resolve("lib"));
     Files.copy(LOCK_LIBRARY, buildpackLibrary.resolve("lock.sh"));
+    Files.copy(RUNTIME_LIBRARY, buildpackLibrary.resolve("runtime.sh"));
     var futureVersion = "8.2.0-1";
     var futureLock = lockWithVersion(futureVersion, "abcdef1234" + "0".repeat(30));
     Files.writeString(buildpackDirectory.resolve("ffmpeg.lock"), futureLock);

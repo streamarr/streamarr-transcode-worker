@@ -13,6 +13,8 @@ repository_root="$(cd "${script_dir}/../../.." && pwd)"
 lock_file="${repository_root}/buildpacks/ffmpeg/ffmpeg.lock"
 # shellcheck source=../../../buildpacks/ffmpeg/lib/lock.sh
 . "${repository_root}/buildpacks/ffmpeg/lib/lock.sh"
+# shellcheck source=../../../buildpacks/ffmpeg/lib/runtime.sh
+. "${repository_root}/buildpacks/ffmpeg/lib/runtime.sh"
 
 ffmpeg_lock_validate "${lock_file}"
 expected_ffmpeg_version="$(ffmpeg_lock_value "${lock_file}" version)"
@@ -41,7 +43,8 @@ verify_label org.opencontainers.image.revision "${expected_revision}"
 verify_label org.streamarr.contract.version "${expected_contract}"
 
 EXPECTED_FFMPEG_VERSION="${expected_ffmpeg_version}" \
-  docker run --rm --interactive --env EXPECTED_FFMPEG_VERSION \
+  REQUIRED_MP4_MUXER_OPTIONS="$(ffmpeg_runtime_mp4_muxer_options)" \
+  docker run --rm --interactive --env EXPECTED_FFMPEG_VERSION --env REQUIRED_MP4_MUXER_OPTIONS \
   --entrypoint /cnb/lifecycle/launcher "${image}" \
   /bin/bash -euo pipefail -s <<'SCRIPT'
   ffmpeg="$(command -v ffmpeg)"
@@ -56,7 +59,7 @@ EXPECTED_FFMPEG_VERSION="${expected_ffmpeg_version}" \
   fi
 
   mp4_muxer_help="$("${ffmpeg}" -hide_banner -h muxer=mp4 2>&1)"
-  for option in -frag_duration cmaf delay_moov skip_trailer frag_keyframe frag_discont; do
+  for option in ${REQUIRED_MP4_MUXER_OPTIONS}; do
     grep -F -- "${option}" <<<"${mp4_muxer_help}" >/dev/null
   done
 
