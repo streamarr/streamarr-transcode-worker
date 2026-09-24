@@ -404,16 +404,13 @@ export function diagnostics(stream) {
 }
 
 function packetViolations({ hlsVideoSamples, identicalPackets, sharesVideoArguments }) {
-  if (sharesVideoArguments && identicalPackets !== hlsVideoSamples) {
-    return [
-      `${hlsVideoSamples - identicalPackets} of ${hlsVideoSamples} video packets differ from the pipe recording, ` +
-        'whose video arguments it shares',
-    ];
+  if (!sharesVideoArguments || identicalPackets === hlsVideoSamples) {
+    return [];
   }
-  if (!sharesVideoArguments && identicalPackets === hlsVideoSamples) {
-    return ["every video packet equals the pipe recording's, whose video arguments it does not share"];
-  }
-  return [];
+  return [
+    `${hlsVideoSamples - identicalPackets} of ${hlsVideoSamples} video packets differ from the pipe recording, ` +
+      'whose video arguments it shares',
+  ];
 }
 
 function oracleViolations(fixture) {

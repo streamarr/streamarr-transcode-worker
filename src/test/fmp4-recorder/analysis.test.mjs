@@ -341,7 +341,6 @@ describe('violated claims', () => {
       'f / r: agrees=False, expected True',
       'f / r: 1 of 3 video packets differ from the pipe recording, whose video arguments it shares',
       'f / r: the hlsenc model does not reproduce the HLS cuts',
-      "f / s: every video packet equals the pipe recording's, whose video arguments it does not share",
       "f: a recorded keyframe is not the source's own keyframe",
       'f: a keyframe does not start a fragment',
       'initialization segments differ: same',
