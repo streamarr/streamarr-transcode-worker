@@ -46,6 +46,16 @@ function hlsComparison(run, flags, { audio = true, reference = null, restrict = 
   return { run, flags, audio, reference, restrict, expect };
 }
 
+// How a fixture deliberately departs from the worker's recipe; a fixture without one follows it,
+// fixture-only additions aside, and FfmpegCommandBuilderRecipeTest pins the worker to it.
+const FIRST_30_SECONDS = 'only the first 30 s of the source';
+const MISSED_FORCED_KEYFRAME = 'the forced keyframe for 18 s suppressed';
+const X265_WITH_FIXTURE_PARAMS = 'with -x265-params that keep it single-threaded and quiet';
+const X265_UNDER_THE_VERIFIED_GOP =
+  `libx265, not verified, under the verified GOP of 145 frames, ${X265_WITH_FIXTURE_PARAMS}`;
+const X265_UNDER_THE_FLOORED_GOP =
+  `libx265 under the floored GOP of 143 frames it gets while unverified, ${X265_WITH_FIXTURE_PARAMS}`;
+
 const FIXTURES = [
   {
     name: '01-encode-cfr', source: 'cfr.mp4', mode: 'encode', encoder: 'libx264', seek: 0, start: 0,
@@ -174,6 +184,8 @@ const FIXTURES = [
   },
   {
     name: '11-encode-cfr-floored-gop', source: 'cfr.mp4', mode: 'encode', encoder: 'libx264', seek: 0, start: 0,
+    recipeDeviation:
+      `libx264 under the floored GOP of 143 frames, standing in for an encoder not verified; ${FIRST_30_SECONDS}`,
     proves: 'The first 30 s of 01 under the floored GOP of floor(6 x 23.976) = 143 frames that ADR 0037 keeps for ' +
       'an encoder not verified to honour forced keyframes: the GOP keyframe one frame before every later boundary ' +
       '(frames 143, 287, 431, 575) and on the last frame (719) is a 1-frame keyframe-first fragment that joins the ' +
@@ -182,6 +194,7 @@ const FIXTURES = [
   },
   {
     name: '12-encode-cfr-missed-forced-keyframe', source: 'cfr.mp4', mode: 'encode', encoder: 'libx264', seek: 0, start: 0,
+    recipeDeviation: `${MISSED_FORCED_KEYFRAME}; ${FIRST_30_SECONDS}`,
     proves: 'libx264 over the first 30 s under the verified GOP of 145 frames with the forced keyframe for 18 s ' +
       'suppressed: the GOP count restarts at the forced keyframe at 12.012 s (frame 288), so the backstop keyframe ' +
       'lands 145 frames later at 18.060 s (frame 433), inside interval 3, and no segment number is skipped.',
@@ -189,12 +202,14 @@ const FIXTURES = [
   },
   {
     name: '12-svtav1-cfr-missed-forced-keyframe', source: 'cfr.mp4', mode: 'encode', encoder: 'libsvtav1', seek: 0, start: 0,
+    recipeDeviation: `${MISSED_FORCED_KEYFRAME}; ${FIRST_30_SECONDS}`,
     proves: 'The same suppressed forced keyframe through SVT-AV1: its GOP count also restarts at the forced keyframe ' +
       'at frame 288, and the backstop keyframe lands at frame 433 (18.060 s), inside interval 3.',
     hlsComparisons: [hlsComparison('12-svtav1-cfr-missed-forced-keyframe.video-only', 'pipe-recipe', { audio: false })],
   },
   {
     name: '13-x265-cfr', source: 'cfr.mp4', mode: 'encode', encoder: 'libx265', seek: 0, start: 0,
+    recipeDeviation: `${X265_UNDER_THE_VERIFIED_GOP}; ${FIRST_30_SECONDS}`,
     proves: 'libx265 with the worker\'s arguments (open GOP by default) under the 145-frame GOP: it honours every ' +
       'time-based forced keyframe (frames 144, 288, 432, 576), but despite -forced-idr 1 each one is a CRA ' +
       '(NAL type 21); only frame 0 is an IDR (type 20). No RASL picture follows them here.',
@@ -202,6 +217,7 @@ const FIXTURES = [
   },
   {
     name: '13-x265-cfr-missed-forced-keyframe', source: 'cfr.mp4', mode: 'encode', encoder: 'libx265', seek: 0, start: 0,
+    recipeDeviation: `${X265_UNDER_THE_VERIFIED_GOP}; ${MISSED_FORCED_KEYFRAME}; ${FIRST_30_SECONDS}`,
     proves: 'libx265 with the forced keyframe for 18 s suppressed: its GOP count restarts at the forced keyframe at ' +
       'frame 288 and the backstop lands at frame 433 (18.060 s), inside interval 3, but as a CRA whose RASL ' +
       'picture (frame 432) references the previous GOP, so the segment it opens cannot be decoded on its own.',
@@ -209,6 +225,7 @@ const FIXTURES = [
   },
   {
     name: '13-x265-cfr-floored-gop', source: 'cfr.mp4', mode: 'encode', encoder: 'libx265', seek: 0, start: 0,
+    recipeDeviation: `${X265_UNDER_THE_FLOORED_GOP}; ${FIRST_30_SECONDS}`,
     proves: 'libx265 with the worker\'s arguments under the floored GOP of 143 frames that it gets while unverified: ' +
       'as in 11, the GOP keyframe one frame before every later boundary (frames 143, 287, 431, 575) and on the last ' +
       'frame (719) joins the earlier segment, so each of the 5 segments holds two keyframes and opens at its forced ' +
@@ -228,13 +245,12 @@ const INITIALIZATION_SEGMENT_DIFFERENCE_PAIRS = [
 ];
 
 const RECIPE =
-  'ffmpeg -y [-ss S] -i SRC -map 0:v:0 -map 0:a:0 -map_metadata -1 -map_chapters -1 -copyts ' +
+  'ffmpeg -y [-ss S] -i SRC -map 0:v:0 -map 0:a:0 -map -0:s -map_metadata -1 -map_chapters -1 -copyts ' +
   '-avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128 <codec args> [-bsf:a aac_adtstoasc ' +
   'when copying AAC] [encode: -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 expr:gte(t,n_forced*6) ' +
-  '-g:v:0 145 = ceil(6 x 23.976) + 1 for an encoder verified to honour forced keyframes (libx264, SVT-AV1), else ' +
-  '143 = floor(6 x 23.976) (fixtures 11 and 13c) (-keyint_min:v:0 with the same value for SVT-AV1) ' +
-  '(-sc_threshold:v:0 0 for libx264); fixtures 13 and 13b give libx265, not verified, 145 to test whether it ' +
-  'qualifies] ' +
+  '(-sc_threshold:v:0 0 for libx264) -g:v:0 145 = ceil(6 x 23.976) + 1 for an encoder verified to honour forced ' +
+  'keyframes (libx264, SVT-AV1), else 143 = floor(6 x 23.976) (fixtures 11 and 13c) (-keyint_min:v:0 with the ' +
+  'same value for SVT-AV1); fixtures 13 and 13b give libx265, not verified, 145 to test whether it qualifies] ' +
   '[fixtures 11 to 13 only: -t 30] -threads 1 -f mp4 -movflags ' +
   'cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont -frag_duration 1000000 pipe:1';
 
@@ -273,6 +289,7 @@ function fixtureRecord({ fixture, record, source, pipe, work }) {
     name: fixture.name,
     file: `${fixture.name}.fmp4`,
     proves: fixture.proves,
+    recipeDeviation: fixture.recipeDeviation ?? null,
     mode: fixture.mode,
     encoder: fixture.encoder,
     source: {

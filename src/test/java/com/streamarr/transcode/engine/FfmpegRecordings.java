@@ -49,10 +49,24 @@ public final class FfmpegRecordings {
 
   public record Expectations(List<Recording> fixtures) {}
 
-  /** One recorded stream and what its initialization segment and media segments must be. */
+  /**
+   * One recorded stream, the FFmpeg command line that recorded it, and what its initialization
+   * segment and media segments must be.
+   *
+   * @param encoder the video encoder of an encode; empty for a stream copy
+   * @param recipeDeviation how the recording deliberately departs from the worker's recipe; empty
+   *     when it follows the recipe
+   */
   public record Recording(
       String file,
+      String mode,
+      Optional<String> encoder,
+      Source source,
+      int seekSeconds,
       int period,
+      long fragmentationTargetMicros,
+      List<String> ffmpegArguments,
+      Optional<String> recipeDeviation,
       int startSequenceNumber,
       Size initializationSegment,
       List<SegmentSummary> segments,
@@ -64,6 +78,16 @@ public final class FfmpegRecordings {
     @Override
     public String toString() {
       return file;
+    }
+  }
+
+  /** The source a recording read, with its video stream's r_frame_rate as ffprobe reports it. */
+  public record Source(String file, String videoRealFrameRate) {
+
+    /** The probed frame rate as the worker receives it: the rational as a double. */
+    public double videoFrameRate() {
+      var rational = videoRealFrameRate.split("/");
+      return Double.parseDouble(rational[0]) / Double.parseDouble(rational[1]);
     }
   }
 

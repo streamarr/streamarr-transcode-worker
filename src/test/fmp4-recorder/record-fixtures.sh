@@ -41,11 +41,12 @@ FORCED_EVERY_PERIOD="expr:gte(t,n_forced*$P)"
 # Forces 0, 6, 12, 24, 30 ... s: the forced keyframe for 18 s never comes, so the GOP backstop must
 # place interval 3's keyframe.
 FORCED_EXCEPT_18="expr:gte(t,(n_forced+gte(n_forced,3))*$P)"
-# Fixture-only additions: single-threaded encoders (-threads 1, and lp=1 for SVT-AV1, whose output
-# otherwise differs on every run), so that a re-recording reproduces the same bytes. For libx264 and
-# libx265 threading changes rate-control decisions, never where a keyframe is placed or where the
-# muxer cuts. For SVT-AV1 lp=1 also excludes upstream issue 2385 (worker #42), which under the
-# worker's threading can reorder packets and crowd keyframes, so no recording shows that bug.
+# Fixture-only additions: quiet, non-interactive logging (FF's -hide_banner -nostdin -loglevel error)
+# and single-threaded encoders (-threads 1, and lp=1 for SVT-AV1, whose output otherwise differs on
+# every run), so that a re-recording reproduces the same bytes. For libx264 and libx265 threading
+# changes rate-control decisions, never where a keyframe is placed or where the muxer cuts. For
+# SVT-AV1 lp=1 also excludes upstream issue 2385 (worker #42), which under the worker's threading can
+# reorder packets and crowd keyframes, so no recording shows that bug.
 DET=(-threads 1)
 
 X264=(-c:v libx264 -vf scale=-2:36 -b:v 6000 -maxrate 6000 -bufsize 12000)
@@ -61,9 +62,10 @@ COMMON_PIPE=(-map_metadata -1 -map_chapters -1 -copyts -avoid_negative_ts disabl
 
 # Two recipes: HLS = the HLS muxer recipe that ADR 0037 replaces, PIPE = ADR 0037's pipe recipe.
 KEY_X264_HLS=(-forced-idr 1 -force_key_frames:0 "$FORCED_EVERY_PERIOD" -sc_threshold:v:0 0)
-KEY_X264_PIPE=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$FORCED_EVERY_PERIOD" -g:v:0 "$GOP_VERIFIED" -sc_threshold:v:0 0)
-KEY_X264_PIPE_FLOORED=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$FORCED_EVERY_PERIOD" -g:v:0 "$GOP_FLOOR" -sc_threshold:v:0 0)
-KEY_X264_PIPE_MISSED=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$FORCED_EXCEPT_18" -g:v:0 "$GOP_VERIFIED" -sc_threshold:v:0 0)
+# The pipe recipe's keyframe arguments in the order FfmpegCommandBuilder passes them.
+KEY_X264_PIPE=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$FORCED_EVERY_PERIOD" -sc_threshold:v:0 0 -g:v:0 "$GOP_VERIFIED")
+KEY_X264_PIPE_FLOORED=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$FORCED_EVERY_PERIOD" -sc_threshold:v:0 0 -g:v:0 "$GOP_FLOOR")
+KEY_X264_PIPE_MISSED=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$FORCED_EXCEPT_18" -sc_threshold:v:0 0 -g:v:0 "$GOP_VERIFIED")
 KEY_SVT_HLS=(-forced-idr 1 -g:v:0 "$GOP_CEIL" -keyint_min:v:0 "$GOP_CEIL")
 KEY_SVT_PIPE=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$FORCED_EVERY_PERIOD" -g:v:0 "$GOP_VERIFIED" -keyint_min:v:0 "$GOP_VERIFIED")
 KEY_SVT_PIPE_MISSED=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$FORCED_EXCEPT_18" -g:v:0 "$GOP_VERIFIED" -keyint_min:v:0 "$GOP_VERIFIED")
@@ -94,8 +96,9 @@ run() {
   done
   local src=$1; shift 2
   if [ "$kind" = pipe ]; then
-    local command=("${FF[@]}" -y "${seek[@]}" "${duration[@]}" -i "$src" "${maps[@]}" "${common[@]}" "$@" \
-      "${DET[@]}" -f mp4 -movflags "$MOVFLAGS" -frag_duration "$FRAG_US" pipe:1)
+    # -map -0:s: the worker excludes subtitle streams; these sources have none.
+    local command=("${FF[@]}" -y "${seek[@]}" "${duration[@]}" -i "$src" "${maps[@]}" -map -0:s "${common[@]}" \
+      "$@" "${DET[@]}" -f mp4 -movflags "$MOVFLAGS" -frag_duration "$FRAG_US" pipe:1)
     printf '%s\n' "${command[@]}" > "out/$name.args"
     "${command[@]}" > "out/$name.fmp4" 2> "logs/$name.log"
     return

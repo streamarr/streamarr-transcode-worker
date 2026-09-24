@@ -7,7 +7,10 @@ in `expected.json` records every segment whose cut point differs from the grid, 
 explains the cause.
 `RecordedFfmpegOutputTest` runs the real `FragmentedMp4Reader` and `SegmentGrouper` over every
 recording and asserts `expected.json`, so the reader and grouper are pinned to the worker's own
-FFmpeg output (ADR "Tests substitute the process"). `FfmpegRecordings` loads a recording and its
+FFmpeg output (ADR "Tests substitute the process"). `FfmpegCommandBuilderRecipeTest` builds the
+worker's FFmpeg command for every recording that follows the recipe (no `recipeDeviation`) and
+requires it to equal that recording's `ffmpegArguments` without the fixture-only additions, so the
+recordings and the worker's command cannot drift apart. `FfmpegRecordings` loads a recording and its
 expectations for any test, such as one that replays the bytes through a scripted `Process`.
 
 | File | What it is |
@@ -70,12 +73,13 @@ ADR 0037's Decision ("One producer per job attempt reads FFmpeg's standard outpu
 probed frame rate passed as the worker would pass it (`r_frame_rate` 24000/1001 as a Java double):
 
 ```
-ffmpeg -y [-ss 30] -i SRC -map 0:v:0 -map 0:a:0 -map_metadata -1 -map_chapters -1
+ffmpeg -hide_banner -nostdin -loglevel error
+  -y [-ss 30] -i SRC -map 0:v:0 -map 0:a:0 -map -0:s -map_metadata -1 -map_chapters -1
   -copyts -avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128
   copy:   -c:v copy -c:a copy -bsf:a aac_adtstoasc
   x264:   -c:v libx264 -vf scale=-2:36 -b:v 6000 -maxrate 6000 -bufsize 12000 -c:a aac -ac 1 -b:a 8k
           -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 expr:gte(t,n_forced*6)
-          -g:v:0 145 -sc_threshold:v:0 0                      (fixture 11: -g:v:0 143)
+          -sc_threshold:v:0 0 -g:v:0 145                      (fixture 11: -g:v:0 143)
   svtav1: -c:v libsvtav1 -vf scale=-2:36 -crf 35 -maxrate 6000 -svtav1-params mbr-overshoot-pct=0:lp=1
           -c:a aac -ac 1 -b:a 8k
           -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 expr:gte(t,n_forced*6)
@@ -97,12 +101,15 @@ gets while it does not. Fixtures 11–13 read only the source's
 first 30 s (input `-t 30`), and fixtures 12, 12b and 13b replace the forced-keyframe expression with
 `expr:gte(t,(n_forced+gte(n_forced,3))*6)`, which forces 0, 6, 12, 24, 30 … s and never 18 s.
 
-Fixture-only additions are `-threads 1`, `lp=1` for SVT-AV1, whose output otherwise differs on
-every invocation, and `pools=none:frame-threads=1` for libx265, which keeps it single-threaded too.
-For libx264 and libx265 none moves a keyframe or a cut. For SVT-AV1, `lp=1` also excludes upstream
-bug #2385 (worker #42): under the worker's threading the pinned SVT-AV1 can emit packets out of
-decode order, which leaves one-tick video samples and crowds keyframes into one or two intervals, so
-no recording here shows that bug. Nothing else differs from the recipe.
+Fixture-only additions are `-hide_banner -nostdin -loglevel error`, which keep FFmpeg's log quiet
+and its input closed, `-threads 1`, `lp=1` for SVT-AV1, whose output otherwise differs on every
+invocation, and `-x265-params pools=none:frame-threads=1:log-level=error` for libx265, which keeps it
+single-threaded and quiet too. For libx264 and libx265 none moves a keyframe or a cut. For SVT-AV1,
+`lp=1` also excludes upstream bug #2385 (worker #42): under the worker's threading the pinned SVT-AV1
+can emit packets out of decode order, which leaves one-tick video samples and crowds keyframes into
+one or two intervals, so no recording here shows that bug. Nothing else differs from the recipe,
+apart from what a fixture's `recipeDeviation` names (fixtures 11–13), and the arguments come in the
+order the worker's command builder passes them.
 
 ## Conventions in expected.json
 
@@ -115,6 +122,8 @@ no recording here shows that bug. Nothing else differs from the recipe.
   after the initialization segment, from 0.
 - `ffmpegArguments` is the recording run's FFmpeg command line exactly as it ran, one argument per
   entry, fixture-only additions included (see [Recipe](#recipe)).
+- `recipeDeviation` says how a fixture deliberately departs from the worker's recipe, and is null
+  when it follows the recipe.
 - `discardedPreroll` lists segments numbered below `startSequenceNumber`, which are never delivered.
   `failure` names the named-reason failure (fixture 10) and the fragment that fails; `segments` then
   lists what is delivered before the failure. A keyframe that skips a segment number still marks the
