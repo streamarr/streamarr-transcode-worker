@@ -249,8 +249,7 @@ class WorkerMediaSmokeTest {
 
     var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
 
-    assertThat(uploads.names()).hasSizeGreaterThan(1001);
-    assertThat(uploads.names()).containsExactlyElementsOf(uploadNames(uploads.names().size() - 1));
+    assertThat(uploads.names()).containsExactlyElementsOf(uploadNames(LONG_SOURCE_SECONDS));
     var start = playable(uploads.contentOf(List.of("init.mp4", "segment0.m4s")));
     assertThat(video(start).getCodec()).isEqualTo(codecFamily);
   }
