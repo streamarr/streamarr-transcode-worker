@@ -81,7 +81,7 @@ public final class Producer {
     this.watchdog = new StallWatchdog(stallTimeout);
     this.reader =
         new FragmentedMp4Reader(
-            watchdog.watch(process.getInputStream()), MAXIMUM_SEGMENT_BYTES, this::admit);
+            watchdog.watch(process.getInputStream()), MAXIMUM_SEGMENT_BYTES, this::tryAdmit);
     this.grouper = settings.grouper();
     this.sink = settings.sink();
     this.memoryBudget = settings.memoryBudget();
@@ -458,26 +458,35 @@ public final class Producer {
       return endingOf(e);
     } catch (IOException e) {
       return new Abandoned(new Failed(ProducerFailure.OUTPUT_UNREADABLE, e.toString()));
-    } catch (AdmissionRefused _) {
+    } catch (FragmentedMp4Reader.Abandoned _) {
       return new Decided();
     }
   }
 
   private Ending deliverEachSegment() throws IOException {
-    for (var unit = reader.next(); unit.isPresent(); unit = reader.next()) {
-      var interruption = deliverClosedSegment(unit.orElseThrow());
-      if (interruption.isPresent()) {
-        return interruption.orElseThrow();
-      }
-
+    var ending = deliverNextUnit();
+    while (ending.isEmpty()) {
       holdOnlyTheAssemblingSegment();
+      ending = deliverNextUnit();
     }
 
-    return grouper
-        .finish()
-        .map(ProducedSegment::of)
-        .flatMap(this::handOff)
-        .orElseGet(EndOfOutput::new);
+    return ending.orElseThrow();
+  }
+
+  // Reads the next unit and delivers the segment it closes; empty while reading goes on. The unit
+  // is referenced only until this returns, so no read from the pipe keeps it reachable.
+  private Optional<Ending> deliverNextUnit() throws IOException {
+    var unit = reader.next();
+    if (unit.isEmpty()) {
+      return Optional.of(
+          grouper
+              .finish()
+              .map(ProducedSegment::of)
+              .flatMap(this::handOff)
+              .orElseGet(EndOfOutput::new));
+    }
+
+    return deliverClosedSegment(unit.orElseThrow());
   }
 
   // Empty unless the unit ends reading, by closing a segment whose delivery ends it or by
@@ -517,36 +526,34 @@ public final class Producer {
   }
 
   // Admits a box's bytes while the reader's and the delivery's holdings fit in the producer's
-  // budget and the box fits in the worker's.
-  private void admit(long boxBytes) {
+  // budget and the box fits in the worker's; false once the attempt is decided.
+  private boolean tryAdmit(long boxBytes) {
     awaitReaderWhile(() -> decision.isEmpty() && heldBytes() + boxBytes > BUDGET_BYTES);
-    reserveInWorkerBudget(boxBytes);
-    boolean admitted;
+    if (!tryReserveInWorkerBudget(boxBytes)) {
+      return false;
+    }
+
     synchronized (lock) {
-      admitted = decision.isEmpty();
-      if (admitted) {
+      if (decision.isEmpty()) {
         readerHeldBytes += boxBytes;
+        return true;
       }
     }
 
-    if (!admitted) {
-      memoryBudget.release(boxBytes);
-      throw new AdmissionRefused();
-    }
+    memoryBudget.release(boxBytes);
+    return false;
   }
 
   // The reader waits for other producers to release memory rather than for FFmpeg, so the stall
-  // watchdog pauses meanwhile.
-  private void reserveInWorkerBudget(long boxBytes) {
+  // watchdog pauses meanwhile. False once the attempt is decided first.
+  private boolean tryReserveInWorkerBudget(long boxBytes) {
     if (memoryBudget.tryReserveAtOnce(boxBytes)) {
-      return;
+      return true;
     }
 
     watchdog.pause();
     try {
-      if (!memoryBudget.tryReserve(boxBytes, this::isDecided)) {
-        throw new AdmissionRefused();
-      }
+      return memoryBudget.tryReserve(boxBytes, this::isDecided);
     } finally {
       watchdog.resume();
     }
@@ -720,13 +727,6 @@ public final class Producer {
   private record Decided() implements Ending {}
 
   private record Delivery(ProducedSegment segment, DeliveryCancellation cancellation) {}
-
-  // Ends reading from inside the reader once the attempt's outcome is decided.
-  private static final class AdmissionRefused extends RuntimeException {
-    private AdmissionRefused() {
-      super(null, null, false, false);
-    }
-  }
 
   @Builder
   private record Settings(

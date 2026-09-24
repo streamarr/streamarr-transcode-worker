@@ -7,8 +7,8 @@ package com.streamarr.transcode.engine;
 interface BoxAdmission {
 
   /**
-   * Returns once the reader may hold the box's bytes; until then the reader reads nothing further.
-   * Throws to end reading instead.
+   * Returns true once the reader may hold the box's bytes, and false when the reader must end
+   * reading instead; until it returns, the reader reads nothing further.
    */
-  void admit(long boxBytes);
+  boolean tryAdmit(long boxBytes);
 }

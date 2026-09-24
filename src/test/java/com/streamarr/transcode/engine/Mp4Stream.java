@@ -20,7 +20,7 @@ record Mp4Stream(InitializationSegment initializationSegment, List<Fragment> fra
 
   /** A reader that admits every box under the cap at once. */
   static FragmentedMp4Reader readerOf(InputStream stream, long maximumSegmentBytes) {
-    return new FragmentedMp4Reader(stream, maximumSegmentBytes, _ -> {});
+    return new FragmentedMp4Reader(stream, maximumSegmentBytes, _ -> true);
   }
 
   /** Reads every unit up to a clean end of the stream. */
