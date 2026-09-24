@@ -11,8 +11,8 @@ public class FfmpegTranscodeEngine {
   // How long a stop waits for FFmpeg to exit after asking it to quit.
   private static final Duration STOP_GRACE_PERIOD = Duration.ofSeconds(5);
 
-  // How long FFmpeg may write nothing while its producer reads its output, unless configured.
-  private static final Duration DEFAULT_ENCODER_STALL_TIMEOUT = Duration.ofSeconds(30);
+  /** How long FFmpeg may write nothing while its producer reads its output, unless configured. */
+  public static final Duration DEFAULT_ENCODER_STALL_TIMEOUT = Duration.ofSeconds(30);
 
   private final FfmpegCommandBuilder commandBuilder;
   private final TranscodeCapabilityService capabilityService;

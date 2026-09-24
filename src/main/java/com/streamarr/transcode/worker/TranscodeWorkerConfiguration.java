@@ -20,8 +20,8 @@ public record TranscodeWorkerConfiguration(
 
   private static final Duration DEFAULT_KEEPALIVE_TIME = Duration.ofSeconds(30);
   private static final Duration DEFAULT_KEEPALIVE_TIMEOUT = Duration.ofSeconds(10);
-  private static final Duration DEFAULT_UPLOAD_READINESS_TIMEOUT = Duration.ofSeconds(30);
-  private static final Duration DEFAULT_UPLOAD_ACKNOWLEDGEMENT_TIMEOUT = Duration.ofSeconds(60);
+  static final Duration DEFAULT_UPLOAD_READINESS_TIMEOUT = Duration.ofSeconds(30);
+  static final Duration DEFAULT_UPLOAD_ACKNOWLEDGEMENT_TIMEOUT = Duration.ofSeconds(60);
 
   public TranscodeWorkerConfiguration {
     if (availableSlots < 1) {

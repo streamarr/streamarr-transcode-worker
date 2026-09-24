@@ -1,5 +1,6 @@
 package com.streamarr.transcode.worker;
 
+import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.temporal.ChronoUnit;
@@ -15,6 +16,7 @@ record TranscodeWorkerSettings(
     String ffmpegPath,
     String ffprobePath,
     Duration fragmentationTarget,
+    Duration encoderStallTimeout,
     TranscodeWorkerConfiguration workerConfiguration) {
 
   private static final String PREFIX = "TRANSCODE_WORKER_";
@@ -37,6 +39,16 @@ record TranscodeWorkerSettings(
             .bootId(UUID.randomUUID())
             .availableSlots(positiveInteger(environment, PREFIX + "SLOTS", 1))
             .sourceNamespaces(Map.of(sourceNamespaceId, path(environment, PREFIX + "SOURCE_ROOT")))
+            .uploadReadinessTimeout(
+                positiveDuration(
+                    environment,
+                    PREFIX + "UPLOAD_READINESS_TIMEOUT",
+                    TranscodeWorkerConfiguration.DEFAULT_UPLOAD_READINESS_TIMEOUT))
+            .uploadAcknowledgementTimeout(
+                positiveDuration(
+                    environment,
+                    PREFIX + "UPLOAD_ACKNOWLEDGEMENT_TIMEOUT",
+                    TranscodeWorkerConfiguration.DEFAULT_UPLOAD_ACKNOWLEDGEMENT_TIMEOUT))
             .build();
     return TranscodeWorkerSettings.builder()
         .controlPlaneHost(optional(environment, PREFIX + "CONTROL_PLANE_HOST", "127.0.0.1"))
@@ -44,6 +56,11 @@ record TranscodeWorkerSettings(
         .ffmpegPath(optional(environment, PREFIX + "FFMPEG_PATH", "ffmpeg"))
         .ffprobePath(optional(environment, PREFIX + "FFPROBE_PATH", "ffprobe"))
         .fragmentationTarget(fragmentationTarget(environment, PREFIX + "FRAGMENTATION_TARGET"))
+        .encoderStallTimeout(
+            positiveDuration(
+                environment,
+                PREFIX + "ENCODER_STALL_TIMEOUT",
+                FfmpegTranscodeEngine.DEFAULT_ENCODER_STALL_TIMEOUT))
         .workerConfiguration(workerConfiguration)
         .build();
   }
@@ -85,10 +102,29 @@ record TranscodeWorkerSettings(
     return target;
   }
 
-  // A whole number of one unit, from nanoseconds to hours, such as 1s or 500ms.
+  private static Duration positiveDuration(
+      Map<String, String> environment, String key, Duration defaultValue) {
+    var configured = environment.get(key);
+    if (configured == null || configured.isBlank()) {
+      return defaultValue;
+    }
+
+    var value = parseDuration(key, configured);
+    if (!value.isPositive()) {
+      throw new IllegalArgumentException(key + " must be positive");
+    }
+
+    return value;
+  }
+
   private static Duration duration(
       Map<String, String> environment, String key, String defaultValue) {
-    var matcher = DURATION.matcher(optional(environment, key, defaultValue));
+    return parseDuration(key, optional(environment, key, defaultValue));
+  }
+
+  // A whole number of one unit, from nanoseconds to hours, such as 1s or 500ms.
+  private static Duration parseDuration(String key, String text) {
+    var matcher = DURATION.matcher(text);
     if (!matcher.matches()) {
       throw invalidDuration(key);
     }

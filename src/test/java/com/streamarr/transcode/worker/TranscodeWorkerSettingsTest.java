@@ -201,6 +201,61 @@ class TranscodeWorkerSettingsTest {
         "TRANSCODE_WORKER_FRAGMENTATION_TARGET must be a duration such as 1s or 500ms");
   }
 
+  @Test
+  @DisplayName("Should bound every wait of a job attempt by default when loading settings")
+  void shouldBoundEveryWaitOfAJobAttemptByDefaultWhenLoadingSettings() {
+    var settings = TranscodeWorkerSettings.fromEnvironment(requiredEnvironment());
+
+    assertThat(settings.encoderStallTimeout()).isEqualTo(Duration.ofSeconds(30));
+    assertThat(settings.workerConfiguration().uploadReadinessTimeout())
+        .isEqualTo(Duration.ofSeconds(30));
+    assertThat(settings.workerConfiguration().uploadAcknowledgementTimeout())
+        .isEqualTo(Duration.ofSeconds(60));
+  }
+
+  @Test
+  @DisplayName("Should use the configured bound of each wait when loading settings")
+  void shouldUseTheConfiguredBoundOfEachWaitWhenLoadingSettings() {
+    var environment = new HashMap<>(requiredEnvironment());
+    environment.put("TRANSCODE_WORKER_ENCODER_STALL_TIMEOUT", "45s");
+    environment.put("TRANSCODE_WORKER_UPLOAD_READINESS_TIMEOUT", "2m");
+    environment.put("TRANSCODE_WORKER_UPLOAD_ACKNOWLEDGEMENT_TIMEOUT", "1500ms");
+
+    var settings = TranscodeWorkerSettings.fromEnvironment(environment);
+
+    assertThat(settings.encoderStallTimeout()).isEqualTo(Duration.ofSeconds(45));
+    assertThat(settings.workerConfiguration().uploadReadinessTimeout())
+        .isEqualTo(Duration.ofMinutes(2));
+    assertThat(settings.workerConfiguration().uploadAcknowledgementTimeout())
+        .isEqualTo(Duration.ofMillis(1500));
+  }
+
+  @ParameterizedTest(name = "{0}={1}")
+  @CsvSource({
+    "TRANSCODE_WORKER_ENCODER_STALL_TIMEOUT, 0s",
+    "TRANSCODE_WORKER_ENCODER_STALL_TIMEOUT, -1s",
+    "TRANSCODE_WORKER_UPLOAD_READINESS_TIMEOUT, 0ms",
+    "TRANSCODE_WORKER_UPLOAD_READINESS_TIMEOUT, -5m",
+    "TRANSCODE_WORKER_UPLOAD_ACKNOWLEDGEMENT_TIMEOUT, 0ns",
+    "TRANSCODE_WORKER_UPLOAD_ACKNOWLEDGEMENT_TIMEOUT, -1h"
+  })
+  @DisplayName("Should reject a wait bound that is not positive when loading settings")
+  void shouldRejectAWaitBoundThatIsNotPositiveWhenLoadingSettings(String key, String bound) {
+    assertInvalidSetting(key, bound, key + " must be positive");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(
+      strings = {
+        "TRANSCODE_WORKER_ENCODER_STALL_TIMEOUT",
+        "TRANSCODE_WORKER_UPLOAD_READINESS_TIMEOUT",
+        "TRANSCODE_WORKER_UPLOAD_ACKNOWLEDGEMENT_TIMEOUT"
+      })
+  @DisplayName("Should explain a wait bound that is not a duration when loading settings")
+  void shouldExplainAWaitBoundThatIsNotADurationWhenLoadingSettings(String key) {
+    assertInvalidSetting(key, "30", key + " must be a duration such as 1s or 500ms");
+  }
+
   private void assertInvalidSetting(String key, String value, String expectedMessage) {
     var environment = new HashMap<>(requiredEnvironment());
     environment.put(key, value);

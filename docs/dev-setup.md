@@ -52,6 +52,9 @@ Settings are read from the environment at startup. The three variables in the ex
 | `TRANSCODE_WORKER_FFMPEG_PATH` | `ffmpeg` | FFmpeg executable |
 | `TRANSCODE_WORKER_FFPROBE_PATH` | `ffprobe` | ffprobe executable |
 | `TRANSCODE_WORKER_FRAGMENTATION_TARGET` | `1s` | Fragmentation target: the media duration after which FFmpeg starts a new fragment at the next packet: a whole number with a unit from `ns` to `h`, such as `1s` or `500ms`. Keep it well below the segment period |
+| `TRANSCODE_WORKER_ENCODER_STALL_TIMEOUT` | `30s` | How long FFmpeg may write nothing to its output while the worker reads it. The worker then fails the job attempt and asks FFmpeg to terminate, destroying it after a 5 s grace period, because a hung FFmpeg can ignore the request. Time spent waiting for the server does not count. Keep it above the time FFmpeg needs to write its first fragment. A positive duration in the same format |
+| `TRANSCODE_WORKER_UPLOAD_READINESS_TIMEOUT` | `30s` | How long a segment upload waits for the server to accept its next message before the job attempt fails. A positive duration in the same format |
+| `TRANSCODE_WORKER_UPLOAD_ACKNOWLEDGEMENT_TIMEOUT` | `60s` | How long a segment upload may take, counted from its first message, until the server acknowledges the segment, before the job attempt fails. A positive duration in the same format |
 | `SERVER_PORT` | `9091` | HTTP port for health checks |
 
 ### Filename Locale
