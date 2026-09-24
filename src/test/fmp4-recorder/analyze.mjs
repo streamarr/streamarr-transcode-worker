@@ -284,6 +284,7 @@ function fixtureRecord({ fixture, record, source, pipe, work }) {
     seekSeconds: fixture.seek,
     period: PERIOD,
     fragmentationTargetMicros: FRAGMENTATION_TARGET_MICROS,
+    ffmpegArguments: record.ffmpegArguments,
     startSequenceNumber: fixture.start,
     videoTrackId,
     videoTimescale,
@@ -347,12 +348,16 @@ function main() {
   for (const fixture of FIXTURES) {
     const path = join(args.work, 'out', `${fixture.name}.fmp4`);
     const stream = readFiles([path]);
+    const ffmpegArguments = readFileSync(join(args.work, 'out', `${fixture.name}.args`), 'utf8')
+      .split('\n')
+      .slice(0, -1);
     const videoTrack = videoTrackOf(stream);
     pipe.set(fixture.name, {
       name: fixture.name,
       stream,
       videoTimescale: videoTrack.timescale,
       videoTrackId: videoTrack.trackId,
+      ffmpegArguments,
       path,
     });
   }

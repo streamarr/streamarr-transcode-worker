@@ -34,9 +34,9 @@ decide (tracks, initialization segment, media segments, preroll, failure, audio-
 diagnostics, a copy's keyframes, each HLS comparison's disagreements with the grid, the
 initialization-segment pairs), and fails on every fact `expected.json` states differently, on a
 recording it does not describe, and on a described recording that is missing. The HLS muxer's own
-cuts, the sources and the ADR side claims need a recording run, so it takes those as recorded, and
-then fails on every claim of the recorder (see [Regenerating](#regenerating)) that the facts in
-`expected.json` contradict.
+cuts, the sources, each recording's FFmpeg arguments and the ADR side claims need a recording run,
+so it takes those as recorded, and then fails on every claim of the recorder (see
+[Regenerating](#regenerating)) that the facts in `expected.json` contradict.
 
 ## Regenerating
 
@@ -113,6 +113,8 @@ no recording here shows that bug. Nothing else differs from the recipe.
   `firstFragmentIndex`, `fragmentCount`, `syncFirstFragmentCount` and `byteLength` (the sum of that
   segment's `moof`+`mdat` bytes, concatenated in arrival order). Fragment indexes count fragments
   after the initialization segment, from 0.
+- `ffmpegArguments` is the recording run's FFmpeg command line exactly as it ran, one argument per
+  entry, fixture-only additions included (see [Recipe](#recipe)).
 - `discardedPreroll` lists segments numbered below `startSequenceNumber`, which are never delivered.
   `failure` names the named-reason failure (fixture 10) and the fragment that fails; `segments` then
   lists what is delivered before the failure. A keyframe that skips a segment number still marks the

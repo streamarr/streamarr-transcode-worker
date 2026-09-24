@@ -72,7 +72,8 @@ KEY_X265_PIPE_MISSED=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$FORCED_E
 KEY_X265_PIPE_FLOORED=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$FORCED_EVERY_PERIOD" -g:v:0 "$GOP_FLOOR")
 
 # run KIND NAME [start=N] [seek=S] [duration=D] [hls-recipe] [video] SRC -- CODEC/KEYFRAME ARGS...
-#   KIND pipe: ADR 0037's recipe to pipe:1, recorded as out/NAME.fmp4
+#   KIND pipe: ADR 0037's recipe to pipe:1, recorded as out/NAME.fmp4, its command line one argument per
+#              line in out/NAME.args
 #   KIND hls:  the HLS muxer (fMP4 segments) into hls/NAME/; "hls-recipe" swaps in the HLS recipe's common
 #              flags (no -start_at_zero, -max_delay), "video" maps the video stream only.
 #   duration=D reads only the source's first D seconds.
@@ -93,8 +94,10 @@ run() {
   done
   local src=$1; shift 2
   if [ "$kind" = pipe ]; then
-    "${FF[@]}" -y "${seek[@]}" "${duration[@]}" -i "$src" "${maps[@]}" "${common[@]}" "$@" "${DET[@]}" \
-      -f mp4 -movflags "$MOVFLAGS" -frag_duration "$FRAG_US" pipe:1 > "out/$name.fmp4" 2> "logs/$name.log"
+    local command=("${FF[@]}" -y "${seek[@]}" "${duration[@]}" -i "$src" "${maps[@]}" "${common[@]}" "$@" \
+      "${DET[@]}" -f mp4 -movflags "$MOVFLAGS" -frag_duration "$FRAG_US" pipe:1)
+    printf '%s\n' "${command[@]}" > "out/$name.args"
+    "${command[@]}" > "out/$name.fmp4" 2> "logs/$name.log"
     return
   fi
   local number=(); [ "$start" -gt 0 ] && number=(-start_number "$start")
