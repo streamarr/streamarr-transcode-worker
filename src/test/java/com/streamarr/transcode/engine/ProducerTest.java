@@ -71,6 +71,16 @@ class ProducerTest {
           + keyframeMoof(48_000).length
           + 8;
 
+  // Where the reader of nearlyCappedSegments() stops on a one-slot worker while a stopped attempt's
+  // cancelled delivery of its first segment still holds three fragments: before the body of the
+  // second segment's first mdat, which the worker's budget cannot admit.
+  private static final int BEHIND_A_HELD_STOP =
+      IsoBoxes.ftyp().length
+          + IsoBoxes.videoAndAudioMoov().length
+          + 3 * keyframeFragment(0).length
+          + keyframeMoof(24_000).length
+          + 8;
+
   private final RecordingSegmentSink sink = new RecordingSegmentSink();
 
   static Stream<Recording> recordingsThatGroupWithoutFailure() {
@@ -203,40 +213,19 @@ class ProducerTest {
   void
       shouldHoldAnotherAttemptsReaderOnlyUntilAStoppedAttemptsCancelledDeliveryReturnsWhenBothShareTheWorkersBudget() {
     var workerBudget = SegmentMemoryBudget.forSlots(1);
-    var stoppedProcess =
-        ScriptedProcess.builder()
-            .output(nearlyCappedSegments())
-            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
-            .build();
-    var stoppedSink = new RecordingSegmentSink().holdingPastCancellation(1);
-    var stopped =
-        producerOfOneSecondSegments(stoppedProcess)
-            .sink(stoppedSink)
-            .memoryBudget(workerBudget)
-            .gracePeriod(Duration.ofMinutes(10))
-            .start();
-    awaiting().until(() -> stoppedProcess.bytesTaken() == NEARLY_CAPPED_BUDGET_STOP);
-    stopped.requestStop();
-    awaiting().until(stoppedSink::wasCancelled);
+    var stopped = stopHoldingItsCancelledDelivery(workerBudget);
     var nextProcess = ScriptedProcess.builder().output(nearlyCappedSegments()).build();
 
     var next = producerOfOneSecondSegments(nextProcess).memoryBudget(workerBudget).start();
 
-    // The stop released the segment the stopped attempt was assembling, but its cancelled delivery
-    // of segment 0 still holds three fragments; the next reader admits three fragments of its own
-    // and the next moof, but not the mdat that follows.
-    var workerBudgetStop =
-        IsoBoxes.ftyp().length
-            + IsoBoxes.videoAndAudioMoov().length
-            + 3 * keyframeFragment(0).length
-            + keyframeMoof(24_000).length
-            + 8;
-    assertReaderStopsAt(nextProcess, workerBudgetStop);
-    stoppedSink.release();
+    // The stop released the segment the stopped attempt was assembling, but not its cancelled
+    // delivery.
+    assertReaderStopsAt(nextProcess, BEHIND_A_HELD_STOP);
+    stopped.sink().release();
     assertThat(next.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
-    assertThat(stoppedProcess.isAlive()).isTrue();
-    stoppedProcess.exit();
-    assertThat(stopped.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Stopped());
+    assertThat(stopped.process().isAlive()).isTrue();
+    stopped.process().exit();
+    assertThat(stopped.producer().outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Stopped());
   }
 
   @Test
@@ -1448,6 +1437,27 @@ class ProducerTest {
         .until(() -> process.bytesTaken() == offset);
   }
 
+  // Stops an attempt of nearlyCappedSegments() that has filled its own budget while its sink holds
+  // its first media segment past the cancellation, as an upload slow to abandon would.
+  private HeldStop stopHoldingItsCancelledDelivery(SegmentMemoryBudget workerBudget) {
+    var process =
+        ScriptedProcess.builder()
+            .output(nearlyCappedSegments())
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    var heldSink = new RecordingSegmentSink().holdingPastCancellation(1);
+    var producer =
+        producerOfOneSecondSegments(process)
+            .sink(heldSink)
+            .memoryBudget(workerBudget)
+            .gracePeriod(Duration.ofMinutes(10))
+            .start();
+    awaiting().until(() -> process.bytesTaken() == NEARLY_CAPPED_BUDGET_STOP);
+    producer.requestStop();
+    awaiting().until(heldSink::wasCancelled);
+    return new HeldStop(process, heldSink, producer);
+  }
+
   // Starts one attempt per slot, each filling its own budget while its sink holds its first media
   // segment.
   private List<BurstAttempt> startBurst(BurstStart burst) {
@@ -1656,6 +1666,8 @@ class ProducerTest {
 
   @Builder
   private record BurstStart(byte[] output, SegmentMemoryBudget budget, int burst) {}
+
+  private record HeldStop(ScriptedProcess process, RecordingSegmentSink sink, Producer producer) {}
 
   // How many bytes of FFmpeg's output an attempt's reader had taken when the sampler read it.
   private record ReaderProgress(BurstAttempt attempt, int bytesTaken) {
