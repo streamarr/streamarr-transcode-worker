@@ -809,12 +809,14 @@ class ProducerTest {
   void shouldCancelTheDeliveryInFlightAndLetFfmpegExitWhenStoppedWhileTheSinkHoldsASegment()
       throws InterruptedException {
     var recording = recording(ENCODED_RECORDING);
-    // FFmpeg is still encoding, so it exits when asked to quit, not at the end of its output. The
-    // reader drains that output once the stop is recorded, before or after FFmpeg exits.
+    var output = bytesOf(ENCODED_RECORDING);
+    // FFmpeg writes its last byte only once asked to quit and exits only once the reader has read
+    // everything it wrote, as FFmpeg blocked on a full pipe does.
     var process =
         ScriptedProcess.builder()
-            .output(bytesOf(ENCODED_RECORDING))
-            .exitTiming(ExitTiming.AT_QUIT)
+            .output(output)
+            .pauseAfter(output.length - 1)
+            .resumesOnQuit(true)
             .build();
     sink.holding(2);
     var producer = producerFor(process, recording).gracePeriod(Duration.ofMinutes(10)).start();
@@ -825,7 +827,7 @@ class ProducerTest {
     assertThat(stopping.join(OUTCOME_LIMIT)).isTrue();
     assertThat(producer.outcome()).isCompletedWithValue(new Stopped());
     assertThat(process.stdinText()).isEqualTo("q");
-    awaiting().until(process::hasReadToEndOfOutput);
+    assertThat(process.hasReadToEndOfOutput()).isTrue();
     assertThat(process.wasDestroyedForcibly()).isFalse();
     assertThat(sink.wasCancelled()).isTrue();
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
