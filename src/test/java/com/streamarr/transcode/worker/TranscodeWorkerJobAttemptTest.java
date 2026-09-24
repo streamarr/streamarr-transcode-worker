@@ -576,7 +576,7 @@ class TranscodeWorkerJobAttemptTest {
           + " stopped while an upload awaits readiness")
   void shouldLetFfmpegExitAndSendNoFurtherUploadMessageWhenStoppedWhileAnUploadAwaitsReadiness()
       throws Exception {
-    var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
+    var launcher = writingUntilTheTestExits();
     var job = variantJobBuilder().build();
 
     try (var worker = worker(launcher)) {
@@ -589,7 +589,7 @@ class TranscodeWorkerJobAttemptTest {
 
       stopVariant(connection, job);
 
-      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_STOPPED);
+      assertStopReportedOnlyOnceFfmpegExits(connection, process);
       connection.grantUploadMessage();
       await()
           .during(Duration.ofMillis(200))
@@ -598,7 +598,6 @@ class TranscodeWorkerJobAttemptTest {
       assertThat(connection.uploads())
           .singleElement()
           .satisfies(upload -> assertThat(upload.wasCancelled()).isTrue());
-      assertThat(process.stdinText()).isEqualTo("q");
       assertThat(process.hasReadToEndOfOutput()).isTrue();
       assertThat(process.wasDestroyedForcibly()).isFalse();
     }
@@ -610,7 +609,7 @@ class TranscodeWorkerJobAttemptTest {
           + " upload awaits acknowledgement")
   void shouldLetFfmpegExitAndReportTheStopWhenStoppedWhileAnUploadAwaitsAcknowledgement()
       throws Exception {
-    var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
+    var launcher = writingUntilTheTestExits();
     var job = variantJobBuilder().build();
 
     try (var worker = worker(launcher)) {
@@ -628,11 +627,10 @@ class TranscodeWorkerJobAttemptTest {
 
       stopVariant(connection, job);
 
-      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_STOPPED);
+      assertStopReportedOnlyOnceFfmpegExits(connection, process);
       assertThat(connection.uploads())
           .singleElement()
           .satisfies(upload -> assertThat(upload.wasCancelled()).isTrue());
-      assertThat(process.stdinText()).isEqualTo("q");
       assertThat(process.hasReadToEndOfOutput()).isTrue();
       assertThat(process.wasDestroyedForcibly()).isFalse();
     }
@@ -922,6 +920,30 @@ class TranscodeWorkerJobAttemptTest {
                     .isFalse();
               });
     }
+  }
+
+  // FFmpeg that writes the recording at once and exits only when the test lets it.
+  private static ScriptedProcessLauncher writingUntilTheTestExits() {
+    return new ScriptedProcessLauncher(
+        _ ->
+            ScriptedProcess.builder()
+                .output(bytesOf(ENCODED_RECORDING))
+                .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+                .build());
+  }
+
+  // The worker asks FFmpeg to quit, reports nothing while FFmpeg lives, and reports the stop once
+  // it
+  // has exited.
+  private static void assertStopReportedOnlyOnceFfmpegExits(
+      ScriptedWorkerRuntime.Connection connection, ScriptedProcess process) {
+    promptly().until(() -> process.stdinText().equals("q"));
+    await()
+        .during(Duration.ofMillis(200))
+        .atMost(EVENT_LIMIT)
+        .until(() -> eventsOf(connection).equals(List.of(EventCase.JOB_ATTEMPT_STARTED)));
+    process.exit();
+    awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_STOPPED);
   }
 
   // The worker reports the job attempt failed as an invalid specification and never starts FFmpeg.
