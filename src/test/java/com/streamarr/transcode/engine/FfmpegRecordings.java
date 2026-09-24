@@ -16,7 +16,7 @@ import tools.jackson.databind.json.JsonMapper;
  * media segments each recording groups into. {@code src/test/resources/fmp4/README.md} describes
  * every recording and how to record them again.
  */
-final class FfmpegRecordings {
+public final class FfmpegRecordings {
 
   private static final String DIRECTORY = "/fmp4/";
   private static final Expectations EXPECTATIONS =
@@ -27,7 +27,7 @@ final class FfmpegRecordings {
 
   private FfmpegRecordings() {}
 
-  static byte[] bytesOf(String file) {
+  public static byte[] bytesOf(String file) {
     try (var stream = FfmpegRecordings.class.getResourceAsStream(DIRECTORY + file)) {
       assertThat(stream).as("recording %s", file).isNotNull();
       return stream.readAllBytes();
@@ -36,21 +36,21 @@ final class FfmpegRecordings {
     }
   }
 
-  static List<Recording> recordings() {
+  public static List<Recording> recordings() {
     return EXPECTATIONS.fixtures();
   }
 
-  static Recording recording(String file) {
+  public static Recording recording(String file) {
     return recordings().stream()
         .filter(recording -> recording.file().equals(file))
         .findFirst()
         .orElseThrow(() -> new AssertionError("expected.json describes no recording " + file));
   }
 
-  record Expectations(List<Recording> fixtures) {}
+  public record Expectations(List<Recording> fixtures) {}
 
   /** One recorded stream and what its initialization segment and media segments must be. */
-  record Recording(
+  public record Recording(
       String file,
       int period,
       int startSequenceNumber,
@@ -67,14 +67,14 @@ final class FfmpegRecordings {
     }
   }
 
-  record Size(int byteLength) {}
+  public record Size(int byteLength) {}
 
   /**
    * A media segment by its number, the media time of its first video sample in the video track's
    * timescale, the indexes of its fragments after the initialization segment, and its size.
    */
   @Builder
-  record SegmentSummary(
+  public record SegmentSummary(
       int number,
       long firstVideoPresentationTime,
       int firstFragmentIndex,
@@ -88,7 +88,7 @@ final class FfmpegRecordings {
    * keyframe opens.
    */
   @Builder
-  record ExpectedFailure(
+  public record ExpectedFailure(
       Reason reason,
       int fragmentIndex,
       Optional<Long> expectedNumber,
@@ -99,7 +99,7 @@ final class FfmpegRecordings {
    * segment it cut, mapped onto this recording, and the segments whose start differs from the
    * grid's.
    */
-  record HlsRun(String hlsRun, List<CutPoint> segments, List<CutPointMismatch> mismatches) {
+  public record HlsRun(String hlsRun, List<CutPoint> segments, List<CutPointMismatch> mismatches) {
 
     @Override
     public String toString() {
@@ -107,8 +107,8 @@ final class FfmpegRecordings {
     }
   }
 
-  record CutPoint(int number, long firstVideoPresentationTime) {}
+  public record CutPoint(int number, long firstVideoPresentationTime) {}
 
   /** A segment number whose first video sample the grid and the HLS muxer place differently. */
-  record CutPointMismatch(int number, Optional<Long> grouping, Optional<Long> hls) {}
+  public record CutPointMismatch(int number, Optional<Long> grouping, Optional<Long> hls) {}
 }
