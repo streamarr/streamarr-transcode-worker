@@ -10,7 +10,7 @@ record EncodedFrameRate(double framesPerSecond) {
 
   /**
    * Returns the fragment unless it holds a video sample shorter than half a frame. An encoder that
-   * emits packets out of decode order, as SVT-AV1 4.x can (upstream #2385), leaves FFmpeg to
+   * emits packets out of decode order, as SVT-AV1 4.x can (upstream issue 2385), leaves FFmpeg to
    * rewrite their timestamps into samples of a tick or so; the output then fails to decode or skips
    * segment numbers, even when FFmpeg exits cleanly.
    *

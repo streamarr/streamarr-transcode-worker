@@ -310,8 +310,9 @@ class WorkerMediaSmokeTest {
   }
 
   // SVT-AV1 4.x can overrun its packetization reorder queue when its threads are starved of CPU
-  // (upstream #2385, worker #42): FFmpeg then hangs, or squeezes the timestamps of out-of-order
-  // packets, and this long job fails on a busy CI runner for a reason unrelated to what it checks.
+  // (upstream issue 2385, worker #42): FFmpeg then hangs, or squeezes the timestamps of
+  // out-of-order packets, and this long job fails on a busy CI runner for a reason unrelated to
+  // what it checks.
   // At a level of parallelism of one (lp=1) each stage has one thread and one picture in flight,
   // so the queue cannot overrun, and the forced and GOP keyframes land where they do at production
   // threading, so this check of where segments start still covers the recipe. Production keeps its
