@@ -14,6 +14,11 @@ public class FfmpegCommandBuilder {
   @NonNull private final String ffmpegPath;
   @NonNull private final Duration fragmentationTarget;
 
+  // Encoders whose recordings show every time-based forced keyframe as a sync sample that starts a
+  // closed GOP, with the GOP count restarting there (src/test/resources/fmp4/README.md, "Verified
+  // encoders"; ADR 0037 as amended). libx265 and the hardware encoders are not verified yet.
+  private static final Set<String> VERIFIED_ENCODERS = Set.of("libx264", "libsvtav1");
+
   private static final Set<String> FIXED_GOP_ENCODERS =
       Set.of(
           "libsvtav1",
@@ -155,7 +160,7 @@ public class FfmpegCommandBuilder {
   }
 
   private void addKeyframeArgs(List<String> cmd, TranscodeJob job) {
-    var gopSize = String.valueOf(periodFrameCount(job.request()));
+    var gopSize = String.valueOf(gopFrameCount(job));
 
     cmd.addAll(List.of("-forced-idr", "1"));
     addForceKeyframeExprArgs(cmd, job);
@@ -166,10 +171,18 @@ public class FfmpegCommandBuilder {
     }
   }
 
-  // Rounded down, never up: an encoder that ignores the forced keyframe then still places a
-  // keyframe inside every segment interval, occasionally two, and never skips a segment.
-  private static int periodFrameCount(TranscodeRequest request) {
-    return (int) Math.floor(request.targetSegmentDuration() * request.framerate());
+  private static int gopFrameCount(TranscodeJob job) {
+    var request = job.request();
+    var periodFrames = request.targetSegmentDuration() * request.framerate();
+    // One frame past the forced keyframes' gap, so the GOP never fires while forcing works, and a
+    // keyframe it places for a dropped forced one still lands inside that interval.
+    if (VERIFIED_ENCODERS.contains(job.videoEncoder())) {
+      return (int) Math.ceil(periodFrames) + 1;
+    }
+
+    // Rounded down, never up: an encoder that ignores the forced keyframe then still places a
+    // keyframe inside every segment interval, often two, and never skips a segment.
+    return (int) Math.floor(periodFrames);
   }
 
   private void addForceKeyframeExprArgs(List<String> cmd, TranscodeJob job) {

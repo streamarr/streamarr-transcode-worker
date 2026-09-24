@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -239,10 +240,32 @@ class FfmpegCommandBuilderTest {
   }
 
   @ParameterizedTest(name = "{0}")
-  @MethodSource("everyEncoder")
+  @ValueSource(strings = {"libx264", "libsvtav1"})
   @DisplayName(
-      "Should round the GOP down to whole frames in a segment period when any encoder runs")
-  void shouldRoundTheGopDownToWholeFramesInASegmentPeriodWhenAnyEncoderRuns(String encoder) {
+      "Should lengthen the GOP one frame past the rounded-up period when the encoder is verified")
+  void shouldLengthenTheGopOneFramePastTheRoundedUpPeriodWhenTheEncoderIsVerified(String encoder) {
+    var cmd =
+        command(request(TranscodeMode.FULL_TRANSCODE).framerate(24000.0 / 1001.0).build(), encoder);
+
+    assertThat(cmd).containsSequence("-g:v:0", "145");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(
+      strings = {
+        "libx265",
+        "h264_nvenc",
+        "hevc_qsv",
+        "av1_amf",
+        "h264_vaapi",
+        "hevc_rkmpp",
+        "h264_videotoolbox"
+      })
+  @DisplayName(
+      "Should round the GOP down to whole frames in a segment period when the encoder is not"
+          + " verified")
+  void shouldRoundTheGopDownToWholeFramesInASegmentPeriodWhenTheEncoderIsNotVerified(
+      String encoder) {
     var cmd =
         command(request(TranscodeMode.FULL_TRANSCODE).framerate(24000.0 / 1001.0).build(), encoder);
 
@@ -251,22 +274,44 @@ class FfmpegCommandBuilderTest {
 
   @Test
   @DisplayName(
-      "Should keep every frame of the period in the GOP when the period spans whole frames")
-  void shouldKeepEveryFrameOfThePeriodInTheGopWhenThePeriodSpansWholeFrames() {
+      "Should lengthen the GOP one frame past the period when the period spans whole frames and the"
+          + " encoder is verified")
+  void
+      shouldLengthenTheGopOneFramePastThePeriodWhenThePeriodSpansWholeFramesAndTheEncoderIsVerified() {
     var cmd = command(request(TranscodeMode.FULL_TRANSCODE).framerate(25.0).build(), "libx264");
+
+    assertThat(cmd).containsSequence("-g:v:0", "151");
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep every frame of the period in the GOP when the period spans whole frames and the"
+          + " encoder is not verified")
+  void
+      shouldKeepEveryFrameOfThePeriodInTheGopWhenThePeriodSpansWholeFramesAndTheEncoderIsNotVerified() {
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).framerate(25.0).build(), "libx265");
 
     assertThat(cmd).containsSequence("-g:v:0", "150");
   }
 
   @ParameterizedTest(name = "{0}")
-  @ValueSource(strings = {"libsvtav1", "h264_nvenc", "hevc_qsv", "av1_amf", "hevc_rkmpp"})
+  @CsvSource({
+    "libsvtav1, 145",
+    "h264_nvenc, 143",
+    "hevc_qsv, 143",
+    "av1_amf, 143",
+    "hevc_rkmpp, 143"
+  })
   @DisplayName(
       "Should fix the minimum keyframe interval to the GOP when the encoder has a fixed GOP")
-  void shouldFixTheMinimumKeyframeIntervalToTheGopWhenTheEncoderHasAFixedGop(String encoder) {
+  void shouldFixTheMinimumKeyframeIntervalToTheGopWhenTheEncoderHasAFixedGop(
+      String encoder, String gopFrames) {
     var cmd =
         command(request(TranscodeMode.FULL_TRANSCODE).framerate(24000.0 / 1001.0).build(), encoder);
 
-    assertThat(cmd).containsSequence("-keyint_min:v:0", "143");
+    assertThat(cmd)
+        .containsSequence("-g:v:0", gopFrames)
+        .containsSequence("-keyint_min:v:0", gopFrames);
   }
 
   @ParameterizedTest(name = "{0}")
