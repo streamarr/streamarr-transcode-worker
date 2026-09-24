@@ -264,33 +264,38 @@ class RecordedFfmpegOutputTest {
   @ParameterizedTest(name = "{0}")
   @CsvSource({
     "12-encode-cfr-missed-forced-keyframe.fmp4",
-    "12-svtav1-cfr-missed-forced-keyframe.fmp4",
-    "13-x265-cfr-missed-forced-keyframe.fmp4"
+    "12-svtav1-cfr-missed-forced-keyframe.fmp4"
   })
   @DisplayName(
-      "Should open the interval of a missed forced keyframe at the GOP backstop 145 frames after the"
-          + " previous keyframe")
-  void shouldOpenTheIntervalOfAMissedForcedKeyframeAtTheGopBackstop(String file)
-      throws IOException {
+      "Should open a missed forced keyframe's interval at the GOP backstop when a verified encoder"
+          + " misses one")
+  void shouldOpenAMissedForcedKeyframesIntervalAtTheGopBackstopWhenAVerifiedEncoderMissesOne(
+      String file) throws IOException {
     var grouping = group(recording(file));
-    var frame = 1001;
 
     assertThat(grouping.failure()).isEmpty();
-    assertThat(cutPoints(grouping))
-        .containsExactly(
-            new CutPoint(0, 0),
-            new CutPoint(1, 144L * frame),
-            new CutPoint(2, 288L * frame),
-            new CutPoint(3, (288L + 145) * frame),
-            new CutPoint(4, 576L * frame));
+    assertThat(cutPoints(grouping)).containsExactlyElementsOf(backstopCutPoints());
+  }
+
+  @Test
+  @DisplayName(
+      "Should open a missed forced keyframe's interval at the GOP backstop when unverified libx265"
+          + " runs under the verified GOP")
+  void shouldOpenAMissedForcedKeyframesIntervalAtTheGopBackstopWhenUnverifiedLibx265RunsUnderIt()
+      throws IOException {
+    var grouping = group(recording("13-x265-cfr-missed-forced-keyframe.fmp4"));
+
+    assertThat(grouping.failure()).isEmpty();
+    assertThat(cutPoints(grouping)).containsExactlyElementsOf(backstopCutPoints());
   }
 
   @Test
   @DisplayName(
       "Should deliver the segment the skipping keyframe closed, then fail, when source keyframes are"
           + " further apart than the period")
-  void shouldDeliverTheSegmentTheSkippingKeyframeClosedThenFailWhenSourceKeyframesAreFurtherApart()
-      throws IOException {
+  void
+      shouldDeliverTheSegmentTheSkippingKeyframeClosedThenFailWhenSourceKeyframesAreFurtherApartThanThePeriod()
+          throws IOException {
     var grouping = group(recording("10-copy-gop-exceeds-period.fmp4"));
     var lastDelivered = grouping.delivered().getLast();
 
@@ -335,10 +340,10 @@ class RecordedFfmpegOutputTest {
       "Should fail with sample data outside the mdat when a recorded trun points outside its"
           + " fragment's mdat")
   void shouldFailWithSampleDataOutsideTheMdatWhenARecordedTrunPointsOutsideItsFragmentsMdat(
-      int trun, int dataOffset) {
+      int occurrence, int dataOffset) {
     var recorded = bytesOf("01-encode-cfr.fmp4");
     var fields = ByteBuffer.wrap(recorded);
-    var run = positionOf(recorded, "trun", trun);
+    var run = positionOf(recorded, "trun", occurrence);
     assertThat(fields.getInt(run + 4) & TRUN_DATA_OFFSET).isEqualTo(TRUN_DATA_OFFSET);
     fields.putInt(run + 12, dataOffset);
 
@@ -394,6 +399,20 @@ class RecordedFfmpegOutputTest {
                     .byteLength(segment.byteLength())
                     .build())
         .toList();
+  }
+
+  /**
+   * The segments of the first 30 s at 23.976 fps when the forced keyframe for 18 s is suppressed:
+   * the GOP count restarts at the forced keyframe on frame 288, so its backstop keys frame 433.
+   */
+  private static List<CutPoint> backstopCutPoints() {
+    var frame = 1001;
+    return List.of(
+        new CutPoint(0, 0),
+        new CutPoint(1, 144L * frame),
+        new CutPoint(2, 288L * frame),
+        new CutPoint(3, (288L + 145) * frame),
+        new CutPoint(4, 576L * frame));
   }
 
   private static List<CutPoint> cutPoints(Grouping grouping) {
