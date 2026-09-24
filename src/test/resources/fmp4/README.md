@@ -32,6 +32,9 @@ The script writes the recordings and `expected.json` into this directory, so `gi
 what a re-recording changed and `RecordedFfmpegOutputTest` then checks the reader and grouper
 against it. Re-record after an FFmpeg lock update with an image built from that lock (see
 [Image validation](../../../../docs/image-validation.md)), and review every changed expectation.
+After writing, the recorder exits with status 1 and names each claim a recording contradicts: an
+HLS oracle's expected agreement, the hlsenc model, a copy's source keyframes, a keyframe that does
+not start a fragment, the initialization-segment pairs, or an ADR side claim.
 
 Every FFmpeg and ffprobe run happens inside
 `streamarr/streamarr-transcode-worker:0.1.0-SNAPSHOT@sha256:9d2d286c…caa`

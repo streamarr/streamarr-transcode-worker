@@ -381,6 +381,53 @@ def diagnostics(stream):
     }
 
 
+def oracle_violations(fixture):
+    name, found = fixture["name"], []
+    for o in fixture["hlsOracles"]:
+        if o["agrees"] != o["expectedToAgree"]:
+            found.append(f"{name} / {o['hlsRun']}: agrees={o['agrees']}, expected {o['expectedToAgree']}")
+        if not o["hlsencModel"]["reproducesHlsCuts"]:
+            found.append(f"{name} / {o['hlsRun']}: the hlsenc model does not reproduce the HLS cuts")
+    return found
+
+
+def recording_violations(fixture):
+    name, found = fixture["name"], []
+    check = fixture["sourceKeyframeCheck"]
+    if check is not None and not check["recordedKeyframesEqualSourceKeyframes"]:
+        found.append(f"{name}: a recorded keyframe is not the source's own keyframe")
+    if not fixture["diagnostics"]["everyKeyframeStartsAFragment"]:
+        found.append(f"{name}: a keyframe does not start a fragment")
+    return found
+
+
+def side_claim_violations(expected):
+    found = []
+    found += [f"initialization segments differ: {p['label']}"
+              for p in expected["initializationSegmentIdentityPairs"] if not p["identical"]]
+    found += [f"initialization segments are identical: {p['label']}"
+              for p in expected["initializationSegmentDifferencePairs"] if p["identical"]]
+    claims = expected["adrSideClaims"]
+    if claims["mpegTsAacCopyWithoutAdtstoasc"]["exitStatus"] == 0:
+        found.append("an MPEG-TS AAC copy without aac_adtstoasc no longer fails")
+    if not claims["adtstoascLeavesMp4SourceCopyByteIdentical"]:
+        found.append("aac_adtstoasc changes a copy from an MP4 source")
+    if not claims["maxDelayLeavesMp4OutputByteIdentical"]:
+        found.append("-max_delay changes mp4 output")
+    cfr = claims["seekWithFpsModeCfr"]
+    if cfr["firstVideoPresentationTime"] != 0 or cfr["videoSamples"] <= cfr["videoSamplesWithoutFpsMode"]:
+        found.append("an explicit -fps_mode cfr after a seek no longer pads from zero")
+    return found
+
+
+def violated_claims(expected):
+    """Every claim in expected.json that the recordings contradict; any one fails the recorder."""
+    found = []
+    for fixture in expected["fixtures"]:
+        found += oracle_violations(fixture) + recording_violations(fixture)
+    return found + side_claim_violations(expected)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--work", required=True)
@@ -397,7 +444,7 @@ def main():
         pipe[fixture["name"]] = {"stream": stream, "videoTimescale": video_track["timescale"],
                                  "videoTrackId": video_track["trackId"], "path": path}
 
-    results, warnings = [], []
+    results = []
     for fixture in FIXTURES:
         record = pipe[fixture["name"]]
         stream = record["stream"]
@@ -407,11 +454,6 @@ def main():
         delivered, preroll, failure = group(stream, PERIOD, fixture["start"])
         segments = [describe(s, stream) for s in delivered]
         oracles = [evaluate_oracle(args.work, fixture, spec, pipe, segments, source) for spec in fixture["oracles"]]
-        for o in oracles:
-            if o["agrees"] != o["expectedToAgree"]:
-                warnings.append(f"{fixture['name']} / {o['hlsRun']}: agrees={o['agrees']}, expected {o['expectedToAgree']}")
-            if not o["hlsencModel"]["reproducesHlsCuts"]:
-                warnings.append(f"{fixture['name']} / {o['hlsRun']}: hlsenc model does not reproduce the HLS cuts")
         last_video = max(i for i, f in enumerate(stream["fragments"]) if fmp4dump.video_start(f))
         results.append({
             "name": fixture["name"],
@@ -509,8 +551,11 @@ def main():
     with open(os.path.join(args.out, "expected.json"), "w") as out:
         json.dump(expected, out, indent=2)
         out.write("\n")
-    for warning in warnings:
-        print("WARNING " + warning)
+    violations = violated_claims(expected)
+    for violation in violations:
+        print("VIOLATED " + violation, file=sys.stderr)
+    if violations:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
