@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Optional;
 import lombok.Builder;
 import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.MapperFeature;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
@@ -22,6 +23,7 @@ public final class FfmpegRecordings {
   private static final Expectations EXPECTATIONS =
       JsonMapper.builder()
           .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+          .enable(MapperFeature.ACCEPT_CASE_INSENSITIVE_ENUMS)
           .build()
           .readValue(bytesOf("expected.json"), Expectations.class);
 
@@ -61,7 +63,7 @@ public final class FfmpegRecordings {
    */
   public record Recording(
       String file,
-      String mode,
+      Mode mode,
       Optional<String> encoder,
       Source source,
       int period,
@@ -81,6 +83,12 @@ public final class FfmpegRecordings {
     public String toString() {
       return file;
     }
+  }
+
+  /** Whether a recording encodes the video or copies it from the source. */
+  public enum Mode {
+    ENCODE,
+    COPY
   }
 
   /** The source a recording read, with its video stream's r_frame_rate as ffprobe reports it. */

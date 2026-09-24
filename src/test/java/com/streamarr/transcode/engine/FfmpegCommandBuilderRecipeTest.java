@@ -104,11 +104,9 @@ class FfmpegCommandBuilderRecipeTest {
   private static TranscodeDecision decisionRecordedAs(Recording recording) {
     var decision = TranscodeDecision.builder().subtitleDecision(EXCLUDED_SUBTITLES);
     return switch (recording.mode()) {
-      case "encode" ->
+      case ENCODE ->
           decision.transcodeMode(TranscodeMode.FULL_TRANSCODE).audioDecision(ENCODED_AUDIO).build();
-      case "copy" ->
-          decision.transcodeMode(TranscodeMode.REMUX).audioDecision(COPIED_AUDIO).build();
-      default -> throw new IllegalArgumentException("Unknown recording mode: " + recording.mode());
+      case COPY -> decision.transcodeMode(TranscodeMode.REMUX).audioDecision(COPIED_AUDIO).build();
     };
   }
 
