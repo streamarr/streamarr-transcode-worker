@@ -1,7 +1,8 @@
 # Fragmented-MP4 grouping fixtures (ADR 0037, worker #39)
 
 Recorded standard-output streams of ADR 0037's FFmpeg recipe, with the expected media segments for
-the grouping rule. Each is checked against the HLS muxer's cut points on the same source.
+the grouping rule. Each is compared with the HLS muxer's cut points on the same source, and where
+the two differ, `expected.json` records each differing segment and this file explains why.
 `RecordedFfmpegOutputTest` runs the real `FragmentedMp4Reader` and `SegmentGrouper` over every
 recording and asserts `expected.json`, so the reader and grouper are pinned to the worker's own
 FFmpeg output (ADR "Tests substitute the process"). `FfmpegRecordings` loads a recording and its

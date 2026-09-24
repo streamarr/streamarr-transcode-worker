@@ -89,9 +89,10 @@ final class FfmpegRecordings {
 
   /**
    * The HLS muxer's run over the same source, with the media time of the first video sample of each
-   * segment it cut, mapped onto this recording.
+   * segment it cut, mapped onto this recording, and the segments whose start differs from the
+   * grid's.
    */
-  record HlsRun(String hlsRun, boolean expectedToAgree, List<CutPoint> segments) {
+  record HlsRun(String hlsRun, List<CutPoint> segments, List<CutPointMismatch> mismatches) {
 
     @Override
     public String toString() {
@@ -100,4 +101,7 @@ final class FfmpegRecordings {
   }
 
   record CutPoint(int number, long firstVideoPresentationTime) {}
+
+  /** A segment number whose first video sample the grid and the HLS muxer place differently. */
+  record CutPointMismatch(int number, Optional<Long> grouping, Optional<Long> hls) {}
 }

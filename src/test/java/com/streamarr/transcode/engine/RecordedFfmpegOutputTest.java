@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 import com.streamarr.transcode.engine.FfmpegRecordings.CutPoint;
+import com.streamarr.transcode.engine.FfmpegRecordings.CutPointMismatch;
 import com.streamarr.transcode.engine.FfmpegRecordings.ExpectedFailure;
 import com.streamarr.transcode.engine.FfmpegRecordings.HlsRun;
 import com.streamarr.transcode.engine.FfmpegRecordings.Recording;
@@ -18,7 +19,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
@@ -45,13 +48,11 @@ class RecordedFfmpegOutputTest {
         .filter(recording -> recording.trailingAudioOnlyFragmentCount() > 0);
   }
 
-  static Stream<Arguments> hlsRunsExpectedToAgreeWithTheGrid() {
+  static Stream<Arguments> hlsRuns() {
     return recordings()
         .flatMap(
             recording ->
-                recording.hlsOracles().stream()
-                    .filter(HlsRun::expectedToAgree)
-                    .map(hlsRun -> Arguments.of(recording, hlsRun)));
+                recording.hlsOracles().stream().map(hlsRun -> Arguments.of(recording, hlsRun)));
   }
 
   @ParameterizedTest(name = "{0}")
@@ -101,13 +102,14 @@ class RecordedFfmpegOutputTest {
   }
 
   @ParameterizedTest(name = "{0} against {1}")
-  @MethodSource("hlsRunsExpectedToAgreeWithTheGrid")
+  @MethodSource("hlsRuns")
   @DisplayName(
-      "Should start each media segment on the HLS muxer's cut point when that run agrees with the"
-          + " grid")
-  void shouldStartEachMediaSegmentOnTheHlsMuxersCutPointWhenThatRunAgreesWithTheGrid(
+      "Should differ from the HLS muxer's cut points only on the recorded segments when grouping on"
+          + " the grid")
+  void shouldDifferFromTheHlsMuxersCutPointsOnlyOnTheRecordedSegmentsWhenGroupingOnTheGrid(
       Recording recording, HlsRun hlsRun) throws IOException {
-    assertThat(cutPoints(group(recording))).containsExactlyElementsOf(hlsRun.segments());
+    assertThat(mismatches(cutPoints(group(recording)), hlsRun.segments()))
+        .containsExactlyElementsOf(hlsRun.mismatches());
   }
 
   @Test
@@ -297,6 +299,27 @@ class RecordedFfmpegOutputTest {
     return grouping.delivered().stream()
         .map(segment -> new CutPoint(segment.sequenceNumber(), firstVideoPresentationTime(segment)))
         .toList();
+  }
+
+  private static List<CutPointMismatch> mismatches(List<CutPoint> grid, List<CutPoint> hls) {
+    var gridStarts = startsByNumber(grid);
+    var hlsStarts = startsByNumber(hls);
+    return Stream.concat(gridStarts.keySet().stream(), hlsStarts.keySet().stream())
+        .distinct()
+        .sorted()
+        .map(
+            number ->
+                new CutPointMismatch(
+                    number,
+                    Optional.ofNullable(gridStarts.get(number)),
+                    Optional.ofNullable(hlsStarts.get(number))))
+        .filter(mismatch -> !mismatch.grouping().equals(mismatch.hls()))
+        .toList();
+  }
+
+  private static Map<Integer, Long> startsByNumber(List<CutPoint> cutPoints) {
+    return cutPoints.stream()
+        .collect(Collectors.toMap(CutPoint::number, CutPoint::firstVideoPresentationTime));
   }
 
   private static long firstVideoPresentationTime(MediaSegment segment) {
