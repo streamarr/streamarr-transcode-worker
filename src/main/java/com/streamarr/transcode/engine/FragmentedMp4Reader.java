@@ -25,12 +25,6 @@ final class FragmentedMp4Reader {
   /**
    * @param maximumSegmentBytes the largest initialization segment or fragment the reader admits; it
    *     rejects any box that would exceed it before allocating memory for that box
-   */
-  FragmentedMp4Reader(@NonNull InputStream stream, long maximumSegmentBytes) {
-    this(stream, maximumSegmentBytes, BoxAdmission.UNBOUNDED);
-  }
-
-  /**
    * @param admission admits each box's bytes after the reader has checked the box against the cap
    *     and before it allocates memory for the box
    */

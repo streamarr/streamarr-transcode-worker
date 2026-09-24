@@ -6,9 +6,6 @@ package com.streamarr.transcode.engine;
 @FunctionalInterface
 interface BoxAdmission {
 
-  /** Admits every box at once. */
-  BoxAdmission UNBOUNDED = _ -> {};
-
   /**
    * Returns once the reader may hold the box's bytes; until then the reader reads nothing further.
    * Throws to end reading instead.

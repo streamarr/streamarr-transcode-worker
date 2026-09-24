@@ -2,6 +2,7 @@ package com.streamarr.transcode.engine;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -14,7 +15,12 @@ record Mp4Stream(InitializationSegment initializationSegment, List<Fragment> fra
   static final long SEGMENT_CAP = 16L * 1024 * 1024;
 
   static FragmentedMp4Reader readerOf(byte[] bytes) {
-    return new FragmentedMp4Reader(new ByteArrayInputStream(bytes), SEGMENT_CAP);
+    return readerOf(new ByteArrayInputStream(bytes), SEGMENT_CAP);
+  }
+
+  /** A reader that admits every box under the cap at once. */
+  static FragmentedMp4Reader readerOf(InputStream stream, long maximumSegmentBytes) {
+    return new FragmentedMp4Reader(stream, maximumSegmentBytes, _ -> {});
   }
 
   /** Reads every unit up to a clean end of the stream. */

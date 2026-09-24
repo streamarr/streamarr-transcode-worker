@@ -188,7 +188,7 @@ class FragmentedMp4ReaderTest {
   @DisplayName("Should fail before reading the body when a box exceeds the segment cap")
   void shouldFailBeforeReadingTheBodyWhenABoxExceedsTheSegmentCap() {
     var reader =
-        new FragmentedMp4Reader(
+        readerOf(
             new ByteArrayInputStream(concat(ftyp(), videoAndAudioMoov(), header(1025, "moof"))),
             1024);
 
@@ -212,7 +212,7 @@ class FragmentedMp4ReaderTest {
     var moof = videoMoof(0);
     var cap = Math.max(initialization.length, moof.length + 100);
     var reader =
-        new FragmentedMp4Reader(
+        readerOf(
             new ByteArrayInputStream(concat(initialization, moof, mdat(cap - moof.length))), cap);
 
     assertFailure(reader, Reason.EXCEEDS_SEGMENT_CAP);
@@ -222,9 +222,7 @@ class FragmentedMp4ReaderTest {
   @DisplayName("Should fail when the initialization segment exceeds the segment cap")
   void shouldFailWhenTheInitializationSegmentExceedsTheSegmentCap() {
     var initialization = concat(ftyp(), videoAndAudioMoov());
-    var reader =
-        new FragmentedMp4Reader(
-            new ByteArrayInputStream(initialization), initialization.length - 1L);
+    var reader = readerOf(new ByteArrayInputStream(initialization), initialization.length - 1L);
 
     assertFailure(reader, Reason.EXCEEDS_SEGMENT_CAP);
   }
@@ -235,7 +233,7 @@ class FragmentedMp4ReaderTest {
   void shouldRejectASegmentCapWhenNoArrayCanHoldIt(long cap) {
     var stream = new ByteArrayInputStream(new byte[0]);
 
-    assertThatIllegalArgumentException().isThrownBy(() -> new FragmentedMp4Reader(stream, cap));
+    assertThatIllegalArgumentException().isThrownBy(() -> readerOf(stream, cap));
   }
 
   @Test
