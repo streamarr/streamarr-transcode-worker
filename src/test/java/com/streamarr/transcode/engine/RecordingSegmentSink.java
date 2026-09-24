@@ -8,6 +8,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Accepts each segment the producer delivers and keeps its name and bytes. A test can hold one
@@ -21,6 +22,8 @@ final class RecordingSegmentSink implements SegmentSink {
   private final List<Accepted> accepted = new CopyOnWriteArrayList<>();
   private final ByteArrayOutputStream acceptedBytes = new ByteArrayOutputStream();
   private final AtomicInteger deliveries = new AtomicInteger();
+  private final AtomicLong startedBytes = new AtomicLong();
+  private final AtomicLong returnedBytes = new AtomicLong();
   private final CountDownLatch release = new CountDownLatch(1);
   private final CountDownLatch held = new CountDownLatch(1);
   private volatile OptionalInt heldDelivery = OptionalInt.empty();
@@ -71,8 +74,30 @@ final class RecordingSegmentSink implements SegmentSink {
     return cancelled;
   }
 
+  /** The bytes of every segment the producer has handed to the sink, returned or not. */
+  long startedBytes() {
+    return startedBytes.get();
+  }
+
+  /**
+   * The bytes of every delivery that has returned or thrown, counted just before it does, so never
+   * later than the producer learns of it.
+   */
+  long returnedBytes() {
+    return returnedBytes.get();
+  }
+
   @Override
   public void deliver(ProducedSegment segment, DeliveryCancellation cancellation) {
+    startedBytes.addAndGet(segment.byteLength());
+    try {
+      receive(segment, cancellation);
+    } finally {
+      returnedBytes.addAndGet(segment.byteLength());
+    }
+  }
+
+  private void receive(ProducedSegment segment, DeliveryCancellation cancellation) {
     var delivery = OptionalInt.of(deliveries.getAndIncrement());
     if (delivery.equals(refusedDelivery)) {
       throw new IllegalStateException("the server refused " + segment.name());

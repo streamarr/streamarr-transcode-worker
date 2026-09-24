@@ -20,14 +20,23 @@ import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.nio.ByteBuffer;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.OptionalDouble;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
+import java.util.stream.IntStream;
 import java.util.stream.Stream;
+import lombok.Builder;
 import org.assertj.core.api.InstanceOfAssertFactories;
 import org.awaitility.core.ConditionFactory;
 import org.junit.jupiter.api.DisplayName;
@@ -50,6 +59,8 @@ class ProducerTest {
   private static final long SERVER_SEGMENT_CAP_BYTES = 16L * 1024 * 1024;
   private static final int NEARLY_CAPPED_FRAGMENT_PAYLOAD = 5 * 1024 * 1024;
   private static final int RACE_ITERATIONS = 200;
+  private static final int BURSTS = 12;
+  private static final int BURST_SLOTS = 3;
 
   // Where the reader of nearlyCappedSegments() stops while the first segment awaits acceptance:
   // before the body of the third segment's first mdat, which the budget cannot admit.
@@ -227,6 +238,61 @@ class ProducerTest {
     assertThat(stoppedProcess.isAlive()).isTrue();
     stoppedProcess.exit();
     assertThat(stopped.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Stopped());
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep within the worker's budget and let every new attempt proceed when stops and"
+          + " starts arrive in bursts")
+  void
+      shouldKeepWithinTheWorkersBudgetAndLetEveryNewAttemptProceedWhenStopsAndStartsArriveInBursts()
+          throws InterruptedException {
+    var output = nearlyCappedSegments();
+    var layout = topLevelBoxesOf(output);
+    var workerBudget = SegmentMemoryBudget.forSlots(BURST_SLOTS);
+    var capacity = BURST_SLOTS * 2 * SERVER_SEGMENT_CAP_BYTES;
+    var attempts = new CopyOnWriteArrayList<BurstAttempt>();
+    var highestCharge = new AtomicLong();
+
+    try (var sampler = Executors.newSingleThreadScheduledExecutor()) {
+      var sampling =
+          sampler.scheduleAtFixedRate(
+              () -> highestCharge.accumulateAndGet(chargedAtLeast(attempts, layout), Math::max),
+              0,
+              1,
+              TimeUnit.MILLISECONDS);
+      var running =
+          startBurst(BurstStart.builder().output(output).budget(workerBudget).burst(0).build());
+      attempts.addAll(running);
+      awaitEachReaderAtItsBudget(running);
+      for (var burst = 1; burst <= BURSTS; burst++) {
+        var stopped = running;
+        var next = BurstStart.builder().output(output).budget(workerBudget).burst(burst).build();
+        running = stopAndStartTogether(stopped, () -> startBurst(next));
+        attempts.addAll(running);
+
+        awaitReadersWaiting(running);
+        assertThat(chargedAtLeast(attempts, layout)).isLessThanOrEqualTo(capacity);
+        assertThat(running)
+            .as("a cancelled delivery still held keeps some new reader waiting for memory")
+            .anySatisfy(
+                attempt ->
+                    assertThat(attempt.process().bytesTaken())
+                        .isLessThan(NEARLY_CAPPED_BUDGET_STOP));
+        stopped.forEach(attempt -> attempt.sink().release());
+        awaitEachReaderAtItsBudget(running);
+        assertThat(stopped).allSatisfy(attempt -> assertThat(attempt.process().isAlive()).isTrue());
+        endStoppedAttempts(stopped);
+        attempts.removeAll(stopped);
+      }
+
+      running.forEach(BurstAttempt::stop);
+      running.forEach(attempt -> attempt.sink().release());
+      endStoppedAttempts(running);
+      assertThat(sampling.isDone()).as("the sampler never failed").isFalse();
+    }
+
+    assertThat(highestCharge.get()).isPositive().isLessThanOrEqualTo(capacity);
   }
 
   @Test
@@ -1327,6 +1393,112 @@ class ProducerTest {
         .until(() -> process.bytesTaken() == offset);
   }
 
+  // Starts one attempt per slot, each filling its own budget while its sink holds its first media
+  // segment. Alternate attempts hold that delivery past its cancellation, as an upload slow to
+  // abandon would, when a later burst stops them.
+  private List<BurstAttempt> startBurst(BurstStart burst) {
+    return IntStream.range(0, BURST_SLOTS)
+        .mapToObj(
+            slot -> {
+              var process =
+                  ScriptedProcess.builder()
+                      .output(burst.output())
+                      .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+                      .build();
+              var cancelsSlowly = (burst.burst() + slot) % 2 == 0;
+              var attemptSink = new RecordingSegmentSink();
+              if (cancelsSlowly) {
+                attemptSink.holdingPastCancellation(1);
+              } else {
+                attemptSink.holding(1);
+              }
+
+              var producer =
+                  producerOfOneSecondSegments(process)
+                      .sink(attemptSink)
+                      .memoryBudget(burst.budget())
+                      .gracePeriod(Duration.ofMinutes(10))
+                      .start();
+              return new BurstAttempt(process, attemptSink, producer, new AtomicBoolean());
+            })
+        .toList();
+  }
+
+  // Stops the attempts on another thread while the next ones start, as a burst of seeks does.
+  private static List<BurstAttempt> stopAndStartTogether(
+      List<BurstAttempt> stopping, Supplier<List<BurstAttempt>> starting)
+      throws InterruptedException {
+    var start = new CyclicBarrier(2);
+    var stops =
+        Thread.ofVirtual()
+            .start(
+                () -> {
+                  awaitStart(start);
+                  stopping.forEach(BurstAttempt::stop);
+                });
+    awaitStart(start);
+    var started = starting.get();
+    assertThat(stops.join(OUTCOME_LIMIT)).isTrue();
+    return started;
+  }
+
+  // Each reader takes FFmpeg's output up to its own budget while its first media segment awaits
+  // acceptance.
+  private static void awaitEachReaderAtItsBudget(List<BurstAttempt> attempts) {
+    attempts.forEach(
+        attempt ->
+            awaiting().until(() -> attempt.process().bytesTaken() == NEARLY_CAPPED_BUDGET_STOP));
+  }
+
+  // Returns once no reader has taken a byte for a while, as when each waits for memory.
+  private static void awaitReadersWaiting(List<BurstAttempt> attempts) {
+    var lastTaken = new AtomicReference<List<Integer>>(List.of());
+    await()
+        .atMost(OUTCOME_LIMIT)
+        .pollInterval(POLL_INTERVAL)
+        .during(Duration.ofMillis(200))
+        .until(
+            () -> {
+              var taken = attempts.stream().map(attempt -> attempt.process().bytesTaken()).toList();
+              return taken.equals(lastTaken.getAndSet(taken));
+            });
+  }
+
+  // Each stopped attempt settles as stopped once its FFmpeg, alive until now, exits.
+  private static void endStoppedAttempts(List<BurstAttempt> stopped) {
+    stopped.forEach(attempt -> attempt.process().exit());
+    assertThat(stopped)
+        .allSatisfy(
+            attempt ->
+                assertThat(attempt.producer().outcome())
+                    .succeedsWithin(OUTCOME_LIMIT)
+                    .isEqualTo(new Stopped()));
+  }
+
+  // A lower bound of what the attempts charge the worker's budget. An active attempt's reader holds
+  // every box it has begun to read that no returned delivery carried; a stopped attempt holds only
+  // its deliveries that have not returned. Every charge is read before any release, so the bound
+  // holds at the moment the charges are read.
+  private static long chargedAtLeast(List<BurstAttempt> attempts, List<BoxSpan> layout) {
+    var snapshot = List.copyOf(attempts);
+    var charged = snapshot.stream().mapToLong(attempt -> attempt.chargedBefore(layout)).sum();
+    var released = snapshot.stream().mapToLong(attempt -> attempt.sink().returnedBytes()).sum();
+    return charged - released;
+  }
+
+  private static List<BoxSpan> topLevelBoxesOf(byte[] output) {
+    var buffer = ByteBuffer.wrap(output);
+    var boxes = new ArrayList<BoxSpan>();
+    var start = 0;
+    while (start < output.length) {
+      var size = buffer.getInt(start);
+      boxes.add(new BoxSpan(start, size));
+      start += size;
+    }
+
+    return boxes;
+  }
+
   // The heap that live objects occupy once a full collection has freed every unreachable one.
   private static long liveHeapBytes() {
     var memory = ManagementFactory.getMemoryMXBean();
@@ -1431,6 +1603,45 @@ class ProducerTest {
 
   private Producer.ProducerBuilder producerOfOneSecondSegments(ScriptedProcess process) {
     return producerLaunching(process).periodSeconds(1).startSequenceNumber(0);
+  }
+
+  @Builder
+  private record BurstStart(byte[] output, SegmentMemoryBudget budget, int burst) {}
+
+  private record BoxSpan(int start, int size) {
+
+    // Whether a reader that took this many bytes has begun to read the box's body, which it admits
+    // only after reading its 8-byte header.
+    boolean isAdmittedAfter(int bytesTaken) {
+      return bytesTaken > start + 8;
+    }
+  }
+
+  // An attempt of the burst test. The test marks it stopped before it asks the producer to stop, so
+  // that the lower bound stops counting the reader's share no later than the producer releases it.
+  private record BurstAttempt(
+      ScriptedProcess process,
+      RecordingSegmentSink sink,
+      Producer producer,
+      AtomicBoolean stopped) {
+
+    void stop() {
+      stopped.set(true);
+      producer.requestStop();
+    }
+
+    // What the attempt charges before its returned deliveries are subtracted.
+    long chargedBefore(List<BoxSpan> layout) {
+      if (stopped.get()) {
+        return sink.startedBytes();
+      }
+
+      var taken = process.bytesTaken();
+      return layout.stream()
+          .filter(box -> box.isAdmittedAfter(taken))
+          .mapToLong(BoxSpan::size)
+          .sum();
+    }
   }
 
   private static byte[] keyframeFragment(long presentationTime) {
