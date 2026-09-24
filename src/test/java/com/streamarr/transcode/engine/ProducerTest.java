@@ -1045,6 +1045,29 @@ class ProducerTest {
   }
 
   @Test
+  @DisplayName(
+      "Should complete the attempt when FFmpeg exits later than the stall timeout after its output"
+          + " ends")
+  void shouldCompleteTheAttemptWhenFfmpegExitsLaterThanTheStallTimeoutAfterItsOutputEnds() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    var producer = producerFor(process, recording).stallTimeout(Duration.ofMillis(100)).start();
+    awaiting().until(process::hasReadToEndOfOutput);
+
+    await()
+        .during(Duration.ofMillis(500))
+        .atMost(OUTCOME_LIMIT)
+        .until(() -> !producer.outcome().isDone() && !process.wasTerminated());
+    process.exit();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+  }
+
+  @Test
   @DisplayName("Should not fail the attempt as an encoder stall once it is stopped")
   void shouldNotFailTheAttemptAsAnEncoderStallOnceItIsStopped() throws InterruptedException {
     var recording = recording(ENCODED_RECORDING);

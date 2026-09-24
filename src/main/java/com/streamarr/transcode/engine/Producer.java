@@ -34,8 +34,9 @@ import lombok.extern.slf4j.Slf4j;
  * awaits acceptance, the reader stops reading and the pipe holds FFmpeg back.
  *
  * <p>A watchdog fails the attempt when FFmpeg writes nothing for the stall timeout while the reader
- * is reading; waiting for the sink pauses it. It asks FFmpeg to terminate and destroys it after the
- * grace period, because a hung FFmpeg can ignore termination.
+ * is reading; waiting for the sink pauses it, and it ends once the reader stops reading. It asks
+ * FFmpeg to terminate and destroys it after the grace period, because a hung FFmpeg can ignore
+ * termination.
  */
 @Slf4j
 public final class Producer {
@@ -314,9 +315,12 @@ public final class Producer {
     }
   }
 
+  // The watchdog measures FFmpeg only while the reader reads, so it ends with the reading.
   private void produce() {
     try {
-      conclude(readAndDeliver());
+      var ending = readAndDeliver();
+      watchdog.end();
+      conclude(ending);
     } finally {
       errorOutput.close();
     }
