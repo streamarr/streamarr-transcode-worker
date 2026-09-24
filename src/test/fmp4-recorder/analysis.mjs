@@ -26,6 +26,56 @@ export function group(stream, period, startSequenceNumber) {
   return groupOnGrid(gridFragments(stream), { period, startSequenceNumber });
 }
 
+export function sha256(bytes) {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+/**
+ * Everything expected.json records about one recording that its own bytes decide: its tracks and
+ * initialization segment, the media segments and preroll the grid groups it into, and any failure.
+ */
+export function recordingFacts(stream, { period, startSequenceNumber }) {
+  const videoTrack = [...stream.tracks.values()].find((track) => track.handler === 'vide');
+  const { delivered, preroll, failure } = group(stream, period, startSequenceNumber);
+  const lastVideo = stream.fragments.findLastIndex((fragment) => videoStart(fragment) !== null);
+  return {
+    videoTrackId: videoTrack.trackId,
+    videoTimescale: videoTrack.timescale,
+    byteLength: stream.data.length,
+    initializationSegment: {
+      byteLength: stream.initByteLength,
+      sha256: sha256(stream.initBytes),
+      tracks: [...stream.tracks.values()].map((track) => ({
+        trackId: track.trackId,
+        handler: track.handler,
+        timescale: track.timescale,
+        editList: track.edits,
+        trexDefaultSampleFlags: track.trexFlags ?? null,
+        trexDefaultSampleDuration: track.trexDuration ?? null,
+      })),
+    },
+    segments: delivered.map((segment) => describe(segment, stream)),
+    discardedPreroll: preroll.map((segment) => describe(segment, stream)),
+    failure,
+    endsWithAudioOnlyFragments: lastVideo < stream.fragments.length - 1,
+    trailingAudioOnlyFragmentCount: stream.fragments.length - 1 - lastVideo,
+    diagnostics: diagnostics(stream),
+  };
+}
+
+/** Whether two recordings' initialization segments are byte-identical, and their digests. */
+export function initializationSegmentPair(label, [firstName, first], [secondName, second]) {
+  const a = first.initBytes;
+  const b = second.initBytes;
+  return {
+    label,
+    files: [`${firstName}.fmp4`, `${secondName}.fmp4`],
+    identical: a.equals(b),
+    byteLengths: [a.length, b.length],
+    sha256: [sha256(a), sha256(b)],
+  };
+}
+
 export function describe(segment, stream) {
   const fragments = segment.fragments.map((index) => stream.fragments[index]);
   return {
@@ -233,15 +283,20 @@ export function evaluateOracle({ fixture, spec, reference, grouped, source, hls,
   };
 }
 
+/** The presentation time of every video sync sample, in ascending order. */
+export function recordedKeyframes(stream) {
+  return videoSamples(stream)
+    .filter((sample) => sample.sync)
+    .map((sample) => sample.presentationTime)
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
 /** For a stream copy: whether every recorded keyframe is the source's own, moved to media time. */
 export function checkSourceKeyframes({ mode, stream, source, timescale }) {
   if (mode !== 'copy') {
     return null;
   }
-  const recorded = videoSamples(stream)
-    .filter((sample) => sample.sync)
-    .map((sample) => sample.presentationTime)
-    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const recorded = recordedKeyframes(stream);
   const expected = [
     ...new Set(source.keyframes.map((keyframe) => keyframe.minus(source.start).times(timescale).truncate())),
   ]

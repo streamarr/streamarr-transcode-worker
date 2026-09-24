@@ -19,21 +19,19 @@
 //
 //   node analyze.mjs --work WORK --out FIXTURES_DIR --image WORKER_IMAGE
 
-import { createHash } from 'node:crypto';
-import { copyFileSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
   checkSourceKeyframes,
-  describe,
-  diagnostics,
   evaluateOracle,
-  group,
+  initializationSegmentPair,
   loadSource,
   readHls,
+  recordingFacts,
   violatedClaims,
 } from './analysis.mjs';
-import { readFiles, videoSamples, videoStart } from './fmp4.mjs';
+import { readFiles, videoSamples } from './fmp4.mjs';
 import { formatJson } from './json.mjs';
 
 const PERIOD = 6;
@@ -197,17 +195,15 @@ const RULES =
   'fails with a skipped segment number. firstVideoPresentationTime = tfdt + first sample\'s composition offset, ' +
   'in videoTimescale ticks, no edit list.';
 
-function sha256(bytes) {
-  return createHash('sha256').update(bytes).digest('hex');
-}
-
 function fixtureRecord({ fixture, record, source, pipe, work }) {
   const stream = record.stream;
   if (fixture.mode === 'encode' && source.video.r_frame_rate !== '24000/1001') {
     throw new Error(`${fixture.source} probes as ${source.video.r_frame_rate}, the script passes 24000/1001`);
   }
-  const { delivered, preroll, failure } = group(stream, PERIOD, fixture.start);
-  const segments = delivered.map((segment) => describe(segment, stream));
+  const { videoTrackId, videoTimescale, diagnostics, ...facts } = recordingFacts(stream, {
+    period: PERIOD,
+    startSequenceNumber: fixture.start,
+  });
   const oracles = fixture.oracles.map((spec) =>
     evaluateOracle({
       fixture,
@@ -215,13 +211,12 @@ function fixtureRecord({ fixture, record, source, pipe, work }) {
       // recording's own video arguments; the HLS recipe's encodes use other keyframe arguments.
       spec: { ...spec, samePackets: fixture.mode === 'copy' || spec.flags === 'pipe-recipe' },
       reference: pipe.get(spec.reference ?? fixture.name),
-      grouped: segments,
+      grouped: facts.segments,
       source,
       hls: readHls(join(work, 'hls', spec.run)),
       period: PERIOD,
     }),
   );
-  const lastVideo = stream.fragments.findLastIndex((fragment) => videoStart(fragment) !== null);
   return {
     name: fixture.name,
     file: `${fixture.name}.fmp4`,
@@ -238,47 +233,17 @@ function fixtureRecord({ fixture, record, source, pipe, work }) {
     period: PERIOD,
     fragmentationTargetMicros: FRAGMENTATION_TARGET_MICROS,
     startSequenceNumber: fixture.start,
-    videoTrackId: record.videoTrackId,
-    videoTimescale: record.videoTimescale,
-    byteLength: statSync(record.path).size,
-    initializationSegment: {
-      byteLength: stream.initByteLength,
-      sha256: sha256(stream.initBytes),
-      tracks: [...stream.tracks.values()].map((track) => ({
-        trackId: track.trackId,
-        handler: track.handler,
-        timescale: track.timescale,
-        editList: track.edits,
-        trexDefaultSampleFlags: track.trexFlags ?? null,
-        trexDefaultSampleDuration: track.trexDuration ?? null,
-      })),
-    },
-    segments,
-    discardedPreroll: preroll.map((segment) => describe(segment, stream)),
-    failure,
-    endsWithAudioOnlyFragments: lastVideo < stream.fragments.length - 1,
-    trailingAudioOnlyFragmentCount: stream.fragments.length - 1 - lastVideo,
-    sourceKeyframeCheck: checkSourceKeyframes({
-      mode: fixture.mode,
-      stream,
-      source,
-      timescale: record.videoTimescale,
-    }),
-    diagnostics: diagnostics(stream),
+    videoTrackId,
+    videoTimescale,
+    ...facts,
+    sourceKeyframeCheck: checkSourceKeyframes({ mode: fixture.mode, stream, source, timescale: videoTimescale }),
+    diagnostics,
     hlsOracles: oracles,
   };
 }
 
-function initializationSegmentPair(pipe, [label, first, second]) {
-  const a = pipe.get(first).stream.initBytes;
-  const b = pipe.get(second).stream.initBytes;
-  return {
-    label,
-    files: [`${first}.fmp4`, `${second}.fmp4`],
-    identical: a.equals(b),
-    byteLengths: [a.length, b.length],
-    sha256: [sha256(a), sha256(b)],
-  };
+function initializationSegmentPairOf(pipe, [label, first, second]) {
+  return initializationSegmentPair(label, [first, pipe.get(first).stream], [second, pipe.get(second).stream]);
 }
 
 function sideClaims(work, pipe) {
@@ -354,11 +319,9 @@ function main() {
     recipe: RECIPE,
     rules: RULES,
     fixtures: results,
-    initializationSegmentIdentityPairs: INITIALIZATION_SEGMENT_IDENTITY_PAIRS.map((pair) =>
-      initializationSegmentPair(pipe, pair),
-    ),
+    initializationSegmentIdentityPairs: INITIALIZATION_SEGMENT_IDENTITY_PAIRS.map((pair) => initializationSegmentPairOf(pipe, pair)),
     initializationSegmentDifferencePairs: INITIALIZATION_SEGMENT_DIFFERENCE_PAIRS.map((pair) =>
-      initializationSegmentPair(pipe, pair),
+      initializationSegmentPairOf(pipe, pair),
     ),
     adrSideClaims: sideClaims(args.work, pipe),
   };

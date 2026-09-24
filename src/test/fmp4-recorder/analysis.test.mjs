@@ -10,9 +10,11 @@ import {
   evaluateOracle,
   group,
   hlsencCuts,
+  initializationSegmentPair,
   loadSource,
   mismatches,
   readHls,
+  recordingFacts,
   sourceKeyframes,
   sourceStart,
   violatedClaims,
@@ -353,5 +355,30 @@ describe('source files', () => {
       source.keyframes.map((keyframe) => String(keyframe.minus(source.start))),
       ['0', '1001/500'],
     );
+  });
+});
+
+describe('recording facts of the committed recordings', () => {
+  const read = (name) => readStream(readFileSync(new URL(`../resources/fmp4/${name}.fmp4`, import.meta.url)));
+
+  it('finds one initialization segment across a stream-copy start and its replacement attempt', () => {
+    const pair = initializationSegmentPair('copy', ['07-copy-start0', read('07-copy-start0')], ['07-copy-seek30', read('07-copy-seek30')]);
+
+    assert.equal(pair.identical, true);
+    assert.deepEqual(pair.byteLengths, [1348, 1348]);
+    assert.equal(pair.sha256[0], pair.sha256[1]);
+    assert.equal(
+      initializationSegmentPair('encode or copy', ['01-encode-cfr', read('01-encode-cfr')], ['07-copy-start0', read('07-copy-start0')]).identical,
+      false,
+    );
+  });
+
+  it('groups the 10 s-GOP copy until the keyframe at 20.02 s skips segment 2', () => {
+    const facts = recordingFacts(read('10-copy-gop-exceeds-period'), { period: 6, startSequenceNumber: 0 });
+
+    assert.equal(facts.videoTimescale, 24000);
+    assert.equal(facts.failure.fragmentIndex, 20);
+    assert.equal(facts.failure.expectedNumber, 2);
+    assert.equal(facts.trailingAudioOnlyFragmentCount, 1);
   });
 });
