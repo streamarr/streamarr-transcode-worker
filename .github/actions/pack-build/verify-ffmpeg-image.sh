@@ -55,9 +55,12 @@ EXPECTED_FFMPEG_VERSION="${expected_ffmpeg_version}" \
     exit 1
   fi
 
-  "${ffmpeg}" -hide_banner -h muxer=hls 2>&1 \
-    | grep -F -- "-hls_segment_options" >/dev/null
+  mp4_muxer_help="$("${ffmpeg}" -hide_banner -h muxer=mp4 2>&1)"
+  for option in -frag_duration cmaf delay_moov skip_trailer frag_keyframe frag_discont; do
+    grep -F -- "${option}" <<<"${mp4_muxer_help}" >/dev/null
+  done
 
+  # The worker reads fragmented MP4 from FFmpeg's standard output.
   output_dir="$(mktemp -d)"
   "${ffmpeg}" \
     -nostdin \
@@ -70,27 +73,20 @@ EXPECTED_FFMPEG_VERSION="${expected_ffmpeg_version}" \
     -t 3 \
     -c:v libx264 \
     -pix_fmt yuv420p \
+    -force_key_frames:0 "expr:gte(t,n_forced*1)" \
     -c:a aac \
-    -f hls \
-    -hls_time 1 \
-    -hls_list_size 0 \
-    -hls_flags temp_file \
-    -hls_segment_type fmp4 \
-    -hls_fmp4_init_filename init.mp4 \
-    -hls_segment_options movflags=+frag_discont \
-    -hls_segment_filename "${output_dir}/segment%d.m4s" \
-    "${output_dir}/playlist.m3u8"
+    -f mp4 \
+    -movflags cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont \
+    -frag_duration 1000000 \
+    pipe:1 >"${output_dir}/fragmented.mp4"
 
-  test -s "${output_dir}/init.mp4"
-  test -s "${output_dir}/segment0.m4s"
-  grep -F "#EXT-X-MAP:URI=\"init.mp4\"" "${output_dir}/playlist.m3u8"
-  grep -F "segment0.m4s" "${output_dir}/playlist.m3u8"
+  grep -aF moof "${output_dir}/fragmented.mp4" >/dev/null
   "${ffprobe}" \
     -v error \
     -show_entries format=format_name \
     -of default=noprint_wrappers=1 \
-    "${output_dir}/playlist.m3u8" \
-    | grep -F "format_name=hls"
+    "${output_dir}/fragmented.mp4" \
+    | grep -F "format_name=mov,mp4"
 
   "${ffmpeg}" -nostdin -hide_banner -loglevel error \
     -f lavfi -i testsrc2=size=160x90:rate=10 -t 1 \
