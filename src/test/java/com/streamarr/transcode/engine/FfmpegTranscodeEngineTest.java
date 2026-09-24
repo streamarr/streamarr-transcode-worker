@@ -11,13 +11,11 @@ import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import java.nio.file.Path;
 import java.time.Duration;
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.CopyOnWriteArrayList;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -31,7 +29,7 @@ class FfmpegTranscodeEngineTest {
 
   private static final Duration OUTCOME_LIMIT = Duration.ofSeconds(10);
 
-  private final List<Launch> launches = new CopyOnWriteArrayList<>();
+  private ScriptedProcessLauncher launcher;
   private FfmpegTranscodeEngine executor;
 
   @BeforeEach
@@ -110,16 +108,10 @@ class FfmpegTranscodeEngineTest {
     var producer = executor.startProducer(request, sink);
 
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
-    assertThat(launches)
-        .singleElement()
-        .satisfies(
-            launch -> {
-              assertThat(launch.jobAttemptId()).isEqualTo(request.attemptId());
-              assertThat(launch.command())
-                  .startsWith("ffmpeg")
-                  .containsSubsequence("-ss", "30", "-i", "/media/movie.mkv")
-                  .endsWith("pipe:1");
-            });
+    assertThat(launcher.command(request.attemptId()))
+        .startsWith("ffmpeg")
+        .containsSubsequence("-ss", "30", "-i", "/media/movie.mkv")
+        .endsWith("pipe:1");
     assertThat(sink.acceptedNames())
         .containsExactly(
             "init.mp4",
@@ -142,7 +134,7 @@ class FfmpegTranscodeEngineTest {
     assertThat(thrown)
         .isInstanceOf(TranscodeException.class)
         .hasMessageStartingWith("FFmpeg is unavailable");
-    assertThat(launches).isEmpty();
+    assertThat(launcher.hasLaunchedAny()).isFalse();
   }
 
   @Test
@@ -155,16 +147,12 @@ class FfmpegTranscodeEngineTest {
             .accelerator("cuda")
             .build();
     executor = engineLaunching(runningProcess(), createCapabilityService(true, hardware));
+    var request = createRequest(TranscodeMode.FULL_TRANSCODE, "h264");
 
-    var producer =
-        executor.startProducer(
-            createRequest(TranscodeMode.FULL_TRANSCODE, "h264"), new RecordingSegmentSink());
+    var producer = executor.startProducer(request, new RecordingSegmentSink());
 
     producer.stop();
-    assertThat(launches)
-        .singleElement()
-        .satisfies(
-            launch -> assertThat(launch.command()).containsSubsequence("-c:v", "h264_nvenc"));
+    assertThat(launcher.command(request.attemptId())).containsSubsequence("-c:v", "h264_nvenc");
   }
 
   @Test
@@ -172,15 +160,12 @@ class FfmpegTranscodeEngineTest {
       "Should launch FFmpeg with the software encoder when no hardware encoder is available")
   void shouldLaunchFfmpegWithTheSoftwareEncoderWhenNoHardwareEncoderIsAvailable() {
     executor = engineLaunching(runningProcess(), createCapabilityService(true, noHardware()));
+    var request = createRequest(TranscodeMode.FULL_TRANSCODE, "av1");
 
-    var producer =
-        executor.startProducer(
-            createRequest(TranscodeMode.FULL_TRANSCODE, "av1"), new RecordingSegmentSink());
+    var producer = executor.startProducer(request, new RecordingSegmentSink());
 
     producer.stop();
-    assertThat(launches)
-        .singleElement()
-        .satisfies(launch -> assertThat(launch.command()).containsSubsequence("-c:v", "libsvtav1"));
+    assertThat(launcher.command(request.attemptId())).containsSubsequence("-c:v", "libsvtav1");
   }
 
   @ParameterizedTest(name = "{0}")
@@ -190,13 +175,12 @@ class FfmpegTranscodeEngineTest {
   @DisplayName("Should launch FFmpeg copying the video when the mode keeps the video stream")
   void shouldLaunchFfmpegCopyingTheVideoWhenTheModeKeepsTheVideoStream(TranscodeMode mode) {
     executor = engineLaunching(runningProcess(), createCapabilityService(true, noHardware()));
+    var request = createRequest(mode, "h264");
 
-    var producer = executor.startProducer(createRequest(mode, "h264"), new RecordingSegmentSink());
+    var producer = executor.startProducer(request, new RecordingSegmentSink());
 
     producer.stop();
-    assertThat(launches)
-        .singleElement()
-        .satisfies(launch -> assertThat(launch.command()).containsSubsequence("-c:v", "copy"));
+    assertThat(launcher.command(request.attemptId())).containsSubsequence("-c:v", "copy");
   }
 
   @Test
@@ -239,7 +223,7 @@ class FfmpegTranscodeEngineTest {
 
     var thrown = catchThrowable(() -> executor.startProducer(request, new RecordingSegmentSink()));
 
-    assertThat(launches).isEmpty();
+    assertThat(launcher.hasLaunchedAny()).isFalse();
     assertThat(thrown)
         .isInstanceOf(TranscodeException.class)
         .hasMessage(
@@ -249,14 +233,11 @@ class FfmpegTranscodeEngineTest {
 
   private FfmpegTranscodeEngine engineLaunching(
       ScriptedProcess process, TranscodeCapabilityService capabilities) {
+    launcher = new ScriptedProcessLauncher(_ -> process);
     return FfmpegTranscodeEngine.builder()
         .commandBuilder(new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)))
         .capabilityService(capabilities)
-        .launcher(
-            (command, jobAttemptId) -> {
-              launches.add(new Launch(command, jobAttemptId));
-              return process;
-            })
+        .launcher(launcher)
         .build();
   }
 
@@ -267,8 +248,6 @@ class FfmpegTranscodeEngineTest {
   private static HardwareEncodingCapability noHardware() {
     return HardwareEncodingCapability.builder().available(false).encoders(Set.of()).build();
   }
-
-  private record Launch(List<String> command, UUID jobAttemptId) {}
 
   private TranscodeCapabilityService createCapabilityService(
       boolean available, HardwareEncodingCapability hwCapability) {

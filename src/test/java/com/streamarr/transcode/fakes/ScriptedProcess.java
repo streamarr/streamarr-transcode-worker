@@ -27,7 +27,7 @@ import lombok.NonNull;
  */
 public final class ScriptedProcess extends Process {
 
-  public static final int FORCIBLY_DESTROYED_EXIT_CODE = 137;
+  private static final int FORCIBLY_DESTROYED_EXIT_CODE = 137;
 
   private static final long PROCESS_ID = 4242;
 

@@ -1,5 +1,6 @@
 package com.streamarr.transcode.fakes;
 
+import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.streamarr.transcode.engine.FfmpegRecordings;
@@ -16,9 +17,6 @@ import java.util.concurrent.ConcurrentHashMap;
  * observe what happened to one attempt's FFmpeg.
  */
 public final class ScriptedProcessLauncher implements ProcessLauncher {
-
-  /** The recording a running FFmpeg holds back until it is asked to quit. */
-  private static final String RUNNING_OUTPUT = "01-encode-cfr.fmp4";
 
   private final Script script;
   private final Map<UUID, Launch> launches = new ConcurrentHashMap<>();
@@ -41,7 +39,7 @@ public final class ScriptedProcessLauncher implements ProcessLauncher {
   /** A process that holds its whole output back until {@code q} arrives, then exits cleanly. */
   public static ScriptedProcess.ScriptedProcessBuilder runningProcessBuilder() {
     return ScriptedProcess.builder()
-        .output(FfmpegRecordings.bytesOf(RUNNING_OUTPUT))
+        .output(FfmpegRecordings.bytesOf(ENCODED_RECORDING))
         .pauseAfter(0)
         .resumesOnQuit(true)
         .exitTiming(ExitTiming.AT_QUIT);
@@ -64,15 +62,15 @@ public final class ScriptedProcessLauncher implements ProcessLauncher {
 
   /** The process launched for the job attempt. */
   public ScriptedProcess process(UUID jobAttemptId) {
-    return launch(jobAttemptId).process();
+    return recordedLaunch(jobAttemptId).process();
   }
 
   /** The command FFmpeg was launched with for the job attempt. */
   public List<String> command(UUID jobAttemptId) {
-    return launch(jobAttemptId).command();
+    return recordedLaunch(jobAttemptId).command();
   }
 
-  private Launch launch(UUID jobAttemptId) {
+  private Launch recordedLaunch(UUID jobAttemptId) {
     var launch = launches.get(jobAttemptId);
     assertThat(launch).as("FFmpeg launched for job attempt %s", jobAttemptId).isNotNull();
     return launch;

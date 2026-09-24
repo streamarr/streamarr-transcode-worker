@@ -2,6 +2,8 @@ package com.streamarr.transcode.worker;
 
 import static com.streamarr.transcode.engine.FfmpegRecordings.bytesOf;
 import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
+import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
+import static com.streamarr.transcode.fixtures.RecordingFixtures.uploadNames;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engine;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.startVariant;
@@ -49,7 +51,6 @@ import org.junit.jupiter.params.provider.ValueSource;
 @DisplayName("Transcode Worker Job Attempt Tests")
 class TranscodeWorkerJobAttemptTest {
 
-  private static final String WHOLE_RUN = "01-encode-cfr.fmp4";
   private static final Duration EVENT_LIMIT = Duration.ofSeconds(10);
   private static final int UPLOAD_MESSAGE_BYTES = 64 * 1024;
 
@@ -67,8 +68,8 @@ class TranscodeWorkerJobAttemptTest {
       "Should upload every segment FFmpeg writes as fragmented MP4 when the attempt completes")
   void shouldUploadEverySegmentFfmpegWritesAsFragmentedMp4WhenTheAttemptCompletes()
       throws Exception {
-    var recording = recording(WHOLE_RUN);
-    var launcher = ScriptedProcessLauncher.writing(WHOLE_RUN);
+    var recording = recording(ENCODED_RECORDING);
+    var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
     var job = variantJobBuilder().build();
 
     try (var worker = worker(launcher)) {
@@ -80,7 +81,7 @@ class TranscodeWorkerJobAttemptTest {
       assertThat(launcher.hasLaunched(fromProto(job.getJobAttemptId()))).isTrue();
       assertThat(connection.uploads())
           .extracting(upload -> upload.metadata().getSegmentName())
-          .containsExactlyElementsOf(expectedNames(recording));
+          .containsExactlyElementsOf(uploadNames(recording));
       assertThat(connection.uploads())
           .extracting(upload -> (long) upload.content().length)
           .containsExactlyElementsOf(expectedLengths(recording));
@@ -100,7 +101,7 @@ class TranscodeWorkerJobAttemptTest {
               });
       var uploaded = new ByteArrayOutputStream();
       connection.uploads().forEach(upload -> uploaded.writeBytes(upload.content()));
-      assertThat(uploaded.toByteArray()).isEqualTo(bytesOf(WHOLE_RUN));
+      assertThat(uploaded.toByteArray()).isEqualTo(bytesOf(ENCODED_RECORDING));
     }
   }
 
@@ -108,7 +109,7 @@ class TranscodeWorkerJobAttemptTest {
   @DisplayName(
       "Should upload a segment in full-sized data messages when it is larger than one message")
   void shouldUploadASegmentInFullSizedDataMessagesWhenItIsLargerThanOneMessage() throws Exception {
-    var output = withLargeFirstMediaData(bytesOf(WHOLE_RUN));
+    var output = withLargeFirstMediaData(bytesOf(ENCODED_RECORDING));
     var launcher =
         new ScriptedProcessLauncher(_ -> ScriptedProcess.builder().output(output).build());
     var job = variantJobBuilder().build();
@@ -159,10 +160,10 @@ class TranscodeWorkerJobAttemptTest {
   @Test
   @DisplayName("Should send each upload message only when the upload call is ready for it")
   void shouldSendEachUploadMessageOnlyWhenTheUploadCallIsReadyForIt() throws Exception {
-    var recording = recording(WHOLE_RUN);
+    var recording = recording(ENCODED_RECORDING);
     var job = variantJobBuilder().build();
 
-    try (var worker = worker(ScriptedProcessLauncher.writing(WHOLE_RUN))) {
+    try (var worker = worker(ScriptedProcessLauncher.writing(ENCODED_RECORDING))) {
       worker.start("localhost", 1);
       var connection = runtime.connection();
       connection.withholdUploadReadiness();
@@ -191,7 +192,7 @@ class TranscodeWorkerJobAttemptTest {
       "Should refuse the job as an invalid specification when it asks for another container")
   void shouldRefuseTheJobAsAnInvalidSpecificationWhenItAsksForAnotherContainer(int container)
       throws Exception {
-    var launcher = ScriptedProcessLauncher.writing(WHOLE_RUN);
+    var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
     var job = variantJobBuilder();
     job.getDecisionBuilder().setContainerValue(container);
 
@@ -214,7 +215,7 @@ class TranscodeWorkerJobAttemptTest {
           + " frame rate")
   void shouldRefuseTheJobAsAnInvalidSpecificationWhenItEncodesVideoWithoutAUsableFrameRate(
       TranscodeMode mode, double framerate) throws Exception {
-    var launcher = ScriptedProcessLauncher.writing(WHOLE_RUN);
+    var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
     var job = variantJobBuilder();
     job.getDecisionBuilder().setMode(mode);
     job.getExecutionBuilder().setFramerate(framerate);
@@ -252,7 +253,7 @@ class TranscodeWorkerJobAttemptTest {
     job.getDecisionBuilder().setMode(mode);
     job.getExecutionBuilder().setFramerate(0);
 
-    try (var worker = worker(ScriptedProcessLauncher.writing(WHOLE_RUN))) {
+    try (var worker = worker(ScriptedProcessLauncher.writing(ENCODED_RECORDING))) {
       worker.start("localhost", 1);
       var connection = runtime.connection();
       startVariant(connection, job.build());
@@ -266,7 +267,7 @@ class TranscodeWorkerJobAttemptTest {
   void shouldFailTheAttemptAsATranscodeFailureWhenFfmpegExitsWithAnError() throws Exception {
     var launcher =
         new ScriptedProcessLauncher(
-            _ -> ScriptedProcess.builder().output(bytesOf(WHOLE_RUN)).exitCode(1).build());
+            _ -> ScriptedProcess.builder().output(bytesOf(ENCODED_RECORDING)).exitCode(1).build());
     var job = variantJobBuilder().build();
 
     try (var worker = worker(launcher)) {
@@ -288,12 +289,12 @@ class TranscodeWorkerJobAttemptTest {
           + " throws unexpectedly")
   void shouldFailTheAttemptAsATranscodeFailureAndEndFfmpegWhenReadingItsOutputThrowsUnexpectedly()
       throws Exception {
-    var failureOffset = recording(WHOLE_RUN).initializationSegment().byteLength() + 100;
+    var failureOffset = recording(ENCODED_RECORDING).initializationSegment().byteLength() + 100;
     var launcher =
         new ScriptedProcessLauncher(
             _ ->
                 ScriptedProcess.builder()
-                    .output(bytesOf(WHOLE_RUN))
+                    .output(bytesOf(ENCODED_RECORDING))
                     .failReadAfter(failureOffset)
                     .failReadWith(new IllegalStateException("scripted defect"))
                     .build());
@@ -313,8 +314,8 @@ class TranscodeWorkerJobAttemptTest {
   }
 
   @Test
-  @DisplayName("Should report the stopped attempt only after FFmpeg has exited")
-  void shouldReportTheStoppedAttemptOnlyAfterFfmpegHasExited() throws Exception {
+  @DisplayName("Should report the stopped attempt only after FFmpeg has exited when stopped")
+  void shouldReportTheStoppedAttemptOnlyAfterFfmpegHasExitedWhenStopped() throws Exception {
     var launcher =
         new ScriptedProcessLauncher(
             _ ->
@@ -380,7 +381,8 @@ class TranscodeWorkerJobAttemptTest {
   void shouldSettleTheAttemptOnceWhenAStopRacesFfmpegsFailure() throws Exception {
     var initializationSegment =
         Arrays.copyOf(
-            bytesOf(WHOLE_RUN), recording(WHOLE_RUN).initializationSegment().byteLength());
+            bytesOf(ENCODED_RECORDING),
+            recording(ENCODED_RECORDING).initializationSegment().byteLength());
     var launcher =
         new ScriptedProcessLauncher(
             _ ->
@@ -435,13 +437,6 @@ class TranscodeWorkerJobAttemptTest {
   private static EstablishWorkerSessionRequest lastEvent(
       ScriptedWorkerRuntime.Connection connection) {
     return connection.events().getLast();
-  }
-
-  private static List<String> expectedNames(Recording recording) {
-    return Stream.concat(
-            Stream.of("init.mp4"),
-            recording.segments().stream().map(segment -> "segment" + segment.number() + ".m4s"))
-        .toList();
   }
 
   private static List<Long> expectedLengths(Recording recording) {

@@ -249,10 +249,8 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     }
   }
 
-  /**
-   * Whether an upload call is ready for another message: always, unless the test withholds
-   * readiness and grants it one message at a time.
-   */
+  // Whether an upload call is ready for another message: always, unless the test withholds
+  // readiness and grants it one message at a time.
   private static final class UploadReadiness {
 
     private boolean withheld;

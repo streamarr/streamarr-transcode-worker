@@ -581,8 +581,8 @@ class FfmpegPackagingScriptsTest {
   }
 
   @Test
-  @DisplayName("Should reject a runtime whose mp4 muxer cannot fragment the worker's output")
-  void shouldRejectARuntimeWhoseMp4MuxerCannotFragmentTheWorkersOutput() throws Exception {
+  @DisplayName("Should reject the runtime when its mp4 muxer cannot fragment the worker's output")
+  void shouldRejectTheRuntimeWhenItsMp4MuxerCannotFragmentTheWorkersOutput() throws Exception {
     var buildpack = buildpack();
 
     var result =
@@ -1236,10 +1236,8 @@ class FfmpegPackagingScriptsTest {
     assertThat(probes).doesNotExist();
   }
 
-  /**
-   * FFmpeg and ffprobe inside the image: FFmpeg writes a fragmented MP4 stand-in to its standard
-   * output and a file anywhere else, and ffprobe records which output it recognized.
-   */
+  // FFmpeg and ffprobe inside the image: FFmpeg writes a fragmented MP4 stand-in to its standard
+  // output and a file anywhere else, and ffprobe records which output it recognized.
   private static void writeImageRuntime(ImageVerifierFixture verifier) throws IOException {
     ScriptCommand.writeFake(
         verifier.runtime(),

@@ -2,6 +2,7 @@ package com.streamarr.transcode.engine;
 
 import static com.streamarr.transcode.engine.FfmpegRecordings.bytesOf;
 import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
+import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -26,7 +27,6 @@ import org.junit.jupiter.api.io.TempDir;
 class ProcessBuilderLauncherTest {
 
   private static final Duration OUTCOME_LIMIT = Duration.ofSeconds(10);
-  private static final String WHOLE_RUN = "01-encode-cfr.fmp4";
 
   @TempDir Path tempDir;
 
@@ -49,14 +49,16 @@ class ProcessBuilderLauncherTest {
   }
 
   @Test
-  @DisplayName("Should complete the attempt when a launched process writes a whole run and exits")
-  void shouldCompleteTheAttemptWhenALaunchedProcessWritesAWholeRunAndExits() throws IOException {
-    var run = Files.write(tempDir.resolve(WHOLE_RUN), bytesOf(WHOLE_RUN));
+  @DisplayName(
+      "Should complete the attempt when a launched process writes a recorded output and exits")
+  void shouldCompleteTheAttemptWhenALaunchedProcessWritesARecordedOutputAndExits()
+      throws IOException {
+    var recordingFile = Files.write(tempDir.resolve(ENCODED_RECORDING), bytesOf(ENCODED_RECORDING));
 
-    var producer = producerRunning("cat \"$0\"", run.toString()).start();
+    var producer = producerRunning("cat \"$0\"", recordingFile.toString()).start();
 
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
-    assertThat(sink.acceptedBytes()).isEqualTo(bytesOf(WHOLE_RUN));
+    assertThat(sink.acceptedBytes()).isEqualTo(bytesOf(ENCODED_RECORDING));
   }
 
   @Test
@@ -75,15 +77,17 @@ class ProcessBuilderLauncherTest {
   }
 
   @Test
-  @DisplayName("Should settle the stop without destroying a launched process that quits on q")
-  void shouldSettleTheStopWithoutDestroyingALaunchedProcessThatQuitsOnQ()
+  @DisplayName(
+      "Should settle the stop without destroying the process when a launched process quits on q")
+  void shouldSettleTheStopWithoutDestroyingTheProcessWhenALaunchedProcessQuitsOnQ()
       throws IOException, InterruptedException {
-    var run = Files.write(tempDir.resolve(WHOLE_RUN), bytesOf(WHOLE_RUN));
-    var initializationSegmentLength = recording(WHOLE_RUN).initializationSegment().byteLength();
+    var recordingFile = Files.write(tempDir.resolve(ENCODED_RECORDING), bytesOf(ENCODED_RECORDING));
+    var initializationSegmentLength =
+        recording(ENCODED_RECORDING).initializationSegment().byteLength();
     var producer =
         producerRunning(
                 "head -c " + initializationSegmentLength + " \"$0\"; read -r -n 1 quit; exit 0",
-                run.toString())
+                recordingFile.toString())
             .gracePeriod(Duration.ofSeconds(30))
             .start();
 
@@ -111,7 +115,7 @@ class ProcessBuilderLauncherTest {
         .hasCauseInstanceOf(IOException.class);
   }
 
-  /** A producer whose FFmpeg is this bash script, with {@code $0} bound to the argument. */
+  // A producer whose FFmpeg is this bash script, with $0 bound to the argument.
   private Producer.ProducerBuilder producerRunning(String script, String argument) {
     return Producer.builder()
         .launcher(launcher)

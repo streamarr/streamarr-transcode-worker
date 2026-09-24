@@ -365,7 +365,7 @@ class FfmpegCommandBuilderTest {
     assertThat(cmd)
         .doesNotContain("-start_number")
         .noneMatch(argument -> argument.startsWith("-hls_"))
-        .noneMatch(argument -> argument.contains("/tmp/session-123"));
+        .endsWith("pipe:1");
   }
 
   @Test

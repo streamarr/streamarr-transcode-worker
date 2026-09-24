@@ -99,7 +99,7 @@ public final class ImageControlPlane
     };
   }
 
-  /** The first media segment behind its initialization segment, so that it decodes alone. */
+  // The first media segment behind its initialization segment, so that it decodes alone.
   private byte[] firstMediaSegment() {
     var segment = new ByteArrayOutputStream();
     segment.writeBytes(segments.getOrDefault("init.mp4", new byte[0]));

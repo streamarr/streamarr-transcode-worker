@@ -55,10 +55,10 @@ import org.junit.jupiter.params.provider.ValueSource;
 @DisplayName("Worker Media Smoke Tests")
 class WorkerMediaSmokeTest {
 
-  /** The 10 s fixture at the default 6 s period: the server advertises segments 0 and 1. */
+  // The 10 s fixture at the default 6 s period: the server advertises segments 0 and 1.
   private static final int FIXTURE_SEGMENT_COUNT = 2;
 
-  /** Media time of the long source; at a 1 s period it spans segments 0 to 1002. */
+  // Media time of the long source; at a 1 s period it spans segments 0 to 1002.
   private static final int LONG_SOURCE_SECONDS = 1003;
 
   private static final Duration JOB_LIMIT = Duration.ofMinutes(5);
@@ -291,7 +291,7 @@ class WorkerMediaSmokeTest {
     return new TranscodeCapabilityService("ffmpeg", command -> new ProcessBuilder(command).start());
   }
 
-  /** Lists no hardware encoder, so that each codec family runs its software encoder. */
+  // Lists no hardware encoder, so that each codec family runs its software encoder.
   private static TranscodeCapabilityService softwareCapabilities() {
     return new TranscodeCapabilityService(
         "ffmpeg",
@@ -304,7 +304,7 @@ class WorkerMediaSmokeTest {
         });
   }
 
-  /** A tiny H.264 and AAC source for more than a thousand 1 s segments, recorded once. */
+  // A tiny H.264 and AAC source for more than a thousand 1 s segments, recorded once.
   private static synchronized Path longSource() throws Exception {
     if (longSource == null) {
       var source = longSources.resolve("long.mp4");
@@ -384,7 +384,7 @@ class WorkerMediaSmokeTest {
     Files.copy(Path.of(source.toURI()), root.resolve("movie.mkv"));
   }
 
-  /** What the control plane accepted, in upload order. */
+  // What the control plane accepted, in upload order.
   private record MediaUploads(List<String> names, Map<String, byte[]> segments) {
 
     private byte[] contentOf(List<String> uploadNames) {

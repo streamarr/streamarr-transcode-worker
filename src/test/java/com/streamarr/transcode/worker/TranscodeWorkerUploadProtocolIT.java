@@ -1,5 +1,6 @@
 package com.streamarr.transcode.worker;
 
+import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engine;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -57,7 +58,6 @@ class TranscodeWorkerUploadProtocolIT {
   private static final UUID WORKER_ID = UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
   private static final UUID SOURCE_NAMESPACE_ID =
       UUID.fromString("cccccccc-cccc-cccc-cccc-cccccccccccc");
-  private static final String RECORDING = "01-encode-cfr.fmp4";
 
   @TempDir Path tempDir;
 
@@ -66,7 +66,7 @@ class TranscodeWorkerUploadProtocolIT {
   void shouldCancelUploadRpcWhenAcknowledgementTimesOut() throws Exception {
     var mediaRoot = Files.createDirectory(tempDir.resolve("media"));
     Files.writeString(mediaRoot.resolve("movie.mkv"), "test media");
-    var launcher = ScriptedProcessLauncher.writing(RECORDING);
+    var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
     var service = ControllableUploadService.leavesUploadRpcOpen();
     var job = variantJob();
 
@@ -92,7 +92,7 @@ class TranscodeWorkerUploadProtocolIT {
   void shouldFailVariantWhenServerAcknowledgesFewerBytesThanWorkerUploaded() throws Exception {
     var mediaRoot = Files.createDirectory(tempDir.resolve("media"));
     Files.writeString(mediaRoot.resolve("movie.mkv"), "test media");
-    var launcher = ScriptedProcessLauncher.writing(RECORDING);
+    var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
     var service = ControllableUploadService.acknowledgesFewerBytes();
     var job = variantJob();
 
@@ -116,7 +116,7 @@ class TranscodeWorkerUploadProtocolIT {
   void shouldFailVariantPromptlyWhenUploadStreamClosesBeforeAcknowledgement() throws Exception {
     var mediaRoot = Files.createDirectory(tempDir.resolve("media"));
     Files.writeString(mediaRoot.resolve("movie.mkv"), "test media");
-    var launcher = ScriptedProcessLauncher.writing(RECORDING);
+    var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
     var service = ControllableUploadService.closesWithoutResponse();
     var job = variantJob();
 

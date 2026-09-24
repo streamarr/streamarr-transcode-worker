@@ -2,6 +2,7 @@ package com.streamarr.transcode.engine;
 
 import static com.streamarr.transcode.engine.FfmpegRecordings.bytesOf;
 import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
+import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
@@ -36,7 +37,6 @@ class ProducerTest {
   private static final Duration POLL_INTERVAL = Duration.ofMillis(5);
   private static final UUID JOB_ATTEMPT_ID =
       UUID.fromString("0f6a3a9e-4c6b-4f59-9d0e-1c2b3a4d5e6f");
-  private static final String WHOLE_RUN = "01-encode-cfr.fmp4";
   private static final long SERVER_SEGMENT_CAP_BYTES = 16L * 1024 * 1024;
 
   private final RecordingSegmentSink sink = new RecordingSegmentSink();
@@ -65,8 +65,8 @@ class ProducerTest {
   @Test
   @DisplayName("Should not complete the attempt when the last media segment awaits acceptance")
   void shouldNotCompleteTheAttemptWhenTheLastMediaSegmentAwaitsAcceptance() {
-    var recording = recording(WHOLE_RUN);
-    var process = ScriptedProcess.builder().output(bytesOf(WHOLE_RUN)).build();
+    var recording = recording(ENCODED_RECORDING);
+    var process = ScriptedProcess.builder().output(bytesOf(ENCODED_RECORDING)).build();
     sink.holding(recording.segments().size());
 
     var producer = producerFor(process, recording).start();
@@ -82,10 +82,10 @@ class ProducerTest {
   @DisplayName(
       "Should not complete the attempt when the output has ended but FFmpeg has not exited")
   void shouldNotCompleteTheAttemptWhenTheOutputHasEndedButFfmpegHasNotExited() {
-    var recording = recording(WHOLE_RUN);
+    var recording = recording(ENCODED_RECORDING);
     var process =
         ScriptedProcess.builder()
-            .output(bytesOf(WHOLE_RUN))
+            .output(bytesOf(ENCODED_RECORDING))
             .exitTiming(ExitTiming.WHEN_TEST_EXITS)
             .build();
 
@@ -106,9 +106,9 @@ class ProducerTest {
       "Should deliver every media segment when FFmpeg exits before or after its output ends")
   void shouldDeliverEveryMediaSegmentWhenFfmpegExitsBeforeOrAfterItsOutputEnds(
       ExitTiming exitTiming) {
-    var recording = recording(WHOLE_RUN);
+    var recording = recording(ENCODED_RECORDING);
     var process =
-        ScriptedProcess.builder().output(bytesOf(WHOLE_RUN)).exitTiming(exitTiming).build();
+        ScriptedProcess.builder().output(bytesOf(ENCODED_RECORDING)).exitTiming(exitTiming).build();
 
     var producer = producerFor(process, recording).start();
 
@@ -119,10 +119,10 @@ class ProducerTest {
   @Test
   @DisplayName("Should fail the attempt with FFmpeg's last error output when FFmpeg exits non-zero")
   void shouldFailTheAttemptWithFfmpegsLastErrorOutputWhenFfmpegExitsNonZero() {
-    var recording = recording(WHOLE_RUN);
+    var recording = recording(ENCODED_RECORDING);
     var process =
         ScriptedProcess.builder()
-            .output(bytesOf(WHOLE_RUN))
+            .output(bytesOf(ENCODED_RECORDING))
             .exitCode(1)
             .stderr("frame=  264 fps=0.0 q=-1.0 size=N/A\nConversion failed!\n")
             .build();
@@ -137,8 +137,8 @@ class ProducerTest {
   @Test
   @DisplayName("Should fail the attempt when the output ends inside a box and FFmpeg exits cleanly")
   void shouldFailTheAttemptWhenTheOutputEndsInsideABoxAndFfmpegExitsCleanly() {
-    var recording = recording(WHOLE_RUN);
-    var process = ScriptedProcess.builder().output(truncated(bytesOf(WHOLE_RUN))).build();
+    var recording = recording(ENCODED_RECORDING);
+    var process = ScriptedProcess.builder().output(truncated(bytesOf(ENCODED_RECORDING))).build();
 
     var producer = producerFor(process, recording).start();
 
@@ -154,10 +154,10 @@ class ProducerTest {
   @DisplayName(
       "Should report FFmpeg's exit when the output ends inside a box and FFmpeg exits non-zero")
   void shouldReportFfmpegsExitWhenTheOutputEndsInsideABoxAndFfmpegExitsNonZero() {
-    var recording = recording(WHOLE_RUN);
+    var recording = recording(ENCODED_RECORDING);
     var process =
         ScriptedProcess.builder()
-            .output(truncated(bytesOf(WHOLE_RUN)))
+            .output(truncated(bytesOf(ENCODED_RECORDING)))
             .exitCode(234)
             .stderr("Error writing trailer of pipe:1: Broken pipe")
             .build();
@@ -172,8 +172,8 @@ class ProducerTest {
   @Test
   @DisplayName("Should fail the attempt and end FFmpeg when a box exceeds the segment cap")
   void shouldFailTheAttemptAndEndFfmpegWhenABoxExceedsTheSegmentCap() {
-    var recording = recording(WHOLE_RUN);
-    var recorded = bytesOf(WHOLE_RUN);
+    var recording = recording(ENCODED_RECORDING);
+    var recorded = bytesOf(ENCODED_RECORDING);
     var output =
         IsoBoxes.concat(
             Arrays.copyOf(recorded, recording.initializationSegment().byteLength()),
@@ -206,10 +206,10 @@ class ProducerTest {
   @Test
   @DisplayName("Should fail the attempt and end FFmpeg when the output does not begin with a movie")
   void shouldFailTheAttemptAndEndFfmpegWhenTheOutputDoesNotBeginWithAMovie() {
-    var output = IsoBoxes.concat(IsoBoxes.box("free", new byte[16]), bytesOf(WHOLE_RUN));
+    var output = IsoBoxes.concat(IsoBoxes.box("free", new byte[16]), bytesOf(ENCODED_RECORDING));
     var process = ScriptedProcess.builder().output(output).build();
 
-    var producer = producerFor(process, recording(WHOLE_RUN)).start();
+    var producer = producerFor(process, recording(ENCODED_RECORDING)).start();
 
     var failure = failureOf(producer);
     assertThat(failure.reason()).isEqualTo(ProducerFailure.MALFORMED_OUTPUT);
@@ -232,21 +232,23 @@ class ProducerTest {
   }
 
   static Stream<Arguments> outputsWithoutAMediaSegment() {
-    var wholeRun = recording(WHOLE_RUN);
-    var restart = recording("07-copy-seek30.fmp4");
+    var encoded = recording(ENCODED_RECORDING);
+    var replacementAttempt = recording("07-copy-seek30.fmp4");
     var prerollEnd =
-        restart.initializationSegment().byteLength()
-            + restart.discardedPreroll().stream().mapToLong(SegmentSummary::byteLength).sum();
+        replacementAttempt.initializationSegment().byteLength()
+            + replacementAttempt.discardedPreroll().stream()
+                .mapToLong(SegmentSummary::byteLength)
+                .sum();
     return Stream.of(
-        Arguments.of("no output", new byte[0], wholeRun),
+        Arguments.of("no output", new byte[0], encoded),
         Arguments.of(
             "an initialization segment alone",
-            Arrays.copyOf(bytesOf(WHOLE_RUN), wholeRun.initializationSegment().byteLength()),
-            wholeRun),
+            Arrays.copyOf(bytesOf(ENCODED_RECORDING), encoded.initializationSegment().byteLength()),
+            encoded),
         Arguments.of(
             "preroll alone",
-            Arrays.copyOf(bytesOf(restart.file()), Math.toIntExact(prerollEnd)),
-            restart));
+            Arrays.copyOf(bytesOf(replacementAttempt.file()), Math.toIntExact(prerollEnd)),
+            replacementAttempt));
   }
 
   @Test
@@ -254,8 +256,8 @@ class ProducerTest {
       "Should fail the attempt and deliver nothing further when the sink does not accept a"
           + " segment")
   void shouldFailTheAttemptAndDeliverNothingFurtherWhenTheSinkDoesNotAcceptASegment() {
-    var recording = recording(WHOLE_RUN);
-    var process = ScriptedProcess.builder().output(bytesOf(WHOLE_RUN)).build();
+    var recording = recording(ENCODED_RECORDING);
+    var process = ScriptedProcess.builder().output(bytesOf(ENCODED_RECORDING)).build();
     sink.refusing(3);
 
     var producer = producerFor(process, recording).start();
@@ -270,10 +272,10 @@ class ProducerTest {
   @Test
   @DisplayName("Should fail the attempt and end FFmpeg when its output cannot be read")
   void shouldFailTheAttemptAndEndFfmpegWhenItsOutputCannotBeRead() {
-    var recording = recording(WHOLE_RUN);
+    var recording = recording(ENCODED_RECORDING);
     var process =
         ScriptedProcess.builder()
-            .output(bytesOf(WHOLE_RUN))
+            .output(bytesOf(ENCODED_RECORDING))
             .failReadAfter(recording.initializationSegment().byteLength() + 100)
             .build();
 
@@ -287,10 +289,10 @@ class ProducerTest {
   @Test
   @DisplayName("Should fail the attempt and end FFmpeg when reading its output throws unexpectedly")
   void shouldFailTheAttemptAndEndFfmpegWhenReadingItsOutputThrowsUnexpectedly() {
-    var recording = recording(WHOLE_RUN);
+    var recording = recording(ENCODED_RECORDING);
     var process =
         ScriptedProcess.builder()
-            .output(bytesOf(WHOLE_RUN))
+            .output(bytesOf(ENCODED_RECORDING))
             .failReadAfter(recording.initializationSegment().byteLength() + 100)
             .failReadWith(new IllegalStateException("scripted defect"))
             .build();
@@ -307,8 +309,8 @@ class ProducerTest {
   @Test
   @DisplayName("Should fail the attempt and end FFmpeg when the sink throws an error")
   void shouldFailTheAttemptAndEndFfmpegWhenTheSinkThrowsAnError() {
-    var recording = recording(WHOLE_RUN);
-    var process = ScriptedProcess.builder().output(bytesOf(WHOLE_RUN)).build();
+    var recording = recording(ENCODED_RECORDING);
+    var process = ScriptedProcess.builder().output(bytesOf(ENCODED_RECORDING)).build();
     sink.failing(2, new OutOfMemoryError("scripted exhaustion"));
 
     var producer = producerFor(process, recording).start();
@@ -325,10 +327,10 @@ class ProducerTest {
       "Should settle only the stop and deliver nothing further when stopped while FFmpeg is"
           + " writing")
   void shouldSettleOnlyTheStopAndDeliverNothingFurtherWhenStoppedWhileFfmpegIsWriting() {
-    var recording = recording(WHOLE_RUN);
+    var recording = recording(ENCODED_RECORDING);
     var process =
         ScriptedProcess.builder()
-            .output(truncated(bytesOf(WHOLE_RUN)))
+            .output(truncated(bytesOf(ENCODED_RECORDING)))
             .pauseAfter(insideThirdMediaSegment(recording))
             .resumesOnQuit(true)
             .exitCode(255)
@@ -348,8 +350,8 @@ class ProducerTest {
   @Test
   @DisplayName("Should let FFmpeg finish quitting when its output breaks after a stop")
   void shouldLetFfmpegFinishQuittingWhenItsOutputBreaksAfterAStop() {
-    var recording = recording(WHOLE_RUN);
-    var recorded = bytesOf(WHOLE_RUN);
+    var recording = recording(ENCODED_RECORDING);
+    var recorded = bytesOf(ENCODED_RECORDING);
     var firstTwoSegmentsEnd = insideThirdMediaSegment(recording) - 10;
     var output =
         IsoBoxes.concat(
@@ -376,11 +378,11 @@ class ProducerTest {
   @Test
   @DisplayName("Should settle only the stop when the output cannot be read after a stop")
   void shouldSettleOnlyTheStopWhenTheOutputCannotBeReadAfterAStop() {
-    var recording = recording(WHOLE_RUN);
+    var recording = recording(ENCODED_RECORDING);
     var pause = insideThirdMediaSegment(recording);
     var process =
         ScriptedProcess.builder()
-            .output(bytesOf(WHOLE_RUN))
+            .output(bytesOf(ENCODED_RECORDING))
             .pauseAfter(pause)
             .failReadAfter(pause + 100)
             .resumesOnQuit(true)
@@ -398,10 +400,10 @@ class ProducerTest {
   @DisplayName(
       "Should destroy FFmpeg after the grace period when stopped and FFmpeg ignores the quit")
   void shouldDestroyFfmpegAfterTheGracePeriodWhenStoppedAndFfmpegIgnoresTheQuit() {
-    var recording = recording(WHOLE_RUN);
+    var recording = recording(ENCODED_RECORDING);
     var process =
         ScriptedProcess.builder()
-            .output(bytesOf(WHOLE_RUN))
+            .output(bytesOf(ENCODED_RECORDING))
             .pauseAfter(insideThirdMediaSegment(recording))
             .build();
     var producer = producerFor(process, recording).gracePeriod(Duration.ofMillis(100)).start();
@@ -418,10 +420,10 @@ class ProducerTest {
   @Test
   @DisplayName("Should destroy FFmpeg at once when the thread stopping the attempt is interrupted")
   void shouldDestroyFfmpegAtOnceWhenTheThreadStoppingTheAttemptIsInterrupted() {
-    var recording = recording(WHOLE_RUN);
+    var recording = recording(ENCODED_RECORDING);
     var process =
         ScriptedProcess.builder()
-            .output(bytesOf(WHOLE_RUN))
+            .output(bytesOf(ENCODED_RECORDING))
             .pauseAfter(insideThirdMediaSegment(recording))
             .build();
     var producer = producerFor(process, recording).gracePeriod(Duration.ofMinutes(10)).start();
@@ -440,8 +442,8 @@ class ProducerTest {
       "Should deliver nothing after the delivery in flight when stopped while the sink holds a"
           + " segment")
   void shouldDeliverNothingAfterTheDeliveryInFlightWhenStoppedWhileTheSinkHoldsASegment() {
-    var recording = recording(WHOLE_RUN);
-    var process = ScriptedProcess.builder().output(bytesOf(WHOLE_RUN)).build();
+    var recording = recording(ENCODED_RECORDING);
+    var process = ScriptedProcess.builder().output(bytesOf(ENCODED_RECORDING)).build();
     sink.holding(2);
     var producer = producerFor(process, recording).gracePeriod(Duration.ofMillis(100)).start();
     awaiting().until(sink::isHolding);
@@ -463,10 +465,10 @@ class ProducerTest {
           + " the exit")
   void shouldSettleOnlyTheStopWhenFfmpegExitsAfterItsOutputEndedWhileAStopAwaitsTheExit()
       throws InterruptedException {
-    var recording = recording(WHOLE_RUN);
+    var recording = recording(ENCODED_RECORDING);
     var process =
         ScriptedProcess.builder()
-            .output(bytesOf(WHOLE_RUN))
+            .output(bytesOf(ENCODED_RECORDING))
             .exitTiming(ExitTiming.WHEN_TEST_EXITS)
             .build();
     var producer = producerFor(process, recording).start();
@@ -483,8 +485,8 @@ class ProducerTest {
   @Test
   @DisplayName("Should keep the completed outcome when stopped after the attempt completed")
   void shouldKeepTheCompletedOutcomeWhenStoppedAfterTheAttemptCompleted() {
-    var recording = recording(WHOLE_RUN);
-    var process = ScriptedProcess.builder().output(bytesOf(WHOLE_RUN)).build();
+    var recording = recording(ENCODED_RECORDING);
+    var process = ScriptedProcess.builder().output(bytesOf(ENCODED_RECORDING)).build();
     var producer = producerFor(process, recording).start();
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT);
 
@@ -497,10 +499,10 @@ class ProducerTest {
   @Test
   @DisplayName("Should ask FFmpeg to quit once when stopped twice")
   void shouldAskFfmpegToQuitOnceWhenStoppedTwice() {
-    var recording = recording(WHOLE_RUN);
+    var recording = recording(ENCODED_RECORDING);
     var process =
         ScriptedProcess.builder()
-            .output(bytesOf(WHOLE_RUN))
+            .output(bytesOf(ENCODED_RECORDING))
             .pauseAfter(insideThirdMediaSegment(recording))
             .resumesOnQuit(true)
             .build();
@@ -515,12 +517,15 @@ class ProducerTest {
   }
 
   @Test
-  @DisplayName("Should return from a second stop only once the first stop has settled")
-  void shouldReturnFromASecondStopOnlyOnceTheFirstStopHasSettled() throws InterruptedException {
-    var recording = recording(WHOLE_RUN);
+  @DisplayName(
+      "Should return from a second stop only after the first settles when stopped twice"
+          + " concurrently")
+  void shouldReturnFromASecondStopOnlyAfterTheFirstSettlesWhenStoppedTwiceConcurrently()
+      throws InterruptedException {
+    var recording = recording(ENCODED_RECORDING);
     var process =
         ScriptedProcess.builder()
-            .output(bytesOf(WHOLE_RUN))
+            .output(bytesOf(ENCODED_RECORDING))
             .pauseAfter(insideThirdMediaSegment(recording))
             .build();
     var producer = producerFor(process, recording).gracePeriod(Duration.ofMinutes(10)).start();
@@ -542,8 +547,8 @@ class ProducerTest {
       "Should settle the stop when stopped while the sink holds the last segment of an exited"
           + " FFmpeg")
   void shouldSettleTheStopWhenStoppedWhileTheSinkHoldsTheLastSegmentOfAnExitedFfmpeg() {
-    var recording = recording(WHOLE_RUN);
-    var process = ScriptedProcess.builder().output(bytesOf(WHOLE_RUN)).build();
+    var recording = recording(ENCODED_RECORDING);
+    var process = ScriptedProcess.builder().output(bytesOf(ENCODED_RECORDING)).build();
     sink.holding(recording.segments().size());
     var producer = producerFor(process, recording).start();
     awaiting().until(sink::isHolding);
@@ -577,14 +582,14 @@ class ProducerTest {
         .actual();
   }
 
-  /** An offset inside the first fragment of the third media segment, before it is complete. */
+  // An offset inside the first fragment of the third media segment, before it is complete.
   private static int insideThirdMediaSegment(Recording recording) {
     var firstTwoSegments =
         recording.segments().stream().limit(2).mapToLong(SegmentSummary::byteLength).sum();
     return Math.toIntExact(recording.initializationSegment().byteLength() + firstTwoSegments + 10);
   }
 
-  /** The output without the last bytes of its final box. */
+  // The output without the last bytes of its final box.
   private static byte[] truncated(byte[] output) {
     return Arrays.copyOf(output, output.length - 100);
   }
@@ -606,7 +611,7 @@ class ProducerTest {
         .toList();
   }
 
-  /** The recording without the preroll the producer discards between the two. */
+  // The recording without the preroll the producer discards between the two.
   private static byte[] deliveredBytesOf(Recording recording) {
     var recorded = bytesOf(recording.file());
     var initializationSegmentLength = recording.initializationSegment().byteLength();

@@ -2,6 +2,8 @@ package com.streamarr.transcode.worker;
 
 import static com.streamarr.transcode.engine.FfmpegRecordings.bytesOf;
 import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
+import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
+import static com.streamarr.transcode.fixtures.RecordingFixtures.uploadNames;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.SOURCE_NAMESPACE_ID;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engine;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.workerConfigurationBuilder;
@@ -39,7 +41,6 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
-import com.streamarr.transcode.engine.FfmpegRecordings.Recording;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
@@ -66,7 +67,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.UnaryOperator;
-import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -76,8 +76,6 @@ import org.slf4j.LoggerFactory;
 @Tag("IntegrationTest")
 @DisplayName("Transcode Worker Control Plane Integration Tests")
 class TranscodeWorkerControlPlaneIT {
-
-  private static final String WHOLE_RUN = "01-encode-cfr.fmp4";
 
   @TempDir Path tempDir;
 
@@ -293,9 +291,9 @@ class TranscodeWorkerControlPlaneIT {
   @DisplayName("Should fail the attempt when FFmpeg exits cleanly without a media segment")
   void shouldFailTheAttemptWhenFfmpegExitsCleanlyWithoutAMediaSegment() throws Exception {
     var service = new ControllableWorkerService();
-    var recording = recording(WHOLE_RUN);
+    var recording = recording(ENCODED_RECORDING);
     var initializationOnly =
-        Arrays.copyOf(bytesOf(WHOLE_RUN), recording.initializationSegment().byteLength());
+        Arrays.copyOf(bytesOf(ENCODED_RECORDING), recording.initializationSegment().byteLength());
     var launcher =
         new ScriptedProcessLauncher(
             _ -> ScriptedProcess.builder().output(initializationOnly).build());
@@ -322,12 +320,12 @@ class TranscodeWorkerControlPlaneIT {
   @DisplayName("Should upload every segment when FFmpeg exits before the worker reads its output")
   void shouldUploadEverySegmentWhenFfmpegExitsBeforeTheWorkerReadsItsOutput() throws Exception {
     var service = new ControllableWorkerService();
-    var recording = recording(WHOLE_RUN);
+    var recording = recording(ENCODED_RECORDING);
     var launcher =
         new ScriptedProcessLauncher(
             _ ->
                 ScriptedProcess.builder()
-                    .output(bytesOf(WHOLE_RUN))
+                    .output(bytesOf(ENCODED_RECORDING))
                     .exitTiming(ExitTiming.AT_LAUNCH)
                     .build());
     var job = variantJob();
@@ -435,7 +433,7 @@ class TranscodeWorkerControlPlaneIT {
         new ScriptedProcessLauncher(
             _ ->
                 ScriptedProcess.builder()
-                    .output(bytesOf(WHOLE_RUN))
+                    .output(bytesOf(ENCODED_RECORDING))
                     .exitTiming(ExitTiming.AT_QUIT)
                     .build());
     var job = variantJob();
@@ -478,12 +476,12 @@ class TranscodeWorkerControlPlaneIT {
 
   @Test
   @DisplayName(
-      "Should read no further output while the control plane has not acknowledged a segment")
-  void shouldReadNoFurtherOutputWhileTheControlPlaneHasNotAcknowledgedASegment() throws Exception {
+      "Should read no further output when the control plane has not acknowledged a segment")
+  void shouldReadNoFurtherOutputWhenTheControlPlaneHasNotAcknowledgedASegment() throws Exception {
     var service = new ControllableWorkerService();
     service.acknowledgeUploads = false;
-    var recording = recording(WHOLE_RUN);
-    var launcher = ScriptedProcessLauncher.writing(WHOLE_RUN);
+    var recording = recording(ENCODED_RECORDING);
+    var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
     var job = variantJob();
     try (var server = new TestServer(service);
         var worker = worker(preparedMediaRoot(), launcher)) {
@@ -513,10 +511,11 @@ class TranscodeWorkerControlPlaneIT {
   @DisplayName("Should complete the attempt when the control plane acknowledges every segment")
   void shouldCompleteTheAttemptWhenTheControlPlaneAcknowledgesEverySegment() throws Exception {
     var service = new ControllableWorkerService();
-    var recording = recording(WHOLE_RUN);
+    var recording = recording(ENCODED_RECORDING);
     var job = variantJob();
     try (var server = new TestServer(service);
-        var worker = worker(preparedMediaRoot(), ScriptedProcessLauncher.writing(WHOLE_RUN))) {
+        var worker =
+            worker(preparedMediaRoot(), ScriptedProcessLauncher.writing(ENCODED_RECORDING))) {
       server.start();
       worker.start("localhost", server.port());
 
@@ -537,7 +536,7 @@ class TranscodeWorkerControlPlaneIT {
               });
       var uploaded = new ByteArrayOutputStream();
       service.uploads.forEach(upload -> uploaded.writeBytes(upload.bytes()));
-      assertThat(uploaded.toByteArray()).isEqualTo(bytesOf(WHOLE_RUN));
+      assertThat(uploaded.toByteArray()).isEqualTo(bytesOf(ENCODED_RECORDING));
     }
   }
 
@@ -545,13 +544,6 @@ class TranscodeWorkerControlPlaneIT {
     await().atMost(5, TimeUnit.SECONDS).until(() -> !process.isAlive());
     assertThat(process.stdinText()).isEqualTo("q");
     assertThat(process.wasDestroyedForcibly()).isFalse();
-  }
-
-  private static List<String> uploadNames(Recording recording) {
-    return Stream.concat(
-            Stream.of("init.mp4"),
-            recording.segments().stream().map(segment -> "segment" + segment.number() + ".m4s"))
-        .toList();
   }
 
   private Path preparedMediaRoot() throws IOException {
