@@ -6,17 +6,18 @@
 # library): analyze.py reads the recorded boxes itself, groups the fragments by the ADR rules,
 # measures the HLS muxer's cut points for the same sources, and writes expected.json.
 #
-# It writes the recordings and expected.json into its own directory, wherever it is run from:
+# It writes the recordings and expected.json into src/test/resources/fmp4, wherever it is run from:
 #
-#   src/test/resources/fmp4/record-fixtures.sh                  # re-record in place
-#   WORK=/some/dir src/test/resources/fmp4/record-fixtures.sh   # keep the sources, logs and HLS oracle outputs
-#   WORKER_IMAGE=streamarr-worker:local src/test/resources/fmp4/record-fixtures.sh   # record with another image
+#   src/test/fmp4-recorder/record-fixtures.sh                  # re-record in place
+#   WORK=/some/dir src/test/fmp4-recorder/record-fixtures.sh   # keep the sources, logs and HLS oracle outputs
+#   WORKER_IMAGE=streamarr-worker:local src/test/fmp4-recorder/record-fixtures.sh   # record with another image
 #
 # Sources are synthesized with lavfi inside the container; nothing is downloaded.
 set -euo pipefail
 
 IMAGE="${WORKER_IMAGE:-streamarr/streamarr-transcode-worker:0.1.0-SNAPSHOT@sha256:9d2d286c4f192e5e359cd7ead44ca05c7d0c720d491c3d5b4a6becfffcd61caa}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
+FIXTURES="$(cd "$HERE/../resources/fmp4" && pwd)"
 WORK="${WORK:-$(mktemp -d)}"
 mkdir -p "$WORK"
 
@@ -216,5 +217,5 @@ CONTAINER
 docker run --rm --entrypoint /cnb/lifecycle/launcher -v "$WORK":/work "$IMAGE" bash /work/record.sh \
   > "$WORK/launcher.log" 2>&1 || { cat "$WORK/launcher.log"; exit 1; }
 
-python3 -B "$HERE/analyze.py" --work "$WORK" --out "$HERE" --image "$IMAGE"
-echo "recorded into $HERE (sources, logs and HLS oracle outputs in $WORK)"
+python3 -B "$HERE/analyze.py" --work "$WORK" --out "$FIXTURES" --image "$IMAGE"
+echo "recorded into $FIXTURES (sources, logs and HLS oracle outputs in $WORK)"

@@ -11,21 +11,24 @@ expectations for any test, such as one that replays the bytes through a scripted
 |---|---|
 | `NN-*.fmp4` | A recorded `pipe:1` stream: `ftyp` + `moov`, then `moof` + `mdat` fragments, exactly as FFmpeg wrote them |
 | `expected.json` | Per fixture: expected segments, discarded preroll, skip failure, audio-only tail, init digest, HLS oracle comparison; plus init identity pairs and ADR side claims |
-| `record-fixtures.sh` | Regenerates everything from scratch in the pinned worker image (about 15 s) |
-| `analyze.py` | Groups the recordings by the ADR rules, evaluates the HLS oracles, writes `expected.json` |
-| `fmp4dump.py` | Standalone box reader (`python3 fmp4dump.py FILE`), independent of the worker's Java code |
+| `../../fmp4-recorder/record-fixtures.sh` | Regenerates everything from scratch in the pinned worker image (about 15 s) |
+| `../../fmp4-recorder/analyze.py` | Groups the recordings by the ADR rules, evaluates the HLS oracles, writes `expected.json` |
+| `../../fmp4-recorder/fmp4dump.py` | Standalone box reader (`python3 fmp4dump.py FILE`), independent of the worker's Java code |
+
+The recorder lives in `src/test/fmp4-recorder`, outside the test classpath; only the recordings,
+`expected.json` and this file are test resources.
 
 ## Regenerating
 
 From the repository root (Docker, and python3 with the standard library only):
 
 ```
-src/test/resources/fmp4/record-fixtures.sh                                # re-record in place
-WORK=/tmp/fx src/test/resources/fmp4/record-fixtures.sh                   # keep sources, FFmpeg logs and HLS oracle outputs
-WORKER_IMAGE=streamarr-worker:local src/test/resources/fmp4/record-fixtures.sh   # record with another worker image
+src/test/fmp4-recorder/record-fixtures.sh                                # re-record in place
+WORK=/tmp/fx src/test/fmp4-recorder/record-fixtures.sh                   # keep sources, FFmpeg logs and HLS oracle outputs
+WORKER_IMAGE=streamarr-worker:local src/test/fmp4-recorder/record-fixtures.sh   # record with another worker image
 ```
 
-The script writes the recordings and `expected.json` into its own directory, so `git diff` shows
+The script writes the recordings and `expected.json` into this directory, so `git diff` shows
 what a re-recording changed and `RecordedFfmpegOutputTest` then checks the reader and grouper
 against it. Re-record after an FFmpeg lock update with an image built from that lock (see
 [Image validation](../../../../docs/image-validation.md)), and review every changed expectation.
