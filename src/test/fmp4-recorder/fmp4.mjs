@@ -2,7 +2,8 @@
 // Independent reader for FFmpeg's fragmented MP4 output (no Java, no FFmpeg).
 //
 // Reads top-level ISOBMFF boxes: ftyp + moov form the initialization segment; each moof with the
-// mdat that follows it forms one fragment. For every fragment it reports, per track, the first
+// mdat that follows it forms one fragment, and every sample the moof describes must lie inside that
+// mdat. For every fragment it reports, per track, the first
 // sample's presentation time (tfdt baseMediaDecodeTime + that sample's composition offset from
 // trun, signed when trun version is 1, no edit list), whether that sample is a sync sample (trun
 // first_sample_flags, else trun per-sample flags of sample 0, else tfhd default_sample_flags,
@@ -189,6 +190,9 @@ export function parseMoov(data, body, stop) {
   return tracks;
 }
 
+const TFHD_BASE_DATA_OFFSET = 0x1;
+const TFHD_DEFAULT_BASE_IS_MOOF = 0x020000;
+
 function trackFragmentHeader(data, body, stop, tracks) {
   const { flags, fields } = fullBox(data, required(child(data, body, stop, 'tfhd'), 'tfhd'), 'tfhd');
   const trackId = fields.u32();
@@ -201,7 +205,9 @@ function trackFragmentHeader(data, body, stop, tracks) {
     size: track.trexSize ?? 0,
     flags: track.trexFlags ?? 0,
   };
-  fields.skip((flags & 0x1 ? 8 : 0) + (flags & 0x2 ? 4 : 0));
+  const baseDataOffset = flags & TFHD_BASE_DATA_OFFSET ? Number(fields.u64()) : null;
+  const defaultBaseIsMoof = (flags & TFHD_DEFAULT_BASE_IS_MOOF) !== 0;
+  fields.skip(flags & 0x2 ? 4 : 0);
   if (flags & 0x8) {
     defaults.duration = fields.u32();
   }
@@ -211,7 +217,7 @@ function trackFragmentHeader(data, body, stop, tracks) {
   if (flags & 0x20) {
     defaults.flags = fields.u32();
   }
-  return { track, defaults };
+  return { track, defaults, baseDataOffset, defaultBaseIsMoof };
 }
 
 function baseMediaDecodeTime(data, body, stop) {
@@ -219,10 +225,10 @@ function baseMediaDecodeTime(data, body, stop) {
   return version === 1 ? fields.u64() : BigInt(fields.u32());
 }
 
-function trackRunSamples(data, trun, defaults) {
+function trackRun(data, trun, defaults) {
   const { version, flags, fields } = fullBox(data, trun, 'trun');
   const count = fields.u32();
-  fields.skip(flags & 0x1 ? 4 : 0);
+  const dataOffset = flags & 0x1 ? fields.s32() : null;
   const firstFlags = flags & 0x4 ? fields.u32() : null;
   const samples = [];
   for (let index = 0; index < count; index++) {
@@ -244,23 +250,55 @@ function trackRunSamples(data, trun, defaults) {
     }
     samples.push(sample);
   }
-  return samples;
+  return { dataOffset, samples };
 }
 
 export function isSync(flags) {
   return (flags & NON_SYNC) === 0;
 }
 
-function parseTraf(data, body, stop, tracks) {
-  const { track, defaults } = trackFragmentHeader(data, body, stop, tracks);
+/**
+ * Where each run's sample data starts (ISO/IEC 14496-12 8.8.7 and 8.8.8): the traf's base is the
+ * tfhd base-data-offset, else the moof with default-base-is-moof, else the moof for the first traf
+ * and the end of the previous traf's data after it; a run starts at base + its data offset, else
+ * where the previous run of the traf ended, else at the base. Positions are offsets into the stream.
+ */
+function placeRuns({ header, runs, layout }) {
+  let base = layout.previousTrafEnd;
+  if (header.defaultBaseIsMoof) {
+    base = layout.moofStart;
+  }
+  if (header.baseDataOffset !== null) {
+    base = header.baseDataOffset;
+  }
+  let end = base;
+  const ranges = runs.map((run) => {
+    const start = run.dataOffset === null ? end : base + run.dataOffset;
+    let position = start;
+    for (const sample of run.samples) {
+      sample.offset = position;
+      position += sample.size;
+    }
+    end = position;
+    return [start, end];
+  });
+  layout.previousTrafEnd = end;
+  return ranges;
+}
+
+function parseTraf(data, [body, stop], { tracks, layout }) {
+  const header = trackFragmentHeader(data, body, stop, tracks);
   const base = baseMediaDecodeTime(data, body, stop);
-  const samples = [];
+  const runs = [];
   for (const [type, , trunBody, trunStop] of boxes(data, body, stop)) {
     if (type === 'trun') {
-      samples.push(...trackRunSamples(data, [trunBody, trunStop], defaults));
+      runs.push(trackRun(data, [trunBody, trunStop], header.defaults));
     }
   }
+  const dataRanges = placeRuns({ header, runs, layout });
+  const samples = runs.flatMap((run) => run.samples);
   const first = samples[0] ?? null;
+  const track = header.track;
   return {
     trackId: track.trackId,
     handler: track.handler,
@@ -272,7 +310,21 @@ function parseTraf(data, body, stop, tracks) {
     durationSum: samples.reduce((sum, sample) => sum + BigInt(sample.duration), 0n),
     syncSamples: samples.filter((sample) => isSync(sample.flags)).length,
     samples,
+    dataRanges,
   };
+}
+
+/** Every run that carries bytes must lie inside the body of the mdat that follows its moof. */
+function requireDataInside(fragment, [bodyStart, end]) {
+  for (const traf of fragment.trafs) {
+    for (const [start, stop] of traf.dataRanges) {
+      if (stop > start && (start < bodyStart || stop > end)) {
+        throw new Mp4FormatError(
+          `track ${traf.trackId} sample data at ${start}..${stop} lies outside the mdat body at ${bodyStart}..${end}`,
+        );
+      }
+    }
+  }
 }
 
 /** Reads one stream: the initialization segment's tracks, then every moof + mdat fragment. */
@@ -293,9 +345,10 @@ export function readStream(data) {
         throw new Mp4FormatError(`moof at ${start} follows a moof with no mdat`);
       }
       const trafs = [];
+      const layout = { moofStart: start, previousTrafEnd: start };
       for (const [child, , trafBody, trafStop] of boxes(data, body, stop)) {
         if (child === 'traf') {
-          trafs.push(parseTraf(data, trafBody, trafStop, tracks));
+          trafs.push(parseTraf(data, [trafBody, trafStop], { tracks, layout }));
         }
       }
       pendingMoof = { offset: start, trafs };
@@ -303,6 +356,7 @@ export function readStream(data) {
       if (pendingMoof === null) {
         throw new Mp4FormatError(`mdat at ${start} without moof`);
       }
+      requireDataInside(pendingMoof, [body, stop]);
       pendingMoof.byteLength = stop - pendingMoof.offset;
       fragments.push(pendingMoof);
       pendingMoof = null;
@@ -369,7 +423,7 @@ export function describeStream(stream) {
     ),
     fragments: stream.fragments.map((fragment) => ({
       offset: fragment.offset,
-      trafs: fragment.trafs.map(({ samples, ...traf }) => traf),
+      trafs: fragment.trafs.map(({ samples, dataRanges, ...traf }) => traf),
       byteLength: fragment.byteLength,
     })),
   };

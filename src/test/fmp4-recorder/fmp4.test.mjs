@@ -203,6 +203,54 @@ describe('fmp4 box structure', () => {
   });
 });
 
+describe('fmp4 sample data', () => {
+  const tfdt = fullBox('tfdt', 1, 0, u64(0));
+  const videoRun = (options = {}) => trun({ samples: [{ size: 2 }], firstSampleFlags: SYNC, ...options });
+  const audioRun = (options = {}) => trun({ samples: [{ size: 3 }], ...options });
+
+  /** A moof whose video traf starts its data at an absolute base and whose audio traf follows it. */
+  function explicitBase(shift) {
+    const build = (base) =>
+      moof(
+        box('traf', fullBox('tfhd', 0, 0x1, u32(VIDEO.trackId), u64(base)), tfdt, videoRun()),
+        box('traf', fullBox('tfhd', 0, 0, u32(AUDIO.trackId)), tfdt, audioRun()),
+      );
+    const start = initialization().length + build(0).length + 8;
+    return Buffer.concat([initialization(), build(start + shift), mdat([1, 2, 3, 4, 5])]);
+  }
+
+  it('fails on a video run whose data offset points at its moof instead of its mdat', () => {
+    const fragment = Buffer.concat([moof(traf({ trackId: VIDEO.trackId, decodeTime: 0, runs: [videoRun({ dataOffset: 0 })] })), mdat([1, 2])]);
+
+    assert.throws(() => readStream(Buffer.concat([initialization(), fragment])), Mp4FormatError);
+  });
+
+  it('fails on an audio run whose samples end past its mdat', () => {
+    const fourByteSample = audioFragment({ decodeTime: 0, size: 4 });
+    const moofOnly = fourByteSample.subarray(0, fourByteSample.length - 12);
+
+    assert.throws(() => readStream(Buffer.concat([initialization(), moofOnly, mdat([1, 2, 3])])), Mp4FormatError);
+  });
+
+  it('reads runs that follow the previous run and traf when they declare no data offset', () => {
+    assert.deepEqual(
+      readStream(explicitBase(0)).fragments[0].trafs.map((entry) => entry.sampleCount),
+      [1, 1],
+    );
+    assert.throws(() => readStream(explicitBase(1)), Mp4FormatError);
+    assert.throws(() => readStream(explicitBase(-1)), Mp4FormatError);
+  });
+
+  it('reads a second run of a traf after the first run when it declares no data offset', () => {
+    const build = (dataOffset) =>
+      moof(traf({ trackId: VIDEO.trackId, decodeTime: 0, runs: [videoRun({ dataOffset }), trun({ samples: [{ size: 3 }] })] }));
+    const valid = build(build(0).length + 8);
+
+    assert.equal(readStream(Buffer.concat([initialization(), valid, mdat([1, 2, 3, 4, 5])])).fragments[0].trafs[0].sampleCount, 2);
+    assert.throws(() => readStream(Buffer.concat([initialization(), valid, mdat([1, 2, 3, 4])])), Mp4FormatError);
+  });
+});
+
 describe('fmp4 box reader over the recordings', () => {
   it('reads the stream-copy replacement attempt from its preroll keyframe at 28.028 s', () => {
     const stream = recording('07-copy-seek30.fmp4');
