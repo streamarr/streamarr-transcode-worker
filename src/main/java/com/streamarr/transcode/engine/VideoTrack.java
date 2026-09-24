@@ -1,5 +1,7 @@
 package com.streamarr.transcode.engine;
 
+import static com.streamarr.transcode.engine.BoxFields.isSet;
+
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.engine.TrackRun.FirstSample;
 import java.util.Optional;
@@ -109,10 +111,6 @@ record VideoTrack(long trackId, long timescale, int defaultSampleFlags) {
     }
 
     return fields.u32();
-  }
-
-  private static boolean isSet(int flags, int flag) {
-    return (flags & flag) != 0;
   }
 
   private static long addExact(long decodeTime, long compositionOffset) {

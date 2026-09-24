@@ -2,6 +2,7 @@ package com.streamarr.transcode.engine;
 
 import java.nio.ByteBuffer;
 import java.util.Optional;
+import java.util.OptionalLong;
 
 /** Reads a box's big-endian fields in order; reading past the box fails as a malformed box. */
 final class BoxFields {
@@ -76,6 +77,31 @@ final class BoxFields {
     }
 
     return Optional.empty();
+  }
+
+  OptionalLong u32If(boolean present) {
+    if (present) {
+      return OptionalLong.of(u32());
+    }
+
+    return OptionalLong.empty();
+  }
+
+  /**
+   * Reads an unsigned 64-bit field as the {@code long} with the same bits, so a value of 2^63 or
+   * more reads as negative.
+   */
+  OptionalLong u64If(boolean present) {
+    if (present) {
+      return OptionalLong.of(s64());
+    }
+
+    return OptionalLong.empty();
+  }
+
+  /** Whether a flags field has the given flag bit set. */
+  static boolean isSet(int flags, int flag) {
+    return (flags & flag) != 0;
   }
 
   private static char printable(byte value) {

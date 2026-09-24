@@ -1,8 +1,9 @@
 package com.streamarr.transcode.engine;
 
+import static com.streamarr.transcode.engine.BoxFields.isSet;
+
 import java.util.Optional;
 import java.util.OptionalLong;
-import java.util.function.LongSupplier;
 import lombok.Builder;
 
 /**
@@ -33,23 +34,11 @@ record TrackFragmentHeader(
     var flags = fields.u24();
     var header =
         builder().trackId(fields.u32()).defaultBaseIsMoof(isSet(flags, DEFAULT_BASE_IS_MOOF));
-    header.baseDataOffset(optionalLong(isSet(flags, BASE_DATA_OFFSET), fields::s64));
+    header.baseDataOffset(fields.u64If(isSet(flags, BASE_DATA_OFFSET)));
     fields
         .skipIf(isSet(flags, SAMPLE_DESCRIPTION_INDEX), 4)
         .skipIf(isSet(flags, DEFAULT_SAMPLE_DURATION), 4);
-    header.defaultSampleSize(optionalLong(isSet(flags, DEFAULT_SAMPLE_SIZE), fields::u32));
+    header.defaultSampleSize(fields.u32If(isSet(flags, DEFAULT_SAMPLE_SIZE)));
     return header.defaultSampleFlags(fields.s32If(isSet(flags, DEFAULT_SAMPLE_FLAGS))).build();
-  }
-
-  private static OptionalLong optionalLong(boolean present, LongSupplier field) {
-    if (present) {
-      return OptionalLong.of(field.getAsLong());
-    }
-
-    return OptionalLong.empty();
-  }
-
-  private static boolean isSet(int flags, int flag) {
-    return (flags & flag) != 0;
   }
 }

@@ -29,10 +29,9 @@ final class TrackRun {
 
   static TrackRun of(BoxView trun) {
     var fields = trun.fields();
-    var header = new Header(fields.u8(), fields.u24(), fields.u32());
-    fields.skipIf(header.has(DATA_OFFSET), 4).skipIf(header.has(FIRST_SAMPLE_FLAGS), 4);
-    header.requireSampleTable(fields);
-    return new TrackRun(trun, header);
+    var run = new TrackRun(trun, new Header(fields.u8(), fields.u24(), fields.u32()));
+    run.header.requireSampleTable(run.sampleTable());
+    return run;
   }
 
   /**
@@ -44,20 +43,17 @@ final class TrackRun {
       return Optional.empty();
     }
 
-    var fields = box.fields().skip(HEADER_BYTES).skipIf(header.has(DATA_OFFSET), 4);
-    var firstSampleFlags = fields.s32If(header.has(FIRST_SAMPLE_FLAGS));
-    var sampleFlags =
-        fields
-            .skipIf(header.has(SAMPLE_DURATION), 4)
-            .skipIf(header.has(SAMPLE_SIZE), 4)
-            .s32If(header.has(SAMPLE_FLAGS));
+    var fields =
+        sampleTable().skipIf(header.has(SAMPLE_DURATION), 4).skipIf(header.has(SAMPLE_SIZE), 4);
+    var sampleFlags = fields.s32If(header.has(SAMPLE_FLAGS));
     var compositionOffset = header.compositionOffsetOf(fields);
-    return Optional.of(new FirstSample(firstSampleFlags.or(() -> sampleFlags), compositionOffset));
+    return Optional.of(
+        new FirstSample(firstSampleFlags().or(() -> sampleFlags), compositionOffset));
   }
 
   /** The run's data offset from its {@code traf}'s base, when the run declares one. */
   Optional<Integer> dataOffset() {
-    return box.fields().skip(HEADER_BYTES).s32If(header.has(DATA_OFFSET));
+    return optionalFields().s32If(header.has(DATA_OFFSET));
   }
 
   /**
@@ -74,20 +70,34 @@ final class TrackRun {
       return Math.multiplyExact(header.sampleCount(), defaultSampleSize.getAsLong());
     }
 
-    var fields =
-        box.fields()
-            .skip(HEADER_BYTES)
-            .skipIf(header.has(DATA_OFFSET), 4)
-            .skipIf(header.has(FIRST_SAMPLE_FLAGS), 4);
+    var fields = sampleTable();
     var afterSize =
         4 * Integer.bitCount(header.flags() & (SAMPLE_FLAGS | SAMPLE_COMPOSITION_TIME_OFFSET));
     var bytes = 0L;
     for (var sample = 0L; sample < header.sampleCount(); sample++) {
-      bytes += fields.skipIf(header.has(SAMPLE_DURATION), 4).u32();
+      bytes = Math.addExact(bytes, fields.skipIf(header.has(SAMPLE_DURATION), 4).u32());
       fields.skip(afterSize);
     }
 
     return bytes;
+  }
+
+  private Optional<Integer> firstSampleFlags() {
+    return optionalFields()
+        .skipIf(header.has(DATA_OFFSET), 4)
+        .s32If(header.has(FIRST_SAMPLE_FLAGS));
+  }
+
+  /** The fields after the sample count: the optional data offset and first-sample flags. */
+  private BoxFields optionalFields() {
+    return box.fields().skip(HEADER_BYTES);
+  }
+
+  /** The fields from the first sample's entry on. */
+  private BoxFields sampleTable() {
+    return optionalFields()
+        .skipIf(header.has(DATA_OFFSET), 4)
+        .skipIf(header.has(FIRST_SAMPLE_FLAGS), 4);
   }
 
   /** A run's first sample: its flags, when the run declares any, and its composition offset. */
@@ -96,7 +106,7 @@ final class TrackRun {
   private record Header(int version, int flags, long sampleCount) {
 
     boolean has(int flag) {
-      return (flags & flag) != 0;
+      return BoxFields.isSet(flags, flag);
     }
 
     /** Every declared sample's entry must fit in the box. */
