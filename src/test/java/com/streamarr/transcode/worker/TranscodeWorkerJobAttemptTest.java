@@ -221,6 +221,36 @@ class TranscodeWorkerJobAttemptTest {
   }
 
   @Test
+  @DisplayName(
+      "Should fail the attempt as a transcode failure and end FFmpeg when reading its output"
+          + " throws unexpectedly")
+  void shouldFailTheAttemptAsATranscodeFailureAndEndFfmpegWhenReadingItsOutputThrowsUnexpectedly()
+      throws Exception {
+    var failureOffset = recording(WHOLE_RUN).initializationSegment().byteLength() + 100;
+    var launcher =
+        new ScriptedProcessLauncher(
+            _ ->
+                ScriptedProcess.builder()
+                    .output(bytesOf(WHOLE_RUN))
+                    .failReadAfter(failureOffset)
+                    .failReadWith(new IllegalStateException("scripted defect"))
+                    .build());
+    var job = variantJobBuilder().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
+      assertThat(launcher.process(fromProto(job.getJobAttemptId())).wasDestroyedForcibly())
+          .isTrue();
+    }
+  }
+
+  @Test
   @DisplayName("Should report the stopped attempt only after FFmpeg has exited")
   void shouldReportTheStoppedAttemptOnlyAfterFfmpegHasExited() throws Exception {
     var launcher =

@@ -8,6 +8,7 @@ import java.io.InterruptedIOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -20,9 +21,9 @@ import lombok.NonNull;
  * A process whose standard output replays scripted bytes, standing in for FFmpeg.
  *
  * <p>The output can pause at one offset until the test or a {@code q} on standard input resumes it,
- * and can fail with an I/O error at another. The process exits at the end of its output, at launch,
- * on {@code q}, or when the test says so. A forcible destroy ends the output where it stands and
- * exits with 137.
+ * and can fail at another, with an I/O error or with the unchecked exception the test supplies. The
+ * process exits at the end of its output, at launch, on {@code q}, or when the test says so. A
+ * forcible destroy ends the output where it stands and exits with 137.
  */
 public final class ScriptedProcess extends Process {
 
@@ -50,6 +51,7 @@ public final class ScriptedProcess extends Process {
   private final ExitTiming exitTiming;
   private final OptionalInt pauseOffset;
   private final OptionalInt readFailureOffset;
+  private final Optional<RuntimeException> uncheckedReadFailure;
   private final boolean resumesOnQuit;
   private final byte[] stderr;
   private final ByteArrayOutputStream stdin = new ByteArrayOutputStream();
@@ -70,6 +72,7 @@ public final class ScriptedProcess extends Process {
       ExitTiming exitTiming,
       Integer pauseAfter,
       Integer failReadAfter,
+      RuntimeException failReadWith,
       boolean resumesOnQuit,
       String stderr) {
     this.output = output.clone();
@@ -77,6 +80,7 @@ public final class ScriptedProcess extends Process {
     this.exitTiming = Objects.requireNonNullElse(exitTiming, ExitTiming.AT_END_OF_OUTPUT);
     this.pauseOffset = optionalOffset(pauseAfter);
     this.readFailureOffset = optionalOffset(failReadAfter);
+    this.uncheckedReadFailure = Optional.ofNullable(failReadWith);
     this.resumesOnQuit = resumesOnQuit;
     this.stderr = Objects.requireNonNullElse(stderr, "").getBytes(StandardCharsets.UTF_8);
     this.endOffset = this.output.length;
@@ -196,7 +200,7 @@ public final class ScriptedProcess extends Process {
   private synchronized int read(byte[] buffer, int offset, int length) throws IOException {
     awaitResumeAtPause();
     if (readFailureOffset.equals(OptionalInt.of(position))) {
-      throw new IOException("scripted read failure at byte " + position);
+      throw readFailure();
     }
 
     if (position >= endOffset) {
@@ -208,6 +212,14 @@ public final class ScriptedProcess extends Process {
     System.arraycopy(output, position, buffer, offset, readable);
     position += readable;
     return readable;
+  }
+
+  private IOException readFailure() {
+    uncheckedReadFailure.ifPresent(
+        failure -> {
+          throw failure;
+        });
+    return new IOException("scripted read failure at byte " + position);
   }
 
   private void awaitResumeAtPause() throws InterruptedIOException {

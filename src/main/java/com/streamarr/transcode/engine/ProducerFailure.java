@@ -17,5 +17,7 @@ public enum ProducerFailure {
   /** The output is not fragmented MP4 that the producer can group into media segments. */
   MALFORMED_OUTPUT,
   /** Reading FFmpeg's standard output failed. */
-  OUTPUT_UNREADABLE
+  OUTPUT_UNREADABLE,
+  /** The producer met a throwable it does not expect, such as a defect or an exhausted heap. */
+  UNEXPECTED_ERROR
 }

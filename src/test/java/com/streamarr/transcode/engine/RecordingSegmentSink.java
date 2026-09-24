@@ -10,7 +10,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Accepts each segment the producer delivers and keeps its name and bytes. A test can hold one
- * delivery until it releases it, or refuse one.
+ * delivery until it releases it, refuse one, or throw an error from one.
  */
 final class RecordingSegmentSink implements SegmentSink {
 
@@ -23,6 +23,8 @@ final class RecordingSegmentSink implements SegmentSink {
   private final CountDownLatch held = new CountDownLatch(1);
   private volatile OptionalInt heldDelivery = OptionalInt.empty();
   private volatile OptionalInt refusedDelivery = OptionalInt.empty();
+  private volatile OptionalInt failedDelivery = OptionalInt.empty();
+  private volatile Error failure;
 
   /** Holds the delivery at this zero-based position, counting the initialization segment. */
   RecordingSegmentSink holding(int delivery) {
@@ -33,6 +35,13 @@ final class RecordingSegmentSink implements SegmentSink {
   /** Refuses the delivery at this zero-based position, counting the initialization segment. */
   RecordingSegmentSink refusing(int delivery) {
     refusedDelivery = OptionalInt.of(delivery);
+    return this;
+  }
+
+  /** Throws the error from the delivery at this zero-based position. */
+  RecordingSegmentSink failing(int delivery, Error error) {
+    failure = error;
+    failedDelivery = OptionalInt.of(delivery);
     return this;
   }
 
@@ -49,6 +58,10 @@ final class RecordingSegmentSink implements SegmentSink {
     var delivery = OptionalInt.of(deliveries.getAndIncrement());
     if (delivery.equals(refusedDelivery)) {
       throw new IllegalStateException("the server refused " + segment.name());
+    }
+
+    if (delivery.equals(failedDelivery)) {
+      throw failure;
     }
 
     if (delivery.equals(heldDelivery)) {

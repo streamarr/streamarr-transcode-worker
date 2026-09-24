@@ -285,6 +285,42 @@ class ProducerTest {
   }
 
   @Test
+  @DisplayName("Should fail the attempt and end FFmpeg when reading its output throws unexpectedly")
+  void shouldFailTheAttemptAndEndFfmpegWhenReadingItsOutputThrowsUnexpectedly() {
+    var recording = recording(WHOLE_RUN);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(WHOLE_RUN))
+            .failReadAfter(recording.initializationSegment().byteLength() + 100)
+            .failReadWith(new IllegalStateException("scripted defect"))
+            .build();
+
+    var producer = producerFor(process, recording).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.UNEXPECTED_ERROR);
+    assertThat(failure.detail()).contains("scripted defect");
+    assertThat(process.wasDestroyedForcibly()).isTrue();
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+  }
+
+  @Test
+  @DisplayName("Should fail the attempt and end FFmpeg when the sink throws an error")
+  void shouldFailTheAttemptAndEndFfmpegWhenTheSinkThrowsAnError() {
+    var recording = recording(WHOLE_RUN);
+    var process = ScriptedProcess.builder().output(bytesOf(WHOLE_RUN)).build();
+    sink.failing(2, new OutOfMemoryError("scripted exhaustion"));
+
+    var producer = producerFor(process, recording).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.UNEXPECTED_ERROR);
+    assertThat(failure.detail()).contains("scripted exhaustion");
+    assertThat(process.wasDestroyedForcibly()).isTrue();
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+  }
+
+  @Test
   @DisplayName(
       "Should settle only the stop and deliver nothing further when stopped while FFmpeg is"
           + " writing")

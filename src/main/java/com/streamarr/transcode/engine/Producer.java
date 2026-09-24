@@ -14,12 +14,14 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import lombok.Builder;
 import lombok.NonNull;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * Owns one job attempt's FFmpeg process: reads its fragmented MP4 output on a virtual thread,
  * groups the fragments into media segments, delivers the initialization segment and then each media
  * segment to the sink, and settles the attempt's outcome once FFmpeg has exited.
  */
+@Slf4j
 public final class Producer {
 
   // The server's segment cap; the reader admits no initialization segment or fragment above it.
@@ -78,7 +80,10 @@ public final class Producer {
     }
 
     var producer = new Producer(process, settings);
-    Thread.ofVirtual().name("producer-" + jobAttemptId).start(producer::produce);
+    Thread.ofVirtual()
+        .name("producer-" + jobAttemptId)
+        .uncaughtExceptionHandler(producer::failUnexpectedly)
+        .start(producer::produce);
     return producer;
   }
 
@@ -168,6 +173,13 @@ public final class Producer {
     } finally {
       errorOutput.close();
     }
+  }
+
+  // Whatever escapes the reader thread still ends FFmpeg and settles the attempt.
+  private void failUnexpectedly(Thread readerThread, Throwable error) {
+    log.error("{} failed unexpectedly", readerThread.getName(), error);
+    outcomeAfterEndingProcess(new Failed(ProducerFailure.UNEXPECTED_ERROR, error.toString()))
+        .ifPresent(this::settle);
   }
 
   // Empty when the stop settles the attempt.
