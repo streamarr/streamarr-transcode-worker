@@ -2,9 +2,10 @@
 # Regenerates the fragmented-MP4 grouping fixtures (ADR 0037 "Tests substitute the process").
 #
 # Every FFmpeg and ffprobe run happens inside the pinned worker image, so every recorded byte comes
-# from the worker's own FFmpeg 8.1.2-Jellyfin. The host needs only Docker and python3 (standard
-# library): analyze.py reads the recorded boxes itself, groups the fragments by the ADR rules,
-# measures the HLS muxer's cut points for the same sources, and writes expected.json.
+# from the worker's own FFmpeg 8.1.2-Jellyfin. The host needs only Docker and Node (the major in
+# buildpacks/ffmpeg/.nvmrc, no packages): analyze.mjs reads the recorded boxes itself, groups the
+# fragments by the ADR rules, measures the HLS muxer's cut points for the same sources, and writes
+# expected.json.
 #
 # It writes the recordings and expected.json into src/test/resources/fmp4, wherever it is run from:
 #
@@ -31,7 +32,7 @@ P=6                                   # segment period in seconds
 FRAG_US=1000000                       # fragmentation target: 1 s
 MOVFLAGS=cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont
 # The probed frame rate exactly as the worker passes it: ffprobe r_frame_rate 24000/1001 as a
-# Java double. Every encoded source below probes as 24000/1001 (analyze.py checks it).
+# Java double. Every encoded source below probes as 24000/1001 (analyze.mjs checks it).
 FPS=23.976023976023978
 GOP_FLOOR=143                         # floor(P * FPS): ADR 0037's recipe
 GOP_CEIL=144                          # ceil(P * FPS): the HLS recipe's frame-count GOP
@@ -217,5 +218,5 @@ CONTAINER
 docker run --rm --entrypoint /cnb/lifecycle/launcher -v "$WORK":/work "$IMAGE" bash /work/record.sh \
   > "$WORK/launcher.log" 2>&1 || { cat "$WORK/launcher.log"; exit 1; }
 
-python3 -B "$HERE/analyze.py" --work "$WORK" --out "$FIXTURES" --image "$IMAGE"
+node "$HERE/analyze.mjs" --work "$WORK" --out "$FIXTURES" --image "$IMAGE"
 echo "recorded into $FIXTURES (sources, logs and HLS oracle outputs in $WORK)"

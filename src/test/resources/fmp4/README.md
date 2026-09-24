@@ -13,15 +13,18 @@ expectations for any test, such as one that replays the bytes through a scripted
 | `NN-*.fmp4` | A recorded `pipe:1` stream: `ftyp` + `moov`, then `moof` + `mdat` fragments, exactly as FFmpeg wrote them |
 | `expected.json` | Per fixture: expected segments, discarded preroll, skip failure, audio-only tail, initialization-segment digest, HLS oracle comparison; plus initialization-segment identity pairs and ADR side claims |
 | `../../fmp4-recorder/record-fixtures.sh` | Regenerates everything from scratch in the pinned worker image (about 15 s) |
-| `../../fmp4-recorder/analyze.py` | Groups the recordings by the ADR rules, evaluates the HLS oracles, writes `expected.json` |
-| `../../fmp4-recorder/fmp4dump.py` | Standalone box reader (`python3 fmp4dump.py FILE`), independent of the worker's Java code |
+| `../../fmp4-recorder/analyze.mjs` | Groups the recordings by the ADR rules (`grid.mjs`), evaluates the HLS oracles (`analysis.mjs`), writes `expected.json` |
+| `../../fmp4-recorder/fmp4.mjs` | Standalone box reader (`node fmp4.mjs FILE`), independent of the worker's Java code |
 
 The recorder lives in `src/test/fmp4-recorder`, outside the test classpath; only the recordings,
-`expected.json` and this file are test resources.
+`expected.json` and this file are test resources. It is plain Node (the major in
+`buildpacks/ffmpeg/.nvmrc`) with no packages, and keeps every timestamp exact: BigInt ticks and
+BigInt rationals (`rational.mjs`), never a double. `node --test src/test/fmp4-recorder/*.test.mjs`
+tests the box reader, the grid model and the analysis arithmetic.
 
 ## Regenerating
 
-From the repository root (Docker, and python3 with the standard library only):
+From the repository root (Docker, and Node with no packages):
 
 ```
 src/test/fmp4-recorder/record-fixtures.sh                                # re-record in place
