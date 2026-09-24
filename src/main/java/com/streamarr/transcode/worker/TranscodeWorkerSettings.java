@@ -28,11 +28,6 @@ record TranscodeWorkerSettings(
             .bootId(UUID.randomUUID())
             .availableSlots(positiveInteger(environment, PREFIX + "SLOTS", 1))
             .sourceNamespaces(Map.of(sourceNamespaceId, path(environment, PREFIX + "SOURCE_ROOT")))
-            .segmentBasePath(
-                optionalPath(
-                    environment,
-                    PREFIX + "SEGMENT_BASE_PATH",
-                    Path.of(System.getProperty("java.io.tmpdir"), "streamarr-worker-segments")))
             .build();
     return TranscodeWorkerSettings.builder()
         .controlPlaneHost(optional(environment, PREFIX + "CONTROL_PLANE_HOST", "127.0.0.1"))
@@ -59,10 +54,6 @@ record TranscodeWorkerSettings(
 
   private static Path path(Map<String, String> environment, String key) {
     return Path.of(required(environment, key));
-  }
-
-  private static Path optionalPath(Map<String, String> environment, String key, Path defaultValue) {
-    return Path.of(optional(environment, key, defaultValue.toString()));
   }
 
   private static UUID uuid(Map<String, String> environment, String key) {

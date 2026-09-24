@@ -42,7 +42,6 @@ class TranscodeWorkerTransportIT {
             .bootId(bootId)
             .availableSlots(2)
             .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, tempDir))
-            .segmentBasePath(tempDir.resolve("segments"))
             .build();
 
     try (var controlPlane = WorkerApplicationControlPlane.builder().build();

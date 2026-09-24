@@ -70,7 +70,6 @@ class TranscodeWorkerKeepaliveIT {
         workerConfigurationBuilder()
             .availableSlots(1)
             .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, mediaRoot))
-            .segmentBasePath(tempDir.resolve("worker-segments"))
             .keepAliveTime(Duration.ofSeconds(10))
             .keepAliveTimeout(Duration.ofSeconds(2))
             .build();

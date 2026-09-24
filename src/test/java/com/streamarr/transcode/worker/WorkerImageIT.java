@@ -399,7 +399,6 @@ class WorkerImageIT {
               .withEnv("TRANSCODE_WORKER_ID", workerId.toString())
               .withEnv("TRANSCODE_WORKER_SOURCE_NAMESPACE_ID", SOURCE_NAMESPACE_ID.toString())
               .withEnv("TRANSCODE_WORKER_SOURCE_ROOT", "/media")
-              .withEnv("TRANSCODE_WORKER_SEGMENT_BASE_PATH", "/tmp/segments")
               .withFileSystemBind(media.toAbsolutePath().toString(), "/media", BindMode.READ_ONLY)
               .waitingFor(Wait.forLogMessage(".*Started TranscodeWorkerApplication.*", 1));
       if (ffmpegPath != null) {

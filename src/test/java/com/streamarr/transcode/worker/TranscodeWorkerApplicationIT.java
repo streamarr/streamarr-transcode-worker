@@ -478,8 +478,6 @@ class TranscodeWorkerApplicationIT {
                 Map.entry("TRANSCODE_WORKER_ID", UUID.randomUUID().toString()),
                 Map.entry("TRANSCODE_WORKER_SOURCE_NAMESPACE_ID", SOURCE_NAMESPACE_ID.toString()),
                 Map.entry("TRANSCODE_WORKER_SOURCE_ROOT", tempDir.toString()),
-                Map.entry(
-                    "TRANSCODE_WORKER_SEGMENT_BASE_PATH", tempDir.resolve("segments").toString()),
                 Map.entry("SERVER_PORT", "0"),
                 Map.entry("TRANSCODE_WORKER_FFMPEG_PATH", ffmpeg.toString()),
                 Map.entry("TRANSCODE_WORKER_FFPROBE_PATH", fixture.ffprobe().toString())));

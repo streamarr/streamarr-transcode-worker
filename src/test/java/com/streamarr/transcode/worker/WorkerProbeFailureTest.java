@@ -95,7 +95,6 @@ class WorkerProbeFailureTest {
         workerConfigurationBuilder()
             .availableSlots(1)
             .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, root))
-            .segmentBasePath(tempDir.resolve("segments"))
             .build();
     var runtime = new ScriptedWorkerRuntime();
     var producer = new FfprobeExecutor(new ObjectMapper(), _ -> processBuilder().build());

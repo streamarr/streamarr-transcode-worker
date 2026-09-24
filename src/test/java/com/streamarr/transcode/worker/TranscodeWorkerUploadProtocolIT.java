@@ -173,7 +173,6 @@ class TranscodeWorkerUploadProtocolIT {
             .bootId(UUID.randomUUID())
             .availableSlots(1)
             .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, mediaRoot))
-            .segmentBasePath(tempDir.resolve("segments"))
             .build();
     return new TranscodeWorker(configuration, engine);
   }

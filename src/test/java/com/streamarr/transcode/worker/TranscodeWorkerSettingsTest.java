@@ -50,7 +50,6 @@ class TranscodeWorkerSettingsTest {
     assertThat(worker.workerId()).isEqualTo(WORKER_ID);
     assertThat(worker.availableSlots()).isEqualTo(1);
     assertThat(worker.sourceNamespaces()).containsEntry(SOURCE_NAMESPACE_ID, Path.of("/media"));
-    assertThat(worker.segmentBasePath().toString()).contains("streamarr-worker-segments");
   }
 
   @Test
@@ -95,8 +94,7 @@ class TranscodeWorkerSettingsTest {
             .workerId(UUID.randomUUID())
             .bootId(UUID.randomUUID())
             .availableSlots(0)
-            .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, Path.of("/media")))
-            .segmentBasePath(Path.of("/segments"));
+            .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, Path.of("/media")));
 
     assertThatThrownBy(configuration::build)
         .isInstanceOf(IllegalArgumentException.class)
@@ -110,14 +108,12 @@ class TranscodeWorkerSettingsTest {
     environment.put("TRANSCODE_WORKER_CONTROL_PLANE_PORT", "65535");
     environment.put("TRANSCODE_WORKER_SLOTS", "2");
     environment.put("TRANSCODE_WORKER_FFMPEG_PATH", "/usr/local/bin/ffmpeg");
-    environment.put("TRANSCODE_WORKER_SEGMENT_BASE_PATH", "/transcode");
 
     var settings = TranscodeWorkerSettings.fromEnvironment(environment);
 
     assertThat(settings.controlPlanePort()).isEqualTo(65_535);
     assertThat(settings.ffmpegPath()).isEqualTo("/usr/local/bin/ffmpeg");
     assertThat(settings.workerConfiguration().availableSlots()).isEqualTo(2);
-    assertThat(settings.workerConfiguration().segmentBasePath()).isEqualTo(Path.of("/transcode"));
   }
 
   @Test

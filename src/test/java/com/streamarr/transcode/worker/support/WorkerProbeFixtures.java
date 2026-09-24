@@ -45,7 +45,6 @@ public final class WorkerProbeFixtures {
             workerConfigurationBuilder()
                 .availableSlots(2)
                 .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, root))
-                .segmentBasePath(root.resolve("segments"))
                 .build())
         .engine(engine(ScriptedProcessLauncher.running()));
   }
