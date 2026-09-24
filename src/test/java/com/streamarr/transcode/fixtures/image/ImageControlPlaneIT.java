@@ -125,6 +125,12 @@ class ImageControlPlaneIT {
             .command("job")
             .event(failed)
             .cause("JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED")
+            .build(),
+        JobOutcome.builder().command("stopped-job").event(completed).cause("completed").build(),
+        JobOutcome.builder()
+            .command("stopped-job")
+            .event(failed)
+            .cause("JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED")
             .build());
   }
 
@@ -165,7 +171,7 @@ class ImageControlPlaneIT {
 
   private static Stream<SessionOutcome> sessionOutcomes() {
     var afterRegistration =
-        Stream.of("probe", "job", "failed-job", "start-job")
+        Stream.of("probe", "job", "failed-job", "start-job", "stopped-job")
             .flatMap(
                 command ->
                     Stream.of(false, true)

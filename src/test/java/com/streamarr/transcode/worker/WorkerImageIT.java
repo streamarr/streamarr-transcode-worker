@@ -13,6 +13,7 @@ import build.buf.gen.streamarr.transcode.v1.JobAttemptCompleted;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailed;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptStarted;
+import build.buf.gen.streamarr.transcode.v1.JobAttemptStopped;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.TranscodeMode;
@@ -345,6 +346,42 @@ class WorkerImageIT {
           .isIn(0L, 143L);
       assertThat(new String(image.command("disconnected", new byte[0]), StandardCharsets.UTF_8))
           .isEqualTo("true");
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should let FFmpeg exit without a forced kill and report the stop when the image stops a job"
+          + " whose upload awaits acknowledgement")
+  void shouldLetFfmpegExitAndReportTheStopWhenTheImageStopsAJobWhoseUploadAwaitsAcknowledgement()
+      throws Exception {
+    copyMedia();
+    // FFmpeg runs as this wrapper's child and the wrapper records its exit status, which a forced
+    // kill of the wrapper would never write. With every acknowledgement withheld, the pipe holds
+    // the
+    // remux's output back by the time the stop arrives.
+    var script =
+        scriptedFfmpeg(
+            """
+        ffmpeg "$@"
+        status=$?
+        printf '%s' "$status" > /tmp/worker-image-ffmpeg-exit
+        exit "$status"
+        """);
+    try (var image = ImageFixture.builder().media(media).ffmpegPath(script).build()) {
+      image.accept();
+      var request = variantJobBuilder().build();
+
+      var stopped =
+          JobAttemptStopped.parseFrom(image.command("stopped-job", request.toByteArray()));
+
+      assertThat(stopped.getJobAttemptId()).isEqualTo(request.getJobAttemptId());
+      var exitStatus = image.worker.execInContainer("cat", "/tmp/worker-image-ffmpeg-exit");
+      assertThat(exitStatus.getExitCode())
+          .as("FFmpeg exited on its own before the worker reported the stop")
+          .isZero();
+      assertThat(exitStatus.getStdout()).containsPattern("^[0-9]+$");
+      assertThat(image.health("readiness").statusCode()).isEqualTo(200);
     }
   }
 

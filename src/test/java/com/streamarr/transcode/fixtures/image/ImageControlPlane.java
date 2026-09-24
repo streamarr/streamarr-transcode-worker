@@ -7,10 +7,12 @@ import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptCompleted;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailed;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptStarted;
+import build.buf.gen.streamarr.transcode.v1.JobAttemptStopped;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.StartProbeCommand;
 import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
+import build.buf.gen.streamarr.transcode.v1.StopVariantCommand;
 import build.buf.gen.streamarr.transcode.v1.TranscodeWorkerServiceGrpc;
 import build.buf.gen.streamarr.transcode.v1.UploadSegmentRequest;
 import build.buf.gen.streamarr.transcode.v1.UploadSegmentResponse;
@@ -43,6 +45,9 @@ public final class ImageControlPlane
   private final CompletableFuture<JobAttemptCompleted> completed = new CompletableFuture<>();
   private final CompletableFuture<JobAttemptFailed> failed = new CompletableFuture<>();
   private final CompletableFuture<JobAttemptStarted> started = new CompletableFuture<>();
+  private final CompletableFuture<JobAttemptStopped> stopped = new CompletableFuture<>();
+  private final CompletableFuture<Void> uploadAwaitsAcknowledgement = new CompletableFuture<>();
+  private volatile boolean withholdAcknowledgements;
   private final CompletableFuture<Boolean> disconnected = new CompletableFuture<>();
   private final Map<String, byte[]> segments = new ConcurrentHashMap<>();
   private StreamObserver<EstablishWorkerSessionResponse> responses;
@@ -92,6 +97,7 @@ public final class ImageControlPlane
       case "/job" -> job(VariantJob.parseFrom(exchange.getRequestBody()));
       case "/failed-job" -> failedJob(VariantJob.parseFrom(exchange.getRequestBody()));
       case "/start-job" -> startJob(VariantJob.parseFrom(exchange.getRequestBody()));
+      case "/stopped-job" -> stoppedJob(VariantJob.parseFrom(exchange.getRequestBody()));
       case "/disconnected" ->
           disconnected.get(10, TimeUnit.SECONDS).toString().getBytes(StandardCharsets.UTF_8);
       case "/segment" -> firstMediaSegment();
@@ -143,6 +149,22 @@ public final class ImageControlPlane
     return started.get(30, TimeUnit.SECONDS).toByteArray();
   }
 
+  // Withholds every upload's acknowledgement, stops the job once an upload awaits one, and answers
+  // with the worker's report of the stop.
+  private byte[] stoppedJob(VariantJob request) throws Exception {
+    withholdAcknowledgements = true;
+    dispatch(request);
+    uploadAwaitsAcknowledgement.get(30, TimeUnit.SECONDS);
+    responses.onNext(
+        EstablishWorkerSessionResponse.newBuilder()
+            .setStopVariant(
+                StopVariantCommand.newBuilder()
+                    .setTarget(registration.get(30, TimeUnit.SECONDS).getWorker())
+                    .setJobAttemptId(request.getJobAttemptId()))
+            .build());
+    return stopped.get(30, TimeUnit.SECONDS).toByteArray();
+  }
+
   private void dispatch(VariantJob request) throws Exception {
     responses.onNext(
         EstablishWorkerSessionResponse.newBuilder()
@@ -173,6 +195,7 @@ public final class ImageControlPlane
                   "Job completed before the expected result: " + request.getJobAttemptCompleted());
           failed.completeExceptionally(cause);
           started.completeExceptionally(cause);
+          failStop(cause);
         }
         if (request.hasJobAttemptFailed()) {
           failed.complete(request.getJobAttemptFailed());
@@ -181,6 +204,10 @@ public final class ImageControlPlane
                   "Job failed before the expected result: " + request.getJobAttemptFailed());
           completed.completeExceptionally(cause);
           started.completeExceptionally(cause);
+          failStop(cause);
+        }
+        if (request.hasJobAttemptStopped()) {
+          stopped.complete(request.getJobAttemptStopped());
         }
         if (request.hasJobAttemptStarted()) {
           started.complete(request.getJobAttemptStarted());
@@ -201,7 +228,13 @@ public final class ImageControlPlane
     };
   }
 
+  private void failStop(Throwable cause) {
+    uploadAwaitsAcknowledgement.completeExceptionally(cause);
+    stopped.completeExceptionally(cause);
+  }
+
   private void terminateSession(Throwable failure) {
+    failStop(failure);
     registration.completeExceptionally(failure);
     probe.completeExceptionally(failure);
     completed.completeExceptionally(failure);
@@ -234,6 +267,11 @@ public final class ImageControlPlane
       @Override
       public void onCompleted() {
         segments.put(name, bytes.toByteArray());
+        if (withholdAcknowledgements) {
+          uploadAwaitsAcknowledgement.complete(null);
+          return;
+        }
+
         responseObserver.onNext(
             UploadSegmentResponse.newBuilder().setAcceptedLengthBytes(bytes.size()).build());
         responseObserver.onCompleted();

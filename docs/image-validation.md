@@ -30,6 +30,8 @@ namespace. It leaves the worker endpoint unset to exercise `127.0.0.1:9090`. It 
 - Remuxing and transcoding upload segments that decode successfully and have the expected dimensions.
 - A mounted executable can inject a typed transcode failure without making the worker unready.
 - Container termination sends the media process its graceful quit command and closes the session.
+- Stopping a job whose segment upload awaits acknowledgement lets FFmpeg flush and exit on its own,
+  without a forced kill, before the worker reports the stop.
 
 The existing JVM smoke tests remain separate. The image tests carry the `ImageTest` tag and are
 excluded from ordinary Maven runs. CI runs them explicitly against native amd64 and arm64 images.
