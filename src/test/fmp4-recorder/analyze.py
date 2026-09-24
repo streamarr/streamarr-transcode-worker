@@ -299,7 +299,7 @@ def evaluate_oracle(work, fixture, spec, pipe, grouped, source):
                   for n in sorted(set(ours) | set(theirs)) if ours.get(n) != theirs.get(n)]
 
     # hlsenc's reference is the pts of the first packet it receives. The muxer interleaves by dts, so
-    # audio arrives first when its first dts precedes the video's (the HLS init's edit media_time is the
+    # audio arrives first when its first dts precedes the video's (the HLS initialization segment's edit media_time is the
     # first video sample's pts - dts). An audio reference is kept in audio ticks and later subtracted in
     # the video time base, unless a video packet's raw pts is smaller (hlsenc.c 2450-2458, 2488).
     pts_raw = [Fraction(s[0], timescale) + offset for s in ref_samples]
