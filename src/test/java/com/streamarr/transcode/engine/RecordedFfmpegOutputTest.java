@@ -10,6 +10,7 @@ import com.streamarr.transcode.engine.FfmpegRecordings.CutPoint;
 import com.streamarr.transcode.engine.FfmpegRecordings.CutPointMismatch;
 import com.streamarr.transcode.engine.FfmpegRecordings.ExpectedFailure;
 import com.streamarr.transcode.engine.FfmpegRecordings.HlsRun;
+import com.streamarr.transcode.engine.FfmpegRecordings.Mode;
 import com.streamarr.transcode.engine.FfmpegRecordings.Recording;
 import com.streamarr.transcode.engine.FfmpegRecordings.SegmentSummary;
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
@@ -51,6 +52,12 @@ class RecordedFfmpegOutputTest {
   static Stream<Recording> recordingsEndingInAudioOnlyFragments() {
     return recordingsThatGroupWithoutFailure()
         .filter(recording -> recording.trailingAudioOnlyFragmentCount() > 0);
+  }
+
+  static Stream<Recording> encodesOfTheRecipe() {
+    return recordings()
+        .filter(
+            recording -> recording.mode() == Mode.ENCODE && recording.recipeDeviation().isEmpty());
   }
 
   static Stream<Arguments> hlsRuns() {
@@ -199,6 +206,38 @@ class RecordedFfmpegOutputTest {
       throws IOException {
     assertThat(read("07-copy-start0.fmp4").initializationSegment())
         .isNotEqualTo(read("01-encode-cfr.fmp4").initializationSegment());
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("encodesOfTheRecipe")
+  @DisplayName(
+      "Should open every segment after segment zero on the first frame at or after its boundary"
+          + " when an encode follows the recipe")
+  void
+      shouldOpenEverySegmentAfterSegmentZeroOnTheFirstFrameAtOrAfterItsBoundaryWhenAnEncodeFollowsTheRecipe(
+          Recording recording) throws IOException {
+    var grouping = group(recording);
+    var timescale =
+        grouping
+            .delivered()
+            .getFirst()
+            .fragments()
+            .getFirst()
+            .videoStart()
+            .orElseThrow()
+            .timescale();
+    var cuts = cutPoints(grouping).stream().filter(cut -> cut.number() > 0).toList();
+
+    assertThat(cuts)
+        .isNotEmpty()
+        .containsExactlyElementsOf(
+            cuts.stream()
+                .map(
+                    cut ->
+                        new CutPoint(
+                            cut.number(),
+                            firstFrameAtOrAfterBoundary(recording, cut.number(), timescale)))
+                .toList());
   }
 
   @ParameterizedTest(name = "{0} against {1}")
@@ -449,6 +488,15 @@ class RecordedFfmpegOutputTest {
         new CutPoint(2, 288L * frame),
         new CutPoint(3, (288L + 145) * frame),
         new CutPoint(4, 576L * frame));
+  }
+
+  // The first frame at or after the segment's boundary on the constant-rate output's frame grid
+  // from zero: every encode of the recipe runs at the source's probed frame rate.
+  private static long firstFrameAtOrAfterBoundary(Recording recording, int number, long timescale) {
+    var frameRate = recording.source().videoRealFrameRate().split("/");
+    var frameTicks = timescale * Long.parseLong(frameRate[1]) / Long.parseLong(frameRate[0]);
+    var boundaryTicks = (long) number * recording.period() * timescale;
+    return Math.ceilDiv(boundaryTicks, frameTicks) * frameTicks;
   }
 
   private static List<CutPoint> cutPoints(Grouping grouping) {
