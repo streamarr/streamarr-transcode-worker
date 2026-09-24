@@ -170,8 +170,8 @@
       },
       "hlsOracles": [
         {
-          "hlsRun": "01-encode-cfr.today",
-          "flags": "today's FfmpegCommandBuilder common flags",
+          "hlsRun": "01-encode-cfr.hls-recipe",
+          "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
           "streams": "video and audio",
           "pipeReference": "01-encode-cfr.fmp4",
           "hlsExitStatus": 0,
@@ -238,7 +238,7 @@
         },
         {
           "hlsRun": "01-encode-cfr.video-only",
-          "flags": "ADR 0037 common flags (-start_at_zero)",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
           "streams": "video only",
           "pipeReference": "01-encode-cfr.fmp4",
           "hlsExitStatus": 0,
@@ -304,8 +304,8 @@
           }
         },
         {
-          "hlsRun": "01-encode-cfr.new-keyframes-with-audio",
-          "flags": "ADR 0037 common flags (-start_at_zero)",
+          "hlsRun": "01-encode-cfr.pipe-keyframes-with-audio",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
           "streams": "video and audio",
           "pipeReference": "01-encode-cfr.fmp4",
           "hlsExitStatus": 0,
@@ -496,8 +496,8 @@
       },
       "hlsOracles": [
         {
-          "hlsRun": "01-encode-cfr-seek30.today",
-          "flags": "today's FfmpegCommandBuilder common flags",
+          "hlsRun": "01-encode-cfr-seek30.hls-recipe",
+          "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
           "streams": "video and audio",
           "pipeReference": "01-encode-cfr-seek30.fmp4",
           "hlsExitStatus": 0,
@@ -565,7 +565,7 @@
         },
         {
           "hlsRun": "01-encode-cfr-seek30.video-only",
-          "flags": "ADR 0037 common flags (-start_at_zero)",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
           "streams": "video only",
           "pipeReference": "01-encode-cfr-seek30.fmp4",
           "hlsExitStatus": 0,
@@ -632,8 +632,8 @@
           }
         },
         {
-          "hlsRun": "01-encode-cfr.today",
-          "flags": "today's FfmpegCommandBuilder common flags",
+          "hlsRun": "01-encode-cfr.hls-recipe",
+          "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
           "streams": "video and audio",
           "pipeReference": "01-encode-cfr.fmp4",
           "hlsExitStatus": 0,
@@ -859,8 +859,8 @@
       },
       "hlsOracles": [
         {
-          "hlsRun": "02-copy-irregular-keyframes.today",
-          "flags": "today's FfmpegCommandBuilder common flags",
+          "hlsRun": "02-copy-irregular-keyframes.hls-recipe",
+          "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
           "streams": "video and audio",
           "pipeReference": "02-copy-irregular-keyframes.fmp4",
           "hlsExitStatus": 0,
@@ -927,7 +927,7 @@
         },
         {
           "hlsRun": "02-copy-irregular-keyframes.video-only",
-          "flags": "ADR 0037 common flags (-start_at_zero)",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
           "streams": "video only",
           "pipeReference": "02-copy-irregular-keyframes.fmp4",
           "hlsExitStatus": 0,
@@ -1158,8 +1158,8 @@
       },
       "hlsOracles": [
         {
-          "hlsRun": "03-encode-vfr.today",
-          "flags": "today's FfmpegCommandBuilder common flags",
+          "hlsRun": "03-encode-vfr.hls-recipe",
+          "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
           "streams": "video and audio",
           "pipeReference": "03-encode-vfr.fmp4",
           "hlsExitStatus": 0,
@@ -1272,7 +1272,7 @@
         },
         {
           "hlsRun": "03-encode-vfr.video-only",
-          "flags": "ADR 0037 common flags (-start_at_zero)",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
           "streams": "video only",
           "pipeReference": "03-encode-vfr.fmp4",
           "hlsExitStatus": 0,
@@ -1573,8 +1573,8 @@
       },
       "hlsOracles": [
         {
-          "hlsRun": "04-copy-vfr-bframes.today",
-          "flags": "today's FfmpegCommandBuilder common flags",
+          "hlsRun": "04-copy-vfr-bframes.hls-recipe",
+          "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
           "streams": "video and audio",
           "pipeReference": "04-copy-vfr-bframes.fmp4",
           "hlsExitStatus": 0,
@@ -1647,7 +1647,7 @@
         },
         {
           "hlsRun": "04-copy-vfr-bframes.video-only",
-          "flags": "ADR 0037 common flags (-start_at_zero)",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
           "streams": "video only",
           "pipeReference": "04-copy-vfr-bframes.fmp4",
           "hlsExitStatus": 0,
@@ -1844,8 +1844,8 @@
       },
       "hlsOracles": [
         {
-          "hlsRun": "05-encode-late-start.today",
-          "flags": "today's FfmpegCommandBuilder common flags",
+          "hlsRun": "05-encode-late-start.hls-recipe",
+          "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
           "streams": "video and audio",
           "pipeReference": "05-encode-late-start.fmp4",
           "hlsExitStatus": 0,
@@ -1914,7 +1914,7 @@
         },
         {
           "hlsRun": "05-encode-late-start.video-only",
-          "flags": "ADR 0037 common flags (-start_at_zero)",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
           "streams": "video only",
           "pipeReference": "05-encode-late-start.fmp4",
           "hlsExitStatus": 0,
@@ -2118,8 +2118,8 @@
       },
       "hlsOracles": [
         {
-          "hlsRun": "05-copy-late-start.today-adtstoasc",
-          "flags": "today's FfmpegCommandBuilder common flags",
+          "hlsRun": "05-copy-late-start.hls-recipe-adtstoasc",
+          "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
           "streams": "video and audio",
           "pipeReference": "05-copy-late-start.fmp4",
           "hlsExitStatus": 0,
@@ -2162,7 +2162,7 @@
         },
         {
           "hlsRun": "05-copy-late-start.video-only",
-          "flags": "ADR 0037 common flags (-start_at_zero)",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
           "streams": "video only",
           "pipeReference": "05-copy-late-start.fmp4",
           "hlsExitStatus": 0,
@@ -2313,8 +2313,8 @@
       },
       "hlsOracles": [
         {
-          "hlsRun": "06-encode-audio-tail.today",
-          "flags": "today's FfmpegCommandBuilder common flags",
+          "hlsRun": "06-encode-audio-tail.hls-recipe",
+          "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
           "streams": "video and audio",
           "pipeReference": "06-encode-audio-tail.fmp4",
           "hlsExitStatus": 0,
@@ -2353,7 +2353,7 @@
         },
         {
           "hlsRun": "06-encode-audio-tail.video-only",
-          "flags": "ADR 0037 common flags (-start_at_zero)",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
           "streams": "video only",
           "pipeReference": "06-encode-audio-tail.fmp4",
           "hlsExitStatus": 0,
@@ -2593,8 +2593,8 @@
       },
       "hlsOracles": [
         {
-          "hlsRun": "07-copy-start0.today",
-          "flags": "today's FfmpegCommandBuilder common flags",
+          "hlsRun": "07-copy-start0.hls-recipe",
+          "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
           "streams": "video and audio",
           "pipeReference": "07-copy-start0.fmp4",
           "hlsExitStatus": 0,
@@ -2661,7 +2661,7 @@
         },
         {
           "hlsRun": "07-copy-start0.video-only",
-          "flags": "ADR 0037 common flags (-start_at_zero)",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
           "streams": "video only",
           "pipeReference": "07-copy-start0.fmp4",
           "hlsExitStatus": 0,
@@ -2884,8 +2884,8 @@
       },
       "hlsOracles": [
         {
-          "hlsRun": "07-copy-start0.today",
-          "flags": "today's FfmpegCommandBuilder common flags",
+          "hlsRun": "07-copy-start0.hls-recipe",
+          "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
           "streams": "video and audio",
           "pipeReference": "07-copy-start0.fmp4",
           "hlsExitStatus": 0,
@@ -2931,8 +2931,8 @@
           }
         },
         {
-          "hlsRun": "07-copy-seek30.today",
-          "flags": "today's FfmpegCommandBuilder common flags",
+          "hlsRun": "07-copy-seek30.hls-recipe",
+          "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
           "streams": "video and audio",
           "pipeReference": "07-copy-seek30.fmp4",
           "hlsExitStatus": 0,
@@ -3184,7 +3184,7 @@
       "hlsOracles": [
         {
           "hlsRun": "09-svtav1-vfr.video-only",
-          "flags": "ADR 0037 common flags (-start_at_zero)",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
           "streams": "video only",
           "pipeReference": "09-svtav1-vfr.fmp4",
           "hlsExitStatus": 0,
@@ -3296,8 +3296,8 @@
           }
         },
         {
-          "hlsRun": "09-svtav1-vfr.today",
-          "flags": "today's FfmpegCommandBuilder common flags",
+          "hlsRun": "09-svtav1-vfr.hls-recipe",
+          "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
           "streams": "video and audio",
           "pipeReference": "09-svtav1-vfr.fmp4",
           "hlsExitStatus": 0,
@@ -3414,8 +3414,8 @@
           }
         },
         {
-          "hlsRun": "09-svtav1-vfr.new-keyframes-with-audio",
-          "flags": "ADR 0037 common flags (-start_at_zero)",
+          "hlsRun": "09-svtav1-vfr.pipe-keyframes-with-audio",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
           "streams": "video and audio",
           "pipeReference": "09-svtav1-vfr.fmp4",
           "hlsExitStatus": 0,
@@ -3607,7 +3607,7 @@
       "hlsOracles": [
         {
           "hlsRun": "09-svtav1-vfr-seek30.video-only",
-          "flags": "ADR 0037 common flags (-start_at_zero)",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
           "streams": "video only",
           "pipeReference": "09-svtav1-vfr-seek30.fmp4",
           "hlsExitStatus": 0,
@@ -3679,8 +3679,8 @@
           }
         },
         {
-          "hlsRun": "09-svtav1-vfr-seek30.today",
-          "flags": "today's FfmpegCommandBuilder common flags",
+          "hlsRun": "09-svtav1-vfr-seek30.hls-recipe",
+          "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
           "streams": "video and audio",
           "pipeReference": "09-svtav1-vfr-seek30.fmp4",
           "hlsExitStatus": 0,
@@ -3850,8 +3850,8 @@
       },
       "hlsOracles": [
         {
-          "hlsRun": "10-copy-gop-exceeds-period.today",
-          "flags": "today's FfmpegCommandBuilder common flags",
+          "hlsRun": "10-copy-gop-exceeds-period.hls-recipe",
+          "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
           "streams": "video and audio",
           "pipeReference": "10-copy-gop-exceeds-period.fmp4",
           "hlsExitStatus": 0,

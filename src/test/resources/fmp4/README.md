@@ -112,7 +112,7 @@ Box facts every recording shares (useful for the reader):
 ## The HLS oracle, and where it disagrees
 
 For every fixture the same source was also run through the HLS muxer (`-f hls -hls_segment_type fmp4`):
-- `*.today`: the current `FfmpegCommandBuilder` recipe (no `-start_at_zero`, `-max_delay`, today's keyframe arguments, with audio).
+- `*.hls-recipe`: the HLS muxer recipe that ADR 0037 replaces, as `FfmpegCommandBuilder` builds it (no `-start_at_zero`, `-max_delay`, its keyframe arguments, with audio).
 - `*.video-only`: the pipe recipe's own flags and keyframe arguments, video only.
 
 Each HLS segment's first video sample is mapped to the pipe recording by its ordinal in decode order.
@@ -124,10 +124,10 @@ offset (5a, 5b) and drift by a frame on the VFR B-frame copy (4).
 
 Agreement, exact in ticks:
 
-| Fixture | today | video-only | Note |
+| Fixture | hls-recipe | video-only | Note |
 |---|---|---|---|
 | 1, 2, 6, 7 | agrees | agrees | |
-| 5b | agrees (with `aac_adtstoasc` added; today's exact copy recipe exits 255) | agrees | |
+| 5b | agrees (with `aac_adtstoasc` added; the HLS recipe's exact copy exits 255) | agrees | |
 | 7b | agrees with the start-0 run's HLS output | – | its own HLS run is misaligned: 28.028, 34.034, 40.040 … as ADR 0037 describes |
 | 1b | agrees with the start-0 run's HLS output | differs on 7–10 by one frame | see below |
 | 3, 5a, 9, 9b | differs by one frame | differs by one frame | see below |
