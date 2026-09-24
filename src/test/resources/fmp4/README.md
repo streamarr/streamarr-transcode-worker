@@ -121,7 +121,8 @@ Fixture-only additions are `-hide_banner -nostdin -loglevel error`, which keep F
 and its input closed, `-threads 1`, `lp=1` for SVT-AV1, whose output otherwise differs on every
 invocation, and `-x265-params pools=none:frame-threads=1:log-level=error` for libx265, which keeps it
 single-threaded and quiet too. For libx264 and libx265 none moves a keyframe or a cut. For SVT-AV1,
-`lp=1` also excludes upstream bug #2385 (worker #42): under the worker's threading the pinned SVT-AV1
+`lp=1` also excludes [upstream issue 2385](https://gitlab.com/AOMediaCodec/SVT-AV1/-/work_items/2385)
+(worker #42): under the worker's threading the pinned SVT-AV1
 can emit packets out of decode order, which leaves one-tick video samples and crowds keyframes into
 one or two intervals, so no recording here shows that bug. Nothing else differs from the recipe,
 apart from what a fixture's `recipeDeviation` names (fixtures 11–13), and the arguments come in the
