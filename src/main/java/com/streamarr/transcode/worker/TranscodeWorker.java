@@ -33,6 +33,7 @@ import com.streamarr.transcode.engine.AttemptOutcome;
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.engine.AttemptOutcome.Failed;
 import com.streamarr.transcode.engine.AttemptOutcome.Stopped;
+import com.streamarr.transcode.engine.DeliveryCancellation;
 import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
 import com.streamarr.transcode.engine.ProducedSegment;
 import com.streamarr.transcode.engine.Producer;
@@ -50,6 +51,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
@@ -198,7 +200,10 @@ public final class TranscodeWorker implements AutoCloseable {
 
     Producer producer;
     try {
-      producer = engine.startProducer(jobMapper.map(job), segment -> deliverToServer(job, segment));
+      producer =
+          engine.startProducer(
+              jobMapper.map(job),
+              (segment, cancellation) -> deliverToServer(job, segment, cancellation));
     } catch (RuntimeException e) {
       logStartupFailure(job, e);
       reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED);
@@ -252,9 +257,10 @@ public final class TranscodeWorker implements AutoCloseable {
   }
 
   // The attempt's producer delivers each segment here and waits until the server accepts it.
-  private void deliverToServer(VariantJob job, ProducedSegment segment) {
+  private void deliverToServer(
+      VariantJob job, ProducedSegment segment, DeliveryCancellation cancellation) {
     try {
-      uploadSegment(job, segment);
+      uploadSegment(job, segment, cancellation);
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       throw new WorkerJobException("Interrupted while uploading " + segment, e);
@@ -263,11 +269,15 @@ public final class TranscodeWorker implements AutoCloseable {
     }
   }
 
-  private void uploadSegment(VariantJob job, ProducedSegment segment)
+  private void uploadSegment(
+      VariantJob job, ProducedSegment segment, DeliveryCancellation cancellation)
       throws InterruptedException, ExecutionException, TimeoutException {
     var upload = new SegmentUpload();
+    var metadataBuilder = openUpload(job, upload);
+    cancellation.onCancel(
+        () -> upload.cancel(new CancellationException("The job attempt stopped")));
     var metadata =
-        openUpload(job, upload)
+        metadataBuilder
             .setSegmentName(segment.name())
             .setContentType(SegmentContentType.SEGMENT_CONTENT_TYPE_VIDEO_MP4)
             .setContentLengthBytes(segment.byteLength())
@@ -606,12 +616,13 @@ public final class TranscodeWorker implements AutoCloseable {
     }
   }
 
-  // One segment's upload call, which sends a message only when the call is ready for it.
+  // One segment's upload call, which sends a message only when the call is ready for it. Every
+  // call method runs under this object's monitor, so a cancellation from the thread that stops the
+  // attempt never interleaves with a send.
   private static final class SegmentUpload
       implements ClientResponseObserver<UploadSegmentRequest, UploadSegmentResponse> {
 
     private final CompletableFuture<UploadSegmentResponse> response = new CompletableFuture<>();
-    private final Object readiness = new Object();
     private ClientCallStreamObserver<UploadSegmentRequest> call;
 
     @Override
@@ -620,29 +631,22 @@ public final class TranscodeWorker implements AutoCloseable {
       call.setOnReadyHandler(this::signalReadiness);
     }
 
-    // Sends nothing once the server has answered; the answer decides the upload.
-    private void send(UploadSegmentRequest message) throws InterruptedException {
-      awaitReadiness();
+    // Sends nothing once the server has answered or the upload was cancelled; that decides it.
+    private synchronized void send(UploadSegmentRequest message) throws InterruptedException {
+      while (!call.isReady() && !response.isDone()) {
+        wait();
+      }
+
       if (!response.isDone()) {
         call.onNext(message);
       }
     }
 
-    private void awaitReadiness() throws InterruptedException {
-      synchronized (readiness) {
-        while (!call.isReady() && !response.isDone()) {
-          readiness.wait();
-        }
-      }
+    private synchronized void signalReadiness() {
+      notifyAll();
     }
 
-    private void signalReadiness() {
-      synchronized (readiness) {
-        readiness.notifyAll();
-      }
-    }
-
-    private void finish() {
+    private synchronized void finish() {
       if (!response.isDone()) {
         call.onCompleted();
       }
@@ -653,8 +657,10 @@ public final class TranscodeWorker implements AutoCloseable {
       return response.get(CONNECTION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
     }
 
-    private void cancel(Throwable failure) {
+    private synchronized void cancel(Throwable failure) {
+      response.completeExceptionally(failure);
       call.cancel("Segment upload failed", failure);
+      notifyAll();
     }
 
     @Override

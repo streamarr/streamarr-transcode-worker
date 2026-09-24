@@ -285,13 +285,18 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     }
   }
 
-  /** A segment upload that records what the worker sent and acknowledges every byte. */
+  /**
+   * A segment upload that records what the worker sent and acknowledges every byte. Like a gRPC
+   * call, a cancelled upload closes with {@code CANCELLED} and is never acknowledged.
+   */
   public static final class UploadCall
       extends ClientCall<UploadSegmentRequest, UploadSegmentResponse> {
 
     private final UploadReadiness readiness;
     private final List<UploadSegmentRequest> messages = new CopyOnWriteArrayList<>();
     private volatile Listener<UploadSegmentResponse> responses;
+    private boolean closed;
+    private boolean cancelled;
 
     private UploadCall(UploadReadiness readiness) {
       this.readiness = readiness;
@@ -345,8 +350,16 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
       messages.add(message);
     }
 
+    public synchronized boolean wasCancelled() {
+      return cancelled;
+    }
+
     @Override
     public void halfClose() {
+      if (!tryClose()) {
+        return;
+      }
+
       responses.onMessage(
           UploadSegmentResponse.newBuilder().setAcceptedLengthBytes(content().length).build());
       responses.onClose(Status.OK, new Metadata());
@@ -354,7 +367,24 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
 
     @Override
     public void cancel(String message, Throwable cause) {
-      // Every upload is acknowledged when it half-closes, so nothing is left to cancel.
+      if (!tryClose()) {
+        return;
+      }
+
+      synchronized (this) {
+        cancelled = true;
+      }
+
+      responses.onClose(Status.CANCELLED.withDescription(message).withCause(cause), new Metadata());
+    }
+
+    private synchronized boolean tryClose() {
+      if (closed) {
+        return false;
+      }
+
+      closed = true;
+      return true;
     }
   }
 }

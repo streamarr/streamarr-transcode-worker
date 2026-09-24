@@ -458,6 +458,40 @@ class TranscodeWorkerJobAttemptTest {
 
   @Test
   @DisplayName(
+      "Should let FFmpeg exit without a forced kill and send no further upload message when"
+          + " stopped while an upload awaits readiness")
+  void shouldLetFfmpegExitAndSendNoFurtherUploadMessageWhenStoppedWhileAnUploadAwaitsReadiness()
+      throws Exception {
+    var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
+    var job = variantJobBuilder().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.withholdUploadReadiness();
+      startVariant(connection, job);
+      await().atMost(EVENT_LIMIT).until(() -> connection.uploads().size() == 1);
+      var process = launcher.process(fromProto(job.getJobAttemptId()));
+
+      stopVariant(connection, job);
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_STOPPED);
+      connection.grantUploadMessage();
+      await()
+          .during(Duration.ofMillis(200))
+          .atMost(EVENT_LIMIT)
+          .until(() -> connection.uploadMessageCount() == 0);
+      assertThat(connection.uploads())
+          .singleElement()
+          .satisfies(upload -> assertThat(upload.wasCancelled()).isTrue());
+      assertThat(process.stdinText()).isEqualTo("q");
+      assertThat(process.hasReadToEndOfOutput()).isTrue();
+      assertThat(process.wasDestroyedForcibly()).isFalse();
+    }
+  }
+
+  @Test
+  @DisplayName(
       "Should not report the stopped attempt to a new session when the worker reconnects while"
           + " FFmpeg quits")
   void shouldNotReportTheStoppedAttemptToANewSessionWhenTheWorkerReconnectsWhileFfmpegQuits()

@@ -541,24 +541,25 @@ class ProducerTest {
 
   @Test
   @DisplayName(
-      "Should deliver nothing after the delivery in flight when stopped while the sink holds a"
-          + " segment")
-  void shouldDeliverNothingAfterTheDeliveryInFlightWhenStoppedWhileTheSinkHoldsASegment() {
+      "Should cancel the delivery in flight and let FFmpeg exit within the grace period when"
+          + " stopped while the sink holds a segment")
+  void shouldCancelTheDeliveryInFlightAndLetFfmpegExitWhenStoppedWhileTheSinkHoldsASegment()
+      throws InterruptedException {
     var recording = recording(ENCODED_RECORDING);
     var process = ScriptedProcess.builder().output(bytesOf(ENCODED_RECORDING)).build();
     sink.holding(2);
-    var producer = producerFor(process, recording).gracePeriod(Duration.ofMillis(100)).start();
+    var producer = producerFor(process, recording).gracePeriod(Duration.ofMinutes(10)).start();
     awaiting().until(sink::isHolding);
 
-    producer.stop();
-    sink.release();
+    var stopping = Thread.ofVirtual().start(producer::stop);
 
+    assertThat(stopping.join(OUTCOME_LIMIT)).isTrue();
     assertThat(producer.outcome()).isCompletedWithValue(new Stopped());
-    await()
-        .during(Duration.ofMillis(200))
-        .atMost(OUTCOME_LIMIT)
-        .until(
-            () -> sink.acceptedNames().equals(List.of("init.mp4", "segment0.m4s", "segment1.m4s")));
+    assertThat(process.stdinText()).isEqualTo("q");
+    assertThat(process.hasReadToEndOfOutput()).isTrue();
+    assertThat(process.wasDestroyedForcibly()).isFalse();
+    assertThat(sink.wasCancelled()).isTrue();
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
   }
 
   @RepeatedTest(50)

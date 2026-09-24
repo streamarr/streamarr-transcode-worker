@@ -3,6 +3,7 @@ package com.streamarr.transcode.engine;
 import java.io.ByteArrayOutputStream;
 import java.util.List;
 import java.util.OptionalInt;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -10,7 +11,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Accepts each segment the producer delivers and keeps its name and bytes. A test can hold one
- * delivery until it releases it, refuse one, or throw an error from one.
+ * delivery until it releases it or the producer cancels it, refuse one, or throw an error from one.
  */
 final class RecordingSegmentSink implements SegmentSink {
 
@@ -25,6 +26,7 @@ final class RecordingSegmentSink implements SegmentSink {
   private volatile OptionalInt refusedDelivery = OptionalInt.empty();
   private volatile OptionalInt failedDelivery = OptionalInt.empty();
   private volatile Error failure;
+  private volatile boolean cancelled;
 
   /** Holds the delivery at this zero-based position, counting the initialization segment. */
   RecordingSegmentSink holding(int delivery) {
@@ -53,8 +55,13 @@ final class RecordingSegmentSink implements SegmentSink {
     release.countDown();
   }
 
+  /** Whether the producer cancelled the held delivery. */
+  boolean wasCancelled() {
+    return cancelled;
+  }
+
   @Override
-  public void deliver(ProducedSegment segment) {
+  public void deliver(ProducedSegment segment, DeliveryCancellation cancellation) {
     var delivery = OptionalInt.of(deliveries.getAndIncrement());
     if (delivery.equals(refusedDelivery)) {
       throw new IllegalStateException("the server refused " + segment.name());
@@ -65,8 +72,13 @@ final class RecordingSegmentSink implements SegmentSink {
     }
 
     if (delivery.equals(heldDelivery)) {
+      cancellation.onCancel(this::cancelHeldDelivery);
       held.countDown();
       awaitRelease();
+    }
+
+    if (cancelled) {
+      throw new CancellationException(segment.name() + " was cancelled");
     }
 
     var bytes = bytesOf(segment);
@@ -75,6 +87,11 @@ final class RecordingSegmentSink implements SegmentSink {
     }
 
     accepted.add(new Accepted(segment.name(), segment.byteLength(), bytes.length));
+  }
+
+  private void cancelHeldDelivery() {
+    cancelled = true;
+    release.countDown();
   }
 
   private void awaitRelease() {

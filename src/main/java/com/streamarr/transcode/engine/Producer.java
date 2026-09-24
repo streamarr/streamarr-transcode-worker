@@ -43,6 +43,7 @@ public final class Producer {
   // Guarded by lock.
   private boolean stopRequested;
   private boolean settled;
+  private Optional<DeliveryCancellation> deliveryInFlight = Optional.empty();
 
   // Confined to the reader thread.
   private boolean mediaSegmentDelivered;
@@ -102,13 +103,15 @@ public final class Producer {
 
   /**
    * Ends the attempt for good and returns once it has an outcome. Unless the attempt has already
-   * settled, the producer starts no further delivery, asks FFmpeg to quit, discards the rest of its
-   * output, destroys FFmpeg when it has not exited within the grace period, and settles the stop
-   * after FFmpeg has exited; a failure observed after the stop is never reported.
+   * settled, the producer starts no further delivery, asks FFmpeg to quit, cancels the delivery in
+   * flight, discards the rest of its output, destroys FFmpeg when it has not exited within the
+   * grace period, and settles the stop after FFmpeg has exited; a failure observed after the stop
+   * is never reported.
    */
   public void stop() {
     if (tryRecordStop()) {
       requestQuit();
+      cancelDeliveryInFlight();
       awaitExitWithinGracePeriod();
       settle(new Stopped());
     }
@@ -124,6 +127,33 @@ public final class Producer {
 
       stopRequested = true;
       return true;
+    }
+  }
+
+  private void cancelDeliveryInFlight() {
+    Optional<DeliveryCancellation> cancellation;
+    synchronized (lock) {
+      cancellation = deliveryInFlight;
+    }
+
+    cancellation.ifPresent(DeliveryCancellation::cancel);
+  }
+
+  // Empty once a stop is recorded, so that no delivery starts after it.
+  private Optional<DeliveryCancellation> tryStartDelivery() {
+    synchronized (lock) {
+      if (stopRequested) {
+        return Optional.empty();
+      }
+
+      deliveryInFlight = Optional.of(new DeliveryCancellation());
+      return deliveryInFlight;
+    }
+  }
+
+  private void endDelivery() {
+    synchronized (lock) {
+      deliveryInFlight = Optional.empty();
     }
   }
 
@@ -235,15 +265,18 @@ public final class Producer {
 
   // Empty once the sink has accepted the segment; otherwise why reading ends.
   private Optional<Ending> deliver(ProducedSegment segment) {
-    if (isStopRequested()) {
+    var cancellation = tryStartDelivery();
+    if (cancellation.isEmpty()) {
       return Optional.of(new StopObserved());
     }
 
     try {
-      sink.deliver(segment);
+      sink.deliver(segment, cancellation.orElseThrow());
     } catch (RuntimeException e) {
       return Optional.of(
           new Abandoned(new Failed(ProducerFailure.SEGMENT_NOT_ACCEPTED, segment + ": " + e)));
+    } finally {
+      endDelivery();
     }
 
     if (segment instanceof ProducedSegment.Media) {
