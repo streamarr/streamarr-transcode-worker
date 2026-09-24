@@ -18,9 +18,14 @@ import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.BrokenBarrierException;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.stream.Stream;
 import org.assertj.core.api.InstanceOfAssertFactories;
 import org.awaitility.core.ConditionFactory;
@@ -43,6 +48,7 @@ class ProducerTest {
       UUID.fromString("0f6a3a9e-4c6b-4f59-9d0e-1c2b3a4d5e6f");
   private static final long SERVER_SEGMENT_CAP_BYTES = 16L * 1024 * 1024;
   private static final int NEARLY_CAPPED_FRAGMENT_PAYLOAD = 5 * 1024 * 1024;
+  private static final int RACE_ITERATIONS = 200;
 
   // Where the reader of nearlyCappedSegments() stops while the first segment awaits acceptance:
   // before the body of the third segment's first mdat, which the budget cannot admit.
@@ -703,6 +709,56 @@ class ProducerTest {
 
   @Test
   @DisplayName(
+      "Should settle whichever of a stop and a failure is recorded first, and let the other take"
+          + " no effect, when they race")
+  void shouldSettleWhicheverOfAStopAndAFailureIsRecordedFirstWhenTheyRace() throws Exception {
+    var recording = recording(ENCODED_RECORDING);
+    var outcomes = new ArrayList<AttemptOutcome>();
+
+    for (var iteration = 0; iteration < RACE_ITERATIONS; iteration++) {
+      var process =
+          ScriptedProcess.builder()
+              .output(bytesOf(ENCODED_RECORDING))
+              .pauseAfter(insideThirdMediaSegment(recording))
+              .resumesOnQuit(true)
+              .build();
+      var start = new CyclicBarrier(2);
+      SegmentSink refusingTheFirstMediaSegment =
+          (segment, _) -> {
+            if (segment.name().equals("segment0.m4s")) {
+              awaitBarrier(start);
+              throw new IllegalStateException("the server refused " + segment.name());
+            }
+          };
+      var producer = producerFor(process, recording).sink(refusingTheFirstMediaSegment).start();
+
+      awaitBarrier(start);
+      producer.stop();
+
+      var outcome = producer.outcome().get(OUTCOME_LIMIT.toSeconds(), TimeUnit.SECONDS);
+      var stoppedFirst = outcome instanceof Stopped;
+      assertThat(process.stdinText().equals("q"))
+          .as("the stop asked FFmpeg to quit")
+          .isEqualTo(stoppedFirst);
+      assertThat(process.wasDestroyedForcibly())
+          .as("the failure destroyed FFmpeg")
+          .isEqualTo(!stoppedFirst);
+      if (!stoppedFirst) {
+        assertThat(outcome)
+            .asInstanceOf(InstanceOfAssertFactories.type(Failed.class))
+            .extracting(Failed::reason)
+            .isEqualTo(ProducerFailure.SEGMENT_NOT_ACCEPTED);
+      }
+
+      outcomes.add(outcome);
+    }
+
+    assertThat(outcomes).hasAtLeastOneElementOfType(Stopped.class);
+    assertThat(outcomes).hasAtLeastOneElementOfType(Failed.class);
+  }
+
+  @Test
+  @DisplayName(
       "Should return from a second stop only after the first settles when stopped twice"
           + " concurrently")
   void shouldReturnFromASecondStopOnlyAfterTheFirstSettlesWhenStoppedTwiceConcurrently()
@@ -743,6 +799,17 @@ class ProducerTest {
 
     assertThat(process.stdinText()).isEmpty();
     assertThat(producer.outcome()).isCompletedWithValue(new Stopped());
+  }
+
+  private static void awaitBarrier(CyclicBarrier barrier) {
+    try {
+      barrier.await(OUTCOME_LIMIT.toSeconds(), TimeUnit.SECONDS);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new AssertionError("interrupted at the race's start", e);
+    } catch (BrokenBarrierException | TimeoutException e) {
+      throw new AssertionError("the race never started", e);
+    }
   }
 
   private static ConditionFactory awaiting() {

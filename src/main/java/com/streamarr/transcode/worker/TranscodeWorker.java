@@ -355,12 +355,15 @@ public final class TranscodeWorker implements AutoCloseable {
       return;
     }
 
-    tryReport(
-        switch (outcome) {
-          case Completed _ -> jobAttemptCompleted(job.getJobAttemptId());
-          case Failed(var reason, var detail) -> transcodeFailure(job, reason, detail);
-          case Stopped _ -> jobAttemptStopped(job.getJobAttemptId());
-        });
+    tryReport(reportOf(job, outcome));
+  }
+
+  private static EstablishWorkerSessionRequest reportOf(VariantJob job, AttemptOutcome outcome) {
+    return switch (outcome) {
+      case Completed _ -> jobAttemptCompleted(job.getJobAttemptId());
+      case Failed(var reason, var detail) -> transcodeFailure(job, reason, detail);
+      case Stopped _ -> jobAttemptStopped(job.getJobAttemptId());
+    };
   }
 
   private static EstablishWorkerSessionRequest transcodeFailure(
@@ -397,10 +400,13 @@ public final class TranscodeWorker implements AutoCloseable {
     stopping.start();
   }
 
+  // The producer settles the stop unless it had already recorded another outcome, which the worker
+  // then reports instead: a failure recorded before the stop stays a failure.
   private void finishStop(ClaimedStop stop, Uuid jobAttemptId) {
     try {
-      stop.attempt().producer().stop();
-      reportStopped(stop, jobAttemptId);
+      var producer = stop.attempt().producer();
+      producer.stop();
+      reportClaimed(stop, producer.outcome().join());
     } catch (RuntimeException e) {
       log.error("Stopping job attempt {} failed", fromProto(jobAttemptId), e);
     } finally {
@@ -429,12 +435,12 @@ public final class TranscodeWorker implements AutoCloseable {
   }
 
   // A stop that outlives its session reports nothing; the server learned of the end on disconnect.
-  private synchronized void reportStopped(ClaimedStop stop, Uuid jobAttemptId) {
+  private synchronized void reportClaimed(ClaimedStop stop, AttemptOutcome outcome) {
     if (requests != stop.session()) {
       return;
     }
 
-    tryReport(jobAttemptStopped(jobAttemptId));
+    tryReport(reportOf(stop.attempt().job(), outcome));
   }
 
   private void reportFailure(VariantJob job, JobAttemptFailure failure) {

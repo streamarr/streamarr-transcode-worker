@@ -19,6 +19,7 @@ import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest.EventC
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
 import build.buf.gen.streamarr.transcode.v1.SegmentContentType;
 import build.buf.gen.streamarr.transcode.v1.TranscodeMode;
+import build.buf.gen.streamarr.transcode.v1.Uuid;
 import build.buf.gen.streamarr.transcode.v1.VariantJob;
 import com.streamarr.transcode.engine.FfmpegRecordings.Recording;
 import com.streamarr.transcode.engine.FfmpegRecordings.SegmentSummary;
@@ -32,14 +33,20 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.stream.DoubleStream;
 import java.util.stream.Stream;
+import org.awaitility.core.ConditionFactory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -55,6 +62,7 @@ class TranscodeWorkerJobAttemptTest {
 
   private static final Duration EVENT_LIMIT = Duration.ofSeconds(10);
   private static final int UPLOAD_MESSAGE_BYTES = 64 * 1024;
+  private static final int RACE_ITERATIONS = 100;
 
   @TempDir Path tempDir;
 
@@ -555,36 +563,58 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
-  @RepeatedTest(20)
-  @DisplayName("Should settle the attempt once when a stop races FFmpeg's failure")
-  void shouldSettleTheAttemptOnceWhenAStopRacesFfmpegsFailure() throws Exception {
-    var initializationSegment =
-        Arrays.copyOf(
-            bytesOf(ENCODED_RECORDING),
-            recording(ENCODED_RECORDING).initializationSegment().byteLength());
+  @Test
+  @DisplayName(
+      "Should report once, and as whichever the producer recorded first, when a stop races a"
+          + " failure")
+  void shouldReportOnceAsWhicheverTheProducerRecordedFirstWhenAStopRacesAFailure()
+      throws Exception {
+    // FFmpeg's output breaks at this offset once the test lets the reader past its pause, and
+    // FFmpeg exits when asked to quit.
+    var failureOffset = recording(ENCODED_RECORDING).initializationSegment().byteLength() + 100;
     var launcher =
         new ScriptedProcessLauncher(
             _ ->
                 ScriptedProcess.builder()
-                    .output(initializationSegment)
-                    .exitCode(1)
-                    .exitTiming(ExitTiming.AT_LAUNCH)
+                    .output(bytesOf(ENCODED_RECORDING))
+                    .pauseAfter(failureOffset)
+                    .failReadAfter(failureOffset)
+                    .exitTiming(ExitTiming.AT_QUIT)
                     .build());
-    var job = variantJobBuilder().build();
+    var jobs = new ArrayList<VariantJob>();
 
     try (var worker = worker(launcher)) {
       worker.start("localhost", 1);
       var connection = runtime.connection();
-      startVariant(connection, job);
+      for (var iteration = 0; iteration < RACE_ITERATIONS; iteration++) {
+        var job = variantJobBuilder().build();
+        jobs.add(job);
+        startVariant(connection, job);
+        var process = launcher.process(fromProto(job.getJobAttemptId()));
+        promptly().until(process::hasReachedPause);
+        var start = new CyclicBarrier(2);
+        var failing =
+            Thread.ofVirtual()
+                .start(
+                    () -> {
+                      awaitBarrier(start);
+                      process.resume();
+                    });
 
-      stopVariant(connection, job);
+        awaitBarrier(start);
+        stopVariant(connection, job);
 
-      await().atMost(EVENT_LIMIT).until(() -> eventsOf(connection).size() >= 2);
-      assertThat(eventsOf(connection))
-          .hasSize(2)
-          .startsWith(EventCase.JOB_ATTEMPT_STARTED)
-          .last()
-          .isIn(EventCase.JOB_ATTEMPT_STOPPED, EventCase.JOB_ATTEMPT_FAILED);
+        assertThat(failing.join(EVENT_LIMIT)).isTrue();
+        var reported = awaitTerminalEvent(connection, job);
+        assertThat(reported == EventCase.JOB_ATTEMPT_STOPPED)
+            .as("the stop was recorded first, so it asked FFmpeg to quit")
+            .isEqualTo(process.stdinText().equals("q"));
+      }
+
+      assertThat(jobs).allSatisfy(job -> assertThat(terminalEventsOf(connection, job)).hasSize(1));
+      assertThat(jobs)
+          .extracting(job -> terminalEventsOf(connection, job).getFirst())
+          .contains(EventCase.JOB_ATTEMPT_STOPPED, EventCase.JOB_ATTEMPT_FAILED);
     }
   }
 
@@ -606,6 +636,45 @@ class TranscodeWorkerJobAttemptTest {
 
   private TranscodeWorker worker(ScriptedProcessLauncher launcher) throws Exception {
     return workerBuilder(tempDir).runtime(runtime).engine(engine(launcher)).build();
+  }
+
+  private static EventCase awaitTerminalEvent(
+      ScriptedWorkerRuntime.Connection connection, VariantJob job) {
+    promptly().until(() -> !terminalEventsOf(connection, job).isEmpty());
+    return terminalEventsOf(connection, job).getFirst();
+  }
+
+  // How the worker reported the end of the job's attempt: completed, failed or stopped.
+  private static List<EventCase> terminalEventsOf(
+      ScriptedWorkerRuntime.Connection connection, VariantJob job) {
+    return connection.events().stream()
+        .filter(event -> endedAttemptOf(event).equals(Optional.of(job.getJobAttemptId())))
+        .map(EstablishWorkerSessionRequest::getEventCase)
+        .toList();
+  }
+
+  private static Optional<Uuid> endedAttemptOf(EstablishWorkerSessionRequest event) {
+    return switch (event.getEventCase()) {
+      case JOB_ATTEMPT_COMPLETED -> Optional.of(event.getJobAttemptCompleted().getJobAttemptId());
+      case JOB_ATTEMPT_FAILED -> Optional.of(event.getJobAttemptFailed().getJobAttemptId());
+      case JOB_ATTEMPT_STOPPED -> Optional.of(event.getJobAttemptStopped().getJobAttemptId());
+      default -> Optional.empty();
+    };
+  }
+
+  private static ConditionFactory promptly() {
+    return await().atMost(EVENT_LIMIT).pollInterval(Duration.ofMillis(5));
+  }
+
+  private static void awaitBarrier(CyclicBarrier barrier) {
+    try {
+      barrier.await(EVENT_LIMIT.toSeconds(), TimeUnit.SECONDS);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new AssertionError("interrupted at the race's start", e);
+    } catch (BrokenBarrierException | TimeoutException e) {
+      throw new AssertionError("the race never started", e);
+    }
   }
 
   private static void awaitEvents(
