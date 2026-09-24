@@ -280,6 +280,27 @@ class FfmpegCommandBuilderTest {
     assertThat(forcedKeyframeTimes(cmd)).hasSize(131_071).endsWith(",135210,135216");
   }
 
+  @Test
+  @DisplayName(
+      "Should end the list short of the limit when the next boundary would make the argument one"
+          + " byte too long")
+  void shouldEndTheListShortOfTheLimitWhenTheNextBoundaryWouldMakeTheArgumentOneByteTooLong() {
+    // From segment 2 the list reaches 131,065 bytes at 128214 s; the next time, ",128220", would
+    // make it 131,072 bytes, which with its NUL no longer fits in 32 pages of 4 KiB.
+    var cmd =
+        command(
+            request(TranscodeMode.FULL_TRANSCODE)
+                .startSequenceNumber(2)
+                .mediaSegmentCount(Integer.MAX_VALUE)
+                .build(),
+            "libx264");
+
+    assertThat(forcedKeyframeTimes(cmd))
+        .hasSize(131_065)
+        .startsWith("12,18,")
+        .endsWith(",128208,128214");
+  }
+
   private static String forcedKeyframeTimes(List<String> cmd) {
     return cmd.get(cmd.indexOf("-force_key_frames:0") + 1);
   }
