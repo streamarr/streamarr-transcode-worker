@@ -217,6 +217,35 @@ class ProducerTest {
 
   @Test
   @DisplayName(
+      "Should fail the attempt and end FFmpeg when fragments under the segment cap add up to a"
+          + " media segment over it")
+  void shouldFailTheAttemptAndEndFfmpegWhenFragmentsUnderTheSegmentCapAddUpToAMediaSegmentOverIt() {
+    var mediaDataBytes = Math.toIntExact(SERVER_SEGMENT_CAP_BYTES / 3 + 1);
+    var output =
+        IsoBoxes.concat(
+            IsoBoxes.ftyp(),
+            IsoBoxes.videoAndAudioMoov(),
+            IsoBoxes.moof(
+                IsoBoxes.videoTraf()
+                    .baseMediaDecodeTime(0L)
+                    .firstSampleFlags(IsoBoxes.SYNC_SAMPLE_FLAGS)
+                    .build()),
+            IsoBoxes.mdat(mediaDataBytes),
+            IsoBoxes.moof(IsoBoxes.videoTraf().baseMediaDecodeTime(24_000L).build()),
+            IsoBoxes.mdat(mediaDataBytes),
+            IsoBoxes.moof(IsoBoxes.videoTraf().baseMediaDecodeTime(48_000L).build()),
+            IsoBoxes.mdat(mediaDataBytes));
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer = producerFor(process, recording(ENCODED_RECORDING)).start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.SEGMENT_CAP_EXCEEDED);
+    assertThat(process.wasDestroyedForcibly()).isTrue();
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+  }
+
+  @Test
+  @DisplayName(
       "Should deliver the closed segment, then fail the attempt and end FFmpeg, when source"
           + " keyframes are further apart than the period")
   void shouldDeliverTheClosedSegmentThenFailWhenSourceKeyframesAreFurtherApartThanThePeriod() {
