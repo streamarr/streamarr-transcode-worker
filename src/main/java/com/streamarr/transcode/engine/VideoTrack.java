@@ -5,6 +5,7 @@ import static com.streamarr.transcode.engine.BoxFields.isSet;
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.engine.TrackRun.FirstSample;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -16,8 +17,11 @@ record VideoTrack(long trackId, long timescale, int defaultSampleFlags) {
   private static final String VIDEO_HANDLER = "vide";
   private static final int SAMPLE_IS_NON_SYNC_SAMPLE = 0x0001_0000;
 
-  /** Finds the single video track of a {@code moov}; empty when it declares none. */
-  static Optional<VideoTrack> of(BoxView moov) {
+  /**
+   * Finds the single video track of a {@code moov}, with its {@code trex} defaults; empty when it
+   * declares none.
+   */
+  static Optional<VideoTrack> of(BoxView moov, Map<Long, TrackExtends> trackExtends) {
     var videoTraks =
         moov.children("trak").stream()
             .filter(trak -> handlerOf(trak).equals(VIDEO_HANDLER))
@@ -27,7 +31,7 @@ record VideoTrack(long trackId, long timescale, int defaultSampleFlags) {
           Reason.MULTIPLE_VIDEO_TRACKS, "moov declares " + videoTraks.size() + " video tracks");
     }
 
-    return videoTraks.stream().findFirst().map(trak -> fromTrak(moov, trak));
+    return videoTraks.stream().findFirst().map(trak -> fromTrak(trak, trackExtends));
   }
 
   /**
@@ -42,17 +46,14 @@ record VideoTrack(long trackId, long timescale, int defaultSampleFlags) {
         .findFirst();
   }
 
-  private static VideoTrack fromTrak(BoxView moov, BoxView trak) {
+  private static VideoTrack fromTrak(BoxView trak, Map<Long, TrackExtends> trackExtends) {
     var trackId = trackIdOf(trak.requiredChild("tkhd"));
     var timescale = timescaleOf(trak.requiredChild("mdia").requiredChild("mdhd"));
-    var trackExtends =
-        moov.requiredChild("mvex").children("trex").stream()
-            .map(TrackExtends::of)
-            .filter(trex -> trex.trackId() == trackId)
-            .findFirst()
+    var defaults =
+        Optional.ofNullable(trackExtends.get(trackId))
             .orElseThrow(
                 () -> FragmentedMp4Exception.malformed("mvex holds no trex for track " + trackId));
-    return new VideoTrack(trackId, timescale, trackExtends.defaultSampleFlags());
+    return new VideoTrack(trackId, timescale, defaults.defaultSampleFlags());
   }
 
   private static String handlerOf(BoxView trak) {
@@ -116,15 +117,6 @@ record VideoTrack(long trackId, long timescale, int defaultSampleFlags) {
       return Math.addExact(decodeTime, compositionOffset);
     } catch (ArithmeticException _) {
       throw FragmentedMp4Exception.malformed("presentation time overflows a signed 64-bit value");
-    }
-  }
-
-  private record TrackExtends(long trackId, int defaultSampleFlags) {
-
-    static TrackExtends of(BoxView trex) {
-      var fields = trex.fields().skip(4);
-      var trackId = fields.u32();
-      return new TrackExtends(trackId, fields.skip(12).s32());
     }
   }
 }

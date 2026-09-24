@@ -65,7 +65,10 @@ final class FragmentedMp4Reader {
             .orElseThrow(() -> unexpected(missing, "moov", "the end of the stream"));
     var moov = readBox(moovHeader, ftyp.length);
     var moovView = viewOf(moovHeader, moov);
-    movie = Optional.of(new Movie(VideoTrack.of(moovView), SampleRanges.of(moovView)));
+    var trackExtends = TrackExtends.byTrackIdIn(moovView);
+    movie =
+        Optional.of(
+            new Movie(VideoTrack.of(moovView, trackExtends), new SampleRanges(trackExtends)));
     var bytes = ByteBuffer.allocate(ftyp.length + moov.length).put(ftyp).put(moov).array();
     return Optional.of(new InitializationSegment(bytes));
   }

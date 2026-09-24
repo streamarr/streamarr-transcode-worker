@@ -1,15 +1,14 @@
 package com.streamarr.transcode.engine;
 
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.function.LongSupplier;
 
 /**
- * The default sample sizes an initialization segment declares per track, and the rule that every
- * sample a {@code moof} describes lies inside the body of the {@code mdat} that follows it.
+ * The rule that every sample a {@code moof} describes lies inside the body of the {@code mdat} that
+ * follows it, with the default sample sizes the initialization segment declares per track.
  *
  * <p>Samples are placed as ISO/IEC 14496-12 (8.8.7, 8.8.8) defines: a {@code traf}'s base is its
  * {@code tfhd} base-data-offset, else the {@code moof} under default-base-is-moof, else the {@code
@@ -19,23 +18,10 @@ import java.util.function.LongSupplier;
  */
 final class SampleRanges {
 
-  private final Map<Long, Long> defaultSampleSizes;
+  private final Map<Long, TrackExtends> trackExtends;
 
-  private SampleRanges(Map<Long, Long> defaultSampleSizes) {
-    this.defaultSampleSizes = defaultSampleSizes;
-  }
-
-  static SampleRanges of(BoxView moov) {
-    var sizes = new HashMap<Long, Long>();
-    for (var mvex : moov.children("mvex")) {
-      for (var trex : mvex.children("trex")) {
-        var fields = trex.fields().skip(4);
-        var trackId = fields.u32();
-        sizes.put(trackId, fields.skip(8).u32());
-      }
-    }
-
-    return new SampleRanges(Map.copyOf(sizes));
+  SampleRanges(Map<Long, TrackExtends> trackExtends) {
+    this.trackExtends = Map.copyOf(trackExtends);
   }
 
   /**
@@ -107,7 +93,8 @@ final class SampleRanges {
   }
 
   private long trackDefaultSampleSizeOf(long trackId) {
-    return Optional.ofNullable(defaultSampleSizes.get(trackId))
+    return Optional.ofNullable(trackExtends.get(trackId))
+        .map(TrackExtends::defaultSampleSize)
         .orElseThrow(
             () ->
                 FragmentedMp4Exception.malformed(

@@ -570,6 +570,32 @@ class FragmentedMp4ReaderTest {
   }
 
   @Test
+  @DisplayName("Should fail when the movie declares two sets of defaults for one track")
+  void shouldFailWhenTheMovieDeclaresTwoSetsOfDefaultsForOneTrack() {
+    var video = Track.video().build();
+    var audio = Track.audio().build();
+    var moov =
+        box(
+            "moov",
+            video.trak(),
+            audio.trak(),
+            box("mvex", video.trex(), audio.trex(), audio.trex()));
+
+    assertFailure(readerOf(concat(ftyp(), moov)), Reason.MALFORMED_BOX);
+  }
+
+  @Test
+  @DisplayName("Should fail when an audio track's defaults end before its default sample flags")
+  void shouldFailWhenAnAudioTracksDefaultsEndBeforeItsDefaultSampleFlags() {
+    var video = Track.video().build();
+    var audio = Track.audio().build();
+    var truncatedTrex = fullBox("trex", 0, u32(IsoBoxes.AUDIO_TRACK_ID), u32(1), u32(0), u32(0));
+    var moov = box("moov", video.trak(), audio.trak(), box("mvex", video.trex(), truncatedTrex));
+
+    assertFailure(readerOf(concat(ftyp(), moov)), Reason.MALFORMED_BOX);
+  }
+
+  @Test
   @DisplayName("Should fail when the video track's timescale is zero")
   void shouldFailWhenTheVideoTracksTimescaleIsZero() {
     assertFailure(
