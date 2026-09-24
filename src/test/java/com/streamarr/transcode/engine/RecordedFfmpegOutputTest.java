@@ -211,6 +211,19 @@ class RecordedFfmpegOutputTest {
   }
 
   @Test
+  @DisplayName("Should fail with the segment cap when a recorded media segment outgrows the cap")
+  void shouldFailWithTheSegmentCapWhenARecordedMediaSegmentOutgrowsTheCap() throws IOException {
+    var recording = recording("01-encode-cfr.fmp4");
+    var largestSegment =
+        recording.segments().stream().mapToLong(SegmentSummary::byteLength).max().orElseThrow();
+
+    assertThat(group(recording, largestSegment).failure()).isEmpty();
+    assertThat(group(recording, largestSegment - 1).failure())
+        .map(Failure::reason)
+        .contains(Reason.EXCEEDS_SEGMENT_CAP);
+  }
+
+  @Test
   @DisplayName(
       "Should fail as a malformed box when a recorded trun declares one sample more than it holds")
   void shouldFailAsAMalformedBoxWhenARecordedTrunDeclaresOneSampleMoreThanItHolds() {
@@ -231,8 +244,14 @@ class RecordedFfmpegOutputTest {
   }
 
   private static Grouping group(Recording recording) throws IOException {
+    return group(recording, Mp4Stream.SEGMENT_CAP);
+  }
+
+  private static Grouping group(Recording recording, long maximumSegmentBytes) throws IOException {
     var units = read(recording.file());
-    var grouper = new SegmentGrouper(recording.period(), recording.startSequenceNumber());
+    var grouper =
+        new SegmentGrouper(
+            recording.period(), recording.startSequenceNumber(), maximumSegmentBytes);
     var delivered = new ArrayList<MediaSegment>();
     for (var index = 0; index < units.fragments().size(); index++) {
       try {

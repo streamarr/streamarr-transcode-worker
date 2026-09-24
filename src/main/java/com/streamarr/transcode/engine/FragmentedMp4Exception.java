@@ -8,7 +8,10 @@ import lombok.NonNull;
 final class FragmentedMp4Exception extends RuntimeException {
 
   enum Reason {
-    /** A box would make the initialization segment or a fragment larger than the segment cap. */
+    /**
+     * A box would make the initialization segment or a fragment larger than the segment cap, or a
+     * fragment would make a media segment larger than it.
+     */
     EXCEEDS_SEGMENT_CAP,
     /** A top-level box declares size zero, which on a pipe means it never ends. */
     UNSIZED_BOX,
