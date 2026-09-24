@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.stream.Stream;
 import org.assertj.core.api.InstanceOfAssertFactories;
+import org.awaitility.core.ConditionFactory;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -30,6 +31,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 class ProducerTest {
 
   private static final Duration OUTCOME_LIMIT = Duration.ofSeconds(10);
+  private static final Duration POLL_INTERVAL = Duration.ofMillis(5);
   private static final UUID JOB_ATTEMPT_ID =
       UUID.fromString("0f6a3a9e-4c6b-4f59-9d0e-1c2b3a4d5e6f");
   private static final String WHOLE_RUN = "01-encode-cfr.fmp4";
@@ -66,7 +68,7 @@ class ProducerTest {
 
     var producer = producerFor(process, recording).start();
 
-    await().atMost(OUTCOME_LIMIT).until(sink::isHolding);
+    awaiting().until(sink::isHolding);
     assertThat(process.isAlive()).isFalse();
     assertThat(producer.outcome()).isNotDone();
     sink.release();
@@ -86,7 +88,7 @@ class ProducerTest {
 
     var producer = producerFor(process, recording).start();
 
-    await().atMost(OUTCOME_LIMIT).until(process::hasReadToEndOfOutput);
+    awaiting().until(process::hasReadToEndOfOutput);
     assertThat(sink.accepted()).hasSize(recording.segments().size() + 1);
     assertThat(producer.outcome()).isNotDone();
     process.exit();
@@ -277,6 +279,10 @@ class ProducerTest {
     assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.OUTPUT_UNREADABLE);
     assertThat(process.wasDestroyedForcibly()).isTrue();
     assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+  }
+
+  private static ConditionFactory awaiting() {
+    return await().atMost(OUTCOME_LIMIT).pollInterval(POLL_INTERVAL);
   }
 
   private Producer.ProducerBuilder producerFor(ScriptedProcess process, Recording recording) {
