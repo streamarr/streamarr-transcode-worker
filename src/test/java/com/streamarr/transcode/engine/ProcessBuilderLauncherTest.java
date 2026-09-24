@@ -99,9 +99,8 @@ class ProcessBuilderLauncherTest {
 
   @Test
   @DisplayName(
-      "Should kill a launched process that stops writing and ignores termination, and fail the"
-          + " attempt as an encoder stall")
-  void shouldKillALaunchedProcessThatStopsWritingAndIgnoresTerminationAndFailTheAttempt()
+      "Should fail the attempt and kill FFmpeg when it stops writing and ignores termination")
+  void shouldFailTheAttemptAndKillFfmpegWhenItStopsWritingAndIgnoresTermination()
       throws IOException {
     var recordingFile = Files.write(tempDir.resolve(ENCODED_RECORDING), bytesOf(ENCODED_RECORDING));
     var initializationSegmentLength =

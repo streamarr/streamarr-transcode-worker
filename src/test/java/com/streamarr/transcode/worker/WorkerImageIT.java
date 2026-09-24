@@ -351,8 +351,8 @@ class WorkerImageIT {
 
   @Test
   @DisplayName(
-      "Should let FFmpeg exit without a forced kill and report the stop when the image stops a job"
-          + " whose upload awaits acknowledgement")
+      "Should let FFmpeg exit and report the stop when the image stops a job whose upload awaits"
+          + " acknowledgement")
   void shouldLetFfmpegExitAndReportTheStopWhenTheImageStopsAJobWhoseUploadAwaitsAcknowledgement()
       throws Exception {
     copyMedia();

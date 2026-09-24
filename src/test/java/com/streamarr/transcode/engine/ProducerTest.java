@@ -128,7 +128,7 @@ class ProducerTest {
   @Test
   @DisplayName(
       "Should assemble the next segment while one awaits acceptance and stop reading when that"
-          + " segment closes too")
+          + " segment closes")
   void shouldAssembleTheNextSegmentWhileOneAwaitsAcceptanceAndStopReadingWhenThatSegmentCloses() {
     var recording = recording(ENCODED_RECORDING);
     var recorded = bytesOf(ENCODED_RECORDING);
@@ -152,9 +152,7 @@ class ProducerTest {
   }
 
   @Test
-  @DisplayName(
-      "Should hold no more than two segment caps of output and block FFmpeg on the pipe when a"
-          + " segment awaits acceptance and the next approaches the cap")
+  @DisplayName("Should hold no more than two segment caps and block FFmpeg when the budget is full")
   void shouldHoldNoMoreThanTwoSegmentCapsAndBlockFfmpegWhenTheBudgetIsFull() {
     var process = ScriptedProcess.builder().output(nearlyCappedSegments()).build();
     sink.holding(1);
@@ -716,8 +714,8 @@ class ProducerTest {
 
   @Test
   @DisplayName(
-      "Should cancel the delivery in flight and let FFmpeg exit within the grace period when"
-          + " stopped while the sink holds a segment")
+      "Should cancel the delivery in flight and let FFmpeg exit when stopped while the sink holds a"
+          + " segment")
   void shouldCancelTheDeliveryInFlightAndLetFfmpegExitWhenStoppedWhileTheSinkHoldsASegment()
       throws InterruptedException {
     var recording = recording(ENCODED_RECORDING);
@@ -889,9 +887,7 @@ class ProducerTest {
   }
 
   @Test
-  @DisplayName(
-      "Should settle whichever of a stop and a failure is recorded first, and let the other take"
-          + " no effect, when they race")
+  @DisplayName("Should settle whichever of a stop and a failure is recorded first when they race")
   void shouldSettleWhicheverOfAStopAndAFailureIsRecordedFirstWhenTheyRace() throws Exception {
     var recording = recording(ENCODED_RECORDING);
 
@@ -940,8 +936,8 @@ class ProducerTest {
 
   @Test
   @DisplayName(
-      "Should fail an encoded attempt as a short video sample and end FFmpeg when a video sample"
-          + " lasts less than half a frame")
+      "Should fail an encoded attempt as a short video sample when a video sample lasts less than"
+          + " half a frame")
   void shouldFailAnEncodedAttemptAsAShortVideoSampleWhenAVideoSampleLastsLessThanHalfAFrame() {
     var process = ScriptedProcess.builder().output(outputWithAOneTickVideoSample()).build();
 
@@ -989,8 +985,8 @@ class ProducerTest {
   @ParameterizedTest(name = "FFmpeg ignores termination: {0}")
   @ValueSource(booleans = {false, true})
   @DisplayName(
-      "Should fail the attempt as an encoder stall, escalating to a forced kill only when FFmpeg"
-          + " ignores termination, when FFmpeg writes nothing while the producer reads")
+      "Should fail the attempt as an encoder stall when FFmpeg writes nothing while the producer"
+          + " reads")
   void shouldFailTheAttemptAsAnEncoderStallWhenFfmpegWritesNothingWhileTheProducerReads(
       boolean ignoresTermination) {
     var recording = recording(ENCODED_RECORDING);
@@ -1097,9 +1093,7 @@ class ProducerTest {
   }
 
   @Test
-  @DisplayName(
-      "Should not fail the attempt as an encoder stall while a segment awaits acceptance and the"
-          + " reader waits for it")
+  @DisplayName("Should not fail the attempt as an encoder stall while a segment awaits acceptance")
   void shouldNotFailTheAttemptAsAnEncoderStallWhileASegmentAwaitsAcceptance() {
     var recording = recording(ENCODED_RECORDING);
     var process = ScriptedProcess.builder().output(bytesOf(ENCODED_RECORDING)).build();

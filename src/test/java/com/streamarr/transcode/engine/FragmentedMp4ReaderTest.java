@@ -563,8 +563,8 @@ class FragmentedMp4ReaderTest {
 
   @Test
   @DisplayName(
-      "Should read the trex default as the shortest video sample duration when neither trun nor"
-          + " tfhd carries durations")
+      "Should read the trex default as the shortest video sample duration when no fragment box"
+          + " carries one")
   void shouldReadTheTrexDefaultAsTheShortestVideoSampleDurationWhenNoFragmentBoxCarriesOne()
       throws IOException {
     var moov = moov(Track.video().defaultSampleDuration(1001).build());

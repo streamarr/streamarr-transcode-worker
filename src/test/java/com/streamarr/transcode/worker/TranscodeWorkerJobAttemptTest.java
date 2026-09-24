@@ -572,8 +572,8 @@ class TranscodeWorkerJobAttemptTest {
 
   @Test
   @DisplayName(
-      "Should let FFmpeg exit without a forced kill and send no further upload message when"
-          + " stopped while an upload awaits readiness")
+      "Should let FFmpeg exit and send no further upload message when stopped while an upload"
+          + " awaits readiness")
   void shouldLetFfmpegExitAndSendNoFurtherUploadMessageWhenStoppedWhileAnUploadAwaitsReadiness()
       throws Exception {
     var launcher = writingUntilTheTestExits();
@@ -605,8 +605,8 @@ class TranscodeWorkerJobAttemptTest {
 
   @Test
   @DisplayName(
-      "Should let FFmpeg exit without a forced kill and report the stop when stopped while an"
-          + " upload awaits acknowledgement")
+      "Should let FFmpeg exit and report the stop when stopped while an upload awaits"
+          + " acknowledgement")
   void shouldLetFfmpegExitAndReportTheStopWhenStoppedWhileAnUploadAwaitsAcknowledgement()
       throws Exception {
     var launcher = writingUntilTheTestExits();
@@ -705,9 +705,9 @@ class TranscodeWorkerJobAttemptTest {
 
   @Test
   @DisplayName(
-      "Should count the acknowledgement deadline from the upload's first byte when the receiver"
-          + " grants readiness slowly")
-  void shouldCountTheAcknowledgementDeadlineFromTheFirstByteWhenReadinessComesSlowly()
+      "Should count the acknowledgement deadline from the first message when readiness comes"
+          + " slowly")
+  void shouldCountTheAcknowledgementDeadlineFromTheFirstMessageWhenReadinessComesSlowly()
       throws Exception {
     var output = withLargeFirstMediaData(bytesOf(ENCODED_RECORDING));
     var launcher =
@@ -742,8 +742,8 @@ class TranscodeWorkerJobAttemptTest {
 
   @Test
   @DisplayName(
-      "Should fail the attempt as a transcode failure and terminate FFmpeg when FFmpeg writes"
-          + " nothing for the stall timeout")
+      "Should fail the attempt and terminate FFmpeg when FFmpeg writes nothing for the stall"
+          + " timeout")
   void shouldFailTheAttemptAndTerminateFfmpegWhenFfmpegWritesNothingForTheStallTimeout()
       throws Exception {
     var launcher = ScriptedProcessLauncher.running();
@@ -764,8 +764,8 @@ class TranscodeWorkerJobAttemptTest {
 
   @Test
   @DisplayName(
-      "Should complete the attempt when the receiver withholds readiness for longer than the"
-          + " stall timeout")
+      "Should complete the attempt when the receiver withholds readiness longer than the stall"
+          + " timeout")
   void shouldCompleteTheAttemptWhenTheReceiverWithholdsReadinessLongerThanTheStallTimeout()
       throws Exception {
     var job = variantJobBuilder().build();
@@ -795,8 +795,7 @@ class TranscodeWorkerJobAttemptTest {
 
   @Test
   @DisplayName(
-      "Should report the stop to its own session and not to the next when the worker reconnects"
-          + " after FFmpeg quits")
+      "Should report the stop to its own session and not to the next when the worker reconnects")
   void shouldReportTheStopToItsOwnSessionAndNotToTheNextWhenTheWorkerReconnects() throws Exception {
     var launcher =
         new ScriptedProcessLauncher(
@@ -906,8 +905,7 @@ class TranscodeWorkerJobAttemptTest {
 
   @Test
   @DisplayName(
-      "Should report once, and as whichever the producer recorded first, when a stop races a"
-          + " failure")
+      "Should report once as whichever the producer recorded first when a stop races a failure")
   void shouldReportOnceAsWhicheverTheProducerRecordedFirstWhenAStopRacesAFailure()
       throws Exception {
     // FFmpeg's output breaks at this offset once the test lets the reader past its pause, and

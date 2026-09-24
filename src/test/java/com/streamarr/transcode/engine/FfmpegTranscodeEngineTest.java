@@ -120,8 +120,8 @@ class FfmpegTranscodeEngineTest {
       value = TranscodeMode.class,
       names = {"VIDEO_TRANSCODE", "FULL_TRANSCODE"})
   @DisplayName(
-      "Should fail the attempt as a short video sample when it encodes video and its output holds a"
-          + " sample shorter than half a frame")
+      "Should fail the attempt as a short video sample when it encodes video and its output holds"
+          + " one")
   void shouldFailTheAttemptAsAShortVideoSampleWhenItEncodesVideoAndItsOutputHoldsOne(
       TranscodeMode mode) {
     var producer = startProducerOverAOneTickVideoSample(mode);
@@ -138,8 +138,7 @@ class FfmpegTranscodeEngineTest {
       value = TranscodeMode.class,
       names = {"REMUX", "AUDIO_TRANSCODE"})
   @DisplayName(
-      "Should complete the attempt when it copies the video and its output holds a sample shorter"
-          + " than half a frame")
+      "Should complete the attempt when it copies the video and its output holds a short sample")
   void shouldCompleteTheAttemptWhenItCopiesTheVideoAndItsOutputHoldsAShortSample(
       TranscodeMode mode) {
     var producer = startProducerOverAOneTickVideoSample(mode);
