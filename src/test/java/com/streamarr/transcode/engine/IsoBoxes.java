@@ -4,6 +4,7 @@ import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.List;
 import java.util.function.LongFunction;
 import lombok.Builder;
 
@@ -161,7 +162,12 @@ final class IsoBoxes {
   /** One {@code trak} of the {@code moov} and its {@code trex} defaults. */
   @Builder
   record Track(
-      int trackId, String handler, long timescale, int defaultSampleFlags, int headerVersion) {
+      int trackId,
+      String handler,
+      long timescale,
+      int defaultSampleDuration,
+      int defaultSampleFlags,
+      int headerVersion) {
 
     static TrackBuilder video() {
       return builder()
@@ -180,7 +186,14 @@ final class IsoBoxes {
     }
 
     byte[] trex() {
-      return fullBox("trex", 0, u32(trackId), u32(1), u32(0), u32(0), u32(defaultSampleFlags));
+      return fullBox(
+          "trex",
+          0,
+          u32(trackId),
+          u32(1),
+          u32(defaultSampleDuration),
+          u32(0),
+          u32(defaultSampleFlags));
     }
 
     private byte[] tkhd() {
@@ -213,6 +226,7 @@ final class IsoBoxes {
   static final class TrackFragment {
 
     private final int trackId;
+    private final Integer defaultSampleDuration;
     private final Integer defaultSampleFlags;
     private final Long baseMediaDecodeTime;
     private final int decodeTimeVersion;
@@ -221,6 +235,7 @@ final class IsoBoxes {
     private final Integer firstSampleFlags;
     private final Integer sampleFlags;
     private final Integer compositionOffset;
+    private final List<Integer> sampleDurations;
 
     byte[] traf(int dataOffset) {
       return box("traf", tfhd(), tfdt(), trun(dataOffset));
@@ -231,23 +246,32 @@ final class IsoBoxes {
     }
 
     private int samples() {
-      if (sampleCount == null) {
-        return 1;
+      if (sampleCount != null) {
+        return sampleCount;
       }
 
-      return sampleCount;
+      if (sampleDurations != null) {
+        return sampleDurations.size();
+      }
+
+      return 1;
     }
 
     private byte[] tfhd() {
-      if (defaultSampleFlags == null) {
-        return IsoBoxes.tfhd(trackId);
+      var flags = TFHD_DEFAULT_BASE_IS_MOOF;
+      var fields = new ByteArrayOutputStream();
+      fields.writeBytes(u32(trackId));
+      if (defaultSampleDuration != null) {
+        flags |= TFHD_DEFAULT_SAMPLE_DURATION;
+        fields.writeBytes(u32(defaultSampleDuration));
       }
 
-      return fullBox(
-          "tfhd",
-          TFHD_DEFAULT_BASE_IS_MOOF | TFHD_DEFAULT_SAMPLE_FLAGS,
-          u32(trackId),
-          u32(defaultSampleFlags));
+      if (defaultSampleFlags != null) {
+        flags |= TFHD_DEFAULT_SAMPLE_FLAGS;
+        fields.writeBytes(u32(defaultSampleFlags));
+      }
+
+      return fullBox("tfhd", flags, fields.toByteArray());
     }
 
     private byte[] tfdt() {
@@ -281,6 +305,10 @@ final class IsoBoxes {
         flags |= TRUN_SAMPLE_COMPOSITION_TIME_OFFSET;
       }
 
+      if (sampleDurations != null) {
+        flags |= TRUN_SAMPLE_DURATION;
+      }
+
       for (var sample = 0; sample < samples; sample++) {
         header.writeBytes(sampleEntry(sample));
       }
@@ -290,6 +318,10 @@ final class IsoBoxes {
 
     private byte[] sampleEntry(int sample) {
       var entry = new ByteArrayOutputStream();
+      if (sampleDurations != null) {
+        entry.writeBytes(u32(sampleDurations.get(sample)));
+      }
+
       entry.writeBytes(u32(SAMPLE_BYTES));
       if (sampleFlags != null) {
         entry.writeBytes(u32(sampleFlags));

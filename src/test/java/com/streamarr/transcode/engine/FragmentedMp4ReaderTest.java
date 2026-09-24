@@ -47,6 +47,7 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -527,6 +528,78 @@ class FragmentedMp4ReaderTest {
   }
 
   @Test
+  @DisplayName(
+      "Should read the shortest video sample duration from the trun when it carries each sample's"
+          + " duration")
+  void shouldReadTheShortestVideoSampleDurationFromTheTrunWhenItCarriesEachSamplesDuration()
+      throws IOException {
+    var moof =
+        moof(
+            syncVideoTraf()
+                .baseMediaDecodeTime(0L)
+                .sampleDurations(List.of(1001, 1, 1001))
+                .defaultSampleDuration(1001)
+                .build(),
+            audioTraf().baseMediaDecodeTime(0L).build());
+
+    assertThat(fragmentOf(videoAndAudioMoov(), moof).shortestVideoSampleDuration()).hasValue(1);
+  }
+
+  @Test
+  @DisplayName(
+      "Should read the tfhd default as the shortest video sample duration when the trun carries no"
+          + " durations")
+  void shouldReadTheTfhdDefaultAsTheShortestVideoSampleDurationWhenTheTrunCarriesNoDurations()
+      throws IOException {
+    var moov = moov(Track.video().defaultSampleDuration(2002).build());
+    var moof =
+        moof(
+            syncVideoTraf()
+                .baseMediaDecodeTime(0L)
+                .sampleCount(3)
+                .defaultSampleDuration(1001)
+                .build());
+
+    assertThat(fragmentOf(moov, moof).shortestVideoSampleDuration()).hasValue(1001);
+  }
+
+  @Test
+  @DisplayName(
+      "Should read the trex default as the shortest video sample duration when neither trun nor"
+          + " tfhd carries durations")
+  void shouldReadTheTrexDefaultAsTheShortestVideoSampleDurationWhenNoFragmentBoxCarriesOne()
+      throws IOException {
+    var moov = moov(Track.video().defaultSampleDuration(1001).build());
+
+    assertThat(
+            fragmentOf(moov, moof(syncVideoTraf().baseMediaDecodeTime(0L).build()))
+                .shortestVideoSampleDuration())
+        .hasValue(1001);
+  }
+
+  @Test
+  @DisplayName(
+      "Should measure only video samples when an audio traf carries shorter sample durations")
+  void shouldMeasureOnlyVideoSamplesWhenAnAudioTrafCarriesShorterSampleDurations()
+      throws IOException {
+    var moof =
+        moof(
+            audioTraf().baseMediaDecodeTime(0L).sampleDurations(List.of(1, 1)).build(),
+            syncVideoTraf().baseMediaDecodeTime(0L).sampleDurations(List.of(1001)).build());
+
+    assertThat(fragmentOf(videoAndAudioMoov(), moof).shortestVideoSampleDuration()).hasValue(1001);
+  }
+
+  @Test
+  @DisplayName(
+      "Should give a fragment no shortest video sample duration when it carries only audio")
+  void shouldGiveAFragmentNoShortestVideoSampleDurationWhenItCarriesOnlyAudio() throws IOException {
+    var moof = moof(audioTraf().baseMediaDecodeTime(0L).sampleDurations(List.of(1024)).build());
+
+    assertThat(fragmentOf(videoAndAudioMoov(), moof).shortestVideoSampleDuration()).isEmpty();
+  }
+
+  @Test
   @DisplayName("Should read the first sample of the next run when an earlier run has no samples")
   void shouldReadTheFirstSampleOfTheNextRunWhenAnEarlierRunHasNoSamples() throws IOException {
     var emptyRun =
@@ -925,9 +998,13 @@ class FragmentedMp4ReaderTest {
   }
 
   private static Optional<VideoStart> videoStartOf(byte[] moov, byte[] moof) throws IOException {
+    return fragmentOf(moov, moof).videoStart();
+  }
+
+  private static Fragment fragmentOf(byte[] moov, byte[] moof) throws IOException {
     var reader = readerOf(concat(ftyp(), moov, moof, mdat(8)));
     reader.next();
-    return nextFragment(reader).videoStart();
+    return nextFragment(reader);
   }
 
   private static byte[] videoMoof(long baseMediaDecodeTime) {

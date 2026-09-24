@@ -7,6 +7,7 @@ import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalLong;
 import lombok.NonNull;
 
 /** Reads the top-level ISOBMFF boxes of FFmpeg's fragmented MP4 output from a byte stream. */
@@ -108,7 +109,12 @@ final class FragmentedMp4Reader {
             (long) moof.length + mdat.length);
     declared.sampleRanges().requireInside(trackFragments, mediaData);
     var videoStart = declared.videoTrack().flatMap(track -> track.startOf(trackFragments));
-    return Optional.of(new Fragment(List.of(moof, mdat), videoStart));
+    var shortestVideoSampleDuration =
+        declared
+            .videoTrack()
+            .map(track -> track.shortestSampleDurationOf(trackFragments))
+            .orElseGet(OptionalLong::empty);
+    return Optional.of(new Fragment(List.of(moof, mdat), videoStart, shortestVideoSampleDuration));
   }
 
   private static BoxHeader requireMoof(BoxHeader header) {

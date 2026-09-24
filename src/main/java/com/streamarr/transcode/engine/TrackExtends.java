@@ -5,7 +5,8 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /** The sample defaults a {@code trex} declares for one track's fragments. */
-record TrackExtends(long trackId, long defaultSampleSize, int defaultSampleFlags) {
+record TrackExtends(
+    long trackId, long defaultSampleDuration, long defaultSampleSize, int defaultSampleFlags) {
 
   /**
    * Reads every {@code trex} of a {@code moov}'s {@code mvex}, by track.
@@ -25,8 +26,9 @@ record TrackExtends(long trackId, long defaultSampleSize, int defaultSampleFlags
   private static TrackExtends of(BoxView trex) {
     var fields = trex.fields().skip(4);
     var trackId = fields.u32();
-    var defaultSampleSize = fields.skip(8).u32();
-    return new TrackExtends(trackId, defaultSampleSize, fields.s32());
+    var defaultSampleDuration = fields.skip(4).u32();
+    var defaultSampleSize = fields.u32();
+    return new TrackExtends(trackId, defaultSampleDuration, defaultSampleSize, fields.s32());
   }
 
   private static TrackExtends duplicate(TrackExtends first, TrackExtends second) {
