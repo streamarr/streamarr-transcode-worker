@@ -231,6 +231,48 @@ class ProducerTest {
     assertThat(sink.acceptedBytes()).isEqualTo(deliveredBytesOf(recording));
   }
 
+  // ADR 0037: a skip lets the segment it closed finish delivery before the skip is recorded, but
+  // a failed upload is recorded at once.
+  @Test
+  @DisplayName(
+      "Should report the refused segment when the sink does not accept the segment a skipping"
+          + " keyframe closed")
+  void shouldReportTheRefusedSegmentWhenTheSinkDoesNotAcceptTheSegmentASkippingKeyframeClosed() {
+    var recording = recording("10-copy-gop-exceeds-period.fmp4");
+    var process = ScriptedProcess.builder().output(bytesOf(recording.file())).build();
+    sink.refusing(2);
+
+    var producer = producerFor(process, recording).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.SEGMENT_NOT_ACCEPTED);
+    assertThat(failure.detail()).contains("segment1.m4s");
+    assertThat(process.wasDestroyedForcibly()).isTrue();
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+  }
+
+  @Test
+  @DisplayName(
+      "Should settle only the stop when stopped while the sink holds the segment a skipping"
+          + " keyframe closed")
+  void shouldSettleOnlyTheStopWhenStoppedWhileTheSinkHoldsTheSegmentASkippingKeyframeClosed() {
+    var recording = recording("10-copy-gop-exceeds-period.fmp4");
+    var process = ScriptedProcess.builder().output(bytesOf(recording.file())).build();
+    sink.holding(2);
+    var producer = producerFor(process, recording).gracePeriod(Duration.ofMillis(100)).start();
+    awaiting().until(sink::isHolding);
+
+    producer.stop();
+    sink.release();
+
+    assertThat(producer.outcome()).isCompletedWithValue(new Stopped());
+    await()
+        .during(Duration.ofMillis(200))
+        .atMost(OUTCOME_LIMIT)
+        .until(
+            () -> sink.acceptedNames().equals(List.of("init.mp4", "segment0.m4s", "segment1.m4s")));
+  }
+
   @Test
   @DisplayName("Should fail the attempt and end FFmpeg when the output does not begin with a movie")
   void shouldFailTheAttemptAndEndFfmpegWhenTheOutputDoesNotBeginWithAMovie() {
