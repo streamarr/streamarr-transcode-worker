@@ -184,6 +184,20 @@ class RecordedFfmpegOutputTest {
   }
 
   @ParameterizedTest(name = "{0}")
+  @CsvSource({"01-encode-cfr-seek30.fmp4, 720720", "09-svtav1-vfr-seek30.fmp4, 721721"})
+  @DisplayName(
+      "Should deliver its first fragment at the seek point when an encoded attempt seeks under the"
+          + " frame-rate flags")
+  void shouldDeliverItsFirstFragmentAtTheSeekPointWhenAnEncodedAttemptSeeksUnderTheFrameRateFlags(
+      String file, long seekPoint) throws IOException {
+    var grouping = group(recording(file));
+    var firstFragment = grouping.units().fragments().getFirst();
+
+    assertThat(firstFragment.videoStart()).contains(new VideoStart(seekPoint, 24_000, true));
+    assertThat(grouping.delivered().getFirst().fragments().getFirst()).isSameAs(firstFragment);
+  }
+
+  @ParameterizedTest(name = "{0}")
   @CsvSource({"09-svtav1-vfr.fmp4, 0", "09-svtav1-vfr-seek30.fmp4, 5"})
   @DisplayName(
       "Should deliver every interval when SVT-AV1 encodes a variable-frame-rate source under a"
