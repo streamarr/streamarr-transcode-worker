@@ -82,8 +82,7 @@ class RecordedFfmpegOutputTest {
     var grouping = group(recording);
 
     assertThat(summaries(grouping)).containsExactlyElementsOf(recording.segments());
-    assertThat(grouping.failure())
-        .isEqualTo(recording.failure().map(RecordedFfmpegOutputTest::failureOf));
+    assertThat(grouping.failure()).isEqualTo(recording.failure());
   }
 
   @ParameterizedTest(name = "{0}")
@@ -296,13 +295,17 @@ class RecordedFfmpegOutputTest {
   void
       shouldDeliverTheSegmentTheSkippingKeyframeClosedThenFailWhenSourceKeyframesAreFurtherApartThanThePeriod()
           throws IOException {
-    var grouping = group(recording("10-copy-gop-exceeds-period.fmp4"));
-    var lastDelivered = grouping.delivered().getLast();
+    var units = read("10-copy-gop-exceeds-period.fmp4");
+    var grouper = new SegmentGrouper(6, 0, Mp4Stream.SEGMENT_CAP);
+    var outcomes = units.fragments().subList(0, 21).stream().map(grouper::accept).toList();
+    var segmentOne = new MediaSegment(1, units.fragments().subList(10, 20));
 
-    assertThat(grouping.delivered()).extracting(MediaSegment::sequenceNumber).containsExactly(0, 1);
-    assertThat(firstVideoPresentationTime(lastDelivered)).isEqualTo(240_240);
-    assertThat(grouping.units().indexOf(lastDelivered.fragments().getLast())).isEqualTo(19);
-    assertThat(grouping.failure()).contains(new Failure(Reason.SKIPPED_SEGMENT_NUMBER, 20));
+    assertThat(outcomes.get(10))
+        .isEqualTo(new SegmentClosed(new MediaSegment(0, units.fragments().subList(0, 10))));
+    assertThat(outcomes.subList(11, 20)).allMatch(NothingClosed.class::isInstance);
+    assertThat(outcomes.getLast())
+        .isEqualTo(new SegmentNumberSkipped(Optional.of(segmentOne), 2, 3));
+    assertThat(firstVideoPresentationTime(segmentOne)).isEqualTo(240_240);
   }
 
   @Test
@@ -314,7 +317,7 @@ class RecordedFfmpegOutputTest {
 
     assertThat(group(recording, largestSegment).failure()).isEmpty();
     assertThat(group(recording, largestSegment - 1).failure())
-        .map(Failure::reason)
+        .map(ExpectedFailure::reason)
         .contains(Reason.EXCEEDS_SEGMENT_CAP);
   }
 
@@ -374,11 +377,11 @@ class RecordedFfmpegOutputTest {
           case SegmentClosed(var segment) -> delivered.add(segment);
           case SegmentNumberSkipped skipped -> {
             skipped.closedSegment().ifPresent(delivered::add);
-            throw skipped.failure();
+            return new Grouping(units, delivered, Optional.of(failureOf(skipped, index)));
           }
         }
       } catch (FragmentedMp4Exception e) {
-        return new Grouping(units, delivered, Optional.of(new Failure(e.getReason(), index)));
+        return new Grouping(units, delivered, Optional.of(failureOf(e, index)));
       }
     }
 
@@ -457,8 +460,22 @@ class RecordedFfmpegOutputTest {
             .count());
   }
 
-  private static Failure failureOf(ExpectedFailure expected) {
-    return new Failure(expected.reason(), expected.fragmentIndex());
+  private static ExpectedFailure failureOf(SegmentNumberSkipped skipped, int fragmentIndex) {
+    return ExpectedFailure.builder()
+        .reason(skipped.failure().getReason())
+        .fragmentIndex(fragmentIndex)
+        .expectedNumber(Optional.of(skipped.expectedNumber()))
+        .actualNumber(Optional.of(skipped.actualNumber()))
+        .build();
+  }
+
+  private static ExpectedFailure failureOf(FragmentedMp4Exception failure, int fragmentIndex) {
+    return ExpectedFailure.builder()
+        .reason(failure.getReason())
+        .fragmentIndex(fragmentIndex)
+        .expectedNumber(Optional.empty())
+        .actualNumber(Optional.empty())
+        .build();
   }
 
   /** The position of a box type's first four-character code; a full box's flags follow it. */
@@ -484,8 +501,6 @@ class RecordedFfmpegOutputTest {
     return bytes.toByteArray();
   }
 
-  private record Failure(Reason reason, int fragmentIndex) {}
-
   private record Grouping(
-      Mp4Stream units, List<MediaSegment> delivered, Optional<Failure> failure) {}
+      Mp4Stream units, List<MediaSegment> delivered, Optional<ExpectedFailure> failure) {}
 }

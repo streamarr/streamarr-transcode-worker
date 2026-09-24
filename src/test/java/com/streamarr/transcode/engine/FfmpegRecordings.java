@@ -83,9 +83,16 @@ final class FfmpegRecordings {
       long byteLength) {}
 
   /**
-   * The reason grouping fails and the fragment, counted from 0 after the initialization segment.
+   * The reason grouping fails and the fragment, counted from 0 after the initialization segment;
+   * for a skipped segment number, also the number the attempt expected and the one the fragment's
+   * keyframe opens.
    */
-  record ExpectedFailure(Reason reason, int fragmentIndex) {}
+  @Builder
+  record ExpectedFailure(
+      Reason reason,
+      int fragmentIndex,
+      Optional<Long> expectedNumber,
+      Optional<Long> actualNumber) {}
 
   /**
    * The HLS muxer's run over the same source, with the media time of the first video sample of each
