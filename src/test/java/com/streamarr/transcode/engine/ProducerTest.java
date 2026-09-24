@@ -1,6 +1,7 @@
 package com.streamarr.transcode.engine;
 
 import static com.streamarr.transcode.engine.FfmpegRecordings.bytesOf;
+import static com.streamarr.transcode.engine.FfmpegRecordings.deliveredBytesOf;
 import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -708,25 +709,5 @@ class ProducerTest {
                 new Accepted("init.mp4", initializationSegmentLength, initializationSegmentLength)),
             mediaSegments)
         .toList();
-  }
-
-  // The recording's initialization segment and media segments, without the preroll the producer
-  // discards between the two or anything after the last media segment.
-  private static byte[] deliveredBytesOf(Recording recording) {
-    var recorded = bytesOf(recording.file());
-    var initializationSegmentLength = recording.initializationSegment().byteLength();
-    var prerollLength =
-        recording.discardedPreroll().stream().mapToLong(SegmentSummary::byteLength).sum();
-    var mediaSegmentsLength =
-        recording.segments().stream().mapToLong(SegmentSummary::byteLength).sum();
-    var delivered = new byte[Math.toIntExact(initializationSegmentLength + mediaSegmentsLength)];
-    System.arraycopy(recorded, 0, delivered, 0, initializationSegmentLength);
-    System.arraycopy(
-        recorded,
-        Math.toIntExact(initializationSegmentLength + prerollLength),
-        delivered,
-        initializationSegmentLength,
-        delivered.length - initializationSegmentLength);
-    return delivered;
   }
 }

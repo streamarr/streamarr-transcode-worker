@@ -1,6 +1,7 @@
 package com.streamarr.transcode.worker;
 
 import static com.streamarr.transcode.engine.FfmpegRecordings.bytesOf;
+import static com.streamarr.transcode.engine.FfmpegRecordings.deliveredBytesOf;
 import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.uploadNames;
@@ -192,20 +193,10 @@ class TranscodeWorkerJobAttemptTest {
       "Should refuse the job as an invalid specification when it asks for another container")
   void shouldRefuseTheJobAsAnInvalidSpecificationWhenItAsksForAnotherContainer(int container)
       throws Exception {
-    var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
     var job = variantJobBuilder();
     job.getDecisionBuilder().setContainerValue(container);
 
-    try (var worker = worker(launcher)) {
-      worker.start("localhost", 1);
-      var connection = runtime.connection();
-      startVariant(connection, job.build());
-
-      assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_FAILED);
-      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
-          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
-      assertThat(launcher.hasLaunchedAny()).isFalse();
-    }
+    assertRefusedAsAnInvalidSpecification(job.build());
   }
 
   @ParameterizedTest(name = "{0} at {1} fps")
@@ -215,21 +206,11 @@ class TranscodeWorkerJobAttemptTest {
           + " frame rate")
   void shouldRefuseTheJobAsAnInvalidSpecificationWhenItEncodesVideoWithoutAUsableFrameRate(
       TranscodeMode mode, double framerate) throws Exception {
-    var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
     var job = variantJobBuilder();
     job.getDecisionBuilder().setMode(mode);
     job.getExecutionBuilder().setFramerate(framerate);
 
-    try (var worker = worker(launcher)) {
-      worker.start("localhost", 1);
-      var connection = runtime.connection();
-      startVariant(connection, job.build());
-
-      assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_FAILED);
-      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
-          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
-      assertThat(launcher.hasLaunchedAny()).isFalse();
-    }
+    assertRefusedAsAnInvalidSpecification(job.build());
   }
 
   static Stream<Arguments> videoEncodingsWithoutAUsableFrameRate() {
@@ -249,23 +230,13 @@ class TranscodeWorkerJobAttemptTest {
           + " its start")
   void shouldRefuseTheJobAsAnInvalidSpecificationWhenNoAdvertisedMediaSegmentFollowsItsStart(
       TranscodeMode mode, int mediaSegmentCount, int startSequenceNumber) throws Exception {
-    var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
     var job = variantJobBuilder();
     job.getDecisionBuilder().setMode(mode);
     job.getExecutionBuilder()
         .setMediaSegmentCount(mediaSegmentCount)
         .setStartSequenceNumber(startSequenceNumber);
 
-    try (var worker = worker(launcher)) {
-      worker.start("localhost", 1);
-      var connection = runtime.connection();
-      startVariant(connection, job.build());
-
-      assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_FAILED);
-      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
-          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
-      assertThat(launcher.hasLaunchedAny()).isFalse();
-    }
+    assertRefusedAsAnInvalidSpecification(job.build());
   }
 
   static Stream<Arguments> jobsAdvertisingNoMediaSegmentFromTheirStart() {
@@ -448,8 +419,7 @@ class TranscodeWorkerJobAttemptTest {
           .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
       var uploaded = new ByteArrayOutputStream();
       connection.uploads().forEach(upload -> uploaded.writeBytes(upload.content()));
-      assertThat(uploaded.toByteArray())
-          .isEqualTo(Arrays.copyOf(bytesOf(recording.file()), uploadedLength(recording)));
+      assertThat(uploaded.toByteArray()).isEqualTo(deliveredBytesOf(recording));
       assertThat(launcher.process(fromProto(job.getJobAttemptId())).wasDestroyedForcibly())
           .isTrue();
     }
@@ -550,6 +520,22 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
+  // The worker reports the job attempt failed as an invalid specification and never starts FFmpeg.
+  private void assertRefusedAsAnInvalidSpecification(VariantJob job) throws Exception {
+    var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+
+      assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
+      assertThat(launcher.hasLaunchedAny()).isFalse();
+    }
+  }
+
   private TranscodeWorker worker(ScriptedProcessLauncher launcher) throws Exception {
     return workerBuilder(tempDir).runtime(runtime).engine(engine(launcher)).build();
   }
@@ -586,10 +572,6 @@ class TranscodeWorkerJobAttemptTest {
             Stream.of((long) recording.initializationSegment().byteLength()),
             recording.segments().stream().map(segment -> segment.byteLength()))
         .toList();
-  }
-
-  private static int uploadedLength(Recording recording) {
-    return Math.toIntExact(expectedLengths(recording).stream().mapToLong(Long::longValue).sum());
   }
 
   // The recording with its first media data box grown past two upload data messages, which the

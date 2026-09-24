@@ -49,6 +49,28 @@ public final class FfmpegRecordings {
         .orElseThrow(() -> new AssertionError("expected.json describes no recording " + file));
   }
 
+  /**
+   * The recording's initialization segment and media segments as the producer delivers them,
+   * without the preroll it discards between the two or anything after the last media segment.
+   */
+  public static byte[] deliveredBytesOf(Recording recording) {
+    var recorded = bytesOf(recording.file());
+    var initializationSegmentLength = recording.initializationSegment().byteLength();
+    var prerollLength =
+        recording.discardedPreroll().stream().mapToLong(SegmentSummary::byteLength).sum();
+    var mediaSegmentsLength =
+        recording.segments().stream().mapToLong(SegmentSummary::byteLength).sum();
+    var delivered = new byte[Math.toIntExact(initializationSegmentLength + mediaSegmentsLength)];
+    System.arraycopy(recorded, 0, delivered, 0, initializationSegmentLength);
+    System.arraycopy(
+        recorded,
+        Math.toIntExact(initializationSegmentLength + prerollLength),
+        delivered,
+        initializationSegmentLength,
+        delivered.length - initializationSegmentLength);
+    return delivered;
+  }
+
   public record Expectations(List<Recording> fixtures) {}
 
   /**
