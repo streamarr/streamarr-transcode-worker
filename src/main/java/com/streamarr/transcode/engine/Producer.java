@@ -2,13 +2,16 @@ package com.streamarr.transcode.engine;
 
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.engine.AttemptOutcome.Failed;
+import com.streamarr.transcode.engine.AttemptOutcome.Stopped;
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import lombok.Builder;
 import lombok.NonNull;
 
@@ -30,20 +33,32 @@ public final class Producer {
   private final FragmentedMp4Reader reader;
   private final SegmentGrouper grouper;
   private final SegmentSink sink;
+  private final Duration gracePeriod;
   private final CompletableFuture<AttemptOutcome> outcome = new CompletableFuture<>();
+  private final Object lock = new Object();
+
+  /** Guarded by {@link #lock}. */
+  private boolean stopRequested;
+
+  /** Guarded by {@link #lock}. */
+  private boolean settled;
+
+  /** Confined to the reader thread. */
   private boolean mediaSegmentDelivered;
 
-  private Producer(Process process, SegmentGrouper grouper, SegmentSink sink) {
+  private Producer(Process process, Attempt attempt) {
     this.process = process;
     this.errorOutput = new StderrDrainer(process.getErrorStream());
     this.reader = new FragmentedMp4Reader(process.getInputStream(), MAXIMUM_SEGMENT_BYTES);
-    this.grouper = grouper;
-    this.sink = sink;
+    this.grouper = attempt.grouper();
+    this.sink = attempt.sink();
+    this.gracePeriod = attempt.gracePeriod();
   }
 
   /**
    * Starts FFmpeg and reads its output until the attempt settles.
    *
+   * @param gracePeriod how long a stop waits for FFmpeg to exit after asking it to quit
    * @throws TranscodeException when FFmpeg cannot be started
    */
   @Builder(buildMethodName = "start")
@@ -53,8 +68,10 @@ public final class Producer {
       @NonNull UUID jobAttemptId,
       int periodSeconds,
       int startSequenceNumber,
+      @NonNull Duration gracePeriod,
       @NonNull SegmentSink sink) {
-    var grouper = new SegmentGrouper(periodSeconds, startSequenceNumber);
+    var attempt =
+        new Attempt(new SegmentGrouper(periodSeconds, startSequenceNumber), sink, gracePeriod);
     Process process;
     try {
       process = launcher.launch(command, jobAttemptId);
@@ -62,7 +79,7 @@ public final class Producer {
       throw new TranscodeException(TranscodeException.GENERIC_MESSAGE, e);
     }
 
-    var producer = new Producer(process, grouper, sink);
+    var producer = new Producer(process, attempt);
     Thread.ofVirtual().name("producer-" + jobAttemptId).start(producer::produce);
     return producer;
   }
@@ -72,11 +89,87 @@ public final class Producer {
     return outcome.copy();
   }
 
+  /**
+   * Ends the attempt for good and returns once it has an outcome. Unless the attempt has already
+   * settled, the producer starts no further delivery, asks FFmpeg to quit, discards the rest of its
+   * output, destroys FFmpeg when it has not exited within the grace period, and settles the stop
+   * after FFmpeg has exited; a failure observed after the stop is never reported.
+   */
+  public void stop() {
+    if (tryRecordStop()) {
+      requestQuit();
+      awaitExitWithinGracePeriod();
+      settle(new Stopped());
+    }
+
+    outcome.join();
+  }
+
+  private boolean tryRecordStop() {
+    synchronized (lock) {
+      if (settled || stopRequested) {
+        return false;
+      }
+
+      stopRequested = true;
+      return true;
+    }
+  }
+
+  private boolean isStopRequested() {
+    synchronized (lock) {
+      return stopRequested;
+    }
+  }
+
+  private void requestQuit() {
+    try {
+      var input = process.getOutputStream();
+      input.write('q');
+      input.flush();
+    } catch (IOException _) {
+      // FFmpeg has already closed its input; the exit wait observes it ending.
+    }
+  }
+
+  private void awaitExitWithinGracePeriod() {
+    try {
+      if (process.waitFor(gracePeriod.toNanos(), TimeUnit.NANOSECONDS)) {
+        return;
+      }
+    } catch (InterruptedException _) {
+      Thread.currentThread().interrupt();
+    }
+
+    process.destroyForcibly();
+    process.onExit().join();
+  }
+
+  private void settle(AttemptOutcome settledOutcome) {
+    if (tryClaimSettlement(settledOutcome)) {
+      outcome.complete(settledOutcome);
+    }
+  }
+
+  /** Once a stop is recorded, only the stop settles the attempt. */
+  private boolean tryClaimSettlement(AttemptOutcome settledOutcome) {
+    synchronized (lock) {
+      var preemptedByStop = stopRequested && !(settledOutcome instanceof Stopped);
+      if (settled || preemptedByStop) {
+        return false;
+      }
+
+      settled = true;
+      return true;
+    }
+  }
+
   private void produce() {
     try {
       switch (readAndDeliver()) {
         case EndOfOutput(var truncation) -> settleAtExit(truncation);
         case Abandoned(var failure) -> settleAfterEndingProcess(failure);
+        case StopObserved _ -> discardRemainingOutput();
       }
     } finally {
       errorOutput.close();
@@ -112,6 +205,10 @@ public final class Producer {
 
   /** Empty once the sink has accepted the segment; otherwise why reading ends. */
   private Optional<Ending> deliver(ProducedSegment segment) {
+    if (isStopRequested()) {
+      return Optional.of(new StopObserved());
+    }
+
     try {
       sink.deliver(segment);
     } catch (RuntimeException e) {
@@ -154,7 +251,7 @@ public final class Producer {
   }
 
   private void settleAtExit(Optional<Failed> truncation) {
-    outcome.complete(outcomeAtExit(process.onExit().join().exitValue(), truncation));
+    settle(outcomeAtExit(process.onExit().join().exitValue(), truncation));
   }
 
   /** A non-zero exit explains a truncated output, so it takes precedence. */
@@ -185,10 +282,25 @@ public final class Producer {
         + recentErrorOutput.substring(tailStart);
   }
 
+  /** A stop in progress lets FFmpeg flush and quit rather than destroying it. */
   private void settleAfterEndingProcess(Failed failure) {
+    if (isStopRequested()) {
+      discardRemainingOutput();
+      return;
+    }
+
     process.destroyForcibly();
     process.onExit().join();
-    outcome.complete(failure);
+    settle(failure);
+  }
+
+  /** Reading to the end lets FFmpeg flush its last fragment and exit after a quit. */
+  private void discardRemainingOutput() {
+    try {
+      process.getInputStream().transferTo(OutputStream.nullOutputStream());
+    } catch (IOException _) {
+      // The stop settles the attempt; nothing read after it matters.
+    }
   }
 
   /** Why the producer stopped reading FFmpeg's output. */
@@ -199,4 +311,9 @@ public final class Producer {
 
   /** The attempt failed while FFmpeg may still be writing. */
   private record Abandoned(Failed failure) implements Ending {}
+
+  /** A stop was recorded before the next delivery. */
+  private record StopObserved() implements Ending {}
+
+  private record Attempt(SegmentGrouper grouper, SegmentSink sink, Duration gracePeriod) {}
 }

@@ -14,4 +14,7 @@ public sealed interface AttemptOutcome {
   /** The attempt failed for the named reason; the detail describes it for the operator. */
   record Failed(@NonNull ProducerFailure reason, @NonNull String detail)
       implements AttemptOutcome {}
+
+  /** The worker stopped the attempt, and FFmpeg has exited. */
+  record Stopped() implements AttemptOutcome {}
 }

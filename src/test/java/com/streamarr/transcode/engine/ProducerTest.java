@@ -7,6 +7,7 @@ import static org.awaitility.Awaitility.await;
 
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.engine.AttemptOutcome.Failed;
+import com.streamarr.transcode.engine.AttemptOutcome.Stopped;
 import com.streamarr.transcode.engine.FfmpegRecordings.Recording;
 import com.streamarr.transcode.engine.FfmpegRecordings.SegmentSummary;
 import com.streamarr.transcode.engine.RecordingSegmentSink.Accepted;
@@ -20,6 +21,7 @@ import java.util.stream.Stream;
 import org.assertj.core.api.InstanceOfAssertFactories;
 import org.awaitility.core.ConditionFactory;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -281,6 +283,200 @@ class ProducerTest {
     assertThat(sink.acceptedNames()).containsExactly("init.mp4");
   }
 
+  @Test
+  @DisplayName(
+      "Should settle only the stop and deliver nothing further when stopped while FFmpeg is"
+          + " writing")
+  void shouldSettleOnlyTheStopAndDeliverNothingFurtherWhenStoppedWhileFfmpegIsWriting() {
+    var recording = recording(WHOLE_RUN);
+    var process =
+        ScriptedProcess.builder()
+            .output(truncated(bytesOf(WHOLE_RUN)))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .resumesOnQuit(true)
+            .exitCode(255)
+            .build();
+    var producer = producerFor(process, recording).start();
+    awaiting().until(process::hasReachedPause);
+
+    producer.stop();
+
+    assertThat(process.stdinText()).isEqualTo("q");
+    assertThat(process.hasReadToEndOfOutput()).isTrue();
+    assertThat(process.wasDestroyedForcibly()).isFalse();
+    assertThat(producer.outcome()).isCompletedWithValue(new Stopped());
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+  }
+
+  @Test
+  @DisplayName("Should let FFmpeg finish quitting when its output breaks after a stop")
+  void shouldLetFfmpegFinishQuittingWhenItsOutputBreaksAfterAStop() {
+    var recording = recording(WHOLE_RUN);
+    var recorded = bytesOf(WHOLE_RUN);
+    var firstTwoSegmentsEnd = insideThirdMediaSegment(recording) - 10;
+    var output =
+        IsoBoxes.concat(
+            Arrays.copyOf(recorded, firstTwoSegmentsEnd),
+            IsoBoxes.box("free", new byte[16]),
+            Arrays.copyOfRange(recorded, firstTwoSegmentsEnd, recorded.length));
+    var process =
+        ScriptedProcess.builder()
+            .output(output)
+            .pauseAfter(firstTwoSegmentsEnd)
+            .resumesOnQuit(true)
+            .build();
+    var producer = producerFor(process, recording).start();
+    awaiting().until(process::hasReachedPause);
+
+    producer.stop();
+
+    assertThat(producer.outcome()).isCompletedWithValue(new Stopped());
+    assertThat(process.hasReadToEndOfOutput()).isTrue();
+    assertThat(process.wasDestroyedForcibly()).isFalse();
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+  }
+
+  @Test
+  @DisplayName("Should settle only the stop when the output cannot be read after a stop")
+  void shouldSettleOnlyTheStopWhenTheOutputCannotBeReadAfterAStop() {
+    var recording = recording(WHOLE_RUN);
+    var pause = insideThirdMediaSegment(recording);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(WHOLE_RUN))
+            .pauseAfter(pause)
+            .failReadAfter(pause + 100)
+            .resumesOnQuit(true)
+            .build();
+    var producer = producerFor(process, recording).gracePeriod(Duration.ofMillis(100)).start();
+    awaiting().until(process::hasReachedPause);
+
+    producer.stop();
+
+    assertThat(producer.outcome()).isCompletedWithValue(new Stopped());
+    assertThat(process.wasDestroyedForcibly()).isTrue();
+  }
+
+  @Test
+  @DisplayName(
+      "Should destroy FFmpeg after the grace period when stopped and FFmpeg ignores the quit")
+  void shouldDestroyFfmpegAfterTheGracePeriodWhenStoppedAndFfmpegIgnoresTheQuit() {
+    var recording = recording(WHOLE_RUN);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(WHOLE_RUN))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .build();
+    var producer = producerFor(process, recording).gracePeriod(Duration.ofMillis(100)).start();
+    awaiting().until(process::hasReachedPause);
+
+    producer.stop();
+
+    assertThat(process.stdinText()).isEqualTo("q");
+    assertThat(process.wasDestroyedForcibly()).isTrue();
+    assertThat(producer.outcome()).isCompletedWithValue(new Stopped());
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+  }
+
+  @Test
+  @DisplayName("Should destroy FFmpeg at once when the thread stopping the attempt is interrupted")
+  void shouldDestroyFfmpegAtOnceWhenTheThreadStoppingTheAttemptIsInterrupted() {
+    var recording = recording(WHOLE_RUN);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(WHOLE_RUN))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .build();
+    var producer = producerFor(process, recording).gracePeriod(Duration.ofMinutes(10)).start();
+    awaiting().until(process::hasReachedPause);
+    var stopping = Thread.ofVirtual().start(producer::stop);
+    awaiting().until(() -> process.stdinText().equals("q"));
+
+    stopping.interrupt();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Stopped());
+    assertThat(process.wasDestroyedForcibly()).isTrue();
+  }
+
+  @Test
+  @DisplayName(
+      "Should deliver nothing after the delivery in flight when stopped while the sink holds a"
+          + " segment")
+  void shouldDeliverNothingAfterTheDeliveryInFlightWhenStoppedWhileTheSinkHoldsASegment() {
+    var recording = recording(WHOLE_RUN);
+    var process = ScriptedProcess.builder().output(bytesOf(WHOLE_RUN)).build();
+    sink.holding(2);
+    var producer = producerFor(process, recording).gracePeriod(Duration.ofMillis(100)).start();
+    awaiting().until(sink::isHolding);
+
+    producer.stop();
+    sink.release();
+
+    assertThat(producer.outcome()).isCompletedWithValue(new Stopped());
+    await()
+        .during(Duration.ofMillis(200))
+        .atMost(OUTCOME_LIMIT)
+        .until(
+            () -> sink.acceptedNames().equals(List.of("init.mp4", "segment0.m4s", "segment1.m4s")));
+  }
+
+  @RepeatedTest(50)
+  @DisplayName(
+      "Should settle only the stop when FFmpeg exits after its output ended while a stop awaits"
+          + " the exit")
+  void shouldSettleOnlyTheStopWhenFfmpegExitsAfterItsOutputEndedWhileAStopAwaitsTheExit()
+      throws InterruptedException {
+    var recording = recording(WHOLE_RUN);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(WHOLE_RUN))
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    var producer = producerFor(process, recording).start();
+    awaiting().until(process::hasReadToEndOfOutput);
+    var stopping = Thread.ofVirtual().start(producer::stop);
+    awaiting().until(() -> process.stdinText().equals("q"));
+
+    process.exit();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Stopped());
+    assertThat(stopping.join(OUTCOME_LIMIT)).isTrue();
+  }
+
+  @Test
+  @DisplayName("Should keep the completed outcome when stopped after the attempt completed")
+  void shouldKeepTheCompletedOutcomeWhenStoppedAfterTheAttemptCompleted() {
+    var recording = recording(WHOLE_RUN);
+    var process = ScriptedProcess.builder().output(bytesOf(WHOLE_RUN)).build();
+    var producer = producerFor(process, recording).start();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT);
+
+    producer.stop();
+
+    assertThat(process.stdinText()).isEmpty();
+    assertThat(producer.outcome()).isCompletedWithValue(new Completed());
+  }
+
+  @Test
+  @DisplayName("Should ask FFmpeg to quit once when stopped twice")
+  void shouldAskFfmpegToQuitOnceWhenStoppedTwice() {
+    var recording = recording(WHOLE_RUN);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(WHOLE_RUN))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .resumesOnQuit(true)
+            .build();
+    var producer = producerFor(process, recording).start();
+    awaiting().until(process::hasReachedPause);
+
+    producer.stop();
+    producer.stop();
+
+    assertThat(process.stdinText()).isEqualTo("q");
+    assertThat(producer.outcome()).isCompletedWithValue(new Stopped());
+  }
+
   private static ConditionFactory awaiting() {
     return await().atMost(OUTCOME_LIMIT).pollInterval(POLL_INTERVAL);
   }
@@ -292,6 +488,7 @@ class ProducerTest {
         .jobAttemptId(JOB_ATTEMPT_ID)
         .periodSeconds(recording.period())
         .startSequenceNumber(recording.startSequenceNumber())
+        .gracePeriod(Duration.ofSeconds(5))
         .sink(sink);
   }
 
@@ -300,6 +497,13 @@ class ProducerTest {
         .succeedsWithin(OUTCOME_LIMIT)
         .asInstanceOf(InstanceOfAssertFactories.type(Failed.class))
         .actual();
+  }
+
+  /** An offset inside the first fragment of the third media segment, before it is complete. */
+  private static int insideThirdMediaSegment(Recording recording) {
+    var firstTwoSegments =
+        recording.segments().stream().limit(2).mapToLong(SegmentSummary::byteLength).sum();
+    return Math.toIntExact(recording.initializationSegment().byteLength() + firstTwoSegments + 10);
   }
 
   /** The output without the last bytes of its final box. */
