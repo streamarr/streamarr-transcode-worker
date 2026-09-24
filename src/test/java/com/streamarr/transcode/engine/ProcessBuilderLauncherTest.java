@@ -134,6 +134,7 @@ class ProcessBuilderLauncherTest {
             .startSequenceNumber(0)
             .gracePeriod(Duration.ofSeconds(5))
             .stallTimeout(Duration.ofMinutes(1))
+            .memoryBudget(SegmentMemoryBudget.forSlots(1))
             .sink(sink);
 
     assertThatThrownBy(producer::start)
@@ -151,6 +152,7 @@ class ProcessBuilderLauncherTest {
         .startSequenceNumber(0)
         .gracePeriod(Duration.ofSeconds(5))
         .stallTimeout(Duration.ofMinutes(1))
+        .memoryBudget(SegmentMemoryBudget.forSlots(1))
         .sink(sink);
   }
 }

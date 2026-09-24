@@ -97,7 +97,7 @@ class FfmpegTranscodeEngineTest {
             .build();
     var sink = new RecordingSegmentSink();
 
-    var producer = executor.startProducer(request, sink);
+    var producer = executor.startProducer(request, sink, SegmentMemoryBudget.forSlots(1));
 
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
     assertThat(launcher.command(request.attemptId()))
@@ -158,7 +158,8 @@ class FfmpegTranscodeEngineTest {
             createCapabilityService(true, noHardware()));
     var request =
         requestBuilder(mode, "h264").targetSegmentDuration(1).framerate(24_000.0 / 1001).build();
-    return executor.startProducer(request, new RecordingSegmentSink());
+    return executor.startProducer(
+        request, new RecordingSegmentSink(), SegmentMemoryBudget.forSlots(1));
   }
 
   @Test
@@ -167,7 +168,11 @@ class FfmpegTranscodeEngineTest {
     executor = engineLaunching(runningProcess(), createCapabilityService(false, noHardware()));
     var request = createRequest(TranscodeMode.FULL_TRANSCODE, "h264");
 
-    var thrown = catchThrowable(() -> executor.startProducer(request, new RecordingSegmentSink()));
+    var thrown =
+        catchThrowable(
+            () ->
+                executor.startProducer(
+                    request, new RecordingSegmentSink(), SegmentMemoryBudget.forSlots(1)));
 
     assertThat(thrown)
         .isInstanceOf(TranscodeException.class)
@@ -187,7 +192,9 @@ class FfmpegTranscodeEngineTest {
     executor = engineLaunching(runningProcess(), createCapabilityService(true, hardware));
     var request = createRequest(TranscodeMode.FULL_TRANSCODE, "h264");
 
-    var producer = executor.startProducer(request, new RecordingSegmentSink());
+    var producer =
+        executor.startProducer(
+            request, new RecordingSegmentSink(), SegmentMemoryBudget.forSlots(1));
 
     producer.stop();
     assertThat(launcher.command(request.attemptId())).containsSubsequence("-c:v", "h264_nvenc");
@@ -200,7 +207,9 @@ class FfmpegTranscodeEngineTest {
     executor = engineLaunching(runningProcess(), createCapabilityService(true, noHardware()));
     var request = createRequest(TranscodeMode.FULL_TRANSCODE, "av1");
 
-    var producer = executor.startProducer(request, new RecordingSegmentSink());
+    var producer =
+        executor.startProducer(
+            request, new RecordingSegmentSink(), SegmentMemoryBudget.forSlots(1));
 
     producer.stop();
     assertThat(launcher.command(request.attemptId())).containsSubsequence("-c:v", "libsvtav1");
@@ -215,7 +224,9 @@ class FfmpegTranscodeEngineTest {
     executor = engineLaunching(runningProcess(), createCapabilityService(true, noHardware()));
     var request = createRequest(mode, "h264");
 
-    var producer = executor.startProducer(request, new RecordingSegmentSink());
+    var producer =
+        executor.startProducer(
+            request, new RecordingSegmentSink(), SegmentMemoryBudget.forSlots(1));
 
     producer.stop();
     assertThat(launcher.command(request.attemptId())).containsSubsequence("-c:v", "copy");
@@ -257,7 +268,11 @@ class FfmpegTranscodeEngineTest {
     executor = engineLaunching(runningProcess(), capabilityService);
     var request = createRequest(TranscodeMode.FULL_TRANSCODE, "av1");
 
-    var thrown = catchThrowable(() -> executor.startProducer(request, new RecordingSegmentSink()));
+    var thrown =
+        catchThrowable(
+            () ->
+                executor.startProducer(
+                    request, new RecordingSegmentSink(), SegmentMemoryBudget.forSlots(1)));
 
     assertThat(launcher.hasLaunchedAny()).isFalse();
     assertThat(thrown)

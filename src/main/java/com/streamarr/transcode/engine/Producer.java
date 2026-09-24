@@ -30,8 +30,10 @@ import lombok.extern.slf4j.Slf4j;
  *
  * <p>The producer holds at most two segment caps of FFmpeg's output: the segment awaiting the
  * sink's acceptance and what the reader holds for the next. It admits each box's bytes before it
- * reads them, so when the budget is full, or when a second segment closes while the first still
- * awaits acceptance, the reader stops reading and the pipe holds FFmpeg back.
+ * reads them, within its own budget and within the worker's, so when either budget is full, or when
+ * a second segment closes while the first still awaits acceptance, the reader stops reading and the
+ * pipe holds FFmpeg back. Once the attempt has an outcome, the producer releases what the reader
+ * holds at once and the delivery in flight once that delivery returns.
  *
  * <p>A watchdog fails the attempt when FFmpeg writes nothing for the stall timeout while the reader
  * is reading; waiting for the sink pauses it, and it ends once the reader stops reading. It asks
@@ -46,7 +48,7 @@ public final class Producer {
   private static final long MAXIMUM_SEGMENT_BYTES = 16L * 1024 * 1024;
 
   // One segment awaiting acceptance and one assembling.
-  private static final long BUDGET_BYTES = 2 * MAXIMUM_SEGMENT_BYTES;
+  static final long BUDGET_BYTES = 2 * MAXIMUM_SEGMENT_BYTES;
 
   private static final Duration ERROR_OUTPUT_WAIT = Duration.ofSeconds(1);
   private static final int ERROR_OUTPUT_DETAIL_LIMIT = 2000;
@@ -56,6 +58,7 @@ public final class Producer {
   private final FragmentedMp4Reader reader;
   private final SegmentGrouper grouper;
   private final SegmentSink sink;
+  private final SegmentMemoryBudget memoryBudget;
   private final Duration gracePeriod;
   private final Duration stallTimeout;
   private final StallWatchdog watchdog;
@@ -80,6 +83,7 @@ public final class Producer {
             watchdog.watch(process.getInputStream()), MAXIMUM_SEGMENT_BYTES, this::admit);
     this.grouper = settings.grouper();
     this.sink = settings.sink();
+    this.memoryBudget = settings.memoryBudget();
     this.gracePeriod = settings.gracePeriod();
     this.encodedFrameRate = settings.encodedFrameRate();
     this.threadName = "producer-" + settings.jobAttemptId();
@@ -94,6 +98,7 @@ public final class Producer {
    * @param encodedFrameRate the frame rate an attempt that encodes video forces on its output, so
    *     that the producer fails an output holding a video sample shorter than half a frame; empty
    *     when the attempt copies the video, whose sample durations follow the source
+   * @param memoryBudget the worker's segment memory, which every producer of the worker shares
    * @throws TranscodeException when FFmpeg cannot be started
    */
   @Builder(buildMethodName = "start")
@@ -106,12 +111,14 @@ public final class Producer {
       @NonNull Duration gracePeriod,
       @NonNull Duration stallTimeout,
       @NonNull OptionalDouble encodedFrameRate,
+      @NonNull SegmentMemoryBudget memoryBudget,
       @NonNull SegmentSink sink) {
     var settings =
         Settings.builder()
             .jobAttemptId(jobAttemptId)
             .grouper(new SegmentGrouper(periodSeconds, startSequenceNumber, MAXIMUM_SEGMENT_BYTES))
             .sink(sink)
+            .memoryBudget(memoryBudget)
             .gracePeriod(gracePeriod)
             .stallTimeout(stallTimeout)
             .encodedFrameRate(encodedFrameRateOf(encodedFrameRate))
@@ -224,18 +231,24 @@ public final class Producer {
   }
 
   // Records the attempt's outcome unless another is already recorded; the caller that records it
-  // settles it once FFmpeg has exited, or starts the thread that does.
+  // settles it once FFmpeg has exited, or starts the thread that does. The reader admits and
+  // delivers nothing afterwards, so what it holds is released at once.
   private boolean tryDecide(AttemptOutcome decided) {
+    long readerReleasedBytes;
     synchronized (lock) {
       if (decision.isPresent()) {
         return false;
       }
 
       decision = Optional.of(decided);
+      readerReleasedBytes = readerHeldBytes;
+      readerHeldBytes = 0;
       lock.notifyAll();
-      watchdog.end();
-      return true;
     }
+
+    watchdog.end();
+    memoryBudget.release(readerReleasedBytes);
+    return true;
   }
 
   private boolean isDecided() {
@@ -315,11 +328,14 @@ public final class Producer {
     }
   }
 
-  // The watchdog measures FFmpeg only while the reader reads, so it ends with the reading.
+  // The watchdog measures FFmpeg only while the reader reads, so it ends with the reading, and the
+  // reader delivers nothing more that it holds.
   private void produce() {
     try {
       var ending = readAndDeliver();
       watchdog.end();
+      grouper.discardOpenFragments();
+      holdOnlyTheAssemblingSegment();
       conclude(ending);
     } finally {
       errorOutput.close();
@@ -370,6 +386,7 @@ public final class Producer {
 
   private void failReaderUnexpectedly(Thread readerThread, Throwable error) {
     log.error("{} failed unexpectedly", readerThread.getName(), error);
+    grouper.discardOpenFragments();
     if (!tryFailWithProcessEnded(unexpected(error))) {
       discardRemainingOutput();
     }
@@ -472,15 +489,39 @@ public final class Producer {
     return Optional.of(endingOf(skipped.failure()));
   }
 
-  // Admits a box's bytes while the reader's and the delivery's holdings fit in the budget.
+  // Admits a box's bytes while the reader's and the delivery's holdings fit in the producer's
+  // budget and the box fits in the worker's.
   private void admit(long boxBytes) {
     awaitReaderWhile(() -> decision.isEmpty() && heldBytes() + boxBytes > BUDGET_BYTES);
+    reserveInWorkerBudget(boxBytes);
+    boolean admitted;
     synchronized (lock) {
-      if (decision.isPresent()) {
+      admitted = decision.isEmpty();
+      if (admitted) {
+        readerHeldBytes += boxBytes;
+      }
+    }
+
+    if (!admitted) {
+      memoryBudget.release(boxBytes);
+      throw new AdmissionRefused();
+    }
+  }
+
+  // The reader waits for other producers to release memory rather than for FFmpeg, so the stall
+  // watchdog pauses meanwhile.
+  private void reserveInWorkerBudget(long boxBytes) {
+    if (memoryBudget.tryReserveAtOnce(boxBytes)) {
+      return;
+    }
+
+    watchdog.pause();
+    try {
+      if (!memoryBudget.tryReserve(boxBytes, this::isDecided)) {
         throw new AdmissionRefused();
       }
-
-      readerHeldBytes += boxBytes;
+    } finally {
+      watchdog.resume();
     }
   }
 
@@ -490,10 +531,21 @@ public final class Producer {
         + deliveryInFlight.map(Delivery::segment).map(ProducedSegment::byteLength).orElse(0L);
   }
 
-  // Whatever the grouper did not keep, such as preroll, is no longer held.
+  // Whatever the grouper did not keep, such as preroll, is no longer held. Once the attempt has an
+  // outcome, the reader holds nothing that it has not already released.
   private void holdOnlyTheAssemblingSegment() {
+    long droppedBytes;
     synchronized (lock) {
+      if (decision.isPresent()) {
+        return;
+      }
+
+      droppedBytes = readerHeldBytes - grouper.heldBytes();
       readerHeldBytes = grouper.heldBytes();
+    }
+
+    if (droppedBytes > 0) {
+      memoryBudget.release(droppedBytes);
     }
   }
 
@@ -543,11 +595,16 @@ public final class Producer {
   }
 
   private void endDelivery(boolean mediaSegmentAccepted) {
+    long deliveredBytes;
     synchronized (lock) {
+      deliveredBytes =
+          deliveryInFlight.map(Delivery::segment).map(ProducedSegment::byteLength).orElse(0L);
       deliveryInFlight = Optional.empty();
       mediaSegmentDelivered |= mediaSegmentAccepted;
       lock.notifyAll();
     }
+
+    memoryBudget.release(deliveredBytes);
   }
 
   // The output ends where it cannot be delivered; a truncated output has already ended.
@@ -649,6 +706,7 @@ public final class Producer {
       UUID jobAttemptId,
       SegmentGrouper grouper,
       SegmentSink sink,
+      SegmentMemoryBudget memoryBudget,
       Duration gracePeriod,
       Duration stallTimeout,
       Optional<EncodedFrameRate> encodedFrameRate) {}

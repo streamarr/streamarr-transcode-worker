@@ -38,11 +38,12 @@ public class FfmpegTranscodeEngine {
 
   /**
    * Starts FFmpeg for the job attempt and a producer that delivers its initialization segment and
-   * media segments to the sink.
+   * media segments to the sink, holding FFmpeg's output within the worker's memory budget.
    *
    * @throws TranscodeException when FFmpeg is unavailable or cannot be started
    */
-  public Producer startProducer(TranscodeRequest request, SegmentSink sink) {
+  public Producer startProducer(
+      TranscodeRequest request, SegmentSink sink, SegmentMemoryBudget memoryBudget) {
     requireAvailableFfmpeg();
     var job = TranscodeJob.builder().request(request).videoEncoder(resolveEncoder(request)).build();
     var command = commandBuilder.buildCommand(job);
@@ -58,6 +59,7 @@ public class FfmpegTranscodeEngine {
             .gracePeriod(STOP_GRACE_PERIOD)
             .stallTimeout(encoderStallTimeout)
             .encodedFrameRate(encodedFrameRateOf(request))
+            .memoryBudget(memoryBudget)
             .sink(sink)
             .start();
     log.info(

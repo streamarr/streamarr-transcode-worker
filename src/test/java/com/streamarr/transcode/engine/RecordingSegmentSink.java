@@ -11,7 +11,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Accepts each segment the producer delivers and keeps its name and bytes. A test can hold one
- * delivery until it releases it or the producer cancels it, refuse one, or throw an error from one.
+ * delivery until it releases it or the producer cancels it, or until it releases it whether or not
+ * the producer cancelled it, refuse one, or throw an error from one.
  */
 final class RecordingSegmentSink implements SegmentSink {
 
@@ -27,6 +28,7 @@ final class RecordingSegmentSink implements SegmentSink {
   private volatile OptionalInt failedDelivery = OptionalInt.empty();
   private volatile Error failure;
   private volatile boolean cancelled;
+  private volatile boolean holdsPastCancellation;
 
   /** Holds the delivery at this zero-based position, counting the initialization segment. */
   RecordingSegmentSink holding(int delivery) {
@@ -45,6 +47,15 @@ final class RecordingSegmentSink implements SegmentSink {
     failure = error;
     failedDelivery = OptionalInt.of(delivery);
     return this;
+  }
+
+  /**
+   * Holds the delivery at this zero-based position until the test releases it, even after the
+   * producer cancels it, as an upload slow to abandon would.
+   */
+  RecordingSegmentSink holdingPastCancellation(int delivery) {
+    holdsPastCancellation = true;
+    return holding(delivery);
   }
 
   boolean isHolding() {
@@ -72,7 +83,8 @@ final class RecordingSegmentSink implements SegmentSink {
     }
 
     if (delivery.equals(heldDelivery)) {
-      cancellation.onCancel(this::cancelHeldDelivery);
+      cancellation.onCancel(
+          holdsPastCancellation ? this::noteCancellation : this::cancelHeldDelivery);
       held.countDown();
       awaitRelease();
     }
@@ -90,8 +102,12 @@ final class RecordingSegmentSink implements SegmentSink {
   }
 
   private void cancelHeldDelivery() {
-    cancelled = true;
+    noteCancellation();
     release.countDown();
+  }
+
+  private void noteCancellation() {
+    cancelled = true;
   }
 
   private void awaitRelease() {

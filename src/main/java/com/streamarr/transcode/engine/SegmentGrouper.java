@@ -142,7 +142,8 @@ final class SegmentGrouper {
     return openSequenceNumber.isPresent() && openSequenceNumber.getAsLong() < startSequenceNumber;
   }
 
-  private void discardOpenFragments() {
+  /** Drops the fragments held for the open segment, which the producer then never delivers. */
+  void discardOpenFragments() {
     openFragments.clear();
     openBytes = 0;
   }

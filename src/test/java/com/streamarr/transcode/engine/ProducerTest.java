@@ -198,6 +198,53 @@ class ProducerTest {
 
   @Test
   @DisplayName(
+      "Should hold another attempt's reader only until a stopped attempt's cancelled delivery"
+          + " returns when both share the worker's budget")
+  void
+      shouldHoldAnotherAttemptsReaderOnlyUntilAStoppedAttemptsCancelledDeliveryReturnsWhenBothShareTheWorkersBudget() {
+    var workerBudget = SegmentMemoryBudget.forSlots(1);
+    var stoppedProcess =
+        ScriptedProcess.builder()
+            .output(nearlyCappedSegments())
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    var stoppedSink = new RecordingSegmentSink().holdingPastCancellation(1);
+    var stopped =
+        producerOfOneSecondSegments(stoppedProcess)
+            .sink(stoppedSink)
+            .memoryBudget(workerBudget)
+            .gracePeriod(Duration.ofMinutes(10))
+            .start();
+    awaiting().until(() -> stoppedProcess.bytesTaken() == NEARLY_CAPPED_BUDGET_STOP);
+    stopped.requestStop();
+    awaiting().until(stoppedSink::wasCancelled);
+    var nextProcess = ScriptedProcess.builder().output(nearlyCappedSegments()).build();
+
+    var next = producerOfOneSecondSegments(nextProcess).memoryBudget(workerBudget).start();
+
+    // The stop released the segment the stopped attempt was assembling, but its cancelled delivery
+    // of segment 0 still holds three fragments; the next reader admits three fragments of its own
+    // and the next moof, but not the mdat that follows.
+    var workerBudgetStop =
+        IsoBoxes.ftyp().length
+            + IsoBoxes.videoAndAudioMoov().length
+            + 3 * keyframeFragment(0).length
+            + keyframeMoof(24_000).length
+            + 8;
+    awaiting().until(() -> nextProcess.bytesTaken() == workerBudgetStop);
+    await()
+        .during(Duration.ofMillis(200))
+        .atMost(OUTCOME_LIMIT)
+        .until(() -> nextProcess.bytesTaken() == workerBudgetStop);
+    stoppedSink.release();
+    assertThat(next.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(stoppedProcess.isAlive()).isTrue();
+    stoppedProcess.exit();
+    assertThat(stopped.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Stopped());
+  }
+
+  @Test
+  @DisplayName(
       "Should hold none of the discarded preroll against the budget when the preroll of a"
           + " replacement attempt outgrows the segment cap")
   void
@@ -1231,6 +1278,7 @@ class ProducerTest {
         .startSequenceNumber(recording.startSequenceNumber())
         .gracePeriod(Duration.ofSeconds(5))
         .stallTimeout(Duration.ofMinutes(1))
+        .memoryBudget(SegmentMemoryBudget.forSlots(1))
         .sink(sink);
   }
 
@@ -1309,6 +1357,7 @@ class ProducerTest {
         .startSequenceNumber(0)
         .gracePeriod(Duration.ofSeconds(5))
         .stallTimeout(Duration.ofMinutes(1))
+        .memoryBudget(SegmentMemoryBudget.forSlots(1))
         .sink(sink);
   }
 

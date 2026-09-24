@@ -38,6 +38,7 @@ import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
 import com.streamarr.transcode.engine.ProducedSegment;
 import com.streamarr.transcode.engine.Producer;
 import com.streamarr.transcode.engine.ProducerFailure;
+import com.streamarr.transcode.engine.SegmentMemoryBudget;
 import com.streamarr.transcode.probe.FfprobeExecutor;
 import com.streamarr.transcode.protocol.ProtoUuid;
 import io.grpc.ManagedChannel;
@@ -78,6 +79,7 @@ public final class TranscodeWorker implements AutoCloseable {
   private final WorkerVariantJobMapper jobMapper;
   private final Optional<FfprobeExecutor> ffprobe;
   private final WorkerRuntime runtime;
+  private final SegmentMemoryBudget memoryBudget;
   private final Map<UUID, ActiveAttempt> activeAttempts = new HashMap<>();
   private final Set<Thread> stopThreads = new HashSet<>();
 
@@ -109,6 +111,7 @@ public final class TranscodeWorker implements AutoCloseable {
     this.engine = engine;
     this.ffprobe = ffprobe;
     this.runtime = runtime;
+    memoryBudget = SegmentMemoryBudget.forSlots(configuration.availableSlots());
     sources = new WorkerMediaSourceResolver(configuration.sourceNamespaces());
     jobMapper = new WorkerVariantJobMapper(sources);
   }
@@ -203,8 +206,8 @@ public final class TranscodeWorker implements AutoCloseable {
       return new Refused();
     }
 
-    // Only active attempts hold a slot: a stopped attempt's producer delivers and holds nothing
-    // more, and the server freed its slot when it sent the stop.
+    // Only active attempts hold a slot: the server freed a stopped attempt's slot when it sent the
+    // stop, and the worker's memory budget charges its producer until it has released its segments.
     if (activeAttempts.size() >= configuration.availableSlots()) {
       log.warn(
           "Refusing job attempt {}: all {} advertised slots are occupied",
@@ -219,7 +222,8 @@ public final class TranscodeWorker implements AutoCloseable {
       producer =
           engine.startProducer(
               jobMapper.map(job),
-              (segment, cancellation) -> deliverToServer(job, segment, cancellation));
+              (segment, cancellation) -> deliverToServer(job, segment, cancellation),
+              memoryBudget);
     } catch (RuntimeException e) {
       logStartupFailure(job, e);
       reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED);
