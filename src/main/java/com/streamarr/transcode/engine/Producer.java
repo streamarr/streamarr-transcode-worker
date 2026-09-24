@@ -22,7 +22,7 @@ import lombok.NonNull;
  */
 public final class Producer {
 
-  /** The server's segment cap, which bounds the initialization segment and every media segment. */
+  /** The server's segment cap; the reader admits no initialization segment or fragment above it. */
   public static final long MAXIMUM_SEGMENT_BYTES = 16L * 1024 * 1024;
 
   private static final Duration ERROR_OUTPUT_WAIT = Duration.ofSeconds(1);
