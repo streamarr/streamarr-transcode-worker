@@ -74,15 +74,25 @@ final class WorkerVariantJobMapper {
         subtitle.hasLanguage() ? Optional.of(subtitle.getLanguage()) : Optional.empty());
   }
 
+  // Whether the job encodes video, by the engine's rule; a job that names no mode encodes none.
+  static boolean encodesVideo(VariantJob job) {
+    return modeOf(job.getDecision().getMode()).map(TranscodeMode::encodesVideo).orElse(false);
+  }
+
   @SuppressWarnings("checkstyle:fullyQualifiedName")
-  private TranscodeMode mode(build.buf.gen.streamarr.transcode.v1.TranscodeMode mode) {
+  private static TranscodeMode mode(build.buf.gen.streamarr.transcode.v1.TranscodeMode mode) {
+    return modeOf(mode).orElseThrow(() -> new WorkerJobException("Transcode mode is required"));
+  }
+
+  @SuppressWarnings("checkstyle:fullyQualifiedName")
+  private static Optional<TranscodeMode> modeOf(
+      build.buf.gen.streamarr.transcode.v1.TranscodeMode mode) {
     return switch (mode) {
-      case TRANSCODE_MODE_REMUX -> TranscodeMode.REMUX;
-      case TRANSCODE_MODE_AUDIO_TRANSCODE -> TranscodeMode.AUDIO_TRANSCODE;
-      case TRANSCODE_MODE_VIDEO_TRANSCODE -> TranscodeMode.VIDEO_TRANSCODE;
-      case TRANSCODE_MODE_FULL_TRANSCODE -> TranscodeMode.FULL_TRANSCODE;
-      case TRANSCODE_MODE_UNSPECIFIED, UNRECOGNIZED ->
-          throw new WorkerJobException("Transcode mode is required");
+      case TRANSCODE_MODE_REMUX -> Optional.of(TranscodeMode.REMUX);
+      case TRANSCODE_MODE_AUDIO_TRANSCODE -> Optional.of(TranscodeMode.AUDIO_TRANSCODE);
+      case TRANSCODE_MODE_VIDEO_TRANSCODE -> Optional.of(TranscodeMode.VIDEO_TRANSCODE);
+      case TRANSCODE_MODE_FULL_TRANSCODE -> Optional.of(TranscodeMode.FULL_TRANSCODE);
+      case TRANSCODE_MODE_UNSPECIFIED, UNRECOGNIZED -> Optional.empty();
     };
   }
 

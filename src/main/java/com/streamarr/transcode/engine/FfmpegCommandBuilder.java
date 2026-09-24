@@ -51,7 +51,7 @@ public class FfmpegCommandBuilder {
     addCommonFlags(cmd);
     addCodecArgs(cmd, job);
 
-    if (encodesVideo(mode)) {
+    if (mode.encodesVideo()) {
       addFrameRateArgs(cmd, job.request());
       addKeyframeArgs(cmd, job);
     }
@@ -59,10 +59,6 @@ public class FfmpegCommandBuilder {
     addFragmentedMp4Output(cmd);
 
     return List.copyOf(cmd);
-  }
-
-  private static boolean encodesVideo(TranscodeMode mode) {
-    return mode == TranscodeMode.VIDEO_TRANSCODE || mode == TranscodeMode.FULL_TRANSCODE;
   }
 
   private void addInputArgs(List<String> cmd, TranscodeRequest request) {
@@ -84,7 +80,7 @@ public class FfmpegCommandBuilder {
   // before it.
   private static long inputSeekSeconds(TranscodeRequest request) {
     var mode = request.transcodeDecision().transcodeMode();
-    if (!encodesVideo(mode) || request.startSequenceNumber() == 0) {
+    if (!mode.encodesVideo() || request.startSequenceNumber() == 0) {
       return request.seekPosition();
     }
 
@@ -120,9 +116,8 @@ public class FfmpegCommandBuilder {
 
   private void addCodecArgs(List<String> cmd, TranscodeJob job) {
     var decision = job.request().transcodeDecision();
-    var mode = decision.transcodeMode();
 
-    if (mode == TranscodeMode.REMUX || mode == TranscodeMode.AUDIO_TRANSCODE) {
+    if (!decision.transcodeMode().encodesVideo()) {
       cmd.addAll(List.of("-c:v", "copy"));
       addAudioArgs(cmd, decision.audioDecision());
       return;

@@ -74,8 +74,7 @@ public class FfmpegTranscodeEngine {
   }
 
   private String resolveEncoder(TranscodeRequest request) {
-    var mode = request.transcodeDecision().transcodeMode();
-    if (mode == TranscodeMode.REMUX || mode == TranscodeMode.AUDIO_TRANSCODE) {
+    if (!request.transcodeDecision().transcodeMode().encodesVideo()) {
       return "copy";
     }
 
