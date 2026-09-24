@@ -34,8 +34,13 @@ MOVFLAGS=cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont
 # The probed frame rate exactly as the worker passes it: ffprobe r_frame_rate 24000/1001 as a
 # Java double. Every encoded source below probes as 24000/1001 (analyze.mjs checks it).
 FPS=23.976023976023978
-GOP_FLOOR=143                         # floor(P * FPS): ADR 0037's recipe
+GOP_VERIFIED=145                      # ceil(P * FPS) + 1: ADR 0037's backstop for an encoder verified to honour forced keyframes
+GOP_FLOOR=143                         # floor(P * FPS): ADR 0037's GOP for an encoder not verified to (hardware, until worker #14)
 GOP_CEIL=144                          # ceil(P * FPS): the HLS recipe's frame-count GOP
+FORCED_EVERY_PERIOD="expr:gte(t,n_forced*$P)"
+# Forces 0, 6, 12, 24, 30 ... s: the forced keyframe for 18 s never comes, so the GOP backstop must
+# place interval 3's keyframe.
+FORCED_EXCEPT_18="expr:gte(t,(n_forced+gte(n_forced,3))*$P)"
 # Fixture-only additions: single-threaded encoders (-threads 1, and lp=1 for SVT-AV1, whose output
 # otherwise differs on every run), so that a re-recording reproduces the same bytes. Threading
 # changes rate-control decisions, never where a keyframe is placed or where the muxer cuts.
@@ -43,6 +48,9 @@ DET=(-threads 1)
 
 X264=(-c:v libx264 -vf scale=-2:36 -b:v 6000 -maxrate 6000 -bufsize 12000)
 SVT=(-c:v libsvtav1 -vf scale=-2:36 -crf 35 -maxrate 6000 -svtav1-params mbr-overshoot-pct=0:lp=1)
+# The worker's libx265 arguments (open GOP and x265's scene cut left at their defaults; worker #23
+# owns the closed-GOP flags), single-threaded for reproducible bytes.
+X265=(-c:v libx265 -vf scale=-2:36 -b:v 6000 -maxrate 6000 -bufsize 12000 -x265-params pools=none:frame-threads=1:log-level=error)
 AAC=(-c:a aac -ac 1 -b:a 8k)
 COPY_PIPE=(-c:v copy -c:a copy -bsf:a aac_adtstoasc)
 COPY_HLS=(-c:v copy -c:a copy)
@@ -50,22 +58,30 @@ COMMON_HLS=(-map_metadata -1 -map_chapters -1 -copyts -avoid_negative_ts disable
 COMMON_PIPE=(-map_metadata -1 -map_chapters -1 -copyts -avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128)
 
 # Two recipes: HLS = the HLS muxer recipe that ADR 0037 replaces, PIPE = ADR 0037's pipe recipe.
-KEY_X264_HLS=(-forced-idr 1 -force_key_frames:0 "expr:gte(t,n_forced*$P)" -sc_threshold:v:0 0)
-KEY_X264_PIPE=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "expr:gte(t,n_forced*$P)" -g:v:0 "$GOP_FLOOR" -sc_threshold:v:0 0)
+KEY_X264_HLS=(-forced-idr 1 -force_key_frames:0 "$FORCED_EVERY_PERIOD" -sc_threshold:v:0 0)
+KEY_X264_PIPE=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$FORCED_EVERY_PERIOD" -g:v:0 "$GOP_VERIFIED" -sc_threshold:v:0 0)
+KEY_X264_PIPE_FLOORED=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$FORCED_EVERY_PERIOD" -g:v:0 "$GOP_FLOOR" -sc_threshold:v:0 0)
+KEY_X264_PIPE_MISSED=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$FORCED_EXCEPT_18" -g:v:0 "$GOP_VERIFIED" -sc_threshold:v:0 0)
 KEY_SVT_HLS=(-forced-idr 1 -g:v:0 "$GOP_CEIL" -keyint_min:v:0 "$GOP_CEIL")
-KEY_SVT_PIPE=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "expr:gte(t,n_forced*$P)" -g:v:0 "$GOP_FLOOR" -keyint_min:v:0 "$GOP_FLOOR")
+KEY_SVT_PIPE=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$FORCED_EVERY_PERIOD" -g:v:0 "$GOP_VERIFIED" -keyint_min:v:0 "$GOP_VERIFIED")
+KEY_SVT_PIPE_MISSED=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$FORCED_EXCEPT_18" -g:v:0 "$GOP_VERIFIED" -keyint_min:v:0 "$GOP_VERIFIED")
+KEY_X265_PIPE=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$FORCED_EVERY_PERIOD" -g:v:0 "$GOP_VERIFIED")
+KEY_X265_PIPE_MISSED=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$FORCED_EXCEPT_18" -g:v:0 "$GOP_VERIFIED")
 
-# run KIND NAME [start=N] [seek=S] [hls-recipe] [video] SRC -- CODEC/KEYFRAME ARGS...
+# run KIND NAME [start=N] [seek=S] [duration=D] [hls-recipe] [video] SRC -- CODEC/KEYFRAME ARGS...
 #   KIND pipe: ADR 0037's recipe to pipe:1, recorded as out/NAME.fmp4
 #   KIND hls:  the HLS muxer (fMP4 segments) into hls/NAME/; "hls-recipe" swaps in the HLS recipe's common
 #              flags (no -start_at_zero, -max_delay), "video" maps the video stream only.
+#   duration=D reads only the source's first D seconds.
 run() {
   local kind=$1 name=$2; shift 2
   local start=0 seek=() common=("${COMMON_PIPE[@]}") maps=(-map 0:v:0 -map 0:a:0)
+  local duration=()
   while [ "$1" != "--" ] && [ $# -gt 1 ]; do
     case "$1" in
       start=*) start=${1#start=} ;;
       seek=*) seek=(-ss "${1#seek=}") ;;
+      duration=*) duration=(-t "${1#duration=}") ;;
       hls-recipe) common=("${COMMON_HLS[@]}") ;;
       video) maps=(-map 0:v:0) ;;
       *) break ;;
@@ -74,7 +90,7 @@ run() {
   done
   local src=$1; shift 2
   if [ "$kind" = pipe ]; then
-    "${FF[@]}" -y "${seek[@]}" -i "$src" "${maps[@]}" "${common[@]}" "$@" "${DET[@]}" \
+    "${FF[@]}" -y "${seek[@]}" "${duration[@]}" -i "$src" "${maps[@]}" "${common[@]}" "$@" "${DET[@]}" \
       -f mp4 -movflags "$MOVFLAGS" -frag_duration "$FRAG_US" pipe:1 > "out/$name.fmp4" 2> "logs/$name.log"
     return
   fi
@@ -190,6 +206,17 @@ run hls 09-svtav1-vfr.pipe-keyframes-with-audio src/vfr.mp4 -- "${SVT[@]}" "${AA
 # ------------------------------------------------------------------ 10. keyframe gap wider than the period
 run pipe 10-copy-gop-exceeds-period src/gop10.mp4 -- "${COPY_PIPE[@]}"
 run hls 10-copy-gop-exceeds-period.hls-recipe hls-recipe src/gop10.mp4 -- "${COPY_HLS[@]}"
+
+# ------------------------------------------------------------------ 11. the floored GOP of an encoder not verified to honour forced keyframes
+run pipe 11-encode-cfr-floored-gop duration=30 src/cfr.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE_FLOORED[@]}"
+
+# ------------------------------------------------------------------ 12. a forced keyframe that never comes: the GOP backstop places it
+run pipe 12-encode-cfr-missed-forced-keyframe duration=30 src/cfr.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE_MISSED[@]}"
+run pipe 12-svtav1-cfr-missed-forced-keyframe duration=30 src/cfr.mp4 -- "${SVT[@]}" "${AAC[@]}" "${KEY_SVT_PIPE_MISSED[@]}"
+
+# ------------------------------------------------------------------ 13. libx265 under the verified-encoder GOP, with and without a missed forced keyframe
+run pipe 13-x265-cfr duration=30 src/cfr.mp4 -- "${X265[@]}" "${AAC[@]}" "${KEY_X265_PIPE[@]}"
+run pipe 13-x265-cfr-missed-forced-keyframe duration=30 src/cfr.mp4 -- "${X265[@]}" "${AAC[@]}" "${KEY_X265_PIPE_MISSED[@]}"
 
 # ------------------------------------------------------------------ side claims of ADR 0037 (recorded, not delivered)
 mkdir -p claims

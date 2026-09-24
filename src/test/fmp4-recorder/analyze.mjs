@@ -49,9 +49,9 @@ function oracle(run, flags, { audio = true, reference = null, restrict = false, 
 const FIXTURES = [
   {
     name: '01-encode-cfr', source: 'cfr.mp4', mode: 'encode', encoder: 'libx264', seek: 0, start: 0,
-    proves: 'Constant 23.976 fps libx264 encode of 66 s: every forced keyframe opens a segment; the ' +
-      'frame-count-GOP keyframe one frame before most boundaries (frame 143, 287, ...) is a 1-frame ' +
-      'sync-first fragment that joins the earlier segment.',
+    proves: 'Constant 23.976 fps libx264 encode of 66 s under the verified-encoder GOP of ceil(6 x 23.976) + 1 = ' +
+      '145 frames: every forced keyframe (frames 0, 144, 288, ..., 1007, 1151, ...) opens a segment and the ' +
+      'frame-count GOP never fires, so every segment holds exactly one keyframe-first fragment.',
     oracles: [
       oracle('01-encode-cfr.hls-recipe', 'hls-recipe'),
       oracle('01-encode-cfr.video-only', 'pipe-recipe', { audio: false }),
@@ -61,11 +61,13 @@ const FIXTURES = [
   {
     name: '01-encode-cfr-seek30', source: 'cfr.mp4', mode: 'encode', encoder: 'libx264', seek: 30, start: 5,
     proves: 'An encoded seek (-ss 30) under -r without -fps_mode starts at the seek point (30.030 s, ' +
-      "segment 5), pads nothing from zero, and has no preroll; its segment starts equal the start-0 recording's.",
+      'segment 5), pads nothing from zero, and has no preroll. force_key_frames measures t from the run\'s ' +
+      'first frame, so from segment 7 on its forced keyframes sit one frame after the start-0 recording\'s ' +
+      '(42.042 s against 42.0003 s), inside the same intervals.',
     oracles: [
-      oracle('01-encode-cfr-seek30.hls-recipe', 'hls-recipe', { expect: false }),
-      oracle('01-encode-cfr-seek30.video-only', 'pipe-recipe', { audio: false, expect: false }),
-      oracle('01-encode-cfr.hls-recipe', 'hls-recipe', { reference: '01-encode-cfr', restrict: true }),
+      oracle('01-encode-cfr-seek30.hls-recipe', 'hls-recipe'),
+      oracle('01-encode-cfr-seek30.video-only', 'pipe-recipe', { audio: false }),
+      oracle('01-encode-cfr.hls-recipe', 'hls-recipe', { reference: '01-encode-cfr', restrict: true, expect: false }),
     ],
   },
   {
@@ -82,10 +84,10 @@ const FIXTURES = [
     name: '03-encode-vfr', source: 'vfr.mp4', mode: 'encode', encoder: 'libx264', seek: 0, start: 0,
     proves: 'Variable-frame-rate source (avg 16.2 fps on a 23.976 grid) encoded with libx264 under ' +
       '-r 23.976 and no -fps_mode: constant-rate output starting at the first source frame (41.7 ms), ' +
-      'a keyframe in every interval.',
+      'one keyframe in every interval.',
     oracles: [
-      oracle('03-encode-vfr.hls-recipe', 'hls-recipe', { expect: false }),
-      oracle('03-encode-vfr.video-only', 'pipe-recipe', { audio: false, expect: false }),
+      oracle('03-encode-vfr.hls-recipe', 'hls-recipe'),
+      oracle('03-encode-vfr.video-only', 'pipe-recipe', { audio: false }),
     ],
   },
   {
@@ -103,8 +105,8 @@ const FIXTURES = [
       'container start (the AAC priming frame, 21.3 ms before the first video frame), so the first ' +
       'fragment is segment 0, not segment 2.',
     oracles: [
-      oracle('05-encode-late-start.hls-recipe', 'hls-recipe', { expect: false }),
-      oracle('05-encode-late-start.video-only', 'pipe-recipe', { audio: false, expect: false }),
+      oracle('05-encode-late-start.hls-recipe', 'hls-recipe'),
+      oracle('05-encode-late-start.video-only', 'pipe-recipe', { audio: false }),
     ],
   },
   {
@@ -145,11 +147,11 @@ const FIXTURES = [
   },
   {
     name: '09-svtav1-vfr', source: 'vfr.mp4', mode: 'encode', encoder: 'libsvtav1', seek: 0, start: 0,
-    proves: 'Irregular variable-frame-rate source through SVT-AV1 with -r 23.976, a frame-count GOP of ' +
-      'floor(6 x 23.976) = 143 and time-based forced keyframes: a keyframe in every interval, on the same ' +
-      'frames libx264 chose in 03.',
+    proves: 'Irregular variable-frame-rate source through SVT-AV1 with -r 23.976, the verified-encoder GOP of ' +
+      '145 frames and time-based forced keyframes: one keyframe in every interval, on the same frames libx264 ' +
+      'chose in 03.',
     oracles: [
-      oracle('09-svtav1-vfr.video-only', 'pipe-recipe', { audio: false, expect: false }),
+      oracle('09-svtav1-vfr.video-only', 'pipe-recipe', { audio: false }),
       oracle('09-svtav1-vfr.hls-recipe', 'hls-recipe', { expect: false }),
       oracle('09-svtav1-vfr.pipe-keyframes-with-audio', 'pipe-recipe', { expect: true }),
     ],
@@ -157,10 +159,10 @@ const FIXTURES = [
   {
     name: '09-svtav1-vfr-seek30', source: 'vfr.mp4', mode: 'encode', encoder: 'libsvtav1', seek: 30, start: 5,
     proves: 'The same SVT-AV1 recipe after -ss 30: starts at the first source frame after the seek point ' +
-      '(30.072 s), pads nothing from zero, keyframe in every interval.',
+      '(30.072 s), pads nothing from zero, one keyframe in every interval.',
     oracles: [
-      oracle('09-svtav1-vfr-seek30.video-only', 'pipe-recipe', { audio: false, expect: false }),
-      oracle('09-svtav1-vfr-seek30.hls-recipe', 'hls-recipe', { expect: false }),
+      oracle('09-svtav1-vfr-seek30.video-only', 'pipe-recipe', { audio: false }),
+      oracle('09-svtav1-vfr-seek30.hls-recipe', 'hls-recipe'),
     ],
   },
   {
@@ -169,6 +171,41 @@ const FIXTURES = [
       'fragment at 20.02 s (segment 3) closes segment 1, which is delivered complete with segment 0, and ' +
       'then grouping fails with a skipped segment number; nothing from that fragment on is grouped.',
     oracles: [oracle('10-copy-gop-exceeds-period.hls-recipe', 'hls-recipe', { expect: false })],
+  },
+  {
+    name: '11-encode-cfr-floored-gop', source: 'cfr.mp4', mode: 'encode', encoder: 'libx264', seek: 0, start: 0,
+    proves: 'The first 30 s of 01 under the floored GOP of floor(6 x 23.976) = 143 frames that ADR 0037 keeps for ' +
+      'an encoder not verified to honour forced keyframes: the GOP keyframe one frame before every later boundary ' +
+      '(frames 143, 287, 431, 575) and on the last frame (719) is a 1-frame keyframe-first fragment that joins the ' +
+      'earlier segment, so each segment holds two keyframes and still groups on the grid.',
+    oracles: [],
+  },
+  {
+    name: '12-encode-cfr-missed-forced-keyframe', source: 'cfr.mp4', mode: 'encode', encoder: 'libx264', seek: 0, start: 0,
+    proves: 'libx264 over the first 30 s under the verified GOP of 145 frames with the forced keyframe for 18 s ' +
+      'suppressed: the GOP count restarts at the forced keyframe at 12.012 s (frame 288), so the backstop keyframe ' +
+      'lands 145 frames later at 18.060 s (frame 433), inside interval 3, and no segment number is skipped.',
+    oracles: [],
+  },
+  {
+    name: '12-svtav1-cfr-missed-forced-keyframe', source: 'cfr.mp4', mode: 'encode', encoder: 'libsvtav1', seek: 0, start: 0,
+    proves: 'The same suppressed forced keyframe through SVT-AV1: its GOP count also restarts at the forced keyframe ' +
+      'at frame 288, and the backstop keyframe lands at frame 433 (18.060 s), inside interval 3.',
+    oracles: [],
+  },
+  {
+    name: '13-x265-cfr', source: 'cfr.mp4', mode: 'encode', encoder: 'libx265', seek: 0, start: 0,
+    proves: 'libx265 with the worker\'s arguments (open GOP by default) under the 145-frame GOP: it honours every ' +
+      'time-based forced keyframe (frames 144, 288, 432, 576), but despite -forced-idr 1 each one is a CRA ' +
+      '(NAL type 21); only frame 0 is an IDR (type 20). No RASL picture follows them here.',
+    oracles: [],
+  },
+  {
+    name: '13-x265-cfr-missed-forced-keyframe', source: 'cfr.mp4', mode: 'encode', encoder: 'libx265', seek: 0, start: 0,
+    proves: 'libx265 with the forced keyframe for 18 s suppressed: its GOP count restarts at the forced keyframe at ' +
+      'frame 288 and the backstop lands at frame 433 (18.060 s), inside interval 3, but as a CRA whose RASL ' +
+      'picture (frame 432) references the previous GOP, so the segment it opens cannot be decoded on its own.',
+    oracles: [],
   },
 ];
 
@@ -185,7 +222,9 @@ const RECIPE =
   'ffmpeg -y [-ss S] -i SRC -map 0:v:0 -map 0:a:0 -map_metadata -1 -map_chapters -1 -copyts ' +
   '-avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128 <codec args> [-bsf:a aac_adtstoasc ' +
   'when copying AAC] [encode: -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 expr:gte(t,n_forced*6) ' +
-  '-g:v:0 143 (-keyint_min:v:0 143 for SVT-AV1) (-sc_threshold:v:0 0 for libx264)] -threads 1 -f mp4 -movflags ' +
+  '-g:v:0 145 = ceil(6 x 23.976) + 1 for an encoder verified to honour forced keyframes (libx264, SVT-AV1), else ' +
+  '143 = floor(6 x 23.976) (fixture 11) (-keyint_min:v:0 with the same value for SVT-AV1) (-sc_threshold:v:0 0 for ' +
+  'libx264)] [fixtures 12 and 13 only: -t 30] -threads 1 -f mp4 -movflags ' +
   'cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont -frag_duration 1000000 pipe:1';
 
 const RULES =

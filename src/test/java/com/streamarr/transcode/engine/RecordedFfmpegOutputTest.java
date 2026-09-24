@@ -228,6 +228,63 @@ class RecordedFfmpegOutputTest {
         .containsExactlyElementsOf(IntStream.rangeClosed(firstSegment, 10).boxed().toList());
   }
 
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({
+    "01-encode-cfr.fmp4",
+    "01-encode-cfr-seek30.fmp4",
+    "03-encode-vfr.fmp4",
+    "09-svtav1-vfr.fmp4",
+    "09-svtav1-vfr-seek30.fmp4"
+  })
+  @DisplayName(
+      "Should start every segment with one keyframe when a verified encoder's GOP backstop exceeds"
+          + " the period")
+  void shouldStartEverySegmentWithOneKeyframeWhenAVerifiedEncodersGopBackstopExceedsThePeriod(
+      String file) throws IOException {
+    assertThat(group(recording(file)).delivered())
+        .isNotEmpty()
+        .allSatisfy(segment -> assertThat(syncFirstFragmentCount(segment)).isOne());
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep both keyframes in one segment when an unverified encoder's floored GOP fires one"
+          + " frame early")
+  void shouldKeepBothKeyframesInOneSegmentWhenAnUnverifiedEncodersFlooredGopFiresOneFrameEarly()
+      throws IOException {
+    var grouping = group(recording("11-encode-cfr-floored-gop.fmp4"));
+
+    assertThat(grouping.delivered())
+        .extracting(MediaSegment::sequenceNumber)
+        .containsExactly(0, 1, 2, 3, 4);
+    assertThat(grouping.delivered())
+        .allSatisfy(segment -> assertThat(syncFirstFragmentCount(segment)).isEqualTo(2));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({
+    "12-encode-cfr-missed-forced-keyframe.fmp4",
+    "12-svtav1-cfr-missed-forced-keyframe.fmp4",
+    "13-x265-cfr-missed-forced-keyframe.fmp4"
+  })
+  @DisplayName(
+      "Should open the interval of a missed forced keyframe at the GOP backstop 145 frames after the"
+          + " previous keyframe")
+  void shouldOpenTheIntervalOfAMissedForcedKeyframeAtTheGopBackstop(String file)
+      throws IOException {
+    var grouping = group(recording(file));
+    var frame = 1001;
+
+    assertThat(grouping.failure()).isEmpty();
+    assertThat(cutPoints(grouping))
+        .containsExactly(
+            new CutPoint(0, 0),
+            new CutPoint(1, 144L * frame),
+            new CutPoint(2, 288L * frame),
+            new CutPoint(3, (288L + 145) * frame),
+            new CutPoint(4, 576L * frame));
+  }
+
   @Test
   @DisplayName(
       "Should deliver the segment the skipping keyframe closed, then fail, when source keyframes are"

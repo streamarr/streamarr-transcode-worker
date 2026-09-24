@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -77,7 +77,9 @@ describe('offline expectation check', () => {
     );
 
     assert.equal(agreeing.status, 0, agreeing.stderr);
-    assert.match(agreeing.stdout, /expected\.json agrees with all 13 recordings/);
+    const recordings = readdirSync(FIXTURES).filter((file) => file.endsWith('.fmp4')).length;
+    assert.ok(recordings > 0);
+    assert.match(agreeing.stdout, new RegExp(`expected\\.json agrees with all ${recordings} recordings`));
     assert.equal(drifted.status, 1);
     assert.equal(drifted.stderr, 'DRIFT 01-encode-cfr: byteLength in expected.json does not match the recording\n');
   });
