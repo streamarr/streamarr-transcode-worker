@@ -125,11 +125,12 @@ describe('fmp4 box reader', () => {
       ],
       firstSampleFlags: SYNC,
     };
-    const stream = streamOf(initialization(), audioFragment({ decodeTime: 0 }), fragment({ trackId: 1, decodeTime: 1001, runs: [run] }));
+    const bytes = Buffer.concat([initialization(), audioFragment({ decodeTime: 0 }), fragment({ trackId: 1, decodeTime: 1001, runs: [run] })]);
+    const payload = bytes.length - 7;
 
-    assert.deepEqual(videoSamples(stream), [
-      { presentationTime: 3003n, sync: true, size: 3, fragmentIndex: 1 },
-      { presentationTime: 2002n, sync: false, size: 4, fragmentIndex: 1 },
+    assert.deepEqual(videoSamples(readStream(bytes)), [
+      { presentationTime: 3003n, sync: true, size: 3, offset: payload, fragmentIndex: 1 },
+      { presentationTime: 2002n, sync: false, size: 4, offset: payload + 3, fragmentIndex: 1 },
     ]);
   });
 

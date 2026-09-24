@@ -5,11 +5,14 @@
 //   * fmp4.mjs reads the boxes of every recording;
 //   * grid.mjs applies ADR 0037's grouping rules to the pipe stream;
 //   * each HLS oracle run is read the same way, and each HLS segment's first video sample is mapped
-//     to the pipe recording by its ordinal in decode order (frame identity, checked by sample count
-//     and, where the runs share their video arguments, by every sample's byte size). Converting the
-//     HLS files' own timestamps is not reliable: with frag_discont the mp4 muxer rebases the first
-//     fragment on pts 0 and snaps every later fragment's dts to the running duration sum, so HLS
-//     segment timestamps drift from the source's on the variable-frame-rate copy;
+//     to the pipe recording by its ordinal in decode order. Where the runs share their video
+//     arguments (every copy, and every run with the pipe recipe's keyframe arguments), every packet
+//     must be byte-identical (size and SHA-256), which proves the ordinal names the same frame; the
+//     HLS recipe's own encodes use other keyframe arguments, so there only the packet count is
+//     checked (see evaluateOracle). Converting the HLS files' own timestamps is not reliable: with
+//     frag_discont the mp4 muxer rebases the first fragment on pts 0 and snaps every later
+//     fragment's dts to the running duration sum, so HLS segment timestamps drift from the
+//     source's on the variable-frame-rate copy;
 //   * analysis.mjs's hlsencCuts() models hlsenc.c's own cut rule (FFmpeg 8.1, lines 2440-2489) with
 //     its actual reference point, to show that every disagreement between the grid and the HLS
 //     muxer comes from where hlsenc measures from, not from the grouping.
@@ -208,7 +211,9 @@ function fixtureRecord({ fixture, record, source, pipe, work }) {
   const oracles = fixture.oracles.map((spec) =>
     evaluateOracle({
       fixture,
-      spec,
+      // A copy passes the source's packets through, and a pipe-recipe run encodes with the
+      // recording's own video arguments; the HLS recipe's encodes use other keyframe arguments.
+      spec: { ...spec, samePackets: fixture.mode === 'copy' || spec.flags === 'pipe-recipe' },
       reference: pipe.get(spec.reference ?? fixture.name),
       grouped: segments,
       source,

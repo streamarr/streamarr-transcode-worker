@@ -1,6 +1,7 @@
 // What expected.json records about one recording, derived from the recorded boxes alone, and the
 // comparison of a recording with the HLS muxer's run over the same source.
 
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { readFiles, signed, videoSamples, videoStart } from './fmp4.mjs';
@@ -65,7 +66,18 @@ export function loadSource(work, source) {
   return { start, startMicros, video, keyframes: sourceKeyframes(csv, num, den) };
 }
 
-/** An HLS muxer run: its segments' first video samples and every video sample, in order. */
+/** The SHA-256 of one sample's bytes in the stream that holds it. */
+export function packetDigest(stream, sample) {
+  return createHash('sha256')
+    .update(stream.data.subarray(sample.offset, sample.offset + sample.size))
+    .digest('hex');
+}
+
+function withDigests(stream) {
+  return videoSamples(stream).map((sample) => ({ ...sample, digest: packetDigest(stream, sample) }));
+}
+
+/** An HLS muxer run: its segments' first video samples and every video packet, in order. */
 export function readHls(folder) {
   const playlist = readFileSync(join(folder, 'stream.m3u8'), 'utf8');
   const sequence = Number(/#EXT-X-MEDIA-SEQUENCE:(\d+)/.exec(playlist)[1]);
@@ -90,7 +102,7 @@ export function readHls(folder) {
       ordinal: samples.length,
       ownPresentation: video.firstPresentationTime - edit,
     });
-    samples.push(...videoSamples(stream));
+    samples.push(...withDigests(stream));
   });
   return {
     exitStatus: Number(readFileSync(join(folder, 'exit-status'), 'utf8').trim()),
@@ -156,15 +168,24 @@ function hlsencReference({ spec, hls, ptsRaw, timescale }) {
 /**
  * Maps each HLS segment's first video sample onto the pipe recording by its ordinal in decode
  * order and compares the result with the grid, and models hlsenc's cuts from its own reference.
+ *
+ * The ordinal names the same frame in both runs only when both hold the same packets in the same
+ * order. A run that copies the stream or encodes with the recording's own video arguments
+ * (spec.samePackets) must hold byte-identical packets, and identicalPackets proves it packet by
+ * packet (size and SHA-256). A run that encodes with other keyframe arguments cannot: there only
+ * the packet count is checked, and the ordinal rests on both encoders receiving the same
+ * constant-rate frames in the same order.
  */
 export function evaluateOracle({ fixture, spec, reference, grouped, source, hls, period }) {
-  const refSamples = videoSamples(reference.stream);
+  const refSamples = withDigests(reference.stream);
   const timescale = reference.videoTimescale;
   const identity = {
     hlsVideoSamples: hls.samples.length,
     pipeVideoSamples: refSamples.length,
-    sampleSizesIdentical:
-      hls.samples.length === refSamples.length && hls.samples.every((sample, index) => sample.size === refSamples[index].size),
+    identicalPackets: hls.samples.filter(
+      (sample, index) => sample.size === refSamples[index]?.size && sample.digest === refSamples[index]?.digest,
+    ).length,
+    sharesVideoArguments: spec.samePackets,
   };
   if (hls.samples.length !== refSamples.length || hls.videoTimescale !== timescale) {
     throw new Error(`${spec.run}: not the same frames as ${reference.name}: ${JSON.stringify(identity)}`);
@@ -281,15 +302,29 @@ export function diagnostics(stream) {
   };
 }
 
+function packetViolations({ hlsVideoSamples, identicalPackets, sharesVideoArguments }) {
+  if (sharesVideoArguments && identicalPackets !== hlsVideoSamples) {
+    return [
+      `${hlsVideoSamples - identicalPackets} of ${hlsVideoSamples} video packets differ from the pipe recording, ` +
+        'whose video arguments it shares',
+    ];
+  }
+  if (!sharesVideoArguments && identicalPackets === hlsVideoSamples) {
+    return ["every video packet equals the pipe recording's, whose video arguments it does not share"];
+  }
+  return [];
+}
+
 function oracleViolations(fixture) {
-  return fixture.hlsOracles.flatMap((oracle) => [
-    ...(oracle.agrees === oracle.expectedToAgree
-      ? []
-      : [`${fixture.name} / ${oracle.hlsRun}: agrees=${pythonBoolean(oracle.agrees)}, expected ${pythonBoolean(oracle.expectedToAgree)}`]),
-    ...(oracle.hlsencModel.reproducesHlsCuts
-      ? []
-      : [`${fixture.name} / ${oracle.hlsRun}: the hlsenc model does not reproduce the HLS cuts`]),
-  ]);
+  return fixture.hlsOracles.flatMap((oracle) =>
+    [
+      ...(oracle.agrees === oracle.expectedToAgree
+        ? []
+        : [`agrees=${pythonBoolean(oracle.agrees)}, expected ${pythonBoolean(oracle.expectedToAgree)}`]),
+      ...packetViolations(oracle.frameIdentity),
+      ...(oracle.hlsencModel.reproducesHlsCuts ? [] : ['the hlsenc model does not reproduce the HLS cuts']),
+    ].map((violation) => `${fixture.name} / ${oracle.hlsRun}: ${violation}`),
+  );
 }
 
 function pythonBoolean(value) {

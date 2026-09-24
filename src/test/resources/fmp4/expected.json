@@ -178,7 +178,8 @@
           "frameIdentity": {
             "hlsVideoSamples": 1583,
             "pipeVideoSamples": 1583,
-            "sampleSizesIdentical": false
+            "identicalPackets": 140,
+            "sharesVideoArguments": false
           },
           "segments": [
             {
@@ -245,7 +246,8 @@
           "frameIdentity": {
             "hlsVideoSamples": 1583,
             "pipeVideoSamples": 1583,
-            "sampleSizesIdentical": true
+            "identicalPackets": 1583,
+            "sharesVideoArguments": true
           },
           "segments": [
             {
@@ -312,7 +314,8 @@
           "frameIdentity": {
             "hlsVideoSamples": 1583,
             "pipeVideoSamples": 1583,
-            "sampleSizesIdentical": true
+            "identicalPackets": 1583,
+            "sharesVideoArguments": true
           },
           "segments": [
             {
@@ -504,7 +507,8 @@
           "frameIdentity": {
             "hlsVideoSamples": 863,
             "pipeVideoSamples": 863,
-            "sampleSizesIdentical": false
+            "identicalPackets": 166,
+            "sharesVideoArguments": false
           },
           "segments": [
             {
@@ -572,7 +576,8 @@
           "frameIdentity": {
             "hlsVideoSamples": 863,
             "pipeVideoSamples": 863,
-            "sampleSizesIdentical": true
+            "identicalPackets": 863,
+            "sharesVideoArguments": true
           },
           "segments": [
             {
@@ -640,7 +645,8 @@
           "frameIdentity": {
             "hlsVideoSamples": 1583,
             "pipeVideoSamples": 1583,
-            "sampleSizesIdentical": false
+            "identicalPackets": 140,
+            "sharesVideoArguments": false
           },
           "segments": [
             {
@@ -867,7 +873,8 @@
           "frameIdentity": {
             "hlsVideoSamples": 1584,
             "pipeVideoSamples": 1584,
-            "sampleSizesIdentical": true
+            "identicalPackets": 1584,
+            "sharesVideoArguments": true
           },
           "segments": [
             {
@@ -934,7 +941,8 @@
           "frameIdentity": {
             "hlsVideoSamples": 1584,
             "pipeVideoSamples": 1584,
-            "sampleSizesIdentical": true
+            "identicalPackets": 1584,
+            "sharesVideoArguments": true
           },
           "segments": [
             {
@@ -1166,7 +1174,8 @@
           "frameIdentity": {
             "hlsVideoSamples": 1582,
             "pipeVideoSamples": 1582,
-            "sampleSizesIdentical": false
+            "identicalPackets": 172,
+            "sharesVideoArguments": false
           },
           "segments": [
             {
@@ -1279,7 +1288,8 @@
           "frameIdentity": {
             "hlsVideoSamples": 1582,
             "pipeVideoSamples": 1582,
-            "sampleSizesIdentical": true
+            "identicalPackets": 1582,
+            "sharesVideoArguments": true
           },
           "segments": [
             {
@@ -1581,7 +1591,8 @@
           "frameIdentity": {
             "hlsVideoSamples": 1068,
             "pipeVideoSamples": 1068,
-            "sampleSizesIdentical": true
+            "identicalPackets": 1068,
+            "sharesVideoArguments": true
           },
           "segments": [
             {
@@ -1654,7 +1665,8 @@
           "frameIdentity": {
             "hlsVideoSamples": 1068,
             "pipeVideoSamples": 1068,
-            "sampleSizesIdentical": true
+            "identicalPackets": 1068,
+            "sharesVideoArguments": true
           },
           "segments": [
             {
@@ -1852,7 +1864,8 @@
           "frameIdentity": {
             "hlsVideoSamples": 720,
             "pipeVideoSamples": 720,
-            "sampleSizesIdentical": false
+            "identicalPackets": 186,
+            "sharesVideoArguments": false
           },
           "segments": [
             {
@@ -1921,7 +1934,8 @@
           "frameIdentity": {
             "hlsVideoSamples": 720,
             "pipeVideoSamples": 720,
-            "sampleSizesIdentical": true
+            "identicalPackets": 720,
+            "sharesVideoArguments": true
           },
           "segments": [
             {
@@ -2126,7 +2140,8 @@
           "frameIdentity": {
             "hlsVideoSamples": 720,
             "pipeVideoSamples": 720,
-            "sampleSizesIdentical": true
+            "identicalPackets": 720,
+            "sharesVideoArguments": true
           },
           "segments": [
             {
@@ -2169,7 +2184,8 @@
           "frameIdentity": {
             "hlsVideoSamples": 720,
             "pipeVideoSamples": 720,
-            "sampleSizesIdentical": true
+            "identicalPackets": 720,
+            "sharesVideoArguments": true
           },
           "segments": [
             {
@@ -2321,7 +2337,8 @@
           "frameIdentity": {
             "hlsVideoSamples": 480,
             "pipeVideoSamples": 480,
-            "sampleSizesIdentical": false
+            "identicalPackets": 123,
+            "sharesVideoArguments": false
           },
           "segments": [
             {
@@ -2360,7 +2377,8 @@
           "frameIdentity": {
             "hlsVideoSamples": 480,
             "pipeVideoSamples": 480,
-            "sampleSizesIdentical": true
+            "identicalPackets": 480,
+            "sharesVideoArguments": true
           },
           "segments": [
             {
@@ -2601,7 +2619,8 @@
           "frameIdentity": {
             "hlsVideoSamples": 1583,
             "pipeVideoSamples": 1583,
-            "sampleSizesIdentical": true
+            "identicalPackets": 1583,
+            "sharesVideoArguments": true
           },
           "segments": [
             {
@@ -2668,7 +2687,8 @@
           "frameIdentity": {
             "hlsVideoSamples": 1583,
             "pipeVideoSamples": 1583,
-            "sampleSizesIdentical": true
+            "identicalPackets": 1583,
+            "sharesVideoArguments": true
           },
           "segments": [
             {
@@ -2892,7 +2912,8 @@
           "frameIdentity": {
             "hlsVideoSamples": 1583,
             "pipeVideoSamples": 1583,
-            "sampleSizesIdentical": true
+            "identicalPackets": 1583,
+            "sharesVideoArguments": true
           },
           "segments": [
             {
@@ -2939,7 +2960,8 @@
           "frameIdentity": {
             "hlsVideoSamples": 911,
             "pipeVideoSamples": 911,
-            "sampleSizesIdentical": true
+            "identicalPackets": 911,
+            "sharesVideoArguments": true
           },
           "segments": [
             {
@@ -3191,7 +3213,8 @@
           "frameIdentity": {
             "hlsVideoSamples": 1582,
             "pipeVideoSamples": 1582,
-            "sampleSizesIdentical": true
+            "identicalPackets": 1582,
+            "sharesVideoArguments": true
           },
           "segments": [
             {
@@ -3304,7 +3327,8 @@
           "frameIdentity": {
             "hlsVideoSamples": 1582,
             "pipeVideoSamples": 1582,
-            "sampleSizesIdentical": false
+            "identicalPackets": 749,
+            "sharesVideoArguments": false
           },
           "segments": [
             {
@@ -3422,7 +3446,8 @@
           "frameIdentity": {
             "hlsVideoSamples": 1582,
             "pipeVideoSamples": 1582,
-            "sampleSizesIdentical": true
+            "identicalPackets": 1582,
+            "sharesVideoArguments": true
           },
           "segments": [
             {
@@ -3614,7 +3639,8 @@
           "frameIdentity": {
             "hlsVideoSamples": 862,
             "pipeVideoSamples": 862,
-            "sampleSizesIdentical": true
+            "identicalPackets": 862,
+            "sharesVideoArguments": true
           },
           "segments": [
             {
@@ -3687,7 +3713,8 @@
           "frameIdentity": {
             "hlsVideoSamples": 862,
             "pipeVideoSamples": 862,
-            "sampleSizesIdentical": false
+            "identicalPackets": 691,
+            "sharesVideoArguments": false
           },
           "segments": [
             {
@@ -3858,7 +3885,8 @@
           "frameIdentity": {
             "hlsVideoSamples": 600,
             "pipeVideoSamples": 600,
-            "sampleSizesIdentical": true
+            "identicalPackets": 600,
+            "sharesVideoArguments": true
           },
           "segments": [
             {

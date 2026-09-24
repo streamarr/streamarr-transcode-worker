@@ -84,7 +84,8 @@ every invocation. Neither moves a keyframe or a cut. Nothing else differs from t
 - `endsWithAudioOnlyFragments` / `trailingAudioOnlyFragmentCount` describe fragments with no video
   `traf` after the last video sample.
 - `hlsOracles[]` holds the HLS muxer's segment starts mapped onto this recording, whether they agree,
-  and `hlsencModel` (see below). `sourceKeyframeCheck` (copy recordings) confirms that every recorded
+  `frameIdentity` (how many video packets equal the recording's, and whether the run shares its
+  video arguments) and `hlsencModel` (see below). `sourceKeyframeCheck` (copy recordings) confirms that every recorded
   keyframe is the source's own keyframe, at a media time equal to its source timestamp minus the
   container start.
 
@@ -124,9 +125,13 @@ For every fixture the same source was also run through the HLS muxer (`-f hls -h
 - `*.video-only`: the pipe recipe's own flags and keyframe arguments, video only.
 
 Each HLS segment's first video sample is mapped to the pipe recording by its ordinal in decode order.
-Frame identity is checked by equal sample counts in every oracle run, and by identical sample sizes
-wherever the two runs share their video arguments. The HLS files' own timestamps are not usable
-directly. With `frag_discont`, movenc "pretends the stream started at pts=0" (movenc.c 7091) and snaps
+Where the two runs share their video arguments (every stream copy, every `video-only` run and every
+`pipe-keyframes-with-audio` run), `frameIdentity.identicalPackets` shows every video packet identical
+in size and SHA-256, so the ordinal names the same frame, and the recorder fails when one differs.
+The HLS recipe's own encodes use other keyframe arguments, so their packets differ from the first
+GOP difference on: for them only the packet count is checked, and the mapping rests on both encoders
+receiving the same constant-rate frames in the same order. That is not checked frame by frame.
+The HLS files' own timestamps are not usable directly. With `frag_discont`, movenc "pretends the stream started at pts=0" (movenc.c 7091) and snaps
 each later fragment's dts to the running duration sum. So HLS segment timestamps lose the start
 offset (5a, 5b) and drift by a frame on the VFR B-frame copy (4).
 

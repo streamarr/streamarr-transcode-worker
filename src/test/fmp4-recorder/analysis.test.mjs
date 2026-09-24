@@ -17,7 +17,7 @@ import {
   sourceStart,
   violatedClaims,
 } from './analysis.mjs';
-import { readStream, videoStart } from './fmp4.mjs';
+import { readStream, videoSamples, videoStart } from './fmp4.mjs';
 import { Decimal } from './json.mjs';
 import { Rational } from './rational.mjs';
 import { NON_SYNC, SYNC, VIDEO, audioFragment, fragment, initialization, videoFragment } from './test-boxes.mjs';
@@ -183,7 +183,7 @@ describe('HLS oracle', () => {
   const gridCuts = grid.delivered.map((segment) => segment.fragments[0]);
   const keyframeAt = (ticks) =>
     stream.fragments.findIndex((fragment) => videoStart(fragment)?.firstPresentationTime === ticks);
-  const spec = { run: 'run', flags: 'pipe-recipe', audio: false, reference: null, restrict: false, expect: true };
+  const spec = { run: 'run', flags: 'pipe-recipe', audio: false, reference: null, restrict: false, expect: true, samePackets: true };
   const evaluate = (folder, overrides = {}) =>
     evaluateOracle({
       fixture: { name: reference.name, start: 0 },
@@ -201,7 +201,12 @@ describe('HLS oracle', () => {
 
     assert.equal(oracle.agrees, true);
     assert.deepEqual(oracle.mismatches, []);
-    assert.deepEqual(oracle.frameIdentity, { hlsVideoSamples: 1583, pipeVideoSamples: 1583, sampleSizesIdentical: true });
+    assert.deepEqual(oracle.frameIdentity, {
+      hlsVideoSamples: 1583,
+      pipeVideoSamples: 1583,
+      identicalPackets: 1583,
+      sharesVideoArguments: true,
+    });
     assert.equal(oracle.hlsOwnTimestampsMatchPipe, true);
     assert.equal(oracle.hlsencModel.reproducesHlsCuts, true);
     assert.deepEqual(oracle.hlsencModel.referenceOnZeroBasedTimelineSeconds, new Decimal(0));
@@ -244,6 +249,25 @@ describe('HLS oracle', () => {
     assert.match(oracle.flags, /no -start_at_zero/);
   });
 
+  it('counts a packet whose bytes differ at the same size as not identical', () => {
+    const folder = hlsOutput(gridCuts);
+    const path = join(folder, 'segment3.m4s');
+    const init = readFileSync(join(folder, 'init.mp4'));
+    const segment = readFileSync(path);
+    const [firstVideoSample] = videoSamples(readStream(Buffer.concat([init, segment])));
+    segment[firstVideoSample.offset - init.length] ^= 0xff;
+    writeFileSync(path, segment);
+    const oracle = evaluate(folder, { spec: { ...spec, samePackets: false } });
+
+    assert.deepEqual(oracle.frameIdentity, {
+      hlsVideoSamples: 1583,
+      pipeVideoSamples: 1583,
+      identicalPackets: 1582,
+      sharesVideoArguments: false,
+    });
+    assert.equal(oracle.agrees, true);
+  });
+
   it('refuses an HLS run that did not encode the same number of frames', () => {
     const folder = hlsOutput(gridCuts);
     writeFileSync(join(folder, 'stream.m3u8'), '#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:0\nsegment0.m4s\n');
@@ -259,8 +283,27 @@ describe('violated claims', () => {
         {
           name: 'f',
           hlsOracles: [
-            { hlsRun: 'r', agrees: false, expectedToAgree: true, hlsencModel: { reproducesHlsCuts: false } },
-            { hlsRun: 's', agrees: true, expectedToAgree: true, hlsencModel: { reproducesHlsCuts: true } },
+            {
+              hlsRun: 'r',
+              agrees: false,
+              expectedToAgree: true,
+              frameIdentity: { hlsVideoSamples: 3, identicalPackets: 2, sharesVideoArguments: true },
+              hlsencModel: { reproducesHlsCuts: false },
+            },
+            {
+              hlsRun: 's',
+              agrees: true,
+              expectedToAgree: true,
+              frameIdentity: { hlsVideoSamples: 3, identicalPackets: 3, sharesVideoArguments: false },
+              hlsencModel: { reproducesHlsCuts: true },
+            },
+            {
+              hlsRun: 't',
+              agrees: true,
+              expectedToAgree: true,
+              frameIdentity: { hlsVideoSamples: 3, identicalPackets: 0, sharesVideoArguments: false },
+              hlsencModel: { reproducesHlsCuts: true },
+            },
           ],
           sourceKeyframeCheck: { recordedKeyframesEqualSourceKeyframes: false },
           diagnostics: { everyKeyframeStartsAFragment: false },
@@ -278,7 +321,9 @@ describe('violated claims', () => {
 
     assert.deepEqual(violatedClaims(expected), [
       'f / r: agrees=False, expected True',
+      'f / r: 1 of 3 video packets differ from the pipe recording, whose video arguments it shares',
       'f / r: the hlsenc model does not reproduce the HLS cuts',
+      "f / s: every video packet equals the pipe recording's, whose video arguments it does not share",
       "f: a recorded keyframe is not the source's own keyframe",
       'f: a keyframe does not start a fragment',
       'initialization segments differ: same',

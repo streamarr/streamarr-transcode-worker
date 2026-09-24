@@ -370,6 +370,7 @@ export function readStream(data) {
     initBytes: initEnd === null ? data : data.subarray(0, initEnd),
     tracks,
     fragments,
+    data,
   };
 }
 
@@ -378,7 +379,7 @@ export function readFiles(paths) {
   return readStream(Buffer.concat(paths.map((path) => readFileSync(path))));
 }
 
-/** Every video sample in decode order: presentation time, sync, size and fragment index. */
+/** Every video sample in decode order: presentation time, sync, size, stream offset and fragment index. */
 export function videoSamples(stream) {
   const result = [];
   stream.fragments.forEach((fragment, index) => {
@@ -392,6 +393,7 @@ export function videoSamples(stream) {
           presentationTime: decode + BigInt(sample.compositionOffset),
           sync: isSync(sample.flags),
           size: sample.size,
+          offset: sample.offset,
           fragmentIndex: index,
         });
         decode += BigInt(sample.duration);
