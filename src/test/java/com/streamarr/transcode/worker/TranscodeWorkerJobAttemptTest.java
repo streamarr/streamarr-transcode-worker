@@ -450,10 +450,10 @@ class TranscodeWorkerJobAttemptTest {
       stopVariant(connection, job);
 
       assertThat(process.isAlive()).isTrue();
+      await().atMost(EVENT_LIMIT).until(() -> process.stdinText().equals("q"));
       assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
       process.exit();
       awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_STOPPED);
-      assertThat(process.stdinText()).isEqualTo("q");
       assertThat(process.wasDestroyedForcibly()).isFalse();
     }
   }

@@ -16,6 +16,7 @@ import com.streamarr.transcode.engine.RecordingSegmentSink.Accepted;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
@@ -41,6 +42,16 @@ class ProducerTest {
   private static final UUID JOB_ATTEMPT_ID =
       UUID.fromString("0f6a3a9e-4c6b-4f59-9d0e-1c2b3a4d5e6f");
   private static final long SERVER_SEGMENT_CAP_BYTES = 16L * 1024 * 1024;
+  private static final int NEARLY_CAPPED_FRAGMENT_PAYLOAD = 5 * 1024 * 1024;
+
+  // Where the reader of nearlyCappedSegments() stops while the first segment awaits acceptance:
+  // before the body of the third segment's first mdat, which the budget cannot admit.
+  private static final int NEARLY_CAPPED_BUDGET_STOP =
+      IsoBoxes.ftyp().length
+          + IsoBoxes.videoAndAudioMoov().length
+          + 6 * keyframeFragment(0).length
+          + keyframeMoof(48_000).length
+          + 8;
 
   private final RecordingSegmentSink sink = new RecordingSegmentSink();
 
@@ -105,6 +116,77 @@ class ProducerTest {
     assertThat(producer.outcome()).isNotDone();
     sink.release();
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+  }
+
+  @Test
+  @DisplayName(
+      "Should assemble the next segment while one awaits acceptance and stop reading when that"
+          + " segment closes too")
+  void shouldAssembleTheNextSegmentWhileOneAwaitsAcceptanceAndStopReadingWhenThatSegmentCloses() {
+    var recording = recording(ENCODED_RECORDING);
+    var recorded = bytesOf(ENCODED_RECORDING);
+    var process = ScriptedProcess.builder().output(recorded).build();
+    sink.holding(1);
+    var firstThirdSegmentFragment = offsetOfMediaSegment(recording, 2);
+    var closingFragmentEnd =
+        firstThirdSegmentFragment + fragmentLengthAt(recorded, firstThirdSegmentFragment);
+
+    var producer = producerFor(process, recording).start();
+
+    awaiting().until(() -> process.bytesTaken() == closingFragmentEnd);
+    await()
+        .during(Duration.ofMillis(200))
+        .atMost(OUTCOME_LIMIT)
+        .until(() -> process.bytesTaken() == closingFragmentEnd);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+    sink.release();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(sink.accepted()).containsExactlyElementsOf(expectedDeliveries(recording));
+  }
+
+  @Test
+  @DisplayName(
+      "Should hold no more than two segment caps of output and block FFmpeg on the pipe when a"
+          + " segment awaits acceptance and the next approaches the cap")
+  void shouldHoldNoMoreThanTwoSegmentCapsAndBlockFfmpegWhenTheBudgetIsFull() {
+    var process = ScriptedProcess.builder().output(nearlyCappedSegments()).build();
+    sink.holding(1);
+
+    var producer = producerOfOneSecondSegments(process).start();
+
+    awaiting().until(() -> process.bytesTaken() == NEARLY_CAPPED_BUDGET_STOP);
+    await()
+        .during(Duration.ofMillis(200))
+        .atMost(OUTCOME_LIMIT)
+        .until(() -> process.bytesTaken() == NEARLY_CAPPED_BUDGET_STOP);
+    assertThat(
+            (long) process.bytesTaken()
+                - IsoBoxes.ftyp().length
+                - IsoBoxes.videoAndAudioMoov().length)
+        .isLessThanOrEqualTo(2 * SERVER_SEGMENT_CAP_BYTES);
+    sink.release();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(sink.acceptedNames())
+        .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
+  }
+
+  @Test
+  @DisplayName(
+      "Should discard the rest of the output and let FFmpeg exit when stopped while the budget is"
+          + " full")
+  void shouldDiscardTheRestOfTheOutputAndLetFfmpegExitWhenStoppedWhileTheBudgetIsFull() {
+    var process = ScriptedProcess.builder().output(nearlyCappedSegments()).build();
+    sink.holding(1);
+    var producer = producerOfOneSecondSegments(process).gracePeriod(Duration.ofMinutes(10)).start();
+    awaiting().until(() -> process.bytesTaken() == NEARLY_CAPPED_BUDGET_STOP);
+
+    producer.stop();
+
+    assertThat(producer.outcome()).isCompletedWithValue(new Stopped());
+    assertThat(process.hasReadToEndOfOutput()).isTrue();
+    assertThat(process.wasDestroyedForcibly()).isFalse();
+    assertThat(sink.wasCancelled()).isTrue();
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
   }
 
   @Test
@@ -687,9 +769,64 @@ class ProducerTest {
 
   // An offset inside the first fragment of the third media segment, before it is complete.
   private static int insideThirdMediaSegment(Recording recording) {
-    var firstTwoSegments =
-        recording.segments().stream().limit(2).mapToLong(SegmentSummary::byteLength).sum();
-    return Math.toIntExact(recording.initializationSegment().byteLength() + firstTwoSegments + 10);
+    return offsetOfMediaSegment(recording, 2) + 10;
+  }
+
+  // Where the media segment at this position starts in a recording without preroll.
+  private static int offsetOfMediaSegment(Recording recording, int position) {
+    var earlierSegments =
+        recording.segments().stream().limit(position).mapToLong(SegmentSummary::byteLength).sum();
+    return Math.toIntExact(recording.initializationSegment().byteLength() + earlierSegments);
+  }
+
+  // The length of the moof at this offset and the mdat that follows it.
+  private static int fragmentLengthAt(byte[] output, int offset) {
+    var buffer = ByteBuffer.wrap(output);
+    var moofLength = buffer.getInt(offset);
+    return moofLength + buffer.getInt(offset + moofLength);
+  }
+
+  // Three 1 s segments of three 5 MiB keyframe fragments each, nearly the segment cap: while the
+  // first awaits acceptance, the second fills the rest of the budget.
+  private static byte[] nearlyCappedSegments() {
+    return IsoBoxes.concat(
+        IsoBoxes.ftyp(),
+        IsoBoxes.videoAndAudioMoov(),
+        keyframeFragment(0),
+        keyframeFragment(6_000),
+        keyframeFragment(12_000),
+        keyframeFragment(24_000),
+        keyframeFragment(30_000),
+        keyframeFragment(36_000),
+        keyframeFragment(48_000));
+  }
+
+  private Producer.ProducerBuilder producerOfOneSecondSegments(ScriptedProcess process) {
+    return Producer.builder()
+        .launcher((command, jobAttemptId) -> process)
+        .command(List.of("ffmpeg"))
+        .jobAttemptId(JOB_ATTEMPT_ID)
+        .periodSeconds(1)
+        .startSequenceNumber(0)
+        .gracePeriod(Duration.ofSeconds(5))
+        .sink(sink);
+  }
+
+  private static byte[] keyframeFragment(long presentationTime) {
+    return keyframeFragment(presentationTime, NEARLY_CAPPED_FRAGMENT_PAYLOAD);
+  }
+
+  private static byte[] keyframeFragment(long presentationTime, int mediaDataPayload) {
+    return IsoBoxes.concat(keyframeMoof(presentationTime), IsoBoxes.mdat(mediaDataPayload));
+  }
+
+  // A moof whose single video sample is a keyframe at this time in the 24 kHz video timescale.
+  private static byte[] keyframeMoof(long presentationTime) {
+    return IsoBoxes.moof(
+        IsoBoxes.videoTraf()
+            .baseMediaDecodeTime(presentationTime)
+            .firstSampleFlags(IsoBoxes.SYNC_SAMPLE_FLAGS)
+            .build());
   }
 
   // The output without the last bytes of its final box.

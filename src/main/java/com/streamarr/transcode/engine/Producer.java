@@ -3,7 +3,10 @@ package com.streamarr.transcode.engine;
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.engine.AttemptOutcome.Failed;
 import com.streamarr.transcode.engine.AttemptOutcome.Stopped;
-import com.streamarr.transcode.engine.SegmentAssembler.Closing;
+import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
+import com.streamarr.transcode.engine.GroupingOutcome.NothingClosed;
+import com.streamarr.transcode.engine.GroupingOutcome.SegmentClosed;
+import com.streamarr.transcode.engine.GroupingOutcome.SegmentNumberSkipped;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.time.Duration;
@@ -12,14 +15,21 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 import lombok.Builder;
 import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * Owns one job attempt's FFmpeg process: reads its fragmented MP4 output on a virtual thread,
+ * Owns one job attempt's FFmpeg process: reads its fragmented MP4 output on a virtual thread and
  * groups the fragments into media segments, delivers the initialization segment and then each media
- * segment to the sink, and settles the attempt's outcome once FFmpeg has exited.
+ * segment to the sink on a second virtual thread while it assembles the next, and settles the
+ * attempt's outcome once FFmpeg has exited.
+ *
+ * <p>The producer holds at most two segment caps of FFmpeg's output: the segment awaiting the
+ * sink's acceptance and what the reader holds for the next. It admits each box's bytes before it
+ * reads them, so when the budget is full, or when a second segment closes while the first still
+ * awaits acceptance, the reader stops reading and the pipe holds FFmpeg back.
  */
 @Slf4j
 public final class Producer {
@@ -28,33 +38,37 @@ public final class Producer {
   // and the grouper assembles no media segment above it.
   private static final long MAXIMUM_SEGMENT_BYTES = 16L * 1024 * 1024;
 
+  // One segment awaiting acceptance and one assembling.
+  private static final long BUDGET_BYTES = 2 * MAXIMUM_SEGMENT_BYTES;
+
   private static final Duration ERROR_OUTPUT_WAIT = Duration.ofSeconds(1);
   private static final int ERROR_OUTPUT_DETAIL_LIMIT = 2000;
 
   private final Process process;
   private final StderrDrainer errorOutput;
   private final FragmentedMp4Reader reader;
-  private final SegmentAssembler assembler;
+  private final SegmentGrouper grouper;
   private final SegmentSink sink;
   private final Duration gracePeriod;
+  private final String threadName;
   private final CompletableFuture<AttemptOutcome> outcome = new CompletableFuture<>();
   private final Object lock = new Object();
 
-  // Guarded by lock.
-  private boolean stopRequested;
-  private boolean settled;
-  private Optional<DeliveryCancellation> deliveryInFlight = Optional.empty();
-
-  // Confined to the reader thread.
+  // Guarded by lock. The first outcome decided is the only one the producer settles.
+  private Optional<AttemptOutcome> decision = Optional.empty();
+  private Optional<Delivery> deliveryInFlight = Optional.empty();
+  private long readerHeldBytes;
   private boolean mediaSegmentDelivered;
 
   private Producer(Process process, Settings settings) {
     this.process = process;
     this.errorOutput = new StderrDrainer(process.getErrorStream());
-    this.reader = new FragmentedMp4Reader(process.getInputStream(), MAXIMUM_SEGMENT_BYTES);
-    this.assembler = new SegmentAssembler(settings.grouper());
+    this.reader =
+        new FragmentedMp4Reader(process.getInputStream(), MAXIMUM_SEGMENT_BYTES, this::admit);
+    this.grouper = settings.grouper();
     this.sink = settings.sink();
     this.gracePeriod = settings.gracePeriod();
+    this.threadName = "producer-" + settings.jobAttemptId();
   }
 
   /**
@@ -74,6 +88,7 @@ public final class Producer {
       @NonNull SegmentSink sink) {
     var settings =
         new Settings(
+            jobAttemptId,
             new SegmentGrouper(periodSeconds, startSequenceNumber, MAXIMUM_SEGMENT_BYTES),
             sink,
             gracePeriod);
@@ -86,8 +101,8 @@ public final class Producer {
 
     var producer = new Producer(process, settings);
     Thread.ofVirtual()
-        .name("producer-" + jobAttemptId)
-        .uncaughtExceptionHandler(producer::failUnexpectedly)
+        .name(producer.threadName)
+        .uncaughtExceptionHandler(producer::failReaderUnexpectedly)
         .start(producer::produce);
     return producer;
   }
@@ -102,14 +117,14 @@ public final class Producer {
   }
 
   /**
-   * Ends the attempt for good and returns once it has an outcome. Unless the attempt has already
-   * settled, the producer starts no further delivery, asks FFmpeg to quit, cancels the delivery in
+   * Ends the attempt for good and returns once it has an outcome. Unless the attempt already has an
+   * outcome, the producer starts no further delivery, asks FFmpeg to quit, cancels the delivery in
    * flight, discards the rest of its output, destroys FFmpeg when it has not exited within the
    * grace period, and settles the stop after FFmpeg has exited; a failure observed after the stop
    * is never reported.
    */
   public void stop() {
-    if (tryRecordStop()) {
+    if (tryDecide(new Stopped())) {
       requestQuit();
       cancelDeliveryInFlight();
       awaitExitWithinGracePeriod();
@@ -117,50 +132,6 @@ public final class Producer {
     }
 
     outcome.join();
-  }
-
-  private boolean tryRecordStop() {
-    synchronized (lock) {
-      if (settled || stopRequested) {
-        return false;
-      }
-
-      stopRequested = true;
-      return true;
-    }
-  }
-
-  private void cancelDeliveryInFlight() {
-    Optional<DeliveryCancellation> cancellation;
-    synchronized (lock) {
-      cancellation = deliveryInFlight;
-    }
-
-    cancellation.ifPresent(DeliveryCancellation::cancel);
-  }
-
-  // Empty once a stop is recorded, so that no delivery starts after it.
-  private Optional<DeliveryCancellation> tryStartDelivery() {
-    synchronized (lock) {
-      if (stopRequested) {
-        return Optional.empty();
-      }
-
-      deliveryInFlight = Optional.of(new DeliveryCancellation());
-      return deliveryInFlight;
-    }
-  }
-
-  private void endDelivery() {
-    synchronized (lock) {
-      deliveryInFlight = Optional.empty();
-    }
-  }
-
-  private boolean isStopRequested() {
-    synchronized (lock) {
-      return stopRequested;
-    }
   }
 
   private void requestQuit() {
@@ -182,52 +153,147 @@ public final class Producer {
       Thread.currentThread().interrupt();
     }
 
+    endProcessForcibly();
+  }
+
+  private void endProcessForcibly() {
     process.destroyForcibly();
     process.onExit().join();
   }
 
-  private void settle(AttemptOutcome settledOutcome) {
-    if (tryClaimSettlement(settledOutcome)) {
-      outcome.complete(settledOutcome);
-    }
-  }
-
-  private boolean tryClaimSettlement(AttemptOutcome settledOutcome) {
+  // Records the attempt's outcome unless another is already recorded; the caller that records it
+  // settles it once FFmpeg has exited.
+  private boolean tryDecide(AttemptOutcome decided) {
     synchronized (lock) {
-      // Once a stop is recorded, only the stop settles the attempt.
-      var preemptedByStop = stopRequested && !(settledOutcome instanceof Stopped);
-      if (settled || preemptedByStop) {
+      if (decision.isPresent()) {
         return false;
       }
 
-      settled = true;
+      decision = Optional.of(decided);
+      lock.notifyAll();
       return true;
+    }
+  }
+
+  private boolean isDecided() {
+    synchronized (lock) {
+      return decision.isPresent();
+    }
+  }
+
+  // Settles once no delivery is left in flight, so that nothing reaches the sink afterwards.
+  private void settle(AttemptOutcome decided) {
+    cancelDeliveryInFlight();
+    awaitWhile(() -> deliveryInFlight.isPresent());
+    outcome.complete(decided);
+  }
+
+  private void cancelDeliveryInFlight() {
+    Optional<Delivery> delivery;
+    synchronized (lock) {
+      delivery = deliveryInFlight;
+    }
+
+    delivery.map(Delivery::cancellation).ifPresent(DeliveryCancellation::cancel);
+  }
+
+  // Waits on lock until the condition, evaluated under lock, is false. Nothing interrupts the
+  // producer's own threads, and a stop's caller learns of an interrupt once the wait ends.
+  private void awaitWhile(BooleanSupplier condition) {
+    var interrupted = false;
+    synchronized (lock) {
+      while (condition.getAsBoolean()) {
+        try {
+          lock.wait();
+        } catch (InterruptedException _) {
+          interrupted = true;
+        }
+      }
+    }
+
+    if (interrupted) {
+      Thread.currentThread().interrupt();
     }
   }
 
   private void produce() {
     try {
-      outcomeOf(readAndDeliver()).ifPresent(this::settle);
+      conclude(readAndDeliver());
     } finally {
       errorOutput.close();
     }
   }
 
-  // Whatever escapes the reader thread still ends FFmpeg and settles the attempt.
-  private void failUnexpectedly(Thread readerThread, Throwable error) {
-    log.error("{} failed unexpectedly", readerThread.getName(), error);
-    outcomeAfterEndingProcess(new Failed(ProducerFailure.UNEXPECTED_ERROR, error.toString()))
-        .ifPresent(this::settle);
+  private void conclude(Ending ending) {
+    switch (ending) {
+      case EndOfOutput _ -> settleAtExitOnceAccepted();
+      case TruncatedOutput(var failure) -> settleAtExitOnceAccepted(failure);
+      case Abandoned(var failure) -> abandon(failure);
+      case Decided _ -> discardRemainingOutput();
+    }
   }
 
-  // Empty when the stop settles the attempt.
-  private Optional<AttemptOutcome> outcomeOf(Ending ending) {
-    return switch (ending) {
-      case EndOfOutput _ -> Optional.of(outcomeAtExit(outcomeOfCompleteOutput()));
-      case TruncatedOutput(var failure) -> Optional.of(outcomeAtExit(failure));
-      case Abandoned(var failure) -> outcomeAfterEndingProcess(failure);
-      case StopObserved _ -> discardRemainingOutput();
-    };
+  private void settleAtExitOnceAccepted() {
+    if (awaitAcceptanceOfDeliveryInFlight()) {
+      settleAtExit(outcomeOfCompleteOutput());
+    }
+  }
+
+  private void settleAtExitOnceAccepted(Failed failure) {
+    if (awaitAcceptanceOfDeliveryInFlight()) {
+      settleAtExit(failure);
+    }
+  }
+
+  private void settleAtExit(AttemptOutcome outcomeOnCleanExit) {
+    var atExit = outcomeAtExit(outcomeOnCleanExit);
+    if (tryDecide(atExit)) {
+      settle(atExit);
+    }
+  }
+
+  // The segment already in delivery is complete, so the reader lets it finish before it ends a
+  // failed attempt; a stop or another failure decided meanwhile takes over instead.
+  private void abandon(Failed failure) {
+    if (!awaitAcceptanceOfDeliveryInFlight() || !tryDecide(failure)) {
+      discardRemainingOutput();
+      return;
+    }
+
+    endProcessForcibly();
+    settle(failure);
+  }
+
+  // False when the attempt was decided while the delivery awaited acceptance.
+  private boolean awaitAcceptanceOfDeliveryInFlight() {
+    awaitWhile(() -> deliveryInFlight.isPresent() && decision.isEmpty());
+    return !isDecided();
+  }
+
+  private void failReaderUnexpectedly(Thread readerThread, Throwable error) {
+    log.error("{} failed unexpectedly", readerThread.getName(), error);
+    if (!tryFailWithProcessEnded(unexpected(error))) {
+      discardRemainingOutput();
+    }
+  }
+
+  private void failDeliveryUnexpectedly(Thread deliveryThread, Throwable error) {
+    log.error("{} failed unexpectedly", deliveryThread.getName(), error);
+    failDelivery(unexpected(error));
+  }
+
+  private static Failed unexpected(Throwable error) {
+    return new Failed(ProducerFailure.UNEXPECTED_ERROR, error.toString());
+  }
+
+  private boolean tryFailWithProcessEnded(Failed failure) {
+    if (!tryDecide(failure)) {
+      return false;
+    }
+
+    endProcessForcibly();
+    settle(failure);
+    return true;
   }
 
   private Ending readAndDeliver() {
@@ -237,58 +303,138 @@ public final class Producer {
       return endingOf(e);
     } catch (IOException e) {
       return new Abandoned(new Failed(ProducerFailure.OUTPUT_UNREADABLE, e.toString()));
+    } catch (AdmissionRefused _) {
+      return new Decided();
     }
   }
 
   private Ending deliverEachSegment() throws IOException {
     for (var unit = reader.next(); unit.isPresent(); unit = reader.next()) {
-      var interruption = deliverClosedSegment(assembler.accept(unit.orElseThrow()));
+      var interruption = deliverClosedSegment(unit.orElseThrow());
       if (interruption.isPresent()) {
         return interruption.orElseThrow();
       }
+
+      holdOnlyTheAssemblingSegment();
     }
 
-    return assembler.finish().flatMap(this::deliver).orElseGet(EndOfOutput::new);
+    return grouper
+        .finish()
+        .map(ProducedSegment::of)
+        .flatMap(this::handOff)
+        .orElseGet(EndOfOutput::new);
   }
 
   // Empty unless the unit ends reading, by closing a segment whose delivery ends it or by
-  // skipping a segment number. The skipping fragment closes a complete segment, which is delivered
-  // before the skip fails the attempt; a stop or a failed delivery ends reading first.
-  private Optional<Ending> deliverClosedSegment(Closing closing) {
-    var deliveryEnding = closing.closedSegment().flatMap(this::deliver);
-    if (deliveryEnding.isPresent()) {
-      return deliveryEnding;
-    }
-
-    return closing.failure().map(Producer::endingOf);
+  // skipping a segment number.
+  private Optional<Ending> deliverClosedSegment(Mp4Unit unit) {
+    return switch (unit) {
+      case InitializationSegment initializationSegment ->
+          handOff(ProducedSegment.of(initializationSegment));
+      case Fragment fragment -> deliverClosedBy(grouper.accept(fragment));
+    };
   }
 
-  // Empty once the sink has accepted the segment; otherwise why reading ends.
-  private Optional<Ending> deliver(ProducedSegment segment) {
-    var cancellation = tryStartDelivery();
-    if (cancellation.isEmpty()) {
-      return Optional.of(new StopObserved());
+  private Optional<Ending> deliverClosedBy(GroupingOutcome grouping) {
+    return switch (grouping) {
+      case NothingClosed _ -> Optional.empty();
+      case SegmentClosed(var segment) -> handOff(ProducedSegment.of(segment));
+      case SegmentNumberSkipped skipped -> deliverThenFail(skipped);
+    };
+  }
+
+  // The skipping fragment closes a complete segment, which is delivered before the skip fails the
+  // attempt; a stop or a failed delivery decided first ends reading instead.
+  private Optional<Ending> deliverThenFail(SegmentNumberSkipped skipped) {
+    var handOffEnding = skipped.closedSegment().map(ProducedSegment::of).flatMap(this::handOff);
+    if (handOffEnding.isPresent()) {
+      return handOffEnding;
     }
 
-    try {
-      sink.deliver(segment, cancellation.orElseThrow());
-    } catch (RuntimeException e) {
-      return Optional.of(
-          new Abandoned(new Failed(ProducerFailure.SEGMENT_NOT_ACCEPTED, segment + ": " + e)));
-    } finally {
-      endDelivery();
+    return Optional.of(endingOf(skipped.failure()));
+  }
+
+  // Admits a box's bytes while the reader's and the delivery's holdings fit in the budget.
+  private void admit(long boxBytes) {
+    awaitWhile(() -> decision.isEmpty() && heldBytes() + boxBytes > BUDGET_BYTES);
+    synchronized (lock) {
+      if (decision.isPresent()) {
+        throw new AdmissionRefused();
+      }
+
+      readerHeldBytes += boxBytes;
+    }
+  }
+
+  // Guarded by lock.
+  private long heldBytes() {
+    return readerHeldBytes
+        + deliveryInFlight.map(Delivery::segment).map(ProducedSegment::byteLength).orElse(0L);
+  }
+
+  // Whatever the grouper did not keep, such as preroll, is no longer held.
+  private void holdOnlyTheAssemblingSegment() {
+    synchronized (lock) {
+      readerHeldBytes = grouper.heldBytes();
+    }
+  }
+
+  // Starts the segment's delivery once the previous one was accepted; empty once it starts, and
+  // the attempt's end when the attempt is decided first.
+  private Optional<Ending> handOff(ProducedSegment segment) {
+    awaitWhile(() -> deliveryInFlight.isPresent() && decision.isEmpty());
+    Delivery delivery;
+    synchronized (lock) {
+      if (decision.isPresent()) {
+        return Optional.of(new Decided());
+      }
+
+      delivery = new Delivery(segment, new DeliveryCancellation());
+      deliveryInFlight = Optional.of(delivery);
+      readerHeldBytes -= segment.byteLength();
     }
 
-    if (segment instanceof ProducedSegment.Media) {
-      mediaSegmentDelivered = true;
-    }
-
+    Thread.ofVirtual()
+        .name(threadName + "-delivery")
+        .uncaughtExceptionHandler(this::failDeliveryUnexpectedly)
+        .start(() -> deliver(delivery));
     return Optional.empty();
+  }
+
+  private void deliver(Delivery delivery) {
+    var segment = delivery.segment();
+    try {
+      sink.deliver(segment, delivery.cancellation());
+    } catch (RuntimeException e) {
+      failDelivery(new Failed(ProducerFailure.SEGMENT_NOT_ACCEPTED, segment + ": " + e));
+      return;
+    }
+
+    endDelivery(segment instanceof ProducedSegment.Media);
+  }
+
+  // The failure is decided before the delivery ends, so the reader, waiting to hand off its next
+  // segment, cannot complete the attempt in between.
+  private void failDelivery(Failed failure) {
+    var decided = tryDecide(failure);
+    endDelivery(false);
+    if (decided) {
+      endProcessForcibly();
+      settle(failure);
+    }
+  }
+
+  private void endDelivery(boolean mediaSegmentAccepted) {
+    synchronized (lock) {
+      deliveryInFlight = Optional.empty();
+      mediaSegmentDelivered |= mediaSegmentAccepted;
+      lock.notifyAll();
+    }
   }
 
   // The output ends where it cannot be delivered; a truncated output has already ended.
   private static Ending endingOf(FragmentedMp4Exception exception) {
-    var failure = new Failed(ProducerFailure.of(exception.getReason()), exception.getMessage());
+    var failure = new Failed(failureOf(exception.getReason()), exception.getMessage());
     if (failure.reason() == ProducerFailure.TRUNCATED_OUTPUT) {
       return new TruncatedOutput(failure);
     }
@@ -296,10 +442,30 @@ public final class Producer {
     return new Abandoned(failure);
   }
 
+  private static ProducerFailure failureOf(Reason reason) {
+    return switch (reason) {
+      case END_OF_FILE_IN_BOX_HEADER, END_OF_FILE_IN_BOX_BODY, END_OF_FILE_AFTER_MOVIE_FRAGMENT ->
+          ProducerFailure.TRUNCATED_OUTPUT;
+      case EXCEEDS_SEGMENT_CAP -> ProducerFailure.SEGMENT_CAP_EXCEEDED;
+      case SKIPPED_SEGMENT_NUMBER -> ProducerFailure.SKIPPED_SEGMENT_NUMBER;
+      case UNSIZED_BOX,
+          MALFORMED_BOX,
+          SAMPLE_DATA_OUTSIDE_MDAT,
+          MISSING_INITIALIZATION_SEGMENT,
+          MISPLACED_INITIALIZATION_SEGMENT,
+          UNEXPECTED_BOX,
+          MULTIPLE_VIDEO_TRACKS,
+          PRESENTATION_TIME_REGRESSED ->
+          ProducerFailure.MALFORMED_OUTPUT;
+    };
+  }
+
   private AttemptOutcome outcomeOfCompleteOutput() {
-    if (!mediaSegmentDelivered) {
-      return new Failed(
-          ProducerFailure.NO_MEDIA_SEGMENT, "FFmpeg exited cleanly without a media segment");
+    synchronized (lock) {
+      if (!mediaSegmentDelivered) {
+        return new Failed(
+            ProducerFailure.NO_MEDIA_SEGMENT, "FFmpeg exited cleanly without a media segment");
+      }
     }
 
     return new Completed();
@@ -325,27 +491,14 @@ public final class Producer {
         + recentErrorOutput.substring(tailStart);
   }
 
-  // A stop in progress lets FFmpeg flush and quit rather than destroying it.
-  private Optional<AttemptOutcome> outcomeAfterEndingProcess(Failed failure) {
-    if (isStopRequested()) {
-      return discardRemainingOutput();
-    }
-
-    process.destroyForcibly();
-    process.onExit().join();
-    return Optional.of(failure);
-  }
-
-  // Reading to the end lets FFmpeg flush its last fragment and exit after a quit; the stop, not
-  // the reader, settles the attempt.
-  private Optional<AttemptOutcome> discardRemainingOutput() {
+  // Reading to the end lets FFmpeg flush its last fragment and exit after a quit; whoever decided
+  // the outcome settles it.
+  private void discardRemainingOutput() {
     try {
       process.getInputStream().transferTo(OutputStream.nullOutputStream());
     } catch (IOException _) {
-      // Nothing read after a stop matters.
+      // Nothing read after the attempt's outcome was decided matters.
     }
-
-    return Optional.empty();
   }
 
   // Why the producer stopped reading FFmpeg's output.
@@ -360,8 +513,18 @@ public final class Producer {
   // The attempt failed while FFmpeg may still be writing.
   private record Abandoned(Failed failure) implements Ending {}
 
-  // A stop was recorded before the next delivery.
-  private record StopObserved() implements Ending {}
+  // The attempt's outcome was decided elsewhere, by a stop or a failed delivery.
+  private record Decided() implements Ending {}
 
-  private record Settings(SegmentGrouper grouper, SegmentSink sink, Duration gracePeriod) {}
+  private record Delivery(ProducedSegment segment, DeliveryCancellation cancellation) {}
+
+  // Ends reading from inside the reader once the attempt's outcome is decided.
+  private static final class AdmissionRefused extends RuntimeException {
+    private AdmissionRefused() {
+      super(null, null, false, false);
+    }
+  }
+
+  private record Settings(
+      UUID jobAttemptId, SegmentGrouper grouper, SegmentSink sink, Duration gracePeriod) {}
 }

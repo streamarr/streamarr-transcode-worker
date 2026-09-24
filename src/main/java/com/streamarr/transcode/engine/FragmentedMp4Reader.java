@@ -16,6 +16,7 @@ final class FragmentedMp4Reader {
 
   private final InputStream stream;
   private final long maximumSegmentBytes;
+  private final BoxAdmission admission;
   private final byte[] headerBytes = new byte[BoxHeader.LARGE_LENGTH];
   private long position;
   private Optional<Movie> movie = Optional.empty();
@@ -25,6 +26,15 @@ final class FragmentedMp4Reader {
    *     rejects any box that would exceed it before allocating memory for that box
    */
   FragmentedMp4Reader(@NonNull InputStream stream, long maximumSegmentBytes) {
+    this(stream, maximumSegmentBytes, BoxAdmission.UNBOUNDED);
+  }
+
+  /**
+   * @param admission admits each box's bytes after the reader has checked the box against the cap
+   *     and before it allocates memory for the box
+   */
+  FragmentedMp4Reader(
+      @NonNull InputStream stream, long maximumSegmentBytes, @NonNull BoxAdmission admission) {
     if (maximumSegmentBytes <= 0 || maximumSegmentBytes > MAXIMUM_ARRAY_BYTES) {
       throw new IllegalArgumentException(
           "Segment cap must be between 1 and "
@@ -35,6 +45,7 @@ final class FragmentedMp4Reader {
 
     this.stream = stream;
     this.maximumSegmentBytes = maximumSegmentBytes;
+    this.admission = admission;
   }
 
   /**
@@ -175,6 +186,7 @@ final class FragmentedMp4Reader {
           header.type() + " declares " + header.size() + " bytes");
     }
 
+    admission.admit(header.size());
     var box = new byte[(int) header.size()];
     var headerLength = header.length();
     System.arraycopy(headerBytes, 0, box, 0, headerLength);
