@@ -74,7 +74,7 @@ probed frame rate passed as the worker would pass it (`r_frame_rate` 24000/1001 
 
 ```
 ffmpeg -hide_banner -nostdin -loglevel error
-  -y [-ss 30] -i SRC -map 0:v:0 -map 0:a:0 -map -0:s -map_metadata -1 -map_chapters -1
+  -y [-ss S] -i SRC -map 0:v:0 -map 0:a:0 -map -0:s -map_metadata -1 -map_chapters -1
   -copyts -avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128
   copy:   -c:v copy -c:a copy -bsf:a aac_adtstoasc
   x264:   -c:v libx264 -vf scale=-2:36 -b:v 6000 -maxrate 6000 -bufsize 12000 -c:a aac -ac 1 -b:a 8k
@@ -102,6 +102,11 @@ That is 12 for `cfr.mp4` (66.024 s), 11 for `vfr.mp4` and `irregular.mp4` (66 s)
 (30.051 s), 5 for `gop10.mp4` (25.025 s), 4 for `tail.mp4` (23.5 s) and 5 for the first 30 s that
 fixtures 11–13 read. A start-0 encode of `cfr.mp4` therefore receives `0,6,…,66` and its replacement
 attempt 1b `30,36,…,66`; a time past the last video frame forces nothing.
+
+A replacement attempt from segment K > 0 is a job that seeks to K × 6 (`seekSeconds`, 30 s for 1b,
+7b and 9b). A stream copy passes that seek to FFmpeg (`-ss 30`) and lands on the keyframe at or before
+it. An encode seeks one period earlier, to (K − 1) × 6 (`-ss 24`), and the grouper discards that
+period, segment K − 1, as preroll, exactly as it discards a stream copy's.
 
 The frame-count GOP follows ADR 0037's amended ceiling: 145 = ceil(6 × 23.976) + 1 for an encoder
 verified to honour time-based forced keyframes and to restart its GOP count at each one (libx264 and
@@ -133,6 +138,8 @@ order the worker's command builder passes them.
   after the initialization segment, from 0.
 - `ffmpegArguments` is the recording run's FFmpeg command line exactly as it ran, one argument per
   entry, fixture-only additions included (see [Recipe](#recipe)).
+- `seekSeconds` is the job's seek position, the start sequence number times the period; an encode's
+  FFmpeg seek is one period earlier (see [Recipe](#recipe)).
 - `mediaSegmentCount` is the media segment count the server advertises for what the recording read.
   An encode forces its keyframes at k × `period` for every k from `startSequenceNumber` up to it.
 - `recipeDeviation` says how a fixture deliberately departs from the worker's recipe, and is null
@@ -165,7 +172,7 @@ Timescale 24000 unless stated. `n@t` means segment n starts at t seconds.
 | # | File | Start seq. | Proves |
 |---|---|---|---|
 | 1 | `01-encode-cfr.fmp4` | 0 | Constant 23.976 fps libx264, 66 s, under the verified GOP of 145 frames. 11 segments: 0@0, 1@6.006 … 7@42.0003 … 10@60.018. The only keyframes are the forced ones, the first frame at or after each boundary (frames 0, 144, 288 … 864, 1007, 1151, 1295, 1439), so the GOP never fires and every segment holds one keyframe-first fragment. The list ends at 66 s, which no frame reaches. |
-| 1b | `01-encode-cfr-seek30.fmp4` | 5 | Encoded replacement attempt at `-ss 30`: starts at 30.030 s (segment 5), 863 frames, nothing padded from zero, no preroll. The list `30,36,…,66` forces the frames 1 forced (720, 864, 1007, 1151, 1295, 1439), so segments 5–10 start on exactly 1's ticks. Ends with one audio-only fragment. |
+| 1b | `01-encode-cfr-seek30.fmp4` | 5 | Encoded replacement attempt from segment 5, seeking one period early (`-ss 24`): starts at 24.024 s, 1007 frames, nothing padded from zero. Segment 4 (the first frame, a keyframe, and 5 non-sync fragments) is discarded preroll. The list `30,36,…,66` forces the frames 1 forced (720, 864, 1007, 1151, 1295, 1439), so every delivered segment, 5–10, starts on exactly 1's ticks. Ends with one audio-only fragment. |
 | 2 | `02-copy-irregular-keyframes.fmp4` | 0 | Timescale 12288 (24 fps). Keyframes only at 0, 6.5, 12, 18, 24.5, 30, 36.5, 42, 48, 54.5, 60 s. 11 segments, one keyframe each. Keyframes exactly on a boundary (12, 18, 30, 42, 48, 60 s) open that boundary's segment. |
 | 3 | `03-encode-vfr.fmp4` | 0 | VFR source (1068 frames, avg 16.2 fps on the 23.976 grid, first frame at 41.7 ms) encoded under `-r`: 1582 constant-rate frames, the same count as the HLS recipe's output. The list forces the first frame at or after each boundary (6.006, 12.012 … s, the same ticks as 1), exactly one keyframe in every interval, 11 segments. |
 | 4 | `04-copy-vfr-bframes.fmp4` | 0 | VFR stream copy with B-frames and one or two keyframes per interval. Keyframes at 5.922, 29.988, 47.922 and 59.976 s, just before a boundary, stay in the earlier segment. The keyframe meant for 17.95 s landed at 18.017 s (dropped frames) and opens segment 3. |
@@ -176,7 +183,7 @@ Timescale 24000 unless stated. `n@t` means segment n starts at t seconds.
 | 7b | `07-copy-seek30.fmp4` | 5 | Stream-copy replacement attempt at `-ss 30`. The seek lands on the keyframe at 28.028 s (segment 4 < 5). That keyframe fragment and the non-sync fragment after it (2 fragments) are discarded preroll. Segments 5–10 carry exactly 7's video samples at the same ticks. Their audio is the same packets at the same times, but each fragment starts one AAC frame earlier (see findings). |
 | 8 | (pairs over 1, 7, 9) | – | `initializationSegmentIdentityPairs`: `ftyp`+`moov` is byte-identical between the start-0 and seek recordings for libx264 (1348 B), stream copy (1348 B) and SVT-AV1 (1334 B). `initializationSegmentDifferencePairs`: the encode and copy initialization segments of the same source differ. Each initialization segment has a zero edit list and zero `trex` defaults. |
 | 9 | `09-svtav1-vfr.fmp4` | 0 | The VFR source through SVT-AV1 (145-frame GOP + the list): 1582 frames, exactly one keyframe in every interval, segment starts on exactly the ticks of 3 (libx264). SVT-AV1 honours the forced keyframe. No B-frame reordering, so composition offsets are 0. |
-| 9b | `09-svtav1-vfr-seek30.fmp4` | 5 | The same after `-ss 30`: starts at 30.0717 s (the first source frame after 30 s), 862 frames, no padding, no preroll, one keyframe per interval. Segments 6–10 start on 9's ticks; segment 5 starts one frame after 9's (30.0717 against 30.030 s, see Observations). |
+| 9b | `09-svtav1-vfr-seek30.fmp4` | 5 | The same as a replacement attempt from segment 5, seeking one period early (`-ss 24`): starts at 24.024 s, 1007 frames, no padding. Segment 4 (one keyframe) is discarded preroll. Every delivered segment, 5–10, starts on exactly 9's ticks, including segment 5 at 30.030 s, which a seek to 30 s itself missed (see Observations). |
 | 10 | `10-copy-gop-exceeds-period.fmp4` | 0 | A copy with a keyframe every 10.01 s. The sync-first fragment at 20.02 s (fragment 20) is segment 3 while 2 is expected. It closes segment 1 (10.01–20.02 s, fragments 10–19), so segments 0 and 1 are delivered, then grouping fails with `SKIPPED_SEGMENT_NUMBER` and fragment 20 onwards is never grouped. |
 | 11 | `11-encode-cfr-floored-gop.fmp4` | 0 | The unverified-encoder case: the first 30 s of 1 under the floored GOP of 143 frames. The GOP keyframe one frame before every later boundary (frames 143, 287, 431, 575) and on the last frame (719) is a 1-frame keyframe-first fragment inside the earlier interval, so each of the 5 segments holds two keyframes, and every segment still opens at its forced keyframe. |
 | 12 | `12-encode-cfr-missed-forced-keyframe.fmp4` | 0 | libx264, first 30 s, 145-frame GOP, 18 left out of the list. The GOP count restarts at the forced keyframe at frame 288 (12.012 s), so the backstop keyframe comes 145 frames later at frame 433 (18.060 s), inside interval 3: 0@0, 1@6.006, 2@12.012, 3@18.060, 4@24.024, no number skipped. |
@@ -220,8 +227,14 @@ frames.
 
 The list's times are absolute, so every attempt forces the same frame at a boundary it shares with
 another attempt, whatever its seek:
-- 1b's segments 5–10 and 9b's segments 6–10 start on exactly the ticks of 1's and 9's
-  (`RecordedFfmpegOutputTest`).
+- Every segment 1b and 9b deliver, 5–10, starts on exactly the ticks of 1's and 9's
+  (`RecordedFfmpegOutputTest`), and the producer discards their preroll, segment 4, and delivers
+  segment 5 from 30.030 s (`ProducerTest`).
+- The first boundary also needs the early seek. An earlier recording of 9b that sought to 30 s itself
+  started at 30.0717 s, the first source frame after 30 s, and so lacked the frame 9 holds at
+  30.030 s, a repeat of the source frame at 29.988 s. Seeking to 24 s starts on the frame at
+  24.024 s, and from 30 s on 9b's frames sit on 9's ticks. A verified encoder's preroll holds only its
+  own first keyframe (1b and 9b), because the list starts at segment 5 and the GOP outlasts a period.
 - 3, 5a and 9, whose first frame is at 41.7 ms, open every segment on the first frame at or after its
   boundary, the same ticks as 1.
 
@@ -254,13 +267,13 @@ Agreement, exact in ticks:
 | Fixture | hls-recipe | video-only | Note |
 |---|---|---|---|
 | 1, 2, 6, 7 | agrees | agrees | 1 also agrees with its pipe-keyframes-with-audio run |
-| 1b | differs on 7–10 | differs on 7–10 | agrees with the start-0 recording's HLS output on 5–10 (reference 2) |
+| 1b | – | differs on 7–10 | agrees with the start-0 recording's HLS output on 5–10 (reference 2) |
 | 3 | differs on 1–10 | differs on 1–10 | reference 1 |
 | 5a | differs on 1–5 | – | its pipe-keyframes-with-audio run differs on 1–5 (reference 1); a video-only run starts its video one frame earlier (see Observations) |
 | 5b | agrees (with `aac_adtstoasc` added; the HLS recipe's exact copy exits 255) | agrees | |
 | 7b | agrees with the start-0 recording's HLS output | – | its own HLS run is misaligned: 28.028, 34.034, 40.040 … as ADR 0037 describes |
 | 9 | differs on 1–10 | differs on 1–10 | hls-recipe is a different encode (4 below); video-only as reference 1; its pipe-keyframes-with-audio run agrees (reference 3) |
-| 9b | differs on 6–10 | differs on 6–10 | against 9's pipe-keyframes-with-audio run it differs only on segment 5, its first junction (see Observations) |
+| 9b | – | differs on 7–10 | agrees with 9's pipe-keyframes-with-audio run on 5–10 |
 | 4 | differs on segment 3 | differs on segment 3 | reference 1 below |
 | 10 | differs on segment 2 | – | the HLS muxer numbers sequentially and never skips |
 | 11, 12, 12b, 13, 13b, 13c | – | agrees | the first video frame is at zero, so hlsenc measures from the grid's zero |
@@ -268,7 +281,9 @@ Agreement, exact in ticks:
 The list anchors the pipe recipe's keyframes on the zero-based timeline, while hlsenc and the HLS
 recipe's expression both measure from the run's first frame. Before the list, the pipe recipe forced
 keyframes with the same expression, and the encodes that start after zero (3, 5a, 9) and the encoded
-seeks (1b, 9b) agreed with their own HLS runs; they now disagree for the reasons below.
+seeks (1b, 9b) agreed with their own HLS runs; they now disagree for the reasons below. The HLS
+recipe's own runs of a replacement attempt seek to 30 s and hold a period fewer frames than 1b and 9b,
+so the ordinal mapping cannot compare them; the start-0 runs stand in for them.
 
 Every disagreement is explained by where hlsenc measures from, or by an HLS run that encodes other
 keyframes, not by the grouping. `hlsencModel`
@@ -277,7 +292,7 @@ re-implements hlsenc.c's cut rule (FFmpeg n8.1 source, lines 2440–2489):
 - a later keyframe cuts when `pts − start_pts ≥ hls_time × number` in the video time base.
 
 It applies that rule to the HLS run's own keyframes, with `start_pts` = the pts of the first packet
-the muxer receives. The model reproduces the observed HLS cut list in all 35 HLS comparisons
+the muxer receives. The model reproduces the observed HLS cut list in all 33 HLS comparisons
 (`reproducesHlsCuts: true`). Its reference differs from the grid's zero in three ways:
 
 1. **First video frame after zero** (3, 4, 5a, 9: video starts 41 or 41.7 ms after the container
@@ -289,14 +304,12 @@ the muxer receives. The model reproduces the observed HLS cut list in all 35 HLS
    keyframes sit one frame after the list's (6.048 against 6.006 s) and hlsenc cuts at each of them,
    one frame after the grid (3's and 5a's hls-recipe runs). In 4, the source keyframe at 18.017 s lies
    inside [18, 18.041), so hlsenc cuts one keyframe later (19.018 s).
-2. **Seek recordings** (1b, 9b, 7b). hlsenc measures from the seek's first frame (30.030 s, 30.072 s,
-   28.028 s), not from the grid, and so does the HLS recipe's expression. 1b's list forces the frames
-   the start-0 recording forced, so 1b agrees with the start-0 HLS output on 5–10. Its own HLS runs
-   disagree from the first forced keyframe that lies less than 30 ms past its boundary (42.0003 s):
-   the video-only run cannot cut there and runs one behind from segment 7, and the hls-recipe run
-   forces frame 1008 where the list forces 1007. 9b's first frame is 71.7 ms past 30 s, so its runs
-   disagree from segment 6 on. For 7b this is exactly the misalignment ADR 0037 describes for a
-   replacement attempt.
+2. **Seek recordings** (1b, 9b, 7b). hlsenc measures from the seek's first frame (24.024 s for both
+   encodes, 28.028 s for 7b), not from the grid. 1b's and 9b's lists force the frames the start-0
+   recordings forced, so they agree with the start-0 HLS output on 5–10. Their own video-only runs
+   (`-start_number 4`, so that the preroll keeps its number) cut at 30.030 s and 36.036 s, 6.006 s and
+   12.012 s after 24.024 s, but not at 42.0003 s, 17.976 s after it, so they run one behind from
+   segment 7. For 7b this is exactly the misalignment ADR 0037 describes for a replacement attempt.
 3. **An audio reference read in the video time base.** When the first audio dts precedes the first
    video dts, `start_pts` is the audio packet's pts in audio ticks, yet hlsenc subtracts it in the
    video time base. It replaces it only if a video packet's raw pts is smaller (hlsenc.c 2450–2458).
@@ -335,13 +348,14 @@ Reproduced:
 - Start point and seeking:
   - `-start_at_zero` on an MPEG-TS source puts zero at the AAC priming frame. Video starts at
     0.021 s (copy) and 0.042 s (encode), exactly the ADR's numbers.
-  - An encoded seek to 30 s starts at 30.030 s. A stream-copy seek starts at 28.028 s, which is preroll.
+  - An encoded seek starts at the seek point: `-ss 24` starts 1b and 9b at 24.024 s. A stream-copy
+    seek to 30 s starts at 28.028 s, which is preroll.
   - The HLS recipe starts a stream-copy replacement attempt's segments at 28.028, 34.034 and 40.040 s.
 - Frame rate:
   - `-r` with no `-fps_mode` yields the same constant-rate frames as the HLS recipe on a VFR
     source (1582 = 1582).
-  - After a seek it pads nothing. An explicit `-fps_mode cfr` after `-ss 30` pads from zero
-    (1583 frames starting at 0, against 863 starting at 30.030 s).
+  - After a seek it pads nothing. An explicit `-fps_mode cfr` after `-ss 24` pads from zero
+    (1583 frames starting at 0, against 1007 starting at 24.024 s).
 - SVT-AV1:
   - It honours the time-based forced keyframe and places keyframes on exactly the frames libx264
     chose (9 = 3 tick for tick).
@@ -363,6 +377,9 @@ Did not reproduce exactly (mechanism in each case; none is a grouping error):
   does. Under the list the variable-frame-rate encode (3) still delivers 11 segments, one keyframe
   each, but on the first frame at or after each boundary, where hlsenc, measuring from 41.7 ms,
   cannot cut; an encoded seek likewise disagrees with its own HLS run (references 1 and 2).
+- **"… the encode restart starts at 30.030 s and needs no discard."** That describes a seek to the
+  boundary itself. The fixtures' encoded replacement attempts seek one period earlier and discard that
+  period, because the seek to the boundary dropped 9's frame at 30.030 s (see [Anchoring](#anchoring-on-the-zero-based-timeline)).
 - **"… including the one-frame-early 42.000 s."** The list forces the first frame at or after 42 s,
   42.0003 s (frame 1007), on every encode whose frames lie on the 23.976 grid from zero: 1, 1b, 3, 9
   and 9b. The expression had forced 42.042 s on the VFR source, whose first frame is at 41.7 ms.
@@ -388,10 +405,12 @@ settle what, if anything, changes because of them.
   forces frames 1007, 1151, 1295 and 1439 exactly as 1 does. Under the expression, which measured `t`
   from the attempt's first frame (30.030 s), 1b forced 1008, 1152, 1296 and 1440, and a playlist that
   joined the first attempt's segment 6 to the replacement attempt's segment 7 skipped frame 1007.
-- **An encoded replacement attempt's first boundary can still differ from the first attempt's** (9b
-  against 9). 9 fills 30.030 s with a repeat of the last source frame before 30 s, which 9b's
-  accurate seek to 30 s discards, so 9b's segment 5 starts at 30.0717 s, the first source frame after
-  30 s: a playlist that joins 9's segment 4 to 9b's segment 5 skips that repeated frame.
+- **An encoded replacement attempt that seeks to its first boundary can miss the first attempt's
+  first frame** (9b). 9 fills 30.030 s with a repeat of the source frame at 29.988 s, which an
+  accurate seek to 30 s discards, so that seek started 9b's segment 5 at 30.0717 s, and a playlist
+  joining 9's segment 4 to it skipped the repeated frame. Seeking one period earlier removes it: 9b
+  now delivers segment 5 from 30.030 s. An MPEG-TS source, whose demuxer lands on the next keyframe
+  after the target, has no encoded replacement attempt recording here.
 - **libx265 under the worker's arguments keys its forced keyframes as CRA pictures** (13, 13b, 13c),
   not as IDR, although the worker passes `-forced-idr 1`. With no RASL picture after them (13) they
   behave as clean random-access points, but the GOP backstop CRA in 13b leads a RASL picture, so the

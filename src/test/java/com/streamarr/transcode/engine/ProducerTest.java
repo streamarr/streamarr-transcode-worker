@@ -14,6 +14,7 @@ import com.streamarr.transcode.engine.FfmpegRecordings.SegmentSummary;
 import com.streamarr.transcode.engine.RecordingSegmentSink.Accepted;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
+import java.io.IOException;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
@@ -29,6 +30,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 @Tag("UnitTest")
 class ProducerTest {
@@ -60,6 +62,31 @@ class ProducerTest {
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
     assertThat(sink.accepted()).containsExactlyElementsOf(expectedDeliveries(recording));
     assertThat(sink.acceptedBytes()).isEqualTo(deliveredBytesOf(recording));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"01-encode-cfr-seek30.fmp4", "09-svtav1-vfr-seek30.fmp4"})
+  @DisplayName(
+      "Should discard the period before the first segment and deliver that segment from its"
+          + " boundary when an encoded replacement attempt seeks one period early")
+  void shouldDiscardThePeriodBeforeTheFirstSegmentWhenAnEncodedReplacementAttemptSeeksEarly(
+      String file) throws IOException {
+    var recording = recording(file);
+    var process = ScriptedProcess.builder().output(bytesOf(file)).build();
+
+    var producer = producerFor(process, recording).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(recording.discardedPreroll())
+        .extracting(SegmentSummary::number)
+        .containsExactly(recording.startSequenceNumber() - 1);
+    assertThat(sink.acceptedNames())
+        .startsWith("init.mp4", "segment5.m4s")
+        .doesNotContain("segment4.m4s");
+    var delivered = Mp4Stream.read(Mp4Stream.readerOf(sink.acceptedBytes()));
+    // 30.030 s: frame 720, the first frame at or after 30 s on the 23.976 fps grid from zero.
+    assertThat(delivered.fragments().getFirst().videoStart())
+        .contains(new VideoStart(720_720, 24_000, true));
   }
 
   @Test

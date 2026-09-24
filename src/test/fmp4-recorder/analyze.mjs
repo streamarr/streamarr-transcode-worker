@@ -70,13 +70,13 @@ const FIXTURES = [
   },
   {
     name: '01-encode-cfr-seek30', source: 'cfr.mp4', mode: 'encode', encoder: 'libx264', seek: 30, start: 5,
-    proves: 'An encoded replacement attempt (-ss 30, start sequence number 5) under -r without -fps_mode starts at ' +
-      'the seek point (30.030 s, segment 5), pads nothing from zero, and has no preroll. The forced keyframe times ' +
-      '30, 36, ..., 66 are absolute, so it forces the frames the start-0 recording forced (720, 864, 1007, 1151, ' +
-      '1295, 1439) and every segment starts on the start-0 recording\'s ticks.',
+    proves: 'An encoded replacement attempt from segment 5 (a job seeking to 30 s) seeks one period early, to ' +
+      '-ss 24, under -r without -fps_mode: it starts at the seek point (24.024 s), pads nothing from zero, and ' +
+      'segment 4 is preroll that the grouper discards. The forced keyframe times 30, 36, ..., 66 are absolute, so ' +
+      'it forces the frames the start-0 recording forced (720, 864, 1007, 1151, 1295, 1439) and every delivered ' +
+      'segment starts on the start-0 recording\'s ticks.',
     hlsComparisons: [
-      hlsComparison('01-encode-cfr-seek30.hls-recipe', 'hls-recipe', { expect: false }),
-      hlsComparison('01-encode-cfr-seek30.video-only', 'pipe-recipe', { audio: false, expect: false }),
+      hlsComparison('01-encode-cfr-seek30.video-only', 'pipe-recipe', { audio: false, restrict: true, expect: false }),
       hlsComparison('01-encode-cfr.hls-recipe', 'hls-recipe', { reference: '01-encode-cfr', restrict: true }),
     ],
   },
@@ -169,17 +169,13 @@ const FIXTURES = [
   },
   {
     name: '09-svtav1-vfr-seek30', source: 'vfr.mp4', mode: 'encode', encoder: 'libsvtav1', seek: 30, start: 5,
-    proves: 'The same SVT-AV1 recipe after -ss 30: starts at the first source frame after the seek point ' +
-      '(30.072 s), pads nothing from zero, one keyframe in every interval. Segments 6 to 10 start on the ticks of ' +
-      '09; segment 5 starts one frame after 09\'s, which repeats a source frame before 30 s at 30.030 s.',
+    proves: 'The same SVT-AV1 recipe as a replacement attempt from segment 5, seeking one period early (-ss 24): ' +
+      'it starts at 24.024 s, pads nothing from zero, and discards segment 4 as preroll. Every delivered segment ' +
+      'starts on the ticks of 09, including segment 5 at 30.030 s, the frame 09 repeats from the last source frame ' +
+      'before 30 s; a seek to 30 s itself started at the next source frame, 30.072 s.',
     hlsComparisons: [
-      hlsComparison('09-svtav1-vfr-seek30.video-only', 'pipe-recipe', { audio: false, expect: false }),
-      hlsComparison('09-svtav1-vfr-seek30.hls-recipe', 'hls-recipe', { expect: false }),
-      hlsComparison('09-svtav1-vfr.pipe-keyframes-with-audio', 'pipe-recipe', {
-        reference: '09-svtav1-vfr',
-        restrict: true,
-        expect: false,
-      }),
+      hlsComparison('09-svtav1-vfr-seek30.video-only', 'pipe-recipe', { audio: false, restrict: true, expect: false }),
+      hlsComparison('09-svtav1-vfr.pipe-keyframes-with-audio', 'pipe-recipe', { reference: '09-svtav1-vfr', restrict: true }),
     ],
   },
   {
@@ -243,16 +239,16 @@ const FIXTURES = [
 ];
 
 const INITIALIZATION_SEGMENT_IDENTITY_PAIRS = [
-  ['encode (libx264), start 0 vs -ss 30', '01-encode-cfr', '01-encode-cfr-seek30'],
-  ['stream copy, start 0 vs -ss 30', '07-copy-start0', '07-copy-seek30'],
-  ['encode (libsvtav1), start 0 vs -ss 30', '09-svtav1-vfr', '09-svtav1-vfr-seek30'],
+  ['encode (libx264), start 0 vs a replacement attempt from segment 5', '01-encode-cfr', '01-encode-cfr-seek30'],
+  ['stream copy, start 0 vs a replacement attempt from segment 5', '07-copy-start0', '07-copy-seek30'],
+  ['encode (libsvtav1), start 0 vs a replacement attempt from segment 5', '09-svtav1-vfr', '09-svtav1-vfr-seek30'],
 ];
 const INITIALIZATION_SEGMENT_DIFFERENCE_PAIRS = [
   ['encode vs stream copy of the same source', '01-encode-cfr', '07-copy-start0'],
 ];
 
 const RECIPE =
-  'ffmpeg -y [-ss S] -i SRC -map 0:v:0 -map 0:a:0 -map -0:s -map_metadata -1 -map_chapters -1 -copyts ' +
+  'ffmpeg -y [-ss S: (K-1)*6 for an encode with K > 0, else the job\'s seek] -i SRC -map 0:v:0 -map 0:a:0 -map -0:s -map_metadata -1 -map_chapters -1 -copyts ' +
   '-avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128 <codec args> [-bsf:a aac_adtstoasc ' +
   'when copying AAC] [encode: -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6 ' +
   'in whole seconds, K = startSequenceNumber, N = mediaSegmentCount ' +

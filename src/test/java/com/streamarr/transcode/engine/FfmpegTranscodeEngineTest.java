@@ -110,7 +110,7 @@ class FfmpegTranscodeEngineTest {
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
     assertThat(launcher.command(request.attemptId()))
         .startsWith("ffmpeg")
-        .containsSubsequence("-ss", "30", "-i", "/media/movie.mkv")
+        .containsSubsequence("-ss", "24", "-i", "/media/movie.mkv")
         .endsWith("pipe:1");
     assertThat(sink.acceptedNames())
         .containsExactly(

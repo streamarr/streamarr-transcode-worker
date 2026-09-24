@@ -35,6 +35,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 @Tag("UnitTest")
 class RecordedFfmpegOutputTest {
@@ -206,29 +207,31 @@ class RecordedFfmpegOutputTest {
     "09-svtav1-vfr-seek30.fmp4, 09-svtav1-vfr.fmp4"
   })
   @DisplayName(
-      "Should open every later segment on the start-0 attempt's frame when an encoded replacement"
-          + " attempt forces keyframes at absolute media times")
-  void shouldOpenEveryLaterSegmentOnTheStartZeroAttemptsFrameWhenAnEncodedReplacementAttemptSeeks(
+      "Should open every segment on the start-0 attempt's frame when an encoded replacement attempt"
+          + " seeks one period early")
+  void shouldOpenEverySegmentOnTheStartZeroAttemptsFrameWhenAnEncodedReplacementAttemptSeeksEarly(
       String replacementAttempt, String startZeroAttempt) throws IOException {
     var replacement = cutPoints(group(recording(replacementAttempt)));
     var startZero = cutPoints(group(recording(startZeroAttempt)));
 
-    assertThat(replacement.subList(1, replacement.size()))
-        .containsExactlyElementsOf(startZero.subList(6, 11));
+    assertThat(replacement).containsExactlyElementsOf(startZero.subList(5, 11));
   }
 
   @ParameterizedTest(name = "{0}")
-  @CsvSource({"01-encode-cfr-seek30.fmp4, 720720", "09-svtav1-vfr-seek30.fmp4, 721721"})
+  @ValueSource(strings = {"01-encode-cfr-seek30.fmp4", "09-svtav1-vfr-seek30.fmp4"})
   @DisplayName(
-      "Should deliver its first fragment at the seek point when an encoded attempt seeks under the"
-          + " frame-rate flags")
-  void shouldDeliverItsFirstFragmentAtTheSeekPointWhenAnEncodedAttemptSeeksUnderTheFrameRateFlags(
-      String file, long seekPoint) throws IOException {
+      "Should start at the seek point and discard that period when an encoded replacement attempt"
+          + " seeks one period before its first segment")
+  void shouldStartAtTheSeekPointAndDiscardThatPeriodWhenAnEncodedReplacementAttemptSeeksEarly(
+      String file) throws IOException {
     var grouping = group(recording(file));
     var firstFragment = grouping.units().fragments().getFirst();
 
-    assertThat(firstFragment.videoStart()).contains(new VideoStart(seekPoint, 24_000, true));
-    assertThat(grouping.delivered().getFirst().fragments().getFirst()).isSameAs(firstFragment);
+    // 24.024 s and 30.030 s: frames 576 and 720, the first frames at or after the seek point (24 s)
+    // and the first segment's boundary (30 s) on the 23.976 fps grid from zero.
+    assertThat(firstFragment.videoStart()).contains(new VideoStart(576_576, 24_000, true));
+    assertThat(grouping.delivered().getFirst().sequenceNumber()).isEqualTo(5);
+    assertThat(firstVideoPresentationTime(grouping.delivered().getFirst())).isEqualTo(720_720);
   }
 
   @ParameterizedTest(name = "{0}")

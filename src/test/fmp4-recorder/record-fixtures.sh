@@ -99,21 +99,23 @@ fill_boundaries() {  # LIST ARGS...
   done
 }
 
-# run KIND NAME [start=N] [seek=S] [duration=D] [skip=T] [hls-recipe] [video] SRC -- CODEC/KEYFRAME ARGS...
+# run KIND NAME [start=N] [number=N] [seek=S] [duration=D] [skip=T] [hls-recipe] [video] SRC -- CODEC/KEYFRAME ARGS...
 #   KIND pipe: ADR 0037's recipe to pipe:1, recorded as out/NAME.fmp4, its command line one argument per
 #              line in out/NAME.args and the media segment count it forces keyframes up to in out/NAME.count
 #   KIND hls:  the HLS muxer (fMP4 segments) into hls/NAME/; "hls-recipe" swaps in the HLS recipe's common
 #              flags (no -start_at_zero, -max_delay), "video" maps the video stream only.
 #   start=N    the start sequence number: the first forced keyframe time, and the HLS muxer's -start_number.
+#   number=N   the HLS muxer's -start_number instead: the preroll's number when the run seeks one period early.
 #   duration=D reads only the source's first D seconds.
 #   skip=T     leaves the time T out of the forced keyframe times.
 run() {
   local kind=$1 name=$2; shift 2
   local start=0 seek=() common=("${COMMON_PIPE[@]}") maps=(-map 0:v:0 -map 0:a:0)
-  local duration=() seconds="" skip=""
+  local duration=() seconds="" skip="" first=""
   while [ "$1" != "--" ] && [ $# -gt 1 ]; do
     case "$1" in
       start=*) start=${1#start=} ;;
+      number=*) first=${1#number=} ;;
       seek=*) seek=(-ss "${1#seek=}") ;;
       duration=*) seconds=${1#duration=}; duration=(-t "$seconds") ;;
       skip=*) skip=${1#skip=} ;;
@@ -135,7 +137,8 @@ run() {
     "${command[@]}" > "out/$name.fmp4" 2> "logs/$name.log"
     return
   fi
-  local number=(); [ "$start" -gt 0 ] && number=(-start_number "$start")
+  first=${first:-$start}
+  local number=(); [ "$first" -gt 0 ] && number=(-start_number "$first")
   mkdir -p "hls/$name"
   local status=0
   "${FF[@]}" -y "${seek[@]}" "${duration[@]}" -i "$src" "${maps[@]}" "${common[@]}" "${FILLED[@]}" "${DET[@]}" \
@@ -190,11 +193,12 @@ done
 
 # ------------------------------------------------------------------ 1. constant 23.976 fps libx264 encode, and an encoded seek
 run pipe 01-encode-cfr src/cfr.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}"
-run pipe 01-encode-cfr-seek30 start=5 seek=30 src/cfr.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}"
+# The replacement attempt for segment 5 (a job seeking to 30 s) is an encode, so it seeks one period
+# early, to 24 s, and segment 4 is its preroll.
+run pipe 01-encode-cfr-seek30 start=5 seek=24 src/cfr.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}"
 run hls 01-encode-cfr.hls-recipe hls-recipe src/cfr.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_HLS[@]}"
-run hls 01-encode-cfr-seek30.hls-recipe hls-recipe start=5 seek=30 src/cfr.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_HLS[@]}"
 run hls 01-encode-cfr.video-only video src/cfr.mp4 -- "${X264[@]}" "${KEY_X264_PIPE[@]}"
-run hls 01-encode-cfr-seek30.video-only video start=5 seek=30 src/cfr.mp4 -- "${X264[@]}" "${KEY_X264_PIPE[@]}"
+run hls 01-encode-cfr-seek30.video-only video start=5 number=4 seek=24 src/cfr.mp4 -- "${X264[@]}" "${KEY_X264_PIPE[@]}"
 run hls 01-encode-cfr.pipe-keyframes-with-audio src/cfr.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}"
 
 # ------------------------------------------------------------------ 2. stream copy, irregular keyframes
@@ -239,11 +243,10 @@ run hls 07-copy-start0.video-only video src/cfr.mp4 -- "${COPY_PIPE[@]}"
 
 # ------------------------------------------------------------------ 9. irregular VFR source through SVT-AV1, with and without a seek
 run pipe 09-svtav1-vfr src/vfr.mp4 -- "${SVT[@]}" "${AAC[@]}" "${KEY_SVT_PIPE[@]}"
-run pipe 09-svtav1-vfr-seek30 start=5 seek=30 src/vfr.mp4 -- "${SVT[@]}" "${AAC[@]}" "${KEY_SVT_PIPE[@]}"
+run pipe 09-svtav1-vfr-seek30 start=5 seek=24 src/vfr.mp4 -- "${SVT[@]}" "${AAC[@]}" "${KEY_SVT_PIPE[@]}"
 run hls 09-svtav1-vfr.hls-recipe hls-recipe src/vfr.mp4 -- "${SVT[@]}" "${AAC[@]}" "${KEY_SVT_HLS[@]}"
-run hls 09-svtav1-vfr-seek30.hls-recipe hls-recipe start=5 seek=30 src/vfr.mp4 -- "${SVT[@]}" "${AAC[@]}" "${KEY_SVT_HLS[@]}"
 run hls 09-svtav1-vfr.video-only video src/vfr.mp4 -- "${SVT[@]}" "${KEY_SVT_PIPE[@]}"
-run hls 09-svtav1-vfr-seek30.video-only video start=5 seek=30 src/vfr.mp4 -- "${SVT[@]}" "${KEY_SVT_PIPE[@]}"
+run hls 09-svtav1-vfr-seek30.video-only video start=5 number=4 seek=24 src/vfr.mp4 -- "${SVT[@]}" "${KEY_SVT_PIPE[@]}"
 run hls 09-svtav1-vfr.pipe-keyframes-with-audio src/vfr.mp4 -- "${SVT[@]}" "${AAC[@]}" "${KEY_SVT_PIPE[@]}"
 
 # ------------------------------------------------------------------ 10. keyframe gap wider than the period
@@ -287,7 +290,7 @@ claim mp4-copy-without-adtstoasc 0 -i src/cfr.mp4 "${AV[@]}" "${COMMON_PIPE[@]}"
 # -max_delay 5000000 changes nothing in mp4 output (compare with out/01-encode-cfr.fmp4).
 claim encode-with-max-delay 0 -i src/cfr.mp4 "${AV[@]}" "${COMMON_PIPE[@]}" -max_delay 5000000 "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}"
 # An explicit -fps_mode cfr after a seek pads from time zero (compare with out/01-encode-cfr-seek30.fmp4).
-claim encode-seek30-fps-mode-cfr 5 -ss 30 -i src/cfr.mp4 "${AV[@]}" "${COMMON_PIPE[@]}" "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}" -fps_mode:v:0 cfr
+claim encode-seek30-fps-mode-cfr 5 -ss 24 -i src/cfr.mp4 "${AV[@]}" "${COMMON_PIPE[@]}" "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}" -fps_mode:v:0 cfr
 
 ffmpeg -version | head -1 > ffmpeg-version.txt
 CONTAINER

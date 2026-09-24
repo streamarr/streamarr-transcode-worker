@@ -69,11 +69,26 @@ public class FfmpegCommandBuilder {
     cmd.add(ffmpegPath);
     cmd.add("-y");
 
-    if (request.seekPosition() > 0) {
-      cmd.addAll(List.of("-ss", String.valueOf(request.seekPosition())));
+    var seekSeconds = inputSeekSeconds(request);
+    if (seekSeconds > 0) {
+      cmd.addAll(List.of("-ss", String.valueOf(seekSeconds)));
     }
 
     cmd.addAll(List.of("-i", request.sourcePath().toString()));
+  }
+
+  // An encoded replacement attempt seeks one period before its first segment, and the producer
+  // discards that period as preroll: a seek to the boundary itself can drop the frame an earlier
+  // attempt repeated there from a variable-frame-rate source, and lands after the boundary on an
+  // MPEG-TS source. A stream copy seeks to its first segment and lands on the keyframe at or
+  // before it.
+  private static long inputSeekSeconds(TranscodeRequest request) {
+    var mode = request.transcodeDecision().transcodeMode();
+    if (!encodesVideo(mode) || request.startSequenceNumber() == 0) {
+      return request.seekPosition();
+    }
+
+    return (request.startSequenceNumber() - 1L) * request.targetSegmentDuration();
   }
 
   private void addStreamSelection(

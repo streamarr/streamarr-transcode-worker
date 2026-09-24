@@ -391,6 +391,48 @@ class FfmpegCommandBuilderTest {
     assertThat(cmd).doesNotContain("-keyint_min:v:0");
   }
 
+  @ParameterizedTest
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"VIDEO_TRANSCODE", "FULL_TRANSCODE"})
+  @DisplayName(
+      "Should seek one period before its first segment when an encoded replacement attempt starts"
+          + " mid-stream")
+  void shouldSeekOnePeriodBeforeItsFirstSegmentWhenAnEncodedReplacementAttemptStartsMidStream(
+      TranscodeMode mode) {
+    var cmd = command(request(mode).seekPosition(30).startSequenceNumber(5).build(), "libsvtav1");
+
+    assertThat(cmd).containsSubsequence("-ss", "24", "-i");
+  }
+
+  @ParameterizedTest
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"VIDEO_TRANSCODE", "FULL_TRANSCODE"})
+  @DisplayName(
+      "Should read from the start when an encoded replacement attempt starts at the second segment")
+  void shouldReadFromTheStartWhenAnEncodedReplacementAttemptStartsAtTheSecondSegment(
+      TranscodeMode mode) {
+    var cmd = command(request(mode).seekPosition(6).startSequenceNumber(1).build(), "libx264");
+
+    assertThat(cmd)
+        .doesNotContain("-ss")
+        .containsSequence("-force_key_frames:0", "6,12,18,24,30,36,42,48,54,60");
+  }
+
+  @ParameterizedTest
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"REMUX", "AUDIO_TRANSCODE"})
+  @DisplayName(
+      "Should seek to its first segment when a stream-copy replacement attempt starts mid-stream")
+  void shouldSeekToItsFirstSegmentWhenAStreamCopyReplacementAttemptStartsMidStream(
+      TranscodeMode mode) {
+    var cmd = command(request(mode).seekPosition(30).startSequenceNumber(5).build(), "copy");
+
+    assertThat(cmd).containsSubsequence("-ss", "30", "-i");
+  }
+
   @Test
   @DisplayName("Should place seek before input when seek position is non-zero")
   void shouldPlaceSeekBeforeInputWhenSeekPositionIsNonZero() {
