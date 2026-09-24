@@ -2,6 +2,7 @@ package com.streamarr.transcode.engine;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.List;
@@ -81,8 +82,10 @@ final class FfmpegRecordings {
       int syncFirstFragmentCount,
       long byteLength) {}
 
-  /** The fragment, counted from 0 after the initialization segment, at which grouping fails. */
-  record ExpectedFailure(String reason, int fragment) {}
+  /**
+   * The reason grouping fails and the fragment, counted from 0 after the initialization segment.
+   */
+  record ExpectedFailure(Reason reason, int fragmentIndex) {}
 
   /**
    * The HLS muxer's run over the same source, with the media time of the first video sample of each

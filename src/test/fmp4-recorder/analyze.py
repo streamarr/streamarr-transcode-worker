@@ -50,7 +50,7 @@ FIXTURES = [
                   oracle("01-encode-cfr.new-keyframes-with-audio", "new")]),
     dict(name="01-encode-cfr-seek30", source="cfr.mp4", mode="encode", encoder="libx264", seek=30, start=5,
          proves="An encoded seek (-ss 30) under -r without -fps_mode starts at the seek point (30.030 s, "
-         "segment 5), pads nothing from zero, and has no preroll; its segment starts equal the start-0 run's.",
+         "segment 5), pads nothing from zero, and has no preroll; its segment starts equal the start-0 recording's.",
          oracles=[oracle("01-encode-cfr-seek30.today", "today", expect=False),
                   oracle("01-encode-cfr-seek30.video-only", "new", audio=False, expect=False),
                   oracle("01-encode-cfr.today", "today", reference="01-encode-cfr", restrict=True)]),
@@ -79,11 +79,11 @@ FIXTURES = [
                   oracle("05-encode-late-start.video-only", "new", audio=False, expect=False)]),
     dict(name="05-copy-late-start", source="late.ts", mode="copy", encoder=None, seek=0, start=0,
          proves="Stream copy of the same 12 s-origin MPEG-TS source with -bsf:a aac_adtstoasc: the first "
-         "fragment is segment 0 and every keyframe keeps its source time minus the container start.",
+         "fragment is segment 0 and every keyframe's media time is its source timestamp minus the container start.",
          oracles=[oracle("05-copy-late-start.today-adtstoasc", "today"),
                   oracle("05-copy-late-start.video-only", "new", audio=False)]),
     dict(name="06-encode-audio-tail", source="tail.mp4", mode="encode", encoder="libx264", seek=0, start=0,
-         proves="Audio outlasts video by 3.5 s: the run ends in audio-only fragments (no video traf), which "
+         proves="Audio outlasts video by 3.5 s: the recording ends in audio-only fragments (no video traf), which "
          "join the last open segment; none precedes the first segment.",
          oracles=[oracle("06-encode-audio-tail.today", "today"),
                   oracle("06-encode-audio-tail.video-only", "new", audio=False)]),
@@ -92,9 +92,9 @@ FIXTURES = [
          oracles=[oracle("07-copy-start0.today", "today"),
                   oracle("07-copy-start0.video-only", "new", audio=False)]),
     dict(name="07-copy-seek30", source="cfr.mp4", mode="copy", encoder=None, seek=30, start=5,
-         proves="Stream-copy restart at -ss 30 (start sequence number 5): the seek lands on the keyframe at "
+         proves="Stream-copy replacement attempt at -ss 30 (start sequence number 5): the seek lands on the keyframe at "
          "28.028 s (segment 4), which is preroll and is discarded with the non-sync fragment after it; "
-         "segments 5 to 10 carry the start-0 run's video samples at the same ticks (audio packets regroup by one AAC frame).",
+         "segments 5 to 10 carry the start-0 recording's video samples at the same ticks (audio packets regroup by one AAC frame).",
          oracles=[oracle("07-copy-start0.today", "today", reference="07-copy-start0", restrict=True),
                   oracle("07-copy-seek30.today", "today", expect=False)]),
     dict(name="09-svtav1-vfr", source="vfr.mp4", mode="encode", encoder="libsvtav1", seek=0, start=0,
@@ -110,22 +110,24 @@ FIXTURES = [
          oracles=[oracle("09-svtav1-vfr-seek30.video-only", "new", audio=False, expect=False),
                   oracle("09-svtav1-vfr-seek30.today", "today", expect=False)]),
     dict(name="10-copy-gop-exceeds-period", source="gop10.mp4", mode="copy", encoder=None, seek=0, start=0,
-         proves="(Extra) Stream copy with a keyframe every 10.01 s: interval 2 holds no keyframe, so grouping "
+         proves="Stream copy with a keyframe every 10.01 s: interval 2 holds no keyframe, so grouping "
          "fails with a skipped segment number at the sync-first fragment at 20.02 s (segment 3).",
          oracles=[oracle("10-copy-gop-exceeds-period.today", "today", expect=False)]),
 ]
 
-INIT_IDENTITY_PAIRS = [
+INITIALIZATION_SEGMENT_IDENTITY_PAIRS = [
     ("encode (libx264), start 0 vs -ss 30", "01-encode-cfr", "01-encode-cfr-seek30"),
     ("stream copy, start 0 vs -ss 30", "07-copy-start0", "07-copy-seek30"),
     ("encode (libsvtav1), start 0 vs -ss 30", "09-svtav1-vfr", "09-svtav1-vfr-seek30"),
 ]
-INIT_DIFFERENCE_PAIRS = [
+INITIALIZATION_SEGMENT_DIFFERENCE_PAIRS = [
     ("encode vs stream copy of the same source", "01-encode-cfr", "07-copy-start0"),
 ]
 
 
 class GroupingFailure(Exception):
+    """reason is the name of the FragmentedMp4Exception.Reason the worker's grouper fails with."""
+
     def __init__(self, reason, **detail):
         super().__init__(reason)
         self.reason = reason
@@ -147,7 +149,7 @@ class Grouping:
             return
         time = video["firstPresentationTime"]
         if self.last_sync_time is not None and time < self.last_sync_time:
-            raise GroupingFailure("presentation time moved backwards", fragment=index, presentationTime=time)
+            raise GroupingFailure("PRESENTATION_TIME_REGRESSED", fragmentIndex=index, presentationTime=time)
         self.last_sync_time = time
         number = time // (self.period * video["timescale"])
         if self.open is not None and number == self.open["number"]:
@@ -155,7 +157,7 @@ class Grouping:
             return
         expected = self.next_deliverable()
         if number > expected:
-            raise GroupingFailure("skipped segment number", fragment=index, expectedNumber=expected,
+            raise GroupingFailure("SKIPPED_SEGMENT_NUMBER", fragmentIndex=index, expectedNumber=expected,
                                   actualNumber=number, presentationTime=time)
         self.close()
         self.open = {"number": number, "firstVideoPresentationTime": time, "fragments": self.waiting + [index]}
@@ -498,8 +500,8 @@ def main():
         "fails with a skipped segment number. firstVideoPresentationTime = tfdt + first sample's composition offset, "
         "in videoTimescale ticks, no edit list.",
         "fixtures": results,
-        "initIdentityPairs": [pair(*p) for p in INIT_IDENTITY_PAIRS],
-        "initDifferencePairs": [pair(*p) for p in INIT_DIFFERENCE_PAIRS],
+        "initializationSegmentIdentityPairs": [pair(*p) for p in INITIALIZATION_SEGMENT_IDENTITY_PAIRS],
+        "initializationSegmentDifferencePairs": [pair(*p) for p in INITIALIZATION_SEGMENT_DIFFERENCE_PAIRS],
         "adrSideClaims": claims,
     }
     for fixture in FIXTURES:

@@ -18,7 +18,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Locale;
 import java.util.Optional;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
@@ -316,8 +315,7 @@ class RecordedFfmpegOutputTest {
   }
 
   private static Failure failureOf(ExpectedFailure expected) {
-    var reason = Reason.valueOf(expected.reason().toUpperCase(Locale.ROOT).replace(' ', '_'));
-    return new Failure(reason, expected.fragment());
+    return new Failure(expected.reason(), expected.fragmentIndex());
   }
 
   private static int positionOf(byte[] bytes, String type) {

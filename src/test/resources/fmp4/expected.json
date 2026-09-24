@@ -375,7 +375,7 @@
     {
       "name": "01-encode-cfr-seek30",
       "file": "01-encode-cfr-seek30.fmp4",
-      "proves": "An encoded seek (-ss 30) under -r without -fps_mode starts at the seek point (30.030 s, segment 5), pads nothing from zero, and has no preroll; its segment starts equal the start-0 run's.",
+      "proves": "An encoded seek (-ss 30) under -r without -fps_mode starts at the seek point (30.030 s, segment 5), pads nothing from zero, and has no preroll; its segment starts equal the start-0 recording's.",
       "mode": "encode",
       "encoder": "libx264",
       "source": {
@@ -1986,7 +1986,7 @@
     {
       "name": "05-copy-late-start",
       "file": "05-copy-late-start.fmp4",
-      "proves": "Stream copy of the same 12 s-origin MPEG-TS source with -bsf:a aac_adtstoasc: the first fragment is segment 0 and every keyframe keeps its source time minus the container start.",
+      "proves": "Stream copy of the same 12 s-origin MPEG-TS source with -bsf:a aac_adtstoasc: the first fragment is segment 0 and every keyframe's media time is its source timestamp minus the container start.",
       "mode": "copy",
       "encoder": null,
       "source": {
@@ -2208,7 +2208,7 @@
     {
       "name": "06-encode-audio-tail",
       "file": "06-encode-audio-tail.fmp4",
-      "proves": "Audio outlasts video by 3.5 s: the run ends in audio-only fragments (no video traf), which join the last open segment; none precedes the first segment.",
+      "proves": "Audio outlasts video by 3.5 s: the recording ends in audio-only fragments (no video traf), which join the last open segment; none precedes the first segment.",
       "mode": "encode",
       "encoder": "libx264",
       "source": {
@@ -2731,7 +2731,7 @@
     {
       "name": "07-copy-seek30",
       "file": "07-copy-seek30.fmp4",
-      "proves": "Stream-copy restart at -ss 30 (start sequence number 5): the seek lands on the keyframe at 28.028 s (segment 4), which is preroll and is discarded with the non-sync fragment after it; segments 5 to 10 carry the start-0 run's video samples at the same ticks (audio packets regroup by one AAC frame).",
+      "proves": "Stream-copy replacement attempt at -ss 30 (start sequence number 5): the seek lands on the keyframe at 28.028 s (segment 4), which is preroll and is discarded with the non-sync fragment after it; segments 5 to 10 carry the start-0 recording's video samples at the same ticks (audio packets regroup by one AAC frame).",
       "mode": "copy",
       "encoder": null,
       "source": {
@@ -3756,7 +3756,7 @@
     {
       "name": "10-copy-gop-exceeds-period",
       "file": "10-copy-gop-exceeds-period.fmp4",
-      "proves": "(Extra) Stream copy with a keyframe every 10.01 s: interval 2 holds no keyframe, so grouping fails with a skipped segment number at the sync-first fragment at 20.02 s (segment 3).",
+      "proves": "Stream copy with a keyframe every 10.01 s: interval 2 holds no keyframe, so grouping fails with a skipped segment number at the sync-first fragment at 20.02 s (segment 3).",
       "mode": "copy",
       "encoder": null,
       "source": {
@@ -3816,8 +3816,8 @@
       ],
       "discardedPreroll": [],
       "failure": {
-        "reason": "skipped segment number",
-        "fragment": 20,
+        "reason": "SKIPPED_SEGMENT_NUMBER",
+        "fragmentIndex": 20,
         "expectedNumber": 2,
         "actualNumber": 3,
         "presentationTime": 480480
@@ -3898,7 +3898,7 @@
       ]
     }
   ],
-  "initIdentityPairs": [
+  "initializationSegmentIdentityPairs": [
     {
       "label": "encode (libx264), start 0 vs -ss 30",
       "files": [
@@ -3948,7 +3948,7 @@
       ]
     }
   ],
-  "initDifferencePairs": [
+  "initializationSegmentDifferencePairs": [
     {
       "label": "encode vs stream copy of the same source",
       "files": [
