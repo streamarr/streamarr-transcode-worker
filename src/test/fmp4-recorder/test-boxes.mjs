@@ -44,13 +44,18 @@ export function ftyp() {
   return box('ftyp', Buffer.from('iso6', 'latin1'), u32(512), Buffer.from('iso6cmfc', 'latin1'));
 }
 
-/** A visual sample entry of the given type whose decoder configuration declares 4-byte NAL lengths. */
+const DECODER_CONFIGURATIONS = {
+  avc1: () => box('avcC', Buffer.from([1, 100, 0, 30, 0xff, 0xe0, 0])),
+  hvc1: () => box('hvcC', Buffer.alloc(21), Buffer.from([0x0f, 0])),
+  av01: () => box('av1C', Buffer.from([0x81, 0, 0, 0])),
+};
+
+/**
+ * A visual sample entry of the given type: for H.264 and HEVC, one whose decoder configuration
+ * declares 4-byte NAL lengths.
+ */
 export function visualSampleEntry(type) {
-  const configuration =
-    type === 'avc1'
-      ? box('avcC', Buffer.from([1, 100, 0, 30, 0xff, 0xe0, 0]))
-      : box('hvcC', Buffer.alloc(21), Buffer.from([0x0f, 0]));
-  return box(type, Buffer.alloc(78), configuration);
+  return box(type, Buffer.alloc(78), DECODER_CONFIGURATIONS[type]());
 }
 
 /** A trak with a v0 tkhd and mdhd, an optional elst entry and sample entry, and its trex defaults. */
@@ -199,6 +204,22 @@ export function audioFragment({ decodeTime, size = 1 }) {
 /** A length-prefixed access unit of NAL units given as their header bytes. */
 export function accessUnit(...nalUnits) {
   return [...Buffer.concat(nalUnits.map((header) => Buffer.concat([u32(header.length), Buffer.from(header)])))];
+}
+
+/**
+ * One AV1 OBU of the given type: its header, with the extension byte when extended, the LEB128
+ * size of its payload unless unsized, then the payload.
+ */
+export function obu(type, payload, { extended = false, sized = true } = {}) {
+  const header = (type << 3) | (extended ? 0x4 : 0) | (sized ? 0x2 : 0);
+  const size = [];
+  for (let rest = payload.length; sized; rest >>= 7) {
+    size.push((rest & 0x7f) | (rest > 0x7f ? 0x80 : 0));
+    if (rest <= 0x7f) {
+      break;
+    }
+  }
+  return [header, ...(extended ? [0] : []), ...size, ...payload];
 }
 
 export function initialization() {

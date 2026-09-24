@@ -171,10 +171,63 @@
         },
         "videoPictures": {
           "sampleEntry": "avc1",
-          "keyframeNalUnitTypes": [
-            5
-          ],
-          "raslPictures": null
+          "keyframes": [
+            {
+              "presentationTime": 0,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 144144,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 288288,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 432432,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 576576,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 720720,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 864864,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1008007,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1152151,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1296295,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1440439,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            }
+          ]
         }
       },
       "hlsComparisons": [
@@ -509,10 +562,38 @@
         },
         "videoPictures": {
           "sampleEntry": "avc1",
-          "keyframeNalUnitTypes": [
-            5
-          ],
-          "raslPictures": null
+          "keyframes": [
+            {
+              "presentationTime": 720720,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 864864,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1009008,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1153152,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1297296,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1441440,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            }
+          ]
         }
       },
       "hlsComparisons": [
@@ -863,10 +944,63 @@
         },
         "videoPictures": {
           "sampleEntry": "avc1",
-          "keyframeNalUnitTypes": [
-            5
-          ],
-          "raslPictures": null
+          "keyframes": [
+            {
+              "presentationTime": 0,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 79872,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 147456,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 221184,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 301056,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 368640,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 448512,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 516096,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 589824,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 669696,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 737280,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            }
+          ]
         }
       },
       "hlsComparisons": [
@@ -1173,10 +1307,63 @@
         },
         "videoPictures": {
           "sampleEntry": "avc1",
-          "keyframeNalUnitTypes": [
-            5
-          ],
-          "raslPictures": null
+          "keyframes": [
+            {
+              "presentationTime": 1001,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 145145,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 289289,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 433433,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 577577,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 721721,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 865865,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1009008,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1153152,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1297296,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1441440,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            }
+          ]
         }
       },
       "hlsComparisons": [
@@ -1507,10 +1694,108 @@
         },
         "videoPictures": {
           "sampleEntry": "avc1",
-          "keyframeNalUnitTypes": [
-            5
-          ],
-          "raslPictures": null
+          "keyframes": [
+            {
+              "presentationTime": 984,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 60043,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 142125,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 197180,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 295278,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 432415,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 456439,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 578561,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 719702,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 744727,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 868851,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 973956,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1010993,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1150132,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1176158,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1279261,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1299281,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1439421,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1464446,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1560542,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            }
+          ]
         }
       },
       "hlsComparisons": [
@@ -1781,10 +2066,33 @@
         },
         "videoPictures": {
           "sampleEntry": "avc1",
-          "keyframeNalUnitTypes": [
-            5
-          ],
-          "raslPictures": null
+          "keyframes": [
+            {
+              "presentationTime": 1001,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 145145,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 289289,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 433433,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 577577,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            }
+          ]
         }
       },
       "hlsComparisons": [
@@ -2014,10 +2322,83 @@
         },
         "videoPictures": {
           "sampleEntry": "avc1",
-          "keyframeNalUnitTypes": [
-            5
-          ],
-          "raslPictures": null
+          "keyframes": [
+            {
+              "presentationTime": 1920,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 182100,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 362280,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 542460,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 722640,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 902820,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1083000,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1263180,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1443360,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1623540,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1803720,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1983900,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 2164080,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 2344260,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 2524440,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            }
+          ]
         }
       },
       "hlsComparisons": [
@@ -2220,10 +2601,28 @@
         },
         "videoPictures": {
           "sampleEntry": "avc1",
-          "keyframeNalUnitTypes": [
-            5
-          ],
-          "raslPictures": null
+          "keyframes": [
+            {
+              "presentationTime": 0,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 144144,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 288288,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 432432,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            }
+          ]
         }
       },
       "hlsComparisons": [
@@ -2511,10 +2910,173 @@
         },
         "videoPictures": {
           "sampleEntry": "avc1",
-          "keyframeNalUnitTypes": [
-            5
-          ],
-          "raslPictures": null
+          "keyframes": [
+            {
+              "presentationTime": 0,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 48048,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 96096,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 144144,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 192192,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 240240,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 288288,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 336336,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 384384,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 432432,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 480480,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 528528,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 576576,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 624624,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 672672,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 720720,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 768768,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 816816,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 864864,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 912912,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 960960,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1009008,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1057056,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1105104,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1153152,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1201200,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1249248,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1297296,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1345344,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1393392,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1441440,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1489488,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1537536,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            }
+          ]
         }
       },
       "hlsComparisons": [
@@ -2813,10 +3375,103 @@
         },
         "videoPictures": {
           "sampleEntry": "avc1",
-          "keyframeNalUnitTypes": [
-            5
-          ],
-          "raslPictures": null
+          "keyframes": [
+            {
+              "presentationTime": 672672,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 720720,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 768768,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 816816,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 864864,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 912912,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 960960,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1009008,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1057056,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1105104,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1153152,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1201200,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1249248,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1297296,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1345344,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1393392,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1441440,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1489488,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1537536,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            }
+          ]
         }
       },
       "hlsComparisons": [
@@ -3121,7 +3776,77 @@
           "min": 0,
           "max": 0
         },
-        "videoPictures": null
+        "videoPictures": {
+          "sampleEntry": "av01",
+          "keyframes": [
+            {
+              "presentationTime": 1001,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 145145,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 289289,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 433433,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 577577,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 721721,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 865865,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1009008,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1153152,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1297296,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1441440,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            }
+          ]
+        }
       },
       "hlsComparisons": [
         {
@@ -3474,7 +4199,47 @@
           "min": 0,
           "max": 0
         },
-        "videoPictures": null
+        "videoPictures": {
+          "sampleEntry": "av01",
+          "keyframes": [
+            {
+              "presentationTime": 721721,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 865865,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1010009,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1154153,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1298297,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1442441,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            }
+          ]
+        }
       },
       "hlsComparisons": [
         {
@@ -3681,10 +4446,23 @@
         },
         "videoPictures": {
           "sampleEntry": "avc1",
-          "keyframeNalUnitTypes": [
-            5
-          ],
-          "raslPictures": null
+          "keyframes": [
+            {
+              "presentationTime": 0,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 240240,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 480480,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            }
+          ]
         }
       },
       "hlsComparisons": [
@@ -3849,10 +4627,58 @@
         },
         "videoPictures": {
           "sampleEntry": "avc1",
-          "keyframeNalUnitTypes": [
-            5
-          ],
-          "raslPictures": null
+          "keyframes": [
+            {
+              "presentationTime": 0,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 143143,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 144144,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 287287,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 288288,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 431431,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 432432,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 575575,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 576576,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 719719,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            }
+          ]
         }
       },
       "hlsComparisons": []
@@ -3974,10 +4800,33 @@
         },
         "videoPictures": {
           "sampleEntry": "avc1",
-          "keyframeNalUnitTypes": [
-            5
-          ],
-          "raslPictures": null
+          "keyframes": [
+            {
+              "presentationTime": 0,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 144144,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 288288,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 433433,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 576576,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            }
+          ]
         }
       },
       "hlsComparisons": []
@@ -4097,7 +4946,41 @@
           "min": 0,
           "max": 0
         },
-        "videoPictures": null
+        "videoPictures": {
+          "sampleEntry": "av01",
+          "keyframes": [
+            {
+              "presentationTime": 0,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 144144,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 288288,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 433433,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 576576,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            }
+          ]
+        }
       },
       "hlsComparisons": []
     },
@@ -4218,11 +5101,38 @@
         },
         "videoPictures": {
           "sampleEntry": "hev1",
-          "keyframeNalUnitTypes": [
-            20,
-            21
-          ],
-          "raslPictures": 0
+          "keyframes": [
+            {
+              "presentationTime": 0,
+              "nalUnitType": 20,
+              "raslPictures": 0,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 144144,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 288288,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 432432,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 576576,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            }
+          ]
         }
       },
       "hlsComparisons": []
@@ -4344,11 +5254,38 @@
         },
         "videoPictures": {
           "sampleEntry": "hev1",
-          "keyframeNalUnitTypes": [
-            20,
-            21
-          ],
-          "raslPictures": 1
+          "keyframes": [
+            {
+              "presentationTime": 0,
+              "nalUnitType": 20,
+              "raslPictures": 0,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 144144,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 288288,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 433433,
+              "nalUnitType": 21,
+              "raslPictures": 1,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 576576,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            }
+          ]
         }
       },
       "hlsComparisons": []

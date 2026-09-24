@@ -34,7 +34,9 @@ decide (tracks, initialization segment, media segments, preroll, failure, audio-
 diagnostics, a copy's keyframes, each HLS comparison's disagreements with the grid, the
 initialization-segment pairs), and fails on every fact `expected.json` states differently, on a
 recording it does not describe, and on a described recording that is missing. The HLS muxer's own
-cuts, the sources and the ADR side claims need a recording run, so it takes those as recorded.
+cuts, the sources and the ADR side claims need a recording run, so it takes those as recorded, and
+then fails on every claim of the recorder (see [Regenerating](#regenerating)) that the facts in
+`expected.json` contradict.
 
 ## Regenerating
 
@@ -52,7 +54,8 @@ against it. Re-record after an FFmpeg lock update with an image built from that 
 [Image validation](../../../../docs/image-validation.md)), and review every changed expectation.
 After writing, the recorder exits with status 1 and names each claim a recording contradicts: an
 HLS comparison's expected agreement, the hlsenc model, a copy's source keyframes, a keyframe that does
-not start a fragment, the initialization-segment pairs, or an ADR side claim.
+not start a fragment, a verified encoder's keyframe that does not start a closed GOP, the
+initialization-segment pairs, or an ADR side claim.
 
 Every FFmpeg and ffprobe invocation happens inside
 `streamarr/streamarr-transcode-worker:0.1.0-SNAPSHOT@sha256:9d2d286c…caa`
@@ -115,10 +118,12 @@ None moves a keyframe or a cut. Nothing else differs from the recipe.
   owns, not the grouping.
 - `endsWithAudioOnlyFragments` / `trailingAudioOnlyFragmentCount` describe fragments with no video
   `traf` after the last video sample.
-- `diagnostics.videoPictures` names, for H.264 and HEVC, the NAL unit type of the first picture of
-  every keyframe (5: H.264 IDR; 19 or 20: HEVC IDR; 21: HEVC CRA, which opens a GOP) and, for HEVC,
-  how many RASL pictures (which reference the GOP before a CRA) the recording holds. It is null for
-  AV1.
+- `diagnostics.videoPictures.keyframes` lists every keyframe in decode order with its presentation
+  time, the picture that starts it, and whether that picture starts a closed GOP. For H.264 and HEVC
+  the picture is the NAL unit type of the keyframe's first picture (5: H.264 IDR; 19 or 20: HEVC
+  IDR; 21: HEVC CRA, which opens a GOP), and an HEVC keyframe also counts the RASL pictures (which
+  reference the GOP before a CRA) that follow it in decode order. For AV1 it is the frame type of
+  the sample's first frame header and whether that frame is shown.
 - `hlsComparisons[]` holds the HLS muxer's segment starts mapped onto this recording, whether they agree,
   `frameIdentity` (how many video packets equal the recording's, and whether the run shares its
   video arguments) and `hlsencModel` (see below). `sourceKeyframeCheck` (copy recordings) confirms that every recorded
@@ -170,9 +175,9 @@ and before 9 of 10 in the earlier 66 s floored recording of 1.
 
 | Encoder | Honours the forced keyframe | Restarts its GOP count there | Keyframe picture | Verdict |
 |---|---|---|---|---|
-| libx264 | yes: 1, 1b, 3, 5a, 6 key only the forced frames, one per segment | yes: 12's backstop at frame 433 = 288 + 145 | IDR (NAL type 5) in every H.264 recording | verified: 145 |
-| SVT-AV1 | yes: 9, 9b, on the frames libx264 chose in 3 | yes: 12b's backstop at frame 433 | a sync sample (AV1 picture types not inspected) | verified: 145 |
-| libx265, default open GOP | yes: 13 keys only the forced frames | yes: 13b's backstop at frame 433 | CRA (type 21) despite `-forced-idr 1`; 13b's backstop CRA leads a RASL picture | not verified: keep 143 until worker #23 closes libx265's GOPs, then record 13 again |
+| libx264 | yes: 1, 1b, 3, 5a, 6 key only the forced frames, one per segment | yes: 12's backstop at frame 433 = 288 + 145 | an IDR (NAL type 5) at every keyframe of every H.264 recording, 12's backstop included | verified: 145 |
+| SVT-AV1 | yes: 9, 9b, on the frames libx264 chose in 3 | yes: 12b's backstop at frame 433 | a shown key frame at every keyframe of 9, 9b and 12b, 12b's backstop included | verified: 145 |
+| libx265, default open GOP | yes: 13 keys only the forced frames | yes: 13b's backstop at frame 433 | a CRA (type 21) at every keyframe after frame 0 despite `-forced-idr 1`; 13b's backstop CRA at frame 433 leads a RASL picture | not verified: keep 143 until worker #23 closes libx265's GOPs, then record 13 again |
 | hardware encoders | not recorded | not recorded | not recorded | not verified: 143 until worker #14 |
 
 ## The HLS muxer as differential evidence

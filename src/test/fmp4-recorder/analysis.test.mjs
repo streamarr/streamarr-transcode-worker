@@ -35,6 +35,7 @@ import {
   ftyp,
   initialization,
   moov,
+  obu,
   track,
   videoFragment,
   visualSampleEntry,
@@ -342,7 +343,31 @@ describe('violated claims', () => {
             },
           ],
           sourceKeyframeCheck: { recordedKeyframesEqualSourceKeyframes: false },
-          diagnostics: { everyKeyframeStartsAFragment: false },
+          diagnostics: { everyKeyframeStartsAFragment: false, videoPictures: null },
+        },
+        {
+          name: 'x',
+          encoder: 'libx264',
+          hlsComparisons: [],
+          sourceKeyframeCheck: null,
+          diagnostics: {
+            everyKeyframeStartsAFragment: true,
+            videoPictures: { keyframes: [{ startsClosedGop: true }, { startsClosedGop: false }] },
+          },
+        },
+        {
+          name: 'a',
+          encoder: 'libsvtav1',
+          hlsComparisons: [],
+          sourceKeyframeCheck: null,
+          diagnostics: { everyKeyframeStartsAFragment: true, videoPictures: null },
+        },
+        {
+          name: 'h',
+          encoder: 'libx265',
+          hlsComparisons: [],
+          sourceKeyframeCheck: null,
+          diagnostics: { everyKeyframeStartsAFragment: true, videoPictures: { keyframes: [{ startsClosedGop: false }] } },
         },
       ],
       initializationSegmentIdentityPairs: [{ label: 'same', identical: false }],
@@ -361,6 +386,8 @@ describe('violated claims', () => {
       'f / r: the hlsenc model does not reproduce the HLS cuts',
       "f: a recorded keyframe is not the source's own keyframe",
       'f: a keyframe does not start a fragment',
+      'x: a keyframe of the verified encoder libx264 does not start a closed GOP (1 of 2)',
+      'a: the picture types of the verified encoder libsvtav1 are not read',
       'initialization segments differ: same',
       'initialization segments are identical: different',
       'an MPEG-TS AAC copy without aac_adtstoasc no longer fails',
@@ -393,6 +420,7 @@ describe('source files', () => {
 
 describe('video pictures', () => {
   const HEVC = { IDR_W_RADL: [0x26, 0x01], CRA: [0x2a, 0x01], RASL_N: [0x10, 0x01], TRAIL_R: [0x02, 0x01], AUD: [0x46, 0x01] };
+  const AV1 = { SEQUENCE_HEADER: 1, FRAME_HEADER: 3, FRAME: 6, PADDING: 15 };
   const sample = (payload, flags) => ({ duration: 1001, size: payload.length, flags });
   const pictures = (sampleEntry, units) => {
     const run = {
@@ -406,16 +434,24 @@ describe('video pictures', () => {
     ]);
     return videoPictures(readStream(bytes));
   };
+  const temporalUnit = (...obus) => obus.flat();
 
-  it('Should name the NAL unit type that starts each keyframe and count the RASL pictures when the track is HEVC', () => {
+  it('Should name the NAL unit type that starts each keyframe and count its RASL pictures when the track is HEVC', () => {
     assert.deepEqual(
       pictures('hvc1', [
         [accessUnit(HEVC.AUD, HEVC.IDR_W_RADL), true],
         [accessUnit(HEVC.TRAIL_R), false],
         [accessUnit(HEVC.CRA), true],
         [accessUnit(HEVC.AUD, HEVC.RASL_N), false],
+        [accessUnit(HEVC.TRAIL_R), false],
       ]),
-      { sampleEntry: 'hvc1', keyframeNalUnitTypes: [19, 21], raslPictures: 1 },
+      {
+        sampleEntry: 'hvc1',
+        keyframes: [
+          { presentationTime: 0n, nalUnitType: 19, raslPictures: 0, startsClosedGop: true },
+          { presentationTime: 2002n, nalUnitType: 21, raslPictures: 1, startsClosedGop: false },
+        ],
+      },
     );
   });
 
@@ -424,12 +460,62 @@ describe('video pictures', () => {
       pictures('avc1', [
         [accessUnit([0x09, 0xf0], [0x67, 0x64], [0x65, 0x88]), true],
         [accessUnit([0x41, 0x9a]), false],
+        [accessUnit([0x41, 0x9a]), true],
       ]),
-      { sampleEntry: 'avc1', keyframeNalUnitTypes: [5], raslPictures: null },
+      {
+        sampleEntry: 'avc1',
+        keyframes: [
+          { presentationTime: 0n, nalUnitType: 5, startsClosedGop: true },
+          { presentationTime: 2002n, nalUnitType: 1, startsClosedGop: false },
+        ],
+      },
     );
   });
 
-  it("Should read no pictures when the track's samples are not NAL units", () => {
+  it('Should read whether each keyframe is a shown key frame when the track is AV1', () => {
+    const keyFrame = obu(AV1.FRAME, [0x10, 0xff]);
+    const interFrame = obu(AV1.FRAME, [0x30, 0xff]);
+    const hiddenKeyFrame = obu(AV1.FRAME, [0x00, 0xff]);
+    const showExisting = obu(AV1.FRAME_HEADER, [0x80], { extended: true, sized: false });
+
+    assert.deepEqual(
+      pictures('av01', [
+        [temporalUnit(obu(AV1.SEQUENCE_HEADER, [0x00, 0x00]), obu(AV1.PADDING, Array(130).fill(0)), keyFrame), true],
+        [temporalUnit(interFrame), false],
+        [temporalUnit(hiddenKeyFrame), true],
+        [temporalUnit(showExisting), true],
+      ]),
+      {
+        sampleEntry: 'av01',
+        keyframes: [
+          { presentationTime: 0n, frameType: 'KEY_FRAME', showFrame: true, startsClosedGop: true },
+          { presentationTime: 2002n, frameType: 'KEY_FRAME', showFrame: false, startsClosedGop: false },
+          { presentationTime: 3003n, frameType: 'SHOWN_EXISTING_FRAME', showFrame: true, startsClosedGop: false },
+        ],
+      },
+    );
+  });
+
+  it("Should read a shown key frame when the AV1 sequence header declares a reduced still picture header", () => {
+    assert.deepEqual(pictures('av01', [[temporalUnit(obu(AV1.SEQUENCE_HEADER, [0x08]), obu(AV1.FRAME, [0x30])), true]]).keyframes, [
+      { presentationTime: 0n, frameType: 'KEY_FRAME', showFrame: true, startsClosedGop: true },
+    ]);
+  });
+
+  it('Should fail when an AV1 sample is not a whole sequence of OBUs with a frame header', () => {
+    const cases = [
+      ['a keyframe before any sequence header', [obu(AV1.FRAME, [0x10])]],
+      ['a keyframe with no frame header', [obu(AV1.SEQUENCE_HEADER, [0x00])]],
+      ['an OBU that runs past its sample', [[0x32, 5, 0x10]]],
+      ['an OBU size that never ends', [[0x32, 0x80, 0x80]]],
+      ['a frame header with no payload', [obu(AV1.SEQUENCE_HEADER, [0x00]), obu(AV1.FRAME, [])]],
+    ];
+    for (const [name, obus] of cases) {
+      assert.throws(() => pictures('av01', [[temporalUnit(...obus), true]]), Mp4FormatError, name);
+    }
+  });
+
+  it("Should read no pictures when the track's samples are neither NAL units nor OBUs", () => {
     assert.equal(videoPictures(readStream(Buffer.concat([initialization(), videoFragment({ decodeTime: 0, sync: true })]))), null);
   });
 

@@ -330,12 +330,22 @@ export function checkSourceKeyframes({ mode, stream, source, timescale }) {
   };
 }
 
-const NAL_UNIT_TYPE = {
-  avc1: { of: (header) => header & 0x1f, isPicture: (type) => type >= 1 && type <= 5 },
-  hvc1: { of: (header) => (header >> 1) & 0x3f, isPicture: (type) => type <= 31 },
-  hev1: { of: (header) => (header >> 1) & 0x3f, isPicture: (type) => type <= 31 },
-};
 const HEVC_RASL = new Set([8, 9]);
+const NAL_UNIT_TYPE = {
+  avc1: {
+    of: (header) => header & 0x1f,
+    isPicture: (type) => type >= 1 && type <= 5,
+    startsClosedGop: (type) => type === 5,
+    leadingPictures: () => ({}),
+  },
+  hvc1: {
+    of: (header) => (header >> 1) & 0x3f,
+    isPicture: (type) => type <= 31,
+    startsClosedGop: (type) => type === 19 || type === 20,
+    leadingPictures: (types) => ({ raslPictures: types.filter((type) => HEVC_RASL.has(type)).length }),
+  },
+};
+NAL_UNIT_TYPE.hev1 = NAL_UNIT_TYPE.hvc1;
 
 /** The NAL unit types of one length-prefixed sample, in order. */
 function nalUnitTypesOf(stream, sample, { nalLengthSize, sampleEntry }) {
@@ -353,25 +363,138 @@ function nalUnitTypesOf(stream, sample, { nalLengthSize, sampleEntry }) {
   return types;
 }
 
+/** Each keyframe in decode order, with the samples that follow it up to the next keyframe. */
+function keyframeRanges(samples) {
+  const starts = samples.flatMap((sample, index) => (sample.sync ? [index] : []));
+  return starts.map((start, position) => [samples[start], samples.slice(start + 1, starts[position + 1])]);
+}
+
+function nalKeyframes(stream, track) {
+  const codec = NAL_UNIT_TYPE[track.sampleEntry];
+  const pictureOf = (sample) => nalUnitTypesOf(stream, sample, track).find(codec.isPicture);
+  return keyframeRanges(videoSamples(stream)).map(([keyframe, followers]) => {
+    const nalUnitType = pictureOf(keyframe);
+    return {
+      presentationTime: keyframe.presentationTime,
+      nalUnitType,
+      ...codec.leadingPictures(followers.map(pictureOf)),
+      startsClosedGop: codec.startsClosedGop(nalUnitType),
+    };
+  });
+}
+
+const OBU_SEQUENCE_HEADER = 1;
+const OBU_FRAME_HEADER = 3;
+const OBU_FRAME = 6;
+const AV1_FRAME_TYPES = ['KEY_FRAME', 'INTER_FRAME', 'INTRA_ONLY_FRAME', 'SWITCH_FRAME'];
+
+/** A LEB128 value and its byte count; an AV1 size field holds at most 8 bytes. */
+function leb128(data, at, end) {
+  let value = 0;
+  for (let index = 0; index < 8 && at + index < end; index++) {
+    const byte = data[at + index];
+    value += (byte & 0x7f) * 2 ** (7 * index);
+    if ((byte & 0x80) === 0) {
+      return [value, index + 1];
+    }
+  }
+  throw new Mp4FormatError(`an OBU size at ${at} does not end inside its sample`);
+}
+
+/** Each OBU of one AV1 sample, in order: its type and where its payload lies. */
+function obusOf(data, sample) {
+  const obus = [];
+  const end = sample.offset + sample.size;
+  let position = sample.offset;
+  while (position < end) {
+    const header = data[position];
+    let payload = position + 1 + ((header >> 2) & 1);
+    let size = end - payload;
+    if ((header >> 1) & 1) {
+      const [value, bytes] = leb128(data, payload, end);
+      payload += bytes;
+      size = value;
+    }
+    if (size > end - payload) {
+      throw new Mp4FormatError(`an OBU at ${position} runs past its sample`);
+    }
+    obus.push({ type: (header >> 3) & 0xf, payload, size });
+    position = payload + size;
+  }
+  return obus;
+}
+
 /**
- * For an H.264 or HEVC video track: the NAL unit type of the first picture of every keyframe (5 is
- * an H.264 IDR; 19 and 20 are HEVC IDR, 21 an HEVC CRA, which opens a GOP), and for HEVC the
- * number of RASL pictures, which reference the GOP before a CRA. Null for other codecs.
+ * The first frame of an AV1 sample, from its first frame header: a shown key frame when the
+ * sequence header declares a reduced still picture header, else show_existing_frame, frame_type
+ * and show_frame as the uncompressed header's first bits give them.
+ */
+function av1FrameOf(data, sample, sequence) {
+  for (const obu of obusOf(data, sample)) {
+    if (obu.type === OBU_SEQUENCE_HEADER) {
+      sequence.reducedStillPictureHeader = ((data[obu.payload] >> 3) & 1) === 1;
+    }
+    if (obu.type === OBU_FRAME || obu.type === OBU_FRAME_HEADER) {
+      return frameHeaderOf(data, obu, sequence);
+    }
+  }
+  throw new Mp4FormatError(`the AV1 sample at ${sample.offset} holds no frame header`);
+}
+
+function frameHeaderOf(data, { payload, size }, { reducedStillPictureHeader }) {
+  if (reducedStillPictureHeader === undefined) {
+    throw new Mp4FormatError(`an AV1 frame header at ${payload} precedes every sequence header`);
+  }
+  if (size === 0) {
+    throw new Mp4FormatError(`the AV1 frame header at ${payload} is empty`);
+  }
+  if (reducedStillPictureHeader) {
+    return { frameType: 'KEY_FRAME', showFrame: true };
+  }
+  const bits = data[payload];
+  if (bits >> 7 === 1) {
+    return { frameType: 'SHOWN_EXISTING_FRAME', showFrame: true };
+  }
+  return { frameType: AV1_FRAME_TYPES[(bits >> 5) & 0x3], showFrame: ((bits >> 4) & 1) === 1 };
+}
+
+function av1Keyframes(stream) {
+  const sequence = {};
+  return keyframeRanges(videoSamples(stream)).map(([keyframe]) => {
+    const { frameType, showFrame } = av1FrameOf(stream.data, keyframe, sequence);
+    return {
+      presentationTime: keyframe.presentationTime,
+      frameType,
+      showFrame,
+      startsClosedGop: frameType === 'KEY_FRAME' && showFrame,
+    };
+  });
+}
+
+function keyframePicturesOf(stream, track) {
+  if (track.sampleEntry === 'av01') {
+    return av1Keyframes(stream);
+  }
+  if (track.sampleEntry in NAL_UNIT_TYPE) {
+    return nalKeyframes(stream, track);
+  }
+  return null;
+}
+
+/**
+ * For every video keyframe in decode order: its presentation time, the picture that starts it, and
+ * whether that picture starts a closed GOP, which ADR 0037 requires of a verified encoder: an H.264
+ * IDR (NAL type 5), an HEVC IDR (19 or 20, where 21 is a CRA), or a shown AV1 key frame. For HEVC,
+ * also the RASL pictures that follow the keyframe in decode order, which reference the GOP before
+ * a CRA. Null for a codec whose pictures the recorder does not read.
  */
 export function videoPictures(stream) {
   const track = videoTrackOf(stream);
-  const nalUnitType = NAL_UNIT_TYPE[track.sampleEntry];
-  if (nalUnitType === undefined) {
+  const keyframes = keyframePicturesOf(stream, track);
+  if (keyframes === null) {
     return null;
   }
-  const pictureOf = (sample) => nalUnitTypesOf(stream, sample, track).find(nalUnitType.isPicture);
-  const samples = videoSamples(stream);
-  const keyframeTypes = new Set(samples.filter((sample) => sample.sync).map(pictureOf));
-  return {
-    sampleEntry: track.sampleEntry,
-    keyframeNalUnitTypes: [...keyframeTypes].sort((a, b) => a - b),
-    raslPictures: track.sampleEntry === 'avc1' ? null : samples.filter((sample) => HEVC_RASL.has(pictureOf(sample))).length,
-  };
+  return { sampleEntry: track.sampleEntry, keyframes };
 }
 
 function everyKeyframeStartsAFragment(stream) {
@@ -445,6 +568,26 @@ function hlsComparisonViolations(fixture) {
   );
 }
 
+/** The encoders ADR 0037 verified by these recordings, whose keyframes must start closed GOPs. */
+const VERIFIED_ENCODERS = new Set(['libx264', 'libsvtav1']);
+
+function pictureViolations({ name, encoder, diagnostics }) {
+  if (!VERIFIED_ENCODERS.has(encoder)) {
+    return [];
+  }
+  if (diagnostics.videoPictures === null) {
+    return [`${name}: the picture types of the verified encoder ${encoder} are not read`];
+  }
+  const keyframes = diagnostics.videoPictures.keyframes;
+  const open = keyframes.filter((keyframe) => !keyframe.startsClosedGop).length;
+  if (open === 0) {
+    return [];
+  }
+  return [
+    `${name}: a keyframe of the verified encoder ${encoder} does not start a closed GOP (${open} of ${keyframes.length})`,
+  ];
+}
+
 function recordingViolations(fixture) {
   const found = [];
   const check = fixture.sourceKeyframeCheck;
@@ -454,7 +597,7 @@ function recordingViolations(fixture) {
   if (!fixture.diagnostics.everyKeyframeStartsAFragment) {
     found.push(`${fixture.name}: a keyframe does not start a fragment`);
   }
-  return found;
+  return [...found, ...pictureViolations(fixture)];
 }
 
 function sideClaimViolations(expected) {
