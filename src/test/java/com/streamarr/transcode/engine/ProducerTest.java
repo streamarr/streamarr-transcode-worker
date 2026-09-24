@@ -1025,15 +1025,19 @@ class ProducerTest {
   // first awaits acceptance, the second fills the rest of the budget.
   private static byte[] nearlyCappedSegments() {
     return IsoBoxes.concat(
-        IsoBoxes.ftyp(),
-        IsoBoxes.videoAndAudioMoov(),
-        keyframeFragment(0),
-        keyframeFragment(6_000),
-        keyframeFragment(12_000),
-        keyframeFragment(24_000),
-        keyframeFragment(30_000),
-        keyframeFragment(36_000),
-        keyframeFragment(48_000));
+        IsoBoxes.ftyp(), IsoBoxes.videoAndAudioMoov(), nearlyCappedFragmentsFrom(0));
+  }
+
+  // The fragments of nearlyCappedSegments() from this media time in the 24 kHz video timescale.
+  private static byte[] nearlyCappedFragmentsFrom(long startTime) {
+    return IsoBoxes.concat(
+        keyframeFragment(startTime),
+        keyframeFragment(startTime + 6_000),
+        keyframeFragment(startTime + 12_000),
+        keyframeFragment(startTime + 24_000),
+        keyframeFragment(startTime + 30_000),
+        keyframeFragment(startTime + 36_000),
+        keyframeFragment(startTime + 48_000));
   }
 
   private Producer.ProducerBuilder producerOfOneSecondSegments(ScriptedProcess process) {
