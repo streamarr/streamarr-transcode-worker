@@ -7,9 +7,7 @@ import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.engine.GroupingOutcome.NothingClosed;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentClosed;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentNumberSkipped;
-import java.io.FilterInputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.OutputStream;
 import java.time.Duration;
 import java.util.List;
@@ -19,6 +17,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 import lombok.Builder;
 import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
@@ -58,7 +57,8 @@ public final class Producer {
   private final SegmentSink sink;
   private final Duration gracePeriod;
   private final Duration stallTimeout;
-  private final OptionalDouble encodedFrameRate;
+  private final StallWatchdog watchdog;
+  private final Optional<EncodedFrameRate> encodedFrameRate;
   private final String threadName;
   private final CompletableFuture<AttemptOutcome> outcome = new CompletableFuture<>();
   private final Object lock = new Object();
@@ -68,21 +68,18 @@ public final class Producer {
   private Optional<Delivery> deliveryInFlight = Optional.empty();
   private long readerHeldBytes;
   private boolean mediaSegmentDelivered;
-  private boolean readerWaiting;
-
-  // When FFmpeg last wrote output, or the reader last resumed reading.
-  private volatile long lastOutputNanos = System.nanoTime();
 
   private Producer(Process process, Settings settings) {
     this.process = process;
     this.errorOutput = new StderrDrainer(process.getErrorStream());
+    this.stallTimeout = settings.stallTimeout();
+    this.watchdog = new StallWatchdog(stallTimeout);
     this.reader =
         new FragmentedMp4Reader(
-            new WatchedOutput(process.getInputStream()), MAXIMUM_SEGMENT_BYTES, this::admit);
+            watchdog.watch(process.getInputStream()), MAXIMUM_SEGMENT_BYTES, this::admit);
     this.grouper = settings.grouper();
     this.sink = settings.sink();
     this.gracePeriod = settings.gracePeriod();
-    this.stallTimeout = settings.stallTimeout();
     this.encodedFrameRate = settings.encodedFrameRate();
     this.threadName = "producer-" + settings.jobAttemptId();
   }
@@ -116,7 +113,7 @@ public final class Producer {
             .sink(sink)
             .gracePeriod(gracePeriod)
             .stallTimeout(stallTimeout)
-            .encodedFrameRate(encodedFrameRate)
+            .encodedFrameRate(encodedFrameRateOf(encodedFrameRate))
             .build();
     Process process;
     try {
@@ -135,6 +132,14 @@ public final class Producer {
         .uncaughtExceptionHandler(producer::failWatchdogUnexpectedly)
         .start(producer::watchForStall);
     return producer;
+  }
+
+  private static Optional<EncodedFrameRate> encodedFrameRateOf(OptionalDouble framesPerSecond) {
+    if (framesPerSecond.isEmpty()) {
+      return Optional.empty();
+    }
+
+    return Optional.of(new EncodedFrameRate(framesPerSecond.getAsDouble()));
   }
 
   long pid() {
@@ -201,6 +206,7 @@ public final class Producer {
 
       decision = Optional.of(decided);
       lock.notifyAll();
+      watchdog.end();
       return true;
     }
   }
@@ -233,11 +239,7 @@ public final class Producer {
     var interrupted = false;
     synchronized (lock) {
       while (condition.getAsBoolean()) {
-        try {
-          lock.wait();
-        } catch (InterruptedException _) {
-          interrupted = true;
-        }
+        interrupted |= !tryWaitOnLock();
       }
     }
 
@@ -246,50 +248,25 @@ public final class Producer {
     }
   }
 
+  // Holds lock. False when an interrupt ended the wait.
+  private boolean tryWaitOnLock() {
+    try {
+      lock.wait();
+      return true;
+    } catch (InterruptedException _) {
+      return false;
+    }
+  }
+
   private void watchForStall() {
     var stall =
         new Failed(
             ProducerFailure.ENCODER_STALLED,
             "FFmpeg wrote no output for " + stallTimeout + " while the producer read it");
-    if (tryDecideStall(stall)) {
+    if (watchdog.awaitStall() && tryDecide(stall)) {
       process.destroy();
       awaitExitWithinGracePeriod();
       settle(stall);
-    }
-  }
-
-  // Records the stall once the reader has read nothing for the stall timeout; false once the
-  // attempt's outcome is decided otherwise.
-  private boolean tryDecideStall(Failed stall) {
-    synchronized (lock) {
-      while (decision.isEmpty()) {
-        var silence = System.nanoTime() - lastOutputNanos;
-        if (!readerWaiting && silence >= stallTimeout.toNanos()) {
-          return tryDecide(stall);
-        }
-
-        if (!tryAwaitWatchdogWake(silence)) {
-          return false;
-        }
-      }
-
-      return false;
-    }
-  }
-
-  // Holds lock. False when interrupted, which nothing does, and the watchdog then stops watching.
-  private boolean tryAwaitWatchdogWake(long silence) {
-    try {
-      if (readerWaiting) {
-        lock.wait();
-        return true;
-      }
-
-      TimeUnit.NANOSECONDS.timedWait(lock, stallTimeout.toNanos() - silence);
-      return true;
-    } catch (InterruptedException _) {
-      Thread.currentThread().interrupt();
-      return false;
     }
   }
 
@@ -300,18 +277,13 @@ public final class Producer {
       if (!condition.getAsBoolean()) {
         return;
       }
-
-      readerWaiting = true;
     }
 
+    watchdog.pause();
     try {
       awaitWhile(condition);
     } finally {
-      synchronized (lock) {
-        readerWaiting = false;
-        lastOutputNanos = System.nanoTime();
-        lock.notifyAll();
-      }
+      watchdog.resume();
     }
   }
 
@@ -324,23 +296,19 @@ public final class Producer {
   }
 
   private void conclude(Ending ending) {
-    switch (ending) {
-      case EndOfOutput _ -> settleAtExitOnceAccepted();
-      case TruncatedOutput(var failure) -> settleAtExitOnceAccepted(failure);
-      case Abandoned(var failure) -> abandon(failure);
-      case Decided _ -> discardRemainingOutput();
-    }
+    Runnable conclusion =
+        switch (ending) {
+          case EndOfOutput _ -> () -> settleAtExitOnceAccepted(this::outcomeOfCompleteOutput);
+          case TruncatedOutput(var failure) -> () -> settleAtExitOnceAccepted(() -> failure);
+          case Abandoned(var failure) -> () -> abandon(failure);
+          case Decided _ -> this::discardRemainingOutput;
+        };
+    conclusion.run();
   }
 
-  private void settleAtExitOnceAccepted() {
-    if (awaitAcceptanceOfDeliveryInFlight()) {
-      settleAtExit(outcomeOfCompleteOutput());
-    }
-  }
-
-  private void settleAtExitOnceAccepted(Failed failure) {
-    if (awaitAcceptanceOfDeliveryInFlight()) {
-      settleAtExit(failure);
+  private void settleAtExitOnceAccepted(Supplier<AttemptOutcome> outcomeOnCleanExit) {
+    if (tryAwaitAcceptanceOfDeliveryInFlight()) {
+      settleAtExit(outcomeOnCleanExit.get());
     }
   }
 
@@ -354,7 +322,7 @@ public final class Producer {
   // The segment already in delivery is complete, so the reader lets it finish before it ends a
   // failed attempt; a stop or another failure decided meanwhile takes over instead.
   private void abandon(Failed failure) {
-    if (!awaitAcceptanceOfDeliveryInFlight() || !tryDecide(failure)) {
+    if (!tryAwaitAcceptanceOfDeliveryInFlight() || !tryDecide(failure)) {
       discardRemainingOutput();
       return;
     }
@@ -364,7 +332,7 @@ public final class Producer {
   }
 
   // False when the attempt was decided while the delivery awaited acceptance.
-  private boolean awaitAcceptanceOfDeliveryInFlight() {
+  private boolean tryAwaitAcceptanceOfDeliveryInFlight() {
     awaitReaderWhile(() -> deliveryInFlight.isPresent() && decision.isEmpty());
     return !isDecided();
   }
@@ -435,36 +403,15 @@ public final class Producer {
     return switch (unit) {
       case InitializationSegment initializationSegment ->
           handOff(ProducedSegment.of(initializationSegment));
-      case Fragment fragment ->
-          deliverClosedBy(grouper.accept(requireNoShortVideoSample(fragment)));
+      case Fragment fragment -> deliverClosedBy(grouper.accept(checkedForShortSamples(fragment)));
     };
   }
 
-  // An encoder that emits packets out of decode order, as SVT-AV1 4.x can (upstream #2385), leaves
-  // FFmpeg to rewrite their timestamps into samples of a tick or so; the output then fails to
-  // decode or skips segment numbers, even when FFmpeg exits cleanly. Nothing after such a sample is
-  // delivered, not even the segment it would close.
-  private Fragment requireNoShortVideoSample(Fragment fragment) {
-    var timescale = fragment.videoStart().map(VideoStart::timescale);
-    var shortest = fragment.shortestVideoSampleDuration();
-    if (encodedFrameRate.isEmpty() || timescale.isEmpty() || shortest.isEmpty()) {
-      return fragment;
-    }
-
-    var halfFrame = timescale.orElseThrow() / encodedFrameRate.getAsDouble() / 2;
-    if (shortest.getAsLong() >= halfFrame) {
-      return fragment;
-    }
-
-    throw new FragmentedMp4Exception(
-        Reason.SHORT_VIDEO_SAMPLE,
-        "a video sample of "
-            + shortest.getAsLong()
-            + " ticks lasts less than half a frame of "
-            + 2 * halfFrame
-            + " ticks at "
-            + encodedFrameRate.getAsDouble()
-            + " frames per second");
+  // Nothing after a short video sample is delivered, not even the segment it would close.
+  private Fragment checkedForShortSamples(Fragment fragment) {
+    return encodedFrameRate
+        .map(frameRate -> frameRate.requireNoShortVideoSample(fragment))
+        .orElse(fragment);
   }
 
   private Optional<Ending> deliverClosedBy(GroupingOutcome grouping) {
@@ -658,34 +605,6 @@ public final class Producer {
     }
   }
 
-  // FFmpeg's standard output, noting when each byte arrives for the stall watchdog.
-  private final class WatchedOutput extends FilterInputStream {
-
-    private WatchedOutput(InputStream output) {
-      super(output);
-    }
-
-    @Override
-    public int read() throws IOException {
-      var value = super.read();
-      if (value >= 0) {
-        lastOutputNanos = System.nanoTime();
-      }
-
-      return value;
-    }
-
-    @Override
-    public int read(byte[] buffer, int offset, int length) throws IOException {
-      var read = super.read(buffer, offset, length);
-      if (read > 0) {
-        lastOutputNanos = System.nanoTime();
-      }
-
-      return read;
-    }
-  }
-
   @Builder
   private record Settings(
       UUID jobAttemptId,
@@ -693,7 +612,7 @@ public final class Producer {
       SegmentSink sink,
       Duration gracePeriod,
       Duration stallTimeout,
-      OptionalDouble encodedFrameRate) {}
+      Optional<EncodedFrameRate> encodedFrameRate) {}
 
   public static class ProducerBuilder {
     private OptionalDouble encodedFrameRate = OptionalDouble.empty();
