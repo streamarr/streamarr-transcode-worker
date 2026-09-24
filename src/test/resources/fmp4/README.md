@@ -1,7 +1,7 @@
 # Fragmented-MP4 grouping fixtures (ADR 0037, worker #39)
 
 Recorded standard-output streams of ADR 0037's FFmpeg recipe, with the media segments that the
-zero-based grid rule groups them into. The recordings pin that rule. Fixtures 1–10 also run the same
+zero-based grid rule groups them into. The recordings pin that rule. Every fixture also runs the same
 source through FFmpeg's HLS muxer as differential evidence, not as an oracle: each HLS comparison
 in `expected.json` records every segment whose cut point differs from the grid, and this file
 explains the cause.
@@ -187,7 +187,8 @@ and before 9 of 10 in the earlier 66 s floored recording of 1.
 
 For every fixture the same source was also run through the HLS muxer (`-f hls -hls_segment_type fmp4`):
 - `*.hls-recipe`: the HLS muxer recipe that ADR 0037 replaces, as `FfmpegCommandBuilder` builds it (no `-start_at_zero`, `-max_delay`, its keyframe arguments, with audio).
-- `*.video-only`: the pipe recipe's own flags and keyframe arguments, video only.
+- `*.video-only`: the pipe recipe's own flags and keyframe arguments, video only; for fixtures 11–13 over the
+  same first 30 s of the source.
 
 Each HLS segment's first video sample is mapped to the pipe recording by its ordinal in decode order.
 Where the two runs share their video arguments (every stream copy, every `video-only` run and every
@@ -211,6 +212,7 @@ Agreement, exact in ticks:
 | 9 | differs on 7–10 | agrees | a different encode (4 below); its pipe-keyframes-with-audio run agrees |
 | 4 | differs on segment 3 | differs on segment 3 | reference 1 below |
 | 10 | differs on segment 2 | – | the HLS muxer numbers sequentially and never skips |
+| 11, 12, 12b, 13, 13b | – | agrees | the first video frame is at zero, so hlsenc measures from the grid's zero |
 
 Every disagreement is explained by where hlsenc measures from, or by an HLS run that encodes other
 keyframes, not by the grouping. `hlsencModel`
@@ -219,7 +221,7 @@ re-implements hlsenc.c's cut rule (FFmpeg n8.1 source, lines 2440–2489):
 - a later keyframe cuts when `pts − start_pts ≥ hls_time × number` in the video time base.
 
 It applies that rule to the HLS run's own keyframes, with `start_pts` = the pts of the first packet
-the muxer receives. The model reproduces the observed HLS cut list in all 28 HLS comparisons
+the muxer receives. The model reproduces the observed HLS cut list in all 33 HLS comparisons
 (`reproducesHlsCuts: true`). Its reference differs from the grid's zero in three ways:
 
 1. **First video frame after zero** (3, 4, 5a, 9: video starts 41 or 41.7 ms after the container
@@ -341,6 +343,6 @@ settle what, if anything, changes because of them.
   than the first attempt's. So the replacement attempt's segment 5 begins with the first attempt's
   segment 4's last AAC frame: 21.3 ms of audio heard twice, not a gap. Video is identical.
 - **Trailing audio-only fragments are common, not exceptional.** With 48 kHz audio they end 1, 1b, 2,
-  4, 5a, 5b, 10, 12 and 13, as well as 6.
+  4, 5a, 5b, 10, 12, 13 and 13b, as well as 6.
 - `hlsenc` measures fMP4 cut points in the video time base from a reference that can be an audio
   packet's pts. That is a latent defect of the HLS recipe's fMP4 path (reference 3 above).

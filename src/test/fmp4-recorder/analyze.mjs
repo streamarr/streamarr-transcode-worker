@@ -178,34 +178,34 @@ const FIXTURES = [
       'an encoder not verified to honour forced keyframes: the GOP keyframe one frame before every later boundary ' +
       '(frames 143, 287, 431, 575) and on the last frame (719) is a 1-frame keyframe-first fragment that joins the ' +
       'earlier segment, so each segment holds two keyframes and still groups on the grid.',
-    hlsComparisons: [],
+    hlsComparisons: [hlsComparison('11-encode-cfr-floored-gop.video-only', 'pipe-recipe', { audio: false })],
   },
   {
     name: '12-encode-cfr-missed-forced-keyframe', source: 'cfr.mp4', mode: 'encode', encoder: 'libx264', seek: 0, start: 0,
     proves: 'libx264 over the first 30 s under the verified GOP of 145 frames with the forced keyframe for 18 s ' +
       'suppressed: the GOP count restarts at the forced keyframe at 12.012 s (frame 288), so the backstop keyframe ' +
       'lands 145 frames later at 18.060 s (frame 433), inside interval 3, and no segment number is skipped.',
-    hlsComparisons: [],
+    hlsComparisons: [hlsComparison('12-encode-cfr-missed-forced-keyframe.video-only', 'pipe-recipe', { audio: false })],
   },
   {
     name: '12-svtav1-cfr-missed-forced-keyframe', source: 'cfr.mp4', mode: 'encode', encoder: 'libsvtav1', seek: 0, start: 0,
     proves: 'The same suppressed forced keyframe through SVT-AV1: its GOP count also restarts at the forced keyframe ' +
       'at frame 288, and the backstop keyframe lands at frame 433 (18.060 s), inside interval 3.',
-    hlsComparisons: [],
+    hlsComparisons: [hlsComparison('12-svtav1-cfr-missed-forced-keyframe.video-only', 'pipe-recipe', { audio: false })],
   },
   {
     name: '13-x265-cfr', source: 'cfr.mp4', mode: 'encode', encoder: 'libx265', seek: 0, start: 0,
     proves: 'libx265 with the worker\'s arguments (open GOP by default) under the 145-frame GOP: it honours every ' +
       'time-based forced keyframe (frames 144, 288, 432, 576), but despite -forced-idr 1 each one is a CRA ' +
       '(NAL type 21); only frame 0 is an IDR (type 20). No RASL picture follows them here.',
-    hlsComparisons: [],
+    hlsComparisons: [hlsComparison('13-x265-cfr.video-only', 'pipe-recipe', { audio: false })],
   },
   {
     name: '13-x265-cfr-missed-forced-keyframe', source: 'cfr.mp4', mode: 'encode', encoder: 'libx265', seek: 0, start: 0,
     proves: 'libx265 with the forced keyframe for 18 s suppressed: its GOP count restarts at the forced keyframe at ' +
       'frame 288 and the backstop lands at frame 433 (18.060 s), inside interval 3, but as a CRA whose RASL ' +
       'picture (frame 432) references the previous GOP, so the segment it opens cannot be decoded on its own.',
-    hlsComparisons: [],
+    hlsComparisons: [hlsComparison('13-x265-cfr-missed-forced-keyframe.video-only', 'pipe-recipe', { audio: false })],
   },
 ];
 

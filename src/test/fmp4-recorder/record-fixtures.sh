@@ -99,7 +99,7 @@ run() {
   local number=(); [ "$start" -gt 0 ] && number=(-start_number "$start")
   mkdir -p "hls/$name"
   local status=0
-  "${FF[@]}" -y "${seek[@]}" -i "$src" "${maps[@]}" "${common[@]}" "$@" "${DET[@]}" \
+  "${FF[@]}" -y "${seek[@]}" "${duration[@]}" -i "$src" "${maps[@]}" "${common[@]}" "$@" "${DET[@]}" \
     -f hls -hls_time "$P" -hls_list_size 0 -hls_flags temp_file "${number[@]}" \
     -hls_segment_type fmp4 -hls_fmp4_init_filename init.mp4 -hls_segment_options movflags=+frag_discont \
     -hls_segment_filename "hls/$name/segment%d.m4s" "hls/$name/stream.m3u8" 2> "logs/hls-$name.log" || status=$?
@@ -211,14 +211,19 @@ run hls 10-copy-gop-exceeds-period.hls-recipe hls-recipe src/gop10.mp4 -- "${COP
 
 # ------------------------------------------------------------------ 11. the floored GOP of an encoder not verified to honour forced keyframes
 run pipe 11-encode-cfr-floored-gop duration=30 src/cfr.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE_FLOORED[@]}"
+run hls 11-encode-cfr-floored-gop.video-only video duration=30 src/cfr.mp4 -- "${X264[@]}" "${KEY_X264_PIPE_FLOORED[@]}"
 
 # ------------------------------------------------------------------ 12. a forced keyframe that never comes: the GOP backstop places it
 run pipe 12-encode-cfr-missed-forced-keyframe duration=30 src/cfr.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE_MISSED[@]}"
+run hls 12-encode-cfr-missed-forced-keyframe.video-only video duration=30 src/cfr.mp4 -- "${X264[@]}" "${KEY_X264_PIPE_MISSED[@]}"
 run pipe 12-svtav1-cfr-missed-forced-keyframe duration=30 src/cfr.mp4 -- "${SVT[@]}" "${AAC[@]}" "${KEY_SVT_PIPE_MISSED[@]}"
+run hls 12-svtav1-cfr-missed-forced-keyframe.video-only video duration=30 src/cfr.mp4 -- "${SVT[@]}" "${KEY_SVT_PIPE_MISSED[@]}"
 
 # ------------------------------------------------------------------ 13. libx265 under the verified-encoder GOP, with and without a missed forced keyframe
 run pipe 13-x265-cfr duration=30 src/cfr.mp4 -- "${X265[@]}" "${AAC[@]}" "${KEY_X265_PIPE[@]}"
+run hls 13-x265-cfr.video-only video duration=30 src/cfr.mp4 -- "${X265[@]}" "${KEY_X265_PIPE[@]}"
 run pipe 13-x265-cfr-missed-forced-keyframe duration=30 src/cfr.mp4 -- "${X265[@]}" "${AAC[@]}" "${KEY_X265_PIPE_MISSED[@]}"
+run hls 13-x265-cfr-missed-forced-keyframe.video-only video duration=30 src/cfr.mp4 -- "${X265[@]}" "${KEY_X265_PIPE_MISSED[@]}"
 
 # ------------------------------------------------------------------ side claims of ADR 0037 (recorded, not delivered)
 mkdir -p claims

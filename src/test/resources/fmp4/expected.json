@@ -4681,7 +4681,52 @@
           ]
         }
       },
-      "hlsComparisons": []
+      "hlsComparisons": [
+        {
+          "hlsRun": "11-encode-cfr-floored-gop.video-only",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
+          "streams": "video only",
+          "pipeReference": "11-encode-cfr-floored-gop.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 720,
+            "pipeVideoSamples": 720,
+            "identicalPackets": 720,
+            "sharesVideoArguments": true
+          },
+          "segments": [
+            {
+              "number": 0,
+              "firstVideoPresentationTime": 0
+            },
+            {
+              "number": 1,
+              "firstVideoPresentationTime": 144144
+            },
+            {
+              "number": 2,
+              "firstVideoPresentationTime": 288288
+            },
+            {
+              "number": 3,
+              "firstVideoPresentationTime": 432432
+            },
+            {
+              "number": 4,
+              "firstVideoPresentationTime": 576576
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": true,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 0.0,
+            "reproducesHlsCuts": true
+          }
+        }
+      ]
     },
     {
       "name": "12-encode-cfr-missed-forced-keyframe",
@@ -4829,7 +4874,52 @@
           ]
         }
       },
-      "hlsComparisons": []
+      "hlsComparisons": [
+        {
+          "hlsRun": "12-encode-cfr-missed-forced-keyframe.video-only",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
+          "streams": "video only",
+          "pipeReference": "12-encode-cfr-missed-forced-keyframe.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 720,
+            "pipeVideoSamples": 720,
+            "identicalPackets": 720,
+            "sharesVideoArguments": true
+          },
+          "segments": [
+            {
+              "number": 0,
+              "firstVideoPresentationTime": 0
+            },
+            {
+              "number": 1,
+              "firstVideoPresentationTime": 144144
+            },
+            {
+              "number": 2,
+              "firstVideoPresentationTime": 288288
+            },
+            {
+              "number": 3,
+              "firstVideoPresentationTime": 433433
+            },
+            {
+              "number": 4,
+              "firstVideoPresentationTime": 576576
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": true,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 0.0,
+            "reproducesHlsCuts": true
+          }
+        }
+      ]
     },
     {
       "name": "12-svtav1-cfr-missed-forced-keyframe",
@@ -4982,7 +5072,52 @@
           ]
         }
       },
-      "hlsComparisons": []
+      "hlsComparisons": [
+        {
+          "hlsRun": "12-svtav1-cfr-missed-forced-keyframe.video-only",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
+          "streams": "video only",
+          "pipeReference": "12-svtav1-cfr-missed-forced-keyframe.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 720,
+            "pipeVideoSamples": 720,
+            "identicalPackets": 720,
+            "sharesVideoArguments": true
+          },
+          "segments": [
+            {
+              "number": 0,
+              "firstVideoPresentationTime": 0
+            },
+            {
+              "number": 1,
+              "firstVideoPresentationTime": 144144
+            },
+            {
+              "number": 2,
+              "firstVideoPresentationTime": 288288
+            },
+            {
+              "number": 3,
+              "firstVideoPresentationTime": 433433
+            },
+            {
+              "number": 4,
+              "firstVideoPresentationTime": 576576
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": true,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 0.0,
+            "reproducesHlsCuts": true
+          }
+        }
+      ]
     },
     {
       "name": "13-x265-cfr",
@@ -5135,7 +5270,52 @@
           ]
         }
       },
-      "hlsComparisons": []
+      "hlsComparisons": [
+        {
+          "hlsRun": "13-x265-cfr.video-only",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
+          "streams": "video only",
+          "pipeReference": "13-x265-cfr.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 720,
+            "pipeVideoSamples": 720,
+            "identicalPackets": 720,
+            "sharesVideoArguments": true
+          },
+          "segments": [
+            {
+              "number": 0,
+              "firstVideoPresentationTime": 0
+            },
+            {
+              "number": 1,
+              "firstVideoPresentationTime": 144144
+            },
+            {
+              "number": 2,
+              "firstVideoPresentationTime": 288288
+            },
+            {
+              "number": 3,
+              "firstVideoPresentationTime": 432432
+            },
+            {
+              "number": 4,
+              "firstVideoPresentationTime": 576576
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": true,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 0.0,
+            "reproducesHlsCuts": true
+          }
+        }
+      ]
     },
     {
       "name": "13-x265-cfr-missed-forced-keyframe",
@@ -5288,7 +5468,52 @@
           ]
         }
       },
-      "hlsComparisons": []
+      "hlsComparisons": [
+        {
+          "hlsRun": "13-x265-cfr-missed-forced-keyframe.video-only",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
+          "streams": "video only",
+          "pipeReference": "13-x265-cfr-missed-forced-keyframe.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 720,
+            "pipeVideoSamples": 720,
+            "identicalPackets": 720,
+            "sharesVideoArguments": true
+          },
+          "segments": [
+            {
+              "number": 0,
+              "firstVideoPresentationTime": 0
+            },
+            {
+              "number": 1,
+              "firstVideoPresentationTime": 144144
+            },
+            {
+              "number": 2,
+              "firstVideoPresentationTime": 288288
+            },
+            {
+              "number": 3,
+              "firstVideoPresentationTime": 433433
+            },
+            {
+              "number": 4,
+              "firstVideoPresentationTime": 576576
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": false,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 0.0,
+            "reproducesHlsCuts": true
+          }
+        }
+      ]
     }
   ],
   "initializationSegmentIdentityPairs": [
