@@ -150,6 +150,17 @@ class RecordedFfmpegOutputTest {
   }
 
   @ParameterizedTest(name = "{0}")
+  @MethodSource("recordings")
+  @DisplayName("Should start every video fragment at or after media time zero when recorded")
+  void shouldStartEveryVideoFragmentAtOrAfterMediaTimeZeroWhenRecorded(Recording recording)
+      throws IOException {
+    assertThat(read(recording.file()).fragments())
+        .flatMap(fragment -> fragment.videoStart().stream().toList())
+        .isNotEmpty()
+        .allSatisfy(start -> assertThat(start.presentationTime()).isNotNegative());
+  }
+
+  @ParameterizedTest(name = "{0}")
   @CsvSource({"05-encode-late-start.fmp4, 1001", "05-copy-late-start.fmp4, 1920"})
   @DisplayName("Should open media segment zero when the source's timestamps begin after zero")
   void shouldOpenMediaSegmentZeroWhenTheSourcesTimestampsBeginAfterZero(
