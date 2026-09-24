@@ -44,7 +44,7 @@ FORCED_EXCEPT_18="expr:gte(t,(n_forced+gte(n_forced,3))*$P)"
 # Fixture-only additions: single-threaded encoders (-threads 1, and lp=1 for SVT-AV1, whose output
 # otherwise differs on every run), so that a re-recording reproduces the same bytes. For libx264 and
 # libx265 threading changes rate-control decisions, never where a keyframe is placed or where the
-# muxer cuts. For SVT-AV1 lp=1 also excludes upstream bug #2385 (worker #42), which under the
+# muxer cuts. For SVT-AV1 lp=1 also excludes upstream issue 2385 (worker #42), which under the
 # worker's threading can reorder packets and crowd keyframes, so no recording shows that bug.
 DET=(-threads 1)
 

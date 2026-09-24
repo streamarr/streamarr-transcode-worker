@@ -118,8 +118,8 @@ no recording here shows that bug. Nothing else differs from the recipe.
   lists what is delivered before the failure. A keyframe that skips a segment number still marks the
   end of the open segment, so that segment is complete: it is delivered (or discarded, when it is
   preroll) and the attempt then fails. The skipping fragment and everything after it are never
-  grouped. Whether a segment that long may be served at all is a duration policy that server #66
-  owns, not the grouping.
+  grouped. Whether a segment that long may be served at all is a duration policy that
+  [server #66](https://github.com/streamarr/streamarr-server/issues/66) owns, not the grouping.
 - `endsWithAudioOnlyFragments` / `trailingAudioOnlyFragmentCount` describe fragments with no video
   `traf` after the last video sample.
 - `diagnostics.videoPictures.keyframes` lists every keyframe in decode order with its presentation
