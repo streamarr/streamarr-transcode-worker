@@ -875,6 +875,32 @@ class ProducerTest {
 
   @Test
   @DisplayName(
+      "Should fail the attempt as an encoder stall when FFmpeg writes nothing while the producer"
+          + " discards the preroll of an encoded replacement attempt")
+  void
+      shouldFailTheAttemptAsAnEncoderStallWhenFfmpegWritesNothingWhileTheProducerDiscardsThePrerollOfAnEncodedReplacementAttempt() {
+    var recording = recording("09-svtav1-vfr-seek30.fmp4");
+    var recorded = bytesOf(recording.file());
+    var process =
+        ScriptedProcess.builder()
+            .output(recorded)
+            .pauseAfter(insideSecondPrerollFragment(recording, recorded))
+            .build();
+
+    var producer =
+        producerFor(process, recording)
+            .stallTimeout(Duration.ofMillis(200))
+            .gracePeriod(Duration.ofMillis(200))
+            .start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.ENCODER_STALLED);
+    assertThat(process.wasTerminated()).isTrue();
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+  }
+
+  @Test
+  @DisplayName(
       "Should not fail the attempt as an encoder stall while a segment awaits acceptance and the"
           + " reader waits for it")
   void shouldNotFailTheAttemptAsAnEncoderStallWhileASegmentAwaitsAcceptance() {
@@ -1041,6 +1067,20 @@ class ProducerTest {
     var earlierSegments =
         recording.segments().stream().limit(position).mapToLong(SegmentSummary::byteLength).sum();
     return Math.toIntExact(recording.initializationSegment().byteLength() + earlierSegments);
+  }
+
+  // An offset inside the second fragment of a recording whose preroll follows its initialization
+  // segment.
+  private static int insideSecondPrerollFragment(Recording recording, byte[] recorded) {
+    assertThat(recording.discardedPreroll())
+        .singleElement()
+        .satisfies(
+            preroll -> {
+              assertThat(preroll.firstFragmentIndex()).isZero();
+              assertThat(preroll.fragmentCount()).isGreaterThan(2);
+            });
+    var firstPrerollFragment = Math.toIntExact(recording.initializationSegment().byteLength());
+    return firstPrerollFragment + fragmentLengthAt(recorded, firstPrerollFragment) + 10;
   }
 
   // The length of the moof at this offset and the mdat that follows it.
