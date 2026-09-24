@@ -61,7 +61,7 @@ const FIXTURES = [
   {
     name: '01-encode-cfr-seek30', source: 'cfr.mp4', mode: 'encode', encoder: 'libx264', seek: 30, start: 5,
     proves: 'An encoded seek (-ss 30) under -r without -fps_mode starts at the seek point (30.030 s, ' +
-      'segment 5), pads nothing from zero, and has no preroll. force_key_frames measures t from the run\'s ' +
+      'segment 5), pads nothing from zero, and has no preroll. force_key_frames measures t from the attempt\'s ' +
       'first frame, so from segment 7 on its forced keyframes sit one frame after the start-0 recording\'s ' +
       '(42.042 s against 42.0003 s), inside the same intervals.',
     hlsComparisons: [
@@ -224,7 +224,8 @@ const RECIPE =
   'when copying AAC] [encode: -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 expr:gte(t,n_forced*6) ' +
   '-g:v:0 145 = ceil(6 x 23.976) + 1 for an encoder verified to honour forced keyframes (libx264, SVT-AV1), else ' +
   '143 = floor(6 x 23.976) (fixture 11) (-keyint_min:v:0 with the same value for SVT-AV1) (-sc_threshold:v:0 0 for ' +
-  'libx264)] [fixtures 12 and 13 only: -t 30] -threads 1 -f mp4 -movflags ' +
+  'libx264); fixtures 13 and 13b give libx265, not verified, 145 to test whether it qualifies] ' +
+  '[fixtures 11 to 13 only: -t 30] -threads 1 -f mp4 -movflags ' +
   'cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont -frag_duration 1000000 pipe:1';
 
 const RULES =

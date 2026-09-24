@@ -35,15 +35,17 @@ MOVFLAGS=cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont
 # Java double. Every encoded source below probes as 24000/1001 (analyze.mjs checks it).
 FPS=23.976023976023978
 GOP_VERIFIED=145                      # ceil(P * FPS) + 1: ADR 0037's backstop for an encoder verified to honour forced keyframes
-GOP_FLOOR=143                         # floor(P * FPS): ADR 0037's GOP for an encoder not verified to (hardware, until worker #14)
+GOP_FLOOR=143                         # floor(P * FPS): ADR 0037's GOP for an encoder not verified to (libx265 until worker #23, hardware until worker #14)
 GOP_CEIL=144                          # ceil(P * FPS): the HLS recipe's frame-count GOP
 FORCED_EVERY_PERIOD="expr:gte(t,n_forced*$P)"
 # Forces 0, 6, 12, 24, 30 ... s: the forced keyframe for 18 s never comes, so the GOP backstop must
 # place interval 3's keyframe.
 FORCED_EXCEPT_18="expr:gte(t,(n_forced+gte(n_forced,3))*$P)"
 # Fixture-only additions: single-threaded encoders (-threads 1, and lp=1 for SVT-AV1, whose output
-# otherwise differs on every run), so that a re-recording reproduces the same bytes. Threading
-# changes rate-control decisions, never where a keyframe is placed or where the muxer cuts.
+# otherwise differs on every run), so that a re-recording reproduces the same bytes. For libx264 and
+# libx265 threading changes rate-control decisions, never where a keyframe is placed or where the
+# muxer cuts. For SVT-AV1 lp=1 also excludes upstream bug #2385 (worker #42), which under the
+# worker's threading can reorder packets and crowd keyframes, so no recording shows that bug.
 DET=(-threads 1)
 
 X264=(-c:v libx264 -vf scale=-2:36 -b:v 6000 -maxrate 6000 -bufsize 12000)
