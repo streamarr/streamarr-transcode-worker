@@ -313,12 +313,10 @@ class WorkerMediaSmokeTest {
   // (upstream #2385, worker #42): FFmpeg then hangs, or squeezes the timestamps of out-of-order
   // packets, and this long job fails on a busy CI runner for a reason unrelated to what it checks.
   // At a level of parallelism of one (lp=1) each stage has one thread and one picture in flight,
-  // so the queue cannot overrun (0 failures in 90 runs), and the forced and GOP keyframes land
-  // where
-  // they do at production threading, so this check of where segments start still covers the
-  // recipe. Production keeps its threading and relies on the stall watchdog and the short-sample
-  // rule instead; lp=1 encodes 1080p slower than real time. The short AV1 smoke above keeps
-  // production threading.
+  // so the queue cannot overrun, and the forced and GOP keyframes land where they do at production
+  // threading, so this check of where segments start still covers the recipe. Production keeps its
+  // threading and relies on the stall watchdog and the short-sample rule instead; lp=1 encodes
+  // 1080p slower than real time. The short AV1 smoke above keeps production threading.
   private static ProcessLauncher withSvtAv1ParallelismOfOne(ProcessLauncher launcher) {
     return (command, jobAttemptId) -> {
       var parameters = command.indexOf("-svtav1-params") + 1;

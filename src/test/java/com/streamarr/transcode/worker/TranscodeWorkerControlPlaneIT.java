@@ -237,20 +237,20 @@ class TranscodeWorkerControlPlaneIT {
       service.awaitStarted(current);
 
       var replaced = new ArrayList<Uuid>();
-      var replacements = new ArrayList<Uuid>();
+      var replacementAttempts = new ArrayList<Uuid>();
       for (var index = 0; index < 100; index++) {
         service.sendStop(service.registeredWorker(), current);
         var next = current.toBuilder().setJobAttemptId(toProto(UUID.randomUUID())).build();
         service.sendStart(service.registeredWorker(), next);
         replaced.add(current.getJobAttemptId());
-        replacements.add(next.getJobAttemptId());
+        replacementAttempts.add(next.getJobAttemptId());
         current = next;
       }
 
       // Each stop reports once FFmpeg has exited, on its own thread, so a replaced attempt's stop
       // and its successor's start reach the control plane in either order. With one slot, a start
       // handled before the stop that precedes it would be refused.
-      var events = service.awaitEvents(replaced.size() + replacements.size());
+      var events = service.awaitEvents(replaced.size() + replacementAttempts.size());
       assertThat(events)
           .filteredOn(EstablishWorkerSessionRequest::hasJobAttemptStopped)
           .extracting(event -> event.getJobAttemptStopped().getJobAttemptId())
@@ -258,7 +258,7 @@ class TranscodeWorkerControlPlaneIT {
       assertThat(events)
           .filteredOn(EstablishWorkerSessionRequest::hasJobAttemptStarted)
           .extracting(event -> event.getJobAttemptStarted().getJobAttemptId())
-          .containsExactlyInAnyOrderElementsOf(replacements);
+          .containsExactlyInAnyOrderElementsOf(replacementAttempts);
       assertThat(launcher.process(fromProto(current.getJobAttemptId())).isAlive()).isTrue();
     }
   }
