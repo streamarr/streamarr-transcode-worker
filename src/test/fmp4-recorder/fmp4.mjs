@@ -254,7 +254,7 @@ function trackFragmentHeader(data, body, stop, tracks) {
     size: track.trexSize ?? 0,
     flags: track.trexFlags ?? 0,
   };
-  const baseDataOffset = flags & TFHD_BASE_DATA_OFFSET ? Number(fields.u64()) : null;
+  const baseDataOffset = flags & TFHD_BASE_DATA_OFFSET ? fields.u64() : null;
   const defaultBaseIsMoof = (flags & TFHD_DEFAULT_BASE_IS_MOOF) !== 0;
   fields.skip(flags & TFHD_SAMPLE_DESCRIPTION_INDEX ? 4 : 0);
   if (flags & TFHD_DEFAULT_SAMPLE_DURATION) {
@@ -310,7 +310,8 @@ export function isSync(flags) {
  * Where each run's sample data starts (ISO/IEC 14496-12 8.8.7 and 8.8.8): the traf's base is the
  * tfhd base-data-offset, else the moof with default-base-is-moof, else the moof for the first traf
  * and the end of the previous traf's data after it; a run starts at base + its data offset, else
- * where the previous run of the traf ended, else at the base. Positions are offsets into the stream.
+ * where the previous run of the traf ended, else at the base. Positions are BigInt offsets into the
+ * stream, since a 64-bit base can lie beyond the doubles that hold every integer exactly.
  */
 function placeRuns({ header, runs, layout }) {
   let base = layout.previousTrafEnd;
@@ -322,11 +323,11 @@ function placeRuns({ header, runs, layout }) {
   }
   let end = base;
   const ranges = runs.map((run) => {
-    const start = run.dataOffset === null ? end : base + run.dataOffset;
+    const start = run.dataOffset === null ? end : base + BigInt(run.dataOffset);
     let position = start;
     for (const sample of run.samples) {
       sample.offset = position;
-      position += sample.size;
+      position += BigInt(sample.size);
     }
     end = position;
     return [start, end];
@@ -367,7 +368,7 @@ function parseTraf(data, [body, stop], { tracks, layout }) {
 function requireDataInside(fragment, [bodyStart, end]) {
   for (const traf of fragment.trafs) {
     for (const [start, stop] of traf.dataRanges) {
-      if (stop > start && (start < bodyStart || stop > end)) {
+      if (stop > start && (start < BigInt(bodyStart) || stop > BigInt(end))) {
         throw new Mp4FormatError(
           `track ${traf.trackId} sample data at ${start}..${stop} lies outside the mdat body at ${bodyStart}..${end}`,
         );
@@ -421,7 +422,7 @@ function readMoof({ data, tracks, pendingMoof }, [start, body, stop]) {
     throw new Mp4FormatError(`moof at ${start} follows a moof with no mdat`);
   }
   const trafs = [];
-  const layout = { moofStart: start, previousTrafEnd: start };
+  const layout = { moofStart: BigInt(start), previousTrafEnd: BigInt(start) };
   for (const [child, , trafBody, trafStop] of boxes(data, body, stop)) {
     if (child === 'traf') {
       trafs.push(parseTraf(data, [trafBody, trafStop], { tracks, layout }));
@@ -436,7 +437,17 @@ function closeFragment(moof, [start, body, stop]) {
     throw new Mp4FormatError(`mdat at ${start} without moof`);
   }
   requireDataInside(moof, [body, stop]);
+  useBufferOffsets(moof);
   return { ...moof, byteLength: stop - moof.offset };
+}
+
+/** Holds each sample's offset as a buffer position, which every run inside its mdat fits. */
+function useBufferOffsets(moof) {
+  for (const traf of moof.trafs) {
+    for (const sample of traf.samples) {
+      sample.offset = Number(sample.offset);
+    }
+  }
 }
 
 /** Reads several files as one concatenated stream. */

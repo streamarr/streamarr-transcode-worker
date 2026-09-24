@@ -272,6 +272,13 @@ describe('fmp4 sample data', () => {
     assert.throws(() => readStream(explicitBase(-1)), Mp4FormatError);
   });
 
+  it('Should fail when a tfhd base lies beyond the exact range of a double and its sample holds a byte', () => {
+    const base = box('traf', fullBox('tfhd', 0, TFHD_BASE_DATA_OFFSET, u32(VIDEO.trackId), u64(1n << 63n)), tfdt, videoRun());
+    const stream = Buffer.concat([initialization(), moof(base), mdat([1, 2])]);
+
+    assert.throws(() => readStream(stream), Mp4FormatError);
+  });
+
   it("Should read a traf's second run after the first when it declares no data offset", () => {
     const build = (dataOffset) =>
       moof(traf({ trackId: VIDEO.trackId, decodeTime: 0, runs: [videoRun({ dataOffset }), trun({ samples: [{ size: 3 }] })] }));
