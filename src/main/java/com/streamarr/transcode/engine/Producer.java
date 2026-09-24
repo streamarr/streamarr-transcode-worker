@@ -274,7 +274,7 @@ public final class Producer {
   }
 
   // Waits on lock until the condition, evaluated under lock, is false. Nothing interrupts the
-  // producer's own threads, and a stop's caller learns of an interrupt once the wait ends.
+  // producer's own threads; an interrupt is restored once the wait ends.
   private void awaitWhile(BooleanSupplier condition) {
     var interrupted = false;
     synchronized (lock) {
