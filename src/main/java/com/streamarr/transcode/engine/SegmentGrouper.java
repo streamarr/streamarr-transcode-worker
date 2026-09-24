@@ -8,9 +8,9 @@ import java.util.OptionalLong;
 import lombok.NonNull;
 
 /**
- * Groups fragments into media segments on the zero-based interval grid: segment N holds the
- * fragments whose first video sample is a keyframe inside media time [N × period, (N + 1) ×
- * period), with the fragments that follow them before the next such keyframe.
+ * Groups fragments, in arrival order, into the media segments of ADR 0037's zero-based interval
+ * grid. A keyframe that opens the next segment closes the open one, and the end of the stream
+ * closes the last; segments below the start sequence number are preroll and are never returned.
  */
 final class SegmentGrouper {
 
@@ -51,7 +51,10 @@ final class SegmentGrouper {
       return Optional.empty();
     }
 
-    var sequenceNumber = sequenceNumberOf(keyframeStart.orElseThrow());
+    var keyframe = keyframeStart.orElseThrow();
+    requireNoRegression(keyframe);
+    lastKeyframeTime = OptionalLong.of(keyframe.presentationTime());
+    var sequenceNumber = sequenceNumberOf(keyframe);
     if (openSequenceNumber.equals(OptionalLong.of(sequenceNumber))) {
       openFragments.add(fragment);
       return Optional.empty();
@@ -69,8 +72,8 @@ final class SegmentGrouper {
     return close();
   }
 
-  private long sequenceNumberOf(VideoStart start) {
-    var presentationTime = start.presentationTime();
+  private void requireNoRegression(VideoStart keyframe) {
+    var presentationTime = keyframe.presentationTime();
     if (lastKeyframeTime.isPresent() && presentationTime < lastKeyframeTime.getAsLong()) {
       throw new FragmentedMp4Exception(
           Reason.PRESENTATION_TIME_REGRESSED,
@@ -79,9 +82,10 @@ final class SegmentGrouper {
               + " follows a keyframe at "
               + lastKeyframeTime.getAsLong());
     }
+  }
 
-    lastKeyframeTime = OptionalLong.of(presentationTime);
-    return Math.floorDiv(presentationTime, periodSeconds * start.timescale());
+  private long sequenceNumberOf(VideoStart keyframe) {
+    return Math.floorDiv(keyframe.presentationTime(), periodSeconds * keyframe.timescale());
   }
 
   private void requireNoSkippedNumber(long sequenceNumber) {
