@@ -320,7 +320,11 @@ class TranscodeWorkerJobAttemptTest {
 
         awaitEachReaderAt(launcher, running, readerWaits);
         assertThat(stopped)
-            .allSatisfy(job -> assertThat(processOf(launcher, job).isAlive()).isTrue());
+            .allSatisfy(
+                job -> {
+                  assertThat(processOf(launcher, job).isAlive()).isTrue();
+                  assertThat(terminalEventsOf(connection, job)).isEmpty();
+                });
         stopped.forEach(job -> processOf(launcher, job).exit());
         stopped.forEach(job -> awaitTerminalEvent(connection, job));
       }
