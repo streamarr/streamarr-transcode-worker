@@ -152,21 +152,47 @@ public final class Producer {
   }
 
   /**
-   * Ends the attempt for good and returns once it has an outcome. Unless the attempt already has an
-   * outcome, the producer starts no further delivery, asks FFmpeg to quit, cancels the delivery in
-   * flight, discards the rest of its output, destroys FFmpeg when it has not exited within the
-   * grace period, and settles the stop after FFmpeg has exited; a failure observed after the stop
-   * is never reported.
+   * Ends the attempt for good and returns at once. Unless the attempt already has an outcome, the
+   * producer records the stop before it returns, so that it never reports a failure observed
+   * afterwards, and starts no further delivery. It then asks FFmpeg to quit, cancels the delivery
+   * in flight, discards the rest of FFmpeg's output, destroys FFmpeg when it has not exited within
+   * the grace period, and settles the stop after FFmpeg has exited.
    */
-  public void stop() {
-    if (tryDecide(new Stopped())) {
-      requestQuit();
-      cancelDeliveryInFlight();
-      awaitExitWithinGracePeriod();
-      settle(new Stopped());
+  public void requestStop() {
+    if (!tryDecide(new Stopped())) {
+      return;
     }
 
+    Thread.ofVirtual()
+        .name(threadName + "-stop")
+        .uncaughtExceptionHandler(this::failStopUnexpectedly)
+        .start(this::settleStop);
+  }
+
+  /**
+   * Requests the stop and returns once the attempt has an outcome. An interrupt of the waiting
+   * thread destroys FFmpeg at once instead of waiting out the grace period.
+   */
+  public void stop() {
+    requestStop();
+    awaitExitEndingItOnInterrupt();
     outcome.join();
+  }
+
+  private void settleStop() {
+    requestQuit();
+    cancelDeliveryInFlight();
+    awaitExitWithinGracePeriod();
+    settle(new Stopped());
+  }
+
+  private void awaitExitEndingItOnInterrupt() {
+    try {
+      process.waitFor();
+    } catch (InterruptedException _) {
+      Thread.currentThread().interrupt();
+      process.destroyForcibly();
+    }
   }
 
   private void requestQuit() {
@@ -197,7 +223,7 @@ public final class Producer {
   }
 
   // Records the attempt's outcome unless another is already recorded; the caller that records it
-  // settles it once FFmpeg has exited.
+  // settles it once FFmpeg has exited, or starts the thread that does.
   private boolean tryDecide(AttemptOutcome decided) {
     synchronized (lock) {
       if (decision.isPresent()) {
@@ -347,6 +373,13 @@ public final class Producer {
   private void failWatchdogUnexpectedly(Thread watchdogThread, Throwable error) {
     log.error("{} failed unexpectedly", watchdogThread.getName(), error);
     tryFailWithProcessEnded(unexpected(error));
+  }
+
+  // The stop is already recorded, so it still settles, without waiting for FFmpeg to quit.
+  private void failStopUnexpectedly(Thread stopThread, Throwable error) {
+    log.error("{} failed unexpectedly", stopThread.getName(), error);
+    endProcessForcibly();
+    settle(new Stopped());
   }
 
   private void failDeliveryUnexpectedly(Thread deliveryThread, Throwable error) {

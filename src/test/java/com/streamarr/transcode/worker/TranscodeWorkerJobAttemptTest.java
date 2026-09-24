@@ -885,6 +885,45 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
+  @Test
+  @DisplayName(
+      "Should report the stop and let FFmpeg quit when the stop arrives while the first upload"
+          + " opens")
+  void shouldReportTheStopAndLetFfmpegQuitWhenTheStopArrivesWhileTheFirstUploadOpens()
+      throws Exception {
+    // FFmpeg writes at once and exits only when asked to quit, so every attempt ends in its stop.
+    var launcher =
+        new ScriptedProcessLauncher(
+            _ ->
+                ScriptedProcess.builder()
+                    .output(bytesOf(ENCODED_RECORDING))
+                    .exitTiming(ExitTiming.AT_QUIT)
+                    .build());
+    var jobs = new ArrayList<VariantJob>();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      for (var iteration = 0; iteration < RACE_ITERATIONS; iteration++) {
+        var job = variantJobBuilder().build();
+        jobs.add(job);
+        startVariant(connection, job);
+        stopVariant(connection, job);
+        awaitTerminalEvent(connection, job);
+      }
+
+      assertThat(jobs)
+          .allSatisfy(
+              job -> {
+                assertThat(terminalEventsOf(connection, job))
+                    .containsExactly(EventCase.JOB_ATTEMPT_STOPPED);
+                assertThat(
+                        launcher.process(fromProto(job.getJobAttemptId())).wasDestroyedForcibly())
+                    .isFalse();
+              });
+    }
+  }
+
   // The worker reports the job attempt failed as an invalid specification and never starts FFmpeg.
   private void assertRefusedAsAnInvalidSpecification(VariantJob job) throws Exception {
     var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);

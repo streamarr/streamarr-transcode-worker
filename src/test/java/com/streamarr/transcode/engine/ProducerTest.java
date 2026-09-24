@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.OptionalDouble;
 import java.util.UUID;
 import java.util.concurrent.BrokenBarrierException;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -749,6 +750,74 @@ class ProducerTest {
 
   @Test
   @DisplayName(
+      "Should record the stop at once and settle it only once FFmpeg exits when a stop is"
+          + " requested")
+  void shouldRecordTheStopAtOnceAndSettleItOnlyOnceFfmpegExitsWhenAStopIsRequested()
+      throws InterruptedException {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    sink.holding(2);
+    var producer = producerFor(process, recording).gracePeriod(Duration.ofMinutes(10)).start();
+    awaiting().until(sink::isHolding);
+
+    var requesting = Thread.ofVirtual().start(producer::requestStop);
+
+    assertThat(requesting.join(OUTCOME_LIMIT)).isTrue();
+    awaiting().until(() -> sink.wasCancelled() && process.hasReadToEndOfOutput());
+    assertThat(producer.outcome()).isNotDone();
+    process.exit();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Stopped());
+    assertThat(process.stdinText()).isEqualTo("q");
+    assertThat(process.wasDestroyedForcibly()).isFalse();
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+  }
+
+  @Test
+  @DisplayName(
+      "Should settle the stop and end FFmpeg when cancelling the delivery in flight throws"
+          + " unexpectedly")
+  void shouldSettleTheStopAndEndFfmpegWhenCancellingTheDeliveryInFlightThrowsUnexpectedly() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    var held = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    SegmentSink brokenCancellation =
+        (segment, cancellation) -> {
+          if (!segment.name().equals("segment0.m4s")) {
+            return;
+          }
+
+          cancellation.onCancel(
+              () -> {
+                throw new IllegalStateException("the cancellation broke");
+              });
+          held.countDown();
+          awaitLatch(release);
+        };
+    var producer =
+        producerFor(process, recording)
+            .sink(brokenCancellation)
+            .gracePeriod(Duration.ofMinutes(10))
+            .start();
+    awaitLatch(held);
+
+    producer.requestStop();
+
+    awaiting().until(process::wasDestroyedForcibly);
+    release.countDown();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Stopped());
+  }
+
+  @Test
+  @DisplayName(
       "Should settle whichever of a stop and a failure is recorded first, and let the other take"
           + " no effect, when they race")
   void shouldSettleWhicheverOfAStopAndAFailureIsRecordedFirstWhenTheyRace() throws Exception {
@@ -1024,6 +1093,17 @@ class ProducerTest {
       throw new AssertionError("interrupted at the race's start", e);
     } catch (BrokenBarrierException | TimeoutException e) {
       throw new AssertionError("the race never started", e);
+    }
+  }
+
+  private static void awaitLatch(CountDownLatch latch) {
+    try {
+      assertThat(latch.await(OUTCOME_LIMIT.toSeconds(), TimeUnit.SECONDS))
+          .as("the latch opened")
+          .isTrue();
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new AssertionError("interrupted while awaiting a latch", e);
     }
   }
 

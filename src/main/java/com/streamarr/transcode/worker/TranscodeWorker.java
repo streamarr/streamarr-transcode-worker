@@ -232,7 +232,7 @@ public final class TranscodeWorker implements AutoCloseable {
       send(jobAttemptStarted(job.getJobAttemptId()));
     } catch (RuntimeException e) {
       logStartupFailure(job, e);
-      activeAttempts.remove(fromProto(job.getJobAttemptId()));
+      claim(attempt);
       reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED);
       return new Orphaned(producer);
     }
@@ -392,20 +392,21 @@ public final class TranscodeWorker implements AutoCloseable {
     return jobAttemptFailed(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
   }
 
-  // Claims the attempt so that its producer's own outcome is never reported, and stops it on its
-  // own thread: the stop waits for FFmpeg to exit, which must hold neither the control stream nor
-  // the monitor that uploads need. close() waits for every stop in progress.
+  // Claims the attempt so that its producer's own outcome is never reported, and finishes its stop
+  // on its own thread: the stop waits for FFmpeg to exit, which must hold neither the control
+  // stream nor the monitor that uploads need. close() waits for every stop in progress.
   @SuppressWarnings("java:S3398") // Job lifecycle belongs to the worker, not its gRPC observer.
   private synchronized void stopVariant(StopVariantCommand command) {
     if (!command.getTarget().equals(identity())) {
       return;
     }
 
-    var attempt = activeAttempts.remove(fromProto(command.getJobAttemptId()));
+    var attempt = activeAttempts.get(fromProto(command.getJobAttemptId()));
     if (attempt == null) {
       return;
     }
 
+    claim(attempt);
     var stop = new ClaimedStop(attempt, requests);
     var stopping =
         Thread.ofVirtual()
@@ -530,9 +531,17 @@ public final class TranscodeWorker implements AutoCloseable {
   }
 
   private synchronized List<Producer> claimActiveAttempts() {
-    var producers = activeAttempts.values().stream().map(ActiveAttempt::producer).toList();
-    activeAttempts.clear();
-    return producers;
+    var attempts = List.copyOf(activeAttempts.values());
+    attempts.forEach(this::claim);
+    return attempts.stream().map(ActiveAttempt::producer).toList();
+  }
+
+  // The producer records the stop while the worker still holds the attempt, so a delivery that the
+  // worker refuses once the attempt is no longer active can only fail after the stop, which the
+  // producer then never reports.
+  private synchronized void claim(ActiveAttempt attempt) {
+    attempt.producer().requestStop();
+    activeAttempts.remove(fromProto(attempt.job().getJobAttemptId()));
   }
 
   // Stops the producers together and returns once every FFmpeg has exited.
