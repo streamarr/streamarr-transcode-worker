@@ -58,10 +58,10 @@ final class SampleRanges {
       var start = runEnd;
       var dataOffset = run.dataOffset();
       if (dataOffset.isPresent()) {
-        start = mediaData.offsetBy(base, dataOffset.orElseThrow());
+        start = offsetBy(base, dataOffset.orElseThrow());
       }
 
-      var bytes = mediaData.sampleBytesOf(run, () -> defaultSampleSizeOf(header));
+      var bytes = sampleBytesOf(run, () -> defaultSampleSizeOf(header));
       mediaData.requireInside(header.trackId(), start, bytes);
       runEnd = start + bytes;
     }
@@ -71,7 +71,7 @@ final class SampleRanges {
 
   private static long baseOf(TrackFragmentHeader header, long previousTrafEnd, MediaData data) {
     if (header.baseDataOffset().isPresent()) {
-      return data.offsetBy(header.baseDataOffset().getAsLong(), -data.moofPosition());
+      return offsetBy(header.baseDataOffset().getAsLong(), -data.moofPosition());
     }
 
     if (header.defaultBaseIsMoof()) {
@@ -79,6 +79,26 @@ final class SampleRanges {
     }
 
     return previousTrafEnd;
+  }
+
+  private static long offsetBy(long base, long offset) {
+    try {
+      return Math.addExact(base, offset);
+    } catch (ArithmeticException _) {
+      throw outside("a sample position overflows a signed 64-bit offset");
+    }
+  }
+
+  private static long sampleBytesOf(TrackRun run, LongSupplier defaultSampleSize) {
+    try {
+      return run.sampleBytes(defaultSampleSize);
+    } catch (ArithmeticException _) {
+      throw outside("a run's samples add up to more bytes than a signed 64-bit count");
+    }
+  }
+
+  private static FragmentedMp4Exception outside(String detail) {
+    return new FragmentedMp4Exception(Reason.SAMPLE_DATA_OUTSIDE_MDAT, detail);
   }
 
   private long defaultSampleSizeOf(TrackFragmentHeader header) {
@@ -122,26 +142,6 @@ final class SampleRanges {
 
     private boolean holds(long start, long bytes) {
       return start >= bodyStart && bytes <= end - start;
-    }
-
-    long offsetBy(long base, long offset) {
-      try {
-        return Math.addExact(base, offset);
-      } catch (ArithmeticException _) {
-        throw outside("a sample position overflows a signed 64-bit offset");
-      }
-    }
-
-    long sampleBytesOf(TrackRun run, LongSupplier defaultSampleSize) {
-      try {
-        return run.sampleBytes(defaultSampleSize);
-      } catch (ArithmeticException _) {
-        throw outside("a run's samples add up to more bytes than a signed 64-bit count");
-      }
-    }
-
-    private static FragmentedMp4Exception outside(String detail) {
-      return new FragmentedMp4Exception(Reason.SAMPLE_DATA_OUTSIDE_MDAT, detail);
     }
   }
 }
