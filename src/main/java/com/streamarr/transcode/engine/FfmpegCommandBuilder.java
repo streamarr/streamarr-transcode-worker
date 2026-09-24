@@ -37,6 +37,10 @@ public class FfmpegCommandBuilder {
   static final List<String> MP4_MOVFLAGS =
       List.of("cmaf", "delay_moov", "skip_trailer", "frag_keyframe", "frag_discont");
 
+  // The longest argument Linux passes to a program: MAX_ARG_STRLEN, 32 pages, holds the argument
+  // and its terminating NUL, and a page is at least 4 KiB.
+  private static final int LONGEST_ARGUMENT_BYTES = 32 * 4096 - 1;
+
   public List<String> buildCommand(TranscodeJob job) {
     var cmd = new ArrayList<String>();
     var decision = job.request().transcodeDecision();
@@ -163,7 +167,7 @@ public class FfmpegCommandBuilder {
     var gopSize = String.valueOf(gopFrameCount(job));
 
     cmd.addAll(List.of("-forced-idr", "1"));
-    addForceKeyframeExprArgs(cmd, job);
+    addForcedKeyframeArgs(cmd, job);
     cmd.addAll(List.of("-g:v:0", gopSize));
 
     if (FIXED_GOP_ENCODERS.contains(job.videoEncoder())) {
@@ -185,15 +189,34 @@ public class FfmpegCommandBuilder {
     return (int) Math.floor(periodFrames);
   }
 
-  private void addForceKeyframeExprArgs(List<String> cmd, TranscodeJob job) {
-    cmd.addAll(
-        List.of(
-            "-force_key_frames:0",
-            "expr:gte(t,n_forced*" + job.request().targetSegmentDuration() + ")"));
+  private void addForcedKeyframeArgs(List<String> cmd, TranscodeJob job) {
+    cmd.addAll(List.of("-force_key_frames:0", forcedKeyframeTimes(job.request())));
 
     if ("libx264".equals(job.videoEncoder())) {
       cmd.addAll(List.of("-sc_threshold:v:0", "0"));
     }
+  }
+
+  // FFmpeg's list mode compares each frame's own timestamp with these absolute media times, so
+  // every attempt forces the same frame at a boundary it shares with another attempt; an
+  // expression would measure from the attempt's first frame instead. The list starts at the
+  // attempt's first segment, because FFmpeg consumes at most one time per frame, and ends at the
+  // last advertised boundary or the longest argument, past which the GOP places keyframes.
+  private static String forcedKeyframeTimes(TranscodeRequest request) {
+    var period = (long) request.targetSegmentDuration();
+    var times = new StringBuilder().append(request.startSequenceNumber() * period);
+    for (var segment = request.startSequenceNumber() + 1L;
+        segment < request.mediaSegmentCount();
+        segment++) {
+      var next = "," + segment * period;
+      if (times.length() + next.length() > LONGEST_ARGUMENT_BYTES) {
+        break;
+      }
+
+      times.append(next);
+    }
+
+    return times.toString();
   }
 
   private void addFragmentedMp4Output(List<String> cmd) {

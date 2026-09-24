@@ -49,7 +49,7 @@ function hlsComparison(run, flags, { audio = true, reference = null, restrict = 
 // How a fixture deliberately departs from the worker's recipe; a fixture without one follows it,
 // fixture-only additions aside, and FfmpegCommandBuilderRecipeTest pins the worker to it.
 const FIRST_30_SECONDS = 'only the first 30 s of the source';
-const MISSED_FORCED_KEYFRAME = 'the forced keyframe for 18 s suppressed';
+const MISSED_FORCED_KEYFRAME = '18 s left out of the forced keyframe times';
 const X265_WITH_FIXTURE_PARAMS = 'with -x265-params that keep it single-threaded and quiet';
 const X265_UNDER_THE_VERIFIED_GOP =
   `libx265, not verified, under the verified GOP of 145 frames, ${X265_WITH_FIXTURE_PARAMS}`;
@@ -70,14 +70,14 @@ const FIXTURES = [
   },
   {
     name: '01-encode-cfr-seek30', source: 'cfr.mp4', mode: 'encode', encoder: 'libx264', seek: 30, start: 5,
-    proves: 'An encoded seek (-ss 30) under -r without -fps_mode starts at the seek point (30.030 s, ' +
-      'segment 5), pads nothing from zero, and has no preroll. force_key_frames measures t from the attempt\'s ' +
-      'first frame, so from segment 7 on its forced keyframes sit one frame after the start-0 recording\'s ' +
-      '(42.042 s against 42.0003 s), inside the same intervals.',
+    proves: 'An encoded replacement attempt (-ss 30, start sequence number 5) under -r without -fps_mode starts at ' +
+      'the seek point (30.030 s, segment 5), pads nothing from zero, and has no preroll. The forced keyframe times ' +
+      '30, 36, ..., 66 are absolute, so it forces the frames the start-0 recording forced (720, 864, 1007, 1151, ' +
+      '1295, 1439) and every segment starts on the start-0 recording\'s ticks.',
     hlsComparisons: [
-      hlsComparison('01-encode-cfr-seek30.hls-recipe', 'hls-recipe'),
-      hlsComparison('01-encode-cfr-seek30.video-only', 'pipe-recipe', { audio: false }),
-      hlsComparison('01-encode-cfr.hls-recipe', 'hls-recipe', { reference: '01-encode-cfr', restrict: true, expect: false }),
+      hlsComparison('01-encode-cfr-seek30.hls-recipe', 'hls-recipe', { expect: false }),
+      hlsComparison('01-encode-cfr-seek30.video-only', 'pipe-recipe', { audio: false, expect: false }),
+      hlsComparison('01-encode-cfr.hls-recipe', 'hls-recipe', { reference: '01-encode-cfr', restrict: true }),
     ],
   },
   {
@@ -93,11 +93,11 @@ const FIXTURES = [
   {
     name: '03-encode-vfr', source: 'vfr.mp4', mode: 'encode', encoder: 'libx264', seek: 0, start: 0,
     proves: 'Variable-frame-rate source (avg 16.2 fps on a 23.976 grid) encoded with libx264 under ' +
-      '-r 23.976 and no -fps_mode: constant-rate output starting at the first source frame (41.7 ms), ' +
-      'one keyframe in every interval.',
+      '-r 23.976 and no -fps_mode: constant-rate output starting at the first source frame (41.7 ms); the forced ' +
+      'keyframe times put a keyframe on the first frame at or after each boundary, one in every interval.',
     hlsComparisons: [
-      hlsComparison('03-encode-vfr.hls-recipe', 'hls-recipe'),
-      hlsComparison('03-encode-vfr.video-only', 'pipe-recipe', { audio: false }),
+      hlsComparison('03-encode-vfr.hls-recipe', 'hls-recipe', { expect: false }),
+      hlsComparison('03-encode-vfr.video-only', 'pipe-recipe', { audio: false, expect: false }),
     ],
   },
   {
@@ -113,10 +113,11 @@ const FIXTURES = [
     name: '05-encode-late-start', source: 'late.ts', mode: 'encode', encoder: 'libx264', seek: 0, start: 0,
     proves: 'MPEG-TS source whose timestamps begin at 12 s: -start_at_zero puts media time zero at the ' +
       'container start (the AAC priming frame, 21.3 ms before the first video frame), so the first ' +
-      'fragment is segment 0, not segment 2.',
+      'fragment is segment 0, not segment 2. The server advertises 6 segments for the 30.051 s source, so the ' +
+      'last forced keyframe time is 30 s, and the last frame (30.030 s) forms a 1-frame segment 5.',
     hlsComparisons: [
-      hlsComparison('05-encode-late-start.hls-recipe', 'hls-recipe'),
-      hlsComparison('05-encode-late-start.video-only', 'pipe-recipe', { audio: false }),
+      hlsComparison('05-encode-late-start.hls-recipe', 'hls-recipe', { expect: false }),
+      hlsComparison('05-encode-late-start.pipe-keyframes-with-audio', 'pipe-recipe', { expect: false }),
     ],
   },
   {
@@ -158,10 +159,10 @@ const FIXTURES = [
   {
     name: '09-svtav1-vfr', source: 'vfr.mp4', mode: 'encode', encoder: 'libsvtav1', seek: 0, start: 0,
     proves: 'Irregular variable-frame-rate source through SVT-AV1 with -r 23.976, the verified-encoder GOP of ' +
-      '145 frames and time-based forced keyframes: one keyframe in every interval, on the same frames libx264 ' +
+      '145 frames and the forced keyframe times: one keyframe in every interval, on the same frames libx264 ' +
       'chose in 03.',
     hlsComparisons: [
-      hlsComparison('09-svtav1-vfr.video-only', 'pipe-recipe', { audio: false }),
+      hlsComparison('09-svtav1-vfr.video-only', 'pipe-recipe', { audio: false, expect: false }),
       hlsComparison('09-svtav1-vfr.hls-recipe', 'hls-recipe', { expect: false }),
       hlsComparison('09-svtav1-vfr.pipe-keyframes-with-audio', 'pipe-recipe', { expect: true }),
     ],
@@ -169,10 +170,16 @@ const FIXTURES = [
   {
     name: '09-svtav1-vfr-seek30', source: 'vfr.mp4', mode: 'encode', encoder: 'libsvtav1', seek: 30, start: 5,
     proves: 'The same SVT-AV1 recipe after -ss 30: starts at the first source frame after the seek point ' +
-      '(30.072 s), pads nothing from zero, one keyframe in every interval.',
+      '(30.072 s), pads nothing from zero, one keyframe in every interval. Segments 6 to 10 start on the ticks of ' +
+      '09; segment 5 starts one frame after 09\'s, which repeats a source frame before 30 s at 30.030 s.',
     hlsComparisons: [
-      hlsComparison('09-svtav1-vfr-seek30.video-only', 'pipe-recipe', { audio: false }),
-      hlsComparison('09-svtav1-vfr-seek30.hls-recipe', 'hls-recipe'),
+      hlsComparison('09-svtav1-vfr-seek30.video-only', 'pipe-recipe', { audio: false, expect: false }),
+      hlsComparison('09-svtav1-vfr-seek30.hls-recipe', 'hls-recipe', { expect: false }),
+      hlsComparison('09-svtav1-vfr.pipe-keyframes-with-audio', 'pipe-recipe', {
+        reference: '09-svtav1-vfr',
+        restrict: true,
+        expect: false,
+      }),
     ],
   },
   {
@@ -195,15 +202,15 @@ const FIXTURES = [
   {
     name: '12-encode-cfr-missed-forced-keyframe', source: 'cfr.mp4', mode: 'encode', encoder: 'libx264', seek: 0, start: 0,
     recipeDeviation: `${MISSED_FORCED_KEYFRAME}; ${FIRST_30_SECONDS}`,
-    proves: 'libx264 over the first 30 s under the verified GOP of 145 frames with the forced keyframe for 18 s ' +
-      'suppressed: the GOP count restarts at the forced keyframe at 12.012 s (frame 288), so the backstop keyframe ' +
+    proves: 'libx264 over the first 30 s under the verified GOP of 145 frames with 18 s left out of the forced ' +
+      'keyframe times: the GOP count restarts at the forced keyframe at 12.012 s (frame 288), so the backstop keyframe ' +
       'lands 145 frames later at 18.060 s (frame 433), inside interval 3, and no segment number is skipped.',
     hlsComparisons: [hlsComparison('12-encode-cfr-missed-forced-keyframe.video-only', 'pipe-recipe', { audio: false })],
   },
   {
     name: '12-svtav1-cfr-missed-forced-keyframe', source: 'cfr.mp4', mode: 'encode', encoder: 'libsvtav1', seek: 0, start: 0,
     recipeDeviation: `${MISSED_FORCED_KEYFRAME}; ${FIRST_30_SECONDS}`,
-    proves: 'The same suppressed forced keyframe through SVT-AV1: its GOP count also restarts at the forced keyframe ' +
+    proves: 'The same missing forced keyframe through SVT-AV1: its GOP count also restarts at the forced keyframe ' +
       'at frame 288, and the backstop keyframe lands at frame 433 (18.060 s), inside interval 3.',
     hlsComparisons: [hlsComparison('12-svtav1-cfr-missed-forced-keyframe.video-only', 'pipe-recipe', { audio: false })],
   },
@@ -218,7 +225,7 @@ const FIXTURES = [
   {
     name: '13-x265-cfr-missed-forced-keyframe', source: 'cfr.mp4', mode: 'encode', encoder: 'libx265', seek: 0, start: 0,
     recipeDeviation: `${X265_UNDER_THE_VERIFIED_GOP}; ${MISSED_FORCED_KEYFRAME}; ${FIRST_30_SECONDS}`,
-    proves: 'libx265 with the forced keyframe for 18 s suppressed: its GOP count restarts at the forced keyframe at ' +
+    proves: 'libx265 with 18 s left out of the forced keyframe times: its GOP count restarts at the forced keyframe at ' +
       'frame 288 and the backstop lands at frame 433 (18.060 s), inside interval 3, but as a CRA whose RASL ' +
       'picture (frame 432) references the previous GOP, so the segment it opens cannot be decoded on its own.',
     hlsComparisons: [hlsComparison('13-x265-cfr-missed-forced-keyframe.video-only', 'pipe-recipe', { audio: false })],
@@ -247,7 +254,8 @@ const INITIALIZATION_SEGMENT_DIFFERENCE_PAIRS = [
 const RECIPE =
   'ffmpeg -y [-ss S] -i SRC -map 0:v:0 -map 0:a:0 -map -0:s -map_metadata -1 -map_chapters -1 -copyts ' +
   '-avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128 <codec args> [-bsf:a aac_adtstoasc ' +
-  'when copying AAC] [encode: -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 expr:gte(t,n_forced*6) ' +
+  'when copying AAC] [encode: -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6 ' +
+  'in whole seconds, K = startSequenceNumber, N = mediaSegmentCount ' +
   '(-sc_threshold:v:0 0 for libx264) -g:v:0 145 = ceil(6 x 23.976) + 1 for an encoder verified to honour forced ' +
   'keyframes (libx264, SVT-AV1), else 143 = floor(6 x 23.976) (fixtures 11 and 13c) (-keyint_min:v:0 with the ' +
   'same value for SVT-AV1); fixtures 13 and 13b give libx265, not verified, 145 to test whether it qualifies] ' +
@@ -303,6 +311,7 @@ function fixtureRecord({ fixture, record, source, pipe, work }) {
     fragmentationTargetMicros: FRAGMENTATION_TARGET_MICROS,
     ffmpegArguments: record.ffmpegArguments,
     startSequenceNumber: fixture.start,
+    mediaSegmentCount: record.mediaSegmentCount,
     videoTrackId,
     videoTimescale,
     ...facts,
@@ -368,6 +377,7 @@ function main() {
     const ffmpegArguments = readFileSync(join(args.work, 'out', `${fixture.name}.args`), 'utf8')
       .split('\n')
       .slice(0, -1);
+    const mediaSegmentCount = Number(readFileSync(join(args.work, 'out', `${fixture.name}.count`), 'utf8').trim());
     const videoTrack = videoTrackOf(stream);
     pipe.set(fixture.name, {
       name: fixture.name,
@@ -375,6 +385,7 @@ function main() {
       videoTimescale: videoTrack.timescale,
       videoTrackId: videoTrack.trackId,
       ffmpegArguments,
+      mediaSegmentCount,
       path,
     });
   }

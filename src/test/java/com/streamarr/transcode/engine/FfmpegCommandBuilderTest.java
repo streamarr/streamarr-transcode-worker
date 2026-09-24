@@ -51,6 +51,7 @@ class FfmpegCommandBuilderTest {
         .sourcePath(Path.of("/media/movie.mkv"))
         .targetSegmentDuration(6)
         .framerate(23.976)
+        .mediaSegmentCount(11)
         .transcodeDecision(decision)
         .width(1920)
         .height(1080)
@@ -209,13 +210,78 @@ class FfmpegCommandBuilderTest {
 
   @ParameterizedTest(name = "{0}")
   @MethodSource("everyEncoder")
-  @DisplayName("Should force an IDR keyframe at every segment period when any encoder runs")
-  void shouldForceAnIdrKeyframeAtEverySegmentPeriodWhenAnyEncoderRuns(String encoder) {
-    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), encoder);
+  @DisplayName(
+      "Should force an IDR keyframe at every advertised segment boundary when any encoder runs")
+  void shouldForceAnIdrKeyframeAtEveryAdvertisedSegmentBoundaryWhenAnyEncoderRuns(String encoder) {
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).mediaSegmentCount(4).build(), encoder);
 
     assertThat(cmd)
         .containsSequence("-forced-idr", "1")
-        .containsSequence("-force_key_frames:0", "expr:gte(t,n_forced*6)");
+        .containsSequence("-force_key_frames:0", "0,6,12,18")
+        .noneMatch(argument -> argument.startsWith("expr:"));
+  }
+
+  @ParameterizedTest
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"VIDEO_TRANSCODE", "FULL_TRANSCODE"})
+  @DisplayName(
+      "Should force keyframes from the attempt's first segment to the last advertised one when a"
+          + " replacement attempt starts mid-stream")
+  void shouldForceKeyframesFromTheAttemptsFirstSegmentWhenAReplacementAttemptStartsMidStream(
+      TranscodeMode mode) {
+    var cmd =
+        command(
+            request(mode)
+                .targetSegmentDuration(4)
+                .seekPosition(20)
+                .startSequenceNumber(5)
+                .mediaSegmentCount(9)
+                .build(),
+            "libx264");
+
+    assertThat(cmd).containsSequence("-force_key_frames:0", "20,24,28,32");
+  }
+
+  @Test
+  @DisplayName("Should keep every boundary when the list fills the longest argument Linux accepts")
+  void shouldKeepEveryBoundaryWhenTheListFillsTheLongestArgumentLinuxAccepts() {
+    // 14,997 five-digit and 5,870 six-digit times with their commas: 131,071 bytes, which with the
+    // terminating NUL is Linux's limit on one argument, 32 pages of 4 KiB.
+    var cmd =
+        command(
+            request(TranscodeMode.FULL_TRANSCODE)
+                .startSequenceNumber(1670)
+                .mediaSegmentCount(22_537)
+                .build(),
+            "libx264");
+
+    assertThat(forcedKeyframeTimes(cmd))
+        .hasSize(131_071)
+        .startsWith("10020,10026,")
+        .endsWith(",135210,135216");
+  }
+
+  @ParameterizedTest(name = "{0} advertised segments")
+  @ValueSource(ints = {22_538, Integer.MAX_VALUE})
+  @DisplayName(
+      "Should end the list at the last boundary that fits when the next would pass the argument"
+          + " limit")
+  void shouldEndTheListAtTheLastBoundaryThatFitsWhenTheNextWouldPassTheArgumentLimit(
+      int mediaSegmentCount) {
+    var cmd =
+        command(
+            request(TranscodeMode.FULL_TRANSCODE)
+                .startSequenceNumber(1670)
+                .mediaSegmentCount(mediaSegmentCount)
+                .build(),
+            "libx264");
+
+    assertThat(forcedKeyframeTimes(cmd)).hasSize(131_071).endsWith(",135210,135216");
+  }
+
+  private static String forcedKeyframeTimes(List<String> cmd) {
+    return cmd.get(cmd.indexOf("-force_key_frames:0") + 1);
   }
 
   @Test

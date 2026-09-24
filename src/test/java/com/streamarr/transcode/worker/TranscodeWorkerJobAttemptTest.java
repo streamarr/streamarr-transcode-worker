@@ -278,6 +278,31 @@ class TranscodeWorkerJobAttemptTest {
   }
 
   @Test
+  @DisplayName(
+      "Should force keyframes from the job's start to its last advertised media segment when the"
+          + " job encodes video")
+  void shouldForceKeyframesFromTheJobsStartToItsLastAdvertisedMediaSegmentWhenTheJobEncodesVideo()
+      throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJobBuilder();
+    job.getDecisionBuilder().setMode(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(4)
+        .setStartSequenceNumber(2)
+        .setMediaSegmentCount(5);
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(launcher.command(fromProto(job.getJobAttemptId())))
+          .containsSequence("-force_key_frames:0", "8,12,16");
+    }
+  }
+
+  @Test
   @DisplayName("Should run the job when the last advertised media segment is the one it starts at")
   void shouldRunTheJobWhenTheLastAdvertisedMediaSegmentIsTheOneItStartsAt() throws Exception {
     var recording = recording("07-copy-seek30.fmp4");

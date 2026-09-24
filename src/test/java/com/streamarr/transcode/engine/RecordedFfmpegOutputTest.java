@@ -200,6 +200,23 @@ class RecordedFfmpegOutputTest {
         .isNotEqualTo(read("01-encode-cfr.fmp4").initializationSegment());
   }
 
+  @ParameterizedTest(name = "{0} against {1}")
+  @CsvSource({
+    "01-encode-cfr-seek30.fmp4, 01-encode-cfr.fmp4",
+    "09-svtav1-vfr-seek30.fmp4, 09-svtav1-vfr.fmp4"
+  })
+  @DisplayName(
+      "Should open every later segment on the start-0 attempt's frame when an encoded replacement"
+          + " attempt forces keyframes at absolute media times")
+  void shouldOpenEveryLaterSegmentOnTheStartZeroAttemptsFrameWhenAnEncodedReplacementAttemptSeeks(
+      String replacementAttempt, String startZeroAttempt) throws IOException {
+    var replacement = cutPoints(group(recording(replacementAttempt)));
+    var startZero = cutPoints(group(recording(startZeroAttempt)));
+
+    assertThat(replacement.subList(1, replacement.size()))
+        .containsExactlyElementsOf(startZero.subList(6, 11));
+  }
+
   @ParameterizedTest(name = "{0}")
   @CsvSource({"01-encode-cfr-seek30.fmp4, 720720", "09-svtav1-vfr-seek30.fmp4, 721721"})
   @DisplayName(

@@ -56,6 +56,8 @@ public final class FfmpegRecordings {
    * @param encoder the video encoder of an encode; empty for a stream copy
    * @param recipeDeviation how the recording deliberately departs from the worker's recipe; empty
    *     when it follows the recipe
+   * @param mediaSegmentCount the media segment count the server advertises for what the recording
+   *     read, which an encode forces keyframes up to
    */
   public record Recording(
       String file,
@@ -68,6 +70,7 @@ public final class FfmpegRecordings {
       List<String> ffmpegArguments,
       Optional<String> recipeDeviation,
       int startSequenceNumber,
+      int mediaSegmentCount,
       Size initializationSegment,
       List<SegmentSummary> segments,
       List<SegmentSummary> discardedPreroll,

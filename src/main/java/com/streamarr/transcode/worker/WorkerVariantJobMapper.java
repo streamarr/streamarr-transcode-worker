@@ -38,6 +38,7 @@ final class WorkerVariantJobMapper {
         .bitrate(variant.getBitrateBitsPerSecond())
         .variantLabel(variant.getVariantLabel())
         .startSequenceNumber(execution.getStartSequenceNumber())
+        .mediaSegmentCount(execution.getMediaSegmentCount())
         .build();
   }
 
