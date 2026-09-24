@@ -15,12 +15,24 @@ expectations for any test, such as one that replays the bytes through a scripted
 | `../../fmp4-recorder/record-fixtures.sh` | Regenerates everything from scratch in the pinned worker image (about 15 s) |
 | `../../fmp4-recorder/analyze.mjs` | Groups the recordings by the ADR rules (`grid.mjs`), evaluates the HLS oracles (`analysis.mjs`), writes `expected.json` |
 | `../../fmp4-recorder/fmp4.mjs` | Standalone box reader (`node fmp4.mjs FILE`), independent of the worker's Java code |
+| `../../fmp4-recorder/check-expectations.mjs` | Offline drift check: re-derives `expected.json` from the committed recordings (no Docker) |
 
 The recorder lives in `src/test/fmp4-recorder`, outside the test classpath; only the recordings,
 `expected.json` and this file are test resources. It is plain Node (the major in
 `buildpacks/ffmpeg/.nvmrc`) with no packages, and keeps every timestamp exact: BigInt ticks and
 BigInt rationals (`rational.mjs`), never a double. `node --test src/test/fmp4-recorder/*.test.mjs`
 tests the box reader, the grid model and the analysis arithmetic.
+
+## Checking offline
+
+CI's tooling job runs the recorder's node tests and
+`node src/test/fmp4-recorder/check-expectations.mjs`, without Docker or FFmpeg. The check re-reads
+every committed `.fmp4`, re-derives with the grid model everything that a recording's own bytes
+decide (tracks, initialization segment, media segments, preroll, failure, audio-only tail,
+diagnostics, a copy's keyframes, each HLS oracle's disagreements with the grid, the
+initialization-segment pairs), and fails on every fact `expected.json` states differently, on a
+recording it does not describe, and on a described recording that is missing. The HLS muxer's own
+cuts, the sources and the ADR side claims need a recording run, so it takes those as recorded.
 
 ## Regenerating
 

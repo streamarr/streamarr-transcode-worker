@@ -1084,6 +1084,39 @@ class FfmpegAutomationWorkflowTest {
   }
 
   @Test
+  @DisplayName(
+      "Should check the recorded fMP4 expectations offline when tooling verifies the recorder")
+  void shouldCheckTheRecordedFmp4ExpectationsOfflineWhenToolingVerifiesTheRecorder()
+      throws IOException {
+    var tooling = map(map(yaml(".github/workflows/ci.yml").get("jobs")).get("tooling"));
+    var steps = listOfMaps(tooling.get("steps"));
+    var node =
+        steps.stream()
+            .filter(step -> "./.github/actions/prepare-ffmpeg".equals(step.get("uses")))
+            .findFirst()
+            .orElseThrow();
+    var recorder = stepNamed(steps, "Verify the fMP4 fixture recorder");
+    var expectations = stepNamed(steps, "Verify the recorded fMP4 expectations offline");
+
+    assertThat(steps.indexOf(node)).isLessThan(steps.indexOf(recorder));
+    assertThat(steps.indexOf(recorder)).isLessThan(steps.indexOf(expectations));
+    assertThat(recorder.get("run").toString())
+        .contains(
+            "node --test --experimental-test-coverage",
+            "--test-coverage-include='src/test/fmp4-recorder/*.mjs'",
+            "--test-coverage-exclude='src/test/fmp4-recorder/*.test.mjs'",
+            "--test-coverage-lines=90",
+            "--test-coverage-branches=90",
+            "--test-coverage-functions=90",
+            "src/test/fmp4-recorder/*.test.mjs");
+    assertThat(expectations)
+        .containsEntry("run", "node src/test/fmp4-recorder/check-expectations.mjs");
+    assertThat(recorder).doesNotContainKeys("if", "env");
+    assertThat(expectations).doesNotContainKeys("if", "env");
+    assertThat(steps.toString()).doesNotContain("record-fixtures.sh", "docker");
+  }
+
+  @Test
   @DisplayName("Should test the locked runtime on both architectures when verifying the worker")
   void shouldTestLockedRuntimeOnBothArchitecturesWhenVerifyingWorker() throws IOException {
     var jobs = map(yaml(".github/workflows/ci.yml").get("jobs"));

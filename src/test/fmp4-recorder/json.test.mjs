@@ -18,6 +18,13 @@ describe('expected.json text', () => {
     assert.equal(parseJson('{"small": 480480}').small, 480480);
   });
 
+  it('reads a decimal back as the text it was written as', () => {
+    const text = '[\n  0.0,\n  30.03,\n  1\n]';
+
+    assert.equal(formatJson(parseJson(text)), text);
+    assert.deepEqual(parseJson(text)[0], new Decimal(0));
+  });
+
   it('writes a decimal with a fractional digit even when it is whole', () => {
     assert.equal(formatJson([new Decimal(0), new Decimal(30.03), new Decimal(-0.042667), new Decimal(-0)]),
       '[\n  0.0,\n  30.03,\n  -0.042667,\n  -0.0\n]');

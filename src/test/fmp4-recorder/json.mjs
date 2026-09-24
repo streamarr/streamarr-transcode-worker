@@ -89,12 +89,18 @@ export function formatJson(value, indent = 2, depth = 0) {
   throw new TypeError(`no JSON form for ${String(value)}`);
 }
 
-/** Parses JSON, keeping every integer beyond the exact double range as a BigInt. */
+/**
+ * Parses JSON so that formatJson writes it back unchanged: every integer beyond the exact double
+ * range becomes a BigInt, and every number written with a fraction or exponent a Decimal.
+ */
 export function parseJson(text) {
   return JSON.parse(text, (_key, value, context) => {
-    if (typeof value === 'number' && !Number.isSafeInteger(value) && /^-?\d+$/.test(context.source)) {
-      return BigInt(context.source);
+    if (typeof value !== 'number') {
+      return value;
     }
-    return value;
+    if (!/^-?\d+$/.test(context.source)) {
+      return new Decimal(value);
+    }
+    return Number.isSafeInteger(value) ? value : BigInt(context.source);
   });
 }
