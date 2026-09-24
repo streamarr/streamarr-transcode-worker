@@ -312,10 +312,13 @@ class ProducerTest {
           + " media segment over it")
   void shouldFailTheAttemptAndEndFfmpegWhenFragmentsUnderTheSegmentCapAddUpToAMediaSegmentOverIt() {
     var mediaDataBytes = Math.toIntExact(SERVER_SEGMENT_CAP_BYTES / 3 + 1);
+    // The encoded recording's producer checks sample durations, so each video sample lasts a
+    // frame at 24000/1001 frames per second.
+    var oneFrameVideo = IsoBoxes.Track.video().defaultSampleDuration(1001).build();
     var output =
         IsoBoxes.concat(
             IsoBoxes.ftyp(),
-            IsoBoxes.videoAndAudioMoov(),
+            IsoBoxes.moov(oneFrameVideo, IsoBoxes.Track.audio().build()),
             IsoBoxes.moof(
                 IsoBoxes.videoTraf()
                     .baseMediaDecodeTime(0L)
@@ -374,9 +377,10 @@ class ProducerTest {
 
   @Test
   @DisplayName(
-      "Should settle only the stop when stopped while the sink holds the segment a skipping"
-          + " keyframe closed")
-  void shouldSettleOnlyTheStopWhenStoppedWhileTheSinkHoldsTheSegmentASkippingKeyframeClosed() {
+      "Should settle only the stop and cancel the delivery when stopped while the sink holds the"
+          + " segment a skipping keyframe closed")
+  void
+      shouldSettleOnlyTheStopAndCancelTheDeliveryWhenStoppedWhileTheSinkHoldsTheSegmentASkippingKeyframeClosed() {
     var recording = recording("10-copy-gop-exceeds-period.fmp4");
     var process = ScriptedProcess.builder().output(bytesOf(recording.file())).build();
     sink.holding(2);
@@ -384,14 +388,13 @@ class ProducerTest {
     awaiting().until(sink::isHolding);
 
     producer.stop();
-    sink.release();
 
     assertThat(producer.outcome()).isCompletedWithValue(new Stopped());
+    assertThat(sink.wasCancelled()).isTrue();
     await()
         .during(Duration.ofMillis(200))
         .atMost(OUTCOME_LIMIT)
-        .until(
-            () -> sink.acceptedNames().equals(List.of("init.mp4", "segment0.m4s", "segment1.m4s")));
+        .until(() -> sink.acceptedNames().equals(List.of("init.mp4", "segment0.m4s")));
   }
 
   @Test
