@@ -84,8 +84,6 @@ class FfmpegTranscodeEngineTest {
                         Optional.empty(),
                         OptionalInt.empty(),
                         Optional.empty()))
-                .containerFormat(
-                    "av1".equals(codecFamily) ? ContainerFormat.FMP4 : ContainerFormat.MPEGTS)
                 .needsKeyframeAlignment(mode != TranscodeMode.FULL_TRANSCODE)
                 .build())
         .width(1920)

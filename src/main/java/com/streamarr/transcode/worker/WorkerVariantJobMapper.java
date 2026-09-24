@@ -5,7 +5,6 @@ import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import build.buf.gen.streamarr.transcode.v1.VariantJob;
 import com.streamarr.transcode.engine.AudioDecision;
 import com.streamarr.transcode.engine.AudioMode;
-import com.streamarr.transcode.engine.ContainerFormat;
 import com.streamarr.transcode.engine.SubtitleDecision;
 import com.streamarr.transcode.engine.SubtitleMode;
 import com.streamarr.transcode.engine.TranscodeDecision;
@@ -50,7 +49,6 @@ final class WorkerVariantJobMapper {
         .videoCodecFamily(decision.getVideoCodecFamily())
         .audioDecision(audio(decision.getAudio()))
         .subtitleDecision(subtitle(decision.getSubtitle()))
-        .containerFormat(container(decision.getContainer()))
         .needsKeyframeAlignment(decision.getAlignKeyframesToSegments())
         .build();
   }
@@ -108,16 +106,6 @@ final class WorkerVariantJobMapper {
       case SUBTITLE_MODE_EMBED -> SubtitleMode.EMBED;
       case SUBTITLE_MODE_UNSPECIFIED, UNRECOGNIZED ->
           throw new WorkerJobException("Subtitle mode is required");
-    };
-  }
-
-  @SuppressWarnings("checkstyle:fullyQualifiedName")
-  static ContainerFormat container(build.buf.gen.streamarr.transcode.v1.ContainerFormat container) {
-    return switch (container) {
-      case CONTAINER_FORMAT_MPEG_TS -> ContainerFormat.MPEGTS;
-      case CONTAINER_FORMAT_FMP4 -> ContainerFormat.FMP4;
-      case CONTAINER_FORMAT_UNSPECIFIED, UNRECOGNIZED ->
-          throw new WorkerJobException("Container format is required");
     };
   }
 }
