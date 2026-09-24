@@ -167,7 +167,8 @@ public final class Producer {
   private void produce() {
     try {
       switch (readAndDeliver()) {
-        case EndOfOutput(var truncation) -> settleAtExit(truncation);
+        case EndOfOutput _ -> settleAtExit(outcomeOfCompleteOutput());
+        case TruncatedOutput(var failure) -> settleAtExit(failure);
         case Abandoned(var failure) -> settleAfterEndingProcess(failure);
         case StopObserved _ -> discardRemainingOutput();
       }
@@ -195,7 +196,7 @@ public final class Producer {
           .finish()
           .map(ProducedSegment::of)
           .flatMap(this::deliver)
-          .orElseGet(() -> new EndOfOutput(Optional.empty()));
+          .orElseGet(EndOfOutput::new);
     } catch (FragmentedMp4Exception e) {
       return endingOf(e);
     } catch (IOException e) {
@@ -227,7 +228,7 @@ public final class Producer {
   private static Ending endingOf(FragmentedMp4Exception exception) {
     var failure = new Failed(failureOf(exception.getReason()), exception.getMessage());
     if (failure.reason() == ProducerFailure.TRUNCATED_OUTPUT) {
-      return new EndOfOutput(Optional.of(failure));
+      return new TruncatedOutput(failure);
     }
 
     return new Abandoned(failure);
@@ -250,26 +251,24 @@ public final class Producer {
     };
   }
 
-  private void settleAtExit(Optional<Failed> truncation) {
-    settle(outcomeAtExit(process.onExit().join().exitValue(), truncation));
-  }
-
-  /** A non-zero exit explains a truncated output, so it takes precedence. */
-  private AttemptOutcome outcomeAtExit(int exitCode, Optional<Failed> truncation) {
-    if (exitCode != 0) {
-      return new Failed(ProducerFailure.PROCESS_EXITED_WITH_ERROR, exitDetail(exitCode));
-    }
-
-    if (truncation.isPresent()) {
-      return truncation.orElseThrow();
-    }
-
+  private AttemptOutcome outcomeOfCompleteOutput() {
     if (!mediaSegmentDelivered) {
       return new Failed(
           ProducerFailure.NO_MEDIA_SEGMENT, "FFmpeg exited cleanly without a media segment");
     }
 
     return new Completed();
+  }
+
+  /** A non-zero exit explains whatever the output lacks, so it takes precedence. */
+  private void settleAtExit(AttemptOutcome outcomeOnCleanExit) {
+    var exitCode = process.onExit().join().exitValue();
+    if (exitCode != 0) {
+      settle(new Failed(ProducerFailure.PROCESS_EXITED_WITH_ERROR, exitDetail(exitCode)));
+      return;
+    }
+
+    settle(outcomeOnCleanExit);
   }
 
   /** FFmpeg reports why it failed at the end of its error output. */
@@ -306,8 +305,11 @@ public final class Producer {
   /** Why the producer stopped reading FFmpeg's output. */
   private sealed interface Ending {}
 
-  /** The output ended, on a box boundary unless it was truncated. */
-  private record EndOfOutput(Optional<Failed> truncation) implements Ending {}
+  /** The output ended on a box boundary. */
+  private record EndOfOutput() implements Ending {}
+
+  /** The output ended inside a box or after a moof with no mdat. */
+  private record TruncatedOutput(Failed failure) implements Ending {}
 
   /** The attempt failed while FFmpeg may still be writing. */
   private record Abandoned(Failed failure) implements Ending {}
