@@ -125,6 +125,11 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
       call.responses.onClose(Status.UNAVAILABLE.withDescription(description), new Metadata());
     }
 
+    /** From now on the session stream refuses every message, as a cancelled call does. */
+    public void refuseMessages() {
+      call.refusing = true;
+    }
+
     @Override
     public <Q, R> ClientCall<Q, R> newCall(MethodDescriptor<Q, R> method, CallOptions options) {
       if (method.equals(TranscodeWorkerServiceGrpc.getUploadSegmentMethod())) {
@@ -203,6 +208,7 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     private final ConcurrentLinkedQueue<EstablishWorkerSessionRequest> events =
         new ConcurrentLinkedQueue<>();
     private Listener<EstablishWorkerSessionResponse> responses;
+    private volatile boolean refusing;
 
     @Override
     public void start(Listener<EstablishWorkerSessionResponse> listener, Metadata headers) {
@@ -211,6 +217,10 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
 
     @Override
     public void sendMessage(EstablishWorkerSessionRequest message) {
+      if (refusing) {
+        throw new IllegalStateException("call was cancelled");
+      }
+
       events.add(message);
       if (message.hasRegistration()) {
         registration.complete(message.getRegistration());
@@ -291,6 +301,14 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
 
     public SegmentUploadMetadata metadata() {
       return messages.getFirst().getMetadata();
+    }
+
+    /** The length of each chunk of content, in order. */
+    public List<Integer> chunkLengths() {
+      return messages.stream()
+          .filter(UploadSegmentRequest::hasData)
+          .map(message -> message.getData().size())
+          .toList();
     }
 
     public byte[] content() {

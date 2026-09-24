@@ -22,6 +22,8 @@ import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
 import java.io.ByteArrayOutputStream;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -44,6 +46,7 @@ class TranscodeWorkerJobAttemptTest {
 
   private static final String WHOLE_RUN = "01-encode-cfr.fmp4";
   private static final Duration EVENT_LIMIT = Duration.ofSeconds(10);
+  private static final int CHUNK = 64 * 1024;
 
   @TempDir Path tempDir;
 
@@ -93,6 +96,55 @@ class TranscodeWorkerJobAttemptTest {
       var uploaded = new ByteArrayOutputStream();
       connection.uploads().forEach(upload -> uploaded.writeBytes(upload.content()));
       assertThat(uploaded.toByteArray()).isEqualTo(bytesOf(WHOLE_RUN));
+    }
+  }
+
+  @Test
+  @DisplayName("Should upload a segment larger than a chunk in whole chunks when it is delivered")
+  void shouldUploadASegmentLargerThanAChunkInWholeChunksWhenItIsDelivered() throws Exception {
+    var output = withLargeFirstMediaData(bytesOf(WHOLE_RUN));
+    var launcher =
+        new ScriptedProcessLauncher(_ -> ScriptedProcess.builder().output(output).build());
+    var job = variantJobBuilder().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_COMPLETED);
+      var firstMediaSegment = connection.uploads().get(1);
+      assertThat(firstMediaSegment.chunkLengths())
+          .hasSizeGreaterThan(2)
+          .last()
+          .satisfies(length -> assertThat(length).isPositive().isLessThanOrEqualTo(CHUNK));
+      assertThat(firstMediaSegment.chunkLengths().subList(0, 2)).containsOnly(CHUNK);
+      assertThat(firstMediaSegment.metadata().getContentLengthBytes())
+          .isEqualTo(firstMediaSegment.content().length);
+      var uploaded = new ByteArrayOutputStream();
+      connection.uploads().forEach(upload -> uploaded.writeBytes(upload.content()));
+      assertThat(uploaded.toByteArray()).isEqualTo(output);
+    }
+  }
+
+  @Test
+  @DisplayName("Should ask FFmpeg to quit when the worker cannot report that the attempt started")
+  void shouldAskFfmpegToQuitWhenTheWorkerCannotReportThatTheAttemptStarted() throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJobBuilder().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.registration();
+      connection.refuseMessages();
+
+      startVariant(connection, job);
+
+      var process = launcher.process(fromProto(job.getJobAttemptId()));
+      assertThat(process.isAlive()).isFalse();
+      assertThat(process.stdinText()).isEqualTo("q");
+      assertThat(eventsOf(connection)).isEmpty();
     }
   }
 
@@ -271,5 +323,32 @@ class TranscodeWorkerJobAttemptTest {
             Stream.of((long) recording.initializationSegment().byteLength()),
             recording.segments().stream().map(segment -> segment.byteLength()))
         .toList();
+  }
+
+  /**
+   * The recording with its first media data box grown past two upload chunks, which the producer
+   * reads without looking inside.
+   */
+  private static byte[] withLargeFirstMediaData(byte[] recording) {
+    var grown = new ByteArrayOutputStream();
+    var buffer = ByteBuffer.wrap(recording);
+    var padded = false;
+    while (buffer.hasRemaining()) {
+      var size = buffer.getInt(buffer.position());
+      var type = new String(recording, buffer.position() + 4, 4, StandardCharsets.US_ASCII);
+      var box = new byte[size];
+      buffer.get(box);
+      if (padded || !type.equals("mdat")) {
+        grown.writeBytes(box);
+        continue;
+      }
+
+      grown.writeBytes(ByteBuffer.allocate(4).putInt(size + 3 * CHUNK).array());
+      grown.writeBytes(Arrays.copyOfRange(box, 4, size));
+      grown.writeBytes(new byte[3 * CHUNK]);
+      padded = true;
+    }
+
+    return grown.toByteArray();
   }
 }
