@@ -1,6 +1,7 @@
 package com.streamarr.transcode.engine;
 
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
+import com.streamarr.transcode.engine.TrackRun.FirstSample;
 import java.util.Optional;
 
 /**
@@ -11,24 +12,6 @@ record VideoTrack(long trackId, long timescale, int defaultSampleFlags) {
 
   private static final String VIDEO_HANDLER = "vide";
   private static final int SAMPLE_IS_NON_SYNC_SAMPLE = 0x0001_0000;
-
-  private static final int TFHD_BASE_DATA_OFFSET = 0x000001;
-  private static final int TFHD_SAMPLE_DESCRIPTION_INDEX = 0x000002;
-  private static final int TFHD_DEFAULT_SAMPLE_DURATION = 0x000008;
-  private static final int TFHD_DEFAULT_SAMPLE_SIZE = 0x000010;
-  private static final int TFHD_DEFAULT_SAMPLE_FLAGS = 0x000020;
-
-  private static final int TRUN_DATA_OFFSET = 0x000001;
-  private static final int TRUN_FIRST_SAMPLE_FLAGS = 0x000004;
-  private static final int TRUN_SAMPLE_DURATION = 0x000100;
-  private static final int TRUN_SAMPLE_SIZE = 0x000200;
-  private static final int TRUN_SAMPLE_FLAGS = 0x000400;
-  private static final int TRUN_SAMPLE_COMPOSITION_TIME_OFFSET = 0x000800;
-  private static final int PER_SAMPLE_FIELDS =
-      TRUN_SAMPLE_DURATION
-          | TRUN_SAMPLE_SIZE
-          | TRUN_SAMPLE_FLAGS
-          | TRUN_SAMPLE_COMPOSITION_TIME_OFFSET;
 
   /** Finds the single video track of a {@code moov}; empty when it declares none. */
   static Optional<VideoTrack> of(BoxView moov) {
@@ -103,8 +86,9 @@ record VideoTrack(long trackId, long timescale, int defaultSampleFlags) {
       return Optional.empty();
     }
 
-    var firstSamples = traf.children("trun").stream().map(VideoTrack::firstSampleOf).toList();
-    return firstSamples.stream()
+    var runs = traf.children("trun").stream().map(TrackRun::of).toList();
+    return runs.stream()
+        .map(TrackRun::firstSample)
         .flatMap(Optional::stream)
         .findFirst()
         .map(sample -> videoStart(traf, header, sample));
@@ -114,57 +98,6 @@ record VideoTrack(long trackId, long timescale, int defaultSampleFlags) {
     var flags = sample.flags().or(header::defaultSampleFlags).orElse(defaultSampleFlags);
     var presentationTime = addExact(baseMediaDecodeTimeOf(traf), sample.compositionOffset());
     return new VideoStart(presentationTime, timescale, !isSet(flags, SAMPLE_IS_NON_SYNC_SAMPLE));
-  }
-
-  private static Optional<FirstSample> firstSampleOf(BoxView trun) {
-    var fields = trun.fields();
-    var version = fields.u8();
-    var flags = fields.u24();
-    var sampleCount = fields.u32();
-    var firstSampleFlags =
-        fields
-            .skipIf(isSet(flags, TRUN_DATA_OFFSET), 4)
-            .s32If(isSet(flags, TRUN_FIRST_SAMPLE_FLAGS));
-    requireSampleTable(fields, flags, sampleCount);
-    if (sampleCount == 0) {
-      return Optional.empty();
-    }
-
-    var sampleFlags =
-        fields
-            .skipIf(isSet(flags, TRUN_SAMPLE_DURATION), 4)
-            .skipIf(isSet(flags, TRUN_SAMPLE_SIZE), 4)
-            .s32If(isSet(flags, TRUN_SAMPLE_FLAGS));
-    var compositionOffset = compositionOffsetOf(fields, flags, version);
-    return Optional.of(new FirstSample(firstSampleFlags.or(() -> sampleFlags), compositionOffset));
-  }
-
-  /** Every declared sample's entry must fit in the box; the first one is all the reader reads. */
-  private static void requireSampleTable(BoxFields fields, int flags, long sampleCount) {
-    var entryBytes = 4L * Integer.bitCount(flags & PER_SAMPLE_FIELDS);
-    var tableBytes = sampleCount * entryBytes;
-    if (tableBytes > fields.remaining()) {
-      throw FragmentedMp4Exception.malformed(
-          "trun declares "
-              + sampleCount
-              + " samples of "
-              + entryBytes
-              + " bytes in "
-              + fields.remaining()
-              + " bytes");
-    }
-  }
-
-  private static long compositionOffsetOf(BoxFields fields, int flags, int version) {
-    if (!isSet(flags, TRUN_SAMPLE_COMPOSITION_TIME_OFFSET)) {
-      return 0;
-    }
-
-    if (version == 0) {
-      return fields.u32();
-    }
-
-    return fields.s32();
   }
 
   private static long baseMediaDecodeTimeOf(BoxView traf) {
@@ -198,23 +131,4 @@ record VideoTrack(long trackId, long timescale, int defaultSampleFlags) {
       return new TrackExtends(trackId, fields.skip(12).s32());
     }
   }
-
-  private record TrackFragmentHeader(long trackId, Optional<Integer> defaultSampleFlags) {
-
-    static TrackFragmentHeader of(BoxView tfhd) {
-      var fields = tfhd.fields().skip(1);
-      var flags = fields.u24();
-      var trackId = fields.u32();
-      var defaultSampleFlags =
-          fields
-              .skipIf(isSet(flags, TFHD_BASE_DATA_OFFSET), 8)
-              .skipIf(isSet(flags, TFHD_SAMPLE_DESCRIPTION_INDEX), 4)
-              .skipIf(isSet(flags, TFHD_DEFAULT_SAMPLE_DURATION), 4)
-              .skipIf(isSet(flags, TFHD_DEFAULT_SAMPLE_SIZE), 4)
-              .s32If(isSet(flags, TFHD_DEFAULT_SAMPLE_FLAGS));
-      return new TrackFragmentHeader(trackId, defaultSampleFlags);
-    }
-  }
-
-  private record FirstSample(Optional<Integer> flags, long compositionOffset) {}
 }
