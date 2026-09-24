@@ -50,6 +50,11 @@ class FfmpegTranscodeEngineTest {
 
   private TranscodeRequest createRequest(
       TranscodeMode mode, String codecFamily, String variantLabel) {
+    return requestBuilder(mode, codecFamily).variantLabel(variantLabel).build();
+  }
+
+  private static TranscodeRequest.TranscodeRequestBuilder requestBuilder(
+      TranscodeMode mode, String codecFamily) {
     return TranscodeRequest.builder()
         .sessionId(UUID.randomUUID())
         .sourcePath(Path.of("/media/movie.mkv"))
@@ -79,9 +84,7 @@ class FfmpegTranscodeEngineTest {
                 .build())
         .width(1920)
         .height(1080)
-        .bitrate(5_000_000L)
-        .variantLabel(variantLabel)
-        .build();
+        .bitrate(5_000_000L);
   }
 
   @Test
@@ -89,35 +92,8 @@ class FfmpegTranscodeEngineTest {
   void shouldPropagateAttemptIdentityAndStartSequenceWhenStartingAProducer() {
     var attemptId = UUID.randomUUID();
     var request =
-        TranscodeRequest.builder()
-            .sessionId(UUID.randomUUID())
-            .sourcePath(Path.of("/media/movie.mkv"))
+        requestBuilder(TranscodeMode.FULL_TRANSCODE, "h264")
             .seekPosition(12)
-            .targetSegmentDuration(6)
-            .framerate(23.976)
-            .transcodeDecision(
-                TranscodeDecision.builder()
-                    .transcodeMode(TranscodeMode.FULL_TRANSCODE)
-                    .videoCodecFamily("h264")
-                    .audioDecision(
-                        AudioDecision.builder()
-                            .mode(AudioMode.TRANSCODE)
-                            .codec("aac")
-                            .channels(2)
-                            .bitrate(128_000L)
-                            .build())
-                    .subtitleDecision(
-                        new SubtitleDecision(
-                            SubtitleMode.EXCLUDE,
-                            Optional.empty(),
-                            OptionalInt.empty(),
-                            Optional.empty()))
-                    .containerFormat(ContainerFormat.MPEGTS)
-                    .needsKeyframeAlignment(false)
-                    .build())
-            .width(1920)
-            .height(1080)
-            .bitrate(5_000_000L)
             .attemptId(attemptId)
             .startSequenceNumber(2)
             .build();
