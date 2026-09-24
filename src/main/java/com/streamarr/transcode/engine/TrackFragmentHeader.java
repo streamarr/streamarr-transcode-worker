@@ -11,7 +11,7 @@ import lombok.Builder;
  * declares for that {@code traf}.
  *
  * @param baseDataOffset the absolute stream position the {@code traf}'s data offsets count from,
- *     when the {@code tfhd} declares one
+ *     when the {@code tfhd} declares one: an unsigned 64-bit value held in a {@code long}'s bits
  * @param defaultBaseIsMoof whether the data offsets count from the {@code moof}'s first byte
  */
 @Builder

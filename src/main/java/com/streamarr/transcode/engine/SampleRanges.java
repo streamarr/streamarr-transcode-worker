@@ -72,7 +72,7 @@ final class SampleRanges {
 
   private static long baseOf(TrackFragmentHeader header, long previousTrafEnd, MediaData data) {
     if (header.baseDataOffset().isPresent()) {
-      return offsetBy(header.baseDataOffset().getAsLong(), -data.moofPosition());
+      return data.fromMoof(header.baseDataOffset().getAsLong());
     }
 
     if (header.defaultBaseIsMoof()) {
@@ -139,6 +139,22 @@ final class SampleRanges {
               + ".."
               + end
               + " from its moof");
+    }
+
+    /**
+     * Measures an unsigned 64-bit stream position from the {@code moof}.
+     *
+     * @throws FragmentedMp4Exception when the position lies beyond any stream position
+     */
+    long fromMoof(long unsignedStreamPosition) {
+      if (Long.compareUnsigned(unsignedStreamPosition, Long.MAX_VALUE) > 0) {
+        throw outside(
+            "a tfhd base of "
+                + Long.toUnsignedString(unsignedStreamPosition)
+                + " lies beyond any stream position");
+      }
+
+      return unsignedStreamPosition - moofPosition;
     }
 
     private boolean holds(long start, long bytes) {

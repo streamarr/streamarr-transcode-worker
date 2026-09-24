@@ -782,6 +782,36 @@ class FragmentedMp4ReaderTest {
   }
 
   @Test
+  @DisplayName("Should fail when a tfhd base beyond any stream position wraps onto its mdat body")
+  void shouldFailWhenATfhdBaseBeyondAnyStreamPositionWrapsOntoItsMdatBody() {
+    var moov = videoAndAudioMoov();
+    var largestUnsignedBase = u64(0xFFFF_FFFF_FFFF_FFFFL);
+    var moof =
+        moofPointingAtItsMdat(
+            ftyp().length + moov.length,
+            mdatBody ->
+                box(
+                    "moof",
+                    box(
+                        "traf",
+                        fullBox(
+                            "tfhd",
+                            TFHD_BASE_DATA_OFFSET | TFHD_DEFAULT_SAMPLE_SIZE,
+                            u32(VIDEO_TRACK_ID),
+                            largestUnsignedBase,
+                            u32(1)),
+                        tfdt(0),
+                        fullBox(
+                            "trun",
+                            VERSION_1 | TRUN_DATA_OFFSET | TRUN_FIRST_SAMPLE_FLAGS,
+                            u32(1),
+                            u32(mdatBody + 1),
+                            u32(SYNC_SAMPLE_FLAGS)))));
+
+    assertFailure(readerOf(concat(ftyp(), moov, moof, mdat(8))), Reason.SAMPLE_DATA_OUTSIDE_MDAT);
+  }
+
+  @Test
   @DisplayName("Should fail when a run declares more sample bytes than any mdat could hold")
   void shouldFailWhenARunDeclaresMoreSampleBytesThanAnyMdatCouldHold() {
     var tfhd =
