@@ -17,10 +17,8 @@ final class FragmentedMp4Reader {
   private final InputStream stream;
   private final long maximumSegmentBytes;
   private final byte[] headerBytes = new byte[BoxHeader.LARGE_LENGTH];
-  private boolean initialized;
   private long position;
-  private Optional<VideoTrack> videoTrack = Optional.empty();
-  private Optional<SampleRanges> sampleRanges = Optional.empty();
+  private Optional<Movie> movie = Optional.empty();
 
   /**
    * @param maximumSegmentBytes the largest initialization segment or fragment the reader admits; it
@@ -46,8 +44,8 @@ final class FragmentedMp4Reader {
    * @throws FragmentedMp4Exception when the stream cannot be delivered, with the named reason
    */
   Optional<Mp4Unit> next() throws IOException {
-    if (initialized) {
-      return readFragment();
+    if (movie.isPresent()) {
+      return readFragment(movie.orElseThrow());
     }
 
     return readInitializationSegment();
@@ -67,14 +65,12 @@ final class FragmentedMp4Reader {
             .orElseThrow(() -> unexpected(missing, "moov", "the end of the stream"));
     var moov = readBox(moovHeader, ftyp.length);
     var moovView = viewOf(moovHeader, moov);
-    videoTrack = VideoTrack.of(moovView);
-    sampleRanges = Optional.of(SampleRanges.of(moovView));
-    initialized = true;
+    movie = Optional.of(new Movie(VideoTrack.of(moovView), SampleRanges.of(moovView)));
     var bytes = ByteBuffer.allocate(ftyp.length + moov.length).put(ftyp).put(moov).array();
     return Optional.of(new InitializationSegment(bytes));
   }
 
-  private Optional<Mp4Unit> readFragment() throws IOException {
+  private Optional<Mp4Unit> readFragment(Movie declared) throws IOException {
     var moofPosition = position;
     var nextHeader = readHeader();
     if (nextHeader.isEmpty()) {
@@ -96,8 +92,8 @@ final class FragmentedMp4Reader {
             moofPosition,
             (long) moof.length + mdatHeader.length(),
             (long) moof.length + mdat.length);
-    sampleRanges.orElseThrow().requireInside(trackFragments, mediaData);
-    var videoStart = videoTrack.flatMap(track -> track.startOf(trackFragments));
+    declared.sampleRanges().requireInside(trackFragments, mediaData);
+    var videoStart = declared.videoTrack().flatMap(track -> track.startOf(trackFragments));
     return Optional.of(new Fragment(List.of(moof, mdat), videoStart));
   }
 
@@ -134,9 +130,9 @@ final class FragmentedMp4Reader {
     var length = BoxHeader.COMPACT_LENGTH;
     if (BoxHeader.declaresLargeSize(headerBytes)) {
       length = BoxHeader.LARGE_LENGTH;
-      var largeSize = stream.readNBytes(headerBytes, read, length - read);
-      position += largeSize;
-      read += largeSize;
+      var largeSizeBytesRead = stream.readNBytes(headerBytes, read, length - read);
+      position += largeSizeBytesRead;
+      read += largeSizeBytesRead;
       requireHeaderBytes(read, length);
     }
 
@@ -195,4 +191,7 @@ final class FragmentedMp4Reader {
     return new BoxView(
         header.type(), ByteBuffer.wrap(box, headerLength, box.length - headerLength));
   }
+
+  /** What the initialization segment's {@code moov} declares for reading every fragment. */
+  private record Movie(Optional<VideoTrack> videoTrack, SampleRanges sampleRanges) {}
 }
