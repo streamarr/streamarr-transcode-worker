@@ -47,9 +47,11 @@ import io.grpc.stub.StreamObserver;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
@@ -75,6 +77,7 @@ public final class TranscodeWorker implements AutoCloseable {
   private final Optional<FfprobeExecutor> ffprobe;
   private final WorkerRuntime runtime;
   private final Map<UUID, Producer> activeAttempts = new HashMap<>();
+  private final Set<Thread> stoppingAttempts = new HashSet<>();
 
   private ManagedChannel channel;
   private StreamObserver<EstablishWorkerSessionRequest> requests;
@@ -370,25 +373,58 @@ public final class TranscodeWorker implements AutoCloseable {
     return jobAttemptFailed(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
   }
 
+  // Claims the attempt so that its producer's own outcome is never reported, and stops it on its
+  // own thread: the stop waits for FFmpeg to exit, which must hold neither the control stream nor
+  // the monitor that uploads need. close() waits for every stop in progress.
   @SuppressWarnings("java:S3398") // Job lifecycle belongs to the worker, not its gRPC observer.
-  private void stopVariant(StopVariantCommand command) {
-    // The stop waits for FFmpeg to exit, so it runs without the monitor that uploads need.
-    claimStoppedAttempt(command)
-        .ifPresent(
-            stop -> {
-              stop.producer().stop();
-              reportStopped(stop, command.getJobAttemptId());
-            });
-  }
-
-  // Claims the attempt so that its producer's own outcome is never reported.
-  private synchronized Optional<ClaimedStop> claimStoppedAttempt(StopVariantCommand command) {
+  private synchronized void stopVariant(StopVariantCommand command) {
     if (!command.getTarget().equals(identity())) {
-      return Optional.empty();
+      return;
     }
 
-    return Optional.ofNullable(activeAttempts.remove(fromProto(command.getJobAttemptId())))
-        .map(producer -> new ClaimedStop(producer, requests));
+    var producer = activeAttempts.remove(fromProto(command.getJobAttemptId()));
+    if (producer == null) {
+      return;
+    }
+
+    var stop = new ClaimedStop(producer, requests);
+    var stopping =
+        Thread.ofVirtual()
+            .name("stop-" + fromProto(command.getJobAttemptId()))
+            .unstarted(() -> finishStop(stop, command.getJobAttemptId()));
+    stoppingAttempts.add(stopping);
+    stopping.start();
+  }
+
+  private void finishStop(ClaimedStop stop, Uuid jobAttemptId) {
+    try {
+      stop.producer().stop();
+      reportStopped(stop, jobAttemptId);
+    } catch (RuntimeException e) {
+      log.error("Stopping job attempt {} failed", fromProto(jobAttemptId), e);
+    } finally {
+      releaseStop();
+    }
+  }
+
+  private synchronized void releaseStop() {
+    stoppingAttempts.remove(Thread.currentThread());
+  }
+
+  private synchronized List<Thread> stopsInProgress() {
+    return List.copyOf(stoppingAttempts);
+  }
+
+  private void awaitStopsInProgress() {
+    stopsInProgress().forEach(this::awaitStop);
+  }
+
+  private void awaitStop(Thread stopping) {
+    try {
+      stopping.join();
+    } catch (InterruptedException _) {
+      Thread.currentThread().interrupt();
+    }
   }
 
   // A stop that outlives its session reports nothing; the server learned of the end on disconnect.
@@ -487,11 +523,13 @@ public final class TranscodeWorker implements AutoCloseable {
   public void close() {
     // Stopping first lets FFmpeg quit while the session can still carry its uploads.
     stopAll(claimActiveAttempts());
+    awaitStopsInProgress();
     // Probe completion needs the worker monitor, so join only after closeConnection releases it.
     closeConnection()
         .ifPresent(
             closed -> {
               stopAll(closed.attempts());
+              awaitStopsInProgress();
               closed.probes().close();
             });
   }

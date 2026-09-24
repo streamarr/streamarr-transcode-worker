@@ -428,8 +428,11 @@ class TranscodeWorkerJobAttemptTest {
   }
 
   @Test
-  @DisplayName("Should report the stopped attempt only after FFmpeg has exited when stopped")
-  void shouldReportTheStoppedAttemptOnlyAfterFfmpegHasExitedWhenStopped() throws Exception {
+  @DisplayName(
+      "Should return to the control stream and report the stop only after FFmpeg has exited when"
+          + " stopped")
+  void shouldReturnToTheControlStreamAndReportTheStopOnlyAfterFfmpegHasExitedWhenStopped()
+      throws Exception {
     var launcher =
         new ScriptedProcessLauncher(
             _ ->
@@ -444,14 +447,41 @@ class TranscodeWorkerJobAttemptTest {
       startVariant(connection, job);
       var process = launcher.process(fromProto(job.getJobAttemptId()));
 
-      var stop = CompletableFuture.runAsync(() -> deliverStop(connection, job));
-      await().atMost(EVENT_LIMIT).until(() -> process.stdinText().equals("q"));
+      stopVariant(connection, job);
 
+      assertThat(process.isAlive()).isTrue();
       assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
       process.exit();
-      assertThat(stop).succeedsWithin(EVENT_LIMIT);
-      assertThat(eventsOf(connection))
-          .containsExactly(EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_STOPPED);
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_STOPPED);
+      assertThat(process.stdinText()).isEqualTo("q");
+      assertThat(process.wasDestroyedForcibly()).isFalse();
+    }
+  }
+
+  @Test
+  @DisplayName("Should wait for a stopping FFmpeg to exit when the worker closes")
+  void shouldWaitForAStoppingFfmpegToExitWhenTheWorkerCloses() throws Exception {
+    var launcher =
+        new ScriptedProcessLauncher(
+            _ ->
+                ScriptedProcessLauncher.runningProcessBuilder()
+                    .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+                    .build());
+    var job = variantJobBuilder().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+      var process = launcher.process(fromProto(job.getJobAttemptId()));
+      stopVariant(connection, job);
+      await().atMost(EVENT_LIMIT).until(() -> process.stdinText().equals("q"));
+
+      var closing = CompletableFuture.runAsync(worker::close);
+
+      await().during(Duration.ofMillis(200)).atMost(EVENT_LIMIT).until(() -> !closing.isDone());
+      process.exit();
+      assertThat(closing).succeedsWithin(EVENT_LIMIT);
       assertThat(process.wasDestroyedForcibly()).isFalse();
     }
   }
@@ -492,10 +522,9 @@ class TranscodeWorkerJobAttemptTest {
 
   @Test
   @DisplayName(
-      "Should not report the stopped attempt to a new session when the worker reconnects while"
-          + " FFmpeg quits")
-  void shouldNotReportTheStoppedAttemptToANewSessionWhenTheWorkerReconnectsWhileFfmpegQuits()
-      throws Exception {
+      "Should report the stop to its own session and not to the next when the worker reconnects"
+          + " after FFmpeg quits")
+  void shouldReportTheStopToItsOwnSessionAndNotToTheNextWhenTheWorkerReconnects() throws Exception {
     var launcher =
         new ScriptedProcessLauncher(
             _ ->
@@ -509,17 +538,19 @@ class TranscodeWorkerJobAttemptTest {
       var firstSession = runtime.connection();
       startVariant(firstSession, job);
       var process = launcher.process(fromProto(job.getJobAttemptId()));
-      var stop = CompletableFuture.runAsync(() -> deliverStop(firstSession, job));
+      stopVariant(firstSession, job);
       await().atMost(EVENT_LIMIT).until(() -> process.stdinText().equals("q"));
+      var closing = CompletableFuture.runAsync(worker::close);
+      process.exit();
+      assertThat(closing).succeedsWithin(EVENT_LIMIT);
 
-      worker.close();
       worker.start("localhost", 1);
       var nextSession = runtime.connection();
       nextSession.registration();
-      process.exit();
 
-      assertThat(stop).succeedsWithin(EVENT_LIMIT);
       assertThat(process.wasDestroyedForcibly()).isFalse();
+      assertThat(eventsOf(firstSession))
+          .containsExactly(EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_STOPPED);
       assertThat(eventsOf(nextSession)).isEmpty();
     }
   }
@@ -548,6 +579,7 @@ class TranscodeWorkerJobAttemptTest {
 
       stopVariant(connection, job);
 
+      await().atMost(EVENT_LIMIT).until(() -> eventsOf(connection).size() >= 2);
       assertThat(eventsOf(connection))
           .hasSize(2)
           .startsWith(EventCase.JOB_ATTEMPT_STARTED)
@@ -574,14 +606,6 @@ class TranscodeWorkerJobAttemptTest {
 
   private TranscodeWorker worker(ScriptedProcessLauncher launcher) throws Exception {
     return workerBuilder(tempDir).runtime(runtime).engine(engine(launcher)).build();
-  }
-
-  private static void deliverStop(ScriptedWorkerRuntime.Connection connection, VariantJob job) {
-    try {
-      stopVariant(connection, job);
-    } catch (Exception e) {
-      throw new IllegalStateException(e);
-    }
   }
 
   private static void awaitEvents(
