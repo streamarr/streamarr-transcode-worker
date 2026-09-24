@@ -1246,10 +1246,35 @@ class ProducerTest {
 
     var producer = producerFor(process, recording).gracePeriod(Duration.ofMillis(100)).start();
 
-    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.PROCESS_DID_NOT_EXIT);
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.PROCESS_DID_NOT_EXIT);
+    assertThat(failure.detail())
+        .contains("after its output ended and its last segment was accepted");
     assertThat(process.wasTerminated()).isTrue();
     assertThat(process.wasDestroyedForcibly()).isFalse();
     assertThat(sink.accepted()).containsExactlyElementsOf(expectedDeliveries(recording));
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as a truncated output and terminate FFmpeg when FFmpeg does not"
+          + " exit within the grace period after its output ends inside a box")
+  void
+      shouldFailTheAttemptAsATruncatedOutputAndTerminateFfmpegWhenFfmpegDoesNotExitWithinTheGracePeriodAfterItsOutputEndsInsideABox() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(truncated(bytesOf(ENCODED_RECORDING)))
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+
+    var producer = producerFor(process, recording).gracePeriod(Duration.ofMillis(100)).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.TRUNCATED_OUTPUT);
+    assertThat(failure.detail()).contains("END_OF_FILE_IN_BOX_BODY");
+    assertThat(process.wasTerminated()).isTrue();
+    assertThat(process.wasDestroyedForcibly()).isFalse();
   }
 
   @Test

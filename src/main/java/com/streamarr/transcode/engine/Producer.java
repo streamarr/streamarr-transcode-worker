@@ -38,9 +38,10 @@ import lombok.extern.slf4j.Slf4j;
  *
  * <p>A watchdog fails the attempt when FFmpeg writes nothing for the stall timeout while the reader
  * is reading; waiting for the sink pauses it, and it ends once the reader stops reading. Once the
- * output ends, FFmpeg must exit within the grace period, or the producer fails the attempt too. In
- * both cases it asks FFmpeg to terminate and destroys it after the grace period, because a hung
- * FFmpeg can ignore termination.
+ * output ends and the sink has accepted its last segment, FFmpeg must exit within the grace period,
+ * or the producer fails the attempt too, as a truncated output when it was one. In both cases it
+ * asks FFmpeg to terminate and destroys it after the grace period, because a hung FFmpeg can ignore
+ * termination.
  */
 @Slf4j
 public final class Producer {
@@ -97,8 +98,9 @@ public final class Producer {
   /**
    * Starts FFmpeg and reads its output until the attempt settles.
    *
-   * @param gracePeriod how long FFmpeg may take to exit once its output ends, after a stop asks it
-   *     to quit, and after the producer asks it to terminate
+   * @param gracePeriod how long FFmpeg may take to exit once its output ends and the sink has
+   *     accepted its last segment, after a stop asks it to quit, and after the producer asks it to
+   *     terminate
    * @param stallTimeout how long FFmpeg may write nothing while the reader reads its output
    * @param encodedFrameRate the frame rate an attempt that encodes video forces on its output, so
    *     that the producer fails an output holding a video sample shorter than half a frame; empty
@@ -364,33 +366,42 @@ public final class Producer {
   private void conclude(Ending ending) {
     Runnable conclusion =
         switch (ending) {
-          case EndOfOutput _ -> () -> settleAtExitOnceAccepted(this::outcomeOfCompleteOutput);
-          case TruncatedOutput(var failure) -> () -> settleAtExitOnceAccepted(() -> failure);
+          case EndOfOutput _ ->
+              () -> settleAtExitOnceAccepted(this::outcomeOfCompleteOutput, notExited());
+          case TruncatedOutput(var failure) ->
+              () -> settleAtExitOnceAccepted(() -> failure, failure);
           case Abandoned(var failure) -> () -> abandon(failure);
           case Decided _ -> this::discardRemainingOutput;
         };
     conclusion.run();
   }
 
-  private void settleAtExitOnceAccepted(Supplier<AttemptOutcome> outcomeOnCleanExit) {
-    if (tryAwaitAcceptanceOfDeliveryInFlight()) {
-      settleAtExit(outcomeOnCleanExit.get());
-    }
-  }
-
-  private void settleAtExit(AttemptOutcome outcomeOnCleanExit) {
-    if (!tryAwaitExitWithinGracePeriod()) {
-      failAndTerminateFfmpeg(
-          new Failed(
-              ProducerFailure.PROCESS_DID_NOT_EXIT,
-              "FFmpeg did not exit within " + gracePeriod + " after its output ended"));
+  // FFmpeg's exit decides a complete output's outcome, and a non-zero exit takes precedence over
+  // any outcome. A truncated output fails whether or not FFmpeg exits, so it keeps its own reason
+  // as the failure when FFmpeg outlives the grace period.
+  private void settleAtExitOnceAccepted(
+      Supplier<AttemptOutcome> outcomeOnCleanExit, Failed failureWithoutExit) {
+    if (!tryAwaitAcceptanceOfDeliveryInFlight()) {
       return;
     }
 
-    var atExit = outcomeAtExit(outcomeOnCleanExit);
+    if (!tryAwaitExitWithinGracePeriod()) {
+      failAndTerminateFfmpeg(failureWithoutExit);
+      return;
+    }
+
+    var atExit = outcomeAtExit(outcomeOnCleanExit.get());
     if (tryDecide(atExit)) {
       settle(atExit);
     }
+  }
+
+  private Failed notExited() {
+    return new Failed(
+        ProducerFailure.PROCESS_DID_NOT_EXIT,
+        "FFmpeg did not exit within "
+            + gracePeriod
+            + " after its output ended and its last segment was accepted");
   }
 
   // The segment already in delivery is complete, so the reader lets it finish before it ends a
