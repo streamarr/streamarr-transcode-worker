@@ -5,14 +5,12 @@ import com.streamarr.transcode.engine.AttemptOutcome.Failed;
 import com.streamarr.transcode.engine.AttemptOutcome.Stopped;
 import com.streamarr.transcode.engine.SegmentAssembler.Closing;
 import java.io.IOException;
-import java.io.OutputStream;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalDouble;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 import lombok.Builder;
@@ -50,11 +48,7 @@ public final class Producer {
   // One segment awaiting acceptance and one assembling.
   static final long BUDGET_BYTES = 2 * MAXIMUM_SEGMENT_BYTES;
 
-  private static final Duration ERROR_OUTPUT_WAIT = Duration.ofSeconds(1);
-  private static final int ERROR_OUTPUT_DETAIL_LIMIT = 2000;
-
-  private final Process process;
-  private final StderrDrainer errorOutput;
+  private final FfmpegProcess ffmpeg;
   private final FragmentedMp4Reader reader;
 
   // Guarded by lock, because a decision discards the fragments it holds.
@@ -62,7 +56,6 @@ public final class Producer {
 
   private final SegmentSink sink;
   private final SegmentMemoryBudget memoryBudget;
-  private final Duration gracePeriod;
   private final Duration stallTimeout;
   private final StallWatchdog watchdog;
   private final String threadName;
@@ -75,18 +68,16 @@ public final class Producer {
   private long readerHeldBytes;
   private boolean mediaSegmentDelivered;
 
-  private Producer(Process process, Settings settings) {
-    this.process = process;
-    this.errorOutput = new StderrDrainer(process.getErrorStream());
+  private Producer(FfmpegProcess ffmpeg, Settings settings) {
+    this.ffmpeg = ffmpeg;
     this.stallTimeout = settings.stallTimeout();
     this.watchdog = new StallWatchdog(stallTimeout);
     this.reader =
         new FragmentedMp4Reader(
-            watchdog.watch(process.getInputStream()), MAXIMUM_SEGMENT_BYTES, this::tryAdmit);
+            watchdog.watch(ffmpeg.output()), MAXIMUM_SEGMENT_BYTES, this::tryAdmit);
     this.assembler = settings.assembler();
     this.sink = settings.sink();
     this.memoryBudget = settings.memoryBudget();
-    this.gracePeriod = settings.gracePeriod();
     this.threadName = "producer-" + settings.jobAttemptId();
   }
 
@@ -124,7 +115,6 @@ public final class Producer {
                     EncodedFrameRate.of(encodedFrameRate)))
             .sink(sink)
             .memoryBudget(memoryBudget)
-            .gracePeriod(gracePeriod)
             .stallTimeout(stallTimeout)
             .build();
     Process process;
@@ -134,7 +124,7 @@ public final class Producer {
       throw new TranscodeException(TranscodeException.GENERIC_MESSAGE, e);
     }
 
-    var producer = new Producer(process, settings);
+    var producer = new Producer(new FfmpegProcess(process, gracePeriod), settings);
     Thread.ofVirtual()
         .name(producer.threadName)
         .uncaughtExceptionHandler(producer::failReaderUnexpectedly)
@@ -147,7 +137,7 @@ public final class Producer {
   }
 
   long pid() {
-    return process.pid();
+    return ffmpeg.pid();
   }
 
   /** Completes once with the attempt's outcome, after FFmpeg has exited. */
@@ -179,55 +169,15 @@ public final class Producer {
    */
   public void stop() {
     requestStop();
-    awaitExitEndingItOnInterrupt();
+    ffmpeg.awaitExitEndingItOnInterrupt();
     outcome.join();
   }
 
   private void settleStop() {
-    requestQuit();
+    ffmpeg.requestQuit();
     cancelDeliveryInFlight();
-    awaitExitWithinGracePeriod();
+    ffmpeg.awaitExitWithinGracePeriod();
     settle(new Stopped());
-  }
-
-  private void awaitExitEndingItOnInterrupt() {
-    try {
-      process.waitFor();
-    } catch (InterruptedException _) {
-      Thread.currentThread().interrupt();
-      process.destroyForcibly();
-    }
-  }
-
-  private void requestQuit() {
-    try {
-      var input = process.getOutputStream();
-      input.write('q');
-      input.flush();
-    } catch (IOException _) {
-      // FFmpeg has already closed its input; the exit wait observes it ending.
-    }
-  }
-
-  private void awaitExitWithinGracePeriod() {
-    if (!tryAwaitExitWithinGracePeriod()) {
-      endProcessForcibly();
-    }
-  }
-
-  // False when FFmpeg has not exited within the grace period, or an interrupt ended the wait.
-  private boolean tryAwaitExitWithinGracePeriod() {
-    try {
-      return process.waitFor(gracePeriod.toNanos(), TimeUnit.NANOSECONDS);
-    } catch (InterruptedException _) {
-      Thread.currentThread().interrupt();
-      return false;
-    }
-  }
-
-  private void endProcessForcibly() {
-    process.destroyForcibly();
-    process.onExit().join();
   }
 
   // Records the attempt's outcome unless another is already recorded; the caller that records it
@@ -316,8 +266,8 @@ public final class Producer {
     }
 
     cancelDeliveryInFlight();
-    process.destroy();
-    awaitExitWithinGracePeriod();
+    ffmpeg.requestTermination();
+    ffmpeg.awaitExitWithinGracePeriod();
     settle(failure);
   }
 
@@ -348,7 +298,7 @@ public final class Producer {
       holdOnlyTheAssemblingSegment();
       conclude(ending);
     } finally {
-      errorOutput.close();
+      ffmpeg.stopDrainingErrorOutput();
     }
   }
 
@@ -360,7 +310,7 @@ public final class Producer {
           case TruncatedOutput(var failure) ->
               () -> settleAtExitOnceAccepted(() -> failure, failure);
           case Abandoned(var failure) -> () -> abandon(failure);
-          case Decided _ -> this::discardRemainingOutput;
+          case Decided _ -> ffmpeg::discardRemainingOutput;
         };
     conclusion.run();
   }
@@ -374,12 +324,12 @@ public final class Producer {
       return;
     }
 
-    if (!tryAwaitExitWithinGracePeriod()) {
+    if (!ffmpeg.tryAwaitExitWithinGracePeriod()) {
       failAndTerminateFfmpeg(failureWithoutExit);
       return;
     }
 
-    var atExit = outcomeAtExit(outcomeOnCleanExit.get());
+    var atExit = ffmpeg.outcomeAtExit(outcomeOnCleanExit.get());
     if (tryDecide(atExit)) {
       settle(atExit);
     }
@@ -389,7 +339,7 @@ public final class Producer {
     return new Failed(
         ProducerFailure.PROCESS_DID_NOT_EXIT,
         "FFmpeg did not exit within "
-            + gracePeriod
+            + ffmpeg.gracePeriod()
             + " after its output ended and its last segment was accepted");
   }
 
@@ -397,11 +347,11 @@ public final class Producer {
   // failed attempt; a stop or another failure decided meanwhile takes over instead.
   private void abandon(Failed failure) {
     if (!tryAwaitAcceptanceOfDeliveryInFlight() || !tryDecide(failure)) {
-      discardRemainingOutput();
+      ffmpeg.discardRemainingOutput();
       return;
     }
 
-    endProcessForcibly();
+    ffmpeg.endForcibly();
     settle(failure);
   }
 
@@ -415,7 +365,7 @@ public final class Producer {
     log.error("{} failed unexpectedly", readerThread.getName(), error);
     discardOpenFragments();
     if (!tryFailWithProcessEnded(unexpected(error))) {
-      discardRemainingOutput();
+      ffmpeg.discardRemainingOutput();
     }
   }
 
@@ -427,7 +377,7 @@ public final class Producer {
   // The stop is already recorded, so it still settles, without waiting for FFmpeg to quit.
   private void failStopUnexpectedly(Thread stopThread, Throwable error) {
     log.error("{} failed unexpectedly", stopThread.getName(), error);
-    endProcessForcibly();
+    ffmpeg.endForcibly();
     settle(new Stopped());
   }
 
@@ -446,7 +396,7 @@ public final class Producer {
     }
 
     cancelDeliveryInFlight();
-    endProcessForcibly();
+    ffmpeg.endForcibly();
     settle(failure);
     return true;
   }
@@ -628,7 +578,7 @@ public final class Producer {
     var decided = tryDecide(failure);
     endDelivery(false);
     if (decided) {
-      endProcessForcibly();
+      ffmpeg.endForcibly();
       settle(failure);
     }
   }
@@ -667,36 +617,6 @@ public final class Producer {
     return new Completed();
   }
 
-  // A non-zero exit explains whatever the output lacks, so it takes precedence.
-  private AttemptOutcome outcomeAtExit(AttemptOutcome outcomeOnCleanExit) {
-    var exitCode = process.onExit().join().exitValue();
-    if (exitCode != 0) {
-      return new Failed(ProducerFailure.PROCESS_EXITED_WITH_ERROR, exitDetail(exitCode));
-    }
-
-    return outcomeOnCleanExit;
-  }
-
-  // FFmpeg reports why it failed at the end of its error output.
-  private String exitDetail(int exitCode) {
-    var recentErrorOutput = String.join("\n", errorOutput.awaitRecentOutput(ERROR_OUTPUT_WAIT));
-    var tailStart = Math.max(0, recentErrorOutput.length() - ERROR_OUTPUT_DETAIL_LIMIT);
-    return "FFmpeg exited with exit code "
-        + exitCode
-        + ": "
-        + recentErrorOutput.substring(tailStart);
-  }
-
-  // Reading to the end lets FFmpeg flush its last fragment and exit after a quit; whoever decided
-  // the outcome settles it.
-  private void discardRemainingOutput() {
-    try {
-      process.getInputStream().transferTo(OutputStream.nullOutputStream());
-    } catch (IOException _) {
-      // Nothing read after the attempt's outcome was decided matters.
-    }
-  }
-
   // Why the producer stopped reading FFmpeg's output.
   private sealed interface Ending {}
 
@@ -720,7 +640,6 @@ public final class Producer {
       SegmentAssembler assembler,
       SegmentSink sink,
       SegmentMemoryBudget memoryBudget,
-      Duration gracePeriod,
       Duration stallTimeout) {}
 
   public static class ProducerBuilder {
