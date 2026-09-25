@@ -114,9 +114,12 @@ public final class Producer {
         Settings.builder()
             .jobAttemptId(jobAttemptId)
             .assembler(
-                new SegmentAssembler(
-                    new SegmentGrouper(periodSeconds, startSequenceNumber, MAXIMUM_SEGMENT_BYTES),
-                    EncodedFrameRate.of(encodedFrameRate)))
+                SegmentAssembler.builder()
+                    .periodSeconds(periodSeconds)
+                    .startSequenceNumber(startSequenceNumber)
+                    .maximumSegmentBytes(MAXIMUM_SEGMENT_BYTES)
+                    .encodedFrameRate(encodedFrameRate)
+                    .build())
             .sink(sink)
             .memoryBudget(memoryBudget)
             .stallTimeout(stallTimeout)

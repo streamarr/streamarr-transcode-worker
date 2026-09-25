@@ -4,6 +4,8 @@ import com.streamarr.transcode.engine.GroupingOutcome.NothingClosed;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentClosed;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentNumberSkipped;
 import java.util.Optional;
+import java.util.OptionalDouble;
+import lombok.Builder;
 import lombok.NonNull;
 
 /**
@@ -16,14 +18,21 @@ final class SegmentAssembler {
   private final Optional<EncodedFrameRate> encodedFrameRate;
 
   /**
+   * @param startSequenceNumber the first segment this job attempt delivers; segments below it are
+   *     preroll and are discarded
+   * @param maximumSegmentBytes the largest media segment the assembler assembles
    * @param encodedFrameRate the frame rate an attempt that encodes video forces on its output, so
    *     that the assembler refuses a fragment holding a video sample shorter than half a frame;
    *     empty when the attempt copies the video, whose sample durations follow the source
    */
-  SegmentAssembler(
-      @NonNull SegmentGrouper grouper, @NonNull Optional<EncodedFrameRate> encodedFrameRate) {
-    this.grouper = grouper;
-    this.encodedFrameRate = encodedFrameRate;
+  @Builder
+  private SegmentAssembler(
+      int periodSeconds,
+      int startSequenceNumber,
+      long maximumSegmentBytes,
+      @NonNull OptionalDouble encodedFrameRate) {
+    this.grouper = new SegmentGrouper(periodSeconds, startSequenceNumber, maximumSegmentBytes);
+    this.encodedFrameRate = EncodedFrameRate.of(encodedFrameRate);
   }
 
   /**
