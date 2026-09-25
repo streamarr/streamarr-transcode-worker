@@ -3,6 +3,10 @@ package com.streamarr.transcode.engine;
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.engine.AttemptOutcome.Failed;
 import com.streamarr.transcode.engine.AttemptOutcome.Stopped;
+import com.streamarr.transcode.engine.ReadingEnding.Abandoned;
+import com.streamarr.transcode.engine.ReadingEnding.Decided;
+import com.streamarr.transcode.engine.ReadingEnding.EndOfOutput;
+import com.streamarr.transcode.engine.ReadingEnding.TruncatedOutput;
 import com.streamarr.transcode.engine.SegmentAssembler.Closing;
 import java.io.IOException;
 import java.time.Duration;
@@ -302,15 +306,15 @@ public final class Producer {
     }
   }
 
-  private void conclude(Ending ending) {
+  private void conclude(ReadingEnding ending) {
     Runnable conclusion =
         switch (ending) {
-          case EndOfOutput _ ->
+          case EndOfOutput() ->
               () -> settleAtExitOnceAccepted(this::outcomeOfCompleteOutput, notExited());
           case TruncatedOutput(var failure) ->
               () -> settleAtExitOnceAccepted(() -> failure, failure);
           case Abandoned(var failure) -> () -> abandon(failure);
-          case Decided _ -> ffmpeg::discardRemainingOutput;
+          case Decided() -> ffmpeg::discardRemainingOutput;
         };
     conclusion.run();
   }
@@ -401,11 +405,11 @@ public final class Producer {
     return true;
   }
 
-  private Ending readAndDeliver() {
+  private ReadingEnding readAndDeliver() {
     try {
       return deliverEachSegment();
     } catch (FragmentedMp4Exception e) {
-      return endingOf(e);
+      return ReadingEnding.refused(e);
     } catch (IOException e) {
       return new Abandoned(new Failed(ProducerFailure.OUTPUT_UNREADABLE, e.toString()));
     } catch (FragmentedMp4Reader.ReadingCancelled _) {
@@ -413,7 +417,7 @@ public final class Producer {
     }
   }
 
-  private Ending deliverEachSegment() throws IOException {
+  private ReadingEnding deliverEachSegment() throws IOException {
     var ending = deliverNextUnit();
     while (ending.isEmpty()) {
       holdOnlyTheAssemblingSegment();
@@ -425,7 +429,7 @@ public final class Producer {
 
   // Reads the next unit and delivers the segment it closes; empty while reading goes on. The unit
   // is referenced only until this returns, so no read from the pipe keeps it reachable.
-  private Optional<Ending> deliverNextUnit() throws IOException {
+  private Optional<ReadingEnding> deliverNextUnit() throws IOException {
     var unit = reader.next();
     if (unit.isEmpty()) {
       return Optional.of(deliverLastSegment());
@@ -437,7 +441,7 @@ public final class Producer {
   // Empty unless the unit ends reading, by closing a segment whose delivery ends it, by skipping a
   // segment number, or because the attempt was decided. The assembler takes a unit only while the
   // attempt is undecided, because the decision discards what the assembler holds.
-  private Optional<Ending> deliverClosedSegment(Mp4Unit unit) {
+  private Optional<ReadingEnding> deliverClosedSegment(Mp4Unit unit) {
     Closing closing;
     synchronized (lock) {
       if (decision.isPresent()) {
@@ -450,7 +454,7 @@ public final class Producer {
     return deliverThenFail(closing);
   }
 
-  private Ending deliverLastSegment() {
+  private ReadingEnding deliverLastSegment() {
     Optional<ProducedSegment> lastSegment;
     synchronized (lock) {
       if (decision.isPresent()) {
@@ -471,13 +475,13 @@ public final class Producer {
 
   // The skipping fragment closes a complete segment, which is delivered before the skip fails the
   // attempt; a stop or a failed delivery decided first ends reading instead.
-  private Optional<Ending> deliverThenFail(Closing closing) {
+  private Optional<ReadingEnding> deliverThenFail(Closing closing) {
     var handOffEnding = closing.closedSegment().flatMap(this::handOff);
     if (handOffEnding.isPresent()) {
       return handOffEnding;
     }
 
-    return closing.failure().map(Producer::endingOf);
+    return closing.failure().map(ReadingEnding::refused);
   }
 
   // Admits a box's bytes while the reader's and the delivery's holdings fit in the producer's
@@ -540,7 +544,7 @@ public final class Producer {
 
   // Starts the segment's delivery once the previous one was accepted; empty once it starts, and
   // the attempt's end when the attempt is decided first.
-  private Optional<Ending> handOff(ProducedSegment segment) {
+  private Optional<ReadingEnding> handOff(ProducedSegment segment) {
     awaitReaderWhile(() -> deliveryInFlight.isPresent() && decision.isEmpty());
     Delivery delivery;
     synchronized (lock) {
@@ -596,16 +600,6 @@ public final class Producer {
     memoryBudget.release(deliveredBytes);
   }
 
-  // The output ends where it cannot be delivered; a truncated output has already ended.
-  private static Ending endingOf(FragmentedMp4Exception exception) {
-    var failure = new Failed(ProducerFailure.of(exception.getReason()), exception.getMessage());
-    if (failure.reason() == ProducerFailure.TRUNCATED_OUTPUT) {
-      return new TruncatedOutput(failure);
-    }
-
-    return new Abandoned(failure);
-  }
-
   private AttemptOutcome outcomeOfCompleteOutput() {
     synchronized (lock) {
       if (!mediaSegmentDelivered) {
@@ -616,21 +610,6 @@ public final class Producer {
 
     return new Completed();
   }
-
-  // Why the producer stopped reading FFmpeg's output.
-  private sealed interface Ending {}
-
-  // The output ended on a box boundary.
-  private record EndOfOutput() implements Ending {}
-
-  // The output ended inside a box or after a moof with no mdat.
-  private record TruncatedOutput(Failed failure) implements Ending {}
-
-  // The attempt failed while FFmpeg may still be writing.
-  private record Abandoned(Failed failure) implements Ending {}
-
-  // The attempt's outcome was decided elsewhere, by a stop or a failed delivery.
-  private record Decided() implements Ending {}
 
   private record Delivery(ProducedSegment segment, DeliveryCancellation cancellation) {}
 
