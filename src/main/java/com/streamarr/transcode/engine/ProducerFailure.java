@@ -1,5 +1,7 @@
 package com.streamarr.transcode.engine;
 
+import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
+
 /** Why a producer failed its job attempt. */
 public enum ProducerFailure {
   /** FFmpeg exited with a non-zero status. */
@@ -22,5 +24,24 @@ public enum ProducerFailure {
   /** Reading FFmpeg's standard output failed. */
   OUTPUT_UNREADABLE,
   /** The producer met a throwable it does not expect, such as a defect or an exhausted heap. */
-  UNEXPECTED_ERROR
+  UNEXPECTED_ERROR;
+
+  /** The failure of an attempt whose output was refused for the reason. */
+  static ProducerFailure of(Reason reason) {
+    return switch (reason) {
+      case END_OF_FILE_IN_BOX_HEADER, END_OF_FILE_IN_BOX_BODY, END_OF_FILE_AFTER_MOVIE_FRAGMENT ->
+          TRUNCATED_OUTPUT;
+      case EXCEEDS_SEGMENT_CAP -> SEGMENT_CAP_EXCEEDED;
+      case SKIPPED_SEGMENT_NUMBER -> SKIPPED_SEGMENT_NUMBER;
+      case UNSIZED_BOX,
+          MALFORMED_BOX,
+          SAMPLE_DATA_OUTSIDE_MDAT,
+          MISSING_INITIALIZATION_SEGMENT,
+          MISPLACED_INITIALIZATION_SEGMENT,
+          UNEXPECTED_BOX,
+          MULTIPLE_VIDEO_TRACKS,
+          PRESENTATION_TIME_REGRESSED ->
+          MALFORMED_OUTPUT;
+    };
+  }
 }

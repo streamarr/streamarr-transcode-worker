@@ -3,7 +3,6 @@ package com.streamarr.transcode.engine;
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.engine.AttemptOutcome.Failed;
 import com.streamarr.transcode.engine.AttemptOutcome.Stopped;
-import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.engine.GroupingOutcome.NothingClosed;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentClosed;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentNumberSkipped;
@@ -279,30 +278,12 @@ public final class Producer {
 
   // The output ends where it cannot be delivered; a truncated output has already ended.
   private static Ending endingOf(FragmentedMp4Exception exception) {
-    var failure = new Failed(failureOf(exception.getReason()), exception.getMessage());
+    var failure = new Failed(ProducerFailure.of(exception.getReason()), exception.getMessage());
     if (failure.reason() == ProducerFailure.TRUNCATED_OUTPUT) {
       return new TruncatedOutput(failure);
     }
 
     return new Abandoned(failure);
-  }
-
-  private static ProducerFailure failureOf(Reason reason) {
-    return switch (reason) {
-      case END_OF_FILE_IN_BOX_HEADER, END_OF_FILE_IN_BOX_BODY, END_OF_FILE_AFTER_MOVIE_FRAGMENT ->
-          ProducerFailure.TRUNCATED_OUTPUT;
-      case EXCEEDS_SEGMENT_CAP -> ProducerFailure.SEGMENT_CAP_EXCEEDED;
-      case SKIPPED_SEGMENT_NUMBER -> ProducerFailure.SKIPPED_SEGMENT_NUMBER;
-      case UNSIZED_BOX,
-          MALFORMED_BOX,
-          SAMPLE_DATA_OUTSIDE_MDAT,
-          MISSING_INITIALIZATION_SEGMENT,
-          MISPLACED_INITIALIZATION_SEGMENT,
-          UNEXPECTED_BOX,
-          MULTIPLE_VIDEO_TRACKS,
-          PRESENTATION_TIME_REGRESSED ->
-          ProducerFailure.MALFORMED_OUTPUT;
-    };
   }
 
   private AttemptOutcome outcomeOfCompleteOutput() {
