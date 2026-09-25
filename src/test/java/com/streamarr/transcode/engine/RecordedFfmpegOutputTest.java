@@ -375,13 +375,10 @@ class RecordedFfmpegOutputTest {
     var delivered = new ArrayList<MediaSegment>();
     for (var index = 0; index < units.fragments().size(); index++) {
       try {
-        switch (grouper.accept(units.fragments().get(index))) {
-          case NothingClosed _ -> {}
-          case SegmentClosed(var segment) -> delivered.add(segment);
-          case SegmentNumberSkipped skipped -> {
-            skipped.closedSegment().ifPresent(delivered::add);
-            return new Grouping(units, delivered, Optional.of(failureOf(skipped, index)));
-          }
+        var outcome = grouper.accept(units.fragments().get(index));
+        segmentClosedBy(outcome).ifPresent(delivered::add);
+        if (outcome instanceof SegmentNumberSkipped skipped) {
+          return new Grouping(units, delivered, Optional.of(failureOf(skipped, index)));
         }
       } catch (FragmentedMp4Exception e) {
         return new Grouping(units, delivered, Optional.of(failureOf(e, index)));
@@ -390,6 +387,14 @@ class RecordedFfmpegOutputTest {
 
     grouper.finish().ifPresent(delivered::add);
     return new Grouping(units, delivered, Optional.empty());
+  }
+
+  private static Optional<MediaSegment> segmentClosedBy(GroupingOutcome outcome) {
+    return switch (outcome) {
+      case NothingClosed _ -> Optional.empty();
+      case SegmentClosed(var segment) -> Optional.of(segment);
+      case SegmentNumberSkipped skipped -> skipped.closedSegment();
+    };
   }
 
   private static List<SegmentSummary> summaries(Grouping grouping) {
