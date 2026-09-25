@@ -121,14 +121,14 @@ public final class Producer {
             .memoryBudget(memoryBudget)
             .stallTimeout(stallTimeout)
             .build();
-    Process process;
-    try {
-      process = launcher.launch(command, jobAttemptId);
-    } catch (IOException e) {
-      throw new TranscodeException(TranscodeException.GENERIC_MESSAGE, e);
-    }
-
-    var producer = new Producer(new FfmpegProcess(process, gracePeriod), settings);
+    var ffmpeg =
+        FfmpegProcess.builder()
+            .launcher(launcher)
+            .command(command)
+            .jobAttemptId(jobAttemptId)
+            .gracePeriod(gracePeriod)
+            .start();
+    var producer = new Producer(ffmpeg, settings);
     Thread.ofVirtual()
         .name(producer.threadName)
         .uncaughtExceptionHandler(producer::failReaderUnexpectedly)

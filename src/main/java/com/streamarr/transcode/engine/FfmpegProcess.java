@@ -5,7 +5,10 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.time.Duration;
+import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import lombok.Builder;
 import lombok.NonNull;
 
 /**
@@ -22,15 +25,34 @@ final class FfmpegProcess {
   private final StderrDrainer errorOutput;
   private final Duration gracePeriod;
 
-  /**
-   * @param gracePeriod how long FFmpeg may take to exit once its output ends and the sink has
-   *     accepted its last segment, after a stop asks it to quit, and after the producer asks it to
-   *     terminate
-   */
-  FfmpegProcess(@NonNull Process process, @NonNull Duration gracePeriod) {
+  private FfmpegProcess(Process process, Duration gracePeriod) {
     this.process = process;
     this.errorOutput = new StderrDrainer(process.getErrorStream());
     this.gracePeriod = gracePeriod;
+  }
+
+  /**
+   * Starts FFmpeg for the job attempt.
+   *
+   * @param gracePeriod how long FFmpeg may take to exit once its output ends and the sink has
+   *     accepted its last segment, after a stop asks it to quit, and after the producer asks it to
+   *     terminate
+   * @throws TranscodeException when FFmpeg cannot be started
+   */
+  @Builder(buildMethodName = "start")
+  private static FfmpegProcess launch(
+      @NonNull ProcessLauncher launcher,
+      @NonNull List<String> command,
+      @NonNull UUID jobAttemptId,
+      @NonNull Duration gracePeriod) {
+    Process process;
+    try {
+      process = launcher.launch(command, jobAttemptId);
+    } catch (IOException e) {
+      throw new TranscodeException(TranscodeException.GENERIC_MESSAGE, e);
+    }
+
+    return new FfmpegProcess(process, gracePeriod);
   }
 
   long pid() {
