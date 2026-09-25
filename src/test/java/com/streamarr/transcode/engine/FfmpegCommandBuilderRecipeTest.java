@@ -74,7 +74,7 @@ class FfmpegCommandBuilderRecipeTest {
   @DisplayName(
       "Should pin each verified encoder and the stream copy when recordings follow the recipe")
   void shouldPinEachVerifiedEncoderAndTheStreamCopyWhenRecordingsFollowTheRecipe() {
-    assertThat(recordingsOfTheRecipe().map(recording -> recording.videoEncoder()))
+    assertThat(recordingsOfTheRecipe().map(Recording::videoEncoder))
         .contains("libx264", "libsvtav1", "copy");
   }
 

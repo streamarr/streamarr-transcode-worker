@@ -21,6 +21,7 @@ import build.buf.gen.streamarr.transcode.v1.SegmentContentType;
 import build.buf.gen.streamarr.transcode.v1.TranscodeMode;
 import build.buf.gen.streamarr.transcode.v1.VariantJob;
 import com.streamarr.transcode.engine.FfmpegRecordings.Recording;
+import com.streamarr.transcode.engine.FfmpegRecordings.SegmentSummary;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
@@ -571,7 +572,7 @@ class TranscodeWorkerJobAttemptTest {
   private static List<Long> expectedLengths(Recording recording) {
     return Stream.concat(
             Stream.of((long) recording.initializationSegment().byteLength()),
-            recording.segments().stream().map(segment -> segment.byteLength()))
+            recording.segments().stream().map(SegmentSummary::byteLength))
         .toList();
   }
 
