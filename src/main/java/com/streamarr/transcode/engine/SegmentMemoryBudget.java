@@ -79,7 +79,9 @@ public final class SegmentMemoryBudget {
     return true;
   }
 
-  // Holds this monitor. False when an interrupt ended the wait.
+  // Holds this monitor. False when an interrupt ended the wait; tryReserve restores the interrupt
+  // once its loop ends, because restoring it here would make the loop's next wait throw at once.
+  @SuppressWarnings({"java:S2273", "java:S2274", "java:S2142"}) // Called in tryReserve's loop.
   private boolean tryWait() {
     try {
       wait();

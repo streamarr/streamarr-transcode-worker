@@ -245,7 +245,9 @@ public final class Producer {
     }
   }
 
-  // Holds lock. False when an interrupt ended the wait.
+  // Holds lock. False when an interrupt ended the wait; awaitWhile restores the interrupt once its
+  // loop ends, because restoring it here would make the loop's next wait throw at once.
+  @SuppressWarnings({"java:S2273", "java:S2274", "java:S2142"}) // Called in awaitWhile's loop.
   private boolean tryWaitOnLock() {
     try {
       lock.wait();

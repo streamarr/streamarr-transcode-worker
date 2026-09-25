@@ -68,6 +68,7 @@ final class StallWatchdog {
   }
 
   // Holds this monitor. False when interrupted.
+  @SuppressWarnings({"java:S2273", "java:S2274"}) // Called in awaitStall's loop.
   private boolean tryAwaitWake(long silence) {
     try {
       if (paused) {
