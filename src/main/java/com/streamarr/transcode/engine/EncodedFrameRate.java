@@ -1,12 +1,23 @@
 package com.streamarr.transcode.engine;
 
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
+import java.util.Optional;
+import java.util.OptionalDouble;
 
 /**
  * The frame rate an attempt that encodes video forces on its output, which bounds how short a video
  * sample of that output can be.
  */
 record EncodedFrameRate(double framesPerSecond) {
+
+  /** The rate an attempt forces on its output; empty when the attempt copies the video. */
+  static Optional<EncodedFrameRate> of(OptionalDouble framesPerSecond) {
+    if (framesPerSecond.isEmpty()) {
+      return Optional.empty();
+    }
+
+    return Optional.of(new EncodedFrameRate(framesPerSecond.getAsDouble()));
+  }
 
   /**
    * Returns the fragment unless it holds a video sample shorter than half a frame. An encoder that

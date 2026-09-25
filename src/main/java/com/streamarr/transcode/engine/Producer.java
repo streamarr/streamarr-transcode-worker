@@ -3,10 +3,7 @@ package com.streamarr.transcode.engine;
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.engine.AttemptOutcome.Failed;
 import com.streamarr.transcode.engine.AttemptOutcome.Stopped;
-import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
-import com.streamarr.transcode.engine.GroupingOutcome.NothingClosed;
-import com.streamarr.transcode.engine.GroupingOutcome.SegmentClosed;
-import com.streamarr.transcode.engine.GroupingOutcome.SegmentNumberSkipped;
+import com.streamarr.transcode.engine.SegmentAssembler.Closing;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.time.Duration;
@@ -61,14 +58,13 @@ public final class Producer {
   private final FragmentedMp4Reader reader;
 
   // Guarded by lock, because a decision discards the fragments it holds.
-  private final SegmentGrouper grouper;
+  private final SegmentAssembler assembler;
 
   private final SegmentSink sink;
   private final SegmentMemoryBudget memoryBudget;
   private final Duration gracePeriod;
   private final Duration stallTimeout;
   private final StallWatchdog watchdog;
-  private final Optional<EncodedFrameRate> encodedFrameRate;
   private final String threadName;
   private final CompletableFuture<AttemptOutcome> outcome = new CompletableFuture<>();
   private final Object lock = new Object();
@@ -87,11 +83,10 @@ public final class Producer {
     this.reader =
         new FragmentedMp4Reader(
             watchdog.watch(process.getInputStream()), MAXIMUM_SEGMENT_BYTES, this::tryAdmit);
-    this.grouper = settings.grouper();
+    this.assembler = settings.assembler();
     this.sink = settings.sink();
     this.memoryBudget = settings.memoryBudget();
     this.gracePeriod = settings.gracePeriod();
-    this.encodedFrameRate = settings.encodedFrameRate();
     this.threadName = "producer-" + settings.jobAttemptId();
   }
 
@@ -123,12 +118,14 @@ public final class Producer {
     var settings =
         Settings.builder()
             .jobAttemptId(jobAttemptId)
-            .grouper(new SegmentGrouper(periodSeconds, startSequenceNumber, MAXIMUM_SEGMENT_BYTES))
+            .assembler(
+                new SegmentAssembler(
+                    new SegmentGrouper(periodSeconds, startSequenceNumber, MAXIMUM_SEGMENT_BYTES),
+                    EncodedFrameRate.of(encodedFrameRate)))
             .sink(sink)
             .memoryBudget(memoryBudget)
             .gracePeriod(gracePeriod)
             .stallTimeout(stallTimeout)
-            .encodedFrameRate(encodedFrameRateOf(encodedFrameRate))
             .build();
     Process process;
     try {
@@ -147,14 +144,6 @@ public final class Producer {
         .uncaughtExceptionHandler(producer::failWatchdogUnexpectedly)
         .start(producer::watchForStall);
     return producer;
-  }
-
-  private static Optional<EncodedFrameRate> encodedFrameRateOf(OptionalDouble framesPerSecond) {
-    if (framesPerSecond.isEmpty()) {
-      return Optional.empty();
-    }
-
-    return Optional.of(new EncodedFrameRate(framesPerSecond.getAsDouble()));
   }
 
   long pid() {
@@ -253,7 +242,7 @@ public final class Producer {
       }
 
       decision = Optional.of(decided);
-      grouper.discardOpenFragments();
+      assembler.discardOpenFragments();
       readerReleasedBytes = readerHeldBytes;
       readerHeldBytes = 0;
       lock.notifyAll();
@@ -496,73 +485,49 @@ public final class Producer {
   }
 
   // Empty unless the unit ends reading, by closing a segment whose delivery ends it, by skipping a
-  // segment number, or because the attempt was decided.
+  // segment number, or because the attempt was decided. The assembler takes a unit only while the
+  // attempt is undecided, because the decision discards what the assembler holds.
   private Optional<Ending> deliverClosedSegment(Mp4Unit unit) {
-    return switch (unit) {
-      case InitializationSegment initializationSegment ->
-          handOff(ProducedSegment.of(initializationSegment));
-      case Fragment fragment -> groupAndDeliver(checkedForShortSamples(fragment));
-    };
-  }
-
-  // The grouper takes a fragment only while the attempt is undecided, because the decision
-  // discards what the grouper holds.
-  private Optional<Ending> groupAndDeliver(Fragment fragment) {
-    GroupingOutcome grouping;
+    Closing closing;
     synchronized (lock) {
       if (decision.isPresent()) {
         return Optional.of(new Decided());
       }
 
-      grouping = grouper.accept(fragment);
+      closing = assembler.accept(unit);
     }
 
-    return deliverClosedBy(grouping);
+    return deliverThenFail(closing);
   }
 
   private Ending deliverLastSegment() {
-    Optional<MediaSegment> lastSegment;
+    Optional<ProducedSegment> lastSegment;
     synchronized (lock) {
       if (decision.isPresent()) {
         return new Decided();
       }
 
-      lastSegment = grouper.finish();
+      lastSegment = assembler.finish();
     }
 
-    return lastSegment.map(ProducedSegment::of).flatMap(this::handOff).orElseGet(EndOfOutput::new);
+    return lastSegment.flatMap(this::handOff).orElseGet(EndOfOutput::new);
   }
 
   private void discardOpenFragments() {
     synchronized (lock) {
-      grouper.discardOpenFragments();
+      assembler.discardOpenFragments();
     }
-  }
-
-  // Nothing after a short video sample is delivered, not even the segment it would close.
-  private Fragment checkedForShortSamples(Fragment fragment) {
-    return encodedFrameRate
-        .map(frameRate -> frameRate.requireNoShortVideoSample(fragment))
-        .orElse(fragment);
-  }
-
-  private Optional<Ending> deliverClosedBy(GroupingOutcome grouping) {
-    return switch (grouping) {
-      case NothingClosed _ -> Optional.empty();
-      case SegmentClosed(var segment) -> handOff(ProducedSegment.of(segment));
-      case SegmentNumberSkipped skipped -> deliverThenFail(skipped);
-    };
   }
 
   // The skipping fragment closes a complete segment, which is delivered before the skip fails the
   // attempt; a stop or a failed delivery decided first ends reading instead.
-  private Optional<Ending> deliverThenFail(SegmentNumberSkipped skipped) {
-    var handOffEnding = skipped.closedSegment().map(ProducedSegment::of).flatMap(this::handOff);
+  private Optional<Ending> deliverThenFail(Closing closing) {
+    var handOffEnding = closing.closedSegment().flatMap(this::handOff);
     if (handOffEnding.isPresent()) {
       return handOffEnding;
     }
 
-    return Optional.of(endingOf(skipped.failure()));
+    return closing.failure().map(Producer::endingOf);
   }
 
   // Admits a box's bytes while the reader's and the delivery's holdings fit in the producer's
@@ -614,8 +579,8 @@ public final class Producer {
         return;
       }
 
-      droppedBytes = readerHeldBytes - grouper.heldBytes();
-      readerHeldBytes = grouper.heldBytes();
+      droppedBytes = readerHeldBytes - assembler.heldBytes();
+      readerHeldBytes = assembler.heldBytes();
     }
 
     if (droppedBytes > 0) {
@@ -683,31 +648,12 @@ public final class Producer {
 
   // The output ends where it cannot be delivered; a truncated output has already ended.
   private static Ending endingOf(FragmentedMp4Exception exception) {
-    var failure = new Failed(failureOf(exception.getReason()), exception.getMessage());
+    var failure = new Failed(ProducerFailure.of(exception.getReason()), exception.getMessage());
     if (failure.reason() == ProducerFailure.TRUNCATED_OUTPUT) {
       return new TruncatedOutput(failure);
     }
 
     return new Abandoned(failure);
-  }
-
-  private static ProducerFailure failureOf(Reason reason) {
-    return switch (reason) {
-      case END_OF_FILE_IN_BOX_HEADER, END_OF_FILE_IN_BOX_BODY, END_OF_FILE_AFTER_MOVIE_FRAGMENT ->
-          ProducerFailure.TRUNCATED_OUTPUT;
-      case EXCEEDS_SEGMENT_CAP -> ProducerFailure.SEGMENT_CAP_EXCEEDED;
-      case SKIPPED_SEGMENT_NUMBER -> ProducerFailure.SKIPPED_SEGMENT_NUMBER;
-      case SHORT_VIDEO_SAMPLE -> ProducerFailure.SHORT_VIDEO_SAMPLE;
-      case UNSIZED_BOX,
-          MALFORMED_BOX,
-          SAMPLE_DATA_OUTSIDE_MDAT,
-          MISSING_INITIALIZATION_SEGMENT,
-          MISPLACED_INITIALIZATION_SEGMENT,
-          UNEXPECTED_BOX,
-          MULTIPLE_VIDEO_TRACKS,
-          PRESENTATION_TIME_REGRESSED ->
-          ProducerFailure.MALFORMED_OUTPUT;
-    };
   }
 
   private AttemptOutcome outcomeOfCompleteOutput() {
@@ -771,12 +717,11 @@ public final class Producer {
   @Builder
   private record Settings(
       UUID jobAttemptId,
-      SegmentGrouper grouper,
+      SegmentAssembler assembler,
       SegmentSink sink,
       SegmentMemoryBudget memoryBudget,
       Duration gracePeriod,
-      Duration stallTimeout,
-      Optional<EncodedFrameRate> encodedFrameRate) {}
+      Duration stallTimeout) {}
 
   public static class ProducerBuilder {
     private OptionalDouble encodedFrameRate = OptionalDouble.empty();
