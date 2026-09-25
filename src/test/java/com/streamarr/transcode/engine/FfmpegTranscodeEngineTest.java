@@ -4,6 +4,7 @@ import static com.streamarr.transcode.engine.FfmpegRecordings.bytesOf;
 import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
 import static com.streamarr.transcode.fixtures.FfmpegMuxerHelpFixtures.FRAGMENTED_MP4_MUXER_HELP;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
@@ -45,6 +46,20 @@ class FfmpegTranscodeEngineTest {
     var capabilityService = createCapabilityService(true, hwCapability);
 
     executor = engineLaunching(runningProcess(), capabilityService);
+  }
+
+  @Test
+  @DisplayName("Should refuse to build an engine without an encoder stall timeout")
+  void shouldRefuseToBuildAnEngineWithoutAnEncoderStallTimeout() {
+    var builder =
+        FfmpegTranscodeEngine.builder()
+            .commandBuilder(new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)))
+            .capabilityService(createCapabilityService(true, noHardware()))
+            .launcher(new ScriptedProcessLauncher(_ -> runningProcess()));
+
+    assertThatNullPointerException()
+        .isThrownBy(builder::build)
+        .withMessageContaining("encoderStallTimeout");
   }
 
   private TranscodeRequest createRequest(TranscodeMode mode, String codecFamily) {
@@ -288,6 +303,7 @@ class FfmpegTranscodeEngineTest {
         .commandBuilder(new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)))
         .capabilityService(capabilities)
         .launcher(launcher)
+        .encoderStallTimeout(FfmpegTranscodeEngine.DEFAULT_ENCODER_STALL_TIMEOUT)
         .build();
   }
 

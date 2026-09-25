@@ -47,7 +47,8 @@ public final class RemoteWorkerFixtures {
     return FfmpegTranscodeEngine.builder()
         .commandBuilder(new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)))
         .capabilityService(capabilityService)
-        .launcher(launcher);
+        .launcher(launcher)
+        .encoderStallTimeout(FfmpegTranscodeEngine.DEFAULT_ENCODER_STALL_TIMEOUT);
   }
 
   private static class CompatibleFfmpegProcess extends Process {

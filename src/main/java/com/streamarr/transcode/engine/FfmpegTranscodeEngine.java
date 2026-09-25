@@ -100,8 +100,4 @@ public class FfmpegTranscodeEngine {
 
     return OptionalDouble.of(request.framerate());
   }
-
-  public static class FfmpegTranscodeEngineBuilder {
-    private Duration encoderStallTimeout = DEFAULT_ENCODER_STALL_TIMEOUT;
-  }
 }

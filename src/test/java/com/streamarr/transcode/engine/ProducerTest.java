@@ -6,6 +6,7 @@ import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
 import static com.streamarr.transcode.fixtures.Races.awaitStart;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 import static org.awaitility.Awaitility.await;
 
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
@@ -82,6 +83,27 @@ class ProducerTest {
           + 8;
 
   private final RecordingSegmentSink sink = new RecordingSegmentSink();
+
+  @Test
+  @DisplayName("Should refuse to start a producer without an encoded frame rate")
+  void shouldRefuseToStartAProducerWithoutAnEncodedFrameRate() {
+    var builder =
+        Producer.builder()
+            .launcher(
+                (command, jobAttemptId) -> {
+                  throw new AssertionError("FFmpeg must not start");
+                })
+            .command(List.of("ffmpeg"))
+            .jobAttemptId(JOB_ATTEMPT_ID)
+            .gracePeriod(Duration.ofSeconds(5))
+            .stallTimeout(Duration.ofMinutes(1))
+            .memoryBudget(SegmentMemoryBudget.forSlots(1))
+            .sink(sink);
+
+    assertThatNullPointerException()
+        .isThrownBy(builder::start)
+        .withMessageContaining("encodedFrameRate");
+  }
 
   static Stream<Recording> recordingsThatGroupWithoutFailure() {
     return FfmpegRecordings.recordings().stream()
@@ -1619,6 +1641,7 @@ class ProducerTest {
         .jobAttemptId(JOB_ATTEMPT_ID)
         .gracePeriod(Duration.ofSeconds(5))
         .stallTimeout(Duration.ofMinutes(1))
+        .encodedFrameRate(OptionalDouble.empty())
         .memoryBudget(SegmentMemoryBudget.forSlots(1))
         .sink(sink);
   }

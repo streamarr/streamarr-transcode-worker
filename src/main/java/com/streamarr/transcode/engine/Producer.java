@@ -624,8 +624,4 @@ public final class Producer {
       SegmentSink sink,
       SegmentMemoryBudget memoryBudget,
       Duration stallTimeout) {}
-
-  public static class ProducerBuilder {
-    private OptionalDouble encodedFrameRate = OptionalDouble.empty();
-  }
 }

@@ -306,6 +306,7 @@ class WorkerMediaSmokeTest {
         .commandBuilder(new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)))
         .capabilityService(capabilities)
         .launcher(launcher)
+        .encoderStallTimeout(FfmpegTranscodeEngine.DEFAULT_ENCODER_STALL_TIMEOUT)
         .build();
   }
 
