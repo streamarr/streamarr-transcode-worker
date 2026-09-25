@@ -8,8 +8,7 @@ import lombok.NonNull;
  * A segment the producer delivers: the name the worker uploads it under and the bytes FFmpeg wrote
  * for it, which the producer never copies.
  */
-public abstract sealed class ProducedSegment
-    permits ProducedSegment.Initialization, ProducedSegment.Media {
+public abstract sealed class ProducedSegment {
 
   private final List<byte[]> boxes;
 
