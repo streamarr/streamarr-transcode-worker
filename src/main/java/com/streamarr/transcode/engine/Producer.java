@@ -366,7 +366,7 @@ public final class Producer {
   }
 
   private void failReaderUnexpectedly(Thread readerThread, Throwable error) {
-    log.error("{} failed unexpectedly", readerThread.getName(), error);
+    logUnexpectedFailure(readerThread, error);
     discardOpenFragments();
     if (!tryFailWithProcessEnded(unexpected(error))) {
       ffmpeg.discardRemainingOutput();
@@ -374,20 +374,24 @@ public final class Producer {
   }
 
   private void failWatchdogUnexpectedly(Thread watchdogThread, Throwable error) {
-    log.error("{} failed unexpectedly", watchdogThread.getName(), error);
+    logUnexpectedFailure(watchdogThread, error);
     tryFailWithProcessEnded(unexpected(error));
   }
 
   // The stop is already recorded, so it still settles, without waiting for FFmpeg to quit.
   private void failStopUnexpectedly(Thread stopThread, Throwable error) {
-    log.error("{} failed unexpectedly", stopThread.getName(), error);
+    logUnexpectedFailure(stopThread, error);
     ffmpeg.endForcibly();
     settle(new Stopped());
   }
 
   private void failDeliveryUnexpectedly(Thread deliveryThread, Throwable error) {
-    log.error("{} failed unexpectedly", deliveryThread.getName(), error);
+    logUnexpectedFailure(deliveryThread, error);
     failDelivery(unexpected(error));
+  }
+
+  private static void logUnexpectedFailure(Thread thread, Throwable error) {
+    log.error("{} failed unexpectedly", thread.getName(), error);
   }
 
   private static Failed unexpected(Throwable error) {
