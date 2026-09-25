@@ -3,9 +3,13 @@ package com.streamarr.transcode.worker;
 import static com.streamarr.transcode.engine.FfmpegRecordings.bytesOf;
 import static com.streamarr.transcode.engine.FfmpegRecordings.deliveredBytesOf;
 import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
+import static com.streamarr.transcode.fixtures.Races.awaitStart;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.uploadNames;
+import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.SOURCE_NAMESPACE_ID;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engine;
+import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engineBuilder;
+import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.workerConfigurationBuilder;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.startVariant;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.stopVariant;
@@ -19,27 +23,36 @@ import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest.EventC
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
 import build.buf.gen.streamarr.transcode.v1.SegmentContentType;
 import build.buf.gen.streamarr.transcode.v1.TranscodeMode;
+import build.buf.gen.streamarr.transcode.v1.Uuid;
 import build.buf.gen.streamarr.transcode.v1.VariantJob;
 import com.streamarr.transcode.engine.FfmpegRecordings.Recording;
 import com.streamarr.transcode.engine.FfmpegRecordings.SegmentSummary;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
+import com.streamarr.transcode.fixtures.TopLevelBoxes;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.function.IntUnaryOperator;
 import java.util.stream.DoubleStream;
+import java.util.stream.IntStream;
 import java.util.stream.Stream;
+import org.awaitility.core.ConditionFactory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -55,6 +68,12 @@ class TranscodeWorkerJobAttemptTest {
 
   private static final Duration EVENT_LIMIT = Duration.ofSeconds(10);
   private static final int UPLOAD_MESSAGE_BYTES = 64 * 1024;
+  private static final int RACE_ITERATIONS = 100;
+  private static final int BURSTS = 10;
+  private static final int BURST_SLOTS = 2;
+
+  // Six such fragments make a segment of about 15 MiB, within the server's 16 MiB cap.
+  private static final int GROWN_MEDIA_DATA_BYTES = 5 * 512 * 1024;
 
   @TempDir Path tempDir;
 
@@ -152,7 +171,7 @@ class TranscodeWorkerJobAttemptTest {
 
       startVariant(connection, job);
 
-      var process = launcher.process(fromProto(job.getJobAttemptId()));
+      var process = processOf(launcher, job);
       assertThat(process.isAlive()).isFalse();
       assertThat(process.stdinText()).isEqualTo("q");
       assertThat(eventsOf(connection)).isEmpty();
@@ -186,6 +205,177 @@ class TranscodeWorkerJobAttemptTest {
       assertThat(connection.uploadMessagesSentWhileNotReady()).isZero();
       assertThat(connection.uploadMessageCount()).isEqualTo(expectedMessages);
     }
+  }
+
+  @Test
+  @DisplayName(
+      "Should refuse a job beyond the advertised slots as a startup failure without launching"
+          + " FFmpeg")
+  void shouldRefuseAJobBeyondTheAdvertisedSlotsAsAStartupFailureWithoutLaunchingFfmpeg()
+      throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var first = variantJobBuilder().build();
+    var second = variantJobBuilder().build();
+    var beyond = variantJobBuilder().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      assertThat(connection.registration().getAvailableSlots()).isEqualTo(2);
+      startVariant(connection, first);
+      startVariant(connection, second);
+
+      startVariant(connection, beyond);
+
+      assertThat(eventsOf(connection))
+          .containsExactly(
+              EventCase.JOB_ATTEMPT_STARTED,
+              EventCase.JOB_ATTEMPT_STARTED,
+              EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getJobAttemptId())
+          .isEqualTo(beyond.getJobAttemptId());
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED);
+      assertThat(launcher.hasLaunched(fromProto(beyond.getJobAttemptId()))).isFalse();
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should run a job in the slot a stopped attempt freed while its FFmpeg is still quitting")
+  void shouldRunAJobInTheSlotAStoppedAttemptFreedWhileItsFfmpegIsStillQuitting() throws Exception {
+    var launcher =
+        new ScriptedProcessLauncher(
+            _ ->
+                ScriptedProcessLauncher.runningProcessBuilder()
+                    .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+                    .build());
+    var stopped = variantJobBuilder().build();
+    var running = variantJobBuilder().build();
+    var next = variantJobBuilder().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, stopped);
+      startVariant(connection, running);
+      var quitting = processOf(launcher, stopped);
+      stopVariant(connection, stopped);
+      await().atMost(EVENT_LIMIT).until(() -> quitting.stdinText().equals("q"));
+
+      startVariant(connection, next);
+
+      assertThat(quitting.isAlive()).isTrue();
+      assertThat(eventsOf(connection))
+          .containsExactly(
+              EventCase.JOB_ATTEMPT_STARTED,
+              EventCase.JOB_ATTEMPT_STARTED,
+              EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(launcher.hasLaunched(fromProto(next.getJobAttemptId()))).isTrue();
+      quitting.exit();
+      processOf(launcher, running).exit();
+      processOf(launcher, next).exit();
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should start each job in a slot a stop freed and let its reader take its memory while the"
+          + " stopped attempts' FFmpeg still runs when stops and starts arrive in bursts")
+  void
+      shouldStartEachJobInASlotAStopFreedAndLetItsReaderTakeItsMemoryWhileTheStoppedAttemptsFfmpegStillRunsWhenStopsAndStartsArriveInBursts()
+          throws Exception {
+    // Each attempt holds its first segment of about 15 MiB and the fragment that closed it while
+    // the server never acknowledges the initialization segment, so the stopped attempts would hold
+    // more than the worker's budget leaves the new ones unless each stop releases its share.
+    var recording = recording(ENCODED_RECORDING);
+    var firstFragmentOfSegment1 = recording.segments().get(1).firstFragmentIndex();
+    var output =
+        withPaddedMediaData(
+            bytesOf(ENCODED_RECORDING),
+            fragment -> fragment <= firstFragmentOfSegment1 + 2 ? GROWN_MEDIA_DATA_BYTES : 0);
+    var readerWaits = endOfFragment(output, firstFragmentOfSegment1);
+    var launcher =
+        new ScriptedProcessLauncher(
+            _ ->
+                ScriptedProcess.builder()
+                    .output(
+                        Arrays.copyOf(output, endOfFragment(output, firstFragmentOfSegment1 + 2)))
+                    .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+                    .build());
+    var started = new ArrayList<VariantJob>();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.withholdAcknowledgements();
+      var running = startJobs(connection);
+      started.addAll(running);
+      awaitEachReaderAt(launcher, running, readerWaits);
+      for (var burst = 0; burst < BURSTS; burst++) {
+        var stopped = running;
+        stopJobs(connection, stopped);
+        running = startJobs(connection);
+        started.addAll(running);
+
+        awaitEachReaderAt(launcher, running, readerWaits);
+        assertThat(stopped)
+            .allSatisfy(
+                job -> {
+                  assertThat(processOf(launcher, job).isAlive()).isTrue();
+                  assertThat(terminalEventsOf(connection, job)).isEmpty();
+                });
+        stopped.forEach(job -> processOf(launcher, job).exit());
+        stopped.forEach(job -> awaitTerminalEvent(connection, job));
+      }
+
+      stopJobs(connection, running);
+      running.forEach(job -> processOf(launcher, job).exit());
+      running.forEach(job -> awaitTerminalEvent(connection, job));
+      assertThat(started)
+          .hasSize((BURSTS + 1) * BURST_SLOTS)
+          .allSatisfy(
+              job ->
+                  assertThat(terminalEventsOf(connection, job))
+                      .containsExactly(EventCase.JOB_ATTEMPT_STOPPED));
+      assertThat(eventsOf(connection)).doesNotContain(EventCase.JOB_ATTEMPT_FAILED);
+    }
+  }
+
+  private static List<VariantJob> startJobs(ScriptedWorkerRuntime.Connection connection)
+      throws Exception {
+    var jobs = IntStream.range(0, BURST_SLOTS).mapToObj(_ -> variantJobBuilder().build()).toList();
+    for (var job : jobs) {
+      startVariant(connection, job);
+    }
+
+    return jobs;
+  }
+
+  private static void stopJobs(ScriptedWorkerRuntime.Connection connection, List<VariantJob> jobs)
+      throws Exception {
+    for (var job : jobs) {
+      stopVariant(connection, job);
+    }
+  }
+
+  private static void awaitEachReaderAt(
+      ScriptedProcessLauncher launcher, List<VariantJob> jobs, int offset) {
+    jobs.forEach(job -> promptly().until(() -> processOf(launcher, job).bytesTaken() == offset));
+  }
+
+  private static ScriptedProcess processOf(ScriptedProcessLauncher launcher, VariantJob job) {
+    return launcher.process(fromProto(job.getJobAttemptId()));
+  }
+
+  // Where the fragment at this position after the initialization segment ends.
+  private static int endOfFragment(byte[] output, int fragmentIndex) {
+    return TopLevelBoxes.of(output).stream()
+        .filter(box -> box.type().equals("mdat"))
+        .skip(fragmentIndex)
+        .findFirst()
+        .orElseThrow()
+        .end();
   }
 
   @ParameterizedTest(name = "container value {0}")
@@ -387,8 +577,7 @@ class TranscodeWorkerJobAttemptTest {
       awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_FAILED);
       assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
           .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
-      assertThat(launcher.process(fromProto(job.getJobAttemptId())).wasDestroyedForcibly())
-          .isTrue();
+      assertThat(processOf(launcher, job).wasDestroyedForcibly()).isTrue();
     }
   }
 
@@ -422,14 +611,16 @@ class TranscodeWorkerJobAttemptTest {
       var uploaded = new ByteArrayOutputStream();
       connection.uploads().forEach(upload -> uploaded.writeBytes(upload.content()));
       assertThat(uploaded.toByteArray()).isEqualTo(deliveredBytesOf(recording));
-      assertThat(launcher.process(fromProto(job.getJobAttemptId())).wasDestroyedForcibly())
-          .isTrue();
+      assertThat(processOf(launcher, job).wasDestroyedForcibly()).isTrue();
     }
   }
 
   @Test
-  @DisplayName("Should report the stopped attempt only after FFmpeg has exited when stopped")
-  void shouldReportTheStoppedAttemptOnlyAfterFfmpegHasExitedWhenStopped() throws Exception {
+  @DisplayName(
+      "Should return to the control stream and report the stop only after FFmpeg has exited when"
+          + " stopped")
+  void shouldReturnToTheControlStreamAndReportTheStopOnlyAfterFfmpegHasExitedWhenStopped()
+      throws Exception {
     var launcher =
         new ScriptedProcessLauncher(
             _ ->
@@ -442,26 +633,302 @@ class TranscodeWorkerJobAttemptTest {
       worker.start("localhost", 1);
       var connection = runtime.connection();
       startVariant(connection, job);
-      var process = launcher.process(fromProto(job.getJobAttemptId()));
+      var process = processOf(launcher, job);
 
-      var stop = CompletableFuture.runAsync(() -> deliverStop(connection, job));
+      stopVariant(connection, job);
+
+      assertThat(process.isAlive()).isTrue();
       await().atMost(EVENT_LIMIT).until(() -> process.stdinText().equals("q"));
-
       assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
       process.exit();
-      assertThat(stop).succeedsWithin(EVENT_LIMIT);
-      assertThat(eventsOf(connection))
-          .containsExactly(EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_STOPPED);
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_STOPPED);
+      assertThat(process.wasDestroyedForcibly()).isFalse();
+    }
+  }
+
+  @Test
+  @DisplayName("Should wait for a stopping FFmpeg to exit when the worker closes")
+  void shouldWaitForAStoppingFfmpegToExitWhenTheWorkerCloses() throws Exception {
+    var launcher =
+        new ScriptedProcessLauncher(
+            _ ->
+                ScriptedProcessLauncher.runningProcessBuilder()
+                    .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+                    .build());
+    var job = variantJobBuilder().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+      var process = processOf(launcher, job);
+      stopVariant(connection, job);
+      await().atMost(EVENT_LIMIT).until(() -> process.stdinText().equals("q"));
+
+      var closing = CompletableFuture.runAsync(worker::close);
+
+      await().during(Duration.ofMillis(200)).atMost(EVENT_LIMIT).until(() -> !closing.isDone());
+      process.exit();
+      assertThat(closing).succeedsWithin(EVENT_LIMIT);
       assertThat(process.wasDestroyedForcibly()).isFalse();
     }
   }
 
   @Test
   @DisplayName(
-      "Should not report the stopped attempt to a new session when the worker reconnects while"
-          + " FFmpeg quits")
-  void shouldNotReportTheStoppedAttemptToANewSessionWhenTheWorkerReconnectsWhileFfmpegQuits()
+      "Should let FFmpeg exit and send no further upload message when stopped while an upload"
+          + " awaits readiness")
+  void shouldLetFfmpegExitAndSendNoFurtherUploadMessageWhenStoppedWhileAnUploadAwaitsReadiness()
       throws Exception {
+    var launcher = writingUntilTheTestExits();
+    var job = variantJobBuilder().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.withholdUploadReadiness();
+      startVariant(connection, job);
+      await().atMost(EVENT_LIMIT).until(() -> connection.uploads().size() == 1);
+      var process = processOf(launcher, job);
+
+      stopVariant(connection, job);
+
+      assertStopReportedOnlyOnceFfmpegExits(connection, process);
+      connection.grantUploadMessage();
+      await()
+          .during(Duration.ofMillis(200))
+          .atMost(EVENT_LIMIT)
+          .until(() -> connection.uploadMessageCount() == 0);
+      assertThat(connection.uploads())
+          .singleElement()
+          .satisfies(upload -> assertThat(upload.wasCancelled()).isTrue());
+      assertThat(process.hasReadToEndOfOutput()).isTrue();
+      assertThat(process.wasDestroyedForcibly()).isFalse();
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should let FFmpeg exit and report the stop when stopped while an upload awaits"
+          + " acknowledgement")
+  void shouldLetFfmpegExitAndReportTheStopWhenStoppedWhileAnUploadAwaitsAcknowledgement()
+      throws Exception {
+    var launcher = writingUntilTheTestExits();
+    var job = variantJobBuilder().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.withholdAcknowledgements();
+      startVariant(connection, job);
+      await()
+          .atMost(EVENT_LIMIT)
+          .until(
+              () ->
+                  connection.uploads().size() == 1
+                      && connection.uploads().getFirst().awaitsAcknowledgement());
+      var process = processOf(launcher, job);
+
+      stopVariant(connection, job);
+
+      assertStopReportedOnlyOnceFfmpegExits(connection, process);
+      assertThat(connection.uploads())
+          .singleElement()
+          .satisfies(upload -> assertThat(upload.wasCancelled()).isTrue());
+      assertThat(process.hasReadToEndOfOutput()).isTrue();
+      assertThat(process.wasDestroyedForcibly()).isFalse();
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt within the readiness bound when the receiver never reports"
+          + " readiness")
+  void shouldFailTheAttemptWithinTheReadinessBoundWhenTheReceiverNeverReportsReadiness()
+      throws Exception {
+    var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
+    var job = variantJobBuilder().build();
+    var configuration =
+        configurationBuilder().uploadReadinessTimeout(Duration.ofMillis(200)).build();
+
+    try (var worker =
+        workerBuilder(tempDir)
+            .runtime(runtime)
+            .engine(engine(launcher))
+            .configuration(configuration)
+            .build()) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.withholdUploadReadiness();
+      startVariant(connection, job);
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
+      assertThat(connection.uploadMessageCount()).isZero();
+      assertThat(connection.uploads())
+          .singleElement()
+          .satisfies(upload -> assertThat(upload.wasCancelled()).isTrue());
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt within the acknowledgement deadline when the receiver never"
+          + " acknowledges")
+  void shouldFailTheAttemptWithinTheAcknowledgementDeadlineWhenTheReceiverNeverAcknowledges()
+      throws Exception {
+    var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
+    var job = variantJobBuilder().build();
+    var configuration =
+        configurationBuilder().uploadAcknowledgementTimeout(Duration.ofMillis(200)).build();
+
+    try (var worker =
+        workerBuilder(tempDir)
+            .runtime(runtime)
+            .engine(engine(launcher))
+            .configuration(configuration)
+            .build()) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.withholdAcknowledgements();
+      startVariant(connection, job);
+
+      await()
+          .atMost(Duration.ofSeconds(2))
+          .untilAsserted(
+              () ->
+                  assertThat(eventsOf(connection))
+                      .containsExactly(
+                          EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_FAILED));
+      assertThat(connection.uploads())
+          .singleElement()
+          .satisfies(upload -> assertThat(upload.wasCancelled()).isTrue());
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should count the acknowledgement deadline from the first message when readiness comes"
+          + " slowly")
+  void shouldCountTheAcknowledgementDeadlineFromTheFirstMessageWhenReadinessComesSlowly()
+      throws Exception {
+    var output = withLargeFirstMediaData(bytesOf(ENCODED_RECORDING));
+    var launcher =
+        new ScriptedProcessLauncher(_ -> ScriptedProcess.builder().output(output).build());
+    var job = variantJobBuilder().build();
+    var configuration =
+        configurationBuilder().uploadAcknowledgementTimeout(Duration.ofMillis(300)).build();
+
+    try (var worker =
+            workerBuilder(tempDir)
+                .runtime(runtime)
+                .engine(engine(launcher))
+                .configuration(configuration)
+                .build();
+        var receiver = Executors.newSingleThreadScheduledExecutor()) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.withholdUploadReadiness();
+      startVariant(connection, job);
+
+      // Each message waits 100 ms for readiness; the first media segment's messages need longer
+      // than the deadline in all.
+      receiver.scheduleAtFixedRate(connection::grantUploadMessage, 0, 100, TimeUnit.MILLISECONDS);
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(connection.uploads())
+          .extracting(upload -> upload.metadata().getSegmentName())
+          .containsExactly("init.mp4", "segment0.m4s");
+      assertThat(connection.uploads().getLast().wasCancelled()).isTrue();
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt and terminate FFmpeg when FFmpeg writes nothing for the stall"
+          + " timeout")
+  void shouldFailTheAttemptAndTerminateFfmpegWhenFfmpegWritesNothingForTheStallTimeout()
+      throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJobBuilder().build();
+    var engine = engineBuilder(launcher).encoderStallTimeout(Duration.ofMillis(200)).build();
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).engine(engine).build()) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
+      assertThat(processOf(launcher, job).wasTerminated()).isTrue();
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as a transcode failure and terminate FFmpeg when FFmpeg does not"
+          + " exit within the grace period after its output ends")
+  void
+      shouldFailTheAttemptAsATranscodeFailureAndTerminateFfmpegWhenFfmpegDoesNotExitWithinTheGracePeriodAfterItsOutputEnds()
+          throws Exception {
+    var recording = recording(ENCODED_RECORDING);
+    var launcher = writingUntilTheTestExits();
+    var job = variantJobBuilder().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
+      assertThat(connection.uploads())
+          .extracting(upload -> upload.metadata().getSegmentName())
+          .containsExactlyElementsOf(uploadNames(recording));
+      var process = processOf(launcher, job);
+      assertThat(process.wasTerminated()).isTrue();
+      assertThat(process.wasDestroyedForcibly()).isFalse();
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should complete the attempt when the receiver withholds readiness longer than the stall"
+          + " timeout")
+  void shouldCompleteTheAttemptWhenTheReceiverWithholdsReadinessLongerThanTheStallTimeout()
+      throws Exception {
+    var job = variantJobBuilder().build();
+    var engine =
+        engineBuilder(ScriptedProcessLauncher.writing(ENCODED_RECORDING))
+            .encoderStallTimeout(Duration.ofMillis(100))
+            .build();
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).engine(engine).build()) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.withholdUploadReadiness();
+      startVariant(connection, job);
+      await().atMost(EVENT_LIMIT).until(() -> connection.uploads().size() == 1);
+
+      await()
+          .during(Duration.ofMillis(500))
+          .atMost(EVENT_LIMIT)
+          .until(() -> eventsOf(connection).equals(List.of(EventCase.JOB_ATTEMPT_STARTED)));
+      for (var granted = 0; granted < 100; granted++) {
+        connection.grantUploadMessage();
+      }
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_COMPLETED);
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should report the stop to its own session and not to the next when the worker reconnects")
+  void shouldReportTheStopToItsOwnSessionAndNotToTheNextWhenTheWorkerReconnects() throws Exception {
     var launcher =
         new ScriptedProcessLauncher(
             _ ->
@@ -474,36 +941,37 @@ class TranscodeWorkerJobAttemptTest {
       worker.start("localhost", 1);
       var firstSession = runtime.connection();
       startVariant(firstSession, job);
-      var process = launcher.process(fromProto(job.getJobAttemptId()));
-      var stop = CompletableFuture.runAsync(() -> deliverStop(firstSession, job));
+      var process = processOf(launcher, job);
+      stopVariant(firstSession, job);
       await().atMost(EVENT_LIMIT).until(() -> process.stdinText().equals("q"));
+      var closing = CompletableFuture.runAsync(worker::close);
+      process.exit();
+      assertThat(closing).succeedsWithin(EVENT_LIMIT);
 
-      worker.close();
       worker.start("localhost", 1);
       var nextSession = runtime.connection();
       nextSession.registration();
-      process.exit();
 
-      assertThat(stop).succeedsWithin(EVENT_LIMIT);
       assertThat(process.wasDestroyedForcibly()).isFalse();
+      assertThat(eventsOf(firstSession))
+          .containsExactly(EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_STOPPED);
       assertThat(eventsOf(nextSession)).isEmpty();
     }
   }
 
-  @RepeatedTest(20)
-  @DisplayName("Should settle the attempt once when a stop races FFmpeg's failure")
-  void shouldSettleTheAttemptOnceWhenAStopRacesFfmpegsFailure() throws Exception {
-    var initializationSegment =
-        Arrays.copyOf(
-            bytesOf(ENCODED_RECORDING),
-            recording(ENCODED_RECORDING).initializationSegment().byteLength());
+  @Test
+  @DisplayName(
+      "Should report the stop without a forced kill when FFmpeg's output breaks after the stop")
+  void shouldReportTheStopWithoutAForcedKillWhenFfmpegsOutputBreaksAfterTheStop() throws Exception {
+    var failureOffset = recording(ENCODED_RECORDING).initializationSegment().byteLength() + 100;
     var launcher =
         new ScriptedProcessLauncher(
             _ ->
                 ScriptedProcess.builder()
-                    .output(initializationSegment)
-                    .exitCode(1)
-                    .exitTiming(ExitTiming.AT_LAUNCH)
+                    .output(bytesOf(ENCODED_RECORDING))
+                    .pauseAfter(failureOffset)
+                    .failReadAfter(failureOffset)
+                    .exitTiming(ExitTiming.WHEN_TEST_EXITS)
                     .build());
     var job = variantJobBuilder().build();
 
@@ -511,15 +979,172 @@ class TranscodeWorkerJobAttemptTest {
       worker.start("localhost", 1);
       var connection = runtime.connection();
       startVariant(connection, job);
+      var process = processOf(launcher, job);
+      promptly().until(process::hasReachedPause);
+      stopVariant(connection, job);
+      promptly().until(() -> process.stdinText().equals("q"));
+
+      process.resume();
+
+      await()
+          .during(Duration.ofMillis(200))
+          .atMost(EVENT_LIMIT)
+          .until(() -> eventsOf(connection).equals(List.of(EventCase.JOB_ATTEMPT_STARTED)));
+      process.exit();
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_STOPPED);
+      assertThat(process.wasDestroyedForcibly()).isFalse();
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should report the recorded failure without asking FFmpeg to quit when stopped before the"
+          + " failure settles")
+  void shouldReportTheRecordedFailureWithoutAskingFfmpegToQuitWhenStoppedBeforeTheFailureSettles()
+      throws Exception {
+    var failureOffset = recording(ENCODED_RECORDING).initializationSegment().byteLength() + 100;
+    var launcher =
+        new ScriptedProcessLauncher(
+            _ ->
+                ScriptedProcess.builder()
+                    .output(bytesOf(ENCODED_RECORDING))
+                    .failReadAfter(failureOffset)
+                    .lingersAfterKill(true)
+                    .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+                    .build());
+    var job = variantJobBuilder().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+      var process = processOf(launcher, job);
+      promptly().until(process::wasDestroyedForcibly);
 
       stopVariant(connection, job);
 
-      assertThat(eventsOf(connection))
-          .hasSize(2)
-          .startsWith(EventCase.JOB_ATTEMPT_STARTED)
-          .last()
-          .isIn(EventCase.JOB_ATTEMPT_STOPPED, EventCase.JOB_ATTEMPT_FAILED);
+      await()
+          .during(Duration.ofMillis(200))
+          .atMost(EVENT_LIMIT)
+          .until(() -> eventsOf(connection).equals(List.of(EventCase.JOB_ATTEMPT_STARTED)));
+      process.exit();
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
+      assertThat(process.stdinText()).isEmpty();
     }
+  }
+
+  @Test
+  @DisplayName(
+      "Should report once as whichever the producer recorded first when a stop races a failure")
+  void shouldReportOnceAsWhicheverTheProducerRecordedFirstWhenAStopRacesAFailure()
+      throws Exception {
+    // FFmpeg's output breaks at this offset once the test lets the reader past its pause, and
+    // FFmpeg exits when asked to quit.
+    var failureOffset = recording(ENCODED_RECORDING).initializationSegment().byteLength() + 100;
+    var launcher =
+        new ScriptedProcessLauncher(
+            _ ->
+                ScriptedProcess.builder()
+                    .output(bytesOf(ENCODED_RECORDING))
+                    .pauseAfter(failureOffset)
+                    .failReadAfter(failureOffset)
+                    .exitTiming(ExitTiming.AT_QUIT)
+                    .build());
+    var jobs = new ArrayList<VariantJob>();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      for (var iteration = 0; iteration < RACE_ITERATIONS; iteration++) {
+        var job = variantJobBuilder().build();
+        jobs.add(job);
+        startVariant(connection, job);
+        var process = processOf(launcher, job);
+        promptly().until(process::hasReachedPause);
+        var start = new CyclicBarrier(2);
+        var failing = Thread.ofVirtual().start(() -> resumeAt(start, process));
+
+        awaitStart(start);
+        stopVariant(connection, job);
+
+        assertThat(failing.join(EVENT_LIMIT)).isTrue();
+        var reported = awaitTerminalEvent(connection, job);
+        assertThat(reported == EventCase.JOB_ATTEMPT_STOPPED)
+            .as("the stop was recorded first, so it asked FFmpeg to quit")
+            .isEqualTo(process.stdinText().equals("q"));
+      }
+
+      assertThat(jobs).allSatisfy(job -> assertThat(terminalEventsOf(connection, job)).hasSize(1));
+    }
+  }
+
+  // Lets the paused FFmpeg's output continue into its failure once the race's other side is ready.
+  private static void resumeAt(CyclicBarrier start, ScriptedProcess process) {
+    awaitStart(start);
+    process.resume();
+  }
+
+  @Test
+  @DisplayName(
+      "Should report the stop and let FFmpeg quit when the stop arrives while the first upload"
+          + " opens")
+  void shouldReportTheStopAndLetFfmpegQuitWhenTheStopArrivesWhileTheFirstUploadOpens()
+      throws Exception {
+    // FFmpeg writes at once and exits only when asked to quit, so every attempt ends in its stop.
+    var launcher =
+        new ScriptedProcessLauncher(
+            _ ->
+                ScriptedProcess.builder()
+                    .output(bytesOf(ENCODED_RECORDING))
+                    .exitTiming(ExitTiming.AT_QUIT)
+                    .build());
+    var jobs = new ArrayList<VariantJob>();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      for (var iteration = 0; iteration < RACE_ITERATIONS; iteration++) {
+        var job = variantJobBuilder().build();
+        jobs.add(job);
+        startVariant(connection, job);
+        stopVariant(connection, job);
+        awaitTerminalEvent(connection, job);
+      }
+
+      assertThat(jobs)
+          .allSatisfy(
+              job -> {
+                assertThat(terminalEventsOf(connection, job))
+                    .containsExactly(EventCase.JOB_ATTEMPT_STOPPED);
+                assertThat(processOf(launcher, job).wasDestroyedForcibly()).isFalse();
+              });
+    }
+  }
+
+  // FFmpeg that writes the recording at once and exits only when the test lets it.
+  private static ScriptedProcessLauncher writingUntilTheTestExits() {
+    return new ScriptedProcessLauncher(
+        _ ->
+            ScriptedProcess.builder()
+                .output(bytesOf(ENCODED_RECORDING))
+                .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+                .build());
+  }
+
+  // The worker asks FFmpeg to quit, reports nothing while FFmpeg lives, and reports the stop once
+  // it
+  // has exited.
+  private static void assertStopReportedOnlyOnceFfmpegExits(
+      ScriptedWorkerRuntime.Connection connection, ScriptedProcess process) {
+    promptly().until(() -> process.stdinText().equals("q"));
+    await()
+        .during(Duration.ofMillis(200))
+        .atMost(EVENT_LIMIT)
+        .until(() -> eventsOf(connection).equals(List.of(EventCase.JOB_ATTEMPT_STARTED)));
+    process.exit();
+    awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_STOPPED);
   }
 
   // The worker reports the job attempt failed as an invalid specification and never starts FFmpeg.
@@ -538,16 +1163,43 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
+  // The worker configuration the fixture worker uses, to adjust.
+  private TranscodeWorkerConfiguration.TranscodeWorkerConfigurationBuilder configurationBuilder() {
+    return workerConfigurationBuilder()
+        .availableSlots(2)
+        .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, tempDir));
+  }
+
   private TranscodeWorker worker(ScriptedProcessLauncher launcher) throws Exception {
     return workerBuilder(tempDir).runtime(runtime).engine(engine(launcher)).build();
   }
 
-  private static void deliverStop(ScriptedWorkerRuntime.Connection connection, VariantJob job) {
-    try {
-      stopVariant(connection, job);
-    } catch (Exception e) {
-      throw new IllegalStateException(e);
-    }
+  private static EventCase awaitTerminalEvent(
+      ScriptedWorkerRuntime.Connection connection, VariantJob job) {
+    promptly().until(() -> !terminalEventsOf(connection, job).isEmpty());
+    return terminalEventsOf(connection, job).getFirst();
+  }
+
+  // How the worker reported the end of the job's attempt: completed, failed or stopped.
+  private static List<EventCase> terminalEventsOf(
+      ScriptedWorkerRuntime.Connection connection, VariantJob job) {
+    return connection.events().stream()
+        .filter(event -> endedAttemptOf(event).equals(Optional.of(job.getJobAttemptId())))
+        .map(EstablishWorkerSessionRequest::getEventCase)
+        .toList();
+  }
+
+  private static Optional<Uuid> endedAttemptOf(EstablishWorkerSessionRequest event) {
+    return switch (event.getEventCase()) {
+      case JOB_ATTEMPT_COMPLETED -> Optional.of(event.getJobAttemptCompleted().getJobAttemptId());
+      case JOB_ATTEMPT_FAILED -> Optional.of(event.getJobAttemptFailed().getJobAttemptId());
+      case JOB_ATTEMPT_STOPPED -> Optional.of(event.getJobAttemptStopped().getJobAttemptId());
+      default -> Optional.empty();
+    };
+  }
+
+  private static ConditionFactory promptly() {
+    return await().atMost(EVENT_LIMIT).pollInterval(Duration.ofMillis(5));
   }
 
   private static void awaitEvents(
@@ -576,26 +1228,27 @@ class TranscodeWorkerJobAttemptTest {
         .toList();
   }
 
-  // The recording with its first media data box grown past two upload data messages, which the
-  // producer reads without looking inside.
+  // The recording with its first media data box grown past two upload data messages.
   private static byte[] withLargeFirstMediaData(byte[] recording) {
+    return withPaddedMediaData(recording, fragment -> fragment == 0 ? 3 * UPLOAD_MESSAGE_BYTES : 0);
+  }
+
+  // The recording with the media data box of each fragment, counted from 0, grown by the padding
+  // for that fragment, which the producer reads without looking inside.
+  private static byte[] withPaddedMediaData(byte[] recording, IntUnaryOperator paddingOfFragment) {
     var grown = new ByteArrayOutputStream();
-    var buffer = ByteBuffer.wrap(recording);
-    var padded = false;
-    while (buffer.hasRemaining()) {
-      var size = buffer.getInt(buffer.position());
-      var type = new String(recording, buffer.position() + 4, 4, StandardCharsets.US_ASCII);
-      var box = new byte[size];
-      buffer.get(box);
-      if (padded || !type.equals("mdat")) {
-        grown.writeBytes(box);
+    var fragment = 0;
+    for (var box : TopLevelBoxes.of(recording)) {
+      if (!box.type().equals("mdat")) {
+        grown.write(recording, box.start(), box.size());
         continue;
       }
 
-      grown.writeBytes(ByteBuffer.allocate(4).putInt(size + 3 * UPLOAD_MESSAGE_BYTES).array());
-      grown.writeBytes(Arrays.copyOfRange(box, 4, size));
-      grown.writeBytes(new byte[3 * UPLOAD_MESSAGE_BYTES]);
-      padded = true;
+      var padding = paddingOfFragment.applyAsInt(fragment);
+      fragment++;
+      grown.writeBytes(ByteBuffer.allocate(4).putInt(box.size() + padding).array());
+      grown.write(recording, box.start() + 4, box.size() - 4);
+      grown.writeBytes(new byte[padding]);
     }
 
     return grown.toByteArray();

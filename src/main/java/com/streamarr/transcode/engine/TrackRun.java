@@ -1,6 +1,7 @@
 package com.streamarr.transcode.engine;
 
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.function.LongSupplier;
 
 /**
@@ -80,6 +81,33 @@ final class TrackRun {
     }
 
     return bytes;
+  }
+
+  /**
+   * The shortest duration among the run's samples: each sample's own duration, else the default;
+   * empty when the run holds no sample.
+   */
+  OptionalLong shortestSampleDuration(LongSupplier defaultSampleDuration) {
+    if (header.sampleCount() == 0) {
+      return OptionalLong.empty();
+    }
+
+    if (!header.has(SAMPLE_DURATION)) {
+      return OptionalLong.of(defaultSampleDuration.getAsLong());
+    }
+
+    var fields = sampleTable();
+    var afterDuration =
+        4
+            * Integer.bitCount(
+                header.flags() & (SAMPLE_SIZE | SAMPLE_FLAGS | SAMPLE_COMPOSITION_TIME_OFFSET));
+    var shortest = Long.MAX_VALUE;
+    for (var sample = 0L; sample < header.sampleCount(); sample++) {
+      shortest = Math.min(shortest, fields.u32());
+      fields.skip(afterDuration);
+    }
+
+    return OptionalLong.of(shortest);
   }
 
   private Optional<Integer> firstSampleFlags() {

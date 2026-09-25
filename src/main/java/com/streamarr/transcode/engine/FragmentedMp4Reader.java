@@ -5,26 +5,38 @@ import com.streamarr.transcode.engine.SampleRanges.MediaData;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalLong;
 import lombok.NonNull;
 
 /** Reads the top-level ISOBMFF boxes of FFmpeg's fragmented MP4 output from a byte stream. */
 final class FragmentedMp4Reader {
 
   private static final long MAXIMUM_ARRAY_BYTES = Integer.MAX_VALUE - 8L;
+  private static final int SCRATCH_BYTES = 64 * 1024;
 
   private final InputStream stream;
   private final long maximumSegmentBytes;
-  private final byte[] headerBytes = new byte[BoxHeader.LARGE_LENGTH];
+  private final BoxAdmission admission;
+
+  // Every read from the stream lands here first, box headers and body reads alike, so a read that
+  // blocks on the stream references no box.
+  private final byte[] scratch = new byte[SCRATCH_BYTES];
+  private final UnitBoxes unitBoxes = new UnitBoxes();
   private long position;
   private Optional<Movie> movie = Optional.empty();
 
   /**
    * @param maximumSegmentBytes the largest initialization segment or fragment the reader admits; it
    *     rejects any box that would exceed it before allocating memory for that box
+   * @param admission admits each box's bytes after the reader has checked the box against the cap
+   *     and before it allocates memory for the box; when it refuses a box, the reader ends reading
+   *     with {@link ReadingCancelled}
    */
-  FragmentedMp4Reader(@NonNull InputStream stream, long maximumSegmentBytes) {
+  FragmentedMp4Reader(
+      @NonNull InputStream stream, long maximumSegmentBytes, @NonNull BoxAdmission admission) {
     if (maximumSegmentBytes <= 0 || maximumSegmentBytes > MAXIMUM_ARRAY_BYTES) {
       throw new IllegalArgumentException(
           "Segment cap must be between 1 and "
@@ -35,6 +47,16 @@ final class FragmentedMp4Reader {
 
     this.stream = stream;
     this.maximumSegmentBytes = maximumSegmentBytes;
+    this.admission = admission;
+  }
+
+  /**
+   * Drops the boxes of the unit being read, from any thread, and ends reading with {@link
+   * ReadingCancelled} instead of returning that unit. A read that blocks on the stream meanwhile
+   * ends reading once it returns.
+   */
+  void cancel() {
+    unitBoxes.cancel();
   }
 
   /**
@@ -42,28 +64,37 @@ final class FragmentedMp4Reader {
    * on a box boundary.
    *
    * @throws FragmentedMp4Exception when the stream cannot be delivered, with the named reason
+   * @throws ReadingCancelled when the admission refused a box or reading was cancelled
    */
   Optional<Mp4Unit> next() throws IOException {
-    if (movie.isPresent()) {
-      return readFragment(movie.orElseThrow());
-    }
+    try {
+      if (movie.isPresent()) {
+        return readFragment(movie.orElseThrow());
+      }
 
-    return readInitializationSegment();
+      return readInitializationSegment();
+    } finally {
+      unitBoxes.clear();
+    }
   }
 
   private Optional<Mp4Unit> readInitializationSegment() throws IOException {
-    var ftypHeader = readHeader();
-    if (ftypHeader.isEmpty()) {
+    var firstHeader = readHeader();
+    if (firstHeader.isEmpty()) {
       return Optional.empty();
     }
 
     var missing = Reason.MISSING_INITIALIZATION_SEGMENT;
-    var ftyp = readBox(requireType(ftypHeader.orElseThrow(), "ftyp", missing), 0);
+    var ftypHeader = requireType(firstHeader.orElseThrow(), "ftyp", missing);
+    readBox(ftypHeader, 0);
     var moovHeader =
         readHeader()
             .map(header -> requireType(header, "moov", missing))
             .orElseThrow(() -> unexpected(missing, "moov", "the end of the stream"));
-    var moov = readBox(moovHeader, ftyp.length);
+    readBox(moovHeader, ftypHeader.size());
+    var boxes = unitBoxes.takePair();
+    var ftyp = boxes.first();
+    var moov = boxes.second();
     var moovView = viewOf(moovHeader, moov);
     var trackExtends = TrackExtends.byTrackIdIn(moovView);
     movie =
@@ -81,14 +112,17 @@ final class FragmentedMp4Reader {
     }
 
     var moofHeader = requireMoof(nextHeader.orElseThrow());
-    var moof = readBox(moofHeader, 0);
+    readBox(moofHeader, 0);
     var mdatHeader =
         readHeader()
             .orElseThrow(
                 () ->
                     new FragmentedMp4Exception(
                         Reason.END_OF_FILE_AFTER_MOVIE_FRAGMENT, "no mdat follows the moof"));
-    var mdat = readBox(requireType(mdatHeader, "mdat", Reason.UNEXPECTED_BOX), moof.length);
+    readBox(requireType(mdatHeader, "mdat", Reason.UNEXPECTED_BOX), moofHeader.size());
+    var boxes = unitBoxes.takePair();
+    var moof = boxes.first();
+    var mdat = boxes.second();
     var trackFragments = TrackFragmentBox.allOf(viewOf(moofHeader, moof));
     var mediaData =
         new MediaData(
@@ -97,7 +131,12 @@ final class FragmentedMp4Reader {
             (long) moof.length + mdat.length);
     declared.sampleRanges().requireInside(trackFragments, mediaData);
     var videoStart = declared.videoTrack().flatMap(track -> track.startOf(trackFragments));
-    return Optional.of(new Fragment(List.of(moof, mdat), videoStart));
+    var shortestVideoSampleDuration =
+        declared
+            .videoTrack()
+            .map(track -> track.shortestSampleDurationOf(trackFragments))
+            .orElseGet(OptionalLong::empty);
+    return Optional.of(new Fragment(List.of(moof, mdat), videoStart, shortestVideoSampleDuration));
   }
 
   private static BoxHeader requireMoof(BoxHeader header) {
@@ -121,9 +160,9 @@ final class FragmentedMp4Reader {
     return new FragmentedMp4Exception(reason, "expected " + expected + ", found " + found);
   }
 
-  /** Reads the next header into {@link #headerBytes}, where {@link #readBox} copies it from. */
+  /** Reads the next header into {@link #scratch}, where {@link #readBox} copies it from. */
   private Optional<BoxHeader> readHeader() throws IOException {
-    var read = stream.readNBytes(headerBytes, 0, BoxHeader.COMPACT_LENGTH);
+    var read = stream.readNBytes(scratch, 0, BoxHeader.COMPACT_LENGTH);
     position += read;
     if (read == 0) {
       return Optional.empty();
@@ -131,16 +170,15 @@ final class FragmentedMp4Reader {
 
     requireHeaderBytes(read, BoxHeader.COMPACT_LENGTH);
     var length = BoxHeader.COMPACT_LENGTH;
-    if (BoxHeader.declaresLargeSize(headerBytes)) {
+    if (BoxHeader.declaresLargeSize(scratch)) {
       length = BoxHeader.LARGE_LENGTH;
-      var largeSizeBytesRead = stream.readNBytes(headerBytes, read, length - read);
+      var largeSizeBytesRead = stream.readNBytes(scratch, read, length - read);
       position += largeSizeBytesRead;
       read += largeSizeBytesRead;
       requireHeaderBytes(read, length);
     }
 
-    var header =
-        BoxHeader.read(new BoxFields("box header", ByteBuffer.wrap(headerBytes, 0, length)));
+    var header = BoxHeader.read(new BoxFields("box header", ByteBuffer.wrap(scratch, 0, length)));
     if (header.isUnsized()) {
       throw new FragmentedMp4Exception(
           Reason.UNSIZED_BOX, header.type() + " extends to the end of the stream");
@@ -157,7 +195,8 @@ final class FragmentedMp4Reader {
     }
   }
 
-  private byte[] readBox(BoxHeader header, long admittedBytes) throws IOException {
+  // Adds the box whose header the scratch buffer holds to the unit being read.
+  private void readBox(BoxHeader header, long admittedBytes) throws IOException {
     if (Long.compareUnsigned(header.size(), maximumSegmentBytes - admittedBytes) > 0) {
       throw new FragmentedMp4Exception(
           Reason.EXCEEDS_SEGMENT_CAP,
@@ -175,18 +214,29 @@ final class FragmentedMp4Reader {
           header.type() + " declares " + header.size() + " bytes");
     }
 
-    var box = new byte[(int) header.size()];
-    var headerLength = header.length();
-    System.arraycopy(headerBytes, 0, box, 0, headerLength);
-    var read = stream.readNBytes(box, headerLength, box.length - headerLength);
-    position += read;
-    if (read < box.length - headerLength) {
-      throw new FragmentedMp4Exception(
-          Reason.END_OF_FILE_IN_BOX_BODY,
-          header.type() + " ended after " + (headerLength + read) + " of " + box.length + " bytes");
+    if (!admission.tryAdmit(header.size())) {
+      throw new ReadingCancelled();
     }
 
-    return box;
+    unitBoxes.begin(header, scratch);
+    var remaining = header.size() - header.length();
+    while (remaining > 0) {
+      var read = stream.read(scratch, 0, (int) Math.min(remaining, scratch.length));
+      if (read < 0) {
+        throw new FragmentedMp4Exception(
+            Reason.END_OF_FILE_IN_BOX_BODY,
+            header.type()
+                + " ended after "
+                + (header.size() - remaining)
+                + " of "
+                + header.size()
+                + " bytes");
+      }
+
+      position += read;
+      remaining -= read;
+      unitBoxes.append(scratch, read);
+    }
   }
 
   private static BoxView viewOf(BoxHeader header, byte[] box) {
@@ -197,4 +247,68 @@ final class FragmentedMp4Reader {
 
   /** What the initialization segment's {@code moov} declares for reading every fragment. */
   private record Movie(Optional<VideoTrack> videoTrack, SampleRanges sampleRanges) {}
+
+  /**
+   * Ends reading when the admission refuses a box or reading is cancelled; the reader then holds
+   * none of its unit.
+   */
+  static final class ReadingCancelled extends RuntimeException {
+    ReadingCancelled() {
+      super(null, null, false, false);
+    }
+  }
+
+  // The two boxes of a unit: ftyp and moov, or moof and mdat.
+  @SuppressWarnings("java:S6218") // Carries the boxes to the reader; nothing compares pairs.
+  private record BoxPair(byte[] first, byte[] second) {}
+
+  // The boxes of the unit being read. The reader holds them only here until the unit is complete,
+  // never in a local variable while it reads from the stream, so cancelling reading from another
+  // thread drops them even while a read blocks.
+  private static final class UnitBoxes {
+
+    // Guarded by this monitor.
+    private final List<byte[]> boxes = new ArrayList<>();
+    private int filledBytes;
+    private boolean cancelled;
+
+    // Starts a box with the header bytes at the start of the scratch buffer.
+    synchronized void begin(BoxHeader header, byte[] scratch) {
+      requireNotCancelled();
+      var box = new byte[Math.toIntExact(header.size())];
+      System.arraycopy(scratch, 0, box, 0, header.length());
+      boxes.add(box);
+      filledBytes = header.length();
+    }
+
+    // Appends the first bytes of the scratch buffer to the box begun last.
+    synchronized void append(byte[] scratch, int length) {
+      requireNotCancelled();
+      System.arraycopy(scratch, 0, boxes.getLast(), filledBytes, length);
+      filledBytes += length;
+    }
+
+    synchronized BoxPair takePair() {
+      requireNotCancelled();
+      var pair = new BoxPair(boxes.getFirst(), boxes.getLast());
+      boxes.clear();
+      return pair;
+    }
+
+    synchronized void clear() {
+      boxes.clear();
+    }
+
+    synchronized void cancel() {
+      cancelled = true;
+      boxes.clear();
+    }
+
+    // Holds this monitor.
+    private void requireNotCancelled() {
+      if (cancelled) {
+        throw new ReadingCancelled();
+      }
+    }
+  }
 }

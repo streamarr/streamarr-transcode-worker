@@ -3,8 +3,10 @@ package com.streamarr.transcode.engine;
 import static com.streamarr.transcode.engine.FfmpegRecordings.bytesOf;
 import static com.streamarr.transcode.engine.FfmpegRecordings.deliveredBytesOf;
 import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
+import static com.streamarr.transcode.fixtures.Races.awaitStart;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 import static org.awaitility.Awaitility.await;
 
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
@@ -15,12 +17,27 @@ import com.streamarr.transcode.engine.FfmpegRecordings.SegmentSummary;
 import com.streamarr.transcode.engine.RecordingSegmentSink.Accepted;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
+import com.streamarr.transcode.fixtures.TopLevelBoxes;
+import com.streamarr.transcode.fixtures.TopLevelBoxes.Box;
 import java.io.IOException;
+import java.lang.management.ManagementFactory;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
+import java.util.OptionalDouble;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
+import java.util.stream.IntStream;
 import java.util.stream.Stream;
+import lombok.Builder;
 import org.assertj.core.api.InstanceOfAssertFactories;
 import org.awaitility.core.ConditionFactory;
 import org.junit.jupiter.api.DisplayName;
@@ -41,8 +58,52 @@ class ProducerTest {
   private static final UUID JOB_ATTEMPT_ID =
       UUID.fromString("0f6a3a9e-4c6b-4f59-9d0e-1c2b3a4d5e6f");
   private static final long SERVER_SEGMENT_CAP_BYTES = 16L * 1024 * 1024;
+  private static final int NEARLY_CAPPED_FRAGMENT_PAYLOAD = 5 * 1024 * 1024;
+  private static final int RACE_ITERATIONS = 200;
+  private static final int BURSTS = 12;
+  private static final int BURST_SLOTS = 3;
+
+  // Where the reader of nearlyCappedSegments() stops while the first segment awaits acceptance:
+  // before the body of the third segment's first mdat, which the budget cannot admit.
+  private static final int NEARLY_CAPPED_BUDGET_STOP =
+      IsoBoxes.ftyp().length
+          + IsoBoxes.videoAndAudioMoov().length
+          + 6 * keyframeFragment(0).length
+          + keyframeMoof(48_000).length
+          + 8;
+
+  // Where the reader of nearlyCappedSegments() stops on a one-slot worker while a stopped attempt's
+  // cancelled delivery of its first segment still holds three fragments: before the body of the
+  // second segment's first mdat, which the worker's budget cannot admit.
+  private static final int BEHIND_A_HELD_STOP =
+      IsoBoxes.ftyp().length
+          + IsoBoxes.videoAndAudioMoov().length
+          + 3 * keyframeFragment(0).length
+          + keyframeMoof(24_000).length
+          + 8;
 
   private final RecordingSegmentSink sink = new RecordingSegmentSink();
+
+  @Test
+  @DisplayName("Should refuse to start a producer without an encoded frame rate")
+  void shouldRefuseToStartAProducerWithoutAnEncodedFrameRate() {
+    var builder =
+        Producer.builder()
+            .launcher(
+                (command, jobAttemptId) -> {
+                  throw new AssertionError("FFmpeg must not start");
+                })
+            .command(List.of("ffmpeg"))
+            .jobAttemptId(JOB_ATTEMPT_ID)
+            .gracePeriod(Duration.ofSeconds(5))
+            .stallTimeout(Duration.ofMinutes(1))
+            .memoryBudget(SegmentMemoryBudget.forSlots(1))
+            .sink(sink);
+
+    assertThatNullPointerException()
+        .isThrownBy(builder::start)
+        .withMessageContaining("encodedFrameRate");
+  }
 
   static Stream<Recording> recordingsThatGroupWithoutFailure() {
     return FfmpegRecordings.recordings().stream()
@@ -105,6 +166,247 @@ class ProducerTest {
     assertThat(producer.outcome()).isNotDone();
     sink.release();
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+  }
+
+  @Test
+  @DisplayName(
+      "Should assemble the next segment while one awaits acceptance and stop reading when that"
+          + " segment closes")
+  void shouldAssembleTheNextSegmentWhileOneAwaitsAcceptanceAndStopReadingWhenThatSegmentCloses() {
+    var recording = recording(ENCODED_RECORDING);
+    var recorded = bytesOf(ENCODED_RECORDING);
+    var process = ScriptedProcess.builder().output(recorded).build();
+    sink.holding(1);
+    var firstThirdSegmentFragment = offsetOfMediaSegment(recording, 2);
+    var closingFragmentEnd = endOfFragmentAt(recorded, firstThirdSegmentFragment);
+
+    var producer = producerFor(process, recording).start();
+
+    assertReaderStopsAt(process, closingFragmentEnd);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+    sink.release();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(sink.accepted()).containsExactlyElementsOf(expectedDeliveries(recording));
+  }
+
+  @Test
+  @DisplayName("Should hold no more than two segment caps and block FFmpeg when the budget is full")
+  void shouldHoldNoMoreThanTwoSegmentCapsAndBlockFfmpegWhenTheBudgetIsFull() {
+    var process = ScriptedProcess.builder().output(nearlyCappedSegments()).build();
+    sink.holding(1);
+
+    var producer = producerOfOneSecondSegments(process).start();
+
+    assertReaderStopsAt(process, NEARLY_CAPPED_BUDGET_STOP);
+    assertThat(
+            (long) process.bytesTaken()
+                - IsoBoxes.ftyp().length
+                - IsoBoxes.videoAndAudioMoov().length)
+        .isLessThanOrEqualTo(2 * SERVER_SEGMENT_CAP_BYTES);
+    sink.release();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(sink.acceptedNames())
+        .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
+  }
+
+  @Test
+  @DisplayName(
+      "Should discard the rest of the output and let FFmpeg exit when stopped while the budget is"
+          + " full")
+  void shouldDiscardTheRestOfTheOutputAndLetFfmpegExitWhenStoppedWhileTheBudgetIsFull() {
+    var process = ScriptedProcess.builder().output(nearlyCappedSegments()).build();
+    sink.holding(1);
+    var producer = producerOfOneSecondSegments(process).gracePeriod(Duration.ofMinutes(10)).start();
+    awaiting().until(() -> process.bytesTaken() == NEARLY_CAPPED_BUDGET_STOP);
+
+    producer.stop();
+
+    assertThat(producer.outcome()).isCompletedWithValue(new Stopped());
+    assertThat(process.hasReadToEndOfOutput()).isTrue();
+    assertThat(process.wasDestroyedForcibly()).isFalse();
+    assertThat(sink.wasCancelled()).isTrue();
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+  }
+
+  @Test
+  @DisplayName(
+      "Should hold another attempt's reader only until a stopped attempt's cancelled delivery"
+          + " returns when both share the worker's budget")
+  void
+      shouldHoldAnotherAttemptsReaderOnlyUntilAStoppedAttemptsCancelledDeliveryReturnsWhenBothShareTheWorkersBudget() {
+    var workerBudget = SegmentMemoryBudget.forSlots(1);
+    var stopped = stopHoldingItsCancelledDelivery(workerBudget);
+    var nextProcess = ScriptedProcess.builder().output(nearlyCappedSegments()).build();
+
+    var next = producerOfOneSecondSegments(nextProcess).memoryBudget(workerBudget).start();
+
+    // The stop released the segment the stopped attempt was assembling, but not its cancelled
+    // delivery.
+    assertReaderStopsAt(nextProcess, BEHIND_A_HELD_STOP);
+    stopped.sink().release();
+    assertThat(next.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(stopped.process().isAlive()).isTrue();
+    stopped.process().exit();
+    assertThat(stopped.producer().outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Stopped());
+  }
+
+  @Test
+  @DisplayName(
+      "Should admit a reader waiting for the worker's memory before a later attempt's reader whose"
+          + " boxes would fit when both share the worker's budget")
+  void
+      shouldAdmitAReaderWaitingForTheWorkersMemoryBeforeALaterAttemptsReaderWhoseBoxesWouldFitWhenBothShareTheWorkersBudget() {
+    var workerBudget = SegmentMemoryBudget.forSlots(1);
+    var stopped = stopHoldingItsCancelledDelivery(workerBudget);
+    var waitingProcess = ScriptedProcess.builder().output(nearlyCappedSegments()).build();
+    var waiting = producerOfOneSecondSegments(waitingProcess).memoryBudget(workerBudget).start();
+    assertReaderStopsAt(waitingProcess, BEHIND_A_HELD_STOP);
+    var laterProcess = ScriptedProcess.builder().output(bytesOf(ENCODED_RECORDING)).build();
+    var laterSink = new RecordingSegmentSink();
+
+    var later =
+        producerFor(laterProcess, recording(ENCODED_RECORDING))
+            .sink(laterSink)
+            .memoryBudget(workerBudget)
+            .start();
+
+    // The whole recording would fit in what the waiting reader leaves free, but the later reader
+    // takes only its first box header until the waiting reader has its memory.
+    assertReaderStopsAt(laterProcess, 8);
+    stopped.sink().release();
+    assertThat(waiting.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(later.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(laterSink.acceptedNames()).contains("init.mp4");
+    stopped.process().exit();
+    assertThat(stopped.producer().outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Stopped());
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep within the worker's budget and let every new attempt proceed when stops and"
+          + " starts arrive in bursts")
+  void
+      shouldKeepWithinTheWorkersBudgetAndLetEveryNewAttemptProceedWhenStopsAndStartsArriveInBursts()
+          throws InterruptedException {
+    var output = nearlyCappedSegments();
+    var layout = TopLevelBoxes.of(output);
+    var workerBudget = SegmentMemoryBudget.forSlots(BURST_SLOTS);
+    var capacity = BURST_SLOTS * 2 * SERVER_SEGMENT_CAP_BYTES;
+    var attempts = new CopyOnWriteArrayList<BurstAttempt>();
+    var highestCharge = new AtomicLong();
+
+    try (var sampler = Executors.newSingleThreadScheduledExecutor()) {
+      var sampling =
+          sampler.scheduleAtFixedRate(
+              () -> highestCharge.accumulateAndGet(chargedAtLeast(attempts, layout), Math::max),
+              0,
+              1,
+              TimeUnit.MILLISECONDS);
+      var running =
+          startBurst(BurstStart.builder().output(output).budget(workerBudget).burst(0).build());
+      attempts.addAll(running);
+      awaitEachReaderAtItsBudget(running);
+      for (var burst = 1; burst <= BURSTS; burst++) {
+        var stopped = running;
+        var next = BurstStart.builder().output(output).budget(workerBudget).burst(burst).build();
+        running = stopAndStartTogether(stopped, () -> startBurst(next));
+        attempts.addAll(running);
+
+        awaitReadersWaiting(running);
+        assertThat(chargedAtLeast(attempts, layout)).isLessThanOrEqualTo(capacity);
+        assertThat(running)
+            .as("a cancelled delivery still held keeps some new reader waiting for memory")
+            .anySatisfy(
+                attempt ->
+                    assertThat(attempt.process().bytesTaken())
+                        .isLessThan(NEARLY_CAPPED_BUDGET_STOP));
+        stopped.forEach(attempt -> attempt.sink().release());
+        awaitEachReaderAtItsBudget(running);
+        assertThat(stopped).allSatisfy(attempt -> assertThat(attempt.process().isAlive()).isTrue());
+        endStoppedAttempts(stopped);
+        attempts.removeAll(stopped);
+      }
+
+      running.forEach(BurstAttempt::stop);
+      running.forEach(attempt -> attempt.sink().release());
+      endStoppedAttempts(running);
+      assertThat(sampling.isDone()).as("the sampler never failed").isFalse();
+    }
+
+    assertThat(highestCharge.get()).isPositive().isLessThanOrEqualTo(capacity);
+  }
+
+  @Test
+  @DisplayName(
+      "Should free the segment it was assembling at the stop when a hung FFmpeg leaves the reader"
+          + " waiting inside a fragment")
+  void
+      shouldFreeTheSegmentItWasAssemblingAtTheStopWhenAHungFfmpegLeavesTheReaderWaitingInsideAFragment() {
+    // Segment 0's three 5 MiB fragments and the first MiB of the next fragment's mdat, after which
+    // FFmpeg writes nothing more and ignores the quit.
+    var hangOffset =
+        IsoBoxes.ftyp().length
+            + IsoBoxes.videoAndAudioMoov().length
+            + 3 * keyframeFragment(0).length
+            + keyframeMoof(24_000).length
+            + 8
+            + 1024 * 1024;
+    var process =
+        ScriptedProcess.builder()
+            .output(nearlyCappedSegments())
+            .pauseAfter(hangOffset)
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    var heldBeforeReading = liveHeapBytes();
+    var producer = producerOfOneSecondSegments(process).gracePeriod(Duration.ofMinutes(10)).start();
+    awaiting().until(process::hasReachedPause);
+    assertThat(liveHeapBytes())
+        .as("the reader holds three fragments and all of the next fragment's mdat")
+        .isGreaterThan(heldBeforeReading + 18L * 1024 * 1024);
+
+    producer.requestStop();
+
+    await()
+        .atMost(OUTCOME_LIMIT)
+        .pollInterval(Duration.ofMillis(100))
+        .until(() -> liveHeapBytes() <= heldBeforeReading + 2L * 1024 * 1024);
+    assertThat(process.bytesTaken()).isEqualTo(hangOffset);
+    assertThat(process.isAlive()).isTrue();
+    process.resume();
+    process.exit();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Stopped());
+  }
+
+  @Test
+  @DisplayName(
+      "Should hold none of the discarded preroll against the budget when the preroll of a"
+          + " replacement attempt outgrows the segment cap")
+  void
+      shouldHoldNoneOfTheDiscardedPrerollAgainstTheBudgetWhenThePrerollOfAReplacementAttemptOutgrowsTheSegmentCap() {
+    // Four 5 MiB keyframe fragments in segment 0, which an attempt from segment 1 discards.
+    var preroll =
+        IsoBoxes.concat(
+            keyframeFragment(0),
+            keyframeFragment(6_000),
+            keyframeFragment(12_000),
+            keyframeFragment(18_000));
+    var output =
+        IsoBoxes.concat(
+            IsoBoxes.ftyp(),
+            IsoBoxes.videoAndAudioMoov(),
+            preroll,
+            nearlyCappedFragmentsFrom(24_000));
+    var process = ScriptedProcess.builder().output(output).build();
+    sink.holding(1);
+
+    var producer = producerOfOneSecondSegments(process).startSequenceNumber(1).start();
+
+    var budgetStop = preroll.length + NEARLY_CAPPED_BUDGET_STOP;
+    assertReaderStopsAt(process, budgetStop);
+    sink.release();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(sink.acceptedNames())
+        .containsExactly("init.mp4", "segment1.m4s", "segment2.m4s", "segment3.m4s");
   }
 
   @Test
@@ -223,10 +525,13 @@ class ProducerTest {
           + " media segment over it")
   void shouldFailTheAttemptAndEndFfmpegWhenFragmentsUnderTheSegmentCapAddUpToAMediaSegmentOverIt() {
     var mediaDataBytes = Math.toIntExact(SERVER_SEGMENT_CAP_BYTES / 3 + 1);
+    // The encoded recording's producer checks sample durations, so each video sample lasts a
+    // frame at 24000/1001 frames per second.
+    var oneFrameVideo = IsoBoxes.Track.video().defaultSampleDuration(1001).build();
     var output =
         IsoBoxes.concat(
             IsoBoxes.ftyp(),
-            IsoBoxes.videoAndAudioMoov(),
+            IsoBoxes.moov(oneFrameVideo, IsoBoxes.Track.audio().build()),
             IsoBoxes.moof(
                 IsoBoxes.videoTraf()
                     .baseMediaDecodeTime(0L)
@@ -285,9 +590,10 @@ class ProducerTest {
 
   @Test
   @DisplayName(
-      "Should settle only the stop when stopped while the sink holds the segment a skipping"
-          + " keyframe closed")
-  void shouldSettleOnlyTheStopWhenStoppedWhileTheSinkHoldsTheSegmentASkippingKeyframeClosed() {
+      "Should settle only the stop and cancel the delivery when stopped while the sink holds the"
+          + " segment a skipping keyframe closed")
+  void
+      shouldSettleOnlyTheStopAndCancelTheDeliveryWhenStoppedWhileTheSinkHoldsTheSegmentASkippingKeyframeClosed() {
     var recording = recording("10-copy-gop-exceeds-period.fmp4");
     var process = ScriptedProcess.builder().output(bytesOf(recording.file())).build();
     sink.holding(2);
@@ -295,14 +601,13 @@ class ProducerTest {
     awaiting().until(sink::isHolding);
 
     producer.stop();
-    sink.release();
 
     assertThat(producer.outcome()).isCompletedWithValue(new Stopped());
+    assertThat(sink.wasCancelled()).isTrue();
     await()
         .during(Duration.ofMillis(200))
         .atMost(OUTCOME_LIMIT)
-        .until(
-            () -> sink.acceptedNames().equals(List.of("init.mp4", "segment0.m4s", "segment1.m4s")));
+        .until(() -> sink.acceptedNames().equals(List.of("init.mp4", "segment0.m4s")));
   }
 
   @Test
@@ -541,24 +846,33 @@ class ProducerTest {
 
   @Test
   @DisplayName(
-      "Should deliver nothing after the delivery in flight when stopped while the sink holds a"
+      "Should cancel the delivery in flight and let FFmpeg exit when stopped while the sink holds a"
           + " segment")
-  void shouldDeliverNothingAfterTheDeliveryInFlightWhenStoppedWhileTheSinkHoldsASegment() {
+  void shouldCancelTheDeliveryInFlightAndLetFfmpegExitWhenStoppedWhileTheSinkHoldsASegment()
+      throws InterruptedException {
     var recording = recording(ENCODED_RECORDING);
-    var process = ScriptedProcess.builder().output(bytesOf(ENCODED_RECORDING)).build();
+    var output = bytesOf(ENCODED_RECORDING);
+    // FFmpeg writes its last byte only once asked to quit and exits only once the reader has read
+    // everything it wrote, as FFmpeg blocked on a full pipe does.
+    var process =
+        ScriptedProcess.builder()
+            .output(output)
+            .pauseAfter(output.length - 1)
+            .resumesOnQuit(true)
+            .build();
     sink.holding(2);
-    var producer = producerFor(process, recording).gracePeriod(Duration.ofMillis(100)).start();
+    var producer = producerFor(process, recording).gracePeriod(Duration.ofMinutes(10)).start();
     awaiting().until(sink::isHolding);
 
-    producer.stop();
-    sink.release();
+    var stopping = Thread.ofVirtual().start(producer::stop);
 
+    assertThat(stopping.join(OUTCOME_LIMIT)).isTrue();
     assertThat(producer.outcome()).isCompletedWithValue(new Stopped());
-    await()
-        .during(Duration.ofMillis(200))
-        .atMost(OUTCOME_LIMIT)
-        .until(
-            () -> sink.acceptedNames().equals(List.of("init.mp4", "segment0.m4s", "segment1.m4s")));
+    assertThat(process.stdinText()).isEqualTo("q");
+    assertThat(process.hasReadToEndOfOutput()).isTrue();
+    assertThat(process.wasDestroyedForcibly()).isFalse();
+    assertThat(sink.wasCancelled()).isTrue();
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
   }
 
   @RepeatedTest(50)
@@ -620,6 +934,499 @@ class ProducerTest {
 
   @Test
   @DisplayName(
+      "Should record the stop at once and settle it only once FFmpeg exits when a stop is"
+          + " requested")
+  void shouldRecordTheStopAtOnceAndSettleItOnlyOnceFfmpegExitsWhenAStopIsRequested()
+      throws InterruptedException {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    sink.holding(2);
+    var producer = producerFor(process, recording).gracePeriod(Duration.ofMinutes(10)).start();
+    awaiting().until(sink::isHolding);
+
+    var requesting = Thread.ofVirtual().start(producer::requestStop);
+
+    assertThat(requesting.join(OUTCOME_LIMIT)).isTrue();
+    awaiting().until(() -> sink.wasCancelled() && process.hasReadToEndOfOutput());
+    assertThat(producer.outcome()).isNotDone();
+    process.exit();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Stopped());
+    assertThat(process.stdinText()).isEqualTo("q");
+    assertThat(process.wasDestroyedForcibly()).isFalse();
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+  }
+
+  @Test
+  @DisplayName(
+      "Should settle the stop and end FFmpeg when cancelling the delivery in flight throws"
+          + " unexpectedly")
+  void shouldSettleTheStopAndEndFfmpegWhenCancellingTheDeliveryInFlightThrowsUnexpectedly() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    var held = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    SegmentSink brokenCancellation =
+        (segment, cancellation) -> {
+          if (!segment.name().equals("segment0.m4s")) {
+            return;
+          }
+
+          cancellation.onCancel(
+              () -> {
+                throw new IllegalStateException("the cancellation broke");
+              });
+          held.countDown();
+          awaitLatch(release);
+        };
+    var producer =
+        producerFor(process, recording)
+            .sink(brokenCancellation)
+            .gracePeriod(Duration.ofMinutes(10))
+            .start();
+    awaitLatch(held);
+
+    producer.requestStop();
+
+    awaiting().until(process::wasDestroyedForcibly);
+    release.countDown();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Stopped());
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep the recorded failure without asking FFmpeg to quit when stopped before the"
+          + " failure settles")
+  void shouldKeepTheRecordedFailureWithoutAskingFfmpegToQuitWhenStoppedBeforeTheFailureSettles()
+      throws InterruptedException {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .lingersAfterKill(true)
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    sink.refusing(1);
+    var producer = producerFor(process, recording).start();
+    awaiting().until(process::wasDestroyedForcibly);
+
+    var stopping = Thread.ofVirtual().start(producer::stop);
+
+    assertThat(stopping.join(Duration.ofMillis(200))).isFalse();
+    process.exit();
+    assertThat(stopping.join(OUTCOME_LIMIT)).isTrue();
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.SEGMENT_NOT_ACCEPTED);
+    assertThat(process.stdinText()).isEmpty();
+  }
+
+  @Test
+  @DisplayName("Should settle whichever of a stop and a failure is recorded first when they race")
+  void shouldSettleWhicheverOfAStopAndAFailureIsRecordedFirstWhenTheyRace() throws Exception {
+    var recording = recording(ENCODED_RECORDING);
+
+    for (var iteration = 0; iteration < RACE_ITERATIONS; iteration++) {
+      var process =
+          ScriptedProcess.builder()
+              .output(bytesOf(ENCODED_RECORDING))
+              .pauseAfter(insideThirdMediaSegment(recording))
+              .resumesOnQuit(true)
+              .build();
+      var start = new CyclicBarrier(2);
+      var producer =
+          producerFor(process, recording).sink(refusingTheFirstMediaSegmentAt(start)).start();
+
+      awaitStart(start);
+      producer.stop();
+
+      var outcome = producer.outcome().get(OUTCOME_LIMIT.toSeconds(), TimeUnit.SECONDS);
+      var stoppedFirst = outcome instanceof Stopped;
+      assertThat(process.stdinText().equals("q"))
+          .as("the stop asked FFmpeg to quit")
+          .isEqualTo(stoppedFirst);
+      assertThat(process.wasDestroyedForcibly())
+          .as("the failure destroyed FFmpeg")
+          .isEqualTo(!stoppedFirst);
+      if (!stoppedFirst) {
+        assertThat(outcome)
+            .asInstanceOf(InstanceOfAssertFactories.type(Failed.class))
+            .extracting(Failed::reason)
+            .isEqualTo(ProducerFailure.SEGMENT_NOT_ACCEPTED);
+      }
+    }
+  }
+
+  // A sink that refuses the first media segment once the race's other side is ready.
+  private static SegmentSink refusingTheFirstMediaSegmentAt(CyclicBarrier start) {
+    return (segment, _) -> {
+      if (!segment.name().equals("segment0.m4s")) {
+        return;
+      }
+
+      awaitStart(start);
+      throw new IllegalStateException("the server refused " + segment.name());
+    };
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail an encoded attempt as a short video sample when a video sample lasts less than"
+          + " half a frame")
+  void shouldFailAnEncodedAttemptAsAShortVideoSampleWhenAVideoSampleLastsLessThanHalfAFrame() {
+    var process = ScriptedProcess.builder().output(outputWithAOneTickVideoSample()).build();
+
+    var producer =
+        producerOfOneSecondSegments(process)
+            .encodedFrameRate(OptionalDouble.of(24_000.0 / 1001))
+            .start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.SHORT_VIDEO_SAMPLE);
+    assertThat(failure.detail()).contains("sample of 1 ticks");
+    assertThat(process.wasDestroyedForcibly()).isTrue();
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+  }
+
+  @Test
+  @DisplayName("Should deliver a short video sample when the attempt copies the video")
+  void shouldDeliverAShortVideoSampleWhenTheAttemptCopiesTheVideo() {
+    var process = ScriptedProcess.builder().output(outputWithAOneTickVideoSample()).build();
+
+    var producer = producerOfOneSecondSegments(process).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(sink.acceptedNames())
+        .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
+  }
+
+  @Test
+  @DisplayName(
+      "Should complete an encoded attempt when its shortest video sample lasts half a frame")
+  void shouldCompleteAnEncodedAttemptWhenItsShortestVideoSampleLastsHalfAFrame() {
+    var output =
+        IsoBoxes.oneSecondKeyframeFragments(
+            List.of(List.of(1001, 1001), List.of(1001, 501, 1001), List.of(1001)));
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer =
+        producerOfOneSecondSegments(process)
+            .encodedFrameRate(OptionalDouble.of(24_000.0 / 1001))
+            .start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+  }
+
+  @ParameterizedTest(name = "FFmpeg ignores termination: {0}")
+  @ValueSource(booleans = {false, true})
+  @DisplayName(
+      "Should fail the attempt as an encoder stall when FFmpeg writes nothing while the producer"
+          + " reads")
+  void shouldFailTheAttemptAsAnEncoderStallWhenFfmpegWritesNothingWhileTheProducerReads(
+      boolean ignoresTermination) {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .ignoresTermination(ignoresTermination)
+            .build();
+
+    var producer =
+        producerFor(process, recording)
+            .stallTimeout(Duration.ofMillis(200))
+            .gracePeriod(Duration.ofMillis(200))
+            .start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.ENCODER_STALLED);
+    assertThat(process.wasTerminated()).isTrue();
+    assertThat(process.wasDestroyedForcibly()).isEqualTo(ignoresTermination);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as an encoder stall when FFmpeg writes nothing while the producer"
+          + " discards the preroll of an encoded replacement attempt")
+  void
+      shouldFailTheAttemptAsAnEncoderStallWhenFfmpegWritesNothingWhileTheProducerDiscardsThePrerollOfAnEncodedReplacementAttempt() {
+    var recording = recording("09-svtav1-vfr-seek30.fmp4");
+    var recorded = bytesOf(recording.file());
+    var process =
+        ScriptedProcess.builder()
+            .output(recorded)
+            .pauseAfter(insideSecondPrerollFragment(recording, recorded))
+            .build();
+
+    var producer =
+        producerFor(process, recording)
+            .stallTimeout(Duration.ofMillis(200))
+            .gracePeriod(Duration.ofMillis(200))
+            .start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.ENCODER_STALLED);
+    assertThat(process.wasTerminated()).isTrue();
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+  }
+
+  @Test
+  @DisplayName(
+      "Should cancel the delivery in flight before FFmpeg exits when FFmpeg stalls while the next"
+          + " segment assembles")
+  void
+      shouldCancelTheDeliveryInFlightBeforeFfmpegExitsWhenFfmpegStallsWhileTheNextSegmentAssembles() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .ignoresTermination(true)
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    sink.holding(1);
+    var producer =
+        producerFor(process, recording)
+            .stallTimeout(Duration.ofMillis(200))
+            .gracePeriod(Duration.ofMinutes(10))
+            .start();
+
+    awaiting().until(sink::wasCancelled);
+
+    assertThat(process.wasTerminated()).isTrue();
+    assertThat(process.isAlive()).isTrue();
+    process.exit();
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.ENCODER_STALLED);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+  }
+
+  @Test
+  @DisplayName(
+      "Should cancel the delivery in flight before FFmpeg exits when reading its output throws"
+          + " unexpectedly")
+  void shouldCancelTheDeliveryInFlightBeforeFfmpegExitsWhenReadingItsOutputThrowsUnexpectedly() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .failReadAfter(insideThirdMediaSegment(recording))
+            .failReadWith(new IllegalStateException("scripted defect"))
+            .lingersAfterKill(true)
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    sink.holding(1);
+    var producer = producerFor(process, recording).start();
+
+    awaiting().until(sink::wasCancelled);
+
+    assertThat(process.wasDestroyedForcibly()).isTrue();
+    assertThat(process.isAlive()).isTrue();
+    process.exit();
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.UNEXPECTED_ERROR);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+  }
+
+  @Test
+  @DisplayName("Should not fail the attempt as an encoder stall while a segment awaits acceptance")
+  void shouldNotFailTheAttemptAsAnEncoderStallWhileASegmentAwaitsAcceptance() {
+    var recording = recording(ENCODED_RECORDING);
+    var process = ScriptedProcess.builder().output(bytesOf(ENCODED_RECORDING)).build();
+    sink.holding(1);
+    var producer = producerFor(process, recording).stallTimeout(Duration.ofMillis(100)).start();
+    awaiting().until(sink::isHolding);
+
+    await()
+        .during(Duration.ofMillis(500))
+        .atMost(OUTCOME_LIMIT)
+        .until(() -> !producer.outcome().isDone() && !process.wasTerminated());
+    sink.release();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+  }
+
+  @Test
+  @DisplayName(
+      "Should complete the attempt when FFmpeg exits later than the stall timeout after its output"
+          + " ends")
+  void shouldCompleteTheAttemptWhenFfmpegExitsLaterThanTheStallTimeoutAfterItsOutputEnds() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    var producer = producerFor(process, recording).stallTimeout(Duration.ofMillis(100)).start();
+    awaiting().until(process::hasReadToEndOfOutput);
+
+    await()
+        .during(Duration.ofMillis(500))
+        .atMost(OUTCOME_LIMIT)
+        .until(() -> !producer.outcome().isDone() && !process.wasTerminated());
+    process.exit();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt and terminate FFmpeg when FFmpeg does not exit within the grace"
+          + " period after its output ends")
+  void
+      shouldFailTheAttemptAndTerminateFfmpegWhenFfmpegDoesNotExitWithinTheGracePeriodAfterItsOutputEnds() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+
+    var producer = producerFor(process, recording).gracePeriod(Duration.ofMillis(100)).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.PROCESS_DID_NOT_EXIT);
+    assertThat(failure.detail())
+        .contains("after its output ended and its last segment was accepted");
+    assertThat(process.wasTerminated()).isTrue();
+    assertThat(process.wasDestroyedForcibly()).isFalse();
+    assertThat(sink.accepted()).containsExactlyElementsOf(expectedDeliveries(recording));
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as a truncated output and terminate FFmpeg when FFmpeg does not"
+          + " exit within the grace period after its output ends inside a box")
+  void
+      shouldFailTheAttemptAsATruncatedOutputAndTerminateFfmpegWhenFfmpegDoesNotExitWithinTheGracePeriodAfterItsOutputEndsInsideABox() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(truncated(bytesOf(ENCODED_RECORDING)))
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+
+    var producer = producerFor(process, recording).gracePeriod(Duration.ofMillis(100)).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.TRUNCATED_OUTPUT);
+    assertThat(failure.detail()).contains("END_OF_FILE_IN_BOX_BODY");
+    assertThat(process.wasTerminated()).isTrue();
+    assertThat(process.wasDestroyedForcibly()).isFalse();
+  }
+
+  @Test
+  @DisplayName(
+      "Should destroy FFmpeg and settle the failure only once it has exited when FFmpeg ignores"
+          + " termination after its output ends")
+  void
+      shouldDestroyFfmpegAndSettleTheFailureOnlyOnceItHasExitedWhenFfmpegIgnoresTerminationAfterItsOutputEnds() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .ignoresTermination(true)
+            .lingersAfterKill(true)
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+
+    var producer = producerFor(process, recording).gracePeriod(Duration.ofMillis(100)).start();
+
+    awaiting().until(process::wasDestroyedForcibly);
+    assertThat(process.wasTerminated()).isTrue();
+    assertThat(producer.outcome()).isNotDone();
+    process.exit();
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.PROCESS_DID_NOT_EXIT);
+  }
+
+  @Test
+  @DisplayName(
+      "Should settle only the stop without terminating FFmpeg when a stop arrives while FFmpeg"
+          + " outlives the grace period after its output ended")
+  void
+      shouldSettleOnlyTheStopWithoutTerminatingFfmpegWhenAStopArrivesWhileFfmpegOutlivesTheGracePeriodAfterItsOutputEnded() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .lingersAfterKill(true)
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    var producer = producerFor(process, recording).gracePeriod(Duration.ofMillis(200)).start();
+    awaiting().until(process::hasReadToEndOfOutput);
+
+    producer.requestStop();
+
+    // The exit wait that began when the output ended expires before the stop's forced kill.
+    awaiting().until(process::wasDestroyedForcibly);
+    await()
+        .atMost(OUTCOME_LIMIT)
+        .during(Duration.ofMillis(200))
+        .until(() -> !process.wasTerminated());
+    process.exit();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Stopped());
+    assertThat(process.stdinText()).isEqualTo("q");
+  }
+
+  @Test
+  @DisplayName("Should not fail the attempt as an encoder stall once it is stopped")
+  void shouldNotFailTheAttemptAsAnEncoderStallOnceItIsStopped() throws InterruptedException {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    var producer =
+        producerFor(process, recording)
+            .stallTimeout(Duration.ofMillis(300))
+            .gracePeriod(Duration.ofMinutes(10))
+            .start();
+    awaiting().until(process::hasReachedPause);
+    var stopping = Thread.ofVirtual().start(producer::stop);
+    awaiting().until(() -> process.stdinText().equals("q"));
+
+    await()
+        .during(Duration.ofMillis(600))
+        .atMost(OUTCOME_LIMIT)
+        .until(() -> !process.wasTerminated() && !process.wasDestroyedForcibly());
+    process.exit();
+
+    assertThat(stopping.join(OUTCOME_LIMIT)).isTrue();
+    assertThat(producer.outcome()).isCompletedWithValue(new Stopped());
+  }
+
+  @Test
+  @DisplayName("Should settle the stop only once FFmpeg has exited after a forced kill")
+  void shouldSettleTheStopOnlyOnceFfmpegHasExitedAfterAForcedKill() throws InterruptedException {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(insideThirdMediaSegment(recording))
+            .lingersAfterKill(true)
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    var producer = producerFor(process, recording).gracePeriod(Duration.ofMillis(100)).start();
+    awaiting().until(process::hasReachedPause);
+
+    var stopping = Thread.ofVirtual().start(producer::stop);
+
+    awaiting().until(process::wasDestroyedForcibly);
+    assertThat(stopping.join(Duration.ofMillis(200))).isFalse();
+    assertThat(producer.outcome()).isNotDone();
+    process.exit();
+    assertThat(stopping.join(OUTCOME_LIMIT)).isTrue();
+    assertThat(producer.outcome()).isCompletedWithValue(new Stopped());
+  }
+
+  @Test
+  @DisplayName(
       "Should return from a second stop only after the first settles when stopped twice"
           + " concurrently")
   void shouldReturnFromASecondStopOnlyAfterTheFirstSettlesWhenStoppedTwiceConcurrently()
@@ -662,18 +1469,180 @@ class ProducerTest {
     assertThat(producer.outcome()).isCompletedWithValue(new Stopped());
   }
 
+  private static void awaitLatch(CountDownLatch latch) {
+    try {
+      assertThat(latch.await(OUTCOME_LIMIT.toSeconds(), TimeUnit.SECONDS))
+          .as("the latch opened")
+          .isTrue();
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new AssertionError("interrupted while awaiting a latch", e);
+    }
+  }
+
+  // The reader takes FFmpeg's output up to this offset and no further, so FFmpeg blocks on the
+  // pipe.
+  private static void assertReaderStopsAt(ScriptedProcess process, int offset) {
+    awaiting().until(() -> process.bytesTaken() == offset);
+    await()
+        .during(Duration.ofMillis(200))
+        .atMost(OUTCOME_LIMIT)
+        .until(() -> process.bytesTaken() == offset);
+  }
+
+  // Stops an attempt of nearlyCappedSegments() that has filled its own budget while its sink holds
+  // its first media segment past the cancellation, as an upload slow to abandon would.
+  private HeldStop stopHoldingItsCancelledDelivery(SegmentMemoryBudget workerBudget) {
+    var process =
+        ScriptedProcess.builder()
+            .output(nearlyCappedSegments())
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    var heldSink = new RecordingSegmentSink().holdingPastCancellation(1);
+    var producer =
+        producerOfOneSecondSegments(process)
+            .sink(heldSink)
+            .memoryBudget(workerBudget)
+            .gracePeriod(Duration.ofMinutes(10))
+            .start();
+    awaiting().until(() -> process.bytesTaken() == NEARLY_CAPPED_BUDGET_STOP);
+    producer.requestStop();
+    awaiting().until(heldSink::wasCancelled);
+    return new HeldStop(process, heldSink, producer);
+  }
+
+  // Starts one attempt per slot, each filling its own budget while its sink holds its first media
+  // segment.
+  private List<BurstAttempt> startBurst(BurstStart burst) {
+    return IntStream.range(0, BURST_SLOTS).mapToObj(slot -> startAttempt(burst, slot)).toList();
+  }
+
+  private BurstAttempt startAttempt(BurstStart burst, int slot) {
+    var process =
+        ScriptedProcess.builder()
+            .output(burst.output())
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    var attemptSink = sinkHoldingTheFirstMediaSegment(burst, slot);
+    var producer =
+        producerOfOneSecondSegments(process)
+            .sink(attemptSink)
+            .memoryBudget(burst.budget())
+            .gracePeriod(Duration.ofMinutes(10))
+            .start();
+    return BurstAttempt.builder().process(process).sink(attemptSink).producer(producer).build();
+  }
+
+  // Alternate attempts hold that delivery past its cancellation, as an upload slow to abandon
+  // would, when a later burst stops them.
+  private static RecordingSegmentSink sinkHoldingTheFirstMediaSegment(BurstStart burst, int slot) {
+    var attemptSink = new RecordingSegmentSink();
+    if ((burst.burst() + slot) % 2 == 0) {
+      return attemptSink.holdingPastCancellation(1);
+    }
+
+    return attemptSink.holding(1);
+  }
+
+  // Stops the attempts on another thread while the next ones start, as a burst of seeks does.
+  private static List<BurstAttempt> stopAndStartTogether(
+      List<BurstAttempt> stopping, Supplier<List<BurstAttempt>> starting)
+      throws InterruptedException {
+    var start = new CyclicBarrier(2);
+    var stops =
+        Thread.ofVirtual()
+            .start(
+                () -> {
+                  awaitStart(start);
+                  stopping.forEach(BurstAttempt::stop);
+                });
+    awaitStart(start);
+    var started = starting.get();
+    assertThat(stops.join(OUTCOME_LIMIT)).isTrue();
+    return started;
+  }
+
+  // Each reader takes FFmpeg's output up to its own budget while its first media segment awaits
+  // acceptance.
+  private static void awaitEachReaderAtItsBudget(List<BurstAttempt> attempts) {
+    attempts.forEach(
+        attempt ->
+            awaiting().until(() -> attempt.process().bytesTaken() == NEARLY_CAPPED_BUDGET_STOP));
+  }
+
+  // Returns once no reader has taken a byte for a while, as when each waits for memory.
+  private static void awaitReadersWaiting(List<BurstAttempt> attempts) {
+    var lastTaken = new AtomicReference<List<Integer>>(List.of());
+    await()
+        .atMost(OUTCOME_LIMIT)
+        .pollInterval(POLL_INTERVAL)
+        .during(Duration.ofMillis(200))
+        .until(
+            () -> {
+              var taken = attempts.stream().map(attempt -> attempt.process().bytesTaken()).toList();
+              return taken.equals(lastTaken.getAndSet(taken));
+            });
+  }
+
+  private static void endStoppedAttempts(List<BurstAttempt> stopped) {
+    stopped.forEach(attempt -> attempt.process().exit());
+    assertThat(stopped)
+        .allSatisfy(
+            attempt ->
+                assertThat(attempt.producer().outcome())
+                    .succeedsWithin(OUTCOME_LIMIT)
+                    .isEqualTo(new Stopped()));
+  }
+
+  // A lower bound of what the attempts charge the worker's budget at the moment between reading
+  // every reader's progress and reading any stop flag. An active attempt's reader holds every box
+  // it has begun to read that no returned delivery carried; a stopped attempt holds only its
+  // deliveries that have not returned. A flag still clear after that moment means the attempt was
+  // active at it, and returns counted later only lower the bound.
+  private static long chargedAtLeast(List<BurstAttempt> attempts, List<Box> layout) {
+    var progress =
+        List.copyOf(attempts).stream()
+            .map(attempt -> new ReaderProgress(attempt, attempt.process().bytesTaken()))
+            .toList();
+    var charged = progress.stream().mapToLong(read -> read.chargedBefore(layout)).sum();
+    var released = progress.stream().mapToLong(read -> read.attempt().sink().returnedBytes()).sum();
+    return charged - released;
+  }
+
+  // The heap that live objects occupy once a full collection has freed every unreachable one.
+  private static long liveHeapBytes() {
+    var memory = ManagementFactory.getMemoryMXBean();
+    memory.gc();
+    return memory.getHeapMemoryUsage().getUsed();
+  }
+
   private static ConditionFactory awaiting() {
     return await().atMost(OUTCOME_LIMIT).pollInterval(POLL_INTERVAL);
   }
 
+  // An encoded recording's producer checks its video samples against the frame rate it forced.
   private Producer.ProducerBuilder producerFor(ScriptedProcess process, Recording recording) {
+    var encodedFrameRate = OptionalDouble.empty();
+    if (recording.encoder().isPresent()) {
+      encodedFrameRate = OptionalDouble.of(recording.source().videoFrameRate());
+    }
+
+    return producerLaunching(process)
+        .encodedFrameRate(encodedFrameRate)
+        .periodSeconds(recording.period())
+        .startSequenceNumber(recording.startSequenceNumber());
+  }
+
+  // A producer of this process's output, with its own budget and generous bounds, to adjust.
+  private Producer.ProducerBuilder producerLaunching(ScriptedProcess process) {
     return Producer.builder()
         .launcher((command, jobAttemptId) -> process)
         .command(List.of("ffmpeg"))
         .jobAttemptId(JOB_ATTEMPT_ID)
-        .periodSeconds(recording.period())
-        .startSequenceNumber(recording.startSequenceNumber())
         .gracePeriod(Duration.ofSeconds(5))
+        .stallTimeout(Duration.ofMinutes(1))
+        .encodedFrameRate(OptionalDouble.empty())
+        .memoryBudget(SegmentMemoryBudget.forSlots(1))
         .sink(sink);
   }
 
@@ -686,9 +1655,143 @@ class ProducerTest {
 
   // An offset inside the first fragment of the third media segment, before it is complete.
   private static int insideThirdMediaSegment(Recording recording) {
-    var firstTwoSegments =
-        recording.segments().stream().limit(2).mapToLong(SegmentSummary::byteLength).sum();
-    return Math.toIntExact(recording.initializationSegment().byteLength() + firstTwoSegments + 10);
+    return offsetOfMediaSegment(recording, 2) + 10;
+  }
+
+  // Where the media segment at this position starts in a recording without preroll.
+  private static int offsetOfMediaSegment(Recording recording, int position) {
+    var earlierSegments =
+        recording.segments().stream().limit(position).mapToLong(SegmentSummary::byteLength).sum();
+    return Math.toIntExact(recording.initializationSegment().byteLength() + earlierSegments);
+  }
+
+  // An offset inside the second fragment of a recording whose preroll follows its initialization
+  // segment.
+  private static int insideSecondPrerollFragment(Recording recording, byte[] recorded) {
+    assertThat(recording.discardedPreroll())
+        .singleElement()
+        .satisfies(
+            preroll -> {
+              assertThat(preroll.firstFragmentIndex()).isZero();
+              assertThat(preroll.fragmentCount()).isGreaterThan(2);
+            });
+    var firstPrerollFragment = Math.toIntExact(recording.initializationSegment().byteLength());
+    return endOfFragmentAt(recorded, firstPrerollFragment) + 10;
+  }
+
+  // Where the mdat that follows the moof at this offset ends.
+  private static int endOfFragmentAt(byte[] output, int moofOffset) {
+    return TopLevelBoxes.of(output).stream()
+        .filter(box -> box.start() > moofOffset && box.type().equals("mdat"))
+        .findFirst()
+        .orElseThrow()
+        .end();
+  }
+
+  // Three 1 s segments of 23.976 fps video in which the second segment's first fragment holds a
+  // 1-tick sample, as FFmpeg writes after SVT-AV1 emits packets out of decode order.
+  private static byte[] outputWithAOneTickVideoSample() {
+    return IsoBoxes.oneSecondKeyframeFragments(
+        List.of(List.of(1001, 1001), List.of(1001, 1, 1001), List.of(1001)));
+  }
+
+  // Three 1 s segments of three 5 MiB keyframe fragments each, nearly the segment cap: while the
+  // first awaits acceptance, the second fills the rest of the budget.
+  private static byte[] nearlyCappedSegments() {
+    return IsoBoxes.concat(
+        IsoBoxes.ftyp(), IsoBoxes.videoAndAudioMoov(), nearlyCappedFragmentsFrom(0));
+  }
+
+  // The fragments of nearlyCappedSegments() from this media time in the 24 kHz video timescale.
+  private static byte[] nearlyCappedFragmentsFrom(long startTime) {
+    return IsoBoxes.concat(
+        keyframeFragment(startTime),
+        keyframeFragment(startTime + 6_000),
+        keyframeFragment(startTime + 12_000),
+        keyframeFragment(startTime + 24_000),
+        keyframeFragment(startTime + 30_000),
+        keyframeFragment(startTime + 36_000),
+        keyframeFragment(startTime + 48_000));
+  }
+
+  private Producer.ProducerBuilder producerOfOneSecondSegments(ScriptedProcess process) {
+    return producerLaunching(process).periodSeconds(1).startSequenceNumber(0);
+  }
+
+  @Builder
+  private record BurstStart(byte[] output, SegmentMemoryBudget budget, int burst) {}
+
+  private record HeldStop(ScriptedProcess process, RecordingSegmentSink sink, Producer producer) {}
+
+  // How many bytes of FFmpeg's output an attempt's reader had taken when the sampler read it.
+  private record ReaderProgress(BurstAttempt attempt, int bytesTaken) {
+
+    // What the attempt charges before its returned deliveries are subtracted.
+    long chargedBefore(List<Box> layout) {
+      if (attempt.isStopped()) {
+        return attempt.sink().startedBytes();
+      }
+
+      return layout.stream()
+          .filter(box -> box.hasBodyBegunAfter(bytesTaken))
+          .mapToLong(Box::size)
+          .sum();
+    }
+  }
+
+  // An attempt of the burst test. The test marks it stopped before it asks the producer to stop, so
+  // that the lower bound stops counting the reader's share no later than the producer releases it.
+  private static final class BurstAttempt {
+
+    private final ScriptedProcess process;
+    private final RecordingSegmentSink sink;
+    private final Producer producer;
+    private final AtomicBoolean stopped = new AtomicBoolean();
+
+    @Builder
+    private BurstAttempt(ScriptedProcess process, RecordingSegmentSink sink, Producer producer) {
+      this.process = process;
+      this.sink = sink;
+      this.producer = producer;
+    }
+
+    ScriptedProcess process() {
+      return process;
+    }
+
+    RecordingSegmentSink sink() {
+      return sink;
+    }
+
+    Producer producer() {
+      return producer;
+    }
+
+    void stop() {
+      stopped.set(true);
+      producer.requestStop();
+    }
+
+    boolean isStopped() {
+      return stopped.get();
+    }
+  }
+
+  private static byte[] keyframeFragment(long presentationTime) {
+    return keyframeFragment(presentationTime, NEARLY_CAPPED_FRAGMENT_PAYLOAD);
+  }
+
+  private static byte[] keyframeFragment(long presentationTime, int mediaDataPayload) {
+    return IsoBoxes.concat(keyframeMoof(presentationTime), IsoBoxes.mdat(mediaDataPayload));
+  }
+
+  // A moof whose single video sample is a keyframe at this time in the 24 kHz video timescale.
+  private static byte[] keyframeMoof(long presentationTime) {
+    return IsoBoxes.moof(
+        IsoBoxes.videoTraf()
+            .baseMediaDecodeTime(presentationTime)
+            .firstSampleFlags(IsoBoxes.SYNC_SAMPLE_FLAGS)
+            .build());
   }
 
   // The output without the last bytes of its final box.

@@ -3,14 +3,17 @@ package com.streamarr.transcode.engine;
 import java.io.ByteArrayOutputStream;
 import java.util.List;
 import java.util.OptionalInt;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Accepts each segment the producer delivers and keeps its name and bytes. A test can hold one
- * delivery until it releases it, refuse one, or throw an error from one.
+ * delivery until it releases it or the producer cancels it, or until it releases it whether or not
+ * the producer cancelled it, refuse one, or throw an error from one.
  */
 final class RecordingSegmentSink implements SegmentSink {
 
@@ -19,12 +22,16 @@ final class RecordingSegmentSink implements SegmentSink {
   private final List<Accepted> accepted = new CopyOnWriteArrayList<>();
   private final ByteArrayOutputStream acceptedBytes = new ByteArrayOutputStream();
   private final AtomicInteger deliveries = new AtomicInteger();
+  private final AtomicLong startedBytes = new AtomicLong();
+  private final AtomicLong returnedBytes = new AtomicLong();
   private final CountDownLatch release = new CountDownLatch(1);
   private final CountDownLatch held = new CountDownLatch(1);
   private volatile OptionalInt heldDelivery = OptionalInt.empty();
   private volatile OptionalInt refusedDelivery = OptionalInt.empty();
   private volatile OptionalInt failedDelivery = OptionalInt.empty();
   private volatile Error failure;
+  private volatile boolean cancelled;
+  private volatile boolean holdsPastCancellation;
 
   /** Holds the delivery at this zero-based position, counting the initialization segment. */
   RecordingSegmentSink holding(int delivery) {
@@ -45,6 +52,15 @@ final class RecordingSegmentSink implements SegmentSink {
     return this;
   }
 
+  /**
+   * Holds the delivery at this zero-based position until the test releases it, even after the
+   * producer cancels it, as an upload slow to abandon would.
+   */
+  RecordingSegmentSink holdingPastCancellation(int delivery) {
+    holdsPastCancellation = true;
+    return holding(delivery);
+  }
+
   boolean isHolding() {
     return held.getCount() == 0 && release.getCount() > 0;
   }
@@ -53,8 +69,35 @@ final class RecordingSegmentSink implements SegmentSink {
     release.countDown();
   }
 
+  /** Whether the producer cancelled the held delivery. */
+  boolean wasCancelled() {
+    return cancelled;
+  }
+
+  /** The bytes of every segment the producer has handed to the sink, returned or not. */
+  long startedBytes() {
+    return startedBytes.get();
+  }
+
+  /**
+   * The bytes of every delivery that has returned or thrown, counted just before it does, so never
+   * later than the producer learns of it.
+   */
+  long returnedBytes() {
+    return returnedBytes.get();
+  }
+
   @Override
-  public void deliver(ProducedSegment segment) {
+  public void deliver(ProducedSegment segment, DeliveryCancellation cancellation) {
+    startedBytes.addAndGet(segment.byteLength());
+    try {
+      receive(segment, cancellation);
+    } finally {
+      returnedBytes.addAndGet(segment.byteLength());
+    }
+  }
+
+  private void receive(ProducedSegment segment, DeliveryCancellation cancellation) {
     var delivery = OptionalInt.of(deliveries.getAndIncrement());
     if (delivery.equals(refusedDelivery)) {
       throw new IllegalStateException("the server refused " + segment.name());
@@ -65,8 +108,14 @@ final class RecordingSegmentSink implements SegmentSink {
     }
 
     if (delivery.equals(heldDelivery)) {
+      cancellation.onCancel(
+          holdsPastCancellation ? this::noteCancellation : this::cancelHeldDelivery);
       held.countDown();
       awaitRelease();
+    }
+
+    if (cancelled) {
+      throw new CancellationException(segment.name() + " was cancelled");
     }
 
     var bytes = bytesOf(segment);
@@ -75,6 +124,15 @@ final class RecordingSegmentSink implements SegmentSink {
     }
 
     accepted.add(new Accepted(segment.name(), segment.byteLength(), bytes.length));
+  }
+
+  private void cancelHeldDelivery() {
+    noteCancellation();
+    release.countDown();
+  }
+
+  private void noteCancellation() {
+    cancelled = true;
   }
 
   private void awaitRelease() {

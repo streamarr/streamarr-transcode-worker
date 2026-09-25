@@ -19,6 +19,7 @@ record TrackFragmentHeader(
     long trackId,
     OptionalLong baseDataOffset,
     boolean defaultBaseIsMoof,
+    OptionalLong defaultSampleDuration,
     OptionalLong defaultSampleSize,
     Optional<Integer> defaultSampleFlags) {
 
@@ -35,9 +36,8 @@ record TrackFragmentHeader(
     var header =
         builder().trackId(fields.u32()).defaultBaseIsMoof(isSet(flags, DEFAULT_BASE_IS_MOOF));
     header.baseDataOffset(fields.u64If(isSet(flags, BASE_DATA_OFFSET)));
-    fields
-        .skipIf(isSet(flags, SAMPLE_DESCRIPTION_INDEX), 4)
-        .skipIf(isSet(flags, DEFAULT_SAMPLE_DURATION), 4);
+    fields.skipIf(isSet(flags, SAMPLE_DESCRIPTION_INDEX), 4);
+    header.defaultSampleDuration(fields.u32If(isSet(flags, DEFAULT_SAMPLE_DURATION)));
     header.defaultSampleSize(fields.u32If(isSet(flags, DEFAULT_SAMPLE_SIZE)));
     return header.defaultSampleFlags(fields.s32If(isSet(flags, DEFAULT_SAMPLE_FLAGS))).build();
   }

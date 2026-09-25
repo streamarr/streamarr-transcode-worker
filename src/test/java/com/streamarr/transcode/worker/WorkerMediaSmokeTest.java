@@ -23,6 +23,8 @@ import build.buf.gen.streamarr.transcode.v1.WorkerRegistration;
 import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
 import com.streamarr.transcode.engine.FfmpegCommandBuilder;
 import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
+import com.streamarr.transcode.engine.ProcessBuilderLauncher;
+import com.streamarr.transcode.engine.ProcessLauncher;
 import com.streamarr.transcode.engine.TranscodeCapabilityService;
 import com.streamarr.transcode.probe.FfprobeExecutor;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
@@ -34,6 +36,7 @@ import java.net.InetSocketAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -252,8 +255,13 @@ class WorkerMediaSmokeTest {
         .setTargetSegmentDurationSeconds(1)
         .setFramerate(24000.0 / 1001)
         .setMediaSegmentCount(LONG_SOURCE_SECONDS);
+    ProcessLauncher launcher = new ProcessBuilderLauncher();
+    if (codecFamily.equals("av1")) {
+      launcher = withSvtAv1ParallelismOfOne(launcher);
+    }
 
-    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+    var uploads =
+        execute(engine(softwareCapabilities(), launcher), source.getParent(), job.build());
 
     assertThat(uploads.names()).containsExactlyElementsOf(uploadNames(LONG_SOURCE_SECONDS));
     var start = playable(uploads.contentOf(List.of("init.mp4", "segment0.m4s")));
@@ -287,10 +295,38 @@ class WorkerMediaSmokeTest {
   }
 
   private static FfmpegTranscodeEngine engine(TranscodeCapabilityService capabilities) {
+    return engine(capabilities, new ProcessBuilderLauncher());
+  }
+
+  private static FfmpegTranscodeEngine engine(
+      TranscodeCapabilityService capabilities, ProcessLauncher launcher) {
     capabilities.detectCapabilities();
     assertThat(capabilities.isFfmpegAvailable()).as(capabilities.getUnavailableReason()).isTrue();
-    return new FfmpegTranscodeEngine(
-        new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)), capabilities);
+    return FfmpegTranscodeEngine.builder()
+        .commandBuilder(new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)))
+        .capabilityService(capabilities)
+        .launcher(launcher)
+        .encoderStallTimeout(FfmpegTranscodeEngine.DEFAULT_ENCODER_STALL_TIMEOUT)
+        .build();
+  }
+
+  // SVT-AV1 4.x can overrun its packetization reorder queue when its threads are starved of CPU
+  // (upstream issue 2385, worker #42): FFmpeg then hangs, or squeezes the timestamps of
+  // out-of-order packets, and this long job fails on a busy CI runner for a reason unrelated to
+  // what it checks.
+  // At a level of parallelism of one (lp=1) each stage has one thread and one picture in flight,
+  // so the queue cannot overrun, and the forced and GOP keyframes land where they do at production
+  // threading, so this check of where segments start still covers the recipe. Production keeps its
+  // threading and relies on the stall watchdog and the short-sample rule instead; lp=1 encodes
+  // 1080p slower than real time. The short AV1 smoke above keeps production threading.
+  private static ProcessLauncher withSvtAv1ParallelismOfOne(ProcessLauncher launcher) {
+    return (command, jobAttemptId) -> {
+      var parameters = command.indexOf("-svtav1-params") + 1;
+      assertThat(parameters).as("the SVT-AV1 command sets encoder parameters").isPositive();
+      var adjusted = new ArrayList<>(command);
+      adjusted.set(parameters, command.get(parameters) + ":lp=1");
+      return launcher.launch(adjusted, jobAttemptId);
+    };
   }
 
   private static TranscodeCapabilityService realCapabilities() {

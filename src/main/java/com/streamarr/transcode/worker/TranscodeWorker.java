@@ -33,10 +33,12 @@ import com.streamarr.transcode.engine.AttemptOutcome;
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.engine.AttemptOutcome.Failed;
 import com.streamarr.transcode.engine.AttemptOutcome.Stopped;
+import com.streamarr.transcode.engine.DeliveryCancellation;
 import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
 import com.streamarr.transcode.engine.ProducedSegment;
 import com.streamarr.transcode.engine.Producer;
 import com.streamarr.transcode.engine.ProducerFailure;
+import com.streamarr.transcode.engine.SegmentMemoryBudget;
 import com.streamarr.transcode.probe.FfprobeExecutor;
 import com.streamarr.transcode.protocol.ProtoUuid;
 import io.grpc.ManagedChannel;
@@ -45,11 +47,16 @@ import io.grpc.stub.ClientResponseObserver;
 import io.grpc.stub.StreamObserver;
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.time.Duration;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
@@ -72,7 +79,9 @@ public final class TranscodeWorker implements AutoCloseable {
   private final WorkerVariantJobMapper jobMapper;
   private final Optional<FfprobeExecutor> ffprobe;
   private final WorkerRuntime runtime;
-  private final Map<UUID, Producer> activeAttempts = new HashMap<>();
+  private final SegmentMemoryBudget memoryBudget;
+  private final Map<UUID, ActiveAttempt> activeAttempts = new HashMap<>();
+  private final Set<Thread> stopThreads = new HashSet<>();
 
   private ManagedChannel channel;
   private StreamObserver<EstablishWorkerSessionRequest> requests;
@@ -102,6 +111,7 @@ public final class TranscodeWorker implements AutoCloseable {
     this.engine = engine;
     this.ffprobe = ffprobe;
     this.runtime = runtime;
+    memoryBudget = SegmentMemoryBudget.forSlots(configuration.availableSlots());
     sources = new WorkerMediaSourceResolver(configuration.sourceNamespaces());
     jobMapper = new WorkerVariantJobMapper(sources);
   }
@@ -196,26 +206,42 @@ public final class TranscodeWorker implements AutoCloseable {
       return new Refused();
     }
 
+    // Only active attempts hold a slot: the server freed a stopped attempt's slot when it sent the
+    // stop, and the worker's memory budget charges its producer until it has released its segments.
+    if (activeAttempts.size() >= configuration.availableSlots()) {
+      log.warn(
+          "Refusing job attempt {}: all {} advertised slots are occupied",
+          fromProto(job.getJobAttemptId()),
+          configuration.availableSlots());
+      reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED);
+      return new Refused();
+    }
+
     Producer producer;
     try {
-      producer = engine.startProducer(jobMapper.map(job), segment -> deliverToServer(job, segment));
+      producer =
+          engine.startProducer(
+              jobMapper.map(job),
+              (segment, cancellation) -> deliverToServer(job, segment, cancellation),
+              memoryBudget);
     } catch (RuntimeException e) {
       logStartupFailure(job, e);
       reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED);
       return new Refused();
     }
 
-    activeAttempts.put(fromProto(job.getJobAttemptId()), producer);
+    var attempt = new ActiveAttempt(job, producer);
+    activeAttempts.put(fromProto(job.getJobAttemptId()), attempt);
     try {
       send(jobAttemptStarted(job.getJobAttemptId()));
     } catch (RuntimeException e) {
       logStartupFailure(job, e);
-      activeAttempts.remove(fromProto(job.getJobAttemptId()));
+      claim(attempt);
       reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED);
       return new Orphaned(producer);
     }
 
-    producer.outcome().thenAccept(outcome -> settleAttempt(job, producer, outcome));
+    producer.outcome().thenAccept(outcome -> settleAttempt(attempt, outcome));
     return new Started();
   }
 
@@ -252,9 +278,10 @@ public final class TranscodeWorker implements AutoCloseable {
   }
 
   // The attempt's producer delivers each segment here and waits until the server accepts it.
-  private void deliverToServer(VariantJob job, ProducedSegment segment) {
+  private void deliverToServer(
+      VariantJob job, ProducedSegment segment, DeliveryCancellation cancellation) {
     try {
-      uploadSegment(job, segment);
+      uploadSegment(job, segment, cancellation);
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       throw new WorkerJobException("Interrupted while uploading " + segment, e);
@@ -263,11 +290,17 @@ public final class TranscodeWorker implements AutoCloseable {
     }
   }
 
-  private void uploadSegment(VariantJob job, ProducedSegment segment)
+  private void uploadSegment(
+      VariantJob job, ProducedSegment segment, DeliveryCancellation cancellation)
       throws InterruptedException, ExecutionException, TimeoutException {
-    var upload = new SegmentUpload();
+    var upload =
+        new SegmentUpload(
+            configuration.uploadReadinessTimeout(), configuration.uploadAcknowledgementTimeout());
+    var metadataBuilder = openUpload(job, upload);
+    cancellation.onCancel(
+        () -> upload.cancel(new CancellationException("The job attempt stopped")));
     var metadata =
-        openUpload(job, upload)
+        metadataBuilder
             .setSegmentName(segment.name())
             .setContentType(SegmentContentType.SEGMENT_CONTENT_TYPE_VIDEO_MP4)
             .setContentLengthBytes(segment.byteLength())
@@ -306,7 +339,7 @@ public final class TranscodeWorker implements AutoCloseable {
   }
 
   private static void sendContent(SegmentUpload upload, ProducedSegment segment)
-      throws InterruptedException {
+      throws InterruptedException, TimeoutException {
     var pending = ByteString.EMPTY;
     for (var box : segment.content()) {
       // The producer never changes a segment it delivered, so wrapping its boxes copies nothing.
@@ -320,7 +353,7 @@ public final class TranscodeWorker implements AutoCloseable {
 
   // Sends every full-sized data message and returns the remainder.
   private static ByteString sendWholeDataMessages(SegmentUpload upload, ByteString content)
-      throws InterruptedException {
+      throws InterruptedException, TimeoutException {
     var remaining = content;
     while (remaining.size() >= UPLOAD_MESSAGE_BYTES) {
       upload.send(dataMessage(remaining.substring(0, UPLOAD_MESSAGE_BYTES)));
@@ -335,18 +368,21 @@ public final class TranscodeWorker implements AutoCloseable {
   }
 
   // Reports the producer's outcome unless a stop or the session's end has already claimed it.
-  private synchronized void settleAttempt(
-      VariantJob job, Producer producer, AttemptOutcome outcome) {
-    if (!activeAttempts.remove(fromProto(job.getJobAttemptId()), producer)) {
+  private synchronized void settleAttempt(ActiveAttempt attempt, AttemptOutcome outcome) {
+    var job = attempt.job();
+    if (!activeAttempts.remove(fromProto(job.getJobAttemptId()), attempt)) {
       return;
     }
 
-    tryReport(
-        switch (outcome) {
-          case Completed _ -> jobAttemptCompleted(job.getJobAttemptId());
-          case Failed(var reason, var detail) -> transcodeFailure(job, reason, detail);
-          case Stopped _ -> jobAttemptStopped(job.getJobAttemptId());
-        });
+    tryReport(reportOf(job, outcome));
+  }
+
+  private static EstablishWorkerSessionRequest reportOf(VariantJob job, AttemptOutcome outcome) {
+    return switch (outcome) {
+      case Completed _ -> jobAttemptCompleted(job.getJobAttemptId());
+      case Failed(var reason, var detail) -> transcodeFailure(job, reason, detail);
+      case Stopped _ -> jobAttemptStopped(job.getJobAttemptId());
+    };
   }
 
   private static EstablishWorkerSessionRequest transcodeFailure(
@@ -360,34 +396,72 @@ public final class TranscodeWorker implements AutoCloseable {
     return jobAttemptFailed(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
   }
 
+  // Claims the attempt so that its producer's own outcome is never reported, and finishes its stop
+  // on its own thread: the stop waits for FFmpeg to exit, which must hold neither the control
+  // stream nor the monitor that uploads need. close() waits for every stop in progress.
   @SuppressWarnings("java:S3398") // Job lifecycle belongs to the worker, not its gRPC observer.
-  private void stopVariant(StopVariantCommand command) {
-    // The stop waits for FFmpeg to exit, so it runs without the monitor that uploads need.
-    claimStoppedAttempt(command)
-        .ifPresent(
-            stop -> {
-              stop.producer().stop();
-              reportStopped(stop, command.getJobAttemptId());
-            });
-  }
-
-  // Claims the attempt so that its producer's own outcome is never reported.
-  private synchronized Optional<ClaimedStop> claimStoppedAttempt(StopVariantCommand command) {
+  private synchronized void stopVariant(StopVariantCommand command) {
     if (!command.getTarget().equals(identity())) {
-      return Optional.empty();
+      return;
     }
 
-    return Optional.ofNullable(activeAttempts.remove(fromProto(command.getJobAttemptId())))
-        .map(producer -> new ClaimedStop(producer, requests));
+    var attempt = activeAttempts.get(fromProto(command.getJobAttemptId()));
+    if (attempt == null) {
+      return;
+    }
+
+    claim(attempt);
+    var stop = new ClaimedStop(attempt, requests);
+    var stopping =
+        Thread.ofVirtual()
+            .name("stop-" + fromProto(command.getJobAttemptId()))
+            .unstarted(() -> finishStop(stop));
+    stopThreads.add(stopping);
+    stopping.start();
+  }
+
+  // The producer settles the stop unless it had already recorded another outcome, which the worker
+  // then reports instead: a failure recorded before the stop stays a failure.
+  private void finishStop(ClaimedStop stop) {
+    try {
+      var producer = stop.attempt().producer();
+      producer.stop();
+      reportClaimed(stop, producer.outcome().join());
+    } catch (RuntimeException e) {
+      log.error(
+          "Stopping job attempt {} failed", fromProto(stop.attempt().job().getJobAttemptId()), e);
+    } finally {
+      releaseStop();
+    }
+  }
+
+  private synchronized void releaseStop() {
+    stopThreads.remove(Thread.currentThread());
+  }
+
+  private synchronized List<Thread> stopsInProgress() {
+    return List.copyOf(stopThreads);
+  }
+
+  private void awaitStopsInProgress() {
+    stopsInProgress().forEach(this::awaitStop);
+  }
+
+  private void awaitStop(Thread stopping) {
+    try {
+      stopping.join();
+    } catch (InterruptedException _) {
+      Thread.currentThread().interrupt();
+    }
   }
 
   // A stop that outlives its session reports nothing; the server learned of the end on disconnect.
-  private synchronized void reportStopped(ClaimedStop stop, Uuid jobAttemptId) {
+  private synchronized void reportClaimed(ClaimedStop stop, AttemptOutcome outcome) {
     if (requests != stop.session()) {
       return;
     }
 
-    tryReport(jobAttemptStopped(jobAttemptId));
+    tryReport(reportOf(stop.attempt().job(), outcome));
   }
 
   private void reportFailure(VariantJob job, JobAttemptFailure failure) {
@@ -461,9 +535,17 @@ public final class TranscodeWorker implements AutoCloseable {
   }
 
   private synchronized List<Producer> claimActiveAttempts() {
-    var producers = List.copyOf(activeAttempts.values());
-    activeAttempts.clear();
-    return producers;
+    var attempts = List.copyOf(activeAttempts.values());
+    attempts.forEach(this::claim);
+    return attempts.stream().map(ActiveAttempt::producer).toList();
+  }
+
+  // The producer records the stop while the worker still holds the attempt, so a delivery that the
+  // worker refuses once the attempt is no longer active can only fail after the stop, which the
+  // producer then never reports.
+  private synchronized void claim(ActiveAttempt attempt) {
+    attempt.producer().requestStop();
+    activeAttempts.remove(fromProto(attempt.job().getJobAttemptId()));
   }
 
   // Stops the producers together and returns once every FFmpeg has exited.
@@ -477,11 +559,13 @@ public final class TranscodeWorker implements AutoCloseable {
   public void close() {
     // Stopping first lets FFmpeg quit while the session can still carry its uploads.
     stopAll(claimActiveAttempts());
+    awaitStopsInProgress();
     // Probe completion needs the worker monitor, so join only after closeConnection releases it.
     closeConnection()
         .ifPresent(
             closed -> {
               stopAll(closed.attempts());
+              awaitStopsInProgress();
               closed.probes().close();
             });
   }
@@ -606,13 +690,26 @@ public final class TranscodeWorker implements AutoCloseable {
     }
   }
 
-  // One segment's upload call, which sends a message only when the call is ready for it.
+  // One segment's upload call, which sends a message only when the call is ready for it. It fails
+  // when the call is not ready within the readiness timeout, or when the server has not
+  // acknowledged the segment within the acknowledgement timeout of the first message sent. Every
+  // call method runs under this object's monitor, so a cancellation from the thread that stops the
+  // attempt never interleaves with a send.
   private static final class SegmentUpload
       implements ClientResponseObserver<UploadSegmentRequest, UploadSegmentResponse> {
 
     private final CompletableFuture<UploadSegmentResponse> response = new CompletableFuture<>();
-    private final Object readiness = new Object();
+    private final Duration readinessTimeout;
+    private final Duration acknowledgementTimeout;
     private ClientCallStreamObserver<UploadSegmentRequest> call;
+
+    // Guarded by this monitor.
+    private OptionalLong acknowledgementDeadline = OptionalLong.empty();
+
+    private SegmentUpload(Duration readinessTimeout, Duration acknowledgementTimeout) {
+      this.readinessTimeout = readinessTimeout;
+      this.acknowledgementTimeout = acknowledgementTimeout;
+    }
 
     @Override
     public void beforeStart(ClientCallStreamObserver<UploadSegmentRequest> call) {
@@ -620,29 +717,65 @@ public final class TranscodeWorker implements AutoCloseable {
       call.setOnReadyHandler(this::signalReadiness);
     }
 
-    // Sends nothing once the server has answered; the answer decides the upload.
-    private void send(UploadSegmentRequest message) throws InterruptedException {
-      awaitReadiness();
-      if (!response.isDone()) {
-        call.onNext(message);
+    // Sends nothing once the server has answered or the upload was cancelled; that decides it.
+    private synchronized void send(UploadSegmentRequest message)
+        throws InterruptedException, TimeoutException {
+      var readinessDeadline = System.nanoTime() + readinessTimeout.toNanos();
+      while (!call.isReady() && !response.isDone()) {
+        TimeUnit.NANOSECONDS.timedWait(this, nanosUntilNextDeadline(readinessDeadline));
       }
+
+      if (response.isDone()) {
+        return;
+      }
+
+      if (acknowledgementDeadline.isEmpty()) {
+        acknowledgementDeadline =
+            OptionalLong.of(System.nanoTime() + acknowledgementTimeout.toNanos());
+      }
+
+      call.onNext(message);
     }
 
-    private void awaitReadiness() throws InterruptedException {
-      synchronized (readiness) {
-        while (!call.isReady() && !response.isDone()) {
-          readiness.wait();
-        }
+    // Holds this monitor. The time left before the first of the readiness deadline and the
+    // acknowledgement deadline passes.
+    private long nanosUntilNextDeadline(long readinessDeadline) throws TimeoutException {
+      var now = System.nanoTime();
+      var untilReady = readinessDeadline - now;
+      if (untilReady <= 0) {
+        throw new TimeoutException(
+            "The upload was not ready for its next message within " + readinessTimeout);
       }
+
+      return Math.min(untilReady, nanosUntilAcknowledgementDeadline(now));
     }
 
-    private void signalReadiness() {
-      synchronized (readiness) {
-        readiness.notifyAll();
+    // Holds this monitor.
+    private long nanosUntilAcknowledgementDeadline(long now) throws TimeoutException {
+      if (acknowledgementDeadline.isEmpty()) {
+        return Long.MAX_VALUE;
       }
+
+      var untilAcknowledged = acknowledgementDeadline.getAsLong() - now;
+      if (untilAcknowledged <= 0) {
+        throw acknowledgementTimedOut();
+      }
+
+      return untilAcknowledged;
     }
 
-    private void finish() {
+    private TimeoutException acknowledgementTimedOut() {
+      return new TimeoutException(
+          "The server did not acknowledge the upload within "
+              + acknowledgementTimeout
+              + " of its first message");
+    }
+
+    private synchronized void signalReadiness() {
+      notifyAll();
+    }
+
+    private synchronized void finish() {
       if (!response.isDone()) {
         call.onCompleted();
       }
@@ -650,11 +783,21 @@ public final class TranscodeWorker implements AutoCloseable {
 
     private UploadSegmentResponse awaitAcknowledgement()
         throws InterruptedException, ExecutionException, TimeoutException {
-      return response.get(CONNECTION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+      try {
+        return response.get(nanosUntilAcknowledgementDeadline(), TimeUnit.NANOSECONDS);
+      } catch (TimeoutException _) {
+        throw acknowledgementTimedOut();
+      }
     }
 
-    private void cancel(Throwable failure) {
+    private synchronized long nanosUntilAcknowledgementDeadline() throws TimeoutException {
+      return nanosUntilAcknowledgementDeadline(System.nanoTime());
+    }
+
+    private synchronized void cancel(Throwable failure) {
+      response.completeExceptionally(failure);
       call.cancel("Segment upload failed", failure);
+      notifyAll();
     }
 
     @Override
@@ -687,8 +830,10 @@ public final class TranscodeWorker implements AutoCloseable {
 
   private record ClosedSession(WorkerProbeSession probes, List<Producer> attempts) {}
 
+  private record ActiveAttempt(VariantJob job, Producer producer) {}
+
   private record ClaimedStop(
-      Producer producer, StreamObserver<EstablishWorkerSessionRequest> session) {}
+      ActiveAttempt attempt, StreamObserver<EstablishWorkerSessionRequest> session) {}
 
   private sealed interface AttemptStart {}
 

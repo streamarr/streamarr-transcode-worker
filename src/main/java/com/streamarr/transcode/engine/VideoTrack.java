@@ -7,12 +7,15 @@ import com.streamarr.transcode.engine.TrackRun.FirstSample;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
+import java.util.function.LongSupplier;
 
 /**
  * The video track an initialization segment declares, and the rules that read a fragment's video
  * start from its {@code moof}.
  */
-record VideoTrack(long trackId, long timescale, int defaultSampleFlags) {
+record VideoTrack(
+    long trackId, long timescale, long defaultSampleDuration, int defaultSampleFlags) {
 
   private static final String VIDEO_HANDLER = "vide";
   private static final int SAMPLE_IS_NON_SYNC_SAMPLE = 0x0001_0000;
@@ -46,6 +49,27 @@ record VideoTrack(long trackId, long timescale, int defaultSampleFlags) {
         .findFirst();
   }
 
+  /**
+   * The shortest duration among this track's samples in a fragment's {@code traf}s, in the track's
+   * timescale; empty when the fragment carries no sample of this track.
+   */
+  OptionalLong shortestSampleDurationOf(List<TrackFragmentBox> trackFragments) {
+    return trackFragments.stream()
+        .filter(trackFragment -> trackFragment.header().trackId() == trackId)
+        .map(this::shortestSampleDurationOfTrackFragment)
+        .flatMapToLong(OptionalLong::stream)
+        .min();
+  }
+
+  private OptionalLong shortestSampleDurationOfTrackFragment(TrackFragmentBox trackFragment) {
+    LongSupplier defaultDuration =
+        () -> trackFragment.header().defaultSampleDuration().orElse(defaultSampleDuration);
+    return trackFragment.runs().stream()
+        .map(run -> run.shortestSampleDuration(defaultDuration))
+        .flatMapToLong(OptionalLong::stream)
+        .min();
+  }
+
   private static VideoTrack fromTrak(BoxView trak, Map<Long, TrackExtends> trackExtends) {
     var trackId = trackIdOf(trak.requiredChild("tkhd"));
     var timescale = timescaleOf(trak.requiredChild("mdia").requiredChild("mdhd"));
@@ -53,7 +77,8 @@ record VideoTrack(long trackId, long timescale, int defaultSampleFlags) {
         Optional.ofNullable(trackExtends.get(trackId))
             .orElseThrow(
                 () -> FragmentedMp4Exception.malformed("mvex holds no trex for track " + trackId));
-    return new VideoTrack(trackId, timescale, defaults.defaultSampleFlags());
+    return new VideoTrack(
+        trackId, timescale, defaults.defaultSampleDuration(), defaults.defaultSampleFlags());
   }
 
   private static String handlerOf(BoxView trak) {

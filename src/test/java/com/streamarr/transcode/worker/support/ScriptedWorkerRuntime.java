@@ -32,6 +32,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 
 public final class ScriptedWorkerRuntime implements WorkerRuntime {
 
@@ -66,6 +67,7 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     private final SessionCall call = new SessionCall();
     private final List<UploadCall> uploads = new CopyOnWriteArrayList<>();
     private final UploadReadiness readiness = new UploadReadiness();
+    private volatile boolean acknowledgementsWithheld;
     private boolean shutdown;
 
     public WorkerRegistration registration() throws Exception {
@@ -94,6 +96,11 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     public void grantUploadMessage() {
       readiness.grant();
       uploads.forEach(UploadCall::signalReady);
+    }
+
+    /** From now on an upload that the worker half-closes is never acknowledged. */
+    public void withholdAcknowledgements() {
+      acknowledgementsWithheld = true;
     }
 
     /** The number of messages the worker has sent on all its upload calls. */
@@ -133,7 +140,7 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     @Override
     public <Q, R> ClientCall<Q, R> newCall(MethodDescriptor<Q, R> method, CallOptions options) {
       if (method.equals(TranscodeWorkerServiceGrpc.getUploadSegmentMethod())) {
-        var upload = new UploadCall(readiness);
+        var upload = new UploadCall(readiness, () -> acknowledgementsWithheld);
         uploads.add(upload);
         return typed(upload);
       }
@@ -285,16 +292,24 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     }
   }
 
-  /** A segment upload that records what the worker sent and acknowledges every byte. */
+  /**
+   * A segment upload that records what the worker sent and acknowledges every byte. Like a gRPC
+   * call, a cancelled upload closes with {@code CANCELLED} and is never acknowledged.
+   */
   public static final class UploadCall
       extends ClientCall<UploadSegmentRequest, UploadSegmentResponse> {
 
     private final UploadReadiness readiness;
+    private final BooleanSupplier acknowledgementsWithheld;
     private final List<UploadSegmentRequest> messages = new CopyOnWriteArrayList<>();
     private volatile Listener<UploadSegmentResponse> responses;
+    private boolean closed;
+    private boolean cancelled;
+    private boolean halfClosed;
 
-    private UploadCall(UploadReadiness readiness) {
+    private UploadCall(UploadReadiness readiness, BooleanSupplier acknowledgementsWithheld) {
       this.readiness = readiness;
+      this.acknowledgementsWithheld = acknowledgementsWithheld;
     }
 
     public SegmentUploadMetadata metadata() {
@@ -345,8 +360,25 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
       messages.add(message);
     }
 
+    public synchronized boolean wasCancelled() {
+      return cancelled;
+    }
+
+    /** Whether the worker sent the whole segment and awaits the acknowledgement. */
+    public synchronized boolean awaitsAcknowledgement() {
+      return halfClosed && !closed;
+    }
+
     @Override
     public void halfClose() {
+      synchronized (this) {
+        halfClosed = true;
+      }
+
+      if (acknowledgementsWithheld.getAsBoolean() || !tryClose()) {
+        return;
+      }
+
       responses.onMessage(
           UploadSegmentResponse.newBuilder().setAcceptedLengthBytes(content().length).build());
       responses.onClose(Status.OK, new Metadata());
@@ -354,7 +386,24 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
 
     @Override
     public void cancel(String message, Throwable cause) {
-      // Every upload is acknowledged when it half-closes, so nothing is left to cancel.
+      if (!tryClose()) {
+        return;
+      }
+
+      synchronized (this) {
+        cancelled = true;
+      }
+
+      responses.onClose(Status.CANCELLED.withDescription(message).withCause(cause), new Metadata());
+    }
+
+    private synchronized boolean tryClose() {
+      if (closed) {
+        return false;
+      }
+
+      closed = true;
+      return true;
     }
   }
 }

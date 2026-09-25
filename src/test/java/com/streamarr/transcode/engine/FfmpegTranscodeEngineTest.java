@@ -4,16 +4,20 @@ import static com.streamarr.transcode.engine.FfmpegRecordings.bytesOf;
 import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
 import static com.streamarr.transcode.fixtures.FfmpegMuxerHelpFixtures.FRAGMENTED_MP4_MUXER_HELP;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
+import com.streamarr.transcode.engine.AttemptOutcome.Failed;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -32,8 +36,6 @@ class FfmpegTranscodeEngineTest {
 
   @BeforeEach
   void setUp() {
-    var commandBuilder = new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1));
-
     var hwCapability =
         HardwareEncodingCapability.builder()
             .available(true)
@@ -43,7 +45,21 @@ class FfmpegTranscodeEngineTest {
 
     var capabilityService = createCapabilityService(true, hwCapability);
 
-    executor = new FfmpegTranscodeEngine(commandBuilder, capabilityService);
+    executor = engineLaunching(runningProcess(), capabilityService);
+  }
+
+  @Test
+  @DisplayName("Should refuse to build an engine without an encoder stall timeout")
+  void shouldRefuseToBuildAnEngineWithoutAnEncoderStallTimeout() {
+    var builder =
+        FfmpegTranscodeEngine.builder()
+            .commandBuilder(new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)))
+            .capabilityService(createCapabilityService(true, noHardware()))
+            .launcher(new ScriptedProcessLauncher(_ -> runningProcess()));
+
+    assertThatNullPointerException()
+        .isThrownBy(builder::build)
+        .withMessageContaining("encoderStallTimeout");
   }
 
   private TranscodeRequest createRequest(TranscodeMode mode, String codecFamily) {
@@ -96,7 +112,7 @@ class FfmpegTranscodeEngineTest {
             .build();
     var sink = new RecordingSegmentSink();
 
-    var producer = executor.startProducer(request, sink);
+    var producer = executor.startProducer(request, sink, SegmentMemoryBudget.forSlots(1));
 
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
     assertThat(launcher.command(request.attemptId()))
@@ -114,13 +130,63 @@ class FfmpegTranscodeEngineTest {
             "segment10.m4s");
   }
 
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"VIDEO_TRANSCODE", "FULL_TRANSCODE"})
+  @DisplayName(
+      "Should fail the attempt as a short video sample when it encodes video and its output holds"
+          + " one")
+  void shouldFailTheAttemptAsAShortVideoSampleWhenItEncodesVideoAndItsOutputHoldsOne(
+      TranscodeMode mode) {
+    var producer = startProducerOverAOneTickVideoSample(mode);
+
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .asInstanceOf(InstanceOfAssertFactories.type(Failed.class))
+        .extracting(Failed::reason)
+        .isEqualTo(ProducerFailure.SHORT_VIDEO_SAMPLE);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"REMUX", "AUDIO_TRANSCODE"})
+  @DisplayName(
+      "Should complete the attempt when it copies the video and its output holds a short sample")
+  void shouldCompleteTheAttemptWhenItCopiesTheVideoAndItsOutputHoldsAShortSample(
+      TranscodeMode mode) {
+    var producer = startProducerOverAOneTickVideoSample(mode);
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+  }
+
+  // FFmpeg writes three 1 s segments of 23.976 fps video whose second holds a 1-tick sample.
+  private Producer startProducerOverAOneTickVideoSample(TranscodeMode mode) {
+    var output =
+        IsoBoxes.oneSecondKeyframeFragments(
+            List.of(List.of(1001, 1001), List.of(1001, 1, 1001), List.of(1001)));
+    executor =
+        engineLaunching(
+            ScriptedProcess.builder().output(output).build(),
+            createCapabilityService(true, noHardware()));
+    var request =
+        requestBuilder(mode, "h264").targetSegmentDuration(1).framerate(24_000.0 / 1001).build();
+    return executor.startProducer(
+        request, new RecordingSegmentSink(), SegmentMemoryBudget.forSlots(1));
+  }
+
   @Test
   @DisplayName("Should refuse to start a producer without launching FFmpeg when it is unavailable")
   void shouldRefuseToStartAProducerWithoutLaunchingFfmpegWhenItIsUnavailable() {
     executor = engineLaunching(runningProcess(), createCapabilityService(false, noHardware()));
     var request = createRequest(TranscodeMode.FULL_TRANSCODE, "h264");
 
-    var thrown = catchThrowable(() -> executor.startProducer(request, new RecordingSegmentSink()));
+    var thrown =
+        catchThrowable(
+            () ->
+                executor.startProducer(
+                    request, new RecordingSegmentSink(), SegmentMemoryBudget.forSlots(1)));
 
     assertThat(thrown)
         .isInstanceOf(TranscodeException.class)
@@ -140,7 +206,9 @@ class FfmpegTranscodeEngineTest {
     executor = engineLaunching(runningProcess(), createCapabilityService(true, hardware));
     var request = createRequest(TranscodeMode.FULL_TRANSCODE, "h264");
 
-    var producer = executor.startProducer(request, new RecordingSegmentSink());
+    var producer =
+        executor.startProducer(
+            request, new RecordingSegmentSink(), SegmentMemoryBudget.forSlots(1));
 
     producer.stop();
     assertThat(launcher.command(request.attemptId())).containsSubsequence("-c:v", "h264_nvenc");
@@ -153,7 +221,9 @@ class FfmpegTranscodeEngineTest {
     executor = engineLaunching(runningProcess(), createCapabilityService(true, noHardware()));
     var request = createRequest(TranscodeMode.FULL_TRANSCODE, "av1");
 
-    var producer = executor.startProducer(request, new RecordingSegmentSink());
+    var producer =
+        executor.startProducer(
+            request, new RecordingSegmentSink(), SegmentMemoryBudget.forSlots(1));
 
     producer.stop();
     assertThat(launcher.command(request.attemptId())).containsSubsequence("-c:v", "libsvtav1");
@@ -168,7 +238,9 @@ class FfmpegTranscodeEngineTest {
     executor = engineLaunching(runningProcess(), createCapabilityService(true, noHardware()));
     var request = createRequest(mode, "h264");
 
-    var producer = executor.startProducer(request, new RecordingSegmentSink());
+    var producer =
+        executor.startProducer(
+            request, new RecordingSegmentSink(), SegmentMemoryBudget.forSlots(1));
 
     producer.stop();
     assertThat(launcher.command(request.attemptId())).containsSubsequence("-c:v", "copy");
@@ -188,9 +260,7 @@ class FfmpegTranscodeEngineTest {
             false,
             HardwareEncodingCapability.builder().available(false).encoders(Set.of()).build());
 
-    executor =
-        new FfmpegTranscodeEngine(
-            new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)), capabilityService);
+    executor = engineLaunching(runningProcess(), capabilityService);
 
     assertThat(executor.isHealthy()).isFalse();
   }
@@ -212,7 +282,11 @@ class FfmpegTranscodeEngineTest {
     executor = engineLaunching(runningProcess(), capabilityService);
     var request = createRequest(TranscodeMode.FULL_TRANSCODE, "av1");
 
-    var thrown = catchThrowable(() -> executor.startProducer(request, new RecordingSegmentSink()));
+    var thrown =
+        catchThrowable(
+            () ->
+                executor.startProducer(
+                    request, new RecordingSegmentSink(), SegmentMemoryBudget.forSlots(1)));
 
     assertThat(launcher.hasLaunchedAny()).isFalse();
     assertThat(thrown)
@@ -229,6 +303,7 @@ class FfmpegTranscodeEngineTest {
         .commandBuilder(new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)))
         .capabilityService(capabilities)
         .launcher(launcher)
+        .encoderStallTimeout(FfmpegTranscodeEngine.DEFAULT_ENCODER_STALL_TIMEOUT)
         .build();
   }
 

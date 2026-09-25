@@ -33,6 +33,7 @@ import build.buf.gen.streamarr.transcode.v1.TranscodeMode;
 import build.buf.gen.streamarr.transcode.v1.TranscodeWorkerServiceGrpc;
 import build.buf.gen.streamarr.transcode.v1.UploadSegmentRequest;
 import build.buf.gen.streamarr.transcode.v1.UploadSegmentResponse;
+import build.buf.gen.streamarr.transcode.v1.Uuid;
 import build.buf.gen.streamarr.transcode.v1.VariantJob;
 import build.buf.gen.streamarr.transcode.v1.VariantSpec;
 import build.buf.gen.streamarr.transcode.v1.WorkerIdentity;
@@ -229,26 +230,35 @@ class TranscodeWorkerControlPlaneIT {
     var launcher = ScriptedProcessLauncher.running();
     var current = variantJob();
     try (var server = new TestServer(service);
-        var worker = worker(preparedMediaRoot(), launcher)) {
+        var worker = worker(preparedMediaRoot(), launcher, 1)) {
       server.start();
       worker.start("localhost", server.port());
       service.sendStart(service.registeredWorker(), current);
       service.awaitStarted(current);
 
-      var replacements = new ArrayList<VariantJob>();
+      var replaced = new ArrayList<Uuid>();
+      var replacementAttempts = new ArrayList<Uuid>();
       for (var index = 0; index < 100; index++) {
         service.sendStop(service.registeredWorker(), current);
         var next = current.toBuilder().setJobAttemptId(toProto(UUID.randomUUID())).build();
         service.sendStart(service.registeredWorker(), next);
-        replacements.add(current);
-        replacements.add(next);
+        replaced.add(current.getJobAttemptId());
+        replacementAttempts.add(next.getJobAttemptId());
         current = next;
       }
-      for (var index = 0; index < replacements.size(); index += 2) {
-        service.awaitStopped(replacements.get(index));
-        service.awaitStarted(replacements.get(index + 1));
-      }
 
+      // Each stop reports once FFmpeg has exited, on its own thread, so a replaced attempt's stop
+      // and its successor's start reach the control plane in either order. With one slot, a start
+      // handled before the stop that precedes it would be refused.
+      var events = service.awaitEvents(replaced.size() + replacementAttempts.size());
+      assertThat(events)
+          .filteredOn(EstablishWorkerSessionRequest::hasJobAttemptStopped)
+          .extracting(event -> event.getJobAttemptStopped().getJobAttemptId())
+          .containsExactlyInAnyOrderElementsOf(replaced);
+      assertThat(events)
+          .filteredOn(EstablishWorkerSessionRequest::hasJobAttemptStarted)
+          .extracting(event -> event.getJobAttemptStarted().getJobAttemptId())
+          .containsExactlyInAnyOrderElementsOf(replacementAttempts);
       assertThat(launcher.process(fromProto(current.getJobAttemptId())).isAlive()).isTrue();
     }
   }
@@ -605,11 +615,17 @@ class TranscodeWorkerControlPlaneIT {
     return worker(mediaRoot, ScriptedProcessLauncher.running());
   }
 
+  // Room for the two attempts that some tests run at once.
   private TranscodeWorker worker(Path mediaRoot, ScriptedProcessLauncher launcher)
+      throws Exception {
+    return worker(mediaRoot, launcher, 2);
+  }
+
+  private TranscodeWorker worker(Path mediaRoot, ScriptedProcessLauncher launcher, int slots)
       throws Exception {
     var configuration =
         workerConfigurationBuilder()
-            .availableSlots(1)
+            .availableSlots(slots)
             .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, mediaRoot))
             .build();
     return new TranscodeWorker(configuration, engine(launcher));
@@ -863,6 +879,17 @@ class TranscodeWorkerControlPlaneIT {
           .as("the next worker event must acknowledge the ordering-barrier start command")
           .isTrue();
       assertThat(event.getJobAttemptStarted().getJobAttemptId()).isEqualTo(job.getJobAttemptId());
+    }
+
+    private List<EstablishWorkerSessionRequest> awaitEvents(int count) throws InterruptedException {
+      var received = new ArrayList<EstablishWorkerSessionRequest>();
+      while (received.size() < count) {
+        var event = events.poll(5, TimeUnit.SECONDS);
+        assertThat(event).as("worker event %s of %s", received.size() + 1, count).isNotNull();
+        received.add(event);
+      }
+
+      return received;
     }
 
     private void awaitStopped(VariantJob job) throws InterruptedException {

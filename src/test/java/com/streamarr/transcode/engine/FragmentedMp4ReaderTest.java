@@ -39,15 +39,21 @@ import static com.streamarr.transcode.engine.Mp4Stream.readerOf;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
+import static org.awaitility.Awaitility.await;
 
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.engine.IsoBoxes.Track;
 import com.streamarr.transcode.engine.IsoBoxes.TrackFragment;
+import com.streamarr.transcode.fakes.ScriptedProcess;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -187,7 +193,7 @@ class FragmentedMp4ReaderTest {
   @DisplayName("Should fail before reading the body when a box exceeds the segment cap")
   void shouldFailBeforeReadingTheBodyWhenABoxExceedsTheSegmentCap() {
     var reader =
-        new FragmentedMp4Reader(
+        readerOf(
             new ByteArrayInputStream(concat(ftyp(), videoAndAudioMoov(), header(1025, "moof"))),
             1024);
 
@@ -211,7 +217,7 @@ class FragmentedMp4ReaderTest {
     var moof = videoMoof(0);
     var cap = Math.max(initialization.length, moof.length + 100);
     var reader =
-        new FragmentedMp4Reader(
+        readerOf(
             new ByteArrayInputStream(concat(initialization, moof, mdat(cap - moof.length))), cap);
 
     assertFailure(reader, Reason.EXCEEDS_SEGMENT_CAP);
@@ -221,9 +227,7 @@ class FragmentedMp4ReaderTest {
   @DisplayName("Should fail when the initialization segment exceeds the segment cap")
   void shouldFailWhenTheInitializationSegmentExceedsTheSegmentCap() {
     var initialization = concat(ftyp(), videoAndAudioMoov());
-    var reader =
-        new FragmentedMp4Reader(
-            new ByteArrayInputStream(initialization), initialization.length - 1L);
+    var reader = readerOf(new ByteArrayInputStream(initialization), initialization.length - 1L);
 
     assertFailure(reader, Reason.EXCEEDS_SEGMENT_CAP);
   }
@@ -234,7 +238,47 @@ class FragmentedMp4ReaderTest {
   void shouldRejectASegmentCapWhenNoArrayCanHoldIt(long cap) {
     var stream = new ByteArrayInputStream(new byte[0]);
 
-    assertThatIllegalArgumentException().isThrownBy(() -> new FragmentedMp4Reader(stream, cap));
+    assertThatIllegalArgumentException().isThrownBy(() -> readerOf(stream, cap));
+  }
+
+  @Test
+  @DisplayName("Should end reading when the admission refuses a box")
+  void shouldEndReadingWhenTheAdmissionRefusesABox() {
+    var stream = new ByteArrayInputStream(concat(ftyp(), videoAndAudioMoov()));
+    var reader = new FragmentedMp4Reader(stream, Mp4Stream.SEGMENT_CAP, _ -> false);
+
+    assertThatExceptionOfType(FragmentedMp4Reader.ReadingCancelled.class).isThrownBy(reader::next);
+  }
+
+  @ParameterizedTest(name = "{0} bytes after the moof")
+  @ValueSource(ints = {0, 100})
+  @DisplayName(
+      "Should end reading without returning the fragment when reading is cancelled while the"
+          + " reader waits inside it")
+  void shouldEndReadingWithoutReturningTheFragmentWhenReadingIsCancelledWhileTheReaderWaitsInsideIt(
+      int bytesAfterMoof) throws IOException {
+    var initialization = concat(ftyp(), videoAndAudioMoov());
+    var moof = videoMoof(0);
+    var process =
+        ScriptedProcess.builder()
+            .output(concat(initialization, moof, mdat(1024)))
+            .pauseAfter(initialization.length + moof.length + bytesAfterMoof)
+            .build();
+    var reader = readerOf(process.getInputStream(), Mp4Stream.SEGMENT_CAP);
+    assertThat(reader.next()).containsInstanceOf(InitializationSegment.class);
+
+    try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+      var reading = executor.submit(reader::next);
+      await().atMost(Duration.ofSeconds(10)).until(process::hasReachedPause);
+
+      reader.cancel();
+      process.resume();
+
+      assertThat(reading)
+          .failsWithin(Duration.ofSeconds(10))
+          .withThrowableOfType(ExecutionException.class)
+          .withCauseInstanceOf(FragmentedMp4Reader.ReadingCancelled.class);
+    }
   }
 
   @Test
@@ -524,6 +568,78 @@ class FragmentedMp4ReaderTest {
     var moov = moov(Track.audio().build());
 
     assertThat(videoStartOf(moov, moof(audioTraf().baseMediaDecodeTime(0L).build()))).isEmpty();
+  }
+
+  @Test
+  @DisplayName(
+      "Should read the shortest video sample duration from the trun when it carries each sample's"
+          + " duration")
+  void shouldReadTheShortestVideoSampleDurationFromTheTrunWhenItCarriesEachSamplesDuration()
+      throws IOException {
+    var moof =
+        moof(
+            syncVideoTraf()
+                .baseMediaDecodeTime(0L)
+                .sampleDurations(List.of(1001, 1, 1001))
+                .defaultSampleDuration(1001)
+                .build(),
+            audioTraf().baseMediaDecodeTime(0L).build());
+
+    assertThat(fragmentOf(videoAndAudioMoov(), moof).shortestVideoSampleDuration()).hasValue(1);
+  }
+
+  @Test
+  @DisplayName(
+      "Should read the tfhd default as the shortest video sample duration when the trun carries no"
+          + " durations")
+  void shouldReadTheTfhdDefaultAsTheShortestVideoSampleDurationWhenTheTrunCarriesNoDurations()
+      throws IOException {
+    var moov = moov(Track.video().defaultSampleDuration(2002).build());
+    var moof =
+        moof(
+            syncVideoTraf()
+                .baseMediaDecodeTime(0L)
+                .sampleCount(3)
+                .defaultSampleDuration(1001)
+                .build());
+
+    assertThat(fragmentOf(moov, moof).shortestVideoSampleDuration()).hasValue(1001);
+  }
+
+  @Test
+  @DisplayName(
+      "Should read the trex default as the shortest video sample duration when no fragment box"
+          + " carries one")
+  void shouldReadTheTrexDefaultAsTheShortestVideoSampleDurationWhenNoFragmentBoxCarriesOne()
+      throws IOException {
+    var moov = moov(Track.video().defaultSampleDuration(1001).build());
+
+    assertThat(
+            fragmentOf(moov, moof(syncVideoTraf().baseMediaDecodeTime(0L).build()))
+                .shortestVideoSampleDuration())
+        .hasValue(1001);
+  }
+
+  @Test
+  @DisplayName(
+      "Should measure only video samples when an audio traf carries shorter sample durations")
+  void shouldMeasureOnlyVideoSamplesWhenAnAudioTrafCarriesShorterSampleDurations()
+      throws IOException {
+    var moof =
+        moof(
+            audioTraf().baseMediaDecodeTime(0L).sampleDurations(List.of(1, 1)).build(),
+            syncVideoTraf().baseMediaDecodeTime(0L).sampleDurations(List.of(1001)).build());
+
+    assertThat(fragmentOf(videoAndAudioMoov(), moof).shortestVideoSampleDuration()).hasValue(1001);
+  }
+
+  @Test
+  @DisplayName(
+      "Should give a fragment no shortest video sample duration when it carries only audio")
+  void shouldGiveAFragmentNoShortestVideoSampleDurationWhenItCarriesOnlyAudio() throws IOException {
+    var moof = moof(audioTraf().baseMediaDecodeTime(0L).sampleDurations(List.of(1024)).build());
+
+    assertThat(fragmentOf(videoAndAudioMoov(), moof).shortestVideoSampleDuration()).isEmpty();
   }
 
   @Test
@@ -925,9 +1041,13 @@ class FragmentedMp4ReaderTest {
   }
 
   private static Optional<VideoStart> videoStartOf(byte[] moov, byte[] moof) throws IOException {
+    return fragmentOf(moov, moof).videoStart();
+  }
+
+  private static Fragment fragmentOf(byte[] moov, byte[] moof) throws IOException {
     var reader = readerOf(concat(ftyp(), moov, moof, mdat(8)));
     reader.next();
-    return nextFragment(reader).videoStart();
+    return nextFragment(reader);
   }
 
   private static byte[] videoMoof(long baseMediaDecodeTime) {

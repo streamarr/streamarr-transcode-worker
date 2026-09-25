@@ -23,10 +23,13 @@ import lombok.NonNull;
  * <p>The output can pause at one offset until the test or a {@code q} on standard input resumes it,
  * and can fail at another, with an I/O error or with the unchecked exception the test supplies. The
  * process exits at the end of its output, at launch, on {@code q}, or when the test says so. A
- * forcible destroy ends the output where it stands and exits with 137.
+ * destroy, like SIGTERM, ends the output where it stands and exits with 143 unless the process
+ * ignores termination, as a hung FFmpeg does. A forcible destroy, like SIGKILL, ends the output and
+ * exits with 137, or lingers until the test says it exits.
  */
 public final class ScriptedProcess extends Process {
 
+  private static final int TERMINATED_EXIT_CODE = 143;
   private static final int FORCIBLY_DESTROYED_EXIT_CODE = 137;
 
   private static final long PROCESS_ID = 4242;
@@ -53,6 +56,8 @@ public final class ScriptedProcess extends Process {
   private final OptionalInt readFailureOffset;
   private final Optional<RuntimeException> uncheckedReadFailure;
   private final boolean resumesOnQuit;
+  private final boolean ignoresTermination;
+  private final boolean lingersAfterKill;
   private final byte[] stderr;
   private final ByteArrayOutputStream stdin = new ByteArrayOutputStream();
   private final CompletableFuture<Integer> exit = new CompletableFuture<>();
@@ -63,6 +68,7 @@ public final class ScriptedProcess extends Process {
   private boolean resumed;
   private boolean pauseReached;
   private boolean endOfOutputRead;
+  private boolean terminated;
   private boolean destroyedForcibly;
 
   @Builder
@@ -74,6 +80,8 @@ public final class ScriptedProcess extends Process {
       Integer failReadAfter,
       RuntimeException failReadWith,
       boolean resumesOnQuit,
+      boolean ignoresTermination,
+      boolean lingersAfterKill,
       String stderr) {
     this.output = output.clone();
     this.exitCode = exitCode;
@@ -82,6 +90,8 @@ public final class ScriptedProcess extends Process {
     this.readFailureOffset = optionalOffset(failReadAfter);
     this.uncheckedReadFailure = Optional.ofNullable(failReadWith);
     this.resumesOnQuit = resumesOnQuit;
+    this.ignoresTermination = ignoresTermination;
+    this.lingersAfterKill = lingersAfterKill;
     this.stderr = Objects.requireNonNullElse(stderr, "").getBytes(StandardCharsets.UTF_8);
     this.endOffset = this.output.length;
     if (this.exitTiming == ExitTiming.AT_LAUNCH) {
@@ -104,12 +114,25 @@ public final class ScriptedProcess extends Process {
     exit.complete(exitCode);
   }
 
+  /**
+   * How many bytes of its output the reader has taken. A pipe holds only a bounded amount of
+   * FFmpeg's output that nobody has read, so FFmpeg blocks once the reader stops taking bytes.
+   */
+  public synchronized int bytesTaken() {
+    return position;
+  }
+
   public synchronized boolean hasReachedPause() {
     return pauseReached;
   }
 
   public synchronized boolean hasReadToEndOfOutput() {
     return endOfOutputRead;
+  }
+
+  /** Whether something asked the process to terminate, as SIGTERM does. */
+  public synchronized boolean wasTerminated() {
+    return terminated;
   }
 
   public synchronized boolean wasDestroyedForcibly() {
@@ -184,17 +207,30 @@ public final class ScriptedProcess extends Process {
   }
 
   @Override
-  public void destroy() {
-    destroyForcibly();
+  public synchronized void destroy() {
+    terminated = true;
+    if (ignoresTermination) {
+      return;
+    }
+
+    endOutput();
+    exit.complete(TERMINATED_EXIT_CODE);
   }
 
   @Override
   public synchronized Process destroyForcibly() {
     destroyedForcibly = true;
+    endOutput();
+    if (!lingersAfterKill) {
+      exit.complete(FORCIBLY_DESTROYED_EXIT_CODE);
+    }
+
+    return this;
+  }
+
+  private void endOutput() {
     endOffset = position;
     notifyAll();
-    exit.complete(FORCIBLY_DESTROYED_EXIT_CODE);
-    return this;
   }
 
   private synchronized int read(byte[] buffer, int offset, int length) throws IOException {

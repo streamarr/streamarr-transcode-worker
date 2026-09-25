@@ -11,6 +11,7 @@ import com.streamarr.transcode.engine.GroupingOutcome.SegmentClosed;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentNumberSkipped;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalLong;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -380,8 +381,10 @@ class SegmentGrouperTest {
         new MediaSegment(
             0,
             List.of(
-                new Fragment(List.of(new byte[40], new byte[100]), Optional.empty()),
-                new Fragment(List.of(new byte[30], new byte[7]), Optional.empty())));
+                new Fragment(
+                    List.of(new byte[40], new byte[100]), Optional.empty(), OptionalLong.empty()),
+                new Fragment(
+                    List.of(new byte[30], new byte[7]), Optional.empty(), OptionalLong.empty())));
 
     assertThat(segment.byteLength()).isEqualTo(177);
   }
@@ -427,6 +430,6 @@ class SegmentGrouperTest {
   }
 
   private static Fragment fragment(Optional<VideoStart> videoStart) {
-    return new Fragment(List.of(new byte[] {1}, new byte[] {2}), videoStart);
+    return new Fragment(List.of(new byte[] {1}, new byte[] {2}), videoStart, OptionalLong.empty());
   }
 }
