@@ -281,10 +281,10 @@ class FragmentedMp4ReaderTest {
   @DisplayName("Should describe an unprintable box type with printable characters when it fails")
   void shouldDescribeAnUnprintableBoxTypeWithPrintableCharactersWhenItFails() {
     var type = concat(new byte[] {'\n', (byte) 0xC3}, "o!".getBytes(StandardCharsets.ISO_8859_1));
-    var unexpected = concat(ftyp(), videoAndAudioMoov(), u32(8), type);
+    var reader = readerOf(concat(ftyp(), videoAndAudioMoov(), u32(8), type));
 
     assertThatExceptionOfType(FragmentedMp4Exception.class)
-        .isThrownBy(() -> Mp4Stream.read(readerOf(unexpected)))
+        .isThrownBy(() -> Mp4Stream.read(reader))
         .withMessageContaining("??o!")
         .withMessageNotContaining("\n");
   }

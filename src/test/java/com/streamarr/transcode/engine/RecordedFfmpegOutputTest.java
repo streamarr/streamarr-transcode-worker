@@ -331,9 +331,10 @@ class RecordedFfmpegOutputTest {
     var sampleCount = positionOf(recorded, "trun") + 8;
     assertThat(fields.getInt(sampleCount)).isEqualTo(24);
     fields.putInt(sampleCount, 25);
+    var reader = Mp4Stream.readerOf(recorded);
 
     assertThatExceptionOfType(FragmentedMp4Exception.class)
-        .isThrownBy(() -> Mp4Stream.read(Mp4Stream.readerOf(recorded)))
+        .isThrownBy(() -> Mp4Stream.read(reader))
         .extracting(FragmentedMp4Exception::getReason)
         .isEqualTo(Reason.MALFORMED_BOX);
   }
@@ -350,9 +351,10 @@ class RecordedFfmpegOutputTest {
     var run = positionOf(recorded, "trun", occurrence);
     assertThat(fields.getInt(run + 4) & TRUN_DATA_OFFSET).isEqualTo(TRUN_DATA_OFFSET);
     fields.putInt(run + 12, dataOffset);
+    var reader = Mp4Stream.readerOf(recorded);
 
     assertThatExceptionOfType(FragmentedMp4Exception.class)
-        .isThrownBy(() -> Mp4Stream.read(Mp4Stream.readerOf(recorded)))
+        .isThrownBy(() -> Mp4Stream.read(reader))
         .extracting(FragmentedMp4Exception::getReason)
         .isEqualTo(Reason.SAMPLE_DATA_OUTSIDE_MDAT);
   }
