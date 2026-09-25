@@ -370,14 +370,14 @@ class WorkerMediaSmokeTest {
     runFfmpeg(List.of("-xerror", "-i", media.toString(), "-f", "null"), Path.of("-"));
   }
 
-  private static List<ProbeStreamInfo> streams(Path media) throws Exception {
+  private static List<ProbeStreamInfo> streams(Path media) {
     return FfprobeExecutor.forBinary(Path.of("ffprobe"))
         .probe(media, requestBuilder().build())
         .getMedia()
         .getStreamsList();
   }
 
-  private static ProbeStreamInfo video(Path media) throws Exception {
+  private static ProbeStreamInfo video(Path media) {
     var videos =
         streams(media).stream().filter(stream -> "video".equals(stream.getCodecType())).toList();
     assertThat(videos).hasSize(1);
