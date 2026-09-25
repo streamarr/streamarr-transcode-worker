@@ -148,7 +148,9 @@ class RecordedFfmpegOutputTest {
         lastSegment.subList(
             lastSegment.size() - recording.trailingAudioOnlyFragmentCount(), lastSegment.size());
 
-    assertThat(audioOnly).allSatisfy(fragment -> assertThat(fragment.videoStart()).isEmpty());
+    assertThat(audioOnly)
+        .isNotEmpty()
+        .allSatisfy(fragment -> assertThat(fragment.videoStart()).isEmpty());
     assertThat(lastSegment.getLast()).isSameAs(grouping.units().fragments().getLast());
   }
 
