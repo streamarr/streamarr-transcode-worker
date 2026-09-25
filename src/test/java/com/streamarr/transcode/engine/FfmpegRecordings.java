@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Optional;
 import lombok.Builder;
 import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.MapperFeature;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
@@ -16,18 +17,19 @@ import tools.jackson.databind.json.JsonMapper;
  * media segments each recording groups into. {@code src/test/resources/fmp4/README.md} describes
  * every recording and how to record them again.
  */
-final class FfmpegRecordings {
+public final class FfmpegRecordings {
 
   private static final String DIRECTORY = "/fmp4/";
   private static final Expectations EXPECTATIONS =
       JsonMapper.builder()
           .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+          .enable(MapperFeature.ACCEPT_CASE_INSENSITIVE_ENUMS)
           .build()
           .readValue(bytesOf("expected.json"), Expectations.class);
 
   private FfmpegRecordings() {}
 
-  static byte[] bytesOf(String file) {
+  public static byte[] bytesOf(String file) {
     try (var stream = FfmpegRecordings.class.getResourceAsStream(DIRECTORY + file)) {
       assertThat(stream).as("recording %s", file).isNotNull();
       return stream.readAllBytes();
@@ -36,24 +38,62 @@ final class FfmpegRecordings {
     }
   }
 
-  static List<Recording> recordings() {
+  public static List<Recording> recordings() {
     return EXPECTATIONS.fixtures();
   }
 
-  static Recording recording(String file) {
+  public static Recording recording(String file) {
     return recordings().stream()
         .filter(recording -> recording.file().equals(file))
         .findFirst()
         .orElseThrow(() -> new AssertionError("expected.json describes no recording " + file));
   }
 
-  record Expectations(List<Recording> fixtures) {}
+  /**
+   * The recording's initialization segment and media segments as the producer delivers them,
+   * without the preroll it discards between the two or anything after the last media segment.
+   */
+  public static byte[] deliveredBytesOf(Recording recording) {
+    var recorded = bytesOf(recording.file());
+    var initializationSegmentLength = recording.initializationSegment().byteLength();
+    var prerollLength =
+        recording.discardedPreroll().stream().mapToLong(SegmentSummary::byteLength).sum();
+    var mediaSegmentsLength =
+        recording.segments().stream().mapToLong(SegmentSummary::byteLength).sum();
+    var delivered = new byte[Math.toIntExact(initializationSegmentLength + mediaSegmentsLength)];
+    System.arraycopy(recorded, 0, delivered, 0, initializationSegmentLength);
+    System.arraycopy(
+        recorded,
+        Math.toIntExact(initializationSegmentLength + prerollLength),
+        delivered,
+        initializationSegmentLength,
+        delivered.length - initializationSegmentLength);
+    return delivered;
+  }
 
-  /** One recorded stream and what its initialization segment and media segments must be. */
-  record Recording(
+  public record Expectations(List<Recording> fixtures) {}
+
+  /**
+   * One recorded stream, the FFmpeg command line that recorded it, and what its initialization
+   * segment and media segments must be.
+   *
+   * @param encoder the video encoder of an encode; empty for a stream copy
+   * @param recipeDeviation how the recording deliberately departs from the worker's recipe; empty
+   *     when it follows the recipe
+   * @param mediaSegmentCount the media segment count the server advertises for what the recording
+   *     read, which an encode forces keyframes up to
+   */
+  public record Recording(
       String file,
+      Mode mode,
+      Optional<String> encoder,
+      Source source,
       int period,
+      long fragmentationTargetMicros,
+      List<String> ffmpegArguments,
+      Optional<String> recipeDeviation,
       int startSequenceNumber,
+      int mediaSegmentCount,
       Size initializationSegment,
       List<SegmentSummary> segments,
       List<SegmentSummary> discardedPreroll,
@@ -61,20 +101,41 @@ final class FfmpegRecordings {
       int trailingAudioOnlyFragmentCount,
       List<HlsRun> hlsComparisons) {
 
+    /** The encoder a job names for the recording: its video encoder, or copy for a stream copy. */
+    public String videoEncoder() {
+      return encoder().orElse("copy");
+    }
+
     @Override
     public String toString() {
       return file;
     }
   }
 
-  record Size(int byteLength) {}
+  /** Whether a recording encodes the video or copies it from the source. */
+  public enum Mode {
+    ENCODE,
+    COPY
+  }
+
+  /** The source a recording read, with its video stream's r_frame_rate as ffprobe reports it. */
+  public record Source(String file, String videoRealFrameRate) {
+
+    /** The probed frame rate as the worker receives it: the rational as a double. */
+    public double videoFrameRate() {
+      var rational = videoRealFrameRate.split("/");
+      return Double.parseDouble(rational[0]) / Double.parseDouble(rational[1]);
+    }
+  }
+
+  public record Size(int byteLength) {}
 
   /**
    * A media segment by its number, the media time of its first video sample in the video track's
    * timescale, the indexes of its fragments after the initialization segment, and its size.
    */
   @Builder
-  record SegmentSummary(
+  public record SegmentSummary(
       int number,
       long firstVideoPresentationTime,
       int firstFragmentIndex,
@@ -88,7 +149,7 @@ final class FfmpegRecordings {
    * keyframe opens.
    */
   @Builder
-  record ExpectedFailure(
+  public record ExpectedFailure(
       Reason reason,
       int fragmentIndex,
       Optional<Long> expectedNumber,
@@ -99,7 +160,7 @@ final class FfmpegRecordings {
    * segment it cut, mapped onto this recording, and the segments whose start differs from the
    * grid's.
    */
-  record HlsRun(String hlsRun, List<CutPoint> segments, List<CutPointMismatch> mismatches) {
+  public record HlsRun(String hlsRun, List<CutPoint> segments, List<CutPointMismatch> mismatches) {
 
     @Override
     public String toString() {
@@ -107,8 +168,8 @@ final class FfmpegRecordings {
     }
   }
 
-  record CutPoint(int number, long firstVideoPresentationTime) {}
+  public record CutPoint(int number, long firstVideoPresentationTime) {}
 
   /** A segment number whose first video sample the grid and the HLS muxer place differently. */
-  record CutPointMismatch(int number, Optional<Long> grouping, Optional<Long> hls) {}
+  public record CutPointMismatch(int number, Optional<Long> grouping, Optional<Long> hls) {}
 }

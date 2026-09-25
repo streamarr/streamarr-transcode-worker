@@ -1,14 +1,15 @@
 package com.streamarr.transcode.fixtures;
 
 import com.streamarr.transcode.engine.FfmpegCommandBuilder;
-import com.streamarr.transcode.engine.FfmpegProcessManager;
 import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
+import com.streamarr.transcode.engine.ProcessLauncher;
 import com.streamarr.transcode.engine.TranscodeCapabilityService;
 import com.streamarr.transcode.worker.TranscodeWorkerConfiguration;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.UUID;
 
@@ -25,17 +26,23 @@ public final class RemoteWorkerFixtures {
     return TranscodeWorkerConfiguration.builder().workerId(WORKER_ID).bootId(UUID.randomUUID());
   }
 
-  public static FfmpegTranscodeEngine remuxEngine(FfmpegProcessManager processManager) {
+  /** An engine with a compatible FFmpeg that launches FFmpeg through the launcher. */
+  public static FfmpegTranscodeEngine engine(ProcessLauncher launcher) {
     var capabilityService =
         new TranscodeCapabilityService(
             "ffmpeg",
             command ->
                 new CompatibleFfmpegProcess(
-                    Arrays.asList(command).contains("muxer=hls") ? "hls_segment_options" : ""));
+                    Arrays.asList(command).contains("muxer=mp4")
+                        ? FfmpegMuxerHelpFixtures.FRAGMENTED_MP4_MUXER_HELP
+                        : ""));
     capabilityService.detectCapabilities();
 
-    return new FfmpegTranscodeEngine(
-        new FfmpegCommandBuilder("ffmpeg"), processManager, capabilityService);
+    return FfmpegTranscodeEngine.builder()
+        .commandBuilder(new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)))
+        .capabilityService(capabilityService)
+        .launcher(launcher)
+        .build();
   }
 
   private static class CompatibleFfmpegProcess extends Process {

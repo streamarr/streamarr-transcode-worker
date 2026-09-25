@@ -1,5 +1,6 @@
 package com.streamarr.transcode.engine;
 
+import static com.streamarr.transcode.fixtures.FfmpegMuxerHelpFixtures.FRAGMENTED_MP4_MUXER_HELP;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
@@ -86,45 +87,59 @@ class TranscodeCapabilityServiceTest {
   }
 
   @Test
-  @DisplayName("Should report unavailable when FFmpeg lacks required HLS segment options")
-  void shouldReportUnavailableWhenFfmpegLacksRequiredHlsSegmentOptions() {
+  @DisplayName("Should name the missing options when the mp4 muxer cannot fragment its output")
+  void shouldNameTheMissingOptionsWhenTheMp4MuxerCannotFragmentItsOutput() {
     var outputs =
         Map.of(
-            "ffmpeg", createProcess("ffmpeg version 4.4.2", 0),
-            "hls", createProcess("Muxer hls [Apple HTTP Live Streaming]:", 0));
+            "ffmpeg",
+            createProcess("ffmpeg version 4.1.11", 0),
+            "mp4",
+            createProcess(
+                """
+                mov/mp4/tgp/psp/tg2/ipod/ismv/f4v muxer AVOptions:
+                  -movflags          <flags>      E.......... MOV muxer flags (default 0)
+                     delay_moov                   E.......... Delay writing the initial moov
+                     frag_discont                 E.......... Signal a discontinuous fragment
+                     frag_keyframe                E.......... Fragment at video keyframes
+                     skip_trailer                 E.......... Skip writing the trailer
+                  -min_frag_duration <int>        E.......... Minimum fragment duration
+                """,
+                0));
     var service =
         new TranscodeCapabilityService("ffmpeg", command -> resolveProcess(command, outputs));
 
     service.detectCapabilities();
 
     assertThat(service.isFfmpegAvailable()).isFalse();
-    assertThat(service.getUnavailableReason()).isEqualTo("Missing hls_segment_options");
+    assertThat(service.getUnavailableReason())
+        .isEqualTo("Missing mp4 muxer options: -frag_duration, cmaf");
   }
 
   @Test
-  @DisplayName("Should report HLS probe failure when capability probe exits unsuccessfully")
-  void shouldReportHlsProbeFailureWhenCapabilityProbeExitsUnsuccessfully() {
+  @DisplayName("Should report mp4 muxer probe failure when capability probe exits unsuccessfully")
+  void shouldReportMp4MuxerProbeFailureWhenCapabilityProbeExitsUnsuccessfully() {
     var outputs =
         Map.of(
             "ffmpeg", createProcess("ffmpeg version 8.1.2", 0),
-            "hls", createProcess("-hls_segment_options <dictionary>", 1));
+            "mp4", createProcess(FRAGMENTED_MP4_MUXER_HELP, 1));
     var service =
         new TranscodeCapabilityService("ffmpeg", command -> resolveProcess(command, outputs));
 
     service.detectCapabilities();
 
     assertThat(service.isFfmpegAvailable()).isFalse();
-    assertThat(service.getUnavailableReason()).isEqualTo("FFmpeg HLS capability probe failed");
+    assertThat(service.getUnavailableReason())
+        .isEqualTo("FFmpeg mp4 muxer capability probe failed");
   }
 
   @Test
-  @DisplayName("Should report HLS probe failure when capability probe throws")
-  void shouldReportHlsProbeFailureWhenCapabilityProbeThrows() {
+  @DisplayName("Should report mp4 muxer probe failure when capability probe throws")
+  void shouldReportMp4MuxerProbeFailureWhenCapabilityProbeThrows() {
     var service =
         new TranscodeCapabilityService(
             "ffmpeg",
             command -> {
-              if (String.join(" ", command).contains("muxer=hls")) {
+              if (String.join(" ", command).contains("muxer=mp4")) {
                 throw new IllegalStateException("probe failed");
               }
 
@@ -134,14 +149,15 @@ class TranscodeCapabilityServiceTest {
     service.detectCapabilities();
 
     assertThat(service.isFfmpegAvailable()).isFalse();
-    assertThat(service.getUnavailableReason()).isEqualTo("FFmpeg HLS capability probe failed");
+    assertThat(service.getUnavailableReason())
+        .isEqualTo("FFmpeg mp4 muxer capability probe failed");
   }
 
   @Test
-  @DisplayName("Should restore interrupt when required HLS capability probe is interrupted")
-  void shouldRestoreInterruptWhenRequiredHlsCapabilityProbeIsInterrupted() {
+  @DisplayName("Should restore interrupt when the mp4 muxer capability probe is interrupted")
+  void shouldRestoreInterruptWhenTheMp4MuxerCapabilityProbeIsInterrupted() {
     var interruptedProcess =
-        new FakeProcess("-hls_segment_options <dictionary>", 0) {
+        new FakeProcess(FRAGMENTED_MP4_MUXER_HELP, 0) {
           @Override
           public int waitFor() throws InterruptedException {
             throw new InterruptedException("probe interrupted");
@@ -151,7 +167,7 @@ class TranscodeCapabilityServiceTest {
         Map.of(
             "ffmpeg",
             createProcess("ffmpeg version 8.1.2", 0),
-            "hls",
+            "mp4",
             (Process) interruptedProcess);
     var service =
         new TranscodeCapabilityService("ffmpeg", command -> resolveProcess(command, outputs));
@@ -161,7 +177,7 @@ class TranscodeCapabilityServiceTest {
 
       assertThat(service.isFfmpegAvailable()).isFalse();
       assertThat(service.getUnavailableReason())
-          .isEqualTo("FFmpeg HLS capability probe interrupted");
+          .isEqualTo("FFmpeg mp4 muxer capability probe interrupted");
       assertThat(Thread.currentThread().isInterrupted()).isTrue();
     } finally {
       Thread.interrupted();
@@ -463,8 +479,8 @@ class TranscodeCapabilityServiceTest {
       return outputs.get("ffmpeg");
     }
 
-    if (cmdStr.contains("muxer=hls")) {
-      return outputs.getOrDefault("hls", createProcess("-hls_segment_options <dictionary>", 0));
+    if (cmdStr.contains("muxer=mp4")) {
+      return outputs.getOrDefault("mp4", createProcess(FRAGMENTED_MP4_MUXER_HELP, 0));
     }
 
     if (cmdStr.contains("-hwaccels")) {

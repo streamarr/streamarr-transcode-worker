@@ -1,7 +1,7 @@
 package com.streamarr.transcode.worker.support;
 
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.SOURCE_NAMESPACE_ID;
-import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.remuxEngine;
+import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engine;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.workerConfigurationBuilder;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
 
@@ -15,6 +15,8 @@ import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.StartProbeCommand;
+import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
+import build.buf.gen.streamarr.transcode.v1.StopVariantCommand;
 import build.buf.gen.streamarr.transcode.v1.SubtitleDecision;
 import build.buf.gen.streamarr.transcode.v1.SubtitleMode;
 import build.buf.gen.streamarr.transcode.v1.TranscodeDecision;
@@ -22,7 +24,7 @@ import build.buf.gen.streamarr.transcode.v1.TranscodeExecution;
 import build.buf.gen.streamarr.transcode.v1.TranscodeMode;
 import build.buf.gen.streamarr.transcode.v1.VariantJob;
 import build.buf.gen.streamarr.transcode.v1.VariantSpec;
-import com.streamarr.transcode.fakes.FakeFfmpegProcessManager;
+import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import com.streamarr.transcode.probe.FfprobeExecutor;
 import com.streamarr.transcode.worker.TranscodeWorker;
 import java.io.IOException;
@@ -43,9 +45,8 @@ public final class WorkerProbeFixtures {
             workerConfigurationBuilder()
                 .availableSlots(2)
                 .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, root))
-                .segmentBasePath(root.resolve("segments"))
                 .build())
-        .engine(remuxEngine(new FakeFfmpegProcessManager()));
+        .engine(engine(ScriptedProcessLauncher.running()));
   }
 
   public static ProbeRequest.Builder requestBuilder() {
@@ -99,6 +100,28 @@ public final class WorkerProbeFixtures {
             .build());
   }
 
+  public static void startVariant(ScriptedWorkerRuntime.Connection connection, VariantJob job)
+      throws Exception {
+    connection.deliver(
+        EstablishWorkerSessionResponse.newBuilder()
+            .setStartVariant(
+                StartVariantCommand.newBuilder()
+                    .setTarget(connection.registration().getWorker())
+                    .setJob(job))
+            .build());
+  }
+
+  public static void stopVariant(ScriptedWorkerRuntime.Connection connection, VariantJob job)
+      throws Exception {
+    connection.deliver(
+        EstablishWorkerSessionResponse.newBuilder()
+            .setStopVariant(
+                StopVariantCommand.newBuilder()
+                    .setTarget(connection.registration().getWorker())
+                    .setJobAttemptId(job.getJobAttemptId()))
+            .build());
+  }
+
   public static VariantJob.Builder variantJobBuilder() {
     return VariantJob.newBuilder()
         .setStreamSessionId(toProto(UUID.randomUUID()))
@@ -112,10 +135,13 @@ public final class WorkerProbeFixtures {
                 .setAudio(AudioDecision.newBuilder().setMode(AudioMode.AUDIO_MODE_COPY))
                 .setSubtitle(
                     SubtitleDecision.newBuilder().setMode(SubtitleMode.SUBTITLE_MODE_EXCLUDE))
-                .setContainer(ContainerFormat.CONTAINER_FORMAT_MPEG_TS))
+                .setContainer(ContainerFormat.CONTAINER_FORMAT_FMP4))
         .setVariant(VariantSpec.newBuilder().setVariantLabel("original"))
         .setExecution(
-            TranscodeExecution.newBuilder().setTargetSegmentDurationSeconds(6).setFramerate(24));
+            TranscodeExecution.newBuilder()
+                .setTargetSegmentDurationSeconds(6)
+                .setFramerate(24)
+                .setMediaSegmentCount(11));
   }
 
   public static FfprobeExecutor fileContentsProducer() {

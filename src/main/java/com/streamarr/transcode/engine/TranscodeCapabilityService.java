@@ -5,10 +5,12 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.jspecify.annotations.NonNull;
@@ -16,7 +18,9 @@ import org.jspecify.annotations.NonNull;
 @Slf4j
 public class TranscodeCapabilityService {
 
-  private static final String REQUIRED_HLS_OPTION = "hls_segment_options";
+  private static final List<String> REQUIRED_MP4_MUXER_OPTIONS =
+      Stream.concat(Stream.of("-frag_duration"), FfmpegCommandBuilder.MP4_MOVFLAGS.stream())
+          .toList();
 
   private static final Pattern HW_ENCODER_PATTERN =
       Pattern.compile("^\\s*V\\S+\\s+(\\w+_(?:nvenc|qsv|amf|vaapi|videotoolbox))\\s+");
@@ -54,9 +58,9 @@ public class TranscodeCapabilityService {
       return;
     }
 
-    var hlsProbe = probeRequiredHlsOptions();
-    if (!hlsProbe.successful()) {
-      markUnavailable(hlsProbe.unavailableReason());
+    var mp4MuxerProbe = probeRequiredMp4MuxerOptions();
+    if (!mp4MuxerProbe.successful()) {
+      markUnavailable(mp4MuxerProbe.unavailableReason());
       return;
     }
 
@@ -127,27 +131,30 @@ public class TranscodeCapabilityService {
     }
   }
 
-  private CapabilityProbeResult probeRequiredHlsOptions() {
+  private CapabilityProbeResult probeRequiredMp4MuxerOptions() {
     try {
       var process =
-          processFactory.create(new String[] {ffmpegPath, "-hide_banner", "-h", "muxer=hls"});
+          processFactory.create(new String[] {ffmpegPath, "-hide_banner", "-h", "muxer=mp4"});
       var output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
       if (process.waitFor() != 0) {
-        return CapabilityProbeResult.failure("FFmpeg HLS capability probe failed");
+        return CapabilityProbeResult.failure("FFmpeg mp4 muxer capability probe failed");
       }
 
-      if (!output.contains(REQUIRED_HLS_OPTION)) {
-        return CapabilityProbeResult.failure("Missing " + REQUIRED_HLS_OPTION);
+      var missingOptions =
+          REQUIRED_MP4_MUXER_OPTIONS.stream().filter(option -> !output.contains(option)).toList();
+      if (!missingOptions.isEmpty()) {
+        return CapabilityProbeResult.failure(
+            "Missing mp4 muxer options: " + String.join(", ", missingOptions));
       }
 
       return CapabilityProbeResult.success();
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
-      log.debug("FFmpeg HLS capability check interrupted", e);
-      return CapabilityProbeResult.failure("FFmpeg HLS capability probe interrupted");
+      log.debug("FFmpeg mp4 muxer capability check interrupted", e);
+      return CapabilityProbeResult.failure("FFmpeg mp4 muxer capability probe interrupted");
     } catch (Exception e) {
-      log.debug("FFmpeg HLS capability check failed", e);
-      return CapabilityProbeResult.failure("FFmpeg HLS capability probe failed");
+      log.debug("FFmpeg mp4 muxer capability check failed", e);
+      return CapabilityProbeResult.failure("FFmpeg mp4 muxer capability probe failed");
     }
   }
 

@@ -31,7 +31,9 @@ metadata from GitHub and compares it byte-for-byte without modifying the lock.
 The buildpack verifies the downloaded archive against the locked checksum before extracting
 its root-level `ffmpeg` and `ffprobe` binaries. Jellyfin's banner omits the packaging revision:
 package `8.1.2-4` reports `8.1.2-Jellyfin`; the checksum pins the exact build. The runtime must
-enable GPL, omit the `--enable-nonfree` build flag, and support `hls_segment_options`.
+enable GPL, omit the `--enable-nonfree` build flag, and give the mp4 muxer the `-frag_duration`
+option and the `cmaf`, `delay_moov`, `skip_trailer`, `frag_keyframe` and `frag_discont` flags that
+the worker's fragmented MP4 output uses.
 Its `-buildconf` output, from the banner onward, must also equal the reviewed
 `notices/buildconf-<architecture>.txt` capture byte for byte: the notice inventory starts from
 that capture, so a binary with another toolchain, flag set or library version is unreviewed.
@@ -376,11 +378,12 @@ the release, lock, resolver, or shared resolver libraries change. Ordinary read-
 this is distinct from the privileged synchronization workflow's trusted-base boundary.
 Release builds use offline metadata validation and verify the binary checksum at download time.
 
-The `SmokeTest` group (including `HlsStreamingSmokeTest`) uses the locked runtime in
+The `SmokeTest` group (`WorkerMediaSmokeTest`) uses the locked runtime in
 the amd64 application job. Packaging changes also run that group on an arm64 host;
 the packaging matrix does not repeat the amd64 host run. Separately, both native
-images are built and verified in-container for runtime identity, H.264/AAC fMP4 HLS
-and AV1 encoding. The required `build` status aggregates all applicable checks.
+images are built and verified in-container for runtime identity, H.264/AAC fragmented
+MP4 written to standard output, and AV1 encoding. The required `build` status aggregates
+all applicable checks.
 
 Numbered Jellyfin releases avoid BtbN's rolling daily-build expiry. They are still upstream
 assets, not a guarantee of immutable or permanent storage: a missing asset fails the build,

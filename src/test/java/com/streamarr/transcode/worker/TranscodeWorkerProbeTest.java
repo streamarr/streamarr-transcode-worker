@@ -1,6 +1,6 @@
 package com.streamarr.transcode.worker;
 
-import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.remuxEngine;
+import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engine;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.cancel;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.failure;
@@ -25,7 +25,7 @@ import build.buf.gen.streamarr.transcode.v1.StartProbeCommand;
 import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
 import build.buf.gen.streamarr.transcode.v1.WorkerIdentity;
 import com.google.protobuf.Duration;
-import com.streamarr.transcode.fakes.FakeFfmpegProcessManager;
+import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import com.streamarr.transcode.probe.FfprobeExecutor;
 import com.streamarr.transcode.protocol.ProtoUuid;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
@@ -308,7 +308,7 @@ class TranscodeWorkerProbeTest {
       throws Exception {
     Files.writeString(tempDir.resolve("movie.mkv"), "media");
     var runtime = new ScriptedWorkerRuntime();
-    var processes = new FakeFfmpegProcessManager();
+    var launcher = ScriptedProcessLauncher.running();
     var process = processBuilder().running(true).build();
     var producer = new FfprobeExecutor(new ObjectMapper(), _ -> process);
     var job = variantJobBuilder().build();
@@ -316,7 +316,7 @@ class TranscodeWorkerProbeTest {
 
     try (var worker =
         workerBuilder(tempDir)
-            .engine(remuxEngine(processes))
+            .engine(engine(launcher))
             .runtime(runtime)
             .ffprobe(producer)
             .build()) {
@@ -339,7 +339,7 @@ class TranscodeWorkerProbeTest {
 
         ending.end(old);
 
-        assertThat(processes.isRunning(fromProto(job.getStreamSessionId()), "original")).isTrue();
+        assertThat(launcher.process(fromProto(job.getJobAttemptId())).isAlive()).isTrue();
         process.finish();
         running.get(5, TimeUnit.SECONDS);
         assertThat(replacement.results())

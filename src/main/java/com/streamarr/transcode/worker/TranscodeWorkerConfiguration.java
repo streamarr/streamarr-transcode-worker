@@ -13,7 +13,6 @@ public record TranscodeWorkerConfiguration(
     @NonNull UUID bootId,
     int availableSlots,
     @NonNull Map<UUID, Path> sourceNamespaces,
-    @NonNull Path segmentBasePath,
     Duration keepAliveTime,
     Duration keepAliveTimeout) {
 

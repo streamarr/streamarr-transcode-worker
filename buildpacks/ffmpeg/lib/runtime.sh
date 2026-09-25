@@ -45,6 +45,22 @@ ffmpeg_runtime_extract() (
     "$@"
 )
 
+# The mp4 muxer options the worker needs to write fragmented MP4 to a pipe, one per line.
+ffmpeg_runtime_mp4_muxer_options() {
+  printf '%s\n' -frag_duration cmaf delay_moov skip_trailer frag_keyframe frag_discont
+}
+
+# Fails, naming the first required option that FFmpeg's mp4 muxer help lacks.
+ffmpeg_runtime_require_mp4_muxer_options() {
+  local option
+  while read -r option; do
+    if ! grep -Fq -- "${option}" <<<"$1"; then
+      echo "FFmpeg's mp4 muxer lacks ${option}" >&2
+      return 1
+    fi
+  done < <(ffmpeg_runtime_mp4_muxer_options)
+}
+
 # Loader diagnostics can precede the banner; the reviewed capture starts at the banner.
 ffmpeg_runtime_buildconf() {
   "$1" -buildconf 2>&1 | sed -n '/^ffmpeg version /,$p'

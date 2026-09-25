@@ -32,6 +32,8 @@ class FfmpegPackagingScriptsTest {
       Path.of("buildpacks/ffmpeg/lib/lock.sh").toAbsolutePath();
   private static final Path HTTP_LIBRARY =
       Path.of("buildpacks/ffmpeg/lib/http.sh").toAbsolutePath();
+  private static final Path RUNTIME_LIBRARY =
+      Path.of("buildpacks/ffmpeg/lib/runtime.sh").toAbsolutePath();
   private static final Path IMAGE_VERIFIER =
       Path.of(".github/actions/pack-build/verify-ffmpeg-image.sh").toAbsolutePath();
 
@@ -581,6 +583,23 @@ class FfmpegPackagingScriptsTest {
   }
 
   @Test
+  @DisplayName("Should reject the runtime when its mp4 muxer cannot fragment the worker's output")
+  void shouldRejectTheRuntimeWhenItsMp4MuxerCannotFragmentTheWorkersOutput() throws Exception {
+    var buildpack = buildpack();
+
+    var result =
+        buildpack
+            .command()
+            .environment(
+                "FAKE_MP4_MUXER_OPTIONS",
+                "-frag_duration cmaf delay_moov skip_trailer frag_keyframe")
+            .execute();
+
+    assertThat(result.exitCode()).isEqualTo(1);
+    assertThat(result.output()).contains("FFmpeg's mp4 muxer lacks frag_discont");
+  }
+
+  @Test
   @DisplayName("Should accept version banner when prefixed by diagnostic output")
   void shouldAcceptVersionBannerWhenPrefixedByDiagnosticOutput() throws Exception {
     var buildpack = buildpack();
@@ -1011,8 +1030,8 @@ class FfmpegPackagingScriptsTest {
             "ffmpeg version ${FAKE_FFMPEG_VERSION%-*}-${FAKE_FFMPEG_SUFFIX:-Jellyfin} Copyright" \
             'configuration: --enable-gpl --enable-libfdk-aac'
         fi
-        if [[ "$*" == *"muxer=hls"* ]]; then
-          printf '%s\n' '-hls_segment_options'
+        if [[ "$*" == *"muxer=mp4"* ]]; then
+          printf '%s\n' ${FAKE_MP4_MUXER_OPTIONS:--frag_duration cmaf delay_moov skip_trailer frag_keyframe frag_discont}
         fi
         if [[ "$*" == *"-buildconf"* ]]; then
           if [[ -n "${FAKE_FFMPEG_BANNER_PREFIX:-}" ]]; then
@@ -1143,6 +1162,7 @@ class FfmpegPackagingScriptsTest {
     var buildpackDirectory = Files.createDirectories(verifierRoot.resolve("buildpacks/ffmpeg"));
     var buildpackLibrary = Files.createDirectory(buildpackDirectory.resolve("lib"));
     Files.copy(LOCK_LIBRARY, buildpackLibrary.resolve("lock.sh"));
+    Files.copy(RUNTIME_LIBRARY, buildpackLibrary.resolve("runtime.sh"));
     var futureVersion = "8.2.0-1";
     var futureLock = lockWithVersion(futureVersion, "abcdef1234" + "0".repeat(30));
     Files.writeString(buildpackDirectory.resolve("ffmpeg.lock"), futureLock);
@@ -1185,34 +1205,7 @@ class FfmpegPackagingScriptsTest {
       throws Exception {
     var verifier = imageVerifier();
     var probes = temporaryDirectory.resolve("completed-probes");
-    ScriptCommand.writeFake(
-        verifier.runtime(),
-        "ffmpeg",
-        """
-        case " $* " in
-          *' -version '*)
-            printf '%s\\n' 'ffmpeg version 8.2.0-Jellyfin Copyright' 'configuration: --enable-gpl'
-            exit 0 ;;
-          *' muxer=hls '*) echo '-hls_segment_options'; exit 0 ;;
-        esac
-        if [[ " $* " == *" -c:v ${STDIN_ENCODER} "* && " $* " != *' -nostdin '* ]]; then
-          cat >/dev/null
-        fi
-        output="${!#}"
-        directory="$(dirname "${output}")"
-        printf '%s\\n' '#EXT-X-MAP:URI="init.mp4"' 'segment0.m4s' >"${output}"
-        printf segment >"${directory}/init.mp4"
-        printf segment >"${directory}/segment0.m4s"
-        """);
-    ScriptCommand.writeFake(
-        verifier.runtime(),
-        "ffprobe",
-        """
-        case "${!#}" in
-          */playlist.m3u8) echo hls >>"${COMPLETED_PROBES}"; echo 'format_name=hls' ;;
-          */av1.mp4) echo av1 >>"${COMPLETED_PROBES}"; echo 'codec_name=av1' ;;
-        esac
-        """);
+    writeImageRuntime(verifier);
 
     var result =
         verifier
@@ -1223,7 +1216,117 @@ class FfmpegPackagingScriptsTest {
 
     assertThat(result.exitCode()).as(result.output()).isZero();
     assertThat(probes).exists();
-    assertThat(Files.readAllLines(probes)).containsExactly("hls", "av1");
+    assertThat(Files.readAllLines(probes)).containsExactly("fragmented-mp4", "av1");
+  }
+
+  @Test
+  @DisplayName(
+      "Should reject the image when FFmpeg writes no movie fragment to its standard output")
+  void shouldRejectTheImageWhenFfmpegWritesNoMovieFragmentToItsStandardOutput() throws Exception {
+    var verifier = imageVerifier();
+    var probes = temporaryDirectory.resolve("completed-probes");
+    writeImageRuntime(verifier);
+
+    var result =
+        verifier
+            .command()
+            .environment("STDIN_ENCODER", "none")
+            .environment("COMPLETED_PROBES", probes.toString())
+            .environment("FAKE_PIPE_OUTPUT", "ftypmoov")
+            .execute();
+
+    assertThat(result.exitCode()).as(result.output()).isNotZero();
+    assertThat(probes).doesNotExist();
+  }
+
+  @Test
+  @DisplayName(
+      "Should force keyframes from a list of times, as the worker does, when the image writes"
+          + " fragmented MP4 to its standard output")
+  void
+      shouldForceKeyframesFromAListOfTimesAsTheWorkerDoesWhenTheImageWritesFragmentedMp4ToItsStandardOutput()
+          throws Exception {
+    var verifier = imageVerifier();
+    var pipeArguments = temporaryDirectory.resolve("pipe-arguments");
+    writeImageRuntime(verifier);
+
+    var result =
+        verifier
+            .command()
+            .environment("STDIN_ENCODER", "none")
+            .environment("COMPLETED_PROBES", temporaryDirectory.resolve("probes").toString())
+            .environment("PIPE_ARGUMENTS", pipeArguments.toString())
+            .execute();
+
+    assertThat(result.exitCode()).as(result.output()).isZero();
+    assertThat(Files.readAllLines(pipeArguments))
+        .containsSequence("-force_key_frames:0", "0,1,2")
+        .noneMatch(argument -> argument.startsWith("expr:"));
+  }
+
+  @Test
+  @DisplayName(
+      "Should name the missing option when the image's mp4 muxer cannot fragment the worker's"
+          + " output")
+  void shouldNameTheMissingOptionWhenTheImagesMp4MuxerCannotFragmentTheWorkersOutput()
+      throws Exception {
+    var verifier = imageVerifier();
+    writeImageRuntime(verifier);
+
+    var result =
+        verifier
+            .command()
+            .environment("STDIN_ENCODER", "none")
+            .environment("COMPLETED_PROBES", temporaryDirectory.resolve("probes").toString())
+            .environment(
+                "FAKE_MP4_MUXER_OPTIONS",
+                "-frag_duration cmaf delay_moov skip_trailer frag_keyframe")
+            .execute();
+
+    assertThat(result.exitCode()).isEqualTo(1);
+    assertThat(result.output()).contains("FFmpeg's mp4 muxer lacks frag_discont");
+  }
+
+  // FFmpeg and ffprobe inside the image: FFmpeg writes a fragmented MP4 stand-in to its standard
+  // output, and its arguments to PIPE_ARGUMENTS when set, and a file anywhere else; ffprobe records
+  // which output it recognized.
+  private static void writeImageRuntime(ImageVerifierFixture verifier) throws IOException {
+    ScriptCommand.writeFake(
+        verifier.runtime(),
+        "ffmpeg",
+        """
+        case " $* " in
+          *' -version '*)
+            printf '%s\\n' 'ffmpeg version 8.2.0-Jellyfin Copyright' 'configuration: --enable-gpl'
+            exit 0 ;;
+          *' muxer=mp4 '*)
+            printf '%s\\n' ${FAKE_MP4_MUXER_OPTIONS:--frag_duration cmaf delay_moov skip_trailer frag_keyframe frag_discont}
+            exit 0 ;;
+        esac
+        if [[ " $* " == *" -c:v ${STDIN_ENCODER} "* && " $* " != *' -nostdin '* ]]; then
+          cat >/dev/null
+        fi
+        output="${!#}"
+        if [[ "${output}" == pipe:1 ]]; then
+          if [[ -n "${PIPE_ARGUMENTS:-}" ]]; then
+            printf '%s\n' "$@" >"${PIPE_ARGUMENTS}"
+          fi
+          printf '%s' "${FAKE_PIPE_OUTPUT:-ftypmoovmoofmdat}"
+          exit 0
+        fi
+        printf media >"${output}"
+        """);
+    ScriptCommand.writeFake(
+        verifier.runtime(),
+        "ffprobe",
+        """
+        case "${!#}" in
+          */fragmented.mp4)
+            echo fragmented-mp4 >>"${COMPLETED_PROBES}"
+            echo 'format_name=mov,mp4,m4a,3gp,3g2,mj2' ;;
+          */av1.mp4) echo av1 >>"${COMPLETED_PROBES}"; echo 'codec_name=av1' ;;
+        esac
+        """);
   }
 
   private ScriptCommand command(Path script) {

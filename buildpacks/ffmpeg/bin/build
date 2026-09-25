@@ -58,8 +58,7 @@ if grep -Fq -- "--enable-nonfree" <<<"${version_output}"; then
   echo "FFmpeg must not include nonfree components" >&2
   exit 1
 fi
-"${layer}/bin/ffmpeg" -hide_banner -h muxer=hls 2>&1 \
-  | grep -F -- "-hls_segment_options" >/dev/null
+ffmpeg_runtime_require_mp4_muxer_options "$("${layer}/bin/ffmpeg" -hide_banner -h muxer=mp4 2>&1)"
 # The notice inventory starts from this capture, so a differing binary is unreviewed.
 reviewed_buildconf="notices/buildconf-${sbom_arch}.txt"
 if ! ffmpeg_runtime_buildconf "${layer}/bin/ffmpeg" \

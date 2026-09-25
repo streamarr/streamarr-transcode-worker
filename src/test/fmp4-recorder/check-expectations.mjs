@@ -4,8 +4,9 @@
 // (tracks, initialization segment, media segments, preroll, failure, audio-only tail, diagnostics,
 // a copy's keyframes, each HLS comparison's disagreements with the grid, the initialization-segment
 // pairs), and names every fact expected.json states differently. What only a recording run can
-// decide (the HLS muxer's own cuts, the sources, the ADR side claims) it takes as recorded, and it
-// names every claim of the recorder that those recorded facts contradict.
+// decide (the HLS muxer's own cuts, the sources, each recording's FFmpeg arguments, the ADR side
+// claims) it takes as recorded, and it names every claim of the recorder that those recorded facts
+// contradict.
 //
 //   node check-expectations.mjs [FIXTURES_DIR]   (default: src/test/resources/fmp4)
 

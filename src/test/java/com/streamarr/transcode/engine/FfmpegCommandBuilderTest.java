@@ -3,8 +3,8 @@ package com.streamarr.transcode.engine;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.nio.file.Path;
-import java.util.Optional;
-import java.util.OptionalInt;
+import java.time.Duration;
+import java.util.List;
 import java.util.UUID;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
@@ -12,191 +12,78 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 @Tag("UnitTest")
 @DisplayName("FFmpeg Command Builder Tests")
 class FfmpegCommandBuilderTest {
 
-  private final FfmpegCommandBuilder builder = new FfmpegCommandBuilder("ffmpeg");
+  private static final AudioDecision NO_AUDIO =
+      AudioDecision.builder().mode(AudioMode.NONE).codec(null).channels(0).bitrate(0L).build();
 
-  private TranscodeJob job(
-      TranscodeMode mode,
-      String codecFamily,
-      String audioCodec,
-      ContainerFormat container,
-      String videoEncoder,
-      boolean needsKeyframeAlignment) {
-    return job(mode, codecFamily, audioCodec, container, videoEncoder, needsKeyframeAlignment, 0);
+  private final FfmpegCommandBuilder builder =
+      new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1));
+
+  private List<String> command(TranscodeRequest request, String videoEncoder) {
+    return builder.buildCommand(job(request, videoEncoder));
   }
 
-  private TranscodeJob job(
-      TranscodeMode mode,
-      String codecFamily,
-      String audioCodec,
-      ContainerFormat container,
-      String videoEncoder,
-      boolean needsKeyframeAlignment,
-      int seekPosition) {
-    return job(
-        mode,
-        codecFamily,
-        audioCodec,
-        container,
-        videoEncoder,
-        needsKeyframeAlignment,
-        seekPosition,
-        1920,
-        1080,
-        5_000_000L);
+  private static TranscodeJob job(TranscodeRequest request, String videoEncoder) {
+    return TranscodeJob.builder().request(request).videoEncoder(videoEncoder).build();
   }
 
-  private TranscodeJob job(
-      TranscodeMode mode,
-      String codecFamily,
-      String audioCodec,
-      ContainerFormat container,
-      String videoEncoder,
-      boolean needsKeyframeAlignment,
-      int seekPosition,
-      int width,
-      int height,
-      long bitrate) {
-    var audio = audioDecisionFor(mode, audioCodec);
-    return TranscodeJob.builder()
-        .request(
-            TranscodeRequest.builder()
-                .sessionId(UUID.randomUUID())
-                .sourcePath(Path.of("/media/movie.mkv"))
-                .seekPosition(seekPosition)
-                .targetSegmentDuration(6)
-                .framerate(23.976)
-                .transcodeDecision(
-                    TranscodeDecision.builder()
-                        .transcodeMode(mode)
-                        .videoCodecFamily(codecFamily)
-                        .audioDecision(audio)
-                        .subtitleDecision(
-                            new SubtitleDecision(
-                                SubtitleMode.EXCLUDE,
-                                Optional.empty(),
-                                OptionalInt.empty(),
-                                Optional.empty()))
-                        .containerFormat(container)
-                        .needsKeyframeAlignment(needsKeyframeAlignment)
-                        .build())
-                .width(width)
-                .height(height)
-                .bitrate(bitrate)
-                .build())
-        .videoEncoder(videoEncoder)
-        .outputDir(Path.of("/tmp/session-123"))
-        .build();
+  private static TranscodeRequest.TranscodeRequestBuilder request(TranscodeMode mode) {
+    return request(decision(mode).build());
   }
 
-  private TranscodeJob jobWithStartNumber(
-      TranscodeMode mode,
-      String codecFamily,
-      String audioCodec,
-      ContainerFormat container,
-      String videoEncoder,
-      boolean needsKeyframeAlignment,
-      int startSequenceNumber) {
-    var audio = audioDecisionFor(mode, audioCodec);
-    return TranscodeJob.builder()
-        .request(
-            TranscodeRequest.builder()
-                .sessionId(UUID.randomUUID())
-                .sourcePath(Path.of("/media/movie.mkv"))
-                .seekPosition(0)
-                .targetSegmentDuration(6)
-                .framerate(23.976)
-                .transcodeDecision(
-                    TranscodeDecision.builder()
-                        .transcodeMode(mode)
-                        .videoCodecFamily(codecFamily)
-                        .audioDecision(audio)
-                        .subtitleDecision(
-                            new SubtitleDecision(
-                                SubtitleMode.EXCLUDE,
-                                Optional.empty(),
-                                OptionalInt.empty(),
-                                Optional.empty()))
-                        .containerFormat(container)
-                        .needsKeyframeAlignment(needsKeyframeAlignment)
-                        .build())
-                .width(1920)
-                .height(1080)
-                .bitrate(5_000_000L)
-                .startSequenceNumber(startSequenceNumber)
-                .build())
-        .videoEncoder(videoEncoder)
-        .outputDir(Path.of("/tmp/session-123"))
-        .build();
+  private static TranscodeRequest.TranscodeRequestBuilder request(TranscodeDecision decision) {
+    return TranscodeRequest.builder()
+        .sessionId(UUID.randomUUID())
+        .sourcePath(Path.of("/media/movie.mkv"))
+        .targetSegmentDuration(6)
+        .framerate(23.976)
+        .mediaSegmentCount(11)
+        .transcodeDecision(decision)
+        .width(1920)
+        .height(1080)
+        .bitrate(5_000_000L);
   }
 
-  private AudioDecision audioDecisionFor(TranscodeMode mode, String audioCodec) {
-    return switch (mode) {
-      case REMUX, VIDEO_TRANSCODE ->
-          AudioDecision.builder()
-              .mode(AudioMode.COPY)
-              .codec(audioCodec)
-              .channels(2)
-              .bitrate(0L)
-              .build();
-      case AUDIO_TRANSCODE, FULL_TRANSCODE ->
-          AudioDecision.builder()
-              .mode(AudioMode.TRANSCODE)
-              .codec("aac")
-              .channels(2)
-              .bitrate(128_000L)
-              .build();
-    };
+  private static TranscodeDecision.TranscodeDecisionBuilder decision(TranscodeMode mode) {
+    var audio =
+        switch (mode) {
+          case REMUX, VIDEO_TRANSCODE -> copiedAudio("aac");
+          case AUDIO_TRANSCODE, FULL_TRANSCODE ->
+              AudioDecision.builder()
+                  .mode(AudioMode.TRANSCODE)
+                  .codec("aac")
+                  .channels(2)
+                  .bitrate(128_000L)
+                  .build();
+        };
+    return TranscodeDecision.builder()
+        .transcodeMode(mode)
+        .videoCodecFamily("h264")
+        .audioDecision(audio)
+        .subtitleDecision(SubtitleDecisions.EXCLUDED);
   }
 
-  private TranscodeJob jobWithAudio(
-      TranscodeMode mode,
-      String codecFamily,
-      AudioDecision audio,
-      ContainerFormat container,
-      String videoEncoder) {
-    return TranscodeJob.builder()
-        .request(
-            TranscodeRequest.builder()
-                .sessionId(UUID.randomUUID())
-                .sourcePath(Path.of("/media/movie.mkv"))
-                .seekPosition(0)
-                .targetSegmentDuration(6)
-                .framerate(23.976)
-                .transcodeDecision(
-                    TranscodeDecision.builder()
-                        .transcodeMode(mode)
-                        .videoCodecFamily(codecFamily)
-                        .audioDecision(audio)
-                        .subtitleDecision(
-                            new SubtitleDecision(
-                                SubtitleMode.EXCLUDE,
-                                Optional.empty(),
-                                OptionalInt.empty(),
-                                Optional.empty()))
-                        .containerFormat(container)
-                        .needsKeyframeAlignment(mode == TranscodeMode.REMUX)
-                        .build())
-                .width(1920)
-                .height(1080)
-                .bitrate(5_000_000L)
-                .build())
-        .videoEncoder(videoEncoder)
-        .outputDir(Path.of("/tmp/session-123"))
+  private static AudioDecision copiedAudio(String codec) {
+    return AudioDecision.builder()
+        .mode(AudioMode.COPY)
+        .codec(codec)
+        .channels(2)
+        .bitrate(0L)
         .build();
   }
 
   @Test
   @DisplayName("Should use copy codecs when mode is remux")
   void shouldUseCopyCodecsWhenModeIsRemux() {
-    var j = job(TranscodeMode.REMUX, "h264", "aac", ContainerFormat.MPEGTS, "copy", true);
-
-    var cmd = builder.buildCommand(j);
+    var cmd = command(request(TranscodeMode.REMUX).build(), "copy");
 
     assertThat(cmd)
         .isNotEmpty()
@@ -210,10 +97,7 @@ class FfmpegCommandBuilderTest {
   @MethodSource("fullTranscodeExpectedFlags")
   @DisplayName("Should include expected flags when mode is full transcode")
   void shouldIncludeExpectedFlagsWhenModeIsFullTranscode(String scenario, String... expectedFlags) {
-    var j =
-        job(TranscodeMode.FULL_TRANSCODE, "h264", "aac", ContainerFormat.MPEGTS, "libx264", false);
-
-    var cmd = builder.buildCommand(j);
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), "libx264");
 
     assertThat(cmd).contains(expectedFlags);
   }
@@ -228,10 +112,7 @@ class FfmpegCommandBuilderTest {
   @Test
   @DisplayName("Should include bitrate control when mode is full transcode")
   void shouldIncludeBitrateControlWhenModeIsFullTranscode() {
-    var j =
-        job(TranscodeMode.FULL_TRANSCODE, "h264", "aac", ContainerFormat.MPEGTS, "libx264", false);
-
-    var cmd = builder.buildCommand(j);
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), "libx264");
 
     assertThat(cmd)
         .contains("-b:v", "5000000")
@@ -242,20 +123,14 @@ class FfmpegCommandBuilderTest {
   @Test
   @DisplayName("Should use variant dimensions when variant differs from source")
   void shouldUseVariantDimensionsWhenVariantDiffersFromSource() {
-    var j =
-        job(
-            TranscodeMode.FULL_TRANSCODE,
-            "h264",
-            "aac",
-            ContainerFormat.MPEGTS,
-            "libx264",
-            false,
-            0,
-            1280,
-            720,
-            3_000_000L);
-
-    var cmd = builder.buildCommand(j);
+    var cmd =
+        command(
+            request(TranscodeMode.FULL_TRANSCODE)
+                .width(1280)
+                .height(720)
+                .bitrate(3_000_000L)
+                .build(),
+            "libx264");
 
     assertThat(cmd)
         .contains("-vf", "scale=-2:720")
@@ -266,9 +141,7 @@ class FfmpegCommandBuilderTest {
   @Test
   @DisplayName("Should not include scale or bitrate when mode is audio transcode")
   void shouldNotIncludeScaleOrBitrateWhenModeIsAudioTranscode() {
-    var j = job(TranscodeMode.AUDIO_TRANSCODE, "h264", "aac", ContainerFormat.MPEGTS, "copy", true);
-
-    var cmd = builder.buildCommand(j);
+    var cmd = command(request(TranscodeMode.AUDIO_TRANSCODE).build(), "copy");
 
     assertThat(cmd).isNotEmpty().doesNotContain("-vf", "-b:v", "-maxrate", "-bufsize");
   }
@@ -276,9 +149,7 @@ class FfmpegCommandBuilderTest {
   @Test
   @DisplayName("Should use copy video and AAC audio when mode is audio transcode")
   void shouldUseCopyVideoAndAacAudioWhenModeIsAudioTranscode() {
-    var j = job(TranscodeMode.AUDIO_TRANSCODE, "h264", "aac", ContainerFormat.MPEGTS, "copy", true);
-
-    var cmd = builder.buildCommand(j);
+    var cmd = command(request(TranscodeMode.AUDIO_TRANSCODE).build(), "copy");
 
     assertThat(cmd)
         .containsSubsequence("-c:v", "copy")
@@ -287,90 +158,300 @@ class FfmpegCommandBuilderTest {
   }
 
   @Test
-  @DisplayName("Should include H264 MPEGTS args when full transcode targets H264")
-  void shouldIncludeH264MpegtsArgsWhenFullTranscodeTargetsH264() {
-    var j =
-        job(TranscodeMode.FULL_TRANSCODE, "h264", "aac", ContainerFormat.MPEGTS, "libx264", false);
-
-    var cmd = builder.buildCommand(j);
+  @DisplayName("Should encode H264 video and AAC audio when full transcode targets H264")
+  void shouldEncodeH264VideoAndAacAudioWhenFullTranscodeTargetsH264() {
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), "libx264");
 
     assertThat(cmd)
         .containsSubsequence("-c:v", "libx264")
         .containsSubsequence("-c:a", "aac")
-        .containsSubsequence("-b:a", "128k")
-        .containsSubsequence("-hls_segment_type", "mpegts");
+        .containsSubsequence("-b:a", "128k");
   }
 
   @Test
-  @DisplayName("Should include AV1 fMP4 args when full transcode targets AV1")
-  void shouldIncludeAv1Fmp4ArgsWhenFullTranscodeTargetsAv1() {
-    var j =
-        job(TranscodeMode.FULL_TRANSCODE, "av1", "aac", ContainerFormat.FMP4, "libsvtav1", false);
+  @DisplayName("Should encode AV1 video when full transcode targets AV1")
+  void shouldEncodeAv1VideoWhenFullTranscodeTargetsAv1() {
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), "libsvtav1");
 
-    var cmd = builder.buildCommand(j);
+    assertThat(cmd).containsSequence("-c:v", "libsvtav1");
+  }
+
+  @ParameterizedTest
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"VIDEO_TRANSCODE", "FULL_TRANSCODE"})
+  @DisplayName("Should encode at the probed frame rate when video is transcoded")
+  void shouldEncodeAtTheProbedFrameRateWhenVideoIsTranscoded(TranscodeMode mode) {
+    var cmd = command(request(mode).framerate(24000.0 / 1001.0).build(), "libx264");
 
     assertThat(cmd)
-        .contains("-c:v", "libsvtav1")
-        .contains("-hls_segment_type", "fmp4")
-        .contains("-hls_fmp4_init_filename", "init.mp4");
+        .containsSequence("-r:v:0", "23.976023976023978")
+        .noneMatch(argument -> argument.startsWith("-fps_mode"));
   }
 
-  @Test
-  @DisplayName("Should use force keyframes when encoder is libx264")
-  void shouldUseForceKeyframesWhenEncoderIsLibx264() {
-    var j =
-        job(TranscodeMode.FULL_TRANSCODE, "h264", "aac", ContainerFormat.MPEGTS, "libx264", false);
-
-    var cmd = builder.buildCommand(j);
+  @ParameterizedTest
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"REMUX", "AUDIO_TRANSCODE"})
+  @DisplayName("Should keep the source frame timing when video is copied")
+  void shouldKeepTheSourceFrameTimingWhenVideoIsCopied(TranscodeMode mode) {
+    var cmd = command(request(mode).build(), "copy");
 
     assertThat(cmd)
-        .isNotEmpty()
-        .anyMatch(s -> s.startsWith("expr:gte(t,n_forced*"))
-        .contains("-sc_threshold:v:0", "0");
+        .doesNotContain("-r:v:0")
+        .noneMatch(argument -> argument.startsWith("-fps_mode"));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("everyEncoder")
+  @DisplayName(
+      "Should force an IDR keyframe at every advertised segment boundary when any encoder runs")
+  void shouldForceAnIdrKeyframeAtEveryAdvertisedSegmentBoundaryWhenAnyEncoderRuns(String encoder) {
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).mediaSegmentCount(4).build(), encoder);
+
+    assertThat(cmd)
+        .containsSequence("-forced-idr", "1")
+        .containsSequence("-force_key_frames:0", "0,6,12,18")
+        .noneMatch(argument -> argument.startsWith("expr:"));
+  }
+
+  @ParameterizedTest
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"VIDEO_TRANSCODE", "FULL_TRANSCODE"})
+  @DisplayName(
+      "Should force keyframes from the attempt's first segment to the last advertised one when a"
+          + " replacement attempt starts mid-stream")
+  void
+      shouldForceKeyframesFromTheAttemptsFirstSegmentToTheLastAdvertisedOneWhenAReplacementAttemptStartsMidStream(
+          TranscodeMode mode) {
+    var cmd =
+        command(
+            request(mode)
+                .targetSegmentDuration(4)
+                .startSequenceNumber(5)
+                .mediaSegmentCount(9)
+                .build(),
+            "libx264");
+
+    assertThat(cmd).containsSequence("-force_key_frames:0", "20,24,28,32");
   }
 
   @Test
-  @DisplayName("Should use GOP size when encoder is NVENC")
-  void shouldUseGopSizeWhenEncoderIsNvenc() {
-    var j =
-        job(
-            TranscodeMode.FULL_TRANSCODE,
-            "h264",
-            "aac",
-            ContainerFormat.MPEGTS,
-            "h264_nvenc",
-            false);
+  @DisplayName("Should keep every boundary when the list fills the longest argument Linux accepts")
+  void shouldKeepEveryBoundaryWhenTheListFillsTheLongestArgumentLinuxAccepts() {
+    // 14,997 five-digit and 5,870 six-digit times with their commas: 131,071 bytes, which with the
+    // terminating NUL is Linux's limit on one argument, 32 pages of 4 KiB.
+    var cmd =
+        command(
+            request(TranscodeMode.FULL_TRANSCODE)
+                .startSequenceNumber(1670)
+                .mediaSegmentCount(22_537)
+                .build(),
+            "libx264");
 
-    var cmd = builder.buildCommand(j);
+    assertThat(forcedKeyframeTimes(cmd))
+        .hasSize(131_071)
+        .startsWith("10020,10026,")
+        .endsWith(",135210,135216");
+  }
 
-    assertThat(cmd).isNotEmpty().contains("-g:v:0").doesNotContain("-force_key_frames:0");
+  @ParameterizedTest(name = "{0} advertised segments")
+  @ValueSource(ints = {22_538, Integer.MAX_VALUE})
+  @DisplayName(
+      "Should end the list at the last boundary that fits when the next would pass the argument"
+          + " limit")
+  void shouldEndTheListAtTheLastBoundaryThatFitsWhenTheNextWouldPassTheArgumentLimit(
+      int mediaSegmentCount) {
+    var cmd =
+        command(
+            request(TranscodeMode.FULL_TRANSCODE)
+                .startSequenceNumber(1670)
+                .mediaSegmentCount(mediaSegmentCount)
+                .build(),
+            "libx264");
+
+    assertThat(forcedKeyframeTimes(cmd)).hasSize(131_071).endsWith(",135210,135216");
   }
 
   @Test
-  @DisplayName("Should use GOP size when encoder is libsvtav1")
-  void shouldUseGopSizeWhenEncoderIsLibsvtav1() {
-    var j =
-        job(TranscodeMode.FULL_TRANSCODE, "av1", "aac", ContainerFormat.FMP4, "libsvtav1", false);
+  @DisplayName(
+      "Should end the list short of the limit when the next boundary would make the argument one"
+          + " byte too long")
+  void shouldEndTheListShortOfTheLimitWhenTheNextBoundaryWouldMakeTheArgumentOneByteTooLong() {
+    // From segment 2 the list reaches 131,065 bytes at 128214 s; the next time, ",128220", would
+    // make it 131,072 bytes, which with its NUL no longer fits in 32 pages of 4 KiB.
+    var cmd =
+        command(
+            request(TranscodeMode.FULL_TRANSCODE)
+                .startSequenceNumber(2)
+                .mediaSegmentCount(Integer.MAX_VALUE)
+                .build(),
+            "libx264");
 
-    var cmd = builder.buildCommand(j);
+    assertThat(forcedKeyframeTimes(cmd))
+        .hasSize(131_065)
+        .startsWith("12,18,")
+        .endsWith(",128208,128214");
+  }
 
-    assertThat(cmd).contains("-g:v:0");
+  private static String forcedKeyframeTimes(List<String> cmd) {
+    return cmd.get(cmd.indexOf("-force_key_frames:0") + 1);
   }
 
   @Test
-  @DisplayName("Should place seek before input when seek position is non-zero")
-  void shouldPlaceSeekBeforeInputWhenSeekPositionIsNonZero() {
-    var j =
-        job(
-            TranscodeMode.FULL_TRANSCODE,
-            "h264",
-            "aac",
-            ContainerFormat.MPEGTS,
-            "libx264",
-            false,
-            300);
+  @DisplayName("Should disable scene-cut keyframes when encoder is libx264")
+  void shouldDisableSceneCutKeyframesWhenEncoderIsLibx264() {
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), "libx264");
 
-    var cmd = builder.buildCommand(j);
+    assertThat(cmd).containsSequence("-sc_threshold:v:0", "0");
+  }
+
+  static Stream<String> everyEncoder() {
+    return Stream.of(
+        "libx264",
+        "libx265",
+        "libsvtav1",
+        "h264_nvenc",
+        "hevc_qsv",
+        "av1_amf",
+        "h264_vaapi",
+        "hevc_rkmpp",
+        "h264_videotoolbox");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"libx264", "libsvtav1"})
+  @DisplayName(
+      "Should lengthen the GOP one frame past the rounded-up period when the encoder is verified")
+  void shouldLengthenTheGopOneFramePastTheRoundedUpPeriodWhenTheEncoderIsVerified(String encoder) {
+    var cmd =
+        command(request(TranscodeMode.FULL_TRANSCODE).framerate(24000.0 / 1001.0).build(), encoder);
+
+    assertThat(cmd).containsSequence("-g:v:0", "145");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(
+      strings = {
+        "libx265",
+        "h264_nvenc",
+        "hevc_qsv",
+        "av1_amf",
+        "h264_vaapi",
+        "hevc_rkmpp",
+        "h264_videotoolbox"
+      })
+  @DisplayName(
+      "Should round the GOP down to whole frames in a segment period when the encoder is not"
+          + " verified")
+  void shouldRoundTheGopDownToWholeFramesInASegmentPeriodWhenTheEncoderIsNotVerified(
+      String encoder) {
+    var cmd =
+        command(request(TranscodeMode.FULL_TRANSCODE).framerate(24000.0 / 1001.0).build(), encoder);
+
+    assertThat(cmd).containsSequence("-g:v:0", "143");
+  }
+
+  @Test
+  @DisplayName(
+      "Should lengthen the GOP one frame past the period when the period spans whole frames and the"
+          + " encoder is verified")
+  void
+      shouldLengthenTheGopOneFramePastThePeriodWhenThePeriodSpansWholeFramesAndTheEncoderIsVerified() {
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).framerate(25.0).build(), "libx264");
+
+    assertThat(cmd).containsSequence("-g:v:0", "151");
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep every frame of the period in the GOP when the period spans whole frames and the"
+          + " encoder is not verified")
+  void
+      shouldKeepEveryFrameOfThePeriodInTheGopWhenThePeriodSpansWholeFramesAndTheEncoderIsNotVerified() {
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).framerate(25.0).build(), "libx265");
+
+    assertThat(cmd).containsSequence("-g:v:0", "150");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({
+    "libsvtav1, 145",
+    "h264_nvenc, 143",
+    "hevc_qsv, 143",
+    "av1_amf, 143",
+    "hevc_rkmpp, 143"
+  })
+  @DisplayName(
+      "Should fix the minimum keyframe interval to the GOP when the encoder has a fixed GOP")
+  void shouldFixTheMinimumKeyframeIntervalToTheGopWhenTheEncoderHasAFixedGop(
+      String encoder, String gopFrames) {
+    var cmd =
+        command(request(TranscodeMode.FULL_TRANSCODE).framerate(24000.0 / 1001.0).build(), encoder);
+
+    assertThat(cmd)
+        .containsSequence("-g:v:0", gopFrames)
+        .containsSequence("-keyint_min:v:0", gopFrames);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"libx264", "libx265", "h264_vaapi", "h264_videotoolbox"})
+  @DisplayName(
+      "Should leave the minimum keyframe interval to the encoder when the encoder has no fixed GOP")
+  void shouldLeaveTheMinimumKeyframeIntervalToTheEncoderWhenTheEncoderHasNoFixedGop(
+      String encoder) {
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), encoder);
+
+    assertThat(cmd).isNotEmpty().doesNotContain("-keyint_min:v:0");
+  }
+
+  @ParameterizedTest
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"VIDEO_TRANSCODE", "FULL_TRANSCODE"})
+  @DisplayName(
+      "Should seek one period before its first segment when an encoded replacement attempt starts"
+          + " mid-stream")
+  void shouldSeekOnePeriodBeforeItsFirstSegmentWhenAnEncodedReplacementAttemptStartsMidStream(
+      TranscodeMode mode) {
+    var cmd = command(request(mode).startSequenceNumber(5).build(), "libsvtav1");
+
+    assertThat(cmd).containsSubsequence("-ss", "24", "-i");
+  }
+
+  @ParameterizedTest
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"VIDEO_TRANSCODE", "FULL_TRANSCODE"})
+  @DisplayName(
+      "Should read from the start when an encoded replacement attempt starts at the second segment")
+  void shouldReadFromTheStartWhenAnEncodedReplacementAttemptStartsAtTheSecondSegment(
+      TranscodeMode mode) {
+    var cmd = command(request(mode).startSequenceNumber(1).build(), "libx264");
+
+    assertThat(cmd)
+        .doesNotContain("-ss")
+        .containsSequence("-force_key_frames:0", "6,12,18,24,30,36,42,48,54,60");
+  }
+
+  @ParameterizedTest
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"REMUX", "AUDIO_TRANSCODE"})
+  @DisplayName(
+      "Should seek to its first segment when a stream-copy replacement attempt starts mid-stream")
+  void shouldSeekToItsFirstSegmentWhenAStreamCopyReplacementAttemptStartsMidStream(
+      TranscodeMode mode) {
+    var cmd = command(request(mode).startSequenceNumber(5).build(), "copy");
+
+    assertThat(cmd).containsSubsequence("-ss", "30", "-i");
+  }
+
+  @Test
+  @DisplayName("Should place seek before input when the attempt starts after segment zero")
+  void shouldPlaceSeekBeforeInputWhenTheAttemptStartsAfterSegmentZero() {
+    var cmd = command(request(TranscodeMode.REMUX).startSequenceNumber(50).build(), "copy");
 
     int ssIndex = cmd.indexOf("-ss");
     int iIndex = cmd.indexOf("-i");
@@ -380,41 +461,17 @@ class FfmpegCommandBuilderTest {
   }
 
   @Test
-  @DisplayName("Should not include seek when position is zero")
-  void shouldNotIncludeSeekWhenPositionIsZero() {
-    var j =
-        job(
-            TranscodeMode.FULL_TRANSCODE,
-            "h264",
-            "aac",
-            ContainerFormat.MPEGTS,
-            "libx264",
-            false,
-            0);
-
-    var cmd = builder.buildCommand(j);
+  @DisplayName("Should not include seek when the attempt starts at segment zero")
+  void shouldNotIncludeSeekWhenTheAttemptStartsAtSegmentZero() {
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), "libx264");
 
     assertThat(cmd).isNotEmpty().doesNotContain("-ss");
   }
 
   @Test
-  @DisplayName("Should include fMP4 segment options when container is fMP4")
-  void shouldIncludeFmp4SegmentOptionsWhenContainerIsFmp4() {
-    var j =
-        job(TranscodeMode.FULL_TRANSCODE, "av1", "aac", ContainerFormat.FMP4, "libsvtav1", false);
-
-    var cmd = builder.buildCommand(j);
-
-    assertThat(cmd).contains("-hls_segment_options", "movflags=+frag_discont");
-  }
-
-  @Test
   @DisplayName("Should include common flags when mode is full transcode")
   void shouldIncludeCommonFlagsWhenModeIsFullTranscode() {
-    var j =
-        job(TranscodeMode.FULL_TRANSCODE, "h264", "aac", ContainerFormat.MPEGTS, "libx264", false);
-
-    var cmd = builder.buildCommand(j);
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), "libx264");
 
     assertThat(cmd)
         .contains("-map_metadata", "-1")
@@ -425,56 +482,17 @@ class FfmpegCommandBuilderTest {
   }
 
   @Test
-  @DisplayName("Should include HLS temp file flag when building command")
-  void shouldIncludeHlsTempFileFlagWhenBuildingCommand() {
-    var j =
-        job(TranscodeMode.FULL_TRANSCODE, "h264", "aac", ContainerFormat.MPEGTS, "libx264", false);
-
-    var cmd = builder.buildCommand(j);
-
-    assertThat(cmd).isNotEmpty().anyMatch(s -> s.contains("temp_file"));
-  }
-
-  @Test
   @DisplayName("Should start with FFmpeg binary when building command")
   void shouldStartWithFfmpegBinaryWhenBuildingCommand() {
-    var j = job(TranscodeMode.REMUX, "h264", "aac", ContainerFormat.MPEGTS, "copy", true);
-
-    var cmd = builder.buildCommand(j);
+    var cmd = command(request(TranscodeMode.REMUX).build(), "copy");
 
     assertThat(cmd.getFirst()).isEqualTo("ffmpeg");
   }
 
   @Test
-  @DisplayName("Should set TS segment filename pattern when container is MPEGTS")
-  void shouldSetTsSegmentFilenamePatternWhenContainerIsMpegts() {
-    var j = job(TranscodeMode.REMUX, "h264", "aac", ContainerFormat.MPEGTS, "copy", true);
-
-    var cmd = builder.buildCommand(j);
-
-    assertThat(cmd).contains("-hls_segment_filename");
-    int idx = cmd.indexOf("-hls_segment_filename");
-    assertThat(cmd.get(idx + 1)).contains("segment%d.ts");
-  }
-
-  @Test
-  @DisplayName("Should set m4s segment filename pattern when container is fMP4")
-  void shouldSetM4sSegmentFilenamePatternWhenContainerIsFmp4() {
-    var j =
-        job(TranscodeMode.FULL_TRANSCODE, "av1", "aac", ContainerFormat.FMP4, "libsvtav1", false);
-
-    var cmd = builder.buildCommand(j);
-
-    int idx = cmd.indexOf("-hls_segment_filename");
-    assertThat(cmd.get(idx + 1)).contains("segment%d.m4s");
-  }
-
-  @Test
   @DisplayName("Should not include keyframe args when mode is remux")
   void shouldNotIncludeKeyframeArgsWhenModeIsRemux() {
-    var j = job(TranscodeMode.REMUX, "h264", "aac", ContainerFormat.MPEGTS, "copy", true);
-
-    var cmd = builder.buildCommand(j);
+    var cmd = command(request(TranscodeMode.REMUX).build(), "copy");
 
     assertThat(cmd)
         .isNotEmpty()
@@ -484,94 +502,69 @@ class FfmpegCommandBuilderTest {
   }
 
   @Test
-  @DisplayName("Should output to HLS format when building command")
-  void shouldOutputToHlsFormatWhenBuildingCommand() {
-    var j = job(TranscodeMode.REMUX, "h264", "aac", ContainerFormat.MPEGTS, "copy", true);
-
-    var cmd = builder.buildCommand(j);
-
-    assertThat(cmd).contains("-f", "hls");
-  }
-
-  @Test
-  @DisplayName("Should use force keyframes when encoder is libx265")
-  void shouldUseForceKeyframesWhenEncoderIsLibx265() {
-    var j =
-        job(TranscodeMode.FULL_TRANSCODE, "hevc", "aac", ContainerFormat.FMP4, "libx265", false);
-
-    var cmd = builder.buildCommand(j);
+  @DisplayName("Should write fragmented MP4 to standard output when building command")
+  void shouldWriteFragmentedMp4ToStandardOutputWhenBuildingCommand() {
+    var cmd = command(request(TranscodeMode.REMUX).build(), "copy");
 
     assertThat(cmd)
-        .isNotEmpty()
-        .anyMatch(s -> s.startsWith("expr:gte(t,n_forced*"))
-        .doesNotContain("-sc_threshold:v:0");
+        .containsSequence("-f", "mp4")
+        .containsSequence("-movflags", "cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont")
+        .doesNotContain("-min_frag_duration", "-max_delay")
+        .endsWith("pipe:1");
   }
 
   @Test
-  @DisplayName("Should use force keyframes when encoder is VAAPI")
-  void shouldUseForceKeyframesWhenEncoderIsVaapi() {
-    var j =
-        job(
-            TranscodeMode.FULL_TRANSCODE,
-            "h264",
-            "aac",
-            ContainerFormat.MPEGTS,
-            "h264_vaapi",
-            false);
+  @DisplayName("Should cut fragments at the fragmentation target when building command")
+  void shouldCutFragmentsAtTheFragmentationTargetWhenBuildingCommand() {
+    var targetedBuilder = new FfmpegCommandBuilder("ffmpeg", Duration.ofMillis(1500));
 
-    var cmd = builder.buildCommand(j);
+    var cmd = targetedBuilder.buildCommand(job(request(TranscodeMode.REMUX).build(), "copy"));
 
-    assertThat(cmd).isNotEmpty().anyMatch(s -> s.startsWith("expr:gte(t,n_forced*"));
+    assertThat(cmd).containsSequence("-frag_duration", "1500000", "pipe:1");
+  }
+
+  @Test
+  @DisplayName("Should leave out the HLS muxer when a replacement attempt starts mid-stream")
+  void shouldLeaveOutTheHlsMuxerWhenAReplacementAttemptStartsMidStream() {
+    var cmd = command(request(TranscodeMode.REMUX).startSequenceNumber(5).build(), "copy");
+
+    assertThat(cmd)
+        .doesNotContain("-start_number")
+        .noneMatch(argument -> argument.startsWith("-hls_"))
+        .endsWith("pipe:1");
+  }
+
+  @Test
+  @DisplayName("Should measure media time from the source start when an attempt seeks")
+  void shouldMeasureMediaTimeFromTheSourceStartWhenAnAttemptSeeks() {
+    var cmd =
+        command(request(TranscodeMode.FULL_TRANSCODE).startSequenceNumber(50).build(), "libx264");
+
+    assertThat(cmd)
+        .contains("-copyts", "-start_at_zero")
+        .containsSequence("-avoid_negative_ts", "disabled");
+  }
+
+  @Test
+  @DisplayName("Should leave scene-cut detection to the encoder when encoder is libx265")
+  void shouldLeaveSceneCutDetectionToTheEncoderWhenEncoderIsLibx265() {
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), "libx265");
+
+    assertThat(cmd).isNotEmpty().doesNotContain("-sc_threshold:v:0");
   }
 
   @Test
   @DisplayName("Should include overwrite flag but not nostdin when building command")
   void shouldIncludeOverwriteFlagButNotNostdinWhenBuildingCommand() {
-    var j = job(TranscodeMode.REMUX, "h264", "aac", ContainerFormat.MPEGTS, "copy", true);
-
-    var cmd = builder.buildCommand(j);
+    var cmd = command(request(TranscodeMode.REMUX).build(), "copy");
 
     assertThat(cmd).isNotEmpty().contains("-y").doesNotContain("-nostdin");
   }
 
   @Test
-  @DisplayName("Should set HLS time when building command")
-  void shouldSetHlsTimeWhenBuildingCommand() {
-    var j = job(TranscodeMode.REMUX, "h264", "aac", ContainerFormat.MPEGTS, "copy", true);
-
-    var cmd = builder.buildCommand(j);
-
-    assertThat(cmd).contains("-hls_time", "6");
-  }
-
-  @Test
-  @DisplayName("Should include start number when start number is non-zero")
-  void shouldIncludeStartNumberWhenStartNumberIsNonZero() {
-    var j =
-        jobWithStartNumber(
-            TranscodeMode.REMUX, "h264", "aac", ContainerFormat.MPEGTS, "copy", true, 5);
-
-    var cmd = builder.buildCommand(j);
-
-    assertThat(cmd).contains("-start_number", "5");
-  }
-
-  @Test
-  @DisplayName("Should not include start number when start number is zero")
-  void shouldNotIncludeStartNumberWhenStartNumberIsZero() {
-    var j = job(TranscodeMode.REMUX, "h264", "aac", ContainerFormat.MPEGTS, "copy", true);
-
-    var cmd = builder.buildCommand(j);
-
-    assertThat(cmd).isNotEmpty().doesNotContain("-start_number");
-  }
-
-  @Test
   @DisplayName("Should map first video and audio streams when building command")
   void shouldMapFirstVideoAndAudioStreamsWhenBuildingCommand() {
-    var j = job(TranscodeMode.REMUX, "h264", "aac", ContainerFormat.MPEGTS, "copy", true);
-
-    var cmd = builder.buildCommand(j);
+    var cmd = command(request(TranscodeMode.REMUX).build(), "copy");
 
     assertThat(cmd).containsSequence("-map", "0:v:0", "-map", "0:a:0");
   }
@@ -579,9 +572,7 @@ class FfmpegCommandBuilderTest {
   @Test
   @DisplayName("Should exclude subtitle streams when building command")
   void shouldExcludeSubtitleStreamsWhenBuildingCommand() {
-    var j = job(TranscodeMode.REMUX, "h264", "aac", ContainerFormat.MPEGTS, "copy", true);
-
-    var cmd = builder.buildCommand(j);
+    var cmd = command(request(TranscodeMode.REMUX).build(), "copy");
 
     assertThat(cmd).containsSequence("-map", "-0:s");
   }
@@ -589,9 +580,7 @@ class FfmpegCommandBuilderTest {
   @Test
   @DisplayName("Should downmix audio to stereo when mode is audio transcode")
   void shouldDownmixAudioToStereoWhenModeIsAudioTranscode() {
-    var j = job(TranscodeMode.AUDIO_TRANSCODE, "h264", "aac", ContainerFormat.MPEGTS, "copy", true);
-
-    var cmd = builder.buildCommand(j);
+    var cmd = command(request(TranscodeMode.AUDIO_TRANSCODE).build(), "copy");
 
     assertThat(cmd).contains("-ac", "2");
   }
@@ -599,9 +588,7 @@ class FfmpegCommandBuilderTest {
   @Test
   @DisplayName("Should not downmix audio when mode is remux")
   void shouldNotDownmixAudioWhenModeIsRemux() {
-    var j = job(TranscodeMode.REMUX, "h264", "aac", ContainerFormat.MPEGTS, "copy", true);
-
-    var cmd = builder.buildCommand(j);
+    var cmd = command(request(TranscodeMode.REMUX).build(), "copy");
 
     assertThat(cmd).isNotEmpty().doesNotContain("-ac");
   }
@@ -609,10 +596,14 @@ class FfmpegCommandBuilderTest {
   @Test
   @DisplayName("Should use video encoder with audio copy when mode is video transcode")
   void shouldUseVideoEncoderWithAudioCopyWhenModeIsVideoTranscode() {
-    var j =
-        job(TranscodeMode.VIDEO_TRANSCODE, "h264", "ac3", ContainerFormat.MPEGTS, "libx264", false);
-
-    var cmd = builder.buildCommand(j);
+    var cmd =
+        command(
+            request(
+                    decision(TranscodeMode.VIDEO_TRANSCODE)
+                        .audioDecision(copiedAudio("ac3"))
+                        .build())
+                .build(),
+            "libx264");
 
     assertThat(cmd)
         .isNotEmpty()
@@ -626,33 +617,47 @@ class FfmpegCommandBuilderTest {
   @Test
   @DisplayName("Should include keyframe args when mode is video transcode")
   void shouldIncludeKeyframeArgsWhenModeIsVideoTranscode() {
-    var j =
-        job(TranscodeMode.VIDEO_TRANSCODE, "h264", "ac3", ContainerFormat.MPEGTS, "libx264", false);
-
-    var cmd = builder.buildCommand(j);
+    var cmd =
+        command(
+            request(
+                    decision(TranscodeMode.VIDEO_TRANSCODE)
+                        .audioDecision(copiedAudio("ac3"))
+                        .build())
+                .build(),
+            "libx264");
 
     assertThat(cmd).contains("-forced-idr", "1");
   }
 
+  @ParameterizedTest
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"REMUX", "VIDEO_TRANSCODE"})
+  @DisplayName("Should convert ADTS framing when AAC audio is copied")
+  void shouldConvertAdtsFramingWhenAacAudioIsCopied(TranscodeMode mode) {
+    var cmd = command(request(mode).build(), "libx264");
+
+    assertThat(cmd).containsSequence("-c:a", "copy", "-bsf:a", "aac_adtstoasc");
+  }
+
   @Test
-  @DisplayName("Should only add forced IDR when encoder is in neither keyframe set")
-  void shouldOnlyAddForcedIdrWhenEncoderIsInNeitherKeyframeSet() {
-    var j =
-        job(
-            TranscodeMode.FULL_TRANSCODE,
-            "h264",
-            "aac",
-            ContainerFormat.MPEGTS,
-            "h264_videotoolbox",
-            false);
+  @DisplayName("Should leave copied audio unfiltered when it is not AAC")
+  void shouldLeaveCopiedAudioUnfilteredWhenItIsNotAac() {
+    var cmd =
+        command(
+            request(decision(TranscodeMode.REMUX).audioDecision(copiedAudio("ac3")).build())
+                .build(),
+            "copy");
 
-    var cmd = builder.buildCommand(j);
+    assertThat(cmd).contains("-c:a", "copy").doesNotContain("-bsf:a");
+  }
 
-    assertThat(cmd)
-        .isNotEmpty()
-        .contains("-forced-idr", "1")
-        .doesNotContain("-g:v:0")
-        .noneMatch(s -> s.startsWith("-force_key_frames"));
+  @Test
+  @DisplayName("Should leave encoded AAC audio unfiltered when audio is transcoded")
+  void shouldLeaveEncodedAacAudioUnfilteredWhenAudioIsTranscoded() {
+    var cmd = command(request(TranscodeMode.AUDIO_TRANSCODE).build(), "copy");
+
+    assertThat(cmd).containsSequence("-c:a", "aac").doesNotContain("-bsf:a");
   }
 
   // --- Video-only (no audio) ---
@@ -660,13 +665,10 @@ class FfmpegCommandBuilderTest {
   @Test
   @DisplayName("Should omit audio map and codec args when audio mode is none")
   void shouldOmitAudioMapAndCodecArgsWhenAudioModeIsNone() {
-    var audio =
-        AudioDecision.builder().mode(AudioMode.NONE).codec(null).channels(0).bitrate(0L).build();
-    var j =
-        jobWithAudio(
-            TranscodeMode.FULL_TRANSCODE, "h264", audio, ContainerFormat.MPEGTS, "libx264");
-
-    var cmd = builder.buildCommand(j);
+    var cmd =
+        command(
+            request(decision(TranscodeMode.FULL_TRANSCODE).audioDecision(NO_AUDIO).build()).build(),
+            "libx264");
 
     assertThat(cmd)
         .isNotEmpty()
@@ -682,10 +684,10 @@ class FfmpegCommandBuilderTest {
   @DisplayName("Should transcode to AC-3 5.1 when audio decision is AC-3 transcode")
   void shouldTranscodeToAc3SurroundWhenAudioDecisionIsAc3Transcode() {
     var audio = new AudioDecision(AudioMode.TRANSCODE, "ac3", 6, 384_000L);
-    var j =
-        jobWithAudio(TranscodeMode.AUDIO_TRANSCODE, "h264", audio, ContainerFormat.MPEGTS, "copy");
-
-    var cmd = builder.buildCommand(j);
+    var cmd =
+        command(
+            request(decision(TranscodeMode.AUDIO_TRANSCODE).audioDecision(audio).build()).build(),
+            "copy");
 
     assertThat(cmd)
         .containsSubsequence("-c:a", "ac3")
@@ -697,10 +699,10 @@ class FfmpegCommandBuilderTest {
   @DisplayName("Should transcode to E-AC-3 7.1 when audio decision is E-AC-3 transcode")
   void shouldTranscodeToEac3SurroundWhenAudioDecisionIsEac3Transcode() {
     var audio = new AudioDecision(AudioMode.TRANSCODE, "eac3", 8, 512_000L);
-    var j =
-        jobWithAudio(TranscodeMode.AUDIO_TRANSCODE, "h264", audio, ContainerFormat.MPEGTS, "copy");
-
-    var cmd = builder.buildCommand(j);
+    var cmd =
+        command(
+            request(decision(TranscodeMode.AUDIO_TRANSCODE).audioDecision(audio).build()).build(),
+            "copy");
 
     assertThat(cmd)
         .containsSubsequence("-c:a", "eac3")
@@ -718,9 +720,9 @@ class FfmpegCommandBuilderTest {
             .channels(6)
             .bitrate(384_000L)
             .build();
-    var j = jobWithAudio(TranscodeMode.REMUX, "h264", audio, ContainerFormat.MPEGTS, "copy");
-
-    var cmd = builder.buildCommand(j);
+    var cmd =
+        command(
+            request(decision(TranscodeMode.REMUX).audioDecision(audio).build()).build(), "copy");
 
     assertThat(cmd)
         .isNotEmpty()
@@ -734,10 +736,7 @@ class FfmpegCommandBuilderTest {
   @Test
   @DisplayName("Should map video, audio, and exclude subtitles in correct order")
   void shouldMapVideoAudioAndExcludeSubtitlesInCorrectOrder() {
-    var transcodeJob =
-        job(TranscodeMode.REMUX, "h264", "aac", ContainerFormat.MPEGTS, "copy", true);
-
-    var cmd = builder.buildCommand(transcodeJob);
+    var cmd = command(request(TranscodeMode.REMUX).build(), "copy");
 
     assertThat(cmd).containsSequence("-map", "0:v:0", "-map", "0:a:0", "-map", "-0:s");
   }
@@ -745,13 +744,10 @@ class FfmpegCommandBuilderTest {
   @Test
   @DisplayName("Should map video and exclude subtitles without audio when audio mode is none")
   void shouldMapVideoAndExcludeSubtitlesWithoutAudioWhenAudioModeIsNone() {
-    var audio =
-        AudioDecision.builder().mode(AudioMode.NONE).codec(null).channels(0).bitrate(0L).build();
-    var transcodeJob =
-        jobWithAudio(
-            TranscodeMode.FULL_TRANSCODE, "h264", audio, ContainerFormat.MPEGTS, "libx264");
-
-    var cmd = builder.buildCommand(transcodeJob);
+    var cmd =
+        command(
+            request(decision(TranscodeMode.FULL_TRANSCODE).audioDecision(NO_AUDIO).build()).build(),
+            "libx264");
 
     assertThat(cmd).containsSequence("-map", "0:v:0", "-map", "-0:s").doesNotContain("0:a:0");
   }

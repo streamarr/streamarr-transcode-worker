@@ -59,6 +59,9 @@ class WorkerImageIT {
   private static final String UNICODE_KEY =
       "東京 Café’s 🎬 %2F ..%2F dir/Ame\u0301lie’s 100%23 #1 한국 𝄞 (2001).mkv";
 
+  // The 10 s fixture at the default 6 s period: the server advertises segments 0 and 1.
+  private static final int MEDIA_SEGMENT_COUNT = 2;
+
   @TempDir Path media;
 
   @Test
@@ -132,6 +135,7 @@ class WorkerImageIT {
       var job = variantJobBuilder();
       job.getDecisionBuilder().setMode(mode);
       job.getVariantBuilder().setWidth(160).setHeight(90).setBitrateBitsPerSecond(500_000);
+      job.getExecutionBuilder().setMediaSegmentCount(MEDIA_SEGMENT_COUNT);
       var request = job.build();
 
       var completed = JobAttemptCompleted.parseFrom(image.command("job", request.toByteArray()));
@@ -139,7 +143,7 @@ class WorkerImageIT {
       assertThat(completed.getJobAttemptId()).isEqualTo(request.getJobAttemptId());
       var segment = image.command("segment", new byte[0]);
       assertThat(segment).isNotEmpty();
-      var uploaded = media.resolve("uploaded.ts");
+      var uploaded = media.resolve("uploaded.mp4");
       Files.write(uploaded, segment);
       var probe =
           image.worker.execInContainer(
@@ -155,7 +159,7 @@ class WorkerImageIT {
               "json",
               "-o",
               "/tmp/uploaded.json",
-              "/media/uploaded.ts");
+              "/media/uploaded.mp4");
       assertThat(probe.getExitCode()).as(probe.getStderr()).isZero();
       var output = image.worker.execInContainer("cat", "/tmp/uploaded.json");
       assertThat(output.getExitCode()).as(output.getStderr()).isZero();
@@ -172,7 +176,7 @@ class WorkerImageIT {
               "error",
               "-xerror",
               "-i",
-              "/media/uploaded.ts",
+              "/media/uploaded.mp4",
               "-f",
               "null",
               "-");
@@ -201,7 +205,9 @@ class WorkerImageIT {
           .satisfies(video -> assertThat(video.getCodec()).isEqualTo("h264"));
       assertThat(image.recordedArguments("ffprobe")).contains("/media/" + UNICODE_KEY);
 
-      var job = variantJobBuilder().setSource(sourceBuilder().setRelativeKey(UNICODE_KEY)).build();
+      var jobBuilder = variantJobBuilder().setSource(sourceBuilder().setRelativeKey(UNICODE_KEY));
+      jobBuilder.getExecutionBuilder().setMediaSegmentCount(MEDIA_SEGMENT_COUNT);
+      var job = jobBuilder.build();
 
       var completed = JobAttemptCompleted.parseFrom(image.command("job", job.toByteArray()));
 
@@ -399,7 +405,6 @@ class WorkerImageIT {
               .withEnv("TRANSCODE_WORKER_ID", workerId.toString())
               .withEnv("TRANSCODE_WORKER_SOURCE_NAMESPACE_ID", SOURCE_NAMESPACE_ID.toString())
               .withEnv("TRANSCODE_WORKER_SOURCE_ROOT", "/media")
-              .withEnv("TRANSCODE_WORKER_SEGMENT_BASE_PATH", "/tmp/segments")
               .withFileSystemBind(media.toAbsolutePath().toString(), "/media", BindMode.READ_ONLY)
               .waitingFor(Wait.forLogMessage(".*Started TranscodeWorkerApplication.*", 1));
       if (ffmpegPath != null) {

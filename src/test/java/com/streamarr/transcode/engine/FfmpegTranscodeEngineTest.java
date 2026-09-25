@@ -1,34 +1,38 @@
 package com.streamarr.transcode.engine;
 
+import static com.streamarr.transcode.engine.FfmpegRecordings.bytesOf;
+import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
+import static com.streamarr.transcode.fixtures.FfmpegMuxerHelpFixtures.FRAGMENTED_MP4_MUXER_HELP;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
-import com.streamarr.transcode.fakes.FakeFfmpegProcessManager;
+import com.streamarr.transcode.engine.AttemptOutcome.Completed;
+import com.streamarr.transcode.fakes.ScriptedProcess;
+import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.Map;
-import java.util.Optional;
-import java.util.OptionalInt;
 import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 @Tag("UnitTest")
 @DisplayName("FFmpeg Transcode Engine Tests")
 class FfmpegTranscodeEngineTest {
 
-  @TempDir Path tempDir;
+  private static final Duration OUTCOME_LIMIT = Duration.ofSeconds(10);
 
-  private FakeFfmpegProcessManager processManager;
+  private ScriptedProcessLauncher launcher;
   private FfmpegTranscodeEngine executor;
 
   @BeforeEach
   void setUp() {
-    processManager = new FakeFfmpegProcessManager();
-    var commandBuilder = new FfmpegCommandBuilder("ffmpeg");
+    var commandBuilder = new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1));
 
     var hwCapability =
         HardwareEncodingCapability.builder()
@@ -39,7 +43,7 @@ class FfmpegTranscodeEngineTest {
 
     var capabilityService = createCapabilityService(true, hwCapability);
 
-    executor = new FfmpegTranscodeEngine(commandBuilder, processManager, capabilityService);
+    executor = new FfmpegTranscodeEngine(commandBuilder, capabilityService);
   }
 
   private TranscodeRequest createRequest(TranscodeMode mode, String codecFamily) {
@@ -48,10 +52,14 @@ class FfmpegTranscodeEngineTest {
 
   private TranscodeRequest createRequest(
       TranscodeMode mode, String codecFamily, String variantLabel) {
+    return requestBuilder(mode, codecFamily).variantLabel(variantLabel).build();
+  }
+
+  private static TranscodeRequest.TranscodeRequestBuilder requestBuilder(
+      TranscodeMode mode, String codecFamily) {
     return TranscodeRequest.builder()
         .sessionId(UUID.randomUUID())
         .sourcePath(Path.of("/media/movie.mkv"))
-        .seekPosition(0)
         .targetSegmentDuration(6)
         .framerate(23.976)
         .transcodeDecision(
@@ -65,134 +73,105 @@ class FfmpegTranscodeEngineTest {
                         .channels(2)
                         .bitrate(128_000L)
                         .build())
-                .subtitleDecision(
-                    new SubtitleDecision(
-                        SubtitleMode.EXCLUDE,
-                        Optional.empty(),
-                        OptionalInt.empty(),
-                        Optional.empty()))
-                .containerFormat(
-                    "av1".equals(codecFamily) ? ContainerFormat.FMP4 : ContainerFormat.MPEGTS)
+                .subtitleDecision(SubtitleDecisions.EXCLUDED)
                 .needsKeyframeAlignment(mode != TranscodeMode.FULL_TRANSCODE)
                 .build())
         .width(1920)
         .height(1080)
-        .bitrate(5_000_000L)
-        .variantLabel(variantLabel)
-        .build();
+        .bitrate(5_000_000L);
   }
 
   @Test
-  @DisplayName("Should propagate attempt identity and start sequence when starting a producer")
-  void shouldPropagateAttemptIdentityAndStartSequenceWhenStartingAProducer() {
-    var attemptId = UUID.randomUUID();
+  @DisplayName(
+      "Should deliver the job attempt's media segments from its own FFmpeg when starting a"
+          + " producer")
+  void shouldDeliverTheJobAttemptsMediaSegmentsFromItsOwnFfmpegWhenStartingAProducer() {
+    var recording = recording("01-encode-cfr-seek30.fmp4");
+    var process = ScriptedProcess.builder().output(bytesOf(recording.file())).build();
+    executor = engineLaunching(process, createCapabilityService(true, noHardware()));
     var request =
-        TranscodeRequest.builder()
-            .sessionId(UUID.randomUUID())
-            .sourcePath(Path.of("/media/movie.mkv"))
-            .seekPosition(12)
-            .targetSegmentDuration(6)
-            .framerate(23.976)
-            .transcodeDecision(
-                TranscodeDecision.builder()
-                    .transcodeMode(TranscodeMode.FULL_TRANSCODE)
-                    .videoCodecFamily("h264")
-                    .audioDecision(
-                        AudioDecision.builder()
-                            .mode(AudioMode.TRANSCODE)
-                            .codec("aac")
-                            .channels(2)
-                            .bitrate(128_000L)
-                            .build())
-                    .subtitleDecision(
-                        new SubtitleDecision(
-                            SubtitleMode.EXCLUDE,
-                            Optional.empty(),
-                            OptionalInt.empty(),
-                            Optional.empty()))
-                    .containerFormat(ContainerFormat.MPEGTS)
-                    .needsKeyframeAlignment(false)
-                    .build())
-            .width(1920)
-            .height(1080)
-            .bitrate(5_000_000L)
-            .attemptId(attemptId)
-            .startSequenceNumber(2)
+        requestBuilder(TranscodeMode.FULL_TRANSCODE, "h264")
+            .attemptId(UUID.randomUUID())
+            .startSequenceNumber(recording.startSequenceNumber())
             .build();
+    var sink = new RecordingSegmentSink();
 
-    var handle = executor.start(request, tempDir);
+    var producer = executor.startProducer(request, sink);
 
-    // Recovery fencing matches observed handles against the attempt the coordinator minted; a
-    // handle carrying a fresh random attemptId would break stale-producer detection invisibly.
-    assertThat(handle.attemptId()).isEqualTo(attemptId);
-    assertThat(handle.attemptId()).isNotEqualTo(request.sessionId());
-    assertThat(handle.startSequenceNumber()).isEqualTo(2);
-    assertThat(handle.processId()).isPresent();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(launcher.command(request.attemptId()))
+        .startsWith("ffmpeg")
+        .containsSubsequence("-ss", "24", "-i", "/media/movie.mkv")
+        .endsWith("pipe:1");
+    assertThat(sink.acceptedNames())
+        .containsExactly(
+            "init.mp4",
+            "segment5.m4s",
+            "segment6.m4s",
+            "segment7.m4s",
+            "segment8.m4s",
+            "segment9.m4s",
+            "segment10.m4s");
   }
 
   @Test
-  @DisplayName("Should start active transcode when GPU encoder available")
-  void shouldStartActiveTranscodeWhenGpuEncoderAvailable() {
+  @DisplayName("Should refuse to start a producer without launching FFmpeg when it is unavailable")
+  void shouldRefuseToStartAProducerWithoutLaunchingFfmpegWhenItIsUnavailable() {
+    executor = engineLaunching(runningProcess(), createCapabilityService(false, noHardware()));
     var request = createRequest(TranscodeMode.FULL_TRANSCODE, "h264");
 
-    var handle = executor.start(request, tempDir);
+    var thrown = catchThrowable(() -> executor.startProducer(request, new RecordingSegmentSink()));
 
-    assertThat(handle).isNotNull();
-    assertThat(handle.status()).isEqualTo(TranscodeStatus.ACTIVE);
-    assertThat(processManager.getStarted()).contains(request.sessionId());
+    assertThat(thrown)
+        .isInstanceOf(TranscodeException.class)
+        .hasMessageStartingWith("FFmpeg is unavailable");
+    assertThat(launcher.hasLaunchedAny()).isFalse();
   }
 
   @Test
-  @DisplayName("Should start active transcode when no GPU available")
-  void shouldStartActiveTranscodeWhenNoGpuAvailable() {
-    var noHwCapability =
-        HardwareEncodingCapability.builder().available(false).encoders(Set.of()).build();
-    var capabilityService = createCapabilityService(true, noHwCapability);
+  @DisplayName("Should launch FFmpeg with the hardware encoder when one is available")
+  void shouldLaunchFfmpegWithTheHardwareEncoderWhenOneIsAvailable() {
+    var hardware =
+        HardwareEncodingCapability.builder()
+            .available(true)
+            .encoders(Set.of("h264_nvenc"))
+            .accelerator("cuda")
+            .build();
+    executor = engineLaunching(runningProcess(), createCapabilityService(true, hardware));
+    var request = createRequest(TranscodeMode.FULL_TRANSCODE, "h264");
 
-    executor =
-        new FfmpegTranscodeEngine(
-            new FfmpegCommandBuilder("ffmpeg"), processManager, capabilityService);
+    var producer = executor.startProducer(request, new RecordingSegmentSink());
 
+    producer.stop();
+    assertThat(launcher.command(request.attemptId())).containsSubsequence("-c:v", "h264_nvenc");
+  }
+
+  @Test
+  @DisplayName(
+      "Should launch FFmpeg with the software encoder when no hardware encoder is available")
+  void shouldLaunchFfmpegWithTheSoftwareEncoderWhenNoHardwareEncoderIsAvailable() {
+    executor = engineLaunching(runningProcess(), createCapabilityService(true, noHardware()));
     var request = createRequest(TranscodeMode.FULL_TRANSCODE, "av1");
 
-    var handle = executor.start(request, tempDir);
+    var producer = executor.startProducer(request, new RecordingSegmentSink());
 
-    assertThat(handle).isNotNull();
-    assertThat(handle.status()).isEqualTo(TranscodeStatus.ACTIVE);
+    producer.stop();
+    assertThat(launcher.command(request.attemptId())).containsSubsequence("-c:v", "libsvtav1");
   }
 
-  @Test
-  @DisplayName("Should stop transcode and remove from tracking when stopped")
-  void shouldStopTranscodeAndRemoveFromTrackingWhenStopped() {
-    var request = createRequest(TranscodeMode.FULL_TRANSCODE, "h264");
-    executor.start(request, tempDir);
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"REMUX", "AUDIO_TRANSCODE"})
+  @DisplayName("Should launch FFmpeg copying the video when the mode keeps the video stream")
+  void shouldLaunchFfmpegCopyingTheVideoWhenTheModeKeepsTheVideoStream(TranscodeMode mode) {
+    executor = engineLaunching(runningProcess(), createCapabilityService(true, noHardware()));
+    var request = createRequest(mode, "h264");
 
-    executor.stop(request.sessionId());
+    var producer = executor.startProducer(request, new RecordingSegmentSink());
 
-    assertThat(executor.isRunning(request.sessionId(), "default")).isFalse();
-    assertThat(processManager.getStopped()).contains(request.sessionId());
-  }
-
-  @Test
-  @DisplayName("Should report running only between start and stop when session is active")
-  void shouldReportRunningOnlyBetweenStartAndStopWhenSessionIsActive() {
-    var request = createRequest(TranscodeMode.FULL_TRANSCODE, "h264");
-
-    assertThat(executor.isRunning(request.sessionId(), "default")).isFalse();
-
-    executor.start(request, tempDir);
-
-    assertThat(executor.isRunning(request.sessionId(), "default")).isTrue();
-
-    executor.stop(request.sessionId(), "default");
-
-    assertThat(executor.isRunning(request.sessionId(), "default")).isFalse();
-  }
-
-  @Test
-  @DisplayName("Should report not running when session is unknown")
-  void shouldReportNotRunningWhenSessionIsUnknown() {
-    assertThat(executor.isRunning(UUID.randomUUID(), "default")).isFalse();
+    producer.stop();
+    assertThat(launcher.command(request.attemptId())).containsSubsequence("-c:v", "copy");
   }
 
   @Test
@@ -211,67 +190,54 @@ class FfmpegTranscodeEngineTest {
 
     executor =
         new FfmpegTranscodeEngine(
-            new FfmpegCommandBuilder("ffmpeg"), processManager, capabilityService);
+            new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)), capabilityService);
 
     assertThat(executor.isHealthy()).isFalse();
   }
 
   @Test
-  @DisplayName("Should reject producer start when FFmpeg lacks required HLS capabilities")
-  void shouldRejectProducerStartWhenFfmpegLacksRequiredHlsCapabilities() {
+  @DisplayName("Should reject producer start when FFmpeg cannot fragment mp4 output")
+  void shouldRejectProducerStartWhenFfmpegCannotFragmentMp4Output() {
     var capabilityService =
         new TranscodeCapabilityService(
             "ffmpeg",
             command -> {
-              if (String.join(" ", command).contains("muxer=hls")) {
-                return new FakeProcess("Muxer hls [Apple HTTP Live Streaming]:", 0);
+              if (String.join(" ", command).contains("muxer=mp4")) {
+                return new FakeProcess("Muxer mp4 [MP4 (MPEG-4 Part 14)]:", 0);
               }
 
               return new FakeProcess("ffmpeg version 4.4.2", 0);
             });
     capabilityService.detectCapabilities();
-    executor =
-        new FfmpegTranscodeEngine(
-            new FfmpegCommandBuilder("ffmpeg"), processManager, capabilityService);
+    executor = engineLaunching(runningProcess(), capabilityService);
     var request = createRequest(TranscodeMode.FULL_TRANSCODE, "av1");
 
-    var thrown = catchThrowable(() -> executor.start(request, tempDir));
+    var thrown = catchThrowable(() -> executor.startProducer(request, new RecordingSegmentSink()));
 
-    assertThat(processManager.getStarted()).doesNotContain(request.sessionId());
+    assertThat(launcher.hasLaunchedAny()).isFalse();
     assertThat(thrown)
         .isInstanceOf(TranscodeException.class)
-        .hasMessage("FFmpeg is unavailable: Missing hls_segment_options");
+        .hasMessage(
+            "FFmpeg is unavailable: Missing mp4 muxer options: "
+                + "-frag_duration, cmaf, delay_moov, skip_trailer, frag_keyframe, frag_discont");
   }
 
-  @Test
-  @DisplayName("Should start active transcode when mode is remux")
-  void shouldStartActiveTranscodeWhenModeIsRemux() {
-    var request = createRequest(TranscodeMode.REMUX, "h264");
-
-    var handle = executor.start(request, tempDir);
-
-    assertThat(handle.status()).isEqualTo(TranscodeStatus.ACTIVE);
-    assertThat(processManager.getStarted()).contains(request.sessionId());
+  private FfmpegTranscodeEngine engineLaunching(
+      ScriptedProcess process, TranscodeCapabilityService capabilities) {
+    launcher = new ScriptedProcessLauncher(_ -> process);
+    return FfmpegTranscodeEngine.builder()
+        .commandBuilder(new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)))
+        .capabilityService(capabilities)
+        .launcher(launcher)
+        .build();
   }
 
-  @Test
-  @DisplayName("Should report not running for unstarted variant")
-  void shouldReportNotRunningForUnstartedVariant() {
-    var request = createRequest(TranscodeMode.FULL_TRANSCODE, "h264", "720p");
-    executor.start(request, tempDir);
-
-    assertThat(executor.isRunning(request.sessionId(), "1080p")).isFalse();
+  private static ScriptedProcess runningProcess() {
+    return ScriptedProcessLauncher.runningProcessBuilder().build();
   }
 
-  @Test
-  @DisplayName("Should start active transcode when mode is audio transcode")
-  void shouldStartActiveTranscodeWhenModeIsAudioTranscode() {
-    var request = createRequest(TranscodeMode.AUDIO_TRANSCODE, "h264");
-
-    var handle = executor.start(request, tempDir);
-
-    assertThat(handle.status()).isEqualTo(TranscodeStatus.ACTIVE);
-    assertThat(processManager.getStarted()).contains(request.sessionId());
+  private static HardwareEncodingCapability noHardware() {
+    return HardwareEncodingCapability.builder().available(false).encoders(Set.of()).build();
   }
 
   private TranscodeCapabilityService createCapabilityService(
@@ -286,7 +252,7 @@ class FfmpegTranscodeEngineTest {
     var outputs =
         Map.of(
             "ffmpeg", (Process) new FakeProcess("ffmpeg version 7.0", 0),
-            "hls", (Process) new FakeProcess("-hls_segment_options <dictionary>", 0),
+            "mp4", (Process) new FakeProcess(FRAGMENTED_MP4_MUXER_HELP, 0),
             "hwaccels",
                 (Process)
                     new FakeProcess(
@@ -305,8 +271,8 @@ class FfmpegTranscodeEngineTest {
                 return outputs.get("ffmpeg");
               }
 
-              if (cmdStr.contains("muxer=hls")) {
-                return outputs.get("hls");
+              if (cmdStr.contains("muxer=mp4")) {
+                return outputs.get("mp4");
               }
 
               if (cmdStr.contains("-hwaccels")) {
@@ -315,6 +281,11 @@ class FfmpegTranscodeEngineTest {
 
               if (cmdStr.contains("-encoders")) {
                 return outputs.get("encoders");
+              }
+
+              // The trial encode that proves a listed hardware encoder works.
+              if (cmdStr.contains("-f null")) {
+                return new FakeProcess("", 0);
               }
 
               return new FakeProcess("", 1);

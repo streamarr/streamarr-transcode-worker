@@ -10,6 +10,7 @@ import com.streamarr.transcode.engine.FfmpegRecordings.CutPoint;
 import com.streamarr.transcode.engine.FfmpegRecordings.CutPointMismatch;
 import com.streamarr.transcode.engine.FfmpegRecordings.ExpectedFailure;
 import com.streamarr.transcode.engine.FfmpegRecordings.HlsRun;
+import com.streamarr.transcode.engine.FfmpegRecordings.Mode;
 import com.streamarr.transcode.engine.FfmpegRecordings.Recording;
 import com.streamarr.transcode.engine.FfmpegRecordings.SegmentSummary;
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
@@ -35,6 +36,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 @Tag("UnitTest")
 class RecordedFfmpegOutputTest {
@@ -50,6 +52,12 @@ class RecordedFfmpegOutputTest {
   static Stream<Recording> recordingsEndingInAudioOnlyFragments() {
     return recordingsThatGroupWithoutFailure()
         .filter(recording -> recording.trailingAudioOnlyFragmentCount() > 0);
+  }
+
+  static Stream<Recording> encodesOfTheRecipe() {
+    return recordings()
+        .filter(
+            recording -> recording.mode() == Mode.ENCODE && recording.recipeDeviation().isEmpty());
   }
 
   static Stream<Arguments> hlsRuns() {
@@ -201,17 +209,71 @@ class RecordedFfmpegOutputTest {
   }
 
   @ParameterizedTest(name = "{0}")
-  @CsvSource({"01-encode-cfr-seek30.fmp4, 720720", "09-svtav1-vfr-seek30.fmp4, 721721"})
+  @MethodSource("encodesOfTheRecipe")
   @DisplayName(
-      "Should deliver its first fragment at the seek point when an encoded attempt seeks under the"
-          + " frame-rate flags")
-  void shouldDeliverItsFirstFragmentAtTheSeekPointWhenAnEncodedAttemptSeeksUnderTheFrameRateFlags(
-      String file, long seekPoint) throws IOException {
+      "Should open every segment after segment zero on the first frame at or after its boundary"
+          + " when an encode follows the recipe")
+  void
+      shouldOpenEverySegmentAfterSegmentZeroOnTheFirstFrameAtOrAfterItsBoundaryWhenAnEncodeFollowsTheRecipe(
+          Recording recording) throws IOException {
+    var grouping = group(recording);
+    var timescale =
+        grouping
+            .delivered()
+            .getFirst()
+            .fragments()
+            .getFirst()
+            .videoStart()
+            .orElseThrow()
+            .timescale();
+    var cuts = cutPoints(grouping).stream().filter(cut -> cut.number() > 0).toList();
+
+    assertThat(cuts)
+        .isNotEmpty()
+        .containsExactlyElementsOf(
+            cuts.stream()
+                .map(
+                    cut ->
+                        new CutPoint(
+                            cut.number(),
+                            firstFrameAtOrAfterBoundary(recording, cut.number(), timescale)))
+                .toList());
+  }
+
+  @ParameterizedTest(name = "{0} against {1}")
+  @CsvSource({
+    "01-encode-cfr-seek30.fmp4, 01-encode-cfr.fmp4",
+    "09-svtav1-vfr-seek30.fmp4, 09-svtav1-vfr.fmp4"
+  })
+  @DisplayName(
+      "Should open every segment on the start-0 attempt's frame when an encoded replacement attempt"
+          + " seeks one period early")
+  void
+      shouldOpenEverySegmentOnTheStartZeroAttemptsFrameWhenAnEncodedReplacementAttemptSeeksOnePeriodEarly(
+          String replacementAttempt, String startZeroAttempt) throws IOException {
+    var replacementAttemptCuts = cutPoints(group(recording(replacementAttempt)));
+    var startZeroAttemptCuts = cutPoints(group(recording(startZeroAttempt)));
+
+    assertThat(replacementAttemptCuts)
+        .containsExactlyElementsOf(startZeroAttemptCuts.subList(5, 11));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"01-encode-cfr-seek30.fmp4", "09-svtav1-vfr-seek30.fmp4"})
+  @DisplayName(
+      "Should start at the seek point and discard that period when an encoded replacement attempt"
+          + " seeks one period before its first segment")
+  void
+      shouldStartAtTheSeekPointAndDiscardThatPeriodWhenAnEncodedReplacementAttemptSeeksOnePeriodBeforeItsFirstSegment(
+          String file) throws IOException {
     var grouping = group(recording(file));
     var firstFragment = grouping.units().fragments().getFirst();
 
-    assertThat(firstFragment.videoStart()).contains(new VideoStart(seekPoint, 24_000, true));
-    assertThat(grouping.delivered().getFirst().fragments().getFirst()).isSameAs(firstFragment);
+    // 24.024 s and 30.030 s: frames 576 and 720, the first frames at or after the seek point (24 s)
+    // and the first segment's boundary (30 s) on the 23.976 fps grid from zero.
+    assertThat(firstFragment.videoStart()).contains(new VideoStart(576_576, 24_000, true));
+    assertThat(grouping.delivered().getFirst().sequenceNumber()).isEqualTo(5);
+    assertThat(firstVideoPresentationTime(grouping.delivered().getFirst())).isEqualTo(720_720);
   }
 
   @ParameterizedTest(name = "{0}")
@@ -426,6 +488,15 @@ class RecordedFfmpegOutputTest {
         new CutPoint(2, 288L * frame),
         new CutPoint(3, (288L + 145) * frame),
         new CutPoint(4, 576L * frame));
+  }
+
+  // The first frame at or after the segment's boundary on the constant-rate output's frame grid
+  // from zero: every encode of the recipe runs at the source's probed frame rate.
+  private static long firstFrameAtOrAfterBoundary(Recording recording, int number, long timescale) {
+    var frameRate = recording.source().videoRealFrameRate().split("/");
+    var frameTicks = timescale * Long.parseLong(frameRate[1]) / Long.parseLong(frameRate[0]);
+    var boundaryTicks = (long) number * recording.period() * timescale;
+    return Math.ceilDiv(boundaryTicks, frameTicks) * frameTicks;
   }
 
   private static List<CutPoint> cutPoints(Grouping grouping) {

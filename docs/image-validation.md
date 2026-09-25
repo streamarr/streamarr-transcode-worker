@@ -16,7 +16,8 @@ Build and validate a local image with Java 25, the Node version in
 ```
 
 The build validates FFmpeg notices and checksums, preserves the license and source materials,
-and checks H.264/AAC HLS and AV1 encoding inside the resulting image. OCI labels record the
+and checks, inside the resulting image, that FFmpeg writes H.264/AAC fragmented MP4 to its
+standard output and encodes AV1. OCI labels record the
 source commit. The OCI version label defaults to the Maven project version. An optional second argument to
 `build-worker-image.sh` supplies the release version. The `org.streamarr.contract.version` label records the pinned Buf SDK version.
 Validation checks these labels against the expected values. These commands do not publish the image.

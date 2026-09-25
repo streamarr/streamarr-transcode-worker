@@ -10,7 +10,6 @@ public record TranscodeRequest(
     @NonNull UUID sessionId,
     UUID attemptId,
     @NonNull Path sourcePath,
-    int seekPosition,
     int targetSegmentDuration,
     double framerate,
     @NonNull TranscodeDecision transcodeDecision,
@@ -18,7 +17,8 @@ public record TranscodeRequest(
     int height,
     long bitrate,
     String variantLabel,
-    int startSequenceNumber) {
+    int startSequenceNumber,
+    int mediaSegmentCount) {
 
   public TranscodeRequest {
     if (variantLabel == null) {

@@ -21,13 +21,22 @@ import build.buf.gen.streamarr.transcode.v1.StopVariantCommand;
 import build.buf.gen.streamarr.transcode.v1.TranscodeWorkerServiceGrpc;
 import build.buf.gen.streamarr.transcode.v1.UploadSegmentRequest;
 import build.buf.gen.streamarr.transcode.v1.UploadSegmentResponse;
+import build.buf.gen.streamarr.transcode.v1.Uuid;
 import build.buf.gen.streamarr.transcode.v1.VariantJob;
 import build.buf.gen.streamarr.transcode.v1.WorkerCapabilities;
 import build.buf.gen.streamarr.transcode.v1.WorkerIdentity;
 import build.buf.gen.streamarr.transcode.v1.WorkerRegistration;
 import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
 import com.google.protobuf.ByteString;
+import com.google.protobuf.UnsafeByteOperations;
+import com.streamarr.transcode.engine.AttemptOutcome;
+import com.streamarr.transcode.engine.AttemptOutcome.Completed;
+import com.streamarr.transcode.engine.AttemptOutcome.Failed;
+import com.streamarr.transcode.engine.AttemptOutcome.Stopped;
 import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
+import com.streamarr.transcode.engine.ProducedSegment;
+import com.streamarr.transcode.engine.Producer;
+import com.streamarr.transcode.engine.ProducerFailure;
 import com.streamarr.transcode.probe.FfprobeExecutor;
 import com.streamarr.transcode.protocol.ProtoUuid;
 import io.grpc.ManagedChannel;
@@ -35,18 +44,14 @@ import io.grpc.stub.ClientCallStreamObserver;
 import io.grpc.stub.ClientResponseObserver;
 import io.grpc.stub.StreamObserver;
 import java.io.IOException;
-import java.io.InputStream;
 import java.net.InetSocketAddress;
-import java.nio.file.Files;
-import java.nio.file.NoSuchFileException;
-import java.nio.file.Path;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -54,14 +59,12 @@ import java.util.concurrent.atomic.AtomicReference;
 import lombok.Builder;
 import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.io.FileUtils;
 
 @Slf4j
 public final class TranscodeWorker implements AutoCloseable {
 
   private static final int CONNECTION_TIMEOUT_SECONDS = 5;
-  private static final int SEGMENT_CHUNK_BYTES = 64 * 1024;
-  private static final int SEGMENT_WAIT_SECONDS = 30;
+  private static final int UPLOAD_MESSAGE_BYTES = 64 * 1024;
 
   private final TranscodeWorkerConfiguration configuration;
   private final FfmpegTranscodeEngine engine;
@@ -69,10 +72,9 @@ public final class TranscodeWorker implements AutoCloseable {
   private final WorkerVariantJobMapper jobMapper;
   private final Optional<FfprobeExecutor> ffprobe;
   private final WorkerRuntime runtime;
-  private final Map<UUID, ActiveVariant> activeVariants = new HashMap<>();
+  private final Map<UUID, Producer> activeAttempts = new HashMap<>();
 
   private ManagedChannel channel;
-  private ExecutorService executor;
   private StreamObserver<EstablishWorkerSessionRequest> requests;
   private WorkerSessionAccepted workerSession;
   private WorkerProbeSession probeSession;
@@ -112,7 +114,6 @@ public final class TranscodeWorker implements AutoCloseable {
 
     var channelBuilder =
         runtime.channelBuilder(configuration, InetSocketAddress.createUnresolved(host, port));
-    executor = Executors.newVirtualThreadPerTaskExecutor();
     // Client keepalive detects a half-open control-plane connection (server power loss, dropped
     // NAT mapping); without it an idle worker would wait on a dead session until TCP gives up.
     channel =
@@ -182,289 +183,253 @@ public final class TranscodeWorker implements AutoCloseable {
 
   @SuppressWarnings("java:S3398") // Job lifecycle belongs to the worker, not its gRPC observer.
   private void startVariant(StartVariantCommand command) {
+    // The stop waits for FFmpeg to exit, so it runs without the monitor that uploads need.
+    if (startAttempt(command) instanceof Orphaned(var producer)) {
+      producer.stop();
+    }
+  }
+
+  private synchronized AttemptStart startAttempt(StartVariantCommand command) {
     var job = command.getJob();
-    var outputDirectory =
-        configuration.segmentBasePath().resolve(fromProto(job.getJobAttemptId()).toString());
-    try {
-      synchronized (this) {
-        if (!command.getTarget().equals(identity())) {
-          sendFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
-          return;
-        }
-
-        Files.createDirectories(outputDirectory);
-        var request = jobMapper.map(job);
-        engine.start(request, outputDirectory);
-        activeVariants.put(
-            fromProto(job.getJobAttemptId()),
-            new ActiveVariant(request.sessionId(), request.variantLabel()));
-        send(
-            EstablishWorkerSessionRequest.newBuilder()
-                .setJobAttemptStarted(
-                    JobAttemptStarted.newBuilder().setJobAttemptId(job.getJobAttemptId()))
-                .build());
-      }
-    } catch (IOException | RuntimeException e) {
-      log.error(
-          "Failed to start variant {} of stream session {}",
-          job.getVariant().getVariantLabel(),
-          fromProto(job.getStreamSessionId()),
-          e);
-      deleteOutputDirectory(outputDirectory);
-      // A failure after engine.start() + activeVariants.put() (e.g. send() throwing) must stop the
-      // engine and drop the entry, otherwise the FFmpeg process leaks. failVariant is a no-op stop
-      // when nothing was registered yet.
-      failVariant(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED);
-      return;
+    if (!isRunnableHere(command)) {
+      reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
+      return new Refused();
     }
 
-    // execute + a terminal catch instead of submit: a throwable escaping the handlers below would
-    // otherwise be captured in a Future nobody reads and vanish.
-    executor.execute(
-        () -> {
-          try {
-            uploadVariant(job, outputDirectory);
-          } catch (RuntimeException e) {
-            log.error(
-                "Upload loop for variant {} of stream session {} died unexpectedly",
-                job.getVariant().getVariantLabel(),
-                fromProto(job.getStreamSessionId()),
-                e);
-          }
-        });
+    Producer producer;
+    try {
+      producer = engine.startProducer(jobMapper.map(job), segment -> deliverToServer(job, segment));
+    } catch (RuntimeException e) {
+      logStartupFailure(job, e);
+      reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED);
+      return new Refused();
+    }
+
+    activeAttempts.put(fromProto(job.getJobAttemptId()), producer);
+    try {
+      send(jobAttemptStarted(job.getJobAttemptId()));
+    } catch (RuntimeException e) {
+      logStartupFailure(job, e);
+      activeAttempts.remove(fromProto(job.getJobAttemptId()));
+      reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED);
+      return new Orphaned(producer);
+    }
+
+    producer.outcome().thenAccept(outcome -> settleAttempt(job, producer, outcome));
+    return new Started();
   }
 
-  private void uploadVariant(VariantJob job, Path outputDirectory) {
+  private boolean isRunnableHere(StartVariantCommand command) {
+    var job = command.getJob();
+    return command.getTarget().equals(identity())
+        && job.getDecision().getContainer() == ContainerFormat.CONTAINER_FORMAT_FMP4
+        && hasUsableFrameRate(job)
+        && startsAtAnAdvertisedMediaSegment(job);
+  }
+
+  // The server advertises the variant's media segment count to every job attempt; zero is unset.
+  private static boolean startsAtAnAdvertisedMediaSegment(VariantJob job) {
+    var execution = job.getExecution();
+    return execution.getMediaSegmentCount() > execution.getStartSequenceNumber();
+  }
+
+  // The worker encodes video at the probed frame rate and counts its GOP from that rate.
+  private static boolean hasUsableFrameRate(VariantJob job) {
+    if (!WorkerVariantJobMapper.encodesVideo(job)) {
+      return true;
+    }
+
+    var framerate = job.getExecution().getFramerate();
+    return framerate > 0 && Double.isFinite(framerate);
+  }
+
+  private static void logStartupFailure(VariantJob job, RuntimeException failure) {
+    log.error(
+        "Failed to start variant {} of stream session {}",
+        job.getVariant().getVariantLabel(),
+        fromProto(job.getStreamSessionId()),
+        failure);
+  }
+
+  // The attempt's producer delivers each segment here and waits until the server accepts it.
+  private void deliverToServer(VariantJob job, ProducedSegment segment) {
     try {
-      uploadProducedSegments(job, outputDirectory);
-    } catch (InterruptedException _) {
+      uploadSegment(job, segment);
+    } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
-      log.info(
-          "Upload of variant {} for stream session {} interrupted; failing the attempt",
-          job.getVariant().getVariantLabel(),
-          fromProto(job.getStreamSessionId()));
-      failVariant(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
-    } catch (IOException | ExecutionException | TimeoutException | RuntimeException e) {
-      log.error(
-          "Variant {} of stream session {} failed",
-          job.getVariant().getVariantLabel(),
-          fromProto(job.getStreamSessionId()),
-          e);
-      failVariant(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
-    } finally {
-      deleteOutputDirectory(outputDirectory);
+      throw new WorkerJobException("Interrupted while uploading " + segment, e);
+    } catch (ExecutionException | TimeoutException e) {
+      throw new WorkerJobException("Upload of " + segment + " failed", e);
     }
   }
 
-  private static void deleteOutputDirectory(Path outputDirectory) {
-    try {
-      FileUtils.deleteDirectory(outputDirectory.toFile());
-    } catch (NoSuchFileException _) {
-      // Concurrent shutdown already completed the idempotent cleanup.
-    } catch (IOException e) {
-      log.warn("Failed to delete transcode attempt output {}", outputDirectory, e);
-    }
-  }
-
-  private void uploadProducedSegments(VariantJob job, Path outputDirectory)
-      throws IOException, InterruptedException, ExecutionException, TimeoutException {
-    if (job.getDecision().getContainer() == ContainerFormat.CONTAINER_FORMAT_FMP4
-        && !uploadInitializationWhenProduced(job, outputDirectory)) {
-      finishEndedVariant(job, false);
-      return;
-    }
-
-    var segmentNumber = job.getExecution().getStartSequenceNumber();
-    var uploadedMediaSegment = false;
-    while (isAttemptActive(job)) {
-      var segmentName = segmentName(job, segmentNumber);
-      if (!uploadWhenProduced(job, outputDirectory, segmentName)) {
-        finishEndedVariant(job, uploadedMediaSegment);
-        return;
-      }
-      uploadedMediaSegment = true;
-      segmentNumber++;
-    }
-  }
-
-  private boolean uploadInitializationWhenProduced(VariantJob job, Path outputDirectory)
-      throws IOException, InterruptedException, ExecutionException, TimeoutException {
-    // FFmpeg opens init.mp4 before writing its header. The first atomically renamed media fragment
-    // establishes that the header has been closed, including when a replacement starts after zero.
-    var firstSegment = segmentName(job, job.getExecution().getStartSequenceNumber());
-    if (awaitSegment(job, outputDirectory.resolve(firstSegment)).isEmpty()) {
-      return false;
-    }
-
-    return uploadWhenProduced(job, outputDirectory, "init.mp4");
-  }
-
-  private boolean uploadWhenProduced(VariantJob job, Path outputDirectory, String segmentName)
-      throws IOException, InterruptedException, ExecutionException, TimeoutException {
-    var segmentPath = awaitSegment(job, outputDirectory.resolve(segmentName));
-    if (segmentPath.isEmpty()) {
-      return false;
-    }
-    uploadSegment(job, segmentName, segmentPath.get());
-    Files.delete(segmentPath.get());
-    return true;
-  }
-
-  private void uploadSegment(VariantJob job, String segmentName, Path segmentPath)
-      throws IOException, InterruptedException, ExecutionException, TimeoutException {
-    var segmentLength = Files.size(segmentPath);
-    var response = new CompletableFuture<UploadSegmentResponse>();
-    var responseObserver = new SegmentUploadResponseObserver(response);
-    var upload = TranscodeWorkerServiceGrpc.newStub(channel).uploadSegment(responseObserver);
+  private void uploadSegment(VariantJob job, ProducedSegment segment)
+      throws InterruptedException, ExecutionException, TimeoutException {
+    var upload = new SegmentUpload();
+    var metadata =
+        openUpload(job, upload)
+            .setSegmentName(segment.name())
+            .setContentType(SegmentContentType.SEGMENT_CONTENT_TYPE_VIDEO_MP4)
+            .setContentLengthBytes(segment.byteLength())
+            .build();
     UploadSegmentResponse accepted;
     try {
-      upload.onNext(
-          UploadSegmentRequest.newBuilder()
-              .setMetadata(segmentMetadata(job, segmentName, segmentLength))
-              .build());
-      try (InputStream input = Files.newInputStream(segmentPath)) {
-        byte[] chunk;
-        while ((chunk = input.readNBytes(SEGMENT_CHUNK_BYTES)).length > 0) {
-          upload.onNext(
-              UploadSegmentRequest.newBuilder().setData(ByteString.copyFrom(chunk)).build());
-        }
-      }
-      upload.onCompleted();
-      accepted = response.get(CONNECTION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-    } catch (IOException
-        | InterruptedException
-        | ExecutionException
-        | TimeoutException
-        | RuntimeException failure) {
-      responseObserver.cancel(failure);
-      throw failure;
+      upload.send(UploadSegmentRequest.newBuilder().setMetadata(metadata).build());
+      sendContent(upload, segment);
+      upload.finish();
+      accepted = upload.awaitAcknowledgement();
+    } catch (InterruptedException | ExecutionException | TimeoutException | RuntimeException e) {
+      upload.cancel(e);
+      throw e;
     }
 
-    if (accepted.getAcceptedLengthBytes() != segmentLength) {
+    if (accepted.getAcceptedLengthBytes() != segment.byteLength()) {
       throw new WorkerJobException("Server accepted an incomplete segment");
     }
   }
 
-  private Optional<Path> awaitSegment(VariantJob job, Path segmentPath) {
-    var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(SEGMENT_WAIT_SECONDS);
-    while (System.nanoTime() < deadline) {
-      if (Files.isRegularFile(segmentPath)) {
-        return Optional.of(segmentPath);
-      }
-      if (!isAttemptProducing(job)) {
-        // FFmpeg may have written the segment and exited after the check above.
-        return Optional.of(segmentPath).filter(Files::isRegularFile);
-      }
-      try {
-        Thread.sleep(50);
-      } catch (InterruptedException _) {
-        Thread.currentThread().interrupt();
-        throw new WorkerJobException("Interrupted while waiting for a segment");
-      }
+  // Opens the upload call while the attempt is still active in this session.
+  private synchronized SegmentUploadMetadata.Builder openUpload(
+      VariantJob job, SegmentUpload upload) {
+    if (!activeAttempts.containsKey(fromProto(job.getJobAttemptId()))) {
+      throw new WorkerJobException("Job attempt is no longer active");
     }
-    throw new WorkerJobException("Timed out waiting for a segment");
-  }
 
-  private synchronized boolean isAttemptActive(VariantJob job) {
-    return activeVariants.containsKey(fromProto(job.getJobAttemptId()));
-  }
-
-  private synchronized boolean isAttemptProducing(VariantJob job) {
-    var variant = activeVariants.get(fromProto(job.getJobAttemptId()));
-    return variant != null && engine.isRunning(variant.streamSessionId(), variant.variantLabel());
-  }
-
-  private SegmentUploadMetadata segmentMetadata(
-      VariantJob job, String segmentName, long segmentLength) {
+    TranscodeWorkerServiceGrpc.newStub(channel).uploadSegment(upload);
     return SegmentUploadMetadata.newBuilder()
         .setWorkerSessionId(workerSession.getWorkerSessionId())
         .setWorker(identity())
         .setStreamSessionId(job.getStreamSessionId())
         .setJobId(job.getJobId())
         .setJobAttemptId(job.getJobAttemptId())
-        .setVariantLabel(job.getVariant().getVariantLabel())
-        .setSegmentName(segmentName)
-        .setContentType(contentType(job))
-        .setContentLengthBytes(segmentLength)
-        .build();
+        .setVariantLabel(job.getVariant().getVariantLabel());
   }
 
-  private static String segmentName(VariantJob job, int segmentNumber) {
-    var container = WorkerVariantJobMapper.container(job.getDecision().getContainer());
-    return "segment" + segmentNumber + container.segmentExtension();
-  }
-
-  private static SegmentContentType contentType(VariantJob job) {
-    return switch (WorkerVariantJobMapper.container(job.getDecision().getContainer())) {
-      case MPEGTS -> SegmentContentType.SEGMENT_CONTENT_TYPE_VIDEO_MP2T;
-      case FMP4 -> SegmentContentType.SEGMENT_CONTENT_TYPE_VIDEO_MP4;
-    };
-  }
-
-  private synchronized void failVariant(VariantJob job, JobAttemptFailure failure) {
-    var variant = activeVariants.remove(fromProto(job.getJobAttemptId()));
-    if (variant != null) {
-      engine.stop(variant.streamSessionId(), variant.variantLabel());
+  private static void sendContent(SegmentUpload upload, ProducedSegment segment)
+      throws InterruptedException {
+    var pending = ByteString.EMPTY;
+    for (var box : segment.content()) {
+      // The producer never changes a segment it delivered, so wrapping its boxes copies nothing.
+      pending = sendWholeDataMessages(upload, pending.concat(UnsafeByteOperations.unsafeWrap(box)));
     }
-    try {
-      sendFailure(job, failure);
-    } catch (RuntimeException e) {
-      // The control stream is gone (shutdown or connection loss). The server learns of the
-      // attempt's end from the disconnect itself, so the lost report costs precision, not safety —
-      // but it must be visible, not swallowed by the upload task.
-      log.debug(
-          "Could not report job attempt failure for variant {} of stream session {}",
-          job.getVariant().getVariantLabel(),
-          fromProto(job.getStreamSessionId()),
-          e);
+
+    if (!pending.isEmpty()) {
+      upload.send(dataMessage(pending));
     }
   }
 
-  private synchronized void finishEndedVariant(VariantJob job, boolean uploadedMediaSegment) {
-    if (!isAttemptActive(job)) {
-      return;
+  // Sends every full-sized data message and returns the remainder.
+  private static ByteString sendWholeDataMessages(SegmentUpload upload, ByteString content)
+      throws InterruptedException {
+    var remaining = content;
+    while (remaining.size() >= UPLOAD_MESSAGE_BYTES) {
+      upload.send(dataMessage(remaining.substring(0, UPLOAD_MESSAGE_BYTES)));
+      remaining = remaining.substring(UPLOAD_MESSAGE_BYTES);
     }
-    if (!uploadedMediaSegment) {
-      failVariant(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
+
+    return remaining;
+  }
+
+  private static UploadSegmentRequest dataMessage(ByteString data) {
+    return UploadSegmentRequest.newBuilder().setData(data).build();
+  }
+
+  // Reports the producer's outcome unless a stop or the session's end has already claimed it.
+  private synchronized void settleAttempt(
+      VariantJob job, Producer producer, AttemptOutcome outcome) {
+    if (!activeAttempts.remove(fromProto(job.getJobAttemptId()), producer)) {
       return;
     }
 
-    activeVariants.remove(fromProto(job.getJobAttemptId()));
-    send(
-        EstablishWorkerSessionRequest.newBuilder()
-            .setJobAttemptCompleted(
-                JobAttemptCompleted.newBuilder().setJobAttemptId(job.getJobAttemptId()))
-            .build());
+    tryReport(
+        switch (outcome) {
+          case Completed _ -> jobAttemptCompleted(job.getJobAttemptId());
+          case Failed(var reason, var detail) -> transcodeFailure(job, reason, detail);
+          case Stopped _ -> jobAttemptStopped(job.getJobAttemptId());
+        });
+  }
+
+  private static EstablishWorkerSessionRequest transcodeFailure(
+      VariantJob job, ProducerFailure reason, String detail) {
+    log.warn(
+        "Variant {} of stream session {} failed ({}): {}",
+        job.getVariant().getVariantLabel(),
+        fromProto(job.getStreamSessionId()),
+        reason,
+        detail);
+    return jobAttemptFailed(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
   }
 
   @SuppressWarnings("java:S3398") // Job lifecycle belongs to the worker, not its gRPC observer.
-  private synchronized void stopVariant(StopVariantCommand command) {
-    if (!command.getTarget().equals(identity())) {
-      return;
-    }
-
-    var jobAttemptId = fromProto(command.getJobAttemptId());
-    var variant = activeVariants.remove(jobAttemptId);
-    if (variant == null) {
-      return;
-    }
-
-    engine.stop(variant.streamSessionId(), variant.variantLabel());
-    send(
-        EstablishWorkerSessionRequest.newBuilder()
-            .setJobAttemptStopped(
-                JobAttemptStopped.newBuilder().setJobAttemptId(command.getJobAttemptId()))
-            .build());
+  private void stopVariant(StopVariantCommand command) {
+    // The stop waits for FFmpeg to exit, so it runs without the monitor that uploads need.
+    claimStoppedAttempt(command)
+        .ifPresent(
+            stop -> {
+              stop.producer().stop();
+              reportStopped(stop, command.getJobAttemptId());
+            });
   }
 
-  private void sendFailure(VariantJob job, JobAttemptFailure failure) {
-    send(
-        EstablishWorkerSessionRequest.newBuilder()
-            .setJobAttemptFailed(
-                JobAttemptFailed.newBuilder()
-                    .setJobAttemptId(job.getJobAttemptId())
-                    .setFailure(failure))
-            .build());
+  // Claims the attempt so that its producer's own outcome is never reported.
+  private synchronized Optional<ClaimedStop> claimStoppedAttempt(StopVariantCommand command) {
+    if (!command.getTarget().equals(identity())) {
+      return Optional.empty();
+    }
+
+    return Optional.ofNullable(activeAttempts.remove(fromProto(command.getJobAttemptId())))
+        .map(producer -> new ClaimedStop(producer, requests));
+  }
+
+  // A stop that outlives its session reports nothing; the server learned of the end on disconnect.
+  private synchronized void reportStopped(ClaimedStop stop, Uuid jobAttemptId) {
+    if (requests != stop.session()) {
+      return;
+    }
+
+    tryReport(jobAttemptStopped(jobAttemptId));
+  }
+
+  private void reportFailure(VariantJob job, JobAttemptFailure failure) {
+    tryReport(jobAttemptFailed(job, failure));
+  }
+
+  private void tryReport(EstablishWorkerSessionRequest report) {
+    try {
+      send(report);
+    } catch (RuntimeException e) {
+      // The control stream is gone (shutdown or connection loss). The server learns of the
+      // attempt's end from the disconnect itself, so the lost report costs precision, not safety.
+      log.debug("Could not report {}", report, e);
+    }
+  }
+
+  private static EstablishWorkerSessionRequest jobAttemptStarted(Uuid jobAttemptId) {
+    return EstablishWorkerSessionRequest.newBuilder()
+        .setJobAttemptStarted(JobAttemptStarted.newBuilder().setJobAttemptId(jobAttemptId))
+        .build();
+  }
+
+  private static EstablishWorkerSessionRequest jobAttemptCompleted(Uuid jobAttemptId) {
+    return EstablishWorkerSessionRequest.newBuilder()
+        .setJobAttemptCompleted(JobAttemptCompleted.newBuilder().setJobAttemptId(jobAttemptId))
+        .build();
+  }
+
+  private static EstablishWorkerSessionRequest jobAttemptStopped(Uuid jobAttemptId) {
+    return EstablishWorkerSessionRequest.newBuilder()
+        .setJobAttemptStopped(JobAttemptStopped.newBuilder().setJobAttemptId(jobAttemptId))
+        .build();
+  }
+
+  private static EstablishWorkerSessionRequest jobAttemptFailed(
+      VariantJob job, JobAttemptFailure failure) {
+    return EstablishWorkerSessionRequest.newBuilder()
+        .setJobAttemptFailed(
+            JobAttemptFailed.newBuilder()
+                .setJobAttemptId(job.getJobAttemptId())
+                .setFailure(failure))
+        .build();
   }
 
   private synchronized void send(EstablishWorkerSessionRequest request) {
@@ -475,40 +440,54 @@ public final class TranscodeWorker implements AutoCloseable {
   }
 
   @SuppressWarnings("java:S3398") // Job lifecycle belongs to the worker, not its gRPC observer.
-  private synchronized void logAbandonedAttempts() {
-    if (activeVariants.isEmpty()) {
-      return;
-    }
-    log.warn(
-        "Worker session ended with {} abandoned job attempt(s): {}",
-        activeVariants.size(),
-        activeVariants.keySet());
-  }
-
-  private synchronized void stopActiveVariants() {
-    activeVariants
-        .values()
-        .forEach(variant -> engine.stop(variant.streamSessionId(), variant.variantLabel()));
-    activeVariants.clear();
+  private void endSession(WorkerProbeSession sessionProbes) {
+    stopAll(claimSessionAttempts(sessionProbes));
   }
 
   @SuppressWarnings("java:S3398") // The fence shares the worker monitor with close() and start().
-  private synchronized void endSession(WorkerProbeSession sessionProbes) {
+  private synchronized List<Producer> claimSessionAttempts(WorkerProbeSession sessionProbes) {
     if (probeSession != sessionProbes) {
-      return;
+      return List.of();
     }
 
-    logAbandonedAttempts();
-    stopActiveVariants();
+    if (!activeAttempts.isEmpty()) {
+      log.warn(
+          "Worker session ended with {} abandoned job attempt(s): {}",
+          activeAttempts.size(),
+          activeAttempts.keySet());
+    }
+
+    return claimActiveAttempts();
+  }
+
+  private synchronized List<Producer> claimActiveAttempts() {
+    var producers = List.copyOf(activeAttempts.values());
+    activeAttempts.clear();
+    return producers;
+  }
+
+  // Stops the producers together and returns once every FFmpeg has exited.
+  private static void stopAll(List<Producer> producers) {
+    try (var stops = Executors.newVirtualThreadPerTaskExecutor()) {
+      producers.forEach(producer -> stops.execute(producer::stop));
+    }
   }
 
   @Override
   public void close() {
+    // Stopping first lets FFmpeg quit while the session can still carry its uploads.
+    stopAll(claimActiveAttempts());
     // Probe completion needs the worker monitor, so join only after closeConnection releases it.
-    closeConnection().ifPresent(WorkerProbeSession::close);
+    closeConnection()
+        .ifPresent(
+            closed -> {
+              stopAll(closed.attempts());
+              closed.probes().close();
+            });
   }
 
-  private synchronized Optional<WorkerProbeSession> closeConnection() {
+  // Returns the closed session's probes and any attempt that started after the stops began.
+  private synchronized Optional<ClosedSession> closeConnection() {
     responseObserver = null;
 
     if (channel == null) {
@@ -516,7 +495,7 @@ public final class TranscodeWorker implements AutoCloseable {
     }
 
     probeSession.shutdown();
-    stopActiveVariants();
+    var attempts = claimActiveAttempts();
     try {
       requests.onCompleted();
     } catch (RuntimeException _) {
@@ -530,15 +509,13 @@ public final class TranscodeWorker implements AutoCloseable {
     } catch (InterruptedException _) {
       Thread.currentThread().interrupt();
     }
-    executor.shutdownNow();
     disconnected.complete(null);
     requests = null;
     workerSession = null;
     channel = null;
-    executor = null;
     var closedProbes = probeSession;
     probeSession = null;
-    return Optional.of(closedProbes);
+    return Optional.of(new ClosedSession(closedProbes, attempts));
   }
 
   private final class WorkerResponseObserver
@@ -629,19 +606,51 @@ public final class TranscodeWorker implements AutoCloseable {
     }
   }
 
-  private static final class SegmentUploadResponseObserver
+  // One segment's upload call, which sends a message only when the call is ready for it.
+  private static final class SegmentUpload
       implements ClientResponseObserver<UploadSegmentRequest, UploadSegmentResponse> {
 
-    private final CompletableFuture<UploadSegmentResponse> response;
+    private final CompletableFuture<UploadSegmentResponse> response = new CompletableFuture<>();
+    private final Object readiness = new Object();
     private ClientCallStreamObserver<UploadSegmentRequest> call;
-
-    private SegmentUploadResponseObserver(CompletableFuture<UploadSegmentResponse> response) {
-      this.response = response;
-    }
 
     @Override
     public void beforeStart(ClientCallStreamObserver<UploadSegmentRequest> call) {
       this.call = call;
+      call.setOnReadyHandler(this::signalReadiness);
+    }
+
+    // Sends nothing once the server has answered; the answer decides the upload.
+    private void send(UploadSegmentRequest message) throws InterruptedException {
+      awaitReadiness();
+      if (!response.isDone()) {
+        call.onNext(message);
+      }
+    }
+
+    private void awaitReadiness() throws InterruptedException {
+      synchronized (readiness) {
+        while (!call.isReady() && !response.isDone()) {
+          readiness.wait();
+        }
+      }
+    }
+
+    private void signalReadiness() {
+      synchronized (readiness) {
+        readiness.notifyAll();
+      }
+    }
+
+    private void finish() {
+      if (!response.isDone()) {
+        call.onCompleted();
+      }
+    }
+
+    private UploadSegmentResponse awaitAcknowledgement()
+        throws InterruptedException, ExecutionException, TimeoutException {
+      return response.get(CONNECTION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
     }
 
     private void cancel(Throwable failure) {
@@ -651,11 +660,13 @@ public final class TranscodeWorker implements AutoCloseable {
     @Override
     public void onNext(UploadSegmentResponse value) {
       response.complete(value);
+      signalReadiness();
     }
 
     @Override
     public void onError(Throwable throwable) {
       response.completeExceptionally(throwable);
+      signalReadiness();
     }
 
     @Override
@@ -668,11 +679,23 @@ public final class TranscodeWorker implements AutoCloseable {
     private Optional<FfprobeExecutor> ffprobe = Optional.empty();
     private WorkerRuntime runtime = new GrpcWorkerRuntime();
 
-    public TranscodeWorkerBuilder ffprobe(@NonNull FfprobeExecutor producer) {
-      ffprobe = Optional.of(producer);
+    public TranscodeWorkerBuilder ffprobe(@NonNull FfprobeExecutor executor) {
+      ffprobe = Optional.of(executor);
       return this;
     }
   }
 
-  private record ActiveVariant(UUID streamSessionId, String variantLabel) {}
+  private record ClosedSession(WorkerProbeSession probes, List<Producer> attempts) {}
+
+  private record ClaimedStop(
+      Producer producer, StreamObserver<EstablishWorkerSessionRequest> session) {}
+
+  private sealed interface AttemptStart {}
+
+  private record Started() implements AttemptStart {}
+
+  private record Refused() implements AttemptStart {}
+
+  // The producer started, but the worker could not report the start and must stop it.
+  private record Orphaned(Producer producer) implements AttemptStart {}
 }

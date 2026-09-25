@@ -5,7 +5,6 @@ import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import build.buf.gen.streamarr.transcode.v1.VariantJob;
 import com.streamarr.transcode.engine.AudioDecision;
 import com.streamarr.transcode.engine.AudioMode;
-import com.streamarr.transcode.engine.ContainerFormat;
 import com.streamarr.transcode.engine.SubtitleDecision;
 import com.streamarr.transcode.engine.SubtitleMode;
 import com.streamarr.transcode.engine.TranscodeDecision;
@@ -28,8 +27,8 @@ final class WorkerVariantJobMapper {
     var execution = job.getExecution();
     return TranscodeRequest.builder()
         .sessionId(fromProto(job.getStreamSessionId()))
+        .attemptId(fromProto(job.getJobAttemptId()))
         .sourcePath(sourceResolver.resolve(job.getSource()))
-        .seekPosition(execution.getSeekPositionSeconds())
         .targetSegmentDuration(execution.getTargetSegmentDurationSeconds())
         .framerate(execution.getFramerate())
         .transcodeDecision(decision(job.getDecision()))
@@ -37,7 +36,10 @@ final class WorkerVariantJobMapper {
         .height(variant.getHeight())
         .bitrate(variant.getBitrateBitsPerSecond())
         .variantLabel(variant.getVariantLabel())
+        // The start sequence number also decides the seek, so the job's seek position, which
+        // the server sets to that segment's boundary, is not read.
         .startSequenceNumber(execution.getStartSequenceNumber())
+        .mediaSegmentCount(execution.getMediaSegmentCount())
         .build();
   }
 
@@ -49,7 +51,6 @@ final class WorkerVariantJobMapper {
         .videoCodecFamily(decision.getVideoCodecFamily())
         .audioDecision(audio(decision.getAudio()))
         .subtitleDecision(subtitle(decision.getSubtitle()))
-        .containerFormat(container(decision.getContainer()))
         .needsKeyframeAlignment(decision.getAlignKeyframesToSegments())
         .build();
   }
@@ -74,15 +75,25 @@ final class WorkerVariantJobMapper {
         subtitle.hasLanguage() ? Optional.of(subtitle.getLanguage()) : Optional.empty());
   }
 
+  // Whether the job encodes video, by the engine's rule; a job that names no mode encodes none.
+  static boolean encodesVideo(VariantJob job) {
+    return modeOf(job.getDecision().getMode()).map(TranscodeMode::encodesVideo).orElse(false);
+  }
+
   @SuppressWarnings("checkstyle:fullyQualifiedName")
-  private TranscodeMode mode(build.buf.gen.streamarr.transcode.v1.TranscodeMode mode) {
+  private static TranscodeMode mode(build.buf.gen.streamarr.transcode.v1.TranscodeMode mode) {
+    return modeOf(mode).orElseThrow(() -> new WorkerJobException("Transcode mode is required"));
+  }
+
+  @SuppressWarnings("checkstyle:fullyQualifiedName")
+  private static Optional<TranscodeMode> modeOf(
+      build.buf.gen.streamarr.transcode.v1.TranscodeMode mode) {
     return switch (mode) {
-      case TRANSCODE_MODE_REMUX -> TranscodeMode.REMUX;
-      case TRANSCODE_MODE_AUDIO_TRANSCODE -> TranscodeMode.AUDIO_TRANSCODE;
-      case TRANSCODE_MODE_VIDEO_TRANSCODE -> TranscodeMode.VIDEO_TRANSCODE;
-      case TRANSCODE_MODE_FULL_TRANSCODE -> TranscodeMode.FULL_TRANSCODE;
-      case TRANSCODE_MODE_UNSPECIFIED, UNRECOGNIZED ->
-          throw new WorkerJobException("Transcode mode is required");
+      case TRANSCODE_MODE_REMUX -> Optional.of(TranscodeMode.REMUX);
+      case TRANSCODE_MODE_AUDIO_TRANSCODE -> Optional.of(TranscodeMode.AUDIO_TRANSCODE);
+      case TRANSCODE_MODE_VIDEO_TRANSCODE -> Optional.of(TranscodeMode.VIDEO_TRANSCODE);
+      case TRANSCODE_MODE_FULL_TRANSCODE -> Optional.of(TranscodeMode.FULL_TRANSCODE);
+      case TRANSCODE_MODE_UNSPECIFIED, UNRECOGNIZED -> Optional.empty();
     };
   }
 
@@ -107,16 +118,6 @@ final class WorkerVariantJobMapper {
       case SUBTITLE_MODE_EMBED -> SubtitleMode.EMBED;
       case SUBTITLE_MODE_UNSPECIFIED, UNRECOGNIZED ->
           throw new WorkerJobException("Subtitle mode is required");
-    };
-  }
-
-  @SuppressWarnings("checkstyle:fullyQualifiedName")
-  static ContainerFormat container(build.buf.gen.streamarr.transcode.v1.ContainerFormat container) {
-    return switch (container) {
-      case CONTAINER_FORMAT_MPEG_TS -> ContainerFormat.MPEGTS;
-      case CONTAINER_FORMAT_FMP4 -> ContainerFormat.FMP4;
-      case CONTAINER_FORMAT_UNSPECIFIED, UNRECOGNIZED ->
-          throw new WorkerJobException("Container format is required");
     };
   }
 }

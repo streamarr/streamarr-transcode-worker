@@ -4,12 +4,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 @Tag("UnitTest")
 @DisplayName("Transcode Worker Settings Tests")
@@ -47,7 +51,6 @@ class TranscodeWorkerSettingsTest {
     assertThat(worker.workerId()).isEqualTo(WORKER_ID);
     assertThat(worker.availableSlots()).isEqualTo(1);
     assertThat(worker.sourceNamespaces()).containsEntry(SOURCE_NAMESPACE_ID, Path.of("/media"));
-    assertThat(worker.segmentBasePath().toString()).contains("streamarr-worker-segments");
   }
 
   @Test
@@ -92,8 +95,7 @@ class TranscodeWorkerSettingsTest {
             .workerId(UUID.randomUUID())
             .bootId(UUID.randomUUID())
             .availableSlots(0)
-            .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, Path.of("/media")))
-            .segmentBasePath(Path.of("/segments"));
+            .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, Path.of("/media")));
 
     assertThatThrownBy(configuration::build)
         .isInstanceOf(IllegalArgumentException.class)
@@ -107,14 +109,12 @@ class TranscodeWorkerSettingsTest {
     environment.put("TRANSCODE_WORKER_CONTROL_PLANE_PORT", "65535");
     environment.put("TRANSCODE_WORKER_SLOTS", "2");
     environment.put("TRANSCODE_WORKER_FFMPEG_PATH", "/usr/local/bin/ffmpeg");
-    environment.put("TRANSCODE_WORKER_SEGMENT_BASE_PATH", "/transcode");
 
     var settings = TranscodeWorkerSettings.fromEnvironment(environment);
 
     assertThat(settings.controlPlanePort()).isEqualTo(65_535);
     assertThat(settings.ffmpegPath()).isEqualTo("/usr/local/bin/ffmpeg");
     assertThat(settings.workerConfiguration().availableSlots()).isEqualTo(2);
-    assertThat(settings.workerConfiguration().segmentBasePath()).isEqualTo(Path.of("/transcode"));
   }
 
   @Test
@@ -146,6 +146,59 @@ class TranscodeWorkerSettingsTest {
     var settings = TranscodeWorkerSettings.fromEnvironment(environment);
 
     assertThat(settings.ffprobePath()).isEqualTo("/usr/local/bin/ffprobe");
+  }
+
+  @Test
+  @DisplayName("Should target one-second fragments when the fragmentation target is not configured")
+  void shouldTargetOneSecondFragmentsWhenTheFragmentationTargetIsNotConfigured() {
+    var settings = TranscodeWorkerSettings.fromEnvironment(requiredEnvironment());
+
+    assertThat(settings.fragmentationTarget()).isEqualTo(Duration.ofSeconds(1));
+  }
+
+  @Test
+  @DisplayName("Should use the configured fragmentation target when loading settings")
+  void shouldUseTheConfiguredFragmentationTargetWhenLoadingSettings() {
+    var environment = new HashMap<>(requiredEnvironment());
+    environment.put("TRANSCODE_WORKER_FRAGMENTATION_TARGET", "250ms");
+
+    var settings = TranscodeWorkerSettings.fromEnvironment(environment);
+
+    assertThat(settings.fragmentationTarget()).isEqualTo(Duration.ofMillis(250));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"0s", "-1s", "500ns"})
+  @DisplayName(
+      "Should reject a fragmentation target shorter than a microsecond when loading settings")
+  void shouldRejectAFragmentationTargetShorterThanAMicrosecondWhenLoadingSettings(String target) {
+    assertInvalidSetting(
+        "TRANSCODE_WORKER_FRAGMENTATION_TARGET",
+        target,
+        "TRANSCODE_WORKER_FRAGMENTATION_TARGET must be at least 1 microsecond");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({"1500us, PT0.0015S", "250ms, PT0.25S", "2s, PT2S", "1m, PT1M", "1h, PT1H"})
+  @DisplayName("Should read the fragmentation target in its unit when loading settings")
+  void shouldReadTheFragmentationTargetInItsUnitWhenLoadingSettings(
+      String target, Duration expected) {
+    var environment = new HashMap<>(requiredEnvironment());
+    environment.put("TRANSCODE_WORKER_FRAGMENTATION_TARGET", target);
+
+    var settings = TranscodeWorkerSettings.fromEnvironment(environment);
+
+    assertThat(settings.fragmentationTarget()).isEqualTo(expected);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"soon", "1000", "1.5s", "PT1S", "1 s", "99999999999999999999s"})
+  @DisplayName("Should explain a fragmentation target that is not a duration when loading settings")
+  void shouldExplainAFragmentationTargetThatIsNotADurationWhenLoadingSettings(String target) {
+    assertInvalidSetting(
+        "TRANSCODE_WORKER_FRAGMENTATION_TARGET",
+        target,
+        "TRANSCODE_WORKER_FRAGMENTATION_TARGET must be a duration such as 1s or 500ms");
   }
 
   private void assertInvalidSetting(String key, String value, String expectedMessage) {

@@ -37,15 +37,18 @@ FPS=23.976023976023978
 GOP_VERIFIED=145                      # ceil(P * FPS) + 1: ADR 0037's backstop for an encoder verified to honour forced keyframes
 GOP_FLOOR=143                         # floor(P * FPS): ADR 0037's GOP for an encoder not verified to (libx265 until worker #23, hardware until worker #14)
 GOP_CEIL=144                          # ceil(P * FPS): the HLS recipe's frame-count GOP
+# The HLS recipe's forced keyframes: an expression whose t counts from the attempt's first frame.
 FORCED_EVERY_PERIOD="expr:gte(t,n_forced*$P)"
-# Forces 0, 6, 12, 24, 30 ... s: the forced keyframe for 18 s never comes, so the GOP backstop must
-# place interval 3's keyframe.
-FORCED_EXCEPT_18="expr:gte(t,(n_forced+gte(n_forced,3))*$P)"
-# Fixture-only additions: single-threaded encoders (-threads 1, and lp=1 for SVT-AV1, whose output
-# otherwise differs on every run), so that a re-recording reproduces the same bytes. For libx264 and
-# libx265 threading changes rate-control decisions, never where a keyframe is placed or where the
-# muxer cuts. For SVT-AV1 lp=1 also excludes upstream issue 2385 (worker #42), which under the
-# worker's threading can reorder packets and crowd keyframes, so no recording shows that bug.
+# The pipe recipe forces its keyframes from a list of absolute media times that run() fills in
+# for this placeholder: every boundary k * P, in whole seconds, from the recorded attempt's start
+# sequence number up to the media segment count the server advertises for the source.
+BOUNDARIES=@BOUNDARIES@
+# Fixture-only additions: quiet, non-interactive logging (FF's -hide_banner -nostdin -loglevel error)
+# and single-threaded encoders (-threads 1, and lp=1 for SVT-AV1, whose output otherwise differs on
+# every run), so that a re-recording reproduces the same bytes. For libx264 and libx265 threading
+# changes rate-control decisions, never where a keyframe is placed or where the muxer cuts. For
+# SVT-AV1 lp=1 also excludes upstream issue 2385 (worker #42), which under the worker's threading can
+# reorder packets and crowd keyframes, so no recording shows that bug.
 DET=(-threads 1)
 
 X264=(-c:v libx264 -vf scale=-2:36 -b:v 6000 -maxrate 6000 -bufsize 12000)
@@ -61,30 +64,61 @@ COMMON_PIPE=(-map_metadata -1 -map_chapters -1 -copyts -avoid_negative_ts disabl
 
 # Two recipes: HLS = the HLS muxer recipe that ADR 0037 replaces, PIPE = ADR 0037's pipe recipe.
 KEY_X264_HLS=(-forced-idr 1 -force_key_frames:0 "$FORCED_EVERY_PERIOD" -sc_threshold:v:0 0)
-KEY_X264_PIPE=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$FORCED_EVERY_PERIOD" -g:v:0 "$GOP_VERIFIED" -sc_threshold:v:0 0)
-KEY_X264_PIPE_FLOORED=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$FORCED_EVERY_PERIOD" -g:v:0 "$GOP_FLOOR" -sc_threshold:v:0 0)
-KEY_X264_PIPE_MISSED=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$FORCED_EXCEPT_18" -g:v:0 "$GOP_VERIFIED" -sc_threshold:v:0 0)
+# The pipe recipe's keyframe arguments in the order FfmpegCommandBuilder passes them.
+KEY_X264_PIPE=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$BOUNDARIES" -sc_threshold:v:0 0 -g:v:0 "$GOP_VERIFIED")
+KEY_X264_PIPE_FLOORED=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$BOUNDARIES" -sc_threshold:v:0 0 -g:v:0 "$GOP_FLOOR")
 KEY_SVT_HLS=(-forced-idr 1 -g:v:0 "$GOP_CEIL" -keyint_min:v:0 "$GOP_CEIL")
-KEY_SVT_PIPE=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$FORCED_EVERY_PERIOD" -g:v:0 "$GOP_VERIFIED" -keyint_min:v:0 "$GOP_VERIFIED")
-KEY_SVT_PIPE_MISSED=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$FORCED_EXCEPT_18" -g:v:0 "$GOP_VERIFIED" -keyint_min:v:0 "$GOP_VERIFIED")
-KEY_X265_PIPE=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$FORCED_EVERY_PERIOD" -g:v:0 "$GOP_VERIFIED")
-KEY_X265_PIPE_MISSED=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$FORCED_EXCEPT_18" -g:v:0 "$GOP_VERIFIED")
-KEY_X265_PIPE_FLOORED=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$FORCED_EVERY_PERIOD" -g:v:0 "$GOP_FLOOR")
+KEY_SVT_PIPE=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$BOUNDARIES" -g:v:0 "$GOP_VERIFIED" -keyint_min:v:0 "$GOP_VERIFIED")
+KEY_X265_PIPE=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$BOUNDARIES" -g:v:0 "$GOP_VERIFIED")
+KEY_X265_PIPE_FLOORED=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$BOUNDARIES" -g:v:0 "$GOP_FLOOR")
 
-# run KIND NAME [start=N] [seek=S] [duration=D] [hls-recipe] [video] SRC -- CODEC/KEYFRAME ARGS...
-#   KIND pipe: ADR 0037's recipe to pipe:1, recorded as out/NAME.fmp4
+# The media segment count the server advertises for SRC, or for its first SECONDS when given: the
+# probed duration in whole milliseconds over the period, rounded up (MediaSegmentTimeline in
+# streamarr-server).
+segment_count() {  # SRC [SECONDS]
+  local duration=${2:-$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$1")}
+  local seconds=${duration%%.*} fraction=000
+  [ "$seconds" != "$duration" ] && fraction=$(printf '%s000' "${duration#*.}" | cut -c1-3)
+  local millis=$((10#$seconds * 1000 + 10#$fraction))
+  echo $(((millis + P * 1000 - 1) / (P * 1000)))
+}
+
+# The forced keyframe times of an attempt: k * P for every k from START up to, not including,
+# COUNT, joined by commas, without the time SKIP when one is given.
+boundaries() {  # START COUNT [SKIP]
+  seq "$(($1 * P))" "$P" "$((($2 - 1) * P))" | { grep -vx -- "${3:--1}" || true; } | paste -sd, -
+}
+
+# Sets ARGS_WITH_BOUNDARIES to the arguments after the first, with the first in place of $BOUNDARIES.
+fill_boundaries() {  # LIST ARGS...
+  local list=$1 arg; shift
+  ARGS_WITH_BOUNDARIES=()
+  for arg in "$@"; do
+    [ "$arg" = "$BOUNDARIES" ] && arg=$list
+    ARGS_WITH_BOUNDARIES+=("$arg")
+  done
+}
+
+# run KIND NAME [start=N] [hls-start=N] [seek=S] [duration=D] [skip=T] [hls-recipe] [video] SRC -- CODEC/KEYFRAME ARGS...
+#   KIND pipe: ADR 0037's recipe to pipe:1, recorded as out/NAME.fmp4, its command line one argument per
+#              line in out/NAME.args and the media segment count it forces keyframes up to in out/NAME.count
 #   KIND hls:  the HLS muxer (fMP4 segments) into hls/NAME/; "hls-recipe" swaps in the HLS recipe's common
 #              flags (no -start_at_zero, -max_delay), "video" maps the video stream only.
-#   duration=D reads only the source's first D seconds.
+#   start=N     the start sequence number: the first forced keyframe time, and the HLS muxer's -start_number.
+#   hls-start=N the HLS muxer's -start_number instead: the preroll's number when the recorded attempt seeks one period early.
+#   duration=D  reads only the source's first D seconds.
+#   skip=T      leaves the time T out of the forced keyframe times.
 run() {
   local kind=$1 name=$2; shift 2
   local start=0 seek=() common=("${COMMON_PIPE[@]}") maps=(-map 0:v:0 -map 0:a:0)
-  local duration=()
+  local duration=() seconds="" skip="" hls_start_number=""
   while [ "$1" != "--" ] && [ $# -gt 1 ]; do
     case "$1" in
       start=*) start=${1#start=} ;;
+      hls-start=*) hls_start_number=${1#hls-start=} ;;
       seek=*) seek=(-ss "${1#seek=}") ;;
-      duration=*) duration=(-t "${1#duration=}") ;;
+      duration=*) seconds=${1#duration=}; duration=(-t "$seconds") ;;
+      skip=*) skip=${1#skip=} ;;
       hls-recipe) common=("${COMMON_HLS[@]}") ;;
       video) maps=(-map 0:v:0) ;;
       *) break ;;
@@ -92,16 +126,23 @@ run() {
     shift
   done
   local src=$1; shift 2
+  local count; count=$(segment_count "$src" "$seconds")
+  fill_boundaries "$(boundaries "$start" "$count" "$skip")" "$@"
   if [ "$kind" = pipe ]; then
-    "${FF[@]}" -y "${seek[@]}" "${duration[@]}" -i "$src" "${maps[@]}" "${common[@]}" "$@" "${DET[@]}" \
-      -f mp4 -movflags "$MOVFLAGS" -frag_duration "$FRAG_US" pipe:1 > "out/$name.fmp4" 2> "logs/$name.log"
+    # -map -0:s: the worker excludes subtitle streams; these sources have none.
+    local command=("${FF[@]}" -y "${seek[@]}" "${duration[@]}" -i "$src" "${maps[@]}" -map -0:s "${common[@]}" \
+      "${ARGS_WITH_BOUNDARIES[@]}" "${DET[@]}" -f mp4 -movflags "$MOVFLAGS" -frag_duration "$FRAG_US" pipe:1)
+    printf '%s\n' "${command[@]}" > "out/$name.args"
+    echo "$count" > "out/$name.count"
+    "${command[@]}" > "out/$name.fmp4" 2> "logs/$name.log"
     return
   fi
-  local number=(); [ "$start" -gt 0 ] && number=(-start_number "$start")
+  hls_start_number=${hls_start_number:-$start}
+  local start_number=(); [ "$hls_start_number" -gt 0 ] && start_number=(-start_number "$hls_start_number")
   mkdir -p "hls/$name"
   local status=0
-  "${FF[@]}" -y "${seek[@]}" "${duration[@]}" -i "$src" "${maps[@]}" "${common[@]}" "$@" "${DET[@]}" \
-    -f hls -hls_time "$P" -hls_list_size 0 -hls_flags temp_file "${number[@]}" \
+  "${FF[@]}" -y "${seek[@]}" "${duration[@]}" -i "$src" "${maps[@]}" "${common[@]}" "${ARGS_WITH_BOUNDARIES[@]}" "${DET[@]}" \
+    -f hls -hls_time "$P" -hls_list_size 0 -hls_flags temp_file "${start_number[@]}" \
     -hls_segment_type fmp4 -hls_fmp4_init_filename init.mp4 -hls_segment_options movflags=+frag_discont \
     -hls_segment_filename "hls/$name/segment%d.m4s" "hls/$name/stream.m3u8" 2> "logs/hls-$name.log" || status=$?
   echo "$status" > "hls/$name/exit-status"
@@ -152,11 +193,12 @@ done
 
 # ------------------------------------------------------------------ 1. constant 23.976 fps libx264 encode, and an encoded seek
 run pipe 01-encode-cfr src/cfr.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}"
-run pipe 01-encode-cfr-seek30 seek=30 src/cfr.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}"
+# The replacement attempt for segment 5 (a job seeking to 30 s) is an encode, so it seeks one period
+# early, to 24 s, and segment 4 is its preroll.
+run pipe 01-encode-cfr-seek30 start=5 seek=24 src/cfr.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}"
 run hls 01-encode-cfr.hls-recipe hls-recipe src/cfr.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_HLS[@]}"
-run hls 01-encode-cfr-seek30.hls-recipe hls-recipe start=5 seek=30 src/cfr.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_HLS[@]}"
 run hls 01-encode-cfr.video-only video src/cfr.mp4 -- "${X264[@]}" "${KEY_X264_PIPE[@]}"
-run hls 01-encode-cfr-seek30.video-only video start=5 seek=30 src/cfr.mp4 -- "${X264[@]}" "${KEY_X264_PIPE[@]}"
+run hls 01-encode-cfr-seek30.video-only video start=5 hls-start=4 seek=24 src/cfr.mp4 -- "${X264[@]}" "${KEY_X264_PIPE[@]}"
 run hls 01-encode-cfr.pipe-keyframes-with-audio src/cfr.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}"
 
 # ------------------------------------------------------------------ 2. stream copy, irregular keyframes
@@ -178,7 +220,9 @@ run hls 04-copy-vfr-bframes.video-only video src/vfr.mp4 -- "${COPY_PIPE[@]}"
 run pipe 05-encode-late-start src/late.ts -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}"
 run pipe 05-copy-late-start src/late.ts -- "${COPY_PIPE[@]}"
 run hls 05-encode-late-start.hls-recipe hls-recipe src/late.ts -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_HLS[@]}"
-run hls 05-encode-late-start.video-only video src/late.ts -- "${X264[@]}" "${KEY_X264_PIPE[@]}"
+# With its audio unmapped this source's encoded video starts one frame earlier (0 s, not 41.7 ms),
+# and the forced keyframe times are absolute, so the HLS comparison with the pipe's keyframes keeps the audio.
+run hls 05-encode-late-start.pipe-keyframes-with-audio src/late.ts -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}"
 # The HLS recipe's exact copy fails on ADTS audio in fMP4 (kept to record the exit status) ...
 run hls 05-copy-late-start.hls-recipe hls-recipe src/late.ts -- "${COPY_HLS[@]}"
 # ... so the copy's HLS comparison adds the bitstream filter.
@@ -192,18 +236,17 @@ run hls 06-encode-audio-tail.video-only video src/tail.mp4 -- "${X264[@]}" "${KE
 
 # ------------------------------------------------------------------ 7 (and 8). stream-copy replacement attempt
 run pipe 07-copy-start0 src/cfr.mp4 -- "${COPY_PIPE[@]}"
-run pipe 07-copy-seek30 seek=30 src/cfr.mp4 -- "${COPY_PIPE[@]}"
+run pipe 07-copy-seek30 start=5 seek=30 src/cfr.mp4 -- "${COPY_PIPE[@]}"
 run hls 07-copy-start0.hls-recipe hls-recipe src/cfr.mp4 -- "${COPY_HLS[@]}"
 run hls 07-copy-seek30.hls-recipe hls-recipe start=5 seek=30 src/cfr.mp4 -- "${COPY_HLS[@]}"
 run hls 07-copy-start0.video-only video src/cfr.mp4 -- "${COPY_PIPE[@]}"
 
 # ------------------------------------------------------------------ 9. irregular VFR source through SVT-AV1, with and without a seek
 run pipe 09-svtav1-vfr src/vfr.mp4 -- "${SVT[@]}" "${AAC[@]}" "${KEY_SVT_PIPE[@]}"
-run pipe 09-svtav1-vfr-seek30 seek=30 src/vfr.mp4 -- "${SVT[@]}" "${AAC[@]}" "${KEY_SVT_PIPE[@]}"
+run pipe 09-svtav1-vfr-seek30 start=5 seek=24 src/vfr.mp4 -- "${SVT[@]}" "${AAC[@]}" "${KEY_SVT_PIPE[@]}"
 run hls 09-svtav1-vfr.hls-recipe hls-recipe src/vfr.mp4 -- "${SVT[@]}" "${AAC[@]}" "${KEY_SVT_HLS[@]}"
-run hls 09-svtav1-vfr-seek30.hls-recipe hls-recipe start=5 seek=30 src/vfr.mp4 -- "${SVT[@]}" "${AAC[@]}" "${KEY_SVT_HLS[@]}"
 run hls 09-svtav1-vfr.video-only video src/vfr.mp4 -- "${SVT[@]}" "${KEY_SVT_PIPE[@]}"
-run hls 09-svtav1-vfr-seek30.video-only video start=5 seek=30 src/vfr.mp4 -- "${SVT[@]}" "${KEY_SVT_PIPE[@]}"
+run hls 09-svtav1-vfr-seek30.video-only video start=5 hls-start=4 seek=24 src/vfr.mp4 -- "${SVT[@]}" "${KEY_SVT_PIPE[@]}"
 run hls 09-svtav1-vfr.pipe-keyframes-with-audio src/vfr.mp4 -- "${SVT[@]}" "${AAC[@]}" "${KEY_SVT_PIPE[@]}"
 
 # ------------------------------------------------------------------ 10. keyframe gap wider than the period
@@ -215,37 +258,39 @@ run pipe 11-encode-cfr-floored-gop duration=30 src/cfr.mp4 -- "${X264[@]}" "${AA
 run hls 11-encode-cfr-floored-gop.video-only video duration=30 src/cfr.mp4 -- "${X264[@]}" "${KEY_X264_PIPE_FLOORED[@]}"
 
 # ------------------------------------------------------------------ 12. a forced keyframe that never comes: the GOP backstop places it
-run pipe 12-encode-cfr-missed-forced-keyframe duration=30 src/cfr.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE_MISSED[@]}"
-run hls 12-encode-cfr-missed-forced-keyframe.video-only video duration=30 src/cfr.mp4 -- "${X264[@]}" "${KEY_X264_PIPE_MISSED[@]}"
-run pipe 12-svtav1-cfr-missed-forced-keyframe duration=30 src/cfr.mp4 -- "${SVT[@]}" "${AAC[@]}" "${KEY_SVT_PIPE_MISSED[@]}"
-run hls 12-svtav1-cfr-missed-forced-keyframe.video-only video duration=30 src/cfr.mp4 -- "${SVT[@]}" "${KEY_SVT_PIPE_MISSED[@]}"
+run pipe 12-encode-cfr-missed-forced-keyframe duration=30 skip=18 src/cfr.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}"
+run hls 12-encode-cfr-missed-forced-keyframe.video-only video duration=30 skip=18 src/cfr.mp4 -- "${X264[@]}" "${KEY_X264_PIPE[@]}"
+run pipe 12-svtav1-cfr-missed-forced-keyframe duration=30 skip=18 src/cfr.mp4 -- "${SVT[@]}" "${AAC[@]}" "${KEY_SVT_PIPE[@]}"
+run hls 12-svtav1-cfr-missed-forced-keyframe.video-only video duration=30 skip=18 src/cfr.mp4 -- "${SVT[@]}" "${KEY_SVT_PIPE[@]}"
 
 # ------------------------------------------------------------------ 13. libx265 under the verified-encoder GOP, with and without a missed forced keyframe, and under its own floored GOP
 run pipe 13-x265-cfr duration=30 src/cfr.mp4 -- "${X265[@]}" "${AAC[@]}" "${KEY_X265_PIPE[@]}"
 run hls 13-x265-cfr.video-only video duration=30 src/cfr.mp4 -- "${X265[@]}" "${KEY_X265_PIPE[@]}"
-run pipe 13-x265-cfr-missed-forced-keyframe duration=30 src/cfr.mp4 -- "${X265[@]}" "${AAC[@]}" "${KEY_X265_PIPE_MISSED[@]}"
-run hls 13-x265-cfr-missed-forced-keyframe.video-only video duration=30 src/cfr.mp4 -- "${X265[@]}" "${KEY_X265_PIPE_MISSED[@]}"
+run pipe 13-x265-cfr-missed-forced-keyframe duration=30 skip=18 src/cfr.mp4 -- "${X265[@]}" "${AAC[@]}" "${KEY_X265_PIPE[@]}"
+run hls 13-x265-cfr-missed-forced-keyframe.video-only video duration=30 skip=18 src/cfr.mp4 -- "${X265[@]}" "${KEY_X265_PIPE[@]}"
 run pipe 13-x265-cfr-floored-gop duration=30 src/cfr.mp4 -- "${X265[@]}" "${AAC[@]}" "${KEY_X265_PIPE_FLOORED[@]}"
 run hls 13-x265-cfr-floored-gop.video-only video duration=30 src/cfr.mp4 -- "${X265[@]}" "${KEY_X265_PIPE_FLOORED[@]}"
 
 # ------------------------------------------------------------------ side claims of ADR 0037 (recorded, not delivered)
 mkdir -p claims
+# claim NAME START ARGS...: START is the start sequence number the forced keyframe times begin at.
 claim() {
-  local name=$1; shift
+  local name=$1 start=$2; shift 2
+  fill_boundaries "$(boundaries "$start" "$(segment_count src/cfr.mp4)")" "$@"
   local status=0
-  "${FF[@]}" -y "$@" "${DET[@]}" -f mp4 -movflags "$MOVFLAGS" -frag_duration "$FRAG_US" pipe:1 \
+  "${FF[@]}" -y "${ARGS_WITH_BOUNDARIES[@]}" "${DET[@]}" -f mp4 -movflags "$MOVFLAGS" -frag_duration "$FRAG_US" pipe:1 \
     > "claims/$name.fmp4" 2> "claims/$name.log" || status=$?
   echo "$status" > "claims/$name.exit-status"
 }
 AV=(-map 0:v:0 -map 0:a:0)
 # delay_moov stops the mp4 muxer inserting aac_adtstoasc itself: an MPEG-TS AAC copy must fail without it ...
-claim ts-copy-without-adtstoasc -i src/late.ts "${AV[@]}" "${COMMON_PIPE[@]}" "${COPY_HLS[@]}"
+claim ts-copy-without-adtstoasc 0 -i src/late.ts "${AV[@]}" "${COMMON_PIPE[@]}" "${COPY_HLS[@]}"
 # ... and the filter leaves a copy from an MP4 source byte-identical (compare with out/07-copy-start0.fmp4).
-claim mp4-copy-without-adtstoasc -i src/cfr.mp4 "${AV[@]}" "${COMMON_PIPE[@]}" "${COPY_HLS[@]}"
+claim mp4-copy-without-adtstoasc 0 -i src/cfr.mp4 "${AV[@]}" "${COMMON_PIPE[@]}" "${COPY_HLS[@]}"
 # -max_delay 5000000 changes nothing in mp4 output (compare with out/01-encode-cfr.fmp4).
-claim encode-with-max-delay -i src/cfr.mp4 "${AV[@]}" "${COMMON_PIPE[@]}" -max_delay 5000000 "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}"
+claim encode-with-max-delay 0 -i src/cfr.mp4 "${AV[@]}" "${COMMON_PIPE[@]}" -max_delay 5000000 "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}"
 # An explicit -fps_mode cfr after a seek pads from time zero (compare with out/01-encode-cfr-seek30.fmp4).
-claim encode-seek30-fps-mode-cfr -ss 30 -i src/cfr.mp4 "${AV[@]}" "${COMMON_PIPE[@]}" "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}" -fps_mode:v:0 cfr
+claim encode-seek30-fps-mode-cfr 5 -ss 24 -i src/cfr.mp4 "${AV[@]}" "${COMMON_PIPE[@]}" "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}" -fps_mode:v:0 cfr
 
 ffmpeg -version | head -1 > ffmpeg-version.txt
 CONTAINER

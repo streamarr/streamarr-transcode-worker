@@ -50,7 +50,7 @@ describe('offline expectation check', () => {
       '06-encode-audio-tail: diagnostics in expected.json does not match the recording',
       '07-copy-seek30: discardedPreroll in expected.json does not match the recording',
       '10-copy-gop-exceeds-period: failure in expected.json does not match the recording',
-      'encode (libx264), start 0 vs -ss 30: the initialization segment comparison in expected.json does not match the recordings',
+      'encode (libx264), start 0 vs a replacement attempt from segment 5: the initialization segment comparison in expected.json does not match the recordings',
       'violated claim: 04-copy-vfr-bframes / 04-copy-vfr-bframes.video-only: agrees=true, expected false',
     ]);
   });
