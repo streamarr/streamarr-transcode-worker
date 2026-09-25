@@ -403,7 +403,7 @@ class FfmpegCommandBuilderTest {
       String encoder) {
     var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), encoder);
 
-    assertThat(cmd).doesNotContain("-keyint_min:v:0");
+    assertThat(cmd).isNotEmpty().doesNotContain("-keyint_min:v:0");
   }
 
   @ParameterizedTest
@@ -550,7 +550,7 @@ class FfmpegCommandBuilderTest {
   void shouldLeaveSceneCutDetectionToTheEncoderWhenEncoderIsLibx265() {
     var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), "libx265");
 
-    assertThat(cmd).doesNotContain("-sc_threshold:v:0");
+    assertThat(cmd).isNotEmpty().doesNotContain("-sc_threshold:v:0");
   }
 
   @Test
