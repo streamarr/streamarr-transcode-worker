@@ -3,9 +3,7 @@ package com.streamarr.transcode.engine;
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.engine.AttemptOutcome.Failed;
 import com.streamarr.transcode.engine.AttemptOutcome.Stopped;
-import com.streamarr.transcode.engine.GroupingOutcome.NothingClosed;
-import com.streamarr.transcode.engine.GroupingOutcome.SegmentClosed;
-import com.streamarr.transcode.engine.GroupingOutcome.SegmentNumberSkipped;
+import com.streamarr.transcode.engine.SegmentAssembler.Closing;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.time.Duration;
@@ -36,7 +34,7 @@ public final class Producer {
   private final Process process;
   private final StderrDrainer errorOutput;
   private final FragmentedMp4Reader reader;
-  private final SegmentGrouper grouper;
+  private final SegmentAssembler assembler;
   private final SegmentSink sink;
   private final Duration gracePeriod;
   private final CompletableFuture<AttemptOutcome> outcome = new CompletableFuture<>();
@@ -53,7 +51,7 @@ public final class Producer {
     this.process = process;
     this.errorOutput = new StderrDrainer(process.getErrorStream());
     this.reader = new FragmentedMp4Reader(process.getInputStream(), MAXIMUM_SEGMENT_BYTES);
-    this.grouper = settings.grouper();
+    this.assembler = new SegmentAssembler(settings.grouper());
     this.sink = settings.sink();
     this.gracePeriod = settings.gracePeriod();
   }
@@ -214,46 +212,25 @@ public final class Producer {
 
   private Ending deliverEachSegment() throws IOException {
     for (var unit = reader.next(); unit.isPresent(); unit = reader.next()) {
-      var interruption = deliverClosedSegment(unit.orElseThrow());
+      var interruption = deliverClosedSegment(assembler.accept(unit.orElseThrow()));
       if (interruption.isPresent()) {
         return interruption.orElseThrow();
       }
     }
 
-    return grouper
-        .finish()
-        .map(ProducedSegment::of)
-        .flatMap(this::deliver)
-        .orElseGet(EndOfOutput::new);
+    return assembler.finish().flatMap(this::deliver).orElseGet(EndOfOutput::new);
   }
 
   // Empty unless the unit ends reading, by closing a segment whose delivery ends it or by
-  // skipping a segment number.
-  private Optional<Ending> deliverClosedSegment(Mp4Unit unit) {
-    return switch (unit) {
-      case InitializationSegment initializationSegment ->
-          deliver(ProducedSegment.of(initializationSegment));
-      case Fragment fragment -> deliverClosedBy(grouper.accept(fragment));
-    };
-  }
-
-  private Optional<Ending> deliverClosedBy(GroupingOutcome grouping) {
-    return switch (grouping) {
-      case NothingClosed _ -> Optional.empty();
-      case SegmentClosed(var segment) -> deliver(ProducedSegment.of(segment));
-      case SegmentNumberSkipped skipped -> deliverThenFail(skipped);
-    };
-  }
-
-  // The skipping fragment closes a complete segment, which is delivered before the skip fails the
-  // attempt; a stop or a failed delivery ends reading first.
-  private Optional<Ending> deliverThenFail(SegmentNumberSkipped skipped) {
-    var deliveryEnding = skipped.closedSegment().map(ProducedSegment::of).flatMap(this::deliver);
+  // skipping a segment number. The skipping fragment closes a complete segment, which is delivered
+  // before the skip fails the attempt; a stop or a failed delivery ends reading first.
+  private Optional<Ending> deliverClosedSegment(Closing closing) {
+    var deliveryEnding = closing.closedSegment().flatMap(this::deliver);
     if (deliveryEnding.isPresent()) {
       return deliveryEnding;
     }
 
-    return Optional.of(endingOf(skipped.failure()));
+    return closing.failure().map(Producer::endingOf);
   }
 
   // Empty once the sink has accepted the segment; otherwise why reading ends.
