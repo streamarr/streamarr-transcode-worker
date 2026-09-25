@@ -88,6 +88,15 @@ jobs:
           node --test .github/actions/pack-build/*.test.mjs
       - name: Verify analysis failure handling
         run: node --test .github/actions/sonar/test/*.test.mjs
+      - name: Verify the fMP4 fixture recorder
+        run: >-
+          node --test --experimental-test-coverage
+          --test-coverage-include='src/test/fmp4-recorder/*.mjs'
+          --test-coverage-exclude='src/test/fmp4-recorder/*.test.mjs'
+          --test-coverage-lines=90 --test-coverage-branches=90 --test-coverage-functions=90
+          src/test/fmp4-recorder/*.test.mjs
+      - name: Verify the recorded fMP4 expectations offline
+        run: node src/test/fmp4-recorder/check-expectations.mjs
 
   smoke:
     name: Verify real FFmpeg execution

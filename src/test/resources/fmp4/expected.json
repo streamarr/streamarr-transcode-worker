@@ -1,0 +1,5830 @@
+{
+  "recordedWith": {
+    "image": "streamarr/streamarr-transcode-worker:0.1.0-SNAPSHOT@sha256:9d2d286c4f192e5e359cd7ead44ca05c7d0c720d491c3d5b4a6becfffcd61caa",
+    "ffmpeg": "ffmpeg version 8.1.2-Jellyfin Copyright (c) 2000-2026 the FFmpeg developers"
+  },
+  "recipe": "ffmpeg -y [-ss S] -i SRC -map 0:v:0 -map 0:a:0 -map_metadata -1 -map_chapters -1 -copyts -avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128 <codec args> [-bsf:a aac_adtstoasc when copying AAC] [encode: -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 expr:gte(t,n_forced*6) -g:v:0 145 = ceil(6 x 23.976) + 1 for an encoder verified to honour forced keyframes (libx264, SVT-AV1), else 143 = floor(6 x 23.976) (fixtures 11 and 13c) (-keyint_min:v:0 with the same value for SVT-AV1) (-sc_threshold:v:0 0 for libx264); fixtures 13 and 13b give libx265, not verified, 145 to test whether it qualifies] [fixtures 11 to 13 only: -t 30] -threads 1 -f mp4 -movflags cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont -frag_duration 1000000 pipe:1",
+  "rules": "ADR 0037: segment N = [N*P, (N+1)*P) on the zero-based timeline. A fragment whose video traf starts with a sync sample opens segment floor(presentationTime / (P * timescale)), or joins it when that segment is already open; every other fragment joins the open segment (or waits for the first one). Segments numbered below startSequenceNumber are discarded preroll; a sync-first fragment beyond the next deliverable number closes the open segment (delivered, or discarded when preroll) and then fails with a skipped segment number, grouping nothing from that fragment on. firstVideoPresentationTime = tfdt + first sample's composition offset, in videoTimescale ticks, no edit list.",
+  "fixtures": [
+    {
+      "name": "01-encode-cfr",
+      "file": "01-encode-cfr.fmp4",
+      "proves": "Constant 23.976 fps libx264 encode of 66 s under the verified-encoder GOP of ceil(6 x 23.976) + 1 = 145 frames: every forced keyframe (frames 0, 144, 288, ..., 1007, 1151, ...) opens a segment and the frame-count GOP never fires, so every segment holds exactly one keyframe-first fragment.",
+      "mode": "encode",
+      "encoder": "libx264",
+      "source": {
+        "file": "cfr.mp4",
+        "containerStartTimeMicros": 0,
+        "videoRealFrameRate": "24000/1001",
+        "videoAverageFrameRate": "24000/1001"
+      },
+      "seekSeconds": 0,
+      "period": 6,
+      "fragmentationTargetMicros": 1000000,
+      "startSequenceNumber": 0,
+      "videoTrackId": 1,
+      "videoTimescale": 24000,
+      "byteLength": 92351,
+      "initializationSegment": {
+        "byteLength": 1348,
+        "sha256": "c088712750a25550ba7163ef599051ee1641fda27dc09b273e5ceaf1284a107e",
+        "tracks": [
+          {
+            "trackId": 1,
+            "handler": "vide",
+            "sampleEntry": "avc1",
+            "timescale": 24000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          },
+          {
+            "trackId": 2,
+            "handler": "soun",
+            "sampleEntry": "mp4a",
+            "timescale": 48000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          }
+        ]
+      },
+      "segments": [
+        {
+          "number": 0,
+          "firstVideoPresentationTime": 0,
+          "firstFragmentIndex": 0,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 9629
+        },
+        {
+          "number": 1,
+          "firstVideoPresentationTime": 144144,
+          "firstFragmentIndex": 6,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 7829
+        },
+        {
+          "number": 2,
+          "firstVideoPresentationTime": 288288,
+          "firstFragmentIndex": 12,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8036
+        },
+        {
+          "number": 3,
+          "firstVideoPresentationTime": 432432,
+          "firstFragmentIndex": 18,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8104
+        },
+        {
+          "number": 4,
+          "firstVideoPresentationTime": 576576,
+          "firstFragmentIndex": 24,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8191
+        },
+        {
+          "number": 5,
+          "firstVideoPresentationTime": 720720,
+          "firstFragmentIndex": 30,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8165
+        },
+        {
+          "number": 6,
+          "firstVideoPresentationTime": 864864,
+          "firstFragmentIndex": 36,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8142
+        },
+        {
+          "number": 7,
+          "firstVideoPresentationTime": 1008007,
+          "firstFragmentIndex": 42,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8296
+        },
+        {
+          "number": 8,
+          "firstVideoPresentationTime": 1152151,
+          "firstFragmentIndex": 48,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8114
+        },
+        {
+          "number": 9,
+          "firstVideoPresentationTime": 1296295,
+          "firstFragmentIndex": 54,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8104
+        },
+        {
+          "number": 10,
+          "firstVideoPresentationTime": 1440439,
+          "firstFragmentIndex": 60,
+          "fragmentCount": 7,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8393
+        }
+      ],
+      "discardedPreroll": [],
+      "failure": null,
+      "endsWithAudioOnlyFragments": true,
+      "trailingAudioOnlyFragmentCount": 1,
+      "sourceKeyframeCheck": null,
+      "diagnostics": {
+        "fragmentCount": 67,
+        "syncFirstFragments": 11,
+        "nonSyncFirstFragments": 55,
+        "fragmentsWithoutVideo": 1,
+        "leadingFragmentsWithoutVideo": 0,
+        "everyKeyframeStartsAFragment": true,
+        "videoSamples": 1583,
+        "largestFragmentByteLength": 3420,
+        "firstVideoPresentationTime": 0,
+        "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
+        "startPlusDurationsMissesNextStartByTicks": {
+          "min": -3003,
+          "max": 4004
+        },
+        "videoPictures": {
+          "sampleEntry": "avc1",
+          "keyframes": [
+            {
+              "presentationTime": 0,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 144144,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 288288,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 432432,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 576576,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 720720,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 864864,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1008007,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1152151,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1296295,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1440439,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            }
+          ]
+        }
+      },
+      "hlsComparisons": [
+        {
+          "hlsRun": "01-encode-cfr.hls-recipe",
+          "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
+          "streams": "video and audio",
+          "pipeReference": "01-encode-cfr.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 1583,
+            "pipeVideoSamples": 1583,
+            "identicalPackets": 1582,
+            "sharesVideoArguments": false
+          },
+          "segments": [
+            {
+              "number": 0,
+              "firstVideoPresentationTime": 0
+            },
+            {
+              "number": 1,
+              "firstVideoPresentationTime": 144144
+            },
+            {
+              "number": 2,
+              "firstVideoPresentationTime": 288288
+            },
+            {
+              "number": 3,
+              "firstVideoPresentationTime": 432432
+            },
+            {
+              "number": 4,
+              "firstVideoPresentationTime": 576576
+            },
+            {
+              "number": 5,
+              "firstVideoPresentationTime": 720720
+            },
+            {
+              "number": 6,
+              "firstVideoPresentationTime": 864864
+            },
+            {
+              "number": 7,
+              "firstVideoPresentationTime": 1008007
+            },
+            {
+              "number": 8,
+              "firstVideoPresentationTime": 1152151
+            },
+            {
+              "number": 9,
+              "firstVideoPresentationTime": 1296295
+            },
+            {
+              "number": 10,
+              "firstVideoPresentationTime": 1440439
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": true,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 0.0,
+            "reproducesHlsCuts": true
+          }
+        },
+        {
+          "hlsRun": "01-encode-cfr.video-only",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
+          "streams": "video only",
+          "pipeReference": "01-encode-cfr.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 1583,
+            "pipeVideoSamples": 1583,
+            "identicalPackets": 1583,
+            "sharesVideoArguments": true
+          },
+          "segments": [
+            {
+              "number": 0,
+              "firstVideoPresentationTime": 0
+            },
+            {
+              "number": 1,
+              "firstVideoPresentationTime": 144144
+            },
+            {
+              "number": 2,
+              "firstVideoPresentationTime": 288288
+            },
+            {
+              "number": 3,
+              "firstVideoPresentationTime": 432432
+            },
+            {
+              "number": 4,
+              "firstVideoPresentationTime": 576576
+            },
+            {
+              "number": 5,
+              "firstVideoPresentationTime": 720720
+            },
+            {
+              "number": 6,
+              "firstVideoPresentationTime": 864864
+            },
+            {
+              "number": 7,
+              "firstVideoPresentationTime": 1008007
+            },
+            {
+              "number": 8,
+              "firstVideoPresentationTime": 1152151
+            },
+            {
+              "number": 9,
+              "firstVideoPresentationTime": 1296295
+            },
+            {
+              "number": 10,
+              "firstVideoPresentationTime": 1440439
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": true,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 0.0,
+            "reproducesHlsCuts": true
+          }
+        },
+        {
+          "hlsRun": "01-encode-cfr.pipe-keyframes-with-audio",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
+          "streams": "video and audio",
+          "pipeReference": "01-encode-cfr.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 1583,
+            "pipeVideoSamples": 1583,
+            "identicalPackets": 1583,
+            "sharesVideoArguments": true
+          },
+          "segments": [
+            {
+              "number": 0,
+              "firstVideoPresentationTime": 0
+            },
+            {
+              "number": 1,
+              "firstVideoPresentationTime": 144144
+            },
+            {
+              "number": 2,
+              "firstVideoPresentationTime": 288288
+            },
+            {
+              "number": 3,
+              "firstVideoPresentationTime": 432432
+            },
+            {
+              "number": 4,
+              "firstVideoPresentationTime": 576576
+            },
+            {
+              "number": 5,
+              "firstVideoPresentationTime": 720720
+            },
+            {
+              "number": 6,
+              "firstVideoPresentationTime": 864864
+            },
+            {
+              "number": 7,
+              "firstVideoPresentationTime": 1008007
+            },
+            {
+              "number": 8,
+              "firstVideoPresentationTime": 1152151
+            },
+            {
+              "number": 9,
+              "firstVideoPresentationTime": 1296295
+            },
+            {
+              "number": 10,
+              "firstVideoPresentationTime": 1440439
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": true,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 0.0,
+            "reproducesHlsCuts": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "01-encode-cfr-seek30",
+      "file": "01-encode-cfr-seek30.fmp4",
+      "proves": "An encoded seek (-ss 30) under -r without -fps_mode starts at the seek point (30.030 s, segment 5), pads nothing from zero, and has no preroll. force_key_frames measures t from the attempt's first frame, so from segment 7 on its forced keyframes sit one frame after the start-0 recording's (42.042 s against 42.0003 s), inside the same intervals.",
+      "mode": "encode",
+      "encoder": "libx264",
+      "source": {
+        "file": "cfr.mp4",
+        "containerStartTimeMicros": 0,
+        "videoRealFrameRate": "24000/1001",
+        "videoAverageFrameRate": "24000/1001"
+      },
+      "seekSeconds": 30,
+      "period": 6,
+      "fragmentationTargetMicros": 1000000,
+      "startSequenceNumber": 5,
+      "videoTrackId": 1,
+      "videoTimescale": 24000,
+      "byteLength": 51296,
+      "initializationSegment": {
+        "byteLength": 1348,
+        "sha256": "c088712750a25550ba7163ef599051ee1641fda27dc09b273e5ceaf1284a107e",
+        "tracks": [
+          {
+            "trackId": 1,
+            "handler": "vide",
+            "sampleEntry": "avc1",
+            "timescale": 24000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          },
+          {
+            "trackId": 2,
+            "handler": "soun",
+            "sampleEntry": "mp4a",
+            "timescale": 48000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          }
+        ]
+      },
+      "segments": [
+        {
+          "number": 5,
+          "firstVideoPresentationTime": 720720,
+          "firstFragmentIndex": 0,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 9473
+        },
+        {
+          "number": 6,
+          "firstVideoPresentationTime": 864864,
+          "firstFragmentIndex": 6,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 7815
+        },
+        {
+          "number": 7,
+          "firstVideoPresentationTime": 1009008,
+          "firstFragmentIndex": 12,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8037
+        },
+        {
+          "number": 8,
+          "firstVideoPresentationTime": 1153152,
+          "firstFragmentIndex": 18,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8140
+        },
+        {
+          "number": 9,
+          "firstVideoPresentationTime": 1297296,
+          "firstFragmentIndex": 24,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8208
+        },
+        {
+          "number": 10,
+          "firstVideoPresentationTime": 1441440,
+          "firstFragmentIndex": 30,
+          "fragmentCount": 7,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8275
+        }
+      ],
+      "discardedPreroll": [],
+      "failure": null,
+      "endsWithAudioOnlyFragments": true,
+      "trailingAudioOnlyFragmentCount": 1,
+      "sourceKeyframeCheck": null,
+      "diagnostics": {
+        "fragmentCount": 37,
+        "syncFirstFragments": 6,
+        "nonSyncFirstFragments": 30,
+        "fragmentsWithoutVideo": 1,
+        "leadingFragmentsWithoutVideo": 0,
+        "everyKeyframeStartsAFragment": true,
+        "videoSamples": 863,
+        "largestFragmentByteLength": 3328,
+        "firstVideoPresentationTime": 720720,
+        "firstAudioBaseMediaDecodeTimeUnsigned": 1438976,
+        "startPlusDurationsMissesNextStartByTicks": {
+          "min": -3003,
+          "max": 2002
+        },
+        "videoPictures": {
+          "sampleEntry": "avc1",
+          "keyframes": [
+            {
+              "presentationTime": 720720,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 864864,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1009008,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1153152,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1297296,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1441440,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            }
+          ]
+        }
+      },
+      "hlsComparisons": [
+        {
+          "hlsRun": "01-encode-cfr-seek30.hls-recipe",
+          "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
+          "streams": "video and audio",
+          "pipeReference": "01-encode-cfr-seek30.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 863,
+            "pipeVideoSamples": 863,
+            "identicalPackets": 862,
+            "sharesVideoArguments": false
+          },
+          "segments": [
+            {
+              "number": 5,
+              "firstVideoPresentationTime": 720720
+            },
+            {
+              "number": 6,
+              "firstVideoPresentationTime": 864864
+            },
+            {
+              "number": 7,
+              "firstVideoPresentationTime": 1009008
+            },
+            {
+              "number": 8,
+              "firstVideoPresentationTime": 1153152
+            },
+            {
+              "number": 9,
+              "firstVideoPresentationTime": 1297296
+            },
+            {
+              "number": 10,
+              "firstVideoPresentationTime": 1441440
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": true,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 30.03,
+            "reproducesHlsCuts": true
+          }
+        },
+        {
+          "hlsRun": "01-encode-cfr-seek30.video-only",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
+          "streams": "video only",
+          "pipeReference": "01-encode-cfr-seek30.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 863,
+            "pipeVideoSamples": 863,
+            "identicalPackets": 863,
+            "sharesVideoArguments": true
+          },
+          "segments": [
+            {
+              "number": 5,
+              "firstVideoPresentationTime": 720720
+            },
+            {
+              "number": 6,
+              "firstVideoPresentationTime": 864864
+            },
+            {
+              "number": 7,
+              "firstVideoPresentationTime": 1009008
+            },
+            {
+              "number": 8,
+              "firstVideoPresentationTime": 1153152
+            },
+            {
+              "number": 9,
+              "firstVideoPresentationTime": 1297296
+            },
+            {
+              "number": 10,
+              "firstVideoPresentationTime": 1441440
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": true,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 30.03,
+            "reproducesHlsCuts": true
+          }
+        },
+        {
+          "hlsRun": "01-encode-cfr.hls-recipe",
+          "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
+          "streams": "video and audio",
+          "pipeReference": "01-encode-cfr.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 1583,
+            "pipeVideoSamples": 1583,
+            "identicalPackets": 1582,
+            "sharesVideoArguments": false
+          },
+          "segments": [
+            {
+              "number": 5,
+              "firstVideoPresentationTime": 720720
+            },
+            {
+              "number": 6,
+              "firstVideoPresentationTime": 864864
+            },
+            {
+              "number": 7,
+              "firstVideoPresentationTime": 1008007
+            },
+            {
+              "number": 8,
+              "firstVideoPresentationTime": 1152151
+            },
+            {
+              "number": 9,
+              "firstVideoPresentationTime": 1296295
+            },
+            {
+              "number": 10,
+              "firstVideoPresentationTime": 1440439
+            }
+          ],
+          "agrees": false,
+          "expectedToAgree": false,
+          "mismatches": [
+            {
+              "number": 7,
+              "grouping": 1009008,
+              "hls": 1008007
+            },
+            {
+              "number": 8,
+              "grouping": 1153152,
+              "hls": 1152151
+            },
+            {
+              "number": 9,
+              "grouping": 1297296,
+              "hls": 1296295
+            },
+            {
+              "number": 10,
+              "grouping": 1441440,
+              "hls": 1440439
+            }
+          ],
+          "hlsOwnTimestampsMatchPipe": true,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 0.0,
+            "reproducesHlsCuts": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "02-copy-irregular-keyframes",
+      "file": "02-copy-irregular-keyframes.fmp4",
+      "proves": "Stream copy of a 24 fps source with keyframes only at 0, 6.5, 12, 18, 24.5, 30, 36.5, 42, 48, 54.5 and 60 s over 66 s (12, 18, 30, 42, 48 and 60 s sit exactly on a boundary and open that boundary's segment): 11 segments, one keyframe each.",
+      "mode": "copy",
+      "encoder": null,
+      "source": {
+        "file": "irregular.mp4",
+        "containerStartTimeMicros": 0,
+        "videoRealFrameRate": "24/1",
+        "videoAverageFrameRate": "24/1"
+      },
+      "seekSeconds": 0,
+      "period": 6,
+      "fragmentationTargetMicros": 1000000,
+      "startSequenceNumber": 0,
+      "videoTrackId": 1,
+      "videoTimescale": 12288,
+      "byteLength": 104133,
+      "initializationSegment": {
+        "byteLength": 1349,
+        "sha256": "ea95f1e00c063117ed0e911877c4d64e8327f9c8287607a5efdcc85ec0ad6d52",
+        "tracks": [
+          {
+            "trackId": 1,
+            "handler": "vide",
+            "sampleEntry": "avc1",
+            "timescale": 12288,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          },
+          {
+            "trackId": 2,
+            "handler": "soun",
+            "sampleEntry": "mp4a",
+            "timescale": 48000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          }
+        ]
+      },
+      "segments": [
+        {
+          "number": 0,
+          "firstVideoPresentationTime": 0,
+          "firstFragmentIndex": 0,
+          "fragmentCount": 7,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 9360
+        },
+        {
+          "number": 1,
+          "firstVideoPresentationTime": 79872,
+          "firstFragmentIndex": 7,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8024
+        },
+        {
+          "number": 2,
+          "firstVideoPresentationTime": 147456,
+          "firstFragmentIndex": 13,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8937
+        },
+        {
+          "number": 3,
+          "firstVideoPresentationTime": 221184,
+          "firstFragmentIndex": 19,
+          "fragmentCount": 7,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 9953
+        },
+        {
+          "number": 4,
+          "firstVideoPresentationTime": 301056,
+          "firstFragmentIndex": 26,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8716
+        },
+        {
+          "number": 5,
+          "firstVideoPresentationTime": 368640,
+          "firstFragmentIndex": 32,
+          "fragmentCount": 7,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 10257
+        },
+        {
+          "number": 6,
+          "firstVideoPresentationTime": 448512,
+          "firstFragmentIndex": 39,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8813
+        },
+        {
+          "number": 7,
+          "firstVideoPresentationTime": 516096,
+          "firstFragmentIndex": 45,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 9523
+        },
+        {
+          "number": 8,
+          "firstVideoPresentationTime": 589824,
+          "firstFragmentIndex": 51,
+          "fragmentCount": 7,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 10382
+        },
+        {
+          "number": 9,
+          "firstVideoPresentationTime": 669696,
+          "firstFragmentIndex": 58,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8992
+        },
+        {
+          "number": 10,
+          "firstVideoPresentationTime": 737280,
+          "firstFragmentIndex": 64,
+          "fragmentCount": 7,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 9827
+        }
+      ],
+      "discardedPreroll": [],
+      "failure": null,
+      "endsWithAudioOnlyFragments": true,
+      "trailingAudioOnlyFragmentCount": 1,
+      "sourceKeyframeCheck": {
+        "recordedKeyframesEqualSourceKeyframes": true,
+        "keyframePresentationTimes": [
+          0,
+          79872,
+          147456,
+          221184,
+          301056,
+          368640,
+          448512,
+          516096,
+          589824,
+          669696,
+          737280
+        ]
+      },
+      "diagnostics": {
+        "fragmentCount": 71,
+        "syncFirstFragments": 11,
+        "nonSyncFirstFragments": 59,
+        "fragmentsWithoutVideo": 1,
+        "leadingFragmentsWithoutVideo": 0,
+        "everyKeyframeStartsAFragment": true,
+        "videoSamples": 1584,
+        "largestFragmentByteLength": 2287,
+        "firstVideoPresentationTime": 0,
+        "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
+        "startPlusDurationsMissesNextStartByTicks": {
+          "min": 0,
+          "max": 0
+        },
+        "videoPictures": {
+          "sampleEntry": "avc1",
+          "keyframes": [
+            {
+              "presentationTime": 0,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 79872,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 147456,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 221184,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 301056,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 368640,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 448512,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 516096,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 589824,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 669696,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 737280,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            }
+          ]
+        }
+      },
+      "hlsComparisons": [
+        {
+          "hlsRun": "02-copy-irregular-keyframes.hls-recipe",
+          "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
+          "streams": "video and audio",
+          "pipeReference": "02-copy-irregular-keyframes.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 1584,
+            "pipeVideoSamples": 1584,
+            "identicalPackets": 1584,
+            "sharesVideoArguments": true
+          },
+          "segments": [
+            {
+              "number": 0,
+              "firstVideoPresentationTime": 0
+            },
+            {
+              "number": 1,
+              "firstVideoPresentationTime": 79872
+            },
+            {
+              "number": 2,
+              "firstVideoPresentationTime": 147456
+            },
+            {
+              "number": 3,
+              "firstVideoPresentationTime": 221184
+            },
+            {
+              "number": 4,
+              "firstVideoPresentationTime": 301056
+            },
+            {
+              "number": 5,
+              "firstVideoPresentationTime": 368640
+            },
+            {
+              "number": 6,
+              "firstVideoPresentationTime": 448512
+            },
+            {
+              "number": 7,
+              "firstVideoPresentationTime": 516096
+            },
+            {
+              "number": 8,
+              "firstVideoPresentationTime": 589824
+            },
+            {
+              "number": 9,
+              "firstVideoPresentationTime": 669696
+            },
+            {
+              "number": 10,
+              "firstVideoPresentationTime": 737280
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": true,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 0.0,
+            "reproducesHlsCuts": true
+          }
+        },
+        {
+          "hlsRun": "02-copy-irregular-keyframes.video-only",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
+          "streams": "video only",
+          "pipeReference": "02-copy-irregular-keyframes.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 1584,
+            "pipeVideoSamples": 1584,
+            "identicalPackets": 1584,
+            "sharesVideoArguments": true
+          },
+          "segments": [
+            {
+              "number": 0,
+              "firstVideoPresentationTime": 0
+            },
+            {
+              "number": 1,
+              "firstVideoPresentationTime": 79872
+            },
+            {
+              "number": 2,
+              "firstVideoPresentationTime": 147456
+            },
+            {
+              "number": 3,
+              "firstVideoPresentationTime": 221184
+            },
+            {
+              "number": 4,
+              "firstVideoPresentationTime": 301056
+            },
+            {
+              "number": 5,
+              "firstVideoPresentationTime": 368640
+            },
+            {
+              "number": 6,
+              "firstVideoPresentationTime": 448512
+            },
+            {
+              "number": 7,
+              "firstVideoPresentationTime": 516096
+            },
+            {
+              "number": 8,
+              "firstVideoPresentationTime": 589824
+            },
+            {
+              "number": 9,
+              "firstVideoPresentationTime": 669696
+            },
+            {
+              "number": 10,
+              "firstVideoPresentationTime": 737280
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": true,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 0.0,
+            "reproducesHlsCuts": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "03-encode-vfr",
+      "file": "03-encode-vfr.fmp4",
+      "proves": "Variable-frame-rate source (avg 16.2 fps on a 23.976 grid) encoded with libx264 under -r 23.976 and no -fps_mode: constant-rate output starting at the first source frame (41.7 ms), one keyframe in every interval.",
+      "mode": "encode",
+      "encoder": "libx264",
+      "source": {
+        "file": "vfr.mp4",
+        "containerStartTimeMicros": 0,
+        "videoRealFrameRate": "24000/1001",
+        "videoAverageFrameRate": "8544000/527527"
+      },
+      "seekSeconds": 0,
+      "period": 6,
+      "fragmentationTargetMicros": 1000000,
+      "startSequenceNumber": 0,
+      "videoTrackId": 1,
+      "videoTimescale": 24000,
+      "byteLength": 92289,
+      "initializationSegment": {
+        "byteLength": 1348,
+        "sha256": "c088712750a25550ba7163ef599051ee1641fda27dc09b273e5ceaf1284a107e",
+        "tracks": [
+          {
+            "trackId": 1,
+            "handler": "vide",
+            "sampleEntry": "avc1",
+            "timescale": 24000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          },
+          {
+            "trackId": 2,
+            "handler": "soun",
+            "sampleEntry": "mp4a",
+            "timescale": 48000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          }
+        ]
+      },
+      "segments": [
+        {
+          "number": 0,
+          "firstVideoPresentationTime": 1001,
+          "firstFragmentIndex": 0,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 9715
+        },
+        {
+          "number": 1,
+          "firstVideoPresentationTime": 145145,
+          "firstFragmentIndex": 6,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 7724
+        },
+        {
+          "number": 2,
+          "firstVideoPresentationTime": 289289,
+          "firstFragmentIndex": 12,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 7909
+        },
+        {
+          "number": 3,
+          "firstVideoPresentationTime": 433433,
+          "firstFragmentIndex": 18,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8008
+        },
+        {
+          "number": 4,
+          "firstVideoPresentationTime": 577577,
+          "firstFragmentIndex": 24,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8158
+        },
+        {
+          "number": 5,
+          "firstVideoPresentationTime": 721721,
+          "firstFragmentIndex": 30,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8220
+        },
+        {
+          "number": 6,
+          "firstVideoPresentationTime": 865865,
+          "firstFragmentIndex": 36,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8097
+        },
+        {
+          "number": 7,
+          "firstVideoPresentationTime": 1009008,
+          "firstFragmentIndex": 42,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8371
+        },
+        {
+          "number": 8,
+          "firstVideoPresentationTime": 1153152,
+          "firstFragmentIndex": 48,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8251
+        },
+        {
+          "number": 9,
+          "firstVideoPresentationTime": 1297296,
+          "firstFragmentIndex": 54,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8238
+        },
+        {
+          "number": 10,
+          "firstVideoPresentationTime": 1441440,
+          "firstFragmentIndex": 60,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8250
+        }
+      ],
+      "discardedPreroll": [],
+      "failure": null,
+      "endsWithAudioOnlyFragments": false,
+      "trailingAudioOnlyFragmentCount": 0,
+      "sourceKeyframeCheck": null,
+      "diagnostics": {
+        "fragmentCount": 66,
+        "syncFirstFragments": 11,
+        "nonSyncFirstFragments": 55,
+        "fragmentsWithoutVideo": 0,
+        "leadingFragmentsWithoutVideo": 0,
+        "everyKeyframeStartsAFragment": true,
+        "videoSamples": 1582,
+        "largestFragmentByteLength": 3263,
+        "firstVideoPresentationTime": 1001,
+        "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
+        "startPlusDurationsMissesNextStartByTicks": {
+          "min": -3003,
+          "max": 3003
+        },
+        "videoPictures": {
+          "sampleEntry": "avc1",
+          "keyframes": [
+            {
+              "presentationTime": 1001,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 145145,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 289289,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 433433,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 577577,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 721721,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 865865,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1009008,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1153152,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1297296,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1441440,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            }
+          ]
+        }
+      },
+      "hlsComparisons": [
+        {
+          "hlsRun": "03-encode-vfr.hls-recipe",
+          "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
+          "streams": "video and audio",
+          "pipeReference": "03-encode-vfr.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 1582,
+            "pipeVideoSamples": 1582,
+            "identicalPackets": 1581,
+            "sharesVideoArguments": false
+          },
+          "segments": [
+            {
+              "number": 0,
+              "firstVideoPresentationTime": 1001
+            },
+            {
+              "number": 1,
+              "firstVideoPresentationTime": 145145
+            },
+            {
+              "number": 2,
+              "firstVideoPresentationTime": 289289
+            },
+            {
+              "number": 3,
+              "firstVideoPresentationTime": 433433
+            },
+            {
+              "number": 4,
+              "firstVideoPresentationTime": 577577
+            },
+            {
+              "number": 5,
+              "firstVideoPresentationTime": 721721
+            },
+            {
+              "number": 6,
+              "firstVideoPresentationTime": 865865
+            },
+            {
+              "number": 7,
+              "firstVideoPresentationTime": 1009008
+            },
+            {
+              "number": 8,
+              "firstVideoPresentationTime": 1153152
+            },
+            {
+              "number": 9,
+              "firstVideoPresentationTime": 1297296
+            },
+            {
+              "number": 10,
+              "firstVideoPresentationTime": 1441440
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": true,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 0.041708,
+            "reproducesHlsCuts": true
+          }
+        },
+        {
+          "hlsRun": "03-encode-vfr.video-only",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
+          "streams": "video only",
+          "pipeReference": "03-encode-vfr.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 1582,
+            "pipeVideoSamples": 1582,
+            "identicalPackets": 1582,
+            "sharesVideoArguments": true
+          },
+          "segments": [
+            {
+              "number": 0,
+              "firstVideoPresentationTime": 1001
+            },
+            {
+              "number": 1,
+              "firstVideoPresentationTime": 145145
+            },
+            {
+              "number": 2,
+              "firstVideoPresentationTime": 289289
+            },
+            {
+              "number": 3,
+              "firstVideoPresentationTime": 433433
+            },
+            {
+              "number": 4,
+              "firstVideoPresentationTime": 577577
+            },
+            {
+              "number": 5,
+              "firstVideoPresentationTime": 721721
+            },
+            {
+              "number": 6,
+              "firstVideoPresentationTime": 865865
+            },
+            {
+              "number": 7,
+              "firstVideoPresentationTime": 1009008
+            },
+            {
+              "number": 8,
+              "firstVideoPresentationTime": 1153152
+            },
+            {
+              "number": 9,
+              "firstVideoPresentationTime": 1297296
+            },
+            {
+              "number": 10,
+              "firstVideoPresentationTime": 1441440
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": true,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 0.041708,
+            "reproducesHlsCuts": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "04-copy-vfr-bframes",
+      "file": "04-copy-vfr-bframes.fmp4",
+      "proves": "Variable-frame-rate stream copy with B-frames and one or two keyframes per interval: segments open only at a sync-first fragment inside a new interval, whatever the frame spacing.",
+      "mode": "copy",
+      "encoder": null,
+      "source": {
+        "file": "vfr.mp4",
+        "containerStartTimeMicros": 0,
+        "videoRealFrameRate": "24000/1001",
+        "videoAverageFrameRate": "8544000/527527"
+      },
+      "seekSeconds": 0,
+      "period": 6,
+      "fragmentationTargetMicros": 1000000,
+      "startSequenceNumber": 0,
+      "videoTrackId": 1,
+      "videoTimescale": 24000,
+      "byteLength": 106886,
+      "initializationSegment": {
+        "byteLength": 1348,
+        "sha256": "e83cdbefc32bc4d2e0647160b43693f24205ccc09dc92ac64044dfcf6e7663f5",
+        "tracks": [
+          {
+            "trackId": 1,
+            "handler": "vide",
+            "sampleEntry": "avc1",
+            "timescale": 24000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          },
+          {
+            "trackId": 2,
+            "handler": "soun",
+            "sampleEntry": "mp4a",
+            "timescale": 48000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          }
+        ]
+      },
+      "segments": [
+        {
+          "number": 0,
+          "firstVideoPresentationTime": 984,
+          "firstFragmentIndex": 0,
+          "fragmentCount": 10,
+          "syncFirstFragmentCount": 3,
+          "byteLength": 12535
+        },
+        {
+          "number": 1,
+          "firstVideoPresentationTime": 197180,
+          "firstFragmentIndex": 10,
+          "fragmentCount": 5,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 6270
+        },
+        {
+          "number": 2,
+          "firstVideoPresentationTime": 295278,
+          "firstFragmentIndex": 15,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 7282
+        },
+        {
+          "number": 3,
+          "firstVideoPresentationTime": 432415,
+          "firstFragmentIndex": 21,
+          "fragmentCount": 7,
+          "syncFirstFragmentCount": 2,
+          "byteLength": 8610
+        },
+        {
+          "number": 4,
+          "firstVideoPresentationTime": 578561,
+          "firstFragmentIndex": 28,
+          "fragmentCount": 8,
+          "syncFirstFragmentCount": 2,
+          "byteLength": 10478
+        },
+        {
+          "number": 5,
+          "firstVideoPresentationTime": 744727,
+          "firstFragmentIndex": 36,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 7941
+        },
+        {
+          "number": 6,
+          "firstVideoPresentationTime": 868851,
+          "firstFragmentIndex": 42,
+          "fragmentCount": 7,
+          "syncFirstFragmentCount": 2,
+          "byteLength": 9665
+        },
+        {
+          "number": 7,
+          "firstVideoPresentationTime": 1010993,
+          "firstFragmentIndex": 49,
+          "fragmentCount": 8,
+          "syncFirstFragmentCount": 2,
+          "byteLength": 12333
+        },
+        {
+          "number": 8,
+          "firstVideoPresentationTime": 1176158,
+          "firstFragmentIndex": 57,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 2,
+          "byteLength": 9371
+        },
+        {
+          "number": 9,
+          "firstVideoPresentationTime": 1299281,
+          "firstFragmentIndex": 63,
+          "fragmentCount": 8,
+          "syncFirstFragmentCount": 2,
+          "byteLength": 12185
+        },
+        {
+          "number": 10,
+          "firstVideoPresentationTime": 1464446,
+          "firstFragmentIndex": 71,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 2,
+          "byteLength": 8868
+        }
+      ],
+      "discardedPreroll": [],
+      "failure": null,
+      "endsWithAudioOnlyFragments": true,
+      "trailingAudioOnlyFragmentCount": 1,
+      "sourceKeyframeCheck": {
+        "recordedKeyframesEqualSourceKeyframes": true,
+        "keyframePresentationTimes": [
+          984,
+          60043,
+          142125,
+          197180,
+          295278,
+          432415,
+          456439,
+          578561,
+          719702,
+          744727,
+          868851,
+          973956,
+          1010993,
+          1150132,
+          1176158,
+          1279261,
+          1299281,
+          1439421,
+          1464446,
+          1560542
+        ]
+      },
+      "diagnostics": {
+        "fragmentCount": 77,
+        "syncFirstFragments": 20,
+        "nonSyncFirstFragments": 56,
+        "fragmentsWithoutVideo": 1,
+        "leadingFragmentsWithoutVideo": 0,
+        "everyKeyframeStartsAFragment": true,
+        "videoSamples": 1068,
+        "largestFragmentByteLength": 2349,
+        "firstVideoPresentationTime": 984,
+        "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
+        "startPlusDurationsMissesNextStartByTicks": {
+          "min": -2002,
+          "max": 2002
+        },
+        "videoPictures": {
+          "sampleEntry": "avc1",
+          "keyframes": [
+            {
+              "presentationTime": 984,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 60043,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 142125,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 197180,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 295278,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 432415,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 456439,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 578561,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 719702,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 744727,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 868851,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 973956,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1010993,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1150132,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1176158,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1279261,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1299281,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1439421,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1464446,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1560542,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            }
+          ]
+        }
+      },
+      "hlsComparisons": [
+        {
+          "hlsRun": "04-copy-vfr-bframes.hls-recipe",
+          "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
+          "streams": "video and audio",
+          "pipeReference": "04-copy-vfr-bframes.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 1068,
+            "pipeVideoSamples": 1068,
+            "identicalPackets": 1068,
+            "sharesVideoArguments": true
+          },
+          "segments": [
+            {
+              "number": 0,
+              "firstVideoPresentationTime": 984
+            },
+            {
+              "number": 1,
+              "firstVideoPresentationTime": 197180
+            },
+            {
+              "number": 2,
+              "firstVideoPresentationTime": 295278
+            },
+            {
+              "number": 3,
+              "firstVideoPresentationTime": 456439
+            },
+            {
+              "number": 4,
+              "firstVideoPresentationTime": 578561
+            },
+            {
+              "number": 5,
+              "firstVideoPresentationTime": 744727
+            },
+            {
+              "number": 6,
+              "firstVideoPresentationTime": 868851
+            },
+            {
+              "number": 7,
+              "firstVideoPresentationTime": 1010993
+            },
+            {
+              "number": 8,
+              "firstVideoPresentationTime": 1176158
+            },
+            {
+              "number": 9,
+              "firstVideoPresentationTime": 1299281
+            },
+            {
+              "number": 10,
+              "firstVideoPresentationTime": 1464446
+            }
+          ],
+          "agrees": false,
+          "expectedToAgree": false,
+          "mismatches": [
+            {
+              "number": 3,
+              "grouping": 432415,
+              "hls": 456439
+            }
+          ],
+          "hlsOwnTimestampsMatchPipe": false,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 0.041,
+            "reproducesHlsCuts": true
+          }
+        },
+        {
+          "hlsRun": "04-copy-vfr-bframes.video-only",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
+          "streams": "video only",
+          "pipeReference": "04-copy-vfr-bframes.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 1068,
+            "pipeVideoSamples": 1068,
+            "identicalPackets": 1068,
+            "sharesVideoArguments": true
+          },
+          "segments": [
+            {
+              "number": 0,
+              "firstVideoPresentationTime": 984
+            },
+            {
+              "number": 1,
+              "firstVideoPresentationTime": 197180
+            },
+            {
+              "number": 2,
+              "firstVideoPresentationTime": 295278
+            },
+            {
+              "number": 3,
+              "firstVideoPresentationTime": 456439
+            },
+            {
+              "number": 4,
+              "firstVideoPresentationTime": 578561
+            },
+            {
+              "number": 5,
+              "firstVideoPresentationTime": 744727
+            },
+            {
+              "number": 6,
+              "firstVideoPresentationTime": 868851
+            },
+            {
+              "number": 7,
+              "firstVideoPresentationTime": 1010993
+            },
+            {
+              "number": 8,
+              "firstVideoPresentationTime": 1176158
+            },
+            {
+              "number": 9,
+              "firstVideoPresentationTime": 1299281
+            },
+            {
+              "number": 10,
+              "firstVideoPresentationTime": 1464446
+            }
+          ],
+          "agrees": false,
+          "expectedToAgree": false,
+          "mismatches": [
+            {
+              "number": 3,
+              "grouping": 432415,
+              "hls": 456439
+            }
+          ],
+          "hlsOwnTimestampsMatchPipe": false,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 0.041,
+            "reproducesHlsCuts": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "05-encode-late-start",
+      "file": "05-encode-late-start.fmp4",
+      "proves": "MPEG-TS source whose timestamps begin at 12 s: -start_at_zero puts media time zero at the container start (the AAC priming frame, 21.3 ms before the first video frame), so the first fragment is segment 0, not segment 2.",
+      "mode": "encode",
+      "encoder": "libx264",
+      "source": {
+        "file": "late.ts",
+        "containerStartTimeMicros": 11978667,
+        "videoRealFrameRate": "24000/1001",
+        "videoAverageFrameRate": "24000/1001"
+      },
+      "seekSeconds": 0,
+      "period": 6,
+      "fragmentationTargetMicros": 1000000,
+      "startSequenceNumber": 0,
+      "videoTrackId": 1,
+      "videoTimescale": 24000,
+      "byteLength": 43064,
+      "initializationSegment": {
+        "byteLength": 1348,
+        "sha256": "c088712750a25550ba7163ef599051ee1641fda27dc09b273e5ceaf1284a107e",
+        "tracks": [
+          {
+            "trackId": 1,
+            "handler": "vide",
+            "sampleEntry": "avc1",
+            "timescale": 24000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          },
+          {
+            "trackId": 2,
+            "handler": "soun",
+            "sampleEntry": "mp4a",
+            "timescale": 48000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          }
+        ]
+      },
+      "segments": [
+        {
+          "number": 0,
+          "firstVideoPresentationTime": 1001,
+          "firstFragmentIndex": 0,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 9507
+        },
+        {
+          "number": 1,
+          "firstVideoPresentationTime": 145145,
+          "firstFragmentIndex": 6,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 7526
+        },
+        {
+          "number": 2,
+          "firstVideoPresentationTime": 289289,
+          "firstFragmentIndex": 12,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8085
+        },
+        {
+          "number": 3,
+          "firstVideoPresentationTime": 433433,
+          "firstFragmentIndex": 18,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8181
+        },
+        {
+          "number": 4,
+          "firstVideoPresentationTime": 577577,
+          "firstFragmentIndex": 24,
+          "fragmentCount": 7,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8417
+        }
+      ],
+      "discardedPreroll": [],
+      "failure": null,
+      "endsWithAudioOnlyFragments": true,
+      "trailingAudioOnlyFragmentCount": 1,
+      "sourceKeyframeCheck": null,
+      "diagnostics": {
+        "fragmentCount": 31,
+        "syncFirstFragments": 5,
+        "nonSyncFirstFragments": 25,
+        "fragmentsWithoutVideo": 1,
+        "leadingFragmentsWithoutVideo": 0,
+        "everyKeyframeStartsAFragment": true,
+        "videoSamples": 720,
+        "largestFragmentByteLength": 3403,
+        "firstVideoPresentationTime": 1001,
+        "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
+        "startPlusDurationsMissesNextStartByTicks": {
+          "min": -3003,
+          "max": 4004
+        },
+        "videoPictures": {
+          "sampleEntry": "avc1",
+          "keyframes": [
+            {
+              "presentationTime": 1001,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 145145,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 289289,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 433433,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 577577,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            }
+          ]
+        }
+      },
+      "hlsComparisons": [
+        {
+          "hlsRun": "05-encode-late-start.hls-recipe",
+          "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
+          "streams": "video and audio",
+          "pipeReference": "05-encode-late-start.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 720,
+            "pipeVideoSamples": 720,
+            "identicalPackets": 719,
+            "sharesVideoArguments": false
+          },
+          "segments": [
+            {
+              "number": 0,
+              "firstVideoPresentationTime": 1001
+            },
+            {
+              "number": 1,
+              "firstVideoPresentationTime": 145145
+            },
+            {
+              "number": 2,
+              "firstVideoPresentationTime": 289289
+            },
+            {
+              "number": 3,
+              "firstVideoPresentationTime": 433433
+            },
+            {
+              "number": 4,
+              "firstVideoPresentationTime": 577577
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": false,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 0.041708,
+            "reproducesHlsCuts": true
+          }
+        },
+        {
+          "hlsRun": "05-encode-late-start.video-only",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
+          "streams": "video only",
+          "pipeReference": "05-encode-late-start.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 720,
+            "pipeVideoSamples": 720,
+            "identicalPackets": 720,
+            "sharesVideoArguments": true
+          },
+          "segments": [
+            {
+              "number": 0,
+              "firstVideoPresentationTime": 1001
+            },
+            {
+              "number": 1,
+              "firstVideoPresentationTime": 145145
+            },
+            {
+              "number": 2,
+              "firstVideoPresentationTime": 289289
+            },
+            {
+              "number": 3,
+              "firstVideoPresentationTime": 433433
+            },
+            {
+              "number": 4,
+              "firstVideoPresentationTime": 577577
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": false,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 0.041708,
+            "reproducesHlsCuts": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "05-copy-late-start",
+      "file": "05-copy-late-start.fmp4",
+      "proves": "Stream copy of the same 12 s-origin MPEG-TS source with -bsf:a aac_adtstoasc: the first fragment is segment 0 and every keyframe's media time is its source timestamp minus the container start.",
+      "mode": "copy",
+      "encoder": null,
+      "source": {
+        "file": "late.ts",
+        "containerStartTimeMicros": 11978667,
+        "videoRealFrameRate": "24000/1001",
+        "videoAverageFrameRate": "24000/1001"
+      },
+      "seekSeconds": 0,
+      "period": 6,
+      "fragmentationTargetMicros": 1000000,
+      "startSequenceNumber": 0,
+      "videoTrackId": 1,
+      "videoTimescale": 90000,
+      "byteLength": 52405,
+      "initializationSegment": {
+        "byteLength": 1325,
+        "sha256": "d480ab5e888015d3532d6a75d2ec4cf4426e1abebb520cc4afca16a0a726d08a",
+        "tracks": [
+          {
+            "trackId": 1,
+            "handler": "vide",
+            "sampleEntry": "avc1",
+            "timescale": 90000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          },
+          {
+            "trackId": 2,
+            "handler": "soun",
+            "sampleEntry": "mp4a",
+            "timescale": 48000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          }
+        ]
+      },
+      "segments": [
+        {
+          "number": 0,
+          "firstVideoPresentationTime": 1920,
+          "firstFragmentIndex": 0,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 3,
+          "byteLength": 10343
+        },
+        {
+          "number": 1,
+          "firstVideoPresentationTime": 542460,
+          "firstFragmentIndex": 6,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 3,
+          "byteLength": 10046
+        },
+        {
+          "number": 2,
+          "firstVideoPresentationTime": 1083000,
+          "firstFragmentIndex": 12,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 3,
+          "byteLength": 10195
+        },
+        {
+          "number": 3,
+          "firstVideoPresentationTime": 1623540,
+          "firstFragmentIndex": 18,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 3,
+          "byteLength": 10186
+        },
+        {
+          "number": 4,
+          "firstVideoPresentationTime": 2164080,
+          "firstFragmentIndex": 24,
+          "fragmentCount": 7,
+          "syncFirstFragmentCount": 3,
+          "byteLength": 10310
+        }
+      ],
+      "discardedPreroll": [],
+      "failure": null,
+      "endsWithAudioOnlyFragments": true,
+      "trailingAudioOnlyFragmentCount": 1,
+      "sourceKeyframeCheck": {
+        "recordedKeyframesEqualSourceKeyframes": true,
+        "keyframePresentationTimes": [
+          1920,
+          182100,
+          362280,
+          542460,
+          722640,
+          902820,
+          1083000,
+          1263180,
+          1443360,
+          1623540,
+          1803720,
+          1983900,
+          2164080,
+          2344260,
+          2524440
+        ]
+      },
+      "diagnostics": {
+        "fragmentCount": 31,
+        "syncFirstFragments": 15,
+        "nonSyncFirstFragments": 15,
+        "fragmentsWithoutVideo": 1,
+        "leadingFragmentsWithoutVideo": 0,
+        "everyKeyframeStartsAFragment": true,
+        "videoSamples": 720,
+        "largestFragmentByteLength": 2592,
+        "firstVideoPresentationTime": 1920,
+        "firstAudioBaseMediaDecodeTimeUnsigned": 0,
+        "startPlusDurationsMissesNextStartByTicks": {
+          "min": -1,
+          "max": 0
+        },
+        "videoPictures": {
+          "sampleEntry": "avc1",
+          "keyframes": [
+            {
+              "presentationTime": 1920,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 182100,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 362280,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 542460,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 722640,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 902820,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1083000,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1263180,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1443360,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1623540,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1803720,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1983900,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 2164080,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 2344260,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 2524440,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            }
+          ]
+        }
+      },
+      "hlsComparisons": [
+        {
+          "hlsRun": "05-copy-late-start.hls-recipe-adtstoasc",
+          "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
+          "streams": "video and audio",
+          "pipeReference": "05-copy-late-start.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 720,
+            "pipeVideoSamples": 720,
+            "identicalPackets": 720,
+            "sharesVideoArguments": true
+          },
+          "segments": [
+            {
+              "number": 0,
+              "firstVideoPresentationTime": 1920
+            },
+            {
+              "number": 1,
+              "firstVideoPresentationTime": 542460
+            },
+            {
+              "number": 2,
+              "firstVideoPresentationTime": 1083000
+            },
+            {
+              "number": 3,
+              "firstVideoPresentationTime": 1623540
+            },
+            {
+              "number": 4,
+              "firstVideoPresentationTime": 2164080
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": false,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 0.021333,
+            "reproducesHlsCuts": true
+          }
+        },
+        {
+          "hlsRun": "05-copy-late-start.video-only",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
+          "streams": "video only",
+          "pipeReference": "05-copy-late-start.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 720,
+            "pipeVideoSamples": 720,
+            "identicalPackets": 720,
+            "sharesVideoArguments": true
+          },
+          "segments": [
+            {
+              "number": 0,
+              "firstVideoPresentationTime": 1920
+            },
+            {
+              "number": 1,
+              "firstVideoPresentationTime": 542460
+            },
+            {
+              "number": 2,
+              "firstVideoPresentationTime": 1083000
+            },
+            {
+              "number": 3,
+              "firstVideoPresentationTime": 1623540
+            },
+            {
+              "number": 4,
+              "firstVideoPresentationTime": 2164080
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": false,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 0.021333,
+            "reproducesHlsCuts": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "06-encode-audio-tail",
+      "file": "06-encode-audio-tail.fmp4",
+      "proves": "Audio outlasts video by 3.5 s: the recording ends in audio-only fragments (no video traf), which join the last open segment; none precedes the first segment.",
+      "mode": "encode",
+      "encoder": "libx264",
+      "source": {
+        "file": "tail.mp4",
+        "containerStartTimeMicros": 0,
+        "videoRealFrameRate": "24000/1001",
+        "videoAverageFrameRate": "24000/1001"
+      },
+      "seekSeconds": 0,
+      "period": 6,
+      "fragmentationTargetMicros": 1000000,
+      "startSequenceNumber": 0,
+      "videoTrackId": 1,
+      "videoTimescale": 24000,
+      "byteLength": 30855,
+      "initializationSegment": {
+        "byteLength": 1348,
+        "sha256": "c088712750a25550ba7163ef599051ee1641fda27dc09b273e5ceaf1284a107e",
+        "tracks": [
+          {
+            "trackId": 1,
+            "handler": "vide",
+            "sampleEntry": "avc1",
+            "timescale": 24000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          },
+          {
+            "trackId": 2,
+            "handler": "soun",
+            "sampleEntry": "mp4a",
+            "timescale": 48000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          }
+        ]
+      },
+      "segments": [
+        {
+          "number": 0,
+          "firstVideoPresentationTime": 0,
+          "firstFragmentIndex": 0,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 9629
+        },
+        {
+          "number": 1,
+          "firstVideoPresentationTime": 144144,
+          "firstFragmentIndex": 6,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 7829
+        },
+        {
+          "number": 2,
+          "firstVideoPresentationTime": 288288,
+          "firstFragmentIndex": 12,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8036
+        },
+        {
+          "number": 3,
+          "firstVideoPresentationTime": 432432,
+          "firstFragmentIndex": 18,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 4013
+        }
+      ],
+      "discardedPreroll": [],
+      "failure": null,
+      "endsWithAudioOnlyFragments": true,
+      "trailingAudioOnlyFragmentCount": 4,
+      "sourceKeyframeCheck": null,
+      "diagnostics": {
+        "fragmentCount": 24,
+        "syncFirstFragments": 4,
+        "nonSyncFirstFragments": 16,
+        "fragmentsWithoutVideo": 4,
+        "leadingFragmentsWithoutVideo": 0,
+        "everyKeyframeStartsAFragment": true,
+        "videoSamples": 480,
+        "largestFragmentByteLength": 3420,
+        "firstVideoPresentationTime": 0,
+        "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
+        "startPlusDurationsMissesNextStartByTicks": {
+          "min": -3003,
+          "max": 4004
+        },
+        "videoPictures": {
+          "sampleEntry": "avc1",
+          "keyframes": [
+            {
+              "presentationTime": 0,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 144144,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 288288,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 432432,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            }
+          ]
+        }
+      },
+      "hlsComparisons": [
+        {
+          "hlsRun": "06-encode-audio-tail.hls-recipe",
+          "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
+          "streams": "video and audio",
+          "pipeReference": "06-encode-audio-tail.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 480,
+            "pipeVideoSamples": 480,
+            "identicalPackets": 479,
+            "sharesVideoArguments": false
+          },
+          "segments": [
+            {
+              "number": 0,
+              "firstVideoPresentationTime": 0
+            },
+            {
+              "number": 1,
+              "firstVideoPresentationTime": 144144
+            },
+            {
+              "number": 2,
+              "firstVideoPresentationTime": 288288
+            },
+            {
+              "number": 3,
+              "firstVideoPresentationTime": 432432
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": true,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 0.0,
+            "reproducesHlsCuts": true
+          }
+        },
+        {
+          "hlsRun": "06-encode-audio-tail.video-only",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
+          "streams": "video only",
+          "pipeReference": "06-encode-audio-tail.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 480,
+            "pipeVideoSamples": 480,
+            "identicalPackets": 480,
+            "sharesVideoArguments": true
+          },
+          "segments": [
+            {
+              "number": 0,
+              "firstVideoPresentationTime": 0
+            },
+            {
+              "number": 1,
+              "firstVideoPresentationTime": 144144
+            },
+            {
+              "number": 2,
+              "firstVideoPresentationTime": 288288
+            },
+            {
+              "number": 3,
+              "firstVideoPresentationTime": 432432
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": true,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 0.0,
+            "reproducesHlsCuts": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "07-copy-start0",
+      "file": "07-copy-start0.fmp4",
+      "proves": "Stream copy of a 2.002 s-GOP 23.976 fps source from the start: three keyframes per segment.",
+      "mode": "copy",
+      "encoder": null,
+      "source": {
+        "file": "cfr.mp4",
+        "containerStartTimeMicros": 0,
+        "videoRealFrameRate": "24000/1001",
+        "videoAverageFrameRate": "24000/1001"
+      },
+      "seekSeconds": 0,
+      "period": 6,
+      "fragmentationTargetMicros": 1000000,
+      "startSequenceNumber": 0,
+      "videoTrackId": 1,
+      "videoTimescale": 24000,
+      "byteLength": 104117,
+      "initializationSegment": {
+        "byteLength": 1348,
+        "sha256": "505f73a7c96dbc796f5c161c1772b3a6dcc6aa11c64b17b17e1b9fc7f976805a",
+        "tracks": [
+          {
+            "trackId": 1,
+            "handler": "vide",
+            "sampleEntry": "avc1",
+            "timescale": 24000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          },
+          {
+            "trackId": 2,
+            "handler": "soun",
+            "sampleEntry": "mp4a",
+            "timescale": 48000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          }
+        ]
+      },
+      "segments": [
+        {
+          "number": 0,
+          "firstVideoPresentationTime": 0,
+          "firstFragmentIndex": 0,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 3,
+          "byteLength": 9273
+        },
+        {
+          "number": 1,
+          "firstVideoPresentationTime": 144144,
+          "firstFragmentIndex": 6,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 3,
+          "byteLength": 8801
+        },
+        {
+          "number": 2,
+          "firstVideoPresentationTime": 288288,
+          "firstFragmentIndex": 12,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 3,
+          "byteLength": 9008
+        },
+        {
+          "number": 3,
+          "firstVideoPresentationTime": 432432,
+          "firstFragmentIndex": 18,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 3,
+          "byteLength": 9122
+        },
+        {
+          "number": 4,
+          "firstVideoPresentationTime": 576576,
+          "firstFragmentIndex": 24,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 3,
+          "byteLength": 9139
+        },
+        {
+          "number": 5,
+          "firstVideoPresentationTime": 720720,
+          "firstFragmentIndex": 30,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 3,
+          "byteLength": 9404
+        },
+        {
+          "number": 6,
+          "firstVideoPresentationTime": 864864,
+          "firstFragmentIndex": 36,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 3,
+          "byteLength": 9441
+        },
+        {
+          "number": 7,
+          "firstVideoPresentationTime": 1009008,
+          "firstFragmentIndex": 42,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 3,
+          "byteLength": 9584
+        },
+        {
+          "number": 8,
+          "firstVideoPresentationTime": 1153152,
+          "firstFragmentIndex": 48,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 3,
+          "byteLength": 9557
+        },
+        {
+          "number": 9,
+          "firstVideoPresentationTime": 1297296,
+          "firstFragmentIndex": 54,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 3,
+          "byteLength": 9590
+        },
+        {
+          "number": 10,
+          "firstVideoPresentationTime": 1441440,
+          "firstFragmentIndex": 60,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 3,
+          "byteLength": 9850
+        }
+      ],
+      "discardedPreroll": [],
+      "failure": null,
+      "endsWithAudioOnlyFragments": false,
+      "trailingAudioOnlyFragmentCount": 0,
+      "sourceKeyframeCheck": {
+        "recordedKeyframesEqualSourceKeyframes": true,
+        "keyframePresentationTimes": [
+          0,
+          48048,
+          96096,
+          144144,
+          192192,
+          240240,
+          288288,
+          336336,
+          384384,
+          432432,
+          480480,
+          528528,
+          576576,
+          624624,
+          672672,
+          720720,
+          768768,
+          816816,
+          864864,
+          912912,
+          960960,
+          1009008,
+          1057056,
+          1105104,
+          1153152,
+          1201200,
+          1249248,
+          1297296,
+          1345344,
+          1393392,
+          1441440,
+          1489488,
+          1537536
+        ]
+      },
+      "diagnostics": {
+        "fragmentCount": 66,
+        "syncFirstFragments": 33,
+        "nonSyncFirstFragments": 33,
+        "fragmentsWithoutVideo": 0,
+        "leadingFragmentsWithoutVideo": 0,
+        "everyKeyframeStartsAFragment": true,
+        "videoSamples": 1583,
+        "largestFragmentByteLength": 2297,
+        "firstVideoPresentationTime": 0,
+        "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
+        "startPlusDurationsMissesNextStartByTicks": {
+          "min": -1001,
+          "max": 1001
+        },
+        "videoPictures": {
+          "sampleEntry": "avc1",
+          "keyframes": [
+            {
+              "presentationTime": 0,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 48048,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 96096,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 144144,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 192192,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 240240,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 288288,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 336336,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 384384,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 432432,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 480480,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 528528,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 576576,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 624624,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 672672,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 720720,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 768768,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 816816,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 864864,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 912912,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 960960,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1009008,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1057056,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1105104,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1153152,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1201200,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1249248,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1297296,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1345344,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1393392,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1441440,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1489488,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1537536,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            }
+          ]
+        }
+      },
+      "hlsComparisons": [
+        {
+          "hlsRun": "07-copy-start0.hls-recipe",
+          "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
+          "streams": "video and audio",
+          "pipeReference": "07-copy-start0.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 1583,
+            "pipeVideoSamples": 1583,
+            "identicalPackets": 1583,
+            "sharesVideoArguments": true
+          },
+          "segments": [
+            {
+              "number": 0,
+              "firstVideoPresentationTime": 0
+            },
+            {
+              "number": 1,
+              "firstVideoPresentationTime": 144144
+            },
+            {
+              "number": 2,
+              "firstVideoPresentationTime": 288288
+            },
+            {
+              "number": 3,
+              "firstVideoPresentationTime": 432432
+            },
+            {
+              "number": 4,
+              "firstVideoPresentationTime": 576576
+            },
+            {
+              "number": 5,
+              "firstVideoPresentationTime": 720720
+            },
+            {
+              "number": 6,
+              "firstVideoPresentationTime": 864864
+            },
+            {
+              "number": 7,
+              "firstVideoPresentationTime": 1009008
+            },
+            {
+              "number": 8,
+              "firstVideoPresentationTime": 1153152
+            },
+            {
+              "number": 9,
+              "firstVideoPresentationTime": 1297296
+            },
+            {
+              "number": 10,
+              "firstVideoPresentationTime": 1441440
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": true,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 0.0,
+            "reproducesHlsCuts": true
+          }
+        },
+        {
+          "hlsRun": "07-copy-start0.video-only",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
+          "streams": "video only",
+          "pipeReference": "07-copy-start0.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 1583,
+            "pipeVideoSamples": 1583,
+            "identicalPackets": 1583,
+            "sharesVideoArguments": true
+          },
+          "segments": [
+            {
+              "number": 0,
+              "firstVideoPresentationTime": 0
+            },
+            {
+              "number": 1,
+              "firstVideoPresentationTime": 144144
+            },
+            {
+              "number": 2,
+              "firstVideoPresentationTime": 288288
+            },
+            {
+              "number": 3,
+              "firstVideoPresentationTime": 432432
+            },
+            {
+              "number": 4,
+              "firstVideoPresentationTime": 576576
+            },
+            {
+              "number": 5,
+              "firstVideoPresentationTime": 720720
+            },
+            {
+              "number": 6,
+              "firstVideoPresentationTime": 864864
+            },
+            {
+              "number": 7,
+              "firstVideoPresentationTime": 1009008
+            },
+            {
+              "number": 8,
+              "firstVideoPresentationTime": 1153152
+            },
+            {
+              "number": 9,
+              "firstVideoPresentationTime": 1297296
+            },
+            {
+              "number": 10,
+              "firstVideoPresentationTime": 1441440
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": true,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 0.0,
+            "reproducesHlsCuts": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "07-copy-seek30",
+      "file": "07-copy-seek30.fmp4",
+      "proves": "Stream-copy replacement attempt at -ss 30 (start sequence number 5): the seek lands on the keyframe at 28.028 s (segment 4), which is preroll and is discarded with the non-sync fragment after it; segments 5 to 10 carry the start-0 recording's video samples at the same ticks (audio packets regroup by one AAC frame).",
+      "mode": "copy",
+      "encoder": null,
+      "source": {
+        "file": "cfr.mp4",
+        "containerStartTimeMicros": 0,
+        "videoRealFrameRate": "24000/1001",
+        "videoAverageFrameRate": "24000/1001"
+      },
+      "seekSeconds": 30,
+      "period": 6,
+      "fragmentationTargetMicros": 1000000,
+      "startSequenceNumber": 5,
+      "videoTrackId": 1,
+      "videoTimescale": 24000,
+      "byteLength": 60228,
+      "initializationSegment": {
+        "byteLength": 1348,
+        "sha256": "505f73a7c96dbc796f5c161c1772b3a6dcc6aa11c64b17b17e1b9fc7f976805a",
+        "tracks": [
+          {
+            "trackId": 1,
+            "handler": "vide",
+            "sampleEntry": "avc1",
+            "timescale": 24000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          },
+          {
+            "trackId": 2,
+            "handler": "soun",
+            "sampleEntry": "mp4a",
+            "timescale": 48000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          }
+        ]
+      },
+      "segments": [
+        {
+          "number": 5,
+          "firstVideoPresentationTime": 720720,
+          "firstFragmentIndex": 2,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 3,
+          "byteLength": 8828
+        },
+        {
+          "number": 6,
+          "firstVideoPresentationTime": 864864,
+          "firstFragmentIndex": 8,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 3,
+          "byteLength": 8869
+        },
+        {
+          "number": 7,
+          "firstVideoPresentationTime": 1009008,
+          "firstFragmentIndex": 14,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 3,
+          "byteLength": 9392
+        },
+        {
+          "number": 8,
+          "firstVideoPresentationTime": 1153152,
+          "firstFragmentIndex": 20,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 3,
+          "byteLength": 9557
+        },
+        {
+          "number": 9,
+          "firstVideoPresentationTime": 1297296,
+          "firstFragmentIndex": 26,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 3,
+          "byteLength": 9590
+        },
+        {
+          "number": 10,
+          "firstVideoPresentationTime": 1441440,
+          "firstFragmentIndex": 32,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 3,
+          "byteLength": 9850
+        }
+      ],
+      "discardedPreroll": [
+        {
+          "number": 4,
+          "firstVideoPresentationTime": 672672,
+          "firstFragmentIndex": 0,
+          "fragmentCount": 2,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 2794
+        }
+      ],
+      "failure": null,
+      "endsWithAudioOnlyFragments": false,
+      "trailingAudioOnlyFragmentCount": 0,
+      "sourceKeyframeCheck": {
+        "recordedKeyframesEqualSourceKeyframes": true,
+        "keyframePresentationTimes": [
+          672672,
+          720720,
+          768768,
+          816816,
+          864864,
+          912912,
+          960960,
+          1009008,
+          1057056,
+          1105104,
+          1153152,
+          1201200,
+          1249248,
+          1297296,
+          1345344,
+          1393392,
+          1441440,
+          1489488,
+          1537536
+        ]
+      },
+      "diagnostics": {
+        "fragmentCount": 38,
+        "syncFirstFragments": 19,
+        "nonSyncFirstFragments": 19,
+        "fragmentsWithoutVideo": 0,
+        "leadingFragmentsWithoutVideo": 0,
+        "everyKeyframeStartsAFragment": true,
+        "videoSamples": 911,
+        "largestFragmentByteLength": 1937,
+        "firstVideoPresentationTime": 672672,
+        "firstAudioBaseMediaDecodeTimeUnsigned": 1340416,
+        "startPlusDurationsMissesNextStartByTicks": {
+          "min": -1001,
+          "max": 1001
+        },
+        "videoPictures": {
+          "sampleEntry": "avc1",
+          "keyframes": [
+            {
+              "presentationTime": 672672,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 720720,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 768768,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 816816,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 864864,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 912912,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 960960,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1009008,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1057056,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1105104,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1153152,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1201200,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1249248,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1297296,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1345344,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1393392,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1441440,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1489488,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1537536,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            }
+          ]
+        }
+      },
+      "hlsComparisons": [
+        {
+          "hlsRun": "07-copy-start0.hls-recipe",
+          "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
+          "streams": "video and audio",
+          "pipeReference": "07-copy-start0.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 1583,
+            "pipeVideoSamples": 1583,
+            "identicalPackets": 1583,
+            "sharesVideoArguments": true
+          },
+          "segments": [
+            {
+              "number": 5,
+              "firstVideoPresentationTime": 720720
+            },
+            {
+              "number": 6,
+              "firstVideoPresentationTime": 864864
+            },
+            {
+              "number": 7,
+              "firstVideoPresentationTime": 1009008
+            },
+            {
+              "number": 8,
+              "firstVideoPresentationTime": 1153152
+            },
+            {
+              "number": 9,
+              "firstVideoPresentationTime": 1297296
+            },
+            {
+              "number": 10,
+              "firstVideoPresentationTime": 1441440
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": true,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 0.0,
+            "reproducesHlsCuts": true
+          }
+        },
+        {
+          "hlsRun": "07-copy-seek30.hls-recipe",
+          "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
+          "streams": "video and audio",
+          "pipeReference": "07-copy-seek30.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 911,
+            "pipeVideoSamples": 911,
+            "identicalPackets": 911,
+            "sharesVideoArguments": true
+          },
+          "segments": [
+            {
+              "number": 5,
+              "firstVideoPresentationTime": 672672
+            },
+            {
+              "number": 6,
+              "firstVideoPresentationTime": 816816
+            },
+            {
+              "number": 7,
+              "firstVideoPresentationTime": 960960
+            },
+            {
+              "number": 8,
+              "firstVideoPresentationTime": 1105104
+            },
+            {
+              "number": 9,
+              "firstVideoPresentationTime": 1249248
+            },
+            {
+              "number": 10,
+              "firstVideoPresentationTime": 1393392
+            },
+            {
+              "number": 11,
+              "firstVideoPresentationTime": 1537536
+            }
+          ],
+          "agrees": false,
+          "expectedToAgree": false,
+          "mismatches": [
+            {
+              "number": 5,
+              "grouping": 720720,
+              "hls": 672672
+            },
+            {
+              "number": 6,
+              "grouping": 864864,
+              "hls": 816816
+            },
+            {
+              "number": 7,
+              "grouping": 1009008,
+              "hls": 960960
+            },
+            {
+              "number": 8,
+              "grouping": 1153152,
+              "hls": 1105104
+            },
+            {
+              "number": 9,
+              "grouping": 1297296,
+              "hls": 1249248
+            },
+            {
+              "number": 10,
+              "grouping": 1441440,
+              "hls": 1393392
+            },
+            {
+              "number": 11,
+              "grouping": null,
+              "hls": 1537536
+            }
+          ],
+          "hlsOwnTimestampsMatchPipe": true,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 28.028,
+            "reproducesHlsCuts": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "09-svtav1-vfr",
+      "file": "09-svtav1-vfr.fmp4",
+      "proves": "Irregular variable-frame-rate source through SVT-AV1 with -r 23.976, the verified-encoder GOP of 145 frames and time-based forced keyframes: one keyframe in every interval, on the same frames libx264 chose in 03.",
+      "mode": "encode",
+      "encoder": "libsvtav1",
+      "source": {
+        "file": "vfr.mp4",
+        "containerStartTimeMicros": 0,
+        "videoRealFrameRate": "24000/1001",
+        "videoAverageFrameRate": "8544000/527527"
+      },
+      "seekSeconds": 0,
+      "period": 6,
+      "fragmentationTargetMicros": 1000000,
+      "startSequenceNumber": 0,
+      "videoTrackId": 1,
+      "videoTimescale": 24000,
+      "byteLength": 98018,
+      "initializationSegment": {
+        "byteLength": 1334,
+        "sha256": "280fdd918c22795d9f692f5159e156db97044d3fb680e1d7811ca65a7685a208",
+        "tracks": [
+          {
+            "trackId": 1,
+            "handler": "vide",
+            "sampleEntry": "av01",
+            "timescale": 24000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          },
+          {
+            "trackId": 2,
+            "handler": "soun",
+            "sampleEntry": "mp4a",
+            "timescale": 48000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          }
+        ]
+      },
+      "segments": [
+        {
+          "number": 0,
+          "firstVideoPresentationTime": 1001,
+          "firstFragmentIndex": 0,
+          "fragmentCount": 7,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 10259
+        },
+        {
+          "number": 1,
+          "firstVideoPresentationTime": 145145,
+          "firstFragmentIndex": 7,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 9275
+        },
+        {
+          "number": 2,
+          "firstVideoPresentationTime": 289289,
+          "firstFragmentIndex": 13,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8629
+        },
+        {
+          "number": 3,
+          "firstVideoPresentationTime": 433433,
+          "firstFragmentIndex": 19,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8568
+        },
+        {
+          "number": 4,
+          "firstVideoPresentationTime": 577577,
+          "firstFragmentIndex": 25,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8423
+        },
+        {
+          "number": 5,
+          "firstVideoPresentationTime": 721721,
+          "firstFragmentIndex": 31,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8614
+        },
+        {
+          "number": 6,
+          "firstVideoPresentationTime": 865865,
+          "firstFragmentIndex": 37,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8538
+        },
+        {
+          "number": 7,
+          "firstVideoPresentationTime": 1009008,
+          "firstFragmentIndex": 43,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8382
+        },
+        {
+          "number": 8,
+          "firstVideoPresentationTime": 1153152,
+          "firstFragmentIndex": 49,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8616
+        },
+        {
+          "number": 9,
+          "firstVideoPresentationTime": 1297296,
+          "firstFragmentIndex": 55,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8812
+        },
+        {
+          "number": 10,
+          "firstVideoPresentationTime": 1441440,
+          "firstFragmentIndex": 61,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8568
+        }
+      ],
+      "discardedPreroll": [],
+      "failure": null,
+      "endsWithAudioOnlyFragments": false,
+      "trailingAudioOnlyFragmentCount": 0,
+      "sourceKeyframeCheck": null,
+      "diagnostics": {
+        "fragmentCount": 67,
+        "syncFirstFragments": 11,
+        "nonSyncFirstFragments": 56,
+        "fragmentsWithoutVideo": 0,
+        "leadingFragmentsWithoutVideo": 0,
+        "everyKeyframeStartsAFragment": true,
+        "videoSamples": 1582,
+        "largestFragmentByteLength": 2485,
+        "firstVideoPresentationTime": 1001,
+        "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
+        "startPlusDurationsMissesNextStartByTicks": {
+          "min": 0,
+          "max": 0
+        },
+        "videoPictures": {
+          "sampleEntry": "av01",
+          "keyframes": [
+            {
+              "presentationTime": 1001,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 145145,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 289289,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 433433,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 577577,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 721721,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 865865,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1009008,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1153152,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1297296,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1441440,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            }
+          ]
+        }
+      },
+      "hlsComparisons": [
+        {
+          "hlsRun": "09-svtav1-vfr.video-only",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
+          "streams": "video only",
+          "pipeReference": "09-svtav1-vfr.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 1582,
+            "pipeVideoSamples": 1582,
+            "identicalPackets": 1582,
+            "sharesVideoArguments": true
+          },
+          "segments": [
+            {
+              "number": 0,
+              "firstVideoPresentationTime": 1001
+            },
+            {
+              "number": 1,
+              "firstVideoPresentationTime": 145145
+            },
+            {
+              "number": 2,
+              "firstVideoPresentationTime": 289289
+            },
+            {
+              "number": 3,
+              "firstVideoPresentationTime": 433433
+            },
+            {
+              "number": 4,
+              "firstVideoPresentationTime": 577577
+            },
+            {
+              "number": 5,
+              "firstVideoPresentationTime": 721721
+            },
+            {
+              "number": 6,
+              "firstVideoPresentationTime": 865865
+            },
+            {
+              "number": 7,
+              "firstVideoPresentationTime": 1009008
+            },
+            {
+              "number": 8,
+              "firstVideoPresentationTime": 1153152
+            },
+            {
+              "number": 9,
+              "firstVideoPresentationTime": 1297296
+            },
+            {
+              "number": 10,
+              "firstVideoPresentationTime": 1441440
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": true,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 0.041708,
+            "reproducesHlsCuts": true
+          }
+        },
+        {
+          "hlsRun": "09-svtav1-vfr.hls-recipe",
+          "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
+          "streams": "video and audio",
+          "pipeReference": "09-svtav1-vfr.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 1582,
+            "pipeVideoSamples": 1582,
+            "identicalPackets": 1007,
+            "sharesVideoArguments": false
+          },
+          "segments": [
+            {
+              "number": 0,
+              "firstVideoPresentationTime": 1001
+            },
+            {
+              "number": 1,
+              "firstVideoPresentationTime": 145145
+            },
+            {
+              "number": 2,
+              "firstVideoPresentationTime": 289289
+            },
+            {
+              "number": 3,
+              "firstVideoPresentationTime": 433433
+            },
+            {
+              "number": 4,
+              "firstVideoPresentationTime": 577577
+            },
+            {
+              "number": 5,
+              "firstVideoPresentationTime": 721721
+            },
+            {
+              "number": 6,
+              "firstVideoPresentationTime": 865865
+            },
+            {
+              "number": 7,
+              "firstVideoPresentationTime": 1010009
+            },
+            {
+              "number": 8,
+              "firstVideoPresentationTime": 1154153
+            },
+            {
+              "number": 9,
+              "firstVideoPresentationTime": 1298297
+            },
+            {
+              "number": 10,
+              "firstVideoPresentationTime": 1442441
+            }
+          ],
+          "agrees": false,
+          "expectedToAgree": false,
+          "mismatches": [
+            {
+              "number": 7,
+              "grouping": 1009008,
+              "hls": 1010009
+            },
+            {
+              "number": 8,
+              "grouping": 1153152,
+              "hls": 1154153
+            },
+            {
+              "number": 9,
+              "grouping": 1297296,
+              "hls": 1298297
+            },
+            {
+              "number": 10,
+              "grouping": 1441440,
+              "hls": 1442441
+            }
+          ],
+          "hlsOwnTimestampsMatchPipe": true,
+          "hlsencModel": {
+            "reference": "first audio packet: pts -1024 at 1/48000 (-0.021333 s), read by hlsenc at the video's 1/24000",
+            "referenceOnZeroBasedTimelineSeconds": -0.042667,
+            "reproducesHlsCuts": true
+          }
+        },
+        {
+          "hlsRun": "09-svtav1-vfr.pipe-keyframes-with-audio",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
+          "streams": "video and audio",
+          "pipeReference": "09-svtav1-vfr.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 1582,
+            "pipeVideoSamples": 1582,
+            "identicalPackets": 1582,
+            "sharesVideoArguments": true
+          },
+          "segments": [
+            {
+              "number": 0,
+              "firstVideoPresentationTime": 1001
+            },
+            {
+              "number": 1,
+              "firstVideoPresentationTime": 145145
+            },
+            {
+              "number": 2,
+              "firstVideoPresentationTime": 289289
+            },
+            {
+              "number": 3,
+              "firstVideoPresentationTime": 433433
+            },
+            {
+              "number": 4,
+              "firstVideoPresentationTime": 577577
+            },
+            {
+              "number": 5,
+              "firstVideoPresentationTime": 721721
+            },
+            {
+              "number": 6,
+              "firstVideoPresentationTime": 865865
+            },
+            {
+              "number": 7,
+              "firstVideoPresentationTime": 1009008
+            },
+            {
+              "number": 8,
+              "firstVideoPresentationTime": 1153152
+            },
+            {
+              "number": 9,
+              "firstVideoPresentationTime": 1297296
+            },
+            {
+              "number": 10,
+              "firstVideoPresentationTime": 1441440
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": true,
+          "hlsencModel": {
+            "reference": "first audio packet: pts -1024 at 1/48000 (-0.021333 s), read by hlsenc at the video's 1/24000",
+            "referenceOnZeroBasedTimelineSeconds": -0.042667,
+            "reproducesHlsCuts": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "09-svtav1-vfr-seek30",
+      "file": "09-svtav1-vfr-seek30.fmp4",
+      "proves": "The same SVT-AV1 recipe after -ss 30: starts at the first source frame after the seek point (30.072 s), pads nothing from zero, one keyframe in every interval.",
+      "mode": "encode",
+      "encoder": "libsvtav1",
+      "source": {
+        "file": "vfr.mp4",
+        "containerStartTimeMicros": 0,
+        "videoRealFrameRate": "24000/1001",
+        "videoAverageFrameRate": "8544000/527527"
+      },
+      "seekSeconds": 30,
+      "period": 6,
+      "fragmentationTargetMicros": 1000000,
+      "startSequenceNumber": 5,
+      "videoTrackId": 1,
+      "videoTimescale": 24000,
+      "byteLength": 53200,
+      "initializationSegment": {
+        "byteLength": 1334,
+        "sha256": "280fdd918c22795d9f692f5159e156db97044d3fb680e1d7811ca65a7685a208",
+        "tracks": [
+          {
+            "trackId": 1,
+            "handler": "vide",
+            "sampleEntry": "av01",
+            "timescale": 24000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          },
+          {
+            "trackId": 2,
+            "handler": "soun",
+            "sampleEntry": "mp4a",
+            "timescale": 48000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          }
+        ]
+      },
+      "segments": [
+        {
+          "number": 5,
+          "firstVideoPresentationTime": 721721,
+          "firstFragmentIndex": 0,
+          "fragmentCount": 7,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 9026
+        },
+        {
+          "number": 6,
+          "firstVideoPresentationTime": 865865,
+          "firstFragmentIndex": 7,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8571
+        },
+        {
+          "number": 7,
+          "firstVideoPresentationTime": 1010009,
+          "firstFragmentIndex": 13,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8374
+        },
+        {
+          "number": 8,
+          "firstVideoPresentationTime": 1154153,
+          "firstFragmentIndex": 19,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8541
+        },
+        {
+          "number": 9,
+          "firstVideoPresentationTime": 1298297,
+          "firstFragmentIndex": 25,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8546
+        },
+        {
+          "number": 10,
+          "firstVideoPresentationTime": 1442441,
+          "firstFragmentIndex": 31,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8808
+        }
+      ],
+      "discardedPreroll": [],
+      "failure": null,
+      "endsWithAudioOnlyFragments": false,
+      "trailingAudioOnlyFragmentCount": 0,
+      "sourceKeyframeCheck": null,
+      "diagnostics": {
+        "fragmentCount": 37,
+        "syncFirstFragments": 6,
+        "nonSyncFirstFragments": 31,
+        "fragmentsWithoutVideo": 0,
+        "leadingFragmentsWithoutVideo": 0,
+        "everyKeyframeStartsAFragment": true,
+        "videoSamples": 862,
+        "largestFragmentByteLength": 2259,
+        "firstVideoPresentationTime": 721721,
+        "firstAudioBaseMediaDecodeTimeUnsigned": 1438976,
+        "startPlusDurationsMissesNextStartByTicks": {
+          "min": 0,
+          "max": 0
+        },
+        "videoPictures": {
+          "sampleEntry": "av01",
+          "keyframes": [
+            {
+              "presentationTime": 721721,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 865865,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1010009,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1154153,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1298297,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1442441,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            }
+          ]
+        }
+      },
+      "hlsComparisons": [
+        {
+          "hlsRun": "09-svtav1-vfr-seek30.video-only",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
+          "streams": "video only",
+          "pipeReference": "09-svtav1-vfr-seek30.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 862,
+            "pipeVideoSamples": 862,
+            "identicalPackets": 862,
+            "sharesVideoArguments": true
+          },
+          "segments": [
+            {
+              "number": 5,
+              "firstVideoPresentationTime": 721721
+            },
+            {
+              "number": 6,
+              "firstVideoPresentationTime": 865865
+            },
+            {
+              "number": 7,
+              "firstVideoPresentationTime": 1010009
+            },
+            {
+              "number": 8,
+              "firstVideoPresentationTime": 1154153
+            },
+            {
+              "number": 9,
+              "firstVideoPresentationTime": 1298297
+            },
+            {
+              "number": 10,
+              "firstVideoPresentationTime": 1442441
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": true,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 30.071708,
+            "reproducesHlsCuts": true
+          }
+        },
+        {
+          "hlsRun": "09-svtav1-vfr-seek30.hls-recipe",
+          "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
+          "streams": "video and audio",
+          "pipeReference": "09-svtav1-vfr-seek30.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 862,
+            "pipeVideoSamples": 862,
+            "identicalPackets": 862,
+            "sharesVideoArguments": false
+          },
+          "segments": [
+            {
+              "number": 5,
+              "firstVideoPresentationTime": 721721
+            },
+            {
+              "number": 6,
+              "firstVideoPresentationTime": 865865
+            },
+            {
+              "number": 7,
+              "firstVideoPresentationTime": 1010009
+            },
+            {
+              "number": 8,
+              "firstVideoPresentationTime": 1154153
+            },
+            {
+              "number": 9,
+              "firstVideoPresentationTime": 1298297
+            },
+            {
+              "number": 10,
+              "firstVideoPresentationTime": 1442441
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": true,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 30.071708,
+            "reproducesHlsCuts": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "10-copy-gop-exceeds-period",
+      "file": "10-copy-gop-exceeds-period.fmp4",
+      "proves": "Stream copy with a keyframe every 10.01 s: interval 2 holds no keyframe. The sync-first fragment at 20.02 s (segment 3) closes segment 1, which is delivered complete with segment 0, and then grouping fails with a skipped segment number; nothing from that fragment on is grouped.",
+      "mode": "copy",
+      "encoder": null,
+      "source": {
+        "file": "gop10.mp4",
+        "containerStartTimeMicros": 0,
+        "videoRealFrameRate": "24000/1001",
+        "videoAverageFrameRate": "24000/1001"
+      },
+      "seekSeconds": 0,
+      "period": 6,
+      "fragmentationTargetMicros": 1000000,
+      "startSequenceNumber": 0,
+      "videoTrackId": 1,
+      "videoTimescale": 24000,
+      "byteLength": 38116,
+      "initializationSegment": {
+        "byteLength": 1348,
+        "sha256": "71a4b5f93eb69a7a0d778c7a6dcac7a1b49233dd0703a9422c62891ab864670b",
+        "tracks": [
+          {
+            "trackId": 1,
+            "handler": "vide",
+            "sampleEntry": "avc1",
+            "timescale": 24000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          },
+          {
+            "trackId": 2,
+            "handler": "soun",
+            "sampleEntry": "mp4a",
+            "timescale": 48000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          }
+        ]
+      },
+      "segments": [
+        {
+          "number": 0,
+          "firstVideoPresentationTime": 0,
+          "firstFragmentIndex": 0,
+          "fragmentCount": 10,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 14254
+        },
+        {
+          "number": 1,
+          "firstVideoPresentationTime": 240240,
+          "firstFragmentIndex": 10,
+          "fragmentCount": 10,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 14719
+        }
+      ],
+      "discardedPreroll": [],
+      "failure": {
+        "reason": "SKIPPED_SEGMENT_NUMBER",
+        "fragmentIndex": 20,
+        "expectedNumber": 2,
+        "actualNumber": 3,
+        "presentationTime": 480480
+      },
+      "endsWithAudioOnlyFragments": true,
+      "trailingAudioOnlyFragmentCount": 1,
+      "sourceKeyframeCheck": {
+        "recordedKeyframesEqualSourceKeyframes": true,
+        "keyframePresentationTimes": [
+          0,
+          240240,
+          480480
+        ]
+      },
+      "diagnostics": {
+        "fragmentCount": 26,
+        "syncFirstFragments": 3,
+        "nonSyncFirstFragments": 22,
+        "fragmentsWithoutVideo": 1,
+        "leadingFragmentsWithoutVideo": 0,
+        "everyKeyframeStartsAFragment": true,
+        "videoSamples": 600,
+        "largestFragmentByteLength": 2299,
+        "firstVideoPresentationTime": 0,
+        "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
+        "startPlusDurationsMissesNextStartByTicks": {
+          "min": 0,
+          "max": 0
+        },
+        "videoPictures": {
+          "sampleEntry": "avc1",
+          "keyframes": [
+            {
+              "presentationTime": 0,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 240240,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 480480,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            }
+          ]
+        }
+      },
+      "hlsComparisons": [
+        {
+          "hlsRun": "10-copy-gop-exceeds-period.hls-recipe",
+          "flags": "the HLS recipe's common flags (no -start_at_zero, -max_delay)",
+          "streams": "video and audio",
+          "pipeReference": "10-copy-gop-exceeds-period.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 600,
+            "pipeVideoSamples": 600,
+            "identicalPackets": 600,
+            "sharesVideoArguments": true
+          },
+          "segments": [
+            {
+              "number": 0,
+              "firstVideoPresentationTime": 0
+            },
+            {
+              "number": 1,
+              "firstVideoPresentationTime": 240240
+            },
+            {
+              "number": 2,
+              "firstVideoPresentationTime": 480480
+            }
+          ],
+          "agrees": false,
+          "expectedToAgree": false,
+          "mismatches": [
+            {
+              "number": 2,
+              "grouping": null,
+              "hls": 480480
+            }
+          ],
+          "hlsOwnTimestampsMatchPipe": true,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 0.0,
+            "reproducesHlsCuts": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "11-encode-cfr-floored-gop",
+      "file": "11-encode-cfr-floored-gop.fmp4",
+      "proves": "The first 30 s of 01 under the floored GOP of floor(6 x 23.976) = 143 frames that ADR 0037 keeps for an encoder not verified to honour forced keyframes: the GOP keyframe one frame before every later boundary (frames 143, 287, 431, 575) and on the last frame (719) is a 1-frame keyframe-first fragment that joins the earlier segment, so each segment holds two keyframes and still groups on the grid.",
+      "mode": "encode",
+      "encoder": "libx264",
+      "source": {
+        "file": "cfr.mp4",
+        "containerStartTimeMicros": 0,
+        "videoRealFrameRate": "24000/1001",
+        "videoAverageFrameRate": "24000/1001"
+      },
+      "seekSeconds": 0,
+      "period": 6,
+      "fragmentationTargetMicros": 1000000,
+      "startSequenceNumber": 0,
+      "videoTrackId": 1,
+      "videoTimescale": 24000,
+      "byteLength": 44438,
+      "initializationSegment": {
+        "byteLength": 1348,
+        "sha256": "c088712750a25550ba7163ef599051ee1641fda27dc09b273e5ceaf1284a107e",
+        "tracks": [
+          {
+            "trackId": 1,
+            "handler": "vide",
+            "sampleEntry": "avc1",
+            "timescale": 24000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          },
+          {
+            "trackId": 2,
+            "handler": "soun",
+            "sampleEntry": "mp4a",
+            "timescale": 48000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          }
+        ]
+      },
+      "segments": [
+        {
+          "number": 0,
+          "firstVideoPresentationTime": 0,
+          "firstFragmentIndex": 0,
+          "fragmentCount": 7,
+          "syncFirstFragmentCount": 2,
+          "byteLength": 10173
+        },
+        {
+          "number": 1,
+          "firstVideoPresentationTime": 144144,
+          "firstFragmentIndex": 7,
+          "fragmentCount": 7,
+          "syncFirstFragmentCount": 2,
+          "byteLength": 8100
+        },
+        {
+          "number": 2,
+          "firstVideoPresentationTime": 288288,
+          "firstFragmentIndex": 14,
+          "fragmentCount": 7,
+          "syncFirstFragmentCount": 2,
+          "byteLength": 8046
+        },
+        {
+          "number": 3,
+          "firstVideoPresentationTime": 432432,
+          "firstFragmentIndex": 21,
+          "fragmentCount": 7,
+          "syncFirstFragmentCount": 2,
+          "byteLength": 8266
+        },
+        {
+          "number": 4,
+          "firstVideoPresentationTime": 576576,
+          "firstFragmentIndex": 28,
+          "fragmentCount": 7,
+          "syncFirstFragmentCount": 2,
+          "byteLength": 8505
+        }
+      ],
+      "discardedPreroll": [],
+      "failure": null,
+      "endsWithAudioOnlyFragments": false,
+      "trailingAudioOnlyFragmentCount": 0,
+      "sourceKeyframeCheck": null,
+      "diagnostics": {
+        "fragmentCount": 35,
+        "syncFirstFragments": 10,
+        "nonSyncFirstFragments": 25,
+        "fragmentsWithoutVideo": 0,
+        "leadingFragmentsWithoutVideo": 0,
+        "everyKeyframeStartsAFragment": true,
+        "videoSamples": 720,
+        "largestFragmentByteLength": 3420,
+        "firstVideoPresentationTime": 0,
+        "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
+        "startPlusDurationsMissesNextStartByTicks": {
+          "min": -3003,
+          "max": 4004
+        },
+        "videoPictures": {
+          "sampleEntry": "avc1",
+          "keyframes": [
+            {
+              "presentationTime": 0,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 143143,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 144144,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 287287,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 288288,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 431431,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 432432,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 575575,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 576576,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 719719,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            }
+          ]
+        }
+      },
+      "hlsComparisons": [
+        {
+          "hlsRun": "11-encode-cfr-floored-gop.video-only",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
+          "streams": "video only",
+          "pipeReference": "11-encode-cfr-floored-gop.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 720,
+            "pipeVideoSamples": 720,
+            "identicalPackets": 720,
+            "sharesVideoArguments": true
+          },
+          "segments": [
+            {
+              "number": 0,
+              "firstVideoPresentationTime": 0
+            },
+            {
+              "number": 1,
+              "firstVideoPresentationTime": 144144
+            },
+            {
+              "number": 2,
+              "firstVideoPresentationTime": 288288
+            },
+            {
+              "number": 3,
+              "firstVideoPresentationTime": 432432
+            },
+            {
+              "number": 4,
+              "firstVideoPresentationTime": 576576
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": true,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 0.0,
+            "reproducesHlsCuts": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "12-encode-cfr-missed-forced-keyframe",
+      "file": "12-encode-cfr-missed-forced-keyframe.fmp4",
+      "proves": "libx264 over the first 30 s under the verified GOP of 145 frames with the forced keyframe for 18 s suppressed: the GOP count restarts at the forced keyframe at 12.012 s (frame 288), so the backstop keyframe lands 145 frames later at 18.060 s (frame 433), inside interval 3, and no segment number is skipped.",
+      "mode": "encode",
+      "encoder": "libx264",
+      "source": {
+        "file": "cfr.mp4",
+        "containerStartTimeMicros": 0,
+        "videoRealFrameRate": "24000/1001",
+        "videoAverageFrameRate": "24000/1001"
+      },
+      "seekSeconds": 0,
+      "period": 6,
+      "fragmentationTargetMicros": 1000000,
+      "startSequenceNumber": 0,
+      "videoTrackId": 1,
+      "videoTimescale": 24000,
+      "byteLength": 43439,
+      "initializationSegment": {
+        "byteLength": 1348,
+        "sha256": "c088712750a25550ba7163ef599051ee1641fda27dc09b273e5ceaf1284a107e",
+        "tracks": [
+          {
+            "trackId": 1,
+            "handler": "vide",
+            "sampleEntry": "avc1",
+            "timescale": 24000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          },
+          {
+            "trackId": 2,
+            "handler": "soun",
+            "sampleEntry": "mp4a",
+            "timescale": 48000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          }
+        ]
+      },
+      "segments": [
+        {
+          "number": 0,
+          "firstVideoPresentationTime": 0,
+          "firstFragmentIndex": 0,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 9629
+        },
+        {
+          "number": 1,
+          "firstVideoPresentationTime": 144144,
+          "firstFragmentIndex": 6,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 7829
+        },
+        {
+          "number": 2,
+          "firstVideoPresentationTime": 288288,
+          "firstFragmentIndex": 12,
+          "fragmentCount": 7,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8308
+        },
+        {
+          "number": 3,
+          "firstVideoPresentationTime": 433433,
+          "firstFragmentIndex": 19,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8080
+        },
+        {
+          "number": 4,
+          "firstVideoPresentationTime": 576576,
+          "firstFragmentIndex": 25,
+          "fragmentCount": 7,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8245
+        }
+      ],
+      "discardedPreroll": [],
+      "failure": null,
+      "endsWithAudioOnlyFragments": true,
+      "trailingAudioOnlyFragmentCount": 1,
+      "sourceKeyframeCheck": null,
+      "diagnostics": {
+        "fragmentCount": 32,
+        "syncFirstFragments": 5,
+        "nonSyncFirstFragments": 26,
+        "fragmentsWithoutVideo": 1,
+        "leadingFragmentsWithoutVideo": 0,
+        "everyKeyframeStartsAFragment": true,
+        "videoSamples": 720,
+        "largestFragmentByteLength": 3420,
+        "firstVideoPresentationTime": 0,
+        "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
+        "startPlusDurationsMissesNextStartByTicks": {
+          "min": -3003,
+          "max": 4004
+        },
+        "videoPictures": {
+          "sampleEntry": "avc1",
+          "keyframes": [
+            {
+              "presentationTime": 0,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 144144,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 288288,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 433433,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 576576,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            }
+          ]
+        }
+      },
+      "hlsComparisons": [
+        {
+          "hlsRun": "12-encode-cfr-missed-forced-keyframe.video-only",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
+          "streams": "video only",
+          "pipeReference": "12-encode-cfr-missed-forced-keyframe.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 720,
+            "pipeVideoSamples": 720,
+            "identicalPackets": 720,
+            "sharesVideoArguments": true
+          },
+          "segments": [
+            {
+              "number": 0,
+              "firstVideoPresentationTime": 0
+            },
+            {
+              "number": 1,
+              "firstVideoPresentationTime": 144144
+            },
+            {
+              "number": 2,
+              "firstVideoPresentationTime": 288288
+            },
+            {
+              "number": 3,
+              "firstVideoPresentationTime": 433433
+            },
+            {
+              "number": 4,
+              "firstVideoPresentationTime": 576576
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": true,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 0.0,
+            "reproducesHlsCuts": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "12-svtav1-cfr-missed-forced-keyframe",
+      "file": "12-svtav1-cfr-missed-forced-keyframe.fmp4",
+      "proves": "The same suppressed forced keyframe through SVT-AV1: its GOP count also restarts at the forced keyframe at frame 288, and the backstop keyframe lands at frame 433 (18.060 s), inside interval 3.",
+      "mode": "encode",
+      "encoder": "libsvtav1",
+      "source": {
+        "file": "cfr.mp4",
+        "containerStartTimeMicros": 0,
+        "videoRealFrameRate": "24000/1001",
+        "videoAverageFrameRate": "24000/1001"
+      },
+      "seekSeconds": 0,
+      "period": 6,
+      "fragmentationTargetMicros": 1000000,
+      "startSequenceNumber": 0,
+      "videoTrackId": 1,
+      "videoTimescale": 24000,
+      "byteLength": 48736,
+      "initializationSegment": {
+        "byteLength": 1334,
+        "sha256": "280fdd918c22795d9f692f5159e156db97044d3fb680e1d7811ca65a7685a208",
+        "tracks": [
+          {
+            "trackId": 1,
+            "handler": "vide",
+            "sampleEntry": "av01",
+            "timescale": 24000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          },
+          {
+            "trackId": 2,
+            "handler": "soun",
+            "sampleEntry": "mp4a",
+            "timescale": 48000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          }
+        ]
+      },
+      "segments": [
+        {
+          "number": 0,
+          "firstVideoPresentationTime": 0,
+          "firstFragmentIndex": 0,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 9735
+        },
+        {
+          "number": 1,
+          "firstVideoPresentationTime": 144144,
+          "firstFragmentIndex": 6,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 9502
+        },
+        {
+          "number": 2,
+          "firstVideoPresentationTime": 288288,
+          "firstFragmentIndex": 12,
+          "fragmentCount": 7,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 9642
+        },
+        {
+          "number": 3,
+          "firstVideoPresentationTime": 433433,
+          "firstFragmentIndex": 19,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 9105
+        },
+        {
+          "number": 4,
+          "firstVideoPresentationTime": 576576,
+          "firstFragmentIndex": 25,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 9418
+        }
+      ],
+      "discardedPreroll": [],
+      "failure": null,
+      "endsWithAudioOnlyFragments": false,
+      "trailingAudioOnlyFragmentCount": 0,
+      "sourceKeyframeCheck": null,
+      "diagnostics": {
+        "fragmentCount": 31,
+        "syncFirstFragments": 5,
+        "nonSyncFirstFragments": 26,
+        "fragmentsWithoutVideo": 0,
+        "leadingFragmentsWithoutVideo": 0,
+        "everyKeyframeStartsAFragment": true,
+        "videoSamples": 720,
+        "largestFragmentByteLength": 2396,
+        "firstVideoPresentationTime": 0,
+        "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
+        "startPlusDurationsMissesNextStartByTicks": {
+          "min": 0,
+          "max": 0
+        },
+        "videoPictures": {
+          "sampleEntry": "av01",
+          "keyframes": [
+            {
+              "presentationTime": 0,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 144144,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 288288,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 433433,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 576576,
+              "frameType": "KEY_FRAME",
+              "showFrame": true,
+              "startsClosedGop": true
+            }
+          ]
+        }
+      },
+      "hlsComparisons": [
+        {
+          "hlsRun": "12-svtav1-cfr-missed-forced-keyframe.video-only",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
+          "streams": "video only",
+          "pipeReference": "12-svtav1-cfr-missed-forced-keyframe.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 720,
+            "pipeVideoSamples": 720,
+            "identicalPackets": 720,
+            "sharesVideoArguments": true
+          },
+          "segments": [
+            {
+              "number": 0,
+              "firstVideoPresentationTime": 0
+            },
+            {
+              "number": 1,
+              "firstVideoPresentationTime": 144144
+            },
+            {
+              "number": 2,
+              "firstVideoPresentationTime": 288288
+            },
+            {
+              "number": 3,
+              "firstVideoPresentationTime": 433433
+            },
+            {
+              "number": 4,
+              "firstVideoPresentationTime": 576576
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": true,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 0.0,
+            "reproducesHlsCuts": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "13-x265-cfr",
+      "file": "13-x265-cfr.fmp4",
+      "proves": "libx265 with the worker's arguments (open GOP by default) under the 145-frame GOP: it honours every time-based forced keyframe (frames 144, 288, 432, 576), but despite -forced-idr 1 each one is a CRA (NAL type 21); only frame 0 is an IDR (type 20). No RASL picture follows them here.",
+      "mode": "encode",
+      "encoder": "libx265",
+      "source": {
+        "file": "cfr.mp4",
+        "containerStartTimeMicros": 0,
+        "videoRealFrameRate": "24000/1001",
+        "videoAverageFrameRate": "24000/1001"
+      },
+      "seekSeconds": 0,
+      "period": 6,
+      "fragmentationTargetMicros": 1000000,
+      "startSequenceNumber": 0,
+      "videoTrackId": 1,
+      "videoTimescale": 24000,
+      "byteLength": 47407,
+      "initializationSegment": {
+        "byteLength": 3847,
+        "sha256": "b30e1d81b8bc00403553382dbcf514a0662b4a8a87dd5f28f784f7a94d7a63c2",
+        "tracks": [
+          {
+            "trackId": 1,
+            "handler": "vide",
+            "sampleEntry": "hev1",
+            "timescale": 24000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          },
+          {
+            "trackId": 2,
+            "handler": "soun",
+            "sampleEntry": "mp4a",
+            "timescale": 48000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          }
+        ]
+      },
+      "segments": [
+        {
+          "number": 0,
+          "firstVideoPresentationTime": 0,
+          "firstFragmentIndex": 0,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8472
+        },
+        {
+          "number": 1,
+          "firstVideoPresentationTime": 144144,
+          "firstFragmentIndex": 6,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8771
+        },
+        {
+          "number": 2,
+          "firstVideoPresentationTime": 288288,
+          "firstFragmentIndex": 12,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8776
+        },
+        {
+          "number": 3,
+          "firstVideoPresentationTime": 432432,
+          "firstFragmentIndex": 18,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8687
+        },
+        {
+          "number": 4,
+          "firstVideoPresentationTime": 576576,
+          "firstFragmentIndex": 24,
+          "fragmentCount": 7,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8854
+        }
+      ],
+      "discardedPreroll": [],
+      "failure": null,
+      "endsWithAudioOnlyFragments": true,
+      "trailingAudioOnlyFragmentCount": 1,
+      "sourceKeyframeCheck": null,
+      "diagnostics": {
+        "fragmentCount": 31,
+        "syncFirstFragments": 5,
+        "nonSyncFirstFragments": 25,
+        "fragmentsWithoutVideo": 1,
+        "leadingFragmentsWithoutVideo": 0,
+        "everyKeyframeStartsAFragment": true,
+        "videoSamples": 720,
+        "largestFragmentByteLength": 2099,
+        "firstVideoPresentationTime": 0,
+        "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
+        "startPlusDurationsMissesNextStartByTicks": {
+          "min": -4004,
+          "max": 4004
+        },
+        "videoPictures": {
+          "sampleEntry": "hev1",
+          "keyframes": [
+            {
+              "presentationTime": 0,
+              "nalUnitType": 20,
+              "raslPictures": 0,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 144144,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 288288,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 432432,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 576576,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            }
+          ]
+        }
+      },
+      "hlsComparisons": [
+        {
+          "hlsRun": "13-x265-cfr.video-only",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
+          "streams": "video only",
+          "pipeReference": "13-x265-cfr.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 720,
+            "pipeVideoSamples": 720,
+            "identicalPackets": 720,
+            "sharesVideoArguments": true
+          },
+          "segments": [
+            {
+              "number": 0,
+              "firstVideoPresentationTime": 0
+            },
+            {
+              "number": 1,
+              "firstVideoPresentationTime": 144144
+            },
+            {
+              "number": 2,
+              "firstVideoPresentationTime": 288288
+            },
+            {
+              "number": 3,
+              "firstVideoPresentationTime": 432432
+            },
+            {
+              "number": 4,
+              "firstVideoPresentationTime": 576576
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": true,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 0.0,
+            "reproducesHlsCuts": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "13-x265-cfr-missed-forced-keyframe",
+      "file": "13-x265-cfr-missed-forced-keyframe.fmp4",
+      "proves": "libx265 with the forced keyframe for 18 s suppressed: its GOP count restarts at the forced keyframe at frame 288 and the backstop lands at frame 433 (18.060 s), inside interval 3, but as a CRA whose RASL picture (frame 432) references the previous GOP, so the segment it opens cannot be decoded on its own.",
+      "mode": "encode",
+      "encoder": "libx265",
+      "source": {
+        "file": "cfr.mp4",
+        "containerStartTimeMicros": 0,
+        "videoRealFrameRate": "24000/1001",
+        "videoAverageFrameRate": "24000/1001"
+      },
+      "seekSeconds": 0,
+      "period": 6,
+      "fragmentationTargetMicros": 1000000,
+      "startSequenceNumber": 0,
+      "videoTrackId": 1,
+      "videoTimescale": 24000,
+      "byteLength": 47441,
+      "initializationSegment": {
+        "byteLength": 3847,
+        "sha256": "b30e1d81b8bc00403553382dbcf514a0662b4a8a87dd5f28f784f7a94d7a63c2",
+        "tracks": [
+          {
+            "trackId": 1,
+            "handler": "vide",
+            "sampleEntry": "hev1",
+            "timescale": 24000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          },
+          {
+            "trackId": 2,
+            "handler": "soun",
+            "sampleEntry": "mp4a",
+            "timescale": 48000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          }
+        ]
+      },
+      "segments": [
+        {
+          "number": 0,
+          "firstVideoPresentationTime": 0,
+          "firstFragmentIndex": 0,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8472
+        },
+        {
+          "number": 1,
+          "firstVideoPresentationTime": 144144,
+          "firstFragmentIndex": 6,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8771
+        },
+        {
+          "number": 2,
+          "firstVideoPresentationTime": 288288,
+          "firstFragmentIndex": 12,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8776
+        },
+        {
+          "number": 3,
+          "firstVideoPresentationTime": 433433,
+          "firstFragmentIndex": 18,
+          "fragmentCount": 6,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8681
+        },
+        {
+          "number": 4,
+          "firstVideoPresentationTime": 576576,
+          "firstFragmentIndex": 24,
+          "fragmentCount": 7,
+          "syncFirstFragmentCount": 1,
+          "byteLength": 8894
+        }
+      ],
+      "discardedPreroll": [],
+      "failure": null,
+      "endsWithAudioOnlyFragments": true,
+      "trailingAudioOnlyFragmentCount": 1,
+      "sourceKeyframeCheck": null,
+      "diagnostics": {
+        "fragmentCount": 31,
+        "syncFirstFragments": 5,
+        "nonSyncFirstFragments": 25,
+        "fragmentsWithoutVideo": 1,
+        "leadingFragmentsWithoutVideo": 0,
+        "everyKeyframeStartsAFragment": true,
+        "videoSamples": 720,
+        "largestFragmentByteLength": 2099,
+        "firstVideoPresentationTime": 0,
+        "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
+        "startPlusDurationsMissesNextStartByTicks": {
+          "min": -4004,
+          "max": 4004
+        },
+        "videoPictures": {
+          "sampleEntry": "hev1",
+          "keyframes": [
+            {
+              "presentationTime": 0,
+              "nalUnitType": 20,
+              "raslPictures": 0,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 144144,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 288288,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 433433,
+              "nalUnitType": 21,
+              "raslPictures": 1,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 576576,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            }
+          ]
+        }
+      },
+      "hlsComparisons": [
+        {
+          "hlsRun": "13-x265-cfr-missed-forced-keyframe.video-only",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
+          "streams": "video only",
+          "pipeReference": "13-x265-cfr-missed-forced-keyframe.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 720,
+            "pipeVideoSamples": 720,
+            "identicalPackets": 720,
+            "sharesVideoArguments": true
+          },
+          "segments": [
+            {
+              "number": 0,
+              "firstVideoPresentationTime": 0
+            },
+            {
+              "number": 1,
+              "firstVideoPresentationTime": 144144
+            },
+            {
+              "number": 2,
+              "firstVideoPresentationTime": 288288
+            },
+            {
+              "number": 3,
+              "firstVideoPresentationTime": 433433
+            },
+            {
+              "number": 4,
+              "firstVideoPresentationTime": 576576
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": false,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 0.0,
+            "reproducesHlsCuts": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "13-x265-cfr-floored-gop",
+      "file": "13-x265-cfr-floored-gop.fmp4",
+      "proves": "libx265 with the worker's arguments under the floored GOP of 143 frames that it gets while unverified: as in 11, the GOP keyframe one frame before every later boundary (frames 143, 287, 431, 575) and on the last frame (719) joins the earlier segment, so each of the 5 segments holds two keyframes and opens at its forced keyframe. Every keyframe after frame 0 is a CRA; the GOP keyframes at frames 143 and 287 lead two RASL pictures each inside the earlier segment, and no RASL picture follows a forced keyframe that opens a segment.",
+      "mode": "encode",
+      "encoder": "libx265",
+      "source": {
+        "file": "cfr.mp4",
+        "containerStartTimeMicros": 0,
+        "videoRealFrameRate": "24000/1001",
+        "videoAverageFrameRate": "24000/1001"
+      },
+      "seekSeconds": 0,
+      "period": 6,
+      "fragmentationTargetMicros": 1000000,
+      "startSequenceNumber": 0,
+      "videoTrackId": 1,
+      "videoTimescale": 24000,
+      "byteLength": 48355,
+      "initializationSegment": {
+        "byteLength": 3847,
+        "sha256": "1bff51fd11398e8a7acbabf125779a51808b77c338492826d0ed6efb9f09c572",
+        "tracks": [
+          {
+            "trackId": 1,
+            "handler": "vide",
+            "sampleEntry": "hev1",
+            "timescale": 24000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          },
+          {
+            "trackId": 2,
+            "handler": "soun",
+            "sampleEntry": "mp4a",
+            "timescale": 48000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          }
+        ]
+      },
+      "segments": [
+        {
+          "number": 0,
+          "firstVideoPresentationTime": 0,
+          "firstFragmentIndex": 0,
+          "fragmentCount": 7,
+          "syncFirstFragmentCount": 2,
+          "byteLength": 9079
+        },
+        {
+          "number": 1,
+          "firstVideoPresentationTime": 144144,
+          "firstFragmentIndex": 7,
+          "fragmentCount": 7,
+          "syncFirstFragmentCount": 2,
+          "byteLength": 8984
+        },
+        {
+          "number": 2,
+          "firstVideoPresentationTime": 288288,
+          "firstFragmentIndex": 14,
+          "fragmentCount": 7,
+          "syncFirstFragmentCount": 2,
+          "byteLength": 8961
+        },
+        {
+          "number": 3,
+          "firstVideoPresentationTime": 432432,
+          "firstFragmentIndex": 21,
+          "fragmentCount": 7,
+          "syncFirstFragmentCount": 2,
+          "byteLength": 8771
+        },
+        {
+          "number": 4,
+          "firstVideoPresentationTime": 576576,
+          "firstFragmentIndex": 28,
+          "fragmentCount": 7,
+          "syncFirstFragmentCount": 2,
+          "byteLength": 8713
+        }
+      ],
+      "discardedPreroll": [],
+      "failure": null,
+      "endsWithAudioOnlyFragments": false,
+      "trailingAudioOnlyFragmentCount": 0,
+      "sourceKeyframeCheck": null,
+      "diagnostics": {
+        "fragmentCount": 35,
+        "syncFirstFragments": 10,
+        "nonSyncFirstFragments": 25,
+        "fragmentsWithoutVideo": 0,
+        "leadingFragmentsWithoutVideo": 0,
+        "everyKeyframeStartsAFragment": true,
+        "videoSamples": 720,
+        "largestFragmentByteLength": 1672,
+        "firstVideoPresentationTime": 0,
+        "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
+        "startPlusDurationsMissesNextStartByTicks": {
+          "min": -2002,
+          "max": 4004
+        },
+        "videoPictures": {
+          "sampleEntry": "hev1",
+          "keyframes": [
+            {
+              "presentationTime": 0,
+              "nalUnitType": 20,
+              "raslPictures": 0,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 143143,
+              "nalUnitType": 21,
+              "raslPictures": 2,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 144144,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 287287,
+              "nalUnitType": 21,
+              "raslPictures": 2,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 288288,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 431431,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 432432,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 575575,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 576576,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 719719,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            }
+          ]
+        }
+      },
+      "hlsComparisons": [
+        {
+          "hlsRun": "13-x265-cfr-floored-gop.video-only",
+          "flags": "the pipe recipe's common flags (-start_at_zero)",
+          "streams": "video only",
+          "pipeReference": "13-x265-cfr-floored-gop.fmp4",
+          "hlsExitStatus": 0,
+          "frameIdentity": {
+            "hlsVideoSamples": 720,
+            "pipeVideoSamples": 720,
+            "identicalPackets": 720,
+            "sharesVideoArguments": true
+          },
+          "segments": [
+            {
+              "number": 0,
+              "firstVideoPresentationTime": 0
+            },
+            {
+              "number": 1,
+              "firstVideoPresentationTime": 144144
+            },
+            {
+              "number": 2,
+              "firstVideoPresentationTime": 288288
+            },
+            {
+              "number": 3,
+              "firstVideoPresentationTime": 432432
+            },
+            {
+              "number": 4,
+              "firstVideoPresentationTime": 576576
+            }
+          ],
+          "agrees": true,
+          "expectedToAgree": true,
+          "mismatches": [],
+          "hlsOwnTimestampsMatchPipe": true,
+          "hlsencModel": {
+            "reference": "first video packet",
+            "referenceOnZeroBasedTimelineSeconds": 0.0,
+            "reproducesHlsCuts": true
+          }
+        }
+      ]
+    }
+  ],
+  "initializationSegmentIdentityPairs": [
+    {
+      "label": "encode (libx264), start 0 vs -ss 30",
+      "files": [
+        "01-encode-cfr.fmp4",
+        "01-encode-cfr-seek30.fmp4"
+      ],
+      "identical": true,
+      "byteLengths": [
+        1348,
+        1348
+      ],
+      "sha256": [
+        "c088712750a25550ba7163ef599051ee1641fda27dc09b273e5ceaf1284a107e",
+        "c088712750a25550ba7163ef599051ee1641fda27dc09b273e5ceaf1284a107e"
+      ]
+    },
+    {
+      "label": "stream copy, start 0 vs -ss 30",
+      "files": [
+        "07-copy-start0.fmp4",
+        "07-copy-seek30.fmp4"
+      ],
+      "identical": true,
+      "byteLengths": [
+        1348,
+        1348
+      ],
+      "sha256": [
+        "505f73a7c96dbc796f5c161c1772b3a6dcc6aa11c64b17b17e1b9fc7f976805a",
+        "505f73a7c96dbc796f5c161c1772b3a6dcc6aa11c64b17b17e1b9fc7f976805a"
+      ]
+    },
+    {
+      "label": "encode (libsvtav1), start 0 vs -ss 30",
+      "files": [
+        "09-svtav1-vfr.fmp4",
+        "09-svtav1-vfr-seek30.fmp4"
+      ],
+      "identical": true,
+      "byteLengths": [
+        1334,
+        1334
+      ],
+      "sha256": [
+        "280fdd918c22795d9f692f5159e156db97044d3fb680e1d7811ca65a7685a208",
+        "280fdd918c22795d9f692f5159e156db97044d3fb680e1d7811ca65a7685a208"
+      ]
+    }
+  ],
+  "initializationSegmentDifferencePairs": [
+    {
+      "label": "encode vs stream copy of the same source",
+      "files": [
+        "01-encode-cfr.fmp4",
+        "07-copy-start0.fmp4"
+      ],
+      "identical": false,
+      "byteLengths": [
+        1348,
+        1348
+      ],
+      "sha256": [
+        "c088712750a25550ba7163ef599051ee1641fda27dc09b273e5ceaf1284a107e",
+        "505f73a7c96dbc796f5c161c1772b3a6dcc6aa11c64b17b17e1b9fc7f976805a"
+      ]
+    }
+  ],
+  "adrSideClaims": {
+    "mpegTsAacCopyWithoutAdtstoasc": {
+      "exitStatus": 255,
+      "firstLogLine": "[mp4] Malformed AAC bitstream detected: use the audio bitstream filter 'aac_adtstoasc' to fix it ('-bsf:a aac_adtstoasc' option with ffmpeg)"
+    },
+    "adtstoascLeavesMp4SourceCopyByteIdentical": true,
+    "maxDelayLeavesMp4OutputByteIdentical": true,
+    "seekWithFpsModeCfr": {
+      "exitStatus": 0,
+      "videoSamples": 1583,
+      "firstVideoPresentationTime": 0,
+      "videoSamplesWithoutFpsMode": 863,
+      "firstVideoPresentationTimeWithoutFpsMode": 720720
+    }
+  }
+}
