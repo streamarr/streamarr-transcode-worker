@@ -80,6 +80,12 @@ class FfmpegCommandBuilderTest {
         .build();
   }
 
+  // FFmpeg applies the last -b:a it reads, so a command must carry exactly one.
+  private static String audioBitrate(List<String> cmd) {
+    assertThat(cmd).as("the command's -b:a options").containsOnlyOnce("-b:a");
+    return cmd.get(cmd.indexOf("-b:a") + 1);
+  }
+
   @Test
   @DisplayName("Should use copy codecs when mode is remux")
   void shouldUseCopyCodecsWhenModeIsRemux() {
@@ -151,10 +157,8 @@ class FfmpegCommandBuilderTest {
   void shouldUseCopyVideoAndAacAudioWhenModeIsAudioTranscode() {
     var cmd = command(request(TranscodeMode.AUDIO_TRANSCODE).build(), "copy");
 
-    assertThat(cmd)
-        .containsSubsequence("-c:v", "copy")
-        .containsSubsequence("-c:a", "aac")
-        .containsSubsequence("-b:a", "128k");
+    assertThat(cmd).containsSubsequence("-c:v", "copy").containsSubsequence("-c:a", "aac");
+    assertThat(audioBitrate(cmd)).isEqualTo("128k");
   }
 
   @Test
@@ -162,10 +166,8 @@ class FfmpegCommandBuilderTest {
   void shouldEncodeH264VideoAndAacAudioWhenFullTranscodeTargetsH264() {
     var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), "libx264");
 
-    assertThat(cmd)
-        .containsSubsequence("-c:v", "libx264")
-        .containsSubsequence("-c:a", "aac")
-        .containsSubsequence("-b:a", "128k");
+    assertThat(cmd).containsSubsequence("-c:v", "libx264").containsSubsequence("-c:a", "aac");
+    assertThat(audioBitrate(cmd)).isEqualTo("128k");
   }
 
   @Test
@@ -611,6 +613,7 @@ class FfmpegCommandBuilderTest {
         .contains("-c:a", "copy")
         .contains("-vf", "scale=-2:1080")
         .doesNotContain("-ac");
+    assertThat(audioBitrate(cmd)).isEqualTo("0");
   }
 
   @Test
@@ -661,7 +664,8 @@ class FfmpegCommandBuilderTest {
                 .build(),
             "copy");
 
-    assertThat(cmd).containsSubsequence("-c:a", "copy", "-b:a", "0", "pipe:1");
+    assertThat(cmd).containsSubsequence("-c:a", "copy", "-b:a", "pipe:1");
+    assertThat(audioBitrate(cmd)).isEqualTo("0");
   }
 
   @Test
@@ -701,10 +705,8 @@ class FfmpegCommandBuilderTest {
             request(decision(TranscodeMode.AUDIO_TRANSCODE).audioDecision(audio).build()).build(),
             "copy");
 
-    assertThat(cmd)
-        .containsSubsequence("-c:a", "ac3")
-        .containsSubsequence("-ac", "6")
-        .containsSubsequence("-b:a", "384k");
+    assertThat(cmd).containsSubsequence("-c:a", "ac3").containsSubsequence("-ac", "6");
+    assertThat(audioBitrate(cmd)).isEqualTo("384k");
   }
 
   @Test
@@ -716,10 +718,8 @@ class FfmpegCommandBuilderTest {
             request(decision(TranscodeMode.AUDIO_TRANSCODE).audioDecision(audio).build()).build(),
             "copy");
 
-    assertThat(cmd)
-        .containsSubsequence("-c:a", "eac3")
-        .containsSubsequence("-ac", "8")
-        .containsSubsequence("-b:a", "512k");
+    assertThat(cmd).containsSubsequence("-c:a", "eac3").containsSubsequence("-ac", "8");
+    assertThat(audioBitrate(cmd)).isEqualTo("512k");
   }
 
   @Test
@@ -736,11 +736,8 @@ class FfmpegCommandBuilderTest {
         command(
             request(decision(TranscodeMode.REMUX).audioDecision(audio).build()).build(), "copy");
 
-    assertThat(cmd)
-        .isNotEmpty()
-        .contains("-c:a", "copy")
-        .doesNotContain("-ac")
-        .doesNotContainSequence("-b:a", "384k");
+    assertThat(cmd).isNotEmpty().contains("-c:a", "copy").doesNotContain("-ac");
+    assertThat(audioBitrate(cmd)).isEqualTo("0");
   }
 
   // --- Map ordering ---
