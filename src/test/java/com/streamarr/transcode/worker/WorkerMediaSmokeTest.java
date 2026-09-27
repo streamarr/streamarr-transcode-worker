@@ -37,8 +37,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -79,6 +81,10 @@ class WorkerMediaSmokeTest {
   @TempDir static Path longSources;
 
   @TempDir static Path seekableSources;
+
+  // A source joins only once FFmpeg has written it successfully, so that a later case generates it
+  // again instead of reading what a failed or timed-out run left behind.
+  private static final Set<Path> generatedSeekableSources = new HashSet<>();
 
   private static Path longSource;
 
@@ -342,7 +348,7 @@ class WorkerMediaSmokeTest {
   // MPEG-TS sources carry the Matroska source's streams unchanged.
   private static synchronized Path seekableSource(String container) throws Exception {
     var matroska = seekableSources.resolve("seekable.mkv");
-    if (Files.notExists(matroska)) {
+    if (!generatedSeekableSources.contains(matroska)) {
       runFfmpeg(
           List.of(
               "-f",
@@ -362,11 +368,13 @@ class WorkerMediaSmokeTest {
               "-c:a",
               "aac"),
           matroska);
+      generatedSeekableSources.add(matroska);
     }
 
     var source = seekableSources.resolve("seekable." + container);
-    if (Files.notExists(source)) {
+    if (!generatedSeekableSources.contains(source)) {
       runFfmpeg(List.of("-i", matroska.toString(), "-c", "copy"), source);
+      generatedSeekableSources.add(source);
     }
 
     return source;
