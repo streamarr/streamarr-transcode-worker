@@ -531,7 +531,7 @@ describe('recording facts of the committed recordings', () => {
     const pair = initializationSegmentPair('copy', ['07-copy-start0', read('07-copy-start0')], ['07-copy-seek30', read('07-copy-seek30')]);
 
     assert.equal(pair.identical, true);
-    assert.deepEqual(pair.byteLengths, [1348, 1348]);
+    assert.deepEqual(pair.byteLengths, [1328, 1328]);
     assert.equal(pair.sha256[0], pair.sha256[1]);
     assert.equal(
       initializationSegmentPair('encode or copy', ['01-encode-cfr', read('01-encode-cfr')], ['07-copy-start0', read('07-copy-start0')]).identical,

@@ -57,7 +57,10 @@ SVT=(-c:v libsvtav1 -vf scale=-2:36 -crf 35 -maxrate 6000 -svtav1-params mbr-ove
 # owns the closed-GOP flags), single-threaded for reproducible bytes.
 X265=(-c:v libx265 -vf scale=-2:36 -b:v 6000 -maxrate 6000 -bufsize 12000 -x265-params pools=none:frame-threads=1:log-level=error)
 AAC=(-c:a aac -ac 1 -b:a 8k)
-COPY_PIPE=(-c:v copy -c:a copy -bsf:a aac_adtstoasc)
+# The worker declares a copied stream's bitrate unknown (-b:a 0): the mp4 muxer would otherwise write
+# the demuxer's measurement, which a seek into an MPEG-TS source changes, into the initialization segment.
+COPY_PIPE=(-c:v copy -c:a copy -bsf:a aac_adtstoasc -b:a 0)
+COPY_PIPE_WITHOUT_ADTSTOASC=(-c:v copy -c:a copy -b:a 0)
 COPY_HLS=(-c:v copy -c:a copy)
 COMMON_HLS=(-map_metadata -1 -map_chapters -1 -copyts -avoid_negative_ts disabled -max_muxing_queue_size 128 -max_delay 5000000)
 COMMON_PIPE=(-map_metadata -1 -map_chapters -1 -copyts -avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128)
@@ -284,9 +287,9 @@ claim() {
 }
 AV=(-map 0:v:0 -map 0:a:0)
 # delay_moov stops the mp4 muxer inserting aac_adtstoasc itself: an MPEG-TS AAC copy must fail without it ...
-claim ts-copy-without-adtstoasc 0 -i src/late.ts "${AV[@]}" "${COMMON_PIPE[@]}" "${COPY_HLS[@]}"
+claim ts-copy-without-adtstoasc 0 -i src/late.ts "${AV[@]}" "${COMMON_PIPE[@]}" "${COPY_PIPE_WITHOUT_ADTSTOASC[@]}"
 # ... and the filter leaves a copy from an MP4 source byte-identical (compare with out/07-copy-start0.fmp4).
-claim mp4-copy-without-adtstoasc 0 -i src/cfr.mp4 "${AV[@]}" "${COMMON_PIPE[@]}" "${COPY_HLS[@]}"
+claim mp4-copy-without-adtstoasc 0 -i src/cfr.mp4 "${AV[@]}" "${COMMON_PIPE[@]}" "${COPY_PIPE_WITHOUT_ADTSTOASC[@]}"
 # -max_delay 5000000 changes nothing in mp4 output (compare with out/01-encode-cfr.fmp4).
 claim encode-with-max-delay 0 -i src/cfr.mp4 "${AV[@]}" "${COMMON_PIPE[@]}" -max_delay 5000000 "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}"
 # An explicit -fps_mode cfr after a seek pads from time zero (compare with out/01-encode-cfr-seek30.fmp4).

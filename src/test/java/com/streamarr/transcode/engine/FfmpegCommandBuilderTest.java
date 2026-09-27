@@ -610,8 +610,7 @@ class FfmpegCommandBuilderTest {
         .contains("-c:v", "libx264")
         .contains("-c:a", "copy")
         .contains("-vf", "scale=-2:1080")
-        .doesNotContain("-ac")
-        .doesNotContain("-b:a");
+        .doesNotContain("-ac");
   }
 
   @Test
@@ -650,6 +649,19 @@ class FfmpegCommandBuilderTest {
             "copy");
 
     assertThat(cmd).contains("-c:a", "copy").doesNotContain("-bsf:a");
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"aac", "ac3", "eac3", "flac", "opus", "alac"})
+  @DisplayName("Should declare the bitrate unknown when audio is copied")
+  void shouldDeclareTheBitrateUnknownWhenAudioIsCopied(String codec) {
+    var cmd =
+        command(
+            request(decision(TranscodeMode.REMUX).audioDecision(copiedAudio(codec)).build())
+                .build(),
+            "copy");
+
+    assertThat(cmd).containsSubsequence("-c:a", "copy", "-b:a", "0", "pipe:1");
   }
 
   @Test
@@ -728,7 +740,7 @@ class FfmpegCommandBuilderTest {
         .isNotEmpty()
         .contains("-c:a", "copy")
         .doesNotContain("-ac")
-        .doesNotContain("-b:a");
+        .doesNotContainSequence("-b:a", "384k");
   }
 
   // --- Map ordering ---
