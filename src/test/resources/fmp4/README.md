@@ -209,8 +209,8 @@ Timescale 24000 unless stated. `n@t` means segment n starts at t seconds.
 | 3 | `03-encode-vfr.fmp4` | 0 | VFR source (1068 frames, avg 16.2 fps on the 23.976 grid, first frame at 41.7 ms) encoded under `-r`: 1582 constant-rate frames, the same count as the HLS recipe's output. The list forces the first frame at or after each boundary (6.006, 12.012 … s, the same ticks as 1), exactly one keyframe in every interval, 11 segments. |
 | 4 | `04-copy-vfr-bframes.fmp4` | 0 | VFR stream copy with B-frames and one or two keyframes per interval. Keyframes at 5.922, 29.988, 47.922 and 59.976 s, just before a boundary, stay in the earlier segment. The keyframe meant for 17.95 s landed at 18.017 s (dropped frames) and opens segment 3. |
 | 5a | `05-encode-late-start.fmp4` | 0 | MPEG-TS source whose timestamps begin at 12 s. The container start is the AAC priming frame (11.978667 s), so video starts at 0.0417 s (encode): segment 0, not 2. The server advertises 6 segments for the 30.051 s source, and the last output frame (30.030 s) is the first at or after 30 s, so the list forces it: 6 segments, the last a 1-frame segment 5 with no audio-only fragment after it. |
-| 5b | `05-copy-late-start.fmp4` | 0 | Timescale 90000. The same source copied with `-bsf:a aac_adtstoasc`: video starts at 0.0213 s, keyframes every 2.002 s, 5 segments. |
-| 5c | `05-copy-late-start-seek12.fmp4` | 2 | Timescale 90000. Stream-copy replacement attempt of the same source from segment 2 (`-ss 12`). The MPEG-TS demuxer lands on the keyframe at 12.033 s, after the boundary, so nothing is preroll, and its first fragment carries audio from 11.861 s: eight AAC frames before the boundary, which segment 1 of 5b holds. Segments 2–4 carry 5b's video samples at the same ticks. Ends with one audio-only fragment. |
+| 5b | `05-copy-late-start.fmp4` | 0 | Timescale 90000. The same source copied with `-bsf:a aac_adtstoasc`: video starts at 0.0213 s, audio at 0 with no priming frame, keyframes every 2.002 s, 5 segments. |
+| 5c | `05-copy-late-start-seek12.fmp4` | 2 | Timescale 90000. Stream-copy replacement attempt of the same source from segment 2 (`-ss 12`). The MPEG-TS demuxer lands on the keyframe at 12.033 s, after the boundary, so nothing is preroll, and its first fragment carries audio from 11.861 s: seven AAC frames before the boundary, all of which segment 1 of 5b holds once each audio sample is placed by its start. Segments 2–4 carry 5b's video samples at the same ticks. Ends with one audio-only fragment. |
 | 6 | `06-encode-audio-tail.fmp4` | 0 | 20 s video, 23.5 s audio. The recording ends in 4 audio-only fragments (19.95, 20.95, 21.95, 22.95 s), which join segment 3. No fragment without video precedes the first segment. |
 | 7 | `07-copy-start0.fmp4` | 0 | 2.002 s-GOP 23.976 fps copy from the start: 11 segments of 3 keyframes each. |
 | 7b | `07-copy-seek30.fmp4` | 5 | Stream-copy replacement attempt at `-ss 30`. The seek lands on the keyframe at 28.028 s (segment 4 < 5). That keyframe fragment and the non-sync fragment after it (2 fragments) are discarded preroll. Segments 5–10 carry exactly 7's video samples at the same ticks. Their audio is the same packets at the same times, but each fragment starts one AAC frame earlier (see findings). |
@@ -225,7 +225,7 @@ Timescale 24000 unless stated. `n@t` means segment n starts at t seconds.
 | 13b | `13-x265-cfr-missed-forced-keyframe.fmp4` | 0 | libx265 with 18 left out of the list: its GOP count restarts at frame 288 as well, and the backstop comes at frame 433 inside interval 3 as an IDR picture (NAL type 20). So the segment it opens decodes on its own. |
 | 13c | `13-x265-cfr-floored-gop.fmp4` | 0 | libx265 with the worker's arguments under the floored GOP of 143 frames of an encoder that is not keyframe-verified, first 30 s. As in 11, the GOP keyframe one frame before every later boundary (frames 143, 287, 431, 575) and on the last frame (719) joins the earlier segment: 5 segments of two keyframes, each opening at its forced keyframe. Every keyframe is an IDR picture (NAL type 20). |
 | 13d | `13-x265-cfr-seek30.fmp4` | 5 | The libx265 replacement attempt from segment 5, seeking one period early (`-ss 24`): starts at 24.024 s, and segment 4 is discarded preroll. The list `30,36,…,66` forces the frames 13 forced (720, 864, 1007, 1151, 1295, 1439), so every delivered segment, 5–10, starts on exactly 13's ticks. Every keyframe is an IDR picture. Ends with one audio-only fragment. |
-| 14 | `14-copy-audio-ends-early.fmp4` | 0 | 20 s of video, 8 s of audio, copied. From 8.008 s on FFmpeg writes fragments with a video `traf` alone, so no audio sample ever starts at or after the end of segments 1–3; 4 segments, the last from 18.018 s. |
+| 14 | `14-copy-audio-ends-early.fmp4` | 0 | 20 s of video, 8 s of audio, copied. The fragment at 8.008 s still carries the last three audio samples, which end at 8.0 s, and from 9.009 s on FFmpeg writes fragments with a video `traf` alone, so no audio sample ever starts at or after the end of segments 1–3; 4 segments, the last from 18.018 s. |
 
 Box facts every recording shares (useful for the reader):
 - Top-level boxes are only `ftyp`, `moov`, `moof` and `mdat`, in that order, with no `largesize`, `styp` or `sidx`.
@@ -233,7 +233,7 @@ Box facts every recording shares (useful for the reader):
 - Every `traf` has `tfhd` flags `0x02003a` (default-base-is-moof plus default duration, size and flags), `tfdt` version 1 and exactly one `trun`.
 - Every `trun` is version 1 (signed composition offsets) with a data offset. Sync status is carried by `trun` first_sample_flags (0x4) when present, otherwise by the `tfhd` default flags. Per-sample flags (0x400) never occur.
 - The largest fragment is 3.4 KB; every keyframe starts a fragment.
-- In every recording from the start the first audio `tfdt` is 2^64 − 1024: the unsigned wrap of −1024, the AAC priming.
+- In every recording from the start except 5b the first audio `tfdt` is 2^64 − 1024: the unsigned wrap of −1024, the AAC priming. 5b copies the ADTS audio of an MPEG-TS source, which carries no priming frame, so its audio starts at 0.
 
 ## Verified encoders
 
@@ -473,13 +473,13 @@ settle what, if anything, changes because of them.
 - **A stream-copy replacement attempt's fragments start their audio before the boundary** (7b, 5c).
   7b's fragments carry the same audio packets at the same times as 7's, but each starts one packet
   (1024 ticks, 21.3 ms) earlier. 5c's first fragment, from an MPEG-TS source, starts its audio at
-  11.861 s, eight packets before the boundary, where 5b's segment 1 holds them. Grouped by fragment,
-  the replacement attempt's first segment would repeat those packets. The producer instead places
+  11.861 s, seven packets before the boundary. Grouped by fragment, 5b's segment 1 ends its audio at
+  574464 (11.968 s), so the replacement attempt's first segment would repeat five packets. The producer instead places
   each audio sample in the segment whose interval holds its start, so the replacement attempt's
   first segment starts its audio exactly where the start-0 attempt's segment before it ends
   (`ProducerTest`). Video is identical.
-- **Audio can end before the video** (14). From 8.008 s on, FFmpeg writes fragments with a video
-  `traf` alone. Such a fragment, whose video starts past a boundary, shows that no audio of the
+- **Audio can end before the video** (14). The fragment at 8.008 s carries the last three audio
+  samples, which end at 8.0 s, and from 9.009 s on FFmpeg writes fragments with a video `traf` alone. Such a fragment, whose video starts past a boundary, shows that no audio of the
   interval before it is still to come, so the producer closes each segment at the keyframe that
   opens the next, as it does for a movie without a sound track.
 - **Trailing audio-only fragments are common, not exceptional.** With 48 kHz audio they end 1, 1b, 2,

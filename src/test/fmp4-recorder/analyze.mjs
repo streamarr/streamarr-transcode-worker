@@ -129,7 +129,7 @@ const FIXTURES = [
     name: '05-copy-late-start-seek12', source: 'late.ts', mode: 'copy', encoder: null, seek: 12, start: 2,
     proves: 'Stream-copy replacement attempt of the same MPEG-TS source from segment 2 (-ss 12): the MPEG-TS demuxer ' +
       'lands on the keyframe at 12.033 s, just after the boundary, so no fragment is preroll, and its first fragment ' +
-      'carries the audio from 11.861 s, eight AAC frames before the boundary, which segment 1 of 05-copy-late-start ' +
+      'carries the audio from 11.861 s, seven AAC frames before the boundary, which segment 1 of 05-copy-late-start ' +
       'holds. Segments 2 to 4 carry the start-0 recording\'s video samples at the same ticks.',
     hlsComparisons: [
       hlsComparison('05-copy-late-start.hls-recipe-adtstoasc', 'hls-recipe', {
@@ -255,8 +255,9 @@ const FIXTURES = [
   },
   {
     name: '14-copy-audio-ends-early', source: 'short-audio.mp4', mode: 'copy', encoder: null, seek: 0, start: 0,
-    proves: 'Stream copy of a source whose 8 s of audio end 12 s before its 20 s of video: from 8.008 s on FFmpeg ' +
-      'writes fragments with a video traf alone, so no audio sample at or after a later boundary ever arrives.',
+    proves: 'Stream copy of a source whose 8 s of audio end 12 s before its 20 s of video: the fragment at 8.008 s ' +
+      'still carries the last three audio samples, which end at 8.0 s, and from 9.009 s on FFmpeg writes ' +
+      'fragments with a video traf alone, so no audio sample at or after a later boundary ever arrives.',
     hlsComparisons: [
       hlsComparison('14-copy-audio-ends-early.hls-recipe', 'hls-recipe'),
       hlsComparison('14-copy-audio-ends-early.video-only', 'pipe-recipe', { audio: false }),
