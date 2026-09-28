@@ -43,7 +43,7 @@ final class MovieFragmentWriter {
     var moofBytes = moofBytes(tracks);
     var header = ByteBuffer.allocate(Math.toIntExact(moofBytes + BOX_HEADER_BYTES));
     boxHeader(header, moofBytes, "moof");
-    fullBoxHeader(header, MFHD_BYTES, "mfhd", 0);
+    fullBoxHeader(header, MFHD_BYTES, FullBox.MFHD);
     header.putInt((int) sequenceNumber);
     var dataOffset = moofBytes + BOX_HEADER_BYTES;
     for (var track : tracks) {
@@ -63,11 +63,11 @@ final class MovieFragmentWriter {
   private static void writeTraf(ByteBuffer header, Track track, long dataOffset) {
     var samples = track.samples();
     boxHeader(header, track.trafBytes(), "traf");
-    fullBoxHeader(header, TFHD_BYTES, "tfhd", DEFAULT_BASE_IS_MOOF);
+    fullBoxHeader(header, TFHD_BYTES, FullBox.TFHD);
     header.putInt((int) track.trackId());
-    fullBoxHeader(header, TFDT_BYTES, "tfdt", VERSION_1);
+    fullBoxHeader(header, TFDT_BYTES, FullBox.TFDT);
     header.putLong(samples.getFirst().decodeTime());
-    fullBoxHeader(header, track.trunBytes(), "trun", VERSION_1 | TRUN_FIELDS);
+    fullBoxHeader(header, track.trunBytes(), FullBox.TRUN);
     header.putInt(samples.size());
     header.putInt(Math.toIntExact(dataOffset));
     for (var index = 0; index < samples.size(); index++) {
@@ -84,9 +84,25 @@ final class MovieFragmentWriter {
     header.put(type.getBytes(StandardCharsets.ISO_8859_1));
   }
 
-  private static void fullBoxHeader(ByteBuffer header, long size, String type, int versionFlags) {
-    boxHeader(header, size, type);
-    header.putInt(versionFlags);
+  private static void fullBoxHeader(ByteBuffer header, long size, FullBox box) {
+    boxHeader(header, size, box.type);
+    header.putInt(box.versionAndFlags);
+  }
+
+  /** Each full box the writer writes, with the version and flags it always carries. */
+  private enum FullBox {
+    MFHD("mfhd", 0),
+    TFHD("tfhd", DEFAULT_BASE_IS_MOOF),
+    TFDT("tfdt", VERSION_1),
+    TRUN("trun", VERSION_1 | TRUN_FIELDS);
+
+    private final String type;
+    private final int versionAndFlags;
+
+    FullBox(String type, int versionAndFlags) {
+      this.type = type;
+      this.versionAndFlags = versionAndFlags;
+    }
   }
 
   /**
