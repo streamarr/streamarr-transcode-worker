@@ -20,6 +20,7 @@ import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
 import com.streamarr.transcode.fixtures.Mp4Samples;
 import com.streamarr.transcode.fixtures.Mp4Samples.Movie;
+import com.streamarr.transcode.fixtures.Mp4Samples.MovieFragment;
 import com.streamarr.transcode.fixtures.Mp4Samples.Sample;
 import com.streamarr.transcode.fixtures.RecordingFixtures;
 import com.streamarr.transcode.fixtures.TopLevelBoxes;
@@ -225,6 +226,44 @@ class ProducerTest {
         .isNotEmpty()
         .containsExactlyElementsOf(
             audioSamplesOfTheDeliveredSegments(recording, outcome instanceof Completed));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("recordings")
+  @DisplayName(
+      "Should number each media segment's movie fragment one past the segment's sequence number"
+          + " when it rebuilds the media segments")
+  void shouldNumberEachMediaSegmentsMovieFragmentOnePastItsSequenceNumberWhenItRebuildsTheSegments(
+      Recording recording) {
+    deliverEverySegmentOf(recording);
+
+    assertThat(mediaSegmentNames())
+        .isNotEmpty()
+        .allSatisfy(
+            name ->
+                assertThat(mediaSegmentOf(sink, name).fragments())
+                    .extracting(MovieFragment::sequenceNumber)
+                    .containsExactly(numberOf(name) + 1L));
+  }
+
+  // Stream copies of an MP4 source: FFmpeg writes the same packets at the same decode times in
+  // both attempts, so only the producer could make a shared segment's bytes differ.
+  @Test
+  @DisplayName(
+      "Should deliver the start-0 attempt's bytes for every media segment a stream-copy replacement"
+          + " attempt delivers when both copy the same packets")
+  void shouldDeliverTheStartZeroAttemptsBytesForEveryMediaSegmentWhenBothCopyTheSamePackets() {
+    var startZero = deliveredBy(recording("07-copy-start0.fmp4"));
+    var replacement = deliveredBy(recording("07-copy-seek30.fmp4"));
+
+    assertThat(replacement.acceptedNames())
+        .filteredOn(name -> name.startsWith("segment"))
+        .isNotEmpty()
+        .allSatisfy(
+            name ->
+                assertThat(replacement.contentOf(name))
+                    .as(name)
+                    .isEqualTo(startZero.contentOf(name)));
   }
 
   @ParameterizedTest(name = "{1} after {0}")

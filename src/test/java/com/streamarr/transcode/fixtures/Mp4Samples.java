@@ -62,8 +62,11 @@ public final class Mp4Samples {
     }
   }
 
-  /** One {@code moof} and its {@code mdat}, with their samples in {@code traf} order. */
-  public record MovieFragment(List<Sample> samples) {}
+  /**
+   * One {@code moof} and its {@code mdat}: the {@code mfhd} sequence number and the samples in
+   * {@code traf} order.
+   */
+  public record MovieFragment(long sequenceNumber, List<Sample> samples) {}
 
   /** The tracks and fragments of an output. */
   public record Movie(Map<Long, Track> tracks, List<MovieFragment> fragments) {
@@ -117,7 +120,8 @@ public final class Mp4Samples {
         }
 
         if (type.equals("mdat")) {
-          fragments.add(new MovieFragment(readMoof(moofStart)));
+          fragments.add(
+              new MovieFragment(unsigned(child(moofStart, "mfhd") + 12), readMoof(moofStart)));
         }
 
         position += size;
