@@ -304,9 +304,9 @@ class WorkerMediaSmokeTest {
         execute(engine(softwareCapabilities()), source.getParent(), replacement.build());
 
     assertThat(replacementUploads.names()).containsExactly("init.mp4", "segment2.m4s");
-    assertThat(replacementUploads.segments().get("init.mp4"))
+    assertThat(replacementUploads.segments())
         .as("the replacement attempt's initialization segment")
-        .isEqualTo(fromStartUploads.segments().get("init.mp4"));
+        .containsEntry("init.mp4", fromStartUploads.segments().get("init.mp4"));
   }
 
   static Stream<Arguments> sourceContainersAndModes() {
