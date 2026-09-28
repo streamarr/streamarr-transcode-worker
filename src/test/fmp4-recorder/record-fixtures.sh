@@ -199,6 +199,13 @@ VFR_SELECT="select='if(lt(n,300),gte(mod(n*7919,97),20),if(lt(n,600),not(mod(n,2
 "${FF[@]}" -f lavfi -i "$(lavfi 24000/1001 20)" -f lavfi -i "$SILENCE:duration=8" -map 0:v -map 1:a \
   "${SRC_X264[@]}" -g 48 -keyint_min 48 "${SRC_AAC[@]}" -fflags +bitexact src/short-audio.mp4
 
+# 22.05 kHz audio, whose 46.4 ms AAC frames outlast the 41.7 ms video frames, starting 20 ms after
+# the video, and a keyframe on every frame from 5.6 s to 6.6 s, so FFmpeg cuts a one-frame fragment
+# at each of them and some carry no audio; 20 s.
+"${FF[@]}" -f lavfi -i "$(lavfi 24000/1001 20)" -itsoffset 0.02 -f lavfi -i "anullsrc=channel_layout=mono:sample_rate=22050:duration=20" \
+  -map 0:v -map 1:a "${SRC_X264[@]}" -g 48 -keyint_min 48 -force_key_frames "expr:eq(n,0)+gte(t,5.6)*lte(t,6.6)" \
+  "${SRC_AAC[@]}" -fflags +bitexact src/adjacent-keyframes.mp4
+
 # A keyframe every 240 frames (10.01 s): wider than the period, so a segment number is skipped.
 "${FF[@]}" -f lavfi -i "$(lavfi 24000/1001 25)" -f lavfi -i "$SILENCE:duration=25" -map 0:v -map 1:a \
   "${SRC_X264[@]}" -g 240 -keyint_min 240 "${SRC_AAC[@]}" -fflags +bitexact src/gop10.mp4
@@ -297,6 +304,10 @@ run hls 13-x265-cfr-floored-gop.video-only video duration=30 src/cfr.mp4 -- "${X
 run pipe 14-copy-audio-ends-early src/short-audio.mp4 -- "${COPY_PIPE[@]}"
 run hls 14-copy-audio-ends-early.hls-recipe hls-recipe src/short-audio.mp4 -- "${COPY_HLS[@]}"
 run hls 14-copy-audio-ends-early.video-only video src/short-audio.mp4 -- "${COPY_PIPE[@]}"
+
+# ------------------------------------------------------------------ 15. a keyframe fragment without audio just past a boundary
+run pipe 15-copy-adjacent-keyframes src/adjacent-keyframes.mp4 -- "${COPY_PIPE[@]}"
+run hls 15-copy-adjacent-keyframes.video-only video src/adjacent-keyframes.mp4 -- "${COPY_PIPE[@]}"
 
 # ------------------------------------------------------------------ side claims of ADR 0037 (recorded, not delivered)
 mkdir -p claims

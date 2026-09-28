@@ -46,7 +46,7 @@ final class FragmentedMp4Exception extends RuntimeException {
     OUTPUT_MISMATCH,
     /**
      * An audio sample arrives after the media segment whose interval holds its start closed, which
-     * FFmpeg's interleaving in decode order rules out.
+     * only a sound track whose presentation times run backwards can cause.
      */
     LATE_AUDIO_SAMPLE
   }

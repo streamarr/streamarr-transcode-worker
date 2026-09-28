@@ -22,8 +22,8 @@ import lombok.NonNull;
  * initialization segment as it arrives, without the SEI messages of its HEVC records, and each
  * media segment, rebuilt as one {@code moof} and one {@code mdat}. A media segment holds the video
  * of the fragments its grouper groups and the audio samples that start inside its interval,
- * whichever fragment carried them. It closes once its grouper has closed it and no audio sample of
- * its interval can still arrive, or the output ends.
+ * whichever fragment carried them. It closes once its grouper has closed it and an audio sample of
+ * a later segment has arrived, at once when the movie has no sound track, or when the output ends.
  */
 final class SegmentAssembler {
 

@@ -13,6 +13,8 @@ import java.util.stream.Stream;
  * sample's start closes, whichever fragment carried it, and tracks how far the audio has certainly
  * arrived. A sample before the attempt's first segment is preroll and is dropped, except that an
  * attempt from segment zero keeps the AAC priming frame, which starts before zero, in segment zero.
+ * Only an audio sample shows how far the audio has arrived: FFmpeg can write a keyframe fragment
+ * without audio past a boundary and the audio before that boundary in the fragment after it.
  */
 final class AudioSampleQueue {
 
@@ -22,6 +24,7 @@ final class AudioSampleQueue {
   private final Deque<Queued> held = new ArrayDeque<>();
   private long firstOpenNumber;
   private long reachedNumber = Long.MIN_VALUE;
+  private boolean withoutSoundTrack;
 
   AudioSampleQueue(int periodSeconds, int startSequenceNumber) {
     this.periodSeconds = periodSeconds;
@@ -30,29 +33,29 @@ final class AudioSampleQueue {
   }
 
   /**
-   * Holds the fragment's audio samples for their segments. FFmpeg interleaves its packets in decode
-   * order, so once an audio sample starts in segment N, or a fragment without audio starts its
-   * video in segment N, no audio sample of an earlier segment follows.
+   * Holds the fragment's audio samples for their segments. The sound track's samples arrive in
+   * decode order, which for audio is presentation order, so once an audio sample starts in segment
+   * N, no audio sample of an earlier segment follows.
    *
    * @throws FragmentedMp4Exception when an audio sample belongs to a segment that already closed
    */
   void add(Fragment fragment) {
+    withoutSoundTrack = fragment.tracks().audio().isEmpty();
     fragment.audioSamples().forEach(sample -> hold(fragment, sample));
-    if (!fragment.audioSamples().isEmpty()) {
-      reach(
-          numberOf(
-              fragment.audioSamples().getLast().presentationTime(), audioTimescaleOf(fragment)));
+    if (fragment.audioSamples().isEmpty()) {
       return;
     }
 
-    fragment
-        .videoStart()
-        .ifPresent(start -> reach(numberOf(start.presentationTime(), start.timescale())));
+    reach(
+        numberOf(fragment.audioSamples().getLast().presentationTime(), audioTimescaleOf(fragment)));
   }
 
-  /** Whether no audio sample of segment {@code number} or before it can still arrive. */
+  /**
+   * Whether no audio sample of segment {@code number} or before it can still arrive: an audio
+   * sample of a later segment has arrived, or the movie has no sound track.
+   */
   boolean hasPassed(long number) {
-    return reachedNumber > number;
+    return withoutSoundTrack || reachedNumber > number;
   }
 
   /**

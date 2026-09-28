@@ -263,6 +263,14 @@ const FIXTURES = [
       hlsComparison('14-copy-audio-ends-early.video-only', 'pipe-recipe', { audio: false }),
     ],
   },
+  {
+    name: '15-copy-adjacent-keyframes', source: 'adjacent-keyframes.mp4', mode: 'copy', encoder: null, seek: 0, start: 0,
+    proves: 'Stream copy of a source with 22.05 kHz audio, whose AAC frames outlast the video frames, and a keyframe ' +
+      'on every frame from 5.6 s to 6.6 s: FFmpeg cuts a one-frame fragment at each of those keyframes. The one at ' +
+      '6.006 s, which opens segment 1, carries no audio, and the next fragment carries an audio sample from 5.964 s, ' +
+      'inside segment 0, so a fragment without audio does not show that segment 0\'s audio has all arrived.',
+    hlsComparisons: [hlsComparison('15-copy-adjacent-keyframes.video-only', 'pipe-recipe', { audio: false })],
+  },
 ];
 
 const INITIALIZATION_SEGMENT_IDENTITY_PAIRS = [

@@ -318,13 +318,70 @@ class ProducerTest {
     assertThat(audioDecodeTimesOf("segment1.m4s")).containsExactly(48_000L);
   }
 
-  @ParameterizedTest(name = "{0}")
-  @MethodSource("outputsWithoutAudioAfterTheFirstSegment")
+  @Test
   @DisplayName(
-      "Should close a media segment at the keyframe that opens the next one when no audio arrives"
-          + " with that keyframe")
-  void shouldCloseAMediaSegmentAtTheKeyframeThatOpensTheNextOneWhenNoAudioArrivesWithIt(
-      String description, OneSecondSegments output) {
+      "Should hold a media segment until an audio sample at or after its end arrives when the"
+          + " keyframe that opens the next segment carries no audio")
+  void
+      shouldHoldAMediaSegmentUntilAnAudioSampleAtOrAfterItsEndArrivesWhenTheKeyframeOpeningTheNextCarriesNoAudio() {
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0).audioFrom(0, 12_000, 12_000, 12_000, 10_000).build(),
+            TimedFragment.keyframeAt(24_000).build(),
+            TimedFragment.frameAt(48_000).audioFrom(46_000, 2_000, 48_000).build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+
+    var producer = producerOfOneSecondSegments(process).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
+    assertThat(audioDecodeTimesOf("segment0.m4s"))
+        .containsExactly(0L, 12_000L, 24_000L, 36_000L, 46_000L);
+    assertThat(audioDecodeTimesOf("segment1.m4s")).containsExactly(48_000L);
+  }
+
+  @Test
+  @DisplayName(
+      "Should hold every media segment after the audio's end until the output ends when the audio"
+          + " ends before the video")
+  void shouldHoldEveryMediaSegmentAfterTheAudiosEndUntilTheOutputEndsWhenTheAudioEndsFirst() {
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0).audioFrom(0, 12_000, 12_000).build(),
+            TimedFragment.keyframeAt(24_000).build(),
+            TimedFragment.keyframeAt(48_000).build(),
+            TimedFragment.keyframeAt(72_000).build());
+    var process =
+        ScriptedProcess.builder().output(output.bytes()).pauseAfter(output.endOf(2)).build();
+    sink.holding(0);
+
+    var producer = producerOfOneSecondSegments(process).start();
+
+    // A segment that closed would wait for the held initialization segment and keep the reader
+    // from reading on.
+    awaiting().until(process::hasReachedPause);
+    sink.release();
+    process.resume();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(sink.acceptedNames())
+        .containsExactly(
+            "init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s", "segment3.m4s");
+    assertThat(audioDecodeTimesOf("segment0.m4s")).containsExactly(0L, 12_000L);
+  }
+
+  @Test
+  @DisplayName(
+      "Should close a media segment at the keyframe that opens the next one when the movie has no"
+          + " sound track")
+  void shouldCloseAMediaSegmentAtTheKeyframeThatOpensTheNextOneWhenTheMovieHasNoSoundTrack() {
+    var output =
+        OneSecondSegments.of(
+            videoOnlyMoov(),
+            TimedFragment.keyframeAt(0).build(),
+            TimedFragment.keyframeAt(24_000).build(),
+            TimedFragment.keyframeAt(48_000).build());
     var process = ScriptedProcess.builder().output(output.bytes()).build();
     sink.holding(0);
 
@@ -337,24 +394,6 @@ class ProducerTest {
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
     assertThat(sink.acceptedNames())
         .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
-  }
-
-  static Stream<Arguments> outputsWithoutAudioAfterTheFirstSegment() {
-    return Stream.of(
-        Arguments.of(
-            "the audio ended",
-            OneSecondSegments.of(
-                IsoBoxes.videoAndAudioMoov(),
-                TimedFragment.keyframeAt(0).audioFrom(0, 12_000, 12_000).build(),
-                TimedFragment.keyframeAt(24_000).build(),
-                TimedFragment.keyframeAt(48_000).build())),
-        Arguments.of(
-            "the movie has no sound track",
-            OneSecondSegments.of(
-                videoOnlyMoov(),
-                TimedFragment.keyframeAt(0).build(),
-                TimedFragment.keyframeAt(24_000).build(),
-                TimedFragment.keyframeAt(48_000).build())));
   }
 
   @Test
@@ -384,7 +423,7 @@ class ProducerTest {
         OneSecondSegments.of(
             IsoBoxes.videoAndAudioMoov(),
             TimedFragment.keyframeAt(0).audioFrom(0, 12_000, 12_000).build(),
-            TimedFragment.keyframeAt(24_000).build(),
+            TimedFragment.keyframeAt(24_000).audioFrom(48_000, 12_000).build(),
             TimedFragment.frameAt(48_000).audioFrom(24_000, 12_000).build());
     var process = ScriptedProcess.builder().output(output.bytes()).build();
 
@@ -905,7 +944,7 @@ class ProducerTest {
     var output =
         IsoBoxes.concat(
             IsoBoxes.ftyp(),
-            videoOnlyMoov(),
+            IsoBoxes.moov(IsoBoxes.Track.video().build()),
             manySampleFragment(0, samplesPerFragment, IsoBoxes.SYNC_SAMPLE_FLAGS),
             manySampleFragment(12_000, samplesPerFragment, IsoBoxes.NON_SYNC_SAMPLE_FLAGS),
             keyframeFragment(24_000, 1));
@@ -929,7 +968,7 @@ class ProducerTest {
     var output =
         IsoBoxes.concat(
             IsoBoxes.ftyp(),
-            videoOnlyMoov(),
+            IsoBoxes.moov(IsoBoxes.Track.video().build()),
             manySampleFragment(
                 0, Math.toIntExact(SERVER_SEGMENT_CAP_BYTES / 16 + 1), IsoBoxes.SYNC_SAMPLE_FLAGS));
     var process = ScriptedProcess.builder().output(output).build();

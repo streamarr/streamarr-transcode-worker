@@ -226,6 +226,7 @@ Timescale 24000 unless stated. `n@t` means segment n starts at t seconds.
 | 13c | `13-x265-cfr-floored-gop.fmp4` | 0 | libx265 with the worker's arguments under the floored GOP of 143 frames of an encoder that is not keyframe-verified, first 30 s. As in 11, the GOP keyframe one frame before every later boundary (frames 143, 287, 431, 575) and on the last frame (719) joins the earlier segment: 5 segments of two keyframes, each opening at its forced keyframe. Every keyframe is an IDR picture (NAL type 20). |
 | 13d | `13-x265-cfr-seek30.fmp4` | 5 | The libx265 replacement attempt from segment 5, seeking one period early (`-ss 24`): starts at 24.024 s, and segment 4 is discarded preroll. The list `30,36,…,66` forces the frames 13 forced (720, 864, 1007, 1151, 1295, 1439), so every delivered segment, 5–10, starts on exactly 13's ticks. Every keyframe is an IDR picture. Ends with one audio-only fragment. |
 | 14 | `14-copy-audio-ends-early.fmp4` | 0 | 20 s of video, 8 s of audio, copied. The fragment at 8.008 s still carries the last three audio samples, which end at 8.0 s, and from 9.009 s on FFmpeg writes fragments with a video `traf` alone, so no audio sample ever starts at or after the end of segments 1–3; 4 segments, the last from 18.018 s. |
+| 15 | `15-copy-adjacent-keyframes.fmp4` | 0 | 22.05 kHz audio, whose 46.4 ms AAC frames outlast the 41.7 ms video frames, starting 20 ms after the video, and a keyframe on every frame from 5.6 s to 6.6 s, copied. FFmpeg cuts a one-frame fragment at each of those keyframes, and some carry no audio. The one at 6.006 s, which opens segment 1, is one of them, and the next fragment carries an audio sample from 5.964 s, inside segment 0. 4 segments. |
 
 Box facts every recording shares (useful for the reader):
 - Top-level boxes are only `ftyp`, `moov`, `moof` and `mdat`, in that order, with no `largesize`, `styp` or `sidx`.
@@ -322,6 +323,7 @@ Agreement, exact in ticks:
 | 10 | differs on segment 2 | – | the HLS muxer numbers sequentially and never skips |
 | 11, 12, 12b, 13, 13b, 13c | – | agrees | the first video frame is at zero, so hlsenc measures from the grid's zero |
 | 14 | agrees | agrees | |
+| 15 | – | agrees | |
 
 The list anchors the pipe recipe's keyframes on the zero-based timeline, while hlsenc and the HLS
 recipe's expression both measure from the attempt's first frame. Before the list, the pipe recipe forced
@@ -478,10 +480,15 @@ settle what, if anything, changes because of them.
   each audio sample in the segment whose interval holds its start, so the replacement attempt's
   first segment starts its audio exactly where the start-0 attempt's segment before it ends
   (`ProducerTest`). Video is identical.
+- **A keyframe fragment past a boundary can carry no audio while audio before it is still to come**
+  (15). The fragment at 6.006 s opens segment 1 without audio, and the next fragment carries an audio
+  sample from 5.964 s, inside segment 0. The producer therefore closes a segment only once an audio
+  sample of a later segment has arrived, or the output ends.
 - **Audio can end before the video** (14). The fragment at 8.008 s carries the last three audio
-  samples, which end at 8.0 s, and from 9.009 s on FFmpeg writes fragments with a video `traf` alone. Such a fragment, whose video starts past a boundary, shows that no audio of the
-  interval before it is still to come, so the producer closes each segment at the keyframe that
-  opens the next, as it does for a movie without a sound track.
+  samples, which end at 8.0 s, and from 9.009 s on FFmpeg writes fragments with a video `traf` alone.
+  Nothing in the output says that the audio has ended, and such a fragment does not show that the
+  audio before its boundary has all arrived (15), so segments 1–3 wait until the output ends. Only a
+  movie without a sound track closes each segment at the keyframe that opens the next.
 - **Trailing audio-only fragments are common, not exceptional.** With 48 kHz audio they end 1, 1b, 2,
   3, 4, 5b, 5c, 10, 12, 13, 13b and 13d, as well as 6.
 - `hlsenc` measures fMP4 cut points in the video time base from a reference that can be an audio
