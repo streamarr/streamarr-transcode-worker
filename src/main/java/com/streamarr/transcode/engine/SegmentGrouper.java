@@ -110,6 +110,11 @@ final class SegmentGrouper {
     return openBytes;
   }
 
+  /** The fragments the grouper holds for the open segment, or for the first one. */
+  List<Fragment> heldFragments() {
+    return List.copyOf(openFragments);
+  }
+
   private void requireNotEnded() {
     if (ended) {
       throw new IllegalStateException("grouping ended at a skipped segment number");

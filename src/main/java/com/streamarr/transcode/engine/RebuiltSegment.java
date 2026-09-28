@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Stream;
 import lombok.Builder;
 import lombok.NonNull;
@@ -21,12 +22,18 @@ final class RebuiltSegment implements ClosedSegment {
   private final List<SampleOf> audioSamples;
   private final List<MovieFragmentWriter.Track> tracks;
   private final long heldBytes;
+  private final long sharedBytes;
 
+  /**
+   * @param stillHeld the fragments the assembler still holds for later segments once this one
+   *     closes, by identity; those that carried samples of this segment count for its delivery too
+   */
   @Builder
   private RebuiltSegment(
       int sequenceNumber,
       @NonNull List<SampleOf> videoSamples,
-      @NonNull List<SampleOf> audioSamples) {
+      @NonNull List<SampleOf> audioSamples,
+      @NonNull Set<Fragment> stillHeld) {
     if (videoSamples.isEmpty()) {
       throw new IllegalArgumentException("media segment " + sequenceNumber + " has no video");
     }
@@ -35,8 +42,9 @@ final class RebuiltSegment implements ClosedSegment {
     this.videoSamples = List.copyOf(videoSamples);
     this.audioSamples = List.copyOf(audioSamples);
     this.tracks = tracksOf(this.videoSamples, this.audioSamples);
-    this.heldBytes =
-        byteLengthOf(fragmentsOf(Stream.concat(videoSamples.stream(), audioSamples.stream())));
+    var fragments = fragmentsOf(Stream.concat(videoSamples.stream(), audioSamples.stream()));
+    this.sharedBytes = byteLengthOf(fragments.stream().filter(stillHeld::contains).toList());
+    this.heldBytes = byteLengthOf(fragments) - sharedBytes;
   }
 
   /** The segment's bytes once written. */
@@ -50,10 +58,11 @@ final class RebuiltSegment implements ClosedSegment {
     return heldBytes;
   }
 
-  // The new moof and mdat header.
+  // The new moof and mdat header, and the fragments a later segment shares, which the delivery
+  // and the assembler each count until the delivery returns.
   @Override
   public long additionalBytes() {
-    return MovieFragmentWriter.headerBytes(tracks);
+    return MovieFragmentWriter.headerBytes(tracks) + sharedBytes;
   }
 
   @Override

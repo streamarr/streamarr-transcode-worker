@@ -1573,6 +1573,33 @@ class WorkerMediaSmokeTest {
             ffmpegVideo.subList(ffmpegVideo.indexOf(uploadedVideo.getFirst()), ffmpegVideo.size()));
   }
 
+  @ParameterizedTest(name = "{0} source, {1}, from segment {2}")
+  @MethodSource("sourceContainersModesAndStarts")
+  @DisplayName(
+      "Should upload each media segment with exactly FFmpeg's audio packets that start inside its"
+          + " interval when a worker runs a real job")
+  void shouldUploadEachMediaSegmentWithExactlyFfmpegsAudioPacketsThatStartInsideItsInterval(
+      String container, TranscodeMode mode, int startSequenceNumber) throws Exception {
+    var run = runSeekableSourceJob(container, mode, startSequenceNumber);
+
+    var ffmpegAudio =
+        FfprobePackets.of(run.ffmpegOutput(), root).stream().filter(Packet::isAudio).toList();
+    var names = run.mediaSegmentNames();
+    assertThat(names).isNotEmpty();
+    for (var name : names) {
+      var interval = AudioInterval.of(name, names);
+      var uploadedAudio =
+          FfprobePackets.of(run.uploads().contentOf(List.of("init.mp4", name)), root).stream()
+              .filter(Packet::isAudio)
+              .toList();
+      assertThat(uploadedAudio)
+          .as("the audio packets of %s", name)
+          .isNotEmpty()
+          .containsExactlyElementsOf(
+              ffmpegAudio.stream().filter(packet -> interval.holds(packet.pts())).toList());
+    }
+  }
+
   static Stream<Arguments> sourceContainersModesAndStarts() {
     return sourceContainersAndModes()
         .flatMap(
@@ -2291,6 +2318,35 @@ class WorkerMediaSmokeTest {
       var content = new ByteArrayOutputStream();
       uploadNames.forEach(name -> content.writeBytes(segments.get(name)));
       return content.toByteArray();
+    }
+  }
+
+  /**
+   * The audio start times, in the source's 48 kHz audio timescale, of an uploaded media segment:
+   * its interval, from before zero for segment 0, which keeps the AAC priming frame, and without
+   * end for the last segment, which keeps the audio after its interval.
+   */
+  private record AudioInterval(long start, long end) {
+
+    private static final long PERIOD_TICKS = 6L * 48_000;
+
+    private static AudioInterval of(String name, List<String> names) {
+      var number = Long.parseLong(name.substring("segment".length(), name.indexOf(".")));
+      var start = number * PERIOD_TICKS;
+      var end = (number + 1) * PERIOD_TICKS;
+      if (number == 0) {
+        start = Long.MIN_VALUE;
+      }
+
+      if (name.equals(names.getLast())) {
+        end = Long.MAX_VALUE;
+      }
+
+      return new AudioInterval(start, end);
+    }
+
+    private boolean holds(long time) {
+      return time >= start && time < end;
     }
   }
 

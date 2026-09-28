@@ -470,10 +470,18 @@ settle what, if anything, changes because of them.
   the list forces the frames one later (144, 288 … instead of 143, 287 …). Every attempt of a
   variant maps the same streams, so its attempts agree; 5a's HLS comparison with the pipe's keyframes
   therefore keeps the audio.
-- **A stream-copy replacement attempt repeats one AAC frame at the splice** (7b). Its fragments carry
-  the same audio packets at the same times, but each starts one packet (1024 ticks, 21.3 ms) earlier
-  than the first attempt's. So the replacement attempt's segment 5 begins with the first attempt's
-  segment 4's last AAC frame: 21.3 ms of audio heard twice, not a gap. Video is identical.
+- **A stream-copy replacement attempt's fragments start their audio before the boundary** (7b, 5c).
+  7b's fragments carry the same audio packets at the same times as 7's, but each starts one packet
+  (1024 ticks, 21.3 ms) earlier. 5c's first fragment, from an MPEG-TS source, starts its audio at
+  11.861 s, eight packets before the boundary, where 5b's segment 1 holds them. Grouped by fragment,
+  the replacement attempt's first segment would repeat those packets. The producer instead places
+  each audio sample in the segment whose interval holds its start, so the replacement attempt's
+  first segment starts its audio exactly where the start-0 attempt's segment before it ends
+  (`ProducerTest`). Video is identical.
+- **Audio can end before the video** (14). From 8.008 s on, FFmpeg writes fragments with a video
+  `traf` alone. Such a fragment, whose video starts past a boundary, shows that no audio of the
+  interval before it is still to come, so the producer closes each segment at the keyframe that
+  opens the next, as it does for a movie without a sound track.
 - **Trailing audio-only fragments are common, not exceptional.** With 48 kHz audio they end 1, 1b, 2,
   3, 4, 5b, 5c, 10, 12, 13, 13b and 13d, as well as 6.
 - `hlsenc` measures fMP4 cut points in the video time base from a reference that can be an audio

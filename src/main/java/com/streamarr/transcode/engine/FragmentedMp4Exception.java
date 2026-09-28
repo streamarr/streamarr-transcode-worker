@@ -43,7 +43,12 @@ final class FragmentedMp4Exception extends RuntimeException {
      * The initialization segment declares video other than the job's video decision, or video whose
      * decoder configuration record cannot be read.
      */
-    OUTPUT_MISMATCH
+    OUTPUT_MISMATCH,
+    /**
+     * An audio sample arrives after the media segment whose interval holds its start closed, which
+     * FFmpeg's interleaving in decode order rules out.
+     */
+    LATE_AUDIO_SAMPLE
   }
 
   private final Reason reason;
