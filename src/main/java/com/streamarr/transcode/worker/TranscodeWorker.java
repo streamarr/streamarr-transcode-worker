@@ -356,9 +356,11 @@ public final class TranscodeWorker implements AutoCloseable {
   private static void sendContent(SegmentUpload upload, ProducedSegment segment)
       throws InterruptedException, TimeoutException {
     var pending = ByteString.EMPTY;
-    for (var box : segment.content()) {
-      // The producer never changes a segment it delivered, so wrapping its boxes copies nothing.
-      pending = sendWholeDataMessages(upload, pending.concat(UnsafeByteOperations.unsafeWrap(box)));
+    for (var part : segment.content()) {
+      // The producer never changes a segment's bytes after delivering it, so wrapping them copies
+      // nothing.
+      pending =
+          sendWholeDataMessages(upload, pending.concat(UnsafeByteOperations.unsafeWrap(part)));
     }
 
     if (!pending.isEmpty()) {
