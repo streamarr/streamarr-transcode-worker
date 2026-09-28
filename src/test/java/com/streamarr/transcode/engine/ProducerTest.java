@@ -90,7 +90,7 @@ class ProducerTest {
   // before the body of the third segment's first mdat, which the budget cannot admit.
   private static final int NEARLY_CAPPED_BUDGET_STOP =
       IsoBoxes.ftyp().length
-          + IsoBoxes.videoAndAudioMoov().length
+          + videoOnlyMoov().length
           + 6 * keyframeFragment(0).length
           + keyframeMoof(48_000).length
           + 8;
@@ -100,7 +100,7 @@ class ProducerTest {
   // second segment's first mdat, which the worker's budget cannot admit.
   private static final int BEHIND_A_HELD_STOP =
       IsoBoxes.ftyp().length
-          + IsoBoxes.videoAndAudioMoov().length
+          + videoOnlyMoov().length
           + 3 * keyframeFragment(0).length
           + keyframeMoof(24_000).length
           + 8;
@@ -351,7 +351,7 @@ class ProducerTest {
         Arguments.of(
             "the movie has no sound track",
             OneSecondSegments.of(
-                IsoBoxes.moov(IsoBoxes.Track.video().build()),
+                videoOnlyMoov(),
                 TimedFragment.keyframeAt(0).build(),
                 TimedFragment.keyframeAt(24_000).build(),
                 TimedFragment.keyframeAt(48_000).build())));
@@ -488,10 +488,7 @@ class ProducerTest {
     var producer = producerOfOneSecondSegments(process).start();
 
     assertReaderStopsAt(process, NEARLY_CAPPED_BUDGET_STOP);
-    assertThat(
-            (long) process.bytesTaken()
-                - IsoBoxes.ftyp().length
-                - IsoBoxes.videoAndAudioMoov().length)
+    assertThat((long) process.bytesTaken() - IsoBoxes.ftyp().length - videoOnlyMoov().length)
         .isLessThanOrEqualTo(2 * SERVER_SEGMENT_CAP_BYTES);
     sink.release();
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
@@ -694,7 +691,7 @@ class ProducerTest {
     // FFmpeg writes nothing more and ignores the quit.
     var hangOffset =
         IsoBoxes.ftyp().length
-            + IsoBoxes.videoAndAudioMoov().length
+            + videoOnlyMoov().length
             + 3 * keyframeFragment(0).length
             + keyframeMoof(24_000).length
             + 8
@@ -740,10 +737,7 @@ class ProducerTest {
             keyframeFragment(18_000));
     var output =
         IsoBoxes.concat(
-            IsoBoxes.ftyp(),
-            IsoBoxes.videoAndAudioMoov(),
-            preroll,
-            nearlyCappedFragmentsFrom(24_000));
+            IsoBoxes.ftyp(), videoOnlyMoov(), preroll, nearlyCappedFragmentsFrom(24_000));
     var process = ScriptedProcess.builder().output(output).build();
     sink.holding(1);
 
@@ -911,7 +905,7 @@ class ProducerTest {
     var output =
         IsoBoxes.concat(
             IsoBoxes.ftyp(),
-            IsoBoxes.moov(IsoBoxes.Track.video().build()),
+            videoOnlyMoov(),
             manySampleFragment(0, samplesPerFragment, IsoBoxes.SYNC_SAMPLE_FLAGS),
             manySampleFragment(12_000, samplesPerFragment, IsoBoxes.NON_SYNC_SAMPLE_FLAGS),
             keyframeFragment(24_000, 1));
@@ -935,7 +929,7 @@ class ProducerTest {
     var output =
         IsoBoxes.concat(
             IsoBoxes.ftyp(),
-            IsoBoxes.moov(IsoBoxes.Track.video().build()),
+            videoOnlyMoov(),
             manySampleFragment(
                 0, Math.toIntExact(SERVER_SEGMENT_CAP_BYTES / 16 + 1), IsoBoxes.SYNC_SAMPLE_FLAGS));
     var process = ScriptedProcess.builder().output(output).build();
@@ -959,7 +953,7 @@ class ProducerTest {
     var output =
         IsoBoxes.concat(
             IsoBoxes.ftyp(),
-            IsoBoxes.videoAndAudioMoov(),
+            videoOnlyMoov(),
             keyframeFragment(0, cappedFragmentPayload),
             keyframeFragment(24_000, cappedFragmentPayload));
     var process = ScriptedProcess.builder().output(output).build();
@@ -991,7 +985,7 @@ class ProducerTest {
   }
 
   static Stream<Arguments> outputsThatCannotBeRebuilt() {
-    var videoOnly = IsoBoxes.moov(IsoBoxes.Track.video().build());
+    var videoOnly = videoOnlyMoov();
     return Stream.of(
         Arguments.of(
             "decode times that run backwards",
@@ -2688,11 +2682,15 @@ class ProducerTest {
         List.of(List.of(1001, 1001), List.of(1001, 1, 1001), List.of(1001)));
   }
 
+  // A movie without a sound track, whose segments close at the keyframe that opens the next.
+  private static byte[] videoOnlyMoov() {
+    return IsoBoxes.moov(IsoBoxes.Track.video().build());
+  }
+
   // Three 1 s segments of three 40 MiB keyframe fragments each, nearly the segment cap: while the
   // first awaits acceptance, the second fills the rest of the budget.
   private static byte[] nearlyCappedSegments() {
-    return IsoBoxes.concat(
-        IsoBoxes.ftyp(), IsoBoxes.videoAndAudioMoov(), nearlyCappedFragmentsFrom(0));
+    return IsoBoxes.concat(IsoBoxes.ftyp(), videoOnlyMoov(), nearlyCappedFragmentsFrom(0));
   }
 
   // The fragments of nearlyCappedSegments() from this media time in the 24 kHz video timescale.
@@ -2806,8 +2804,7 @@ class ProducerTest {
     private static final int PAYLOAD_BYTES = 4096;
 
     static OneKeyframePerSecond of(int fragments) {
-      var initializationSegment =
-          IsoBoxes.concat(IsoBoxes.ftyp(), IsoBoxes.moov(IsoBoxes.Track.video().build()));
+      var initializationSegment = IsoBoxes.concat(IsoBoxes.ftyp(), videoOnlyMoov());
       var output = new ByteArrayOutputStream();
       output.writeBytes(initializationSegment);
       for (var fragment = 0; fragment < fragments; fragment++) {
