@@ -1,6 +1,7 @@
 package com.streamarr.transcode.engine;
 
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
+import com.streamarr.transcode.engine.GroupingOutcome.NothingClosed;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentClosed;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentNumberSkipped;
 import com.streamarr.transcode.engine.RebuiltSegment.SampleOf;
@@ -126,22 +127,27 @@ final class SegmentAssembler {
 
   private Closing closingOf(Fragment fragment) {
     audio.add(fragment);
-    var grouping = grouper.accept(fragment);
-    if (grouping instanceof SegmentNumberSkipped skipped) {
-      skipped.closedSegment().ifPresent(awaitingAudio::addLast);
-      return new Closing(closeEveryAwaiting(), Optional.of(skipped.failure()));
-    }
+    return switch (grouper.accept(fragment)) {
+      case NothingClosed _ -> Closing.of(closeEveryCompleted());
+      case SegmentClosed(var segment) -> {
+        awaitingAudio.addLast(segment);
+        yield Closing.of(closeEveryCompleted());
+      }
+      case SegmentNumberSkipped skipped -> {
+        skipped.closedSegment().ifPresent(awaitingAudio::addLast);
+        yield new Closing(closeEveryAwaiting(), Optional.of(skipped.failure()));
+      }
+    };
+  }
 
-    if (grouping instanceof SegmentClosed(var segment)) {
-      awaitingAudio.addLast(segment);
-    }
-
+  // Closes each segment awaiting audio, in order, once no audio of its interval can still arrive.
+  private List<ClosedSegment> closeEveryCompleted() {
     var closed = new ArrayList<ClosedSegment>();
     while (!awaitingAudio.isEmpty() && audio.hasPassed(awaitingAudio.getFirst().sequenceNumber())) {
       closed.add(closeFirstAwaiting(List.of()));
     }
 
-    return Closing.of(closed);
+    return closed;
   }
 
   private List<ClosedSegment> closeEveryAwaiting() {
