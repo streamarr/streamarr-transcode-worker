@@ -94,19 +94,8 @@ record VideoTrack(
     var flags =
         sample.flags().or(trackFragment.header()::defaultSampleFlags).orElse(defaultSampleFlags);
     var presentationTime =
-        addExact(baseMediaDecodeTimeOf(trackFragment.traf()), sample.compositionOffset());
+        addExact(trackFragment.baseMediaDecodeTime(), sample.compositionOffset());
     return new VideoStart(presentationTime, timescale, !isSet(flags, SAMPLE_IS_NON_SYNC_SAMPLE));
-  }
-
-  private static long baseMediaDecodeTimeOf(BoxView traf) {
-    var fields = traf.requiredChild("tfdt").fields();
-    var version = fields.u8();
-    fields.skip(3);
-    if (version == 1) {
-      return fields.s64();
-    }
-
-    return fields.u32();
   }
 
   private static long addExact(long decodeTime, long compositionOffset) {
