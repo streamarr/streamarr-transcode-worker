@@ -90,8 +90,9 @@ final class MovieFragmentWriter {
   }
 
   /**
-   * One track's samples of the segment, in decode order. Each sample lasts until the next one
-   * decodes, as the durations FFmpeg writes within one fragment do, and the last keeps its own.
+   * One track's samples of the segment, in decode order, of which there is at least one. Each
+   * sample lasts until the next one decodes, as the durations FFmpeg writes within one fragment do,
+   * and the last keeps its own.
    */
   static final class Track {
 
@@ -104,10 +105,6 @@ final class MovieFragmentWriter {
      *     composition offset does not fit a version 1 {@code trun}
      */
     Track(long trackId, @NonNull List<Sample> samples) {
-      if (samples.isEmpty()) {
-        throw new IllegalArgumentException("track " + trackId + " has no sample to write");
-      }
-
       samples.forEach(sample -> requireSignedCompositionOffset(trackId, sample));
       this.trackId = trackId;
       this.samples = List.copyOf(samples);

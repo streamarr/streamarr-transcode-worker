@@ -12,8 +12,9 @@ import lombok.NonNull;
 
 /**
  * The samples of one media segment, which the producer writes as one {@code moof} and one {@code
- * mdat}: video first, then audio, each in decode order. The rebuilt segment references the bytes of
- * the fragments that carried its samples instead of copying them.
+ * mdat}: video first, of which a keyframe that opens the segment guarantees one, then audio, each
+ * in decode order. The rebuilt segment references the bytes of the fragments that carried its
+ * samples instead of copying them.
  */
 final class RebuiltSegment implements ClosedSegment {
 
@@ -34,10 +35,6 @@ final class RebuiltSegment implements ClosedSegment {
       @NonNull List<SampleOf> videoSamples,
       @NonNull List<SampleOf> audioSamples,
       @NonNull Set<Fragment> stillHeld) {
-    if (videoSamples.isEmpty()) {
-      throw new IllegalArgumentException("media segment " + sequenceNumber + " has no video");
-    }
-
     this.sequenceNumber = sequenceNumber;
     this.videoSamples = List.copyOf(videoSamples);
     this.audioSamples = List.copyOf(audioSamples);
