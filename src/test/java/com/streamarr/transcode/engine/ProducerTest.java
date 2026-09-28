@@ -916,6 +916,20 @@ class ProducerTest {
                 keyframeFragment(24_000, 1)),
             "offsets a sample's composition by 2147483648"),
         Arguments.of(
+            "a decode time beyond a signed 64-bit value",
+            IsoBoxes.concat(
+                IsoBoxes.ftyp(),
+                videoOnly,
+                IsoBoxes.moof(
+                    IsoBoxes.videoTraf()
+                        .baseMediaDecodeTime(Long.MAX_VALUE)
+                        .decodeTimeVersion(1)
+                        .firstSampleFlags(IsoBoxes.SYNC_SAMPLE_FLAGS)
+                        .sampleDurations(List.of(1))
+                        .build()),
+                IsoBoxes.mdat(1)),
+            "a decode time overflows a signed 64-bit value"),
+        Arguments.of(
             "samples of a track the movie does not declare",
             IsoBoxes.concat(
                 IsoBoxes.ftyp(),
