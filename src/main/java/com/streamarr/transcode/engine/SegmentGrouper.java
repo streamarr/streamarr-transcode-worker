@@ -30,7 +30,8 @@ final class SegmentGrouper {
   /**
    * @param startSequenceNumber the first segment this job attempt delivers; segments below it are
    *     preroll and are discarded
-   * @param maximumSegmentBytes the largest media segment the grouper assembles
+   * @param maximumSegmentBytes the most bytes of FFmpeg's fragments the grouper holds for one media
+   *     segment, as read, which bounds what it holds rather than the segment rebuilt from them
    */
   SegmentGrouper(int periodSeconds, int startSequenceNumber, long maximumSegmentBytes) {
     if (periodSeconds <= 0 || startSequenceNumber < 0) {
