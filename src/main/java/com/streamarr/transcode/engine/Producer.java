@@ -47,7 +47,7 @@ public final class Producer {
 
   // The server's segment cap; the reader admits no initialization segment or fragment above it,
   // and the grouper assembles no media segment above it.
-  private static final long MAXIMUM_SEGMENT_BYTES = 16L * 1024 * 1024;
+  private static final long MAXIMUM_SEGMENT_BYTES = 128L * 1024 * 1024;
 
   // One segment awaiting acceptance and one assembling.
   static final long BUDGET_BYTES = 2 * MAXIMUM_SEGMENT_BYTES;
