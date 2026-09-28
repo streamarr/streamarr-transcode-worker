@@ -11,8 +11,8 @@ import java.util.stream.IntStream;
 /** The initialization segment and the fragments a reader returns from one stream, in order. */
 record Mp4Stream(InitializationSegment initializationSegment, List<Fragment> fragments) {
 
-  /** The server's 16 MiB segment cap. */
-  static final long SEGMENT_CAP = 16L * 1024 * 1024;
+  /** The server's 128 MiB segment cap. */
+  static final long SEGMENT_CAP = 128L * 1024 * 1024;
 
   static FragmentedMp4Reader readerOf(byte[] bytes) {
     return readerOf(new ByteArrayInputStream(bytes), SEGMENT_CAP);

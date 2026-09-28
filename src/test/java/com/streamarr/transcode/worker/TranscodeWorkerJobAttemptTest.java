@@ -72,8 +72,8 @@ class TranscodeWorkerJobAttemptTest {
   private static final int BURSTS = 10;
   private static final int BURST_SLOTS = 2;
 
-  // Six such fragments make a segment of about 15 MiB, within the server's 16 MiB cap.
-  private static final int GROWN_MEDIA_DATA_BYTES = 5 * 512 * 1024;
+  // Six such fragments make a segment of about 120 MiB, within the server's 128 MiB cap.
+  private static final int GROWN_MEDIA_DATA_BYTES = 20 * 1024 * 1024;
 
   @TempDir Path tempDir;
 
@@ -126,11 +126,19 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
-  @Test
+  @ParameterizedTest
+  @ValueSource(ints = {1, 17, 128})
   @DisplayName(
       "Should upload a segment in full-sized data messages when it is larger than one message")
-  void shouldUploadASegmentInFullSizedDataMessagesWhenItIsLargerThanOneMessage() throws Exception {
-    var output = withLargeFirstMediaData(bytesOf(ENCODED_RECORDING));
+  void shouldUploadASegmentInFullSizedDataMessagesWhenItIsLargerThanOneMessage(int segmentMiB)
+      throws Exception {
+    var segmentBytes = segmentMiB * 1024 * 1024;
+    var originalBytes =
+        Math.toIntExact(recording(ENCODED_RECORDING).segments().getFirst().byteLength());
+    var output =
+        withPaddedMediaData(
+            bytesOf(ENCODED_RECORDING),
+            fragment -> fragment == 0 ? segmentBytes - originalBytes : 0);
     var launcher =
         new ScriptedProcessLauncher(_ -> ScriptedProcess.builder().output(output).build());
     var job = variantJobBuilder().build();
@@ -149,8 +157,8 @@ class TranscodeWorkerJobAttemptTest {
               length -> assertThat(length).isPositive().isLessThanOrEqualTo(UPLOAD_MESSAGE_BYTES));
       assertThat(firstMediaSegment.dataMessageLengths().subList(0, 2))
           .containsOnly(UPLOAD_MESSAGE_BYTES);
-      assertThat(firstMediaSegment.metadata().getContentLengthBytes())
-          .isEqualTo(firstMediaSegment.content().length);
+      assertThat(firstMediaSegment.metadata().getContentLengthBytes()).isEqualTo(segmentBytes);
+      assertThat(firstMediaSegment.content()).hasSize(segmentBytes);
       var uploaded = new ByteArrayOutputStream();
       connection.uploads().forEach(upload -> uploaded.writeBytes(upload.content()));
       assertThat(uploaded.toByteArray()).isEqualTo(output);
@@ -285,7 +293,7 @@ class TranscodeWorkerJobAttemptTest {
   void
       shouldStartEachJobInASlotAStopFreedAndLetItsReaderTakeItsMemoryWhileTheStoppedAttemptsFfmpegStillRunsWhenStopsAndStartsArriveInBursts()
           throws Exception {
-    // Each attempt holds its first segment of about 15 MiB and the fragment that closed it while
+    // Each attempt holds its first segment of about 120 MiB and the fragment that closed it while
     // the server never acknowledges the initialization segment, so the stopped attempts would hold
     // more than the worker's budget leaves the new ones unless each stop releases its share.
     var recording = recording(ENCODED_RECORDING);

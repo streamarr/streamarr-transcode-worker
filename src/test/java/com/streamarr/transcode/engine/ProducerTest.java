@@ -57,8 +57,8 @@ class ProducerTest {
   private static final Duration POLL_INTERVAL = Duration.ofMillis(5);
   private static final UUID JOB_ATTEMPT_ID =
       UUID.fromString("0f6a3a9e-4c6b-4f59-9d0e-1c2b3a4d5e6f");
-  private static final long SERVER_SEGMENT_CAP_BYTES = 16L * 1024 * 1024;
-  private static final int NEARLY_CAPPED_FRAGMENT_PAYLOAD = 5 * 1024 * 1024;
+  private static final long SERVER_SEGMENT_CAP_BYTES = 128L * 1024 * 1024;
+  private static final int NEARLY_CAPPED_FRAGMENT_PAYLOAD = 40 * 1024 * 1024;
   private static final int RACE_ITERATIONS = 200;
   private static final int BURSTS = 12;
   private static final int BURST_SLOTS = 3;
@@ -342,7 +342,7 @@ class ProducerTest {
           + " waiting inside a fragment")
   void
       shouldFreeTheSegmentItWasAssemblingAtTheStopWhenAHungFfmpegLeavesTheReaderWaitingInsideAFragment() {
-    // Segment 0's three 5 MiB fragments and the first MiB of the next fragment's mdat, after which
+    // Segment 0's three 40 MiB fragments and the first MiB of the next fragment's mdat, after which
     // FFmpeg writes nothing more and ignores the quit.
     var hangOffset =
         IsoBoxes.ftyp().length
@@ -362,7 +362,7 @@ class ProducerTest {
     awaiting().until(process::hasReachedPause);
     assertThat(liveHeapBytes())
         .as("the reader holds three fragments and all of the next fragment's mdat")
-        .isGreaterThan(heldBeforeReading + 18L * 1024 * 1024);
+        .isGreaterThan(heldBeforeReading + 150L * 1024 * 1024);
 
     producer.requestStop();
 
@@ -383,7 +383,7 @@ class ProducerTest {
           + " replacement attempt outgrows the segment cap")
   void
       shouldHoldNoneOfTheDiscardedPrerollAgainstTheBudgetWhenThePrerollOfAReplacementAttemptOutgrowsTheSegmentCap() {
-    // Four 5 MiB keyframe fragments in segment 0, which an attempt from segment 1 discards.
+    // Four 40 MiB keyframe fragments in segment 0, which an attempt from segment 1 discards.
     var preroll =
         IsoBoxes.concat(
             keyframeFragment(0),
@@ -1695,7 +1695,7 @@ class ProducerTest {
         List.of(List.of(1001, 1001), List.of(1001, 1, 1001), List.of(1001)));
   }
 
-  // Three 1 s segments of three 5 MiB keyframe fragments each, nearly the segment cap: while the
+  // Three 1 s segments of three 40 MiB keyframe fragments each, nearly the segment cap: while the
   // first awaits acceptance, the second fills the rest of the budget.
   private static byte[] nearlyCappedSegments() {
     return IsoBoxes.concat(
