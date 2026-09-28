@@ -10,32 +10,36 @@ import lombok.NonNull;
  */
 public abstract sealed class ProducedSegment {
 
-  private final List<byte[]> boxes;
+  // Read-only views that nothing moves, so each call hands out duplicates.
+  private final List<ByteBuffer> parts;
 
-  private ProducedSegment(@NonNull List<byte[]> boxes) {
-    this.boxes = List.copyOf(boxes);
+  private ProducedSegment(@NonNull List<ByteBuffer> parts) {
+    this.parts = parts.stream().map(ByteBuffer::asReadOnlyBuffer).toList();
   }
 
   static Initialization of(@NonNull InitializationSegment segment) {
-    return new Initialization(List.of(segment.bytes()));
+    return new Initialization(List.of(ByteBuffer.wrap(segment.bytes())));
   }
 
   static Media of(@NonNull MediaSegment segment) {
     return new Media(
         segment.sequenceNumber(),
-        segment.fragments().stream().flatMap(fragment -> fragment.boxes().stream()).toList());
+        segment.fragments().stream()
+            .flatMap(fragment -> fragment.boxes().stream())
+            .map(ByteBuffer::wrap)
+            .toList());
   }
 
   /** The name the worker uploads the segment under. */
   public abstract String name();
 
   public long byteLength() {
-    return boxes.stream().mapToLong(box -> box.length).sum();
+    return parts.stream().mapToLong(ByteBuffer::remaining).sum();
   }
 
   /** The segment's bytes in order, as fresh read-only views on every call. */
   public List<ByteBuffer> content() {
-    return boxes.stream().map(box -> ByteBuffer.wrap(box).asReadOnlyBuffer()).toList();
+    return parts.stream().map(ByteBuffer::duplicate).toList();
   }
 
   @Override
@@ -46,8 +50,8 @@ public abstract sealed class ProducedSegment {
   /** The initialization segment. */
   public static final class Initialization extends ProducedSegment {
 
-    private Initialization(List<byte[]> boxes) {
-      super(boxes);
+    private Initialization(List<ByteBuffer> parts) {
+      super(parts);
     }
 
     @Override
@@ -61,8 +65,8 @@ public abstract sealed class ProducedSegment {
 
     private final int sequenceNumber;
 
-    private Media(int sequenceNumber, List<byte[]> boxes) {
-      super(boxes);
+    private Media(int sequenceNumber, List<ByteBuffer> parts) {
+      super(parts);
       this.sequenceNumber = sequenceNumber;
     }
 
