@@ -334,7 +334,7 @@ describe('fmp4 box reader command line', () => {
     const dump = JSON.parse(run.stdout);
 
     assert.equal(run.status, 0, run.stderr);
-    assert.equal(dump.initializationSegmentByteLength, 1348);
+    assert.equal(dump.initializationSegmentByteLength, 1328);
     assert.deepEqual(Object.keys(dump.tracks), ['1', '2']);
     assert.equal(dump.fragments[20].trafs[0].firstPresentationTime, 480480);
     assert.equal(dump.fragments[20].trafs[0].samples, undefined);

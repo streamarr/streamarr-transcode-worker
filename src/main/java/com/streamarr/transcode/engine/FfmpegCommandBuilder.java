@@ -161,13 +161,20 @@ public class FfmpegCommandBuilder {
   }
 
   private static List<String> copiedAudioArgs(String codec) {
+    var args = new ArrayList<>(List.of("-c:a", "copy"));
     // delay_moov stops the mp4 muxer from inserting this filter itself, and a copy of the ADTS
     // AAC that MPEG-TS sources carry fails without it. Raw AAC passes through unchanged.
     if ("aac".equals(codec)) {
-      return List.of("-c:a", "copy", "-bsf:a", "aac_adtstoasc");
+      args.addAll(List.of("-bsf:a", "aac_adtstoasc"));
     }
 
-    return List.of("-c:a", "copy");
+    // The mp4 muxer writes a copied stream's bitrate into the initialization segment's esds and
+    // btrt boxes: whatever the demuxer has measured when the output starts. Seeking an MPEG-TS
+    // source runs FFmpeg's audio parser over the frames the seek reads, so that average differs
+    // with the attempt's start. Zero declares the bitrate unknown, so that every job attempt of a
+    // variant writes the same initialization segment.
+    args.addAll(List.of("-b:a", "0"));
+    return List.copyOf(args);
   }
 
   private void addScaleAndBitrateArgs(List<String> cmd, TranscodeJob job) {

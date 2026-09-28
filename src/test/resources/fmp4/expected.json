@@ -3,7 +3,7 @@
     "image": "streamarr/streamarr-transcode-worker:0.1.0-SNAPSHOT@sha256:9d2d286c4f192e5e359cd7ead44ca05c7d0c720d491c3d5b4a6becfffcd61caa",
     "ffmpeg": "ffmpeg version 8.1.2-Jellyfin Copyright (c) 2000-2026 the FFmpeg developers"
   },
-  "recipe": "ffmpeg -y [-ss S: (K-1)*6 for an encode with K > 0, else the job's seek] -i SRC -map 0:v:0 -map 0:a:0 -map -0:s -map_metadata -1 -map_chapters -1 -copyts -avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128 <codec args> [-bsf:a aac_adtstoasc when copying AAC] [encode: -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6 in whole seconds, K = startSequenceNumber, N = mediaSegmentCount (-sc_threshold:v:0 0 for libx264) -g:v:0 145 = ceil(6 x 23.976) + 1 for an encoder verified to honour forced keyframes (libx264, SVT-AV1), else 143 = floor(6 x 23.976) (fixtures 11 and 13c) (-keyint_min:v:0 with the same value for SVT-AV1); fixtures 13 and 13b give libx265, not verified, 145 to test whether it qualifies] [fixtures 11 to 13 only: -t 30] -threads 1 -f mp4 -movflags cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont -frag_duration 1000000 pipe:1",
+  "recipe": "ffmpeg -y [-ss S: (K-1)*6 for an encode with K > 0, else the job's seek] -i SRC -map 0:v:0 -map 0:a:0 -map -0:s -map_metadata -1 -map_chapters -1 -copyts -avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128 <codec args> [copy: -bsf:a aac_adtstoasc when copying AAC, then -b:a 0] [encode: -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6 in whole seconds, K = startSequenceNumber, N = mediaSegmentCount (-sc_threshold:v:0 0 for libx264) -g:v:0 145 = ceil(6 x 23.976) + 1 for an encoder verified to honour forced keyframes (libx264, SVT-AV1), else 143 = floor(6 x 23.976) (fixtures 11 and 13c) (-keyint_min:v:0 with the same value for SVT-AV1); fixtures 13 and 13b give libx265, not verified, 145 to test whether it qualifies] [fixtures 11 to 13 only: -t 30] -threads 1 -f mp4 -movflags cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont -frag_duration 1000000 pipe:1",
   "rules": "ADR 0037: segment N = [N*P, (N+1)*P) on the zero-based timeline. A fragment whose video traf starts with a sync sample opens segment floor(presentationTime / (P * timescale)), or joins it when that segment is already open; every other fragment joins the open segment (or waits for the first one). Segments numbered below startSequenceNumber are discarded preroll; a sync-first fragment beyond the next deliverable number closes the open segment (delivered, or discarded when preroll) and then fails with a skipped segment number, grouping nothing from that fragment on. firstVideoPresentationTime = tfdt + first sample's composition offset, in videoTimescale ticks, no edit list.",
   "fixtures": [
     {
@@ -901,6 +901,8 @@
         "copy",
         "-bsf:a",
         "aac_adtstoasc",
+        "-b:a",
+        "0",
         "-threads",
         "1",
         "-f",
@@ -915,10 +917,10 @@
       "mediaSegmentCount": 11,
       "videoTrackId": 1,
       "videoTimescale": 12288,
-      "byteLength": 104133,
+      "byteLength": 104113,
       "initializationSegment": {
-        "byteLength": 1349,
-        "sha256": "ea95f1e00c063117ed0e911877c4d64e8327f9c8287607a5efdcc85ec0ad6d52",
+        "byteLength": 1329,
+        "sha256": "73ad19a74f1912f4cc17048fe4cd40ebe67813ed68f234163279a7c0b8d55786",
         "tracks": [
           {
             "trackId": 1,
@@ -1846,6 +1848,8 @@
         "copy",
         "-bsf:a",
         "aac_adtstoasc",
+        "-b:a",
+        "0",
         "-threads",
         "1",
         "-f",
@@ -1860,10 +1864,10 @@
       "mediaSegmentCount": 11,
       "videoTrackId": 1,
       "videoTimescale": 24000,
-      "byteLength": 106886,
+      "byteLength": 106866,
       "initializationSegment": {
-        "byteLength": 1348,
-        "sha256": "e83cdbefc32bc4d2e0647160b43693f24205ccc09dc92ac64044dfcf6e7663f5",
+        "byteLength": 1328,
+        "sha256": "fcf380d89d137b6159eda8376a6ae05fc8e859908dc23afc09c760fe2036a4b5",
         "tracks": [
           {
             "trackId": 1,
@@ -2698,6 +2702,8 @@
         "copy",
         "-bsf:a",
         "aac_adtstoasc",
+        "-b:a",
+        "0",
         "-threads",
         "1",
         "-f",
@@ -2712,10 +2718,10 @@
       "mediaSegmentCount": 6,
       "videoTrackId": 1,
       "videoTimescale": 90000,
-      "byteLength": 52405,
+      "byteLength": 52385,
       "initializationSegment": {
-        "byteLength": 1325,
-        "sha256": "d480ab5e888015d3532d6a75d2ec4cf4426e1abebb520cc4afca16a0a726d08a",
+        "byteLength": 1305,
+        "sha256": "9b728e14aa1fa40af47ef4505af49f237dc73572f5186412738f2df38d8649a2",
         "tracks": [
           {
             "trackId": 1,
@@ -3326,6 +3332,8 @@
         "copy",
         "-bsf:a",
         "aac_adtstoasc",
+        "-b:a",
+        "0",
         "-threads",
         "1",
         "-f",
@@ -3340,10 +3348,10 @@
       "mediaSegmentCount": 12,
       "videoTrackId": 1,
       "videoTimescale": 24000,
-      "byteLength": 104117,
+      "byteLength": 104097,
       "initializationSegment": {
-        "byteLength": 1348,
-        "sha256": "505f73a7c96dbc796f5c161c1772b3a6dcc6aa11c64b17b17e1b9fc7f976805a",
+        "byteLength": 1328,
+        "sha256": "38975fc0535d12aa37700234f287cda80b467b6cda2bde1765f66d6d8989b648",
         "tracks": [
           {
             "trackId": 1,
@@ -3881,6 +3889,8 @@
         "copy",
         "-bsf:a",
         "aac_adtstoasc",
+        "-b:a",
+        "0",
         "-threads",
         "1",
         "-f",
@@ -3895,10 +3905,10 @@
       "mediaSegmentCount": 12,
       "videoTrackId": 1,
       "videoTimescale": 24000,
-      "byteLength": 60228,
+      "byteLength": 60208,
       "initializationSegment": {
-        "byteLength": 1348,
-        "sha256": "505f73a7c96dbc796f5c161c1772b3a6dcc6aa11c64b17b17e1b9fc7f976805a",
+        "byteLength": 1328,
+        "sha256": "38975fc0535d12aa37700234f287cda80b467b6cda2bde1765f66d6d8989b648",
         "tracks": [
           {
             "trackId": 1,
@@ -5283,6 +5293,8 @@
         "copy",
         "-bsf:a",
         "aac_adtstoasc",
+        "-b:a",
+        "0",
         "-threads",
         "1",
         "-f",
@@ -5297,10 +5309,10 @@
       "mediaSegmentCount": 5,
       "videoTrackId": 1,
       "videoTimescale": 24000,
-      "byteLength": 38116,
+      "byteLength": 38096,
       "initializationSegment": {
-        "byteLength": 1348,
-        "sha256": "71a4b5f93eb69a7a0d778c7a6dcac7a1b49233dd0703a9422c62891ab864670b",
+        "byteLength": 1328,
+        "sha256": "049c5cd60716724de663688600bd2c90ad480231ce228fa930b3727a405b46ba",
         "tracks": [
           {
             "trackId": 1,
@@ -7098,12 +7110,12 @@
       ],
       "identical": true,
       "byteLengths": [
-        1348,
-        1348
+        1328,
+        1328
       ],
       "sha256": [
-        "505f73a7c96dbc796f5c161c1772b3a6dcc6aa11c64b17b17e1b9fc7f976805a",
-        "505f73a7c96dbc796f5c161c1772b3a6dcc6aa11c64b17b17e1b9fc7f976805a"
+        "38975fc0535d12aa37700234f287cda80b467b6cda2bde1765f66d6d8989b648",
+        "38975fc0535d12aa37700234f287cda80b467b6cda2bde1765f66d6d8989b648"
       ]
     },
     {
@@ -7133,11 +7145,11 @@
       "identical": false,
       "byteLengths": [
         1348,
-        1348
+        1328
       ],
       "sha256": [
         "c088712750a25550ba7163ef599051ee1641fda27dc09b273e5ceaf1284a107e",
-        "505f73a7c96dbc796f5c161c1772b3a6dcc6aa11c64b17b17e1b9fc7f976805a"
+        "38975fc0535d12aa37700234f287cda80b467b6cda2bde1765f66d6d8989b648"
       ]
     }
   ],

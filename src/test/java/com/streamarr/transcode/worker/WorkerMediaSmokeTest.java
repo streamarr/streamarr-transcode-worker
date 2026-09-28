@@ -37,8 +37,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -51,7 +53,9 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 @Tag("SmokeTest")
@@ -64,10 +68,23 @@ class WorkerMediaSmokeTest {
   // Media time of the long source; at a 1 s period it spans segments 0 to 1002.
   private static final int LONG_SOURCE_SECONDS = 1003;
 
+  // The seekable sources span segments 0 to 2 at the default 6 s period. A replacement attempt
+  // for segment 2 seeks to 12 s when it copies the video and to 6 s when it encodes it, so it
+  // starts past the source's first frame either way.
+  private static final int SEEKABLE_SOURCE_SECONDS = 18;
+  private static final int SEEKABLE_SOURCE_SEGMENT_COUNT = 3;
+  private static final int REPLACEMENT_START_SEQUENCE_NUMBER = 2;
+
   private static final Duration JOB_LIMIT = Duration.ofMinutes(5);
   private static final int PERMITTED_KEEPALIVE_SECONDS = 10;
 
   @TempDir static Path longSources;
+
+  @TempDir static Path seekableSources;
+
+  // A source joins only once FFmpeg has written it successfully, so that a later case generates it
+  // again instead of reading what a failed or timed-out run left behind.
+  private static final Set<Path> generatedSeekableSources = new HashSet<>();
 
   private static Path longSource;
 
@@ -266,6 +283,101 @@ class WorkerMediaSmokeTest {
     assertThat(uploads.names()).containsExactlyElementsOf(uploadNames(LONG_SOURCE_SECONDS));
     var start = playable(uploads.contentOf(List.of("init.mp4", "segment0.m4s")));
     assertThat(video(start).getCodec()).isEqualTo(codecFamily);
+  }
+
+  @ParameterizedTest(name = "{0} source, {1}")
+  @MethodSource("sourceContainersAndModes")
+  @DisplayName(
+      "Should upload the same initialization segment as an attempt from the start when a"
+          + " replacement attempt seeks into a real source")
+  void
+      shouldUploadTheSameInitializationSegmentAsAnAttemptFromTheStartWhenAReplacementAttemptSeeksIntoARealSource(
+          String container, TranscodeMode mode) throws Exception {
+    var source = seekableSource(container);
+    var fromStart = seekableSourceJob(source, mode);
+    var replacement = seekableSourceJob(source, mode);
+    replacement.getExecutionBuilder().setStartSequenceNumber(REPLACEMENT_START_SEQUENCE_NUMBER);
+
+    var fromStartUploads =
+        execute(engine(softwareCapabilities()), source.getParent(), fromStart.build());
+    var replacementUploads =
+        execute(engine(softwareCapabilities()), source.getParent(), replacement.build());
+
+    assertThat(replacementUploads.names()).containsExactly("init.mp4", "segment2.m4s");
+    assertThat(replacementUploads.segments())
+        .as("the replacement attempt's initialization segment")
+        .containsEntry("init.mp4", fromStartUploads.segments().get("init.mp4"));
+  }
+
+  static Stream<Arguments> sourceContainersAndModes() {
+    return Stream.of("mp4", "mkv", "ts")
+        .flatMap(
+            container ->
+                Stream.of(
+                        TranscodeMode.TRANSCODE_MODE_REMUX,
+                        TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE,
+                        TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE,
+                        TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE)
+                    .map(mode -> Arguments.of(container, mode)));
+  }
+
+  private static VariantJob.Builder seekableSourceJob(Path source, TranscodeMode mode) {
+    var job = variantJobBuilder();
+    job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
+    job.getDecisionBuilder()
+        .setMode(mode)
+        .getAudioBuilder()
+        .setMode(audioModeOf(mode))
+        .setCodec("aac")
+        .setChannels(2)
+        .setBitrateBitsPerSecond(128_000);
+    job.getVariantBuilder().setWidth(64).setHeight(36).setBitrateBitsPerSecond(100_000);
+    job.getExecutionBuilder().setMediaSegmentCount(SEEKABLE_SOURCE_SEGMENT_COUNT);
+    return job;
+  }
+
+  private static AudioMode audioModeOf(TranscodeMode mode) {
+    return switch (mode) {
+      case TRANSCODE_MODE_REMUX, TRANSCODE_MODE_VIDEO_TRANSCODE -> AudioMode.AUDIO_MODE_COPY;
+      default -> AudioMode.AUDIO_MODE_TRANSCODE;
+    };
+  }
+
+  // H.264 with a keyframe every 2 s, so that a stream copy's seek to a segment boundary lands on
+  // one, and pink noise, whose AAC frames vary in size as a real soundtrack's do. The MP4 and
+  // MPEG-TS sources carry the Matroska source's streams unchanged.
+  private static synchronized Path seekableSource(String container) throws Exception {
+    var matroska = seekableSources.resolve("seekable.mkv");
+    if (!generatedSeekableSources.contains(matroska)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24",
+              "-f",
+              "lavfi",
+              "-i",
+              "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5",
+              "-t",
+              String.valueOf(SEEKABLE_SOURCE_SECONDS),
+              "-c:v",
+              "libx264",
+              "-g",
+              "48",
+              "-c:a",
+              "aac"),
+          matroska);
+      generatedSeekableSources.add(matroska);
+    }
+
+    var source = seekableSources.resolve("seekable." + container);
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(List.of("-i", matroska.toString(), "-c", "copy"), source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
   }
 
   private MediaUploads execute(FfmpegTranscodeEngine engine, Path sourceRoot, VariantJob job)
