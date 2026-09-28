@@ -1578,8 +1578,9 @@ class WorkerMediaSmokeTest {
   @DisplayName(
       "Should upload each media segment with exactly FFmpeg's audio packets that start inside its"
           + " interval when a worker runs a real job")
-  void shouldUploadEachMediaSegmentWithExactlyFfmpegsAudioPacketsThatStartInsideItsInterval(
-      String container, TranscodeMode mode, int startSequenceNumber) throws Exception {
+  void
+      shouldUploadEachMediaSegmentWithExactlyFfmpegsAudioPacketsThatStartInsideItsIntervalWhenAWorkerRunsARealJob(
+          String container, TranscodeMode mode, int startSequenceNumber) throws Exception {
     var run = runSeekableSourceJob(container, mode, startSequenceNumber);
 
     var ffmpegAudio =

@@ -181,9 +181,11 @@ class ProducerTest {
   @MethodSource("recordings")
   @DisplayName(
       "Should deliver each audio sample in the media segment whose interval holds its start, apart"
-          + " from segment zero's priming frame and the last segment's tail")
-  void shouldDeliverEachAudioSampleInTheMediaSegmentWhoseIntervalHoldsItsStart(
-      Recording recording) {
+          + " from segment zero's priming frame and the last segment's tail, when FFmpeg writes it in"
+          + " another segment's fragment")
+  void
+      shouldDeliverEachAudioSampleInTheMediaSegmentWhoseIntervalHoldsItsStartWhenFfmpegWritesItInAnotherSegmentsFragment(
+          Recording recording) {
     var outcome = deliverEverySegmentOf(recording);
 
     var names = mediaSegmentNames();
@@ -212,8 +214,9 @@ class ProducerTest {
   @ParameterizedTest(name = "{0}")
   @MethodSource("recordings")
   @DisplayName(
-      "Should deliver every audio sample FFmpeg writes for the delivered segments exactly once")
-  void shouldDeliverEveryAudioSampleFfmpegWritesForTheDeliveredSegmentsExactlyOnce(
+      "Should deliver every audio sample FFmpeg writes exactly once when it rebuilds the media"
+          + " segments")
+  void shouldDeliverEveryAudioSampleFfmpegWritesExactlyOnceWhenItRebuildsTheMediaSegments(
       Recording recording) {
     var outcome = deliverEverySegmentOf(recording);
 
@@ -231,9 +234,10 @@ class ProducerTest {
   })
   @DisplayName(
       "Should start a stream-copy replacement attempt's audio where the start-0 attempt's segment"
-          + " before it ends when the replacement attempt's first segment follows that segment")
-  void shouldStartAStreamCopyReplacementAttemptsAudioWhereTheStartZeroAttemptsSegmentBeforeItEnds(
-      String startZeroAttempt, String replacementAttempt) {
+          + " ends when its first segment follows that segment")
+  void
+      shouldStartAStreamCopyReplacementAttemptsAudioWhereTheStartZeroAttemptsSegmentEndsWhenItsFirstSegmentFollowsThatSegment(
+          String startZeroAttempt, String replacementAttempt) {
     var replacement = recording(replacementAttempt);
     var junction = replacement.startSequenceNumber();
 
