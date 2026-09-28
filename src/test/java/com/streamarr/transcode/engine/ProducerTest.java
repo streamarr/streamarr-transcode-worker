@@ -1082,6 +1082,38 @@ class ProducerTest {
 
   @Test
   @DisplayName(
+      "Should fail a replacement attempt as malformed output when an audio sample's presentation"
+          + " time overflows a signed 64-bit value")
+  void shouldFailAReplacementAttemptAsMalformedOutputWhenAnAudioSamplesPresentationTimeOverflows() {
+    var output =
+        IsoBoxes.concat(
+            IsoBoxes.ftyp(),
+            IsoBoxes.videoAndAudioMoov(),
+            IsoBoxes.moof(
+                IsoBoxes.videoTraf()
+                    .baseMediaDecodeTime(24_000L)
+                    .firstSampleFlags(IsoBoxes.SYNC_SAMPLE_FLAGS)
+                    .build(),
+                IsoBoxes.audioTraf()
+                    .decodeTimeVersion(1)
+                    .baseMediaDecodeTime(Long.MAX_VALUE - 1024)
+                    .sampleDurations(List.of(1024))
+                    .compositionOffset(2048)
+                    .build()),
+            IsoBoxes.mdat(2),
+            keyframeFragment(48_000, 1));
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer = producerOfOneSecondSegments(process).startSequenceNumber(1).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.MALFORMED_OUTPUT);
+    assertThat(failure.detail()).contains("presentation time overflows");
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+  }
+
+  @Test
+  @DisplayName(
       "Should deliver the closed segment, then fail the attempt and end FFmpeg, when source"
           + " keyframes are further apart than the period")
   void

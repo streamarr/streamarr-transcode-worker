@@ -52,16 +52,7 @@ record VideoTrack(long trackId, long timescale) {
   }
 
   private VideoStart videoStart(Sample sample) {
-    var presentationTime = addExact(sample.decodeTime(), sample.compositionOffset());
     return new VideoStart(
-        presentationTime, timescale, !isSet(sample.flags(), SAMPLE_IS_NON_SYNC_SAMPLE));
-  }
-
-  private static long addExact(long decodeTime, long compositionOffset) {
-    try {
-      return Math.addExact(decodeTime, compositionOffset);
-    } catch (ArithmeticException _) {
-      throw FragmentedMp4Exception.malformed("presentation time overflows a signed 64-bit value");
-    }
+        sample.presentationTime(), timescale, !isSet(sample.flags(), SAMPLE_IS_NON_SYNC_SAMPLE));
   }
 }

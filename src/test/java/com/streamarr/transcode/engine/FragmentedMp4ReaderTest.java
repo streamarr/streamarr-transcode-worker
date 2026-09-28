@@ -719,6 +719,24 @@ class FragmentedMp4ReaderTest {
   }
 
   @Test
+  @DisplayName(
+      "Should fail when an audio sample's presentation time overflows a signed 64-bit value")
+  void shouldFailWhenAnAudioSamplesPresentationTimeOverflowsASigned64BitValue() {
+    var moof =
+        moof(
+            syncVideoTraf().baseMediaDecodeTime(0L).build(),
+            audioTraf()
+                .decodeTimeVersion(1)
+                .baseMediaDecodeTime(Long.MAX_VALUE - 1024)
+                .sampleDurations(List.of(1024))
+                .compositionOffset(2048)
+                .build());
+
+    assertFailure(
+        readerOf(concat(ftyp(), videoAndAudioMoov(), moof, mdat(2))), Reason.MALFORMED_BOX);
+  }
+
+  @Test
   @DisplayName("Should fail when a video traf holds samples but no tfdt")
   void shouldFailWhenAVideoTrafHoldsSamplesButNoTfdt() {
     var moof = moof(syncVideoTraf().build());

@@ -16,6 +16,18 @@ record Sample(
     int flags,
     int mediaDataPosition) {
 
+  /**
+   * @throws FragmentedMp4Exception when the presentation time, the decode time plus the composition
+   *     offset, overflows a signed 64-bit value
+   */
+  Sample {
+    try {
+      Math.addExact(decodeTime, compositionOffset);
+    } catch (ArithmeticException _) {
+      throw FragmentedMp4Exception.malformed("presentation time overflows a signed 64-bit value");
+    }
+  }
+
   long presentationTime() {
     return decodeTime + compositionOffset;
   }
