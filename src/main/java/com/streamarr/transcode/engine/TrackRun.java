@@ -3,7 +3,6 @@ package com.streamarr.transcode.engine;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.OptionalLong;
 import java.util.function.IntSupplier;
 import java.util.function.LongSupplier;
 import lombok.Builder;
@@ -39,23 +38,6 @@ final class TrackRun {
     return run;
   }
 
-  /**
-   * The first sample's flags (the run's first-sample flags, else its own) and composition offset;
-   * empty when the run holds no sample.
-   */
-  Optional<FirstSample> firstSample() {
-    if (header.sampleCount() == 0) {
-      return Optional.empty();
-    }
-
-    var fields =
-        sampleTable().skipIf(header.has(SAMPLE_DURATION), 4).skipIf(header.has(SAMPLE_SIZE), 4);
-    var sampleFlags = fields.s32If(header.has(SAMPLE_FLAGS));
-    var compositionOffset = header.compositionOffsetOf(fields);
-    return Optional.of(
-        new FirstSample(firstSampleFlags().or(() -> sampleFlags), compositionOffset));
-  }
-
   /** The run's data offset from its {@code traf}'s base, when the run declares one. */
   Optional<Integer> dataOffset() {
     return optionalFields().s32If(header.has(DATA_OFFSET));
@@ -85,33 +67,6 @@ final class TrackRun {
     }
 
     return bytes;
-  }
-
-  /**
-   * The shortest duration among the run's samples: each sample's own duration, else the default;
-   * empty when the run holds no sample.
-   */
-  OptionalLong shortestSampleDuration(LongSupplier defaultSampleDuration) {
-    if (header.sampleCount() == 0) {
-      return OptionalLong.empty();
-    }
-
-    if (!header.has(SAMPLE_DURATION)) {
-      return OptionalLong.of(defaultSampleDuration.getAsLong());
-    }
-
-    var fields = sampleTable();
-    var afterDuration =
-        4
-            * Integer.bitCount(
-                header.flags() & (SAMPLE_SIZE | SAMPLE_FLAGS | SAMPLE_COMPOSITION_TIME_OFFSET));
-    var shortest = Long.MAX_VALUE;
-    for (var sample = 0L; sample < header.sampleCount(); sample++) {
-      shortest = Math.min(shortest, fields.u32());
-      fields.skip(afterDuration);
-    }
-
-    return OptionalLong.of(shortest);
   }
 
   long sampleCount() {
@@ -172,9 +127,6 @@ final class TrackRun {
   /** One sample's fields as the run and the defaults give them. */
   @Builder
   record Entry(long duration, long size, int flags, long compositionOffset) {}
-
-  /** A run's first sample: its flags, when the run declares any, and its composition offset. */
-  record FirstSample(Optional<Integer> flags, long compositionOffset) {}
 
   private record Header(int version, int flags, long sampleCount) {
 

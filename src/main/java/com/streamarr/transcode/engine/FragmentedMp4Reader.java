@@ -8,7 +8,6 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.OptionalLong;
 import java.util.stream.Stream;
 import lombok.NonNull;
 
@@ -136,21 +135,16 @@ final class FragmentedMp4Reader {
             .build();
     declared.sampleRanges().requireInside(trackFragments, mediaData);
     var tracks = declared.tracks();
-    var videoStart = tracks.video().flatMap(track -> track.startOf(trackFragments));
-    var shortestVideoSampleDuration =
-        tracks
-            .video()
-            .map(track -> track.shortestSampleDurationOf(trackFragments))
-            .orElseGet(OptionalLong::empty);
     var trackSamples = declared.sampleRanges().samplesOf(trackFragments, mediaData);
     requireDeclaredTracks(tracks, trackSamples);
+    var videoSamples = samplesOf(tracks.video().map(VideoTrack::trackId), trackSamples);
     return Optional.of(
         Fragment.builder()
             .boxes(List.of(moof, mdat))
             .tracks(tracks)
-            .videoStart(videoStart)
-            .shortestVideoSampleDuration(shortestVideoSampleDuration)
-            .videoSamples(samplesOf(tracks.video().map(VideoTrack::trackId), trackSamples))
+            .videoStart(tracks.video().flatMap(track -> track.startOf(videoSamples)))
+            .shortestVideoSampleDuration(videoSamples.stream().mapToLong(Sample::duration).min())
+            .videoSamples(videoSamples)
             .audioSamples(samplesOf(tracks.audio().map(AudioTrack::trackId), trackSamples))
             .build());
   }
