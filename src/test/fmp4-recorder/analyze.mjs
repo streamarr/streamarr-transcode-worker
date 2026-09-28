@@ -126,6 +126,19 @@ const FIXTURES = [
     ],
   },
   {
+    name: '05-copy-late-start-seek12', source: 'late.ts', mode: 'copy', encoder: null, seek: 12, start: 2,
+    proves: 'Stream-copy replacement attempt of the same MPEG-TS source from segment 2 (-ss 12): the MPEG-TS demuxer ' +
+      'lands on the keyframe at 12.033 s, just after the boundary, so no fragment is preroll, and its first fragment ' +
+      'carries the audio from 11.861 s, eight AAC frames before the boundary, which segment 1 of 05-copy-late-start ' +
+      'holds. Segments 2 to 4 carry the start-0 recording\'s video samples at the same ticks.',
+    hlsComparisons: [
+      hlsComparison('05-copy-late-start.hls-recipe-adtstoasc', 'hls-recipe', {
+        reference: '05-copy-late-start',
+        restrict: true,
+      }),
+    ],
+  },
+  {
     name: '06-encode-audio-tail', source: 'tail.mp4', mode: 'encode', encoder: 'libx264', seek: 0, start: 0,
     proves: 'Audio outlasts video by 3.5 s: the recording ends in audio-only fragments (no video traf), which ' +
       'join the last open segment; none precedes the first segment.',
@@ -240,11 +253,25 @@ const FIXTURES = [
       'keyframe. Every keyframe is an IDR picture (NAL type 20).',
     hlsComparisons: [hlsComparison('13-x265-cfr-floored-gop.video-only', 'pipe-recipe', { audio: false })],
   },
+  {
+    name: '14-copy-audio-ends-early', source: 'short-audio.mp4', mode: 'copy', encoder: null, seek: 0, start: 0,
+    proves: 'Stream copy of a source whose 8 s of audio end 12 s before its 20 s of video: from 8.008 s on FFmpeg ' +
+      'writes fragments with a video traf alone, so no audio sample at or after a later boundary ever arrives.',
+    hlsComparisons: [
+      hlsComparison('14-copy-audio-ends-early.hls-recipe', 'hls-recipe'),
+      hlsComparison('14-copy-audio-ends-early.video-only', 'pipe-recipe', { audio: false }),
+    ],
+  },
 ];
 
 const INITIALIZATION_SEGMENT_IDENTITY_PAIRS = [
   ['encode (libx264), start 0 vs a replacement attempt from segment 5', '01-encode-cfr', '01-encode-cfr-seek30'],
   ['stream copy, start 0 vs a replacement attempt from segment 5', '07-copy-start0', '07-copy-seek30'],
+  [
+    'stream copy of an MPEG-TS source, start 0 vs a replacement attempt from segment 2',
+    '05-copy-late-start',
+    '05-copy-late-start-seek12',
+  ],
   ['encode (libsvtav1), start 0 vs a replacement attempt from segment 5', '09-svtav1-vfr', '09-svtav1-vfr-seek30'],
   ['encode (libx265), start 0 vs a replacement attempt from segment 5', '13-x265-cfr', '13-x265-cfr-seek30'],
 ];

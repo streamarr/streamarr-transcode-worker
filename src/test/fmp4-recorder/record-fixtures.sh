@@ -195,6 +195,10 @@ VFR_SELECT="select='if(lt(n,300),gte(mod(n*7919,97),20),if(lt(n,600),not(mod(n,2
 "${FF[@]}" -f lavfi -i "$(lavfi 24000/1001 20)" -f lavfi -i "$SILENCE:duration=23.5" -map 0:v -map 1:a \
   "${SRC_X264[@]}" -g 48 -keyint_min 48 "${SRC_AAC[@]}" -fflags +bitexact src/tail.mp4
 
+# Audio ends before the video: 20 s of video, 8 s of audio.
+"${FF[@]}" -f lavfi -i "$(lavfi 24000/1001 20)" -f lavfi -i "$SILENCE:duration=8" -map 0:v -map 1:a \
+  "${SRC_X264[@]}" -g 48 -keyint_min 48 "${SRC_AAC[@]}" -fflags +bitexact src/short-audio.mp4
+
 # A keyframe every 240 frames (10.01 s): wider than the period, so a segment number is skipped.
 "${FF[@]}" -f lavfi -i "$(lavfi 24000/1001 25)" -f lavfi -i "$SILENCE:duration=25" -map 0:v -map 1:a \
   "${SRC_X264[@]}" -g 240 -keyint_min 240 "${SRC_AAC[@]}" -fflags +bitexact src/gop10.mp4
@@ -242,6 +246,8 @@ run hls 05-copy-late-start.hls-recipe hls-recipe src/late.ts -- "${COPY_HLS[@]}"
 # ... so the copy's HLS comparison adds the bitstream filter.
 run hls 05-copy-late-start.hls-recipe-adtstoasc hls-recipe src/late.ts -- "${COPY_PIPE[@]}"
 run hls 05-copy-late-start.video-only video src/late.ts -- "${COPY_PIPE[@]}"
+# The stream-copy replacement attempt for segment 2 of the MPEG-TS source.
+run pipe 05-copy-late-start-seek12 start=2 seek=12 src/late.ts -- "${COPY_PIPE[@]}"
 
 # ------------------------------------------------------------------ 6. audio outlasts video
 run pipe 06-encode-audio-tail src/tail.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}"
@@ -286,6 +292,11 @@ run pipe 13-x265-cfr-missed-forced-keyframe duration=30 skip=18 src/cfr.mp4 -- "
 run hls 13-x265-cfr-missed-forced-keyframe.video-only video duration=30 skip=18 src/cfr.mp4 -- "${X265[@]}" "${KEY_X265_PIPE[@]}"
 run pipe 13-x265-cfr-floored-gop duration=30 src/cfr.mp4 -- "${X265[@]}" "${AAC[@]}" "${KEY_X265_PIPE_FLOORED[@]}"
 run hls 13-x265-cfr-floored-gop.video-only video duration=30 src/cfr.mp4 -- "${X265[@]}" "${KEY_X265_PIPE_FLOORED[@]}"
+
+# ------------------------------------------------------------------ 14. audio that ends before the video
+run pipe 14-copy-audio-ends-early src/short-audio.mp4 -- "${COPY_PIPE[@]}"
+run hls 14-copy-audio-ends-early.hls-recipe hls-recipe src/short-audio.mp4 -- "${COPY_HLS[@]}"
+run hls 14-copy-audio-ends-early.video-only video src/short-audio.mp4 -- "${COPY_PIPE[@]}"
 
 # ------------------------------------------------------------------ side claims of ADR 0037 (recorded, not delivered)
 mkdir -p claims

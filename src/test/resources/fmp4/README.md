@@ -7,7 +7,10 @@ in `expected.json` records every segment whose cut point differs from the grid, 
 explains the cause.
 `RecordedFfmpegOutputTest` runs the real `FragmentedMp4Reader` and `SegmentGrouper` over every
 recording and asserts `expected.json`, so the reader and grouper are pinned to the worker's own
-FFmpeg output (ADR "Tests substitute the process"). `FfmpegCommandBuilderRecipeTest` builds the
+FFmpeg output (ADR "Tests substitute the process"). `ProducerTest` replays every recording through
+the real producer, which rebuilds each media segment the grouper closes as one `moof` and one
+`mdat` and places each audio sample in the segment whose interval holds its start, and checks the
+delivered samples against the recording's own, sample by sample. `FfmpegCommandBuilderRecipeTest` builds the
 worker's FFmpeg command for every recording that follows the recipe (no `recipeDeviation`) and
 requires it to equal that recording's `ffmpegArguments` without the fixture-only additions, so the
 recordings and the worker's command cannot drift apart. `FfmpegRecordings` loads a recording and its
@@ -124,9 +127,10 @@ timestamp with those absolute media times, so it forces the first frame at or af
 and every attempt forces the same frame at a boundary it shares with another attempt. The recorder
 derives N as the server does: the probed duration in whole milliseconds over the period, rounded up.
 That is 12 for `cfr.mp4` (66.024 s), 11 for `vfr.mp4` and `irregular.mp4` (66 s), 6 for `late.ts`
-(30.051 s), 5 for `gop10.mp4` (25.025 s), 4 for `tail.mp4` (23.5 s) and 5 for the first 30 s that
-fixtures 11, 12, 12b, 13b and 13c read. A start-0 encode of `cfr.mp4` therefore receives `0,6,…,66`
-and its replacement attempts 1b and 13d `30,36,…,66`; a time past the last video frame forces nothing.
+(30.051 s), 5 for `gop10.mp4` (25.025 s), 4 for `tail.mp4` (23.5 s) and `short-audio.mp4` (20.02 s),
+and 5 for the first 30 s that fixtures 11, 12, 12b, 13b and 13c read. A start-0 encode of `cfr.mp4`
+therefore receives `0,6,…,66` and its replacement attempts 1b and 13d `30,36,…,66`; a time past the
+last video frame forces nothing.
 
 A replacement attempt from segment K > 0 is a job that seeks to K × 6 (`seekSeconds`, 30 s for 1b,
 7b, 9b and 13d). A stream copy passes that seek to FFmpeg (`-ss 30`) and lands on the keyframe at or before
@@ -162,7 +166,8 @@ order the worker's command builder passes them.
 - `segments` is what the grouper must deliver. Each entry is `number`, `firstVideoPresentationTime`,
   `firstFragmentIndex`, `fragmentCount`, `syncFirstFragmentCount` and `byteLength` (the sum of that
   segment's `moof`+`mdat` bytes, concatenated in arrival order). Fragment indexes count fragments
-  after the initialization segment, from 0.
+  after the initialization segment, from 0. The producer delivers the video samples of those
+  fragments, rebuilt as one `moof` and one `mdat`; its audio samples follow their own start instead.
 - `ffmpegArguments` is the recording run's FFmpeg command line exactly as it ran, one argument per
   entry, fixture-only additions included (see [Recipe](#recipe)).
 - `seekSeconds` is the job's seek position, the start sequence number times the period; an encode's
@@ -205,6 +210,7 @@ Timescale 24000 unless stated. `n@t` means segment n starts at t seconds.
 | 4 | `04-copy-vfr-bframes.fmp4` | 0 | VFR stream copy with B-frames and one or two keyframes per interval. Keyframes at 5.922, 29.988, 47.922 and 59.976 s, just before a boundary, stay in the earlier segment. The keyframe meant for 17.95 s landed at 18.017 s (dropped frames) and opens segment 3. |
 | 5a | `05-encode-late-start.fmp4` | 0 | MPEG-TS source whose timestamps begin at 12 s. The container start is the AAC priming frame (11.978667 s), so video starts at 0.0417 s (encode): segment 0, not 2. The server advertises 6 segments for the 30.051 s source, and the last output frame (30.030 s) is the first at or after 30 s, so the list forces it: 6 segments, the last a 1-frame segment 5 with no audio-only fragment after it. |
 | 5b | `05-copy-late-start.fmp4` | 0 | Timescale 90000. The same source copied with `-bsf:a aac_adtstoasc`: video starts at 0.0213 s, keyframes every 2.002 s, 5 segments. |
+| 5c | `05-copy-late-start-seek12.fmp4` | 2 | Timescale 90000. Stream-copy replacement attempt of the same source from segment 2 (`-ss 12`). The MPEG-TS demuxer lands on the keyframe at 12.033 s, after the boundary, so nothing is preroll, and its first fragment carries audio from 11.861 s: eight AAC frames before the boundary, which segment 1 of 5b holds. Segments 2–4 carry 5b's video samples at the same ticks. Ends with one audio-only fragment. |
 | 6 | `06-encode-audio-tail.fmp4` | 0 | 20 s video, 23.5 s audio. The recording ends in 4 audio-only fragments (19.95, 20.95, 21.95, 22.95 s), which join segment 3. No fragment without video precedes the first segment. |
 | 7 | `07-copy-start0.fmp4` | 0 | 2.002 s-GOP 23.976 fps copy from the start: 11 segments of 3 keyframes each. |
 | 7b | `07-copy-seek30.fmp4` | 5 | Stream-copy replacement attempt at `-ss 30`. The seek lands on the keyframe at 28.028 s (segment 4 < 5). That keyframe fragment and the non-sync fragment after it (2 fragments) are discarded preroll. Segments 5–10 carry exactly 7's video samples at the same ticks. Their audio is the same packets at the same times, but each fragment starts one AAC frame earlier (see findings). |
@@ -219,14 +225,15 @@ Timescale 24000 unless stated. `n@t` means segment n starts at t seconds.
 | 13b | `13-x265-cfr-missed-forced-keyframe.fmp4` | 0 | libx265 with 18 left out of the list: its GOP count restarts at frame 288 as well, and the backstop comes at frame 433 inside interval 3 as an IDR picture (NAL type 20). So the segment it opens decodes on its own. |
 | 13c | `13-x265-cfr-floored-gop.fmp4` | 0 | libx265 with the worker's arguments under the floored GOP of 143 frames of an encoder that is not keyframe-verified, first 30 s. As in 11, the GOP keyframe one frame before every later boundary (frames 143, 287, 431, 575) and on the last frame (719) joins the earlier segment: 5 segments of two keyframes, each opening at its forced keyframe. Every keyframe is an IDR picture (NAL type 20). |
 | 13d | `13-x265-cfr-seek30.fmp4` | 5 | The libx265 replacement attempt from segment 5, seeking one period early (`-ss 24`): starts at 24.024 s, and segment 4 is discarded preroll. The list `30,36,…,66` forces the frames 13 forced (720, 864, 1007, 1151, 1295, 1439), so every delivered segment, 5–10, starts on exactly 13's ticks. Every keyframe is an IDR picture. Ends with one audio-only fragment. |
+| 14 | `14-copy-audio-ends-early.fmp4` | 0 | 20 s of video, 8 s of audio, copied. From 8.008 s on FFmpeg writes fragments with a video `traf` alone, so no audio sample ever starts at or after the end of segments 1–3; 4 segments, the last from 18.018 s. |
 
 Box facts every recording shares (useful for the reader):
 - Top-level boxes are only `ftyp`, `moov`, `moof` and `mdat`, in that order, with no `largesize`, `styp` or `sidx`.
 - `moov` holds `mvhd`, two `trak`s (video track 1, audio track 2), `mvex` and `udta`. The video sample entry is `avc1` (libx264 and copies), `av01` (SVT-AV1) or `hvc1` (libx265).
 - Every `traf` has `tfhd` flags `0x02003a` (default-base-is-moof plus default duration, size and flags), `tfdt` version 1 and exactly one `trun`.
 - Every `trun` is version 1 (signed composition offsets) with a data offset. Sync status is carried by `trun` first_sample_flags (0x4) when present, otherwise by the `tfhd` default flags. Per-sample flags (0x400) never occur.
-- The largest fragment is 3.0 KB; every keyframe starts a fragment.
-- The first audio `tfdt` is 2^64 − 1024: the unsigned wrap of −1024, the AAC priming.
+- The largest fragment is 3.4 KB; every keyframe starts a fragment.
+- In every recording from the start the first audio `tfdt` is 2^64 − 1024: the unsigned wrap of −1024, the AAC priming.
 
 ## Verified encoders
 
@@ -306,6 +313,7 @@ Agreement, exact in ticks:
 | 3 | differs on 1–10 | differs on 1–10 | reference 1 |
 | 5a | differs on 1–5 | – | its pipe-keyframes-with-audio run differs on 1–5 (reference 1); a video-only run starts its video one frame earlier (see Observations) |
 | 5b | agrees (with `aac_adtstoasc` added; the HLS recipe's exact copy exits 255) | agrees | |
+| 5c | agrees with the start-0 recording's HLS output on 2–4 | – | |
 | 7b | agrees with the start-0 recording's HLS output | – | its own HLS run is misaligned: 28.028, 34.034, 40.040 … as ADR 0037 describes |
 | 9 | differs on 1–10 | differs on 1–10 | hls-recipe is a different encode (4 below); video-only as reference 1; its pipe-keyframes-with-audio run agrees (reference 3) |
 | 9b | – | differs on 7–10 | agrees with 9's pipe-keyframes-with-audio run on 5–10 |
@@ -313,6 +321,7 @@ Agreement, exact in ticks:
 | 4 | differs on segment 3 | differs on segment 3 | reference 1 below |
 | 10 | differs on segment 2 | – | the HLS muxer numbers sequentially and never skips |
 | 11, 12, 12b, 13, 13b, 13c | – | agrees | the first video frame is at zero, so hlsenc measures from the grid's zero |
+| 14 | agrees | agrees | |
 
 The list anchors the pipe recipe's keyframes on the zero-based timeline, while hlsenc and the HLS
 recipe's expression both measure from the attempt's first frame. Before the list, the pipe recipe forced
@@ -466,6 +475,6 @@ settle what, if anything, changes because of them.
   than the first attempt's. So the replacement attempt's segment 5 begins with the first attempt's
   segment 4's last AAC frame: 21.3 ms of audio heard twice, not a gap. Video is identical.
 - **Trailing audio-only fragments are common, not exceptional.** With 48 kHz audio they end 1, 1b, 2,
-  3, 4, 5b, 10, 12, 13, 13b and 13d, as well as 6.
+  3, 4, 5b, 5c, 10, 12, 13, 13b and 13d, as well as 6.
 - `hlsenc` measures fMP4 cut points in the video time base from a reference that can be an audio
   packet's pts. That is a latent defect of the HLS recipe's fMP4 path (reference 3 above).
