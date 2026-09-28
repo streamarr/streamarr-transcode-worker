@@ -27,7 +27,8 @@ record VideoTrack(
   static Optional<VideoTrack> of(BoxView moov, Map<Long, TrackExtends> trackExtends) {
     var videoTraks =
         moov.children("trak").stream()
-            .filter(trak -> handlerOf(trak).equals(VIDEO_HANDLER))
+            .map(TrackBox::new)
+            .filter(trak -> trak.handler().equals(VIDEO_HANDLER))
             .toList();
     if (videoTraks.size() > 1) {
       throw new FragmentedMp4Exception(
@@ -70,44 +71,15 @@ record VideoTrack(
         .min();
   }
 
-  private static VideoTrack fromTrak(BoxView trak, Map<Long, TrackExtends> trackExtends) {
-    var trackId = trackIdOf(trak.requiredChild("tkhd"));
-    var timescale = timescaleOf(trak.requiredChild("mdia").requiredChild("mdhd"));
+  private static VideoTrack fromTrak(TrackBox trak, Map<Long, TrackExtends> trackExtends) {
+    var trackId = trak.trackId();
+    var timescale = trak.timescale();
     var defaults =
         Optional.ofNullable(trackExtends.get(trackId))
             .orElseThrow(
                 () -> FragmentedMp4Exception.malformed("mvex holds no trex for track " + trackId));
     return new VideoTrack(
         trackId, timescale, defaults.defaultSampleDuration(), defaults.defaultSampleFlags());
-  }
-
-  private static String handlerOf(BoxView trak) {
-    return trak.requiredChild("mdia").requiredChild("hdlr").fields().skip(8).fourcc();
-  }
-
-  private static long trackIdOf(BoxView tkhd) {
-    var fields = tkhd.fields();
-    var version = fields.u8();
-    return fields.skip(3).skip(creationAndModificationTimeBytes(version)).u32();
-  }
-
-  private static long timescaleOf(BoxView mdhd) {
-    var fields = mdhd.fields();
-    var version = fields.u8();
-    var timescale = fields.skip(3).skip(creationAndModificationTimeBytes(version)).u32();
-    if (timescale == 0) {
-      throw FragmentedMp4Exception.malformed("mdhd declares a timescale of zero");
-    }
-
-    return timescale;
-  }
-
-  private static int creationAndModificationTimeBytes(int version) {
-    if (version == 1) {
-      return 16;
-    }
-
-    return 8;
   }
 
   private Optional<VideoStart> startOfTrackFragment(TrackFragmentBox trackFragment) {
