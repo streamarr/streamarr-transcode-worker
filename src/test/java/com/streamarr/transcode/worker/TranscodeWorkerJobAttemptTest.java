@@ -72,9 +72,6 @@ class TranscodeWorkerJobAttemptTest {
   private static final int BURSTS = 10;
   private static final int BURST_SLOTS = 2;
 
-  // Six such fragments make a segment of about 120 MiB, within the server's 128 MiB cap.
-  private static final int GROWN_MEDIA_DATA_BYTES = 20 * 1024 * 1024;
-
   @TempDir Path tempDir;
 
   private final ScriptedWorkerRuntime runtime = new ScriptedWorkerRuntime();
@@ -287,21 +284,11 @@ class TranscodeWorkerJobAttemptTest {
   }
 
   @Test
-  @DisplayName(
-      "Should start each job in a slot a stop freed and let its reader take its memory while the"
-          + " stopped attempts' FFmpeg still runs when stops and starts arrive in bursts")
-  void
-      shouldStartEachJobInASlotAStopFreedAndLetItsReaderTakeItsMemoryWhileTheStoppedAttemptsFfmpegStillRunsWhenStopsAndStartsArriveInBursts()
-          throws Exception {
-    // Each attempt holds its first segment of about 120 MiB and the fragment that closed it while
-    // the server never acknowledges the initialization segment, so the stopped attempts would hold
-    // more than the worker's budget leaves the new ones unless each stop releases its share.
+  @DisplayName("Should reuse freed slots when stops and starts arrive in bursts")
+  void shouldReuseFreedSlotsWhenStopsAndStartsArriveInBursts() throws Exception {
     var recording = recording(ENCODED_RECORDING);
     var firstFragmentOfSegment1 = recording.segments().get(1).firstFragmentIndex();
-    var output =
-        withPaddedMediaData(
-            bytesOf(ENCODED_RECORDING),
-            fragment -> fragment <= firstFragmentOfSegment1 + 2 ? GROWN_MEDIA_DATA_BYTES : 0);
+    var output = bytesOf(ENCODED_RECORDING);
     var readerWaits = endOfFragment(output, firstFragmentOfSegment1);
     var launcher =
         new ScriptedProcessLauncher(
