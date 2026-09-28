@@ -4,6 +4,7 @@ import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 
 /**
@@ -29,31 +30,52 @@ final class SampleRanges {
    *     body, or when a run's samples need a default size that no box declares
    */
   void requireInside(List<TrackFragmentBox> trackFragments, MediaData mediaData) {
-    var previousTrafEnd = 0L;
-    for (var trackFragment : trackFragments) {
-      previousTrafEnd = requireTrackFragmentInside(trackFragment, previousTrafEnd, mediaData);
-    }
+    forEachRun(
+        trackFragments,
+        mediaData,
+        placed -> mediaData.requireInside(placed.trackId(), placed.start(), placed.bytes()));
   }
 
-  /** Returns where the {@code traf}'s data ends, measured from the {@code moof}'s first byte. */
-  private long requireTrackFragmentInside(
-      TrackFragmentBox trackFragment, long previousTrafEnd, MediaData mediaData) {
-    var header = trackFragment.header();
-    var base = baseOf(header, previousTrafEnd, mediaData);
-    var runEnd = base;
-    for (var run : trackFragment.runs()) {
-      var start = runEnd;
-      var dataOffset = run.dataOffset();
-      if (dataOffset.isPresent()) {
-        start = offsetBy(base, dataOffset.orElseThrow());
-      }
+  // Places every run in order, handing each to the visitor before placing the next.
+  private void forEachRun(
+      List<TrackFragmentBox> trackFragments, MediaData mediaData, Consumer<PlacedRun> visitor) {
+    var placement = new Placement(mediaData, visitor);
+    trackFragments.forEach(placement::place);
+  }
 
-      var bytes = sampleBytesOf(run, () -> defaultSampleSizeOf(header));
-      mediaData.requireInside(header.trackId(), start, bytes);
-      runEnd = start + bytes;
+  /** Where a run's samples start, measured from the {@code moof}'s first byte, and their bytes. */
+  private record PlacedRun(long trackId, long start, long bytes) {}
+
+  /** Places each {@code traf}'s runs after the data of the {@code traf} placed before it. */
+  private final class Placement {
+
+    private final MediaData mediaData;
+    private final Consumer<PlacedRun> visitor;
+    private long previousTrafEnd;
+
+    private Placement(MediaData mediaData, Consumer<PlacedRun> visitor) {
+      this.mediaData = mediaData;
+      this.visitor = visitor;
     }
 
-    return runEnd;
+    private void place(TrackFragmentBox trackFragment) {
+      var header = trackFragment.header();
+      var base = baseOf(header, previousTrafEnd, mediaData);
+      var runEnd = base;
+      for (var run : trackFragment.runs()) {
+        var start = runEnd;
+        var dataOffset = run.dataOffset();
+        if (dataOffset.isPresent()) {
+          start = offsetBy(base, dataOffset.orElseThrow());
+        }
+
+        var bytes = sampleBytesOf(run, () -> defaultSampleSizeOf(header));
+        visitor.accept(new PlacedRun(header.trackId(), start, bytes));
+        runEnd = start + bytes;
+      }
+
+      previousTrafEnd = runEnd;
+    }
   }
 
   private static long baseOf(TrackFragmentHeader header, long previousTrafEnd, MediaData data) {
