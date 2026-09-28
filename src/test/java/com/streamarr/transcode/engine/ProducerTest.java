@@ -73,6 +73,7 @@ class ProducerTest {
       UUID.fromString("0f6a3a9e-4c6b-4f59-9d0e-1c2b3a4d5e6f");
   private static final long SERVER_SEGMENT_CAP_BYTES = 128L * 1024 * 1024;
   private static final int NEARLY_CAPPED_FRAGMENT_PAYLOAD = 40 * 1024 * 1024;
+  private static final long ONE_SLOT_CAPACITY = 2 * SERVER_SEGMENT_CAP_BYTES;
   private static final int RACE_ITERATIONS = 200;
   private static final int BURSTS = 12;
   private static final int BURST_SLOTS = 3;
@@ -623,6 +624,64 @@ class ProducerTest {
     }
 
     assertThat(highestCharge.get()).isPositive().isLessThanOrEqualTo(capacity);
+  }
+
+  @Test
+  @DisplayName(
+      "Should start a media segment's delivery only once the worker's budget also holds the moof"
+          + " it writes when another attempt's reservations leave room for the fragments alone")
+  void
+      shouldStartAMediaSegmentsDeliveryOnlyOnceTheWorkersBudgetAlsoHoldsTheMoofItWritesWhenOnlyTheFragmentsFit() {
+    var workerBudget = SegmentMemoryBudget.forSlots(1);
+    var output = OneKeyframePerSecond.of(3);
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+    var otherAttempts = output.leavingRoomForTheFirstTwoFragmentsIn(workerBudget);
+
+    var producer = producerOfOneSecondSegments(process).memoryBudget(workerBudget).start();
+
+    assertReaderStopsAt(process, output.endOf(1));
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+    workerBudget.release(otherAttempts);
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(sink.acceptedNames())
+        .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
+    assertReleasesEveryReservedByte(workerBudget);
+  }
+
+  @Test
+  @DisplayName(
+      "Should release every byte it reserved in the worker's budget when stopped while waiting for"
+          + " that budget to hold the moof it writes")
+  void
+      shouldReleaseEveryByteItReservedInTheWorkersBudgetWhenStoppedWhileWaitingForItToHoldTheMoofItWrites() {
+    var workerBudget = SegmentMemoryBudget.forSlots(1);
+    var output = OneKeyframePerSecond.of(3);
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+    var otherAttempts = output.leavingRoomForTheFirstTwoFragmentsIn(workerBudget);
+    var producer = producerOfOneSecondSegments(process).memoryBudget(workerBudget).start();
+    assertReaderStopsAt(process, output.endOf(1));
+
+    producer.stop();
+
+    assertThat(producer.outcome()).isCompletedWithValue(new Stopped());
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+    workerBudget.release(otherAttempts);
+    assertReleasesEveryReservedByte(workerBudget);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("recordings")
+  @DisplayName(
+      "Should release every byte it reserved in the worker's budget when the attempt settles")
+  void shouldReleaseEveryByteItReservedInTheWorkersBudgetWhenTheAttemptSettles(
+      Recording recording) {
+    var workerBudget = SegmentMemoryBudget.forSlots(1);
+    var process = ScriptedProcess.builder().output(bytesOf(recording.file())).build();
+
+    var producer = producerFor(process, recording).memoryBudget(workerBudget).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT);
+    assertReleasesEveryReservedByte(workerBudget);
   }
 
   @Test
@@ -2456,6 +2515,15 @@ class ProducerTest {
         .sum();
   }
 
+  // Nothing the producer reserved in the worker's budget is still reserved, and it released
+  // nothing it did not reserve: the whole capacity is reservable at once, and not one byte more.
+  // The last delivery releases its bytes just after the outcome can settle, hence the wait.
+  private static void assertReleasesEveryReservedByte(SegmentMemoryBudget workerBudget) {
+    awaiting().until(() -> workerBudget.tryReserveAtOnce(ONE_SLOT_CAPACITY));
+    assertThat(workerBudget.tryReserveAtOnce(1)).as("a byte beyond the capacity").isFalse();
+    workerBudget.release(ONE_SLOT_CAPACITY);
+  }
+
   // The heap that live objects occupy once a full collection has freed every unreachable one.
   private static long liveHeapBytes() {
     var memory = ManagementFactory.getMemoryMXBean();
@@ -2694,6 +2762,49 @@ class ProducerTest {
       TimedFragmentBuilder audioFrom(long start, Integer... durations) {
         return audioStart(start).audioDurations(List.of(durations));
       }
+    }
+  }
+
+  /**
+   * An output of a movie without a sound track whose fragments each hold one keyframe a second, so
+   * that each fragment opens a segment of a 1 s period.
+   */
+  private record OneKeyframePerSecond(byte[] bytes, int initializationSegmentBytes, int fragments) {
+
+    private static final int PAYLOAD_BYTES = 4096;
+
+    static OneKeyframePerSecond of(int fragments) {
+      var initializationSegment =
+          IsoBoxes.concat(IsoBoxes.ftyp(), IsoBoxes.moov(IsoBoxes.Track.video().build()));
+      var output = new ByteArrayOutputStream();
+      output.writeBytes(initializationSegment);
+      for (var fragment = 0; fragment < fragments; fragment++) {
+        output.writeBytes(keyframeFragment(fragment * 24_000L, PAYLOAD_BYTES));
+      }
+
+      return new OneKeyframePerSecond(
+          output.toByteArray(), initializationSegment.length, fragments);
+    }
+
+    int endOf(int fragment) {
+      return initializationSegmentBytes + (fragment + 1) * fragmentBytes();
+    }
+
+    // Reserves, as other attempts would, all of the budget but room for the first two fragments,
+    // whose second closes segment 0; returns the bytes to release for those attempts.
+    long leavingRoomForTheFirstTwoFragmentsIn(SegmentMemoryBudget workerBudget) {
+      var reserved = ONE_SLOT_CAPACITY - 2L * fragmentBytes();
+      assertThat(workerBudget.tryReserveAtOnce(reserved)).isTrue();
+      return reserved;
+    }
+
+    private int fragmentBytes() {
+      return (bytes.length - initializationSegmentBytes) / fragments;
+    }
+
+    @Override
+    public String toString() {
+      return "OneKeyframePerSecond[" + fragments + " fragments]";
     }
   }
 
