@@ -45,7 +45,7 @@
     "id": "dav1d",
     "recipe": "builder/scripts.d/50-dav1d.sh",
     "repository": "https://code.videolan.org/videolan/dav1d",
-    "revision": "b546257f770768b2c88258c533da38b91a06f737",
+    "revision": "54706fc6bc0cdecab7e9593974a4039cc038fca7",
     "architectures": [
       "amd64",
       "arm64"
@@ -53,7 +53,7 @@
     "role": "Static AV1 decoder (--enable-libdav1d).",
     "notices": [
       {
-        "url": "https://code.videolan.org/videolan/dav1d/-/raw/b546257f770768b2c88258c533da38b91a06f737/COPYING",
+        "url": "https://code.videolan.org/videolan/dav1d/-/raw/54706fc6bc0cdecab7e9593974a4039cc038fca7/COPYING",
         "sha256": "dd92c3c2247c5651606fc23a5e2d6a1ebc5ace9a3e49cbde0e12f05ad1cb1ee5",
         "file": "dav1d/COPYING.txt"
       }
@@ -112,7 +112,7 @@
   {
     "id": "ffmpeg",
     "repository": "https://github.com/jellyfin/jellyfin-ffmpeg",
-    "revision": "5b16ac4eeef9559e652faac4a5907c3de6e15eb8",
+    "revision": "253db2a7b0a8045c54ce68ce33d7f601229b1822",
     "recipe": "builder",
     "architectures": [
       "amd64",
@@ -121,32 +121,32 @@
     "role": "FFmpeg and ffprobe executables, including Jellyfin patches.",
     "notices": [
       {
-        "url": "https://raw.githubusercontent.com/jellyfin/jellyfin-ffmpeg/5b16ac4eeef9559e652faac4a5907c3de6e15eb8/LICENSE.md",
+        "url": "https://raw.githubusercontent.com/jellyfin/jellyfin-ffmpeg/253db2a7b0a8045c54ce68ce33d7f601229b1822/LICENSE.md",
         "sha256": "2e1d16c72fd74e12063776371da757322f8b77589386532f4fd8634bde7de1af",
         "file": "ffmpeg/LICENSE.md"
       },
       {
-        "url": "https://raw.githubusercontent.com/jellyfin/jellyfin-ffmpeg/5b16ac4eeef9559e652faac4a5907c3de6e15eb8/COPYING.GPLv2",
+        "url": "https://raw.githubusercontent.com/jellyfin/jellyfin-ffmpeg/253db2a7b0a8045c54ce68ce33d7f601229b1822/COPYING.GPLv2",
         "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
         "file": "ffmpeg/COPYING.GPLv2.txt"
       },
       {
-        "url": "https://raw.githubusercontent.com/jellyfin/jellyfin-ffmpeg/5b16ac4eeef9559e652faac4a5907c3de6e15eb8/COPYING.GPLv3",
+        "url": "https://raw.githubusercontent.com/jellyfin/jellyfin-ffmpeg/253db2a7b0a8045c54ce68ce33d7f601229b1822/COPYING.GPLv3",
         "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
         "file": "ffmpeg/COPYING.GPLv3.txt"
       },
       {
-        "url": "https://raw.githubusercontent.com/jellyfin/jellyfin-ffmpeg/5b16ac4eeef9559e652faac4a5907c3de6e15eb8/COPYING.LGPLv2.1",
+        "url": "https://raw.githubusercontent.com/jellyfin/jellyfin-ffmpeg/253db2a7b0a8045c54ce68ce33d7f601229b1822/COPYING.LGPLv2.1",
         "sha256": "246041b6ecf9bc32d718a62c57877c78b5eb397b6467e74ed7ae2626ab189c30",
         "file": "ffmpeg/COPYING.LGPLv2.1.txt"
       },
       {
-        "url": "https://raw.githubusercontent.com/jellyfin/jellyfin-ffmpeg/5b16ac4eeef9559e652faac4a5907c3de6e15eb8/COPYING.LGPLv3",
+        "url": "https://raw.githubusercontent.com/jellyfin/jellyfin-ffmpeg/253db2a7b0a8045c54ce68ce33d7f601229b1822/COPYING.LGPLv3",
         "sha256": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768",
         "file": "ffmpeg/COPYING.LGPLv3.txt"
       },
       {
-        "url": "https://raw.githubusercontent.com/jellyfin/jellyfin-ffmpeg/5b16ac4eeef9559e652faac4a5907c3de6e15eb8/debian/copyright",
+        "url": "https://raw.githubusercontent.com/jellyfin/jellyfin-ffmpeg/253db2a7b0a8045c54ce68ce33d7f601229b1822/debian/copyright",
         "sha256": "1dcbd4a0573defb2b6b44010c96eabe026d06d9cf2a86eaf7782aa80f76ed2f2",
         "file": "ffmpeg/debian/copyright.txt"
       }
@@ -1291,7 +1291,7 @@
     "id": "svtav1",
     "recipe": "builder/scripts.d/50-svtav1.sh",
     "repository": "https://gitlab.com/AOMediaCodec/SVT-AV1",
-    "revision": "c04f951541ad600e0d9c10836f2ab7b9bc69816d",
+    "revision": "9292ec8e32bce26f781f277ec8739b53426c4300",
     "architectures": [
       "amd64",
       "arm64"
@@ -1299,12 +1299,12 @@
     "role": "Static AV1 encoder (--enable-libsvtav1).",
     "notices": [
       {
-        "url": "https://gitlab.com/AOMediaCodec/SVT-AV1/-/raw/c04f951541ad600e0d9c10836f2ab7b9bc69816d/LICENSE.md",
+        "url": "https://gitlab.com/AOMediaCodec/SVT-AV1/-/raw/9292ec8e32bce26f781f277ec8739b53426c4300/LICENSE.md",
         "sha256": "0acc2fcb27472bdc9aaf8b71f37055bbdac4f54671b7d922f241bd7fcd0dd3e6",
         "file": "svtav1/LICENSE.md"
       },
       {
-        "url": "https://gitlab.com/AOMediaCodec/SVT-AV1/-/raw/c04f951541ad600e0d9c10836f2ab7b9bc69816d/PATENTS.md",
+        "url": "https://gitlab.com/AOMediaCodec/SVT-AV1/-/raw/9292ec8e32bce26f781f277ec8739b53426c4300/PATENTS.md",
         "sha256": "20678ab10402659106dc4c147c97b2a6e94b5c0695415e15a8f195ebc3547922",
         "file": "svtav1/PATENTS.md"
       }
@@ -1389,8 +1389,8 @@
   {
     "id": "x265",
     "recipe": "builder/scripts.d/50-x265.sh",
-    "repository": "https://bitbucket.org/multicoreware/x265_git",
-    "revision": "e444744c03978c1fb4e037168967020cf2648427",
+    "repository": "https://github.com/Multicorewareinc/x265",
+    "revision": "e9b88125dc21393b3fd8d68e98083bdfb89778a8",
     "architectures": [
       "amd64",
       "arm64"
@@ -1398,13 +1398,13 @@
     "role": "Static HEVC encoder (--enable-libx265), including the json11 parser in the enabled HDR10+ builds.",
     "notices": [
       {
-        "url": "https://bitbucket.org/multicoreware/x265_git/raw/e444744c03978c1fb4e037168967020cf2648427/COPYING",
+        "url": "https://raw.githubusercontent.com/Multicorewareinc/x265/e9b88125dc21393b3fd8d68e98083bdfb89778a8/COPYING",
         "sha256": "d8afb1bcc7a2cfc603683b168d6987ef0a48e59e0da3693bf55c5d33b67e2b49",
         "file": "x265/COPYING.txt"
       },
       {
         "file": "x265/source/dynamicHDR10/json11/LICENSE.txt",
-        "url": "https://bitbucket.org/multicoreware/x265_git/raw/e444744c03978c1fb4e037168967020cf2648427/source/dynamicHDR10/json11/LICENSE.txt",
+        "url": "https://raw.githubusercontent.com/Multicorewareinc/x265/e9b88125dc21393b3fd8d68e98083bdfb89778a8/source/dynamicHDR10/json11/LICENSE.txt",
         "sha256": "950e288a2548cb33f6a90d23958806b0803f510ab17c600d661619a73ae3a6c8"
       }
     ],

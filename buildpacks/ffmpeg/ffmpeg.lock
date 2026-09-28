@@ -1,8 +1,8 @@
-release=v8.1.2-5
-version=8.1.2-5
-source_revision=5b16ac4eeef9559e652faac4a5907c3de6e15eb8
+release=v8.1.3-1
+version=8.1.3-1
+source_revision=253db2a7b0a8045c54ce68ce33d7f601229b1822
 asset_variant=gpl
-amd64_asset=jellyfin-ffmpeg_8.1.2-5_portable_linux64-gpl.tar.xz
-amd64_sha256=1fd859927053c44a4f2dbf67ae8b9ba8d29fb3b8930df0dd57d91aa60589363d
-arm64_asset=jellyfin-ffmpeg_8.1.2-5_portable_linuxarm64-gpl.tar.xz
-arm64_sha256=1bd4fafaf4c309cad896d3479152c31d6b7604d4be8b8526882ea16cc6d5f589
+amd64_asset=jellyfin-ffmpeg_8.1.3-1_portable_linux64-gpl.tar.xz
+amd64_sha256=b86dc023c64a5a9a410e6e3a938a970460214fae78f31c1553c9f88f1c289b6a
+arm64_asset=jellyfin-ffmpeg_8.1.3-1_portable_linuxarm64-gpl.tar.xz
+arm64_sha256=7bc8e8d0986f7f4693f63e9728570f671f07b6e21c05d5465dd7ce461d1631dc
