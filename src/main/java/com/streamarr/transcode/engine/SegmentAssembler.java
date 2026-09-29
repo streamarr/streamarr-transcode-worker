@@ -168,7 +168,7 @@ final class SegmentAssembler {
     var rebuilt =
         RebuiltSegment.builder()
             .sequenceNumber(segment.sequenceNumber())
-            .videoSamples(segment.fragments().stream().flatMap(SampleOf::videoOf).toList())
+            .videoSamples(segment.videoSamples())
             .audioSamples(audioSamples)
             .stillHeld(heldFragments())
             .build();

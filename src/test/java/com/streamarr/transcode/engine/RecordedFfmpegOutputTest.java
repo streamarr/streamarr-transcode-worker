@@ -17,6 +17,7 @@ import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.engine.GroupingOutcome.NothingClosed;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentClosed;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentNumberSkipped;
+import com.streamarr.transcode.engine.RebuiltSegment.SampleOf;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -363,10 +364,10 @@ class RecordedFfmpegOutputTest {
     var units = read("10-copy-gop-exceeds-period.fmp4");
     var grouper = new SegmentGrouper(6, 0, Mp4Stream.SEGMENT_CAP);
     var outcomes = units.fragments().subList(0, 21).stream().map(grouper::accept).toList();
-    var segmentOne = new MediaSegment(1, units.fragments().subList(10, 20));
+    var segmentOne = segmentOf(1, units.fragments().subList(10, 20));
 
     assertThat(outcomes.get(10))
-        .isEqualTo(new SegmentClosed(new MediaSegment(0, units.fragments().subList(0, 10))));
+        .isEqualTo(new SegmentClosed(segmentOf(0, units.fragments().subList(0, 10))));
     assertThat(outcomes.subList(11, 20)).allMatch(NothingClosed.class::isInstance);
     assertThat(outcomes.getLast())
         .isEqualTo(new SegmentNumberSkipped(Optional.of(segmentOne), 2, 3));
@@ -459,6 +460,12 @@ class RecordedFfmpegOutputTest {
       case SegmentClosed(var segment) -> Optional.of(segment);
       case SegmentNumberSkipped skipped -> skipped.closedSegment();
     };
+  }
+
+  // A media segment of these fragments and every video sample they carry.
+  private static MediaSegment segmentOf(int sequenceNumber, List<Fragment> fragments) {
+    return new MediaSegment(
+        sequenceNumber, fragments, fragments.stream().flatMap(SampleOf::videoOf).toList());
   }
 
   private static List<SegmentSummary> summaries(Grouping grouping) {

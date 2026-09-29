@@ -4,6 +4,7 @@ import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.engine.GroupingOutcome.NothingClosed;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentClosed;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentNumberSkipped;
+import com.streamarr.transcode.engine.RebuiltSegment.SampleOf;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -22,6 +23,7 @@ final class SegmentGrouper {
   private final int startSequenceNumber;
   private final long maximumSegmentBytes;
   private final List<Fragment> openFragments = new ArrayList<>();
+  private final List<SampleOf> openVideoSamples = new ArrayList<>();
   private long openBytes;
   private OptionalLong openSequenceNumber = OptionalLong.empty();
   private OptionalLong lastKeyframeTime = OptionalLong.empty();
@@ -141,6 +143,7 @@ final class SegmentGrouper {
     }
 
     openFragments.add(fragment);
+    SampleOf.videoOf(fragment).forEach(openVideoSamples::add);
     openBytes += bytes;
   }
 
@@ -151,6 +154,7 @@ final class SegmentGrouper {
   /** Drops the fragments held for the open segment, which the producer then never delivers. */
   void discardOpenFragments() {
     openFragments.clear();
+    openVideoSamples.clear();
     openBytes = 0;
   }
 
@@ -184,13 +188,14 @@ final class SegmentGrouper {
     }
 
     var sequenceNumber = openSequenceNumber.getAsLong();
-    var fragments = List.copyOf(openFragments);
+    var segment =
+        new MediaSegment(Math.toIntExact(sequenceNumber), openFragments, openVideoSamples);
     discardOpenFragments();
     openSequenceNumber = OptionalLong.empty();
     if (sequenceNumber < startSequenceNumber) {
       return Optional.empty();
     }
 
-    return Optional.of(new MediaSegment(Math.toIntExact(sequenceNumber), fragments));
+    return Optional.of(segment);
   }
 }

@@ -10,6 +10,8 @@ import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.engine.GroupingOutcome.NothingClosed;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentClosed;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentNumberSkipped;
+import com.streamarr.transcode.engine.RebuiltSegment.SampleOf;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
@@ -383,7 +385,8 @@ class SegmentGrouperTest {
             0,
             List.of(
                 fragmentBuilder().boxes(List.of(new byte[40], new byte[100])).build(),
-                fragmentBuilder().boxes(List.of(new byte[30], new byte[7])).build()));
+                fragmentBuilder().boxes(List.of(new byte[30], new byte[7])).build()),
+            List.of());
 
     assertThat(segment.byteLength()).isEqualTo(177);
   }
@@ -409,7 +412,10 @@ class SegmentGrouperTest {
   }
 
   private static MediaSegment segment(int sequenceNumber, Fragment... fragments) {
-    return new MediaSegment(sequenceNumber, List.of(fragments));
+    return new MediaSegment(
+        sequenceNumber,
+        List.of(fragments),
+        Arrays.stream(fragments).flatMap(SampleOf::videoOf).toList());
   }
 
   private static Fragment keyframeAt(long milliseconds) {
