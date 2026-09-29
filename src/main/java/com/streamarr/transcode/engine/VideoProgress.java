@@ -14,8 +14,9 @@ final class VideoProgress {
   private static final long MARGIN_SECONDS = 1;
 
   private final int periodSeconds;
-  private long endTicks;
-  private long timescale;
+  // Before any video sample, no segment's end has passed.
+  private long endTicks = Long.MIN_VALUE;
+  private long timescale = 1;
 
   VideoProgress(int periodSeconds) {
     this.periodSeconds = periodSeconds;
@@ -37,10 +38,6 @@ final class VideoProgress {
    * segment closes without waiting for an audio sample of a later one.
    */
   boolean hasPassed(long number) {
-    if (timescale == 0) {
-      return false;
-    }
-
     return endTicks >= ((number + 1) * periodSeconds + MARGIN_SECONDS) * timescale;
   }
 }
