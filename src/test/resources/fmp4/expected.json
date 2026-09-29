@@ -3,7 +3,7 @@
     "image": "streamarr/streamarr-transcode-worker:0.1.0-SNAPSHOT@sha256:9d2d286c4f192e5e359cd7ead44ca05c7d0c720d491c3d5b4a6becfffcd61caa",
     "ffmpeg": "ffmpeg version 8.1.2-Jellyfin Copyright (c) 2000-2026 the FFmpeg developers"
   },
-  "recipe": "ffmpeg -y [-ss S: (K-1)*6 for an encode with K > 0, else the job's seek] -i SRC -map 0:v:0 -map 0:a:0 -map -0:s -map_metadata -1 -map_chapters -1 -copyts -avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128 <codec args> [copy: -bsf:a aac_adtstoasc when copying AAC, then -b:a 0] [encode: -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6 in whole seconds, K = startSequenceNumber, N = mediaSegmentCount (-sc_threshold:v:0 0 for libx264, -x265-params no-scenecut=1:no-open-gop=1 for libx265) -g:v:0 145 = ceil(6 x 23.976) + 1 for an encoder verified to honour forced keyframes (libx264, SVT-AV1, libx265), else 143 = floor(6 x 23.976) (fixtures 11 and 13c) (-keyint_min:v:0 with the same value for SVT-AV1)] [fixtures 11, 12, 12b, 13b and 13c only: -t 30] -threads 1 -f mp4 -movflags cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont -frag_duration 1000000 pipe:1",
+  "recipe": "ffmpeg -y [-ss S: (K-1)*6 for an encode with K > 0, else the job's seek] -i SRC -map 0:v:0 -map 0:a:0 -map -0:s -map_metadata -1 -map_chapters -1 -copyts -avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128 <codec args> [copy: -bsf:a aac_adtstoasc when copying AAC, then -b:a 0] [video copy with encoded audio (fixture 16): -c:v copy -c:a aac -ac 1 -b:a 8k] [encode: -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6 in whole seconds, K = startSequenceNumber, N = mediaSegmentCount (-sc_threshold:v:0 0 for libx264, -x265-params no-scenecut=1:no-open-gop=1 for libx265) -g:v:0 145 = ceil(6 x 23.976) + 1 for an encoder verified to honour forced keyframes (libx264, SVT-AV1, libx265), else 143 = floor(6 x 23.976) (fixtures 11 and 13c) (-keyint_min:v:0 with the same value for SVT-AV1)] [fixtures 11, 12, 12b, 13b and 13c only: -t 30] -threads 1 -f mp4 -movflags cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont -frag_duration 1000000 pipe:1",
   "rules": "ADR 0037: segment N = [N*P, (N+1)*P) on the zero-based timeline. A fragment whose video traf starts with a sync sample opens segment floor(presentationTime / (P * timescale)), or joins it when that segment is already open; every other fragment joins the open segment (or waits for the first one). Segments numbered below startSequenceNumber are discarded preroll; a sync-first fragment beyond the next deliverable number closes the open segment (delivered, or discarded when preroll) and then fails with a skipped segment number, grouping nothing from that fragment on. firstVideoPresentationTime = tfdt + first sample's composition offset, in videoTimescale ticks, no edit list.",
   "fixtures": [
     {
@@ -12,6 +12,7 @@
       "proves": "Constant 23.976 fps libx264 encode of 66 s under the verified-encoder GOP of ceil(6 x 23.976) + 1 = 145 frames: every forced keyframe (frames 0, 144, 288, ..., 1007, 1151, ...) opens a segment and the frame-count GOP never fires, so every segment holds exactly one keyframe-first fragment.",
       "recipeDeviation": null,
       "mode": "encode",
+      "audio": "encode",
       "encoder": "libx264",
       "source": {
         "file": "cfr.mp4",
@@ -235,7 +236,7 @@
         "nonSyncFirstFragments": 55,
         "fragmentsWithoutVideo": 1,
         "leadingFragmentsWithoutVideo": 0,
-        "everyKeyframeStartsAFragment": true,
+        "fragmentsWithAKeyframeInside": [],
         "videoSamples": 1583,
         "largestFragmentByteLength": 2953,
         "firstVideoPresentationTime": 0,
@@ -518,6 +519,7 @@
       "proves": "An encoded replacement attempt from segment 5 (a job seeking to 30 s) seeks one period early, to -ss 24, under -r without -fps_mode: it starts at the seek point (24.024 s), pads nothing from zero, and segment 4 is preroll that the grouper discards. The forced keyframe times 30, 36, ..., 66 are absolute, so it forces the frames the start-0 recording forced (720, 864, 1007, 1151, 1295, 1439) and every delivered segment starts on the start-0 recording's ticks.",
       "recipeDeviation": null,
       "mode": "encode",
+      "audio": "encode",
       "encoder": "libx264",
       "source": {
         "file": "cfr.mp4",
@@ -712,7 +714,7 @@
         "nonSyncFirstFragments": 35,
         "fragmentsWithoutVideo": 1,
         "leadingFragmentsWithoutVideo": 0,
-        "everyKeyframeStartsAFragment": true,
+        "fragmentsWithAKeyframeInside": [],
         "videoSamples": 1007,
         "largestFragmentByteLength": 2951,
         "firstVideoPresentationTime": 576576,
@@ -884,6 +886,7 @@
       "proves": "Stream copy of a 24 fps source with keyframes only at 0, 6.5, 12, 18, 24.5, 30, 36.5, 42, 48, 54.5 and 60 s over 66 s (12, 18, 30, 42, 48 and 60 s sit exactly on a boundary and open that boundary's segment): 11 segments, one keyframe each.",
       "recipeDeviation": null,
       "mode": "copy",
+      "audio": "copy",
       "encoder": null,
       "source": {
         "file": "irregular.mp4",
@@ -1102,7 +1105,7 @@
         "nonSyncFirstFragments": 59,
         "fragmentsWithoutVideo": 1,
         "leadingFragmentsWithoutVideo": 0,
-        "everyKeyframeStartsAFragment": true,
+        "fragmentsWithAKeyframeInside": [],
         "videoSamples": 1584,
         "largestFragmentByteLength": 2325,
         "firstVideoPresentationTime": 0,
@@ -1317,6 +1320,7 @@
       "proves": "Variable-frame-rate source (avg 16.2 fps on a 23.976 grid) encoded with libx264 under -r 23.976 and no -fps_mode: constant-rate output starting at the first source frame (41.7 ms); the forced keyframe times put a keyframe on the first frame at or after each boundary, one in every interval.",
       "recipeDeviation": null,
       "mode": "encode",
+      "audio": "encode",
       "encoder": "libx264",
       "source": {
         "file": "vfr.mp4",
@@ -1540,7 +1544,7 @@
         "nonSyncFirstFragments": 55,
         "fragmentsWithoutVideo": 1,
         "leadingFragmentsWithoutVideo": 0,
-        "everyKeyframeStartsAFragment": true,
+        "fragmentsWithAKeyframeInside": [],
         "videoSamples": 1582,
         "largestFragmentByteLength": 2996,
         "firstVideoPresentationTime": 1001,
@@ -1853,6 +1857,7 @@
       "proves": "Variable-frame-rate stream copy with B-frames and one or two keyframes per interval: segments open only at a sync-first fragment inside a new interval, whatever the frame spacing.",
       "recipeDeviation": null,
       "mode": "copy",
+      "audio": "copy",
       "encoder": null,
       "source": {
         "file": "vfr.mp4",
@@ -2080,7 +2085,7 @@
         "nonSyncFirstFragments": 56,
         "fragmentsWithoutVideo": 1,
         "leadingFragmentsWithoutVideo": 0,
-        "everyKeyframeStartsAFragment": true,
+        "fragmentsWithAKeyframeInside": [],
         "videoSamples": 1068,
         "largestFragmentByteLength": 2386,
         "firstVideoPresentationTime": 984,
@@ -2352,6 +2357,7 @@
       "proves": "MPEG-TS source whose timestamps begin at 12 s: -start_at_zero puts media time zero at the container start (the AAC priming frame, 21.3 ms before the first video frame), so the first fragment is segment 0, not segment 2. The server advertises 6 segments for the 30.051 s source, so the last forced keyframe time is 30 s, and the last frame (30.030 s) forms a 1-frame segment 5.",
       "recipeDeviation": null,
       "mode": "encode",
+      "audio": "encode",
       "encoder": "libx264",
       "source": {
         "file": "late.ts",
@@ -2535,7 +2541,7 @@
         "nonSyncFirstFragments": 25,
         "fragmentsWithoutVideo": 0,
         "leadingFragmentsWithoutVideo": 0,
-        "everyKeyframeStartsAFragment": true,
+        "fragmentsWithAKeyframeInside": [],
         "videoSamples": 720,
         "largestFragmentByteLength": 2897,
         "firstVideoPresentationTime": 1001,
@@ -2729,6 +2735,7 @@
       "proves": "Stream copy of the same 12 s-origin MPEG-TS source with -bsf:a aac_adtstoasc: the first fragment is segment 0 and every keyframe's media time is its source timestamp minus the container start.",
       "recipeDeviation": null,
       "mode": "copy",
+      "audio": "copy",
       "encoder": null,
       "source": {
         "file": "late.ts",
@@ -2903,7 +2910,7 @@
         "nonSyncFirstFragments": 15,
         "fragmentsWithoutVideo": 1,
         "leadingFragmentsWithoutVideo": 0,
-        "everyKeyframeStartsAFragment": true,
+        "fragmentsWithAKeyframeInside": [],
         "videoSamples": 720,
         "largestFragmentByteLength": 2592,
         "firstVideoPresentationTime": 1920,
@@ -3090,6 +3097,7 @@
       "proves": "Stream-copy replacement attempt of the same MPEG-TS source from segment 2 (-ss 12): the MPEG-TS demuxer lands on the keyframe at 12.033 s, just after the boundary, so no fragment is preroll, and its first fragment carries the audio from 11.861 s, seven AAC frames before the boundary, which segment 1 of 05-copy-late-start holds. Segments 2 to 4 carry the start-0 recording's video samples at the same ticks.",
       "recipeDeviation": null,
       "mode": "copy",
+      "audio": "copy",
       "encoder": null,
       "source": {
         "file": "late.ts",
@@ -3244,7 +3252,7 @@
         "nonSyncFirstFragments": 10,
         "fragmentsWithoutVideo": 1,
         "leadingFragmentsWithoutVideo": 0,
-        "everyKeyframeStartsAFragment": true,
+        "fragmentsWithAKeyframeInside": [],
         "videoSamples": 432,
         "largestFragmentByteLength": 2028,
         "firstVideoPresentationTime": 1083000,
@@ -3349,6 +3357,7 @@
       "proves": "Audio outlasts video by 3.5 s: the recording ends in audio-only fragments (no video traf), which join the last open segment; none precedes the first segment.",
       "recipeDeviation": null,
       "mode": "encode",
+      "audio": "encode",
       "encoder": "libx264",
       "source": {
         "file": "tail.mp4",
@@ -3516,7 +3525,7 @@
         "nonSyncFirstFragments": 16,
         "fragmentsWithoutVideo": 4,
         "leadingFragmentsWithoutVideo": 0,
-        "everyKeyframeStartsAFragment": true,
+        "fragmentsWithAKeyframeInside": [],
         "videoSamples": 480,
         "largestFragmentByteLength": 2953,
         "firstVideoPresentationTime": 0,
@@ -3640,6 +3649,7 @@
       "proves": "Stream copy of a 2.002 s-GOP 23.976 fps source from the start: three keyframes per segment.",
       "recipeDeviation": null,
       "mode": "copy",
+      "audio": "copy",
       "encoder": null,
       "source": {
         "file": "cfr.mp4",
@@ -3880,7 +3890,7 @@
         "nonSyncFirstFragments": 33,
         "fragmentsWithoutVideo": 0,
         "leadingFragmentsWithoutVideo": 0,
-        "everyKeyframeStartsAFragment": true,
+        "fragmentsWithAKeyframeInside": [],
         "videoSamples": 1583,
         "largestFragmentByteLength": 2334,
         "firstVideoPresentationTime": 0,
@@ -4205,6 +4215,7 @@
       "proves": "Stream-copy replacement attempt at -ss 30 (start sequence number 5): the seek lands on the keyframe at 28.028 s (segment 4), which is preroll and is discarded with the non-sync fragment after it; segments 5 to 10 carry the start-0 recording's video samples at the same ticks (audio packets regroup by one AAC frame).",
       "recipeDeviation": null,
       "mode": "copy",
+      "audio": "copy",
       "encoder": null,
       "source": {
         "file": "cfr.mp4",
@@ -4402,7 +4413,7 @@
         "nonSyncFirstFragments": 19,
         "fragmentsWithoutVideo": 0,
         "leadingFragmentsWithoutVideo": 0,
-        "everyKeyframeStartsAFragment": true,
+        "fragmentsWithAKeyframeInside": [],
         "videoSamples": 911,
         "largestFragmentByteLength": 1974,
         "firstVideoPresentationTime": 672672,
@@ -4657,6 +4668,7 @@
       "proves": "Irregular variable-frame-rate source through SVT-AV1 with -r 23.976, the verified-encoder GOP of 145 frames and the forced keyframe times: one keyframe in every interval, on the same frames libx264 chose in 03.",
       "recipeDeviation": null,
       "mode": "encode",
+      "audio": "encode",
       "encoder": "libsvtav1",
       "source": {
         "file": "vfr.mp4",
@@ -4876,7 +4888,7 @@
         "nonSyncFirstFragments": 55,
         "fragmentsWithoutVideo": 0,
         "leadingFragmentsWithoutVideo": 0,
-        "everyKeyframeStartsAFragment": true,
+        "fragmentsWithAKeyframeInside": [],
         "videoSamples": 1582,
         "largestFragmentByteLength": 2354,
         "firstVideoPresentationTime": 1001,
@@ -5268,6 +5280,7 @@
       "proves": "The same SVT-AV1 recipe as a replacement attempt from segment 5, seeking one period early (-ss 24): it starts at 24.024 s, pads nothing from zero, and discards segment 4 as preroll. Every delivered segment starts on the ticks of 09, including segment 5 at 30.030 s, the frame 09 repeats from the last source frame before 30 s; a seek to 30 s itself started at the next source frame, 30.072 s.",
       "recipeDeviation": null,
       "mode": "encode",
+      "audio": "encode",
       "encoder": "libsvtav1",
       "source": {
         "file": "vfr.mp4",
@@ -5458,7 +5471,7 @@
         "nonSyncFirstFragments": 36,
         "fragmentsWithoutVideo": 0,
         "leadingFragmentsWithoutVideo": 0,
-        "everyKeyframeStartsAFragment": true,
+        "fragmentsWithAKeyframeInside": [],
         "videoSamples": 1007,
         "largestFragmentByteLength": 2329,
         "firstVideoPresentationTime": 576576,
@@ -5637,6 +5650,7 @@
       "proves": "Stream copy with a keyframe every 10.01 s: interval 2 holds no keyframe. The sync-first fragment at 20.02 s (segment 3) closes segment 1, which is delivered complete with segment 0, and then grouping fails with a skipped segment number; nothing from that fragment on is grouped.",
       "recipeDeviation": null,
       "mode": "copy",
+      "audio": "copy",
       "encoder": null,
       "source": {
         "file": "gop10.mp4",
@@ -5781,7 +5795,7 @@
         "nonSyncFirstFragments": 22,
         "fragmentsWithoutVideo": 1,
         "leadingFragmentsWithoutVideo": 0,
-        "everyKeyframeStartsAFragment": true,
+        "fragmentsWithAKeyframeInside": [],
         "videoSamples": 600,
         "largestFragmentByteLength": 2336,
         "firstVideoPresentationTime": 0,
@@ -5862,6 +5876,7 @@
       "proves": "The first 30 s of 01 under the floored GOP of floor(6 x 23.976) = 143 frames that ADR 0037 keeps for an encoder not verified to honour forced keyframes: the GOP keyframe one frame before every later boundary (frames 143, 287, 431, 575) and on the last frame (719) is a 1-frame keyframe-first fragment that joins the earlier segment, so each segment holds two keyframes and still groups on the grid.",
       "recipeDeviation": "libx264 under the floored GOP of 143 frames, standing in for an encoder not verified; only the first 30 s of the source",
       "mode": "encode",
+      "audio": "encode",
       "encoder": "libx264",
       "source": {
         "file": "cfr.mp4",
@@ -6039,7 +6054,7 @@
         "nonSyncFirstFragments": 25,
         "fragmentsWithoutVideo": 0,
         "leadingFragmentsWithoutVideo": 0,
-        "everyKeyframeStartsAFragment": true,
+        "fragmentsWithAKeyframeInside": [],
         "videoSamples": 720,
         "largestFragmentByteLength": 2953,
         "firstVideoPresentationTime": 0,
@@ -6157,6 +6172,7 @@
       "proves": "libx264 over the first 30 s under the verified GOP of 145 frames with 18 s left out of the forced keyframe times: the GOP count restarts at the forced keyframe at 12.012 s (frame 288), so the backstop keyframe lands 145 frames later at 18.060 s (frame 433), inside interval 3, and no segment number is skipped.",
       "recipeDeviation": "18 s left out of the forced keyframe times; only the first 30 s of the source",
       "mode": "encode",
+      "audio": "encode",
       "encoder": "libx264",
       "source": {
         "file": "cfr.mp4",
@@ -6334,7 +6350,7 @@
         "nonSyncFirstFragments": 26,
         "fragmentsWithoutVideo": 1,
         "leadingFragmentsWithoutVideo": 0,
-        "everyKeyframeStartsAFragment": true,
+        "fragmentsWithAKeyframeInside": [],
         "videoSamples": 720,
         "largestFragmentByteLength": 2953,
         "firstVideoPresentationTime": 0,
@@ -6427,6 +6443,7 @@
       "proves": "The same missing forced keyframe through SVT-AV1: its GOP count also restarts at the forced keyframe at frame 288, and the backstop keyframe lands at frame 433 (18.060 s), inside interval 3.",
       "recipeDeviation": "18 s left out of the forced keyframe times; only the first 30 s of the source",
       "mode": "encode",
+      "audio": "encode",
       "encoder": "libsvtav1",
       "source": {
         "file": "cfr.mp4",
@@ -6600,7 +6617,7 @@
         "nonSyncFirstFragments": 26,
         "fragmentsWithoutVideo": 0,
         "leadingFragmentsWithoutVideo": 0,
-        "everyKeyframeStartsAFragment": true,
+        "fragmentsWithAKeyframeInside": [],
         "videoSamples": 720,
         "largestFragmentByteLength": 2285,
         "firstVideoPresentationTime": 0,
@@ -6698,6 +6715,7 @@
       "proves": "Constant 23.976 fps libx265 encode of 66 s with the worker's arguments (closed GOPs, no scene cuts) under the keyframe-verified GOP of 145 frames: it keys only the forced frames (0, 144, 288 ... 864, 1007, 1151, 1295, 1439), one per segment, and every keyframe is an IDR picture (NAL type 20) with no leading pictures.",
       "recipeDeviation": null,
       "mode": "encode",
+      "audio": "encode",
       "encoder": "libx265",
       "source": {
         "file": "cfr.mp4",
@@ -6919,7 +6937,7 @@
         "nonSyncFirstFragments": 55,
         "fragmentsWithoutVideo": 1,
         "leadingFragmentsWithoutVideo": 0,
-        "everyKeyframeStartsAFragment": true,
+        "fragmentsWithAKeyframeInside": [],
         "videoSamples": 1583,
         "largestFragmentByteLength": 2138,
         "firstVideoPresentationTime": 0,
@@ -7077,6 +7095,7 @@
       "proves": "The libx265 replacement attempt from segment 5, seeking one period early (-ss 24): segment 4 is preroll, the list forces the frames 13 forced (720, 864, 1007, 1151, 1295, 1439), every delivered segment starts on 13's ticks, and every keyframe is an IDR picture (NAL type 20).",
       "recipeDeviation": null,
       "mode": "encode",
+      "audio": "encode",
       "encoder": "libx265",
       "source": {
         "file": "cfr.mp4",
@@ -7269,7 +7288,7 @@
         "nonSyncFirstFragments": 35,
         "fragmentsWithoutVideo": 1,
         "leadingFragmentsWithoutVideo": 0,
-        "everyKeyframeStartsAFragment": true,
+        "fragmentsWithAKeyframeInside": [],
         "videoSamples": 1007,
         "largestFragmentByteLength": 2103,
         "firstVideoPresentationTime": 576576,
@@ -7448,6 +7467,7 @@
       "proves": "libx265 with 18 s left out of the forced keyframe times: its GOP count restarts at the forced keyframe at frame 288 and the backstop comes at frame 433 (18.060 s), inside interval 3, as an IDR picture (NAL type 20), so the segment it opens decodes on its own.",
       "recipeDeviation": "18 s left out of the forced keyframe times; only the first 30 s of the source",
       "mode": "encode",
+      "audio": "encode",
       "encoder": "libx265",
       "source": {
         "file": "cfr.mp4",
@@ -7623,7 +7643,7 @@
         "nonSyncFirstFragments": 26,
         "fragmentsWithoutVideo": 1,
         "leadingFragmentsWithoutVideo": 0,
-        "everyKeyframeStartsAFragment": true,
+        "fragmentsWithAKeyframeInside": [],
         "videoSamples": 720,
         "largestFragmentByteLength": 2103,
         "firstVideoPresentationTime": 0,
@@ -7721,6 +7741,7 @@
       "proves": "libx265 with the worker's arguments under the floored GOP of 143 frames of an encoder that is not keyframe-verified: as in 11, the GOP keyframe one frame before every later boundary (frames 143, 287, 431, 575) and on the last frame (719) joins the earlier segment, so each of the 5 segments holds two keyframes and opens at its forced keyframe. Every keyframe is an IDR picture (NAL type 20).",
       "recipeDeviation": "libx265 under the floored GOP of 143 frames of an encoder that is not keyframe-verified; only the first 30 s of the source",
       "mode": "encode",
+      "audio": "encode",
       "encoder": "libx265",
       "source": {
         "file": "cfr.mp4",
@@ -7896,7 +7917,7 @@
         "nonSyncFirstFragments": 25,
         "fragmentsWithoutVideo": 0,
         "leadingFragmentsWithoutVideo": 0,
-        "everyKeyframeStartsAFragment": true,
+        "fragmentsWithAKeyframeInside": [],
         "videoSamples": 720,
         "largestFragmentByteLength": 1638,
         "firstVideoPresentationTime": 0,
@@ -8024,6 +8045,7 @@
       "proves": "Stream copy of a source whose 8 s of audio end 12 s before its 20 s of video: the fragment at 8.008 s still carries the last three audio samples, which end at 8.0 s, and from 9.009 s on FFmpeg writes fragments with a video traf alone, so no audio sample at or after a later boundary ever arrives.",
       "recipeDeviation": null,
       "mode": "copy",
+      "audio": "copy",
       "encoder": null,
       "source": {
         "file": "short-audio.mp4",
@@ -8185,7 +8207,7 @@
         "nonSyncFirstFragments": 10,
         "fragmentsWithoutVideo": 0,
         "leadingFragmentsWithoutVideo": 0,
-        "everyKeyframeStartsAFragment": true,
+        "fragmentsWithAKeyframeInside": [],
         "videoSamples": 480,
         "largestFragmentByteLength": 2334,
         "firstVideoPresentationTime": 0,
@@ -8339,6 +8361,7 @@
       "proves": "Stream copy of a source with 22.05 kHz audio, whose AAC frames outlast the video frames, and a keyframe on every frame from 5.6 s to 6.6 s: FFmpeg cuts a one-frame fragment at each of those keyframes. The one at 6.006 s, which opens segment 1, carries no audio, and the next fragment carries an audio sample from 5.964 s, inside segment 0, so a fragment without audio does not show that segment 0's audio has all arrived.",
       "recipeDeviation": null,
       "mode": "copy",
+      "audio": "copy",
       "encoder": null,
       "source": {
         "file": "adjacent-keyframes.mp4",
@@ -8523,7 +8546,7 @@
         "nonSyncFirstFragments": 10,
         "fragmentsWithoutVideo": 0,
         "leadingFragmentsWithoutVideo": 0,
-        "everyKeyframeStartsAFragment": true,
+        "fragmentsWithAKeyframeInside": [],
         "videoSamples": 480,
         "largestFragmentByteLength": 2142,
         "firstVideoPresentationTime": 0,
@@ -8745,6 +8768,753 @@
           }
         }
       ]
+    },
+    {
+      "name": "16-copy-encode-audio",
+      "file": "16-copy-encode-audio.fmp4",
+      "proves": "The 2.002 s-GOP source with its video copied and its audio encoded, from the start: the encoded audio starts with the AAC priming frame, as the copied audio does, and every keyframe starts a fragment.",
+      "recipeDeviation": null,
+      "mode": "copy",
+      "audio": "encode",
+      "encoder": null,
+      "source": {
+        "file": "cfr.mp4",
+        "containerStartTimeMicros": 0,
+        "videoRealFrameRate": "24000/1001",
+        "videoAverageFrameRate": "24000/1001"
+      },
+      "seekSeconds": 0,
+      "period": 6,
+      "fragmentationTargetMicros": 1000000,
+      "ffmpegArguments": [
+        "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        "src/cfr.mp4",
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a:0",
+        "-map",
+        "-0:s",
+        "-map_metadata",
+        "-1",
+        "-map_chapters",
+        "-1",
+        "-copyts",
+        "-avoid_negative_ts",
+        "disabled",
+        "-start_at_zero",
+        "-max_muxing_queue_size",
+        "128",
+        "-c:v",
+        "copy",
+        "-bsf:v",
+        "h264_mp4toannexb",
+        "-tag:v",
+        "avc1",
+        "-strict",
+        "unofficial",
+        "-c:a",
+        "aac",
+        "-ac",
+        "1",
+        "-b:a",
+        "8k",
+        "-threads",
+        "1",
+        "-f",
+        "mp4",
+        "-movflags",
+        "cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont",
+        "-frag_duration",
+        "1000000",
+        "pipe:1"
+      ],
+      "startSequenceNumber": 0,
+      "mediaSegmentCount": 12,
+      "videoTrackId": 1,
+      "videoTimescale": 24000,
+      "byteLength": 105150,
+      "initializationSegment": {
+        "byteLength": 1348,
+        "sha256": "bb78124304f2920a1617a379ca2222d8352d0e0399c2e9609c96a9b003111dbc",
+        "tracks": [
+          {
+            "trackId": 1,
+            "handler": "vide",
+            "sampleEntry": "avc1",
+            "timescale": 24000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          },
+          {
+            "trackId": 2,
+            "handler": "soun",
+            "sampleEntry": "mp4a",
+            "timescale": 48000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          }
+        ]
+      },
+      "deliveredInitializationSegment": {
+        "byteLength": 1348,
+        "sha256": "bb78124304f2920a1617a379ca2222d8352d0e0399c2e9609c96a9b003111dbc"
+      },
+      "segments": [
+        {
+          "number": 0,
+          "firstVideoPresentationTime": 0,
+          "firstFragmentIndex": 0,
+          "fragmentCount": 6,
+          "keyframeCount": 3,
+          "byteLength": 9384
+        },
+        {
+          "number": 1,
+          "firstVideoPresentationTime": 144144,
+          "firstFragmentIndex": 6,
+          "fragmentCount": 6,
+          "keyframeCount": 3,
+          "byteLength": 8912
+        },
+        {
+          "number": 2,
+          "firstVideoPresentationTime": 288288,
+          "firstFragmentIndex": 12,
+          "fragmentCount": 6,
+          "keyframeCount": 3,
+          "byteLength": 9119
+        },
+        {
+          "number": 3,
+          "firstVideoPresentationTime": 432432,
+          "firstFragmentIndex": 18,
+          "fragmentCount": 6,
+          "keyframeCount": 3,
+          "byteLength": 9233
+        },
+        {
+          "number": 4,
+          "firstVideoPresentationTime": 576576,
+          "firstFragmentIndex": 24,
+          "fragmentCount": 6,
+          "keyframeCount": 3,
+          "byteLength": 9250
+        },
+        {
+          "number": 5,
+          "firstVideoPresentationTime": 720720,
+          "firstFragmentIndex": 30,
+          "fragmentCount": 6,
+          "keyframeCount": 3,
+          "byteLength": 9515
+        },
+        {
+          "number": 6,
+          "firstVideoPresentationTime": 864864,
+          "firstFragmentIndex": 36,
+          "fragmentCount": 6,
+          "keyframeCount": 3,
+          "byteLength": 9552
+        },
+        {
+          "number": 7,
+          "firstVideoPresentationTime": 1009008,
+          "firstFragmentIndex": 42,
+          "fragmentCount": 6,
+          "keyframeCount": 3,
+          "byteLength": 9695
+        },
+        {
+          "number": 8,
+          "firstVideoPresentationTime": 1153152,
+          "firstFragmentIndex": 48,
+          "fragmentCount": 6,
+          "keyframeCount": 3,
+          "byteLength": 9668
+        },
+        {
+          "number": 9,
+          "firstVideoPresentationTime": 1297296,
+          "firstFragmentIndex": 54,
+          "fragmentCount": 6,
+          "keyframeCount": 3,
+          "byteLength": 9701
+        },
+        {
+          "number": 10,
+          "firstVideoPresentationTime": 1441440,
+          "firstFragmentIndex": 60,
+          "fragmentCount": 6,
+          "keyframeCount": 3,
+          "byteLength": 9773
+        }
+      ],
+      "discardedPreroll": [],
+      "failure": null,
+      "endsWithAudioOnlyFragments": false,
+      "trailingAudioOnlyFragmentCount": 0,
+      "sourceKeyframeCheck": {
+        "recordedKeyframesEqualSourceKeyframes": true,
+        "keyframePresentationTimes": [
+          0,
+          48048,
+          96096,
+          144144,
+          192192,
+          240240,
+          288288,
+          336336,
+          384384,
+          432432,
+          480480,
+          528528,
+          576576,
+          624624,
+          672672,
+          720720,
+          768768,
+          816816,
+          864864,
+          912912,
+          960960,
+          1009008,
+          1057056,
+          1105104,
+          1153152,
+          1201200,
+          1249248,
+          1297296,
+          1345344,
+          1393392,
+          1441440,
+          1489488,
+          1537536
+        ]
+      },
+      "diagnostics": {
+        "fragmentCount": 66,
+        "syncFirstFragments": 33,
+        "nonSyncFirstFragments": 33,
+        "fragmentsWithoutVideo": 0,
+        "leadingFragmentsWithoutVideo": 0,
+        "fragmentsWithAKeyframeInside": [],
+        "videoSamples": 1583,
+        "largestFragmentByteLength": 2334,
+        "firstVideoPresentationTime": 0,
+        "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
+        "startPlusDurationsMissesNextStartByTicks": {
+          "min": -1001,
+          "max": 1001
+        },
+        "videoPictures": {
+          "sampleEntry": "avc1",
+          "keyframes": [
+            {
+              "presentationTime": 0,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 48048,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 96096,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 144144,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 192192,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 240240,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 288288,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 336336,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 384384,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 432432,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 480480,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 528528,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 576576,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 624624,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 672672,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 720720,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 768768,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 816816,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 864864,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 912912,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 960960,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1009008,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1057056,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1105104,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1153152,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1201200,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1249248,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1297296,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1345344,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1393392,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1441440,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1489488,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1537536,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            }
+          ]
+        }
+      },
+      "hlsComparisons": []
+    },
+    {
+      "name": "16-copy-encode-audio-seek30",
+      "file": "16-copy-encode-audio-seek30.fmp4",
+      "proves": "Replacement attempt at -ss 30 that copies the video and encodes the audio: the seek lands on the keyframe at 28.028 s, while the encoded audio starts at the seek point, 29.979 s with its priming frame. delay_moov writes nothing until every track has a sample, so the first fragment runs from 28.028 s to 30.072 s and holds the keyframe at 30.030 s in its middle; the next keyframe that starts a fragment is at 32.032 s.",
+      "recipeDeviation": null,
+      "mode": "copy",
+      "audio": "encode",
+      "encoder": null,
+      "source": {
+        "file": "cfr.mp4",
+        "containerStartTimeMicros": 0,
+        "videoRealFrameRate": "24000/1001",
+        "videoAverageFrameRate": "24000/1001"
+      },
+      "seekSeconds": 30,
+      "period": 6,
+      "fragmentationTargetMicros": 1000000,
+      "ffmpegArguments": [
+        "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
+        "-loglevel",
+        "error",
+        "-y",
+        "-ss",
+        "30",
+        "-i",
+        "src/cfr.mp4",
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a:0",
+        "-map",
+        "-0:s",
+        "-map_metadata",
+        "-1",
+        "-map_chapters",
+        "-1",
+        "-copyts",
+        "-avoid_negative_ts",
+        "disabled",
+        "-start_at_zero",
+        "-max_muxing_queue_size",
+        "128",
+        "-c:v",
+        "copy",
+        "-bsf:v",
+        "h264_mp4toannexb",
+        "-tag:v",
+        "avc1",
+        "-strict",
+        "unofficial",
+        "-c:a",
+        "aac",
+        "-ac",
+        "1",
+        "-b:a",
+        "8k",
+        "-threads",
+        "1",
+        "-f",
+        "mp4",
+        "-movflags",
+        "cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont",
+        "-frag_duration",
+        "1000000",
+        "pipe:1"
+      ],
+      "startSequenceNumber": 5,
+      "mediaSegmentCount": 12,
+      "videoTrackId": 1,
+      "videoTimescale": 24000,
+      "byteLength": 60279,
+      "initializationSegment": {
+        "byteLength": 1348,
+        "sha256": "bb78124304f2920a1617a379ca2222d8352d0e0399c2e9609c96a9b003111dbc",
+        "tracks": [
+          {
+            "trackId": 1,
+            "handler": "vide",
+            "sampleEntry": "avc1",
+            "timescale": 24000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          },
+          {
+            "trackId": 2,
+            "handler": "soun",
+            "sampleEntry": "mp4a",
+            "timescale": 48000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          }
+        ]
+      },
+      "deliveredInitializationSegment": {
+        "byteLength": 1348,
+        "sha256": "bb78124304f2920a1617a379ca2222d8352d0e0399c2e9609c96a9b003111dbc"
+      },
+      "segments": [
+        {
+          "number": 5,
+          "firstVideoPresentationTime": 768768,
+          "firstFragmentIndex": 3,
+          "fragmentCount": 4,
+          "keyframeCount": 2,
+          "byteLength": 6064
+        },
+        {
+          "number": 6,
+          "firstVideoPresentationTime": 864864,
+          "firstFragmentIndex": 7,
+          "fragmentCount": 6,
+          "keyframeCount": 3,
+          "byteLength": 8976
+        },
+        {
+          "number": 7,
+          "firstVideoPresentationTime": 1009008,
+          "firstFragmentIndex": 13,
+          "fragmentCount": 6,
+          "keyframeCount": 3,
+          "byteLength": 9503
+        },
+        {
+          "number": 8,
+          "firstVideoPresentationTime": 1153152,
+          "firstFragmentIndex": 19,
+          "fragmentCount": 6,
+          "keyframeCount": 3,
+          "byteLength": 9668
+        },
+        {
+          "number": 9,
+          "firstVideoPresentationTime": 1297296,
+          "firstFragmentIndex": 25,
+          "fragmentCount": 6,
+          "keyframeCount": 3,
+          "byteLength": 9701
+        },
+        {
+          "number": 10,
+          "firstVideoPresentationTime": 1441440,
+          "firstFragmentIndex": 31,
+          "fragmentCount": 7,
+          "keyframeCount": 3,
+          "byteLength": 9680
+        }
+      ],
+      "discardedPreroll": [
+        {
+          "number": 4,
+          "firstVideoPresentationTime": 672672,
+          "firstFragmentIndex": 0,
+          "fragmentCount": 3,
+          "keyframeCount": 2,
+          "byteLength": 5339
+        }
+      ],
+      "failure": null,
+      "endsWithAudioOnlyFragments": true,
+      "trailingAudioOnlyFragmentCount": 1,
+      "sourceKeyframeCheck": {
+        "recordedKeyframesEqualSourceKeyframes": true,
+        "keyframePresentationTimes": [
+          672672,
+          720720,
+          768768,
+          816816,
+          864864,
+          912912,
+          960960,
+          1009008,
+          1057056,
+          1105104,
+          1153152,
+          1201200,
+          1249248,
+          1297296,
+          1345344,
+          1393392,
+          1441440,
+          1489488,
+          1537536
+        ]
+      },
+      "diagnostics": {
+        "fragmentCount": 38,
+        "syncFirstFragments": 18,
+        "nonSyncFirstFragments": 19,
+        "fragmentsWithoutVideo": 1,
+        "leadingFragmentsWithoutVideo": 0,
+        "fragmentsWithAKeyframeInside": [
+          0
+        ],
+        "videoSamples": 911,
+        "largestFragmentByteLength": 2934,
+        "firstVideoPresentationTime": 672672,
+        "firstAudioBaseMediaDecodeTimeUnsigned": 1438976,
+        "startPlusDurationsMissesNextStartByTicks": {
+          "min": -1001,
+          "max": 1001
+        },
+        "videoPictures": {
+          "sampleEntry": "avc1",
+          "keyframes": [
+            {
+              "presentationTime": 672672,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 720720,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 768768,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 816816,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 864864,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 912912,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 960960,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1009008,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1057056,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1105104,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1153152,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1201200,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1249248,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1297296,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1345344,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1393392,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1441440,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1489488,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 1537536,
+              "nalUnitType": 5,
+              "startsClosedGop": true
+            }
+          ]
+        }
+      },
+      "hlsComparisons": []
     }
   ],
   "initializationSegmentIdentityPairs": [
@@ -8778,6 +9548,22 @@
       "sha256": [
         "38975fc0535d12aa37700234f287cda80b467b6cda2bde1765f66d6d8989b648",
         "38975fc0535d12aa37700234f287cda80b467b6cda2bde1765f66d6d8989b648"
+      ]
+    },
+    {
+      "label": "video copy with encoded audio, start 0 vs a replacement attempt from segment 5",
+      "files": [
+        "16-copy-encode-audio.fmp4",
+        "16-copy-encode-audio-seek30.fmp4"
+      ],
+      "identical": true,
+      "byteLengths": [
+        1348,
+        1348
+      ],
+      "sha256": [
+        "bb78124304f2920a1617a379ca2222d8352d0e0399c2e9609c96a9b003111dbc",
+        "bb78124304f2920a1617a379ca2222d8352d0e0399c2e9609c96a9b003111dbc"
       ]
     },
     {

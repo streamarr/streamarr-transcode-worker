@@ -83,6 +83,8 @@ public final class FfmpegRecordings {
    * One recorded stream, the FFmpeg command line that recorded it, and what its initialization
    * segment and media segments must be.
    *
+   * @param mode whether the recording encodes or copies the video
+   * @param audio whether the recording encodes or copies the audio
    * @param encoder the video encoder of an encode; empty for a stream copy
    * @param recipeDeviation how the recording deliberately departs from the worker's recipe; empty
    *     when it follows the recipe
@@ -92,6 +94,7 @@ public final class FfmpegRecordings {
   public record Recording(
       String file,
       Mode mode,
+      Mode audio,
       Optional<String> encoder,
       Source source,
       int period,
@@ -134,7 +137,7 @@ public final class FfmpegRecordings {
     }
   }
 
-  /** Whether a recording encodes the video or copies it from the source. */
+  /** Whether a recording encodes a stream or copies it from the source. */
   public enum Mode {
     ENCODE,
     COPY

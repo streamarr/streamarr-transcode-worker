@@ -271,11 +271,30 @@ const FIXTURES = [
       'inside segment 0, so a fragment without audio does not show that segment 0\'s audio has all arrived.',
     hlsComparisons: [hlsComparison('15-copy-adjacent-keyframes.video-only', 'pipe-recipe', { audio: false })],
   },
+  {
+    name: '16-copy-encode-audio', source: 'cfr.mp4', mode: 'copy', audio: 'encode', encoder: null, seek: 0, start: 0,
+    proves: 'The 2.002 s-GOP source with its video copied and its audio encoded, from the start: the encoded audio starts ' +
+      'with the AAC priming frame, as the copied audio does, and every keyframe starts a fragment.',
+    hlsComparisons: [],
+  },
+  {
+    name: '16-copy-encode-audio-seek30', source: 'cfr.mp4', mode: 'copy', audio: 'encode', encoder: null, seek: 30, start: 5,
+    proves: 'Replacement attempt at -ss 30 that copies the video and encodes the audio: the seek lands on the keyframe at ' +
+      '28.028 s, while the encoded audio starts at the seek point, 29.979 s with its priming frame. delay_moov writes ' +
+      'nothing until every track has a sample, so the first fragment runs from 28.028 s to 30.072 s and holds the ' +
+      'keyframe at 30.030 s in its middle; the next keyframe that starts a fragment is at 32.032 s.',
+    hlsComparisons: [],
+  },
 ];
 
 const INITIALIZATION_SEGMENT_IDENTITY_PAIRS = [
   ['encode (libx264), start 0 vs a replacement attempt from segment 5', '01-encode-cfr', '01-encode-cfr-seek30'],
   ['stream copy, start 0 vs a replacement attempt from segment 5', '07-copy-start0', '07-copy-seek30'],
+  [
+    'video copy with encoded audio, start 0 vs a replacement attempt from segment 5',
+    '16-copy-encode-audio',
+    '16-copy-encode-audio-seek30',
+  ],
   [
     'stream copy of an MPEG-TS source, start 0 vs a replacement attempt from segment 2',
     '05-copy-late-start',
@@ -291,7 +310,7 @@ const INITIALIZATION_SEGMENT_DIFFERENCE_PAIRS = [
 const RECIPE =
   'ffmpeg -y [-ss S: (K-1)*6 for an encode with K > 0, else the job\'s seek] -i SRC -map 0:v:0 -map 0:a:0 -map -0:s -map_metadata -1 -map_chapters -1 -copyts ' +
   '-avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128 <codec args> [copy: -bsf:a aac_adtstoasc ' +
-  'when copying AAC, then -b:a 0] [encode: -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6 ' +
+  'when copying AAC, then -b:a 0] [video copy with encoded audio (fixture 16): -c:v copy -c:a aac -ac 1 -b:a 8k] [encode: -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6 ' +
   'in whole seconds, K = startSequenceNumber, N = mediaSegmentCount ' +
   '(-sc_threshold:v:0 0 for libx264, -x265-params no-scenecut=1:no-open-gop=1 for libx265) -g:v:0 145 = ceil(6 x 23.976) + 1 for an encoder verified to honour forced ' +
   'keyframes (libx264, SVT-AV1, libx265), else 143 = floor(6 x 23.976) (fixtures 11 and 13c) (-keyint_min:v:0 with the ' +
@@ -336,6 +355,7 @@ function fixtureRecord({ fixture, record, source, pipe, work }) {
     proves: fixture.proves,
     recipeDeviation: fixture.recipeDeviation ?? null,
     mode: fixture.mode,
+    audio: fixture.audio ?? fixture.mode,
     encoder: fixture.encoder,
     source: {
       file: fixture.source,

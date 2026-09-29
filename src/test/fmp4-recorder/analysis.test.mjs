@@ -158,7 +158,7 @@ describe('recording facts', () => {
       nonSyncFirstFragments: 1,
       fragmentsWithoutVideo: 2,
       leadingFragmentsWithoutVideo: 1,
-      everyKeyframeStartsAFragment: true,
+      fragmentsWithAKeyframeInside: [],
       videoSamples: 3,
       largestFragmentByteLength: stream.fragments[2].byteLength,
       firstVideoPresentationTime: 0n,
@@ -168,12 +168,17 @@ describe('recording facts', () => {
     });
   });
 
-  it("Should report that a keyframe does not start a fragment when a run's second sample is a keyframe", () => {
+  it("Should list each fragment whose keyframe does not start it when a run's second sample is a keyframe", () => {
     const stream = readStream(
-      Buffer.concat([initialization(), keyframeRun(0), keyframeRun(2002)]),
+      Buffer.concat([
+        initialization(),
+        keyframeRun(0),
+        videoFragment({ decodeTime: 2002, sync: true }),
+        keyframeRun(3003),
+      ]),
     );
 
-    assert.equal(diagnostics(stream).everyKeyframeStartsAFragment, false);
+    assert.deepEqual(diagnostics(stream).fragmentsWithAKeyframeInside, [0, 2]);
   });
 
   it('Should describe a segment by its fragments, keyframes and bytes when the grid delivers it', () => {
@@ -343,7 +348,7 @@ describe('violated claims', () => {
             },
           ],
           sourceKeyframeCheck: { recordedKeyframesEqualSourceKeyframes: false },
-          diagnostics: { everyKeyframeStartsAFragment: false, videoPictures: null },
+          diagnostics: { fragmentsWithAKeyframeInside: [0, 3], videoPictures: null },
         },
         {
           name: 'x',
@@ -351,7 +356,7 @@ describe('violated claims', () => {
           hlsComparisons: [],
           sourceKeyframeCheck: null,
           diagnostics: {
-            everyKeyframeStartsAFragment: true,
+            fragmentsWithAKeyframeInside: [0],
             videoPictures: { keyframes: [{ startsClosedGop: true }, { startsClosedGop: false }] },
           },
         },
@@ -360,14 +365,14 @@ describe('violated claims', () => {
           encoder: 'libsvtav1',
           hlsComparisons: [],
           sourceKeyframeCheck: null,
-          diagnostics: { everyKeyframeStartsAFragment: true, videoPictures: null },
+          diagnostics: { fragmentsWithAKeyframeInside: [], videoPictures: null },
         },
         {
           name: 'h',
           encoder: 'libx265',
           hlsComparisons: [],
           sourceKeyframeCheck: null,
-          diagnostics: { everyKeyframeStartsAFragment: true, videoPictures: { keyframes: [{ startsClosedGop: false }] } },
+          diagnostics: { fragmentsWithAKeyframeInside: [], videoPictures: { keyframes: [{ startsClosedGop: false }] } },
         },
         {
           name: 'n',
@@ -392,7 +397,7 @@ describe('violated claims', () => {
       'f / r: 1 of 3 video packets differ from the pipe recording, whose video arguments it shares',
       'f / r: the hlsenc model does not reproduce the HLS cuts',
       "f: a recorded keyframe is not the source's own keyframe",
-      'f: a keyframe does not start a fragment',
+      'f: a keyframe does not start a fragment after the first',
       'x: a keyframe of the verified encoder libx264 does not start a closed GOP (1 of 2)',
       'a: the picture types of the verified encoder libsvtav1 are not read',
       'h: a keyframe of the verified encoder libx265 does not start a closed GOP (1 of 1)',

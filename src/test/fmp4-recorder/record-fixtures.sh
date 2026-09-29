@@ -71,6 +71,8 @@ AAC=(-c:a aac -ac 1 -b:a 8k)
 COPY_VIDEO_PIPE=(-c:v copy -bsf:v h264_mp4toannexb -tag:v avc1 -strict unofficial)
 COPY_PIPE=("${COPY_VIDEO_PIPE[@]}" -c:a copy -bsf:a aac_adtstoasc -b:a 0)
 COPY_PIPE_WITHOUT_ADTSTOASC=("${COPY_VIDEO_PIPE[@]}" -c:a copy -b:a 0)
+# The worker's audio transcode: the video copied, the audio encoded.
+COPY_VIDEO_ENCODE_AUDIO=("${COPY_VIDEO_PIPE[@]}" "${AAC[@]}")
 # The HLS recipe's copies take the same video arguments, so that both recipes hold the same packets.
 COPY_HLS=("${COPY_VIDEO_PIPE[@]}" -c:a copy)
 COMMON_HLS=(-map_metadata -1 -map_chapters -1 -copyts -avoid_negative_ts disabled -max_muxing_queue_size 128 -max_delay 5000000)
@@ -308,6 +310,10 @@ run hls 14-copy-audio-ends-early.video-only video src/short-audio.mp4 -- "${COPY
 # ------------------------------------------------------------------ 15. a keyframe fragment without audio just past a boundary
 run pipe 15-copy-adjacent-keyframes src/adjacent-keyframes.mp4 -- "${COPY_PIPE[@]}"
 run hls 15-copy-adjacent-keyframes.video-only video src/adjacent-keyframes.mp4 -- "${COPY_PIPE[@]}"
+
+# ------------------------------------------------------------------ 16. stream copy with encoded audio, and its replacement attempt
+run pipe 16-copy-encode-audio src/cfr.mp4 -- "${COPY_VIDEO_ENCODE_AUDIO[@]}"
+run pipe 16-copy-encode-audio-seek30 start=5 seek=30 src/cfr.mp4 -- "${COPY_VIDEO_ENCODE_AUDIO[@]}"
 
 # ------------------------------------------------------------------ side claims of ADR 0037 (recorded, not delivered)
 mkdir -p claims

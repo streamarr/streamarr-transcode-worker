@@ -81,6 +81,8 @@ ffmpeg -hide_banner -nostdin -loglevel error
   -copyts -avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128
   copy:   -c:v copy -bsf:v h264_mp4toannexb -tag:v avc1 -strict unofficial
           -c:a copy -bsf:a aac_adtstoasc -b:a 0
+  copy with encoded audio (16): -c:v copy -bsf:v h264_mp4toannexb -tag:v avc1 -strict unofficial
+          -c:a aac -ac 1 -b:a 8k
   x264:   -c:v libx264 -preset faster -tag:v avc1 -profile:v high -level:v 10
           -vf scale=-2:36,format=yuv420p -b:v 6000 -maxrate 6000 -bufsize 12000 -c:a aac -ac 1 -b:a 8k
           -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6
@@ -183,8 +185,12 @@ order the worker's command builder passes them.
   preroll) and the attempt then fails. The skipping fragment and everything after it are never
   grouped. Whether a segment that long may be served at all is a duration policy that
   [server #66](https://github.com/streamarr/streamarr-server/issues/66) owns, not the grouping.
+- `mode` and `audio` say whether the recording encodes or copies its video and its audio.
 - `endsWithAudioOnlyFragments` / `trailingAudioOnlyFragmentCount` describe fragments with no video
   `traf` after the last video sample.
+- `diagnostics.fragmentsWithAKeyframeInside` lists the fragments that hold a keyframe after their
+  first video sample. Only the first fragment may: `delay_moov` writes nothing until every track has
+  a sample (16b).
 - `diagnostics.videoPictures.keyframes` lists every keyframe in decode order with its presentation
   time, the picture that starts it, and whether that picture starts a closed GOP. For H.264 and HEVC
   the picture is the NAL unit type of the keyframe's first picture (5: H.264 IDR; 19 or 20: HEVC
@@ -214,7 +220,7 @@ Timescale 24000 unless stated. `n@t` means segment n starts at t seconds.
 | 6 | `06-encode-audio-tail.fmp4` | 0 | 20 s video, 23.5 s audio. The recording ends in 4 audio-only fragments (19.95, 20.95, 21.95, 22.95 s), which join segment 3. No fragment without video precedes the first segment. |
 | 7 | `07-copy-start0.fmp4` | 0 | 2.002 s-GOP 23.976 fps copy from the start: 11 segments of 3 keyframes each. |
 | 7b | `07-copy-seek30.fmp4` | 5 | Stream-copy replacement attempt at `-ss 30`. The seek lands on the keyframe at 28.028 s (segment 4 < 5). That keyframe fragment and the non-sync fragment after it (2 fragments) are discarded preroll. Segments 5–10 carry exactly 7's video samples at the same ticks. Their audio is the same packets at the same times, but each fragment starts one AAC frame earlier (see findings). |
-| 8 | (pairs over 1, 7, 9, 13) | – | `initializationSegmentIdentityPairs`: `ftyp`+`moov` is byte-identical between the start-0 and seek recordings for libx264 (1346 B), stream copy (1328 B), SVT-AV1 (1334 B) and libx265 (3848 B). `initializationSegmentDifferencePairs`: the encode and copy initialization segments of the same source differ. Each initialization segment has a zero edit list and zero `trex` defaults. |
+| 8 | (pairs over 1, 5b, 7, 9, 13, 16) | – | `initializationSegmentIdentityPairs`: `ftyp`+`moov` is byte-identical between the start-0 and seek recordings for libx264 (1346 B), stream copy (1328 B), the MPEG-TS stream copy (1305 B), stream copy with encoded audio (1348 B), SVT-AV1 (1334 B) and libx265 (3848 B). `initializationSegmentDifferencePairs`: the encode and copy initialization segments of the same source differ. Each initialization segment has a zero edit list and zero `trex` defaults. |
 | 9 | `09-svtav1-vfr.fmp4` | 0 | The VFR source through SVT-AV1 (145-frame GOP + the list): 1582 frames, exactly one keyframe in every interval, segment starts on exactly the ticks of 3 (libx264). SVT-AV1 honours the forced keyframe. No B-frame reordering, so composition offsets are 0. |
 | 9b | `09-svtav1-vfr-seek30.fmp4` | 5 | The same as a replacement attempt from segment 5, seeking one period early (`-ss 24`): starts at 24.024 s, 1007 frames, no padding. Segment 4 (one keyframe) is discarded preroll. Every delivered segment, 5–10, starts on exactly 9's ticks, including segment 5 at 30.030 s, which a seek to 30 s itself missed (see Observations). |
 | 10 | `10-copy-gop-exceeds-period.fmp4` | 0 | A copy with a keyframe every 10.01 s. The sync-first fragment at 20.02 s (fragment 20) is segment 3 while 2 is expected. It closes segment 1 (10.01–20.02 s, fragments 10–19), so segments 0 and 1 are delivered, then grouping fails with `SKIPPED_SEGMENT_NUMBER` and fragment 20 onwards is never grouped. |
@@ -227,13 +233,15 @@ Timescale 24000 unless stated. `n@t` means segment n starts at t seconds.
 | 13d | `13-x265-cfr-seek30.fmp4` | 5 | The libx265 replacement attempt from segment 5, seeking one period early (`-ss 24`): starts at 24.024 s, and segment 4 is discarded preroll. The list `30,36,…,66` forces the frames 13 forced (720, 864, 1007, 1151, 1295, 1439), so every delivered segment, 5–10, starts on exactly 13's ticks. Every keyframe is an IDR picture. Ends with one audio-only fragment. |
 | 14 | `14-copy-audio-ends-early.fmp4` | 0 | 20 s of video, 8 s of audio, copied. The fragment at 8.008 s still carries the last three audio samples, which end at 8.0 s, and from 9.009 s on FFmpeg writes fragments with a video `traf` alone, so no audio sample ever starts at or after the end of segments 1–3; 4 segments, the last from 18.018 s. |
 | 15 | `15-copy-adjacent-keyframes.fmp4` | 0 | 22.05 kHz audio, whose 46.4 ms AAC frames outlast the 41.7 ms video frames, starting 20 ms after the video, and a keyframe on every frame from 5.6 s to 6.6 s, copied. FFmpeg cuts a one-frame fragment at each of those keyframes, and some carry no audio. The one at 6.006 s, which opens segment 1, is one of them, and the next fragment carries an audio sample from 5.964 s, inside segment 0. 4 segments. |
+| 16 | `16-copy-encode-audio.fmp4` | 0 | 7's source with its video copied and its audio encoded (the worker's audio transcode): 11 segments of 3 keyframes each, every keyframe starting a fragment. |
+| 16b | `16-copy-encode-audio-seek30.fmp4` | 5 | Its replacement attempt at `-ss 30`. The seek lands on the keyframe at 28.028 s, but the encoded audio starts at the seek point (29.979 s, its priming frame). `delay_moov` writes nothing until every track has a sample, so the first fragment holds the video from 28.028 s to 30.072 s, with the keyframe at 30.030 s as its 49th sample, and one audio sample. The next two fragments start with non-sync samples; the next keyframe that starts a fragment is at 32.032 s. |
 
 Box facts every recording shares (useful for the reader):
 - Top-level boxes are only `ftyp`, `moov`, `moof` and `mdat`, in that order, with no `largesize`, `styp` or `sidx`.
 - `moov` holds `mvhd`, two `trak`s (video track 1, audio track 2), `mvex` and `udta`. The video sample entry is `avc1` (libx264 and copies), `av01` (SVT-AV1) or `hvc1` (libx265).
 - Every `traf` has `tfhd` flags `0x02003a` (default-base-is-moof plus default duration, size and flags), `tfdt` version 1 and exactly one `trun`.
 - Every `trun` is version 1 (signed composition offsets) with a data offset. Sync status is carried by `trun` first_sample_flags (0x4) when present, otherwise by the `tfhd` default flags. Per-sample flags (0x400) never occur.
-- The largest fragment is 3.4 KB; every keyframe starts a fragment.
+- The largest fragment is 3.4 KB; every keyframe starts a fragment, except the keyframe at 30.030 s inside 16b's first fragment.
 - In every recording from the start except 5b the first audio `tfdt` is 2^64 − 1024: the unsigned wrap of −1024, the AAC priming. 5b copies the ADTS audio of an MPEG-TS source, which carries no priming frame, so its audio starts at 0.
 
 ## Verified encoders
@@ -324,6 +332,7 @@ Agreement, exact in ticks:
 | 11, 12, 12b, 13, 13b, 13c | – | agrees | the first video frame is at zero, so hlsenc measures from the grid's zero |
 | 14 | agrees | agrees | |
 | 15 | – | agrees | |
+| 16, 16b | – | – | no HLS run: the video packets and cut points are 7's |
 
 The list anchors the pipe recipe's keyframes on the zero-based timeline, while hlsenc and the HLS
 recipe's expression both measure from the attempt's first frame. Before the list, the pipe recipe forced
@@ -382,7 +391,10 @@ Reproduced:
   - It has a zero edit list and zero `trex` defaults.
   - Encode and copy initialization segments differ.
 - Fragmentation:
-  - With no `min_frag_duration` and `-frag_duration` 1 s, every keyframe starts a fragment.
+  - With no `min_frag_duration` and `-frag_duration` 1 s, every keyframe starts a fragment, except
+    in the first fragment: `delay_moov` writes nothing until every track has a sample, so when a
+    stream copy's replacement attempt encodes its audio, which starts at the seek point, the first
+    fragment runs from the keyframe the seek landed on past the next one (16b).
   - Every fragment that does not start at a keyframe starts with a non-sync sample.
 - Timestamps and grouping:
   - The `cmaf` flag writes negative composition offsets.

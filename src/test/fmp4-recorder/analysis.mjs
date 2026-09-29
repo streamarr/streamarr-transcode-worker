@@ -504,14 +504,13 @@ export function videoPictures(stream) {
   return { sampleEntry: track.sampleEntry, keyframes };
 }
 
-function everyKeyframeStartsAFragment(stream) {
+/** The indexes of the fragments that hold a keyframe after their first video sample. */
+function fragmentsWithAKeyframeInside(stream) {
   const samples = videoSamples(stream);
-  const withKeyframes = new Set(samples.filter((sample) => sample.sync).map((sample) => sample.fragmentIndex));
-  return [...withKeyframes].every((index) => {
-    const start = videoTrafOf(stream.fragments[index]);
-    const keyframes = samples.filter((sample) => sample.fragmentIndex === index && sample.sync).length;
-    return start.firstSync && start.sampleCount > 0 && keyframes === 1;
-  });
+  const inside = samples.filter(
+    (sample, position) => sample.sync && position > 0 && samples[position - 1].fragmentIndex === sample.fragmentIndex,
+  );
+  return [...new Set(inside.map((sample) => sample.fragmentIndex))];
 }
 
 function startPlusDurationMisses(video) {
@@ -543,7 +542,7 @@ export function diagnostics(stream) {
     nonSyncFirstFragments: video.filter((traf) => traf?.firstSync === false).length,
     fragmentsWithoutVideo: video.filter((traf) => traf === null).length,
     leadingFragmentsWithoutVideo: video.findIndex((traf) => traf !== null),
-    everyKeyframeStartsAFragment: everyKeyframeStartsAFragment(stream),
+    fragmentsWithAKeyframeInside: fragmentsWithAKeyframeInside(stream),
     videoSamples: videoSamples(stream).length,
     largestFragmentByteLength: Math.max(...fragments.map((fragment) => fragment.byteLength)),
     firstVideoPresentationTime: starts[0],
@@ -601,8 +600,9 @@ function recordingViolations(fixture) {
   if (check !== null && !check.recordedKeyframesEqualSourceKeyframes) {
     found.push(`${fixture.name}: a recorded keyframe is not the source's own keyframe`);
   }
-  if (!fixture.diagnostics.everyKeyframeStartsAFragment) {
-    found.push(`${fixture.name}: a keyframe does not start a fragment`);
+  // delay_moov writes nothing until every track has a sample, so only the first fragment may run past a keyframe.
+  if (fixture.diagnostics.fragmentsWithAKeyframeInside.some((index) => index > 0)) {
+    found.push(`${fixture.name}: a keyframe does not start a fragment after the first`);
   }
   return [...found, ...pictureViolations(fixture)];
 }
