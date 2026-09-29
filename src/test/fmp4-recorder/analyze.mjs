@@ -286,6 +286,20 @@ const FIXTURES = [
       'preroll, and segment 5 carries the start-0 recording\'s video samples.',
     hlsComparisons: [],
   },
+  {
+    name: '17-copy-audio-ends-long-before-video', source: 'long-video.mp4', mode: 'copy', encoder: null, seek: 0, start: 0,
+    proves: 'Stream copy of a source whose 20 s of audio end 160 s before its 180 s of video, many times FFmpeg\'s ' +
+      '10 s muxer interleave bound: the fragment at 20.020 s carries the last three audio samples, which end at ' +
+      '20.0 s, and fragments 21-179 carry video alone, so no audio sample at or after the end of segments 3-28 ever ' +
+      'arrives.',
+    hlsComparisons: [],
+  },
+  {
+    name: '17-encode-audio-ends-long-before-video', source: 'long-video.mp4', mode: 'encode', encoder: 'libx264', seek: 0, start: 0,
+    proves: 'The same source encoded under the recipe: the fragment at 20.103 s carries the last audio sample, at ' +
+      '19.947 s, and fragments 21-179 carry video alone.',
+    hlsComparisons: [],
+  },
 ];
 
 const INITIALIZATION_SEGMENT_IDENTITY_PAIRS = [

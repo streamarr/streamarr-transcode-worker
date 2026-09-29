@@ -131,9 +131,9 @@ and every attempt forces the same frame at a boundary it shares with another att
 derives N as the server does: the probed duration in whole milliseconds over the period, rounded up.
 That is 12 for `cfr.mp4` (66.024 s), 11 for `vfr.mp4` and `irregular.mp4` (66 s), 6 for `late.ts`
 (30.051 s), 5 for `gop10.mp4` (25.025 s), 4 for `tail.mp4` (23.5 s) and `short-audio.mp4` (20.02 s),
-and 5 for the first 30 s that fixtures 11, 12, 12b, 13b and 13c read. A start-0 encode of `cfr.mp4`
-therefore receives `0,6,…,66` and its replacement attempts 1b and 13d `30,36,…,66`; a time past the
-last video frame forces nothing.
+31 for `long-video.mp4` (180.013 s), and 5 for the first 30 s that fixtures 11, 12, 12b, 13b and 13c
+read. A start-0 encode of `cfr.mp4` therefore receives `0,6,…,66` and its replacement attempts 1b and
+13d `30,36,…,66`; a time past the last video frame forces nothing.
 
 A replacement attempt from segment K > 0 is a job that seeks to K × 6 (`seekSeconds`, 30 s for 1b,
 7b, 9b and 13d). A stream copy passes that seek to FFmpeg (`-ss 30`) and lands on the keyframe at or before
@@ -241,6 +241,8 @@ Timescale 24000 unless stated. `n@t` means segment n starts at t seconds.
 | 15 | `15-copy-adjacent-keyframes.fmp4` | 0 | 22.05 kHz audio, whose 46.4 ms AAC frames outlast the 41.7 ms video frames, starting 20 ms after the video, and a keyframe on every frame from 5.6 s to 6.6 s, copied. FFmpeg cuts a one-frame fragment at each of those keyframes, and some carry no audio. The one at 6.006 s, which opens segment 1, is one of them, and the next fragment carries an audio sample from 5.964 s, inside segment 0. 4 segments. |
 | 16 | `16-copy-encode-audio.fmp4` | 0 | 7's source with its video copied and its audio encoded (the worker's audio transcode): 11 segments of 3 keyframes each, every keyframe starting a fragment. |
 | 16b | `16-copy-encode-audio-seek30.fmp4` | 5 | Its replacement attempt at `-ss 30`. The seek lands on the keyframe at 28.028 s, but the encoded audio starts at the seek point (29.979 s, its priming frame). `delay_moov` writes nothing until every track has a sample, so the first fragment holds the video from 28.028 s to 30.072 s, with the keyframe at 30.030 s as its 49th sample, and one audio sample. That keyframe opens segment 5 inside the fragment: the 48 samples before it are segment 4's discarded preroll, and segment 5 carries exactly 16's video samples at the same ticks. The next two fragments start with non-sync samples; the next keyframe that starts a fragment is at 32.032 s. |
+| 17 | `17-copy-audio-ends-long-before-video.fmp4` | 0 | 180 s of video, 20 s of a sine tone, copied: the audio outlasts FFmpeg's 10 s muxer interleave bound many times over. The fragment at 20.020 s carries the last three audio samples, which end at 20.0 s, and fragments 21–179 carry video alone, so no audio sample ever starts at or after the end of segments 3–28; 30 segments, the last from 174.174 s. |
+| 17b | `17-encode-audio-ends-long-before-video.fmp4` | 0 | The same source encoded under the recipe: the fragment at 20.103 s carries the last audio sample, at 19.947 s, and fragments 21–179 carry video alone; 30 segments of one forced keyframe each. |
 
 Box facts every recording shares (useful for the reader):
 - Top-level boxes are only `ftyp`, `moov`, `moof` and `mdat`, in that order, with no `largesize`, `styp` or `sidx`.
@@ -339,6 +341,7 @@ Agreement, exact in ticks:
 | 14 | agrees | agrees | |
 | 15 | – | agrees | |
 | 16, 16b | – | – | no HLS run: the video packets and cut points are 7's |
+| 17, 17b | – | – | no HLS run: they record when audio stops arriving, not where the muxer cuts |
 
 The list anchors the pipe recipe's keyframes on the zero-based timeline, while hlsenc and the HLS
 recipe's expression both measure from the attempt's first frame. Before the list, the pipe recipe forced

@@ -208,6 +208,12 @@ VFR_SELECT="select='if(lt(n,300),gte(mod(n*7919,97),20),if(lt(n,600),not(mod(n,2
   -map 0:v -map 1:a "${SRC_X264[@]}" -g 48 -keyint_min 48 -force_key_frames "expr:eq(n,0)+gte(t,5.6)*lte(t,6.6)" \
   "${SRC_AAC[@]}" -fflags +bitexact src/adjacent-keyframes.mp4
 
+# Audio that ends long before the video: 180 s of video, 20 s of a sine tone, so the video outruns
+# FFmpeg's muxer interleave bound (10 s) once the audio ends.
+"${FF[@]}" -f lavfi -i "testsrc2=size=64x36:rate=24000/1001:duration=180" \
+  -f lavfi -i "sine=frequency=440:sample_rate=48000:duration=20" -map 0:v -map 1:a \
+  "${SRC_X264[@]}" -g 48 -keyint_min 48 "${SRC_AAC[@]}" -fflags +bitexact src/long-video.mp4
+
 # A keyframe every 240 frames (10.01 s): wider than the period, so a segment number is skipped.
 "${FF[@]}" -f lavfi -i "$(lavfi 24000/1001 25)" -f lavfi -i "$SILENCE:duration=25" -map 0:v -map 1:a \
   "${SRC_X264[@]}" -g 240 -keyint_min 240 "${SRC_AAC[@]}" -fflags +bitexact src/gop10.mp4
@@ -314,6 +320,10 @@ run hls 15-copy-adjacent-keyframes.video-only video src/adjacent-keyframes.mp4 -
 # ------------------------------------------------------------------ 16. stream copy with encoded audio, and its replacement attempt
 run pipe 16-copy-encode-audio src/cfr.mp4 -- "${COPY_VIDEO_ENCODE_AUDIO[@]}"
 run pipe 16-copy-encode-audio-seek30 start=5 seek=30 src/cfr.mp4 -- "${COPY_VIDEO_ENCODE_AUDIO[@]}"
+
+# ------------------------------------------------------------------ 17. audio that ends 160 s before the video, copied and encoded
+run pipe 17-copy-audio-ends-long-before-video src/long-video.mp4 -- "${COPY_PIPE[@]}"
+run pipe 17-encode-audio-ends-long-before-video src/long-video.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}"
 
 # ------------------------------------------------------------------ side claims of ADR 0037 (recorded, not delivered)
 mkdir -p claims
