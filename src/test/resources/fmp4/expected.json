@@ -4,7 +4,7 @@
     "ffmpeg": "ffmpeg version 8.1.2-Jellyfin Copyright (c) 2000-2026 the FFmpeg developers"
   },
   "recipe": "ffmpeg -y [-ss S: (K-1)*6 for an encode with K > 0, else the job's seek] -i SRC -map 0:v:0 -map 0:a:0 -map -0:s -map_metadata -1 -map_chapters -1 -copyts -avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128 -max_interleave_delta 10000000 <codec args> [copy: -bsf:a aac_adtstoasc when copying AAC, then -b:a 0] [video copy with encoded audio (fixture 16): -c:v copy -c:a aac -ac 1 -b:a 8k] [encode: -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6 in whole seconds, K = startSequenceNumber, N = mediaSegmentCount (-sc_threshold:v:0 0 for libx264, -x265-params no-scenecut=1:no-open-gop=1 for libx265) -g:v:0 145 = ceil(6 x 23.976) + 1 for an encoder verified to honour forced keyframes (libx264, SVT-AV1, libx265), else 143 = floor(6 x 23.976) (fixtures 11 and 13c) (-keyint_min:v:0 with the same value for SVT-AV1)] [fixtures 11, 12, 12b, 13b and 13c only: -t 30] -threads 1 -f mp4 -movflags cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont -frag_duration 1000000 pipe:1",
-  "rules": "ADR 0037: segment N = [N*P, (N+1)*P) on the zero-based timeline. A sync video sample opens segment floor(presentationTime / (P * timescale)), even inside a fragment, or joins it when that segment is already open; every other sample joins the open segment (or waits for the first one), and a fragment belongs to every segment that holds one of its video samples. Segments numbered below startSequenceNumber are discarded preroll; a sync sample beyond the next deliverable number closes the open segment (delivered, or discarded when preroll) and then fails with a skipped segment number, grouping nothing from that sample on. firstVideoPresentationTime = the opening sync sample's decode time + its composition offset, in videoTimescale ticks, no edit list. Audio samples follow their own start: once the keyframe of a later segment has arrived, a segment closes after the fragment in which an audio sample of a later segment arrives or the video's decode end runs 1 s past the segment's end; lateAudioSample names the first audio sample that arrives after its segment closed, which fails the attempt.",
+  "rules": "ADR 0037: segment N = [N*P, (N+1)*P) on the zero-based timeline. A sync video sample opens segment floor(presentationTime / (P * timescale)), even inside a fragment, or joins it when that segment is already open; every other sample joins the open segment (or waits for the first one), and a fragment belongs to every segment that holds one of its video samples. Segments numbered below startSequenceNumber are discarded preroll; a sync sample beyond the next deliverable number closes the open segment (delivered, or discarded when preroll) and then fails with a skipped segment number, grouping nothing from that sample on. firstVideoPresentationTime = the opening sync sample's decode time + its composition offset, in videoTimescale ticks, no edit list. Audio samples follow their own start: once the keyframe of a later segment has arrived, a segment closes after the fragment in which an audio sample of a later segment arrives or the video's decode end runs 1 s past the segment's end; droppedAudioSamples lists every audio sample that arrives after its segment closed, which the producer drops.",
   "fixtures": [
     {
       "name": "01-encode-cfr",
@@ -229,7 +229,7 @@
       ],
       "discardedPreroll": [],
       "failure": null,
-      "lateAudioSample": null,
+      "droppedAudioSamples": [],
       "endsWithAudioOnlyFragments": true,
       "trailingAudioOnlyFragmentCount": 1,
       "sourceKeyframeCheck": null,
@@ -710,7 +710,7 @@
         }
       ],
       "failure": null,
-      "lateAudioSample": null,
+      "droppedAudioSamples": [],
       "endsWithAudioOnlyFragments": true,
       "trailingAudioOnlyFragmentCount": 1,
       "sourceKeyframeCheck": null,
@@ -1089,7 +1089,7 @@
       ],
       "discardedPreroll": [],
       "failure": null,
-      "lateAudioSample": null,
+      "droppedAudioSamples": [],
       "endsWithAudioOnlyFragments": true,
       "trailingAudioOnlyFragmentCount": 1,
       "sourceKeyframeCheck": {
@@ -1546,7 +1546,7 @@
       ],
       "discardedPreroll": [],
       "failure": null,
-      "lateAudioSample": null,
+      "droppedAudioSamples": [],
       "endsWithAudioOnlyFragments": true,
       "trailingAudioOnlyFragmentCount": 1,
       "sourceKeyframeCheck": null,
@@ -2066,7 +2066,7 @@
       ],
       "discardedPreroll": [],
       "failure": null,
-      "lateAudioSample": null,
+      "droppedAudioSamples": [],
       "endsWithAudioOnlyFragments": true,
       "trailingAudioOnlyFragmentCount": 1,
       "sourceKeyframeCheck": {
@@ -2549,7 +2549,7 @@
       ],
       "discardedPreroll": [],
       "failure": null,
-      "lateAudioSample": null,
+      "droppedAudioSamples": [],
       "endsWithAudioOnlyFragments": false,
       "trailingAudioOnlyFragmentCount": 0,
       "sourceKeyframeCheck": null,
@@ -2902,7 +2902,7 @@
       ],
       "discardedPreroll": [],
       "failure": null,
-      "lateAudioSample": null,
+      "droppedAudioSamples": [],
       "endsWithAudioOnlyFragments": true,
       "trailingAudioOnlyFragmentCount": 1,
       "sourceKeyframeCheck": {
@@ -3253,7 +3253,7 @@
       ],
       "discardedPreroll": [],
       "failure": null,
-      "lateAudioSample": null,
+      "droppedAudioSamples": [],
       "endsWithAudioOnlyFragments": true,
       "trailingAudioOnlyFragmentCount": 1,
       "sourceKeyframeCheck": {
@@ -3542,7 +3542,7 @@
       ],
       "discardedPreroll": [],
       "failure": null,
-      "lateAudioSample": null,
+      "droppedAudioSamples": [],
       "endsWithAudioOnlyFragments": true,
       "trailingAudioOnlyFragmentCount": 4,
       "sourceKeyframeCheck": null,
@@ -3873,7 +3873,7 @@
       ],
       "discardedPreroll": [],
       "failure": null,
-      "lateAudioSample": null,
+      "droppedAudioSamples": [],
       "endsWithAudioOnlyFragments": false,
       "trailingAudioOnlyFragmentCount": 0,
       "sourceKeyframeCheck": {
@@ -4413,7 +4413,7 @@
         }
       ],
       "failure": null,
-      "lateAudioSample": null,
+      "droppedAudioSamples": [],
       "endsWithAudioOnlyFragments": false,
       "trailingAudioOnlyFragmentCount": 0,
       "sourceKeyframeCheck": {
@@ -4914,7 +4914,7 @@
       ],
       "discardedPreroll": [],
       "failure": null,
-      "lateAudioSample": null,
+      "droppedAudioSamples": [],
       "endsWithAudioOnlyFragments": false,
       "trailingAudioOnlyFragmentCount": 0,
       "sourceKeyframeCheck": null,
@@ -5500,7 +5500,7 @@
         }
       ],
       "failure": null,
-      "lateAudioSample": null,
+      "droppedAudioSamples": [],
       "endsWithAudioOnlyFragments": false,
       "trailingAudioOnlyFragmentCount": 0,
       "sourceKeyframeCheck": null,
@@ -5820,7 +5820,7 @@
         "actualNumber": 3,
         "presentationTime": 480480
       },
-      "lateAudioSample": null,
+      "droppedAudioSamples": [],
       "endsWithAudioOnlyFragments": true,
       "trailingAudioOnlyFragmentCount": 1,
       "sourceKeyframeCheck": {
@@ -6089,7 +6089,7 @@
       ],
       "discardedPreroll": [],
       "failure": null,
-      "lateAudioSample": null,
+      "droppedAudioSamples": [],
       "endsWithAudioOnlyFragments": false,
       "trailingAudioOnlyFragmentCount": 0,
       "sourceKeyframeCheck": null,
@@ -6388,7 +6388,7 @@
       ],
       "discardedPreroll": [],
       "failure": null,
-      "lateAudioSample": null,
+      "droppedAudioSamples": [],
       "endsWithAudioOnlyFragments": true,
       "trailingAudioOnlyFragmentCount": 1,
       "sourceKeyframeCheck": null,
@@ -6658,7 +6658,7 @@
       ],
       "discardedPreroll": [],
       "failure": null,
-      "lateAudioSample": null,
+      "droppedAudioSamples": [],
       "endsWithAudioOnlyFragments": false,
       "trailingAudioOnlyFragmentCount": 0,
       "sourceKeyframeCheck": null,
@@ -6981,7 +6981,7 @@
       ],
       "discardedPreroll": [],
       "failure": null,
-      "lateAudioSample": null,
+      "droppedAudioSamples": [],
       "endsWithAudioOnlyFragments": true,
       "trailingAudioOnlyFragmentCount": 1,
       "sourceKeyframeCheck": null,
@@ -7335,7 +7335,7 @@
         }
       ],
       "failure": null,
-      "lateAudioSample": null,
+      "droppedAudioSamples": [],
       "endsWithAudioOnlyFragments": true,
       "trailingAudioOnlyFragmentCount": 1,
       "sourceKeyframeCheck": null,
@@ -7693,7 +7693,7 @@
       ],
       "discardedPreroll": [],
       "failure": null,
-      "lateAudioSample": null,
+      "droppedAudioSamples": [],
       "endsWithAudioOnlyFragments": true,
       "trailingAudioOnlyFragmentCount": 1,
       "sourceKeyframeCheck": null,
@@ -7970,7 +7970,7 @@
       ],
       "discardedPreroll": [],
       "failure": null,
-      "lateAudioSample": null,
+      "droppedAudioSamples": [],
       "endsWithAudioOnlyFragments": false,
       "trailingAudioOnlyFragmentCount": 0,
       "sourceKeyframeCheck": null,
@@ -8249,7 +8249,7 @@
       ],
       "discardedPreroll": [],
       "failure": null,
-      "lateAudioSample": null,
+      "droppedAudioSamples": [],
       "endsWithAudioOnlyFragments": false,
       "trailingAudioOnlyFragmentCount": 0,
       "sourceKeyframeCheck": {
@@ -8568,7 +8568,7 @@
       ],
       "discardedPreroll": [],
       "failure": null,
-      "lateAudioSample": null,
+      "droppedAudioSamples": [],
       "endsWithAudioOnlyFragments": false,
       "trailingAudioOnlyFragmentCount": 0,
       "sourceKeyframeCheck": {
@@ -9041,7 +9041,7 @@
       ],
       "discardedPreroll": [],
       "failure": null,
-      "lateAudioSample": null,
+      "droppedAudioSamples": [],
       "endsWithAudioOnlyFragments": false,
       "trailingAudioOnlyFragmentCount": 0,
       "sourceKeyframeCheck": {
@@ -9444,7 +9444,7 @@
         }
       ],
       "failure": null,
-      "lateAudioSample": null,
+      "droppedAudioSamples": [],
       "endsWithAudioOnlyFragments": true,
       "trailingAudioOnlyFragmentCount": 1,
       "sourceKeyframeCheck": {
@@ -9946,7 +9946,7 @@
       ],
       "discardedPreroll": [],
       "failure": null,
-      "lateAudioSample": null,
+      "droppedAudioSamples": [],
       "endsWithAudioOnlyFragments": false,
       "trailingAudioOnlyFragmentCount": 0,
       "sourceKeyframeCheck": {
@@ -10892,11 +10892,18 @@
       ],
       "discardedPreroll": [],
       "failure": null,
-      "lateAudioSample": {
-        "fragmentIndex": 169,
-        "presentationTime": 958464,
-        "segmentNumber": 3
-      },
+      "droppedAudioSamples": [
+        {
+          "fragmentIndex": 169,
+          "presentationTime": 958464,
+          "segmentNumber": 3
+        },
+        {
+          "fragmentIndex": 169,
+          "presentationTime": 959488,
+          "segmentNumber": 3
+        }
+      ],
       "endsWithAudioOnlyFragments": false,
       "trailingAudioOnlyFragmentCount": 0,
       "sourceKeyframeCheck": null,

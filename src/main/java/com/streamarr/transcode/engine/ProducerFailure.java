@@ -64,8 +64,7 @@ public enum ProducerFailure {
           MISPLACED_INITIALIZATION_SEGMENT,
           UNEXPECTED_BOX,
           MULTIPLE_VIDEO_TRACKS,
-          PRESENTATION_TIME_REGRESSED,
-          LATE_AUDIO_SAMPLE ->
+          PRESENTATION_TIME_REGRESSED ->
           MALFORMED_OUTPUT;
     };
   }

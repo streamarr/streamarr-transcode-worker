@@ -1685,6 +1685,39 @@ class WorkerMediaSmokeTest {
         .isEqualTo(unwithheldUploads.contentOf(unwithheldUploads.names()));
   }
 
+  @Test
+  @DisplayName(
+      "Should upload every media segment without the audio encoder's last frames when an attempt"
+          + " that encodes its audio reads audio that ends long before the video")
+  void shouldUploadEveryMediaSegmentWithoutTheAudioEncodersLastFramesWhenTheAudioEndsLongBeforeIt()
+      throws Exception {
+    var source = audioEndsLongBeforeVideoSource();
+    var launcher = new TeeingProcessLauncher(new ProcessBuilderLauncher());
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    job.getExecutionBuilder().setMediaSegmentCount(AUDIO_ENDS_LONG_BEFORE_VIDEO_SEGMENT_COUNT);
+
+    var uploads =
+        execute(engine(softwareCapabilities(), launcher), source.getParent(), job.build());
+
+    assertThat(uploads.names())
+        .containsExactlyElementsOf(uploadNames(AUDIO_ENDS_LONG_BEFORE_VIDEO_SEGMENT_COUNT));
+    var ffmpegAudio =
+        FfprobePackets.of(launcher.outputOf(fromProto(job.getJobAttemptId())), root).stream()
+            .filter(Packet::isAudio)
+            .toList();
+    var uploadedAudio =
+        FfprobePackets.of(uploads.contentOf(uploads.names()), root).stream()
+            .filter(Packet::isAudio)
+            .toList();
+    // The copied video runs ahead of the audio still inside FFmpeg's decoder, filter and encoder,
+    // and the muxer stops holding the video for it 10 s after the audio's last packet. The frames
+    // that come out later, as many as thread scheduling leaves behind, arrive after their segment
+    // was delivered, and the worker drops them: only the end of FFmpeg's audio can be missing.
+    assertThat(uploadedAudio)
+        .isNotEmpty()
+        .containsExactlyElementsOf(ffmpegAudio.subList(0, uploadedAudio.size()));
+  }
+
   static Stream<Arguments> sourceContainersModesAndStarts() {
     return sourceContainersAndModes()
         .flatMap(

@@ -14,6 +14,7 @@ import static org.awaitility.Awaitility.await;
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.engine.AttemptOutcome.Failed;
 import com.streamarr.transcode.engine.AttemptOutcome.Stopped;
+import com.streamarr.transcode.engine.FfmpegRecordings.DroppedAudioSample;
 import com.streamarr.transcode.engine.FfmpegRecordings.Recording;
 import com.streamarr.transcode.engine.FfmpegRecordings.SegmentSummary;
 import com.streamarr.transcode.fakes.ScriptedProcess;
@@ -144,15 +145,11 @@ class ProducerTest {
   }
 
   static Stream<Recording> recordingsThatComplete() {
-    return recordingsWithoutLateAudio().filter(recording -> recording.failure().isEmpty());
+    return recordings().filter(recording -> recording.failure().isEmpty());
   }
 
-  static Stream<Recording> recordingsWithoutLateAudio() {
-    return recordings().filter(recording -> recording.lateAudioSample().isEmpty());
-  }
-
-  static Stream<Recording> recordingsWithLateAudio() {
-    return recordings().filter(recording -> recording.lateAudioSample().isPresent());
+  static Stream<Recording> recordingsThatDropAudio() {
+    return recordings().filter(recording -> !recording.droppedAudioSamples().isEmpty());
   }
 
   static Stream<Recording> recordings() {
@@ -181,7 +178,7 @@ class ProducerTest {
   }
 
   @ParameterizedTest(name = "{0}")
-  @MethodSource("recordingsWithoutLateAudio")
+  @MethodSource("recordings")
   @DisplayName("Should deliver FFmpeg's own samples when it rebuilds the media segments")
   void shouldDeliverFfmpegsOwnSamplesWhenItRebuildsTheMediaSegments(Recording recording) {
     deliverEverySegmentOf(recording);
@@ -221,11 +218,11 @@ class ProducerTest {
   }
 
   @ParameterizedTest(name = "{0}")
-  @MethodSource("recordingsWithoutLateAudio")
+  @MethodSource("recordings")
   @DisplayName(
-      "Should deliver every audio sample FFmpeg writes exactly once when it rebuilds the media"
-          + " segments")
-  void shouldDeliverEveryAudioSampleFfmpegWritesExactlyOnceWhenItRebuildsTheMediaSegments(
+      "Should deliver exactly once every audio sample FFmpeg writes before its media segment was"
+          + " delivered when it rebuilds the media segments")
+  void shouldDeliverEveryAudioSampleFfmpegWritesInTimeExactlyOnceWhenItRebuildsTheMediaSegments(
       Recording recording) {
     var outcome = deliverEverySegmentOf(recording);
 
@@ -493,30 +490,28 @@ class ProducerTest {
   }
 
   // FFmpeg flushes an audio encoder only once the whole input has ended, so the encoder's last
-  // frames of audio that ends long before the video arrive after their segment closed.
+  // frames of audio that ends long before the video arrive after their segment was delivered.
   @ParameterizedTest(name = "{0}")
-  @MethodSource("recordingsWithLateAudio")
+  @MethodSource("recordingsThatDropAudio")
   @DisplayName(
-      "Should fail the attempt as malformed output when an audio sample arrives after the video has"
-          + " run a second past its segment's end")
-  void shouldFailTheAttemptAsMalformedOutputWhenAnAudioSampleArrivesAfterTheVideoRanPastItsSegment(
+      "Should deliver every media segment without the audio samples that arrive after their segment"
+          + " was delivered when the audio ends long before the video")
+  void shouldDeliverEveryMediaSegmentWithoutTheLateAudioSamplesWhenTheAudioEndsLongBeforeTheVideo(
       Recording recording) {
-    var late = recording.lateAudioSample().orElseThrow();
+    var outcome = deliverEverySegmentOf(recording);
 
-    var failure =
-        failureOf(
-            producerFor(
-                    ScriptedProcess.builder().output(bytesOf(recording.file())).build(), recording)
-                .start());
-
-    assertThat(failure.reason()).isEqualTo(ProducerFailure.MALFORMED_OUTPUT);
-    assertThat(failure.detail())
-        .contains("LATE_AUDIO_SAMPLE")
-        .contains(
-            "an audio sample at "
-                + late.presentationTime()
-                + " belongs to segment "
-                + late.segmentNumber());
+    assertThat(outcome).isEqualTo(new Completed());
+    assertThat(mediaSegmentNames())
+        .extracting(ProducerTest::numberOf)
+        .containsExactlyElementsOf(
+            recording.segments().stream().map(SegmentSummary::number).toList());
+    var delivered = Mp4Samples.read(sink.acceptedBytes());
+    assertThat(delivered.samplesOf(delivered.audioTrack()))
+        .extracting(Sample::presentationTime)
+        .doesNotContainAnyElementsOf(
+            recording.droppedAudioSamples().stream()
+                .map(DroppedAudioSample::presentationTime)
+                .toList());
   }
 
   @Test
@@ -596,9 +591,32 @@ class ProducerTest {
 
   @Test
   @DisplayName(
-      "Should fail the attempt as malformed output when an audio sample arrives after the segment"
-          + " whose interval holds its start closed")
-  void shouldFailTheAttemptAsMalformedOutputWhenAnAudioSampleArrivesAfterItsSegmentClosed() {
+      "Should drop an audio sample and complete the attempt when the sample arrives after the"
+          + " segment whose interval holds its start was delivered")
+  void shouldDropAnAudioSampleAndCompleteTheAttemptWhenItArrivesAfterItsSegmentWasDelivered() {
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0).audioFrom(0, 12_000, 12_000).build(),
+            TimedFragment.keyframeAt(24_000).build(),
+            TimedFragment.keyframeAt(48_000).audioFrom(24_000, 12_000).build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+
+    var producer = producerOfOneSecondSegments(process).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(sink.acceptedNames())
+        .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
+    assertThat(audioDecodeTimesOf("segment0.m4s")).containsExactly(0L, 12_000L);
+    assertThat(audioDecodeTimesOf("segment1.m4s")).isEmpty();
+    assertThat(audioDecodeTimesOf("segment2.m4s")).isEmpty();
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as malformed output when an audio sample's presentation time runs"
+          + " back into a segment that was delivered")
+  void shouldFailTheAttemptAsMalformedOutputWhenAnAudioSampleRunsBackIntoADeliveredSegment() {
     var output =
         OneSecondSegments.of(
             IsoBoxes.videoAndAudioMoov(),
@@ -611,8 +629,29 @@ class ProducerTest {
 
     var failure = failureOf(producer);
     assertThat(failure.reason()).isEqualTo(ProducerFailure.MALFORMED_OUTPUT);
-    assertThat(failure.detail()).contains("LATE_AUDIO_SAMPLE");
+    assertThat(failure.detail()).contains("PRESENTATION_TIME_REGRESSED");
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as malformed output when an audio sample's presentation time runs"
+          + " back inside a segment still being assembled")
+  void shouldFailTheAttemptAsMalformedOutputWhenAnAudioSampleRunsBackInsideAnOpenSegment() {
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0).audioFrom(12_000, 12_000).build(),
+            TimedFragment.frameAt(24_000).audioFrom(0, 12_000).build(),
+            TimedFragment.keyframeAt(48_000).audioFrom(48_000, 12_000).build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+
+    var producer = producerOfOneSecondSegments(process).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.MALFORMED_OUTPUT);
+    assertThat(failure.detail()).contains("PRESENTATION_TIME_REGRESSED");
+    assertThat(mediaSegmentNames()).isEmpty();
   }
 
   @ParameterizedTest(name = "{0}")

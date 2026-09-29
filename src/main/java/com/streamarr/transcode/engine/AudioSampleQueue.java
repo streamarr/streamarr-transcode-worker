@@ -12,9 +12,12 @@ import java.util.stream.Stream;
  * sample's start closes, whichever fragment carried it, and tracks how far the audio has certainly
  * arrived. A sample before the attempt's first segment is preroll and is dropped, except that an
  * attempt from segment zero keeps the AAC priming frame, which starts before zero, in segment zero.
- * A keyframe fragment does not show how far the audio has arrived: FFmpeg can write one without
- * audio past a boundary and the audio before that boundary in the fragment after it. While the
- * audio lasts, an audio sample shows it; once the audio ends, only the video does ({@link
+ * A sample that arrives after its segment closed is dropped and counted: when encoded audio ends
+ * long before the video, the frames still inside FFmpeg's encoding pipeline, and the encoder's last
+ * frames, which come out only once the whole input has ended, arrive after the video has run past
+ * their segment. A keyframe fragment does not show how far the audio has arrived: FFmpeg can write
+ * one without audio past a boundary and the audio before that boundary in the fragment after it.
+ * While the audio lasts, an audio sample shows it; once the audio ends, only the video does ({@link
  * VideoProgress}).
  */
 final class AudioSampleQueue {
@@ -26,6 +29,9 @@ final class AudioSampleQueue {
   private long firstOpenNumber;
   private long reachedNumber = Long.MIN_VALUE;
   private boolean withoutSoundTrack;
+  // Before any audio sample, none has run backwards.
+  private long lastPresentationTime = Long.MIN_VALUE;
+  private long droppedLateSampleCount;
 
   AudioSampleQueue(int periodSeconds, int startSequenceNumber) {
     this.periodSeconds = periodSeconds;
@@ -38,7 +44,8 @@ final class AudioSampleQueue {
    * decode order, which for audio is presentation order, so once an audio sample starts in segment
    * N, no audio sample of an earlier segment follows.
    *
-   * @throws FragmentedMp4Exception when an audio sample belongs to a segment that already closed
+   * @throws FragmentedMp4Exception when an audio sample starts before the one that arrived before
+   *     it
    */
   void add(Fragment fragment) {
     withoutSoundTrack = fragment.tracks().audio().isEmpty();
@@ -80,6 +87,11 @@ final class AudioSampleQueue {
     return samples;
   }
 
+  /** The audio samples dropped because they arrived after their segment closed. */
+  long droppedLateSampleCount() {
+    return droppedLateSampleCount;
+  }
+
   Stream<Fragment> heldFragments() {
     return held.stream().map(queued -> queued.sample().fragment());
   }
@@ -89,6 +101,7 @@ final class AudioSampleQueue {
   }
 
   private void hold(Fragment fragment, Sample sample) {
+    requireNoRegression(sample);
     var number = numberOf(sample.presentationTime(), audioTimescaleOf(fragment));
     if (number < 0 && startSequenceNumber == 0) {
       number = 0;
@@ -99,16 +112,22 @@ final class AudioSampleQueue {
     }
 
     if (number < firstOpenNumber) {
-      throw new FragmentedMp4Exception(
-          Reason.LATE_AUDIO_SAMPLE,
-          "an audio sample at "
-              + sample.presentationTime()
-              + " belongs to segment "
-              + number
-              + ", which already closed");
+      droppedLateSampleCount++;
+      return;
     }
 
     held.addLast(new Queued(number, new CarriedSample(fragment, sample)));
+  }
+
+  private void requireNoRegression(Sample sample) {
+    var presentationTime = sample.presentationTime();
+    if (presentationTime < lastPresentationTime) {
+      throw new FragmentedMp4Exception(
+          Reason.PRESENTATION_TIME_REGRESSED,
+          "audio sample at " + presentationTime + " follows one at " + lastPresentationTime);
+    }
+
+    lastPresentationTime = presentationTime;
   }
 
   private void reach(long number) {

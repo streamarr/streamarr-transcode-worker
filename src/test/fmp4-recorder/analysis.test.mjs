@@ -212,10 +212,10 @@ describe('recording facts', () => {
   });
 });
 
-describe('late audio', () => {
+describe('dropped audio', () => {
   // A keyframe at 0 with audio, segment 1's keyframe at 6.006 s, then a frame whose decode ends
   // at the given 24 kHz tick, then an audio sample of segment 0 at 5 s.
-  const lateAudioOf = (videoDecodeEnd) =>
+  const droppedAudioOf = (videoDecodeEnd) =>
     recordingFacts(
       readStream(
         Buffer.concat([
@@ -230,14 +230,14 @@ describe('late audio', () => {
         ]),
       ),
       { period: 6, startSequenceNumber: 0 },
-    ).lateAudioSample;
+    ).droppedAudioSamples;
 
-  it("Should name an audio sample late when it arrives once the video has run a second past its segment's end", () => {
-    assert.deepEqual(lateAudioOf(168000), { fragmentIndex: 3, presentationTime: 240000n, segmentNumber: 0 });
+  it("Should drop an audio sample when it arrives once the video has run a second past its segment's end", () => {
+    assert.deepEqual(droppedAudioOf(168000), [{ fragmentIndex: 3, presentationTime: 240000n, segmentNumber: 0 }]);
   });
 
-  it("Should find no late audio sample when the video has not yet run a second past its segment's end", () => {
-    assert.equal(lateAudioOf(167999), null);
+  it("Should drop no audio sample when the video has not yet run a second past its segment's end", () => {
+    assert.deepEqual(droppedAudioOf(167999), []);
   });
 });
 

@@ -4,6 +4,7 @@ import static com.streamarr.transcode.engine.FfmpegRecordings.assertBeginsWithTh
 import static com.streamarr.transcode.engine.FfmpegRecordings.bytesOf;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.streamarr.transcode.engine.FfmpegRecordings.DroppedAudioSample;
 import com.streamarr.transcode.engine.FfmpegRecordings.Recording;
 import com.streamarr.transcode.fixtures.Mp4Samples.Movie;
 import com.streamarr.transcode.fixtures.Mp4Samples.Sample;
@@ -50,7 +51,8 @@ public final class DeliveredSamples {
 
   /**
    * The recording's audio samples that start inside the interval of a segment {@code expected.json}
-   * delivers, in order: segment zero of an attempt from the start also takes the priming frame
+   * delivers, in order, apart from those it lists as dropped because they arrive after their
+   * segment was delivered: segment zero of an attempt from the start also takes the priming frame
    * before zero, and the last segment of a completed attempt every sample after its interval.
    */
   public static List<Sample> audioSamplesOfTheDeliveredSegments(
@@ -66,10 +68,13 @@ public final class DeliveredSamples {
                     AudioInterval.ofDeliveredSegment(
                         segment.number(), periodTicks, completed && segment.equals(last)))
             .toList();
+    var dropped =
+        recording.droppedAudioSamples().stream().map(DroppedAudioSample::presentationTime).toList();
     return recorded.samplesOf(audio).stream()
         .filter(
             sample ->
                 intervals.stream().anyMatch(interval -> interval.holds(sample.presentationTime())))
+        .filter(sample -> !dropped.contains(sample.presentationTime()))
         .toList();
   }
 

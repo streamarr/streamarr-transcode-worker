@@ -34,6 +34,9 @@ final class FragmentedMp4Exception extends RuntimeException {
     UNEXPECTED_BOX,
     MULTIPLE_VIDEO_TRACKS,
     SKIPPED_SEGMENT_NUMBER,
+    /**
+     * A keyframe, or an audio sample, starts before the one of its track that arrived before it.
+     */
     PRESENTATION_TIME_REGRESSED,
     /**
      * A video sample of an encoded output lasts less than half the frame duration of the rate the
@@ -44,14 +47,7 @@ final class FragmentedMp4Exception extends RuntimeException {
      * The initialization segment declares video other than the job's video decision, or video whose
      * decoder configuration record cannot be read.
      */
-    OUTPUT_MISMATCH,
-    /**
-     * An audio sample arrives after the media segment whose interval holds its start closed: its
-     * presentation times run backwards, or it trails the video by more than the margin after which
-     * a segment closes without later audio, as an audio encoder's last frames do when the audio
-     * ends more than the muxer's interleave bound before the video.
-     */
-    LATE_AUDIO_SAMPLE
+    OUTPUT_MISMATCH
   }
 
   private final Reason reason;

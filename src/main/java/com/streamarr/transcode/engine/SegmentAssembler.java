@@ -68,9 +68,9 @@ final class SegmentAssembler {
    *
    * @throws FragmentedMp4Exception when the initialization segment declares other video than the
    *     decision, when the grouper refuses the fragment, when it holds a short video sample or an
-   *     audio sample whose segment already closed, or when a segment it closes is larger than the
-   *     segment cap once rebuilt, after which nothing is delivered, not even the segments it would
-   *     close
+   *     audio sample that starts before the one before it, or when a segment it closes is larger
+   *     than the segment cap once rebuilt, after which nothing is delivered, not even the segments
+   *     it would close
    */
   Closing accept(@NonNull Mp4Unit unit) {
     return switch (unit) {
@@ -112,6 +112,11 @@ final class SegmentAssembler {
    */
   long heldBytes() {
     return heldFragments().stream().mapToLong(Fragment::byteLength).sum();
+  }
+
+  /** The audio samples dropped because they arrived after their segment closed. */
+  long droppedLateAudioSampleCount() {
+    return audio.droppedLateSampleCount();
   }
 
   /**

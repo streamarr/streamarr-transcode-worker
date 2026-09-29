@@ -344,8 +344,8 @@ const RULES =
   'firstVideoPresentationTime = the opening sync sample\'s decode time + its composition offset, in ' +
   'videoTimescale ticks, no edit list. Audio samples follow their own start: once the keyframe of a later ' +
   'segment has arrived, a segment closes after the fragment in which an audio sample of a later segment ' +
-  'arrives or the video\'s decode end runs 1 s past the segment\'s end; lateAudioSample names the first audio ' +
-  'sample that arrives after its segment closed, which fails the attempt.';
+  'arrives or the video\'s decode end runs 1 s past the segment\'s end; droppedAudioSamples lists every audio ' +
+  'sample that arrives after its segment closed, which the producer drops.';
 
 function fixtureRecord({ fixture, record, source, pipe, work }) {
   const stream = record.stream;
