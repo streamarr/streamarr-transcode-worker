@@ -24,7 +24,15 @@ public final class DeliveredSamples {
    * delivered segments, in order.
    */
   public static void assertCarriesTheRecordedSamples(byte[] delivered, Recording recording) {
-    var recordedBytes = bytesOf(recording.file());
+    assertCarriesTheRecordedSamples(delivered, recording, bytesOf(recording.file()));
+  }
+
+  /**
+   * Asserts the same of a delivery from FFmpeg output that differs from the recording only in its
+   * samples' sizes and bytes, which {@code expected.json} groups as it groups the recording.
+   */
+  public static void assertCarriesTheRecordedSamples(
+      byte[] delivered, Recording recording, byte[] recordedBytes) {
     assertBeginsWithTheDeliveredInitializationSegment(delivered, recording);
     var recorded = Mp4Samples.read(recordedBytes);
     var deliveredMovie = Mp4Samples.read(delivered);

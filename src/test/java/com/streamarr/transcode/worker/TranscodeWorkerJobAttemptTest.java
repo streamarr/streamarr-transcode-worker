@@ -3,6 +3,7 @@ package com.streamarr.transcode.worker;
 import static com.streamarr.transcode.engine.FfmpegRecordings.bytesOf;
 import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
 import static com.streamarr.transcode.fixtures.DeliveredSamples.assertCarriesTheRecordedSamples;
+import static com.streamarr.transcode.fixtures.DeliveredSamples.audioSamplesOfTheDeliveredSegments;
 import static com.streamarr.transcode.fixtures.Races.awaitStart;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.uploadNames;
@@ -41,7 +42,6 @@ import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import com.streamarr.transcode.fixtures.Mp4Samples;
-import com.streamarr.transcode.fixtures.Mp4Samples.MovieFragment;
 import com.streamarr.transcode.fixtures.TopLevelBoxes;
 import com.streamarr.transcode.fixtures.TopLevelBoxes.Box;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
@@ -178,12 +178,12 @@ class TranscodeWorkerJobAttemptTest {
           .containsOnly(UPLOAD_MESSAGE_BYTES);
       assertThat(firstMediaSegment.metadata().getContentLengthBytes()).isEqualTo(segmentBytes);
       assertThat(firstMediaSegment.content()).hasSize(segmentBytes);
-      assertThat(Mp4Samples.read(uploadedBytes(uploads)).fragments())
-          .flatMap(MovieFragment::samples)
-          .isSubsetOf(
-              Mp4Samples.read(output.get()).fragments().stream()
-                  .flatMap(fragment -> fragment.samples().stream())
-                  .toList());
+      var uploaded = uploadedBytes(uploads);
+      assertCarriesTheRecordedSamples(uploaded, recording(ENCODED_RECORDING), output.get());
+      var uploadedMovie = Mp4Samples.read(uploaded);
+      assertThat(uploadedMovie.samplesOf(uploadedMovie.audioTrack()))
+          .containsExactlyElementsOf(
+              audioSamplesOfTheDeliveredSegments(recording(ENCODED_RECORDING), true));
     }
   }
 
