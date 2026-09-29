@@ -23,11 +23,12 @@ import { floorDiv } from './rational.mjs';
 function keyframesOf(fragments, period) {
   return fragments.flatMap((fragment, index) => {
     const video = fragment.video;
-    if (video === null || !video.sync) {
+    const first = video?.samples[0];
+    if (first === undefined || !first.sync) {
       return [];
     }
-    const number = Number(floorDiv(video.presentationTime, BigInt(period) * BigInt(video.timescale)));
-    return [{ index, presentationTime: video.presentationTime, number }];
+    const number = Number(floorDiv(first.presentationTime, BigInt(period) * BigInt(video.timescale)));
+    return [{ index, presentationTime: first.presentationTime, number }];
   });
 }
 
@@ -81,9 +82,10 @@ function range(from, to) {
 }
 
 /**
- * Groups fragments ({ video: null | { presentationTime: bigint, timescale, sync } }) in arrival
- * order. Returns the delivered segments, the discarded preroll and the failure, if any; a segment
- * is { number, firstVideoPresentationTime, fragments: [fragment indexes] }.
+ * Groups fragments ({ video: null | { timescale, samples: [{ presentationTime: bigint, sync }] } },
+ * the video samples in decode order) in arrival order. Returns the delivered segments, the
+ * discarded preroll and the failure, if any; a segment is
+ * { number, firstVideoPresentationTime, fragments: [fragment indexes] }.
  */
 export function groupOnGrid(fragments, { period, startSequenceNumber }) {
   const keyframes = keyframesOf(fragments, period);

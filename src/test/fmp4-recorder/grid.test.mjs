@@ -4,9 +4,10 @@ import { groupOnGrid } from './grid.mjs';
 
 const PERIOD = 6;
 
-// Fragments in milliseconds: K = keyframe first, N = non-sync first, A = no video.
-const K = (milliseconds) => ({ video: { presentationTime: BigInt(milliseconds), timescale: 1000, sync: true } });
-const N = (milliseconds) => ({ video: { presentationTime: BigInt(milliseconds), timescale: 1000, sync: false } });
+// Fragments of one video sample in milliseconds: K = a keyframe, N = a non-sync sample; A = no video.
+const video = (presentationTime, timescale, sync) => ({ video: { timescale, samples: [{ presentationTime, sync }] } });
+const K = (milliseconds) => video(BigInt(milliseconds), 1000, true);
+const N = (milliseconds) => video(BigInt(milliseconds), 1000, false);
 const A = () => ({ video: null });
 
 function numbersAndFragments(segments) {
@@ -142,7 +143,7 @@ describe('grid model', () => {
   });
 
   it('Should read each keyframe in its own timescale when timescales differ', () => {
-    const at = (ticks, timescale) => ({ video: { presentationTime: ticks, timescale, sync: true } });
+    const at = (ticks, timescale) => video(ticks, timescale, true);
 
     assert.deepEqual(grouped([at(0n, 24000), at(143143n, 24000), at(144144n, 24000), at(540000n, 90000)]).delivered, [
       [0, [0, 1]],

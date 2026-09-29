@@ -19,15 +19,21 @@ import { groupOnGrid } from './grid.mjs';
 import { Decimal } from './json.mjs';
 import { Rational } from './rational.mjs';
 
-/** The grid model's view of each fragment: its first video sample, when it has one. */
+/** The grid model's view of each fragment: its video samples in decode order, when it has any. */
 export function gridFragments(stream) {
-  return stream.fragments.map((fragment) => {
+  const samples = videoSamples(stream);
+  return stream.fragments.map((fragment, index) => {
     const traf = videoTrafOf(fragment);
     if (traf === null) {
       return { video: null };
     }
     return {
-      video: { presentationTime: traf.firstPresentationTime, timescale: traf.timescale, sync: traf.firstSync },
+      video: {
+        timescale: traf.timescale,
+        samples: samples
+          .filter((sample) => sample.fragmentIndex === index)
+          .map(({ presentationTime, sync }) => ({ presentationTime, sync })),
+      },
     };
   });
 }
