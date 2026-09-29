@@ -18,6 +18,7 @@ import com.streamarr.transcode.engine.FfmpegRecordings.Recording;
 import com.streamarr.transcode.engine.FfmpegRecordings.SegmentSummary;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
+import com.streamarr.transcode.fixtures.AudioInterval;
 import com.streamarr.transcode.fixtures.Mp4Samples;
 import com.streamarr.transcode.fixtures.Mp4Samples.Movie;
 import com.streamarr.transcode.fixtures.Mp4Samples.MovieFragment;
@@ -204,14 +205,11 @@ class ProducerTest {
             name -> {
               var segment = mediaSegmentOf(sink, name);
               var periodTicks = recording.period() * segment.audioTrack().timescale();
-              var interval = AudioInterval.of(numberOf(name), periodTicks);
-              if (numberOf(name) == 0) {
-                interval = interval.fromBeforeZero();
-              }
-
-              if (name.equals(names.getLast()) && outcome instanceof Completed) {
-                interval = interval.withoutEnd();
-              }
+              var interval =
+                  AudioInterval.ofDeliveredSegment(
+                      numberOf(name),
+                      periodTicks,
+                      name.equals(names.getLast()) && outcome instanceof Completed);
 
               assertThat(segment.samplesOf(segment.audioTrack()))
                   .extracting(Sample::presentationTime)
@@ -2965,26 +2963,6 @@ class ProducerTest {
         IsoBoxes.moov(
             IsoBoxes.Track.video().sampleEntry(videoSampleEntry).build(),
             IsoBoxes.Track.audio().build()));
-  }
-
-  /** A media segment's interval of start times, in ticks. */
-  private record AudioInterval(long start, long end) {
-
-    static AudioInterval of(long number, long periodTicks) {
-      return new AudioInterval(number * periodTicks, (number + 1) * periodTicks);
-    }
-
-    AudioInterval fromBeforeZero() {
-      return new AudioInterval(Long.MIN_VALUE, end);
-    }
-
-    AudioInterval withoutEnd() {
-      return new AudioInterval(start, Long.MAX_VALUE);
-    }
-
-    boolean holds(long time) {
-      return time >= start && time < end;
-    }
   }
 
   /**

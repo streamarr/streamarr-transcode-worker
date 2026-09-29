@@ -5,7 +5,6 @@ import static com.streamarr.transcode.engine.FfmpegRecordings.bytesOf;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.streamarr.transcode.engine.FfmpegRecordings.Recording;
-import com.streamarr.transcode.engine.FfmpegRecordings.SegmentSummary;
 import com.streamarr.transcode.fixtures.Mp4Samples.Movie;
 import com.streamarr.transcode.fixtures.Mp4Samples.Sample;
 import java.util.List;
@@ -51,18 +50,18 @@ public final class DeliveredSamples {
     var recorded = Mp4Samples.read(bytesOf(recording.file()));
     var audio = recorded.audioTrack();
     var periodTicks = recording.period() * audio.timescale();
-    var numbers = recording.segments().stream().map(SegmentSummary::number).toList();
+    var last = recording.segments().getLast();
+    var intervals =
+        recording.segments().stream()
+            .map(
+                segment ->
+                    AudioInterval.ofDeliveredSegment(
+                        segment.number(), periodTicks, completed && segment.equals(last)))
+            .toList();
     return recorded.samplesOf(audio).stream()
         .filter(
-            sample -> {
-              var number = Math.floorDiv(sample.presentationTime(), periodTicks);
-              if (number < 0 && recording.startSequenceNumber() == 0) {
-                number = 0;
-              }
-
-              return numbers.contains(Math.toIntExact(number))
-                  || (completed && number > numbers.getLast());
-            })
+            sample ->
+                intervals.stream().anyMatch(interval -> interval.holds(sample.presentationTime())))
         .toList();
   }
 

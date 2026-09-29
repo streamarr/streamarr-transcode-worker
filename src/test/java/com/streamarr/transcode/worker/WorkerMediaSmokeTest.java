@@ -48,6 +48,7 @@ import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
 import com.streamarr.transcode.engine.ProcessBuilderLauncher;
 import com.streamarr.transcode.engine.ProcessLauncher;
 import com.streamarr.transcode.engine.TranscodeCapabilityService;
+import com.streamarr.transcode.fixtures.AudioInterval;
 import com.streamarr.transcode.fixtures.Mp4Samples;
 import com.streamarr.transcode.fixtures.TopLevelBoxes;
 import com.streamarr.transcode.fixtures.TopLevelBoxes.Box;
@@ -115,6 +116,8 @@ class WorkerMediaSmokeTest {
   private static final int SEEKABLE_SOURCE_SECONDS = 18;
   private static final int SEEKABLE_SOURCE_SEGMENT_COUNT = 3;
   private static final int REPLACEMENT_START_SEQUENCE_NUMBER = 2;
+  // The seekable sources' 6 s period in their 48 kHz audio timescale.
+  private static final long SEEKABLE_SOURCE_AUDIO_PERIOD_TICKS = 6L * 48_000;
 
   // The 10-bit source spans segments 0 and 1 at the default 6 s period.
   private static final int TEN_BIT_SOURCE_SECONDS = 8;
@@ -1593,7 +1596,9 @@ class WorkerMediaSmokeTest {
     var names = run.mediaSegmentNames();
     assertThat(names).isNotEmpty();
     for (var name : names) {
-      var interval = AudioInterval.of(name, names);
+      var interval =
+          AudioInterval.ofDeliveredSegment(
+              numberOf(name), SEEKABLE_SOURCE_AUDIO_PERIOD_TICKS, name.equals(names.getLast()));
       var uploadedAudio =
           FfprobePackets.of(run.uploads().contentOf(List.of("init.mp4", name)), root).stream()
               .filter(Packet::isAudio)
@@ -2501,33 +2506,9 @@ class WorkerMediaSmokeTest {
     }
   }
 
-  /**
-   * The audio start times, in the source's 48 kHz audio timescale, of an uploaded media segment:
-   * its interval, from before zero for segment 0, which keeps the AAC priming frame, and without
-   * end for the last segment, which keeps the audio after its interval.
-   */
-  private record AudioInterval(long start, long end) {
-
-    private static final long PERIOD_TICKS = 6L * 48_000;
-
-    private static AudioInterval of(String name, List<String> names) {
-      var number = Long.parseLong(name.substring("segment".length(), name.indexOf(".")));
-      var start = number * PERIOD_TICKS;
-      var end = (number + 1) * PERIOD_TICKS;
-      if (number == 0) {
-        start = Long.MIN_VALUE;
-      }
-
-      if (name.equals(names.getLast())) {
-        end = Long.MAX_VALUE;
-      }
-
-      return new AudioInterval(start, end);
-    }
-
-    private boolean holds(long time) {
-      return time >= start && time < end;
-    }
+  private static long numberOf(String mediaSegmentName) {
+    return Long.parseLong(
+        mediaSegmentName.substring("segment".length(), mediaSegmentName.indexOf(".")));
   }
 
   // A job's uploads and everything its FFmpeg wrote to standard output.
