@@ -510,13 +510,19 @@ settle what, if anything, changes because of them.
   (`ProducerTest`). Video is identical.
 - **A keyframe fragment past a boundary can carry no audio while audio before it is still to come**
   (15). The fragment at 6.006 s opens segment 1 without audio, and the next fragment carries an audio
-  sample from 5.964 s, inside segment 0. The producer therefore closes a segment only once an audio
-  sample of a later segment has arrived, or the output ends.
+  sample from 5.964 s, inside segment 0. A keyframe therefore does not close a segment's audio: the
+  producer closes a segment once an audio sample of a later segment has arrived, once the video's
+  decode end has run 1 s past the segment's end (`VideoProgress`), or when the output ends.
 - **Audio can end before the video** (14). The fragment at 8.008 s carries the last three audio
   samples, which end at 8.0 s, and from 9.009 s on FFmpeg writes fragments with a video `traf` alone.
   Nothing in the output says that the audio has ended, and such a fragment does not show that the
-  audio before its boundary has all arrived (15), so segments 1–3 wait until the output ends. Only a
-  movie without a sound track closes each segment at the keyframe that opens the next.
+  audio before its boundary has all arrived (15). The video does: the muxer writes each audio sample
+  with the video around it unless the input's audio trails its video by more than FFmpeg's
+  interleave bound, which the worker passes as `-max_interleave_delta 10000000` (10 s). So segments
+  1–3 each close once the video's decode end runs 1 s past their end, not when the output ends; 17
+  shows the same over 160 s of video without audio. An audio encoder's last frames are the
+  exception: FFmpeg flushes them only once the whole input has ended (17b). A movie without a sound
+  track closes each segment at the keyframe that opens the next.
 - **Trailing audio-only fragments are common, not exceptional.** With 48 kHz audio they end 1, 1b, 2,
   3, 4, 5b, 5c, 10, 12, 13, 13b and 13d, as well as 6.
 - `hlsenc` measures fMP4 cut points in the video time base from a reference that can be an audio
