@@ -8,16 +8,12 @@ import lombok.NonNull;
 
 /**
  * One {@code moof} with the {@code mdat} that follows it, each box's bytes exactly as read, the
- * tracks its movie declares, the start of its video track when it carries one, the shortest
- * duration among its video samples, in the video track's timescale, and the samples of its video
- * and sound tracks in decode order.
+ * tracks its movie declares, and the samples of its video and sound tracks in decode order.
  */
 @Builder
 record Fragment(
     @NonNull List<byte[]> boxes,
     @NonNull MovieTracks tracks,
-    @NonNull Optional<VideoStart> videoStart,
-    @NonNull OptionalLong shortestVideoSampleDuration,
     @NonNull List<Sample> videoSamples,
     @NonNull List<Sample> audioSamples)
     implements Mp4Unit {
@@ -35,5 +31,15 @@ record Fragment(
 
   long byteLength() {
     return boxes.stream().mapToLong(box -> box.length).sum();
+  }
+
+  /** The start of the fragment's video track; empty when it carries no video sample. */
+  Optional<VideoStart> videoStart() {
+    return tracks.video().flatMap(track -> track.startOf(videoSamples));
+  }
+
+  /** The shortest duration among the fragment's video samples, in the video track's timescale. */
+  OptionalLong shortestVideoSampleDuration() {
+    return videoSamples.stream().mapToLong(Sample::duration).min();
   }
 }

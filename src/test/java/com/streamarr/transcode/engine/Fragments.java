@@ -2,7 +2,6 @@ package com.streamarr.transcode.engine;
 
 import java.util.List;
 import java.util.Optional;
-import java.util.OptionalLong;
 
 /** Fragments for tests that group them or compare them without reading their boxes. */
 final class Fragments {
@@ -14,8 +13,6 @@ final class Fragments {
     return Fragment.builder()
         .boxes(List.of(new byte[] {1}, new byte[] {2}))
         .tracks(new MovieTracks(Optional.empty(), Optional.empty()))
-        .videoStart(Optional.empty())
-        .shortestVideoSampleDuration(OptionalLong.empty())
         .videoSamples(List.of())
         .audioSamples(List.of());
   }

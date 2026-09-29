@@ -432,7 +432,6 @@ class SegmentGrouperTest {
         .tracks(
             new MovieTracks(
                 Optional.of(new VideoTrack(VIDEO_TRACK_ID, start.timescale())), Optional.empty()))
-        .videoStart(Optional.of(start))
         .videoSamples(List.of(sample.build()))
         .build();
   }

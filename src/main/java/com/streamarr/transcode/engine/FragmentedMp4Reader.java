@@ -137,14 +137,11 @@ final class FragmentedMp4Reader {
     var tracks = declared.tracks();
     var trackSamples = declared.sampleRanges().samplesOf(trackFragments, mediaData);
     requireDeclaredTracks(tracks, trackSamples);
-    var videoSamples = samplesOf(tracks.video().map(VideoTrack::trackId), trackSamples);
     return Optional.of(
         Fragment.builder()
             .boxes(List.of(moof, mdat))
             .tracks(tracks)
-            .videoStart(tracks.video().flatMap(track -> track.startOf(videoSamples)))
-            .shortestVideoSampleDuration(videoSamples.stream().mapToLong(Sample::duration).min())
-            .videoSamples(videoSamples)
+            .videoSamples(samplesOf(tracks.video().map(VideoTrack::trackId), trackSamples))
             .audioSamples(samplesOf(tracks.audio().map(AudioTrack::trackId), trackSamples))
             .build());
   }
