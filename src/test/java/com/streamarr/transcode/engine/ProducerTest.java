@@ -32,11 +32,13 @@ import java.lang.management.ManagementFactory;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.OptionalDouble;
+import java.util.OptionalInt;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -381,6 +383,39 @@ class ProducerTest {
     assertThat(audioDecodeTimesOf("segment0.m4s"))
         .containsExactly(0L, 12_000L, 24_000L, 36_000L, 46_000L);
     assertThat(audioDecodeTimesOf("segment1.m4s")).containsExactly(48_000L);
+  }
+
+  @Test
+  @DisplayName(
+      "Should deliver the video samples before a keyframe inside a fragment in the segment that"
+          + " keyframe closes and the rest in the segment it opens when both segments are delivered")
+  void
+      shouldDeliverTheVideoSamplesBeforeAKeyframeInsideAFragmentInTheSegmentItClosesAndTheRestInTheSegmentItOpens() {
+    var workerBudget = SegmentMemoryBudget.forSlots(1);
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0).videoDuration(12_000).audioFrom(0, 24_000).build(),
+            TimedFragment.frameAt(12_000)
+                .videoDuration(12_000)
+                .videoSampleCount(3)
+                .keyframeInside(OptionalInt.of(1))
+                .audioFrom(24_000, 24_000, 24_000, 24_000)
+                .build(),
+            TimedFragment.keyframeAt(48_000).audioFrom(96_000, 48_000).build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+
+    var producer = producerOfOneSecondSegments(process).memoryBudget(workerBudget).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(sink.acceptedNames())
+        .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
+    assertThat(videoDecodeTimesOf("segment0.m4s")).containsExactly(0L, 12_000L);
+    assertThat(videoDecodeTimesOf("segment1.m4s")).containsExactly(24_000L, 36_000L);
+    assertThat(videoDecodeTimesOf("segment2.m4s")).containsExactly(48_000L);
+    assertThat(audioDecodeTimesOf("segment0.m4s")).containsExactly(0L, 24_000L);
+    assertThat(audioDecodeTimesOf("segment1.m4s")).containsExactly(48_000L, 72_000L);
+    assertReleasesEveryReservedByte(workerBudget);
   }
 
   @Test
@@ -2852,6 +2887,10 @@ class ProducerTest {
     return segment.samplesOf(segment.audioTrack());
   }
 
+  private List<Long> videoDecodeTimesOf(String name) {
+    return videoSamplesOf(sink, name).stream().map(Sample::decodeTime).toList();
+  }
+
   private List<Long> audioDecodeTimesOf(String name) {
     return audioSamplesOf(sink, name).stream().map(Sample::decodeTime).toList();
   }
@@ -2966,16 +3005,19 @@ class ProducerTest {
   }
 
   /**
-   * One fragment of a 1 s period: a video sample at this time in the 24 kHz video timescale,
-   * lasting one second unless given, a keyframe or not, and one-byte audio samples back to back
-   * from their start in the 48 kHz audio timescale, lasting as given, followed in the mdat by any
-   * padding given.
+   * One fragment of a 1 s period: one-byte video samples back to back from this time in the 24 kHz
+   * video timescale, one unless given, each lasting one second unless given, the first a keyframe
+   * or not, and a keyframe at the given position after it, if any; then one-byte audio samples back
+   * to back from their start in the 48 kHz audio timescale, lasting as given, followed in the mdat
+   * by any padding given.
    */
   @Builder
   private record TimedFragment(
       long videoTime,
       long videoDuration,
+      int videoSampleCount,
       boolean keyframe,
+      OptionalInt keyframeInside,
       long audioStart,
       List<Integer> audioDurations,
       int paddingBytes) {
@@ -2988,7 +3030,9 @@ class ProducerTest {
       return builder()
           .videoTime(videoTime)
           .videoDuration(24_000)
+          .videoSampleCount(1)
           .keyframe(false)
+          .keyframeInside(OptionalInt.empty())
           .audioDurations(List.of());
     }
 
@@ -2996,20 +3040,35 @@ class ProducerTest {
       var video =
           IsoBoxes.videoTraf()
               .baseMediaDecodeTime(videoTime)
-              .sampleDurations(List.of(Math.toIntExact(videoDuration)));
-      if (keyframe) {
+              .sampleDurations(
+                  Collections.nCopies(videoSampleCount, Math.toIntExact(videoDuration)));
+      if (keyframeInside.isPresent()) {
+        video.flagsOfEachSample(
+            IntStream.range(0, videoSampleCount).mapToObj(this::flagsOfVideoSample).toList());
+      }
+
+      if (keyframeInside.isEmpty() && keyframe) {
         video.firstSampleFlags(IsoBoxes.SYNC_SAMPLE_FLAGS);
       }
 
       if (audioDurations.isEmpty()) {
-        return IsoBoxes.concat(IsoBoxes.moof(video.build()), IsoBoxes.mdat(1 + paddingBytes));
+        return IsoBoxes.concat(
+            IsoBoxes.moof(video.build()), IsoBoxes.mdat(videoSampleCount + paddingBytes));
       }
 
       var audio =
           IsoBoxes.audioTraf().baseMediaDecodeTime(audioStart).sampleDurations(audioDurations);
       return IsoBoxes.concat(
           IsoBoxes.moof(video.build(), audio.build()),
-          IsoBoxes.mdat(1 + audioDurations.size() + paddingBytes));
+          IsoBoxes.mdat(videoSampleCount + audioDurations.size() + paddingBytes));
+    }
+
+    private int flagsOfVideoSample(int sample) {
+      if ((sample == 0 && keyframe) || keyframeInside.equals(OptionalInt.of(sample))) {
+        return IsoBoxes.SYNC_SAMPLE_FLAGS;
+      }
+
+      return IsoBoxes.NON_SYNC_SAMPLE_FLAGS;
     }
 
     static final class TimedFragmentBuilder {

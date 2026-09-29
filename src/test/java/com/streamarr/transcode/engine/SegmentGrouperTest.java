@@ -13,6 +13,7 @@ import com.streamarr.transcode.engine.GroupingOutcome.SegmentsClosed;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -376,6 +377,59 @@ class SegmentGrouperTest {
         .isThrownBy(() -> new SegmentGrouper(PERIOD_SECONDS, 0, maximumSegmentBytes));
   }
 
+  @Test
+  @DisplayName(
+      "Should close the open segment with the video samples before a keyframe inside a fragment"
+          + " when that keyframe opens the next segment")
+  void shouldCloseTheOpenSegmentWithTheVideoSamplesBeforeAKeyframeInsideAFragment() {
+    var grouper = new SegmentGrouper(PERIOD_SECONDS, 0, SEGMENT_CAP);
+    var first = keyframeAt(0);
+    var spanning =
+        videoFragment(nonSyncSampleAt(5_000), nonSyncSampleAt(5_500), syncSampleAt(6_006));
+    var samples = CarriedSample.videoOf(spanning).toList();
+
+    grouper.accept(first);
+
+    assertThat(grouper.accept(spanning))
+        .isEqualTo(
+            closed(
+                new MediaSegment(
+                    0,
+                    List.of(first, spanning),
+                    List.of(
+                        CarriedSample.videoOf(first).findFirst().orElseThrow(),
+                        samples.get(0),
+                        samples.get(1)))));
+    assertThat(grouper.finish())
+        .contains(new MediaSegment(1, List.of(spanning), List.of(samples.get(2))));
+  }
+
+  @Test
+  @DisplayName(
+      "Should close the open segment with the video samples before a keyframe inside a fragment"
+          + " when that keyframe skips a segment number")
+  void shouldCloseTheOpenSegmentWithTheVideoSamplesBeforeAKeyframeInsideAFragmentThatSkips() {
+    var grouper = new SegmentGrouper(PERIOD_SECONDS, 0, SEGMENT_CAP);
+    var first = keyframeAt(0);
+    var skipping = videoFragment(nonSyncSampleAt(5_000), syncSampleAt(12_012));
+
+    grouper.accept(first);
+
+    assertThat(grouper.accept(skipping))
+        .isEqualTo(
+            new SegmentNumberSkipped(
+                List.of(
+                    new MediaSegment(
+                        0,
+                        List.of(first, skipping),
+                        Stream.concat(
+                                CarriedSample.videoOf(first),
+                                CarriedSample.videoOf(skipping).limit(1))
+                            .toList())),
+                1,
+                2));
+  }
+
   @ParameterizedTest
   @CsvSource({"0, 0", "-6, 0", "6, -1"})
   @DisplayName("Should reject a grouping when its period or start sequence number cannot exist")
@@ -421,17 +475,47 @@ class SegmentGrouperTest {
 
   // A fragment of one video sample that starts as given.
   private static Fragment videoFragment(VideoStart start) {
-    var flags = IsoBoxes.SYNC_SAMPLE_FLAGS;
-    if (!start.syncSample()) {
-      flags = IsoBoxes.NON_SYNC_SAMPLE_FLAGS;
-    }
+    return videoFragment(List.of(start));
+  }
 
-    var sample = Sample.builder().decodeTime(start.presentationTime()).duration(1).flags(flags);
+  private static VideoStart nonSyncSampleAt(long milliseconds) {
+    return new VideoStart(milliseconds, MILLISECONDS, false);
+  }
+
+  private static VideoStart syncSampleAt(long milliseconds) {
+    return new VideoStart(milliseconds, MILLISECONDS, true);
+  }
+
+  private static Fragment videoFragment(VideoStart... starts) {
+    return videoFragment(List.of(starts));
+  }
+
+  // A fragment of one-tick video samples that start as given, in one timescale.
+  private static Fragment videoFragment(List<VideoStart> starts) {
+    var samples =
+        starts.stream()
+            .map(
+                start ->
+                    Sample.builder()
+                        .decodeTime(start.presentationTime())
+                        .duration(1)
+                        .flags(flagsOf(start))
+                        .build())
+            .toList();
     return fragmentBuilder()
         .tracks(
             new MovieTracks(
-                Optional.of(new VideoTrack(VIDEO_TRACK_ID, start.timescale())), Optional.empty()))
-        .videoSamples(List.of(sample.build()))
+                Optional.of(new VideoTrack(VIDEO_TRACK_ID, starts.getFirst().timescale())),
+                Optional.empty()))
+        .videoSamples(samples)
         .build();
+  }
+
+  private static int flagsOf(VideoStart start) {
+    if (start.syncSample()) {
+      return IsoBoxes.SYNC_SAMPLE_FLAGS;
+    }
+
+    return IsoBoxes.NON_SYNC_SAMPLE_FLAGS;
   }
 }

@@ -290,6 +290,8 @@ final class IsoBoxes {
     private final Integer sampleCount;
     private final Integer firstSampleFlags;
     private final Integer sampleFlags;
+    // Each sample's own flags, in place of one value for every sample.
+    private final List<Integer> flagsOfEachSample;
     private final Integer compositionOffset;
     private final List<Integer> sampleDurations;
 
@@ -353,7 +355,7 @@ final class IsoBoxes {
         header.writeBytes(u32(firstSampleFlags));
       }
 
-      if (sampleFlags != null) {
+      if (sampleFlags != null || flagsOfEachSample != null) {
         flags |= TRUN_SAMPLE_FLAGS;
       }
 
@@ -381,6 +383,10 @@ final class IsoBoxes {
       entry.writeBytes(u32(SAMPLE_BYTES));
       if (sampleFlags != null) {
         entry.writeBytes(u32(sampleFlags));
+      }
+
+      if (flagsOfEachSample != null) {
+        entry.writeBytes(u32(flagsOfEachSample.get(sample)));
       }
 
       if (compositionOffset == null) {
