@@ -164,7 +164,7 @@ order the worker's command builder passes them.
   presentation time: `tfdt` baseMediaDecodeTime plus that sample's signed `trun` composition offset,
   with no edit list, on the zero-based timeline that `-start_at_zero` produces.
 - `segments` is what the grouper must deliver. Each entry is `number`, `firstVideoPresentationTime`,
-  `firstFragmentIndex`, `fragmentCount`, `syncFirstFragmentCount` and `byteLength` (the sum of that
+  `firstFragmentIndex`, `fragmentCount`, `keyframeCount` and `byteLength` (the sum of that
   segment's `moof`+`mdat` bytes, concatenated in arrival order). Fragment indexes count fragments
   after the initialization segment, from 0. The producer delivers the video samples of those
   fragments, rebuilt as one `moof` and one `mdat`; its audio samples follow their own start instead.

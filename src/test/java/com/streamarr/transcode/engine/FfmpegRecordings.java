@@ -165,7 +165,7 @@ public final class FfmpegRecordings {
       long firstVideoPresentationTime,
       int firstFragmentIndex,
       int fragmentCount,
-      int syncFirstFragmentCount,
+      int keyframeCount,
       long byteLength) {}
 
   /**

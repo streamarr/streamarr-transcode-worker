@@ -41,6 +41,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 @Tag("UnitTest")
 class RecordedFfmpegOutputTest {
 
+  private static final int SAMPLE_IS_NON_SYNC_SAMPLE = 0x0001_0000;
+
   static Stream<Recording> recordings() {
     return FfmpegRecordings.recordings().stream();
   }
@@ -315,7 +317,7 @@ class RecordedFfmpegOutputTest {
       String file) throws IOException {
     assertThat(group(recording(file)).delivered())
         .isNotEmpty()
-        .allSatisfy(segment -> assertThat(syncFirstFragmentCount(segment)).isOne());
+        .allSatisfy(segment -> assertThat(keyframeCount(segment)).isOne());
   }
 
   @ParameterizedTest(name = "{0}")
@@ -331,7 +333,7 @@ class RecordedFfmpegOutputTest {
         .extracting(MediaSegment::sequenceNumber)
         .containsExactly(0, 1, 2, 3, 4);
     assertThat(grouping.delivered())
-        .allSatisfy(segment -> assertThat(syncFirstFragmentCount(segment)).isEqualTo(2));
+        .allSatisfy(segment -> assertThat(keyframeCount(segment)).isEqualTo(2));
   }
 
   @ParameterizedTest(name = "{0}")
@@ -468,7 +470,7 @@ class RecordedFfmpegOutputTest {
                     .firstVideoPresentationTime(firstVideoPresentationTime(segment))
                     .firstFragmentIndex(grouping.units().indexOf(segment.fragments().getFirst()))
                     .fragmentCount(segment.fragments().size())
-                    .syncFirstFragmentCount(syncFirstFragmentCount(segment))
+                    .keyframeCount(keyframeCount(segment))
                     .byteLength(segment.byteLength())
                     .build())
         .toList();
@@ -532,10 +534,11 @@ class RecordedFfmpegOutputTest {
         .presentationTime();
   }
 
-  private static int syncFirstFragmentCount(MediaSegment segment) {
+  private static int keyframeCount(MediaSegment segment) {
     return Math.toIntExact(
         segment.fragments().stream()
-            .filter(fragment -> fragment.videoStart().filter(VideoStart::syncSample).isPresent())
+            .flatMap(fragment -> fragment.videoSamples().stream())
+            .filter(sample -> (sample.flags() & SAMPLE_IS_NON_SYNC_SAMPLE) == 0)
             .count());
   }
 

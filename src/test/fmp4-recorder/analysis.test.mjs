@@ -187,7 +187,7 @@ describe('recording facts', () => {
       firstVideoPresentationTime: 0n,
       firstFragmentIndex: 0,
       fragmentCount: 3,
-      syncFirstFragmentCount: 1,
+      keyframeCount: 1,
       byteLength: stream.fragments.reduce((sum, fragment) => sum + fragment.byteLength, 0),
     });
   });

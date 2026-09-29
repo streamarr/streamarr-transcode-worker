@@ -94,12 +94,13 @@ export function initializationSegmentPair(label, [firstName, first], [secondName
 
 export function describeSegment(segment, stream) {
   const fragments = segment.fragments.map((index) => stream.fragments[index]);
+  const keyframes = videoSamples(stream).filter((sample) => sample.sync && segment.fragments.includes(sample.fragmentIndex));
   return {
     number: segment.number,
     firstVideoPresentationTime: segment.firstVideoPresentationTime,
     firstFragmentIndex: segment.fragments[0],
     fragmentCount: fragments.length,
-    syncFirstFragmentCount: fragments.filter((fragment) => videoTrafOf(fragment)?.firstSync === true).length,
+    keyframeCount: keyframes.length,
     byteLength: fragments.reduce((sum, fragment) => sum + fragment.byteLength, 0),
   };
 }
