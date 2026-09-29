@@ -27,6 +27,7 @@ class SegmentGrouperTest {
   private static final long SEGMENT_CAP = Mp4Stream.SEGMENT_CAP;
   private static final long FRAGMENT_BYTES = 2;
   private static final GroupingOutcome NOTHING_CLOSED = new NothingClosed();
+  private static final long VIDEO_TRACK_ID = 1;
 
   @Test
   @DisplayName("Should deliver nothing when the first keyframe opens a segment")
@@ -416,18 +417,31 @@ class SegmentGrouperTest {
   }
 
   private static Fragment keyframeAt(long presentationTime, long timescale) {
-    return fragment(Optional.of(new VideoStart(presentationTime, timescale, true)));
+    return videoFragment(new VideoStart(presentationTime, timescale, true));
   }
 
   private static Fragment nonSyncAt(long milliseconds) {
-    return fragment(Optional.of(new VideoStart(milliseconds, MILLISECONDS, false)));
+    return videoFragment(new VideoStart(milliseconds, MILLISECONDS, false));
   }
 
   private static Fragment audioOnly() {
-    return fragment(Optional.empty());
+    return fragmentBuilder().build();
   }
 
-  private static Fragment fragment(Optional<VideoStart> videoStart) {
-    return fragmentBuilder().videoStart(videoStart).build();
+  // A fragment of one video sample that starts as given.
+  private static Fragment videoFragment(VideoStart start) {
+    var flags = IsoBoxes.SYNC_SAMPLE_FLAGS;
+    if (!start.syncSample()) {
+      flags = IsoBoxes.NON_SYNC_SAMPLE_FLAGS;
+    }
+
+    var sample = Sample.builder().decodeTime(start.presentationTime()).duration(1).flags(flags);
+    return fragmentBuilder()
+        .tracks(
+            new MovieTracks(
+                Optional.of(new VideoTrack(VIDEO_TRACK_ID, start.timescale())), Optional.empty()))
+        .videoStart(Optional.of(start))
+        .videoSamples(List.of(sample.build()))
+        .build();
   }
 }
