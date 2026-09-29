@@ -1,7 +1,6 @@
 package com.streamarr.transcode.engine;
 
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
-import com.streamarr.transcode.engine.RebuiltSegment.SampleOf;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -62,8 +61,8 @@ final class AudioSampleQueue {
    * Removes the samples held for this segment and every one before it, in order; no later sample
    * may belong to them.
    */
-  List<SampleOf> close(long number) {
-    var samples = new ArrayList<SampleOf>();
+  List<CarriedSample> close(long number) {
+    var samples = new ArrayList<CarriedSample>();
     while (!held.isEmpty() && held.peekFirst().number() <= number) {
       samples.add(held.removeFirst().sample());
     }
@@ -73,7 +72,7 @@ final class AudioSampleQueue {
   }
 
   /** Removes every sample still held, which the end of the output leaves to the last segment. */
-  List<SampleOf> closeAll() {
+  List<CarriedSample> closeAll() {
     var samples = held.stream().map(Queued::sample).toList();
     held.clear();
     return samples;
@@ -107,7 +106,7 @@ final class AudioSampleQueue {
               + ", which already closed");
     }
 
-    held.addLast(new Queued(number, new SampleOf(fragment, sample)));
+    held.addLast(new Queued(number, new CarriedSample(fragment, sample)));
   }
 
   private void reach(long number) {
@@ -122,5 +121,5 @@ final class AudioSampleQueue {
     return fragment.tracks().audio().orElseThrow().timescale();
   }
 
-  private record Queued(long number, SampleOf sample) {}
+  private record Queued(long number, CarriedSample sample) {}
 }

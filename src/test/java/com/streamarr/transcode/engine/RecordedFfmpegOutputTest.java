@@ -17,7 +17,6 @@ import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.engine.GroupingOutcome.NothingClosed;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentNumberSkipped;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentsClosed;
-import com.streamarr.transcode.engine.RebuiltSegment.SampleOf;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -469,7 +468,7 @@ class RecordedFfmpegOutputTest {
   // A media segment of these fragments and every video sample they carry.
   private static MediaSegment segmentOf(int sequenceNumber, List<Fragment> fragments) {
     return new MediaSegment(
-        sequenceNumber, fragments, fragments.stream().flatMap(SampleOf::videoOf).toList());
+        sequenceNumber, fragments, fragments.stream().flatMap(CarriedSample::videoOf).toList());
   }
 
   private static List<SegmentSummary> summaries(Grouping grouping) {
@@ -549,7 +548,7 @@ class RecordedFfmpegOutputTest {
 
   private static Stream<Sample> keyframesOf(MediaSegment segment) {
     return segment.videoSamples().stream()
-        .map(SampleOf::sample)
+        .map(CarriedSample::sample)
         .filter(sample -> (sample.flags() & SAMPLE_IS_NON_SYNC_SAMPLE) == 0);
   }
 

@@ -4,7 +4,6 @@ import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.engine.GroupingOutcome.NothingClosed;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentNumberSkipped;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentsClosed;
-import com.streamarr.transcode.engine.RebuiltSegment.SampleOf;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -24,7 +23,7 @@ final class SegmentGrouper {
   private final int startSequenceNumber;
   private final long maximumSegmentBytes;
   private final List<Fragment> openFragments = new ArrayList<>();
-  private final List<SampleOf> openVideoSamples = new ArrayList<>();
+  private final List<CarriedSample> openVideoSamples = new ArrayList<>();
   private long openBytes;
   private OptionalLong openSequenceNumber = OptionalLong.empty();
   private OptionalLong lastKeyframeTime = OptionalLong.empty();
@@ -69,7 +68,7 @@ final class SegmentGrouper {
    */
   GroupingOutcome accept(@NonNull Fragment fragment) {
     requireNotEnded();
-    var samples = SampleOf.videoOf(fragment).toList();
+    var samples = CarriedSample.videoOf(fragment).toList();
     var closed = new ArrayList<MediaSegment>();
     var firstOpenSample = 0;
     for (var index = 0; index < samples.size(); index++) {
@@ -129,7 +128,7 @@ final class SegmentGrouper {
   }
 
   /** The number of the segment a keyframe opens; empty for a keyframe of the open segment. */
-  private OptionalLong segmentNumberOpenedBy(SampleOf sample) {
+  private OptionalLong segmentNumberOpenedBy(CarriedSample sample) {
     var keyframe =
         sample
             .fragment()
@@ -156,7 +155,7 @@ final class SegmentGrouper {
    * and returns the position of the first sample left for the segment the keyframe opens. Before
    * the first keyframe no segment is open, and those samples belong to the one it opens.
    */
-  private int joinSamplesBefore(List<SampleOf> samples, int firstOpenSample, int keyframe) {
+  private int joinSamplesBefore(List<CarriedSample> samples, int firstOpenSample, int keyframe) {
     if (openSequenceNumber.isEmpty()) {
       return firstOpenSample;
     }
@@ -172,7 +171,7 @@ final class SegmentGrouper {
    * Holds a fragment and those of its video samples that belong to the open segment, or to the
    * first one; drops them when that is preroll.
    */
-  private void join(Fragment fragment, List<SampleOf> videoSamples) {
+  private void join(Fragment fragment, List<CarriedSample> videoSamples) {
     if (isPrerollOpen()) {
       return;
     }

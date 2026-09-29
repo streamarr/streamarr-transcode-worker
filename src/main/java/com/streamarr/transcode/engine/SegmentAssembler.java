@@ -4,7 +4,6 @@ import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.engine.GroupingOutcome.NothingClosed;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentNumberSkipped;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentsClosed;
-import com.streamarr.transcode.engine.RebuiltSegment.SampleOf;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -169,7 +168,7 @@ final class SegmentAssembler {
 
   // Closes the first segment awaiting audio with the audio samples of its interval and any
   // further samples given.
-  private ClosedSegment closeFirstAwaiting(List<SampleOf> furtherAudio) {
+  private ClosedSegment closeFirstAwaiting(List<CarriedSample> furtherAudio) {
     var segment = awaitingAudio.removeFirst();
     var audioSamples = new ArrayList<>(audio.close(segment.sequenceNumber()));
     audioSamples.addAll(furtherAudio);

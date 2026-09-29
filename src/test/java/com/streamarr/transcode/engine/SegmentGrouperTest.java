@@ -10,7 +10,6 @@ import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.engine.GroupingOutcome.NothingClosed;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentNumberSkipped;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentsClosed;
-import com.streamarr.transcode.engine.RebuiltSegment.SampleOf;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
@@ -401,7 +400,7 @@ class SegmentGrouperTest {
     return new MediaSegment(
         sequenceNumber,
         List.of(fragments),
-        Arrays.stream(fragments).flatMap(SampleOf::videoOf).toList());
+        Arrays.stream(fragments).flatMap(CarriedSample::videoOf).toList());
   }
 
   private static Fragment keyframeAt(long milliseconds) {

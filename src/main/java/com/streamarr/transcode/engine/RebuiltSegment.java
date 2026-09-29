@@ -19,8 +19,8 @@ import lombok.NonNull;
 final class RebuiltSegment implements ClosedSegment {
 
   private final int sequenceNumber;
-  private final List<SampleOf> videoSamples;
-  private final List<SampleOf> audioSamples;
+  private final List<CarriedSample> videoSamples;
+  private final List<CarriedSample> audioSamples;
   private final List<MovieFragmentWriter.Track> tracks;
   private final long heldBytes;
   private final long sharedBytes;
@@ -32,8 +32,8 @@ final class RebuiltSegment implements ClosedSegment {
   @Builder
   private RebuiltSegment(
       int sequenceNumber,
-      @NonNull List<SampleOf> videoSamples,
-      @NonNull List<SampleOf> audioSamples,
+      @NonNull List<CarriedSample> videoSamples,
+      @NonNull List<CarriedSample> audioSamples,
       @NonNull Set<Fragment> stillHeld) {
     this.sequenceNumber = sequenceNumber;
     this.videoSamples = List.copyOf(videoSamples);
@@ -72,7 +72,7 @@ final class RebuiltSegment implements ClosedSegment {
   }
 
   private static List<MovieFragmentWriter.Track> tracksOf(
-      List<SampleOf> videoSamples, List<SampleOf> audioSamples) {
+      List<CarriedSample> videoSamples, List<CarriedSample> audioSamples) {
     var tracks = new ArrayList<MovieFragmentWriter.Track>();
     tracks.add(trackOf(videoSamples, videoSamples.getFirst().videoTrackId()));
     if (!audioSamples.isEmpty()) {
@@ -82,12 +82,13 @@ final class RebuiltSegment implements ClosedSegment {
     return List.copyOf(tracks);
   }
 
-  private static MovieFragmentWriter.Track trackOf(List<SampleOf> samples, long trackId) {
-    return new MovieFragmentWriter.Track(trackId, samples.stream().map(SampleOf::sample).toList());
+  private static MovieFragmentWriter.Track trackOf(List<CarriedSample> samples, long trackId) {
+    return new MovieFragmentWriter.Track(
+        trackId, samples.stream().map(CarriedSample::sample).toList());
   }
 
   // One view per run of samples that lie back to back in one fragment's mdat.
-  private static void addSampleBytes(List<ByteBuffer> parts, List<SampleOf> samples) {
+  private static void addSampleBytes(List<ByteBuffer> parts, List<CarriedSample> samples) {
     var index = 0;
     while (index < samples.size()) {
       var first = samples.get(index);
@@ -103,7 +104,7 @@ final class RebuiltSegment implements ClosedSegment {
     }
   }
 
-  private static Collection<Fragment> fragmentsOf(Stream<SampleOf> samples) {
+  private static Collection<Fragment> fragmentsOf(Stream<CarriedSample> samples) {
     var fragments = new IdentityHashMap<Fragment, Fragment>();
     samples.forEach(sample -> fragments.put(sample.fragment(), sample.fragment()));
     return fragments.values();
@@ -111,29 +112,5 @@ final class RebuiltSegment implements ClosedSegment {
 
   private static long byteLengthOf(Collection<Fragment> fragments) {
     return fragments.stream().mapToLong(Fragment::byteLength).sum();
-  }
-
-  /** A sample and the fragment whose mdat holds its bytes. */
-  record SampleOf(@NonNull Fragment fragment, @NonNull Sample sample) {
-
-    static Stream<SampleOf> videoOf(Fragment fragment) {
-      return fragment.videoSamples().stream().map(sample -> new SampleOf(fragment, sample));
-    }
-
-    static Stream<SampleOf> audioOf(Fragment fragment) {
-      return fragment.audioSamples().stream().map(sample -> new SampleOf(fragment, sample));
-    }
-
-    private boolean follows(Fragment previous, int end) {
-      return fragment == previous && sample.mediaDataPosition() == end;
-    }
-
-    private long videoTrackId() {
-      return fragment.tracks().video().orElseThrow().trackId();
-    }
-
-    private long audioTrackId() {
-      return fragment.tracks().audio().orElseThrow().trackId();
-    }
   }
 }

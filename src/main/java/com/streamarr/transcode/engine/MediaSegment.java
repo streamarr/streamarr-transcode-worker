@@ -1,6 +1,5 @@
 package com.streamarr.transcode.engine;
 
-import com.streamarr.transcode.engine.RebuiltSegment.SampleOf;
 import java.util.List;
 import lombok.NonNull;
 
@@ -10,7 +9,9 @@ import lombok.NonNull;
  * segment.
  */
 record MediaSegment(
-    int sequenceNumber, @NonNull List<Fragment> fragments, @NonNull List<SampleOf> videoSamples) {
+    int sequenceNumber,
+    @NonNull List<Fragment> fragments,
+    @NonNull List<CarriedSample> videoSamples) {
 
   MediaSegment {
     fragments = List.copyOf(fragments);
