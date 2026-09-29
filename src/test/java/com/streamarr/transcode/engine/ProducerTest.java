@@ -193,7 +193,7 @@ class ProducerTest {
           + " from segment zero's priming frame and the last segment's tail, when FFmpeg writes it in"
           + " another segment's fragment")
   void
-      shouldDeliverEachAudioSampleInTheMediaSegmentWhoseIntervalHoldsItsStartWhenFfmpegWritesItInAnotherSegmentsFragment(
+      shouldDeliverEachAudioSampleInTheMediaSegmentWhoseIntervalHoldsItsStartApartFromSegmentZerosPrimingFrameAndTheLastSegmentsTailWhenFfmpegWritesItInAnotherSegmentsFragment(
           Recording recording) {
     var outcome = deliverEverySegmentOf(recording);
 
