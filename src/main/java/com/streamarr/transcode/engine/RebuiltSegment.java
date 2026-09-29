@@ -40,8 +40,8 @@ final class RebuiltSegment implements ClosedSegment {
     this.audioSamples = List.copyOf(audioSamples);
     this.tracks = tracksOf(this.videoSamples, this.audioSamples);
     var fragments = fragmentsOf(Stream.concat(videoSamples.stream(), audioSamples.stream()));
-    this.sharedBytes = byteLengthOf(fragments.stream().filter(stillHeld::contains).toList());
-    this.heldBytes = byteLengthOf(fragments) - sharedBytes;
+    this.sharedBytes = heldBytesOf(fragments.stream().filter(stillHeld::contains).toList());
+    this.heldBytes = heldBytesOf(fragments) - sharedBytes;
   }
 
   /** The segment's bytes once written. */
@@ -110,7 +110,7 @@ final class RebuiltSegment implements ClosedSegment {
     return fragments.values();
   }
 
-  private static long byteLengthOf(Collection<Fragment> fragments) {
-    return fragments.stream().mapToLong(Fragment::byteLength).sum();
+  private static long heldBytesOf(Collection<Fragment> fragments) {
+    return fragments.stream().mapToLong(Fragment::heldBytes).sum();
   }
 }

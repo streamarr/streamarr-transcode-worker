@@ -107,11 +107,12 @@ final class SegmentAssembler {
   }
 
   /**
-   * The bytes of the fragments the assembler holds: for the open segment, or for the first one, for
-   * the segments awaiting audio, and for the audio samples it holds for later segments.
+   * The memory of the fragments the assembler holds, their bytes and their samples' heap: for the
+   * open segment, or for the first one, for the segments awaiting audio, and for the audio samples
+   * it holds for later segments.
    */
   long heldBytes() {
-    return heldFragments().stream().mapToLong(Fragment::byteLength).sum();
+    return heldFragments().stream().mapToLong(Fragment::heldBytes).sum();
   }
 
   /** The audio samples dropped because they arrived after their segment closed. */

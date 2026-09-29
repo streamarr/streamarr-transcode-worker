@@ -32,8 +32,8 @@ final class FragmentedMp4Reader {
    * @param maximumSegmentBytes the largest initialization segment or fragment the reader admits; it
    *     rejects any box that would exceed it before allocating memory for that box
    * @param admission admits each box's bytes after the reader has checked the box against the cap
-   *     and before it allocates memory for the box; when it refuses a box, the reader ends reading
-   *     with {@link ReadingCancelled}
+   *     and before it allocates memory for the box, and the heap of a fragment's samples before it
+   *     builds them; when it refuses, the reader ends reading with {@link ReadingCancelled}
    */
   FragmentedMp4Reader(
       @NonNull InputStream stream, long maximumSegmentBytes, @NonNull BoxAdmission admission) {
@@ -134,6 +134,11 @@ final class FragmentedMp4Reader {
             .end((long) moof.length + mdat.length)
             .build();
     declared.sampleRanges().requireInside(trackFragments, mediaData);
+    var sampleCount = declared.sampleRanges().describableSampleCountOf(trackFragments);
+    if (!admission.tryAdmit(Fragment.heapBytesOf(sampleCount))) {
+      throw new ReadingCancelled();
+    }
+
     var tracks = declared.tracks();
     var trackSamples = declared.sampleRanges().samplesOf(trackFragments, mediaData);
     requireDeclaredTracks(tracks, trackSamples);

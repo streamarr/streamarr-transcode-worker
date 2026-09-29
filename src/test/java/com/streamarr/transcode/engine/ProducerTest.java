@@ -1255,13 +1255,65 @@ class ProducerTest {
 
   @Test
   @DisplayName(
+      "Should fail the attempt with the segment cap when the producer's budget cannot hold a"
+          + " fragment's samples beside its bytes although the fragment fits the cap")
+  void shouldFailTheAttemptWithTheSegmentCapWhenTheProducersBudgetCannotHoldAFragmentsSamples() {
+    // Each one-byte sample takes 5 bytes of the fragment besides the heap it takes once built.
+    var samples = Math.toIntExact(ONE_SLOT_CAPACITY / (5 + Fragment.HEAP_BYTES_PER_SAMPLE) + 1);
+    var output =
+        IsoBoxes.concat(
+            IsoBoxes.ftyp(),
+            IsoBoxes.moov(IsoBoxes.Track.video().build()),
+            manySampleFragment(0, samples, IsoBoxes.SYNC_SAMPLE_FLAGS),
+            keyframeFragment(24_000, 1));
+    assertThat((long) output.length).isLessThan(SERVER_SEGMENT_CAP_BYTES);
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer = producerOfOneSecondSegments(process).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.SEGMENT_CAP_EXCEEDED);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+  }
+
+  @Test
+  @DisplayName(
+      "Should build a fragment's samples only once the worker's budget also holds their heap when"
+          + " another attempt's reservations leave room for the fragment's bytes alone")
+  void shouldBuildAFragmentsSamplesOnlyOnceTheWorkersBudgetAlsoHoldsTheirHeap() {
+    var workerBudget = SegmentMemoryBudget.forSlots(1);
+    var samples = 1_000;
+    var initializationSegment =
+        IsoBoxes.concat(IsoBoxes.ftyp(), IsoBoxes.moov(IsoBoxes.Track.video().build()));
+    var manySamples = manySampleFragment(0, samples, IsoBoxes.SYNC_SAMPLE_FLAGS);
+    var output = IsoBoxes.concat(initializationSegment, manySamples, keyframeFragment(24_000, 1));
+    var process = ScriptedProcess.builder().output(output).build();
+    var otherAttempts =
+        ONE_SLOT_CAPACITY
+            - initializationSegment.length
+            - manySamples.length
+            - samples * Fragment.HEAP_BYTES_PER_SAMPLE / 2;
+    assertThat(workerBudget.tryReserveAtOnce(otherAttempts)).isTrue();
+
+    var producer = producerOfOneSecondSegments(process).memoryBudget(workerBudget).start();
+
+    assertReaderStopsAt(process, initializationSegment.length + manySamples.length);
+    workerBudget.release(otherAttempts);
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
+    assertReleasesEveryReservedByte(workerBudget);
+  }
+
+  @Test
+  @DisplayName(
       "Should fail the attempt with the segment cap when the producer's budget cannot also hold the"
           + " moof it writes for a media segment")
   void shouldFailTheAttemptWithTheSegmentCapWhenTheProducersBudgetCannotAlsoHoldTheMoofItWrites() {
-    // A capped segment 0 and a capped fragment that opens segment 1 fill the budget exactly, so
-    // nothing is left for segment 0's new moof.
+    // A segment 0 and a fragment that opens segment 1, each holding the cap with its sample's heap,
+    // fill the budget exactly, so nothing is left for segment 0's new moof.
     var cappedFragmentPayload =
-        Math.toIntExact(SERVER_SEGMENT_CAP_BYTES - keyframeMoof(0).length - 8);
+        Math.toIntExact(
+            SERVER_SEGMENT_CAP_BYTES - keyframeMoof(0).length - 8 - Fragment.HEAP_BYTES_PER_SAMPLE);
     var output =
         IsoBoxes.concat(
             IsoBoxes.ftyp(),
@@ -3153,10 +3205,11 @@ class ProducerTest {
       return initializationSegmentBytes + (fragment + 1) * fragmentBytes();
     }
 
-    // Reserves, as other attempts would, all of the budget but room for the first two fragments,
-    // whose second closes segment 0; returns the bytes to release for those attempts.
+    // Reserves, as other attempts would, all of the budget but room for the first two fragments and
+    // their one sample each, whose second closes segment 0; returns the bytes to release for those
+    // attempts.
     long leavingRoomForTheFirstTwoFragmentsIn(SegmentMemoryBudget workerBudget) {
-      var reserved = ONE_SLOT_CAPACITY - 2L * fragmentBytes();
+      var reserved = ONE_SLOT_CAPACITY - 2L * (fragmentBytes() + Fragment.HEAP_BYTES_PER_SAMPLE);
       assertThat(workerBudget.tryReserveAtOnce(reserved)).isTrue();
       return reserved;
     }

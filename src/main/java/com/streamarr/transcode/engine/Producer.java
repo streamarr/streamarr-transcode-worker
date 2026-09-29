@@ -532,45 +532,45 @@ public final class Producer {
     return Optional.empty();
   }
 
-  // Admits a box's bytes while the reader's and the delivery's holdings fit in the producer's
-  // budget and the box fits in the worker's; false once the attempt is decided. Only a delivery in
-  // flight frees the producer's budget, because the reader cannot release what it holds before it
-  // reads on, so a box that does not fit without one never will.
-  private boolean tryAdmit(long boxBytes) {
+  // Admits a box's bytes, or the heap of a fragment's samples, while the reader's and the
+  // delivery's holdings fit in the producer's budget and the bytes fit in the worker's; false once
+  // the attempt is decided. Only a delivery in flight frees the producer's budget, because the
+  // reader cannot release what it holds before it reads on, so bytes that do not fit without one
+  // never will.
+  private boolean tryAdmit(long bytes) {
     awaitReaderWhile(
         () ->
             decision.isEmpty()
                 && deliveryInFlight.isPresent()
-                && heldBytes() + boxBytes > BUDGET_BYTES);
-    requireRoomInTheProducersBudget(boxBytes);
-    if (!tryReserveInWorkerBudget(boxBytes)) {
+                && heldBytes() + bytes > BUDGET_BYTES);
+    requireRoomInTheProducersBudget(bytes);
+    if (!tryReserveInWorkerBudget(bytes)) {
       return false;
     }
 
     synchronized (lock) {
       if (decision.isEmpty()) {
-        readerHeldBytes += boxBytes;
+        readerHeldBytes += bytes;
         return true;
       }
     }
 
-    memoryBudget.release(boxBytes);
+    memoryBudget.release(bytes);
     return false;
   }
 
   // The reader calls it once the box fits or no delivery is in flight, which only the reader
   // starts.
-  private void requireRoomInTheProducersBudget(long boxBytes) {
+  private void requireRoomInTheProducersBudget(long bytes) {
     synchronized (lock) {
-      if (decision.isPresent() || heldBytes() + boxBytes <= BUDGET_BYTES) {
+      if (decision.isPresent() || heldBytes() + bytes <= BUDGET_BYTES) {
         return;
       }
 
       throw new FragmentedMp4Exception(
           Reason.EXCEEDS_SEGMENT_CAP,
-          "a box of "
-              + boxBytes
-              + " bytes does not fit beside the "
+          bytes
+              + " more bytes do not fit beside the "
               + heldBytes()
               + " the reader holds, such as segments awaiting their audio, which no delivery in"
               + " flight can free, within the producer's budget of "
@@ -580,14 +580,14 @@ public final class Producer {
 
   // The reader waits for other producers to release memory rather than for FFmpeg, so the stall
   // watchdog pauses meanwhile. False once the attempt is decided first.
-  private boolean tryReserveInWorkerBudget(long boxBytes) {
-    if (memoryBudget.tryReserveAtOnce(boxBytes)) {
+  private boolean tryReserveInWorkerBudget(long bytes) {
+    if (memoryBudget.tryReserveAtOnce(bytes)) {
       return true;
     }
 
     watchdog.pause();
     try {
-      return memoryBudget.tryReserve(boxBytes, this::isDecided);
+      return memoryBudget.tryReserve(bytes, this::isDecided);
     } finally {
       watchdog.resume();
     }

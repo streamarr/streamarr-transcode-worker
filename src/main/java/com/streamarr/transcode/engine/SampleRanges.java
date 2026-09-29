@@ -57,13 +57,19 @@ final class SampleRanges {
    *     when a sample needs a default that no box declares
    */
   List<TrackSamples> samplesOf(List<TrackFragmentBox> trackFragments, MediaData mediaData) {
-    requireDescribableSampleCount(trackFragments);
+    describableSampleCountOf(trackFragments);
     var timing = new SampleTiming(mediaData);
     forEachRun(trackFragments, mediaData, timing::add);
     return timing.trackSamples();
   }
 
-  private void requireDescribableSampleCount(List<TrackFragmentBox> trackFragments) {
+  /**
+   * The samples of every run of the fragment.
+   *
+   * @throws FragmentedMp4Exception when the fragment holds more samples than a media segment under
+   *     the segment cap can describe
+   */
+  long describableSampleCountOf(List<TrackFragmentBox> trackFragments) {
     var sampleCount =
         trackFragments.stream()
             .flatMap(trackFragment -> trackFragment.runs().stream())
@@ -76,6 +82,8 @@ final class SampleRanges {
               + sampleCount
               + " samples needs more than the segment cap to describe them");
     }
+
+    return sampleCount;
   }
 
   // Places every run in order, handing each to the visitor before placing the next.

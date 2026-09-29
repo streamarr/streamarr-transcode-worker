@@ -18,6 +18,11 @@ record Fragment(
     @NonNull List<Sample> audioSamples)
     implements Mp4Unit {
 
+  // What reading, holding and rebuilding one sample takes from the heap, besides its bytes in the
+  // boxes: the sample, the run entry parsed for it, the sample a segment carries, and the list
+  // slots that reference them. A fragment's boxes can describe a sample in as little as one byte.
+  static final long HEAP_BYTES_PER_SAMPLE = 128;
+
   Fragment {
     boxes = List.copyOf(boxes);
     videoSamples = List.copyOf(videoSamples);
@@ -31,6 +36,16 @@ record Fragment(
 
   long byteLength() {
     return boxes.stream().mapToLong(box -> box.length).sum();
+  }
+
+  /** The memory the fragment holds: its boxes' bytes and the heap its samples take. */
+  long heldBytes() {
+    return byteLength() + heapBytesOf(videoSamples.size() + (long) audioSamples.size());
+  }
+
+  /** The heap that this many samples take once the reader builds them. */
+  static long heapBytesOf(long sampleCount) {
+    return Math.multiplyExact(sampleCount, HEAP_BYTES_PER_SAMPLE);
   }
 
   /** The start of the fragment's video track; empty when it carries no video sample. */
