@@ -1037,6 +1037,18 @@ class FfmpegCommandBuilderTest {
         .contains("-max_muxing_queue_size", "128");
   }
 
+  @ParameterizedTest
+  @EnumSource(TranscodeMode.class)
+  @DisplayName(
+      "Should bound how far the muxer lets one stream run ahead of another at FFmpeg's default when"
+          + " building any mode")
+  void shouldBoundHowFarTheMuxerLetsOneStreamRunAheadAtFfmpegsDefaultWhenBuildingAnyMode(
+      TranscodeMode mode) {
+    var cmd = command(request(mode).build(), mode.encodesVideo() ? "libx264" : "copy");
+
+    assertThat(cmd).containsSequence("-max_interleave_delta", "10000000");
+  }
+
   @Test
   @DisplayName("Should start with FFmpeg binary when building command")
   void shouldStartWithFfmpegBinaryWhenBuildingCommand() {

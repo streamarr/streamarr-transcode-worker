@@ -79,6 +79,7 @@ probed frame rate passed as the worker would pass it (`r_frame_rate` 24000/1001 
 ffmpeg -hide_banner -nostdin -loglevel error
   -y [-ss S] -i SRC -map 0:v:0 -map 0:a:0 -map -0:s -map_metadata -1 -map_chapters -1
   -copyts -avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128
+  -max_interleave_delta 10000000
   copy:   -c:v copy -bsf:v h264_mp4toannexb -tag:v avc1 -strict unofficial
           -c:a copy -bsf:a aac_adtstoasc -b:a 0
   copy with encoded audio (16): -c:v copy -bsf:v h264_mp4toannexb -tag:v avc1 -strict unofficial

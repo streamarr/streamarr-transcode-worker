@@ -18,6 +18,10 @@ public class FfmpegCommandBuilder {
   @NonNull private final String ffmpegPath;
   @NonNull private final Duration fragmentationTarget;
 
+  // FFmpeg's default, passed so that a new default cannot move it: the muxer holds one stream's
+  // packets until every stream has one or the held span exceeds this, which bounds how far the
+  // output's audio trails its video when the input's does not.
+  private static final String MAX_INTERLEAVE_DELTA_MICROSECONDS = "10000000";
   // The 8-bit 4:2:0 format every encoder takes unless its traits name another.
   private static final String DEFAULT_EIGHT_BIT_PIXEL_FORMAT = "yuv420p";
   private static final EncoderTraits UNLISTED_ENCODER = traits().build();
@@ -182,7 +186,9 @@ public class FfmpegCommandBuilder {
             "disabled",
             "-start_at_zero",
             "-max_muxing_queue_size",
-            "128"));
+            "128",
+            "-max_interleave_delta",
+            MAX_INTERLEAVE_DELTA_MICROSECONDS));
   }
 
   private void addCodecArgs(List<String> cmd, TranscodeJob job) {
