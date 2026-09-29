@@ -377,20 +377,6 @@ class SegmentGrouperTest {
         .isThrownBy(() -> new SegmentGrouper(PERIOD_SECONDS, 0, maximumSegmentBytes));
   }
 
-  @Test
-  @DisplayName("Should report a media segment's byte length when it holds several fragments")
-  void shouldReportAMediaSegmentsByteLengthWhenItHoldsSeveralFragments() {
-    var segment =
-        new MediaSegment(
-            0,
-            List.of(
-                fragmentBuilder().boxes(List.of(new byte[40], new byte[100])).build(),
-                fragmentBuilder().boxes(List.of(new byte[30], new byte[7])).build()),
-            List.of());
-
-    assertThat(segment.byteLength()).isEqualTo(177);
-  }
-
   @ParameterizedTest
   @CsvSource({"0, 0", "-6, 0", "6, -1"})
   @DisplayName("Should reject a grouping when its period or start sequence number cannot exist")

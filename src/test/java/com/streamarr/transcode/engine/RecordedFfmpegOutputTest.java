@@ -482,7 +482,7 @@ class RecordedFfmpegOutputTest {
                     .firstFragmentIndex(grouping.units().indexOf(segment.fragments().getFirst()))
                     .fragmentCount(segment.fragments().size())
                     .keyframeCount(keyframeCount(segment))
-                    .byteLength(segment.byteLength())
+                    .byteLength(segment.fragments().stream().mapToLong(Fragment::byteLength).sum())
                     .build())
         .toList();
   }

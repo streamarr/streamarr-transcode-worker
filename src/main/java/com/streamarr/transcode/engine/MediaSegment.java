@@ -16,8 +16,4 @@ record MediaSegment(
     fragments = List.copyOf(fragments);
     videoSamples = List.copyOf(videoSamples);
   }
-
-  long byteLength() {
-    return fragments.stream().mapToLong(Fragment::byteLength).sum();
-  }
 }
