@@ -36,10 +36,10 @@ import lombok.extern.slf4j.Slf4j;
  * within its own budget and within the worker's, so when either budget is full, or when a second
  * segment closes while the first still awaits acceptance, the reader stops reading and the pipe
  * holds FFmpeg back. A rebuilt segment views the bytes of the fragments that carried its samples,
- * so it holds them until its delivery returns, and a fragment whose audio a later segment also
- * carries counts for both. Once the attempt has an outcome, the producer drops and releases what
- * the reader holds at once, even while the reader waits on the pipe, and the delivery in flight
- * once that delivery returns.
+ * so it holds them until its delivery returns, and a fragment whose samples a later segment also
+ * carries, its audio or the video after a keyframe inside it, counts for both. Once the attempt has
+ * an outcome, the producer drops and releases what the reader holds at once, even while the reader
+ * waits on the pipe, and the delivery in flight once that delivery returns.
  *
  * <p>A watchdog fails the attempt when FFmpeg writes nothing for the stall timeout while the reader
  * is reading; waiting for the sink pauses it, and it ends once the reader stops reading. Once the

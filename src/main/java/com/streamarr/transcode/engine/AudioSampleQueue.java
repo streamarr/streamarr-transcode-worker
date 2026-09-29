@@ -12,8 +12,10 @@ import java.util.stream.Stream;
  * sample's start closes, whichever fragment carried it, and tracks how far the audio has certainly
  * arrived. A sample before the attempt's first segment is preroll and is dropped, except that an
  * attempt from segment zero keeps the AAC priming frame, which starts before zero, in segment zero.
- * Only an audio sample shows how far the audio has arrived: FFmpeg can write a keyframe fragment
- * without audio past a boundary and the audio before that boundary in the fragment after it.
+ * A keyframe fragment does not show how far the audio has arrived: FFmpeg can write one without
+ * audio past a boundary and the audio before that boundary in the fragment after it. While the
+ * audio lasts, an audio sample shows it; once the audio ends, only the video does ({@link
+ * VideoProgress}).
  */
 final class AudioSampleQueue {
 
