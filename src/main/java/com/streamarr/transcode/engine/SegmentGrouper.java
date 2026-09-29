@@ -2,8 +2,8 @@ package com.streamarr.transcode.engine;
 
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.engine.GroupingOutcome.NothingClosed;
-import com.streamarr.transcode.engine.GroupingOutcome.SegmentClosed;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentNumberSkipped;
+import com.streamarr.transcode.engine.GroupingOutcome.SegmentsClosed;
 import com.streamarr.transcode.engine.RebuiltSegment.SampleOf;
 import java.util.ArrayList;
 import java.util.List;
@@ -86,7 +86,7 @@ final class SegmentGrouper {
     if (sequenceNumber > nextDeliverable) {
       ended = true;
       discardOpenFragments();
-      return new SegmentNumberSkipped(closed, nextDeliverable, sequenceNumber);
+      return new SegmentNumberSkipped(closed.stream().toList(), nextDeliverable, sequenceNumber);
     }
 
     openSequenceNumber = OptionalLong.of(sequenceNumber);
@@ -95,7 +95,9 @@ final class SegmentGrouper {
     }
 
     join(fragment);
-    return closed.<GroupingOutcome>map(SegmentClosed::new).orElseGet(NothingClosed::new);
+    return closed
+        .<GroupingOutcome>map(segment -> new SegmentsClosed(List.of(segment)))
+        .orElseGet(NothingClosed::new);
   }
 
   /**

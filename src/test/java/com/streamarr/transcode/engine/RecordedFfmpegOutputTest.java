@@ -15,8 +15,8 @@ import com.streamarr.transcode.engine.FfmpegRecordings.Recording;
 import com.streamarr.transcode.engine.FfmpegRecordings.SegmentSummary;
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.engine.GroupingOutcome.NothingClosed;
-import com.streamarr.transcode.engine.GroupingOutcome.SegmentClosed;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentNumberSkipped;
+import com.streamarr.transcode.engine.GroupingOutcome.SegmentsClosed;
 import com.streamarr.transcode.engine.RebuiltSegment.SampleOf;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -367,10 +367,9 @@ class RecordedFfmpegOutputTest {
     var segmentOne = segmentOf(1, units.fragments().subList(10, 20));
 
     assertThat(outcomes.get(10))
-        .isEqualTo(new SegmentClosed(segmentOf(0, units.fragments().subList(0, 10))));
+        .isEqualTo(new SegmentsClosed(List.of(segmentOf(0, units.fragments().subList(0, 10)))));
     assertThat(outcomes.subList(11, 20)).allMatch(NothingClosed.class::isInstance);
-    assertThat(outcomes.getLast())
-        .isEqualTo(new SegmentNumberSkipped(Optional.of(segmentOne), 2, 3));
+    assertThat(outcomes.getLast()).isEqualTo(new SegmentNumberSkipped(List.of(segmentOne), 2, 3));
     assertThat(firstVideoPresentationTime(segmentOne)).isEqualTo(240_240);
   }
 
@@ -441,7 +440,7 @@ class RecordedFfmpegOutputTest {
     for (var index = 0; index < units.fragments().size(); index++) {
       try {
         var outcome = grouper.accept(units.fragments().get(index));
-        segmentClosedBy(outcome).ifPresent(delivered::add);
+        delivered.addAll(segmentsClosedBy(outcome));
         if (outcome instanceof SegmentNumberSkipped skipped) {
           return new Grouping(units, delivered, Optional.of(failureOf(skipped, index)));
         }
@@ -454,11 +453,11 @@ class RecordedFfmpegOutputTest {
     return new Grouping(units, delivered, Optional.empty());
   }
 
-  private static Optional<MediaSegment> segmentClosedBy(GroupingOutcome outcome) {
+  private static List<MediaSegment> segmentsClosedBy(GroupingOutcome outcome) {
     return switch (outcome) {
-      case NothingClosed _ -> Optional.empty();
-      case SegmentClosed(var segment) -> Optional.of(segment);
-      case SegmentNumberSkipped skipped -> skipped.closedSegment();
+      case NothingClosed _ -> List.of();
+      case SegmentsClosed(var segments) -> segments;
+      case SegmentNumberSkipped skipped -> skipped.closedSegments();
     };
   }
 

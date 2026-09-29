@@ -8,8 +8,8 @@ import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.engine.GroupingOutcome.NothingClosed;
-import com.streamarr.transcode.engine.GroupingOutcome.SegmentClosed;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentNumberSkipped;
+import com.streamarr.transcode.engine.GroupingOutcome.SegmentsClosed;
 import com.streamarr.transcode.engine.RebuiltSegment.SampleOf;
 import java.util.Arrays;
 import java.util.List;
@@ -228,13 +228,13 @@ class SegmentGrouperTest {
     grouper.accept(secondNonSync);
 
     assertThat(grouper.accept(keyframeAt(18_000)))
-        .isEqualTo(new SegmentNumberSkipped(Optional.of(segment(1, second, secondNonSync)), 2, 3));
+        .isEqualTo(new SegmentNumberSkipped(List.of(segment(1, second, secondNonSync)), 2, 3));
   }
 
   @Test
   @DisplayName("Should fail with a skipped segment number when a producer reads the skip")
   void shouldFailWithASkippedSegmentNumberWhenAProducerReadsTheSkip() {
-    var skipped = new SegmentNumberSkipped(Optional.empty(), 2, 3);
+    var skipped = new SegmentNumberSkipped(List.of(), 2, 3);
 
     assertThat(skipped.failure())
         .extracting(FragmentedMp4Exception::getReason)
@@ -265,7 +265,7 @@ class SegmentGrouperTest {
     grouper.accept(audioOnly());
 
     assertThat(grouper.accept(keyframeAt(36_000)))
-        .isEqualTo(new SegmentNumberSkipped(Optional.empty(), 5, 6));
+        .isEqualTo(new SegmentNumberSkipped(List.of(), 5, 6));
   }
 
   @Test
@@ -279,7 +279,7 @@ class SegmentGrouperTest {
     grouper.accept(nonSyncAt(28_000));
 
     assertThat(grouper.accept(keyframeAt(36_000)))
-        .isEqualTo(new SegmentNumberSkipped(Optional.empty(), 5, 6));
+        .isEqualTo(new SegmentNumberSkipped(List.of(), 5, 6));
   }
 
   @ParameterizedTest
@@ -408,7 +408,7 @@ class SegmentGrouperTest {
   }
 
   private static GroupingOutcome closed(MediaSegment segment) {
-    return new SegmentClosed(segment);
+    return new SegmentsClosed(List.of(segment));
   }
 
   private static MediaSegment segment(int sequenceNumber, Fragment... fragments) {

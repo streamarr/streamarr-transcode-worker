@@ -2,8 +2,8 @@ package com.streamarr.transcode.engine;
 
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.engine.GroupingOutcome.NothingClosed;
-import com.streamarr.transcode.engine.GroupingOutcome.SegmentClosed;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentNumberSkipped;
+import com.streamarr.transcode.engine.GroupingOutcome.SegmentsClosed;
 import com.streamarr.transcode.engine.RebuiltSegment.SampleOf;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -129,12 +129,12 @@ final class SegmentAssembler {
     audio.add(fragment);
     return switch (grouper.accept(fragment)) {
       case NothingClosed _ -> Closing.of(closeEveryCompleted());
-      case SegmentClosed(var segment) -> {
-        awaitingAudio.addLast(segment);
+      case SegmentsClosed(var segments) -> {
+        awaitingAudio.addAll(segments);
         yield Closing.of(closeEveryCompleted());
       }
       case SegmentNumberSkipped skipped -> {
-        skipped.closedSegment().ifPresent(awaitingAudio::addLast);
+        awaitingAudio.addAll(skipped.closedSegments());
         yield new Closing(closeEveryAwaiting(), Optional.of(skipped.failure()));
       }
     };
