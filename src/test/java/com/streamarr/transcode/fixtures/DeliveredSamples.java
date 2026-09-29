@@ -21,8 +21,8 @@ public final class DeliveredSamples {
   /**
    * Asserts that the delivered output begins with the initialization segment {@code expected.json}
    * digests, that every sample it carries is the recording's sample of the same track and decode
-   * time, bytes included, and that its video samples are those of the fragments {@code
-   * expected.json} groups into delivered segments, in order.
+   * time, bytes included, and that its video samples are those {@code expected.json} groups into
+   * delivered segments, in order.
    */
   public static void assertCarriesTheRecordedSamples(byte[] delivered, Recording recording) {
     var recordedBytes = bytesOf(recording.file());
@@ -77,7 +77,8 @@ public final class DeliveredSamples {
     return movie.fragments().stream().flatMap(fragment -> fragment.samples().stream()).toList();
   }
 
-  // The video samples of the recorded fragments that expected.json groups into delivered segments.
+  // The recorded video samples from the keyframe that opens the first segment expected.json
+  // delivers to the end of its last segment's fragments.
   private static List<Sample> videoSamplesOfTheDeliveredSegments(
       Recording recording, Movie recorded) {
     var first = recording.segments().getFirst();
@@ -89,6 +90,7 @@ public final class DeliveredSamples {
         .stream()
         .flatMap(fragment -> fragment.samples().stream())
         .filter(sample -> sample.trackId() == videoTrackId)
+        .dropWhile(sample -> sample.presentationTime() != first.firstVideoPresentationTime())
         .toList();
   }
 }

@@ -8,8 +8,8 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * The video track an initialization segment declares, and the rule that reads a fragment's video
- * start from its first video sample.
+ * The video track an initialization segment declares, and the rule that reads a video sample's
+ * presentation time and sync status.
  */
 record VideoTrack(long trackId, long timescale) {
 
@@ -39,7 +39,13 @@ record VideoTrack(long trackId, long timescale) {
    * when the fragment carries none.
    */
   Optional<VideoStart> startOf(List<Sample> samples) {
-    return samples.stream().findFirst().map(this::videoStart);
+    return samples.stream().findFirst().map(this::startOf);
+  }
+
+  /** The presentation time and sync status of one of this track's samples. */
+  VideoStart startOf(Sample sample) {
+    return new VideoStart(
+        sample.presentationTime(), timescale, !isSet(sample.flags(), SAMPLE_IS_NON_SYNC_SAMPLE));
   }
 
   private static VideoTrack fromTrak(TrackBox trak, Map<Long, TrackExtends> trackExtends) {
@@ -49,10 +55,5 @@ record VideoTrack(long trackId, long timescale) {
     }
 
     return new VideoTrack(trackId, trak.timescale());
-  }
-
-  private VideoStart videoStart(Sample sample) {
-    return new VideoStart(
-        sample.presentationTime(), timescale, !isSet(sample.flags(), SAMPLE_IS_NON_SYNC_SAMPLE));
   }
 }

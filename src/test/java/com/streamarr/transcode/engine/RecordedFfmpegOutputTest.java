@@ -102,12 +102,17 @@ class RecordedFfmpegOutputTest {
   void shouldDeliverEveryFragmentAfterThePrerollByteForByteWhenGrouping(Recording recording)
       throws IOException {
     var recorded = bytesOf(recording.file());
+    var grouping = group(recording);
     var firstDeliveredByte =
         recording.initializationSegment().byteLength()
-            + recording.discardedPreroll().stream().mapToLong(SegmentSummary::byteLength).sum();
+            + grouping.units().fragments().stream()
+                .limit(recording.segments().getFirst().firstFragmentIndex())
+                .mapToLong(Fragment::byteLength)
+                .sum();
     var delivered =
-        group(recording).delivered().stream()
+        grouping.delivered().stream()
             .flatMap(segment -> segment.fragments().stream())
+            .distinct()
             .flatMap(fragment -> fragment.boxes().stream());
 
     assertThat(concat(delivered))
@@ -532,20 +537,20 @@ class RecordedFfmpegOutputTest {
         .collect(Collectors.toMap(CutPoint::number, CutPoint::firstVideoPresentationTime));
   }
 
+  // The keyframe that opened the segment: any video sample before it is the first segment's
+  // lead-in.
   private static long firstVideoPresentationTime(MediaSegment segment) {
-    return segment.fragments().stream()
-        .flatMap(fragment -> fragment.videoStart().stream())
-        .findFirst()
-        .orElseThrow()
-        .presentationTime();
+    return keyframesOf(segment).findFirst().orElseThrow().presentationTime();
   }
 
   private static int keyframeCount(MediaSegment segment) {
-    return Math.toIntExact(
-        segment.fragments().stream()
-            .flatMap(fragment -> fragment.videoSamples().stream())
-            .filter(sample -> (sample.flags() & SAMPLE_IS_NON_SYNC_SAMPLE) == 0)
-            .count());
+    return Math.toIntExact(keyframesOf(segment).count());
+  }
+
+  private static Stream<Sample> keyframesOf(MediaSegment segment) {
+    return segment.videoSamples().stream()
+        .map(SampleOf::sample)
+        .filter(sample -> (sample.flags() & SAMPLE_IS_NON_SYNC_SAMPLE) == 0);
   }
 
   private static ExpectedFailure failureOf(SegmentNumberSkipped skipped, int fragmentIndex) {

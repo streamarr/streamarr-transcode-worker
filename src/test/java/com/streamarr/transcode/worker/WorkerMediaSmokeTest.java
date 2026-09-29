@@ -48,6 +48,7 @@ import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
 import com.streamarr.transcode.engine.ProcessBuilderLauncher;
 import com.streamarr.transcode.engine.ProcessLauncher;
 import com.streamarr.transcode.engine.TranscodeCapabilityService;
+import com.streamarr.transcode.fixtures.Mp4Samples;
 import com.streamarr.transcode.fixtures.TopLevelBoxes;
 import com.streamarr.transcode.fixtures.TopLevelBoxes.Box;
 import com.streamarr.transcode.probe.FfprobeExecutor;
@@ -1601,6 +1602,39 @@ class WorkerMediaSmokeTest {
     }
   }
 
+  @Test
+  @DisplayName(
+      "Should upload the start-0 attempt's video packets for every media segment when a"
+          + " stream-copy replacement attempt that encodes its audio holds its first segment's"
+          + " keyframe inside FFmpeg's first fragment")
+  void
+      shouldUploadTheStartZeroAttemptsVideoPacketsWhenAReplacementAttemptHoldsItsFirstSegmentsKeyframeInsideFfmpegsFirstFragment()
+          throws Exception {
+    var source = keyframeBeforeBoundarySource();
+    var fromStart = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    var replacement = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    replacement.getExecutionBuilder().setStartSequenceNumber(REPLACEMENT_START_SEQUENCE_NUMBER);
+    var launcher = new TeeingProcessLauncher(new ProcessBuilderLauncher());
+
+    var fromStartUploads =
+        execute(engine(softwareCapabilities(), launcher), source.getParent(), fromStart.build());
+    var replacementUploads =
+        execute(engine(softwareCapabilities(), launcher), source.getParent(), replacement.build());
+
+    // The seek lands on the keyframe at 10.010 s while the encoded audio starts at 12 s, and FFmpeg
+    // writes nothing until every track has a sample, so its first fragment holds the keyframe at
+    // 12.012 s too.
+    var output = Mp4Samples.read(launcher.outputOf(fromProto(replacement.getJobAttemptId())));
+    var videoTrackId = output.videoTrack().trackId();
+    assertThat(output.fragments().getFirst().samples())
+        .filteredOn(sample -> sample.trackId() == videoTrackId && sample.isSync())
+        .hasSize(2);
+    assertThat(replacementUploads.names()).containsExactly("init.mp4", "segment2.m4s");
+    assertThat(videoPacketsOf(replacementUploads, "segment2.m4s"))
+        .isNotEmpty()
+        .isEqualTo(videoPacketsOf(fromStartUploads, "segment2.m4s"));
+  }
+
   static Stream<Arguments> sourceContainersModesAndStarts() {
     return sourceContainersAndModes()
         .flatMap(
@@ -1736,6 +1770,44 @@ class WorkerMediaSmokeTest {
     var source = irregularKeyframeSources.resolve("irregular." + container);
     if (!generatedSeekableSources.contains(source)) {
       runFfmpeg(List.of("-i", matroska.toString(), "-c", "copy"), source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  private List<Packet> videoPacketsOf(MediaUploads uploads, String name) throws Exception {
+    return FfprobePackets.of(uploads.contentOf(List.of("init.mp4", name)), root).stream()
+        .filter(Packet::isVideo)
+        .toList();
+  }
+
+  // H.264 at 23.976 fps with a keyframe every 48 frames (2.002 s), so that a stream copy's seek
+  // to a segment boundary lands on a keyframe before it, and pink noise.
+  private static synchronized Path keyframeBeforeBoundarySource() throws Exception {
+    var source = seekableSources.resolve("keyframe-before-boundary.mp4");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24000/1001",
+              "-f",
+              "lavfi",
+              "-i",
+              "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5",
+              "-t",
+              String.valueOf(SEEKABLE_SOURCE_SECONDS),
+              "-c:v",
+              "libx264",
+              "-g",
+              "48",
+              "-keyint_min",
+              "48",
+              "-c:a",
+              "aac"),
+          source);
       generatedSeekableSources.add(source);
     }
 

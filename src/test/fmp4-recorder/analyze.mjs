@@ -282,7 +282,8 @@ const FIXTURES = [
     proves: 'Replacement attempt at -ss 30 that copies the video and encodes the audio: the seek lands on the keyframe at ' +
       '28.028 s, while the encoded audio starts at the seek point, 29.979 s with its priming frame. delay_moov writes ' +
       'nothing until every track has a sample, so the first fragment runs from 28.028 s to 30.072 s and holds the ' +
-      'keyframe at 30.030 s in its middle; the next keyframe that starts a fragment is at 32.032 s.',
+      'keyframe at 30.030 s in its middle, which opens segment 5 there; the samples before it are segment 4\'s ' +
+      'preroll, and segment 5 carries the start-0 recording\'s video samples.',
     hlsComparisons: [],
   },
 ];
@@ -319,13 +320,14 @@ const RECIPE =
   'cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont -frag_duration 1000000 pipe:1';
 
 const RULES =
-  'ADR 0037: segment N = [N*P, (N+1)*P) on the zero-based timeline. A fragment whose video traf starts ' +
-  'with a sync sample opens segment floor(presentationTime / (P * timescale)), or joins it when that segment is ' +
-  'already open; every other fragment joins the open segment (or waits for the first one). Segments numbered ' +
-  'below startSequenceNumber are discarded preroll; a sync-first fragment beyond the next deliverable number ' +
-  'closes the open segment (delivered, or discarded when preroll) and then fails with a skipped segment ' +
-  'number, grouping nothing from that fragment on. firstVideoPresentationTime = tfdt + first sample\'s composition offset, ' +
-  'in videoTimescale ticks, no edit list.';
+  'ADR 0037: segment N = [N*P, (N+1)*P) on the zero-based timeline. A sync video sample opens segment ' +
+  'floor(presentationTime / (P * timescale)), even inside a fragment, or joins it when that segment is already ' +
+  'open; every other sample joins the open segment (or waits for the first one), and a fragment belongs to every ' +
+  'segment that holds one of its video samples. Segments numbered below startSequenceNumber are discarded ' +
+  'preroll; a sync sample beyond the next deliverable number closes the open segment (delivered, or discarded ' +
+  'when preroll) and then fails with a skipped segment number, grouping nothing from that sample on. ' +
+  'firstVideoPresentationTime = the opening sync sample\'s decode time + its composition offset, in ' +
+  'videoTimescale ticks, no edit list.';
 
 function fixtureRecord({ fixture, record, source, pipe, work }) {
   const stream = record.stream;

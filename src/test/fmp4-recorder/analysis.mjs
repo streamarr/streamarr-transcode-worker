@@ -100,7 +100,9 @@ export function initializationSegmentPair(label, [firstName, first], [secondName
 
 export function describeSegment(segment, stream) {
   const fragments = segment.fragments.map((index) => stream.fragments[index]);
-  const keyframes = videoSamples(stream).filter((sample) => sample.sync && segment.fragments.includes(sample.fragmentIndex));
+  const keyframes = videoSamples(stream)
+    .slice(segment.videoSamples.from, segment.videoSamples.to)
+    .filter((sample) => sample.sync);
   return {
     number: segment.number,
     firstVideoPresentationTime: segment.firstVideoPresentationTime,

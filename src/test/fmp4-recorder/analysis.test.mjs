@@ -196,6 +196,20 @@ describe('recording facts', () => {
       byteLength: stream.fragments.reduce((sum, fragment) => sum + fragment.byteLength, 0),
     });
   });
+
+  it('Should count only its own keyframes when a segment opens inside a fragment it shares', () => {
+    const stream = readStream(
+      Buffer.concat([initialization(), videoFragment({ decodeTime: 0, sync: true }), keyframeRun(143143), videoFragment({ decodeTime: 145145, sync: false })]),
+    );
+
+    assert.deepEqual(
+      group(stream, 6, 0).delivered.map((segment) => describeSegment(segment, stream)),
+      [
+        { number: 0, firstVideoPresentationTime: 0n, firstFragmentIndex: 0, fragmentCount: 2, keyframeCount: 1, byteLength: stream.fragments[0].byteLength + stream.fragments[1].byteLength },
+        { number: 1, firstVideoPresentationTime: 144144n, firstFragmentIndex: 1, fragmentCount: 2, keyframeCount: 1, byteLength: stream.fragments[1].byteLength + stream.fragments[2].byteLength },
+      ],
+    );
+  });
 });
 
 /** Writes an HLS output of the recording whose segment n starts at fragment cuts[n]. */

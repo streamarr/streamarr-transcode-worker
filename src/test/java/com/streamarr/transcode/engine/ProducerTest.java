@@ -267,6 +267,31 @@ class ProducerTest {
                     .isEqualTo(startZero.contentOf(name)));
   }
 
+  // A stream copy writes the same video packets at the same decode times whatever its seek; the
+  // encoded audio of a replacement attempt starts at the seek point, and FFmpeg writes nothing
+  // until the audio has a sample, so its first fragment runs past the keyframe at 30.030 s.
+  @Test
+  @DisplayName(
+      "Should deliver the start-0 attempt's video samples for every media segment when a"
+          + " stream-copy replacement attempt that encodes its audio holds its first segment's"
+          + " keyframe inside FFmpeg's first fragment")
+  void
+      shouldDeliverTheStartZeroAttemptsVideoSamplesWhenAReplacementAttemptHoldsItsFirstSegmentsKeyframeInsideFfmpegsFirstFragment() {
+    var startZero = deliveredBy(recording("16-copy-encode-audio.fmp4"));
+    var replacement = deliveredBy(recording("16-copy-encode-audio-seek30.fmp4"));
+
+    assertThat(videoSamplesOf(replacement, "segment5.m4s").getFirst().presentationTime())
+        .isEqualTo(720_720);
+    assertThat(replacement.acceptedNames())
+        .filteredOn(name -> name.startsWith("segment"))
+        .startsWith("segment5.m4s")
+        .allSatisfy(
+            name ->
+                assertThat(videoSamplesOf(replacement, name))
+                    .as(name)
+                    .isEqualTo(videoSamplesOf(startZero, name)));
+  }
+
   @ParameterizedTest(name = "{1} after {0}")
   @CsvSource({
     "05-copy-late-start.fmp4, 05-copy-late-start-seek12.fmp4",
@@ -2686,6 +2711,11 @@ class ProducerTest {
   private static Movie mediaSegmentOf(RecordingSegmentSink deliveries, String name) {
     return Mp4Samples.read(
         IsoBoxes.concat(deliveries.contentOf("init.mp4"), deliveries.contentOf(name)));
+  }
+
+  private static List<Sample> videoSamplesOf(RecordingSegmentSink deliveries, String name) {
+    var segment = mediaSegmentOf(deliveries, name);
+    return segment.samplesOf(segment.videoTrack());
   }
 
   private static List<Sample> audioSamplesOf(RecordingSegmentSink deliveries, String name) {

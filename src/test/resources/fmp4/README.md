@@ -162,14 +162,19 @@ order the worker's command builder passes them.
 
 ## Conventions in expected.json
 
-- `firstVideoPresentationTime` is in ticks of `videoTimescale`. It is the first video sample's
-  presentation time: `tfdt` baseMediaDecodeTime plus that sample's signed `trun` composition offset,
-  with no edit list, on the zero-based timeline that `-start_at_zero` produces.
+- `firstVideoPresentationTime` is in ticks of `videoTimescale`. It is the presentation time of the
+  keyframe that opens the segment: `tfdt` baseMediaDecodeTime plus the durations of the samples
+  before it in its fragment plus its signed `trun` composition offset, with no edit list, on the
+  zero-based timeline that `-start_at_zero` produces.
 - `segments` is what the grouper must deliver. Each entry is `number`, `firstVideoPresentationTime`,
-  `firstFragmentIndex`, `fragmentCount`, `keyframeCount` and `byteLength` (the sum of that
-  segment's `moof`+`mdat` bytes, concatenated in arrival order). Fragment indexes count fragments
-  after the initialization segment, from 0. The producer delivers the video samples of those
-  fragments, rebuilt as one `moof` and one `mdat`; its audio samples follow their own start instead.
+  `firstFragmentIndex`, `fragmentCount`, `keyframeCount` (the keyframes among the segment's own
+  video samples) and `byteLength` (the sum of the `moof`+`mdat` bytes of the fragments that carry
+  its samples, concatenated in arrival order). Fragment indexes count fragments after the
+  initialization segment, from 0. A segment opens at its keyframe even inside a fragment; the
+  samples before that keyframe belong to the segment before, so that fragment is counted in both
+  (16b). The producer delivers the segment's own video samples, from its opening keyframe to the
+  next segment's, rebuilt as one `moof` and one `mdat`; its audio samples follow their own start
+  instead.
 - `ffmpegArguments` is the recording run's FFmpeg command line exactly as it ran, one argument per
   entry, fixture-only additions included (see [Recipe](#recipe)).
 - `seekSeconds` is the job's seek position, the start sequence number times the period; an encode's
@@ -182,7 +187,7 @@ order the worker's command builder passes them.
   `failure` names the named-reason failure (fixture 10) and the fragment that fails; `segments` then
   lists what is delivered before the failure. A keyframe that skips a segment number still marks the
   end of the open segment, so that segment is complete: it is delivered (or discarded, when it is
-  preroll) and the attempt then fails. The skipping fragment and everything after it are never
+  preroll) and the attempt then fails. The skipping keyframe and everything after it are never
   grouped. Whether a segment that long may be served at all is a duration policy that
   [server #66](https://github.com/streamarr/streamarr-server/issues/66) owns, not the grouping.
 - `mode` and `audio` say whether the recording encodes or copies its video and its audio.
@@ -234,7 +239,7 @@ Timescale 24000 unless stated. `n@t` means segment n starts at t seconds.
 | 14 | `14-copy-audio-ends-early.fmp4` | 0 | 20 s of video, 8 s of audio, copied. The fragment at 8.008 s still carries the last three audio samples, which end at 8.0 s, and from 9.009 s on FFmpeg writes fragments with a video `traf` alone, so no audio sample ever starts at or after the end of segments 1–3; 4 segments, the last from 18.018 s. |
 | 15 | `15-copy-adjacent-keyframes.fmp4` | 0 | 22.05 kHz audio, whose 46.4 ms AAC frames outlast the 41.7 ms video frames, starting 20 ms after the video, and a keyframe on every frame from 5.6 s to 6.6 s, copied. FFmpeg cuts a one-frame fragment at each of those keyframes, and some carry no audio. The one at 6.006 s, which opens segment 1, is one of them, and the next fragment carries an audio sample from 5.964 s, inside segment 0. 4 segments. |
 | 16 | `16-copy-encode-audio.fmp4` | 0 | 7's source with its video copied and its audio encoded (the worker's audio transcode): 11 segments of 3 keyframes each, every keyframe starting a fragment. |
-| 16b | `16-copy-encode-audio-seek30.fmp4` | 5 | Its replacement attempt at `-ss 30`. The seek lands on the keyframe at 28.028 s, but the encoded audio starts at the seek point (29.979 s, its priming frame). `delay_moov` writes nothing until every track has a sample, so the first fragment holds the video from 28.028 s to 30.072 s, with the keyframe at 30.030 s as its 49th sample, and one audio sample. The next two fragments start with non-sync samples; the next keyframe that starts a fragment is at 32.032 s. |
+| 16b | `16-copy-encode-audio-seek30.fmp4` | 5 | Its replacement attempt at `-ss 30`. The seek lands on the keyframe at 28.028 s, but the encoded audio starts at the seek point (29.979 s, its priming frame). `delay_moov` writes nothing until every track has a sample, so the first fragment holds the video from 28.028 s to 30.072 s, with the keyframe at 30.030 s as its 49th sample, and one audio sample. That keyframe opens segment 5 inside the fragment: the 48 samples before it are segment 4's discarded preroll, and segment 5 carries exactly 16's video samples at the same ticks. The next two fragments start with non-sync samples; the next keyframe that starts a fragment is at 32.032 s. |
 
 Box facts every recording shares (useful for the reader):
 - Top-level boxes are only `ftyp`, `moov`, `moof` and `mdat`, in that order, with no `largesize`, `styp` or `sidx`.
@@ -403,7 +408,7 @@ Reproduced:
     (209 ms). A fragment's end cannot be computed from its durations.
   - Fragments without video appear only after the last video sample: one per target of audio that
     outlasts the video (4 for 3.5 s). None ever precedes the first segment.
-  - On a 10 s-GOP copy the sync-first fragments fall in segments 0, 1, 3; the first skip is at 20.02 s.
+  - On a 10 s-GOP copy the keyframes fall in segments 0, 1, 3; the first skip is at 20.02 s.
 - Start point and seeking:
   - `-start_at_zero` on an MPEG-TS source puts zero at the AAC priming frame. Video starts at
     0.021 s (copy) and 0.042 s (encode), exactly the ADR's numbers.

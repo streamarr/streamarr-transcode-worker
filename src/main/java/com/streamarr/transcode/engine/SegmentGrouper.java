@@ -13,9 +13,10 @@ import lombok.NonNull;
 
 /**
  * Groups fragments, in arrival order, into the media segments of ADR 0037's zero-based interval
- * grid. A keyframe that opens the next segment closes the open one, and the end of the stream
- * closes the last; segments below the start sequence number are preroll and are never returned. A
- * keyframe that skips a segment number closes the open segment and ends the grouping.
+ * grid. A keyframe that opens the next segment closes the open one, even inside a fragment, and the
+ * end of the stream closes the last; segments below the start sequence number are preroll and are
+ * never returned. A keyframe that skips a segment number closes the open segment and ends the
+ * grouping.
  */
 final class SegmentGrouper {
 
@@ -55,49 +56,50 @@ final class SegmentGrouper {
   }
 
   /**
-   * Adds a fragment in arrival order and reports the media segment its keyframe closed, if any. A
-   * closed preroll segment is discarded rather than reported. A keyframe that skips a segment
-   * number closes the open segment too, and the grouper reports that segment with the skip and
-   * takes no further fragment.
+   * Adds a fragment in arrival order and reports the media segments its keyframes closed, if any. A
+   * keyframe opens its segment wherever it lies in the fragment: the video samples before it belong
+   * to the segment it closes, so both segments hold the fragment. A closed preroll segment is
+   * discarded rather than reported. A keyframe that skips a segment number closes the open segment
+   * too, and the grouper reports the segments closed so far with the skip and takes no further
+   * fragment.
    *
-   * @throws FragmentedMp4Exception when the fragment's keyframe starts before the previous
-   *     keyframe, or when the fragment would make the segment it joins larger than the segment cap
+   * @throws FragmentedMp4Exception when one of the fragment's keyframes starts before the previous
+   *     keyframe, or when the fragment would make a segment it joins larger than the segment cap
    * @throws IllegalStateException after a keyframe skipped a segment number
    */
   GroupingOutcome accept(@NonNull Fragment fragment) {
     requireNotEnded();
-    var keyframeStart = fragment.videoStart().filter(VideoStart::syncSample);
-    if (keyframeStart.isEmpty()) {
-      join(fragment);
+    var samples = SampleOf.videoOf(fragment).toList();
+    var closed = new ArrayList<MediaSegment>();
+    var firstOpenSample = 0;
+    for (var index = 0; index < samples.size(); index++) {
+      var opened = segmentNumberOpenedBy(samples.get(index));
+      if (opened.isEmpty()) {
+        continue;
+      }
+
+      var sequenceNumber = opened.getAsLong();
+      firstOpenSample = joinSamplesBefore(samples, firstOpenSample, index);
+      var nextDeliverable = nextDeliverableNumber();
+      close().ifPresent(closed::add);
+      if (sequenceNumber > nextDeliverable) {
+        ended = true;
+        discardOpenFragments();
+        return new SegmentNumberSkipped(closed, nextDeliverable, sequenceNumber);
+      }
+
+      openSequenceNumber = OptionalLong.of(sequenceNumber);
+      if (isPrerollOpen()) {
+        discardOpenFragments();
+      }
+    }
+
+    join(fragment, samples.subList(firstOpenSample, samples.size()));
+    if (closed.isEmpty()) {
       return new NothingClosed();
     }
 
-    var keyframe = keyframeStart.orElseThrow();
-    requireNoRegression(keyframe);
-    lastKeyframeTime = OptionalLong.of(keyframe.presentationTime());
-    var sequenceNumber = sequenceNumberOf(keyframe);
-    if (openSequenceNumber.equals(OptionalLong.of(sequenceNumber))) {
-      join(fragment);
-      return new NothingClosed();
-    }
-
-    var nextDeliverable = nextDeliverableNumber();
-    var closed = close();
-    if (sequenceNumber > nextDeliverable) {
-      ended = true;
-      discardOpenFragments();
-      return new SegmentNumberSkipped(closed.stream().toList(), nextDeliverable, sequenceNumber);
-    }
-
-    openSequenceNumber = OptionalLong.of(sequenceNumber);
-    if (isPrerollOpen()) {
-      discardOpenFragments();
-    }
-
-    join(fragment);
-    return closed
-        .<GroupingOutcome>map(segment -> new SegmentsClosed(List.of(segment)))
-        .orElseGet(NothingClosed::new);
+    return new SegmentsClosed(closed);
   }
 
   /**
@@ -126,8 +128,51 @@ final class SegmentGrouper {
     }
   }
 
-  /** Holds a fragment for the open segment, or for the first one; drops it when that is preroll. */
-  private void join(Fragment fragment) {
+  /** The number of the segment a keyframe opens; empty for a keyframe of the open segment. */
+  private OptionalLong segmentNumberOpenedBy(SampleOf sample) {
+    var keyframe =
+        sample
+            .fragment()
+            .tracks()
+            .video()
+            .map(track -> track.startOf(sample.sample()))
+            .filter(VideoStart::syncSample);
+    if (keyframe.isEmpty()) {
+      return OptionalLong.empty();
+    }
+
+    requireNoRegression(keyframe.orElseThrow());
+    lastKeyframeTime = OptionalLong.of(keyframe.orElseThrow().presentationTime());
+    var sequenceNumber = sequenceNumberOf(keyframe.orElseThrow());
+    if (openSequenceNumber.equals(OptionalLong.of(sequenceNumber))) {
+      return OptionalLong.empty();
+    }
+
+    return OptionalLong.of(sequenceNumber);
+  }
+
+  /**
+   * Joins the fragment's video samples before a keyframe that opens a segment to the open segment,
+   * and returns the position of the first sample left for the segment the keyframe opens. Before
+   * the first keyframe no segment is open, and those samples belong to the one it opens.
+   */
+  private int joinSamplesBefore(List<SampleOf> samples, int firstOpenSample, int keyframe) {
+    if (openSequenceNumber.isEmpty()) {
+      return firstOpenSample;
+    }
+
+    if (keyframe > firstOpenSample) {
+      join(samples.get(keyframe).fragment(), samples.subList(firstOpenSample, keyframe));
+    }
+
+    return keyframe;
+  }
+
+  /**
+   * Holds a fragment and those of its video samples that belong to the open segment, or to the
+   * first one; drops them when that is preroll.
+   */
+  private void join(Fragment fragment, List<SampleOf> videoSamples) {
     if (isPrerollOpen()) {
       return;
     }
@@ -145,7 +190,7 @@ final class SegmentGrouper {
     }
 
     openFragments.add(fragment);
-    SampleOf.videoOf(fragment).forEach(openVideoSamples::add);
+    openVideoSamples.addAll(videoSamples);
     openBytes += bytes;
   }
 
