@@ -934,6 +934,44 @@ class ProducerTest {
 
   @Test
   @DisplayName(
+      "Should fail the attempt with the segment cap and release its memory when segments awaiting"
+          + " their audio leave the producer's budget no room for the next box")
+  void
+      shouldFailTheAttemptWithTheSegmentCapWhenSegmentsAwaitingTheirAudioLeaveTheBudgetNoRoomForTheNextBox() {
+    var workerBudget = SegmentMemoryBudget.forSlots(1);
+    var eightyMebibytes = 80 * 1024 * 1024;
+    // Segments 0 to 2, each under the cap, await audio at or after their end, which arrives only
+    // with the last fragment, whose 24 MiB no delivery can make room for.
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0).audioFrom(0, 1024).paddingBytes(eightyMebibytes).build(),
+            TimedFragment.keyframeAt(24_000)
+                .audioFrom(1024, 1024)
+                .paddingBytes(eightyMebibytes)
+                .build(),
+            TimedFragment.keyframeAt(48_000)
+                .audioFrom(2048, 1024)
+                .paddingBytes(eightyMebibytes)
+                .build(),
+            TimedFragment.frameAt(60_000)
+                .audioFrom(150_000, 1024)
+                .paddingBytes(24 * 1024 * 1024)
+                .build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+
+    var producer = producerOfOneSecondSegments(process).memoryBudget(workerBudget).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.SEGMENT_CAP_EXCEEDED);
+    assertThat(failure.detail()).contains("no delivery in flight can free");
+    assertThat(process.wasDestroyedForcibly()).isTrue();
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+    assertReleasesEveryReservedByte(workerBudget);
+  }
+
+  @Test
+  @DisplayName(
       "Should fail the attempt with the segment cap when a media segment rebuilt as one moof and"
           + " mdat outgrows the cap although its fragments fit")
   void
@@ -2795,11 +2833,15 @@ class ProducerTest {
   /**
    * One fragment of a 1 s period: a video sample of one second at this time in the 24 kHz video
    * timescale, a keyframe or not, and one-byte audio samples back to back from their start in the
-   * 48 kHz audio timescale, lasting as given.
+   * 48 kHz audio timescale, lasting as given, followed in the mdat by any padding given.
    */
   @Builder
   private record TimedFragment(
-      long videoTime, boolean keyframe, long audioStart, List<Integer> audioDurations) {
+      long videoTime,
+      boolean keyframe,
+      long audioStart,
+      List<Integer> audioDurations,
+      int paddingBytes) {
 
     static TimedFragmentBuilder keyframeAt(long videoTime) {
       return builder().videoTime(videoTime).keyframe(true).audioDurations(List.of());
@@ -2817,13 +2859,14 @@ class ProducerTest {
       }
 
       if (audioDurations.isEmpty()) {
-        return IsoBoxes.concat(IsoBoxes.moof(video.build()), IsoBoxes.mdat(1));
+        return IsoBoxes.concat(IsoBoxes.moof(video.build()), IsoBoxes.mdat(1 + paddingBytes));
       }
 
       var audio =
           IsoBoxes.audioTraf().baseMediaDecodeTime(audioStart).sampleDurations(audioDurations);
       return IsoBoxes.concat(
-          IsoBoxes.moof(video.build(), audio.build()), IsoBoxes.mdat(1 + audioDurations.size()));
+          IsoBoxes.moof(video.build(), audio.build()),
+          IsoBoxes.mdat(1 + audioDurations.size() + paddingBytes));
     }
 
     static final class TimedFragmentBuilder {

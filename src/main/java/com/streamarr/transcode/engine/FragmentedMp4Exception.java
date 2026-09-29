@@ -11,8 +11,9 @@ final class FragmentedMp4Exception extends RuntimeException {
     /**
      * A box would make the initialization segment or a fragment larger than the segment cap, a
      * fragment would make the fragments of a media segment larger than it, a fragment holds more
-     * samples than a media segment under it can describe, or a media segment rebuilt as one {@code
-     * moof} and one {@code mdat} would be larger than it.
+     * samples than a media segment under it can describe, a media segment rebuilt as one {@code
+     * moof} and one {@code mdat} would be larger than it, or the next box does not fit the
+     * producer's budget of two caps beside what the reader holds while no delivery can free room.
      */
     EXCEEDS_SEGMENT_CAP,
     /** A top-level box declares size zero, which on a pipe means it never ends. */

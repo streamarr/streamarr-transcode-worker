@@ -9,6 +9,8 @@ interface BoxAdmission {
   /**
    * Returns true once the reader may hold the box's bytes, and false when the reader must end
    * reading instead; until it returns, the reader reads nothing further.
+   *
+   * @throws FragmentedMp4Exception when the box can never be admitted, which fails the output
    */
   boolean tryAdmit(long boxBytes);
 }

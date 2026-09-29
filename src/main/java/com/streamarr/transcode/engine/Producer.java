@@ -3,6 +3,7 @@ package com.streamarr.transcode.engine;
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.engine.AttemptOutcome.Failed;
 import com.streamarr.transcode.engine.AttemptOutcome.Stopped;
+import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.engine.ReadingEnding.Abandoned;
 import com.streamarr.transcode.engine.ReadingEnding.Decided;
 import com.streamarr.transcode.engine.ReadingEnding.EndOfOutput;
@@ -28,15 +29,17 @@ import lombok.extern.slf4j.Slf4j;
  * while it assembles the next, and settles the attempt's outcome once FFmpeg has exited.
  *
  * <p>The producer holds at most two segment caps: the segment awaiting the sink's acceptance and
- * what the reader holds for the next. It admits each box's bytes before it reads them, and the
- * {@code moof} and {@code mdat} header of each rebuilt segment before it writes them, within its
- * own budget and within the worker's, so when either budget is full, or when a second segment
- * closes while the first still awaits acceptance, the reader stops reading and the pipe holds
- * FFmpeg back. A rebuilt segment views the bytes of the fragments that carried its samples, so it
- * holds them until its delivery returns, and a fragment whose audio a later segment also carries
- * counts for both. Once the attempt has an outcome, the producer drops and releases what the reader
- * holds at once, even while the reader waits on the pipe, and the delivery in flight once that
- * delivery returns.
+ * what the reader holds for the next, which includes the segments awaiting their audio. It fails
+ * the attempt when a box does not fit while no delivery is in flight to free room, since the reader
+ * cannot release what it holds before it reads on. It admits each box's bytes before it reads them,
+ * and the {@code moof} and {@code mdat} header of each rebuilt segment before it writes them,
+ * within its own budget and within the worker's, so when either budget is full, or when a second
+ * segment closes while the first still awaits acceptance, the reader stops reading and the pipe
+ * holds FFmpeg back. A rebuilt segment views the bytes of the fragments that carried its samples,
+ * so it holds them until its delivery returns, and a fragment whose audio a later segment also
+ * carries counts for both. Once the attempt has an outcome, the producer drops and releases what
+ * the reader holds at once, even while the reader waits on the pipe, and the delivery in flight
+ * once that delivery returns.
  *
  * <p>A watchdog fails the attempt when FFmpeg writes nothing for the stall timeout while the reader
  * is reading; waiting for the sink pauses it, and it ends once the reader stops reading. Once the
@@ -514,9 +517,16 @@ public final class Producer {
   }
 
   // Admits a box's bytes while the reader's and the delivery's holdings fit in the producer's
-  // budget and the box fits in the worker's; false once the attempt is decided.
+  // budget and the box fits in the worker's; false once the attempt is decided. Only a delivery in
+  // flight frees the producer's budget, because the reader cannot release what it holds before it
+  // reads on, so a box that does not fit without one never will.
   private boolean tryAdmit(long boxBytes) {
-    awaitReaderWhile(() -> decision.isEmpty() && heldBytes() + boxBytes > BUDGET_BYTES);
+    awaitReaderWhile(
+        () ->
+            decision.isEmpty()
+                && deliveryInFlight.isPresent()
+                && heldBytes() + boxBytes > BUDGET_BYTES);
+    requireRoomInTheProducersBudget(boxBytes);
     if (!tryReserveInWorkerBudget(boxBytes)) {
       return false;
     }
@@ -530,6 +540,26 @@ public final class Producer {
 
     memoryBudget.release(boxBytes);
     return false;
+  }
+
+  // The reader calls it once the box fits or no delivery is in flight, which only the reader
+  // starts.
+  private void requireRoomInTheProducersBudget(long boxBytes) {
+    synchronized (lock) {
+      if (decision.isPresent() || heldBytes() + boxBytes <= BUDGET_BYTES) {
+        return;
+      }
+
+      throw new FragmentedMp4Exception(
+          Reason.EXCEEDS_SEGMENT_CAP,
+          "a box of "
+              + boxBytes
+              + " bytes does not fit beside the "
+              + heldBytes()
+              + " the reader holds, such as segments awaiting their audio, which no delivery in"
+              + " flight can free, within the producer's budget of "
+              + BUDGET_BYTES);
+    }
   }
 
   // The reader waits for other producers to release memory rather than for FFmpeg, so the stall

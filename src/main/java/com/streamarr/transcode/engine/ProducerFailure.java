@@ -15,7 +15,8 @@ public enum ProducerFailure {
   /**
    * A box would make the initialization segment or a fragment exceed the server's segment cap, a
    * media segment would exceed it, or the producer's budget of two caps cannot also hold what
-   * writing a media segment needs.
+   * writing a media segment needs, or the next box beside what the reader holds, such as segments
+   * awaiting their audio, while no delivery is in flight to free room.
    */
   SEGMENT_CAP_EXCEEDED,
   /** A keyframe skipped a segment number, so the source has no keyframe inside that interval. */
