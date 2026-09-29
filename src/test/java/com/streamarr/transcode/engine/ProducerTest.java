@@ -1200,15 +1200,26 @@ class ProducerTest {
           + " mdat outgrows the cap although its fragments fit")
   void
       shouldFailTheAttemptWithTheSegmentCapWhenAMediaSegmentRebuiltAsOneMoofAndMdatOutgrowsTheCap() {
-    // Each one-byte sample takes 5 bytes of a fragment and 17 of the rebuilt segment, so two
-    // fragments of this many samples fit the cap and their rebuilt segment does not.
-    var samplesPerFragment = Math.toIntExact(SERVER_SEGMENT_CAP_BYTES / (2 * 17) + 1);
+    // Each sample of this size takes 4 bytes more in a fragment and 16 more in the rebuilt segment,
+    // so two fragments of this many samples fit the cap and their rebuilt segment does not.
+    var sampleSize = 200;
+    var samplesPerFragment = Math.toIntExact(SERVER_SEGMENT_CAP_BYTES / (2 * (sampleSize + 10)));
     var output =
         IsoBoxes.concat(
             IsoBoxes.ftyp(),
             IsoBoxes.moov(IsoBoxes.Track.video().build()),
-            manySampleFragment(0, samplesPerFragment, IsoBoxes.SYNC_SAMPLE_FLAGS),
-            manySampleFragment(12_000, samplesPerFragment, IsoBoxes.NON_SYNC_SAMPLE_FLAGS),
+            manySampleFragment(
+                IsoBoxes.videoTraf()
+                    .baseMediaDecodeTime(0L)
+                    .firstSampleFlags(IsoBoxes.SYNC_SAMPLE_FLAGS)
+                    .sampleCount(samplesPerFragment)
+                    .sampleSize(sampleSize)),
+            manySampleFragment(
+                IsoBoxes.videoTraf()
+                    .baseMediaDecodeTime(12_000L)
+                    .firstSampleFlags(IsoBoxes.NON_SYNC_SAMPLE_FLAGS)
+                    .sampleCount(samplesPerFragment)
+                    .sampleSize(sampleSize)),
             keyframeFragment(24_000, 1));
     assertThat((long) output.length).isLessThan(SERVER_SEGMENT_CAP_BYTES);
     var process = ScriptedProcess.builder().output(output).build();
@@ -3248,14 +3259,18 @@ class ProducerTest {
   // A fragment of one-byte video samples of one tick each, the first with these flags, at this
   // time in the 24 kHz video timescale.
   private static byte[] manySampleFragment(long decodeTime, int samples, int firstSampleFlags) {
+    return manySampleFragment(
+        IsoBoxes.videoTraf()
+            .baseMediaDecodeTime(decodeTime)
+            .firstSampleFlags(firstSampleFlags)
+            .sampleCount(samples));
+  }
+
+  // A fragment of the traf's video samples, of one tick each, and an mdat that holds their bytes.
+  private static byte[] manySampleFragment(IsoBoxes.TrackFragment.TrackFragmentBuilder videoTraf) {
+    var trackFragment = videoTraf.build();
     return IsoBoxes.concat(
-        IsoBoxes.moof(
-            IsoBoxes.videoTraf()
-                .baseMediaDecodeTime(decodeTime)
-                .firstSampleFlags(firstSampleFlags)
-                .sampleCount(samples)
-                .build()),
-        IsoBoxes.mdat(samples));
+        IsoBoxes.moof(trackFragment), IsoBoxes.mdat(trackFragment.sampleBytes()));
   }
 
   private static byte[] keyframeFragment(long presentationTime) {
