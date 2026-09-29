@@ -17,7 +17,7 @@ import {
 } from './fmp4.mjs';
 import { groupOnGrid } from './grid.mjs';
 import { Decimal } from './json.mjs';
-import { Rational } from './rational.mjs';
+import { Rational, floorDiv } from './rational.mjs';
 
 /** The grid model's view of each fragment: its video samples in decode order, when it has any. */
 export function gridFragments(stream) {
@@ -52,7 +52,8 @@ export function sha256(bytes) {
  */
 export function recordingFacts(stream, { period, startSequenceNumber }) {
   const videoTrack = videoTrackOf(stream);
-  const { delivered, preroll, failure } = group(stream, period, startSequenceNumber);
+  const grid = group(stream, period, startSequenceNumber);
+  const { delivered, preroll, failure } = grid;
   const lastVideo = stream.fragments.findLastIndex((fragment) => videoTrafOf(fragment) !== null);
   return {
     videoTrackId: videoTrack.trackId,
@@ -75,6 +76,7 @@ export function recordingFacts(stream, { period, startSequenceNumber }) {
     segments: delivered.map((segment) => describeSegment(segment, stream)),
     discardedPreroll: preroll.map((segment) => describeSegment(segment, stream)),
     failure,
+    lateAudioSample: firstLateAudioSample(stream, grid, { period, startSequenceNumber }),
     endsWithAudioOnlyFragments: lastVideo < stream.fragments.length - 1,
     trailingAudioOnlyFragmentCount: stream.fragments.length - 1 - lastVideo,
     diagnostics: diagnostics(stream),
@@ -83,6 +85,68 @@ export function recordingFacts(stream, { period, startSequenceNumber }) {
 
 function digestOf(bytes) {
   return { byteLength: bytes.length, sha256: sha256(bytes) };
+}
+
+// How far past a segment's end the video runs before the segment closes without later audio.
+const MARGIN_SECONDS = 1n;
+
+function audioSamplesOf(fragment, audioTrack) {
+  return fragment.trafs
+    .filter((traf) => traf.trackId === audioTrack?.trackId)
+    .flatMap((traf) => {
+      let decode = signed(traf.baseMediaDecodeTime);
+      return traf.samples.map((sample) => {
+        const presentationTime = decode + BigInt(sample.compositionOffset);
+        decode += BigInt(sample.duration);
+        return { presentationTime, timescale: traf.timescale };
+      });
+    });
+}
+
+function videoDecodeEndOf(fragment) {
+  const traf = videoTrafOf(fragment);
+  if (traf === null) {
+    return null;
+  }
+  const duration = traf.samples.reduce((sum, sample) => sum + BigInt(sample.duration), 0n);
+  return { ticks: signed(traf.baseMediaDecodeTime) + duration, timescale: BigInt(traf.timescale) };
+}
+
+/**
+ * The first audio sample that arrives after its media segment closed, or null. Once the keyframe
+ * of a later segment has arrived, a segment closes after the fragment in which an audio sample of a
+ * later segment arrives or the video's decode end runs MARGIN_SECONDS past the segment's end. An
+ * audio sample before the start sequence number is preroll; an attempt from segment zero keeps the
+ * samples before zero in segment zero. Nothing from a grouping failure on is read.
+ */
+function firstLateAudioSample(stream, { delivered, preroll, failure }, { period, startSequenceNumber }) {
+  const audioTrack = audioTrackOf(stream);
+  const openedAt = new Map([...preroll, ...delivered].map((segment) => [segment.openedAtFragment, segment.number]));
+  const end = failure === null ? stream.fragments.length : failure.fragmentIndex;
+  let opened = -Infinity;
+  let reached = -Infinity;
+  let passedByVideo = -Infinity;
+  for (let index = 0; index < end; index++) {
+    const fragment = stream.fragments[index];
+    const closedThrough = Math.min(opened - 1, Math.max(reached - 1, passedByVideo));
+    for (const { presentationTime, timescale } of audioSamplesOf(fragment, audioTrack)) {
+      let number = Number(floorDiv(presentationTime, BigInt(period * timescale)));
+      if (number < 0 && startSequenceNumber === 0) {
+        number = 0;
+      }
+      if (number >= startSequenceNumber && number <= closedThrough) {
+        return { fragmentIndex: index, presentationTime, segmentNumber: number };
+      }
+      reached = Math.max(reached, number);
+    }
+    const videoEnd = videoDecodeEndOf(fragment);
+    if (videoEnd !== null) {
+      const unit = BigInt(period) * videoEnd.timescale;
+      passedByVideo = Number(floorDiv(videoEnd.ticks - MARGIN_SECONDS * videoEnd.timescale, unit)) - 1;
+    }
+    opened = Math.max(opened, openedAt.get(index) ?? -Infinity);
+  }
+  return null;
 }
 
 /** Whether two recordings' initialization segments are byte-identical, and their digests. */

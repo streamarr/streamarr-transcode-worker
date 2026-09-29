@@ -191,6 +191,13 @@ order the worker's command builder passes them.
   preroll) and the attempt then fails. The skipping keyframe and everything after it are never
   grouped. Whether a segment that long may be served at all is a duration policy that
   [server #66](https://github.com/streamarr/streamarr-server/issues/66) owns, not the grouping.
+- `lateAudioSample` names the first audio sample that arrives after its media segment closed, by
+  its fragment, its presentation time in the audio timescale and its segment, or is null. Once the
+  keyframe of a later segment has arrived, a segment closes after the fragment in which an audio
+  sample of a later segment arrives or the video's decode end runs 1 s past the segment's end. In
+  every other recording an audio sample trails the video written before it by at most 0.162 s
+  (04); in 17b the AAC encoder's last two frames arrive 148 s after their segment's video, and
+  the producer fails the attempt with `LATE_AUDIO_SAMPLE`.
 - `mode` and `audio` say whether the recording encodes or copies its video and its audio.
 - `endsWithAudioOnlyFragments` / `trailingAudioOnlyFragmentCount` describe fragments with no video
   `traf` after the last video sample.

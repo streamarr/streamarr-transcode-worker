@@ -83,6 +83,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -171,6 +172,9 @@ class WorkerMediaSmokeTest {
   private static final String DOLBY_VISION_FIXTURE = "dolby-vision-8.2-dvh1.mp4";
   // The fixture's 10-bit base layer: Main 10 at level 2.0 in the Main tier.
   private static final String DOLBY_VISION_BASE_LAYER_CODEC_STRING = "hvc1.2.4.L60.90";
+
+  // 90 s of video at the default 6 s period.
+  private static final int AUDIO_ENDS_LONG_BEFORE_VIDEO_SEGMENT_COUNT = 15;
 
   private static final Duration JOB_LIMIT = Duration.ofMinutes(5);
   private static final String EMPTY_EDIT_SOURCE = "mp4-empty-edit.mp4";
@@ -1635,6 +1639,47 @@ class WorkerMediaSmokeTest {
         .isEqualTo(videoPacketsOf(fromStartUploads, "segment2.m4s"));
   }
 
+  @Test
+  @DisplayName(
+      "Should upload a media segment after the audio's end while FFmpeg's output continues when the"
+          + " audio ends long before the video")
+  void shouldUploadAMediaSegmentAfterTheAudiosEndWhileFfmpegsOutputContinues() throws Exception {
+    var source = audioEndsLongBeforeVideoSource();
+    var launcher = new TeeingProcessLauncher(new ProcessBuilderLauncher());
+    var unwithheld = audioEndsLongBeforeVideoJob(source);
+    var unwithheldUploads =
+        execute(engine(softwareCapabilities(), launcher), source.getParent(), unwithheld.build());
+    var output = launcher.outputOf(fromProto(unwithheld.getJobAttemptId()));
+    // A stream copy writes the same output every run. Segment 5 ends at 36 s, and its audio at
+    // 10 s, so the worker must upload it before it reads the video past 50 s. The output is
+    // withheld for less than the stall timeout, so that a late upload fails this test, not the
+    // attempt.
+    var segmentFiveUploaded = new CompletableFuture<Void>();
+    var releasedByTheUpload =
+        launcher.withholdOutputAfter(
+            endOfTheFragmentWhoseVideoReaches(output, 50),
+            segmentFiveUploaded,
+            FfmpegTranscodeEngine.DEFAULT_ENCODER_STALL_TIMEOUT.dividedBy(2));
+
+    var uploads =
+        execute(
+            engine(softwareCapabilities(), launcher),
+            source.getParent(),
+            audioEndsLongBeforeVideoJob(source).build(),
+            name -> {
+              if (name.equals("segment5.m4s")) {
+                segmentFiveUploaded.complete(null);
+              }
+            });
+
+    assertThat(releasedByTheUpload).isCompletedWithValue(true);
+    assertThat(uploads.names())
+        .containsExactlyElementsOf(uploadNames(AUDIO_ENDS_LONG_BEFORE_VIDEO_SEGMENT_COUNT))
+        .isEqualTo(unwithheldUploads.names());
+    assertThat(uploads.contentOf(uploads.names()))
+        .isEqualTo(unwithheldUploads.contentOf(unwithheldUploads.names()));
+  }
+
   static Stream<Arguments> sourceContainersModesAndStarts() {
     return sourceContainersAndModes()
         .flatMap(
@@ -1770,6 +1815,61 @@ class WorkerMediaSmokeTest {
     var source = irregularKeyframeSources.resolve("irregular." + container);
     if (!generatedSeekableSources.contains(source)) {
       runFfmpeg(List.of("-i", matroska.toString(), "-c", "copy"), source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  private static VariantJob.Builder audioEndsLongBeforeVideoJob(Path source) {
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_REMUX);
+    job.getExecutionBuilder().setMediaSegmentCount(AUDIO_ENDS_LONG_BEFORE_VIDEO_SEGMENT_COUNT);
+    return job;
+  }
+
+  // Where the first fragment whose video decode end reaches this media time ends in the output.
+  private static int endOfTheFragmentWhoseVideoReaches(byte[] output, long seconds) {
+    var movie = Mp4Samples.read(output);
+    var video = movie.videoTrack();
+    var mediaDataBoxes =
+        TopLevelBoxes.of(output).stream().filter(box -> box.type().equals("mdat")).toList();
+    for (var index = 0; index < movie.fragments().size(); index++) {
+      var reaches =
+          movie.fragments().get(index).samples().stream()
+              .filter(sample -> sample.trackId() == video.trackId())
+              .anyMatch(sample -> sample.end() >= seconds * video.timescale());
+      if (reaches) {
+        return mediaDataBoxes.get(index).end();
+      }
+    }
+
+    throw new AssertionError("the video never reaches " + seconds + " s");
+  }
+
+  // H.264 at 23.976 fps with a keyframe every 2 s for 90 s, and a sine tone that ends at 10 s: 80 s
+  // before the video, many times FFmpeg's muxer interleave bound.
+  private static synchronized Path audioEndsLongBeforeVideoSource() throws Exception {
+    var source = seekableSources.resolve("audio-ends-long-before-video.mp4");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc2=size=64x36:rate=24000/1001:duration=90",
+              "-f",
+              "lavfi",
+              "-i",
+              "sine=frequency=440:sample_rate=48000:duration=10",
+              "-c:v",
+              "libx264",
+              "-g",
+              "48",
+              "-keyint_min",
+              "48",
+              "-c:a",
+              "aac"),
+          source);
       generatedSeekableSources.add(source);
     }
 
@@ -1945,7 +2045,14 @@ class WorkerMediaSmokeTest {
 
   private MediaUploads execute(FfmpegTranscodeEngine engine, Path sourceRoot, VariantJob job)
       throws Exception {
-    try (var controlPlane = new MediaControlPlane();
+    return execute(engine, sourceRoot, job, _ -> {});
+  }
+
+  // Calls uploadStarted with each upload's name once the control plane reads its metadata.
+  private MediaUploads execute(
+      FfmpegTranscodeEngine engine, Path sourceRoot, VariantJob job, Consumer<String> uploadStarted)
+      throws Exception {
+    try (var controlPlane = new MediaControlPlane(uploadStarted);
         var worker = workerBuilder(sourceRoot).engine(engine).build()) {
       worker.start("127.0.0.1", controlPlane.port());
       var registeredWorker = controlPlane.registration.get(5, TimeUnit.SECONDS).getWorker();
@@ -1964,7 +2071,7 @@ class WorkerMediaSmokeTest {
 
   private FailedExecution executeExpectingFailure(
       FfmpegTranscodeEngine engine, Path sourceRoot, VariantJob job) throws Exception {
-    try (var controlPlane = new MediaControlPlane();
+    try (var controlPlane = new MediaControlPlane(_ -> {});
         var worker = workerBuilder(sourceRoot).engine(engine).build()) {
       worker.start("127.0.0.1", controlPlane.port());
       var registeredWorker = controlPlane.registration.get(5, TimeUnit.SECONDS).getWorker();
@@ -2444,9 +2551,11 @@ class WorkerMediaSmokeTest {
     private final Map<String, byte[]> segments = new ConcurrentHashMap<>();
     private final List<String> names = new CopyOnWriteArrayList<>();
     private final Server server;
+    private final Consumer<String> uploadStarted;
     private StreamObserver<EstablishWorkerSessionResponse> responses;
 
-    private MediaControlPlane() throws Exception {
+    private MediaControlPlane(Consumer<String> uploadStarted) throws Exception {
+      this.uploadStarted = uploadStarted;
       // As Streamarr's session listener does, so that a job longer than the default ping
       // allowance keeps its session.
       server =
@@ -2512,6 +2621,7 @@ class WorkerMediaSmokeTest {
         public void onNext(UploadSegmentRequest request) {
           if (request.hasMetadata()) {
             name = request.getMetadata().getSegmentName();
+            uploadStarted.accept(name);
             return;
           }
 

@@ -102,8 +102,9 @@ function range(from, to) {
  * Groups fragments ({ video: null | { timescale, samples: [{ presentationTime: bigint, sync }] } },
  * the video samples in decode order) in arrival order. Returns the delivered segments, the
  * discarded preroll and the failure, if any; a segment is
- * { number, firstVideoPresentationTime, fragments: [fragment indexes], videoSamples: { from, to } },
- * the video samples numbered across every fragment in decode order, from inclusive, to exclusive.
+ * { number, firstVideoPresentationTime, openedAtFragment, fragments: [fragment indexes],
+ * videoSamples: { from, to } }: the index of the fragment whose keyframe opened it, and the video
+ * samples numbered across every fragment in decode order, from inclusive, to exclusive.
  */
 export function groupOnGrid(fragments, { period, startSequenceNumber }) {
   const keyframes = keyframesOf(fragments, period);
@@ -119,6 +120,7 @@ export function groupOnGrid(fragments, { period, startSequenceNumber }) {
     return {
       number: opening.number,
       firstVideoPresentationTime: opening.presentationTime,
+      openedAtFragment: opening.index,
       fragments: range(order === 0 ? 0 : opening.index, fragmentEnd(next, fragments.length)),
       videoSamples: { from: order === 0 ? 0 : opening.position, to: next?.position ?? videoSampleCount(fragments) },
     };

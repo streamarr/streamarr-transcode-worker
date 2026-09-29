@@ -140,9 +140,16 @@ class ProducerTest {
         .sink(new RecordingSegmentSink());
   }
 
-  static Stream<Recording> recordingsThatGroupWithoutFailure() {
-    return FfmpegRecordings.recordings().stream()
-        .filter(recording -> recording.failure().isEmpty());
+  static Stream<Recording> recordingsThatComplete() {
+    return recordingsWithoutLateAudio().filter(recording -> recording.failure().isEmpty());
+  }
+
+  static Stream<Recording> recordingsWithoutLateAudio() {
+    return recordings().filter(recording -> recording.lateAudioSample().isEmpty());
+  }
+
+  static Stream<Recording> recordingsWithLateAudio() {
+    return recordings().filter(recording -> recording.lateAudioSample().isPresent());
   }
 
   static Stream<Recording> recordings() {
@@ -171,7 +178,7 @@ class ProducerTest {
   }
 
   @ParameterizedTest(name = "{0}")
-  @MethodSource("recordings")
+  @MethodSource("recordingsWithoutLateAudio")
   @DisplayName("Should deliver FFmpeg's own samples when it rebuilds the media segments")
   void shouldDeliverFfmpegsOwnSamplesWhenItRebuildsTheMediaSegments(Recording recording) {
     deliverEverySegmentOf(recording);
@@ -214,7 +221,7 @@ class ProducerTest {
   }
 
   @ParameterizedTest(name = "{0}")
-  @MethodSource("recordings")
+  @MethodSource("recordingsWithoutLateAudio")
   @DisplayName(
       "Should deliver every audio sample FFmpeg writes exactly once when it rebuilds the media"
           + " segments")
@@ -322,9 +329,15 @@ class ProducerTest {
     var output =
         OneSecondSegments.of(
             IsoBoxes.videoAndAudioMoov(),
-            TimedFragment.keyframeAt(0).audioFrom(0, 12_000, 12_000).build(),
-            TimedFragment.keyframeAt(24_000).audioFrom(24_000, 12_000, 9_600).build(),
-            TimedFragment.frameAt(48_000).audioFrom(45_600, 2_400, 48_000).build());
+            TimedFragment.keyframeAt(0).videoDuration(12_000).audioFrom(0, 12_000, 12_000).build(),
+            TimedFragment.keyframeAt(24_000)
+                .videoDuration(12_000)
+                .audioFrom(24_000, 12_000, 9_600)
+                .build(),
+            TimedFragment.frameAt(36_000)
+                .videoDuration(12_000)
+                .audioFrom(45_600, 2_400, 48_000)
+                .build());
     var process =
         ScriptedProcess.builder().output(output.bytes()).pauseAfter(output.endOf(1)).build();
     sink.holding(0);
@@ -352,9 +365,15 @@ class ProducerTest {
     var output =
         OneSecondSegments.of(
             IsoBoxes.videoAndAudioMoov(),
-            TimedFragment.keyframeAt(0).audioFrom(0, 12_000, 12_000, 12_000, 10_000).build(),
-            TimedFragment.keyframeAt(24_000).build(),
-            TimedFragment.frameAt(48_000).audioFrom(46_000, 2_000, 48_000).build());
+            TimedFragment.keyframeAt(0)
+                .videoDuration(12_000)
+                .audioFrom(0, 12_000, 12_000, 12_000, 10_000)
+                .build(),
+            TimedFragment.keyframeAt(24_000).videoDuration(12_000).build(),
+            TimedFragment.frameAt(36_000)
+                .videoDuration(12_000)
+                .audioFrom(46_000, 2_000, 48_000)
+                .build());
     var process = ScriptedProcess.builder().output(output.bytes()).build();
 
     var producer = producerOfOneSecondSegments(process).start();
@@ -368,9 +387,9 @@ class ProducerTest {
 
   @Test
   @DisplayName(
-      "Should hold every media segment after the audio's end until the output ends when the audio"
-          + " ends before the video")
-  void shouldHoldEveryMediaSegmentAfterTheAudiosEndUntilTheOutputEndsWhenTheAudioEndsFirst() {
+      "Should deliver a media segment after the audio's end once the video runs a second past its"
+          + " end when the audio ends before the video")
+  void shouldDeliverAMediaSegmentAfterTheAudiosEndOnceTheVideoRunsASecondPastItsEnd() {
     var output =
         OneSecondSegments.of(
             IsoBoxes.videoAndAudioMoov(),
@@ -380,20 +399,123 @@ class ProducerTest {
             TimedFragment.keyframeAt(72_000).build());
     var process =
         ScriptedProcess.builder().output(output.bytes()).pauseAfter(output.endOf(2)).build();
-    sink.holding(0);
 
     var producer = producerOfOneSecondSegments(process).start();
 
-    // A segment that closed would wait for the held initialization segment and keep the reader
-    // from reading on.
     awaiting().until(process::hasReachedPause);
-    sink.release();
+    awaiting()
+        .untilAsserted(
+            () ->
+                assertThat(sink.acceptedNames())
+                    .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s"));
     process.resume();
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
     assertThat(sink.acceptedNames())
         .containsExactly(
             "init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s", "segment3.m4s");
     assertThat(audioDecodeTimesOf("segment0.m4s")).containsExactly(0L, 12_000L);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(
+      strings = {
+        "17-copy-audio-ends-long-before-video.fmp4",
+        "17-encode-audio-ends-long-before-video.fmp4"
+      })
+  @DisplayName(
+      "Should deliver each media segment after the audio's end while FFmpeg's output continues when"
+          + " the audio ends long before the video")
+  void shouldDeliverEachMediaSegmentAfterTheAudiosEndWhileFfmpegsOutputContinues(String file) {
+    var recording = recording(file);
+    // Inside segment 10's first fragment: the video has reached 60 s, a second past segment 8's end
+    // and not yet past segment 9's, and the audio ended at 20 s.
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(file))
+            .pauseAfter(offsetOfMediaSegment(recording, 10) + 10)
+            .resumesOnQuit(true)
+            .exitCode(255)
+            .build();
+
+    var producer = producerFor(process, recording).start();
+
+    awaiting().until(process::hasReachedPause);
+    awaiting()
+        .untilAsserted(
+            () ->
+                assertThat(sink.acceptedNames())
+                    .containsExactly(
+                        "init.mp4",
+                        "segment0.m4s",
+                        "segment1.m4s",
+                        "segment2.m4s",
+                        "segment3.m4s",
+                        "segment4.m4s",
+                        "segment5.m4s",
+                        "segment6.m4s",
+                        "segment7.m4s",
+                        "segment8.m4s"));
+    producer.stop();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Stopped());
+  }
+
+  // FFmpeg flushes an audio encoder only once the whole input has ended, so the encoder's last
+  // frames of audio that ends long before the video arrive after their segment closed.
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("recordingsWithLateAudio")
+  @DisplayName(
+      "Should fail the attempt as malformed output when an audio sample arrives after the video has"
+          + " run a second past its segment's end")
+  void shouldFailTheAttemptAsMalformedOutputWhenAnAudioSampleArrivesAfterTheVideoRanPastItsSegment(
+      Recording recording) {
+    var late = recording.lateAudioSample().orElseThrow();
+
+    var failure =
+        failureOf(
+            producerFor(
+                    ScriptedProcess.builder().output(bytesOf(recording.file())).build(), recording)
+                .start());
+
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.MALFORMED_OUTPUT);
+    assertThat(failure.detail())
+        .contains("LATE_AUDIO_SAMPLE")
+        .contains(
+            "an audio sample at "
+                + late.presentationTime()
+                + " belongs to segment "
+                + late.segmentNumber());
+  }
+
+  @Test
+  @DisplayName(
+      "Should deliver every media segment within the budget when segments after the audio's end"
+          + " would outgrow it together")
+  void shouldDeliverEveryMediaSegmentWithinTheBudgetWhenSegmentsAfterTheAudiosEndWouldOutgrowIt() {
+    var workerBudget = SegmentMemoryBudget.forSlots(1);
+    var seventyMebibytes = 70 * 1024 * 1024;
+    // Held until the output ends, segments 1 to 3 and segment 4's fragment would take 280 MiB.
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0).audioFrom(0, 1024).build(),
+            TimedFragment.keyframeAt(24_000).paddingBytes(seventyMebibytes).build(),
+            TimedFragment.keyframeAt(48_000).paddingBytes(seventyMebibytes).build(),
+            TimedFragment.keyframeAt(72_000).paddingBytes(seventyMebibytes).build(),
+            TimedFragment.keyframeAt(96_000).paddingBytes(seventyMebibytes).build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+
+    var producer = producerOfOneSecondSegments(process).memoryBudget(workerBudget).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(sink.acceptedNames())
+        .containsExactly(
+            "init.mp4",
+            "segment0.m4s",
+            "segment1.m4s",
+            "segment2.m4s",
+            "segment3.m4s",
+            "segment4.m4s");
+    assertReleasesEveryReservedByte(workerBudget);
   }
 
   @Test
@@ -461,7 +583,7 @@ class ProducerTest {
   }
 
   @ParameterizedTest(name = "{0}")
-  @MethodSource("recordingsThatGroupWithoutFailure")
+  @MethodSource("recordingsThatComplete")
   @DisplayName(
       "Should deliver the initialization segment and then each media segment in order when FFmpeg"
           + " exits cleanly")
@@ -964,24 +1086,29 @@ class ProducerTest {
   void
       shouldFailTheAttemptWithTheSegmentCapWhenSegmentsAwaitingTheirAudioLeaveTheBudgetNoRoomForTheNextBox() {
     var workerBudget = SegmentMemoryBudget.forSlots(1);
-    var eightyMebibytes = 80 * 1024 * 1024;
-    // Segments 0 to 2, each under the cap, await audio at or after their end, which arrives only
-    // with the last fragment, whose 24 MiB no delivery can make room for.
+    var fiftyMebibytes = 50 * 1024 * 1024;
+    // Segment 0's 100 MiB awaits audio at or after its end while the video stays within a second
+    // of it, and segment 1's 100 MiB leave no room for its next 60 MiB fragment.
     var output =
         OneSecondSegments.of(
             IsoBoxes.videoAndAudioMoov(),
-            TimedFragment.keyframeAt(0).audioFrom(0, 1024).paddingBytes(eightyMebibytes).build(),
+            TimedFragment.keyframeAt(0)
+                .videoDuration(12_000)
+                .audioFrom(0, 1024)
+                .paddingBytes(fiftyMebibytes)
+                .build(),
+            TimedFragment.frameAt(12_000)
+                .videoDuration(12_000)
+                .paddingBytes(fiftyMebibytes)
+                .build(),
             TimedFragment.keyframeAt(24_000)
-                .audioFrom(1024, 1024)
-                .paddingBytes(eightyMebibytes)
+                .videoDuration(6_000)
+                .paddingBytes(fiftyMebibytes)
                 .build(),
-            TimedFragment.keyframeAt(48_000)
-                .audioFrom(2048, 1024)
-                .paddingBytes(eightyMebibytes)
-                .build(),
-            TimedFragment.frameAt(60_000)
-                .audioFrom(150_000, 1024)
-                .paddingBytes(24 * 1024 * 1024)
+            TimedFragment.frameAt(30_000).videoDuration(6_000).paddingBytes(fiftyMebibytes).build(),
+            TimedFragment.frameAt(36_000)
+                .videoDuration(6_000)
+                .paddingBytes(60 * 1024 * 1024)
                 .build());
     var process = ScriptedProcess.builder().output(output.bytes()).build();
 
@@ -2861,29 +2988,37 @@ class ProducerTest {
   }
 
   /**
-   * One fragment of a 1 s period: a video sample of one second at this time in the 24 kHz video
-   * timescale, a keyframe or not, and one-byte audio samples back to back from their start in the
-   * 48 kHz audio timescale, lasting as given, followed in the mdat by any padding given.
+   * One fragment of a 1 s period: a video sample at this time in the 24 kHz video timescale,
+   * lasting one second unless given, a keyframe or not, and one-byte audio samples back to back
+   * from their start in the 48 kHz audio timescale, lasting as given, followed in the mdat by any
+   * padding given.
    */
   @Builder
   private record TimedFragment(
       long videoTime,
+      long videoDuration,
       boolean keyframe,
       long audioStart,
       List<Integer> audioDurations,
       int paddingBytes) {
 
     static TimedFragmentBuilder keyframeAt(long videoTime) {
-      return builder().videoTime(videoTime).keyframe(true).audioDurations(List.of());
+      return frameAt(videoTime).keyframe(true);
     }
 
     static TimedFragmentBuilder frameAt(long videoTime) {
-      return builder().videoTime(videoTime).keyframe(false).audioDurations(List.of());
+      return builder()
+          .videoTime(videoTime)
+          .videoDuration(24_000)
+          .keyframe(false)
+          .audioDurations(List.of());
     }
 
     byte[] bytes() {
       var video =
-          IsoBoxes.videoTraf().baseMediaDecodeTime(videoTime).sampleDurations(List.of(24_000));
+          IsoBoxes.videoTraf()
+              .baseMediaDecodeTime(videoTime)
+              .sampleDurations(List.of(Math.toIntExact(videoDuration)));
       if (keyframe) {
         video.firstSampleFlags(IsoBoxes.SYNC_SAMPLE_FLAGS);
       }

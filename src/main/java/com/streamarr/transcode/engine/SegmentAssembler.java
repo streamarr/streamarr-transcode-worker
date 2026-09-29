@@ -23,12 +23,14 @@ import lombok.NonNull;
  * media segment, rebuilt as one {@code moof} and one {@code mdat}. A media segment holds the video
  * of the fragments its grouper groups and the audio samples that start inside its interval,
  * whichever fragment carried them. It closes once its grouper has closed it and an audio sample of
- * a later segment has arrived, at once when the movie has no sound track, or when the output ends.
+ * a later segment has arrived or the video has run a margin past its end, at once when the movie
+ * has no sound track, or when the output ends.
  */
 final class SegmentAssembler {
 
   private final SegmentGrouper grouper;
   private final AudioSampleQueue audio;
+  private final VideoProgress video;
   // Segments whose video the grouper closed while audio of their interval may still arrive.
   private final Deque<MediaSegment> awaitingAudio = new ArrayDeque<>();
   private final long maximumSegmentBytes;
@@ -54,6 +56,7 @@ final class SegmentAssembler {
       @NonNull VideoDecision videoDecision) {
     this.grouper = new SegmentGrouper(periodSeconds, startSequenceNumber, maximumSegmentBytes);
     this.audio = new AudioSampleQueue(periodSeconds, startSequenceNumber);
+    this.video = new VideoProgress(periodSeconds);
     this.maximumSegmentBytes = maximumSegmentBytes;
     this.encodedFrameRate = EncodedFrameRate.of(encodedFrameRate);
     this.videoDecision = videoDecision;
@@ -127,6 +130,7 @@ final class SegmentAssembler {
 
   private Closing closingOf(Fragment fragment) {
     audio.add(fragment);
+    video.add(fragment);
     return switch (grouper.accept(fragment)) {
       case NothingClosed _ -> Closing.of(closeEveryCompleted());
       case SegmentsClosed(var segments) -> {
@@ -143,11 +147,15 @@ final class SegmentAssembler {
   // Closes each segment awaiting audio, in order, once no audio of its interval can still arrive.
   private List<ClosedSegment> closeEveryCompleted() {
     var closed = new ArrayList<ClosedSegment>();
-    while (!awaitingAudio.isEmpty() && audio.hasPassed(awaitingAudio.getFirst().sequenceNumber())) {
+    while (!awaitingAudio.isEmpty() && hasPassed(awaitingAudio.getFirst().sequenceNumber())) {
       closed.add(closeFirstAwaiting(List.of()));
     }
 
     return closed;
+  }
+
+  private boolean hasPassed(long sequenceNumber) {
+    return audio.hasPassed(sequenceNumber) || video.hasPassed(sequenceNumber);
   }
 
   private List<ClosedSegment> closeEveryAwaiting() {

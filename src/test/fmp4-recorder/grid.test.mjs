@@ -82,7 +82,7 @@ describe('grid model', () => {
       [[4, [0], { from: 0, to: 2 }]],
     );
     assert.deepEqual(result.delivered, [
-      { number: 5, firstVideoPresentationTime: 30030n, fragments: [0, 1], videoSamples: { from: 2, to: 5 } },
+      { number: 5, firstVideoPresentationTime: 30030n, openedAtFragment: 0, fragments: [0, 1], videoSamples: { from: 2, to: 5 } },
     ]);
   });
 
@@ -127,7 +127,7 @@ describe('grid model', () => {
     const result = groupOnGrid([K(0), F(n(5000), k(18000), n(19000))], { period: PERIOD, startSequenceNumber: 0 });
 
     assert.deepEqual(result.delivered, [
-      { number: 0, firstVideoPresentationTime: 0n, fragments: [0, 1], videoSamples: { from: 0, to: 2 } },
+      { number: 0, firstVideoPresentationTime: 0n, openedAtFragment: 0, fragments: [0, 1], videoSamples: { from: 0, to: 2 } },
     ]);
     assert.equal(result.failure.fragmentIndex, 1);
     assert.equal(result.failure.actualNumber, 3);

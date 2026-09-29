@@ -212,6 +212,35 @@ describe('recording facts', () => {
   });
 });
 
+describe('late audio', () => {
+  // A keyframe at 0 with audio, segment 1's keyframe at 6.006 s, then a frame whose decode ends
+  // at the given 24 kHz tick, then an audio sample of segment 0 at 5 s.
+  const lateAudioOf = (videoDecodeEnd) =>
+    recordingFacts(
+      readStream(
+        Buffer.concat([
+          initialization(),
+          fragment(
+            { trackId: VIDEO.trackId, decodeTime: 0, runs: [{ samples: [{ duration: 1001, size: 1 }], firstSampleFlags: SYNC_SAMPLE_FLAGS }] },
+            { trackId: AUDIO.trackId, decodeTime: 0, runs: [{ samples: [{ duration: 1024, size: 1 }] }] },
+          ),
+          videoFragment({ decodeTime: 144144, sync: true }),
+          videoFragment({ decodeTime: videoDecodeEnd - 1001, sync: false }),
+          audioFragment({ decodeTime: 240000 }),
+        ]),
+      ),
+      { period: 6, startSequenceNumber: 0 },
+    ).lateAudioSample;
+
+  it("Should name an audio sample late when it arrives once the video has run a second past its segment's end", () => {
+    assert.deepEqual(lateAudioOf(168000), { fragmentIndex: 3, presentationTime: 240000n, segmentNumber: 0 });
+  });
+
+  it("Should find no late audio sample when the video has not yet run a second past its segment's end", () => {
+    assert.equal(lateAudioOf(167999), null);
+  });
+});
+
 /** Writes an HLS output of the recording whose segment n starts at fragment cuts[n]. */
 function hlsOutput(cuts) {
   const bytes = readFileSync(RECORDING);

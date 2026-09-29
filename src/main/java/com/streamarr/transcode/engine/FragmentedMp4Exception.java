@@ -46,8 +46,10 @@ final class FragmentedMp4Exception extends RuntimeException {
      */
     OUTPUT_MISMATCH,
     /**
-     * An audio sample arrives after the media segment whose interval holds its start closed, which
-     * only a sound track whose presentation times run backwards can cause.
+     * An audio sample arrives after the media segment whose interval holds its start closed: its
+     * presentation times run backwards, or it trails the video by more than the margin after which
+     * a segment closes without later audio, as an audio encoder's last frames do when the audio
+     * ends more than the muxer's interleave bound before the video.
      */
     LATE_AUDIO_SAMPLE
   }
