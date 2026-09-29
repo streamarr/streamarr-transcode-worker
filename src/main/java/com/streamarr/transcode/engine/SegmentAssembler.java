@@ -114,8 +114,11 @@ final class SegmentAssembler {
     return heldFragments().stream().mapToLong(Fragment::byteLength).sum();
   }
 
-  /** Drops every fragment the assembler holds, which the producer then never delivers. */
-  void discardOpenFragments() {
+  /**
+   * Drops every fragment the assembler holds, which the producer then never delivers: those of the
+   * open segment, those of the segments awaiting audio, and the audio samples held for later ones.
+   */
+  void discardHeldFragments() {
     grouper.discardOpenFragments();
     awaitingAudio.clear();
     audio.discard();

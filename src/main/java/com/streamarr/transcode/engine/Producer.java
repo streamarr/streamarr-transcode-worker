@@ -210,7 +210,7 @@ public final class Producer {
       }
 
       decision = Optional.of(decided);
-      assembler.discardOpenFragments();
+      assembler.discardHeldFragments();
       readerReleasedBytes = readerHeldBytes;
       readerHeldBytes = 0;
       lock.notifyAll();
@@ -314,7 +314,7 @@ public final class Producer {
     try {
       var ending = readAndDeliver();
       watchdog.end();
-      discardOpenFragments();
+      discardHeldFragments();
       holdOnlyTheAssemblingSegment();
       conclude(ending);
     } finally {
@@ -383,7 +383,7 @@ public final class Producer {
 
   private void failReaderUnexpectedly(Thread readerThread, Throwable error) {
     logUnexpectedFailure(readerThread, error);
-    discardOpenFragments();
+    discardHeldFragments();
     if (!tryFailWithProcessEnded(unexpected(error))) {
       ffmpeg.discardRemainingOutput();
     }
@@ -487,9 +487,9 @@ public final class Producer {
     return handOffInOrder(lastSegments).orElseGet(EndOfOutput::new);
   }
 
-  private void discardOpenFragments() {
+  private void discardHeldFragments() {
     synchronized (lock) {
-      assembler.discardOpenFragments();
+      assembler.discardHeldFragments();
     }
   }
 
