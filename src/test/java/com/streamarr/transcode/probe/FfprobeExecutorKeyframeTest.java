@@ -650,6 +650,37 @@ class FfprobeExecutorKeyframeTest {
   }
 
   @Test
+  @DisplayName(
+      "Should report keyframe positions without a keyframe when the packet scan finds no keyframe"
+          + " packet")
+  void shouldReportKeyframePositionsWithoutKeyframeWhenPacketScanFindsNoKeyframePacket() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(MPEGTS_STREAMS)
+            .packetScan(
+                """
+                0, 126000, 133500, 3750, 100, 0x00000000, F=0x0
+                0, 129750, 144750, 3750, 100, 0x00000000, F=0x0
+                """)
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
+
+    assertThat(report.result().getMedia().getKeyframes())
+        .isEqualTo(
+            ProbeKeyframes.newBuilder()
+                .setPositions(
+                    KeyframePositions.newBuilder()
+                        .setStreamIndex(0)
+                        .setTimeBaseNumerator(1)
+                        .setTimeBaseDenominator(90_000)
+                        .setSource(KeyframePositionSource.KEYFRAME_POSITION_SOURCE_PACKET_SCAN)
+                        .setKeyframeCount(0))
+                .build());
+    assertThat(report.keyframePositionsParts()).isEmpty();
+  }
+
+  @Test
   @DisplayName("Should report an execution failure when the packet scan exits with an error")
   void shouldReportExecutionFailureWhenPacketScanExitsWithError() {
     var ffprobe =
