@@ -325,6 +325,18 @@ class FfmpegCommandBuilderTest {
   }
 
   @Test
+  @DisplayName("Should pass every libx265 parameter in one -x265-params value when libx265 encodes")
+  void shouldPassEveryLibx265ParameterInOneX265ParamsValueWhenLibx265Encodes() {
+    var encode = hevcEncode().tier(Optional.of(VideoCodecTier.MAIN));
+
+    var cmd = command(request(encoding(encode)).build(), "libx265");
+
+    assertThat(cmd).containsOnlyOnce("-x265-params");
+    assertThat(cmd.get(cmd.indexOf("-x265-params") + 1).split(":"))
+        .contains("no-scenecut=1", "no-open-gop=1", "level-idc=41", "high-tier=0");
+  }
+
+  @Test
   @DisplayName("Should force only the level when libx265 encodes without a tier")
   void shouldForceOnlyTheLevelWhenLibx265EncodesWithoutATier() {
     var cmd = command(request(encoding(hevcEncode())).build(), "libx265");
