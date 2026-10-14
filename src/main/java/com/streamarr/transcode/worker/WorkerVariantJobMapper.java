@@ -51,7 +51,6 @@ final class WorkerVariantJobMapper {
         .videoCodecFamily(decision.getVideoCodecFamily())
         .audioDecision(audio(decision.getAudio()))
         .subtitleDecision(subtitle(decision.getSubtitle()))
-        .needsKeyframeAlignment(decision.getAlignKeyframesToSegments())
         .build();
   }
 
