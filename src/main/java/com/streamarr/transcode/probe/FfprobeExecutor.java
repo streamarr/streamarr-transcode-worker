@@ -51,7 +51,11 @@ public final class FfprobeExecutor {
     }
   }
 
-  public ProbeAttemptResult probe(Path source, ProbeRequest request) {
+  public ProbeAttemptReport probe(Path source, ProbeRequest request) {
+    return ProbeAttemptReport.resultOnly(probeResult(source, request));
+  }
+
+  private ProbeAttemptResult probeResult(Path source, ProbeRequest request) {
     var result =
         ProbeAttemptResult.newBuilder()
             .setProbeAttemptId(request.getProbeAttemptId())

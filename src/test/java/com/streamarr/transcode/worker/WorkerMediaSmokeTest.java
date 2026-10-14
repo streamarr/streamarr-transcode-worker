@@ -827,6 +827,7 @@ class WorkerMediaSmokeTest {
   private static List<ProbeStreamInfo> streams(Path media) {
     return FfprobeExecutor.forBinary(Path.of("ffprobe"))
         .probe(media, requestBuilder().build())
+        .result()
         .getMedia()
         .getStreamsList();
   }
