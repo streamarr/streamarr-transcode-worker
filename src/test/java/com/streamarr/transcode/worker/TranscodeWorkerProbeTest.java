@@ -28,6 +28,7 @@ import build.buf.gen.streamarr.transcode.v1.WorkerIdentity;
 import com.google.protobuf.Duration;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import com.streamarr.transcode.probe.FfprobeExecutor;
+import com.streamarr.transcode.probe.ProbeCommand;
 import com.streamarr.transcode.protocol.ProtoUuid;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
 import java.nio.file.Files;
@@ -139,11 +140,11 @@ class TranscodeWorkerProbeTest {
             command ->
                 processBuilder()
                     .stdout(
-                        command.arguments().contains("packet=pts,dts,flags")
+                        command.tool() == ProbeCommand.ProbeTool.FFMPEG
                             ? """
-                              pts=0|dts=0|flags=K__
-                              pts=3750|dts=3750|flags=___
-                              pts=180000|dts=180000|flags=K__
+                              0, 0, 0, 3750, 100, 0x00000000
+                              0, 3750, 3750, 3750, 100, 0x00000000, F=0x0
+                              0, 180000, 180000, 3750, 100, 0x00000000
                               """
                             : """
                               {"format":{"format_name":"mpegts","start_time":"0.000000"},

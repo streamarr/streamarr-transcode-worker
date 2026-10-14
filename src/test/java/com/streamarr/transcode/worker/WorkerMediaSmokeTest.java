@@ -283,9 +283,35 @@ class WorkerMediaSmokeTest {
 
   @Test
   @DisplayName(
-      "Should report CANCELLED and stop ffprobe when a packet scan is cancelled while the source"
+      "Should report an execution failure when the source stops being readable after a packet scan"
+          + " has read keyframes")
+  void shouldReportExecutionFailureWhenSourceStopsBeingReadableAfterPacketScanHasReadKeyframes()
+      throws Exception {
+    var fixture = getClass().getResource("/keyframes/mpegts.ts");
+    assertThat(fixture).isNotNull();
+    Files.copy(Path.of(fixture.toURI()), root.resolve("readable.ts"));
+    // The concat demuxer delivers every packet of the readable file and then fails to open the
+    // missing one, as a read error from network storage would stop the scan partway.
+    var source =
+        Files.writeString(
+            root.resolve("unreadable-after-keyframes.ffconcat"),
+            """
+            ffconcat version 1.0
+            file 'readable.ts'
+            file 'missing.ts'
+            """);
+
+    var report = probeExecutor().probe(source, packetScanRequest());
+
+    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
+    assertThat(report.keyframePositionsParts()).isEmpty();
+  }
+
+  @Test
+  @DisplayName(
+      "Should report CANCELLED and stop FFmpeg when a packet scan is cancelled while the source"
           + " blocks reads")
-  void shouldReportCancelledAndStopFfprobeWhenPacketScanIsCancelledWhileSourceBlocksReads()
+  void shouldReportCancelledAndStopFfmpegWhenPacketScanIsCancelledWhileSourceBlocksReads()
       throws Exception {
     var fixture = getClass().getResource("/keyframes/mpegts.ts");
     assertThat(fixture).isNotNull();
@@ -1002,7 +1028,7 @@ class WorkerMediaSmokeTest {
                     .info()
                     .arguments()
                     .map(List::of)
-                    .filter(arguments -> arguments.contains("packet=pts,dts,flags"))
+                    .filter(arguments -> arguments.contains("framecrc"))
                     .filter(arguments -> arguments.contains(source.toString()))
                     .isPresent())
         .findFirst();

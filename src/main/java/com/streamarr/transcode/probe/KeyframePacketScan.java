@@ -8,6 +8,7 @@ import build.buf.gen.streamarr.transcode.v1.ProbeKeyframes;
 import com.streamarr.transcode.probe.KeyframeIndex.KeyframeTime;
 import com.streamarr.transcode.probe.KeyframeIndex.TimeBase;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -19,23 +20,34 @@ import tools.jackson.databind.JsonNode;
 
 /**
  * Adds the keyframe positions of the chosen video stream to a successful probe result, found by
- * scanning every packet of that stream. ffprobe prints one line per packet, and the scan keeps only
- * the keyframes, so its memory grows with the keyframe count rather than the packet count.
+ * copying every packet of that stream through FFmpeg. FFmpeg prints one framecrc line per packet,
+ * and the scan keeps only the keyframes, so its memory grows with the keyframe count rather than
+ * the packet count.
  */
 @RequiredArgsConstructor
 final class KeyframePacketScan {
 
-  private static final String NO_VALUE = "N/A";
+  /** framecrc prints FFmpeg's AV_NOPTS_VALUE for a packet time that the source does not give. */
+  private static final String NO_TIME = Long.toString(Long.MIN_VALUE);
 
-  @NonNull private final PacketLineRunner ffprobe;
+  /** framecrc omits the flags of a packet whose only flag is AV_PKT_FLAG_KEY. */
+  private static final int KEYFRAME_FLAG = 1;
+
+  /**
+   * FFmpeg logs this line when the source fails before its end, and then exits with code 0. The
+   * packets printed before the failure are an incomplete list.
+   */
+  private static final String DEMUXING_ERROR = "Error during demuxing";
+
+  @NonNull private final PacketScanRunner ffmpeg;
 
   @FunctionalInterface
-  interface PacketLineRunner {
+  interface PacketScanRunner {
     /**
-     * Runs ffprobe, passes each line of its standard output to the consumer, and returns the exit
-     * code.
+     * Runs FFmpeg, passes each line of its standard output to the packet consumer and each line of
+     * its standard error to the diagnostic consumer, and returns the exit code.
      */
-    int run(List<String> arguments, Consumer<String> lines)
+    int run(List<String> arguments, Consumer<String> packetLines, Consumer<String> diagnosticLines)
         throws ExecutionException, InterruptedException;
   }
 
@@ -53,23 +65,28 @@ final class KeyframePacketScan {
     var stream = chosen.get().description();
     var timeBase = timeBase(stream);
     var keyframes = new PacketKeyframes(timeRule(probed, stream));
+    var diagnostics = new DemuxingDiagnostics();
+    // -copyts keeps each packet's time from the source; the report subtracts the start time.
     var exitCode =
-        ffprobe.run(
+        ffmpeg.run(
             List.of(
+                "-nostdin",
+                "-hide_banner",
+                "-nostats",
                 "-v",
-                "quiet",
-                "-select_streams",
-                Integer.toString(chosen.get().streamIndex()),
-                "-show_entries",
-                "packet=pts,dts,flags",
-                "-print_format",
-                "compact=print_section=0",
-                probed.source().toString()),
-            keyframes);
-    if (exitCode != 0) {
-      throw new PacketScanException("ffprobe exited with code " + exitCode);
-    }
-
+                "error",
+                "-copyts",
+                "-i",
+                probed.source().toString(),
+                "-map",
+                "0:" + chosen.get().streamIndex(),
+                "-c",
+                "copy",
+                "-f",
+                "framecrc",
+                "-"),
+            keyframes,
+            diagnostics);
     if (keyframes.isMissingTime()) {
       return ProbeAttemptReport.resultOnly(
           KeyframePositionsReport.withKeyframes(
@@ -80,6 +97,14 @@ final class KeyframePacketScan {
                           .setReason(
                               KeyframesUnavailableReason
                                   .KEYFRAMES_UNAVAILABLE_REASON_KEYFRAME_WITHOUT_TIMESTAMP))));
+    }
+
+    if (exitCode != 0) {
+      throw new PacketScanException("FFmpeg exited with code " + exitCode);
+    }
+
+    if (diagnostics.isDemuxingFailed()) {
+      throw new PacketScanException("FFmpeg stopped reading the source before its end");
     }
 
     return KeyframePositionsReport.builder()
@@ -131,7 +156,9 @@ final class KeyframePacketScan {
   }
 
   /**
-   * Collects the keyframes from ffprobe's compact packet lines, such as pts=0|dts=-1024|flags=K__.
+   * Collects the keyframes from FFmpeg's framecrc packet lines, such as {@code 0, -1024, 0, 512,
+   * 3109, 0x5e1c1fb1}: the stream, decode time, presentation time, duration, size and checksum.
+   * Flags and side data may follow, such as {@code F=0x0}.
    */
   @RequiredArgsConstructor
   private static final class PacketKeyframes implements Consumer<String> {
@@ -142,12 +169,16 @@ final class KeyframePacketScan {
 
     @Override
     public void accept(String line) {
-      var fields = Fields.parse(line);
-      if (missingTime || !fields.flags().startsWith("K")) {
+      if (line.isBlank() || line.startsWith("#")) {
         return;
       }
 
-      var time = keyframeTime(fields.pts(), fields.dts());
+      var packet = Packet.parse(line);
+      if (missingTime || !packet.isKeyframe()) {
+        return;
+      }
+
+      var time = keyframeTime(packet.pts(), packet.dts());
       if (time.isEmpty()) {
         missingTime = true;
         times.clear();
@@ -184,38 +215,51 @@ final class KeyframePacketScan {
 
   private record PacketTimes(OptionalLong presentation, OptionalLong decode) {}
 
-  private record Fields(OptionalLong pts, OptionalLong dts, String flags) {
+  private record Packet(OptionalLong pts, OptionalLong dts, int flags) {
 
-    static Fields parse(String line) {
-      var pts = OptionalLong.empty();
-      var dts = OptionalLong.empty();
-      var flags = "";
-      for (var field : line.split("\\|")) {
-        var separator = field.indexOf('=');
-        if (separator < 0) {
-          continue;
-        }
-
-        var value = field.substring(separator + 1);
-        switch (field.substring(0, separator)) {
-          case "pts" -> pts = time(value);
-          case "dts" -> dts = time(value);
-          case "flags" -> flags = value;
-          default -> {
-            // ffprobe prints only the requested entries.
-          }
-        }
+    static Packet parse(String line) {
+      var fields = Arrays.stream(line.split(",")).map(String::strip).toList();
+      if (fields.size() < 6) {
+        throw new PacketScanException("FFmpeg printed a packet line without six fields");
       }
 
-      return new Fields(pts, dts, flags);
+      var flags =
+          fields.stream()
+              .skip(6)
+              .filter(field -> field.startsWith("F="))
+              .findFirst()
+              .map(field -> Integer.decode(field.substring("F=".length())))
+              .orElse(KEYFRAME_FLAG);
+      return new Packet(time(fields.get(2)), time(fields.get(1)), flags);
+    }
+
+    boolean isKeyframe() {
+      return (flags & KEYFRAME_FLAG) != 0;
     }
 
     private static OptionalLong time(String value) {
-      if (NO_VALUE.equals(value)) {
+      if (NO_TIME.equals(value)) {
         return OptionalLong.empty();
       }
 
       return OptionalLong.of(Long.parseLong(value));
+    }
+  }
+
+  /** Watches FFmpeg's diagnostics for a source that failed before its end. */
+  private static final class DemuxingDiagnostics implements Consumer<String> {
+
+    private volatile boolean demuxingFailed;
+
+    @Override
+    public void accept(String line) {
+      if (line.contains(DEMUXING_ERROR)) {
+        demuxingFailed = true;
+      }
+    }
+
+    boolean isDemuxingFailed() {
+      return demuxingFailed;
     }
   }
 }

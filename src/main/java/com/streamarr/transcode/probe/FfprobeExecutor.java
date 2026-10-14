@@ -55,15 +55,21 @@ public final class FfprobeExecutor {
                   case FFPROBE -> ffprobe;
                   case FFMPEG -> ffmpeg;
                 },
-                command.arguments()));
+                command));
   }
 
-  private static Process start(Path binary, List<String> arguments) {
+  private static Process start(Path binary, ProbeCommand probeCommand) {
     var command = new ArrayList<String>();
     command.add(binary.toString());
-    command.addAll(arguments);
+    command.addAll(probeCommand.arguments());
+    // The packet scan reads FFmpeg's diagnostics to find a source that stopped being readable.
+    var diagnostics =
+        switch (probeCommand.tool()) {
+          case FFPROBE -> ProcessBuilder.Redirect.DISCARD;
+          case FFMPEG -> ProcessBuilder.Redirect.PIPE;
+        };
     try {
-      return new ProcessBuilder(command).redirectError(ProcessBuilder.Redirect.DISCARD).start();
+      return new ProcessBuilder(command).redirectError(diagnostics).start();
     } catch (IOException e) {
       throw new UncheckedIOException("Failed to start " + binary, e);
     }
@@ -140,7 +146,7 @@ public final class FfprobeExecutor {
     var probed =
         ProbedSource.builder().source(attempt.source()).ffprobeOutput(json).result(result).build();
     if (attempt.request().getScanKeyframePackets()) {
-      return new KeyframePacketScan(this::runLines).addKeyframes(probed);
+      return new KeyframePacketScan(this::runPacketScan).addKeyframes(probed);
     }
 
     return new ContainerIndexProbe(objectMapper, this::run).addKeyframes(probed);
@@ -152,32 +158,44 @@ public final class FfprobeExecutor {
     return new ProcessOutput(finished.output(), finished.exitCode());
   }
 
-  private int runLines(List<String> arguments, Consumer<String> lines)
+  private int runPacketScan(
+      List<String> arguments, Consumer<String> packetLines, Consumer<String> diagnosticLines)
       throws ExecutionException, InterruptedException {
-    StdoutReader<Void> reader =
-        stdout -> {
-          new BufferedReader(new InputStreamReader(stdout, StandardCharsets.UTF_8))
-              .lines()
-              .forEach(lines);
-          return null;
-        };
-    return run(arguments, reader).exitCode();
+    var command = new ProbeCommand(ProbeTool.FFMPEG, arguments);
+    return run(command, stdout -> readLines(stdout, packetLines), diagnosticLines).exitCode();
   }
 
   private <T> Finished<T> run(List<String> arguments, StdoutReader<T> reader)
       throws ExecutionException, InterruptedException {
-    var process = processFactory.apply(new ProbeCommand(ProbeTool.FFPROBE, arguments));
+    return run(new ProbeCommand(ProbeTool.FFPROBE, arguments), reader, _ -> {});
+  }
+
+  private <T> Finished<T> run(
+      ProbeCommand command, StdoutReader<T> reader, Consumer<String> diagnosticLines)
+      throws ExecutionException, InterruptedException {
+    var process = processFactory.apply(command);
     try (var readers = Executors.newVirtualThreadPerTaskExecutor()) {
+      var diagnostics = readers.submit(() -> readLines(process.getErrorStream(), diagnosticLines));
       var output = readers.submit(() -> readOutput(process, reader));
       try {
         var exitCode = process.waitFor();
-        return new Finished<>(output.get(), exitCode);
+        var finished = new Finished<>(output.get(), exitCode);
+        diagnostics.get();
+        return finished;
       } finally {
         if (process.isAlive()) {
           terminate(process);
         }
       }
     }
+  }
+
+  private static Void readLines(InputStream stream, Consumer<String> lines) throws IOException {
+    try (var reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+      reader.lines().forEach(lines);
+    }
+
+    return null;
   }
 
   private <T> T readOutput(Process process, StdoutReader<T> reader) throws IOException {

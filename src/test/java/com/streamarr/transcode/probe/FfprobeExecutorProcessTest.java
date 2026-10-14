@@ -81,7 +81,12 @@ class FfprobeExecutorProcessTest {
         """);
     var request = request();
 
-    var completed = probeUntilInterrupted(binary, temporaryDirectory.resolve("movie.mkv"), request);
+    var completed =
+        probeUntilInterrupted(
+            executorFor(binary),
+            Path.of(binary + ".pid"),
+            temporaryDirectory.resolve("movie.mkv"),
+            request);
 
     assertThat(completed.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_CANCELLED);
     assertThat(completed.result().getProbeAttemptId()).isEqualTo(request.getProbeAttemptId());
@@ -93,27 +98,29 @@ class FfprobeExecutorProcessTest {
   @Test
   @Timeout(10)
   @DisplayName(
-      "Should report CANCELLED and stop ffprobe when a packet scan is cancelled while the source"
+      "Should report CANCELLED and stop FFmpeg when a packet scan is cancelled while the source"
           + " blocks reads")
-  void shouldReportCancelledAndStopFfprobeWhenPacketScanIsCancelledWhileSourceBlocksReads()
+  void shouldReportCancelledAndStopFfmpegWhenPacketScanIsCancelledWhileSourceBlocksReads()
       throws Exception {
     var source = temporaryDirectory.resolve("movie.ts");
     var fifo = new ProcessBuilder("mkfifo", source.toString()).start();
     assertThat(fifo.waitFor()).isZero();
-    // The packet scan reads the source, a FIFO that no process writes, so the read never returns.
-    var binary =
+    var ffprobe =
         script(
+            "ffprobe",
             """
-        for source; do :; done
-        case "$*" in
-          *packet=pts,dts,flags*)
-            printf '%s\n' 'pts=0|dts=0|flags=K__'
-            printf '%s' "$$" > "$0.pid"
-            exec cat "$source"
-            ;;
-        esac
         printf '%s' '{"format":{"format_name":"mpegts","start_time":"0.000000"},
           "streams":[{"index":0,"codec_type":"video","time_base":"1/90000","has_b_frames":2}]}'
+        """);
+    // The packet scan reads the source, a FIFO that no process writes, so the read never returns.
+    var ffmpeg =
+        script(
+            "ffmpeg",
+            """
+        while [ "$1" != "-i" ]; do shift; done
+        printf '%s\n' '0, 0, 0, 3750, 100, 0x00000000'
+        printf '%s' "$$" > "$0.pid"
+        exec cat "$2"
         """);
     var request =
         request().toBuilder()
@@ -121,7 +128,12 @@ class FfprobeExecutorProcessTest {
             .setScanKeyframePackets(true)
             .build();
 
-    var completed = probeUntilInterrupted(binary, source, request);
+    var completed =
+        probeUntilInterrupted(
+            FfprobeExecutor.forBinaries(ffprobe, ffmpeg),
+            Path.of(ffmpeg + ".pid"),
+            source,
+            request);
 
     assertThat(completed.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_CANCELLED);
     assertThat(completed.processAlive()).isFalse();
@@ -129,15 +141,13 @@ class FfprobeExecutorProcessTest {
   }
 
   /**
-   * Probes on its own thread and interrupts that thread once the scripted ffprobe writes its
-   * process id to the file beside the script.
+   * Probes on its own thread and interrupts that thread once a scripted binary writes its process
+   * id to the given file.
    */
-  private ProbeCompletion probeUntilInterrupted(Path binary, Path source, ProbeRequest request)
-      throws Exception {
-    var pidFile = Path.of(binary + ".pid");
+  private ProbeCompletion probeUntilInterrupted(
+      FfprobeExecutor executor, Path pidFile, Path source, ProbeRequest request) throws Exception {
     var process = new AtomicReference<ProcessHandle>();
     var completion = new CompletableFuture<ProbeCompletion>();
-    var executor = executorFor(binary);
     var task =
         Thread.ofVirtual()
             .start(
@@ -209,7 +219,11 @@ class FfprobeExecutorProcessTest {
   }
 
   private Path script(String body) throws Exception {
-    var binary = temporaryDirectory.resolve("ffprobe");
+    return script("ffprobe", body);
+  }
+
+  private Path script(String name, String body) throws Exception {
+    var binary = temporaryDirectory.resolve(name);
     Files.writeString(binary, "#!/bin/sh\n" + body);
     Files.setPosixFilePermissions(binary, PosixFilePermissions.fromString("rwx------"));
     return binary;

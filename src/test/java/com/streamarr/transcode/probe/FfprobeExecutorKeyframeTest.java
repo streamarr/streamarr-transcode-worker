@@ -491,11 +491,12 @@ class FfprobeExecutorKeyframeTest {
             .streams(MPEGTS_STREAMS)
             .packetScan(
                 """
-                pts=133500|dts=126000|flags=K__|
-                pts=144750|dts=129750|flags=___|
-                pts=197250|dts=189750|flags=K__|
-                pts=321000|dts=313500|flags=K__|
-                pts=396000|dts=388500|flags=K__|
+                #tb 0: 1/90000
+                0,     126000,     133500,     3750,      100, 0x00000000
+                0,     129750,     144750,     3750,      100, 0x00000000, F=0x0
+                0,     189750,     197250,     3750,      100, 0x00000000
+                0,     313500,     321000,     3750,      100, 0x00000000
+                0,     388500,     396000,     3750,      100, 0x00000000
                 """)
             .build();
     var request = packetScanRequest();
@@ -538,9 +539,9 @@ class FfprobeExecutorKeyframeTest {
                 """)
             .packetScan(
                 """
-                pts=N/A|dts=0|flags=K__
-                pts=N/A|dts=1|flags=___
-                pts=N/A|dts=18|flags=K__
+                0, 0, -9223372036854775808, 1, 100, 0x00000000
+                0, 1, -9223372036854775808, 1, 100, 0x00000000, F=0x0
+                0, 18, -9223372036854775808, 1, 100, 0x00000000
                 """)
             .build();
 
@@ -565,8 +566,8 @@ class FfprobeExecutorKeyframeTest {
             .streams(MATROSKA_STREAMS)
             .packetScan(
                 """
-                pts=0|dts=N/A|flags=K__
-                pts=708|dts=625|flags=K__
+                0, -9223372036854775808, 0, 42, 100, 0x00000000
+                0, 625, 708, 42, 100, 0x00000000
                 """)
             .build();
 
@@ -582,7 +583,12 @@ class FfprobeExecutorKeyframeTest {
   }
 
   @ParameterizedTest
-  @CsvSource({"pts=N/A|dts=189750|flags=K__", "pts=197250|dts=N/A|flags=K__"})
+  @CsvSource(
+      delimiter = ';',
+      value = {
+        "0, 189750, -9223372036854775808, 3750, 100, 0x00000000",
+        "0, -9223372036854775808, 197250, 3750, 100, 0x00000000"
+      })
   @DisplayName(
       "Should report the keyframes unavailable when a keyframe packet has no presentation or decode"
           + " time")
@@ -593,10 +599,10 @@ class FfprobeExecutorKeyframeTest {
             .streams(MPEGTS_STREAMS)
             .packetScan(
                 """
-                pts=133500|dts=126000|flags=K__|
-                pts=N/A|dts=129750|flags=___|
+                0, 126000, 133500, 3750, 100, 0x00000000
+                0, 129750, -9223372036854775808, 3750, 100, 0x00000000, F=0x0
                 %s
-                pts=321000|dts=313500|flags=K__|
+                0, 313500, 321000, 3750, 100, 0x00000000
                 """
                     .formatted(keyframePacket))
             .build();
@@ -621,7 +627,7 @@ class FfprobeExecutorKeyframeTest {
     var ffprobe =
         ScriptedFfprobe.builder()
             .streams(MPEGTS_STREAMS)
-            .packetScan("pts=133500|dts=126000|flags=K__|\n")
+            .packetScan("0, 126000, 133500, 3750, 100, 0x00000000\n")
             .packetScanExitCode(1)
             .build();
 
@@ -635,6 +641,64 @@ class FfprobeExecutorKeyframeTest {
                     .setProbeVersion(FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION)
                     .setFailure(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED)
                     .build()));
+  }
+
+  @Test
+  @DisplayName(
+      "Should report an execution failure when FFmpeg reports a demuxing error after the keyframes"
+          + " it printed")
+  void shouldReportExecutionFailureWhenFfmpegReportsDemuxingErrorAfterKeyframesItPrinted() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(MPEGTS_STREAMS)
+            .packetScan(
+                """
+                0, 126000, 133500, 3750, 100, 0x00000000
+                0, 189750, 197250, 3750, 100, 0x00000000
+                """)
+            .packetScanDiagnostics(
+                "[in#0/mpegts @ 0x1] Error during demuxing: Input/output error\n")
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
+
+    assertThat(report)
+        .isEqualTo(
+            ProbeAttemptReport.resultOnly(
+                ProbeAttemptResult.newBuilder()
+                    .setProbeAttemptId(report.result().getProbeAttemptId())
+                    .setProbeVersion(FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION)
+                    .setFailure(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED)
+                    .build()));
+  }
+
+  @Test
+  @DisplayName(
+      "Should report keyframe positions when FFmpeg reports a diagnostic other than a demuxing"
+          + " error")
+  void shouldReportKeyframePositionsWhenFfmpegReportsDiagnosticOtherThanDemuxingError() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(MPEGTS_STREAMS)
+            .packetScan("0, 126000, 133500, 3750, 100, 0x00000000\n")
+            .packetScanDiagnostics("[h264 @ 0x1] non-existing PPS 0 referenced\n")
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
+
+    assertThat(report.result().getMedia().getKeyframes().getPositions().getKeyframeCount())
+        .isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("Should report an execution failure when FFmpeg prints an unreadable packet line")
+  void shouldReportExecutionFailureWhenFfmpegPrintsUnreadablePacketLine() {
+    var ffprobe =
+        ScriptedFfprobe.builder().streams(MPEGTS_STREAMS).packetScan("0, 126000, 133500\n").build();
+
+    var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
+
+    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
   }
 
   @ParameterizedTest
@@ -657,7 +721,7 @@ class FfprobeExecutorKeyframeTest {
                  "streams":[{"codec_type":"video",%s}]}
                 """
                     .formatted(description))
-            .packetScan("pts=0|dts=0|flags=K__\n")
+            .packetScan("0, 0, 0, 3750, 100, 0x00000000\n")
             .build();
 
     var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
@@ -696,9 +760,9 @@ class FfprobeExecutorKeyframeTest {
   }
 
   /**
-   * Answers the probe command with recorded stream JSON, and a last-keyframe read with the packets
-   * recorded for its exact read interval and {@code packetReadExitCode}. Any other read interval
-   * finds no packet.
+   * Answers the probe command with recorded stream JSON, a last-keyframe read with the packets
+   * recorded for its exact read interval and {@code packetReadExitCode}, and FFmpeg's packet scan
+   * with recorded framecrc lines and diagnostics. Any other read interval finds no packet.
    */
   @Builder
   private record ScriptedFfprobe(
@@ -706,6 +770,7 @@ class FfprobeExecutorKeyframeTest {
       @Singular Map<String, String> packets,
       int packetReadExitCode,
       String packetScan,
+      String packetScanDiagnostics,
       int packetScanExitCode,
       boolean cancelAfterStreams) {
 
@@ -723,9 +788,10 @@ class FfprobeExecutorKeyframeTest {
             false);
       }
 
-      if (arguments.contains("packet=pts,dts,flags")) {
+      if (command.tool() == ProbeCommand.ProbeTool.FFMPEG) {
         assertThat(packetScan).as("a scripted packet scan").isNotNull();
-        return new CompletedProcess(packetScan, packetScanExitCode, false);
+        return new CompletedProcess(packetScan, packetScanExitCode, false)
+            .withDiagnostics(packetScanDiagnostics == null ? "" : packetScanDiagnostics);
       }
 
       return new CompletedProcess(streams, 0, cancelAfterStreams);
@@ -741,11 +807,17 @@ class FfprobeExecutorKeyframeTest {
     private final InputStream stdout;
     private final int exitCode;
     private final boolean cancelOnExit;
+    private InputStream stderr = InputStream.nullInputStream();
 
     private CompletedProcess(String stdout, int exitCode, boolean cancelOnExit) {
       this.stdout = new ByteArrayInputStream(stdout.getBytes(StandardCharsets.UTF_8));
       this.exitCode = exitCode;
       this.cancelOnExit = cancelOnExit;
+    }
+
+    private CompletedProcess withDiagnostics(String diagnostics) {
+      stderr = new ByteArrayInputStream(diagnostics.getBytes(StandardCharsets.UTF_8));
+      return this;
     }
 
     @Override
@@ -760,7 +832,7 @@ class FfprobeExecutorKeyframeTest {
 
     @Override
     public InputStream getErrorStream() {
-      return InputStream.nullInputStream();
+      return stderr;
     }
 
     @Override
