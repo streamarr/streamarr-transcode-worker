@@ -12,7 +12,12 @@ import build.buf.gen.streamarr.transcode.v1.EncoderPreset;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptCompleted;
+import build.buf.gen.streamarr.transcode.v1.KeyframePacketScanReason;
+import build.buf.gen.streamarr.transcode.v1.KeyframePositions;
+import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
+import build.buf.gen.streamarr.transcode.v1.ProbeKeyframePositionsPart;
+import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
 import build.buf.gen.streamarr.transcode.v1.TranscodeMode;
@@ -34,6 +39,8 @@ import io.grpc.Server;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.grpc.stub.StreamObserver;
 import java.io.ByteArrayOutputStream;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -59,9 +66,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import tools.jackson.databind.ObjectMapper;
 
 @Tag("SmokeTest")
 @DisplayName("Worker Media Smoke Tests")
@@ -97,6 +106,8 @@ class WorkerMediaSmokeTest {
   private static final int HEVC_IDR_N_LP = 20;
 
   private static final Duration JOB_LIMIT = Duration.ofMinutes(5);
+  private static final String EMPTY_EDIT_SOURCE = "mp4-empty-edit.mp4";
+  private static final String TRIMMED_START_SOURCE = "mp4-trimmed-start.mp4";
   private static final int PERMITTED_KEEPALIVE_SECONDS = 10;
 
   @TempDir static Path longSources;
@@ -169,6 +180,46 @@ class WorkerMediaSmokeTest {
                 assertThat(result.getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_INVALID_MEDIA);
               });
     }
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(
+      strings = {
+        "mp4-bframes-editlist.mp4",
+        "mkv-libavformat.mkv",
+        EMPTY_EDIT_SOURCE,
+        TRIMMED_START_SOURCE
+      })
+  @DisplayName(
+      "Should report the keyframes that ffprobe reads from the packets when the worker reads a"
+          + " container index")
+  void shouldReportKeyframesThatFfprobeReadsFromPacketsWhenWorkerReadsContainerIndex(String fixture)
+      throws Exception {
+    var source = keyframeSource(fixture);
+
+    var report = FfprobeExecutor.forBinary(Path.of("ffprobe")).probe(source, keyframeRequest());
+
+    var positions = report.result().getMedia().getKeyframes().getPositions();
+    var packetKeyframes = packetKeyframes(source, positions);
+    assertThat(positions.getKeyframeCount()).isEqualTo(packetKeyframes.size());
+    assertThat(keyframeTimes(report.keyframePositionsParts())).isEqualTo(packetKeyframes);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({
+    "mpegts.ts, KEYFRAME_PACKET_SCAN_REASON_NO_CONTAINER_INDEX",
+    "avi.avi, KEYFRAME_PACKET_SCAN_REASON_NO_CONTAINER_INDEX",
+    "mkv-pipe.mkv, KEYFRAME_PACKET_SCAN_REASON_NO_CONTAINER_INDEX",
+    "mp4-fragmented.mp4, KEYFRAME_PACKET_SCAN_REASON_NO_CONTAINER_INDEX",
+    "mp4-truncated.mp4, KEYFRAME_PACKET_SCAN_REASON_UNREADABLE_LAST_INDEXED_KEYFRAME",
+    "mkv-truncated-cues-front.mkv, KEYFRAME_PACKET_SCAN_REASON_UNREADABLE_LAST_INDEXED_KEYFRAME"
+  })
+  @DisplayName("Should require a packet scan when real ffprobe finds no usable container index")
+  void shouldRequirePacketScanWhenRealFfprobeFindsNoUsableContainerIndex(
+      String fixture, KeyframePacketScanReason reason) throws Exception {
+    var result = keyframeProbe(keyframeSource(fixture));
+
+    assertThat(result.getMedia().getKeyframes().getPacketScanRequired()).isEqualTo(reason);
   }
 
   @ParameterizedTest
@@ -823,6 +874,110 @@ class WorkerMediaSmokeTest {
   private static void assertDecodes(Path media) throws Exception {
     runFfmpeg(List.of("-xerror", "-i", media.toString(), "-f", "null"), Path.of("-"));
   }
+
+  private static ProbeAttemptResult keyframeProbe(Path source) {
+    return FfprobeExecutor.forBinary(Path.of("ffprobe")).probe(source, keyframeRequest()).result();
+  }
+
+  private static ProbeRequest keyframeRequest() {
+    return requestBuilder()
+        .setProbeVersion(FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION)
+        .build();
+  }
+
+  // Two MP4 edit lists that FFmpeg's stream copy writes: an empty edit that delays the video by
+  // 0.5 s, and an edit that starts the media between two keyframes.
+  private Path keyframeSource(String fixture) throws Exception {
+    var resource = getClass().getResource("/keyframes/" + fixture);
+    var base = getClass().getResource("/keyframes/mp4-bframes-editlist.mp4");
+    assertThat(base).isNotNull();
+    var basePath = Path.of(base.toURI()).toString();
+    return switch (fixture) {
+      case EMPTY_EDIT_SOURCE -> {
+        var output = root.resolve(fixture);
+        runFfmpeg(
+            List.of(
+                "-itsoffset",
+                "0.5",
+                "-i",
+                basePath,
+                "-i",
+                basePath,
+                "-map",
+                "0:v",
+                "-map",
+                "1:a",
+                "-c",
+                "copy"),
+            output);
+        yield output;
+      }
+      case TRIMMED_START_SOURCE -> {
+        var output = root.resolve(fixture);
+        runFfmpeg(List.of("-ss", "1", "-i", basePath, "-c", "copy"), output);
+        yield output;
+      }
+      default -> {
+        assertThat(resource).as("fixture %s", fixture).isNotNull();
+        yield Path.of(resource.toURI());
+      }
+    };
+  }
+
+  private static List<KeyframeTime> keyframeTimes(List<ProbeKeyframePositionsPart> parts) {
+    var times = new ArrayList<KeyframeTime>();
+    long presentation = 0;
+    long decode = 0;
+    for (var part : parts) {
+      for (var i = 0; i < part.getPresentationTimeDeltasCount(); i++) {
+        presentation += part.getPresentationTimeDeltas(i);
+        decode += part.getDecodeTimeDeltas(i);
+        times.add(new KeyframeTime(presentation, decode));
+      }
+    }
+
+    return times;
+  }
+
+  // The keyframe packets of stream 0 on the zero-based timeline. A Matroska keyframe's decode time
+  // is its cue time, which equals its presentation time.
+  private static List<KeyframeTime> packetKeyframes(Path source, KeyframePositions positions)
+      throws Exception {
+    var process =
+        new ProcessBuilder(
+                "ffprobe",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-select_streams",
+                "0",
+                "-show_entries",
+                "packet=pts,dts,flags:format=start_time",
+                source.toString())
+            .redirectError(ProcessBuilder.Redirect.DISCARD)
+            .start();
+    var json = new ObjectMapper().readTree(process.getInputStream().readAllBytes());
+    assertThat(process.waitFor(1, TimeUnit.MINUTES)).isTrue();
+    var start =
+        new BigDecimal(json.path("format").path("start_time").asString())
+            .multiply(BigDecimal.valueOf(positions.getTimeBaseDenominator()))
+            .divide(BigDecimal.valueOf(positions.getTimeBaseNumerator()), 0, RoundingMode.HALF_UP)
+            .longValueExact();
+    var isMatroska = source.toString().endsWith(".mkv");
+    var keyframes = new ArrayList<KeyframeTime>();
+    for (var packet : json.path("packets")) {
+      if (packet.path("flags").asString().startsWith("K")) {
+        var presentation = packet.path("pts").asLong();
+        var decode = isMatroska ? presentation : packet.path("dts").asLong();
+        keyframes.add(new KeyframeTime(presentation - start, decode - start));
+      }
+    }
+
+    return keyframes;
+  }
+
+  private record KeyframeTime(long presentation, long decode) {}
 
   private static List<ProbeStreamInfo> streams(Path media) {
     return FfprobeExecutor.forBinary(Path.of("ffprobe"))

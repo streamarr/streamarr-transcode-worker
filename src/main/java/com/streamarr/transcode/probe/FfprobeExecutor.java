@@ -17,7 +17,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.function.Function;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
@@ -30,6 +29,13 @@ import tools.jackson.databind.ObjectMapper;
 public final class FfprobeExecutor {
 
   public static final int PROBE_VERSION = 1;
+
+  /**
+   * The probe version whose results carry keyframe positions. The worker does not advertise it
+   * until it can also scan the packets of a source without a usable index.
+   */
+  public static final int KEYFRAME_POSITIONS_PROBE_VERSION = 3;
+
   private static final int AVERROR_INVALIDDATA = -1094995529;
   private static final int AVERROR_EOF = -541478725;
 
@@ -52,37 +58,52 @@ public final class FfprobeExecutor {
   }
 
   public ProbeAttemptReport probe(Path source, ProbeRequest request) {
-    return ProbeAttemptReport.resultOnly(probeResult(source, request));
-  }
-
-  private ProbeAttemptResult probeResult(Path source, ProbeRequest request) {
     var result =
         ProbeAttemptResult.newBuilder()
             .setProbeAttemptId(request.getProbeAttemptId())
             .setProbeVersion(request.getProbeVersion());
-    if (request.getProbeVersion() != PROBE_VERSION) {
-      return result.setFailure(ProbeFailure.PROBE_FAILURE_UNSUPPORTED_VERSION).build();
+    if (!isSupported(request)) {
+      return ProbeAttemptReport.resultOnly(
+          result.setFailure(ProbeFailure.PROBE_FAILURE_UNSUPPORTED_VERSION).build());
     }
 
     if (Thread.currentThread().isInterrupted()) {
-      return result.setFailure(ProbeFailure.PROBE_FAILURE_CANCELLED).build();
+      return ProbeAttemptReport.resultOnly(
+          result.setFailure(ProbeFailure.PROBE_FAILURE_CANCELLED).build());
     }
 
+    var attempt = new Attempt(source, request, result);
     try {
-      return execute(new Attempt(source, result));
+      return execute(attempt);
+    } catch (InterruptedException _) {
+      Thread.currentThread().interrupt();
+      return ProbeAttemptReport.resultOnly(
+          result.setFailure(ProbeFailure.PROBE_FAILURE_CANCELLED).build());
     } catch (Exception failure) {
       log.warn(
           "ffprobe attempt {} failed for source {}",
           fromProto(request.getProbeAttemptId()),
           source,
           failure);
-      return result.setFailure(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED).build();
+      return ProbeAttemptReport.resultOnly(
+          result.setFailure(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED).build());
     }
   }
 
-  private ProbeAttemptResult execute(Attempt attempt) throws ExecutionException {
-    var process =
-        processFactory.apply(
+  // This worker cannot scan packets yet, so it refuses every packet-scan request.
+  private boolean isSupported(ProbeRequest request) {
+    if (request.getScanKeyframePackets()) {
+      return false;
+    }
+
+    return request.getProbeVersion() == PROBE_VERSION
+        || request.getProbeVersion() == KEYFRAME_POSITIONS_PROBE_VERSION;
+  }
+
+  private ProbeAttemptReport execute(Attempt attempt)
+      throws ExecutionException, InterruptedException, IOException {
+    var output =
+        run(
             List.of(
                 "-v",
                 "quiet",
@@ -92,9 +113,34 @@ public final class FfprobeExecutor {
                 "-show_format",
                 "-show_error",
                 attempt.source().toString()));
+    var result = readResult(output, attempt);
+    if (attempt.request().getProbeVersion() != KEYFRAME_POSITIONS_PROBE_VERSION
+        || !result.hasMedia()) {
+      return ProbeAttemptReport.resultOnly(result);
+    }
+
+    return new ContainerIndexProbe(objectMapper, this::run)
+        .addKeyframes(
+            ContainerIndexProbe.Probed.builder()
+                .source(attempt.source())
+                .ffprobeOutput(objectMapper.readTree(output.stdout()))
+                .result(result)
+                .build());
+  }
+
+  private ProcessOutput run(List<String> arguments)
+      throws ExecutionException, InterruptedException {
+    var process = processFactory.apply(arguments);
     try (var readers = Executors.newVirtualThreadPerTaskExecutor()) {
       var output = readers.submit(() -> readOutput(process));
-      return collect(process, output, attempt);
+      try {
+        var exitCode = process.waitFor();
+        return new ProcessOutput(output.get(), exitCode);
+      } finally {
+        if (process.isAlive()) {
+          terminate(process);
+        }
+      }
     }
   }
 
@@ -104,35 +150,20 @@ public final class FfprobeExecutor {
     }
   }
 
-  private ProbeAttemptResult collect(Process process, Future<byte[]> output, Attempt attempt)
-      throws ExecutionException {
-    try {
-      var exitCode = process.waitFor();
-      return readResult(output.get(), exitCode, attempt);
-    } catch (InterruptedException _) {
-      Thread.currentThread().interrupt();
-      return attempt.result().setFailure(ProbeFailure.PROBE_FAILURE_CANCELLED).build();
-    } finally {
-      if (process.isAlive()) {
-        terminate(process);
-      }
-    }
-  }
-
   private void terminate(Process process) {
     process.destroyForcibly();
     process.onExit().join();
   }
 
-  private ProbeAttemptResult readResult(byte[] output, int exitCode, Attempt attempt) {
+  private ProbeAttemptResult readResult(ProcessOutput output, Attempt attempt) {
     try {
-      return interpret(objectMapper.readTree(output), exitCode, attempt);
+      return interpret(objectMapper.readTree(output.stdout()), output.exitCode(), attempt);
     } catch (Exception failure) {
       log.warn(
           "ffprobe attempt {} for source {} returned unusable output with exit code {}",
           fromProto(attempt.result().getProbeAttemptId()),
           attempt.source(),
-          exitCode,
+          output.exitCode(),
           failure);
       return attempt.result().setFailure(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED).build();
     }
@@ -255,5 +286,5 @@ public final class FfprobeExecutor {
         .build();
   }
 
-  private record Attempt(Path source, ProbeAttemptResult.Builder result) {}
+  private record Attempt(Path source, ProbeRequest request, ProbeAttemptResult.Builder result) {}
 }
