@@ -509,6 +509,25 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
+  @Test
+  @DisplayName("Should force the job's codec profile and level when the job encodes H.264")
+  void shouldForceTheJobsCodecProfileAndLevelWhenTheJobEncodesH264() throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getDecisionBuilder().getVideoBuilder().setLevel(42).setCodecString("avc1.64002A");
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(launcher.command(fromProto(job.getJobAttemptId())))
+          .containsSequence("-c:v", "libx264")
+          .containsSequence("-profile:v", "high", "-level:v", "42");
+    }
+  }
+
   private static UnaryOperator<VideoDecision.Builder> unary(
       UnaryOperator<VideoDecision.Builder> operator) {
     return operator;

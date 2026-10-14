@@ -77,20 +77,28 @@ ffmpeg -hide_banner -nostdin -loglevel error
   -y [-ss S] -i SRC -map 0:v:0 -map 0:a:0 -map -0:s -map_metadata -1 -map_chapters -1
   -copyts -avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128
   copy:   -c:v copy -c:a copy -bsf:a aac_adtstoasc -b:a 0
-  x264:   -c:v libx264 -preset faster -vf scale=-2:36,format=yuv420p -b:v 6000 -maxrate 6000 -bufsize 12000 -c:a aac -ac 1 -b:a 8k
+  x264:   -c:v libx264 -preset faster -profile:v high -level:v 10
+          -vf scale=-2:36,format=yuv420p -b:v 6000 -maxrate 6000 -bufsize 12000 -c:a aac -ac 1 -b:a 8k
           -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6
           -sc_threshold:v:0 0 -g:v:0 145                      (fixture 11: -g:v:0 143)
-  svtav1: -c:v libsvtav1 -preset 10 -vf scale=-2:36,format=yuv420p -crf 35 -maxrate 6000 -svtav1-params mbr-overshoot-pct=0:lp=1
+  svtav1: -c:v libsvtav1 -preset 10 -level:v 20 -vf scale=-2:36,format=yuv420p -crf 35 -maxrate 6000 -svtav1-params mbr-overshoot-pct=0:lp=1
           -c:a aac -ac 1 -b:a 8k
           -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6
           -g:v:0 145 -keyint_min:v:0 145
-  x265:   -c:v libx265 -preset veryfast -vf scale=-2:36,format=yuv420p -b:v 6000 -maxrate 6000 -bufsize 12000 -c:a aac -ac 1 -b:a 8k
+  x265:   -c:v libx265 -preset veryfast -profile:v main
+          -vf scale=-2:36,format=yuv420p -b:v 6000 -maxrate 6000 -bufsize 12000 -c:a aac -ac 1 -b:a 8k
           -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6
-          -x265-params no-scenecut=1:no-open-gop=1:pools=none:frame-threads=1:log-level=error
+          -x265-params no-scenecut=1:no-open-gop=1:level-idc=10:high-tier=0:pools=none:frame-threads=1:log-level=error
           -g:v:0 145                                           (fixture 13c: -g:v:0 143)
   -threads 1
   -f mp4 -movflags cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont -frag_duration 1000000 pipe:1
 ```
+
+Each encode forces the codec profile, tier and level that the job carries, as the worker does. For
+the 64x36 sources at 23.976 fps they are the values each encoder chooses when nothing is forced:
+H.264 High at level 1.0 (`avc1.64000A`), AV1 Main at level 2.0 (`av01.0.00M.08`), and H.265 Main at
+level 1.0 in the Main tier. Forcing them left the libx264 and SVT-AV1 recordings byte-identical.
+libx265 writes its parameters into the initialization segment, so its recordings grew by one byte.
 
 An encode forces its keyframes with FFmpeg's list mode: every segment boundary k × 6 in whole
 seconds, for each k from the attempt's start sequence number K up to, not including, the media
@@ -120,7 +128,7 @@ Fixture-only additions are `-hide_banner -nostdin -loglevel error`, which keep F
 and its input closed, `-threads 1`, `lp=1` for SVT-AV1, whose output otherwise differs on every
 invocation, and the keys `pools=none:frame-threads=1:log-level=error` for libx265, which keep it
 single-threaded and quiet too. FFmpeg keeps only the last `-x265-params` option, so the recorder
-appends these keys to the worker's own `no-scenecut=1:no-open-gop=1` instead of passing a second
+appends these keys to the worker's own `no-scenecut=1:no-open-gop=1:level-idc=10:high-tier=0` instead of passing a second
 option. For libx264 and libx265 none moves a keyframe or a cut. For SVT-AV1,
 `lp=1` also excludes [upstream issue 2385](https://gitlab.com/AOMediaCodec/SVT-AV1/-/work_items/2385)
 (worker #42): under the worker's threading the pinned SVT-AV1
