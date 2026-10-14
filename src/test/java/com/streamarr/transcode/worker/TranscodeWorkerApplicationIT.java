@@ -483,8 +483,8 @@ class TranscodeWorkerApplicationIT {
   @Builder
   private record ApplicationFixture(int port, Path ffprobe, Class<?> mainClass) {
 
-    static class ApplicationFixtureBuilder {
-      private Class<?> mainClass = TranscodeWorkerApplication.class;
+    static ApplicationFixtureBuilder builder() {
+      return new ApplicationFixtureBuilder().mainClass(TranscodeWorkerApplication.class);
     }
   }
 
