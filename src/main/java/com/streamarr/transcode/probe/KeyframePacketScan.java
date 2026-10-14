@@ -44,11 +44,18 @@ final class KeyframePacketScan {
   @FunctionalInterface
   interface PacketScanRunner {
     /**
-     * Runs FFmpeg, passes each line of its standard output to the packet consumer and each line of
-     * its standard error to the diagnostic consumer, and returns the exit code.
+     * Runs FFmpeg, passes each line of its standard output to the packet lines and each line of its
+     * standard error to the diagnostic consumer, and returns the exit code. When the packet lines
+     * need no more lines, the runner stops FFmpeg.
      */
-    int run(List<String> arguments, Consumer<String> packetLines, Consumer<String> diagnosticLines)
+    int run(List<String> arguments, PacketLines packetLines, Consumer<String> diagnosticLines)
         throws ExecutionException, InterruptedException;
+  }
+
+  @FunctionalInterface
+  interface PacketLines {
+    /** Takes one line of FFmpeg's output and returns whether the scan needs the lines after it. */
+    boolean take(String line);
   }
 
   ProbeAttemptReport addKeyframes(ProbedSource probed)
@@ -161,31 +168,33 @@ final class KeyframePacketScan {
    * Flags and side data may follow, such as {@code F=0x0}.
    */
   @RequiredArgsConstructor
-  private static final class PacketKeyframes implements Consumer<String> {
+  private static final class PacketKeyframes implements PacketLines {
 
     private final TimeRule rule;
     private final List<KeyframeTime> times = new ArrayList<>();
     private boolean missingTime;
 
+    /** A keyframe without a time decides the outcome, so the scan needs no lines after it. */
     @Override
-    public void accept(String line) {
+    public boolean take(String line) {
       if (line.isBlank() || line.startsWith("#")) {
-        return;
+        return true;
       }
 
       var packet = Packet.parse(line);
-      if (missingTime || !packet.isKeyframe()) {
-        return;
+      if (!packet.isKeyframe()) {
+        return true;
       }
 
       var time = keyframeTime(packet.pts(), packet.dts());
       if (time.isEmpty()) {
         missingTime = true;
         times.clear();
-        return;
+        return false;
       }
 
       times.add(time.get());
+      return true;
     }
 
     private Optional<KeyframeTime> keyframeTime(OptionalLong pts, OptionalLong dts) {

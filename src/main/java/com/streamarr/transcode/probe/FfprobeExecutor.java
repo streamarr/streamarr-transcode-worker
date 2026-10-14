@@ -159,21 +159,33 @@ public final class FfprobeExecutor {
   }
 
   private int runPacketScan(
-      List<String> arguments, Consumer<String> packetLines, Consumer<String> diagnosticLines)
+      List<String> arguments,
+      KeyframePacketScan.PacketLines packetLines,
+      Consumer<String> diagnosticLines)
       throws ExecutionException, InterruptedException {
-    var command = new ProbeCommand(ProbeTool.FFMPEG, arguments);
-    return run(command, stdout -> readLines(stdout, packetLines), diagnosticLines).exitCode();
+    var process = processFactory.apply(new ProbeCommand(ProbeTool.FFMPEG, arguments));
+    StdoutReader<Void> reader =
+        stdout -> {
+          if (!readLinesWhileNeeded(stdout, packetLines)) {
+            // The scan needs no more packets, so FFmpeg stops before it reads the rest of the
+            // source.
+            process.destroyForcibly();
+          }
+
+          return null;
+        };
+    return run(process, reader, diagnosticLines).exitCode();
   }
 
   private <T> Finished<T> run(List<String> arguments, StdoutReader<T> reader)
       throws ExecutionException, InterruptedException {
-    return run(new ProbeCommand(ProbeTool.FFPROBE, arguments), reader, _ -> {});
+    return run(
+        processFactory.apply(new ProbeCommand(ProbeTool.FFPROBE, arguments)), reader, _ -> {});
   }
 
   private <T> Finished<T> run(
-      ProbeCommand command, StdoutReader<T> reader, Consumer<String> diagnosticLines)
+      Process process, StdoutReader<T> reader, Consumer<String> diagnosticLines)
       throws ExecutionException, InterruptedException {
-    var process = processFactory.apply(command);
     try (var readers = Executors.newVirtualThreadPerTaskExecutor()) {
       var diagnostics = readers.submit(() -> readLines(process.getErrorStream(), diagnosticLines));
       var output = readers.submit(() -> readOutput(process, reader));
@@ -188,6 +200,19 @@ public final class FfprobeExecutor {
         }
       }
     }
+  }
+
+  private static boolean readLinesWhileNeeded(
+      InputStream stream, KeyframePacketScan.PacketLines lines) throws IOException {
+    try (var reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+      for (var line = reader.readLine(); line != null; line = reader.readLine()) {
+        if (!lines.take(line)) {
+          return false;
+        }
+      }
+    }
+
+    return true;
   }
 
   private static Void readLines(InputStream stream, Consumer<String> lines) throws IOException {

@@ -27,6 +27,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 import lombok.Builder;
 import lombok.Singular;
 import org.junit.jupiter.api.DisplayName;
@@ -622,6 +623,32 @@ class FfprobeExecutorKeyframeTest {
   }
 
   @Test
+  @Timeout(value = 10, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
+  @DisplayName(
+      "Should stop FFmpeg and report the keyframes unavailable when the packet scan finds a keyframe"
+          + " without a time")
+  void shouldStopFfmpegAndReportKeyframesUnavailableWhenPacketScanFindsKeyframeWithoutTime() {
+    var ffmpeg =
+        new EndlessPacketScan(
+            "0, 126000, -9223372036854775808, 3750, 100, 0x00000000\n",
+            "0, 129750, 144750, 3750, 100, 0x00000000, F=0x0\n");
+    var executor =
+        new FfprobeExecutor(
+            new ObjectMapper(),
+            command ->
+                command.tool() == ProbeCommand.ProbeTool.FFMPEG
+                    ? ffmpeg
+                    : new CompletedProcess(MPEGTS_STREAMS, 0, false));
+
+    var report = executor.probe(fixture("mpegts.ts"), packetScanRequest());
+
+    assertThat(report.result().getMedia().getKeyframes().getUnavailable().getReason())
+        .isEqualTo(
+            KeyframesUnavailableReason.KEYFRAMES_UNAVAILABLE_REASON_KEYFRAME_WITHOUT_TIMESTAMP);
+    assertThat(ffmpeg.isAlive()).isFalse();
+  }
+
+  @Test
   @DisplayName("Should report an execution failure when the packet scan exits with an error")
   void shouldReportExecutionFailureWhenPacketScanExitsWithError() {
     var ffprobe =
@@ -857,6 +884,78 @@ class FfprobeExecutorKeyframeTest {
     @Override
     public void destroy() {
       // This fake has already exited.
+    }
+  }
+
+  /**
+   * A packet scan that prints its first line and then repeats the next line until the process is
+   * destroyed, as FFmpeg does while it reads a long source.
+   */
+  private static final class EndlessPacketScan extends Process {
+    private final CountDownLatch destroyed = new CountDownLatch(1);
+    private final InputStream stdout;
+
+    private EndlessPacketScan(String firstLine, String repeatedLine) {
+      var first = firstLine.getBytes(StandardCharsets.UTF_8);
+      var repeated = repeatedLine.getBytes(StandardCharsets.UTF_8);
+      this.stdout =
+          new InputStream() {
+            private long position;
+
+            @Override
+            public int read() {
+              if (destroyed.getCount() == 0) {
+                return -1;
+              }
+
+              var index = position++;
+              if (index < first.length) {
+                return first[(int) index];
+              }
+
+              return repeated[(int) ((index - first.length) % repeated.length)];
+            }
+          };
+    }
+
+    @Override
+    public OutputStream getOutputStream() {
+      return OutputStream.nullOutputStream();
+    }
+
+    @Override
+    public InputStream getInputStream() {
+      return stdout;
+    }
+
+    @Override
+    public InputStream getErrorStream() {
+      return InputStream.nullInputStream();
+    }
+
+    @Override
+    public int waitFor() throws InterruptedException {
+      destroyed.await();
+      return 137;
+    }
+
+    @Override
+    public int exitValue() {
+      if (isAlive()) {
+        throw new IllegalThreadStateException("FFmpeg is still scanning");
+      }
+
+      return 137;
+    }
+
+    @Override
+    public boolean isAlive() {
+      return destroyed.getCount() > 0;
+    }
+
+    @Override
+    public void destroy() {
+      destroyed.countDown();
     }
   }
 }
