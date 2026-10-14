@@ -38,10 +38,6 @@ import build.buf.gen.streamarr.transcode.v1.VariantJob;
 import build.buf.gen.streamarr.transcode.v1.VariantSpec;
 import build.buf.gen.streamarr.transcode.v1.WorkerIdentity;
 import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
-import ch.qos.logback.classic.Level;
-import ch.qos.logback.classic.Logger;
-import ch.qos.logback.classic.spi.ILoggingEvent;
-import ch.qos.logback.core.read.ListAppender;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
@@ -71,7 +67,6 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
-import org.slf4j.LoggerFactory;
 
 @Tag("IntegrationTest")
 @DisplayName("Transcode Worker Control Plane Integration Tests")
@@ -98,29 +93,23 @@ class TranscodeWorkerControlPlaneIT {
   }
 
   @Test
-  @DisplayName("Should warn when the control plane sends an unknown command")
-  void shouldWarnWhenControlPlaneSendsUnknownCommand() throws Exception {
+  @DisplayName("Should keep handling commands when the control plane sends an unknown command")
+  void shouldKeepHandlingCommandsWhenControlPlaneSendsUnknownCommand() throws Exception {
     var service = new ControllableWorkerService();
-    var orderingBarrierJob = variantJob();
-    var appender = attachWorkerAppender();
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJob();
 
     try (var server = new TestServer(service);
-        var worker = worker(preparedMediaRoot())) {
+        var worker = worker(preparedMediaRoot(), launcher)) {
       server.start();
       worker.start("localhost", server.port());
 
       service.send(EstablishWorkerSessionResponse.getDefaultInstance());
-      service.sendStart(service.registeredWorker(), orderingBarrierJob);
-      service.awaitStarted(orderingBarrierJob);
+      service.sendStart(service.registeredWorker(), job);
+      service.awaitStarted(job);
 
-      assertThat(appender.list)
-          .anySatisfy(
-              event -> {
-                assertThat(event.getLevel()).isEqualTo(Level.WARN);
-                assertThat(event.getFormattedMessage()).contains("COMMAND_NOT_SET");
-              });
-    } finally {
-      detachWorkerAppender(appender);
+      assertThat(worker.hasAcceptedSession()).isTrue();
+      assertThat(launcher.process(fromProto(job.getJobAttemptId())).isAlive()).isTrue();
     }
   }
 
@@ -722,21 +711,6 @@ class TranscodeWorkerControlPlaneIT {
             .setDecision(
                 unknownContainer.getDecision().toBuilder().setContainerValue(Integer.MAX_VALUE))
             .build());
-  }
-
-  private static ListAppender<ILoggingEvent> attachWorkerAppender() {
-    var logger = (Logger) LoggerFactory.getLogger(TranscodeWorker.class);
-    logger.setLevel(Level.WARN);
-    var appender = new ListAppender<ILoggingEvent>();
-    appender.start();
-    logger.addAppender(appender);
-    return appender;
-  }
-
-  private static void detachWorkerAppender(ListAppender<ILoggingEvent> appender) {
-    var logger = (Logger) LoggerFactory.getLogger(TranscodeWorker.class);
-    logger.detachAppender(appender);
-    logger.setLevel(null);
   }
 
   private static final class ControllableWorkerService
