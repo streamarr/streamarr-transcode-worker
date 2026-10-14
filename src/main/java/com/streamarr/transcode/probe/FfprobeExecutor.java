@@ -11,6 +11,7 @@ import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import com.google.protobuf.Duration;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.channels.ClosedByInterruptException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -75,7 +76,8 @@ public final class FfprobeExecutor {
     var attempt = new Attempt(source, request, result);
     try {
       return execute(attempt);
-    } catch (InterruptedException _) {
+    } catch (InterruptedException | ClosedByInterruptException _) {
+      // An interrupt closes a FileChannel that the keyframe step is reading.
       Thread.currentThread().interrupt();
       return ProbeAttemptReport.resultOnly(
           result.setFailure(ProbeFailure.PROBE_FAILURE_CANCELLED).build());

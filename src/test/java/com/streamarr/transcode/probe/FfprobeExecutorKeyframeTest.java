@@ -301,6 +301,25 @@ class FfprobeExecutorKeyframeTest {
     assertThat(report.keyframePositionsParts().get(1).getDecodeTimeDeltas(0)).isEqualTo(1);
   }
 
+  @ParameterizedTest
+  @CsvSource({"mp4-bframes-editlist.mp4, MP4", "mkv-libavformat.mkv, MATROSKA"})
+  @DisplayName("Should report cancellation when the attempt is cancelled before the index read")
+  void shouldReportCancellationWhenAttemptIsCancelledBeforeIndexRead(
+      String fixture, String container) {
+    var streams = "MP4".equals(container) ? MP4_STREAMS : MATROSKA_STREAMS;
+    var ffprobe = ScriptedFfprobe.builder().streams(streams).cancelAfterStreams(true).build();
+
+    try {
+      var report = ffprobe.executor().probe(fixture(fixture), keyframeRequest());
+
+      assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_CANCELLED);
+      assertThat(report.keyframePositionsParts()).isEmpty();
+      assertThat(Thread.currentThread().isInterrupted()).isTrue();
+    } finally {
+      Thread.interrupted();
+    }
+  }
+
   private static String streamsOf(String formatName) {
     return """
         {"format":{"format_name":"%s","start_time":"0.000000"},
@@ -332,7 +351,8 @@ class FfprobeExecutorKeyframeTest {
    * recorded for its exact read interval. Any other read interval finds no packet.
    */
   @Builder
-  private record ScriptedFfprobe(String streams, @Singular Map<String, String> packets) {
+  private record ScriptedFfprobe(
+      String streams, @Singular Map<String, String> packets, boolean cancelAfterStreams) {
 
     FfprobeExecutor executor() {
       return new FfprobeExecutor(new ObjectMapper(), this::answer);
@@ -341,18 +361,25 @@ class FfprobeExecutorKeyframeTest {
     private Process answer(List<String> arguments) {
       var interval = arguments.indexOf("-read_intervals");
       if (interval < 0) {
-        return new CompletedProcess(streams);
+        return new CompletedProcess(streams, cancelAfterStreams);
       }
 
-      return new CompletedProcess(packets.getOrDefault(arguments.get(interval + 1), NO_PACKETS));
+      return new CompletedProcess(
+          packets.getOrDefault(arguments.get(interval + 1), NO_PACKETS), false);
     }
   }
 
+  /**
+   * A process that has already exited. With {@code cancelOnExit}, the attempt is cancelled when the
+   * executor finds that the process has exited, after it has read the whole output.
+   */
   private static final class CompletedProcess extends Process {
     private final InputStream stdout;
+    private final boolean cancelOnExit;
 
-    private CompletedProcess(String stdout) {
+    private CompletedProcess(String stdout, boolean cancelOnExit) {
       this.stdout = new ByteArrayInputStream(stdout.getBytes(StandardCharsets.UTF_8));
+      this.cancelOnExit = cancelOnExit;
     }
 
     @Override
@@ -382,6 +409,10 @@ class FfprobeExecutorKeyframeTest {
 
     @Override
     public boolean isAlive() {
+      if (cancelOnExit) {
+        Thread.currentThread().interrupt();
+      }
+
       return false;
     }
 
