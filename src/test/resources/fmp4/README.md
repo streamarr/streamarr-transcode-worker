@@ -191,9 +191,9 @@ Timescale 24000 unless stated. `n@t` means segment n starts at t seconds.
 | 12 | `12-encode-cfr-missed-forced-keyframe.fmp4` | 0 | libx264, first 30 s, 145-frame GOP, 18 left out of the list. The GOP count restarts at the forced keyframe at frame 288 (12.012 s), so the backstop keyframe comes 145 frames later at frame 433 (18.060 s), inside interval 3: 0@0, 1@6.006, 2@12.012, 3@18.060, 4@24.024, no number skipped. |
 | 12b | `12-svtav1-cfr-missed-forced-keyframe.fmp4` | 0 | The same through SVT-AV1: its backstop also lands at frame 433 (18.060 s). |
 | 13 | `13-x265-cfr.fmp4` | 0 | Constant 23.976 fps libx265, 66 s, with the worker's arguments (closed GOPs, no scene cuts, sample entry `hev1`) under the verified GOP of 145 frames. As in 1, the only keyframes are the forced frames (0, 144, 288 … 864, 1007, 1151, 1295, 1439), one per segment, 11 segments on 1's ticks. Every keyframe is an IDR picture (NAL type 20) with no leading pictures. |
-| 13d | `13-x265-cfr-seek30.fmp4` | 5 | The libx265 replacement attempt from segment 5, seeking one period early (`-ss 24`): starts at 24.024 s, and segment 4 is discarded preroll. The list `30,36,…,66` forces the frames 13 forced (720, 864, 1007, 1151, 1295, 1439), so every delivered segment, 5–10, starts on exactly 13's ticks. Every keyframe is an IDR picture. Ends with one audio-only fragment. |
 | 13b | `13-x265-cfr-missed-forced-keyframe.fmp4` | 0 | libx265 with 18 left out of the list: its GOP count restarts at frame 288 as well, and the backstop comes at frame 433 inside interval 3 as an IDR picture (NAL type 20). So the segment it opens decodes on its own. |
-| 13c | `13-x265-cfr-floored-gop.fmp4` | 0 | libx265 with the worker's arguments under the floored GOP of 143 frames of an encoder not verified, first 30 s. As in 11, the GOP keyframe one frame before every later boundary (frames 143, 287, 431, 575) and on the last frame (719) joins the earlier segment: 5 segments of two keyframes, each opening at its forced keyframe. Every keyframe is an IDR picture (NAL type 20). |
+| 13c | `13-x265-cfr-floored-gop.fmp4` | 0 | libx265 with the worker's arguments under the floored GOP of 143 frames of an encoder that is not keyframe-verified, first 30 s. As in 11, the GOP keyframe one frame before every later boundary (frames 143, 287, 431, 575) and on the last frame (719) joins the earlier segment: 5 segments of two keyframes, each opening at its forced keyframe. Every keyframe is an IDR picture (NAL type 20). |
+| 13d | `13-x265-cfr-seek30.fmp4` | 5 | The libx265 replacement attempt from segment 5, seeking one period early (`-ss 24`): starts at 24.024 s, and segment 4 is discarded preroll. The list `30,36,…,66` forces the frames 13 forced (720, 864, 1007, 1151, 1295, 1439), so every delivered segment, 5–10, starts on exactly 13's ticks. Every keyframe is an IDR picture. Ends with one audio-only fragment. |
 
 Box facts every recording shares (useful for the reader):
 - Top-level boxes are only `ftyp`, `moov`, `moof` and `mdat`, in that order, with no `largesize`, `styp` or `sidx`.
@@ -216,8 +216,8 @@ Every verdict below rests on recordings that force keyframes from the list. Wher
 first frame is at zero (1, 6, 11, 12 and 12b) the list forces the same frames as the earlier
 expression `expr:gte(t,n_forced*6)` did, and those recordings are byte-identical to the expression's.
 Where the first frame is after zero (3, 5a, 9) or the attempt seeks (1b, 9b, 13d), the list forces
-the first frame at or after each boundary on the zero-based timeline, and every verified encoder
-keys exactly those frames.
+the first frame at or after each boundary on the zero-based timeline, and every keyframe-verified
+encoder keys exactly those frames.
 
 | Encoder | Honours the forced keyframe | Restarts its GOP count there | Keyframe picture | Verdict |
 |---|---|---|---|---|

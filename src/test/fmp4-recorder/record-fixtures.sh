@@ -268,7 +268,7 @@ run hls 12-encode-cfr-missed-forced-keyframe.video-only video duration=30 skip=1
 run pipe 12-svtav1-cfr-missed-forced-keyframe duration=30 skip=18 src/cfr.mp4 -- "${SVT[@]}" "${AAC[@]}" "${KEY_SVT_PIPE[@]}"
 run hls 12-svtav1-cfr-missed-forced-keyframe.video-only video duration=30 skip=18 src/cfr.mp4 -- "${SVT[@]}" "${KEY_SVT_PIPE[@]}"
 
-# ------------------------------------------------------------------ 13. libx265 under the verified-encoder GOP, from the start, after a seek and with a missed forced keyframe, and under the floored GOP
+# ------------------------------------------------------------------ 13. libx265 under the keyframe-verified GOP, from the start, after a seek and with a missed forced keyframe, and under the floored GOP
 run pipe 13-x265-cfr src/cfr.mp4 -- "${X265[@]}" "${AAC[@]}" "${KEY_X265_PIPE[@]}"
 run hls 13-x265-cfr.video-only video src/cfr.mp4 -- "${X265[@]}" "${KEY_X265_PIPE[@]}"
 run pipe 13-x265-cfr-seek30 start=5 seek=24 src/cfr.mp4 -- "${X265[@]}" "${AAC[@]}" "${KEY_X265_PIPE[@]}"

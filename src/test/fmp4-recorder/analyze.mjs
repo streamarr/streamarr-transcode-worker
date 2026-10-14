@@ -50,7 +50,7 @@ function hlsComparison(run, flags, { audio = true, reference = null, restrict = 
 // fixture-only additions aside, and FfmpegCommandBuilderRecipeTest pins the worker to it.
 const FIRST_30_SECONDS = 'only the first 30 s of the source';
 const MISSED_FORCED_KEYFRAME = '18 s left out of the forced keyframe times';
-const X265_UNDER_THE_FLOORED_GOP = 'libx265 under the floored GOP of 143 frames of an encoder not verified';
+const X265_UNDER_THE_FLOORED_GOP = 'libx265 under the floored GOP of 143 frames of an encoder that is not keyframe-verified';
 
 const FIXTURES = [
   {
@@ -209,7 +209,7 @@ const FIXTURES = [
   {
     name: '13-x265-cfr', source: 'cfr.mp4', mode: 'encode', encoder: 'libx265', seek: 0, start: 0,
     proves: 'Constant 23.976 fps libx265 encode of 66 s with the worker\'s arguments (closed GOPs, no scene cuts) under ' +
-      'the verified-encoder GOP of 145 frames: it keys only the forced frames (0, 144, 288 ... 864, 1007, 1151, 1295, ' +
+      'the keyframe-verified GOP of 145 frames: it keys only the forced frames (0, 144, 288 ... 864, 1007, 1151, 1295, ' +
       '1439), one per segment, and every keyframe is an IDR picture (NAL type 20) with no leading pictures.',
     hlsComparisons: [hlsComparison('13-x265-cfr.video-only', 'pipe-recipe', { audio: false })],
   },
@@ -234,7 +234,7 @@ const FIXTURES = [
   {
     name: '13-x265-cfr-floored-gop', source: 'cfr.mp4', mode: 'encode', encoder: 'libx265', seek: 0, start: 0,
     recipeDeviation: `${X265_UNDER_THE_FLOORED_GOP}; ${FIRST_30_SECONDS}`,
-    proves: 'libx265 with the worker\'s arguments under the floored GOP of 143 frames of an encoder not verified: ' +
+    proves: 'libx265 with the worker\'s arguments under the floored GOP of 143 frames of an encoder that is not keyframe-verified: ' +
       'as in 11, the GOP keyframe one frame before every later boundary (frames 143, 287, 431, 575) and on the last ' +
       'frame (719) joins the earlier segment, so each of the 5 segments holds two keyframes and opens at its forced ' +
       'keyframe. Every keyframe is an IDR picture (NAL type 20).',
