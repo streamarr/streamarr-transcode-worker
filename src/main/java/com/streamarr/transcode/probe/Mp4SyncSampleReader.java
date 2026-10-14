@@ -38,20 +38,9 @@ final class Mp4SyncSampleReader {
       }
 
       return read(movie, trackId);
-    } catch (RuntimeException failure) {
-      if (failure instanceof ContainerIndexException || isTruncatedBox(failure)) {
-        return incomplete();
-      }
-
-      throw failure;
+    } catch (ContainerIndexException | BufferUnderflowException _) {
+      return incomplete();
     }
-  }
-
-  private static boolean isTruncatedBox(RuntimeException failure) {
-    return failure instanceof BufferUnderflowException
-        || failure instanceof IndexOutOfBoundsException
-        || failure instanceof IllegalArgumentException
-        || failure instanceof ArithmeticException;
   }
 
   private static KeyframeIndex read(ByteBuffer movie, long trackId) {
@@ -93,7 +82,7 @@ final class Mp4SyncSampleReader {
 
     var keyframes = new ArrayList<KeyframeTime>();
     var offsetRuns = new RunCursor(offsets);
-    var sync = syncSamples.map(SyncCursor::new).orElseGet(SyncCursor::everySample);
+    var sync = syncSamples.<SyncSamples>map(ListedSyncSamples::new).orElseGet(EverySample::new);
     long sample = 1;
     long decodeTime = 0;
     for (var run : durations) {
@@ -230,6 +219,10 @@ final class Mp4SyncSampleReader {
   }
 
   private static void skip(ByteBuffer buffer, int bytes) {
+    if (bytes > buffer.remaining()) {
+      throw malformed("box shorter than its fields");
+    }
+
     buffer.position(buffer.position() + bytes);
   }
 
@@ -298,24 +291,30 @@ final class Mp4SyncSampleReader {
     }
   }
 
-  /** Walks the sync samples in order; a track without stss has only sync samples. */
-  private static final class SyncCursor {
+  /** Answers, for each sample number in increasing order, whether it is a sync sample. */
+  private sealed interface SyncSamples permits EverySample, ListedSyncSamples {
+    boolean isSync(long sample);
+  }
+
+  /** A track without stss has only sync samples. */
+  private record EverySample() implements SyncSamples {
+    @Override
+    public boolean isSync(long sample) {
+      return true;
+    }
+  }
+
+  /** Walks the stss entries in order. */
+  private static final class ListedSyncSamples implements SyncSamples {
     private final List<Long> samples;
     private int next;
 
-    private SyncCursor(List<Long> samples) {
+    private ListedSyncSamples(List<Long> samples) {
       this.samples = samples;
     }
 
-    private static SyncCursor everySample() {
-      return new SyncCursor(null);
-    }
-
-    private boolean isSync(long sample) {
-      if (samples == null) {
-        return true;
-      }
-
+    @Override
+    public boolean isSync(long sample) {
       while (next < samples.size() && samples.get(next) < sample) {
         next++;
       }
@@ -380,7 +379,12 @@ final class Mp4SyncSampleReader {
     }
 
     private static long rescale(long value, long multiplier, long divisor) {
-      return Math.floorDiv(Math.multiplyExact(value, multiplier) + divisor / 2, divisor);
+      try {
+        return Math.floorDiv(
+            Math.addExact(Math.multiplyExact(value, multiplier), divisor / 2), divisor);
+      } catch (ArithmeticException _) {
+        throw malformed("edit duration out of range");
+      }
     }
   }
 }
