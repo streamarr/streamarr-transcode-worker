@@ -552,8 +552,8 @@ class TranscodeWorkerControlPlaneIT {
     }
   }
 
-  private static void assertQuitGracefully(ScriptedProcess process) {
-    await().atMost(5, TimeUnit.SECONDS).until(() -> !process.isAlive());
+  private static void assertQuitGracefully(ScriptedProcess process) throws InterruptedException {
+    process.waitFor();
     assertThat(process.stdinText()).isEqualTo("q");
     assertThat(process.wasDestroyedForcibly()).isFalse();
   }
