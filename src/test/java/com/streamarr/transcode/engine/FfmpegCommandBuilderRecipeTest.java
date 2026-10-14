@@ -111,12 +111,14 @@ class FfmpegCommandBuilderRecipeTest {
       command.subList(start, start + option.size()).clear();
     }
 
-    var svtAv1Parameters = command.indexOf("-svtav1-params") + 1;
-    if (svtAv1Parameters > 0) {
-      command.set(
-          svtAv1Parameters, command.get(svtAv1Parameters).replace(SVT_AV1_SINGLE_THREAD, ""));
-    }
-
+    removeParameter(command, "-svtav1-params", SVT_AV1_SINGLE_THREAD);
     return command;
+  }
+
+  private static void removeParameter(List<String> command, String option, String parameter) {
+    var parameters = command.indexOf(option) + 1;
+    if (parameters > 0) {
+      command.set(parameters, command.get(parameters).replace(parameter, ""));
+    }
   }
 }
