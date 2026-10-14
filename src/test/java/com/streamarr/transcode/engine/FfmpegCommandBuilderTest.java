@@ -154,7 +154,10 @@ class FfmpegCommandBuilderTest {
         "hevc_nvenc",
         "av1_nvenc",
         "h264_amf",
+        "hevc_amf",
+        "av1_amf",
         "h264_rkmpp",
+        "hevc_rkmpp",
         "unlisted_encoder"
       })
   @DisplayName(
