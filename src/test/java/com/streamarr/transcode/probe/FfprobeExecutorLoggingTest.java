@@ -164,8 +164,9 @@ class FfprobeExecutorLoggingTest {
     var result = executor.probe(SOURCE, request).result();
 
     assertExecutionFailure(result, request);
-    assertThat(events).isNotEmpty();
-    assertThat(events).noneSatisfy(event -> assertThat(rendered(event)).contains(title));
+    assertThat(events)
+        .isNotEmpty()
+        .noneSatisfy(event -> assertThat(rendered(event)).contains(title));
   }
 
   /** The event's message and the message of every throwable it carries. */
