@@ -441,6 +441,66 @@ class TranscodeWorkerJobAttemptTest {
         Arguments.of("codec string", unary(VideoDecision.Builder::clearCodecString)));
   }
 
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = VideoCodecFamily.class,
+      names = {"VIDEO_CODEC_FAMILY_HEVC", "VIDEO_CODEC_FAMILY_AV1"})
+  @DisplayName(
+      "Should refuse the job as an invalid specification when an HEVC or AV1 encode carries no"
+          + " tier")
+  void shouldRefuseTheJobAsAnInvalidSpecificationWhenAnHevcOrAv1EncodeCarriesNoTier(
+      VideoCodecFamily family) throws Exception {
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getDecisionBuilder()
+        .clearVideoCodecFamily()
+        .getVideoBuilder()
+        .setCodecFamily(family)
+        .setCodecProfile(mainProfileOf(family))
+        .clearTier();
+
+    assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
+  @Test
+  @DisplayName(
+      "Should refuse the job as an invalid specification when an H.264 encode carries a tier")
+  void shouldRefuseTheJobAsAnInvalidSpecificationWhenAnH264EncodeCarriesATier() throws Exception {
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getDecisionBuilder().getVideoBuilder().setTier(VideoCodecTier.VIDEO_CODEC_TIER_MAIN);
+
+    assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("copiesWithEncodeValues")
+  @DisplayName(
+      "Should refuse the job as an invalid specification when a stream copy carries a codec"
+          + " profile, tier or level")
+  void shouldRefuseTheJobAsAnInvalidSpecificationWhenAStreamCopyCarriesACodecProfileTierOrLevel(
+      String carrying, UnaryOperator<VideoDecision.Builder> withValue) throws Exception {
+    var job = variantJobBuilder();
+    withValue.apply(job.getDecisionBuilder().getVideoBuilder());
+
+    assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
+  static Stream<Arguments> copiesWithEncodeValues() {
+    return Stream.of(
+        Arguments.of(
+            "codec profile",
+            unary(video -> video.setCodecProfile(VideoCodecProfile.VIDEO_CODEC_PROFILE_H264_HIGH))),
+        Arguments.of("tier", unary(video -> video.setTier(VideoCodecTier.VIDEO_CODEC_TIER_MAIN))),
+        Arguments.of("level", unary(video -> video.setLevel(10))));
+  }
+
+  private static VideoCodecProfile mainProfileOf(VideoCodecFamily family) {
+    return switch (family) {
+      case VIDEO_CODEC_FAMILY_HEVC -> VideoCodecProfile.VIDEO_CODEC_PROFILE_HEVC_MAIN;
+      case VIDEO_CODEC_FAMILY_AV1 -> VideoCodecProfile.VIDEO_CODEC_PROFILE_AV1_MAIN;
+      default -> throw new AssertionError("No Main profile is listed for " + family);
+    };
+  }
+
   @Test
   @DisplayName(
       "Should refuse the job as an invalid specification when a stream copy carries no codec"

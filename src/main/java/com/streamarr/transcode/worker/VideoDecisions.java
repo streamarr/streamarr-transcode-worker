@@ -33,7 +33,7 @@ final class VideoDecisions {
     }
 
     if (!mode.encodesVideo()) {
-      return new VideoDecision.Copy(video.getCodecString());
+      return copy(video);
     }
 
     return encode(video);
@@ -58,6 +58,28 @@ final class VideoDecisions {
   }
 
   @SuppressWarnings("checkstyle:fullyQualifiedName")
+  private static VideoDecision.Copy copy(build.buf.gen.streamarr.transcode.v1.VideoDecision video) {
+    if (carriesEncodeValues(video)) {
+      throw new InvalidJobSpecificationException(
+          "A stream copy carries a codec profile, tier or level");
+    }
+
+    return new VideoDecision.Copy(video.getCodecString());
+  }
+
+  @SuppressWarnings("checkstyle:fullyQualifiedName")
+  private static boolean carriesEncodeValues(
+      build.buf.gen.streamarr.transcode.v1.VideoDecision video) {
+    return video.getCodecProfileValue()
+            != build.buf.gen.streamarr.transcode.v1.VideoCodecProfile
+                .VIDEO_CODEC_PROFILE_UNSPECIFIED_VALUE
+        || video.getTierValue()
+            != build.buf.gen.streamarr.transcode.v1.VideoCodecTier
+                .VIDEO_CODEC_TIER_UNSPECIFIED_VALUE
+        || video.hasLevel();
+  }
+
+  @SuppressWarnings("checkstyle:fullyQualifiedName")
   private static VideoDecision.Encode encode(
       build.buf.gen.streamarr.transcode.v1.VideoDecision video) {
     if (codecFamilyName(video.getCodecFamily()).isEmpty()) {
@@ -74,9 +96,18 @@ final class VideoDecisions {
           "Codec profile " + profile + " does not belong to " + video.getCodecFamily());
     }
 
+    var tier = tier(video.getTier());
+    if (tier.isPresent() != hasTiers(profile)) {
+      throw new InvalidJobSpecificationException(
+          "An encode carries a tier exactly when its codec family has tiers, and "
+              + video.getCodecFamily()
+              + " carries "
+              + video.getTier());
+    }
+
     return VideoDecision.Encode.builder()
         .codecProfile(profile)
-        .tier(tier(video.getTier()))
+        .tier(tier)
         .level(video.getLevel())
         .codecString(video.getCodecString())
         .build();
@@ -99,6 +130,14 @@ final class VideoDecisions {
       case H264_HIGH -> VideoCodecFamily.VIDEO_CODEC_FAMILY_H264;
       case HEVC_MAIN -> VideoCodecFamily.VIDEO_CODEC_FAMILY_HEVC;
       case AV1_MAIN -> VideoCodecFamily.VIDEO_CODEC_FAMILY_AV1;
+    };
+  }
+
+  // H.264 has no tier; HEVC and AV1 write one into every codec string.
+  private static boolean hasTiers(VideoCodecProfile profile) {
+    return switch (profile) {
+      case H264_HIGH -> false;
+      case HEVC_MAIN, AV1_MAIN -> true;
     };
   }
 
