@@ -16,7 +16,6 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -47,22 +46,10 @@ class TranscodeWorkerKeepaliveIT {
         worker.start("localhost", relay.port());
 
         relay.freeze();
-        try (var scope = Executors.newVirtualThreadPerTaskExecutor()) {
-          var disconnection =
-              scope.submit(
-                  () -> {
-                    worker.awaitDisconnection();
-                    return null;
-                  });
-          try {
-            assertThatThrownBy(() -> disconnection.get(30, TimeUnit.SECONDS))
-                .isInstanceOf(ExecutionException.class)
-                .hasCauseInstanceOf(WorkerJobException.class)
-                .hasRootCauseInstanceOf(StatusRuntimeException.class);
-          } finally {
-            disconnection.cancel(true);
-          }
-        }
+
+        assertThatThrownBy(worker::awaitDisconnection)
+            .isInstanceOf(WorkerJobException.class)
+            .hasRootCauseInstanceOf(StatusRuntimeException.class);
       }
     }
   }
