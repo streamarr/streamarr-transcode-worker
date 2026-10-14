@@ -26,6 +26,7 @@ Validation checks these labels against the expected values. These commands do no
 namespace. It leaves the worker endpoint unset to exercise `127.0.0.1:9090`. It verifies:
 
 - Readiness is down before the control plane accepts registration and up afterward. Liveness is up.
+- Without a GPU, registration advertises libx264, libx265 and libsvtav1 as software encoders.
 - The image probes a real media file mounted read-only.
 - Remuxing and transcoding upload segments that decode successfully and have the expected dimensions.
 - A mounted executable can inject a typed transcode failure without making the worker unready.

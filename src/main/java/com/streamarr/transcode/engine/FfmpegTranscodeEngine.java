@@ -1,6 +1,8 @@
 package com.streamarr.transcode.engine;
 
 import java.time.Duration;
+import java.util.List;
+import java.util.Optional;
 import java.util.OptionalDouble;
 import lombok.Builder;
 import lombok.NonNull;
@@ -46,7 +48,8 @@ public class FfmpegTranscodeEngine {
   public Producer startProducer(
       TranscodeRequest request, SegmentSink sink, SegmentMemoryBudget memoryBudget) {
     requireAvailableFfmpeg();
-    var job = TranscodeJob.builder().request(request).videoEncoder(resolveEncoder(request)).build();
+    var videoEncoder = encoderBackendOf(request).map(EncoderBackend::encoder).orElse("copy");
+    var job = TranscodeJob.builder().request(request).videoEncoder(videoEncoder).build();
     var command = commandBuilder.buildCommand(job);
     log.debug(
         "FFmpeg command for job attempt {}: {}", request.attemptId(), String.join(" ", command));
@@ -80,12 +83,19 @@ public class FfmpegTranscodeEngine {
     }
   }
 
-  private String resolveEncoder(TranscodeRequest request) {
+  /** The encoder backend that the job attempt runs; empty when it copies the video. */
+  public Optional<EncoderBackend> encoderBackendOf(TranscodeRequest request) {
     if (!request.transcodeDecision().transcodeMode().encodesVideo()) {
-      return "copy";
+      return Optional.empty();
     }
 
-    return capabilityService.resolveEncoder(request.transcodeDecision().videoCodecFamily());
+    return Optional.of(
+        capabilityService.resolveEncoder(request.transcodeDecision().videoCodecFamily()));
+  }
+
+  /** The encoder backends that this engine runs, one for each codec family it can encode. */
+  public List<WorkerVerifiedEncoder> workerVerifiedEncoders() {
+    return capabilityService.workerVerifiedEncoders();
   }
 
   // An encode forces the probed frame rate on its output; a copy keeps the source's durations.

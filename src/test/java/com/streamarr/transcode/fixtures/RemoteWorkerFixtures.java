@@ -34,14 +34,18 @@ public final class RemoteWorkerFixtures {
   /** A builder for an engine with a compatible FFmpeg that launches FFmpeg through the launcher. */
   public static FfmpegTranscodeEngine.FfmpegTranscodeEngineBuilder engineBuilder(
       ProcessLauncher launcher) {
+    return engineBuilder(launcher, "");
+  }
+
+  /**
+   * A builder for an engine whose compatible FFmpeg lists the encoders in {@code encodersOutput},
+   * in the format of {@code ffmpeg -encoders}, and passes every test encode.
+   */
+  public static FfmpegTranscodeEngine.FfmpegTranscodeEngineBuilder engineBuilder(
+      ProcessLauncher launcher, String encodersOutput) {
     var capabilityService =
         new TranscodeCapabilityService(
-            "ffmpeg",
-            command ->
-                new CompatibleFfmpegProcess(
-                    Arrays.asList(command).contains("muxer=mp4")
-                        ? FfmpegMuxerHelpFixtures.FRAGMENTED_MP4_MUXER_HELP
-                        : ""));
+            "ffmpeg", command -> new CompatibleFfmpegProcess(stdoutOf(command, encodersOutput)));
     capabilityService.detectCapabilities();
 
     return FfmpegTranscodeEngine.builder()
@@ -49,6 +53,19 @@ public final class RemoteWorkerFixtures {
         .capabilityService(capabilityService)
         .launcher(launcher)
         .encoderStallTimeout(FfmpegTranscodeEngine.DEFAULT_ENCODER_STALL_TIMEOUT);
+  }
+
+  private static String stdoutOf(String[] command, String encodersOutput) {
+    var arguments = Arrays.asList(command);
+    if (arguments.contains("muxer=mp4")) {
+      return FfmpegMuxerHelpFixtures.FRAGMENTED_MP4_MUXER_HELP;
+    }
+
+    if (arguments.contains("-encoders")) {
+      return encodersOutput;
+    }
+
+    return "";
   }
 
   private static class CompatibleFfmpegProcess extends Process {

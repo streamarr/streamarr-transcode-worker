@@ -4,8 +4,13 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
+import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
@@ -32,6 +37,10 @@ public class TranscodeCapabilityService {
   @Getter
   private HardwareEncodingCapability hardwareEncodingCapability =
       HardwareEncodingCapability.builder().available(false).encoders(Set.of()).build();
+
+  // Each codec family's worker-verified encoder backend, resolved once after detection, so that
+  // every job of a codec family runs the backend that registration advertises.
+  private Map<CodecFamily, EncoderBackend> encoderBackends = Map.of();
 
   public TranscodeCapabilityService(String ffmpegPath, ProcessFactory processFactory) {
     this.ffmpegPath = ffmpegPath;
@@ -63,12 +72,14 @@ public class TranscodeCapabilityService {
             .encoders(hwEncoders)
             .accelerator(accelerator)
             .build();
+    encoderBackends = resolveEncoderBackends(hwEncoders, detectSoftwareEncoders());
 
     log.info(
-        "FFmpeg capabilities: GPU={}, encoders={}, accelerator={}",
+        "FFmpeg capabilities: GPU={}, encoders={}, accelerator={}, encoder backends={}",
         hasGpu,
         hwEncoders,
-        accelerator);
+        accelerator,
+        encoderBackends.values());
   }
 
   private void markUnavailable(String reason) {
@@ -77,23 +88,72 @@ public class TranscodeCapabilityService {
     log.warn("FFmpeg capability detection failed for {}: {}", ffmpegPath, reason);
   }
 
-  public String resolveEncoder(String codecFamily) {
-    var family = CodecFamily.named(codecFamily);
-    if (family.isEmpty()) {
-      return CodecFamily.H264.softwareEncoder();
+  /**
+   * The encoder backend that jobs of each codec family run, for every codec family whose backend
+   * passed its test encode, with its keyframe-verified trait.
+   */
+  public List<WorkerVerifiedEncoder> workerVerifiedEncoders() {
+    return encoderBackends.values().stream()
+        .map(
+            backend ->
+                WorkerVerifiedEncoder.builder()
+                    .backend(backend)
+                    .keyframeVerified(FfmpegCommandBuilder.isKeyframeVerified(backend.encoder()))
+                    .build())
+        .toList();
+  }
+
+  /**
+   * The encoder backend that jobs of the codec family run: the advertised one, or the family's
+   * software encoder when none is advertised. An unknown codec family runs libx264.
+   */
+  public EncoderBackend resolveEncoder(String codecFamily) {
+    return CodecFamily.named(codecFamily)
+        .map(family -> encoderBackends.getOrDefault(family, softwareBackend(family)))
+        .orElseGet(() -> softwareBackend(CodecFamily.H264));
+  }
+
+  private static Map<CodecFamily, EncoderBackend> resolveEncoderBackends(
+      Set<String> hardwareEncoders, Set<CodecFamily> softwareEncoderFamilies) {
+    var backends = new EnumMap<CodecFamily, EncoderBackend>(CodecFamily.class);
+    for (var family : CodecFamily.values()) {
+      hardwareBackend(family, hardwareEncoders)
+          .or(() -> softwareBackendIfVerified(family, softwareEncoderFamilies))
+          .ifPresent(backend -> backends.put(family, backend));
     }
 
-    if (!hardwareEncodingCapability.available()) {
-      return family.get().softwareEncoder();
+    return Collections.unmodifiableMap(backends);
+  }
+
+  private static Optional<EncoderBackend> hardwareBackend(
+      CodecFamily family, Set<String> hardwareEncoders) {
+    return hardwareEncoders.stream()
+        .filter(family::isHardwareEncoderOfThisFamily)
+        .findFirst()
+        .map(
+            encoder ->
+                EncoderBackend.builder()
+                    .codecFamily(family)
+                    .encoder(encoder)
+                    .hardware(true)
+                    .build());
+  }
+
+  private static Optional<EncoderBackend> softwareBackendIfVerified(
+      CodecFamily family, Set<CodecFamily> softwareEncoderFamilies) {
+    if (!softwareEncoderFamilies.contains(family)) {
+      return Optional.empty();
     }
 
-    for (var encoder : hardwareEncodingCapability.encoders()) {
-      if (family.get().isHardwareEncoderOfThisFamily(encoder)) {
-        return encoder;
-      }
-    }
+    return Optional.of(softwareBackend(family));
+  }
 
-    return family.get().softwareEncoder();
+  private static EncoderBackend softwareBackend(CodecFamily family) {
+    return EncoderBackend.builder()
+        .codecFamily(family)
+        .encoder(family.softwareEncoder())
+        .hardware(false)
+        .build();
   }
 
   private CapabilityProbeResult checkFfmpegVersion() {
@@ -190,6 +250,29 @@ public class TranscodeCapabilityService {
     }
   }
 
+  // The codec families whose software encoder passes the same test encode as a hardware encoder.
+  // An interrupted hardware detection starts no further test encode.
+  private Set<CodecFamily> detectSoftwareEncoders() {
+    if (Thread.currentThread().isInterrupted()) {
+      return Set.of();
+    }
+
+    try {
+      var families = EnumSet.noneOf(CodecFamily.class);
+      for (var family : CodecFamily.values()) {
+        if (canEncodeCpuFrames(family.softwareEncoder())) {
+          families.add(family);
+        }
+      }
+
+      return families;
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      log.debug("Software encoder detection interrupted", e);
+      return Set.of();
+    }
+  }
+
   private boolean canEncodeCpuFrames(String encoder) throws InterruptedException {
     try {
       // Match the command builder's CPU scaling path. Compiled encoders may need unavailable
@@ -224,7 +307,7 @@ public class TranscodeCapabilityService {
     } catch (InterruptedException e) {
       throw e;
     } catch (Exception e) {
-      log.debug("Hardware encoder validation failed for {}", encoder, e);
+      log.debug("Encoder validation failed for {}", encoder, e);
       return false;
     }
   }
@@ -236,7 +319,7 @@ public class TranscodeCapabilityService {
 
     process.destroyForcibly();
     if (!process.waitFor(1, TimeUnit.SECONDS)) {
-      log.warn("Hardware encoder validation did not exit after termination");
+      log.warn("Encoder validation did not exit after termination");
     }
   }
 
