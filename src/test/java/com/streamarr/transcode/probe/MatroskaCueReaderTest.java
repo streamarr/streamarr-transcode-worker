@@ -241,10 +241,12 @@ class MatroskaCueReaderTest {
               + infoElement.length
               + tracks.length
               + (cuesAfterCluster ? cluster.length : 0);
-      var seekHead =
-          seekHeadListsCues
-              ? element(0x114D9B74, seek(0x1C53BB6B, cuesPosition))
-              : element(0x114D9B74, seek(0x1549A966, seekHeadSize));
+      var seekEntry = seek(0x1549A966, seekHeadSize);
+      if (seekHeadListsCues) {
+        seekEntry = seek(0x1C53BB6B, cuesPosition);
+      }
+
+      var seekHead = element(0x114D9B74, seekEntry);
       var body =
           cuesAfterCluster
               ? List.of(seekHead, infoElement, tracks, cluster, cueElement)
