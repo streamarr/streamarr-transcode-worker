@@ -38,8 +38,8 @@ public record TranscodeRequest(
     }
   }
 
-  public static class TranscodeRequestBuilder {
-    private Optional<Duration> seekPosition = Optional.empty();
+  public static TranscodeRequestBuilder builder() {
+    return new TranscodeRequestBuilder().seekPosition(Optional.empty());
   }
 
   private static boolean encodesVideo(TranscodeDecision decision) {
