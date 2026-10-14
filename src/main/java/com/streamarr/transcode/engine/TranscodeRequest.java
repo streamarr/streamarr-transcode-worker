@@ -22,7 +22,7 @@ public record TranscodeRequest(
     String variantLabel,
     int startSequenceNumber,
     int mediaSegmentCount,
-    Optional<Duration> seekPosition) {
+    @NonNull Optional<Duration> seekPosition) {
 
   public TranscodeRequest {
     if (encoderPreset == null && encodesVideo(transcodeDecision)) {
@@ -36,10 +36,10 @@ public record TranscodeRequest(
     if (attemptId == null) {
       attemptId = UUID.randomUUID();
     }
+  }
 
-    if (seekPosition == null) {
-      seekPosition = Optional.empty();
-    }
+  public static class TranscodeRequestBuilder {
+    private Optional<Duration> seekPosition = Optional.empty();
   }
 
   private static boolean encodesVideo(TranscodeDecision decision) {
