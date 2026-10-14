@@ -349,6 +349,42 @@ class FfmpegCommandBuilderTest {
         .endsWith(",128208,128214");
   }
 
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"libx264", "libsvtav1", "libx265"})
+  @DisplayName(
+      "Should round the GOP down to whole frames in a segment period when the list ends before the"
+          + " last advertised boundary")
+  void shouldRoundTheGopDownToWholeFramesInASegmentPeriodWhenTheListEndsBeforeTheLastBoundary(
+      String encoder) {
+    var cmd =
+        command(
+            request(TranscodeMode.FULL_TRANSCODE)
+                .startSequenceNumber(1670)
+                .mediaSegmentCount(22_538)
+                .build(),
+            encoder);
+
+    assertThat(cmd).containsSequence("-g:v:0", "143");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"libx264", "libsvtav1", "libx265"})
+  @DisplayName(
+      "Should lengthen the GOP one frame past the rounded-up period when the list fills the longest"
+          + " argument and reaches the last advertised boundary")
+  void shouldLengthenTheGopWhenTheListFillsTheLongestArgumentAndReachesTheLastBoundary(
+      String encoder) {
+    var cmd =
+        command(
+            request(TranscodeMode.FULL_TRANSCODE)
+                .startSequenceNumber(1670)
+                .mediaSegmentCount(22_537)
+                .build(),
+            encoder);
+
+    assertThat(cmd).containsSequence("-g:v:0", "145");
+  }
+
   private static String forcedKeyframeTimes(List<String> cmd) {
     return cmd.get(cmd.indexOf("-force_key_frames:0") + 1);
   }

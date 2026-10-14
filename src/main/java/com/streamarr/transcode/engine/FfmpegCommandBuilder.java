@@ -214,10 +214,11 @@ public class FfmpegCommandBuilder {
   }
 
   private void addKeyframeArgs(List<String> cmd, TranscodeJob job) {
-    var gopSize = String.valueOf(gopFrameCount(job));
+    var forcedKeyframes = forcedKeyframes(job.request());
+    var gopSize = String.valueOf(gopFrameCount(job, forcedKeyframes));
 
     cmd.addAll(List.of("-forced-idr", "1"));
-    addForcedKeyframeArgs(cmd, job);
+    addForcedKeyframeArgs(cmd, job, forcedKeyframes);
     cmd.addAll(List.of("-g:v:0", gopSize));
 
     if (traitsOf(job).fixedGop()) {
@@ -225,12 +226,13 @@ public class FfmpegCommandBuilder {
     }
   }
 
-  private static int gopFrameCount(TranscodeJob job) {
+  private static int gopFrameCount(TranscodeJob job, ForcedKeyframes forcedKeyframes) {
     var request = job.request();
     var periodFrames = request.targetSegmentDuration() * request.framerate();
     // One frame past the forced keyframes' gap, so the GOP never fires while forcing works, and a
-    // keyframe it places for a dropped forced one still lands inside that interval.
-    if (isKeyframeVerified(job.videoEncoder())) {
+    // keyframe it places for a dropped forced one still lands inside that interval. Past the end of
+    // a list cut short, that GOP alone would drift past a segment interval and skip it.
+    if (isKeyframeVerified(job.videoEncoder()) && forcedKeyframes.reachesLastBoundary()) {
       return (int) Math.ceil(periodFrames) + 1;
     }
 
@@ -239,8 +241,9 @@ public class FfmpegCommandBuilder {
     return (int) Math.floor(periodFrames);
   }
 
-  private void addForcedKeyframeArgs(List<String> cmd, TranscodeJob job) {
-    cmd.addAll(List.of("-force_key_frames:0", forcedKeyframeTimes(job.request())));
+  private void addForcedKeyframeArgs(
+      List<String> cmd, TranscodeJob job, ForcedKeyframes forcedKeyframes) {
+    cmd.addAll(List.of("-force_key_frames:0", forcedKeyframes.times()));
 
     if (traitsOf(job).disablesSceneCutsByThreshold()) {
       cmd.addAll(List.of("-sc_threshold:v:0", "0"));
@@ -256,7 +259,7 @@ public class FfmpegCommandBuilder {
   // expression would measure from the attempt's first frame instead. The list starts at the
   // attempt's first segment, because FFmpeg consumes at most one time per frame, and ends at the
   // last advertised boundary or the longest argument, past which the GOP places keyframes.
-  private static String forcedKeyframeTimes(TranscodeRequest request) {
+  private static ForcedKeyframes forcedKeyframes(TranscodeRequest request) {
     var period = (long) request.targetSegmentDuration();
     var times = new StringBuilder().append(request.startSequenceNumber() * period);
     for (var segment = request.startSequenceNumber() + 1L;
@@ -264,13 +267,13 @@ public class FfmpegCommandBuilder {
         segment++) {
       var next = "," + segment * period;
       if (times.length() + next.length() > LONGEST_ARGUMENT_BYTES) {
-        break;
+        return new ForcedKeyframes(times.toString(), false);
       }
 
       times.append(next);
     }
 
-    return times.toString();
+    return new ForcedKeyframes(times.toString(), true);
   }
 
   static boolean isKeyframeVerified(String encoder) {
@@ -309,4 +312,6 @@ public class FfmpegCommandBuilder {
   private static EncoderTraits.EncoderTraitsBuilder traits() {
     return EncoderTraits.builder().eightBitPixelFormat(DEFAULT_EIGHT_BIT_PIXEL_FORMAT);
   }
+
+  private record ForcedKeyframes(@NonNull String times, boolean reachesLastBoundary) {}
 }

@@ -244,7 +244,9 @@ another attempt, whatever its seek:
 The list is one argument, and Linux passes an argument of at most 131,071 bytes before its
 terminating NUL (32 pages of 4 KiB). `FfmpegCommandBuilder` ends the list at the last time that fits:
 21,370 boundaries at a 6 s period from zero (35.6 h), 22,771 at 2 s (12.6 h). Past it only the GOP
-places keyframes.
+places keyframes. A GOP of ceil(P × fps) + 1 frames is longer than a period, so its keyframes drift
+later each time and eventually skip a whole interval. When the list ends before the last advertised
+boundary, every encoder therefore takes floor(P × fps), keyframe-verified or not.
 
 ## The HLS muxer as differential evidence
 
