@@ -176,15 +176,15 @@ class TranscodeWorkerProbeTest {
   }
 
   @Test
-  @DisplayName("Should advertise the supported probe version when the worker registers")
-  void shouldAdvertiseTheSupportedProbeVersionWhenTheWorkerRegisters() throws Exception {
+  @DisplayName("Should advertise version 1 and the keyframe probe version")
+  void shouldAdvertiseVersionOneAndKeyframeProbeVersion() throws Exception {
     var runtime = new ScriptedWorkerRuntime();
 
     try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
       worker.start("localhost", 1);
 
       assertThat(runtime.connection().registration().getCapabilities().getProbeVersionsList())
-          .containsExactly(FfprobeExecutor.PROBE_VERSION);
+          .containsExactly(1, FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION);
     }
   }
 
