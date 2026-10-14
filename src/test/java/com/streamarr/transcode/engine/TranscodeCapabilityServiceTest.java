@@ -494,14 +494,18 @@ class TranscodeCapabilityServiceTest {
     service.detectCapabilities();
 
     var advertised = service.workerVerifiedEncoders();
+    var codecFamilies =
+        Map.of("h264", CodecFamily.H264, "hevc", CodecFamily.HEVC, "av1", CodecFamily.AV1);
     assertThat(advertised)
         .extracting(encoder -> encoder.backend().codecFamily())
-        .containsExactlyInAnyOrder(CodecFamily.values());
-    assertThat(advertised)
-        .allSatisfy(
-            encoder ->
-                assertThat(service.resolveEncoder(encoder.backend().codecFamily().familyName()))
-                    .isEqualTo(encoder.backend()));
+        .containsExactlyInAnyOrderElementsOf(codecFamilies.values());
+    codecFamilies.forEach(
+        (familyName, family) ->
+            assertThat(advertised)
+                .filteredOn(encoder -> encoder.backend().codecFamily() == family)
+                .singleElement()
+                .extracting(WorkerVerifiedEncoder::backend)
+                .isEqualTo(service.resolveEncoder(familyName)));
     assertThat(advertised)
         .containsExactlyInAnyOrder(
             WorkerVerifiedEncoder.builder()

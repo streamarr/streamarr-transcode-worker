@@ -23,10 +23,6 @@ public enum CodecFamily {
         .findFirst();
   }
 
-  String familyName() {
-    return familyName;
-  }
-
   String softwareEncoder() {
     return softwareEncoder;
   }
