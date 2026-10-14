@@ -130,7 +130,7 @@ public final class FfprobeExecutor {
 
     return new ContainerIndexProbe(objectMapper, this::run)
         .addKeyframes(
-            ContainerIndexProbe.Probed.builder()
+            ProbedSource.builder()
                 .source(attempt.source())
                 .ffprobeOutput(json)
                 .result(result)
