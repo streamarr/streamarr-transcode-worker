@@ -23,6 +23,11 @@ final class BoxFields {
     return Byte.toUnsignedInt(buffer.get());
   }
 
+  int u16() {
+    require(2);
+    return Short.toUnsignedInt(buffer.getShort());
+  }
+
   int u24() {
     require(3);
     return Byte.toUnsignedInt(buffer.get()) << 16 | Short.toUnsignedInt(buffer.getShort());

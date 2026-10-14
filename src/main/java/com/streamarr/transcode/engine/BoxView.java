@@ -27,6 +27,15 @@ record BoxView(@NonNull String type, @NonNull ByteBuffer body) {
     return children;
   }
 
+  /** The boxes that follow the first bytes of the body, such as a sample entry's fixed fields. */
+  BoxView after(int bytes) {
+    if (bytes > body.remaining()) {
+      throw FragmentedMp4Exception.malformed(type + " ends before its fields do");
+    }
+
+    return new BoxView(type, body.slice(bytes, body.remaining() - bytes));
+  }
+
   BoxView requiredChild(String childType) {
     return children(childType).stream()
         .findFirst()
