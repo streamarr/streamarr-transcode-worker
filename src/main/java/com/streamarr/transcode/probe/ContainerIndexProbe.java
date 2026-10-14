@@ -27,7 +27,6 @@ import tools.jackson.databind.ObjectMapper;
 final class ContainerIndexProbe {
 
   private static final String MP4_FORMAT = "mov,mp4,m4a,3gp,3g2,mj2";
-  private static final String MATROSKA_FORMAT = "matroska,webm";
   private static final BigInteger MICROSECONDS_PER_SECOND = BigInteger.valueOf(1_000_000);
 
   @NonNull private final ObjectMapper objectMapper;
@@ -58,14 +57,14 @@ final class ContainerIndexProbe {
 
   private KeyframeIndex readIndex(ProbedSource probed, ChosenVideoStream chosen)
       throws IOException {
-    var format = probed.ffprobeOutput().path("format").path("format_name").asString("");
-    return switch (format) {
+    return switch (probed.formatName()) {
       case MP4_FORMAT ->
           chosen.trackId().isPresent()
               ? Mp4SyncSampleReader.read(probed.source(), chosen.trackId().get())
               : new Unusable(
                   KeyframePacketScanReason.KEYFRAME_PACKET_SCAN_REASON_INCOMPLETE_CONTAINER_INDEX);
-      case MATROSKA_FORMAT -> MatroskaCueReader.read(probed.source(), chosen.videoOrdinal());
+      case ProbedSource.MATROSKA_FORMAT ->
+          MatroskaCueReader.read(probed.source(), chosen.videoOrdinal());
       default ->
           new Unusable(KeyframePacketScanReason.KEYFRAME_PACKET_SCAN_REASON_NO_CONTAINER_INDEX);
     };

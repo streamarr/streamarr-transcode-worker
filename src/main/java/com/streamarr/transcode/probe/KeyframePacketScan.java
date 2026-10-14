@@ -25,7 +25,6 @@ import tools.jackson.databind.JsonNode;
 @RequiredArgsConstructor
 final class KeyframePacketScan {
 
-  private static final String MATROSKA_FORMAT = "matroska,webm";
   private static final String NO_VALUE = "N/A";
 
   @NonNull private final PacketLineRunner ffprobe;
@@ -113,8 +112,7 @@ final class KeyframePacketScan {
    * its decode time, which is how FFmpeg's muxers fill the missing time of such a packet.
    */
   private static TimeRule timeRule(ProbedSource probed, JsonNode stream) {
-    var format = probed.ffprobeOutput().path("format").path("format_name").asString("");
-    if (MATROSKA_FORMAT.equals(format)) {
+    if (ProbedSource.MATROSKA_FORMAT.equals(probed.formatName())) {
       return TimeRule.DECODE_AT_PRESENTATION;
     }
 
