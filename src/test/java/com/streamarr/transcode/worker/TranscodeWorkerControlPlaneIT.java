@@ -965,7 +965,11 @@ class TranscodeWorkerControlPlaneIT {
         return;
       }
       server.shutdownNow();
-      server.awaitTermination();
+      // A hang guard: a JUnit timeout interrupts only once, and a wait in the test body may
+      // already have consumed that interrupt.
+      assertThat(server.awaitTermination(1, TimeUnit.MINUTES))
+          .as("the control-plane server terminates")
+          .isTrue();
     }
   }
 

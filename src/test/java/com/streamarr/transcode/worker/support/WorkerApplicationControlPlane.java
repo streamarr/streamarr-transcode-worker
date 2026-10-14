@@ -1,6 +1,7 @@
 package com.streamarr.transcode.worker.support;
 
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
@@ -21,6 +22,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import lombok.Builder;
 
@@ -147,7 +149,11 @@ public final class WorkerApplicationControlPlane
   @Override
   public void close() throws InterruptedException {
     server.shutdownNow();
-    server.awaitTermination();
+    // A hang guard: a JUnit timeout interrupts only once, and a wait in the test body may
+    // already have consumed that interrupt.
+    assertThat(server.awaitTermination(1, TimeUnit.MINUTES))
+        .as("the control-plane server terminates")
+        .isTrue();
   }
 
   public static class WorkerApplicationControlPlaneBuilder {
