@@ -17,11 +17,11 @@ public class FfmpegCommandBuilder {
 
   // The 8-bit 4:2:0 format every encoder takes unless its traits name another.
   private static final String DEFAULT_EIGHT_BIT_PIXEL_FORMAT = "yuv420p";
-  private static final EncoderTraits UNLISTED_ENCODER = EncoderTraits.builder().build();
-  private static final EncoderTraits FIXED_GOP = EncoderTraits.builder().fixedGop(true).build();
+  private static final EncoderTraits UNLISTED_ENCODER = traits().build();
+  private static final EncoderTraits FIXED_GOP = traits().fixedGop(true).build();
   // QSV takes nv12 from system memory and refuses yuv420p.
   private static final EncoderTraits QSV =
-      EncoderTraits.builder().fixedGop(true).eightBitPixelFormat("nv12").build();
+      traits().fixedGop(true).eightBitPixelFormat("nv12").build();
 
   // What the command passes each encoder differently; an encoder not listed has none of it. A
   // keyframe-verified encoder's recordings show every forced keyframe as a sync sample that starts
@@ -32,13 +32,10 @@ public class FfmpegCommandBuilder {
       Map.ofEntries(
           Map.entry(
               "libx264",
-              EncoderTraits.builder()
-                  .keyframeVerified(true)
-                  .disablesSceneCutsByThreshold(true)
-                  .build()),
+              traits().keyframeVerified(true).disablesSceneCutsByThreshold(true).build()),
           Map.entry(
               "libsvtav1",
-              EncoderTraits.builder()
+              traits()
                   .keyframeVerified(true)
                   .fixedGop(true)
                   .capsBitrateOnlyInCrfMode(true)
@@ -288,10 +285,9 @@ public class FfmpegCommandBuilder {
       boolean fixedGop,
       boolean disablesSceneCutsByThreshold,
       boolean capsBitrateOnlyInCrfMode,
-      @NonNull String eightBitPixelFormat) {
+      @NonNull String eightBitPixelFormat) {}
 
-    private static class EncoderTraitsBuilder {
-      private String eightBitPixelFormat = DEFAULT_EIGHT_BIT_PIXEL_FORMAT;
-    }
+  private static EncoderTraits.EncoderTraitsBuilder traits() {
+    return EncoderTraits.builder().eightBitPixelFormat(DEFAULT_EIGHT_BIT_PIXEL_FORMAT);
   }
 }
