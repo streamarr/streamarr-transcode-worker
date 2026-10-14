@@ -71,10 +71,13 @@ class TranscodeWorkerProbeTest {
       throws Exception {
     var fixture = getClass().getResource("/keyframes/mp4-bframes-editlist.mp4");
     assertThat(fixture).isNotNull();
-    Files.copy(Path.of(fixture.toURI()), tempDir.resolve("movie.mkv"));
+    Files.copy(Path.of(fixture.toURI()), tempDir.resolve("movie.mp4"));
     var runtime = new ScriptedWorkerRuntime();
     var request =
-        requestBuilder().setProbeVersion(FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION).build();
+        requestBuilder()
+            .setProbeVersion(FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION)
+            .setSource(sourceBuilder().setRelativeKey("movie.mp4"))
+            .build();
     var producer =
         new FfprobeExecutor(
             new ObjectMapper(),
