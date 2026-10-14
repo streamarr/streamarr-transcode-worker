@@ -125,7 +125,8 @@ final class KeyframePacketScan {
   }
 
   private static TimeBase timeBase(JsonNode stream) {
-    var parts = stream.path("time_base").asString("").split("/");
+    var value = stream.path("time_base").asString("");
+    var parts = value.split("/");
     try {
       if (parts.length == 2) {
         return new TimeBase(Long.parseLong(parts[0]), Long.parseLong(parts[1]));
@@ -134,7 +135,7 @@ final class KeyframePacketScan {
       // Reported below with the value that could not be read.
     }
 
-    throw new PacketScanException("ffprobe reported an unreadable time base: " + stream);
+    throw new PacketScanException("ffprobe reported an unreadable time base: '" + value + "'");
   }
 
   /**
