@@ -10,6 +10,7 @@ import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import com.google.protobuf.Duration;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.channels.ClosedByInterruptException;
 import java.nio.file.Path;
@@ -139,12 +140,18 @@ public final class FfprobeExecutor {
 
   private ProcessOutput run(List<String> arguments)
       throws ExecutionException, InterruptedException {
+    var finished = run(arguments, InputStream::readAllBytes);
+    return new ProcessOutput(finished.output(), finished.exitCode());
+  }
+
+  private <T> Finished<T> run(List<String> arguments, StdoutReader<T> reader)
+      throws ExecutionException, InterruptedException {
     var process = processFactory.apply(arguments);
     try (var readers = Executors.newVirtualThreadPerTaskExecutor()) {
-      var output = readers.submit(() -> readOutput(process));
+      var output = readers.submit(() -> readOutput(process, reader));
       try {
         var exitCode = process.waitFor();
-        return new ProcessOutput(output.get(), exitCode);
+        return new Finished<>(output.get(), exitCode);
       } finally {
         if (process.isAlive()) {
           terminate(process);
@@ -153,9 +160,9 @@ public final class FfprobeExecutor {
     }
   }
 
-  private byte[] readOutput(Process process) throws IOException {
+  private <T> T readOutput(Process process, StdoutReader<T> reader) throws IOException {
     try (var output = process.getInputStream()) {
-      return output.readAllBytes();
+      return reader.read(output);
     }
   }
 
@@ -301,4 +308,11 @@ public final class FfprobeExecutor {
   }
 
   private record Attempt(Path source, ProbeRequest request, ProbeAttemptResult.Builder result) {}
+
+  @FunctionalInterface
+  private interface StdoutReader<T> {
+    T read(InputStream stdout) throws IOException;
+  }
+
+  private record Finished<T>(T output, int exitCode) {}
 }
