@@ -178,7 +178,7 @@ final class KeyframePacketScan {
     /** A keyframe without a time decides the outcome, so the scan needs no lines after it. */
     @Override
     public boolean take(String line) {
-      if (line.isBlank() || line.startsWith("#")) {
+      if (line.startsWith("#")) {
         return true;
       }
 
