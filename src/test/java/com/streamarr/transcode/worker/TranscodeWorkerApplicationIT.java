@@ -126,13 +126,7 @@ class TranscodeWorkerApplicationIT {
     try (var controlPlane = WorkerApplicationControlPlane.builder().build()) {
       var fixture = ApplicationFixture.builder().port(controlPlane.port()).ffprobe(binary).build();
       try (var worker = start(applicationProcess(fixture))) {
-        assertThat(worker.awaitExitBeforeRegistration(controlPlane))
-            .as("startup refuses an unavailable producer")
-            .isNotZero();
-        assertThat(controlPlane.registrationsAfterExit()).isEmpty();
-        assertThat(controlPlane.wasContacted())
-            .as("the worker checks ffprobe before it connects to the server")
-            .isFalse();
+        assertStartupRefusedBeforeContact(worker, controlPlane, "ffprobe");
       }
     }
   }
@@ -153,13 +147,7 @@ class TranscodeWorkerApplicationIT {
     try (var controlPlane = WorkerApplicationControlPlane.builder().build()) {
       var fixture = ApplicationFixture.builder().port(controlPlane.port()).ffprobe(binary).build();
       try (var worker = start(applicationProcess(fixture))) {
-        assertThat(worker.awaitExitBeforeRegistration(controlPlane))
-            .as("the worker refuses startup after the configured ffprobe fails its version check")
-            .isNotZero();
-        assertThat(controlPlane.registrationsAfterExit()).isEmpty();
-        assertThat(controlPlane.wasContacted())
-            .as("the worker checks ffprobe before it connects to the server")
-            .isFalse();
+        assertStartupRefusedBeforeContact(worker, controlPlane, "ffprobe");
       }
     }
   }
@@ -268,15 +256,21 @@ class TranscodeWorkerApplicationIT {
           .environment()
           .put("TRANSCODE_WORKER_FFMPEG_PATH", tempDir.resolve("missing-ffmpeg").toString());
       try (var worker = start(processBuilder)) {
-        assertThat(worker.awaitExitBeforeRegistration(controlPlane))
-            .as("startup refuses missing FFmpeg")
-            .isNotZero();
-        assertThat(controlPlane.registrationsAfterExit()).isEmpty();
-        assertThat(controlPlane.wasContacted())
-            .as("the worker checks FFmpeg before it connects to the server")
-            .isFalse();
+        assertStartupRefusedBeforeContact(worker, controlPlane, "FFmpeg");
       }
     }
+  }
+
+  private static void assertStartupRefusedBeforeContact(
+      WorkerApplicationProcess worker, WorkerApplicationControlPlane controlPlane, String binary)
+      throws Exception {
+    assertThat(worker.awaitExitBeforeRegistration(controlPlane))
+        .as("the worker refuses startup when the %s check fails", binary)
+        .isNotZero();
+    assertThat(controlPlane.registrationsAfterExit()).isEmpty();
+    assertThat(controlPlane.wasContacted())
+        .as("the worker checks %s before it connects to the server", binary)
+        .isFalse();
   }
 
   private Path versionOnlyFfprobe() throws Exception {
