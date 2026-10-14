@@ -39,8 +39,6 @@ import io.grpc.Server;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.grpc.stub.StreamObserver;
 import java.io.ByteArrayOutputStream;
-import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -70,7 +68,6 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
-import tools.jackson.databind.ObjectMapper;
 
 @Tag("SmokeTest")
 @DisplayName("Worker Media Smoke Tests")
@@ -108,6 +105,7 @@ class WorkerMediaSmokeTest {
   private static final Duration JOB_LIMIT = Duration.ofMinutes(5);
   private static final String EMPTY_EDIT_SOURCE = "mp4-empty-edit.mp4";
   private static final String TRIMMED_START_SOURCE = "mp4-trimmed-start.mp4";
+  private static final String FRACTIONAL_START_SOURCE = "mp4-fractional-start.mp4";
   private static final int PERMITTED_KEEPALIVE_SECONDS = 10;
 
   @TempDir static Path longSources;
@@ -188,7 +186,8 @@ class WorkerMediaSmokeTest {
         "mp4-bframes-editlist.mp4",
         "mkv-libavformat.mkv",
         EMPTY_EDIT_SOURCE,
-        TRIMMED_START_SOURCE
+        TRIMMED_START_SOURCE,
+        FRACTIONAL_START_SOURCE
       })
   @DisplayName(
       "Should report the keyframes that ffprobe reads from the packets when the worker reads a"
@@ -885,8 +884,10 @@ class WorkerMediaSmokeTest {
         .build();
   }
 
-  // Two MP4 edit lists that FFmpeg's stream copy writes: an empty edit that delays the video by
-  // 0.5 s, and an edit that starts the media between two keyframes.
+  // Three MP4 sources that FFmpeg's stream copy writes: an empty edit that delays the video by
+  // 0.5 s, an edit that starts the media between two keyframes, and a container start of 0.276009
+  // s,
+  // which is 3,391.6 ticks of the video's 1/12288 s time base.
   private Path keyframeSource(String fixture) throws Exception {
     var resource = getClass().getResource("/keyframes/" + fixture);
     var base = getClass().getResource("/keyframes/mp4-bframes-editlist.mp4");
@@ -910,6 +911,11 @@ class WorkerMediaSmokeTest {
                 "-c",
                 "copy"),
             output);
+        yield output;
+      }
+      case FRACTIONAL_START_SOURCE -> {
+        var output = root.resolve(fixture);
+        runFfmpeg(List.of("-itsoffset", "0.3", "-i", basePath, "-c", "copy"), output);
         yield output;
       }
       case TRIMMED_START_SOURCE -> {
@@ -939,38 +945,51 @@ class WorkerMediaSmokeTest {
     return times;
   }
 
-  // The keyframe packets of stream 0 on the zero-based timeline. A Matroska keyframe's decode time
-  // is its cue time, which equals its presentation time.
+  // The keyframe packets of stream 0 as FFmpeg's -copyts -start_at_zero passes them to a muxer,
+  // which is the contract's zero-based timeline. framecrc adds the packet flags to every line whose
+  // packet is not only a keyframe. A Matroska keyframe's decode time is its cue time, which equals
+  // its presentation time.
   private static List<KeyframeTime> packetKeyframes(Path source, KeyframePositions positions)
       throws Exception {
     var process =
         new ProcessBuilder(
-                "ffprobe",
-                "-v",
-                "quiet",
-                "-print_format",
-                "json",
-                "-select_streams",
-                "0",
-                "-show_entries",
-                "packet=pts,dts,flags:format=start_time",
-                source.toString())
+                "ffmpeg",
+                "-hide_banner",
+                "-nostdin",
+                "-loglevel",
+                "error",
+                "-copyts",
+                "-start_at_zero",
+                "-i",
+                source.toString(),
+                "-map",
+                "0:0",
+                "-c",
+                "copy",
+                "-f",
+                "framecrc",
+                "-")
             .redirectError(ProcessBuilder.Redirect.DISCARD)
             .start();
-    var json = new ObjectMapper().readTree(process.getInputStream().readAllBytes());
+    var lines =
+        new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8)
+            .lines()
+            .toList();
     assertThat(process.waitFor(1, TimeUnit.MINUTES)).isTrue();
-    var start =
-        new BigDecimal(json.path("format").path("start_time").asString())
-            .multiply(BigDecimal.valueOf(positions.getTimeBaseDenominator()))
-            .divide(BigDecimal.valueOf(positions.getTimeBaseNumerator()), 0, RoundingMode.HALF_UP)
-            .longValueExact();
+    assertThat(process.exitValue()).isZero();
+    assertThat(lines)
+        .contains(
+            "#tb 0: %d/%d"
+                .formatted(positions.getTimeBaseNumerator(), positions.getTimeBaseDenominator()));
     var isMatroska = source.toString().endsWith(".mkv");
     var keyframes = new ArrayList<KeyframeTime>();
-    for (var packet : json.path("packets")) {
-      if (packet.path("flags").asString().startsWith("K")) {
-        var presentation = packet.path("pts").asLong();
-        var decode = isMatroska ? presentation : packet.path("dts").asLong();
-        keyframes.add(new KeyframeTime(presentation - start, decode - start));
+    for (var line : lines.stream().filter(line -> !line.startsWith("#")).toList()) {
+      var fields = Arrays.stream(line.split(",")).map(String::trim).toList();
+      var flags = fields.size() > 6 ? Integer.decode(fields.get(6).substring("F=".length())) : 1;
+      if ((flags & 1) != 0) {
+        var presentation = Long.parseLong(fields.get(2));
+        var decode = isMatroska ? presentation : Long.parseLong(fields.get(1));
+        keyframes.add(new KeyframeTime(presentation, decode));
       }
     }
 
