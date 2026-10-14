@@ -9,16 +9,20 @@ import build.buf.gen.streamarr.transcode.v1.ProbeMediaInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import com.google.protobuf.Duration;
+import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.UncheckedIOException;
 import java.nio.channels.ClosedByInterruptException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
@@ -32,10 +36,7 @@ public final class FfprobeExecutor {
 
   public static final int PROBE_VERSION = 1;
 
-  /**
-   * The probe version whose results carry keyframe positions. The worker does not advertise it
-   * until it can also scan the packets of a source without a usable index.
-   */
+  /** The probe version whose results carry keyframe positions. */
   public static final int KEYFRAME_POSITIONS_PROBE_VERSION = 3;
 
   private static final int AVERROR_INVALIDDATA = -1094995529;
@@ -93,14 +94,12 @@ public final class FfprobeExecutor {
     }
   }
 
-  // This worker cannot scan packets yet, so it refuses every packet-scan request.
   private boolean isSupported(ProbeRequest request) {
-    if (request.getScanKeyframePackets()) {
-      return false;
+    if (request.getProbeVersion() == KEYFRAME_POSITIONS_PROBE_VERSION) {
+      return true;
     }
 
-    return request.getProbeVersion() == PROBE_VERSION
-        || request.getProbeVersion() == KEYFRAME_POSITIONS_PROBE_VERSION;
+    return request.getProbeVersion() == PROBE_VERSION && !request.getScanKeyframePackets();
   }
 
   private ProbeAttemptReport execute(Attempt attempt)
@@ -129,19 +128,31 @@ public final class FfprobeExecutor {
       return ProbeAttemptReport.resultOnly(result);
     }
 
-    return new ContainerIndexProbe(objectMapper, this::run)
-        .addKeyframes(
-            ProbedSource.builder()
-                .source(attempt.source())
-                .ffprobeOutput(json)
-                .result(result)
-                .build());
+    var probed =
+        ProbedSource.builder().source(attempt.source()).ffprobeOutput(json).result(result).build();
+    if (attempt.request().getScanKeyframePackets()) {
+      return new KeyframePacketScan(this::runLines).addKeyframes(probed);
+    }
+
+    return new ContainerIndexProbe(objectMapper, this::run).addKeyframes(probed);
   }
 
   private ProcessOutput run(List<String> arguments)
       throws ExecutionException, InterruptedException {
     var finished = run(arguments, InputStream::readAllBytes);
     return new ProcessOutput(finished.output(), finished.exitCode());
+  }
+
+  private int runLines(List<String> arguments, Consumer<String> lines)
+      throws ExecutionException, InterruptedException {
+    StdoutReader<Void> reader =
+        stdout -> {
+          new BufferedReader(new InputStreamReader(stdout, StandardCharsets.UTF_8))
+              .lines()
+              .forEach(lines);
+          return null;
+        };
+    return run(arguments, reader).exitCode();
   }
 
   private <T> Finished<T> run(List<String> arguments, StdoutReader<T> reader)

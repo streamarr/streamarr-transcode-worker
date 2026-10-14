@@ -90,6 +90,44 @@ class FfprobeExecutorProcessTest {
     assertThat(completed.interrupted()).isTrue();
   }
 
+  @Test
+  @Timeout(10)
+  @DisplayName(
+      "Should report CANCELLED and stop ffprobe when a packet scan is cancelled while the source"
+          + " blocks reads")
+  void shouldReportCancelledAndStopFfprobeWhenPacketScanIsCancelledWhileSourceBlocksReads()
+      throws Exception {
+    var source = temporaryDirectory.resolve("movie.ts");
+    var fifo = new ProcessBuilder("mkfifo", source.toString()).start();
+    assertThat(fifo.waitFor()).isZero();
+    // The packet scan reads the source, a FIFO that no process writes, so the read never returns.
+    var binary =
+        script(
+            """
+        for source; do :; done
+        case "$*" in
+          *packet=pts,dts,flags*)
+            printf '%s\n' 'pts=0|dts=0|flags=K__'
+            printf '%s' "$$" > "$0.pid"
+            exec cat "$source"
+            ;;
+        esac
+        printf '%s' '{"format":{"format_name":"mpegts","start_time":"0.000000"},
+          "streams":[{"index":0,"codec_type":"video","time_base":"1/90000","has_b_frames":2}]}'
+        """);
+    var request =
+        request().toBuilder()
+            .setProbeVersion(FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION)
+            .setScanKeyframePackets(true)
+            .build();
+
+    var completed = probeUntilInterrupted(binary, source, request);
+
+    assertThat(completed.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_CANCELLED);
+    assertThat(completed.processAlive()).isFalse();
+    assertThat(completed.interrupted()).isTrue();
+  }
+
   /**
    * Probes on its own thread and interrupts that thread once the scripted ffprobe writes its
    * process id to the file beside the script.

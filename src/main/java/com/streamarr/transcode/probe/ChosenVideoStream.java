@@ -5,10 +5,11 @@ import tools.jackson.databind.JsonNode;
 
 /**
  * The chosen video stream: the first video stream that is not an attached picture. Its video
- * ordinal counts the video streams before it, and its track ID is the MP4 track_ID ffprobe reports
- * as the stream id.
+ * ordinal counts the video streams before it, its track ID is the MP4 track_ID ffprobe reports as
+ * the stream id, and its description is ffprobe's stream entry.
  */
-record ChosenVideoStream(int streamIndex, int videoOrdinal, Optional<Long> trackId) {
+record ChosenVideoStream(
+    int streamIndex, int videoOrdinal, Optional<Long> trackId, JsonNode description) {
 
   static Optional<ChosenVideoStream> find(JsonNode streams) {
     var videoOrdinal = 0;
@@ -18,7 +19,7 @@ record ChosenVideoStream(int streamIndex, int videoOrdinal, Optional<Long> track
       if (isVideo && stream.path("disposition").path("attached_pic").asInt() != 1) {
         return Optional.of(
             new ChosenVideoStream(
-                stream.path("index").asInt(position), videoOrdinal, trackId(stream)));
+                stream.path("index").asInt(position), videoOrdinal, trackId(stream), stream));
       }
 
       if (isVideo) {

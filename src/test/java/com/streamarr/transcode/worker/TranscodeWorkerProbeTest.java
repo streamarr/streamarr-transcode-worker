@@ -16,6 +16,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import build.buf.gen.streamarr.transcode.v1.CancelProbeCommand;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
+import build.buf.gen.streamarr.transcode.v1.KeyframePositionSource;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeContainerInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
@@ -115,6 +116,62 @@ class TranscodeWorkerProbeTest {
                               .getPositions()
                               .getKeyframeCount())
                       .isEqualTo(4));
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should send the scanned keyframe positions before the probe result when the server requests"
+          + " a packet scan")
+  void shouldSendScannedKeyframePositionsBeforeProbeResultWhenServerRequestsPacketScan()
+      throws Exception {
+    Files.writeString(tempDir.resolve("movie.ts"), "media");
+    var runtime = new ScriptedWorkerRuntime();
+    var request =
+        requestBuilder()
+            .setProbeVersion(FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION)
+            .setScanKeyframePackets(true)
+            .setSource(sourceBuilder().setRelativeKey("movie.ts"))
+            .build();
+    var producer =
+        new FfprobeExecutor(
+            new ObjectMapper(),
+            arguments ->
+                processBuilder()
+                    .stdout(
+                        arguments.contains("packet=pts,dts,flags")
+                            ? """
+                              pts=0|dts=0|flags=K__
+                              pts=3750|dts=3750|flags=___
+                              pts=180000|dts=180000|flags=K__
+                              """
+                            : """
+                              {"format":{"format_name":"mpegts","start_time":"0.000000"},
+                               "streams":[{"index":0,"codec_type":"video",
+                                           "time_base":"1/90000","has_b_frames":0}]}
+                              """)
+                    .build());
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).ffprobe(producer).build()) {
+      worker.start("localhost", 1);
+      start(runtime.connection(), request);
+      runtime.probes().drain();
+
+      assertThat(runtime.connection().events())
+          .filteredOn(event -> !event.hasRegistration())
+          .satisfiesExactly(
+              part ->
+                  assertThat(part.getProbeKeyframePositionsPart().getPresentationTimeDeltasList())
+                      .containsExactly(0L, 180_000L),
+              result ->
+                  assertThat(result.getProbeResult().getMedia().getKeyframes().getPositions())
+                      .satisfies(
+                          positions -> {
+                            assertThat(positions.getKeyframeCount()).isEqualTo(2);
+                            assertThat(positions.getSource())
+                                .isEqualTo(
+                                    KeyframePositionSource.KEYFRAME_POSITION_SOURCE_PACKET_SCAN);
+                          }));
     }
   }
 

@@ -6,6 +6,7 @@ import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.start;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variantJobBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 import build.buf.gen.streamarr.transcode.v1.AudioMode;
 import build.buf.gen.streamarr.transcode.v1.EncoderPreset;
@@ -13,6 +14,7 @@ import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptCompleted;
 import build.buf.gen.streamarr.transcode.v1.KeyframePacketScanReason;
+import build.buf.gen.streamarr.transcode.v1.KeyframePositionSource;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositions;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
@@ -50,6 +52,7 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -105,6 +108,7 @@ class WorkerMediaSmokeTest {
   private static final Duration JOB_LIMIT = Duration.ofMinutes(5);
   private static final String EMPTY_EDIT_SOURCE = "mp4-empty-edit.mp4";
   private static final String TRIMMED_START_SOURCE = "mp4-trimmed-start.mp4";
+  private static final String MOV_SOURCE = "mov-bframes-editlist.mov";
   private static final String FRACTIONAL_START_SOURCE = "mp4-fractional-start.mp4";
   private static final String NEGATIVE_OFFSETS_SOURCE = "mp4-negative-offsets.mp4";
   private static final String NEGATIVE_OFFSETS_EMPTY_EDIT_SOURCE =
@@ -224,6 +228,116 @@ class WorkerMediaSmokeTest {
     var result = keyframeProbe(keyframeSource(fixture));
 
     assertThat(result.getMedia().getKeyframes().getPacketScanRequired()).isEqualTo(reason);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(
+      strings = {
+        "mp4-bframes-editlist.mp4",
+        MOV_SOURCE,
+        "mkv-libavformat.mkv",
+        EMPTY_EDIT_SOURCE,
+        TRIMMED_START_SOURCE,
+        FRACTIONAL_START_SOURCE,
+        NEGATIVE_OFFSETS_SOURCE,
+        NEGATIVE_OFFSETS_EMPTY_EDIT_SOURCE
+      })
+  @DisplayName(
+      "Should report the container index's keyframe positions when a packet scan reads a source"
+          + " with an index")
+  void shouldReportContainerIndexKeyframePositionsWhenPacketScanReadsSourceWithIndex(String fixture)
+      throws Exception {
+    var source = keyframeSource(fixture);
+    var ffprobe = FfprobeExecutor.forBinary(Path.of("ffprobe"));
+
+    var index = ffprobe.probe(source, keyframeRequest());
+    var scan = ffprobe.probe(source, packetScanRequest());
+
+    var indexPositions = index.result().getMedia().getKeyframes().getPositions();
+    var scanPositions = scan.result().getMedia().getKeyframes().getPositions();
+    assertThat(scanPositions.getSource())
+        .isEqualTo(KeyframePositionSource.KEYFRAME_POSITION_SOURCE_PACKET_SCAN);
+    assertThat(scanPositions.toBuilder().setSource(indexPositions.getSource()).build())
+        .isEqualTo(indexPositions);
+    assertThat(keyframeTimes(scan.keyframePositionsParts()))
+        .isNotEmpty()
+        .isEqualTo(keyframeTimes(index.keyframePositionsParts()));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(
+      strings = {
+        "mpegts.ts",
+        "avi.avi",
+        "mkv-pipe.mkv",
+        "mp4-fragmented.mp4",
+        "mp4-truncated.mp4",
+        "mkv-truncated-cues-front.mkv"
+      })
+  @DisplayName(
+      "Should report the keyframes that FFmpeg passes to a muxer when a packet scan reads a source"
+          + " without a usable index")
+  void shouldReportKeyframesThatFfmpegPassesToMuxerWhenPacketScanReadsSourceWithoutUsableIndex(
+      String fixture) throws Exception {
+    var source = keyframeSource(fixture);
+
+    var report = FfprobeExecutor.forBinary(Path.of("ffprobe")).probe(source, packetScanRequest());
+
+    var positions = report.result().getMedia().getKeyframes().getPositions();
+    var packetKeyframes = packetKeyframes(source, positions);
+    assertThat(positions.getKeyframeCount()).isEqualTo(packetKeyframes.size()).isPositive();
+    assertThat(keyframeTimes(report.keyframePositionsParts())).isEqualTo(packetKeyframes);
+  }
+
+  @Test
+  @DisplayName(
+      "Should report CANCELLED and stop ffprobe when a packet scan is cancelled while the source"
+          + " blocks reads")
+  void shouldReportCancelledAndStopFfprobeWhenPacketScanIsCancelledWhileSourceBlocksReads()
+      throws Exception {
+    var fixture = getClass().getResource("/keyframes/mpegts.ts");
+    assertThat(fixture).isNotNull();
+    var source = root.resolve("blocked.ts");
+    var mkfifo = new ProcessBuilder("mkfifo", source.toString()).start();
+    assertThat(mkfifo.waitFor()).isZero();
+    // The writer serves the stream probe once. The packet scan then opens a FIFO that no process
+    // writes, as a stalled read from network storage would block it.
+    var writer =
+        Thread.ofVirtual()
+            .start(
+                () -> {
+                  try {
+                    Files.write(source, Files.readAllBytes(Path.of(fixture.toURI())));
+                  } catch (Exception _) {
+                    // The test fails on the probe result instead.
+                  }
+                });
+    var result = new CompletableFuture<ProbeAttemptResult>();
+    var probe =
+        Thread.ofVirtual()
+            .start(
+                () ->
+                    result.complete(
+                        FfprobeExecutor.forBinary(Path.of("ffprobe"))
+                            .probe(source, packetScanRequest())
+                            .result()));
+
+    try {
+      var scan =
+          await()
+              .atMost(Duration.ofSeconds(30))
+              .until(() -> packetScanProcess(source), Optional::isPresent)
+              .orElseThrow();
+      probe.interrupt();
+
+      assertThat(result.get(10, TimeUnit.SECONDS).getFailure())
+          .isEqualTo(ProbeFailure.PROBE_FAILURE_CANCELLED);
+      assertThat(scan.isAlive()).isFalse();
+    } finally {
+      probe.interrupt();
+      writer.interrupt();
+      packetScanProcess(source).ifPresent(ProcessHandle::destroyForcibly);
+    }
   }
 
   @ParameterizedTest
@@ -883,6 +997,25 @@ class WorkerMediaSmokeTest {
     return FfprobeExecutor.forBinary(Path.of("ffprobe")).probe(source, keyframeRequest()).result();
   }
 
+  private static ProbeRequest packetScanRequest() {
+    return keyframeRequest().toBuilder().setScanKeyframePackets(true).build();
+  }
+
+  private static Optional<ProcessHandle> packetScanProcess(Path source) {
+    return ProcessHandle.current()
+        .descendants()
+        .filter(
+            process ->
+                process
+                    .info()
+                    .arguments()
+                    .map(List::of)
+                    .filter(arguments -> arguments.contains("packet=pts,dts,flags"))
+                    .filter(arguments -> arguments.contains(source.toString()))
+                    .isPresent())
+        .findFirst();
+  }
+
   private static ProbeRequest keyframeRequest() {
     return requestBuilder()
         .setProbeVersion(FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION)
@@ -950,6 +1083,11 @@ class WorkerMediaSmokeTest {
             output);
         yield output;
       }
+      case MOV_SOURCE -> {
+        var output = root.resolve(fixture);
+        runFfmpeg(List.of("-i", basePath, "-c", "copy"), output);
+        yield output;
+      }
       case TRIMMED_START_SOURCE -> {
         var output = root.resolve(fixture);
         runFfmpeg(List.of("-ss", "1", "-i", basePath, "-c", "copy"), output);
@@ -977,9 +1115,11 @@ class WorkerMediaSmokeTest {
     return times;
   }
 
-  // The keyframe packets of stream 0 as FFmpeg's -copyts -start_at_zero passes them to a muxer,
-  // which is the contract's zero-based timeline. framecrc adds the packet flags to every line whose
-  // packet is not only a keyframe. A Matroska keyframe's decode time is its cue time, which equals
+  // The keyframe packets of the chosen stream as FFmpeg's -copyts -start_at_zero passes them to a
+  // muxer, which is the contract's zero-based timeline. Every stream is mapped, because FFmpeg
+  // starts an MPEG-TS source's timeline at the earliest start of the streams it maps. framecrc adds
+  // the packet flags to every line whose packet is not only a keyframe, and side data after them. A
+  // Matroska keyframe's decode time is its cue time, which equals
   // its presentation time.
   private static List<KeyframeTime> packetKeyframes(Path source, KeyframePositions positions)
       throws Exception {
@@ -995,7 +1135,7 @@ class WorkerMediaSmokeTest {
                 "-i",
                 source.toString(),
                 "-map",
-                "0:0",
+                "0",
                 "-c",
                 "copy",
                 "-f",
@@ -1017,8 +1157,14 @@ class WorkerMediaSmokeTest {
     var keyframes = new ArrayList<KeyframeTime>();
     for (var line : lines.stream().filter(line -> !line.startsWith("#")).toList()) {
       var fields = Arrays.stream(line.split(",")).map(String::trim).toList();
-      var flags = fields.size() > 6 ? Integer.decode(fields.get(6).substring("F=".length())) : 1;
-      if ((flags & 1) != 0) {
+      var flags =
+          fields.stream()
+              .filter(field -> field.startsWith("F="))
+              .findFirst()
+              .map(field -> Integer.decode(field.substring("F=".length())))
+              .orElse(1);
+      var isChosenStream = Integer.parseInt(fields.getFirst()) == positions.getStreamIndex();
+      if (isChosenStream && (flags & 1) != 0) {
         var presentation = Long.parseLong(fields.get(2));
         var decode = isMatroska ? presentation : Long.parseLong(fields.get(1));
         keyframes.add(new KeyframeTime(presentation, decode));

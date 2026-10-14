@@ -6,6 +6,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import build.buf.gen.streamarr.transcode.v1.KeyframePacketScanReason;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositionSource;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositions;
+import build.buf.gen.streamarr.transcode.v1.KeyframesUnavailable;
+import build.buf.gen.streamarr.transcode.v1.KeyframesUnavailableReason;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeContainerInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
@@ -34,6 +36,7 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import tools.jackson.databind.ObjectMapper;
 
 @Tag("UnitTest")
@@ -55,7 +58,7 @@ class FfprobeExecutorKeyframeTest {
       {"format":{"format_name":"matroska,webm","start_time":"-0.023000","duration":"4.023000"},
        "streams":[
         {"index":0,"codec_type":"video","codec_name":"h264","r_frame_rate":"24/1",
-         "disposition":{"attached_pic":0}},
+         "time_base":"1/1000","has_b_frames":2,"disposition":{"attached_pic":0}},
         {"index":1,"codec_type":"audio","codec_name":"aac","disposition":{"attached_pic":0}}]}
       """;
   private static final String MP4_LAST_KEYFRAME =
@@ -65,6 +68,15 @@ class FfprobeExecutorKeyframeTest {
   private static final String MATROSKA_LAST_KEYFRAME =
       """
       {"packets":[{"pts":2917,"flags":"K__"}]}
+      """;
+  private static final String MPEGTS_STREAMS =
+      """
+      {"format":{"format_name":"mpegts","start_time":"1.460111","duration":"4.000000"},
+       "streams":[
+        {"index":0,"codec_type":"video","codec_name":"h264","id":"0x100","r_frame_rate":"24/1",
+         "time_base":"1/90000","has_b_frames":2,"disposition":{"attached_pic":0}},
+        {"index":1,"codec_type":"audio","codec_name":"aac","id":"0x101","time_base":"1/90000",
+         "disposition":{"attached_pic":0}}]}
       """;
   private static final String MP4_FORMAT = "mov,mp4,m4a,3gp,3g2,mj2";
   private static final String NO_PACKETS =
@@ -238,9 +250,10 @@ class FfprobeExecutorKeyframeTest {
         .isEqualTo(ProbeFailure.PROBE_FAILURE_UNSUPPORTED_VERSION);
   }
 
-  @Test
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
   @DisplayName("Should report no video stream when every video stream is an attached picture")
-  void shouldReportNoVideoStreamWhenEveryVideoStreamIsAttachedPicture() {
+  void shouldReportNoVideoStreamWhenEveryVideoStreamIsAttachedPicture(boolean scanKeyframePackets) {
     var ffprobe =
         ScriptedFfprobe.builder()
             .streams(
@@ -251,7 +264,9 @@ class FfprobeExecutorKeyframeTest {
                 """)
             .build();
 
-    var report = ffprobe.executor().probe(fixture("mp4-bframes-editlist.mp4"), keyframeRequest());
+    var request = keyframeRequest().toBuilder().setScanKeyframePackets(scanKeyframePackets).build();
+
+    var report = ffprobe.executor().probe(fixture("mp4-bframes-editlist.mp4"), request);
 
     assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_NO_VIDEO_STREAM);
     assertThat(report.result().hasMedia()).isFalse();
@@ -468,6 +483,188 @@ class FfprobeExecutorKeyframeTest {
         .containsExactly(ProbeFailure.PROBE_FAILURE_NO_VIDEO_STREAM, List.of());
   }
 
+  @Test
+  @DisplayName("Should report keyframe positions from a packet scan when the request asks for one")
+  void shouldReportKeyframePositionsFromPacketScanWhenRequestAsksForOne() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(MPEGTS_STREAMS)
+            .packetScan(
+                """
+                pts=133500|dts=126000|flags=K__|
+                pts=144750|dts=129750|flags=___|
+                pts=197250|dts=189750|flags=K__|
+                pts=321000|dts=313500|flags=K__|
+                pts=396000|dts=388500|flags=K__|
+                """)
+            .build();
+    var request = packetScanRequest();
+
+    var report = ffprobe.executor().probe(fixture("mpegts.ts"), request);
+
+    assertThat(report.result().getMedia().getKeyframes())
+        .isEqualTo(
+            ProbeKeyframes.newBuilder()
+                .setPositions(
+                    KeyframePositions.newBuilder()
+                        .setStreamIndex(0)
+                        .setTimeBaseNumerator(1)
+                        .setTimeBaseDenominator(90_000)
+                        .setSource(KeyframePositionSource.KEYFRAME_POSITION_SOURCE_PACKET_SCAN)
+                        .setKeyframeCount(4))
+                .build());
+    // The container starts at 1.460111 s, which is 131,410 ticks, at the first audio packet.
+    assertThat(report.keyframePositionsParts())
+        .containsExactly(
+            ProbeKeyframePositionsPart.newBuilder()
+                .setProbeAttemptId(request.getProbeAttemptId())
+                .addAllPresentationTimeDeltas(List.of(2_090L, 63_750L, 123_750L, 75_000L))
+                .addAllDecodeTimeDeltas(List.of(-5_410L, 63_750L, 123_750L, 75_000L))
+                .build());
+  }
+
+  @Test
+  @DisplayName(
+      "Should take each keyframe's presentation time from its decode time when the scanned stream"
+          + " does not reorder frames")
+  void shouldTakeEachKeyframePresentationTimeFromDecodeTimeWhenScannedStreamDoesNotReorderFrames() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(
+                """
+                {"format":{"format_name":"avi","start_time":"0.000000"},
+                 "streams":[{"index":0,"codec_type":"video","codec_name":"h264",
+                             "time_base":"1/24","has_b_frames":0}]}
+                """)
+            .packetScan(
+                """
+                pts=N/A|dts=0|flags=K__
+                pts=N/A|dts=1|flags=___
+                pts=N/A|dts=18|flags=K__
+                """)
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("avi.avi"), packetScanRequest());
+
+    assertThat(report.keyframePositionsParts())
+        .singleElement()
+        .satisfies(
+            part -> {
+              assertThat(part.getPresentationTimeDeltasList()).containsExactly(0L, 18L);
+              assertThat(part.getDecodeTimeDeltasList()).containsExactly(0L, 18L);
+            });
+  }
+
+  @Test
+  @DisplayName(
+      "Should report each Matroska keyframe's decode time as its presentation time when a packet"
+          + " scan reads a Matroska source")
+  void shouldReportEachMatroskaKeyframeDecodeTimeAsPresentationTimeWhenPacketScanReadsMatroska() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(MATROSKA_STREAMS)
+            .packetScan(
+                """
+                pts=0|dts=N/A|flags=K__
+                pts=708|dts=625|flags=K__
+                """)
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mkv-pipe.mkv"), packetScanRequest());
+
+    assertThat(report.keyframePositionsParts())
+        .singleElement()
+        .satisfies(
+            part -> {
+              assertThat(part.getPresentationTimeDeltasList()).containsExactly(23L, 708L);
+              assertThat(part.getDecodeTimeDeltasList()).containsExactly(23L, 708L);
+            });
+  }
+
+  @ParameterizedTest
+  @CsvSource({"pts=N/A|dts=189750|flags=K__", "pts=197250|dts=N/A|flags=K__"})
+  @DisplayName(
+      "Should report the keyframes unavailable when a keyframe packet has no presentation or decode"
+          + " time")
+  void shouldReportKeyframesUnavailableWhenKeyframePacketHasNoPresentationOrDecodeTime(
+      String keyframePacket) {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(MPEGTS_STREAMS)
+            .packetScan(
+                """
+                pts=133500|dts=126000|flags=K__|
+                pts=N/A|dts=129750|flags=___|
+                %s
+                pts=321000|dts=313500|flags=K__|
+                """
+                    .formatted(keyframePacket))
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
+
+    assertThat(report.result().getMedia().getKeyframes())
+        .isEqualTo(
+            ProbeKeyframes.newBuilder()
+                .setUnavailable(
+                    KeyframesUnavailable.newBuilder()
+                        .setReason(
+                            KeyframesUnavailableReason
+                                .KEYFRAMES_UNAVAILABLE_REASON_KEYFRAME_WITHOUT_TIMESTAMP))
+                .build());
+    assertThat(report.keyframePositionsParts()).isEmpty();
+  }
+
+  @Test
+  @DisplayName("Should report an execution failure when the packet scan exits with an error")
+  void shouldReportExecutionFailureWhenPacketScanExitsWithError() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(MPEGTS_STREAMS)
+            .packetScan("pts=133500|dts=126000|flags=K__|\n")
+            .packetScanExitCode(1)
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
+
+    assertThat(report)
+        .isEqualTo(
+            ProbeAttemptReport.resultOnly(
+                ProbeAttemptResult.newBuilder()
+                    .setProbeAttemptId(report.result().getProbeAttemptId())
+                    .setProbeVersion(FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION)
+                    .setFailure(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED)
+                    .build()));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "\"index\":0",
+        "\"index\":0,\"time_base\":\"0:1\"",
+        "\"index\":0,\"time_base\":\"1/x\""
+      })
+  @DisplayName(
+      "Should report an execution failure when ffprobe gives the scanned stream no readable time"
+          + " base")
+  void shouldReportExecutionFailureWhenFfprobeGivesScannedStreamNoReadableTimeBase(
+      String description) {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(
+                """
+                {"format":{"format_name":"mpegts","start_time":"0.000000"},
+                 "streams":[{"codec_type":"video",%s}]}
+                """
+                    .formatted(description))
+            .packetScan("pts=0|dts=0|flags=K__\n")
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
+
+    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
+  }
+
   private static String streamsOf(String formatName) {
     return """
         {"format":{"format_name":"%s","start_time":"0.000000"},
@@ -475,6 +672,10 @@ class FfprobeExecutorKeyframeTest {
                      "disposition":{"attached_pic":0}}]}
         """
         .formatted(formatName);
+  }
+
+  private static ProbeRequest packetScanRequest() {
+    return keyframeRequest().toBuilder().setScanKeyframePackets(true).build();
   }
 
   private static ProbeRequest keyframeRequest() {
@@ -504,6 +705,8 @@ class FfprobeExecutorKeyframeTest {
       String streams,
       @Singular Map<String, String> packets,
       int packetReadExitCode,
+      String packetScan,
+      int packetScanExitCode,
       boolean cancelAfterStreams) {
 
     FfprobeExecutor executor() {
@@ -512,12 +715,19 @@ class FfprobeExecutorKeyframeTest {
 
     private Process answer(List<String> arguments) {
       var interval = arguments.indexOf("-read_intervals");
-      if (interval < 0) {
-        return new CompletedProcess(streams, 0, cancelAfterStreams);
+      if (interval >= 0) {
+        return new CompletedProcess(
+            packets.getOrDefault(arguments.get(interval + 1), NO_PACKETS),
+            packetReadExitCode,
+            false);
       }
 
-      return new CompletedProcess(
-          packets.getOrDefault(arguments.get(interval + 1), NO_PACKETS), packetReadExitCode, false);
+      if (arguments.contains("packet=pts,dts,flags")) {
+        assertThat(packetScan).as("a scripted packet scan").isNotNull();
+        return new CompletedProcess(packetScan, packetScanExitCode, false);
+      }
+
+      return new CompletedProcess(streams, 0, cancelAfterStreams);
     }
   }
 
