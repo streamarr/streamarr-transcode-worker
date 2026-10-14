@@ -10,6 +10,7 @@ import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import com.streamarr.transcode.worker.support.WorkerApplicationControlPlane;
 import com.streamarr.transcode.worker.support.WorkerApplicationProcess;
+import java.io.File;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.lang.management.ManagementFactory;
@@ -25,7 +26,6 @@ import java.util.ArrayList;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
-import java.util.regex.Pattern;
 import lombok.Builder;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -34,6 +34,8 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.web.server.context.WebServerPortFileWriter;
 
 @Tag("IntegrationTest")
 @DisplayName("Transcode Worker Application Integration Tests")
@@ -45,30 +47,24 @@ class TranscodeWorkerApplicationIT {
   @Test
   @DisplayName("Should serve Actuator liveness when the worker application starts")
   void shouldServeActuatorLivenessWhenTheWorkerApplicationStarts() throws Exception {
+    var portFile = tempDir.resolve("http.port");
     try (var controlPlane = WorkerApplicationControlPlane.builder().build();
         var client = HttpClient.newHttpClient()) {
       var fixture =
           ApplicationFixture.builder()
               .port(controlPlane.port())
               .ffprobe(versionOnlyFfprobe())
+              .mainClass(PortReportingStartup.class)
               .build();
       var processBuilder = applicationProcess(fixture);
-      processBuilder.environment().put("SERVER_PORT", "0");
+      processBuilder.environment().put("WORKER_HTTP_PORT_FILE", portFile.toString());
       try (var worker = start(processBuilder)) {
         worker.awaitRegistration(controlPlane);
-        var announcedPort =
-            Pattern.compile("Tomcat started on port (\\d+)")
-                .matcher(Files.readString(tempDir.resolve("worker.log")));
-        assertThat(announcedPort.find())
-            .as("the application reports its ephemeral HTTP port before registering")
-            .isTrue();
+        var httpPort = Integer.parseInt(Files.readString(portFile).strip());
         var response =
             client.send(
                 HttpRequest.newBuilder(
-                        URI.create(
-                            "http://localhost:"
-                                + announcedPort.group(1)
-                                + "/actuator/health/liveness"))
+                        URI.create("http://localhost:" + httpPort + "/actuator/health/liveness"))
                     .GET()
                     .build(),
                 BodyHandlers.ofString());
@@ -383,10 +379,13 @@ class TranscodeWorkerApplicationIT {
         exec /bin/sleep 300
         """);
     Files.setPosixFilePermissions(binary, PosixFilePermissions.fromString("rwx------"));
-    var fixture = ApplicationFixture.builder().port(1).ffprobe(binary).build();
+    var fixture =
+        ApplicationFixture.builder()
+            .port(1)
+            .ffprobe(binary)
+            .mainClass(InterruptedStartup.class)
+            .build();
     var processBuilder = applicationProcess(fixture);
-    var command = processBuilder.command();
-    command.set(command.size() - 1, InterruptedStartup.class.getName());
     processBuilder.environment().put("PROBE_PID_FILE", pidFile.toString());
     processBuilder.environment().put("PROBE_READY_DIR", signals.toString());
     try (var worker = start(processBuilder)) {
@@ -426,7 +425,7 @@ class TranscodeWorkerApplicationIT {
         .ifPresent(command::add);
     command.add("-cp");
     command.add(System.getProperty("java.class.path"));
-    command.add(TranscodeWorkerApplication.class.getName());
+    command.add(fixture.mainClass().getName());
     var process = new ProcessBuilder(command);
     process.environment().keySet().removeIf(key -> key.startsWith("TRANSCODE_WORKER_"));
     process
@@ -487,7 +486,30 @@ class TranscodeWorkerApplicationIT {
   }
 
   @Builder
-  private record ApplicationFixture(int port, Path ffprobe) {}
+  private record ApplicationFixture(int port, Path ffprobe, Class<?> mainClass) {
+
+    static class ApplicationFixtureBuilder {
+      private Class<?> mainClass = TranscodeWorkerApplication.class;
+    }
+  }
+
+  public static final class PortReportingStartup {
+
+    private PortReportingStartup() {}
+
+    public static void main(String[] args) {
+      var portFile = new File(System.getenv("WORKER_HTTP_PORT_FILE"));
+      SpringApplication.withHook(
+          application -> {
+            application.addListeners(new WebServerPortFileWriter(portFile));
+            return null;
+          },
+          () -> {
+            TranscodeWorkerApplication.main(args);
+            return null;
+          });
+    }
+  }
 
   public static final class InterruptedStartup {
 
