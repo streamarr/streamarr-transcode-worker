@@ -339,8 +339,8 @@ class WorkerMediaSmokeTest {
   }
 
   private static String pixelFormatOf(Path media) throws Exception {
-    var process =
-        new ProcessBuilder(
+    return runToCompletion(
+            List.of(
                 "ffprobe",
                 "-v",
                 "error",
@@ -350,18 +350,8 @@ class WorkerMediaSmokeTest {
                 "stream=pix_fmt",
                 "-of",
                 "csv=p=0",
-                media.toString())
-            .redirectErrorStream(true)
-            .start();
-    try {
-      var output =
-          new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).strip();
-      assertThat(process.waitFor(1, TimeUnit.MINUTES)).as("ffprobe finished").isTrue();
-      assertThat(process.exitValue()).as(output).isZero();
-      return output;
-    } finally {
-      process.destroyForcibly();
-    }
+                media.toString()))
+        .strip();
   }
 
   @ParameterizedTest(name = "{0}")
@@ -604,19 +594,27 @@ class WorkerMediaSmokeTest {
   }
 
   private static void runFfmpeg(List<String> arguments, Path output) throws Exception {
-    var command =
+    runToCompletion(
         Stream.of(
                 List.of("ffmpeg", "-nostdin", "-v", "error", "-y"),
                 arguments,
                 List.of(output.toString()))
             .flatMap(List::stream)
-            .toList();
-    var log = Files.createTempFile(longSources, "ffmpeg", ".log");
+            .toList());
+  }
+
+  // Returns the command's combined output after it exits successfully.
+  private static String runToCompletion(List<String> command) throws Exception {
+    var log = Files.createTempFile(longSources, command.getFirst(), ".log");
     var process =
         new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(log.toFile()).start();
     try {
-      assertThat(process.waitFor(2, TimeUnit.MINUTES)).as("FFmpeg finished").isTrue();
-      assertThat(process.exitValue()).as(Files.readString(log)).isZero();
+      assertThat(process.waitFor(2, TimeUnit.MINUTES))
+          .as(command.getFirst() + " finished")
+          .isTrue();
+      var output = Files.readString(log);
+      assertThat(process.exitValue()).as(output).isZero();
+      return output;
     } finally {
       process.destroyForcibly();
     }
