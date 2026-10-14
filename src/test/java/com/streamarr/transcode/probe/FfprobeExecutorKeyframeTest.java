@@ -18,6 +18,7 @@ import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import com.google.protobuf.Duration;
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.URISyntaxException;
@@ -889,7 +890,8 @@ class FfprobeExecutorKeyframeTest {
 
   /**
    * A packet scan that prints its first line and then repeats the next line until the process is
-   * destroyed, as FFmpeg does while it reads a long source.
+   * destroyed, as FFmpeg does while it reads a long source. Like the JDK's process, destroying it
+   * closes its standard error, so a blocked read of standard error fails.
    */
   private static final class EndlessPacketScan extends Process {
     private final CountDownLatch destroyed = new CountDownLatch(1);
@@ -930,7 +932,18 @@ class FfprobeExecutorKeyframeTest {
 
     @Override
     public InputStream getErrorStream() {
-      return InputStream.nullInputStream();
+      return new InputStream() {
+        @Override
+        public int read() throws IOException {
+          try {
+            destroyed.await();
+          } catch (InterruptedException _) {
+            Thread.currentThread().interrupt();
+          }
+
+          throw new IOException("Stream closed");
+        }
+      };
     }
 
     @Override

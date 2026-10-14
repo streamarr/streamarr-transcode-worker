@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import lombok.NonNull;
@@ -164,17 +165,33 @@ public final class FfprobeExecutor {
       Consumer<String> diagnosticLines)
       throws ExecutionException, InterruptedException {
     var process = processFactory.apply(new ProbeCommand(ProbeTool.FFMPEG, arguments));
+    var stopped = new AtomicBoolean();
     OutputReader<Void> reader =
         stdout -> {
           if (!readLinesWhileNeeded(stdout, packetLines)) {
             // The scan needs no more packets, so FFmpeg stops before it reads the rest of the
             // source.
+            stopped.set(true);
             process.destroyForcibly();
           }
 
           return null;
         };
-    return run(process, reader, stderr -> readLines(stderr, diagnosticLines)).exitCode();
+    OutputReader<Void> diagnosticsReader =
+        stderr -> {
+          try {
+            return readLines(stderr, diagnosticLines);
+          } catch (IOException | UncheckedIOException failure) {
+            // Destroying a process closes its standard error, so the read fails once the scan
+            // has stopped FFmpeg.
+            if (stopped.get()) {
+              return null;
+            }
+
+            throw failure;
+          }
+        };
+    return run(process, reader, diagnosticsReader).exitCode();
   }
 
   private <T> Finished<T> run(List<String> arguments, OutputReader<T> reader)

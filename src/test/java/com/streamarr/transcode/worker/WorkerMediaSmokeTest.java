@@ -16,9 +16,12 @@ import build.buf.gen.streamarr.transcode.v1.JobAttemptCompleted;
 import build.buf.gen.streamarr.transcode.v1.KeyframePacketScanReason;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositionSource;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositions;
+import build.buf.gen.streamarr.transcode.v1.KeyframesUnavailable;
+import build.buf.gen.streamarr.transcode.v1.KeyframesUnavailableReason;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeKeyframePositionsPart;
+import build.buf.gen.streamarr.transcode.v1.ProbeKeyframes;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
@@ -109,6 +112,7 @@ class WorkerMediaSmokeTest {
   private static final String EMPTY_EDIT_SOURCE = "mp4-empty-edit.mp4";
   private static final String TRIMMED_START_SOURCE = "mp4-trimmed-start.mp4";
   private static final String MOV_SOURCE = "mov-bframes-editlist.mov";
+  private static final String REORDERED_AVI_SOURCE = "avi-bframes.avi";
   private static final String FRACTIONAL_START_SOURCE = "mp4-fractional-start.mp4";
   private static final String NEGATIVE_OFFSETS_SOURCE = "mp4-negative-offsets.mp4";
   private static final String NEGATIVE_OFFSETS_EMPTY_EDIT_SOURCE =
@@ -279,6 +283,30 @@ class WorkerMediaSmokeTest {
     var packetKeyframes = packetKeyframes(source, positions);
     assertThat(positions.getKeyframeCount()).isEqualTo(packetKeyframes.size()).isPositive();
     assertThat(keyframeTimes(report.keyframePositionsParts())).isEqualTo(packetKeyframes);
+  }
+
+  @Test
+  @DisplayName(
+      "Should report the keyframes unavailable when a packet scan reads an AVI whose video reorders"
+          + " frames")
+  void shouldReportKeyframesUnavailableWhenPacketScanReadsAviWhoseVideoReordersFrames()
+      throws Exception {
+    // AVI stores no presentation times. With B-frames, a keyframe's presentation time differs from
+    // its decode time, and FFmpeg's copy into MP4 presents every frame at its decode time.
+    var source = keyframeSource(REORDERED_AVI_SOURCE);
+
+    var report = probeExecutor().probe(source, packetScanRequest());
+
+    assertThat(report.result().getMedia().getKeyframes())
+        .isEqualTo(
+            ProbeKeyframes.newBuilder()
+                .setUnavailable(
+                    KeyframesUnavailable.newBuilder()
+                        .setReason(
+                            KeyframesUnavailableReason
+                                .KEYFRAMES_UNAVAILABLE_REASON_KEYFRAME_WITHOUT_TIMESTAMP))
+                .build());
+    assertThat(report.keyframePositionsParts()).isEmpty();
   }
 
   @Test
@@ -1098,6 +1126,25 @@ class WorkerMediaSmokeTest {
                 "copy",
                 "-movflags",
                 "+negative_cts_offsets"),
+            output);
+        yield output;
+      }
+      case REORDERED_AVI_SOURCE -> {
+        var output = root.resolve(fixture);
+        runFfmpeg(
+            List.of(
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=64x36:rate=24:duration=6",
+                "-c:v",
+                "libx264",
+                "-bf",
+                "2",
+                "-g",
+                "48",
+                "-pix_fmt",
+                "yuv420p"),
             output);
         yield output;
       }
