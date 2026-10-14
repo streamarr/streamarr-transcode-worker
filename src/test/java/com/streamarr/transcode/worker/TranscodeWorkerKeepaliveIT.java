@@ -23,10 +23,12 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
 @Tag("IntegrationTest")
 @DisplayName("Transcode Worker Keepalive Integration Tests")
+@Timeout(value = 2, unit = TimeUnit.MINUTES)
 class TranscodeWorkerKeepaliveIT {
 
   private static final UUID SOURCE_NAMESPACE_ID =

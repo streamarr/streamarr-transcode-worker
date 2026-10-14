@@ -9,6 +9,7 @@ import build.buf.gen.streamarr.transcode.v1.MediaSourceRef;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import com.streamarr.transcode.worker.support.WorkerApplicationControlPlane;
+import com.streamarr.transcode.worker.support.WorkerApplicationProcess;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.lang.management.ManagementFactory;
@@ -20,7 +21,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardWatchEventKinds;
 import java.nio.file.attribute.PosixFilePermissions;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Map;
 import java.util.UUID;
@@ -30,12 +30,14 @@ import lombok.Builder;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
 @Tag("IntegrationTest")
 @DisplayName("Transcode Worker Application Integration Tests")
+@Timeout(value = 2, unit = TimeUnit.MINUTES)
 class TranscodeWorkerApplicationIT {
 
   @TempDir Path tempDir;
@@ -52,9 +54,8 @@ class TranscodeWorkerApplicationIT {
               .build();
       var processBuilder = applicationProcess(fixture);
       processBuilder.environment().put("SERVER_PORT", "0");
-      var process = processBuilder.start();
-      try {
-        controlPlane.awaitRegistration();
+      try (var worker = start(processBuilder)) {
+        worker.awaitRegistration(controlPlane);
         var announcedPort =
             Pattern.compile("Tomcat started on port (\\d+)")
                 .matcher(Files.readString(tempDir.resolve("worker.log")));
@@ -68,15 +69,12 @@ class TranscodeWorkerApplicationIT {
                             "http://localhost:"
                                 + announcedPort.group(1)
                                 + "/actuator/health/liveness"))
-                    .timeout(Duration.ofSeconds(5))
                     .GET()
                     .build(),
                 BodyHandlers.ofString());
 
         assertThat(response.statusCode()).isEqualTo(200);
         assertThat(response.body()).contains("\"status\":\"UP\"");
-      } finally {
-        stop(process);
       }
     }
   }
@@ -103,17 +101,14 @@ class TranscodeWorkerApplicationIT {
       var processBuilder = applicationProcess(fixture);
       processBuilder.environment().put("LC_ALL", "C");
       processBuilder.environment().put("LANG", "C");
-      var process = processBuilder.start();
-      try {
-        controlPlane.awaitRegistration();
+      try (var worker = start(processBuilder)) {
+        worker.awaitRegistration(controlPlane);
         controlPlane.startProbe(request);
 
-        var result = controlPlane.awaitResult();
+        var result = worker.awaitProbeResult(controlPlane);
         assertThat(result.getProbeAttemptId()).isEqualTo(request.getProbeAttemptId());
         assertThat(result.getProbeVersion()).isEqualTo(request.getProbeVersion());
         assertThat(result.getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_SOURCE_UNAVAILABLE);
-      } finally {
-        stop(process);
       }
     }
   }
@@ -128,15 +123,13 @@ class TranscodeWorkerApplicationIT {
 
     try (var controlPlane = WorkerApplicationControlPlane.builder().build()) {
       var fixture = ApplicationFixture.builder().port(controlPlane.port()).ffprobe(binary).build();
-      var process = applicationProcess(fixture).start();
-      try {
-        assertThat(process.waitFor(10, TimeUnit.SECONDS)).isTrue();
-        assertThat(process.exitValue()).as("startup refuses an unavailable producer").isNotZero();
+      try (var worker = start(applicationProcess(fixture))) {
+        assertThat(worker.awaitExitBeforeRegistration(controlPlane))
+            .as("startup refuses an unavailable producer")
+            .isNotZero();
         assertThat(Files.readString(tempDir.resolve("worker.log")))
             .contains("ffprobe", binary.toString());
         assertThat(controlPlane.registrationsAfterExit()).isEmpty();
-      } finally {
-        stop(process);
       }
     }
   }
@@ -156,17 +149,13 @@ class TranscodeWorkerApplicationIT {
 
     try (var controlPlane = WorkerApplicationControlPlane.builder().build()) {
       var fixture = ApplicationFixture.builder().port(controlPlane.port()).ffprobe(binary).build();
-      var process = applicationProcess(fixture).start();
-      try {
-        assertThat(process.waitFor(10, TimeUnit.SECONDS))
+      try (var worker = start(applicationProcess(fixture))) {
+        assertThat(worker.awaitExitBeforeRegistration(controlPlane))
             .as("the worker refuses startup after the configured ffprobe fails its version check")
-            .isTrue();
-        assertThat(process.exitValue()).isNotZero();
+            .isNotZero();
         assertThat(Files.readString(tempDir.resolve("worker.log")))
             .contains("ffprobe", binary.toString(), "exited with code 7");
         assertThat(controlPlane.registrationsAfterExit()).isEmpty();
-      } finally {
-        stop(process);
       }
     }
   }
@@ -203,20 +192,17 @@ class TranscodeWorkerApplicationIT {
       var configuredBinary = location == BinaryLocation.PATH ? binary.getFileName() : binary;
       var fixture =
           ApplicationFixture.builder().port(controlPlane.port()).ffprobe(configuredBinary).build();
-      var process = applicationProcess(fixture).start();
-      try {
-        var registration = controlPlane.awaitRegistration();
+      try (var worker = start(applicationProcess(fixture))) {
+        var registration = worker.awaitRegistration(controlPlane);
         assertThat(registration.getCapabilities().getProbeVersionsList()).contains(1);
         controlPlane.startProbe(request);
 
-        var result = controlPlane.awaitResult();
+        var result = worker.awaitProbeResult(controlPlane);
         assertThat(result.hasMedia()).isTrue();
         assertThat(result.getProbeAttemptId()).isEqualTo(request.getProbeAttemptId());
         assertThat(result.getMedia().getStreamsList())
             .singleElement()
             .satisfies(stream -> assertThat(stream.getCodec()).isEqualTo("configured-codec"));
-      } finally {
-        stop(process);
       }
     }
   }
@@ -234,15 +220,12 @@ class TranscodeWorkerApplicationIT {
               .build();
       var processBuilder = applicationProcess(fixture);
       var workerId = UUID.fromString(processBuilder.environment().get("TRANSCODE_WORKER_ID"));
-      var process = processBuilder.start();
-      try {
-        var registration = controlPlane.awaitRegistration();
+      try (var worker = start(processBuilder)) {
+        var registration = worker.awaitRegistration(controlPlane);
 
         assertThat(registration.getWorker().getWorkerId()).isEqualTo(toProto(workerId));
         assertThat(registration.getCapabilities().getSourceNamespaceIdsList())
             .containsExactly(toProto(SOURCE_NAMESPACE_ID));
-      } finally {
-        stop(process);
       }
     }
   }
@@ -256,16 +239,11 @@ class TranscodeWorkerApplicationIT {
               .port(controlPlane.port())
               .ffprobe(versionOnlyFfprobe())
               .build();
-      var process = applicationProcess(fixture).start();
-      try {
-        controlPlane.awaitRegistration();
+      try (var worker = start(applicationProcess(fixture))) {
+        worker.awaitRegistration(controlPlane);
         controlPlane.close();
 
-        assertThat(process.waitFor(10, TimeUnit.SECONDS))
-            .as("the application exits after its control plane disconnects")
-            .isTrue();
-      } finally {
-        stop(process);
+        worker.awaitExit();
       }
     }
   }
@@ -278,16 +256,10 @@ class TranscodeWorkerApplicationIT {
     processBuilder
         .environment()
         .put("TRANSCODE_WORKER_FFMPEG_PATH", tempDir.resolve("missing-ffmpeg").toString());
-    var process = processBuilder.start();
-    try {
-      assertThat(process.waitFor(5, TimeUnit.SECONDS))
-          .as("startup refuses missing FFmpeg")
-          .isTrue();
-      assertThat(process.exitValue()).isNotZero();
+    try (var worker = start(processBuilder)) {
+      assertThat(worker.awaitExit()).as("startup refuses missing FFmpeg").isNotZero();
       assertThat(Files.readString(tempDir.resolve("worker.log")))
           .contains("FFmpeg is not available to the transcode worker: FFmpeg not found");
-    } finally {
-      stop(process);
     }
   }
 
@@ -351,8 +323,7 @@ class TranscodeWorkerApplicationIT {
       processBuilder.environment().put("PROBE_PID_FILE", pidFile.toString());
       processBuilder.environment().put("PROBE_READY_DIR", signals.toString());
       processBuilder.environment().put("PROBE_RELEASE_FIFO", release.toString());
-      var process = processBuilder.start();
-      try {
+      try (var worker = start(processBuilder)) {
         assertThat(watcher.poll(10, TimeUnit.SECONDS))
             .as("the version check reaches its held wait")
             .isNotNull();
@@ -372,13 +343,12 @@ class TranscodeWorkerApplicationIT {
           stop(releasing);
         }
 
-        assertThat(controlPlane.awaitRegistration().getCapabilities().getProbeVersionsList())
+        assertThat(worker.awaitRegistration(controlPlane).getCapabilities().getProbeVersionsList())
             .containsExactly(1);
         assertThat(controlPlane.wasAdmittedAtRegistration())
             .as("registration occurs after the held version process has exited successfully")
             .isTrue();
       } finally {
-        stop(process);
         stopNativeProcess(pidFile);
       }
     }
@@ -419,18 +389,15 @@ class TranscodeWorkerApplicationIT {
     command.set(command.size() - 1, InterruptedStartup.class.getName());
     processBuilder.environment().put("PROBE_PID_FILE", pidFile.toString());
     processBuilder.environment().put("PROBE_READY_DIR", signals.toString());
-    var process = processBuilder.start();
-    try {
-      assertThat(process.waitFor(10, TimeUnit.SECONDS))
+    try (var worker = start(processBuilder)) {
+      assertThat(worker.awaitExit())
           .as("interrupted startup finishes after its native process has terminated")
-          .isTrue();
-      assertThat(process.exitValue()).isZero();
+          .isZero();
       assertThat(Files.readString(tempDir.resolve("worker.log")))
           .contains("startup-interrupted=true");
       var nativeProcess = ProcessHandle.of(Long.parseLong(Files.readString(pidFile)));
       assertThat(nativeProcess.map(ProcessHandle::isAlive).orElse(false)).isFalse();
     } finally {
-      stop(process);
       stopNativeProcess(pidFile);
     }
   }
@@ -460,10 +427,7 @@ class TranscodeWorkerApplicationIT {
     command.add("-cp");
     command.add(System.getProperty("java.class.path"));
     command.add(TranscodeWorkerApplication.class.getName());
-    var process =
-        new ProcessBuilder(command)
-            .redirectErrorStream(true)
-            .redirectOutput(tempDir.resolve("worker.log").toFile());
+    var process = new ProcessBuilder(command);
     process.environment().keySet().removeIf(key -> key.startsWith("TRANSCODE_WORKER_"));
     process
         .environment()
@@ -482,6 +446,10 @@ class TranscodeWorkerApplicationIT {
                 Map.entry("TRANSCODE_WORKER_FFMPEG_PATH", ffmpeg.toString()),
                 Map.entry("TRANSCODE_WORKER_FFPROBE_PATH", fixture.ffprobe().toString())));
     return process;
+  }
+
+  private WorkerApplicationProcess start(ProcessBuilder processBuilder) throws IOException {
+    return WorkerApplicationProcess.start(processBuilder, tempDir.resolve("worker.log"));
   }
 
   private static void stop(Process process) throws InterruptedException {
@@ -505,7 +473,7 @@ class TranscodeWorkerApplicationIT {
 
     var process = nativeProcess.orElseThrow();
     process.destroyForcibly();
-    process.onExit().get(5, TimeUnit.SECONDS);
+    process.onExit().get();
   }
 
   private enum UnavailableBinary {
