@@ -129,6 +129,9 @@ public class TranscodeCapabilityService {
     // advertised backend the same across worker restarts until a hardware preference order exists.
     return hardwareEncoders.stream()
         .filter(family::isHardwareEncoderOfThisFamily)
+        // The producer fails an attempt whose output differs from the job's codec profile, tier
+        // and level, so a hardware encoder runs only once the command forces them on it.
+        .filter(FfmpegCommandBuilder::forcesCodecProfile)
         .sorted()
         .findFirst()
         .map(

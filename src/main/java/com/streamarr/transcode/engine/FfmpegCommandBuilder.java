@@ -372,6 +372,11 @@ public class FfmpegCommandBuilder {
     };
   }
 
+  /** Whether the command forces the job's codec profile, tier and level on the encoder. */
+  static boolean forcesCodecProfile(String encoder) {
+    return traitsOf(encoder).codecProfileForcing() != CodecProfileForcing.NONE;
+  }
+
   private static EncoderTraits traitsOf(TranscodeJob job) {
     return traitsOf(job.videoEncoder());
   }
@@ -412,7 +417,8 @@ public class FfmpegCommandBuilder {
 
   // How an encoder takes the codec profile, tier and level that the job forces. The hardware
   // encoders force nothing until each passes the forced-value check (worker #14, #56 and #57); the
-  // producer's output check fails an attempt whose output differs from the job.
+  // producer's output check fails an attempt whose output differs from the job, so until then the
+  // worker runs the software encoder instead.
   private enum CodecProfileForcing {
     NONE,
     LIBX264,

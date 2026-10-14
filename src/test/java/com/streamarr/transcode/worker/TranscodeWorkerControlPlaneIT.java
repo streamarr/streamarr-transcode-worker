@@ -126,8 +126,12 @@ class TranscodeWorkerControlPlaneIT {
   }
 
   @Test
-  @DisplayName("Should advertise the hardware encoder when its test encode passes")
-  void shouldAdvertiseTheHardwareEncoderWhenItsTestEncodePasses() throws Exception {
+  @DisplayName(
+      "Should advertise the software encoder when the hardware encoder that passes its test encode"
+          + " does not force the job's codec profile and level")
+  void
+      shouldAdvertiseTheSoftwareEncoderWhenTheHardwareEncoderThatPassesItsTestEncodeDoesNotForceTheJobsCodecProfileAndLevel()
+          throws Exception {
     var service = new ControllableWorkerService();
 
     try (var server = new ControlPlaneServer(service);
@@ -138,9 +142,9 @@ class TranscodeWorkerControlPlaneIT {
       assertThat(service.registration().getCapabilities().getVideoEncodersList())
           .containsExactlyInAnyOrder(
               workerVerifiedEncoder(
-                  backend(VideoCodecFamily.VIDEO_CODEC_FAMILY_H264, "h264_nvenc")
-                      .setKind(EncoderKind.ENCODER_KIND_HARDWARE),
-                  false),
+                  backend(VideoCodecFamily.VIDEO_CODEC_FAMILY_H264, "libx264")
+                      .setKind(EncoderKind.ENCODER_KIND_SOFTWARE),
+                  true),
               workerVerifiedEncoder(
                   backend(VideoCodecFamily.VIDEO_CODEC_FAMILY_HEVC, "libx265")
                       .setKind(EncoderKind.ENCODER_KIND_SOFTWARE),

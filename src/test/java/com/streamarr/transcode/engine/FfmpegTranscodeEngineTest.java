@@ -217,8 +217,11 @@ class FfmpegTranscodeEngineTest {
   }
 
   @Test
-  @DisplayName("Should launch FFmpeg with the hardware encoder when one is available")
-  void shouldLaunchFfmpegWithTheHardwareEncoderWhenOneIsAvailable() {
+  @DisplayName(
+      "Should launch FFmpeg with the software encoder when the available hardware encoder does not"
+          + " force the job's codec profile and level")
+  void
+      shouldLaunchFfmpegWithTheSoftwareEncoderWhenTheAvailableHardwareEncoderDoesNotForceTheJobsCodecProfileAndLevel() {
     var hardware =
         HardwareEncodingCapability.builder()
             .available(true)
@@ -233,7 +236,7 @@ class FfmpegTranscodeEngineTest {
             request, new RecordingSegmentSink(), SegmentMemoryBudget.forSlots(1));
 
     producer.stop();
-    assertThat(launcher.command(request.attemptId())).containsSubsequence("-c:v", "h264_nvenc");
+    assertThat(launcher.command(request.attemptId())).containsSubsequence("-c:v", "libx264");
   }
 
   @Test
