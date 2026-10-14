@@ -104,13 +104,11 @@ public class TranscodeCapabilityService {
   }
 
   /**
-   * The encoder backend that jobs of the codec family run: the advertised one, or the family's
-   * software encoder when none is advertised. An unknown codec family runs libx264.
+   * The advertised encoder backend that jobs of the codec family run; empty when the worker
+   * advertises no encoder for the codec family.
    */
-  public EncoderBackend resolveEncoder(String codecFamily) {
-    return CodecFamily.named(codecFamily)
-        .map(family -> encoderBackends.getOrDefault(family, softwareBackend(family)))
-        .orElseGet(() -> softwareBackend(CodecFamily.H264));
+  public Optional<EncoderBackend> resolveEncoder(String codecFamily) {
+    return CodecFamily.named(codecFamily).map(encoderBackends::get);
   }
 
   private static Map<CodecFamily, EncoderBackend> resolveEncoderBackends(

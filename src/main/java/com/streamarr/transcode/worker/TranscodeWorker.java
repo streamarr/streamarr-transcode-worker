@@ -41,6 +41,7 @@ import com.streamarr.transcode.engine.Producer;
 import com.streamarr.transcode.engine.ProducerFailure;
 import com.streamarr.transcode.engine.SegmentMemoryBudget;
 import com.streamarr.transcode.engine.TranscodeRequest;
+import com.streamarr.transcode.engine.UnadvertisedCodecFamilyException;
 import com.streamarr.transcode.probe.FfprobeExecutor;
 import com.streamarr.transcode.protocol.ProtoUuid;
 import io.grpc.ManagedChannel;
@@ -220,6 +221,10 @@ public final class TranscodeWorker implements AutoCloseable {
               request,
               (segment, cancellation) -> deliverToServer(job, segment, cancellation),
               memoryBudget);
+    } catch (UnadvertisedCodecFamilyException e) {
+      log.warn("Refusing job attempt {}: {}", fromProto(job.getJobAttemptId()), e.getMessage());
+      reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
+      return new Refused();
     } catch (RuntimeException e) {
       logStartupFailure(job, e);
       reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED);

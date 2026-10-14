@@ -176,6 +176,32 @@ class TranscodeWorkerControlPlaneIT {
   }
 
   @Test
+  @DisplayName("Should refuse an encode when the worker advertises no encoder for its codec family")
+  void shouldRefuseAnEncodeWhenTheWorkerAdvertisesNoEncoderForItsCodecFamily() throws Exception {
+    var service = new ControllableWorkerService();
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJob();
+    var encode =
+        job.toBuilder()
+            .setDecision(job.getDecision().toBuilder().setVideoCodecFamily("vp9"))
+            .build();
+
+    try (var server = new ControlPlaneServer(service);
+        var worker = worker(preparedMediaRoot(), launcher)) {
+      server.start();
+      worker.start("localhost", server.port());
+
+      service.sendStart(service.registeredWorker(), encode);
+
+      var failure = service.awaitFailure();
+      assertThat(failure.getJobAttemptId()).isEqualTo(encode.getJobAttemptId());
+      assertThat(failure.getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
+      assertThat(launcher.hasLaunchedAny()).isFalse();
+    }
+  }
+
+  @Test
   @DisplayName("Should name no encoder backend when a stream copy starts")
   void shouldNameNoEncoderBackendWhenAStreamCopyStarts() throws Exception {
     var service = new ControllableWorkerService();

@@ -44,6 +44,8 @@ public class FfmpegTranscodeEngine {
    * media segments to the sink, holding FFmpeg's output within the worker's memory budget.
    *
    * @throws TranscodeException when FFmpeg is unavailable or cannot be started
+   * @throws UnadvertisedCodecFamilyException when the job attempt encodes a codec family that the
+   *     worker does not advertise
    */
   public Producer startProducer(
       TranscodeRequest request, SegmentSink sink, SegmentMemoryBudget memoryBudget) {
@@ -83,14 +85,22 @@ public class FfmpegTranscodeEngine {
     }
   }
 
-  /** The encoder backend that the job attempt runs; empty when it copies the video. */
+  /**
+   * The encoder backend that the job attempt runs; empty when it copies the video.
+   *
+   * @throws UnadvertisedCodecFamilyException when the job attempt encodes a codec family that the
+   *     worker does not advertise
+   */
   public Optional<EncoderBackend> encoderBackendOf(TranscodeRequest request) {
     if (!request.transcodeDecision().transcodeMode().encodesVideo()) {
       return Optional.empty();
     }
 
+    var codecFamily = request.transcodeDecision().videoCodecFamily();
     return Optional.of(
-        capabilityService.resolveEncoder(request.transcodeDecision().videoCodecFamily()));
+        capabilityService
+            .resolveEncoder(codecFamily)
+            .orElseThrow(() -> new UnadvertisedCodecFamilyException(codecFamily)));
   }
 
   /** The encoder backends that this engine runs, one for each codec family it can encode. */
