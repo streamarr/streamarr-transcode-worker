@@ -158,24 +158,19 @@ final class KeyframePacketScan {
     }
 
     private Optional<KeyframeTime> keyframeTime(OptionalLong pts, OptionalLong dts) {
-      var presentation = pts;
-      var decode = dts;
-      switch (rule) {
-        case DECODE_AT_PRESENTATION -> decode = pts;
-        case EQUAL_WHEN_ONE_IS_MISSING -> {
-          presentation = pts.isPresent() ? pts : dts;
-          decode = dts.isPresent() ? dts : pts;
-        }
-        case AS_REPORTED -> {
-          // Both times come from the packet.
-        }
-      }
-
-      if (presentation.isEmpty() || decode.isEmpty()) {
+      var times =
+          switch (rule) {
+            case AS_REPORTED -> new PacketTimes(pts, dts);
+            case DECODE_AT_PRESENTATION -> new PacketTimes(pts, pts);
+            case EQUAL_WHEN_ONE_IS_MISSING ->
+                new PacketTimes(pts.isPresent() ? pts : dts, dts.isPresent() ? dts : pts);
+          };
+      if (times.presentation().isEmpty() || times.decode().isEmpty()) {
         return Optional.empty();
       }
 
-      return Optional.of(new KeyframeTime(presentation.getAsLong(), decode.getAsLong()));
+      return Optional.of(
+          new KeyframeTime(times.presentation().getAsLong(), times.decode().getAsLong()));
     }
 
     boolean isMissingTime() {
@@ -186,6 +181,8 @@ final class KeyframePacketScan {
       return times;
     }
   }
+
+  private record PacketTimes(OptionalLong presentation, OptionalLong decode) {}
 
   private record Fields(OptionalLong pts, OptionalLong dts, String flags) {
 
