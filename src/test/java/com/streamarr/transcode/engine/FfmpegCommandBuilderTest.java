@@ -109,8 +109,9 @@ class FfmpegCommandBuilderTest {
 
     var cmd = command(request, "libx264");
 
-    assertThat(cmd).containsSequence("-c:v", "libx264", "-preset", presetName);
-    assertThat(cmd).containsOnlyOnce("-preset");
+    assertThat(cmd)
+        .containsSequence("-c:v", "libx264", "-preset", presetName)
+        .containsOnlyOnce("-preset");
   }
 
   @ParameterizedTest(name = "{0} is {1}")
@@ -121,8 +122,9 @@ class FfmpegCommandBuilderTest {
 
     var cmd = command(request, "libx265");
 
-    assertThat(cmd).containsSequence("-c:v", "libx265", "-preset", presetName);
-    assertThat(cmd).containsOnlyOnce("-preset");
+    assertThat(cmd)
+        .containsSequence("-c:v", "libx265", "-preset", presetName)
+        .containsOnlyOnce("-preset");
   }
 
   @ParameterizedTest(name = "{0} is preset {1}")
@@ -143,8 +145,9 @@ class FfmpegCommandBuilderTest {
 
     var cmd = command(request, "libsvtav1");
 
-    assertThat(cmd).containsSequence("-c:v", "libsvtav1", "-preset", svtAv1Preset);
-    assertThat(cmd).containsOnlyOnce("-preset");
+    assertThat(cmd)
+        .containsSequence("-c:v", "libsvtav1", "-preset", svtAv1Preset)
+        .containsOnlyOnce("-preset");
   }
 
   @ParameterizedTest(name = "{0}")
@@ -180,7 +183,7 @@ class FfmpegCommandBuilderTest {
   void shouldPassNoPresetWhenJobCopiesTheVideo(TranscodeMode mode) {
     var cmd = command(request(mode).build(), "copy");
 
-    assertThat(cmd).doesNotContain("-preset");
+    assertThat(cmd).containsSequence("-c:v", "copy").doesNotContain("-preset");
   }
 
   // libx264 and libx265 take the scale's own names.
