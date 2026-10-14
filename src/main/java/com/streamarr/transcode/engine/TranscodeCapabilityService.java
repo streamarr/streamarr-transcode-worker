@@ -6,7 +6,6 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
@@ -24,18 +23,6 @@ public class TranscodeCapabilityService {
 
   private static final Pattern HW_ENCODER_PATTERN =
       Pattern.compile("^\\s*V\\S+\\s+(\\w+_(?:nvenc|qsv|amf|vaapi|videotoolbox))\\s+");
-
-  private static final Map<String, String> SOFTWARE_ENCODERS =
-      Map.of(
-          "h264", "libx264",
-          "hevc", "libx265",
-          "av1", "libsvtav1");
-
-  private static final Map<String, String> CODEC_HW_PREFIX =
-      Map.of(
-          "h264", "h264_",
-          "hevc", "hevc_",
-          "av1", "av1_");
 
   private final String ffmpegPath;
   private final ProcessFactory processFactory;
@@ -91,24 +78,22 @@ public class TranscodeCapabilityService {
   }
 
   public String resolveEncoder(String codecFamily) {
-    var softwareDefault = SOFTWARE_ENCODERS.getOrDefault(codecFamily, "libx264");
-
-    if (!hardwareEncodingCapability.available()) {
-      return softwareDefault;
+    var family = CodecFamily.named(codecFamily);
+    if (family.isEmpty()) {
+      return CodecFamily.H264.softwareEncoder();
     }
 
-    var prefix = CODEC_HW_PREFIX.get(codecFamily);
-    if (prefix == null) {
-      return softwareDefault;
+    if (!hardwareEncodingCapability.available()) {
+      return family.get().softwareEncoder();
     }
 
     for (var encoder : hardwareEncodingCapability.encoders()) {
-      if (encoder.startsWith(prefix)) {
+      if (family.get().isHardwareEncoderOfThisFamily(encoder)) {
         return encoder;
       }
     }
 
-    return softwareDefault;
+    return family.get().softwareEncoder();
   }
 
   private CapabilityProbeResult checkFfmpegVersion() {
