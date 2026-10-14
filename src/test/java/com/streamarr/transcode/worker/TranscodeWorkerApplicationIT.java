@@ -128,9 +128,10 @@ class TranscodeWorkerApplicationIT {
         assertThat(worker.awaitExitBeforeRegistration(controlPlane))
             .as("startup refuses an unavailable producer")
             .isNotZero();
-        assertThat(Files.readString(tempDir.resolve("worker.log")))
-            .contains("ffprobe", binary.toString());
         assertThat(controlPlane.registrationsAfterExit()).isEmpty();
+        assertThat(controlPlane.wasContacted())
+            .as("the worker checks ffprobe before it connects to the server")
+            .isFalse();
       }
     }
   }
@@ -154,9 +155,10 @@ class TranscodeWorkerApplicationIT {
         assertThat(worker.awaitExitBeforeRegistration(controlPlane))
             .as("the worker refuses startup after the configured ffprobe fails its version check")
             .isNotZero();
-        assertThat(Files.readString(tempDir.resolve("worker.log")))
-            .contains("ffprobe", binary.toString(), "exited with code 7");
         assertThat(controlPlane.registrationsAfterExit()).isEmpty();
+        assertThat(controlPlane.wasContacted())
+            .as("the worker checks ffprobe before it connects to the server")
+            .isFalse();
       }
     }
   }
@@ -250,17 +252,27 @@ class TranscodeWorkerApplicationIT {
   }
 
   @Test
-  @DisplayName("Should exit immediately when FFmpeg is unavailable")
-  void shouldExitImmediatelyWhenFfmpegIsUnavailable() throws Exception {
-    var fixture = ApplicationFixture.builder().port(1).ffprobe(versionOnlyFfprobe()).build();
-    var processBuilder = applicationProcess(fixture);
-    processBuilder
-        .environment()
-        .put("TRANSCODE_WORKER_FFMPEG_PATH", tempDir.resolve("missing-ffmpeg").toString());
-    try (var worker = start(processBuilder)) {
-      assertThat(worker.awaitExit()).as("startup refuses missing FFmpeg").isNotZero();
-      assertThat(Files.readString(tempDir.resolve("worker.log")))
-          .contains("FFmpeg is not available to the transcode worker: FFmpeg not found");
+  @DisplayName("Should refuse startup when FFmpeg is unavailable")
+  void shouldRefuseStartupWhenFfmpegIsUnavailable() throws Exception {
+    try (var controlPlane = WorkerApplicationControlPlane.builder().build()) {
+      var fixture =
+          ApplicationFixture.builder()
+              .port(controlPlane.port())
+              .ffprobe(versionOnlyFfprobe())
+              .build();
+      var processBuilder = applicationProcess(fixture);
+      processBuilder
+          .environment()
+          .put("TRANSCODE_WORKER_FFMPEG_PATH", tempDir.resolve("missing-ffmpeg").toString());
+      try (var worker = start(processBuilder)) {
+        assertThat(worker.awaitExitBeforeRegistration(controlPlane))
+            .as("startup refuses missing FFmpeg")
+            .isNotZero();
+        assertThat(controlPlane.registrationsAfterExit()).isEmpty();
+        assertThat(controlPlane.wasContacted())
+            .as("the worker checks FFmpeg before it connects to the server")
+            .isFalse();
+      }
     }
   }
 
