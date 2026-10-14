@@ -164,7 +164,7 @@ public final class FfprobeExecutor {
       Consumer<String> diagnosticLines)
       throws ExecutionException, InterruptedException {
     var process = processFactory.apply(new ProbeCommand(ProbeTool.FFMPEG, arguments));
-    StdoutReader<Void> reader =
+    OutputReader<Void> reader =
         stdout -> {
           if (!readLinesWhileNeeded(stdout, packetLines)) {
             // The scan needs no more packets, so FFmpeg stops before it reads the rest of the
@@ -174,20 +174,20 @@ public final class FfprobeExecutor {
 
           return null;
         };
-    return run(process, reader, diagnosticLines).exitCode();
+    return run(process, reader, stderr -> readLines(stderr, diagnosticLines)).exitCode();
   }
 
-  private <T> Finished<T> run(List<String> arguments, StdoutReader<T> reader)
+  private <T> Finished<T> run(List<String> arguments, OutputReader<T> reader)
       throws ExecutionException, InterruptedException {
-    return run(
-        processFactory.apply(new ProbeCommand(ProbeTool.FFPROBE, arguments)), reader, _ -> {});
+    var process = processFactory.apply(new ProbeCommand(ProbeTool.FFPROBE, arguments));
+    return run(process, reader, stderr -> readLines(stderr, _ -> {}));
   }
 
   private <T> Finished<T> run(
-      Process process, StdoutReader<T> reader, Consumer<String> diagnosticLines)
+      Process process, OutputReader<T> reader, OutputReader<Void> diagnosticsReader)
       throws ExecutionException, InterruptedException {
     try (var readers = Executors.newVirtualThreadPerTaskExecutor()) {
-      var diagnostics = readers.submit(() -> readLines(process.getErrorStream(), diagnosticLines));
+      var diagnostics = readers.submit(() -> diagnosticsReader.read(process.getErrorStream()));
       var output = readers.submit(() -> readOutput(process, reader));
       try {
         var exitCode = process.waitFor();
@@ -223,7 +223,7 @@ public final class FfprobeExecutor {
     return null;
   }
 
-  private <T> T readOutput(Process process, StdoutReader<T> reader) throws IOException {
+  private <T> T readOutput(Process process, OutputReader<T> reader) throws IOException {
     try (var output = process.getInputStream()) {
       return reader.read(output);
     }
@@ -373,8 +373,8 @@ public final class FfprobeExecutor {
   private record Attempt(Path source, ProbeRequest request, ProbeAttemptResult.Builder result) {}
 
   @FunctionalInterface
-  private interface StdoutReader<T> {
-    T read(InputStream stdout) throws IOException;
+  private interface OutputReader<T> {
+    T read(InputStream output) throws IOException;
   }
 
   private record Finished<T>(T output, int exitCode) {}
