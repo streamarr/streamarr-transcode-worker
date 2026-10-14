@@ -127,6 +127,7 @@ final class Mp4SyncSampleReader {
       return List.of();
     }
 
+    var decodeShift = decodeShift(offsets);
     var keyframes = new ArrayList<KeyframeTime>();
     var offsetRuns = new RunCursor(offsets);
     var sync = syncSamples.<SyncSamples>map(ListedSyncSamples::new).orElseGet(EverySample::new);
@@ -135,12 +136,8 @@ final class Mp4SyncSampleReader {
     for (var run : durations) {
       for (long i = 0; i < run.count(); i++, sample++) {
         var offset = offsetRuns.next();
-        if (offset < 0) {
-          throw malformed("negative composition offset");
-        }
-
         if (sync.isSync(sample)) {
-          keyframes.add(new KeyframeTime(decodeTime + offset, decodeTime));
+          keyframes.add(new KeyframeTime(decodeTime + offset, decodeTime - decodeShift));
         }
 
         decodeTime += run.value();
@@ -148,6 +145,28 @@ final class Mp4SyncSampleReader {
     }
 
     return keyframes;
+  }
+
+  /**
+   * FFmpeg's mov demuxer moves every decode time earlier by the most negative composition offset,
+   * so that no decode time follows its presentation time. It skips the last two ctts entries and
+   * the entries that count no samples. It drops an entry whose count exceeds a signed 32-bit
+   * integer, so the reader treats that entry as damaged.
+   */
+  private static long decodeShift(List<Run> offsets) {
+    if (offsets.stream().anyMatch(run -> run.count() > Integer.MAX_VALUE)) {
+      throw malformed("ctts count");
+    }
+
+    long shift = 0;
+    for (var i = 0; i + 2 < offsets.size(); i++) {
+      var run = offsets.get(i);
+      if (run.count() > 0) {
+        shift = Math.max(shift, -Math.max(run.value(), Integer.MIN_VALUE + 1L));
+      }
+    }
+
+    return shift;
   }
 
   private static List<Run> runs(ByteBuffer box) {

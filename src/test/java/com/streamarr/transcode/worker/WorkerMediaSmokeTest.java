@@ -106,6 +106,9 @@ class WorkerMediaSmokeTest {
   private static final String EMPTY_EDIT_SOURCE = "mp4-empty-edit.mp4";
   private static final String TRIMMED_START_SOURCE = "mp4-trimmed-start.mp4";
   private static final String FRACTIONAL_START_SOURCE = "mp4-fractional-start.mp4";
+  private static final String NEGATIVE_OFFSETS_SOURCE = "mp4-negative-offsets.mp4";
+  private static final String NEGATIVE_OFFSETS_EMPTY_EDIT_SOURCE =
+      "mp4-negative-offsets-empty-edit.mp4";
   private static final int PERMITTED_KEEPALIVE_SECONDS = 10;
 
   @TempDir static Path longSources;
@@ -187,7 +190,9 @@ class WorkerMediaSmokeTest {
         "mkv-libavformat.mkv",
         EMPTY_EDIT_SOURCE,
         TRIMMED_START_SOURCE,
-        FRACTIONAL_START_SOURCE
+        FRACTIONAL_START_SOURCE,
+        NEGATIVE_OFFSETS_SOURCE,
+        NEGATIVE_OFFSETS_EMPTY_EDIT_SOURCE
       })
   @DisplayName(
       "Should report the keyframes that ffprobe reads from the packets when the worker reads a"
@@ -884,10 +889,10 @@ class WorkerMediaSmokeTest {
         .build();
   }
 
-  // Three MP4 sources that FFmpeg's stream copy writes: an empty edit that delays the video by
-  // 0.5 s, an edit that starts the media between two keyframes, and a container start of 0.276009
-  // s,
-  // which is 3,391.6 ticks of the video's 1/12288 s time base.
+  // MP4 sources that FFmpeg's stream copy writes: an empty edit that delays the video by 0.5 s,
+  // an edit that starts the media between two keyframes, and a container start of 0.276009 s.
+  // That start is 3,391.6 ticks of the video's 1/12288 s time base. Two more sources have negative
+  // composition offsets (ctts version 1), one of them behind an empty edit.
   private Path keyframeSource(String fixture) throws Exception {
     var resource = getClass().getResource("/keyframes/" + fixture);
     var base = getClass().getResource("/keyframes/mp4-bframes-editlist.mp4");
@@ -916,6 +921,33 @@ class WorkerMediaSmokeTest {
       case FRACTIONAL_START_SOURCE -> {
         var output = root.resolve(fixture);
         runFfmpeg(List.of("-itsoffset", "0.3", "-i", basePath, "-c", "copy"), output);
+        yield output;
+      }
+      case NEGATIVE_OFFSETS_SOURCE -> {
+        var output = root.resolve(fixture);
+        runFfmpeg(
+            List.of("-i", basePath, "-c", "copy", "-movflags", "+negative_cts_offsets"), output);
+        yield output;
+      }
+      case NEGATIVE_OFFSETS_EMPTY_EDIT_SOURCE -> {
+        var output = root.resolve(fixture);
+        runFfmpeg(
+            List.of(
+                "-itsoffset",
+                "0.5",
+                "-i",
+                basePath,
+                "-i",
+                basePath,
+                "-map",
+                "0:v",
+                "-map",
+                "1:a",
+                "-c",
+                "copy",
+                "-movflags",
+                "+negative_cts_offsets"),
+            output);
         yield output;
       }
       case TRIMMED_START_SOURCE -> {

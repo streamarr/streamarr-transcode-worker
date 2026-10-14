@@ -22,6 +22,7 @@ record SyntheticMp4(
     boolean compactSampleSizes,
     int compositionOffsetCount,
     int compositionOffset,
+    @Singular List<CompositionRun> compositionRuns,
     List<Long> syncSamples,
     int editListVersion,
     @Singular List<Edit> edits,
@@ -31,6 +32,9 @@ record SyntheticMp4(
 
   record Edit(long duration, long mediaTime) {}
 
+  /** One ctts entry: {@code count} samples whose composition offset is {@code offset}. */
+  record CompositionRun(int count, int offset) {}
+
   byte[] bytes() {
     var sampleTable = new ArrayList<byte[]>();
     sampleTable.add(fullBox("stts", 0, int32(1), int32(sampleCount), int32(sampleDuration)));
@@ -38,6 +42,13 @@ record SyntheticMp4(
     if (compositionOffsetCount > 0) {
       sampleTable.add(
           fullBox("ctts", 1, int32(1), int32(compositionOffsetCount), int32(compositionOffset)));
+    }
+
+    if (!compositionRuns.isEmpty()) {
+      var entries = new ArrayList<byte[]>();
+      entries.add(int32(compositionRuns.size()));
+      compositionRuns.forEach(run -> entries.add(concat(int32(run.count()), int32(run.offset()))));
+      sampleTable.add(fullBox("ctts", 1, entries.toArray(byte[][]::new)));
     }
 
     if (syncSamples != null) {

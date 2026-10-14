@@ -99,14 +99,62 @@ class Mp4SyncSampleReaderTest {
   }
 
   @Test
-  @DisplayName("Should require a packet scan when a composition offset is negative")
-  void shouldRequirePacketScanWhenCompositionOffsetIsNegative() throws Exception {
+  @DisplayName("Should keep the decode times when the only composition offset entry is negative")
+  void shouldKeepDecodeTimesWhenOnlyCompositionOffsetEntryIsNegative() throws Exception {
     var source =
         write(
             SyntheticMp4.builder()
                 .mediaTimescale(1_000)
                 .sampleDurations(2, 1_000)
                 .compositionOffsets(2, -500)
+                .build());
+
+    // FFmpeg's mov demuxer leaves the last two ctts entries out of its decode-time shift.
+    assertThat(Mp4SyncSampleReader.read(source, TRACK_ID))
+        .isEqualTo(
+            new Listed(
+                new TimeBase(1, 1_000),
+                List.of(new KeyframeTime(-500, 0), new KeyframeTime(500, 1_000))));
+  }
+
+  @Test
+  @DisplayName(
+      "Should shift the decode times by the most negative offset when composition offsets are negative")
+  void shouldShiftDecodeTimesByMostNegativeOffsetWhenCompositionOffsetsAreNegative()
+      throws Exception {
+    var source =
+        write(
+            SyntheticMp4.builder()
+                .mediaTimescale(1_000)
+                .sampleDurations(4, 1_000)
+                .compositionRun(new SyntheticMp4.CompositionRun(1, 1_000))
+                .compositionRun(new SyntheticMp4.CompositionRun(1, -500))
+                .compositionRun(new SyntheticMp4.CompositionRun(1, 500))
+                .compositionRun(new SyntheticMp4.CompositionRun(1, -1_000))
+                .build());
+
+    // The shift is 500 ticks: the -1,000 offset is in the last two entries, which FFmpeg skips.
+    assertThat(Mp4SyncSampleReader.read(source, TRACK_ID))
+        .isEqualTo(
+            new Listed(
+                new TimeBase(1, 1_000),
+                List.of(
+                    new KeyframeTime(1_000, -500),
+                    new KeyframeTime(500, 500),
+                    new KeyframeTime(2_500, 1_500),
+                    new KeyframeTime(2_000, 2_500))));
+  }
+
+  @Test
+  @DisplayName(
+      "Should require a packet scan when a composition offset entry counts 2^32 - 1 samples")
+  void shouldRequirePacketScanWhenCompositionOffsetEntryCountsMaximumSamples() throws Exception {
+    var source =
+        write(
+            SyntheticMp4.builder()
+                .mediaTimescale(1_000)
+                .sampleDurations(2, 1_000)
+                .compositionRun(new SyntheticMp4.CompositionRun(-1, 500))
                 .build());
 
     assertThat(Mp4SyncSampleReader.read(source, TRACK_ID)).isEqualTo(INCOMPLETE);
