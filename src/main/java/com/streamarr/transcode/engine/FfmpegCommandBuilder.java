@@ -166,14 +166,14 @@ public class FfmpegCommandBuilder {
 
   // Hardware encoders take no preset until the preset scale has rows for them (ADR 0044).
   private static void addPresetArgs(List<String> cmd, TranscodeJob job) {
-    var preset = job.request().encoderPreset();
-    if (traitsOf(job).takesPresetName()) {
-      cmd.addAll(List.of("-preset", preset.scaleName()));
+    var traits = traitsOf(job);
+    if (traits.takesPresetName()) {
+      cmd.addAll(List.of("-preset", job.request().encoderPreset().scaleName()));
       return;
     }
 
-    if (traitsOf(job).takesSvtAv1PresetNumber()) {
-      cmd.addAll(List.of("-preset", String.valueOf(preset.svtAv1Preset())));
+    if (traits.takesSvtAv1PresetNumber()) {
+      cmd.addAll(List.of("-preset", String.valueOf(job.request().encoderPreset().svtAv1Preset())));
     }
   }
 
