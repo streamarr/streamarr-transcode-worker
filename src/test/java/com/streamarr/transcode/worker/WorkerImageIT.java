@@ -9,7 +9,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.awaitility.Awaitility.await;
 
+import build.buf.gen.streamarr.transcode.v1.AudioMode;
 import build.buf.gen.streamarr.transcode.v1.EncoderKind;
+import build.buf.gen.streamarr.transcode.v1.EncoderPreset;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptCompleted;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailed;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
@@ -18,11 +20,13 @@ import build.buf.gen.streamarr.transcode.v1.JobAttemptStopped;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.TranscodeMode;
+import build.buf.gen.streamarr.transcode.v1.VariantJob;
 import build.buf.gen.streamarr.transcode.v1.WorkerRegistration;
 import build.buf.gen.streamarr.transcode.v1.WorkerVerifiedVideoEncoder;
 import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.command.WaitContainerResultCallback;
 import com.streamarr.transcode.fixtures.image.ImageControlPlane;
+import com.streamarr.transcode.worker.support.X264Options;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.URI;
@@ -34,6 +38,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
@@ -207,6 +213,99 @@ class WorkerImageIT {
               "-");
       assertThat(decode.getExitCode()).as(decode.getStderr()).isZero();
     }
+  }
+
+  @Test
+  @DisplayName("Should write the job's preset into the x264 options when the image encodes H.264")
+  void shouldWriteTheJobsPresetIntoTheX264OptionsWhenTheImageEncodesH264() throws Exception {
+    copyMedia();
+    try (var image = ImageFixture.builder().media(media).build()) {
+      image.accept();
+      var request = presetJob("h264", EncoderPreset.ENCODER_PRESET_VERYFAST).build();
+
+      var completed = JobAttemptCompleted.parseFrom(image.command("job", request.toByteArray()));
+
+      assertThat(completed.getJobAttemptId()).isEqualTo(request.getJobAttemptId());
+      // x264's own definition of veryfast. Its default, medium, sets ref=3, subme=7 and
+      // rc_lookahead=40, and faster sets ref=2, subme=4 and rc_lookahead=20.
+      assertThat(X264Options.of(image.command("segment", new byte[0])))
+          .contains("ref=1", "subme=2", "rc_lookahead=10");
+    }
+  }
+
+  @Test
+  @DisplayName("Should encode the bytes of the job's SVT-AV1 preset when the image encodes AV1")
+  void shouldEncodeTheBytesOfTheJobsSvtAv1PresetWhenTheImageEncodesAv1() throws Exception {
+    copyMedia();
+    var ffmpeg = svtAv1ParallelismOfOneFfmpeg();
+    try (var image = ImageFixture.builder().media(media).ffmpegPath(ffmpeg).build()) {
+      image.accept();
+      var request = presetJob("av1", EncoderPreset.ENCODER_PRESET_ULTRAFAST).build();
+
+      var completed = JobAttemptCompleted.parseFrom(image.command("job", request.toByteArray()));
+
+      assertThat(completed.getJobAttemptId()).isEqualTo(request.getJobAttemptId());
+      // SVT-AV1 writes no preset into its sequence header, so only the media bytes show it. The
+      // references set the preset through SVT-AV1's own parameter instead of FFmpeg's -preset
+      // option, and leave it at the library default.
+      var uploaded = image.command("segment", new byte[0]);
+      var arguments = svtAv1ArgumentsWithoutPreset(image.recordedArguments("ffmpeg"), "13");
+      var preset13 = image.svtAv1Reference(arguments, ":preset=13");
+      var libraryDefault = image.svtAv1Reference(arguments, "");
+      assertThat(Arrays.copyOf(preset13, uploaded.length)).isEqualTo(uploaded);
+      assertThat(Arrays.copyOf(libraryDefault, uploaded.length)).isNotEqualTo(uploaded);
+    }
+  }
+
+  private static VariantJob.Builder presetJob(String codecFamily, EncoderPreset preset) {
+    var job = variantJobBuilder();
+    job.getDecisionBuilder()
+        .setMode(TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE)
+        .setVideoCodecFamily(codecFamily)
+        .getAudioBuilder()
+        .setMode(AudioMode.AUDIO_MODE_NONE);
+    job.getVariantBuilder()
+        .setWidth(160)
+        .setHeight(90)
+        .setBitrateBitsPerSecond(500_000)
+        .setEncoderPreset(preset);
+    job.getExecutionBuilder().setMediaSegmentCount(MEDIA_SEGMENT_COUNT);
+    return job;
+  }
+
+  // Records FFmpeg's arguments and runs SVT-AV1 on one thread, so that a reference encode with the
+  // same arguments produces the same bytes.
+  private String svtAv1ParallelismOfOneFfmpeg() throws Exception {
+    var script = media.resolve("svtav1-ffmpeg");
+    Files.writeString(
+        script,
+        """
+        #!/bin/bash
+        arguments=()
+        previous=
+        for argument in "$@"; do
+          if [[ $previous == -svtav1-params ]]; then
+            argument="$argument:lp=1"
+          fi
+          arguments+=("$argument")
+          previous=$argument
+        done
+        printf '%s\\0' "${arguments[@]}" > /tmp/ffmpeg-arguments
+        exec ffmpeg "${arguments[@]}"
+        """);
+    Files.setPosixFilePermissions(script, PosixFilePermissions.fromString("rwxr-xr-x"));
+    return "/media/svtav1-ffmpeg";
+  }
+
+  // The worker's arguments between "-y" and its pipe:1 output, without its -preset option.
+  private static List<String> svtAv1ArgumentsWithoutPreset(List<String> recorded, String preset) {
+    assertThat(recorded).as("the worker's FFmpeg arguments").startsWith("-y").endsWith("pipe:1");
+    var arguments = new ArrayList<>(recorded.subList(1, recorded.size() - 1));
+    var position = arguments.indexOf("-preset");
+    assertThat(position).as("the position of the worker's -preset option").isNotNegative();
+    assertThat(arguments.subList(position, position + 2)).containsExactly("-preset", preset);
+    arguments.subList(position, position + 2).clear();
+    return arguments;
   }
 
   @Test
@@ -598,6 +697,25 @@ class WorkerImageIT {
           new String(
               Base64.getDecoder().decode(recorded.getStdout().trim()), StandardCharsets.UTF_8);
       return List.of(arguments.split("\\x00"));
+    }
+
+    private byte[] svtAv1Reference(List<String> arguments, String addedParameters)
+        throws Exception {
+      var command = new ArrayList<>(List.of("/cnb/lifecycle/launcher", "ffmpeg", "-y"));
+      command.addAll(arguments);
+      var parameters = command.indexOf("-svtav1-params") + 1;
+      assertThat(parameters).as("the SVT-AV1 command sets encoder parameters").isPositive();
+      command.set(parameters, command.get(parameters) + addedParameters);
+      command.add("/tmp/reference.mp4");
+      var encode = worker.execInContainer(command.toArray(String[]::new));
+      assertThat(encode.getExitCode()).as(encode.getStderr()).isZero();
+      var reference = Files.createTempFile("svtav1-reference", ".mp4");
+      try {
+        worker.copyFileFromContainer("/tmp/reference.mp4", reference.toString());
+        return Files.readAllBytes(reference);
+      } finally {
+        Files.delete(reference);
+      }
     }
 
     private HttpResponse<String> health(String group) throws Exception {
