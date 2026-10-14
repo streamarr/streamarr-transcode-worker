@@ -230,7 +230,23 @@ final class MatroskaCueReader {
       Optional<ByteBuffer> info, Optional<ByteBuffer> tracks, Optional<ByteBuffer> cues) {
 
     static TopLevel read(FileChannel channel) throws IOException {
-      var fileSize = channel.size();
+      var segment = firstSegment(channel);
+      var seekPositions = new HashMap<Long, Long>();
+      var found = elementsBeforeFirstCluster(channel, segment, seekPositions);
+      for (var id : List.of(INFO, TRACKS, CUES)) {
+        if (!found.containsKey(id) && seekPositions.containsKey(id)) {
+          seek(channel, segment.dataStart() + seekPositions.get(id), id)
+              .ifPresent(payload -> found.put(id, payload));
+        }
+      }
+
+      return new TopLevel(
+          Optional.ofNullable(found.get(INFO)),
+          Optional.ofNullable(found.get(TRACKS)),
+          Optional.ofNullable(found.get(CUES)));
+    }
+
+    private static FileElement firstSegment(FileChannel channel) throws IOException {
       var ebml = element(channel, 0);
       if (ebml.id() != EBML || ebml.size() == UNKNOWN_SIZE) {
         throw malformed("EBML header");
@@ -241,10 +257,20 @@ final class MatroskaCueReader {
         throw malformed("Segment");
       }
 
+      return segment;
+    }
+
+    /**
+     * Collects the Info, Tracks and Cues elements that precede the first Cluster, and adds the
+     * positions each SeekHead lists to {@code seekPositions}.
+     */
+    private static Map<Long, ByteBuffer> elementsBeforeFirstCluster(
+        FileChannel channel, FileElement segment, Map<Long, Long> seekPositions)
+        throws IOException {
+      var fileSize = channel.size();
       var segmentEnd =
           segment.size() == UNKNOWN_SIZE ? fileSize : Math.min(segment.end(), fileSize);
       var found = new HashMap<Long, ByteBuffer>();
-      var seekPositions = new HashMap<Long, Long>();
       var position = segment.dataStart();
       while (position < segmentEnd) {
         var element = element(channel, position);
@@ -263,17 +289,7 @@ final class MatroskaCueReader {
         position = element.end();
       }
 
-      for (var id : List.of(INFO, TRACKS, CUES)) {
-        if (!found.containsKey(id) && seekPositions.containsKey(id)) {
-          seek(channel, segment.dataStart() + seekPositions.get(id), id)
-              .ifPresent(payload -> found.put(id, payload));
-        }
-      }
-
-      return new TopLevel(
-          Optional.ofNullable(found.get(INFO)),
-          Optional.ofNullable(found.get(TRACKS)),
-          Optional.ofNullable(found.get(CUES)));
+      return found;
     }
 
     private static Optional<ByteBuffer> seek(FileChannel channel, long position, long id)
