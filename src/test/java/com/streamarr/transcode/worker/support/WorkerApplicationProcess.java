@@ -7,6 +7,7 @@ import build.buf.gen.streamarr.transcode.v1.WorkerRegistration;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import lombok.NonNull;
@@ -19,9 +20,11 @@ import lombok.NonNull;
 public final class WorkerApplicationProcess implements AutoCloseable {
 
   private static final int LOG_TAIL_LINES = 40;
+  private static final Duration SHUTDOWN_HANG_GUARD = Duration.ofMinutes(1);
 
   private final Process process;
   private final Path log;
+  private boolean waitInterrupted;
 
   private WorkerApplicationProcess(Process process, Path log) {
     this.process = process;
@@ -36,7 +39,7 @@ public final class WorkerApplicationProcess implements AutoCloseable {
 
   public <T> T awaitBeforeExit(CompletableFuture<T> outcome, String expectation)
       throws InterruptedException, ExecutionException {
-    CompletableFuture.anyOf(outcome, process.onExit()).get();
+    awaitInterruptibly(() -> CompletableFuture.anyOf(outcome, process.onExit()).get());
     if (outcome.isDone()) {
       return outcome.get();
     }
@@ -59,7 +62,7 @@ public final class WorkerApplicationProcess implements AutoCloseable {
   public int awaitExitBeforeRegistration(WorkerApplicationControlPlane controlPlane)
       throws InterruptedException, ExecutionException {
     var registration = controlPlane.registration();
-    CompletableFuture.anyOf(registration, process.onExit()).get();
+    awaitInterruptibly(() -> CompletableFuture.anyOf(registration, process.onExit()).get());
     if (registration.isDone()) {
       throw new AssertionError(
           "The worker application registered although startup should refuse%n%s"
@@ -70,22 +73,47 @@ public final class WorkerApplicationProcess implements AutoCloseable {
   }
 
   public int awaitExit() throws InterruptedException {
-    return process.waitFor();
+    return awaitInterruptibly(process::waitFor);
   }
 
   /**
-   * Stops the child with SIGTERM and waits for it without a time limit, so a slow but progressing
-   * shutdown still writes the child's coverage data. Only an interrupted wait kills it.
+   * Stops the child with SIGTERM and waits for it to exit. A child that outlasts the hang guard is
+   * killed. When an earlier wait was interrupted, the child is killed at once.
    */
   @Override
   public void close() {
+    if (waitInterrupted) {
+      kill();
+      return;
+    }
+
     process.destroy();
     try {
-      process.waitFor();
+      // The guard outlasts Spring's 30 s shutdown phase, so a progressing shutdown writes coverage.
+      if (process.waitFor(SHUTDOWN_HANG_GUARD)) {
+        return;
+      }
     } catch (InterruptedException _) {
-      process.destroyForcibly();
       Thread.currentThread().interrupt();
     }
+
+    kill();
+  }
+
+  // An interrupted wait clears the interrupt flag, so close() keeps the cancellation here instead.
+  private <T, X extends Exception> T awaitInterruptibly(InterruptibleWait<T, X> wait)
+      throws InterruptedException, X {
+    try {
+      return wait.await();
+    } catch (InterruptedException interruption) {
+      waitInterrupted = true;
+      throw interruption;
+    }
+  }
+
+  private void kill() {
+    process.destroyForcibly();
+    process.onExit().join();
   }
 
   private String logTail() {
@@ -97,5 +125,10 @@ public final class WorkerApplicationProcess implements AutoCloseable {
     } catch (IOException exception) {
       return "The worker log could not be read: " + exception;
     }
+  }
+
+  @FunctionalInterface
+  private interface InterruptibleWait<T, X extends Exception> {
+    T await() throws InterruptedException, X;
   }
 }
