@@ -79,12 +79,27 @@ class FfprobeExecutorProcessTest {
         printf '%s' "$$" > "$0.pid"
         exec sleep 60
         """);
+    var request = request();
+
+    var completed = probeUntilInterrupted(binary, temporaryDirectory.resolve("movie.mkv"), request);
+
+    assertThat(completed.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_CANCELLED);
+    assertThat(completed.result().getProbeAttemptId()).isEqualTo(request.getProbeAttemptId());
+    assertThat(completed.result().getProbeVersion()).isEqualTo(request.getProbeVersion());
+    assertThat(completed.processAlive()).isFalse();
+    assertThat(completed.interrupted()).isTrue();
+  }
+
+  /**
+   * Probes on its own thread and interrupts that thread once the scripted ffprobe writes its
+   * process id to the file beside the script.
+   */
+  private ProbeCompletion probeUntilInterrupted(Path binary, Path source, ProbeRequest request)
+      throws Exception {
     var pidFile = Path.of(binary + ".pid");
     var process = new AtomicReference<ProcessHandle>();
     var completion = new CompletableFuture<ProbeCompletion>();
     var executor = FfprobeExecutor.forBinary(binary);
-    var source = temporaryDirectory.resolve("movie.mkv");
-    var request = request();
     var task =
         Thread.ofVirtual()
             .start(
@@ -106,13 +121,7 @@ class FfprobeExecutorProcessTest {
       process.set(ProcessHandle.of(Long.parseLong(Files.readString(pidFile))).orElseThrow());
       task.interrupt();
 
-      var completed = completion.get(3, TimeUnit.SECONDS);
-
-      assertThat(completed.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_CANCELLED);
-      assertThat(completed.result().getProbeAttemptId()).isEqualTo(request.getProbeAttemptId());
-      assertThat(completed.result().getProbeVersion()).isEqualTo(request.getProbeVersion());
-      assertThat(completed.processAlive()).isFalse();
-      assertThat(completed.interrupted()).isTrue();
+      return completion.get(3, TimeUnit.SECONDS);
     } finally {
       Optional.ofNullable(process.get()).ifPresent(ProcessHandle::destroyForcibly);
       task.interrupt();
