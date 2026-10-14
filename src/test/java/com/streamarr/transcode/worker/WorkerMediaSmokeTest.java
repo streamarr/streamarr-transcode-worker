@@ -33,10 +33,13 @@ import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.grpc.stub.StreamObserver;
 import java.io.ByteArrayOutputStream;
 import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -75,12 +78,18 @@ class WorkerMediaSmokeTest {
   private static final int SEEKABLE_SOURCE_SEGMENT_COUNT = 3;
   private static final int REPLACEMENT_START_SEQUENCE_NUMBER = 2;
 
+  // The 10-bit source spans segments 0 and 1 at the default 6 s period.
+  private static final int TEN_BIT_SOURCE_SECONDS = 8;
+  private static final int TEN_BIT_SOURCE_SEGMENT_COUNT = 2;
+
   private static final Duration JOB_LIMIT = Duration.ofMinutes(5);
   private static final int PERMITTED_KEEPALIVE_SECONDS = 10;
 
   @TempDir static Path longSources;
 
   @TempDir static Path seekableSources;
+
+  @TempDir static Path tenBitSources;
 
   // A source joins only once FFmpeg has written it successfully, so that a later case generates it
   // again instead of reading what a failed or timed-out run left behind.
@@ -248,6 +257,111 @@ class WorkerMediaSmokeTest {
               assertThat(audio.getCodec()).isEqualTo("aac");
               assertThat(audio.getChannels()).isEqualTo(1);
             });
+  }
+
+  @Test
+  @DisplayName("Should upload 8-bit High profile H.264 when transcoding a 10-bit SDR source")
+  void shouldUploadEightBitHighProfileH264WhenTranscodingATenBitSdrSource() throws Exception {
+    var source = tenBitSdrSource();
+
+    var uploads =
+        execute(
+            engine(softwareCapabilities()),
+            source.getParent(),
+            tenBitSdrSourceJob(source, "h264").build());
+
+    var configuration = AvcDecoderConfiguration.of(uploads.segments().get("init.mp4"));
+    assertThat(configuration.profileIndication()).as("AVCProfileIndication (High)").isEqualTo(100);
+    assertThat(configuration.chromaFormatIdc()).as("chroma_format_idc (4:2:0)").isEqualTo(1);
+    assertThat(configuration.bitDepthLumaMinus8()).as("bit_depth_luma_minus8").isZero();
+    assertThat(configuration.bitDepthChromaMinus8()).as("bit_depth_chroma_minus8").isZero();
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"h264", "hevc", "av1"})
+  @DisplayName("Should upload 8-bit 4:2:0 video when encoding a 10-bit SDR source")
+  void shouldUploadEightBitYuv420pVideoWhenEncodingATenBitSdrSource(String codecFamily)
+      throws Exception {
+    var source = tenBitSdrSource();
+
+    var uploads =
+        execute(
+            engine(softwareCapabilities()),
+            source.getParent(),
+            tenBitSdrSourceJob(source, codecFamily).build());
+
+    var media = playable(uploads.contentOf(uploads.names()));
+    assertDecodes(media);
+    assertThat(video(media).getCodec()).isEqualTo(codecFamily);
+    assertThat(pixelFormatOf(media)).isEqualTo("yuv420p");
+  }
+
+  private static VariantJob.Builder tenBitSdrSourceJob(Path source, String codecFamily) {
+    var job = variantJobBuilder();
+    job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
+    job.getDecisionBuilder()
+        .setMode(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE)
+        .setVideoCodecFamily(codecFamily)
+        .getAudioBuilder()
+        .setMode(AudioMode.AUDIO_MODE_NONE);
+    job.getVariantBuilder().setWidth(64).setHeight(36).setBitrateBitsPerSecond(100_000);
+    job.getExecutionBuilder().setMediaSegmentCount(TEN_BIT_SOURCE_SEGMENT_COUNT);
+    return job;
+  }
+
+  // 10-bit 4:2:0 HEVC without HDR signaling, the common real 10-bit source.
+  private static synchronized Path tenBitSdrSource() throws Exception {
+    var source = tenBitSources.resolve("ten-bit-sdr.mp4");
+    if (Files.exists(source)) {
+      return source;
+    }
+
+    var partial = tenBitSources.resolve("ten-bit-sdr.partial.mp4");
+    runFfmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=64x36:rate=24",
+            "-t",
+            String.valueOf(TEN_BIT_SOURCE_SECONDS),
+            "-c:v",
+            "libx265",
+            "-pix_fmt",
+            "yuv420p10le",
+            "-x265-params",
+            "log-level=error",
+            "-tag:v",
+            "hvc1"),
+        partial);
+    Files.move(partial, source);
+    return source;
+  }
+
+  private static String pixelFormatOf(Path media) throws Exception {
+    var process =
+        new ProcessBuilder(
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=pix_fmt",
+                "-of",
+                "csv=p=0",
+                media.toString())
+            .redirectErrorStream(true)
+            .start();
+    try {
+      var output =
+          new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).strip();
+      assertThat(process.waitFor(1, TimeUnit.MINUTES)).as("ffprobe finished").isTrue();
+      assertThat(process.exitValue()).as(output).isZero();
+      return output;
+    } finally {
+      process.destroyForcibly();
+    }
   }
 
   @ParameterizedTest(name = "{0}")
@@ -536,6 +650,48 @@ class WorkerMediaSmokeTest {
     var source = getClass().getResource("/BigBuckBunny_320x180_10s.mp4");
     assertThat(source).isNotNull();
     Files.copy(Path.of(source.toURI()), root.resolve("movie.mkv"));
+  }
+
+  // The fields of an ISO/IEC 14496-15 AVCDecoderConfigurationRecord that name the profile, chroma
+  // format and bit depth. The chroma format and bit depths follow the parameter sets and are
+  // present only for the High profiles.
+  private record AvcDecoderConfiguration(
+      int profileIndication,
+      int chromaFormatIdc,
+      int bitDepthLumaMinus8,
+      int bitDepthChromaMinus8) {
+
+    private static final byte[] AVCC = "avcC".getBytes(StandardCharsets.US_ASCII);
+
+    private static AvcDecoderConfiguration of(byte[] initializationSegment) {
+      var record = ByteBuffer.wrap(initializationSegment);
+      record.position(indexOfAvcc(initializationSegment) + AVCC.length);
+      record.get();
+      var profileIndication = Byte.toUnsignedInt(record.get());
+      record.position(record.position() + 3);
+      skipParameterSets(record, record.get() & 0x1f);
+      skipParameterSets(record, Byte.toUnsignedInt(record.get()));
+      return new AvcDecoderConfiguration(
+          profileIndication, record.get() & 0x03, record.get() & 0x07, record.get() & 0x07);
+    }
+
+    private static void skipParameterSets(ByteBuffer record, int count) {
+      for (var set = 0; set < count; set++) {
+        var length = Short.toUnsignedInt(record.getShort());
+        record.position(record.position() + length);
+      }
+    }
+
+    private static int indexOfAvcc(byte[] initializationSegment) {
+      for (var index = 0; index + AVCC.length <= initializationSegment.length; index++) {
+        if (Arrays.equals(
+            initializationSegment, index, index + AVCC.length, AVCC, 0, AVCC.length)) {
+          return index;
+        }
+      }
+
+      throw new AssertionError("the initialization segment carries no avcC box");
+    }
   }
 
   // What the control plane accepted, in upload order.
