@@ -29,6 +29,7 @@ import com.streamarr.transcode.engine.ProcessLauncher;
 import com.streamarr.transcode.engine.TranscodeCapabilityService;
 import com.streamarr.transcode.probe.FfprobeExecutor;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
+import com.streamarr.transcode.worker.support.X264Options;
 import io.grpc.Server;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.grpc.stub.StreamObserver;
@@ -449,7 +450,7 @@ class WorkerMediaSmokeTest {
 
     // x264's own definition of faster; its default, medium, sets ref=3, subme=7, mixed_ref=1,
     // weightp=2 and rc_lookahead=40.
-    assertThat(x264Options(uploads.contentOf(uploads.names())))
+    assertThat(X264Options.of(uploads.contentOf(uploads.names())))
         .contains("ref=2", "subme=4", "mixed_ref=0", "weightp=1", "rc_lookahead=20");
   }
 
@@ -491,15 +492,6 @@ class WorkerMediaSmokeTest {
         .setEncoderPreset(EncoderPreset.ENCODER_PRESET_FASTER);
     job.getExecutionBuilder().setMediaSegmentCount(SEEKABLE_SOURCE_SEGMENT_COUNT);
     return job;
-  }
-
-  // The settings x264 writes into its unregistered user data SEI, ended by a NUL byte.
-  private static List<String> x264Options(byte[] media) {
-    var text = new String(media, StandardCharsets.ISO_8859_1);
-    var start = text.indexOf("options: ");
-    assertThat(start).as("the x264 options in the output").isNotNegative();
-    var end = text.indexOf('\0', start);
-    return List.of(text.substring(start + "options: ".length(), end).split(" "));
   }
 
   private static ProcessLauncher capturingCommands(
