@@ -13,13 +13,15 @@ record BoxView(@NonNull String type, @NonNull ByteBuffer body) {
   }
 
   List<BoxView> children(String childType) {
+    return children().stream().filter(child -> child.type().equals(childType)).toList();
+  }
+
+  /** Every child box in order, read from the whole body. */
+  List<BoxView> children() {
     var children = new ArrayList<BoxView>();
     var content = body.duplicate();
     while (content.hasRemaining()) {
-      var child = readChild(content);
-      if (child.type().equals(childType)) {
-        children.add(child);
-      }
+      children.add(readChild(content));
     }
 
     return children;
