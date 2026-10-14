@@ -1134,11 +1134,12 @@ class WorkerMediaSmokeTest {
   }
 
   // The keyframe packets of the chosen stream as FFmpeg's -copyts -start_at_zero passes them to a
-  // muxer, which is the contract's zero-based timeline. Every stream is mapped, because FFmpeg
-  // starts an MPEG-TS source's timeline at the earliest start of the streams it maps. framecrc adds
-  // the packet flags to every line whose packet is not only a keyframe, and side data after them. A
-  // Matroska keyframe's decode time is its cue time, which equals
-  // its presentation time.
+  // muxer, which is the contract's zero-based timeline. Only the chosen stream is mapped, as a job
+  // attempt without audio maps it. -discard none keeps an MPEG-TS source's time zero at the
+  // earliest start of every stream, as ADR 0037 requires; without it, FFmpeg starts the timeline at
+  // the earliest mapped stream. framecrc adds the packet flags to every line whose packet is not
+  // only a keyframe, and side data after them. A Matroska keyframe's decode time is its cue time,
+  // which equals its presentation time.
   private static List<KeyframeTime> packetKeyframes(Path source, KeyframePositions positions)
       throws Exception {
     var process =
@@ -1150,10 +1151,12 @@ class WorkerMediaSmokeTest {
                 "error",
                 "-copyts",
                 "-start_at_zero",
+                "-discard",
+                "none",
                 "-i",
                 source.toString(),
                 "-map",
-                "0",
+                "0:" + positions.getStreamIndex(),
                 "-c",
                 "copy",
                 "-f",
@@ -1181,8 +1184,7 @@ class WorkerMediaSmokeTest {
               .findFirst()
               .map(field -> Integer.decode(field.substring("F=".length())))
               .orElse(1);
-      var isChosenStream = Integer.parseInt(fields.getFirst()) == positions.getStreamIndex();
-      if (isChosenStream && (flags & 1) != 0) {
+      if ((flags & 1) != 0) {
         var presentation = Long.parseLong(fields.get(2));
         var decode = isMatroska ? presentation : Long.parseLong(fields.get(1));
         keyframes.add(new KeyframeTime(presentation, decode));
