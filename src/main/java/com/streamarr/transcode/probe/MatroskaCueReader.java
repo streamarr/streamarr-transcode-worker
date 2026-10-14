@@ -231,8 +231,9 @@ final class MatroskaCueReader {
 
     static TopLevel read(FileChannel channel) throws IOException {
       var segment = firstSegment(channel);
-      var seekPositions = new HashMap<Long, Long>();
-      var found = elementsBeforeFirstCluster(channel, segment, seekPositions);
+      var beforeFirstCluster = elementsBeforeFirstCluster(channel, segment);
+      var found = beforeFirstCluster.found();
+      var seekPositions = beforeFirstCluster.seekPositions();
       for (var id : List.of(INFO, TRACKS, CUES)) {
         if (!found.containsKey(id) && seekPositions.containsKey(id)) {
           seek(channel, segment.dataStart() + seekPositions.get(id), id)
@@ -260,17 +261,15 @@ final class MatroskaCueReader {
       return segment;
     }
 
-    /**
-     * Collects the Info, Tracks and Cues elements that precede the first Cluster, and adds the
-     * positions each SeekHead lists to {@code seekPositions}.
-     */
-    private static Map<Long, ByteBuffer> elementsBeforeFirstCluster(
-        FileChannel channel, FileElement segment, Map<Long, Long> seekPositions)
-        throws IOException {
+    private record BeforeFirstCluster(Map<Long, ByteBuffer> found, Map<Long, Long> seekPositions) {}
+
+    private static BeforeFirstCluster elementsBeforeFirstCluster(
+        FileChannel channel, FileElement segment) throws IOException {
       var fileSize = channel.size();
       var segmentEnd =
           segment.size() == UNKNOWN_SIZE ? fileSize : Math.min(segment.end(), fileSize);
       var found = new HashMap<Long, ByteBuffer>();
+      var seekPositions = new HashMap<Long, Long>();
       var position = segment.dataStart();
       while (position < segmentEnd) {
         var element = element(channel, position);
@@ -289,7 +288,7 @@ final class MatroskaCueReader {
         position = element.end();
       }
 
-      return found;
+      return new BeforeFirstCluster(found, seekPositions);
     }
 
     private static Optional<ByteBuffer> seek(FileChannel channel, long position, long id)
