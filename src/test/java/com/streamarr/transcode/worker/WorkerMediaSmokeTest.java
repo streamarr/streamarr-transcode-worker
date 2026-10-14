@@ -662,21 +662,24 @@ class WorkerMediaSmokeTest {
     private static final byte[] AVCC = "avcC".getBytes(StandardCharsets.US_ASCII);
 
     private static AvcDecoderConfiguration of(byte[] initializationSegment) {
-      var record = ByteBuffer.wrap(initializationSegment);
-      record.position(indexOfAvcc(initializationSegment) + AVCC.length);
-      record.get();
-      var profileIndication = Byte.toUnsignedInt(record.get());
-      record.position(record.position() + 3);
-      skipParameterSets(record, record.get() & 0x1f);
-      skipParameterSets(record, Byte.toUnsignedInt(record.get()));
+      var configuration = ByteBuffer.wrap(initializationSegment);
+      configuration.position(indexOfAvcc(initializationSegment) + AVCC.length);
+      configuration.get();
+      var profileIndication = Byte.toUnsignedInt(configuration.get());
+      configuration.position(configuration.position() + 3);
+      skipParameterSets(configuration, configuration.get() & 0x1f);
+      skipParameterSets(configuration, Byte.toUnsignedInt(configuration.get()));
       return new AvcDecoderConfiguration(
-          profileIndication, record.get() & 0x03, record.get() & 0x07, record.get() & 0x07);
+          profileIndication,
+          configuration.get() & 0x03,
+          configuration.get() & 0x07,
+          configuration.get() & 0x07);
     }
 
-    private static void skipParameterSets(ByteBuffer record, int count) {
+    private static void skipParameterSets(ByteBuffer configuration, int count) {
       for (var set = 0; set < count; set++) {
-        var length = Short.toUnsignedInt(record.getShort());
-        record.position(record.position() + length);
+        var length = Short.toUnsignedInt(configuration.getShort());
+        configuration.position(configuration.position() + length);
       }
     }
 
