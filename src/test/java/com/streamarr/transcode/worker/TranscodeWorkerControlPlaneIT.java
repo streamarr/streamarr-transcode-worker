@@ -548,8 +548,10 @@ class TranscodeWorkerControlPlaneIT {
     }
   }
 
-  private static void assertQuitGracefully(ScriptedProcess process) throws InterruptedException {
-    process.waitFor();
+  // Every caller first waits for close(), the stop event, or the disconnection. The worker
+  // finishes each of them only after FFmpeg has exited.
+  private static void assertQuitGracefully(ScriptedProcess process) {
+    assertThat(process.isAlive()).as("FFmpeg has exited").isFalse();
     assertThat(process.stdinText()).isEqualTo("q");
     assertThat(process.wasDestroyedForcibly()).isFalse();
   }
