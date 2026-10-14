@@ -249,6 +249,32 @@ class TranscodeCapabilityServiceTest {
   }
 
   @Test
+  @DisplayName(
+      "Should run the hardware encoder that sorts first by name when two of one codec family pass")
+  void shouldRunTheHardwareEncoderThatSortsFirstByNameWhenTwoOfOneCodecFamilyPass() {
+    var outputs =
+        Map.of(
+            "ffmpeg", createProcess("ffmpeg version 8.1.2", 0),
+            "encoders",
+                createProcess(
+                    """
+                V....D h264_vaapi VAAPI H.264 encoder
+                V....D h264_qsv QSV H.264 encoder
+                V....D h264_nvenc NVENC H.264 encoder
+                """,
+                    0),
+            "hwaccels", createProcess("Hardware acceleration methods:\ncuda\nqsv\nvaapi\n", 0));
+    var service =
+        new TranscodeCapabilityService("ffmpeg", command -> resolveProcess(command, outputs));
+
+    service.detectCapabilities();
+
+    assertThat(service.getHardwareEncodingCapability().encoders())
+        .containsExactlyInAnyOrder("h264_nvenc", "h264_qsv", "h264_vaapi");
+    assertThat(service.resolveEncoder("h264").encoder()).isEqualTo("h264_nvenc");
+  }
+
+  @Test
   @DisplayName("Should terminate encoder validation when it exceeds its deadline")
   void shouldTerminateEncoderValidationWhenItExceedsItsDeadline() {
     var encoderProcess = TimedEncoderProcess.builder().interrupted(false).build();

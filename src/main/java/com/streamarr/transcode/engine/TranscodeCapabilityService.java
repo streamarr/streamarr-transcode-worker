@@ -127,8 +127,11 @@ public class TranscodeCapabilityService {
 
   private static Optional<EncoderBackend> hardwareBackend(
       CodecFamily family, Set<String> hardwareEncoders) {
+    // The iteration order of an immutable Set changes between JVM runs. Sorting by name keeps the
+    // advertised backend the same across worker restarts until a hardware preference order exists.
     return hardwareEncoders.stream()
         .filter(family::isHardwareEncoderOfThisFamily)
+        .sorted()
         .findFirst()
         .map(
             encoder ->
