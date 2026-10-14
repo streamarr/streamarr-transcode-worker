@@ -5,6 +5,7 @@ import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.SOURCE_NAMES
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
 import static java.nio.charset.StandardCharsets.US_ASCII;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 
 import build.buf.gen.streamarr.transcode.v1.MediaSourceRef;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
@@ -246,7 +247,9 @@ class TranscodeWorkerApplicationIT {
         worker.awaitRegistration(controlPlane);
         controlPlane.close();
 
-        worker.awaitExit();
+        assertThatCode(worker::awaitExit)
+            .as("the application exits after its control plane disconnects")
+            .doesNotThrowAnyException();
       }
     }
   }
