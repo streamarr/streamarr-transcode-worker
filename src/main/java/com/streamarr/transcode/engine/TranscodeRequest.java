@@ -1,6 +1,8 @@
 package com.streamarr.transcode.engine;
 
 import java.nio.file.Path;
+import java.time.Duration;
+import java.util.Optional;
 import java.util.UUID;
 import lombok.Builder;
 import lombok.NonNull;
@@ -19,7 +21,8 @@ public record TranscodeRequest(
     long bitrate,
     String variantLabel,
     int startSequenceNumber,
-    int mediaSegmentCount) {
+    int mediaSegmentCount,
+    Optional<Duration> seekPosition) {
 
   public TranscodeRequest {
     if (encoderPreset == null && encodesVideo(transcodeDecision)) {
@@ -32,6 +35,10 @@ public record TranscodeRequest(
 
     if (attemptId == null) {
       attemptId = UUID.randomUUID();
+    }
+
+    if (seekPosition == null) {
+      seekPosition = Optional.empty();
     }
   }
 
