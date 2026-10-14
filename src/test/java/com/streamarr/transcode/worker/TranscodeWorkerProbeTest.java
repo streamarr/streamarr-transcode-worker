@@ -82,10 +82,10 @@ class TranscodeWorkerProbeTest {
     var producer =
         new FfprobeExecutor(
             new ObjectMapper(),
-            arguments ->
+            command ->
                 processBuilder()
                     .stdout(
-                        arguments.contains("-read_intervals")
+                        command.arguments().contains("-read_intervals")
                             ? """
                               {"packets":[{"pts":35840,"dts":34816,"flags":"K__"}]}
                               """
@@ -136,10 +136,10 @@ class TranscodeWorkerProbeTest {
     var producer =
         new FfprobeExecutor(
             new ObjectMapper(),
-            arguments ->
+            command ->
                 processBuilder()
                     .stdout(
-                        arguments.contains("packet=pts,dts,flags")
+                        command.arguments().contains("packet=pts,dts,flags")
                             ? """
                               pts=0|dts=0|flags=K__
                               pts=3750|dts=3750|flags=___
@@ -511,8 +511,8 @@ class TranscodeWorkerProbeTest {
     var producer =
         new FfprobeExecutor(
             new ObjectMapper(),
-            arguments ->
-                Path.of(arguments.getLast()).equals(oldSource)
+            command ->
+                Path.of(command.arguments().getLast()).equals(oldSource)
                     ? process
                     : processBuilder().build());
     var oldRequest = requestBuilder().setSource(sourceBuilder().setRelativeKey("old.mkv")).build();

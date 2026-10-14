@@ -713,7 +713,8 @@ class FfprobeExecutorKeyframeTest {
       return new FfprobeExecutor(new ObjectMapper(), this::answer);
     }
 
-    private Process answer(List<String> arguments) {
+    private Process answer(ProbeCommand command) {
+      var arguments = command.arguments();
       var interval = arguments.indexOf("-read_intervals");
       if (interval >= 0) {
         return new CompletedProcess(

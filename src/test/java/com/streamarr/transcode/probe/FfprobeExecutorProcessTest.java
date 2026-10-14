@@ -33,7 +33,9 @@ class FfprobeExecutorProcessTest {
   @Test
   @DisplayName("Should return an execution failure when the configured binary is unavailable")
   void shouldReturnAnExecutionFailureWhenTheConfiguredBinaryIsUnavailable() {
-    var executor = FfprobeExecutor.forBinary(temporaryDirectory.resolve("missing-ffprobe"));
+    var executor =
+        FfprobeExecutor.forBinaries(
+            temporaryDirectory.resolve("missing-ffprobe"), temporaryDirectory.resolve("ffmpeg"));
 
     assertThat(
             executor
@@ -56,9 +58,7 @@ class FfprobeExecutorProcessTest {
         """);
 
     var result =
-        FfprobeExecutor.forBinary(binary)
-            .probe(temporaryDirectory.resolve("movie.mkv"), request())
-            .result();
+        executorFor(binary).probe(temporaryDirectory.resolve("movie.mkv"), request()).result();
 
     assertThat(result.hasMedia()).isTrue();
     assertThat(result.getMedia().getStreamsList()).hasSize(1);
@@ -137,7 +137,7 @@ class FfprobeExecutorProcessTest {
     var pidFile = Path.of(binary + ".pid");
     var process = new AtomicReference<ProcessHandle>();
     var completion = new CompletableFuture<ProbeCompletion>();
-    var executor = FfprobeExecutor.forBinary(binary);
+    var executor = executorFor(binary);
     var task =
         Thread.ofVirtual()
             .start(
@@ -181,7 +181,7 @@ class FfprobeExecutorProcessTest {
         """);
     var source = temporaryDirectory.resolve("movie with spaces.mkv");
 
-    var result = FfprobeExecutor.forBinary(binary).probe(source, request()).result();
+    var result = executorFor(binary).probe(source, request()).result();
 
     assertThat(result.hasMedia()).isTrue();
     assertThat(result.getMedia().getStreams(0).getCodec()).isEqualTo("h264");
@@ -195,6 +195,10 @@ class FfprobeExecutorProcessTest {
             "-show_format",
             "-show_error",
             source.toString());
+  }
+
+  private FfprobeExecutor executorFor(Path ffprobe) {
+    return FfprobeExecutor.forBinaries(ffprobe, temporaryDirectory.resolve("ffmpeg"));
   }
 
   private ProbeRequest request() {

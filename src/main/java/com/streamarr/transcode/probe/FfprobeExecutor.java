@@ -9,6 +9,7 @@ import build.buf.gen.streamarr.transcode.v1.ProbeMediaInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import com.google.protobuf.Duration;
+import com.streamarr.transcode.probe.ProbeCommand.ProbeTool;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -43,10 +44,18 @@ public final class FfprobeExecutor {
   private static final int AVERROR_EOF = -541478725;
 
   @NonNull private final ObjectMapper objectMapper;
-  @NonNull private final Function<List<String>, Process> processFactory;
+  @NonNull private final Function<ProbeCommand, Process> processFactory;
 
-  public static FfprobeExecutor forBinary(@NonNull Path binary) {
-    return new FfprobeExecutor(new ObjectMapper(), arguments -> start(binary, arguments));
+  public static FfprobeExecutor forBinaries(@NonNull Path ffprobe, @NonNull Path ffmpeg) {
+    return new FfprobeExecutor(
+        new ObjectMapper(),
+        command ->
+            start(
+                switch (command.tool()) {
+                  case FFPROBE -> ffprobe;
+                  case FFMPEG -> ffmpeg;
+                },
+                command.arguments()));
   }
 
   private static Process start(Path binary, List<String> arguments) {
@@ -56,7 +65,7 @@ public final class FfprobeExecutor {
     try {
       return new ProcessBuilder(command).redirectError(ProcessBuilder.Redirect.DISCARD).start();
     } catch (IOException e) {
-      throw new UncheckedIOException("Failed to start ffprobe", e);
+      throw new UncheckedIOException("Failed to start " + binary, e);
     }
   }
 
@@ -157,7 +166,7 @@ public final class FfprobeExecutor {
 
   private <T> Finished<T> run(List<String> arguments, StdoutReader<T> reader)
       throws ExecutionException, InterruptedException {
-    var process = processFactory.apply(arguments);
+    var process = processFactory.apply(new ProbeCommand(ProbeTool.FFPROBE, arguments));
     try (var readers = Executors.newVirtualThreadPerTaskExecutor()) {
       var output = readers.submit(() -> readOutput(process, reader));
       try {

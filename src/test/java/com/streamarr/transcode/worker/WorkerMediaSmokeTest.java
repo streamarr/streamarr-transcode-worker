@@ -135,11 +135,7 @@ class WorkerMediaSmokeTest {
     copyMedia();
     var runtime = new ScriptedWorkerRuntime();
     var request = requestBuilder().build();
-    try (var worker =
-        workerBuilder(root)
-            .runtime(runtime)
-            .ffprobe(FfprobeExecutor.forBinary(Path.of("ffprobe")))
-            .build()) {
+    try (var worker = workerBuilder(root).runtime(runtime).ffprobe(probeExecutor()).build()) {
       worker.start("localhost", 1);
       start(runtime.connection(), request);
       runtime.probes().drain();
@@ -168,11 +164,7 @@ class WorkerMediaSmokeTest {
     Files.writeString(root.resolve("movie.mkv"), "This file contains no media stream.");
     var runtime = new ScriptedWorkerRuntime();
     var request = requestBuilder().build();
-    try (var worker =
-        workerBuilder(root)
-            .runtime(runtime)
-            .ffprobe(FfprobeExecutor.forBinary(Path.of("ffprobe")))
-            .build()) {
+    try (var worker = workerBuilder(root).runtime(runtime).ffprobe(probeExecutor()).build()) {
       worker.start("localhost", 1);
       start(runtime.connection(), request);
       runtime.probes().drain();
@@ -205,7 +197,7 @@ class WorkerMediaSmokeTest {
       throws Exception {
     var source = keyframeSource(fixture);
 
-    var report = FfprobeExecutor.forBinary(Path.of("ffprobe")).probe(source, keyframeRequest());
+    var report = probeExecutor().probe(source, keyframeRequest());
 
     var positions = report.result().getMedia().getKeyframes().getPositions();
     var packetKeyframes = packetKeyframes(source, positions);
@@ -248,7 +240,7 @@ class WorkerMediaSmokeTest {
   void shouldReportContainerIndexKeyframePositionsWhenPacketScanReadsSourceWithIndex(String fixture)
       throws Exception {
     var source = keyframeSource(fixture);
-    var ffprobe = FfprobeExecutor.forBinary(Path.of("ffprobe"));
+    var ffprobe = probeExecutor();
 
     var index = ffprobe.probe(source, keyframeRequest());
     var scan = ffprobe.probe(source, packetScanRequest());
@@ -281,7 +273,7 @@ class WorkerMediaSmokeTest {
       String fixture) throws Exception {
     var source = keyframeSource(fixture);
 
-    var report = FfprobeExecutor.forBinary(Path.of("ffprobe")).probe(source, packetScanRequest());
+    var report = probeExecutor().probe(source, packetScanRequest());
 
     var positions = report.result().getMedia().getKeyframes().getPositions();
     var packetKeyframes = packetKeyframes(source, positions);
@@ -316,11 +308,7 @@ class WorkerMediaSmokeTest {
     var probe =
         Thread.ofVirtual()
             .start(
-                () ->
-                    result.complete(
-                        FfprobeExecutor.forBinary(Path.of("ffprobe"))
-                            .probe(source, packetScanRequest())
-                            .result()));
+                () -> result.complete(probeExecutor().probe(source, packetScanRequest()).result()));
 
     try {
       var scan =
@@ -994,7 +982,11 @@ class WorkerMediaSmokeTest {
   }
 
   private static ProbeAttemptResult keyframeProbe(Path source) {
-    return FfprobeExecutor.forBinary(Path.of("ffprobe")).probe(source, keyframeRequest()).result();
+    return probeExecutor().probe(source, keyframeRequest()).result();
+  }
+
+  private static FfprobeExecutor probeExecutor() {
+    return FfprobeExecutor.forBinaries(Path.of("ffprobe"), Path.of("ffmpeg"));
   }
 
   private static ProbeRequest packetScanRequest() {
@@ -1177,7 +1169,7 @@ class WorkerMediaSmokeTest {
   private record KeyframeTime(long presentation, long decode) {}
 
   private static List<ProbeStreamInfo> streams(Path media) {
-    return FfprobeExecutor.forBinary(Path.of("ffprobe"))
+    return probeExecutor()
         .probe(media, requestBuilder().build())
         .result()
         .getMedia()
