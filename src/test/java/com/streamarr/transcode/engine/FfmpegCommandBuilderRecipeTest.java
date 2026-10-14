@@ -9,6 +9,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
@@ -35,6 +36,12 @@ class FfmpegCommandBuilderRecipeTest {
           .channels(1)
           .bitrate(8000L)
           .build();
+  // The presets Automatic resolves to for each software encoder (ADR 0044).
+  private static final Map<String, EncoderPreset> RECORDED_PRESETS =
+      Map.of(
+          "libx264", EncoderPreset.FASTER,
+          "libsvtav1", EncoderPreset.FASTER,
+          "libx265", EncoderPreset.VERYFAST);
   private static final AudioDecision COPIED_AUDIO =
       AudioDecision.builder().mode(AudioMode.COPY).codec("aac").channels(1).bitrate(0L).build();
   // The fixture-only additions the fixture README lists: quiet, non-interactive logging and a
@@ -90,6 +97,7 @@ class FfmpegCommandBuilderRecipeTest {
             .targetSegmentDuration(recording.period())
             .framerate(recording.source().videoFrameRate())
             .transcodeDecision(decisionRecordedAs(recording))
+            .encoderPreset(RECORDED_PRESETS.get(recording.videoEncoder()))
             .height(RECORDED_HEIGHT)
             .bitrate(RECORDED_VIDEO_BITRATE)
             .build();

@@ -5,6 +5,7 @@ import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import build.buf.gen.streamarr.transcode.v1.VariantJob;
 import com.streamarr.transcode.engine.AudioDecision;
 import com.streamarr.transcode.engine.AudioMode;
+import com.streamarr.transcode.engine.EncoderPreset;
 import com.streamarr.transcode.engine.SubtitleDecision;
 import com.streamarr.transcode.engine.SubtitleMode;
 import com.streamarr.transcode.engine.TranscodeDecision;
@@ -32,6 +33,7 @@ final class WorkerVariantJobMapper {
         .targetSegmentDuration(execution.getTargetSegmentDurationSeconds())
         .framerate(execution.getFramerate())
         .transcodeDecision(decision(job.getDecision()))
+        .encoderPreset(encoderPresetOf(variant.getEncoderPreset()).orElse(null))
         .width(variant.getWidth())
         .height(variant.getHeight())
         .bitrate(variant.getBitrateBitsPerSecond())
@@ -79,11 +81,24 @@ final class WorkerVariantJobMapper {
     return modeOf(job.getDecision().getMode()).map(TranscodeMode::encodesVideo).orElse(false);
   }
 
-  @SuppressWarnings("checkstyle:fullyQualifiedName")
   static boolean hasEncoderPreset(VariantJob job) {
-    return switch (job.getVariant().getEncoderPreset()) {
-      case ENCODER_PRESET_UNSPECIFIED, UNRECOGNIZED -> false;
-      default -> true;
+    return encoderPresetOf(job.getVariant().getEncoderPreset()).isPresent();
+  }
+
+  @SuppressWarnings("checkstyle:fullyQualifiedName")
+  private static Optional<EncoderPreset> encoderPresetOf(
+      build.buf.gen.streamarr.transcode.v1.EncoderPreset preset) {
+    return switch (preset) {
+      case ENCODER_PRESET_ULTRAFAST -> Optional.of(EncoderPreset.ULTRAFAST);
+      case ENCODER_PRESET_SUPERFAST -> Optional.of(EncoderPreset.SUPERFAST);
+      case ENCODER_PRESET_VERYFAST -> Optional.of(EncoderPreset.VERYFAST);
+      case ENCODER_PRESET_FASTER -> Optional.of(EncoderPreset.FASTER);
+      case ENCODER_PRESET_FAST -> Optional.of(EncoderPreset.FAST);
+      case ENCODER_PRESET_MEDIUM -> Optional.of(EncoderPreset.MEDIUM);
+      case ENCODER_PRESET_SLOW -> Optional.of(EncoderPreset.SLOW);
+      case ENCODER_PRESET_SLOWER -> Optional.of(EncoderPreset.SLOWER);
+      case ENCODER_PRESET_VERYSLOW -> Optional.of(EncoderPreset.VERYSLOW);
+      case ENCODER_PRESET_UNSPECIFIED, UNRECOGNIZED -> Optional.empty();
     };
   }
 

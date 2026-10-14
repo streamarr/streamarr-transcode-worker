@@ -11,6 +11,7 @@ import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engine;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engineBuilder;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.workerConfigurationBuilder;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
+import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.startVariant;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.stopVariant;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variantJobBuilder;
@@ -43,6 +44,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Executors;
@@ -437,6 +439,40 @@ class TranscodeWorkerJobAttemptTest {
                     Arguments.of(mode, 0, 0), Arguments.of(mode, 5, 5), Arguments.of(mode, 4, 5)));
   }
 
+  @ParameterizedTest(name = "{0} is {1}")
+  @MethodSource("encoderPresetNames")
+  @DisplayName("Should map the encoder preset when the job carries one")
+  void shouldMapEncoderPresetWhenJobCarriesOne(EncoderPreset preset, String presetName)
+      throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJobBuilder();
+    job.getDecisionBuilder().setMode(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getVariantBuilder().setEncoderPreset(preset);
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(launcher.command(fromProto(job.getJobAttemptId())))
+          .containsSequence("-c:v", "libx264", "-preset", presetName);
+    }
+  }
+
+  static Stream<Arguments> encoderPresetNames() {
+    return Stream.of(
+        Arguments.of(EncoderPreset.ENCODER_PRESET_ULTRAFAST, "ultrafast"),
+        Arguments.of(EncoderPreset.ENCODER_PRESET_SUPERFAST, "superfast"),
+        Arguments.of(EncoderPreset.ENCODER_PRESET_VERYFAST, "veryfast"),
+        Arguments.of(EncoderPreset.ENCODER_PRESET_FASTER, "faster"),
+        Arguments.of(EncoderPreset.ENCODER_PRESET_FAST, "fast"),
+        Arguments.of(EncoderPreset.ENCODER_PRESET_MEDIUM, "medium"),
+        Arguments.of(EncoderPreset.ENCODER_PRESET_SLOW, "slow"),
+        Arguments.of(EncoderPreset.ENCODER_PRESET_SLOWER, "slower"),
+        Arguments.of(EncoderPreset.ENCODER_PRESET_VERYSLOW, "veryslow"));
+  }
+
   @ParameterizedTest(name = "{0}, preset value {1}")
   @MethodSource("videoEncodingsWithoutAPreset")
   @DisplayName(
@@ -478,6 +514,33 @@ class TranscodeWorkerJobAttemptTest {
 
       awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_COMPLETED);
       assertThat(launcher.command(fromProto(job.getJobAttemptId()))).doesNotContain("-preset");
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should pass the job's own preset to every attempt when a replacement attempt runs the same"
+          + " job")
+  void shouldPassTheJobsOwnPresetToEveryAttemptWhenAReplacementAttemptRunsTheSameJob()
+      throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var first = variantJobBuilder();
+    first.getDecisionBuilder().setMode(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    first.getVariantBuilder().setEncoderPreset(EncoderPreset.ENCODER_PRESET_SLOW);
+    var replacement = first.clone().setJobAttemptId(toProto(UUID.randomUUID()));
+    replacement.getExecutionBuilder().setStartSequenceNumber(5);
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, first.build());
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      startVariant(connection, replacement.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(List.of(first, replacement))
+          .extracting(job -> launcher.command(fromProto(job.getJobAttemptId())))
+          .allSatisfy(command -> assertThat(command).containsSequence("-preset", "slow"));
     }
   }
 

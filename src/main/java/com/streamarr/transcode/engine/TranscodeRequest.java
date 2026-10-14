@@ -13,6 +13,8 @@ public record TranscodeRequest(
     int targetSegmentDuration,
     double framerate,
     @NonNull TranscodeDecision transcodeDecision,
+    // Absent only when the job copies the video.
+    EncoderPreset encoderPreset,
     int width,
     int height,
     long bitrate,
