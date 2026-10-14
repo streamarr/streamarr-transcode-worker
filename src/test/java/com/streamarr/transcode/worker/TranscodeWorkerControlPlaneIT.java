@@ -652,8 +652,7 @@ class TranscodeWorkerControlPlaneIT {
                         .setBitrateBitsPerSecond(128_000))
                 .setSubtitle(
                     SubtitleDecision.newBuilder().setMode(SubtitleMode.SUBTITLE_MODE_EXCLUDE))
-                .setContainer(ContainerFormat.CONTAINER_FORMAT_FMP4)
-                .setAlignKeyframesToSegments(true))
+                .setContainer(ContainerFormat.CONTAINER_FORMAT_FMP4))
         .setVariant(
             VariantSpec.newBuilder()
                 .setVariantLabel("720p")

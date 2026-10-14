@@ -90,7 +90,6 @@ class FfmpegTranscodeEngineTest {
                         .bitrate(128_000L)
                         .build())
                 .subtitleDecision(SubtitleDecisions.EXCLUDED)
-                .needsKeyframeAlignment(mode != TranscodeMode.FULL_TRANSCODE)
                 .build())
         .width(1920)
         .height(1080)
