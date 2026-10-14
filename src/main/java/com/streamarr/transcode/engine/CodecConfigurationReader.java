@@ -43,19 +43,38 @@ final class CodecConfigurationReader {
    * @throws FragmentedMp4Exception when a box that the codec string needs is missing or too short
    */
   static List<TrackCodec> tracksOf(InitializationSegment segment) {
-    var moov =
-        new BoxView("initialization segment", ByteBuffer.wrap(segment.bytes()))
-            .requiredChild("moov");
-    return moov.children("trak").stream()
+    return moovOf(segment).children("trak").stream()
         .map(CodecConfigurationReader::trackCodecOf)
         .flatMap(Optional::stream)
         .toList();
   }
 
+  /**
+   * The codec configuration of the first video track; empty when the {@code moov} declares no video
+   * track. The reader parses no other track's sample entry.
+   *
+   * @throws FragmentedMp4Exception when a box that the codec string needs is missing or too short
+   */
+  static Optional<Video> firstVideoOf(InitializationSegment segment) {
+    return moovOf(segment).children("trak").stream()
+        .map(trak -> trak.requiredChild("mdia"))
+        .filter(mdia -> handlerOf(mdia).equals("vide"))
+        .findFirst()
+        .map(mdia -> videoOf(sampleEntryOf(mdia)));
+  }
+
+  private static BoxView moovOf(InitializationSegment segment) {
+    return new BoxView("initialization segment", ByteBuffer.wrap(segment.bytes()))
+        .requiredChild("moov");
+  }
+
+  private static String handlerOf(BoxView mdia) {
+    return mdia.requiredChild("hdlr").fields().skip(8).fourcc();
+  }
+
   private static Optional<TrackCodec> trackCodecOf(BoxView trak) {
     var mdia = trak.requiredChild("mdia");
-    var handler = mdia.requiredChild("hdlr").fields().skip(8).fourcc();
-    return switch (handler) {
+    return switch (handlerOf(mdia)) {
       case "vide" -> Optional.of(videoOf(sampleEntryOf(mdia)));
       case "soun" -> Optional.of(audioOf(sampleEntryOf(mdia)));
       default -> Optional.empty();

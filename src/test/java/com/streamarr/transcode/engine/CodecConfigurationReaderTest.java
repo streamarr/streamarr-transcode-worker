@@ -295,6 +295,34 @@ class CodecConfigurationReaderTest {
         .isInstanceOf(FragmentedMp4Exception.class);
   }
 
+  @Test
+  @DisplayName(
+      "Should read the first video track without parsing an audio track when the audio track's"
+          + " esds is malformed")
+  void shouldReadTheFirstVideoTrackWithoutParsingAnAudioTrackWhenTheAudioTracksEsdsIsMalformed() {
+    var misplacedDescriptor = box("mp4a", new byte[28], fullBox("esds", 0, hex("0480808000")));
+    var avcC = box("avcC", hex("01640028FFE100026742010002" + "68CE"));
+    var segment =
+        new InitializationSegment(
+            concat(
+                ftyp(),
+                box(
+                    "moov",
+                    trak("soun", fullBox("stsd", 0, u32(1), misplacedDescriptor)),
+                    trak("vide", fullBox("stsd", 0, u32(1), box("avc1", new byte[78], avcC))))));
+
+    assertThat(CodecConfigurationReader.firstVideoOf(segment))
+        .contains(new Video("avc1.640028", Optional.empty()));
+  }
+
+  @Test
+  @DisplayName("Should find no video when the initialization segment holds only an audio track")
+  void shouldFindNoVideoWhenTheInitializationSegmentHoldsOnlyAnAudioTrack() {
+    var segment = withAudioSampleEntry(box("ac-3", new byte[28]));
+
+    assertThat(CodecConfigurationReader.firstVideoOf(segment)).isEmpty();
+  }
+
   private static InitializationSegment withVideoSampleEntry(byte[] sampleEntry) {
     return withStsd(fullBox("stsd", 0, u32(1), sampleEntry));
   }
@@ -308,9 +336,12 @@ class CodecConfigurationReaderTest {
   }
 
   private static InitializationSegment withTrack(String handler, byte[] stsd) {
+    return new InitializationSegment(concat(ftyp(), box("moov", trak(handler, stsd))));
+  }
+
+  private static byte[] trak(String handler, byte[] stsd) {
     var hdlr = fullBox("hdlr", 0, u32(0), fourcc(handler), new byte[12], new byte[1]);
-    var trak = box("trak", box("mdia", hdlr, box("minf", box("stbl", stsd))));
-    return new InitializationSegment(concat(ftyp(), box("moov", trak)));
+    return box("trak", box("mdia", hdlr, box("minf", box("stbl", stsd))));
   }
 
   private static byte[] hex(String digits) {

@@ -24,6 +24,7 @@ import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.OptionalDouble;
@@ -746,6 +747,39 @@ class ProducerTest {
 
     assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
     assertThat(sink.acceptedNames()).isEmpty();
+  }
+
+  @Test
+  @DisplayName(
+      "Should deliver the attempt when the reader cannot parse the codec configuration of an audio"
+          + " track")
+  void shouldDeliverTheAttemptWhenTheReaderCannotParseTheCodecConfigurationOfAnAudioTrack() {
+    var misplacedDescriptor =
+        IsoBoxes.box(
+            "mp4a",
+            new byte[28],
+            IsoBoxes.fullBox("esds", 0, HexFormat.of().parseHex("0480808000")));
+    var moov =
+        IsoBoxes.moov(
+            IsoBoxes.Track.video().build(),
+            IsoBoxes.Track.audio().sampleEntry(misplacedDescriptor).build());
+    var output =
+        IsoBoxes.concat(
+            IsoBoxes.ftyp(),
+            moov,
+            IsoBoxes.moof(
+                IsoBoxes.videoTraf()
+                    .baseMediaDecodeTime(0L)
+                    .firstSampleFlags(IsoBoxes.SYNC_SAMPLE_FLAGS)
+                    .sampleDurations(List.of(1001))
+                    .build()),
+            IsoBoxes.mdat(1));
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer = producerOfOneSecondSegments(process).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
   }
 
   @Test

@@ -38,10 +38,7 @@ final class VideoOutputCheck {
 
   private static Video videoOf(InitializationSegment segment) {
     try {
-      return CodecConfigurationReader.tracksOf(segment).stream()
-          .filter(Video.class::isInstance)
-          .map(Video.class::cast)
-          .findFirst()
+      return CodecConfigurationReader.firstVideoOf(segment)
           .orElseThrow(() -> mismatch("the initialization segment declares no video track"));
     } catch (FragmentedMp4Exception e) {
       if (e.getReason() == Reason.OUTPUT_MISMATCH) {
