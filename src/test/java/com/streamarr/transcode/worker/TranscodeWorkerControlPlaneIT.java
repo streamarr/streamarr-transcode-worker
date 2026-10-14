@@ -46,6 +46,7 @@ import build.buf.gen.streamarr.transcode.v1.WorkerIdentity;
 import build.buf.gen.streamarr.transcode.v1.WorkerRegistration;
 import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
 import build.buf.gen.streamarr.transcode.v1.WorkerVerifiedVideoEncoder;
+import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
@@ -732,6 +733,14 @@ class TranscodeWorkerControlPlaneIT {
   }
 
   private TranscodeWorker worker(Path mediaRoot, ScriptedProcessLauncher launcher, int slots) {
+    return worker(mediaRoot, engine(launcher), slots);
+  }
+
+  private TranscodeWorker hardwareWorker(Path mediaRoot, ScriptedProcessLauncher launcher) {
+    return worker(mediaRoot, engineBuilder(launcher, H264_NVENC_ENCODERS).build(), 1);
+  }
+
+  private TranscodeWorker worker(Path mediaRoot, FfmpegTranscodeEngine engine, int slots) {
     var configuration =
         workerConfigurationBuilder()
             .availableSlots(slots)
@@ -739,20 +748,7 @@ class TranscodeWorkerControlPlaneIT {
             .build();
     return TranscodeWorker.builder()
         .configuration(configuration)
-        .engine(engine(launcher))
-        .ffprobe(fileContentsProducer())
-        .build();
-  }
-
-  private TranscodeWorker hardwareWorker(Path mediaRoot, ScriptedProcessLauncher launcher) {
-    var configuration =
-        workerConfigurationBuilder()
-            .availableSlots(1)
-            .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, mediaRoot))
-            .build();
-    return TranscodeWorker.builder()
-        .configuration(configuration)
-        .engine(engineBuilder(launcher, H264_NVENC_ENCODERS).build())
+        .engine(engine)
         .ffprobe(fileContentsProducer())
         .build();
   }
