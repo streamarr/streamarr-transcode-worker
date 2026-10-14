@@ -788,6 +788,153 @@ class FfprobeExecutorKeyframeTest {
     assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
   }
 
+  @Test
+  @DisplayName(
+      "Should take each keyframe's decode time from its presentation time when the scanned stream"
+          + " does not reorder frames")
+  void shouldTakeEachKeyframeDecodeTimeFromPresentationTimeWhenScannedStreamDoesNotReorderFrames() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(
+                """
+                {"format":{"format_name":"mpegts","start_time":"0.000000"},
+                 "streams":[{"index":0,"codec_type":"video","codec_name":"h264",
+                             "time_base":"1/90000","has_b_frames":0}]}
+                """)
+            .packetScan(
+                """
+                0, -9223372036854775808, 0, 3750, 100, 0x00000000
+                0, 3750, 3750, 3750, 100, 0x00000000, F=0x0
+                0, -9223372036854775808, 67500, 3750, 100, 0x00000000
+                """)
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
+
+    assertThat(report.keyframePositionsParts())
+        .singleElement()
+        .satisfies(
+            part -> {
+              assertThat(part.getPresentationTimeDeltasList()).containsExactly(0L, 67_500L);
+              assertThat(part.getDecodeTimeDeltasList()).containsExactly(0L, 67_500L);
+            });
+  }
+
+  @Test
+  @DisplayName(
+      "Should report the keyframes unavailable when ffprobe does not say whether the scanned stream"
+          + " reorders frames")
+  void shouldReportKeyframesUnavailableWhenFfprobeDoesNotSayWhetherScannedStreamReordersFrames() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(
+                """
+                {"format":{"format_name":"avi","start_time":"0.000000"},
+                 "streams":[{"index":0,"codec_type":"video","codec_name":"h264",
+                             "time_base":"1/24"}]}
+                """)
+            .packetScan("0, 0, -9223372036854775808, 1, 100, 0x00000000\n")
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("avi.avi"), packetScanRequest());
+
+    assertThat(report.result().getMedia().getKeyframes().getUnavailable().getReason())
+        .isEqualTo(
+            KeyframesUnavailableReason.KEYFRAMES_UNAVAILABLE_REASON_KEYFRAME_WITHOUT_TIMESTAMP);
+    assertThat(report.keyframePositionsParts()).isEmpty();
+  }
+
+  @Test
+  @DisplayName(
+      "Should report the scanned keyframe times unchanged when ffprobe gives the source no start"
+          + " time")
+  void shouldReportScannedKeyframeTimesUnchangedWhenFfprobeGivesSourceNoStartTime() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(
+                """
+                {"format":{"format_name":"mpegts","start_time":"N/A"},
+                 "streams":[{"index":0,"codec_type":"video","codec_name":"h264",
+                             "time_base":"1/90000","has_b_frames":2}]}
+                """)
+            .packetScan(
+                """
+                0, 126000, 133500, 3750, 100, 0x00000000
+                0, 189750, 197250, 3750, 100, 0x00000000
+                """)
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
+
+    assertThat(report.keyframePositionsParts())
+        .singleElement()
+        .satisfies(
+            part -> {
+              assertThat(part.getPresentationTimeDeltasList()).containsExactly(133_500L, 63_750L);
+              assertThat(part.getDecodeTimeDeltasList()).containsExactly(126_000L, 63_750L);
+            });
+  }
+
+  @Test
+  @DisplayName("Should scan the first video stream when another stream comes before it")
+  void shouldScanFirstVideoStreamWhenAnotherStreamComesBeforeIt() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(
+                """
+                {"format":{"format_name":"mpegts","start_time":"0.000000"},
+                 "streams":[
+                  {"index":0,"codec_type":"audio","codec_name":"aac","time_base":"1/90000"},
+                  {"index":1,"codec_type":"video","codec_name":"h264","time_base":"1/90000",
+                   "has_b_frames":2,"disposition":{"attached_pic":0}}]}
+                """)
+            .packetScan("1, 0, 0, 3750, 100, 0x00000000\n")
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
+
+    assertThat(report.result().getMedia().getKeyframes().getPositions().getStreamIndex())
+        .isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName(
+      "Should require a packet scan when ffprobe reports an unreadable track id for an MP4 stream")
+  void shouldRequirePacketScanWhenFfprobeReportsUnreadableTrackIdForMp4Stream() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(
+                """
+                {"format":{"format_name":"mov,mp4,m4a,3gp,3g2,mj2","start_time":"0.000000"},
+                 "streams":[{"index":0,"codec_type":"video","codec_name":"h264","id":"0xzz"}]}
+                """)
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mp4-bframes-editlist.mp4"), keyframeRequest());
+
+    assertThat(report.result().getMedia().getKeyframes().getPacketScanRequired())
+        .isEqualTo(KeyframePacketScanReason.KEYFRAME_PACKET_SCAN_REASON_INCOMPLETE_CONTAINER_INDEX);
+  }
+
+  @Test
+  @DisplayName("Should report an execution failure when FFmpeg's diagnostics cannot be read")
+  void shouldReportExecutionFailureWhenFfmpegDiagnosticsCannotBeRead() {
+    var ffmpeg =
+        new CompletedProcess("0, 126000, 133500, 3750, 100, 0x00000000\n", 0, false)
+            .withUnreadableDiagnostics();
+    var executor =
+        new FfprobeExecutor(
+            new ObjectMapper(),
+            command ->
+                command.tool() == ProbeCommand.ProbeTool.FFMPEG
+                    ? ffmpeg
+                    : new CompletedProcess(MPEGTS_STREAMS, 0, false));
+
+    var report = executor.probe(fixture("mpegts.ts"), packetScanRequest());
+
+    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
+  }
+
   private static String streamsOf(String formatName) {
     return """
         {"format":{"format_name":"%s","start_time":"0.000000"},
@@ -876,6 +1023,17 @@ class FfprobeExecutorKeyframeTest {
 
     private CompletedProcess withDiagnostics(String diagnostics) {
       stderr = new ByteArrayInputStream(diagnostics.getBytes(StandardCharsets.UTF_8));
+      return this;
+    }
+
+    private CompletedProcess withUnreadableDiagnostics() {
+      stderr =
+          new InputStream() {
+            @Override
+            public int read() throws IOException {
+              throw new IOException("Diagnostics pipe unavailable");
+            }
+          };
       return this;
     }
 
