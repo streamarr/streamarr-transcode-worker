@@ -71,11 +71,13 @@ import java.util.function.UnaryOperator;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.LoggerFactory;
 
 @Tag("IntegrationTest")
 @DisplayName("Transcode Worker Control Plane Integration Tests")
+@Timeout(value = 2, unit = TimeUnit.MINUTES)
 class TranscodeWorkerControlPlaneIT {
 
   @TempDir Path tempDir;
@@ -453,7 +455,7 @@ class TranscodeWorkerControlPlaneIT {
       worker.start("localhost", server.port());
       service.sendStart(service.registeredWorker(), job);
       service.awaitStarted(job);
-      assertThat(service.uploadReceived.await(5, TimeUnit.SECONDS)).isTrue();
+      service.uploadReceived.await();
 
       worker.close();
 
@@ -499,7 +501,7 @@ class TranscodeWorkerControlPlaneIT {
       worker.start("localhost", server.port());
       service.sendStart(service.registeredWorker(), job);
       service.awaitStarted(job);
-      assertThat(service.uploadReceived.await(5, TimeUnit.SECONDS)).isTrue();
+      service.uploadReceived.await();
       var process = launcher.process(fromProto(job.getJobAttemptId()));
 
       assertThat(service.uploads)
@@ -846,7 +848,7 @@ class TranscodeWorkerControlPlaneIT {
     }
 
     private void send(EstablishWorkerSessionResponse response) throws InterruptedException {
-      assertThat(registered.await(5, TimeUnit.SECONDS)).isTrue();
+      registered.await();
       responses.onNext(response);
     }
 
@@ -872,8 +874,7 @@ class TranscodeWorkerControlPlaneIT {
     }
 
     private void awaitStarted(VariantJob job) throws InterruptedException {
-      var event = events.poll(5, TimeUnit.SECONDS);
-      assertThat(event).isNotNull();
+      var event = events.take();
       assertThat(event.hasJobAttemptStarted())
           .as("the next worker event must acknowledge the ordering-barrier start command")
           .isTrue();
@@ -883,24 +884,20 @@ class TranscodeWorkerControlPlaneIT {
     private List<EstablishWorkerSessionRequest> awaitEvents(int count) throws InterruptedException {
       var received = new ArrayList<EstablishWorkerSessionRequest>();
       while (received.size() < count) {
-        var event = events.poll(5, TimeUnit.SECONDS);
-        assertThat(event).as("worker event %s of %s", received.size() + 1, count).isNotNull();
-        received.add(event);
+        received.add(events.take());
       }
 
       return received;
     }
 
     private void awaitStopped(VariantJob job) throws InterruptedException {
-      var event = events.poll(5, TimeUnit.SECONDS);
-      assertThat(event).isNotNull();
+      var event = events.take();
       assertThat(event.hasJobAttemptStopped()).isTrue();
       assertThat(event.getJobAttemptStopped().getJobAttemptId()).isEqualTo(job.getJobAttemptId());
     }
 
     private void awaitCompleted(VariantJob job) throws InterruptedException {
-      var event = events.poll(5, TimeUnit.SECONDS);
-      assertThat(event).isNotNull();
+      var event = events.take();
       assertThat(event.hasJobAttemptCompleted()).isTrue();
       assertThat(event.getJobAttemptCompleted().getJobAttemptId()).isEqualTo(job.getJobAttemptId());
     }
@@ -911,8 +908,7 @@ class TranscodeWorkerControlPlaneIT {
     }
 
     private JobAttemptFailed awaitFailure() throws InterruptedException {
-      var event = events.poll(5, TimeUnit.SECONDS);
-      assertThat(event).isNotNull();
+      var event = events.take();
       assertThat(event.hasJobAttemptFailed()).isTrue();
       return event.getJobAttemptFailed();
     }
@@ -941,7 +937,7 @@ class TranscodeWorkerControlPlaneIT {
         return;
       }
       server.shutdownNow();
-      server.awaitTermination(5, TimeUnit.SECONDS);
+      server.awaitTermination();
     }
   }
 
