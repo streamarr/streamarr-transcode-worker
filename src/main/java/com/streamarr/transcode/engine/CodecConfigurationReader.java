@@ -50,17 +50,33 @@ final class CodecConfigurationReader {
   }
 
   /**
-   * The codec configuration of the first video track; empty when the {@code moov} declares no video
-   * track. The reader parses no other track's sample entry.
+   * The sample entry of the first video track; empty when the {@code moov} declares no video track.
+   * The reader parses no track's sample entry.
    *
-   * @throws FragmentedMp4Exception when a box that the codec string needs is missing or too short
+   * @throws FragmentedMp4Exception when a box that leads to the sample entry is missing or too
+   *     short
    */
-  static Optional<Video> firstVideoOf(InitializationSegment segment) {
+  static Optional<BoxView> firstVideoSampleEntryOf(InitializationSegment segment) {
     return moovOf(segment).children("trak").stream()
         .map(trak -> trak.requiredChild("mdia"))
         .filter(mdia -> handlerOf(mdia).equals("vide"))
         .findFirst()
-        .map(mdia -> videoOf(sampleEntryOf(mdia)));
+        .map(CodecConfigurationReader::sampleEntryOf);
+  }
+
+  /**
+   * The codec configuration that a video sample entry and its decoder configuration record declare.
+   *
+   * @throws FragmentedMp4Exception when the decoder configuration record is missing or too short
+   */
+  static Video videoOf(BoxView sampleEntry) {
+    var children = sampleEntry.after(VISUAL_SAMPLE_ENTRY_BYTES);
+    return switch (sampleEntry.type()) {
+      case "avc1", "avc3" -> avc(sampleEntry.type(), children.requiredChild("avcC").fields());
+      case "hvc1", "hev1" -> hevc(sampleEntry.type(), children.requiredChild("hvcC").fields());
+      case "av01" -> av1(children.requiredChild("av1C").fields());
+      default -> new Video(sampleEntry.type(), Optional.empty());
+    };
   }
 
   private static BoxView moovOf(InitializationSegment segment) {
@@ -86,16 +102,6 @@ final class CodecConfigurationReader {
     return stsd.after(8).children().stream()
         .findFirst()
         .orElseThrow(() -> FragmentedMp4Exception.malformed("stsd holds no sample entry"));
-  }
-
-  private static Video videoOf(BoxView entry) {
-    var children = entry.after(VISUAL_SAMPLE_ENTRY_BYTES);
-    return switch (entry.type()) {
-      case "avc1", "avc3" -> avc(entry.type(), children.requiredChild("avcC").fields());
-      case "hvc1", "hev1" -> hevc(entry.type(), children.requiredChild("hvcC").fields());
-      case "av01" -> av1(children.requiredChild("av1C").fields());
-      default -> new Video(entry.type(), Optional.empty());
-    };
   }
 
   private static Video avc(String sampleEntry, BoxFields avcC) {

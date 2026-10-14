@@ -311,7 +311,9 @@ class CodecConfigurationReaderTest {
                     trak("soun", fullBox("stsd", 0, u32(1), misplacedDescriptor)),
                     trak("vide", fullBox("stsd", 0, u32(1), box("avc1", new byte[78], avcC))))));
 
-    assertThat(CodecConfigurationReader.firstVideoOf(segment))
+    assertThat(
+            CodecConfigurationReader.firstVideoSampleEntryOf(segment)
+                .map(CodecConfigurationReader::videoOf))
         .contains(new Video("avc1.640028", Optional.empty()));
   }
 
@@ -320,7 +322,7 @@ class CodecConfigurationReaderTest {
   void shouldFindNoVideoWhenTheInitializationSegmentHoldsOnlyAnAudioTrack() {
     var segment = withAudioSampleEntry(box("ac-3", new byte[28]));
 
-    assertThat(CodecConfigurationReader.firstVideoOf(segment)).isEmpty();
+    assertThat(CodecConfigurationReader.firstVideoSampleEntryOf(segment)).isEmpty();
   }
 
   private static InitializationSegment withVideoSampleEntry(byte[] sampleEntry) {

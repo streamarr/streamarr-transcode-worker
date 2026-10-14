@@ -784,6 +784,23 @@ class ProducerTest {
 
   @Test
   @DisplayName(
+      "Should fail the attempt as malformed output when the video track's stsd holds no sample"
+          + " entry")
+  void shouldFailTheAttemptAsMalformedOutputWhenTheVideoTracksStsdHoldsNoSampleEntry() {
+    var output =
+        IsoBoxes.concat(
+            IsoBoxes.ftyp(),
+            IsoBoxes.moov(IsoBoxes.Track.video().sampleEntry(new byte[0]).build()));
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer = producerLaunching(process).periodSeconds(6).start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.MALFORMED_OUTPUT);
+    assertThat(sink.acceptedNames()).isEmpty();
+  }
+
+  @Test
+  @DisplayName(
       "Should fail the attempt as an output mismatch when the initialization segment declares no"
           + " video track")
   void shouldFailTheAttemptAsAnOutputMismatchWhenTheInitializationSegmentDeclaresNoVideoTrack() {

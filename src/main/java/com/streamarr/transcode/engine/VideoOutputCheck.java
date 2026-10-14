@@ -15,7 +15,9 @@ final class VideoOutputCheck {
 
   /**
    * @throws FragmentedMp4Exception with {@link Reason#OUTPUT_MISMATCH} when the segment declares
-   *     other video than the decision, or video whose codec configuration cannot be read
+   *     other video than the decision, or video whose decoder configuration record cannot be read;
+   *     with {@link Reason#MALFORMED_BOX} when a box that leads to the video sample entry is
+   *     missing or too short
    */
   static void requireMatch(VideoDecision decision, InitializationSegment segment) {
     var video = videoOf(segment);
@@ -36,15 +38,15 @@ final class VideoOutputCheck {
     }
   }
 
+  // A missing box on the way to the sample entry stays a malformed box; only a decoder
+  // configuration record that cannot be read is a mismatch.
   private static Video videoOf(InitializationSegment segment) {
+    var sampleEntry =
+        CodecConfigurationReader.firstVideoSampleEntryOf(segment)
+            .orElseThrow(() -> mismatch("the initialization segment declares no video track"));
     try {
-      return CodecConfigurationReader.firstVideoOf(segment)
-          .orElseThrow(() -> mismatch("the initialization segment declares no video track"));
+      return CodecConfigurationReader.videoOf(sampleEntry);
     } catch (FragmentedMp4Exception e) {
-      if (e.getReason() == Reason.OUTPUT_MISMATCH) {
-        throw e;
-      }
-
       throw mismatch("the video codec configuration cannot be read: " + e.getMessage());
     }
   }
