@@ -400,7 +400,10 @@ class TranscodeWorkerProbeTest {
     var producer =
         new FfprobeExecutor(
             new ObjectMapper(),
-            source -> source.equals(oldSource) ? process : processBuilder().build());
+            arguments ->
+                Path.of(arguments.getLast()).equals(oldSource)
+                    ? process
+                    : processBuilder().build());
     var oldRequest = requestBuilder().setSource(sourceBuilder().setRelativeKey("old.mkv")).build();
     var nextRequest = requestBuilder().build();
 

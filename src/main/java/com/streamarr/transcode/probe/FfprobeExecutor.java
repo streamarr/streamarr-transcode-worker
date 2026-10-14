@@ -12,6 +12,8 @@ import com.google.protobuf.Duration;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
@@ -32,26 +34,18 @@ public final class FfprobeExecutor {
   private static final int AVERROR_EOF = -541478725;
 
   @NonNull private final ObjectMapper objectMapper;
-  @NonNull private final Function<Path, Process> processFactory;
+  @NonNull private final Function<List<String>, Process> processFactory;
 
   public static FfprobeExecutor forBinary(@NonNull Path binary) {
-    return new FfprobeExecutor(new ObjectMapper(), source -> start(binary, source));
+    return new FfprobeExecutor(new ObjectMapper(), arguments -> start(binary, arguments));
   }
 
-  private static Process start(Path binary, Path source) {
+  private static Process start(Path binary, List<String> arguments) {
+    var command = new ArrayList<String>();
+    command.add(binary.toString());
+    command.addAll(arguments);
     try {
-      return new ProcessBuilder(
-              binary.toString(),
-              "-v",
-              "quiet",
-              "-print_format",
-              "json",
-              "-show_streams",
-              "-show_format",
-              "-show_error",
-              source.toString())
-          .redirectError(ProcessBuilder.Redirect.DISCARD)
-          .start();
+      return new ProcessBuilder(command).redirectError(ProcessBuilder.Redirect.DISCARD).start();
     } catch (IOException e) {
       throw new UncheckedIOException("Failed to start ffprobe", e);
     }
@@ -83,7 +77,17 @@ public final class FfprobeExecutor {
   }
 
   private ProbeAttemptResult execute(Attempt attempt) throws ExecutionException {
-    var process = processFactory.apply(attempt.source());
+    var process =
+        processFactory.apply(
+            List.of(
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_streams",
+                "-show_format",
+                "-show_error",
+                attempt.source().toString()));
     try (var readers = Executors.newVirtualThreadPerTaskExecutor()) {
       var output = readers.submit(() -> readOutput(process));
       return collect(process, output, attempt);
