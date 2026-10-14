@@ -18,6 +18,7 @@ import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerB
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
+import build.buf.gen.streamarr.transcode.v1.EncoderPreset;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest.EventCase;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
@@ -434,6 +435,50 @@ class TranscodeWorkerJobAttemptTest {
             mode ->
                 Stream.of(
                     Arguments.of(mode, 0, 0), Arguments.of(mode, 5, 5), Arguments.of(mode, 4, 5)));
+  }
+
+  @ParameterizedTest(name = "{0}, preset value {1}")
+  @MethodSource("videoEncodingsWithoutAPreset")
+  @DisplayName(
+      "Should refuse the video job as an invalid specification when its preset is unspecified")
+  void shouldRefuseVideoJobWhenPresetIsUnspecified(TranscodeMode mode, int presetValue)
+      throws Exception {
+    var job = variantJobBuilder();
+    job.getDecisionBuilder().setMode(mode);
+    job.getVariantBuilder().setEncoderPresetValue(presetValue);
+
+    assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
+  static Stream<Arguments> videoEncodingsWithoutAPreset() {
+    return Stream.of(
+            TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE,
+            TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE)
+        .flatMap(
+            mode ->
+                IntStream.of(EncoderPreset.ENCODER_PRESET_UNSPECIFIED_VALUE, Integer.MAX_VALUE)
+                    .mapToObj(presetValue -> Arguments.of(mode, presetValue)));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"TRANSCODE_MODE_REMUX", "TRANSCODE_MODE_AUDIO_TRANSCODE"})
+  @DisplayName("Should run the job without a preset when it copies the video")
+  void shouldRunTheJobWithoutAPresetWhenItCopiesTheVideo(TranscodeMode mode) throws Exception {
+    var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
+    var job = variantJobBuilder();
+    job.getDecisionBuilder().setMode(mode);
+    job.getVariantBuilder().setEncoderPreset(EncoderPreset.ENCODER_PRESET_UNSPECIFIED);
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_COMPLETED);
+      assertThat(launcher.command(fromProto(job.getJobAttemptId()))).doesNotContain("-preset");
+    }
   }
 
   @Test

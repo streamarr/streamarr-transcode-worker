@@ -80,6 +80,14 @@ final class WorkerVariantJobMapper {
   }
 
   @SuppressWarnings("checkstyle:fullyQualifiedName")
+  static boolean hasEncoderPreset(VariantJob job) {
+    return switch (job.getVariant().getEncoderPreset()) {
+      case ENCODER_PRESET_UNSPECIFIED, UNRECOGNIZED -> false;
+      default -> true;
+    };
+  }
+
+  @SuppressWarnings("checkstyle:fullyQualifiedName")
   private static TranscodeMode mode(build.buf.gen.streamarr.transcode.v1.TranscodeMode mode) {
     return modeOf(mode).orElseThrow(() -> new WorkerJobException("Transcode mode is required"));
   }
