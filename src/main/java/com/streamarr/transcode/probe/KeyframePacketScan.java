@@ -199,19 +199,20 @@ final class KeyframePacketScan {
     }
 
     private Optional<KeyframeTime> keyframeTime(OptionalLong pts, OptionalLong dts) {
-      var times =
+      var packetTimes =
           switch (rule) {
             case AS_REPORTED -> new PacketTimes(pts, dts);
             case DECODE_AT_PRESENTATION -> new PacketTimes(pts, pts);
             case EQUAL_WHEN_ONE_IS_MISSING ->
                 new PacketTimes(pts.isPresent() ? pts : dts, dts.isPresent() ? dts : pts);
           };
-      if (times.presentation().isEmpty() || times.decode().isEmpty()) {
+      if (packetTimes.presentation().isEmpty() || packetTimes.decode().isEmpty()) {
         return Optional.empty();
       }
 
       return Optional.of(
-          new KeyframeTime(times.presentation().getAsLong(), times.decode().getAsLong()));
+          new KeyframeTime(
+              packetTimes.presentation().getAsLong(), packetTimes.decode().getAsLong()));
     }
 
     boolean isMissingTime() {
