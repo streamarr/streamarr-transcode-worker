@@ -26,8 +26,9 @@ final class WorkerVariantJobMapper {
   }
 
   /**
-   * @throws InvalidJobSpecificationException when the job's video decision is missing, contradicts
-   *     the rest of the job, or lacks a value that the worker forces or checks
+   * @throws InvalidJobSpecificationException when the job names no transcode, audio or subtitle
+   *     mode, or when its video decision is missing, contradicts the rest of the job, or lacks a
+   *     value that the worker forces or checks
    */
   TranscodeRequest map(VariantJob job) {
     var variant = job.getVariant();
@@ -143,7 +144,8 @@ final class WorkerVariantJobMapper {
 
   @SuppressWarnings("checkstyle:fullyQualifiedName")
   private static TranscodeMode mode(build.buf.gen.streamarr.transcode.v1.TranscodeMode mode) {
-    return modeOf(mode).orElseThrow(() -> new WorkerJobException("Transcode mode is required"));
+    return modeOf(mode)
+        .orElseThrow(() -> new InvalidJobSpecificationException("Transcode mode is required"));
   }
 
   @SuppressWarnings("checkstyle:fullyQualifiedName")
@@ -165,7 +167,7 @@ final class WorkerVariantJobMapper {
       case AUDIO_MODE_TRANSCODE -> AudioMode.TRANSCODE;
       case AUDIO_MODE_NONE -> AudioMode.NONE;
       case AUDIO_MODE_UNSPECIFIED, UNRECOGNIZED ->
-          throw new WorkerJobException("Audio mode is required");
+          throw new InvalidJobSpecificationException("Audio mode is required");
     };
   }
 
@@ -178,7 +180,7 @@ final class WorkerVariantJobMapper {
       case SUBTITLE_MODE_HLS -> SubtitleMode.HLS;
       case SUBTITLE_MODE_EMBED -> SubtitleMode.EMBED;
       case SUBTITLE_MODE_UNSPECIFIED, UNRECOGNIZED ->
-          throw new WorkerJobException("Subtitle mode is required");
+          throw new InvalidJobSpecificationException("Subtitle mode is required");
     };
   }
 }

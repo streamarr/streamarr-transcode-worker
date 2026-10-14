@@ -20,11 +20,14 @@ import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerB
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
+import build.buf.gen.streamarr.transcode.v1.AudioMode;
 import build.buf.gen.streamarr.transcode.v1.EncoderPreset;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest.EventCase;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
 import build.buf.gen.streamarr.transcode.v1.SegmentContentType;
+import build.buf.gen.streamarr.transcode.v1.SubtitleMode;
+import build.buf.gen.streamarr.transcode.v1.TranscodeDecision;
 import build.buf.gen.streamarr.transcode.v1.TranscodeMode;
 import build.buf.gen.streamarr.transcode.v1.Uuid;
 import build.buf.gen.streamarr.transcode.v1.VariantJob;
@@ -439,6 +442,45 @@ class TranscodeWorkerJobAttemptTest {
         Arguments.of("codec profile", unary(VideoDecision.Builder::clearCodecProfile)),
         Arguments.of("level", unary(VideoDecision.Builder::clearLevel)),
         Arguments.of("codec string", unary(VideoDecision.Builder::clearCodecString)));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("jobsWithoutAMode")
+  @DisplayName(
+      "Should refuse the job as an invalid specification when it names no transcode, audio or"
+          + " subtitle mode")
+  void shouldRefuseTheJobAsAnInvalidSpecificationWhenItNamesNoTranscodeAudioOrSubtitleMode(
+      String lacking, UnaryOperator<TranscodeDecision.Builder> withoutMode) throws Exception {
+    var job = variantJobBuilder();
+    withoutMode.apply(job.getDecisionBuilder());
+
+    assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
+  static Stream<Arguments> jobsWithoutAMode() {
+    return Stream.of(
+        Arguments.of(
+            "transcode mode",
+            decisionChange(decision -> decision.setMode(TranscodeMode.TRANSCODE_MODE_UNSPECIFIED))),
+        Arguments.of(
+            "audio mode",
+            decisionChange(
+                decision -> {
+                  decision.getAudioBuilder().setMode(AudioMode.AUDIO_MODE_UNSPECIFIED);
+                  return decision;
+                })),
+        Arguments.of(
+            "subtitle mode",
+            decisionChange(
+                decision -> {
+                  decision.getSubtitleBuilder().setMode(SubtitleMode.SUBTITLE_MODE_UNSPECIFIED);
+                  return decision;
+                })));
+  }
+
+  private static UnaryOperator<TranscodeDecision.Builder> decisionChange(
+      UnaryOperator<TranscodeDecision.Builder> change) {
+    return change;
   }
 
   @ParameterizedTest(name = "{0}")
