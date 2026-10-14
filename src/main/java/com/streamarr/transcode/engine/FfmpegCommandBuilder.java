@@ -15,6 +15,8 @@ public class FfmpegCommandBuilder {
   @NonNull private final String ffmpegPath;
   @NonNull private final Duration fragmentationTarget;
 
+  // The 8-bit 4:2:0 format every encoder takes unless its traits name another.
+  private static final String DEFAULT_EIGHT_BIT_PIXEL_FORMAT = "yuv420p";
   private static final EncoderTraits UNLISTED_ENCODER = EncoderTraits.builder().build();
   private static final EncoderTraits FIXED_GOP = EncoderTraits.builder().fixedGop(true).build();
   // QSV takes nv12 from system memory and refuses yuv420p.
@@ -183,7 +185,7 @@ public class FfmpegCommandBuilder {
   private void addScaleAndBitrateArgs(List<String> cmd, TranscodeJob job) {
     var request = job.request();
     // Every variant is 8-bit 4:2:0: an encoder otherwise keeps a 10-bit or 4:4:4 source's format,
-    // and few hardware decoders accept 10-bit H.264 (ADR 0013 as amended).
+    // and few hardware decoders accept 10-bit H.264.
     var videoFilter =
         "scale=-2:" + request.height() + ",format=" + traitsOf(job).eightBitPixelFormat();
     cmd.addAll(List.of("-vf", videoFilter));
@@ -289,7 +291,7 @@ public class FfmpegCommandBuilder {
       @NonNull String eightBitPixelFormat) {
 
     private static class EncoderTraitsBuilder {
-      private String eightBitPixelFormat = "yuv420p";
+      private String eightBitPixelFormat = DEFAULT_EIGHT_BIT_PIXEL_FORMAT;
     }
   }
 }
