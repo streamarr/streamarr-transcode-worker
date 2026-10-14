@@ -260,7 +260,7 @@ final class Mp4SyncSampleReader {
     var position = parent.position();
     while (parent.limit() - position >= BOX_HEADER_BYTES) {
       var view = parent.duplicate().position(position);
-      var header = BoxHeader.read(view, parent.limit() - position);
+      var header = BoxHeader.read(view, view.remaining());
       var payload =
           parent
               .duplicate()
