@@ -25,6 +25,7 @@ import java.lang.management.ManagementFactory;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.OptionalDouble;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -45,6 +46,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceLock;
+import org.junit.jupiter.api.parallel.Resources;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.EnumSource;
@@ -698,6 +701,29 @@ class ProducerTest {
 
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
     assertThat(sink.acceptedNames()).first().isEqualTo("init.mp4");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"13-x265-cfr.fmp4", "09-svtav1-vfr.fmp4", ENCODED_RECORDING})
+  @ResourceLock(Resources.LOCALE)
+  @DisplayName(
+      "Should deliver every segment of an encode that matches the job when the default format"
+          + " locale writes other digits")
+  void
+      shouldDeliverEverySegmentOfAnEncodeThatMatchesTheJobWhenTheDefaultFormatLocaleWritesOtherDigits(
+          String file) {
+    var recording = recording(file);
+    var process = ScriptedProcess.builder().output(bytesOf(file)).build();
+    var formatLocale = Locale.getDefault(Locale.Category.FORMAT);
+    Locale.setDefault(Locale.Category.FORMAT, Locale.forLanguageTag("ar-EG"));
+    try {
+      var producer = producerFor(process, recording).start();
+
+      assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+      assertThat(sink.acceptedNames()).first().isEqualTo("init.mp4");
+    } finally {
+      Locale.setDefault(Locale.Category.FORMAT, formatLocale);
+    }
   }
 
   @Test

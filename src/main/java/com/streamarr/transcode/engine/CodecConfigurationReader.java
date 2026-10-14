@@ -5,6 +5,7 @@ import com.streamarr.transcode.engine.TrackCodec.Video;
 import java.nio.ByteBuffer;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 
@@ -12,7 +13,8 @@ import java.util.Set;
  * Builds each track's RFC 6381 codec string from the sample entry and the decoder configuration
  * record that an initialization segment declares: {@code avcC} (ISO/IEC 14496-15 5.3.2), {@code
  * hvcC} (ISO/IEC 14496-15 8.3.2), {@code av1C} (AV1 ISOBMFF binding 2.3) and {@code esds} (ISO/IEC
- * 14496-1 7.2.6). Hexadecimal digits are uppercase.
+ * 14496-1 7.2.6). Hexadecimal digits are uppercase, and every digit is ASCII whatever the default
+ * locale.
  */
 final class CodecConfigurationReader {
 
@@ -82,7 +84,8 @@ final class CodecConfigurationReader {
     var profile = avcC.u8();
     var constraints = avcC.u8();
     var level = avcC.u8();
-    var codecString = "%s.%02X%02X%02X".formatted(sampleEntry, profile, constraints, level);
+    var codecString =
+        String.format(Locale.ROOT, "%s.%02X%02X%02X", sampleEntry, profile, constraints, level);
     if (!AVC_PROFILES_WITH_FORMAT.contains(profile)) {
       return new Video(codecString, Optional.of(PictureFormat.EIGHT_BIT_420));
     }
@@ -119,15 +122,16 @@ final class CodecConfigurationReader {
     var chroma = chromaOf(hvcC.u8() & 0x03);
     var bitDepth = (hvcC.u8() & 0x07) + 8;
     var codecString =
-        "%s.%s%d.%X.%s%d%s"
-            .formatted(
-                sampleEntry,
-                profileSpace(spaceTierAndProfile >> 6),
-                spaceTierAndProfile & 0x1F,
-                Integer.reverse(compatibility),
-                tierLetter((spaceTierAndProfile & 0x20) != 0, "L"),
-                level,
-                constraintSuffix(constraints));
+        String.format(
+            Locale.ROOT,
+            "%s.%s%d.%X.%s%d%s",
+            sampleEntry,
+            profileSpace(spaceTierAndProfile >> 6),
+            spaceTierAndProfile & 0x1F,
+            Integer.reverse(compatibility),
+            tierLetter((spaceTierAndProfile & 0x20) != 0, "L"),
+            level,
+            constraintSuffix(constraints));
     return new Video(codecString, Optional.of(new PictureFormat(bitDepth, chroma)));
   }
 
@@ -149,7 +153,7 @@ final class CodecConfigurationReader {
 
     var suffix = new StringBuilder();
     for (var index = 0; index < last; index++) {
-      suffix.append(".%X".formatted(Byte.toUnsignedInt(constraints[index])));
+      suffix.append(String.format(Locale.ROOT, ".%X", Byte.toUnsignedInt(constraints[index])));
     }
 
     return suffix.toString();
@@ -172,9 +176,13 @@ final class CodecConfigurationReader {
     }
 
     var codecString =
-        "av01.%d.%02d%s.%02d"
-            .formatted(
-                profile, profileAndLevel & 0x1F, tierLetter((flags & 0x80) != 0, "M"), bitDepth);
+        String.format(
+            Locale.ROOT,
+            "av01.%d.%02d%s.%02d",
+            profile,
+            profileAndLevel & 0x1F,
+            tierLetter((flags & 0x80) != 0, "M"),
+            bitDepth);
     return new Video(codecString, Optional.of(new PictureFormat(bitDepth, av1ChromaOf(flags))));
   }
 

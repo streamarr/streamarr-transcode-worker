@@ -15,10 +15,13 @@ import com.streamarr.transcode.engine.TrackCodec.Video;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.HexFormat;
+import java.util.Locale;
 import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceLock;
+import org.junit.jupiter.api.parallel.Resources;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
@@ -51,6 +54,29 @@ class CodecConfigurationReaderTest {
     assertThat(tracks)
         .first()
         .isEqualTo(new Video(codecString, Optional.of(PictureFormat.EIGHT_BIT_420)));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({
+    "libx264-1080p60.mp4, avc1.64002A",
+    "libsvtav1-1080p60.mp4, av01.0.09M.08",
+    "copy-hvc1.mp4, hvc1.1.6.L120.90"
+  })
+  @ResourceLock(Resources.LOCALE)
+  @DisplayName("Should write ASCII digits when the default format locale writes other digits")
+  void shouldWriteAsciiDigitsWhenTheDefaultFormatLocaleWritesOtherDigits(
+      String file, String codecString) {
+    var segment = initializationSegment(file);
+    var formatLocale = Locale.getDefault(Locale.Category.FORMAT);
+    Locale.setDefault(Locale.Category.FORMAT, Locale.forLanguageTag("ar-EG"));
+    try {
+      assertThat(CodecConfigurationReader.tracksOf(segment))
+          .first()
+          .extracting(TrackCodec::codecString)
+          .isEqualTo(codecString);
+    } finally {
+      Locale.setDefault(Locale.Category.FORMAT, formatLocale);
+    }
   }
 
   @ParameterizedTest(name = "{0}")
