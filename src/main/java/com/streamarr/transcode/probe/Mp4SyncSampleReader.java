@@ -27,6 +27,12 @@ final class Mp4SyncSampleReader {
   private static final int BOX_HEADER_BYTES = 8;
   private static final int LARGE_BOX_HEADER_BYTES = 16;
 
+  /**
+   * The reader lists at most this many samples. A 24-hour source at 48 fps has 4,147,200 samples. A
+   * track with more samples gets a packet scan.
+   */
+  private static final long MAXIMUM_SAMPLES = 1L << 22;
+
   private Mp4SyncSampleReader() {}
 
   static KeyframeIndex read(Path source, long trackId) throws IOException {
@@ -62,7 +68,13 @@ final class Mp4SyncSampleReader {
             .orElseThrow(() -> malformed("stbl"));
     var editList = child(track, "edts").flatMap(edits -> child(edits, "elst"));
     var edit = editList.isPresent() ? Edit.read(editList.get()) : Optional.of(Edit.NONE);
-    var keyframes = rawKeyframes(sampleTable);
+    var durations = runs(child(sampleTable, "stts").orElseThrow(() -> malformed("stts")));
+    var sampleCount = sampleCount(sampleTable);
+    if (sampleCount > MAXIMUM_SAMPLES || sampleCount != totalCount(durations)) {
+      return incomplete();
+    }
+
+    var keyframes = rawKeyframes(sampleTable, durations);
     if (edit.isEmpty() || keyframes.isEmpty()) {
       return incomplete();
     }
@@ -72,8 +84,43 @@ final class Mp4SyncSampleReader {
         edit.get().apply(keyframes, movieTimescale, mediaTimescale));
   }
 
-  private static List<KeyframeTime> rawKeyframes(ByteBuffer sampleTable) {
-    var durations = runs(child(sampleTable, "stts").orElseThrow(() -> malformed("stts")));
+  /** The number of samples in the track, from the sample sizes (stsz or stz2). */
+  private static long sampleCount(ByteBuffer sampleTable) {
+    return child(sampleTable, "stsz")
+        .map(Mp4SyncSampleReader::sizeTableCount)
+        .orElseGet(
+            () ->
+                compactSizeTableCount(
+                    child(sampleTable, "stz2").orElseThrow(() -> malformed("stsz"))));
+  }
+
+  private static long sizeTableCount(ByteBuffer box) {
+    skip(box, 4);
+    var constantSize = box.getInt();
+    var count = Integer.toUnsignedLong(box.getInt());
+    if (constantSize == 0 && box.remaining() / Integer.BYTES < count) {
+      throw malformed("stsz shorter than its sample count");
+    }
+
+    return count;
+  }
+
+  private static long compactSizeTableCount(ByteBuffer box) {
+    skip(box, 7);
+    var fieldBits = box.get() & 0xFF;
+    var count = Integer.toUnsignedLong(box.getInt());
+    if (fieldBits == 0 || box.remaining() * 8L / fieldBits < count) {
+      throw malformed("stz2 shorter than its sample count");
+    }
+
+    return count;
+  }
+
+  private static long totalCount(List<Run> runs) {
+    return runs.stream().mapToLong(Run::count).sum();
+  }
+
+  private static List<KeyframeTime> rawKeyframes(ByteBuffer sampleTable, List<Run> durations) {
     var offsets = child(sampleTable, "ctts").map(Mp4SyncSampleReader::runs).orElse(List.of());
     var syncSamples = child(sampleTable, "stss").map(Mp4SyncSampleReader::syncSamples);
     if (syncSamples.isPresent() && syncSamples.get().isEmpty()) {

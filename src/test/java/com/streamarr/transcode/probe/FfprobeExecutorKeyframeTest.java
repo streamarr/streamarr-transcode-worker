@@ -30,6 +30,7 @@ import lombok.Singular;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -65,6 +66,7 @@ class FfprobeExecutorKeyframeTest {
       """
       {"packets":[{"pts":2917,"flags":"K__"}]}
       """;
+  private static final String MP4_FORMAT = "mov,mp4,m4a,3gp,3g2,mj2";
   private static final String NO_PACKETS =
       """
       {"packets":[]}
@@ -318,6 +320,34 @@ class FfprobeExecutorKeyframeTest {
     } finally {
       Thread.interrupted();
     }
+  }
+
+  @Test
+  @Timeout(value = 10, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
+  @DisplayName(
+      "Should require a packet scan when the decode durations declare more samples than the track has")
+  void shouldRequirePacketScanWhenDecodeDurationsDeclareMoreSamplesThanTrackHas(
+      @TempDir Path directory) throws Exception {
+    var source =
+        Files.write(
+            directory.resolve("source.mp4"),
+            SyntheticMp4.builder()
+                .mediaTimescale(1_000)
+                .sampleDurations(-1, 1)
+                .sampleSizes(2, 100)
+                .syncSamples(List.of(1L))
+                .build()
+                .bytes());
+    var ffprobe = ScriptedFfprobe.builder().streams(streamsOf(MP4_FORMAT)).build();
+
+    var report = ffprobe.executor().probe(source, keyframeRequest());
+
+    assertThat(report.result().getMedia().getKeyframes())
+        .isEqualTo(
+            ProbeKeyframes.newBuilder()
+                .setPacketScanRequired(
+                    KeyframePacketScanReason.KEYFRAME_PACKET_SCAN_REASON_INCOMPLETE_CONTAINER_INDEX)
+                .build());
   }
 
   private static String streamsOf(String formatName) {

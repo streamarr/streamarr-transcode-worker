@@ -4,6 +4,7 @@ import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import lombok.Builder;
 import lombok.Singular;
@@ -16,6 +17,9 @@ record SyntheticMp4(
     long mediaTimescale,
     int sampleCount,
     int sampleDuration,
+    Integer sampleSizeCount,
+    int sampleSize,
+    boolean compactSampleSizes,
     int compositionOffsetCount,
     int compositionOffset,
     List<Long> syncSamples,
@@ -30,6 +34,7 @@ record SyntheticMp4(
   byte[] bytes() {
     var sampleTable = new ArrayList<byte[]>();
     sampleTable.add(fullBox("stts", 0, int32(1), int32(sampleCount), int32(sampleDuration)));
+    sampleTable.add(sampleSizeBox());
     if (compositionOffsetCount > 0) {
       sampleTable.add(
           fullBox("ctts", 1, int32(1), int32(compositionOffsetCount), int32(compositionOffset)));
@@ -73,9 +78,27 @@ record SyntheticMp4(
       return sampleCount(count).sampleDuration(duration);
     }
 
+    /** Writes an stsz with one size for every sample; without it, each sample has size 1. */
+    SyntheticMp4Builder sampleSizes(int count, int size) {
+      return sampleSizeCount(count).sampleSize(size);
+    }
+
     SyntheticMp4Builder compositionOffsets(int count, int offset) {
       return compositionOffsetCount(count).compositionOffset(offset);
     }
+  }
+
+  private byte[] sampleSizeBox() {
+    var count = sampleSizeCount == null ? sampleCount : sampleSizeCount;
+    var size = sampleSizeCount == null ? 1 : sampleSize;
+    if (compactSampleSizes) {
+      // stz2 with 8-bit fields: three reserved bytes, the field size, the count, then the fields.
+      var fields = new byte[count];
+      Arrays.fill(fields, (byte) size);
+      return fullBox("stz2", 0, new byte[] {0, 0, 0, 8}, int32(count), fields);
+    }
+
+    return fullBox("stsz", 0, int32(size), int32(count));
   }
 
   private byte[] editList() {

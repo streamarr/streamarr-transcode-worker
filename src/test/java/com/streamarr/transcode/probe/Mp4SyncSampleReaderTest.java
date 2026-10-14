@@ -9,10 +9,12 @@ import com.streamarr.transcode.probe.KeyframeIndex.TimeBase;
 import com.streamarr.transcode.probe.KeyframeIndex.Unusable;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
 @Tag("UnitTest")
@@ -172,6 +174,105 @@ class Mp4SyncSampleReaderTest {
             SyntheticMp4.box("ftyp", SyntheticMp4.ascii("isom"), SyntheticMp4.int32(0)));
 
     assertThat(Mp4SyncSampleReader.read(source, TRACK_ID)).isEqualTo(INCOMPLETE);
+  }
+
+  @Test
+  @Timeout(value = 10, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
+  @DisplayName(
+      "Should require a packet scan when the track declares more samples than the reader lists")
+  void shouldRequirePacketScanWhenTrackDeclaresMoreSamplesThanReaderLists() throws Exception {
+    var source =
+        write(
+            SyntheticMp4.builder()
+                .mediaTimescale(1_000)
+                .sampleDurations(-1, 1)
+                .sampleSizes(-1, 100)
+                .build());
+
+    assertThat(Mp4SyncSampleReader.read(source, TRACK_ID)).isEqualTo(INCOMPLETE);
+  }
+
+  @Test
+  @DisplayName(
+      "Should require a packet scan when the sample sizes count fewer samples than the durations")
+  void shouldRequirePacketScanWhenSampleSizesCountFewerSamplesThanDurations() throws Exception {
+    var source =
+        write(
+            SyntheticMp4.builder()
+                .mediaTimescale(1_000)
+                .sampleDurations(3, 1_000)
+                .sampleSizes(2, 100)
+                .build());
+
+    assertThat(Mp4SyncSampleReader.read(source, TRACK_ID)).isEqualTo(INCOMPLETE);
+  }
+
+  @Test
+  @DisplayName(
+      "Should require a packet scan when a table of sample sizes is shorter than its count")
+  void shouldRequirePacketScanWhenTableOfSampleSizesIsShorterThanItsCount() throws Exception {
+    var source =
+        write(
+            SyntheticMp4.builder()
+                .mediaTimescale(1_000)
+                .sampleDurations(3, 1_000)
+                .sampleSizes(3, 0)
+                .build());
+
+    assertThat(Mp4SyncSampleReader.read(source, TRACK_ID)).isEqualTo(INCOMPLETE);
+  }
+
+  @Test
+  @DisplayName("Should list every sample when the track stores compact sample sizes")
+  void shouldListEverySampleWhenTrackStoresCompactSampleSizes() throws Exception {
+    var source =
+        write(
+            SyntheticMp4.builder()
+                .mediaTimescale(1_000)
+                .sampleDurations(2, 100)
+                .sampleSizes(2, 7)
+                .compactSampleSizes(true)
+                .build());
+
+    assertThat(Mp4SyncSampleReader.read(source, TRACK_ID))
+        .isEqualTo(
+            new Listed(
+                new TimeBase(1, 1_000),
+                List.of(new KeyframeTime(0, 0), new KeyframeTime(100, 100))));
+  }
+
+  @Test
+  @DisplayName(
+      "Should require a packet scan when compact sample sizes are shorter than their count")
+  void shouldRequirePacketScanWhenCompactSampleSizesAreShorterThanTheirCount() throws Exception {
+    var bytes =
+        SyntheticMp4.builder()
+            .mediaTimescale(1_000)
+            .sampleDurations(3, 100)
+            .sampleSizes(2, 7)
+            .compactSampleSizes(true)
+            .build()
+            .bytes();
+    // Claim the third sample's 8-bit field, which the table does not hold.
+    var count = indexOf(bytes, "stz2") + 12;
+    bytes[count + 3] = 3;
+
+    assertThat(Mp4SyncSampleReader.read(write(bytes), TRACK_ID)).isEqualTo(INCOMPLETE);
+  }
+
+  private static int indexOf(byte[] bytes, String type) {
+    var pattern = SyntheticMp4.ascii(type);
+    for (var i = 0; i + pattern.length <= bytes.length; i++) {
+      if (Arrays.equals(bytes, i, i + pattern.length, pattern, 0, pattern.length)) {
+        return i;
+      }
+    }
+
+    throw new AssertionError("no " + type + " box");
+  }
+
+  private Path write(byte[] bytes) throws Exception {
+    return Files.write(temporaryDirectory.resolve("source.mp4"), bytes);
   }
 
   private Path write(SyntheticMp4 file) throws Exception {
