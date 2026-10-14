@@ -306,7 +306,7 @@ final class MatroskaCueReader {
         throw malformed("element past the end of the file");
       }
 
-      var buffer = readFully(channel, position, length);
+      var buffer = ContainerFileBytes.read(channel, position, length);
       var header = Header.read(buffer);
       return new FileElement(header.id(), position + buffer.position(), header.size());
     }
@@ -316,19 +316,7 @@ final class MatroskaCueReader {
         throw malformed("oversized element");
       }
 
-      return readFully(channel, element.dataStart(), (int) element.size());
-    }
-
-    private static ByteBuffer readFully(FileChannel channel, long position, int length)
-        throws IOException {
-      var buffer = ByteBuffer.allocate(length);
-      while (buffer.hasRemaining()) {
-        if (channel.read(buffer, position + buffer.position()) < 0) {
-          throw malformed("element past the end of the file");
-        }
-      }
-
-      return buffer.flip();
+      return ContainerFileBytes.read(channel, element.dataStart(), (int) element.size());
     }
   }
 

@@ -166,7 +166,9 @@ final class Mp4SyncSampleReader {
     var size = channel.size();
     long position = 0;
     while (position + BOX_HEADER_BYTES <= size) {
-      var header = read(channel, position, (int) Math.min(LARGE_BOX_HEADER_BYTES, size - position));
+      var header =
+          ContainerFileBytes.read(
+              channel, position, (int) Math.min(LARGE_BOX_HEADER_BYTES, size - position));
       var box = BoxHeader.read(header, size - position);
       if ("moov".equals(box.type())) {
         return payload(channel, position, box);
@@ -184,19 +186,7 @@ final class Mp4SyncSampleReader {
       throw malformed("oversized moov");
     }
 
-    return read(channel, position + box.headerSize(), (int) box.payloadSize());
-  }
-
-  private static ByteBuffer read(FileChannel channel, long position, int length)
-      throws IOException {
-    var buffer = ByteBuffer.allocate(length);
-    while (buffer.hasRemaining()) {
-      if (channel.read(buffer, position + buffer.position()) < 0) {
-        throw malformed("box past the end of the file");
-      }
-    }
-
-    return buffer.flip();
+    return ContainerFileBytes.read(channel, position + box.headerSize(), (int) box.payloadSize());
   }
 
   private static Optional<ByteBuffer> child(ByteBuffer parent, String type) {
