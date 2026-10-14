@@ -397,7 +397,7 @@ class TranscodeWorkerApplicationIT {
               "startup rethrows its interruption with the interrupt flag set"
                   + " (exit status %d: flag cleared, %d: startup returned)",
               InterruptedStartup.INTERRUPT_FLAG_CLEARED, InterruptedStartup.STARTUP_RETURNED)
-          .isZero();
+          .isEqualTo(InterruptedStartup.INTERRUPT_PRESERVED);
       var nativeProcess = ProcessHandle.of(Long.parseLong(Files.readString(pidFile)));
       assertThat(nativeProcess.map(ProcessHandle::isAlive).orElse(false)).isFalse();
     } finally {
