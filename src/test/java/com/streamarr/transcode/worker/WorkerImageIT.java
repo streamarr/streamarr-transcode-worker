@@ -168,8 +168,7 @@ class WorkerImageIT {
     copyMedia();
     try (var image = ImageFixture.builder().media(media).build()) {
       image.accept();
-      var job = variantJobBuilder();
-      job.getDecisionBuilder().setMode(mode);
+      var job = fixtureJobBuilder(mode);
       job.getVariantBuilder().setWidth(160).setHeight(90).setBitrateBitsPerSecond(500_000);
       job.getExecutionBuilder().setMediaSegmentCount(MEDIA_SEGMENT_COUNT);
       var request = job.build();
@@ -356,7 +355,9 @@ class WorkerImageIT {
           .satisfies(video -> assertThat(video.getCodec()).isEqualTo("h264"));
       assertThat(image.recordedArguments("ffprobe")).contains("/media/" + UNICODE_KEY);
 
-      var jobBuilder = variantJobBuilder().setSource(sourceBuilder().setRelativeKey(UNICODE_KEY));
+      var jobBuilder =
+          fixtureJobBuilder(TranscodeMode.TRANSCODE_MODE_REMUX)
+              .setSource(sourceBuilder().setRelativeKey(UNICODE_KEY));
       jobBuilder.getExecutionBuilder().setMediaSegmentCount(MEDIA_SEGMENT_COUNT);
       var job = jobBuilder.build();
 
@@ -399,6 +400,20 @@ class WorkerImageIT {
     }
   }
 
+  // A job over the 10 s fixture, whose video is Constrained Baseline H.264 at level 1.3. An encode
+  // forces High at level 1.3, which a 160x90 variant at 24 fps and 500 kb/s needs.
+  private static VariantJob.Builder fixtureJobBuilder(TranscodeMode mode) {
+    var job = variantJobBuilder(mode);
+    var video = job.getDecisionBuilder().getVideoBuilder();
+    if (mode == TranscodeMode.TRANSCODE_MODE_REMUX) {
+      video.setCodecString("avc1.42C00D");
+      return job;
+    }
+
+    video.setLevel(13).setCodecString("avc1.64000D");
+    return job;
+  }
+
   private void copyMedia(String relativeKey) throws Exception {
     var source = getClass().getResource("/BigBuckBunny_320x180_10s.mp4");
     assertThat(source).isNotNull();
@@ -439,7 +454,7 @@ class WorkerImageIT {
     var script = scriptedFfmpeg("exit 73");
     try (var image = ImageFixture.builder().media(media).ffmpegPath(script).build()) {
       image.accept();
-      var request = variantJobBuilder().build();
+      var request = fixtureJobBuilder(TranscodeMode.TRANSCODE_MODE_REMUX).build();
 
       var failed = JobAttemptFailed.parseFrom(image.command("failed-job", request.toByteArray()));
 
@@ -466,7 +481,7 @@ class WorkerImageIT {
         """);
     try (var image = ImageFixture.builder().media(media).ffmpegPath(script).build()) {
       image.accept();
-      var request = variantJobBuilder().build();
+      var request = fixtureJobBuilder(TranscodeMode.TRANSCODE_MODE_REMUX).build();
       var started = JobAttemptStarted.parseFrom(image.command("start-job", request.toByteArray()));
       assertThat(started.getJobAttemptId()).isEqualTo(request.getJobAttemptId());
 
@@ -509,7 +524,7 @@ class WorkerImageIT {
                 .formatted(exitFile));
     try (var image = ImageFixture.builder().media(media).ffmpegPath(script).build()) {
       image.accept();
-      var request = variantJobBuilder().build();
+      var request = fixtureJobBuilder(TranscodeMode.TRANSCODE_MODE_REMUX).build();
       image.command("job-awaiting-acknowledgement", request.toByteArray());
       assertThat(image.worker.execInContainer("test", "-e", exitFile).getExitCode())
           .as("FFmpeg was still running when the stop was sent")

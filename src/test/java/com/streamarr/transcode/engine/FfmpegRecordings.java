@@ -106,6 +106,21 @@ public final class FfmpegRecordings {
       return encoder().orElse("copy");
     }
 
+    /**
+     * The codec string that the recording's initialization segment declares for its video: every
+     * copy is of a 64x36 libx264 High 4:4:4 Predictive source at level 1.0, and every encode forces
+     * the level that its encoder chooses for 64x36 at 23.976 fps.
+     */
+    public String videoCodecString() {
+      return switch (videoEncoder()) {
+        case "copy" -> "avc1.F4000A";
+        case "libx264" -> "avc1.64000A";
+        case "libsvtav1" -> "av01.0.00M.08";
+        case "libx265" -> "hev1.1.6.L30.90";
+        default -> throw new AssertionError("No codec string is known for " + videoEncoder());
+      };
+    }
+
     @Override
     public String toString() {
       return file;

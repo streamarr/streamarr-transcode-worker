@@ -135,6 +135,7 @@ class ProcessBuilderLauncherTest {
             .gracePeriod(Duration.ofSeconds(5))
             .stallTimeout(Duration.ofMinutes(1))
             .encodedFrameRate(OptionalDouble.empty())
+            .videoDecision(new VideoDecision.Copy(VideoDecisionFixtures.ENCODED_CODEC_STRING))
             .memoryBudget(SegmentMemoryBudget.forSlots(1))
             .sink(sink);
 
@@ -154,6 +155,7 @@ class ProcessBuilderLauncherTest {
         .gracePeriod(Duration.ofSeconds(5))
         .stallTimeout(Duration.ofMinutes(1))
         .encodedFrameRate(OptionalDouble.empty())
+        .videoDecision(new VideoDecision.Copy(VideoDecisionFixtures.ENCODED_CODEC_STRING))
         .memoryBudget(SegmentMemoryBudget.forSlots(1))
         .sink(sink);
   }

@@ -12,8 +12,10 @@ import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.workerConfig
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.copiedVideo;
+import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.copyJobBuilderFor;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.encodedVideo;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.fileContentsProducer;
+import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variantJobBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.fail;
@@ -435,13 +437,9 @@ class TranscodeWorkerControlPlaneIT {
   void shouldUploadRequestedSequenceWhenResumingJobMidTimeline() throws Exception {
     var service = new ControllableWorkerService();
     var recording = recording("07-copy-seek30.fmp4");
-    var initial = variantJob();
-    var resumed =
-        initial.toBuilder()
-            .setExecution(
-                initial.getExecution().toBuilder()
-                    .setStartSequenceNumber(recording.startSequenceNumber()))
-            .build();
+    var resumedBuilder = copyJobBuilderFor(recording);
+    resumedBuilder.getExecutionBuilder().setStartSequenceNumber(recording.startSequenceNumber());
+    var resumed = resumedBuilder.build();
     try (var server = new ControlPlaneServer(service);
         var worker =
             worker(preparedMediaRoot(), ScriptedProcessLauncher.writing(recording.file()))) {
@@ -491,6 +489,37 @@ class TranscodeWorkerControlPlaneIT {
           .extracting(upload -> upload.metadata().getSegmentName())
           .containsExactly("init.mp4");
     }
+  }
+
+  @Test
+  @DisplayName(
+      "Should report an output mismatch and upload nothing when a copy's initialization segment"
+          + " declares another codec string than the job")
+  void
+      shouldReportAnOutputMismatchAndUploadNothingWhenACopysInitializationSegmentDeclaresAnotherCodecStringThanTheJob()
+          throws Exception {
+    var service = new ControllableWorkerService();
+    var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
+    var job = variantJobBuilder().build();
+    try (var server = new ControlPlaneServer(service);
+        var worker = worker(preparedMediaRoot(), launcher)) {
+      server.start();
+      worker.start("localhost", server.port());
+
+      service.sendStart(service.registeredWorker(), withCopiedVideo(job, "hvc1.1.6.L120.90"));
+      service.awaitStarted(job);
+      var failure = service.awaitFailure();
+
+      assertThat(failure.getJobAttemptId()).isEqualTo(job.getJobAttemptId());
+      assertThat(failure.getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_OUTPUT_MISMATCH);
+      assertThat(service.uploads).isEmpty();
+    }
+  }
+
+  private static VariantJob withCopiedVideo(VariantJob job, String codecString) {
+    var decision = job.getDecision().toBuilder().setVideo(copiedVideo(codecString));
+    return job.toBuilder().setDecision(decision).build();
   }
 
   @Test

@@ -12,6 +12,7 @@ import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engineBuilde
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.workerConfigurationBuilder;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
+import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.copyJobBuilderFor;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.startVariant;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.stopVariant;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variantJobBuilder;
@@ -528,6 +529,28 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
+  @Test
+  @DisplayName(
+      "Should report an output mismatch and upload nothing when the initialization segment declares"
+          + " another level than the job forces")
+  void
+      shouldReportAnOutputMismatchAndUploadNothingWhenTheInitializationSegmentDeclaresAnotherLevelThanTheJobForces()
+          throws Exception {
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getDecisionBuilder().getVideoBuilder().setLevel(42).setCodecString("avc1.64002A");
+
+    try (var worker = worker(ScriptedProcessLauncher.writing(ENCODED_RECORDING))) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_OUTPUT_MISMATCH);
+      assertThat(connection.uploads()).isEmpty();
+    }
+  }
+
   private static UnaryOperator<VideoDecision.Builder> unary(
       UnaryOperator<VideoDecision.Builder> operator) {
     return operator;
@@ -781,7 +804,7 @@ class TranscodeWorkerJobAttemptTest {
   @DisplayName("Should run the job when the last advertised media segment is the one it starts at")
   void shouldRunTheJobWhenTheLastAdvertisedMediaSegmentIsTheOneItStartsAt() throws Exception {
     var recording = recording("07-copy-seek30.fmp4");
-    var job = variantJobBuilder();
+    var job = copyJobBuilderFor(recording);
     job.getExecutionBuilder()
         .setStartSequenceNumber(recording.startSequenceNumber())
         .setMediaSegmentCount(recording.startSequenceNumber() + 1);
@@ -873,7 +896,7 @@ class TranscodeWorkerJobAttemptTest {
           throws Exception {
     var recording = recording("10-copy-gop-exceeds-period.fmp4");
     var launcher = ScriptedProcessLauncher.writing(recording.file());
-    var jobBuilder = variantJobBuilder();
+    var jobBuilder = copyJobBuilderFor(recording);
     jobBuilder
         .getExecutionBuilder()
         .setTargetSegmentDurationSeconds(recording.period())

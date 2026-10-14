@@ -4,6 +4,7 @@ import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.function.LongFunction;
 import lombok.Builder;
@@ -183,7 +184,11 @@ final class IsoBoxes {
     return out.toByteArray();
   }
 
-  /** One {@code trak} of the {@code moov} and its {@code trex} defaults. */
+  /**
+   * One {@code trak} of the {@code moov} and its {@code trex} defaults.
+   *
+   * @param sampleEntry the one sample entry of the track's {@code stsd}
+   */
   @Builder
   record Track(
       int trackId,
@@ -191,22 +196,49 @@ final class IsoBoxes {
       long timescale,
       int defaultSampleDuration,
       int defaultSampleFlags,
-      int headerVersion) {
+      int headerVersion,
+      byte[] sampleEntry) {
+
+    // H.264 High at level 1.0, 8-bit 4:2:0, as the libx264 recordings declare it: avc1.64000A.
+    private static final byte[] HIGH_LEVEL_ONE_AVC_ENTRY =
+        box(
+            "avc1",
+            new byte[78],
+            box("avcC", HexFormat.of().parseHex("0164000AFFE1000267640001000268EBFDF8F800")));
+    // AAC LC: mp4a.40.2.
+    private static final byte[] AAC_LC_ENTRY =
+        box(
+            "mp4a",
+            new byte[28],
+            fullBox(
+                "esds",
+                0,
+                HexFormat.of()
+                    .parseHex(
+                        "038080800000010004808080004015"
+                            + "0000000000000000000000"
+                            + "05808080021190")));
 
     static TrackBuilder video() {
       return builder()
           .trackId(VIDEO_TRACK_ID)
           .handler("vide")
           .timescale(24_000)
-          .defaultSampleFlags(NON_SYNC_SAMPLE_FLAGS);
+          .defaultSampleFlags(NON_SYNC_SAMPLE_FLAGS)
+          .sampleEntry(HIGH_LEVEL_ONE_AVC_ENTRY);
     }
 
     static TrackBuilder audio() {
-      return builder().trackId(AUDIO_TRACK_ID).handler("soun").timescale(48_000);
+      return builder()
+          .trackId(AUDIO_TRACK_ID)
+          .handler("soun")
+          .timescale(48_000)
+          .sampleEntry(AAC_LC_ENTRY);
     }
 
     byte[] trak() {
-      return box("trak", tkhd(), box("mdia", mdhd(), hdlr(), box("minf")));
+      var stsd = fullBox("stsd", 0, u32(1), sampleEntry);
+      return box("trak", tkhd(), box("mdia", mdhd(), hdlr(), box("minf", box("stbl", stsd))));
     }
 
     byte[] trex() {

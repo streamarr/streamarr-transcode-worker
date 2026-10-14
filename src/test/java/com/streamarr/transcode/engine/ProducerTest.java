@@ -630,6 +630,111 @@ class ProducerTest {
     assertThat(sink.acceptedNames()).isEmpty();
   }
 
+  @Test
+  @DisplayName(
+      "Should fail the attempt as an output mismatch, deliver nothing and end FFmpeg when an"
+          + " encode's initialization segment declares another level")
+  void
+      shouldFailTheAttemptAsAnOutputMismatchDeliverNothingAndEndFfmpegWhenAnEncodesInitializationSegmentDeclaresAnotherLevel() {
+    var recording = recording(ENCODED_RECORDING);
+    var process = ScriptedProcess.builder().output(bytesOf(ENCODED_RECORDING)).build();
+    var levelFourTwo = VideoDecisionFixtures.encodeBuilder().level(42).codecString("avc1.64002A");
+
+    var producer = producerFor(process, recording).videoDecision(levelFourTwo.build()).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
+    assertThat(failure.detail()).contains("avc1.64000A", "avc1.64002A");
+    assertThat(process.wasDestroyedForcibly()).isTrue();
+    assertThat(sink.acceptedNames()).isEmpty();
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as an output mismatch and deliver nothing when a copy's codec"
+          + " string differs from the job's")
+  void
+      shouldFailTheAttemptAsAnOutputMismatchAndDeliverNothingWhenACopysCodecStringDiffersFromTheJobs() {
+    var recording = recording("07-copy-start0.fmp4");
+    var process = ScriptedProcess.builder().output(bytesOf(recording.file())).build();
+
+    var producer =
+        producerFor(process, recording)
+            .videoDecision(new VideoDecision.Copy("avc1.640028"))
+            .start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
+    assertThat(sink.acceptedNames()).isEmpty();
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as an output mismatch when an encode's output is not 8-bit 4:2:0")
+  void shouldFailTheAttemptAsAnOutputMismatchWhenAnEncodesOutputIsNotEightBitFourTwoZero() {
+    var recording = recording("07-copy-start0.fmp4");
+    var process = ScriptedProcess.builder().output(bytesOf(recording.file())).build();
+    var highFourFourFour =
+        VideoDecisionFixtures.encodeBuilder().codecString(recording.videoCodecString());
+
+    var producer = producerFor(process, recording).videoDecision(highFourFourFour.build()).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
+    assertThat(failure.detail()).contains("4:4:4");
+    assertThat(sink.acceptedNames()).isEmpty();
+  }
+
+  @Test
+  @DisplayName(
+      "Should deliver a copy's initialization segment whatever its picture format when its codec"
+          + " string matches the job's")
+  void
+      shouldDeliverACopysInitializationSegmentWhateverItsPictureFormatWhenItsCodecStringMatchesTheJobs() {
+    var recording = recording("07-copy-start0.fmp4");
+    var process = ScriptedProcess.builder().output(bytesOf(recording.file())).build();
+
+    var producer = producerFor(process, recording).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(sink.acceptedNames()).first().isEqualTo("init.mp4");
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as an output mismatch when the initialization segment's video"
+          + " codec configuration cannot be read")
+  void
+      shouldFailTheAttemptAsAnOutputMismatchWhenTheInitializationSegmentsVideoCodecConfigurationCannotBeRead() {
+    var emptyHvcc = IsoBoxes.box("hvc1", new byte[78], IsoBoxes.box("hvcC"));
+    var output =
+        IsoBoxes.concat(
+            IsoBoxes.ftyp(), IsoBoxes.moov(IsoBoxes.Track.video().sampleEntry(emptyHvcc).build()));
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer =
+        producerLaunching(process)
+            .periodSeconds(6)
+            .videoDecision(new VideoDecision.Copy("hvc1.1.6.L93.90"))
+            .start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
+    assertThat(sink.acceptedNames()).isEmpty();
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as an output mismatch when the initialization segment declares no"
+          + " video track")
+  void shouldFailTheAttemptAsAnOutputMismatchWhenTheInitializationSegmentDeclaresNoVideoTrack() {
+    var output = IsoBoxes.concat(IsoBoxes.ftyp(), IsoBoxes.moov(IsoBoxes.Track.audio().build()));
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer = producerLaunching(process).periodSeconds(6).start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
+    assertThat(sink.acceptedNames()).isEmpty();
+  }
+
   @ParameterizedTest(name = "{0}")
   @MethodSource("outputsWithoutAMediaSegment")
   @DisplayName("Should fail the attempt when FFmpeg exits cleanly without a media segment")
@@ -1634,6 +1739,7 @@ class ProducerTest {
 
     return producerLaunching(process)
         .encodedFrameRate(encodedFrameRate)
+        .videoDecision(VideoDecisionFixtures.forRecording(recording))
         .periodSeconds(recording.period())
         .startSequenceNumber(recording.startSequenceNumber());
   }
@@ -1647,6 +1753,7 @@ class ProducerTest {
         .gracePeriod(Duration.ofSeconds(5))
         .stallTimeout(Duration.ofMinutes(1))
         .encodedFrameRate(OptionalDouble.empty())
+        .videoDecision(new VideoDecision.Copy(VideoDecisionFixtures.ENCODED_CODEC_STRING))
         .memoryBudget(SegmentMemoryBudget.forSlots(1))
         .sink(sink);
   }

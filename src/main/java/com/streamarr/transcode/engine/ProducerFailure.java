@@ -26,6 +26,11 @@ public enum ProducerFailure {
   SHORT_VIDEO_SAMPLE,
   /** The output is not fragmented MP4 that the producer can group into media segments. */
   MALFORMED_OUTPUT,
+  /**
+   * The initialization segment declares video other than the job's video decision, so the producer
+   * delivered nothing.
+   */
+  OUTPUT_MISMATCH,
   /** Reading FFmpeg's standard output failed. */
   OUTPUT_UNREADABLE,
   /**
@@ -49,6 +54,7 @@ public enum ProducerFailure {
       case EXCEEDS_SEGMENT_CAP -> SEGMENT_CAP_EXCEEDED;
       case SKIPPED_SEGMENT_NUMBER -> SKIPPED_SEGMENT_NUMBER;
       case SHORT_VIDEO_SAMPLE -> SHORT_VIDEO_SAMPLE;
+      case OUTPUT_MISMATCH -> OUTPUT_MISMATCH;
       case UNSIZED_BOX,
           MALFORMED_BOX,
           SAMPLE_DATA_OUTSIDE_MDAT,

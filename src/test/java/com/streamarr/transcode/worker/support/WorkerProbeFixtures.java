@@ -31,6 +31,7 @@ import build.buf.gen.streamarr.transcode.v1.VideoCodecFamily;
 import build.buf.gen.streamarr.transcode.v1.VideoCodecProfile;
 import build.buf.gen.streamarr.transcode.v1.VideoDecision;
 import build.buf.gen.streamarr.transcode.v1.VideoMode;
+import com.streamarr.transcode.engine.FfmpegRecordings.Recording;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import com.streamarr.transcode.probe.FfprobeExecutor;
 import com.streamarr.transcode.worker.TranscodeWorker;
@@ -166,6 +167,13 @@ public final class WorkerProbeFixtures {
                 .setTargetSegmentDurationSeconds(6)
                 .setFramerate(24)
                 .setMediaSegmentCount(11));
+  }
+
+  /** A stream copy whose video decision names the codec string that the copy recording declares. */
+  public static VariantJob.Builder copyJobBuilderFor(Recording recording) {
+    var job = variantJobBuilder();
+    job.getDecisionBuilder().getVideoBuilder().setCodecString(recording.videoCodecString());
+    return job;
   }
 
   /** A copy of H.264 video with the codec string. */
