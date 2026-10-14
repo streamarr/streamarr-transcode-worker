@@ -35,7 +35,7 @@ MOVFLAGS=cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont
 # Java double. Every encoded source below probes as 24000/1001 (analyze.mjs checks it).
 FPS=23.976023976023978
 GOP_VERIFIED=145                      # ceil(P * FPS) + 1: ADR 0037's backstop for an encoder verified to honour forced keyframes
-GOP_FLOOR=143                         # floor(P * FPS): ADR 0037's GOP for an encoder not verified to (libx265 until worker #23, hardware until worker #14)
+GOP_FLOOR=143                         # floor(P * FPS): ADR 0037's GOP for an encoder not verified to (libx265 until a recording after a seek, hardware until worker #14)
 GOP_CEIL=144                          # ceil(P * FPS): the HLS recipe's frame-count GOP
 # The HLS recipe's forced keyframes: an expression whose t counts from the attempt's first frame.
 FORCED_EVERY_PERIOD="expr:gte(t,n_forced*$P)"
@@ -53,9 +53,11 @@ DET=(-threads 1)
 
 X264=(-c:v libx264 -vf scale=-2:36,format=yuv420p -b:v 6000 -maxrate 6000 -bufsize 12000)
 SVT=(-c:v libsvtav1 -vf scale=-2:36,format=yuv420p -crf 35 -maxrate 6000 -svtav1-params mbr-overshoot-pct=0:lp=1)
-# The worker's libx265 arguments (open GOP and x265's scene cut left at their defaults; worker #23
-# owns the closed-GOP flags), single-threaded for reproducible bytes.
-X265=(-c:v libx265 -vf scale=-2:36,format=yuv420p -b:v 6000 -maxrate 6000 -bufsize 12000 -x265-params pools=none:frame-threads=1:log-level=error)
+X265=(-c:v libx265 -vf scale=-2:36,format=yuv420p -b:v 6000 -maxrate 6000 -bufsize 12000)
+# The worker's libx265 parameters, which close its GOPs and turn off its scene cuts, followed by the
+# fixture-only ones that keep it single-threaded and quiet. FFmpeg keeps only the last -x265-params,
+# so the fixture-only keys join the worker's string instead of passing a second option.
+X265_PARAMS=(-x265-params no-scenecut=1:no-open-gop=1:pools=none:frame-threads=1:log-level=error)
 AAC=(-c:a aac -ac 1 -b:a 8k)
 # The worker declares a copied stream's bitrate unknown (-b:a 0): the mp4 muxer would otherwise write
 # the demuxer's measurement, which a seek into an MPEG-TS source changes, into the initialization segment.
@@ -72,8 +74,8 @@ KEY_X264_PIPE=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$BOUNDARIES" -sc
 KEY_X264_PIPE_FLOORED=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$BOUNDARIES" -sc_threshold:v:0 0 -g:v:0 "$GOP_FLOOR")
 KEY_SVT_HLS=(-forced-idr 1 -g:v:0 "$GOP_CEIL" -keyint_min:v:0 "$GOP_CEIL")
 KEY_SVT_PIPE=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$BOUNDARIES" -g:v:0 "$GOP_VERIFIED" -keyint_min:v:0 "$GOP_VERIFIED")
-KEY_X265_PIPE=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$BOUNDARIES" -g:v:0 "$GOP_VERIFIED")
-KEY_X265_PIPE_FLOORED=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$BOUNDARIES" -g:v:0 "$GOP_FLOOR")
+KEY_X265_PIPE=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$BOUNDARIES" "${X265_PARAMS[@]}" -g:v:0 "$GOP_VERIFIED")
+KEY_X265_PIPE_FLOORED=(-r:v:0 "$FPS" -forced-idr 1 -force_key_frames:0 "$BOUNDARIES" "${X265_PARAMS[@]}" -g:v:0 "$GOP_FLOOR")
 
 # The media segment count the server advertises for SRC, or for its first SECONDS when given: the
 # probed duration in whole milliseconds over the period, rounded up (MediaSegmentTimeline in

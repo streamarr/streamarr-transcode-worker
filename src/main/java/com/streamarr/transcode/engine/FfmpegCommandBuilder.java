@@ -40,6 +40,7 @@ public class FfmpegCommandBuilder {
                   .fixedGop(true)
                   .capsBitrateOnlyInCrfMode(true)
                   .build()),
+          Map.entry("libx265", traits().closesGopsByX265Parameters(true).build()),
           Map.entry("h264_nvenc", FIXED_GOP),
           Map.entry("hevc_nvenc", FIXED_GOP),
           Map.entry("av1_nvenc", FIXED_GOP),
@@ -51,6 +52,10 @@ public class FfmpegCommandBuilder {
           Map.entry("av1_amf", FIXED_GOP),
           Map.entry("h264_rkmpp", FIXED_GOP),
           Map.entry("hevc_rkmpp", FIXED_GOP));
+
+  // By default x265 opens its GOPs, so a forced keyframe is a CRA picture despite -forced-idr, and
+  // it adds a keyframe at each scene cut, inside a segment.
+  private static final String CLOSED_GOP_X265_PARAMETERS = "no-scenecut=1:no-open-gop=1";
 
   static final List<String> MP4_MOVFLAGS =
       List.of("cmaf", "delay_moov", "skip_trailer", "frag_keyframe", "frag_discont");
@@ -239,6 +244,10 @@ public class FfmpegCommandBuilder {
     if (traitsOf(job).disablesSceneCutsByThreshold()) {
       cmd.addAll(List.of("-sc_threshold:v:0", "0"));
     }
+
+    if (traitsOf(job).closesGopsByX265Parameters()) {
+      cmd.addAll(List.of("-x265-params", CLOSED_GOP_X265_PARAMETERS));
+    }
   }
 
   // FFmpeg's list mode compares each frame's own timestamp with these absolute media times, so
@@ -292,6 +301,7 @@ public class FfmpegCommandBuilder {
       boolean keyframeVerified,
       boolean fixedGop,
       boolean disablesSceneCutsByThreshold,
+      boolean closesGopsByX265Parameters,
       boolean capsBitrateOnlyInCrfMode,
       @NonNull String eightBitPixelFormat) {}
 

@@ -600,11 +600,23 @@ class FfmpegCommandBuilderTest {
   }
 
   @Test
-  @DisplayName("Should leave scene-cut detection to the encoder when encoder is libx265")
-  void shouldLeaveSceneCutDetectionToTheEncoderWhenEncoderIsLibx265() {
+  @DisplayName("Should close GOPs when encoder is libx265")
+  void shouldCloseGopsWhenEncoderIsLibx265() {
     var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), "libx265");
 
-    assertThat(cmd).isNotEmpty().doesNotContain("-sc_threshold:v:0");
+    assertThat(cmd)
+        .containsSequence("-x265-params", "no-scenecut=1:no-open-gop=1")
+        .containsOnlyOnce("-x265-params")
+        .doesNotContain("-sc_threshold:v:0");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"libx264", "libsvtav1", "hevc_nvenc", "hevc_videotoolbox"})
+  @DisplayName("Should pass no x265 parameters when encoder is not libx265")
+  void shouldPassNoX265ParametersWhenEncoderIsNotLibx265(String encoder) {
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), encoder);
+
+    assertThat(cmd).isNotEmpty().doesNotContain("-x265-params");
   }
 
   @Test

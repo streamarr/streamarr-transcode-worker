@@ -50,7 +50,7 @@ function hlsComparison(run, flags, { audio = true, reference = null, restrict = 
 // fixture-only additions aside, and FfmpegCommandBuilderRecipeTest pins the worker to it.
 const FIRST_30_SECONDS = 'only the first 30 s of the source';
 const MISSED_FORCED_KEYFRAME = '18 s left out of the forced keyframe times';
-const X265_WITH_FIXTURE_PARAMS = 'with -x265-params that keep it single-threaded and quiet';
+const X265_WITH_FIXTURE_PARAMS = 'with fixture-only -x265-params keys that keep it single-threaded and quiet';
 const X265_UNDER_THE_VERIFIED_GOP =
   `libx265, not verified, under the verified GOP of 145 frames, ${X265_WITH_FIXTURE_PARAMS}`;
 const X265_UNDER_THE_FLOORED_GOP =
@@ -213,17 +213,17 @@ const FIXTURES = [
   {
     name: '13-x265-cfr', source: 'cfr.mp4', mode: 'encode', encoder: 'libx265', seek: 0, start: 0,
     recipeDeviation: `${X265_UNDER_THE_VERIFIED_GOP}; ${FIRST_30_SECONDS}`,
-    proves: 'libx265 with the worker\'s arguments (open GOP by default) under the 145-frame GOP: it honours every ' +
-      'time-based forced keyframe (frames 144, 288, 432, 576), but despite -forced-idr 1 each one is a CRA ' +
-      '(NAL type 21); only frame 0 is an IDR (type 20). No RASL picture follows them here.',
+    proves: 'libx265 with the worker\'s arguments (closed GOPs, no scene cuts) under the 145-frame GOP: it honours ' +
+      'every time-based forced keyframe (frames 144, 288, 432, 576), and every keyframe, frame 0 included, is an IDR ' +
+      'picture (NAL type 20) with no leading pictures.',
     hlsComparisons: [hlsComparison('13-x265-cfr.video-only', 'pipe-recipe', { audio: false })],
   },
   {
     name: '13-x265-cfr-missed-forced-keyframe', source: 'cfr.mp4', mode: 'encode', encoder: 'libx265', seek: 0, start: 0,
     recipeDeviation: `${X265_UNDER_THE_VERIFIED_GOP}; ${MISSED_FORCED_KEYFRAME}; ${FIRST_30_SECONDS}`,
     proves: 'libx265 with 18 s left out of the forced keyframe times: its GOP count restarts at the forced keyframe at ' +
-      'frame 288 and the backstop lands at frame 433 (18.060 s), inside interval 3, but as a CRA whose RASL ' +
-      'picture (frame 432) references the previous GOP, so the segment it opens cannot be decoded on its own.',
+      'frame 288 and the backstop comes at frame 433 (18.060 s), inside interval 3, as an IDR picture (NAL type 20), ' +
+      'so the segment it opens decodes on its own.',
     hlsComparisons: [hlsComparison('13-x265-cfr-missed-forced-keyframe.video-only', 'pipe-recipe', { audio: false })],
   },
   {
@@ -232,8 +232,7 @@ const FIXTURES = [
     proves: 'libx265 with the worker\'s arguments under the floored GOP of 143 frames that it gets while unverified: ' +
       'as in 11, the GOP keyframe one frame before every later boundary (frames 143, 287, 431, 575) and on the last ' +
       'frame (719) joins the earlier segment, so each of the 5 segments holds two keyframes and opens at its forced ' +
-      'keyframe. Every keyframe after frame 0 is a CRA; the GOP keyframes at frames 143 and 287 lead two RASL ' +
-      'pictures each inside the earlier segment, and no RASL picture follows a forced keyframe that opens a segment.',
+      'keyframe. Every keyframe is an IDR picture (NAL type 20).',
     hlsComparisons: [hlsComparison('13-x265-cfr-floored-gop.video-only', 'pipe-recipe', { audio: false })],
   },
 ];
@@ -252,7 +251,7 @@ const RECIPE =
   '-avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128 <codec args> [copy: -bsf:a aac_adtstoasc ' +
   'when copying AAC, then -b:a 0] [encode: -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6 ' +
   'in whole seconds, K = startSequenceNumber, N = mediaSegmentCount ' +
-  '(-sc_threshold:v:0 0 for libx264) -g:v:0 145 = ceil(6 x 23.976) + 1 for an encoder verified to honour forced ' +
+  '(-sc_threshold:v:0 0 for libx264, -x265-params no-scenecut=1:no-open-gop=1 for libx265) -g:v:0 145 = ceil(6 x 23.976) + 1 for an encoder verified to honour forced ' +
   'keyframes (libx264, SVT-AV1), else 143 = floor(6 x 23.976) (fixtures 11 and 13c) (-keyint_min:v:0 with the ' +
   'same value for SVT-AV1); fixtures 13 and 13b give libx265, not verified, 145 to test whether it qualifies] ' +
   '[fixtures 11 to 13 only: -t 30] -threads 1 -f mp4 -movflags ' +

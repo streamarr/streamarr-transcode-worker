@@ -84,9 +84,9 @@ ffmpeg -hide_banner -nostdin -loglevel error
           -c:a aac -ac 1 -b:a 8k
           -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6
           -g:v:0 145 -keyint_min:v:0 145
-  x265:   -c:v libx265 -vf scale=-2:36,format=yuv420p -b:v 6000 -maxrate 6000 -bufsize 12000
-          -x265-params pools=none:frame-threads=1:log-level=error -c:a aac -ac 1 -b:a 8k
+  x265:   -c:v libx265 -vf scale=-2:36,format=yuv420p -b:v 6000 -maxrate 6000 -bufsize 12000 -c:a aac -ac 1 -b:a 8k
           -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6
+          -x265-params no-scenecut=1:no-open-gop=1:pools=none:frame-threads=1:log-level=error
           -g:v:0 145                                           (fixture 13c: -g:v:0 143)
   -threads 1
   -f mp4 -movflags cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont -frag_duration 1000000 pipe:1
@@ -119,8 +119,10 @@ never comes.
 
 Fixture-only additions are `-hide_banner -nostdin -loglevel error`, which keep FFmpeg's log quiet
 and its input closed, `-threads 1`, `lp=1` for SVT-AV1, whose output otherwise differs on every
-invocation, and `-x265-params pools=none:frame-threads=1:log-level=error` for libx265, which keeps it
-single-threaded and quiet too. For libx264 and libx265 none moves a keyframe or a cut. For SVT-AV1,
+invocation, and the keys `pools=none:frame-threads=1:log-level=error` for libx265, which keep it
+single-threaded and quiet too. FFmpeg keeps only the last `-x265-params` option, so the recorder
+appends these keys to the worker's own `no-scenecut=1:no-open-gop=1` instead of passing a second
+option. For libx264 and libx265 none moves a keyframe or a cut. For SVT-AV1,
 `lp=1` also excludes [upstream issue 2385](https://gitlab.com/AOMediaCodec/SVT-AV1/-/work_items/2385)
 (worker #42): under the worker's threading the pinned SVT-AV1
 can emit packets out of decode order, which leaves one-tick video samples and crowds keyframes into
@@ -189,9 +191,9 @@ Timescale 24000 unless stated. `n@t` means segment n starts at t seconds.
 | 11 | `11-encode-cfr-floored-gop.fmp4` | 0 | The unverified-encoder case: the first 30 s of 1 under the floored GOP of 143 frames. The GOP keyframe one frame before every later boundary (frames 143, 287, 431, 575) and on the last frame (719) is a 1-frame keyframe-first fragment inside the earlier interval, so each of the 5 segments holds two keyframes, and every segment still opens at its forced keyframe. |
 | 12 | `12-encode-cfr-missed-forced-keyframe.fmp4` | 0 | libx264, first 30 s, 145-frame GOP, 18 left out of the list. The GOP count restarts at the forced keyframe at frame 288 (12.012 s), so the backstop keyframe comes 145 frames later at frame 433 (18.060 s), inside interval 3: 0@0, 1@6.006, 2@12.012, 3@18.060, 4@24.024, no number skipped. |
 | 12b | `12-svtav1-cfr-missed-forced-keyframe.fmp4` | 0 | The same through SVT-AV1: its backstop also lands at frame 433 (18.060 s). |
-| 13 | `13-x265-cfr.fmp4` | 0 | libx265 with the worker's arguments (default open GOP, sample entry `hev1`) under the 145-frame GOP, first 30 s: keyframes only at the forced frames 0, 144, 288, 432 and 576, one per segment. Frame 0 is an IDR (NAL type 20); every forced keyframe after it is a CRA (type 21) despite `-forced-idr 1`. No RASL picture follows them here. |
-| 13b | `13-x265-cfr-missed-forced-keyframe.fmp4` | 0 | libx265 with 18 left out of the list: its GOP count restarts at frame 288 as well, and the backstop lands at frame 433 inside interval 3, but as a CRA followed in decode order by one RASL picture (frame 432, presented before it), which references the previous GOP. |
-| 13c | `13-x265-cfr-floored-gop.fmp4` | 0 | libx265 with the worker's arguments under the floored GOP of 143 frames it gets while unverified, first 30 s. As in 11, the GOP keyframe one frame before every later boundary (frames 143, 287, 431, 575) and on the last frame (719) joins the earlier segment: 5 segments of two keyframes, each opening at its forced keyframe. Every keyframe after frame 0 is a CRA; the GOP's CRAs at frames 143 and 287 lead two RASL pictures each inside the earlier segment, and no RASL picture follows a forced CRA that opens a segment. |
+| 13 | `13-x265-cfr.fmp4` | 0 | libx265 with the worker's arguments (closed GOPs, no scene cuts, sample entry `hev1`) under the 145-frame GOP, first 30 s: keyframes only at the forced frames 0, 144, 288, 432 and 576, one per segment. Every keyframe is an IDR picture (NAL type 20) with no leading pictures. |
+| 13b | `13-x265-cfr-missed-forced-keyframe.fmp4` | 0 | libx265 with 18 left out of the list: its GOP count restarts at frame 288 as well, and the backstop comes at frame 433 inside interval 3 as an IDR picture (NAL type 20). So the segment it opens decodes on its own. |
+| 13c | `13-x265-cfr-floored-gop.fmp4` | 0 | libx265 with the worker's arguments under the floored GOP of 143 frames it gets while unverified, first 30 s. As in 11, the GOP keyframe one frame before every later boundary (frames 143, 287, 431, 575) and on the last frame (719) joins the earlier segment: 5 segments of two keyframes, each opening at its forced keyframe. Every keyframe is an IDR picture (NAL type 20). |
 
 Box facts every recording shares (useful for the reader):
 - Top-level boxes are only `ftyp`, `moov`, `moof` and `mdat`, in that order, with no `largesize`, `styp` or `sidx`.
@@ -221,7 +223,7 @@ frames.
 |---|---|---|---|---|
 | libx264 | yes: 1, 1b, 3, 5a, 6 key only the forced frames, one per segment | yes: 12's backstop at frame 433 = 288 + 145 | an IDR (NAL type 5) at every keyframe of every H.264 recording, 12's backstop included | verified: 145 |
 | SVT-AV1 | yes: 9, 9b, on the frames libx264 chose in 3 | yes: 12b's backstop at frame 433 | a shown key frame at every keyframe of 9, 9b and 12b, 12b's backstop included | verified: 145 |
-| libx265, default open GOP | yes: 13 keys only the forced frames | yes: 13b's backstop at frame 433 | a CRA (type 21) at every keyframe after frame 0 despite `-forced-idr 1`; 13b's backstop CRA at frame 433 leads a RASL picture | not verified: keep 143 (13c) until worker #23 closes libx265's GOPs, then record 13 again |
+| libx265, closed GOPs | yes: 13 keys only the forced frames | yes: 13b's backstop at frame 433 | an IDR (NAL type 20) at every keyframe of 13, 13b and 13c, 13b's backstop included | not verified: keep 143 (13c) until a recording after a seek shows the same |
 | hardware encoders | not recorded | not recorded | not recorded | not verified: 143 until worker #14 |
 
 ## Anchoring on the zero-based timeline
@@ -412,13 +414,11 @@ settle what, if anything, changes because of them.
   joining 9's segment 4 to it skipped the repeated frame. Seeking one period earlier removes it: 9b
   now delivers segment 5 from 30.030 s. An MPEG-TS source, whose demuxer lands on the next keyframe
   after the target, has no encoded replacement attempt recording here.
-- **libx265 under the worker's arguments keys its forced keyframes as CRA pictures** (13, 13b, 13c),
-  not as IDR, although the worker passes `-forced-idr 1`. With no RASL picture after them (13) they
-  behave as clean random-access points, but the GOP backstop CRA in 13b leads a RASL picture, so the
-  segment it opens cannot be decoded on its own. Under the floored GOP libx265 gets while unverified
-  (13c), the RASL pictures follow the GOP's CRAs one frame before a boundary, inside the earlier
-  segment, and every segment still opens at a forced CRA that no RASL picture follows. Closing libx265's GOPs is worker #23's work, and the
-  `hvc1` tag (the recordings carry `hev1`) is worker #18's.
+- **libx265 keys every keyframe as an IDR picture once its GOPs are closed** (13, 13b, 13c). Under
+  its default open GOP, libx265 keyed every forced keyframe after frame 0 as a CRA picture, although
+  the worker passes `-forced-idr 1`, and 13b's backstop CRA led a RASL picture that references the
+  GOP before it. The worker now passes `-x265-params no-scenecut=1:no-open-gop=1`, which closes the
+  GOPs and stops keyframes at scene cuts. The `hvc1` tag (the recordings carry `hev1`) is worker #18's.
 - **An encode can end in a 1-frame segment.** The server advertises 6 segments for 5a's 30.051 s
   source, and 5a's last constant-rate frame, at 30.030 s, is the first at or after the last advertised
   boundary, 30 s. The list forces it, so it forms segment 5 holding one frame and nothing else. Under
