@@ -11,7 +11,6 @@ import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.awaitility.Awaitility.await;
 
 import build.buf.gen.streamarr.transcode.v1.AudioDecision;
 import build.buf.gen.streamarr.transcode.v1.AudioMode;
@@ -102,27 +101,25 @@ class TranscodeWorkerControlPlaneIT {
   @Test
   @DisplayName("Should warn when the control plane sends an unknown command")
   void shouldWarnWhenControlPlaneSendsUnknownCommand() throws Exception {
-    var mediaRoot = Files.createDirectory(tempDir.resolve("media"));
     var service = new ControllableWorkerService();
+    var orderingBarrierJob = variantJob();
     var appender = attachWorkerAppender();
 
     try (var server = new TestServer(service);
-        var worker = worker(mediaRoot)) {
+        var worker = worker(preparedMediaRoot())) {
       server.start();
       worker.start("localhost", server.port());
 
       service.send(EstablishWorkerSessionResponse.getDefaultInstance());
+      service.sendStart(service.registeredWorker(), orderingBarrierJob);
+      service.awaitStarted(orderingBarrierJob);
 
-      await()
-          .atMost(5, TimeUnit.SECONDS)
-          .untilAsserted(
-              () ->
-                  assertThat(appender.list)
-                      .anySatisfy(
-                          event -> {
-                            assertThat(event.getLevel()).isEqualTo(Level.WARN);
-                            assertThat(event.getFormattedMessage()).contains("COMMAND_NOT_SET");
-                          }));
+      assertThat(appender.list)
+          .anySatisfy(
+              event -> {
+                assertThat(event.getLevel()).isEqualTo(Level.WARN);
+                assertThat(event.getFormattedMessage()).contains("COMMAND_NOT_SET");
+              });
     } finally {
       detachWorkerAppender(appender);
     }
