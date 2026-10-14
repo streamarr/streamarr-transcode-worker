@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
@@ -108,8 +109,38 @@ class FfmpegCommandBuilderRecipeTest {
     var decision = TranscodeDecision.builder().subtitleDecision(SubtitleDecisions.EXCLUDED);
     return switch (recording.mode()) {
       case ENCODE ->
-          decision.transcodeMode(TranscodeMode.FULL_TRANSCODE).audioDecision(ENCODED_AUDIO).build();
-      case COPY -> decision.transcodeMode(TranscodeMode.REMUX).audioDecision(COPIED_AUDIO).build();
+          decision
+              .transcodeMode(TranscodeMode.FULL_TRANSCODE)
+              .videoDecision(encodeRecordedBy(recording.videoEncoder()))
+              .audioDecision(ENCODED_AUDIO)
+              .build();
+      case COPY ->
+          decision
+              .transcodeMode(TranscodeMode.REMUX)
+              .videoDecision(new VideoDecision.Copy(VideoDecisionFixtures.ENCODED_CODEC_STRING))
+              .audioDecision(COPIED_AUDIO)
+              .build();
+    };
+  }
+
+  // The codec profile, tier and level that each encoder's recordings force.
+  private static VideoDecision encodeRecordedBy(String encoder) {
+    return switch (encoder) {
+      case "libsvtav1" ->
+          VideoDecision.Encode.builder()
+              .codecProfile(VideoCodecProfile.AV1_MAIN)
+              .tier(Optional.of(VideoCodecTier.MAIN))
+              .level(20)
+              .codecString("av01.0.00M.08")
+              .build();
+      case "libx265" ->
+          VideoDecision.Encode.builder()
+              .codecProfile(VideoCodecProfile.HEVC_MAIN)
+              .tier(Optional.of(VideoCodecTier.MAIN))
+              .level(10)
+              .codecString("hev1.1.6.L30.90")
+              .build();
+      default -> VideoDecisionFixtures.encodeBuilder().build();
     };
   }
 

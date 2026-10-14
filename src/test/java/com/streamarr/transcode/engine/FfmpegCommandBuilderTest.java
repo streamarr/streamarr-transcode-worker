@@ -70,6 +70,7 @@ class FfmpegCommandBuilderTest {
     return TranscodeDecision.builder()
         .transcodeMode(mode)
         .videoCodecFamily("h264")
+        .videoDecision(VideoDecisionFixtures.forMode(mode))
         .audioDecision(audio)
         .subtitleDecision(SubtitleDecisions.EXCLUDED);
   }

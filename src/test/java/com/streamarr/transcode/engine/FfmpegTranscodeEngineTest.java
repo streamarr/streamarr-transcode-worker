@@ -82,6 +82,7 @@ class FfmpegTranscodeEngineTest {
             TranscodeDecision.builder()
                 .transcodeMode(mode)
                 .videoCodecFamily(codecFamily)
+                .videoDecision(VideoDecisionFixtures.forMode(mode))
                 .audioDecision(
                     AudioDecision.builder()
                         .mode(AudioMode.TRANSCODE)

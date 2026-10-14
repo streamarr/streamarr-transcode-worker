@@ -21,6 +21,11 @@ import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.TranscodeMode;
 import build.buf.gen.streamarr.transcode.v1.VariantJob;
+import build.buf.gen.streamarr.transcode.v1.VideoCodecFamily;
+import build.buf.gen.streamarr.transcode.v1.VideoCodecProfile;
+import build.buf.gen.streamarr.transcode.v1.VideoCodecTier;
+import build.buf.gen.streamarr.transcode.v1.VideoDecision;
+import build.buf.gen.streamarr.transcode.v1.VideoMode;
 import build.buf.gen.streamarr.transcode.v1.WorkerRegistration;
 import build.buf.gen.streamarr.transcode.v1.WorkerVerifiedVideoEncoder;
 import com.github.dockerjava.api.DockerClient;
@@ -258,10 +263,10 @@ class WorkerImageIT {
   }
 
   private static VariantJob.Builder presetJob(String codecFamily, EncoderPreset preset) {
-    var job = variantJobBuilder();
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE);
     job.getDecisionBuilder()
-        .setMode(TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE)
         .setVideoCodecFamily(codecFamily)
+        .setVideo(presetVariantVideo(codecFamily))
         .getAudioBuilder()
         .setMode(AudioMode.AUDIO_MODE_NONE);
     job.getVariantBuilder()
@@ -271,6 +276,28 @@ class WorkerImageIT {
         .setEncoderPreset(preset);
     job.getExecutionBuilder().setMediaSegmentCount(MEDIA_SEGMENT_COUNT);
     return job;
+  }
+
+  // The encode that a 160x90 variant at 24 fps and 500 kb/s needs: H.264 High at level 1.3, or AV1
+  // Main at level 2.0, with the codec string that the worker's encoder writes for it.
+  private static VideoDecision.Builder presetVariantVideo(String codecFamily) {
+    var video = VideoDecision.newBuilder().setMode(VideoMode.VIDEO_MODE_ENCODE);
+    return switch (codecFamily) {
+      case "h264" ->
+          video
+              .setCodecFamily(VideoCodecFamily.VIDEO_CODEC_FAMILY_H264)
+              .setCodecProfile(VideoCodecProfile.VIDEO_CODEC_PROFILE_H264_HIGH)
+              .setLevel(13)
+              .setCodecString("avc1.64000D");
+      case "av1" ->
+          video
+              .setCodecFamily(VideoCodecFamily.VIDEO_CODEC_FAMILY_AV1)
+              .setCodecProfile(VideoCodecProfile.VIDEO_CODEC_PROFILE_AV1_MAIN)
+              .setTier(VideoCodecTier.VIDEO_CODEC_TIER_MAIN)
+              .setLevel(20)
+              .setCodecString("av01.0.00M.08");
+      default -> throw new AssertionError("No preset job for " + codecFamily);
+    };
   }
 
   // Records FFmpeg's arguments and runs SVT-AV1 on one thread, so that a reference encode with the

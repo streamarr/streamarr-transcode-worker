@@ -233,7 +233,7 @@ public final class TranscodeWorker implements AutoCloseable {
               request,
               (segment, cancellation) -> deliverToServer(job, segment, cancellation),
               memoryBudget);
-    } catch (UnadvertisedCodecFamilyException e) {
+    } catch (InvalidJobSpecificationException | UnadvertisedCodecFamilyException e) {
       log.warn("Refusing job attempt {}: {}", fromProto(job.getJobAttemptId()), e.getMessage());
       reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
       return new Refused();

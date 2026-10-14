@@ -1,5 +1,7 @@
 package com.streamarr.transcode.worker.support;
 
+import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING_CODEC_STRING;
+import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING_LEVEL;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.SOURCE_NAMESPACE_ID;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engine;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.workerConfigurationBuilder;
@@ -25,6 +27,10 @@ import build.buf.gen.streamarr.transcode.v1.TranscodeExecution;
 import build.buf.gen.streamarr.transcode.v1.TranscodeMode;
 import build.buf.gen.streamarr.transcode.v1.VariantJob;
 import build.buf.gen.streamarr.transcode.v1.VariantSpec;
+import build.buf.gen.streamarr.transcode.v1.VideoCodecFamily;
+import build.buf.gen.streamarr.transcode.v1.VideoCodecProfile;
+import build.buf.gen.streamarr.transcode.v1.VideoDecision;
+import build.buf.gen.streamarr.transcode.v1.VideoMode;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import com.streamarr.transcode.probe.FfprobeExecutor;
 import com.streamarr.transcode.worker.TranscodeWorker;
@@ -127,7 +133,16 @@ public final class WorkerProbeFixtures {
             .build());
   }
 
+  /** A stream copy that the recording most tests replay as FFmpeg's output satisfies. */
   public static VariantJob.Builder variantJobBuilder() {
+    return variantJobBuilder(TranscodeMode.TRANSCODE_MODE_REMUX);
+  }
+
+  /**
+   * A job in the mode that the recording most tests replay as FFmpeg's output satisfies: its video
+   * decision copies or encodes as the mode does and names the recording's codec string.
+   */
+  public static VariantJob.Builder variantJobBuilder(TranscodeMode mode) {
     return VariantJob.newBuilder()
         .setStreamSessionId(toProto(UUID.randomUUID()))
         .setJobId(toProto(UUID.randomUUID()))
@@ -135,8 +150,9 @@ public final class WorkerProbeFixtures {
         .setSource(sourceBuilder())
         .setDecision(
             TranscodeDecision.newBuilder()
-                .setMode(TranscodeMode.TRANSCODE_MODE_REMUX)
+                .setMode(mode)
                 .setVideoCodecFamily("h264")
+                .setVideo(videoDecisionFor(mode))
                 .setAudio(AudioDecision.newBuilder().setMode(AudioMode.AUDIO_MODE_COPY))
                 .setSubtitle(
                     SubtitleDecision.newBuilder().setMode(SubtitleMode.SUBTITLE_MODE_EXCLUDE))
@@ -150,6 +166,35 @@ public final class WorkerProbeFixtures {
                 .setTargetSegmentDurationSeconds(6)
                 .setFramerate(24)
                 .setMediaSegmentCount(11));
+  }
+
+  /** A copy of H.264 video with the codec string. */
+  public static VideoDecision.Builder copiedVideo(String codecString) {
+    return VideoDecision.newBuilder()
+        .setMode(VideoMode.VIDEO_MODE_COPY)
+        .setCodecFamily(VideoCodecFamily.VIDEO_CODEC_FAMILY_H264)
+        .setCodecString(codecString);
+  }
+
+  /** An H.264 High encode at the level and codec string of the encoded recording. */
+  public static VideoDecision.Builder encodedVideo() {
+    return VideoDecision.newBuilder()
+        .setMode(VideoMode.VIDEO_MODE_ENCODE)
+        .setCodecFamily(VideoCodecFamily.VIDEO_CODEC_FAMILY_H264)
+        .setCodecProfile(VideoCodecProfile.VIDEO_CODEC_PROFILE_H264_HIGH)
+        .setLevel(ENCODED_RECORDING_LEVEL)
+        .setCodecString(ENCODED_RECORDING_CODEC_STRING);
+  }
+
+  private static VideoDecision.Builder videoDecisionFor(TranscodeMode mode) {
+    return switch (mode) {
+      case TRANSCODE_MODE_VIDEO_TRANSCODE, TRANSCODE_MODE_FULL_TRANSCODE -> encodedVideo();
+      case TRANSCODE_MODE_REMUX,
+          TRANSCODE_MODE_AUDIO_TRANSCODE,
+          TRANSCODE_MODE_UNSPECIFIED,
+          UNRECOGNIZED ->
+          copiedVideo(ENCODED_RECORDING_CODEC_STRING);
+    };
   }
 
   public static FfprobeExecutor fileContentsProducer() {

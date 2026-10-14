@@ -3,6 +3,7 @@ package com.streamarr.transcode.worker;
 import static com.streamarr.transcode.engine.FfmpegRecordings.bytesOf;
 import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
+import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING_CODEC_STRING;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.uploadNames;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.SOURCE_NAMESPACE_ID;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engine;
@@ -10,6 +11,8 @@ import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engineBuilde
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.workerConfigurationBuilder;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
+import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.copiedVideo;
+import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.encodedVideo;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.fileContentsProducer;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -42,6 +45,9 @@ import build.buf.gen.streamarr.transcode.v1.Uuid;
 import build.buf.gen.streamarr.transcode.v1.VariantJob;
 import build.buf.gen.streamarr.transcode.v1.VariantSpec;
 import build.buf.gen.streamarr.transcode.v1.VideoCodecFamily;
+import build.buf.gen.streamarr.transcode.v1.VideoCodecProfile;
+import build.buf.gen.streamarr.transcode.v1.VideoCodecTier;
+import build.buf.gen.streamarr.transcode.v1.VideoDecision;
 import build.buf.gen.streamarr.transcode.v1.VideoEncoderBackend;
 import build.buf.gen.streamarr.transcode.v1.WorkerIdentity;
 import build.buf.gen.streamarr.transcode.v1.WorkerRegistration;
@@ -158,7 +164,10 @@ class TranscodeWorkerControlPlaneIT {
     var job = variantJob();
     var encode =
         job.toBuilder()
-            .setDecision(job.getDecision().toBuilder().setVideoCodecFamily(codecFamily))
+            .setDecision(
+                job.getDecision().toBuilder()
+                    .setVideoCodecFamily(codecFamily)
+                    .setVideo(levelFortyEncodeOf(advertisedCodecFamily)))
             .build();
 
     try (var server = new ControlPlaneServer(service);
@@ -174,6 +183,25 @@ class TranscodeWorkerControlPlaneIT {
       assertThat(launcher.command(fromProto(encode.getJobAttemptId())))
           .containsSubsequence("-c:v", advertised.getEncoder());
     }
+  }
+
+  // A level 4.0 encode that names the codec family, with the tier that HEVC and AV1 carry.
+  private static VideoDecision.Builder levelFortyEncodeOf(VideoCodecFamily codecFamily) {
+    var encode = encodedVideo().setCodecFamily(codecFamily).setLevel(40);
+    return switch (codecFamily) {
+      case VIDEO_CODEC_FAMILY_H264 -> encode.setCodecString("avc1.640028");
+      case VIDEO_CODEC_FAMILY_HEVC ->
+          encode
+              .setCodecProfile(VideoCodecProfile.VIDEO_CODEC_PROFILE_HEVC_MAIN)
+              .setTier(VideoCodecTier.VIDEO_CODEC_TIER_MAIN)
+              .setCodecString("hvc1.1.6.L120.90");
+      case VIDEO_CODEC_FAMILY_AV1 ->
+          encode
+              .setCodecProfile(VideoCodecProfile.VIDEO_CODEC_PROFILE_AV1_MAIN)
+              .setTier(VideoCodecTier.VIDEO_CODEC_TIER_MAIN)
+              .setCodecString("av01.0.08M.08");
+      default -> throw new AssertionError("No encode is listed for " + codecFamily);
+    };
   }
 
   @Test
@@ -209,7 +237,10 @@ class TranscodeWorkerControlPlaneIT {
     var job = variantJob();
     var copy =
         job.toBuilder()
-            .setDecision(job.getDecision().toBuilder().setMode(TranscodeMode.TRANSCODE_MODE_REMUX))
+            .setDecision(
+                job.getDecision().toBuilder()
+                    .setMode(TranscodeMode.TRANSCODE_MODE_REMUX)
+                    .setVideo(copiedVideo(ENCODED_RECORDING_CODEC_STRING)))
             .build();
 
     try (var server = new ControlPlaneServer(service);
@@ -487,6 +518,32 @@ class TranscodeWorkerControlPlaneIT {
       assertThat(service.uploads)
           .extracting(upload -> upload.metadata().getSegmentName())
           .containsExactlyElementsOf(uploadNames(recording));
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should report an invalid specification without launching FFmpeg when the job carries no"
+          + " video decision")
+  void shouldReportAnInvalidSpecificationWithoutLaunchingFfmpegWhenTheJobCarriesNoVideoDecision()
+      throws Exception {
+    var service = new ControllableWorkerService();
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJob();
+    var withoutVideoDecision =
+        job.toBuilder().setDecision(job.getDecision().toBuilder().clearVideo()).build();
+    try (var server = new ControlPlaneServer(service);
+        var worker = worker(preparedMediaRoot(), launcher)) {
+      server.start();
+      worker.start("localhost", server.port());
+
+      service.sendStart(service.registeredWorker(), withoutVideoDecision);
+      var failure = service.awaitFailure();
+
+      assertThat(failure.getJobAttemptId()).isEqualTo(job.getJobAttemptId());
+      assertThat(failure.getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
+      assertThat(launcher.hasLaunchedAny()).isFalse();
     }
   }
 
@@ -805,6 +862,7 @@ class TranscodeWorkerControlPlaneIT {
             TranscodeDecision.newBuilder()
                 .setMode(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE)
                 .setVideoCodecFamily("h264")
+                .setVideo(encodedVideo())
                 .setAudio(
                     AudioDecision.newBuilder()
                         .setMode(AudioMode.AUDIO_MODE_TRANSCODE)
