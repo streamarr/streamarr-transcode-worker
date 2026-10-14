@@ -153,7 +153,7 @@ public final class WorkerProbeFixtures {
             TranscodeDecision.newBuilder()
                 .setMode(mode)
                 .setVideoCodecFamily("h264")
-                .setVideo(videoDecisionFor(mode))
+                .setVideo(recordingVideoFor(mode))
                 .setAudio(AudioDecision.newBuilder().setMode(AudioMode.AUDIO_MODE_COPY))
                 .setSubtitle(
                     SubtitleDecision.newBuilder().setMode(SubtitleMode.SUBTITLE_MODE_EXCLUDE))
@@ -185,7 +185,7 @@ public final class WorkerProbeFixtures {
   }
 
   /** An H.264 High encode at the level and codec string of the encoded recording. */
-  public static VideoDecision.Builder encodedVideo() {
+  public static VideoDecision.Builder encodedRecordingVideo() {
     return VideoDecision.newBuilder()
         .setMode(VideoMode.VIDEO_MODE_ENCODE)
         .setCodecFamily(VideoCodecFamily.VIDEO_CODEC_FAMILY_H264)
@@ -194,9 +194,9 @@ public final class WorkerProbeFixtures {
         .setCodecString(ENCODED_RECORDING_CODEC_STRING);
   }
 
-  private static VideoDecision.Builder videoDecisionFor(TranscodeMode mode) {
+  private static VideoDecision.Builder recordingVideoFor(TranscodeMode mode) {
     return switch (mode) {
-      case TRANSCODE_MODE_VIDEO_TRANSCODE, TRANSCODE_MODE_FULL_TRANSCODE -> encodedVideo();
+      case TRANSCODE_MODE_VIDEO_TRANSCODE, TRANSCODE_MODE_FULL_TRANSCODE -> encodedRecordingVideo();
       case TRANSCODE_MODE_REMUX,
           TRANSCODE_MODE_AUDIO_TRANSCODE,
           TRANSCODE_MODE_UNSPECIFIED,

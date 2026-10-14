@@ -17,6 +17,7 @@ import com.streamarr.transcode.engine.FfmpegRecordings.SegmentSummary;
 import com.streamarr.transcode.engine.RecordingSegmentSink.Accepted;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
+import com.streamarr.transcode.fixtures.RecordingFixtures;
 import com.streamarr.transcode.fixtures.TopLevelBoxes;
 import com.streamarr.transcode.fixtures.TopLevelBoxes.Box;
 import java.io.IOException;
@@ -1753,7 +1754,7 @@ class ProducerTest {
         .gracePeriod(Duration.ofSeconds(5))
         .stallTimeout(Duration.ofMinutes(1))
         .encodedFrameRate(OptionalDouble.empty())
-        .videoDecision(new VideoDecision.Copy(VideoDecisionFixtures.ENCODED_CODEC_STRING))
+        .videoDecision(new VideoDecision.Copy(RecordingFixtures.ENCODED_RECORDING_CODEC_STRING))
         .memoryBudget(SegmentMemoryBudget.forSlots(1))
         .sink(sink);
   }

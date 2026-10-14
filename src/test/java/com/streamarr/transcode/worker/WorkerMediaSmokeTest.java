@@ -65,6 +65,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -120,11 +121,14 @@ class WorkerMediaSmokeTest {
   private static final int HEVC_IDR_W_RADL = 19;
   private static final int HEVC_IDR_N_LP = 20;
 
-  // The codec string of the fixture's Constrained Baseline H.264 at level 1.3.
-  private static final String FIXTURE_CODEC_STRING = "avc1.42C00D";
+  // The fixture's Constrained Baseline H.264 at level 1.3. Its 160x90 variant at 24 fps and 500
+  // kb/s
+  // needs H.264 level 1.3.
+  private static final H264Source FIXTURE = new H264Source("avc1.42C00D", 13);
 
-  // The seekable sources' libx264 encode of testsrc's RGB: High 4:4:4 Predictive at level 1.0.
-  private static final String SEEKABLE_SOURCE_CODEC_STRING = "avc1.F4000A";
+  // The seekable sources' libx264 encode of testsrc's RGB: High 4:4:4 Predictive at level 1.0. Its
+  // 64x36 variant needs H.264 level 1.1.
+  private static final H264Source SEEKABLE_SOURCE = new H264Source("avc1.F4000A", 11);
 
   // The levels that a 64x36 variant at 24 fps and up to 100 kb/s needs: H.264 1.1, because High
   // allows 80 kb/s at level 1.0, H.265 1.0 and AV1 2.0.
@@ -417,8 +421,7 @@ class WorkerMediaSmokeTest {
       TranscodeMode mode) throws Exception {
     copyMedia();
     var job = variantJobBuilder(mode);
-    // 160x90 at 24 fps and 500 kb/s needs H.264 level 1.3.
-    withVideo(job, videoDecisionFor(mode, "h264", 13, FIXTURE_CODEC_STRING));
+    withVideo(job, h264VideoFor(mode, FIXTURE));
     job.getVariantBuilder().setWidth(160).setHeight(90).setBitrateBitsPerSecond(500_000);
     job.getExecutionBuilder().setMediaSegmentCount(FIXTURE_SEGMENT_COUNT);
 
@@ -448,7 +451,7 @@ class WorkerMediaSmokeTest {
         List.of("-i", root.resolve("movie.mkv").toString(), "-c", "copy", "-f", "mpegts"),
         root.resolve("movie.ts"));
     var job = variantJobBuilder();
-    withVideo(job, copiedVideo(FIXTURE_CODEC_STRING));
+    withVideo(job, copiedVideo(FIXTURE.codecString()));
     job.getSourceBuilder().setRelativeKey("movie.ts");
     job.getExecutionBuilder().setMediaSegmentCount(FIXTURE_SEGMENT_COUNT);
     job.getDecisionBuilder()
@@ -475,7 +478,7 @@ class WorkerMediaSmokeTest {
     copyMedia();
     var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
     // 320x180 at 24 fps needs AV1 level 2.0.
-    withVideo(job, encodedVideo("av1", 20));
+    withVideo(job, forcedSoftwareEncode("av1", 20));
     job.getDecisionBuilder()
         .setVideoCodecFamily("av1")
         .getAudioBuilder()
@@ -558,8 +561,10 @@ class WorkerMediaSmokeTest {
     var source = tenBitSdrSource();
     // Level 4.0, far above the level each encoder chooses for 64x36 on its own.
     var job = tenBitSdrSourceJob(source, codecFamily);
-    withVideo(job, encodedVideo(codecFamily, 40));
+    withVideo(job, forcedSoftwareEncode(codecFamily, 40));
 
+    // ffprobe reports no tier. The tier is checked because the job completes: the producer refuses
+    // an initialization segment whose codec string, with its L, M or H tier letter, differs.
     var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
 
     var media = playable(uploads.contentOf(uploads.names()));
@@ -586,7 +591,7 @@ class WorkerMediaSmokeTest {
           throws Exception {
     var source = tenBitSdrSource();
     var job = tenBitSdrSourceJob(source, "h264");
-    withVideo(job, encodedVideo("h264", 40).setCodecString("avc1.64000B"));
+    withVideo(job, forcedSoftwareEncode("h264", 40).setCodecString("avc1.64000B"));
 
     var failure =
         executeExpectingFailure(engine(softwareCapabilities()), source.getParent(), job.build());
@@ -619,7 +624,7 @@ class WorkerMediaSmokeTest {
 
   private static VariantJob.Builder tenBitSdrSourceJob(Path source, String codecFamily) {
     var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
-    withVideo(job, encodedVideo(codecFamily, TINY_VARIANT_LEVELS.get(codecFamily)));
+    withVideo(job, forcedSoftwareEncode(codecFamily, TINY_VARIANT_LEVELS.get(codecFamily)));
     job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
     job.getDecisionBuilder()
         .setVideoCodecFamily(codecFamily)
@@ -685,7 +690,7 @@ class WorkerMediaSmokeTest {
           String codecFamily) throws Exception {
     var source = longSource();
     var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE);
-    withVideo(job, encodedVideo(codecFamily, TINY_VARIANT_LEVELS.get(codecFamily)));
+    withVideo(job, forcedSoftwareEncode(codecFamily, TINY_VARIANT_LEVELS.get(codecFamily)));
     job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
     job.getDecisionBuilder()
         .setVideoCodecFamily(codecFamily)
@@ -970,10 +975,7 @@ class WorkerMediaSmokeTest {
 
   private static VariantJob.Builder seekableSourceJob(Path source, TranscodeMode mode) {
     var job = variantJobBuilder(mode);
-    withVideo(
-        job,
-        videoDecisionFor(
-            mode, "h264", TINY_VARIANT_LEVELS.get("h264"), SEEKABLE_SOURCE_CODEC_STRING));
+    withVideo(job, h264VideoFor(mode, SEEKABLE_SOURCE));
     job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
     job.getDecisionBuilder()
         .getAudioBuilder()
@@ -1160,39 +1162,42 @@ class WorkerMediaSmokeTest {
     job.getDecisionBuilder().setVideo(video);
   }
 
-  // A copy of the source's video, or an encode of the codec family at the level, as the mode says.
-  private static VideoDecision.Builder videoDecisionFor(
-      TranscodeMode mode, String codecFamily, int level, String sourceCodecString) {
+  // A copy of the source's H.264, or an H.264 encode at the level its variant needs, as the mode
+  // says.
+  private static VideoDecision.Builder h264VideoFor(TranscodeMode mode, H264Source source) {
     return switch (mode) {
       case TRANSCODE_MODE_VIDEO_TRANSCODE, TRANSCODE_MODE_FULL_TRANSCODE ->
-          encodedVideo(codecFamily, level);
-      default -> copiedVideo(sourceCodecString);
+          forcedSoftwareEncode("h264", source.variantLevel());
+      default -> copiedVideo(source.codecString());
     };
   }
+
+  private record H264Source(String codecString, int variantLevel) {}
 
   // An 8-bit encode of the codec family that forces the level, with the codec string that the
   // worker's encoder writes for it: High for H.264, and Main at the Main tier for H.265 and AV1.
   // libx265 writes the hev1 sample entry until the worker chooses the tag (worker #18).
-  private static VideoDecision.Builder encodedVideo(String codecFamily, int level) {
+  private static VideoDecision.Builder forcedSoftwareEncode(String codecFamily, int level) {
     var video = VideoDecision.newBuilder().setMode(VideoMode.VIDEO_MODE_ENCODE).setLevel(level);
     return switch (codecFamily) {
       case "h264" ->
           video
               .setCodecFamily(VideoCodecFamily.VIDEO_CODEC_FAMILY_H264)
               .setCodecProfile(VideoCodecProfile.VIDEO_CODEC_PROFILE_H264_HIGH)
-              .setCodecString("avc1.6400%02X".formatted(level));
+              .setCodecString(String.format(Locale.ROOT, "avc1.6400%02X", level));
       case "hevc" ->
           video
               .setCodecFamily(VideoCodecFamily.VIDEO_CODEC_FAMILY_HEVC)
               .setCodecProfile(VideoCodecProfile.VIDEO_CODEC_PROFILE_HEVC_MAIN)
               .setTier(VideoCodecTier.VIDEO_CODEC_TIER_MAIN)
-              .setCodecString("hev1.1.6.L%d.90".formatted(level * 3));
+              .setCodecString(String.format(Locale.ROOT, "hev1.1.6.L%d.90", level * 3));
       case "av1" ->
           video
               .setCodecFamily(VideoCodecFamily.VIDEO_CODEC_FAMILY_AV1)
               .setCodecProfile(VideoCodecProfile.VIDEO_CODEC_PROFILE_AV1_MAIN)
               .setTier(VideoCodecTier.VIDEO_CODEC_TIER_MAIN)
-              .setCodecString("av01.0.%02dM.08".formatted(av1SequenceLevelIndex(level)));
+              .setCodecString(
+                  String.format(Locale.ROOT, "av01.0.%02dM.08", av1SequenceLevelIndex(level)));
       default -> throw new AssertionError("No software encoder for " + codecFamily);
     };
   }

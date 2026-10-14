@@ -3,6 +3,7 @@ package com.streamarr.transcode.engine;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
+import com.streamarr.transcode.fixtures.RecordingFixtures;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.List;
@@ -114,7 +115,7 @@ public final class FfmpegRecordings {
     public String videoCodecString() {
       return switch (videoEncoder()) {
         case "copy" -> "avc1.F4000A";
-        case "libx264" -> "avc1.64000A";
+        case "libx264" -> RecordingFixtures.ENCODED_RECORDING_CODEC_STRING;
         case "libsvtav1" -> "av01.0.00M.08";
         case "libx265" -> "hev1.1.6.L30.90";
         default -> throw new AssertionError("No codec string is known for " + videoEncoder());

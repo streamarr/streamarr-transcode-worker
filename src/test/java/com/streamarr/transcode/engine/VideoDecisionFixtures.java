@@ -1,12 +1,12 @@
 package com.streamarr.transcode.engine;
 
+import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING_CODEC_STRING;
+import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING_LEVEL;
+
 import java.util.Optional;
 
 /** Video decisions that engine tests share. */
 final class VideoDecisionFixtures {
-
-  /** The codec string of the libx264 recordings: H.264 High at level 1.0. */
-  static final String ENCODED_CODEC_STRING = "avc1.64000A";
 
   private VideoDecisionFixtures() {}
 
@@ -15,8 +15,8 @@ final class VideoDecisionFixtures {
     return VideoDecision.Encode.builder()
         .codecProfile(VideoCodecProfile.H264_HIGH)
         .tier(Optional.empty())
-        .level(10)
-        .codecString(ENCODED_CODEC_STRING);
+        .level(ENCODED_RECORDING_LEVEL)
+        .codecString(ENCODED_RECORDING_CODEC_STRING);
   }
 
   /** The video decision that a job for the recording carries. */
@@ -34,6 +34,6 @@ final class VideoDecisionFixtures {
       return encodeBuilder().build();
     }
 
-    return new VideoDecision.Copy(ENCODED_CODEC_STRING);
+    return new VideoDecision.Copy(ENCODED_RECORDING_CODEC_STRING);
   }
 }

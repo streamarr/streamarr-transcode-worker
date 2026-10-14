@@ -13,7 +13,7 @@ import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.copiedVideo;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.copyJobBuilderFor;
-import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.encodedVideo;
+import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.encodedRecordingVideo;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.fileContentsProducer;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variantJobBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -189,7 +189,7 @@ class TranscodeWorkerControlPlaneIT {
 
   // A level 4.0 encode that names the codec family, with the tier that HEVC and AV1 carry.
   private static VideoDecision.Builder levelFortyEncodeOf(VideoCodecFamily codecFamily) {
-    var encode = encodedVideo().setCodecFamily(codecFamily).setLevel(40);
+    var encode = encodedRecordingVideo().setCodecFamily(codecFamily).setLevel(40);
     return switch (codecFamily) {
       case VIDEO_CODEC_FAMILY_H264 -> encode.setCodecString("avc1.640028");
       case VIDEO_CODEC_FAMILY_HEVC ->
@@ -891,7 +891,7 @@ class TranscodeWorkerControlPlaneIT {
             TranscodeDecision.newBuilder()
                 .setMode(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE)
                 .setVideoCodecFamily("h264")
-                .setVideo(encodedVideo())
+                .setVideo(encodedRecordingVideo())
                 .setAudio(
                     AudioDecision.newBuilder()
                         .setMode(AudioMode.AUDIO_MODE_TRANSCODE)

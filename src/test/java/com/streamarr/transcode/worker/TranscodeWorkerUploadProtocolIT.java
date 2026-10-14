@@ -3,7 +3,7 @@ package com.streamarr.transcode.worker;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engine;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
-import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.encodedVideo;
+import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.encodedRecordingVideo;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.fileContentsProducer;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -236,7 +236,7 @@ class TranscodeWorkerUploadProtocolIT {
             TranscodeDecision.newBuilder()
                 .setMode(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE)
                 .setVideoCodecFamily("h264")
-                .setVideo(encodedVideo())
+                .setVideo(encodedRecordingVideo())
                 .setAudio(
                     AudioDecision.newBuilder()
                         .setMode(AudioMode.AUDIO_MODE_TRANSCODE)
