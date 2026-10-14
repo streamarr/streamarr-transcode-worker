@@ -113,7 +113,14 @@ public final class FfprobeExecutor {
                 "-show_format",
                 "-show_error",
                 attempt.source().toString()));
-    var result = readResult(output, attempt);
+    JsonNode json;
+    try {
+      json = objectMapper.readTree(output.stdout());
+    } catch (RuntimeException failure) {
+      return ProbeAttemptReport.resultOnly(unusableOutput(output, attempt, failure));
+    }
+
+    var result = readResult(json, output, attempt);
     if (attempt.request().getProbeVersion() != KEYFRAME_POSITIONS_PROBE_VERSION
         || !result.hasMedia()) {
       return ProbeAttemptReport.resultOnly(result);
@@ -123,7 +130,7 @@ public final class FfprobeExecutor {
         .addKeyframes(
             ContainerIndexProbe.Probed.builder()
                 .source(attempt.source())
-                .ffprobeOutput(objectMapper.readTree(output.stdout()))
+                .ffprobeOutput(json)
                 .result(result)
                 .build());
   }
@@ -155,18 +162,23 @@ public final class FfprobeExecutor {
     process.onExit().join();
   }
 
-  private ProbeAttemptResult readResult(ProcessOutput output, Attempt attempt) {
+  private ProbeAttemptResult readResult(JsonNode json, ProcessOutput output, Attempt attempt) {
     try {
-      return interpret(objectMapper.readTree(output.stdout()), output.exitCode(), attempt);
+      return interpret(json, output.exitCode(), attempt);
     } catch (Exception failure) {
-      log.warn(
-          "ffprobe attempt {} for source {} returned unusable output with exit code {}",
-          fromProto(attempt.result().getProbeAttemptId()),
-          attempt.source(),
-          output.exitCode(),
-          failure);
-      return attempt.result().setFailure(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED).build();
+      return unusableOutput(output, attempt, failure);
     }
+  }
+
+  private ProbeAttemptResult unusableOutput(
+      ProcessOutput output, Attempt attempt, Exception failure) {
+    log.warn(
+        "ffprobe attempt {} for source {} returned unusable output with exit code {}",
+        fromProto(attempt.result().getProbeAttemptId()),
+        attempt.source(),
+        output.exitCode(),
+        failure);
+    return attempt.result().setFailure(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED).build();
   }
 
   private ProbeAttemptResult interpret(JsonNode json, int exitCode, Attempt attempt) {
