@@ -20,7 +20,7 @@ import java.util.Set;
 final class CodecConfigurationReader {
 
   // A VisualSampleEntry's fields before its child boxes (ISO/IEC 14496-12 12.1.3).
-  private static final int VISUAL_SAMPLE_ENTRY_BYTES = 78;
+  static final int VISUAL_SAMPLE_ENTRY_BYTES = 78;
   // An AudioSampleEntry's fields before its child boxes (ISO/IEC 14496-12 12.2.3), and what the
   // QuickTime sound description versions 1 and 2 add to them.
   private static final int AUDIO_SAMPLE_ENTRY_BYTES = 28;
@@ -31,7 +31,7 @@ final class CodecConfigurationReader {
   private static final Set<Integer> AVC_PROFILES_WITH_FORMAT = Set.of(100, 110, 122, 144, 244);
   // The hvcC fields before its array count (ISO/IEC 14496-15 8.3.2.1.2), and the NAL unit types of
   // the VPS, SPS and PPS (ITU-T H.265 table 7-1).
-  private static final int HVCC_FIELDS_BEFORE_ARRAYS = 22;
+  static final int HVCC_FIELDS_BEFORE_ARRAYS = 22;
   private static final Set<Integer> HEVC_PARAMETER_SET_TYPES = Set.of(32, 33, 34);
   private static final int MPEG4_AUDIO = 0x40;
   private static final int ES_DESCRIPTOR = 0x03;
