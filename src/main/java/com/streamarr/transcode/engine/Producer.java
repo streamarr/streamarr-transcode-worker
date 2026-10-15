@@ -232,23 +232,7 @@ public final class Producer {
   private void settle(AttemptOutcome decided) {
     cancelDeliveryInFlight();
     awaitWhile(() -> deliveryInFlight.isPresent());
-    if (outcome.complete(decided)) {
-      logDroppedLateAudioSamples();
-    }
-  }
-
-  private void logDroppedLateAudioSamples() {
-    long dropped;
-    synchronized (lock) {
-      dropped = assembler.droppedLateAudioSampleCount();
-    }
-
-    if (dropped > 0) {
-      log.info(
-          "{} dropped {} audio samples that arrived after their media segment was delivered",
-          threadName,
-          dropped);
-    }
+    outcome.complete(decided);
   }
 
   private void cancelDeliveryInFlight() {
@@ -686,9 +670,9 @@ public final class Producer {
         return new Failed(
             ProducerFailure.NO_MEDIA_SEGMENT, "FFmpeg exited cleanly without a media segment");
       }
-    }
 
-    return new Completed();
+      return new Completed(assembler.droppedLateAudioSampleCount());
+    }
   }
 
   // Reserves what writing and delivering the segment holds besides the fragments the reader holds

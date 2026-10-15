@@ -938,6 +938,30 @@ class TranscodeWorkerJobAttemptTest {
   }
 
   @Test
+  @DisplayName(
+      "Should complete the attempt with every media segment when its encoded audio's last frames"
+          + " arrive after their media segment was delivered")
+  void
+      shouldCompleteTheAttemptWithEveryMediaSegmentWhenItsEncodedAudiosLastFramesArriveAfterTheirMediaSegmentWasDelivered()
+          throws Exception {
+    var recording = recording("17-encode-audio-ends-long-before-video.fmp4");
+    assertThat(recording.droppedAudioSamples()).isNotEmpty();
+    var job = variantJobBuilder();
+    job.getExecutionBuilder().setMediaSegmentCount(recording.mediaSegmentCount());
+
+    try (var worker = worker(ScriptedProcessLauncher.writing(recording.file()))) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_COMPLETED);
+      assertThat(connection.uploads())
+          .extracting(upload -> upload.metadata().getSegmentName())
+          .containsExactlyElementsOf(uploadNames(recording));
+    }
+  }
+
+  @Test
   @DisplayName("Should run the job when the last advertised media segment is the one it starts at")
   void shouldRunTheJobWhenTheLastAdvertisedMediaSegmentIsTheOneItStartsAt() throws Exception {
     var recording = recording("07-copy-seek30.fmp4");

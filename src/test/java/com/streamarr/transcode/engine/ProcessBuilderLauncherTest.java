@@ -60,7 +60,7 @@ class ProcessBuilderLauncherTest {
 
     var producer = producerRunning("cat \"$0\"", recordingFile.toString()).start();
 
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
     assertCarriesTheRecordedSamples(sink.acceptedBytes(), recording(ENCODED_RECORDING));
   }
 
