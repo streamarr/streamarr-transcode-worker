@@ -57,33 +57,20 @@ class TranscodeWorkerProbeTest {
   @TempDir Path tempDir;
 
   @Test
-  @DisplayName("Should preserve failure correlation when a worker has no probe producer")
-  void shouldPreserveFailureCorrelationWhenAWorkerHasNoProbeProducer() throws Exception {
-    var runtime = new ScriptedWorkerRuntime();
-    var request = requestBuilder().setProbeVersion(17).build();
+  @DisplayName("Should refuse to build a worker when it has no ffprobe executor")
+  void shouldRefuseToBuildAWorkerWhenItHasNoFfprobeExecutor() {
+    var builder =
+        TranscodeWorker.builder()
+            .configuration(
+                workerConfigurationBuilder()
+                    .availableSlots(2)
+                    .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, tempDir))
+                    .build())
+            .engine(engine(ScriptedProcessLauncher.running()));
 
-    try (var worker = transcodeOnlyWorkerBuilder().runtime(runtime).build()) {
-      worker.start("localhost", 1);
-      var connection = runtime.connection();
-
-      start(connection, request);
-      runtime.probes().drain();
-
-      assertThat(connection.results())
-          .containsExactly(failure(request, ProbeFailure.PROBE_FAILURE_UNSUPPORTED_VERSION));
-    }
-  }
-
-  @Test
-  @DisplayName("Should omit probe support when connecting a transcode-only worker")
-  void shouldOmitProbeSupportWhenConnectingATranscodeOnlyWorker() throws Exception {
-    var runtime = new ScriptedWorkerRuntime();
-    try (var worker = transcodeOnlyWorkerBuilder().runtime(runtime).build()) {
-      worker.start("localhost", 1);
-
-      assertThat(runtime.connection().registration().getCapabilities().getProbeVersionsList())
-          .isEmpty();
-    }
+    assertThatThrownBy(builder::build)
+        .isInstanceOf(NullPointerException.class)
+        .hasMessageContaining("ffprobe");
   }
 
   @Test
@@ -612,15 +599,5 @@ class TranscodeWorkerProbeTest {
 
       assertThat(runtime.connection().results()).containsExactly(expected);
     }
-  }
-
-  private TranscodeWorker.TranscodeWorkerBuilder transcodeOnlyWorkerBuilder() {
-    return TranscodeWorker.builder()
-        .configuration(
-            workerConfigurationBuilder()
-                .availableSlots(2)
-                .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, tempDir))
-                .build())
-        .engine(engine(ScriptedProcessLauncher.running()));
   }
 }
