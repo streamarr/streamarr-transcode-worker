@@ -464,7 +464,11 @@ class CodecConfigurationReaderTest {
 
   // An hvcC whose arrays each hold one two-byte NAL unit of each listed hexadecimal type.
   private static byte[] hvcCWithArrays(String arrayTypes) {
-    var types = arrayTypes.isBlank() ? List.<String>of() : List.of(arrayTypes.split(" "));
+    var types = List.<String>of();
+    if (!arrayTypes.isBlank()) {
+      types = List.of(arrayTypes.split(" "));
+    }
+
     var arrays = new StringBuilder("%02X".formatted(types.size()));
     for (var type : types) {
       var nalUnitType = Integer.parseInt(type, 16);

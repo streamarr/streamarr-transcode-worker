@@ -61,7 +61,8 @@ record libx264-high444 src/64x36.mkv -- -c:v libx264 -vf format=yuv444p "${AAC[@
 record libsvtav1-10bit src/64x36.mkv -- -c:v libsvtav1 -vf format=yuv420p10le \
   -svtav1-params lp=1 "${AAC[@]}"
 
-# HEVC copies: an MP4 source keeps its hvc1 sample entry, and a Matroska source becomes hev1.
+# HEVC copies without the worker's tag rule, so that the reader meets both sample entries: an MP4
+# source keeps its hvc1 sample entry, and a Matroska source becomes hev1.
 X265=(-c:v libx265 -profile:v main -x265-params level-idc=40:high-tier=0:pools=none:log-level=error
   -vf format=yuv420p -b:v 5000000)
 "${FF[@]}" -i src/1080p30.mkv "${X265[@]}" -tag:v hvc1 "${AAC[@]}" src/hevc.mp4

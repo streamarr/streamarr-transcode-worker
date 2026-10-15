@@ -52,9 +52,9 @@ final class VideoOutputCheck {
 
   // A missing box on the way to the sample entry stays a malformed box; only a decoder
   // configuration record that cannot be read is a mismatch.
-  private static <T> T readable(Supplier<T> record) {
+  private static <T> T readable(Supplier<T> reading) {
     try {
-      return record.get();
+      return reading.get();
     } catch (FragmentedMp4Exception e) {
       throw mismatch("the video codec configuration cannot be read: " + e.getMessage());
     }
