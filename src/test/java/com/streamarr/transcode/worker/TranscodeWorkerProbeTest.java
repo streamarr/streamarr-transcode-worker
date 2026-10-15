@@ -16,6 +16,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import build.buf.gen.streamarr.transcode.v1.CancelProbeCommand;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
+import build.buf.gen.streamarr.transcode.v1.KeyframePositionSource;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeContainerInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
@@ -27,6 +28,7 @@ import build.buf.gen.streamarr.transcode.v1.WorkerIdentity;
 import com.google.protobuf.Duration;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import com.streamarr.transcode.probe.FfprobeExecutor;
+import com.streamarr.transcode.probe.ProbeCommand;
 import com.streamarr.transcode.protocol.ProtoUuid;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
 import java.nio.file.Files;
@@ -65,15 +67,125 @@ class TranscodeWorkerProbeTest {
   }
 
   @Test
-  @DisplayName("Should advertise the supported probe version when the worker registers")
-  void shouldAdvertiseTheSupportedProbeVersionWhenTheWorkerRegisters() throws Exception {
+  @DisplayName(
+      "Should send the keyframe positions before the probe result when the worker reads a container index")
+  void shouldSendKeyframePositionsBeforeProbeResultWhenWorkerReadsContainerIndex()
+      throws Exception {
+    var fixture = getClass().getResource("/keyframes/mp4-bframes-editlist.mp4");
+    assertThat(fixture).isNotNull();
+    Files.copy(Path.of(fixture.toURI()), tempDir.resolve("movie.mp4"));
+    var runtime = new ScriptedWorkerRuntime();
+    var request =
+        requestBuilder()
+            .setProbeVersion(FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION)
+            .setSource(sourceBuilder().setRelativeKey("movie.mp4"))
+            .build();
+    var producer =
+        new FfprobeExecutor(
+            new ObjectMapper(),
+            command ->
+                processBuilder()
+                    .stdout(
+                        command.arguments().contains("-read_intervals")
+                            ? """
+                              {"packets":[{"pts":35840,"dts":34816,"flags":"K__"}]}
+                              """
+                            : """
+                              {"format":{"format_name":"mov,mp4,m4a,3gp,3g2,mj2",
+                                         "start_time":"0.000000"},
+                               "streams":[{"index":0,"codec_type":"video","id":"0x1"}]}
+                              """)
+                    .build());
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).ffprobe(producer).build()) {
+      worker.start("localhost", 1);
+      start(runtime.connection(), request);
+      runtime.probes().drain();
+
+      assertThat(runtime.connection().events())
+          .filteredOn(event -> !event.hasRegistration())
+          .satisfiesExactly(
+              part ->
+                  assertThat(part.getProbeKeyframePositionsPart().getPresentationTimeDeltasList())
+                      .containsExactly(0L, 8_704L, 16_896L, 10_240L),
+              result ->
+                  assertThat(
+                          result
+                              .getProbeResult()
+                              .getMedia()
+                              .getKeyframes()
+                              .getPositions()
+                              .getKeyframeCount())
+                      .isEqualTo(4));
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should send the scanned keyframe positions before the probe result when the server requests"
+          + " a packet scan")
+  void shouldSendScannedKeyframePositionsBeforeProbeResultWhenServerRequestsPacketScan()
+      throws Exception {
+    Files.writeString(tempDir.resolve("movie.ts"), "media");
+    var runtime = new ScriptedWorkerRuntime();
+    var request =
+        requestBuilder()
+            .setProbeVersion(FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION)
+            .setScanKeyframePackets(true)
+            .setSource(sourceBuilder().setRelativeKey("movie.ts"))
+            .build();
+    var producer =
+        new FfprobeExecutor(
+            new ObjectMapper(),
+            command ->
+                processBuilder()
+                    .stdout(
+                        command.tool() == ProbeCommand.ProbeTool.FFMPEG
+                            ? """
+                              0, 0, 0, 3750, 100, 0x00000000
+                              0, 3750, 3750, 3750, 100, 0x00000000, F=0x0
+                              0, 180000, 180000, 3750, 100, 0x00000000
+                              """
+                            : """
+                              {"format":{"format_name":"mpegts","start_time":"0.000000"},
+                               "streams":[{"index":0,"codec_type":"video",
+                                           "time_base":"1/90000","has_b_frames":0}]}
+                              """)
+                    .build());
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).ffprobe(producer).build()) {
+      worker.start("localhost", 1);
+      start(runtime.connection(), request);
+      runtime.probes().drain();
+
+      assertThat(runtime.connection().events())
+          .filteredOn(event -> !event.hasRegistration())
+          .satisfiesExactly(
+              part ->
+                  assertThat(part.getProbeKeyframePositionsPart().getPresentationTimeDeltasList())
+                      .containsExactly(0L, 180_000L),
+              result ->
+                  assertThat(result.getProbeResult().getMedia().getKeyframes().getPositions())
+                      .satisfies(
+                          positions -> {
+                            assertThat(positions.getKeyframeCount()).isEqualTo(2);
+                            assertThat(positions.getSource())
+                                .isEqualTo(
+                                    KeyframePositionSource.KEYFRAME_POSITION_SOURCE_PACKET_SCAN);
+                          }));
+    }
+  }
+
+  @Test
+  @DisplayName("Should advertise version 1 and the keyframe probe version")
+  void shouldAdvertiseVersionOneAndKeyframeProbeVersion() throws Exception {
     var runtime = new ScriptedWorkerRuntime();
 
     try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
       worker.start("localhost", 1);
 
       assertThat(runtime.connection().registration().getCapabilities().getProbeVersionsList())
-          .containsExactly(FfprobeExecutor.PROBE_VERSION);
+          .containsExactly(1, FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION);
     }
   }
 
@@ -400,7 +512,10 @@ class TranscodeWorkerProbeTest {
     var producer =
         new FfprobeExecutor(
             new ObjectMapper(),
-            source -> source.equals(oldSource) ? process : processBuilder().build());
+            command ->
+                Path.of(command.arguments().getLast()).equals(oldSource)
+                    ? process
+                    : processBuilder().build());
     var oldRequest = requestBuilder().setSource(sourceBuilder().setRelativeKey("old.mkv")).build();
     var nextRequest = requestBuilder().build();
 

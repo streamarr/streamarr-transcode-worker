@@ -64,7 +64,9 @@ public class TranscodeWorkerApplication {
     return TranscodeWorker.builder()
         .configuration(settings.workerConfiguration())
         .engine(engine)
-        .ffprobe(FfprobeExecutor.forBinary(Path.of(settings.ffprobePath())))
+        .ffprobe(
+            FfprobeExecutor.forBinaries(
+                Path.of(settings.ffprobePath()), Path.of(settings.ffmpegPath())))
         .build();
   }
 

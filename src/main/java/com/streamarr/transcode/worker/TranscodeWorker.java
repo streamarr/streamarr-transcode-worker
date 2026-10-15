@@ -12,7 +12,6 @@ import build.buf.gen.streamarr.transcode.v1.JobAttemptFailed;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptStarted;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptStopped;
-import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.SegmentContentType;
 import build.buf.gen.streamarr.transcode.v1.SegmentUploadMetadata;
 import build.buf.gen.streamarr.transcode.v1.StartProbeCommand;
@@ -43,6 +42,7 @@ import com.streamarr.transcode.engine.SegmentMemoryBudget;
 import com.streamarr.transcode.engine.TranscodeRequest;
 import com.streamarr.transcode.engine.UnadvertisedCodecFamilyException;
 import com.streamarr.transcode.probe.FfprobeExecutor;
+import com.streamarr.transcode.probe.ProbeAttemptReport;
 import com.streamarr.transcode.protocol.ProtoUuid;
 import io.grpc.ManagedChannel;
 import io.grpc.stub.ClientCallStreamObserver;
@@ -131,7 +131,7 @@ public final class TranscodeWorker implements AutoCloseable {
         WorkerProbeSession.builder()
             .ffprobe(ffprobe)
             .sources(sources)
-            .results(result -> sendProbeResult(sessionRequests.get(), result))
+            .reports(report -> sendProbeResult(sessionRequests.get(), report))
             .executor(runtime.newProbeScope())
             .build();
     disconnected = new CompletableFuture<>();
@@ -157,7 +157,9 @@ public final class TranscodeWorker implements AutoCloseable {
 
   private EstablishWorkerSessionRequest registration() {
     var capabilities = WorkerCapabilities.newBuilder();
-    capabilities.addProbeVersions(FfprobeExecutor.PROBE_VERSION);
+    capabilities
+        .addProbeVersions(FfprobeExecutor.PROBE_VERSION)
+        .addProbeVersions(FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION);
     engine.workerVerifiedEncoders().stream()
         .map(WorkerVideoEncoders::toProto)
         .forEach(capabilities::addVideoEncoders);
@@ -180,12 +182,20 @@ public final class TranscodeWorker implements AutoCloseable {
   }
 
   private synchronized void sendProbeResult(
-      StreamObserver<EstablishWorkerSessionRequest> sessionRequests, ProbeAttemptResult result) {
+      StreamObserver<EstablishWorkerSessionRequest> sessionRequests, ProbeAttemptReport report) {
     if (requests == null || requests != sessionRequests) {
       return;
     }
 
-    send(EstablishWorkerSessionRequest.newBuilder().setProbeResult(result).build());
+    report
+        .keyframePositionsParts()
+        .forEach(
+            part ->
+                send(
+                    EstablishWorkerSessionRequest.newBuilder()
+                        .setProbeKeyframePositionsPart(part)
+                        .build()));
+    send(EstablishWorkerSessionRequest.newBuilder().setProbeResult(report.result()).build());
   }
 
   @SuppressWarnings("java:S3398") // Job lifecycle belongs to the worker, not its gRPC observer.

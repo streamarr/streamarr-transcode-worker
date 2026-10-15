@@ -2,6 +2,7 @@ package com.streamarr.transcode.probe;
 
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
@@ -57,8 +58,28 @@ class FfprobeExecutorTest {
         };
     var executor = new FfprobeExecutor(new ObjectMapper(), _ -> process);
 
-    assertThat(executor.probe(SOURCE, request()).getFailure())
+    assertThat(executor.probe(SOURCE, request()).result().getFailure())
         .isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
+  }
+
+  @Test
+  @DisplayName("Should reject the binaries when no ffprobe binary is configured")
+  void shouldRejectBinariesWhenNoFfprobeBinaryIsConfigured() {
+    var ffmpeg = Path.of("/usr/bin/ffmpeg");
+
+    assertThatNullPointerException()
+        .isThrownBy(() -> FfprobeExecutor.forBinaries(null, ffmpeg))
+        .withMessageContaining("ffprobe");
+  }
+
+  @Test
+  @DisplayName("Should reject the binaries when no FFmpeg binary is configured")
+  void shouldRejectBinariesWhenNoFfmpegBinaryIsConfigured() {
+    var ffprobe = Path.of("/usr/bin/ffprobe");
+
+    assertThatNullPointerException()
+        .isThrownBy(() -> FfprobeExecutor.forBinaries(ffprobe, null))
+        .withMessageContaining("ffmpeg");
   }
 
   @Test
@@ -68,7 +89,9 @@ class FfprobeExecutorTest {
     var executor = new FfprobeExecutor(new ObjectMapper(), _ -> process);
     var request = request();
     var completion = new CompletableFuture<ProbeAttemptResult>();
-    var task = Thread.ofVirtual().start(() -> completion.complete(executor.probe(SOURCE, request)));
+    var task =
+        Thread.ofVirtual()
+            .start(() -> completion.complete(executor.probe(SOURCE, request).result()));
     try {
       assertThat(process.started.await(2, TimeUnit.SECONDS)).isTrue();
       task.interrupt();
@@ -102,7 +125,7 @@ class FfprobeExecutorTest {
             });
     Thread.currentThread().interrupt();
     try {
-      assertThat(executor.probe(SOURCE, request()).getFailure())
+      assertThat(executor.probe(SOURCE, request()).result().getFailure())
           .isEqualTo(ProbeFailure.PROBE_FAILURE_CANCELLED);
       assertThat(Thread.currentThread().isInterrupted()).isTrue();
     } finally {
@@ -124,7 +147,7 @@ class FfprobeExecutorTest {
         """,
             0);
 
-    var media = executor.probe(SOURCE, request()).getMedia();
+    var media = executor.probe(SOURCE, request()).result().getMedia();
 
     assertThat(media.hasContainer()).isTrue();
     assertThat(media.getContainer()).isEqualTo(ProbeContainerInfo.getDefaultInstance());
@@ -152,7 +175,7 @@ class FfprobeExecutorTest {
             0);
     var request = request();
 
-    var result = executor.probe(SOURCE, request);
+    var result = executor.probe(SOURCE, request).result();
 
     assertThat(result)
         .isEqualTo(
@@ -174,7 +197,8 @@ class FfprobeExecutorTest {
         """
                     .formatted(errorCode),
                 1)
-            .probe(SOURCE, request());
+            .probe(SOURCE, request())
+            .result();
 
     assertThat(result.getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
   }
@@ -189,7 +213,7 @@ class FfprobeExecutorTest {
               throw new UncheckedIOException(new IOException("binary unavailable"));
             });
 
-    assertThat(executor.probe(SOURCE, request()).getFailure())
+    assertThat(executor.probe(SOURCE, request()).result().getFailure())
         .isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
   }
 
@@ -199,7 +223,7 @@ class FfprobeExecutorTest {
   void shouldReturnARetryableFailureWhenFfprobeOutputIsAbsentOrMalformed(String json) {
     var process = CompletedProcess.builder().stdout(json).exitCode(0).build();
     var executor = new FfprobeExecutor(new ObjectMapper(), _ -> process);
-    var result = executor.probe(SOURCE, request());
+    var result = executor.probe(SOURCE, request()).result();
 
     assertThat(result.hasMedia()).isFalse();
     assertThat(result.getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
@@ -249,7 +273,7 @@ class FfprobeExecutorTest {
             .exitCode(0)
             .build();
     var executor = new FfprobeExecutor(new ObjectMapper(), _ -> process);
-    var result = executor.probe(SOURCE, request());
+    var result = executor.probe(SOURCE, request()).result();
 
     assertThat(result.hasMedia()).isFalse();
     assertThat(result.getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
@@ -266,7 +290,8 @@ class FfprobeExecutorTest {
         """
                     .formatted(errorCode),
                 1)
-            .probe(SOURCE, request());
+            .probe(SOURCE, request())
+            .result();
 
     assertThat(result.getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_SOURCE_UNAVAILABLE);
   }
@@ -284,7 +309,7 @@ class FfprobeExecutorTest {
             1);
     var request = request();
 
-    var result = executor.probe(SOURCE, request);
+    var result = executor.probe(SOURCE, request).result();
 
     assertThat(result)
         .isEqualTo(
@@ -299,7 +324,7 @@ class FfprobeExecutorTest {
   @ValueSource(strings = {"{}", "{\"streams\":[]}", "{\"streams\":[{\"codec_type\":\"audio\"}]}"})
   @DisplayName("Should return a terminal failure when successful probing finds no video")
   void shouldReturnATerminalFailureWhenSuccessfulProbingFindsNoVideo(String json) {
-    var result = executor(json, 0).probe(SOURCE, request());
+    var result = executor(json, 0).probe(SOURCE, request()).result();
 
     assertThat(result.hasMedia()).isFalse();
     assertThat(result.getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_NO_VIDEO_STREAM);
@@ -318,7 +343,7 @@ class FfprobeExecutorTest {
                 .formatted(duration, rate),
             0);
 
-    var media = executor.probe(SOURCE, request()).getMedia();
+    var media = executor.probe(SOURCE, request()).result().getMedia();
 
     assertThat(media.getContainer().hasDuration()).isFalse();
     assertThat(media.getStreamsList())
@@ -341,7 +366,7 @@ class FfprobeExecutorTest {
                 .formatted(value),
             0);
 
-    var result = executor.probe(SOURCE, request());
+    var result = executor.probe(SOURCE, request()).result();
 
     assertThat(result.hasMedia()).isTrue();
     assertThat(result.getMedia().getContainer().hasDuration()).isFalse();
@@ -375,7 +400,7 @@ class FfprobeExecutorTest {
         """,
             0);
 
-    var result = executor.probe(SOURCE, request());
+    var result = executor.probe(SOURCE, request()).result();
 
     assertThat(result.hasMedia()).isTrue();
     var media = result.getMedia();
@@ -440,7 +465,7 @@ class FfprobeExecutorTest {
             });
     var request = request().toBuilder().setProbeVersion(version).build();
 
-    var result = executor.probe(SOURCE, request);
+    var result = executor.probe(SOURCE, request).result();
 
     assertThat(FfprobeExecutor.PROBE_VERSION).isEqualTo(1);
     assertThat(result.getProbeAttemptId()).isEqualTo(request.getProbeAttemptId());
@@ -459,7 +484,7 @@ class FfprobeExecutorTest {
             0);
     var request = request();
 
-    var result = executor.probe(SOURCE, request);
+    var result = executor.probe(SOURCE, request).result();
 
     assertThat(result.getProbeAttemptId()).isEqualTo(request.getProbeAttemptId());
     assertThat(result.getProbeVersion()).isEqualTo(request.getProbeVersion());

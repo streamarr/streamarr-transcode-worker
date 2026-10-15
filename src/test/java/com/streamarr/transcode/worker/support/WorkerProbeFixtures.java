@@ -155,9 +155,11 @@ public final class WorkerProbeFixtures {
   public static FfprobeExecutor fileContentsProducer() {
     return new FfprobeExecutor(
         new ObjectMapper(),
-        source -> {
+        command -> {
           try {
-            return processBuilder().stdout(Files.readString(source)).build();
+            return processBuilder()
+                .stdout(Files.readString(Path.of(command.arguments().getLast())))
+                .build();
           } catch (IOException exception) {
             throw new UncheckedIOException(exception);
           }
