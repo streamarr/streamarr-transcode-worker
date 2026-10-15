@@ -24,9 +24,11 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
@@ -41,6 +43,7 @@ import org.springframework.context.annotation.Import;
 
 @Tag("IntegrationTest")
 @DisplayName("Worker Actuator Integration Tests")
+@Timeout(value = 2, unit = TimeUnit.MINUTES)
 class WorkerHealthServerIT {
 
   @TempDir Path directory;

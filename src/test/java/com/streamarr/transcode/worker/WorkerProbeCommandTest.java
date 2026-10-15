@@ -18,9 +18,11 @@ import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.boot.test.system.CapturedOutput;
@@ -30,6 +32,7 @@ import tools.jackson.databind.ObjectMapper;
 @Tag("UnitTest")
 @ExtendWith(OutputCaptureExtension.class)
 @DisplayName("Worker Probe Command Tests")
+@Timeout(value = 1, unit = TimeUnit.MINUTES)
 class WorkerProbeCommandTest {
 
   @TempDir Path tempDir;
