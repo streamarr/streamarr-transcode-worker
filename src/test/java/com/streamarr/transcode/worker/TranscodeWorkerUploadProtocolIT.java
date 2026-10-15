@@ -78,7 +78,10 @@ class TranscodeWorkerUploadProtocolIT {
     var service = ControllableUploadService.leavesUploadRpcOpen();
     var job = variantJob();
 
-    try (var server = new ControlPlaneServer(service);
+    // The worker cancels the upload before it reports the failure, and both calls share one
+    // connection. The cancellation's frame therefore arrives first, and this server handles it
+    // before the failure.
+    try (var server = ControlPlaneServer.withCallbacksInFrameOrder(service);
         var worker = worker(engine(launcher), mediaRoot)) {
       server.start();
       worker.start("localhost", server.port());
@@ -87,8 +90,9 @@ class TranscodeWorkerUploadProtocolIT {
       service.awaitUploadCompleted();
       service.awaitFailure();
       assertEnded(launcher.process(fromProto(job.getJobAttemptId())));
-
-      service.awaitUploadCancelled();
+      assertThat(service.uploadCancelled)
+          .as("abandoned upload must be cancelled once the acknowledgement times out")
+          .isCompleted();
     }
   }
 
@@ -250,8 +254,8 @@ class TranscodeWorkerUploadProtocolIT {
         .build();
   }
 
-  // Each future fails as soon as its outcome can no longer arrive: when the worker session ends, or
-  // when the job attempt ends first.
+  // Each awaited future fails as soon as its outcome can no longer arrive: when the worker session
+  // ends, or when the job attempt ends first.
   private static final class ControllableUploadService
       extends TranscodeWorkerServiceGrpc.TranscodeWorkerServiceImplBase {
 
@@ -364,7 +368,6 @@ class TranscodeWorkerUploadProtocolIT {
     private void endSession() {
       registration.completeExceptionally(sessionEndedBefore("the worker registered"));
       uploadCompleted.completeExceptionally(sessionEndedBefore("an upload completed"));
-      uploadCancelled.completeExceptionally(sessionEndedBefore("the worker cancelled the upload"));
       failure.completeExceptionally(sessionEndedBefore("the worker reported a failure"));
     }
 
@@ -388,10 +391,6 @@ class TranscodeWorkerUploadProtocolIT {
 
     private void awaitUploadCompleted() throws InterruptedException, ExecutionException {
       uploadCompleted.get();
-    }
-
-    private void awaitUploadCancelled() throws InterruptedException, ExecutionException {
-      uploadCancelled.get();
     }
 
     private JobAttemptFailed awaitFailure() throws InterruptedException, ExecutionException {

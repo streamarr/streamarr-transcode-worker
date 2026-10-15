@@ -13,14 +13,34 @@ import lombok.NonNull;
 public final class ControlPlaneServer implements AutoCloseable {
 
   private final BindableService service;
+  private final boolean callbacksInFrameOrder;
   private Server server;
 
   public ControlPlaneServer(@NonNull BindableService service) {
+    this(service, false);
+  }
+
+  private ControlPlaneServer(BindableService service, boolean callbacksInFrameOrder) {
     this.service = service;
+    this.callbacksInFrameOrder = callbacksInFrameOrder;
+  }
+
+  /**
+   * A server that runs the service's callbacks on the connection's transport thread. The callbacks
+   * of every call on one connection then run in the order their frames arrived, so they must not
+   * block.
+   */
+  public static ControlPlaneServer withCallbacksInFrameOrder(@NonNull BindableService service) {
+    return new ControlPlaneServer(service, true);
   }
 
   public void start() throws IOException {
-    server = NettyServerBuilder.forPort(0).addService(service).build().start();
+    var builder = NettyServerBuilder.forPort(0).addService(service);
+    if (callbacksInFrameOrder) {
+      builder.directExecutor();
+    }
+
+    server = builder.build().start();
   }
 
   public int port() {
