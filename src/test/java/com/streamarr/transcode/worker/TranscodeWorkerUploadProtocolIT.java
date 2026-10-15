@@ -4,12 +4,12 @@ import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDI
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engine;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.awaitility.Awaitility.await;
 
 import build.buf.gen.streamarr.transcode.v1.AudioDecision;
 import build.buf.gen.streamarr.transcode.v1.AudioMode;
 import build.buf.gen.streamarr.transcode.v1.ContainerFormat;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
+import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest.EventCase;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailed;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
@@ -42,7 +42,8 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.DisplayName;
@@ -80,13 +81,11 @@ class TranscodeWorkerUploadProtocolIT {
       worker.start("localhost", server.port());
       service.dispatch(job);
 
-      assertThat(service.uploadCompleted.await(5, TimeUnit.SECONDS)).isTrue();
-      assertThat(service.failureReported.await(8, TimeUnit.SECONDS)).isTrue();
+      service.awaitUploadCompleted();
+      service.awaitFailure();
       assertEnded(launcher.process(fromProto(job.getJobAttemptId())));
 
-      assertThat(service.uploadCancelled.await(1, TimeUnit.SECONDS))
-          .as("abandoned upload must be cancelled once the acknowledgement times out")
-          .isTrue();
+      service.awaitUploadCancelled();
     }
   }
 
@@ -106,9 +105,9 @@ class TranscodeWorkerUploadProtocolIT {
       worker.start("localhost", server.port());
       service.dispatch(job);
 
-      assertThat(service.failureReported.await(5, TimeUnit.SECONDS)).isTrue();
-      assertThat(service.failure.get().getJobAttemptId()).isEqualTo(job.getJobAttemptId());
-      assertThat(service.failure.get().getFailure())
+      var failure = service.awaitFailure();
+      assertThat(failure.getJobAttemptId()).isEqualTo(job.getJobAttemptId());
+      assertThat(failure.getFailure())
           .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
       assertEnded(launcher.process(fromProto(job.getJobAttemptId())));
     }
@@ -130,12 +129,13 @@ class TranscodeWorkerUploadProtocolIT {
       worker.start("localhost", server.port());
       service.dispatch(job);
 
-      assertThat(service.uploadCompleted.await(5, TimeUnit.SECONDS)).isTrue();
-      assertThat(service.failureReported.await(2, TimeUnit.SECONDS))
+      service.awaitUploadCompleted();
+      assertThat(service.failure)
           .as("a clean close must fail before the upload acknowledgement timeout")
-          .isTrue();
-      assertThat(service.failure.get().getJobAttemptId()).isEqualTo(job.getJobAttemptId());
-      assertThat(service.failure.get().getFailure())
+          .succeedsWithin(Duration.ofSeconds(2));
+      var failure = service.failure.resultNow();
+      assertThat(failure.getJobAttemptId()).isEqualTo(job.getJobAttemptId());
+      assertThat(failure.getFailure())
           .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
       assertEnded(launcher.process(fromProto(job.getJobAttemptId())));
     }
@@ -157,16 +157,17 @@ class TranscodeWorkerUploadProtocolIT {
       worker.start("localhost", server.port());
       service.dispatch(job);
 
-      assertThat(service.failureReported.await(5, TimeUnit.SECONDS)).isTrue();
-      assertThat(service.failure.get().getJobAttemptId()).isEqualTo(job.getJobAttemptId());
-      assertThat(service.failure.get().getFailure())
+      var failure = service.awaitFailure();
+      assertThat(failure.getJobAttemptId()).isEqualTo(job.getJobAttemptId());
+      assertThat(failure.getFailure())
           .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED);
     }
   }
 
-  // FFmpeg is still writing when the upload fails, so the worker has to end it.
+  // FFmpeg is still writing when the upload fails, so the worker has to end it. The worker reports
+  // the failure only after FFmpeg has exited.
   private static void assertEnded(ScriptedProcess process) {
-    await().atMost(5, TimeUnit.SECONDS).until(() -> !process.isAlive());
+    assertThat(process.isAlive()).as("FFmpeg has exited").isFalse();
     assertThat(process.wasDestroyedForcibly()).isTrue();
   }
 
@@ -241,18 +242,18 @@ class TranscodeWorkerUploadProtocolIT {
         .build();
   }
 
+  // Each future fails as soon as its outcome can no longer arrive: when the worker session ends, or
+  // when the job attempt ends first.
   private static final class ControllableUploadService
       extends TranscodeWorkerServiceGrpc.TranscodeWorkerServiceImplBase {
 
     private final UploadResponseBehavior uploadResponseBehavior;
     private final AtomicReference<StreamObserver<EstablishWorkerSessionResponse>> control =
         new AtomicReference<>();
-    private final AtomicReference<WorkerIdentity> worker = new AtomicReference<>();
-    private final AtomicReference<JobAttemptFailed> failure = new AtomicReference<>();
-    private final CountDownLatch registered = new CountDownLatch(1);
-    private final CountDownLatch uploadCompleted = new CountDownLatch(1);
-    private final CountDownLatch uploadCancelled = new CountDownLatch(1);
-    private final CountDownLatch failureReported = new CountDownLatch(1);
+    private final CompletableFuture<WorkerIdentity> registration = new CompletableFuture<>();
+    private final CompletableFuture<Void> uploadCompleted = new CompletableFuture<>();
+    private final CompletableFuture<Void> uploadCancelled = new CompletableFuture<>();
+    private final CompletableFuture<JobAttemptFailed> failure = new CompletableFuture<>();
 
     private ControllableUploadService(UploadResponseBehavior uploadResponseBehavior) {
       this.uploadResponseBehavior = uploadResponseBehavior;
@@ -278,28 +279,34 @@ class TranscodeWorkerUploadProtocolIT {
         @Override
         public void onNext(EstablishWorkerSessionRequest request) {
           if (request.hasRegistration()) {
-            worker.set(request.getRegistration().getWorker());
+            registration.complete(request.getRegistration().getWorker());
             responseObserver.onNext(
                 EstablishWorkerSessionResponse.newBuilder()
                     .setSessionAccepted(
                         WorkerSessionAccepted.newBuilder()
                             .setWorkerSessionId(uuidStatic(UUID.randomUUID())))
                     .build());
-            registered.countDown();
+            return;
           }
+
           if (request.hasJobAttemptFailed()) {
-            failure.set(request.getJobAttemptFailed());
-            failureReported.countDown();
+            failure.complete(request.getJobAttemptFailed());
+          }
+
+          // Every event after the start ends the attempt.
+          if (!request.hasJobAttemptStarted()) {
+            endAttempt(request.getEventCase());
           }
         }
 
         @Override
         public void onError(Throwable throwable) {
-          // Cancellation is asserted through the upload stream.
+          endSession();
         }
 
         @Override
         public void onCompleted() {
+          endSession();
           responseObserver.onCompleted();
         }
       };
@@ -309,7 +316,7 @@ class TranscodeWorkerUploadProtocolIT {
     public StreamObserver<UploadSegmentRequest> uploadSegment(
         StreamObserver<UploadSegmentResponse> responseObserver) {
       ((ServerCallStreamObserver<UploadSegmentResponse>) responseObserver)
-          .setOnCancelHandler(uploadCancelled::countDown);
+          .setOnCancelHandler(() -> uploadCancelled.complete(null));
       return new StreamObserver<>() {
         @Override
         public void onNext(UploadSegmentRequest request) {
@@ -318,12 +325,12 @@ class TranscodeWorkerUploadProtocolIT {
 
         @Override
         public void onError(Throwable throwable) {
-          uploadCancelled.countDown();
+          uploadCancelled.complete(null);
         }
 
         @Override
         public void onCompleted() {
-          uploadCompleted.countDown();
+          uploadCompleted.complete(null);
           switch (uploadResponseBehavior) {
             case LEAVES_RPC_OPEN -> {
               // Keep the response open so the client must cancel the timed-out upload.
@@ -339,15 +346,48 @@ class TranscodeWorkerUploadProtocolIT {
       };
     }
 
-    private void dispatch(VariantJob job) throws InterruptedException {
-      assertThat(registered.await(5, TimeUnit.SECONDS)).isTrue();
+    private void endAttempt(EventCase ending) {
+      uploadCompleted.completeExceptionally(
+          new AssertionError("The worker sent %s before an upload completed".formatted(ending)));
+      failure.completeExceptionally(
+          new AssertionError("The worker sent %s instead of a failure".formatted(ending)));
+    }
+
+    private void endSession() {
+      registration.completeExceptionally(sessionEndedBefore("the worker registered"));
+      uploadCompleted.completeExceptionally(sessionEndedBefore("an upload completed"));
+      uploadCancelled.completeExceptionally(sessionEndedBefore("the worker cancelled the upload"));
+      failure.completeExceptionally(sessionEndedBefore("the worker reported a failure"));
+    }
+
+    private static AssertionError sessionEndedBefore(String expectation) {
+      return new AssertionError("The worker session ended before " + expectation);
+    }
+
+    // The service accepts a session only after it records the registration, so the registration is
+    // known once the worker's start() has returned.
+    private void dispatch(VariantJob job) {
       control
           .get()
           .onNext(
               EstablishWorkerSessionResponse.newBuilder()
                   .setStartVariant(
-                      StartVariantCommand.newBuilder().setTarget(worker.get()).setJob(job))
+                      StartVariantCommand.newBuilder()
+                          .setTarget(registration.resultNow())
+                          .setJob(job))
                   .build());
+    }
+
+    private void awaitUploadCompleted() throws InterruptedException, ExecutionException {
+      uploadCompleted.get();
+    }
+
+    private void awaitUploadCancelled() throws InterruptedException, ExecutionException {
+      uploadCancelled.get();
+    }
+
+    private JobAttemptFailed awaitFailure() throws InterruptedException, ExecutionException {
+      return failure.get();
     }
 
     private static Uuid uuidStatic(UUID value) {
