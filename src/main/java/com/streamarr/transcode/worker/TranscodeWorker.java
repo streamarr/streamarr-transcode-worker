@@ -110,6 +110,10 @@ public final class TranscodeWorker implements AutoCloseable {
     jobMapper = new WorkerVariantJobMapper(sources);
   }
 
+  public static TranscodeWorkerBuilder builder() {
+    return new TranscodeWorkerBuilder().runtime(new GrpcWorkerRuntime());
+  }
+
   public synchronized void start(String host, int port)
       throws IOException, InterruptedException, ExecutionException, TimeoutException {
     if (channel != null) {
@@ -848,10 +852,6 @@ public final class TranscodeWorker implements AutoCloseable {
     public void onCompleted() {
       // gRPC routes a client-streaming close without its single response through onError.
     }
-  }
-
-  public static class TranscodeWorkerBuilder {
-    private WorkerRuntime runtime = new GrpcWorkerRuntime();
   }
 
   private record ClosedSession(WorkerProbeSession probes, List<Producer> attempts) {}

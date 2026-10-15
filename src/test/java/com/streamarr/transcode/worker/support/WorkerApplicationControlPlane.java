@@ -62,6 +62,10 @@ public final class WorkerApplicationControlPlane
     server = builder.build().start();
   }
 
+  public static WorkerApplicationControlPlaneBuilder builder() {
+    return new WorkerApplicationControlPlaneBuilder().producerAdmitted(() -> true);
+  }
+
   public String awaitIdentityHeader() throws Exception {
     return identityHeader.get();
   }
@@ -154,9 +158,5 @@ public final class WorkerApplicationControlPlane
     assertThat(server.awaitTermination(1, TimeUnit.MINUTES))
         .as("the control-plane server terminates")
         .isTrue();
-  }
-
-  public static class WorkerApplicationControlPlaneBuilder {
-    private BooleanSupplier producerAdmitted = () -> true;
   }
 }
