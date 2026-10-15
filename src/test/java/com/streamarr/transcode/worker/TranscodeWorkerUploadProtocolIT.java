@@ -61,8 +61,11 @@ class TranscodeWorkerUploadProtocolIT {
   private static final UUID SOURCE_NAMESPACE_ID =
       UUID.fromString("cccccccc-cccc-cccc-cccc-cccccccccccc");
 
-  // Short enough that a test outlives it, long enough that a clean close fails well before it.
+  // Short enough that the cancellation test outlives it.
   private static final Duration ACKNOWLEDGEMENT_TIMEOUT = Duration.ofSeconds(5);
+
+  // Longer than the class timeout, so a failure that a test sees cannot come from this timeout.
+  private static final Duration ACKNOWLEDGEMENT_TIMEOUT_BEYOND_TEST = Duration.ofMinutes(10);
 
   @TempDir Path tempDir;
 
@@ -122,25 +125,21 @@ class TranscodeWorkerUploadProtocolIT {
     var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
     var service = ControllableUploadService.closesWithoutResponse();
     var job = variantJob();
-    var configuration = configuration(mediaRoot);
+    var configuration =
+        configurationBuilder(mediaRoot)
+            .uploadAcknowledgementTimeout(ACKNOWLEDGEMENT_TIMEOUT_BEYOND_TEST)
+            .build();
 
     try (var server = new ControlPlaneServer(service);
         var worker = new TranscodeWorker(configuration, engine(launcher))) {
       server.start();
       worker.start("localhost", server.port());
-      // The worker starts its acknowledgement timeout at its first upload message, after the
-      // dispatch, so a failure that the timeout causes arrives after this deadline.
-      var acknowledgementDeadline =
-          System.nanoTime() + configuration.uploadAcknowledgementTimeout().toNanos();
       service.dispatch(job);
 
-      assertThat(service.failure)
-          .as("a clean close must fail before the upload acknowledgement timeout")
-          .succeedsWithin(Duration.ofNanos(acknowledgementDeadline - System.nanoTime()));
+      var failure = service.awaitFailure();
       assertThat(service.uploadCompleted)
           .as("the upload completed before the failure")
           .isCompleted();
-      var failure = service.failure.resultNow();
       assertThat(failure.getJobAttemptId()).isEqualTo(job.getJobAttemptId());
       assertThat(failure.getFailure())
           .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
@@ -179,17 +178,17 @@ class TranscodeWorkerUploadProtocolIT {
   }
 
   private TranscodeWorker worker(FfmpegTranscodeEngine engine, Path mediaRoot) {
-    return new TranscodeWorker(configuration(mediaRoot), engine);
+    return new TranscodeWorker(configurationBuilder(mediaRoot).build(), engine);
   }
 
-  private static TranscodeWorkerConfiguration configuration(Path mediaRoot) {
+  private static TranscodeWorkerConfiguration.TranscodeWorkerConfigurationBuilder
+      configurationBuilder(Path mediaRoot) {
     return TranscodeWorkerConfiguration.builder()
         .workerId(WORKER_ID)
         .bootId(UUID.randomUUID())
         .availableSlots(1)
         .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, mediaRoot))
-        .uploadAcknowledgementTimeout(ACKNOWLEDGEMENT_TIMEOUT)
-        .build();
+        .uploadAcknowledgementTimeout(ACKNOWLEDGEMENT_TIMEOUT);
   }
 
   private FfmpegTranscodeEngine unavailableEngine() {
