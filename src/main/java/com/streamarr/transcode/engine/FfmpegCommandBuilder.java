@@ -15,8 +15,13 @@ public class FfmpegCommandBuilder {
   @NonNull private final String ffmpegPath;
   @NonNull private final Duration fragmentationTarget;
 
-  private static final EncoderTraits UNLISTED_ENCODER = EncoderTraits.builder().build();
-  private static final EncoderTraits FIXED_GOP = EncoderTraits.builder().fixedGop(true).build();
+  // The 8-bit 4:2:0 format every encoder takes unless its traits name another.
+  private static final String DEFAULT_EIGHT_BIT_PIXEL_FORMAT = "yuv420p";
+  private static final EncoderTraits UNLISTED_ENCODER = traits().build();
+  private static final EncoderTraits FIXED_GOP = traits().fixedGop(true).build();
+  // QSV takes nv12 from system memory and refuses yuv420p.
+  private static final EncoderTraits QSV =
+      traits().fixedGop(true).eightBitPixelFormat("nv12").build();
 
   // What the command passes each encoder differently; an encoder not listed has none of it. A
   // keyframe-verified encoder's recordings show every forced keyframe as a sync sample that starts
@@ -27,13 +32,10 @@ public class FfmpegCommandBuilder {
       Map.ofEntries(
           Map.entry(
               "libx264",
-              EncoderTraits.builder()
-                  .keyframeVerified(true)
-                  .disablesSceneCutsByThreshold(true)
-                  .build()),
+              traits().keyframeVerified(true).disablesSceneCutsByThreshold(true).build()),
           Map.entry(
               "libsvtav1",
-              EncoderTraits.builder()
+              traits()
                   .keyframeVerified(true)
                   .fixedGop(true)
                   .capsBitrateOnlyInCrfMode(true)
@@ -41,9 +43,9 @@ public class FfmpegCommandBuilder {
           Map.entry("h264_nvenc", FIXED_GOP),
           Map.entry("hevc_nvenc", FIXED_GOP),
           Map.entry("av1_nvenc", FIXED_GOP),
-          Map.entry("h264_qsv", FIXED_GOP),
-          Map.entry("hevc_qsv", FIXED_GOP),
-          Map.entry("av1_qsv", FIXED_GOP),
+          Map.entry("h264_qsv", QSV),
+          Map.entry("hevc_qsv", QSV),
+          Map.entry("av1_qsv", QSV),
           Map.entry("h264_amf", FIXED_GOP),
           Map.entry("hevc_amf", FIXED_GOP),
           Map.entry("av1_amf", FIXED_GOP),
@@ -179,7 +181,11 @@ public class FfmpegCommandBuilder {
 
   private void addScaleAndBitrateArgs(List<String> cmd, TranscodeJob job) {
     var request = job.request();
-    cmd.addAll(List.of("-vf", "scale=-2:" + request.height()));
+    // Every variant is 8-bit 4:2:0: an encoder otherwise keeps a 10-bit or 4:4:4 source's format,
+    // and few hardware decoders accept 10-bit H.264.
+    var videoFilter =
+        "scale=-2:" + request.height() + ",format=" + traitsOf(job).eightBitPixelFormat();
+    cmd.addAll(List.of("-vf", videoFilter));
     var bitrate = String.valueOf(request.bitrate());
     // SVT-AV1 supports a bitrate cap only in CRF mode. Its default CRF is 35.
     if (traitsOf(job).capsBitrateOnlyInCrfMode()) {
@@ -278,5 +284,10 @@ public class FfmpegCommandBuilder {
       boolean keyframeVerified,
       boolean fixedGop,
       boolean disablesSceneCutsByThreshold,
-      boolean capsBitrateOnlyInCrfMode) {}
+      boolean capsBitrateOnlyInCrfMode,
+      @NonNull String eightBitPixelFormat) {}
+
+  private static EncoderTraits.EncoderTraitsBuilder traits() {
+    return EncoderTraits.builder().eightBitPixelFormat(DEFAULT_EIGHT_BIT_PIXEL_FORMAT);
+  }
 }
