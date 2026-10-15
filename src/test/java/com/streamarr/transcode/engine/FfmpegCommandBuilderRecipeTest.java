@@ -46,6 +46,8 @@ class FfmpegCommandBuilderRecipeTest {
           List.of("-loglevel", "error"),
           List.of("-threads", "1"));
   private static final String SVT_AV1_SINGLE_THREAD = ":lp=1";
+  private static final String X265_SINGLE_THREAD_AND_QUIET =
+      ":pools=none:frame-threads=1:log-level=error";
 
   static Stream<Recording> recordingsOfTheRecipe() {
     return FfmpegRecordings.recordings().stream()
@@ -75,7 +77,7 @@ class FfmpegCommandBuilderRecipeTest {
       "Should pin each verified encoder and the stream copy when recordings follow the recipe")
   void shouldPinEachVerifiedEncoderAndTheStreamCopyWhenRecordingsFollowTheRecipe() {
     assertThat(recordingsOfTheRecipe().map(Recording::videoEncoder))
-        .contains("libx264", "libsvtav1", "copy");
+        .contains("libx264", "libsvtav1", "libx265", "copy");
   }
 
   private static TranscodeJob jobRecordedAs(Recording recording) {
@@ -112,6 +114,7 @@ class FfmpegCommandBuilderRecipeTest {
     }
 
     removeParameter(command, "-svtav1-params", SVT_AV1_SINGLE_THREAD);
+    removeParameter(command, "-x265-params", X265_SINGLE_THREAD_AND_QUIET);
     return command;
   }
 

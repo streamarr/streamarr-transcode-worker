@@ -35,7 +35,7 @@ MOVFLAGS=cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont
 # Java double. Every encoded source below probes as 24000/1001 (analyze.mjs checks it).
 FPS=23.976023976023978
 GOP_VERIFIED=145                      # ceil(P * FPS) + 1: ADR 0037's backstop for an encoder verified to honour forced keyframes
-GOP_FLOOR=143                         # floor(P * FPS): ADR 0037's GOP for an encoder not verified to (libx265 until a recording after a seek, hardware until worker #14)
+GOP_FLOOR=143                         # floor(P * FPS): ADR 0037's GOP for an encoder not verified to (hardware until worker #14)
 GOP_CEIL=144                          # ceil(P * FPS): the HLS recipe's frame-count GOP
 # The HLS recipe's forced keyframes: an expression whose t counts from the attempt's first frame.
 FORCED_EVERY_PERIOD="expr:gte(t,n_forced*$P)"
@@ -268,9 +268,11 @@ run hls 12-encode-cfr-missed-forced-keyframe.video-only video duration=30 skip=1
 run pipe 12-svtav1-cfr-missed-forced-keyframe duration=30 skip=18 src/cfr.mp4 -- "${SVT[@]}" "${AAC[@]}" "${KEY_SVT_PIPE[@]}"
 run hls 12-svtav1-cfr-missed-forced-keyframe.video-only video duration=30 skip=18 src/cfr.mp4 -- "${SVT[@]}" "${KEY_SVT_PIPE[@]}"
 
-# ------------------------------------------------------------------ 13. libx265 under the verified-encoder GOP, with and without a missed forced keyframe, and under its own floored GOP
-run pipe 13-x265-cfr duration=30 src/cfr.mp4 -- "${X265[@]}" "${AAC[@]}" "${KEY_X265_PIPE[@]}"
-run hls 13-x265-cfr.video-only video duration=30 src/cfr.mp4 -- "${X265[@]}" "${KEY_X265_PIPE[@]}"
+# ------------------------------------------------------------------ 13. libx265 under the verified-encoder GOP, from the start, after a seek and with a missed forced keyframe, and under the floored GOP
+run pipe 13-x265-cfr src/cfr.mp4 -- "${X265[@]}" "${AAC[@]}" "${KEY_X265_PIPE[@]}"
+run hls 13-x265-cfr.video-only video src/cfr.mp4 -- "${X265[@]}" "${KEY_X265_PIPE[@]}"
+run pipe 13-x265-cfr-seek30 start=5 seek=24 src/cfr.mp4 -- "${X265[@]}" "${AAC[@]}" "${KEY_X265_PIPE[@]}"
+run hls 13-x265-cfr-seek30.video-only video start=5 hls-start=4 seek=24 src/cfr.mp4 -- "${X265[@]}" "${KEY_X265_PIPE[@]}"
 run pipe 13-x265-cfr-missed-forced-keyframe duration=30 skip=18 src/cfr.mp4 -- "${X265[@]}" "${AAC[@]}" "${KEY_X265_PIPE[@]}"
 run hls 13-x265-cfr-missed-forced-keyframe.video-only video duration=30 skip=18 src/cfr.mp4 -- "${X265[@]}" "${KEY_X265_PIPE[@]}"
 run pipe 13-x265-cfr-floored-gop duration=30 src/cfr.mp4 -- "${X265[@]}" "${AAC[@]}" "${KEY_X265_PIPE_FLOORED[@]}"

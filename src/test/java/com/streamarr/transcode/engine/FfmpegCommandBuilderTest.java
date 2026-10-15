@@ -375,7 +375,7 @@ class FfmpegCommandBuilderTest {
   }
 
   @ParameterizedTest(name = "{0}")
-  @ValueSource(strings = {"libx264", "libsvtav1"})
+  @ValueSource(strings = {"libx264", "libsvtav1", "libx265"})
   @DisplayName(
       "Should lengthen the GOP one frame past the rounded-up period when the encoder is verified")
   void shouldLengthenTheGopOneFramePastTheRoundedUpPeriodWhenTheEncoderIsVerified(String encoder) {
@@ -388,7 +388,6 @@ class FfmpegCommandBuilderTest {
   @ParameterizedTest(name = "{0}")
   @ValueSource(
       strings = {
-        "libx265",
         "h264_nvenc",
         "hevc_qsv",
         "av1_amf",
@@ -424,7 +423,7 @@ class FfmpegCommandBuilderTest {
           + " encoder is not verified")
   void
       shouldKeepEveryFrameOfThePeriodInTheGopWhenThePeriodSpansWholeFramesAndTheEncoderIsNotVerified() {
-    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).framerate(25.0).build(), "libx265");
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).framerate(25.0).build(), "h264_vaapi");
 
     assertThat(cmd).containsSequence("-g:v:0", "150");
   }

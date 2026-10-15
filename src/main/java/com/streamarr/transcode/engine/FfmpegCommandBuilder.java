@@ -26,8 +26,8 @@ public class FfmpegCommandBuilder {
   // What the command passes each encoder differently; an encoder not listed has none of it. A
   // keyframe-verified encoder's recordings show every forced keyframe as a sync sample that starts
   // a closed GOP, with its GOP count restarting there (ADR 0037 as amended;
-  // src/test/resources/fmp4/README.md, "Verified encoders"); libx265 and the hardware encoders are
-  // not keyframe-verified yet.
+  // src/test/resources/fmp4/README.md, "Verified encoders"); the hardware encoders are not
+  // keyframe-verified yet.
   private static final Map<String, EncoderTraits> ENCODER_TRAITS =
       Map.ofEntries(
           Map.entry(
@@ -40,7 +40,8 @@ public class FfmpegCommandBuilder {
                   .fixedGop(true)
                   .capsBitrateOnlyInCrfMode(true)
                   .build()),
-          Map.entry("libx265", traits().closesGopsByX265Parameters(true).build()),
+          Map.entry(
+              "libx265", traits().keyframeVerified(true).closesGopsByX265Parameters(true).build()),
           Map.entry("h264_nvenc", FIXED_GOP),
           Map.entry("hevc_nvenc", FIXED_GOP),
           Map.entry("av1_nvenc", FIXED_GOP),

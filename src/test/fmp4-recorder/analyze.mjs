@@ -50,11 +50,7 @@ function hlsComparison(run, flags, { audio = true, reference = null, restrict = 
 // fixture-only additions aside, and FfmpegCommandBuilderRecipeTest pins the worker to it.
 const FIRST_30_SECONDS = 'only the first 30 s of the source';
 const MISSED_FORCED_KEYFRAME = '18 s left out of the forced keyframe times';
-const X265_WITH_FIXTURE_PARAMS = 'with fixture-only -x265-params keys that keep it single-threaded and quiet';
-const X265_UNDER_THE_VERIFIED_GOP =
-  `libx265, not verified, under the verified GOP of 145 frames, ${X265_WITH_FIXTURE_PARAMS}`;
-const X265_UNDER_THE_FLOORED_GOP =
-  `libx265 under the floored GOP of 143 frames it gets while unverified, ${X265_WITH_FIXTURE_PARAMS}`;
+const X265_UNDER_THE_FLOORED_GOP = 'libx265 under the floored GOP of 143 frames of an encoder not verified';
 
 const FIXTURES = [
   {
@@ -212,15 +208,24 @@ const FIXTURES = [
   },
   {
     name: '13-x265-cfr', source: 'cfr.mp4', mode: 'encode', encoder: 'libx265', seek: 0, start: 0,
-    recipeDeviation: `${X265_UNDER_THE_VERIFIED_GOP}; ${FIRST_30_SECONDS}`,
-    proves: 'libx265 with the worker\'s arguments (closed GOPs, no scene cuts) under the 145-frame GOP: it honours ' +
-      'every time-based forced keyframe (frames 144, 288, 432, 576), and every keyframe, frame 0 included, is an IDR ' +
-      'picture (NAL type 20) with no leading pictures.',
+    proves: 'Constant 23.976 fps libx265 encode of 66 s with the worker\'s arguments (closed GOPs, no scene cuts) under ' +
+      'the verified-encoder GOP of 145 frames: it keys only the forced frames (0, 144, 288 ... 864, 1007, 1151, 1295, ' +
+      '1439), one per segment, and every keyframe is an IDR picture (NAL type 20) with no leading pictures.',
     hlsComparisons: [hlsComparison('13-x265-cfr.video-only', 'pipe-recipe', { audio: false })],
   },
   {
+    name: '13-x265-cfr-seek30', source: 'cfr.mp4', mode: 'encode', encoder: 'libx265', seek: 30, start: 5,
+    proves: 'The libx265 replacement attempt from segment 5, seeking one period early (-ss 24): segment 4 is preroll, ' +
+      'the list forces the frames 13 forced (720, 864, 1007, 1151, 1295, 1439), every delivered segment starts on ' +
+      '13\'s ticks, and every keyframe is an IDR picture (NAL type 20).',
+    hlsComparisons: [
+      hlsComparison('13-x265-cfr-seek30.video-only', 'pipe-recipe', { audio: false, restrict: true, expect: false }),
+      hlsComparison('13-x265-cfr.video-only', 'pipe-recipe', { audio: false, reference: '13-x265-cfr', restrict: true }),
+    ],
+  },
+  {
     name: '13-x265-cfr-missed-forced-keyframe', source: 'cfr.mp4', mode: 'encode', encoder: 'libx265', seek: 0, start: 0,
-    recipeDeviation: `${X265_UNDER_THE_VERIFIED_GOP}; ${MISSED_FORCED_KEYFRAME}; ${FIRST_30_SECONDS}`,
+    recipeDeviation: `${MISSED_FORCED_KEYFRAME}; ${FIRST_30_SECONDS}`,
     proves: 'libx265 with 18 s left out of the forced keyframe times: its GOP count restarts at the forced keyframe at ' +
       'frame 288 and the backstop comes at frame 433 (18.060 s), inside interval 3, as an IDR picture (NAL type 20), ' +
       'so the segment it opens decodes on its own.',
@@ -229,7 +234,7 @@ const FIXTURES = [
   {
     name: '13-x265-cfr-floored-gop', source: 'cfr.mp4', mode: 'encode', encoder: 'libx265', seek: 0, start: 0,
     recipeDeviation: `${X265_UNDER_THE_FLOORED_GOP}; ${FIRST_30_SECONDS}`,
-    proves: 'libx265 with the worker\'s arguments under the floored GOP of 143 frames that it gets while unverified: ' +
+    proves: 'libx265 with the worker\'s arguments under the floored GOP of 143 frames of an encoder not verified: ' +
       'as in 11, the GOP keyframe one frame before every later boundary (frames 143, 287, 431, 575) and on the last ' +
       'frame (719) joins the earlier segment, so each of the 5 segments holds two keyframes and opens at its forced ' +
       'keyframe. Every keyframe is an IDR picture (NAL type 20).',
@@ -241,6 +246,7 @@ const INITIALIZATION_SEGMENT_IDENTITY_PAIRS = [
   ['encode (libx264), start 0 vs a replacement attempt from segment 5', '01-encode-cfr', '01-encode-cfr-seek30'],
   ['stream copy, start 0 vs a replacement attempt from segment 5', '07-copy-start0', '07-copy-seek30'],
   ['encode (libsvtav1), start 0 vs a replacement attempt from segment 5', '09-svtav1-vfr', '09-svtav1-vfr-seek30'],
+  ['encode (libx265), start 0 vs a replacement attempt from segment 5', '13-x265-cfr', '13-x265-cfr-seek30'],
 ];
 const INITIALIZATION_SEGMENT_DIFFERENCE_PAIRS = [
   ['encode vs stream copy of the same source', '01-encode-cfr', '07-copy-start0'],
@@ -252,9 +258,9 @@ const RECIPE =
   'when copying AAC, then -b:a 0] [encode: -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6 ' +
   'in whole seconds, K = startSequenceNumber, N = mediaSegmentCount ' +
   '(-sc_threshold:v:0 0 for libx264, -x265-params no-scenecut=1:no-open-gop=1 for libx265) -g:v:0 145 = ceil(6 x 23.976) + 1 for an encoder verified to honour forced ' +
-  'keyframes (libx264, SVT-AV1), else 143 = floor(6 x 23.976) (fixtures 11 and 13c) (-keyint_min:v:0 with the ' +
-  'same value for SVT-AV1); fixtures 13 and 13b give libx265, not verified, 145 to test whether it qualifies] ' +
-  '[fixtures 11 to 13 only: -t 30] -threads 1 -f mp4 -movflags ' +
+  'keyframes (libx264, SVT-AV1, libx265), else 143 = floor(6 x 23.976) (fixtures 11 and 13c) (-keyint_min:v:0 with the ' +
+  'same value for SVT-AV1)] ' +
+  '[fixtures 11, 12, 12b, 13b and 13c only: -t 30] -threads 1 -f mp4 -movflags ' +
   'cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont -frag_duration 1000000 pipe:1';
 
 const RULES =
