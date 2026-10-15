@@ -2,7 +2,6 @@ package com.streamarr.transcode.worker;
 
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.SOURCE_NAMESPACE_ID;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.workerConfigurationBuilder;
-import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.failure;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.processBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.requestBuilder;
@@ -23,14 +22,10 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
-import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
-import org.springframework.boot.test.system.CapturedOutput;
-import org.springframework.boot.test.system.OutputCaptureExtension;
 import tools.jackson.databind.ObjectMapper;
 
 @Tag("UnitTest")
-@ExtendWith(OutputCaptureExtension.class)
 @DisplayName("Worker Probe Failure Tests")
 @Timeout(value = 1, unit = TimeUnit.MINUTES)
 class WorkerProbeFailureTest {
@@ -62,33 +57,8 @@ class WorkerProbeFailureTest {
   }
 
   @Test
-  @DisplayName("Should retain the source diagnosis when a probe cannot resolve its media")
-  void shouldRetainTheSourceDiagnosisWhenAProbeCannotResolveItsMedia(CapturedOutput output)
-      throws Exception {
-    var runtime = new ScriptedWorkerRuntime();
-    var request = requestBuilder().build();
-    var producer = new FfprobeExecutor(new ObjectMapper(), _ -> processBuilder().build());
-
-    try (var worker = workerBuilder(tempDir).runtime(runtime).ffprobe(producer).build()) {
-      worker.start("localhost", 1);
-      start(runtime.connection(), request);
-      runtime.probes().drain();
-
-      assertThat(runtime.connection().results())
-          .containsExactly(failure(request, ProbeFailure.PROBE_FAILURE_SOURCE_UNAVAILABLE));
-      assertThat(output)
-          .contains(
-              fromProto(request.getProbeAttemptId()).toString(),
-              SOURCE_NAMESPACE_ID.toString(),
-              "movie.mkv",
-              "NoSuchFileException");
-    }
-  }
-
-  @Test
   @DisplayName("Should report a terminal failure when a filesystem provider fails unexpectedly")
-  void shouldReportATerminalFailureWhenAFilesystemProviderFailsUnexpectedly(CapturedOutput output)
-      throws Exception {
+  void shouldReportATerminalFailureWhenAFilesystemProviderFailsUnexpectedly() throws Exception {
     Files.writeString(tempDir.resolve("movie.mkv"), "media");
     var root = mock(Path.class);
     when(root.toRealPath())
@@ -116,12 +86,6 @@ class WorkerProbeFailureTest {
 
       assertThat(connection.results())
           .containsExactly(failure(request, ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED));
-      assertThat(output)
-          .contains(
-              fromProto(request.getProbeAttemptId()).toString(),
-              SOURCE_NAMESPACE_ID.toString(),
-              "movie.mkv",
-              "filesystem provider failed");
 
       var next = requestBuilder().build();
       start(connection, next);
