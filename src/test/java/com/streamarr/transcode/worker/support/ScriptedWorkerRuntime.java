@@ -70,8 +70,13 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     private volatile boolean acknowledgementsWithheld;
     private boolean shutdown;
 
-    public WorkerRegistration registration() throws Exception {
-      return call.registration.get(5, TimeUnit.SECONDS);
+    /**
+     * The worker's registration. The scripted session accepts the registration as the worker sends
+     * it, so the worker has registered once its start() returns.
+     */
+    public WorkerRegistration registration() {
+      assertThat(call.registration).as("the worker has registered").isCompleted();
+      return call.registration.resultNow();
     }
 
     /** Every message the worker has sent on its session stream, in order. */
