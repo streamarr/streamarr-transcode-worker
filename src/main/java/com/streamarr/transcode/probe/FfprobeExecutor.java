@@ -9,15 +9,22 @@ import build.buf.gen.streamarr.transcode.v1.ProbeMediaInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import com.google.protobuf.Duration;
+import com.streamarr.transcode.probe.ProbeCommand.ProbeTool;
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.UncheckedIOException;
 import java.nio.channels.ClosedByInterruptException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
@@ -31,30 +38,41 @@ public final class FfprobeExecutor {
 
   public static final int PROBE_VERSION = 1;
 
-  /**
-   * The probe version whose results carry keyframe positions. The worker does not advertise it
-   * until it can also scan the packets of a source without a usable index.
-   */
+  /** The probe version whose results carry keyframe positions. */
   public static final int KEYFRAME_POSITIONS_PROBE_VERSION = 3;
 
   private static final int AVERROR_INVALIDDATA = -1094995529;
   private static final int AVERROR_EOF = -541478725;
 
   @NonNull private final ObjectMapper objectMapper;
-  @NonNull private final Function<List<String>, Process> processFactory;
+  @NonNull private final Function<ProbeCommand, Process> processFactory;
 
-  public static FfprobeExecutor forBinary(@NonNull Path binary) {
-    return new FfprobeExecutor(new ObjectMapper(), arguments -> start(binary, arguments));
+  public static FfprobeExecutor forBinaries(@NonNull Path ffprobe, @NonNull Path ffmpeg) {
+    return new FfprobeExecutor(
+        new ObjectMapper(),
+        command ->
+            start(
+                switch (command.tool()) {
+                  case FFPROBE -> ffprobe;
+                  case FFMPEG -> ffmpeg;
+                },
+                command));
   }
 
-  private static Process start(Path binary, List<String> arguments) {
+  private static Process start(Path binary, ProbeCommand probeCommand) {
     var command = new ArrayList<String>();
     command.add(binary.toString());
-    command.addAll(arguments);
+    command.addAll(probeCommand.arguments());
+    // The packet scan reads FFmpeg's diagnostics to find a source that stopped being readable.
+    var diagnostics =
+        switch (probeCommand.tool()) {
+          case FFPROBE -> ProcessBuilder.Redirect.DISCARD;
+          case FFMPEG -> ProcessBuilder.Redirect.PIPE;
+        };
     try {
-      return new ProcessBuilder(command).redirectError(ProcessBuilder.Redirect.DISCARD).start();
+      return new ProcessBuilder(command).redirectError(diagnostics).start();
     } catch (IOException e) {
-      throw new UncheckedIOException("Failed to start ffprobe", e);
+      throw new UncheckedIOException("Failed to start " + binary, e);
     }
   }
 
@@ -92,14 +110,12 @@ public final class FfprobeExecutor {
     }
   }
 
-  // This worker cannot scan packets yet, so it refuses every packet-scan request.
   private boolean isSupported(ProbeRequest request) {
-    if (request.getScanKeyframePackets()) {
-      return false;
+    if (request.getProbeVersion() == KEYFRAME_POSITIONS_PROBE_VERSION) {
+      return true;
     }
 
-    return request.getProbeVersion() == PROBE_VERSION
-        || request.getProbeVersion() == KEYFRAME_POSITIONS_PROBE_VERSION;
+    return request.getProbeVersion() == PROBE_VERSION && !request.getScanKeyframePackets();
   }
 
   private ProbeAttemptReport execute(Attempt attempt)
@@ -128,23 +144,73 @@ public final class FfprobeExecutor {
       return ProbeAttemptReport.resultOnly(result);
     }
 
-    return new ContainerIndexProbe(objectMapper, this::run)
-        .addKeyframes(
-            ContainerIndexProbe.Probed.builder()
-                .source(attempt.source())
-                .ffprobeOutput(json)
-                .result(result)
-                .build());
+    var probed =
+        ProbedSource.builder().source(attempt.source()).ffprobeOutput(json).result(result).build();
+    if (attempt.request().getScanKeyframePackets()) {
+      return new KeyframePacketScan(this::runPacketScan).addKeyframes(probed);
+    }
+
+    return new ContainerIndexProbe(objectMapper, this::run).addKeyframes(probed);
   }
 
   private ProcessOutput run(List<String> arguments)
       throws ExecutionException, InterruptedException {
-    var process = processFactory.apply(arguments);
+    var finished = run(arguments, InputStream::readAllBytes);
+    return new ProcessOutput(finished.output(), finished.exitCode());
+  }
+
+  private int runPacketScan(
+      List<String> arguments,
+      KeyframePacketScan.PacketLines packetLines,
+      Consumer<String> diagnosticLines)
+      throws ExecutionException, InterruptedException {
+    var process = processFactory.apply(new ProbeCommand(ProbeTool.FFMPEG, arguments));
+    var stopped = new AtomicBoolean();
+    OutputReader<Void> reader =
+        stdout -> {
+          if (!readLinesWhileNeeded(stdout, packetLines)) {
+            // The scan needs no more packets, so FFmpeg stops before it reads the rest of the
+            // source.
+            stopped.set(true);
+            process.destroyForcibly();
+          }
+
+          return null;
+        };
+    OutputReader<Void> diagnosticsReader =
+        stderr -> {
+          try {
+            return readLines(stderr, diagnosticLines);
+          } catch (IOException | UncheckedIOException failure) {
+            // Destroying a process closes its standard error, so the read fails once the scan
+            // has stopped FFmpeg.
+            if (stopped.get()) {
+              return null;
+            }
+
+            throw failure;
+          }
+        };
+    return run(process, reader, diagnosticsReader).exitCode();
+  }
+
+  private <T> Finished<T> run(List<String> arguments, OutputReader<T> reader)
+      throws ExecutionException, InterruptedException {
+    var process = processFactory.apply(new ProbeCommand(ProbeTool.FFPROBE, arguments));
+    return run(process, reader, stderr -> readLines(stderr, _ -> {}));
+  }
+
+  private <T> Finished<T> run(
+      Process process, OutputReader<T> reader, OutputReader<Void> diagnosticsReader)
+      throws ExecutionException, InterruptedException {
     try (var readers = Executors.newVirtualThreadPerTaskExecutor()) {
-      var output = readers.submit(() -> readOutput(process));
+      var diagnostics = readers.submit(() -> diagnosticsReader.read(process.getErrorStream()));
+      var output = readers.submit(() -> readOutput(process, reader));
       try {
         var exitCode = process.waitFor();
-        return new ProcessOutput(output.get(), exitCode);
+        var finished = new Finished<>(output.get(), exitCode);
+        diagnostics.get();
+        return finished;
       } finally {
         if (process.isAlive()) {
           terminate(process);
@@ -153,9 +219,30 @@ public final class FfprobeExecutor {
     }
   }
 
-  private byte[] readOutput(Process process) throws IOException {
+  private static boolean readLinesWhileNeeded(
+      InputStream stream, KeyframePacketScan.PacketLines lines) throws IOException {
+    try (var reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+      for (var line = reader.readLine(); line != null; line = reader.readLine()) {
+        if (!lines.take(line)) {
+          return false;
+        }
+      }
+    }
+
+    return true;
+  }
+
+  private static Void readLines(InputStream stream, Consumer<String> lines) throws IOException {
+    try (var reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+      reader.lines().forEach(lines);
+    }
+
+    return null;
+  }
+
+  private <T> T readOutput(Process process, OutputReader<T> reader) throws IOException {
     try (var output = process.getInputStream()) {
-      return output.readAllBytes();
+      return reader.read(output);
     }
   }
 
@@ -301,4 +388,11 @@ public final class FfprobeExecutor {
   }
 
   private record Attempt(Path source, ProbeRequest request, ProbeAttemptResult.Builder result) {}
+
+  @FunctionalInterface
+  private interface OutputReader<T> {
+    T read(InputStream output) throws IOException;
+  }
+
+  private record Finished<T>(T output, int exitCode) {}
 }

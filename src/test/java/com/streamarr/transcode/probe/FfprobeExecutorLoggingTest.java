@@ -138,6 +138,47 @@ class FfprobeExecutorLoggingTest {
             });
   }
 
+  @Test
+  @DisplayName(
+      "Should keep the stream's tags out of the logs when ffprobe gives the scanned stream no"
+          + " readable time base")
+  void shouldKeepStreamTagsOutOfLogsWhenFfprobeGivesScannedStreamNoReadableTimeBase() {
+    var title = "private-title-" + UUID.randomUUID();
+    var request =
+        requestBuilder()
+            .setProbeAttemptId(toProto(UUID.randomUUID()))
+            .setProbeVersion(FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION)
+            .setScanKeyframePackets(true)
+            .build();
+    var streams =
+        """
+        {"format":{"format_name":"mpegts","start_time":"0.000000"},
+         "streams":[{"index":0,"codec_type":"video","time_base":"1/x",
+                     "tags":{"title":"%s"}}]}
+        """
+            .formatted(title);
+    var executor =
+        new FfprobeExecutor(
+            new ObjectMapper(), _ -> ControlledProbeProcess.builder().stdout(streams).build());
+
+    var result = executor.probe(SOURCE, request).result();
+
+    assertExecutionFailure(result, request);
+    assertThat(events)
+        .isNotEmpty()
+        .noneSatisfy(event -> assertThat(rendered(event)).contains(title));
+  }
+
+  /** The event's message and the message of every throwable it carries. */
+  private static String rendered(ILoggingEvent event) {
+    var text = new StringBuilder(event.getFormattedMessage());
+    for (var proxy = event.getThrowableProxy(); proxy != null; proxy = proxy.getCause()) {
+      text.append('\n').append(proxy.getMessage());
+    }
+
+    return text.toString();
+  }
+
   private ProbeRequest.Builder requestBuilder() {
     return ProbeRequest.newBuilder().setProbeVersion(FfprobeExecutor.PROBE_VERSION);
   }

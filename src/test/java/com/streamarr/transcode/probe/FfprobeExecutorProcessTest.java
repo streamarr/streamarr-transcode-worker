@@ -33,7 +33,9 @@ class FfprobeExecutorProcessTest {
   @Test
   @DisplayName("Should return an execution failure when the configured binary is unavailable")
   void shouldReturnAnExecutionFailureWhenTheConfiguredBinaryIsUnavailable() {
-    var executor = FfprobeExecutor.forBinary(temporaryDirectory.resolve("missing-ffprobe"));
+    var executor =
+        FfprobeExecutor.forBinaries(
+            temporaryDirectory.resolve("missing-ffprobe"), temporaryDirectory.resolve("ffmpeg"));
 
     assertThat(
             executor
@@ -56,9 +58,7 @@ class FfprobeExecutorProcessTest {
         """);
 
     var result =
-        FfprobeExecutor.forBinary(binary)
-            .probe(temporaryDirectory.resolve("movie.mkv"), request())
-            .result();
+        executorFor(binary).probe(temporaryDirectory.resolve("movie.mkv"), request()).result();
 
     assertThat(result.hasMedia()).isTrue();
     assertThat(result.getMedia().getStreamsList()).hasSize(1);
@@ -79,12 +79,75 @@ class FfprobeExecutorProcessTest {
         printf '%s' "$$" > "$0.pid"
         exec sleep 60
         """);
-    var pidFile = Path.of(binary + ".pid");
+    var request = request();
+
+    var completed =
+        probeUntilInterrupted(
+            executorFor(binary),
+            Path.of(binary + ".pid"),
+            temporaryDirectory.resolve("movie.mkv"),
+            request);
+
+    assertThat(completed.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_CANCELLED);
+    assertThat(completed.result().getProbeAttemptId()).isEqualTo(request.getProbeAttemptId());
+    assertThat(completed.result().getProbeVersion()).isEqualTo(request.getProbeVersion());
+    assertThat(completed.processAlive()).isFalse();
+    assertThat(completed.interrupted()).isTrue();
+  }
+
+  @Test
+  @Timeout(10)
+  @DisplayName(
+      "Should report CANCELLED and stop FFmpeg when a packet scan is cancelled while the source"
+          + " blocks reads")
+  void shouldReportCancelledAndStopFfmpegWhenPacketScanIsCancelledWhileSourceBlocksReads()
+      throws Exception {
+    var source = temporaryDirectory.resolve("movie.ts");
+    var fifo = new ProcessBuilder("mkfifo", source.toString()).start();
+    assertThat(fifo.waitFor()).isZero();
+    var ffprobe =
+        script(
+            "ffprobe",
+            """
+        printf '%s' '{"format":{"format_name":"mpegts","start_time":"0.000000"},
+          "streams":[{"index":0,"codec_type":"video","time_base":"1/90000","has_b_frames":2}]}'
+        """);
+    // The packet scan reads the source, a FIFO that no process writes, so the read never returns.
+    var ffmpeg =
+        script(
+            "ffmpeg",
+            """
+        while [ "$1" != "-i" ]; do shift; done
+        printf '%s\n' '0, 0, 0, 3750, 100, 0x00000000'
+        printf '%s' "$$" > "$0.pid"
+        exec cat "$2"
+        """);
+    var request =
+        request().toBuilder()
+            .setProbeVersion(FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION)
+            .setScanKeyframePackets(true)
+            .build();
+
+    var completed =
+        probeUntilInterrupted(
+            FfprobeExecutor.forBinaries(ffprobe, ffmpeg),
+            Path.of(ffmpeg + ".pid"),
+            source,
+            request);
+
+    assertThat(completed.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_CANCELLED);
+    assertThat(completed.processAlive()).isFalse();
+    assertThat(completed.interrupted()).isTrue();
+  }
+
+  /**
+   * Probes on its own thread and interrupts that thread once a scripted binary writes its process
+   * id to the given file.
+   */
+  private ProbeCompletion probeUntilInterrupted(
+      FfprobeExecutor executor, Path pidFile, Path source, ProbeRequest request) throws Exception {
     var process = new AtomicReference<ProcessHandle>();
     var completion = new CompletableFuture<ProbeCompletion>();
-    var executor = FfprobeExecutor.forBinary(binary);
-    var source = temporaryDirectory.resolve("movie.mkv");
-    var request = request();
     var task =
         Thread.ofVirtual()
             .start(
@@ -106,13 +169,7 @@ class FfprobeExecutorProcessTest {
       process.set(ProcessHandle.of(Long.parseLong(Files.readString(pidFile))).orElseThrow());
       task.interrupt();
 
-      var completed = completion.get(3, TimeUnit.SECONDS);
-
-      assertThat(completed.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_CANCELLED);
-      assertThat(completed.result().getProbeAttemptId()).isEqualTo(request.getProbeAttemptId());
-      assertThat(completed.result().getProbeVersion()).isEqualTo(request.getProbeVersion());
-      assertThat(completed.processAlive()).isFalse();
-      assertThat(completed.interrupted()).isTrue();
+      return completion.get(3, TimeUnit.SECONDS);
     } finally {
       Optional.ofNullable(process.get()).ifPresent(ProcessHandle::destroyForcibly);
       task.interrupt();
@@ -134,7 +191,7 @@ class FfprobeExecutorProcessTest {
         """);
     var source = temporaryDirectory.resolve("movie with spaces.mkv");
 
-    var result = FfprobeExecutor.forBinary(binary).probe(source, request()).result();
+    var result = executorFor(binary).probe(source, request()).result();
 
     assertThat(result.hasMedia()).isTrue();
     assertThat(result.getMedia().getStreams(0).getCodec()).isEqualTo("h264");
@@ -150,6 +207,10 @@ class FfprobeExecutorProcessTest {
             source.toString());
   }
 
+  private FfprobeExecutor executorFor(Path ffprobe) {
+    return FfprobeExecutor.forBinaries(ffprobe, temporaryDirectory.resolve("ffmpeg"));
+  }
+
   private ProbeRequest request() {
     return ProbeRequest.newBuilder()
         .setProbeAttemptId(toProto(UUID.randomUUID()))
@@ -158,7 +219,11 @@ class FfprobeExecutorProcessTest {
   }
 
   private Path script(String body) throws Exception {
-    var binary = temporaryDirectory.resolve("ffprobe");
+    return script("ffprobe", body);
+  }
+
+  private Path script(String name, String body) throws Exception {
+    var binary = temporaryDirectory.resolve(name);
     Files.writeString(binary, "#!/bin/sh\n" + body);
     Files.setPosixFilePermissions(binary, PosixFilePermissions.fromString("rwx------"));
     return binary;

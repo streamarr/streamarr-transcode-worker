@@ -10,6 +10,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import build.buf.gen.streamarr.transcode.v1.MediaSourceRef;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
+import com.streamarr.transcode.probe.FfprobeExecutor;
 import com.streamarr.transcode.worker.support.WorkerApplicationControlPlane;
 import com.streamarr.transcode.worker.support.WorkerApplicationProcess;
 import java.io.File;
@@ -332,7 +333,7 @@ class TranscodeWorkerApplicationIT {
         versionCheck.write(ByteBuffer.wrap("release\n".getBytes(US_ASCII)));
 
         assertThat(worker.awaitRegistration(controlPlane).getCapabilities().getProbeVersionsList())
-            .containsExactly(1);
+            .containsExactly(1, FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION);
         assertThat(controlPlane.wasAdmittedAtRegistration())
             .as("registration occurs after the held version process has exited successfully")
             .isTrue();

@@ -2,6 +2,7 @@ package com.streamarr.transcode.probe;
 
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
@@ -59,6 +60,26 @@ class FfprobeExecutorTest {
 
     assertThat(executor.probe(SOURCE, request()).result().getFailure())
         .isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
+  }
+
+  @Test
+  @DisplayName("Should reject the binaries when no ffprobe binary is configured")
+  void shouldRejectBinariesWhenNoFfprobeBinaryIsConfigured() {
+    var ffmpeg = Path.of("/usr/bin/ffmpeg");
+
+    assertThatNullPointerException()
+        .isThrownBy(() -> FfprobeExecutor.forBinaries(null, ffmpeg))
+        .withMessageContaining("ffprobe");
+  }
+
+  @Test
+  @DisplayName("Should reject the binaries when no FFmpeg binary is configured")
+  void shouldRejectBinariesWhenNoFfmpegBinaryIsConfigured() {
+    var ffprobe = Path.of("/usr/bin/ffprobe");
+
+    assertThatNullPointerException()
+        .isThrownBy(() -> FfprobeExecutor.forBinaries(ffprobe, null))
+        .withMessageContaining("ffmpeg");
   }
 
   @Test
