@@ -73,10 +73,6 @@ public class FfmpegTranscodeEngine {
     return producer;
   }
 
-  public boolean isHealthy() {
-    return capabilityService.isFfmpegAvailable();
-  }
-
   private void requireAvailableFfmpeg() {
     if (!capabilityService.isFfmpegAvailable()) {
       throw new TranscodeException(

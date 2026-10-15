@@ -246,25 +246,6 @@ class FfmpegTranscodeEngineTest {
   }
 
   @Test
-  @DisplayName("Should report healthy when FFmpeg available")
-  void shouldReportHealthyWhenFfmpegAvailable() {
-    assertThat(executor.isHealthy()).isTrue();
-  }
-
-  @Test
-  @DisplayName("Should report unhealthy when FFmpeg unavailable")
-  void shouldReportUnhealthyWhenFfmpegUnavailable() {
-    var capabilityService =
-        createCapabilityService(
-            false,
-            HardwareEncodingCapability.builder().available(false).encoders(Set.of()).build());
-
-    executor = engineLaunching(runningProcess(), capabilityService);
-
-    assertThat(executor.isHealthy()).isFalse();
-  }
-
-  @Test
   @DisplayName("Should reject producer start when FFmpeg cannot fragment mp4 output")
   void shouldRejectProducerStartWhenFfmpegCannotFragmentMp4Output() {
     var capabilityService =

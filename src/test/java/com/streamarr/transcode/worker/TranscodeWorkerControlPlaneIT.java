@@ -616,7 +616,7 @@ class TranscodeWorkerControlPlaneIT {
             .availableSlots(slots)
             .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, mediaRoot))
             .build();
-    return new TranscodeWorker(configuration, engine(launcher));
+    return TranscodeWorker.builder().configuration(configuration).engine(engine(launcher)).build();
   }
 
   private static VariantJob variantJob() {

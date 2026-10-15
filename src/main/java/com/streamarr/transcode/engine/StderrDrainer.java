@@ -11,17 +11,12 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 final class StderrDrainer implements AutoCloseable {
 
-  static final int DEFAULT_CAPACITY = 200;
+  static final int CAPACITY = 200;
 
-  private final CircularLineBuffer buffer;
+  private final CircularLineBuffer buffer = new CircularLineBuffer(CAPACITY);
   private final Thread drainThread;
 
   StderrDrainer(InputStream errorStream) {
-    this(errorStream, DEFAULT_CAPACITY);
-  }
-
-  StderrDrainer(InputStream errorStream, int capacity) {
-    this.buffer = new CircularLineBuffer(capacity);
     this.drainThread = Thread.ofVirtual().name("stderr-drainer").start(() -> drain(errorStream));
   }
 
@@ -37,10 +32,6 @@ final class StderrDrainer implements AutoCloseable {
     }
   }
 
-  List<String> getRecentOutput() {
-    return buffer.getLines();
-  }
-
   /**
    * Waits (bounded by {@code timeout}) for the drain thread to reach end of stream before reading,
    * so a dead process's stderr tail is fully captured instead of raced. On timeout the lines
@@ -54,10 +45,6 @@ final class StderrDrainer implements AutoCloseable {
     }
 
     return buffer.getLines();
-  }
-
-  boolean isDrainThreadAlive() {
-    return drainThread.isAlive();
   }
 
   @Override
