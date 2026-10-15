@@ -356,8 +356,7 @@ class FfmpegCommandBuilderTest {
 
     var cmd = command(request(encoding(encode)).build(), "libsvtav1");
 
-    assertThat(cmd).containsSequence("-level:v", "41");
-    assertThat(cmd).doesNotContain("-profile:v");
+    assertThat(cmd).containsSequence("-level:v", "41").doesNotContain("-profile:v");
   }
 
   @ParameterizedTest(name = "{0}")
@@ -367,7 +366,9 @@ class FfmpegCommandBuilderTest {
   void shouldLeaveTheCodecProfileAndLevelToTheEncoderWhenAHardwareEncoderRuns(String encoder) {
     var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), encoder);
 
-    assertThat(cmd).doesNotContain("-profile:v", "-level:v", "-x265-params");
+    assertThat(cmd)
+        .containsSequence("-c:v", encoder)
+        .doesNotContain("-profile:v", "-level:v", "-x265-params");
   }
 
   @ParameterizedTest
@@ -378,7 +379,9 @@ class FfmpegCommandBuilderTest {
   void shouldForceNoCodecProfileOrLevelWhenVideoIsCopied(TranscodeMode mode) {
     var cmd = command(request(mode).build(), "copy");
 
-    assertThat(cmd).doesNotContain("-profile:v", "-level:v", "-x265-params");
+    assertThat(cmd)
+        .containsSequence("-c:v", "copy")
+        .doesNotContain("-profile:v", "-level:v", "-x265-params");
   }
 
   private static TranscodeDecision encoding(VideoDecision.Encode.EncodeBuilder encode) {
