@@ -384,6 +384,41 @@ class FfmpegCommandBuilderTest {
         .doesNotContain("-profile:v", "-level:v", "-x265-params");
   }
 
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"libx264", "libx265", "libsvtav1"})
+  @DisplayName(
+      "Should force no codec profile or level when an encoding request's video decision is a"
+          + " stream copy")
+  void shouldForceNoCodecProfileOrLevelWhenAnEncodingRequestsVideoDecisionIsAStreamCopy(
+      String encoder) {
+    var copy = new VideoDecision.Copy("avc1.64000A");
+    var request =
+        request(decision(TranscodeMode.FULL_TRANSCODE).videoDecision(copy).build()).build();
+
+    var cmd = command(request, encoder);
+
+    assertThat(cmd)
+        .containsSequence("-c:v", encoder)
+        .doesNotContain("-profile:v", "-level:v")
+        .noneMatch(argument -> argument.contains("level-idc") || argument.contains("high-tier"));
+  }
+
+  @ParameterizedTest(name = "{0} forces: {1}")
+  @CsvSource({
+    "libx264, true",
+    "libx265, true",
+    "libsvtav1, true",
+    "h264_nvenc, false",
+    "hevc_qsv, false",
+    "av1_vaapi, false",
+    "h264_videotoolbox, false"
+  })
+  @DisplayName("Should force the job's codec profile and level only on a software encoder")
+  void shouldForceTheJobsCodecProfileAndLevelOnlyOnASoftwareEncoder(
+      String encoder, boolean forces) {
+    assertThat(FfmpegCommandBuilder.forcesCodecProfile(encoder)).isEqualTo(forces);
+  }
+
   private static TranscodeDecision encoding(VideoDecision.Encode.EncodeBuilder encode) {
     return decision(TranscodeMode.FULL_TRANSCODE).videoDecision(encode.build()).build();
   }
