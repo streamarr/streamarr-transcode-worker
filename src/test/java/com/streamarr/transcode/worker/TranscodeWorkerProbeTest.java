@@ -1,8 +1,6 @@
 package com.streamarr.transcode.worker;
 
-import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.SOURCE_NAMESPACE_ID;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engine;
-import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.workerConfigurationBuilder;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.cancel;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.failure;
@@ -12,6 +10,7 @@ import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.sourceB
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.start;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variantJobBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerBuilder;
+import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerBuilderWithoutFfprobe;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -32,7 +31,6 @@ import com.streamarr.transcode.protocol.ProtoUuid;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
@@ -59,14 +57,7 @@ class TranscodeWorkerProbeTest {
   @Test
   @DisplayName("Should refuse to build a worker when it has no ffprobe executor")
   void shouldRefuseToBuildAWorkerWhenItHasNoFfprobeExecutor() {
-    var builder =
-        TranscodeWorker.builder()
-            .configuration(
-                workerConfigurationBuilder()
-                    .availableSlots(2)
-                    .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, tempDir))
-                    .build())
-            .engine(engine(ScriptedProcessLauncher.running()));
+    var builder = workerBuilderWithoutFfprobe(tempDir);
 
     assertThatThrownBy(builder::build)
         .isInstanceOf(NullPointerException.class)
