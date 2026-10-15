@@ -1,13 +1,14 @@
 package com.streamarr.transcode.engine;
 
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
-import com.streamarr.transcode.engine.TrackCodec.Video;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 /**
  * Compares the video that an initialization segment declares with the job's video decision: the
- * codec string always, and for an encode the 8-bit 4:2:0 picture format too. Audio codec strings
- * are not compared, because the job carries none.
+ * codec string always, and for an encode the 8-bit 4:2:0 picture format too. It also requires the
+ * decoder configuration record to hold the parameter sets that its sample entry promises. Audio
+ * codec strings are not compared, because the job carries none.
  */
 final class VideoOutputCheck {
 
@@ -15,12 +16,15 @@ final class VideoOutputCheck {
 
   /**
    * @throws FragmentedMp4Exception with {@link Reason#OUTPUT_MISMATCH} when the segment declares
-   *     other video than the decision, or video whose decoder configuration record cannot be read;
-   *     with {@link Reason#MALFORMED_BOX} when a box that leads to the video sample entry is
-   *     missing or too short
+   *     other video than the decision, or video whose decoder configuration record cannot be read
+   *     or lacks a parameter set that its sample entry promises; with {@link Reason#MALFORMED_BOX}
+   *     when a box that leads to the video sample entry is missing or too short
    */
   static void requireMatch(VideoDecision decision, InitializationSegment segment) {
-    var video = videoOf(segment);
+    var sampleEntry =
+        CodecConfigurationReader.firstVideoSampleEntryOf(segment)
+            .orElseThrow(() -> mismatch("the initialization segment declares no video track"));
+    var video = readable(() -> CodecConfigurationReader.videoOf(sampleEntry));
     if (!video.codecString().equals(decision.codecString())) {
       throw mismatch(
           "the initialization segment declares "
@@ -36,16 +40,21 @@ final class VideoOutputCheck {
               + video.pictureFormat().map(VideoOutputCheck::describe).orElse("no picture format")
               + " where every encode is 8-bit 4:2:0");
     }
+
+    if (!readable(() -> CodecConfigurationReader.holdsPromisedParameterSets(sampleEntry))) {
+      throw mismatch(
+          "the "
+              + sampleEntry.type()
+              + " sample entry promises parameter sets that its decoder configuration record does"
+              + " not hold");
+    }
   }
 
   // A missing box on the way to the sample entry stays a malformed box; only a decoder
   // configuration record that cannot be read is a mismatch.
-  private static Video videoOf(InitializationSegment segment) {
-    var sampleEntry =
-        CodecConfigurationReader.firstVideoSampleEntryOf(segment)
-            .orElseThrow(() -> mismatch("the initialization segment declares no video track"));
+  private static <T> T readable(Supplier<T> record) {
     try {
-      return CodecConfigurationReader.videoOf(sampleEntry);
+      return record.get();
     } catch (FragmentedMp4Exception e) {
       throw mismatch("the video codec configuration cannot be read: " + e.getMessage());
     }

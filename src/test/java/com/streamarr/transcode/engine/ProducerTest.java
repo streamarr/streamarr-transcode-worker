@@ -804,6 +804,66 @@ class ProducerTest {
     assertThat(sink.acceptedNames()).isEmpty();
   }
 
+  // Records that declare the copy's codec string but none of the parameter sets that their sample
+  // entry promises, as FFmpeg writes them when the source carries its parameter sets only in its
+  // samples.
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({
+    "hvc1, hvcC, 0101600000009000000000005AF000FCFDF8F800000F00, hvc1.1.6.L90.90",
+    "avc1, avcC, 0142C00AFFE000, avc1.42C00A"
+  })
+  @DisplayName(
+      "Should fail the attempt as an output mismatch when the record holds none of the parameter"
+          + " sets that its sample entry promises")
+  void
+      shouldFailTheAttemptAsAnOutputMismatchWhenTheRecordHoldsNoneOfTheParameterSetsThatItsSampleEntryPromises(
+          String sampleEntryType, String recordType, String record, String codecString) {
+    var sampleEntry =
+        IsoBoxes.box(
+            sampleEntryType,
+            new byte[78],
+            IsoBoxes.box(recordType, HexFormat.of().parseHex(record)));
+    var output =
+        IsoBoxes.concat(
+            IsoBoxes.ftyp(),
+            IsoBoxes.moov(IsoBoxes.Track.video().sampleEntry(sampleEntry).build()));
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer =
+        producerLaunching(process)
+            .periodSeconds(6)
+            .videoDecision(new VideoDecision.Copy(codecString))
+            .start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
+    assertThat(failure.detail()).contains("parameter sets");
+    assertThat(sink.acceptedNames()).isEmpty();
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as an output mismatch when the record ends inside a parameter set")
+  void shouldFailTheAttemptAsAnOutputMismatchWhenTheRecordEndsInsideAParameterSet() {
+    var truncatedArray =
+        HexFormat.of().parseHex("0101600000009000000000005AF000FCFDF8F800000F01A0000100094001");
+    var sampleEntry = IsoBoxes.box("hvc1", new byte[78], IsoBoxes.box("hvcC", truncatedArray));
+    var output =
+        IsoBoxes.concat(
+            IsoBoxes.ftyp(),
+            IsoBoxes.moov(IsoBoxes.Track.video().sampleEntry(sampleEntry).build()));
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer =
+        producerLaunching(process)
+            .periodSeconds(6)
+            .videoDecision(new VideoDecision.Copy("hvc1.1.6.L90.90"))
+            .start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
+    assertThat(sink.acceptedNames()).isEmpty();
+  }
+
   @Test
   @DisplayName(
       "Should deliver the attempt when the reader cannot parse the codec configuration of an audio"

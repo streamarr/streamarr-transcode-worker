@@ -3,6 +3,7 @@ package com.streamarr.transcode.engine;
 import com.streamarr.transcode.engine.TrackCodec.Audio;
 import com.streamarr.transcode.engine.TrackCodec.Video;
 import java.nio.ByteBuffer;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
@@ -28,6 +29,10 @@ final class CodecConfigurationReader {
 
   // The AVC profiles whose avcC carries the chroma format and bit depths after its parameter sets.
   private static final Set<Integer> AVC_PROFILES_WITH_FORMAT = Set.of(100, 110, 122, 144, 244);
+  // The hvcC fields before its array count (ISO/IEC 14496-15 8.3.2.1.2), and the NAL unit types of
+  // the VPS, SPS and PPS (ITU-T H.265 table 7-1).
+  private static final int HVCC_FIELDS_BEFORE_ARRAYS = 22;
+  private static final Set<Integer> HEVC_PARAMETER_SET_TYPES = Set.of(32, 33, 34);
   private static final int MPEG4_AUDIO = 0x40;
   private static final int ES_DESCRIPTOR = 0x03;
   private static final int DECODER_CONFIG_DESCRIPTOR = 0x04;
@@ -80,6 +85,24 @@ final class CodecConfigurationReader {
     };
   }
 
+  /**
+   * Whether the decoder configuration record holds every parameter set that the sample entry
+   * promises it holds: {@code avc1} promises an SPS and a PPS, and {@code hvc1} a VPS, an SPS and a
+   * PPS. Every other sample entry lets the samples carry its parameter sets, so it promises none.
+   *
+   * @throws FragmentedMp4Exception when the record is missing or ends before its parameter sets do
+   */
+  static boolean holdsPromisedParameterSets(BoxView sampleEntry) {
+    var children = sampleEntry.after(VISUAL_SAMPLE_ENTRY_BYTES);
+    return switch (sampleEntry.type()) {
+      case "avc1" -> avcHoldsParameterSets(children.requiredChild("avcC").fields());
+      case "hvc1" ->
+          hevcArrayTypes(children.requiredChild("hvcC").fields())
+              .containsAll(HEVC_PARAMETER_SET_TYPES);
+      default -> true;
+    };
+  }
+
   private static BoxView moovOf(InitializationSegment segment) {
     return new BoxView("initialization segment", ByteBuffer.wrap(segment.bytes()))
         .requiredChild("moov");
@@ -128,10 +151,35 @@ final class CodecConfigurationReader {
     return new Video(codecString, Optional.of(new PictureFormat(bitDepth, chroma)));
   }
 
-  private static void skipParameterSets(BoxFields avcC, int count) {
+  private static void skipParameterSets(BoxFields record, int count) {
     for (var set = 0; set < count; set++) {
-      avcC.skip(avcC.u16());
+      record.skip(record.u16());
     }
+  }
+
+  private static boolean avcHoldsParameterSets(BoxFields avcC) {
+    avcC.skip(5);
+    var sequenceParameterSets = avcC.u8() & 0x1F;
+    skipParameterSets(avcC, sequenceParameterSets);
+    var pictureParameterSets = avcC.u8();
+    return sequenceParameterSets > 0 && pictureParameterSets > 0;
+  }
+
+  // The NAL unit types of the hvcC arrays that hold at least one NAL unit.
+  private static Set<Integer> hevcArrayTypes(BoxFields hvcC) {
+    hvcC.skip(HVCC_FIELDS_BEFORE_ARRAYS);
+    var arrays = hvcC.u8();
+    var types = new HashSet<Integer>();
+    for (var array = 0; array < arrays; array++) {
+      var type = hvcC.u8() & 0x3F;
+      var nalUnits = hvcC.u16();
+      skipParameterSets(hvcC, nalUnits);
+      if (nalUnits > 0) {
+        types.add(type);
+      }
+    }
+
+    return types;
   }
 
   private static Video hevc(String sampleEntry, BoxFields hvcC) {
