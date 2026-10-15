@@ -194,6 +194,27 @@ class FfmpegTranscodeEngineTest {
   }
 
   @Test
+  @DisplayName(
+      "Should refuse to start a producer without launching FFmpeg when no encoder of the codec"
+          + " family is advertised")
+  void
+      shouldRefuseToStartAProducerWithoutLaunchingFfmpegWhenNoEncoderOfTheCodecFamilyIsAdvertised() {
+    executor = engineLaunching(runningProcess(), createCapabilityService(true, noHardware()));
+    var request = createRequest(TranscodeMode.FULL_TRANSCODE, "vp9");
+
+    var thrown =
+        catchThrowable(
+            () ->
+                executor.startProducer(
+                    request, new RecordingSegmentSink(), SegmentMemoryBudget.forSlots(1)));
+
+    assertThat(thrown)
+        .isInstanceOf(UnadvertisedCodecFamilyException.class)
+        .hasMessage("The worker advertises no encoder for codec family vp9");
+    assertThat(launcher.hasLaunchedAny()).isFalse();
+  }
+
+  @Test
   @DisplayName("Should launch FFmpeg with the hardware encoder when one is available")
   void shouldLaunchFfmpegWithTheHardwareEncoderWhenOneIsAvailable() {
     var hardware =

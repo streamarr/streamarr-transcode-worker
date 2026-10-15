@@ -224,7 +224,7 @@ public class FfmpegCommandBuilder {
     var periodFrames = request.targetSegmentDuration() * request.framerate();
     // One frame past the forced keyframes' gap, so the GOP never fires while forcing works, and a
     // keyframe it places for a dropped forced one still lands inside that interval.
-    if (traitsOf(job).keyframeVerified()) {
+    if (isKeyframeVerified(job.videoEncoder())) {
       return (int) Math.ceil(periodFrames) + 1;
     }
 
@@ -263,8 +263,16 @@ public class FfmpegCommandBuilder {
     return times.toString();
   }
 
+  static boolean isKeyframeVerified(String encoder) {
+    return traitsOf(encoder).keyframeVerified();
+  }
+
   private static EncoderTraits traitsOf(TranscodeJob job) {
-    return ENCODER_TRAITS.getOrDefault(job.videoEncoder(), UNLISTED_ENCODER);
+    return traitsOf(job.videoEncoder());
+  }
+
+  private static EncoderTraits traitsOf(String encoder) {
+    return ENCODER_TRAITS.getOrDefault(encoder, UNLISTED_ENCODER);
   }
 
   private void addFragmentedMp4Output(List<String> cmd) {
