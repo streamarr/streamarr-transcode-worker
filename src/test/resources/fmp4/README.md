@@ -245,8 +245,11 @@ The list is one argument, and Linux passes an argument of at most 131,071 bytes 
 terminating NUL (32 pages of 4 KiB). `FfmpegCommandBuilder` ends the list at the last time that fits:
 21,370 boundaries at a 6 s period from zero (35.6 h), 22,771 at 2 s (12.6 h). Past it only the GOP
 places keyframes. A GOP of ceil(P × fps) + 1 frames is longer than a period, so its keyframes drift
-later each time and eventually skip a whole interval. When the list ends before the last advertised
-boundary, every encoder therefore takes floor(P × fps), keyframe-verified or not.
+later each time and eventually skip a whole interval. When the list from the variant's first segment
+ends before the last advertised boundary, every encoder therefore takes floor(P × fps),
+keyframe-verified or not. Every attempt of the variant takes that GOP, even one whose own list fits:
+libx265 writes its settings into the initialization segment, and 13 and 13c, keyint=145 and
+keyint=143, differ from byte 1,205 of their 3,847-byte initialization segments.
 
 ## The HLS muxer as differential evidence
 
