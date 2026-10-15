@@ -32,11 +32,13 @@ import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import lombok.Builder;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
@@ -53,6 +55,7 @@ import tools.jackson.databind.ObjectMapper;
 @Tag("ImageTest")
 @DisplayName("Worker Image Tests")
 @Slf4j
+@Timeout(value = 5, unit = TimeUnit.MINUTES)
 class WorkerImageIT {
 
   // A decomposed (NFD) accent, literal percent sequences, and names outside the BMP must all reach
