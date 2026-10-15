@@ -20,7 +20,7 @@ record TranscodeWorkerSettings(
     TranscodeWorkerConfiguration workerConfiguration) {
 
   private static final String PREFIX = "TRANSCODE_WORKER_";
-  private static final String DEFAULT_FRAGMENTATION_TARGET = "1s";
+  private static final String DEFAULT_FRAGMENTATION_TARGET = "250ms";
   private static final Pattern DURATION = Pattern.compile("(-?\\d+)(ns|us|ms|s|m|h)");
   private static final Map<String, ChronoUnit> DURATION_UNITS =
       Map.of(
