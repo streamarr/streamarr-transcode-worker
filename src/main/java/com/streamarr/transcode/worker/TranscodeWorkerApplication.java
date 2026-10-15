@@ -61,8 +61,11 @@ public class TranscodeWorkerApplication {
             .launcher(new ProcessBuilderLauncher())
             .encoderStallTimeout(settings.encoderStallTimeout())
             .build();
-    var ffprobe = FfprobeExecutor.forBinary(Path.of(settings.ffprobePath()));
-    return new TranscodeWorker(settings.workerConfiguration(), engine, ffprobe);
+    return TranscodeWorker.builder()
+        .configuration(settings.workerConfiguration())
+        .engine(engine)
+        .ffprobe(FfprobeExecutor.forBinary(Path.of(settings.ffprobePath())))
+        .build();
   }
 
   @Bean

@@ -94,13 +94,6 @@ public final class TranscodeWorker implements AutoCloseable {
     this(configuration, engine, Optional.empty(), new GrpcWorkerRuntime());
   }
 
-  public TranscodeWorker(
-      TranscodeWorkerConfiguration configuration,
-      FfmpegTranscodeEngine engine,
-      @NonNull FfprobeExecutor ffprobe) {
-    this(configuration, engine, Optional.of(ffprobe), new GrpcWorkerRuntime());
-  }
-
   @Builder
   private TranscodeWorker(
       @NonNull TranscodeWorkerConfiguration configuration,
