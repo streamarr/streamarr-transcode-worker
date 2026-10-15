@@ -33,8 +33,7 @@ import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
 import com.streamarr.transcode.engine.TranscodeCapabilityService;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
-import io.grpc.Server;
-import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
+import com.streamarr.transcode.worker.support.ControlPlaneServer;
 import io.grpc.stub.ServerCallStreamObserver;
 import io.grpc.stub.StreamObserver;
 import java.io.IOException;
@@ -75,7 +74,7 @@ class TranscodeWorkerUploadProtocolIT {
     var service = ControllableUploadService.leavesUploadRpcOpen();
     var job = variantJob();
 
-    try (var server = new TestServer(service);
+    try (var server = new ControlPlaneServer(service);
         var worker = worker(engine(launcher), mediaRoot)) {
       server.start();
       worker.start("localhost", server.port());
@@ -101,7 +100,7 @@ class TranscodeWorkerUploadProtocolIT {
     var service = ControllableUploadService.acknowledgesFewerBytes();
     var job = variantJob();
 
-    try (var server = new TestServer(service);
+    try (var server = new ControlPlaneServer(service);
         var worker = worker(engine(launcher), mediaRoot)) {
       server.start();
       worker.start("localhost", server.port());
@@ -125,7 +124,7 @@ class TranscodeWorkerUploadProtocolIT {
     var service = ControllableUploadService.closesWithoutResponse();
     var job = variantJob();
 
-    try (var server = new TestServer(service);
+    try (var server = new ControlPlaneServer(service);
         var worker = worker(engine(launcher), mediaRoot)) {
       server.start();
       worker.start("localhost", server.port());
@@ -152,7 +151,7 @@ class TranscodeWorkerUploadProtocolIT {
     var service = ControllableUploadService.leavesUploadRpcOpen();
     var job = variantJob();
 
-    try (var server = new TestServer(service);
+    try (var server = new ControlPlaneServer(service);
         var worker = worker(unavailableEngine(), mediaRoot)) {
       server.start();
       worker.start("localhost", server.port());
@@ -362,33 +361,6 @@ class TranscodeWorkerUploadProtocolIT {
       LEAVES_RPC_OPEN,
       ACKNOWLEDGES_FEWER_BYTES,
       CLOSES_WITHOUT_RESPONSE
-    }
-  }
-
-  private final class TestServer implements AutoCloseable {
-
-    private final ControllableUploadService service;
-    private Server server;
-
-    private TestServer(ControllableUploadService service) {
-      this.service = service;
-    }
-
-    private void start() throws Exception {
-      server = NettyServerBuilder.forPort(0).addService(service).build().start();
-    }
-
-    private int port() {
-      return server.getPort();
-    }
-
-    @Override
-    public void close() throws InterruptedException {
-      if (server == null) {
-        return;
-      }
-      server.shutdownNow();
-      server.awaitTermination(5, TimeUnit.SECONDS);
     }
   }
 }
