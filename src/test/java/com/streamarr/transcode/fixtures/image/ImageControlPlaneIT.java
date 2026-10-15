@@ -1,7 +1,7 @@
 package com.streamarr.transcode.fixtures.image;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.awaitility.Awaitility.await;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
@@ -15,7 +15,15 @@ import io.grpc.ManagedChannel;
 import io.grpc.Status;
 import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
 import io.grpc.stub.StreamObserver;
+import java.io.IOException;
+import java.net.BindException;
+import java.net.ConnectException;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -24,52 +32,67 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 import lombok.Builder;
+import lombok.NonNull;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.parallel.Execution;
-import org.junit.jupiter.api.parallel.ExecutionMode;
-import org.junit.jupiter.api.parallel.Isolated;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
 @Tag("IntegrationTest")
-@Isolated
-@Execution(ExecutionMode.SAME_THREAD)
 @DisplayName("Image Control Plane Tests")
 class ImageControlPlaneIT {
-  private Thread server;
+  private static final InetAddress LOOPBACK = InetAddress.getLoopbackAddress();
+  private static final ImageControlPlane.ListenAddresses EPHEMERAL_LOOPBACK_ADDRESSES =
+      ImageControlPlane.ListenAddresses.builder()
+          .grpc(new InetSocketAddress(LOOPBACK, 0))
+          .command(new InetSocketAddress(LOOPBACK, 0))
+          .build();
+
+  private ImageControlPlane.Serving controlPlane;
   private HttpClient http;
 
   @BeforeEach
-  void startServer() {
+  void startServer() throws IOException, InterruptedException {
     http = HttpClient.newHttpClient();
-    server =
-        Thread.ofVirtual()
-            .start(
-                () -> {
-                  try {
-                    ImageControlPlane.main();
-                  } catch (InterruptedException _) {
-                    Thread.currentThread().interrupt();
-                  } catch (Exception failure) {
-                    throw new IllegalStateException(failure);
-                  }
-                });
-    await()
-        .atMost(Duration.ofSeconds(10))
-        .ignoreExceptions()
-        .untilAsserted(() -> assertThat(post("ready", new byte[0]).statusCode()).isEqualTo(200));
+    controlPlane = ImageControlPlane.serve(EPHEMERAL_LOOPBACK_ADDRESSES);
   }
 
   @AfterEach
   void stopServer() throws InterruptedException {
     http.close();
-    server.interrupt();
-    server.join(Duration.ofSeconds(10));
-    assertThat(server.isAlive()).as("control-plane server stopped").isFalse();
+    controlPlane.close();
+  }
+
+  @Test
+  @DisplayName("Should listen only on loopback when the test serves the control plane")
+  void shouldListenOnlyOnLoopbackWhenTheTestServesTheControlPlane() {
+    assertThat(Stream.of(controlPlane.grpcAddress(), controlPlane.commandAddress()))
+        .allSatisfy(address -> assertThat(address.getAddress().isLoopbackAddress()).isTrue());
+  }
+
+  @Test
+  @DisplayName("Should release the gRPC listener when the command listener cannot bind")
+  void shouldReleaseTheGrpcListenerWhenTheCommandListenerCannotBind() throws IOException {
+    var grpc = new InetSocketAddress(LOOPBACK, freePort());
+    var addresses =
+        ImageControlPlane.ListenAddresses.builder()
+            .grpc(grpc)
+            .command(controlPlane.commandAddress())
+            .build();
+
+    assertThatThrownBy(() -> ImageControlPlane.serve(addresses)).isInstanceOf(BindException.class);
+
+    assertThatThrownBy(() -> new Socket(grpc.getAddress(), grpc.getPort()).close())
+        .isInstanceOf(ConnectException.class);
+  }
+
+  private static int freePort() throws IOException {
+    try (var socket = new ServerSocket(0, 0, LOOPBACK)) {
+      return socket.getLocalPort();
+    }
   }
 
   @Test
@@ -86,7 +109,7 @@ class ImageControlPlaneIT {
   @DisplayName("Should report the terminal outcome when the expected job result cannot arrive")
   void shouldReportTheTerminalOutcomeWhenTheExpectedJobResultCannotArrive(JobOutcome outcome)
       throws Exception {
-    try (var peer = WorkerPeer.builder().build()) {
+    try (var peer = WorkerPeer.builder().address(controlPlane.grpcAddress()).build()) {
       post("accept", new byte[0]);
       var response =
           http.sendAsync(
@@ -154,7 +177,11 @@ class ImageControlPlaneIT {
   void shouldReportTheSessionTerminationWhenAnExpectedResultIsPending(SessionOutcome outcome)
       throws Exception {
     var waitingForRegistration = outcome.command().equals("registration");
-    try (var peer = WorkerPeer.builder().withoutRegistration(waitingForRegistration).build()) {
+    try (var peer =
+        WorkerPeer.builder()
+            .address(controlPlane.grpcAddress())
+            .withoutRegistration(waitingForRegistration)
+            .build()) {
       if (!waitingForRegistration) {
         post("accept", new byte[0]);
       }
@@ -208,13 +235,13 @@ class ImageControlPlaneIT {
 
   @DisplayName("Worker Peer")
   private static final class WorkerPeer implements AutoCloseable {
-    private final ManagedChannel channel =
-        NettyChannelBuilder.forAddress("127.0.0.1", 9090).usePlaintext().build();
+    private final ManagedChannel channel;
     private final CompletableFuture<Void> command = new CompletableFuture<>();
     private final StreamObserver<EstablishWorkerSessionRequest> requests;
 
     @Builder
-    private WorkerPeer(boolean withoutRegistration) {
+    private WorkerPeer(@NonNull InetSocketAddress address, boolean withoutRegistration) {
+      channel = NettyChannelBuilder.forAddress(address).usePlaintext().build();
       requests =
           TranscodeWorkerServiceGrpc.newStub(channel)
               .establishWorkerSession(
@@ -256,8 +283,11 @@ class ImageControlPlaneIT {
     }
   }
 
-  private HttpRequest request(String command, byte[] body) {
-    return HttpRequest.newBuilder(URI.create("http://127.0.0.1:8082/" + command))
+  private HttpRequest request(String command, byte[] body) throws URISyntaxException {
+    var listener = controlPlane.commandAddress();
+    var host = listener.getAddress().getHostAddress();
+    return HttpRequest.newBuilder(
+            new URI("http", null, host, listener.getPort(), "/" + command, null, null))
         .timeout(Duration.ofSeconds(3))
         .POST(HttpRequest.BodyPublishers.ofByteArray(body))
         .build();

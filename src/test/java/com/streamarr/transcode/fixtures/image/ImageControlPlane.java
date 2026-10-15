@@ -21,6 +21,7 @@ import build.buf.gen.streamarr.transcode.v1.WorkerRegistration;
 import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import io.grpc.Server;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.grpc.stub.StreamObserver;
 import java.io.ByteArrayOutputStream;
@@ -32,8 +33,13 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import lombok.AccessLevel;
+import lombok.Builder;
+import lombok.NonNull;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
@@ -52,20 +58,67 @@ public final class ImageControlPlane
   private final Map<String, byte[]> segments = new ConcurrentHashMap<>();
   private StreamObserver<EstablishWorkerSessionResponse> responses;
 
+  // The image's worker reaches its control plane at its default endpoint, 127.0.0.1:9090.
+  private static final ListenAddresses IMAGE_ADDRESSES =
+      ListenAddresses.builder()
+          .grpc(new InetSocketAddress(9090))
+          .command(new InetSocketAddress(8082))
+          .build();
+
   public static void main() throws Exception {
+    try (var _ = serve(IMAGE_ADDRESSES)) {
+      new CountDownLatch(1).await();
+    }
+  }
+
+  static Serving serve(ListenAddresses addresses) throws IOException, InterruptedException {
     var controlPlane = new ImageControlPlane();
-    var grpc = NettyServerBuilder.forPort(9090).addService(controlPlane).build().start();
-    var http = HttpServer.create(new InetSocketAddress(8082), 0);
-    try (var threads = Executors.newVirtualThreadPerTaskExecutor()) {
+    var grpc =
+        NettyServerBuilder.forAddress(addresses.grpc()).addService(controlPlane).build().start();
+    try {
+      var http = HttpServer.create(addresses.command(), 0);
+      var threads = Executors.newVirtualThreadPerTaskExecutor();
       http.setExecutor(threads);
       http.createContext("/", controlPlane::exchange);
       http.start();
-      try {
-        new CountDownLatch(1).await();
-      } finally {
+      return new Serving(grpc, http, threads);
+    } catch (IOException | RuntimeException failure) {
+      stop(grpc);
+      throw failure;
+    }
+  }
+
+  private static void stop(Server grpc) throws InterruptedException {
+    grpc.shutdownNow();
+    if (!grpc.awaitTermination(10, TimeUnit.SECONDS)) {
+      throw new IllegalStateException("The control-plane gRPC server did not stop in 10 seconds");
+    }
+  }
+
+  /** Addresses to listen on; port 0 binds an ephemeral port. */
+  @Builder
+  record ListenAddresses(@NonNull InetSocketAddress grpc, @NonNull InetSocketAddress command) {}
+
+  @RequiredArgsConstructor(access = AccessLevel.PRIVATE)
+  static final class Serving implements AutoCloseable {
+    private final Server grpc;
+    private final HttpServer http;
+    private final ExecutorService threads;
+
+    InetSocketAddress grpcAddress() {
+      // A Netty server started on one InetSocketAddress listens on exactly that socket.
+      return (InetSocketAddress) grpc.getListenSockets().getFirst();
+    }
+
+    InetSocketAddress commandAddress() {
+      return http.getAddress();
+    }
+
+    @Override
+    public void close() throws InterruptedException {
+      try (threads) {
         http.stop(0);
-        grpc.shutdownNow();
-        grpc.awaitTermination(10, TimeUnit.SECONDS);
+        stop(grpc);
       }
     }
   }
