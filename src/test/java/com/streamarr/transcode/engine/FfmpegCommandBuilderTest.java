@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Stream;
@@ -47,6 +48,7 @@ class FfmpegCommandBuilderTest {
         .framerate(23.976)
         .mediaSegmentCount(11)
         .transcodeDecision(decision)
+        .encoderPreset(EncoderPreset.FASTER)
         .width(1920)
         .height(1080)
         .bitrate(5_000_000L);
@@ -97,6 +99,105 @@ class FfmpegCommandBuilderTest {
         .containsSubsequence("-c:a", "copy")
         .doesNotContain("-vf")
         .doesNotContain("-b:v", "-maxrate", "-bufsize");
+  }
+
+  @ParameterizedTest(name = "{0} is {1}")
+  @MethodSource("presetNames")
+  @DisplayName("Should pass the preset name when the encoder is libx264")
+  void shouldPassPresetNameWhenEncoderIsLibx264(EncoderPreset preset, String presetName) {
+    var request = request(TranscodeMode.FULL_TRANSCODE).encoderPreset(preset).build();
+
+    var cmd = command(request, "libx264");
+
+    assertThat(cmd)
+        .containsSequence("-c:v", "libx264", "-preset", presetName)
+        .containsOnlyOnce("-preset");
+  }
+
+  @ParameterizedTest(name = "{0} is {1}")
+  @MethodSource("presetNames")
+  @DisplayName("Should pass the preset name when the encoder is libx265")
+  void shouldPassPresetNameWhenEncoderIsLibx265(EncoderPreset preset, String presetName) {
+    var request = request(TranscodeMode.FULL_TRANSCODE).encoderPreset(preset).build();
+
+    var cmd = command(request, "libx265");
+
+    assertThat(cmd)
+        .containsSequence("-c:v", "libx265", "-preset", presetName)
+        .containsOnlyOnce("-preset");
+  }
+
+  @ParameterizedTest(name = "{0} is preset {1}")
+  @CsvSource({
+    "VERYSLOW, 5",
+    "SLOWER, 6",
+    "SLOW, 7",
+    "MEDIUM, 8",
+    "FAST, 9",
+    "FASTER, 10",
+    "VERYFAST, 11",
+    "SUPERFAST, 12",
+    "ULTRAFAST, 13"
+  })
+  @DisplayName("Should pass the scale number when the encoder is libsvtav1")
+  void shouldPassScaleNumberWhenEncoderIsLibsvtav1(EncoderPreset preset, String svtAv1Preset) {
+    var request = request(TranscodeMode.FULL_TRANSCODE).encoderPreset(preset).build();
+
+    var cmd = command(request, "libsvtav1");
+
+    assertThat(cmd)
+        .containsSequence("-c:v", "libsvtav1", "-preset", svtAv1Preset)
+        .containsOnlyOnce("-preset");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(
+      strings = {
+        "h264_nvenc",
+        "hevc_nvenc",
+        "av1_nvenc",
+        "h264_qsv",
+        "hevc_qsv",
+        "av1_qsv",
+        "h264_amf",
+        "hevc_amf",
+        "av1_amf",
+        "h264_rkmpp",
+        "hevc_rkmpp",
+        "h264_videotoolbox",
+        "hevc_videotoolbox",
+        "h264_vaapi"
+      })
+  @DisplayName("Should pass no preset when the encoder is hardware")
+  void shouldPassNoPresetWhenEncoderIsHardware(String hardwareEncoder) {
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), hardwareEncoder);
+
+    assertThat(cmd).contains(hardwareEncoder).doesNotContain("-preset");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"REMUX", "AUDIO_TRANSCODE"})
+  @DisplayName("Should pass no preset when the job copies the video")
+  void shouldPassNoPresetWhenJobCopiesTheVideo(TranscodeMode mode) {
+    var cmd = command(request(mode).build(), "copy");
+
+    assertThat(cmd).containsSequence("-c:v", "copy").doesNotContain("-preset");
+  }
+
+  // libx264 and libx265 take the scale's own names.
+  static Stream<Arguments> presetNames() {
+    return Stream.of(
+        Arguments.of(EncoderPreset.ULTRAFAST, "ultrafast"),
+        Arguments.of(EncoderPreset.SUPERFAST, "superfast"),
+        Arguments.of(EncoderPreset.VERYFAST, "veryfast"),
+        Arguments.of(EncoderPreset.FASTER, "faster"),
+        Arguments.of(EncoderPreset.FAST, "fast"),
+        Arguments.of(EncoderPreset.MEDIUM, "medium"),
+        Arguments.of(EncoderPreset.SLOW, "slow"),
+        Arguments.of(EncoderPreset.SLOWER, "slower"),
+        Arguments.of(EncoderPreset.VERYSLOW, "veryslow"));
   }
 
   @ParameterizedTest(name = "{0}")
@@ -349,6 +450,80 @@ class FfmpegCommandBuilderTest {
         .endsWith(",128208,128214");
   }
 
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"libx264", "libsvtav1", "libx265"})
+  @DisplayName(
+      "Should round the GOP down to whole frames in a segment period when the list ends before the"
+          + " last advertised boundary")
+  void shouldRoundTheGopDownToWholeFramesInASegmentPeriodWhenTheListEndsBeforeTheLastBoundary(
+      String encoder) {
+    var cmd =
+        command(
+            request(TranscodeMode.FULL_TRANSCODE)
+                .startSequenceNumber(1670)
+                .mediaSegmentCount(22_538)
+                .build(),
+            encoder);
+
+    assertThat(cmd).containsSequence("-g:v:0", "143");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"libx264", "libsvtav1", "libx265"})
+  @DisplayName(
+      "Should lengthen the GOP one frame past the rounded-up period when the list from the first"
+          + " segment fills the longest argument and reaches the last advertised boundary")
+  void shouldLengthenTheGopWhenTheListFromTheFirstSegmentReachesTheLastBoundary(String encoder) {
+    // 21,370 boundaries from zero at a 6 s period make a list of 131,069 bytes.
+    var cmd =
+        command(request(TranscodeMode.FULL_TRANSCODE).mediaSegmentCount(21_370).build(), encoder);
+
+    assertThat(cmd).containsSequence("-g:v:0", "145");
+  }
+
+  @ParameterizedTest(name = "{0}, {1} advertised segments")
+  @CsvSource({
+    "libx264, 21370",
+    "libx264, 21371",
+    "libsvtav1, 21370",
+    "libsvtav1, 21371",
+    "libx265, 21370",
+    "libx265, 21371"
+  })
+  @DisplayName(
+      "Should give a replacement attempt the start attempt's encoder arguments apart from its seek"
+          + " and forced keyframes when the list from the first segment does or does not fit")
+  void shouldGiveAReplacementAttemptTheStartAttemptsEncoderArgumentsWhetherOrNotTheListFits(
+      String encoder, int mediaSegmentCount) {
+    // libx265 writes its settings, the GOP among them, into the initialization segment.
+    var startAttempt =
+        command(
+            request(TranscodeMode.FULL_TRANSCODE).mediaSegmentCount(mediaSegmentCount).build(),
+            encoder);
+    var replacementAttempt =
+        command(
+            request(TranscodeMode.FULL_TRANSCODE)
+                .startSequenceNumber(21_000)
+                .mediaSegmentCount(mediaSegmentCount)
+                .build(),
+            encoder);
+
+    assertThat(withoutSeekAndForcedKeyframes(replacementAttempt))
+        .containsExactlyElementsOf(withoutSeekAndForcedKeyframes(startAttempt));
+  }
+
+  private static List<String> withoutSeekAndForcedKeyframes(List<String> cmd) {
+    var remaining = new ArrayList<>(cmd);
+    for (var option : List.of("-ss", "-force_key_frames:0")) {
+      var index = remaining.indexOf(option);
+      if (index >= 0) {
+        remaining.subList(index, index + 2).clear();
+      }
+    }
+
+    return remaining;
+  }
+
   private static String forcedKeyframeTimes(List<String> cmd) {
     return cmd.get(cmd.indexOf("-force_key_frames:0") + 1);
   }
@@ -375,7 +550,7 @@ class FfmpegCommandBuilderTest {
   }
 
   @ParameterizedTest(name = "{0}")
-  @ValueSource(strings = {"libx264", "libsvtav1"})
+  @ValueSource(strings = {"libx264", "libsvtav1", "libx265"})
   @DisplayName(
       "Should lengthen the GOP one frame past the rounded-up period when the encoder is verified")
   void shouldLengthenTheGopOneFramePastTheRoundedUpPeriodWhenTheEncoderIsVerified(String encoder) {
@@ -388,7 +563,6 @@ class FfmpegCommandBuilderTest {
   @ParameterizedTest(name = "{0}")
   @ValueSource(
       strings = {
-        "libx265",
         "h264_nvenc",
         "hevc_qsv",
         "av1_amf",
@@ -424,7 +598,7 @@ class FfmpegCommandBuilderTest {
           + " encoder is not verified")
   void
       shouldKeepEveryFrameOfThePeriodInTheGopWhenThePeriodSpansWholeFramesAndTheEncoderIsNotVerified() {
-    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).framerate(25.0).build(), "libx265");
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).framerate(25.0).build(), "h264_vaapi");
 
     assertThat(cmd).containsSequence("-g:v:0", "150");
   }
@@ -600,11 +774,23 @@ class FfmpegCommandBuilderTest {
   }
 
   @Test
-  @DisplayName("Should leave scene-cut detection to the encoder when encoder is libx265")
-  void shouldLeaveSceneCutDetectionToTheEncoderWhenEncoderIsLibx265() {
+  @DisplayName("Should close GOPs when encoder is libx265")
+  void shouldCloseGopsWhenEncoderIsLibx265() {
     var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), "libx265");
 
-    assertThat(cmd).isNotEmpty().doesNotContain("-sc_threshold:v:0");
+    assertThat(cmd)
+        .containsSequence("-x265-params", "no-scenecut=1:no-open-gop=1")
+        .containsOnlyOnce("-x265-params")
+        .doesNotContain("-sc_threshold:v:0");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"libx264", "libsvtav1", "hevc_nvenc", "hevc_videotoolbox"})
+  @DisplayName("Should pass no x265 parameters when encoder is not libx265")
+  void shouldPassNoX265ParametersWhenEncoderIsNotLibx265(String encoder) {
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), encoder);
+
+    assertThat(cmd).isNotEmpty().doesNotContain("-x265-params");
   }
 
   @Test

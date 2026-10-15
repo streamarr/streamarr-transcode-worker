@@ -9,6 +9,7 @@ import build.buf.gen.streamarr.transcode.v1.AudioDecision;
 import build.buf.gen.streamarr.transcode.v1.AudioMode;
 import build.buf.gen.streamarr.transcode.v1.CancelProbeCommand;
 import build.buf.gen.streamarr.transcode.v1.ContainerFormat;
+import build.buf.gen.streamarr.transcode.v1.EncoderPreset;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
 import build.buf.gen.streamarr.transcode.v1.MediaSourceRef;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
@@ -140,7 +141,10 @@ public final class WorkerProbeFixtures {
                 .setSubtitle(
                     SubtitleDecision.newBuilder().setMode(SubtitleMode.SUBTITLE_MODE_EXCLUDE))
                 .setContainer(ContainerFormat.CONTAINER_FORMAT_FMP4))
-        .setVariant(VariantSpec.newBuilder().setVariantLabel("original"))
+        .setVariant(
+            VariantSpec.newBuilder()
+                .setVariantLabel("original")
+                .setEncoderPreset(EncoderPreset.ENCODER_PRESET_FASTER))
         .setExecution(
             TranscodeExecution.newBuilder()
                 .setTargetSegmentDurationSeconds(6)

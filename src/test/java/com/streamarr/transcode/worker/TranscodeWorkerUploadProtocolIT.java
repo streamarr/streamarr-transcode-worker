@@ -9,6 +9,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import build.buf.gen.streamarr.transcode.v1.AudioDecision;
 import build.buf.gen.streamarr.transcode.v1.AudioMode;
 import build.buf.gen.streamarr.transcode.v1.ContainerFormat;
+import build.buf.gen.streamarr.transcode.v1.EncoderPreset;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest.EventCase;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
@@ -248,7 +249,8 @@ class TranscodeWorkerUploadProtocolIT {
                 .setVariantLabel("720p")
                 .setWidth(1920)
                 .setHeight(1080)
-                .setBitrateBitsPerSecond(5_000_000))
+                .setBitrateBitsPerSecond(5_000_000)
+                .setEncoderPreset(EncoderPreset.ENCODER_PRESET_FASTER))
         .setExecution(
             TranscodeExecution.newBuilder()
                 .setTargetSegmentDurationSeconds(6)

@@ -253,7 +253,14 @@ public final class TranscodeWorker implements AutoCloseable {
     return command.getTarget().equals(identity())
         && job.getDecision().getContainer() == ContainerFormat.CONTAINER_FORMAT_FMP4
         && hasUsableFrameRate(job)
+        && hasEncoderPresetForVideoEncode(job)
         && startsAtAnAdvertisedMediaSegment(job);
+  }
+
+  // A job that copies the video ignores its preset.
+  private static boolean hasEncoderPresetForVideoEncode(VariantJob job) {
+    return !WorkerVariantJobMapper.encodesVideo(job)
+        || WorkerVariantJobMapper.hasEncoderPreset(job);
   }
 
   // The server advertises the variant's media segment count to every job attempt; zero is unset.

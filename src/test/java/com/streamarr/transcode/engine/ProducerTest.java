@@ -127,7 +127,12 @@ class ProducerTest {
   }
 
   @ParameterizedTest(name = "{0}")
-  @ValueSource(strings = {"01-encode-cfr-seek30.fmp4", "09-svtav1-vfr-seek30.fmp4"})
+  @ValueSource(
+      strings = {
+        "01-encode-cfr-seek30.fmp4",
+        "09-svtav1-vfr-seek30.fmp4",
+        "13-x265-cfr-seek30.fmp4"
+      })
   @DisplayName(
       "Should discard the period before the first segment and deliver that segment from its"
           + " boundary when an encoded replacement attempt seeks one period early")

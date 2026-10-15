@@ -541,7 +541,7 @@ class TranscodeCapabilityServiceTest {
                 .build(),
             WorkerVerifiedEncoder.builder()
                 .backend(softwareBackend(CodecFamily.HEVC, "libx265"))
-                .keyframeVerified(false)
+                .keyframeVerified(true)
                 .build(),
             WorkerVerifiedEncoder.builder()
                 .backend(softwareBackend(CodecFamily.AV1, "libsvtav1"))

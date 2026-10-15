@@ -8,6 +8,7 @@ import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerB
 import static org.assertj.core.api.Assertions.assertThat;
 
 import build.buf.gen.streamarr.transcode.v1.AudioMode;
+import build.buf.gen.streamarr.transcode.v1.EncoderPreset;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptCompleted;
@@ -28,6 +29,7 @@ import com.streamarr.transcode.engine.ProcessLauncher;
 import com.streamarr.transcode.engine.TranscodeCapabilityService;
 import com.streamarr.transcode.probe.FfprobeExecutor;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
+import com.streamarr.transcode.worker.support.X264Options;
 import io.grpc.Server;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.grpc.stub.StreamObserver;
@@ -81,6 +83,18 @@ class WorkerMediaSmokeTest {
   // The 10-bit source spans segments 0 and 1 at the default 6 s period.
   private static final int TEN_BIT_SOURCE_SECONDS = 8;
   private static final int TEN_BIT_SOURCE_SEGMENT_COUNT = 2;
+
+  // The scene-cut source spans segments 0 to 2 at the default 6 s period.
+  private static final int SCENE_CUT_SOURCE_FRAME_RATE = 30;
+  private static final int SCENE_CUT_SOURCE_SEGMENT_COUNT = 3;
+
+  // HEVC NAL unit types (ITU-T H.265, table 7-1): pictures are types 0 to 31, and the random
+  // access pictures that a decoder can start at (BLA, IDR and CRA) are types 16 to 23.
+  private static final int HEVC_LAST_VIDEO_CODING_LAYER_TYPE = 31;
+  private static final int HEVC_FIRST_RANDOM_ACCESS_TYPE = 16;
+  private static final int HEVC_LAST_RANDOM_ACCESS_TYPE = 23;
+  private static final int HEVC_IDR_W_RADL = 19;
+  private static final int HEVC_IDR_N_LP = 20;
 
   private static final Duration JOB_LIMIT = Duration.ofMinutes(5);
   private static final int PERMITTED_KEEPALIVE_SECONDS = 10;
@@ -387,6 +401,186 @@ class WorkerMediaSmokeTest {
     assertThat(uploads.names()).containsExactlyElementsOf(uploadNames(LONG_SOURCE_SECONDS));
     var start = playable(uploads.contentOf(List.of("init.mp4", "segment0.m4s")));
     assertThat(video(start).getCodec()).isEqualTo(codecFamily);
+  }
+
+  @Test
+  @DisplayName("Should start every media segment with an IDR picture when encoder is libx265")
+  void shouldStartEveryMediaSegmentWithIdrWhenEncoderIsLibx265() throws Exception {
+    var source = sceneCutSource();
+    var job = variantJobBuilder();
+    job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
+    job.getDecisionBuilder()
+        .setMode(TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE)
+        .setVideoCodecFamily("hevc")
+        .getAudioBuilder()
+        .setMode(AudioMode.AUDIO_MODE_NONE);
+    job.getVariantBuilder().setWidth(320).setHeight(180).setBitrateBitsPerSecond(200_000);
+    job.getExecutionBuilder()
+        .setFramerate(SCENE_CUT_SOURCE_FRAME_RATE)
+        .setMediaSegmentCount(SCENE_CUT_SOURCE_SEGMENT_COUNT);
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    var uploadNames = uploadNames(SCENE_CUT_SOURCE_SEGMENT_COUNT);
+    assertThat(uploads.names()).containsExactlyElementsOf(uploadNames);
+    assertThat(uploadNames.subList(1, uploadNames.size()))
+        .allSatisfy(
+            segment -> {
+              var pictures = hevcPictureTypes(uploads.contentOf(List.of("init.mp4", segment)));
+              assertThat(pictures)
+                  .as("the HEVC picture types of %s in decode order", segment)
+                  .first()
+                  .isIn(HEVC_IDR_W_RADL, HEVC_IDR_N_LP);
+              assertThat(pictures.subList(1, pictures.size()))
+                  .as("the HEVC picture types inside %s", segment)
+                  .noneMatch(WorkerMediaSmokeTest::isHevcRandomAccessPicture);
+            });
+  }
+
+  @Test
+  @DisplayName(
+      "Should write the faster preset's settings into the x264 options when the job carries the"
+          + " faster preset")
+  void shouldWriteTheFasterPresetsSettingsIntoTheX264OptionsWhenTheJobCarriesTheFasterPreset()
+      throws Exception {
+    var source = seekableSource("mkv");
+    var job = presetJob(source, "h264");
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    // x264's own definition of faster; its default, medium, sets ref=3, subme=7, mixed_ref=1,
+    // weightp=2 and rc_lookahead=40.
+    assertThat(X264Options.of(uploads.contentOf(uploads.names())))
+        .contains("ref=2", "subme=4", "mixed_ref=0", "weightp=1", "rc_lookahead=20");
+  }
+
+  @Test
+  @DisplayName(
+      "Should encode the bytes of SVT-AV1 preset 10 when the job carries the faster preset")
+  void shouldEncodeTheBytesOfSvtAv1Preset10WhenTheJobCarriesTheFasterPreset() throws Exception {
+    var source = seekableSource("mkv");
+    var job = presetJob(source, "av1");
+    var commands = new CopyOnWriteArrayList<List<String>>();
+    ProcessLauncher launcher = new ProcessBuilderLauncher();
+    launcher = withSvtAv1ParallelismOfOne(capturingCommands(launcher, commands));
+
+    var uploads =
+        execute(engine(softwareCapabilities(), launcher), source.getParent(), job.build());
+
+    // SVT-AV1 writes no preset into its sequence header, so the initialization segment is the same
+    // at every preset and only the media bytes show it. The references set the preset through
+    // SVT-AV1's own parameter instead of FFmpeg's -preset option, and leave it at the default.
+    var arguments = svtAv1ArgumentsWithoutPreset(commands.getFirst());
+    var preset10 = svtAv1Reference(arguments, ":preset=10");
+    var libraryDefault = svtAv1Reference(arguments, "");
+    var uploaded = uploads.contentOf(uploads.names());
+    assertThat(uploaded).isEqualTo(preset10).isNotEqualTo(libraryDefault);
+  }
+
+  private static VariantJob.Builder presetJob(Path source, String codecFamily) {
+    var job = variantJobBuilder();
+    job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
+    job.getDecisionBuilder()
+        .setMode(TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE)
+        .setVideoCodecFamily(codecFamily)
+        .getAudioBuilder()
+        .setMode(AudioMode.AUDIO_MODE_NONE);
+    job.getVariantBuilder()
+        .setWidth(64)
+        .setHeight(36)
+        .setBitrateBitsPerSecond(100_000)
+        .setEncoderPreset(EncoderPreset.ENCODER_PRESET_FASTER);
+    job.getExecutionBuilder().setMediaSegmentCount(SEEKABLE_SOURCE_SEGMENT_COUNT);
+    return job;
+  }
+
+  private static ProcessLauncher capturingCommands(
+      ProcessLauncher launcher, List<List<String>> commands) {
+    return (command, jobAttemptId) -> {
+      commands.add(List.copyOf(command));
+      return launcher.launch(command, jobAttemptId);
+    };
+  }
+
+  // The worker's arguments between "ffmpeg -y" and its pipe:1 output, without its -preset option.
+  private static List<String> svtAv1ArgumentsWithoutPreset(List<String> command) {
+    var arguments = new ArrayList<>(command.subList(2, command.size() - 1));
+    var preset = arguments.indexOf("-preset");
+    assertThat(preset).as("the position of the worker's -preset option").isNotNegative();
+    assertThat(arguments.subList(preset, preset + 2)).containsExactly("-preset", "10");
+    arguments.subList(preset, preset + 2).clear();
+    return arguments;
+  }
+
+  private byte[] svtAv1Reference(List<String> arguments, String addedParameters) throws Exception {
+    var adjusted = new ArrayList<>(arguments);
+    var parameters = adjusted.indexOf("-svtav1-params") + 1;
+    adjusted.set(parameters, adjusted.get(parameters) + addedParameters);
+    var output = Files.createTempFile(root, "reference", ".mp4");
+    runFfmpeg(adjusted, output);
+    return Files.readAllBytes(output);
+  }
+
+  // 18 s at 30 fps: a test pattern for 2.5 s, then color bars. The cut at frame 75 lies inside
+  // segment 0, where x265's scene-cut detection would otherwise place a keyframe.
+  private Path sceneCutSource() throws Exception {
+    var source = root.resolve("scene-cut.mkv");
+    runFfmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=320x180:rate=30:duration=2.5",
+            "-f",
+            "lavfi",
+            "-i",
+            "smptehdbars=size=320x180:rate=30:duration=15.5",
+            "-filter_complex",
+            "[0:v][1:v]concat=n=2:v=1:a=0",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast"),
+        source);
+    return source;
+  }
+
+  // Each picture's NAL unit type in decode order, read from the first slice of every picture
+  // after FFmpeg rewrites the length-prefixed samples as an Annex B stream.
+  private List<Integer> hevcPictureTypes(byte[] media) throws Exception {
+    var annexB = Files.createTempFile(root, "pictures", ".hevc");
+    runFfmpeg(
+        List.of(
+            "-i",
+            playable(media).toString(),
+            "-map",
+            "0:v:0",
+            "-c:v",
+            "copy",
+            "-bsf:v",
+            "hevc_mp4toannexb",
+            "-f",
+            "hevc"),
+        annexB);
+    var stream = Files.readAllBytes(annexB);
+    var pictures = new ArrayList<Integer>();
+    for (var at = 0; at + 5 < stream.length; at++) {
+      if (stream[at] != 0 || stream[at + 1] != 0 || stream[at + 2] != 1) {
+        continue;
+      }
+
+      var type = (stream[at + 3] >> 1) & 0x3f;
+      var firstSliceOfPicture = (stream[at + 5] & 0x80) != 0;
+      if (type <= HEVC_LAST_VIDEO_CODING_LAYER_TYPE && firstSliceOfPicture) {
+        pictures.add(type);
+      }
+    }
+
+    return pictures;
+  }
+
+  private static boolean isHevcRandomAccessPicture(int type) {
+    return type >= HEVC_FIRST_RANDOM_ACCESS_TYPE && type <= HEVC_LAST_RANDOM_ACCESS_TYPE;
   }
 
   @ParameterizedTest(name = "{0} source, {1}")
