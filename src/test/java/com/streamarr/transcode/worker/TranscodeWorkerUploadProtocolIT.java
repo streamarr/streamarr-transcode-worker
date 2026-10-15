@@ -49,10 +49,12 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
 @Tag("IntegrationTest")
 @DisplayName("Transcode Worker Upload Protocol Integration Tests")
+@Timeout(value = 2, unit = TimeUnit.MINUTES)
 class TranscodeWorkerUploadProtocolIT {
 
   private static final UUID WORKER_ID = UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
