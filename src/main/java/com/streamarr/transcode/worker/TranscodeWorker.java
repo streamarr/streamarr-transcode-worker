@@ -93,7 +93,7 @@ public final class TranscodeWorker implements AutoCloseable {
   private WorkerSessionAccepted workerSession;
   private WorkerProbeSession probeSession;
   private CompletableFuture<Void> disconnected;
-  private volatile WorkerResponseObserver responseObserver;
+  private final AtomicReference<WorkerResponseObserver> responseObserver = new AtomicReference<>();
 
   @Builder
   private TranscodeWorker(
@@ -135,15 +135,16 @@ public final class TranscodeWorker implements AutoCloseable {
             .executor(runtime.newProbeScope())
             .build();
     disconnected = new CompletableFuture<>();
-    responseObserver = new WorkerResponseObserver(accepted, probeSession);
-    requests = TranscodeWorkerServiceGrpc.newStub(channel).establishWorkerSession(responseObserver);
+    var observer = new WorkerResponseObserver(accepted, probeSession);
+    responseObserver.set(observer);
+    requests = TranscodeWorkerServiceGrpc.newStub(channel).establishWorkerSession(observer);
     sessionRequests.set(requests);
     send(registration());
     accepted.get(CONNECTION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
   }
 
   public boolean hasAcceptedSession() {
-    var observer = responseObserver;
+    var observer = responseObserver.get();
     return observer != null && observer.sessionAccepted && !observer.sessionDisconnected.isDone();
   }
 
@@ -603,7 +604,7 @@ public final class TranscodeWorker implements AutoCloseable {
 
   // Returns the closed session's probes and any attempt that started after the stops began.
   private synchronized Optional<ClosedSession> closeConnection() {
-    responseObserver = null;
+    responseObserver.set(null);
 
     if (channel == null) {
       return Optional.empty();
