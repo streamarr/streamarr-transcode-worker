@@ -35,7 +35,11 @@ class FfprobeExecutorProcessTest {
   void shouldReturnAnExecutionFailureWhenTheConfiguredBinaryIsUnavailable() {
     var executor = FfprobeExecutor.forBinary(temporaryDirectory.resolve("missing-ffprobe"));
 
-    assertThat(executor.probe(temporaryDirectory.resolve("movie.mkv"), request()).getFailure())
+    assertThat(
+            executor
+                .probe(temporaryDirectory.resolve("movie.mkv"), request())
+                .result()
+                .getFailure())
         .isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
   }
 
@@ -52,7 +56,9 @@ class FfprobeExecutorProcessTest {
         """);
 
     var result =
-        FfprobeExecutor.forBinary(binary).probe(temporaryDirectory.resolve("movie.mkv"), request());
+        FfprobeExecutor.forBinary(binary)
+            .probe(temporaryDirectory.resolve("movie.mkv"), request())
+            .result();
 
     assertThat(result.hasMedia()).isTrue();
     assertThat(result.getMedia().getStreamsList()).hasSize(1);
@@ -83,7 +89,7 @@ class FfprobeExecutorProcessTest {
         Thread.ofVirtual()
             .start(
                 () -> {
-                  var result = executor.probe(source, request);
+                  var result = executor.probe(source, request).result();
                   completion.complete(
                       new ProbeCompletion(
                           result,
@@ -128,7 +134,7 @@ class FfprobeExecutorProcessTest {
         """);
     var source = temporaryDirectory.resolve("movie with spaces.mkv");
 
-    var result = FfprobeExecutor.forBinary(binary).probe(source, request());
+    var result = FfprobeExecutor.forBinary(binary).probe(source, request()).result();
 
     assertThat(result.hasMedia()).isTrue();
     assertThat(result.getMedia().getStreams(0).getCodec()).isEqualTo("h264");

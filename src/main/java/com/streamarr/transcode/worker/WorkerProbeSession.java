@@ -6,6 +6,7 @@ import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import com.streamarr.transcode.probe.FfprobeExecutor;
+import com.streamarr.transcode.probe.ProbeAttemptReport;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -24,7 +25,7 @@ final class WorkerProbeSession implements AutoCloseable {
 
   @NonNull private final FfprobeExecutor ffprobe;
   @NonNull private final WorkerMediaSourceResolver sources;
-  @NonNull private final Consumer<ProbeAttemptResult> results;
+  @NonNull private final Consumer<ProbeAttemptReport> reports;
   @NonNull private final ExecutorService executor;
   private final Map<UUID, ProbeAttempt> attempts = new HashMap<>();
 
@@ -87,7 +88,7 @@ final class WorkerProbeSession implements AutoCloseable {
       complete(execute());
     }
 
-    private ProbeAttemptResult execute() {
+    private ProbeAttemptReport execute() {
       try {
         return ffprobe.probe(sources.resolve(request.getSource()), request);
       } catch (WorkerJobException exception) {
@@ -109,20 +110,21 @@ final class WorkerProbeSession implements AutoCloseable {
       }
     }
 
-    private ProbeAttemptResult failed(ProbeFailure failure) {
-      return ProbeAttemptResult.newBuilder()
-          .setProbeAttemptId(request.getProbeAttemptId())
-          .setProbeVersion(request.getProbeVersion())
-          .setFailure(failure)
-          .build();
+    private ProbeAttemptReport failed(ProbeFailure failure) {
+      return ProbeAttemptReport.resultOnly(
+          ProbeAttemptResult.newBuilder()
+              .setProbeAttemptId(request.getProbeAttemptId())
+              .setProbeVersion(request.getProbeVersion())
+              .setFailure(failure)
+              .build());
     }
 
-    private void complete(ProbeAttemptResult result) {
+    private void complete(ProbeAttemptReport report) {
       synchronized (WorkerProbeSession.this) {
-        attempts.remove(fromProto(result.getProbeAttemptId()), this);
+        attempts.remove(fromProto(report.result().getProbeAttemptId()), this);
       }
 
-      results.accept(result);
+      reports.accept(report);
     }
   }
 }
