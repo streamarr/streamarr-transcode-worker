@@ -179,6 +179,9 @@ class WorkerMediaSmokeTest {
   // 90 s of video at the default 6 s period.
   private static final int AUDIO_ENDS_LONG_BEFORE_VIDEO_SEGMENT_COUNT = 15;
 
+  // The fragmentation target that a worker passes FFmpeg unless its settings name another.
+  private static final Duration DEFAULT_FRAGMENTATION_TARGET = Duration.ofMillis(250);
+
   private static final Duration JOB_LIMIT = Duration.ofMinutes(5);
   private static final String EMPTY_EDIT_SOURCE = "mp4-empty-edit.mp4";
   private static final String TRIMMED_START_SOURCE = "mp4-trimmed-start.mp4";
@@ -2148,7 +2151,7 @@ class WorkerMediaSmokeTest {
     capabilities.detectCapabilities();
     assertThat(capabilities.isFfmpegAvailable()).as(capabilities.getUnavailableReason()).isTrue();
     return FfmpegTranscodeEngine.builder()
-        .commandBuilder(new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)))
+        .commandBuilder(new FfmpegCommandBuilder("ffmpeg", DEFAULT_FRAGMENTATION_TARGET))
         .capabilityService(capabilities)
         .launcher(launcher)
         .encoderStallTimeout(FfmpegTranscodeEngine.DEFAULT_ENCODER_STALL_TIMEOUT)
