@@ -350,6 +350,124 @@ class FfprobeExecutorKeyframeTest {
                 .build());
   }
 
+  @ParameterizedTest(name = "exit code {1}: {0}")
+  @CsvSource(
+      delimiter = '|',
+      value = {
+        "{\"packets\":[{\"pts\":35840,\"dts\":34816,\"flags\":\"K__\"}]} | 1",
+        "{\"packets\":[{\"pts\":35328,\"dts\":34816,\"flags\":\"K__\"}]} | 0",
+        "{\"packets\":[{\"pts\":35840,\"dts\":34816,\"flags\":\"___\"}]} | 0"
+      })
+  @DisplayName(
+      "Should require a packet scan when the read at the last indexed keyframe finds no such keyframe")
+  void shouldRequirePacketScanWhenReadAtLastIndexedKeyframeFindsNoSuchKeyframe(
+      String packets, int exitCode) {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(MP4_STREAMS)
+            .packet("2.916667%+#1", packets)
+            .packetReadExitCode(exitCode)
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mp4-bframes-editlist.mp4"), keyframeRequest());
+
+    assertThat(report.result().getMedia().getKeyframes())
+        .isEqualTo(
+            ProbeKeyframes.newBuilder()
+                .setPacketScanRequired(
+                    KeyframePacketScanReason
+                        .KEYFRAME_PACKET_SCAN_REASON_UNREADABLE_LAST_INDEXED_KEYFRAME)
+                .build());
+    assertThat(report.keyframePositionsParts()).isEmpty();
+  }
+
+  @Test
+  @DisplayName("Should keep the index times when ffprobe reports no container start time")
+  void shouldKeepIndexTimesWhenFfprobeReportsNoContainerStartTime() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(MP4_STREAMS.replace("\"start_time\":\"0.000000\",", ""))
+            .packet("2.916667%+#1", MP4_LAST_KEYFRAME)
+            .build();
+    var request = keyframeRequest();
+
+    var report = ffprobe.executor().probe(fixture("mp4-bframes-editlist.mp4"), request);
+
+    assertThat(report.keyframePositionsParts())
+        .containsExactly(
+            ProbeKeyframePositionsPart.newBuilder()
+                .setProbeAttemptId(request.getProbeAttemptId())
+                .addAllPresentationTimeDeltas(List.of(0L, 8_704L, 16_896L, 10_240L))
+                .addAllDecodeTimeDeltas(List.of(-1_024L, 8_704L, 16_896L, 10_240L))
+                .build());
+  }
+
+  @Test
+  @DisplayName(
+      "Should report the first video stream that is not a picture when audio and a picture precede it")
+  void shouldReportFirstVideoStreamThatIsNotPictureWhenAudioAndPicturePrecedeIt() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(
+                """
+                {"format":{"format_name":"mov,mp4,m4a,3gp,3g2,mj2","start_time":"0.000000"},
+                 "streams":[
+                  {"index":0,"codec_type":"audio","codec_name":"aac","id":"0x2",
+                   "disposition":{"attached_pic":0}},
+                  {"index":1,"codec_type":"video","codec_name":"mjpeg","id":"0x3",
+                   "disposition":{"attached_pic":1}},
+                  {"index":2,"codec_type":"video","codec_name":"h264","id":"0x1",
+                   "disposition":{"attached_pic":0}}]}
+                """)
+            .packet("2.916667%+#1", MP4_LAST_KEYFRAME)
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mp4-bframes-editlist.mp4"), keyframeRequest());
+
+    assertThat(report.result().getMedia().getKeyframes().getPositions())
+        .extracting(KeyframePositions::getStreamIndex, KeyframePositions::getKeyframeCount)
+        .containsExactly(2, 4);
+  }
+
+  @Test
+  @DisplayName(
+      "Should require a packet scan when ffprobe reports an MP4 track id that is not hexadecimal")
+  void shouldRequirePacketScanWhenFfprobeReportsMp4TrackIdThatIsNotHexadecimal() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(
+                """
+                {"format":{"format_name":"mov,mp4,m4a,3gp,3g2,mj2","start_time":"0.000000"},
+                 "streams":[{"index":0,"codec_type":"video","codec_name":"h264","id":"0xZZ"}]}
+                """)
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mp4-bframes-editlist.mp4"), keyframeRequest());
+
+    assertThat(report.result().getMedia().getKeyframes().getPacketScanRequired())
+        .isEqualTo(KeyframePacketScanReason.KEYFRAME_PACKET_SCAN_REASON_INCOMPLETE_CONTAINER_INDEX);
+  }
+
+  @Test
+  @DisplayName("Should report no video stream when a keyframe probe finds only audio")
+  void shouldReportNoVideoStreamWhenKeyframeProbeFindsOnlyAudio() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(
+                """
+                {"format":{"format_name":"mov,mp4,m4a,3gp,3g2,mj2","start_time":"0.000000"},
+                 "streams":[{"index":0,"codec_type":"audio","codec_name":"aac","id":"0x2"}]}
+                """)
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mp4-bframes-editlist.mp4"), keyframeRequest());
+
+    assertThat(report)
+        .extracting(
+            found -> found.result().getFailure(), ProbeAttemptReport::keyframePositionsParts)
+        .containsExactly(ProbeFailure.PROBE_FAILURE_NO_VIDEO_STREAM, List.of());
+  }
+
   private static String streamsOf(String formatName) {
     return """
         {"format":{"format_name":"%s","start_time":"0.000000"},
@@ -378,11 +496,15 @@ class FfprobeExecutorKeyframeTest {
 
   /**
    * Answers the probe command with recorded stream JSON, and a last-keyframe read with the packets
-   * recorded for its exact read interval. Any other read interval finds no packet.
+   * recorded for its exact read interval and {@code packetReadExitCode}. Any other read interval
+   * finds no packet.
    */
   @Builder
   private record ScriptedFfprobe(
-      String streams, @Singular Map<String, String> packets, boolean cancelAfterStreams) {
+      String streams,
+      @Singular Map<String, String> packets,
+      int packetReadExitCode,
+      boolean cancelAfterStreams) {
 
     FfprobeExecutor executor() {
       return new FfprobeExecutor(new ObjectMapper(), this::answer);
@@ -391,24 +513,27 @@ class FfprobeExecutorKeyframeTest {
     private Process answer(List<String> arguments) {
       var interval = arguments.indexOf("-read_intervals");
       if (interval < 0) {
-        return new CompletedProcess(streams, cancelAfterStreams);
+        return new CompletedProcess(streams, 0, cancelAfterStreams);
       }
 
       return new CompletedProcess(
-          packets.getOrDefault(arguments.get(interval + 1), NO_PACKETS), false);
+          packets.getOrDefault(arguments.get(interval + 1), NO_PACKETS), packetReadExitCode, false);
     }
   }
 
   /**
-   * A process that has already exited. With {@code cancelOnExit}, the attempt is cancelled when the
-   * executor finds that the process has exited, after it has read the whole output.
+   * A process that has already exited with {@code exitCode}. With {@code cancelOnExit}, the attempt
+   * is cancelled when the executor finds that the process has exited, after it has read the whole
+   * output.
    */
   private static final class CompletedProcess extends Process {
     private final InputStream stdout;
+    private final int exitCode;
     private final boolean cancelOnExit;
 
-    private CompletedProcess(String stdout, boolean cancelOnExit) {
+    private CompletedProcess(String stdout, int exitCode, boolean cancelOnExit) {
       this.stdout = new ByteArrayInputStream(stdout.getBytes(StandardCharsets.UTF_8));
+      this.exitCode = exitCode;
       this.cancelOnExit = cancelOnExit;
     }
 
@@ -429,12 +554,12 @@ class FfprobeExecutorKeyframeTest {
 
     @Override
     public int waitFor() {
-      return 0;
+      return exitCode;
     }
 
     @Override
     public int exitValue() {
-      return 0;
+      return exitCode;
     }
 
     @Override
