@@ -422,7 +422,7 @@ describe('violated claims', () => {
           encoder: 'hevc_nvenc',
           hlsComparisons: [],
           sourceKeyframeCheck: null,
-          diagnostics: { everyKeyframeStartsAFragment: true, videoPictures: { keyframes: [{ startsClosedGop: false }] } },
+          diagnostics: { fragmentsWithAKeyframeInside: [], videoPictures: { keyframes: [{ startsClosedGop: false }] } },
         },
       ],
       initializationSegmentIdentityPairs: [{ label: 'same', identical: false }],
