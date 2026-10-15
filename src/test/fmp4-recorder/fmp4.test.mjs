@@ -2,7 +2,15 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
-import { Mp4FormatError, readFiles, readStream, signed, videoSamples, videoTrafOf } from './fmp4.mjs';
+import {
+  Mp4FormatError,
+  deliveredInitializationSegment,
+  readFiles,
+  readStream,
+  signed,
+  videoSamples,
+  videoTrafOf,
+} from './fmp4.mjs';
 import {
   AUDIO,
   NON_SYNC_SAMPLE_FLAGS,
@@ -338,5 +346,57 @@ describe('fmp4 box reader command line', () => {
     assert.deepEqual(Object.keys(dump.tracks), ['1', '2']);
     assert.equal(dump.fragments[20].trafs[0].firstPresentationTime, 480480);
     assert.equal(dump.fragments[20].trafs[0].samples, undefined);
+  });
+});
+
+describe('deliveredInitializationSegment', () => {
+  const RECORD_FIELDS = Buffer.alloc(22);
+  const VPS = Buffer.from([0xa0, 0, 1, 0, 2, 0x40, 0x01]);
+  const SPS = Buffer.from([0xa1, 0, 1, 0, 2, 0x42, 0x01]);
+  const PPS = Buffer.from([0xa2, 0, 1, 0, 2, 0x44, 0x01]);
+  const PREFIX_SEI = Buffer.from([0x27, 0, 1, 0, 3, 0x4e, 0x01, 0x05]);
+  const SUFFIX_SEI = Buffer.from([0x28, 0, 1, 0, 3, 0x50, 0x01, 0x05]);
+
+  function hvcC(...arrays) {
+    return box('hvcC', RECORD_FIELDS, Buffer.from([arrays.length]), ...arrays);
+  }
+
+  function segmentWith(sampleEntry) {
+    return Buffer.concat([
+      ftyp(),
+      moov(track({ ...VIDEO, sampleEntry }), track({ ...AUDIO, sampleEntry: box('mp4a', Buffer.alloc(28)) })),
+    ]);
+  }
+
+  it('removes the SEI arrays of an hvc1 record and resizes every box that holds it', () => {
+    const pasp = box('pasp', u32(1), u32(1));
+    const recorded = segmentWith(box('hvc1', Buffer.alloc(78), hvcC(VPS, PREFIX_SEI, SPS, PPS, SUFFIX_SEI), pasp));
+
+    const delivered = deliveredInitializationSegment(recorded);
+
+    assert.deepEqual(delivered, segmentWith(box('hvc1', Buffer.alloc(78), hvcC(VPS, SPS, PPS), pasp)));
+  });
+
+  it('keeps a 64-bit header and resizes it', () => {
+    const recorded = segmentWith(largeBox('hvc1', Buffer.alloc(78), hvcC(VPS, PREFIX_SEI, SPS, PPS)));
+
+    const delivered = deliveredInitializationSegment(recorded);
+
+    assert.deepEqual(delivered, segmentWith(largeBox('hvc1', Buffer.alloc(78), hvcC(VPS, SPS, PPS))));
+  });
+
+  it('keeps the bytes of a segment without an hvc1 record', () => {
+    const recorded = segmentWith(box('hev1', Buffer.alloc(78), hvcC(VPS, PREFIX_SEI, SPS, PPS)));
+
+    assert.deepEqual(deliveredInitializationSegment(recorded), recorded);
+  });
+
+  it('fails on a record that ends inside an array', () => {
+    const truncated = box('hvcC', RECORD_FIELDS, Buffer.from([1, 0x27, 0, 1, 0, 9, 0x4e]));
+
+    assert.throws(
+      () => deliveredInitializationSegment(segmentWith(box('hvc1', Buffer.alloc(78), truncated))),
+      Mp4FormatError,
+    );
   });
 });

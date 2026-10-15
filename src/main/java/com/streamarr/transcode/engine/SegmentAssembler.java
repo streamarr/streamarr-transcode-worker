@@ -10,7 +10,8 @@ import lombok.NonNull;
 
 /**
  * Assembles the units a producer reads, in arrival order, into the segments it delivers: the
- * initialization segment as it arrives, and each media segment once its grouper closes it.
+ * initialization segment as it arrives, without the SEI messages of its HEVC records, and each
+ * media segment once its grouper closes it.
  */
 final class SegmentAssembler {
 
@@ -52,7 +53,8 @@ final class SegmentAssembler {
     return switch (unit) {
       case InitializationSegment initializationSegment -> {
         VideoOutputCheck.requireMatch(videoDecision, initializationSegment);
-        yield Closing.of(ProducedSegment.of(initializationSegment));
+        yield Closing.of(
+            ProducedSegment.of(HevcRecordSeiRemoval.removeSeiMessages(initializationSegment)));
       }
       case Fragment fragment -> closingOf(grouper.accept(checkedForShortSamples(fragment)));
     };

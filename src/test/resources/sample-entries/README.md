@@ -23,6 +23,10 @@ each copy carries, that the producer accepts each copy's record, and that each c
 Dolby Vision file it also checks the codec string of the base layer and an RPU in every frame. With
 the locked FFmpeg it checks that the copy loses the `dvvC` record, which ADR 0013 accepts.
 
+One test changes a byte of the SEI message in the second keyframe of the `hev1` file. A replacement
+attempt from that keyframe must still upload the same initialization segment as an attempt from the
+start, and its samples must keep the changed SEI message.
+
 ## Regenerating
 
 From the repository root, with Docker:

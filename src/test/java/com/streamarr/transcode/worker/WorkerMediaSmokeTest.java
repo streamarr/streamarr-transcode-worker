@@ -674,6 +674,40 @@ class WorkerMediaSmokeTest {
   }
 
   @Test
+  @DisplayName(
+      "Should upload the same initialization segment from every attempt when the SEI messages of"
+          + " a source's keyframes differ")
+  void
+      shouldUploadTheSameInitializationSegmentFromEveryAttemptWhenTheSeiMessagesOfASourcesKeyframesDiffer()
+          throws Exception {
+    // Each keyframe of the fixture repeats libx265's version message, a user-data SEI message,
+    // before its parameter sets. The second keyframe's copy now names another build.
+    var source = sampleEntryFixture("hev1-parameter-sets-in-samples.mp4", "hev1");
+    var bytes = Files.readAllBytes(source);
+    var version = "x265 (build 216)".getBytes(StandardCharsets.US_ASCII);
+    var first = indexOf(bytes, version);
+    var second = indexOf(Arrays.copyOfRange(bytes, first + 1, bytes.length), version) + first + 1;
+    assertThat(second).as("the second keyframe's version message").isGreaterThan(first);
+    bytes[second + version.length - 2] = '7';
+    Files.write(source, bytes);
+    var fromStart = sampleEntryCopyJob(source, "hvc1.1.6.L30.90");
+    var replacement = sampleEntryCopyJob(source, "hvc1.1.6.L30.90");
+    replacement.getExecutionBuilder().setStartSequenceNumber(1);
+
+    var fromStartUploads = execute(engine(realCapabilities()), root, fromStart.build());
+    var replacementUploads = execute(engine(realCapabilities()), root, replacement.build());
+
+    assertDecodes(playable(replacementUploads.contentOf(replacementUploads.names())));
+    assertThat(replacementUploads.segments())
+        .as("the replacement attempt's initialization segment")
+        .containsEntry("init.mp4", fromStartUploads.segments().get("init.mp4"));
+    var changedVersion = "x265 (build 217)".getBytes(StandardCharsets.US_ASCII);
+    assertThat(indexOf(replacementUploads.segments().get("segment1.m4s"), changedVersion))
+        .as("the version message in the first keyframe of the replacement attempt")
+        .isNotNegative();
+  }
+
+  @Test
   @DisplayName("Should write avc1 when a worker copies H.264 from a dva1 source")
   void shouldWriteAvc1WhenAWorkerCopiesH264FromADva1Source() throws Exception {
     var avc1 = root.resolve("avc1.mp4");

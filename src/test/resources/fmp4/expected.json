@@ -130,6 +130,10 @@
           }
         ]
       },
+      "deliveredInitializationSegment": {
+        "byteLength": 1346,
+        "sha256": "edf910eb4d1ba85822c73286c2223ad7f35560b077bf7f15bcbbe87d53f56184"
+      },
       "segments": [
         {
           "number": 0,
@@ -634,6 +638,10 @@
           }
         ]
       },
+      "deliveredInitializationSegment": {
+        "byteLength": 1346,
+        "sha256": "edf910eb4d1ba85822c73286c2223ad7f35560b077bf7f15bcbbe87d53f56184"
+      },
       "segments": [
         {
           "number": 5,
@@ -973,6 +981,10 @@
             "trexDefaultSampleDuration": 0
           }
         ]
+      },
+      "deliveredInitializationSegment": {
+        "byteLength": 1329,
+        "sha256": "73ad19a74f1912f4cc17048fe4cd40ebe67813ed68f234163279a7c0b8d55786"
       },
       "segments": [
         {
@@ -1422,6 +1434,10 @@
             "trexDefaultSampleDuration": 0
           }
         ]
+      },
+      "deliveredInitializationSegment": {
+        "byteLength": 1346,
+        "sha256": "edf910eb4d1ba85822c73286c2223ad7f35560b077bf7f15bcbbe87d53f56184"
       },
       "segments": [
         {
@@ -1934,6 +1950,10 @@
             "trexDefaultSampleDuration": 0
           }
         ]
+      },
+      "deliveredInitializationSegment": {
+        "byteLength": 1328,
+        "sha256": "fcf380d89d137b6159eda8376a6ae05fc8e859908dc23afc09c760fe2036a4b5"
       },
       "segments": [
         {
@@ -2450,6 +2470,10 @@
           }
         ]
       },
+      "deliveredInitializationSegment": {
+        "byteLength": 1346,
+        "sha256": "edf910eb4d1ba85822c73286c2223ad7f35560b077bf7f15bcbbe87d53f56184"
+      },
       "segments": [
         {
           "number": 0,
@@ -2802,6 +2826,10 @@
             "trexDefaultSampleDuration": 0
           }
         ]
+      },
+      "deliveredInitializationSegment": {
+        "byteLength": 1305,
+        "sha256": "9b728e14aa1fa40af47ef4505af49f237dc73572f5186412738f2df38d8649a2"
       },
       "segments": [
         {
@@ -3180,6 +3208,10 @@
           }
         ]
       },
+      "deliveredInitializationSegment": {
+        "byteLength": 1346,
+        "sha256": "edf910eb4d1ba85822c73286c2223ad7f35560b077bf7f15bcbbe87d53f56184"
+      },
       "segments": [
         {
           "number": 0,
@@ -3446,6 +3478,10 @@
             "trexDefaultSampleDuration": 0
           }
         ]
+      },
+      "deliveredInitializationSegment": {
+        "byteLength": 1328,
+        "sha256": "38975fc0535d12aa37700234f287cda80b467b6cda2bde1765f66d6d8989b648"
       },
       "segments": [
         {
@@ -4010,6 +4046,10 @@
           }
         ]
       },
+      "deliveredInitializationSegment": {
+        "byteLength": 1328,
+        "sha256": "38975fc0535d12aa37700234f287cda80b467b6cda2bde1765f66d6d8989b648"
+      },
       "segments": [
         {
           "number": 5,
@@ -4471,6 +4511,10 @@
             "trexDefaultSampleDuration": 0
           }
         ]
+      },
+      "deliveredInitializationSegment": {
+        "byteLength": 1334,
+        "sha256": "280fdd918c22795d9f692f5159e156db97044d3fb680e1d7811ca65a7685a208"
       },
       "segments": [
         {
@@ -5081,6 +5125,10 @@
           }
         ]
       },
+      "deliveredInitializationSegment": {
+        "byteLength": 1334,
+        "sha256": "280fdd918c22795d9f692f5159e156db97044d3fb680e1d7811ca65a7685a208"
+      },
       "segments": [
         {
           "number": 5,
@@ -5428,6 +5476,10 @@
           }
         ]
       },
+      "deliveredInitializationSegment": {
+        "byteLength": 1328,
+        "sha256": "049c5cd60716724de663688600bd2c90ad480231ce228fa930b3727a405b46ba"
+      },
       "segments": [
         {
           "number": 0,
@@ -5670,6 +5722,10 @@
             "trexDefaultSampleDuration": 0
           }
         ]
+      },
+      "deliveredInitializationSegment": {
+        "byteLength": 1346,
+        "sha256": "edf910eb4d1ba85822c73286c2223ad7f35560b077bf7f15bcbbe87d53f56184"
       },
       "segments": [
         {
@@ -5962,6 +6018,10 @@
           }
         ]
       },
+      "deliveredInitializationSegment": {
+        "byteLength": 1346,
+        "sha256": "edf910eb4d1ba85822c73286c2223ad7f35560b077bf7f15bcbbe87d53f56184"
+      },
       "segments": [
         {
           "number": 0,
@@ -6223,6 +6283,10 @@
             "trexDefaultSampleDuration": 0
           }
         ]
+      },
+      "deliveredInitializationSegment": {
+        "byteLength": 1334,
+        "sha256": "280fdd918c22795d9f692f5159e156db97044d3fb680e1d7811ca65a7685a208"
       },
       "segments": [
         {
@@ -6490,6 +6554,10 @@
             "trexDefaultSampleDuration": 0
           }
         ]
+      },
+      "deliveredInitializationSegment": {
+        "byteLength": 1421,
+        "sha256": "c3ee2404d3f96760ce3f5c2d81e5d62f62d7c881a12a831fbb18cc244e9e50e8"
       },
       "segments": [
         {
@@ -6868,6 +6936,10 @@
           }
         ]
       },
+      "deliveredInitializationSegment": {
+        "byteLength": 1421,
+        "sha256": "c3ee2404d3f96760ce3f5c2d81e5d62f62d7c881a12a831fbb18cc244e9e50e8"
+      },
       "segments": [
         {
           "number": 5,
@@ -7235,6 +7307,10 @@
           }
         ]
       },
+      "deliveredInitializationSegment": {
+        "byteLength": 1421,
+        "sha256": "c3ee2404d3f96760ce3f5c2d81e5d62f62d7c881a12a831fbb18cc244e9e50e8"
+      },
       "segments": [
         {
           "number": 0,
@@ -7503,6 +7579,10 @@
             "trexDefaultSampleDuration": 0
           }
         ]
+      },
+      "deliveredInitializationSegment": {
+        "byteLength": 1421,
+        "sha256": "c3ee2404d3f96760ce3f5c2d81e5d62f62d7c881a12a831fbb18cc244e9e50e8"
       },
       "segments": [
         {

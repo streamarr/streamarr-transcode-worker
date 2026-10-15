@@ -33,9 +33,9 @@ tests the box reader, the grid model and the analysis arithmetic.
 CI's tooling job runs the recorder's node tests and
 `node src/test/fmp4-recorder/check-expectations.mjs`, without Docker or FFmpeg. The check re-reads
 every committed `.fmp4`, re-derives with the grid model everything that a recording's own bytes
-decide (tracks, initialization segment, media segments, preroll, failure, audio-only tail,
-diagnostics, a copy's keyframes, each HLS comparison's disagreements with the grid, the
-initialization-segment pairs), and fails on every fact `expected.json` states differently, on a
+decide (tracks, initialization segment, the initialization segment that the producer delivers,
+media segments, preroll, failure, audio-only tail, diagnostics, a copy's keyframes, each HLS
+comparison's disagreements with the grid, the initialization-segment pairs), and fails on every fact `expected.json` states differently, on a
 recording it does not describe, and on a described recording that is missing. The HLS muxer's own
 cuts, the sources, each recording's FFmpeg arguments and the ADR side claims need a recording run,
 so it takes those as recorded, and then fails on every claim of the recorder (see
@@ -107,6 +107,15 @@ every keyframe in the samples; the MPEG-TS copy already carried them, so its rec
 change. The HLS recipe's copies take the same video arguments, so that both recipes hold the same
 packets.
 libx265 writes its parameters into the initialization segment, so its recordings grew by one byte.
+
+The producer removes the SEI messages from every `hvc1` record before it delivers the
+initialization segment. FFmpeg builds the record from the first sample when the source's record
+holds no parameter sets, and then copies that sample's SEI messages into it. Attempts that start at
+different keyframes would deliver different initialization segments, which ADR 0037 forbids. The
+samples keep their SEI messages. `deliveredInitializationSegment` in `expected.json` gives the
+length and SHA-256 of the initialization segment that the producer delivers. It differs from the
+recorded one only for the libx265 recordings, whose record holds libx265's settings as an SEI
+message: 1,421 bytes instead of 3,848.
 
 An encode forces its keyframes with FFmpeg's list mode: every segment boundary k × 6 in whole
 seconds, for each k from the attempt's start sequence number K up to, not including, the media
@@ -199,7 +208,7 @@ Timescale 24000 unless stated. `n@t` means segment n starts at t seconds.
 | 6 | `06-encode-audio-tail.fmp4` | 0 | 20 s video, 23.5 s audio. The recording ends in 4 audio-only fragments (19.95, 20.95, 21.95, 22.95 s), which join segment 3. No fragment without video precedes the first segment. |
 | 7 | `07-copy-start0.fmp4` | 0 | 2.002 s-GOP 23.976 fps copy from the start: 11 segments of 3 keyframes each. |
 | 7b | `07-copy-seek30.fmp4` | 5 | Stream-copy replacement attempt at `-ss 30`. The seek lands on the keyframe at 28.028 s (segment 4 < 5). That keyframe fragment and the non-sync fragment after it (2 fragments) are discarded preroll. Segments 5–10 carry exactly 7's video samples at the same ticks. Their audio is the same packets at the same times, but each fragment starts one AAC frame earlier (see findings). |
-| 8 | (pairs over 1, 7, 9, 13) | – | `initializationSegmentIdentityPairs`: `ftyp`+`moov` is byte-identical between the start-0 and seek recordings for libx264 (1346 B), stream copy (1328 B), SVT-AV1 (1334 B) and libx265 (3847 B). `initializationSegmentDifferencePairs`: the encode and copy initialization segments of the same source differ. Each initialization segment has a zero edit list and zero `trex` defaults. |
+| 8 | (pairs over 1, 7, 9, 13) | – | `initializationSegmentIdentityPairs`: `ftyp`+`moov` is byte-identical between the start-0 and seek recordings for libx264 (1346 B), stream copy (1328 B), SVT-AV1 (1334 B) and libx265 (3848 B). `initializationSegmentDifferencePairs`: the encode and copy initialization segments of the same source differ. Each initialization segment has a zero edit list and zero `trex` defaults. |
 | 9 | `09-svtav1-vfr.fmp4` | 0 | The VFR source through SVT-AV1 (145-frame GOP + the list): 1582 frames, exactly one keyframe in every interval, segment starts on exactly the ticks of 3 (libx264). SVT-AV1 honours the forced keyframe. No B-frame reordering, so composition offsets are 0. |
 | 9b | `09-svtav1-vfr-seek30.fmp4` | 5 | The same as a replacement attempt from segment 5, seeking one period early (`-ss 24`): starts at 24.024 s, 1007 frames, no padding. Segment 4 (one keyframe) is discarded preroll. Every delivered segment, 5–10, starts on exactly 9's ticks, including segment 5 at 30.030 s, which a seek to 30 s itself missed (see Observations). |
 | 10 | `10-copy-gop-exceeds-period.fmp4` | 0 | A copy with a keyframe every 10.01 s. The sync-first fragment at 20.02 s (fragment 20) is segment 3 while 2 is expected. It closes segment 1 (10.01–20.02 s, fragments 10–19), so segments 0 and 1 are delivered, then grouping fails with `SKIPPED_SEGMENT_NUMBER` and fragment 20 onwards is never grouped. |
@@ -265,7 +274,9 @@ later each time and eventually skip a whole interval. When the list from the var
 ends before the last advertised boundary, every encoder therefore takes floor(P × fps),
 keyframe-verified or not. Every attempt of the variant takes that GOP, even one whose own list fits:
 libx265 writes its settings into the initialization segment, and 13 and 13c, keyint=145 and
-keyint=143, differ from byte 1,205 of their 3,847-byte initialization segments.
+keyint=143, differ from byte 1,205 of their 3,848-byte initialization segments. Those settings are an SEI
+message in the record, which the producer removes, so the worker delivers the same 1,421-byte
+initialization segment for both.
 
 ## The HLS muxer as differential evidence
 
