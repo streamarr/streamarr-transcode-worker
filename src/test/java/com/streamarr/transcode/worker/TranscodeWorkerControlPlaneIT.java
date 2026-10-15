@@ -9,6 +9,7 @@ import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engine;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.workerConfigurationBuilder;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
+import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.fileContentsProducer;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.fail;
@@ -616,7 +617,11 @@ class TranscodeWorkerControlPlaneIT {
             .availableSlots(slots)
             .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, mediaRoot))
             .build();
-    return TranscodeWorker.builder().configuration(configuration).engine(engine(launcher)).build();
+    return TranscodeWorker.builder()
+        .configuration(configuration)
+        .engine(engine(launcher))
+        .ffprobe(fileContentsProducer())
+        .build();
   }
 
   private static VariantJob variantJob() {

@@ -1,10 +1,11 @@
 package com.streamarr.transcode.worker;
 
+import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.SOURCE_NAMESPACE_ID;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engine;
+import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.workerConfigurationBuilder;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.cancel;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.failure;
-import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.fileContentsProducer;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.processBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.requestBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.sourceBuilder;
@@ -31,6 +32,7 @@ import com.streamarr.transcode.protocol.ProtoUuid;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
@@ -60,7 +62,7 @@ class TranscodeWorkerProbeTest {
     var runtime = new ScriptedWorkerRuntime();
     var request = requestBuilder().setProbeVersion(17).build();
 
-    try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
+    try (var worker = transcodeOnlyWorkerBuilder().runtime(runtime).build()) {
       worker.start("localhost", 1);
       var connection = runtime.connection();
 
@@ -76,7 +78,7 @@ class TranscodeWorkerProbeTest {
   @DisplayName("Should omit probe support when connecting a transcode-only worker")
   void shouldOmitProbeSupportWhenConnectingATranscodeOnlyWorker() throws Exception {
     var runtime = new ScriptedWorkerRuntime();
-    try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
+    try (var worker = transcodeOnlyWorkerBuilder().runtime(runtime).build()) {
       worker.start("localhost", 1);
 
       assertThat(runtime.connection().registration().getCapabilities().getProbeVersionsList())
@@ -98,8 +100,7 @@ class TranscodeWorkerProbeTest {
     var request = requestBuilder().setSource(sourceBuilder().setRelativeKey("escape.mkv")).build();
     var runtime = new ScriptedWorkerRuntime();
 
-    try (var worker =
-        workerBuilder(root).runtime(runtime).ffprobe(fileContentsProducer()).build()) {
+    try (var worker = workerBuilder(root).runtime(runtime).build()) {
       worker.start("localhost", 1);
       start(runtime.connection(), request);
       runtime.probes().drain();
@@ -604,13 +605,22 @@ class TranscodeWorkerProbeTest {
                             .setIsForced(true)))
             .build();
 
-    try (var worker =
-        workerBuilder(tempDir).runtime(runtime).ffprobe(fileContentsProducer()).build()) {
+    try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
       worker.start("localhost", 1);
       start(runtime.connection(), request);
       runtime.probes().drain();
 
       assertThat(runtime.connection().results()).containsExactly(expected);
     }
+  }
+
+  private TranscodeWorker.TranscodeWorkerBuilder transcodeOnlyWorkerBuilder() {
+    return TranscodeWorker.builder()
+        .configuration(
+            workerConfigurationBuilder()
+                .availableSlots(2)
+                .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, tempDir))
+                .build())
+        .engine(engine(ScriptedProcessLauncher.running()));
   }
 }

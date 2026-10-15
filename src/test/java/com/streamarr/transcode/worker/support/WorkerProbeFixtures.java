@@ -46,7 +46,8 @@ public final class WorkerProbeFixtures {
                 .availableSlots(2)
                 .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, root))
                 .build())
-        .engine(engine(ScriptedProcessLauncher.running()));
+        .engine(engine(ScriptedProcessLauncher.running()))
+        .ffprobe(fileContentsProducer());
   }
 
   public static ProbeRequest.Builder requestBuilder() {
