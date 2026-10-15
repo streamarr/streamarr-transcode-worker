@@ -51,10 +51,8 @@ public final class WorkerApplicationControlPlane
             .intercept(
                 new ServerInterceptor() {
                   @Override
-                  public <ReqT, RespT> ServerCall.Listener<ReqT> interceptCall(
-                      ServerCall<ReqT, RespT> call,
-                      Metadata headers,
-                      ServerCallHandler<ReqT, RespT> next) {
+                  public <Q, R> ServerCall.Listener<Q> interceptCall(
+                      ServerCall<Q, R> call, Metadata headers, ServerCallHandler<Q, R> next) {
                     identityHeader.complete(headers.get(WORKER_ID_HEADER));
                     return next.startCall(call, headers);
                   }
