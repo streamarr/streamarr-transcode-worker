@@ -6,6 +6,7 @@ import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDI
 import static com.streamarr.transcode.fixtures.RecordingFixtures.uploadNames;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.SOURCE_NAMESPACE_ID;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engine;
+import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engineBuilder;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.workerConfigurationBuilder;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
@@ -17,10 +18,12 @@ import static org.assertj.core.api.Assertions.fail;
 import build.buf.gen.streamarr.transcode.v1.AudioDecision;
 import build.buf.gen.streamarr.transcode.v1.AudioMode;
 import build.buf.gen.streamarr.transcode.v1.ContainerFormat;
+import build.buf.gen.streamarr.transcode.v1.EncoderKind;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailed;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
+import build.buf.gen.streamarr.transcode.v1.JobAttemptStarted;
 import build.buf.gen.streamarr.transcode.v1.MediaSourceRef;
 import build.buf.gen.streamarr.transcode.v1.SegmentContentType;
 import build.buf.gen.streamarr.transcode.v1.SegmentUploadMetadata;
@@ -37,8 +40,13 @@ import build.buf.gen.streamarr.transcode.v1.UploadSegmentResponse;
 import build.buf.gen.streamarr.transcode.v1.Uuid;
 import build.buf.gen.streamarr.transcode.v1.VariantJob;
 import build.buf.gen.streamarr.transcode.v1.VariantSpec;
+import build.buf.gen.streamarr.transcode.v1.VideoCodecFamily;
+import build.buf.gen.streamarr.transcode.v1.VideoEncoderBackend;
 import build.buf.gen.streamarr.transcode.v1.WorkerIdentity;
+import build.buf.gen.streamarr.transcode.v1.WorkerRegistration;
 import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
+import build.buf.gen.streamarr.transcode.v1.WorkerVerifiedVideoEncoder;
+import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
@@ -67,13 +75,153 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 @Tag("IntegrationTest")
 @DisplayName("Transcode Worker Control Plane Integration Tests")
 @Timeout(value = 2, unit = TimeUnit.MINUTES)
 class TranscodeWorkerControlPlaneIT {
 
+  // The scripted FFmpeg lists this encoder in -encoders and passes its test encode.
+  private static final String H264_NVENC_ENCODERS =
+      "V....D h264_nvenc           NVIDIA NVENC H.264 encoder (codec h264)\n";
+
   @TempDir Path tempDir;
+
+  @Test
+  @DisplayName("Should advertise the software encoders when the worker has no hardware encoder")
+  void shouldAdvertiseTheSoftwareEncodersWhenTheWorkerHasNoHardwareEncoder() throws Exception {
+    var service = new ControllableWorkerService();
+
+    try (var server = new ControlPlaneServer(service);
+        var worker = worker(preparedMediaRoot())) {
+      server.start();
+      worker.start("localhost", server.port());
+
+      assertThat(service.registration().getCapabilities().getVideoEncodersList())
+          .containsExactlyInAnyOrder(
+              workerVerifiedEncoder(
+                  backend(VideoCodecFamily.VIDEO_CODEC_FAMILY_H264, "libx264")
+                      .setKind(EncoderKind.ENCODER_KIND_SOFTWARE),
+                  true),
+              workerVerifiedEncoder(
+                  backend(VideoCodecFamily.VIDEO_CODEC_FAMILY_HEVC, "libx265")
+                      .setKind(EncoderKind.ENCODER_KIND_SOFTWARE),
+                  false),
+              workerVerifiedEncoder(
+                  backend(VideoCodecFamily.VIDEO_CODEC_FAMILY_AV1, "libsvtav1")
+                      .setKind(EncoderKind.ENCODER_KIND_SOFTWARE),
+                  true));
+    }
+  }
+
+  @Test
+  @DisplayName("Should advertise the hardware encoder when its test encode passes")
+  void shouldAdvertiseTheHardwareEncoderWhenItsTestEncodePasses() throws Exception {
+    var service = new ControllableWorkerService();
+
+    try (var server = new ControlPlaneServer(service);
+        var worker = hardwareWorker(preparedMediaRoot(), ScriptedProcessLauncher.running())) {
+      server.start();
+      worker.start("localhost", server.port());
+
+      assertThat(service.registration().getCapabilities().getVideoEncodersList())
+          .containsExactlyInAnyOrder(
+              workerVerifiedEncoder(
+                  backend(VideoCodecFamily.VIDEO_CODEC_FAMILY_H264, "h264_nvenc")
+                      .setKind(EncoderKind.ENCODER_KIND_HARDWARE),
+                  false),
+              workerVerifiedEncoder(
+                  backend(VideoCodecFamily.VIDEO_CODEC_FAMILY_HEVC, "libx265")
+                      .setKind(EncoderKind.ENCODER_KIND_SOFTWARE),
+                  false),
+              workerVerifiedEncoder(
+                  backend(VideoCodecFamily.VIDEO_CODEC_FAMILY_AV1, "libsvtav1")
+                      .setKind(EncoderKind.ENCODER_KIND_SOFTWARE),
+                  true));
+    }
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({
+    "h264, VIDEO_CODEC_FAMILY_H264",
+    "hevc, VIDEO_CODEC_FAMILY_HEVC",
+    "av1, VIDEO_CODEC_FAMILY_AV1"
+  })
+  @DisplayName("Should name the advertised encoder backend when an encode starts")
+  void shouldNameTheAdvertisedEncoderBackendWhenAnEncodeStarts(
+      String codecFamily, VideoCodecFamily advertisedCodecFamily) throws Exception {
+    var service = new ControllableWorkerService();
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJob();
+    var encode =
+        job.toBuilder()
+            .setDecision(job.getDecision().toBuilder().setVideoCodecFamily(codecFamily))
+            .build();
+
+    try (var server = new ControlPlaneServer(service);
+        var worker = hardwareWorker(preparedMediaRoot(), launcher)) {
+      server.start();
+      worker.start("localhost", server.port());
+
+      service.sendStart(service.registeredWorker(), encode);
+      var started = service.awaitStarted(encode);
+
+      var advertised = service.advertisedBackend(advertisedCodecFamily);
+      assertThat(started.getEncoderBackend()).isEqualTo(advertised);
+      assertThat(launcher.command(fromProto(encode.getJobAttemptId())))
+          .containsSubsequence("-c:v", advertised.getEncoder());
+    }
+  }
+
+  @Test
+  @DisplayName("Should refuse an encode when the worker advertises no encoder for its codec family")
+  void shouldRefuseAnEncodeWhenTheWorkerAdvertisesNoEncoderForItsCodecFamily() throws Exception {
+    var service = new ControllableWorkerService();
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJob();
+    var encode =
+        job.toBuilder()
+            .setDecision(job.getDecision().toBuilder().setVideoCodecFamily("vp9"))
+            .build();
+
+    try (var server = new ControlPlaneServer(service);
+        var worker = worker(preparedMediaRoot(), launcher)) {
+      server.start();
+      worker.start("localhost", server.port());
+
+      service.sendStart(service.registeredWorker(), encode);
+
+      var failure = service.awaitFailure();
+      assertThat(failure.getJobAttemptId()).isEqualTo(encode.getJobAttemptId());
+      assertThat(failure.getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
+      assertThat(launcher.hasLaunchedAny()).isFalse();
+    }
+  }
+
+  @Test
+  @DisplayName("Should name no encoder backend when a stream copy starts")
+  void shouldNameNoEncoderBackendWhenAStreamCopyStarts() throws Exception {
+    var service = new ControllableWorkerService();
+    var job = variantJob();
+    var copy =
+        job.toBuilder()
+            .setDecision(job.getDecision().toBuilder().setMode(TranscodeMode.TRANSCODE_MODE_REMUX))
+            .build();
+
+    try (var server = new ControlPlaneServer(service);
+        var worker = hardwareWorker(preparedMediaRoot(), ScriptedProcessLauncher.running())) {
+      server.start();
+      worker.start("localhost", server.port());
+
+      service.sendStart(service.registeredWorker(), copy);
+      var started = service.awaitStarted(copy);
+
+      assertThat(started.hasEncoderBackend()).isFalse();
+    }
+  }
 
   @Test
   @DisplayName("Should fail startup when the control stream closes before registration is accepted")
@@ -610,8 +758,15 @@ class TranscodeWorkerControlPlaneIT {
     return worker(mediaRoot, launcher, 2);
   }
 
-  private TranscodeWorker worker(Path mediaRoot, ScriptedProcessLauncher launcher, int slots)
-      throws Exception {
+  private TranscodeWorker worker(Path mediaRoot, ScriptedProcessLauncher launcher, int slots) {
+    return worker(mediaRoot, engine(launcher), slots);
+  }
+
+  private TranscodeWorker hardwareWorker(Path mediaRoot, ScriptedProcessLauncher launcher) {
+    return worker(mediaRoot, engineBuilder(launcher, H264_NVENC_ENCODERS).build(), 1);
+  }
+
+  private TranscodeWorker worker(Path mediaRoot, FfmpegTranscodeEngine engine, int slots) {
     var configuration =
         workerConfigurationBuilder()
             .availableSlots(slots)
@@ -619,8 +774,20 @@ class TranscodeWorkerControlPlaneIT {
             .build();
     return TranscodeWorker.builder()
         .configuration(configuration)
-        .engine(engine(launcher))
+        .engine(engine)
         .ffprobe(fileContentsProducer())
+        .build();
+  }
+
+  private static VideoEncoderBackend.Builder backend(VideoCodecFamily codecFamily, String encoder) {
+    return VideoEncoderBackend.newBuilder().setCodecFamily(codecFamily).setEncoder(encoder);
+  }
+
+  private static WorkerVerifiedVideoEncoder workerVerifiedEncoder(
+      VideoEncoderBackend.Builder backend, boolean keyframeVerified) {
+    return WorkerVerifiedVideoEncoder.newBuilder()
+        .setBackend(backend)
+        .setKeyframeVerified(keyframeVerified)
         .build();
   }
 
@@ -722,7 +889,7 @@ class TranscodeWorkerControlPlaneIT {
 
     private final boolean closeBeforeRegistration;
     private final CountDownLatch registered = new CountDownLatch(1);
-    private final AtomicReference<WorkerIdentity> worker = new AtomicReference<>();
+    private final AtomicReference<WorkerRegistration> registration = new AtomicReference<>();
     // The service's monitor guards these fields. Each wait for a worker message waits on it.
     private final List<EstablishWorkerSessionRequest> events = new ArrayList<>();
     private int eventsTaken;
@@ -766,7 +933,7 @@ class TranscodeWorkerControlPlaneIT {
             responseObserver.onCompleted();
             return;
           }
-          worker.set(request.getRegistration().getWorker());
+          registration.set(request.getRegistration());
           responseObserver.onNext(
               EstablishWorkerSessionResponse.newBuilder()
                   .setSessionAccepted(
@@ -884,7 +1051,19 @@ class TranscodeWorkerControlPlaneIT {
     }
 
     private WorkerIdentity registeredWorker() {
-      return worker.get();
+      return registration.get().getWorker();
+    }
+
+    private WorkerRegistration registration() {
+      return registration.get();
+    }
+
+    private VideoEncoderBackend advertisedBackend(VideoCodecFamily codecFamily) {
+      return registration().getCapabilities().getVideoEncodersList().stream()
+          .map(WorkerVerifiedVideoEncoder::getBackend)
+          .filter(backend -> backend.getCodecFamily() == codecFamily)
+          .findFirst()
+          .orElseThrow();
     }
 
     private void sendStart(WorkerIdentity target, VariantJob job) throws InterruptedException {
@@ -904,12 +1083,13 @@ class TranscodeWorkerControlPlaneIT {
               .build());
     }
 
-    private void awaitStarted(VariantJob job) throws InterruptedException {
+    private JobAttemptStarted awaitStarted(VariantJob job) throws InterruptedException {
       var event = takeEvent("the start of an attempt");
       assertThat(event.hasJobAttemptStarted())
           .as("the next worker event must acknowledge the ordering-barrier start command")
           .isTrue();
       assertThat(event.getJobAttemptStarted().getJobAttemptId()).isEqualTo(job.getJobAttemptId());
+      return event.getJobAttemptStarted();
     }
 
     private List<EstablishWorkerSessionRequest> awaitEvents(int count) throws InterruptedException {

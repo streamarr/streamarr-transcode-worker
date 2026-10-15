@@ -34,11 +34,14 @@ import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.engine.AttemptOutcome.Failed;
 import com.streamarr.transcode.engine.AttemptOutcome.Stopped;
 import com.streamarr.transcode.engine.DeliveryCancellation;
+import com.streamarr.transcode.engine.EncoderBackend;
 import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
 import com.streamarr.transcode.engine.ProducedSegment;
 import com.streamarr.transcode.engine.Producer;
 import com.streamarr.transcode.engine.ProducerFailure;
 import com.streamarr.transcode.engine.SegmentMemoryBudget;
+import com.streamarr.transcode.engine.TranscodeRequest;
+import com.streamarr.transcode.engine.UnadvertisedCodecFamilyException;
 import com.streamarr.transcode.probe.FfprobeExecutor;
 import com.streamarr.transcode.protocol.ProtoUuid;
 import io.grpc.ManagedChannel;
@@ -155,6 +158,9 @@ public final class TranscodeWorker implements AutoCloseable {
   private EstablishWorkerSessionRequest registration() {
     var capabilities = WorkerCapabilities.newBuilder();
     capabilities.addProbeVersions(FfprobeExecutor.PROBE_VERSION);
+    engine.workerVerifiedEncoders().stream()
+        .map(WorkerVideoEncoders::toProto)
+        .forEach(capabilities::addVideoEncoders);
     configuration.sourceNamespaces().keySet().stream()
         .map(ProtoUuid::toProto)
         .forEach(capabilities::addSourceNamespaceIds);
@@ -208,13 +214,19 @@ public final class TranscodeWorker implements AutoCloseable {
       return new Refused();
     }
 
+    TranscodeRequest request;
     Producer producer;
     try {
+      request = jobMapper.map(job);
       producer =
           engine.startProducer(
-              jobMapper.map(job),
+              request,
               (segment, cancellation) -> deliverToServer(job, segment, cancellation),
               memoryBudget);
+    } catch (UnadvertisedCodecFamilyException e) {
+      log.warn("Refusing job attempt {}: {}", fromProto(job.getJobAttemptId()), e.getMessage());
+      reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
+      return new Refused();
     } catch (RuntimeException e) {
       logStartupFailure(job, e);
       reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED);
@@ -224,7 +236,7 @@ public final class TranscodeWorker implements AutoCloseable {
     var attempt = new ActiveAttempt(job, producer);
     activeAttempts.put(fromProto(job.getJobAttemptId()), attempt);
     try {
-      send(jobAttemptStarted(job.getJobAttemptId()));
+      send(jobAttemptStarted(job.getJobAttemptId(), engine.encoderBackendOf(request)));
     } catch (RuntimeException e) {
       logStartupFailure(job, e);
       claim(attempt);
@@ -469,10 +481,11 @@ public final class TranscodeWorker implements AutoCloseable {
     }
   }
 
-  private static EstablishWorkerSessionRequest jobAttemptStarted(Uuid jobAttemptId) {
-    return EstablishWorkerSessionRequest.newBuilder()
-        .setJobAttemptStarted(JobAttemptStarted.newBuilder().setJobAttemptId(jobAttemptId))
-        .build();
+  private static EstablishWorkerSessionRequest jobAttemptStarted(
+      Uuid jobAttemptId, Optional<EncoderBackend> encoderBackend) {
+    var started = JobAttemptStarted.newBuilder().setJobAttemptId(jobAttemptId);
+    encoderBackend.map(WorkerVideoEncoders::toProto).ifPresent(started::setEncoderBackend);
+    return EstablishWorkerSessionRequest.newBuilder().setJobAttemptStarted(started).build();
   }
 
   private static EstablishWorkerSessionRequest jobAttemptCompleted(Uuid jobAttemptId) {

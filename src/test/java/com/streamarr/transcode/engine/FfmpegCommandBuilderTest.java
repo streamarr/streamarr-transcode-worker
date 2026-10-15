@@ -110,7 +110,7 @@ class FfmpegCommandBuilderTest {
 
   static Stream<Arguments> fullTranscodeExpectedFlags() {
     return Stream.of(
-        Arguments.of("scale filter", new String[] {"-vf", "scale=-2:1080"}),
+        Arguments.of("scale filter", new String[] {"-vf", "scale=-2:1080,format=yuv420p"}),
         Arguments.of("forced IDR", new String[] {"-forced-idr", "1"}),
         Arguments.of("audio downmix to stereo", new String[] {"-ac", "2"}));
   }
@@ -139,9 +139,61 @@ class FfmpegCommandBuilderTest {
             "libx264");
 
     assertThat(cmd)
-        .contains("-vf", "scale=-2:720")
+        .contains("-vf", "scale=-2:720,format=yuv420p")
         .contains("-b:v", "3000000")
         .contains("-bufsize", "6000000");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(
+      strings = {
+        "libx264",
+        "libx265",
+        "libsvtav1",
+        "h264_nvenc",
+        "hevc_nvenc",
+        "av1_nvenc",
+        "h264_amf",
+        "hevc_amf",
+        "av1_amf",
+        "h264_rkmpp",
+        "hevc_rkmpp",
+        "unlisted_encoder"
+      })
+  @DisplayName(
+      "Should end the video filter chain in 8-bit yuv420p when any encoder other than QSV runs")
+  void shouldEndTheVideoFilterChainInEightBitYuv420pWhenAnyEncoderOtherThanQsvRuns(String encoder) {
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).height(720).build(), encoder);
+
+    assertThat(videoFilter(cmd)).isEqualTo("scale=-2:720,format=yuv420p");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"h264_qsv", "hevc_qsv", "av1_qsv"})
+  @DisplayName("Should end the video filter chain in nv12 when a QSV encoder runs")
+  void shouldEndTheVideoFilterChainInNv12WhenAQsvEncoderRuns(String encoder) {
+    var cmd = command(request(TranscodeMode.VIDEO_TRANSCODE).height(720).build(), encoder);
+
+    assertThat(videoFilter(cmd)).isEqualTo("scale=-2:720,format=nv12");
+  }
+
+  @ParameterizedTest
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"REMUX", "AUDIO_TRANSCODE"})
+  @DisplayName("Should leave the copied video without a pixel format when video is copied")
+  void shouldLeaveTheCopiedVideoWithoutAPixelFormatWhenVideoIsCopied(TranscodeMode mode) {
+    var cmd = command(request(mode).build(), "copy");
+
+    assertThat(cmd)
+        .containsSequence("-c:v", "copy")
+        .doesNotContain("-vf", "-pix_fmt")
+        .noneMatch(argument -> argument.contains("format="));
+  }
+
+  private static String videoFilter(List<String> cmd) {
+    assertThat(cmd).as("the command's -vf options").containsOnlyOnce("-vf");
+    return cmd.get(cmd.indexOf("-vf") + 1);
   }
 
   @Test
@@ -611,7 +663,7 @@ class FfmpegCommandBuilderTest {
         .isNotEmpty()
         .contains("-c:v", "libx264")
         .contains("-c:a", "copy")
-        .contains("-vf", "scale=-2:1080")
+        .contains("-vf", "scale=-2:1080,format=yuv420p")
         .doesNotContain("-ac");
     assertThat(audioBitrate(cmd)).isEqualTo("0");
   }

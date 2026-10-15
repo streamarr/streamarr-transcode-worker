@@ -51,11 +51,11 @@ BOUNDARIES=@BOUNDARIES@
 # reorder packets and crowd keyframes, so no recording shows that bug.
 DET=(-threads 1)
 
-X264=(-c:v libx264 -vf scale=-2:36 -b:v 6000 -maxrate 6000 -bufsize 12000)
-SVT=(-c:v libsvtav1 -vf scale=-2:36 -crf 35 -maxrate 6000 -svtav1-params mbr-overshoot-pct=0:lp=1)
+X264=(-c:v libx264 -vf scale=-2:36,format=yuv420p -b:v 6000 -maxrate 6000 -bufsize 12000)
+SVT=(-c:v libsvtav1 -vf scale=-2:36,format=yuv420p -crf 35 -maxrate 6000 -svtav1-params mbr-overshoot-pct=0:lp=1)
 # The worker's libx265 arguments (open GOP and x265's scene cut left at their defaults; worker #23
 # owns the closed-GOP flags), single-threaded for reproducible bytes.
-X265=(-c:v libx265 -vf scale=-2:36 -b:v 6000 -maxrate 6000 -bufsize 12000 -x265-params pools=none:frame-threads=1:log-level=error)
+X265=(-c:v libx265 -vf scale=-2:36,format=yuv420p -b:v 6000 -maxrate 6000 -bufsize 12000 -x265-params pools=none:frame-threads=1:log-level=error)
 AAC=(-c:a aac -ac 1 -b:a 8k)
 # The worker declares a copied stream's bitrate unknown (-b:a 0): the mp4 muxer would otherwise write
 # the demuxer's measurement, which a seek into an MPEG-TS source changes, into the initialization segment.

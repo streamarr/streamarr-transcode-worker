@@ -6,8 +6,10 @@ import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.request
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.sourceBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variantJobBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.awaitility.Awaitility.await;
 
+import build.buf.gen.streamarr.transcode.v1.EncoderKind;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptCompleted;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailed;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
@@ -17,6 +19,7 @@ import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.TranscodeMode;
 import build.buf.gen.streamarr.transcode.v1.WorkerRegistration;
+import build.buf.gen.streamarr.transcode.v1.WorkerVerifiedVideoEncoder;
 import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.command.WaitContainerResultCallback;
 import com.streamarr.transcode.fixtures.image.ImageControlPlane;
@@ -89,6 +92,24 @@ class WorkerImageIT {
       var uid = identity.getStdout().trim();
       assertThat(uid).as("id -u output").matches("[0-9]+");
       assertThat(Long.parseLong(uid)).as("worker UID").isPositive();
+    }
+  }
+
+  @Test
+  @DisplayName("Should advertise the software encoders when the image runs without a GPU")
+  void shouldAdvertiseTheSoftwareEncodersWhenTheImageRunsWithoutAGpu() throws Exception {
+    try (var image = ImageFixture.builder().media(media).build()) {
+      var registration = image.registration();
+
+      assertThat(registration.getCapabilities().getVideoEncodersList())
+          .extracting(
+              encoder -> encoder.getBackend().getEncoder(),
+              encoder -> encoder.getBackend().getKind(),
+              WorkerVerifiedVideoEncoder::getKeyframeVerified)
+          .containsExactlyInAnyOrder(
+              tuple("libx264", EncoderKind.ENCODER_KIND_SOFTWARE, true),
+              tuple("libx265", EncoderKind.ENCODER_KIND_SOFTWARE, false),
+              tuple("libsvtav1", EncoderKind.ENCODER_KIND_SOFTWARE, true));
     }
   }
 
