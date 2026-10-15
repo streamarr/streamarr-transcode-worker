@@ -10,10 +10,6 @@ record CarriedSample(@NonNull Fragment fragment, @NonNull Sample sample) {
     return fragment.videoSamples().stream().map(sample -> new CarriedSample(fragment, sample));
   }
 
-  static Stream<CarriedSample> audioOf(Fragment fragment) {
-    return fragment.audioSamples().stream().map(sample -> new CarriedSample(fragment, sample));
-  }
-
   boolean follows(Fragment previous, int end) {
     return fragment == previous && sample.mediaDataPosition() == end;
   }

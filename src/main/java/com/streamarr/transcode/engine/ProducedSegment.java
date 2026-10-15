@@ -13,7 +13,7 @@ public abstract sealed class ProducedSegment {
   // Read-only views that nothing moves, so each call hands out duplicates.
   private final List<ByteBuffer> parts;
 
-  private ProducedSegment(@NonNull List<ByteBuffer> parts) {
+  private ProducedSegment(List<ByteBuffer> parts) {
     this.parts = parts.stream().map(ByteBuffer::asReadOnlyBuffer).toList();
   }
 
