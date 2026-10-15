@@ -1,7 +1,6 @@
 package com.streamarr.transcode.fixtures.image;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.awaitility.Awaitility.await;
 
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
@@ -15,6 +14,7 @@ import io.grpc.ManagedChannel;
 import io.grpc.Status;
 import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
 import io.grpc.stub.StreamObserver;
+import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -40,36 +40,22 @@ import org.junit.jupiter.params.provider.MethodSource;
 @Execution(ExecutionMode.SAME_THREAD)
 @DisplayName("Image Control Plane Tests")
 class ImageControlPlaneIT {
-  private Thread server;
+  private static final ImageControlPlane.Ports EPHEMERAL_PORTS =
+      ImageControlPlane.Ports.builder().grpcPort(0).commandPort(0).build();
+
+  private ImageControlPlane.Serving controlPlane;
   private HttpClient http;
 
   @BeforeEach
-  void startServer() {
+  void startServer() throws IOException {
     http = HttpClient.newHttpClient();
-    server =
-        Thread.ofVirtual()
-            .start(
-                () -> {
-                  try {
-                    ImageControlPlane.main();
-                  } catch (InterruptedException _) {
-                    Thread.currentThread().interrupt();
-                  } catch (Exception failure) {
-                    throw new IllegalStateException(failure);
-                  }
-                });
-    await()
-        .atMost(Duration.ofSeconds(10))
-        .ignoreExceptions()
-        .untilAsserted(() -> assertThat(post("ready", new byte[0]).statusCode()).isEqualTo(200));
+    controlPlane = ImageControlPlane.serve(EPHEMERAL_PORTS);
   }
 
   @AfterEach
   void stopServer() throws InterruptedException {
     http.close();
-    server.interrupt();
-    server.join(Duration.ofSeconds(10));
-    assertThat(server.isAlive()).as("control-plane server stopped").isFalse();
+    controlPlane.close();
   }
 
   @Test
@@ -86,7 +72,7 @@ class ImageControlPlaneIT {
   @DisplayName("Should report the terminal outcome when the expected job result cannot arrive")
   void shouldReportTheTerminalOutcomeWhenTheExpectedJobResultCannotArrive(JobOutcome outcome)
       throws Exception {
-    try (var peer = WorkerPeer.builder().build()) {
+    try (var peer = WorkerPeer.builder().port(controlPlane.grpcPort()).build()) {
       post("accept", new byte[0]);
       var response =
           http.sendAsync(
@@ -154,7 +140,11 @@ class ImageControlPlaneIT {
   void shouldReportTheSessionTerminationWhenAnExpectedResultIsPending(SessionOutcome outcome)
       throws Exception {
     var waitingForRegistration = outcome.command().equals("registration");
-    try (var peer = WorkerPeer.builder().withoutRegistration(waitingForRegistration).build()) {
+    try (var peer =
+        WorkerPeer.builder()
+            .port(controlPlane.grpcPort())
+            .withoutRegistration(waitingForRegistration)
+            .build()) {
       if (!waitingForRegistration) {
         post("accept", new byte[0]);
       }
@@ -208,13 +198,13 @@ class ImageControlPlaneIT {
 
   @DisplayName("Worker Peer")
   private static final class WorkerPeer implements AutoCloseable {
-    private final ManagedChannel channel =
-        NettyChannelBuilder.forAddress("127.0.0.1", 9090).usePlaintext().build();
+    private final ManagedChannel channel;
     private final CompletableFuture<Void> command = new CompletableFuture<>();
     private final StreamObserver<EstablishWorkerSessionRequest> requests;
 
     @Builder
-    private WorkerPeer(boolean withoutRegistration) {
+    private WorkerPeer(int port, boolean withoutRegistration) {
+      channel = NettyChannelBuilder.forAddress("127.0.0.1", port).usePlaintext().build();
       requests =
           TranscodeWorkerServiceGrpc.newStub(channel)
               .establishWorkerSession(
@@ -257,7 +247,8 @@ class ImageControlPlaneIT {
   }
 
   private HttpRequest request(String command, byte[] body) {
-    return HttpRequest.newBuilder(URI.create("http://127.0.0.1:8082/" + command))
+    return HttpRequest.newBuilder(
+            URI.create("http://127.0.0.1:" + controlPlane.commandPort() + "/" + command))
         .timeout(Duration.ofSeconds(3))
         .POST(HttpRequest.BodyPublishers.ofByteArray(body))
         .build();
