@@ -839,13 +839,12 @@ class TranscodeWorkerControlPlaneIT {
     }
   }
 
-  private TranscodeWorker worker(Path mediaRoot) throws Exception {
+  private TranscodeWorker worker(Path mediaRoot) {
     return worker(mediaRoot, ScriptedProcessLauncher.running());
   }
 
   // Room for the two attempts that some tests run at once.
-  private TranscodeWorker worker(Path mediaRoot, ScriptedProcessLauncher launcher)
-      throws Exception {
+  private TranscodeWorker worker(Path mediaRoot, ScriptedProcessLauncher launcher) {
     return worker(mediaRoot, launcher, 2);
   }
 

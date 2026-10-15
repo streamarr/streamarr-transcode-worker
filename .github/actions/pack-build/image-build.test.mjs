@@ -34,11 +34,11 @@ function buildImage({ version } = {}) {
       GIT_AUTHOR_NAME: 'Release fixture', GIT_COMMITTER_NAME: 'Release fixture',
       GIT_AUTHOR_EMAIL: 'fixture@example.test', GIT_COMMITTER_EMAIL: 'fixture@example.test',
     };
-    const git = (...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', ...args], { cwd: directory, env, encoding: 'utf8' }).trim();
+    const git = (...args) => execFileSync('/usr/bin/git', ['-c', 'commit.gpgsign=false', ...args], { cwd: directory, env, encoding: 'utf8' }).trim();
     git('init', '--quiet');
     git('commit', '--quiet', '--allow-empty', '-m', 'fixture');
     const revision = git('rev-parse', 'HEAD');
-    const result = spawnSync('bash', [join(directory, '.github/actions/pack-build/build-worker-image.sh'), image, ...version ? [version] : []], {
+    const result = spawnSync(join(directory, '.github/actions/pack-build/build-worker-image.sh'), [image, ...version ? [version] : []], {
       cwd: directory, env, encoding: 'utf8',
     });
     const state = JSON.parse(readFileSync(statePath, 'utf8'));

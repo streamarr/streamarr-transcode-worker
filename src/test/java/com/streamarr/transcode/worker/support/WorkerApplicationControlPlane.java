@@ -51,15 +51,17 @@ public final class WorkerApplicationControlPlane
             .intercept(
                 new ServerInterceptor() {
                   @Override
-                  public <ReqT, RespT> ServerCall.Listener<ReqT> interceptCall(
-                      ServerCall<ReqT, RespT> call,
-                      Metadata headers,
-                      ServerCallHandler<ReqT, RespT> next) {
+                  public <Q, R> ServerCall.Listener<Q> interceptCall(
+                      ServerCall<Q, R> call, Metadata headers, ServerCallHandler<Q, R> next) {
                     identityHeader.complete(headers.get(WORKER_ID_HEADER));
                     return next.startCall(call, headers);
                   }
                 });
     server = builder.build().start();
+  }
+
+  public static WorkerApplicationControlPlaneBuilder builder() {
+    return new WorkerApplicationControlPlaneBuilder().producerAdmitted(() -> true);
   }
 
   public String awaitIdentityHeader() throws Exception {
@@ -154,9 +156,5 @@ public final class WorkerApplicationControlPlane
     assertThat(server.awaitTermination(1, TimeUnit.MINUTES))
         .as("the control-plane server terminates")
         .isTrue();
-  }
-
-  public static class WorkerApplicationControlPlaneBuilder {
-    private BooleanSupplier producerAdmitted = () -> true;
   }
 }

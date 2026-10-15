@@ -16,13 +16,10 @@ import com.streamarr.transcode.worker.TranscodeWorkerConfiguration;
 import com.streamarr.transcode.worker.WorkerRuntime;
 import io.grpc.CallOptions;
 import io.grpc.ClientCall;
-import io.grpc.ForwardingChannelBuilder2;
 import io.grpc.ManagedChannel;
-import io.grpc.ManagedChannelBuilder;
 import io.grpc.Metadata;
 import io.grpc.MethodDescriptor;
 import io.grpc.Status;
-import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
 import java.io.ByteArrayOutputStream;
 import java.net.InetSocketAddress;
 import java.util.List;
@@ -40,10 +37,10 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
   private QueuedProbeExecutor probes;
 
   @Override
-  public ManagedChannelBuilder<?> channelBuilder(
+  public ManagedChannel openChannel(
       TranscodeWorkerConfiguration configuration, InetSocketAddress address) {
     connection = new Connection();
-    return new ChannelBuilder(connection);
+    return connection;
   }
 
   @Override
@@ -189,27 +186,6 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     @Override
     public boolean awaitTermination(long timeout, TimeUnit unit) {
       return shutdown;
-    }
-  }
-
-  private static final class ChannelBuilder extends ForwardingChannelBuilder2<ChannelBuilder> {
-
-    private final ManagedChannel channel;
-    private final ManagedChannelBuilder<?> delegate =
-        NettyChannelBuilder.forAddress("localhost", 1);
-
-    private ChannelBuilder(ManagedChannel channel) {
-      this.channel = channel;
-    }
-
-    @Override
-    protected ManagedChannelBuilder<?> delegate() {
-      return delegate;
-    }
-
-    @Override
-    public ManagedChannel build() {
-      return channel;
     }
   }
 

@@ -4,6 +4,7 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumMap;
 import java.util.EnumSet;
@@ -14,6 +15,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
@@ -236,14 +238,16 @@ public class TranscodeCapabilityService {
       }
 
       process.waitFor();
-      var usableEncoders = new HashSet<String>();
-      for (var encoder : encoders) {
-        if (canEncodeCpuFrames(encoder)) {
-          usableEncoders.add(encoder);
-        }
+      var usableEncoders =
+          encoders.stream()
+              .filter(this::canEncodeCpuFrames)
+              .collect(Collectors.toUnmodifiableSet());
+      if (Thread.currentThread().isInterrupted()) {
+        log.debug("Hardware encoder detection interrupted");
+        return Set.of();
       }
 
-      return Set.copyOf(usableEncoders);
+      return usableEncoders;
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       log.debug("Hardware encoder detection interrupted", e);
@@ -255,29 +259,26 @@ public class TranscodeCapabilityService {
   }
 
   // The codec families whose software encoder passes the same test encode as a hardware encoder.
-  // An interrupted hardware detection starts no further test encode.
   private Set<CodecFamily> detectSoftwareEncoders() {
+    var families =
+        Arrays.stream(CodecFamily.values())
+            .filter(family -> canEncodeCpuFrames(family.softwareEncoder()))
+            .collect(Collectors.toCollection(() -> EnumSet.noneOf(CodecFamily.class)));
     if (Thread.currentThread().isInterrupted()) {
+      log.debug("Software encoder detection interrupted");
       return Set.of();
     }
 
-    try {
-      var families = EnumSet.noneOf(CodecFamily.class);
-      for (var family : CodecFamily.values()) {
-        if (canEncodeCpuFrames(family.softwareEncoder())) {
-          families.add(family);
-        }
-      }
-
-      return families;
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-      log.debug("Software encoder detection interrupted", e);
-      return Set.of();
-    }
+    return families;
   }
 
-  private boolean canEncodeCpuFrames(String encoder) throws InterruptedException {
+  // Once the thread is interrupted, a test encode fails without starting FFmpeg, so an interrupted
+  // detection starts no further test encode. The caller reads the restored interrupt flag.
+  private boolean canEncodeCpuFrames(String encoder) {
+    if (Thread.currentThread().isInterrupted()) {
+      return false;
+    }
+
     try {
       // Match the command builder's CPU scaling path. Compiled encoders may need unavailable
       // devices.
@@ -309,7 +310,9 @@ public class TranscodeCapabilityService {
         terminateValidation(process);
       }
     } catch (InterruptedException e) {
-      throw e;
+      Thread.currentThread().interrupt();
+      log.debug("Encoder validation interrupted for {}", encoder, e);
+      return false;
     } catch (Exception e) {
       log.debug("Encoder validation failed for {}", encoder, e);
       return false;
@@ -370,6 +373,6 @@ public class TranscodeCapabilityService {
 
   @FunctionalInterface
   public interface ProcessFactory {
-    Process create(String[] command) throws Exception;
+    Process create(String[] command) throws IOException;
   }
 }

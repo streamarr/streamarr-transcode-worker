@@ -74,8 +74,6 @@ import lombok.extern.slf4j.Slf4j;
 public final class TranscodeWorker implements AutoCloseable {
 
   private static final int CONNECTION_TIMEOUT_SECONDS = 5;
-  private static final int KEEPALIVE_TIME_SECONDS = 30;
-  private static final int KEEPALIVE_TIMEOUT_SECONDS = 10;
   private static final int UPLOAD_MESSAGE_BYTES = 64 * 1024;
 
   private final TranscodeWorkerConfiguration configuration;
@@ -93,7 +91,7 @@ public final class TranscodeWorker implements AutoCloseable {
   private WorkerSessionAccepted workerSession;
   private WorkerProbeSession probeSession;
   private CompletableFuture<Void> disconnected;
-  private volatile WorkerResponseObserver responseObserver;
+  private final AtomicReference<WorkerResponseObserver> responseObserver = new AtomicReference<>();
 
   @Builder
   private TranscodeWorker(
@@ -110,21 +108,17 @@ public final class TranscodeWorker implements AutoCloseable {
     jobMapper = new WorkerVariantJobMapper(sources);
   }
 
+  public static TranscodeWorkerBuilder builder() {
+    return new TranscodeWorkerBuilder().runtime(new GrpcWorkerRuntime());
+  }
+
   public synchronized void start(String host, int port)
       throws IOException, InterruptedException, ExecutionException, TimeoutException {
     if (channel != null) {
       throw new IllegalStateException("Transcode worker is already started");
     }
 
-    var channelBuilder =
-        runtime.channelBuilder(configuration, InetSocketAddress.createUnresolved(host, port));
-    // Client keepalive detects a half-open control-plane connection (server power loss, dropped
-    // NAT mapping); without it an idle worker would wait on a dead session until TCP gives up.
-    channel =
-        channelBuilder
-            .keepAliveTime(KEEPALIVE_TIME_SECONDS, TimeUnit.SECONDS)
-            .keepAliveTimeout(KEEPALIVE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            .build();
+    channel = runtime.openChannel(configuration, InetSocketAddress.createUnresolved(host, port));
     var accepted = new CompletableFuture<WorkerSessionAccepted>();
     var sessionRequests = new AtomicReference<StreamObserver<EstablishWorkerSessionRequest>>();
     probeSession =
@@ -135,15 +129,16 @@ public final class TranscodeWorker implements AutoCloseable {
             .executor(runtime.newProbeScope())
             .build();
     disconnected = new CompletableFuture<>();
-    responseObserver = new WorkerResponseObserver(accepted, probeSession);
-    requests = TranscodeWorkerServiceGrpc.newStub(channel).establishWorkerSession(responseObserver);
+    var observer = new WorkerResponseObserver(accepted, probeSession);
+    responseObserver.set(observer);
+    requests = TranscodeWorkerServiceGrpc.newStub(channel).establishWorkerSession(observer);
     sessionRequests.set(requests);
     send(registration());
     accepted.get(CONNECTION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
   }
 
   public boolean hasAcceptedSession() {
-    var observer = responseObserver;
+    var observer = responseObserver.get();
     return observer != null && observer.sessionAccepted && !observer.sessionDisconnected.isDone();
   }
 
@@ -603,7 +598,7 @@ public final class TranscodeWorker implements AutoCloseable {
 
   // Returns the closed session's probes and any attempt that started after the stops began.
   private synchronized Optional<ClosedSession> closeConnection() {
-    responseObserver = null;
+    responseObserver.set(null);
 
     if (channel == null) {
       return Optional.empty();
@@ -847,10 +842,6 @@ public final class TranscodeWorker implements AutoCloseable {
     public void onCompleted() {
       // gRPC routes a client-streaming close without its single response through onError.
     }
-  }
-
-  public static class TranscodeWorkerBuilder {
-    private WorkerRuntime runtime = new GrpcWorkerRuntime();
   }
 
   private record ClosedSession(WorkerProbeSession probes, List<Producer> attempts) {}
