@@ -13,7 +13,6 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.file.Path;
-import java.time.Duration;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -60,8 +59,6 @@ class TranscodeWorkerKeepaliveIT {
         workerConfigurationBuilder()
             .availableSlots(1)
             .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, mediaRoot))
-            .keepAliveTime(Duration.ofSeconds(10))
-            .keepAliveTimeout(Duration.ofSeconds(2))
             .build();
     return TranscodeWorker.builder()
         .configuration(configuration)
