@@ -8,9 +8,9 @@ import java.util.Queue;
 import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 
@@ -29,20 +29,24 @@ public final class QueuedProbeExecutor extends AbstractExecutorService {
     queued.add(command);
   }
 
-  public Future<?> runNext() {
+  /** Runs the next queued probe task and returns the task's completion. */
+  public CompletableFuture<Void> runNext() {
     var task = queued.poll();
     assertThat(task).as("a probe is queued for execution").isNotNull();
-    return running.submit(task);
+    return CompletableFuture.runAsync(task, running);
   }
 
-  public void drain() throws Exception {
+  public void drain() throws InterruptedException, ExecutionException {
     while (!queued.isEmpty()) {
-      runNext().get(5, TimeUnit.SECONDS);
+      runNext().get();
     }
   }
 
-  public void awaitClosing() throws Exception {
-    closing.get(5, TimeUnit.SECONDS);
+  /** Waits until the worker closes this scope, and fails at once if its close ends first. */
+  public void awaitClosing(CompletableFuture<?> workerClose)
+      throws InterruptedException, ExecutionException {
+    CompletableFuture.anyOf(closing, workerClose).get();
+    assertThat(closing).as("the worker closed its probe scope before its close ended").isDone();
   }
 
   @Override
@@ -78,7 +82,10 @@ public final class QueuedProbeExecutor extends AbstractExecutorService {
     shutdown();
     closing.complete(null);
     try {
-      assertThat(awaitTermination(5, TimeUnit.SECONDS))
+      // A hang guard: a JUnit timeout interrupts only once, and a wait in the test body may
+      // already have consumed that interrupt. The worker's close also runs this wait on threads
+      // that the timeout never interrupts.
+      assertThat(awaitTermination(1, TimeUnit.MINUTES))
           .as("all probe tasks finish before their scope closes")
           .isTrue();
     } catch (InterruptedException exception) {

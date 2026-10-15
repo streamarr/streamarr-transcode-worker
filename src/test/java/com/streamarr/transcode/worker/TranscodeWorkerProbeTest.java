@@ -32,12 +32,14 @@ import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -47,6 +49,7 @@ import tools.jackson.databind.ObjectMapper;
 
 @Tag("UnitTest")
 @DisplayName("Transcode Worker Probe Tests")
+@Timeout(value = 1, unit = TimeUnit.MINUTES)
 class TranscodeWorkerProbeTest {
 
   @TempDir Path tempDir;
@@ -188,11 +191,11 @@ class TranscodeWorkerProbeTest {
         var connection = runtime.connection();
         start(connection, request);
         var running = runtime.probes().runNext();
-        process.awaitStarted();
+        process.awaitStarted(running);
 
         cancel(connection, request);
-        process.awaitTerminationRequested();
-        process.awaitExitWait();
+        process.awaitTerminationRequested(running);
+        process.awaitExitWait(running);
 
         assertThat(process.isAlive()).isTrue();
         assertThat(connection.results())
@@ -200,7 +203,7 @@ class TranscodeWorkerProbeTest {
             .isEmpty();
         assertThat(running.isDone()).isFalse();
         process.finish();
-        running.get(5, TimeUnit.SECONDS);
+        running.get();
         assertThat(connection.results())
             .containsExactly(failure(request, ProbeFailure.PROBE_FAILURE_CANCELLED));
       } finally {
@@ -274,12 +277,12 @@ class TranscodeWorkerProbeTest {
         var connection = runtime.connection();
         start(connection, requestBuilder().build());
         var running = runtime.probes().runNext();
-        process.awaitStarted();
+        process.awaitStarted(running);
 
         ending.end(connection);
 
-        process.awaitTerminationRequested();
-        running.get(5, TimeUnit.SECONDS);
+        process.awaitTerminationRequested(running);
+        running.get();
         assertThat(process.isAlive()).isFalse();
       } finally {
         process.finish();
@@ -335,13 +338,13 @@ class TranscodeWorkerProbeTest {
                 .build());
         start(replacement, request);
         var running = runtime.probes().runNext();
-        process.awaitStarted();
+        process.awaitStarted(running);
 
         ending.end(old);
 
         assertThat(launcher.process(fromProto(job.getJobAttemptId())).isAlive()).isTrue();
         process.finish();
-        running.get(5, TimeUnit.SECONDS);
+        running.get();
         assertThat(replacement.results())
             .singleElement()
             .satisfies(
@@ -375,19 +378,19 @@ class TranscodeWorkerProbeTest {
         start(runtime.connection(), requestBuilder().build());
         var probes = runtime.probes();
         var running = probes.runNext();
-        process.awaitStarted();
+        process.awaitStarted(running);
 
-        var closing = tasks.submit(worker::close);
+        var closing = CompletableFuture.runAsync(worker::close, tasks);
         try {
-          probes.awaitClosing();
-          process.awaitTerminationRequested();
+          probes.awaitClosing(closing);
+          process.awaitTerminationRequested(running);
           assertThat(closing.isDone()).as("close is waiting for its live probe task").isFalse();
         } finally {
           process.finish();
         }
 
-        closing.get(5, TimeUnit.SECONDS);
-        running.get(5, TimeUnit.SECONDS);
+        closing.get();
+        running.get();
         assertThat(process.isAlive()).isFalse();
       } finally {
         process.finish();
@@ -416,15 +419,15 @@ class TranscodeWorkerProbeTest {
         var old = runtime.connection();
         var oldProbes = runtime.probes();
         start(old, oldRequest);
-        oldProbes.runNext();
-        process.awaitStarted();
-        var closing = tasks.submit(worker::close);
-        oldProbes.awaitClosing();
+        var running = oldProbes.runNext();
+        process.awaitStarted(running);
+        var closing = CompletableFuture.runAsync(worker::close, tasks);
+        oldProbes.awaitClosing(closing);
 
         worker.start("localhost", 1);
         var replacement = runtime.connection();
         process.finish();
-        closing.get(5, TimeUnit.SECONDS);
+        closing.get();
         start(replacement, nextRequest);
         runtime.probes().drain();
 
@@ -520,7 +523,7 @@ class TranscodeWorkerProbeTest {
         var connection = runtime.connection();
         start(connection, request);
         var running = runtime.probes().runNext();
-        process.awaitStarted();
+        process.awaitStarted(running);
 
         connection.deliver(
             EstablishWorkerSessionResponse.newBuilder()
@@ -530,7 +533,7 @@ class TranscodeWorkerProbeTest {
                         .setProbeAttemptId(request.getProbeAttemptId()))
                 .build());
         process.finish();
-        running.get(5, TimeUnit.SECONDS);
+        running.get();
 
         assertThat(connection.results())
             .singleElement()

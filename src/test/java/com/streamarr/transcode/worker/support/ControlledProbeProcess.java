@@ -1,12 +1,13 @@
 package com.streamarr.transcode.worker.support;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
 import lombok.Builder;
 
 public final class ControlledProbeProcess extends Process {
@@ -37,16 +38,29 @@ public final class ControlledProbeProcess extends Process {
     }
   }
 
-  public void awaitStarted() throws Exception {
-    started.get(5, TimeUnit.SECONDS);
+  /** Waits until the probe task waits for this process. */
+  public void awaitStarted(CompletableFuture<?> probeTask)
+      throws InterruptedException, ExecutionException {
+    awaitBeforeTaskEnds(started, probeTask, "waited for the process");
   }
 
-  public void awaitTerminationRequested() throws Exception {
-    terminationRequested.get(5, TimeUnit.SECONDS);
+  public void awaitTerminationRequested(CompletableFuture<?> probeTask)
+      throws InterruptedException, ExecutionException {
+    awaitBeforeTaskEnds(terminationRequested, probeTask, "requested termination");
   }
 
-  public void awaitExitWait() throws Exception {
-    awaitingExit.get(5, TimeUnit.SECONDS);
+  /** Waits until the probe task waits for this process to exit after a termination request. */
+  public void awaitExitWait(CompletableFuture<?> probeTask)
+      throws InterruptedException, ExecutionException {
+    awaitBeforeTaskEnds(awaitingExit, probeTask, "waited for the process to exit");
+  }
+
+  // Fails at once when the probe task ends first, because the signal can no longer arrive.
+  private static void awaitBeforeTaskEnds(
+      CompletableFuture<Void> signal, CompletableFuture<?> probeTask, String expectation)
+      throws InterruptedException, ExecutionException {
+    CompletableFuture.anyOf(signal, probeTask).get();
+    assertThat(signal).as("the probe task %s before it ended", expectation).isDone();
   }
 
   public void finish() {

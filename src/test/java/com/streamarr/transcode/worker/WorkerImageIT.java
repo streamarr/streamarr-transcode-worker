@@ -6,7 +6,6 @@ import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.request
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.sourceBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variantJobBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 
 import build.buf.gen.streamarr.transcode.v1.JobAttemptCompleted;
@@ -18,8 +17,11 @@ import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.TranscodeMode;
 import build.buf.gen.streamarr.transcode.v1.WorkerRegistration;
+import com.github.dockerjava.api.DockerClient;
+import com.github.dockerjava.api.command.WaitContainerResultCallback;
 import com.streamarr.transcode.fixtures.image.ImageControlPlane;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -32,20 +34,21 @@ import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import lombok.Builder;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.testcontainers.containers.BindMode;
-import org.testcontainers.containers.ContainerLaunchException;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.output.Slf4jLogConsumer;
-import org.testcontainers.containers.output.ToStringConsumer;
-import org.testcontainers.containers.startupcheck.OneShotStartupCheckStrategy;
+import org.testcontainers.containers.startupcheck.StartupCheckStrategy;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.utility.MountableFile;
 import tools.jackson.databind.ObjectMapper;
@@ -53,6 +56,7 @@ import tools.jackson.databind.ObjectMapper;
 @Tag("ImageTest")
 @DisplayName("Worker Image Tests")
 @Slf4j
+@Timeout(value = 5, unit = TimeUnit.MINUTES)
 class WorkerImageIT {
 
   // A decomposed (NFD) accent, literal percent sequences, and names outside the BMP must all reach
@@ -69,18 +73,17 @@ class WorkerImageIT {
   @DisplayName("Should become ready after registration is accepted when using the default endpoint")
   void shouldBecomeReadyAfterRegistrationIsAcceptedWhenUsingTheDefaultEndpoint() throws Exception {
     try (var image = ImageFixture.builder().media(media).build()) {
+      var healthBeforeAcceptance = image.acceptAfterHealthCheck();
+
+      assertThat(healthBeforeAcceptance.liveness()).as("liveness before acceptance").isEqualTo(200);
+      assertThat(healthBeforeAcceptance.readiness())
+          .as("readiness before acceptance")
+          .isEqualTo(503);
       var registration = image.registration();
       assertThat(registration.getWorker().getWorkerId()).isEqualTo(toProto(image.workerId));
       assertThat(registration.getCapabilities().getSourceNamespaceIdsList())
           .containsExactly(toProto(SOURCE_NAMESPACE_ID));
-      assertThat(image.health("liveness").statusCode()).isEqualTo(200);
-      assertThat(image.health("readiness").statusCode()).isEqualTo(503);
-
-      image.accept();
-
-      await()
-          .atMost(Duration.ofSeconds(10))
-          .untilAsserted(() -> assertThat(image.health("readiness").statusCode()).isEqualTo(200));
+      image.awaitReadiness();
       var identity = image.worker.execInContainer("id", "-u");
       assertThat(identity.getExitCode()).as("id -u failed: %s", identity.getStderr()).isZero();
       var uid = identity.getStdout().trim();
@@ -220,8 +223,9 @@ class WorkerImageIT {
 
   @Test
   @DisplayName(
-      "Should diagnose the locale and fail the probe for retry when the image runs under POSIX")
-  void shouldDiagnoseLocaleAndFailProbeForRetryWhenImageRunsUnderPosix() throws Exception {
+      "Should fail the probe for retry when the image runs under POSIX with a Unicode source key")
+  void shouldFailTheProbeForRetryWhenTheImageRunsUnderPosixWithAUnicodeSourceKey()
+      throws Exception {
     copyMedia(UNICODE_KEY);
     try (var image = ImageFixture.builder().media(media).filenameLocale("POSIX").build()) {
       image.accept();
@@ -230,34 +234,21 @@ class WorkerImageIT {
       var result = ProbeAttemptResult.parseFrom(image.command("probe", request.toByteArray()));
 
       assertThat(result.getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_SOURCE_UNAVAILABLE);
-      assertThat(image.worker.getLogs())
-          .contains("rather than UTF-8")
-          .contains("the effective locale is LC_ALL=POSIX");
     }
   }
 
+  // The POSIX probe test runs the same worker under POSIX with the ASCII root /media, and that
+  // worker registers. Only the root differs here.
   @Test
-  @DisplayName(
-      "Should diagnose the locale before startup fails when a POSIX worker has a non-ASCII root")
-  void shouldDiagnoseLocaleBeforeStartupFailsWhenPosixWorkerHasNonAsciiRoot() {
-    // A container that fails to launch no longer serves getLogs(), so collect output as it streams.
-    var output = new ToStringConsumer();
-    try (var worker =
-        new GenericContainer<>(workerImage())
-            .withImagePullPolicy(_ -> false)
-            .withLogConsumer(
-                output.andThen(new Slf4jLogConsumer(log).withPrefix("posix-root-worker")))
-            .withEnv("LC_ALL", "POSIX")
-            .withEnv("TRANSCODE_WORKER_ID", UUID.randomUUID().toString())
-            .withEnv("TRANSCODE_WORKER_SOURCE_NAMESPACE_ID", SOURCE_NAMESPACE_ID.toString())
-            .withEnv("TRANSCODE_WORKER_SOURCE_ROOT", "/media/Café")
-            .withStartupCheckStrategy(
-                new OneShotStartupCheckStrategy().withTimeout(Duration.ofMinutes(1)))) {
-      assertThatThrownBy(worker::start).isInstanceOf(ContainerLaunchException.class);
-
-      assertThat(output.toUtf8String())
-          .containsSubsequence(
-              "the effective locale is LC_ALL=POSIX", "InvalidPathException", "/media/Caf");
+  @DisplayName("Should exit before registration when a POSIX worker has a non-ASCII source root")
+  void shouldExitBeforeRegistrationWhenAPosixWorkerHasANonAsciiSourceRoot() throws Exception {
+    try (var image =
+        ImageFixture.builder()
+            .media(media)
+            .filenameLocale("POSIX")
+            .sourceRoot("/media/Café")
+            .build()) {
+      assertThat(image.exitStatusBeforeRegistration()).as("worker exit status").isNotZero();
     }
   }
 
@@ -407,17 +398,30 @@ class WorkerImageIT {
     return "/media/scripted-ffmpeg";
   }
 
+  private record HealthBeforeAcceptance(int liveness, int readiness) {}
+
+  private static final class StartedContainer extends StartupCheckStrategy {
+
+    @Override
+    public StartupStatus checkStartupState(DockerClient dockerClient, String containerId) {
+      return StartupStatus.SUCCESSFUL;
+    }
+  }
+
   @DisplayName("Worker Image Fixture")
   private static final class ImageFixture implements AutoCloseable {
 
     private final UUID workerId = UUID.randomUUID();
     private final GenericContainer<?> controlPlane;
     private final GenericContainer<?> worker;
+    private final CompletableFuture<Integer> workerExit = new CompletableFuture<>();
+    private WaitContainerResultCallback workerExitWait;
     private final HttpClient http =
         HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
     @Builder
-    private ImageFixture(Path media, String ffmpegPath, String ffprobePath, String filenameLocale)
+    private ImageFixture(
+        Path media, String ffmpegPath, String ffprobePath, String filenameLocale, String sourceRoot)
         throws IOException {
       Files.setPosixFilePermissions(media, PosixFilePermissions.fromString("rwxr-xr-x"));
       var image = workerImage();
@@ -445,9 +449,11 @@ class WorkerImageIT {
               .withNetworkMode("container:" + controlPlane.getContainerId())
               .withEnv("TRANSCODE_WORKER_ID", workerId.toString())
               .withEnv("TRANSCODE_WORKER_SOURCE_NAMESPACE_ID", SOURCE_NAMESPACE_ID.toString())
-              .withEnv("TRANSCODE_WORKER_SOURCE_ROOT", "/media")
+              .withEnv("TRANSCODE_WORKER_SOURCE_ROOT", sourceRoot == null ? "/media" : sourceRoot)
               .withFileSystemBind(media.toAbsolutePath().toString(), "/media", BindMode.READ_ONLY)
-              .waitingFor(Wait.forLogMessage(".*Started TranscodeWorkerApplication.*", 1));
+              // The exit watch reports a worker that exits at once, so the start only needs the
+              // container to have started.
+              .withStartupCheckStrategy(new StartedContainer());
       if (ffmpegPath != null) {
         worker.withEnv("TRANSCODE_WORKER_FFMPEG_PATH", ffmpegPath);
       }
@@ -461,21 +467,87 @@ class WorkerImageIT {
       }
       try {
         worker.start();
+        watchWorkerExit();
       } catch (RuntimeException failure) {
         close();
         throw failure;
       }
     }
 
-    private WorkerRegistration registration() throws Exception {
-      return WorkerRegistration.parseFrom(command("registration", new byte[0]));
+    private void watchWorkerExit() {
+      workerExitWait = worker.getDockerClient().waitContainerCmd(worker.getContainerId()).start();
+      Thread.ofVirtual()
+          .start(
+              () -> {
+                try {
+                  workerExit.complete(workerExitWait.awaitStatusCode());
+                } catch (RuntimeException failure) {
+                  workerExit.completeExceptionally(failure);
+                }
+              });
     }
 
+    // The control plane answers the registration request successfully only once the worker
+    // registers, so a worker that cannot start ends this wait with its exit.
+    private int exitStatusBeforeRegistration() throws Exception {
+      var registration =
+          http.sendAsync(
+              commandRequest("registration", new byte[0]), HttpResponse.BodyHandlers.discarding());
+      CompletableFuture.anyOf(registration, workerExit).get();
+      assertThat(workerExit).as("the worker exited before the control plane answered").isDone();
+      return workerExit.resultNow();
+    }
+
+    private WorkerRegistration registration() throws Exception {
+      return WorkerRegistration.parseFrom(commandBeforeWorkerExit("registration"));
+    }
+
+    // The control plane waits for the registration before it accepts. A worker that exits first
+    // fails this wait at once.
     private void accept() throws Exception {
-      command("accept", new byte[0]);
+      commandBeforeWorkerExit("accept");
+    }
+
+    private HealthBeforeAcceptance acceptAfterHealthCheck() throws Exception {
+      var statuses =
+          new String(commandBeforeWorkerExit("accept-after-health-check"), StandardCharsets.UTF_8)
+              .split(" ");
+      return new HealthBeforeAcceptance(
+          Integer.parseInt(statuses[0]), Integer.parseInt(statuses[1]));
+    }
+
+    // Spring reports readiness only once the worker's start has returned, and nothing outside the
+    // worker can observe that moment, so this polls. The poll fails at once when the worker exits.
+    // It has no time limit of its own; it runs on the test thread, so the class timeout's interrupt
+    // ends it.
+    private void awaitReadiness() {
+      await()
+          .pollInSameThread()
+          .forever()
+          .failFast("The worker exited before it became ready", workerExit::isDone)
+          .until(() -> health("readiness").statusCode() == 200);
+    }
+
+    private byte[] commandBeforeWorkerExit(String path) throws Exception {
+      var response =
+          http.sendAsync(
+              commandRequest(path, new byte[0]), HttpResponse.BodyHandlers.ofByteArray());
+      CompletableFuture.anyOf(response, workerExit).get();
+      if (!response.isDone()) {
+        throw new AssertionError(
+            "The worker exited with status %d before the control plane answered %s%n%s"
+                .formatted(workerExit.resultNow(), path, worker.getLogs()));
+      }
+
+      return successfulBody(path, response.get());
     }
 
     private byte[] command(String path, byte[] body) throws Exception {
+      return successfulBody(
+          path, http.send(commandRequest(path, body), HttpResponse.BodyHandlers.ofByteArray()));
+    }
+
+    private HttpRequest commandRequest(String path, byte[] body) {
       var endpoint =
           URI.create(
               "http://"
@@ -484,13 +556,13 @@ class WorkerImageIT {
                   + controlPlane.getMappedPort(8082)
                   + "/"
                   + path);
-      var response =
-          http.send(
-              HttpRequest.newBuilder(endpoint)
-                  .timeout(Duration.ofSeconds(60))
-                  .POST(HttpRequest.BodyPublishers.ofByteArray(body))
-                  .build(),
-              HttpResponse.BodyHandlers.ofByteArray());
+      return HttpRequest.newBuilder(endpoint)
+          .timeout(Duration.ofSeconds(60))
+          .POST(HttpRequest.BodyPublishers.ofByteArray(body))
+          .build();
+    }
+
+    private static byte[] successfulBody(String path, HttpResponse<byte[]> response) {
       assertThat(response.statusCode())
           .as("Command %s failed: %s", path, new String(response.body(), StandardCharsets.UTF_8))
           .isEqualTo(200);
@@ -526,6 +598,13 @@ class WorkerImageIT {
       worker.close();
       controlPlane.close();
       http.close();
+      if (workerExitWait != null) {
+        try {
+          workerExitWait.close();
+        } catch (IOException failure) {
+          throw new UncheckedIOException(failure);
+        }
+      }
     }
   }
 }

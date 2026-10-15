@@ -41,10 +41,9 @@ import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
-import io.grpc.Server;
+import com.streamarr.transcode.worker.support.ControlPlaneServer;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
-import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.grpc.stub.StreamObserver;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -81,7 +80,7 @@ class TranscodeWorkerControlPlaneIT {
     var mediaRoot = Files.createDirectory(tempDir.resolve("media"));
     var service = ControllableWorkerService.closingBeforeRegistration();
 
-    try (var server = new TestServer(service);
+    try (var server = new ControlPlaneServer(service);
         var worker = worker(mediaRoot)) {
       server.start();
 
@@ -99,7 +98,7 @@ class TranscodeWorkerControlPlaneIT {
     var launcher = ScriptedProcessLauncher.running();
     var job = variantJob();
 
-    try (var server = new TestServer(service);
+    try (var server = new ControlPlaneServer(service);
         var worker = worker(preparedMediaRoot(), launcher)) {
       server.start();
       worker.start("localhost", server.port());
@@ -151,7 +150,7 @@ class TranscodeWorkerControlPlaneIT {
   @DisplayName("Should reject startup when the worker already has an active session")
   void shouldRejectStartupWhenWorkerAlreadyHasAnActiveSession() throws Exception {
     var service = new ControllableWorkerService();
-    try (var server = new TestServer(service);
+    try (var server = new ControlPlaneServer(service);
         var worker = worker(preparedMediaRoot())) {
       server.start();
       var port = server.port();
@@ -169,7 +168,7 @@ class TranscodeWorkerControlPlaneIT {
     var service = new ControllableWorkerService();
     var launcher = ScriptedProcessLauncher.running();
     var job = variantJob();
-    try (var server = new TestServer(service);
+    try (var server = new ControlPlaneServer(service);
         var worker = worker(preparedMediaRoot(), launcher)) {
       server.start();
       worker.start("localhost", server.port());
@@ -193,7 +192,7 @@ class TranscodeWorkerControlPlaneIT {
             .setJobAttemptId(toProto(UUID.randomUUID()))
             .setVariant(stopped.getVariant().toBuilder().setVariantLabel("1080p"))
             .build();
-    try (var server = new TestServer(service);
+    try (var server = new ControlPlaneServer(service);
         var worker = worker(preparedMediaRoot(), launcher)) {
       server.start();
       worker.start("localhost", server.port());
@@ -216,7 +215,7 @@ class TranscodeWorkerControlPlaneIT {
     var service = new ControllableWorkerService();
     var launcher = ScriptedProcessLauncher.running();
     var current = variantJob();
-    try (var server = new TestServer(service);
+    try (var server = new ControlPlaneServer(service);
         var worker = worker(preparedMediaRoot(), launcher, 1)) {
       server.start();
       worker.start("localhost", server.port());
@@ -262,7 +261,7 @@ class TranscodeWorkerControlPlaneIT {
                 initial.getExecution().toBuilder()
                     .setStartSequenceNumber(recording.startSequenceNumber()))
             .build();
-    try (var server = new TestServer(service);
+    try (var server = new ControlPlaneServer(service);
         var worker =
             worker(preparedMediaRoot(), ScriptedProcessLauncher.writing(recording.file()))) {
       server.start();
@@ -295,7 +294,7 @@ class TranscodeWorkerControlPlaneIT {
         new ScriptedProcessLauncher(
             _ -> ScriptedProcess.builder().output(initializationOnly).build());
     var job = variantJob();
-    try (var server = new TestServer(service);
+    try (var server = new ControlPlaneServer(service);
         var worker = worker(preparedMediaRoot(), launcher)) {
       server.start();
       worker.start("localhost", server.port());
@@ -326,7 +325,7 @@ class TranscodeWorkerControlPlaneIT {
                     .exitTiming(ExitTiming.AT_LAUNCH)
                     .build());
     var job = variantJob();
-    try (var server = new TestServer(service);
+    try (var server = new ControlPlaneServer(service);
         var worker = worker(preparedMediaRoot(), launcher)) {
       server.start();
       worker.start("localhost", server.port());
@@ -357,7 +356,7 @@ class TranscodeWorkerControlPlaneIT {
             });
     var failed = variantJob();
     var next = variantJob();
-    try (var server = new TestServer(service);
+    try (var server = new ControlPlaneServer(service);
         var worker = worker(preparedMediaRoot(), launcher)) {
       server.start();
       worker.start("localhost", server.port());
@@ -380,7 +379,7 @@ class TranscodeWorkerControlPlaneIT {
   void shouldAcceptValidJobWhenEarlierDecisionsContainInvalidEnumValues() throws Exception {
     var service = new ControllableWorkerService();
     var launcher = ScriptedProcessLauncher.running();
-    try (var server = new TestServer(service);
+    try (var server = new ControlPlaneServer(service);
         var worker = worker(preparedMediaRoot(), launcher)) {
       server.start();
       worker.start("localhost", server.port());
@@ -404,7 +403,7 @@ class TranscodeWorkerControlPlaneIT {
     var service = new ControllableWorkerService();
     var launcher = ScriptedProcessLauncher.running();
     var job = variantJob();
-    try (var server = new TestServer(service);
+    try (var server = new ControlPlaneServer(service);
         var worker = worker(preparedMediaRoot(), launcher)) {
       server.start();
       worker.start("localhost", server.port());
@@ -434,7 +433,7 @@ class TranscodeWorkerControlPlaneIT {
                     .exitTiming(ExitTiming.AT_QUIT)
                     .build());
     var job = variantJob();
-    try (var server = new TestServer(service);
+    try (var server = new ControlPlaneServer(service);
         var worker = worker(preparedMediaRoot(), launcher)) {
       server.start();
       worker.start("localhost", server.port());
@@ -459,7 +458,7 @@ class TranscodeWorkerControlPlaneIT {
               return ScriptedProcessLauncher.runningProcessBuilder().build();
             });
     var job = variantJob();
-    try (var server = new TestServer(service);
+    try (var server = new ControlPlaneServer(service);
         var worker = worker(preparedMediaRoot(), launcher)) {
       server.start();
       worker.start("localhost", server.port());
@@ -480,7 +479,7 @@ class TranscodeWorkerControlPlaneIT {
     var recording = recording(ENCODED_RECORDING);
     var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
     var job = variantJob();
-    try (var server = new TestServer(service);
+    try (var server = new ControlPlaneServer(service);
         var worker = worker(preparedMediaRoot(), launcher)) {
       server.start();
       worker.start("localhost", server.port());
@@ -510,7 +509,7 @@ class TranscodeWorkerControlPlaneIT {
     var service = new ControllableWorkerService();
     var recording = recording(ENCODED_RECORDING);
     var job = variantJob();
-    try (var server = new TestServer(service);
+    try (var server = new ControlPlaneServer(service);
         var worker =
             worker(preparedMediaRoot(), ScriptedProcessLauncher.writing(ENCODED_RECORDING))) {
       server.start();
@@ -559,7 +558,7 @@ class TranscodeWorkerControlPlaneIT {
     var launcher = ScriptedProcessLauncher.running();
     var job = variantJob();
 
-    try (var server = new TestServer(service);
+    try (var server = new ControlPlaneServer(service);
         var worker = worker(mediaRoot, launcher)) {
       server.start();
       worker.start("localhost", server.port());
@@ -583,7 +582,7 @@ class TranscodeWorkerControlPlaneIT {
     var protectedJob = variantJob();
     var orderingBarrierJob = variantJob();
 
-    try (var server = new TestServer(service);
+    try (var server = new ControlPlaneServer(service);
         var worker = worker(mediaRoot, launcher)) {
       server.start();
       worker.start("localhost", server.port());
@@ -939,37 +938,6 @@ class TranscodeWorkerControlPlaneIT {
       var event = takeEvent("the failure of an attempt");
       assertThat(event.hasJobAttemptFailed()).isTrue();
       return event.getJobAttemptFailed();
-    }
-  }
-
-  private static final class TestServer implements AutoCloseable {
-
-    private final ControllableWorkerService service;
-    private Server server;
-
-    private TestServer(ControllableWorkerService service) {
-      this.service = service;
-    }
-
-    private void start() throws Exception {
-      server = NettyServerBuilder.forPort(0).addService(service).build().start();
-    }
-
-    private int port() {
-      return server.getPort();
-    }
-
-    @Override
-    public void close() throws InterruptedException {
-      if (server == null) {
-        return;
-      }
-      server.shutdownNow();
-      // A hang guard: a JUnit timeout interrupts only once, and a wait in the test body may
-      // already have consumed that interrupt.
-      assertThat(server.awaitTermination(1, TimeUnit.MINUTES))
-          .as("the control-plane server terminates")
-          .isTrue();
     }
   }
 
