@@ -296,9 +296,9 @@ const FIXTURES = [
   },
   {
     name: '17-encode-audio-ends-long-before-video', source: 'long-video.mp4', mode: 'encode', encoder: 'libx264', seek: 0, start: 0,
-    proves: 'The same source encoded under the recipe: the fragment at 20.103 s carries an audio sample at 19.947 s, ' +
-      'and the AAC encoder\'s last two frames (19.968-20.011 s, segment 3) arrive only in fragment 168, at 168.001 s, ' +
-      'which opens segment 28: FFmpeg flushes the encoder once the whole input has ended.',
+    proves: 'The same source encoded under the recipe: the fragment at 20.020 s carries an audio sample at 19.947 s, ' +
+      'and the AAC encoder\'s last two frames (19.968-20.011 s, segment 3) arrive only in fragment 169, at 169.002 s, ' +
+      'inside segment 28: FFmpeg flushes the encoder once the whole input has ended.',
     hlsComparisons: [],
   },
 ];

@@ -9663,10 +9663,10 @@
       "mediaSegmentCount": 31,
       "videoTrackId": 1,
       "videoTimescale": 24000,
-      "byteLength": 286815,
+      "byteLength": 282422,
       "initializationSegment": {
-        "byteLength": 1327,
-        "sha256": "39cdfc309269398f003b685d058a720b79e4728009ff7ef79f7cb6c4c3df0dee",
+        "byteLength": 1328,
+        "sha256": "c03ce0e6204be1e8dce996b66cc50f9f77279934bce4a0c0bd752aa7014b0b74",
         "tracks": [
           {
             "trackId": 1,
@@ -9699,8 +9699,8 @@
         ]
       },
       "deliveredInitializationSegment": {
-        "byteLength": 1327,
-        "sha256": "39cdfc309269398f003b685d058a720b79e4728009ff7ef79f7cb6c4c3df0dee"
+        "byteLength": 1328,
+        "sha256": "c03ce0e6204be1e8dce996b66cc50f9f77279934bce4a0c0bd752aa7014b0b74"
       },
       "segments": [
         {
@@ -9709,7 +9709,7 @@
           "firstFragmentIndex": 0,
           "fragmentCount": 6,
           "keyframeCount": 3,
-          "byteLength": 20069
+          "byteLength": 20885
         },
         {
           "number": 1,
@@ -9717,7 +9717,7 @@
           "firstFragmentIndex": 6,
           "fragmentCount": 6,
           "keyframeCount": 3,
-          "byteLength": 20708
+          "byteLength": 20646
         },
         {
           "number": 2,
@@ -9725,7 +9725,7 @@
           "firstFragmentIndex": 12,
           "fragmentCount": 6,
           "keyframeCount": 3,
-          "byteLength": 21164
+          "byteLength": 20849
         },
         {
           "number": 3,
@@ -9733,7 +9733,7 @@
           "firstFragmentIndex": 18,
           "fragmentCount": 6,
           "keyframeCount": 3,
-          "byteLength": 12332
+          "byteLength": 12172
         },
         {
           "number": 4,
@@ -9741,7 +9741,7 @@
           "firstFragmentIndex": 24,
           "fragmentCount": 6,
           "keyframeCount": 3,
-          "byteLength": 8000
+          "byteLength": 7441
         },
         {
           "number": 5,
@@ -9749,7 +9749,7 @@
           "firstFragmentIndex": 30,
           "fragmentCount": 6,
           "keyframeCount": 3,
-          "byteLength": 8252
+          "byteLength": 7702
         },
         {
           "number": 6,
@@ -9757,7 +9757,7 @@
           "firstFragmentIndex": 36,
           "fragmentCount": 6,
           "keyframeCount": 3,
-          "byteLength": 7999
+          "byteLength": 7743
         },
         {
           "number": 7,
@@ -9765,7 +9765,7 @@
           "firstFragmentIndex": 42,
           "fragmentCount": 6,
           "keyframeCount": 3,
-          "byteLength": 7961
+          "byteLength": 7882
         },
         {
           "number": 8,
@@ -9773,7 +9773,7 @@
           "firstFragmentIndex": 48,
           "fragmentCount": 6,
           "keyframeCount": 3,
-          "byteLength": 8298
+          "byteLength": 7859
         },
         {
           "number": 9,
@@ -9781,7 +9781,7 @@
           "firstFragmentIndex": 54,
           "fragmentCount": 6,
           "keyframeCount": 3,
-          "byteLength": 8381
+          "byteLength": 7888
         },
         {
           "number": 10,
@@ -9789,7 +9789,7 @@
           "firstFragmentIndex": 60,
           "fragmentCount": 6,
           "keyframeCount": 3,
-          "byteLength": 8079
+          "byteLength": 7907
         },
         {
           "number": 11,
@@ -9797,7 +9797,7 @@
           "firstFragmentIndex": 66,
           "fragmentCount": 6,
           "keyframeCount": 3,
-          "byteLength": 8260
+          "byteLength": 7904
         },
         {
           "number": 12,
@@ -9805,7 +9805,7 @@
           "firstFragmentIndex": 72,
           "fragmentCount": 6,
           "keyframeCount": 3,
-          "byteLength": 8310
+          "byteLength": 8017
         },
         {
           "number": 13,
@@ -9813,7 +9813,7 @@
           "firstFragmentIndex": 78,
           "fragmentCount": 6,
           "keyframeCount": 3,
-          "byteLength": 8001
+          "byteLength": 8007
         },
         {
           "number": 14,
@@ -9821,7 +9821,7 @@
           "firstFragmentIndex": 84,
           "fragmentCount": 6,
           "keyframeCount": 3,
-          "byteLength": 7990
+          "byteLength": 7993
         },
         {
           "number": 15,
@@ -9829,7 +9829,7 @@
           "firstFragmentIndex": 90,
           "fragmentCount": 6,
           "keyframeCount": 3,
-          "byteLength": 8366
+          "byteLength": 7972
         },
         {
           "number": 16,
@@ -9837,7 +9837,7 @@
           "firstFragmentIndex": 96,
           "fragmentCount": 6,
           "keyframeCount": 3,
-          "byteLength": 8099
+          "byteLength": 8056
         },
         {
           "number": 17,
@@ -9845,7 +9845,7 @@
           "firstFragmentIndex": 102,
           "fragmentCount": 6,
           "keyframeCount": 3,
-          "byteLength": 8002
+          "byteLength": 7961
         },
         {
           "number": 18,
@@ -9853,7 +9853,7 @@
           "firstFragmentIndex": 108,
           "fragmentCount": 6,
           "keyframeCount": 3,
-          "byteLength": 8381
+          "byteLength": 7989
         },
         {
           "number": 19,
@@ -9861,7 +9861,7 @@
           "firstFragmentIndex": 114,
           "fragmentCount": 6,
           "keyframeCount": 3,
-          "byteLength": 8184
+          "byteLength": 8091
         },
         {
           "number": 20,
@@ -9869,7 +9869,7 @@
           "firstFragmentIndex": 120,
           "fragmentCount": 6,
           "keyframeCount": 3,
-          "byteLength": 7994
+          "byteLength": 8052
         },
         {
           "number": 21,
@@ -9877,7 +9877,7 @@
           "firstFragmentIndex": 126,
           "fragmentCount": 6,
           "keyframeCount": 3,
-          "byteLength": 7944
+          "byteLength": 8027
         },
         {
           "number": 22,
@@ -9885,7 +9885,7 @@
           "firstFragmentIndex": 132,
           "fragmentCount": 6,
           "keyframeCount": 3,
-          "byteLength": 8206
+          "byteLength": 8048
         },
         {
           "number": 23,
@@ -9893,7 +9893,7 @@
           "firstFragmentIndex": 138,
           "fragmentCount": 6,
           "keyframeCount": 3,
-          "byteLength": 8069
+          "byteLength": 8065
         },
         {
           "number": 24,
@@ -9901,7 +9901,7 @@
           "firstFragmentIndex": 144,
           "fragmentCount": 6,
           "keyframeCount": 3,
-          "byteLength": 8052
+          "byteLength": 8071
         },
         {
           "number": 25,
@@ -9909,7 +9909,7 @@
           "firstFragmentIndex": 150,
           "fragmentCount": 6,
           "keyframeCount": 3,
-          "byteLength": 8290
+          "byteLength": 8023
         },
         {
           "number": 26,
@@ -9917,7 +9917,7 @@
           "firstFragmentIndex": 156,
           "fragmentCount": 6,
           "keyframeCount": 3,
-          "byteLength": 7982
+          "byteLength": 8007
         },
         {
           "number": 27,
@@ -9925,7 +9925,7 @@
           "firstFragmentIndex": 162,
           "fragmentCount": 6,
           "keyframeCount": 3,
-          "byteLength": 7990
+          "byteLength": 8063
         },
         {
           "number": 28,
@@ -9933,7 +9933,7 @@
           "firstFragmentIndex": 168,
           "fragmentCount": 6,
           "keyframeCount": 3,
-          "byteLength": 8144
+          "byteLength": 8037
         },
         {
           "number": 29,
@@ -9941,7 +9941,7 @@
           "firstFragmentIndex": 174,
           "fragmentCount": 6,
           "keyframeCount": 3,
-          "byteLength": 7981
+          "byteLength": 7737
         }
       ],
       "discardedPreroll": [],
@@ -10052,12 +10052,12 @@
         "leadingFragmentsWithoutVideo": 0,
         "fragmentsWithAKeyframeInside": [],
         "videoSamples": 4316,
-        "largestFragmentByteLength": 4010,
+        "largestFragmentByteLength": 4082,
         "firstVideoPresentationTime": 0,
         "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
         "startPlusDurationsMissesNextStartByTicks": {
-          "min": -3003,
-          "max": 3003
+          "min": -1001,
+          "max": 1001
         },
         "videoPictures": {
           "sampleEntry": "avc1",
@@ -10520,7 +10520,7 @@
     {
       "name": "17-encode-audio-ends-long-before-video",
       "file": "17-encode-audio-ends-long-before-video.fmp4",
-      "proves": "The same source encoded under the recipe: the fragment at 20.103 s carries an audio sample at 19.947 s, and the AAC encoder's last two frames (19.968-20.011 s, segment 3) arrive only in fragment 168, at 168.001 s, which opens segment 28: FFmpeg flushes the encoder once the whole input has ended.",
+      "proves": "The same source encoded under the recipe: the fragment at 20.020 s carries an audio sample at 19.947 s, and the AAC encoder's last two frames (19.968-20.011 s, segment 3) arrive only in fragment 169, at 169.002 s, inside segment 28: FFmpeg flushes the encoder once the whole input has ended.",
       "recipeDeviation": null,
       "mode": "encode",
       "audio": "encode",
@@ -10609,7 +10609,7 @@
       "mediaSegmentCount": 31,
       "videoTrackId": 1,
       "videoTimescale": 24000,
-      "byteLength": 236423,
+      "byteLength": 236831,
       "initializationSegment": {
         "byteLength": 1346,
         "sha256": "edf910eb4d1ba85822c73286c2223ad7f35560b077bf7f15bcbbe87d53f56184",
@@ -10655,7 +10655,7 @@
           "firstFragmentIndex": 0,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 20242
+          "byteLength": 20758
         },
         {
           "number": 1,
@@ -10663,7 +10663,7 @@
           "firstFragmentIndex": 6,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 19633
+          "byteLength": 19608
         },
         {
           "number": 2,
@@ -10671,7 +10671,7 @@
           "firstFragmentIndex": 12,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 19709
+          "byteLength": 19707
         },
         {
           "number": 3,
@@ -10679,7 +10679,7 @@
           "firstFragmentIndex": 18,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 10922
+          "byteLength": 10803
         },
         {
           "number": 4,
@@ -10687,7 +10687,7 @@
           "firstFragmentIndex": 24,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6299
+          "byteLength": 6246
         },
         {
           "number": 5,
@@ -10695,7 +10695,7 @@
           "firstFragmentIndex": 30,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6432
+          "byteLength": 6397
         },
         {
           "number": 6,
@@ -10703,7 +10703,7 @@
           "firstFragmentIndex": 36,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6342
+          "byteLength": 6346
         },
         {
           "number": 7,
@@ -10711,7 +10711,7 @@
           "firstFragmentIndex": 42,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6133
+          "byteLength": 6359
         },
         {
           "number": 8,
@@ -10719,7 +10719,7 @@
           "firstFragmentIndex": 48,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6394
+          "byteLength": 6312
         },
         {
           "number": 9,
@@ -10727,7 +10727,7 @@
           "firstFragmentIndex": 54,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6321
+          "byteLength": 6322
         },
         {
           "number": 10,
@@ -10735,7 +10735,7 @@
           "firstFragmentIndex": 60,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6321
+          "byteLength": 6290
         },
         {
           "number": 11,
@@ -10743,7 +10743,7 @@
           "firstFragmentIndex": 66,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6385
+          "byteLength": 6361
         },
         {
           "number": 12,
@@ -10751,7 +10751,7 @@
           "firstFragmentIndex": 72,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6377
+          "byteLength": 6355
         },
         {
           "number": 13,
@@ -10759,7 +10759,7 @@
           "firstFragmentIndex": 78,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6397
+          "byteLength": 6314
         },
         {
           "number": 14,
@@ -10767,7 +10767,7 @@
           "firstFragmentIndex": 84,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6075
+          "byteLength": 6303
         },
         {
           "number": 15,
@@ -10775,7 +10775,7 @@
           "firstFragmentIndex": 90,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6435
+          "byteLength": 6307
         },
         {
           "number": 16,
@@ -10783,7 +10783,7 @@
           "firstFragmentIndex": 96,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6400
+          "byteLength": 6311
         },
         {
           "number": 17,
@@ -10791,7 +10791,7 @@
           "firstFragmentIndex": 102,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6175
+          "byteLength": 6328
         },
         {
           "number": 18,
@@ -10799,7 +10799,7 @@
           "firstFragmentIndex": 108,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6376
+          "byteLength": 6344
         },
         {
           "number": 19,
@@ -10807,7 +10807,7 @@
           "firstFragmentIndex": 114,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6329
+          "byteLength": 6336
         },
         {
           "number": 20,
@@ -10815,7 +10815,7 @@
           "firstFragmentIndex": 120,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6430
+          "byteLength": 6312
         },
         {
           "number": 21,
@@ -10823,7 +10823,7 @@
           "firstFragmentIndex": 126,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6301
+          "byteLength": 6344
         },
         {
           "number": 22,
@@ -10831,7 +10831,7 @@
           "firstFragmentIndex": 132,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6355
+          "byteLength": 6309
         },
         {
           "number": 23,
@@ -10839,7 +10839,7 @@
           "firstFragmentIndex": 138,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6268
+          "byteLength": 6341
         },
         {
           "number": 24,
@@ -10847,7 +10847,7 @@
           "firstFragmentIndex": 144,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6187
+          "byteLength": 6334
         },
         {
           "number": 25,
@@ -10855,7 +10855,7 @@
           "firstFragmentIndex": 150,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6360
+          "byteLength": 6250
         },
         {
           "number": 26,
@@ -10863,7 +10863,7 @@
           "firstFragmentIndex": 156,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6473
+          "byteLength": 6355
         },
         {
           "number": 27,
@@ -10871,7 +10871,7 @@
           "firstFragmentIndex": 162,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6281
+          "byteLength": 6355
         },
         {
           "number": 28,
@@ -10879,7 +10879,7 @@
           "firstFragmentIndex": 168,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6308
+          "byteLength": 6513
         },
         {
           "number": 29,
@@ -10887,7 +10887,7 @@
           "firstFragmentIndex": 174,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6417
+          "byteLength": 6265
         }
       ],
       "discardedPreroll": [],
@@ -10915,12 +10915,12 @@
         "leadingFragmentsWithoutVideo": 0,
         "fragmentsWithAKeyframeInside": [],
         "videoSamples": 4316,
-        "largestFragmentByteLength": 4694,
+        "largestFragmentByteLength": 4663,
         "firstVideoPresentationTime": 0,
         "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
         "startPlusDurationsMissesNextStartByTicks": {
-          "min": -5005,
-          "max": 5005
+          "min": -3003,
+          "max": 4004
         },
         "videoPictures": {
           "sampleEntry": "avc1",

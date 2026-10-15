@@ -1894,7 +1894,7 @@ class WorkerMediaSmokeTest {
               "-f",
               "lavfi",
               "-i",
-              "testsrc2=size=64x36:rate=24000/1001:duration=90",
+              "testsrc=size=64x36:rate=24000/1001:duration=90",
               "-f",
               "lavfi",
               "-i",

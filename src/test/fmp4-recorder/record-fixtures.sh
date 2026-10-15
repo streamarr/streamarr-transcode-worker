@@ -210,7 +210,7 @@ VFR_SELECT="select='if(lt(n,300),gte(mod(n*7919,97),20),if(lt(n,600),not(mod(n,2
 
 # Audio that ends long before the video: 180 s of video, 20 s of a sine tone, so the video outruns
 # FFmpeg's muxer interleave bound (10 s) once the audio ends.
-"${FF[@]}" -f lavfi -i "testsrc2=size=64x36:rate=24000/1001:duration=180" \
+"${FF[@]}" -f lavfi -i "$(lavfi 24000/1001 180)" \
   -f lavfi -i "sine=frequency=440:sample_rate=48000:duration=20" -map 0:v -map 1:a \
   "${SRC_X264[@]}" -g 48 -keyint_min 48 "${SRC_AAC[@]}" -fflags +bitexact src/long-video.mp4
 
