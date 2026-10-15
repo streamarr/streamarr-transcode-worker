@@ -122,17 +122,24 @@ class TranscodeWorkerUploadProtocolIT {
     var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
     var service = ControllableUploadService.closesWithoutResponse();
     var job = variantJob();
+    var configuration = configuration(mediaRoot);
 
     try (var server = new ControlPlaneServer(service);
-        var worker = worker(engine(launcher), mediaRoot)) {
+        var worker = new TranscodeWorker(configuration, engine(launcher))) {
       server.start();
       worker.start("localhost", server.port());
+      // The worker starts its acknowledgement timeout at its first upload message, after the
+      // dispatch, so a failure that the timeout causes arrives after this deadline.
+      var acknowledgementDeadline =
+          System.nanoTime() + configuration.uploadAcknowledgementTimeout().toNanos();
       service.dispatch(job);
 
-      service.awaitUploadCompleted();
       assertThat(service.failure)
           .as("a clean close must fail before the upload acknowledgement timeout")
-          .succeedsWithin(Duration.ofSeconds(2));
+          .succeedsWithin(Duration.ofNanos(acknowledgementDeadline - System.nanoTime()));
+      assertThat(service.uploadCompleted)
+          .as("the upload completed before the failure")
+          .isCompleted();
       var failure = service.failure.resultNow();
       assertThat(failure.getJobAttemptId()).isEqualTo(job.getJobAttemptId());
       assertThat(failure.getFailure())
@@ -172,15 +179,17 @@ class TranscodeWorkerUploadProtocolIT {
   }
 
   private TranscodeWorker worker(FfmpegTranscodeEngine engine, Path mediaRoot) {
-    var configuration =
-        TranscodeWorkerConfiguration.builder()
-            .workerId(WORKER_ID)
-            .bootId(UUID.randomUUID())
-            .availableSlots(1)
-            .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, mediaRoot))
-            .uploadAcknowledgementTimeout(ACKNOWLEDGEMENT_TIMEOUT)
-            .build();
-    return new TranscodeWorker(configuration, engine);
+    return new TranscodeWorker(configuration(mediaRoot), engine);
+  }
+
+  private static TranscodeWorkerConfiguration configuration(Path mediaRoot) {
+    return TranscodeWorkerConfiguration.builder()
+        .workerId(WORKER_ID)
+        .bootId(UUID.randomUUID())
+        .availableSlots(1)
+        .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, mediaRoot))
+        .uploadAcknowledgementTimeout(ACKNOWLEDGEMENT_TIMEOUT)
+        .build();
   }
 
   private FfmpegTranscodeEngine unavailableEngine() {
