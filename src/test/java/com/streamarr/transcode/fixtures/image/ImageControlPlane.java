@@ -71,16 +71,28 @@ public final class ImageControlPlane
     }
   }
 
-  static Serving serve(ListenAddresses addresses) throws IOException {
+  static Serving serve(ListenAddresses addresses) throws IOException, InterruptedException {
     var controlPlane = new ImageControlPlane();
     var grpc =
         NettyServerBuilder.forAddress(addresses.grpc()).addService(controlPlane).build().start();
-    var http = HttpServer.create(addresses.command(), 0);
-    var threads = Executors.newVirtualThreadPerTaskExecutor();
-    http.setExecutor(threads);
-    http.createContext("/", controlPlane::exchange);
-    http.start();
-    return new Serving(grpc, http, threads);
+    try {
+      var http = HttpServer.create(addresses.command(), 0);
+      var threads = Executors.newVirtualThreadPerTaskExecutor();
+      http.setExecutor(threads);
+      http.createContext("/", controlPlane::exchange);
+      http.start();
+      return new Serving(grpc, http, threads);
+    } catch (IOException | RuntimeException failure) {
+      stop(grpc);
+      throw failure;
+    }
+  }
+
+  private static void stop(Server grpc) throws InterruptedException {
+    grpc.shutdownNow();
+    if (!grpc.awaitTermination(10, TimeUnit.SECONDS)) {
+      throw new IllegalStateException("The control-plane gRPC server did not stop in 10 seconds");
+    }
   }
 
   /** Addresses to listen on; port 0 binds an ephemeral port. */

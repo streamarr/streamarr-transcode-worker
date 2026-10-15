@@ -1,6 +1,7 @@
 package com.streamarr.transcode.fixtures.image;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
@@ -15,8 +16,12 @@ import io.grpc.Status;
 import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
 import io.grpc.stub.StreamObserver;
 import java.io.IOException;
+import java.net.BindException;
+import java.net.ConnectException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.http.HttpClient;
@@ -50,7 +55,7 @@ class ImageControlPlaneIT {
   private HttpClient http;
 
   @BeforeEach
-  void startServer() throws IOException {
+  void startServer() throws IOException, InterruptedException {
     http = HttpClient.newHttpClient();
     controlPlane = ImageControlPlane.serve(EPHEMERAL_LOOPBACK_ADDRESSES);
   }
@@ -66,6 +71,28 @@ class ImageControlPlaneIT {
   void shouldListenOnlyOnLoopbackWhenTheTestServesTheControlPlane() {
     assertThat(Stream.of(controlPlane.grpcAddress(), controlPlane.commandAddress()))
         .allSatisfy(address -> assertThat(address.getAddress().isLoopbackAddress()).isTrue());
+  }
+
+  @Test
+  @DisplayName("Should release the gRPC listener when the command listener cannot bind")
+  void shouldReleaseTheGrpcListenerWhenTheCommandListenerCannotBind() throws IOException {
+    var grpc = new InetSocketAddress(LOOPBACK, freePort());
+    var addresses =
+        ImageControlPlane.ListenAddresses.builder()
+            .grpc(grpc)
+            .command(controlPlane.commandAddress())
+            .build();
+
+    assertThatThrownBy(() -> ImageControlPlane.serve(addresses)).isInstanceOf(BindException.class);
+
+    assertThatThrownBy(() -> new Socket(grpc.getAddress(), grpc.getPort()).close())
+        .isInstanceOf(ConnectException.class);
+  }
+
+  private static int freePort() throws IOException {
+    try (var socket = new ServerSocket(0, 0, LOOPBACK)) {
+      return socket.getLocalPort();
+    }
   }
 
   @Test
