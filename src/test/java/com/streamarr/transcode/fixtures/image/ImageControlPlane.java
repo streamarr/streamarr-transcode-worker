@@ -118,8 +118,7 @@ public final class ImageControlPlane
     public void close() throws InterruptedException {
       try (threads) {
         http.stop(0);
-        grpc.shutdownNow();
-        grpc.awaitTermination(10, TimeUnit.SECONDS);
+        stop(grpc);
       }
     }
   }
