@@ -75,18 +75,17 @@ class WorkerImageIT {
   @DisplayName("Should become ready after registration is accepted when using the default endpoint")
   void shouldBecomeReadyAfterRegistrationIsAcceptedWhenUsingTheDefaultEndpoint() throws Exception {
     try (var image = ImageFixture.builder().media(media).build()) {
+      var healthBeforeAcceptance = image.acceptAfterHealthCheck();
+
+      assertThat(healthBeforeAcceptance.liveness()).as("liveness before acceptance").isEqualTo(200);
+      assertThat(healthBeforeAcceptance.readiness())
+          .as("readiness before acceptance")
+          .isEqualTo(503);
       var registration = image.registration();
       assertThat(registration.getWorker().getWorkerId()).isEqualTo(toProto(image.workerId));
       assertThat(registration.getCapabilities().getSourceNamespaceIdsList())
           .containsExactly(toProto(SOURCE_NAMESPACE_ID));
-      assertThat(image.health("liveness").statusCode()).isEqualTo(200);
-      assertThat(image.health("readiness").statusCode()).isEqualTo(503);
-
-      image.accept();
-
-      await()
-          .atMost(Duration.ofSeconds(10))
-          .untilAsserted(() -> assertThat(image.health("readiness").statusCode()).isEqualTo(200));
+      image.awaitReadiness();
       var identity = image.worker.execInContainer("id", "-u");
       assertThat(identity.getExitCode()).as("id -u failed: %s", identity.getStderr()).isZero();
       var uid = identity.getStdout().trim();
@@ -413,6 +412,8 @@ class WorkerImageIT {
     return "/media/scripted-ffmpeg";
   }
 
+  private record HealthBeforeAcceptance(int liveness, int readiness) {}
+
   @DisplayName("Worker Image Fixture")
   private static final class ImageFixture implements AutoCloseable {
 
@@ -496,6 +497,26 @@ class WorkerImageIT {
     // fails this wait at once.
     private void accept() throws Exception {
       commandBeforeWorkerExit("accept");
+    }
+
+    private HealthBeforeAcceptance acceptAfterHealthCheck() throws Exception {
+      var statuses =
+          new String(commandBeforeWorkerExit("accept-after-health-check"), StandardCharsets.UTF_8)
+              .split(" ");
+      return new HealthBeforeAcceptance(
+          Integer.parseInt(statuses[0]), Integer.parseInt(statuses[1]));
+    }
+
+    // Spring reports readiness only once the worker's start has returned, and nothing outside the
+    // worker can observe that moment, so this polls. The poll fails at once when the worker exits.
+    // It has no time limit of its own; it runs on the test thread, so the class timeout's interrupt
+    // ends it.
+    private void awaitReadiness() {
+      await()
+          .pollInSameThread()
+          .forever()
+          .failFast("The worker exited before it became ready", workerExit::isDone)
+          .until(() -> health("readiness").statusCode() == 200);
     }
 
     private byte[] commandBeforeWorkerExit(String path) throws Exception {

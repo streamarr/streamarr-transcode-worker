@@ -27,6 +27,10 @@ import io.grpc.stub.StreamObserver;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.UUID;
@@ -146,6 +150,7 @@ public final class ImageControlPlane
       case "/ready" -> "ready".getBytes(StandardCharsets.UTF_8);
       case "/registration" -> registration.get(30, TimeUnit.SECONDS).toByteArray();
       case "/accept" -> accept();
+      case "/accept-after-health-check" -> acceptAfterHealthCheck();
       case "/probe" -> probe(ProbeRequest.parseFrom(exchange.getRequestBody()));
       case "/job" -> job(VariantJob.parseFrom(exchange.getRequestBody()));
       case "/failed-job" -> failedJob(VariantJob.parseFrom(exchange.getRequestBody()));
@@ -176,6 +181,27 @@ public final class ImageControlPlane
                 WorkerSessionAccepted.newBuilder().setWorkerSessionId(toProto(UUID.randomUUID())))
             .build());
     return new byte[0];
+  }
+
+  // Reads the worker's health just before the acceptance and answers "<liveness> <readiness>".
+  // The worker waits only a few seconds for its acceptance, and these loopback requests are the
+  // only work that runs inside that wait.
+  private byte[] acceptAfterHealthCheck() throws Exception {
+    registration.get(30, TimeUnit.SECONDS);
+    var health = workerHealth("liveness") + " " + workerHealth("readiness");
+    accept();
+    return health.getBytes(StandardCharsets.UTF_8);
+  }
+
+  // The worker shares this network namespace and serves its health on port 9091.
+  private static int workerHealth(String group) throws IOException, InterruptedException {
+    try (var http = HttpClient.newHttpClient()) {
+      var endpoint = URI.create("http://127.0.0.1:9091/actuator/health/" + group);
+      return http.send(
+              HttpRequest.newBuilder(endpoint).GET().build(),
+              HttpResponse.BodyHandlers.discarding())
+          .statusCode();
+    }
   }
 
   private byte[] probe(ProbeRequest request) throws Exception {
