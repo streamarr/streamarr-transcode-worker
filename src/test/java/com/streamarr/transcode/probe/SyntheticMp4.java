@@ -9,10 +9,14 @@ import java.util.List;
 import lombok.Builder;
 import lombok.Singular;
 
-/** A minimal MP4 file: ftyp, then a moov with track 1, whose movie timescale is 1,000. */
+/**
+ * A minimal MP4 file: ftyp, then a moov with track 1, whose movie timescale is 1,000. With {@code
+ * version1Headers}, the mvhd, tkhd and mdhd boxes use their version 1 layout with 64-bit times.
+ */
 @Builder
 record SyntheticMp4(
     boolean largeMovieBox,
+    boolean version1Headers,
     String handler,
     long mediaTimescale,
     int sampleCount,
@@ -30,7 +34,14 @@ record SyntheticMp4(
 
   static final long TRACK_ID = 1;
 
-  record Edit(long duration, long mediaTime) {}
+  /** One elst entry; {@code rate} is a 16.16 fixed-point number. */
+  record Edit(long duration, long mediaTime, int rate) {
+    static final int NORMAL_RATE = 0x0001_0000;
+
+    Edit(long duration, long mediaTime) {
+      this(duration, mediaTime, NORMAL_RATE);
+    }
+  }
 
   /** One ctts entry: {@code count} samples whose composition offset is {@code offset}. */
   record CompositionRun(int count, int offset) {}
@@ -61,18 +72,21 @@ record SyntheticMp4(
     var media =
         box(
             "mdia",
-            fullBox("mdhd", 0, int32(0), int32(0), int32((int) mediaTimescale), int32(0)),
+            timedHeader("mdhd", mediaTimescale),
             fullBox("hdlr", 0, int32(0), ascii(handler == null ? "vide" : handler), new byte[12]),
             box("minf", box("stbl", sampleTable.toArray(byte[][]::new))));
     var track = new ArrayList<byte[]>();
-    track.add(fullBox("tkhd", 0, int32(0), int32(0), int32((int) TRACK_ID)));
+    track.add(
+        version1Headers
+            ? fullBox("tkhd", 1, int64(0), int64(0), int32((int) TRACK_ID))
+            : fullBox("tkhd", 0, int32(0), int32(0), int32((int) TRACK_ID)));
     if (!edits.isEmpty()) {
       track.add(box("edts", editList()));
     }
 
     track.add(media);
     var movie = new ArrayList<byte[]>();
-    movie.add(fullBox("mvhd", 0, int32(0), int32(0), int32(1_000), int32(0)));
+    movie.add(timedHeader("mvhd", 1_000));
     movie.add(box("trak", track.toArray(byte[][]::new)));
     if (fragmented) {
       movie.add(box("mvex", fullBox("trex", 0, new byte[20])));
@@ -112,6 +126,15 @@ record SyntheticMp4(
     return fullBox("stsz", 0, int32(size), int32(count));
   }
 
+  /** An mvhd or mdhd: creation and modification times, the timescale, then the duration. */
+  private byte[] timedHeader(String type, long timescale) {
+    if (version1Headers) {
+      return fullBox(type, 1, int64(0), int64(0), int32((int) timescale), int64(0));
+    }
+
+    return fullBox(type, 0, int32(0), int32(0), int32((int) timescale), int32(0));
+  }
+
   private byte[] editList() {
     var entries = new ArrayList<byte[]>();
     entries.add(int32(edits.size()));
@@ -124,7 +147,7 @@ record SyntheticMp4(
         entries.add(int32((int) edit.mediaTime()));
       }
 
-      entries.add(int32(0x0001_0000));
+      entries.add(int32(edit.rate()));
     }
 
     return fullBox("elst", editListVersion, entries.toArray(byte[][]::new));
@@ -155,7 +178,7 @@ record SyntheticMp4(
     return ByteBuffer.allocate(8).putLong(value).array();
   }
 
-  private static byte[] concat(byte[]... parts) {
+  static byte[] concat(byte[]... parts) {
     var output = new ByteArrayOutputStream();
     for (var part : parts) {
       output.writeBytes(part);

@@ -7,6 +7,8 @@ import com.streamarr.transcode.probe.KeyframeIndex.KeyframeTime;
 import com.streamarr.transcode.probe.KeyframeIndex.Listed;
 import com.streamarr.transcode.probe.KeyframeIndex.TimeBase;
 import com.streamarr.transcode.probe.KeyframeIndex.Unusable;
+import java.io.RandomAccessFile;
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
@@ -16,6 +18,8 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 @Tag("UnitTest")
 @DisplayName("MP4 Sync Sample Reader Tests")
@@ -306,6 +310,206 @@ class Mp4SyncSampleReaderTest {
     bytes[count + 3] = 3;
 
     assertThat(Mp4SyncSampleReader.read(write(bytes), TRACK_ID)).isEqualTo(INCOMPLETE);
+  }
+
+  @Test
+  @DisplayName("Should list every sample when the movie uses version 1 headers")
+  void shouldListEverySampleWhenMovieUsesVersionOneHeaders() throws Exception {
+    var source =
+        write(
+            SyntheticMp4.builder()
+                .version1Headers(true)
+                .mediaTimescale(1_000)
+                .sampleDurations(2, 100)
+                .build());
+
+    assertThat(Mp4SyncSampleReader.read(source, TRACK_ID))
+        .isEqualTo(
+            new Listed(
+                new TimeBase(1, 1_000),
+                List.of(new KeyframeTime(0, 0), new KeyframeTime(100, 100))));
+  }
+
+  @Test
+  @DisplayName("Should require a packet scan when the media timescale is zero")
+  void shouldRequirePacketScanWhenMediaTimescaleIsZero() throws Exception {
+    var source = write(SyntheticMp4.builder().mediaTimescale(0).sampleDurations(2, 100).build());
+
+    assertThat(Mp4SyncSampleReader.read(source, TRACK_ID)).isEqualTo(INCOMPLETE);
+  }
+
+  @Test
+  @DisplayName("Should require a packet scan when a header box is shorter than its fields")
+  void shouldRequirePacketScanWhenHeaderBoxIsShorterThanItsFields() throws Exception {
+    var movieHeaderWithoutTimes = SyntheticMp4.box("mvhd", SyntheticMp4.int32(0));
+    var source =
+        write(
+            SyntheticMp4.concat(
+                SyntheticMp4.box("ftyp", SyntheticMp4.ascii("isom"), SyntheticMp4.int32(0)),
+                SyntheticMp4.box("moov", movieHeaderWithoutTimes)));
+
+    assertThat(Mp4SyncSampleReader.read(source, TRACK_ID)).isEqualTo(INCOMPLETE);
+  }
+
+  @Test
+  @DisplayName("Should list every sample when the movie box size extends to the end of the file")
+  void shouldListEverySampleWhenMovieBoxSizeExtendsToEndOfFile() throws Exception {
+    var bytes =
+        SyntheticMp4.builder().mediaTimescale(1_000).sampleDurations(2, 100).build().bytes();
+    // A box size of zero means that the box runs to the end of the file.
+    putInt32(bytes, indexOf(bytes, "moov") - Integer.BYTES, 0);
+
+    assertThat(Mp4SyncSampleReader.read(write(bytes), TRACK_ID))
+        .isEqualTo(
+            new Listed(
+                new TimeBase(1, 1_000),
+                List.of(new KeyframeTime(0, 0), new KeyframeTime(100, 100))));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({"'smaller than its header', 4", "'larger than the file', 2147483647"})
+  @DisplayName("Should require a packet scan when the movie box size is impossible")
+  void shouldRequirePacketScanWhenMovieBoxSizeIsImpossible(String description, int size)
+      throws Exception {
+    var bytes =
+        SyntheticMp4.builder().mediaTimescale(1_000).sampleDurations(2, 100).build().bytes();
+    putInt32(bytes, indexOf(bytes, "moov") - Integer.BYTES, size);
+
+    assertThat(Mp4SyncSampleReader.read(write(bytes), TRACK_ID))
+        .as(description)
+        .isEqualTo(INCOMPLETE);
+  }
+
+  @Test
+  @DisplayName("Should require a packet scan when the movie box is larger than the reader accepts")
+  void shouldRequirePacketScanWhenMovieBoxIsLargerThanReaderAccepts() throws Exception {
+    // The reader accepts a movie box of up to 256 MiB; this one declares 257 MiB.
+    var payloadSize = 257 << 20;
+    var source =
+        write(
+            SyntheticMp4.concat(
+                SyntheticMp4.box("ftyp", SyntheticMp4.ascii("isom"), SyntheticMp4.int32(0)),
+                SyntheticMp4.int32(payloadSize + 8),
+                SyntheticMp4.ascii("moov")));
+    try (var file = new RandomAccessFile(source.toFile(), "rw")) {
+      // The file system stores the extension as a hole, so the test writes no payload bytes.
+      file.setLength(file.length() + payloadSize);
+    }
+
+    assertThat(Mp4SyncSampleReader.read(source, TRACK_ID)).isEqualTo(INCOMPLETE);
+  }
+
+  @Test
+  @DisplayName(
+      "Should require a packet scan when the sync-sample table counts more entries than it holds")
+  void shouldRequirePacketScanWhenSyncSampleTableCountsMoreEntriesThanItHolds() throws Exception {
+    var bytes =
+        SyntheticMp4.builder()
+            .mediaTimescale(1_000)
+            .sampleDurations(2, 100)
+            .syncSamples(List.of(1L))
+            .build()
+            .bytes();
+    // The entry count follows the type, the version and the flags.
+    putInt32(bytes, indexOf(bytes, "stss") + 8, 5);
+
+    assertThat(Mp4SyncSampleReader.read(write(bytes), TRACK_ID)).isEqualTo(INCOMPLETE);
+  }
+
+  @Test
+  @DisplayName("Should require a packet scan when compact sample sizes declare zero-bit fields")
+  void shouldRequirePacketScanWhenCompactSampleSizesDeclareZeroBitFields() throws Exception {
+    var bytes =
+        SyntheticMp4.builder()
+            .mediaTimescale(1_000)
+            .sampleDurations(2, 100)
+            .sampleSizes(2, 7)
+            .compactSampleSizes(true)
+            .build()
+            .bytes();
+    // The field size follows the type, the version, the flags and three reserved bytes.
+    bytes[indexOf(bytes, "stz2") + 11] = 0;
+
+    assertThat(Mp4SyncSampleReader.read(write(bytes), TRACK_ID)).isEqualTo(INCOMPLETE);
+  }
+
+  @Test
+  @DisplayName(
+      "Should leave the decode times unshifted when the negative composition offset counts no samples")
+  void shouldLeaveDecodeTimesUnshiftedWhenNegativeCompositionOffsetCountsNoSamples()
+      throws Exception {
+    var source =
+        write(
+            SyntheticMp4.builder()
+                .mediaTimescale(1_000)
+                .sampleDurations(4, 1_000)
+                .compositionRun(new SyntheticMp4.CompositionRun(0, -700))
+                .compositionRun(new SyntheticMp4.CompositionRun(2, 500))
+                .compositionRun(new SyntheticMp4.CompositionRun(1, 0))
+                .compositionRun(new SyntheticMp4.CompositionRun(1, 0))
+                .build());
+
+    assertThat(Mp4SyncSampleReader.read(source, TRACK_ID))
+        .isEqualTo(
+            new Listed(
+                new TimeBase(1, 1_000),
+                List.of(
+                    new KeyframeTime(500, 0),
+                    new KeyframeTime(1_500, 1_000),
+                    new KeyframeTime(2_000, 2_000),
+                    new KeyframeTime(3_000, 3_000))));
+  }
+
+  @Test
+  @DisplayName("Should require a packet scan when the edit list holds only empty edits")
+  void shouldRequirePacketScanWhenEditListHoldsOnlyEmptyEdits() throws Exception {
+    var source =
+        write(
+            SyntheticMp4.builder()
+                .mediaTimescale(1_000)
+                .sampleDurations(2, 1_000)
+                .edit(new SyntheticMp4.Edit(1_000, -1))
+                .build());
+
+    assertThat(Mp4SyncSampleReader.read(source, TRACK_ID)).isEqualTo(INCOMPLETE);
+  }
+
+  @ParameterizedTest(name = "rate {0}, media time {1}")
+  @CsvSource({"131072, 0", "65536, -2"})
+  @DisplayName(
+      "Should require a packet scan when the media edit changes the rate or starts before the media")
+  void shouldRequirePacketScanWhenMediaEditChangesRateOrStartsBeforeMedia(int rate, long mediaTime)
+      throws Exception {
+    var source =
+        write(
+            SyntheticMp4.builder()
+                .mediaTimescale(1_000)
+                .sampleDurations(2, 1_000)
+                .edit(new SyntheticMp4.Edit(2_000, mediaTime, rate))
+                .build());
+
+    assertThat(Mp4SyncSampleReader.read(source, TRACK_ID)).isEqualTo(INCOMPLETE);
+  }
+
+  @Test
+  @DisplayName(
+      "Should require a packet scan when the empty edit is too long to convert to the media timescale")
+  void shouldRequirePacketScanWhenEmptyEditIsTooLongToConvertToMediaTimescale() throws Exception {
+    var source =
+        write(
+            SyntheticMp4.builder()
+                .mediaTimescale(1_000)
+                .sampleDurations(2, 1_000)
+                .editListVersion(1)
+                .edit(new SyntheticMp4.Edit(Long.MAX_VALUE / 2, -1))
+                .edit(new SyntheticMp4.Edit(2_000, 0))
+                .build());
+
+    assertThat(Mp4SyncSampleReader.read(source, TRACK_ID)).isEqualTo(INCOMPLETE);
+  }
+
+  private static void putInt32(byte[] bytes, int offset, int value) {
+    ByteBuffer.wrap(bytes).putInt(offset, value);
   }
 
   private static int indexOf(byte[] bytes, String type) {
