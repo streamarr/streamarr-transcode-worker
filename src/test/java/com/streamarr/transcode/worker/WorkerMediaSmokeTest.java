@@ -25,6 +25,7 @@ import build.buf.gen.streamarr.transcode.v1.ProbeKeyframes;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
+import build.buf.gen.streamarr.transcode.v1.TranscodeExecution;
 import build.buf.gen.streamarr.transcode.v1.TranscodeMode;
 import build.buf.gen.streamarr.transcode.v1.TranscodeWorkerServiceGrpc;
 import build.buf.gen.streamarr.transcode.v1.UploadSegmentRequest;
@@ -44,6 +45,8 @@ import io.grpc.Server;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.grpc.stub.StreamObserver;
 import java.io.ByteArrayOutputStream;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -124,6 +127,7 @@ class WorkerMediaSmokeTest {
   @TempDir static Path seekableSources;
 
   @TempDir static Path tenBitSources;
+  @TempDir static Path irregularKeyframeSources;
 
   // A source joins only once FFmpeg has written it successfully, so that a later case generates it
   // again instead of reading what a failed or timed-out run left behind.
@@ -818,6 +822,48 @@ class WorkerMediaSmokeTest {
         .containsEntry("init.mp4", fromStartUploads.segments().get("init.mp4"));
   }
 
+  @ParameterizedTest(name = "{0} source")
+  @ValueSource(strings = {"mkv", "ts"})
+  @DisplayName(
+      "Should start the first segment at its first keyframe when a stream copy seeks to the"
+          + " server's keyframe position in an irregular-keyframe source")
+  void
+      shouldStartTheFirstSegmentAtItsFirstKeyframeWhenAStreamCopySeeksToTheServersKeyframePositionInAnIrregularKeyframeSource(
+          String container) throws Exception {
+    var source = irregularKeyframeSource(container);
+    var sourcePackets = videoPacketsOnZeroBasedTimeline(source);
+    var keyframeIndex =
+        firstKeyframeIndexOfSegment(sourcePackets, REPLACEMENT_START_SEQUENCE_NUMBER);
+    var fromStart = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_REMUX);
+    var replacement = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_REMUX);
+    replacement
+        .getExecutionBuilder()
+        .setStartSequenceNumber(REPLACEMENT_START_SEQUENCE_NUMBER)
+        .setSeekPositionSeconds(REPLACEMENT_START_SEQUENCE_NUMBER * 6);
+    setSeekPosition(
+        replacement.getExecutionBuilder(),
+        probedDecodeTime(source, sourcePackets.get(keyframeIndex)));
+
+    var fromStartUploads =
+        execute(engine(realCapabilities()), source.getParent(), fromStart.build());
+    var replacementUploads =
+        execute(engine(realCapabilities()), source.getParent(), replacement.build());
+
+    assertThat(replacementUploads.names()).containsExactly("init.mp4", "segment2.m4s");
+    var replacementMedia = playable(replacementUploads.contentOf(replacementUploads.names()));
+    assertDecodes(replacementMedia);
+    // The attempt from the start copies every source packet in decode order, so its packet at the
+    // keyframe's index is that keyframe on the output timeline.
+    var fromStartPackets =
+        videoPackets(playable(fromStartUploads.contentOf(fromStartUploads.names())));
+    assertThat(fromStartPackets).hasSameSizeAs(sourcePackets);
+    var copiedKeyframe = fromStartPackets.get(keyframeIndex);
+    assertThat(copiedKeyframe.keyframe()).as("the copy of the server's keyframe").isTrue();
+    assertThat(videoPackets(replacementMedia).getFirst().presentationTime())
+        .as("the first video presentation time of the replacement attempt's segment 2")
+        .isEqualByComparingTo(copiedKeyframe.presentationTime());
+  }
+
   static Stream<Arguments> sourceContainersAndModes() {
     return Stream.of("mp4", "mkv", "ts")
         .flatMap(
@@ -887,6 +933,132 @@ class WorkerMediaSmokeTest {
     }
 
     return source;
+  }
+
+  // H.264 at 4 fps with B-frames, whose keyframes fall at irregular times. Segment 2 holds two
+  // keyframes, so that a seek past its first one shows, and segment 1 holds the keyframe before
+  // them. libx264 reorders two frames, so a keyframe's decode time lies 0.5 s before its
+  // presentation time. FFmpeg moves the -ss target of such a stream 3/23 s earlier, and an MPEG-TS
+  // seek reads from the last packet whose decode time is at or before that target. A seek to
+  // segment 2's boundary at 12 s therefore reads past the decode time of segment 2's first
+  // keyframe, and the copy starts at the keyframe after it.
+  private static synchronized Path irregularKeyframeSource(String container) throws Exception {
+    var matroska = irregularKeyframeSources.resolve("irregular.mkv");
+    if (!generatedSeekableSources.contains(matroska)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=4",
+              "-f",
+              "lavfi",
+              "-i",
+              "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5",
+              "-t",
+              String.valueOf(SEEKABLE_SOURCE_SECONDS),
+              "-c:v",
+              "libx264",
+              "-g",
+              "1000",
+              "-sc_threshold",
+              "0",
+              "-force_key_frames",
+              "0,2.5,5.25,7.25,9.5,11.5,12,13.25,15.5",
+              "-c:a",
+              "aac"),
+          matroska);
+      generatedSeekableSources.add(matroska);
+    }
+
+    var source = irregularKeyframeSources.resolve("irregular." + container);
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(List.of("-i", matroska.toString(), "-c", "copy"), source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // The first keyframe whose presentation time lies in the segment's interval on the 6 s grid: the
+  // keyframe whose decode time the server sends as a stream copy's seek position.
+  private static int firstKeyframeIndexOfSegment(List<VideoPacket> packets, int sequenceNumber) {
+    var segmentStart = BigDecimal.valueOf((long) sequenceNumber * 6);
+    return IntStream.range(0, packets.size())
+        .filter(index -> packets.get(index).keyframe())
+        .filter(index -> packets.get(index).presentationTime().compareTo(segmentStart) >= 0)
+        .findFirst()
+        .orElseThrow();
+  }
+
+  // The decode time that the worker's keyframe probe reports. The probe reads a Matroska
+  // keyframe's decode time from its cue time, which is the keyframe's presentation time.
+  private static BigDecimal probedDecodeTime(Path source, VideoPacket keyframe) {
+    if (source.toString().endsWith(".mkv")) {
+      return keyframe.presentationTime();
+    }
+
+    return keyframe.decodeTime();
+  }
+
+  // The source's video packets in decode order, on the zero-based timeline the producer groups on.
+  private static List<VideoPacket> videoPacketsOnZeroBasedTimeline(Path source) throws Exception {
+    var startTime = new BigDecimal(ffprobe(List.of("-show_entries", "format=start_time"), source));
+    return videoPackets(source).stream()
+        .map(packet -> packet.onTimelineStartingAt(startTime))
+        .toList();
+  }
+
+  private static List<VideoPacket> videoPackets(Path media) throws Exception {
+    var lines =
+        ffprobe(
+            List.of("-select_streams", "v:0", "-show_entries", "packet=pts_time,dts_time,flags"),
+            media);
+    return lines.lines().map(VideoPacket::parse).toList();
+  }
+
+  private static String ffprobe(List<String> arguments, Path media) throws Exception {
+    var command =
+        Stream.of(
+                List.of("ffprobe", "-v", "error"),
+                arguments,
+                List.of("-of", "csv=p=0", media.toString()))
+            .flatMap(List::stream)
+            .toList();
+    var process =
+        new ProcessBuilder(command).redirectError(ProcessBuilder.Redirect.DISCARD).start();
+    try {
+      var output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+      assertThat(process.waitFor(1, TimeUnit.MINUTES)).as("ffprobe finished").isTrue();
+      assertThat(process.exitValue()).as("ffprobe exit code").isZero();
+      return output.strip();
+    } finally {
+      process.destroyForcibly();
+    }
+  }
+
+  private static void setSeekPosition(TranscodeExecution.Builder execution, BigDecimal seconds) {
+    var whole = seconds.setScale(0, RoundingMode.FLOOR);
+    execution
+        .getSeekPositionBuilder()
+        .setSeconds(whole.longValueExact())
+        .setNanos(seconds.subtract(whole).movePointRight(9).intValueExact());
+  }
+
+  // A video packet's times in seconds, as ffprobe prints them.
+  private record VideoPacket(BigDecimal presentationTime, BigDecimal decodeTime, boolean keyframe) {
+
+    private static VideoPacket parse(String line) {
+      var fields = line.split(",", -1);
+      var presentationTime = new BigDecimal(fields[0]);
+      var decodeTime = "N/A".equals(fields[1]) ? presentationTime : new BigDecimal(fields[1]);
+      return new VideoPacket(presentationTime, decodeTime, fields[2].startsWith("K"));
+    }
+
+    private VideoPacket onTimelineStartingAt(BigDecimal startTime) {
+      return new VideoPacket(
+          presentationTime.subtract(startTime), decodeTime.subtract(startTime), keyframe);
+    }
   }
 
   private MediaUploads execute(FfmpegTranscodeEngine engine, Path sourceRoot, VariantJob job)

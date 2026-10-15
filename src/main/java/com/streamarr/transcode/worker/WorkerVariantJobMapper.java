@@ -2,6 +2,7 @@ package com.streamarr.transcode.worker;
 
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 
+import build.buf.gen.streamarr.transcode.v1.TranscodeExecution;
 import build.buf.gen.streamarr.transcode.v1.VariantJob;
 import com.streamarr.transcode.engine.AudioDecision;
 import com.streamarr.transcode.engine.AudioMode;
@@ -11,6 +12,7 @@ import com.streamarr.transcode.engine.SubtitleMode;
 import com.streamarr.transcode.engine.TranscodeDecision;
 import com.streamarr.transcode.engine.TranscodeMode;
 import com.streamarr.transcode.engine.TranscodeRequest;
+import java.time.Duration;
 import java.util.Optional;
 import java.util.OptionalInt;
 
@@ -38,11 +40,21 @@ final class WorkerVariantJobMapper {
         .height(variant.getHeight())
         .bitrate(variant.getBitrateBitsPerSecond())
         .variantLabel(variant.getVariantLabel())
-        // The start sequence number also decides the seek, so the job's seek position, which
-        // the server sets to that segment's boundary, is not read.
+        // The start sequence number decides the seek of a job without a sub-second seek position,
+        // so seek_position_seconds, which the server sets to that segment's boundary, is not read.
         .startSequenceNumber(execution.getStartSequenceNumber())
         .mediaSegmentCount(execution.getMediaSegmentCount())
+        .seekPosition(seekPosition(execution))
         .build();
+  }
+
+  private static Optional<Duration> seekPosition(TranscodeExecution execution) {
+    if (!execution.hasSeekPosition()) {
+      return Optional.empty();
+    }
+
+    var position = execution.getSeekPosition();
+    return Optional.of(Duration.ofSeconds(position.getSeconds(), position.getNanos()));
   }
 
   @SuppressWarnings("checkstyle:fullyQualifiedName")

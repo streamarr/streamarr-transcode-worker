@@ -2,11 +2,13 @@ package com.streamarr.transcode.engine;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
+import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 
 import java.nio.file.Path;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
@@ -43,5 +45,23 @@ class TranscodeRequestTest {
     var request = request(mode).build();
 
     assertThat(request.transcodeDecision().transcodeMode()).isEqualTo(mode);
+  }
+
+  @Test
+  @DisplayName("Should carry no seek position when the request is built without one")
+  void shouldCarryNoSeekPositionWhenTheRequestIsBuiltWithoutOne() {
+    var request = request(TranscodeMode.REMUX).build();
+
+    assertThat(request.seekPosition()).isEmpty();
+  }
+
+  @Test
+  @DisplayName("Should reject the request when its seek position is null")
+  void shouldRejectTheRequestWhenItsSeekPositionIsNull() {
+    var builder = request(TranscodeMode.REMUX);
+
+    assertThatNullPointerException()
+        .isThrownBy(() -> builder.seekPosition(null))
+        .withMessageContaining("seekPosition");
   }
 }

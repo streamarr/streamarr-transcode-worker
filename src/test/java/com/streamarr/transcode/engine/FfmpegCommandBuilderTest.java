@@ -6,6 +6,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
@@ -674,6 +675,83 @@ class FfmpegCommandBuilderTest {
     var cmd = command(request(mode).startSequenceNumber(5).build(), "copy");
 
     assertThat(cmd).containsSubsequence("-ss", "30", "-i");
+  }
+
+  @ParameterizedTest
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"REMUX", "AUDIO_TRANSCODE"})
+  @DisplayName(
+      "Should seek a stream copy to the server's keyframe position when the job carries one")
+  void shouldSeekAStreamCopyToTheServersKeyframePositionWhenTheJobCarriesOne(TranscodeMode mode) {
+    var request =
+        request(mode)
+            .startSequenceNumber(5)
+            .seekPosition(Optional.of(Duration.ofSeconds(29, 196_000_000)))
+            .build();
+
+    var cmd = command(request, "copy");
+
+    assertThat(cmd).containsSubsequence("-ss", "29.196", "-i");
+  }
+
+  @Test
+  @DisplayName(
+      "Should round a keyframe position up to the next microsecond when the position has a finer"
+          + " precision")
+  void shouldRoundAKeyframePositionUpToTheNextMicrosecondWhenThePositionHasAFinerPrecision() {
+    // 1001/24000 s, the decode time of a 23.976 fps source's second frame, is 41,708.333... µs.
+    var request =
+        request(TranscodeMode.REMUX)
+            .startSequenceNumber(1)
+            .seekPosition(Optional.of(Duration.ofNanos(41_708_333)))
+            .build();
+
+    var cmd = command(request, "copy");
+
+    assertThat(cmd).containsSubsequence("-ss", "0.041709", "-i");
+  }
+
+  @Test
+  @DisplayName(
+      "Should read from the start when a stream copy's keyframe position is not after the start")
+  void shouldReadFromTheStartWhenAStreamCopysKeyframePositionIsNotAfterTheStart() {
+    var request =
+        request(TranscodeMode.REMUX)
+            .startSequenceNumber(0)
+            .seekPosition(Optional.of(Duration.ofMillis(-83)))
+            .build();
+
+    var cmd = command(request, "copy");
+
+    assertThat(cmd).isNotEmpty().doesNotContain("-ss");
+  }
+
+  @ParameterizedTest
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"VIDEO_TRANSCODE", "FULL_TRANSCODE"})
+  @DisplayName("Should keep the period-based seek when an encoded job carries no position")
+  void shouldKeepThePeriodBasedSeekWhenAnEncodedJobCarriesNoPosition(TranscodeMode mode) {
+    var request = request(mode).startSequenceNumber(5).seekPosition(Optional.empty()).build();
+
+    var cmd = command(request, "libx264");
+
+    assertThat(cmd).containsSubsequence("-ss", "24", "-i");
+  }
+
+  @Test
+  @DisplayName("Should keep the period-based seek when an encoded job carries a keyframe position")
+  void shouldKeepThePeriodBasedSeekWhenAnEncodedJobCarriesAKeyframePosition() {
+    var request =
+        request(TranscodeMode.FULL_TRANSCODE)
+            .startSequenceNumber(5)
+            .seekPosition(Optional.of(Duration.ofMillis(29_196)))
+            .build();
+
+    var cmd = command(request, "libx264");
+
+    assertThat(cmd).containsSubsequence("-ss", "24", "-i");
   }
 
   @Test

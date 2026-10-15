@@ -1,5 +1,7 @@
 package com.streamarr.transcode.engine;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -99,19 +101,44 @@ public class FfmpegCommandBuilder {
     cmd.add(ffmpegPath);
     cmd.add("-y");
 
-    var seekSeconds = inputSeekSeconds(request);
-    if (seekSeconds > 0) {
-      cmd.addAll(List.of("-ss", String.valueOf(seekSeconds)));
+    var seekPosition = inputSeekPosition(request);
+    if (seekPosition.isPositive()) {
+      cmd.addAll(List.of("-ss", seekArgument(seekPosition)));
     }
 
     cmd.addAll(List.of("-i", request.sourcePath().toString()));
   }
 
+  // A stream copy that carries the server's keyframe position seeks to that position: the decode
+  // time of the keyframe that starts the copy's first segment. An MPEG-TS seek reads from the last
+  // packet whose decode time is at or before the target, so a seek to the segment's boundary skips
+  // that keyframe when its decode time lies far enough before the boundary. The seek can still
+  // read from an earlier keyframe: for a stream with B-frames, FFmpeg moves the target 3/23 s
+  // earlier unless the container seeks by presentation time, as Matroska and MPEG-TS do not. The
+  // producer discards what the attempt reads before its first segment as preroll.
+  private static Duration inputSeekPosition(TranscodeRequest request) {
+    var copiesVideo = !request.transcodeDecision().transcodeMode().encodesVideo();
+    if (copiesVideo && request.seekPosition().isPresent()) {
+      return request.seekPosition().orElseThrow();
+    }
+
+    return Duration.ofSeconds(inputSeekSeconds(request));
+  }
+
+  // FFmpeg reads microseconds. Rounding up keeps the target at or after the server's position.
+  private static String seekArgument(Duration position) {
+    return BigDecimal.valueOf(position.getSeconds())
+        .add(BigDecimal.valueOf(position.getNano(), 9))
+        .setScale(6, RoundingMode.CEILING)
+        .stripTrailingZeros()
+        .toPlainString();
+  }
+
   // An encoded replacement attempt seeks one period before its first segment, and the producer
   // discards that period as preroll: a seek to the boundary itself can drop the frame an earlier
   // attempt repeated there from a variable-frame-rate source, and lands after the boundary on an
-  // MPEG-TS source. A stream copy seeks to its first segment and lands on the keyframe at or
-  // before it.
+  // MPEG-TS source. A stream copy without the server's keyframe position seeks to its first
+  // segment's boundary.
   private static long inputSeekSeconds(TranscodeRequest request) {
     var firstSegment = (long) request.startSequenceNumber();
     var mode = request.transcodeDecision().transcodeMode();
