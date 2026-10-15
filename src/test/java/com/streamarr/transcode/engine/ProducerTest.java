@@ -446,6 +446,31 @@ class ProducerTest {
     assertThat(audioDecodeTimesOf("segment0.m4s")).containsExactly(0L, 12_000L);
   }
 
+  // A stream copy at one frame per second with B-frames: FFmpeg writes each audio sample beside the
+  // video whose decode time runs seconds ahead of it.
+  @Test
+  @DisplayName(
+      "Should deliver every audio sample in its media segment when the video's decode time runs"
+          + " more than a second ahead of the audio that arrives beside it")
+  void
+      shouldDeliverEveryAudioSampleInItsMediaSegmentWhenTheVideosDecodeTimeRunsMoreThanASecondAhead() {
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0).audioFrom(0, 12_000).build(),
+            TimedFragment.keyframeAt(24_000).audioFrom(12_000, 12_000).build(),
+            TimedFragment.keyframeAt(48_000).audioFrom(24_000, 12_000).build(),
+            TimedFragment.keyframeAt(72_000).audioFrom(36_000, 12_000).build(),
+            TimedFragment.keyframeAt(96_000).audioFrom(48_000, 12_000).build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+
+    var producer = producerOfOneSecondSegments(process).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(audioDecodeTimesOf("segment0.m4s")).containsExactly(0L, 12_000L, 24_000L, 36_000L);
+    assertThat(audioDecodeTimesOf("segment1.m4s")).containsExactly(48_000L);
+  }
+
   @ParameterizedTest(name = "{0}")
   @ValueSource(
       strings = {
@@ -1357,6 +1382,26 @@ class ProducerTest {
   static Stream<Arguments> outputsThatCannotBeRebuilt() {
     var videoOnly = videoOnlyMoov();
     return Stream.of(
+        Arguments.of(
+            "an audio presentation time beyond a signed 64-bit value in the video's timescale",
+            IsoBoxes.concat(
+                OneSecondSegments.of(
+                        IsoBoxes.videoAndAudioMoov(),
+                        TimedFragment.keyframeAt(0).audioFrom(0, 12_000).build())
+                    .bytes(),
+                IsoBoxes.moof(
+                    IsoBoxes.videoTraf()
+                        .baseMediaDecodeTime(24_000L)
+                        .firstSampleFlags(IsoBoxes.SYNC_SAMPLE_FLAGS)
+                        .sampleDurations(List.of(24_000))
+                        .build(),
+                    IsoBoxes.audioTraf()
+                        .baseMediaDecodeTime(Long.MAX_VALUE / 4)
+                        .decodeTimeVersion(1)
+                        .sampleDurations(List.of(12_000))
+                        .build()),
+                IsoBoxes.mdat(2)),
+            "overflows a signed 64-bit value in the video's timescale"),
         Arguments.of(
             "decode times that run backwards",
             IsoBoxes.concat(

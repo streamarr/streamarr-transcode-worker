@@ -137,7 +137,13 @@ final class SegmentAssembler {
   }
 
   private Closing closingOf(Fragment fragment) {
-    audio.add(fragment);
+    audio
+        .add(fragment)
+        .ifPresent(
+            sample ->
+                video.addAudioArrival(
+                    sample.presentationTime(),
+                    fragment.tracks().audio().orElseThrow().timescale()));
     video.add(fragment);
     return switch (grouper.accept(fragment)) {
       case NothingClosed _ -> Closing.of(closeEveryCompleted());

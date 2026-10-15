@@ -239,6 +239,37 @@ describe('dropped audio', () => {
   it("Should drop no audio sample when the video has not yet run a second past its segment's end", () => {
     assert.deepEqual(droppedAudioOf(167999), []);
   });
+
+  // As above, but the video's decode end reaches 73001 ticks before segment 1's keyframe arrives
+  // beside an audio sample of segment 0 at 1 s: the video leads that sample by 49001 ticks.
+  const droppedAudioAfterALeadOf = (videoDecodeEnd) =>
+    recordingFacts(
+      readStream(
+        Buffer.concat([
+          initialization(),
+          fragment(
+            { trackId: VIDEO.trackId, decodeTime: 0, runs: [{ samples: [{ duration: 1001, size: 1 }], firstSampleFlags: SYNC_SAMPLE_FLAGS }] },
+            { trackId: AUDIO.trackId, decodeTime: 0, runs: [{ samples: [{ duration: 1024, size: 1 }] }] },
+          ),
+          videoFragment({ decodeTime: 72000, sync: false }),
+          fragment(
+            { trackId: VIDEO.trackId, decodeTime: 144144, runs: [{ samples: [{ duration: 1001, size: 1 }], firstSampleFlags: SYNC_SAMPLE_FLAGS }] },
+            { trackId: AUDIO.trackId, decodeTime: 48000, runs: [{ samples: [{ duration: 1024, size: 1 }] }] },
+          ),
+          videoFragment({ decodeTime: videoDecodeEnd - 1001, sync: false }),
+          audioFragment({ decodeTime: 240000 }),
+        ]),
+      ),
+      { period: 6, startSequenceNumber: 0 },
+    ).droppedAudioSamples;
+
+  it("Should drop an audio sample when the video has run a second and its lead past its segment's end", () => {
+    assert.deepEqual(droppedAudioAfterALeadOf(217001), [{ fragmentIndex: 4, presentationTime: 240000n, segmentNumber: 0 }]);
+  });
+
+  it("Should drop no audio sample when the video has run a second but not its lead past its segment's end", () => {
+    assert.deepEqual(droppedAudioAfterALeadOf(217000), []);
+  });
 });
 
 /** Writes an HLS output of the recording whose segment n starts at fragment cuts[n]. */

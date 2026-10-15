@@ -176,6 +176,9 @@ class WorkerMediaSmokeTest {
   // The fixture's 10-bit base layer: Main 10 at level 2.0 in the Main tier.
   private static final String DOLBY_VISION_BASE_LAYER_CODEC_STRING = "hvc1.2.4.L60.90";
 
+  // 18 s of video at the default 6 s period.
+  private static final int ONE_FRAME_PER_SECOND_SEGMENT_COUNT = 3;
+
   // 90 s of video at the default 6 s period.
   private static final int AUDIO_ENDS_LONG_BEFORE_VIDEO_SEGMENT_COUNT = 15;
 
@@ -1623,6 +1626,33 @@ class WorkerMediaSmokeTest {
     }
   }
 
+  // At one frame per second, libx264's B-frames delay each video packet's decode time by two
+  // seconds against the audio that FFmpeg writes beside it.
+  @Test
+  @DisplayName(
+      "Should upload every audio packet FFmpeg writes when a stream copy of a one-frame-per-second"
+          + " source reorders its video")
+  void
+      shouldUploadEveryAudioPacketFfmpegWritesWhenAStreamCopyOfAOneFramePerSecondSourceReordersItsVideo()
+          throws Exception {
+    var source = oneFramePerSecondSource();
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_REMUX);
+    job.getExecutionBuilder().setMediaSegmentCount(ONE_FRAME_PER_SECOND_SEGMENT_COUNT);
+    var launcher = new TeeingProcessLauncher(new ProcessBuilderLauncher());
+
+    var uploads =
+        execute(engine(softwareCapabilities(), launcher), source.getParent(), job.build());
+
+    var ffmpegAudio =
+        FfprobePackets.of(launcher.outputOf(fromProto(job.getJobAttemptId())), root).stream()
+            .filter(Packet::isAudio)
+            .toList();
+    assertThat(FfprobePackets.of(uploads.contentOf(uploads.names()), root))
+        .filteredOn(Packet::isAudio)
+        .isNotEmpty()
+        .containsExactlyElementsOf(ffmpegAudio);
+  }
+
   @Test
   @DisplayName(
       "Should upload the start-0 attempt's video packets for every media segment when a"
@@ -1930,6 +1960,34 @@ class WorkerMediaSmokeTest {
     return FfprobePackets.of(uploads.contentOf(List.of("init.mp4", name)), root).stream()
         .filter(Packet::isVideo)
         .toList();
+  }
+
+  // H.264 at one frame per second with libx264's default B-frames and a keyframe every 6 s, and
+  // pink noise for the whole 18 s.
+  private static synchronized Path oneFramePerSecondSource() throws Exception {
+    var source = seekableSources.resolve("one-frame-per-second.mp4");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=1:duration=18",
+              "-f",
+              "lavfi",
+              "-i",
+              "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5:duration=18",
+              "-c:v",
+              "libx264",
+              "-g",
+              "6",
+              "-c:a",
+              "aac"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
   }
 
   // H.264 at 23.976 fps with a keyframe every 48 frames (2.002 s), so that a stream copy's seek

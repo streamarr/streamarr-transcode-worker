@@ -5,6 +5,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Stream;
 
 /**
@@ -40,22 +41,29 @@ final class AudioSampleQueue {
   }
 
   /**
-   * Holds the fragment's audio samples for their segments. The sound track's samples arrive in
-   * decode order, which for audio is presentation order, so once an audio sample starts in segment
-   * N, no audio sample of an earlier segment follows.
+   * Holds the fragment's audio samples for their segments and returns the earliest it holds. The
+   * sound track's samples arrive in decode order, which for audio is presentation order, so once an
+   * audio sample starts in segment N, no audio sample of an earlier segment follows.
    *
    * @throws FragmentedMp4Exception when an audio sample starts before the one that arrived before
    *     it
    */
-  void add(Fragment fragment) {
+  Optional<Sample> add(Fragment fragment) {
     withoutSoundTrack = fragment.tracks().audio().isEmpty();
-    fragment.audioSamples().forEach(sample -> hold(fragment, sample));
+    var earliestHeld = Optional.<Sample>empty();
+    for (var sample : fragment.audioSamples()) {
+      if (tryHold(fragment, sample) && earliestHeld.isEmpty()) {
+        earliestHeld = Optional.of(sample);
+      }
+    }
+
     if (fragment.audioSamples().isEmpty()) {
-      return;
+      return earliestHeld;
     }
 
     reach(
         numberOf(fragment.audioSamples().getLast().presentationTime(), audioTimescaleOf(fragment)));
+    return earliestHeld;
   }
 
   /**
@@ -100,7 +108,8 @@ final class AudioSampleQueue {
     held.clear();
   }
 
-  private void hold(Fragment fragment, Sample sample) {
+  // Holds the sample for its segment unless it is preroll or late; false when it drops it.
+  private boolean tryHold(Fragment fragment, Sample sample) {
     requireNoRegression(sample);
     var number = numberOf(sample.presentationTime(), audioTimescaleOf(fragment));
     if (number < 0 && startSequenceNumber == 0) {
@@ -108,15 +117,16 @@ final class AudioSampleQueue {
     }
 
     if (number < startSequenceNumber) {
-      return;
+      return false;
     }
 
     if (number < firstOpenNumber) {
       droppedLateSampleCount++;
-      return;
+      return false;
     }
 
     held.addLast(new Queued(number, new CarriedSample(fragment, sample)));
+    return true;
   }
 
   private void requireNoRegression(Sample sample) {

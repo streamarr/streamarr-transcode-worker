@@ -116,9 +116,10 @@ function videoDecodeEndOf(fragment) {
  * Every audio sample that arrives after its media segment closed, which the producer drops, in
  * arrival order. Once the keyframe of a later segment has arrived, a segment closes after the
  * fragment in which an audio sample of a later segment arrives or the video's decode end runs
- * MARGIN_SECONDS past the segment's end. An audio sample before the start sequence number is
- * preroll; an attempt from segment zero keeps the samples before zero in segment zero. Nothing from
- * a grouping failure on is read.
+ * MARGIN_SECONDS and the video's lead past the segment's end. The lead is the most that the video's
+ * decode end before a fragment ran ahead of an audio sample the fragment brings and the producer
+ * holds. An audio sample before the start sequence number is preroll; an attempt from segment zero
+ * keeps the samples before zero in segment zero. Nothing from a grouping failure on is read.
  */
 function droppedAudioSamples(stream, { delivered, preroll, failure }, { period, startSequenceNumber }) {
   const audioTrack = audioTrackOf(stream);
@@ -127,6 +128,8 @@ function droppedAudioSamples(stream, { delivered, preroll, failure }, { period, 
   let opened = -Infinity;
   let reached = -Infinity;
   let passedByVideo = -Infinity;
+  let videoEnd = null;
+  let leadTicks = 0n;
   const dropped = [];
   for (let index = 0; index < end; index++) {
     const fragment = stream.fragments[index];
@@ -139,12 +142,17 @@ function droppedAudioSamples(stream, { delivered, preroll, failure }, { period, 
       if (number >= startSequenceNumber && number <= closedThrough) {
         dropped.push({ fragmentIndex: index, presentationTime, segmentNumber: number });
       }
+      if (number >= startSequenceNumber && number > closedThrough && videoEnd !== null) {
+        const audioTicks = floorDiv(presentationTime * videoEnd.timescale, BigInt(timescale));
+        leadTicks = videoEnd.ticks - audioTicks > leadTicks ? videoEnd.ticks - audioTicks : leadTicks;
+      }
       reached = Math.max(reached, number);
     }
-    const videoEnd = videoDecodeEndOf(fragment);
+    videoEnd = videoDecodeEndOf(fragment) ?? videoEnd;
     if (videoEnd !== null) {
       const unit = BigInt(period) * videoEnd.timescale;
-      passedByVideo = Number(floorDiv(videoEnd.ticks - MARGIN_SECONDS * videoEnd.timescale, unit)) - 1;
+      const margin = MARGIN_SECONDS * videoEnd.timescale + leadTicks;
+      passedByVideo = Number(floorDiv(videoEnd.ticks - margin, unit)) - 1;
     }
     opened = Math.max(opened, openedAt.get(index) ?? -Infinity);
   }
