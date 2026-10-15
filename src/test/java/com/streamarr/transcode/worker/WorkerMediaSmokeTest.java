@@ -82,6 +82,18 @@ class WorkerMediaSmokeTest {
   private static final int TEN_BIT_SOURCE_SECONDS = 8;
   private static final int TEN_BIT_SOURCE_SEGMENT_COUNT = 2;
 
+  // The scene-cut source spans segments 0 to 2 at the default 6 s period.
+  private static final int SCENE_CUT_SOURCE_FRAME_RATE = 30;
+  private static final int SCENE_CUT_SOURCE_SEGMENT_COUNT = 3;
+
+  // HEVC NAL unit types (ITU-T H.265, table 7-1): pictures are types 0 to 31, and the random
+  // access pictures that a decoder can start at (BLA, IDR and CRA) are types 16 to 23.
+  private static final int HEVC_LAST_VIDEO_CODING_LAYER_TYPE = 31;
+  private static final int HEVC_FIRST_RANDOM_ACCESS_TYPE = 16;
+  private static final int HEVC_LAST_RANDOM_ACCESS_TYPE = 23;
+  private static final int HEVC_IDR_W_RADL = 19;
+  private static final int HEVC_IDR_N_LP = 20;
+
   private static final Duration JOB_LIMIT = Duration.ofMinutes(5);
   private static final int PERMITTED_KEEPALIVE_SECONDS = 10;
 
@@ -387,6 +399,102 @@ class WorkerMediaSmokeTest {
     assertThat(uploads.names()).containsExactlyElementsOf(uploadNames(LONG_SOURCE_SECONDS));
     var start = playable(uploads.contentOf(List.of("init.mp4", "segment0.m4s")));
     assertThat(video(start).getCodec()).isEqualTo(codecFamily);
+  }
+
+  @Test
+  @DisplayName("Should start every media segment with an IDR picture when encoder is libx265")
+  void shouldStartEveryMediaSegmentWithIdrWhenEncoderIsLibx265() throws Exception {
+    var source = sceneCutSource();
+    var job = variantJobBuilder();
+    job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
+    job.getDecisionBuilder()
+        .setMode(TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE)
+        .setVideoCodecFamily("hevc")
+        .getAudioBuilder()
+        .setMode(AudioMode.AUDIO_MODE_NONE);
+    job.getVariantBuilder().setWidth(320).setHeight(180).setBitrateBitsPerSecond(200_000);
+    job.getExecutionBuilder()
+        .setFramerate(SCENE_CUT_SOURCE_FRAME_RATE)
+        .setMediaSegmentCount(SCENE_CUT_SOURCE_SEGMENT_COUNT);
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    var uploadNames = uploadNames(SCENE_CUT_SOURCE_SEGMENT_COUNT);
+    assertThat(uploads.names()).containsExactlyElementsOf(uploadNames);
+    assertThat(uploadNames.subList(1, uploadNames.size()))
+        .allSatisfy(
+            segment -> {
+              var pictures = hevcPictureTypes(uploads.contentOf(List.of("init.mp4", segment)));
+              assertThat(pictures)
+                  .as("the HEVC picture types of %s in decode order", segment)
+                  .first()
+                  .isIn(HEVC_IDR_W_RADL, HEVC_IDR_N_LP);
+              assertThat(pictures.subList(1, pictures.size()))
+                  .as("the HEVC picture types inside %s", segment)
+                  .noneMatch(WorkerMediaSmokeTest::isHevcRandomAccessPicture);
+            });
+  }
+
+  // 18 s at 30 fps: a test pattern for 2.5 s, then color bars. The cut at frame 75 lies inside
+  // segment 0, where x265's scene-cut detection would otherwise place a keyframe.
+  private Path sceneCutSource() throws Exception {
+    var source = root.resolve("scene-cut.mkv");
+    runFfmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=320x180:rate=30:duration=2.5",
+            "-f",
+            "lavfi",
+            "-i",
+            "smptehdbars=size=320x180:rate=30:duration=15.5",
+            "-filter_complex",
+            "[0:v][1:v]concat=n=2:v=1:a=0",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast"),
+        source);
+    return source;
+  }
+
+  // Each picture's NAL unit type in decode order, read from the first slice of every picture
+  // after FFmpeg rewrites the length-prefixed samples as an Annex B stream.
+  private List<Integer> hevcPictureTypes(byte[] media) throws Exception {
+    var annexB = Files.createTempFile(root, "pictures", ".hevc");
+    runFfmpeg(
+        List.of(
+            "-i",
+            playable(media).toString(),
+            "-map",
+            "0:v:0",
+            "-c:v",
+            "copy",
+            "-bsf:v",
+            "hevc_mp4toannexb",
+            "-f",
+            "hevc"),
+        annexB);
+    var stream = Files.readAllBytes(annexB);
+    var pictures = new ArrayList<Integer>();
+    for (var at = 0; at + 5 < stream.length; at++) {
+      if (stream[at] != 0 || stream[at + 1] != 0 || stream[at + 2] != 1) {
+        continue;
+      }
+
+      var type = (stream[at + 3] >> 1) & 0x3f;
+      var firstSliceOfPicture = (stream[at + 5] & 0x80) != 0;
+      if (type <= HEVC_LAST_VIDEO_CODING_LAYER_TYPE && firstSliceOfPicture) {
+        pictures.add(type);
+      }
+    }
+
+    return pictures;
+  }
+
+  private static boolean isHevcRandomAccessPicture(int type) {
+    return type >= HEVC_FIRST_RANDOM_ACCESS_TYPE && type <= HEVC_LAST_RANDOM_ACCESS_TYPE;
   }
 
   @ParameterizedTest(name = "{0} source, {1}")

@@ -108,7 +108,7 @@ class TranscodeWorkerControlPlaneIT {
               workerVerifiedEncoder(
                   backend(VideoCodecFamily.VIDEO_CODEC_FAMILY_HEVC, "libx265")
                       .setKind(EncoderKind.ENCODER_KIND_SOFTWARE),
-                  false),
+                  true),
               workerVerifiedEncoder(
                   backend(VideoCodecFamily.VIDEO_CODEC_FAMILY_AV1, "libsvtav1")
                       .setKind(EncoderKind.ENCODER_KIND_SOFTWARE),
@@ -135,7 +135,7 @@ class TranscodeWorkerControlPlaneIT {
               workerVerifiedEncoder(
                   backend(VideoCodecFamily.VIDEO_CODEC_FAMILY_HEVC, "libx265")
                       .setKind(EncoderKind.ENCODER_KIND_SOFTWARE),
-                  false),
+                  true),
               workerVerifiedEncoder(
                   backend(VideoCodecFamily.VIDEO_CODEC_FAMILY_AV1, "libsvtav1")
                       .setKind(EncoderKind.ENCODER_KIND_SOFTWARE),

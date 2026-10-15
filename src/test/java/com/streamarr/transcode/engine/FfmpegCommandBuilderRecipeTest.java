@@ -46,6 +46,8 @@ class FfmpegCommandBuilderRecipeTest {
           List.of("-loglevel", "error"),
           List.of("-threads", "1"));
   private static final String SVT_AV1_SINGLE_THREAD = ":lp=1";
+  private static final String X265_SINGLE_THREAD_AND_QUIET =
+      ":pools=none:frame-threads=1:log-level=error";
 
   static Stream<Recording> recordingsOfTheRecipe() {
     return FfmpegRecordings.recordings().stream()
@@ -75,7 +77,7 @@ class FfmpegCommandBuilderRecipeTest {
       "Should pin each verified encoder and the stream copy when recordings follow the recipe")
   void shouldPinEachVerifiedEncoderAndTheStreamCopyWhenRecordingsFollowTheRecipe() {
     assertThat(recordingsOfTheRecipe().map(Recording::videoEncoder))
-        .contains("libx264", "libsvtav1", "copy");
+        .contains("libx264", "libsvtav1", "libx265", "copy");
   }
 
   private static TranscodeJob jobRecordedAs(Recording recording) {
@@ -111,12 +113,15 @@ class FfmpegCommandBuilderRecipeTest {
       command.subList(start, start + option.size()).clear();
     }
 
-    var svtAv1Parameters = command.indexOf("-svtav1-params") + 1;
-    if (svtAv1Parameters > 0) {
-      command.set(
-          svtAv1Parameters, command.get(svtAv1Parameters).replace(SVT_AV1_SINGLE_THREAD, ""));
-    }
-
+    removeParameter(command, "-svtav1-params", SVT_AV1_SINGLE_THREAD);
+    removeParameter(command, "-x265-params", X265_SINGLE_THREAD_AND_QUIET);
     return command;
+  }
+
+  private static void removeParameter(List<String> command, String option, String parameter) {
+    var parameters = command.indexOf(option) + 1;
+    if (parameters > 0) {
+      command.set(parameters, command.get(parameters).replace(parameter, ""));
+    }
   }
 }

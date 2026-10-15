@@ -569,7 +569,7 @@ function hlsComparisonViolations(fixture) {
 }
 
 /** The encoders ADR 0037 verified by these recordings, whose keyframes must start closed GOPs. */
-const VERIFIED_ENCODERS = new Set(['libx264', 'libsvtav1']);
+const VERIFIED_ENCODERS = new Set(['libx264', 'libsvtav1', 'libx265']);
 
 function pictureViolations({ name, encoder, diagnostics }) {
   if (!VERIFIED_ENCODERS.has(encoder)) {

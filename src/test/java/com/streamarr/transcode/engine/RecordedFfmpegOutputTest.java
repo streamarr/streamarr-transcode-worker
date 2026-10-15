@@ -188,7 +188,8 @@ class RecordedFfmpegOutputTest {
   @CsvSource({
     "01-encode-cfr.fmp4, 01-encode-cfr-seek30.fmp4",
     "07-copy-start0.fmp4, 07-copy-seek30.fmp4",
-    "09-svtav1-vfr.fmp4, 09-svtav1-vfr-seek30.fmp4"
+    "09-svtav1-vfr.fmp4, 09-svtav1-vfr-seek30.fmp4",
+    "13-x265-cfr.fmp4, 13-x265-cfr-seek30.fmp4"
   })
   @DisplayName(
       "Should read identical initialization segments when a replacement attempt keeps the encoder"
@@ -243,7 +244,8 @@ class RecordedFfmpegOutputTest {
   @ParameterizedTest(name = "{0} against {1}")
   @CsvSource({
     "01-encode-cfr-seek30.fmp4, 01-encode-cfr.fmp4",
-    "09-svtav1-vfr-seek30.fmp4, 09-svtav1-vfr.fmp4"
+    "09-svtav1-vfr-seek30.fmp4, 09-svtav1-vfr.fmp4",
+    "13-x265-cfr-seek30.fmp4, 13-x265-cfr.fmp4"
   })
   @DisplayName(
       "Should open every segment on the start-0 attempt's frame when an encoded replacement attempt"
@@ -259,7 +261,12 @@ class RecordedFfmpegOutputTest {
   }
 
   @ParameterizedTest(name = "{0}")
-  @ValueSource(strings = {"01-encode-cfr-seek30.fmp4", "09-svtav1-vfr-seek30.fmp4"})
+  @ValueSource(
+      strings = {
+        "01-encode-cfr-seek30.fmp4",
+        "09-svtav1-vfr-seek30.fmp4",
+        "13-x265-cfr-seek30.fmp4"
+      })
   @DisplayName(
       "Should start at the seek point and discard that period when an encoded replacement attempt"
           + " seeks one period before its first segment")
@@ -297,7 +304,9 @@ class RecordedFfmpegOutputTest {
     "01-encode-cfr-seek30.fmp4",
     "03-encode-vfr.fmp4",
     "09-svtav1-vfr.fmp4",
-    "09-svtav1-vfr-seek30.fmp4"
+    "09-svtav1-vfr-seek30.fmp4",
+    "13-x265-cfr.fmp4",
+    "13-x265-cfr-seek30.fmp4"
   })
   @DisplayName(
       "Should start every segment with one keyframe when a verified encoder's GOP backstop exceeds"
@@ -328,7 +337,8 @@ class RecordedFfmpegOutputTest {
   @ParameterizedTest(name = "{0}")
   @CsvSource({
     "12-encode-cfr-missed-forced-keyframe.fmp4",
-    "12-svtav1-cfr-missed-forced-keyframe.fmp4"
+    "12-svtav1-cfr-missed-forced-keyframe.fmp4",
+    "13-x265-cfr-missed-forced-keyframe.fmp4"
   })
   @DisplayName(
       "Should open a missed forced keyframe's interval at the GOP backstop when a verified encoder"
@@ -336,18 +346,6 @@ class RecordedFfmpegOutputTest {
   void shouldOpenAMissedForcedKeyframesIntervalAtTheGopBackstopWhenAVerifiedEncoderMissesOne(
       String file) throws IOException {
     var grouping = group(recording(file));
-
-    assertThat(grouping.failure()).isEmpty();
-    assertThat(cutPoints(grouping)).containsExactlyElementsOf(backstopCutPoints());
-  }
-
-  @Test
-  @DisplayName(
-      "Should open a missed forced keyframe's interval at the GOP backstop when unverified libx265"
-          + " runs under the verified GOP")
-  void shouldOpenAMissedForcedKeyframesIntervalAtTheGopBackstopWhenUnverifiedLibx265RunsUnderIt()
-      throws IOException {
-    var grouping = group(recording("13-x265-cfr-missed-forced-keyframe.fmp4"));
 
     assertThat(grouping.failure()).isEmpty();
     assertThat(cutPoints(grouping)).containsExactlyElementsOf(backstopCutPoints());

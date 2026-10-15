@@ -108,7 +108,7 @@ class WorkerImageIT {
               WorkerVerifiedVideoEncoder::getKeyframeVerified)
           .containsExactlyInAnyOrder(
               tuple("libx264", EncoderKind.ENCODER_KIND_SOFTWARE, true),
-              tuple("libx265", EncoderKind.ENCODER_KIND_SOFTWARE, false),
+              tuple("libx265", EncoderKind.ENCODER_KIND_SOFTWARE, true),
               tuple("libsvtav1", EncoderKind.ENCODER_KIND_SOFTWARE, true));
     }
   }

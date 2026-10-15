@@ -26,8 +26,8 @@ public class FfmpegCommandBuilder {
   // What the command passes each encoder differently; an encoder not listed has none of it. A
   // keyframe-verified encoder's recordings show every forced keyframe as a sync sample that starts
   // a closed GOP, with its GOP count restarting there (ADR 0037 as amended;
-  // src/test/resources/fmp4/README.md, "Verified encoders"); libx265 and the hardware encoders are
-  // not keyframe-verified yet.
+  // src/test/resources/fmp4/README.md, "Verified encoders"); the hardware encoders are not
+  // keyframe-verified yet.
   private static final Map<String, EncoderTraits> ENCODER_TRAITS =
       Map.ofEntries(
           Map.entry(
@@ -40,6 +40,8 @@ public class FfmpegCommandBuilder {
                   .fixedGop(true)
                   .capsBitrateOnlyInCrfMode(true)
                   .build()),
+          Map.entry(
+              "libx265", traits().keyframeVerified(true).closesGopsByX265Parameters(true).build()),
           Map.entry("h264_nvenc", FIXED_GOP),
           Map.entry("hevc_nvenc", FIXED_GOP),
           Map.entry("av1_nvenc", FIXED_GOP),
@@ -51,6 +53,10 @@ public class FfmpegCommandBuilder {
           Map.entry("av1_amf", FIXED_GOP),
           Map.entry("h264_rkmpp", FIXED_GOP),
           Map.entry("hevc_rkmpp", FIXED_GOP));
+
+  // By default x265 opens its GOPs, so a forced keyframe is a CRA picture despite -forced-idr, and
+  // it adds a keyframe at each scene cut, inside a segment.
+  private static final String CLOSED_GOP_X265_PARAMETERS = "no-scenecut=1:no-open-gop=1";
 
   static final List<String> MP4_MOVFLAGS =
       List.of("cmaf", "delay_moov", "skip_trailer", "frag_keyframe", "frag_discont");
@@ -208,10 +214,12 @@ public class FfmpegCommandBuilder {
   }
 
   private void addKeyframeArgs(List<String> cmd, TranscodeJob job) {
+    var request = job.request();
+    var forcedKeyframes = forcedKeyframes(request, request.startSequenceNumber());
     var gopSize = String.valueOf(gopFrameCount(job));
 
     cmd.addAll(List.of("-forced-idr", "1"));
-    addForcedKeyframeArgs(cmd, job);
+    addForcedKeyframeArgs(cmd, job, forcedKeyframes);
     cmd.addAll(List.of("-g:v:0", gopSize));
 
     if (traitsOf(job).fixedGop()) {
@@ -223,8 +231,12 @@ public class FfmpegCommandBuilder {
     var request = job.request();
     var periodFrames = request.targetSegmentDuration() * request.framerate();
     // One frame past the forced keyframes' gap, so the GOP never fires while forcing works, and a
-    // keyframe it places for a dropped forced one still lands inside that interval.
-    if (isKeyframeVerified(job.videoEncoder())) {
+    // keyframe it places for a dropped forced one still lands inside that interval. Past the end of
+    // a list cut short, that GOP alone would drift past a segment interval and skip it. The list
+    // from the variant's first segment decides, whatever the attempt's start: libx265 writes the
+    // GOP into the initialization segment, which every attempt of a variant shares.
+    if (isKeyframeVerified(job.videoEncoder())
+        && forcedKeyframes(request, 0).reachesLastBoundary()) {
       return (int) Math.ceil(periodFrames) + 1;
     }
 
@@ -233,34 +245,37 @@ public class FfmpegCommandBuilder {
     return (int) Math.floor(periodFrames);
   }
 
-  private void addForcedKeyframeArgs(List<String> cmd, TranscodeJob job) {
-    cmd.addAll(List.of("-force_key_frames:0", forcedKeyframeTimes(job.request())));
+  private void addForcedKeyframeArgs(
+      List<String> cmd, TranscodeJob job, ForcedKeyframes forcedKeyframes) {
+    cmd.addAll(List.of("-force_key_frames:0", forcedKeyframes.times()));
 
     if (traitsOf(job).disablesSceneCutsByThreshold()) {
       cmd.addAll(List.of("-sc_threshold:v:0", "0"));
+    }
+
+    if (traitsOf(job).closesGopsByX265Parameters()) {
+      cmd.addAll(List.of("-x265-params", CLOSED_GOP_X265_PARAMETERS));
     }
   }
 
   // FFmpeg's list mode compares each frame's own timestamp with these absolute media times, so
   // every attempt forces the same frame at a boundary it shares with another attempt; an
-  // expression would measure from the attempt's first frame instead. The list starts at the
-  // attempt's first segment, because FFmpeg consumes at most one time per frame, and ends at the
-  // last advertised boundary or the longest argument, past which the GOP places keyframes.
-  private static String forcedKeyframeTimes(TranscodeRequest request) {
+  // expression would measure from the attempt's first frame instead. An attempt's list starts at
+  // its first segment, because FFmpeg consumes at most one time per frame, and ends at the last
+  // advertised boundary or the longest argument, past which the GOP places keyframes.
+  private static ForcedKeyframes forcedKeyframes(TranscodeRequest request, long firstSegment) {
     var period = (long) request.targetSegmentDuration();
-    var times = new StringBuilder().append(request.startSequenceNumber() * period);
-    for (var segment = request.startSequenceNumber() + 1L;
-        segment < request.mediaSegmentCount();
-        segment++) {
+    var times = new StringBuilder().append(firstSegment * period);
+    for (var segment = firstSegment + 1; segment < request.mediaSegmentCount(); segment++) {
       var next = "," + segment * period;
       if (times.length() + next.length() > LONGEST_ARGUMENT_BYTES) {
-        break;
+        return new ForcedKeyframes(times.toString(), false);
       }
 
       times.append(next);
     }
 
-    return times.toString();
+    return new ForcedKeyframes(times.toString(), true);
   }
 
   static boolean isKeyframeVerified(String encoder) {
@@ -292,10 +307,13 @@ public class FfmpegCommandBuilder {
       boolean keyframeVerified,
       boolean fixedGop,
       boolean disablesSceneCutsByThreshold,
+      boolean closesGopsByX265Parameters,
       boolean capsBitrateOnlyInCrfMode,
       @NonNull String eightBitPixelFormat) {}
 
   private static EncoderTraits.EncoderTraitsBuilder traits() {
     return EncoderTraits.builder().eightBitPixelFormat(DEFAULT_EIGHT_BIT_PIXEL_FORMAT);
   }
+
+  private record ForcedKeyframes(@NonNull String times, boolean reachesLastBoundary) {}
 }
