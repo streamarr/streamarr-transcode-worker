@@ -58,12 +58,12 @@ test('refuses to publish an image built from a different source revision', () =>
   assert.deepEqual(result.state.registry, {});
 });
 
-for (const [condition, environment, message] of [
-  ['a pull request', { GITHUB_EVENT_NAME: 'pull_request', GITHUB_REF: 'refs/pull/8/merge' }, /reviewed main push/],
-  ['a feature branch push', { GITHUB_REF: 'refs/heads/feature/image' }, /reviewed main push/],
-  ['manual main execution', { GITHUB_EVENT_NAME: 'workflow_dispatch' }, /reviewed main push/],
-  ['another repository', { GITHUB_REPOSITORY: 'someone/fork' }, /reviewed main push/],
-  ['an abbreviated source revision', { GITHUB_SHA: 'abc123' }, /full source revision/],
+for (const { condition, environment, message } of [
+  { condition: 'a pull request', environment: { GITHUB_EVENT_NAME: 'pull_request', GITHUB_REF: 'refs/pull/8/merge' }, message: /reviewed main push/ },
+  { condition: 'a feature branch push', environment: { GITHUB_REF: 'refs/heads/feature/image' }, message: /reviewed main push/ },
+  { condition: 'manual main execution', environment: { GITHUB_EVENT_NAME: 'workflow_dispatch' }, message: /reviewed main push/ },
+  { condition: 'another repository', environment: { GITHUB_REPOSITORY: 'someone/fork' }, message: /reviewed main push/ },
+  { condition: 'an abbreviated source revision', environment: { GITHUB_SHA: 'abc123' }, message: /full source revision/ },
 ]) {
   test(`refuses native publication for ${condition}`, () => {
     const result = publication({ environment });
