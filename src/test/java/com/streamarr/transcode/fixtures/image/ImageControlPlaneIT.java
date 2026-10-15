@@ -15,6 +15,7 @@ import io.grpc.Status;
 import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
 import io.grpc.stub.StreamObserver;
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -35,8 +36,11 @@ import org.junit.jupiter.params.provider.MethodSource;
 @Tag("IntegrationTest")
 @DisplayName("Image Control Plane Tests")
 class ImageControlPlaneIT {
-  private static final ImageControlPlane.Ports EPHEMERAL_PORTS =
-      ImageControlPlane.Ports.builder().grpcPort(0).commandPort(0).build();
+  private static final ImageControlPlane.ListenAddresses EPHEMERAL_ADDRESSES =
+      ImageControlPlane.ListenAddresses.builder()
+          .grpc(new InetSocketAddress(0))
+          .command(new InetSocketAddress(0))
+          .build();
 
   private ImageControlPlane.Serving controlPlane;
   private HttpClient http;
@@ -44,7 +48,7 @@ class ImageControlPlaneIT {
   @BeforeEach
   void startServer() throws IOException {
     http = HttpClient.newHttpClient();
-    controlPlane = ImageControlPlane.serve(EPHEMERAL_PORTS);
+    controlPlane = ImageControlPlane.serve(EPHEMERAL_ADDRESSES);
   }
 
   @AfterEach
@@ -67,7 +71,7 @@ class ImageControlPlaneIT {
   @DisplayName("Should report the terminal outcome when the expected job result cannot arrive")
   void shouldReportTheTerminalOutcomeWhenTheExpectedJobResultCannotArrive(JobOutcome outcome)
       throws Exception {
-    try (var peer = WorkerPeer.builder().port(controlPlane.grpcPort()).build()) {
+    try (var peer = WorkerPeer.builder().port(controlPlane.grpcAddress().getPort()).build()) {
       post("accept", new byte[0]);
       var response =
           http.sendAsync(
@@ -137,7 +141,7 @@ class ImageControlPlaneIT {
     var waitingForRegistration = outcome.command().equals("registration");
     try (var peer =
         WorkerPeer.builder()
-            .port(controlPlane.grpcPort())
+            .port(controlPlane.grpcAddress().getPort())
             .withoutRegistration(waitingForRegistration)
             .build()) {
       if (!waitingForRegistration) {
@@ -243,7 +247,8 @@ class ImageControlPlaneIT {
 
   private HttpRequest request(String command, byte[] body) {
     return HttpRequest.newBuilder(
-            URI.create("http://127.0.0.1:" + controlPlane.commandPort() + "/" + command))
+            URI.create(
+                "http://127.0.0.1:" + controlPlane.commandAddress().getPort() + "/" + command))
         .timeout(Duration.ofSeconds(3))
         .POST(HttpRequest.BodyPublishers.ofByteArray(body))
         .build();

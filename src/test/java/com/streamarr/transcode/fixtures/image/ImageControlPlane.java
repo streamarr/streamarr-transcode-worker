@@ -38,6 +38,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import lombok.AccessLevel;
 import lombok.Builder;
+import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
@@ -58,19 +59,23 @@ public final class ImageControlPlane
   private StreamObserver<EstablishWorkerSessionResponse> responses;
 
   // The image's worker reaches its control plane at its default endpoint, 127.0.0.1:9090.
-  private static final Ports IMAGE_PORTS = Ports.builder().grpcPort(9090).commandPort(8082).build();
+  private static final ListenAddresses IMAGE_ADDRESSES =
+      ListenAddresses.builder()
+          .grpc(new InetSocketAddress(9090))
+          .command(new InetSocketAddress(8082))
+          .build();
 
   public static void main() throws Exception {
-    try (var _ = serve(IMAGE_PORTS)) {
+    try (var _ = serve(IMAGE_ADDRESSES)) {
       new CountDownLatch(1).await();
     }
   }
 
-  static Serving serve(Ports ports) throws IOException {
+  static Serving serve(ListenAddresses addresses) throws IOException {
     var controlPlane = new ImageControlPlane();
     var grpc =
-        NettyServerBuilder.forPort(ports.grpcPort()).addService(controlPlane).build().start();
-    var http = HttpServer.create(new InetSocketAddress(ports.commandPort()), 0);
+        NettyServerBuilder.forAddress(addresses.grpc()).addService(controlPlane).build().start();
+    var http = HttpServer.create(addresses.command(), 0);
     var threads = Executors.newVirtualThreadPerTaskExecutor();
     http.setExecutor(threads);
     http.createContext("/", controlPlane::exchange);
@@ -78,9 +83,9 @@ public final class ImageControlPlane
     return new Serving(grpc, http, threads);
   }
 
-  /** Ports to bind; port 0 binds an ephemeral port. */
+  /** Addresses to listen on; port 0 binds an ephemeral port. */
   @Builder
-  record Ports(int grpcPort, int commandPort) {}
+  record ListenAddresses(@NonNull InetSocketAddress grpc, @NonNull InetSocketAddress command) {}
 
   @RequiredArgsConstructor(access = AccessLevel.PRIVATE)
   static final class Serving implements AutoCloseable {
@@ -88,12 +93,13 @@ public final class ImageControlPlane
     private final HttpServer http;
     private final ExecutorService threads;
 
-    int grpcPort() {
-      return grpc.getPort();
+    InetSocketAddress grpcAddress() {
+      // A Netty server started on one InetSocketAddress listens on exactly that socket.
+      return (InetSocketAddress) grpc.getListenSockets().getFirst();
     }
 
-    int commandPort() {
-      return http.getAddress().getPort();
+    InetSocketAddress commandAddress() {
+      return http.getAddress();
     }
 
     @Override
