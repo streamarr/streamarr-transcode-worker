@@ -18,8 +18,10 @@ import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.TranscodeMode;
 import build.buf.gen.streamarr.transcode.v1.WorkerRegistration;
+import com.github.dockerjava.api.command.WaitContainerResultCallback;
 import com.streamarr.transcode.fixtures.image.ImageControlPlane;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -32,6 +34,7 @@ import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import lombok.Builder;
 import lombok.extern.slf4j.Slf4j;
@@ -416,6 +419,8 @@ class WorkerImageIT {
     private final UUID workerId = UUID.randomUUID();
     private final GenericContainer<?> controlPlane;
     private final GenericContainer<?> worker;
+    private final CompletableFuture<Integer> workerExit = new CompletableFuture<>();
+    private WaitContainerResultCallback workerExitWait;
     private final HttpClient http =
         HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
@@ -449,8 +454,7 @@ class WorkerImageIT {
               .withEnv("TRANSCODE_WORKER_ID", workerId.toString())
               .withEnv("TRANSCODE_WORKER_SOURCE_NAMESPACE_ID", SOURCE_NAMESPACE_ID.toString())
               .withEnv("TRANSCODE_WORKER_SOURCE_ROOT", "/media")
-              .withFileSystemBind(media.toAbsolutePath().toString(), "/media", BindMode.READ_ONLY)
-              .waitingFor(Wait.forLogMessage(".*Started TranscodeWorkerApplication.*", 1));
+              .withFileSystemBind(media.toAbsolutePath().toString(), "/media", BindMode.READ_ONLY);
       if (ffmpegPath != null) {
         worker.withEnv("TRANSCODE_WORKER_FFMPEG_PATH", ffmpegPath);
       }
@@ -464,21 +468,56 @@ class WorkerImageIT {
       }
       try {
         worker.start();
+        watchWorkerExit();
       } catch (RuntimeException failure) {
         close();
         throw failure;
       }
     }
 
-    private WorkerRegistration registration() throws Exception {
-      return WorkerRegistration.parseFrom(command("registration", new byte[0]));
+    private void watchWorkerExit() {
+      workerExitWait = worker.getDockerClient().waitContainerCmd(worker.getContainerId()).start();
+      Thread.ofVirtual()
+          .start(
+              () -> {
+                try {
+                  workerExit.complete(workerExitWait.awaitStatusCode());
+                } catch (RuntimeException failure) {
+                  workerExit.completeExceptionally(failure);
+                }
+              });
     }
 
+    private WorkerRegistration registration() throws Exception {
+      return WorkerRegistration.parseFrom(commandBeforeWorkerExit("registration"));
+    }
+
+    // The control plane waits for the registration before it accepts. A worker that exits first
+    // fails this wait at once.
     private void accept() throws Exception {
-      command("accept", new byte[0]);
+      commandBeforeWorkerExit("accept");
+    }
+
+    private byte[] commandBeforeWorkerExit(String path) throws Exception {
+      var response =
+          http.sendAsync(
+              commandRequest(path, new byte[0]), HttpResponse.BodyHandlers.ofByteArray());
+      CompletableFuture.anyOf(response, workerExit).get();
+      if (!response.isDone()) {
+        throw new AssertionError(
+            "The worker exited with status %d before the control plane answered %s%n%s"
+                .formatted(workerExit.resultNow(), path, worker.getLogs()));
+      }
+
+      return successfulBody(path, response.get());
     }
 
     private byte[] command(String path, byte[] body) throws Exception {
+      return successfulBody(
+          path, http.send(commandRequest(path, body), HttpResponse.BodyHandlers.ofByteArray()));
+    }
+
+    private HttpRequest commandRequest(String path, byte[] body) {
       var endpoint =
           URI.create(
               "http://"
@@ -487,13 +526,13 @@ class WorkerImageIT {
                   + controlPlane.getMappedPort(8082)
                   + "/"
                   + path);
-      var response =
-          http.send(
-              HttpRequest.newBuilder(endpoint)
-                  .timeout(Duration.ofSeconds(60))
-                  .POST(HttpRequest.BodyPublishers.ofByteArray(body))
-                  .build(),
-              HttpResponse.BodyHandlers.ofByteArray());
+      return HttpRequest.newBuilder(endpoint)
+          .timeout(Duration.ofSeconds(60))
+          .POST(HttpRequest.BodyPublishers.ofByteArray(body))
+          .build();
+    }
+
+    private static byte[] successfulBody(String path, HttpResponse<byte[]> response) {
       assertThat(response.statusCode())
           .as("Command %s failed: %s", path, new String(response.body(), StandardCharsets.UTF_8))
           .isEqualTo(200);
@@ -529,6 +568,13 @@ class WorkerImageIT {
       worker.close();
       controlPlane.close();
       http.close();
+      if (workerExitWait != null) {
+        try {
+          workerExitWait.close();
+        } catch (IOException failure) {
+          throw new UncheckedIOException(failure);
+        }
+      }
     }
   }
 }
