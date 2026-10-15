@@ -194,8 +194,10 @@ order the worker's command builder passes them.
 - `droppedAudioSamples` lists every audio sample that arrives after its media segment closed, by
   its fragment, its presentation time in the audio timescale and its segment, or is empty. Once the
   keyframe of a later segment has arrived, a segment closes after the fragment in which an audio
-  sample of a later segment arrives or the video's decode end runs 1 s past the segment's end. In
-  every other recording an audio sample trails the video written before it by at most 0.162 s
+  sample of a later segment arrives or the video's decode end runs 1 s and the video's lead past the
+  segment's end. The lead is the most that the video's decode end ran ahead of an audio sample the
+  producer holds when that sample arrived: at most 0.162 s in these recordings (04), and two frames,
+  0.083 s, in most of them. In every other recording an audio sample trails the video written before it by at most 0.162 s
   (04); in 17b the AAC encoder's last two frames arrive 149 s after their segment's video, and
   the producer drops them: the segment was delivered long before. An audio sample whose
   presentation time runs back behind the one before it fails the attempt with
@@ -515,14 +517,18 @@ settle what, if anything, changes because of them.
   (15). The fragment at 6.006 s opens segment 1 without audio, and the next fragment carries an audio
   sample from 5.964 s, inside segment 0. A keyframe therefore does not close a segment's audio: the
   producer closes a segment once an audio sample of a later segment has arrived, once the video's
-  decode end has run 1 s past the segment's end (`VideoProgress`), or when the output ends.
+  decode end has run 1 s and the video's lead past the segment's end (`VideoProgress`), or when the
+  output ends. The mp4 muxer shifts the video's decode times by the encoder's reordering delay, two
+  frames for libx264, so the video leads the audio beside it by that delay: two seconds at one frame
+  per second (`WorkerMediaSmokeTest`).
 - **Audio can end before the video** (14). The fragment at 8.008 s carries the last three audio
   samples, which end at 8.0 s, and from 9.009 s on FFmpeg writes fragments with a video `traf` alone.
   Nothing in the output says that the audio has ended, and such a fragment does not show that the
   audio before its boundary has all arrived (15). The video does: the muxer writes each audio sample
   with the video around it unless the input's audio trails its video by more than FFmpeg's
   interleave bound, which the worker passes as `-max_interleave_delta 10000000` (10 s). So segments
-  1–3 each close once the video's decode end runs 1 s past their end, not when the output ends; 17
+  1–3 each close once the video's decode end runs 1 s and its lead past their end, not when the
+  output ends; 17
   shows the same over 160 s of video without audio. An audio encoder's last frames are the
   exception: FFmpeg flushes them only once the whole input has ended (17b), and the producer drops
   them, since their segment was delivered long before. When the video is copied, more of the audio
