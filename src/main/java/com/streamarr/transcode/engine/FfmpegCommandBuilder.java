@@ -6,6 +6,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import lombok.Builder;
 import lombok.NonNull;
@@ -189,15 +190,33 @@ public class FfmpegCommandBuilder {
 
     if (!decision.transcodeMode().encodesVideo()) {
       cmd.addAll(List.of("-c:v", "copy"));
+      cmd.addAll(copiedVideoArgs(decision.videoDecision()));
       addAudioArgs(cmd, decision.audioDecision());
       return;
     }
 
     cmd.addAll(List.of("-c:v", job.videoEncoder()));
     addPresetArgs(cmd, job);
+    PlayableSampleEntry.ofEncoder(job.videoEncoder())
+        .ifPresent(entry -> cmd.addAll(List.of("-tag:v", entry.tag())));
     cmd.addAll(forcedCodecProfileArgs(job));
     addScaleAndBitrateArgs(cmd, job);
     addAudioArgs(cmd, decision.audioDecision());
+  }
+
+  // A copy of H.264 or HEVC gets the codec family's playable sample entry. The mp4 muxer drops a
+  // Dolby Vision configuration record unless the compliance is unofficial; no encode writes one.
+  private static List<String> copiedVideoArgs(VideoDecision decision) {
+    var args = new ArrayList<String>();
+    var sampleEntry =
+        switch (decision) {
+          case VideoDecision.Copy copy -> PlayableSampleEntry.ofCopy(copy);
+          case VideoDecision.Encode _ -> Optional.<PlayableSampleEntry>empty();
+        };
+    sampleEntry.ifPresent(
+        entry -> args.addAll(List.of("-bsf:v", entry.annexBFilter(), "-tag:v", entry.tag())));
+    args.addAll(List.of("-strict", "unofficial"));
+    return List.copyOf(args);
   }
 
   // Hardware encoders take no preset until the preset scale has rows for them (ADR 0044).

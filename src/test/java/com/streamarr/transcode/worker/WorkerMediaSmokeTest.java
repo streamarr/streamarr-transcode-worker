@@ -552,7 +552,7 @@ class WorkerMediaSmokeTest {
   }
 
   @ParameterizedTest(name = "{0}")
-  @CsvSource({"h264, avc1, High, 40", "hevc, hev1, Main, 120", "av1, av01, Main, 8"})
+  @CsvSource({"h264, avc1, High, 40", "hevc, hvc1, Main, 120", "av1, av01, Main, 8"})
   @DisplayName(
       "Should write the forced codec profile, level and tier in 8-bit 4:2:0 when a software encoder"
           + " encodes")
@@ -1179,7 +1179,6 @@ class WorkerMediaSmokeTest {
 
   // An 8-bit encode of the codec family that forces the level, with the codec string that the
   // worker's encoder writes for it: High for H.264, and Main at the Main tier for H.265 and AV1.
-  // libx265 writes the hev1 sample entry until the worker chooses the tag (worker #18).
   private static VideoDecision.Builder forcedSoftwareEncode(String codecFamily, int level) {
     var video = VideoDecision.newBuilder().setMode(VideoMode.VIDEO_MODE_ENCODE).setLevel(level);
     return switch (codecFamily) {
@@ -1193,7 +1192,7 @@ class WorkerMediaSmokeTest {
               .setCodecFamily(VideoCodecFamily.VIDEO_CODEC_FAMILY_HEVC)
               .setCodecProfile(VideoCodecProfile.VIDEO_CODEC_PROFILE_HEVC_MAIN)
               .setTier(VideoCodecTier.VIDEO_CODEC_TIER_MAIN)
-              .setCodecString(String.format(Locale.ROOT, "hev1.1.6.L%d.90", level * 3));
+              .setCodecString(String.format(Locale.ROOT, "hvc1.1.6.L%d.90", level * 3));
       case "av1" ->
           video
               .setCodecFamily(VideoCodecFamily.VIDEO_CODEC_FAMILY_AV1)

@@ -117,7 +117,7 @@ public final class FfmpegRecordings {
         case "copy" -> "avc1.F4000A";
         case "libx264" -> RecordingFixtures.ENCODED_RECORDING_CODEC_STRING;
         case "libsvtav1" -> "av01.0.00M.08";
-        case "libx265" -> "hev1.1.6.L30.90";
+        case "libx265" -> "hvc1.1.6.L30.90";
         default -> throw new AssertionError("No codec string is known for " + videoEncoder());
       };
     }

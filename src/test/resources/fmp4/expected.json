@@ -51,6 +51,8 @@
         "libx264",
         "-preset",
         "faster",
+        "-tag:v",
+        "avc1",
         "-profile:v",
         "high",
         "-level:v",
@@ -553,6 +555,8 @@
         "libx264",
         "-preset",
         "faster",
+        "-tag:v",
+        "avc1",
         "-profile:v",
         "high",
         "-level:v",
@@ -909,6 +913,12 @@
         "128",
         "-c:v",
         "copy",
+        "-bsf:v",
+        "h264_mp4toannexb",
+        "-tag:v",
+        "avc1",
+        "-strict",
+        "unofficial",
         "-c:a",
         "copy",
         "-bsf:a",
@@ -929,7 +939,7 @@
       "mediaSegmentCount": 11,
       "videoTrackId": 1,
       "videoTimescale": 12288,
-      "byteLength": 104113,
+      "byteLength": 104531,
       "initializationSegment": {
         "byteLength": 1329,
         "sha256": "73ad19a74f1912f4cc17048fe4cd40ebe67813ed68f234163279a7c0b8d55786",
@@ -971,7 +981,7 @@
           "firstFragmentIndex": 0,
           "fragmentCount": 7,
           "syncFirstFragmentCount": 1,
-          "byteLength": 9360
+          "byteLength": 9398
         },
         {
           "number": 1,
@@ -979,7 +989,7 @@
           "firstFragmentIndex": 7,
           "fragmentCount": 6,
           "syncFirstFragmentCount": 1,
-          "byteLength": 8024
+          "byteLength": 8062
         },
         {
           "number": 2,
@@ -987,7 +997,7 @@
           "firstFragmentIndex": 13,
           "fragmentCount": 6,
           "syncFirstFragmentCount": 1,
-          "byteLength": 8937
+          "byteLength": 8975
         },
         {
           "number": 3,
@@ -995,7 +1005,7 @@
           "firstFragmentIndex": 19,
           "fragmentCount": 7,
           "syncFirstFragmentCount": 1,
-          "byteLength": 9953
+          "byteLength": 9991
         },
         {
           "number": 4,
@@ -1003,7 +1013,7 @@
           "firstFragmentIndex": 26,
           "fragmentCount": 6,
           "syncFirstFragmentCount": 1,
-          "byteLength": 8716
+          "byteLength": 8754
         },
         {
           "number": 5,
@@ -1011,7 +1021,7 @@
           "firstFragmentIndex": 32,
           "fragmentCount": 7,
           "syncFirstFragmentCount": 1,
-          "byteLength": 10257
+          "byteLength": 10295
         },
         {
           "number": 6,
@@ -1019,7 +1029,7 @@
           "firstFragmentIndex": 39,
           "fragmentCount": 6,
           "syncFirstFragmentCount": 1,
-          "byteLength": 8813
+          "byteLength": 8851
         },
         {
           "number": 7,
@@ -1027,7 +1037,7 @@
           "firstFragmentIndex": 45,
           "fragmentCount": 6,
           "syncFirstFragmentCount": 1,
-          "byteLength": 9523
+          "byteLength": 9561
         },
         {
           "number": 8,
@@ -1035,7 +1045,7 @@
           "firstFragmentIndex": 51,
           "fragmentCount": 7,
           "syncFirstFragmentCount": 1,
-          "byteLength": 10382
+          "byteLength": 10420
         },
         {
           "number": 9,
@@ -1043,7 +1053,7 @@
           "firstFragmentIndex": 58,
           "fragmentCount": 6,
           "syncFirstFragmentCount": 1,
-          "byteLength": 8992
+          "byteLength": 9030
         },
         {
           "number": 10,
@@ -1051,7 +1061,7 @@
           "firstFragmentIndex": 64,
           "fragmentCount": 7,
           "syncFirstFragmentCount": 1,
-          "byteLength": 9827
+          "byteLength": 9865
         }
       ],
       "discardedPreroll": [],
@@ -1082,7 +1092,7 @@
         "leadingFragmentsWithoutVideo": 0,
         "everyKeyframeStartsAFragment": true,
         "videoSamples": 1584,
-        "largestFragmentByteLength": 2287,
+        "largestFragmentByteLength": 2325,
         "firstVideoPresentationTime": 0,
         "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
         "startPlusDurationsMissesNextStartByTicks": {
@@ -1334,6 +1344,8 @@
         "libx264",
         "-preset",
         "faster",
+        "-tag:v",
+        "avc1",
         "-profile:v",
         "high",
         "-level:v",
@@ -1862,6 +1874,12 @@
         "128",
         "-c:v",
         "copy",
+        "-bsf:v",
+        "h264_mp4toannexb",
+        "-tag:v",
+        "avc1",
+        "-strict",
+        "unofficial",
         "-c:a",
         "copy",
         "-bsf:a",
@@ -1882,7 +1900,7 @@
       "mediaSegmentCount": 11,
       "videoTrackId": 1,
       "videoTimescale": 24000,
-      "byteLength": 106866,
+      "byteLength": 107606,
       "initializationSegment": {
         "byteLength": 1328,
         "sha256": "fcf380d89d137b6159eda8376a6ae05fc8e859908dc23afc09c760fe2036a4b5",
@@ -1924,7 +1942,7 @@
           "firstFragmentIndex": 0,
           "fragmentCount": 10,
           "syncFirstFragmentCount": 3,
-          "byteLength": 12535
+          "byteLength": 12646
         },
         {
           "number": 1,
@@ -1932,7 +1950,7 @@
           "firstFragmentIndex": 10,
           "fragmentCount": 5,
           "syncFirstFragmentCount": 1,
-          "byteLength": 6270
+          "byteLength": 6307
         },
         {
           "number": 2,
@@ -1940,7 +1958,7 @@
           "firstFragmentIndex": 15,
           "fragmentCount": 6,
           "syncFirstFragmentCount": 1,
-          "byteLength": 7282
+          "byteLength": 7319
         },
         {
           "number": 3,
@@ -1948,7 +1966,7 @@
           "firstFragmentIndex": 21,
           "fragmentCount": 7,
           "syncFirstFragmentCount": 2,
-          "byteLength": 8610
+          "byteLength": 8684
         },
         {
           "number": 4,
@@ -1956,7 +1974,7 @@
           "firstFragmentIndex": 28,
           "fragmentCount": 8,
           "syncFirstFragmentCount": 2,
-          "byteLength": 10478
+          "byteLength": 10552
         },
         {
           "number": 5,
@@ -1964,7 +1982,7 @@
           "firstFragmentIndex": 36,
           "fragmentCount": 6,
           "syncFirstFragmentCount": 1,
-          "byteLength": 7941
+          "byteLength": 7978
         },
         {
           "number": 6,
@@ -1972,7 +1990,7 @@
           "firstFragmentIndex": 42,
           "fragmentCount": 7,
           "syncFirstFragmentCount": 2,
-          "byteLength": 9665
+          "byteLength": 9739
         },
         {
           "number": 7,
@@ -1980,7 +1998,7 @@
           "firstFragmentIndex": 49,
           "fragmentCount": 8,
           "syncFirstFragmentCount": 2,
-          "byteLength": 12333
+          "byteLength": 12407
         },
         {
           "number": 8,
@@ -1988,7 +2006,7 @@
           "firstFragmentIndex": 57,
           "fragmentCount": 6,
           "syncFirstFragmentCount": 2,
-          "byteLength": 9371
+          "byteLength": 9445
         },
         {
           "number": 9,
@@ -1996,7 +2014,7 @@
           "firstFragmentIndex": 63,
           "fragmentCount": 8,
           "syncFirstFragmentCount": 2,
-          "byteLength": 12185
+          "byteLength": 12259
         },
         {
           "number": 10,
@@ -2004,7 +2022,7 @@
           "firstFragmentIndex": 71,
           "fragmentCount": 6,
           "syncFirstFragmentCount": 2,
-          "byteLength": 8868
+          "byteLength": 8942
         }
       ],
       "discardedPreroll": [],
@@ -2044,7 +2062,7 @@
         "leadingFragmentsWithoutVideo": 0,
         "everyKeyframeStartsAFragment": true,
         "videoSamples": 1068,
-        "largestFragmentByteLength": 2349,
+        "largestFragmentByteLength": 2386,
         "firstVideoPresentationTime": 984,
         "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
         "startPlusDurationsMissesNextStartByTicks": {
@@ -2353,6 +2371,8 @@
         "libx264",
         "-preset",
         "faster",
+        "-tag:v",
+        "avc1",
         "-profile:v",
         "high",
         "-level:v",
@@ -2722,6 +2742,12 @@
         "128",
         "-c:v",
         "copy",
+        "-bsf:v",
+        "h264_mp4toannexb",
+        "-tag:v",
+        "avc1",
+        "-strict",
+        "unofficial",
         "-c:a",
         "copy",
         "-bsf:a",
@@ -3075,6 +3101,8 @@
         "libx264",
         "-preset",
         "faster",
+        "-tag:v",
+        "avc1",
         "-profile:v",
         "high",
         "-level:v",
@@ -3358,6 +3386,12 @@
         "128",
         "-c:v",
         "copy",
+        "-bsf:v",
+        "h264_mp4toannexb",
+        "-tag:v",
+        "avc1",
+        "-strict",
+        "unofficial",
         "-c:a",
         "copy",
         "-bsf:a",
@@ -3378,7 +3412,7 @@
       "mediaSegmentCount": 12,
       "videoTrackId": 1,
       "videoTimescale": 24000,
-      "byteLength": 104097,
+      "byteLength": 105318,
       "initializationSegment": {
         "byteLength": 1328,
         "sha256": "38975fc0535d12aa37700234f287cda80b467b6cda2bde1765f66d6d8989b648",
@@ -3420,7 +3454,7 @@
           "firstFragmentIndex": 0,
           "fragmentCount": 6,
           "syncFirstFragmentCount": 3,
-          "byteLength": 9273
+          "byteLength": 9384
         },
         {
           "number": 1,
@@ -3428,7 +3462,7 @@
           "firstFragmentIndex": 6,
           "fragmentCount": 6,
           "syncFirstFragmentCount": 3,
-          "byteLength": 8801
+          "byteLength": 8912
         },
         {
           "number": 2,
@@ -3436,7 +3470,7 @@
           "firstFragmentIndex": 12,
           "fragmentCount": 6,
           "syncFirstFragmentCount": 3,
-          "byteLength": 9008
+          "byteLength": 9119
         },
         {
           "number": 3,
@@ -3444,7 +3478,7 @@
           "firstFragmentIndex": 18,
           "fragmentCount": 6,
           "syncFirstFragmentCount": 3,
-          "byteLength": 9122
+          "byteLength": 9233
         },
         {
           "number": 4,
@@ -3452,7 +3486,7 @@
           "firstFragmentIndex": 24,
           "fragmentCount": 6,
           "syncFirstFragmentCount": 3,
-          "byteLength": 9139
+          "byteLength": 9250
         },
         {
           "number": 5,
@@ -3460,7 +3494,7 @@
           "firstFragmentIndex": 30,
           "fragmentCount": 6,
           "syncFirstFragmentCount": 3,
-          "byteLength": 9404
+          "byteLength": 9515
         },
         {
           "number": 6,
@@ -3468,7 +3502,7 @@
           "firstFragmentIndex": 36,
           "fragmentCount": 6,
           "syncFirstFragmentCount": 3,
-          "byteLength": 9441
+          "byteLength": 9552
         },
         {
           "number": 7,
@@ -3476,7 +3510,7 @@
           "firstFragmentIndex": 42,
           "fragmentCount": 6,
           "syncFirstFragmentCount": 3,
-          "byteLength": 9584
+          "byteLength": 9695
         },
         {
           "number": 8,
@@ -3484,7 +3518,7 @@
           "firstFragmentIndex": 48,
           "fragmentCount": 6,
           "syncFirstFragmentCount": 3,
-          "byteLength": 9557
+          "byteLength": 9668
         },
         {
           "number": 9,
@@ -3492,7 +3526,7 @@
           "firstFragmentIndex": 54,
           "fragmentCount": 6,
           "syncFirstFragmentCount": 3,
-          "byteLength": 9590
+          "byteLength": 9701
         },
         {
           "number": 10,
@@ -3500,7 +3534,7 @@
           "firstFragmentIndex": 60,
           "fragmentCount": 6,
           "syncFirstFragmentCount": 3,
-          "byteLength": 9850
+          "byteLength": 9961
         }
       ],
       "discardedPreroll": [],
@@ -3553,7 +3587,7 @@
         "leadingFragmentsWithoutVideo": 0,
         "everyKeyframeStartsAFragment": true,
         "videoSamples": 1583,
-        "largestFragmentByteLength": 2297,
+        "largestFragmentByteLength": 2334,
         "firstVideoPresentationTime": 0,
         "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
         "startPlusDurationsMissesNextStartByTicks": {
@@ -3915,6 +3949,12 @@
         "128",
         "-c:v",
         "copy",
+        "-bsf:v",
+        "h264_mp4toannexb",
+        "-tag:v",
+        "avc1",
+        "-strict",
+        "unofficial",
         "-c:a",
         "copy",
         "-bsf:a",
@@ -3935,7 +3975,7 @@
       "mediaSegmentCount": 12,
       "videoTrackId": 1,
       "videoTimescale": 24000,
-      "byteLength": 60208,
+      "byteLength": 60911,
       "initializationSegment": {
         "byteLength": 1328,
         "sha256": "38975fc0535d12aa37700234f287cda80b467b6cda2bde1765f66d6d8989b648",
@@ -3977,7 +4017,7 @@
           "firstFragmentIndex": 2,
           "fragmentCount": 6,
           "syncFirstFragmentCount": 3,
-          "byteLength": 8828
+          "byteLength": 8939
         },
         {
           "number": 6,
@@ -3985,7 +4025,7 @@
           "firstFragmentIndex": 8,
           "fragmentCount": 6,
           "syncFirstFragmentCount": 3,
-          "byteLength": 8869
+          "byteLength": 8980
         },
         {
           "number": 7,
@@ -3993,7 +4033,7 @@
           "firstFragmentIndex": 14,
           "fragmentCount": 6,
           "syncFirstFragmentCount": 3,
-          "byteLength": 9392
+          "byteLength": 9503
         },
         {
           "number": 8,
@@ -4001,7 +4041,7 @@
           "firstFragmentIndex": 20,
           "fragmentCount": 6,
           "syncFirstFragmentCount": 3,
-          "byteLength": 9557
+          "byteLength": 9668
         },
         {
           "number": 9,
@@ -4009,7 +4049,7 @@
           "firstFragmentIndex": 26,
           "fragmentCount": 6,
           "syncFirstFragmentCount": 3,
-          "byteLength": 9590
+          "byteLength": 9701
         },
         {
           "number": 10,
@@ -4017,7 +4057,7 @@
           "firstFragmentIndex": 32,
           "fragmentCount": 6,
           "syncFirstFragmentCount": 3,
-          "byteLength": 9850
+          "byteLength": 9961
         }
       ],
       "discardedPreroll": [
@@ -4027,7 +4067,7 @@
           "firstFragmentIndex": 0,
           "fragmentCount": 2,
           "syncFirstFragmentCount": 1,
-          "byteLength": 2794
+          "byteLength": 2831
         }
       ],
       "failure": null,
@@ -4065,7 +4105,7 @@
         "leadingFragmentsWithoutVideo": 0,
         "everyKeyframeStartsAFragment": true,
         "videoSamples": 911,
-        "largestFragmentByteLength": 1937,
+        "largestFragmentByteLength": 1974,
         "firstVideoPresentationTime": 672672,
         "firstAudioBaseMediaDecodeTimeUnsigned": 1340416,
         "startPlusDurationsMissesNextStartByTicks": {
@@ -5327,6 +5367,12 @@
         "128",
         "-c:v",
         "copy",
+        "-bsf:v",
+        "h264_mp4toannexb",
+        "-tag:v",
+        "avc1",
+        "-strict",
+        "unofficial",
         "-c:a",
         "copy",
         "-bsf:a",
@@ -5347,7 +5393,7 @@
       "mediaSegmentCount": 5,
       "videoTrackId": 1,
       "videoTimescale": 24000,
-      "byteLength": 38096,
+      "byteLength": 38207,
       "initializationSegment": {
         "byteLength": 1328,
         "sha256": "049c5cd60716724de663688600bd2c90ad480231ce228fa930b3727a405b46ba",
@@ -5389,7 +5435,7 @@
           "firstFragmentIndex": 0,
           "fragmentCount": 10,
           "syncFirstFragmentCount": 1,
-          "byteLength": 14254
+          "byteLength": 14291
         },
         {
           "number": 1,
@@ -5397,7 +5443,7 @@
           "firstFragmentIndex": 10,
           "fragmentCount": 10,
           "syncFirstFragmentCount": 1,
-          "byteLength": 14719
+          "byteLength": 14756
         }
       ],
       "discardedPreroll": [],
@@ -5426,7 +5472,7 @@
         "leadingFragmentsWithoutVideo": 0,
         "everyKeyframeStartsAFragment": true,
         "videoSamples": 600,
-        "largestFragmentByteLength": 2299,
+        "largestFragmentByteLength": 2336,
         "firstVideoPresentationTime": 0,
         "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
         "startPlusDurationsMissesNextStartByTicks": {
@@ -5546,6 +5592,8 @@
         "libx264",
         "-preset",
         "faster",
+        "-tag:v",
+        "avc1",
         "-profile:v",
         "high",
         "-level:v",
@@ -5835,6 +5883,8 @@
         "libx264",
         "-preset",
         "faster",
+        "-tag:v",
+        "avc1",
         "-profile:v",
         "high",
         "-level:v",
@@ -6364,6 +6414,8 @@
         "libx265",
         "-preset",
         "veryfast",
+        "-tag:v",
+        "hvc1",
         "-profile:v",
         "main",
         "-vf",
@@ -6407,12 +6459,12 @@
       "byteLength": 99534,
       "initializationSegment": {
         "byteLength": 3848,
-        "sha256": "21e3e6e0250bcd7c68d7cb102c85672c9ef0b9de205ea8bafdf3932571b1e249",
+        "sha256": "848e6a7b94faaa6a8243f99f0709e9a6013af207aa2b0bb1b2c0277c9035cab4",
         "tracks": [
           {
             "trackId": 1,
             "handler": "vide",
-            "sampleEntry": "hev1",
+            "sampleEntry": "hvc1",
             "timescale": 24000,
             "editList": [
               [
@@ -6550,7 +6602,7 @@
           "max": 3003
         },
         "videoPictures": {
-          "sampleEntry": "hev1",
+          "sampleEntry": "hvc1",
           "keyframes": [
             {
               "presentationTime": 0,
@@ -6739,6 +6791,8 @@
         "libx265",
         "-preset",
         "veryfast",
+        "-tag:v",
+        "hvc1",
         "-profile:v",
         "main",
         "-vf",
@@ -6782,12 +6836,12 @@
       "byteLength": 65006,
       "initializationSegment": {
         "byteLength": 3848,
-        "sha256": "21e3e6e0250bcd7c68d7cb102c85672c9ef0b9de205ea8bafdf3932571b1e249",
+        "sha256": "848e6a7b94faaa6a8243f99f0709e9a6013af207aa2b0bb1b2c0277c9035cab4",
         "tracks": [
           {
             "trackId": 1,
             "handler": "vide",
-            "sampleEntry": "hev1",
+            "sampleEntry": "hvc1",
             "timescale": 24000,
             "editList": [
               [
@@ -6894,7 +6948,7 @@
           "max": 3003
         },
         "videoPictures": {
-          "sampleEntry": "hev1",
+          "sampleEntry": "hvc1",
           "keyframes": [
             {
               "presentationTime": 576576,
@@ -7104,6 +7158,8 @@
         "libx265",
         "-preset",
         "veryfast",
+        "-tag:v",
+        "hvc1",
         "-profile:v",
         "main",
         "-vf",
@@ -7147,12 +7203,12 @@
       "byteLength": 47232,
       "initializationSegment": {
         "byteLength": 3848,
-        "sha256": "21e3e6e0250bcd7c68d7cb102c85672c9ef0b9de205ea8bafdf3932571b1e249",
+        "sha256": "848e6a7b94faaa6a8243f99f0709e9a6013af207aa2b0bb1b2c0277c9035cab4",
         "tracks": [
           {
             "trackId": 1,
             "handler": "vide",
-            "sampleEntry": "hev1",
+            "sampleEntry": "hvc1",
             "timescale": 24000,
             "editList": [
               [
@@ -7242,7 +7298,7 @@
           "max": 3003
         },
         "videoPictures": {
-          "sampleEntry": "hev1",
+          "sampleEntry": "hvc1",
           "keyframes": [
             {
               "presentationTime": 0,
@@ -7371,6 +7427,8 @@
         "libx265",
         "-preset",
         "veryfast",
+        "-tag:v",
+        "hvc1",
         "-profile:v",
         "main",
         "-vf",
@@ -7414,12 +7472,12 @@
       "byteLength": 48116,
       "initializationSegment": {
         "byteLength": 3848,
-        "sha256": "c658908f133634559debad8052260150018531c2469679e9a4c36190e850bc31",
+        "sha256": "ee8d58b34a84d131614476f93b4db74e59a0b77ea20cabb1382e935f15e65ce8",
         "tracks": [
           {
             "trackId": 1,
             "handler": "vide",
-            "sampleEntry": "hev1",
+            "sampleEntry": "hvc1",
             "timescale": 24000,
             "editList": [
               [
@@ -7509,7 +7567,7 @@
           "max": 3003
         },
         "videoPictures": {
-          "sampleEntry": "hev1",
+          "sampleEntry": "hvc1",
           "keyframes": [
             {
               "presentationTime": 0,
@@ -7683,8 +7741,8 @@
         3848
       ],
       "sha256": [
-        "21e3e6e0250bcd7c68d7cb102c85672c9ef0b9de205ea8bafdf3932571b1e249",
-        "21e3e6e0250bcd7c68d7cb102c85672c9ef0b9de205ea8bafdf3932571b1e249"
+        "848e6a7b94faaa6a8243f99f0709e9a6013af207aa2b0bb1b2c0277c9035cab4",
+        "848e6a7b94faaa6a8243f99f0709e9a6013af207aa2b0bb1b2c0277c9035cab4"
       ]
     }
   ],

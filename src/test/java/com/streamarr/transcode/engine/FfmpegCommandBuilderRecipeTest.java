@@ -140,7 +140,7 @@ class FfmpegCommandBuilderRecipeTest {
               .codecProfile(VideoCodecProfile.HEVC_MAIN)
               .tier(Optional.of(VideoCodecTier.MAIN))
               .level(10)
-              .codecString("hev1.1.6.L30.90")
+              .codecString("hvc1.1.6.L30.90")
               .build();
       default -> VideoDecisionFixtures.encodeBuilder().build();
     };
