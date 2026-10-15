@@ -352,8 +352,7 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
-  private static List<VariantJob> startJobs(ScriptedWorkerRuntime.Connection connection)
-      throws Exception {
+  private static List<VariantJob> startJobs(ScriptedWorkerRuntime.Connection connection) {
     var jobs = IntStream.range(0, BURST_SLOTS).mapToObj(_ -> variantJobBuilder().build()).toList();
     for (var job : jobs) {
       startVariant(connection, job);
@@ -362,8 +361,7 @@ class TranscodeWorkerJobAttemptTest {
     return jobs;
   }
 
-  private static void stopJobs(ScriptedWorkerRuntime.Connection connection, List<VariantJob> jobs)
-      throws Exception {
+  private static void stopJobs(ScriptedWorkerRuntime.Connection connection, List<VariantJob> jobs) {
     for (var job : jobs) {
       stopVariant(connection, job);
     }
@@ -1605,7 +1603,7 @@ class TranscodeWorkerJobAttemptTest {
         .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, tempDir));
   }
 
-  private TranscodeWorker worker(ScriptedProcessLauncher launcher) throws Exception {
+  private TranscodeWorker worker(ScriptedProcessLauncher launcher) {
     return workerBuilder(tempDir).runtime(runtime).engine(engine(launcher)).build();
   }
 

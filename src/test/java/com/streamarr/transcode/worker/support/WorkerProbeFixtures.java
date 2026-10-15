@@ -47,7 +47,7 @@ public final class WorkerProbeFixtures {
 
   private WorkerProbeFixtures() {}
 
-  public static TranscodeWorker.TranscodeWorkerBuilder workerBuilder(Path root) throws Exception {
+  public static TranscodeWorker.TranscodeWorkerBuilder workerBuilder(Path root) {
     return workerBuilderWithoutFfprobe(root).ffprobe(fileContentsProducer());
   }
 
@@ -90,8 +90,7 @@ public final class WorkerProbeFixtures {
         .build();
   }
 
-  public static void start(ScriptedWorkerRuntime.Connection connection, ProbeRequest request)
-      throws Exception {
+  public static void start(ScriptedWorkerRuntime.Connection connection, ProbeRequest request) {
     connection.deliver(
         EstablishWorkerSessionResponse.newBuilder()
             .setStartProbe(
@@ -101,8 +100,7 @@ public final class WorkerProbeFixtures {
             .build());
   }
 
-  public static void cancel(ScriptedWorkerRuntime.Connection connection, ProbeRequest request)
-      throws Exception {
+  public static void cancel(ScriptedWorkerRuntime.Connection connection, ProbeRequest request) {
     connection.deliver(
         EstablishWorkerSessionResponse.newBuilder()
             .setCancelProbe(
@@ -112,8 +110,7 @@ public final class WorkerProbeFixtures {
             .build());
   }
 
-  public static void startVariant(ScriptedWorkerRuntime.Connection connection, VariantJob job)
-      throws Exception {
+  public static void startVariant(ScriptedWorkerRuntime.Connection connection, VariantJob job) {
     connection.deliver(
         EstablishWorkerSessionResponse.newBuilder()
             .setStartVariant(
@@ -123,8 +120,7 @@ public final class WorkerProbeFixtures {
             .build());
   }
 
-  public static void stopVariant(ScriptedWorkerRuntime.Connection connection, VariantJob job)
-      throws Exception {
+  public static void stopVariant(ScriptedWorkerRuntime.Connection connection, VariantJob job) {
     connection.deliver(
         EstablishWorkerSessionResponse.newBuilder()
             .setStopVariant(
