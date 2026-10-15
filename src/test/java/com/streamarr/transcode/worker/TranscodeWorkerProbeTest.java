@@ -65,6 +65,19 @@ class TranscodeWorkerProbeTest {
   }
 
   @Test
+  @DisplayName("Should advertise the supported probe version when the worker registers")
+  void shouldAdvertiseTheSupportedProbeVersionWhenTheWorkerRegisters() throws Exception {
+    var runtime = new ScriptedWorkerRuntime();
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
+      worker.start("localhost", 1);
+
+      assertThat(runtime.connection().registration().getCapabilities().getProbeVersionsList())
+          .containsExactly(FfprobeExecutor.PROBE_VERSION);
+    }
+  }
+
+  @Test
   @DisplayName("Should reject a probe source when a symlink escapes its namespace")
   void shouldRejectAProbeSourceWhenASymlinkEscapesItsNamespace() throws Exception {
     var root = Files.createDirectory(tempDir.resolve("media"));
