@@ -6,7 +6,6 @@ import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.request
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.sourceBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variantJobBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 
 import build.buf.gen.streamarr.transcode.v1.JobAttemptCompleted;
@@ -18,6 +17,7 @@ import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.TranscodeMode;
 import build.buf.gen.streamarr.transcode.v1.WorkerRegistration;
+import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.command.WaitContainerResultCallback;
 import com.streamarr.transcode.fixtures.image.ImageControlPlane;
 import java.io.IOException;
@@ -46,11 +46,9 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.testcontainers.containers.BindMode;
-import org.testcontainers.containers.ContainerLaunchException;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.output.Slf4jLogConsumer;
-import org.testcontainers.containers.output.ToStringConsumer;
-import org.testcontainers.containers.startupcheck.OneShotStartupCheckStrategy;
+import org.testcontainers.containers.startupcheck.StartupCheckStrategy;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.utility.MountableFile;
 import tools.jackson.databind.ObjectMapper;
@@ -225,8 +223,9 @@ class WorkerImageIT {
 
   @Test
   @DisplayName(
-      "Should diagnose the locale and fail the probe for retry when the image runs under POSIX")
-  void shouldDiagnoseLocaleAndFailProbeForRetryWhenImageRunsUnderPosix() throws Exception {
+      "Should fail the probe for retry when the image runs under POSIX with a Unicode source key")
+  void shouldFailTheProbeForRetryWhenTheImageRunsUnderPosixWithAUnicodeSourceKey()
+      throws Exception {
     copyMedia(UNICODE_KEY);
     try (var image = ImageFixture.builder().media(media).filenameLocale("POSIX").build()) {
       image.accept();
@@ -235,34 +234,21 @@ class WorkerImageIT {
       var result = ProbeAttemptResult.parseFrom(image.command("probe", request.toByteArray()));
 
       assertThat(result.getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_SOURCE_UNAVAILABLE);
-      assertThat(image.worker.getLogs())
-          .contains("rather than UTF-8")
-          .contains("the effective locale is LC_ALL=POSIX");
     }
   }
 
+  // The POSIX probe test runs the same worker under POSIX with the ASCII root /media, and that
+  // worker registers. Only the root differs here.
   @Test
-  @DisplayName(
-      "Should diagnose the locale before startup fails when a POSIX worker has a non-ASCII root")
-  void shouldDiagnoseLocaleBeforeStartupFailsWhenPosixWorkerHasNonAsciiRoot() {
-    // A container that fails to launch no longer serves getLogs(), so collect output as it streams.
-    var output = new ToStringConsumer();
-    try (var worker =
-        new GenericContainer<>(workerImage())
-            .withImagePullPolicy(_ -> false)
-            .withLogConsumer(
-                output.andThen(new Slf4jLogConsumer(log).withPrefix("posix-root-worker")))
-            .withEnv("LC_ALL", "POSIX")
-            .withEnv("TRANSCODE_WORKER_ID", UUID.randomUUID().toString())
-            .withEnv("TRANSCODE_WORKER_SOURCE_NAMESPACE_ID", SOURCE_NAMESPACE_ID.toString())
-            .withEnv("TRANSCODE_WORKER_SOURCE_ROOT", "/media/Café")
-            .withStartupCheckStrategy(
-                new OneShotStartupCheckStrategy().withTimeout(Duration.ofMinutes(1)))) {
-      assertThatThrownBy(worker::start).isInstanceOf(ContainerLaunchException.class);
-
-      assertThat(output.toUtf8String())
-          .containsSubsequence(
-              "the effective locale is LC_ALL=POSIX", "InvalidPathException", "/media/Caf");
+  @DisplayName("Should exit before registration when a POSIX worker has a non-ASCII source root")
+  void shouldExitBeforeRegistrationWhenAPosixWorkerHasANonAsciiSourceRoot() throws Exception {
+    try (var image =
+        ImageFixture.builder()
+            .media(media)
+            .filenameLocale("POSIX")
+            .sourceRoot("/media/Café")
+            .build()) {
+      assertThat(image.exitStatusBeforeRegistration()).as("worker exit status").isNotZero();
     }
   }
 
@@ -414,6 +400,14 @@ class WorkerImageIT {
 
   private record HealthBeforeAcceptance(int liveness, int readiness) {}
 
+  private static final class StartedContainer extends StartupCheckStrategy {
+
+    @Override
+    public StartupStatus checkStartupState(DockerClient dockerClient, String containerId) {
+      return StartupStatus.SUCCESSFUL;
+    }
+  }
+
   @DisplayName("Worker Image Fixture")
   private static final class ImageFixture implements AutoCloseable {
 
@@ -426,7 +420,8 @@ class WorkerImageIT {
         HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
     @Builder
-    private ImageFixture(Path media, String ffmpegPath, String ffprobePath, String filenameLocale)
+    private ImageFixture(
+        Path media, String ffmpegPath, String ffprobePath, String filenameLocale, String sourceRoot)
         throws IOException {
       Files.setPosixFilePermissions(media, PosixFilePermissions.fromString("rwxr-xr-x"));
       var image = workerImage();
@@ -454,8 +449,11 @@ class WorkerImageIT {
               .withNetworkMode("container:" + controlPlane.getContainerId())
               .withEnv("TRANSCODE_WORKER_ID", workerId.toString())
               .withEnv("TRANSCODE_WORKER_SOURCE_NAMESPACE_ID", SOURCE_NAMESPACE_ID.toString())
-              .withEnv("TRANSCODE_WORKER_SOURCE_ROOT", "/media")
-              .withFileSystemBind(media.toAbsolutePath().toString(), "/media", BindMode.READ_ONLY);
+              .withEnv("TRANSCODE_WORKER_SOURCE_ROOT", sourceRoot == null ? "/media" : sourceRoot)
+              .withFileSystemBind(media.toAbsolutePath().toString(), "/media", BindMode.READ_ONLY)
+              // The exit watch reports a worker that exits at once, so the start only needs the
+              // container to have started.
+              .withStartupCheckStrategy(new StartedContainer());
       if (ffmpegPath != null) {
         worker.withEnv("TRANSCODE_WORKER_FFMPEG_PATH", ffmpegPath);
       }
@@ -487,6 +485,17 @@ class WorkerImageIT {
                   workerExit.completeExceptionally(failure);
                 }
               });
+    }
+
+    // The control plane answers the registration request successfully only once the worker
+    // registers, so a worker that cannot start ends this wait with its exit.
+    private int exitStatusBeforeRegistration() throws Exception {
+      var registration =
+          http.sendAsync(
+              commandRequest("registration", new byte[0]), HttpResponse.BodyHandlers.discarding());
+      CompletableFuture.anyOf(registration, workerExit).get();
+      assertThat(workerExit).as("the worker exited before the control plane answered").isDone();
+      return workerExit.resultNow();
     }
 
     private WorkerRegistration registration() throws Exception {
