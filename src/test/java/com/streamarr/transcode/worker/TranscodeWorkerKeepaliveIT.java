@@ -2,6 +2,7 @@ package com.streamarr.transcode.worker;
 
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engine;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.workerConfigurationBuilder;
+import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.fileContentsProducer;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
@@ -65,6 +66,7 @@ class TranscodeWorkerKeepaliveIT {
     return TranscodeWorker.builder()
         .configuration(configuration)
         .engine(engine(ScriptedProcessLauncher.running()))
+        .ffprobe(fileContentsProducer())
         .build();
   }
 

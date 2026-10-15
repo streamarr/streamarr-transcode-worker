@@ -8,7 +8,6 @@ import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import com.streamarr.transcode.probe.FfprobeExecutor;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicReference;
@@ -23,7 +22,7 @@ import lombok.extern.slf4j.Slf4j;
 @Builder(access = AccessLevel.PACKAGE)
 final class WorkerProbeSession implements AutoCloseable {
 
-  @NonNull private final Optional<FfprobeExecutor> ffprobe;
+  @NonNull private final FfprobeExecutor ffprobe;
   @NonNull private final WorkerMediaSourceResolver sources;
   @NonNull private final Consumer<ProbeAttemptResult> results;
   @NonNull private final ExecutorService executor;
@@ -89,12 +88,8 @@ final class WorkerProbeSession implements AutoCloseable {
     }
 
     private ProbeAttemptResult execute() {
-      if (ffprobe.isEmpty()) {
-        return failed(ProbeFailure.PROBE_FAILURE_UNSUPPORTED_VERSION);
-      }
-
       try {
-        return ffprobe.orElseThrow().probe(sources.resolve(request.getSource()), request);
+        return ffprobe.probe(sources.resolve(request.getSource()), request);
       } catch (WorkerJobException exception) {
         log.warn(
             "Probe {} cannot resolve source namespace {} key {}",

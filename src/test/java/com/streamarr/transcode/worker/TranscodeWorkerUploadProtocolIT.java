@@ -3,6 +3,7 @@ package com.streamarr.transcode.worker;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engine;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
+import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.fileContentsProducer;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import build.buf.gen.streamarr.transcode.v1.AudioDecision;
@@ -139,6 +140,7 @@ class TranscodeWorkerUploadProtocolIT {
             TranscodeWorker.builder()
                 .configuration(configuration)
                 .engine(engine(launcher))
+                .ffprobe(fileContentsProducer())
                 .build()) {
       server.start();
       worker.start("localhost", server.port());
@@ -189,6 +191,7 @@ class TranscodeWorkerUploadProtocolIT {
     return TranscodeWorker.builder()
         .configuration(configurationBuilder(mediaRoot).build())
         .engine(engine)
+        .ffprobe(fileContentsProducer())
         .build();
   }
 

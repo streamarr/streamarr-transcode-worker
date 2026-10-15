@@ -40,6 +40,10 @@ public final class WorkerProbeFixtures {
   private WorkerProbeFixtures() {}
 
   public static TranscodeWorker.TranscodeWorkerBuilder workerBuilder(Path root) throws Exception {
+    return workerBuilderWithoutFfprobe(root).ffprobe(fileContentsProducer());
+  }
+
+  public static TranscodeWorker.TranscodeWorkerBuilder workerBuilderWithoutFfprobe(Path root) {
     return TranscodeWorker.builder()
         .configuration(
             workerConfigurationBuilder()

@@ -4,13 +4,13 @@ import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engine;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.cancel;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.failure;
-import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.fileContentsProducer;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.processBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.requestBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.sourceBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.start;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variantJobBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerBuilder;
+import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerBuilderWithoutFfprobe;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -55,32 +55,25 @@ class TranscodeWorkerProbeTest {
   @TempDir Path tempDir;
 
   @Test
-  @DisplayName("Should preserve failure correlation when a worker has no probe producer")
-  void shouldPreserveFailureCorrelationWhenAWorkerHasNoProbeProducer() throws Exception {
-    var runtime = new ScriptedWorkerRuntime();
-    var request = requestBuilder().setProbeVersion(17).build();
+  @DisplayName("Should refuse to build a worker when it has no ffprobe executor")
+  void shouldRefuseToBuildAWorkerWhenItHasNoFfprobeExecutor() {
+    var builder = workerBuilderWithoutFfprobe(tempDir);
 
-    try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
-      worker.start("localhost", 1);
-      var connection = runtime.connection();
-
-      start(connection, request);
-      runtime.probes().drain();
-
-      assertThat(connection.results())
-          .containsExactly(failure(request, ProbeFailure.PROBE_FAILURE_UNSUPPORTED_VERSION));
-    }
+    assertThatThrownBy(builder::build)
+        .isInstanceOf(NullPointerException.class)
+        .hasMessageContaining("ffprobe");
   }
 
   @Test
-  @DisplayName("Should omit probe support when connecting a transcode-only worker")
-  void shouldOmitProbeSupportWhenConnectingATranscodeOnlyWorker() throws Exception {
+  @DisplayName("Should advertise the supported probe version when the worker registers")
+  void shouldAdvertiseTheSupportedProbeVersionWhenTheWorkerRegisters() throws Exception {
     var runtime = new ScriptedWorkerRuntime();
+
     try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
       worker.start("localhost", 1);
 
       assertThat(runtime.connection().registration().getCapabilities().getProbeVersionsList())
-          .isEmpty();
+          .containsExactly(FfprobeExecutor.PROBE_VERSION);
     }
   }
 
@@ -98,8 +91,7 @@ class TranscodeWorkerProbeTest {
     var request = requestBuilder().setSource(sourceBuilder().setRelativeKey("escape.mkv")).build();
     var runtime = new ScriptedWorkerRuntime();
 
-    try (var worker =
-        workerBuilder(root).runtime(runtime).ffprobe(fileContentsProducer()).build()) {
+    try (var worker = workerBuilder(root).runtime(runtime).build()) {
       worker.start("localhost", 1);
       start(runtime.connection(), request);
       runtime.probes().drain();
@@ -604,8 +596,7 @@ class TranscodeWorkerProbeTest {
                             .setIsForced(true)))
             .build();
 
-    try (var worker =
-        workerBuilder(tempDir).runtime(runtime).ffprobe(fileContentsProducer()).build()) {
+    try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
       worker.start("localhost", 1);
       start(runtime.connection(), request);
       runtime.probes().drain();

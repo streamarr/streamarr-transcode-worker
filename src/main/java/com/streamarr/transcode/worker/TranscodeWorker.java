@@ -77,7 +77,7 @@ public final class TranscodeWorker implements AutoCloseable {
   private final FfmpegTranscodeEngine engine;
   private final WorkerMediaSourceResolver sources;
   private final WorkerVariantJobMapper jobMapper;
-  private final Optional<FfprobeExecutor> ffprobe;
+  private final FfprobeExecutor ffprobe;
   private final WorkerRuntime runtime;
   private final SegmentMemoryBudget memoryBudget;
   private final Map<UUID, ActiveAttempt> activeAttempts = new HashMap<>();
@@ -94,7 +94,7 @@ public final class TranscodeWorker implements AutoCloseable {
   private TranscodeWorker(
       @NonNull TranscodeWorkerConfiguration configuration,
       @NonNull FfmpegTranscodeEngine engine,
-      @NonNull Optional<FfprobeExecutor> ffprobe,
+      @NonNull FfprobeExecutor ffprobe,
       @NonNull WorkerRuntime runtime) {
     this.configuration = configuration;
     this.engine = engine;
@@ -152,7 +152,7 @@ public final class TranscodeWorker implements AutoCloseable {
 
   private EstablishWorkerSessionRequest registration() {
     var capabilities = WorkerCapabilities.newBuilder();
-    ffprobe.ifPresent(_ -> capabilities.addProbeVersions(FfprobeExecutor.PROBE_VERSION));
+    capabilities.addProbeVersions(FfprobeExecutor.PROBE_VERSION);
     configuration.sourceNamespaces().keySet().stream()
         .map(ProtoUuid::toProto)
         .forEach(capabilities::addSourceNamespaceIds);
@@ -808,13 +808,7 @@ public final class TranscodeWorker implements AutoCloseable {
   }
 
   public static class TranscodeWorkerBuilder {
-    private Optional<FfprobeExecutor> ffprobe = Optional.empty();
     private WorkerRuntime runtime = new GrpcWorkerRuntime();
-
-    public TranscodeWorkerBuilder ffprobe(@NonNull FfprobeExecutor executor) {
-      ffprobe = Optional.of(executor);
-      return this;
-    }
   }
 
   private record ClosedSession(WorkerProbeSession probes, List<Producer> attempts) {}

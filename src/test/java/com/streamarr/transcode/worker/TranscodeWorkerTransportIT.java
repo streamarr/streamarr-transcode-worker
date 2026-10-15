@@ -3,6 +3,7 @@ package com.streamarr.transcode.worker;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.SOURCE_NAMESPACE_ID;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engine;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
+import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.fileContentsProducer;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
@@ -52,6 +53,7 @@ class TranscodeWorkerTransportIT {
             TranscodeWorker.builder()
                 .configuration(configuration)
                 .engine(engine(ScriptedProcessLauncher.running()))
+                .ffprobe(fileContentsProducer())
                 .build()) {
       worker.start(networkAddress.getHostAddress(), controlPlane.port());
 
