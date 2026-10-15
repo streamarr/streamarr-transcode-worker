@@ -74,6 +74,8 @@ import lombok.extern.slf4j.Slf4j;
 public final class TranscodeWorker implements AutoCloseable {
 
   private static final int CONNECTION_TIMEOUT_SECONDS = 5;
+  private static final int KEEPALIVE_TIME_SECONDS = 30;
+  private static final int KEEPALIVE_TIMEOUT_SECONDS = 10;
   private static final int UPLOAD_MESSAGE_BYTES = 64 * 1024;
 
   private final TranscodeWorkerConfiguration configuration;
@@ -120,8 +122,8 @@ public final class TranscodeWorker implements AutoCloseable {
     // NAT mapping); without it an idle worker would wait on a dead session until TCP gives up.
     channel =
         channelBuilder
-            .keepAliveTime(configuration.keepAliveTime().toMillis(), TimeUnit.MILLISECONDS)
-            .keepAliveTimeout(configuration.keepAliveTimeout().toMillis(), TimeUnit.MILLISECONDS)
+            .keepAliveTime(KEEPALIVE_TIME_SECONDS, TimeUnit.SECONDS)
+            .keepAliveTimeout(KEEPALIVE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .build();
     var accepted = new CompletableFuture<WorkerSessionAccepted>();
     var sessionRequests = new AtomicReference<StreamObserver<EstablishWorkerSessionRequest>>();
