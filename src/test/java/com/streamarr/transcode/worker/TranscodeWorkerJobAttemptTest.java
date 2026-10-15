@@ -613,6 +613,33 @@ class TranscodeWorkerJobAttemptTest {
   }
 
   @Test
+  @DisplayName("Should force the High tier when an HEVC encode carries the High tier")
+  void shouldForceTheHighTierWhenAnHevcEncodeCarriesTheHighTier() throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getDecisionBuilder()
+        .clearVideoCodecFamily()
+        .getVideoBuilder()
+        .setCodecFamily(VideoCodecFamily.VIDEO_CODEC_FAMILY_HEVC)
+        .setCodecProfile(VideoCodecProfile.VIDEO_CODEC_PROFILE_HEVC_MAIN)
+        .setTier(VideoCodecTier.VIDEO_CODEC_TIER_HIGH)
+        .setLevel(41)
+        .setCodecString("hvc1.1.6.H123.90");
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(launcher.command(fromProto(job.getJobAttemptId())))
+          .containsSequence("-c:v", "libx265")
+          .containsSequence("-profile:v", "main")
+          .containsSequence("-x265-params", "no-scenecut=1:no-open-gop=1:level-idc=41:high-tier=1");
+    }
+  }
+
+  @Test
   @DisplayName("Should force the job's codec profile and level when the job encodes H.264")
   void shouldForceTheJobsCodecProfileAndLevelWhenTheJobEncodesH264() throws Exception {
     var launcher = ScriptedProcessLauncher.running();
