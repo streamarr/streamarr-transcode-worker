@@ -370,6 +370,6 @@ public class TranscodeCapabilityService {
 
   @FunctionalInterface
   public interface ProcessFactory {
-    Process create(String[] command) throws Exception;
+    Process create(String[] command) throws IOException;
   }
 }
