@@ -16,7 +16,7 @@ function validateImage({ contract = expectedContract } = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'worker-image-verification-'));
   symlinkSync(fakeDocker, join(directory, 'docker'));
   try {
-    return spawnSync('bash', [script, 'worker-image:tested', revision, source, revision, expectedContract], {
+    return spawnSync(script, ['worker-image:tested', revision, source, revision, expectedContract], {
       encoding: 'utf8',
       env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, IMAGE_LABELS: JSON.stringify({
         'org.opencontainers.image.version': revision,

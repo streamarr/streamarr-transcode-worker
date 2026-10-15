@@ -25,7 +25,7 @@ function publication({ environment = {}, architecture = 'amd64' } = {}) {
     },
     registry: {},
   }));
-  const result = spawnSync('bash', [nativeScript, 'worker-image:tested', architecture], {
+  const result = spawnSync(nativeScript, ['worker-image:tested', architecture], {
     cwd: directory,
     encoding: 'utf8',
     env: { ...process.env, PATH: `${directory}:${process.env.PATH}`,

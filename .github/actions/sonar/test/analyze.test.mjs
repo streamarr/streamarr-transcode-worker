@@ -34,7 +34,7 @@ exit ${scannerExit}
 `, { mode: 0o755 });
   return {
     directory,
-    run: ({ token = 'test-analysis-token' } = {}) => spawnSync('bash', [script], {
+    run: ({ token = 'test-analysis-token' } = {}) => spawnSync(script, {
       cwd: directory,
       encoding: 'utf8',
       env: { ...process.env, SONAR_TOKEN: token },
