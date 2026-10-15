@@ -13,6 +13,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 
@@ -398,17 +400,26 @@ class TranscodeCapabilityServiceTest {
         .contains("h264_nvenc", "hevc_nvenc", "av1_nvenc");
   }
 
-  @Test
+  @ParameterizedTest(name = "{0} resolves to {1} when FFmpeg lists [{3}]")
+  @CsvSource(
+      delimiterString = "|",
+      textBlock =
+          """
+          h264 | libx264   | h264_nvenc | V....D h264_nvenc           NVIDIA NVENC H.264 encoder (codec h264)
+          hevc | libx265   | hevc_nvenc | V....D hevc_nvenc           NVIDIA NVENC hevc encoder (codec hevc)
+          av1  | libsvtav1 | h264_nvenc | V....D h264_nvenc           NVIDIA NVENC H.264 encoder (codec h264)
+          av1  | libsvtav1 | ''         | ''
+          h264 | libx264   | ''         | ''
+          """)
   @DisplayName(
-      "Should resolve the H264 encoder to software when the hardware encoder does not force the"
+      "Should resolve the software encoder of the codec family when no hardware encoder forces the"
           + " job's codec profile and level")
   void
-      shouldResolveTheH264EncoderToSoftwareWhenTheHardwareEncoderDoesNotForceTheJobsCodecProfileAndLevel() {
-    var encoderOutput =
-        """
-        V....D h264_nvenc           NVIDIA NVENC H.264 encoder (codec h264)
-        """;
-
+      shouldResolveTheSoftwareEncoderOfTheCodecFamilyWhenNoHardwareEncoderForcesTheJobsCodecProfileAndLevel(
+          String codecFamily,
+          String expectedEncoder,
+          String detectedHardwareEncoders,
+          String encoderOutput) {
     var outputs =
         Map.of(
             "ffmpeg", createProcess("ffmpeg version 7.0", 0),
@@ -419,40 +430,11 @@ class TranscodeCapabilityServiceTest {
         new TranscodeCapabilityService("ffmpeg", command -> resolveProcess(command, outputs));
     service.detectCapabilities();
 
-    assertThat(service.getHardwareEncodingCapability().encoders()).containsExactly("h264_nvenc");
-    assertThat(service.resolveEncoder("h264")).map(EncoderBackend::encoder).contains("libx264");
-  }
-
-  @Test
-  @DisplayName("Should resolve AV1 encoder to software when no hardware")
-  void shouldResolveAv1EncoderToSoftwareWhenNoHardware() {
-    var outputs =
-        Map.of(
-            "ffmpeg", createProcess("ffmpeg version 7.0", 0),
-            "hwaccels", createProcess("Hardware acceleration methods:\n", 0),
-            "encoders", createProcess("", 0));
-
-    var service =
-        new TranscodeCapabilityService("ffmpeg", command -> resolveProcess(command, outputs));
-    service.detectCapabilities();
-
-    assertThat(service.resolveEncoder("av1")).map(EncoderBackend::encoder).contains("libsvtav1");
-  }
-
-  @Test
-  @DisplayName("Should resolve H264 encoder to software when no hardware")
-  void shouldResolveH264EncoderToSoftwareWhenNoHardware() {
-    var outputs =
-        Map.of(
-            "ffmpeg", createProcess("ffmpeg version 7.0", 0),
-            "hwaccels", createProcess("Hardware acceleration methods:\n", 0),
-            "encoders", createProcess("", 0));
-
-    var service =
-        new TranscodeCapabilityService("ffmpeg", command -> resolveProcess(command, outputs));
-    service.detectCapabilities();
-
-    assertThat(service.resolveEncoder("h264")).map(EncoderBackend::encoder).contains("libx264");
+    assertThat(String.join(",", service.getHardwareEncodingCapability().encoders()))
+        .isEqualTo(detectedHardwareEncoders);
+    assertThat(service.resolveEncoder(codecFamily))
+        .map(EncoderBackend::encoder)
+        .contains(expectedEncoder);
   }
 
   @Test
@@ -592,30 +574,6 @@ class TranscodeCapabilityServiceTest {
   }
 
   @Test
-  @DisplayName(
-      "Should resolve the HEVC encoder to software when NVENC does not force the job's codec"
-          + " profile and level")
-  void shouldResolveTheHevcEncoderToSoftwareWhenNvencDoesNotForceTheJobsCodecProfileAndLevel() {
-    var encoderOutput =
-        """
-        V....D hevc_nvenc           NVIDIA NVENC hevc encoder (codec hevc)
-        """;
-
-    var outputs =
-        Map.of(
-            "ffmpeg", createProcess("ffmpeg version 7.0", 0),
-            "hwaccels", createProcess("Hardware acceleration methods:\ncuda\n", 0),
-            "encoders", createProcess(encoderOutput, 0));
-
-    var service =
-        new TranscodeCapabilityService("ffmpeg", command -> resolveProcess(command, outputs));
-    service.detectCapabilities();
-
-    assertThat(service.getHardwareEncodingCapability().encoders()).containsExactly("hevc_nvenc");
-    assertThat(service.resolveEncoder("hevc")).map(EncoderBackend::encoder).contains("libx265");
-  }
-
-  @Test
   @DisplayName("Should resolve no encoder when the codec family is unknown")
   void shouldResolveNoEncoderWhenTheCodecFamilyIsUnknown() {
     var encoderOutput =
@@ -634,27 +592,6 @@ class TranscodeCapabilityServiceTest {
     service.detectCapabilities();
 
     assertThat(service.resolveEncoder("vp9")).isEmpty();
-  }
-
-  @Test
-  @DisplayName("Should fallback to software when hardware encoder does not match codec")
-  void shouldFallbackToSoftwareWhenHardwareEncoderDoesNotMatchCodec() {
-    var encoderOutput =
-        """
-        V....D h264_nvenc           NVIDIA NVENC H.264 encoder (codec h264)
-        """;
-
-    var outputs =
-        Map.of(
-            "ffmpeg", createProcess("ffmpeg version 7.0", 0),
-            "hwaccels", createProcess("Hardware acceleration methods:\ncuda\n", 0),
-            "encoders", createProcess(encoderOutput, 0));
-
-    var service =
-        new TranscodeCapabilityService("ffmpeg", command -> resolveProcess(command, outputs));
-    service.detectCapabilities();
-
-    assertThat(service.resolveEncoder("av1")).map(EncoderBackend::encoder).contains("libsvtav1");
   }
 
   @Test

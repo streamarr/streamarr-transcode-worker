@@ -274,21 +274,33 @@ class FfprobeExecutorKeyframeTest {
     assertThat(report.result().hasMedia()).isFalse();
   }
 
-  @Test
-  @DisplayName("Should require a packet scan when ffprobe reports no track id for an MP4 stream")
-  void shouldRequirePacketScanWhenFfprobeReportsNoTrackIdForMp4Stream() {
+  @ParameterizedTest(name = "{0}")
+  @CsvSource(
+      delimiterString = "|",
+      textBlock =
+          """
+          no track id                  | N/A      | {"index":0,"codec_type":"video","codec_name":"h264"}
+          a non-hexadecimal track id   | 0.000000 | {"index":0,"codec_type":"video","codec_name":"h264","id":"0xZZ"}
+          an unreadable track id       | 0.000000 | {"index":0,"codec_type":"video","codec_name":"h264","id":"0xzz"}
+          """)
+  @DisplayName(
+      "Should require a packet scan when ffprobe reports no usable track id for an MP4 stream")
+  void shouldRequirePacketScanWhenFfprobeReportsNoUsableTrackIdForMp4Stream(
+      String trackIdCase, String startTime, String stream) {
     var ffprobe =
         ScriptedFfprobe.builder()
             .streams(
                 """
-                {"format":{"format_name":"mov,mp4,m4a,3gp,3g2,mj2","start_time":"N/A"},
-                 "streams":[{"index":0,"codec_type":"video","codec_name":"h264"}]}
-                """)
+                {"format":{"format_name":"mov,mp4,m4a,3gp,3g2,mj2","start_time":"%s"},
+                 "streams":[%s]}
+                """
+                    .formatted(startTime, stream))
             .build();
 
     var report = ffprobe.executor().probe(fixture("mp4-bframes-editlist.mp4"), keyframeRequest());
 
     assertThat(report.result().getMedia().getKeyframes().getPacketScanRequired())
+        .as(trackIdCase)
         .isEqualTo(KeyframePacketScanReason.KEYFRAME_PACKET_SCAN_REASON_INCOMPLETE_CONTAINER_INDEX);
   }
 
@@ -444,25 +456,6 @@ class FfprobeExecutorKeyframeTest {
     assertThat(report.result().getMedia().getKeyframes().getPositions())
         .extracting(KeyframePositions::getStreamIndex, KeyframePositions::getKeyframeCount)
         .containsExactly(2, 4);
-  }
-
-  @Test
-  @DisplayName(
-      "Should require a packet scan when ffprobe reports an MP4 track id that is not hexadecimal")
-  void shouldRequirePacketScanWhenFfprobeReportsMp4TrackIdThatIsNotHexadecimal() {
-    var ffprobe =
-        ScriptedFfprobe.builder()
-            .streams(
-                """
-                {"format":{"format_name":"mov,mp4,m4a,3gp,3g2,mj2","start_time":"0.000000"},
-                 "streams":[{"index":0,"codec_type":"video","codec_name":"h264","id":"0xZZ"}]}
-                """)
-            .build();
-
-    var report = ffprobe.executor().probe(fixture("mp4-bframes-editlist.mp4"), keyframeRequest());
-
-    assertThat(report.result().getMedia().getKeyframes().getPacketScanRequired())
-        .isEqualTo(KeyframePacketScanReason.KEYFRAME_PACKET_SCAN_REASON_INCOMPLETE_CONTAINER_INDEX);
   }
 
   @Test
@@ -895,25 +888,6 @@ class FfprobeExecutorKeyframeTest {
 
     assertThat(report.result().getMedia().getKeyframes().getPositions().getStreamIndex())
         .isEqualTo(1);
-  }
-
-  @Test
-  @DisplayName(
-      "Should require a packet scan when ffprobe reports an unreadable track id for an MP4 stream")
-  void shouldRequirePacketScanWhenFfprobeReportsUnreadableTrackIdForMp4Stream() {
-    var ffprobe =
-        ScriptedFfprobe.builder()
-            .streams(
-                """
-                {"format":{"format_name":"mov,mp4,m4a,3gp,3g2,mj2","start_time":"0.000000"},
-                 "streams":[{"index":0,"codec_type":"video","codec_name":"h264","id":"0xzz"}]}
-                """)
-            .build();
-
-    var report = ffprobe.executor().probe(fixture("mp4-bframes-editlist.mp4"), keyframeRequest());
-
-    assertThat(report.result().getMedia().getKeyframes().getPacketScanRequired())
-        .isEqualTo(KeyframePacketScanReason.KEYFRAME_PACKET_SCAN_REASON_INCOMPLETE_CONTAINER_INDEX);
   }
 
   @Test
