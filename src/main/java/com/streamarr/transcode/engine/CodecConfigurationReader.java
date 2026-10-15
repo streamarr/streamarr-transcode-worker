@@ -151,9 +151,9 @@ final class CodecConfigurationReader {
     return new Video(codecString, Optional.of(new PictureFormat(bitDepth, chroma)));
   }
 
-  private static void skipParameterSets(BoxFields record, int count) {
+  private static void skipParameterSets(BoxFields configuration, int count) {
     for (var set = 0; set < count; set++) {
-      record.skip(record.u16());
+      configuration.skip(configuration.u16());
     }
   }
 

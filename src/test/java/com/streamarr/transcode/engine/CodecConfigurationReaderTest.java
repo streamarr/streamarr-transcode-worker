@@ -439,12 +439,12 @@ class CodecConfigurationReaderTest {
           + " the parameter sets")
   void shouldFindNoPromisedParameterSetMissingWhenTheSampleEntryLetsTheSamplesCarryTheParameterSets(
       String sampleEntryType) {
-    var record = hvcCWithArrays("");
+    var configuration = hvcCWithArrays("");
     if (sampleEntryType.startsWith("avc") || sampleEntryType.equals("dvav")) {
-      record = box("avcC", hex("0142C00AFFE000"));
+      configuration = box("avcC", hex("0142C00AFFE000"));
     }
 
-    var sampleEntry = videoSampleEntryOf(box(sampleEntryType, new byte[78], record));
+    var sampleEntry = videoSampleEntryOf(box(sampleEntryType, new byte[78], configuration));
 
     assertThat(CodecConfigurationReader.holdsPromisedParameterSets(sampleEntry)).isTrue();
   }

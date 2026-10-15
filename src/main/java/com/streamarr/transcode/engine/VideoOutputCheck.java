@@ -41,7 +41,9 @@ final class VideoOutputCheck {
               + " where every encode is 8-bit 4:2:0");
     }
 
-    if (!readable(() -> CodecConfigurationReader.holdsPromisedParameterSets(sampleEntry))) {
+    boolean holdsParameterSets =
+        readable(() -> CodecConfigurationReader.holdsPromisedParameterSets(sampleEntry));
+    if (!holdsParameterSets) {
       throw mismatch(
           "the "
               + sampleEntry.type()

@@ -825,12 +825,12 @@ class ProducerTest {
           + " sets that its sample entry promises")
   void
       shouldFailTheAttemptAsAnOutputMismatchWhenTheRecordHoldsNoneOfTheParameterSetsThatItsSampleEntryPromises(
-          String sampleEntryType, String recordType, String record, String codecString) {
+          String sampleEntryType, String recordType, String recordHex, String codecString) {
     var sampleEntry =
         IsoBoxes.box(
             sampleEntryType,
             new byte[78],
-            IsoBoxes.box(recordType, HexFormat.of().parseHex(record)));
+            IsoBoxes.box(recordType, HexFormat.of().parseHex(recordHex)));
     var output =
         IsoBoxes.concat(
             IsoBoxes.ftyp(),
@@ -2122,11 +2122,11 @@ class ProducerTest {
   }
 
   // An hvc1 sample entry whose record is followed by a pasp box.
-  private static byte[] hvc1Entry(byte[] record) {
+  private static byte[] hvc1Entry(byte[] hvcCBody) {
     return IsoBoxes.box(
         "hvc1",
         new byte[78],
-        IsoBoxes.box("hvcC", record),
+        IsoBoxes.box("hvcC", hvcCBody),
         IsoBoxes.box("pasp", IsoBoxes.u32(1), IsoBoxes.u32(1)));
   }
 

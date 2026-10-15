@@ -570,7 +570,7 @@ class FfmpegCommandBuilderTest {
   void shouldLeaveTheSampleEntryToFfmpegWhenAnAv1EncoderRuns(String encoder) {
     var cmd = command(request(TranscodeMode.VIDEO_TRANSCODE).build(), encoder);
 
-    assertThat(cmd).doesNotContain("-tag:v", "-bsf:v");
+    assertThat(cmd).isNotEmpty().doesNotContain("-tag:v", "-bsf:v");
   }
 
   @ParameterizedTest(name = "{0}")
@@ -579,7 +579,7 @@ class FfmpegCommandBuilderTest {
   void shouldKeepFfmpegsStrictComplianceWhenAnEncoderRuns(String encoder) {
     var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), encoder);
 
-    assertThat(cmd).doesNotContain("-strict", "unofficial");
+    assertThat(cmd).isNotEmpty().doesNotContain("-strict", "unofficial");
   }
 
   @ParameterizedTest
