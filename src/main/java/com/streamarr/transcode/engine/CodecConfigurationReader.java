@@ -51,7 +51,8 @@ final class CodecConfigurationReader {
 
   /**
    * The sample entry of the first video track; empty when the {@code moov} declares no video track.
-   * The reader parses no track's sample entry.
+   * This method does not read the sample entry's decoder configuration record. {@link #videoOf}
+   * reads the record and throws when it is missing or too short.
    *
    * @throws FragmentedMp4Exception when a box that leads to the sample entry is missing or too
    *     short
