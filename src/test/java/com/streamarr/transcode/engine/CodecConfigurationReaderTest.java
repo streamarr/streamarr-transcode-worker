@@ -183,6 +183,7 @@ class CodecConfigurationReaderTest {
   @CsvSource({
     "2D00, av01.1.13M.08, 8, CHROMA_444",
     "4DE8, av01.2.13H.12, 12, CHROMA_422",
+    "4D48, av01.2.13M.10, 10, CHROMA_422",
     "0D5C, av01.0.13M.10, 10, MONOCHROME"
   })
   @DisplayName("Should read the AV1 profile, tier, bit depth and chroma subsampling from av1C")
@@ -200,18 +201,26 @@ class CodecConfigurationReaderTest {
             new Video(codecString, Optional.of(new PictureFormat(bitDepth, chromaSubsampling))));
   }
 
-  @Test
-  @DisplayName("Should name the profile space and constraint bytes when hvcC sets them")
-  void shouldNameTheProfileSpaceAndConstraintBytesWhenHvccSetsThem() {
-    var hvcC = box("hvcC", hex("01" + "A2" + "20000000" + "B00000000001" + "5D" + "F000FCFEFAF8"));
+  @ParameterizedTest(name = "{2}")
+  @CsvSource({
+    "41, 900000000000, hvc1.A1.4.L93.90",
+    "A2, B00000000001, hvc1.B2.4.H93.B0.0.0.0.0.1",
+    "E2, 000000000000, hvc1.C2.4.H93"
+  })
+  @DisplayName("Should name the profile space, tier and constraint bytes that hvcC declares")
+  void shouldNameTheProfileSpaceTierAndConstraintBytesThatHvccDeclares(
+      String spaceTierAndProfile, String constraints, String codecString) {
+    var hvcC =
+        box(
+            "hvcC",
+            hex("01" + spaceTierAndProfile + "20000000" + constraints + "5D" + "F000FCFEFAF8"));
 
     assertThat(
             CodecConfigurationReader.tracksOf(
                 withVideoSampleEntry(box("hvc1", new byte[78], hvcC))))
         .containsExactly(
             new Video(
-                "hvc1.B2.4.H93.B0.0.0.0.0.1",
-                Optional.of(new PictureFormat(10, ChromaSubsampling.CHROMA_422))));
+                codecString, Optional.of(new PictureFormat(10, ChromaSubsampling.CHROMA_422))));
   }
 
   @ParameterizedTest(name = "{0}")
@@ -219,6 +228,7 @@ class CodecConfigurationReaderTest {
     "an escaped audio object type, 0, 00, 40, F840, mp4a.40.34",
     "a dependent stream with a URL, 0, E0, 40, 1010, mp4a.40.2",
     "MP3, 0, 00, 6B, '', mp4a.6B",
+    "AAC without a decoder specific info, 0, 00, 40, '', mp4a.40",
     "version 1 of the sound description, 1, 00, 40, 1010, mp4a.40.2",
     "version 2 of the sound description, 2, 00, 40, 1010, mp4a.40.2"
   })
@@ -267,6 +277,40 @@ class CodecConfigurationReaderTest {
     var segment = withAudioSampleEntry(box("mp4a", fields, extra, esds));
 
     assertThat(CodecConfigurationReader.tracksOf(segment)).containsExactly(new Audio(codecString));
+  }
+
+  @Test
+  @DisplayName(
+      "Should read the descriptor after four size bytes when every size byte announces another")
+  void shouldReadTheDescriptorAfterFourSizeBytesWhenEverySizeByteAnnouncesAnother() {
+    var esds =
+        fullBox(
+            "esds",
+            0,
+            hex(
+                "0380808080"
+                    + "000100"
+                    + "0480808000"
+                    + "4015"
+                    + "0000000000000000000000"
+                    + "05808080021190"));
+    var segment = withAudioSampleEntry(box("mp4a", new byte[28], esds));
+
+    assertThat(CodecConfigurationReader.tracksOf(segment)).containsExactly(new Audio("mp4a.40.2"));
+  }
+
+  @Test
+  @DisplayName(
+      "Should refuse the initialization segment as a malformed box when a video sample entry ends"
+          + " before its fields do")
+  void
+      shouldRefuseTheInitializationSegmentAsAMalformedBoxWhenAVideoSampleEntryEndsBeforeItsFieldsDo() {
+    var segment = withVideoSampleEntry(box("avc1", new byte[77]));
+
+    assertThatThrownBy(() -> CodecConfigurationReader.tracksOf(segment))
+        .isInstanceOfSatisfying(
+            FragmentedMp4Exception.class,
+            exception -> assertThat(exception.getReason()).isEqualTo(Reason.MALFORMED_BOX));
   }
 
   @Test
