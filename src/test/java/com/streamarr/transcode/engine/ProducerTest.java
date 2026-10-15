@@ -51,6 +51,7 @@ import org.junit.jupiter.api.parallel.ResourceLock;
 import org.junit.jupiter.api.parallel.Resources;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -89,25 +90,37 @@ class ProducerTest {
 
   private final RecordingSegmentSink sink = new RecordingSegmentSink();
 
-  @Test
-  @DisplayName("Should refuse to start a producer without an encoded frame rate")
-  void shouldRefuseToStartAProducerWithoutAnEncodedFrameRate() {
-    var builder =
-        Producer.builder()
-            .launcher(
-                (command, jobAttemptId) -> {
-                  throw new AssertionError("FFmpeg must not start");
-                })
-            .command(List.of("ffmpeg"))
-            .jobAttemptId(JOB_ATTEMPT_ID)
-            .gracePeriod(Duration.ofSeconds(5))
-            .stallTimeout(Duration.ofMinutes(1))
-            .memoryBudget(SegmentMemoryBudget.forSlots(1))
-            .sink(sink);
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("producersLackingARequiredArgument")
+  @DisplayName("Should refuse to start a producer when it lacks a required argument")
+  void shouldRefuseToStartAProducerWhenItLacksARequiredArgument(
+      String argument, Producer.ProducerBuilder builder) {
+    assertThatNullPointerException().isThrownBy(builder::start).withMessageContaining(argument);
+  }
 
-    assertThatNullPointerException()
-        .isThrownBy(builder::start)
-        .withMessageContaining("encodedFrameRate");
+  // The builder's setters refuse null themselves, so each producer leaves its argument unset.
+  static Stream<Arguments> producersLackingARequiredArgument() {
+    return Stream.of(
+        Arguments.of(
+            "encodedFrameRate",
+            producerThatMustNotLaunch()
+                .videoDecision(VideoDecisionFixtures.encodeBuilder().build())),
+        Arguments.of(
+            "videoDecision", producerThatMustNotLaunch().encodedFrameRate(OptionalDouble.empty())));
+  }
+
+  private static Producer.ProducerBuilder producerThatMustNotLaunch() {
+    return Producer.builder()
+        .launcher(
+            (command, jobAttemptId) -> {
+              throw new AssertionError("FFmpeg must not start");
+            })
+        .command(List.of("ffmpeg"))
+        .jobAttemptId(JOB_ATTEMPT_ID)
+        .gracePeriod(Duration.ofSeconds(5))
+        .stallTimeout(Duration.ofMinutes(1))
+        .memoryBudget(SegmentMemoryBudget.forSlots(1))
+        .sink(new RecordingSegmentSink());
   }
 
   static Stream<Recording> recordingsThatGroupWithoutFailure() {
@@ -686,6 +699,48 @@ class ProducerTest {
     var failure = failureOf(producer);
     assertThat(failure.reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
     assertThat(failure.detail()).contains("4:4:4");
+    assertThat(sink.acceptedNames()).isEmpty();
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({
+    "10-bit 4:2:0, 6E000A, FDFAFA00",
+    "10-bit 4:2:2, 7A000A, FEFAFA00",
+    "8-bit 4:0:0, 64000A, FCF8F800"
+  })
+  @DisplayName(
+      "Should name the declared picture format in the output mismatch when an encode's output is"
+          + " not 8-bit 4:2:0")
+  void
+      shouldNameTheDeclaredPictureFormatInTheOutputMismatchWhenAnEncodesOutputIsNotEightBitFourTwoZero(
+          String pictureFormat, String profileConstraintsAndLevel, String formatExtension) {
+    var avcC =
+        IsoBoxes.box(
+            "avcC",
+            HexFormat.of()
+                .parseHex(
+                    "01"
+                        + profileConstraintsAndLevel
+                        + "FFE100026742010002"
+                        + "68CE"
+                        + formatExtension));
+    var output =
+        IsoBoxes.concat(
+            IsoBoxes.ftyp(),
+            IsoBoxes.moov(
+                IsoBoxes.Track.video()
+                    .sampleEntry(IsoBoxes.box("avc1", new byte[78], avcC))
+                    .build()));
+    var process = ScriptedProcess.builder().output(output).build();
+    var encode =
+        VideoDecisionFixtures.encodeBuilder().codecString("avc1." + profileConstraintsAndLevel);
+
+    var producer =
+        producerLaunching(process).periodSeconds(6).videoDecision(encode.build()).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
+    assertThat(failure.detail()).contains("declares " + pictureFormat + " where");
     assertThat(sink.acceptedNames()).isEmpty();
   }
 
