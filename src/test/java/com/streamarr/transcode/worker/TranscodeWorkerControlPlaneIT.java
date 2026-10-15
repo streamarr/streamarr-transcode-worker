@@ -11,7 +11,7 @@ import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.awaitility.Awaitility.await;
+import static org.assertj.core.api.Assertions.fail;
 
 import build.buf.gen.streamarr.transcode.v1.AudioDecision;
 import build.buf.gen.streamarr.transcode.v1.AudioMode;
@@ -38,10 +38,6 @@ import build.buf.gen.streamarr.transcode.v1.VariantJob;
 import build.buf.gen.streamarr.transcode.v1.VariantSpec;
 import build.buf.gen.streamarr.transcode.v1.WorkerIdentity;
 import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
-import ch.qos.logback.classic.Level;
-import ch.qos.logback.classic.Logger;
-import ch.qos.logback.classic.spi.ILoggingEvent;
-import ch.qos.logback.core.read.ListAppender;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
@@ -59,11 +55,9 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -71,11 +65,12 @@ import java.util.function.UnaryOperator;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
-import org.slf4j.LoggerFactory;
 
 @Tag("IntegrationTest")
 @DisplayName("Transcode Worker Control Plane Integration Tests")
+@Timeout(value = 2, unit = TimeUnit.MINUTES)
 class TranscodeWorkerControlPlaneIT {
 
   @TempDir Path tempDir;
@@ -98,31 +93,23 @@ class TranscodeWorkerControlPlaneIT {
   }
 
   @Test
-  @DisplayName("Should warn when the control plane sends an unknown command")
-  void shouldWarnWhenControlPlaneSendsUnknownCommand() throws Exception {
-    var mediaRoot = Files.createDirectory(tempDir.resolve("media"));
+  @DisplayName("Should keep handling commands when the control plane sends an unknown command")
+  void shouldKeepHandlingCommandsWhenControlPlaneSendsUnknownCommand() throws Exception {
     var service = new ControllableWorkerService();
-    var appender = attachWorkerAppender();
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJob();
 
     try (var server = new TestServer(service);
-        var worker = worker(mediaRoot)) {
+        var worker = worker(preparedMediaRoot(), launcher)) {
       server.start();
       worker.start("localhost", server.port());
 
       service.send(EstablishWorkerSessionResponse.getDefaultInstance());
+      service.sendStart(service.registeredWorker(), job);
+      service.awaitStarted(job);
 
-      await()
-          .atMost(5, TimeUnit.SECONDS)
-          .untilAsserted(
-              () ->
-                  assertThat(appender.list)
-                      .anySatisfy(
-                          event -> {
-                            assertThat(event.getLevel()).isEqualTo(Level.WARN);
-                            assertThat(event.getFormattedMessage()).contains("COMMAND_NOT_SET");
-                          }));
-    } finally {
-      detachWorkerAppender(appender);
+      assertThat(worker.hasAcceptedSession()).isTrue();
+      assertThat(launcher.process(fromProto(job.getJobAttemptId())).isAlive()).isTrue();
     }
   }
 
@@ -453,7 +440,7 @@ class TranscodeWorkerControlPlaneIT {
       worker.start("localhost", server.port());
       service.sendStart(service.registeredWorker(), job);
       service.awaitStarted(job);
-      assertThat(service.uploadReceived.await(5, TimeUnit.SECONDS)).isTrue();
+      service.awaitFirstUpload();
 
       worker.close();
 
@@ -499,7 +486,7 @@ class TranscodeWorkerControlPlaneIT {
       worker.start("localhost", server.port());
       service.sendStart(service.registeredWorker(), job);
       service.awaitStarted(job);
-      assertThat(service.uploadReceived.await(5, TimeUnit.SECONDS)).isTrue();
+      service.awaitFirstUpload();
       var process = launcher.process(fromProto(job.getJobAttemptId()));
 
       assertThat(service.uploads)
@@ -550,8 +537,10 @@ class TranscodeWorkerControlPlaneIT {
     }
   }
 
+  // Every caller first waits for close(), the stop event, or the disconnection. The worker
+  // finishes each of them only after FFmpeg has exited.
   private static void assertQuitGracefully(ScriptedProcess process) {
-    await().atMost(5, TimeUnit.SECONDS).until(() -> !process.isAlive());
+    assertThat(process.isAlive()).as("FFmpeg has exited").isFalse();
     assertThat(process.stdinText()).isEqualTo("q");
     assertThat(process.wasDestroyedForcibly()).isFalse();
   }
@@ -724,31 +713,18 @@ class TranscodeWorkerControlPlaneIT {
             .build());
   }
 
-  private static ListAppender<ILoggingEvent> attachWorkerAppender() {
-    var logger = (Logger) LoggerFactory.getLogger(TranscodeWorker.class);
-    logger.setLevel(Level.WARN);
-    var appender = new ListAppender<ILoggingEvent>();
-    appender.start();
-    logger.addAppender(appender);
-    return appender;
-  }
-
-  private static void detachWorkerAppender(ListAppender<ILoggingEvent> appender) {
-    var logger = (Logger) LoggerFactory.getLogger(TranscodeWorker.class);
-    logger.detachAppender(appender);
-    logger.setLevel(null);
-  }
-
   private static final class ControllableWorkerService
       extends TranscodeWorkerServiceGrpc.TranscodeWorkerServiceImplBase {
 
     private final boolean closeBeforeRegistration;
     private final CountDownLatch registered = new CountDownLatch(1);
     private final AtomicReference<WorkerIdentity> worker = new AtomicReference<>();
-    private final BlockingQueue<EstablishWorkerSessionRequest> events = new LinkedBlockingQueue<>();
+    // The service's monitor guards these fields. Each wait for a worker message waits on it.
+    private final List<EstablishWorkerSessionRequest> events = new ArrayList<>();
+    private int eventsTaken;
+    private boolean sessionEnded;
     private StreamObserver<EstablishWorkerSessionResponse> responses;
     private final ConcurrentLinkedQueue<UploadedSegment> uploads = new ConcurrentLinkedQueue<>();
-    private final CountDownLatch uploadReceived = new CountDownLatch(1);
     private volatile boolean acknowledgeUploads = true;
     private StreamObserver<UploadSegmentResponse> pendingUpload;
     private int pendingLength;
@@ -779,7 +755,7 @@ class TranscodeWorkerControlPlaneIT {
         @Override
         public void onNext(EstablishWorkerSessionRequest request) {
           if (!request.hasRegistration()) {
-            events.add(request);
+            receiveEvent(request);
             return;
           }
           if (closeBeforeRegistration) {
@@ -798,11 +774,12 @@ class TranscodeWorkerControlPlaneIT {
 
         @Override
         public void onError(Throwable throwable) {
-          // The control-plane assertions observe queued events instead.
+          markSessionEnded();
         }
 
         @Override
         public void onCompleted() {
+          markSessionEnded();
           responseObserver.onCompleted();
         }
       };
@@ -832,10 +809,9 @@ class TranscodeWorkerControlPlaneIT {
 
         @Override
         public void onCompleted() {
-          uploads.add(new UploadedSegment(metadata, bytes.toByteArray()));
           pendingUpload = responseObserver;
           pendingLength = bytes.size();
-          uploadReceived.countDown();
+          receiveUpload(new UploadedSegment(metadata, bytes.toByteArray()));
           if (acknowledgeUploads) {
             responseObserver.onNext(
                 UploadSegmentResponse.newBuilder().setAcceptedLengthBytes(bytes.size()).build());
@@ -845,8 +821,61 @@ class TranscodeWorkerControlPlaneIT {
       };
     }
 
+    private synchronized void receiveEvent(EstablishWorkerSessionRequest event) {
+      events.add(event);
+      notifyAll();
+    }
+
+    private synchronized void receiveUpload(UploadedSegment upload) {
+      uploads.add(upload);
+      notifyAll();
+    }
+
+    private synchronized void markSessionEnded() {
+      sessionEnded = true;
+      notifyAll();
+    }
+
+    private synchronized boolean hasUntakenEvent() {
+      return eventsTaken < events.size();
+    }
+
+    // Fails at once when the session ends, because the awaited event can no longer arrive.
+    private synchronized EstablishWorkerSessionRequest takeEvent(String expected)
+        throws InterruptedException {
+      while (!hasUntakenEvent() && !sessionEnded) {
+        wait();
+      }
+
+      if (!hasUntakenEvent()) {
+        fail("The worker session ended before %s, after %s worker events", expected, eventsTaken);
+      }
+
+      return events.get(eventsTaken++);
+    }
+
+    // Fails at once when the worker sends an event or the session ends first. After the start, the
+    // only event the worker can send ends the attempt, and no upload follows it.
+    private synchronized void awaitFirstUpload() throws InterruptedException {
+      while (uploads.isEmpty() && !hasUntakenEvent() && !sessionEnded) {
+        wait();
+      }
+
+      if (!uploads.isEmpty()) {
+        return;
+      }
+
+      if (hasUntakenEvent()) {
+        fail(
+            "The worker sent %s before its first segment upload",
+            events.get(eventsTaken).getEventCase());
+      }
+
+      fail("The worker session ended before the first segment upload");
+    }
+
     private void send(EstablishWorkerSessionResponse response) throws InterruptedException {
-      assertThat(registered.await(5, TimeUnit.SECONDS)).isTrue();
+      registered.await();
       responses.onNext(response);
     }
 
@@ -872,8 +901,7 @@ class TranscodeWorkerControlPlaneIT {
     }
 
     private void awaitStarted(VariantJob job) throws InterruptedException {
-      var event = events.poll(5, TimeUnit.SECONDS);
-      assertThat(event).isNotNull();
+      var event = takeEvent("the start of an attempt");
       assertThat(event.hasJobAttemptStarted())
           .as("the next worker event must acknowledge the ordering-barrier start command")
           .isTrue();
@@ -883,24 +911,20 @@ class TranscodeWorkerControlPlaneIT {
     private List<EstablishWorkerSessionRequest> awaitEvents(int count) throws InterruptedException {
       var received = new ArrayList<EstablishWorkerSessionRequest>();
       while (received.size() < count) {
-        var event = events.poll(5, TimeUnit.SECONDS);
-        assertThat(event).as("worker event %s of %s", received.size() + 1, count).isNotNull();
-        received.add(event);
+        received.add(takeEvent("worker event %s of %s".formatted(received.size() + 1, count)));
       }
 
       return received;
     }
 
     private void awaitStopped(VariantJob job) throws InterruptedException {
-      var event = events.poll(5, TimeUnit.SECONDS);
-      assertThat(event).isNotNull();
+      var event = takeEvent("the stop of an attempt");
       assertThat(event.hasJobAttemptStopped()).isTrue();
       assertThat(event.getJobAttemptStopped().getJobAttemptId()).isEqualTo(job.getJobAttemptId());
     }
 
     private void awaitCompleted(VariantJob job) throws InterruptedException {
-      var event = events.poll(5, TimeUnit.SECONDS);
-      assertThat(event).isNotNull();
+      var event = takeEvent("the completion of an attempt");
       assertThat(event.hasJobAttemptCompleted()).isTrue();
       assertThat(event.getJobAttemptCompleted().getJobAttemptId()).isEqualTo(job.getJobAttemptId());
     }
@@ -908,11 +932,11 @@ class TranscodeWorkerControlPlaneIT {
     private void failSession() {
       responses.onError(
           Status.UNAVAILABLE.withDescription("control plane stopped").asRuntimeException());
+      markSessionEnded();
     }
 
     private JobAttemptFailed awaitFailure() throws InterruptedException {
-      var event = events.poll(5, TimeUnit.SECONDS);
-      assertThat(event).isNotNull();
+      var event = takeEvent("the failure of an attempt");
       assertThat(event.hasJobAttemptFailed()).isTrue();
       return event.getJobAttemptFailed();
     }
@@ -941,7 +965,11 @@ class TranscodeWorkerControlPlaneIT {
         return;
       }
       server.shutdownNow();
-      server.awaitTermination(5, TimeUnit.SECONDS);
+      // A hang guard: a JUnit timeout interrupts only once, and a wait in the test body may
+      // already have consumed that interrupt.
+      assertThat(server.awaitTermination(1, TimeUnit.MINUTES))
+          .as("the control-plane server terminates")
+          .isTrue();
     }
   }
 

@@ -63,7 +63,11 @@ public final class WorkerApplicationControlPlane
   }
 
   public String awaitIdentityHeader() throws Exception {
-    return identityHeader.get(5, TimeUnit.SECONDS);
+    return identityHeader.get();
+  }
+
+  public boolean wasContacted() {
+    return identityHeader.isDone();
   }
 
   public int port() {
@@ -71,31 +75,36 @@ public final class WorkerApplicationControlPlane
   }
 
   public WorkerRegistration awaitRegistration() throws Exception {
-    return registration.get(10, TimeUnit.SECONDS);
+    return registration.get();
   }
 
-  public boolean wasAdmittedAtRegistration() throws Exception {
-    return admittedAtRegistration.get(10, TimeUnit.SECONDS);
+  public CompletableFuture<WorkerRegistration> registration() {
+    return registration.copy();
   }
 
-  public List<WorkerRegistration> registrationsAfterExit() throws Exception {
+  public CompletableFuture<ProbeAttemptResult> probeResult() {
+    return result.copy();
+  }
+
+  /** Reads the admission state captured before the registration that a caller has observed. */
+  public boolean wasAdmittedAtRegistration() {
+    return admittedAtRegistration.resultNow();
+  }
+
+  /** Drains the exited worker's transport and queued callbacks before reading registrations. */
+  public List<WorkerRegistration> registrationsAfterExit() throws InterruptedException {
     server.shutdown();
-    assertThat(server.awaitTermination(5, TimeUnit.SECONDS))
-        .as("the exited worker's transport and queued callbacks have drained")
-        .isTrue();
+    server.awaitTermination();
     return List.copyOf(registrations);
   }
 
-  public ProbeAttemptResult awaitResult() throws Exception {
-    return result.get(5, TimeUnit.SECONDS);
-  }
-
-  public void startProbe(ProbeRequest request) throws Exception {
+  /** Starts a probe on the registration that a caller has observed. */
+  public void startProbe(ProbeRequest request) {
     responses.onNext(
         EstablishWorkerSessionResponse.newBuilder()
             .setStartProbe(
                 StartProbeCommand.newBuilder()
-                    .setTarget(awaitRegistration().getWorker())
+                    .setTarget(registration.resultNow().getWorker())
                     .setRequest(request))
             .build());
   }
@@ -140,7 +149,11 @@ public final class WorkerApplicationControlPlane
   @Override
   public void close() throws InterruptedException {
     server.shutdownNow();
-    assertThat(server.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+    // A hang guard: a JUnit timeout interrupts only once, and a wait in the test body may
+    // already have consumed that interrupt.
+    assertThat(server.awaitTermination(1, TimeUnit.MINUTES))
+        .as("the control-plane server terminates")
+        .isTrue();
   }
 
   public static class WorkerApplicationControlPlaneBuilder {

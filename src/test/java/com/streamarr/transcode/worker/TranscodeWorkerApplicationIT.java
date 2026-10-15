@@ -3,39 +3,49 @@ package com.streamarr.transcode.worker;
 import static com.streamarr.transcode.fixtures.FfmpegMuxerHelpFixtures.FRAGMENTED_MP4_MUXER_HELP;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.SOURCE_NAMESPACE_ID;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
+import static java.nio.charset.StandardCharsets.US_ASCII;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 
 import build.buf.gen.streamarr.transcode.v1.MediaSourceRef;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import com.streamarr.transcode.worker.support.WorkerApplicationControlPlane;
+import com.streamarr.transcode.worker.support.WorkerApplicationProcess;
+import java.io.File;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.lang.management.ManagementFactory;
+import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse.BodyHandlers;
+import java.nio.ByteBuffer;
+import java.nio.channels.ServerSocketChannel;
+import java.nio.channels.SocketChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardWatchEventKinds;
 import java.nio.file.attribute.PosixFilePermissions;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.regex.Pattern;
 import lombok.Builder;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.web.server.context.WebServerPortFileWriter;
 
 @Tag("IntegrationTest")
 @DisplayName("Transcode Worker Application Integration Tests")
+@Timeout(value = 2, unit = TimeUnit.MINUTES)
 class TranscodeWorkerApplicationIT {
 
   @TempDir Path tempDir;
@@ -43,40 +53,30 @@ class TranscodeWorkerApplicationIT {
   @Test
   @DisplayName("Should serve Actuator liveness when the worker application starts")
   void shouldServeActuatorLivenessWhenTheWorkerApplicationStarts() throws Exception {
+    var portFile = tempDir.resolve("http.port");
     try (var controlPlane = WorkerApplicationControlPlane.builder().build();
         var client = HttpClient.newHttpClient()) {
       var fixture =
           ApplicationFixture.builder()
               .port(controlPlane.port())
               .ffprobe(versionOnlyFfprobe())
+              .mainClass(PortReportingStartup.class)
               .build();
       var processBuilder = applicationProcess(fixture);
-      processBuilder.environment().put("SERVER_PORT", "0");
-      var process = processBuilder.start();
-      try {
-        controlPlane.awaitRegistration();
-        var announcedPort =
-            Pattern.compile("Tomcat started on port (\\d+)")
-                .matcher(Files.readString(tempDir.resolve("worker.log")));
-        assertThat(announcedPort.find())
-            .as("the application reports its ephemeral HTTP port before registering")
-            .isTrue();
+      processBuilder.environment().put("WORKER_HTTP_PORT_FILE", portFile.toString());
+      try (var worker = start(processBuilder)) {
+        worker.awaitRegistration(controlPlane);
+        var httpPort = Integer.parseInt(Files.readString(portFile).strip());
         var response =
             client.send(
                 HttpRequest.newBuilder(
-                        URI.create(
-                            "http://localhost:"
-                                + announcedPort.group(1)
-                                + "/actuator/health/liveness"))
-                    .timeout(Duration.ofSeconds(5))
+                        URI.create("http://localhost:" + httpPort + "/actuator/health/liveness"))
                     .GET()
                     .build(),
                 BodyHandlers.ofString());
 
         assertThat(response.statusCode()).isEqualTo(200);
         assertThat(response.body()).contains("\"status\":\"UP\"");
-      } finally {
-        stop(process);
       }
     }
   }
@@ -103,17 +103,14 @@ class TranscodeWorkerApplicationIT {
       var processBuilder = applicationProcess(fixture);
       processBuilder.environment().put("LC_ALL", "C");
       processBuilder.environment().put("LANG", "C");
-      var process = processBuilder.start();
-      try {
-        controlPlane.awaitRegistration();
+      try (var worker = start(processBuilder)) {
+        worker.awaitRegistration(controlPlane);
         controlPlane.startProbe(request);
 
-        var result = controlPlane.awaitResult();
+        var result = worker.awaitProbeResult(controlPlane);
         assertThat(result.getProbeAttemptId()).isEqualTo(request.getProbeAttemptId());
         assertThat(result.getProbeVersion()).isEqualTo(request.getProbeVersion());
         assertThat(result.getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_SOURCE_UNAVAILABLE);
-      } finally {
-        stop(process);
       }
     }
   }
@@ -128,15 +125,8 @@ class TranscodeWorkerApplicationIT {
 
     try (var controlPlane = WorkerApplicationControlPlane.builder().build()) {
       var fixture = ApplicationFixture.builder().port(controlPlane.port()).ffprobe(binary).build();
-      var process = applicationProcess(fixture).start();
-      try {
-        assertThat(process.waitFor(10, TimeUnit.SECONDS)).isTrue();
-        assertThat(process.exitValue()).as("startup refuses an unavailable producer").isNotZero();
-        assertThat(Files.readString(tempDir.resolve("worker.log")))
-            .contains("ffprobe", binary.toString());
-        assertThat(controlPlane.registrationsAfterExit()).isEmpty();
-      } finally {
-        stop(process);
+      try (var worker = start(applicationProcess(fixture))) {
+        assertStartupRefusedBeforeContact(worker, controlPlane, "ffprobe");
       }
     }
   }
@@ -156,17 +146,8 @@ class TranscodeWorkerApplicationIT {
 
     try (var controlPlane = WorkerApplicationControlPlane.builder().build()) {
       var fixture = ApplicationFixture.builder().port(controlPlane.port()).ffprobe(binary).build();
-      var process = applicationProcess(fixture).start();
-      try {
-        assertThat(process.waitFor(10, TimeUnit.SECONDS))
-            .as("the worker refuses startup after the configured ffprobe fails its version check")
-            .isTrue();
-        assertThat(process.exitValue()).isNotZero();
-        assertThat(Files.readString(tempDir.resolve("worker.log")))
-            .contains("ffprobe", binary.toString(), "exited with code 7");
-        assertThat(controlPlane.registrationsAfterExit()).isEmpty();
-      } finally {
-        stop(process);
+      try (var worker = start(applicationProcess(fixture))) {
+        assertStartupRefusedBeforeContact(worker, controlPlane, "ffprobe");
       }
     }
   }
@@ -203,20 +184,17 @@ class TranscodeWorkerApplicationIT {
       var configuredBinary = location == BinaryLocation.PATH ? binary.getFileName() : binary;
       var fixture =
           ApplicationFixture.builder().port(controlPlane.port()).ffprobe(configuredBinary).build();
-      var process = applicationProcess(fixture).start();
-      try {
-        var registration = controlPlane.awaitRegistration();
+      try (var worker = start(applicationProcess(fixture))) {
+        var registration = worker.awaitRegistration(controlPlane);
         assertThat(registration.getCapabilities().getProbeVersionsList()).contains(1);
         controlPlane.startProbe(request);
 
-        var result = controlPlane.awaitResult();
+        var result = worker.awaitProbeResult(controlPlane);
         assertThat(result.hasMedia()).isTrue();
         assertThat(result.getProbeAttemptId()).isEqualTo(request.getProbeAttemptId());
         assertThat(result.getMedia().getStreamsList())
             .singleElement()
             .satisfies(stream -> assertThat(stream.getCodec()).isEqualTo("configured-codec"));
-      } finally {
-        stop(process);
       }
     }
   }
@@ -234,15 +212,12 @@ class TranscodeWorkerApplicationIT {
               .build();
       var processBuilder = applicationProcess(fixture);
       var workerId = UUID.fromString(processBuilder.environment().get("TRANSCODE_WORKER_ID"));
-      var process = processBuilder.start();
-      try {
-        var registration = controlPlane.awaitRegistration();
+      try (var worker = start(processBuilder)) {
+        var registration = worker.awaitRegistration(controlPlane);
 
         assertThat(registration.getWorker().getWorkerId()).isEqualTo(toProto(workerId));
         assertThat(registration.getCapabilities().getSourceNamespaceIdsList())
             .containsExactly(toProto(SOURCE_NAMESPACE_ID));
-      } finally {
-        stop(process);
       }
     }
   }
@@ -256,39 +231,46 @@ class TranscodeWorkerApplicationIT {
               .port(controlPlane.port())
               .ffprobe(versionOnlyFfprobe())
               .build();
-      var process = applicationProcess(fixture).start();
-      try {
-        controlPlane.awaitRegistration();
+      try (var worker = start(applicationProcess(fixture))) {
+        worker.awaitRegistration(controlPlane);
         controlPlane.close();
 
-        assertThat(process.waitFor(10, TimeUnit.SECONDS))
+        assertThatCode(worker::awaitExit)
             .as("the application exits after its control plane disconnects")
-            .isTrue();
-      } finally {
-        stop(process);
+            .doesNotThrowAnyException();
       }
     }
   }
 
   @Test
-  @DisplayName("Should exit immediately when FFmpeg is unavailable")
-  void shouldExitImmediatelyWhenFfmpegIsUnavailable() throws Exception {
-    var fixture = ApplicationFixture.builder().port(1).ffprobe(versionOnlyFfprobe()).build();
-    var processBuilder = applicationProcess(fixture);
-    processBuilder
-        .environment()
-        .put("TRANSCODE_WORKER_FFMPEG_PATH", tempDir.resolve("missing-ffmpeg").toString());
-    var process = processBuilder.start();
-    try {
-      assertThat(process.waitFor(5, TimeUnit.SECONDS))
-          .as("startup refuses missing FFmpeg")
-          .isTrue();
-      assertThat(process.exitValue()).isNotZero();
-      assertThat(Files.readString(tempDir.resolve("worker.log")))
-          .contains("FFmpeg is not available to the transcode worker: FFmpeg not found");
-    } finally {
-      stop(process);
+  @DisplayName("Should refuse startup when FFmpeg is unavailable")
+  void shouldRefuseStartupWhenFfmpegIsUnavailable() throws Exception {
+    try (var controlPlane = WorkerApplicationControlPlane.builder().build()) {
+      var fixture =
+          ApplicationFixture.builder()
+              .port(controlPlane.port())
+              .ffprobe(versionOnlyFfprobe())
+              .build();
+      var processBuilder = applicationProcess(fixture);
+      processBuilder
+          .environment()
+          .put("TRANSCODE_WORKER_FFMPEG_PATH", tempDir.resolve("missing-ffmpeg").toString());
+      try (var worker = start(processBuilder)) {
+        assertStartupRefusedBeforeContact(worker, controlPlane, "FFmpeg");
+      }
     }
+  }
+
+  private static void assertStartupRefusedBeforeContact(
+      WorkerApplicationProcess worker, WorkerApplicationControlPlane controlPlane, String binary)
+      throws Exception {
+    assertThat(worker.awaitExitBeforeRegistration(controlPlane))
+        .as("the worker refuses startup when the %s check fails", binary)
+        .isNotZero();
+    assertThat(controlPlane.registrationsAfterExit()).isEmpty();
+    assertThat(controlPlane.wasContacted())
+        .as("the worker checks %s before it connects to the server", binary)
+        .isFalse();
   }
 
   private Path versionOnlyFfprobe() throws Exception {
@@ -316,26 +298,16 @@ class TranscodeWorkerApplicationIT {
   @Test
   @DisplayName("Should wait for successful probe validation when registering the application")
   void shouldWaitForSuccessfulProbeValidationWhenRegisteringTheApplication() throws Exception {
-    var signals = Files.createDirectory(tempDir.resolve("signals"));
     var pidFile = tempDir.resolve("probe.pid");
-    var release = tempDir.resolve("release.fifo");
-    var fifo = new ProcessBuilder("mkfifo", release.toString()).start();
-    try {
-      assertThat(fifo.waitFor(5, TimeUnit.SECONDS)).isTrue();
-      assertThat(fifo.exitValue()).isZero();
-    } finally {
-      stop(fifo);
-    }
-
     var binary = tempDir.resolve("held-version-ffprobe");
     Files.writeString(
         binary,
         """
-        #!/bin/sh
+        #!/bin/bash
         [ "$#" -eq 1 ] && [ "$1" = "-version" ] || exit 99
         printf '%s' "$$" > "$PROBE_PID_FILE"
-        /bin/mkdir "$PROBE_READY_DIR/started"
-        read release < "$PROBE_RELEASE_FIFO"
+        exec 3<>"/dev/tcp/127.0.0.1/$PROBE_SIGNAL_PORT"
+        read -r release <&3
         exit 0
         """);
     Files.setPosixFilePermissions(binary, PosixFilePermissions.fromString("rwx------"));
@@ -344,43 +316,37 @@ class TranscodeWorkerApplicationIT {
             WorkerApplicationControlPlane.builder()
                 .producerAdmitted(() -> validationHasExited(pidFile))
                 .build();
-        var watcher = signals.getFileSystem().newWatchService()) {
-      signals.register(watcher, StandardWatchEventKinds.ENTRY_CREATE);
+        var signal = ServerSocketChannel.open().bind(new InetSocketAddress("127.0.0.1", 0))) {
+      var heldVersionCheck =
+          CompletableFuture.supplyAsync(() -> accept(signal), Thread.ofVirtual()::start);
       var fixture = ApplicationFixture.builder().port(controlPlane.port()).ffprobe(binary).build();
       var processBuilder = applicationProcess(fixture);
       processBuilder.environment().put("PROBE_PID_FILE", pidFile.toString());
-      processBuilder.environment().put("PROBE_READY_DIR", signals.toString());
-      processBuilder.environment().put("PROBE_RELEASE_FIFO", release.toString());
-      var process = processBuilder.start();
-      try {
-        assertThat(watcher.poll(10, TimeUnit.SECONDS))
-            .as("the version check reaches its held wait")
-            .isNotNull();
+      processBuilder
+          .environment()
+          .put("PROBE_SIGNAL_PORT", String.valueOf(signal.socket().getLocalPort()));
+      try (var worker = start(processBuilder);
+          var versionCheck =
+              worker.awaitBeforeExit(heldVersionCheck, "the version check reached its held wait")) {
         assertThat(validationHasExited(pidFile)).isFalse();
-        var releasing =
-            new ProcessBuilder(
-                    "/bin/sh",
-                    "-c",
-                    "printf 'release\\n' > \"$1\"",
-                    "release-probe",
-                    release.toString())
-                .start();
-        try {
-          assertThat(releasing.waitFor(5, TimeUnit.SECONDS)).isTrue();
-          assertThat(releasing.exitValue()).isZero();
-        } finally {
-          stop(releasing);
-        }
+        versionCheck.write(ByteBuffer.wrap("release\n".getBytes(US_ASCII)));
 
-        assertThat(controlPlane.awaitRegistration().getCapabilities().getProbeVersionsList())
+        assertThat(worker.awaitRegistration(controlPlane).getCapabilities().getProbeVersionsList())
             .containsExactly(1);
         assertThat(controlPlane.wasAdmittedAtRegistration())
             .as("registration occurs after the held version process has exited successfully")
             .isTrue();
       } finally {
-        stop(process);
         stopNativeProcess(pidFile);
       }
+    }
+  }
+
+  private static SocketChannel accept(ServerSocketChannel signal) {
+    try {
+      return signal.accept();
+    } catch (IOException exception) {
+      throw new UncheckedIOException(exception);
     }
   }
 
@@ -401,7 +367,10 @@ class TranscodeWorkerApplicationIT {
   @Test
   @DisplayName("Should preserve interruption and stop ffprobe when startup is interrupted")
   void shouldPreserveInterruptionAndStopFfprobeWhenStartupIsInterrupted() throws Exception {
-    var signals = Files.createDirectory(tempDir.resolve("signals"));
+    var started = tempDir.resolve("started.fifo");
+    assertThat(new ProcessBuilder("mkfifo", started.toString()).start().waitFor())
+        .as("mkfifo creates the startup signal")
+        .isZero();
     var pidFile = tempDir.resolve("probe.pid");
     var binary = tempDir.resolve("waiting-ffprobe");
     Files.writeString(
@@ -409,28 +378,29 @@ class TranscodeWorkerApplicationIT {
         """
         #!/bin/sh
         printf '%s' "$$" > "$PROBE_PID_FILE"
-        /bin/mkdir "$PROBE_READY_DIR/started"
+        : > "$PROBE_STARTED_FIFO"
         exec /bin/sleep 300
         """);
     Files.setPosixFilePermissions(binary, PosixFilePermissions.fromString("rwx------"));
-    var fixture = ApplicationFixture.builder().port(1).ffprobe(binary).build();
+    var fixture =
+        ApplicationFixture.builder()
+            .port(1)
+            .ffprobe(binary)
+            .mainClass(InterruptedStartup.class)
+            .build();
     var processBuilder = applicationProcess(fixture);
-    var command = processBuilder.command();
-    command.set(command.size() - 1, InterruptedStartup.class.getName());
     processBuilder.environment().put("PROBE_PID_FILE", pidFile.toString());
-    processBuilder.environment().put("PROBE_READY_DIR", signals.toString());
-    var process = processBuilder.start();
-    try {
-      assertThat(process.waitFor(10, TimeUnit.SECONDS))
-          .as("interrupted startup finishes after its native process has terminated")
-          .isTrue();
-      assertThat(process.exitValue()).isZero();
-      assertThat(Files.readString(tempDir.resolve("worker.log")))
-          .contains("startup-interrupted=true");
+    processBuilder.environment().put("PROBE_STARTED_FIFO", started.toString());
+    try (var worker = start(processBuilder)) {
+      assertThat(worker.awaitExit())
+          .as(
+              "startup rethrows its interruption with the interrupt flag set"
+                  + " (exit status %d: flag cleared, %d: startup returned)",
+              InterruptedStartup.INTERRUPT_FLAG_CLEARED, InterruptedStartup.STARTUP_RETURNED)
+          .isEqualTo(InterruptedStartup.INTERRUPT_PRESERVED);
       var nativeProcess = ProcessHandle.of(Long.parseLong(Files.readString(pidFile)));
       assertThat(nativeProcess.map(ProcessHandle::isAlive).orElse(false)).isFalse();
     } finally {
-      stop(process);
       stopNativeProcess(pidFile);
     }
   }
@@ -459,11 +429,8 @@ class TranscodeWorkerApplicationIT {
         .ifPresent(command::add);
     command.add("-cp");
     command.add(System.getProperty("java.class.path"));
-    command.add(TranscodeWorkerApplication.class.getName());
-    var process =
-        new ProcessBuilder(command)
-            .redirectErrorStream(true)
-            .redirectOutput(tempDir.resolve("worker.log").toFile());
+    command.add(fixture.mainClass().getName());
+    var process = new ProcessBuilder(command);
     process.environment().keySet().removeIf(key -> key.startsWith("TRANSCODE_WORKER_"));
     process
         .environment()
@@ -484,13 +451,8 @@ class TranscodeWorkerApplicationIT {
     return process;
   }
 
-  private static void stop(Process process) throws InterruptedException {
-    process.destroy();
-    if (!process.waitFor(5, TimeUnit.SECONDS)) {
-      process.destroyForcibly();
-    }
-
-    assertThat(process.waitFor(5, TimeUnit.SECONDS)).as("the worker process terminates").isTrue();
+  private WorkerApplicationProcess start(ProcessBuilder processBuilder) throws IOException {
+    return WorkerApplicationProcess.start(processBuilder, tempDir.resolve("worker.log"));
   }
 
   private static void stopNativeProcess(Path pidFile) throws Exception {
@@ -505,7 +467,7 @@ class TranscodeWorkerApplicationIT {
 
     var process = nativeProcess.orElseThrow();
     process.destroyForcibly();
-    process.onExit().get(5, TimeUnit.SECONDS);
+    process.onExit().get();
   }
 
   private enum UnavailableBinary {
@@ -519,37 +481,71 @@ class TranscodeWorkerApplicationIT {
   }
 
   @Builder
-  private record ApplicationFixture(int port, Path ffprobe) {}
+  private record ApplicationFixture(int port, Path ffprobe, Class<?> mainClass) {
+
+    static ApplicationFixtureBuilder builder() {
+      return new ApplicationFixtureBuilder().mainClass(TranscodeWorkerApplication.class);
+    }
+  }
+
+  public static final class PortReportingStartup {
+
+    private PortReportingStartup() {}
+
+    public static void main(String[] args) {
+      var portFile = new File(System.getenv("WORKER_HTTP_PORT_FILE"));
+      SpringApplication.withHook(
+          application -> {
+            application.addListeners(new WebServerPortFileWriter(portFile));
+            return null;
+          },
+          () -> {
+            TranscodeWorkerApplication.main(args);
+            return null;
+          });
+    }
+  }
 
   public static final class InterruptedStartup {
 
+    static final int INTERRUPT_PRESERVED = 0;
+    static final int INTERRUPT_FLAG_CLEARED = 3;
+    static final int STARTUP_RETURNED = 4;
+
     private InterruptedStartup() {}
 
-    public static void main(String[] args) throws Exception {
-      var signals = Path.of(System.getenv("PROBE_READY_DIR"));
+    public static void main(String[] args) {
+      var started = Path.of(System.getenv("PROBE_STARTED_FIFO"));
       var startup = Thread.currentThread();
-      try (var watcher = signals.getFileSystem().newWatchService()) {
-        signals.register(watcher, StandardWatchEventKinds.ENTRY_CREATE);
-        var interrupter =
-            Thread.ofPlatform()
-                .daemon()
-                .start(
-                    () -> {
-                      try {
-                        watcher.take();
-                        startup.interrupt();
-                      } catch (InterruptedException _) {
-                        Thread.currentThread().interrupt();
-                      }
-                    });
-        try {
-          TranscodeWorkerApplication.main(args);
-          throw new AssertionError("Startup returned without reporting interruption");
-        } catch (InterruptedException _) {
-          System.out.println("startup-interrupted=" + Thread.currentThread().isInterrupted());
-        } finally {
-          interrupter.interrupt();
+      // Opening a FIFO blocks in native code that ignores interrupts, so only a daemon waits there.
+      Thread.ofPlatform()
+          .daemon()
+          .start(
+              () -> {
+                readToEnd(started);
+                startup.interrupt();
+              });
+      System.exit(startupExitStatus(args));
+    }
+
+    private static int startupExitStatus(String[] args) {
+      try {
+        TranscodeWorkerApplication.main(args);
+        return STARTUP_RETURNED;
+      } catch (InterruptedException _) {
+        if (Thread.currentThread().isInterrupted()) {
+          return INTERRUPT_PRESERVED;
         }
+
+        return INTERRUPT_FLAG_CLEARED;
+      }
+    }
+
+    private static void readToEnd(Path fifo) {
+      try {
+        Files.readAllBytes(fifo);
+      } catch (IOException exception) {
+        throw new UncheckedIOException(exception);
       }
     }
   }

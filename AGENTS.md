@@ -213,7 +213,9 @@ read is a check-then-act race. Check and act inside one synchronized section, as
 - Unit tests: `*Test.java`, `@Tag("UnitTest")`
 - Smoke tests: `@Tag("SmokeTest")`; image tests: `*IT.java`, `@Tag("ImageTest")`, image supplied with `-Dworker.image=<image>`
 - Application tests run the real application — as a child JVM (`TranscodeWorkerApplicationIT`) or through `SpringApplicationBuilder` (`WorkerHealthServerIT`) — no test slices (`@WebMvcTest`, etc.)
-- Wait on conditions with Awaitility or a bounded future — never a bare `Thread.sleep`
+- Wait on a hook: a latch, a future, a listener, or a process exit. Use Awaitility only when nothing can be hooked. Never call `Thread.sleep`
+- A wall-clock bound guards against a hang. It is never the asserted outcome unless the requirement is a latency budget. A class-level `@Timeout` can serve as the guard
+- Assert outcomes such as exit codes, state, registration, and health. Never assert log text, except in a redaction test
 - Test naming: `shouldExpectedBehaviorWhenCondition()` + `@DisplayName` in the same human-readable `Should ... when ...` phrasing
 
 ## Twelve-Factor Principles ([12factor.net](https://12factor.net))
