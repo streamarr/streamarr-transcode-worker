@@ -196,7 +196,7 @@ order the worker's command builder passes them.
   keyframe of a later segment has arrived, a segment closes after the fragment in which an audio
   sample of a later segment arrives or the video's decode end runs 1 s past the segment's end. In
   every other recording an audio sample trails the video written before it by at most 0.162 s
-  (04); in 17b the AAC encoder's last two frames arrive 148 s after their segment's video, and
+  (04); in 17b the AAC encoder's last two frames arrive 149 s after their segment's video, and
   the producer drops them: the segment was delivered long before. An audio sample whose
   presentation time runs back behind the one before it fails the attempt with
   `PRESENTATION_TIME_REGRESSED`. `ProducerTest` delivers every recording and checks that the
@@ -259,7 +259,7 @@ Box facts every recording shares (useful for the reader):
 - `moov` holds `mvhd`, two `trak`s (video track 1, audio track 2), `mvex` and `udta`. The video sample entry is `avc1` (libx264 and copies), `av01` (SVT-AV1) or `hvc1` (libx265).
 - Every `traf` has `tfhd` flags `0x02003a` (default-base-is-moof plus default duration, size and flags), `tfdt` version 1 and exactly one `trun`.
 - Every `trun` is version 1 (signed composition offsets) with a data offset. Sync status is carried by `trun` first_sample_flags (0x4) when present, otherwise by the `tfhd` default flags. Per-sample flags (0x400) never occur.
-- The largest fragment is 5.0 KB (17b), and 3.4 KB outside 17 and 17b; every keyframe starts a fragment, except the keyframe at 30.030 s inside 16b's first fragment.
+- The largest fragment is 4.7 KB (17b), and 3.0 KB outside 17 and 17b; every keyframe starts a fragment, except the keyframe at 30.030 s inside 16b's first fragment.
 - In every recording from the start except 5b the first audio `tfdt` is 2^64 − 1024: the unsigned wrap of −1024, the AAC priming. 5b copies the ADTS audio of an MPEG-TS source, which carries no priming frame, so its audio starts at 0.
 
 ## Verified encoders
