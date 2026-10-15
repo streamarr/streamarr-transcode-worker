@@ -720,6 +720,8 @@ class WorkerMediaSmokeTest {
   void shouldStartEveryMediaSegmentWithIdrWhenEncoderIsLibx265() throws Exception {
     var source = sceneCutSource();
     var job = variantJobBuilder();
+    // A 320x180 variant needs H.265 level 2.0.
+    withVideo(job, forcedSoftwareEncode("hevc", 20));
     job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
     job.getDecisionBuilder()
         .setMode(TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE)
@@ -791,6 +793,7 @@ class WorkerMediaSmokeTest {
 
   private static VariantJob.Builder presetJob(Path source, String codecFamily) {
     var job = variantJobBuilder();
+    withVideo(job, forcedSoftwareEncode(codecFamily, TINY_VARIANT_LEVELS.get(codecFamily)));
     job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
     job.getDecisionBuilder()
         .setMode(TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE)
