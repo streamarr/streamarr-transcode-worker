@@ -1367,10 +1367,14 @@ class WorkerMediaSmokeTest {
     // at every preset and only the media bytes show it. The references set the preset through
     // SVT-AV1's own parameter instead of FFmpeg's -preset option, and leave it at the default.
     var arguments = svtAv1ArgumentsWithoutPreset(commands.getFirst());
+    // The worker rebuilds each media segment from FFmpeg's samples, so the uploads carry the
+    // references' packets, not their fragments.
     var preset10 = svtAv1Reference(arguments, ":preset=10");
     var libraryDefault = svtAv1Reference(arguments, "");
-    var uploaded = uploads.contentOf(uploads.names());
-    assertThat(uploaded).isEqualTo(preset10).isNotEqualTo(libraryDefault);
+    var uploaded = FfprobePackets.of(uploads.contentOf(uploads.names()), root);
+    assertThat(uploaded)
+        .isEqualTo(FfprobePackets.of(preset10, root))
+        .isNotEqualTo(FfprobePackets.of(libraryDefault, root));
   }
 
   private static VariantJob.Builder presetJob(Path source, String codecFamily) {
