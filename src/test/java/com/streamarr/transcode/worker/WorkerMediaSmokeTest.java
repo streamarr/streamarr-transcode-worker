@@ -1562,6 +1562,11 @@ class WorkerMediaSmokeTest {
       String container, TranscodeMode mode, int startSequenceNumber) throws Exception {
     var run = runSeekableSourceJob(container, mode, startSequenceNumber);
 
+    var ffmpegBoxes = TopLevelBoxes.of(run.ffmpegOutput());
+    assertThat(ffmpegBoxes).extracting(Box::type).startsWith("ftyp", "moov");
+    assertThat(run.uploads().segments().get("init.mp4"))
+        .as("the initialization segment")
+        .isEqualTo(Arrays.copyOf(run.ffmpegOutput(), ffmpegBoxes.get(1).end()));
     assertThat(run.mediaSegmentNames())
         .isNotEmpty()
         .allSatisfy(
