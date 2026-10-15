@@ -90,10 +90,6 @@ public final class TranscodeWorker implements AutoCloseable {
   private CompletableFuture<Void> disconnected;
   private volatile WorkerResponseObserver responseObserver;
 
-  public TranscodeWorker(TranscodeWorkerConfiguration configuration, FfmpegTranscodeEngine engine) {
-    this(configuration, engine, Optional.empty(), new GrpcWorkerRuntime());
-  }
-
   @Builder
   private TranscodeWorker(
       @NonNull TranscodeWorkerConfiguration configuration,

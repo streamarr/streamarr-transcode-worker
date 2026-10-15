@@ -49,7 +49,10 @@ class TranscodeWorkerTransportIT {
 
     try (var controlPlane = WorkerApplicationControlPlane.builder().build();
         var worker =
-            new TranscodeWorker(configuration, engine(ScriptedProcessLauncher.running()))) {
+            TranscodeWorker.builder()
+                .configuration(configuration)
+                .engine(engine(ScriptedProcessLauncher.running()))
+                .build()) {
       worker.start(networkAddress.getHostAddress(), controlPlane.port());
 
       var registration = controlPlane.awaitRegistration();

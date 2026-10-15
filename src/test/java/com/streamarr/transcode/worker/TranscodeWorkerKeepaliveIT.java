@@ -62,7 +62,10 @@ class TranscodeWorkerKeepaliveIT {
             .keepAliveTime(Duration.ofSeconds(10))
             .keepAliveTimeout(Duration.ofSeconds(2))
             .build();
-    return new TranscodeWorker(configuration, engine(ScriptedProcessLauncher.running()));
+    return TranscodeWorker.builder()
+        .configuration(configuration)
+        .engine(engine(ScriptedProcessLauncher.running()))
+        .build();
   }
 
   private static final class FreezableRelay implements AutoCloseable {

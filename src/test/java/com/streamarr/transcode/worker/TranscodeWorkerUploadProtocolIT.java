@@ -135,7 +135,11 @@ class TranscodeWorkerUploadProtocolIT {
             .build();
 
     try (var server = new ControlPlaneServer(service);
-        var worker = new TranscodeWorker(configuration, engine(launcher))) {
+        var worker =
+            TranscodeWorker.builder()
+                .configuration(configuration)
+                .engine(engine(launcher))
+                .build()) {
       server.start();
       worker.start("localhost", server.port());
       service.dispatch(job);
@@ -182,7 +186,10 @@ class TranscodeWorkerUploadProtocolIT {
   }
 
   private TranscodeWorker worker(FfmpegTranscodeEngine engine, Path mediaRoot) {
-    return new TranscodeWorker(configurationBuilder(mediaRoot).build(), engine);
+    return TranscodeWorker.builder()
+        .configuration(configurationBuilder(mediaRoot).build())
+        .engine(engine)
+        .build();
   }
 
   private static TranscodeWorkerConfiguration.TranscodeWorkerConfigurationBuilder
