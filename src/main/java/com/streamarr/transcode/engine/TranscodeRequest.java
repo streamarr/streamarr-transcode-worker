@@ -13,6 +13,7 @@ public record TranscodeRequest(
     int targetSegmentDuration,
     double framerate,
     @NonNull TranscodeDecision transcodeDecision,
+    EncoderPreset encoderPreset,
     int width,
     int height,
     long bitrate,
@@ -21,6 +22,10 @@ public record TranscodeRequest(
     int mediaSegmentCount) {
 
   public TranscodeRequest {
+    if (encoderPreset == null && encodesVideo(transcodeDecision)) {
+      throw new IllegalArgumentException("A video encode requires an encoder preset");
+    }
+
     if (variantLabel == null) {
       variantLabel = "default";
     }
@@ -28,5 +33,10 @@ public record TranscodeRequest(
     if (attemptId == null) {
       attemptId = UUID.randomUUID();
     }
+  }
+
+  private static boolean encodesVideo(TranscodeDecision decision) {
+    var mode = decision.transcodeMode();
+    return mode != null && mode.encodesVideo();
   }
 }

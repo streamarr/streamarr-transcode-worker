@@ -8,6 +8,7 @@ import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerB
 import static org.assertj.core.api.Assertions.assertThat;
 
 import build.buf.gen.streamarr.transcode.v1.AudioMode;
+import build.buf.gen.streamarr.transcode.v1.EncoderPreset;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptCompleted;
@@ -28,6 +29,7 @@ import com.streamarr.transcode.engine.ProcessLauncher;
 import com.streamarr.transcode.engine.TranscodeCapabilityService;
 import com.streamarr.transcode.probe.FfprobeExecutor;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
+import com.streamarr.transcode.worker.support.X264Options;
 import io.grpc.Server;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.grpc.stub.StreamObserver;
@@ -433,6 +435,90 @@ class WorkerMediaSmokeTest {
                   .as("the HEVC picture types inside %s", segment)
                   .noneMatch(WorkerMediaSmokeTest::isHevcRandomAccessPicture);
             });
+  }
+
+  @Test
+  @DisplayName(
+      "Should write the faster preset's settings into the x264 options when the job carries the"
+          + " faster preset")
+  void shouldWriteTheFasterPresetsSettingsIntoTheX264OptionsWhenTheJobCarriesTheFasterPreset()
+      throws Exception {
+    var source = seekableSource("mkv");
+    var job = presetJob(source, "h264");
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    // x264's own definition of faster; its default, medium, sets ref=3, subme=7, mixed_ref=1,
+    // weightp=2 and rc_lookahead=40.
+    assertThat(X264Options.of(uploads.contentOf(uploads.names())))
+        .contains("ref=2", "subme=4", "mixed_ref=0", "weightp=1", "rc_lookahead=20");
+  }
+
+  @Test
+  @DisplayName(
+      "Should encode the bytes of SVT-AV1 preset 10 when the job carries the faster preset")
+  void shouldEncodeTheBytesOfSvtAv1Preset10WhenTheJobCarriesTheFasterPreset() throws Exception {
+    var source = seekableSource("mkv");
+    var job = presetJob(source, "av1");
+    var commands = new CopyOnWriteArrayList<List<String>>();
+    ProcessLauncher launcher = new ProcessBuilderLauncher();
+    launcher = withSvtAv1ParallelismOfOne(capturingCommands(launcher, commands));
+
+    var uploads =
+        execute(engine(softwareCapabilities(), launcher), source.getParent(), job.build());
+
+    // SVT-AV1 writes no preset into its sequence header, so the initialization segment is the same
+    // at every preset and only the media bytes show it. The references set the preset through
+    // SVT-AV1's own parameter instead of FFmpeg's -preset option, and leave it at the default.
+    var arguments = svtAv1ArgumentsWithoutPreset(commands.getFirst());
+    var preset10 = svtAv1Reference(arguments, ":preset=10");
+    var libraryDefault = svtAv1Reference(arguments, "");
+    var uploaded = uploads.contentOf(uploads.names());
+    assertThat(uploaded).isEqualTo(preset10).isNotEqualTo(libraryDefault);
+  }
+
+  private static VariantJob.Builder presetJob(Path source, String codecFamily) {
+    var job = variantJobBuilder();
+    job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
+    job.getDecisionBuilder()
+        .setMode(TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE)
+        .setVideoCodecFamily(codecFamily)
+        .getAudioBuilder()
+        .setMode(AudioMode.AUDIO_MODE_NONE);
+    job.getVariantBuilder()
+        .setWidth(64)
+        .setHeight(36)
+        .setBitrateBitsPerSecond(100_000)
+        .setEncoderPreset(EncoderPreset.ENCODER_PRESET_FASTER);
+    job.getExecutionBuilder().setMediaSegmentCount(SEEKABLE_SOURCE_SEGMENT_COUNT);
+    return job;
+  }
+
+  private static ProcessLauncher capturingCommands(
+      ProcessLauncher launcher, List<List<String>> commands) {
+    return (command, jobAttemptId) -> {
+      commands.add(List.copyOf(command));
+      return launcher.launch(command, jobAttemptId);
+    };
+  }
+
+  // The worker's arguments between "ffmpeg -y" and its pipe:1 output, without its -preset option.
+  private static List<String> svtAv1ArgumentsWithoutPreset(List<String> command) {
+    var arguments = new ArrayList<>(command.subList(2, command.size() - 1));
+    var preset = arguments.indexOf("-preset");
+    assertThat(preset).as("the position of the worker's -preset option").isNotNegative();
+    assertThat(arguments.subList(preset, preset + 2)).containsExactly("-preset", "10");
+    arguments.subList(preset, preset + 2).clear();
+    return arguments;
+  }
+
+  private byte[] svtAv1Reference(List<String> arguments, String addedParameters) throws Exception {
+    var adjusted = new ArrayList<>(arguments);
+    var parameters = adjusted.indexOf("-svtav1-params") + 1;
+    adjusted.set(parameters, adjusted.get(parameters) + addedParameters);
+    var output = Files.createTempFile(root, "reference", ".mp4");
+    runFfmpeg(adjusted, output);
+    return Files.readAllBytes(output);
   }
 
   // 18 s at 30 fps: a test pattern for 2.5 s, then color bars. The cut at frame 75 lies inside

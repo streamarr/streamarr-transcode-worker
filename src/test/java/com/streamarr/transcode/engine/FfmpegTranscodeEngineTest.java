@@ -91,6 +91,7 @@ class FfmpegTranscodeEngineTest {
                         .build())
                 .subtitleDecision(SubtitleDecisions.EXCLUDED)
                 .build())
+        .encoderPreset(EncoderPreset.FASTER)
         .width(1920)
         .height(1080)
         .bitrate(5_000_000L);

@@ -48,6 +48,7 @@ class FfmpegCommandBuilderTest {
         .framerate(23.976)
         .mediaSegmentCount(11)
         .transcodeDecision(decision)
+        .encoderPreset(EncoderPreset.FASTER)
         .width(1920)
         .height(1080)
         .bitrate(5_000_000L);
@@ -98,6 +99,105 @@ class FfmpegCommandBuilderTest {
         .containsSubsequence("-c:a", "copy")
         .doesNotContain("-vf")
         .doesNotContain("-b:v", "-maxrate", "-bufsize");
+  }
+
+  @ParameterizedTest(name = "{0} is {1}")
+  @MethodSource("presetNames")
+  @DisplayName("Should pass the preset name when the encoder is libx264")
+  void shouldPassPresetNameWhenEncoderIsLibx264(EncoderPreset preset, String presetName) {
+    var request = request(TranscodeMode.FULL_TRANSCODE).encoderPreset(preset).build();
+
+    var cmd = command(request, "libx264");
+
+    assertThat(cmd)
+        .containsSequence("-c:v", "libx264", "-preset", presetName)
+        .containsOnlyOnce("-preset");
+  }
+
+  @ParameterizedTest(name = "{0} is {1}")
+  @MethodSource("presetNames")
+  @DisplayName("Should pass the preset name when the encoder is libx265")
+  void shouldPassPresetNameWhenEncoderIsLibx265(EncoderPreset preset, String presetName) {
+    var request = request(TranscodeMode.FULL_TRANSCODE).encoderPreset(preset).build();
+
+    var cmd = command(request, "libx265");
+
+    assertThat(cmd)
+        .containsSequence("-c:v", "libx265", "-preset", presetName)
+        .containsOnlyOnce("-preset");
+  }
+
+  @ParameterizedTest(name = "{0} is preset {1}")
+  @CsvSource({
+    "VERYSLOW, 5",
+    "SLOWER, 6",
+    "SLOW, 7",
+    "MEDIUM, 8",
+    "FAST, 9",
+    "FASTER, 10",
+    "VERYFAST, 11",
+    "SUPERFAST, 12",
+    "ULTRAFAST, 13"
+  })
+  @DisplayName("Should pass the scale number when the encoder is libsvtav1")
+  void shouldPassScaleNumberWhenEncoderIsLibsvtav1(EncoderPreset preset, String svtAv1Preset) {
+    var request = request(TranscodeMode.FULL_TRANSCODE).encoderPreset(preset).build();
+
+    var cmd = command(request, "libsvtav1");
+
+    assertThat(cmd)
+        .containsSequence("-c:v", "libsvtav1", "-preset", svtAv1Preset)
+        .containsOnlyOnce("-preset");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(
+      strings = {
+        "h264_nvenc",
+        "hevc_nvenc",
+        "av1_nvenc",
+        "h264_qsv",
+        "hevc_qsv",
+        "av1_qsv",
+        "h264_amf",
+        "hevc_amf",
+        "av1_amf",
+        "h264_rkmpp",
+        "hevc_rkmpp",
+        "h264_videotoolbox",
+        "hevc_videotoolbox",
+        "h264_vaapi"
+      })
+  @DisplayName("Should pass no preset when the encoder is hardware")
+  void shouldPassNoPresetWhenEncoderIsHardware(String hardwareEncoder) {
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), hardwareEncoder);
+
+    assertThat(cmd).contains(hardwareEncoder).doesNotContain("-preset");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"REMUX", "AUDIO_TRANSCODE"})
+  @DisplayName("Should pass no preset when the job copies the video")
+  void shouldPassNoPresetWhenJobCopiesTheVideo(TranscodeMode mode) {
+    var cmd = command(request(mode).build(), "copy");
+
+    assertThat(cmd).containsSequence("-c:v", "copy").doesNotContain("-preset");
+  }
+
+  // libx264 and libx265 take the scale's own names.
+  static Stream<Arguments> presetNames() {
+    return Stream.of(
+        Arguments.of(EncoderPreset.ULTRAFAST, "ultrafast"),
+        Arguments.of(EncoderPreset.SUPERFAST, "superfast"),
+        Arguments.of(EncoderPreset.VERYFAST, "veryfast"),
+        Arguments.of(EncoderPreset.FASTER, "faster"),
+        Arguments.of(EncoderPreset.FAST, "fast"),
+        Arguments.of(EncoderPreset.MEDIUM, "medium"),
+        Arguments.of(EncoderPreset.SLOW, "slow"),
+        Arguments.of(EncoderPreset.SLOWER, "slower"),
+        Arguments.of(EncoderPreset.VERYSLOW, "veryslow"));
   }
 
   @ParameterizedTest(name = "{0}")

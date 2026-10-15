@@ -32,16 +32,26 @@ public class FfmpegCommandBuilder {
       Map.ofEntries(
           Map.entry(
               "libx264",
-              traits().keyframeVerified(true).disablesSceneCutsByThreshold(true).build()),
+              traits()
+                  .keyframeVerified(true)
+                  .takesPresetName(true)
+                  .disablesSceneCutsByThreshold(true)
+                  .build()),
           Map.entry(
               "libsvtav1",
               traits()
                   .keyframeVerified(true)
+                  .takesSvtAv1PresetNumber(true)
                   .fixedGop(true)
                   .capsBitrateOnlyInCrfMode(true)
                   .build()),
           Map.entry(
-              "libx265", traits().keyframeVerified(true).closesGopsByX265Parameters(true).build()),
+              "libx265",
+              traits()
+                  .keyframeVerified(true)
+                  .takesPresetName(true)
+                  .closesGopsByX265Parameters(true)
+                  .build()),
           Map.entry("h264_nvenc", FIXED_GOP),
           Map.entry("hevc_nvenc", FIXED_GOP),
           Map.entry("av1_nvenc", FIXED_GOP),
@@ -149,8 +159,22 @@ public class FfmpegCommandBuilder {
     }
 
     cmd.addAll(List.of("-c:v", job.videoEncoder()));
+    addPresetArgs(cmd, job);
     addScaleAndBitrateArgs(cmd, job);
     addAudioArgs(cmd, decision.audioDecision());
+  }
+
+  // Hardware encoders take no preset until the preset scale has rows for them (ADR 0044).
+  private static void addPresetArgs(List<String> cmd, TranscodeJob job) {
+    var traits = traitsOf(job);
+    if (traits.takesPresetName()) {
+      cmd.addAll(List.of("-preset", job.request().encoderPreset().scaleName()));
+      return;
+    }
+
+    if (traits.takesSvtAv1PresetNumber()) {
+      cmd.addAll(List.of("-preset", String.valueOf(job.request().encoderPreset().svtAv1Preset())));
+    }
   }
 
   private void addAudioArgs(List<String> cmd, AudioDecision audio) {
@@ -305,6 +329,8 @@ public class FfmpegCommandBuilder {
   @Builder
   private record EncoderTraits(
       boolean keyframeVerified,
+      boolean takesPresetName,
+      boolean takesSvtAv1PresetNumber,
       boolean fixedGop,
       boolean disablesSceneCutsByThreshold,
       boolean closesGopsByX265Parameters,

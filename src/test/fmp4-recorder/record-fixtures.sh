@@ -51,9 +51,11 @@ BOUNDARIES=@BOUNDARIES@
 # reorder packets and crowd keyframes, so no recording shows that bug.
 DET=(-threads 1)
 
-X264=(-c:v libx264 -vf scale=-2:36,format=yuv420p -b:v 6000 -maxrate 6000 -bufsize 12000)
-SVT=(-c:v libsvtav1 -vf scale=-2:36,format=yuv420p -crf 35 -maxrate 6000 -svtav1-params mbr-overshoot-pct=0:lp=1)
-X265=(-c:v libx265 -vf scale=-2:36,format=yuv420p -b:v 6000 -maxrate 6000 -bufsize 12000)
+# Each encoder runs at the preset that Automatic resolves to (ADR 0044): faster for libx264, its
+# scale number 10 for SVT-AV1, and veryfast for libx265.
+X264=(-c:v libx264 -preset faster -vf scale=-2:36,format=yuv420p -b:v 6000 -maxrate 6000 -bufsize 12000)
+SVT=(-c:v libsvtav1 -preset 10 -vf scale=-2:36,format=yuv420p -crf 35 -maxrate 6000 -svtav1-params mbr-overshoot-pct=0:lp=1)
+X265=(-c:v libx265 -preset veryfast -vf scale=-2:36,format=yuv420p -b:v 6000 -maxrate 6000 -bufsize 12000)
 # The worker's libx265 parameters, which close its GOPs and turn off its scene cuts, followed by the
 # fixture-only ones that keep it single-threaded and quiet. FFmpeg keeps only the last -x265-params,
 # so the fixture-only keys join the worker's string instead of passing a second option.
