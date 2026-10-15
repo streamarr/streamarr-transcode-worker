@@ -8,6 +8,7 @@ import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variant
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import build.buf.gen.streamarr.transcode.v1.AudioMode;
 import build.buf.gen.streamarr.transcode.v1.EncoderPreset;
@@ -134,6 +135,12 @@ class WorkerMediaSmokeTest {
   // allows 80 kb/s at level 1.0, H.265 1.0 and AV1 2.0.
   private static final Map<String, Integer> TINY_VARIANT_LEVELS =
       Map.of("h264", 11, "hevc", 10, "av1", 20);
+
+  // The sample-entry sources span segments 0 and 1 at a 1 s period, with a keyframe every second.
+  private static final int SAMPLE_ENTRY_SOURCE_SECONDS = 2;
+  private static final String DOLBY_VISION_FIXTURE = "dolby-vision-8.2-dvh1.mp4";
+  // The fixture's 10-bit base layer: Main 10 at level 2.0 in the Main tier.
+  private static final String DOLBY_VISION_BASE_LAYER_CODEC_STRING = "hvc1.2.4.L60.90";
 
   private static final Duration JOB_LIMIT = Duration.ofMinutes(5);
   private static final String EMPTY_EDIT_SOURCE = "mp4-empty-edit.mp4";
@@ -599,6 +606,257 @@ class WorkerMediaSmokeTest {
     assertThat(failure.failure().getFailure())
         .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_OUTPUT_MISMATCH);
     assertThat(failure.uploads().names()).isEmpty();
+  }
+
+  @ParameterizedTest(name = "{0} source")
+  @ValueSource(strings = {"mp4", "mkv", "ts"})
+  @DisplayName("Should write hvc1 when a worker copies libx265 HEVC from a real source")
+  void shouldWriteHvc1WhenAWorkerCopiesLibx265HevcFromARealSource(String container)
+      throws Exception {
+    // libx265 at 64x36 writes Main at level 1.0. FFmpeg's mp4 muxer writes its own default, hev1,
+    // for this MP4 source and for every copy of HEVC from Matroska or MPEG-TS.
+    var source = root.resolve("hevc." + container);
+    runFfmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=64x36:rate=24:duration=" + SAMPLE_ENTRY_SOURCE_SECONDS,
+            "-c:v",
+            "libx265",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+            "-x265-params",
+            "keyint=24:min-keyint=24:scenecut=0:log-level=error"),
+        source);
+
+    var media = copiedMedia(source, "hvc1.1.6.L30.90");
+
+    assertThat(videoStreamFields(media, "codec_tag_string"))
+        .containsEntry("codec_tag_string", "hvc1");
+  }
+
+  // Sources whose parameter sets travel only in the samples, under the sample entry that the
+  // source names: hev1 and avc3 as GPAC wrote them, and dvhe and dvav renamed from them.
+  @ParameterizedTest(name = "{1} source")
+  @CsvSource({
+    "hev1-parameter-sets-in-samples.mp4, hev1, hvc1.1.6.L30.90, hvc1",
+    "hev1-parameter-sets-in-samples.mp4, dvhe, hvc1.1.6.L30.90, hvc1",
+    "avc3-parameter-sets-in-samples.mp4, avc3, avc1.42C00A, avc1",
+    "avc3-parameter-sets-in-samples.mp4, dvav, avc1.42C00A, avc1"
+  })
+  @DisplayName(
+      "Should move the source's parameter sets into the record of every attempt when the source"
+          + " carries them only in its samples")
+  void
+      shouldMoveTheSourcesParameterSetsIntoTheRecordOfEveryAttemptWhenTheSourceCarriesThemOnlyInItsSamples(
+          String fixture, String sourceSampleEntry, String codecString, String sampleEntry)
+          throws Exception {
+    var source = sampleEntryFixture(fixture, sourceSampleEntry);
+    var fromStart = sampleEntryCopyJob(source, codecString);
+    var replacement = sampleEntryCopyJob(source, codecString);
+    replacement.getExecutionBuilder().setStartSequenceNumber(1);
+
+    // The producer refuses a record that lacks the parameter sets its sample entry promises, so
+    // each attempt completes only when FFmpeg moved them into the record.
+    var fromStartUploads = execute(engine(realCapabilities()), root, fromStart.build());
+    var replacementUploads = execute(engine(realCapabilities()), root, replacement.build());
+
+    var media = playable(fromStartUploads.contentOf(fromStartUploads.names()));
+    assertDecodes(media);
+    assertThat(videoStreamFields(media, "codec_tag_string"))
+        .containsEntry("codec_tag_string", sampleEntry);
+    assertThat(replacementUploads.segments())
+        .as("the replacement attempt's initialization segment")
+        .containsEntry("init.mp4", fromStartUploads.segments().get("init.mp4"));
+  }
+
+  @Test
+  @DisplayName("Should write avc1 when a worker copies H.264 from a dva1 source")
+  void shouldWriteAvc1WhenAWorkerCopiesH264FromADva1Source() throws Exception {
+    var avc1 = root.resolve("avc1.mp4");
+    runFfmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=64x36:rate=24:duration=" + SAMPLE_ENTRY_SOURCE_SECONDS,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+            "-g",
+            "24"),
+        avc1);
+    var source = withSampleEntry(Files.readAllBytes(avc1), "avc1", "dva1", "dva1.mp4");
+
+    var media = copiedMedia(source, "avc1.42C00A");
+
+    assertThat(videoStreamFields(media, "codec_tag_string"))
+        .containsEntry("codec_tag_string", "avc1");
+  }
+
+  // The committed Dolby Vision profile 8.2 fixture: 10-bit HEVC under dvh1, with its configuration
+  // record and an RPU after every frame.
+  @Test
+  @DisplayName(
+      "Should copy every RPU under hvc1 with the base layer's codec string when a worker copies"
+          + " Dolby Vision profile 8.2")
+  void shouldCopyEveryRpuUnderHvc1WithTheBaseLayersCodecStringWhenAWorkerCopiesDolbyVision82()
+      throws Exception {
+    var source = sampleEntryFixture(DOLBY_VISION_FIXTURE, "dvh1");
+
+    // The job completes only when the copy declares the base layer's codec string.
+    var media = copiedMedia(source, DOLBY_VISION_BASE_LAYER_CODEC_STRING);
+
+    assertThat(videoStreamFields(media, "codec_tag_string,profile,pix_fmt"))
+        .containsExactlyInAnyOrderEntriesOf(
+            Map.of("codec_tag_string", "hvc1", "profile", "Main 10", "pix_fmt", "yuv420p10le"));
+    assertThat(frameSideDataPerFrame(media))
+        .hasSize(SAMPLE_ENTRY_SOURCE_SECONDS * 24)
+        .allSatisfy(sideData -> assertThat(sideData).contains("Dolby Vision RPU Data"));
+  }
+
+  // ADR 0013 accepts this loss: the locked FFmpeg's mp4 muxer drops the configuration record of a
+  // 10-bit profile 8.2 copy even under -strict unofficial. Other builds may keep it, so only the
+  // locked Jellyfin build is held to the loss.
+  @Test
+  @DisplayName(
+      "Should drop the Dolby Vision configuration record when the locked FFmpeg copies Dolby"
+          + " Vision profile 8.2")
+  void shouldDropTheDolbyVisionConfigurationRecordWhenTheLockedFfmpegCopiesDolbyVision82()
+      throws Exception {
+    assumeTrue(
+        runToCompletion(List.of("ffmpeg", "-version"))
+            .lines()
+            .findFirst()
+            .orElseThrow()
+            .contains("-Jellyfin"),
+        "the FFmpeg on PATH is not the locked Jellyfin build");
+    var source = sampleEntryFixture(DOLBY_VISION_FIXTURE, "dvh1");
+    assertThat(streamSideData(source)).contains("DOVI configuration record");
+
+    var media = copiedMedia(source, DOLBY_VISION_BASE_LAYER_CODEC_STRING);
+
+    assertThat(streamSideData(media)).doesNotContain("DOVI configuration record");
+  }
+
+  // Copies the source on 1 s segments as one attempt from the start, and returns the delivered
+  // initialization segment and media segments as one file.
+  private Path copiedMedia(Path source, String codecString) throws Exception {
+    var uploads =
+        execute(engine(realCapabilities()), root, sampleEntryCopyJob(source, codecString).build());
+
+    assertThat(uploads.names()).containsExactlyElementsOf(uploadNames(SAMPLE_ENTRY_SOURCE_SECONDS));
+    var media = playable(uploads.contentOf(uploads.names()));
+    assertDecodes(media);
+    return media;
+  }
+
+  private static VariantJob.Builder sampleEntryCopyJob(Path source, String codecString) {
+    var family = VideoCodecFamily.VIDEO_CODEC_FAMILY_HEVC;
+    if (codecString.startsWith("avc1")) {
+      family = VideoCodecFamily.VIDEO_CODEC_FAMILY_H264;
+    }
+
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_REMUX);
+    withVideo(job, copiedVideo(codecString).setCodecFamily(family));
+    job.getDecisionBuilder()
+        .setVideoCodecFamily("")
+        .getAudioBuilder()
+        .setMode(AudioMode.AUDIO_MODE_NONE);
+    job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(1)
+        .setMediaSegmentCount(SAMPLE_ENTRY_SOURCE_SECONDS);
+    return job;
+  }
+
+  // A committed fixture from src/test/resources/sample-entries, written into the source root under
+  // the requested sample entry.
+  private Path sampleEntryFixture(String fixture, String sampleEntry) throws Exception {
+    var resource = getClass().getResource("/sample-entries/" + fixture);
+    assertThat(resource).as("fixture %s", fixture).isNotNull();
+    var bytes = Files.readAllBytes(Path.of(resource.toURI()));
+    var written = sampleEntryTypeOf(bytes);
+    return withSampleEntry(bytes, written, sampleEntry, sampleEntry + "-" + fixture);
+  }
+
+  // Writes the MP4 into the source root with the type of its one sample entry renamed.
+  private Path withSampleEntry(byte[] mp4, String from, String to, String fileName)
+      throws Exception {
+    assertThat(sampleEntryTypeOf(mp4)).isEqualTo(from);
+    var renamed = mp4.clone();
+    var type = to.getBytes(StandardCharsets.US_ASCII);
+    System.arraycopy(type, 0, renamed, sampleEntryTypeIndex(mp4), type.length);
+    var source = root.resolve(fileName);
+    Files.write(source, renamed);
+    return source;
+  }
+
+  private static String sampleEntryTypeOf(byte[] mp4) {
+    var at = sampleEntryTypeIndex(mp4);
+    return new String(mp4, at, 4, StandardCharsets.US_ASCII);
+  }
+
+  // The stsd box's type, version and flags, and entry count come before its first sample entry's
+  // size and type.
+  private static int sampleEntryTypeIndex(byte[] mp4) {
+    var stsd = indexOf(mp4, "stsd".getBytes(StandardCharsets.US_ASCII));
+    assertThat(stsd).as("the stsd box").isNotNegative();
+    return stsd + 16;
+  }
+
+  private static int indexOf(byte[] bytes, byte[] target) {
+    for (var at = 0; at + target.length <= bytes.length; at++) {
+      if (Arrays.equals(bytes, at, at + target.length, target, 0, target.length)) {
+        return at;
+      }
+    }
+
+    return -1;
+  }
+
+  private static List<String> streamSideData(Path media) throws Exception {
+    return runToCompletion(
+            List.of(
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream_side_data=side_data_type",
+                "-of",
+                "csv=p=0",
+                media.toString()))
+        .lines()
+        .map(String::strip)
+        .filter(line -> !line.isEmpty())
+        .toList();
+  }
+
+  // Each decoded frame's side data types, as one comma-separated line per frame.
+  private static List<String> frameSideDataPerFrame(Path media) throws Exception {
+    return runToCompletion(
+            List.of(
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "frame=pict_type:frame_side_data=side_data_type",
+                "-of",
+                "csv=p=0",
+                media.toString()))
+        .lines()
+        .filter(line -> !line.isBlank())
+        .toList();
   }
 
   // The fields of the first video stream that ffprobe reports, by name.
