@@ -82,8 +82,10 @@ public final class QueuedProbeExecutor extends AbstractExecutorService {
     shutdown();
     closing.complete(null);
     try {
-      // The test class's timeout guards this wait.
-      assertThat(awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS))
+      // A hang guard: a JUnit timeout interrupts only once, and a wait in the test body may
+      // already have consumed that interrupt. The worker's close also runs this wait on threads
+      // that the timeout never interrupts.
+      assertThat(awaitTermination(1, TimeUnit.MINUTES))
           .as("all probe tasks finish before their scope closes")
           .isTrue();
     } catch (InterruptedException exception) {
