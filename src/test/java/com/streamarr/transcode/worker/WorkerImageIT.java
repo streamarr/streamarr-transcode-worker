@@ -31,6 +31,8 @@ import build.buf.gen.streamarr.transcode.v1.WorkerVerifiedVideoEncoder;
 import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.command.WaitContainerResultCallback;
 import com.streamarr.transcode.fixtures.image.ImageControlPlane;
+import com.streamarr.transcode.worker.support.FfprobePackets;
+import com.streamarr.transcode.worker.support.FfprobePackets.Packet;
 import com.streamarr.transcode.worker.support.X264Options;
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -44,7 +46,6 @@ import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
@@ -252,12 +253,18 @@ class WorkerImageIT {
       // SVT-AV1 writes no preset into its sequence header, so only the media bytes show it. The
       // references set the preset through SVT-AV1's own parameter instead of FFmpeg's -preset
       // option, and leave it at the library default.
-      var uploaded = image.command("segment", new byte[0]);
+      // The worker rebuilds each media segment from FFmpeg's samples, so the upload carries the
+      // references' leading packets, not their fragments.
+      Files.write(media.resolve("uploaded.mp4"), image.command("segment", new byte[0]));
+      var uploaded = image.packetsOf("/media/uploaded.mp4");
       var arguments = svtAv1ArgumentsWithoutPreset(image.recordedArguments("ffmpeg"), "13");
-      var preset13 = image.svtAv1Reference(arguments, ":preset=13");
-      var libraryDefault = image.svtAv1Reference(arguments, "");
-      assertThat(Arrays.copyOf(preset13, uploaded.length)).isEqualTo(uploaded);
-      assertThat(Arrays.copyOf(libraryDefault, uploaded.length)).isNotEqualTo(uploaded);
+      var preset13 = image.svtAv1ReferencePackets(arguments, ":preset=13");
+      var libraryDefault = image.svtAv1ReferencePackets(arguments, "");
+      assertThat(uploaded).isNotEmpty();
+      assertThat(preset13).hasSizeGreaterThanOrEqualTo(uploaded.size());
+      assertThat(libraryDefault).hasSizeGreaterThanOrEqualTo(uploaded.size());
+      assertThat(preset13.subList(0, uploaded.size())).isEqualTo(uploaded);
+      assertThat(libraryDefault.subList(0, uploaded.size())).isNotEqualTo(uploaded);
     }
   }
 
@@ -741,7 +748,7 @@ class WorkerImageIT {
       return List.of(arguments.split("\\x00"));
     }
 
-    private byte[] svtAv1Reference(List<String> arguments, String addedParameters)
+    private List<Packet> svtAv1ReferencePackets(List<String> arguments, String addedParameters)
         throws Exception {
       var command = new ArrayList<>(List.of("/cnb/lifecycle/launcher", "ffmpeg", "-y"));
       command.addAll(arguments);
@@ -751,13 +758,19 @@ class WorkerImageIT {
       command.add("/tmp/reference.mp4");
       var encode = worker.execInContainer(command.toArray(String[]::new));
       assertThat(encode.getExitCode()).as(encode.getStderr()).isZero();
-      var reference = Files.createTempFile("svtav1-reference", ".mp4");
-      try {
-        worker.copyFileFromContainer("/tmp/reference.mp4", reference.toString());
-        return Files.readAllBytes(reference);
-      } finally {
-        Files.delete(reference);
-      }
+      return packetsOf("/tmp/reference.mp4");
+    }
+
+    // The launcher writes its own lines to standard output, so ffprobe writes to a file.
+    private List<Packet> packetsOf(String path) throws Exception {
+      var command = new ArrayList<>(List.of("/cnb/lifecycle/launcher", "ffprobe"));
+      command.addAll(FfprobePackets.listingArguments());
+      command.addAll(List.of("-o", "/tmp/packets.csv", path));
+      var probe = worker.execInContainer(command.toArray(String[]::new));
+      assertThat(probe.getExitCode()).as(probe.getStderr()).isZero();
+      var listing = worker.execInContainer("cat", "/tmp/packets.csv");
+      assertThat(listing.getExitCode()).as(listing.getStderr()).isZero();
+      return FfprobePackets.parse(listing.getStdout());
     }
 
     private HttpResponse<String> health(String group) throws Exception {

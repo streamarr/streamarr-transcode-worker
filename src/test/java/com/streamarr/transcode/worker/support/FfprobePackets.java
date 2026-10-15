@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -23,18 +24,12 @@ public final class FfprobePackets {
     var file = Files.createTempFile(directory, "probed", ".mp4");
     Files.write(file, output);
     var listing = Files.createTempFile(directory, "packets", ".csv");
+    var command = new ArrayList<String>();
+    command.add("ffprobe");
+    command.addAll(listingArguments());
+    command.add(file.toString());
     var process =
-        new ProcessBuilder(
-                "ffprobe",
-                "-v",
-                "error",
-                "-show_entries",
-                "packet=stream_index,pts,dts,duration,size,flags,data_hash",
-                "-show_data_hash",
-                "sha256",
-                "-of",
-                "csv=p=0",
-                file.toString())
+        new ProcessBuilder(command)
             .redirectErrorStream(true)
             .redirectOutput(listing.toFile())
             .start();
@@ -48,10 +43,31 @@ public final class FfprobePackets {
       process.destroyForcibly();
     }
 
-    return Files.readAllLines(listing).stream()
-        .filter(line -> !line.isBlank())
-        .map(Packet::parse)
-        .toList();
+    return parse(Files.readString(listing));
+  }
+
+  /**
+   * Every packet of a listing that ffprobe wrote with the entries and data hash that {@link #of}
+   * asks for.
+   */
+  public static List<Packet> parse(String listing) {
+    return listing.lines().filter(line -> !line.isBlank()).map(Packet::parse).toList();
+  }
+
+  /**
+   * The ffprobe arguments that list each packet's entries and data hash as {@link #parse} reads
+   * them.
+   */
+  public static List<String> listingArguments() {
+    return List.of(
+        "-v",
+        "error",
+        "-show_entries",
+        "packet=stream_index,pts,dts,duration,size,flags,data_hash",
+        "-show_data_hash",
+        "sha256",
+        "-of",
+        "csv=p=0");
   }
 
   /**
