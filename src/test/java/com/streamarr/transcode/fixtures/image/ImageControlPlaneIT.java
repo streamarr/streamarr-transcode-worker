@@ -27,6 +27,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 import lombok.Builder;
+import lombok.NonNull;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -81,7 +82,7 @@ class ImageControlPlaneIT {
   @DisplayName("Should report the terminal outcome when the expected job result cannot arrive")
   void shouldReportTheTerminalOutcomeWhenTheExpectedJobResultCannotArrive(JobOutcome outcome)
       throws Exception {
-    try (var peer = WorkerPeer.builder().port(controlPlane.grpcAddress().getPort()).build()) {
+    try (var peer = WorkerPeer.builder().address(controlPlane.grpcAddress()).build()) {
       post("accept", new byte[0]);
       var response =
           http.sendAsync(
@@ -151,7 +152,7 @@ class ImageControlPlaneIT {
     var waitingForRegistration = outcome.command().equals("registration");
     try (var peer =
         WorkerPeer.builder()
-            .port(controlPlane.grpcAddress().getPort())
+            .address(controlPlane.grpcAddress())
             .withoutRegistration(waitingForRegistration)
             .build()) {
       if (!waitingForRegistration) {
@@ -212,8 +213,8 @@ class ImageControlPlaneIT {
     private final StreamObserver<EstablishWorkerSessionRequest> requests;
 
     @Builder
-    private WorkerPeer(int port, boolean withoutRegistration) {
-      channel = NettyChannelBuilder.forAddress("127.0.0.1", port).usePlaintext().build();
+    private WorkerPeer(@NonNull InetSocketAddress address, boolean withoutRegistration) {
+      channel = NettyChannelBuilder.forAddress(address).usePlaintext().build();
       requests =
           TranscodeWorkerServiceGrpc.newStub(channel)
               .establishWorkerSession(
