@@ -52,14 +52,16 @@ BOUNDARIES=@BOUNDARIES@
 DET=(-threads 1)
 
 # Each encoder runs at the preset that Automatic resolves to (ADR 0044): faster for libx264, its
-# scale number 10 for SVT-AV1, and veryfast for libx265.
-X264=(-c:v libx264 -preset faster -vf scale=-2:36,format=yuv420p -b:v 6000 -maxrate 6000 -bufsize 12000)
-SVT=(-c:v libsvtav1 -preset 10 -vf scale=-2:36,format=yuv420p -crf 35 -maxrate 6000 -svtav1-params mbr-overshoot-pct=0:lp=1)
-X265=(-c:v libx265 -preset veryfast -vf scale=-2:36,format=yuv420p -b:v 6000 -maxrate 6000 -bufsize 12000)
-# The worker's libx265 parameters, which close its GOPs and turn off its scene cuts, followed by the
-# fixture-only ones that keep it single-threaded and quiet. FFmpeg keeps only the last -x265-params,
-# so the fixture-only keys join the worker's string instead of passing a second option.
-X265_PARAMS=(-x265-params no-scenecut=1:no-open-gop=1:pools=none:frame-threads=1:log-level=error)
+# scale number 10 for SVT-AV1, and veryfast for libx265. Each encode forces the codec profile, tier
+# and level that a job carries. For 64x36 at 23.976 fps these are H.264 1.0, AV1 2.0 and H.265 1.0.
+X264=(-c:v libx264 -preset faster -profile:v high -level:v 10 -vf scale=-2:36,format=yuv420p -b:v 6000 -maxrate 6000 -bufsize 12000)
+SVT=(-c:v libsvtav1 -preset 10 -level:v 20 -vf scale=-2:36,format=yuv420p -crf 35 -maxrate 6000 -svtav1-params mbr-overshoot-pct=0:lp=1)
+X265=(-c:v libx265 -preset veryfast -profile:v main -vf scale=-2:36,format=yuv420p -b:v 6000 -maxrate 6000 -bufsize 12000)
+# The worker's libx265 parameters, which close its GOPs, turn off its scene cuts and force the level
+# and Main tier, followed by the fixture-only ones that keep it single-threaded and quiet. FFmpeg
+# keeps only the last -x265-params, so the fixture-only keys join the worker's string instead of
+# passing a second option.
+X265_PARAMS=(-x265-params no-scenecut=1:no-open-gop=1:level-idc=10:high-tier=0:pools=none:frame-threads=1:log-level=error)
 AAC=(-c:a aac -ac 1 -b:a 8k)
 # The worker declares a copied stream's bitrate unknown (-b:a 0): the mp4 muxer would otherwise write
 # the demuxer's measurement, which a seek into an MPEG-TS source changes, into the initialization segment.

@@ -25,6 +25,11 @@ final class WorkerVariantJobMapper {
     this.sourceResolver = sourceResolver;
   }
 
+  /**
+   * @throws InvalidJobSpecificationException when the job names no transcode, audio or subtitle
+   *     mode, or when its video decision is missing, contradicts the rest of the job, or lacks a
+   *     value that the worker forces or checks
+   */
   TranscodeRequest map(VariantJob job) {
     var variant = job.getVariant();
     var execution = job.getExecution();
@@ -60,12 +65,35 @@ final class WorkerVariantJobMapper {
   @SuppressWarnings("checkstyle:fullyQualifiedName")
   private TranscodeDecision decision(
       build.buf.gen.streamarr.transcode.v1.TranscodeDecision decision) {
+    var mode = mode(decision.getMode());
     return TranscodeDecision.builder()
-        .transcodeMode(mode(decision.getMode()))
-        .videoCodecFamily(decision.getVideoCodecFamily())
+        .transcodeMode(mode)
+        .videoCodecFamily(codecFamily(decision))
+        .videoDecision(VideoDecisions.of(decision, mode))
         .audioDecision(audio(decision.getAudio()))
         .subtitleDecision(subtitle(decision.getSubtitle()))
         .build();
+  }
+
+  // The video decision's codec family replaces the string; while the server sends both, they agree.
+  @SuppressWarnings("checkstyle:fullyQualifiedName")
+  private static String codecFamily(
+      build.buf.gen.streamarr.transcode.v1.TranscodeDecision decision) {
+    var legacy = decision.getVideoCodecFamily();
+    var named = VideoDecisions.codecFamilyName(decision.getVideo().getCodecFamily());
+    if (named.isEmpty()) {
+      return legacy;
+    }
+
+    if (!legacy.isEmpty() && !legacy.equals(named.orElseThrow())) {
+      throw new InvalidJobSpecificationException(
+          "The video decision names codec family "
+              + named.orElseThrow()
+              + " but the job names "
+              + legacy);
+    }
+
+    return named.orElseThrow();
   }
 
   @SuppressWarnings("checkstyle:fullyQualifiedName")
@@ -116,7 +144,8 @@ final class WorkerVariantJobMapper {
 
   @SuppressWarnings("checkstyle:fullyQualifiedName")
   private static TranscodeMode mode(build.buf.gen.streamarr.transcode.v1.TranscodeMode mode) {
-    return modeOf(mode).orElseThrow(() -> new WorkerJobException("Transcode mode is required"));
+    return modeOf(mode)
+        .orElseThrow(() -> new InvalidJobSpecificationException("Transcode mode is required"));
   }
 
   @SuppressWarnings("checkstyle:fullyQualifiedName")
@@ -138,7 +167,7 @@ final class WorkerVariantJobMapper {
       case AUDIO_MODE_TRANSCODE -> AudioMode.TRANSCODE;
       case AUDIO_MODE_NONE -> AudioMode.NONE;
       case AUDIO_MODE_UNSPECIFIED, UNRECOGNIZED ->
-          throw new WorkerJobException("Audio mode is required");
+          throw new InvalidJobSpecificationException("Audio mode is required");
     };
   }
 
@@ -151,7 +180,7 @@ final class WorkerVariantJobMapper {
       case SUBTITLE_MODE_HLS -> SubtitleMode.HLS;
       case SUBTITLE_MODE_EMBED -> SubtitleMode.EMBED;
       case SUBTITLE_MODE_UNSPECIFIED, UNRECOGNIZED ->
-          throw new WorkerJobException("Subtitle mode is required");
+          throw new InvalidJobSpecificationException("Subtitle mode is required");
     };
   }
 }

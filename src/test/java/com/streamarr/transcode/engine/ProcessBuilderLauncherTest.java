@@ -9,6 +9,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.engine.AttemptOutcome.Failed;
 import com.streamarr.transcode.engine.AttemptOutcome.Stopped;
+import com.streamarr.transcode.fixtures.RecordingFixtures;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -135,6 +136,7 @@ class ProcessBuilderLauncherTest {
             .gracePeriod(Duration.ofSeconds(5))
             .stallTimeout(Duration.ofMinutes(1))
             .encodedFrameRate(OptionalDouble.empty())
+            .videoDecision(new VideoDecision.Copy(RecordingFixtures.ENCODED_RECORDING_CODEC_STRING))
             .memoryBudget(SegmentMemoryBudget.forSlots(1))
             .sink(sink);
 
@@ -154,6 +156,7 @@ class ProcessBuilderLauncherTest {
         .gracePeriod(Duration.ofSeconds(5))
         .stallTimeout(Duration.ofMinutes(1))
         .encodedFrameRate(OptionalDouble.empty())
+        .videoDecision(new VideoDecision.Copy(RecordingFixtures.ENCODED_RECORDING_CODEC_STRING))
         .memoryBudget(SegmentMemoryBudget.forSlots(1))
         .sink(sink);
   }

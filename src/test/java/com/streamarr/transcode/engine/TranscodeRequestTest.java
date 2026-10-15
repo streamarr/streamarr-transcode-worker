@@ -20,7 +20,11 @@ class TranscodeRequestTest {
     return TranscodeRequest.builder()
         .sessionId(UUID.randomUUID())
         .sourcePath(Path.of("/media/movie.mkv"))
-        .transcodeDecision(TranscodeDecision.builder().transcodeMode(mode).build());
+        .transcodeDecision(
+            TranscodeDecision.builder()
+                .transcodeMode(mode)
+                .videoDecision(VideoDecisionFixtures.forMode(mode))
+                .build());
   }
 
   @ParameterizedTest

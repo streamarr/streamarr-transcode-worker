@@ -70,6 +70,7 @@ class FfmpegCommandBuilderTest {
     return TranscodeDecision.builder()
         .transcodeMode(mode)
         .videoCodecFamily("h264")
+        .videoDecision(VideoDecisionFixtures.forMode(mode))
         .audioDecision(audio)
         .subtitleDecision(SubtitleDecisions.EXCLUDED);
   }
@@ -263,17 +264,20 @@ class FfmpegCommandBuilderTest {
         "unlisted_encoder"
       })
   @DisplayName(
-      "Should end the video filter chain in 8-bit yuv420p when any encoder other than QSV runs")
-  void shouldEndTheVideoFilterChainInEightBitYuv420pWhenAnyEncoderOtherThanQsvRuns(String encoder) {
+      "Should end the video filter chain in 8-bit yuv420p when any encoder other than QSV or VAAPI"
+          + " runs")
+  void shouldEndTheVideoFilterChainInEightBitYuv420pWhenAnyEncoderOtherThanQsvOrVaapiRuns(
+      String encoder) {
     var cmd = command(request(TranscodeMode.FULL_TRANSCODE).height(720).build(), encoder);
 
     assertThat(videoFilter(cmd)).isEqualTo("scale=-2:720,format=yuv420p");
   }
 
   @ParameterizedTest(name = "{0}")
-  @ValueSource(strings = {"h264_qsv", "hevc_qsv", "av1_qsv"})
-  @DisplayName("Should end the video filter chain in nv12 when a QSV encoder runs")
-  void shouldEndTheVideoFilterChainInNv12WhenAQsvEncoderRuns(String encoder) {
+  @ValueSource(
+      strings = {"h264_qsv", "hevc_qsv", "av1_qsv", "h264_vaapi", "hevc_vaapi", "av1_vaapi"})
+  @DisplayName("Should end the video filter chain in nv12 when a QSV or VAAPI encoder runs")
+  void shouldEndTheVideoFilterChainInNv12WhenAQsvOrVaapiEncoderRuns(String encoder) {
     var cmd = command(request(TranscodeMode.VIDEO_TRANSCODE).height(720).build(), encoder);
 
     assertThat(videoFilter(cmd)).isEqualTo("scale=-2:720,format=nv12");
@@ -291,6 +295,140 @@ class FfmpegCommandBuilderTest {
         .containsSequence("-c:v", "copy")
         .doesNotContain("-vf", "-pix_fmt")
         .noneMatch(argument -> argument.contains("format="));
+  }
+
+  @Test
+  @DisplayName("Should force the High profile and the level when libx264 encodes")
+  void shouldForceTheHighProfileAndTheLevelWhenLibx264Encodes() {
+    var encode = VideoDecisionFixtures.encodeBuilder().level(42).codecString("avc1.64002A");
+
+    var cmd = command(request(encoding(encode)).build(), "libx264");
+
+    assertThat(cmd).containsSequence("-profile:v", "high", "-level:v", "42");
+  }
+
+  @ParameterizedTest(name = "{0} tier")
+  @CsvSource({
+    "MAIN, no-scenecut=1:no-open-gop=1:level-idc=41:high-tier=0",
+    "HIGH, no-scenecut=1:no-open-gop=1:level-idc=41:high-tier=1"
+  })
+  @DisplayName("Should force the Main profile, the level and the tier when libx265 encodes")
+  void shouldForceTheMainProfileTheLevelAndTheTierWhenLibx265Encodes(
+      VideoCodecTier tier, String parameters) {
+    var encode = hevcEncode().tier(Optional.of(tier));
+
+    var cmd = command(request(encoding(encode)).build(), "libx265");
+
+    assertThat(cmd)
+        .containsSequence("-profile:v", "main")
+        .containsSequence("-x265-params", parameters);
+  }
+
+  @Test
+  @DisplayName("Should pass every libx265 parameter in one -x265-params value when libx265 encodes")
+  void shouldPassEveryLibx265ParameterInOneX265ParamsValueWhenLibx265Encodes() {
+    var encode = hevcEncode().tier(Optional.of(VideoCodecTier.MAIN));
+
+    var cmd = command(request(encoding(encode)).build(), "libx265");
+
+    assertThat(cmd).containsOnlyOnce("-x265-params");
+    assertThat(cmd.get(cmd.indexOf("-x265-params") + 1).split(":"))
+        .contains("no-scenecut=1", "no-open-gop=1", "level-idc=41", "high-tier=0");
+  }
+
+  @Test
+  @DisplayName("Should force only the level when libx265 encodes without a tier")
+  void shouldForceOnlyTheLevelWhenLibx265EncodesWithoutATier() {
+    var cmd = command(request(encoding(hevcEncode())).build(), "libx265");
+
+    assertThat(cmd).containsSequence("-x265-params", "no-scenecut=1:no-open-gop=1:level-idc=41");
+  }
+
+  @Test
+  @DisplayName("Should force the level when libsvtav1 encodes")
+  void shouldForceTheLevelWhenLibsvtav1Encodes() {
+    var encode =
+        VideoDecision.Encode.builder()
+            .codecProfile(VideoCodecProfile.AV1_MAIN)
+            .tier(Optional.of(VideoCodecTier.MAIN))
+            .level(41)
+            .codecString("av01.0.09M.08");
+
+    var cmd = command(request(encoding(encode)).build(), "libsvtav1");
+
+    assertThat(cmd).containsSequence("-level:v", "41").doesNotContain("-profile:v");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"h264_nvenc", "h264_videotoolbox", "h264_qsv", "h264_vaapi"})
+  @DisplayName(
+      "Should leave the codec profile and level to the encoder when a hardware encoder runs")
+  void shouldLeaveTheCodecProfileAndLevelToTheEncoderWhenAHardwareEncoderRuns(String encoder) {
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), encoder);
+
+    assertThat(cmd)
+        .containsSequence("-c:v", encoder)
+        .doesNotContain("-profile:v", "-level:v", "-x265-params");
+  }
+
+  @ParameterizedTest
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"REMUX", "AUDIO_TRANSCODE"})
+  @DisplayName("Should force no codec profile or level when video is copied")
+  void shouldForceNoCodecProfileOrLevelWhenVideoIsCopied(TranscodeMode mode) {
+    var cmd = command(request(mode).build(), "copy");
+
+    assertThat(cmd)
+        .containsSequence("-c:v", "copy")
+        .doesNotContain("-profile:v", "-level:v", "-x265-params");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"libx264", "libx265", "libsvtav1"})
+  @DisplayName(
+      "Should force no codec profile or level when an encoding request's video decision is a"
+          + " stream copy")
+  void shouldForceNoCodecProfileOrLevelWhenAnEncodingRequestsVideoDecisionIsAStreamCopy(
+      String encoder) {
+    var copy = new VideoDecision.Copy("avc1.64000A");
+    var request =
+        request(decision(TranscodeMode.FULL_TRANSCODE).videoDecision(copy).build()).build();
+
+    var cmd = command(request, encoder);
+
+    assertThat(cmd)
+        .containsSequence("-c:v", encoder)
+        .doesNotContain("-profile:v", "-level:v")
+        .noneMatch(argument -> argument.contains("level-idc") || argument.contains("high-tier"));
+  }
+
+  @ParameterizedTest(name = "{0} forces: {1}")
+  @CsvSource({
+    "libx264, true",
+    "libx265, true",
+    "libsvtav1, true",
+    "h264_nvenc, false",
+    "hevc_qsv, false",
+    "av1_vaapi, false",
+    "h264_videotoolbox, false"
+  })
+  @DisplayName("Should force the job's codec profile and level only on a software encoder")
+  void shouldForceTheJobsCodecProfileAndLevelOnlyOnASoftwareEncoder(
+      String encoder, boolean forces) {
+    assertThat(FfmpegCommandBuilder.forcesCodecProfile(encoder)).isEqualTo(forces);
+  }
+
+  private static TranscodeDecision encoding(VideoDecision.Encode.EncodeBuilder encode) {
+    return decision(TranscodeMode.FULL_TRANSCODE).videoDecision(encode.build()).build();
+  }
+
+  private static VideoDecision.Encode.EncodeBuilder hevcEncode() {
+    return VideoDecision.Encode.builder()
+        .codecProfile(VideoCodecProfile.HEVC_MAIN)
+        .tier(Optional.empty())
+        .level(41)
+        .codecString("hvc1.1.6.L123.90");
   }
 
   private static String videoFilter(List<String> cmd) {
@@ -856,10 +994,8 @@ class FfmpegCommandBuilderTest {
   void shouldCloseGopsWhenEncoderIsLibx265() {
     var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), "libx265");
 
-    assertThat(cmd)
-        .containsSequence("-x265-params", "no-scenecut=1:no-open-gop=1")
-        .containsOnlyOnce("-x265-params")
-        .doesNotContain("-sc_threshold:v:0");
+    assertThat(cmd).containsOnlyOnce("-x265-params").doesNotContain("-sc_threshold:v:0");
+    assertThat(cmd.get(cmd.indexOf("-x265-params") + 1)).startsWith("no-scenecut=1:no-open-gop=1:");
   }
 
   @ParameterizedTest(name = "{0}")

@@ -95,6 +95,9 @@ public final class Producer {
    * @param encodedFrameRate the frame rate an attempt that encodes video forces on its output, so
    *     that the producer fails an output holding a video sample shorter than half a frame; empty
    *     when the attempt copies the video, whose sample durations follow the source
+   * @param videoDecision the video that the initialization segment must declare; the producer fails
+   *     the attempt as an output mismatch, before it delivers anything, when it declares other
+   *     video
    * @param memoryBudget the worker's segment memory, which every producer of the worker shares
    * @throws TranscodeException when FFmpeg cannot be started
    */
@@ -108,6 +111,7 @@ public final class Producer {
       @NonNull Duration gracePeriod,
       @NonNull Duration stallTimeout,
       @NonNull OptionalDouble encodedFrameRate,
+      @NonNull VideoDecision videoDecision,
       @NonNull SegmentMemoryBudget memoryBudget,
       @NonNull SegmentSink sink) {
     var settings =
@@ -119,6 +123,7 @@ public final class Producer {
                     .startSequenceNumber(startSequenceNumber)
                     .maximumSegmentBytes(MAXIMUM_SEGMENT_BYTES)
                     .encodedFrameRate(encodedFrameRate)
+                    .videoDecision(videoDecision)
                     .build())
             .sink(sink)
             .memoryBudget(memoryBudget)

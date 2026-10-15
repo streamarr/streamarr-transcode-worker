@@ -65,6 +65,7 @@ public class FfmpegTranscodeEngine {
             .gracePeriod(GRACE_PERIOD)
             .stallTimeout(encoderStallTimeout)
             .encodedFrameRate(encodedFrameRateOf(request))
+            .videoDecision(request.transcodeDecision().videoDecision())
             .memoryBudget(memoryBudget)
             .sink(sink)
             .start();

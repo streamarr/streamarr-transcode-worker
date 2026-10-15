@@ -36,7 +36,12 @@ final class FragmentedMp4Exception extends RuntimeException {
      * A video sample of an encoded output lasts less than half the frame duration of the rate the
      * encode forced.
      */
-    SHORT_VIDEO_SAMPLE
+    SHORT_VIDEO_SAMPLE,
+    /**
+     * The initialization segment declares video other than the job's video decision, or video whose
+     * decoder configuration record cannot be read.
+     */
+    OUTPUT_MISMATCH
   }
 
   private final Reason reason;

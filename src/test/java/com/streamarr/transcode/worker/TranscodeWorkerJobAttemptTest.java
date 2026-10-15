@@ -12,6 +12,7 @@ import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engineBuilde
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.workerConfigurationBuilder;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
+import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.copyJobBuilderFor;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.startVariant;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.stopVariant;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variantJobBuilder;
@@ -19,14 +20,22 @@ import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerB
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
+import build.buf.gen.streamarr.transcode.v1.AudioMode;
 import build.buf.gen.streamarr.transcode.v1.EncoderPreset;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest.EventCase;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
 import build.buf.gen.streamarr.transcode.v1.SegmentContentType;
+import build.buf.gen.streamarr.transcode.v1.SubtitleMode;
+import build.buf.gen.streamarr.transcode.v1.TranscodeDecision;
 import build.buf.gen.streamarr.transcode.v1.TranscodeMode;
 import build.buf.gen.streamarr.transcode.v1.Uuid;
 import build.buf.gen.streamarr.transcode.v1.VariantJob;
+import build.buf.gen.streamarr.transcode.v1.VideoCodecFamily;
+import build.buf.gen.streamarr.transcode.v1.VideoCodecProfile;
+import build.buf.gen.streamarr.transcode.v1.VideoCodecTier;
+import build.buf.gen.streamarr.transcode.v1.VideoDecision;
+import build.buf.gen.streamarr.transcode.v1.VideoMode;
 import com.streamarr.transcode.engine.FfmpegRecordings.Recording;
 import com.streamarr.transcode.engine.FfmpegRecordings.SegmentSummary;
 import com.streamarr.transcode.fakes.ScriptedProcess;
@@ -50,6 +59,7 @@ import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.function.IntUnaryOperator;
+import java.util.function.UnaryOperator;
 import java.util.stream.DoubleStream;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
@@ -378,6 +388,303 @@ class TranscodeWorkerJobAttemptTest {
         .end();
   }
 
+  @Test
+  @DisplayName(
+      "Should refuse the job as an invalid specification when it carries no video decision")
+  void shouldRefuseTheJobAsAnInvalidSpecificationWhenItCarriesNoVideoDecision() throws Exception {
+    var job = variantJobBuilder();
+    job.getDecisionBuilder().clearVideo();
+
+    assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("videoDecisionsThatTheTranscodeModeContradicts")
+  @DisplayName(
+      "Should refuse the job as an invalid specification when its video decision contradicts the"
+          + " transcode mode")
+  void shouldRefuseTheJobAsAnInvalidSpecificationWhenItsVideoDecisionContradictsTheTranscodeMode(
+      TranscodeMode mode, VideoMode videoMode) throws Exception {
+    var job = variantJobBuilder(mode);
+    job.getDecisionBuilder().getVideoBuilder().setMode(videoMode);
+
+    assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
+  static Stream<Arguments> videoDecisionsThatTheTranscodeModeContradicts() {
+    return Stream.of(
+        Arguments.of(TranscodeMode.TRANSCODE_MODE_REMUX, VideoMode.VIDEO_MODE_ENCODE),
+        Arguments.of(TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE, VideoMode.VIDEO_MODE_ENCODE),
+        Arguments.of(TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE, VideoMode.VIDEO_MODE_COPY),
+        Arguments.of(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE, VideoMode.VIDEO_MODE_COPY),
+        Arguments.of(TranscodeMode.TRANSCODE_MODE_REMUX, VideoMode.VIDEO_MODE_UNSPECIFIED),
+        Arguments.of(
+            TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE, VideoMode.VIDEO_MODE_UNSPECIFIED));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("incompleteEncodes")
+  @DisplayName(
+      "Should refuse the job as an invalid specification when its encode lacks a value that the"
+          + " worker forces or checks")
+  void
+      shouldRefuseTheJobAsAnInvalidSpecificationWhenItsEncodeLacksAValueThatTheWorkerForcesOrChecks(
+          String lacking, UnaryOperator<VideoDecision.Builder> incomplete) throws Exception {
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    incomplete.apply(job.getDecisionBuilder().getVideoBuilder());
+
+    assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
+  static Stream<Arguments> incompleteEncodes() {
+    return Stream.of(
+        Arguments.of("codec family", unary(VideoDecision.Builder::clearCodecFamily)),
+        Arguments.of("codec profile", unary(VideoDecision.Builder::clearCodecProfile)),
+        Arguments.of("level", unary(VideoDecision.Builder::clearLevel)),
+        Arguments.of("codec string", unary(VideoDecision.Builder::clearCodecString)));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("jobsWithoutAMode")
+  @DisplayName(
+      "Should refuse the job as an invalid specification when it names no transcode, audio or"
+          + " subtitle mode")
+  void shouldRefuseTheJobAsAnInvalidSpecificationWhenItNamesNoTranscodeAudioOrSubtitleMode(
+      String lacking, UnaryOperator<TranscodeDecision.Builder> withoutMode) throws Exception {
+    var job = variantJobBuilder();
+    withoutMode.apply(job.getDecisionBuilder());
+
+    assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
+  static Stream<Arguments> jobsWithoutAMode() {
+    return Stream.of(
+        Arguments.of(
+            "transcode mode",
+            decisionChange(decision -> decision.setMode(TranscodeMode.TRANSCODE_MODE_UNSPECIFIED))),
+        Arguments.of(
+            "audio mode",
+            decisionChange(
+                decision -> {
+                  decision.getAudioBuilder().setMode(AudioMode.AUDIO_MODE_UNSPECIFIED);
+                  return decision;
+                })),
+        Arguments.of(
+            "subtitle mode",
+            decisionChange(
+                decision -> {
+                  decision.getSubtitleBuilder().setMode(SubtitleMode.SUBTITLE_MODE_UNSPECIFIED);
+                  return decision;
+                })));
+  }
+
+  private static UnaryOperator<TranscodeDecision.Builder> decisionChange(
+      UnaryOperator<TranscodeDecision.Builder> change) {
+    return change;
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = VideoCodecFamily.class,
+      names = {"VIDEO_CODEC_FAMILY_HEVC", "VIDEO_CODEC_FAMILY_AV1"})
+  @DisplayName(
+      "Should refuse the job as an invalid specification when an HEVC or AV1 encode carries no"
+          + " tier")
+  void shouldRefuseTheJobAsAnInvalidSpecificationWhenAnHevcOrAv1EncodeCarriesNoTier(
+      VideoCodecFamily family) throws Exception {
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getDecisionBuilder()
+        .clearVideoCodecFamily()
+        .getVideoBuilder()
+        .setCodecFamily(family)
+        .setCodecProfile(mainProfileOf(family))
+        .clearTier();
+
+    assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
+  @Test
+  @DisplayName(
+      "Should refuse the job as an invalid specification when an H.264 encode carries a tier")
+  void shouldRefuseTheJobAsAnInvalidSpecificationWhenAnH264EncodeCarriesATier() throws Exception {
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getDecisionBuilder().getVideoBuilder().setTier(VideoCodecTier.VIDEO_CODEC_TIER_MAIN);
+
+    assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("copiesWithEncodeValues")
+  @DisplayName(
+      "Should refuse the job as an invalid specification when a stream copy carries a codec"
+          + " profile, tier or level")
+  void shouldRefuseTheJobAsAnInvalidSpecificationWhenAStreamCopyCarriesACodecProfileTierOrLevel(
+      String carrying, UnaryOperator<VideoDecision.Builder> withValue) throws Exception {
+    var job = variantJobBuilder();
+    withValue.apply(job.getDecisionBuilder().getVideoBuilder());
+
+    assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
+  static Stream<Arguments> copiesWithEncodeValues() {
+    return Stream.of(
+        Arguments.of(
+            "codec profile",
+            unary(video -> video.setCodecProfile(VideoCodecProfile.VIDEO_CODEC_PROFILE_H264_HIGH))),
+        Arguments.of("tier", unary(video -> video.setTier(VideoCodecTier.VIDEO_CODEC_TIER_MAIN))),
+        Arguments.of("level", unary(video -> video.setLevel(10))));
+  }
+
+  private static VideoCodecProfile mainProfileOf(VideoCodecFamily family) {
+    return switch (family) {
+      case VIDEO_CODEC_FAMILY_HEVC -> VideoCodecProfile.VIDEO_CODEC_PROFILE_HEVC_MAIN;
+      case VIDEO_CODEC_FAMILY_AV1 -> VideoCodecProfile.VIDEO_CODEC_PROFILE_AV1_MAIN;
+      default -> throw new AssertionError("No Main profile is listed for " + family);
+    };
+  }
+
+  @Test
+  @DisplayName(
+      "Should refuse the job as an invalid specification when a stream copy carries no codec"
+          + " string")
+  void shouldRefuseTheJobAsAnInvalidSpecificationWhenAStreamCopyCarriesNoCodecString()
+      throws Exception {
+    var job = variantJobBuilder();
+    job.getDecisionBuilder().getVideoBuilder().clearCodecString();
+
+    assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = VideoCodecProfile.class,
+      names = {"VIDEO_CODEC_PROFILE_HEVC_MAIN", "VIDEO_CODEC_PROFILE_AV1_MAIN"})
+  @DisplayName(
+      "Should refuse the job as an invalid specification when its codec profile belongs to another"
+          + " codec family")
+  void shouldRefuseTheJobAsAnInvalidSpecificationWhenItsCodecProfileBelongsToAnotherCodecFamily(
+      VideoCodecProfile profile) throws Exception {
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getDecisionBuilder().getVideoBuilder().setCodecProfile(profile);
+
+    assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"TRANSCODE_MODE_REMUX", "TRANSCODE_MODE_FULL_TRANSCODE"})
+  @DisplayName(
+      "Should refuse the job as an invalid specification when its video decision and its codec"
+          + " family string name different codec families")
+  void
+      shouldRefuseTheJobAsAnInvalidSpecificationWhenItsVideoDecisionAndItsCodecFamilyStringNameDifferentCodecFamilies(
+          TranscodeMode mode) throws Exception {
+    var job = variantJobBuilder(mode);
+    job.getDecisionBuilder().setVideoCodecFamily("av1");
+
+    assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
+  @Test
+  @DisplayName(
+      "Should encode the codec family that the video decision names when the job sends no codec"
+          + " family string")
+  void shouldEncodeTheCodecFamilyThatTheVideoDecisionNamesWhenTheJobSendsNoCodecFamilyString()
+      throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getDecisionBuilder()
+        .clearVideoCodecFamily()
+        .getVideoBuilder()
+        .setCodecFamily(VideoCodecFamily.VIDEO_CODEC_FAMILY_AV1)
+        .setCodecProfile(VideoCodecProfile.VIDEO_CODEC_PROFILE_AV1_MAIN)
+        .setTier(VideoCodecTier.VIDEO_CODEC_TIER_MAIN);
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(launcher.command(fromProto(job.getJobAttemptId())))
+          .containsSequence("-c:v", "libsvtav1");
+    }
+  }
+
+  @Test
+  @DisplayName("Should force the High tier when an HEVC encode carries the High tier")
+  void shouldForceTheHighTierWhenAnHevcEncodeCarriesTheHighTier() throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getDecisionBuilder()
+        .clearVideoCodecFamily()
+        .getVideoBuilder()
+        .setCodecFamily(VideoCodecFamily.VIDEO_CODEC_FAMILY_HEVC)
+        .setCodecProfile(VideoCodecProfile.VIDEO_CODEC_PROFILE_HEVC_MAIN)
+        .setTier(VideoCodecTier.VIDEO_CODEC_TIER_HIGH)
+        .setLevel(41)
+        .setCodecString("hvc1.1.6.H123.90");
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(launcher.command(fromProto(job.getJobAttemptId())))
+          .containsSequence("-c:v", "libx265")
+          .containsSequence("-profile:v", "main")
+          .containsSequence("-x265-params", "no-scenecut=1:no-open-gop=1:level-idc=41:high-tier=1");
+    }
+  }
+
+  @Test
+  @DisplayName("Should force the job's codec profile and level when the job encodes H.264")
+  void shouldForceTheJobsCodecProfileAndLevelWhenTheJobEncodesH264() throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getDecisionBuilder().getVideoBuilder().setLevel(42).setCodecString("avc1.64002A");
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(launcher.command(fromProto(job.getJobAttemptId())))
+          .containsSequence("-c:v", "libx264")
+          .containsSequence("-profile:v", "high", "-level:v", "42");
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should report an output mismatch and upload nothing when the initialization segment declares"
+          + " another level than the job forces")
+  void
+      shouldReportAnOutputMismatchAndUploadNothingWhenTheInitializationSegmentDeclaresAnotherLevelThanTheJobForces()
+          throws Exception {
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getDecisionBuilder().getVideoBuilder().setLevel(42).setCodecString("avc1.64002A");
+
+    try (var worker = worker(ScriptedProcessLauncher.writing(ENCODED_RECORDING))) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_OUTPUT_MISMATCH);
+      assertThat(connection.uploads()).isEmpty();
+    }
+  }
+
+  private static UnaryOperator<VideoDecision.Builder> unary(
+      UnaryOperator<VideoDecision.Builder> operator) {
+    return operator;
+  }
+
   @ParameterizedTest(name = "container value {0}")
   @ValueSource(ints = {0, 1, Integer.MAX_VALUE})
   @DisplayName(
@@ -397,8 +704,7 @@ class TranscodeWorkerJobAttemptTest {
           + " frame rate")
   void shouldRefuseTheJobAsAnInvalidSpecificationWhenItEncodesVideoWithoutAUsableFrameRate(
       TranscodeMode mode, double framerate) throws Exception {
-    var job = variantJobBuilder();
-    job.getDecisionBuilder().setMode(mode);
+    var job = variantJobBuilder(mode);
     job.getExecutionBuilder().setFramerate(framerate);
 
     assertRefusedAsAnInvalidSpecification(job.build());
@@ -421,8 +727,7 @@ class TranscodeWorkerJobAttemptTest {
           + " its start")
   void shouldRefuseTheJobAsAnInvalidSpecificationWhenNoAdvertisedMediaSegmentFollowsItsStart(
       TranscodeMode mode, int mediaSegmentCount, int startSequenceNumber) throws Exception {
-    var job = variantJobBuilder();
-    job.getDecisionBuilder().setMode(mode);
+    var job = variantJobBuilder(mode);
     job.getExecutionBuilder()
         .setMediaSegmentCount(mediaSegmentCount)
         .setStartSequenceNumber(startSequenceNumber);
@@ -445,8 +750,7 @@ class TranscodeWorkerJobAttemptTest {
   void shouldMapEncoderPresetWhenJobCarriesOne(EncoderPreset preset, String presetName)
       throws Exception {
     var launcher = ScriptedProcessLauncher.running();
-    var job = variantJobBuilder();
-    job.getDecisionBuilder().setMode(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
     job.getVariantBuilder().setEncoderPreset(preset);
 
     try (var worker = worker(launcher)) {
@@ -524,8 +828,7 @@ class TranscodeWorkerJobAttemptTest {
   void shouldPassTheJobsOwnPresetToEveryAttemptWhenAReplacementAttemptRunsTheSameJob()
       throws Exception {
     var launcher = ScriptedProcessLauncher.running();
-    var first = variantJobBuilder();
-    first.getDecisionBuilder().setMode(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    var first = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
     first.getVariantBuilder().setEncoderPreset(EncoderPreset.ENCODER_PRESET_SLOW);
     var replacement = first.clone().setJobAttemptId(toProto(UUID.randomUUID()));
     replacement.getExecutionBuilder().setStartSequenceNumber(5);
@@ -551,8 +854,7 @@ class TranscodeWorkerJobAttemptTest {
   void shouldForceKeyframesFromTheJobsStartToItsLastAdvertisedMediaSegmentWhenTheJobEncodesVideo()
       throws Exception {
     var launcher = ScriptedProcessLauncher.running();
-    var job = variantJobBuilder();
-    job.getDecisionBuilder().setMode(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
     job.getExecutionBuilder()
         .setTargetSegmentDurationSeconds(4)
         .setStartSequenceNumber(2)
@@ -580,8 +882,7 @@ class TranscodeWorkerJobAttemptTest {
       shouldSeekAStreamCopyToItsStartSequenceNumbersBoundaryWhenTheJobsSeekPositionNamesAnotherTime(
           TranscodeMode mode) throws Exception {
     var launcher = ScriptedProcessLauncher.running();
-    var job = variantJobBuilder();
-    job.getDecisionBuilder().setMode(mode);
+    var job = variantJobBuilder(mode);
     job.getExecutionBuilder()
         .setTargetSegmentDurationSeconds(6)
         .setStartSequenceNumber(5)
@@ -632,7 +933,7 @@ class TranscodeWorkerJobAttemptTest {
   @DisplayName("Should run the job when the last advertised media segment is the one it starts at")
   void shouldRunTheJobWhenTheLastAdvertisedMediaSegmentIsTheOneItStartsAt() throws Exception {
     var recording = recording("07-copy-seek30.fmp4");
-    var job = variantJobBuilder();
+    var job = copyJobBuilderFor(recording);
     job.getExecutionBuilder()
         .setStartSequenceNumber(recording.startSequenceNumber())
         .setMediaSegmentCount(recording.startSequenceNumber() + 1);
@@ -653,8 +954,7 @@ class TranscodeWorkerJobAttemptTest {
   @DisplayName("Should run the job when it copies the video without a probed frame rate")
   void shouldRunTheJobWhenItCopiesTheVideoWithoutAProbedFrameRate(TranscodeMode mode)
       throws Exception {
-    var job = variantJobBuilder();
-    job.getDecisionBuilder().setMode(mode);
+    var job = variantJobBuilder(mode);
     job.getExecutionBuilder().setFramerate(0);
 
     try (var worker = worker(ScriptedProcessLauncher.writing(ENCODED_RECORDING))) {
@@ -725,7 +1025,7 @@ class TranscodeWorkerJobAttemptTest {
           throws Exception {
     var recording = recording("10-copy-gop-exceeds-period.fmp4");
     var launcher = ScriptedProcessLauncher.writing(recording.file());
-    var jobBuilder = variantJobBuilder();
+    var jobBuilder = copyJobBuilderFor(recording);
     jobBuilder
         .getExecutionBuilder()
         .setTargetSegmentDurationSeconds(recording.period())

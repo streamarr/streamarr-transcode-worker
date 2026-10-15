@@ -1,6 +1,7 @@
 package com.streamarr.transcode.worker;
 
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
+import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.copiedVideo;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.requestBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.start;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variantJobBuilder;
@@ -13,6 +14,8 @@ import build.buf.gen.streamarr.transcode.v1.EncoderPreset;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptCompleted;
+import build.buf.gen.streamarr.transcode.v1.JobAttemptFailed;
+import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
 import build.buf.gen.streamarr.transcode.v1.KeyframePacketScanReason;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositionSource;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositions;
@@ -31,6 +34,11 @@ import build.buf.gen.streamarr.transcode.v1.TranscodeWorkerServiceGrpc;
 import build.buf.gen.streamarr.transcode.v1.UploadSegmentRequest;
 import build.buf.gen.streamarr.transcode.v1.UploadSegmentResponse;
 import build.buf.gen.streamarr.transcode.v1.VariantJob;
+import build.buf.gen.streamarr.transcode.v1.VideoCodecFamily;
+import build.buf.gen.streamarr.transcode.v1.VideoCodecProfile;
+import build.buf.gen.streamarr.transcode.v1.VideoCodecTier;
+import build.buf.gen.streamarr.transcode.v1.VideoDecision;
+import build.buf.gen.streamarr.transcode.v1.VideoMode;
 import build.buf.gen.streamarr.transcode.v1.WorkerRegistration;
 import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
 import com.streamarr.transcode.engine.FfmpegCommandBuilder;
@@ -57,6 +65,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -65,6 +74,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
@@ -110,6 +120,20 @@ class WorkerMediaSmokeTest {
   private static final int HEVC_LAST_RANDOM_ACCESS_TYPE = 23;
   private static final int HEVC_IDR_W_RADL = 19;
   private static final int HEVC_IDR_N_LP = 20;
+
+  // The fixture's Constrained Baseline H.264 at level 1.3. Its 160x90 variant at 24 fps and 500
+  // kb/s
+  // needs H.264 level 1.3.
+  private static final H264Source FIXTURE = new H264Source("avc1.42C00D", 13);
+
+  // The seekable sources' libx264 encode of testsrc's RGB: High 4:4:4 Predictive at level 1.0. Its
+  // 64x36 variant needs H.264 level 1.1.
+  private static final H264Source SEEKABLE_SOURCE = new H264Source("avc1.F4000A", 11);
+
+  // The levels that a 64x36 variant at 24 fps and up to 100 kb/s needs: H.264 1.1, because High
+  // allows 80 kb/s at level 1.0, H.265 1.0 and AV1 2.0.
+  private static final Map<String, Integer> TINY_VARIANT_LEVELS =
+      Map.of("h264", 11, "hevc", 10, "av1", 20);
 
   private static final Duration JOB_LIMIT = Duration.ofMinutes(5);
   private static final String EMPTY_EDIT_SOURCE = "mp4-empty-edit.mp4";
@@ -396,8 +420,8 @@ class WorkerMediaSmokeTest {
   void shouldUploadEveryAdvertisedSegmentThroughThePipeWhenAWorkerExecutesARealMediaJob(
       TranscodeMode mode) throws Exception {
     copyMedia();
-    var job = variantJobBuilder();
-    job.getDecisionBuilder().setMode(mode);
+    var job = variantJobBuilder(mode);
+    withVideo(job, h264VideoFor(mode, FIXTURE));
     job.getVariantBuilder().setWidth(160).setHeight(90).setBitrateBitsPerSecond(500_000);
     job.getExecutionBuilder().setMediaSegmentCount(FIXTURE_SEGMENT_COUNT);
 
@@ -427,6 +451,7 @@ class WorkerMediaSmokeTest {
         List.of("-i", root.resolve("movie.mkv").toString(), "-c", "copy", "-f", "mpegts"),
         root.resolve("movie.ts"));
     var job = variantJobBuilder();
+    withVideo(job, copiedVideo(FIXTURE.codecString()));
     job.getSourceBuilder().setRelativeKey("movie.ts");
     job.getExecutionBuilder().setMediaSegmentCount(FIXTURE_SEGMENT_COUNT);
     job.getDecisionBuilder()
@@ -451,9 +476,10 @@ class WorkerMediaSmokeTest {
       "Should upload decodable AV1 within the bitrate budget when transcoding an H264 file")
   void shouldUploadDecodableAv1WithinTheBitrateBudgetWhenTranscodingAnH264File() throws Exception {
     copyMedia();
-    var job = variantJobBuilder();
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    // 320x180 at 24 fps needs AV1 level 2.0.
+    withVideo(job, forcedSoftwareEncode("av1", 20));
     job.getDecisionBuilder()
-        .setMode(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE)
         .setVideoCodecFamily("av1")
         .getAudioBuilder()
         .setMode(AudioMode.AUDIO_MODE_TRANSCODE)
@@ -525,11 +551,82 @@ class WorkerMediaSmokeTest {
     assertThat(pixelFormatOf(media)).isEqualTo("yuv420p");
   }
 
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({"h264, avc1, High, 40", "hevc, hev1, Main, 120", "av1, av01, Main, 8"})
+  @DisplayName(
+      "Should write the forced codec profile, level and tier in 8-bit 4:2:0 when a software encoder"
+          + " encodes")
+  void shouldWriteTheForcedCodecProfileLevelAndTierInEightBitFourTwoZeroWhenASoftwareEncoderEncodes(
+      String codecFamily, String sampleEntry, String profile, int probedLevel) throws Exception {
+    var source = tenBitSdrSource();
+    // Level 4.0, far above the level each encoder chooses for 64x36 on its own.
+    var job = tenBitSdrSourceJob(source, codecFamily);
+    withVideo(job, forcedSoftwareEncode(codecFamily, 40));
+
+    // ffprobe reports no tier. The tier is checked because the job completes: the producer refuses
+    // an initialization segment whose codec string, with its L, M or H tier letter, differs.
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    var media = playable(uploads.contentOf(uploads.names()));
+    assertDecodes(media);
+    assertThat(videoStreamFields(media, "codec_tag_string,profile,level,pix_fmt"))
+        .containsExactlyInAnyOrderEntriesOf(
+            Map.of(
+                "codec_tag_string",
+                sampleEntry,
+                "profile",
+                profile,
+                "level",
+                String.valueOf(probedLevel),
+                "pix_fmt",
+                "yuv420p"));
+  }
+
+  @Test
+  @DisplayName(
+      "Should report an output mismatch and upload nothing when a real encode declares another"
+          + " level than the job's codec string")
+  void
+      shouldReportAnOutputMismatchAndUploadNothingWhenARealEncodeDeclaresAnotherLevelThanTheJobsCodecString()
+          throws Exception {
+    var source = tenBitSdrSource();
+    var job = tenBitSdrSourceJob(source, "h264");
+    withVideo(job, forcedSoftwareEncode("h264", 40).setCodecString("avc1.64000B"));
+
+    var failure =
+        executeExpectingFailure(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(failure.failure().getFailure())
+        .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_OUTPUT_MISMATCH);
+    assertThat(failure.uploads().names()).isEmpty();
+  }
+
+  // The fields of the first video stream that ffprobe reports, by name.
+  private static Map<String, String> videoStreamFields(Path media, String fields) throws Exception {
+    return Stream.of(
+            runToCompletion(
+                    List.of(
+                        "ffprobe",
+                        "-v",
+                        "error",
+                        "-select_streams",
+                        "v:0",
+                        "-show_entries",
+                        "stream=" + fields,
+                        "-of",
+                        "default=noprint_wrappers=1",
+                        media.toString()))
+                .strip()
+                .split("\\R"))
+        .map(line -> line.split("=", 2))
+        .collect(Collectors.toMap(field -> field[0], field -> field[1]));
+  }
+
   private static VariantJob.Builder tenBitSdrSourceJob(Path source, String codecFamily) {
-    var job = variantJobBuilder();
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    withVideo(job, forcedSoftwareEncode(codecFamily, TINY_VARIANT_LEVELS.get(codecFamily)));
     job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
     job.getDecisionBuilder()
-        .setMode(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE)
         .setVideoCodecFamily(codecFamily)
         .getAudioBuilder()
         .setMode(AudioMode.AUDIO_MODE_NONE);
@@ -592,10 +689,10 @@ class WorkerMediaSmokeTest {
       shouldUploadMoreThanAThousandSegmentsWithoutSkippingAnIntervalWhenASoftwareEncoderRunsALongJob(
           String codecFamily) throws Exception {
     var source = longSource();
-    var job = variantJobBuilder();
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE);
+    withVideo(job, forcedSoftwareEncode(codecFamily, TINY_VARIANT_LEVELS.get(codecFamily)));
     job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
     job.getDecisionBuilder()
-        .setMode(TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE)
         .setVideoCodecFamily(codecFamily)
         .getAudioBuilder()
         .setMode(AudioMode.AUDIO_MODE_COPY)
@@ -623,6 +720,8 @@ class WorkerMediaSmokeTest {
   void shouldStartEveryMediaSegmentWithIdrWhenEncoderIsLibx265() throws Exception {
     var source = sceneCutSource();
     var job = variantJobBuilder();
+    // A 320x180 variant needs H.265 level 2.0.
+    withVideo(job, forcedSoftwareEncode("hevc", 20));
     job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
     job.getDecisionBuilder()
         .setMode(TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE)
@@ -694,6 +793,7 @@ class WorkerMediaSmokeTest {
 
   private static VariantJob.Builder presetJob(Path source, String codecFamily) {
     var job = variantJobBuilder();
+    withVideo(job, forcedSoftwareEncode(codecFamily, TINY_VARIANT_LEVELS.get(codecFamily)));
     job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
     job.getDecisionBuilder()
         .setMode(TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE)
@@ -877,10 +977,10 @@ class WorkerMediaSmokeTest {
   }
 
   private static VariantJob.Builder seekableSourceJob(Path source, TranscodeMode mode) {
-    var job = variantJobBuilder();
+    var job = variantJobBuilder(mode);
+    withVideo(job, h264VideoFor(mode, SEEKABLE_SOURCE));
     job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
     job.getDecisionBuilder()
-        .setMode(mode)
         .getAudioBuilder()
         .setMode(audioModeOf(mode))
         .setCodec("aac")
@@ -1061,6 +1161,55 @@ class WorkerMediaSmokeTest {
     }
   }
 
+  private static void withVideo(VariantJob.Builder job, VideoDecision.Builder video) {
+    job.getDecisionBuilder().setVideo(video);
+  }
+
+  // A copy of the source's H.264, or an H.264 encode at the level its variant needs, as the mode
+  // says.
+  private static VideoDecision.Builder h264VideoFor(TranscodeMode mode, H264Source source) {
+    return switch (mode) {
+      case TRANSCODE_MODE_VIDEO_TRANSCODE, TRANSCODE_MODE_FULL_TRANSCODE ->
+          forcedSoftwareEncode("h264", source.variantLevel());
+      default -> copiedVideo(source.codecString());
+    };
+  }
+
+  private record H264Source(String codecString, int variantLevel) {}
+
+  // An 8-bit encode of the codec family that forces the level, with the codec string that the
+  // worker's encoder writes for it: High for H.264, and Main at the Main tier for H.265 and AV1.
+  // libx265 writes the hev1 sample entry until the worker chooses the tag (worker #18).
+  private static VideoDecision.Builder forcedSoftwareEncode(String codecFamily, int level) {
+    var video = VideoDecision.newBuilder().setMode(VideoMode.VIDEO_MODE_ENCODE).setLevel(level);
+    return switch (codecFamily) {
+      case "h264" ->
+          video
+              .setCodecFamily(VideoCodecFamily.VIDEO_CODEC_FAMILY_H264)
+              .setCodecProfile(VideoCodecProfile.VIDEO_CODEC_PROFILE_H264_HIGH)
+              .setCodecString(String.format(Locale.ROOT, "avc1.6400%02X", level));
+      case "hevc" ->
+          video
+              .setCodecFamily(VideoCodecFamily.VIDEO_CODEC_FAMILY_HEVC)
+              .setCodecProfile(VideoCodecProfile.VIDEO_CODEC_PROFILE_HEVC_MAIN)
+              .setTier(VideoCodecTier.VIDEO_CODEC_TIER_MAIN)
+              .setCodecString(String.format(Locale.ROOT, "hev1.1.6.L%d.90", level * 3));
+      case "av1" ->
+          video
+              .setCodecFamily(VideoCodecFamily.VIDEO_CODEC_FAMILY_AV1)
+              .setCodecProfile(VideoCodecProfile.VIDEO_CODEC_PROFILE_AV1_MAIN)
+              .setTier(VideoCodecTier.VIDEO_CODEC_TIER_MAIN)
+              .setCodecString(
+                  String.format(Locale.ROOT, "av01.0.%02dM.08", av1SequenceLevelIndex(level)));
+      default -> throw new AssertionError("No software encoder for " + codecFamily);
+    };
+  }
+
+  // AV1 numbers levels 2.0 to 7.3 from 0, four minor levels to each major level.
+  private static int av1SequenceLevelIndex(int level) {
+    return (level / 10 - 2) * 4 + level % 10;
+  }
+
   private MediaUploads execute(FfmpegTranscodeEngine engine, Path sourceRoot, VariantJob job)
       throws Exception {
     try (var controlPlane = new MediaControlPlane();
@@ -1079,6 +1228,27 @@ class WorkerMediaSmokeTest {
       return new MediaUploads(List.copyOf(controlPlane.names), Map.copyOf(controlPlane.segments));
     }
   }
+
+  private FailedExecution executeExpectingFailure(
+      FfmpegTranscodeEngine engine, Path sourceRoot, VariantJob job) throws Exception {
+    try (var controlPlane = new MediaControlPlane();
+        var worker = workerBuilder(sourceRoot).engine(engine).build()) {
+      worker.start("127.0.0.1", controlPlane.port());
+      var registeredWorker = controlPlane.registration.get(5, TimeUnit.SECONDS).getWorker();
+      controlPlane.responses.onNext(
+          EstablishWorkerSessionResponse.newBuilder()
+              .setStartVariant(
+                  StartVariantCommand.newBuilder().setTarget(registeredWorker).setJob(job))
+              .build());
+
+      var failure = controlPlane.failed.get(JOB_LIMIT.toSeconds(), TimeUnit.SECONDS);
+      return new FailedExecution(
+          failure,
+          new MediaUploads(List.copyOf(controlPlane.names), Map.copyOf(controlPlane.segments)));
+    }
+  }
+
+  private record FailedExecution(JobAttemptFailed failure, MediaUploads uploads) {}
 
   private static List<String> uploadNames(int mediaSegmentCount) {
     return Stream.concat(
@@ -1496,6 +1666,7 @@ class WorkerMediaSmokeTest {
 
     private final CompletableFuture<WorkerRegistration> registration = new CompletableFuture<>();
     private final CompletableFuture<JobAttemptCompleted> completed = new CompletableFuture<>();
+    private final CompletableFuture<JobAttemptFailed> failed = new CompletableFuture<>();
     private final Map<String, byte[]> segments = new ConcurrentHashMap<>();
     private final List<String> names = new CopyOnWriteArrayList<>();
     private final Server server;
@@ -1539,6 +1710,7 @@ class WorkerMediaSmokeTest {
           }
 
           if (message.hasJobAttemptFailed()) {
+            failed.complete(message.getJobAttemptFailed());
             completed.completeExceptionally(new AssertionError(message.getJobAttemptFailed()));
           }
         }

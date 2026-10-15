@@ -13,16 +13,27 @@ record BoxView(@NonNull String type, @NonNull ByteBuffer body) {
   }
 
   List<BoxView> children(String childType) {
+    return children().stream().filter(child -> child.type().equals(childType)).toList();
+  }
+
+  /** Every child box in order, read from the whole body. */
+  List<BoxView> children() {
     var children = new ArrayList<BoxView>();
     var content = body.duplicate();
     while (content.hasRemaining()) {
-      var child = readChild(content);
-      if (child.type().equals(childType)) {
-        children.add(child);
-      }
+      children.add(readChild(content));
     }
 
     return children;
+  }
+
+  /** The boxes that follow the first bytes of the body, such as a sample entry's fixed fields. */
+  BoxView after(int bytes) {
+    if (bytes > body.remaining()) {
+      throw FragmentedMp4Exception.malformed(type + " ends before its fields do");
+    }
+
+    return new BoxView(type, body.slice(bytes, body.remaining() - bytes));
   }
 
   BoxView requiredChild(String childType) {

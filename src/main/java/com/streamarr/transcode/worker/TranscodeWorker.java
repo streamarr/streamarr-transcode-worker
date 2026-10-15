@@ -233,7 +233,7 @@ public final class TranscodeWorker implements AutoCloseable {
               request,
               (segment, cancellation) -> deliverToServer(job, segment, cancellation),
               memoryBudget);
-    } catch (UnadvertisedCodecFamilyException e) {
+    } catch (InvalidJobSpecificationException | UnadvertisedCodecFamilyException e) {
       log.warn("Refusing job attempt {}: {}", fromProto(job.getJobAttemptId()), e.getMessage());
       reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
       return new Refused();
@@ -413,7 +413,17 @@ public final class TranscodeWorker implements AutoCloseable {
         fromProto(job.getStreamSessionId()),
         reason,
         detail);
-    return jobAttemptFailed(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
+    return jobAttemptFailed(job, jobAttemptFailureOf(reason));
+  }
+
+  // The server does not replace an attempt whose output differs from the job: the same decision on
+  // the same encoder backend produces the same output.
+  private static JobAttemptFailure jobAttemptFailureOf(ProducerFailure reason) {
+    if (reason == ProducerFailure.OUTPUT_MISMATCH) {
+      return JobAttemptFailure.JOB_ATTEMPT_FAILURE_OUTPUT_MISMATCH;
+    }
+
+    return JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED;
   }
 
   // Claims the attempt so that its producer's own outcome is never reported, and finishes its stop

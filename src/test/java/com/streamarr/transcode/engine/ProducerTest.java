@@ -17,13 +17,16 @@ import com.streamarr.transcode.engine.FfmpegRecordings.SegmentSummary;
 import com.streamarr.transcode.engine.RecordingSegmentSink.Accepted;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
+import com.streamarr.transcode.fixtures.RecordingFixtures;
 import com.streamarr.transcode.fixtures.TopLevelBoxes;
 import com.streamarr.transcode.fixtures.TopLevelBoxes.Box;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.List;
+import java.util.Locale;
 import java.util.OptionalDouble;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -44,8 +47,11 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceLock;
+import org.junit.jupiter.api.parallel.Resources;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -84,25 +90,37 @@ class ProducerTest {
 
   private final RecordingSegmentSink sink = new RecordingSegmentSink();
 
-  @Test
-  @DisplayName("Should refuse to start a producer without an encoded frame rate")
-  void shouldRefuseToStartAProducerWithoutAnEncodedFrameRate() {
-    var builder =
-        Producer.builder()
-            .launcher(
-                (command, jobAttemptId) -> {
-                  throw new AssertionError("FFmpeg must not start");
-                })
-            .command(List.of("ffmpeg"))
-            .jobAttemptId(JOB_ATTEMPT_ID)
-            .gracePeriod(Duration.ofSeconds(5))
-            .stallTimeout(Duration.ofMinutes(1))
-            .memoryBudget(SegmentMemoryBudget.forSlots(1))
-            .sink(sink);
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("producersLackingARequiredArgument")
+  @DisplayName("Should refuse to start a producer when it lacks a required argument")
+  void shouldRefuseToStartAProducerWhenItLacksARequiredArgument(
+      String argument, Producer.ProducerBuilder builder) {
+    assertThatNullPointerException().isThrownBy(builder::start).withMessageContaining(argument);
+  }
 
-    assertThatNullPointerException()
-        .isThrownBy(builder::start)
-        .withMessageContaining("encodedFrameRate");
+  // The builder's setters refuse null themselves, so each producer leaves its argument unset.
+  static Stream<Arguments> producersLackingARequiredArgument() {
+    return Stream.of(
+        Arguments.of(
+            "encodedFrameRate",
+            producerThatMustNotLaunch()
+                .videoDecision(VideoDecisionFixtures.encodeBuilder().build())),
+        Arguments.of(
+            "videoDecision", producerThatMustNotLaunch().encodedFrameRate(OptionalDouble.empty())));
+  }
+
+  private static Producer.ProducerBuilder producerThatMustNotLaunch() {
+    return Producer.builder()
+        .launcher(
+            (command, jobAttemptId) -> {
+              throw new AssertionError("FFmpeg must not start");
+            })
+        .command(List.of("ffmpeg"))
+        .jobAttemptId(JOB_ATTEMPT_ID)
+        .gracePeriod(Duration.ofSeconds(5))
+        .stallTimeout(Duration.ofMinutes(1))
+        .memoryBudget(SegmentMemoryBudget.forSlots(1))
+        .sink(new RecordingSegmentSink());
   }
 
   static Stream<Recording> recordingsThatGroupWithoutFailure() {
@@ -627,6 +645,226 @@ class ProducerTest {
     assertThat(failure.reason()).isEqualTo(ProducerFailure.MALFORMED_OUTPUT);
     assertThat(failure.detail()).contains("MISSING_INITIALIZATION_SEGMENT");
     assertThat(process.wasDestroyedForcibly()).isTrue();
+    assertThat(sink.acceptedNames()).isEmpty();
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as an output mismatch, deliver nothing and end FFmpeg when an"
+          + " encode's initialization segment declares another level")
+  void
+      shouldFailTheAttemptAsAnOutputMismatchDeliverNothingAndEndFfmpegWhenAnEncodesInitializationSegmentDeclaresAnotherLevel() {
+    var recording = recording(ENCODED_RECORDING);
+    var process = ScriptedProcess.builder().output(bytesOf(ENCODED_RECORDING)).build();
+    var levelFourTwo = VideoDecisionFixtures.encodeBuilder().level(42).codecString("avc1.64002A");
+
+    var producer = producerFor(process, recording).videoDecision(levelFourTwo.build()).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
+    assertThat(failure.detail()).contains("avc1.64000A", "avc1.64002A");
+    assertThat(process.wasDestroyedForcibly()).isTrue();
+    assertThat(sink.acceptedNames()).isEmpty();
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as an output mismatch and deliver nothing when a copy's codec"
+          + " string differs from the job's")
+  void
+      shouldFailTheAttemptAsAnOutputMismatchAndDeliverNothingWhenACopysCodecStringDiffersFromTheJobs() {
+    var recording = recording("07-copy-start0.fmp4");
+    var process = ScriptedProcess.builder().output(bytesOf(recording.file())).build();
+
+    var producer =
+        producerFor(process, recording)
+            .videoDecision(new VideoDecision.Copy("avc1.640028"))
+            .start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
+    assertThat(sink.acceptedNames()).isEmpty();
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as an output mismatch when an encode's output is not 8-bit 4:2:0")
+  void shouldFailTheAttemptAsAnOutputMismatchWhenAnEncodesOutputIsNotEightBitFourTwoZero() {
+    var recording = recording("07-copy-start0.fmp4");
+    var process = ScriptedProcess.builder().output(bytesOf(recording.file())).build();
+    var highFourFourFour =
+        VideoDecisionFixtures.encodeBuilder().codecString(recording.videoCodecString());
+
+    var producer = producerFor(process, recording).videoDecision(highFourFourFour.build()).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
+    assertThat(failure.detail()).contains("4:4:4");
+    assertThat(sink.acceptedNames()).isEmpty();
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({
+    "10-bit 4:2:0, 6E000A, FDFAFA00",
+    "10-bit 4:2:2, 7A000A, FEFAFA00",
+    "8-bit 4:0:0, 64000A, FCF8F800"
+  })
+  @DisplayName(
+      "Should name the declared picture format in the output mismatch when an encode's output is"
+          + " not 8-bit 4:2:0")
+  void
+      shouldNameTheDeclaredPictureFormatInTheOutputMismatchWhenAnEncodesOutputIsNotEightBitFourTwoZero(
+          String pictureFormat, String profileConstraintsAndLevel, String formatExtension) {
+    var avcC =
+        IsoBoxes.box(
+            "avcC",
+            HexFormat.of()
+                .parseHex(
+                    "01"
+                        + profileConstraintsAndLevel
+                        + "FFE100026742010002"
+                        + "68CE"
+                        + formatExtension));
+    var output =
+        IsoBoxes.concat(
+            IsoBoxes.ftyp(),
+            IsoBoxes.moov(
+                IsoBoxes.Track.video()
+                    .sampleEntry(IsoBoxes.box("avc1", new byte[78], avcC))
+                    .build()));
+    var process = ScriptedProcess.builder().output(output).build();
+    var encode =
+        VideoDecisionFixtures.encodeBuilder().codecString("avc1." + profileConstraintsAndLevel);
+
+    var producer =
+        producerLaunching(process).periodSeconds(6).videoDecision(encode.build()).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
+    assertThat(failure.detail()).contains("declares " + pictureFormat + " where");
+    assertThat(sink.acceptedNames()).isEmpty();
+  }
+
+  @Test
+  @DisplayName(
+      "Should deliver a copy's initialization segment whatever its picture format when its codec"
+          + " string matches the job's")
+  void
+      shouldDeliverACopysInitializationSegmentWhateverItsPictureFormatWhenItsCodecStringMatchesTheJobs() {
+    var recording = recording("07-copy-start0.fmp4");
+    var process = ScriptedProcess.builder().output(bytesOf(recording.file())).build();
+
+    var producer = producerFor(process, recording).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(sink.acceptedNames()).first().isEqualTo("init.mp4");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"13-x265-cfr.fmp4", "09-svtav1-vfr.fmp4", ENCODED_RECORDING})
+  @ResourceLock(Resources.LOCALE)
+  @DisplayName(
+      "Should deliver every segment of an encode that matches the job when the default format"
+          + " locale writes other digits")
+  void
+      shouldDeliverEverySegmentOfAnEncodeThatMatchesTheJobWhenTheDefaultFormatLocaleWritesOtherDigits(
+          String file) {
+    var recording = recording(file);
+    var process = ScriptedProcess.builder().output(bytesOf(file)).build();
+    var formatLocale = Locale.getDefault(Locale.Category.FORMAT);
+    Locale.setDefault(Locale.Category.FORMAT, Locale.forLanguageTag("ar-EG"));
+    try {
+      var producer = producerFor(process, recording).start();
+
+      assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+      assertThat(sink.acceptedNames()).first().isEqualTo("init.mp4");
+    } finally {
+      Locale.setDefault(Locale.Category.FORMAT, formatLocale);
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as an output mismatch when the initialization segment's video"
+          + " codec configuration cannot be read")
+  void
+      shouldFailTheAttemptAsAnOutputMismatchWhenTheInitializationSegmentsVideoCodecConfigurationCannotBeRead() {
+    var emptyHvcc = IsoBoxes.box("hvc1", new byte[78], IsoBoxes.box("hvcC"));
+    var output =
+        IsoBoxes.concat(
+            IsoBoxes.ftyp(), IsoBoxes.moov(IsoBoxes.Track.video().sampleEntry(emptyHvcc).build()));
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer =
+        producerLaunching(process)
+            .periodSeconds(6)
+            .videoDecision(new VideoDecision.Copy("hvc1.1.6.L93.90"))
+            .start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
+    assertThat(sink.acceptedNames()).isEmpty();
+  }
+
+  @Test
+  @DisplayName(
+      "Should deliver the attempt when the reader cannot parse the codec configuration of an audio"
+          + " track")
+  void shouldDeliverTheAttemptWhenTheReaderCannotParseTheCodecConfigurationOfAnAudioTrack() {
+    var misplacedDescriptor =
+        IsoBoxes.box(
+            "mp4a",
+            new byte[28],
+            IsoBoxes.fullBox("esds", 0, HexFormat.of().parseHex("0480808000")));
+    var moov =
+        IsoBoxes.moov(
+            IsoBoxes.Track.video().build(),
+            IsoBoxes.Track.audio().sampleEntry(misplacedDescriptor).build());
+    var output =
+        IsoBoxes.concat(
+            IsoBoxes.ftyp(),
+            moov,
+            IsoBoxes.moof(
+                IsoBoxes.videoTraf()
+                    .baseMediaDecodeTime(0L)
+                    .firstSampleFlags(IsoBoxes.SYNC_SAMPLE_FLAGS)
+                    .sampleDurations(List.of(1001))
+                    .build()),
+            IsoBoxes.mdat(1));
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer = producerOfOneSecondSegments(process).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as malformed output when the video track's stsd holds no sample"
+          + " entry")
+  void shouldFailTheAttemptAsMalformedOutputWhenTheVideoTracksStsdHoldsNoSampleEntry() {
+    var output =
+        IsoBoxes.concat(
+            IsoBoxes.ftyp(),
+            IsoBoxes.moov(IsoBoxes.Track.video().sampleEntry(new byte[0]).build()));
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer = producerLaunching(process).periodSeconds(6).start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.MALFORMED_OUTPUT);
+    assertThat(sink.acceptedNames()).isEmpty();
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as an output mismatch when the initialization segment declares no"
+          + " video track")
+  void shouldFailTheAttemptAsAnOutputMismatchWhenTheInitializationSegmentDeclaresNoVideoTrack() {
+    var output = IsoBoxes.concat(IsoBoxes.ftyp(), IsoBoxes.moov(IsoBoxes.Track.audio().build()));
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer = producerLaunching(process).periodSeconds(6).start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
     assertThat(sink.acceptedNames()).isEmpty();
   }
 
@@ -1634,6 +1872,7 @@ class ProducerTest {
 
     return producerLaunching(process)
         .encodedFrameRate(encodedFrameRate)
+        .videoDecision(VideoDecisionFixtures.forRecording(recording))
         .periodSeconds(recording.period())
         .startSequenceNumber(recording.startSequenceNumber());
   }
@@ -1647,6 +1886,7 @@ class ProducerTest {
         .gracePeriod(Duration.ofSeconds(5))
         .stallTimeout(Duration.ofMinutes(1))
         .encodedFrameRate(OptionalDouble.empty())
+        .videoDecision(new VideoDecision.Copy(RecordingFixtures.ENCODED_RECORDING_CODEC_STRING))
         .memoryBudget(SegmentMemoryBudget.forSlots(1))
         .sink(sink);
   }

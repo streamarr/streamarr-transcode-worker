@@ -245,33 +245,6 @@ class TranscodeCapabilityServiceTest {
 
     assertThat(service.getHardwareEncodingCapability().available()).isTrue();
     assertThat(service.getHardwareEncodingCapability().encoders()).containsExactly("h264_nvenc");
-    assertThat(service.resolveEncoder("h264")).map(EncoderBackend::encoder).contains("h264_nvenc");
-  }
-
-  @Test
-  @DisplayName(
-      "Should run the hardware encoder that sorts first by name when two of one codec family pass")
-  void shouldRunTheHardwareEncoderThatSortsFirstByNameWhenTwoOfOneCodecFamilyPass() {
-    var outputs =
-        Map.of(
-            "ffmpeg", createProcess("ffmpeg version 8.1.2", 0),
-            "encoders",
-                createProcess(
-                    """
-                V....D h264_vaapi VAAPI H.264 encoder
-                V....D h264_qsv QSV H.264 encoder
-                V....D h264_nvenc NVENC H.264 encoder
-                """,
-                    0),
-            "hwaccels", createProcess("Hardware acceleration methods:\ncuda\nqsv\nvaapi\n", 0));
-    var service =
-        new TranscodeCapabilityService("ffmpeg", command -> resolveProcess(command, outputs));
-
-    service.detectCapabilities();
-
-    assertThat(service.getHardwareEncodingCapability().encoders())
-        .containsExactlyInAnyOrder("h264_nvenc", "h264_qsv", "h264_vaapi");
-    assertThat(service.resolveEncoder("h264")).map(EncoderBackend::encoder).contains("h264_nvenc");
   }
 
   @Test
@@ -426,8 +399,11 @@ class TranscodeCapabilityServiceTest {
   }
 
   @Test
-  @DisplayName("Should resolve H264 encoder to hardware when available")
-  void shouldResolveH264EncoderToHardwareWhenAvailable() {
+  @DisplayName(
+      "Should resolve the H264 encoder to software when the hardware encoder does not force the"
+          + " job's codec profile and level")
+  void
+      shouldResolveTheH264EncoderToSoftwareWhenTheHardwareEncoderDoesNotForceTheJobsCodecProfileAndLevel() {
     var encoderOutput =
         """
         V....D h264_nvenc           NVIDIA NVENC H.264 encoder (codec h264)
@@ -443,7 +419,8 @@ class TranscodeCapabilityServiceTest {
         new TranscodeCapabilityService("ffmpeg", command -> resolveProcess(command, outputs));
     service.detectCapabilities();
 
-    assertThat(service.resolveEncoder("h264")).map(EncoderBackend::encoder).contains("h264_nvenc");
+    assertThat(service.getHardwareEncodingCapability().encoders()).containsExactly("h264_nvenc");
+    assertThat(service.resolveEncoder("h264")).map(EncoderBackend::encoder).contains("libx264");
   }
 
   @Test
@@ -497,7 +474,7 @@ class TranscodeCapabilityServiceTest {
     service.detectCapabilities();
 
     assertThat(service.getHardwareEncodingCapability().available()).isTrue();
-    assertThat(service.resolveEncoder("h264")).map(EncoderBackend::encoder).contains("h264_qsv");
+    assertThat(service.getHardwareEncodingCapability().encoders()).containsExactly("h264_qsv");
   }
 
   @Test
@@ -536,8 +513,8 @@ class TranscodeCapabilityServiceTest {
     assertThat(advertised)
         .containsExactlyInAnyOrder(
             WorkerVerifiedEncoder.builder()
-                .backend(hardwareBackend(CodecFamily.H264, "h264_nvenc"))
-                .keyframeVerified(false)
+                .backend(softwareBackend(CodecFamily.H264, "libx264"))
+                .keyframeVerified(true)
                 .build(),
             WorkerVerifiedEncoder.builder()
                 .backend(softwareBackend(CodecFamily.HEVC, "libx265"))
@@ -580,14 +557,6 @@ class TranscodeCapabilityServiceTest {
     assertThat(service.workerVerifiedEncoders()).isEmpty();
   }
 
-  private static EncoderBackend hardwareBackend(CodecFamily codecFamily, String encoder) {
-    return EncoderBackend.builder()
-        .codecFamily(codecFamily)
-        .encoder(encoder)
-        .hardware(true)
-        .build();
-  }
-
   private static EncoderBackend softwareBackend(CodecFamily codecFamily, String encoder) {
     return EncoderBackend.builder()
         .codecFamily(codecFamily)
@@ -623,8 +592,10 @@ class TranscodeCapabilityServiceTest {
   }
 
   @Test
-  @DisplayName("Should resolve HEVC encoder to hardware when NVENC available")
-  void shouldResolveHevcEncoderToHardwareWhenNvencAvailable() {
+  @DisplayName(
+      "Should resolve the HEVC encoder to software when NVENC does not force the job's codec"
+          + " profile and level")
+  void shouldResolveTheHevcEncoderToSoftwareWhenNvencDoesNotForceTheJobsCodecProfileAndLevel() {
     var encoderOutput =
         """
         V....D hevc_nvenc           NVIDIA NVENC hevc encoder (codec hevc)
@@ -640,7 +611,8 @@ class TranscodeCapabilityServiceTest {
         new TranscodeCapabilityService("ffmpeg", command -> resolveProcess(command, outputs));
     service.detectCapabilities();
 
-    assertThat(service.resolveEncoder("hevc")).map(EncoderBackend::encoder).contains("hevc_nvenc");
+    assertThat(service.getHardwareEncodingCapability().encoders()).containsExactly("hevc_nvenc");
+    assertThat(service.resolveEncoder("hevc")).map(EncoderBackend::encoder).contains("libx265");
   }
 
   @Test
@@ -746,9 +718,6 @@ class TranscodeCapabilityServiceTest {
     service.detectCapabilities();
 
     assertThat(service.getHardwareEncodingCapability().encoders()).contains("h264_videotoolbox");
-    assertThat(service.resolveEncoder("h264"))
-        .map(EncoderBackend::encoder)
-        .contains("h264_videotoolbox");
   }
 
   private Process createProcess(String stdout, int exitCode) {

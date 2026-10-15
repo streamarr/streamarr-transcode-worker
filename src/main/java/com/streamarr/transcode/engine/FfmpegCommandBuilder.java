@@ -21,9 +21,11 @@ public class FfmpegCommandBuilder {
   private static final String DEFAULT_EIGHT_BIT_PIXEL_FORMAT = "yuv420p";
   private static final EncoderTraits UNLISTED_ENCODER = traits().build();
   private static final EncoderTraits FIXED_GOP = traits().fixedGop(true).build();
-  // QSV takes nv12 from system memory and refuses yuv420p.
+  // QSV and VAAPI take nv12 from system memory and refuse yuv420p.
+  private static final String NV12 = "nv12";
   private static final EncoderTraits QSV =
-      traits().fixedGop(true).eightBitPixelFormat("nv12").build();
+      traits().fixedGop(true).eightBitPixelFormat(NV12).build();
+  private static final EncoderTraits VAAPI = traits().eightBitPixelFormat(NV12).build();
 
   // What the command passes each encoder differently; an encoder not listed has none of it. A
   // keyframe-verified encoder's recordings show every forced keyframe as a sync sample that starts
@@ -38,6 +40,7 @@ public class FfmpegCommandBuilder {
                   .keyframeVerified(true)
                   .takesPresetName(true)
                   .disablesSceneCutsByThreshold(true)
+                  .codecProfileForcing(CodecProfileForcing.LIBX264)
                   .build()),
           Map.entry(
               "libsvtav1",
@@ -46,6 +49,7 @@ public class FfmpegCommandBuilder {
                   .takesSvtAv1PresetNumber(true)
                   .fixedGop(true)
                   .capsBitrateOnlyInCrfMode(true)
+                  .codecProfileForcing(CodecProfileForcing.LIBSVTAV1)
                   .build()),
           Map.entry(
               "libx265",
@@ -53,6 +57,7 @@ public class FfmpegCommandBuilder {
                   .keyframeVerified(true)
                   .takesPresetName(true)
                   .closesGopsByX265Parameters(true)
+                  .codecProfileForcing(CodecProfileForcing.LIBX265)
                   .build()),
           Map.entry("h264_nvenc", FIXED_GOP),
           Map.entry("hevc_nvenc", FIXED_GOP),
@@ -64,7 +69,10 @@ public class FfmpegCommandBuilder {
           Map.entry("hevc_amf", FIXED_GOP),
           Map.entry("av1_amf", FIXED_GOP),
           Map.entry("h264_rkmpp", FIXED_GOP),
-          Map.entry("hevc_rkmpp", FIXED_GOP));
+          Map.entry("hevc_rkmpp", FIXED_GOP),
+          Map.entry("h264_vaapi", VAAPI),
+          Map.entry("hevc_vaapi", VAAPI),
+          Map.entry("av1_vaapi", VAAPI));
 
   // By default x265 opens its GOPs, so a forced keyframe is a CRA picture despite -forced-idr, and
   // it adds a keyframe at each scene cut, inside a segment.
@@ -187,6 +195,7 @@ public class FfmpegCommandBuilder {
 
     cmd.addAll(List.of("-c:v", job.videoEncoder()));
     addPresetArgs(cmd, job);
+    cmd.addAll(forcedCodecProfileArgs(job));
     addScaleAndBitrateArgs(cmd, job);
     addAudioArgs(cmd, decision.audioDecision());
   }
@@ -304,9 +313,24 @@ public class FfmpegCommandBuilder {
       cmd.addAll(List.of("-sc_threshold:v:0", "0"));
     }
 
+    addX265Parameters(cmd, job);
+  }
+
+  // libx265 reads its settings from one -x265-params value, and FFmpeg keeps only the last
+  // -x265-params of an output, so the closed-GOP settings and the forced level and tier join one
+  // value.
+  private static void addX265Parameters(List<String> cmd, TranscodeJob job) {
+    var parameters = new ArrayList<String>();
     if (traitsOf(job).closesGopsByX265Parameters()) {
-      cmd.addAll(List.of("-x265-params", CLOSED_GOP_X265_PARAMETERS));
+      parameters.add(CLOSED_GOP_X265_PARAMETERS);
     }
+
+    parameters.addAll(forcedX265Parameters(job));
+    if (parameters.isEmpty()) {
+      return;
+    }
+
+    cmd.addAll(List.of("-x265-params", String.join(":", parameters)));
   }
 
   // FFmpeg's list mode compares each frame's own timestamp with these absolute media times, so
@@ -331,6 +355,26 @@ public class FfmpegCommandBuilder {
 
   static boolean isKeyframeVerified(String encoder) {
     return traitsOf(encoder).keyframeVerified();
+  }
+
+  private static List<String> forcedCodecProfileArgs(TranscodeJob job) {
+    return switch (job.request().transcodeDecision().videoDecision()) {
+      case VideoDecision.Copy _ -> List.of();
+      case VideoDecision.Encode encode -> traitsOf(job).codecProfileForcing().argumentsFor(encode);
+    };
+  }
+
+  private static List<String> forcedX265Parameters(TranscodeJob job) {
+    return switch (job.request().transcodeDecision().videoDecision()) {
+      case VideoDecision.Copy _ -> List.of();
+      case VideoDecision.Encode encode ->
+          traitsOf(job).codecProfileForcing().x265ParametersFor(encode);
+    };
+  }
+
+  /** Whether the command forces the job's codec profile, tier and level on the encoder. */
+  static boolean forcesCodecProfile(String encoder) {
+    return traitsOf(encoder).codecProfileForcing() != CodecProfileForcing.NONE;
   }
 
   private static EncoderTraits traitsOf(TranscodeJob job) {
@@ -362,10 +406,59 @@ public class FfmpegCommandBuilder {
       boolean disablesSceneCutsByThreshold,
       boolean closesGopsByX265Parameters,
       boolean capsBitrateOnlyInCrfMode,
-      @NonNull String eightBitPixelFormat) {}
+      @NonNull String eightBitPixelFormat,
+      @NonNull CodecProfileForcing codecProfileForcing) {}
 
   private static EncoderTraits.EncoderTraitsBuilder traits() {
-    return EncoderTraits.builder().eightBitPixelFormat(DEFAULT_EIGHT_BIT_PIXEL_FORMAT);
+    return EncoderTraits.builder()
+        .eightBitPixelFormat(DEFAULT_EIGHT_BIT_PIXEL_FORMAT)
+        .codecProfileForcing(CodecProfileForcing.NONE);
+  }
+
+  // How an encoder takes the codec profile, tier and level that the job forces. The hardware
+  // encoders force nothing until each passes the forced-value check (worker #14, #56 and #57); the
+  // producer's output check fails an attempt whose output differs from the job, so until then the
+  // worker runs the software encoder instead.
+  private enum CodecProfileForcing {
+    NONE,
+    LIBX264,
+    // libx265 ignores FFmpeg's -level, and writes the High tier unless told otherwise.
+    LIBX265,
+    // SVT-AV1 writes the Main tier and the only profile that 8-bit 4:2:0 allows.
+    LIBSVTAV1;
+
+    List<String> argumentsFor(VideoDecision.Encode encode) {
+      var level = String.valueOf(encode.level());
+      return switch (this) {
+        case NONE -> List.of();
+        case LIBX264 ->
+            List.of("-profile:v", profileName(encode.codecProfile()), "-level:v", level);
+        case LIBX265 -> List.of("-profile:v", profileName(encode.codecProfile()));
+        case LIBSVTAV1 -> List.of("-level:v", level);
+      };
+    }
+
+    List<String> x265ParametersFor(VideoDecision.Encode encode) {
+      return switch (this) {
+        case LIBX265 -> x265LevelAndTier(encode);
+        case NONE, LIBX264, LIBSVTAV1 -> List.of();
+      };
+    }
+
+    private static String profileName(VideoCodecProfile profile) {
+      return switch (profile) {
+        case H264_HIGH -> "high";
+        case HEVC_MAIN, AV1_MAIN -> "main";
+      };
+    }
+
+    private static List<String> x265LevelAndTier(VideoDecision.Encode encode) {
+      var parameters = new ArrayList<>(List.of("level-idc=" + encode.level()));
+      encode
+          .tier()
+          .ifPresent(tier -> parameters.add("high-tier=" + (tier == VideoCodecTier.HIGH ? 1 : 0)));
+      return List.copyOf(parameters);
+    }
   }
 
   private record ForcedKeyframes(@NonNull String times, boolean reachesLastBoundary) {}
