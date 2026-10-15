@@ -15,8 +15,10 @@ import io.grpc.Status;
 import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
 import io.grpc.stub.StreamObserver;
 import java.io.IOException;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -36,10 +38,11 @@ import org.junit.jupiter.params.provider.MethodSource;
 @Tag("IntegrationTest")
 @DisplayName("Image Control Plane Tests")
 class ImageControlPlaneIT {
-  private static final ImageControlPlane.ListenAddresses EPHEMERAL_ADDRESSES =
+  private static final InetAddress LOOPBACK = InetAddress.getLoopbackAddress();
+  private static final ImageControlPlane.ListenAddresses EPHEMERAL_LOOPBACK_ADDRESSES =
       ImageControlPlane.ListenAddresses.builder()
-          .grpc(new InetSocketAddress(0))
-          .command(new InetSocketAddress(0))
+          .grpc(new InetSocketAddress(LOOPBACK, 0))
+          .command(new InetSocketAddress(LOOPBACK, 0))
           .build();
 
   private ImageControlPlane.Serving controlPlane;
@@ -48,13 +51,20 @@ class ImageControlPlaneIT {
   @BeforeEach
   void startServer() throws IOException {
     http = HttpClient.newHttpClient();
-    controlPlane = ImageControlPlane.serve(EPHEMERAL_ADDRESSES);
+    controlPlane = ImageControlPlane.serve(EPHEMERAL_LOOPBACK_ADDRESSES);
   }
 
   @AfterEach
   void stopServer() throws InterruptedException {
     http.close();
     controlPlane.close();
+  }
+
+  @Test
+  @DisplayName("Should listen only on loopback when the test serves the control plane")
+  void shouldListenOnlyOnLoopbackWhenTheTestServesTheControlPlane() {
+    assertThat(Stream.of(controlPlane.grpcAddress(), controlPlane.commandAddress()))
+        .allSatisfy(address -> assertThat(address.getAddress().isLoopbackAddress()).isTrue());
   }
 
   @Test
@@ -245,10 +255,11 @@ class ImageControlPlaneIT {
     }
   }
 
-  private HttpRequest request(String command, byte[] body) {
+  private HttpRequest request(String command, byte[] body) throws URISyntaxException {
+    var listener = controlPlane.commandAddress();
+    var host = listener.getAddress().getHostAddress();
     return HttpRequest.newBuilder(
-            URI.create(
-                "http://127.0.0.1:" + controlPlane.commandAddress().getPort() + "/" + command))
+            new URI("http", null, host, listener.getPort(), "/" + command, null, null))
         .timeout(Duration.ofSeconds(3))
         .POST(HttpRequest.BodyPublishers.ofByteArray(body))
         .build();
