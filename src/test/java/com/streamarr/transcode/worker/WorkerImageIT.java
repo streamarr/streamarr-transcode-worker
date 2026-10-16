@@ -245,7 +245,7 @@ class WorkerImageIT {
     var ffmpeg = svtAv1ParallelismOfOneFfmpeg();
     try (var image = ImageFixture.builder().media(media).ffmpegPath(ffmpeg).build()) {
       image.accept();
-      var request = presetJob("av1", EncoderPreset.ENCODER_PRESET_ULTRAFAST).build();
+      var request = presetJob("av1", EncoderPreset.ENCODER_PRESET_SUPERFAST).build();
 
       var completed = JobAttemptCompleted.parseFrom(image.command("job", request.toByteArray()));
 
@@ -257,13 +257,13 @@ class WorkerImageIT {
       // references' leading packets, not their fragments.
       Files.write(media.resolve("uploaded.mp4"), image.command("segment", new byte[0]));
       var uploaded = image.packetsOf("/media/uploaded.mp4");
-      var arguments = svtAv1ArgumentsWithoutPreset(image.recordedArguments("ffmpeg"), "13");
-      var preset13 = image.svtAv1ReferencePackets(arguments, ":preset=13");
+      var arguments = svtAv1ArgumentsWithoutPreset(image.recordedArguments("ffmpeg"), "12");
+      var preset12 = image.svtAv1ReferencePackets(arguments, ":preset=12");
       var libraryDefault = image.svtAv1ReferencePackets(arguments, "");
       assertThat(uploaded).isNotEmpty();
-      assertThat(preset13).hasSizeGreaterThanOrEqualTo(uploaded.size());
+      assertThat(preset12).hasSizeGreaterThanOrEqualTo(uploaded.size());
       assertThat(libraryDefault).hasSizeGreaterThanOrEqualTo(uploaded.size());
-      assertThat(preset13.subList(0, uploaded.size())).isEqualTo(uploaded);
+      assertThat(preset12.subList(0, uploaded.size())).isEqualTo(uploaded);
       assertThat(libraryDefault.subList(0, uploaded.size())).isNotEqualTo(uploaded);
     }
   }

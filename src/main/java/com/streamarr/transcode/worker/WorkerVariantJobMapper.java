@@ -129,7 +129,6 @@ final class WorkerVariantJobMapper {
   private static Optional<EncoderPreset> encoderPresetOf(
       build.buf.gen.streamarr.transcode.v1.EncoderPreset preset) {
     return switch (preset) {
-      case ENCODER_PRESET_ULTRAFAST -> Optional.of(EncoderPreset.ULTRAFAST);
       case ENCODER_PRESET_SUPERFAST -> Optional.of(EncoderPreset.SUPERFAST);
       case ENCODER_PRESET_VERYFAST -> Optional.of(EncoderPreset.VERYFAST);
       case ENCODER_PRESET_FASTER -> Optional.of(EncoderPreset.FASTER);
@@ -138,7 +137,7 @@ final class WorkerVariantJobMapper {
       case ENCODER_PRESET_SLOW -> Optional.of(EncoderPreset.SLOW);
       case ENCODER_PRESET_SLOWER -> Optional.of(EncoderPreset.SLOWER);
       case ENCODER_PRESET_VERYSLOW -> Optional.of(EncoderPreset.VERYSLOW);
-      case ENCODER_PRESET_UNSPECIFIED, UNRECOGNIZED -> Optional.empty();
+      case ENCODER_PRESET_ULTRAFAST, ENCODER_PRESET_UNSPECIFIED, UNRECOGNIZED -> Optional.empty();
     };
   }
 
