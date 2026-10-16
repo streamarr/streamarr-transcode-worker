@@ -5,8 +5,8 @@ import java.util.List;
 import lombok.NonNull;
 
 /**
- * A segment the producer delivers: the name the worker uploads it under and the bytes FFmpeg wrote
- * for it, which the producer never copies.
+ * A segment the producer delivers: the name the worker uploads it under and its bytes, which view
+ * the bytes FFmpeg wrote instead of copying them.
  */
 public abstract sealed class ProducedSegment {
 
@@ -19,15 +19,6 @@ public abstract sealed class ProducedSegment {
 
   static Initialization of(@NonNull InitializationSegment segment) {
     return new Initialization(List.of(ByteBuffer.wrap(segment.bytes())));
-  }
-
-  static Media of(@NonNull MediaSegment segment) {
-    return new Media(
-        segment.sequenceNumber(),
-        segment.fragments().stream()
-            .flatMap(fragment -> fragment.boxes().stream())
-            .map(ByteBuffer::wrap)
-            .toList());
   }
 
   /** The name the worker uploads the segment under. */
@@ -68,6 +59,10 @@ public abstract sealed class ProducedSegment {
     private Media(int sequenceNumber, List<ByteBuffer> parts) {
       super(parts);
       this.sequenceNumber = sequenceNumber;
+    }
+
+    static Media of(int sequenceNumber, @NonNull List<ByteBuffer> parts) {
+      return new Media(sequenceNumber, parts);
     }
 
     @Override

@@ -1,11 +1,14 @@
 package com.streamarr.transcode.engine;
 
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.function.Consumer;
 import java.util.function.LongSupplier;
+import lombok.Builder;
 
 /**
  * The rule that every sample a {@code moof} describes lies inside the body of the {@code mdat} that
@@ -20,9 +23,15 @@ import java.util.function.LongSupplier;
 final class SampleRanges {
 
   private final Map<Long, TrackExtends> trackExtends;
+  private final long maximumSampleCount;
 
-  SampleRanges(Map<Long, TrackExtends> trackExtends) {
+  /**
+   * @param maximumSegmentBytes the segment cap, which bounds how many samples a media segment can
+   *     describe
+   */
+  SampleRanges(Map<Long, TrackExtends> trackExtends, long maximumSegmentBytes) {
     this.trackExtends = Map.copyOf(trackExtends);
+    this.maximumSampleCount = maximumSegmentBytes / MovieFragmentWriter.SAMPLE_ENTRY_BYTES;
   }
 
   /**
@@ -33,7 +42,40 @@ final class SampleRanges {
     forEachRun(
         trackFragments,
         mediaData,
-        placed -> mediaData.requireInside(placed.trackId(), placed.start(), placed.bytes()));
+        placed ->
+            mediaData.requireInside(
+                placed.trackFragment().header().trackId(), placed.start(), placed.bytes()));
+  }
+
+  /**
+   * Every sample of each {@code traf} that holds samples, in {@code traf} order: timed from its
+   * {@code tfdt} and placed in the {@code mdat}. It trusts every run to lie inside the {@code
+   * mdat}, which {@link #requireInside} checks first.
+   *
+   * @throws FragmentedMp4Exception when the fragment holds more samples than a media segment under
+   *     the segment cap can describe, when a {@code traf} with samples holds no {@code tfdt}, or
+   *     when a sample needs a default that no box declares
+   */
+  List<TrackSamples> samplesOf(List<TrackFragmentBox> trackFragments, MediaData mediaData) {
+    requireDescribableSampleCount(trackFragments);
+    var timing = new SampleTiming(mediaData);
+    forEachRun(trackFragments, mediaData, timing::add);
+    return timing.trackSamples();
+  }
+
+  private void requireDescribableSampleCount(List<TrackFragmentBox> trackFragments) {
+    var sampleCount =
+        trackFragments.stream()
+            .flatMap(trackFragment -> trackFragment.runs().stream())
+            .mapToLong(TrackRun::sampleCount)
+            .sum();
+    if (sampleCount > maximumSampleCount) {
+      throw new FragmentedMp4Exception(
+          Reason.EXCEEDS_SEGMENT_CAP,
+          "a fragment of "
+              + sampleCount
+              + " samples needs more than the segment cap to describe them");
+    }
   }
 
   // Places every run in order, handing each to the visitor before placing the next.
@@ -44,7 +86,81 @@ final class SampleRanges {
   }
 
   /** Where a run's samples start, measured from the {@code moof}'s first byte, and their bytes. */
-  private record PlacedRun(long trackId, long start, long bytes) {}
+  @Builder
+  private record PlacedRun(TrackFragmentBox trackFragment, TrackRun run, long start, long bytes) {}
+
+  /** Times each sample from its {@code traf}'s decode time and places it in the {@code mdat}. */
+  private final class SampleTiming {
+
+    private final MediaData mediaData;
+    private final List<TrackSamples> trackSamples = new ArrayList<>();
+    // The traf whose samples the last run added, by identity: two trafs can hold the same bytes.
+    private Optional<TrackFragmentBox> trackFragment = Optional.empty();
+    private OptionalLong decodeTime = OptionalLong.empty();
+
+    private SampleTiming(MediaData mediaData) {
+      this.mediaData = mediaData;
+    }
+
+    private void add(PlacedRun placed) {
+      if (trackFragment.filter(added -> added == placed.trackFragment()).isEmpty()) {
+        trackFragment = Optional.of(placed.trackFragment());
+        decodeTime = OptionalLong.empty();
+        trackSamples.add(
+            new TrackSamples(placed.trackFragment().header().trackId(), new ArrayList<>()));
+      }
+
+      var entries = placed.run().entries(defaultsOf(placed.trackFragment().header()));
+      if (entries.isEmpty()) {
+        return;
+      }
+
+      var time = decodeTime.orElseGet(() -> placed.trackFragment().baseMediaDecodeTime());
+      var position = positionOf(placed);
+      var samples = trackSamples.getLast().samples();
+      for (var entry : entries) {
+        samples.add(
+            Sample.builder()
+                .decodeTime(time)
+                .compositionOffset(entry.compositionOffset())
+                .duration(entry.duration())
+                .size(entry.size())
+                .flags(entry.flags())
+                .mediaDataPosition(position)
+                .build());
+        time = decodeTimeAfter(time, entry.duration());
+        position += Math.toIntExact(entry.size());
+      }
+
+      decodeTime = OptionalLong.of(time);
+    }
+
+    // A run that holds no bytes may point anywhere, and none of its samples is ever read.
+    private int positionOf(PlacedRun placed) {
+      if (placed.bytes() == 0) {
+        return 0;
+      }
+
+      return mediaData.positionInBox(placed.start());
+    }
+
+    private List<TrackSamples> trackSamples() {
+      return trackSamples.stream().filter(track -> !track.samples().isEmpty()).toList();
+    }
+  }
+
+  private TrackRun.Defaults defaultsOf(TrackFragmentHeader header) {
+    return new TrackRun.Defaults(
+        () ->
+            header
+                .defaultSampleDuration()
+                .orElseGet(() -> trackDefaultsOf(header).defaultSampleDuration()),
+        () -> defaultSampleSizeOf(header),
+        () ->
+            header
+                .defaultSampleFlags()
+                .orElseGet(() -> trackDefaultsOf(header).defaultSampleFlags()));
+  }
 
   /** Places each {@code traf}'s runs after the data of the {@code traf} placed before it. */
   private final class Placement {
@@ -70,7 +186,13 @@ final class SampleRanges {
         }
 
         var bytes = sampleBytesOf(run, () -> defaultSampleSizeOf(header));
-        visitor.accept(new PlacedRun(header.trackId(), start, bytes));
+        visitor.accept(
+            PlacedRun.builder()
+                .trackFragment(trackFragment)
+                .run(run)
+                .start(start)
+                .bytes(bytes)
+                .build());
         runEnd = start + bytes;
       }
 
@@ -88,6 +210,14 @@ final class SampleRanges {
     }
 
     return previousTrafEnd;
+  }
+
+  private static long decodeTimeAfter(long decodeTime, long duration) {
+    try {
+      return Math.addExact(decodeTime, duration);
+    } catch (ArithmeticException _) {
+      throw FragmentedMp4Exception.malformed("a decode time overflows a signed 64-bit value");
+    }
   }
 
   private static long offsetBy(long base, long offset) {
@@ -125,11 +255,27 @@ final class SampleRanges {
                         + " needs a default sample size, and no trex declares one"));
   }
 
+  private TrackExtends trackDefaultsOf(TrackFragmentHeader header) {
+    return Optional.ofNullable(trackExtends.get(header.trackId()))
+        .orElseThrow(
+            () ->
+                FragmentedMp4Exception.malformed(
+                    "a traf of track "
+                        + header.trackId()
+                        + " needs a default sample field, and no trex declares one"));
+  }
+
   /**
    * Where a fragment's {@code mdat} body lies, measured from its {@code moof}'s first byte, and
    * where that {@code moof} starts in the stream.
    */
-  record MediaData(long moofPosition, long bodyStart, long end) {
+  @Builder
+  record MediaData(long moofPosition, long boxStart, long bodyStart, long end) {
+
+    /** Where a position measured from the {@code moof} lies in the {@code mdat} box's bytes. */
+    int positionInBox(long fromMoof) {
+      return Math.toIntExact(fromMoof - boxStart);
+    }
 
     void requireInside(long trackId, long start, long bytes) {
       if (bytes == 0 || holds(start, bytes)) {

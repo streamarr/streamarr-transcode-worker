@@ -55,11 +55,11 @@ public final class FfmpegRecordings {
   }
 
   /**
-   * Asserts that the bytes are the recording as the producer delivers it: the initialization
-   * segment that expected.json digests, then the media segments, without the preroll that the
-   * producer discards or anything after the last media segment.
+   * Asserts that the delivered bytes begin with the initialization segment that expected.json
+   * digests: FFmpeg's ftyp and moov, without the SEI messages of an hvc1 record.
    */
-  public static void assertDeliveredAsExpected(byte[] delivered, Recording recording) {
+  public static void assertBeginsWithTheDeliveredInitializationSegment(
+      byte[] delivered, Recording recording) {
     var initializationSegment = recording.deliveredInitializationSegment();
     assertThat(delivered)
         .as("delivered bytes")
@@ -67,21 +67,6 @@ public final class FfmpegRecordings {
     assertThat(sha256Of(Arrays.copyOf(delivered, initializationSegment.byteLength())))
         .as("SHA-256 of the delivered initialization segment")
         .isEqualTo(initializationSegment.sha256());
-    assertThat(Arrays.copyOfRange(delivered, initializationSegment.byteLength(), delivered.length))
-        .as("delivered media segments")
-        .isEqualTo(mediaSegmentBytesOf(recording));
-  }
-
-  private static byte[] mediaSegmentBytesOf(Recording recording) {
-    var recorded = bytesOf(recording.file());
-    var prerollLength =
-        recording.discardedPreroll().stream().mapToLong(SegmentSummary::byteLength).sum();
-    var mediaSegmentsLength =
-        recording.segments().stream().mapToLong(SegmentSummary::byteLength).sum();
-    var mediaStart =
-        Math.toIntExact(recording.initializationSegment().byteLength() + prerollLength);
-    return Arrays.copyOfRange(
-        recorded, mediaStart, Math.toIntExact(mediaStart + mediaSegmentsLength));
   }
 
   private static String sha256Of(byte[] bytes) {

@@ -1,5 +1,6 @@
 package com.streamarr.transcode.engine;
 
+import static com.streamarr.transcode.engine.Fragments.fragmentBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
@@ -11,7 +12,6 @@ import com.streamarr.transcode.engine.GroupingOutcome.SegmentClosed;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentNumberSkipped;
 import java.util.List;
 import java.util.Optional;
-import java.util.OptionalLong;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -381,10 +381,8 @@ class SegmentGrouperTest {
         new MediaSegment(
             0,
             List.of(
-                new Fragment(
-                    List.of(new byte[40], new byte[100]), Optional.empty(), OptionalLong.empty()),
-                new Fragment(
-                    List.of(new byte[30], new byte[7]), Optional.empty(), OptionalLong.empty())));
+                fragmentBuilder().boxes(List.of(new byte[40], new byte[100])).build(),
+                fragmentBuilder().boxes(List.of(new byte[30], new byte[7])).build()));
 
     assertThat(segment.byteLength()).isEqualTo(177);
   }
@@ -430,6 +428,6 @@ class SegmentGrouperTest {
   }
 
   private static Fragment fragment(Optional<VideoStart> videoStart) {
-    return new Fragment(List.of(new byte[] {1}, new byte[] {2}), videoStart, OptionalLong.empty());
+    return fragmentBuilder().videoStart(videoStart).build();
   }
 }

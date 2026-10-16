@@ -1,5 +1,6 @@
 package com.streamarr.transcode.worker;
 
+import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.copiedVideo;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.requestBuilder;
@@ -47,8 +48,13 @@ import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
 import com.streamarr.transcode.engine.ProcessBuilderLauncher;
 import com.streamarr.transcode.engine.ProcessLauncher;
 import com.streamarr.transcode.engine.TranscodeCapabilityService;
+import com.streamarr.transcode.fixtures.TopLevelBoxes;
+import com.streamarr.transcode.fixtures.TopLevelBoxes.Box;
 import com.streamarr.transcode.probe.FfprobeExecutor;
+import com.streamarr.transcode.worker.support.FfprobePackets;
+import com.streamarr.transcode.worker.support.FfprobePackets.Packet;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
+import com.streamarr.transcode.worker.support.TeeingProcessLauncher;
 import com.streamarr.transcode.worker.support.X264Options;
 import io.grpc.Server;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
@@ -76,6 +82,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
@@ -1531,6 +1538,66 @@ class WorkerMediaSmokeTest {
         .isEqualByComparingTo(copiedKeyframe.presentationTime());
   }
 
+  @ParameterizedTest(name = "{0} source, {1}, from segment {2}")
+  @MethodSource("sourceContainersModesAndStarts")
+  @DisplayName(
+      "Should upload each media segment as one moof and one mdat of FFmpeg's own packets when a"
+          + " worker runs a real job")
+  void shouldUploadEachMediaSegmentAsOneMoofAndOneMdatOfFfmpegsOwnPacketsWhenAWorkerRunsARealJob(
+      String container, TranscodeMode mode, int startSequenceNumber) throws Exception {
+    var run = runSeekableSourceJob(container, mode, startSequenceNumber);
+
+    assertThat(run.mediaSegmentNames())
+        .isNotEmpty()
+        .allSatisfy(
+            name ->
+                assertThat(TopLevelBoxes.of(run.uploads().segments().get(name)))
+                    .extracting(Box::type)
+                    .containsExactly("moof", "mdat"));
+    var ffmpegPackets = FfprobePackets.of(run.ffmpegOutput(), root);
+    var ffmpegPacketsByStreamAndDts =
+        ffmpegPackets.stream()
+            .collect(Collectors.toMap(WorkerMediaSmokeTest::streamAndDts, Function.identity()));
+    var uploadedPackets = FfprobePackets.of(run.uploadedOutput(), root);
+    assertThat(uploadedPackets)
+        .isNotEmpty()
+        .allSatisfy(
+            packet ->
+                assertThat(packet)
+                    .isEqualTo(ffmpegPacketsByStreamAndDts.get(streamAndDts(packet))));
+    var uploadedVideo = uploadedPackets.stream().filter(Packet::isVideo).toList();
+    var ffmpegVideo = ffmpegPackets.stream().filter(Packet::isVideo).toList();
+    assertThat(uploadedVideo.getFirst().isKeyframe()).isTrue();
+    assertThat(uploadedVideo)
+        .containsExactlyElementsOf(
+            ffmpegVideo.subList(ffmpegVideo.indexOf(uploadedVideo.getFirst()), ffmpegVideo.size()));
+  }
+
+  static Stream<Arguments> sourceContainersModesAndStarts() {
+    return sourceContainersAndModes()
+        .flatMap(
+            arguments ->
+                Stream.of(0, REPLACEMENT_START_SEQUENCE_NUMBER)
+                    .map(start -> Arguments.of(arguments.get()[0], arguments.get()[1], start)));
+  }
+
+  private SeekableSourceRun runSeekableSourceJob(
+      String container, TranscodeMode mode, int startSequenceNumber) throws Exception {
+    var source = seekableSource(container);
+    var job = seekableSourceJob(source, mode);
+    job.getExecutionBuilder().setStartSequenceNumber(startSequenceNumber);
+    var launcher = new TeeingProcessLauncher(new ProcessBuilderLauncher());
+
+    var uploads =
+        execute(engine(softwareCapabilities(), launcher), source.getParent(), job.build());
+
+    return new SeekableSourceRun(uploads, launcher.outputOf(fromProto(job.getJobAttemptId())));
+  }
+
+  private static List<Long> streamAndDts(Packet packet) {
+    return List.of((long) packet.stream(), packet.dts());
+  }
+
   static Stream<Arguments> sourceContainersAndModes() {
     return Stream.of("mp4", "mkv", "ts")
         .flatMap(
@@ -2224,6 +2291,18 @@ class WorkerMediaSmokeTest {
       var content = new ByteArrayOutputStream();
       uploadNames.forEach(name -> content.writeBytes(segments.get(name)));
       return content.toByteArray();
+    }
+  }
+
+  // A job's uploads and everything its FFmpeg wrote to standard output.
+  private record SeekableSourceRun(MediaUploads uploads, byte[] ffmpegOutput) {
+
+    private List<String> mediaSegmentNames() {
+      return uploads.names().stream().filter(name -> name.startsWith("segment")).toList();
+    }
+
+    private byte[] uploadedOutput() {
+      return uploads.contentOf(uploads.names());
     }
   }
 

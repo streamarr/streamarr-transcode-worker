@@ -2,13 +2,15 @@ package com.streamarr.transcode.engine;
 
 import java.io.ByteArrayOutputStream;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Accepts each segment the producer delivers and keeps its name and bytes. A test can hold one
@@ -20,10 +22,11 @@ final class RecordingSegmentSink implements SegmentSink {
   private static final long HOLD_LIMIT_SECONDS = 10;
 
   private final List<Accepted> accepted = new CopyOnWriteArrayList<>();
+  private final Map<String, byte[]> acceptedContent = new ConcurrentHashMap<>();
   private final ByteArrayOutputStream acceptedBytes = new ByteArrayOutputStream();
   private final AtomicInteger deliveries = new AtomicInteger();
-  private final AtomicLong startedBytes = new AtomicLong();
-  private final AtomicLong returnedBytes = new AtomicLong();
+  private final List<String> startedNames = new CopyOnWriteArrayList<>();
+  private final List<String> returnedNames = new CopyOnWriteArrayList<>();
   private final CountDownLatch release = new CountDownLatch(1);
   private final CountDownLatch held = new CountDownLatch(1);
   private volatile OptionalInt heldDelivery = OptionalInt.empty();
@@ -74,26 +77,26 @@ final class RecordingSegmentSink implements SegmentSink {
     return cancelled;
   }
 
-  /** The bytes of every segment the producer has handed to the sink, returned or not. */
-  long startedBytes() {
-    return startedBytes.get();
+  /** The name of every segment the producer has handed to the sink, returned or not. */
+  List<String> startedNames() {
+    return List.copyOf(startedNames);
   }
 
   /**
-   * The bytes of every delivery that has returned or thrown, counted just before it does, so never
+   * The name of every delivery that has returned or thrown, noted just before it does, so never
    * later than the producer learns of it.
    */
-  long returnedBytes() {
-    return returnedBytes.get();
+  List<String> returnedNames() {
+    return List.copyOf(returnedNames);
   }
 
   @Override
   public void deliver(ProducedSegment segment, DeliveryCancellation cancellation) {
-    startedBytes.addAndGet(segment.byteLength());
+    startedNames.add(segment.name());
     try {
       receive(segment, cancellation);
     } finally {
-      returnedBytes.addAndGet(segment.byteLength());
+      returnedNames.add(segment.name());
     }
   }
 
@@ -123,6 +126,7 @@ final class RecordingSegmentSink implements SegmentSink {
       acceptedBytes.writeBytes(bytes);
     }
 
+    acceptedContent.put(segment.name(), bytes);
     accepted.add(new Accepted(segment.name(), segment.byteLength(), bytes.length));
   }
 
@@ -152,6 +156,12 @@ final class RecordingSegmentSink implements SegmentSink {
 
   List<String> acceptedNames() {
     return accepted.stream().map(Accepted::name).toList();
+  }
+
+  /** The bytes of the accepted segment with this name. */
+  byte[] contentOf(String name) {
+    return Optional.ofNullable(acceptedContent.get(name))
+        .orElseThrow(() -> new AssertionError("the sink accepted no " + name));
   }
 
   /** Every accepted segment's bytes, concatenated in delivery order. */

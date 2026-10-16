@@ -24,16 +24,18 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * Owns one job attempt's FFmpeg process: reads its fragmented MP4 output on a virtual thread and
  * groups the fragments into media segments, delivers the initialization segment and then each media
- * segment to the sink on a second virtual thread while it assembles the next, and settles the
- * attempt's outcome once FFmpeg has exited.
+ * segment, rebuilt as one {@code moof} and one {@code mdat}, to the sink on a second virtual thread
+ * while it assembles the next, and settles the attempt's outcome once FFmpeg has exited.
  *
- * <p>The producer holds at most two segment caps of FFmpeg's output: the segment awaiting the
- * sink's acceptance and what the reader holds for the next. It admits each box's bytes before it
- * reads them, within its own budget and within the worker's, so when either budget is full, or when
- * a second segment closes while the first still awaits acceptance, the reader stops reading and the
- * pipe holds FFmpeg back. Once the attempt has an outcome, the producer drops and releases what the
- * reader holds at once, even while the reader waits on the pipe, and the delivery in flight once
- * that delivery returns.
+ * <p>The producer holds at most two segment caps: the segment awaiting the sink's acceptance and
+ * what the reader holds for the next. It admits each box's bytes before it reads them, and the
+ * {@code moof} and {@code mdat} header of each rebuilt segment before it writes them, within its
+ * own budget and within the worker's, so when either budget is full, or when a second segment
+ * closes while the first still awaits acceptance, the reader stops reading and the pipe holds
+ * FFmpeg back. A rebuilt segment views the bytes of the fragments that carried its samples, so it
+ * holds them until its delivery returns. Once the attempt has an outcome, the producer drops and
+ * releases what the reader holds at once, even while the reader waits on the pipe, and the delivery
+ * in flight once that delivery returns.
  *
  * <p>A watchdog fails the attempt when FFmpeg writes nothing for the stall timeout while the reader
  * is reading; waiting for the sink pauses it, and it ends once the reader stops reading. Once the
@@ -469,16 +471,16 @@ public final class Producer {
   }
 
   private ReadingEnding deliverLastSegment() {
-    Optional<ProducedSegment> lastSegment;
+    List<ClosedSegment> lastSegments;
     synchronized (lock) {
       if (decision.isPresent()) {
         return new Decided();
       }
 
-      lastSegment = assembler.finish();
+      lastSegments = assembler.finish();
     }
 
-    return lastSegment.flatMap(this::handOff).orElseGet(EndOfOutput::new);
+    return handOffInOrder(lastSegments).orElseGet(EndOfOutput::new);
   }
 
   private void discardOpenFragments() {
@@ -490,12 +492,24 @@ public final class Producer {
   // The skipping fragment closes a complete segment, which is delivered before the skip fails the
   // attempt; a stop or a failed delivery decided first ends reading instead.
   private Optional<ReadingEnding> deliverThenFail(Closing closing) {
-    var handOffEnding = closing.closedSegment().flatMap(this::handOff);
+    var handOffEnding = handOffInOrder(closing.closedSegments());
     if (handOffEnding.isPresent()) {
       return handOffEnding;
     }
 
     return closing.failure().map(ReadingEnding::refused);
+  }
+
+  // Empty once every segment's delivery has started; the ending of the first that ends reading.
+  private Optional<ReadingEnding> handOffInOrder(List<ClosedSegment> closedSegments) {
+    for (var closedSegment : closedSegments) {
+      var ending = handOff(closedSegment);
+      if (ending.isPresent()) {
+        return ending;
+      }
+    }
+
+    return Optional.empty();
   }
 
   // Admits a box's bytes while the reader's and the delivery's holdings fit in the producer's
@@ -534,8 +548,7 @@ public final class Producer {
 
   // Guarded by lock.
   private long heldBytes() {
-    return readerHeldBytes
-        + deliveryInFlight.map(Delivery::segment).map(ProducedSegment::byteLength).orElse(0L);
+    return readerHeldBytes + deliveryInFlight.map(Delivery::heldBytes).orElse(0L);
   }
 
   // Whatever the grouper did not keep, such as preroll, is no longer held. Once the attempt has an
@@ -556,19 +569,26 @@ public final class Producer {
     }
   }
 
-  // Starts the segment's delivery once the previous one was accepted; empty once it starts, and
-  // the attempt's end when the attempt is decided first.
-  private Optional<ReadingEnding> handOff(ProducedSegment segment) {
+  // Writes the segment and starts its delivery once the previous one was accepted; empty once it
+  // starts, and the attempt's end when the attempt is decided first or the segment does not fit.
+  private Optional<ReadingEnding> handOff(ClosedSegment closedSegment) {
     awaitReaderWhile(() -> deliveryInFlight.isPresent() && decision.isEmpty());
+    var reservation = tryReserveToWrite(closedSegment);
+    if (reservation.isPresent()) {
+      return reservation;
+    }
+
+    var segment = closedSegment.write();
+    var deliveryHeldBytes = closedSegment.heldBytes() + closedSegment.additionalBytes();
     Delivery delivery;
     synchronized (lock) {
       if (decision.isPresent()) {
         return Optional.of(new Decided());
       }
 
-      delivery = new Delivery(segment, new DeliveryCancellation());
+      delivery = new Delivery(segment, deliveryHeldBytes, new DeliveryCancellation());
       deliveryInFlight = Optional.of(delivery);
-      readerHeldBytes -= segment.byteLength();
+      readerHeldBytes -= deliveryHeldBytes;
     }
 
     Thread.ofVirtual()
@@ -604,8 +624,7 @@ public final class Producer {
   private void endDelivery(boolean mediaSegmentAccepted) {
     long deliveredBytes;
     synchronized (lock) {
-      deliveredBytes =
-          deliveryInFlight.map(Delivery::segment).map(ProducedSegment::byteLength).orElse(0L);
+      deliveredBytes = deliveryInFlight.map(Delivery::heldBytes).orElse(0L);
       deliveryInFlight = Optional.empty();
       mediaSegmentDelivered |= mediaSegmentAccepted;
       lock.notifyAll();
@@ -625,7 +644,54 @@ public final class Producer {
     return new Completed();
   }
 
-  private record Delivery(ProducedSegment segment, DeliveryCancellation cancellation) {}
+  // Reserves what writing and delivering the segment holds besides the fragments the reader holds
+  // for it; empty once reserved. Nothing is in flight here, so a segment that does not fit the
+  // producer's budget now never will.
+  private Optional<ReadingEnding> tryReserveToWrite(ClosedSegment closedSegment) {
+    var bytes = closedSegment.additionalBytes();
+    synchronized (lock) {
+      if (decision.isPresent()) {
+        return Optional.of(new Decided());
+      }
+
+      if (heldBytes() + bytes > BUDGET_BYTES) {
+        return Optional.of(new Abandoned(doesNotFit(bytes)));
+      }
+    }
+
+    if (!tryReserveInWorkerBudget(bytes)) {
+      return Optional.of(new Decided());
+    }
+
+    synchronized (lock) {
+      if (decision.isEmpty()) {
+        readerHeldBytes += bytes;
+        return Optional.empty();
+      }
+    }
+
+    memoryBudget.release(bytes);
+    return Optional.of(new Decided());
+  }
+
+  // Guarded by lock.
+  private Failed doesNotFit(long bytes) {
+    return new Failed(
+        ProducerFailure.SEGMENT_CAP_EXCEEDED,
+        "writing a media segment needs "
+            + bytes
+            + " bytes beyond the "
+            + heldBytes()
+            + " the producer holds, over its budget of "
+            + BUDGET_BYTES);
+  }
+
+  /**
+   * A segment in delivery and the bytes it holds: the fragments whose bytes it views, and the
+   * {@code moof} and {@code mdat} header written for it.
+   */
+  private record Delivery(
+      ProducedSegment segment, long heldBytes, DeliveryCancellation cancellation) {}
 
   @Builder
   private record Settings(

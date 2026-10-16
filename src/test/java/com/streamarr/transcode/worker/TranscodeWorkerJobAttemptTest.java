@@ -1,8 +1,8 @@
 package com.streamarr.transcode.worker;
 
-import static com.streamarr.transcode.engine.FfmpegRecordings.assertDeliveredAsExpected;
 import static com.streamarr.transcode.engine.FfmpegRecordings.bytesOf;
 import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
+import static com.streamarr.transcode.fixtures.DeliveredSamples.assertCarriesTheRecordedSamples;
 import static com.streamarr.transcode.fixtures.Races.awaitStart;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.uploadNames;
@@ -17,6 +17,7 @@ import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.startVa
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.stopVariant;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variantJobBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerBuilder;
+import static java.nio.charset.StandardCharsets.US_ASCII;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
@@ -36,12 +37,13 @@ import build.buf.gen.streamarr.transcode.v1.VideoCodecProfile;
 import build.buf.gen.streamarr.transcode.v1.VideoCodecTier;
 import build.buf.gen.streamarr.transcode.v1.VideoDecision;
 import build.buf.gen.streamarr.transcode.v1.VideoMode;
-import com.streamarr.transcode.engine.FfmpegRecordings.Recording;
-import com.streamarr.transcode.engine.FfmpegRecordings.SegmentSummary;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
+import com.streamarr.transcode.fixtures.Mp4Samples;
+import com.streamarr.transcode.fixtures.Mp4Samples.MovieFragment;
 import com.streamarr.transcode.fixtures.TopLevelBoxes;
+import com.streamarr.transcode.fixtures.TopLevelBoxes.Box;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
@@ -58,7 +60,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import java.util.function.IntUnaryOperator;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.UnaryOperator;
 import java.util.stream.DoubleStream;
 import java.util.stream.IntStream;
@@ -116,9 +118,6 @@ class TranscodeWorkerJobAttemptTest {
           .extracting(upload -> upload.metadata().getSegmentName())
           .containsExactlyElementsOf(uploadNames(recording));
       assertThat(connection.uploads())
-          .extracting(upload -> (long) upload.content().length)
-          .containsExactlyElementsOf(expectedLengths(recording));
-      assertThat(connection.uploads())
           .allSatisfy(
               upload -> {
                 var metadata = upload.metadata();
@@ -132,9 +131,7 @@ class TranscodeWorkerJobAttemptTest {
                     .isEqualTo(job.getVariant().getVariantLabel());
                 assertThat(metadata.getWorker()).isEqualTo(connection.registration().getWorker());
               });
-      var uploaded = new ByteArrayOutputStream();
-      connection.uploads().forEach(upload -> uploaded.writeBytes(upload.content()));
-      assertThat(uploaded.toByteArray()).isEqualTo(bytesOf(ENCODED_RECORDING));
+      assertCarriesTheRecordedSamples(uploadedBytes(connection), recording);
     }
   }
 
@@ -145,23 +142,33 @@ class TranscodeWorkerJobAttemptTest {
   void shouldUploadASegmentInFullSizedDataMessagesWhenItIsLargerThanOneMessage(int segmentMiB)
       throws Exception {
     var segmentBytes = segmentMiB * 1024 * 1024;
-    var originalBytes =
-        Math.toIntExact(recording(ENCODED_RECORDING).segments().getFirst().byteLength());
-    var output =
-        withPaddedMediaData(
-            bytesOf(ENCODED_RECORDING),
-            fragment -> fragment == 0 ? segmentBytes - originalBytes : 0);
+    var output = new AtomicReference<>(bytesOf(ENCODED_RECORDING));
     var launcher =
-        new ScriptedProcessLauncher(_ -> ScriptedProcess.builder().output(output).build());
+        new ScriptedProcessLauncher(_ -> ScriptedProcess.builder().output(output.get()).build());
+    var recorded = variantJobBuilder().build();
     var job = variantJobBuilder().build();
 
     try (var worker = worker(launcher)) {
       worker.start("localhost", 1);
       var connection = runtime.connection();
+      startVariant(connection, recorded);
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_COMPLETED);
+      // The worker rebuilds the first media segment, so only an attempt measures its length before
+      // the grown first video sample brings it to the size under test.
+      var recordedSegmentBytes = uploadsOf(connection, recorded).get(1).content().length;
+      output.set(
+          withLargeFirstVideoSample(
+              bytesOf(ENCODED_RECORDING), segmentBytes - recordedSegmentBytes));
       startVariant(connection, job);
 
-      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_COMPLETED);
-      var firstMediaSegment = connection.uploads().get(1);
+      awaitEvents(
+          connection,
+          EventCase.JOB_ATTEMPT_STARTED,
+          EventCase.JOB_ATTEMPT_COMPLETED,
+          EventCase.JOB_ATTEMPT_STARTED,
+          EventCase.JOB_ATTEMPT_COMPLETED);
+      var uploads = uploadsOf(connection, job);
+      var firstMediaSegment = uploads.get(1);
       assertThat(firstMediaSegment.dataMessageLengths())
           .hasSizeGreaterThan(2)
           .last()
@@ -171,9 +178,12 @@ class TranscodeWorkerJobAttemptTest {
           .containsOnly(UPLOAD_MESSAGE_BYTES);
       assertThat(firstMediaSegment.metadata().getContentLengthBytes()).isEqualTo(segmentBytes);
       assertThat(firstMediaSegment.content()).hasSize(segmentBytes);
-      var uploaded = new ByteArrayOutputStream();
-      connection.uploads().forEach(upload -> uploaded.writeBytes(upload.content()));
-      assertThat(uploaded.toByteArray()).isEqualTo(output);
+      assertThat(Mp4Samples.read(uploadedBytes(uploads)).fragments())
+          .flatMap(MovieFragment::samples)
+          .isSubsetOf(
+              Mp4Samples.read(output.get()).fragments().stream()
+                  .flatMap(fragment -> fragment.samples().stream())
+                  .toList());
     }
   }
 
@@ -1041,9 +1051,7 @@ class TranscodeWorkerJobAttemptTest {
       assertThat(connection.uploads())
           .extracting(upload -> upload.metadata().getSegmentName())
           .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
-      var uploaded = new ByteArrayOutputStream();
-      connection.uploads().forEach(upload -> uploaded.writeBytes(upload.content()));
-      assertDeliveredAsExpected(uploaded.toByteArray(), recording);
+      assertCarriesTheRecordedSamples(uploadedBytes(connection), recording);
       assertThat(processOf(launcher, job).wasDestroyedForcibly()).isTrue();
     }
   }
@@ -1246,7 +1254,7 @@ class TranscodeWorkerJobAttemptTest {
           + " slowly")
   void shouldCountTheAcknowledgementDeadlineFromTheFirstMessageWhenReadinessComesSlowly()
       throws Exception {
-    var output = withLargeFirstMediaData(bytesOf(ENCODED_RECORDING));
+    var output = withLargeFirstVideoSample(bytesOf(ENCODED_RECORDING), 3 * UPLOAD_MESSAGE_BYTES);
     var launcher =
         new ScriptedProcessLauncher(_ -> ScriptedProcess.builder().output(output).build());
     var job = variantJobBuilder().build();
@@ -1654,36 +1662,78 @@ class TranscodeWorkerJobAttemptTest {
     return connection.events().getLast();
   }
 
-  private static List<Long> expectedLengths(Recording recording) {
-    return Stream.concat(
-            Stream.of((long) recording.deliveredInitializationSegment().byteLength()),
-            recording.segments().stream().map(SegmentSummary::byteLength))
+  private static byte[] uploadedBytes(ScriptedWorkerRuntime.Connection connection) {
+    return uploadedBytes(connection.uploads());
+  }
+
+  private static byte[] uploadedBytes(List<ScriptedWorkerRuntime.UploadCall> uploads) {
+    var uploaded = new ByteArrayOutputStream();
+    uploads.forEach(upload -> uploaded.writeBytes(upload.content()));
+    return uploaded.toByteArray();
+  }
+
+  private static List<ScriptedWorkerRuntime.UploadCall> uploadsOf(
+      ScriptedWorkerRuntime.Connection connection, VariantJob job) {
+    return connection.uploads().stream()
+        .filter(upload -> upload.metadata().getJobAttemptId().equals(job.getJobAttemptId()))
         .toList();
   }
 
-  // The recording with its first media data box grown past two upload data messages.
-  private static byte[] withLargeFirstMediaData(byte[] recording) {
-    return withPaddedMediaData(recording, fragment -> fragment == 0 ? 3 * UPLOAD_MESSAGE_BYTES : 0);
+  // The recording with its first video sample grown by this many bytes, which the producer copies
+  // into the first media segment without looking inside it.
+  private static byte[] withLargeFirstVideoSample(byte[] recording, int growth) {
+    var boxes = TopLevelBoxes.of(recording);
+    var moof = boxes.stream().filter(box -> box.type().equals("moof")).findFirst().orElseThrow();
+    var mdat = boxes.get(boxes.indexOf(moof) + 1);
+    var fields = ByteBuffer.wrap(recording.clone());
+    var runs = runsOf(fields, moof);
+    var videoRun = runs.getFirst();
+    var firstSampleEnd =
+        moof.start() + fields.getInt(videoRun + 16) + firstSampleSize(fields, videoRun);
+    fields.putInt(
+        sizeFieldOfFirstSample(fields, videoRun), firstSampleSize(fields, videoRun) + growth);
+    runs.subList(1, runs.size())
+        .forEach(run -> fields.putInt(run + 16, fields.getInt(run + 16) + growth));
+    fields.putInt(mdat.start(), mdat.size() + growth);
+    var grown = new ByteArrayOutputStream();
+    grown.write(fields.array(), 0, firstSampleEnd);
+    grown.writeBytes(new byte[growth]);
+    grown.write(fields.array(), firstSampleEnd, recording.length - firstSampleEnd);
+    return grown.toByteArray();
   }
 
-  // The recording with the media data box of each fragment, counted from 0, grown by the padding
-  // for that fragment, which the producer reads without looking inside.
-  private static byte[] withPaddedMediaData(byte[] recording, IntUnaryOperator paddingOfFragment) {
-    var grown = new ByteArrayOutputStream();
-    var fragment = 0;
-    for (var box : TopLevelBoxes.of(recording)) {
-      if (!box.type().equals("mdat")) {
-        grown.write(recording, box.start(), box.size());
-        continue;
-      }
+  // Where each trun of the moof starts, in traf order: the video traf's first, as FFmpeg writes it.
+  private static List<Integer> runsOf(ByteBuffer fields, Box moof) {
+    return childrenOf(fields, moof.start(), "traf").stream()
+        .flatMap(traf -> childrenOf(fields, traf, "trun").stream())
+        .toList();
+  }
 
-      var padding = paddingOfFragment.applyAsInt(fragment);
-      fragment++;
-      grown.writeBytes(ByteBuffer.allocate(4).putInt(box.size() + padding).array());
-      grown.write(recording, box.start() + 4, box.size() - 4);
-      grown.writeBytes(new byte[padding]);
+  // Where each child box of this type starts inside the box that starts here.
+  private static List<Integer> childrenOf(ByteBuffer fields, int box, String type) {
+    var children = new ArrayList<Integer>();
+    var fourcc = ByteBuffer.wrap(type.getBytes(US_ASCII)).getInt();
+    for (var child = box + 8; child < box + fields.getInt(box); child += fields.getInt(child)) {
+      if (fields.getInt(child + 4) == fourcc) {
+        children.add(child);
+      }
     }
 
-    return grown.toByteArray();
+    return children;
+  }
+
+  // A trun's first sample entry follows its data offset and first-sample flags; the recordings'
+  // video runs carry each sample's size, after its duration when they carry durations.
+  private static int sizeFieldOfFirstSample(ByteBuffer fields, int run) {
+    var flags = fields.getInt(run + 8) & 0xFF_FFFF;
+    var field = run + 16;
+    field += (flags & 0x1) != 0 ? 4 : 0;
+    field += (flags & 0x4) != 0 ? 4 : 0;
+    field += (flags & 0x100) != 0 ? 4 : 0;
+    return field;
+  }
+
+  private static int firstSampleSize(ByteBuffer fields, int run) {
+    return fields.getInt(sizeFieldOfFirstSample(fields, run));
   }
 }

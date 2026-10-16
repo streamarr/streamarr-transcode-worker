@@ -9,8 +9,10 @@ final class FragmentedMp4Exception extends RuntimeException {
 
   enum Reason {
     /**
-     * A box would make the initialization segment or a fragment larger than the segment cap, or a
-     * fragment would make a media segment larger than it.
+     * A box would make the initialization segment or a fragment larger than the segment cap, a
+     * fragment would make the fragments of a media segment larger than it, a fragment holds more
+     * samples than a media segment under it can describe, or a media segment rebuilt as one {@code
+     * moof} and one {@code mdat} would be larger than it.
      */
     EXCEEDS_SEGMENT_CAP,
     /** A top-level box declares size zero, which on a pipe means it never ends. */

@@ -1,8 +1,12 @@
 package com.streamarr.transcode.engine;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.function.IntSupplier;
 import java.util.function.LongSupplier;
+import lombok.Builder;
 
 /**
  * A {@code trun}'s header and its sample table, which {@link #of} checks fits inside the box before
@@ -110,6 +114,40 @@ final class TrackRun {
     return OptionalLong.of(shortest);
   }
 
+  long sampleCount() {
+    return header.sampleCount();
+  }
+
+  /**
+   * Each sample's duration, size, flags and composition offset in order, with the defaults for the
+   * fields the run leaves out; a default is asked for only when a sample needs it.
+   */
+  List<Entry> entries(Defaults defaults) {
+    var entries = new ArrayList<Entry>(Math.toIntExact(header.sampleCount()));
+    var fields = sampleTable();
+    var firstSampleFlags = firstSampleFlags();
+    for (var sample = 0L; sample < header.sampleCount(); sample++) {
+      var duration = fields.u32If(header.has(SAMPLE_DURATION)).orElseGet(defaults.duration());
+      var size = fields.u32If(header.has(SAMPLE_SIZE)).orElseGet(defaults.size());
+      var ownFlags = fields.s32If(header.has(SAMPLE_FLAGS));
+      var compositionOffset = header.compositionOffsetOf(fields);
+      var flags = ownFlags;
+      if (sample == 0) {
+        flags = firstSampleFlags.or(() -> ownFlags);
+      }
+
+      entries.add(
+          Entry.builder()
+              .duration(duration)
+              .size(size)
+              .flags(flags.orElseGet(() -> defaults.flags().getAsInt()))
+              .compositionOffset(compositionOffset)
+              .build());
+    }
+
+    return entries;
+  }
+
   private Optional<Integer> firstSampleFlags() {
     return optionalFields()
         .skipIf(header.has(DATA_OFFSET), 4)
@@ -127,6 +165,13 @@ final class TrackRun {
         .skipIf(header.has(DATA_OFFSET), 4)
         .skipIf(header.has(FIRST_SAMPLE_FLAGS), 4);
   }
+
+  /** The defaults a {@code traf} or its track declares for the fields a run leaves out. */
+  record Defaults(LongSupplier duration, LongSupplier size, IntSupplier flags) {}
+
+  /** One sample's fields as the run and the defaults give them. */
+  @Builder
+  record Entry(long duration, long size, int flags, long compositionOffset) {}
 
   /** A run's first sample: its flags, when the run declares any, and its composition offset. */
   record FirstSample(Optional<Integer> flags, long compositionOffset) {}

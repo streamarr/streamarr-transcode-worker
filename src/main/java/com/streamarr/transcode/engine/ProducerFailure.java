@@ -13,8 +13,9 @@ public enum ProducerFailure {
   /** The output ended inside a box header, inside a box body, or after a moof with no mdat. */
   TRUNCATED_OUTPUT,
   /**
-   * A box would make the initialization segment or a fragment exceed the server's segment cap, or a
-   * fragment would make a media segment exceed it.
+   * A box would make the initialization segment or a fragment exceed the server's segment cap, a
+   * media segment would exceed it, or the producer's budget of two caps cannot also hold what
+   * writing a media segment needs.
    */
   SEGMENT_CAP_EXCEEDED,
   /** A keyframe skipped a segment number, so the source has no keyframe inside that interval. */
