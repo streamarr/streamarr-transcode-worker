@@ -141,10 +141,16 @@ class FfprobeExecutorStreamFactsTest {
     @Test
     @DisplayName("Should end a Matroska track at its start plus its DURATION tag")
     void shouldEndAMatroskaTrackAtItsStartPlusItsDurationTag() {
-      // The first audio track starts at 0 and its DURATION tag says 00:00:02.023000000.
-      var audio = streamOf("mkv-remuxed-from-mp4.mkv", 1);
+      var media =
+          probeOutput(
+              """
+              {"format":{"start_time":"0.000000",
+                         "tags":{"encoder":"libebml v1.4.5 + libmatroska v1.7.1"}},
+               "streams":[{"index":0,"codec_type":"video","time_base":"1/1000","start_pts":500,
+                           "tags":{"DURATION":"00:00:02.000000000"}}]}
+              """);
 
-      assertThat(audio.getEndTime()).isEqualTo(seconds(2, 23_000_000));
+      assertThat(media.getStreams(0).getEndTime()).isEqualTo(seconds(2, 500_000_000));
     }
 
     @Test
@@ -159,6 +165,27 @@ class FfprobeExecutorStreamFactsTest {
               """);
 
       assertThat(media.getStreams(0).getEndTime()).isEqualTo(seconds(3723, 750_000_000));
+    }
+
+    @Test
+    @DisplayName("Should end a track at its DURATION tag when FFmpeg wrote the Matroska file")
+    void shouldEndATrackAtItsDurationTagWhenFfmpegWroteTheMatroskaFile() {
+      // FFmpeg's Matroska muxer writes the track's last timestamp plus that packet's duration as
+      // DURATION. The MP4 source's 2 s video starts at 0.023 s after the remux, and its DURATION
+      // tag says 00:00:02.023000000. The audio starts at 0 and its tag says the same.
+      var media = probeFixture("mkv-remuxed-from-mp4.mkv");
+
+      assertThat(media.getStreams(0).getEndTime()).isEqualTo(seconds(2, 23_000_000));
+      assertThat(media.getStreams(1).getEndTime()).isEqualTo(seconds(2, 23_000_000));
+    }
+
+    @Test
+    @DisplayName("Should measure a DURATION tag from the container start when FFmpeg wrote it late")
+    void shouldMeasureADurationTagFromTheContainerStartWhenFfmpegWroteItLate() {
+      // The 2 s video starts at 10 s, and FFmpeg wrote its DURATION tag as 00:00:12.000000000.
+      var video = streamOf("mkv-offset-chapters.mkv", 0);
+
+      assertThat(video.getEndTime()).isEqualTo(seconds(2, 0));
     }
 
     @Test

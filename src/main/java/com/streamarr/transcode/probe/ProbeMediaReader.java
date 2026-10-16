@@ -29,6 +29,7 @@ final class ProbeMediaReader {
         .ifPresent(container::setDuration);
     var timeline = ProbeTimeline.of(format);
     ProbeChapters.add(root.path("chapters"), timeline, container);
+    var endTimes = StreamEndTime.in(format, timeline);
     var media = ProbeMediaInfo.newBuilder().setContainer(container);
     var streams = root.path("streams");
     if (!streams.isMissingNode() && !streams.isNull() && !streams.isArray()) {
@@ -38,7 +39,7 @@ final class ProbeMediaReader {
     var parsed = new ArrayList<ProbeStreamInfo.Builder>();
     var labels = new IdentityHashMap<ProbeStreamInfo.Builder, StreamLabels>();
     for (var stream : streams) {
-      var parsedStream = parseStream(stream, parsed.size(), timeline);
+      var parsedStream = parseStream(stream, parsed.size(), endTimes);
       parsed.add(parsedStream);
       if (isLabeled(parsedStream.getCodecType())) {
         labels.put(parsedStream, StreamLabels.of(stream));
@@ -72,7 +73,7 @@ final class ProbeMediaReader {
   }
 
   private static ProbeStreamInfo.Builder parseStream(
-      JsonNode source, int position, ProbeTimeline timeline) {
+      JsonNode source, int position, StreamEndTime endTimes) {
     var type =
         Optional.ofNullable(source.get("codec_type"))
             .filter(JsonNode::isTextual)
@@ -97,7 +98,7 @@ final class ProbeMediaReader {
     switch (type) {
       case "video" -> {
         VideoStreamFacts.add(source, stream);
-        StreamEndTime.of(source, timeline).ifPresent(stream::setEndTime);
+        endTimes.of(source).ifPresent(stream::setEndTime);
       }
       case "audio" -> {
         number(source, "channels", Integer::parseInt).ifPresent(stream::setChannels);
@@ -105,7 +106,7 @@ final class ProbeMediaReader {
             .filter(rate -> rate > 0)
             .ifPresent(stream::setSampleRateHz);
         text(source, "profile").ifPresent(stream::setAudioProfile);
-        StreamEndTime.of(source, timeline).ifPresent(stream::setEndTime);
+        endTimes.of(source).ifPresent(stream::setEndTime);
         hearingImpaired(source).ifPresent(stream::setIsHearingImpaired);
       }
       case "subtitle" -> hearingImpaired(source).ifPresent(stream::setIsHearingImpaired);
