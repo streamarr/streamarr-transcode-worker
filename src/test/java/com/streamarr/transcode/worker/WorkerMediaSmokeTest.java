@@ -62,6 +62,7 @@ import io.grpc.Server;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.grpc.stub.StreamObserver;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.net.InetSocketAddress;
@@ -83,6 +84,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -462,18 +464,10 @@ class WorkerMediaSmokeTest {
     var source = root.resolve("blocked.ts");
     var mkfifo = new ProcessBuilder("mkfifo", source.toString()).start();
     assertThat(mkfifo.waitFor()).isZero();
-    // The writer serves the stream probe once. The packet scan then opens a FIFO that no process
-    // writes, as a stalled read from network storage would block it.
-    var writer =
-        Thread.ofVirtual()
-            .start(
-                () -> {
-                  try {
-                    Files.write(source, Files.readAllBytes(Path.of(fixture.toURI())));
-                  } catch (Exception _) {
-                    // The test fails on the probe result instead.
-                  }
-                });
+    // The writer serves each ffprobe read. When the packet scan opens the FIFO, the writer holds it
+    // open and writes nothing, as a stalled read from network storage would block the scan.
+    var media = Files.readAllBytes(Path.of(fixture.toURI()));
+    var writer = Thread.ofVirtual().start(() -> serveUntilThePacketScanOpens(source, media));
     var result = new CompletableFuture<ProbeAttemptResult>();
     var probe =
         Thread.ofVirtual()
@@ -2373,6 +2367,23 @@ class WorkerMediaSmokeTest {
 
   private static ProbeRequest packetScanRequest() {
     return keyframeRequest().toBuilder().setScanKeyframePackets(true).build();
+  }
+
+  private static void serveUntilThePacketScanOpens(Path fifo, byte[] media) {
+    while (!Thread.currentThread().isInterrupted()) {
+      // Opening a FIFO for writing waits for a reader.
+      try (var output = Files.newOutputStream(fifo)) {
+        if (packetScanProcess(fifo).isPresent()) {
+          new CountDownLatch(1).await();
+        }
+
+        output.write(media);
+      } catch (InterruptedException _) {
+        Thread.currentThread().interrupt();
+      } catch (IOException _) {
+        // A reader that stops early closes the pipe; the next read opens it again.
+      }
+    }
   }
 
   private static Optional<ProcessHandle> packetScanProcess(Path source) {
