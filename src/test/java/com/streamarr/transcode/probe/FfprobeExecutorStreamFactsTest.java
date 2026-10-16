@@ -274,6 +274,60 @@ class FfprobeExecutorStreamFactsTest {
   }
 
   @Nested
+  @DisplayName("Hearing-Impaired Flag")
+  class HearingImpairedTests {
+
+    @Test
+    @DisplayName("Should flag the audio and subtitle tracks when Matroska sets FlagHearingImpaired")
+    void shouldFlagTheAudioAndSubtitleTracksWhenMatroskaSetsFlagHearingImpaired() {
+      var media = probeFixture("mkv-remuxed-from-mp4.mkv");
+
+      assertThat(media.getStreams(1).getIsHearingImpaired()).isTrue();
+      assertThat(media.getStreams(3).getIsHearingImpaired()).isTrue();
+    }
+
+    @Test
+    @DisplayName("Should flag the subtitle stream when an MP4 kind box marks it as a caption")
+    void shouldFlagTheSubtitleStreamWhenAnMp4KindBoxMarksItAsACaption() {
+      var subtitle = streamOf("mp4-titled.mp4", 3);
+
+      assertThat(subtitle.getIsHearingImpaired()).isTrue();
+    }
+
+    @Test
+    @DisplayName("Should report false when the container does not mark the stream")
+    void shouldReportFalseWhenTheContainerDoesNotMarkTheStream() {
+      var media = probeFixture("mp4-default-handlers.mp4");
+
+      assertThat(media.getStreams(1).hasIsHearingImpaired()).isTrue();
+      assertThat(media.getStreams(1).getIsHearingImpaired()).isFalse();
+      assertThat(media.getStreams(2).hasIsHearingImpaired()).isTrue();
+      assertThat(media.getStreams(2).getIsHearingImpaired()).isFalse();
+    }
+
+    @Test
+    @DisplayName("Should report no flag when the stream is video")
+    void shouldReportNoFlagWhenTheStreamIsVideo() {
+      var video = streamOf("mkv-remuxed-from-mp4.mkv", 0);
+
+      assertThat(video.hasIsHearingImpaired()).isFalse();
+    }
+
+    @Test
+    @DisplayName("Should report no flag when ffprobe reports no disposition")
+    void shouldReportNoFlagWhenFfprobeReportsNoDisposition() {
+      var media =
+          probeOutput(
+              """
+              {"streams":[{"index":0,"codec_type":"video","time_base":"1/1000"},
+                          {"index":1,"codec_type":"subtitle","codec_name":"subrip"}]}
+              """);
+
+      assertThat(media.getStreams(1).hasIsHearingImpaired()).isFalse();
+    }
+  }
+
+  @Nested
   @DisplayName("Pixel Format")
   class PixelFormatTests {
 

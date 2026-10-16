@@ -75,13 +75,20 @@ final class ProbeMediaReader {
             .ifPresent(stream::setSampleRateHz);
         text(source, "profile").ifPresent(stream::setAudioProfile);
         StreamEndTime.of(source, timeline).ifPresent(stream::setEndTime);
+        hearingImpaired(source).ifPresent(stream::setIsHearingImpaired);
       }
+      case "subtitle" -> hearingImpaired(source).ifPresent(stream::setIsHearingImpaired);
       default -> {
         // Other stream types report only the facts that every stream reports.
       }
     }
 
     return stream.build();
+  }
+
+  private static Optional<Boolean> hearingImpaired(JsonNode source) {
+    var flag = source.path("disposition").path("hearing_impaired");
+    return flag.isIntegralNumber() ? Optional.of(flag.asInt() == 1) : Optional.empty();
   }
 
   private static double framerate(String value) {
