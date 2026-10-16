@@ -35,6 +35,7 @@ final class CodecStringReader {
   private static final int SPS_PROFILE_OFFSET = 1;
   private static final int AV1_RECORD_MARKER = 0x81;
   private static final int ESCAPED_AUDIO_OBJECT_TYPE = 31;
+  private static final String AAC_CODEC_STRING_PREFIX = "mp4a.40.";
   private static final int AAC_MAIN = 1;
   private static final int AAC_LC = 2;
   private static final int AAC_SSR = 3;
@@ -197,13 +198,14 @@ final class CodecStringReader {
    */
   private static Optional<String> aac(JsonNode stream, Optional<byte[]> extradata) {
     if (extradata.isEmpty()) {
-      return adtsObjectType(text(stream, "profile").orElse("")).map(type -> "mp4a.40." + type);
+      return adtsObjectType(text(stream, "profile").orElse(""))
+          .map(type -> AAC_CODEC_STRING_PREFIX + type);
     }
 
     var config = extradata.get();
     var objectType = Byte.toUnsignedInt(config[0]) >> 3;
     if (objectType != ESCAPED_AUDIO_OBJECT_TYPE) {
-      return Optional.of("mp4a.40." + objectType);
+      return Optional.of(AAC_CODEC_STRING_PREFIX + objectType);
     }
 
     if (config.length < 2) {
@@ -211,7 +213,8 @@ final class CodecStringReader {
     }
 
     return Optional.of(
-        "mp4a.40." + (32 + (((config[0] & 0x07) << 3) | (Byte.toUnsignedInt(config[1]) >> 5))));
+        AAC_CODEC_STRING_PREFIX
+            + (32 + (((config[0] & 0x07) << 3) | (Byte.toUnsignedInt(config[1]) >> 5))));
   }
 
   private static Optional<Integer> adtsObjectType(String profile) {
