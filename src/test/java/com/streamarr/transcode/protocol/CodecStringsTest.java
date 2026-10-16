@@ -1,6 +1,7 @@
 package com.streamarr.transcode.protocol;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 
 import java.util.HexFormat;
 import org.junit.jupiter.api.DisplayName;
@@ -51,5 +52,17 @@ class CodecStringsTest {
 
   private static byte[] bytes(String hex) {
     return HexFormat.ofDelimiter(" ").parseHex(hex);
+  }
+
+  @Test
+  @DisplayName("Should refuse a missing argument when a caller builds an AVC or HEVC string")
+  void shouldRefuseAMissingArgumentWhenACallerBuildsAnAvcOrHevcString() {
+    var profile = bytes("42 c0 1e");
+    var generalProfile = bytes("01 60 00 00 00 90 00 00 00 00 00 5d");
+
+    assertThatNullPointerException().isThrownBy(() -> CodecStrings.avc(null, profile));
+    assertThatNullPointerException().isThrownBy(() -> CodecStrings.avc("avc1", null));
+    assertThatNullPointerException().isThrownBy(() -> CodecStrings.hevc(null, generalProfile));
+    assertThatNullPointerException().isThrownBy(() -> CodecStrings.hevc("hvc1", null));
   }
 }

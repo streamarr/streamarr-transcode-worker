@@ -122,14 +122,14 @@ final class CodecStringReader {
   }
 
   /** The SPS NAL units of an avcC record (ISO/IEC 14496-15, 5.3.2.1.2). */
-  private static List<byte[]> avcRecordSequenceParameterSets(byte[] record) {
+  private static List<byte[]> avcRecordSequenceParameterSets(byte[] avcC) {
     var units = new ArrayList<byte[]>();
-    if (record.length <= AVC_RECORD_SPS_COUNT) {
+    if (avcC.length <= AVC_RECORD_SPS_COUNT) {
       return units;
     }
 
-    var buffer = ByteBuffer.wrap(record).position(AVC_RECORD_SPS_COUNT + 1);
-    var count = record[AVC_RECORD_SPS_COUNT] & 0x1F;
+    var buffer = ByteBuffer.wrap(avcC).position(AVC_RECORD_SPS_COUNT + 1);
+    var count = avcC[AVC_RECORD_SPS_COUNT] & 0x1F;
     for (var index = 0; index < count; index++) {
       if (!readLengthPrefixedUnit(buffer, units)) {
         break;
@@ -140,14 +140,14 @@ final class CodecStringReader {
   }
 
   /** The NAL units of every array in an hvcC record (ISO/IEC 14496-15, 8.3.3.1.2). */
-  private static List<byte[]> hevcRecordUnits(byte[] record) {
+  private static List<byte[]> hevcRecordUnits(byte[] hvcC) {
     var units = new ArrayList<byte[]>();
-    if (record.length <= HVCC_ARRAY_COUNT) {
+    if (hvcC.length <= HVCC_ARRAY_COUNT) {
       return units;
     }
 
-    var buffer = ByteBuffer.wrap(record).position(HVCC_ARRAY_COUNT + 1);
-    var arrays = Byte.toUnsignedInt(record[HVCC_ARRAY_COUNT]);
+    var buffer = ByteBuffer.wrap(hvcC).position(HVCC_ARRAY_COUNT + 1);
+    var arrays = Byte.toUnsignedInt(hvcC[HVCC_ARRAY_COUNT]);
     for (var array = 0; array < arrays && buffer.remaining() >= 3; array++) {
       buffer.get();
       var count = Short.toUnsignedInt(buffer.getShort());
@@ -182,10 +182,8 @@ final class CodecStringReader {
   private static Optional<String> av1(byte[] extradata) {
     if (Byte.toUnsignedInt(extradata[0]) == AV1_RECORD_MARKER) {
       return Optional.of(extradata)
-          .filter(record -> record.length >= 3)
-          .map(
-              record ->
-                  CodecStrings.av1(Byte.toUnsignedInt(record[1]), Byte.toUnsignedInt(record[2])));
+          .filter(av1C -> av1C.length >= 3)
+          .map(av1C -> CodecStrings.av1(Byte.toUnsignedInt(av1C[1]), Byte.toUnsignedInt(av1C[2])));
     }
 
     return Av1SequenceHeader.find(extradata)
@@ -225,12 +223,16 @@ final class CodecStringReader {
   private static List<byte[]> annexB(byte[] stream) {
     var units = new ArrayList<byte[]>();
     var start = -1;
-    for (var index = 0; index + 2 < stream.length; index++) {
+    var index = 0;
+    while (index + 2 < stream.length) {
       if (stream[index] == 0 && stream[index + 1] == 0 && stream[index + 2] == 1) {
         addUnit(units, stream, start, index);
         start = index + 3;
-        index += 2;
+        index = start;
+        continue;
       }
+
+      index++;
     }
 
     addUnit(units, stream, start, stream.length);

@@ -225,6 +225,7 @@ class FfprobeExecutorCodecStringTest {
       "av1, 81 00",
       "av1, 0a 01 00",
       "av1, 12 00",
+      "av1, 0e",
     })
     @DisplayName("Should report no codec string when the extradata ends before the profile does")
     void shouldReportNoCodecStringWhenTheExtradataEndsBeforeTheProfileDoes(
@@ -387,6 +388,69 @@ class FfprobeExecutorCodecStringTest {
     }
 
     @Test
+    @DisplayName("Should read the header after the extension byte when the OBU has no size field")
+    void shouldReadTheHeaderAfterTheExtensionByteWhenTheObuHasNoSizeField() {
+      // One operating point at level 8, which carries a tier bit, without order hints. The header
+      // forces screen content tools and leaves integer motion vectors to each frame.
+      var header =
+          new SequenceHeaderBits()
+              .bits(3, 0)
+              .bits(1, 0)
+              .bits(1, 0)
+              .bits(1, 0)
+              .bits(1, 0)
+              .bits(5, 0)
+              .bits(12, 0)
+              .bits(5, 8)
+              .bits(1, 1)
+              .frameSize()
+              .bits(1, 0)
+              .bits(3, 0)
+              .bits(4, 0)
+              .bits(1, 0)
+              .bits(1, 0)
+              .bits(1, 1)
+              .bits(1, 0)
+              .bits(1, 0)
+              .bits(3, 0)
+              .bits(1, 0);
+
+      var video = stream("av1", "0c 00 " + header.payload());
+
+      assertThat(video.getCodecString()).isEqualTo("av01.0.08H.08");
+    }
+
+    @Test
+    @DisplayName("Should read no twelve-bit flag when a profile 2 header states 8 bits")
+    void shouldReadNoTwelveBitFlagWhenAProfile2HeaderStates8Bits() {
+      // A reduced still picture header at level 5, then high_bitdepth 0 and padding bits of 1.
+      var header =
+          new SequenceHeaderBits()
+              .bits(3, 2)
+              .bits(1, 1)
+              .bits(1, 1)
+              .bits(5, 5)
+              .frameSize()
+              .bits(3, 0)
+              .bits(3, 0)
+              .bits(1, 0)
+              .bits(7, 0x7f);
+
+      var video = stream("av1", header.obu());
+
+      assertThat(video.getCodecString()).isEqualTo("av01.2.05M.08");
+    }
+
+    @Test
+    @DisplayName("Should read a size field of two bytes when the OBU continues its leb128 value")
+    void shouldReadASizeFieldOfTwoBytesWhenTheObuContinuesItsLeb128Value() {
+      // The IVF fixture's 11-byte sequence header with its size written as 8b 00.
+      var video = stream("av1", "0a 8b 00 00 00 00 05 15 7f 8c 4a f9 40 40");
+
+      assertThat(video.getCodecString()).isEqualTo("av01.0.00M.10");
+    }
+
+    @Test
     @DisplayName("Should skip other OBUs when a temporal delimiter precedes the sequence header")
     void shouldSkipOtherObusWhenATemporalDelimiterPrecedesTheSequenceHeader() {
       // A temporal delimiter OBU with a size field of 0, then the IVF fixture's sequence header.
@@ -409,8 +473,29 @@ class FfprobeExecutorCodecStringTest {
       return this;
     }
 
+    /**
+     * Frames of 1x1 pixels: frame_width_bits_minus_1 and frame_height_bits_minus_1 of 0, then one
+     * bit each for max_frame_width_minus_1 and max_frame_height_minus_1.
+     */
+    SequenceHeaderBits frameSize() {
+      return bits(4, 0).bits(4, 0).bits(1, 0).bits(1, 0);
+    }
+
     /** The OBU, with a header that names a sequence header and a one-byte size field. */
     String obu() {
+      var payload = bytes();
+      return "0a "
+          + HexFormat.of().formatHex(new byte[] {(byte) payload.length})
+          + " "
+          + HexFormat.ofDelimiter(" ").formatHex(payload);
+    }
+
+    /** The payload alone, padded with zero bits to a whole byte. */
+    String payload() {
+      return HexFormat.ofDelimiter(" ").formatHex(bytes());
+    }
+
+    private byte[] bytes() {
       while (bits.length() % 8 != 0) {
         bits.append('0');
       }
@@ -420,14 +505,10 @@ class FfprobeExecutorCodecStringTest {
         payload[index] = (byte) Integer.parseInt(bits.substring(index * 8, index * 8 + 8), 2);
       }
 
-      return "0a "
-          + HexFormat.of().formatHex(new byte[] {(byte) payload.length})
-          + " "
-          + HexFormat.ofDelimiter(" ").formatHex(payload);
+      return payload;
     }
   }
 
-  /** A video stream of the codec whose extradata ffprobe dumps as the given bytes. */
   /** An AAC stream without an AudioSpecificConfig, after a video stream, with the given fields. */
   private static ProbeStreamInfo adtsStream(String profileField) {
     return probeOutput(
@@ -439,6 +520,7 @@ class FfprobeExecutorCodecStringTest {
         .getStreams(1);
   }
 
+  /** A video stream of the codec whose extradata ffprobe dumps as the given bytes. */
   private static ProbeStreamInfo stream(String codec, String extradata) {
     var bytes = HexFormat.ofDelimiter(" ").parseHex(extradata);
     return probeOutput(

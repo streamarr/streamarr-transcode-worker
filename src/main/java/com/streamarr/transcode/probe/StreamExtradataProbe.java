@@ -26,14 +26,16 @@ final class StreamExtradataProbe {
   // FFmpeg's stream specifiers: V selects the video streams that are not attached pictures.
   private static final Map<String, String> SELECTORS = Map.of("video", "V", "audio", "a");
 
+  private static final String INDEX = "index";
+
   @NonNull private final ObjectMapper objectMapper;
   @NonNull private final ContainerIndexProbe.FfprobeRunner ffprobe;
 
   void addTo(JsonNode ffprobeOutput, Path source) throws ExecutionException, InterruptedException {
     var streams = new HashMap<Integer, ObjectNode>();
     for (var stream : ffprobeOutput.path("streams")) {
-      if (stream instanceof ObjectNode description && stream.path("index").isInt()) {
-        streams.put(stream.path("index").asInt(), description);
+      if (stream instanceof ObjectNode description && stream.path(INDEX).isInt()) {
+        streams.put(stream.path(INDEX).asInt(), description);
       }
     }
 
@@ -66,7 +68,7 @@ final class StreamExtradataProbe {
     }
 
     for (var stream : objectMapper.readTree(output.stdout()).path("streams")) {
-      var description = Optional.ofNullable(streams.get(stream.path("index").asInt(-1)));
+      var description = Optional.ofNullable(streams.get(stream.path(INDEX).asInt(-1)));
       text(stream, "extradata")
           .ifPresent(extradata -> description.ifPresent(node -> node.put("extradata", extradata)));
     }
