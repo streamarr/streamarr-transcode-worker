@@ -257,8 +257,9 @@ public final class FfprobeExecutor {
       Process process, OutputReader<T> reader, OutputReader<Void> diagnosticsReader)
       throws ExecutionException, InterruptedException {
     try (var readers = Executors.newVirtualThreadPerTaskExecutor()) {
-      var diagnostics = readers.submit(() -> diagnosticsReader.read(process.getErrorStream()));
-      var output = readers.submit(() -> readOutput(process, reader));
+      var diagnostics =
+          readers.submit(() -> readOutput(process, process.getErrorStream(), diagnosticsReader));
+      var output = readers.submit(() -> readOutput(process, process.getInputStream(), reader));
       try {
         var exitCode = process.waitFor();
         var finished = new Finished<>(output.get(), exitCode);
@@ -293,9 +294,21 @@ public final class FfprobeExecutor {
     return null;
   }
 
-  private <T> T readOutput(Process process, OutputReader<T> reader) throws IOException {
-    try (var output = process.getInputStream()) {
-      return reader.read(output);
+  private <T> T readOutput(Process process, InputStream output, OutputReader<T> reader)
+      throws IOException {
+    var completed = false;
+    try {
+      T result;
+      try (output) {
+        result = reader.read(output);
+      }
+
+      completed = true;
+      return result;
+    } finally {
+      if (!completed && process.isAlive()) {
+        terminate(process);
+      }
     }
   }
 

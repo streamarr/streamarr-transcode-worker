@@ -171,6 +171,44 @@ class WorkerProbeFrameRateCancellationTest {
 
   private record ProbeCompletion(ProbeAttemptReport report, boolean interrupted) {}
 
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(OutputPipe.class)
+  @DisplayName(
+      "Should terminate the scan before reporting failure when packet output cannot be read")
+  void shouldTerminateTheScanBeforeReportingFailureWhenPacketOutputCannotBeRead(OutputPipe pipe)
+      throws Exception {
+    Files.writeString(root.resolve("movie.mkv"), "media");
+    var runtime = new ScriptedWorkerRuntime();
+    var scan = new ParkedPacketScanProcess(pipe);
+    var request = requestBuilder().build();
+
+    try (var worker = workerBuilder(root).runtime(runtime).ffprobe(executor(scan)).build()) {
+      try {
+        worker.start("localhost", 1);
+        var connection = runtime.connection();
+        start(connection, request);
+        var running = runtime.probes().runNext();
+        awaitSignal(scan.reading, running);
+
+        scan.failRead();
+        awaitSignal(scan.terminationRequested, running);
+        awaitSignal(scan.awaitingExit, running);
+
+        assertThat(scan.isAlive()).isTrue();
+        assertThat(connection.results()).isEmpty();
+        assertThat(running).isNotDone();
+        scan.finish();
+        running.get();
+
+        assertThat(scan.isAlive()).isFalse();
+        assertThat(connection.results())
+            .containsExactly(failure(request, ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED));
+      } finally {
+        scan.finish();
+      }
+    }
+  }
+
   private static FfprobeExecutor executor(ParkedPacketScanProcess scan) {
     return new FfprobeExecutor(
         new ObjectMapper(),
@@ -189,6 +227,39 @@ class WorkerProbeFrameRateCancellationTest {
         });
   }
 
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(OutputPipe.class)
+  @DisplayName("Should stop the process before returning failure when probe output cannot be read")
+  void shouldStopTheProcessBeforeReturningFailureWhenProbeOutputCannotBeRead(OutputPipe pipe)
+      throws Exception {
+    var process = new ParkedPacketScanProcess(pipe);
+    var request = requestBuilder().build();
+    var completed = new CompletableFuture<ProbeAttemptReport>();
+    var probing =
+        Thread.ofVirtual()
+            .start(
+                () ->
+                    completed.complete(
+                        new FfprobeExecutor(new ObjectMapper(), _ -> process)
+                            .probe(root.resolve("movie.mkv"), request)));
+    try {
+      awaitSignal(process.reading, completed);
+
+      process.failRead();
+      awaitSignal(process.terminationRequested, completed);
+      awaitSignal(process.awaitingExit, completed);
+      assertThat(completed).isNotDone();
+      process.finish();
+
+      assertThat(completed.get().result())
+          .isEqualTo(failure(request, ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED));
+      assertThat(process.isAlive()).isFalse();
+    } finally {
+      process.finish();
+      probing.join();
+    }
+  }
+
   private static void awaitSignal(CompletableFuture<?> signal, CompletableFuture<?> work)
       throws Exception {
     CompletableFuture.anyOf(signal, work).get(5, TimeUnit.SECONDS);
@@ -197,6 +268,7 @@ class WorkerProbeFrameRateCancellationTest {
 
   private static final class ParkedPacketScanProcess extends Process {
 
+    private final OutputPipe failurePipe;
     private final CompletableFuture<Void> reading = new CompletableFuture<>();
     private final CompletableFuture<Void> terminationRequested = new CompletableFuture<>();
     private final CompletableFuture<Void> awaitingExit = new CompletableFuture<>();
@@ -223,9 +295,21 @@ class WorkerProbeFrameRateCancellationTest {
           }
         };
 
+    private ParkedPacketScanProcess() {
+      this(OutputPipe.STDOUT);
+    }
+
+    private ParkedPacketScanProcess(OutputPipe failurePipe) {
+      this.failurePipe = failurePipe;
+    }
+
     void finish() {
       releaseRead.complete(false);
       exited.complete(this);
+    }
+
+    void failRead() {
+      releaseRead.complete(true);
     }
 
     @Override
@@ -235,12 +319,12 @@ class WorkerProbeFrameRateCancellationTest {
 
     @Override
     public InputStream getInputStream() {
-      return stdout;
+      return failurePipe == OutputPipe.STDOUT ? stdout : InputStream.nullInputStream();
     }
 
     @Override
     public InputStream getErrorStream() {
-      return InputStream.nullInputStream();
+      return failurePipe == OutputPipe.STDERR ? stdout : InputStream.nullInputStream();
     }
 
     @Override
@@ -283,5 +367,10 @@ class WorkerProbeFrameRateCancellationTest {
     public CompletableFuture<Process> onExit() {
       return exited;
     }
+  }
+
+  private enum OutputPipe {
+    STDOUT,
+    STDERR
   }
 }
