@@ -8,7 +8,6 @@ import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.start;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variantJobBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import build.buf.gen.streamarr.transcode.v1.AudioMode;
@@ -467,7 +466,9 @@ class WorkerMediaSmokeTest {
     // The writer serves each ffprobe read. When the packet scan opens the FIFO, the writer holds it
     // open and writes nothing, as a stalled read from network storage would block the scan.
     var media = Files.readAllBytes(Path.of(fixture.toURI()));
-    var writer = Thread.ofVirtual().start(() -> serveUntilThePacketScanOpens(source, media));
+    var scanReady = new CompletableFuture<ProcessHandle>();
+    var writer =
+        Thread.ofVirtual().start(() -> serveUntilThePacketScanOpens(source, media, scanReady));
     var result = new CompletableFuture<ProbeAttemptResult>();
     var probe =
         Thread.ofVirtual()
@@ -475,11 +476,7 @@ class WorkerMediaSmokeTest {
                 () -> result.complete(probeExecutor().probe(source, packetScanRequest()).result()));
 
     try {
-      var scan =
-          await()
-              .atMost(Duration.ofSeconds(30))
-              .until(() -> packetScanProcess(source), Optional::isPresent)
-              .orElseThrow();
+      var scan = scanReady.get(30, TimeUnit.SECONDS);
       probe.interrupt();
 
       assertThat(result.get(10, TimeUnit.SECONDS).getFailure())
@@ -2369,11 +2366,14 @@ class WorkerMediaSmokeTest {
     return keyframeRequest().toBuilder().setScanKeyframePackets(true).build();
   }
 
-  private static void serveUntilThePacketScanOpens(Path fifo, byte[] media) {
+  private static void serveUntilThePacketScanOpens(
+      Path fifo, byte[] media, CompletableFuture<ProcessHandle> scanReady) {
     while (!Thread.currentThread().isInterrupted()) {
       // Opening a FIFO for writing waits for a reader.
       try (var output = Files.newOutputStream(fifo)) {
-        if (packetScanProcess(fifo).isPresent()) {
+        var scan = packetScanProcess(fifo);
+        if (scan.isPresent()) {
+          scanReady.complete(scan.get());
           new CountDownLatch(1).await();
         }
 
