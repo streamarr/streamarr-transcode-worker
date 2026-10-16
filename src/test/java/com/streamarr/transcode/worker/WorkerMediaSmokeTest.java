@@ -64,6 +64,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -121,6 +122,27 @@ class WorkerMediaSmokeTest {
   private static final int HEVC_LAST_RANDOM_ACCESS_TYPE = 23;
   private static final int HEVC_IDR_W_RADL = 19;
   private static final int HEVC_IDR_N_LP = 20;
+  private static final int HEVC_VPS = 32;
+  private static final int HEVC_SPS = 33;
+  private static final int HEVC_PPS = 34;
+  private static final int HEVC_PREFIX_SEI = 39;
+  private static final int HEVC_SUFFIX_SEI = 40;
+
+  // SEI payload types (ITU-T H.265, 7.3.5).
+  private static final int HEVC_MASTERING_DISPLAY_SEI = 137;
+  private static final int HEVC_CONTENT_LIGHT_LEVEL_SEI = 144;
+
+  // The hvcC record's fields before its count of NAL unit arrays (ISO/IEC 14496-15, 8.3.3.1.2).
+  private static final int HVCC_FIELDS_BEFORE_ARRAYS = 22;
+
+  // A common HDR10 grade: BT.2020 primaries, a D65 white point, and a 1,000 cd/m2 display.
+  private static final MasteringDisplayColourVolume HDR10_MASTERING_DISPLAY =
+      new MasteringDisplayColourVolume(
+          List.of(8500, 39850, 6550, 2300, 35400, 14600), 15635, 16450, 10_000_000, 50);
+  private static final ContentLightLevel HDR10_CONTENT_LIGHT_LEVEL =
+      new ContentLightLevel(1000, 400);
+  // libx265's 64x36 Main 10 at level 1.0 in the Main tier.
+  private static final String HDR10_CODEC_STRING = "hvc1.2.4.L30.90";
 
   // The fixture's Constrained Baseline H.264 at level 1.3. Its 160x90 variant at 24 fps and 500
   // kb/s
@@ -705,6 +727,259 @@ class WorkerMediaSmokeTest {
     assertThat(indexOf(replacementUploads.segments().get("segment1.m4s"), changedVersion))
         .as("the version message in the first keyframe of the replacement attempt")
         .isNotNegative();
+  }
+
+  @Test
+  @DisplayName(
+      "Should deliver HDR10 static metadata in front of every keyframe and none in the record when"
+          + " a worker copies HEVC whose record alone carries it")
+  void
+      shouldDeliverHdr10StaticMetadataInFrontOfEveryKeyframeAndNoneInTheRecordWhenAWorkerCopiesHevcWhoseRecordAloneCarriesIt()
+          throws Exception {
+    var source = hdr10SourceWithStaticMetadataOnlyInItsRecord();
+    var sourceBytes = Files.readAllBytes(source);
+    assertThat(seiMessages(hevcRecordNalUnits(sourceBytes)))
+        .as("the SEI messages of the source's record")
+        .containsKeys(HEVC_MASTERING_DISPLAY_SEI, HEVC_CONTENT_LIGHT_LEVEL_SEI);
+    assertThat(nalUnitsOfFirstPicture(sourceBytes, firstChunkOffset(sourceBytes)))
+        .as("the NAL unit types of the source's first keyframe")
+        .extracting(WorkerMediaSmokeTest::hevcNalUnitType)
+        .isNotEmpty()
+        .doesNotContain(HEVC_PREFIX_SEI, HEVC_SUFFIX_SEI);
+
+    var uploads =
+        execute(
+            engine(realCapabilities()),
+            root,
+            sampleEntryCopyJob(source, HDR10_CODEC_STRING).build());
+
+    assertThat(uploads.names()).containsExactlyElementsOf(uploadNames(SAMPLE_ENTRY_SOURCE_SECONDS));
+    assertDecodes(playable(uploads.contentOf(uploads.names())));
+    assertThat(hevcRecordNalUnits(uploads.segments().get("init.mp4")))
+        .as("the NAL unit types of the delivered record")
+        .extracting(WorkerMediaSmokeTest::hevcNalUnitType)
+        .doesNotContain(HEVC_PREFIX_SEI, HEVC_SUFFIX_SEI)
+        .contains(HEVC_VPS, HEVC_SPS, HEVC_PPS);
+    // Neither the locked FFmpeg nor Homebrew FFmpeg writes an mdcv or clli box for this copy: the
+    // source has neither box, and only SEI messages carry its HDR10 static metadata.
+    for (var segment : uploads.names().subList(1, uploads.names().size())) {
+      var bytes = uploads.segments().get(segment);
+      var keyframe = nalUnitsOfFirstPicture(bytes, firstSampleOffset(bytes));
+      assertThat(hevcNalUnitType(keyframe.getLast()))
+          .as("the picture type at the start of %s", segment)
+          .matches(WorkerMediaSmokeTest::isHevcRandomAccessPicture);
+      var messages = seiMessages(keyframe);
+      assertThat(messages)
+          .as("the SEI messages in front of the keyframe of %s", segment)
+          .containsKeys(HEVC_MASTERING_DISPLAY_SEI, HEVC_CONTENT_LIGHT_LEVEL_SEI);
+      assertThat(MasteringDisplayColourVolume.of(messages.get(HEVC_MASTERING_DISPLAY_SEI)))
+          .isEqualTo(HDR10_MASTERING_DISPLAY);
+      assertThat(ContentLightLevel.of(messages.get(HEVC_CONTENT_LIGHT_LEVEL_SEI)))
+          .isEqualTo(HDR10_CONTENT_LIGHT_LEVEL);
+    }
+  }
+
+  // libx265 writes the HDR10 SEI messages into the record and in front of every keyframe. The
+  // filter removes the parameter sets (types 32 to 34) and prefix SEI messages (type 39) from the
+  // samples, and keeps the record.
+  private Path hdr10SourceWithStaticMetadataOnlyInItsRecord() throws Exception {
+    var encoded = root.resolve("hdr10-encoded.mp4");
+    runFfmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=64x36:rate=24:duration=" + SAMPLE_ENTRY_SOURCE_SECONDS,
+            "-c:v",
+            "libx265",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p10le",
+            "-x265-params",
+            "keyint=24:min-keyint=24:scenecut=0:log-level=error:colorprim=bt2020"
+                + ":transfer=smpte2084:colormatrix=bt2020nc:master-display="
+                + HDR10_MASTERING_DISPLAY.x265Parameter()
+                + ":max-cll="
+                + HDR10_CONTENT_LIGHT_LEVEL.x265Parameter()),
+        encoded);
+    var source = root.resolve("hdr10.mp4");
+    runFfmpeg(
+        List.of(
+            "-i",
+            encoded.toString(),
+            "-c",
+            "copy",
+            "-bsf:v",
+            "filter_units=remove_types=32|33|34|39",
+            "-tag:v",
+            "hvc1"),
+        source);
+    return source;
+  }
+
+  // The NAL units of every array of the first hvcC record (ISO/IEC 14496-15, 8.3.3.1.2).
+  private static List<byte[]> hevcRecordNalUnits(byte[] mp4) {
+    var hvcC = indexOf(mp4, "hvcC".getBytes(StandardCharsets.US_ASCII));
+    assertThat(hvcC).as("the hvcC box").isNotNegative();
+    var configuration = ByteBuffer.wrap(mp4);
+    configuration.position(hvcC + 4 + HVCC_FIELDS_BEFORE_ARRAYS);
+    var arrays = Byte.toUnsignedInt(configuration.get());
+    var nalUnits = new ArrayList<byte[]>();
+    for (var array = 0; array < arrays; array++) {
+      configuration.get();
+      var count = Short.toUnsignedInt(configuration.getShort());
+      for (var nalUnit = 0; nalUnit < count; nalUnit++) {
+        var bytes = new byte[Short.toUnsignedInt(configuration.getShort())];
+        configuration.get(bytes);
+        nalUnits.add(bytes);
+      }
+    }
+
+    return nalUnits;
+  }
+
+  // The offset of a progressive MP4's first chunk: the first entry of its stco box.
+  private static int firstChunkOffset(byte[] mp4) {
+    var stco = indexOf(mp4, "stco".getBytes(StandardCharsets.US_ASCII));
+    assertThat(stco).as("the stco box").isNotNegative();
+    return ByteBuffer.wrap(mp4).getInt(stco + 12);
+  }
+
+  // The offset of a media segment's first sample: the data offset of its first trun box, which
+  // counts from the start of the moof box because CMAF sets default-base-is-moof.
+  private static int firstSampleOffset(byte[] segment) {
+    var moof = indexOf(segment, "moof".getBytes(StandardCharsets.US_ASCII)) - 4;
+    var trun = indexOf(segment, "trun".getBytes(StandardCharsets.US_ASCII));
+    assertThat(moof).as("the moof box").isNotNegative();
+    assertThat(trun).as("the trun box").isGreaterThan(moof);
+    var fields = ByteBuffer.wrap(segment);
+    assertThat(fields.getInt(trun + 4) & 0x01).as("the data-offset-present flag of trun").isOne();
+    return moof + fields.getInt(trun + 12);
+  }
+
+  // The four-byte length-prefixed NAL units from the offset through the first picture's slice.
+  private static List<byte[]> nalUnitsOfFirstPicture(byte[] media, int offset) {
+    var samples = ByteBuffer.wrap(media);
+    samples.position(offset);
+    var nalUnits = new ArrayList<byte[]>();
+    while (nalUnits.isEmpty()
+        || hevcNalUnitType(nalUnits.getLast()) > HEVC_LAST_VIDEO_CODING_LAYER_TYPE) {
+      var nalUnit = new byte[samples.getInt()];
+      samples.get(nalUnit);
+      nalUnits.add(nalUnit);
+    }
+
+    return nalUnits;
+  }
+
+  private static int hevcNalUnitType(byte[] nalUnit) {
+    return (nalUnit[0] >> 1) & 0x3f;
+  }
+
+  // The payload of every message in the prefix SEI NAL units by payload type (ITU-T H.265,
+  // 7.3.5), without the NAL unit header and emulation prevention bytes.
+  private static Map<Integer, byte[]> seiMessages(List<byte[]> nalUnits) {
+    var messages = new HashMap<Integer, byte[]>();
+    nalUnits.stream()
+        .filter(nalUnit -> hevcNalUnitType(nalUnit) == HEVC_PREFIX_SEI)
+        .map(nalUnit -> ByteBuffer.wrap(rawPayloadOf(nalUnit)))
+        .forEach(
+            payloads -> {
+              // The last byte holds the stop bit that ends the trailing bits.
+              while (payloads.remaining() > 1) {
+                var type = seiVariableLengthValue(payloads);
+                var payload = new byte[seiVariableLengthValue(payloads)];
+                payloads.get(payload);
+                messages.put(type, payload);
+              }
+            });
+    return messages;
+  }
+
+  // A payload type or size: a run of 0xFF bytes, each adding 255, then the last byte.
+  private static int seiVariableLengthValue(ByteBuffer payloads) {
+    var value = 0;
+    var next = Byte.toUnsignedInt(payloads.get());
+    while (next == 0xff) {
+      value += next;
+      next = Byte.toUnsignedInt(payloads.get());
+    }
+
+    return value + next;
+  }
+
+  // The bytes after the two-byte NAL unit header, without the 0x03 that follows each 0x0000.
+  private static byte[] rawPayloadOf(byte[] nalUnit) {
+    var payload = new ByteArrayOutputStream();
+    var zeros = 0;
+    for (var at = 2; at < nalUnit.length; at++) {
+      var value = nalUnit[at];
+      if (zeros >= 2 && value == 3) {
+        zeros = 0;
+        continue;
+      }
+
+      zeros = value == 0 ? zeros + 1 : 0;
+      payload.write(value);
+    }
+
+    return payload.toByteArray();
+  }
+
+  // An SEI mastering display colour volume (ITU-T H.265, D.2.28): the primaries in green, blue,
+  // red order, as libx265 writes them, and the white point in units of 0.00002, and the luminance
+  // in units of 0.0001 cd/m2.
+  private record MasteringDisplayColourVolume(
+      List<Integer> primaries,
+      int whitePointX,
+      int whitePointY,
+      long maxLuminance,
+      long minLuminance) {
+
+    private static MasteringDisplayColourVolume of(byte[] payload) {
+      var fields = ByteBuffer.wrap(payload);
+      var primaries = new ArrayList<Integer>();
+      for (var coordinate = 0; coordinate < 6; coordinate++) {
+        primaries.add(Short.toUnsignedInt(fields.getShort()));
+      }
+
+      return new MasteringDisplayColourVolume(
+          List.copyOf(primaries),
+          Short.toUnsignedInt(fields.getShort()),
+          Short.toUnsignedInt(fields.getShort()),
+          Integer.toUnsignedLong(fields.getInt()),
+          Integer.toUnsignedLong(fields.getInt()));
+    }
+
+    private String x265Parameter() {
+      return "G(%d,%d)B(%d,%d)R(%d,%d)WP(%d,%d)L(%d,%d)"
+          .formatted(
+              primaries.get(0),
+              primaries.get(1),
+              primaries.get(2),
+              primaries.get(3),
+              primaries.get(4),
+              primaries.get(5),
+              whitePointX,
+              whitePointY,
+              maxLuminance,
+              minLuminance);
+    }
+  }
+
+  // An SEI content light level information (ITU-T H.265, D.2.35), in cd/m2.
+  private record ContentLightLevel(int maxContentLightLevel, int maxPictureAverageLightLevel) {
+
+    private static ContentLightLevel of(byte[] payload) {
+      var fields = ByteBuffer.wrap(payload);
+      return new ContentLightLevel(
+          Short.toUnsignedInt(fields.getShort()), Short.toUnsignedInt(fields.getShort()));
+    }
+
+    private String x265Parameter() {
+      return maxContentLightLevel + "," + maxPictureAverageLightLevel;
+    }
   }
 
   @Test
