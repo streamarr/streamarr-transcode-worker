@@ -3,6 +3,8 @@ package com.streamarr.transcode.probe;
 /** Reads a byte array's bits, most significant first, as the H.26x and AV1 syntax tables do. */
 final class BitReader {
 
+  private static final int UVLC_LONGEST_VALUE = 32;
+
   private final byte[] bytes;
   private int position;
 
@@ -33,17 +35,19 @@ final class BitReader {
     return bits(1) == 1;
   }
 
-  /** AV1's uvlc(): a run of zero bits, a one bit, then as many value bits as the run held. */
+  /**
+   * AV1's uvlc(): a run of zero bits, a one bit, then as many value bits as the run held. A run of
+   * 32 or more zeros has no value bits.
+   */
   void skipUvlc() {
     var leadingZeros = 0;
     while (!flag()) {
       leadingZeros++;
-      if (leadingZeros >= 32) {
-        return;
-      }
     }
 
-    bits(leadingZeros);
+    if (leadingZeros < UVLC_LONGEST_VALUE) {
+      bits(leadingZeros);
+    }
   }
 
   /** The bitstream ended before a field that the syntax requires. */

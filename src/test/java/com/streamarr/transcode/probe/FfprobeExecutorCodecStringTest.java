@@ -388,6 +388,51 @@ class FfprobeExecutorCodecStringTest {
     }
 
     @Test
+    @DisplayName("Should read past a 32-zero uvlc when the timing info states an equal interval")
+    void shouldReadPastA32ZeroUvlcWhenTheTimingInfoStatesAnEqualInterval() {
+      // AV1 section 4.10.3: uvlc() reads up to its one bit and, after 32 or more zeros, no value
+      // bits. Then no decoder model, one operating point at level 9 in the main tier with an
+      // initial display delay, frame ID numbers, order hints and screen content tools that the
+      // header selects.
+      var header =
+          new SequenceHeaderBits()
+              .bits(3, 0)
+              .bits(1, 0)
+              .bits(1, 0)
+              .bits(1, 1)
+              .bits(32, 1001)
+              .bits(32, 60000)
+              .bits(1, 1)
+              .bits(32, 0)
+              .bits(1, 1)
+              .bits(1, 0)
+              .bits(1, 1)
+              .bits(5, 0)
+              .bits(12, 0)
+              .bits(5, 9)
+              .bits(1, 0)
+              .bits(1, 1)
+              .bits(4, 2)
+              .frameSize()
+              .bits(1, 1)
+              .bits(4, 0)
+              .bits(3, 0)
+              .bits(3, 0)
+              .bits(4, 0)
+              .bits(1, 1)
+              .bits(2, 0)
+              .bits(1, 1)
+              .bits(1, 1)
+              .bits(3, 6)
+              .bits(3, 0)
+              .bits(1, 1);
+
+      var video = stream("av1", header.obu());
+
+      assertThat(video.getCodecString()).isEqualTo("av01.0.09M.10");
+    }
+
+    @Test
     @DisplayName("Should read the header after the extension byte when the OBU has no size field")
     void shouldReadTheHeaderAfterTheExtensionByteWhenTheObuHasNoSizeField() {
       // One operating point at level 8, which carries a tier bit, without order hints. The header
