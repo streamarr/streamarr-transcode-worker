@@ -32,6 +32,7 @@
       "duration": "19.166667",
       "bit_rate": "8496576",
       "nb_frames": "575",
+      "extradata": "\n00000000: 0102 2000 0000 b000 0000 0000 78f0 00fc  .. .........x...\n00000010: fdfa fa00 000b 04a0 0001 0018 4001 0c01  ............@...\n00000020: ffff 0220 0000 0300 b000 0003 0000 0300  ... ............\n00000030: 7815 c090 a100 0100 2442 0101 0220 0000  x.......$B... ..\n00000040: 0300 b000 0003 0000 0300 78a0 03c0 8011  ..........x.....\n00000050: 07ca d881 5ee4 5954 d424 4824 02a2 0001  ....^.YT.$H$....\n00000060: 0009 4401 c028 64b8 6414 c9a7 0001 000d  ..D..(d.d.......\n00000070: 4e01 9408 002f e9a0 3d13 4042 80         N..../..=.@B.\n",
       "extradata_size": 125,
       "disposition": {
         "default": 1,
@@ -107,6 +108,7 @@
       "duration": "19.165011",
       "bit_rate": "151662",
       "nb_frames": "828",
+      "extradata": "\n00000000: 1210                                     ..\n",
       "extradata_size": 2,
       "disposition": {
         "default": 1,
@@ -151,6 +153,7 @@
       "duration": "19.166667",
       "bit_rate": "4",
       "nb_frames": "1",
+      "extradata": "\n",
       "disposition": {
         "default": 1,
         "dub": 0,
@@ -193,6 +196,7 @@
       "duration": "19.166667",
       "bit_rate": "3",
       "nb_frames": "1",
+      "extradata": "\n",
       "disposition": {
         "default": 1,
         "dub": 0,
@@ -235,6 +239,7 @@
       "duration": "19.166667",
       "bit_rate": "34560",
       "nb_frames": "575",
+      "extradata": "\n",
       "disposition": {
         "default": 1,
         "dub": 0,

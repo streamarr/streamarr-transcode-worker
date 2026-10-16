@@ -37,6 +37,7 @@
       "bit_rate": "21600",
       "bits_per_raw_sample": "8",
       "nb_frames": "48",
+      "extradata": "\n00000000: 0142 c00a ffe1 001b 6742 c00a da11 fe7c  .B......gB.....|\n00000010: 05a8 0808 0a00 0003 0002 0000 0300 601e  ..............`.\n00000020: 244d 4001 0004 68ce 0fc8                 $M@...h...\n",
       "extradata_size": 42,
       "disposition": {
         "default": 1,

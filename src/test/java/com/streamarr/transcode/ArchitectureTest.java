@@ -19,6 +19,21 @@ class ArchitectureTest {
           .importPackages("com.streamarr.transcode");
 
   @Test
+  @DisplayName("Should keep the engine independent when other worker packages change")
+  void shouldKeepTheEngineIndependentWhenOtherWorkerPackagesChange() {
+    noClasses()
+        .that()
+        .resideInAPackage("com.streamarr.transcode.engine..")
+        .should()
+        .dependOnClassesThat()
+        .resideInAnyPackage(
+            "com.streamarr.transcode.worker..",
+            "com.streamarr.transcode.probe..",
+            "com.streamarr.transcode.protocol..")
+        .check(WORKER_CLASSES);
+  }
+
+  @Test
   @DisplayName("Should keep Spring out of every class when it is not one of the Boot classes")
   void shouldKeepSpringOutOfEveryClassWhenItIsNotOneOfTheBootClasses() {
     noClasses()

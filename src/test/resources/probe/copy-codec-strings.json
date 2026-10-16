@@ -1,0 +1,164 @@
+{
+  "ivf-av1-10bit.ivf": {
+    "0": "av01.0.00M.10"
+  },
+  "mkv-av1-10bit.mkv": {
+    "0": "av01.0.00M.10"
+  },
+  "mkv-eac3-atmos-dts-hd-ma.mkv": {
+    "0": "avc1.42C00A",
+    "1": "ec-3"
+  },
+  "mkv-hdr10-fate.mkv": {
+    "0": "hvc1.2.4.L93.90"
+  },
+  "mkv-hdr10-maxfall-zero.mkv": {
+    "0": "hvc1.2.4.L30.90"
+  },
+  "mkv-hdr10-static.mkv": {
+    "0": "hvc1.2.4.L30.90"
+  },
+  "mkv-many-chapters.mkv": {
+    "0": "avc1.42C00A"
+  },
+  "mkv-many-titles.mkv": {
+    "0": "avc1.42C00A"
+  },
+  "mkv-mp3-11khz.mkv": {
+    "0": "avc1.42C00A"
+  },
+  "mkv-offset-chapters.mkv": {
+    "0": "avc1.42C00A"
+  },
+  "mkv-pipe-hevc-10bit.mkv": {
+    "0": "hvc1.4.10.L30.9D.8",
+    "1": "Opus"
+  },
+  "mkv-pixel-crop.mkv": {
+    "0": "avc1.42C00A"
+  },
+  "mkv-remuxed-from-mp4.mkv": {
+    "0": "avc1.42C00A",
+    "1": "mp4a.40.2",
+    "2": "mp4a.40.2"
+  },
+  "mkv-title-tags.mkv": {
+    "0": "avc1.42C00A",
+    "1": "mp4a.40.2",
+    "2": "mp4a.40.2"
+  },
+  "mov-phone-hlg-dovi-p84.mov": {
+    "0": "hvc1.2.4.L120.B0",
+    "1": "mp4a.40.2"
+  },
+  "mov-phone-rotated.mov": {
+    "0": "mp4a.40.2",
+    "1": "avc1.640028"
+  },
+  "mp4-audio-codecs.mp4": {
+    "0": "avc1.42C00A",
+    "1": "ac-3",
+    "2": "ec-3",
+    "3": "fLaC",
+    "4": "alac"
+  },
+  "mp4-av1-10bit.mp4": {
+    "0": "av01.0.00M.10"
+  },
+  "mp4-avc-record-level.mp4": {
+    "0": "avc1.42C00A"
+  },
+  "mp4-clap.mp4": {
+    "0": "avc1.42C00A"
+  },
+  "mp4-cover-art-first.mp4": {
+    "1": "avc1.42C00A"
+  },
+  "mp4-default-handlers.mp4": {
+    "0": "avc1.42C00A",
+    "1": "mp4a.40.2"
+  },
+  "mp4-dovi-p5-dvh1-no-record.mp4": {
+    "0": "hvc1.2.4.L123.B0"
+  },
+  "mp4-dovi-p5-dvh1.mp4": {
+    "0": "hvc1.2.4.L123.B0"
+  },
+  "mp4-dovi-p5-hev1.mp4": {
+    "0": "hvc1.2.4.L120.90"
+  },
+  "mp4-dovi-p81.mp4": {
+    "0": "hvc1.2.4.L123.B0"
+  },
+  "mp4-dovi-p82.mp4": {
+    "0": "hvc1.2.4.H120.90"
+  },
+  "mp4-dovi-p84-hlg.mp4": {
+    "0": "hvc1.2.4.L123.B0"
+  },
+  "mp4-dovi-p9-avc1.mp4": {
+    "0": "avc1.640028"
+  },
+  "mp4-dovi-p9-dva1.mp4": {
+    "0": "avc1.640028"
+  },
+  "mp4-er-aac-lc.mp4": {
+    "0": "avc1.42C00A",
+    "1": "mp4a.40.17"
+  },
+  "mp4-hdr10-maxfall-zero.mp4": {
+    "0": "hvc1.2.4.L30.90"
+  },
+  "mp4-hdr10-sei-only.mp4": {
+    "0": "hvc1.2.4.L30.90"
+  },
+  "mp4-hdr10-static.mp4": {
+    "0": "hvc1.2.4.L30.90"
+  },
+  "mp4-hevc-hdr10.mp4": {
+    "0": "hvc1.2.4.L123.B0"
+  },
+  "mp4-hevc-record-level.mp4": {
+    "0": "hvc1.1.6.L30.90"
+  },
+  "mp4-hevc-sdr10-untagged.mp4": {
+    "0": "hvc1.2.4.L123.B0"
+  },
+  "mp4-rotated.mp4": {
+    "0": "avc1.42C00A"
+  },
+  "mp4-sdr8-bt709.mp4": {
+    "0": "avc1.42C00A"
+  },
+  "mp4-titled.mp4": {
+    "0": "avc1.42C00A",
+    "1": "mp4a.40.2",
+    "2": "mp4a.40.2"
+  },
+  "mpegts-aac-he.ts": {
+    "0": "avc1.42C00A",
+    "1": "mp4a.40.2"
+  },
+  "mpegts-aac-ltp.ts": {
+    "0": "avc1.42C00A",
+    "1": "mp4a.40.4"
+  },
+  "mpegts-aac-main.ts": {
+    "0": "avc1.42C00A",
+    "1": "mp4a.40.1"
+  },
+  "mpegts-dovi-p7.ts": {
+    "0": "hvc1.2.4.H153.B0"
+  },
+  "mpegts-empty-audio.ts": {
+    "0": "avc1.42C00A",
+    "1": "mp4a.40.2"
+  },
+  "mpegts-hevc-ac3.ts": {
+    "0": "hvc1.1.6.L30.90",
+    "1": "ac-3"
+  },
+  "obu-av1-10bit.obu": {
+    "0": "av01.0.00M.10"
+  }
+}

@@ -1,8 +1,8 @@
 # Recorded probe output
 
 ffprobe's JSON output for small sources, recorded with the ffprobe in the pinned worker image and
-the probe's own arguments. `../../probe-fixtures/record-fixtures.sh` makes the sources and records
-the output. It keeps only the output, without the source's path. FFmpeg synthesizes most sources
+the probe's own arguments, which include `-show_data` for the extradata.
+`../../probe-fixtures/record-fixtures.sh` makes the sources and records the output. It keeps only the output, without the source's path. FFmpeg synthesizes most sources
 from its lavfi test sources. No file comes from a media library.
 
 | File | What the source is |
@@ -13,6 +13,8 @@ from its lavfi test sources. No file comes from a media library.
 | `mkv-pipe-hevc-10bit.mkv.json` | 10-bit 4:2:2 HEVC and Opus in Matroska written to a pipe, so no stream has a `DURATION` tag |
 | `mpegts-empty-audio.ts.json` | H.264 and AAC in MPEG-TS, which starts at 1.4 s, with a second AAC stream that has no packets |
 | `mkv-mp3-11khz.mkv.json` | MP3 at 11,025 Hz in Matroska |
+| `mp4-avc-record-level.mp4.json`, `mp4-hevc-record-level.mp4.json` | H.264 and HEVC in MP4 whose record headers `edit-mp4-boxes.py` rewrote to name level 5.1, while their parameter sets name level 1.0 |
+| `mpegts-aac-main.ts.json`, `mpegts-aac-ltp.ts.json` | AAC LC in ADTS whose frame headers `edit-adts-profile.py` rewrote as AAC Main and AAC LTP, next to a synthesized H.264 stream in MPEG-TS |
 | `mp4-er-aac-lc.mp4.json` | AAC in MP4 whose config `edit-mp4-boxes.py` rewrote as ER AAC LC, a profile FFmpeg has no name for |
 | `mkv-eac3-atmos-dts-hd-ma.mkv.json` | E-AC-3 with Atmos and DTS-HD MA, copied from FFmpeg's FATE samples `eac3/the_great_wall_7.1.eac3` and `dts/master_audio_7.1_24bit.dts`, in Matroska |
 | `mkv-offset-chapters.mkv.json` | Matroska that starts at 10 s. Its chapters start before the container, have no title, or have a 513-byte title |
@@ -43,6 +45,14 @@ from its lavfi test sources. No file comes from a media library.
 | `mp4-hevc-sdr10-untagged.mp4.json` | Local sample: 10-bit HEVC SDR without a transfer tag |
 | `mov-phone-hlg-dovi-p84.mov.json` | Local sample: a public-domain phone camera original, HEVC HLG with Dolby Vision 8.4 |
 | `mov-phone-rotated.mov.json` | Local sample: a public-domain phone camera original, H.264 recorded upright |
+| `mpegts-hevc-ac3.ts.json` | HEVC and AC-3 in MPEG-TS, whose HEVC parameter sets ffprobe dumps in Annex B form |
+| `ivf-av1-10bit.ivf.json` | 10-bit AV1 in IVF, whose extradata is the sequence header OBU |
+| `obu-av1-10bit.obu.json` | The same stream as a raw OBU file |
+| `mkv-av1-10bit.mkv.json` | The same stream in Matroska, whose extradata is an `av1C` record |
+| `mp4-av1-10bit.mp4.json` | The same stream in MP4 |
+| `mp4-audio-codecs.mp4.json` | H.264 with AC-3, E-AC-3, FLAC and ALAC in MP4 |
+| `mpegts-aac-he.ts.json` | Local sample: HE-AAC in ADTS (`aac-he.adts`), next to a synthesized H.264 stream in MPEG-TS |
+| `copy-codec-strings.json` | The codec string of each copied stream: `copy-codec-strings.py` copies every H.264, HEVC, AV1, AAC, AC-3, E-AC-3, Opus, FLAC and ALAC stream above with the worker's copy arguments, and reads the string from the copy's initialization segment |
 | `pixel-formats.json` | `ffprobe -show_pixel_formats`: FFmpeg's description of every pixel format it knows |
 | `ffprobe-version.txt` | The first line of `ffprobe -version` from the recording image |
 

@@ -84,6 +84,52 @@ class TranscodeWorkerProbeTest {
 
   @Test
   @DisplayName(
+      "Should preserve stream facts without codec strings when records have no parameter sets")
+  void shouldPreserveStreamFactsWithoutCodecStringsWhenRecordsHaveNoParameterSets()
+      throws Exception {
+    Files.writeString(
+        tempDir.resolve("movie.mkv"),
+        """
+        {"streams":[{"index":0,"codec_type":"video","codec_name":"h264",
+                     "width":1920,"height":1080,
+                     "extradata":"\\n00000000: 0142 c033 ffe0 00                        .B.3...\\n"},
+                    {"index":1,"codec_type":"video","codec_name":"hevc",
+                     "width":3840,"height":2160,
+                     "extradata":"\\n00000000: 0102 2000 0000 b000 0000 0000 7bf0 00fc  .. .........{...\\n00000010: fdfa fa00 000f 00                        .......\\n"}]}
+        """);
+    var runtime = new ScriptedWorkerRuntime();
+    var request = requestBuilder().build();
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
+      worker.start("localhost", 1);
+      start(runtime.connection(), request);
+      runtime.probes().drain();
+
+      assertThat(runtime.connection().results())
+          .singleElement()
+          .satisfies(
+              result -> {
+                assertThat(result.getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_UNSPECIFIED);
+                assertThat(result.hasMedia()).isTrue();
+                var streams = result.getMedia().getStreamsList();
+                assertThat(streams)
+                    .extracting(ProbeStreamInfo::getCodec)
+                    .containsExactly("h264", "hevc");
+                assertThat(streams)
+                    .extracting(ProbeStreamInfo::getWidth)
+                    .containsExactly(1920, 3840);
+                assertThat(streams)
+                    .extracting(ProbeStreamInfo::getHeight)
+                    .containsExactly(1080, 2160);
+                assertThat(streams)
+                    .extracting(ProbeStreamInfo::hasCodecString)
+                    .containsExactly(false, false);
+              });
+    }
+  }
+
+  @Test
+  @DisplayName(
       "Should omit stream end times when ASF reports the container duration for each stream")
   void shouldOmitStreamEndTimesWhenAsfReportsTheContainerDurationForEachStream() throws Exception {
     // The WMV audio's last packet ends at 1.021 s, but ASF gives it the global play time.
@@ -880,7 +926,8 @@ class TranscodeWorkerProbeTest {
          "streams":[
           {"index":4,"codec_type":"video","codec_name":"h264","width":1920,"height":1080,
            "r_frame_rate":"24000/1001","bit_rate":"3000000"},
-          {"index":7,"codec_type":"audio","codec_name":"aac","channels":6,"bit_rate":"384000",
+          {"index":7,"codec_type":"audio","codec_name":"aac","profile":"LC","channels":6,
+           "bit_rate":"384000",
            "tags":{"language":"eng"},"disposition":{"default":1}},
           {"index":9,"codec_type":"subtitle","codec_name":"subrip",
            "tags":{"language":"fra"},"disposition":{"forced":1}}]}
@@ -914,6 +961,8 @@ class TranscodeWorkerProbeTest {
                             .setIndex(7)
                             .setCodecType("audio")
                             .setCodec("aac")
+                            .setAudioProfile("LC")
+                            .setCodecString("mp4a.40.2")
                             .setChannels(6)
                             .setBitrateBitsPerSecond(384_000)
                             .setLanguage("eng")
