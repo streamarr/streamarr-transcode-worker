@@ -88,7 +88,7 @@ class TranscodeWorkerApplicationIT {
     var request =
         ProbeRequest.newBuilder()
             .setProbeAttemptId(toProto(UUID.randomUUID()))
-            .setProbeVersion(1)
+            .setProbeVersion(FfprobeExecutor.PROBE_VERSION)
             .setSource(
                 MediaSourceRef.newBuilder()
                     .setSourceNamespaceId(toProto(SOURCE_NAMESPACE_ID))
@@ -174,7 +174,7 @@ class TranscodeWorkerApplicationIT {
     var request =
         ProbeRequest.newBuilder()
             .setProbeAttemptId(toProto(UUID.randomUUID()))
-            .setProbeVersion(1)
+            .setProbeVersion(FfprobeExecutor.PROBE_VERSION)
             .setSource(
                 MediaSourceRef.newBuilder()
                     .setSourceNamespaceId(toProto(SOURCE_NAMESPACE_ID))
@@ -187,7 +187,8 @@ class TranscodeWorkerApplicationIT {
           ApplicationFixture.builder().port(controlPlane.port()).ffprobe(configuredBinary).build();
       try (var worker = start(applicationProcess(fixture))) {
         var registration = worker.awaitRegistration(controlPlane);
-        assertThat(registration.getCapabilities().getProbeVersionsList()).contains(1);
+        assertThat(registration.getCapabilities().getProbeVersionsList())
+            .containsExactly(FfprobeExecutor.PROBE_VERSION);
         controlPlane.startProbe(request);
 
         var result = worker.awaitProbeResult(controlPlane);
@@ -355,7 +356,7 @@ class TranscodeWorkerApplicationIT {
         versionCheck.write(ByteBuffer.wrap("release\n".getBytes(US_ASCII)));
 
         assertThat(worker.awaitRegistration(controlPlane).getCapabilities().getProbeVersionsList())
-            .containsExactly(1, FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION);
+            .containsExactly(FfprobeExecutor.PROBE_VERSION);
         assertThat(controlPlane.wasAdmittedAtRegistration())
             .as("registration occurs after the held version process has exited successfully")
             .isTrue();

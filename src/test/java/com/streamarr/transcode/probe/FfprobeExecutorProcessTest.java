@@ -124,7 +124,7 @@ class FfprobeExecutorProcessTest {
         """);
     var request =
         request().toBuilder()
-            .setProbeVersion(FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION)
+            .setProbeVersion(FfprobeExecutor.PROBE_VERSION)
             .setScanKeyframePackets(true)
             .build();
 
@@ -181,8 +181,11 @@ class FfprobeExecutorProcessTest {
       ProbeAttemptResult result, boolean processAlive, boolean interrupted) {}
 
   @Test
-  @DisplayName("Should pass fixed probe arguments when executing the configured binary")
-  void shouldPassFixedProbeArgumentsWhenExecutingTheConfiguredBinary() throws Exception {
+  @DisplayName(
+      "Should pass the probe's read limits and the chapter listing when executing the configured"
+          + " binary")
+  void shouldPassTheProbesReadLimitsAndTheChapterListingWhenExecutingTheConfiguredBinary()
+      throws Exception {
     var binary =
         script(
             """
@@ -201,8 +204,15 @@ class FfprobeExecutorProcessTest {
             "quiet",
             "-print_format",
             "json",
+            "-analyzeduration",
+            "200M",
+            "-probesize",
+            "1G",
+            "-scan_all_pmts",
+            "0",
             "-show_streams",
             "-show_format",
+            "-show_chapters",
             "-show_error",
             source.toString());
   }

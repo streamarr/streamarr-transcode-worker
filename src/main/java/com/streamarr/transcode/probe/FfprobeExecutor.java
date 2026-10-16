@@ -3,12 +3,8 @@ package com.streamarr.transcode.probe;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
-import build.buf.gen.streamarr.transcode.v1.ProbeContainerInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
-import build.buf.gen.streamarr.transcode.v1.ProbeMediaInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
-import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
-import com.google.protobuf.Duration;
 import com.streamarr.transcode.probe.ProbeCommand.ProbeTool;
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -20,7 +16,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -36,10 +31,8 @@ import tools.jackson.databind.ObjectMapper;
 @Slf4j
 public final class FfprobeExecutor {
 
-  public static final int PROBE_VERSION = 1;
-
-  /** The probe version whose results carry keyframe positions. */
-  public static final int KEYFRAME_POSITIONS_PROBE_VERSION = 3;
+  /** The only probe version that this worker answers. */
+  public static final int PROBE_VERSION = 3;
 
   private static final int AVERROR_INVALIDDATA = -1094995529;
   private static final int AVERROR_EOF = -541478725;
@@ -81,7 +74,7 @@ public final class FfprobeExecutor {
         ProbeAttemptResult.newBuilder()
             .setProbeAttemptId(request.getProbeAttemptId())
             .setProbeVersion(request.getProbeVersion());
-    if (!isSupported(request)) {
+    if (request.getProbeVersion() != PROBE_VERSION) {
       return ProbeAttemptReport.resultOnly(
           result.setFailure(ProbeFailure.PROBE_FAILURE_UNSUPPORTED_VERSION).build());
     }
@@ -110,16 +103,10 @@ public final class FfprobeExecutor {
     }
   }
 
-  private boolean isSupported(ProbeRequest request) {
-    if (request.getProbeVersion() == KEYFRAME_POSITIONS_PROBE_VERSION) {
-      return true;
-    }
-
-    return request.getProbeVersion() == PROBE_VERSION && !request.getScanKeyframePackets();
-  }
-
   private ProbeAttemptReport execute(Attempt attempt)
       throws ExecutionException, InterruptedException, IOException {
+    // The read limits let ffprobe reach streams whose first packet comes late, such as PGS
+    // subtitles. Without -scan_all_pmts 0, ffprobe reads an MPEG-TS source to those limits.
     var output =
         run(
             List.of(
@@ -127,8 +114,15 @@ public final class FfprobeExecutor {
                 "quiet",
                 "-print_format",
                 "json",
+                "-analyzeduration",
+                "200M",
+                "-probesize",
+                "1G",
+                "-scan_all_pmts",
+                "0",
                 "-show_streams",
                 "-show_format",
+                "-show_chapters",
                 "-show_error",
                 attempt.source().toString()));
     JsonNode json;
@@ -139,8 +133,7 @@ public final class FfprobeExecutor {
     }
 
     var result = readResult(json, output, attempt);
-    if (attempt.request().getProbeVersion() != KEYFRAME_POSITIONS_PROBE_VERSION
-        || !result.hasMedia()) {
+    if (!result.hasMedia()) {
       return ProbeAttemptReport.resultOnly(result);
     }
 
@@ -289,9 +282,8 @@ public final class FfprobeExecutor {
       return result.setFailure(failureFor(errorCode)).build();
     }
 
-    var media = parseMedia(json);
-    if (media.getStreamsList().stream()
-        .noneMatch(stream -> "video".equals(stream.getCodecType()))) {
+    var media = ProbeMediaReader.read(json);
+    if (!media.hasChosenVideoStreamIndex()) {
       return result.setFailure(ProbeFailure.PROBE_FAILURE_NO_VIDEO_STREAM).build();
     }
 
@@ -305,86 +297,6 @@ public final class FfprobeExecutor {
       case -2, -5, -13, -20 -> ProbeFailure.PROBE_FAILURE_SOURCE_UNAVAILABLE;
       default -> ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED;
     };
-  }
-
-  private ProbeMediaInfo parseMedia(JsonNode root) {
-    var container = ProbeContainerInfo.newBuilder();
-    var format = root.path("format");
-    text(format, "format_name").ifPresent(container::setFormat);
-    number(format, "bit_rate", Long::parseLong).ifPresent(container::setBitrateBitsPerSecond);
-    number(format, "duration", Double::parseDouble)
-        .filter(value -> Double.isFinite(value) && value >= 0)
-        .map(this::duration)
-        .ifPresent(container::setDuration);
-    var media = ProbeMediaInfo.newBuilder().setContainer(container);
-    var streams = root.path("streams");
-    if (!streams.isMissingNode() && !streams.isNull() && !streams.isArray()) {
-      throw new IllegalArgumentException("ffprobe returned a malformed stream list");
-    }
-
-    for (var stream : streams) {
-      media.addStreams(parseStream(stream, media.getStreamsCount()));
-    }
-
-    return media.build();
-  }
-
-  private ProbeStreamInfo parseStream(JsonNode source, int position) {
-    var type =
-        Optional.ofNullable(source.get("codec_type"))
-            .filter(JsonNode::isTextual)
-            .map(JsonNode::asString)
-            .filter(value -> !value.isBlank())
-            .orElseThrow(
-                () -> new IllegalArgumentException("ffprobe stream is missing codec_type"));
-    var stream =
-        ProbeStreamInfo.newBuilder()
-            .setIndex(text(source, "index").map(Integer::parseInt).orElse(position))
-            .setCodecType(type)
-            .setIsDefault(source.path("disposition").path("default").asInt() == 1)
-            .setIsForced(source.path("disposition").path("forced").asInt() == 1);
-    text(source, "codec_name").ifPresent(stream::setCodec);
-    text(source.path("tags"), "language").ifPresent(stream::setLanguage);
-    number(source, "bit_rate", Long::parseLong).ifPresent(stream::setBitrateBitsPerSecond);
-    number(source, "width", Integer::parseInt).ifPresent(stream::setWidth);
-    number(source, "height", Integer::parseInt).ifPresent(stream::setHeight);
-    number(source, "r_frame_rate", this::framerate)
-        .filter(value -> Double.isFinite(value) && value > 0)
-        .ifPresent(stream::setFramerate);
-    if ("audio".equals(type)) {
-      number(source, "channels", Integer::parseInt).ifPresent(stream::setChannels);
-    }
-
-    return stream.build();
-  }
-
-  private Optional<String> text(JsonNode parent, String name) {
-    return Optional.ofNullable(parent.get(name))
-        .filter(value -> !value.isNull())
-        .map(JsonNode::asString);
-  }
-
-  private double framerate(String value) {
-    var parts = value.split("/");
-    return parts.length == 2
-        ? Double.parseDouble(parts[0]) / Double.parseDouble(parts[1])
-        : Double.parseDouble(value);
-  }
-
-  private <T> Optional<T> number(JsonNode parent, String name, Function<String, T> parser) {
-    try {
-      return text(parent, name).map(parser);
-    } catch (NumberFormatException _) {
-      return Optional.empty();
-    }
-  }
-
-  private Duration duration(double seconds) {
-    var millis = (long) (seconds * 1000);
-    return Duration.newBuilder()
-        .setSeconds(millis / 1000)
-        .setNanos((int) (millis % 1000) * 1_000_000)
-        .build();
   }
 
   private record Attempt(Path source, ProbeRequest request, ProbeAttemptResult.Builder result) {}

@@ -17,10 +17,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import build.buf.gen.streamarr.transcode.v1.CancelProbeCommand;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
+import build.buf.gen.streamarr.transcode.v1.KeyframePacketScanReason;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositionSource;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeContainerInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
+import build.buf.gen.streamarr.transcode.v1.ProbeKeyframes;
 import build.buf.gen.streamarr.transcode.v1.ProbeMediaInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
@@ -60,6 +62,13 @@ class TranscodeWorkerProbeTest {
   // worker_session.proto: the largest session message the server accepts.
   private static final int SESSION_MESSAGE_LIMIT_BYTES = 131_072;
 
+  // A source whose container has no index, such as MPEG-TS, needs a packet scan for its keyframes.
+  private static final ProbeKeyframes PACKET_SCAN_REQUIRED_WITHOUT_INDEX =
+      ProbeKeyframes.newBuilder()
+          .setPacketScanRequired(
+              KeyframePacketScanReason.KEYFRAME_PACKET_SCAN_REASON_NO_CONTAINER_INDEX)
+          .build();
+
   @TempDir Path tempDir;
 
   @Test
@@ -74,6 +83,42 @@ class TranscodeWorkerProbeTest {
 
   @Test
   @DisplayName(
+      "Should omit stream end times when ASF reports the container duration for each stream")
+  void shouldOmitStreamEndTimesWhenAsfReportsTheContainerDurationForEachStream() throws Exception {
+    // The WMV audio's last packet ends at 1.021 s, but ASF gives it the global play time.
+    Files.writeString(
+        tempDir.resolve("movie.wmv"),
+        """
+        {"format":{"format_name":"asf","start_time":"0.000000","duration":"2.092000"},
+         "streams":[{"index":0,"codec_type":"video","codec_name":"wmv2",
+                     "time_base":"1/1000","start_pts":46,"duration_ts":2046},
+                    {"index":1,"codec_type":"audio","codec_name":"wmav2",
+                     "time_base":"1/1000","start_pts":0,"duration_ts":2046}]}
+        """);
+    var runtime = new ScriptedWorkerRuntime();
+    var request = requestBuilder().setSource(sourceBuilder().setRelativeKey("movie.wmv")).build();
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
+      worker.start("localhost", 1);
+      start(runtime.connection(), request);
+      runtime.probes().drain();
+
+      assertThat(runtime.connection().results())
+          .singleElement()
+          .satisfies(
+              result -> {
+                assertThat(result.hasMedia()).isTrue();
+                assertThat(result.getMedia().getContainer().getDuration())
+                    .isEqualTo(Duration.newBuilder().setSeconds(2).setNanos(92_000_000).build());
+                assertThat(result.getMedia().getStreamsList())
+                    .extracting(ProbeStreamInfo::hasEndTime)
+                    .containsExactly(false, false);
+              });
+    }
+  }
+
+  @Test
+  @DisplayName(
       "Should send the keyframe positions before the probe result when the worker reads a container index")
   void shouldSendKeyframePositionsBeforeProbeResultWhenWorkerReadsContainerIndex()
       throws Exception {
@@ -83,7 +128,7 @@ class TranscodeWorkerProbeTest {
     var runtime = new ScriptedWorkerRuntime();
     var request =
         requestBuilder()
-            .setProbeVersion(FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION)
+            .setProbeVersion(FfprobeExecutor.PROBE_VERSION)
             .setSource(sourceBuilder().setRelativeKey("movie.mp4"))
             .build();
     var producer =
@@ -136,7 +181,7 @@ class TranscodeWorkerProbeTest {
     var runtime = new ScriptedWorkerRuntime();
     var request =
         requestBuilder()
-            .setProbeVersion(FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION)
+            .setProbeVersion(FfprobeExecutor.PROBE_VERSION)
             .setScanKeyframePackets(true)
             .setSource(sourceBuilder().setRelativeKey("movie.ts"))
             .build();
@@ -233,7 +278,7 @@ class TranscodeWorkerProbeTest {
     var runtime = new ScriptedWorkerRuntime();
     var request =
         requestBuilder()
-            .setProbeVersion(FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION)
+            .setProbeVersion(FfprobeExecutor.PROBE_VERSION)
             .setSource(sourceBuilder().setRelativeKey("movie.mp4"))
             .build();
     var language = "a".repeat(SESSION_MESSAGE_LIMIT_BYTES);
@@ -314,7 +359,9 @@ class TranscodeWorkerProbeTest {
                     ProbeStreamInfo.newBuilder()
                         .setIndex(0)
                         .setCodecType("video")
-                        .setLanguage(language)));
+                        .setLanguage(language))
+                .setChosenVideoStreamIndex(0)
+                .setKeyframes(PACKET_SCAN_REQUIRED_WITHOUT_INDEX));
   }
 
   // The language tag that makes the session message carrying the result take exactly the given
@@ -339,15 +386,15 @@ class TranscodeWorkerProbeTest {
   }
 
   @Test
-  @DisplayName("Should advertise version 1 and the keyframe probe version")
-  void shouldAdvertiseVersionOneAndKeyframeProbeVersion() throws Exception {
+  @DisplayName("Should advertise only the probe version it answers when it registers")
+  void shouldAdvertiseOnlyTheProbeVersionItAnswersWhenItRegisters() throws Exception {
     var runtime = new ScriptedWorkerRuntime();
 
     try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
       worker.start("localhost", 1);
 
       assertThat(runtime.connection().registration().getCapabilities().getProbeVersionsList())
-          .containsExactly(1, FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION);
+          .containsExactly(3);
     }
   }
 
@@ -393,7 +440,11 @@ class TranscodeWorkerProbeTest {
   }
 
   @ParameterizedTest
-  @CsvSource({"1, PROBE_FAILURE_INVALID_MEDIA", "2, PROBE_FAILURE_UNSUPPORTED_VERSION"})
+  @CsvSource({
+    "3, PROBE_FAILURE_INVALID_MEDIA",
+    "1, PROBE_FAILURE_UNSUPPORTED_VERSION",
+    "4, PROBE_FAILURE_UNSUPPORTED_VERSION"
+  })
   @DisplayName("Should retain typed probe failures when the worker rejects media or a version")
   void shouldRetainTypedProbeFailuresWhenTheWorkerRejectsMediaOrAVersion(
       int version, ProbeFailure expectedFailure) throws Exception {
@@ -838,7 +889,7 @@ class TranscodeWorkerProbeTest {
     var expected =
         ProbeAttemptResult.newBuilder()
             .setProbeAttemptId(request.getProbeAttemptId())
-            .setProbeVersion(1)
+            .setProbeVersion(request.getProbeVersion())
             .setMedia(
                 ProbeMediaInfo.newBuilder()
                     .setContainer(
@@ -870,7 +921,9 @@ class TranscodeWorkerProbeTest {
                             .setCodecType("subtitle")
                             .setCodec("subrip")
                             .setLanguage("fra")
-                            .setIsForced(true)))
+                            .setIsForced(true))
+                    .setChosenVideoStreamIndex(4)
+                    .setKeyframes(PACKET_SCAN_REQUIRED_WITHOUT_INDEX))
             .build();
 
     try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {

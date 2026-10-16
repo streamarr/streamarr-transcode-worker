@@ -2353,9 +2353,7 @@ class WorkerMediaSmokeTest {
   }
 
   private static ProbeRequest keyframeRequest() {
-    return requestBuilder()
-        .setProbeVersion(FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION)
-        .build();
+    return requestBuilder().setProbeVersion(FfprobeExecutor.PROBE_VERSION).build();
   }
 
   // MP4 sources that FFmpeg's stream copy writes: an empty edit that delays the video by 0.5 s,

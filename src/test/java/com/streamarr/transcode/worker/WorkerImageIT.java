@@ -139,7 +139,7 @@ class WorkerImageIT {
       var result = ProbeAttemptResult.parseFrom(image.command("probe", request.toByteArray()));
 
       assertThat(result.getProbeAttemptId()).isEqualTo(request.getProbeAttemptId());
-      assertThat(result.getProbeVersion()).isEqualTo(1);
+      assertThat(result.getProbeVersion()).isEqualTo(request.getProbeVersion());
       assertThat(result.getMedia().getStreamsList())
           .filteredOn(stream -> "video".equals(stream.getCodecType()))
           .singleElement()
