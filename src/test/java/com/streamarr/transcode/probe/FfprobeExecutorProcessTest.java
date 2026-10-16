@@ -18,6 +18,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import lombok.Builder;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -85,10 +86,12 @@ class FfprobeExecutorProcessTest {
 
     var completed =
         probeUntilInterrupted(
-            executorFor(binary),
-            Path.of(binary + ".pid"),
-            temporaryDirectory.resolve("movie.mkv"),
-            request);
+            InterruptedProbe.builder()
+                .executor(executorFor(binary))
+                .pidFile(Path.of(binary + ".pid"))
+                .source(temporaryDirectory.resolve("movie.mkv"))
+                .request(request)
+                .build());
 
     assertThat(completed.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_CANCELLED);
     assertThat(completed.result().getProbeAttemptId()).isEqualTo(request.getProbeAttemptId());
@@ -132,10 +135,12 @@ class FfprobeExecutorProcessTest {
 
     var completed =
         probeUntilInterrupted(
-            FfprobeExecutor.forBinaries(ffprobe, ffmpeg),
-            Path.of(ffmpeg + ".pid"),
-            source,
-            request);
+            InterruptedProbe.builder()
+                .executor(FfprobeExecutor.forBinaries(ffprobe, ffmpeg))
+                .pidFile(Path.of(ffmpeg + ".pid"))
+                .source(source)
+                .request(request)
+                .build());
 
     assertThat(completed.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_CANCELLED);
     assertThat(completed.processAlive()).isFalse();
@@ -146,15 +151,18 @@ class FfprobeExecutorProcessTest {
    * Probes on its own thread and interrupts that thread once a scripted binary writes its process
    * id to the given file.
    */
-  private ProbeCompletion probeUntilInterrupted(
-      FfprobeExecutor executor, Path pidFile, Path source, ProbeRequest request) throws Exception {
+  @Builder
+  private record InterruptedProbe(
+      FfprobeExecutor executor, Path pidFile, Path source, ProbeRequest request) {}
+
+  private ProbeCompletion probeUntilInterrupted(InterruptedProbe probe) throws Exception {
     var process = new AtomicReference<ProcessHandle>();
     var completion = new CompletableFuture<ProbeCompletion>();
     var task =
         Thread.ofVirtual()
             .start(
                 () -> {
-                  var result = executor.probe(source, request).result();
+                  var result = probe.executor().probe(probe.source(), probe.request()).result();
                   completion.complete(
                       new ProbeCompletion(
                           result,
@@ -167,8 +175,10 @@ class FfprobeExecutorProcessTest {
     try {
       await()
           .atMost(Duration.ofSeconds(5))
-          .until(() -> Files.exists(pidFile) && !Files.readString(pidFile).isBlank());
-      process.set(ProcessHandle.of(Long.parseLong(Files.readString(pidFile))).orElseThrow());
+          .until(
+              () -> Files.exists(probe.pidFile()) && !Files.readString(probe.pidFile()).isBlank());
+      process.set(
+          ProcessHandle.of(Long.parseLong(Files.readString(probe.pidFile()))).orElseThrow());
       task.interrupt();
 
       return completion.get(3, TimeUnit.SECONDS);

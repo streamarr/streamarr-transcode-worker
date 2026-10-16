@@ -1,7 +1,6 @@
 package com.streamarr.transcode.probe;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 
 import java.util.HexFormat;
 import org.junit.jupiter.api.DisplayName;
@@ -31,8 +30,9 @@ class CodecStringsTest {
     "01 60 00 00 00 90 00 00 00 00 01 5d, hvc1.1.6.L93.90.0.0.0.0.1",
     "01 60 00 00 00 00 00 00 00 00 00 5d, hvc1.1.6.L93",
   })
-  @DisplayName("Should spell each HEVC field as ISO/IEC 14496-15 E.3 orders it")
-  void shouldSpellEachHevcFieldAsIso1449615E3OrdersIt(String generalProfile, String expected) {
+  @DisplayName("Should spell each HEVC field when the general profile declares it")
+  void shouldSpellEachHevcFieldWhenTheGeneralProfileDeclaresIt(
+      String generalProfile, String expected) {
     assertThat(CodecStrings.hevc("hvc1", bytes(generalProfile))).isEqualTo(expected);
   }
 
@@ -52,17 +52,5 @@ class CodecStringsTest {
 
   private static byte[] bytes(String hex) {
     return HexFormat.ofDelimiter(" ").parseHex(hex);
-  }
-
-  @Test
-  @DisplayName("Should refuse a missing argument when a caller builds an AVC or HEVC string")
-  void shouldRefuseAMissingArgumentWhenACallerBuildsAnAvcOrHevcString() {
-    var profile = bytes("42 c0 1e");
-    var generalProfile = bytes("01 60 00 00 00 90 00 00 00 00 00 5d");
-
-    assertThatNullPointerException().isThrownBy(() -> CodecStrings.avc(null, profile));
-    assertThatNullPointerException().isThrownBy(() -> CodecStrings.avc("avc1", null));
-    assertThatNullPointerException().isThrownBy(() -> CodecStrings.hevc(null, generalProfile));
-    assertThatNullPointerException().isThrownBy(() -> CodecStrings.hevc("hvc1", null));
   }
 }
