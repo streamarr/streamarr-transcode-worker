@@ -7,7 +7,6 @@ import java.util.Locale;
  * take the name itself, and libsvtav1 takes the number the scale maps the name to.
  */
 public enum EncoderPreset {
-  ULTRAFAST(13),
   SUPERFAST(12),
   VERYFAST(11),
   FASTER(10),
