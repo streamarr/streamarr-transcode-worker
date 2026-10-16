@@ -530,7 +530,7 @@ class FfprobeExecutorTest {
   }
 
   @ParameterizedTest
-  @ValueSource(ints = {0, 1, 2, 4, -1})
+  @ValueSource(ints = {0, 1, 2, 3, 5, -1})
   @DisplayName("Should refuse unsupported versions when receiving a probe request")
   void shouldRefuseUnsupportedVersionsWhenReceivingAProbeRequest(int version) {
     var executor =

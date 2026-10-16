@@ -451,7 +451,7 @@ class TranscodeWorkerProbeTest {
       worker.start("localhost", 1);
 
       assertThat(runtime.connection().registration().getCapabilities().getProbeVersionsList())
-          .containsExactly(3);
+          .containsExactly(4);
     }
   }
 
@@ -498,9 +498,10 @@ class TranscodeWorkerProbeTest {
 
   @ParameterizedTest
   @CsvSource({
-    "3, PROBE_FAILURE_INVALID_MEDIA",
+    "4, PROBE_FAILURE_INVALID_MEDIA",
     "1, PROBE_FAILURE_UNSUPPORTED_VERSION",
-    "4, PROBE_FAILURE_UNSUPPORTED_VERSION"
+    "3, PROBE_FAILURE_UNSUPPORTED_VERSION",
+    "5, PROBE_FAILURE_UNSUPPORTED_VERSION"
   })
   @DisplayName("Should retain typed probe failures when the worker rejects media or a version")
   void shouldRetainTypedProbeFailuresWhenTheWorkerRejectsMediaOrAVersion(
