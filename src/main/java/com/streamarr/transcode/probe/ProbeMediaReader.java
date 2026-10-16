@@ -30,8 +30,9 @@ final class ProbeMediaReader {
       throw new IllegalArgumentException("ffprobe returned a malformed stream list");
     }
 
+    var timeline = ProbeTimeline.of(format);
     for (var stream : streams) {
-      media.addStreams(parseStream(stream, media.getStreamsCount()));
+      media.addStreams(parseStream(stream, media.getStreamsCount(), timeline));
     }
 
     ChosenVideoStream.find(streams)
@@ -39,7 +40,8 @@ final class ProbeMediaReader {
     return media.build();
   }
 
-  private static ProbeStreamInfo parseStream(JsonNode source, int position) {
+  private static ProbeStreamInfo parseStream(
+      JsonNode source, int position, ProbeTimeline timeline) {
     var type =
         Optional.ofNullable(source.get("codec_type"))
             .filter(JsonNode::isTextual)
@@ -62,8 +64,14 @@ final class ProbeMediaReader {
         .filter(value -> Double.isFinite(value) && value > 0)
         .ifPresent(stream::setFramerate);
     switch (type) {
-      case "video" -> VideoStreamFacts.add(source, stream);
-      case "audio" -> number(source, "channels", Integer::parseInt).ifPresent(stream::setChannels);
+      case "video" -> {
+        VideoStreamFacts.add(source, stream);
+        StreamEndTime.of(source, timeline).ifPresent(stream::setEndTime);
+      }
+      case "audio" -> {
+        number(source, "channels", Integer::parseInt).ifPresent(stream::setChannels);
+        StreamEndTime.of(source, timeline).ifPresent(stream::setEndTime);
+      }
       default -> {
         // Other stream types report only the facts that every stream reports.
       }

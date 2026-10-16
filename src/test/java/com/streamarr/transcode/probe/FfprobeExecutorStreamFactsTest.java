@@ -8,6 +8,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import build.buf.gen.streamarr.transcode.v1.ChromaSubsampling;
 import build.buf.gen.streamarr.transcode.v1.ContainerCropping;
+import com.google.protobuf.Duration;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -107,6 +108,79 @@ class FfprobeExecutorStreamFactsTest {
       var video = streamOf("mp4-titled.mp4", 0);
 
       assertThat(video.hasContainerCropping()).isFalse();
+    }
+  }
+
+  @Nested
+  @DisplayName("End Time")
+  class EndTimeTests {
+
+    @Test
+    @DisplayName("Should end each video and audio stream at its MP4 header duration")
+    void shouldEndEachVideoAndAudioStreamAtItsMp4HeaderDuration() {
+      // The video lasts 24576 ticks of 1/12288 s and the audio 88200 ticks of 1/44100 s.
+      var media = probeFixture("mp4-titled.mp4");
+
+      assertThat(media.getStreams(0).getEndTime()).isEqualTo(seconds(2, 0));
+      assertThat(media.getStreams(1).getEndTime()).isEqualTo(seconds(2, 0));
+    }
+
+    @Test
+    @DisplayName(
+        "Should measure each end time from the container start when the container starts late")
+    void shouldMeasureEachEndTimeFromTheContainerStartWhenTheContainerStartsLate() {
+      // The container starts at 1.4 s. The video starts at 128090 and lasts 180000 ticks of
+      // 1/90000 s, so it ends at 308090 / 90000 - 1.4 = 2.0232222... s. The audio starts at 126000
+      // and lasts 171363 ticks, so it ends at 297363 / 90000 - 1.4 = 1.9040333... s.
+      var media = probeFixture("mpegts-empty-audio.ts");
+
+      assertThat(media.getStreams(0).getEndTime()).isEqualTo(seconds(2, 23_222_222));
+      assertThat(media.getStreams(1).getEndTime()).isEqualTo(seconds(1, 904_033_333));
+    }
+
+    @Test
+    @DisplayName("Should end a Matroska track at its start plus its DURATION tag")
+    void shouldEndAMatroskaTrackAtItsStartPlusItsDurationTag() {
+      // The first audio track starts at 0 and its DURATION tag says 00:00:02.023000000.
+      var audio = streamOf("mkv-remuxed-from-mp4.mkv", 1);
+
+      assertThat(audio.getEndTime()).isEqualTo(seconds(2, 23_000_000));
+    }
+
+    @Test
+    @DisplayName("Should read a DURATION tag with a language suffix when the tag has one")
+    void shouldReadADurationTagWithALanguageSuffixWhenTheTagHasOne() {
+      var media =
+          probeOutput(
+              """
+              {"format":{"start_time":"0.000000"},
+               "streams":[{"index":0,"codec_type":"video","time_base":"1/1000","start_pts":500,
+                           "tags":{"DURATION-eng":"01:02:03.250000000"}}]}
+              """);
+
+      assertThat(media.getStreams(0).getEndTime()).isEqualTo(seconds(3723, 750_000_000));
+    }
+
+    @Test
+    @DisplayName("Should report no end time when the header states no duration")
+    void shouldReportNoEndTimeWhenTheHeaderStatesNoDuration() {
+      var media = probeFixture("mkv-pipe-hevc-10bit.mkv");
+
+      assertThat(media.getStreams(0).hasEndTime()).isFalse();
+      assertThat(media.getStreams(1).hasEndTime()).isFalse();
+    }
+
+    @Test
+    @DisplayName("Should report no end time when the stream is a subtitle stream")
+    void shouldReportNoEndTimeWhenTheStreamIsASubtitleStream() {
+      // The mov_text stream's header states a duration of 1 s.
+      var subtitle = streamOf("mp4-titled.mp4", 3);
+
+      assertThat(subtitle.hasEndTime()).isFalse();
+    }
+
+    private static Duration seconds(long seconds, int nanos) {
+      return Duration.newBuilder().setSeconds(seconds).setNanos(nanos).build();
     }
   }
 
