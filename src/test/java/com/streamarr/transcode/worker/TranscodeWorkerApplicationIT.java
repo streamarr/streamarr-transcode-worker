@@ -262,6 +262,28 @@ class TranscodeWorkerApplicationIT {
     }
   }
 
+  @Test
+  @DisplayName("Should register its encoders when FFmpeg writes more than a pipe holds")
+  void shouldRegisterItsEncodersWhenFfmpegWritesMoreThanAPipeHolds() throws Exception {
+    try (var controlPlane = WorkerApplicationControlPlane.builder().build()) {
+      var fixture =
+          ApplicationFixture.builder()
+              .port(controlPlane.port())
+              .ffprobe(versionOnlyFfprobe())
+              .build();
+      var processBuilder = applicationProcess(fixture);
+      // Twice the default Linux pipe capacity of 64 KiB.
+      processBuilder.environment().put("FFMPEG_FLOOD_BYTES", String.valueOf(128 * 1024));
+      try (var worker = start(processBuilder)) {
+        var registration = worker.awaitRegistration(controlPlane);
+
+        assertThat(registration.getCapabilities().getVideoEncodersList())
+            .extracting(encoder -> encoder.getBackend().getEncoder())
+            .containsExactlyInAnyOrder("libx264", "libx265", "libsvtav1");
+      }
+    }
+  }
+
   private static void assertStartupRefusedBeforeContact(
       WorkerApplicationProcess worker, WorkerApplicationControlPlane controlPlane, String binary)
       throws Exception {
@@ -412,6 +434,10 @@ class TranscodeWorkerApplicationIT {
         ffmpeg,
         """
         #!/bin/sh
+        if [ -n "$FFMPEG_FLOOD_BYTES" ]; then
+          head -c "$FFMPEG_FLOOD_BYTES" /dev/zero >&2
+          [ "$*" = "-version" ] && head -c "$FFMPEG_FLOOD_BYTES" /dev/zero
+        fi
         case "$*" in
           *"muxer=mp4"*) cat <<'HELP'
         %s
