@@ -155,19 +155,19 @@ final class SampleRanges {
     private List<TrackSamples> trackSamples() {
       return trackSamples.stream().filter(track -> !track.samples().isEmpty()).toList();
     }
-  }
 
-  private TrackRun.Defaults defaultsOf(TrackFragmentHeader header) {
-    return new TrackRun.Defaults(
-        () ->
-            header
-                .defaultSampleDuration()
-                .orElseGet(() -> trackDefaultsOf(header).defaultSampleDuration()),
-        () -> defaultSampleSizeOf(header),
-        () ->
-            header
-                .defaultSampleFlags()
-                .orElseGet(() -> trackDefaultsOf(header).defaultSampleFlags()));
+    private TrackRun.Defaults defaultsOf(TrackFragmentHeader header) {
+      return new TrackRun.Defaults(
+          () ->
+              header
+                  .defaultSampleDuration()
+                  .orElseGet(() -> trackDefaultsOf(header).defaultSampleDuration()),
+          () -> defaultSampleSizeOf(header),
+          () ->
+              header
+                  .defaultSampleFlags()
+                  .orElseGet(() -> trackDefaultsOf(header).defaultSampleFlags()));
+    }
   }
 
   /** Places each {@code traf}'s runs after the data of the {@code traf} placed before it. */

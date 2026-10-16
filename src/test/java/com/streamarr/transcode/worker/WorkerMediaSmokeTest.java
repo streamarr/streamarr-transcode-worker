@@ -1567,9 +1567,9 @@ class WorkerMediaSmokeTest {
 
     var ffmpegBoxes = TopLevelBoxes.of(run.ffmpegOutput());
     assertThat(ffmpegBoxes).extracting(Box::type).startsWith("ftyp", "moov");
-    assertThat(run.uploads().segments().get("init.mp4"))
+    assertThat(run.uploads().segments())
         .as("the initialization segment")
-        .isEqualTo(Arrays.copyOf(run.ffmpegOutput(), ffmpegBoxes.get(1).end()));
+        .containsEntry("init.mp4", Arrays.copyOf(run.ffmpegOutput(), ffmpegBoxes.get(1).end()));
     assertThat(run.mediaSegmentNames())
         .isNotEmpty()
         .allSatisfy(
