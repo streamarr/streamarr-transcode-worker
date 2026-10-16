@@ -42,9 +42,7 @@ public class TranscodeWorkerApplication {
   @Bean(destroyMethod = "close")
   TranscodeWorker transcodeWorker(TranscodeWorkerSettings settings)
       throws IOException, InterruptedException {
-    var capabilities =
-        new TranscodeCapabilityService(
-            settings.ffmpegPath(), command -> new ProcessBuilder(command).start());
+    var capabilities = new TranscodeCapabilityService(settings.ffmpegPath(), ProcessBuilder::start);
     capabilities.detectCapabilities();
     if (!capabilities.isFfmpegAvailable()) {
       throw new IllegalStateException(

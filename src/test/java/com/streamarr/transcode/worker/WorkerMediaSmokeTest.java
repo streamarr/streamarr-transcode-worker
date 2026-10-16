@@ -2241,7 +2241,7 @@ class WorkerMediaSmokeTest {
   }
 
   private static TranscodeCapabilityService realCapabilities() {
-    return new TranscodeCapabilityService("ffmpeg", command -> new ProcessBuilder(command).start());
+    return new TranscodeCapabilityService("ffmpeg", ProcessBuilder::start);
   }
 
   // Lists no hardware encoder, so that each codec family runs its software encoder.
@@ -2249,11 +2249,11 @@ class WorkerMediaSmokeTest {
     return new TranscodeCapabilityService(
         "ffmpeg",
         command -> {
-          if (List.of(command).contains("-encoders")) {
+          if (command.command().contains("-encoders")) {
             return new ProcessBuilder("true").start();
           }
 
-          return new ProcessBuilder(command).start();
+          return command.start();
         });
   }
 

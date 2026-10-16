@@ -10,7 +10,6 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.Arrays;
 import java.util.UUID;
 
 public final class RemoteWorkerFixtures {
@@ -55,8 +54,8 @@ public final class RemoteWorkerFixtures {
         .encoderStallTimeout(FfmpegTranscodeEngine.DEFAULT_ENCODER_STALL_TIMEOUT);
   }
 
-  private static String stdoutOf(String[] command, String encodersOutput) {
-    var arguments = Arrays.asList(command);
+  private static String stdoutOf(ProcessBuilder command, String encodersOutput) {
+    var arguments = command.command();
     if (arguments.contains("muxer=mp4")) {
       return FfmpegMuxerHelpFixtures.FRAGMENTED_MP4_MUXER_HELP;
     }

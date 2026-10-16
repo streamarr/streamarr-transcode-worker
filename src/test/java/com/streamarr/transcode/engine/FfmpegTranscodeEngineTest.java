@@ -278,7 +278,7 @@ class FfmpegTranscodeEngineTest {
         new TranscodeCapabilityService(
             "ffmpeg",
             command -> {
-              if (String.join(" ", command).contains("muxer=mp4")) {
+              if (String.join(" ", command.command()).contains("muxer=mp4")) {
                 return new FakeProcess("Muxer mp4 [MP4 (MPEG-4 Part 14)]:", 0);
               }
 
@@ -347,7 +347,7 @@ class FfmpegTranscodeEngineTest {
         new TranscodeCapabilityService(
             "ffmpeg",
             command -> {
-              var cmdStr = String.join(" ", command);
+              var cmdStr = String.join(" ", command.command());
               if (cmdStr.contains("-version")) {
                 return outputs.get("ffmpeg");
               }

@@ -164,7 +164,7 @@ public class TranscodeCapabilityService {
 
   private CapabilityProbeResult checkFfmpegVersion() {
     try {
-      var process = processFactory.create(new String[] {ffmpegPath, "-version"});
+      var process = processFactory.start(new ProcessBuilder(ffmpegPath, "-version"));
       var exitCode = process.waitFor();
       return exitCode == 0
           ? CapabilityProbeResult.success()
@@ -185,7 +185,7 @@ public class TranscodeCapabilityService {
   private CapabilityProbeResult probeRequiredMp4MuxerOptions() {
     try {
       var process =
-          processFactory.create(new String[] {ffmpegPath, "-hide_banner", "-h", "muxer=mp4"});
+          processFactory.start(new ProcessBuilder(ffmpegPath, "-hide_banner", "-h", "muxer=mp4"));
       var output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
       if (process.waitFor() != 0) {
         return CapabilityProbeResult.failure("FFmpeg mp4 muxer capability probe failed");
@@ -222,7 +222,7 @@ public class TranscodeCapabilityService {
 
   private Set<String> detectHardwareEncoders() {
     try {
-      var process = processFactory.create(new String[] {ffmpegPath, "-encoders"});
+      var process = processFactory.start(new ProcessBuilder(ffmpegPath, "-encoders"));
       var encoders = new HashSet<String>();
 
       try (var reader =
@@ -283,27 +283,26 @@ public class TranscodeCapabilityService {
       // Match the command builder's CPU scaling path. Compiled encoders may need unavailable
       // devices.
       var process =
-          processFactory.create(
-              new String[] {
-                ffmpegPath,
-                "-nostdin",
-                "-v",
-                "quiet",
-                "-f",
-                "lavfi",
-                "-i",
-                "color=size=320x240:rate=30",
-                "-vf",
-                "scale=-2:240",
-                "-frames:v",
-                "1",
-                "-an",
-                "-c:v",
-                encoder,
-                "-f",
-                "null",
-                "-"
-              });
+          processFactory.start(
+              new ProcessBuilder(
+                  ffmpegPath,
+                  "-nostdin",
+                  "-v",
+                  "quiet",
+                  "-f",
+                  "lavfi",
+                  "-i",
+                  "color=size=320x240:rate=30",
+                  "-vf",
+                  "scale=-2:240",
+                  "-frames:v",
+                  "1",
+                  "-an",
+                  "-c:v",
+                  encoder,
+                  "-f",
+                  "null",
+                  "-"));
       try {
         return process.waitFor(10, TimeUnit.SECONDS) && process.exitValue() == 0;
       } finally {
@@ -332,7 +331,7 @@ public class TranscodeCapabilityService {
 
   private String detectAccelerator() {
     try {
-      var process = processFactory.create(new String[] {ffmpegPath, "-hwaccels"});
+      var process = processFactory.start(new ProcessBuilder(ffmpegPath, "-hwaccels"));
       var result = getStringBuilder(process);
 
       process.waitFor();
@@ -373,6 +372,6 @@ public class TranscodeCapabilityService {
 
   @FunctionalInterface
   public interface ProcessFactory {
-    Process create(String[] command) throws IOException;
+    Process start(ProcessBuilder command) throws IOException;
   }
 }
