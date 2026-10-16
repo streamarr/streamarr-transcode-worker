@@ -116,6 +116,23 @@ class FfprobeExecutorCodecStringTest {
     }
 
     @Test
+    @DisplayName("Should read the escaped object type when the config escapes it")
+    void shouldReadTheEscapedObjectTypeWhenTheConfigEscapesIt() {
+      // ISO/IEC 14496-3, 1.6.2.1: object type 31 escapes to 32 plus the next 6 bits. 11111 001010
+      // names object type 42, USAC.
+      var audio =
+          probeOutput(
+                  """
+                  {"streams":[{"index":0,"codec_type":"video","time_base":"1/1000"},
+                              {"index":1,"codec_type":"audio","codec_name":"aac",
+                               "extradata":"\\n00000000: f940 0000                                .@..\\n"}]}
+                  """)
+              .getStreams(1);
+
+      assertThat(audio.getCodecString()).isEqualTo("mp4a.40.42");
+    }
+
+    @Test
     @DisplayName("Should report no codec string when an ADTS stream has no profile")
     void shouldReportNoCodecStringWhenAnAdtsStreamHasNoProfile() {
       var audio = adtsStream("");
