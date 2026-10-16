@@ -185,6 +185,95 @@ class FfprobeExecutorStreamFactsTest {
   }
 
   @Nested
+  @DisplayName("Audio Sample Rate and Profile")
+  class AudioTests {
+
+    @Test
+    @DisplayName("Should report the Atmos profile and sample rate when the stream is E-AC-3 Atmos")
+    void shouldReportTheAtmosProfileAndSampleRateWhenTheStreamIsEac3Atmos() {
+      var audio = streamOf("mkv-eac3-atmos-dts-hd-ma.mkv", 1);
+
+      assertThat(audio.getAudioProfile()).isEqualTo("Dolby Digital Plus + Dolby Atmos");
+      assertThat(audio.getSampleRateHz()).isEqualTo(48_000);
+    }
+
+    @Test
+    @DisplayName("Should report the DTS-HD MA profile when the stream is DTS-HD Master Audio")
+    void shouldReportTheDtsHdMaProfileWhenTheStreamIsDtsHdMasterAudio() {
+      var audio = streamOf("mkv-eac3-atmos-dts-hd-ma.mkv", 2);
+
+      assertThat(audio.getAudioProfile()).isEqualTo("DTS-HD MA");
+    }
+
+    @Test
+    @DisplayName("Should report the LC profile and sample rate when the stream is AAC LC")
+    void shouldReportTheLcProfileAndSampleRateWhenTheStreamIsAacLc() {
+      var audio = streamOf("mp4-titled.mp4", 1);
+
+      assertThat(audio.getAudioProfile()).isEqualTo("LC");
+      assertThat(audio.getSampleRateHz()).isEqualTo(44_100);
+    }
+
+    @Test
+    @DisplayName("Should report the profile number as text when FFmpeg has no name for the profile")
+    void shouldReportTheProfileNumberAsTextWhenFfmpegHasNoNameForTheProfile() {
+      // ER AAC LC is audio object type 17, which FFmpeg stores as profile 16 and does not name.
+      var audio = streamOf("mp4-er-aac-lc.mp4", 1);
+
+      assertThat(audio.getAudioProfile()).isEqualTo("16");
+    }
+
+    @Test
+    @DisplayName("Should report no profile when ffprobe reports none")
+    void shouldReportNoProfileWhenFfprobeReportsNone() {
+      var audio = streamOf("mkv-pipe-hevc-10bit.mkv", 1);
+
+      assertThat(audio.getCodec()).isEqualTo("opus");
+      assertThat(audio.hasAudioProfile()).isFalse();
+    }
+
+    @Test
+    @DisplayName("Should report a sample rate below 16 kHz when the stream is low-rate MP3")
+    void shouldReportASampleRateBelow16KhzWhenTheStreamIsLowRateMp3() {
+      var audio = streamOf("mkv-mp3-11khz.mkv", 1);
+
+      assertThat(audio.getSampleRateHz()).isEqualTo(11_025);
+    }
+
+    @Test
+    @DisplayName("Should report no sample rate when ffprobe reports a sample rate of 0")
+    void shouldReportNoSampleRateWhenFfprobeReportsASampleRateOf0() {
+      // The second AAC stream has no packets, so ffprobe reports sample_rate "0".
+      var audio = streamOf("mpegts-empty-audio.ts", 2);
+
+      assertThat(audio.hasSampleRateHz()).isFalse();
+    }
+
+    @Test
+    @DisplayName("Should report no sample rate when ffprobe reports none")
+    void shouldReportNoSampleRateWhenFfprobeReportsNone() {
+      var media =
+          probeOutput(
+              """
+              {"streams":[{"index":0,"codec_type":"video","time_base":"1/1000"},
+                          {"index":1,"codec_type":"audio","codec_name":"aac"}]}
+              """);
+
+      assertThat(media.getStreams(1).hasSampleRateHz()).isFalse();
+    }
+
+    @Test
+    @DisplayName("Should report no audio profile when the stream is video")
+    void shouldReportNoAudioProfileWhenTheStreamIsVideo() {
+      // ffprobe reports the H.264 profile Constrained Baseline for this video stream.
+      var video = streamOf("mp4-titled.mp4", 0);
+
+      assertThat(video.hasAudioProfile()).isFalse();
+      assertThat(video.hasSampleRateHz()).isFalse();
+    }
+  }
+
+  @Nested
   @DisplayName("Pixel Format")
   class PixelFormatTests {
 

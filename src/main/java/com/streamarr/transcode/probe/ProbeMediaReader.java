@@ -70,6 +70,10 @@ final class ProbeMediaReader {
       }
       case "audio" -> {
         number(source, "channels", Integer::parseInt).ifPresent(stream::setChannels);
+        number(source, "sample_rate", Integer::parseInt)
+            .filter(rate -> rate > 0)
+            .ifPresent(stream::setSampleRateHz);
+        text(source, "profile").ifPresent(stream::setAudioProfile);
         StreamEndTime.of(source, timeline).ifPresent(stream::setEndTime);
       }
       default -> {
