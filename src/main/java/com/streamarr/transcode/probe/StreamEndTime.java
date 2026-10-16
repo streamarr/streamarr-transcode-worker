@@ -1,11 +1,8 @@
 package com.streamarr.transcode.probe;
 
 import com.google.protobuf.Duration;
-import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.Optional;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import tools.jackson.databind.JsonNode;
 
 /**
@@ -18,9 +15,6 @@ import tools.jackson.databind.JsonNode;
  * encoder tag starts with Lavf, and the DURATION tag gives the end without the start time.
  */
 final class StreamEndTime {
-
-  private static final Pattern MATROSKA_DURATION =
-      Pattern.compile("(\\d+):([0-5]\\d):([0-5]\\d(?:\\.\\d+)?)");
 
   private final ProbeTimeline timeline;
   private final boolean durationTagsEndTracks;
@@ -59,18 +53,7 @@ final class StreamEndTime {
     }
 
     var tagStart = durationTagsEndTracks ? BigInteger.ZERO : start.get();
-    return matroskaDuration(stream).map(seconds -> timeline.at(tagStart, timeBase.get(), seconds));
-  }
-
-  /** The DURATION tag, with or without a language suffix such as DURATION-eng, in seconds. */
-  private static Optional<BigDecimal> matroskaDuration(JsonNode stream) {
-    return StreamTags.matroskaStatistic(stream, "DURATION")
-        .map(MATROSKA_DURATION::matcher)
-        .filter(Matcher::matches)
-        .map(
-            match ->
-                new BigDecimal(match.group(3))
-                    .add(BigDecimal.valueOf(Long.parseLong(match.group(2)) * 60))
-                    .add(BigDecimal.valueOf(Long.parseLong(match.group(1)) * 3600)));
+    return StreamTags.matroskaDuration(stream)
+        .map(seconds -> timeline.at(tagStart, timeBase.get(), seconds));
   }
 }
