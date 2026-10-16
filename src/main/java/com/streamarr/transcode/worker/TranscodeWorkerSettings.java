@@ -17,9 +17,19 @@ record TranscodeWorkerSettings(
     String ffprobePath,
     Duration fragmentationTarget,
     Duration encoderStallTimeout,
-    TranscodeWorkerConfiguration workerConfiguration) {
+    TranscodeWorkerConfiguration workerConfiguration,
+    ProbeCapacitySource probeCapacitySource) {
+
+  /** Where the worker's probe capacity came from. */
+  enum ProbeCapacitySource {
+    AVAILABLE_CORES,
+    SETTING
+  }
 
   private static final String PREFIX = "TRANSCODE_WORKER_";
+  private static final String PROBE_CAPACITY = PREFIX + "PROBE_CAPACITY";
+  // These cores stay free for playback and for the worker process itself.
+  private static final int CORES_KEPT_FROM_PROBES = 3;
   private static final String DEFAULT_FRAGMENTATION_TARGET = "250ms";
   private static final Pattern DURATION = Pattern.compile("(-?\\d+)(ns|us|ms|s|m|h)");
   private static final Map<String, ChronoUnit> DURATION_UNITS =
@@ -32,12 +42,24 @@ record TranscodeWorkerSettings(
           "h", ChronoUnit.HOURS);
 
   static TranscodeWorkerSettings fromEnvironment(Map<String, String> environment) {
+    return fromEnvironment(environment, Runtime.getRuntime().availableProcessors());
+  }
+
+  /** Reads the settings for a host whose JVM has {@code availableCores} cores available. */
+  static TranscodeWorkerSettings fromEnvironment(
+      Map<String, String> environment, int availableCores) {
+    var probeCapacitySource = probeCapacitySource(environment);
     var sourceNamespaceId = uuid(environment, PREFIX + "SOURCE_NAMESPACE_ID");
     var workerConfiguration =
         TranscodeWorkerConfiguration.builder()
             .workerId(uuid(environment, PREFIX + "ID"))
             .bootId(UUID.randomUUID())
             .availableSlots(positiveInteger(environment, PREFIX + "SLOTS", 1))
+            .probeCapacity(
+                positiveInteger(
+                    environment,
+                    PROBE_CAPACITY,
+                    Math.max(1, availableCores - CORES_KEPT_FROM_PROBES)))
             .sourceNamespaces(Map.of(sourceNamespaceId, path(environment, PREFIX + "SOURCE_ROOT")))
             .uploadReadinessTimeout(
                 positiveDuration(
@@ -67,7 +89,17 @@ record TranscodeWorkerSettings(
                 PREFIX + "ENCODER_STALL_TIMEOUT",
                 FfmpegTranscodeEngine.DEFAULT_ENCODER_STALL_TIMEOUT))
         .workerConfiguration(workerConfiguration)
+        .probeCapacitySource(probeCapacitySource)
         .build();
+  }
+
+  private static ProbeCapacitySource probeCapacitySource(Map<String, String> environment) {
+    var configured = environment.get(PROBE_CAPACITY);
+    if (configured == null || configured.isBlank()) {
+      return ProbeCapacitySource.AVAILABLE_CORES;
+    }
+
+    return ProbeCapacitySource.SETTING;
   }
 
   private static String required(Map<String, String> environment, String key) {

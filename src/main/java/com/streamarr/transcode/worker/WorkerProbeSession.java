@@ -31,21 +31,64 @@ final class WorkerProbeSession implements AutoCloseable {
   @NonNull private final WorkerMediaSourceResolver sources;
   @NonNull private final Consumer<ProbeAttemptReport> reports;
   @NonNull private final ExecutorService executor;
+  @NonNull private final ProbeSummary summary;
+  private final int probeCapacity;
   private final Map<UUID, ProbeAttempt> attempts = new HashMap<>();
 
-  synchronized void start(ProbeRequest request) {
+  void start(ProbeRequest request) {
+    if (tryAdmit(request) instanceof Admission.Refused(var report)) {
+      complete(report);
+    }
+  }
+
+  private synchronized Admission tryAdmit(ProbeRequest request) {
+    var attemptId = fromProto(request.getProbeAttemptId());
     if (executor.isShutdown()) {
-      return;
+      return new Admission.Ignored();
+    }
+
+    if (attempts.containsKey(attemptId)) {
+      log.warn("Ignoring duplicate probe attempt {}", attemptId);
+      return new Admission.Ignored();
+    }
+
+    // The server counts its probes against the advertised capacity, so a probe beyond it shows a
+    // server defect.
+    if (attempts.size() >= probeCapacity) {
+      log.warn(
+          "Refusing probe {}: all {} units of the advertised probe capacity are in use",
+          attemptId,
+          probeCapacity);
+      return new Admission.Refused(failed(request, ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED));
     }
 
     var attempt = new ProbeAttempt(request);
-    var attemptId = fromProto(request.getProbeAttemptId());
-    if (attempts.putIfAbsent(attemptId, attempt) != null) {
-      log.warn("Ignoring duplicate probe attempt {}", attemptId);
-      return;
-    }
-
+    attempts.put(attemptId, attempt);
+    summary.started(attemptId);
     executor.execute(attempt);
+    return new Admission.Started();
+  }
+
+  private void complete(ProbeAttemptReport report) {
+    summary.finished(fromProto(report.result().getProbeAttemptId()), report.result());
+    reports.accept(report);
+  }
+
+  private static ProbeAttemptReport failed(ProbeRequest request, ProbeFailure failure) {
+    return ProbeAttemptReport.resultOnly(
+        ProbeAttemptResult.newBuilder()
+            .setProbeAttemptId(request.getProbeAttemptId())
+            .setProbeVersion(request.getProbeVersion())
+            .setFailure(failure)
+            .build());
+  }
+
+  private sealed interface Admission {
+    record Started() implements Admission {}
+
+    record Ignored() implements Admission {}
+
+    record Refused(ProbeAttemptReport report) implements Admission {}
   }
 
   synchronized void cancel(UUID attemptId) {
@@ -135,12 +178,7 @@ final class WorkerProbeSession implements AutoCloseable {
     }
 
     private ProbeAttemptReport failed(ProbeFailure failure) {
-      return ProbeAttemptReport.resultOnly(
-          ProbeAttemptResult.newBuilder()
-              .setProbeAttemptId(request.getProbeAttemptId())
-              .setProbeVersion(request.getProbeVersion())
-              .setFailure(failure)
-              .build());
+      return WorkerProbeSession.failed(request, failure);
     }
 
     private void complete(ProbeAttemptReport report) {
@@ -148,7 +186,7 @@ final class WorkerProbeSession implements AutoCloseable {
         attempts.remove(fromProto(report.result().getProbeAttemptId()), this);
       }
 
-      reports.accept(report);
+      WorkerProbeSession.this.complete(report);
     }
   }
 }

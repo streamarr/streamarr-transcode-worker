@@ -50,6 +50,7 @@ import io.grpc.stub.ClientResponseObserver;
 import io.grpc.stub.StreamObserver;
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -63,6 +64,7 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
@@ -75,6 +77,7 @@ public final class TranscodeWorker implements AutoCloseable {
 
   private static final int CONNECTION_TIMEOUT_SECONDS = 5;
   private static final int UPLOAD_MESSAGE_BYTES = 64 * 1024;
+  private static final Duration PROBE_SUMMARY_INTERVAL = Duration.ofMinutes(1);
 
   private final TranscodeWorkerConfiguration configuration;
   private final FfmpegTranscodeEngine engine;
@@ -83,6 +86,7 @@ public final class TranscodeWorker implements AutoCloseable {
   private final FfprobeExecutor ffprobe;
   private final WorkerRuntime runtime;
   private final SegmentMemoryBudget memoryBudget;
+  private final ProbeSummary probeSummary;
   private final Map<UUID, ActiveAttempt> activeAttempts = new HashMap<>();
   private final Set<Thread> stopThreads = new HashSet<>();
 
@@ -90,6 +94,7 @@ public final class TranscodeWorker implements AutoCloseable {
   private StreamObserver<EstablishWorkerSessionRequest> requests;
   private WorkerSessionAccepted workerSession;
   private WorkerProbeSession probeSession;
+  private ScheduledExecutorService probeSummaryLogging;
   private CompletableFuture<Void> disconnected;
   private final AtomicReference<WorkerResponseObserver> responseObserver = new AtomicReference<>();
 
@@ -98,11 +103,13 @@ public final class TranscodeWorker implements AutoCloseable {
       @NonNull TranscodeWorkerConfiguration configuration,
       @NonNull FfmpegTranscodeEngine engine,
       @NonNull FfprobeExecutor ffprobe,
-      @NonNull WorkerRuntime runtime) {
+      @NonNull WorkerRuntime runtime,
+      ProbeSummary probeSummary) {
     this.configuration = configuration;
     this.engine = engine;
     this.ffprobe = ffprobe;
     this.runtime = runtime;
+    this.probeSummary = probeSummary == null ? new ProbeSummary(Clock.systemUTC()) : probeSummary;
     memoryBudget = SegmentMemoryBudget.forSlots(configuration.availableSlots());
     sources = new WorkerMediaSourceResolver(configuration.sourceNamespaces());
     jobMapper = new WorkerVariantJobMapper(sources);
@@ -147,7 +154,17 @@ public final class TranscodeWorker implements AutoCloseable {
             .sources(sources)
             .reports(report -> sendProbeResult(sessionRequests.get(), report))
             .executor(runtime.newProbeScope())
+            .probeCapacity(configuration.probeCapacity())
+            .summary(probeSummary)
             .build();
+    probeSummaryLogging =
+        Executors.newSingleThreadScheduledExecutor(
+            Thread.ofVirtual().name("probe-summary").factory());
+    probeSummaryLogging.scheduleAtFixedRate(
+        this::logProbeSummary,
+        PROBE_SUMMARY_INTERVAL.toMillis(),
+        PROBE_SUMMARY_INTERVAL.toMillis(),
+        TimeUnit.MILLISECONDS);
     disconnected = new CompletableFuture<>();
     var observer = new WorkerResponseObserver(accepted, probeSession);
     responseObserver.set(observer);
@@ -187,8 +204,26 @@ public final class TranscodeWorker implements AutoCloseable {
         WorkerRegistration.newBuilder()
             .setWorker(identity())
             .setCapabilities(capabilities)
-            .setAvailableSlots(configuration.availableSlots());
+            .setAvailableSlots(configuration.availableSlots())
+            .setProbeCapacity(configuration.probeCapacity());
     return EstablishWorkerSessionRequest.newBuilder().setRegistration(registration).build();
+  }
+
+  private void logProbeSummary() {
+    probeSummary
+        .takeInterval()
+        .ifPresent(
+            interval ->
+                log.info(
+                    "Probes in the last {}: {} started, {} finished, failures {}, average time {}"
+                        + " ms, {} running of a probe capacity of {}",
+                    PROBE_SUMMARY_INTERVAL,
+                    interval.started(),
+                    interval.finished(),
+                    interval.failures(),
+                    interval.averageDuration().toMillis(),
+                    interval.running(),
+                    configuration.probeCapacity()));
   }
 
   private WorkerIdentity identity() {
@@ -648,6 +683,8 @@ public final class TranscodeWorker implements AutoCloseable {
     }
 
     probeSession.shutdown();
+    probeSummaryLogging.shutdownNow();
+    probeSummaryLogging = null;
     var attempts = claimActiveAttempts();
     try {
       if (requests != null) {
