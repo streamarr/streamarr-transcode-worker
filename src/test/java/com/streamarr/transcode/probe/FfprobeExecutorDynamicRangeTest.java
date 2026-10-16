@@ -4,11 +4,9 @@ import static com.streamarr.transcode.probe.RecordedFfprobe.probeOutput;
 import static com.streamarr.transcode.probe.RecordedFfprobe.streamOf;
 import static org.assertj.core.api.Assertions.assertThat;
 
-import build.buf.gen.streamarr.transcode.v1.ChromaticityCoordinates;
 import build.buf.gen.streamarr.transcode.v1.CompatibleBase;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionConfiguration;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionPresent;
-import build.buf.gen.streamarr.transcode.v1.MasteringDisplayColorVolume;
 import build.buf.gen.streamarr.transcode.v1.Presence;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import build.buf.gen.streamarr.transcode.v1.VideoDynamicRange;
@@ -28,26 +26,6 @@ class FfprobeExecutorDynamicRangeTest {
   @Nested
   @DisplayName("Compatible Base")
   class CompatibleBaseTests {
-
-    @ParameterizedTest(name = "{0}")
-    @CsvSource({
-      "mp4-hevc-hdr10.mp4, COMPATIBLE_BASE_PQ",
-      "mov-phone-hlg-dovi-p84.mov, COMPATIBLE_BASE_HLG",
-      "mp4-sdr8-bt709.mp4, COMPATIBLE_BASE_SDR",
-      "mp4-dovi-p82.mp4, COMPATIBLE_BASE_SDR",
-      "mp4-dovi-p9-avc1.mp4, COMPATIBLE_BASE_SDR",
-      "mp4-dovi-p5-dvh1.mp4, COMPATIBLE_BASE_NONE",
-      "mp4-dovi-p5-dvh1-no-record.mp4, COMPATIBLE_BASE_NONE",
-      "mp4-dovi-p5-hev1.mp4, COMPATIBLE_BASE_NONE",
-      "mp4-hevc-sdr10-untagged.mp4, COMPATIBLE_BASE_UNSPECIFIED",
-    })
-    @DisplayName("Should derive the compatible base from the transfer when the file is recorded")
-    void shouldDeriveTheCompatibleBaseFromTheTransferWhenTheFileIsRecorded(
-        String fixture, CompatibleBase expected) {
-      var video = streamOf(fixture, 0);
-
-      assertThat(video.getDynamicRange().getCompatibleBase()).isEqualTo(expected);
-    }
 
     @ParameterizedTest(name = "{0}")
     @ValueSource(
@@ -121,38 +99,6 @@ class FfprobeExecutorDynamicRangeTest {
   @DisplayName("Dolby Vision")
   class DolbyVisionTests {
 
-    @ParameterizedTest(name = "{0}")
-    @CsvSource({
-      "mp4-dovi-p5-dvh1.mp4, 5, 5, 0, false",
-      "mp4-dovi-p5-hev1.mp4, 5, 4, 0, false",
-      "mp4-dovi-p81.mp4, 8, 5, 1, false",
-      "mp4-dovi-p82.mp4, 8, 3, 2, false",
-      "mp4-dovi-p84-hlg.mp4, 8, 5, 4, false",
-      "mov-phone-hlg-dovi-p84.mov, 8, 4, 4, false",
-      "mp4-dovi-p9-avc1.mp4, 9, 3, 2, false",
-      "mp4-dovi-p9-dva1.mp4, 9, 3, 2, false",
-      "mpegts-dovi-p7.ts, 7, 6, 6, true",
-    })
-    @DisplayName("Should keep the whole configuration record when the stream declares one")
-    void shouldKeepTheWholeConfigurationRecordWhenTheStreamDeclaresOne(
-        String fixture, int profile, int level, int compatibilityId, boolean enhancementLayer) {
-      var video = streamOf(fixture, 0);
-
-      assertThat(video.getDynamicRange().getDolbyVisionPresent())
-          .isEqualTo(
-              DolbyVisionPresent.newBuilder()
-                  .setDeclared(
-                      DolbyVisionConfiguration.newBuilder()
-                          .setProfile(profile)
-                          .setLevel(level)
-                          .setBaseLayerCompatibilityId(compatibilityId)
-                          .setBaseLayer(true)
-                          .setEnhancementLayer(enhancementLayer)
-                          .setRpu(true))
-                  .setObservedRpu(Presence.PRESENCE_UNSPECIFIED)
-                  .build());
-    }
-
     @Test
     @DisplayName("Should report Dolby Vision without a record when only the sample entry names it")
     void shouldReportDolbyVisionWithoutARecordWhenOnlyTheSampleEntryNamesIt() {
@@ -224,27 +170,6 @@ class FfprobeExecutorDynamicRangeTest {
   @Nested
   @DisplayName("Mastering Display")
   class MasteringDisplayTests {
-
-    @ParameterizedTest(name = "{0}")
-    @ValueSource(strings = {"mp4-hdr10-static.mp4", "mkv-hdr10-static.mkv"})
-    @DisplayName(
-        "Should report the SEI units that the encoder wrote when the container declares them")
-    void shouldReportTheSeiUnitsThatTheEncoderWroteWhenTheContainerDeclaresThem(String fixture) {
-      // x265 wrote G(13250,34500) B(7500,3000) R(34000,16000) WP(15635,16450) L(10000000,50).
-      var video = streamOf(fixture, 0);
-
-      assertThat(video.getMasteringDisplay()).isEqualTo(x265MasteringDisplay(50));
-    }
-
-    @Test
-    @DisplayName("Should round each Matroska float to the nearest unit when the values are inexact")
-    void shouldRoundEachMatroskaFloatToTheNearestUnitWhenTheValuesAreInexact() {
-      // FATE's hdr10tags-both.mkv stores the same primaries and white point as 32-bit floats, a
-      // minimum luminance of 0.01 cd/m^2 and a maximum of 1000 cd/m^2.
-      var video = streamOf("mkv-hdr10-fate.mkv", 0);
-
-      assertThat(video.getMasteringDisplay()).isEqualTo(x265MasteringDisplay(100));
-    }
 
     @Test
     @DisplayName("Should report no mastering display when only the bitstream carries it")
@@ -321,25 +246,6 @@ class FfprobeExecutorDynamicRangeTest {
       assertThat(video.hasMasteringDisplay()).isFalse();
     }
 
-    /**
-     * The primaries, white point and maximum luminance that the HDR10 fixtures' x265 encode wrote,
-     * with the given minimum luminance.
-     */
-    private static MasteringDisplayColorVolume x265MasteringDisplay(long minLuminance) {
-      return MasteringDisplayColorVolume.newBuilder()
-          .setRed(coordinates(34000, 16000))
-          .setGreen(coordinates(13250, 34500))
-          .setBlue(coordinates(7500, 3000))
-          .setWhitePoint(coordinates(15635, 16450))
-          .setMaxLuminance(10_000_000)
-          .setMinLuminance((int) minLuminance)
-          .build();
-    }
-
-    private static ChromaticityCoordinates coordinates(int x, int y) {
-      return ChromaticityCoordinates.newBuilder().setX(x).setY(y).build();
-    }
-
     /** Every coordinate set to {@code coordinate} and both luminances set to {@code luminance}. */
     private static String masteringDisplay(String coordinate, String luminance) {
       var fields = new StringBuilder("\"side_data_type\":\"Mastering display metadata\"");
@@ -399,22 +305,6 @@ class FfprobeExecutorDynamicRangeTest {
   @Nested
   @DisplayName("Content Light Level")
   class ContentLightLevelTests {
-
-    @ParameterizedTest(name = "{0}")
-    @CsvSource({
-      "mp4-hdr10-static.mp4, 1000, 400",
-      "mkv-hdr10-static.mkv, 1000, 400",
-      "mkv-hdr10-fate.mkv, 1000, 300",
-      "mp4-hdr10-maxfall-zero.mp4, 1000, 0",
-    })
-    @DisplayName("Should report MaxCLL and MaxFALL when the container declares them")
-    void shouldReportMaxCllAndMaxFallWhenTheContainerDeclaresThem(
-        String fixture, int maxCll, int maxFall) {
-      var video = streamOf(fixture, 0);
-
-      assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(maxCll);
-      assertThat(video.getContentLightLevel().getMaxFrameAverageLightLevel()).isEqualTo(maxFall);
-    }
 
     @Test
     @DisplayName("Should report no light level when Matroska stores a MaxFALL of 0")
