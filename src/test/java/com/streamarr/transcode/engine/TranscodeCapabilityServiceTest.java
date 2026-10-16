@@ -141,7 +141,7 @@ class TranscodeCapabilityServiceTest {
         new TranscodeCapabilityService(
             "ffmpeg",
             command -> {
-              if (String.join(" ", command).contains("muxer=mp4")) {
+              if (command.command().contains("muxer=mp4")) {
                 throw new IllegalStateException("probe failed");
               }
 
@@ -331,7 +331,7 @@ class TranscodeCapabilityServiceTest {
         new TranscodeCapabilityService(
             "ffmpeg",
             command -> {
-              if (List.of(command).contains("-c:v")) {
+              if (command.command().contains("-c:v")) {
                 return validationProcesses.removeFirst();
               }
 
@@ -360,7 +360,7 @@ class TranscodeCapabilityServiceTest {
         new TranscodeCapabilityService(
             "ffmpeg",
             command -> {
-              if (List.of(command).contains("h264_nvenc")) {
+              if (command.command().contains("h264_nvenc")) {
                 throw new IOException("Cannot launch validation process");
               }
 
@@ -547,8 +547,9 @@ class TranscodeCapabilityServiceTest {
         .build();
   }
 
-  private Process resolveProcess(String[] command, Map<String, Process> outputs) {
-    var cmdStr = String.join(" ", command);
+  private Process resolveProcess(ProcessBuilder command, Map<String, Process> outputs) {
+    var arguments = command.command();
+    var cmdStr = String.join(" ", arguments);
     if (cmdStr.contains("-version")) {
       return outputs.get("ffmpeg");
     }
@@ -565,9 +566,9 @@ class TranscodeCapabilityServiceTest {
       return outputs.get("encoders");
     }
 
-    var encoderIndex = List.of(command).indexOf("-c:v");
+    var encoderIndex = arguments.indexOf("-c:v");
     if (encoderIndex >= 0) {
-      return outputs.getOrDefault(command[encoderIndex + 1], createProcess("", 0));
+      return outputs.getOrDefault(arguments.get(encoderIndex + 1), createProcess("", 0));
     }
 
     return createProcess("", 1);

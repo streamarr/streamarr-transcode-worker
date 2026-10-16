@@ -3,7 +3,9 @@ package com.streamarr.transcode.engine;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.lang.ProcessBuilder.Redirect;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumMap;
@@ -164,7 +166,7 @@ public class TranscodeCapabilityService {
 
   private CapabilityProbeResult checkFfmpegVersion() {
     try {
-      var process = processFactory.create(new String[] {ffmpegPath, "-version"});
+      var process = processFactory.start(ffmpegReadingExitStatusOnly("-version"));
       var exitCode = process.waitFor();
       return exitCode == 0
           ? CapabilityProbeResult.success()
@@ -185,7 +187,7 @@ public class TranscodeCapabilityService {
   private CapabilityProbeResult probeRequiredMp4MuxerOptions() {
     try {
       var process =
-          processFactory.create(new String[] {ffmpegPath, "-hide_banner", "-h", "muxer=mp4"});
+          processFactory.start(ffmpegReadingStandardOutput("-hide_banner", "-h", "muxer=mp4"));
       var output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
       if (process.waitFor() != 0) {
         return CapabilityProbeResult.failure("FFmpeg mp4 muxer capability probe failed");
@@ -222,7 +224,7 @@ public class TranscodeCapabilityService {
 
   private Set<String> detectHardwareEncoders() {
     try {
-      var process = processFactory.create(new String[] {ffmpegPath, "-encoders"});
+      var process = processFactory.start(ffmpegReadingStandardOutput("-encoders"));
       var encoders = new HashSet<String>();
 
       try (var reader =
@@ -283,27 +285,25 @@ public class TranscodeCapabilityService {
       // Match the command builder's CPU scaling path. Compiled encoders may need unavailable
       // devices.
       var process =
-          processFactory.create(
-              new String[] {
-                ffmpegPath,
-                "-nostdin",
-                "-v",
-                "quiet",
-                "-f",
-                "lavfi",
-                "-i",
-                "color=size=320x240:rate=30",
-                "-vf",
-                "scale=-2:240",
-                "-frames:v",
-                "1",
-                "-an",
-                "-c:v",
-                encoder,
-                "-f",
-                "null",
-                "-"
-              });
+          processFactory.start(
+              ffmpegReadingExitStatusOnly(
+                  "-nostdin",
+                  "-v",
+                  "quiet",
+                  "-f",
+                  "lavfi",
+                  "-i",
+                  "color=size=320x240:rate=30",
+                  "-vf",
+                  "scale=-2:240",
+                  "-frames:v",
+                  "1",
+                  "-an",
+                  "-c:v",
+                  encoder,
+                  "-f",
+                  "null",
+                  "-"));
       try {
         return process.waitFor(10, TimeUnit.SECONDS) && process.exitValue() == 0;
       } finally {
@@ -332,7 +332,7 @@ public class TranscodeCapabilityService {
 
   private String detectAccelerator() {
     try {
-      var process = processFactory.create(new String[] {ffmpegPath, "-hwaccels"});
+      var process = processFactory.start(ffmpegReadingStandardOutput("-hwaccels"));
       var result = getStringBuilder(process);
 
       process.waitFor();
@@ -371,8 +371,24 @@ public class TranscodeCapabilityService {
     return result;
   }
 
+  // FFmpeg blocks on a write to a full pipe, so every stream the check does not read is discarded.
+  private ProcessBuilder ffmpegReadingStandardOutput(String... arguments) {
+    return ffmpeg(arguments).redirectError(Redirect.DISCARD);
+  }
+
+  private ProcessBuilder ffmpegReadingExitStatusOnly(String... arguments) {
+    return ffmpeg(arguments).redirectOutput(Redirect.DISCARD).redirectError(Redirect.DISCARD);
+  }
+
+  private ProcessBuilder ffmpeg(String... arguments) {
+    var command = new ArrayList<String>();
+    command.add(ffmpegPath);
+    command.addAll(Arrays.asList(arguments));
+    return new ProcessBuilder(command);
+  }
+
   @FunctionalInterface
   public interface ProcessFactory {
-    Process create(String[] command) throws IOException;
+    Process start(ProcessBuilder command) throws IOException;
   }
 }
