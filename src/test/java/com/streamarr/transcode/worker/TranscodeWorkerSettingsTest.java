@@ -230,6 +230,29 @@ class TranscodeWorkerSettingsTest {
         .isEqualTo(Duration.ofMillis(1500));
   }
 
+  @Test
+  @DisplayName(
+      "Should wait five minutes for the server to accept the session by default when loading"
+          + " settings")
+  void shouldWaitFiveMinutesForTheServerToAcceptTheSessionByDefaultWhenLoadingSettings() {
+    var settings = TranscodeWorkerSettings.fromEnvironment(requiredEnvironment());
+
+    assertThat(settings.workerConfiguration().sessionAcceptanceTimeout())
+        .isEqualTo(Duration.ofMinutes(5));
+  }
+
+  @Test
+  @DisplayName("Should use the configured session acceptance bound when loading settings")
+  void shouldUseTheConfiguredSessionAcceptanceBoundWhenLoadingSettings() {
+    var environment = new HashMap<>(requiredEnvironment());
+    environment.put("TRANSCODE_WORKER_SESSION_ACCEPTANCE_TIMEOUT", "15m");
+
+    var settings = TranscodeWorkerSettings.fromEnvironment(environment);
+
+    assertThat(settings.workerConfiguration().sessionAcceptanceTimeout())
+        .isEqualTo(Duration.ofMinutes(15));
+  }
+
   @ParameterizedTest(name = "{0}={1}")
   @CsvSource({
     "TRANSCODE_WORKER_ENCODER_STALL_TIMEOUT, 0s",
@@ -237,7 +260,9 @@ class TranscodeWorkerSettingsTest {
     "TRANSCODE_WORKER_UPLOAD_READINESS_TIMEOUT, 0ms",
     "TRANSCODE_WORKER_UPLOAD_READINESS_TIMEOUT, -5m",
     "TRANSCODE_WORKER_UPLOAD_ACKNOWLEDGEMENT_TIMEOUT, 0ns",
-    "TRANSCODE_WORKER_UPLOAD_ACKNOWLEDGEMENT_TIMEOUT, -1h"
+    "TRANSCODE_WORKER_UPLOAD_ACKNOWLEDGEMENT_TIMEOUT, -1h",
+    "TRANSCODE_WORKER_SESSION_ACCEPTANCE_TIMEOUT, 0s",
+    "TRANSCODE_WORKER_SESSION_ACCEPTANCE_TIMEOUT, -1m"
   })
   @DisplayName("Should reject a wait bound that is not positive when loading settings")
   void shouldRejectAWaitBoundThatIsNotPositiveWhenLoadingSettings(String key, String bound) {
@@ -249,7 +274,8 @@ class TranscodeWorkerSettingsTest {
       strings = {
         "TRANSCODE_WORKER_ENCODER_STALL_TIMEOUT",
         "TRANSCODE_WORKER_UPLOAD_READINESS_TIMEOUT",
-        "TRANSCODE_WORKER_UPLOAD_ACKNOWLEDGEMENT_TIMEOUT"
+        "TRANSCODE_WORKER_UPLOAD_ACKNOWLEDGEMENT_TIMEOUT",
+        "TRANSCODE_WORKER_SESSION_ACCEPTANCE_TIMEOUT"
       })
   @DisplayName("Should explain a wait bound that is not a duration when loading settings")
   void shouldExplainAWaitBoundThatIsNotADurationWhenLoadingSettings(String key) {

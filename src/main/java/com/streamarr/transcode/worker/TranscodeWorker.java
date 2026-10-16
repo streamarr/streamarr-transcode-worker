@@ -112,8 +112,28 @@ public final class TranscodeWorker implements AutoCloseable {
     return new TranscodeWorkerBuilder().runtime(new GrpcWorkerRuntime());
   }
 
-  public synchronized void start(String host, int port)
+  /**
+   * Connects to the server and waits until it accepts the worker session. The wait spans a server
+   * that is still starting, up to the configured session acceptance timeout, and ends early when
+   * the worker closes.
+   *
+   * @throws SessionAcceptanceTimeoutException when the server has not accepted the session in time
+   */
+  public void start(String host, int port)
       throws IOException, InterruptedException, ExecutionException, TimeoutException {
+    var timeout = configuration.sessionAcceptanceTimeout();
+    log.info("Waiting for the Streamarr server at {}:{} to accept the worker session", host, port);
+    // Waits without the monitor, so that close() can end the wait.
+    var accepted = openSession(host, port);
+    try {
+      accepted.get(timeout.toNanos(), TimeUnit.NANOSECONDS);
+    } catch (TimeoutException _) {
+      throw new SessionAcceptanceTimeoutException(host, port, timeout);
+    }
+  }
+
+  private synchronized CompletableFuture<WorkerSessionAccepted> openSession(String host, int port)
+      throws IOException {
     if (channel != null) {
       throw new IllegalStateException("Transcode worker is already started");
     }
@@ -131,10 +151,14 @@ public final class TranscodeWorker implements AutoCloseable {
     disconnected = new CompletableFuture<>();
     var observer = new WorkerResponseObserver(accepted, probeSession);
     responseObserver.set(observer);
-    requests = TranscodeWorkerServiceGrpc.newStub(channel).establishWorkerSession(observer);
+    // Waiting for the channel to become ready lets the worker start before the server listens.
+    requests =
+        TranscodeWorkerServiceGrpc.newStub(channel)
+            .withWaitForReady()
+            .establishWorkerSession(observer);
     sessionRequests.set(requests);
     send(registration());
-    accepted.get(CONNECTION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+    return accepted;
   }
 
   public boolean hasAcceptedSession() {
