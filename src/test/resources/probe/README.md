@@ -17,7 +17,7 @@ from its lavfi test sources. No file comes from a media library.
 | `mkv-eac3-atmos-dts-hd-ma.mkv.json` | E-AC-3 with Atmos and DTS-HD MA, copied from FFmpeg's FATE samples `eac3/the_great_wall_7.1.eac3` and `dts/master_audio_7.1_24bit.dts`, in Matroska |
 | `mkv-offset-chapters.mkv.json` | Matroska that starts at 10 s. Its chapters start before the container, have no title, or have a 513-byte title |
 | `mkv-many-chapters.mkv.json` | Matroska with 400 chapters whose titles each take 100 bytes |
-| `mkv-title-tags.mkv.json` | Matroska with a blank title before a `NAME` tag, a 513-byte title, a 513-byte handler name, and a titled video stream |
+| `mkv-title-tags.mkv.json` | Matroska with a blank title before a `NAME` tag, a 513-byte title before a `NAME` tag, a titled subtitle stream with a 513-byte handler name, and a titled video stream |
 | `mkv-many-titles.mkv.json` | Matroska with 40 subtitle streams whose titles each take 500 bytes |
 | `mp4-clap.mp4.json` | MP4 whose `clap` box, added by `edit-mp4-boxes.py`, keeps the centered 56x32 of a 64x36 picture |
 | `mkv-pixel-crop.mkv.json` | `mp4-clap.mp4` remuxed into Matroska, which writes the crop as `PixelCrop` elements |

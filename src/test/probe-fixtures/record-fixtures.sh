@@ -118,13 +118,14 @@ CHAPTERS
   mkv-many-chapters.mkv
 
 # Matroska titles: a blank title before a name tag, a 513-byte title before a name tag, and a
-# 513-byte handler name. The video stream carries a title and a handler name too.
+# titled subtitle stream with a 513-byte handler name. The video stream has a title and a handler
+# name too.
 "${FF[@]}" "${VIDEO[@]}" "${TONE[@]}" -i subtitle.srt -map 0:v -map 1:a -map 1:a -map 2:s \
   "${X264[@]}" -c:a aac -c:s srt \
   -metadata:s:v:0 title=Picture -metadata:s:v:0 handler_name=VideoHandler \
   -metadata:s:a:0 "title= " -metadata:s:a:0 name=Director \
   -metadata:s:a:1 "title=$LONG_TITLE" -metadata:s:a:1 name=Fallback \
-  -metadata:s:s:0 "handler_name=$LONG_TITLE" mkv-title-tags.mkv
+  -metadata:s:s:0 "title=English SDH" -metadata:s:s:0 "handler_name=$LONG_TITLE" mkv-title-tags.mkv
 
 # Matroska with 40 subtitle streams whose titles each take 500 bytes.
 SUBTITLE_MAPS=()

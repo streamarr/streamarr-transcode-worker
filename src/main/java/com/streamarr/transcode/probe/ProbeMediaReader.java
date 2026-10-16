@@ -7,6 +7,9 @@ import build.buf.gen.streamarr.transcode.v1.ProbeContainerInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeMediaInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import com.google.protobuf.Duration;
+import java.util.ArrayList;
+import java.util.IdentityHashMap;
+import java.util.Map;
 import java.util.Optional;
 import tools.jackson.databind.JsonNode;
 
@@ -31,16 +34,43 @@ final class ProbeMediaReader {
     }
 
     var timeline = ProbeTimeline.of(format);
+    var parsed = new ArrayList<ProbeStreamInfo.Builder>();
+    var labels = new IdentityHashMap<ProbeStreamInfo.Builder, StreamLabels>();
     for (var stream : streams) {
-      media.addStreams(parseStream(stream, media.getStreamsCount(), timeline));
+      var parsedStream = parseStream(stream, parsed.size(), timeline);
+      parsed.add(parsedStream);
+      if (isLabeled(parsedStream.getCodecType())) {
+        labels.put(parsedStream, StreamLabels.of(stream));
+      }
     }
 
+    addLabels(media, labels);
+    parsed.forEach(media::addStreams);
     ChosenVideoStream.find(streams)
         .ifPresent(chosen -> media.setChosenVideoStreamIndex(chosen.streamIndex()));
     return media.build();
   }
 
-  private static ProbeStreamInfo parseStream(
+  private static boolean isLabeled(String codecType) {
+    return "audio".equals(codecType) || "subtitle".equals(codecType);
+  }
+
+  /**
+   * The titles and handler names of one result take at most {@link
+   * StreamLabels#MAXIMUM_ENCODED_BYTES}, so that a file's text cannot fill the session message.
+   */
+  private static void addLabels(
+      ProbeMediaInfo.Builder media, Map<ProbeStreamInfo.Builder, StreamLabels> labels) {
+    var encodedBytes = labels.values().stream().mapToInt(StreamLabels::encodedBytes).sum();
+    if (encodedBytes > StreamLabels.MAXIMUM_ENCODED_BYTES) {
+      media.setStreamTitlesOmitted(true);
+      return;
+    }
+
+    labels.forEach((stream, streamLabels) -> streamLabels.addTo(stream));
+  }
+
+  private static ProbeStreamInfo.Builder parseStream(
       JsonNode source, int position, ProbeTimeline timeline) {
     var type =
         Optional.ofNullable(source.get("codec_type"))
@@ -83,7 +113,7 @@ final class ProbeMediaReader {
       }
     }
 
-    return stream.build();
+    return stream;
   }
 
   private static Optional<Boolean> hearingImpaired(JsonNode source) {
