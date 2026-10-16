@@ -7,6 +7,7 @@ import static com.streamarr.transcode.probe.RecordedFfprobe.streamOf;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import build.buf.gen.streamarr.transcode.v1.ChromaSubsampling;
+import build.buf.gen.streamarr.transcode.v1.ContainerCropping;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -42,6 +43,70 @@ class FfprobeExecutorStreamFactsTest {
 
       assertThat(media.hasChosenVideoStreamIndex()).isTrue();
       assertThat(media.getChosenVideoStreamIndex()).isZero();
+    }
+  }
+
+  @Nested
+  @DisplayName("Rotation")
+  class RotationTests {
+
+    @Test
+    @DisplayName("Should report the display matrix rotation when the video stream has one")
+    void shouldReportTheDisplayMatrixRotationWhenTheVideoStreamHasOne() {
+      // FFmpeg's -display_rotation 90 rotates the picture 90 degrees counterclockwise.
+      var video = streamOf("mp4-rotated.mp4", 0);
+
+      assertThat(video.getRotationDegrees()).isEqualTo(90);
+    }
+
+    @Test
+    @DisplayName("Should report no rotation when the video stream has no display matrix")
+    void shouldReportNoRotationWhenTheVideoStreamHasNoDisplayMatrix() {
+      var video = streamOf("mp4-titled.mp4", 0);
+
+      assertThat(video.hasRotationDegrees()).isFalse();
+    }
+  }
+
+  @Nested
+  @DisplayName("Container Cropping")
+  class ContainerCroppingTests {
+
+    // The clean aperture keeps the centered 56x32 of the 64x36 picture.
+    private static final ContainerCropping CENTERED_56_BY_32 =
+        ContainerCropping.newBuilder().setTop(2).setBottom(2).setLeft(4).setRight(4).build();
+
+    @Test
+    @DisplayName("Should report the crop of an MP4 clap box when the video stream has one")
+    void shouldReportTheCropOfAnMp4ClapBoxWhenTheVideoStreamHasOne() {
+      var video = streamOf("mp4-clap.mp4", 0);
+
+      assertThat(video.getContainerCropping()).isEqualTo(CENTERED_56_BY_32);
+    }
+
+    @Test
+    @DisplayName("Should report the crop of Matroska PixelCrop elements when the track has them")
+    void shouldReportTheCropOfMatroskaPixelCropElementsWhenTheTrackHasThem() {
+      var video = streamOf("mkv-pixel-crop.mkv", 0);
+
+      assertThat(video.getContainerCropping()).isEqualTo(CENTERED_56_BY_32);
+    }
+
+    @Test
+    @DisplayName("Should keep the size before cropping when the container crops the picture")
+    void shouldKeepTheSizeBeforeCroppingWhenTheContainerCropsThePicture() {
+      var video = streamOf("mp4-clap.mp4", 0);
+
+      assertThat(video.getWidth()).isEqualTo(64);
+      assertThat(video.getHeight()).isEqualTo(36);
+    }
+
+    @Test
+    @DisplayName("Should report no crop when the video stream has no Frame Cropping side data")
+    void shouldReportNoCropWhenTheVideoStreamHasNoFrameCroppingSideData() {
+      var video = streamOf("mp4-titled.mp4", 0);
+
+      assertThat(video.hasContainerCropping()).isFalse();
     }
   }
 

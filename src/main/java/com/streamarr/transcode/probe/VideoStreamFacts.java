@@ -2,7 +2,9 @@ package com.streamarr.transcode.probe;
 
 import static com.streamarr.transcode.probe.FfprobeJson.text;
 
+import build.buf.gen.streamarr.transcode.v1.ContainerCropping;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
+import java.util.Optional;
 import tools.jackson.databind.JsonNode;
 
 /** Adds the facts that only a video stream reports to its probe result. */
@@ -18,5 +20,30 @@ final class VideoStreamFacts {
                 stream
                     .setBitDepth(format.bitDepth())
                     .setChromaSubsampling(format.chromaSubsampling()));
+    sideData(source, "Display Matrix")
+        .map(matrix -> matrix.get("rotation"))
+        .filter(JsonNode::isNumber)
+        .ifPresent(rotation -> stream.setRotationDegrees(rotation.asInt()));
+    sideData(source, "Frame Cropping")
+        .map(VideoStreamFacts::cropping)
+        .ifPresent(stream::setContainerCropping);
+  }
+
+  /** The stream side data of the given type, as ffprobe's -show_streams lists it. */
+  static Optional<JsonNode> sideData(JsonNode source, String type) {
+    return source
+        .path("side_data_list")
+        .valueStream()
+        .filter(entry -> type.equals(entry.path("side_data_type").asString("")))
+        .findFirst();
+  }
+
+  private static ContainerCropping cropping(JsonNode crop) {
+    return ContainerCropping.newBuilder()
+        .setTop(crop.path("crop_top").asInt())
+        .setBottom(crop.path("crop_bottom").asInt())
+        .setLeft(crop.path("crop_left").asInt())
+        .setRight(crop.path("crop_right").asInt())
+        .build();
   }
 }
