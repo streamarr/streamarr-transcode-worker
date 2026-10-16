@@ -261,6 +261,44 @@ class WorkerMediaSmokeTest {
     }
   }
 
+  @Test
+  @DisplayName(
+      "Should report the video's codec string when a Matroska file holds an attachment too large"
+          + " to print")
+  void shouldReportTheVideosCodecStringWhenAMatroskaFileHoldsAnAttachmentTooLargeToPrint()
+      throws Exception {
+    // ffprobe's -show_data prints 16 bytes as a 68-character line, so the 32 MiB attachment
+    // would take about 142.6 million characters: more than the 100 million that Jackson reads
+    // as one string.
+    var font = root.resolve("font.ttf");
+    Files.write(font, new byte[32 * 1024 * 1024]);
+    var source = root.resolve("attachment.mkv");
+    runFfmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=64x36:rate=24:duration=1",
+            "-c:v",
+            "libx264",
+            "-profile:v",
+            "baseline",
+            "-level",
+            "1.0",
+            "-pix_fmt",
+            "yuv420p",
+            "-attach",
+            font.toString(),
+            "-metadata:s:t",
+            "mimetype=font/ttf"),
+        source);
+
+    var result = probeExecutor().probe(source, keyframeRequest()).result();
+
+    // Constrained Baseline at level 1.0.
+    assertThat(result.getMedia().getStreams(0).getCodecString()).isEqualTo("avc1.42C00A");
+  }
+
   @ParameterizedTest(name = "{0}")
   @ValueSource(
       strings = {

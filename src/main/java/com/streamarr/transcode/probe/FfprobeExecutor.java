@@ -34,6 +34,13 @@ public final class FfprobeExecutor {
   /** The only probe version that this worker answers. */
   public static final int PROBE_VERSION = 3;
 
+  /**
+   * The read limits let ffprobe reach streams whose first packet comes late, such as PGS subtitles.
+   * Without -scan_all_pmts 0, ffprobe reads an MPEG-TS source to those limits.
+   */
+  static final List<String> READ_LIMITS =
+      List.of("-analyzeduration", "200M", "-probesize", "1G", "-scan_all_pmts", "0");
+
   private static final int AVERROR_INVALIDDATA = -1094995529;
   private static final int AVERROR_EOF = -541478725;
 
@@ -105,32 +112,25 @@ public final class FfprobeExecutor {
 
   private ProbeAttemptReport execute(Attempt attempt)
       throws ExecutionException, InterruptedException, IOException {
-    // The read limits let ffprobe reach streams whose first packet comes late, such as PGS
-    // subtitles. Without -scan_all_pmts 0, ffprobe reads an MPEG-TS source to those limits.
-    var output =
-        run(
-            List.of(
-                "-v",
-                "quiet",
-                "-print_format",
-                "json",
-                "-analyzeduration",
-                "200M",
-                "-probesize",
-                "1G",
-                "-scan_all_pmts",
-                "0",
-                "-show_streams",
-                "-show_format",
-                "-show_chapters",
-                "-show_data",
-                "-show_error",
-                attempt.source().toString()));
+    var arguments = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
+    arguments.addAll(READ_LIMITS);
+    arguments.addAll(
+        List.of(
+            "-show_streams",
+            "-show_format",
+            "-show_chapters",
+            "-show_error",
+            attempt.source().toString()));
+    var output = run(arguments);
     JsonNode json;
     try {
       json = objectMapper.readTree(output.stdout());
     } catch (RuntimeException failure) {
       return ProbeAttemptReport.resultOnly(unusableOutput(output, attempt, failure));
+    }
+
+    if (output.exitCode() == 0) {
+      new StreamExtradataProbe(objectMapper, this::run).addTo(json, attempt.source());
     }
 
     var result = readResult(json, output, attempt);

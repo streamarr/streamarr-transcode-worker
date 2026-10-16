@@ -11,6 +11,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -182,15 +184,16 @@ class FfprobeExecutorProcessTest {
 
   @Test
   @DisplayName(
-      "Should pass the probe's read limits and the chapter listing when executing the configured"
-          + " binary")
-  void shouldPassTheProbesReadLimitsAndTheChapterListingWhenExecutingTheConfiguredBinary()
+      "Should pass the read limits to the probe and to the extradata read when executing the"
+          + " configured binary")
+  void shouldPassTheReadLimitsToTheProbeAndToTheExtradataReadWhenExecutingTheConfiguredBinary()
       throws Exception {
+    // Each run appends its arguments and a -- line.
     var binary =
         script(
             """
-        printf '%s\\n' "$@" > "$0.args"
-        printf '%s' '{"streams":[{"codec_type":"video","codec_name":"h264"}]}'
+        printf '%s\n' "$@" -- >> "$0.args"
+        printf '%s' '{"streams":[{"index":0,"codec_type":"video","codec_name":"h264"}]}'
         """);
     var source = temporaryDirectory.resolve("movie with spaces.mkv");
 
@@ -198,24 +201,31 @@ class FfprobeExecutorProcessTest {
 
     assertThat(result.hasMedia()).isTrue();
     assertThat(result.getMedia().getStreams(0).getCodec()).isEqualTo("h264");
-    assertThat(Files.readAllLines(Path.of(binary + ".args")))
-        .containsExactly(
-            "-v",
-            "quiet",
-            "-print_format",
-            "json",
-            "-analyzeduration",
-            "200M",
-            "-probesize",
-            "1G",
-            "-scan_all_pmts",
-            "0",
+    var readLimits = List.of("-analyzeduration", "200M", "-probesize", "1G", "-scan_all_pmts", "0");
+    var probe = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
+    probe.addAll(readLimits);
+    probe.addAll(
+        List.of(
             "-show_streams",
             "-show_format",
             "-show_chapters",
-            "-show_data",
             "-show_error",
-            source.toString());
+            source.toString(),
+            "--"));
+    var extradataRead = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
+    extradataRead.addAll(readLimits);
+    extradataRead.addAll(
+        List.of(
+            "-select_streams",
+            "V",
+            "-show_entries",
+            "stream=index,extradata",
+            "-show_data",
+            source.toString(),
+            "--"));
+    var runs = new ArrayList<>(probe);
+    runs.addAll(extradataRead);
+    assertThat(Files.readAllLines(Path.of(binary + ".args"))).isEqualTo(runs);
   }
 
   private FfprobeExecutor executorFor(Path ffprobe) {

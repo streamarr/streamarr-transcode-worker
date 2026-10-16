@@ -13,8 +13,12 @@ import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.UUID;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 
 /**
  * Probes with ffprobe output that the pinned worker image recorded into {@code
@@ -24,6 +28,7 @@ import tools.jackson.databind.ObjectMapper;
 final class RecordedFfprobe {
 
   private static final Path SOURCE = Path.of("/media/source");
+  private static final ObjectMapper MAPPER = new ObjectMapper();
 
   private RecordedFfprobe() {}
 
@@ -52,11 +57,73 @@ final class RecordedFfprobe {
                 ScriptedProcess.builder()
                     .output(
                         switch (command.tool()) {
-                          case FFPROBE -> ffprobeOutput.getBytes(StandardCharsets.UTF_8);
+                          case FFPROBE ->
+                              answer(ffprobeOutput, command.arguments())
+                                  .getBytes(StandardCharsets.UTF_8);
                           case FFMPEG -> new byte[0];
                         })
                     .build());
     return executor.probe(SOURCE, request()).result();
+  }
+
+  /**
+   * What ffprobe prints for the arguments, given its output with -show_data for every stream:
+   * extradata only with -show_data, and with -select_streams only the index and extradata of the
+   * selected streams. V selects the video streams that are not attached pictures, and a the audio
+   * streams. Output that is not JSON comes back unchanged.
+   */
+  private static String answer(String recorded, List<String> arguments) {
+    JsonNode output;
+    try {
+      output = MAPPER.readTree(recorded);
+    } catch (JacksonException _) {
+      return recorded;
+    }
+
+    if (!(output instanceof ObjectNode answer)) {
+      return recorded;
+    }
+
+    var selector = arguments.indexOf("-select_streams");
+    if (selector < 0) {
+      return withoutExtradataUnlessShown(answer, arguments.contains("-show_data")).toString();
+    }
+
+    var selected = MAPPER.createArrayNode();
+    answer
+        .path("streams")
+        .valueStream()
+        .filter(stream -> isSelected(stream, arguments.get(selector + 1)))
+        .forEach(
+            stream ->
+                selected
+                    .addObject()
+                    .put("index", stream.path("index").asInt())
+                    .setAll(
+                        stream.has("extradata")
+                            ? MAPPER
+                                .createObjectNode()
+                                .put("extradata", stream.path("extradata").asString())
+                            : MAPPER.createObjectNode()));
+    return MAPPER.createObjectNode().set("streams", selected).toString();
+  }
+
+  private static ObjectNode withoutExtradataUnlessShown(ObjectNode output, boolean shown) {
+    if (!shown) {
+      output.path("streams").forEach(stream -> ((ObjectNode) stream).remove("extradata"));
+    }
+
+    return output;
+  }
+
+  private static boolean isSelected(JsonNode stream, String selector) {
+    var type = stream.path("codec_type").asString("");
+    return switch (selector) {
+      case "V" ->
+          "video".equals(type) && stream.path("disposition").path("attached_pic").asInt() != 1;
+      case "a" -> "audio".equals(type);
+      default -> throw new AssertionError("an unexpected stream selector " + selector);
+    };
   }
 
   static String fixture(String fixture) {
@@ -69,7 +136,7 @@ final class RecordedFfprobe {
     }
   }
 
-  private static ProbeRequest request() {
+  static ProbeRequest request() {
     return ProbeRequest.newBuilder()
         .setProbeAttemptId(toProto(UUID.randomUUID()))
         .setProbeVersion(FfprobeExecutor.PROBE_VERSION)

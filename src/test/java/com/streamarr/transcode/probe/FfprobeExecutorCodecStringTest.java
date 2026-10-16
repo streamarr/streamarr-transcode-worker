@@ -2,10 +2,15 @@ package com.streamarr.transcode.probe;
 
 import static com.streamarr.transcode.probe.RecordedFfprobe.fixture;
 import static com.streamarr.transcode.probe.RecordedFfprobe.probeOutput;
+import static com.streamarr.transcode.probe.RecordedFfprobe.request;
 import static com.streamarr.transcode.probe.RecordedFfprobe.streamOf;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
+import com.streamarr.transcode.fakes.ScriptedProcess;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.HexFormat;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
@@ -235,6 +240,28 @@ class FfprobeExecutorCodecStringTest {
               .getStreams(0);
 
       assertThat(video.hasCodecString()).isFalse();
+    }
+
+    @ParameterizedTest(name = "exit code {0}")
+    @CsvSource({"1, {\"streams\":[]}", "0, not json"})
+    @DisplayName("Should fail the probe when ffprobe's extradata read fails")
+    void shouldFailTheProbeWhenFfprobesExtradataReadFails(int exitCode, String output) {
+      var executor =
+          new FfprobeExecutor(
+              new ObjectMapper(),
+              command -> {
+                var isExtradataRead = command.arguments().contains("-select_streams");
+                return ScriptedProcess.builder()
+                    .output(
+                        (isExtradataRead ? output : fixture("mp4-hdr10-static.mp4"))
+                            .getBytes(StandardCharsets.UTF_8))
+                    .exitCode(isExtradataRead ? exitCode : 0)
+                    .build();
+              });
+
+      var result = executor.probe(Path.of("/media/source"), request()).result();
+
+      assertThat(result.getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
     }
 
     @Test
