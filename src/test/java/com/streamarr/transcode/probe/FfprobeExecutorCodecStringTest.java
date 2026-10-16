@@ -133,6 +133,21 @@ class FfprobeExecutorCodecStringTest {
     }
 
     @Test
+    @DisplayName("Should report no codec string when the config ends inside an escaped object type")
+    void shouldReportNoCodecStringWhenTheConfigEndsInsideAnEscapedObjectType() {
+      var audio =
+          probeOutput(
+                  """
+                  {"streams":[{"index":0,"codec_type":"video","time_base":"1/1000"},
+                              {"index":1,"codec_type":"audio","codec_name":"aac",
+                               "extradata":"\\n00000000: f8                                       .\\n"}]}
+                  """)
+              .getStreams(1);
+
+      assertThat(audio.hasCodecString()).isFalse();
+    }
+
+    @Test
     @DisplayName("Should report no codec string when an ADTS stream has no profile")
     void shouldReportNoCodecStringWhenAnAdtsStreamHasNoProfile() {
       var audio = adtsStream("");

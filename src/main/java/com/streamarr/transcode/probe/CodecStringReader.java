@@ -202,11 +202,16 @@ final class CodecStringReader {
 
     var config = extradata.get();
     var objectType = Byte.toUnsignedInt(config[0]) >> 3;
-    if (objectType == ESCAPED_AUDIO_OBJECT_TYPE && config.length > 1) {
-      objectType = 32 + (((config[0] & 0x07) << 3) | (Byte.toUnsignedInt(config[1]) >> 5));
+    if (objectType != ESCAPED_AUDIO_OBJECT_TYPE) {
+      return Optional.of("mp4a.40." + objectType);
     }
 
-    return Optional.of("mp4a.40." + objectType);
+    if (config.length < 2) {
+      return Optional.empty();
+    }
+
+    return Optional.of(
+        "mp4a.40." + (32 + (((config[0] & 0x07) << 3) | (Byte.toUnsignedInt(config[1]) >> 5))));
   }
 
   private static Optional<Integer> adtsObjectType(String profile) {
