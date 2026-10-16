@@ -36,10 +36,8 @@ import tools.jackson.databind.ObjectMapper;
 @Slf4j
 public final class FfprobeExecutor {
 
-  public static final int PROBE_VERSION = 1;
-
-  /** The probe version whose results carry keyframe positions. */
-  public static final int KEYFRAME_POSITIONS_PROBE_VERSION = 3;
+  /** The only probe version that this worker answers. */
+  public static final int PROBE_VERSION = 3;
 
   private static final int AVERROR_INVALIDDATA = -1094995529;
   private static final int AVERROR_EOF = -541478725;
@@ -81,7 +79,7 @@ public final class FfprobeExecutor {
         ProbeAttemptResult.newBuilder()
             .setProbeAttemptId(request.getProbeAttemptId())
             .setProbeVersion(request.getProbeVersion());
-    if (!isSupported(request)) {
+    if (request.getProbeVersion() != PROBE_VERSION) {
       return ProbeAttemptReport.resultOnly(
           result.setFailure(ProbeFailure.PROBE_FAILURE_UNSUPPORTED_VERSION).build());
     }
@@ -110,14 +108,6 @@ public final class FfprobeExecutor {
     }
   }
 
-  private boolean isSupported(ProbeRequest request) {
-    if (request.getProbeVersion() == KEYFRAME_POSITIONS_PROBE_VERSION) {
-      return true;
-    }
-
-    return request.getProbeVersion() == PROBE_VERSION && !request.getScanKeyframePackets();
-  }
-
   private ProbeAttemptReport execute(Attempt attempt)
       throws ExecutionException, InterruptedException, IOException {
     var output =
@@ -139,8 +129,7 @@ public final class FfprobeExecutor {
     }
 
     var result = readResult(json, output, attempt);
-    if (attempt.request().getProbeVersion() != KEYFRAME_POSITIONS_PROBE_VERSION
-        || !result.hasMedia()) {
+    if (!result.hasMedia()) {
       return ProbeAttemptReport.resultOnly(result);
     }
 

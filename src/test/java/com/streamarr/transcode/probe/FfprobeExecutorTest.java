@@ -385,7 +385,7 @@ class FfprobeExecutorTest {
     var executor =
         executor(
             """
-        {"format":{"format_name":"matroska,webm","duration":"7200.123","bit_rate":"16000000"},
+        {"format":{"format_name":"mpegts","duration":"7200.123","bit_rate":"16000000"},
          "streams":[
           {"index":4,"codec_type":"video","codec_name":"h264","width":1920,"height":1080,
            "r_frame_rate":"24000/1001","bit_rate":"4000000","disposition":{"default":0}},
@@ -405,7 +405,7 @@ class FfprobeExecutorTest {
     assertThat(result.hasMedia()).isTrue();
     var media = result.getMedia();
     var container = media.getContainer();
-    assertThat(container.getFormat()).isEqualTo("matroska,webm");
+    assertThat(container.getFormat()).isEqualTo("mpegts");
     assertThat(container.getDuration().getSeconds()).isEqualTo(7200);
     assertThat(container.getDuration().getNanos()).isEqualTo(123_000_000);
     assertThat(container.getBitrateBitsPerSecond()).isEqualTo(16_000_000);
@@ -454,7 +454,7 @@ class FfprobeExecutorTest {
   }
 
   @ParameterizedTest
-  @ValueSource(ints = {0, 2, -1})
+  @ValueSource(ints = {0, 1, 2, 4, -1})
   @DisplayName("Should refuse unsupported versions when receiving a probe request")
   void shouldRefuseUnsupportedVersionsWhenReceivingAProbeRequest(int version) {
     var executor =
@@ -467,7 +467,6 @@ class FfprobeExecutorTest {
 
     var result = executor.probe(SOURCE, request).result();
 
-    assertThat(FfprobeExecutor.PROBE_VERSION).isEqualTo(1);
     assertThat(result.getProbeAttemptId()).isEqualTo(request.getProbeAttemptId());
     assertThat(result.getProbeVersion()).isEqualTo(version);
     assertThat(result.getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_UNSUPPORTED_VERSION);
@@ -502,7 +501,7 @@ class FfprobeExecutorTest {
   private ProbeRequest request() {
     return ProbeRequest.newBuilder()
         .setProbeAttemptId(toProto(UUID.randomUUID()))
-        .setProbeVersion(1)
+        .setProbeVersion(FfprobeExecutor.PROBE_VERSION)
         .build();
   }
 

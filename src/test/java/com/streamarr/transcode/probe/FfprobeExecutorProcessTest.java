@@ -124,7 +124,7 @@ class FfprobeExecutorProcessTest {
         """);
     var request =
         request().toBuilder()
-            .setProbeVersion(FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION)
+            .setProbeVersion(FfprobeExecutor.PROBE_VERSION)
             .setScanKeyframePackets(true)
             .build();
 

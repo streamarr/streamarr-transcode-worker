@@ -9,14 +9,10 @@ import build.buf.gen.streamarr.transcode.v1.KeyframePositions;
 import build.buf.gen.streamarr.transcode.v1.KeyframesUnavailable;
 import build.buf.gen.streamarr.transcode.v1.KeyframesUnavailableReason;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
-import build.buf.gen.streamarr.transcode.v1.ProbeContainerInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeKeyframePositionsPart;
 import build.buf.gen.streamarr.transcode.v1.ProbeKeyframes;
-import build.buf.gen.streamarr.transcode.v1.ProbeMediaInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
-import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
-import com.google.protobuf.Duration;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -195,61 +191,6 @@ class FfprobeExecutorKeyframeTest {
                         .KEYFRAME_PACKET_SCAN_REASON_UNREADABLE_LAST_INDEXED_KEYFRAME)
                 .build());
     assertThat(report.keyframePositionsParts()).isEmpty();
-  }
-
-  @Test
-  @DisplayName("Should answer probe version 1 exactly as before when the source has an index")
-  void shouldAnswerProbeVersionOneExactlyAsBeforeWhenSourceHasIndex() {
-    var ffprobe =
-        ScriptedFfprobe.builder()
-            .streams(MP4_STREAMS)
-            .packet("2.916667%+#1", MP4_LAST_KEYFRAME)
-            .build();
-    var request =
-        keyframeRequest().toBuilder().setProbeVersion(FfprobeExecutor.PROBE_VERSION).build();
-
-    var report = ffprobe.executor().probe(fixture("mp4-bframes-editlist.mp4"), request);
-
-    assertThat(report)
-        .isEqualTo(
-            ProbeAttemptReport.resultOnly(
-                ProbeAttemptResult.newBuilder()
-                    .setProbeAttemptId(request.getProbeAttemptId())
-                    .setProbeVersion(1)
-                    .setMedia(
-                        ProbeMediaInfo.newBuilder()
-                            .setContainer(
-                                ProbeContainerInfo.newBuilder()
-                                    .setFormat("mov,mp4,m4a,3gp,3g2,mj2")
-                                    .setDuration(Duration.newBuilder().setSeconds(4)))
-                            .addStreams(
-                                ProbeStreamInfo.newBuilder()
-                                    .setIndex(0)
-                                    .setCodecType("video")
-                                    .setCodec("h264")
-                                    .setFramerate(24))
-                            .addStreams(
-                                ProbeStreamInfo.newBuilder()
-                                    .setIndex(1)
-                                    .setCodecType("audio")
-                                    .setCodec("aac")))
-                    .build()));
-  }
-
-  @Test
-  @DisplayName("Should refuse a packet scan when the probe version reports no keyframes")
-  void shouldRefusePacketScanWhenProbeVersionReportsNoKeyframes() {
-    var ffprobe = ScriptedFfprobe.builder().streams(MP4_STREAMS).build();
-    var request =
-        keyframeRequest().toBuilder()
-            .setProbeVersion(FfprobeExecutor.PROBE_VERSION)
-            .setScanKeyframePackets(true)
-            .build();
-
-    var report = ffprobe.executor().probe(fixture("mp4-bframes-editlist.mp4"), request);
-
-    assertThat(report.result().getFailure())
-        .isEqualTo(ProbeFailure.PROBE_FAILURE_UNSUPPORTED_VERSION);
   }
 
   @ParameterizedTest
@@ -690,7 +631,7 @@ class FfprobeExecutorKeyframeTest {
             ProbeAttemptReport.resultOnly(
                 ProbeAttemptResult.newBuilder()
                     .setProbeAttemptId(report.result().getProbeAttemptId())
-                    .setProbeVersion(FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION)
+                    .setProbeVersion(FfprobeExecutor.PROBE_VERSION)
                     .setFailure(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED)
                     .build()));
   }
@@ -719,7 +660,7 @@ class FfprobeExecutorKeyframeTest {
             ProbeAttemptReport.resultOnly(
                 ProbeAttemptResult.newBuilder()
                     .setProbeAttemptId(report.result().getProbeAttemptId())
-                    .setProbeVersion(FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION)
+                    .setProbeVersion(FfprobeExecutor.PROBE_VERSION)
                     .setFailure(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED)
                     .build()));
   }
@@ -925,7 +866,7 @@ class FfprobeExecutorKeyframeTest {
   private static ProbeRequest keyframeRequest() {
     return ProbeRequest.newBuilder()
         .setProbeAttemptId(toProto(UUID.randomUUID()))
-        .setProbeVersion(FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION)
+        .setProbeVersion(FfprobeExecutor.PROBE_VERSION)
         .build();
   }
 
