@@ -48,6 +48,17 @@ final class ProbeTimeline {
     }
   }
 
+  /** A field that ffprobe prints as a whole number of ticks, such as start_pts or duration_ts. */
+  static Optional<BigInteger> ticks(JsonNode parent, String name) {
+    var value = parent.path(name);
+    return value.isIntegralNumber() ? Optional.of(value.bigIntegerValue()) : Optional.empty();
+  }
+
+  /** The demuxer time of {@code ticks} of the time base on this timeline. */
+  Duration at(BigInteger ticks, TimeBase timeBase) {
+    return at(ticks, timeBase, BigDecimal.ZERO);
+  }
+
   /** The demuxer time of {@code ticks} of the time base, plus {@code seconds}, on this timeline. */
   Duration at(BigInteger ticks, TimeBase timeBase, BigDecimal seconds) {
     var denominator = BigDecimal.valueOf(timeBase.denominator());

@@ -27,13 +27,14 @@ final class ProbeMediaReader {
         .filter(value -> Double.isFinite(value) && value >= 0)
         .map(ProbeMediaReader::duration)
         .ifPresent(container::setDuration);
+    var timeline = ProbeTimeline.of(format);
+    ProbeChapters.add(root.path("chapters"), timeline, container);
     var media = ProbeMediaInfo.newBuilder().setContainer(container);
     var streams = root.path("streams");
     if (!streams.isMissingNode() && !streams.isNull() && !streams.isArray()) {
       throw new IllegalArgumentException("ffprobe returned a malformed stream list");
     }
 
-    var timeline = ProbeTimeline.of(format);
     var parsed = new ArrayList<ProbeStreamInfo.Builder>();
     var labels = new IdentityHashMap<ProbeStreamInfo.Builder, StreamLabels>();
     for (var stream : streams) {
