@@ -28,6 +28,7 @@ import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import build.buf.gen.streamarr.transcode.v1.StartProbeCommand;
 import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
+import build.buf.gen.streamarr.transcode.v1.VideoDynamicRange;
 import build.buf.gen.streamarr.transcode.v1.WorkerIdentity;
 import com.google.protobuf.Duration;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
@@ -359,6 +360,7 @@ class TranscodeWorkerProbeTest {
                     ProbeStreamInfo.newBuilder()
                         .setIndex(0)
                         .setCodecType("video")
+                        .setDynamicRange(VideoDynamicRange.getDefaultInstance())
                         .setLanguage(language))
                 .setChosenVideoStreamIndex(0)
                 .setKeyframes(PACKET_SCAN_REQUIRED_WITHOUT_INDEX));
@@ -901,6 +903,7 @@ class TranscodeWorkerProbeTest {
                         ProbeStreamInfo.newBuilder()
                             .setIndex(4)
                             .setCodecType("video")
+                            .setDynamicRange(VideoDynamicRange.getDefaultInstance())
                             .setCodec("h264")
                             .setWidth(1920)
                             .setHeight(1080)

@@ -43,6 +43,15 @@ class FfprobeExecutorStreamFactsTest {
   class RotationTests {
 
     @Test
+    @DisplayName("Should report a rotation of -90 degrees when a phone recorded the video upright")
+    void shouldReportARotationOfMinus90DegreesWhenAPhoneRecordedTheVideoUpright() {
+      // A phone camera original: AAC first, then H.264 video, then three metadata tracks.
+      var video = streamOf("mov-phone-rotated.mov", 1);
+
+      assertThat(video.getRotationDegrees()).isEqualTo(-90);
+    }
+
+    @Test
     @DisplayName("Should report no rotation when the video stream has no display matrix")
     void shouldReportNoRotationWhenTheVideoStreamHasNoDisplayMatrix() {
       var video = streamOf("mp4-titled.mp4", 0);
