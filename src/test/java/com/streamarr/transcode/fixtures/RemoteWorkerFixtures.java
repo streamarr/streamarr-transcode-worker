@@ -22,7 +22,10 @@ public final class RemoteWorkerFixtures {
 
   public static TranscodeWorkerConfiguration.TranscodeWorkerConfigurationBuilder
       workerConfigurationBuilder() {
-    return TranscodeWorkerConfiguration.builder().workerId(WORKER_ID).bootId(UUID.randomUUID());
+    return TranscodeWorkerConfiguration.builder()
+        .workerId(WORKER_ID)
+        .bootId(UUID.randomUUID())
+        .probeCapacity(4);
   }
 
   /** An engine with a compatible FFmpeg that launches FFmpeg through the launcher. */

@@ -95,6 +95,7 @@ class TranscodeWorkerSettingsTest {
             .workerId(UUID.randomUUID())
             .bootId(UUID.randomUUID())
             .availableSlots(0)
+            .probeCapacity(1)
             .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, Path.of("/media")));
 
     assertThatThrownBy(configuration::build)
@@ -115,6 +116,74 @@ class TranscodeWorkerSettingsTest {
     assertThat(settings.controlPlanePort()).isEqualTo(65_535);
     assertThat(settings.ffmpegPath()).isEqualTo("/usr/local/bin/ffmpeg");
     assertThat(settings.workerConfiguration().availableSlots()).isEqualTo(2);
+  }
+
+  @ParameterizedTest(name = "{0} cores give {1}")
+  @CsvSource({"1, 1", "2, 1", "3, 1", "4, 1", "5, 2", "8, 5", "72, 69"})
+  @DisplayName(
+      "Should leave three cores free for playback and the worker when the probe capacity is not"
+          + " configured")
+  void shouldLeaveThreeCoresFreeForPlaybackAndTheWorkerWhenTheProbeCapacityIsNotConfigured(
+      int availableCores, int expectedProbeCapacity) {
+    var settings = TranscodeWorkerSettings.fromEnvironment(requiredEnvironment(), availableCores);
+
+    assertThat(settings.workerConfiguration().probeCapacity()).isEqualTo(expectedProbeCapacity);
+    assertThat(settings.probeCapacitySource())
+        .isEqualTo(TranscodeWorkerSettings.ProbeCapacitySource.AVAILABLE_CORES);
+  }
+
+  @ParameterizedTest(name = "{0} cores")
+  @ValueSource(ints = {1, 72})
+  @DisplayName("Should use the configured probe capacity whatever the host's cores")
+  void shouldUseTheConfiguredProbeCapacityWhateverTheHostsCores(int availableCores) {
+    var environment = new HashMap<>(requiredEnvironment());
+    environment.put("TRANSCODE_WORKER_PROBE_CAPACITY", "12");
+
+    var settings = TranscodeWorkerSettings.fromEnvironment(environment, availableCores);
+
+    assertThat(settings.workerConfiguration().probeCapacity()).isEqualTo(12);
+    assertThat(settings.probeCapacitySource())
+        .isEqualTo(TranscodeWorkerSettings.ProbeCapacitySource.SETTING);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({
+    "0, TRANSCODE_WORKER_PROBE_CAPACITY must be positive",
+    "-1, TRANSCODE_WORKER_PROBE_CAPACITY must be positive",
+    "many, TRANSCODE_WORKER_PROBE_CAPACITY must be an integer"
+  })
+  @DisplayName(
+      "Should refuse a probe capacity that is not a positive integer when loading settings")
+  void shouldRefuseAProbeCapacityThatIsNotAPositiveIntegerWhenLoadingSettings(
+      String capacity, String expectedMessage) {
+    assertInvalidSetting("TRANSCODE_WORKER_PROBE_CAPACITY", capacity, expectedMessage);
+  }
+
+  @Test
+  @DisplayName("Should keep one playback slot when only the probe capacity is configured")
+  void shouldKeepOnePlaybackSlotWhenOnlyTheProbeCapacityIsConfigured() {
+    var environment = new HashMap<>(requiredEnvironment());
+    environment.put("TRANSCODE_WORKER_PROBE_CAPACITY", "12");
+
+    var settings = TranscodeWorkerSettings.fromEnvironment(environment, 72);
+
+    assertThat(settings.workerConfiguration().availableSlots()).isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("Should reject a worker configuration without probe capacity when loading settings")
+  void shouldRejectWorkerConfigurationWithoutProbeCapacityWhenLoadingSettings() {
+    var configuration =
+        TranscodeWorkerConfiguration.builder()
+            .workerId(UUID.randomUUID())
+            .bootId(UUID.randomUUID())
+            .availableSlots(1)
+            .probeCapacity(0)
+            .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, Path.of("/media")));
+
+    assertThatThrownBy(configuration::build)
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("Probe capacity must be positive");
   }
 
   @Test

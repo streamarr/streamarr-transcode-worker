@@ -203,6 +203,7 @@ class TranscodeWorkerUploadProtocolIT {
         .workerId(WORKER_ID)
         .bootId(UUID.randomUUID())
         .availableSlots(1)
+        .probeCapacity(1)
         .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, mediaRoot))
         .uploadAcknowledgementTimeout(ACKNOWLEDGEMENT_TIMEOUT);
   }

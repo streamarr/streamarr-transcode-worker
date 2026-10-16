@@ -8,12 +8,14 @@ import com.streamarr.transcode.probe.FfprobeExecutor;
 import java.io.IOException;
 import java.lang.ProcessBuilder.Redirect;
 import java.nio.file.Path;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.core.NestedExceptionUtils;
 
+@Slf4j
 @SpringBootApplication(proxyBeanMethods = false)
 public class TranscodeWorkerApplication {
 
@@ -36,7 +38,17 @@ public class TranscodeWorkerApplication {
 
   @Bean
   TranscodeWorkerSettings workerSettings() {
-    return TranscodeWorkerSettings.fromEnvironment(System.getenv());
+    var settings = TranscodeWorkerSettings.fromEnvironment(System.getenv());
+    var worker = settings.workerConfiguration();
+    log.info(
+        "The worker runs {} probes at once ({}) and {} job attempts at once",
+        worker.probeCapacity(),
+        switch (settings.probeCapacitySource()) {
+          case AVAILABLE_CORES -> "the available cores minus 3";
+          case SETTING -> "TRANSCODE_WORKER_PROBE_CAPACITY";
+        },
+        worker.availableSlots());
+    return settings;
   }
 
   @Bean(destroyMethod = "close")
