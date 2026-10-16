@@ -12,6 +12,7 @@ import com.streamarr.transcode.fakes.ScriptedProcess;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.HexFormat;
+import java.util.Set;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -27,6 +28,15 @@ import tools.jackson.databind.ObjectMapper;
 @Tag("UnitTest")
 @DisplayName("Ffprobe Executor Codec String Tests")
 class FfprobeExecutorCodecStringTest {
+
+  private static final Set<String> SESSION_COVERED_VIDEO_FIXTURES =
+      Set.of(
+          "mp4-sdr8-bt709.mp4",
+          "mp4-av1-10bit.mp4",
+          "mp4-hdr10-static.mp4",
+          "mp4-dovi-p5-dvh1.mp4",
+          "mp4-dovi-p9-dva1.mp4",
+          "mp4-dovi-p82.mp4");
 
   @Nested
   @DisplayName("Stream Copies")
@@ -52,6 +62,10 @@ class FfprobeExecutorCodecStringTest {
           .flatMap(
               file ->
                   file.getValue().properties().stream()
+                      .filter(
+                          copy ->
+                              !copy.getKey().equals("0")
+                                  || !SESSION_COVERED_VIDEO_FIXTURES.contains(file.getKey()))
                       // This video's HEVC parameter sets are only in its samples.
                       .filter(
                           copy ->
@@ -69,22 +83,6 @@ class FfprobeExecutorCodecStringTest {
   @Nested
   @DisplayName("Sample Entries")
   class SampleEntryTests {
-
-    @ParameterizedTest(name = "{0}")
-    @CsvSource({
-      "mp4-hdr10-static.mp4, hvc1.2.4.L30.90",
-      "mp4-dovi-p5-dvh1.mp4, hvc1.2.4.L123.B0",
-      "mp4-dovi-p9-dva1.mp4, avc1.640028",
-      "mp4-dovi-p82.mp4, hvc1.2.4.H120.90",
-    })
-    @DisplayName("Should name the tag rule's sample entry when the source names another entry")
-    void shouldNameTheTagRulesSampleEntryWhenTheSourceNamesAnotherEntry(
-        String fixture, String codecString) {
-      // The sources name hev1, dvh1, dva1 and hvc1 with a Dolby Vision 8.2 record.
-      var video = streamOf(fixture, 0);
-
-      assertThat(video.getCodecString()).isEqualTo(codecString);
-    }
 
     @Test
     @DisplayName("Should report AAC LC when an ADTS stream in MPEG-TS carries HE-AAC")
