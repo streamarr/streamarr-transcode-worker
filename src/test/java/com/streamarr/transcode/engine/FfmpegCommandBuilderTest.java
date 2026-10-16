@@ -138,8 +138,7 @@ class FfmpegCommandBuilderTest {
     "FAST, 9",
     "FASTER, 10",
     "VERYFAST, 11",
-    "SUPERFAST, 12",
-    "ULTRAFAST, 13"
+    "SUPERFAST, 12"
   })
   @DisplayName("Should pass the scale number when the encoder is libsvtav1")
   void shouldPassScaleNumberWhenEncoderIsLibsvtav1(EncoderPreset preset, String svtAv1Preset) {
@@ -191,7 +190,6 @@ class FfmpegCommandBuilderTest {
   // libx264 and libx265 take the scale's own names.
   static Stream<Arguments> presetNames() {
     return Stream.of(
-        Arguments.of(EncoderPreset.ULTRAFAST, "ultrafast"),
         Arguments.of(EncoderPreset.SUPERFAST, "superfast"),
         Arguments.of(EncoderPreset.VERYFAST, "veryfast"),
         Arguments.of(EncoderPreset.FASTER, "faster"),

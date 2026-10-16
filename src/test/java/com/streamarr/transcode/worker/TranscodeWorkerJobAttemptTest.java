@@ -774,7 +774,6 @@ class TranscodeWorkerJobAttemptTest {
 
   static Stream<Arguments> encoderPresetNames() {
     return Stream.of(
-        Arguments.of(EncoderPreset.ENCODER_PRESET_ULTRAFAST, "ultrafast"),
         Arguments.of(EncoderPreset.ENCODER_PRESET_SUPERFAST, "superfast"),
         Arguments.of(EncoderPreset.ENCODER_PRESET_VERYFAST, "veryfast"),
         Arguments.of(EncoderPreset.ENCODER_PRESET_FASTER, "faster"),
@@ -806,6 +805,21 @@ class TranscodeWorkerJobAttemptTest {
             mode ->
                 IntStream.of(EncoderPreset.ENCODER_PRESET_UNSPECIFIED_VALUE, Integer.MAX_VALUE)
                     .mapToObj(presetValue -> Arguments.of(mode, presetValue)));
+  }
+
+  // ADR 0044 leaves ultrafast off the preset scale: libx264 writes Constrained Baseline at
+  // ultrafast, whatever profile the job asks for.
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"TRANSCODE_MODE_VIDEO_TRANSCODE", "TRANSCODE_MODE_FULL_TRANSCODE"})
+  @DisplayName(
+      "Should refuse the video job as an invalid specification when its preset is ultrafast")
+  void shouldRefuseVideoJobWhenPresetIsUltrafast(TranscodeMode mode) throws Exception {
+    var job = variantJobBuilder(mode);
+    job.getVariantBuilder().setEncoderPreset(EncoderPreset.ENCODER_PRESET_ULTRAFAST);
+
+    assertRefusedAsAnInvalidSpecification(job.build());
   }
 
   @ParameterizedTest(name = "{0}")
