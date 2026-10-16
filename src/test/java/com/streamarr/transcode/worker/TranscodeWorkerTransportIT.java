@@ -40,21 +40,10 @@ class TranscodeWorkerTransportIT {
             .orElseThrow();
     var workerId = UUID.randomUUID();
     var bootId = UUID.randomUUID();
-    var configuration =
-        TranscodeWorkerConfiguration.builder()
-            .workerId(workerId)
-            .bootId(bootId)
-            .availableSlots(2)
-            .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, tempDir))
-            .build();
+    var configuration = configuration().workerId(workerId).bootId(bootId).availableSlots(2).build();
 
     try (var controlPlane = WorkerApplicationControlPlane.builder().build();
-        var worker =
-            TranscodeWorker.builder()
-                .configuration(configuration)
-                .engine(engine(ScriptedProcessLauncher.running()))
-                .ffprobe(fileContentsProducer())
-                .build()) {
+        var worker = worker(configuration)) {
       worker.start(networkAddress.getHostAddress(), controlPlane.port());
 
       var registration = controlPlane.awaitRegistration();
@@ -65,5 +54,21 @@ class TranscodeWorkerTransportIT {
       assertThat(registration.getCapabilities().getSourceNamespaceIdsList())
           .containsExactly(toProto(SOURCE_NAMESPACE_ID));
     }
+  }
+
+  private TranscodeWorker worker(TranscodeWorkerConfiguration configuration) {
+    return TranscodeWorker.builder()
+        .configuration(configuration)
+        .engine(engine(ScriptedProcessLauncher.running()))
+        .ffprobe(fileContentsProducer())
+        .build();
+  }
+
+  private TranscodeWorkerConfiguration.TranscodeWorkerConfigurationBuilder configuration() {
+    return TranscodeWorkerConfiguration.builder()
+        .workerId(UUID.randomUUID())
+        .bootId(UUID.randomUUID())
+        .availableSlots(1)
+        .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, tempDir));
   }
 }
