@@ -55,6 +55,7 @@ Settings are read from the environment at startup. The three variables in the ex
 | `TRANSCODE_WORKER_ENCODER_STALL_TIMEOUT` | `30s` | How long FFmpeg may write nothing to its output while the worker reads it. The worker then fails the job attempt and asks FFmpeg to terminate, destroying it once the grace period a stop allows has passed, because a hung FFmpeg can ignore the request. Time spent waiting for the server does not count. Keep it above the time FFmpeg needs to write its first fragment. A positive duration in the same format |
 | `TRANSCODE_WORKER_UPLOAD_READINESS_TIMEOUT` | `30s` | How long a segment upload waits for the server to accept its next message before the job attempt fails. A positive duration in the same format |
 | `TRANSCODE_WORKER_UPLOAD_ACKNOWLEDGEMENT_TIMEOUT` | `60s` | How long a segment upload may take, counted from its first message, until the server acknowledges the segment, before the job attempt fails. A positive duration in the same format |
+| `TRANSCODE_WORKER_SESSION_ACCEPTANCE_TIMEOUT` | `5m` | How long the worker waits at startup for the server to accept its session. The wait covers a server that is still starting, so the worker can start first. The worker then exits and names the server it waited for. Keep it above the time the server needs to start, including its database migrations. A positive duration in the same format |
 | `SERVER_PORT` | `9091` | HTTP port for health checks |
 
 ### Filename Locale
@@ -75,7 +76,7 @@ It should report `UTF-8`. To recover, correct the locale and restart the worker.
 
 Spring Boot Actuator serves `/actuator/health/liveness` and `/actuator/health/readiness` on port `9091`. Readiness requires an accepted server session; a worker with all slots occupied remains ready.
 
-Losing the server session stops active work and exits the worker process. A deployment supervisor should restart it. During shutdown, the worker asks each FFmpeg process to quit and waits for it to exit.
+At startup the worker waits for the server to accept its session, so the two can start in either order. Losing the server session stops active work and exits the worker process. A deployment supervisor should restart it. During shutdown, the worker asks each FFmpeg process to quit and waits for it to exit.
 
 ### Deploying Beyond Local Development
 

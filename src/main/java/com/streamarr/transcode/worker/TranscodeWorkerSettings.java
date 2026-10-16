@@ -49,6 +49,11 @@ record TranscodeWorkerSettings(
                     environment,
                     PREFIX + "UPLOAD_ACKNOWLEDGEMENT_TIMEOUT",
                     TranscodeWorkerConfiguration.DEFAULT_UPLOAD_ACKNOWLEDGEMENT_TIMEOUT))
+            .sessionAcceptanceTimeout(
+                positiveDuration(
+                    environment,
+                    PREFIX + "SESSION_ACCEPTANCE_TIMEOUT",
+                    TranscodeWorkerConfiguration.DEFAULT_SESSION_ACCEPTANCE_TIMEOUT))
             .build();
     return TranscodeWorkerSettings.builder()
         .controlPlaneHost(optional(environment, PREFIX + "CONTROL_PLANE_HOST", "127.0.0.1"))

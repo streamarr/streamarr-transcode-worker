@@ -42,11 +42,13 @@ public final class WorkerApplicationControlPlane
   private final CompletableFuture<ProbeAttemptResult> result = new CompletableFuture<>();
   private StreamObserver<EstablishWorkerSessionResponse> responses;
 
+  /** Listens on {@code port}, or on an ephemeral port when it is zero. */
   @Builder
-  private WorkerApplicationControlPlane(BooleanSupplier producerAdmitted) throws Exception {
+  private WorkerApplicationControlPlane(BooleanSupplier producerAdmitted, int port)
+      throws Exception {
     this.producerAdmitted = producerAdmitted;
     var builder =
-        NettyServerBuilder.forPort(0)
+        NettyServerBuilder.forPort(port)
             .addService(this)
             .intercept(
                 new ServerInterceptor() {
