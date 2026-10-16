@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import {
   Mp4FormatError,
   audioTrackOf,
+  deliveredInitializationSegment,
   firstAudioTraf,
   readFiles,
   signed,
@@ -64,6 +65,7 @@ export function recordingFacts(stream, { period, startSequenceNumber }) {
         trexDefaultSampleDuration: track.trexDuration ?? null,
       })),
     },
+    deliveredInitializationSegment: digestOf(deliveredInitializationSegment(stream.initializationSegmentBytes)),
     segments: delivered.map((segment) => describeSegment(segment, stream)),
     discardedPreroll: preroll.map((segment) => describeSegment(segment, stream)),
     failure,
@@ -71,6 +73,10 @@ export function recordingFacts(stream, { period, startSequenceNumber }) {
     trailingAudioOnlyFragmentCount: stream.fragments.length - 1 - lastVideo,
     diagnostics: diagnostics(stream),
   };
+}
+
+function digestOf(bytes) {
+  return { byteLength: bytes.length, sha256: sha256(bytes) };
 }
 
 /** Whether two recordings' initialization segments are byte-identical, and their digests. */

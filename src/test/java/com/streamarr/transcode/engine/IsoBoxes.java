@@ -204,7 +204,7 @@ final class IsoBoxes {
         box(
             "avc1",
             new byte[78],
-            box("avcC", HexFormat.of().parseHex("0164000AFFE1000267640001000268EBFDF8F800")));
+            box("avcC", HexFormat.of().parseHex("0164000AFFE10002676401000268EBFDF8F800")));
     // AAC LC: mp4a.40.2.
     private static final byte[] AAC_LC_ENTRY =
         box(

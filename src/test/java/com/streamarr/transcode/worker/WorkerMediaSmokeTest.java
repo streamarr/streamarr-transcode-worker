@@ -8,6 +8,7 @@ import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variant
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import build.buf.gen.streamarr.transcode.v1.AudioMode;
 import build.buf.gen.streamarr.transcode.v1.EncoderPreset;
@@ -63,6 +64,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -120,6 +122,27 @@ class WorkerMediaSmokeTest {
   private static final int HEVC_LAST_RANDOM_ACCESS_TYPE = 23;
   private static final int HEVC_IDR_W_RADL = 19;
   private static final int HEVC_IDR_N_LP = 20;
+  private static final int HEVC_VPS = 32;
+  private static final int HEVC_SPS = 33;
+  private static final int HEVC_PPS = 34;
+  private static final int HEVC_PREFIX_SEI = 39;
+  private static final int HEVC_SUFFIX_SEI = 40;
+
+  // SEI payload types (ITU-T H.265, 7.3.5).
+  private static final int HEVC_MASTERING_DISPLAY_SEI = 137;
+  private static final int HEVC_CONTENT_LIGHT_LEVEL_SEI = 144;
+
+  // The hvcC record's fields before its count of NAL unit arrays (ISO/IEC 14496-15, 8.3.3.1.2).
+  private static final int HVCC_FIELDS_BEFORE_ARRAYS = 22;
+
+  // A common HDR10 grade: BT.2020 primaries, a D65 white point, and a 1,000 cd/m2 display.
+  private static final MasteringDisplayColourVolume HDR10_MASTERING_DISPLAY =
+      new MasteringDisplayColourVolume(
+          List.of(8500, 39850, 6550, 2300, 35400, 14600), 15635, 16450, 10_000_000, 50);
+  private static final ContentLightLevel HDR10_CONTENT_LIGHT_LEVEL =
+      new ContentLightLevel(1000, 400);
+  // libx265's 64x36 Main 10 at level 1.0 in the Main tier.
+  private static final String HDR10_CODEC_STRING = "hvc1.2.4.L30.90";
 
   // The fixture's Constrained Baseline H.264 at level 1.3. Its 160x90 variant at 24 fps and 500
   // kb/s
@@ -134,6 +157,12 @@ class WorkerMediaSmokeTest {
   // allows 80 kb/s at level 1.0, H.265 1.0 and AV1 2.0.
   private static final Map<String, Integer> TINY_VARIANT_LEVELS =
       Map.of("h264", 11, "hevc", 10, "av1", 20);
+
+  // The sample-entry sources span segments 0 and 1 at a 1 s period, with a keyframe every second.
+  private static final int SAMPLE_ENTRY_SOURCE_SECONDS = 2;
+  private static final String DOLBY_VISION_FIXTURE = "dolby-vision-8.2-dvh1.mp4";
+  // The fixture's 10-bit base layer: Main 10 at level 2.0 in the Main tier.
+  private static final String DOLBY_VISION_BASE_LAYER_CODEC_STRING = "hvc1.2.4.L60.90";
 
   private static final Duration JOB_LIMIT = Duration.ofMinutes(5);
   private static final String EMPTY_EDIT_SOURCE = "mp4-empty-edit.mp4";
@@ -552,7 +581,7 @@ class WorkerMediaSmokeTest {
   }
 
   @ParameterizedTest(name = "{0}")
-  @CsvSource({"h264, avc1, High, 40", "hevc, hev1, Main, 120", "av1, av01, Main, 8"})
+  @CsvSource({"h264, avc1, High, 40", "hevc, hvc1, Main, 120", "av1, av01, Main, 8"})
   @DisplayName(
       "Should write the forced codec profile, level and tier in 8-bit 4:2:0 when a software encoder"
           + " encodes")
@@ -599,6 +628,544 @@ class WorkerMediaSmokeTest {
     assertThat(failure.failure().getFailure())
         .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_OUTPUT_MISMATCH);
     assertThat(failure.uploads().names()).isEmpty();
+  }
+
+  @ParameterizedTest(name = "{0} source")
+  @ValueSource(strings = {"mp4", "mkv", "ts"})
+  @DisplayName("Should write hvc1 when a worker copies libx265 HEVC from a real source")
+  void shouldWriteHvc1WhenAWorkerCopiesLibx265HevcFromARealSource(String container)
+      throws Exception {
+    // libx265 at 64x36 writes Main at level 1.0. FFmpeg's mp4 muxer writes its own default, hev1,
+    // for this MP4 source and for every copy of HEVC from Matroska or MPEG-TS.
+    var source = root.resolve("hevc." + container);
+    runFfmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=64x36:rate=24:duration=" + SAMPLE_ENTRY_SOURCE_SECONDS,
+            "-c:v",
+            "libx265",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+            "-x265-params",
+            "keyint=24:min-keyint=24:scenecut=0:log-level=error"),
+        source);
+
+    var media = copiedMedia(source, "hvc1.1.6.L30.90");
+
+    assertThat(videoStreamFields(media, "codec_tag_string"))
+        .containsEntry("codec_tag_string", "hvc1");
+  }
+
+  // Sources whose parameter sets travel only in the samples, under the sample entry that the
+  // source names: hev1 and avc3 as GPAC wrote them, and dvhe and dvav renamed from them.
+  @ParameterizedTest(name = "{1} source")
+  @CsvSource({
+    "hev1-parameter-sets-in-samples.mp4, hev1, hvc1.1.6.L30.90, hvc1",
+    "hev1-parameter-sets-in-samples.mp4, dvhe, hvc1.1.6.L30.90, hvc1",
+    "avc3-parameter-sets-in-samples.mp4, avc3, avc1.42C00A, avc1",
+    "avc3-parameter-sets-in-samples.mp4, dvav, avc1.42C00A, avc1"
+  })
+  @DisplayName(
+      "Should move the source's parameter sets into the record of every attempt when the source"
+          + " carries them only in its samples")
+  void
+      shouldMoveTheSourcesParameterSetsIntoTheRecordOfEveryAttemptWhenTheSourceCarriesThemOnlyInItsSamples(
+          String fixture, String sourceSampleEntry, String codecString, String sampleEntry)
+          throws Exception {
+    var source = sampleEntryFixture(fixture, sourceSampleEntry);
+    var fromStart = sampleEntryCopyJob(source, codecString);
+    var replacement = sampleEntryCopyJob(source, codecString);
+    replacement.getExecutionBuilder().setStartSequenceNumber(1);
+
+    // The producer refuses a record that lacks the parameter sets its sample entry promises, so
+    // each attempt completes only when FFmpeg moved them into the record.
+    var fromStartUploads = execute(engine(realCapabilities()), root, fromStart.build());
+    var replacementUploads = execute(engine(realCapabilities()), root, replacement.build());
+
+    var media = playable(fromStartUploads.contentOf(fromStartUploads.names()));
+    assertDecodes(media);
+    assertThat(videoStreamFields(media, "codec_tag_string"))
+        .containsEntry("codec_tag_string", sampleEntry);
+    assertThat(replacementUploads.segments())
+        .as("the replacement attempt's initialization segment")
+        .containsEntry("init.mp4", fromStartUploads.segments().get("init.mp4"));
+  }
+
+  @Test
+  @DisplayName(
+      "Should upload the same initialization segment from every attempt when the SEI messages of"
+          + " a source's keyframes differ")
+  void
+      shouldUploadTheSameInitializationSegmentFromEveryAttemptWhenTheSeiMessagesOfASourcesKeyframesDiffer()
+          throws Exception {
+    // Each keyframe of the fixture repeats libx265's version message, a user-data SEI message,
+    // before its parameter sets. The second keyframe's copy now names another build.
+    var source = sampleEntryFixture("hev1-parameter-sets-in-samples.mp4", "hev1");
+    var bytes = Files.readAllBytes(source);
+    var version = "x265 (build 216)".getBytes(StandardCharsets.US_ASCII);
+    var first = indexOf(bytes, version);
+    var second = indexOf(Arrays.copyOfRange(bytes, first + 1, bytes.length), version) + first + 1;
+    assertThat(second).as("the second keyframe's version message").isGreaterThan(first);
+    bytes[second + version.length - 2] = '7';
+    Files.write(source, bytes);
+    var fromStart = sampleEntryCopyJob(source, "hvc1.1.6.L30.90");
+    var replacement = sampleEntryCopyJob(source, "hvc1.1.6.L30.90");
+    replacement.getExecutionBuilder().setStartSequenceNumber(1);
+
+    var fromStartUploads = execute(engine(realCapabilities()), root, fromStart.build());
+    var replacementUploads = execute(engine(realCapabilities()), root, replacement.build());
+
+    assertDecodes(playable(replacementUploads.contentOf(replacementUploads.names())));
+    assertThat(replacementUploads.segments())
+        .as("the replacement attempt's initialization segment")
+        .containsEntry("init.mp4", fromStartUploads.segments().get("init.mp4"));
+    var changedVersion = "x265 (build 217)".getBytes(StandardCharsets.US_ASCII);
+    assertThat(indexOf(replacementUploads.segments().get("segment1.m4s"), changedVersion))
+        .as("the version message in the first keyframe of the replacement attempt")
+        .isNotNegative();
+  }
+
+  @Test
+  @DisplayName(
+      "Should deliver HDR10 static metadata in front of every keyframe and none in the record when"
+          + " a worker copies HEVC whose record alone carries it")
+  void
+      shouldDeliverHdr10StaticMetadataInFrontOfEveryKeyframeAndNoneInTheRecordWhenAWorkerCopiesHevcWhoseRecordAloneCarriesIt()
+          throws Exception {
+    var source = hdr10SourceWithStaticMetadataOnlyInItsRecord();
+    var sourceBytes = Files.readAllBytes(source);
+    assertThat(seiMessages(hevcRecordNalUnits(sourceBytes)))
+        .as("the SEI messages of the source's record")
+        .containsKeys(HEVC_MASTERING_DISPLAY_SEI, HEVC_CONTENT_LIGHT_LEVEL_SEI);
+    assertThat(nalUnitsOfFirstPicture(sourceBytes, firstChunkOffset(sourceBytes)))
+        .as("the NAL unit types of the source's first keyframe")
+        .extracting(WorkerMediaSmokeTest::hevcNalUnitType)
+        .isNotEmpty()
+        .doesNotContain(HEVC_PREFIX_SEI, HEVC_SUFFIX_SEI);
+
+    var uploads =
+        execute(
+            engine(realCapabilities()),
+            root,
+            sampleEntryCopyJob(source, HDR10_CODEC_STRING).build());
+
+    assertThat(uploads.names()).containsExactlyElementsOf(uploadNames(SAMPLE_ENTRY_SOURCE_SECONDS));
+    assertDecodes(playable(uploads.contentOf(uploads.names())));
+    assertThat(hevcRecordNalUnits(uploads.segments().get("init.mp4")))
+        .as("the NAL unit types of the delivered record")
+        .extracting(WorkerMediaSmokeTest::hevcNalUnitType)
+        .doesNotContain(HEVC_PREFIX_SEI, HEVC_SUFFIX_SEI)
+        .contains(HEVC_VPS, HEVC_SPS, HEVC_PPS);
+    // Neither the locked FFmpeg nor Homebrew FFmpeg writes an mdcv or clli box for this copy: the
+    // source has neither box, and only SEI messages carry its HDR10 static metadata.
+    for (var segment : uploads.names().subList(1, uploads.names().size())) {
+      var bytes = uploads.segments().get(segment);
+      var keyframe = nalUnitsOfFirstPicture(bytes, firstSampleOffset(bytes));
+      assertThat(hevcNalUnitType(keyframe.getLast()))
+          .as("the picture type at the start of %s", segment)
+          .matches(WorkerMediaSmokeTest::isHevcRandomAccessPicture);
+      var messages = seiMessages(keyframe);
+      assertThat(messages)
+          .as("the SEI messages in front of the keyframe of %s", segment)
+          .containsKeys(HEVC_MASTERING_DISPLAY_SEI, HEVC_CONTENT_LIGHT_LEVEL_SEI);
+      assertThat(MasteringDisplayColourVolume.of(messages.get(HEVC_MASTERING_DISPLAY_SEI)))
+          .isEqualTo(HDR10_MASTERING_DISPLAY);
+      assertThat(ContentLightLevel.of(messages.get(HEVC_CONTENT_LIGHT_LEVEL_SEI)))
+          .isEqualTo(HDR10_CONTENT_LIGHT_LEVEL);
+    }
+  }
+
+  // libx265 writes the HDR10 SEI messages into the record and in front of every keyframe. The
+  // filter removes the parameter sets (types 32 to 34) and prefix SEI messages (type 39) from the
+  // samples, and keeps the record.
+  private Path hdr10SourceWithStaticMetadataOnlyInItsRecord() throws Exception {
+    var encoded = root.resolve("hdr10-encoded.mp4");
+    runFfmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=64x36:rate=24:duration=" + SAMPLE_ENTRY_SOURCE_SECONDS,
+            "-c:v",
+            "libx265",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p10le",
+            "-x265-params",
+            "keyint=24:min-keyint=24:scenecut=0:log-level=error:colorprim=bt2020"
+                + ":transfer=smpte2084:colormatrix=bt2020nc:master-display="
+                + HDR10_MASTERING_DISPLAY.x265Parameter()
+                + ":max-cll="
+                + HDR10_CONTENT_LIGHT_LEVEL.x265Parameter()),
+        encoded);
+    var source = root.resolve("hdr10.mp4");
+    runFfmpeg(
+        List.of(
+            "-i",
+            encoded.toString(),
+            "-c",
+            "copy",
+            "-bsf:v",
+            "filter_units=remove_types=32|33|34|39",
+            "-tag:v",
+            "hvc1"),
+        source);
+    return source;
+  }
+
+  // The NAL units of every array of the first hvcC record (ISO/IEC 14496-15, 8.3.3.1.2).
+  private static List<byte[]> hevcRecordNalUnits(byte[] mp4) {
+    var hvcC = indexOf(mp4, "hvcC".getBytes(StandardCharsets.US_ASCII));
+    assertThat(hvcC).as("the hvcC box").isNotNegative();
+    var configuration = ByteBuffer.wrap(mp4);
+    configuration.position(hvcC + 4 + HVCC_FIELDS_BEFORE_ARRAYS);
+    var arrays = Byte.toUnsignedInt(configuration.get());
+    var nalUnits = new ArrayList<byte[]>();
+    for (var array = 0; array < arrays; array++) {
+      configuration.get();
+      var count = Short.toUnsignedInt(configuration.getShort());
+      for (var nalUnit = 0; nalUnit < count; nalUnit++) {
+        var bytes = new byte[Short.toUnsignedInt(configuration.getShort())];
+        configuration.get(bytes);
+        nalUnits.add(bytes);
+      }
+    }
+
+    return nalUnits;
+  }
+
+  // The offset of a progressive MP4's first chunk: the first entry of its stco box.
+  private static int firstChunkOffset(byte[] mp4) {
+    var stco = indexOf(mp4, "stco".getBytes(StandardCharsets.US_ASCII));
+    assertThat(stco).as("the stco box").isNotNegative();
+    return ByteBuffer.wrap(mp4).getInt(stco + 12);
+  }
+
+  // The offset of a media segment's first sample: the data offset of its first trun box, which
+  // counts from the start of the moof box because CMAF sets default-base-is-moof.
+  private static int firstSampleOffset(byte[] segment) {
+    var moof = indexOf(segment, "moof".getBytes(StandardCharsets.US_ASCII)) - 4;
+    var trun = indexOf(segment, "trun".getBytes(StandardCharsets.US_ASCII));
+    assertThat(moof).as("the moof box").isNotNegative();
+    assertThat(trun).as("the trun box").isGreaterThan(moof);
+    var fields = ByteBuffer.wrap(segment);
+    assertThat(fields.getInt(trun + 4) & 0x01).as("the data-offset-present flag of trun").isOne();
+    return moof + fields.getInt(trun + 12);
+  }
+
+  // The four-byte length-prefixed NAL units from the offset through the first picture's slice.
+  private static List<byte[]> nalUnitsOfFirstPicture(byte[] media, int offset) {
+    var samples = ByteBuffer.wrap(media);
+    samples.position(offset);
+    var nalUnits = new ArrayList<byte[]>();
+    while (nalUnits.isEmpty()
+        || hevcNalUnitType(nalUnits.getLast()) > HEVC_LAST_VIDEO_CODING_LAYER_TYPE) {
+      var nalUnit = new byte[samples.getInt()];
+      samples.get(nalUnit);
+      nalUnits.add(nalUnit);
+    }
+
+    return nalUnits;
+  }
+
+  private static int hevcNalUnitType(byte[] nalUnit) {
+    return (nalUnit[0] >> 1) & 0x3f;
+  }
+
+  // The payload of every message in the prefix SEI NAL units by payload type (ITU-T H.265,
+  // 7.3.5), without the NAL unit header and emulation prevention bytes.
+  private static Map<Integer, byte[]> seiMessages(List<byte[]> nalUnits) {
+    var messages = new HashMap<Integer, byte[]>();
+    nalUnits.stream()
+        .filter(nalUnit -> hevcNalUnitType(nalUnit) == HEVC_PREFIX_SEI)
+        .map(nalUnit -> ByteBuffer.wrap(rawPayloadOf(nalUnit)))
+        .forEach(
+            payloads -> {
+              // The last byte holds the stop bit that ends the trailing bits.
+              while (payloads.remaining() > 1) {
+                var type = seiVariableLengthValue(payloads);
+                var payload = new byte[seiVariableLengthValue(payloads)];
+                payloads.get(payload);
+                messages.put(type, payload);
+              }
+            });
+    return messages;
+  }
+
+  // A payload type or size: a run of 0xFF bytes, each adding 255, then the last byte.
+  private static int seiVariableLengthValue(ByteBuffer payloads) {
+    var value = 0;
+    var next = Byte.toUnsignedInt(payloads.get());
+    while (next == 0xff) {
+      value += next;
+      next = Byte.toUnsignedInt(payloads.get());
+    }
+
+    return value + next;
+  }
+
+  // The bytes after the two-byte NAL unit header, without the 0x03 that follows each 0x0000.
+  private static byte[] rawPayloadOf(byte[] nalUnit) {
+    var payload = new ByteArrayOutputStream();
+    var zeros = 0;
+    for (var at = 2; at < nalUnit.length; at++) {
+      var value = nalUnit[at];
+      if (zeros >= 2 && value == 3) {
+        zeros = 0;
+        continue;
+      }
+
+      zeros = value == 0 ? zeros + 1 : 0;
+      payload.write(value);
+    }
+
+    return payload.toByteArray();
+  }
+
+  // An SEI mastering display colour volume (ITU-T H.265, D.2.28): the primaries in green, blue,
+  // red order, as libx265 writes them, and the white point in units of 0.00002, and the luminance
+  // in units of 0.0001 cd/m2.
+  private record MasteringDisplayColourVolume(
+      List<Integer> primaries,
+      int whitePointX,
+      int whitePointY,
+      long maxLuminance,
+      long minLuminance) {
+
+    private static MasteringDisplayColourVolume of(byte[] payload) {
+      var fields = ByteBuffer.wrap(payload);
+      var primaries = new ArrayList<Integer>();
+      for (var coordinate = 0; coordinate < 6; coordinate++) {
+        primaries.add(Short.toUnsignedInt(fields.getShort()));
+      }
+
+      return new MasteringDisplayColourVolume(
+          List.copyOf(primaries),
+          Short.toUnsignedInt(fields.getShort()),
+          Short.toUnsignedInt(fields.getShort()),
+          Integer.toUnsignedLong(fields.getInt()),
+          Integer.toUnsignedLong(fields.getInt()));
+    }
+
+    private String x265Parameter() {
+      return "G(%d,%d)B(%d,%d)R(%d,%d)WP(%d,%d)L(%d,%d)"
+          .formatted(
+              primaries.get(0),
+              primaries.get(1),
+              primaries.get(2),
+              primaries.get(3),
+              primaries.get(4),
+              primaries.get(5),
+              whitePointX,
+              whitePointY,
+              maxLuminance,
+              minLuminance);
+    }
+  }
+
+  // An SEI content light level information (ITU-T H.265, D.2.35), in cd/m2.
+  private record ContentLightLevel(int maxContentLightLevel, int maxPictureAverageLightLevel) {
+
+    private static ContentLightLevel of(byte[] payload) {
+      var fields = ByteBuffer.wrap(payload);
+      return new ContentLightLevel(
+          Short.toUnsignedInt(fields.getShort()), Short.toUnsignedInt(fields.getShort()));
+    }
+
+    private String x265Parameter() {
+      return maxContentLightLevel + "," + maxPictureAverageLightLevel;
+    }
+  }
+
+  @Test
+  @DisplayName("Should write avc1 when a worker copies H.264 from a dva1 source")
+  void shouldWriteAvc1WhenAWorkerCopiesH264FromADva1Source() throws Exception {
+    var avc1 = root.resolve("avc1.mp4");
+    runFfmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=64x36:rate=24:duration=" + SAMPLE_ENTRY_SOURCE_SECONDS,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+            "-g",
+            "24"),
+        avc1);
+    var source = withSampleEntry(Files.readAllBytes(avc1), "avc1", "dva1", "dva1.mp4");
+
+    var media = copiedMedia(source, "avc1.42C00A");
+
+    assertThat(videoStreamFields(media, "codec_tag_string"))
+        .containsEntry("codec_tag_string", "avc1");
+  }
+
+  // The committed Dolby Vision profile 8.2 fixture: 10-bit HEVC under dvh1, with its configuration
+  // record and an RPU after every frame.
+  @Test
+  @DisplayName(
+      "Should copy every RPU under hvc1 with the base layer's codec string when a worker copies"
+          + " Dolby Vision profile 8.2")
+  void shouldCopyEveryRpuUnderHvc1WithTheBaseLayersCodecStringWhenAWorkerCopiesDolbyVision82()
+      throws Exception {
+    var source = sampleEntryFixture(DOLBY_VISION_FIXTURE, "dvh1");
+
+    // The job completes only when the copy declares the base layer's codec string.
+    var media = copiedMedia(source, DOLBY_VISION_BASE_LAYER_CODEC_STRING);
+
+    assertThat(videoStreamFields(media, "codec_tag_string,profile,pix_fmt"))
+        .containsExactlyInAnyOrderEntriesOf(
+            Map.of("codec_tag_string", "hvc1", "profile", "Main 10", "pix_fmt", "yuv420p10le"));
+    assertThat(frameSideDataPerFrame(media))
+        .hasSize(SAMPLE_ENTRY_SOURCE_SECONDS * 24)
+        .allSatisfy(sideData -> assertThat(sideData).contains("Dolby Vision RPU Data"));
+  }
+
+  // ADR 0013 accepts this loss: the locked FFmpeg's mp4 muxer drops the configuration record of a
+  // 10-bit profile 8.2 copy even under -strict unofficial. Other builds may keep it, so only the
+  // locked Jellyfin build is held to the loss.
+  @Test
+  @DisplayName(
+      "Should drop the Dolby Vision configuration record when the locked FFmpeg copies Dolby"
+          + " Vision profile 8.2")
+  void shouldDropTheDolbyVisionConfigurationRecordWhenTheLockedFfmpegCopiesDolbyVision82()
+      throws Exception {
+    assumeTrue(
+        runToCompletion(List.of("ffmpeg", "-version"))
+            .lines()
+            .findFirst()
+            .orElseThrow()
+            .contains("-Jellyfin"),
+        "the FFmpeg on PATH is not the locked Jellyfin build");
+    var source = sampleEntryFixture(DOLBY_VISION_FIXTURE, "dvh1");
+    assertThat(streamSideData(source)).contains("DOVI configuration record");
+
+    var media = copiedMedia(source, DOLBY_VISION_BASE_LAYER_CODEC_STRING);
+
+    assertThat(streamSideData(media)).doesNotContain("DOVI configuration record");
+  }
+
+  // Copies the source on 1 s segments as one attempt from the start, and returns the delivered
+  // initialization segment and media segments as one file.
+  private Path copiedMedia(Path source, String codecString) throws Exception {
+    var uploads =
+        execute(engine(realCapabilities()), root, sampleEntryCopyJob(source, codecString).build());
+
+    assertThat(uploads.names()).containsExactlyElementsOf(uploadNames(SAMPLE_ENTRY_SOURCE_SECONDS));
+    var media = playable(uploads.contentOf(uploads.names()));
+    assertDecodes(media);
+    return media;
+  }
+
+  private static VariantJob.Builder sampleEntryCopyJob(Path source, String codecString) {
+    var family = VideoCodecFamily.VIDEO_CODEC_FAMILY_HEVC;
+    if (codecString.startsWith("avc1")) {
+      family = VideoCodecFamily.VIDEO_CODEC_FAMILY_H264;
+    }
+
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_REMUX);
+    withVideo(job, copiedVideo(codecString).setCodecFamily(family));
+    job.getDecisionBuilder()
+        .setVideoCodecFamily("")
+        .getAudioBuilder()
+        .setMode(AudioMode.AUDIO_MODE_NONE);
+    job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(1)
+        .setMediaSegmentCount(SAMPLE_ENTRY_SOURCE_SECONDS);
+    return job;
+  }
+
+  // A committed fixture from src/test/resources/sample-entries, written into the source root under
+  // the requested sample entry.
+  private Path sampleEntryFixture(String fixture, String sampleEntry) throws Exception {
+    var resource = getClass().getResource("/sample-entries/" + fixture);
+    assertThat(resource).as("fixture %s", fixture).isNotNull();
+    var bytes = Files.readAllBytes(Path.of(resource.toURI()));
+    var written = sampleEntryTypeOf(bytes);
+    return withSampleEntry(bytes, written, sampleEntry, sampleEntry + "-" + fixture);
+  }
+
+  // Writes the MP4 into the source root with the type of its one sample entry renamed.
+  private Path withSampleEntry(byte[] mp4, String from, String to, String fileName)
+      throws Exception {
+    assertThat(sampleEntryTypeOf(mp4)).isEqualTo(from);
+    var renamed = mp4.clone();
+    var type = to.getBytes(StandardCharsets.US_ASCII);
+    System.arraycopy(type, 0, renamed, sampleEntryTypeIndex(mp4), type.length);
+    var source = root.resolve(fileName);
+    Files.write(source, renamed);
+    return source;
+  }
+
+  private static String sampleEntryTypeOf(byte[] mp4) {
+    var at = sampleEntryTypeIndex(mp4);
+    return new String(mp4, at, 4, StandardCharsets.US_ASCII);
+  }
+
+  // The stsd box's type, version and flags, and entry count come before its first sample entry's
+  // size and type.
+  private static int sampleEntryTypeIndex(byte[] mp4) {
+    var stsd = indexOf(mp4, "stsd".getBytes(StandardCharsets.US_ASCII));
+    assertThat(stsd).as("the stsd box").isNotNegative();
+    return stsd + 16;
+  }
+
+  private static int indexOf(byte[] bytes, byte[] target) {
+    for (var at = 0; at + target.length <= bytes.length; at++) {
+      if (Arrays.equals(bytes, at, at + target.length, target, 0, target.length)) {
+        return at;
+      }
+    }
+
+    return -1;
+  }
+
+  private static List<String> streamSideData(Path media) throws Exception {
+    return runToCompletion(
+            List.of(
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream_side_data=side_data_type",
+                "-of",
+                "csv=p=0",
+                media.toString()))
+        .lines()
+        .map(String::strip)
+        .filter(line -> !line.isEmpty())
+        .toList();
+  }
+
+  // Each decoded frame's side data types, as one comma-separated line per frame.
+  private static List<String> frameSideDataPerFrame(Path media) throws Exception {
+    return runToCompletion(
+            List.of(
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "frame=pict_type:frame_side_data=side_data_type",
+                "-of",
+                "csv=p=0",
+                media.toString()))
+        .lines()
+        .filter(line -> !line.isBlank())
+        .toList();
   }
 
   // The fields of the first video stream that ffprobe reports, by name.
@@ -1179,7 +1746,6 @@ class WorkerMediaSmokeTest {
 
   // An 8-bit encode of the codec family that forces the level, with the codec string that the
   // worker's encoder writes for it: High for H.264, and Main at the Main tier for H.265 and AV1.
-  // libx265 writes the hev1 sample entry until the worker chooses the tag (worker #18).
   private static VideoDecision.Builder forcedSoftwareEncode(String codecFamily, int level) {
     var video = VideoDecision.newBuilder().setMode(VideoMode.VIDEO_MODE_ENCODE).setLevel(level);
     return switch (codecFamily) {
@@ -1193,7 +1759,7 @@ class WorkerMediaSmokeTest {
               .setCodecFamily(VideoCodecFamily.VIDEO_CODEC_FAMILY_HEVC)
               .setCodecProfile(VideoCodecProfile.VIDEO_CODEC_PROFILE_HEVC_MAIN)
               .setTier(VideoCodecTier.VIDEO_CODEC_TIER_MAIN)
-              .setCodecString(String.format(Locale.ROOT, "hev1.1.6.L%d.90", level * 3));
+              .setCodecString(String.format(Locale.ROOT, "hvc1.1.6.L%d.90", level * 3));
       case "av1" ->
           video
               .setCodecFamily(VideoCodecFamily.VIDEO_CODEC_FAMILY_AV1)

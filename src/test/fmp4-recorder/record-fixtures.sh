@@ -54,9 +54,10 @@ DET=(-threads 1)
 # Each encoder runs at the preset that Automatic resolves to (ADR 0044): faster for libx264, its
 # scale number 10 for SVT-AV1, and veryfast for libx265. Each encode forces the codec profile, tier
 # and level that a job carries. For 64x36 at 23.976 fps these are H.264 1.0, AV1 2.0 and H.265 1.0.
-X264=(-c:v libx264 -preset faster -profile:v high -level:v 10 -vf scale=-2:36,format=yuv420p -b:v 6000 -maxrate 6000 -bufsize 12000)
+# H.264 and HEVC encodes carry the playable sample entry of ADR 0013's tag rule: avc1 and hvc1.
+X264=(-c:v libx264 -preset faster -tag:v avc1 -profile:v high -level:v 10 -vf scale=-2:36,format=yuv420p -b:v 6000 -maxrate 6000 -bufsize 12000)
 SVT=(-c:v libsvtav1 -preset 10 -level:v 20 -vf scale=-2:36,format=yuv420p -crf 35 -maxrate 6000 -svtav1-params mbr-overshoot-pct=0:lp=1)
-X265=(-c:v libx265 -preset veryfast -profile:v main -vf scale=-2:36,format=yuv420p -b:v 6000 -maxrate 6000 -bufsize 12000)
+X265=(-c:v libx265 -preset veryfast -tag:v hvc1 -profile:v main -vf scale=-2:36,format=yuv420p -b:v 6000 -maxrate 6000 -bufsize 12000)
 # The worker's libx265 parameters, which close its GOPs, turn off its scene cuts and force the level
 # and Main tier, followed by the fixture-only ones that keep it single-threaded and quiet. FFmpeg
 # keeps only the last -x265-params, so the fixture-only keys join the worker's string instead of
@@ -65,9 +66,13 @@ X265_PARAMS=(-x265-params no-scenecut=1:no-open-gop=1:level-idc=10:high-tier=0:p
 AAC=(-c:a aac -ac 1 -b:a 8k)
 # The worker declares a copied stream's bitrate unknown (-b:a 0): the mp4 muxer would otherwise write
 # the demuxer's measurement, which a seek into an MPEG-TS source changes, into the initialization segment.
-COPY_PIPE=(-c:v copy -c:a copy -bsf:a aac_adtstoasc -b:a 0)
-COPY_PIPE_WITHOUT_ADTSTOASC=(-c:v copy -c:a copy -b:a 0)
-COPY_HLS=(-c:v copy -c:a copy)
+# A copy of the H.264 sources carries avc1, with its record built from Annex B parameter sets, and
+# unofficial compliance, which keeps a Dolby Vision configuration record (ADR 0013's tag rule).
+COPY_VIDEO_PIPE=(-c:v copy -bsf:v h264_mp4toannexb -tag:v avc1 -strict unofficial)
+COPY_PIPE=("${COPY_VIDEO_PIPE[@]}" -c:a copy -bsf:a aac_adtstoasc -b:a 0)
+COPY_PIPE_WITHOUT_ADTSTOASC=("${COPY_VIDEO_PIPE[@]}" -c:a copy -b:a 0)
+# The HLS recipe's copies take the same video arguments, so that both recipes hold the same packets.
+COPY_HLS=("${COPY_VIDEO_PIPE[@]}" -c:a copy)
 COMMON_HLS=(-map_metadata -1 -map_chapters -1 -copyts -avoid_negative_ts disabled -max_muxing_queue_size 128 -max_delay 5000000)
 COMMON_PIPE=(-map_metadata -1 -map_chapters -1 -copyts -avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128)
 

@@ -33,9 +33,9 @@ tests the box reader, the grid model and the analysis arithmetic.
 CI's tooling job runs the recorder's node tests and
 `node src/test/fmp4-recorder/check-expectations.mjs`, without Docker or FFmpeg. The check re-reads
 every committed `.fmp4`, re-derives with the grid model everything that a recording's own bytes
-decide (tracks, initialization segment, media segments, preroll, failure, audio-only tail,
-diagnostics, a copy's keyframes, each HLS comparison's disagreements with the grid, the
-initialization-segment pairs), and fails on every fact `expected.json` states differently, on a
+decide (tracks, initialization segment, the initialization segment that the producer delivers,
+media segments, preroll, failure, audio-only tail, diagnostics, a copy's keyframes, each HLS
+comparison's disagreements with the grid, the initialization-segment pairs), and fails on every fact `expected.json` states differently, on a
 recording it does not describe, and on a described recording that is missing. The HLS muxer's own
 cuts, the sources, each recording's FFmpeg arguments and the ADR side claims need a recording run,
 so it takes those as recorded, and then fails on every claim of the recorder (see
@@ -76,8 +76,9 @@ probed frame rate passed as the worker would pass it (`r_frame_rate` 24000/1001 
 ffmpeg -hide_banner -nostdin -loglevel error
   -y [-ss S] -i SRC -map 0:v:0 -map 0:a:0 -map -0:s -map_metadata -1 -map_chapters -1
   -copyts -avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128
-  copy:   -c:v copy -c:a copy -bsf:a aac_adtstoasc -b:a 0
-  x264:   -c:v libx264 -preset faster -profile:v high -level:v 10
+  copy:   -c:v copy -bsf:v h264_mp4toannexb -tag:v avc1 -strict unofficial
+          -c:a copy -bsf:a aac_adtstoasc -b:a 0
+  x264:   -c:v libx264 -preset faster -tag:v avc1 -profile:v high -level:v 10
           -vf scale=-2:36,format=yuv420p -b:v 6000 -maxrate 6000 -bufsize 12000 -c:a aac -ac 1 -b:a 8k
           -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6
           -sc_threshold:v:0 0 -g:v:0 145                      (fixture 11: -g:v:0 143)
@@ -85,7 +86,7 @@ ffmpeg -hide_banner -nostdin -loglevel error
           -c:a aac -ac 1 -b:a 8k
           -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6
           -g:v:0 145 -keyint_min:v:0 145
-  x265:   -c:v libx265 -preset veryfast -profile:v main
+  x265:   -c:v libx265 -preset veryfast -tag:v hvc1 -profile:v main
           -vf scale=-2:36,format=yuv420p -b:v 6000 -maxrate 6000 -bufsize 12000 -c:a aac -ac 1 -b:a 8k
           -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6
           -x265-params no-scenecut=1:no-open-gop=1:level-idc=10:high-tier=0:pools=none:frame-threads=1:log-level=error
@@ -98,7 +99,23 @@ Each encode forces the codec profile, tier and level that the job carries, as th
 the 64x36 sources at 23.976 fps they are the values each encoder chooses when nothing is forced:
 H.264 High at level 1.0 (`avc1.64000A`), AV1 Main at level 2.0 (`av01.0.00M.08`), and H.265 Main at
 level 1.0 in the Main tier. Forcing them left the libx264 and SVT-AV1 recordings byte-identical.
+
+The H.264 and HEVC output carries the playable sample entry of ADR 0013's tag rule: `avc1` and
+`hvc1`. FFmpeg writes `avc1` for libx264 anyway, so the tag left the libx264 recordings
+byte-identical. Each copy passes `h264_mp4toannexb`, which puts the source's SPS and PPS before
+every keyframe in the samples; the MPEG-TS copy already carried them, so its recording did not
+change. The HLS recipe's copies take the same video arguments, so that both recipes hold the same
+packets.
 libx265 writes its parameters into the initialization segment, so its recordings grew by one byte.
+
+The producer removes the SEI messages from every `hvc1` record before it delivers the
+initialization segment. FFmpeg builds the record from the first sample when the source's record
+holds no parameter sets, and then copies that sample's SEI messages into it. Attempts that start at
+different keyframes would deliver different initialization segments, which ADR 0037 forbids. The
+samples keep their SEI messages. `deliveredInitializationSegment` in `expected.json` gives the
+length and SHA-256 of the initialization segment that the producer delivers. It differs from the
+recorded one only for the libx265 recordings, whose record holds libx265's settings as an SEI
+message: 1,421 bytes instead of 3,848.
 
 An encode forces its keyframes with FFmpeg's list mode: every segment boundary k × 6 in whole
 seconds, for each k from the attempt's start sequence number K up to, not including, the media
@@ -191,21 +208,21 @@ Timescale 24000 unless stated. `n@t` means segment n starts at t seconds.
 | 6 | `06-encode-audio-tail.fmp4` | 0 | 20 s video, 23.5 s audio. The recording ends in 4 audio-only fragments (19.95, 20.95, 21.95, 22.95 s), which join segment 3. No fragment without video precedes the first segment. |
 | 7 | `07-copy-start0.fmp4` | 0 | 2.002 s-GOP 23.976 fps copy from the start: 11 segments of 3 keyframes each. |
 | 7b | `07-copy-seek30.fmp4` | 5 | Stream-copy replacement attempt at `-ss 30`. The seek lands on the keyframe at 28.028 s (segment 4 < 5). That keyframe fragment and the non-sync fragment after it (2 fragments) are discarded preroll. Segments 5–10 carry exactly 7's video samples at the same ticks. Their audio is the same packets at the same times, but each fragment starts one AAC frame earlier (see findings). |
-| 8 | (pairs over 1, 7, 9, 13) | – | `initializationSegmentIdentityPairs`: `ftyp`+`moov` is byte-identical between the start-0 and seek recordings for libx264 (1346 B), stream copy (1328 B), SVT-AV1 (1334 B) and libx265 (3847 B). `initializationSegmentDifferencePairs`: the encode and copy initialization segments of the same source differ. Each initialization segment has a zero edit list and zero `trex` defaults. |
+| 8 | (pairs over 1, 7, 9, 13) | – | `initializationSegmentIdentityPairs`: `ftyp`+`moov` is byte-identical between the start-0 and seek recordings for libx264 (1346 B), stream copy (1328 B), SVT-AV1 (1334 B) and libx265 (3848 B). `initializationSegmentDifferencePairs`: the encode and copy initialization segments of the same source differ. Each initialization segment has a zero edit list and zero `trex` defaults. |
 | 9 | `09-svtav1-vfr.fmp4` | 0 | The VFR source through SVT-AV1 (145-frame GOP + the list): 1582 frames, exactly one keyframe in every interval, segment starts on exactly the ticks of 3 (libx264). SVT-AV1 honours the forced keyframe. No B-frame reordering, so composition offsets are 0. |
 | 9b | `09-svtav1-vfr-seek30.fmp4` | 5 | The same as a replacement attempt from segment 5, seeking one period early (`-ss 24`): starts at 24.024 s, 1007 frames, no padding. Segment 4 (one keyframe) is discarded preroll. Every delivered segment, 5–10, starts on exactly 9's ticks, including segment 5 at 30.030 s, which a seek to 30 s itself missed (see Observations). |
 | 10 | `10-copy-gop-exceeds-period.fmp4` | 0 | A copy with a keyframe every 10.01 s. The sync-first fragment at 20.02 s (fragment 20) is segment 3 while 2 is expected. It closes segment 1 (10.01–20.02 s, fragments 10–19), so segments 0 and 1 are delivered, then grouping fails with `SKIPPED_SEGMENT_NUMBER` and fragment 20 onwards is never grouped. |
 | 11 | `11-encode-cfr-floored-gop.fmp4` | 0 | The unverified-encoder case: the first 30 s of 1 under the floored GOP of 143 frames. The GOP keyframe one frame before every later boundary (frames 143, 287, 431, 575) and on the last frame (719) is a 1-frame keyframe-first fragment inside the earlier interval, so each of the 5 segments holds two keyframes, and every segment still opens at its forced keyframe. |
 | 12 | `12-encode-cfr-missed-forced-keyframe.fmp4` | 0 | libx264, first 30 s, 145-frame GOP, 18 left out of the list. The GOP count restarts at the forced keyframe at frame 288 (12.012 s), so the backstop keyframe comes 145 frames later at frame 433 (18.060 s), inside interval 3: 0@0, 1@6.006, 2@12.012, 3@18.060, 4@24.024, no number skipped. |
 | 12b | `12-svtav1-cfr-missed-forced-keyframe.fmp4` | 0 | The same through SVT-AV1: its backstop also lands at frame 433 (18.060 s). |
-| 13 | `13-x265-cfr.fmp4` | 0 | Constant 23.976 fps libx265, 66 s, with the worker's arguments (closed GOPs, no scene cuts, sample entry `hev1`) under the verified GOP of 145 frames. As in 1, the only keyframes are the forced frames (0, 144, 288 … 864, 1007, 1151, 1295, 1439), one per segment, 11 segments on 1's ticks. Every keyframe is an IDR picture (NAL type 20) with no leading pictures. |
+| 13 | `13-x265-cfr.fmp4` | 0 | Constant 23.976 fps libx265, 66 s, with the worker's arguments (closed GOPs, no scene cuts, sample entry `hvc1`) under the verified GOP of 145 frames. As in 1, the only keyframes are the forced frames (0, 144, 288 … 864, 1007, 1151, 1295, 1439), one per segment, 11 segments on 1's ticks. Every keyframe is an IDR picture (NAL type 20) with no leading pictures. |
 | 13b | `13-x265-cfr-missed-forced-keyframe.fmp4` | 0 | libx265 with 18 left out of the list: its GOP count restarts at frame 288 as well, and the backstop comes at frame 433 inside interval 3 as an IDR picture (NAL type 20). So the segment it opens decodes on its own. |
 | 13c | `13-x265-cfr-floored-gop.fmp4` | 0 | libx265 with the worker's arguments under the floored GOP of 143 frames of an encoder that is not keyframe-verified, first 30 s. As in 11, the GOP keyframe one frame before every later boundary (frames 143, 287, 431, 575) and on the last frame (719) joins the earlier segment: 5 segments of two keyframes, each opening at its forced keyframe. Every keyframe is an IDR picture (NAL type 20). |
 | 13d | `13-x265-cfr-seek30.fmp4` | 5 | The libx265 replacement attempt from segment 5, seeking one period early (`-ss 24`): starts at 24.024 s, and segment 4 is discarded preroll. The list `30,36,…,66` forces the frames 13 forced (720, 864, 1007, 1151, 1295, 1439), so every delivered segment, 5–10, starts on exactly 13's ticks. Every keyframe is an IDR picture. Ends with one audio-only fragment. |
 
 Box facts every recording shares (useful for the reader):
 - Top-level boxes are only `ftyp`, `moov`, `moof` and `mdat`, in that order, with no `largesize`, `styp` or `sidx`.
-- `moov` holds `mvhd`, two `trak`s (video track 1, audio track 2), `mvex` and `udta`. The video sample entry is `avc1` (libx264 and copies), `av01` (SVT-AV1) or `hev1` (libx265).
+- `moov` holds `mvhd`, two `trak`s (video track 1, audio track 2), `mvex` and `udta`. The video sample entry is `avc1` (libx264 and copies), `av01` (SVT-AV1) or `hvc1` (libx265).
 - Every `traf` has `tfhd` flags `0x02003a` (default-base-is-moof plus default duration, size and flags), `tfdt` version 1 and exactly one `trun`.
 - Every `trun` is version 1 (signed composition offsets) with a data offset. Sync status is carried by `trun` first_sample_flags (0x4) when present, otherwise by the `tfhd` default flags. Per-sample flags (0x400) never occur.
 - The largest fragment is 3.0 KB; every keyframe starts a fragment.
@@ -257,12 +274,14 @@ later each time and eventually skip a whole interval. When the list from the var
 ends before the last advertised boundary, every encoder therefore takes floor(P × fps),
 keyframe-verified or not. Every attempt of the variant takes that GOP, even one whose own list fits:
 libx265 writes its settings into the initialization segment, and 13 and 13c, keyint=145 and
-keyint=143, differ from byte 1,205 of their 3,847-byte initialization segments.
+keyint=143, differ from byte 1,205 of their 3,848-byte initialization segments. Those settings are an SEI
+message in the record, which the producer removes, so the worker delivers the same 1,421-byte
+initialization segment for both.
 
 ## The HLS muxer as differential evidence
 
 For every fixture the same source was also run through the HLS muxer (`-f hls -hls_segment_type fmp4`):
-- `*.hls-recipe`: the HLS muxer recipe that ADR 0037 replaces, as `FfmpegCommandBuilder` built it (no `-start_at_zero`, `-max_delay`, its keyframe arguments, with audio). It forces keyframes with the expression `expr:gte(t,n_forced*6)`, whose `t` counts from the attempt's first frame.
+- `*.hls-recipe`: the HLS muxer recipe that ADR 0037 replaces, as `FfmpegCommandBuilder` built it (no `-start_at_zero`, `-max_delay`, its keyframe arguments, with audio; its copies take the pipe recipe's video arguments). It forces keyframes with the expression `expr:gte(t,n_forced*6)`, whose `t` counts from the attempt's first frame.
 - `*.video-only`: the pipe recipe's own flags and keyframe arguments (the same list), video only; for
   fixtures 11, 12, 12b, 13b and 13c over the same first 30 s of the source.
 - `*.pipe-keyframes-with-audio` (1, 5a, 9): the pipe recipe's own flags and keyframe arguments, with audio.
@@ -432,7 +451,7 @@ settle what, if anything, changes because of them.
   its default open GOP, libx265 keyed every forced keyframe after frame 0 as a CRA picture, although
   the worker passes `-forced-idr 1`, and 13b's backstop CRA led a RASL picture that references the
   GOP before it. The worker now passes `-x265-params no-scenecut=1:no-open-gop=1`, which closes the
-  GOPs and stops keyframes at scene cuts. The `hvc1` tag (the recordings carry `hev1`) is worker #18's.
+  GOPs and stops keyframes at scene cuts.
 - **An encode can end in a 1-frame segment.** The server advertises 6 segments for 5a's 30.051 s
   source, and 5a's last constant-rate frame, at 30.030 s, is the first at or after the last advertised
   boundary, 30 s. The list forces it, so it forms segment 5 holding one frame and nothing else. Under

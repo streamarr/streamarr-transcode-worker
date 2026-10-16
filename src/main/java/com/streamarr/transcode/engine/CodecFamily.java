@@ -23,6 +23,16 @@ public enum CodecFamily {
         .findFirst();
   }
 
+  /** The codec family that the encoder writes; empty for an encoder of no listed family. */
+  static Optional<CodecFamily> ofEncoder(String encoder) {
+    return Arrays.stream(values())
+        .filter(
+            family ->
+                family.softwareEncoder.equals(encoder)
+                    || family.isHardwareEncoderOfThisFamily(encoder))
+        .findFirst();
+  }
+
   String softwareEncoder() {
     return softwareEncoder;
   }

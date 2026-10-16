@@ -18,7 +18,9 @@ Every file also carries a stereo AAC track, `mp4a.40.2`.
 | `copy-hev1.mp4` | stream copy of the same libx265 encode from Matroska | `hev1.1.6.L120.90` | 8-bit 4:2:0 |
 
 The sources are 1-second lavfi `testsrc2` pictures with silent audio, and they are not committed.
-An MP4 copy keeps the source's `hvc1` sample entry, and a Matroska copy becomes `hev1`.
+The two HEVC copies run without the worker's tag rule, so that the reader meets both sample
+entries: an MP4 copy keeps the source's `hvc1`, and a Matroska copy becomes `hev1`. The worker
+itself writes `hvc1` for both (ADR 0013).
 
 To record them again, run `src/test/fmp4-recorder/record-initialization-segments.sh` from the
 repository root. It needs Docker and Python 3, and `WORKER_IMAGE` names another image to record

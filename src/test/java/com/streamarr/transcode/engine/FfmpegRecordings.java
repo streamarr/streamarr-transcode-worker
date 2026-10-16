@@ -6,6 +6,10 @@ import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.fixtures.RecordingFixtures;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 import lombok.Builder;
@@ -51,25 +55,41 @@ public final class FfmpegRecordings {
   }
 
   /**
-   * The recording's initialization segment and media segments as the producer delivers them,
-   * without the preroll it discards between the two or anything after the last media segment.
+   * Asserts that the bytes are the recording as the producer delivers it: the initialization
+   * segment that expected.json digests, then the media segments, without the preroll that the
+   * producer discards or anything after the last media segment.
    */
-  public static byte[] deliveredBytesOf(Recording recording) {
+  public static void assertDeliveredAsExpected(byte[] delivered, Recording recording) {
+    var initializationSegment = recording.deliveredInitializationSegment();
+    assertThat(delivered)
+        .as("delivered bytes")
+        .hasSizeGreaterThanOrEqualTo(initializationSegment.byteLength());
+    assertThat(sha256Of(Arrays.copyOf(delivered, initializationSegment.byteLength())))
+        .as("SHA-256 of the delivered initialization segment")
+        .isEqualTo(initializationSegment.sha256());
+    assertThat(Arrays.copyOfRange(delivered, initializationSegment.byteLength(), delivered.length))
+        .as("delivered media segments")
+        .isEqualTo(mediaSegmentBytesOf(recording));
+  }
+
+  private static byte[] mediaSegmentBytesOf(Recording recording) {
     var recorded = bytesOf(recording.file());
-    var initializationSegmentLength = recording.initializationSegment().byteLength();
     var prerollLength =
         recording.discardedPreroll().stream().mapToLong(SegmentSummary::byteLength).sum();
     var mediaSegmentsLength =
         recording.segments().stream().mapToLong(SegmentSummary::byteLength).sum();
-    var delivered = new byte[Math.toIntExact(initializationSegmentLength + mediaSegmentsLength)];
-    System.arraycopy(recorded, 0, delivered, 0, initializationSegmentLength);
-    System.arraycopy(
-        recorded,
-        Math.toIntExact(initializationSegmentLength + prerollLength),
-        delivered,
-        initializationSegmentLength,
-        delivered.length - initializationSegmentLength);
-    return delivered;
+    var mediaStart =
+        Math.toIntExact(recording.initializationSegment().byteLength() + prerollLength);
+    return Arrays.copyOfRange(
+        recorded, mediaStart, Math.toIntExact(mediaStart + mediaSegmentsLength));
+  }
+
+  private static String sha256Of(byte[] bytes) {
+    try {
+      return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+    } catch (NoSuchAlgorithmException e) {
+      throw new IllegalStateException(e);
+    }
   }
 
   public record Expectations(List<Recording> fixtures) {}
@@ -96,6 +116,7 @@ public final class FfmpegRecordings {
       int startSequenceNumber,
       int mediaSegmentCount,
       Size initializationSegment,
+      Digest deliveredInitializationSegment,
       List<SegmentSummary> segments,
       List<SegmentSummary> discardedPreroll,
       Optional<ExpectedFailure> failure,
@@ -117,7 +138,7 @@ public final class FfmpegRecordings {
         case "copy" -> "avc1.F4000A";
         case "libx264" -> RecordingFixtures.ENCODED_RECORDING_CODEC_STRING;
         case "libsvtav1" -> "av01.0.00M.08";
-        case "libx265" -> "hev1.1.6.L30.90";
+        case "libx265" -> "hvc1.1.6.L30.90";
         default -> throw new AssertionError("No codec string is known for " + videoEncoder());
       };
     }
@@ -145,6 +166,9 @@ public final class FfmpegRecordings {
   }
 
   public record Size(int byteLength) {}
+
+  /** A segment's length and the SHA-256 of its bytes, in lowercase hexadecimal. */
+  public record Digest(int byteLength, String sha256) {}
 
   /**
    * A media segment by its number, the media time of its first video sample in the video track's

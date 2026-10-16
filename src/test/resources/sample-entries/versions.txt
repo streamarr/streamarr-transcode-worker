@@ -1,0 +1,4 @@
+ffmpeg version 8.1.2-Jellyfin Copyright (c) 2000-2026 the FFmpeg developers
+x265 [info]: HEVC encoder version 3.6+1-aa7f602f7
+dovi_tool 2.3.4
+MP4Box - GPAC version 26.08-DEV-rev132-g1b09ef3dd-master

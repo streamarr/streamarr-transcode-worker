@@ -15,6 +15,7 @@ import com.streamarr.transcode.engine.TrackCodec.Video;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
@@ -33,6 +34,9 @@ import org.junit.jupiter.params.provider.CsvSource;
 @Tag("UnitTest")
 @DisplayName("Codec Configuration Reader Tests")
 class CodecConfigurationReaderTest {
+
+  // The 22 bytes of an hvcC before its array count: Main at level 3.0, 8-bit 4:2:0.
+  private static final String HVCC_FIELDS = "0101600000009000000000005AF000FCFDF8F800000F";
 
   @ParameterizedTest(name = "{0}")
   @CsvSource({
@@ -367,6 +371,117 @@ class CodecConfigurationReaderTest {
     var segment = withAudioSampleEntry(box("ac-3", new byte[28]));
 
     assertThat(CodecConfigurationReader.firstVideoSampleEntryOf(segment)).isEmpty();
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({"copy-hvc1.mp4", "libx264-1080p60.mp4", "libsvtav1-1080p60.mp4"})
+  @DisplayName(
+      "Should find the parameter sets that the sample entry promises when the pinned image wrote"
+          + " the record")
+  void shouldFindTheParameterSetsThatTheSampleEntryPromisesWhenThePinnedImageWroteTheRecord(
+      String file) {
+    var sampleEntry =
+        CodecConfigurationReader.firstVideoSampleEntryOf(initializationSegment(file)).orElseThrow();
+
+    assertThat(CodecConfigurationReader.holdsPromisedParameterSets(sampleEntry)).isTrue();
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({
+    "no array, '', false",
+    "every parameter set, 20 21 22, true",
+    "a SEI array beside every parameter set, 20 21 22 27, true",
+    "no VPS, 21 22, false",
+    "no SPS, 20 22, false",
+    "no PPS, 20 21, false"
+  })
+  @DisplayName(
+      "Should find the parameter sets that hvc1 promises only when hvcC holds a VPS, an SPS and a"
+          + " PPS")
+  void shouldFindTheParameterSetsThatHvc1PromisesOnlyWhenHvccHoldsAVpsAnSpsAndAPps(
+      String description, String arrayTypes, boolean holds) {
+    var sampleEntry = videoSampleEntryOf(box("hvc1", new byte[78], hvcCWithArrays(arrayTypes)));
+
+    assertThat(CodecConfigurationReader.holdsPromisedParameterSets(sampleEntry)).isEqualTo(holds);
+  }
+
+  @Test
+  @DisplayName(
+      "Should find a promised parameter set missing when an hvcC array declares no NAL unit")
+  void shouldFindAPromisedParameterSetMissingWhenAnHvccArrayDeclaresNoNalUnit() {
+    var hvcC =
+        box("hvcC", hex(HVCC_FIELDS + "03" + "A0000100024001" + "A10000" + "A2000100024401"));
+    var sampleEntry = videoSampleEntryOf(box("hvc1", new byte[78], hvcC));
+
+    assertThat(CodecConfigurationReader.holdsPromisedParameterSets(sampleEntry)).isFalse();
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({
+    "an SPS and a PPS, E10002674201000268CE, true",
+    "no SPS, E001000268CE, false",
+    "no PPS, E10002674200, false"
+  })
+  @DisplayName(
+      "Should find the parameter sets that avc1 promises only when avcC holds an SPS and a PPS")
+  void shouldFindTheParameterSetsThatAvc1PromisesOnlyWhenAvccHoldsAnSpsAndAPps(
+      String description, String parameterSets, boolean holds) {
+    var avcC = box("avcC", hex("0142C00AFF" + parameterSets));
+    var sampleEntry = videoSampleEntryOf(box("avc1", new byte[78], avcC));
+
+    assertThat(CodecConfigurationReader.holdsPromisedParameterSets(sampleEntry)).isEqualTo(holds);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({"hev1", "dvhe", "avc3", "dvav"})
+  @DisplayName(
+      "Should find no promised parameter set missing when the sample entry lets the samples carry"
+          + " the parameter sets")
+  void shouldFindNoPromisedParameterSetMissingWhenTheSampleEntryLetsTheSamplesCarryTheParameterSets(
+      String sampleEntryType) {
+    var configuration = hvcCWithArrays("");
+    if (sampleEntryType.startsWith("avc") || sampleEntryType.equals("dvav")) {
+      configuration = box("avcC", hex("0142C00AFFE000"));
+    }
+
+    var sampleEntry = videoSampleEntryOf(box(sampleEntryType, new byte[78], configuration));
+
+    assertThat(CodecConfigurationReader.holdsPromisedParameterSets(sampleEntry)).isTrue();
+  }
+
+  @Test
+  @DisplayName(
+      "Should refuse the record as a malformed box when an hvc1 hvcC ends inside a NAL unit")
+  void shouldRefuseTheRecordAsAMalformedBoxWhenAnHvc1HvccEndsInsideANalUnit() {
+    var hvcC = box("hvcC", hex(HVCC_FIELDS + "01" + "A0000100094001"));
+    var sampleEntry = videoSampleEntryOf(box("hvc1", new byte[78], hvcC));
+
+    assertThatThrownBy(() -> CodecConfigurationReader.holdsPromisedParameterSets(sampleEntry))
+        .isInstanceOfSatisfying(
+            FragmentedMp4Exception.class,
+            exception -> assertThat(exception.getReason()).isEqualTo(Reason.MALFORMED_BOX));
+  }
+
+  // An hvcC whose arrays each hold one two-byte NAL unit of each listed hexadecimal type.
+  private static byte[] hvcCWithArrays(String arrayTypes) {
+    var types = List.<String>of();
+    if (!arrayTypes.isBlank()) {
+      types = List.of(arrayTypes.split(" "));
+    }
+
+    var arrays = new StringBuilder("%02X".formatted(types.size()));
+    for (var type : types) {
+      var nalUnitType = Integer.parseInt(type, 16);
+      arrays.append("%02X0001".formatted(0x80 | nalUnitType));
+      arrays.append("0002%02X01".formatted(nalUnitType << 1));
+    }
+
+    return box("hvcC", hex(HVCC_FIELDS + arrays));
+  }
+
+  private static BoxView videoSampleEntryOf(byte[] sampleEntry) {
+    return CodecConfigurationReader.firstVideoSampleEntryOf(withVideoSampleEntry(sampleEntry))
+        .orElseThrow();
   }
 
   private static InitializationSegment withVideoSampleEntry(byte[] sampleEntry) {

@@ -66,6 +66,10 @@ class Fields {
     return this.data.readUInt8(this.take(1));
   }
 
+  u16() {
+    return this.data.readUInt16BE(this.take(2));
+  }
+
   u24() {
     return this.data.readUIntBE(this.take(3), 3);
   }
@@ -451,6 +455,70 @@ function useBufferOffsets(moof) {
 }
 
 /** Reads several files as one concatenated stream. */
+// The fields before the child boxes of each box on the way to an hvc1 record, the hvcC fields
+// before its array count (ISO/IEC 14496-15 8.3.2.1.2), and the NAL unit types of prefix and suffix
+// SEI messages (ITU-T H.265 table 7-1).
+const FIELDS_BEFORE_CHILDREN = { moov: 0, trak: 0, mdia: 0, minf: 0, stbl: 0, stsd: 8, hvc1: VISUAL_SAMPLE_ENTRY_BYTES };
+const HVCC_FIELDS_BEFORE_ARRAYS = 22;
+const HEVC_SEI_NAL_UNIT_TYPES = new Set([39, 40]);
+
+/**
+ * The initialization segment as the worker delivers it: each hvc1 record without its arrays of SEI
+ * messages, and each box that holds such a record resized to fit. Every other byte is kept.
+ */
+export function deliveredInitializationSegment(initializationSegment) {
+  return rebuiltBoxes(initializationSegment, 0, initializationSegment.length);
+}
+
+function rebuiltBoxes(data, start, end) {
+  const rebuilt = [];
+  for (const [type, boxStart, body, stop] of boxes(data, start, end)) {
+    const header = data.subarray(boxStart, body);
+    if (type === 'hvcC') {
+      rebuilt.push(resized(header, hvcCWithoutSei(data, body, stop)));
+    } else if (Object.hasOwn(FIELDS_BEFORE_CHILDREN, type)) {
+      const children = new Fields(data, [body, stop], type).skip(FIELDS_BEFORE_CHILDREN[type]).position;
+      rebuilt.push(resized(header, Buffer.concat([data.subarray(body, children), rebuiltBoxes(data, children, stop)])));
+    } else {
+      rebuilt.push(data.subarray(boxStart, stop));
+    }
+  }
+  return Buffer.concat(rebuilt);
+}
+
+function resized(header, body) {
+  const box = Buffer.concat([header, body]);
+  if (header.length === 16) {
+    box.writeBigUInt64BE(BigInt(box.length), 8);
+  } else {
+    box.writeUInt32BE(box.length, 0);
+  }
+  return box;
+}
+
+function hvcCWithoutSei(data, body, stop) {
+  const fields = new Fields(data, [body, stop], 'hvcC').skip(HVCC_FIELDS_BEFORE_ARRAYS);
+  const arrayCount = fields.u8();
+  const kept = [];
+  for (let array = 0; array < arrayCount; array += 1) {
+    const arrayStart = fields.position;
+    const nalUnitType = fields.u8() & 0x3f;
+    const nalUnits = fields.u16();
+    for (let nalUnit = 0; nalUnit < nalUnits; nalUnit += 1) {
+      fields.skip(fields.u16());
+    }
+    if (!HEVC_SEI_NAL_UNIT_TYPES.has(nalUnitType)) {
+      kept.push(data.subarray(arrayStart, fields.position));
+    }
+  }
+  return Buffer.concat([
+    data.subarray(body, body + HVCC_FIELDS_BEFORE_ARRAYS),
+    Buffer.from([kept.length]),
+    ...kept,
+    data.subarray(fields.position, stop),
+  ]);
+}
+
 export function readFiles(paths) {
   return readStream(Buffer.concat(paths.map((path) => readFileSync(path))));
 }

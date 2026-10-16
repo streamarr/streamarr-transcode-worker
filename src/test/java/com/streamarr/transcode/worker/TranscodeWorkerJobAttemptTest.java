@@ -1,7 +1,7 @@
 package com.streamarr.transcode.worker;
 
+import static com.streamarr.transcode.engine.FfmpegRecordings.assertDeliveredAsExpected;
 import static com.streamarr.transcode.engine.FfmpegRecordings.bytesOf;
-import static com.streamarr.transcode.engine.FfmpegRecordings.deliveredBytesOf;
 import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
 import static com.streamarr.transcode.fixtures.Races.awaitStart;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
@@ -1043,7 +1043,7 @@ class TranscodeWorkerJobAttemptTest {
           .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
       var uploaded = new ByteArrayOutputStream();
       connection.uploads().forEach(upload -> uploaded.writeBytes(upload.content()));
-      assertThat(uploaded.toByteArray()).isEqualTo(deliveredBytesOf(recording));
+      assertDeliveredAsExpected(uploaded.toByteArray(), recording);
       assertThat(processOf(launcher, job).wasDestroyedForcibly()).isTrue();
     }
   }
@@ -1656,7 +1656,7 @@ class TranscodeWorkerJobAttemptTest {
 
   private static List<Long> expectedLengths(Recording recording) {
     return Stream.concat(
-            Stream.of((long) recording.initializationSegment().byteLength()),
+            Stream.of((long) recording.deliveredInitializationSegment().byteLength()),
             recording.segments().stream().map(SegmentSummary::byteLength))
         .toList();
   }

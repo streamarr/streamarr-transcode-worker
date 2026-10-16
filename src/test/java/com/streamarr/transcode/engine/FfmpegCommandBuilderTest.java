@@ -470,6 +470,118 @@ class FfmpegCommandBuilderTest {
     assertThat(cmd).containsSequence("-c:v", "libsvtav1");
   }
 
+  @ParameterizedTest(name = "{0} source, {1}")
+  @CsvSource({
+    "hvc1, REMUX, hevc_mp4toannexb, hvc1",
+    "hev1, REMUX, hevc_mp4toannexb, hvc1",
+    "dvh1, AUDIO_TRANSCODE, hevc_mp4toannexb, hvc1",
+    "dvhe, REMUX, hevc_mp4toannexb, hvc1",
+    "avc1, AUDIO_TRANSCODE, h264_mp4toannexb, avc1",
+    "avc3, REMUX, h264_mp4toannexb, avc1",
+    "dva1, REMUX, h264_mp4toannexb, avc1",
+    "dvav, AUDIO_TRANSCODE, h264_mp4toannexb, avc1"
+  })
+  @DisplayName(
+      "Should write the codec family's playable sample entry from parameter sets the record or the"
+          + " samples hold when the video is copied")
+  void
+      shouldWriteTheCodecFamilysPlayableSampleEntryFromParameterSetsTheRecordOrTheSamplesHoldWhenTheVideoIsCopied(
+          String sourceSampleEntry, TranscodeMode mode, String filter, String sampleEntry) {
+    var copy = new VideoDecision.Copy(sourceSampleEntry + ".64001F");
+    var request = request(decision(mode).videoDecision(copy).build()).build();
+
+    var cmd = command(request, "copy");
+
+    assertThat(cmd)
+        .containsSequence("-c:v", "copy", "-bsf:v", filter, "-tag:v", sampleEntry)
+        .containsOnlyOnce("-bsf:v", "-tag:v");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"av01.0.08M.08", "vp09.00.40.08", "mp4v.20.9"})
+  @DisplayName(
+      "Should leave the sample entry to FFmpeg when the copied video is neither H.264 nor HEVC")
+  void shouldLeaveTheSampleEntryToFfmpegWhenTheCopiedVideoIsNeitherH264NorHevc(String codecString) {
+    var request =
+        request(
+                decision(TranscodeMode.REMUX)
+                    .videoDecision(new VideoDecision.Copy(codecString))
+                    .build())
+            .build();
+
+    assertThat(command(request, "copy")).doesNotContain("-tag:v", "-bsf:v");
+  }
+
+  @Test
+  @DisplayName(
+      "Should leave the sample entry to FFmpeg when a copying request's video decision is an"
+          + " encode")
+  void shouldLeaveTheSampleEntryToFfmpegWhenACopyingRequestsVideoDecisionIsAnEncode() {
+    var request =
+        request(decision(TranscodeMode.REMUX).videoDecision(hevcEncode().build()).build()).build();
+
+    assertThat(command(request, "copy"))
+        .containsSequence("-c:v", "copy", "-strict", "unofficial")
+        .doesNotContain("-tag:v", "-bsf:v");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"hvc1.2.4.L63.90", "avc1.64001F", "av01.0.08M.08"})
+  @DisplayName(
+      "Should let the mp4 muxer keep the Dolby Vision configuration record when the video is"
+          + " copied")
+  void shouldLetTheMp4MuxerKeepTheDolbyVisionConfigurationRecordWhenTheVideoIsCopied(
+      String codecString) {
+    var request =
+        request(
+                decision(TranscodeMode.AUDIO_TRANSCODE)
+                    .videoDecision(new VideoDecision.Copy(codecString))
+                    .build())
+            .build();
+
+    assertThat(command(request, "copy")).containsSequence("-strict", "unofficial");
+  }
+
+  @ParameterizedTest(name = "{0} writes {1}")
+  @CsvSource({
+    "libx265, hvc1",
+    "hevc_nvenc, hvc1",
+    "hevc_qsv, hvc1",
+    "hevc_videotoolbox, hvc1",
+    "libx264, avc1",
+    "h264_vaapi, avc1",
+    "h264_videotoolbox, avc1"
+  })
+  @DisplayName("Should write the codec family's playable sample entry when an encoder runs")
+  void shouldWriteTheCodecFamilysPlayableSampleEntryWhenAnEncoderRuns(
+      String encoder, String sampleEntry) {
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), encoder);
+
+    assertThat(cmd)
+        .containsSequence("-c:v", encoder)
+        .containsSequence("-tag:v", sampleEntry)
+        .containsOnlyOnce("-tag:v")
+        .doesNotContain("-bsf:v");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"libsvtav1", "av1_nvenc", "av1_vaapi"})
+  @DisplayName("Should leave the sample entry to FFmpeg when an AV1 encoder runs")
+  void shouldLeaveTheSampleEntryToFfmpegWhenAnAv1EncoderRuns(String encoder) {
+    var cmd = command(request(TranscodeMode.VIDEO_TRANSCODE).build(), encoder);
+
+    assertThat(cmd).isNotEmpty().doesNotContain("-tag:v", "-bsf:v");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"libx264", "libx265", "libsvtav1", "hevc_nvenc"})
+  @DisplayName("Should keep FFmpeg's strict compliance when an encoder runs")
+  void shouldKeepFfmpegsStrictComplianceWhenAnEncoderRuns(String encoder) {
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), encoder);
+
+    assertThat(cmd).isNotEmpty().doesNotContain("-strict", "unofficial");
+  }
+
   @ParameterizedTest
   @EnumSource(
       value = TranscodeMode.class,

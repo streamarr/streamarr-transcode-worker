@@ -1,7 +1,7 @@
 package com.streamarr.transcode.engine;
 
+import static com.streamarr.transcode.engine.FfmpegRecordings.assertDeliveredAsExpected;
 import static com.streamarr.transcode.engine.FfmpegRecordings.bytesOf;
-import static com.streamarr.transcode.engine.FfmpegRecordings.deliveredBytesOf;
 import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
 import static com.streamarr.transcode.fixtures.Races.awaitStart;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
@@ -68,6 +68,14 @@ class ProducerTest {
   private static final int RACE_ITERATIONS = 200;
   private static final int BURSTS = 12;
   private static final int BURST_SLOTS = 3;
+
+  // The fields of an hvcC up to its array count, for HEVC Main at level 3.0: hvc1.1.6.L90.90.
+  private static final String HVCC_FIELDS = "0101600000009000000000005AF000FCFDF8F800000F";
+  private static final String HVCC_VPS_ARRAY = "A0000100024001";
+  private static final String HVCC_SPS_PPS_ARRAYS = "A1000100024201" + "A2000100024401";
+  private static final String HVC1_RECORD_CODEC_STRING = "hvc1.1.6.L90.90";
+  private static final byte[] HVC1_PARAMETER_SET_RECORD =
+      HexFormat.of().parseHex(HVCC_FIELDS + "03" + HVCC_VPS_ARRAY + HVCC_SPS_PPS_ARRAYS);
 
   // Where the reader of nearlyCappedSegments() stops while the first segment awaits acceptance:
   // before the body of the third segment's first mdat, which the budget cannot admit.
@@ -141,7 +149,7 @@ class ProducerTest {
 
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
     assertThat(sink.accepted()).containsExactlyElementsOf(expectedDeliveries(recording));
-    assertThat(sink.acceptedBytes()).isEqualTo(deliveredBytesOf(recording));
+    assertDeliveredAsExpected(sink.acceptedBytes(), recording);
   }
 
   @ParameterizedTest(name = "{0}")
@@ -588,7 +596,7 @@ class ProducerTest {
     assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.SKIPPED_SEGMENT_NUMBER);
     assertThat(process.wasDestroyedForcibly()).isTrue();
     assertThat(sink.accepted()).containsExactlyElementsOf(expectedDeliveries(recording));
-    assertThat(sink.acceptedBytes()).isEqualTo(deliveredBytesOf(recording));
+    assertDeliveredAsExpected(sink.acceptedBytes(), recording);
   }
 
   // ADR 0037: a skip lets the segment it closed finish delivery before the skip is recorded, but
@@ -801,6 +809,149 @@ class ProducerTest {
             .start();
 
     assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
+    assertThat(sink.acceptedNames()).isEmpty();
+  }
+
+  // Records that declare the copy's codec string but none of the parameter sets that their sample
+  // entry promises, as FFmpeg writes them when the source carries its parameter sets only in its
+  // samples.
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({
+    "hvc1, hvcC, 0101600000009000000000005AF000FCFDF8F800000F00, hvc1.1.6.L90.90",
+    "avc1, avcC, 0142C00AFFE000, avc1.42C00A"
+  })
+  @DisplayName(
+      "Should fail the attempt as an output mismatch when the record holds none of the parameter"
+          + " sets that its sample entry promises")
+  void
+      shouldFailTheAttemptAsAnOutputMismatchWhenTheRecordHoldsNoneOfTheParameterSetsThatItsSampleEntryPromises(
+          String sampleEntryType, String recordType, String recordHex, String codecString) {
+    var sampleEntry =
+        IsoBoxes.box(
+            sampleEntryType,
+            new byte[78],
+            IsoBoxes.box(recordType, HexFormat.of().parseHex(recordHex)));
+    var output =
+        IsoBoxes.concat(
+            IsoBoxes.ftyp(),
+            IsoBoxes.moov(IsoBoxes.Track.video().sampleEntry(sampleEntry).build()));
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer =
+        producerLaunching(process)
+            .periodSeconds(6)
+            .videoDecision(new VideoDecision.Copy(codecString))
+            .start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
+    assertThat(failure.detail()).contains("parameter sets");
+    assertThat(sink.acceptedNames()).isEmpty();
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as an output mismatch when the record ends inside a parameter set")
+  void shouldFailTheAttemptAsAnOutputMismatchWhenTheRecordEndsInsideAParameterSet() {
+    var truncatedArray =
+        HexFormat.of().parseHex("0101600000009000000000005AF000FCFDF8F800000F01A0000100094001");
+    var sampleEntry = IsoBoxes.box("hvc1", new byte[78], IsoBoxes.box("hvcC", truncatedArray));
+    var output =
+        IsoBoxes.concat(
+            IsoBoxes.ftyp(),
+            IsoBoxes.moov(IsoBoxes.Track.video().sampleEntry(sampleEntry).build()));
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer =
+        producerLaunching(process)
+            .periodSeconds(6)
+            .videoDecision(new VideoDecision.Copy("hvc1.1.6.L90.90"))
+            .start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
+    assertThat(sink.acceptedNames()).isEmpty();
+  }
+
+  // FFmpeg copies every SEI message of the first sample into the record when it builds the record
+  // from the samples, so two attempts of one copy can write different records.
+  @ParameterizedTest(name = "NAL unit type {0}")
+  @ValueSource(ints = {39, 40})
+  @DisplayName(
+      "Should deliver the hvc1 record without its SEI messages when FFmpeg writes SEI messages into"
+          + " the record")
+  void shouldDeliverTheHvc1RecordWithoutItsSeiMessagesWhenFfmpegWritesSeiMessagesIntoTheRecord(
+      int seiNalUnitType) {
+    var fragment = keyframeFragment(0, 1);
+    var output =
+        IsoBoxes.concat(
+            hevcInitializationSegment(hvc1Entry(recordWithSeiArray(seiNalUnitType))), fragment);
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer =
+        producerOfOneSecondSegments(process)
+            .videoDecision(new VideoDecision.Copy(HVC1_RECORD_CODEC_STRING))
+            .start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(sink.acceptedBytes())
+        .isEqualTo(
+            IsoBoxes.concat(
+                hevcInitializationSegment(hvc1Entry(HVC1_PARAMETER_SET_RECORD)), fragment));
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep the 64-bit header of the box that holds the hvc1 record when the producer"
+          + " removes the record's SEI messages")
+  void
+      shouldKeepThe64BitHeaderOfTheBoxThatHoldsTheHvc1RecordWhenTheProducerRemovesTheRecordsSeiMessages() {
+    var largeEntry =
+        IsoBoxes.largeSizeBox(
+            "hvc1", IsoBoxes.concat(new byte[78], IsoBoxes.box("hvcC", recordWithSeiArray(39))));
+    var fragment = keyframeFragment(0, 1);
+    var process =
+        ScriptedProcess.builder()
+            .output(IsoBoxes.concat(hevcInitializationSegment(largeEntry), fragment))
+            .build();
+
+    var producer =
+        producerOfOneSecondSegments(process)
+            .videoDecision(new VideoDecision.Copy(HVC1_RECORD_CODEC_STRING))
+            .start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    var expectedEntry =
+        IsoBoxes.largeSizeBox(
+            "hvc1", IsoBoxes.concat(new byte[78], IsoBoxes.box("hvcC", HVC1_PARAMETER_SET_RECORD)));
+    assertThat(sink.acceptedBytes())
+        .isEqualTo(IsoBoxes.concat(hevcInitializationSegment(expectedEntry), fragment));
+  }
+
+  // The audio sample entry declares fewer bytes than its own header, or more than its stsd holds.
+  @ParameterizedTest(name = "{0} bytes")
+  @ValueSource(longs = {4, 10_000})
+  @DisplayName(
+      "Should fail the attempt as malformed output when a box in another track declares a size that"
+          + " its parent cannot hold")
+  void
+      shouldFailTheAttemptAsMalformedOutputWhenABoxInAnotherTrackDeclaresASizeThatItsParentCannotHold(
+          long declaredBytes) {
+    var output =
+        IsoBoxes.concat(
+            IsoBoxes.ftyp(),
+            IsoBoxes.moov(
+                IsoBoxes.Track.video().sampleEntry(hvc1Entry(HVC1_PARAMETER_SET_RECORD)).build(),
+                IsoBoxes.Track.audio()
+                    .sampleEntry(IsoBoxes.header(declaredBytes, "mp4a"))
+                    .build()));
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer =
+        producerOfOneSecondSegments(process)
+            .videoDecision(new VideoDecision.Copy(HVC1_RECORD_CODEC_STRING))
+            .start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.MALFORMED_OUTPUT);
     assertThat(sink.acceptedNames()).isEmpty();
   }
 
@@ -1963,6 +2114,30 @@ class ProducerTest {
     return producerLaunching(process).periodSeconds(1).startSequenceNumber(0);
   }
 
+  // The parameter-set record with an array of one SEI message between its VPS and its SPS.
+  private static byte[] recordWithSeiArray(int seiNalUnitType) {
+    var seiArray = "%02X0001000%d%02X0105".formatted(seiNalUnitType, 3, seiNalUnitType << 1);
+    return HexFormat.of()
+        .parseHex(HVCC_FIELDS + "04" + HVCC_VPS_ARRAY + seiArray + HVCC_SPS_PPS_ARRAYS);
+  }
+
+  // An hvc1 sample entry whose record is followed by a pasp box.
+  private static byte[] hvc1Entry(byte[] hvcCBody) {
+    return IsoBoxes.box(
+        "hvc1",
+        new byte[78],
+        IsoBoxes.box("hvcC", hvcCBody),
+        IsoBoxes.box("pasp", IsoBoxes.u32(1), IsoBoxes.u32(1)));
+  }
+
+  private static byte[] hevcInitializationSegment(byte[] videoSampleEntry) {
+    return IsoBoxes.concat(
+        IsoBoxes.ftyp(),
+        IsoBoxes.moov(
+            IsoBoxes.Track.video().sampleEntry(videoSampleEntry).build(),
+            IsoBoxes.Track.audio().build()));
+  }
+
   @Builder
   private record BurstStart(byte[] output, SegmentMemoryBudget budget, int burst) {}
 
@@ -2045,7 +2220,7 @@ class ProducerTest {
   }
 
   private static List<Accepted> expectedDeliveries(Recording recording) {
-    var initializationSegmentLength = recording.initializationSegment().byteLength();
+    var initializationSegmentLength = recording.deliveredInitializationSegment().byteLength();
     var mediaSegments =
         recording.segments().stream()
             .map(
