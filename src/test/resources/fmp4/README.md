@@ -8,12 +8,15 @@ explains the cause.
 `RecordedFfmpegOutputTest` runs the real `FragmentedMp4Reader` and `SegmentGrouper` over every
 recording and asserts `expected.json`, so the reader and grouper are pinned to the worker's own
 FFmpeg output (ADR "Tests substitute the process"). `ProducerTest` replays every recording through
-the real producer, which rebuilds each media segment the grouper closes as one `moof` and one
-`mdat` and places each audio sample in the segment whose interval holds its start, and checks the
-delivered samples against the recording's own, sample by sample. `FfmpegCommandBuilderRecipeTest` builds the
-worker's FFmpeg command for every recording that follows the recipe (no `recipeDeviation`) and
-requires it to equal that recording's `ffmpegArguments` without the fixture-only additions, so the
-recordings and the worker's command cannot drift apart. `FfmpegRecordings` loads a recording and its
+the real producer, which removes the SEI messages from an `hvc1` record, rebuilds each media segment
+the grouper closes as one `moof` and one `mdat` and places each audio sample in the segment whose
+interval holds its start. It checks the delivered initialization segment against
+`deliveredInitializationSegment`, which equals the recorded `ftyp` and `moov` for every recording but
+the libx265 ones, and the delivered samples against the recording's own, sample by sample.
+`FfmpegCommandBuilderRecipeTest` builds the worker's FFmpeg command for every recording that
+follows the recipe (no `recipeDeviation`) and requires it to equal that recording's
+`ffmpegArguments` without the fixture-only additions, so the recordings and the worker's command
+cannot drift apart. `FfmpegRecordings` loads a recording and its
 expectations for any test, such as one that replays the bytes through a scripted `Process`.
 
 | File | What it is |
@@ -38,8 +41,8 @@ CI's tooling job runs the recorder's node tests and
 every committed `.fmp4`, re-derives with the grid model everything that a recording's own bytes
 decide (tracks, initialization segment, the initialization segment that the producer delivers,
 media segments, preroll, failure, audio-only tail, diagnostics, a copy's keyframes, each HLS
-comparison's disagreements with the grid, the initialization-segment pairs), and fails on every fact `expected.json` states differently, on a
-recording it does not describe, and on a described recording that is missing. The HLS muxer's own
+comparison's disagreements with the grid, the initialization-segment pairs), and fails on every
+fact `expected.json` states differently, on a recording it does not describe, and on a described recording that is missing. The HLS muxer's own
 cuts, the sources, each recording's FFmpeg arguments and the ADR side claims need a recording run,
 so it takes those as recorded, and then fails on every claim of the recorder (see
 [Regenerating](#regenerating)) that the facts in `expected.json` contradict.
