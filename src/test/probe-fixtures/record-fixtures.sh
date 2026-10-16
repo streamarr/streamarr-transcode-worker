@@ -191,6 +191,14 @@ SVTAV1=(-c:v libsvtav1 -preset 10 -svtav1-params log-level=0 -pix_fmt yuv420p10l
 "${FF[@]}" "${VIDEO[@]}" "${TONE[@]}" -map 0:v -map 1:a -map 1:a -map 1:a -map 1:a "${X264[@]}" \
   -c:a:0 ac3 -c:a:1 eac3 -c:a:2 flac -c:a:3 alac -strict -2 mp4-audio-codecs.mp4
 
+# H.264 and HEVC in MP4, whose record headers edit-mp4-boxes.py rewrites to name another level than
+# their parameter sets do.
+"${FF[@]}" "${VIDEO[@]}" "${X264[@]}" mp4-avc-record-level.mp4
+"${FF[@]}" "${VIDEO[@]}" -c:v libx265 -preset ultrafast -x265-params log-level=none -tag:v hvc1 \
+  mp4-hevc-record-level.mp4
+# AAC LC in ADTS, whose frame headers edit-adts-profile.py rewrites as AAC Main and AAC LTP.
+"${FF[@]}" "${TONE[@]}" -c:a aac -f adts aac-lc.adts
+
 # 8-bit SDR with BT.709 color signaling.
 "${FF[@]}" "${VIDEO[@]}" "${X264[@]}" \
   -vf setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709 mp4-sdr8-bt709.mp4
@@ -204,6 +212,17 @@ cat > "$WORK/cropped.sh" <<'CONTAINER'
 set -euo pipefail
 cd /work
 ffmpeg -hide_banner -nostdin -loglevel error -y -i mp4-clap.mp4 -c copy mkv-pixel-crop.mkv
+CONTAINER
+
+cat > "$WORK/adts.sh" <<'CONTAINER'
+set -euo pipefail
+cd /work
+FF=(timeout 60 ffmpeg -hide_banner -nostdin -loglevel error -y)
+for profile in main ltp; do
+  "${FF[@]}" -f lavfi -i testsrc2=size=64x36:rate=24:duration=2 -i "aac-$profile.adts" \
+    -map 0:v -map 1:a -c:v libx264 -preset ultrafast -pix_fmt yuv420p -c:a copy \
+    "mpegts-aac-$profile.ts"
+done
 CONTAINER
 
 cat > "$WORK/fate.sh" <<'CONTAINER'
@@ -223,7 +242,8 @@ cat > "$WORK/probe.sh" <<'CONTAINER'
 set -euo pipefail
 cd /work
 for source in "$@"; do
-  # The probe's own arguments, as FfprobeExecutor passes them.
+  # The probe's own arguments, as FfprobeExecutor passes them, and -show_data, which prints the
+  # extradata that the probe reads for each video and audio stream in separate runs.
   ffprobe -v quiet -print_format json -analyzeduration 200M -probesize 1G -scan_all_pmts 0 \
     -show_streams -show_format -show_chapters -show_data -show_error "$source" \
     > "$(basename "$source").json"
@@ -236,7 +256,12 @@ in_image sources.sh
 python3 "$HERE/edit-mp4-boxes.py" clap "$WORK/mp4-clap.mp4" 56 32
 python3 "$HERE/edit-mp4-boxes.py" udta-first "$WORK/mp4-cover-art-first.mp4"
 python3 "$HERE/edit-mp4-boxes.py" er-aac-lc "$WORK/mp4-er-aac-lc.mp4"
+python3 "$HERE/edit-mp4-boxes.py" record-level "$WORK/mp4-avc-record-level.mp4" 51
+python3 "$HERE/edit-mp4-boxes.py" record-level "$WORK/mp4-hevc-record-level.mp4" 153
+python3 "$HERE/edit-adts-profile.py" "$WORK/aac-lc.adts" "$WORK/aac-main.adts" 0
+python3 "$HERE/edit-adts-profile.py" "$WORK/aac-lc.adts" "$WORK/aac-ltp.adts" 3
 in_image cropped.sh
+in_image adts.sh
 
 FIXTURES_TO_PROBE=(mp4-titled.mp4 mkv-remuxed-from-mp4.mkv mp4-default-handlers.mp4
   mkv-pipe-hevc-10bit.mkv mpegts-empty-audio.ts mkv-mp3-11khz.mkv mkv-offset-chapters.mkv
@@ -244,7 +269,8 @@ FIXTURES_TO_PROBE=(mp4-titled.mp4 mkv-remuxed-from-mp4.mkv mp4-default-handlers.
   mp4-cover-art-first.mp4 mp4-er-aac-lc.mp4 mp4-hdr10-static.mp4 mkv-hdr10-static.mkv
   mp4-hdr10-maxfall-zero.mp4 mkv-hdr10-maxfall-zero.mkv mp4-hdr10-sei-only.mp4 mp4-sdr8-bt709.mp4
   mpegts-hevc-ac3.ts ivf-av1-10bit.ivf obu-av1-10bit.obu mkv-av1-10bit.mkv
-  mp4-av1-10bit.mp4 mp4-audio-codecs.mp4)
+  mp4-av1-10bit.mp4 mp4-audio-codecs.mp4 mp4-avc-record-level.mp4 mp4-hevc-record-level.mp4
+  mpegts-aac-main.ts mpegts-aac-ltp.ts)
 if [ -n "${FATE_SUITE:-}" ]; then
   in_image fate.sh
   FIXTURES_TO_PROBE+=(mkv-eac3-atmos-dts-hd-ma.mkv mp4-dovi-p5-hev1.mp4 mkv-hdr10-fate.mkv

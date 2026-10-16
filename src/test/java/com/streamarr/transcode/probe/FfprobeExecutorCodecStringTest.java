@@ -86,12 +86,83 @@ class FfprobeExecutorCodecStringTest {
       assertThat(audio.getCodecString()).isEqualTo("mp4a.40.2");
     }
 
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+      "mpegts-aac-main.ts, mp4a.40.1",
+      "mpegts-aac-ltp.ts, mp4a.40.4",
+    })
+    @DisplayName("Should report the ADTS profile's object type when an ADTS stream is Main or LTP")
+    void shouldReportTheAdtsProfilesObjectTypeWhenAnAdtsStreamIsMainOrLtp(
+        String fixture, String codecString) {
+      var audio = streamOf(fixture, 1);
+
+      assertThat(audio.getCodecString()).isEqualTo(codecString);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({"SSR, mp4a.40.3", "HE-AACv2, mp4a.40.2"})
+    @DisplayName("Should report the ADTS profile's object type when ffprobe names the profile")
+    void shouldReportTheAdtsProfilesObjectTypeWhenFfprobeNamesTheProfile(
+        String profile, String codecString) {
+      // ADTS carries HE-AAC v2 as AAC LC with implicit SBR and parametric stereo.
+      var audio = adtsStream("\"profile\":\"%s\",".formatted(profile));
+
+      assertThat(audio.getCodecString()).isEqualTo(codecString);
+    }
+
+    @Test
+    @DisplayName("Should report no codec string when an ADTS stream has no profile")
+    void shouldReportNoCodecStringWhenAnAdtsStreamHasNoProfile() {
+      var audio = adtsStream("");
+
+      assertThat(audio.hasCodecString()).isFalse();
+    }
+
     @Test
     @DisplayName("Should report the Opus sample entry when the stream is Opus")
     void shouldReportTheOpusSampleEntryWhenTheStreamIsOpus() {
       var audio = streamOf("mkv-pipe-hevc-10bit.mkv", 1);
 
       assertThat(audio.getCodecString()).isEqualTo("Opus");
+    }
+  }
+
+  @Nested
+  @DisplayName("Parameter Sets")
+  class ParameterSetTests {
+
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+      "mp4-avc-record-level.mp4, avc1.42C00A",
+      "mp4-hevc-record-level.mp4, hvc1.1.6.L30.90",
+    })
+    @DisplayName(
+        "Should take the level from the parameter sets when the record header names another")
+    void shouldTakeTheLevelFromTheParameterSetsWhenTheRecordHeaderNamesAnother(
+        String fixture, String codecString) {
+      // The avcC header names level 5.1 and the hvcC header level 5.1 (153). The copy rebuilds
+      // each record from the parameter sets, which name levels 1.0 and 1.0 (30).
+      var video = streamOf(fixture, 0);
+
+      assertThat(video.getCodecString()).isEqualTo(codecString);
+    }
+
+    @ParameterizedTest(name = "{0} {1}")
+    @CsvSource({
+      "h264, 01 64 00 1f ff e1 00 40 67, avc1.64001F",
+      "h264, 01 64 00 1f ff e1 00 00, avc1.64001F",
+      "h264, 01 64 00 1f ff e1 00, avc1.64001F",
+      "hevc, 01 02 20 00 00 00 b0 00 00 00 00 00 7b f0 00 fc fd fa fa 00 00 0f 01 a0 00 01 00 40,"
+          + " hvc1.2.4.L123.B0",
+      "hevc, 01 02 20 00 00 00 b0 00 00 00 00 00 7b f0 00 fc fd fa fa 00 00 0f 01 a0,"
+          + " hvc1.2.4.L123.B0",
+    })
+    @DisplayName("Should take the record header when the record ends inside its parameter sets")
+    void shouldTakeTheRecordHeaderWhenTheRecordEndsInsideItsParameterSets(
+        String codec, String extradata, String codecString) {
+      var video = stream(codec, extradata);
+
+      assertThat(video.getCodecString()).isEqualTo(codecString);
     }
   }
 
@@ -313,6 +384,17 @@ class FfprobeExecutorCodecStringTest {
   }
 
   /** A video stream of the codec whose extradata ffprobe dumps as the given bytes. */
+  /** An AAC stream without an AudioSpecificConfig, after a video stream, with the given fields. */
+  private static ProbeStreamInfo adtsStream(String profileField) {
+    return probeOutput(
+            """
+            {"streams":[{"index":0,"codec_type":"video","time_base":"1/1000"},
+                        {"index":1,"codec_type":"audio","codec_name":"aac",%s"time_base":"1/90000"}]}
+            """
+                .formatted(profileField))
+        .getStreams(1);
+  }
+
   private static ProbeStreamInfo stream(String codec, String extradata) {
     var bytes = HexFormat.ofDelimiter(" ").parseHex(extradata);
     return probeOutput(

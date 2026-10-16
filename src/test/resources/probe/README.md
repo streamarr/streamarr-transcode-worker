@@ -13,6 +13,8 @@ from its lavfi test sources. No file comes from a media library.
 | `mkv-pipe-hevc-10bit.mkv.json` | 10-bit 4:2:2 HEVC and Opus in Matroska written to a pipe, so no stream has a `DURATION` tag |
 | `mpegts-empty-audio.ts.json` | H.264 and AAC in MPEG-TS, which starts at 1.4 s, with a second AAC stream that has no packets |
 | `mkv-mp3-11khz.mkv.json` | MP3 at 11,025 Hz in Matroska |
+| `mp4-avc-record-level.mp4.json`, `mp4-hevc-record-level.mp4.json` | H.264 and HEVC in MP4 whose record headers `edit-mp4-boxes.py` rewrote to name level 5.1, while their parameter sets name level 1.0 |
+| `mpegts-aac-main.ts.json`, `mpegts-aac-ltp.ts.json` | AAC LC in ADTS whose frame headers `edit-adts-profile.py` rewrote as AAC Main and AAC LTP, next to a synthesized H.264 stream in MPEG-TS |
 | `mp4-er-aac-lc.mp4.json` | AAC in MP4 whose config `edit-mp4-boxes.py` rewrote as ER AAC LC, a profile FFmpeg has no name for |
 | `mkv-eac3-atmos-dts-hd-ma.mkv.json` | E-AC-3 with Atmos and DTS-HD MA, copied from FFmpeg's FATE samples `eac3/the_great_wall_7.1.eac3` and `dts/master_audio_7.1_24bit.dts`, in Matroska |
 | `mkv-offset-chapters.mkv.json` | Matroska that starts at 10 s. Its chapters start before the container, have no title, or have a 513-byte title |

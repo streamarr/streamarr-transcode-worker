@@ -5,6 +5,7 @@ import static com.streamarr.transcode.probe.FfprobeJson.text;
 import com.streamarr.transcode.probe.BitReader.TruncatedBitstreamException;
 import com.streamarr.transcode.protocol.CodecStrings;
 import java.io.ByteArrayOutputStream;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -13,14 +14,19 @@ import tools.jackson.databind.JsonNode;
 
 /**
  * The RFC 6381 codec string that a stream copy carries, computed from the stream's decoder
- * configuration record. The tag rule writes avc1 for every H.264 copy and hvc1 for every HEVC copy,
- * so a Dolby Vision copy names its base layer's sample entry. MPEG-TS carries H.264 and HEVC
- * parameter sets in Annex B form, and IVF and raw OBU files carry AV1's sequence header OBU.
+ * configuration record or its parameter sets. The tag rule writes avc1 for every H.264 copy and
+ * hvc1 for every HEVC copy, so a Dolby Vision copy names its base layer's sample entry. MPEG-TS
+ * carries H.264 and HEVC parameter sets in Annex B form, and IVF and raw OBU files carry AV1's
+ * sequence header OBU.
  */
 final class CodecStringReader {
 
   private static final int AVC_RECORD_VERSION = 1;
   private static final int AVC_SEQUENCE_PARAMETER_SET = 7;
+  // The avcC record's count of SPS NAL units follows its 5 header bytes.
+  private static final int AVC_RECORD_SPS_COUNT = 5;
+  // The hvcC record's count of NAL unit arrays follows its 22 header bytes.
+  private static final int HVCC_ARRAY_COUNT = 22;
   private static final int HEVC_RECORD_VERSION = 1;
   private static final int HEVC_VIDEO_PARAMETER_SET = 32;
   private static final int HEVC_SEQUENCE_PARAMETER_SET = 33;
@@ -29,7 +35,10 @@ final class CodecStringReader {
   private static final int SPS_PROFILE_OFFSET = 1;
   private static final int AV1_RECORD_MARKER = 0x81;
   private static final int ESCAPED_AUDIO_OBJECT_TYPE = 31;
+  private static final int AAC_MAIN = 1;
   private static final int AAC_LC = 2;
+  private static final int AAC_SSR = 3;
+  private static final int AAC_LTP = 4;
 
   private CodecStringReader() {}
 
@@ -40,7 +49,7 @@ final class CodecStringReader {
         case "h264" -> Extradata.of(stream).flatMap(CodecStringReader::avc);
         case "hevc" -> Extradata.of(stream).flatMap(CodecStringReader::hevc);
         case "av1" -> Extradata.of(stream).flatMap(CodecStringReader::av1);
-        case "aac" -> Optional.of(aac(Extradata.of(stream)));
+        case "aac" -> aac(stream, Extradata.of(stream));
         case "ac3" -> Optional.of("ac-3");
         case "eac3" -> Optional.of("ec-3");
         case "opus" -> Optional.of("Opus");
@@ -53,30 +62,40 @@ final class CodecStringReader {
     }
   }
 
-  /** avcC bytes 1 to 3, or the three bytes after the SPS's NAL unit header. */
+  /**
+   * The three bytes after the first SPS's NAL unit header. The copy's Annex B filter turns an avcC
+   * record into its parameter sets, and the mp4 muxer builds the copy's avcC from the first SPS, so
+   * the copy keeps the SPS's profile and level rather than the record header's. A record without an
+   * SPS leaves the muxer to read the parameter sets in the first sample, which the record header
+   * describes.
+   */
   private static Optional<String> avc(byte[] extradata) {
+    var isRecord = Byte.toUnsignedInt(extradata[0]) == AVC_RECORD_VERSION;
+    var units = isRecord ? avcRecordSequenceParameterSets(extradata) : annexB(extradata);
     var profile =
-        Byte.toUnsignedInt(extradata[0]) == AVC_RECORD_VERSION
-            ? Optional.of(Arrays.copyOfRange(extradata, 1, extradata.length))
-            : annexB(extradata).stream()
-                .filter(nal -> (nal[0] & 0x1F) == AVC_SEQUENCE_PARAMETER_SET)
-                .findFirst()
-                .map(nal -> Arrays.copyOfRange(nal, 1, nal.length));
+        units.stream()
+            .filter(nal -> (nal[0] & 0x1F) == AVC_SEQUENCE_PARAMETER_SET)
+            .findFirst()
+            .map(nal -> Arrays.copyOfRange(nal, 1, nal.length));
+    if (profile.isEmpty() && isRecord) {
+      profile = Optional.of(Arrays.copyOfRange(extradata, 1, extradata.length));
+    }
+
     return profile
         .filter(bytes -> bytes.length >= CodecStrings.AVC_PROFILE_BYTES)
         .map(bytes -> CodecStrings.avc("avc1", bytes));
   }
 
-  /** hvcC bytes 1 to 12, or the VPS and SPS merged as FFmpeg's hvcC writer merges them. */
+  /**
+   * The VPS and SPS merged as FFmpeg's hvcC writer merges them. The copy's Annex B filter turns an
+   * hvcC record into its parameter sets, so the copy's record takes its profile, tier and level
+   * from them rather than from the source record's header. A record without them leaves the muxer
+   * to read the parameter sets in the first sample, which the record header describes.
+   */
   private static Optional<String> hevc(byte[] extradata) {
-    if (Byte.toUnsignedInt(extradata[0]) == HEVC_RECORD_VERSION) {
-      return Optional.of(Arrays.copyOfRange(extradata, 1, extradata.length))
-          .filter(bytes -> bytes.length >= CodecStrings.HEVC_PROFILE_BYTES)
-          .map(bytes -> CodecStrings.hevc("hvc1", bytes));
-    }
-
+    var isRecord = Byte.toUnsignedInt(extradata[0]) == HEVC_RECORD_VERSION;
     var merged = new HevcProfileMerge();
-    for (var nal : annexB(extradata)) {
+    for (var nal : isRecord ? hevcRecordUnits(extradata) : annexB(extradata)) {
       if (nal.length < 2 || (nal[1] >> 3 & 0x1F) != 0 || (nal[0] & 0x01) != 0) {
         continue;
       }
@@ -92,7 +111,71 @@ final class CodecStringReader {
       }
     }
 
-    return merged.generalProfile().map(bytes -> CodecStrings.hevc("hvc1", bytes));
+    var profile = merged.generalProfile();
+    if (profile.isEmpty() && isRecord) {
+      profile =
+          Optional.of(Arrays.copyOfRange(extradata, 1, extradata.length))
+              .filter(bytes -> bytes.length >= CodecStrings.HEVC_PROFILE_BYTES);
+    }
+
+    return profile.map(bytes -> CodecStrings.hevc("hvc1", bytes));
+  }
+
+  /** The SPS NAL units of an avcC record (ISO/IEC 14496-15, 5.3.2.1.2). */
+  private static List<byte[]> avcRecordSequenceParameterSets(byte[] record) {
+    var units = new ArrayList<byte[]>();
+    if (record.length <= AVC_RECORD_SPS_COUNT) {
+      return units;
+    }
+
+    var buffer = ByteBuffer.wrap(record).position(AVC_RECORD_SPS_COUNT + 1);
+    var count = record[AVC_RECORD_SPS_COUNT] & 0x1F;
+    for (var index = 0; index < count; index++) {
+      if (!readLengthPrefixedUnit(buffer, units)) {
+        break;
+      }
+    }
+
+    return units;
+  }
+
+  /** The NAL units of every array in an hvcC record (ISO/IEC 14496-15, 8.3.3.1.2). */
+  private static List<byte[]> hevcRecordUnits(byte[] record) {
+    var units = new ArrayList<byte[]>();
+    if (record.length <= HVCC_ARRAY_COUNT) {
+      return units;
+    }
+
+    var buffer = ByteBuffer.wrap(record).position(HVCC_ARRAY_COUNT + 1);
+    var arrays = Byte.toUnsignedInt(record[HVCC_ARRAY_COUNT]);
+    for (var array = 0; array < arrays && buffer.remaining() >= 3; array++) {
+      buffer.get();
+      var count = Short.toUnsignedInt(buffer.getShort());
+      for (var index = 0; index < count; index++) {
+        if (!readLengthPrefixedUnit(buffer, units)) {
+          return units;
+        }
+      }
+    }
+
+    return units;
+  }
+
+  /** Reads one NAL unit after its 2-byte length; false when the record ends first. */
+  private static boolean readLengthPrefixedUnit(ByteBuffer buffer, List<byte[]> units) {
+    if (buffer.remaining() < 2) {
+      return false;
+    }
+
+    var length = Short.toUnsignedInt(buffer.getShort());
+    if (length == 0 || buffer.remaining() < length) {
+      return false;
+    }
+
+    var start = buffer.position();
+    units.add(withoutEmulationPrevention(buffer.array(), start, start + length));
+    buffer.position(start + length);
+    return true;
   }
 
   /** av1C bytes 1 and 2, or the same fields read from the sequence header OBU. */
@@ -111,11 +194,12 @@ final class CodecStringReader {
 
   /**
    * mp4a.40 and the AudioSpecificConfig's audioObjectType. An ADTS stream has no config, and
-   * FFmpeg's aac_adtstoasc builds the copy's config from the ADTS profile as AAC LC.
+   * FFmpeg's aac_adtstoasc builds the copy's config from the ADTS profile. ffprobe names that
+   * profile, or HE-AAC when the decoder finds SBR in an AAC LC stream.
    */
-  private static String aac(Optional<byte[]> extradata) {
+  private static Optional<String> aac(JsonNode stream, Optional<byte[]> extradata) {
     if (extradata.isEmpty()) {
-      return "mp4a.40." + AAC_LC;
+      return adtsObjectType(text(stream, "profile").orElse("")).map(type -> "mp4a.40." + type);
     }
 
     var config = extradata.get();
@@ -124,7 +208,17 @@ final class CodecStringReader {
       objectType = 32 + (((config[0] & 0x07) << 3) | (Byte.toUnsignedInt(config[1]) >> 5));
     }
 
-    return "mp4a.40." + objectType;
+    return Optional.of("mp4a.40." + objectType);
+  }
+
+  private static Optional<Integer> adtsObjectType(String profile) {
+    return switch (profile) {
+      case "Main" -> Optional.of(AAC_MAIN);
+      case "LC", "HE-AAC", "HE-AACv2" -> Optional.of(AAC_LC);
+      case "SSR" -> Optional.of(AAC_SSR);
+      case "LTP" -> Optional.of(AAC_LTP);
+      default -> Optional.empty();
+    };
   }
 
   /** The NAL units of an Annex B byte stream, each without its start code or emulation bytes. */

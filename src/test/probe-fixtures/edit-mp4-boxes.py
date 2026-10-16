@@ -4,13 +4,16 @@
     edit-mp4-boxes.py clap <file> <width> <height>   adds a clap box to the first video sample entry
     edit-mp4-boxes.py udta-first <file>              moves moov's udta box before its trak boxes
     edit-mp4-boxes.py er-aac-lc <file>               makes the first AAC config ER AAC LC
+    edit-mp4-boxes.py record-level <file> <level>    sets the level in the first avcC or hvcC header
 
 clap names a centered clean aperture of <width> by <height> pixels (ISO/IEC 14496-12, 12.1.4).
 FFmpeg's MP4 demuxer creates a stream for each trak box and for the cover art in udta in the order
 of the boxes, so udta-first makes the cover art the first video stream. er-aac-lc
 rewrites the AudioSpecificConfig in the first esds box as audio object type 17, ER AAC LC, with
 the same sampling frequency index and channel configuration (ISO/IEC 14496-3, 1.6.2.1). FFmpeg
-names no profile for that object type. Both edits keep moov's
+names no profile for that object type. record-level changes only the level in the record's header
+(ISO/IEC 14496-15, 5.3.2.1.2 and 8.3.3.1.2), so it no longer matches the parameter sets that the
+record holds. The edits keep moov's
 size or move only bytes inside moov, which FFmpeg writes after mdat, so no chunk offset changes.
 """
 import struct
@@ -71,6 +74,15 @@ def er_aac_lc(data):
     return data[:config] + er_config.to_bytes(3, "big") + data[config + 3 :]
 
 
+def record_level(data, level):
+    for kind, offset in ((b"avcC", 3), (b"hvcC", 12)):
+        record = data.find(kind)
+        if record >= 0:
+            position = record + 4 + offset
+            return data[:position] + bytes([level]) + data[position + 1 :]
+    raise SystemExit("no avcC or hvcC box")
+
+
 def main():
     command, path = sys.argv[1], sys.argv[2]
     with open(path, "rb") as source:
@@ -81,6 +93,8 @@ def main():
         data = udta_first(data)
     elif command == "er-aac-lc":
         data = er_aac_lc(data)
+    elif command == "record-level":
+        data = record_level(data, int(sys.argv[3]))
     else:
         raise SystemExit("unknown command " + command)
     with open(path, "wb") as target:

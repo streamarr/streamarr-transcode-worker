@@ -65,6 +65,9 @@
   "mp4-av1-10bit.mp4": {
     "0": "av01.0.00M.10"
   },
+  "mp4-avc-record-level.mp4": {
+    "0": "avc1.42C00A"
+  },
   "mp4-clap.mp4": {
     "0": "avc1.42C00A"
   },
@@ -115,6 +118,9 @@
   "mp4-hevc-hdr10.mp4": {
     "0": "hvc1.2.4.L123.B0"
   },
+  "mp4-hevc-record-level.mp4": {
+    "0": "hvc1.1.6.L30.90"
+  },
   "mp4-hevc-sdr10-untagged.mp4": {
     "0": "hvc1.2.4.L123.B0"
   },
@@ -132,6 +138,14 @@
   "mpegts-aac-he.ts": {
     "0": "avc1.42C00A",
     "1": "mp4a.40.2"
+  },
+  "mpegts-aac-ltp.ts": {
+    "0": "avc1.42C00A",
+    "1": "mp4a.40.4"
+  },
+  "mpegts-aac-main.ts": {
+    "0": "avc1.42C00A",
+    "1": "mp4a.40.1"
   },
   "mpegts-dovi-p7.ts": {
     "0": "hvc1.2.4.H153.B0"

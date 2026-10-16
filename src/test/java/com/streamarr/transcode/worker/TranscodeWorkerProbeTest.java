@@ -880,7 +880,8 @@ class TranscodeWorkerProbeTest {
          "streams":[
           {"index":4,"codec_type":"video","codec_name":"h264","width":1920,"height":1080,
            "r_frame_rate":"24000/1001","bit_rate":"3000000"},
-          {"index":7,"codec_type":"audio","codec_name":"aac","channels":6,"bit_rate":"384000",
+          {"index":7,"codec_type":"audio","codec_name":"aac","profile":"LC","channels":6,
+           "bit_rate":"384000",
            "tags":{"language":"eng"},"disposition":{"default":1}},
           {"index":9,"codec_type":"subtitle","codec_name":"subrip",
            "tags":{"language":"fra"},"disposition":{"forced":1}}]}
@@ -914,6 +915,7 @@ class TranscodeWorkerProbeTest {
                             .setIndex(7)
                             .setCodecType("audio")
                             .setCodec("aac")
+                            .setAudioProfile("LC")
                             .setCodecString("mp4a.40.2")
                             .setChannels(6)
                             .setBitrateBitsPerSecond(384_000)
