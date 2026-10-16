@@ -1,11 +1,13 @@
 package com.streamarr.transcode.probe;
 
+import static com.streamarr.transcode.probe.FfprobeJson.number;
+import static com.streamarr.transcode.probe.FfprobeJson.text;
+
 import build.buf.gen.streamarr.transcode.v1.ProbeContainerInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeMediaInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import com.google.protobuf.Duration;
 import java.util.Optional;
-import java.util.function.Function;
 import tools.jackson.databind.JsonNode;
 
 /** Reads the container and stream facts of a successful probe from ffprobe's JSON output. */
@@ -66,25 +68,11 @@ final class ProbeMediaReader {
     return stream.build();
   }
 
-  private static Optional<String> text(JsonNode parent, String name) {
-    return Optional.ofNullable(parent.get(name))
-        .filter(value -> !value.isNull())
-        .map(JsonNode::asString);
-  }
-
   private static double framerate(String value) {
     var parts = value.split("/");
     return parts.length == 2
         ? Double.parseDouble(parts[0]) / Double.parseDouble(parts[1])
         : Double.parseDouble(value);
-  }
-
-  private static <T> Optional<T> number(JsonNode parent, String name, Function<String, T> parser) {
-    try {
-      return text(parent, name).map(parser);
-    } catch (NumberFormatException _) {
-      return Optional.empty();
-    }
   }
 
   private static Duration duration(double seconds) {
