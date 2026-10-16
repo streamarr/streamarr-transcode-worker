@@ -66,8 +66,8 @@ final class CodecStringReader {
    * The three bytes after the first SPS's NAL unit header. The copy's Annex B filter turns an avcC
    * record into its parameter sets, and the mp4 muxer builds the copy's avcC from the first SPS, so
    * the copy keeps the SPS's profile and level rather than the record header's. A record without an
-   * SPS leaves the muxer to read the parameter sets in the first sample, which the record header
-   * describes.
+   * SPS leaves the muxer to read the parameter sets in the first sample, so the record header alone
+   * cannot determine the copy's codec string.
    */
   private static Optional<String> avc(byte[] extradata) {
     var isRecord = Byte.toUnsignedInt(extradata[0]) == AVC_RECORD_VERSION;
@@ -77,10 +77,6 @@ final class CodecStringReader {
             .filter(nal -> (nal[0] & 0x1F) == AVC_SEQUENCE_PARAMETER_SET)
             .findFirst()
             .map(nal -> Arrays.copyOfRange(nal, 1, nal.length));
-    if (profile.isEmpty() && isRecord) {
-      profile = Optional.of(Arrays.copyOfRange(extradata, 1, extradata.length));
-    }
-
     return profile
         .filter(bytes -> bytes.length >= CodecStrings.AVC_PROFILE_BYTES)
         .map(bytes -> CodecStrings.avc("avc1", bytes));
@@ -90,7 +86,8 @@ final class CodecStringReader {
    * The VPS and SPS merged as FFmpeg's hvcC writer merges them. The copy's Annex B filter turns an
    * hvcC record into its parameter sets, so the copy's record takes its profile, tier and level
    * from them rather than from the source record's header. A record without them leaves the muxer
-   * to read the parameter sets in the first sample, which the record header describes.
+   * to read the parameter sets in the first sample, so the record header alone cannot determine the
+   * copy's codec string.
    */
   private static Optional<String> hevc(byte[] extradata) {
     var isRecord = Byte.toUnsignedInt(extradata[0]) == HEVC_RECORD_VERSION;
@@ -112,12 +109,6 @@ final class CodecStringReader {
     }
 
     var profile = merged.generalProfile();
-    if (profile.isEmpty() && isRecord) {
-      profile =
-          Optional.of(Arrays.copyOfRange(extradata, 1, extradata.length))
-              .filter(bytes -> bytes.length >= CodecStrings.HEVC_PROFILE_BYTES);
-    }
-
     return profile.map(bytes -> CodecStrings.hevc("hvc1", bytes));
   }
 

@@ -52,6 +52,11 @@ class FfprobeExecutorCodecStringTest {
           .flatMap(
               file ->
                   file.getValue().properties().stream()
+                      // This video's HEVC parameter sets are only in its samples.
+                      .filter(
+                          copy ->
+                              !file.getKey().equals("mp4-dovi-p5-hev1.mp4")
+                                  || !copy.getKey().equals("0"))
                       .map(
                           copy ->
                               Arguments.of(
@@ -184,22 +189,40 @@ class FfprobeExecutorCodecStringTest {
       assertThat(video.getCodecString()).isEqualTo(codecString);
     }
 
-    @ParameterizedTest(name = "{0} {1}")
+    @ParameterizedTest(name = "{0}")
     @CsvSource({
-      "h264, 01 64 00 1f ff e1 00 40 67, avc1.64001F",
-      "h264, 01 64 00 1f ff e1 00 00, avc1.64001F",
-      "h264, 01 64 00 1f ff e1 00, avc1.64001F",
-      "hevc, 01 02 20 00 00 00 b0 00 00 00 00 00 7b f0 00 fc fd fa fa 00 00 0f 01 a0 00 01 00 40,"
-          + " hvc1.2.4.L123.B0",
-      "hevc, 01 02 20 00 00 00 b0 00 00 00 00 00 7b f0 00 fc fd fa fa 00 00 0f 01 a0,"
-          + " hvc1.2.4.L123.B0",
+      "h264, 01 42 c0 33 ff e0 00",
+      "hevc, 01 02 20 00 00 00 b0 00 00 00 00 00 7b f0 00 fc fd fa fa 00 00 0f 00",
     })
-    @DisplayName("Should take the record header when the record ends inside its parameter sets")
-    void shouldTakeTheRecordHeaderWhenTheRecordEndsInsideItsParameterSets(
-        String codec, String extradata, String codecString) {
+    @DisplayName("Should report no codec string when the record has no parameter sets")
+    void shouldReportNoCodecStringWhenTheRecordHasNoParameterSets(String codec, String extradata) {
       var video = stream(codec, extradata);
 
-      assertThat(video.getCodecString()).isEqualTo(codecString);
+      assertThat(video.hasCodecString()).isFalse();
+    }
+
+    @Test
+    @DisplayName("Should report no codec string when the parameter sets are only in samples")
+    void shouldReportNoCodecStringWhenTheParameterSetsAreOnlyInSamples() {
+      var video = streamOf("mp4-dovi-p5-hev1.mp4", 0);
+
+      assertThat(video.hasCodecString()).isFalse();
+    }
+
+    @ParameterizedTest(name = "{0} {1}")
+    @CsvSource({
+      "h264, 01 64 00 1f ff e1 00 40 67",
+      "h264, 01 64 00 1f ff e1 00 00",
+      "h264, 01 64 00 1f ff e1 00",
+      "hevc, 01 02 20 00 00 00 b0 00 00 00 00 00 7b f0 00 fc fd fa fa 00 00 0f 01 a0 00 01 00 40",
+      "hevc, 01 02 20 00 00 00 b0 00 00 00 00 00 7b f0 00 fc fd fa fa 00 00 0f 01 a0",
+    })
+    @DisplayName("Should report no codec string when the record ends inside its parameter sets")
+    void shouldReportNoCodecStringWhenTheRecordEndsInsideItsParameterSets(
+        String codec, String extradata) {
+      var video = stream(codec, extradata);
+
+      assertThat(video.hasCodecString()).isFalse();
     }
   }
 
@@ -300,11 +323,9 @@ class FfprobeExecutorCodecStringTest {
     @Test
     @DisplayName("Should read every line when the extradata spans more than one line")
     void shouldReadEveryLineWhenTheExtradataSpansMoreThanOneLine() {
-      // A 23-byte hvcC record whose general profile is Main 10 at level 4.1 (123).
-      var video =
-          stream("hevc", "01 02 20 00 00 00 b0 00 00 00 00 00 7b f0 00 fc fd fa fa 00 00 0f 00");
+      var video = streamOf("mp4-hevc-record-level.mp4", 0);
 
-      assertThat(video.getCodecString()).isEqualTo("hvc1.2.4.L123.B0");
+      assertThat(video.getCodecString()).isEqualTo("hvc1.1.6.L30.90");
     }
   }
 
