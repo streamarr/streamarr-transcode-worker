@@ -1,4 +1,4 @@
-package com.streamarr.transcode.protocol;
+package com.streamarr.transcode.probe;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;

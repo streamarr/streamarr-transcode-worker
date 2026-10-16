@@ -1,4 +1,4 @@
-package com.streamarr.transcode.protocol;
+package com.streamarr.transcode.probe;
 
 import java.util.Locale;
 import lombok.NonNull;
@@ -7,17 +7,17 @@ import lombok.NonNull;
  * RFC 6381 codec strings, built from the fields of a decoder configuration record. Hexadecimal
  * digits are uppercase, and every digit is ASCII whatever the default locale.
  */
-public final class CodecStrings {
+final class CodecStrings {
 
   /** The bytes that hold an AVC profile_idc, its constraint flags and its level_idc. */
-  public static final int AVC_PROFILE_BYTES = 3;
+  static final int AVC_PROFILE_BYTES = 3;
 
   /**
    * The bytes that hold HEVC's general profile, tier and level in an hvcC record: the profile
    * space, tier flag and profile_idc, four bytes of compatibility flags, six constraint bytes and
    * level_idc.
    */
-  public static final int HEVC_PROFILE_BYTES = 12;
+  static final int HEVC_PROFILE_BYTES = 12;
 
   private static final int HEVC_CONSTRAINT_BYTES = 6;
 
@@ -27,7 +27,7 @@ public final class CodecStrings {
    * {@code avc1.PPCCLL} for the sample entry, from profile_idc, the constraint flags and level_idc:
    * avcC bytes 1 to 3, or the three bytes after an SPS's NAL unit header.
    */
-  public static String avc(@NonNull String sampleEntry, byte @NonNull [] profileConstraintsLevel) {
+  static String avc(@NonNull String sampleEntry, byte @NonNull [] profileConstraintsLevel) {
     return String.format(
         Locale.ROOT,
         "%s.%02X%02X%02X",
@@ -42,7 +42,7 @@ public final class CodecStrings {
    * profile_idc, the compatibility flags in reverse bit order, the tier and level, and each
    * constraint byte up to the last nonzero one (ISO/IEC 14496-15 E.3).
    */
-  public static String hevc(@NonNull String sampleEntry, byte @NonNull [] generalProfile) {
+  static String hevc(@NonNull String sampleEntry, byte @NonNull [] generalProfile) {
     var spaceTierAndProfile = Byte.toUnsignedInt(generalProfile[0]);
     var compatibility = 0;
     for (var index = 1; index <= 4; index++) {
@@ -65,7 +65,7 @@ public final class CodecStrings {
    * {@code av01.P.LLT.DD} from av1C byte 1, which holds seq_profile and seq_level_idx_0, and av1C
    * byte 2, which holds seq_tier_0, high_bitdepth and twelve_bit.
    */
-  public static String av1(int profileAndLevel, int flags) {
+  static String av1(int profileAndLevel, int flags) {
     return String.format(
         Locale.ROOT,
         "av01.%d.%02d%s.%02d",
@@ -76,7 +76,7 @@ public final class CodecStrings {
   }
 
   /** The bit depth that av1C bytes 1 and 2 state: 8, 10, or 12 for profile 2 only. */
-  public static int av1BitDepth(int profileAndLevel, int flags) {
+  static int av1BitDepth(int profileAndLevel, int flags) {
     var highBitDepth = (flags & 0x40) != 0;
     if (!highBitDepth) {
       return 8;
