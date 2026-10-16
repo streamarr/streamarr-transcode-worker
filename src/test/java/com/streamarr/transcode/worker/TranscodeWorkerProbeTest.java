@@ -15,12 +15,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import build.buf.gen.streamarr.transcode.v1.CancelProbeCommand;
+import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositionSource;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeContainerInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeMediaInfo;
+import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import build.buf.gen.streamarr.transcode.v1.StartProbeCommand;
 import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
@@ -33,6 +35,7 @@ import com.streamarr.transcode.protocol.ProtoUuid;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
@@ -53,6 +56,9 @@ import tools.jackson.databind.ObjectMapper;
 @DisplayName("Transcode Worker Probe Tests")
 @Timeout(value = 1, unit = TimeUnit.MINUTES)
 class TranscodeWorkerProbeTest {
+
+  // worker_session.proto: the largest session message the server accepts.
+  private static final int SESSION_MESSAGE_LIMIT_BYTES = 131_072;
 
   @TempDir Path tempDir;
 
@@ -174,6 +180,162 @@ class TranscodeWorkerProbeTest {
                                     KeyframePositionSource.KEYFRAME_POSITION_SOURCE_PACKET_SCAN);
                           }));
     }
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {-1, 0})
+  @DisplayName(
+      "Should send the probe result when its session message fits within the server's limit")
+  void shouldSendTheProbeResultWhenItsSessionMessageFitsWithinTheServersLimit(int bytesFromLimit)
+      throws Exception {
+    var request = requestBuilder().build();
+    var language =
+        languageFillingSessionMessage(request, SESSION_MESSAGE_LIMIT_BYTES + bytesFromLimit);
+
+    assertThat(probeResults(request, ffprobeOutput(1, language)))
+        .containsExactly(resultWithOneVideoStream(request, language).build());
+  }
+
+  @Test
+  @DisplayName(
+      "Should report the result as too large when its session message exceeds the server's limit"
+          + " by one byte")
+  void shouldReportTheResultAsTooLargeWhenItsSessionMessageExceedsTheServersLimitByOneByte()
+      throws Exception {
+    var request = requestBuilder().build();
+    var language = languageFillingSessionMessage(request, SESSION_MESSAGE_LIMIT_BYTES + 1);
+
+    assertThat(probeResults(request, ffprobeOutput(1, language)))
+        .containsExactly(failure(request, ProbeFailure.PROBE_FAILURE_RESULT_TOO_LARGE));
+  }
+
+  @Test
+  @DisplayName(
+      "Should report the result as too large when the file has more streams than one session"
+          + " message can carry")
+  void shouldReportTheResultAsTooLargeWhenTheFileHasMoreStreamsThanOneSessionMessageCanCarry()
+      throws Exception {
+    var request = requestBuilder().build();
+
+    assertThat(probeResults(request, ffprobeOutput(20_000, "")))
+        .containsExactly(failure(request, ProbeFailure.PROBE_FAILURE_RESULT_TOO_LARGE));
+  }
+
+  @Test
+  @DisplayName(
+      "Should send no keyframe positions part when the probe result is too large for one session"
+          + " message")
+  void shouldSendNoKeyframePositionsPartWhenTheProbeResultIsTooLargeForOneSessionMessage()
+      throws Exception {
+    var fixture = getClass().getResource("/keyframes/mp4-bframes-editlist.mp4");
+    assertThat(fixture).isNotNull();
+    Files.copy(Path.of(fixture.toURI()), tempDir.resolve("movie.mp4"));
+    var runtime = new ScriptedWorkerRuntime();
+    var request =
+        requestBuilder()
+            .setProbeVersion(FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION)
+            .setSource(sourceBuilder().setRelativeKey("movie.mp4"))
+            .build();
+    var language = "a".repeat(SESSION_MESSAGE_LIMIT_BYTES);
+    var producer =
+        new FfprobeExecutor(
+            new ObjectMapper(),
+            command ->
+                processBuilder()
+                    .stdout(
+                        command.arguments().contains("-read_intervals")
+                            ? """
+                              {"packets":[{"pts":35840,"dts":34816,"flags":"K__"}]}
+                              """
+                            : """
+                              {"format":{"format_name":"mov,mp4,m4a,3gp,3g2,mj2",
+                                         "start_time":"0.000000"},
+                               "streams":[{"index":0,"codec_type":"video","id":"0x1",
+                                           "tags":{"language":"%s"}}]}
+                              """
+                                .formatted(language))
+                    .build());
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).ffprobe(producer).build()) {
+      worker.start("localhost", 1);
+      start(runtime.connection(), request);
+      runtime.probes().drain();
+
+      assertThat(runtime.connection().events())
+          .filteredOn(event -> !event.hasRegistration())
+          .extracting(EstablishWorkerSessionRequest::getProbeResult)
+          .containsExactly(failure(request, ProbeFailure.PROBE_FAILURE_RESULT_TOO_LARGE));
+    }
+  }
+
+  private List<ProbeAttemptResult> probeResults(ProbeRequest request, String ffprobeOutput)
+      throws Exception {
+    Files.writeString(tempDir.resolve("movie.mkv"), ffprobeOutput);
+    var runtime = new ScriptedWorkerRuntime();
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
+      worker.start("localhost", 1);
+      start(runtime.connection(), request);
+      runtime.probes().drain();
+
+      return runtime.connection().results();
+    }
+  }
+
+  // ffprobe output with the given number of video streams. Only the first stream has a language
+  // tag, which neither the contract nor the worker bounds.
+  private static String ffprobeOutput(int streams, String firstLanguage) {
+    var output = new StringBuilder("{\"streams\":[");
+    for (var index = 0; index < streams; index++) {
+      output
+          .append(index == 0 ? "" : ",")
+          .append("{\"index\":")
+          .append(index)
+          .append(",\"codec_type\":\"video\"");
+      if (index == 0) {
+        output.append(",\"tags\":{\"language\":\"").append(firstLanguage).append("\"}");
+      }
+
+      output.append('}');
+    }
+
+    return output.append("]}").toString();
+  }
+
+  private static ProbeAttemptResult.Builder resultWithOneVideoStream(
+      ProbeRequest request, String language) {
+    return ProbeAttemptResult.newBuilder()
+        .setProbeAttemptId(request.getProbeAttemptId())
+        .setProbeVersion(request.getProbeVersion())
+        .setMedia(
+            ProbeMediaInfo.newBuilder()
+                .setContainer(ProbeContainerInfo.getDefaultInstance())
+                .addStreams(
+                    ProbeStreamInfo.newBuilder()
+                        .setIndex(0)
+                        .setCodecType("video")
+                        .setLanguage(language)));
+  }
+
+  // The language tag that makes the session message carrying the result take exactly the given
+  // number of bytes.
+  private static String languageFillingSessionMessage(ProbeRequest request, int bytes) {
+    var length = 0;
+    for (var attempt = 0; attempt < 3; attempt++) {
+      var language = "a".repeat(length);
+      var size =
+          EstablishWorkerSessionRequest.newBuilder()
+              .setProbeResult(resultWithOneVideoStream(request, language))
+              .build()
+              .getSerializedSize();
+      if (size == bytes) {
+        return language;
+      }
+
+      length += bytes - size;
+    }
+
+    throw new AssertionError("No language tag fills a session message of " + bytes + " bytes");
   }
 
   @Test

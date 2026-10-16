@@ -2,6 +2,7 @@ package com.streamarr.transcode.worker;
 
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 
+import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
@@ -22,6 +23,9 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 @Builder(access = AccessLevel.PACKAGE)
 final class WorkerProbeSession implements AutoCloseable {
+
+  // worker_session.proto: the server ends the session on a larger message.
+  private static final int MAXIMUM_SESSION_MESSAGE_BYTES = 131_072;
 
   @NonNull private final FfprobeExecutor ffprobe;
   @NonNull private final WorkerMediaSourceResolver sources;
@@ -89,6 +93,26 @@ final class WorkerProbeSession implements AutoCloseable {
     }
 
     private ProbeAttemptReport execute() {
+      var report = probe();
+      var sessionMessageBytes =
+          EstablishWorkerSessionRequest.newBuilder()
+              .setProbeResult(report.result())
+              .build()
+              .getSerializedSize();
+      if (sessionMessageBytes <= MAXIMUM_SESSION_MESSAGE_BYTES) {
+        return report;
+      }
+
+      log.warn(
+          "Probe {} result takes {} bytes in its session message, more than the {} bytes the"
+              + " server accepts",
+          fromProto(request.getProbeAttemptId()),
+          sessionMessageBytes,
+          MAXIMUM_SESSION_MESSAGE_BYTES);
+      return failed(ProbeFailure.PROBE_FAILURE_RESULT_TOO_LARGE);
+    }
+
+    private ProbeAttemptReport probe() {
       try {
         return ffprobe.probe(sources.resolve(request.getSource()), request);
       } catch (WorkerJobException exception) {
