@@ -12,6 +12,7 @@ import build.buf.gen.streamarr.transcode.v1.MasteringDisplayColorVolume;
 import build.buf.gen.streamarr.transcode.v1.Presence;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import build.buf.gen.streamarr.transcode.v1.VideoDynamicRange;
+import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
@@ -73,13 +74,28 @@ class FfprobeExecutorDynamicRangeTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @ValueSource(strings = {"linear", "log100", "log316", "smpte428", "reserved"})
+    @ValueSource(strings = {"linear", "log100", "log316", "smpte428", "reserved", "unknown"})
     @DisplayName("Should report an unspecified base when the transfer is neither SDR nor HDR")
     void shouldReportAnUnspecifiedBaseWhenTheTransferIsNeitherSdrNorHdr(String transfer) {
       var video = videoStream("\"color_transfer\":\"" + transfer + "\"");
 
       assertThat(video.getDynamicRange().getCompatibleBase())
           .isEqualTo(CompatibleBase.COMPATIBLE_BASE_UNSPECIFIED);
+    }
+
+    @Test
+    @DisplayName(
+        "Should report no compatible base when a Dolby Vision stream's transfer is unknown")
+    void shouldReportNoCompatibleBaseWhenADolbyVisionStreamsTransferIsUnknown() {
+      var video =
+          videoStream(
+              """
+              "color_transfer":"unknown",
+              "side_data_list":[{"side_data_type":"DOVI configuration record","dv_profile":5}]
+              """);
+
+      assertThat(video.getDynamicRange().getCompatibleBase())
+          .isEqualTo(CompatibleBase.COMPATIBLE_BASE_NONE);
     }
 
     @Test
@@ -173,6 +189,22 @@ class FfprobeExecutorDynamicRangeTest {
                   .setCompatibleBase(video.getDynamicRange().getCompatibleBase())
                   .setHdr10Plus(Presence.PRESENCE_UNSPECIFIED)
                   .build());
+    }
+
+    @Test
+    @DisplayName(
+        "Should leave a record value absent when ffprobe prints it negative, as text or beyond 32"
+            + " bits")
+    void shouldLeaveARecordValueAbsentWhenFfprobePrintsItNegativeAsTextOrBeyond32Bits() {
+      var video =
+          videoStream(
+              """
+              "side_data_list":[{"side_data_type":"DOVI configuration record",
+                "dv_profile":-1,"dv_level":"6","dv_bl_signal_compatibility_id":4294967296}]
+              """);
+
+      assertThat(video.getDynamicRange().getDolbyVisionPresent().getDeclared())
+          .isEqualTo(DolbyVisionConfiguration.getDefaultInstance());
     }
 
     @Test
@@ -332,6 +364,39 @@ class FfprobeExecutorDynamicRangeTest {
   }
 
   @Nested
+  @DisplayName("Mastering Display Fields")
+  class MasteringDisplayFieldTests {
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(
+        strings = {"red_x", "green_y", "blue_x", "white_point_y", "max_luminance", "min_luminance"})
+    @DisplayName("Should report no mastering display when ffprobe prints every field but one")
+    void shouldReportNoMasteringDisplayWhenFfprobePrintsEveryFieldButOne(String missing) {
+      var fields = new StringBuilder("\"side_data_type\":\"Mastering display metadata\"");
+      for (var name :
+          List.of(
+              "red_x",
+              "red_y",
+              "green_x",
+              "green_y",
+              "blue_x",
+              "blue_y",
+              "white_point_x",
+              "white_point_y",
+              "max_luminance",
+              "min_luminance")) {
+        if (!name.equals(missing)) {
+          fields.append(",\"").append(name).append("\":\"1/2\"");
+        }
+      }
+
+      var video = videoStream("\"side_data_list\":[{" + fields + "}]");
+
+      assertThat(video.hasMasteringDisplay()).isFalse();
+    }
+  }
+
+  @Nested
   @DisplayName("Content Light Level")
   class ContentLightLevelTests {
 
@@ -387,6 +452,22 @@ class FfprobeExecutorDynamicRangeTest {
               """
               "side_data_list":[{"side_data_type":"Content light level metadata","max_content":1000}]
               """);
+
+      assertThat(video.hasContentLightLevel()).isFalse();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"\"1000\"", "99999999999999999999"})
+    @DisplayName(
+        "Should report no light level when ffprobe prints MaxCLL as text or beyond 64 bits")
+    void shouldReportNoLightLevelWhenFfprobePrintsMaxCllAsTextOrBeyond64Bits(String maxCll) {
+      var video =
+          videoStream(
+              """
+              "side_data_list":[{"side_data_type":"Content light level metadata",
+                "max_content":%s,"max_average":400}]
+              """
+                  .formatted(maxCll));
 
       assertThat(video.hasContentLightLevel()).isFalse();
     }
