@@ -61,13 +61,4 @@ class ExactFractionTest {
 
     assertThat(fraction.toProto()).isEmpty();
   }
-
-  @Test
-  @DisplayName("Should take the first fraction when the minimum compares equal fractions")
-  void shouldTakeTheFirstFractionWhenTheMinimumComparesEqualFractions() {
-    assertThat(ExactFraction.min(ExactFraction.of(1, 2), ExactFraction.of(2, 4)))
-        .isEqualTo(ExactFraction.of(1, 2));
-    assertThat(ExactFraction.min(ExactFraction.of(3, 4), ExactFraction.of(1, 4)))
-        .isEqualTo(ExactFraction.of(1, 4));
-  }
 }

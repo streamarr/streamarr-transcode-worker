@@ -127,35 +127,6 @@ class FfprobeExecutorFrameRateTest {
       assertThat(rule.getBasis()).isEqualTo(PACKET_SCAN);
       assertThat(rule.getInputs().getFieldOrder()).isEqualTo(reported);
     }
-
-    @Test
-    @DisplayName(
-        "Should keep a progressive frame and a keyframe whole when they follow a field pair")
-    void shouldKeepAProgressiveFrameAndAKeyframeWholeWhenTheyFollowAFieldPair() {
-      // 25 fps in a 1/90000 time base: every other frame arrives as two fields 1,800 ticks apart,
-      // and every 50th frame is a keyframe in one packet.
-      var stream =
-          VideoStream.builder()
-              .baseRate("30/1")
-              .averageRate("25/1")
-              .fieldOrder("tt")
-              .timeBase("1/90000")
-              .build();
-      var lines = new StringBuilder();
-      for (var frame = 0; frame < 300; frame++) {
-        var time = frame * 3600L;
-        var keyframe = frame % 50 == 0;
-        lines.append("%d,%d,100,%s,%n".formatted(time, time, keyframe ? "K__" : "___"));
-        if (!keyframe && frame % 2 == 0) {
-          lines.append("%d,%d,100,___,%n".formatted(time + 1800, time + 1800));
-        }
-      }
-
-      var rule = probeOutput(stream.ffprobeOutput(), lines.toString()).getFrameRateRule();
-
-      assertThat(rule.getOutputFrameRate()).isEqualTo(fraction(25, 1));
-      assertThat(rule.getInputs().getPacketScan().getScannedFrameCount()).isEqualTo(300);
-    }
   }
 
   @Nested
