@@ -21,8 +21,6 @@ final class FrameRateRule {
 
   // Matroska's statistics agree with the average rate within 0.05 %.
   private static final ExactFraction STATISTICS_AGREEMENT = ExactFraction.of(5, 10_000);
-  // The statistics show faster content after the scan when they exceed the motion rate by 1 %.
-  private static final ExactFraction FASTER_CONTENT = ExactFraction.of(101, 100);
 
   @NonNull private final PacketTimings packetTimings;
 
@@ -70,7 +68,7 @@ final class FrameRateRule {
         declared.isPresent()
             && timing
                 .matroskaRate()
-                .filter(rate -> rate.isGreaterThan(motionRate.get().times(FASTER_CONTENT)))
+                .filter(rate -> rate.isGreaterThan(motionRate.get()))
                 .isPresent();
     if (keepsDeclared) {
       return result

@@ -305,6 +305,31 @@ class WorkerProbeFrameRateTest {
     assertThat(rule.getOutputFrameRate()).isEqualTo(fraction(60, 1));
   }
 
+  @ParameterizedTest(name = "{0} frames over 1000 seconds, keep declared={1}")
+  @CsvSource({"24999, false", "25000, false", "25001, true", "25125, true", "25250, true"})
+  @DisplayName(
+      "Should keep the declared rate only when whole-file statistics are faster than the scan")
+  void shouldKeepTheDeclaredRateOnlyWhenWholeFileStatisticsAreFasterThanTheScan(
+      String frames, boolean keepsDeclared) throws Exception {
+    // The first packets run at 25 fps. Even 25.001 fps over the whole file establishes
+    // faster content beyond that scan; equality must retain the scanned rate.
+    var rule =
+        probe(
+            video()
+                .averageRate("30/1")
+                .numberOfFrames(frames)
+                .duration("00:16:40.000000000")
+                .packets(packets(intervals().repeat(40, 10).build()))
+                .build());
+
+    assertThat(rule.getOutputFrameRate()).isEqualTo(fraction(keepsDeclared ? 30 : 25, 1));
+    assertThat(rule.getBasis())
+        .isEqualTo(
+            keepsDeclared
+                ? OutputFrameRateBasis.OUTPUT_FRAME_RATE_BASIS_MATROSKA_STATISTICS
+                : OutputFrameRateBasis.OUTPUT_FRAME_RATE_BASIS_PACKET_SCAN);
+  }
+
   private enum RateInput {
     AVERAGE,
     BASE

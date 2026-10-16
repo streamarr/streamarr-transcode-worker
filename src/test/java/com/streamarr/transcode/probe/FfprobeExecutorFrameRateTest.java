@@ -245,7 +245,7 @@ class FfprobeExecutorFrameRateTest {
     @DisplayName("Should keep the declared rate when the statistics show faster content later")
     void shouldKeepTheDeclaredRateWhenTheStatisticsShowFasterContentLater() {
       // The declared rates agree on 29.97. The first 30 s run at 23.976, but 2,400 frames over
-      // 98.8 s average 24.29 fps over the whole track, more than 1 % faster.
+      // 100 s average 24 fps over the whole track, just 0.1 % faster than the scan.
       var stream =
           VideoStream.builder()
               .baseRate("30000/1001")
@@ -253,7 +253,7 @@ class FfprobeExecutorFrameRateTest {
               .fieldOrder("progressive")
               .timeBase("1/1000")
               .numberOfFrames("2400")
-              .duration("00:01:38.800000000")
+              .duration("00:01:40.000000000")
               .build();
 
       var rule =
@@ -266,7 +266,7 @@ class FfprobeExecutorFrameRateTest {
           .isEqualTo(
               MatroskaStatistics.newBuilder()
                   .setNumberOfFrames(2400)
-                  .setDuration(Duration.newBuilder().setSeconds(98).setNanos(800_000_000))
+                  .setDuration(Duration.newBuilder().setSeconds(100))
                   .build());
     }
 
