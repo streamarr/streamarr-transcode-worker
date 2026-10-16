@@ -105,6 +105,8 @@ public final class FfprobeExecutor {
 
   private ProbeAttemptReport execute(Attempt attempt)
       throws ExecutionException, InterruptedException, IOException {
+    // The read limits let ffprobe reach streams whose first packet comes late, such as PGS
+    // subtitles. Without -scan_all_pmts 0, ffprobe reads an MPEG-TS source to those limits.
     var output =
         run(
             List.of(
@@ -112,8 +114,15 @@ public final class FfprobeExecutor {
                 "quiet",
                 "-print_format",
                 "json",
+                "-analyzeduration",
+                "200M",
+                "-probesize",
+                "1G",
+                "-scan_all_pmts",
+                "0",
                 "-show_streams",
                 "-show_format",
+                "-show_chapters",
                 "-show_error",
                 attempt.source().toString()));
     JsonNode json;
