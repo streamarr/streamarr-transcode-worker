@@ -123,6 +123,7 @@ public final class FfprobeExecutor {
                 "-show_streams",
                 "-show_format",
                 "-show_chapters",
+                "-show_data",
                 "-show_error",
                 attempt.source().toString()));
     JsonNode json;

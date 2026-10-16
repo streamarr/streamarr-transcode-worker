@@ -213,6 +213,7 @@ class FfprobeExecutorProcessTest {
             "-show_streams",
             "-show_format",
             "-show_chapters",
+            "-show_data",
             "-show_error",
             source.toString());
   }

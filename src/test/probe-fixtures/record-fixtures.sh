@@ -178,6 +178,19 @@ done
   mkv-hdr10-maxfall-zero.mkv
 "${FF[@]}" -i sei-1000,400.hevc -c copy -tag:v hvc1 mp4-hdr10-sei-only.mp4
 
+# Codec strings. H.264 and HEVC in MPEG-TS carry their parameter sets in Annex B form. AV1 in IVF
+# and in a raw OBU file carries only its sequence header. AAC in ADTS has no AudioSpecificConfig.
+"${FF[@]}" "${VIDEO[@]}" "${TONE[@]}" -c:v libx265 -preset ultrafast -x265-params log-level=none \
+  -c:a ac3 mpegts-hevc-ac3.ts
+SVTAV1=(-c:v libsvtav1 -preset 10 -svtav1-params log-level=0 -pix_fmt yuv420p10le)
+"${FF[@]}" "${VIDEO[@]}" "${SVTAV1[@]}" ivf-av1-10bit.ivf
+"${FF[@]}" -i ivf-av1-10bit.ivf -c copy obu-av1-10bit.obu
+"${FF[@]}" -i ivf-av1-10bit.ivf -c copy mkv-av1-10bit.mkv
+"${FF[@]}" -i ivf-av1-10bit.ivf -c copy mp4-av1-10bit.mp4
+# AC-3, E-AC-3, FLAC and ALAC in MP4.
+"${FF[@]}" "${VIDEO[@]}" "${TONE[@]}" -map 0:v -map 1:a -map 1:a -map 1:a -map 1:a "${X264[@]}" \
+  -c:a:0 ac3 -c:a:1 eac3 -c:a:2 flac -c:a:3 alac -strict -2 mp4-audio-codecs.mp4
+
 # 8-bit SDR with BT.709 color signaling.
 "${FF[@]}" "${VIDEO[@]}" "${X264[@]}" \
   -vf setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709 mp4-sdr8-bt709.mp4
@@ -212,7 +225,8 @@ cd /work
 for source in "$@"; do
   # The probe's own arguments, as FfprobeExecutor passes them.
   ffprobe -v quiet -print_format json -analyzeduration 200M -probesize 1G -scan_all_pmts 0 \
-    -show_streams -show_format -show_chapters -show_error "$source" > "$(basename "$source").json"
+    -show_streams -show_format -show_chapters -show_data -show_error "$source" \
+    > "$(basename "$source").json"
 done
 ffprobe -version | head -1 > ffprobe-version.txt
 ffprobe -v quiet -print_format json -show_pixel_formats > pixel-formats.json
@@ -228,18 +242,32 @@ FIXTURES_TO_PROBE=(mp4-titled.mp4 mkv-remuxed-from-mp4.mkv mp4-default-handlers.
   mkv-pipe-hevc-10bit.mkv mpegts-empty-audio.ts mkv-mp3-11khz.mkv mkv-offset-chapters.mkv
   mkv-many-chapters.mkv mkv-title-tags.mkv mkv-many-titles.mkv mp4-clap.mp4 mkv-pixel-crop.mkv mp4-rotated.mp4
   mp4-cover-art-first.mp4 mp4-er-aac-lc.mp4 mp4-hdr10-static.mp4 mkv-hdr10-static.mkv
-  mp4-hdr10-maxfall-zero.mp4 mkv-hdr10-maxfall-zero.mkv mp4-hdr10-sei-only.mp4 mp4-sdr8-bt709.mp4)
+  mp4-hdr10-maxfall-zero.mp4 mkv-hdr10-maxfall-zero.mkv mp4-hdr10-sei-only.mp4 mp4-sdr8-bt709.mp4
+  mpegts-hevc-ac3.ts ivf-av1-10bit.ivf obu-av1-10bit.obu mkv-av1-10bit.mkv
+  mp4-av1-10bit.mp4 mp4-audio-codecs.mp4)
 if [ -n "${FATE_SUITE:-}" ]; then
   in_image fate.sh
   FIXTURES_TO_PROBE+=(mkv-eac3-atmos-dts-hd-ma.mkv mp4-dovi-p5-hev1.mp4 mkv-hdr10-fate.mkv
     mpegts-dovi-p7.ts)
 fi
 
+# HE-AAC in ADTS, which a local sample holds, next to a synthesized video stream in MPEG-TS.
+cat > "$WORK/local.sh" <<'CONTAINER'
+set -euo pipefail
+cd /work
+timeout 60 ffmpeg -hide_banner -nostdin -loglevel error -y \
+  -f lavfi -i testsrc2=size=64x36:rate=24:duration=2 -i /samples/aac-he.adts -map 0:v -map 1:a \
+  -c:v libx264 -preset ultrafast -pix_fmt yuv420p -c:a copy -t 2 mpegts-aac-he.ts
+CONTAINER
+
 LOCAL_SAMPLE_NAMES=(mp4-dovi-p5-dvh1.mp4 mp4-dovi-p5-dvh1-no-record.mp4 mp4-dovi-p81.mp4
   mp4-dovi-p82.mp4 mp4-dovi-p84-hlg.mp4 mp4-dovi-p9-avc1.mp4 mp4-dovi-p9-dva1.mp4 mp4-hevc-hdr10.mp4
   mp4-hevc-sdr10-untagged.mp4 mov-phone-hlg-dovi-p84.mov mov-phone-rotated.mov)
 PROBE_ARGUMENTS=("${FIXTURES_TO_PROBE[@]}")
 if [ -n "${LOCAL_SAMPLES:-}" ]; then
+  in_image local.sh
+  FIXTURES_TO_PROBE+=(mpegts-aac-he.ts)
+  PROBE_ARGUMENTS+=(mpegts-aac-he.ts)
   for sample in "${LOCAL_SAMPLE_NAMES[@]}"; do
     PROBE_ARGUMENTS+=("/samples/$sample")
   done
@@ -248,6 +276,13 @@ fi
 
 printf 'bash /work/probe.sh %s\n' "${PROBE_ARGUMENTS[*]}" > "$WORK/probe-all.sh"
 in_image probe-all.sh
+
+# Each video and audio stream that the probe computes a codec string for, copied with the worker's
+# copy arguments into a fragmented MP4. copy-codec-strings.py reads the codec string of each copy's
+# initialization segment, so the tests compare the probe's string with what a copy carries.
+python3 "$HERE/copy-codec-strings.py" commands "$WORK" "${FIXTURES_TO_PROBE[@]}" > "$WORK/copy-all.sh"
+in_image copy-all.sh
+python3 "$HERE/copy-codec-strings.py" read "$WORK" "$FIXTURES/copy-codec-strings.json"
 
 for source in "${FIXTURES_TO_PROBE[@]}"; do
   # The source's path says nothing about the source. A phone recording's container tags can hold

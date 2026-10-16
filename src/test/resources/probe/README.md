@@ -1,8 +1,8 @@
 # Recorded probe output
 
 ffprobe's JSON output for small sources, recorded with the ffprobe in the pinned worker image and
-the probe's own arguments. `../../probe-fixtures/record-fixtures.sh` makes the sources and records
-the output. It keeps only the output, without the source's path. FFmpeg synthesizes most sources
+the probe's own arguments, which include `-show_data` for the extradata.
+`../../probe-fixtures/record-fixtures.sh` makes the sources and records the output. It keeps only the output, without the source's path. FFmpeg synthesizes most sources
 from its lavfi test sources. No file comes from a media library.
 
 | File | What the source is |
@@ -43,6 +43,14 @@ from its lavfi test sources. No file comes from a media library.
 | `mp4-hevc-sdr10-untagged.mp4.json` | Local sample: 10-bit HEVC SDR without a transfer tag |
 | `mov-phone-hlg-dovi-p84.mov.json` | Local sample: a public-domain phone camera original, HEVC HLG with Dolby Vision 8.4 |
 | `mov-phone-rotated.mov.json` | Local sample: a public-domain phone camera original, H.264 recorded upright |
+| `mpegts-hevc-ac3.ts.json` | HEVC and AC-3 in MPEG-TS, whose HEVC parameter sets ffprobe dumps in Annex B form |
+| `ivf-av1-10bit.ivf.json` | 10-bit AV1 in IVF, whose extradata is the sequence header OBU |
+| `obu-av1-10bit.obu.json` | The same stream as a raw OBU file |
+| `mkv-av1-10bit.mkv.json` | The same stream in Matroska, whose extradata is an `av1C` record |
+| `mp4-av1-10bit.mp4.json` | The same stream in MP4 |
+| `mp4-audio-codecs.mp4.json` | H.264 with AC-3, E-AC-3, FLAC and ALAC in MP4 |
+| `mpegts-aac-he.ts.json` | Local sample: HE-AAC in ADTS (`aac-he.adts`), next to a synthesized H.264 stream in MPEG-TS |
+| `copy-codec-strings.json` | The codec string of each copied stream: `copy-codec-strings.py` copies every H.264, HEVC, AV1, AAC, AC-3, E-AC-3, Opus, FLAC and ALAC stream above with the worker's copy arguments, and reads the string from the copy's initialization segment |
 | `pixel-formats.json` | `ffprobe -show_pixel_formats`: FFmpeg's description of every pixel format it knows |
 | `ffprobe-version.txt` | The first line of `ffprobe -version` from the recording image |
 

@@ -33,6 +33,7 @@
       "duration_ts": 180000,
       "duration": "2.000000",
       "bits_per_raw_sample": "8",
+      "extradata": "\n00000000: 0000 0167 42c0 0ada 11fe 7c04 4000 0003  ...gB.....|.@...\n00000010: 0040 0000 0c03 c489 a800 0000 0168 ce0f  .@...........h..\n00000020: c8                                       .\n",
       "extradata_size": 33,
       "disposition": {
         "default": 0,
@@ -82,6 +83,7 @@
       "duration_ts": 171363,
       "duration": "1.904033",
       "bit_rate": "71416",
+      "extradata": "\n",
       "disposition": {
         "default": 0,
         "dub": 0,
@@ -127,6 +129,7 @@
       "start_time": "1.400000",
       "duration_ts": 182090,
       "duration": "2.023222",
+      "extradata": "\n",
       "disposition": {
         "default": 0,
         "dub": 0,

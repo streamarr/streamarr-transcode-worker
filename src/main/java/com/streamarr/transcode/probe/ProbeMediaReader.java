@@ -98,6 +98,7 @@ final class ProbeMediaReader {
     switch (type) {
       case "video" -> {
         VideoStreamFacts.add(source, stream);
+        CodecStringReader.read(source).ifPresent(stream::setCodecString);
         endTimes.of(source).ifPresent(stream::setEndTime);
       }
       case "audio" -> {
@@ -106,6 +107,7 @@ final class ProbeMediaReader {
             .filter(rate -> rate > 0)
             .ifPresent(stream::setSampleRateHz);
         text(source, "profile").ifPresent(stream::setAudioProfile);
+        CodecStringReader.read(source).ifPresent(stream::setCodecString);
         endTimes.of(source).ifPresent(stream::setEndTime);
         hearingImpaired(source).ifPresent(stream::setIsHearingImpaired);
       }

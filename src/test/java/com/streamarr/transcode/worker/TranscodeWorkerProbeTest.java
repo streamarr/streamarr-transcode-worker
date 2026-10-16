@@ -914,6 +914,7 @@ class TranscodeWorkerProbeTest {
                             .setIndex(7)
                             .setCodecType("audio")
                             .setCodec("aac")
+                            .setCodecString("mp4a.40.2")
                             .setChannels(6)
                             .setBitrateBitsPerSecond(384_000)
                             .setLanguage("eng")

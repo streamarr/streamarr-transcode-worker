@@ -31,6 +31,7 @@
       "duration": "0.416667",
       "bit_rate": "61017",
       "nb_frames": "10",
+      "extradata": "\n00000000: 0102 2000 0000 9000 0000 0000 78f0 00fc  .. .........x...\n00000010: fdfa fa00 000f 00                        .......\n",
       "extradata_size": 23,
       "disposition": {
         "default": 1,

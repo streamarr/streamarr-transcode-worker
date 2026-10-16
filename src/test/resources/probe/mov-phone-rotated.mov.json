@@ -25,6 +25,7 @@
       "duration": "7.911678",
       "bit_rate": "201213",
       "nb_frames": "343",
+      "extradata": "\n00000000: 1210                                     ..\n",
       "extradata_size": 2,
       "disposition": {
         "default": 1,
@@ -84,6 +85,7 @@
       "bit_rate": "14206764",
       "bits_per_raw_sample": "8",
       "nb_frames": "221",
+      "extradata": "\n00000000: 0164 0028 ffe1 000c 2764 0028 ac56 c078  .d.(....'d.(.V.x\n00000010: 0227 e540 0100 0428 ee3c b0fd f8f8 00    .'.@...(.<.....\n",
       "extradata_size": 31,
       "disposition": {
         "default": 1,
@@ -136,6 +138,7 @@
       "duration": "7.911667",
       "bit_rate": "10",
       "nb_frames": "1",
+      "extradata": "\n",
       "disposition": {
         "default": 1,
         "dub": 0,
@@ -178,6 +181,7 @@
       "duration": "7.911667",
       "bit_rate": "8",
       "nb_frames": "1",
+      "extradata": "\n",
       "disposition": {
         "default": 1,
         "dub": 0,
@@ -220,6 +224,7 @@
       "duration": "7.911667",
       "bit_rate": "32179",
       "nb_frames": "221",
+      "extradata": "\n",
       "disposition": {
         "default": 1,
         "dub": 0,
