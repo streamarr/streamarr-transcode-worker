@@ -168,6 +168,16 @@ final class SampleRanges {
                   .defaultSampleFlags()
                   .orElseGet(() -> trackDefaultsOf(header).defaultSampleFlags()));
     }
+
+    private TrackExtends trackDefaultsOf(TrackFragmentHeader header) {
+      return Optional.ofNullable(trackExtends.get(header.trackId()))
+          .orElseThrow(
+              () ->
+                  FragmentedMp4Exception.malformed(
+                      "a traf of track "
+                          + header.trackId()
+                          + " needs a default sample field, and no trex declares one"));
+    }
   }
 
   /** Places each {@code traf}'s runs after the data of the {@code traf} placed before it. */
@@ -261,16 +271,6 @@ final class SampleRanges {
                     "a traf of track "
                         + trackId
                         + " needs a default sample size, and no trex declares one"));
-  }
-
-  private TrackExtends trackDefaultsOf(TrackFragmentHeader header) {
-    return Optional.ofNullable(trackExtends.get(header.trackId()))
-        .orElseThrow(
-            () ->
-                FragmentedMp4Exception.malformed(
-                    "a traf of track "
-                        + header.trackId()
-                        + " needs a default sample field, and no trex declares one"));
   }
 
   /**
