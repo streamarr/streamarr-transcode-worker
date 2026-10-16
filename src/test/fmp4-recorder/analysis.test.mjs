@@ -158,7 +158,7 @@ describe('recording facts', () => {
       nonSyncFirstFragments: 1,
       fragmentsWithoutVideo: 2,
       leadingFragmentsWithoutVideo: 1,
-      everyKeyframeStartsAFragment: true,
+      fragmentsWithAKeyframeInside: [],
       videoSamples: 3,
       largestFragmentByteLength: stream.fragments[2].byteLength,
       firstVideoPresentationTime: 0n,
@@ -168,12 +168,17 @@ describe('recording facts', () => {
     });
   });
 
-  it("Should report that a keyframe does not start a fragment when a run's second sample is a keyframe", () => {
+  it("Should list each fragment whose keyframe does not start it when a run's second sample is a keyframe", () => {
     const stream = readStream(
-      Buffer.concat([initialization(), keyframeRun(0), keyframeRun(2002)]),
+      Buffer.concat([
+        initialization(),
+        keyframeRun(0),
+        videoFragment({ decodeTime: 2002, sync: true }),
+        keyframeRun(3003),
+      ]),
     );
 
-    assert.equal(diagnostics(stream).everyKeyframeStartsAFragment, false);
+    assert.deepEqual(diagnostics(stream).fragmentsWithAKeyframeInside, [0, 2]);
   });
 
   it('Should describe a segment by its fragments, keyframes and bytes when the grid delivers it', () => {
@@ -187,9 +192,83 @@ describe('recording facts', () => {
       firstVideoPresentationTime: 0n,
       firstFragmentIndex: 0,
       fragmentCount: 3,
-      syncFirstFragmentCount: 1,
+      keyframeCount: 1,
       byteLength: stream.fragments.reduce((sum, fragment) => sum + fragment.byteLength, 0),
     });
+  });
+
+  it('Should count only its own keyframes when a segment opens inside a fragment it shares', () => {
+    const stream = readStream(
+      Buffer.concat([initialization(), videoFragment({ decodeTime: 0, sync: true }), keyframeRun(143143), videoFragment({ decodeTime: 145145, sync: false })]),
+    );
+
+    assert.deepEqual(
+      group(stream, 6, 0).delivered.map((segment) => describeSegment(segment, stream)),
+      [
+        { number: 0, firstVideoPresentationTime: 0n, firstFragmentIndex: 0, fragmentCount: 2, keyframeCount: 1, byteLength: stream.fragments[0].byteLength + stream.fragments[1].byteLength },
+        { number: 1, firstVideoPresentationTime: 144144n, firstFragmentIndex: 1, fragmentCount: 2, keyframeCount: 1, byteLength: stream.fragments[1].byteLength + stream.fragments[2].byteLength },
+      ],
+    );
+  });
+});
+
+describe('dropped audio', () => {
+  // A keyframe at 0 with audio, segment 1's keyframe at 6.006 s, then a frame whose decode ends
+  // at the given 24 kHz tick, then an audio sample of segment 0 at 5 s.
+  const droppedAudioOf = (videoDecodeEnd) =>
+    recordingFacts(
+      readStream(
+        Buffer.concat([
+          initialization(),
+          fragment(
+            { trackId: VIDEO.trackId, decodeTime: 0, runs: [{ samples: [{ duration: 1001, size: 1 }], firstSampleFlags: SYNC_SAMPLE_FLAGS }] },
+            { trackId: AUDIO.trackId, decodeTime: 0, runs: [{ samples: [{ duration: 1024, size: 1 }] }] },
+          ),
+          videoFragment({ decodeTime: 144144, sync: true }),
+          videoFragment({ decodeTime: videoDecodeEnd - 1001, sync: false }),
+          audioFragment({ decodeTime: 240000 }),
+        ]),
+      ),
+      { period: 6, startSequenceNumber: 0 },
+    ).droppedAudioSamples;
+
+  it("Should drop an audio sample when it arrives once the video has run a second past its segment's end", () => {
+    assert.deepEqual(droppedAudioOf(168000), [{ fragmentIndex: 3, presentationTime: 240000n, segmentNumber: 0 }]);
+  });
+
+  it("Should drop no audio sample when the video has not yet run a second past its segment's end", () => {
+    assert.deepEqual(droppedAudioOf(167999), []);
+  });
+
+  // As above, but the video's decode end reaches 73001 ticks before segment 1's keyframe arrives
+  // beside an audio sample of segment 0 at 1 s: the video leads that sample by 49001 ticks.
+  const droppedAudioAfterALeadOf = (videoDecodeEnd) =>
+    recordingFacts(
+      readStream(
+        Buffer.concat([
+          initialization(),
+          fragment(
+            { trackId: VIDEO.trackId, decodeTime: 0, runs: [{ samples: [{ duration: 1001, size: 1 }], firstSampleFlags: SYNC_SAMPLE_FLAGS }] },
+            { trackId: AUDIO.trackId, decodeTime: 0, runs: [{ samples: [{ duration: 1024, size: 1 }] }] },
+          ),
+          videoFragment({ decodeTime: 72000, sync: false }),
+          fragment(
+            { trackId: VIDEO.trackId, decodeTime: 144144, runs: [{ samples: [{ duration: 1001, size: 1 }], firstSampleFlags: SYNC_SAMPLE_FLAGS }] },
+            { trackId: AUDIO.trackId, decodeTime: 48000, runs: [{ samples: [{ duration: 1024, size: 1 }] }] },
+          ),
+          videoFragment({ decodeTime: videoDecodeEnd - 1001, sync: false }),
+          audioFragment({ decodeTime: 240000 }),
+        ]),
+      ),
+      { period: 6, startSequenceNumber: 0 },
+    ).droppedAudioSamples;
+
+  it("Should drop an audio sample when the video has run a second and its lead past its segment's end", () => {
+    assert.deepEqual(droppedAudioAfterALeadOf(217001), [{ fragmentIndex: 4, presentationTime: 240000n, segmentNumber: 0 }]);
+  });
+
+  it("Should drop no audio sample when the video has run a second but not its lead past its segment's end", () => {
+    assert.deepEqual(droppedAudioAfterALeadOf(217000), []);
   });
 });
 
@@ -343,7 +422,7 @@ describe('violated claims', () => {
             },
           ],
           sourceKeyframeCheck: { recordedKeyframesEqualSourceKeyframes: false },
-          diagnostics: { everyKeyframeStartsAFragment: false, videoPictures: null },
+          diagnostics: { fragmentsWithAKeyframeInside: [0, 3], videoPictures: null },
         },
         {
           name: 'x',
@@ -351,7 +430,7 @@ describe('violated claims', () => {
           hlsComparisons: [],
           sourceKeyframeCheck: null,
           diagnostics: {
-            everyKeyframeStartsAFragment: true,
+            fragmentsWithAKeyframeInside: [0],
             videoPictures: { keyframes: [{ startsClosedGop: true }, { startsClosedGop: false }] },
           },
         },
@@ -360,21 +439,21 @@ describe('violated claims', () => {
           encoder: 'libsvtav1',
           hlsComparisons: [],
           sourceKeyframeCheck: null,
-          diagnostics: { everyKeyframeStartsAFragment: true, videoPictures: null },
+          diagnostics: { fragmentsWithAKeyframeInside: [], videoPictures: null },
         },
         {
           name: 'h',
           encoder: 'libx265',
           hlsComparisons: [],
           sourceKeyframeCheck: null,
-          diagnostics: { everyKeyframeStartsAFragment: true, videoPictures: { keyframes: [{ startsClosedGop: false }] } },
+          diagnostics: { fragmentsWithAKeyframeInside: [], videoPictures: { keyframes: [{ startsClosedGop: false }] } },
         },
         {
           name: 'n',
           encoder: 'hevc_nvenc',
           hlsComparisons: [],
           sourceKeyframeCheck: null,
-          diagnostics: { everyKeyframeStartsAFragment: true, videoPictures: { keyframes: [{ startsClosedGop: false }] } },
+          diagnostics: { fragmentsWithAKeyframeInside: [], videoPictures: { keyframes: [{ startsClosedGop: false }] } },
         },
       ],
       initializationSegmentIdentityPairs: [{ label: 'same', identical: false }],
@@ -392,7 +471,7 @@ describe('violated claims', () => {
       'f / r: 1 of 3 video packets differ from the pipe recording, whose video arguments it shares',
       'f / r: the hlsenc model does not reproduce the HLS cuts',
       "f: a recorded keyframe is not the source's own keyframe",
-      'f: a keyframe does not start a fragment',
+      'f: a keyframe does not start a fragment after the first',
       'x: a keyframe of the verified encoder libx264 does not start a closed GOP (1 of 2)',
       'a: the picture types of the verified encoder libsvtav1 are not read',
       'h: a keyframe of the verified encoder libx265 does not start a closed GOP (1 of 1)',

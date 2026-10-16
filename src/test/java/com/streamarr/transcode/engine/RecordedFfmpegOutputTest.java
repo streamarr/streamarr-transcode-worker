@@ -15,8 +15,8 @@ import com.streamarr.transcode.engine.FfmpegRecordings.Recording;
 import com.streamarr.transcode.engine.FfmpegRecordings.SegmentSummary;
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.engine.GroupingOutcome.NothingClosed;
-import com.streamarr.transcode.engine.GroupingOutcome.SegmentClosed;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentNumberSkipped;
+import com.streamarr.transcode.engine.GroupingOutcome.SegmentsClosed;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -40,6 +40,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 @Tag("UnitTest")
 class RecordedFfmpegOutputTest {
+
+  private static final int SAMPLE_IS_NON_SYNC_SAMPLE = 0x0001_0000;
 
   static Stream<Recording> recordings() {
     return FfmpegRecordings.recordings().stream();
@@ -99,12 +101,17 @@ class RecordedFfmpegOutputTest {
   void shouldDeliverEveryFragmentAfterThePrerollByteForByteWhenGrouping(Recording recording)
       throws IOException {
     var recorded = bytesOf(recording.file());
+    var grouping = group(recording);
     var firstDeliveredByte =
         recording.initializationSegment().byteLength()
-            + recording.discardedPreroll().stream().mapToLong(SegmentSummary::byteLength).sum();
+            + grouping.units().fragments().stream()
+                .limit(recording.segments().getFirst().firstFragmentIndex())
+                .mapToLong(Fragment::byteLength)
+                .sum();
     var delivered =
-        group(recording).delivered().stream()
+        grouping.delivered().stream()
             .flatMap(segment -> segment.fragments().stream())
+            .distinct()
             .flatMap(fragment -> fragment.boxes().stream());
 
     assertThat(concat(delivered))
@@ -315,7 +322,7 @@ class RecordedFfmpegOutputTest {
       String file) throws IOException {
     assertThat(group(recording(file)).delivered())
         .isNotEmpty()
-        .allSatisfy(segment -> assertThat(syncFirstFragmentCount(segment)).isOne());
+        .allSatisfy(segment -> assertThat(keyframeCount(segment)).isOne());
   }
 
   @ParameterizedTest(name = "{0}")
@@ -331,7 +338,7 @@ class RecordedFfmpegOutputTest {
         .extracting(MediaSegment::sequenceNumber)
         .containsExactly(0, 1, 2, 3, 4);
     assertThat(grouping.delivered())
-        .allSatisfy(segment -> assertThat(syncFirstFragmentCount(segment)).isEqualTo(2));
+        .allSatisfy(segment -> assertThat(keyframeCount(segment)).isEqualTo(2));
   }
 
   @ParameterizedTest(name = "{0}")
@@ -361,13 +368,12 @@ class RecordedFfmpegOutputTest {
     var units = read("10-copy-gop-exceeds-period.fmp4");
     var grouper = new SegmentGrouper(6, 0, Mp4Stream.SEGMENT_CAP);
     var outcomes = units.fragments().subList(0, 21).stream().map(grouper::accept).toList();
-    var segmentOne = new MediaSegment(1, units.fragments().subList(10, 20));
+    var segmentOne = segmentOf(1, units.fragments().subList(10, 20));
 
     assertThat(outcomes.get(10))
-        .isEqualTo(new SegmentClosed(new MediaSegment(0, units.fragments().subList(0, 10))));
+        .isEqualTo(new SegmentsClosed(List.of(segmentOf(0, units.fragments().subList(0, 10)))));
     assertThat(outcomes.subList(11, 20)).allMatch(NothingClosed.class::isInstance);
-    assertThat(outcomes.getLast())
-        .isEqualTo(new SegmentNumberSkipped(Optional.of(segmentOne), 2, 3));
+    assertThat(outcomes.getLast()).isEqualTo(new SegmentNumberSkipped(List.of(segmentOne), 2, 3));
     assertThat(firstVideoPresentationTime(segmentOne)).isEqualTo(240_240);
   }
 
@@ -438,7 +444,7 @@ class RecordedFfmpegOutputTest {
     for (var index = 0; index < units.fragments().size(); index++) {
       try {
         var outcome = grouper.accept(units.fragments().get(index));
-        segmentClosedBy(outcome).ifPresent(delivered::add);
+        delivered.addAll(segmentsClosedBy(outcome));
         if (outcome instanceof SegmentNumberSkipped skipped) {
           return new Grouping(units, delivered, Optional.of(failureOf(skipped, index)));
         }
@@ -451,12 +457,18 @@ class RecordedFfmpegOutputTest {
     return new Grouping(units, delivered, Optional.empty());
   }
 
-  private static Optional<MediaSegment> segmentClosedBy(GroupingOutcome outcome) {
+  private static List<MediaSegment> segmentsClosedBy(GroupingOutcome outcome) {
     return switch (outcome) {
-      case NothingClosed _ -> Optional.empty();
-      case SegmentClosed(var segment) -> Optional.of(segment);
-      case SegmentNumberSkipped skipped -> skipped.closedSegment();
+      case NothingClosed _ -> List.of();
+      case SegmentsClosed(var segments) -> segments;
+      case SegmentNumberSkipped skipped -> skipped.closedSegments();
     };
+  }
+
+  // A media segment of these fragments and every video sample they carry.
+  private static MediaSegment segmentOf(int sequenceNumber, List<Fragment> fragments) {
+    return new MediaSegment(
+        sequenceNumber, fragments, fragments.stream().flatMap(CarriedSample::videoOf).toList());
   }
 
   private static List<SegmentSummary> summaries(Grouping grouping) {
@@ -468,8 +480,8 @@ class RecordedFfmpegOutputTest {
                     .firstVideoPresentationTime(firstVideoPresentationTime(segment))
                     .firstFragmentIndex(grouping.units().indexOf(segment.fragments().getFirst()))
                     .fragmentCount(segment.fragments().size())
-                    .syncFirstFragmentCount(syncFirstFragmentCount(segment))
-                    .byteLength(segment.byteLength())
+                    .keyframeCount(keyframeCount(segment))
+                    .byteLength(segment.fragments().stream().mapToLong(Fragment::byteLength).sum())
                     .build())
         .toList();
   }
@@ -524,19 +536,20 @@ class RecordedFfmpegOutputTest {
         .collect(Collectors.toMap(CutPoint::number, CutPoint::firstVideoPresentationTime));
   }
 
+  // The keyframe that opened the segment: any video sample before it is the first segment's
+  // lead-in.
   private static long firstVideoPresentationTime(MediaSegment segment) {
-    return segment.fragments().stream()
-        .flatMap(fragment -> fragment.videoStart().stream())
-        .findFirst()
-        .orElseThrow()
-        .presentationTime();
+    return keyframesOf(segment).findFirst().orElseThrow().presentationTime();
   }
 
-  private static int syncFirstFragmentCount(MediaSegment segment) {
-    return Math.toIntExact(
-        segment.fragments().stream()
-            .filter(fragment -> fragment.videoStart().filter(VideoStart::syncSample).isPresent())
-            .count());
+  private static int keyframeCount(MediaSegment segment) {
+    return Math.toIntExact(keyframesOf(segment).count());
+  }
+
+  private static Stream<Sample> keyframesOf(MediaSegment segment) {
+    return segment.videoSamples().stream()
+        .map(CarriedSample::sample)
+        .filter(sample -> (sample.flags() & SAMPLE_IS_NON_SYNC_SAMPLE) == 0);
   }
 
   private static ExpectedFailure failureOf(SegmentNumberSkipped skipped, int fragmentIndex) {

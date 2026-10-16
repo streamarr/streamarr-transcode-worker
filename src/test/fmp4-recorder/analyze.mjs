@@ -126,6 +126,19 @@ const FIXTURES = [
     ],
   },
   {
+    name: '05-copy-late-start-seek12', source: 'late.ts', mode: 'copy', encoder: null, seek: 12, start: 2,
+    proves: 'Stream-copy replacement attempt of the same MPEG-TS source from segment 2 (-ss 12): the MPEG-TS demuxer ' +
+      'lands on the keyframe at 12.033 s, just after the boundary, so no fragment is preroll, and its first fragment ' +
+      'carries the audio from 11.861 s, seven AAC frames before the boundary, which segment 1 of 05-copy-late-start ' +
+      'holds. Segments 2 to 4 carry the start-0 recording\'s video samples at the same ticks.',
+    hlsComparisons: [
+      hlsComparison('05-copy-late-start.hls-recipe-adtstoasc', 'hls-recipe', {
+        reference: '05-copy-late-start',
+        restrict: true,
+      }),
+    ],
+  },
+  {
     name: '06-encode-audio-tail', source: 'tail.mp4', mode: 'encode', encoder: 'libx264', seek: 0, start: 0,
     proves: 'Audio outlasts video by 3.5 s: the recording ends in audio-only fragments (no video traf), which ' +
       'join the last open segment; none precedes the first segment.',
@@ -240,11 +253,69 @@ const FIXTURES = [
       'keyframe. Every keyframe is an IDR picture (NAL type 20).',
     hlsComparisons: [hlsComparison('13-x265-cfr-floored-gop.video-only', 'pipe-recipe', { audio: false })],
   },
+  {
+    name: '14-copy-audio-ends-early', source: 'short-audio.mp4', mode: 'copy', encoder: null, seek: 0, start: 0,
+    proves: 'Stream copy of a source whose 8 s of audio end 12 s before its 20 s of video: the fragment at 8.008 s ' +
+      'still carries the last three audio samples, which end at 8.0 s, and from 9.009 s on FFmpeg writes ' +
+      'fragments with a video traf alone, so no audio sample at or after a later boundary ever arrives.',
+    hlsComparisons: [
+      hlsComparison('14-copy-audio-ends-early.hls-recipe', 'hls-recipe'),
+      hlsComparison('14-copy-audio-ends-early.video-only', 'pipe-recipe', { audio: false }),
+    ],
+  },
+  {
+    name: '15-copy-adjacent-keyframes', source: 'adjacent-keyframes.mp4', mode: 'copy', encoder: null, seek: 0, start: 0,
+    proves: 'Stream copy of a source with 22.05 kHz audio, whose AAC frames outlast the video frames, and a keyframe ' +
+      'on every frame from 5.6 s to 6.6 s: FFmpeg cuts a one-frame fragment at each of those keyframes. The one at ' +
+      '6.006 s, which opens segment 1, carries no audio, and the next fragment carries an audio sample from 5.964 s, ' +
+      'inside segment 0, so a fragment without audio does not show that segment 0\'s audio has all arrived.',
+    hlsComparisons: [hlsComparison('15-copy-adjacent-keyframes.video-only', 'pipe-recipe', { audio: false })],
+  },
+  {
+    name: '16-copy-encode-audio', source: 'cfr.mp4', mode: 'copy', audio: 'encode', encoder: null, seek: 0, start: 0,
+    proves: 'The 2.002 s-GOP source with its video copied and its audio encoded, from the start: the encoded audio starts ' +
+      'with the AAC priming frame, as the copied audio does, and every keyframe starts a fragment.',
+    hlsComparisons: [],
+  },
+  {
+    name: '16-copy-encode-audio-seek30', source: 'cfr.mp4', mode: 'copy', audio: 'encode', encoder: null, seek: 30, start: 5,
+    proves: 'Replacement attempt at -ss 30 that copies the video and encodes the audio: the seek lands on the keyframe at ' +
+      '28.028 s, while the encoded audio starts at the seek point, 29.979 s with its priming frame. delay_moov writes ' +
+      'nothing until every track has a sample, so the first fragment runs from 28.028 s to 30.072 s and holds the ' +
+      'keyframe at 30.030 s in its middle, which opens segment 5 there; the samples before it are segment 4\'s ' +
+      'preroll, and segment 5 carries the start-0 recording\'s video samples.',
+    hlsComparisons: [],
+  },
+  {
+    name: '17-copy-audio-ends-long-before-video', source: 'long-video.mp4', mode: 'copy', encoder: null, seek: 0, start: 0,
+    proves: 'Stream copy of a source whose 20 s of audio end 160 s before its 180 s of video, many times FFmpeg\'s ' +
+      '10 s muxer interleave bound: the fragment at 20.020 s carries the last three audio samples, which end at ' +
+      '20.0 s, and fragments 21-179 carry video alone, so no audio sample at or after the end of segments 3-28 ever ' +
+      'arrives.',
+    hlsComparisons: [],
+  },
+  {
+    name: '17-encode-audio-ends-long-before-video', source: 'long-video.mp4', mode: 'encode', encoder: 'libx264', seek: 0, start: 0,
+    proves: 'The same source encoded under the recipe: the fragment at 20.020 s carries an audio sample at 19.947 s, ' +
+      'and the AAC encoder\'s last two frames (19.968-20.011 s, segment 3) arrive only in fragment 169, at 169.002 s, ' +
+      'inside segment 28: FFmpeg flushes the encoder once the whole input has ended.',
+    hlsComparisons: [],
+  },
 ];
 
 const INITIALIZATION_SEGMENT_IDENTITY_PAIRS = [
   ['encode (libx264), start 0 vs a replacement attempt from segment 5', '01-encode-cfr', '01-encode-cfr-seek30'],
   ['stream copy, start 0 vs a replacement attempt from segment 5', '07-copy-start0', '07-copy-seek30'],
+  [
+    'video copy with encoded audio, start 0 vs a replacement attempt from segment 5',
+    '16-copy-encode-audio',
+    '16-copy-encode-audio-seek30',
+  ],
+  [
+    'stream copy of an MPEG-TS source, start 0 vs a replacement attempt from segment 2',
+    '05-copy-late-start',
+    '05-copy-late-start-seek12',
+  ],
   ['encode (libsvtav1), start 0 vs a replacement attempt from segment 5', '09-svtav1-vfr', '09-svtav1-vfr-seek30'],
   ['encode (libx265), start 0 vs a replacement attempt from segment 5', '13-x265-cfr', '13-x265-cfr-seek30'],
 ];
@@ -254,8 +325,8 @@ const INITIALIZATION_SEGMENT_DIFFERENCE_PAIRS = [
 
 const RECIPE =
   'ffmpeg -y [-ss S: (K-1)*6 for an encode with K > 0, else the job\'s seek] -i SRC -map 0:v:0 -map 0:a:0 -map -0:s -map_metadata -1 -map_chapters -1 -copyts ' +
-  '-avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128 <codec args> [copy: -bsf:a aac_adtstoasc ' +
-  'when copying AAC, then -b:a 0] [encode: -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6 ' +
+  '-avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128 -max_interleave_delta 10000000 <codec args> [copy: -bsf:a aac_adtstoasc ' +
+  'when copying AAC, then -b:a 0] [video copy with encoded audio (fixture 16): -c:v copy -c:a aac -ac 1 -b:a 8k] [encode: -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6 ' +
   'in whole seconds, K = startSequenceNumber, N = mediaSegmentCount ' +
   '(-sc_threshold:v:0 0 for libx264, -x265-params no-scenecut=1:no-open-gop=1 for libx265) -g:v:0 145 = ceil(6 x 23.976) + 1 for an encoder verified to honour forced ' +
   'keyframes (libx264, SVT-AV1, libx265), else 143 = floor(6 x 23.976) (fixtures 11 and 13c) (-keyint_min:v:0 with the ' +
@@ -264,13 +335,17 @@ const RECIPE =
   'cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont -frag_duration 1000000 pipe:1';
 
 const RULES =
-  'ADR 0037: segment N = [N*P, (N+1)*P) on the zero-based timeline. A fragment whose video traf starts ' +
-  'with a sync sample opens segment floor(presentationTime / (P * timescale)), or joins it when that segment is ' +
-  'already open; every other fragment joins the open segment (or waits for the first one). Segments numbered ' +
-  'below startSequenceNumber are discarded preroll; a sync-first fragment beyond the next deliverable number ' +
-  'closes the open segment (delivered, or discarded when preroll) and then fails with a skipped segment ' +
-  'number, grouping nothing from that fragment on. firstVideoPresentationTime = tfdt + first sample\'s composition offset, ' +
-  'in videoTimescale ticks, no edit list.';
+  'ADR 0037: segment N = [N*P, (N+1)*P) on the zero-based timeline. A sync video sample opens segment ' +
+  'floor(presentationTime / (P * timescale)), even inside a fragment, or joins it when that segment is already ' +
+  'open; every other sample joins the open segment (or waits for the first one), and a fragment belongs to every ' +
+  'segment that holds one of its video samples. Segments numbered below startSequenceNumber are discarded ' +
+  'preroll; a sync sample beyond the next deliverable number closes the open segment (delivered, or discarded ' +
+  'when preroll) and then fails with a skipped segment number, grouping nothing from that sample on. ' +
+  'firstVideoPresentationTime = the opening sync sample\'s decode time + its composition offset, in ' +
+  'videoTimescale ticks, no edit list. Audio samples follow their own start: once the keyframe of a later ' +
+  'segment has arrived, a segment closes after the fragment in which an audio sample of a later segment ' +
+  'arrives or the video\'s decode end runs 1 s past the segment\'s end; droppedAudioSamples lists every audio ' +
+  'sample that arrives after its segment closed, which the producer drops.';
 
 function fixtureRecord({ fixture, record, source, pipe, work }) {
   const stream = record.stream;
@@ -300,6 +375,7 @@ function fixtureRecord({ fixture, record, source, pipe, work }) {
     proves: fixture.proves,
     recipeDeviation: fixture.recipeDeviation ?? null,
     mode: fixture.mode,
+    audio: fixture.audio ?? fixture.mode,
     encoder: fixture.encoder,
     source: {
       file: fixture.source,

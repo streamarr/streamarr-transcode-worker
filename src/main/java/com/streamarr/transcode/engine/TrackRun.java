@@ -1,8 +1,11 @@
 package com.streamarr.transcode.engine;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
-import java.util.OptionalLong;
+import java.util.function.IntSupplier;
 import java.util.function.LongSupplier;
+import lombok.Builder;
 
 /**
  * A {@code trun}'s header and its sample table, which {@link #of} checks fits inside the box before
@@ -33,23 +36,6 @@ final class TrackRun {
     var run = new TrackRun(trun, new Header(fields.u8(), fields.u24(), fields.u32()));
     run.header.requireSampleTable(run.sampleTable());
     return run;
-  }
-
-  /**
-   * The first sample's flags (the run's first-sample flags, else its own) and composition offset;
-   * empty when the run holds no sample.
-   */
-  Optional<FirstSample> firstSample() {
-    if (header.sampleCount() == 0) {
-      return Optional.empty();
-    }
-
-    var fields =
-        sampleTable().skipIf(header.has(SAMPLE_DURATION), 4).skipIf(header.has(SAMPLE_SIZE), 4);
-    var sampleFlags = fields.s32If(header.has(SAMPLE_FLAGS));
-    var compositionOffset = header.compositionOffsetOf(fields);
-    return Optional.of(
-        new FirstSample(firstSampleFlags().or(() -> sampleFlags), compositionOffset));
   }
 
   /** The run's data offset from its {@code traf}'s base, when the run declares one. */
@@ -83,31 +69,38 @@ final class TrackRun {
     return bytes;
   }
 
+  long sampleCount() {
+    return header.sampleCount();
+  }
+
   /**
-   * The shortest duration among the run's samples: each sample's own duration, else the default;
-   * empty when the run holds no sample.
+   * Each sample's duration, size, flags and composition offset in order, with the defaults for the
+   * fields the run leaves out; a default is asked for only when a sample needs it.
    */
-  OptionalLong shortestSampleDuration(LongSupplier defaultSampleDuration) {
-    if (header.sampleCount() == 0) {
-      return OptionalLong.empty();
-    }
-
-    if (!header.has(SAMPLE_DURATION)) {
-      return OptionalLong.of(defaultSampleDuration.getAsLong());
-    }
-
+  List<Entry> entries(Defaults defaults) {
+    var entries = new ArrayList<Entry>(Math.toIntExact(header.sampleCount()));
     var fields = sampleTable();
-    var afterDuration =
-        4
-            * Integer.bitCount(
-                header.flags() & (SAMPLE_SIZE | SAMPLE_FLAGS | SAMPLE_COMPOSITION_TIME_OFFSET));
-    var shortest = Long.MAX_VALUE;
+    var firstSampleFlags = firstSampleFlags();
     for (var sample = 0L; sample < header.sampleCount(); sample++) {
-      shortest = Math.min(shortest, fields.u32());
-      fields.skip(afterDuration);
+      var duration = fields.u32If(header.has(SAMPLE_DURATION)).orElseGet(defaults.duration());
+      var size = fields.u32If(header.has(SAMPLE_SIZE)).orElseGet(defaults.size());
+      var ownFlags = fields.s32If(header.has(SAMPLE_FLAGS));
+      var compositionOffset = header.compositionOffsetOf(fields);
+      var flags = ownFlags;
+      if (sample == 0) {
+        flags = firstSampleFlags.or(() -> ownFlags);
+      }
+
+      entries.add(
+          Entry.builder()
+              .duration(duration)
+              .size(size)
+              .flags(flags.orElseGet(() -> defaults.flags().getAsInt()))
+              .compositionOffset(compositionOffset)
+              .build());
     }
 
-    return OptionalLong.of(shortest);
+    return entries;
   }
 
   private Optional<Integer> firstSampleFlags() {
@@ -128,8 +121,12 @@ final class TrackRun {
         .skipIf(header.has(FIRST_SAMPLE_FLAGS), 4);
   }
 
-  /** A run's first sample: its flags, when the run declares any, and its composition offset. */
-  record FirstSample(Optional<Integer> flags, long compositionOffset) {}
+  /** The defaults a {@code traf} or its track declares for the fields a run leaves out. */
+  record Defaults(LongSupplier duration, LongSupplier size, IntSupplier flags) {}
+
+  /** One sample's fields as the run and the defaults give them. */
+  @Builder
+  record Entry(long duration, long size, int flags, long compositionOffset) {}
 
   private record Header(int version, int flags, long sampleCount) {
 

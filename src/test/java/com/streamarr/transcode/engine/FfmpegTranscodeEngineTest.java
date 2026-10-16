@@ -115,7 +115,7 @@ class FfmpegTranscodeEngineTest {
 
     var producer = executor.startProducer(request, sink, SegmentMemoryBudget.forSlots(1));
 
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
     assertThat(launcher.command(request.attemptId()))
         .startsWith("ffmpeg")
         .containsSubsequence("-ss", "24", "-i", "/media/movie.mkv")
@@ -159,7 +159,7 @@ class FfmpegTranscodeEngineTest {
       TranscodeMode mode) {
     var producer = startProducerOverAOneTickVideoSample(mode);
 
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
   }
 
   // FFmpeg writes three 1 s segments of 23.976 fps video whose second holds a 1-tick sample.

@@ -356,9 +356,11 @@ public final class TranscodeWorker implements AutoCloseable {
   private static void sendContent(SegmentUpload upload, ProducedSegment segment)
       throws InterruptedException, TimeoutException {
     var pending = ByteString.EMPTY;
-    for (var box : segment.content()) {
-      // The producer never changes a segment it delivered, so wrapping its boxes copies nothing.
-      pending = sendWholeDataMessages(upload, pending.concat(UnsafeByteOperations.unsafeWrap(box)));
+    for (var part : segment.content()) {
+      // The producer never changes a segment's bytes after delivering it, so wrapping them copies
+      // nothing.
+      pending =
+          sendWholeDataMessages(upload, pending.concat(UnsafeByteOperations.unsafeWrap(part)));
     }
 
     if (!pending.isEmpty()) {
@@ -394,10 +396,25 @@ public final class TranscodeWorker implements AutoCloseable {
 
   private static EstablishWorkerSessionRequest reportOf(VariantJob job, AttemptOutcome outcome) {
     return switch (outcome) {
-      case Completed _ -> jobAttemptCompleted(job.getJobAttemptId());
+      case Completed(var droppedLateAudioSampleCount) ->
+          completion(job, droppedLateAudioSampleCount);
       case Failed(var reason, var detail) -> transcodeFailure(job, reason, detail);
       case Stopped _ -> jobAttemptStopped(job.getJobAttemptId());
     };
+  }
+
+  private static EstablishWorkerSessionRequest completion(
+      VariantJob job, long droppedLateAudioSampleCount) {
+    if (droppedLateAudioSampleCount > 0) {
+      log.info(
+          "Variant {} of stream session {} dropped {} audio samples that arrived after their media"
+              + " segment was delivered",
+          job.getVariant().getVariantLabel(),
+          fromProto(job.getStreamSessionId()),
+          droppedLateAudioSampleCount);
+    }
+
+    return jobAttemptCompleted(job.getJobAttemptId());
   }
 
   private static EstablishWorkerSessionRequest transcodeFailure(

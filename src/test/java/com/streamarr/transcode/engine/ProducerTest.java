@@ -1,10 +1,12 @@
 package com.streamarr.transcode.engine;
 
-import static com.streamarr.transcode.engine.FfmpegRecordings.assertDeliveredAsExpected;
 import static com.streamarr.transcode.engine.FfmpegRecordings.bytesOf;
 import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
+import static com.streamarr.transcode.fixtures.DeliveredSamples.assertCarriesTheRecordedSamples;
+import static com.streamarr.transcode.fixtures.DeliveredSamples.audioSamplesOfTheDeliveredSegments;
 import static com.streamarr.transcode.fixtures.Races.awaitStart;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
+import static com.streamarr.transcode.fixtures.RecordingFixtures.uploadNames;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 import static org.awaitility.Awaitility.await;
@@ -12,22 +14,32 @@ import static org.awaitility.Awaitility.await;
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.engine.AttemptOutcome.Failed;
 import com.streamarr.transcode.engine.AttemptOutcome.Stopped;
+import com.streamarr.transcode.engine.FfmpegRecordings.DroppedAudioSample;
 import com.streamarr.transcode.engine.FfmpegRecordings.Recording;
 import com.streamarr.transcode.engine.FfmpegRecordings.SegmentSummary;
-import com.streamarr.transcode.engine.RecordingSegmentSink.Accepted;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
+import com.streamarr.transcode.fixtures.AudioInterval;
+import com.streamarr.transcode.fixtures.Mp4Samples;
+import com.streamarr.transcode.fixtures.Mp4Samples.Movie;
+import com.streamarr.transcode.fixtures.Mp4Samples.MovieFragment;
+import com.streamarr.transcode.fixtures.Mp4Samples.Sample;
 import com.streamarr.transcode.fixtures.RecordingFixtures;
 import com.streamarr.transcode.fixtures.TopLevelBoxes;
 import com.streamarr.transcode.fixtures.TopLevelBoxes.Box;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.OptionalDouble;
+import java.util.OptionalInt;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -65,6 +77,7 @@ class ProducerTest {
       UUID.fromString("0f6a3a9e-4c6b-4f59-9d0e-1c2b3a4d5e6f");
   private static final long SERVER_SEGMENT_CAP_BYTES = 128L * 1024 * 1024;
   private static final int NEARLY_CAPPED_FRAGMENT_PAYLOAD = 40 * 1024 * 1024;
+  private static final long ONE_SLOT_CAPACITY = 2 * SERVER_SEGMENT_CAP_BYTES;
   private static final int RACE_ITERATIONS = 200;
   private static final int BURSTS = 12;
   private static final int BURST_SLOTS = 3;
@@ -81,7 +94,7 @@ class ProducerTest {
   // before the body of the third segment's first mdat, which the budget cannot admit.
   private static final int NEARLY_CAPPED_BUDGET_STOP =
       IsoBoxes.ftyp().length
-          + IsoBoxes.videoAndAudioMoov().length
+          + videoOnlyMoov().length
           + 6 * keyframeFragment(0).length
           + keyframeMoof(48_000).length
           + 8;
@@ -91,7 +104,7 @@ class ProducerTest {
   // second segment's first mdat, which the worker's budget cannot admit.
   private static final int BEHIND_A_HELD_STOP =
       IsoBoxes.ftyp().length
-          + IsoBoxes.videoAndAudioMoov().length
+          + videoOnlyMoov().length
           + 3 * keyframeFragment(0).length
           + keyframeMoof(24_000).length
           + 8;
@@ -131,13 +144,545 @@ class ProducerTest {
         .sink(new RecordingSegmentSink());
   }
 
-  static Stream<Recording> recordingsThatGroupWithoutFailure() {
-    return FfmpegRecordings.recordings().stream()
-        .filter(recording -> recording.failure().isEmpty());
+  static Stream<Recording> recordingsThatComplete() {
+    return recordings().filter(recording -> recording.failure().isEmpty());
+  }
+
+  static Stream<Recording> recordingsThatDropAudio() {
+    return recordings().filter(recording -> !recording.droppedAudioSamples().isEmpty());
+  }
+
+  static Stream<Recording> recordings() {
+    return FfmpegRecordings.recordings().stream();
   }
 
   @ParameterizedTest(name = "{0}")
-  @MethodSource("recordingsThatGroupWithoutFailure")
+  @MethodSource("recordings")
+  @DisplayName(
+      "Should deliver each media segment as one moof and one mdat when FFmpeg writes several"
+          + " fragments for it")
+  void shouldDeliverEachMediaSegmentAsOneMoofAndOneMdatWhenFfmpegWritesSeveralFragmentsForIt(
+      Recording recording) {
+    assertThat(recording.segments())
+        .anySatisfy(segment -> assertThat(segment.fragmentCount()).isGreaterThan(1));
+
+    deliverEverySegmentOf(recording);
+
+    assertThat(mediaSegmentNames())
+        .isNotEmpty()
+        .allSatisfy(
+            name ->
+                assertThat(TopLevelBoxes.of(sink.contentOf(name)))
+                    .extracting(Box::type)
+                    .containsExactly("moof", "mdat"));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("recordings")
+  @DisplayName("Should deliver FFmpeg's own samples when it rebuilds the media segments")
+  void shouldDeliverFfmpegsOwnSamplesWhenItRebuildsTheMediaSegments(Recording recording) {
+    deliverEverySegmentOf(recording);
+
+    assertCarriesTheRecordedSamples(sink.acceptedBytes(), recording);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("recordings")
+  @DisplayName(
+      "Should deliver each audio sample in the media segment whose interval holds its start, apart"
+          + " from segment zero's priming frame and the last segment's tail, when FFmpeg writes it in"
+          + " another segment's fragment")
+  void
+      shouldDeliverEachAudioSampleInTheMediaSegmentWhoseIntervalHoldsItsStartApartFromSegmentZerosPrimingFrameAndTheLastSegmentsTailWhenFfmpegWritesItInAnotherSegmentsFragment(
+          Recording recording) {
+    var outcome = deliverEverySegmentOf(recording);
+
+    var names = mediaSegmentNames();
+    assertThat(names)
+        .isNotEmpty()
+        .allSatisfy(
+            name -> {
+              var segment = mediaSegmentOf(sink, name);
+              var periodTicks = recording.period() * segment.audioTrack().timescale();
+              var interval =
+                  AudioInterval.ofDeliveredSegment(
+                      numberOf(name),
+                      periodTicks,
+                      name.equals(names.getLast()) && outcome instanceof Completed);
+
+              assertThat(segment.samplesOf(segment.audioTrack()))
+                  .extracting(Sample::presentationTime)
+                  .allMatch(
+                      interval::holds, name + " starts every audio sample inside " + interval);
+            });
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("recordings")
+  @DisplayName(
+      "Should deliver exactly once every audio sample FFmpeg writes before its media segment was"
+          + " delivered when it rebuilds the media segments")
+  void shouldDeliverEveryAudioSampleFfmpegWritesInTimeExactlyOnceWhenItRebuildsTheMediaSegments(
+      Recording recording) {
+    var outcome = deliverEverySegmentOf(recording);
+
+    var delivered = Mp4Samples.read(sink.acceptedBytes());
+    assertThat(delivered.samplesOf(delivered.audioTrack()))
+        .isNotEmpty()
+        .containsExactlyElementsOf(
+            audioSamplesOfTheDeliveredSegments(recording, outcome instanceof Completed));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("recordings")
+  @DisplayName(
+      "Should number each media segment's movie fragment one past the segment's sequence number"
+          + " when it rebuilds the media segments")
+  void shouldNumberEachMediaSegmentsMovieFragmentOnePastItsSequenceNumberWhenItRebuildsTheSegments(
+      Recording recording) {
+    deliverEverySegmentOf(recording);
+
+    assertThat(mediaSegmentNames())
+        .isNotEmpty()
+        .allSatisfy(
+            name ->
+                assertThat(mediaSegmentOf(sink, name).fragments())
+                    .extracting(MovieFragment::sequenceNumber)
+                    .containsExactly(numberOf(name) + 1L));
+  }
+
+  // Stream copies of an MP4 source: FFmpeg writes the same packets at the same decode times in
+  // both attempts, so only the producer could make a shared segment's bytes differ.
+  @Test
+  @DisplayName(
+      "Should deliver the start-0 attempt's bytes for every media segment a stream-copy replacement"
+          + " attempt delivers when both copy the same packets")
+  void shouldDeliverTheStartZeroAttemptsBytesForEveryMediaSegmentWhenBothCopyTheSamePackets() {
+    var startZero = deliveredBy(recording("07-copy-start0.fmp4"));
+    var replacement = deliveredBy(recording("07-copy-seek30.fmp4"));
+
+    assertThat(replacement.acceptedNames())
+        .filteredOn(name -> name.startsWith("segment"))
+        .isNotEmpty()
+        .allSatisfy(
+            name ->
+                assertThat(replacement.contentOf(name))
+                    .as(name)
+                    .isEqualTo(startZero.contentOf(name)));
+  }
+
+  // A stream copy writes the same video packets at the same decode times whatever its seek; the
+  // encoded audio of a replacement attempt starts at the seek point, and FFmpeg writes nothing
+  // until the audio has a sample, so its first fragment runs past the keyframe at 30.030 s.
+  @Test
+  @DisplayName(
+      "Should deliver the start-0 attempt's video samples for every media segment when a"
+          + " stream-copy replacement attempt that encodes its audio holds its first segment's"
+          + " keyframe inside FFmpeg's first fragment")
+  void
+      shouldDeliverTheStartZeroAttemptsVideoSamplesWhenAReplacementAttemptHoldsItsFirstSegmentsKeyframeInsideFfmpegsFirstFragment() {
+    var startZero = deliveredBy(recording("16-copy-encode-audio.fmp4"));
+    var replacement = deliveredBy(recording("16-copy-encode-audio-seek30.fmp4"));
+
+    assertThat(videoSamplesOf(replacement, "segment5.m4s").getFirst().presentationTime())
+        .isEqualTo(720_720);
+    assertThat(replacement.acceptedNames())
+        .filteredOn(name -> name.startsWith("segment"))
+        .startsWith("segment5.m4s")
+        .allSatisfy(
+            name ->
+                assertThat(videoSamplesOf(replacement, name))
+                    .as(name)
+                    .isEqualTo(videoSamplesOf(startZero, name)));
+  }
+
+  @ParameterizedTest(name = "{1} after {0}")
+  @CsvSource({
+    "05-copy-late-start.fmp4, 05-copy-late-start-seek12.fmp4",
+    "07-copy-start0.fmp4, 07-copy-seek30.fmp4"
+  })
+  @DisplayName(
+      "Should start a stream-copy replacement attempt's audio where the start-0 attempt's segment"
+          + " ends when its first segment follows that segment")
+  void
+      shouldStartAStreamCopyReplacementAttemptsAudioWhereTheStartZeroAttemptsSegmentEndsWhenItsFirstSegmentFollowsThatSegment(
+          String startZeroAttempt, String replacementAttempt) {
+    var replacement = recording(replacementAttempt);
+    var junction = replacement.startSequenceNumber();
+
+    var before =
+        audioSamplesOf(
+            deliveredBy(recording(startZeroAttempt)), "segment" + (junction - 1) + ".m4s");
+    var after = audioSamplesOf(deliveredBy(replacement), "segment" + junction + ".m4s");
+
+    assertThat(after.getFirst().decodeTime()).isEqualTo(before.getLast().end());
+  }
+
+  @Test
+  @DisplayName(
+      "Should hold a media segment until an audio sample at or after its end arrives when the audio"
+          + " lags the keyframe that opens the next segment")
+  void shouldHoldAMediaSegmentUntilAnAudioSampleAtOrAfterItsEndArrivesWhenTheAudioLags() {
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0).videoDuration(12_000).audioFrom(0, 12_000, 12_000).build(),
+            TimedFragment.keyframeAt(24_000)
+                .videoDuration(12_000)
+                .audioFrom(24_000, 12_000, 9_600)
+                .build(),
+            TimedFragment.frameAt(36_000)
+                .videoDuration(12_000)
+                .audioFrom(45_600, 2_400, 48_000)
+                .build());
+    var process =
+        ScriptedProcess.builder().output(output.bytes()).pauseAfter(output.endOf(1)).build();
+    sink.holding(0);
+
+    var producer = producerOfOneSecondSegments(process).start();
+
+    // Closing segment 0 would keep the reader from reading on until the held initialization
+    // segment returns.
+    awaiting().until(process::hasReachedPause);
+    sink.release();
+    process.resume();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
+    assertThat(audioDecodeTimesOf("segment0.m4s"))
+        .containsExactly(0L, 12_000L, 24_000L, 36_000L, 45_600L);
+    assertThat(audioDecodeTimesOf("segment1.m4s")).containsExactly(48_000L);
+  }
+
+  @Test
+  @DisplayName(
+      "Should hold a media segment until an audio sample at or after its end arrives when the"
+          + " keyframe that opens the next segment carries no audio")
+  void
+      shouldHoldAMediaSegmentUntilAnAudioSampleAtOrAfterItsEndArrivesWhenTheKeyframeOpeningTheNextCarriesNoAudio() {
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0)
+                .videoDuration(12_000)
+                .audioFrom(0, 12_000, 12_000, 12_000, 10_000)
+                .build(),
+            TimedFragment.keyframeAt(24_000).videoDuration(12_000).build(),
+            TimedFragment.frameAt(36_000)
+                .videoDuration(12_000)
+                .audioFrom(46_000, 2_000, 48_000)
+                .build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+
+    var producer = producerOfOneSecondSegments(process).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
+    assertThat(audioDecodeTimesOf("segment0.m4s"))
+        .containsExactly(0L, 12_000L, 24_000L, 36_000L, 46_000L);
+    assertThat(audioDecodeTimesOf("segment1.m4s")).containsExactly(48_000L);
+  }
+
+  @Test
+  @DisplayName(
+      "Should deliver the video samples before a keyframe inside a fragment in the segment that"
+          + " keyframe closes and the rest in the segment it opens when both segments are delivered")
+  void
+      shouldDeliverTheVideoSamplesBeforeAKeyframeInsideAFragmentInTheSegmentItClosesAndTheRestInTheSegmentItOpens() {
+    var workerBudget = SegmentMemoryBudget.forSlots(1);
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0).videoDuration(12_000).audioFrom(0, 24_000).build(),
+            TimedFragment.frameAt(12_000)
+                .videoDuration(12_000)
+                .videoSampleCount(3)
+                .keyframeInside(OptionalInt.of(1))
+                .audioFrom(24_000, 24_000, 24_000, 24_000)
+                .build(),
+            TimedFragment.keyframeAt(48_000).audioFrom(96_000, 48_000).build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+
+    var producer = producerOfOneSecondSegments(process).memoryBudget(workerBudget).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(sink.acceptedNames())
+        .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
+    assertThat(videoDecodeTimesOf("segment0.m4s")).containsExactly(0L, 12_000L);
+    assertThat(videoDecodeTimesOf("segment1.m4s")).containsExactly(24_000L, 36_000L);
+    assertThat(videoDecodeTimesOf("segment2.m4s")).containsExactly(48_000L);
+    assertThat(audioDecodeTimesOf("segment0.m4s")).containsExactly(0L, 24_000L);
+    assertThat(audioDecodeTimesOf("segment1.m4s")).containsExactly(48_000L, 72_000L);
+    assertReleasesEveryReservedByte(workerBudget);
+  }
+
+  @Test
+  @DisplayName(
+      "Should deliver a media segment after the audio's end once the video runs a second past its"
+          + " end when the audio ends before the video")
+  void shouldDeliverAMediaSegmentAfterTheAudiosEndOnceTheVideoRunsASecondPastItsEnd() {
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0).audioFrom(0, 12_000, 12_000).build(),
+            TimedFragment.keyframeAt(24_000).build(),
+            TimedFragment.keyframeAt(48_000).build(),
+            TimedFragment.keyframeAt(72_000).build());
+    var process =
+        ScriptedProcess.builder().output(output.bytes()).pauseAfter(output.endOf(2)).build();
+
+    var producer = producerOfOneSecondSegments(process).start();
+
+    awaiting().until(process::hasReachedPause);
+    awaiting()
+        .untilAsserted(
+            () ->
+                assertThat(sink.acceptedNames())
+                    .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s"));
+    process.resume();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(sink.acceptedNames())
+        .containsExactly(
+            "init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s", "segment3.m4s");
+    assertThat(audioDecodeTimesOf("segment0.m4s")).containsExactly(0L, 12_000L);
+  }
+
+  // A stream copy at one frame per second with B-frames: FFmpeg writes each audio sample beside the
+  // video whose decode time runs seconds ahead of it.
+  @Test
+  @DisplayName(
+      "Should deliver every audio sample in its media segment when the video's decode time runs"
+          + " more than a second ahead of the audio that arrives beside it")
+  void
+      shouldDeliverEveryAudioSampleInItsMediaSegmentWhenTheVideosDecodeTimeRunsMoreThanASecondAhead() {
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0).audioFrom(0, 12_000).build(),
+            TimedFragment.keyframeAt(24_000).audioFrom(12_000, 12_000).build(),
+            TimedFragment.keyframeAt(48_000).audioFrom(24_000, 12_000).build(),
+            TimedFragment.keyframeAt(72_000).audioFrom(36_000, 12_000).build(),
+            TimedFragment.keyframeAt(96_000).audioFrom(48_000, 12_000).build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+
+    var producer = producerOfOneSecondSegments(process).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(audioDecodeTimesOf("segment0.m4s")).containsExactly(0L, 12_000L, 24_000L, 36_000L);
+    assertThat(audioDecodeTimesOf("segment1.m4s")).containsExactly(48_000L);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(
+      strings = {
+        "17-copy-audio-ends-long-before-video.fmp4",
+        "17-encode-audio-ends-long-before-video.fmp4"
+      })
+  @DisplayName(
+      "Should deliver each media segment after the audio's end while FFmpeg's output continues when"
+          + " the audio ends long before the video")
+  void shouldDeliverEachMediaSegmentAfterTheAudiosEndWhileFfmpegsOutputContinues(String file) {
+    var recording = recording(file);
+    // Inside segment 10's first fragment: the video has reached 60 s, a second past segment 8's end
+    // and not yet past segment 9's, and the audio ended at 20 s.
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(file))
+            .pauseAfter(offsetOfMediaSegment(recording, 10) + 10)
+            .resumesOnQuit(true)
+            .exitCode(255)
+            .build();
+
+    var producer = producerFor(process, recording).start();
+
+    awaiting().until(process::hasReachedPause);
+    awaiting()
+        .untilAsserted(
+            () ->
+                assertThat(sink.acceptedNames())
+                    .containsExactly(
+                        "init.mp4",
+                        "segment0.m4s",
+                        "segment1.m4s",
+                        "segment2.m4s",
+                        "segment3.m4s",
+                        "segment4.m4s",
+                        "segment5.m4s",
+                        "segment6.m4s",
+                        "segment7.m4s",
+                        "segment8.m4s"));
+    producer.stop();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Stopped());
+  }
+
+  // FFmpeg flushes an audio encoder only once the whole input has ended, so the encoder's last
+  // frames of audio that ends long before the video arrive after their segment was delivered.
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("recordingsThatDropAudio")
+  @DisplayName(
+      "Should deliver every media segment without the audio samples that arrive after their segment"
+          + " was delivered, and count them, when the audio ends long before the video")
+  void
+      shouldDeliverEveryMediaSegmentWithoutTheLateAudioSamplesAndCountThemWhenTheAudioEndsLongBeforeTheVideo(
+          Recording recording) {
+    var outcome = deliverEverySegmentOf(recording);
+
+    assertThat(outcome).isEqualTo(new Completed(recording.droppedAudioSamples().size()));
+    assertThat(mediaSegmentNames())
+        .extracting(ProducerTest::numberOf)
+        .containsExactlyElementsOf(
+            recording.segments().stream().map(SegmentSummary::number).toList());
+    var delivered = Mp4Samples.read(sink.acceptedBytes());
+    assertThat(delivered.samplesOf(delivered.audioTrack()))
+        .extracting(Sample::presentationTime)
+        .doesNotContainAnyElementsOf(
+            recording.droppedAudioSamples().stream()
+                .map(DroppedAudioSample::presentationTime)
+                .toList());
+  }
+
+  @Test
+  @DisplayName(
+      "Should deliver every media segment within the budget when segments after the audio's end"
+          + " would outgrow it together")
+  void shouldDeliverEveryMediaSegmentWithinTheBudgetWhenSegmentsAfterTheAudiosEndWouldOutgrowIt() {
+    var workerBudget = SegmentMemoryBudget.forSlots(1);
+    var seventyMebibytes = 70 * 1024 * 1024;
+    // Held until the output ends, segments 1 to 3 and segment 4's fragment would take 280 MiB.
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0).audioFrom(0, 1024).build(),
+            TimedFragment.keyframeAt(24_000).paddingBytes(seventyMebibytes).build(),
+            TimedFragment.keyframeAt(48_000).paddingBytes(seventyMebibytes).build(),
+            TimedFragment.keyframeAt(72_000).paddingBytes(seventyMebibytes).build(),
+            TimedFragment.keyframeAt(96_000).paddingBytes(seventyMebibytes).build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+
+    var producer = producerOfOneSecondSegments(process).memoryBudget(workerBudget).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(sink.acceptedNames())
+        .containsExactly(
+            "init.mp4",
+            "segment0.m4s",
+            "segment1.m4s",
+            "segment2.m4s",
+            "segment3.m4s",
+            "segment4.m4s");
+    assertReleasesEveryReservedByte(workerBudget);
+  }
+
+  @Test
+  @DisplayName(
+      "Should close a media segment at the keyframe that opens the next one when the movie has no"
+          + " sound track")
+  void shouldCloseAMediaSegmentAtTheKeyframeThatOpensTheNextOneWhenTheMovieHasNoSoundTrack() {
+    var output =
+        OneSecondSegments.of(
+            videoOnlyMoov(),
+            TimedFragment.keyframeAt(0).build(),
+            TimedFragment.keyframeAt(24_000).build(),
+            TimedFragment.keyframeAt(48_000).build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+    sink.holding(0);
+
+    var producer = producerOfOneSecondSegments(process).start();
+
+    // Segment 0 closes at the second fragment, and its delivery waits for the held initialization
+    // segment, so the reader reads nothing further meanwhile.
+    assertReaderStopsAt(process, output.endOf(1));
+    sink.release();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(sink.acceptedNames())
+        .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
+  }
+
+  @Test
+  @DisplayName("Should deliver a media segment still waiting for audio when the output ends")
+  void shouldDeliverAMediaSegmentStillWaitingForAudioWhenTheOutputEnds() {
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0).audioFrom(0, 12_000, 12_000).build(),
+            TimedFragment.keyframeAt(24_000).audioFrom(24_000, 12_000, 9_600).build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+
+    var producer = producerOfOneSecondSegments(process).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
+    assertThat(audioDecodeTimesOf("segment0.m4s")).containsExactly(0L, 12_000L, 24_000L, 36_000L);
+    assertThat(audioDecodeTimesOf("segment1.m4s")).isEmpty();
+  }
+
+  @Test
+  @DisplayName(
+      "Should drop and count an audio sample and complete the attempt when the sample arrives"
+          + " after the segment whose interval holds its start was delivered")
+  void
+      shouldDropAndCountAnAudioSampleAndCompleteTheAttemptWhenItArrivesAfterItsSegmentWasDelivered() {
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0).audioFrom(0, 12_000, 12_000).build(),
+            TimedFragment.keyframeAt(24_000).build(),
+            TimedFragment.keyframeAt(48_000).audioFrom(24_000, 12_000).build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+
+    var producer = producerOfOneSecondSegments(process).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(1));
+    assertThat(sink.acceptedNames())
+        .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
+    assertThat(audioDecodeTimesOf("segment0.m4s")).containsExactly(0L, 12_000L);
+    assertThat(audioDecodeTimesOf("segment1.m4s")).isEmpty();
+    assertThat(audioDecodeTimesOf("segment2.m4s")).isEmpty();
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as malformed output when an audio sample's presentation time runs"
+          + " back into a segment that was delivered")
+  void shouldFailTheAttemptAsMalformedOutputWhenAnAudioSampleRunsBackIntoADeliveredSegment() {
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0).audioFrom(0, 12_000, 12_000).build(),
+            TimedFragment.keyframeAt(24_000).audioFrom(48_000, 12_000).build(),
+            TimedFragment.frameAt(48_000).audioFrom(24_000, 12_000).build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+
+    var producer = producerOfOneSecondSegments(process).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.MALFORMED_OUTPUT);
+    assertThat(failure.detail()).contains("PRESENTATION_TIME_REGRESSED");
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as malformed output when an audio sample's presentation time runs"
+          + " back inside a segment still being assembled")
+  void shouldFailTheAttemptAsMalformedOutputWhenAnAudioSampleRunsBackInsideAnOpenSegment() {
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0).audioFrom(12_000, 12_000).build(),
+            TimedFragment.frameAt(24_000).audioFrom(0, 12_000).build(),
+            TimedFragment.keyframeAt(48_000).audioFrom(48_000, 12_000).build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+
+    var producer = producerOfOneSecondSegments(process).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.MALFORMED_OUTPUT);
+    assertThat(failure.detail()).contains("PRESENTATION_TIME_REGRESSED");
+    assertThat(mediaSegmentNames()).isEmpty();
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("recordingsThatComplete")
   @DisplayName(
       "Should deliver the initialization segment and then each media segment in order when FFmpeg"
           + " exits cleanly")
@@ -147,9 +692,10 @@ class ProducerTest {
 
     var producer = producerFor(process, recording).start();
 
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
-    assertThat(sink.accepted()).containsExactlyElementsOf(expectedDeliveries(recording));
-    assertDeliveredAsExpected(sink.acceptedBytes(), recording);
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(recording.droppedAudioSamples().size()));
+    assertDeliveredInOrder(recording);
   }
 
   @ParameterizedTest(name = "{0}")
@@ -170,7 +716,7 @@ class ProducerTest {
 
     var producer = producerFor(process, recording).start();
 
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
     assertThat(recording.discardedPreroll())
         .extracting(SegmentSummary::number)
         .containsExactly(recording.startSequenceNumber() - 1);
@@ -196,7 +742,7 @@ class ProducerTest {
     assertThat(process.isAlive()).isFalse();
     assertThat(producer.outcome()).isNotDone();
     sink.release();
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
   }
 
   @Test
@@ -216,8 +762,8 @@ class ProducerTest {
     assertReaderStopsAt(process, closingFragmentEnd);
     assertThat(sink.acceptedNames()).containsExactly("init.mp4");
     sink.release();
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
-    assertThat(sink.accepted()).containsExactlyElementsOf(expectedDeliveries(recording));
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertDeliveredInOrder(recording);
   }
 
   @Test
@@ -229,13 +775,10 @@ class ProducerTest {
     var producer = producerOfOneSecondSegments(process).start();
 
     assertReaderStopsAt(process, NEARLY_CAPPED_BUDGET_STOP);
-    assertThat(
-            (long) process.bytesTaken()
-                - IsoBoxes.ftyp().length
-                - IsoBoxes.videoAndAudioMoov().length)
+    assertThat((long) process.bytesTaken() - IsoBoxes.ftyp().length - videoOnlyMoov().length)
         .isLessThanOrEqualTo(2 * SERVER_SEGMENT_CAP_BYTES);
     sink.release();
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
     assertThat(sink.acceptedNames())
         .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
   }
@@ -275,7 +818,7 @@ class ProducerTest {
     // delivery.
     assertReaderStopsAt(nextProcess, BEHIND_A_HELD_STOP);
     stopped.sink().release();
-    assertThat(next.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(next.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
     assertThat(stopped.process().isAlive()).isTrue();
     stopped.process().exit();
     assertThat(stopped.producer().outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Stopped());
@@ -305,8 +848,8 @@ class ProducerTest {
     // takes only its first box header until the waiting reader has its memory.
     assertReaderStopsAt(laterProcess, 8);
     stopped.sink().release();
-    assertThat(waiting.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
-    assertThat(later.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(waiting.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(later.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
     assertThat(laterSink.acceptedNames()).contains("init.mp4");
     stopped.process().exit();
     assertThat(stopped.producer().outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Stopped());
@@ -369,6 +912,64 @@ class ProducerTest {
 
   @Test
   @DisplayName(
+      "Should start a media segment's delivery only once the worker's budget also holds the moof"
+          + " it writes when another attempt's reservations leave room for the fragments alone")
+  void
+      shouldStartAMediaSegmentsDeliveryOnlyOnceTheWorkersBudgetAlsoHoldsTheMoofItWritesWhenOnlyTheFragmentsFit() {
+    var workerBudget = SegmentMemoryBudget.forSlots(1);
+    var output = OneKeyframePerSecond.of(3);
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+    var otherAttempts = output.leavingRoomForTheFirstTwoFragmentsIn(workerBudget);
+
+    var producer = producerOfOneSecondSegments(process).memoryBudget(workerBudget).start();
+
+    assertReaderStopsAt(process, output.endOf(1));
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+    workerBudget.release(otherAttempts);
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(sink.acceptedNames())
+        .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
+    assertReleasesEveryReservedByte(workerBudget);
+  }
+
+  @Test
+  @DisplayName(
+      "Should release every byte it reserved in the worker's budget when stopped while waiting for"
+          + " that budget to hold the moof it writes")
+  void
+      shouldReleaseEveryByteItReservedInTheWorkersBudgetWhenStoppedWhileWaitingForItToHoldTheMoofItWrites() {
+    var workerBudget = SegmentMemoryBudget.forSlots(1);
+    var output = OneKeyframePerSecond.of(3);
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+    var otherAttempts = output.leavingRoomForTheFirstTwoFragmentsIn(workerBudget);
+    var producer = producerOfOneSecondSegments(process).memoryBudget(workerBudget).start();
+    assertReaderStopsAt(process, output.endOf(1));
+
+    producer.stop();
+
+    assertThat(producer.outcome()).isCompletedWithValue(new Stopped());
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+    workerBudget.release(otherAttempts);
+    assertReleasesEveryReservedByte(workerBudget);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("recordings")
+  @DisplayName(
+      "Should release every byte it reserved in the worker's budget when the attempt settles")
+  void shouldReleaseEveryByteItReservedInTheWorkersBudgetWhenTheAttemptSettles(
+      Recording recording) {
+    var workerBudget = SegmentMemoryBudget.forSlots(1);
+    var process = ScriptedProcess.builder().output(bytesOf(recording.file())).build();
+
+    var producer = producerFor(process, recording).memoryBudget(workerBudget).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT);
+    assertReleasesEveryReservedByte(workerBudget);
+  }
+
+  @Test
+  @DisplayName(
       "Should free the segment it was assembling at the stop when a hung FFmpeg leaves the reader"
           + " waiting inside a fragment")
   void
@@ -377,7 +978,7 @@ class ProducerTest {
     // FFmpeg writes nothing more and ignores the quit.
     var hangOffset =
         IsoBoxes.ftyp().length
-            + IsoBoxes.videoAndAudioMoov().length
+            + videoOnlyMoov().length
             + 3 * keyframeFragment(0).length
             + keyframeMoof(24_000).length
             + 8
@@ -423,10 +1024,7 @@ class ProducerTest {
             keyframeFragment(18_000));
     var output =
         IsoBoxes.concat(
-            IsoBoxes.ftyp(),
-            IsoBoxes.videoAndAudioMoov(),
-            preroll,
-            nearlyCappedFragmentsFrom(24_000));
+            IsoBoxes.ftyp(), videoOnlyMoov(), preroll, nearlyCappedFragmentsFrom(24_000));
     var process = ScriptedProcess.builder().output(output).build();
     sink.holding(1);
 
@@ -435,7 +1033,7 @@ class ProducerTest {
     var budgetStop = preroll.length + NEARLY_CAPPED_BUDGET_STOP;
     assertReaderStopsAt(process, budgetStop);
     sink.release();
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
     assertThat(sink.acceptedNames())
         .containsExactly("init.mp4", "segment1.m4s", "segment2.m4s", "segment3.m4s");
   }
@@ -457,7 +1055,7 @@ class ProducerTest {
     assertThat(process.hasReadToEndOfOutput()).isTrue();
     assertThat(producer.outcome()).isNotDone();
     process.exit();
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
   }
 
   @ParameterizedTest(name = "{0}")
@@ -474,8 +1072,10 @@ class ProducerTest {
 
     var producer = producerFor(process, recording).start();
 
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
-    assertThat(sink.accepted()).containsExactlyElementsOf(expectedDeliveries(recording));
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(recording.droppedAudioSamples().size()));
+    assertDeliveredInOrder(recording);
   }
 
   @Test
@@ -584,6 +1184,345 @@ class ProducerTest {
 
   @Test
   @DisplayName(
+      "Should fail the attempt with the segment cap and release its memory when segments awaiting"
+          + " their audio leave the producer's budget no room for the next box")
+  void
+      shouldFailTheAttemptWithTheSegmentCapWhenSegmentsAwaitingTheirAudioLeaveTheBudgetNoRoomForTheNextBox() {
+    var workerBudget = SegmentMemoryBudget.forSlots(1);
+    var fiftyMebibytes = 50 * 1024 * 1024;
+    // Segment 0's 100 MiB awaits audio at or after its end while the video stays within a second
+    // of it, and segment 1's 100 MiB leave no room for its next 60 MiB fragment.
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0)
+                .videoDuration(12_000)
+                .audioFrom(0, 1024)
+                .paddingBytes(fiftyMebibytes)
+                .build(),
+            TimedFragment.frameAt(12_000)
+                .videoDuration(12_000)
+                .paddingBytes(fiftyMebibytes)
+                .build(),
+            TimedFragment.keyframeAt(24_000)
+                .videoDuration(6_000)
+                .paddingBytes(fiftyMebibytes)
+                .build(),
+            TimedFragment.frameAt(30_000).videoDuration(6_000).paddingBytes(fiftyMebibytes).build(),
+            TimedFragment.frameAt(36_000)
+                .videoDuration(6_000)
+                .paddingBytes(60 * 1024 * 1024)
+                .build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+
+    var producer = producerOfOneSecondSegments(process).memoryBudget(workerBudget).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.SEGMENT_CAP_EXCEEDED);
+    assertThat(failure.detail()).contains("no delivery in flight can free");
+    assertThat(process.wasDestroyedForcibly()).isTrue();
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+    assertReleasesEveryReservedByte(workerBudget);
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt with the segment cap when a media segment rebuilt as one moof and"
+          + " mdat outgrows the cap although its fragments fit")
+  void
+      shouldFailTheAttemptWithTheSegmentCapWhenAMediaSegmentRebuiltAsOneMoofAndMdatOutgrowsTheCap() {
+    // Each sample of this size takes 4 bytes more in a fragment and 16 more in the rebuilt segment,
+    // so two fragments of this many samples fit the cap and their rebuilt segment does not.
+    var sampleSize = 200;
+    var samplesPerFragment = Math.toIntExact(SERVER_SEGMENT_CAP_BYTES / (2 * (sampleSize + 10)));
+    var output =
+        IsoBoxes.concat(
+            IsoBoxes.ftyp(),
+            IsoBoxes.moov(IsoBoxes.Track.video().build()),
+            manySampleFragment(
+                IsoBoxes.videoTraf()
+                    .baseMediaDecodeTime(0L)
+                    .firstSampleFlags(IsoBoxes.SYNC_SAMPLE_FLAGS)
+                    .sampleCount(samplesPerFragment)
+                    .sampleSize(sampleSize)),
+            manySampleFragment(
+                IsoBoxes.videoTraf()
+                    .baseMediaDecodeTime(12_000L)
+                    .firstSampleFlags(IsoBoxes.NON_SYNC_SAMPLE_FLAGS)
+                    .sampleCount(samplesPerFragment)
+                    .sampleSize(sampleSize)),
+            keyframeFragment(24_000, 1));
+    assertThat((long) output.length).isLessThan(SERVER_SEGMENT_CAP_BYTES);
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer = producerOfOneSecondSegments(process).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.SEGMENT_CAP_EXCEEDED);
+    assertThat(failure.detail()).contains("as one moof and mdat");
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt with the segment cap when a fragment holds more samples than a"
+          + " media segment under the cap can describe")
+  void
+      shouldFailTheAttemptWithTheSegmentCapWhenAFragmentHoldsMoreSamplesThanAMediaSegmentCanDescribe() {
+    var output =
+        IsoBoxes.concat(
+            IsoBoxes.ftyp(),
+            IsoBoxes.moov(IsoBoxes.Track.video().build()),
+            manySampleFragment(
+                0, Math.toIntExact(SERVER_SEGMENT_CAP_BYTES / 16 + 1), IsoBoxes.SYNC_SAMPLE_FLAGS));
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer = producerOfOneSecondSegments(process).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.SEGMENT_CAP_EXCEEDED);
+    assertThat(failure.detail()).contains("samples needs more than the segment cap");
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt with the segment cap when the producer's budget cannot hold a"
+          + " fragment's samples beside its bytes although the fragment fits the cap")
+  void shouldFailTheAttemptWithTheSegmentCapWhenTheProducersBudgetCannotHoldAFragmentsSamples() {
+    // Each one-byte sample takes 5 bytes of the fragment besides the heap it takes once built.
+    var samples = Math.toIntExact(ONE_SLOT_CAPACITY / (5 + Fragment.HEAP_BYTES_PER_SAMPLE) + 1);
+    var output =
+        IsoBoxes.concat(
+            IsoBoxes.ftyp(),
+            IsoBoxes.moov(IsoBoxes.Track.video().build()),
+            manySampleFragment(0, samples, IsoBoxes.SYNC_SAMPLE_FLAGS),
+            keyframeFragment(24_000, 1));
+    assertThat((long) output.length).isLessThan(SERVER_SEGMENT_CAP_BYTES);
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer = producerOfOneSecondSegments(process).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.SEGMENT_CAP_EXCEEDED);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+  }
+
+  @Test
+  @DisplayName(
+      "Should build a fragment's samples only once the worker's budget also holds their heap when"
+          + " another attempt's reservations leave room for the fragment's bytes alone")
+  void shouldBuildAFragmentsSamplesOnlyOnceTheWorkersBudgetAlsoHoldsTheirHeap() {
+    var workerBudget = SegmentMemoryBudget.forSlots(1);
+    var samples = 1_000;
+    var initializationSegment =
+        IsoBoxes.concat(IsoBoxes.ftyp(), IsoBoxes.moov(IsoBoxes.Track.video().build()));
+    var manySamples = manySampleFragment(0, samples, IsoBoxes.SYNC_SAMPLE_FLAGS);
+    var output = IsoBoxes.concat(initializationSegment, manySamples, keyframeFragment(24_000, 1));
+    var process = ScriptedProcess.builder().output(output).build();
+    var otherAttempts =
+        ONE_SLOT_CAPACITY
+            - initializationSegment.length
+            - manySamples.length
+            - samples * Fragment.HEAP_BYTES_PER_SAMPLE / 2;
+    assertThat(workerBudget.tryReserveAtOnce(otherAttempts)).isTrue();
+
+    var producer = producerOfOneSecondSegments(process).memoryBudget(workerBudget).start();
+
+    assertReaderStopsAt(process, initializationSegment.length + manySamples.length);
+    workerBudget.release(otherAttempts);
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
+    assertReleasesEveryReservedByte(workerBudget);
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt with the segment cap when the producer's budget cannot also hold the"
+          + " moof it writes for a media segment")
+  void shouldFailTheAttemptWithTheSegmentCapWhenTheProducersBudgetCannotAlsoHoldTheMoofItWrites() {
+    // A segment 0 and a fragment that opens segment 1, each holding the cap with its sample's heap,
+    // fill the budget exactly, so nothing is left for segment 0's new moof.
+    var cappedFragmentPayload =
+        Math.toIntExact(
+            SERVER_SEGMENT_CAP_BYTES - keyframeMoof(0).length - 8 - Fragment.HEAP_BYTES_PER_SAMPLE);
+    var output =
+        IsoBoxes.concat(
+            IsoBoxes.ftyp(),
+            videoOnlyMoov(),
+            keyframeFragment(0, cappedFragmentPayload),
+            keyframeFragment(24_000, cappedFragmentPayload));
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer = producerOfOneSecondSegments(process).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.SEGMENT_CAP_EXCEEDED);
+    assertThat(failure.detail()).contains("writing a media segment needs");
+    assertThat(process.wasDestroyedForcibly()).isTrue();
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("outputsThatCannotBeRebuilt")
+  @DisplayName(
+      "Should fail the attempt as malformed output when a media segment's samples cannot be"
+          + " rebuilt as one moof and mdat")
+  void shouldFailTheAttemptAsMalformedOutputWhenAMediaSegmentsSamplesCannotBeRebuilt(
+      String description, byte[] output, String detail) {
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer = producerOfOneSecondSegments(process).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.MALFORMED_OUTPUT);
+    assertThat(failure.detail()).contains(detail);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+  }
+
+  static Stream<Arguments> outputsThatCannotBeRebuilt() {
+    var videoOnly = videoOnlyMoov();
+    return Stream.of(
+        Arguments.of(
+            "an audio presentation time beyond a signed 64-bit value in the video's timescale",
+            IsoBoxes.concat(
+                OneSecondSegments.of(
+                        IsoBoxes.videoAndAudioMoov(),
+                        TimedFragment.keyframeAt(0).audioFrom(0, 12_000).build())
+                    .bytes(),
+                IsoBoxes.moof(
+                    IsoBoxes.videoTraf()
+                        .baseMediaDecodeTime(24_000L)
+                        .firstSampleFlags(IsoBoxes.SYNC_SAMPLE_FLAGS)
+                        .sampleDurations(List.of(24_000))
+                        .build(),
+                    IsoBoxes.audioTraf()
+                        .baseMediaDecodeTime(Long.MAX_VALUE / 4)
+                        .decodeTimeVersion(1)
+                        .sampleDurations(List.of(12_000))
+                        .build()),
+                IsoBoxes.mdat(2)),
+            "overflows a signed 64-bit value in the video's timescale"),
+        Arguments.of(
+            "decode times that run backwards",
+            IsoBoxes.concat(
+                IsoBoxes.ftyp(),
+                videoOnly,
+                keyframeFragment(6_000, 1),
+                IsoBoxes.moof(IsoBoxes.videoTraf().baseMediaDecodeTime(3_000L).build()),
+                IsoBoxes.mdat(1),
+                keyframeFragment(24_000, 1)),
+            "decodes a sample at 3000 after one at 6000"),
+        Arguments.of(
+            "a composition offset beyond a signed 32-bit value",
+            IsoBoxes.concat(
+                IsoBoxes.ftyp(),
+                videoOnly,
+                keyframeFragment(0, 1),
+                IsoBoxes.moof(
+                    IsoBoxes.videoTraf()
+                        .baseMediaDecodeTime(6_000L)
+                        .compositionOffset(Integer.MIN_VALUE)
+                        .build()),
+                IsoBoxes.mdat(1),
+                keyframeFragment(24_000, 1)),
+            "offsets a sample's composition by 2147483648"),
+        Arguments.of(
+            "a decode time beyond a signed 64-bit value",
+            IsoBoxes.concat(
+                IsoBoxes.ftyp(),
+                videoOnly,
+                IsoBoxes.moof(
+                    IsoBoxes.videoTraf()
+                        .baseMediaDecodeTime(Long.MAX_VALUE)
+                        .decodeTimeVersion(1)
+                        .firstSampleFlags(IsoBoxes.SYNC_SAMPLE_FLAGS)
+                        .sampleDurations(List.of(1))
+                        .build()),
+                IsoBoxes.mdat(1)),
+            "a decode time overflows a signed 64-bit value"),
+        Arguments.of(
+            "samples of a track the movie does not declare",
+            IsoBoxes.concat(
+                IsoBoxes.ftyp(),
+                videoOnly,
+                IsoBoxes.moof(
+                    IsoBoxes.videoTraf()
+                        .baseMediaDecodeTime(0L)
+                        .firstSampleFlags(IsoBoxes.SYNC_SAMPLE_FLAGS)
+                        .build(),
+                    IsoBoxes.audioTraf()
+                        .baseMediaDecodeTime(0L)
+                        .sampleDurations(List.of(1024))
+                        .build()),
+                IsoBoxes.mdat(2)),
+            "neither the movie's video track nor its sound track"),
+        Arguments.of(
+            "an audio traf with samples but no tfdt",
+            IsoBoxes.concat(
+                IsoBoxes.ftyp(),
+                IsoBoxes.videoAndAudioMoov(),
+                IsoBoxes.moof(
+                    IsoBoxes.videoTraf()
+                        .baseMediaDecodeTime(0L)
+                        .firstSampleFlags(IsoBoxes.SYNC_SAMPLE_FLAGS)
+                        .build(),
+                    IsoBoxes.audioTraf().build()),
+                IsoBoxes.mdat(2)),
+            "traf holds no tfdt"),
+        Arguments.of(
+            "an audio sample that needs a default duration no box declares",
+            IsoBoxes.concat(
+                IsoBoxes.ftyp(),
+                IsoBoxes.box(
+                    "moov",
+                    IsoBoxes.fullBox("mvhd", 0, new byte[96]),
+                    IsoBoxes.Track.video().build().trak(),
+                    IsoBoxes.Track.audio().build().trak(),
+                    IsoBoxes.box("mvex", IsoBoxes.Track.video().build().trex())),
+                IsoBoxes.moof(
+                    IsoBoxes.videoTraf()
+                        .baseMediaDecodeTime(0L)
+                        .firstSampleFlags(IsoBoxes.SYNC_SAMPLE_FLAGS)
+                        .build(),
+                    IsoBoxes.audioTraf().baseMediaDecodeTime(0L).build()),
+                IsoBoxes.mdat(2)),
+            "needs a default sample field, and no trex declares one"));
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail a replacement attempt as malformed output when an audio sample's presentation"
+          + " time overflows a signed 64-bit value")
+  void shouldFailAReplacementAttemptAsMalformedOutputWhenAnAudioSamplesPresentationTimeOverflows() {
+    var output =
+        IsoBoxes.concat(
+            IsoBoxes.ftyp(),
+            IsoBoxes.videoAndAudioMoov(),
+            IsoBoxes.moof(
+                IsoBoxes.videoTraf()
+                    .baseMediaDecodeTime(24_000L)
+                    .firstSampleFlags(IsoBoxes.SYNC_SAMPLE_FLAGS)
+                    .build(),
+                IsoBoxes.audioTraf()
+                    .decodeTimeVersion(1)
+                    .baseMediaDecodeTime(Long.MAX_VALUE - 1024)
+                    .sampleDurations(List.of(1024))
+                    .compositionOffset(2048)
+                    .build()),
+            IsoBoxes.mdat(2),
+            keyframeFragment(48_000, 1));
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer = producerOfOneSecondSegments(process).startSequenceNumber(1).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.MALFORMED_OUTPUT);
+    assertThat(failure.detail()).contains("presentation time overflows");
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4");
+  }
+
+  @Test
+  @DisplayName(
       "Should deliver the closed segment, then fail the attempt and end FFmpeg, when source"
           + " keyframes are further apart than the period")
   void
@@ -595,8 +1534,7 @@ class ProducerTest {
 
     assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.SKIPPED_SEGMENT_NUMBER);
     assertThat(process.wasDestroyedForcibly()).isTrue();
-    assertThat(sink.accepted()).containsExactlyElementsOf(expectedDeliveries(recording));
-    assertDeliveredAsExpected(sink.acceptedBytes(), recording);
+    assertDeliveredInOrder(recording);
   }
 
   // ADR 0037: a skip lets the segment it closed finish delivery before the skip is recorded, but
@@ -763,7 +1701,7 @@ class ProducerTest {
 
     var producer = producerFor(process, recording).start();
 
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
     assertThat(sink.acceptedNames()).first().isEqualTo("init.mp4");
   }
 
@@ -783,7 +1721,7 @@ class ProducerTest {
     try {
       var producer = producerFor(process, recording).start();
 
-      assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+      assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
       assertThat(sink.acceptedNames()).first().isEqualTo("init.mp4");
     } finally {
       Locale.setDefault(Locale.Category.FORMAT, formatLocale);
@@ -892,11 +1830,9 @@ class ProducerTest {
             .videoDecision(new VideoDecision.Copy(HVC1_RECORD_CODEC_STRING))
             .start();
 
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
-    assertThat(sink.acceptedBytes())
-        .isEqualTo(
-            IsoBoxes.concat(
-                hevcInitializationSegment(hvc1Entry(HVC1_PARAMETER_SET_RECORD)), fragment));
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(sink.contentOf("init.mp4"))
+        .isEqualTo(hevcInitializationSegment(hvc1Entry(HVC1_PARAMETER_SET_RECORD)));
   }
 
   @Test
@@ -919,12 +1855,11 @@ class ProducerTest {
             .videoDecision(new VideoDecision.Copy(HVC1_RECORD_CODEC_STRING))
             .start();
 
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
     var expectedEntry =
         IsoBoxes.largeSizeBox(
             "hvc1", IsoBoxes.concat(new byte[78], IsoBoxes.box("hvcC", HVC1_PARAMETER_SET_RECORD)));
-    assertThat(sink.acceptedBytes())
-        .isEqualTo(IsoBoxes.concat(hevcInitializationSegment(expectedEntry), fragment));
+    assertThat(sink.contentOf("init.mp4")).isEqualTo(hevcInitializationSegment(expectedEntry));
   }
 
   // The audio sample entry declares fewer bytes than its own header, or more than its stsd holds.
@@ -984,7 +1919,7 @@ class ProducerTest {
 
     var producer = producerOfOneSecondSegments(process).start();
 
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
     assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
   }
 
@@ -1303,7 +2238,7 @@ class ProducerTest {
     producer.stop();
 
     assertThat(process.stdinText()).isEmpty();
-    assertThat(producer.outcome()).isCompletedWithValue(new Completed());
+    assertThat(producer.outcome()).isCompletedWithValue(new Completed(0));
   }
 
   @Test
@@ -1494,7 +2429,7 @@ class ProducerTest {
 
     var producer = producerOfOneSecondSegments(process).start();
 
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
     assertThat(sink.acceptedNames())
         .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
   }
@@ -1513,7 +2448,7 @@ class ProducerTest {
             .encodedFrameRate(OptionalDouble.of(24_000.0 / 1001))
             .start();
 
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
   }
 
   @ParameterizedTest(name = "FFmpeg ignores termination: {0}")
@@ -1641,7 +2576,7 @@ class ProducerTest {
         .until(() -> !producer.outcome().isDone() && !process.wasTerminated());
     sink.release();
 
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
   }
 
   @Test
@@ -1664,7 +2599,7 @@ class ProducerTest {
         .until(() -> !producer.outcome().isDone() && !process.wasTerminated());
     process.exit();
 
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
   }
 
   @Test
@@ -1688,7 +2623,7 @@ class ProducerTest {
         .contains("after its output ended and its last segment was accepted");
     assertThat(process.wasTerminated()).isTrue();
     assertThat(process.wasDestroyedForcibly()).isFalse();
-    assertThat(sink.accepted()).containsExactlyElementsOf(expectedDeliveries(recording));
+    assertDeliveredInOrder(recording);
   }
 
   @Test
@@ -1999,8 +2934,35 @@ class ProducerTest {
             .map(attempt -> new ReaderProgress(attempt, attempt.process().bytesTaken()))
             .toList();
     var charged = progress.stream().mapToLong(read -> read.chargedBefore(layout)).sum();
-    var released = progress.stream().mapToLong(read -> read.attempt().sink().returnedBytes()).sum();
+    var released =
+        progress.stream()
+            .mapToLong(read -> heldByDeliveries(read.attempt().sink().returnedNames(), layout))
+            .sum();
     return charged - released;
+  }
+
+  // The bytes of FFmpeg's output that deliveries of these segments of nearlyCappedSegments() hold:
+  // each rebuilt media segment views the bytes of the fragments it was assembled from.
+  private static long heldByDeliveries(List<String> names, List<Box> layout) {
+    var boxesOfEachDelivery =
+        Map.of(
+            "init.mp4", layout.subList(0, 2),
+            "segment0.m4s", layout.subList(2, 8),
+            "segment1.m4s", layout.subList(8, 14),
+            "segment2.m4s", layout.subList(14, 16));
+    return names.stream()
+        .flatMap(name -> boxesOfEachDelivery.get(name).stream())
+        .mapToLong(Box::size)
+        .sum();
+  }
+
+  // Nothing the producer reserved in the worker's budget is still reserved, and it released
+  // nothing it did not reserve: the whole capacity is reservable at once, and not one byte more.
+  // The last delivery releases its bytes just after the outcome can settle, hence the wait.
+  private static void assertReleasesEveryReservedByte(SegmentMemoryBudget workerBudget) {
+    awaiting().until(() -> workerBudget.tryReserveAtOnce(ONE_SLOT_CAPACITY));
+    assertThat(workerBudget.tryReserveAtOnce(1)).as("a byte beyond the capacity").isFalse();
+    workerBudget.release(ONE_SLOT_CAPACITY);
   }
 
   // The heap that live objects occupy once a full collection has freed every unreachable one.
@@ -2040,6 +3002,59 @@ class ProducerTest {
         .videoDecision(new VideoDecision.Copy(RecordingFixtures.ENCODED_RECORDING_CODEC_STRING))
         .memoryBudget(SegmentMemoryBudget.forSlots(1))
         .sink(sink);
+  }
+
+  // Replays the recording through a producer and waits for its outcome, whichever it is.
+  private AttemptOutcome deliverEverySegmentOf(Recording recording) {
+    var process = ScriptedProcess.builder().output(bytesOf(recording.file())).build();
+    var producer = producerFor(process, recording).start();
+    return assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).actual();
+  }
+
+  // Replays the recording through a producer of its own and returns what its sink accepted.
+  private RecordingSegmentSink deliveredBy(Recording recording) {
+    var deliveries = new RecordingSegmentSink();
+    var process = ScriptedProcess.builder().output(bytesOf(recording.file())).build();
+    var producer = producerFor(process, recording).sink(deliveries).start();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    return deliveries;
+  }
+
+  // The samples of the delivered media segment, read after the initialization segment.
+  private static Movie mediaSegmentOf(RecordingSegmentSink deliveries, String name) {
+    return Mp4Samples.read(
+        IsoBoxes.concat(deliveries.contentOf("init.mp4"), deliveries.contentOf(name)));
+  }
+
+  private static List<Sample> videoSamplesOf(RecordingSegmentSink deliveries, String name) {
+    var segment = mediaSegmentOf(deliveries, name);
+    return segment.samplesOf(segment.videoTrack());
+  }
+
+  private static List<Sample> audioSamplesOf(RecordingSegmentSink deliveries, String name) {
+    var segment = mediaSegmentOf(deliveries, name);
+    if (!segment.hasAudio()) {
+      return List.of();
+    }
+
+    return segment.samplesOf(segment.audioTrack());
+  }
+
+  private List<Long> videoDecodeTimesOf(String name) {
+    return videoSamplesOf(sink, name).stream().map(Sample::decodeTime).toList();
+  }
+
+  private List<Long> audioDecodeTimesOf(String name) {
+    return audioSamplesOf(sink, name).stream().map(Sample::decodeTime).toList();
+  }
+
+  private static int numberOf(String mediaSegmentName) {
+    return Integer.parseInt(
+        mediaSegmentName.substring("segment".length(), mediaSegmentName.indexOf(".")));
+  }
+
+  private List<String> mediaSegmentNames() {
+    return sink.acceptedNames().stream().filter(name -> name.startsWith("segment")).toList();
   }
 
   private static Failed failureOf(Producer producer) {
@@ -2091,11 +3106,15 @@ class ProducerTest {
         List.of(List.of(1001, 1001), List.of(1001, 1, 1001), List.of(1001)));
   }
 
+  // A movie without a sound track, whose segments close at the keyframe that opens the next.
+  private static byte[] videoOnlyMoov() {
+    return IsoBoxes.moov(IsoBoxes.Track.video().build());
+  }
+
   // Three 1 s segments of three 40 MiB keyframe fragments each, nearly the segment cap: while the
   // first awaits acceptance, the second fills the rest of the budget.
   private static byte[] nearlyCappedSegments() {
-    return IsoBoxes.concat(
-        IsoBoxes.ftyp(), IsoBoxes.videoAndAudioMoov(), nearlyCappedFragmentsFrom(0));
+    return IsoBoxes.concat(IsoBoxes.ftyp(), videoOnlyMoov(), nearlyCappedFragmentsFrom(0));
   }
 
   // The fragments of nearlyCappedSegments() from this media time in the 24 kHz video timescale.
@@ -2138,6 +3157,150 @@ class ProducerTest {
             IsoBoxes.Track.audio().build()));
   }
 
+  /**
+   * One fragment of a 1 s period: one-byte video samples back to back from this time in the 24 kHz
+   * video timescale, one unless given, each lasting one second unless given, the first a keyframe
+   * or not, and a keyframe at the given position after it, if any; then one-byte audio samples back
+   * to back from their start in the 48 kHz audio timescale, lasting as given, followed in the mdat
+   * by any padding given.
+   */
+  @Builder
+  private record TimedFragment(
+      long videoTime,
+      long videoDuration,
+      int videoSampleCount,
+      boolean keyframe,
+      OptionalInt keyframeInside,
+      long audioStart,
+      List<Integer> audioDurations,
+      int paddingBytes) {
+
+    static TimedFragmentBuilder keyframeAt(long videoTime) {
+      return frameAt(videoTime).keyframe(true);
+    }
+
+    static TimedFragmentBuilder frameAt(long videoTime) {
+      return builder()
+          .videoTime(videoTime)
+          .videoDuration(24_000)
+          .videoSampleCount(1)
+          .keyframe(false)
+          .keyframeInside(OptionalInt.empty())
+          .audioDurations(List.of());
+    }
+
+    byte[] bytes() {
+      var video =
+          IsoBoxes.videoTraf()
+              .baseMediaDecodeTime(videoTime)
+              .sampleDurations(
+                  Collections.nCopies(videoSampleCount, Math.toIntExact(videoDuration)));
+      if (keyframeInside.isPresent()) {
+        video.flagsOfEachSample(
+            IntStream.range(0, videoSampleCount).mapToObj(this::flagsOfVideoSample).toList());
+      }
+
+      if (keyframeInside.isEmpty() && keyframe) {
+        video.firstSampleFlags(IsoBoxes.SYNC_SAMPLE_FLAGS);
+      }
+
+      if (audioDurations.isEmpty()) {
+        return IsoBoxes.concat(
+            IsoBoxes.moof(video.build()), IsoBoxes.mdat(videoSampleCount + paddingBytes));
+      }
+
+      var audio =
+          IsoBoxes.audioTraf().baseMediaDecodeTime(audioStart).sampleDurations(audioDurations);
+      return IsoBoxes.concat(
+          IsoBoxes.moof(video.build(), audio.build()),
+          IsoBoxes.mdat(videoSampleCount + audioDurations.size() + paddingBytes));
+    }
+
+    private int flagsOfVideoSample(int sample) {
+      if ((sample == 0 && keyframe) || keyframeInside.equals(OptionalInt.of(sample))) {
+        return IsoBoxes.SYNC_SAMPLE_FLAGS;
+      }
+
+      return IsoBoxes.NON_SYNC_SAMPLE_FLAGS;
+    }
+
+    static final class TimedFragmentBuilder {
+
+      TimedFragmentBuilder audioFrom(long start, Integer... durations) {
+        return audioStart(start).audioDurations(List.of(durations));
+      }
+    }
+  }
+
+  /**
+   * An output of a movie without a sound track whose fragments each hold one keyframe a second, so
+   * that each fragment opens a segment of a 1 s period.
+   */
+  private record OneKeyframePerSecond(byte[] bytes, int initializationSegmentBytes, int fragments) {
+
+    private static final int PAYLOAD_BYTES = 4096;
+
+    static OneKeyframePerSecond of(int fragments) {
+      var initializationSegment = IsoBoxes.concat(IsoBoxes.ftyp(), videoOnlyMoov());
+      var output = new ByteArrayOutputStream();
+      output.writeBytes(initializationSegment);
+      for (var fragment = 0; fragment < fragments; fragment++) {
+        output.writeBytes(keyframeFragment(fragment * 24_000L, PAYLOAD_BYTES));
+      }
+
+      return new OneKeyframePerSecond(
+          output.toByteArray(), initializationSegment.length, fragments);
+    }
+
+    int endOf(int fragment) {
+      return initializationSegmentBytes + (fragment + 1) * fragmentBytes();
+    }
+
+    // Reserves, as other attempts would, all of the budget but room for the first two fragments and
+    // their one sample each, whose second closes segment 0; returns the bytes to release for those
+    // attempts.
+    long leavingRoomForTheFirstTwoFragmentsIn(SegmentMemoryBudget workerBudget) {
+      var reserved = ONE_SLOT_CAPACITY - 2L * (fragmentBytes() + Fragment.HEAP_BYTES_PER_SAMPLE);
+      assertThat(workerBudget.tryReserveAtOnce(reserved)).isTrue();
+      return reserved;
+    }
+
+    private int fragmentBytes() {
+      return (bytes.length - initializationSegmentBytes) / fragments;
+    }
+
+    @Override
+    public String toString() {
+      return "OneKeyframePerSecond[" + fragments + " fragments]";
+    }
+  }
+
+  /** An output of 1 s segments and where each of its fragments ends. */
+  private record OneSecondSegments(byte[] bytes, List<Integer> fragmentEnds) {
+
+    static OneSecondSegments of(byte[] moov, TimedFragment... fragments) {
+      var output = new ByteArrayOutputStream();
+      output.writeBytes(IsoBoxes.ftyp());
+      output.writeBytes(moov);
+      var ends = new ArrayList<Integer>();
+      for (var fragment : fragments) {
+        output.writeBytes(fragment.bytes());
+        ends.add(output.size());
+      }
+
+      return new OneSecondSegments(output.toByteArray(), List.copyOf(ends));
+    }
+
+    int endOf(int fragment) {
+      return fragmentEnds.get(fragment);
+    }
+
+    @Override
+    public String toString() {
+      return "OneSecondSegments[" + bytes.length + " bytes]";
+    }
+  }
+
   @Builder
   private record BurstStart(byte[] output, SegmentMemoryBudget budget, int burst) {}
 
@@ -2149,7 +3312,7 @@ class ProducerTest {
     // What the attempt charges before its returned deliveries are subtracted.
     long chargedBefore(List<Box> layout) {
       if (attempt.isStopped()) {
-        return attempt.sink().startedBytes();
+        return heldByDeliveries(attempt.sink().startedNames(), layout);
       }
 
       return layout.stream()
@@ -2197,6 +3360,23 @@ class ProducerTest {
     }
   }
 
+  // A fragment of one-byte video samples of one tick each, the first with these flags, at this
+  // time in the 24 kHz video timescale.
+  private static byte[] manySampleFragment(long decodeTime, int samples, int firstSampleFlags) {
+    return manySampleFragment(
+        IsoBoxes.videoTraf()
+            .baseMediaDecodeTime(decodeTime)
+            .firstSampleFlags(firstSampleFlags)
+            .sampleCount(samples));
+  }
+
+  // A fragment of the traf's video samples, of one tick each, and an mdat that holds their bytes.
+  private static byte[] manySampleFragment(IsoBoxes.TrackFragment.TrackFragmentBuilder videoTraf) {
+    var trackFragment = videoTraf.build();
+    return IsoBoxes.concat(
+        IsoBoxes.moof(trackFragment), IsoBoxes.mdat(trackFragment.sampleBytes()));
+  }
+
   private static byte[] keyframeFragment(long presentationTime) {
     return keyframeFragment(presentationTime, NEARLY_CAPPED_FRAGMENT_PAYLOAD);
   }
@@ -2219,20 +3399,11 @@ class ProducerTest {
     return Arrays.copyOf(output, output.length - 100);
   }
 
-  private static List<Accepted> expectedDeliveries(Recording recording) {
-    var initializationSegmentLength = recording.deliveredInitializationSegment().byteLength();
-    var mediaSegments =
-        recording.segments().stream()
-            .map(
-                segment ->
-                    new Accepted(
-                        "segment" + segment.number() + ".m4s",
-                        segment.byteLength(),
-                        segment.byteLength()));
-    return Stream.concat(
-            Stream.of(
-                new Accepted("init.mp4", initializationSegmentLength, initializationSegmentLength)),
-            mediaSegments)
-        .toList();
+  // Every segment the recording groups, in order, each with the length its delivery declared.
+  private void assertDeliveredInOrder(Recording recording) {
+    assertThat(sink.acceptedNames()).containsExactlyElementsOf(uploadNames(recording));
+    assertThat(sink.accepted())
+        .allSatisfy(
+            accepted -> assertThat(accepted.contentLength()).isEqualTo(accepted.declaredLength()));
   }
 }

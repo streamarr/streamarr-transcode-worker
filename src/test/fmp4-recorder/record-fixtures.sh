@@ -71,10 +71,12 @@ AAC=(-c:a aac -ac 1 -b:a 8k)
 COPY_VIDEO_PIPE=(-c:v copy -bsf:v h264_mp4toannexb -tag:v avc1 -strict unofficial)
 COPY_PIPE=("${COPY_VIDEO_PIPE[@]}" -c:a copy -bsf:a aac_adtstoasc -b:a 0)
 COPY_PIPE_WITHOUT_ADTSTOASC=("${COPY_VIDEO_PIPE[@]}" -c:a copy -b:a 0)
+# The worker's audio transcode: the video copied, the audio encoded.
+COPY_VIDEO_ENCODE_AUDIO=("${COPY_VIDEO_PIPE[@]}" "${AAC[@]}")
 # The HLS recipe's copies take the same video arguments, so that both recipes hold the same packets.
 COPY_HLS=("${COPY_VIDEO_PIPE[@]}" -c:a copy)
 COMMON_HLS=(-map_metadata -1 -map_chapters -1 -copyts -avoid_negative_ts disabled -max_muxing_queue_size 128 -max_delay 5000000)
-COMMON_PIPE=(-map_metadata -1 -map_chapters -1 -copyts -avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128)
+COMMON_PIPE=(-map_metadata -1 -map_chapters -1 -copyts -avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128 -max_interleave_delta 10000000)
 
 # Two recipes: HLS = the HLS muxer recipe that ADR 0037 replaces, PIPE = ADR 0037's pipe recipe.
 KEY_X264_HLS=(-forced-idr 1 -force_key_frames:0 "$FORCED_EVERY_PERIOD" -sc_threshold:v:0 0)
@@ -195,6 +197,23 @@ VFR_SELECT="select='if(lt(n,300),gte(mod(n*7919,97),20),if(lt(n,600),not(mod(n,2
 "${FF[@]}" -f lavfi -i "$(lavfi 24000/1001 20)" -f lavfi -i "$SILENCE:duration=23.5" -map 0:v -map 1:a \
   "${SRC_X264[@]}" -g 48 -keyint_min 48 "${SRC_AAC[@]}" -fflags +bitexact src/tail.mp4
 
+# Audio ends before the video: 20 s of video, 8 s of audio.
+"${FF[@]}" -f lavfi -i "$(lavfi 24000/1001 20)" -f lavfi -i "$SILENCE:duration=8" -map 0:v -map 1:a \
+  "${SRC_X264[@]}" -g 48 -keyint_min 48 "${SRC_AAC[@]}" -fflags +bitexact src/short-audio.mp4
+
+# 22.05 kHz audio, whose 46.4 ms AAC frames outlast the 41.7 ms video frames, starting 20 ms after
+# the video, and a keyframe on every frame from 5.6 s to 6.6 s, so FFmpeg cuts a one-frame fragment
+# at each of them and some carry no audio; 20 s.
+"${FF[@]}" -f lavfi -i "$(lavfi 24000/1001 20)" -itsoffset 0.02 -f lavfi -i "anullsrc=channel_layout=mono:sample_rate=22050:duration=20" \
+  -map 0:v -map 1:a "${SRC_X264[@]}" -g 48 -keyint_min 48 -force_key_frames "expr:eq(n,0)+gte(t,5.6)*lte(t,6.6)" \
+  "${SRC_AAC[@]}" -fflags +bitexact src/adjacent-keyframes.mp4
+
+# Audio that ends long before the video: 180 s of video, 20 s of a sine tone, so the video outruns
+# FFmpeg's muxer interleave bound (10 s) once the audio ends.
+"${FF[@]}" -f lavfi -i "$(lavfi 24000/1001 180)" \
+  -f lavfi -i "sine=frequency=440:sample_rate=48000:duration=20" -map 0:v -map 1:a \
+  "${SRC_X264[@]}" -g 48 -keyint_min 48 "${SRC_AAC[@]}" -fflags +bitexact src/long-video.mp4
+
 # A keyframe every 240 frames (10.01 s): wider than the period, so a segment number is skipped.
 "${FF[@]}" -f lavfi -i "$(lavfi 24000/1001 25)" -f lavfi -i "$SILENCE:duration=25" -map 0:v -map 1:a \
   "${SRC_X264[@]}" -g 240 -keyint_min 240 "${SRC_AAC[@]}" -fflags +bitexact src/gop10.mp4
@@ -242,6 +261,8 @@ run hls 05-copy-late-start.hls-recipe hls-recipe src/late.ts -- "${COPY_HLS[@]}"
 # ... so the copy's HLS comparison adds the bitstream filter.
 run hls 05-copy-late-start.hls-recipe-adtstoasc hls-recipe src/late.ts -- "${COPY_PIPE[@]}"
 run hls 05-copy-late-start.video-only video src/late.ts -- "${COPY_PIPE[@]}"
+# The stream-copy replacement attempt for segment 2 of the MPEG-TS source.
+run pipe 05-copy-late-start-seek12 start=2 seek=12 src/late.ts -- "${COPY_PIPE[@]}"
 
 # ------------------------------------------------------------------ 6. audio outlasts video
 run pipe 06-encode-audio-tail src/tail.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}"
@@ -286,6 +307,23 @@ run pipe 13-x265-cfr-missed-forced-keyframe duration=30 skip=18 src/cfr.mp4 -- "
 run hls 13-x265-cfr-missed-forced-keyframe.video-only video duration=30 skip=18 src/cfr.mp4 -- "${X265[@]}" "${KEY_X265_PIPE[@]}"
 run pipe 13-x265-cfr-floored-gop duration=30 src/cfr.mp4 -- "${X265[@]}" "${AAC[@]}" "${KEY_X265_PIPE_FLOORED[@]}"
 run hls 13-x265-cfr-floored-gop.video-only video duration=30 src/cfr.mp4 -- "${X265[@]}" "${KEY_X265_PIPE_FLOORED[@]}"
+
+# ------------------------------------------------------------------ 14. audio that ends before the video
+run pipe 14-copy-audio-ends-early src/short-audio.mp4 -- "${COPY_PIPE[@]}"
+run hls 14-copy-audio-ends-early.hls-recipe hls-recipe src/short-audio.mp4 -- "${COPY_HLS[@]}"
+run hls 14-copy-audio-ends-early.video-only video src/short-audio.mp4 -- "${COPY_PIPE[@]}"
+
+# ------------------------------------------------------------------ 15. a keyframe fragment without audio just past a boundary
+run pipe 15-copy-adjacent-keyframes src/adjacent-keyframes.mp4 -- "${COPY_PIPE[@]}"
+run hls 15-copy-adjacent-keyframes.video-only video src/adjacent-keyframes.mp4 -- "${COPY_PIPE[@]}"
+
+# ------------------------------------------------------------------ 16. stream copy with encoded audio, and its replacement attempt
+run pipe 16-copy-encode-audio src/cfr.mp4 -- "${COPY_VIDEO_ENCODE_AUDIO[@]}"
+run pipe 16-copy-encode-audio-seek30 start=5 seek=30 src/cfr.mp4 -- "${COPY_VIDEO_ENCODE_AUDIO[@]}"
+
+# ------------------------------------------------------------------ 17. audio that ends 160 s before the video, copied and encoded
+run pipe 17-copy-audio-ends-long-before-video src/long-video.mp4 -- "${COPY_PIPE[@]}"
+run pipe 17-encode-audio-ends-long-before-video src/long-video.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}"
 
 # ------------------------------------------------------------------ side claims of ADR 0037 (recorded, not delivered)
 mkdir -p claims

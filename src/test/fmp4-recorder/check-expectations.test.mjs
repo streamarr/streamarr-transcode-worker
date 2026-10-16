@@ -58,7 +58,7 @@ describe('offline expectation check', () => {
   it('Should name every claim when expected.json records a recording run that contradicts it', () => {
     const directory = copyWith((expected) => {
       fixture(expected, '04-copy-vfr-bframes').hlsComparisons[0].expectedToAgree = true;
-      fixture(expected, '07-copy-start0').diagnostics.everyKeyframeStartsAFragment = false;
+      fixture(expected, '07-copy-start0').diagnostics.fragmentsWithAKeyframeInside = [3];
       fixture(expected, '05-copy-late-start').sourceKeyframeCheck.recordedKeyframesEqualSourceKeyframes = false;
       expected.adrSideClaims.maxDelayLeavesMp4OutputByteIdentical = false;
     });
@@ -67,7 +67,7 @@ describe('offline expectation check', () => {
       '07-copy-start0: diagnostics in expected.json does not match the recording',
       'violated claim: 04-copy-vfr-bframes / 04-copy-vfr-bframes.hls-recipe: agrees=false, expected true',
       "violated claim: 05-copy-late-start: a recorded keyframe is not the source's own keyframe",
-      'violated claim: 07-copy-start0: a keyframe does not start a fragment',
+      'violated claim: 07-copy-start0: a keyframe does not start a fragment after the first',
       'violated claim: -max_delay changes mp4 output',
     ]);
   });

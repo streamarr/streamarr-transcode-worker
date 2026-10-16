@@ -149,22 +149,22 @@ class TranscodeWorkerSettingsTest {
   }
 
   @Test
-  @DisplayName("Should target one-second fragments when the fragmentation target is not configured")
-  void shouldTargetOneSecondFragmentsWhenTheFragmentationTargetIsNotConfigured() {
+  @DisplayName("Should target 250 ms fragments when the fragmentation target is not configured")
+  void shouldTarget250MillisecondFragmentsWhenTheFragmentationTargetIsNotConfigured() {
     var settings = TranscodeWorkerSettings.fromEnvironment(requiredEnvironment());
 
-    assertThat(settings.fragmentationTarget()).isEqualTo(Duration.ofSeconds(1));
+    assertThat(settings.fragmentationTarget()).isEqualTo(Duration.ofMillis(250));
   }
 
   @Test
   @DisplayName("Should use the configured fragmentation target when loading settings")
   void shouldUseTheConfiguredFragmentationTargetWhenLoadingSettings() {
     var environment = new HashMap<>(requiredEnvironment());
-    environment.put("TRANSCODE_WORKER_FRAGMENTATION_TARGET", "250ms");
+    environment.put("TRANSCODE_WORKER_FRAGMENTATION_TARGET", "1s");
 
     var settings = TranscodeWorkerSettings.fromEnvironment(environment);
 
-    assertThat(settings.fragmentationTarget()).isEqualTo(Duration.ofMillis(250));
+    assertThat(settings.fragmentationTarget()).isEqualTo(Duration.ofSeconds(1));
   }
 
   @ParameterizedTest

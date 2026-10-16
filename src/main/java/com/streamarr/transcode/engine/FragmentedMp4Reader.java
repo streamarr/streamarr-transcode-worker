@@ -8,7 +8,7 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.OptionalLong;
+import java.util.stream.Stream;
 import lombok.NonNull;
 
 /** Reads the top-level ISOBMFF boxes of FFmpeg's fragmented MP4 output from a byte stream. */
@@ -32,8 +32,8 @@ final class FragmentedMp4Reader {
    * @param maximumSegmentBytes the largest initialization segment or fragment the reader admits; it
    *     rejects any box that would exceed it before allocating memory for that box
    * @param admission admits each box's bytes after the reader has checked the box against the cap
-   *     and before it allocates memory for the box; when it refuses a box, the reader ends reading
-   *     with {@link ReadingCancelled}
+   *     and before it allocates memory for the box, and the heap of a fragment's samples before it
+   *     builds them; when it refuses, the reader ends reading with {@link ReadingCancelled}
    */
   FragmentedMp4Reader(
       @NonNull InputStream stream, long maximumSegmentBytes, @NonNull BoxAdmission admission) {
@@ -99,7 +99,9 @@ final class FragmentedMp4Reader {
     var trackExtends = TrackExtends.byTrackIdIn(moovView);
     movie =
         Optional.of(
-            new Movie(VideoTrack.of(moovView, trackExtends), new SampleRanges(trackExtends)));
+            new Movie(
+                new MovieTracks(VideoTrack.of(moovView, trackExtends), AudioTrack.of(moovView)),
+                new SampleRanges(trackExtends, maximumSegmentBytes)));
     var bytes = ByteBuffer.allocate(ftyp.length + moov.length).put(ftyp).put(moov).array();
     return Optional.of(new InitializationSegment(bytes));
   }
@@ -125,18 +127,28 @@ final class FragmentedMp4Reader {
     var mdat = boxes.second();
     var trackFragments = TrackFragmentBox.allOf(viewOf(moofHeader, moof));
     var mediaData =
-        new MediaData(
-            moofPosition,
-            (long) moof.length + mdatHeader.length(),
-            (long) moof.length + mdat.length);
+        MediaData.builder()
+            .moofPosition(moofPosition)
+            .boxStart(moof.length)
+            .bodyStart((long) moof.length + mdatHeader.length())
+            .end((long) moof.length + mdat.length)
+            .build();
     declared.sampleRanges().requireInside(trackFragments, mediaData);
-    var videoStart = declared.videoTrack().flatMap(track -> track.startOf(trackFragments));
-    var shortestVideoSampleDuration =
-        declared
-            .videoTrack()
-            .map(track -> track.shortestSampleDurationOf(trackFragments))
-            .orElseGet(OptionalLong::empty);
-    return Optional.of(new Fragment(List.of(moof, mdat), videoStart, shortestVideoSampleDuration));
+    var sampleCount = declared.sampleRanges().describableSampleCountOf(trackFragments);
+    if (!admission.tryAdmit(Fragment.heapBytesOf(sampleCount))) {
+      throw new ReadingCancelled();
+    }
+
+    var tracks = declared.tracks();
+    var trackSamples = declared.sampleRanges().samplesOf(trackFragments, mediaData);
+    requireDeclaredTracks(tracks, trackSamples);
+    return Optional.of(
+        Fragment.builder()
+            .boxes(List.of(moof, mdat))
+            .tracks(tracks)
+            .videoSamples(samplesOf(tracks.video().map(VideoTrack::trackId), trackSamples))
+            .audioSamples(samplesOf(tracks.audio().map(AudioTrack::trackId), trackSamples))
+            .build());
   }
 
   private static BoxHeader requireMoof(BoxHeader header) {
@@ -245,8 +257,38 @@ final class FragmentedMp4Reader {
         header.type(), ByteBuffer.wrap(box, headerLength, box.length - headerLength));
   }
 
+  private static List<Sample> samplesOf(Optional<Long> trackId, List<TrackSamples> trackSamples) {
+    return trackSamples.stream()
+        .filter(track -> trackId.equals(Optional.of(track.trackId())))
+        .flatMap(track -> track.samples().stream())
+        .toList();
+  }
+
+  /**
+   * @throws FragmentedMp4Exception when a {@code traf} carries samples of a track that is neither
+   *     the movie's video track nor its sound track
+   */
+  private static void requireDeclaredTracks(MovieTracks tracks, List<TrackSamples> trackSamples) {
+    var declared =
+        Stream.concat(
+                tracks.video().map(VideoTrack::trackId).stream(),
+                tracks.audio().map(AudioTrack::trackId).stream())
+            .toList();
+    trackSamples.stream()
+        .map(TrackSamples::trackId)
+        .filter(trackId -> !declared.contains(trackId))
+        .findFirst()
+        .ifPresent(
+            trackId -> {
+              throw FragmentedMp4Exception.malformed(
+                  "a traf carries samples of track "
+                      + trackId
+                      + ", which is neither the movie's video track nor its sound track");
+            });
+  }
+
   /** What the initialization segment's {@code moov} declares for reading every fragment. */
-  private record Movie(Optional<VideoTrack> videoTrack, SampleRanges sampleRanges) {}
+  private record Movie(MovieTracks tracks, SampleRanges sampleRanges) {}
 
   /**
    * Ends reading when the admission refuses a box or reading is cancelled; the reader then holds

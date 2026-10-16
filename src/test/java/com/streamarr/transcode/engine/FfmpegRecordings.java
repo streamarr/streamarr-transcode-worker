@@ -55,11 +55,11 @@ public final class FfmpegRecordings {
   }
 
   /**
-   * Asserts that the bytes are the recording as the producer delivers it: the initialization
-   * segment that expected.json digests, then the media segments, without the preroll that the
-   * producer discards or anything after the last media segment.
+   * Asserts that the delivered bytes begin with the initialization segment that expected.json
+   * digests: FFmpeg's ftyp and moov, without the SEI messages of an hvc1 record.
    */
-  public static void assertDeliveredAsExpected(byte[] delivered, Recording recording) {
+  public static void assertBeginsWithTheDeliveredInitializationSegment(
+      byte[] delivered, Recording recording) {
     var initializationSegment = recording.deliveredInitializationSegment();
     assertThat(delivered)
         .as("delivered bytes")
@@ -67,21 +67,6 @@ public final class FfmpegRecordings {
     assertThat(sha256Of(Arrays.copyOf(delivered, initializationSegment.byteLength())))
         .as("SHA-256 of the delivered initialization segment")
         .isEqualTo(initializationSegment.sha256());
-    assertThat(Arrays.copyOfRange(delivered, initializationSegment.byteLength(), delivered.length))
-        .as("delivered media segments")
-        .isEqualTo(mediaSegmentBytesOf(recording));
-  }
-
-  private static byte[] mediaSegmentBytesOf(Recording recording) {
-    var recorded = bytesOf(recording.file());
-    var prerollLength =
-        recording.discardedPreroll().stream().mapToLong(SegmentSummary::byteLength).sum();
-    var mediaSegmentsLength =
-        recording.segments().stream().mapToLong(SegmentSummary::byteLength).sum();
-    var mediaStart =
-        Math.toIntExact(recording.initializationSegment().byteLength() + prerollLength);
-    return Arrays.copyOfRange(
-        recorded, mediaStart, Math.toIntExact(mediaStart + mediaSegmentsLength));
   }
 
   private static String sha256Of(byte[] bytes) {
@@ -98,6 +83,8 @@ public final class FfmpegRecordings {
    * One recorded stream, the FFmpeg command line that recorded it, and what its initialization
    * segment and media segments must be.
    *
+   * @param mode whether the recording encodes or copies the video
+   * @param audio whether the recording encodes or copies the audio
    * @param encoder the video encoder of an encode; empty for a stream copy
    * @param recipeDeviation how the recording deliberately departs from the worker's recipe; empty
    *     when it follows the recipe
@@ -107,6 +94,7 @@ public final class FfmpegRecordings {
   public record Recording(
       String file,
       Mode mode,
+      Mode audio,
       Optional<String> encoder,
       Source source,
       int period,
@@ -120,6 +108,7 @@ public final class FfmpegRecordings {
       List<SegmentSummary> segments,
       List<SegmentSummary> discardedPreroll,
       Optional<ExpectedFailure> failure,
+      List<DroppedAudioSample> droppedAudioSamples,
       int trailingAudioOnlyFragmentCount,
       List<HlsRun> hlsComparisons) {
 
@@ -149,7 +138,7 @@ public final class FfmpegRecordings {
     }
   }
 
-  /** Whether a recording encodes the video or copies it from the source. */
+  /** Whether a recording encodes a stream or copies it from the source. */
   public enum Mode {
     ENCODE,
     COPY
@@ -180,7 +169,7 @@ public final class FfmpegRecordings {
       long firstVideoPresentationTime,
       int firstFragmentIndex,
       int fragmentCount,
-      int syncFirstFragmentCount,
+      int keyframeCount,
       long byteLength) {}
 
   /**
@@ -194,6 +183,13 @@ public final class FfmpegRecordings {
       int fragmentIndex,
       Optional<Long> expectedNumber,
       Optional<Long> actualNumber) {}
+
+  /**
+   * An audio sample that arrives after its media segment was delivered, which the producer drops,
+   * at a presentation time in the audio timescale, and the fragment that carries it, counted from 0
+   * after the initialization segment.
+   */
+  public record DroppedAudioSample(int fragmentIndex, long presentationTime, int segmentNumber) {}
 
   /**
    * The HLS muxer's run over the same source, with the media time of the first video sample of each

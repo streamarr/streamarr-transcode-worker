@@ -4,10 +4,15 @@ import { groupOnGrid } from './grid.mjs';
 
 const PERIOD = 6;
 
-// Fragments in milliseconds: K = keyframe first, N = non-sync first, A = no video.
-const K = (milliseconds) => ({ video: { presentationTime: BigInt(milliseconds), timescale: 1000, sync: true } });
-const N = (milliseconds) => ({ video: { presentationTime: BigInt(milliseconds), timescale: 1000, sync: false } });
+// Fragments of one video sample in milliseconds: K = a keyframe, N = a non-sync sample; A = no video.
+const video = (presentationTime, timescale, sync) => ({ video: { timescale, samples: [{ presentationTime, sync }] } });
+const K = (milliseconds) => video(BigInt(milliseconds), 1000, true);
+const N = (milliseconds) => video(BigInt(milliseconds), 1000, false);
 const A = () => ({ video: null });
+// A fragment of several video samples in milliseconds: k = a keyframe, n = a non-sync sample.
+const k = (milliseconds) => ({ presentationTime: BigInt(milliseconds), sync: true });
+const n = (milliseconds) => ({ presentationTime: BigInt(milliseconds), sync: false });
+const F = (...samples) => ({ video: { timescale: 1000, samples } });
 
 function numbersAndFragments(segments) {
   return segments.map((segment) => [segment.number, segment.fragments]);
@@ -66,6 +71,21 @@ describe('grid model', () => {
     assert.deepEqual(result.delivered, [[5, [3, 4]]]);
   });
 
+  it('Should open a segment at a keyframe inside a fragment when the fragment runs past the boundary', () => {
+    const result = groupOnGrid([F(k(28028), n(29029), k(30030), n(31031)), N(32032)], {
+      period: PERIOD,
+      startSequenceNumber: 5,
+    });
+
+    assert.deepEqual(
+      result.preroll.map(({ number, fragments, videoSamples }) => [number, fragments, videoSamples]),
+      [[4, [0], { from: 0, to: 2 }]],
+    );
+    assert.deepEqual(result.delivered, [
+      { number: 5, firstVideoPresentationTime: 30030n, openedAtFragment: 0, fragments: [0, 1], videoSamples: { from: 2, to: 5 } },
+    ]);
+  });
+
   it('Should skip preroll numbers without failing when they lie below the start sequence number', () => {
     const result = grouped([K(9000), K(21000), K(30000)], 5);
 
@@ -101,6 +121,16 @@ describe('grid model', () => {
       actualNumber: 3,
       presentationTime: 18000n,
     });
+  });
+
+  it("Should deliver the segment's samples before a skipping keyframe inside a fragment, then fail", () => {
+    const result = groupOnGrid([K(0), F(n(5000), k(18000), n(19000))], { period: PERIOD, startSequenceNumber: 0 });
+
+    assert.deepEqual(result.delivered, [
+      { number: 0, firstVideoPresentationTime: 0n, openedAtFragment: 0, fragments: [0, 1], videoSamples: { from: 0, to: 2 } },
+    ]);
+    assert.equal(result.failure.fragmentIndex, 1);
+    assert.equal(result.failure.actualNumber, 3);
   });
 
   it('Should fail when the first keyframe lies past the start sequence number', () => {
@@ -142,7 +172,7 @@ describe('grid model', () => {
   });
 
   it('Should read each keyframe in its own timescale when timescales differ', () => {
-    const at = (ticks, timescale) => ({ video: { presentationTime: ticks, timescale, sync: true } });
+    const at = (ticks, timescale) => video(ticks, timescale, true);
 
     assert.deepEqual(grouped([at(0n, 24000), at(143143n, 24000), at(144144n, 24000), at(540000n, 90000)]).delivered, [
       [0, [0, 1]],

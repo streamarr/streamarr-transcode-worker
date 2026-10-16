@@ -290,15 +290,27 @@ final class IsoBoxes {
     private final Integer sampleCount;
     private final Integer firstSampleFlags;
     private final Integer sampleFlags;
+    // Each sample's own flags, in place of one value for every sample.
+    private final List<Integer> flagsOfEachSample;
     private final Integer compositionOffset;
     private final List<Integer> sampleDurations;
+    // Every sample's size, one byte unless given.
+    private final Integer sampleSize;
 
     byte[] traf(int dataOffset) {
       return box("traf", tfhd(), tfdt(), trun(dataOffset));
     }
 
     int sampleBytes() {
-      return samples() * SAMPLE_BYTES;
+      return samples() * sampleSize();
+    }
+
+    private int sampleSize() {
+      if (sampleSize != null) {
+        return sampleSize;
+      }
+
+      return SAMPLE_BYTES;
     }
 
     private int samples() {
@@ -353,7 +365,7 @@ final class IsoBoxes {
         header.writeBytes(u32(firstSampleFlags));
       }
 
-      if (sampleFlags != null) {
+      if (sampleFlags != null || flagsOfEachSample != null) {
         flags |= TRUN_SAMPLE_FLAGS;
       }
 
@@ -378,9 +390,13 @@ final class IsoBoxes {
         entry.writeBytes(u32(sampleDurations.get(sample)));
       }
 
-      entry.writeBytes(u32(SAMPLE_BYTES));
+      entry.writeBytes(u32(sampleSize()));
       if (sampleFlags != null) {
         entry.writeBytes(u32(sampleFlags));
+      }
+
+      if (flagsOfEachSample != null) {
+        entry.writeBytes(u32(flagsOfEachSample.get(sample)));
       }
 
       if (compositionOffset == null) {

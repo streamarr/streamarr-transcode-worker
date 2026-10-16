@@ -2,6 +2,7 @@ package com.streamarr.transcode.engine;
 
 import static com.streamarr.transcode.engine.FfmpegRecordings.bytesOf;
 import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
+import static com.streamarr.transcode.fixtures.DeliveredSamples.assertCarriesTheRecordedSamples;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -59,8 +60,8 @@ class ProcessBuilderLauncherTest {
 
     var producer = producerRunning("cat \"$0\"", recordingFile.toString()).start();
 
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed());
-    assertThat(sink.acceptedBytes()).isEqualTo(bytesOf(ENCODED_RECORDING));
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertCarriesTheRecordedSamples(sink.acceptedBytes(), recording(ENCODED_RECORDING));
   }
 
   @Test

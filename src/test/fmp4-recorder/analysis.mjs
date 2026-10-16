@@ -17,17 +17,23 @@ import {
 } from './fmp4.mjs';
 import { groupOnGrid } from './grid.mjs';
 import { Decimal } from './json.mjs';
-import { Rational } from './rational.mjs';
+import { Rational, floorDiv } from './rational.mjs';
 
-/** The grid model's view of each fragment: its first video sample, when it has one. */
+/** The grid model's view of each fragment: its video samples in decode order, when it has any. */
 export function gridFragments(stream) {
-  return stream.fragments.map((fragment) => {
+  const samples = videoSamples(stream);
+  return stream.fragments.map((fragment, index) => {
     const traf = videoTrafOf(fragment);
     if (traf === null) {
       return { video: null };
     }
     return {
-      video: { presentationTime: traf.firstPresentationTime, timescale: traf.timescale, sync: traf.firstSync },
+      video: {
+        timescale: traf.timescale,
+        samples: samples
+          .filter((sample) => sample.fragmentIndex === index)
+          .map(({ presentationTime, sync }) => ({ presentationTime, sync })),
+      },
     };
   });
 }
@@ -46,7 +52,8 @@ export function sha256(bytes) {
  */
 export function recordingFacts(stream, { period, startSequenceNumber }) {
   const videoTrack = videoTrackOf(stream);
-  const { delivered, preroll, failure } = group(stream, period, startSequenceNumber);
+  const grid = group(stream, period, startSequenceNumber);
+  const { delivered, preroll, failure } = grid;
   const lastVideo = stream.fragments.findLastIndex((fragment) => videoTrafOf(fragment) !== null);
   return {
     videoTrackId: videoTrack.trackId,
@@ -69,6 +76,7 @@ export function recordingFacts(stream, { period, startSequenceNumber }) {
     segments: delivered.map((segment) => describeSegment(segment, stream)),
     discardedPreroll: preroll.map((segment) => describeSegment(segment, stream)),
     failure,
+    droppedAudioSamples: droppedAudioSamples(stream, grid, { period, startSequenceNumber }),
     endsWithAudioOnlyFragments: lastVideo < stream.fragments.length - 1,
     trailingAudioOnlyFragmentCount: stream.fragments.length - 1 - lastVideo,
     diagnostics: diagnostics(stream),
@@ -77,6 +85,78 @@ export function recordingFacts(stream, { period, startSequenceNumber }) {
 
 function digestOf(bytes) {
   return { byteLength: bytes.length, sha256: sha256(bytes) };
+}
+
+// How far past a segment's end the video runs before the segment closes without later audio.
+const MARGIN_SECONDS = 1n;
+
+function audioSamplesOf(fragment, audioTrack) {
+  return fragment.trafs
+    .filter((traf) => traf.trackId === audioTrack?.trackId)
+    .flatMap((traf) => {
+      let decode = signed(traf.baseMediaDecodeTime);
+      return traf.samples.map((sample) => {
+        const presentationTime = decode + BigInt(sample.compositionOffset);
+        decode += BigInt(sample.duration);
+        return { presentationTime, timescale: traf.timescale };
+      });
+    });
+}
+
+function videoDecodeEndOf(fragment) {
+  const traf = videoTrafOf(fragment);
+  if (traf === null) {
+    return null;
+  }
+  const duration = traf.samples.reduce((sum, sample) => sum + BigInt(sample.duration), 0n);
+  return { ticks: signed(traf.baseMediaDecodeTime) + duration, timescale: BigInt(traf.timescale) };
+}
+
+/**
+ * Every audio sample that arrives after its media segment closed, which the producer drops, in
+ * arrival order. Once the keyframe of a later segment has arrived, a segment closes after the
+ * fragment in which an audio sample of a later segment arrives or the video's decode end runs
+ * MARGIN_SECONDS and the video's lead past the segment's end. The lead is the most that the video's
+ * decode end before a fragment ran ahead of an audio sample the fragment brings and the producer
+ * holds. An audio sample before the start sequence number is preroll; an attempt from segment zero
+ * keeps the samples before zero in segment zero. Nothing from a grouping failure on is read.
+ */
+function droppedAudioSamples(stream, { delivered, preroll, failure }, { period, startSequenceNumber }) {
+  const audioTrack = audioTrackOf(stream);
+  const openedAt = new Map([...preroll, ...delivered].map((segment) => [segment.openedAtFragment, segment.number]));
+  const end = failure === null ? stream.fragments.length : failure.fragmentIndex;
+  let opened = -Infinity;
+  let reached = -Infinity;
+  let passedByVideo = -Infinity;
+  let videoEnd = null;
+  let leadTicks = 0n;
+  const dropped = [];
+  for (let index = 0; index < end; index++) {
+    const fragment = stream.fragments[index];
+    const closedThrough = Math.min(opened - 1, Math.max(reached - 1, passedByVideo));
+    for (const { presentationTime, timescale } of audioSamplesOf(fragment, audioTrack)) {
+      let number = Number(floorDiv(presentationTime, BigInt(period * timescale)));
+      if (number < 0 && startSequenceNumber === 0) {
+        number = 0;
+      }
+      if (number >= startSequenceNumber && number <= closedThrough) {
+        dropped.push({ fragmentIndex: index, presentationTime, segmentNumber: number });
+      }
+      if (number >= startSequenceNumber && number > closedThrough && videoEnd !== null) {
+        const audioTicks = floorDiv(presentationTime * videoEnd.timescale, BigInt(timescale));
+        leadTicks = videoEnd.ticks - audioTicks > leadTicks ? videoEnd.ticks - audioTicks : leadTicks;
+      }
+      reached = Math.max(reached, number);
+    }
+    videoEnd = videoDecodeEndOf(fragment) ?? videoEnd;
+    if (videoEnd !== null) {
+      const unit = BigInt(period) * videoEnd.timescale;
+      const margin = MARGIN_SECONDS * videoEnd.timescale + leadTicks;
+      passedByVideo = Number(floorDiv(videoEnd.ticks - margin, unit)) - 1;
+    }
+    opened = Math.max(opened, openedAt.get(index) ?? -Infinity);
+  }
+  return dropped;
 }
 
 /** Whether two recordings' initialization segments are byte-identical, and their digests. */
@@ -94,12 +174,15 @@ export function initializationSegmentPair(label, [firstName, first], [secondName
 
 export function describeSegment(segment, stream) {
   const fragments = segment.fragments.map((index) => stream.fragments[index]);
+  const keyframes = videoSamples(stream)
+    .slice(segment.videoSamples.from, segment.videoSamples.to)
+    .filter((sample) => sample.sync);
   return {
     number: segment.number,
     firstVideoPresentationTime: segment.firstVideoPresentationTime,
     firstFragmentIndex: segment.fragments[0],
     fragmentCount: fragments.length,
-    syncFirstFragmentCount: fragments.filter((fragment) => videoTrafOf(fragment)?.firstSync === true).length,
+    keyframeCount: keyframes.length,
     byteLength: fragments.reduce((sum, fragment) => sum + fragment.byteLength, 0),
   };
 }
@@ -503,14 +586,13 @@ export function videoPictures(stream) {
   return { sampleEntry: track.sampleEntry, keyframes };
 }
 
-function everyKeyframeStartsAFragment(stream) {
+/** The indexes of the fragments that hold a keyframe after their first video sample. */
+function fragmentsWithAKeyframeInside(stream) {
   const samples = videoSamples(stream);
-  const withKeyframes = new Set(samples.filter((sample) => sample.sync).map((sample) => sample.fragmentIndex));
-  return [...withKeyframes].every((index) => {
-    const start = videoTrafOf(stream.fragments[index]);
-    const keyframes = samples.filter((sample) => sample.fragmentIndex === index && sample.sync).length;
-    return start.firstSync && start.sampleCount > 0 && keyframes === 1;
-  });
+  const inside = samples.filter(
+    (sample, position) => sample.sync && position > 0 && samples[position - 1].fragmentIndex === sample.fragmentIndex,
+  );
+  return [...new Set(inside.map((sample) => sample.fragmentIndex))];
 }
 
 function startPlusDurationMisses(video) {
@@ -542,7 +624,7 @@ export function diagnostics(stream) {
     nonSyncFirstFragments: video.filter((traf) => traf?.firstSync === false).length,
     fragmentsWithoutVideo: video.filter((traf) => traf === null).length,
     leadingFragmentsWithoutVideo: video.findIndex((traf) => traf !== null),
-    everyKeyframeStartsAFragment: everyKeyframeStartsAFragment(stream),
+    fragmentsWithAKeyframeInside: fragmentsWithAKeyframeInside(stream),
     videoSamples: videoSamples(stream).length,
     largestFragmentByteLength: Math.max(...fragments.map((fragment) => fragment.byteLength)),
     firstVideoPresentationTime: starts[0],
@@ -600,8 +682,9 @@ function recordingViolations(fixture) {
   if (check !== null && !check.recordedKeyframesEqualSourceKeyframes) {
     found.push(`${fixture.name}: a recorded keyframe is not the source's own keyframe`);
   }
-  if (!fixture.diagnostics.everyKeyframeStartsAFragment) {
-    found.push(`${fixture.name}: a keyframe does not start a fragment`);
+  // delay_moov writes nothing until every track has a sample, so only the first fragment may run past a keyframe.
+  if (fixture.diagnostics.fragmentsWithAKeyframeInside.some((index) => index > 0)) {
+    found.push(`${fixture.name}: a keyframe does not start a fragment after the first`);
   }
   return [...found, ...pictureViolations(fixture)];
 }

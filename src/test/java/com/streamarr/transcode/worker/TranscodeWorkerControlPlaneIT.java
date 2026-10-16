@@ -2,6 +2,7 @@ package com.streamarr.transcode.worker;
 
 import static com.streamarr.transcode.engine.FfmpegRecordings.bytesOf;
 import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
+import static com.streamarr.transcode.fixtures.DeliveredSamples.assertCarriesTheRecordedSamples;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING_CODEC_STRING;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.uploadNames;
@@ -772,7 +773,7 @@ class TranscodeWorkerControlPlaneIT {
               });
       var uploaded = new ByteArrayOutputStream();
       service.uploads.forEach(upload -> uploaded.writeBytes(upload.bytes()));
-      assertThat(uploaded.toByteArray()).isEqualTo(bytesOf(ENCODED_RECORDING));
+      assertCarriesTheRecordedSamples(uploaded.toByteArray(), recording);
     }
   }
 

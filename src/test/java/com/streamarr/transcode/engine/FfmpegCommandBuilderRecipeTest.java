@@ -108,20 +108,26 @@ class FfmpegCommandBuilderRecipeTest {
 
   private static TranscodeDecision decisionRecordedAs(Recording recording) {
     var decision = TranscodeDecision.builder().subtitleDecision(SubtitleDecisions.EXCLUDED);
-    return switch (recording.mode()) {
+    return switch (recording.audio()) {
       case ENCODE ->
           decision
-              .transcodeMode(TranscodeMode.FULL_TRANSCODE)
-              .videoDecision(encodeRecordedBy(recording.videoEncoder()))
+              .transcodeMode(modeEncodingAudio(recording))
+              .videoDecision(videoDecisionRecordedIn(recording))
               .audioDecision(ENCODED_AUDIO)
               .build();
       case COPY ->
           decision
-              .transcodeMode(TranscodeMode.REMUX)
-              .videoDecision(
-                  new VideoDecision.Copy(RecordingFixtures.ENCODED_RECORDING_CODEC_STRING))
+              .transcodeMode(modeCopyingAudio(recording))
+              .videoDecision(videoDecisionRecordedIn(recording))
               .audioDecision(COPIED_AUDIO)
               .build();
+    };
+  }
+
+  private static VideoDecision videoDecisionRecordedIn(Recording recording) {
+    return switch (recording.mode()) {
+      case ENCODE -> encodeRecordedBy(recording.videoEncoder());
+      case COPY -> new VideoDecision.Copy(RecordingFixtures.ENCODED_RECORDING_CODEC_STRING);
     };
   }
 
@@ -143,6 +149,20 @@ class FfmpegCommandBuilderRecipeTest {
               .codecString("hvc1.1.6.L30.90")
               .build();
       default -> VideoDecisionFixtures.encodeBuilder().build();
+    };
+  }
+
+  private static TranscodeMode modeEncodingAudio(Recording recording) {
+    return switch (recording.mode()) {
+      case ENCODE -> TranscodeMode.FULL_TRANSCODE;
+      case COPY -> TranscodeMode.AUDIO_TRANSCODE;
+    };
+  }
+
+  private static TranscodeMode modeCopyingAudio(Recording recording) {
+    return switch (recording.mode()) {
+      case ENCODE -> TranscodeMode.VIDEO_TRANSCODE;
+      case COPY -> TranscodeMode.REMUX;
     };
   }
 

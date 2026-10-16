@@ -15,6 +15,23 @@ record TrackFragmentBox(
     return moof.children("traf").stream().map(TrackFragmentBox::of).toList();
   }
 
+  /**
+   * The decode time of the {@code traf}'s first sample, which its {@code tfdt} declares: unsigned
+   * in version 0 and signed in version 1, where FFmpeg writes the AAC priming frame before zero.
+   *
+   * @throws FragmentedMp4Exception when the {@code traf} holds no {@code tfdt}
+   */
+  long baseMediaDecodeTime() {
+    var fields = traf.requiredChild("tfdt").fields();
+    var version = fields.u8();
+    fields.skip(3);
+    if (version == 1) {
+      return fields.s64();
+    }
+
+    return fields.u32();
+  }
+
   private static TrackFragmentBox of(BoxView traf) {
     var header = TrackFragmentHeader.of(traf.requiredChild("tfhd"));
     return new TrackFragmentBox(
