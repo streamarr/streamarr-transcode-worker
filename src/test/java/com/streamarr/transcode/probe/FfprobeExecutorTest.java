@@ -380,77 +380,148 @@ class FfprobeExecutorTest {
   }
 
   @Test
-  @DisplayName("Should retain complete container and ordered streams when probing multiple tracks")
-  void shouldRetainCompleteContainerAndOrderedStreamsWhenProbingMultipleTracks() {
-    var executor =
+  @DisplayName("Should preserve container facts when its duration has a fractional second")
+  void shouldPreserveContainerFactsWhenItsDurationHasAFractionalSecond() {
+    var media =
         executor(
-            """
-        {"format":{"format_name":"mpegts","duration":"7200.123","bit_rate":"16000000"},
-         "streams":[
-          {"index":4,"codec_type":"video","codec_name":"h264","width":1920,"height":1080,
-           "r_frame_rate":"24000/1001","bit_rate":"4000000","disposition":{"default":0}},
-          {"index":1,"codec_type":"audio","codec_name":"ac3","channels":6,"bit_rate":"384000",
-           "tags":{"language":"eng"},"disposition":{"default":1,"forced":1}},
-          {"index":9,"codec_type":"video","codec_name":"hevc","width":3840,"height":2160,
-           "r_frame_rate":"60","bit_rate":"12000000","disposition":{"default":1}},
-          {"index":3,"codec_type":"subtitle","codec_name":"srt","tags":{"language":"fra"}},
-          {"index":6,"codec_type":"data","codec_name":"bin_data","bit_rate":"1000"},
-          {"index":7,"codec_type":"attachment","codec_name":"ttf"},
-          {"index":8,"codec_type":"unknown","codec_name":"unknown"}]}
-        """,
-            0);
+                """
+                {"format":{"format_name":"mpegts","duration":"7200.123","bit_rate":"16000000"},
+                 "streams":[{"index":0,"codec_type":"video"}]}
+                """,
+                0)
+            .probe(SOURCE, request())
+            .result()
+            .getMedia();
 
-    var result = executor.probe(SOURCE, request()).result();
-
-    assertThat(result.hasMedia()).isTrue();
-    var media = result.getMedia();
     var container = media.getContainer();
     assertThat(container.getFormat()).isEqualTo("mpegts");
     assertThat(container.getDuration().getSeconds()).isEqualTo(7200);
     assertThat(container.getDuration().getNanos()).isEqualTo(123_000_000);
     assertThat(container.getBitrateBitsPerSecond()).isEqualTo(16_000_000);
+  }
+
+  @Test
+  @DisplayName("Should preserve stream identities in order when their indices are not sorted")
+  void shouldPreserveStreamIdentitiesInOrderWhenTheirIndicesAreNotSorted() {
+    var media =
+        executor(
+                """
+                {"streams":[
+                  {"index":4,"codec_type":"video","codec_name":"h264"},
+                  {"index":1,"codec_type":"audio","codec_name":"ac3"},
+                  {"index":9,"codec_type":"video","codec_name":"hevc"},
+                  {"index":3,"codec_type":"subtitle","codec_name":"srt"},
+                  {"index":6,"codec_type":"data","codec_name":"bin_data"},
+                  {"index":7,"codec_type":"attachment","codec_name":"ttf"},
+                  {"index":8,"codec_type":"unknown","codec_name":"unknown"}]}
+                """,
+                0)
+            .probe(SOURCE, request())
+            .result()
+            .getMedia();
+
     assertThat(media.getStreamsList())
         .extracting(ProbeStreamInfo::getIndex)
         .containsExactly(4, 1, 9, 3, 6, 7, 8);
-    assertThat(media.getStreams(0))
-        .isEqualTo(
-            ProbeStreamInfo.newBuilder()
-                .setIndex(4)
-                .setCodecType("video")
-                .setCodec("h264")
-                .setWidth(1920)
-                .setHeight(1080)
-                .setFramerate(24000.0 / 1001)
-                .setBitrateBitsPerSecond(4_000_000)
-                .build());
-    assertThat(media.getStreams(1))
-        .isEqualTo(
-            ProbeStreamInfo.newBuilder()
-                .setIndex(1)
-                .setCodecType("audio")
-                .setCodec("ac3")
-                .setChannels(6)
-                .setBitrateBitsPerSecond(384_000)
-                .setLanguage("eng")
-                .setIsDefault(true)
-                .setIsForced(true)
-                .build());
-    assertThat(media.getStreams(2))
-        .isEqualTo(
-            ProbeStreamInfo.newBuilder()
-                .setIndex(9)
-                .setCodecType("video")
-                .setCodec("hevc")
-                .setWidth(3840)
-                .setHeight(2160)
-                .setFramerate(60)
-                .setBitrateBitsPerSecond(12_000_000)
-                .setIsDefault(true)
-                .build());
-    assertThat(media.getStreams(3).getLanguage()).isEqualTo("fra");
-    assertThat(media.getStreams(4).getBitrateBitsPerSecond()).isEqualTo(1000);
-    assertThat(media.getStreams(5).getCodecType()).isEqualTo("attachment");
-    assertThat(media.getStreams(6).getCodecType()).isEqualTo("unknown");
+    assertThat(media.getStreamsList())
+        .extracting(ProbeStreamInfo::getCodecType)
+        .containsExactly("video", "audio", "video", "subtitle", "data", "attachment", "unknown");
+    assertThat(media.getStreamsList())
+        .extracting(ProbeStreamInfo::getCodec)
+        .containsExactly("h264", "ac3", "hevc", "srt", "bin_data", "ttf", "unknown");
+  }
+
+  @Test
+  @DisplayName("Should retain each video's dimensions when the tracks have different sizes")
+  void shouldRetainEachVideosDimensionsWhenTheTracksHaveDifferentSizes() {
+    var media =
+        executor(
+                """
+                {"streams":[
+                  {"index":4,"codec_type":"video","width":1920,"height":1080},
+                  {"index":9,"codec_type":"video","width":3840,"height":2160}]}
+                """,
+                0)
+            .probe(SOURCE, request())
+            .result()
+            .getMedia();
+
+    assertThat(media.getStreamsList())
+        .extracting(ProbeStreamInfo::getWidth)
+        .containsExactly(1920, 3840);
+    assertThat(media.getStreamsList())
+        .extracting(ProbeStreamInfo::getHeight)
+        .containsExactly(1080, 2160);
+  }
+
+  @ParameterizedTest
+  @CsvSource({"24000/1001, 23.976023976023978", "60, 60"})
+  @DisplayName("Should retain the declared rate when ffprobe reports a fraction or an integer")
+  void shouldRetainTheDeclaredRateWhenFfprobeReportsAFractionOrAnInteger(
+      String rate, double expected) {
+    var media =
+        executor(
+                """
+                {"streams":[{"index":0,"codec_type":"video","r_frame_rate":"%s"}]}
+                """
+                    .formatted(rate),
+                0)
+            .probe(SOURCE, request())
+            .result()
+            .getMedia();
+
+    assertThat(media.getStreams(0).getFramerate()).isEqualTo(expected);
+  }
+
+  @Test
+  @DisplayName("Should preserve rendition selection facts when audio and subtitles differ")
+  void shouldPreserveRenditionSelectionFactsWhenAudioAndSubtitlesDiffer() {
+    var media =
+        executor(
+                """
+                {"streams":[
+                  {"index":0,"codec_type":"video"},
+                  {"index":1,"codec_type":"audio","channels":6,"tags":{"language":"eng"},
+                   "disposition":{"default":1,"forced":0}},
+                  {"index":2,"codec_type":"subtitle","tags":{"language":"fra"},
+                   "disposition":{"default":0,"forced":1}}]}
+                """,
+                0)
+            .probe(SOURCE, request())
+            .result()
+            .getMedia();
+
+    var audio = media.getStreams(1);
+    assertThat(audio.getChannels()).isEqualTo(6);
+    assertThat(audio.getLanguage()).isEqualTo("eng");
+    assertThat(audio.getIsDefault()).isTrue();
+    assertThat(audio.getIsForced()).isFalse();
+    var subtitle = media.getStreams(2);
+    assertThat(subtitle.getLanguage()).isEqualTo("fra");
+    assertThat(subtitle.getIsDefault()).isFalse();
+    assertThat(subtitle.getIsForced()).isTrue();
+  }
+
+  @Test
+  @DisplayName(
+      "Should preserve each bitrate when video audio and data streams report different values")
+  void shouldPreserveEachBitrateWhenVideoAudioAndDataStreamsReportDifferentValues() {
+    var media =
+        executor(
+                """
+                {"streams":[
+                  {"index":0,"codec_type":"video","bit_rate":"4000000"},
+                  {"index":1,"codec_type":"audio","bit_rate":"384000"},
+                  {"index":2,"codec_type":"data","bit_rate":"1000"}]}
+                """,
+                0)
+            .probe(SOURCE, request())
+            .result()
+            .getMedia();
+
+    assertThat(media.getStreamsList())
+        .extracting(ProbeStreamInfo::getBitrateBitsPerSecond)
+        .containsExactly(4_000_000L, 384_000L, 1000L);
   }
 
   @ParameterizedTest
