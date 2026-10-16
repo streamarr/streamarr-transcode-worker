@@ -7,6 +7,7 @@ import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeMediaInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
+import com.streamarr.transcode.fakes.EndlessOutputProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import java.io.IOException;
 import java.io.InputStream;
@@ -15,6 +16,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.IntFunction;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -33,7 +35,7 @@ final class RecordedFfprobe {
   private RecordedFfprobe() {}
 
   static ProbeMediaInfo probeFixture(String fixture) {
-    return probeOutput(fixture(fixture));
+    return probeOutput(fixture(fixture), packets(fixture));
   }
 
   static ProbeStreamInfo streamOf(String fixture, int index) {
@@ -44,12 +46,62 @@ final class RecordedFfprobe {
   }
 
   static ProbeMediaInfo probeOutput(String ffprobeOutput) {
-    var result = probeResult(ffprobeOutput);
+    return probeOutput(ffprobeOutput, "");
+  }
+
+  /**
+   * Probes with the given ffprobe output, and answers the frame-rate rule's packet scan with the
+   * given packet lines.
+   */
+  static ProbeMediaInfo probeOutput(String ffprobeOutput, String packetLines) {
+    var result = probeResult(ffprobeOutput, packetLines);
     assertThat(result.hasMedia()).as("the probe succeeds").isTrue();
     return result.getMedia();
   }
 
   static ProbeAttemptResult probeResult(String ffprobeOutput) {
+    return probeResult(ffprobeOutput, "");
+  }
+
+  /** Probes with the given ffprobe output while the frame-rate scan prints packets forever. */
+  static ProbeAttemptResult probeResultWithEndlessScan(
+      String ffprobeOutput, IntFunction<String> packetLines) {
+    var executor =
+        new FfprobeExecutor(
+            new ObjectMapper(),
+            command -> {
+              if (command.arguments().contains("-read_intervals")) {
+                return new EndlessOutputProcess(packetLines);
+              }
+
+              var output =
+                  switch (command.tool()) {
+                    case FFPROBE -> answer(ffprobeOutput, command.arguments());
+                    case FFMPEG -> "";
+                  };
+              return ScriptedProcess.builder()
+                  .output(output.getBytes(StandardCharsets.UTF_8))
+                  .build();
+            });
+    return executor.probe(SOURCE, request()).result();
+  }
+
+  /** Probes with the given ffprobe output while the frame-rate scan exits with the given code. */
+  static ProbeAttemptResult probeResultWithScanExitCode(String ffprobeOutput, int exitCode) {
+    var executor =
+        new FfprobeExecutor(
+            new ObjectMapper(),
+            command -> {
+              var isScan = command.arguments().contains("-read_intervals");
+              return ScriptedProcess.builder()
+                  .output(isScan ? new byte[0] : ffprobeOutput.getBytes(StandardCharsets.UTF_8))
+                  .exitCode(isScan ? exitCode : 0)
+                  .build();
+            });
+    return executor.probe(SOURCE, request()).result();
+  }
+
+  private static ProbeAttemptResult probeResult(String ffprobeOutput, String packetLines) {
     var executor =
         new FfprobeExecutor(
             new ObjectMapper(),
@@ -58,7 +110,9 @@ final class RecordedFfprobe {
                     .output(
                         switch (command.tool()) {
                           case FFPROBE ->
-                              answer(ffprobeOutput, command.arguments())
+                              (command.arguments().contains("-read_intervals")
+                                      ? packetLines
+                                      : answer(ffprobeOutput, command.arguments()))
                                   .getBytes(StandardCharsets.UTF_8);
                           case FFMPEG -> new byte[0];
                         })
@@ -124,6 +178,19 @@ final class RecordedFfprobe {
       case "a" -> "audio".equals(type);
       default -> throw new AssertionError("an unexpected stream selector " + selector);
     };
+  }
+
+  /**
+   * The frame-rate scan that the pinned worker image recorded into {@code
+   * src/test/resources/probe/packets}; no packets when the fixture has no recorded scan.
+   */
+  static String packets(String fixture) {
+    try (InputStream recorded =
+        RecordedFfprobe.class.getResourceAsStream("/probe/packets/" + fixture + ".csv")) {
+      return recorded == null ? "" : new String(recorded.readAllBytes(), StandardCharsets.UTF_8);
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
+    }
   }
 
   static String fixture(String fixture) {

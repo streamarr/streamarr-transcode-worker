@@ -41,6 +41,9 @@ public final class FfprobeExecutor {
   static final List<String> READ_LIMITS =
       List.of("-analyzeduration", "200M", "-probesize", "1G", "-scan_all_pmts", "0");
 
+  // 30 s of fields at the 1000 fps limit of a usable rate, twice over.
+  private static final int MAXIMUM_SCANNED_PACKETS = 120_000;
+
   private static final int AVERROR_INVALIDDATA = -1094995529;
   private static final int AVERROR_EOF = -541478725;
 
@@ -138,6 +141,17 @@ public final class FfprobeExecutor {
       return ProbeAttemptReport.resultOnly(result);
     }
 
+    var chosen = ChosenVideoStream.find(json.path("streams"));
+    if (chosen.isPresent()) {
+      var frameRate =
+          new FrameRateRule(streamIndex -> packetTimings(attempt.source(), streamIndex))
+              .choose(chosen.get());
+      result =
+          result.toBuilder()
+              .setMedia(result.getMedia().toBuilder().setFrameRateRule(frameRate))
+              .build();
+    }
+
     var probed =
         ProbedSource.builder().source(attempt.source()).ffprobeOutput(json).result(result).build();
     if (attempt.request().getScanKeyframePackets()) {
@@ -145,6 +159,51 @@ public final class FfprobeExecutor {
     }
 
     return new ContainerIndexProbe(objectMapper, this::run).addKeyframes(probed);
+  }
+
+  /**
+   * ffprobe's packet lines, pts,dts,size,flags, for the first 30 s of one stream, and at most
+   * 120,000 of them. The read interval ends only when the timestamps pass 30 s, so a stream whose
+   * timestamps stop advancing would otherwise print every packet in the file.
+   */
+  private List<String> packetTimings(Path source, int streamIndex)
+      throws ExecutionException, InterruptedException {
+    var arguments =
+        List.of(
+            "-v",
+            "error",
+            "-select_streams",
+            String.valueOf(streamIndex),
+            "-read_intervals",
+            "%+30",
+            "-show_entries",
+            "packet=pts,dts,size,flags",
+            "-of",
+            "csv=p=0",
+            source.toString());
+    var process = processFactory.apply(new ProbeCommand(ProbeTool.FFPROBE, arguments));
+    var lines = new ArrayList<String>();
+    var stopped = new AtomicBoolean();
+    OutputReader<Void> reader =
+        stdout -> {
+          KeyframePacketScan.PacketLines take =
+              line -> {
+                lines.add(line);
+                return lines.size() < MAXIMUM_SCANNED_PACKETS;
+              };
+          if (!readLinesWhileNeeded(stdout, take)) {
+            stopped.set(true);
+            process.destroyForcibly();
+          }
+
+          return null;
+        };
+    var exitCode = run(process, reader, stderr -> readLines(stderr, _ -> {})).exitCode();
+    if (!stopped.get() && exitCode != 0) {
+      throw new PacketScanException("ffprobe's frame-rate scan exited with code " + exitCode);
+    }
+
+    return lines;
   }
 
   private ProcessOutput run(List<String> arguments)
@@ -198,8 +257,9 @@ public final class FfprobeExecutor {
       Process process, OutputReader<T> reader, OutputReader<Void> diagnosticsReader)
       throws ExecutionException, InterruptedException {
     try (var readers = Executors.newVirtualThreadPerTaskExecutor()) {
-      var diagnostics = readers.submit(() -> diagnosticsReader.read(process.getErrorStream()));
-      var output = readers.submit(() -> readOutput(process, reader));
+      var diagnostics =
+          readers.submit(() -> readOutput(process, process.getErrorStream(), diagnosticsReader));
+      var output = readers.submit(() -> readOutput(process, process.getInputStream(), reader));
       try {
         var exitCode = process.waitFor();
         var finished = new Finished<>(output.get(), exitCode);
@@ -234,9 +294,21 @@ public final class FfprobeExecutor {
     return null;
   }
 
-  private <T> T readOutput(Process process, OutputReader<T> reader) throws IOException {
-    try (var output = process.getInputStream()) {
-      return reader.read(output);
+  private <T> T readOutput(Process process, InputStream output, OutputReader<T> reader)
+      throws IOException {
+    var completed = false;
+    try {
+      T result;
+      try (output) {
+        result = reader.read(output);
+      }
+
+      completed = true;
+      return result;
+    } finally {
+      if (!completed && process.isAlive()) {
+        terminate(process);
+      }
     }
   }
 

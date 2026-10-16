@@ -198,6 +198,12 @@ SVTAV1=(-c:v libsvtav1 -preset 10 -svtav1-params log-level=0 -pix_fmt yuv420p10l
   mp4-hevc-record-level.mp4
 # AAC LC in ADTS, whose frame headers edit-adts-profile.py rewrites as AAC Main and AAC LTP.
 "${FF[@]}" "${TONE[@]}" -c:a aac -f adts aac-lc.adts
+# Frame rates above 60, which the frame-rate rule divides evenly: 120 in Matroska, whose 1 ms
+# timestamps alternate 8 and 9 ms, and 100, 90 and 72 in MP4.
+"${FF[@]}" -f lavfi -i testsrc2=size=64x36:rate=120:duration=1 "${X264[@]}" mkv-120fps.mkv
+for rate in 100 90 72; do
+  "${FF[@]}" -f lavfi -i "testsrc2=size=64x36:rate=$rate:duration=1" "${X264[@]}" "mp4-${rate}fps.mp4"
+done
 
 # 8-bit SDR with BT.709 color signaling.
 "${FF[@]}" "${VIDEO[@]}" "${X264[@]}" \
@@ -270,7 +276,7 @@ FIXTURES_TO_PROBE=(mp4-titled.mp4 mkv-remuxed-from-mp4.mkv mp4-default-handlers.
   mp4-hdr10-maxfall-zero.mp4 mkv-hdr10-maxfall-zero.mkv mp4-hdr10-sei-only.mp4 mp4-sdr8-bt709.mp4
   mpegts-hevc-ac3.ts ivf-av1-10bit.ivf obu-av1-10bit.obu mkv-av1-10bit.mkv
   mp4-av1-10bit.mp4 mp4-audio-codecs.mp4 mp4-avc-record-level.mp4 mp4-hevc-record-level.mp4
-  mpegts-aac-main.ts mpegts-aac-ltp.ts)
+  mpegts-aac-main.ts mpegts-aac-ltp.ts mkv-120fps.mkv mp4-100fps.mp4 mp4-90fps.mp4 mp4-72fps.mp4)
 if [ -n "${FATE_SUITE:-}" ]; then
   in_image fate.sh
   FIXTURES_TO_PROBE+=(mkv-eac3-atmos-dts-hd-ma.mkv mp4-dovi-p5-hev1.mp4 mkv-hdr10-fate.mkv
@@ -288,7 +294,8 @@ CONTAINER
 
 LOCAL_SAMPLE_NAMES=(mp4-dovi-p5-dvh1.mp4 mp4-dovi-p5-dvh1-no-record.mp4 mp4-dovi-p81.mp4
   mp4-dovi-p82.mp4 mp4-dovi-p84-hlg.mp4 mp4-dovi-p9-avc1.mp4 mp4-dovi-p9-dva1.mp4 mp4-hevc-hdr10.mp4
-  mp4-hevc-sdr10-untagged.mp4 mov-phone-hlg-dovi-p84.mov mov-phone-rotated.mov)
+  mp4-hevc-sdr10-untagged.mp4 mov-phone-hlg-dovi-p84.mov mov-phone-rotated.mov mov-phone-one-gap.mov
+  mov-phone-120-declared.mov mov-phone-60.mov mov-phone-slow-motion.mov mpegts-avchd-interlaced.mts)
 PROBE_ARGUMENTS=("${FIXTURES_TO_PROBE[@]}")
 if [ -n "${LOCAL_SAMPLES:-}" ]; then
   in_image local.sh
@@ -302,6 +309,20 @@ fi
 
 printf 'bash /work/probe.sh %s\n' "${PROBE_ARGUMENTS[*]}" > "$WORK/probe-all.sh"
 in_image probe-all.sh
+
+# The frame-rate rule's packet scan of the chosen video stream, with the probe's own arguments, for
+# the sources that the frame-rate tests read.
+FRAME_RATE_SCANS=(mov-phone-hlg-dovi-p84.mov mov-phone-rotated.mov mov-phone-one-gap.mov
+  mov-phone-120-declared.mov mov-phone-60.mov mov-phone-slow-motion.mov mpegts-avchd-interlaced.mts
+  mkv-120fps.mkv mp4-100fps.mp4 mp4-90fps.mp4 mp4-72fps.mp4)
+python3 "$HERE/frame-rate-scans.py" "$WORK" "${FRAME_RATE_SCANS[@]}" > "$WORK/scan-all.sh"
+in_image scan-all.sh
+mkdir -p "$FIXTURES/packets"
+for source in "${FRAME_RATE_SCANS[@]}"; do
+  if [ -f "$WORK/packets/$source.csv" ]; then
+    cp "$WORK/packets/$source.csv" "$FIXTURES/packets/"
+  fi
+done
 
 # Each video and audio stream that the probe computes a codec string for, copied with the worker's
 # copy arguments into a fragmented MP4. copy-codec-strings.py reads the codec string of each copy's

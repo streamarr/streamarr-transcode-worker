@@ -43,8 +43,8 @@ from its lavfi test sources. No file comes from a media library.
 | `mp4-dovi-p9-dva1.mp4.json` | Local sample: the same file with its sample entry renamed `dva1` |
 | `mp4-hevc-hdr10.mp4.json` | Local sample: 10-bit HEVC with PQ, whose HDR10 values travel only in SEI messages |
 | `mp4-hevc-sdr10-untagged.mp4.json` | Local sample: 10-bit HEVC SDR without a transfer tag |
-| `mov-phone-hlg-dovi-p84.mov.json` | Local sample: a public-domain phone camera original, HEVC HLG with Dolby Vision 8.4 |
-| `mov-phone-rotated.mov.json` | Local sample: a public-domain phone camera original, H.264 recorded upright |
+| `mov-phone-hlg-dovi-p84.mov.json` | Local sample: a phone camera original, HEVC HLG with Dolby Vision 8.4 (see Sources) |
+| `mov-phone-rotated.mov.json` | Local sample: a phone camera original, H.264 recorded upright (see Sources) |
 | `mpegts-hevc-ac3.ts.json` | HEVC and AC-3 in MPEG-TS, whose HEVC parameter sets ffprobe dumps in Annex B form |
 | `ivf-av1-10bit.ivf.json` | 10-bit AV1 in IVF, whose extradata is the sequence header OBU |
 | `obu-av1-10bit.obu.json` | The same stream as a raw OBU file |
@@ -52,9 +52,31 @@ from its lavfi test sources. No file comes from a media library.
 | `mp4-av1-10bit.mp4.json` | The same stream in MP4 |
 | `mp4-audio-codecs.mp4.json` | H.264 with AC-3, E-AC-3, FLAC and ALAC in MP4 |
 | `mpegts-aac-he.ts.json` | Local sample: HE-AAC in ADTS (`aac-he.adts`), next to a synthesized H.264 stream in MPEG-TS |
+| `mkv-120fps.mkv.json` | H.264 at 120 fps in Matroska, whose 1 ms timestamps alternate 8 and 9 ms |
+| `mp4-100fps.mp4.json`, `mp4-90fps.mp4.json`, `mp4-72fps.mp4.json` | H.264 at 100, 90 and 72 fps in MP4 |
+| `mov-phone-one-gap.mov.json` | Local sample: a phone camera original at 30 fps with one 133 ms gap (see Sources) |
+| `mov-phone-120-declared.mov.json` | Local sample: a phone camera original at 30 fps that declares `r_frame_rate` 120 (see Sources) |
+| `mov-phone-60.mov.json` | Local sample: a phone camera original at 60 fps whose average rate is 59.956 (see Sources) |
+| `mov-phone-slow-motion.mov.json` | Local sample: a phone slow-motion original that runs at up to 240 fps (see Sources) |
+| `mpegts-avchd-interlaced.mts.json` | Local sample: an AVCHD camcorder file, top field first, one field per packet (see Sources) |
+| `packets/*.csv` | The frame-rate rule's packet scan of a recording's chosen video stream: the first 30 s of packets as `pts,dts,size,flags`, from `frame-rate-scans.py` |
 | `copy-codec-strings.json` | The codec string of each copied stream: `copy-codec-strings.py` copies every H.264, HEVC, AV1, AAC, AC-3, E-AC-3, Opus, FLAC and ALAC stream above with the worker's copy arguments, and reads the string from the copy's initialization segment |
 | `pixel-formats.json` | `ffprobe -show_pixel_formats`: FFmpeg's description of every pixel format it knows |
 | `ffprobe-version.txt` | The first line of `ffprobe -version` from the recording image |
+
+## Sources
+
+The phone and camcorder fixtures hold only ffprobe's description of each file and its packet timing. The files themselves stay local. Each file was downloaded from the Internet Archive.
+
+| Fixture | Source | Author | License |
+| --- | --- | --- | --- |
+| `mov-phone-hlg-dovi-p84` | [img-5945_202311](https://archive.org/details/img-5945_202311) | Simon Robin Lehn | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) |
+| `mov-phone-rotated` | [img-6851_202505](https://archive.org/details/img-6851_202505) | Imad Rahi | [Public Domain Mark 1.0](https://creativecommons.org/publicdomain/mark/1.0/) |
+| `mov-phone-one-gap` | [img-4999_202406](https://archive.org/details/img-4999_202406) | Maung Fate | [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) |
+| `mov-phone-120-declared` | [img-0233_202604](https://archive.org/details/img-0233_202604) | Gemma | [CC BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/) |
+| `mov-phone-60` | [img-0372_202404](https://archive.org/details/img-0372_202404) | Uploader on the Internet Archive | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) |
+| `mov-phone-slow-motion` | [img-3068_202403](https://archive.org/details/img-3068_202403), file `IMG_3074.MOV` | Uploader on the Internet Archive | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) |
+| `mpegts-avchd-interlaced` | [Flickr-5838795894](https://archive.org/details/Flickr-5838795894) | Lawrence, via Flickr | [CC BY-SA 2.0](https://creativecommons.org/licenses/by-sa/2.0/) |
 
 ## Regenerating
 
