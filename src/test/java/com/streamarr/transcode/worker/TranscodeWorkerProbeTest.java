@@ -17,8 +17,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import build.buf.gen.streamarr.transcode.v1.CancelProbeCommand;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
+import build.buf.gen.streamarr.transcode.v1.Fraction;
+import build.buf.gen.streamarr.transcode.v1.FrameRateRuleInputs;
+import build.buf.gen.streamarr.transcode.v1.FrameRateRuleResult;
 import build.buf.gen.streamarr.transcode.v1.KeyframePacketScanReason;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositionSource;
+import build.buf.gen.streamarr.transcode.v1.OutputFrameRateBasis;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeContainerInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
@@ -409,6 +413,11 @@ class TranscodeWorkerProbeTest {
                         .setDynamicRange(VideoDynamicRange.getDefaultInstance())
                         .setLanguage(language))
                 .setChosenVideoStreamIndex(0)
+                // The stream declares no frame rate and no time base.
+                .setFrameRateRule(
+                    FrameRateRuleResult.newBuilder()
+                        .setBasis(OutputFrameRateBasis.OUTPUT_FRAME_RATE_BASIS_REFUSED)
+                        .setInputs(FrameRateRuleInputs.getDefaultInstance()))
                 .setKeyframes(PACKET_SCAN_REQUIRED_WITHOUT_INDEX));
   }
 
@@ -975,6 +984,19 @@ class TranscodeWorkerProbeTest {
                             .setLanguage("fra")
                             .setIsForced(true))
                     .setChosenVideoStreamIndex(4)
+                    // Without a time base, the rule cannot scan, so it snaps the base rate.
+                    .setFrameRateRule(
+                        FrameRateRuleResult.newBuilder()
+                            .setOutputFrameRate(
+                                Fraction.newBuilder().setNumerator(24_000).setDenominator(1001))
+                            .setBasis(
+                                OutputFrameRateBasis.OUTPUT_FRAME_RATE_BASIS_DECLARED_RATE_FALLBACK)
+                            .setInputs(
+                                FrameRateRuleInputs.newBuilder()
+                                    .setBaseRate(
+                                        Fraction.newBuilder()
+                                            .setNumerator(24_000)
+                                            .setDenominator(1001))))
                     .setKeyframes(PACKET_SCAN_REQUIRED_WITHOUT_INDEX))
             .build();
 

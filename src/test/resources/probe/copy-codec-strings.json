@@ -2,6 +2,9 @@
   "ivf-av1-10bit.ivf": {
     "0": "av01.0.00M.10"
   },
+  "mkv-120fps.mkv": {
+    "0": "avc1.42C00A"
+  },
   "mkv-av1-10bit.mkv": {
     "0": "av01.0.00M.10"
   },
@@ -47,13 +50,38 @@
     "1": "mp4a.40.2",
     "2": "mp4a.40.2"
   },
+  "mov-phone-120-declared.mov": {
+    "0": "hvc1.2.4.L120.B0",
+    "1": "mp4a.40.2"
+  },
+  "mov-phone-60.mov": {
+    "0": "hvc1.2.4.L123.B0",
+    "1": "mp4a.40.2"
+  },
   "mov-phone-hlg-dovi-p84.mov": {
+    "0": "hvc1.2.4.L120.B0",
+    "1": "mp4a.40.2"
+  },
+  "mov-phone-one-gap.mov": {
     "0": "hvc1.2.4.L120.B0",
     "1": "mp4a.40.2"
   },
   "mov-phone-rotated.mov": {
     "0": "mp4a.40.2",
     "1": "avc1.640028"
+  },
+  "mov-phone-slow-motion.mov": {
+    "0": "mp4a.40.2",
+    "1": "avc1.640033"
+  },
+  "mp4-100fps.mp4": {
+    "0": "avc1.42C00A"
+  },
+  "mp4-72fps.mp4": {
+    "0": "avc1.42C00A"
+  },
+  "mp4-90fps.mp4": {
+    "0": "avc1.42C00A"
   },
   "mp4-audio-codecs.mp4": {
     "0": "avc1.42C00A",
@@ -146,6 +174,10 @@
   "mpegts-aac-main.ts": {
     "0": "avc1.42C00A",
     "1": "mp4a.40.1"
+  },
+  "mpegts-avchd-interlaced.mts": {
+    "0": "avc1.640028",
+    "1": "ac-3"
   },
   "mpegts-dovi-p7.ts": {
     "0": "hvc1.2.4.H153.B0"
