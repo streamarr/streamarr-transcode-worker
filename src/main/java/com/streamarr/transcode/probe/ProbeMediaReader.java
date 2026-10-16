@@ -85,8 +85,8 @@ final class ProbeMediaReader {
         ProbeStreamInfo.newBuilder()
             .setIndex(text(source, "index").map(Integer::parseInt).orElse(position))
             .setCodecType(type)
-            .setIsDefault(source.path("disposition").path("default").asInt() == 1)
-            .setIsForced(source.path("disposition").path("forced").asInt() == 1);
+            .setIsDefault(disposition(source, "default").asInt() == 1)
+            .setIsForced(disposition(source, "forced").asInt() == 1);
     text(source, "codec_name").ifPresent(stream::setCodec);
     text(source.path("tags"), "language").ifPresent(stream::setLanguage);
     number(source, "bit_rate", Long::parseLong).ifPresent(stream::setBitrateBitsPerSecond);
@@ -118,8 +118,12 @@ final class ProbeMediaReader {
     return stream;
   }
 
+  private static JsonNode disposition(JsonNode source, String flag) {
+    return source.path("disposition").path(flag);
+  }
+
   private static Optional<Boolean> hearingImpaired(JsonNode source) {
-    var flag = source.path("disposition").path("hearing_impaired");
+    var flag = disposition(source, "hearing_impaired");
     return flag.isIntegralNumber() ? Optional.of(flag.asInt() == 1) : Optional.empty();
   }
 
