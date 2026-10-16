@@ -29,7 +29,7 @@ in_image() {
 
   # The buildpack launcher prints JVM lines on its own stdout, so FFmpeg writes only to files.
   docker run --rm --user "$(id -u):$(id -g)" --entrypoint /cnb/lifecycle/launcher \
-    -v "$WORK":/work "${fate_mount[@]}" "$IMAGE" bash "/work/$1" > "$WORK/launcher.log" 2>&1 \
+    -v "$WORK":/work ${fate_mount[@]+"${fate_mount[@]}"} "$IMAGE" bash "/work/$1" > "$WORK/launcher.log" 2>&1 \
     || { cat "$WORK/launcher.log"; exit 1; }
 }
 
@@ -175,6 +175,7 @@ for source in "$@"; do
     -show_streams -show_format -show_chapters -show_error "$source" > "$source.json"
 done
 ffprobe -version | head -1 > ffprobe-version.txt
+ffprobe -v quiet -print_format json -show_pixel_formats > pixel-formats.json
 CONTAINER
 
 in_image sources.sh
@@ -203,5 +204,5 @@ output.get("format", {}).pop("filename", None)
 json.dump(output, open(sys.argv[2], "w"), indent=2, ensure_ascii=False)
 open(sys.argv[2], "a").write("\n")' "$WORK/$source.json" "$FIXTURES/$source.json"
 done
-cp "$WORK/ffprobe-version.txt" "$FIXTURES/ffprobe-version.txt"
+cp "$WORK/ffprobe-version.txt" "$WORK/pixel-formats.json" "$FIXTURES/"
 echo "recorded into $FIXTURES with $IMAGE"

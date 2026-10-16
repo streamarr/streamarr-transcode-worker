@@ -1,12 +1,22 @@
 package com.streamarr.transcode.probe;
 
+import static com.streamarr.transcode.probe.RecordedFfprobe.fixture;
 import static com.streamarr.transcode.probe.RecordedFfprobe.probeFixture;
+import static com.streamarr.transcode.probe.RecordedFfprobe.probeOutput;
+import static com.streamarr.transcode.probe.RecordedFfprobe.streamOf;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import build.buf.gen.streamarr.transcode.v1.ChromaSubsampling;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 @Tag("UnitTest")
 @DisplayName("Ffprobe Executor Stream Facts Tests")
@@ -33,5 +43,109 @@ class FfprobeExecutorStreamFactsTest {
       assertThat(media.hasChosenVideoStreamIndex()).isTrue();
       assertThat(media.getChosenVideoStreamIndex()).isZero();
     }
+  }
+
+  @Nested
+  @DisplayName("Pixel Format")
+  class PixelFormatTests {
+
+    @Test
+    @DisplayName("Should report 8-bit 4:2:0 when the video stream is yuv420p")
+    void shouldReport8Bit420WhenTheVideoStreamIsYuv420p() {
+      var video = streamOf("mp4-titled.mp4", 0);
+
+      assertThat(video.getBitDepth()).isEqualTo(8);
+      assertThat(video.getChromaSubsampling()).isEqualTo(ChromaSubsampling.CHROMA_SUBSAMPLING_420);
+    }
+
+    @Test
+    @DisplayName("Should report 10-bit 4:2:2 when the video stream is yuv422p10le")
+    void shouldReport10Bit422WhenTheVideoStreamIsYuv422p10le() {
+      var video = streamOf("mkv-pipe-hevc-10bit.mkv", 0);
+
+      assertThat(video.getBitDepth()).isEqualTo(10);
+      assertThat(video.getChromaSubsampling()).isEqualTo(ChromaSubsampling.CHROMA_SUBSAMPLING_422);
+    }
+
+    @Test
+    @DisplayName(
+        "Should report no bit depth and no subsampling when ffprobe reports no pixel format")
+    void shouldReportNoBitDepthAndNoSubsamplingWhenFfprobeReportsNoPixelFormat() {
+      var video = probeOutput(videoStreamWithPixelFormat(null)).getStreams(0);
+
+      assertThat(video.hasBitDepth()).isFalse();
+      assertThat(video.getChromaSubsampling())
+          .isEqualTo(ChromaSubsampling.CHROMA_SUBSAMPLING_UNSPECIFIED);
+    }
+
+    @Test
+    @DisplayName("Should report no pixel format facts when the stream is not video")
+    void shouldReportNoPixelFormatFactsWhenTheStreamIsNotVideo() {
+      var audio = streamOf("mp4-titled.mp4", 1);
+
+      assertThat(audio.hasBitDepth()).isFalse();
+      assertThat(audio.getChromaSubsampling())
+          .isEqualTo(ChromaSubsampling.CHROMA_SUBSAMPLING_UNSPECIFIED);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("pixelFormats")
+    @DisplayName(
+        "Should report FFmpeg's first component depth and subsampling when a pixel format is known")
+    void shouldReportFfmpegsFirstComponentDepthAndSubsamplingWhenAPixelFormatIsKnown(
+        String name, JsonNode descriptor) {
+      var video = probeOutput(videoStreamWithPixelFormat(name)).getStreams(0);
+
+      assertThat(video.getBitDepth())
+          .isEqualTo(descriptor.path("components").path(0).path("bit_depth").asInt());
+      assertThat(video.getChromaSubsampling()).isEqualTo(subsamplingOf(descriptor));
+    }
+
+    /**
+     * Every pixel format that the pinned image's ffprobe describes, except hardware formats, which
+     * hold no samples, and Bayer formats, whose first component is not a whole sample.
+     */
+    static Stream<Arguments> pixelFormats() {
+      var descriptors =
+          new ObjectMapper().readTree(fixture("pixel-formats")).path("pixel_formats").values();
+      return descriptors.stream()
+          .filter(descriptor -> descriptor.path("flags").path("hwaccel").asInt() == 0)
+          .filter(descriptor -> !descriptor.path("name").asString().startsWith("bayer_"))
+          .map(descriptor -> Arguments.of(descriptor.path("name").asString(), descriptor));
+    }
+  }
+
+  /**
+   * A YCbCr format subsamples chroma by its log2 chroma shifts. A format with fewer than three
+   * components has no chroma. RGB, paletted and CIE XYZ formats have no chroma planes to subsample.
+   */
+  private static ChromaSubsampling subsamplingOf(JsonNode descriptor) {
+    var flags = descriptor.path("flags");
+    if (flags.path("rgb").asInt() == 1
+        || flags.path("palette").asInt() == 1
+        || descriptor.path("name").asString().startsWith("xyz")) {
+      return ChromaSubsampling.CHROMA_SUBSAMPLING_UNSPECIFIED;
+    }
+
+    if (descriptor.path("nb_components").asInt() < 3) {
+      return ChromaSubsampling.CHROMA_SUBSAMPLING_MONOCHROME;
+    }
+
+    var shifts =
+        descriptor.path("log2_chroma_w").asInt() + "x" + descriptor.path("log2_chroma_h").asInt();
+    return switch (shifts) {
+      case "1x1" -> ChromaSubsampling.CHROMA_SUBSAMPLING_420;
+      case "1x0" -> ChromaSubsampling.CHROMA_SUBSAMPLING_422;
+      case "0x0" -> ChromaSubsampling.CHROMA_SUBSAMPLING_444;
+      default -> ChromaSubsampling.CHROMA_SUBSAMPLING_UNSPECIFIED;
+    };
+  }
+
+  private static String videoStreamWithPixelFormat(String pixelFormat) {
+    var field = pixelFormat == null ? "" : ",\"pix_fmt\":\"" + pixelFormat + "\"";
+    return """
+        {"streams":[{"index":0,"codec_type":"video","time_base":"1/1000"%s}]}
+        """
+        .formatted(field);
   }
 }

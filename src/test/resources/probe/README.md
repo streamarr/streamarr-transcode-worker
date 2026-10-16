@@ -23,6 +23,7 @@ from its lavfi test sources. No file comes from a media library.
 | `mkv-pixel-crop.mkv.json` | `mp4-clap.mp4` remuxed into Matroska, which writes the crop as `PixelCrop` elements |
 | `mp4-rotated.mp4.json` | MP4 whose display matrix rotates the picture by 90 degrees (`-display_rotation 90`) |
 | `mp4-cover-art-first.mp4.json` | MP4 whose cover art `edit-mp4-boxes.py` moved in front of the video stream |
+| `pixel-formats.json` | `ffprobe -show_pixel_formats`: FFmpeg's description of every pixel format it knows |
 | `ffprobe-version.txt` | The first line of `ffprobe -version` from the recording image |
 
 ## Regenerating

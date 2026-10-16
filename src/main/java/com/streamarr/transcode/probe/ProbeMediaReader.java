@@ -61,8 +61,12 @@ final class ProbeMediaReader {
     number(source, "r_frame_rate", ProbeMediaReader::framerate)
         .filter(value -> Double.isFinite(value) && value > 0)
         .ifPresent(stream::setFramerate);
-    if ("audio".equals(type)) {
-      number(source, "channels", Integer::parseInt).ifPresent(stream::setChannels);
+    switch (type) {
+      case "video" -> VideoStreamFacts.add(source, stream);
+      case "audio" -> number(source, "channels", Integer::parseInt).ifPresent(stream::setChannels);
+      default -> {
+        // Other stream types report only the facts that every stream reports.
+      }
     }
 
     return stream.build();
