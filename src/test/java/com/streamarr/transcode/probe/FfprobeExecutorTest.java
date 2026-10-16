@@ -10,6 +10,7 @@ import build.buf.gen.streamarr.transcode.v1.ProbeContainerInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
+import build.buf.gen.streamarr.transcode.v1.VideoDynamicRange;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -154,7 +155,11 @@ class FfprobeExecutorTest {
     assertThat(media.getStreamsList())
         .containsExactly(
             ProbeStreamInfo.newBuilder().setIndex(0).setCodecType("unknown").build(),
-            ProbeStreamInfo.newBuilder().setIndex(1).setCodecType("video").build(),
+            ProbeStreamInfo.newBuilder()
+                .setIndex(1)
+                .setCodecType("video")
+                .setDynamicRange(VideoDynamicRange.getDefaultInstance())
+                .build(),
             ProbeStreamInfo.newBuilder()
                 .setIndex(2)
                 .setCodecType("audio")

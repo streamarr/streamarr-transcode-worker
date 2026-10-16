@@ -27,6 +27,9 @@ final class VideoStreamFacts {
     sideData(source, "Frame Cropping")
         .map(VideoStreamFacts::cropping)
         .ifPresent(stream::setContainerCropping);
+    stream.setDynamicRange(DynamicRangeReader.read(source));
+    HdrStaticMetadata.masteringDisplay(source).ifPresent(stream::setMasteringDisplay);
+    HdrStaticMetadata.contentLightLevel(source).ifPresent(stream::setContentLightLevel);
   }
 
   /** The stream side data of the given type, as ffprobe's -show_streams lists it. */

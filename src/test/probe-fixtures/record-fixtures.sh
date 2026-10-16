@@ -9,10 +9,14 @@
 #   src/test/probe-fixtures/record-fixtures.sh
 #   WORKER_IMAGE=streamarr-worker:local src/test/probe-fixtures/record-fixtures.sh
 #   FATE_SUITE=/path/to/fate-suite src/test/probe-fixtures/record-fixtures.sh
+#   LOCAL_SAMPLES=/path/to/samples src/test/probe-fixtures/record-fixtures.sh
 #
 # FATE_SUITE names a local copy of FFmpeg's FATE samples (rsync://fate-suite.ffmpeg.org/fate-suite/).
 # The audio fixtures copy an E-AC-3 Atmos and a DTS-HD MA stream from it next to a synthesized video
-# stream. Without FATE_SUITE, the script keeps those fixtures as they are.
+# stream, and the Dolby Vision and HDR10 fixtures probe or remux its Dolby Vision and HDR10 samples.
+# LOCAL_SAMPLES names a directory that holds the public Dolby Vision, HDR and phone samples that the
+# fixture README lists. Those samples stay local. Without either variable, the script keeps the
+# fixtures that need it as they are.
 set -euo pipefail
 
 IMAGE="${WORKER_IMAGE:-streamarr/streamarr-transcode-worker:0.1.0-SNAPSHOT@sha256:ad4a844f8fa7f27946ceb79431d62719474b2f3332b80a2222e5a421dc2acaab}"
@@ -25,6 +29,10 @@ in_image() {
   local fate_mount=()
   if [ -n "${FATE_SUITE:-}" ]; then
     fate_mount=(-v "$FATE_SUITE":/fate:ro)
+  fi
+
+  if [ -n "${LOCAL_SAMPLES:-}" ]; then
+    fate_mount+=(-v "$LOCAL_SAMPLES":/samples:ro)
   fi
 
   # The buildpack launcher prints JVM lines on its own stdout, so FFmpeg writes only to files.
@@ -147,6 +155,33 @@ done
 # AAC in MP4, whose config edit-mp4-boxes.py rewrites as ER AAC LC.
 "${FF[@]}" "${VIDEO[@]}" "${TONE[@]}" "${X264[@]}" -c:a aac mp4-er-aac-lc.mp4
 
+# HDR10 static metadata. x265 writes the mastering display and content light level SEI messages
+# into a raw HEVC stream. An encode from that stream carries both values as side data into MP4 mdcv
+# and clli boxes and into the Matroska mastering elements. A copy keeps them only in the SEI
+# messages. The second stream declares a MaxFALL of 0.
+MASTERING='G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,50)'
+# FFmpeg 8 takes an encode's color signaling from its frames, which setparams tags.
+HDR10=(-vf setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc
+  -pix_fmt yuv420p10le)
+X265=(-c:v libx265 -preset ultrafast)
+for light in 1000,400 1000,0; do
+  "${FF[@]}" -f lavfi -i testsrc2=size=64x64:rate=24:duration=1 "${HDR10[@]}" "${X265[@]}" \
+    -x265-params "log-level=none:hdr10=1:master-display=$MASTERING:max-cll=$light" "sei-$light.hevc"
+done
+"${FF[@]}" -i sei-1000,400.hevc "${HDR10[@]}" "${X265[@]}" -x265-params log-level=none \
+  mp4-hdr10-static.mp4
+"${FF[@]}" -i sei-1000,400.hevc "${HDR10[@]}" "${X265[@]}" -x265-params log-level=none \
+  mkv-hdr10-static.mkv
+"${FF[@]}" -i sei-1000,0.hevc "${HDR10[@]}" "${X265[@]}" -x265-params log-level=none \
+  mp4-hdr10-maxfall-zero.mp4
+"${FF[@]}" -i sei-1000,0.hevc "${HDR10[@]}" "${X265[@]}" -x265-params log-level=none \
+  mkv-hdr10-maxfall-zero.mkv
+"${FF[@]}" -i sei-1000,400.hevc -c copy -tag:v hvc1 mp4-hdr10-sei-only.mp4
+
+# 8-bit SDR with BT.709 color signaling.
+"${FF[@]}" "${VIDEO[@]}" "${X264[@]}" \
+  -vf setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709 mp4-sdr8-bt709.mp4
+
 # MP4 whose clean aperture crops 4 pixels from the left and the right and 2 from the top and the
 # bottom of the 64x36 picture, and the same stream remuxed into Matroska as PixelCrop elements.
 "${FF[@]}" "${VIDEO[@]}" "${X264[@]}" -map_metadata -1 mp4-clap.mp4
@@ -165,6 +200,10 @@ FF=(ffmpeg -hide_banner -nostdin -loglevel error -y)
 "${FF[@]}" -f lavfi -i testsrc2=size=64x36:rate=24:duration=1 -i /fate/eac3/the_great_wall_7.1.eac3 \
   -i /fate/dts/master_audio_7.1_24bit.dts -map 0:v -map 1:a -map 2:a -c:v libx264 -preset ultrafast \
   -c:a copy -t 1 mkv-eac3-atmos-dts-hd-ma.mkv
+cp /fate/mov/dovi-p5.mp4 mp4-dovi-p5-hev1.mp4
+cp /fate/mkv/hdr10tags-both.mkv mkv-hdr10-fate.mkv
+# Dolby Vision profile 7 in MPEG-TS, whose Dolby Vision descriptor carries the record.
+"${FF[@]}" -i /fate/mov/dovi-p7-hvce.mp4 -map 0:v -c copy -strict unofficial mpegts-dovi-p7.ts
 CONTAINER
 
 cat > "$WORK/probe.sh" <<'CONTAINER'
@@ -173,7 +212,7 @@ cd /work
 for source in "$@"; do
   # The probe's own arguments, as FfprobeExecutor passes them.
   ffprobe -v quiet -print_format json -analyzeduration 200M -probesize 1G -scan_all_pmts 0 \
-    -show_streams -show_format -show_chapters -show_error "$source" > "$source.json"
+    -show_streams -show_format -show_chapters -show_error "$source" > "$(basename "$source").json"
 done
 ffprobe -version | head -1 > ffprobe-version.txt
 ffprobe -v quiet -print_format json -show_pixel_formats > pixel-formats.json
@@ -188,20 +227,37 @@ in_image cropped.sh
 FIXTURES_TO_PROBE=(mp4-titled.mp4 mkv-remuxed-from-mp4.mkv mp4-default-handlers.mp4
   mkv-pipe-hevc-10bit.mkv mpegts-empty-audio.ts mkv-mp3-11khz.mkv mkv-offset-chapters.mkv
   mkv-many-chapters.mkv mkv-title-tags.mkv mkv-many-titles.mkv mp4-clap.mp4 mkv-pixel-crop.mkv mp4-rotated.mp4
-  mp4-cover-art-first.mp4 mp4-er-aac-lc.mp4)
+  mp4-cover-art-first.mp4 mp4-er-aac-lc.mp4 mp4-hdr10-static.mp4 mkv-hdr10-static.mkv
+  mp4-hdr10-maxfall-zero.mp4 mkv-hdr10-maxfall-zero.mkv mp4-hdr10-sei-only.mp4 mp4-sdr8-bt709.mp4)
 if [ -n "${FATE_SUITE:-}" ]; then
   in_image fate.sh
-  FIXTURES_TO_PROBE+=(mkv-eac3-atmos-dts-hd-ma.mkv)
+  FIXTURES_TO_PROBE+=(mkv-eac3-atmos-dts-hd-ma.mkv mp4-dovi-p5-hev1.mp4 mkv-hdr10-fate.mkv
+    mpegts-dovi-p7.ts)
 fi
 
-printf 'bash /work/probe.sh %s\n' "${FIXTURES_TO_PROBE[*]}" > "$WORK/probe-all.sh"
+LOCAL_SAMPLE_NAMES=(mp4-dovi-p5-dvh1.mp4 mp4-dovi-p5-dvh1-no-record.mp4 mp4-dovi-p81.mp4
+  mp4-dovi-p82.mp4 mp4-dovi-p84-hlg.mp4 mp4-dovi-p9-avc1.mp4 mp4-dovi-p9-dva1.mp4 mp4-hevc-hdr10.mp4
+  mp4-hevc-sdr10-untagged.mp4 mov-phone-hlg-dovi-p84.mov mov-phone-rotated.mov)
+PROBE_ARGUMENTS=("${FIXTURES_TO_PROBE[@]}")
+if [ -n "${LOCAL_SAMPLES:-}" ]; then
+  for sample in "${LOCAL_SAMPLE_NAMES[@]}"; do
+    PROBE_ARGUMENTS+=("/samples/$sample")
+  done
+  FIXTURES_TO_PROBE+=("${LOCAL_SAMPLE_NAMES[@]}")
+fi
+
+printf 'bash /work/probe.sh %s\n' "${PROBE_ARGUMENTS[*]}" > "$WORK/probe-all.sh"
 in_image probe-all.sh
 
 for source in "${FIXTURES_TO_PROBE[@]}"; do
-  # The source's path inside the recording container says nothing about the source.
+  # The source's path says nothing about the source. A phone recording's container tags can hold
+  # the place where it was recorded.
   python3 -c 'import json, sys
 output = json.load(open(sys.argv[1]))
 output.get("format", {}).pop("filename", None)
+tags = output.get("format", {}).get("tags", {})
+for key in [key for key in tags if "location" in key.lower()]:
+    del tags[key]
 json.dump(output, open(sys.argv[2], "w"), indent=2, ensure_ascii=False)
 open(sys.argv[2], "a").write("\n")' "$WORK/$source.json" "$FIXTURES/$source.json"
 done
