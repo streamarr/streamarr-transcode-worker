@@ -116,6 +116,20 @@ class FfprobeExecutorStreamFactsTest {
   class EndTimeTests {
 
     @Test
+    @DisplayName("Should omit the end time when ASF copies its play time into the stream duration")
+    void shouldOmitTheEndTimeWhenAsfCopiesItsPlayTimeIntoTheStreamDuration() {
+      var media =
+          probeOutput(
+              """
+              {"format":{"format_name":"asf","start_time":"0.000000"},
+               "streams":[{"index":0,"codec_type":"video","time_base":"1/1000",
+                           "start_pts":46,"duration_ts":2046}]}
+              """);
+
+      assertThat(media.getStreams(0).hasEndTime()).isFalse();
+    }
+
+    @Test
     @DisplayName("Should end each video and audio stream at its MP4 header duration")
     void shouldEndEachVideoAndAudioStreamAtItsMp4HeaderDuration() {
       // The video lasts 24576 ticks of 1/12288 s and the audio 88200 ticks of 1/44100 s.

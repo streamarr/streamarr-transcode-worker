@@ -83,6 +83,42 @@ class TranscodeWorkerProbeTest {
 
   @Test
   @DisplayName(
+      "Should omit stream end times when ASF reports the container duration for each stream")
+  void shouldOmitStreamEndTimesWhenAsfReportsTheContainerDurationForEachStream() throws Exception {
+    // The WMV audio's last packet ends at 1.021 s, but ASF gives it the global play time.
+    Files.writeString(
+        tempDir.resolve("movie.wmv"),
+        """
+        {"format":{"format_name":"asf","start_time":"0.000000","duration":"2.092000"},
+         "streams":[{"index":0,"codec_type":"video","codec_name":"wmv2",
+                     "time_base":"1/1000","start_pts":46,"duration_ts":2046},
+                    {"index":1,"codec_type":"audio","codec_name":"wmav2",
+                     "time_base":"1/1000","start_pts":0,"duration_ts":2046}]}
+        """);
+    var runtime = new ScriptedWorkerRuntime();
+    var request = requestBuilder().setSource(sourceBuilder().setRelativeKey("movie.wmv")).build();
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
+      worker.start("localhost", 1);
+      start(runtime.connection(), request);
+      runtime.probes().drain();
+
+      assertThat(runtime.connection().results())
+          .singleElement()
+          .satisfies(
+              result -> {
+                assertThat(result.hasMedia()).isTrue();
+                assertThat(result.getMedia().getContainer().getDuration())
+                    .isEqualTo(Duration.newBuilder().setSeconds(2).setNanos(92_000_000).build());
+                assertThat(result.getMedia().getStreamsList())
+                    .extracting(ProbeStreamInfo::hasEndTime)
+                    .containsExactly(false, false);
+              });
+    }
+  }
+
+  @Test
+  @DisplayName(
       "Should send the keyframe positions before the probe result when the worker reads a container index")
   void shouldSendKeyframePositionsBeforeProbeResultWhenWorkerReadsContainerIndex()
       throws Exception {

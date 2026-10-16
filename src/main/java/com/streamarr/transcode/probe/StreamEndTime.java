@@ -24,20 +24,29 @@ final class StreamEndTime {
 
   private final ProbeTimeline timeline;
   private final boolean durationTagsEndTracks;
+  private final boolean hasStreamDurations;
 
-  private StreamEndTime(ProbeTimeline timeline, boolean durationTagsEndTracks) {
+  private StreamEndTime(
+      ProbeTimeline timeline, boolean durationTagsEndTracks, boolean hasStreamDurations) {
     this.timeline = timeline;
     this.durationTagsEndTracks = durationTagsEndTracks;
+    this.hasStreamDurations = hasStreamDurations;
   }
 
   /** The end times of the streams in the container that ffprobe's format section describes. */
   static StreamEndTime in(JsonNode format, ProbeTimeline timeline) {
     var writtenByFfmpeg =
         StreamTags.tag(format, "encoder").filter(encoder -> encoder.startsWith("Lavf")).isPresent();
-    return new StreamEndTime(timeline, writtenByFfmpeg);
+    // ASF sets every stream's duration_ts from the file's global play_time.
+    var hasStreamDurations = !"asf".equals(format.path("format_name").asString(""));
+    return new StreamEndTime(timeline, writtenByFfmpeg, hasStreamDurations);
   }
 
   Optional<Duration> of(JsonNode stream) {
+    if (!hasStreamDurations) {
+      return Optional.empty();
+    }
+
     var timeBase = ProbeTimeline.timeBase(stream, "time_base");
     var start = ProbeTimeline.ticks(stream, "start_pts");
     if (timeBase.isEmpty() || start.isEmpty()) {
