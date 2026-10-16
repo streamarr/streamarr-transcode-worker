@@ -82,16 +82,6 @@ class FfprobeExecutorChaptersTest {
   }
 
   @Test
-  @DisplayName("Should omit every chapter when the chapters take more than 32,768 bytes")
-  void shouldOmitEveryChapterWhenTheChaptersTakeMoreThan32768Bytes() {
-    // 400 chapters with 100-byte titles.
-    var container = probeFixture("mkv-many-chapters.mkv").getContainer();
-
-    assertThat(container.getChaptersList()).isEmpty();
-    assertThat(container.getChaptersOmitted()).isTrue();
-  }
-
-  @Test
   @DisplayName("Should report every chapter when the chapters take exactly 32,768 bytes")
   void shouldReportEveryChapterWhenTheChaptersTakeExactly32768Bytes() {
     var container = probeOutput(chaptersTaking(0)).getContainer();

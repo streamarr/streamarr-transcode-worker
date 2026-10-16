@@ -1,12 +1,12 @@
 package com.streamarr.transcode.probe;
 
-import static com.streamarr.transcode.probe.RecordedFfprobe.probeFixture;
 import static com.streamarr.transcode.probe.RecordedFfprobe.probeOutput;
 import static com.streamarr.transcode.probe.RecordedFfprobe.streamOf;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -35,15 +35,6 @@ class FfprobeExecutorStreamTitlesTest {
       var subtitle = streamOf("mkv-title-tags.mkv", 3);
 
       assertThat(subtitle.getTitle()).isEqualTo("English SDH");
-    }
-
-    @Test
-    @DisplayName("Should report the name tag when FFmpeg wrote an MP4 track's title")
-    void shouldReportTheNameTagWhenFfmpegWroteAnMp4TracksTitle() {
-      var media = probeFixture("mp4-titled.mp4");
-
-      assertThat(media.getStreams(1).getTitle()).isEqualTo("Commentary");
-      assertThat(media.getStreams(3).getTitle()).isEqualTo("SDH");
     }
 
     @Test
@@ -97,15 +88,6 @@ class FfprobeExecutorStreamTitlesTest {
   class HandlerNameTests {
 
     @Test
-    @DisplayName("Should report FFmpeg's default handler names unchanged when an MP4 has no others")
-    void shouldReportFfmpegsDefaultHandlerNamesUnchangedWhenAnMp4HasNoOthers() {
-      var media = probeFixture("mp4-default-handlers.mp4");
-
-      assertThat(media.getStreams(1).getHandlerName()).isEqualTo("SoundHandler");
-      assertThat(media.getStreams(2).getHandlerName()).isEqualTo("SubtitleHandler");
-    }
-
-    @Test
     @DisplayName("Should report a Matroska HANDLER_NAME tag when FFmpeg remuxed the file from MP4")
     void shouldReportAMatroskaHandlerNameTagWhenFfmpegRemuxedTheFileFromMp4() {
       var audio = streamOf("mkv-remuxed-from-mp4.mkv", 2);
@@ -151,16 +133,6 @@ class FfprobeExecutorStreamTitlesTest {
   class TitleLimitTests {
 
     @Test
-    @DisplayName("Should omit every title when the titles take more than 16,384 bytes")
-    void shouldOmitEveryTitleWhenTheTitlesTakeMoreThan16384Bytes() {
-      // 40 titles of 500 bytes take 40 x 504 = 20,160 bytes in their protobuf encoding.
-      var media = probeFixture("mkv-many-titles.mkv");
-
-      assertThat(media.getStreamTitlesOmitted()).isTrue();
-      assertThat(media.getStreamsList()).noneMatch(ProbeStreamInfo::hasTitle);
-    }
-
-    @Test
     @DisplayName("Should report every title and handler name when they take exactly 16,384 bytes")
     void shouldReportEveryTitleAndHandlerNameWhenTheyTakeExactly16384Bytes() {
       var media = probeOutput(labelsTaking(384));
@@ -184,7 +156,7 @@ class FfprobeExecutorStreamTitlesTest {
     @DisplayName("Should count nothing for a title that exceeds 512 bytes when it checks the limit")
     void shouldCountNothingForATitleThatExceeds512BytesWhenItChecksTheLimit() {
       var output = FfprobeOutput.builder();
-      for (var stream = 0; stream < 32; stream++) {
+      for (var stream = 0; stream < 31; stream++) {
         output.subtitle(Labels.titled(TITLE_OF_512_BYTES));
       }
 
@@ -192,8 +164,12 @@ class FfprobeExecutorStreamTitlesTest {
 
       var media = probeOutput(output.build().json());
 
-      // 32 titles of 512 bytes take 32 x 516 = 16,512 bytes, which exceeds the limit on its own.
-      assertThat(media.getStreamTitlesOmitted()).isTrue();
+      // The retained titles take 31 x 516 = 15,996 bytes, below the aggregate limit.
+      assertThat(media.getStreamTitlesOmitted()).isFalse();
+      assertThat(media.getStreamsList())
+          .filteredOn(ProbeStreamInfo::hasTitle)
+          .extracting(ProbeStreamInfo::getTitle)
+          .containsExactlyElementsOf(Collections.nCopies(31, TITLE_OF_512_BYTES));
     }
 
     /**

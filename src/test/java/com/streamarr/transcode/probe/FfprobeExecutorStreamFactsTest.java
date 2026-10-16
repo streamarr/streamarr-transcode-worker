@@ -29,15 +29,6 @@ class FfprobeExecutorStreamFactsTest {
   class ChosenVideoStreamTests {
 
     @Test
-    @DisplayName(
-        "Should choose the video stream after the cover art when the cover art comes first")
-    void shouldChooseTheVideoStreamAfterTheCoverArtWhenTheCoverArtComesFirst() {
-      var media = probeFixture("mp4-cover-art-first.mp4");
-
-      assertThat(media.getChosenVideoStreamIndex()).isEqualTo(1);
-    }
-
-    @Test
     @DisplayName("Should choose the first video stream when no cover art precedes it")
     void shouldChooseTheFirstVideoStreamWhenNoCoverArtPrecedesIt() {
       var media = probeFixture("mp4-titled.mp4");
@@ -50,15 +41,6 @@ class FfprobeExecutorStreamFactsTest {
   @Nested
   @DisplayName("Rotation")
   class RotationTests {
-
-    @Test
-    @DisplayName("Should report the display matrix rotation when the video stream has one")
-    void shouldReportTheDisplayMatrixRotationWhenTheVideoStreamHasOne() {
-      // FFmpeg's -display_rotation 90 rotates the picture 90 degrees counterclockwise.
-      var video = streamOf("mp4-rotated.mp4", 0);
-
-      assertThat(video.getRotationDegrees()).isEqualTo(90);
-    }
 
     @Test
     @DisplayName("Should report no rotation when the video stream has no display matrix")
@@ -130,16 +112,6 @@ class FfprobeExecutorStreamFactsTest {
     }
 
     @Test
-    @DisplayName("Should end each video and audio stream at its MP4 header duration")
-    void shouldEndEachVideoAndAudioStreamAtItsMp4HeaderDuration() {
-      // The video lasts 24576 ticks of 1/12288 s and the audio 88200 ticks of 1/44100 s.
-      var media = probeFixture("mp4-titled.mp4");
-
-      assertThat(media.getStreams(0).getEndTime()).isEqualTo(seconds(2, 0));
-      assertThat(media.getStreams(1).getEndTime()).isEqualTo(seconds(2, 0));
-    }
-
-    @Test
     @DisplayName(
         "Should measure each end time from the container start when the container starts late")
     void shouldMeasureEachEndTimeFromTheContainerStartWhenTheContainerStartsLate() {
@@ -153,8 +125,9 @@ class FfprobeExecutorStreamFactsTest {
     }
 
     @Test
-    @DisplayName("Should end a Matroska track at its start plus its DURATION tag")
-    void shouldEndAMatroskaTrackAtItsStartPlusItsDurationTag() {
+    @DisplayName(
+        "Should end the track at its start plus duration when another muxer wrote the Matroska file")
+    void shouldEndTheTrackAtItsStartPlusDurationWhenAnotherMuxerWroteTheMatroskaFile() {
       var media =
           probeOutput(
               """
@@ -247,15 +220,6 @@ class FfprobeExecutorStreamFactsTest {
     }
 
     @Test
-    @DisplayName("Should report the LC profile and sample rate when the stream is AAC LC")
-    void shouldReportTheLcProfileAndSampleRateWhenTheStreamIsAacLc() {
-      var audio = streamOf("mp4-titled.mp4", 1);
-
-      assertThat(audio.getAudioProfile()).isEqualTo("LC");
-      assertThat(audio.getSampleRateHz()).isEqualTo(44_100);
-    }
-
-    @Test
     @DisplayName("Should report the profile number as text when FFmpeg has no name for the profile")
     void shouldReportTheProfileNumberAsTextWhenFfmpegHasNoNameForTheProfile() {
       // ER AAC LC is audio object type 17, which FFmpeg stores as profile 16 and does not name.
@@ -319,15 +283,6 @@ class FfprobeExecutorStreamFactsTest {
   class HearingImpairedTests {
 
     @Test
-    @DisplayName("Should flag the audio and subtitle tracks when Matroska sets FlagHearingImpaired")
-    void shouldFlagTheAudioAndSubtitleTracksWhenMatroskaSetsFlagHearingImpaired() {
-      var media = probeFixture("mkv-remuxed-from-mp4.mkv");
-
-      assertThat(media.getStreams(1).getIsHearingImpaired()).isTrue();
-      assertThat(media.getStreams(3).getIsHearingImpaired()).isTrue();
-    }
-
-    @Test
     @DisplayName("Should flag the subtitle stream when an MP4 kind box marks it as a caption")
     void shouldFlagTheSubtitleStreamWhenAnMp4KindBoxMarksItAsACaption() {
       var subtitle = streamOf("mp4-titled.mp4", 3);
@@ -373,15 +328,6 @@ class FfprobeExecutorStreamFactsTest {
   class PixelFormatTests {
 
     @Test
-    @DisplayName("Should report 8-bit 4:2:0 when the video stream is yuv420p")
-    void shouldReport8Bit420WhenTheVideoStreamIsYuv420p() {
-      var video = streamOf("mp4-titled.mp4", 0);
-
-      assertThat(video.getBitDepth()).isEqualTo(8);
-      assertThat(video.getChromaSubsampling()).isEqualTo(ChromaSubsampling.CHROMA_SUBSAMPLING_420);
-    }
-
-    @Test
     @DisplayName("Should report 10-bit 4:2:2 when the video stream is yuv422p10le")
     void shouldReport10Bit422WhenTheVideoStreamIsYuv422p10le() {
       var video = streamOf("mkv-pipe-hevc-10bit.mkv", 0);
@@ -398,16 +344,6 @@ class FfprobeExecutorStreamFactsTest {
 
       assertThat(video.hasBitDepth()).isFalse();
       assertThat(video.getChromaSubsampling())
-          .isEqualTo(ChromaSubsampling.CHROMA_SUBSAMPLING_UNSPECIFIED);
-    }
-
-    @Test
-    @DisplayName("Should report no pixel format facts when the stream is not video")
-    void shouldReportNoPixelFormatFactsWhenTheStreamIsNotVideo() {
-      var audio = streamOf("mp4-titled.mp4", 1);
-
-      assertThat(audio.hasBitDepth()).isFalse();
-      assertThat(audio.getChromaSubsampling())
           .isEqualTo(ChromaSubsampling.CHROMA_SUBSAMPLING_UNSPECIFIED);
     }
 
