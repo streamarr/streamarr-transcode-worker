@@ -184,7 +184,8 @@ class FfprobeExecutorProcessTest {
   @DisplayName(
       "Should pass the probe's read limits and the chapter listing when executing the configured"
           + " binary")
-  void shouldPassTheProbesReadLimitsAndTheChapterListingWhenExecutingTheConfiguredBinary() throws Exception {
+  void shouldPassTheProbesReadLimitsAndTheChapterListingWhenExecutingTheConfiguredBinary()
+      throws Exception {
     var binary =
         script(
             """

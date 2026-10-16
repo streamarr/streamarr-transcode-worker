@@ -324,6 +324,7 @@ class TranscodeWorkerProbeTest {
                         .setIndex(0)
                         .setCodecType("video")
                         .setLanguage(language))
+                .setChosenVideoStreamIndex(0)
                 .setKeyframes(PACKET_SCAN_REQUIRED_WITHOUT_INDEX));
   }
 
@@ -885,6 +886,7 @@ class TranscodeWorkerProbeTest {
                             .setCodec("subrip")
                             .setLanguage("fra")
                             .setIsForced(true))
+                    .setChosenVideoStreamIndex(4)
                     .setKeyframes(PACKET_SCAN_REQUIRED_WITHOUT_INDEX))
             .build();
 

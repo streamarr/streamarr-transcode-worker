@@ -283,8 +283,7 @@ public final class FfprobeExecutor {
     }
 
     var media = ProbeMediaReader.read(json);
-    if (media.getStreamsList().stream()
-        .noneMatch(stream -> "video".equals(stream.getCodecType()))) {
+    if (!media.hasChosenVideoStreamIndex()) {
       return result.setFailure(ProbeFailure.PROBE_FAILURE_NO_VIDEO_STREAM).build();
     }
 

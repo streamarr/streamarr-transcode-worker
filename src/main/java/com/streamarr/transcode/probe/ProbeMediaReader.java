@@ -32,6 +32,8 @@ final class ProbeMediaReader {
       media.addStreams(parseStream(stream, media.getStreamsCount()));
     }
 
+    ChosenVideoStream.find(streams)
+        .ifPresent(chosen -> media.setChosenVideoStreamIndex(chosen.streamIndex()));
     return media.build();
   }
 
