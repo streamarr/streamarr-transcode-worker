@@ -291,6 +291,7 @@ class WorkerImageIT {
   private static VideoDecision.Builder presetVariantVideo(String codecFamily) {
     var video =
         VideoDecision.newBuilder()
+            .setStreamIndex(0)
             .setMode(VideoMode.VIDEO_MODE_ENCODE)
             .setSourceDynamicRange(VideoDynamicRange.getDefaultInstance())
             .setOutputDynamicRange(sdrDynamicRange());

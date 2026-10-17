@@ -142,6 +142,53 @@ class TranscodeWorkerJobAttemptTest {
   }
 
   @ParameterizedTest
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"TRANSCODE_MODE_REMUX", "TRANSCODE_MODE_FULL_TRANSCODE"})
+  @DisplayName("Should map the absolute chosen video stream index when a job starts")
+  void shouldMapTheAbsoluteChosenVideoStreamIndexWhenAJobStarts(TranscodeMode mode)
+      throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJobBuilder(mode);
+    job.getDecisionBuilder().getVideoBuilder().setStreamIndex(2);
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(launcher.command(fromProto(job.getJobAttemptId())))
+          .containsSequence("-map", "0:2")
+          .doesNotContain("0:v:0", "0:v:2");
+    }
+  }
+
+  @ParameterizedTest
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"TRANSCODE_MODE_REMUX", "TRANSCODE_MODE_FULL_TRANSCODE"})
+  @DisplayName("Should refuse the job when the chosen video stream index is missing")
+  void shouldRefuseTheJobWhenTheChosenVideoStreamIndexIsMissing(TranscodeMode mode)
+      throws Exception {
+    var job = variantJobBuilder(mode);
+    job.getDecisionBuilder().getVideoBuilder().clearStreamIndex();
+
+    assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {-1, Integer.MIN_VALUE})
+  @DisplayName("Should refuse the job when the chosen video stream index exceeds FFmpeg's range")
+  void shouldRefuseTheJobWhenTheChosenVideoStreamIndexExceedsFfmpegsRange(int streamIndex)
+      throws Exception {
+    var job = variantJobBuilder();
+    job.getDecisionBuilder().getVideoBuilder().setStreamIndex(streamIndex);
+
+    assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
+  @ParameterizedTest
   @ValueSource(ints = {1, 17, 128})
   @DisplayName(
       "Should upload a segment in full-sized data messages when it is larger than one message")

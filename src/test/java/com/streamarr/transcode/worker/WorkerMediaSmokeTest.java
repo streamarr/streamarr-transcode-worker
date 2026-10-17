@@ -557,6 +557,80 @@ class WorkerMediaSmokeTest {
         .satisfies(audio -> assertThat(audio.getCodec()).isEqualTo("aac"));
   }
 
+  @ParameterizedTest
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"TRANSCODE_MODE_REMUX", "TRANSCODE_MODE_FULL_TRANSCODE"})
+  @DisplayName("Should upload the chosen video stream when cover art and audio precede it")
+  void shouldUploadTheChosenVideoStreamWhenCoverArtAndAudioPrecedeIt(TranscodeMode mode)
+      throws Exception {
+    var source = sourceWithCoverArtBeforeVideo();
+    var probe = probeExecutor().probe(source, requestBuilder().build()).result().getMedia();
+    assertThat(probe.getChosenVideoStreamIndex()).isEqualTo(2);
+    assertThat(probe.getStreamsList())
+        .extracting(ProbeStreamInfo::getCodec)
+        .containsExactly("png", "aac", "h264");
+    var job = variantJobBuilder(mode);
+    withVideo(job, h264VideoFor(mode, FIXTURE).setStreamIndex(2));
+    job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
+    job.getVariantBuilder().setWidth(320).setHeight(180).setBitrateBitsPerSecond(500_000);
+    job.getExecutionBuilder().setMediaSegmentCount(FIXTURE_SEGMENT_COUNT);
+
+    var uploads = execute(engine(softwareCapabilities()), root, job.build());
+
+    assertThat(uploads.names()).containsExactlyElementsOf(uploadNames(FIXTURE_SEGMENT_COUNT));
+    var media = playable(uploads.contentOf(uploads.names()));
+    assertDecodes(media);
+    assertThat(video(media))
+        .satisfies(
+            video -> {
+              assertThat(video.getCodec()).isEqualTo("h264");
+              assertThat(video.getWidth()).isEqualTo(320);
+              assertThat(video.getHeight()).isEqualTo(180);
+            });
+  }
+
+  private Path sourceWithCoverArtBeforeVideo() throws Exception {
+    copyMedia();
+    var cover = root.resolve("cover.png");
+    runFfmpeg(List.of("-f", "lavfi", "-i", "color=red:s=64x64", "-frames:v", "1"), cover);
+    var source = root.resolve("cover-first.mp4");
+    runFfmpeg(
+        List.of(
+            "-i",
+            root.resolve("movie.mkv").toString(),
+            "-i",
+            cover.toString(),
+            "-map",
+            "0:a:0",
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:v:0",
+            "-c",
+            "copy",
+            "-disposition:v:1",
+            "attached_pic"),
+        source);
+    var bytes = Files.readAllBytes(source);
+    var moov =
+        TopLevelBoxes.of(bytes).stream()
+            .filter(box -> box.type().equals("moov"))
+            .findFirst()
+            .orElseThrow();
+    var body = Arrays.copyOfRange(bytes, moov.start() + 8, moov.end());
+    var children = TopLevelBoxes.of(body);
+    var reordered = new ByteArrayOutputStream();
+    // FFmpeg assigns cover art a stream index when it encounters udta; box sizes stay unchanged.
+    Stream.concat(
+            children.stream().filter(box -> box.type().equals("udta")),
+            children.stream().filter(box -> !box.type().equals("udta")))
+        .forEach(box -> reordered.write(body, box.start(), box.size()));
+    System.arraycopy(reordered.toByteArray(), 0, bytes, moov.start() + 8, body.length);
+    Files.write(source, bytes);
+    return source;
+  }
+
   @Test
   @DisplayName(
       "Should upload decodable AV1 within the bitrate budget when transcoding an H264 file")
@@ -2456,6 +2530,7 @@ class WorkerMediaSmokeTest {
   private static VideoDecision.Builder forcedSoftwareEncode(String codecFamily, int level) {
     var video =
         VideoDecision.newBuilder()
+            .setStreamIndex(0)
             .setMode(VideoMode.VIDEO_MODE_ENCODE)
             .setLevel(level)
             .setSourceDynamicRange(VideoDynamicRange.getDefaultInstance())

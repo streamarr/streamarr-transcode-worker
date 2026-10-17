@@ -7,11 +7,14 @@ import lombok.NonNull;
 /** Whether the job copies or encodes the video, and the codec string the variant advertises. */
 public sealed interface VideoDecision {
 
+  /** The chosen video stream's absolute index in the source container. */
+  int streamIndex();
+
   /** The codec string that every initialization segment of the variant declares for its video. */
   String codecString();
 
   /** A stream copy, whose codec string the probe computed for the source stream. */
-  record Copy(@NonNull String codecString) implements VideoDecision {}
+  record Copy(int streamIndex, @NonNull String codecString) implements VideoDecision {}
 
   /**
    * An encode, which forces the codec profile, the tier and the level.
@@ -21,6 +24,7 @@ public sealed interface VideoDecision {
    */
   @Builder
   record Encode(
+      int streamIndex,
       @NonNull VideoCodecProfile codecProfile,
       @NonNull Optional<VideoCodecTier> tier,
       int level,
