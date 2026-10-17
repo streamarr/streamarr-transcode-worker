@@ -13,7 +13,6 @@ import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
-import java.util.OptionalDouble;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.BooleanSupplier;
@@ -116,7 +115,7 @@ public final class Producer {
       int startSequenceNumber,
       @NonNull Duration gracePeriod,
       @NonNull Duration stallTimeout,
-      @NonNull OptionalDouble encodedFrameRate,
+      @NonNull Optional<OutputFrameRate> encodedFrameRate,
       @NonNull VideoDecision videoDecision,
       @NonNull SegmentMemoryBudget memoryBudget,
       @NonNull SegmentSink sink) {

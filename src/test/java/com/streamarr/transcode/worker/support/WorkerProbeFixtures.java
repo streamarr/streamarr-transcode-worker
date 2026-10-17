@@ -15,6 +15,7 @@ import build.buf.gen.streamarr.transcode.v1.ContainerFormat;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionAbsent;
 import build.buf.gen.streamarr.transcode.v1.EncoderPreset;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
+import build.buf.gen.streamarr.transcode.v1.Fraction;
 import build.buf.gen.streamarr.transcode.v1.MediaSourceRef;
 import build.buf.gen.streamarr.transcode.v1.Presence;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
@@ -165,7 +166,7 @@ public final class WorkerProbeFixtures {
         .setExecution(
             TranscodeExecution.newBuilder()
                 .setTargetSegmentDurationSeconds(6)
-                .setFramerate(24)
+                .setOutputFrameRate(Fraction.newBuilder().setNumerator(24).setDenominator(1))
                 .setMediaSegmentCount(11));
   }
 

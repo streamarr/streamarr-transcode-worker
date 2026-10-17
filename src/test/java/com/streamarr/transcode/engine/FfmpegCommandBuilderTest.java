@@ -49,7 +49,7 @@ class FfmpegCommandBuilderTest {
         .sessionId(UUID.randomUUID())
         .sourcePath(Path.of("/media/movie.mkv"))
         .targetSegmentDuration(6)
-        .framerate(23.976)
+        .outputFrameRate(Optional.of(new OutputFrameRate(24_000, 1001)))
         .mediaSegmentCount(11)
         .transcodeDecision(decision)
         .encoderPreset(EncoderPreset.FASTER)
@@ -675,10 +675,13 @@ class FfmpegCommandBuilderTest {
       names = {"VIDEO_TRANSCODE", "FULL_TRANSCODE"})
   @DisplayName("Should encode at the probed frame rate when video is transcoded")
   void shouldEncodeAtTheProbedFrameRateWhenVideoIsTranscoded(TranscodeMode mode) {
-    var cmd = command(request(mode).framerate(24000.0 / 1001.0).build(), "libx264");
+    var cmd =
+        command(
+            request(mode).outputFrameRate(Optional.of(new OutputFrameRate(24_000, 1001))).build(),
+            "libx264");
 
     assertThat(cmd)
-        .containsSequence("-r:v:0", "23.976023976023978")
+        .containsSequence("-r:v:0", "24000/1001")
         .noneMatch(argument -> argument.startsWith("-fps_mode"));
   }
 
@@ -893,7 +896,11 @@ class FfmpegCommandBuilderTest {
       "Should lengthen the GOP one frame past the rounded-up period when the encoder is verified")
   void shouldLengthenTheGopOneFramePastTheRoundedUpPeriodWhenTheEncoderIsVerified(String encoder) {
     var cmd =
-        command(request(TranscodeMode.FULL_TRANSCODE).framerate(24000.0 / 1001.0).build(), encoder);
+        command(
+            request(TranscodeMode.FULL_TRANSCODE)
+                .outputFrameRate(Optional.of(new OutputFrameRate(24_000, 1001)))
+                .build(),
+            encoder);
 
     assertThat(cmd).containsSequence("-g:v:0", "145");
   }
@@ -914,7 +921,11 @@ class FfmpegCommandBuilderTest {
   void shouldRoundTheGopDownToWholeFramesInASegmentPeriodWhenTheEncoderIsNotVerified(
       String encoder) {
     var cmd =
-        command(request(TranscodeMode.FULL_TRANSCODE).framerate(24000.0 / 1001.0).build(), encoder);
+        command(
+            request(TranscodeMode.FULL_TRANSCODE)
+                .outputFrameRate(Optional.of(new OutputFrameRate(24_000, 1001)))
+                .build(),
+            encoder);
 
     assertThat(cmd).containsSequence("-g:v:0", "143");
   }
@@ -925,7 +936,12 @@ class FfmpegCommandBuilderTest {
           + " encoder is verified")
   void
       shouldLengthenTheGopOneFramePastThePeriodWhenThePeriodSpansWholeFramesAndTheEncoderIsVerified() {
-    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).framerate(25.0).build(), "libx264");
+    var cmd =
+        command(
+            request(TranscodeMode.FULL_TRANSCODE)
+                .outputFrameRate(Optional.of(new OutputFrameRate(25, 1)))
+                .build(),
+            "libx264");
 
     assertThat(cmd).containsSequence("-g:v:0", "151");
   }
@@ -936,7 +952,12 @@ class FfmpegCommandBuilderTest {
           + " encoder is not verified")
   void
       shouldKeepEveryFrameOfThePeriodInTheGopWhenThePeriodSpansWholeFramesAndTheEncoderIsNotVerified() {
-    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).framerate(25.0).build(), "h264_vaapi");
+    var cmd =
+        command(
+            request(TranscodeMode.FULL_TRANSCODE)
+                .outputFrameRate(Optional.of(new OutputFrameRate(25, 1)))
+                .build(),
+            "h264_vaapi");
 
     assertThat(cmd).containsSequence("-g:v:0", "150");
   }
@@ -954,7 +975,11 @@ class FfmpegCommandBuilderTest {
   void shouldFixTheMinimumKeyframeIntervalToTheGopWhenTheEncoderHasAFixedGop(
       String encoder, String gopFrames) {
     var cmd =
-        command(request(TranscodeMode.FULL_TRANSCODE).framerate(24000.0 / 1001.0).build(), encoder);
+        command(
+            request(TranscodeMode.FULL_TRANSCODE)
+                .outputFrameRate(Optional.of(new OutputFrameRate(24_000, 1001)))
+                .build(),
+            encoder);
 
     assertThat(cmd)
         .containsSequence("-g:v:0", gopFrames)

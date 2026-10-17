@@ -147,10 +147,10 @@ public final class FfmpegRecordings {
   /** The source a recording read, with its video stream's r_frame_rate as ffprobe reports it. */
   public record Source(String file, String videoRealFrameRate) {
 
-    /** The probed frame rate as the worker receives it: the rational as a double. */
-    public double videoFrameRate() {
+    /** The exact output frame rate sent to the worker. */
+    public OutputFrameRate videoFrameRate() {
       var rational = videoRealFrameRate.split("/");
-      return Double.parseDouble(rational[0]) / Double.parseDouble(rational[1]);
+      return new OutputFrameRate(Long.parseLong(rational[0]), Long.parseLong(rational[1]));
     }
   }
 

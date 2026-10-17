@@ -315,7 +315,7 @@ public class FfmpegCommandBuilder {
   // The rate the frame-count GOP is computed from; without -fps_mode FFmpeg then emits the
   // constant-rate frames the GOP counts, and -copyts keeps a seek's first timestamp.
   private static void addFrameRateArgs(List<String> cmd, TranscodeRequest request) {
-    cmd.addAll(List.of("-r:v:0", String.valueOf(request.framerate())));
+    cmd.addAll(List.of("-r:v:0", request.outputFrameRate().orElseThrow().ffmpegArgument()));
   }
 
   private void addKeyframeArgs(List<String> cmd, TranscodeJob job) {
@@ -334,7 +334,7 @@ public class FfmpegCommandBuilder {
 
   private static int gopFrameCount(TranscodeJob job) {
     var request = job.request();
-    var periodFrames = request.targetSegmentDuration() * request.framerate();
+    var frameRate = request.outputFrameRate().orElseThrow();
     // One frame past the forced keyframes' gap, so the GOP never fires while forcing works, and a
     // keyframe it places for a dropped forced one still lands inside that interval. Past the end of
     // a list cut short, that GOP alone would drift past a segment interval and skip it. The list
@@ -342,12 +342,12 @@ public class FfmpegCommandBuilder {
     // GOP into the initialization segment, which every attempt of a variant shares.
     if (isKeyframeVerified(job.videoEncoder())
         && forcedKeyframes(request, 0).reachesLastBoundary()) {
-      return (int) Math.ceil(periodFrames) + 1;
+      return Math.addExact(frameRate.framesCovering(request.targetSegmentDuration()), 1);
     }
 
     // Rounded down, never up: an encoder that ignores the forced keyframe then still places a
     // keyframe inside every segment interval, often two, and never skips a segment.
-    return (int) Math.floor(periodFrames);
+    return frameRate.wholeFramesIn(request.targetSegmentDuration());
   }
 
   private void addForcedKeyframeArgs(
