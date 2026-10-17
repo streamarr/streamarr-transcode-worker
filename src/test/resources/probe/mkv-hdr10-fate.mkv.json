@@ -1,0 +1,177 @@
+{
+  "streams": [
+    {
+      "index": 0,
+      "codec_name": "hevc",
+      "codec_long_name": "H.265 / HEVC (High Efficiency Video Coding)",
+      "profile": "Main 10",
+      "codec_type": "video",
+      "codec_tag_string": "[0][0][0][0]",
+      "codec_tag": "0x0000",
+      "width": 560,
+      "height": 320,
+      "coded_width": 560,
+      "coded_height": 320,
+      "has_b_frames": 2,
+      "sample_aspect_ratio": "1:1",
+      "display_aspect_ratio": "7:4",
+      "pix_fmt": "yuv420p10le",
+      "level": 93,
+      "color_range": "tv",
+      "color_space": "bt2020nc",
+      "color_transfer": "smpte2084",
+      "color_primaries": "bt2020",
+      "chroma_location": "left",
+      "view_ids_available": "",
+      "view_pos_available": "",
+      "r_frame_rate": "25/1",
+      "avg_frame_rate": "25/1",
+      "time_base": "1/1000",
+      "start_pts": 0,
+      "start_time": "0.000000",
+      "extradata": "\n00000000: 0102 2000 0000 9000 0000 0000 5df0 00ff  .. .........]...\n00000010: fdfa fa00 000f 04a0 0001 0019 4001 0c01  ............@...\n00000020: ffff 0220 0000 0300 9000 0003 0000 0300  ... ............\n00000030: 5d95 8a02 40a1 0001 002c 4201 0102 2000  ]...@....,B... .\n00000040: 0003 0090 0000 0300 0003 005d a004 6201  ...........]..b.\n00000050: 4136 5958 a924 49ae 6a12 2012 0800 001f  A6YX.$I.j. .....\n00000060: 4800 03a9 8040 a200 0100 0744 01c1 72b6  H....@.....D..r.\n00000070: 6240 2700 0100 1e4e 0189 1821 349b aa19  b@'....N...!4...\n00000080: 9608 fc8a 4839 073d 1240 4200 9896 8000  ....H9.=.@B.....\n00000090: 0003 000a 80                             .....\n",
+      "extradata_size": 149,
+      "disposition": {
+        "default": 1,
+        "dub": 0,
+        "original": 0,
+        "comment": 0,
+        "lyrics": 0,
+        "karaoke": 0,
+        "forced": 0,
+        "hearing_impaired": 0,
+        "visual_impaired": 0,
+        "clean_effects": 0,
+        "attached_pic": 0,
+        "timed_thumbnails": 0,
+        "non_diegetic": 0,
+        "captions": 0,
+        "descriptions": 0,
+        "metadata": 0,
+        "dependent": 0,
+        "still_image": 0,
+        "multilayer": 0
+      },
+      "tags": {
+        "language": "spa",
+        "BPS-eng": "216040",
+        "DURATION-eng": "00:00:00.400000000",
+        "NUMBER_OF_FRAMES-eng": "10",
+        "NUMBER_OF_BYTES-eng": "10802",
+        "_STATISTICS_WRITING_APP-eng": "mkvmerge v9.0.1 ('Mask Machine') 64bit",
+        "_STATISTICS_WRITING_DATE_UTC-eng": "2019-02-14 12:53:10",
+        "_STATISTICS_TAGS-eng": "BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES"
+      },
+      "side_data_list": [
+        {
+          "side_data_type": "Content light level metadata",
+          "max_content": 1000,
+          "max_average": 300
+        },
+        {
+          "side_data_type": "Mastering display metadata",
+          "red_x": "11408507/16777216",
+          "red_y": "5368709/16777216",
+          "green_x": "2222981/8388608",
+          "green_y": "11576279/16777216",
+          "blue_x": "5033165/33554432",
+          "blue_y": "16106127/268435456",
+          "white_point_x": "10492471/33554432",
+          "white_point_y": "689963/2097152",
+          "min_luminance": "5368709/536870912",
+          "max_luminance": "1000/1"
+        },
+        {
+          "side_data_type": "Display Matrix",
+          "displaymatrix": "\n00000000:            0       65536           0\n00000001:        65536           0           0\n00000002:            0           0  1073741824\n",
+          "rotation": -90
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "codec_type": "attachment",
+      "codec_tag_string": "[0][0][0][0]",
+      "codec_tag": "0x0000",
+      "r_frame_rate": "0/0",
+      "avg_frame_rate": "0/0",
+      "time_base": "1/90000",
+      "start_pts": 0,
+      "start_time": "0.000000",
+      "duration_ts": 36000,
+      "duration": "0.400000",
+      "extradata": "\n00000000: 2f2a 2058 504d 202a 2f0a 7374 6174 6963  /* XPM */.static\n00000010: 2063 6861 7220 2a20 626c 6172 675f 7870   char * blarg_xp\n00000020: 6d5b 5d20 3d20 7b0a 2231 3620 3720 3220  m[] = {.\"16 7 2 \n00000030: 3122 2c0a 222a 2063 2023 3030 3030 3030  1\",.\"* c #000000\n00000040: 222c 0a22 2e20 6320 2366 6666 6666 6622  \",.\". c #ffffff\"\n00000050: 2c0a 222a 2a2e 2e2a 2e2e 2e2e 2e2e 2e2e  ,.\"**..*........\n00000060: 2e2e 2e22 2c0a 222a 2e2a 2e2a 2e2e 2e2e  ...\",.\"*.*.*....\n00000070: 2e2e 2e2e 2e2e 2e22 2c0a 222a 2a2e 2e2a  .......\",.\"**..*\n00000080: 2e2e 2a2a 2e2a 2a2e 2e2a 2a22 2c0a 222a  ..**.**..**\",.\"*\n00000090: 2e2a 2e2a 2e2a 2e2a 2e2a 2e2e 2a2e 2a22  .*.*.*.*.*..*.*\"\n000000a0: 2c0a 222a 2a2e 2e2a 2e2e 2a2a 2e2a 2e2e  ,.\"**..*..**.*..\n000000b0: 2e2a 2a22 2c0a 222e 2e2e 2e2e 2e2e 2e2e  .**\",.\".........\n000000c0: 2e2e 2e2e 2e2e 2a22 2c0a 222e 2e2e 2e2e  ......*\",.\".....\n000000d0: 2e2e 2e2e 2e2e 2e2e 2a2a 2e22 0a7d 3b0a  ........**.\".};.\n",
+      "extradata_size": 224,
+      "disposition": {
+        "default": 0,
+        "dub": 0,
+        "original": 0,
+        "comment": 0,
+        "lyrics": 0,
+        "karaoke": 0,
+        "forced": 0,
+        "hearing_impaired": 0,
+        "visual_impaired": 0,
+        "clean_effects": 0,
+        "attached_pic": 0,
+        "timed_thumbnails": 0,
+        "non_diegetic": 0,
+        "captions": 0,
+        "descriptions": 0,
+        "metadata": 0,
+        "dependent": 0,
+        "still_image": 0,
+        "multilayer": 0
+      },
+      "tags": {
+        "filename": "blarg.xpm",
+        "mimetype": "image/x-xpixmap",
+        "LICENSE": "Creative Commons Attribution-ShareAlike License 4.0",
+        "DESCRIPTION": "XPM3 file copied from https://en.wikipedia.org/wiki/X_PixMap"
+      }
+    }
+  ],
+  "chapters": [
+    {
+      "id": 5639955558387732090,
+      "time_base": "1/1000000000",
+      "start": 0,
+      "start_time": "0.000000",
+      "end": 10000000,
+      "end_time": "0.010000",
+      "tags": {
+        "title": "Schloß"
+      }
+    },
+    {
+      "id": 8654870948951234448,
+      "time_base": "1/1000000000",
+      "start": 10000000,
+      "start_time": "0.010000",
+      "end": 400000000,
+      "end_time": "0.400000",
+      "tags": {
+        "title": "Carro",
+        "DESCRIPTION": "Chapter titles for regional variants of English/Spanish"
+      }
+    }
+  ],
+  "format": {
+    "nb_streams": 2,
+    "nb_programs": 0,
+    "nb_stream_groups": 0,
+    "format_name": "matroska,webm",
+    "format_long_name": "Matroska / WebM",
+    "start_time": "0.000000",
+    "duration": "0.400000",
+    "size": "17818",
+    "bit_rate": "356360",
+    "probe_score": 100,
+    "tags": {
+      "creation_time": "2019-02-14T12:53:10.000000Z",
+      "encoder": "libebml v1.3.4 + libmatroska v1.4.5",
+      "TITLE": "Edition title",
+      "DESCRIPTION": "Edition description"
+    }
+  }
+}

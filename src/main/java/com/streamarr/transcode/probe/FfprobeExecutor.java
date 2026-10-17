@@ -3,12 +3,8 @@ package com.streamarr.transcode.probe;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
-import build.buf.gen.streamarr.transcode.v1.ProbeContainerInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
-import build.buf.gen.streamarr.transcode.v1.ProbeMediaInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
-import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
-import com.google.protobuf.Duration;
 import com.streamarr.transcode.probe.ProbeCommand.ProbeTool;
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -20,7 +16,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -36,10 +31,18 @@ import tools.jackson.databind.ObjectMapper;
 @Slf4j
 public final class FfprobeExecutor {
 
-  public static final int PROBE_VERSION = 1;
+  /** The only probe version that this worker answers. */
+  public static final int PROBE_VERSION = 4;
 
-  /** The probe version whose results carry keyframe positions. */
-  public static final int KEYFRAME_POSITIONS_PROBE_VERSION = 3;
+  /**
+   * The read limits let ffprobe reach streams whose first packet comes late, such as PGS subtitles.
+   * Without -scan_all_pmts 0, ffprobe reads an MPEG-TS source to those limits.
+   */
+  static final List<String> READ_LIMITS =
+      List.of("-analyzeduration", "200M", "-probesize", "1G", "-scan_all_pmts", "0");
+
+  // 30 s of fields at the 1000 fps limit of a usable rate, twice over.
+  private static final int MAXIMUM_SCANNED_PACKETS = 120_000;
 
   private static final int AVERROR_INVALIDDATA = -1094995529;
   private static final int AVERROR_EOF = -541478725;
@@ -81,7 +84,7 @@ public final class FfprobeExecutor {
         ProbeAttemptResult.newBuilder()
             .setProbeAttemptId(request.getProbeAttemptId())
             .setProbeVersion(request.getProbeVersion());
-    if (!isSupported(request)) {
+    if (request.getProbeVersion() != PROBE_VERSION) {
       return ProbeAttemptReport.resultOnly(
           result.setFailure(ProbeFailure.PROBE_FAILURE_UNSUPPORTED_VERSION).build());
     }
@@ -110,27 +113,18 @@ public final class FfprobeExecutor {
     }
   }
 
-  private boolean isSupported(ProbeRequest request) {
-    if (request.getProbeVersion() == KEYFRAME_POSITIONS_PROBE_VERSION) {
-      return true;
-    }
-
-    return request.getProbeVersion() == PROBE_VERSION && !request.getScanKeyframePackets();
-  }
-
   private ProbeAttemptReport execute(Attempt attempt)
       throws ExecutionException, InterruptedException, IOException {
-    var output =
-        run(
-            List.of(
-                "-v",
-                "quiet",
-                "-print_format",
-                "json",
-                "-show_streams",
-                "-show_format",
-                "-show_error",
-                attempt.source().toString()));
+    var arguments = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
+    arguments.addAll(READ_LIMITS);
+    arguments.addAll(
+        List.of(
+            "-show_streams",
+            "-show_format",
+            "-show_chapters",
+            "-show_error",
+            attempt.source().toString()));
+    var output = run(arguments);
     JsonNode json;
     try {
       json = objectMapper.readTree(output.stdout());
@@ -138,10 +132,24 @@ public final class FfprobeExecutor {
       return ProbeAttemptReport.resultOnly(unusableOutput(output, attempt, failure));
     }
 
+    if (output.exitCode() == 0) {
+      new StreamExtradataProbe(objectMapper, this::run).addTo(json, attempt.source());
+    }
+
     var result = readResult(json, output, attempt);
-    if (attempt.request().getProbeVersion() != KEYFRAME_POSITIONS_PROBE_VERSION
-        || !result.hasMedia()) {
+    if (!result.hasMedia()) {
       return ProbeAttemptReport.resultOnly(result);
+    }
+
+    var chosen = ChosenVideoStream.find(json.path("streams"));
+    if (chosen.isPresent()) {
+      var frameRate =
+          new FrameRateRule(streamIndex -> packetTimings(attempt.source(), streamIndex))
+              .choose(chosen.get());
+      result =
+          result.toBuilder()
+              .setMedia(result.getMedia().toBuilder().setFrameRateRule(frameRate))
+              .build();
     }
 
     var probed =
@@ -151,6 +159,51 @@ public final class FfprobeExecutor {
     }
 
     return new ContainerIndexProbe(objectMapper, this::run).addKeyframes(probed);
+  }
+
+  /**
+   * ffprobe's packet lines, pts,dts,size,flags, for the first 30 s of one stream, and at most
+   * 120,000 of them. The read interval ends only when the timestamps pass 30 s, so a stream whose
+   * timestamps stop advancing would otherwise print every packet in the file.
+   */
+  private List<String> packetTimings(Path source, int streamIndex)
+      throws ExecutionException, InterruptedException {
+    var arguments =
+        List.of(
+            "-v",
+            "error",
+            "-select_streams",
+            String.valueOf(streamIndex),
+            "-read_intervals",
+            "%+30",
+            "-show_entries",
+            "packet=pts,dts,size,flags",
+            "-of",
+            "csv=p=0",
+            source.toString());
+    var process = processFactory.apply(new ProbeCommand(ProbeTool.FFPROBE, arguments));
+    var lines = new ArrayList<String>();
+    var stopped = new AtomicBoolean();
+    OutputReader<Void> reader =
+        stdout -> {
+          KeyframePacketScan.PacketLines take =
+              line -> {
+                lines.add(line);
+                return lines.size() < MAXIMUM_SCANNED_PACKETS;
+              };
+          if (!readLinesWhileNeeded(stdout, take)) {
+            stopped.set(true);
+            process.destroyForcibly();
+          }
+
+          return null;
+        };
+    var exitCode = run(process, reader, stderr -> readLines(stderr, _ -> {})).exitCode();
+    if (!stopped.get() && exitCode != 0) {
+      throw new PacketScanException("ffprobe's frame-rate scan exited with code " + exitCode);
+    }
+
+    return lines;
   }
 
   private ProcessOutput run(List<String> arguments)
@@ -204,8 +257,9 @@ public final class FfprobeExecutor {
       Process process, OutputReader<T> reader, OutputReader<Void> diagnosticsReader)
       throws ExecutionException, InterruptedException {
     try (var readers = Executors.newVirtualThreadPerTaskExecutor()) {
-      var diagnostics = readers.submit(() -> diagnosticsReader.read(process.getErrorStream()));
-      var output = readers.submit(() -> readOutput(process, reader));
+      var diagnostics =
+          readers.submit(() -> readOutput(process, process.getErrorStream(), diagnosticsReader));
+      var output = readers.submit(() -> readOutput(process, process.getInputStream(), reader));
       try {
         var exitCode = process.waitFor();
         var finished = new Finished<>(output.get(), exitCode);
@@ -240,9 +294,21 @@ public final class FfprobeExecutor {
     return null;
   }
 
-  private <T> T readOutput(Process process, OutputReader<T> reader) throws IOException {
-    try (var output = process.getInputStream()) {
-      return reader.read(output);
+  private <T> T readOutput(Process process, InputStream output, OutputReader<T> reader)
+      throws IOException {
+    var completed = false;
+    try {
+      T result;
+      try (output) {
+        result = reader.read(output);
+      }
+
+      completed = true;
+      return result;
+    } finally {
+      if (!completed && process.isAlive()) {
+        terminate(process);
+      }
     }
   }
 
@@ -289,9 +355,8 @@ public final class FfprobeExecutor {
       return result.setFailure(failureFor(errorCode)).build();
     }
 
-    var media = parseMedia(json);
-    if (media.getStreamsList().stream()
-        .noneMatch(stream -> "video".equals(stream.getCodecType()))) {
+    var media = ProbeMediaReader.read(json);
+    if (!media.hasChosenVideoStreamIndex()) {
       return result.setFailure(ProbeFailure.PROBE_FAILURE_NO_VIDEO_STREAM).build();
     }
 
@@ -305,86 +370,6 @@ public final class FfprobeExecutor {
       case -2, -5, -13, -20 -> ProbeFailure.PROBE_FAILURE_SOURCE_UNAVAILABLE;
       default -> ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED;
     };
-  }
-
-  private ProbeMediaInfo parseMedia(JsonNode root) {
-    var container = ProbeContainerInfo.newBuilder();
-    var format = root.path("format");
-    text(format, "format_name").ifPresent(container::setFormat);
-    number(format, "bit_rate", Long::parseLong).ifPresent(container::setBitrateBitsPerSecond);
-    number(format, "duration", Double::parseDouble)
-        .filter(value -> Double.isFinite(value) && value >= 0)
-        .map(this::duration)
-        .ifPresent(container::setDuration);
-    var media = ProbeMediaInfo.newBuilder().setContainer(container);
-    var streams = root.path("streams");
-    if (!streams.isMissingNode() && !streams.isNull() && !streams.isArray()) {
-      throw new IllegalArgumentException("ffprobe returned a malformed stream list");
-    }
-
-    for (var stream : streams) {
-      media.addStreams(parseStream(stream, media.getStreamsCount()));
-    }
-
-    return media.build();
-  }
-
-  private ProbeStreamInfo parseStream(JsonNode source, int position) {
-    var type =
-        Optional.ofNullable(source.get("codec_type"))
-            .filter(JsonNode::isTextual)
-            .map(JsonNode::asString)
-            .filter(value -> !value.isBlank())
-            .orElseThrow(
-                () -> new IllegalArgumentException("ffprobe stream is missing codec_type"));
-    var stream =
-        ProbeStreamInfo.newBuilder()
-            .setIndex(text(source, "index").map(Integer::parseInt).orElse(position))
-            .setCodecType(type)
-            .setIsDefault(source.path("disposition").path("default").asInt() == 1)
-            .setIsForced(source.path("disposition").path("forced").asInt() == 1);
-    text(source, "codec_name").ifPresent(stream::setCodec);
-    text(source.path("tags"), "language").ifPresent(stream::setLanguage);
-    number(source, "bit_rate", Long::parseLong).ifPresent(stream::setBitrateBitsPerSecond);
-    number(source, "width", Integer::parseInt).ifPresent(stream::setWidth);
-    number(source, "height", Integer::parseInt).ifPresent(stream::setHeight);
-    number(source, "r_frame_rate", this::framerate)
-        .filter(value -> Double.isFinite(value) && value > 0)
-        .ifPresent(stream::setFramerate);
-    if ("audio".equals(type)) {
-      number(source, "channels", Integer::parseInt).ifPresent(stream::setChannels);
-    }
-
-    return stream.build();
-  }
-
-  private Optional<String> text(JsonNode parent, String name) {
-    return Optional.ofNullable(parent.get(name))
-        .filter(value -> !value.isNull())
-        .map(JsonNode::asString);
-  }
-
-  private double framerate(String value) {
-    var parts = value.split("/");
-    return parts.length == 2
-        ? Double.parseDouble(parts[0]) / Double.parseDouble(parts[1])
-        : Double.parseDouble(value);
-  }
-
-  private <T> Optional<T> number(JsonNode parent, String name, Function<String, T> parser) {
-    try {
-      return text(parent, name).map(parser);
-    } catch (NumberFormatException _) {
-      return Optional.empty();
-    }
-  }
-
-  private Duration duration(double seconds) {
-    var millis = (long) (seconds * 1000);
-    return Duration.newBuilder()
-        .setSeconds(millis / 1000)
-        .setNanos((int) (millis % 1000) * 1_000_000)
-        .build();
   }
 
   private record Attempt(Path source, ProbeRequest request, ProbeAttemptResult.Builder result) {}

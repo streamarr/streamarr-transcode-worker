@@ -11,11 +11,14 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import lombok.Builder;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -83,10 +86,12 @@ class FfprobeExecutorProcessTest {
 
     var completed =
         probeUntilInterrupted(
-            executorFor(binary),
-            Path.of(binary + ".pid"),
-            temporaryDirectory.resolve("movie.mkv"),
-            request);
+            InterruptedProbe.builder()
+                .executor(executorFor(binary))
+                .pidFile(Path.of(binary + ".pid"))
+                .source(temporaryDirectory.resolve("movie.mkv"))
+                .request(request)
+                .build());
 
     assertThat(completed.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_CANCELLED);
     assertThat(completed.result().getProbeAttemptId()).isEqualTo(request.getProbeAttemptId());
@@ -124,16 +129,18 @@ class FfprobeExecutorProcessTest {
         """);
     var request =
         request().toBuilder()
-            .setProbeVersion(FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION)
+            .setProbeVersion(FfprobeExecutor.PROBE_VERSION)
             .setScanKeyframePackets(true)
             .build();
 
     var completed =
         probeUntilInterrupted(
-            FfprobeExecutor.forBinaries(ffprobe, ffmpeg),
-            Path.of(ffmpeg + ".pid"),
-            source,
-            request);
+            InterruptedProbe.builder()
+                .executor(FfprobeExecutor.forBinaries(ffprobe, ffmpeg))
+                .pidFile(Path.of(ffmpeg + ".pid"))
+                .source(source)
+                .request(request)
+                .build());
 
     assertThat(completed.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_CANCELLED);
     assertThat(completed.processAlive()).isFalse();
@@ -144,15 +151,18 @@ class FfprobeExecutorProcessTest {
    * Probes on its own thread and interrupts that thread once a scripted binary writes its process
    * id to the given file.
    */
-  private ProbeCompletion probeUntilInterrupted(
-      FfprobeExecutor executor, Path pidFile, Path source, ProbeRequest request) throws Exception {
+  @Builder
+  private record InterruptedProbe(
+      FfprobeExecutor executor, Path pidFile, Path source, ProbeRequest request) {}
+
+  private ProbeCompletion probeUntilInterrupted(InterruptedProbe probe) throws Exception {
     var process = new AtomicReference<ProcessHandle>();
     var completion = new CompletableFuture<ProbeCompletion>();
     var task =
         Thread.ofVirtual()
             .start(
                 () -> {
-                  var result = executor.probe(source, request).result();
+                  var result = probe.executor().probe(probe.source(), probe.request()).result();
                   completion.complete(
                       new ProbeCompletion(
                           result,
@@ -165,8 +175,10 @@ class FfprobeExecutorProcessTest {
     try {
       await()
           .atMost(Duration.ofSeconds(5))
-          .until(() -> Files.exists(pidFile) && !Files.readString(pidFile).isBlank());
-      process.set(ProcessHandle.of(Long.parseLong(Files.readString(pidFile))).orElseThrow());
+          .until(
+              () -> Files.exists(probe.pidFile()) && !Files.readString(probe.pidFile()).isBlank());
+      process.set(
+          ProcessHandle.of(Long.parseLong(Files.readString(probe.pidFile()))).orElseThrow());
       task.interrupt();
 
       return completion.get(3, TimeUnit.SECONDS);
@@ -181,13 +193,17 @@ class FfprobeExecutorProcessTest {
       ProbeAttemptResult result, boolean processAlive, boolean interrupted) {}
 
   @Test
-  @DisplayName("Should pass fixed probe arguments when executing the configured binary")
-  void shouldPassFixedProbeArgumentsWhenExecutingTheConfiguredBinary() throws Exception {
+  @DisplayName(
+      "Should pass the read limits to the probe and to the extradata read when executing the"
+          + " configured binary")
+  void shouldPassTheReadLimitsToTheProbeAndToTheExtradataReadWhenExecutingTheConfiguredBinary()
+      throws Exception {
+    // Each run appends its arguments and a -- line.
     var binary =
         script(
             """
-        printf '%s\\n' "$@" > "$0.args"
-        printf '%s' '{"streams":[{"codec_type":"video","codec_name":"h264"}]}'
+        printf '%s\n' "$@" -- >> "$0.args"
+        printf '%s' '{"streams":[{"index":0,"codec_type":"video","codec_name":"h264"}]}'
         """);
     var source = temporaryDirectory.resolve("movie with spaces.mkv");
 
@@ -195,16 +211,31 @@ class FfprobeExecutorProcessTest {
 
     assertThat(result.hasMedia()).isTrue();
     assertThat(result.getMedia().getStreams(0).getCodec()).isEqualTo("h264");
-    assertThat(Files.readAllLines(Path.of(binary + ".args")))
-        .containsExactly(
-            "-v",
-            "quiet",
-            "-print_format",
-            "json",
+    var readLimits = List.of("-analyzeduration", "200M", "-probesize", "1G", "-scan_all_pmts", "0");
+    var probe = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
+    probe.addAll(readLimits);
+    probe.addAll(
+        List.of(
             "-show_streams",
             "-show_format",
+            "-show_chapters",
             "-show_error",
-            source.toString());
+            source.toString(),
+            "--"));
+    var extradataRead = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
+    extradataRead.addAll(readLimits);
+    extradataRead.addAll(
+        List.of(
+            "-select_streams",
+            "V",
+            "-show_entries",
+            "stream=index,extradata",
+            "-show_data",
+            source.toString(),
+            "--"));
+    var runs = new ArrayList<>(probe);
+    runs.addAll(extradataRead);
+    assertThat(Files.readAllLines(Path.of(binary + ".args"))).isEqualTo(runs);
   }
 
   private FfprobeExecutor executorFor(Path ffprobe) {

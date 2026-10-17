@@ -1,0 +1,101 @@
+{
+  "streams": [
+    {
+      "index": 0,
+      "codec_name": "hevc",
+      "codec_long_name": "H.265 / HEVC (High Efficiency Video Coding)",
+      "profile": "Main 10",
+      "codec_type": "video",
+      "codec_tag_string": "hvc1",
+      "codec_tag": "0x31637668",
+      "width": 1920,
+      "height": 1080,
+      "coded_width": 1920,
+      "coded_height": 1080,
+      "has_b_frames": 2,
+      "sample_aspect_ratio": "1:1",
+      "display_aspect_ratio": "16:9",
+      "pix_fmt": "yuv420p10le",
+      "level": 120,
+      "color_range": "tv",
+      "color_space": "bt709",
+      "color_transfer": "bt709",
+      "color_primaries": "bt709",
+      "chroma_location": "left",
+      "view_ids_available": "",
+      "view_pos_available": "",
+      "id": "0x1",
+      "r_frame_rate": "24/1",
+      "avg_frame_rate": "24/1",
+      "time_base": "1/24",
+      "start_pts": 0,
+      "start_time": "0.000000",
+      "duration_ts": 432,
+      "duration": "18.000000",
+      "bit_rate": "5817051",
+      "nb_frames": "432",
+      "extradata": "\n00000000: 0122 2000 0000 9000 0000 0000 78f0 00ff  .\" .........x...\n00000010: fdfa fa00 000f 03a0 0001 0018 4001 0c01  ............@...\n00000020: ffff 2220 0000 0300 9000 0003 0000 0300  ..\" ............\n00000030: 7895 9809 a100 0100 3942 0101 2220 0000  x.......9B..\" ..\n00000040: 0300 9000 0003 0000 0300 78a0 03c0 8010  ..........x.....\n00000050: e4d9 6566 924c af01 6a02 0202 0800 0003  ..ef.L..j.......\n00000060: 0008 0000 0300 c30d a692 f000 7a12 000f  ............z...\n00000070: 4244 a200 0100 0744 01c1 72b4 6240       BD.....D..r.b@\n",
+      "extradata_size": 126,
+      "disposition": {
+        "default": 1,
+        "dub": 0,
+        "original": 0,
+        "comment": 0,
+        "lyrics": 0,
+        "karaoke": 0,
+        "forced": 0,
+        "hearing_impaired": 0,
+        "visual_impaired": 0,
+        "clean_effects": 0,
+        "attached_pic": 0,
+        "timed_thumbnails": 0,
+        "non_diegetic": 0,
+        "captions": 0,
+        "descriptions": 0,
+        "metadata": 0,
+        "dependent": 0,
+        "still_image": 0,
+        "multilayer": 0
+      },
+      "tags": {
+        "creation_time": "2026-09-29T14:32:29.000000Z",
+        "language": "und",
+        "handler_name": "hevc:fps=24@GPAC26.08-DEV-rev132-g1b09ef3dd-master"
+      },
+      "side_data_list": [
+        {
+          "side_data_type": "DOVI configuration record",
+          "dv_version_major": 1,
+          "dv_version_minor": 0,
+          "dv_profile": 8,
+          "dv_level": 3,
+          "rpu_present_flag": 1,
+          "el_present_flag": 0,
+          "bl_present_flag": 1,
+          "dv_bl_signal_compatibility_id": 2,
+          "dv_md_compression": "none"
+        }
+      ]
+    }
+  ],
+  "chapters": [],
+  "format": {
+    "nb_streams": 1,
+    "nb_programs": 0,
+    "nb_stream_groups": 0,
+    "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+    "format_long_name": "QuickTime / MOV",
+    "start_time": "0.000000",
+    "duration": "18.000000",
+    "size": "13094500",
+    "bit_rate": "5819777",
+    "probe_score": 100,
+    "tags": {
+      "major_brand": "iso4",
+      "minor_version": "1",
+      "compatible_brands": "iso4dby1db2g",
+      "creation_time": "2026-09-29T14:32:29.000000Z",
+      "encoder": "GPAC-26.08-DEV-rev132-g1b09ef3dd-master"
+    }
+  }
+}

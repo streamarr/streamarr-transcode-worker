@@ -64,7 +64,7 @@ public final class WorkerProbeFixtures {
   public static ProbeRequest.Builder requestBuilder() {
     return ProbeRequest.newBuilder()
         .setProbeAttemptId(toProto(UUID.randomUUID()))
-        .setProbeVersion(1)
+        .setProbeVersion(FfprobeExecutor.PROBE_VERSION)
         .setSource(sourceBuilder());
   }
 

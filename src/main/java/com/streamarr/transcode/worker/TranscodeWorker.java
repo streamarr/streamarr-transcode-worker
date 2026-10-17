@@ -193,9 +193,7 @@ public final class TranscodeWorker implements AutoCloseable {
 
   private EstablishWorkerSessionRequest registration() {
     var capabilities = WorkerCapabilities.newBuilder();
-    capabilities
-        .addProbeVersions(FfprobeExecutor.PROBE_VERSION)
-        .addProbeVersions(FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION);
+    capabilities.addProbeVersions(FfprobeExecutor.PROBE_VERSION);
     engine.workerVerifiedEncoders().stream()
         .map(WorkerVideoEncoders::toProto)
         .forEach(capabilities::addVideoEncoders);
@@ -615,7 +613,7 @@ public final class TranscodeWorker implements AutoCloseable {
     requests.onNext(request);
   }
 
-  @SuppressWarnings("java:S3398") // Job lifecycle belongs to the worker, not its gRPC observer.
+  @SuppressWarnings("java:S3398") // Session lifecycle belongs to the worker, not its gRPC observer.
   private void endSession(WorkerProbeSession sessionProbes) {
     stopAll(claimSessionAttempts(sessionProbes));
   }
@@ -625,6 +623,10 @@ public final class TranscodeWorker implements AutoCloseable {
     if (probeSession != sessionProbes) {
       return List.of();
     }
+
+    requests = null;
+    workerSession = null;
+    sessionProbes.shutdown();
 
     if (!activeAttempts.isEmpty()) {
       log.warn(
@@ -685,7 +687,9 @@ public final class TranscodeWorker implements AutoCloseable {
     probeSummaryLogging = null;
     var attempts = claimActiveAttempts();
     try {
-      requests.onCompleted();
+      if (requests != null) {
+        requests.onCompleted();
+      }
     } catch (RuntimeException _) {
       // The session stream already failed; shutdown proceeds regardless.
     }
@@ -777,7 +781,6 @@ public final class TranscodeWorker implements AutoCloseable {
     public void onError(Throwable throwable) {
       sessionAccepted = false;
       accepted.completeExceptionally(throwable);
-      sessionProbes.shutdown();
       endSession(sessionProbes);
       sessionDisconnected.completeExceptionally(throwable);
     }
@@ -785,7 +788,6 @@ public final class TranscodeWorker implements AutoCloseable {
     @Override
     public void onCompleted() {
       sessionAccepted = false;
-      sessionProbes.shutdown();
       if (!accepted.isDone()) {
         accepted.completeExceptionally(new IllegalStateException("Worker session closed"));
       }

@@ -147,7 +147,7 @@ class FfprobeExecutorLoggingTest {
     var request =
         requestBuilder()
             .setProbeAttemptId(toProto(UUID.randomUUID()))
-            .setProbeVersion(FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION)
+            .setProbeVersion(FfprobeExecutor.PROBE_VERSION)
             .setScanKeyframePackets(true)
             .build();
     var streams =

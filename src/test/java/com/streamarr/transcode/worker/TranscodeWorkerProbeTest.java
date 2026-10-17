@@ -17,15 +17,22 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import build.buf.gen.streamarr.transcode.v1.CancelProbeCommand;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
+import build.buf.gen.streamarr.transcode.v1.Fraction;
+import build.buf.gen.streamarr.transcode.v1.FrameRateRuleInputs;
+import build.buf.gen.streamarr.transcode.v1.FrameRateRuleResult;
+import build.buf.gen.streamarr.transcode.v1.KeyframePacketScanReason;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositionSource;
+import build.buf.gen.streamarr.transcode.v1.OutputFrameRateBasis;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeContainerInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
+import build.buf.gen.streamarr.transcode.v1.ProbeKeyframes;
 import build.buf.gen.streamarr.transcode.v1.ProbeMediaInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import build.buf.gen.streamarr.transcode.v1.StartProbeCommand;
 import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
+import build.buf.gen.streamarr.transcode.v1.VideoDynamicRange;
 import build.buf.gen.streamarr.transcode.v1.WorkerIdentity;
 import com.google.protobuf.Duration;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
@@ -60,6 +67,13 @@ class TranscodeWorkerProbeTest {
   // worker_session.proto: the largest session message the server accepts.
   private static final int SESSION_MESSAGE_LIMIT_BYTES = 131_072;
 
+  // A source whose container has no index, such as MPEG-TS, needs a packet scan for its keyframes.
+  private static final ProbeKeyframes PACKET_SCAN_REQUIRED_WITHOUT_INDEX =
+      ProbeKeyframes.newBuilder()
+          .setPacketScanRequired(
+              KeyframePacketScanReason.KEYFRAME_PACKET_SCAN_REASON_NO_CONTAINER_INDEX)
+          .build();
+
   @TempDir Path tempDir;
 
   @Test
@@ -74,6 +88,88 @@ class TranscodeWorkerProbeTest {
 
   @Test
   @DisplayName(
+      "Should preserve stream facts without codec strings when records have no parameter sets")
+  void shouldPreserveStreamFactsWithoutCodecStringsWhenRecordsHaveNoParameterSets()
+      throws Exception {
+    Files.writeString(
+        tempDir.resolve("movie.mkv"),
+        """
+        {"streams":[{"index":0,"codec_type":"video","codec_name":"h264",
+                     "width":1920,"height":1080,
+                     "extradata":"\\n00000000: 0142 c033 ffe0 00                        .B.3...\\n"},
+                    {"index":1,"codec_type":"video","codec_name":"hevc",
+                     "width":3840,"height":2160,
+                     "extradata":"\\n00000000: 0102 2000 0000 b000 0000 0000 7bf0 00fc  .. .........{...\\n00000010: fdfa fa00 000f 00                        .......\\n"}]}
+        """);
+    var runtime = new ScriptedWorkerRuntime();
+    var request = requestBuilder().build();
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
+      worker.start("localhost", 1);
+      start(runtime.connection(), request);
+      runtime.probes().drain();
+
+      assertThat(runtime.connection().results())
+          .singleElement()
+          .satisfies(
+              result -> {
+                assertThat(result.getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_UNSPECIFIED);
+                assertThat(result.hasMedia()).isTrue();
+                var streams = result.getMedia().getStreamsList();
+                assertThat(streams)
+                    .extracting(ProbeStreamInfo::getCodec)
+                    .containsExactly("h264", "hevc");
+                assertThat(streams)
+                    .extracting(ProbeStreamInfo::getWidth)
+                    .containsExactly(1920, 3840);
+                assertThat(streams)
+                    .extracting(ProbeStreamInfo::getHeight)
+                    .containsExactly(1080, 2160);
+                assertThat(streams)
+                    .extracting(ProbeStreamInfo::hasCodecString)
+                    .containsExactly(false, false);
+              });
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should omit stream end times when ASF reports the container duration for each stream")
+  void shouldOmitStreamEndTimesWhenAsfReportsTheContainerDurationForEachStream() throws Exception {
+    // The WMV audio's last packet ends at 1.021 s, but ASF gives it the global play time.
+    Files.writeString(
+        tempDir.resolve("movie.wmv"),
+        """
+        {"format":{"format_name":"asf","start_time":"0.000000","duration":"2.092000"},
+         "streams":[{"index":0,"codec_type":"video","codec_name":"wmv2",
+                     "time_base":"1/1000","start_pts":46,"duration_ts":2046},
+                    {"index":1,"codec_type":"audio","codec_name":"wmav2",
+                     "time_base":"1/1000","start_pts":0,"duration_ts":2046}]}
+        """);
+    var runtime = new ScriptedWorkerRuntime();
+    var request = requestBuilder().setSource(sourceBuilder().setRelativeKey("movie.wmv")).build();
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
+      worker.start("localhost", 1);
+      start(runtime.connection(), request);
+      runtime.probes().drain();
+
+      assertThat(runtime.connection().results())
+          .singleElement()
+          .satisfies(
+              result -> {
+                assertThat(result.hasMedia()).isTrue();
+                assertThat(result.getMedia().getContainer().getDuration())
+                    .isEqualTo(Duration.newBuilder().setSeconds(2).setNanos(92_000_000).build());
+                assertThat(result.getMedia().getStreamsList())
+                    .extracting(ProbeStreamInfo::hasEndTime)
+                    .containsExactly(false, false);
+              });
+    }
+  }
+
+  @Test
+  @DisplayName(
       "Should send the keyframe positions before the probe result when the worker reads a container index")
   void shouldSendKeyframePositionsBeforeProbeResultWhenWorkerReadsContainerIndex()
       throws Exception {
@@ -83,7 +179,7 @@ class TranscodeWorkerProbeTest {
     var runtime = new ScriptedWorkerRuntime();
     var request =
         requestBuilder()
-            .setProbeVersion(FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION)
+            .setProbeVersion(FfprobeExecutor.PROBE_VERSION)
             .setSource(sourceBuilder().setRelativeKey("movie.mp4"))
             .build();
     var producer =
@@ -136,7 +232,7 @@ class TranscodeWorkerProbeTest {
     var runtime = new ScriptedWorkerRuntime();
     var request =
         requestBuilder()
-            .setProbeVersion(FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION)
+            .setProbeVersion(FfprobeExecutor.PROBE_VERSION)
             .setScanKeyframePackets(true)
             .setSource(sourceBuilder().setRelativeKey("movie.ts"))
             .build();
@@ -233,7 +329,7 @@ class TranscodeWorkerProbeTest {
     var runtime = new ScriptedWorkerRuntime();
     var request =
         requestBuilder()
-            .setProbeVersion(FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION)
+            .setProbeVersion(FfprobeExecutor.PROBE_VERSION)
             .setSource(sourceBuilder().setRelativeKey("movie.mp4"))
             .build();
     var language = "a".repeat(SESSION_MESSAGE_LIMIT_BYTES);
@@ -314,7 +410,15 @@ class TranscodeWorkerProbeTest {
                     ProbeStreamInfo.newBuilder()
                         .setIndex(0)
                         .setCodecType("video")
-                        .setLanguage(language)));
+                        .setDynamicRange(VideoDynamicRange.getDefaultInstance())
+                        .setLanguage(language))
+                .setChosenVideoStreamIndex(0)
+                // The stream declares no frame rate and no time base.
+                .setFrameRateRule(
+                    FrameRateRuleResult.newBuilder()
+                        .setBasis(OutputFrameRateBasis.OUTPUT_FRAME_RATE_BASIS_REFUSED)
+                        .setInputs(FrameRateRuleInputs.getDefaultInstance()))
+                .setKeyframes(PACKET_SCAN_REQUIRED_WITHOUT_INDEX));
   }
 
   // The language tag that makes the session message carrying the result take exactly the given
@@ -339,15 +443,15 @@ class TranscodeWorkerProbeTest {
   }
 
   @Test
-  @DisplayName("Should advertise version 1 and the keyframe probe version")
-  void shouldAdvertiseVersionOneAndKeyframeProbeVersion() throws Exception {
+  @DisplayName("Should advertise only the probe version it answers when it registers")
+  void shouldAdvertiseOnlyTheProbeVersionItAnswersWhenItRegisters() throws Exception {
     var runtime = new ScriptedWorkerRuntime();
 
     try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
       worker.start("localhost", 1);
 
       assertThat(runtime.connection().registration().getCapabilities().getProbeVersionsList())
-          .containsExactly(1, FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION);
+          .containsExactly(4);
     }
   }
 
@@ -393,7 +497,12 @@ class TranscodeWorkerProbeTest {
   }
 
   @ParameterizedTest
-  @CsvSource({"1, PROBE_FAILURE_INVALID_MEDIA", "2, PROBE_FAILURE_UNSUPPORTED_VERSION"})
+  @CsvSource({
+    "4, PROBE_FAILURE_INVALID_MEDIA",
+    "1, PROBE_FAILURE_UNSUPPORTED_VERSION",
+    "3, PROBE_FAILURE_UNSUPPORTED_VERSION",
+    "5, PROBE_FAILURE_UNSUPPORTED_VERSION"
+  })
   @DisplayName("Should retain typed probe failures when the worker rejects media or a version")
   void shouldRetainTypedProbeFailuresWhenTheWorkerRejectsMediaOrAVersion(
       int version, ProbeFailure expectedFailure) throws Exception {
@@ -827,7 +936,8 @@ class TranscodeWorkerProbeTest {
          "streams":[
           {"index":4,"codec_type":"video","codec_name":"h264","width":1920,"height":1080,
            "r_frame_rate":"24000/1001","bit_rate":"3000000"},
-          {"index":7,"codec_type":"audio","codec_name":"aac","channels":6,"bit_rate":"384000",
+          {"index":7,"codec_type":"audio","codec_name":"aac","profile":"LC","channels":6,
+           "bit_rate":"384000",
            "tags":{"language":"eng"},"disposition":{"default":1}},
           {"index":9,"codec_type":"subtitle","codec_name":"subrip",
            "tags":{"language":"fra"},"disposition":{"forced":1}}]}
@@ -838,7 +948,7 @@ class TranscodeWorkerProbeTest {
     var expected =
         ProbeAttemptResult.newBuilder()
             .setProbeAttemptId(request.getProbeAttemptId())
-            .setProbeVersion(1)
+            .setProbeVersion(request.getProbeVersion())
             .setMedia(
                 ProbeMediaInfo.newBuilder()
                     .setContainer(
@@ -850,6 +960,7 @@ class TranscodeWorkerProbeTest {
                         ProbeStreamInfo.newBuilder()
                             .setIndex(4)
                             .setCodecType("video")
+                            .setDynamicRange(VideoDynamicRange.getDefaultInstance())
                             .setCodec("h264")
                             .setWidth(1920)
                             .setHeight(1080)
@@ -860,6 +971,8 @@ class TranscodeWorkerProbeTest {
                             .setIndex(7)
                             .setCodecType("audio")
                             .setCodec("aac")
+                            .setAudioProfile("LC")
+                            .setCodecString("mp4a.40.2")
                             .setChannels(6)
                             .setBitrateBitsPerSecond(384_000)
                             .setLanguage("eng")
@@ -870,7 +983,22 @@ class TranscodeWorkerProbeTest {
                             .setCodecType("subtitle")
                             .setCodec("subrip")
                             .setLanguage("fra")
-                            .setIsForced(true)))
+                            .setIsForced(true))
+                    .setChosenVideoStreamIndex(4)
+                    // Without a time base, the rule cannot scan, so it snaps the base rate.
+                    .setFrameRateRule(
+                        FrameRateRuleResult.newBuilder()
+                            .setOutputFrameRate(
+                                Fraction.newBuilder().setNumerator(24_000).setDenominator(1001))
+                            .setBasis(
+                                OutputFrameRateBasis.OUTPUT_FRAME_RATE_BASIS_DECLARED_RATE_FALLBACK)
+                            .setInputs(
+                                FrameRateRuleInputs.newBuilder()
+                                    .setBaseRate(
+                                        Fraction.newBuilder()
+                                            .setNumerator(24_000)
+                                            .setDenominator(1001))))
+                    .setKeyframes(PACKET_SCAN_REQUIRED_WITHOUT_INDEX))
             .build();
 
     try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {

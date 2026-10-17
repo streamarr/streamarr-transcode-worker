@@ -8,7 +8,6 @@ import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.start;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variantJobBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import build.buf.gen.streamarr.transcode.v1.AudioMode;
@@ -62,6 +61,7 @@ import io.grpc.Server;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.grpc.stub.StreamObserver;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.net.InetSocketAddress;
@@ -83,6 +83,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -261,6 +262,44 @@ class WorkerMediaSmokeTest {
     }
   }
 
+  @Test
+  @DisplayName(
+      "Should report the video's codec string when a Matroska file holds an attachment too large"
+          + " to print")
+  void shouldReportTheVideosCodecStringWhenAMatroskaFileHoldsAnAttachmentTooLargeToPrint()
+      throws Exception {
+    // ffprobe's -show_data prints 16 bytes as a 68-character line, so the 32 MiB attachment
+    // would take about 142.6 million characters: more than the 100 million that Jackson reads
+    // as one string.
+    var font = root.resolve("font.ttf");
+    Files.write(font, new byte[32 * 1024 * 1024]);
+    var source = root.resolve("attachment.mkv");
+    runFfmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=64x36:rate=24:duration=1",
+            "-c:v",
+            "libx264",
+            "-profile:v",
+            "baseline",
+            "-level",
+            "1.0",
+            "-pix_fmt",
+            "yuv420p",
+            "-attach",
+            font.toString(),
+            "-metadata:s:t",
+            "mimetype=font/ttf"),
+        source);
+
+    var result = probeExecutor().probe(source, keyframeRequest()).result();
+
+    // Constrained Baseline at level 1.0.
+    assertThat(result.getMedia().getStreams(0).getCodecString()).isEqualTo("avc1.42C00A");
+  }
+
   @ParameterizedTest(name = "{0}")
   @ValueSource(
       strings = {
@@ -424,18 +463,12 @@ class WorkerMediaSmokeTest {
     var source = root.resolve("blocked.ts");
     var mkfifo = new ProcessBuilder("mkfifo", source.toString()).start();
     assertThat(mkfifo.waitFor()).isZero();
-    // The writer serves the stream probe once. The packet scan then opens a FIFO that no process
-    // writes, as a stalled read from network storage would block it.
+    // The writer serves each ffprobe read. When the packet scan opens the FIFO, the writer holds it
+    // open and writes nothing, as a stalled read from network storage would block the scan.
+    var media = Files.readAllBytes(Path.of(fixture.toURI()));
+    var scanReady = new CompletableFuture<ProcessHandle>();
     var writer =
-        Thread.ofVirtual()
-            .start(
-                () -> {
-                  try {
-                    Files.write(source, Files.readAllBytes(Path.of(fixture.toURI())));
-                  } catch (Exception _) {
-                    // The test fails on the probe result instead.
-                  }
-                });
+        Thread.ofVirtual().start(() -> serveUntilThePacketScanOpens(source, media, scanReady));
     var result = new CompletableFuture<ProbeAttemptResult>();
     var probe =
         Thread.ofVirtual()
@@ -443,11 +476,7 @@ class WorkerMediaSmokeTest {
                 () -> result.complete(probeExecutor().probe(source, packetScanRequest()).result()));
 
     try {
-      var scan =
-          await()
-              .atMost(Duration.ofSeconds(30))
-              .until(() -> packetScanProcess(source), Optional::isPresent)
-              .orElseThrow();
+      var scan = scanReady.get(30, TimeUnit.SECONDS);
       probe.interrupt();
 
       assertThat(result.get(10, TimeUnit.SECONDS).getFailure())
@@ -2337,6 +2366,26 @@ class WorkerMediaSmokeTest {
     return keyframeRequest().toBuilder().setScanKeyframePackets(true).build();
   }
 
+  private static void serveUntilThePacketScanOpens(
+      Path fifo, byte[] media, CompletableFuture<ProcessHandle> scanReady) {
+    while (!Thread.currentThread().isInterrupted()) {
+      // Opening a FIFO for writing waits for a reader.
+      try (var output = Files.newOutputStream(fifo)) {
+        var scan = packetScanProcess(fifo);
+        if (scan.isPresent()) {
+          scanReady.complete(scan.get());
+          new CountDownLatch(1).await();
+        }
+
+        output.write(media);
+      } catch (InterruptedException _) {
+        Thread.currentThread().interrupt();
+      } catch (IOException _) {
+        // A reader that stops early closes the pipe; the next read opens it again.
+      }
+    }
+  }
+
   private static Optional<ProcessHandle> packetScanProcess(Path source) {
     return ProcessHandle.current()
         .descendants()
@@ -2353,9 +2402,7 @@ class WorkerMediaSmokeTest {
   }
 
   private static ProbeRequest keyframeRequest() {
-    return requestBuilder()
-        .setProbeVersion(FfprobeExecutor.KEYFRAME_POSITIONS_PROBE_VERSION)
-        .build();
+    return requestBuilder().setProbeVersion(FfprobeExecutor.PROBE_VERSION).build();
   }
 
   // MP4 sources that FFmpeg's stream copy writes: an empty edit that delays the video by 0.5 s,
