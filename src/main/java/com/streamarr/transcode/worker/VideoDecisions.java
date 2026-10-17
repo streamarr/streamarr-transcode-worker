@@ -67,7 +67,7 @@ final class VideoDecisions {
   private static VideoDecision.Copy copy(build.buf.gen.streamarr.transcode.v1.VideoDecision video) {
     if (carriesEncodeValues(video)) {
       throw new InvalidJobSpecificationException(
-          "A stream copy carries a codec profile, tier or level");
+          "A stream copy carries a codec profile, tier, level or output dynamic range");
     }
 
     return new VideoDecision.Copy(video.getStreamIndex(), video.getCodecString());
@@ -82,7 +82,8 @@ final class VideoDecisions {
         || video.getTierValue()
             != build.buf.gen.streamarr.transcode.v1.VideoCodecTier
                 .VIDEO_CODEC_TIER_UNSPECIFIED_VALUE
-        || video.hasLevel();
+        || video.hasLevel()
+        || video.hasOutputDynamicRange();
   }
 
   @SuppressWarnings("checkstyle:fullyQualifiedName")
