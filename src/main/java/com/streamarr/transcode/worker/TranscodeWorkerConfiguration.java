@@ -12,6 +12,7 @@ public record TranscodeWorkerConfiguration(
     @NonNull UUID workerId,
     @NonNull UUID bootId,
     int availableSlots,
+    int probeCapacity,
     @NonNull Map<UUID, Path> sourceNamespaces,
     Duration uploadReadinessTimeout,
     Duration uploadAcknowledgementTimeout,
@@ -25,6 +26,10 @@ public record TranscodeWorkerConfiguration(
   public TranscodeWorkerConfiguration {
     if (availableSlots < 1) {
       throw new IllegalArgumentException("Available slots must be positive");
+    }
+
+    if (probeCapacity < 1) {
+      throw new IllegalArgumentException("Probe capacity must be positive");
     }
 
     sourceNamespaces = Map.copyOf(sourceNamespaces);

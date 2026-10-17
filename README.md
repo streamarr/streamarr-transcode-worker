@@ -34,6 +34,10 @@ To run Streamarr with a worker, see the server's [Distributed Transcoding](https
 
 To build and run the worker from source, see [Developer Setup](docs/dev-setup.md).
 
+## Capacity
+
+Each worker advertises two capacities to the server. `TRANSCODE_WORKER_SLOTS` sets the playback slots: the job attempts that the worker runs at once. The default is 1. `TRANSCODE_WORKER_PROBE_CAPACITY` sets the probes that the worker runs at once. The default is the cores available to the worker minus 3, and at least 1, so a large first scan probes on most of the host's cores while 3 cores stay free for playback. Probes never take a playback slot, so a library scan never delays playback. While probes run, the worker logs a summary each minute. [Developer Setup](docs/dev-setup.md#configuration) lists every setting.
+
 ## Architecture
 
 The worker runs as a separate Java service. It connects to the server over gRPC, reads files from a shared media library, reads FFmpeg's fragmented MP4 output from a pipe, and uploads each HLS media segment back to the server. Workers can run alongside the server or on other machines.
