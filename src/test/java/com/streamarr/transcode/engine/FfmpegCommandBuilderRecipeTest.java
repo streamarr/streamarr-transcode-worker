@@ -97,7 +97,7 @@ class FfmpegCommandBuilderRecipeTest {
             .startSequenceNumber(recording.startSequenceNumber())
             .mediaSegmentCount(recording.mediaSegmentCount())
             .targetSegmentDuration(recording.period())
-            .framerate(recording.source().videoFrameRate())
+            .outputFrameRate(Optional.of(recording.source().videoFrameRate()))
             .transcodeDecision(decisionRecordedAs(recording))
             .encoderPreset(RECORDED_PRESETS.get(recording.videoEncoder()))
             .height(RECORDED_HEIGHT)

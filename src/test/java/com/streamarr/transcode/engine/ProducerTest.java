@@ -38,7 +38,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.OptionalDouble;
+import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -127,7 +127,8 @@ class ProducerTest {
             producerThatMustNotLaunch()
                 .videoDecision(VideoDecisionFixtures.encodeBuilder().build())),
         Arguments.of(
-            "videoDecision", producerThatMustNotLaunch().encodedFrameRate(OptionalDouble.empty())));
+            "videoDecision",
+            producerThatMustNotLaunch().encodedFrameRate(Optional.<OutputFrameRate>empty())));
   }
 
   private static Producer.ProducerBuilder producerThatMustNotLaunch() {
@@ -2412,7 +2413,7 @@ class ProducerTest {
 
     var producer =
         producerOfOneSecondSegments(process)
-            .encodedFrameRate(OptionalDouble.of(24_000.0 / 1001))
+            .encodedFrameRate(Optional.of(new OutputFrameRate(24_000, 1001)))
             .start();
 
     var failure = failureOf(producer);
@@ -2445,7 +2446,7 @@ class ProducerTest {
 
     var producer =
         producerOfOneSecondSegments(process)
-            .encodedFrameRate(OptionalDouble.of(24_000.0 / 1001))
+            .encodedFrameRate(Optional.of(new OutputFrameRate(24_000, 1001)))
             .start();
 
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
@@ -2978,9 +2979,9 @@ class ProducerTest {
 
   // An encoded recording's producer checks its video samples against the frame rate it forced.
   private Producer.ProducerBuilder producerFor(ScriptedProcess process, Recording recording) {
-    var encodedFrameRate = OptionalDouble.empty();
+    var encodedFrameRate = Optional.<OutputFrameRate>empty();
     if (recording.encoder().isPresent()) {
-      encodedFrameRate = OptionalDouble.of(recording.source().videoFrameRate());
+      encodedFrameRate = Optional.of(recording.source().videoFrameRate());
     }
 
     return producerLaunching(process)
@@ -2998,7 +2999,7 @@ class ProducerTest {
         .jobAttemptId(JOB_ATTEMPT_ID)
         .gracePeriod(Duration.ofSeconds(5))
         .stallTimeout(Duration.ofMinutes(1))
-        .encodedFrameRate(OptionalDouble.empty())
+        .encodedFrameRate(Optional.<OutputFrameRate>empty())
         .videoDecision(new VideoDecision.Copy(0, RecordingFixtures.ENCODED_RECORDING_CODEC_STRING))
         .memoryBudget(SegmentMemoryBudget.forSlots(1))
         .sink(sink);

@@ -28,6 +28,7 @@ import build.buf.gen.streamarr.transcode.v1.EncoderKind;
 import build.buf.gen.streamarr.transcode.v1.EncoderPreset;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
+import build.buf.gen.streamarr.transcode.v1.Fraction;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailed;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptStarted;
@@ -915,7 +916,7 @@ class TranscodeWorkerControlPlaneIT {
         .setExecution(
             TranscodeExecution.newBuilder()
                 .setTargetSegmentDurationSeconds(6)
-                .setFramerate(23.976)
+                .setOutputFrameRate(Fraction.newBuilder().setNumerator(24_000).setDenominator(1001))
                 .setMediaSegmentCount(11))
         .build();
   }

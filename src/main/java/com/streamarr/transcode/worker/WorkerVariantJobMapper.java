@@ -7,6 +7,7 @@ import build.buf.gen.streamarr.transcode.v1.VariantJob;
 import com.streamarr.transcode.engine.AudioDecision;
 import com.streamarr.transcode.engine.AudioMode;
 import com.streamarr.transcode.engine.EncoderPreset;
+import com.streamarr.transcode.engine.OutputFrameRate;
 import com.streamarr.transcode.engine.SubtitleDecision;
 import com.streamarr.transcode.engine.SubtitleMode;
 import com.streamarr.transcode.engine.TranscodeDecision;
@@ -38,7 +39,7 @@ final class WorkerVariantJobMapper {
         .attemptId(fromProto(job.getJobAttemptId()))
         .sourcePath(sourceResolver.resolve(job.getSource()))
         .targetSegmentDuration(execution.getTargetSegmentDurationSeconds())
-        .framerate(execution.getFramerate())
+        .outputFrameRate(outputFrameRate(job))
         .transcodeDecision(decision(job.getDecision()))
         .encoderPreset(encoderPresetOf(variant.getEncoderPreset()).orElse(null))
         .width(variant.getWidth())
@@ -51,6 +52,18 @@ final class WorkerVariantJobMapper {
         .mediaSegmentCount(execution.getMediaSegmentCount())
         .seekPosition(seekPosition(execution))
         .build();
+  }
+
+  private static Optional<OutputFrameRate> outputFrameRate(VariantJob job) {
+    if (!encodesVideo(job)) {
+      return Optional.empty();
+    }
+
+    var rate = job.getExecution().getOutputFrameRate();
+    return Optional.of(
+        new OutputFrameRate(
+            Integer.toUnsignedLong(rate.getNumerator()),
+            Integer.toUnsignedLong(rate.getDenominator())));
   }
 
   private static Optional<Duration> seekPosition(TranscodeExecution execution) {

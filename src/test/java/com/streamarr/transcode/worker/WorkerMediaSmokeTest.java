@@ -19,6 +19,7 @@ import build.buf.gen.streamarr.transcode.v1.DolbyVisionPresent;
 import build.buf.gen.streamarr.transcode.v1.EncoderPreset;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
+import build.buf.gen.streamarr.transcode.v1.Fraction;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptCompleted;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailed;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
@@ -629,6 +630,50 @@ class WorkerMediaSmokeTest {
     System.arraycopy(reordered.toByteArray(), 0, bytes, moov.start() + 8, body.length);
     Files.write(source, bytes);
     return source;
+  }
+
+  @ParameterizedTest(name = "{0}/{1}")
+  @CsvSource({"24000, 1001", "30000, 1001"})
+  @DisplayName("Should upload the exact output frame rate when an encoded attempt starts or seeks")
+  void shouldUploadTheExactOutputFrameRateWhenAnEncodedAttemptStartsOrSeeks(
+      int numerator, int denominator) throws Exception {
+    copyMedia();
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    withVideo(job, h264VideoFor(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE, FIXTURE));
+    job.getVariantBuilder().setWidth(320).setHeight(180).setBitrateBitsPerSecond(500_000);
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(3)
+        .setMediaSegmentCount(4)
+        .setFramerate(30)
+        .setOutputFrameRate(
+            Fraction.newBuilder().setNumerator(numerator).setDenominator(denominator));
+
+    var initial = execute(engine(softwareCapabilities()), root, job.build());
+    job.getExecutionBuilder().setStartSequenceNumber(2);
+    job.setJobAttemptId(toProto(UUID.randomUUID()));
+    var replacement = execute(engine(softwareCapabilities()), root, job.build());
+
+    assertThat(replacement.names()).containsExactly("init.mp4", "segment2.m4s", "segment3.m4s");
+    assertThat(replacement.segments())
+        .containsEntry("init.mp4", initial.segments().get("init.mp4"));
+    for (var uploads : List.of(initial, replacement)) {
+      var media = playable(uploads.contentOf(uploads.names()));
+      assertDecodes(media);
+      var frameRate =
+          runToCompletion(
+              List.of(
+                  "ffprobe",
+                  "-v",
+                  "error",
+                  "-select_streams",
+                  "v:0",
+                  "-show_entries",
+                  "stream=r_frame_rate",
+                  "-of",
+                  "default=noprint_wrappers=1:nokey=1",
+                  media.toString()));
+      assertThat(frameRate.strip()).isEqualTo(numerator + "/" + denominator);
+    }
   }
 
   @Test
@@ -1694,7 +1739,7 @@ class WorkerMediaSmokeTest {
     job.getVariantBuilder().setWidth(64).setHeight(36).setBitrateBitsPerSecond(20_000);
     job.getExecutionBuilder()
         .setTargetSegmentDurationSeconds(1)
-        .setFramerate(24000.0 / 1001)
+        .setOutputFrameRate(Fraction.newBuilder().setNumerator(24_000).setDenominator(1001))
         .setMediaSegmentCount(LONG_SOURCE_SECONDS);
     ProcessLauncher launcher = new ProcessBuilderLauncher();
     if (codecFamily.equals("av1")) {
@@ -1724,7 +1769,8 @@ class WorkerMediaSmokeTest {
         .setMode(AudioMode.AUDIO_MODE_NONE);
     job.getVariantBuilder().setWidth(320).setHeight(180).setBitrateBitsPerSecond(200_000);
     job.getExecutionBuilder()
-        .setFramerate(SCENE_CUT_SOURCE_FRAME_RATE)
+        .setOutputFrameRate(
+            Fraction.newBuilder().setNumerator(SCENE_CUT_SOURCE_FRAME_RATE).setDenominator(1))
         .setMediaSegmentCount(SCENE_CUT_SOURCE_SEGMENT_COUNT);
 
     var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());

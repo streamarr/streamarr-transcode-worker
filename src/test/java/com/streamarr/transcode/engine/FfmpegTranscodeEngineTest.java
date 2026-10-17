@@ -15,6 +15,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.assertj.core.api.InstanceOfAssertFactories;
@@ -77,7 +78,7 @@ class FfmpegTranscodeEngineTest {
         .sessionId(UUID.randomUUID())
         .sourcePath(Path.of("/media/movie.mkv"))
         .targetSegmentDuration(6)
-        .framerate(23.976)
+        .outputFrameRate(Optional.of(new OutputFrameRate(24_000, 1001)))
         .transcodeDecision(
             TranscodeDecision.builder()
                 .transcodeMode(mode)
@@ -172,7 +173,10 @@ class FfmpegTranscodeEngineTest {
             ScriptedProcess.builder().output(output).build(),
             createCapabilityService(true, noHardware()));
     var request =
-        requestBuilder(mode, "h264").targetSegmentDuration(1).framerate(24_000.0 / 1001).build();
+        requestBuilder(mode, "h264")
+            .targetSegmentDuration(1)
+            .outputFrameRate(Optional.of(new OutputFrameRate(24_000, 1001)))
+            .build();
     return executor.startProducer(
         request, new RecordingSegmentSink(), SegmentMemoryBudget.forSlots(1));
   }

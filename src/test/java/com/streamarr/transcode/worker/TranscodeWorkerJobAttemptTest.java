@@ -30,6 +30,7 @@ import build.buf.gen.streamarr.transcode.v1.DolbyVisionPresent;
 import build.buf.gen.streamarr.transcode.v1.EncoderPreset;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest.EventCase;
+import build.buf.gen.streamarr.transcode.v1.Fraction;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
 import build.buf.gen.streamarr.transcode.v1.Presence;
 import build.buf.gen.streamarr.transcode.v1.SegmentContentType;
@@ -68,7 +69,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.UnaryOperator;
-import java.util.stream.DoubleStream;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import org.awaitility.core.ConditionFactory;
@@ -180,6 +180,33 @@ class TranscodeWorkerJobAttemptTest {
     job.getDecisionBuilder().getVideoBuilder().clearStreamIndex();
 
     assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
+  @ParameterizedTest
+  @CsvSource({"24000/1001, 145", "30000/1001, 181", "4294967295/4294967295, 7"})
+  @DisplayName("Should preserve the exact output frame rate when the legacy decimal disagrees")
+  void shouldPreserveTheExactOutputFrameRateWhenTheLegacyDecimalDisagrees(
+      String exactRate, String expectedGop) throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    var terms = exactRate.split("/");
+    job.getExecutionBuilder()
+        .setFramerate(30)
+        .setOutputFrameRate(
+            Fraction.newBuilder()
+                .setNumerator(Integer.parseUnsignedInt(terms[0]))
+                .setDenominator(Integer.parseUnsignedInt(terms[1])));
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(launcher.command(fromProto(job.getJobAttemptId())))
+          .containsSequence("-r:v:0", exactRate)
+          .containsSequence("-g:v:0", expectedGop);
+    }
   }
 
   @ParameterizedTest
@@ -919,9 +946,10 @@ class TranscodeWorkerJobAttemptTest {
       "Should refuse the job as an invalid specification when it encodes video without a usable"
           + " frame rate")
   void shouldRefuseTheJobAsAnInvalidSpecificationWhenItEncodesVideoWithoutAUsableFrameRate(
-      TranscodeMode mode, double framerate) throws Exception {
+      TranscodeMode mode, Optional<Fraction> frameRate) throws Exception {
     var job = variantJobBuilder(mode);
-    job.getExecutionBuilder().setFramerate(framerate);
+    job.getExecutionBuilder().clearOutputFrameRate();
+    frameRate.ifPresent(job.getExecutionBuilder()::setOutputFrameRate);
 
     assertRefusedAsAnInvalidSpecification(job.build());
   }
@@ -932,8 +960,12 @@ class TranscodeWorkerJobAttemptTest {
             TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE)
         .flatMap(
             mode ->
-                DoubleStream.of(0, -24, Double.NaN, Double.POSITIVE_INFINITY)
-                    .mapToObj(framerate -> Arguments.of(mode, framerate)));
+                Stream.of(
+                        Optional.<Fraction>empty(),
+                        Optional.of(Fraction.getDefaultInstance()),
+                        Optional.of(Fraction.newBuilder().setNumerator(24).build()),
+                        Optional.of(Fraction.newBuilder().setDenominator(1).build()))
+                    .map(frameRate -> Arguments.of(mode, frameRate)));
   }
 
   @ParameterizedTest(name = "{0}, {1} media segments from segment {2}")
@@ -1209,7 +1241,7 @@ class TranscodeWorkerJobAttemptTest {
   void shouldRunTheJobWhenItCopiesTheVideoWithoutAProbedFrameRate(TranscodeMode mode)
       throws Exception {
     var job = variantJobBuilder(mode);
-    job.getExecutionBuilder().setFramerate(0);
+    job.getExecutionBuilder().clearOutputFrameRate();
 
     try (var worker = worker(ScriptedProcessLauncher.writing(ENCODED_RECORDING))) {
       worker.start("localhost", 1);

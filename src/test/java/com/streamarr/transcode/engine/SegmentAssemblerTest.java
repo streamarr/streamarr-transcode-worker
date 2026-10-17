@@ -2,7 +2,7 @@ package com.streamarr.transcode.engine;
 
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 
-import java.util.OptionalDouble;
+import java.util.Optional;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -28,7 +28,8 @@ class SegmentAssemblerTest {
         Arguments.of(
             "encodedFrameRate",
             assembler().videoDecision(VideoDecisionFixtures.encodeBuilder().build())),
-        Arguments.of("videoDecision", assembler().encodedFrameRate(OptionalDouble.empty())));
+        Arguments.of(
+            "videoDecision", assembler().encodedFrameRate(Optional.<OutputFrameRate>empty())));
   }
 
   private static SegmentAssembler.SegmentAssemblerBuilder assembler() {

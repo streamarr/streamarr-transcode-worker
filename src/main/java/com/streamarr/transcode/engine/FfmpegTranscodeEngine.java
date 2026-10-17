@@ -3,7 +3,6 @@ package com.streamarr.transcode.engine;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
-import java.util.OptionalDouble;
 import lombok.Builder;
 import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
@@ -110,11 +109,11 @@ public class FfmpegTranscodeEngine {
   }
 
   // An encode forces the probed frame rate on its output; a copy keeps the source's durations.
-  private static OptionalDouble encodedFrameRateOf(TranscodeRequest request) {
+  private static Optional<OutputFrameRate> encodedFrameRateOf(TranscodeRequest request) {
     if (!request.transcodeDecision().transcodeMode().encodesVideo()) {
-      return OptionalDouble.empty();
+      return Optional.empty();
     }
 
-    return OptionalDouble.of(request.framerate());
+    return request.outputFrameRate();
   }
 }

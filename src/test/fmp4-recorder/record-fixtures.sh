@@ -31,9 +31,9 @@ FF=(ffmpeg -hide_banner -nostdin -loglevel error)
 P=6                                   # segment period in seconds
 FRAG_US=1000000                       # fragmentation target: 1 s
 MOVFLAGS=cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont
-# The probed frame rate exactly as the worker passes it: ffprobe r_frame_rate 24000/1001 as a
-# Java double. Every encoded source below probes as 24000/1001 (analyze.mjs checks it).
-FPS=23.976023976023978
+# The exact output frame rate the worker passes. Every encoded source below probes as
+# 24000/1001 (analyze.mjs checks it).
+FPS=24000/1001
 GOP_VERIFIED=145                      # ceil(P * FPS) + 1: ADR 0037's backstop for an encoder verified to honour forced keyframes
 GOP_FLOOR=143                         # floor(P * FPS): ADR 0037's GOP for an encoder not verified to (hardware until worker #14)
 GOP_CEIL=144                          # ceil(P * FPS): the HLS recipe's frame-count GOP

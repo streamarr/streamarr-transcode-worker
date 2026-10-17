@@ -17,7 +17,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
-import java.util.OptionalDouble;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import org.assertj.core.api.InstanceOfAssertFactories;
@@ -136,7 +136,7 @@ class ProcessBuilderLauncherTest {
             .startSequenceNumber(0)
             .gracePeriod(Duration.ofSeconds(5))
             .stallTimeout(Duration.ofMinutes(1))
-            .encodedFrameRate(OptionalDouble.empty())
+            .encodedFrameRate(Optional.<OutputFrameRate>empty())
             .videoDecision(
                 new VideoDecision.Copy(0, RecordingFixtures.ENCODED_RECORDING_CODEC_STRING))
             .memoryBudget(SegmentMemoryBudget.forSlots(1))
@@ -157,7 +157,7 @@ class ProcessBuilderLauncherTest {
         .startSequenceNumber(0)
         .gracePeriod(Duration.ofSeconds(5))
         .stallTimeout(Duration.ofMinutes(1))
-        .encodedFrameRate(OptionalDouble.empty())
+        .encodedFrameRate(Optional.<OutputFrameRate>empty())
         .videoDecision(new VideoDecision.Copy(0, RecordingFixtures.ENCODED_RECORDING_CODEC_STRING))
         .memoryBudget(SegmentMemoryBudget.forSlots(1))
         .sink(sink);

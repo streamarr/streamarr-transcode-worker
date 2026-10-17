@@ -302,8 +302,8 @@ public final class TranscodeWorker implements AutoCloseable {
       return true;
     }
 
-    var framerate = job.getExecution().getFramerate();
-    return framerate > 0 && Double.isFinite(framerate);
+    var frameRate = job.getExecution().getOutputFrameRate();
+    return frameRate.getNumerator() != 0 && frameRate.getDenominator() != 0;
   }
 
   private static void logStartupFailure(VariantJob job, RuntimeException failure) {

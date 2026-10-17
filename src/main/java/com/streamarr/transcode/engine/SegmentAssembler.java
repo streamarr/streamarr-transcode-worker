@@ -11,7 +11,6 @@ import java.util.Deque;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Optional;
-import java.util.OptionalDouble;
 import java.util.Set;
 import lombok.Builder;
 import lombok.NonNull;
@@ -33,7 +32,7 @@ final class SegmentAssembler {
   // Segments whose video the grouper closed while audio of their interval may still arrive.
   private final Deque<MediaSegment> awaitingAudio = new ArrayDeque<>();
   private final long maximumSegmentBytes;
-  private final Optional<EncodedFrameRate> encodedFrameRate;
+  private final Optional<OutputFrameRate> encodedFrameRate;
   private final VideoDecision videoDecision;
 
   /**
@@ -51,13 +50,13 @@ final class SegmentAssembler {
       int periodSeconds,
       int startSequenceNumber,
       long maximumSegmentBytes,
-      @NonNull OptionalDouble encodedFrameRate,
+      @NonNull Optional<OutputFrameRate> encodedFrameRate,
       @NonNull VideoDecision videoDecision) {
     this.grouper = new SegmentGrouper(periodSeconds, startSequenceNumber, maximumSegmentBytes);
     this.audio = new AudioSampleQueue(periodSeconds, startSequenceNumber);
     this.video = new VideoProgress(periodSeconds);
     this.maximumSegmentBytes = maximumSegmentBytes;
-    this.encodedFrameRate = EncodedFrameRate.of(encodedFrameRate);
+    this.encodedFrameRate = encodedFrameRate;
     this.videoDecision = videoDecision;
   }
 

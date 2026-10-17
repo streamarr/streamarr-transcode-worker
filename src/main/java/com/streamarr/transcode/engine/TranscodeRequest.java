@@ -13,7 +13,7 @@ public record TranscodeRequest(
     UUID attemptId,
     @NonNull Path sourcePath,
     int targetSegmentDuration,
-    double framerate,
+    @NonNull Optional<OutputFrameRate> outputFrameRate,
     @NonNull TranscodeDecision transcodeDecision,
     EncoderPreset encoderPreset,
     int width,
@@ -39,7 +39,9 @@ public record TranscodeRequest(
   }
 
   public static TranscodeRequestBuilder builder() {
-    return new TranscodeRequestBuilder().seekPosition(Optional.empty());
+    return new TranscodeRequestBuilder()
+        .seekPosition(Optional.empty())
+        .outputFrameRate(Optional.empty());
   }
 
   private static boolean encodesVideo(TranscodeDecision decision) {

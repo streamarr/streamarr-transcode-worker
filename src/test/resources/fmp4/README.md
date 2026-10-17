@@ -90,18 +90,18 @@ ffmpeg -hide_banner -nostdin -loglevel error
   x264:   -c:v libx264 -preset faster -tag:v avc1 -profile:v high -level:v 10
           -vf scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p
           -b:v 6000 -maxrate 6000 -bufsize 12000 -c:a aac -ac 1 -b:a 8k
-          -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6
+          -r:v:0 24000/1001 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6
           -sc_threshold:v:0 0 -g:v:0 145                      (fixture 11: -g:v:0 143)
   svtav1: -c:v libsvtav1 -preset 10 -level:v 20
           -vf scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p
           -crf 35 -maxrate 6000 -svtav1-params mbr-overshoot-pct=0:lp=1
           -c:a aac -ac 1 -b:a 8k
-          -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6
+          -r:v:0 24000/1001 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6
           -g:v:0 145 -keyint_min:v:0 145
   x265:   -c:v libx265 -preset veryfast -tag:v hvc1 -profile:v main
           -vf scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p
           -b:v 6000 -maxrate 6000 -bufsize 12000 -c:a aac -ac 1 -b:a 8k
-          -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6
+          -r:v:0 24000/1001 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6
           -x265-params no-scenecut=1:no-open-gop=1:level-idc=10:high-tier=0:pools=none:frame-threads=1:log-level=error
           -g:v:0 145                                           (fixture 13c: -g:v:0 143)
   -threads 1
