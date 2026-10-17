@@ -80,6 +80,7 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -139,6 +140,57 @@ class TranscodeWorkerJobAttemptTest {
               });
       assertCarriesTheRecordedSamples(uploadedBytes(connection), recording);
     }
+  }
+
+  @ParameterizedTest(name = "{0}, {1}")
+  @CsvSource({
+    "TRANSCODE_MODE_REMUX, SUBTITLE_MODE_EXCLUDE, true",
+    "TRANSCODE_MODE_FULL_TRANSCODE, SUBTITLE_MODE_EXCLUDE, true",
+    "TRANSCODE_MODE_REMUX, SUBTITLE_MODE_SIDECAR, false",
+    "TRANSCODE_MODE_FULL_TRANSCODE, SUBTITLE_MODE_SIDECAR, false"
+  })
+  @DisplayName("Should map the absolute chosen video stream index when a job starts")
+  void shouldMapTheAbsoluteChosenVideoStreamIndexWhenAJobStarts(
+      TranscodeMode mode, SubtitleMode subtitleMode, boolean excludesSubtitles) throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJobBuilder(mode);
+    job.getDecisionBuilder().getVideoBuilder().setStreamIndex(2);
+    job.getDecisionBuilder().getSubtitleBuilder().setMode(subtitleMode);
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      var command = launcher.command(fromProto(job.getJobAttemptId()));
+      assertThat(command).containsSequence("-map", "0:2").doesNotContain("0:v:0", "0:v:2");
+      assertThat(command.contains("-0:s")).isEqualTo(excludesSubtitles);
+    }
+  }
+
+  @ParameterizedTest
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"TRANSCODE_MODE_REMUX", "TRANSCODE_MODE_FULL_TRANSCODE"})
+  @DisplayName("Should refuse the job when the chosen video stream index is missing")
+  void shouldRefuseTheJobWhenTheChosenVideoStreamIndexIsMissing(TranscodeMode mode)
+      throws Exception {
+    var job = variantJobBuilder(mode);
+    job.getDecisionBuilder().getVideoBuilder().clearStreamIndex();
+
+    assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {-1, Integer.MIN_VALUE})
+  @DisplayName("Should refuse the job when the chosen video stream index exceeds FFmpeg's range")
+  void shouldRefuseTheJobWhenTheChosenVideoStreamIndexExceedsFfmpegsRange(int streamIndex)
+      throws Exception {
+    var job = variantJobBuilder();
+    job.getDecisionBuilder().getVideoBuilder().setStreamIndex(streamIndex);
+
+    assertRefusedAsAnInvalidSpecification(job.build());
   }
 
   @ParameterizedTest

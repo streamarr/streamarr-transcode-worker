@@ -324,7 +324,7 @@ const INITIALIZATION_SEGMENT_DIFFERENCE_PAIRS = [
 ];
 
 const RECIPE =
-  'ffmpeg -y [-ss S: (K-1)*6 for an encode with K > 0, else the job\'s seek] -i SRC -map 0:v:0 -map 0:a:0 -map -0:s -map_metadata -1 -map_chapters -1 -copyts ' +
+  'ffmpeg -y [-ss S: (K-1)*6 for an encode with K > 0, else the job\'s seek] -i SRC -map 0:0 -map 0:a:0 -map -0:s -map_metadata -1 -map_chapters -1 -copyts ' +
   '-avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128 -max_interleave_delta 10000000 <codec args> [copy: -bsf:a aac_adtstoasc ' +
   'when copying AAC, then -b:a 0] [video copy with encoded audio (fixture 16): -c:v copy -c:a aac -ac 1 -b:a 8k] [encode: -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6 ' +
   'in whole seconds, K = startSequenceNumber, N = mediaSegmentCount ' +

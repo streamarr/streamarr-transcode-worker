@@ -127,7 +127,7 @@ fill_boundaries() {  # LIST ARGS...
 #   skip=T      leaves the time T out of the forced keyframe times.
 run() {
   local kind=$1 name=$2; shift 2
-  local start=0 seek=() common=("${COMMON_PIPE[@]}") maps=(-map 0:v:0 -map 0:a:0)
+  local start=0 seek=() common=("${COMMON_PIPE[@]}") maps=(-map 0:0 -map 0:a:0)
   local duration=() seconds="" skip="" hls_start_number=""
   while [ "$1" != "--" ] && [ $# -gt 1 ]; do
     case "$1" in
@@ -137,7 +137,7 @@ run() {
       duration=*) seconds=${1#duration=}; duration=(-t "$seconds") ;;
       skip=*) skip=${1#skip=} ;;
       hls-recipe) common=("${COMMON_HLS[@]}") ;;
-      video) maps=(-map 0:v:0) ;;
+      video) maps=(-map 0:0) ;;
       *) break ;;
     esac
     shift
@@ -337,7 +337,7 @@ claim() {
     > "claims/$name.fmp4" 2> "claims/$name.log" || status=$?
   echo "$status" > "claims/$name.exit-status"
 }
-AV=(-map 0:v:0 -map 0:a:0)
+AV=(-map 0:0 -map 0:a:0)
 # delay_moov stops the mp4 muxer inserting aac_adtstoasc itself: an MPEG-TS AAC copy must fail without it ...
 claim ts-copy-without-adtstoasc 0 -i src/late.ts "${AV[@]}" "${COMMON_PIPE[@]}" "${COPY_PIPE_WITHOUT_ADTSTOASC[@]}"
 # ... and the filter leaves a copy from an MP4 source byte-identical (compare with out/07-copy-start0.fmp4).

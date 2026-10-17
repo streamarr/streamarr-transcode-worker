@@ -476,7 +476,7 @@ class FfmpegCommandBuilderTest {
           + " stream copy")
   void shouldForceNoCodecProfileOrLevelWhenAnEncodingRequestsVideoDecisionIsAStreamCopy(
       String encoder) {
-    var copy = new VideoDecision.Copy("avc1.64000A");
+    var copy = new VideoDecision.Copy(0, "avc1.64000A");
     var request =
         request(decision(TranscodeMode.FULL_TRANSCODE).videoDecision(copy).build()).build();
 
@@ -574,7 +574,7 @@ class FfmpegCommandBuilderTest {
   void
       shouldWriteTheCodecFamilysPlayableSampleEntryFromParameterSetsTheRecordOrTheSamplesHoldWhenTheVideoIsCopied(
           String sourceSampleEntry, TranscodeMode mode, String filter, String sampleEntry) {
-    var copy = new VideoDecision.Copy(sourceSampleEntry + ".64001F");
+    var copy = new VideoDecision.Copy(0, sourceSampleEntry + ".64001F");
     var request = request(decision(mode).videoDecision(copy).build()).build();
 
     var cmd = command(request, "copy");
@@ -592,7 +592,7 @@ class FfmpegCommandBuilderTest {
     var request =
         request(
                 decision(TranscodeMode.REMUX)
-                    .videoDecision(new VideoDecision.Copy(codecString))
+                    .videoDecision(new VideoDecision.Copy(0, codecString))
                     .build())
             .build();
 
@@ -622,7 +622,7 @@ class FfmpegCommandBuilderTest {
     var request =
         request(
                 decision(TranscodeMode.AUDIO_TRANSCODE)
-                    .videoDecision(new VideoDecision.Copy(codecString))
+                    .videoDecision(new VideoDecision.Copy(0, codecString))
                     .build())
             .build();
 
@@ -1231,7 +1231,7 @@ class FfmpegCommandBuilderTest {
   void shouldMapFirstVideoAndAudioStreamsWhenBuildingCommand() {
     var cmd = command(request(TranscodeMode.REMUX).build(), "copy");
 
-    assertThat(cmd).containsSequence("-map", "0:v:0", "-map", "0:a:0");
+    assertThat(cmd).containsSequence("-map", "0:0", "-map", "0:a:0");
   }
 
   @Test
@@ -1410,7 +1410,7 @@ class FfmpegCommandBuilderTest {
   void shouldMapVideoAudioAndExcludeSubtitlesInCorrectOrder() {
     var cmd = command(request(TranscodeMode.REMUX).build(), "copy");
 
-    assertThat(cmd).containsSequence("-map", "0:v:0", "-map", "0:a:0", "-map", "-0:s");
+    assertThat(cmd).containsSequence("-map", "0:0", "-map", "0:a:0", "-map", "-0:s");
   }
 
   @Test
@@ -1421,6 +1421,6 @@ class FfmpegCommandBuilderTest {
             request(decision(TranscodeMode.FULL_TRANSCODE).audioDecision(NO_AUDIO).build()).build(),
             "libx264");
 
-    assertThat(cmd).containsSequence("-map", "0:v:0", "-map", "-0:s").doesNotContain("0:a:0");
+    assertThat(cmd).containsSequence("-map", "0:0", "-map", "-0:s").doesNotContain("0:a:0");
   }
 }

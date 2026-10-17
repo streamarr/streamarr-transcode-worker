@@ -179,6 +179,7 @@ public final class WorkerProbeFixtures {
   /** A copy of H.264 video with the codec string. */
   public static VideoDecision.Builder copiedVideo(String codecString) {
     return VideoDecision.newBuilder()
+        .setStreamIndex(0)
         .setMode(VideoMode.VIDEO_MODE_COPY)
         .setCodecFamily(VideoCodecFamily.VIDEO_CODEC_FAMILY_H264)
         .setCodecString(codecString);
@@ -187,6 +188,7 @@ public final class WorkerProbeFixtures {
   /** An H.264 High encode at the level and codec string of the encoded recording. */
   public static VideoDecision.Builder encodedRecordingVideo() {
     return VideoDecision.newBuilder()
+        .setStreamIndex(0)
         .setMode(VideoMode.VIDEO_MODE_ENCODE)
         .setSourceDynamicRange(VideoDynamicRange.getDefaultInstance())
         .setOutputDynamicRange(sdrDynamicRange())

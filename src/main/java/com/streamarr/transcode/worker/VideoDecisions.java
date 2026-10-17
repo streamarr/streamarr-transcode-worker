@@ -24,6 +24,11 @@ final class VideoDecisions {
     }
 
     var video = decision.getVideo();
+    if (!video.hasStreamIndex() || video.getStreamIndex() < 0) {
+      throw new InvalidJobSpecificationException(
+          "The chosen video stream requires an index in FFmpeg's nonnegative integer range");
+    }
+
     if (!encodes(video.getMode()).equals(Optional.of(mode.encodesVideo()))) {
       throw new InvalidJobSpecificationException(
           "Video mode " + video.getMode() + " contradicts transcode mode " + mode);
@@ -65,7 +70,7 @@ final class VideoDecisions {
           "A stream copy carries a codec profile, tier or level");
     }
 
-    return new VideoDecision.Copy(video.getCodecString());
+    return new VideoDecision.Copy(video.getStreamIndex(), video.getCodecString());
   }
 
   @SuppressWarnings("checkstyle:fullyQualifiedName")
@@ -118,6 +123,7 @@ final class VideoDecisions {
     }
 
     return VideoDecision.Encode.builder()
+        .streamIndex(video.getStreamIndex())
         .codecProfile(profile)
         .tier(tier)
         .level(video.getLevel())

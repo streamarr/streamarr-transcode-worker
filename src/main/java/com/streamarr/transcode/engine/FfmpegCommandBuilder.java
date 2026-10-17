@@ -96,7 +96,7 @@ public class FfmpegCommandBuilder {
     var mode = decision.transcodeMode();
 
     addInputArgs(cmd, job.request());
-    addStreamSelection(cmd, decision.audioDecision(), decision.subtitleDecision());
+    addStreamSelection(cmd, decision);
     addCommonFlags(cmd);
     addCodecArgs(cmd, job);
 
@@ -162,14 +162,13 @@ public class FfmpegCommandBuilder {
     return (firstSegment - 1) * request.targetSegmentDuration();
   }
 
-  private void addStreamSelection(
-      List<String> cmd, AudioDecision audio, SubtitleDecision subtitle) {
-    cmd.addAll(List.of("-map", "0:v:0"));
-    if (audio.mode() != AudioMode.NONE) {
+  private void addStreamSelection(List<String> cmd, TranscodeDecision decision) {
+    cmd.addAll(List.of("-map", "0:" + decision.videoDecision().streamIndex()));
+    if (decision.audioDecision().mode() != AudioMode.NONE) {
       cmd.addAll(List.of("-map", "0:a:0"));
     }
 
-    if (subtitle.mode() == SubtitleMode.EXCLUDE) {
+    if (decision.subtitleDecision().mode() == SubtitleMode.EXCLUDE) {
       cmd.addAll(List.of("-map", "-0:s"));
     }
   }

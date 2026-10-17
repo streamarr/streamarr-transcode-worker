@@ -1624,7 +1624,7 @@ class ProducerTest {
 
     var producer =
         producerFor(process, recording)
-            .videoDecision(new VideoDecision.Copy("avc1.640028"))
+            .videoDecision(new VideoDecision.Copy(0, "avc1.640028"))
             .start();
 
     assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
@@ -1743,7 +1743,7 @@ class ProducerTest {
     var producer =
         producerLaunching(process)
             .periodSeconds(6)
-            .videoDecision(new VideoDecision.Copy("hvc1.1.6.L93.90"))
+            .videoDecision(new VideoDecision.Copy(0, "hvc1.1.6.L93.90"))
             .start();
 
     assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
@@ -1778,7 +1778,7 @@ class ProducerTest {
     var producer =
         producerLaunching(process)
             .periodSeconds(6)
-            .videoDecision(new VideoDecision.Copy(codecString))
+            .videoDecision(new VideoDecision.Copy(0, codecString))
             .start();
 
     var failure = failureOf(producer);
@@ -1803,7 +1803,7 @@ class ProducerTest {
     var producer =
         producerLaunching(process)
             .periodSeconds(6)
-            .videoDecision(new VideoDecision.Copy("hvc1.1.6.L90.90"))
+            .videoDecision(new VideoDecision.Copy(0, "hvc1.1.6.L90.90"))
             .start();
 
     assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
@@ -1827,7 +1827,7 @@ class ProducerTest {
 
     var producer =
         producerOfOneSecondSegments(process)
-            .videoDecision(new VideoDecision.Copy(HVC1_RECORD_CODEC_STRING))
+            .videoDecision(new VideoDecision.Copy(0, HVC1_RECORD_CODEC_STRING))
             .start();
 
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
@@ -1852,7 +1852,7 @@ class ProducerTest {
 
     var producer =
         producerOfOneSecondSegments(process)
-            .videoDecision(new VideoDecision.Copy(HVC1_RECORD_CODEC_STRING))
+            .videoDecision(new VideoDecision.Copy(0, HVC1_RECORD_CODEC_STRING))
             .start();
 
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
@@ -1883,7 +1883,7 @@ class ProducerTest {
 
     var producer =
         producerOfOneSecondSegments(process)
-            .videoDecision(new VideoDecision.Copy(HVC1_RECORD_CODEC_STRING))
+            .videoDecision(new VideoDecision.Copy(0, HVC1_RECORD_CODEC_STRING))
             .start();
 
     assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.MALFORMED_OUTPUT);
@@ -2999,7 +2999,7 @@ class ProducerTest {
         .gracePeriod(Duration.ofSeconds(5))
         .stallTimeout(Duration.ofMinutes(1))
         .encodedFrameRate(OptionalDouble.empty())
-        .videoDecision(new VideoDecision.Copy(RecordingFixtures.ENCODED_RECORDING_CODEC_STRING))
+        .videoDecision(new VideoDecision.Copy(0, RecordingFixtures.ENCODED_RECORDING_CODEC_STRING))
         .memoryBudget(SegmentMemoryBudget.forSlots(1))
         .sink(sink);
   }
