@@ -21,15 +21,22 @@ final class VideoStreamFacts {
                     .setBitDepth(format.bitDepth())
                     .setChromaSubsampling(format.chromaSubsampling()));
     sideData(source, "Display Matrix")
-        .map(matrix -> matrix.get("rotation"))
-        .filter(JsonNode::isNumber)
-        .ifPresent(rotation -> stream.setRotationDegrees(rotation.asInt()));
+        .filter(matrix -> matrix.path("rotation").isNumber())
+        .map(VideoStreamFacts::rotationDegrees)
+        .ifPresent(stream::setRotationDegrees);
     sideData(source, "Frame Cropping")
         .map(VideoStreamFacts::cropping)
         .ifPresent(stream::setContainerCropping);
     stream.setDynamicRange(DynamicRangeReader.read(source));
     HdrStaticMetadata.masteringDisplay(source).ifPresent(stream::setMasteringDisplay);
     HdrStaticMetadata.contentLightLevel(source).ifPresent(stream::setContentLightLevel);
+  }
+
+  private static int rotationDegrees(JsonNode matrix) {
+    // ffprobe truncates its rotation field; FFmpeg rounds the full matrix angle before rotating.
+    return text(matrix, "displaymatrix")
+        .flatMap(DisplayMatrixRotation::read)
+        .orElseGet(() -> matrix.path("rotation").asInt());
   }
 
   /** The stream side data of the given type, as ffprobe's -show_streams lists it. */
