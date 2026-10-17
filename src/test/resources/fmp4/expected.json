@@ -1,7 +1,7 @@
 {
   "recordedWith": {
-    "image": "streamarr/streamarr-transcode-worker:0.1.0-SNAPSHOT@sha256:9d2d286c4f192e5e359cd7ead44ca05c7d0c720d491c3d5b4a6becfffcd61caa",
-    "ffmpeg": "ffmpeg version 8.1.2-Jellyfin Copyright (c) 2000-2026 the FFmpeg developers"
+    "image": "streamarr/streamarr-transcode-worker:0.1.0-SNAPSHOT@sha256:6248ba61f42b1e2b4130b95fd0b2d20aa7f4488625eacbe13e7c0b073d9c164c",
+    "ffmpeg": "ffmpeg version 8.1.3-Jellyfin Copyright (c) 2000-2026 the FFmpeg developers"
   },
   "recipe": "ffmpeg -y [-ss S: (K-1)*6 for an encode with K > 0, else the job's seek] -i SRC -map 0:v:0 -map 0:a:0 -map -0:s -map_metadata -1 -map_chapters -1 -copyts -avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128 -max_interleave_delta 10000000 <codec args> [copy: -bsf:a aac_adtstoasc when copying AAC, then -b:a 0] [video copy with encoded audio (fixture 16): -c:v copy -c:a aac -ac 1 -b:a 8k] [encode: -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6 in whole seconds, K = startSequenceNumber, N = mediaSegmentCount (-sc_threshold:v:0 0 for libx264, -x265-params no-scenecut=1:no-open-gop=1 for libx265) -g:v:0 145 = ceil(6 x 23.976) + 1 for an encoder verified to honour forced keyframes (libx264, SVT-AV1, libx265), else 143 = floor(6 x 23.976) (fixtures 11 and 13c) (-keyint_min:v:0 with the same value for SVT-AV1)] [fixtures 11, 12, 12b, 13b and 13c only: -t 30] -threads 1 -f mp4 -movflags cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont -frag_duration 1000000 pipe:1",
   "rules": "ADR 0037: segment N = [N*P, (N+1)*P) on the zero-based timeline. A sync video sample opens segment floor(presentationTime / (P * timescale)), even inside a fragment, or joins it when that segment is already open; every other sample joins the open segment (or waits for the first one), and a fragment belongs to every segment that holds one of its video samples. Segments numbered below startSequenceNumber are discarded preroll; a sync sample beyond the next deliverable number closes the open segment (delivered, or discarded when preroll) and then fails with a skipped segment number, grouping nothing from that sample on. firstVideoPresentationTime = the opening sync sample's decode time + its composition offset, in videoTimescale ticks, no edit list. Audio samples follow their own start: once the keyframe of a later segment has arrived, a segment closes after the fragment in which an audio sample of a later segment arrives or the video's decode end runs 1 s past the segment's end; droppedAudioSamples lists every audio sample that arrives after its segment closed, which the producer drops.",
@@ -61,7 +61,7 @@
         "-level:v",
         "10",
         "-vf",
-        "scale=-2:36,format=yuv420p",
+        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p",
         "-b:v",
         "6000",
         "-maxrate",
@@ -98,10 +98,10 @@
       "mediaSegmentCount": 12,
       "videoTrackId": 1,
       "videoTimescale": 24000,
-      "byteLength": 92299,
+      "byteLength": 92382,
       "initializationSegment": {
-        "byteLength": 1346,
-        "sha256": "edf910eb4d1ba85822c73286c2223ad7f35560b077bf7f15bcbbe87d53f56184",
+        "byteLength": 1368,
+        "sha256": "84c027c8d6e5ac09b53668eebfc246b0114663ea6d6fe23438da9af5dcffd16a",
         "tracks": [
           {
             "trackId": 1,
@@ -134,8 +134,8 @@
         ]
       },
       "deliveredInitializationSegment": {
-        "byteLength": 1346,
-        "sha256": "edf910eb4d1ba85822c73286c2223ad7f35560b077bf7f15bcbbe87d53f56184"
+        "byteLength": 1368,
+        "sha256": "84c027c8d6e5ac09b53668eebfc246b0114663ea6d6fe23438da9af5dcffd16a"
       },
       "segments": [
         {
@@ -144,7 +144,7 @@
           "firstFragmentIndex": 0,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 9476
+          "byteLength": 9224
         },
         {
           "number": 1,
@@ -152,7 +152,7 @@
           "firstFragmentIndex": 6,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8054
+          "byteLength": 8098
         },
         {
           "number": 2,
@@ -160,7 +160,7 @@
           "firstFragmentIndex": 12,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8177
+          "byteLength": 8222
         },
         {
           "number": 3,
@@ -168,7 +168,7 @@
           "firstFragmentIndex": 18,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8054
+          "byteLength": 8121
         },
         {
           "number": 4,
@@ -176,7 +176,7 @@
           "firstFragmentIndex": 24,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8055
+          "byteLength": 8170
         },
         {
           "number": 5,
@@ -184,7 +184,7 @@
           "firstFragmentIndex": 30,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8210
+          "byteLength": 8164
         },
         {
           "number": 6,
@@ -192,7 +192,7 @@
           "firstFragmentIndex": 36,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8147
+          "byteLength": 8202
         },
         {
           "number": 7,
@@ -200,7 +200,7 @@
           "firstFragmentIndex": 42,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8172
+          "byteLength": 8189
         },
         {
           "number": 8,
@@ -208,7 +208,7 @@
           "firstFragmentIndex": 48,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8121
+          "byteLength": 8117
         },
         {
           "number": 9,
@@ -216,7 +216,7 @@
           "firstFragmentIndex": 54,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8135
+          "byteLength": 8143
         },
         {
           "number": 10,
@@ -224,7 +224,7 @@
           "firstFragmentIndex": 60,
           "fragmentCount": 7,
           "keyframeCount": 1,
-          "byteLength": 8352
+          "byteLength": 8364
         }
       ],
       "discardedPreroll": [],
@@ -241,11 +241,11 @@
         "leadingFragmentsWithoutVideo": 0,
         "fragmentsWithAKeyframeInside": [],
         "videoSamples": 1583,
-        "largestFragmentByteLength": 2953,
+        "largestFragmentByteLength": 2826,
         "firstVideoPresentationTime": 0,
         "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
         "startPlusDurationsMissesNextStartByTicks": {
-          "min": -3003,
+          "min": -2002,
           "max": 4004
         },
         "videoPictures": {
@@ -573,7 +573,7 @@
         "-level:v",
         "10",
         "-vf",
-        "scale=-2:36,format=yuv420p",
+        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p",
         "-b:v",
         "6000",
         "-maxrate",
@@ -610,10 +610,10 @@
       "mediaSegmentCount": 12,
       "videoTrackId": 1,
       "videoTimescale": 24000,
-      "byteLength": 59525,
+      "byteLength": 59617,
       "initializationSegment": {
-        "byteLength": 1346,
-        "sha256": "edf910eb4d1ba85822c73286c2223ad7f35560b077bf7f15bcbbe87d53f56184",
+        "byteLength": 1368,
+        "sha256": "84c027c8d6e5ac09b53668eebfc246b0114663ea6d6fe23438da9af5dcffd16a",
         "tracks": [
           {
             "trackId": 1,
@@ -646,8 +646,8 @@
         ]
       },
       "deliveredInitializationSegment": {
-        "byteLength": 1346,
-        "sha256": "edf910eb4d1ba85822c73286c2223ad7f35560b077bf7f15bcbbe87d53f56184"
+        "byteLength": 1368,
+        "sha256": "84c027c8d6e5ac09b53668eebfc246b0114663ea6d6fe23438da9af5dcffd16a"
       },
       "segments": [
         {
@@ -656,7 +656,7 @@
           "firstFragmentIndex": 6,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8161
+          "byteLength": 8154
         },
         {
           "number": 6,
@@ -664,7 +664,7 @@
           "firstFragmentIndex": 12,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8111
+          "byteLength": 8128
         },
         {
           "number": 7,
@@ -672,7 +672,7 @@
           "firstFragmentIndex": 18,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8218
+          "byteLength": 8308
         },
         {
           "number": 8,
@@ -680,7 +680,7 @@
           "firstFragmentIndex": 24,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8115
+          "byteLength": 8160
         },
         {
           "number": 9,
@@ -688,7 +688,7 @@
           "firstFragmentIndex": 30,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8119
+          "byteLength": 8142
         },
         {
           "number": 10,
@@ -696,7 +696,7 @@
           "firstFragmentIndex": 36,
           "fragmentCount": 7,
           "keyframeCount": 1,
-          "byteLength": 8167
+          "byteLength": 8176
         }
       ],
       "discardedPreroll": [
@@ -706,7 +706,7 @@
           "firstFragmentIndex": 0,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 9288
+          "byteLength": 9181
         }
       ],
       "failure": null,
@@ -722,11 +722,11 @@
         "leadingFragmentsWithoutVideo": 0,
         "fragmentsWithAKeyframeInside": [],
         "videoSamples": 1007,
-        "largestFragmentByteLength": 2951,
+        "largestFragmentByteLength": 2745,
         "firstVideoPresentationTime": 576576,
         "firstAudioBaseMediaDecodeTimeUnsigned": 1150976,
         "startPlusDurationsMissesNextStartByTicks": {
-          "min": -3003,
+          "min": -2002,
           "max": 3003
         },
         "videoPictures": {
@@ -961,7 +961,7 @@
       "byteLength": 104531,
       "initializationSegment": {
         "byteLength": 1329,
-        "sha256": "73ad19a74f1912f4cc17048fe4cd40ebe67813ed68f234163279a7c0b8d55786",
+        "sha256": "ad27a0ea97258c9c28b2ca7b626c7d3a73fcdb1c0abab949e79e9191cc3c4bd1",
         "tracks": [
           {
             "trackId": 1,
@@ -995,7 +995,7 @@
       },
       "deliveredInitializationSegment": {
         "byteLength": 1329,
-        "sha256": "73ad19a74f1912f4cc17048fe4cd40ebe67813ed68f234163279a7c0b8d55786"
+        "sha256": "ad27a0ea97258c9c28b2ca7b626c7d3a73fcdb1c0abab949e79e9191cc3c4bd1"
       },
       "segments": [
         {
@@ -1378,7 +1378,7 @@
         "-level:v",
         "10",
         "-vf",
-        "scale=-2:36,format=yuv420p",
+        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p",
         "-b:v",
         "6000",
         "-maxrate",
@@ -1415,10 +1415,10 @@
       "mediaSegmentCount": 11,
       "videoTrackId": 1,
       "videoTimescale": 24000,
-      "byteLength": 92334,
+      "byteLength": 92387,
       "initializationSegment": {
-        "byteLength": 1346,
-        "sha256": "edf910eb4d1ba85822c73286c2223ad7f35560b077bf7f15bcbbe87d53f56184",
+        "byteLength": 1368,
+        "sha256": "84c027c8d6e5ac09b53668eebfc246b0114663ea6d6fe23438da9af5dcffd16a",
         "tracks": [
           {
             "trackId": 1,
@@ -1451,8 +1451,8 @@
         ]
       },
       "deliveredInitializationSegment": {
-        "byteLength": 1346,
-        "sha256": "edf910eb4d1ba85822c73286c2223ad7f35560b077bf7f15bcbbe87d53f56184"
+        "byteLength": 1368,
+        "sha256": "84c027c8d6e5ac09b53668eebfc246b0114663ea6d6fe23438da9af5dcffd16a"
       },
       "segments": [
         {
@@ -1461,7 +1461,7 @@
           "firstFragmentIndex": 0,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 9657
+          "byteLength": 9304
         },
         {
           "number": 1,
@@ -1469,7 +1469,7 @@
           "firstFragmentIndex": 6,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 7698
+          "byteLength": 7963
         },
         {
           "number": 2,
@@ -1477,7 +1477,7 @@
           "firstFragmentIndex": 12,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 7945
+          "byteLength": 8110
         },
         {
           "number": 3,
@@ -1485,7 +1485,7 @@
           "firstFragmentIndex": 18,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8125
+          "byteLength": 8133
         },
         {
           "number": 4,
@@ -1493,7 +1493,7 @@
           "firstFragmentIndex": 24,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8225
+          "byteLength": 8203
         },
         {
           "number": 5,
@@ -1501,7 +1501,7 @@
           "firstFragmentIndex": 30,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8273
+          "byteLength": 8298
         },
         {
           "number": 6,
@@ -1509,7 +1509,7 @@
           "firstFragmentIndex": 36,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8165
+          "byteLength": 8168
         },
         {
           "number": 7,
@@ -1517,7 +1517,7 @@
           "firstFragmentIndex": 42,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8272
+          "byteLength": 8257
         },
         {
           "number": 8,
@@ -1525,7 +1525,7 @@
           "firstFragmentIndex": 48,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8143
+          "byteLength": 8123
         },
         {
           "number": 9,
@@ -1533,7 +1533,7 @@
           "firstFragmentIndex": 54,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8117
+          "byteLength": 8093
         },
         {
           "number": 10,
@@ -1541,7 +1541,7 @@
           "firstFragmentIndex": 60,
           "fragmentCount": 7,
           "keyframeCount": 1,
-          "byteLength": 8368
+          "byteLength": 8367
         }
       ],
       "discardedPreroll": [],
@@ -1558,11 +1558,11 @@
         "leadingFragmentsWithoutVideo": 0,
         "fragmentsWithAKeyframeInside": [],
         "videoSamples": 1582,
-        "largestFragmentByteLength": 2996,
+        "largestFragmentByteLength": 2843,
         "firstVideoPresentationTime": 1001,
         "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
         "startPlusDurationsMissesNextStartByTicks": {
-          "min": -2002,
+          "min": -4004,
           "max": 3003
         },
         "videoPictures": {
@@ -1636,7 +1636,7 @@
           "frameIdentity": {
             "hlsVideoSamples": 1582,
             "pipeVideoSamples": 1582,
-            "identicalPackets": 130,
+            "identicalPackets": 140,
             "sharesVideoArguments": false
           },
           "segments": [
@@ -1650,7 +1650,7 @@
             },
             {
               "number": 2,
-              "firstVideoPresentationTime": 289289
+              "firstVideoPresentationTime": 291291
             },
             {
               "number": 3,
@@ -1696,7 +1696,7 @@
             {
               "number": 2,
               "grouping": 288288,
-              "hls": 289289
+              "hls": 291291
             },
             {
               "number": 3,
@@ -1938,7 +1938,7 @@
       "byteLength": 107606,
       "initializationSegment": {
         "byteLength": 1328,
-        "sha256": "fcf380d89d137b6159eda8376a6ae05fc8e859908dc23afc09c760fe2036a4b5",
+        "sha256": "6b01e6d073a414e754371111c1d9363ff43e5e37232a54b37d8501c925e2f14e",
         "tracks": [
           {
             "trackId": 1,
@@ -1972,7 +1972,7 @@
       },
       "deliveredInitializationSegment": {
         "byteLength": 1328,
-        "sha256": "fcf380d89d137b6159eda8376a6ae05fc8e859908dc23afc09c760fe2036a4b5"
+        "sha256": "6b01e6d073a414e754371111c1d9363ff43e5e37232a54b37d8501c925e2f14e"
       },
       "segments": [
         {
@@ -2421,7 +2421,7 @@
         "-level:v",
         "10",
         "-vf",
-        "scale=-2:36,format=yuv420p",
+        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p",
         "-b:v",
         "6000",
         "-maxrate",
@@ -2458,10 +2458,10 @@
       "mediaSegmentCount": 6,
       "videoTrackId": 1,
       "videoTimescale": 24000,
-      "byteLength": 43608,
+      "byteLength": 43611,
       "initializationSegment": {
-        "byteLength": 1346,
-        "sha256": "edf910eb4d1ba85822c73286c2223ad7f35560b077bf7f15bcbbe87d53f56184",
+        "byteLength": 1368,
+        "sha256": "84c027c8d6e5ac09b53668eebfc246b0114663ea6d6fe23438da9af5dcffd16a",
         "tracks": [
           {
             "trackId": 1,
@@ -2494,8 +2494,8 @@
         ]
       },
       "deliveredInitializationSegment": {
-        "byteLength": 1346,
-        "sha256": "edf910eb4d1ba85822c73286c2223ad7f35560b077bf7f15bcbbe87d53f56184"
+        "byteLength": 1368,
+        "sha256": "84c027c8d6e5ac09b53668eebfc246b0114663ea6d6fe23438da9af5dcffd16a"
       },
       "segments": [
         {
@@ -2504,7 +2504,7 @@
           "firstFragmentIndex": 0,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 9348
+          "byteLength": 9405
         },
         {
           "number": 1,
@@ -2512,7 +2512,7 @@
           "firstFragmentIndex": 6,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8108
+          "byteLength": 8107
         },
         {
           "number": 2,
@@ -2528,7 +2528,7 @@
           "firstFragmentIndex": 18,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8070
+          "byteLength": 8073
         },
         {
           "number": 4,
@@ -2536,7 +2536,7 @@
           "firstFragmentIndex": 24,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8171
+          "byteLength": 8089
         },
         {
           "number": 5,
@@ -2544,7 +2544,7 @@
           "firstFragmentIndex": 30,
           "fragmentCount": 1,
           "keyframeCount": 1,
-          "byteLength": 509
+          "byteLength": 513
         }
       ],
       "discardedPreroll": [],
@@ -2561,12 +2561,12 @@
         "leadingFragmentsWithoutVideo": 0,
         "fragmentsWithAKeyframeInside": [],
         "videoSamples": 720,
-        "largestFragmentByteLength": 2897,
+        "largestFragmentByteLength": 2818,
         "firstVideoPresentationTime": 1001,
         "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
         "startPlusDurationsMissesNextStartByTicks": {
           "min": -4004,
-          "max": 5005
+          "max": 4004
         },
         "videoPictures": {
           "sampleEntry": "avc1",
@@ -2614,7 +2614,7 @@
           "frameIdentity": {
             "hlsVideoSamples": 720,
             "pipeVideoSamples": 720,
-            "identicalPackets": 129,
+            "identicalPackets": 128,
             "sharesVideoArguments": false
           },
           "segments": [
@@ -2624,19 +2624,19 @@
             },
             {
               "number": 1,
-              "firstVideoPresentationTime": 148148
+              "firstVideoPresentationTime": 145145
             },
             {
               "number": 2,
-              "firstVideoPresentationTime": 292292
+              "firstVideoPresentationTime": 289289
             },
             {
               "number": 3,
-              "firstVideoPresentationTime": 436436
+              "firstVideoPresentationTime": 434434
             },
             {
               "number": 4,
-              "firstVideoPresentationTime": 580580
+              "firstVideoPresentationTime": 577577
             }
           ],
           "agrees": false,
@@ -2645,22 +2645,22 @@
             {
               "number": 1,
               "grouping": 144144,
-              "hls": 148148
+              "hls": 145145
             },
             {
               "number": 2,
               "grouping": 288288,
-              "hls": 292292
+              "hls": 289289
             },
             {
               "number": 3,
               "grouping": 432432,
-              "hls": 436436
+              "hls": 434434
             },
             {
               "number": 4,
               "grouping": 576576,
-              "hls": 580580
+              "hls": 577577
             },
             {
               "number": 5,
@@ -2822,7 +2822,7 @@
       "byteLength": 52385,
       "initializationSegment": {
         "byteLength": 1305,
-        "sha256": "9b728e14aa1fa40af47ef4505af49f237dc73572f5186412738f2df38d8649a2",
+        "sha256": "42959f1f86f813cd72d423cd305a5352a95427c44d5540b2aad9521d2094c66a",
         "tracks": [
           {
             "trackId": 1,
@@ -2856,7 +2856,7 @@
       },
       "deliveredInitializationSegment": {
         "byteLength": 1305,
-        "sha256": "9b728e14aa1fa40af47ef4505af49f237dc73572f5186412738f2df38d8649a2"
+        "sha256": "42959f1f86f813cd72d423cd305a5352a95427c44d5540b2aad9521d2094c66a"
       },
       "segments": [
         {
@@ -3189,7 +3189,7 @@
       "byteLength": 32200,
       "initializationSegment": {
         "byteLength": 1305,
-        "sha256": "9b728e14aa1fa40af47ef4505af49f237dc73572f5186412738f2df38d8649a2",
+        "sha256": "42959f1f86f813cd72d423cd305a5352a95427c44d5540b2aad9521d2094c66a",
         "tracks": [
           {
             "trackId": 1,
@@ -3223,7 +3223,7 @@
       },
       "deliveredInitializationSegment": {
         "byteLength": 1305,
-        "sha256": "9b728e14aa1fa40af47ef4505af49f237dc73572f5186412738f2df38d8649a2"
+        "sha256": "42959f1f86f813cd72d423cd305a5352a95427c44d5540b2aad9521d2094c66a"
       },
       "segments": [
         {
@@ -3430,7 +3430,7 @@
         "-level:v",
         "10",
         "-vf",
-        "scale=-2:36,format=yuv420p",
+        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p",
         "-b:v",
         "6000",
         "-maxrate",
@@ -3467,10 +3467,10 @@
       "mediaSegmentCount": 4,
       "videoTrackId": 1,
       "videoTimescale": 24000,
-      "byteLength": 31064,
+      "byteLength": 30970,
       "initializationSegment": {
-        "byteLength": 1346,
-        "sha256": "edf910eb4d1ba85822c73286c2223ad7f35560b077bf7f15bcbbe87d53f56184",
+        "byteLength": 1368,
+        "sha256": "84c027c8d6e5ac09b53668eebfc246b0114663ea6d6fe23438da9af5dcffd16a",
         "tracks": [
           {
             "trackId": 1,
@@ -3503,8 +3503,8 @@
         ]
       },
       "deliveredInitializationSegment": {
-        "byteLength": 1346,
-        "sha256": "edf910eb4d1ba85822c73286c2223ad7f35560b077bf7f15bcbbe87d53f56184"
+        "byteLength": 1368,
+        "sha256": "84c027c8d6e5ac09b53668eebfc246b0114663ea6d6fe23438da9af5dcffd16a"
       },
       "segments": [
         {
@@ -3513,7 +3513,7 @@
           "firstFragmentIndex": 0,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 9476
+          "byteLength": 9224
         },
         {
           "number": 1,
@@ -3521,7 +3521,7 @@
           "firstFragmentIndex": 6,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8054
+          "byteLength": 8098
         },
         {
           "number": 2,
@@ -3529,7 +3529,7 @@
           "firstFragmentIndex": 12,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8178
+          "byteLength": 8222
         },
         {
           "number": 3,
@@ -3537,7 +3537,7 @@
           "firstFragmentIndex": 18,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 4010
+          "byteLength": 4058
         }
       ],
       "discardedPreroll": [],
@@ -3554,11 +3554,11 @@
         "leadingFragmentsWithoutVideo": 0,
         "fragmentsWithAKeyframeInside": [],
         "videoSamples": 480,
-        "largestFragmentByteLength": 2953,
+        "largestFragmentByteLength": 2826,
         "firstVideoPresentationTime": 0,
         "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
         "startPlusDurationsMissesNextStartByTicks": {
-          "min": -3003,
+          "min": -2002,
           "max": 4004
         },
         "videoPictures": {
@@ -3745,7 +3745,7 @@
       "byteLength": 105318,
       "initializationSegment": {
         "byteLength": 1328,
-        "sha256": "38975fc0535d12aa37700234f287cda80b467b6cda2bde1765f66d6d8989b648",
+        "sha256": "dc4943920ecaa93eeb55132008fd357b364c1fa0f49ed4a26ed27c3d0c26350f",
         "tracks": [
           {
             "trackId": 1,
@@ -3779,7 +3779,7 @@
       },
       "deliveredInitializationSegment": {
         "byteLength": 1328,
-        "sha256": "38975fc0535d12aa37700234f287cda80b467b6cda2bde1765f66d6d8989b648"
+        "sha256": "dc4943920ecaa93eeb55132008fd357b364c1fa0f49ed4a26ed27c3d0c26350f"
       },
       "segments": [
         {
@@ -4316,7 +4316,7 @@
       "byteLength": 60911,
       "initializationSegment": {
         "byteLength": 1328,
-        "sha256": "38975fc0535d12aa37700234f287cda80b467b6cda2bde1765f66d6d8989b648",
+        "sha256": "dc4943920ecaa93eeb55132008fd357b364c1fa0f49ed4a26ed27c3d0c26350f",
         "tracks": [
           {
             "trackId": 1,
@@ -4350,7 +4350,7 @@
       },
       "deliveredInitializationSegment": {
         "byteLength": 1328,
-        "sha256": "38975fc0535d12aa37700234f287cda80b467b6cda2bde1765f66d6d8989b648"
+        "sha256": "dc4943920ecaa93eeb55132008fd357b364c1fa0f49ed4a26ed27c3d0c26350f"
       },
       "segments": [
         {
@@ -4746,7 +4746,7 @@
         "-level:v",
         "20",
         "-vf",
-        "scale=-2:36,format=yuv420p",
+        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p",
         "-crf",
         "35",
         "-maxrate",
@@ -4783,10 +4783,10 @@
       "mediaSegmentCount": 11,
       "videoTrackId": 1,
       "videoTimescale": 24000,
-      "byteLength": 98040,
+      "byteLength": 97510,
       "initializationSegment": {
-        "byteLength": 1334,
-        "sha256": "280fdd918c22795d9f692f5159e156db97044d3fb680e1d7811ca65a7685a208",
+        "byteLength": 1357,
+        "sha256": "74024590609a54a45394b92568f7b06ec030db80ed568e5b8660d4791963b21e",
         "tracks": [
           {
             "trackId": 1,
@@ -4819,8 +4819,8 @@
         ]
       },
       "deliveredInitializationSegment": {
-        "byteLength": 1334,
-        "sha256": "280fdd918c22795d9f692f5159e156db97044d3fb680e1d7811ca65a7685a208"
+        "byteLength": 1357,
+        "sha256": "74024590609a54a45394b92568f7b06ec030db80ed568e5b8660d4791963b21e"
       },
       "segments": [
         {
@@ -4829,7 +4829,7 @@
           "firstFragmentIndex": 0,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 9817
+          "byteLength": 9567
         },
         {
           "number": 1,
@@ -4837,7 +4837,7 @@
           "firstFragmentIndex": 6,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 9156
+          "byteLength": 8772
         },
         {
           "number": 2,
@@ -4845,7 +4845,7 @@
           "firstFragmentIndex": 12,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8691
+          "byteLength": 8625
         },
         {
           "number": 3,
@@ -4853,7 +4853,7 @@
           "firstFragmentIndex": 18,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8748
+          "byteLength": 8812
         },
         {
           "number": 4,
@@ -4861,7 +4861,7 @@
           "firstFragmentIndex": 24,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8563
+          "byteLength": 8452
         },
         {
           "number": 5,
@@ -4869,7 +4869,7 @@
           "firstFragmentIndex": 30,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8660
+          "byteLength": 8582
         },
         {
           "number": 6,
@@ -4877,7 +4877,7 @@
           "firstFragmentIndex": 36,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8621
+          "byteLength": 8717
         },
         {
           "number": 7,
@@ -4885,7 +4885,7 @@
           "firstFragmentIndex": 42,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8519
+          "byteLength": 8481
         },
         {
           "number": 8,
@@ -4893,7 +4893,7 @@
           "firstFragmentIndex": 48,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8739
+          "byteLength": 8837
         },
         {
           "number": 9,
@@ -4901,7 +4901,7 @@
           "firstFragmentIndex": 54,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8425
+          "byteLength": 8510
         },
         {
           "number": 10,
@@ -4909,7 +4909,7 @@
           "firstFragmentIndex": 60,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8767
+          "byteLength": 8798
         }
       ],
       "discardedPreroll": [],
@@ -4926,7 +4926,7 @@
         "leadingFragmentsWithoutVideo": 0,
         "fragmentsWithAKeyframeInside": [],
         "videoSamples": 1582,
-        "largestFragmentByteLength": 2354,
+        "largestFragmentByteLength": 2375,
         "firstVideoPresentationTime": 1001,
         "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
         "startPlusDurationsMissesNextStartByTicks": {
@@ -5363,7 +5363,7 @@
         "-level:v",
         "20",
         "-vf",
-        "scale=-2:36,format=yuv420p",
+        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p",
         "-crf",
         "35",
         "-maxrate",
@@ -5400,10 +5400,10 @@
       "mediaSegmentCount": 11,
       "videoTrackId": 1,
       "videoTimescale": 24000,
-      "byteLength": 62006,
+      "byteLength": 62067,
       "initializationSegment": {
-        "byteLength": 1334,
-        "sha256": "280fdd918c22795d9f692f5159e156db97044d3fb680e1d7811ca65a7685a208",
+        "byteLength": 1357,
+        "sha256": "74024590609a54a45394b92568f7b06ec030db80ed568e5b8660d4791963b21e",
         "tracks": [
           {
             "trackId": 1,
@@ -5436,8 +5436,8 @@
         ]
       },
       "deliveredInitializationSegment": {
-        "byteLength": 1334,
-        "sha256": "280fdd918c22795d9f692f5159e156db97044d3fb680e1d7811ca65a7685a208"
+        "byteLength": 1357,
+        "sha256": "74024590609a54a45394b92568f7b06ec030db80ed568e5b8660d4791963b21e"
       },
       "segments": [
         {
@@ -5446,7 +5446,7 @@
           "firstFragmentIndex": 7,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8606
+          "byteLength": 8572
         },
         {
           "number": 6,
@@ -5454,7 +5454,7 @@
           "firstFragmentIndex": 13,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8453
+          "byteLength": 8551
         },
         {
           "number": 7,
@@ -5462,7 +5462,7 @@
           "firstFragmentIndex": 19,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8867
+          "byteLength": 8785
         },
         {
           "number": 8,
@@ -5470,7 +5470,7 @@
           "firstFragmentIndex": 25,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8445
+          "byteLength": 8479
         },
         {
           "number": 9,
@@ -5478,7 +5478,7 @@
           "firstFragmentIndex": 31,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8578
+          "byteLength": 8589
         },
         {
           "number": 10,
@@ -5486,7 +5486,7 @@
           "firstFragmentIndex": 37,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8580
+          "byteLength": 8656
         }
       ],
       "discardedPreroll": [
@@ -5496,7 +5496,7 @@
           "firstFragmentIndex": 0,
           "fragmentCount": 7,
           "keyframeCount": 1,
-          "byteLength": 9143
+          "byteLength": 9078
         }
       ],
       "failure": null,
@@ -5512,7 +5512,7 @@
         "leadingFragmentsWithoutVideo": 0,
         "fragmentsWithAKeyframeInside": [],
         "videoSamples": 1007,
-        "largestFragmentByteLength": 2329,
+        "largestFragmentByteLength": 2339,
         "firstVideoPresentationTime": 576576,
         "firstAudioBaseMediaDecodeTimeUnsigned": 1150976,
         "startPlusDurationsMissesNextStartByTicks": {
@@ -5758,7 +5758,7 @@
       "byteLength": 38207,
       "initializationSegment": {
         "byteLength": 1328,
-        "sha256": "049c5cd60716724de663688600bd2c90ad480231ce228fa930b3727a405b46ba",
+        "sha256": "b00e4310f7f0242a2504057cb7fd34eefa5ad000fe6fa5a966c89b5d51f6f24c",
         "tracks": [
           {
             "trackId": 1,
@@ -5792,7 +5792,7 @@
       },
       "deliveredInitializationSegment": {
         "byteLength": 1328,
-        "sha256": "049c5cd60716724de663688600bd2c90ad480231ce228fa930b3727a405b46ba"
+        "sha256": "b00e4310f7f0242a2504057cb7fd34eefa5ad000fe6fa5a966c89b5d51f6f24c"
       },
       "segments": [
         {
@@ -5969,7 +5969,7 @@
         "-level:v",
         "10",
         "-vf",
-        "scale=-2:36,format=yuv420p",
+        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p",
         "-b:v",
         "6000",
         "-maxrate",
@@ -6006,10 +6006,10 @@
       "mediaSegmentCount": 5,
       "videoTrackId": 1,
       "videoTimescale": 24000,
-      "byteLength": 44319,
+      "byteLength": 44393,
       "initializationSegment": {
-        "byteLength": 1346,
-        "sha256": "edf910eb4d1ba85822c73286c2223ad7f35560b077bf7f15bcbbe87d53f56184",
+        "byteLength": 1368,
+        "sha256": "84c027c8d6e5ac09b53668eebfc246b0114663ea6d6fe23438da9af5dcffd16a",
         "tracks": [
           {
             "trackId": 1,
@@ -6042,8 +6042,8 @@
         ]
       },
       "deliveredInitializationSegment": {
-        "byteLength": 1346,
-        "sha256": "edf910eb4d1ba85822c73286c2223ad7f35560b077bf7f15bcbbe87d53f56184"
+        "byteLength": 1368,
+        "sha256": "84c027c8d6e5ac09b53668eebfc246b0114663ea6d6fe23438da9af5dcffd16a"
       },
       "segments": [
         {
@@ -6052,7 +6052,7 @@
           "firstFragmentIndex": 0,
           "fragmentCount": 7,
           "keyframeCount": 2,
-          "byteLength": 9995
+          "byteLength": 9834
         },
         {
           "number": 1,
@@ -6060,7 +6060,7 @@
           "firstFragmentIndex": 7,
           "fragmentCount": 7,
           "keyframeCount": 2,
-          "byteLength": 8160
+          "byteLength": 8303
         },
         {
           "number": 2,
@@ -6068,7 +6068,7 @@
           "firstFragmentIndex": 14,
           "fragmentCount": 7,
           "keyframeCount": 2,
-          "byteLength": 8236
+          "byteLength": 8239
         },
         {
           "number": 3,
@@ -6076,7 +6076,7 @@
           "firstFragmentIndex": 21,
           "fragmentCount": 7,
           "keyframeCount": 2,
-          "byteLength": 8231
+          "byteLength": 8282
         },
         {
           "number": 4,
@@ -6084,7 +6084,7 @@
           "firstFragmentIndex": 28,
           "fragmentCount": 7,
           "keyframeCount": 2,
-          "byteLength": 8351
+          "byteLength": 8367
         }
       ],
       "discardedPreroll": [],
@@ -6101,11 +6101,11 @@
         "leadingFragmentsWithoutVideo": 0,
         "fragmentsWithAKeyframeInside": [],
         "videoSamples": 720,
-        "largestFragmentByteLength": 2953,
+        "largestFragmentByteLength": 2826,
         "firstVideoPresentationTime": 0,
         "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
         "startPlusDurationsMissesNextStartByTicks": {
-          "min": -3003,
+          "min": -2002,
           "max": 4004
         },
         "videoPictures": {
@@ -6268,7 +6268,7 @@
         "-level:v",
         "10",
         "-vf",
-        "scale=-2:36,format=yuv420p",
+        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p",
         "-b:v",
         "6000",
         "-maxrate",
@@ -6305,10 +6305,10 @@
       "mediaSegmentCount": 5,
       "videoTrackId": 1,
       "videoTimescale": 24000,
-      "byteLength": 43426,
+      "byteLength": 43458,
       "initializationSegment": {
-        "byteLength": 1346,
-        "sha256": "edf910eb4d1ba85822c73286c2223ad7f35560b077bf7f15bcbbe87d53f56184",
+        "byteLength": 1368,
+        "sha256": "84c027c8d6e5ac09b53668eebfc246b0114663ea6d6fe23438da9af5dcffd16a",
         "tracks": [
           {
             "trackId": 1,
@@ -6341,8 +6341,8 @@
         ]
       },
       "deliveredInitializationSegment": {
-        "byteLength": 1346,
-        "sha256": "edf910eb4d1ba85822c73286c2223ad7f35560b077bf7f15bcbbe87d53f56184"
+        "byteLength": 1368,
+        "sha256": "84c027c8d6e5ac09b53668eebfc246b0114663ea6d6fe23438da9af5dcffd16a"
       },
       "segments": [
         {
@@ -6351,7 +6351,7 @@
           "firstFragmentIndex": 0,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 9476
+          "byteLength": 9224
         },
         {
           "number": 1,
@@ -6359,7 +6359,7 @@
           "firstFragmentIndex": 6,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8054
+          "byteLength": 8098
         },
         {
           "number": 2,
@@ -6367,7 +6367,7 @@
           "firstFragmentIndex": 12,
           "fragmentCount": 7,
           "keyframeCount": 1,
-          "byteLength": 8453
+          "byteLength": 8461
         },
         {
           "number": 3,
@@ -6375,7 +6375,7 @@
           "firstFragmentIndex": 19,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 7963
+          "byteLength": 8086
         },
         {
           "number": 4,
@@ -6383,7 +6383,7 @@
           "firstFragmentIndex": 25,
           "fragmentCount": 7,
           "keyframeCount": 1,
-          "byteLength": 8134
+          "byteLength": 8221
         }
       ],
       "discardedPreroll": [],
@@ -6400,11 +6400,11 @@
         "leadingFragmentsWithoutVideo": 0,
         "fragmentsWithAKeyframeInside": [],
         "videoSamples": 720,
-        "largestFragmentByteLength": 2953,
+        "largestFragmentByteLength": 2826,
         "firstVideoPresentationTime": 0,
         "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
         "startPlusDurationsMissesNextStartByTicks": {
-          "min": -3003,
+          "min": -2002,
           "max": 4004
         },
         "videoPictures": {
@@ -6538,7 +6538,7 @@
         "-level:v",
         "20",
         "-vf",
-        "scale=-2:36,format=yuv420p",
+        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p",
         "-crf",
         "35",
         "-maxrate",
@@ -6575,10 +6575,10 @@
       "mediaSegmentCount": 5,
       "videoTrackId": 1,
       "videoTimescale": 24000,
-      "byteLength": 48299,
+      "byteLength": 47109,
       "initializationSegment": {
-        "byteLength": 1334,
-        "sha256": "280fdd918c22795d9f692f5159e156db97044d3fb680e1d7811ca65a7685a208",
+        "byteLength": 1357,
+        "sha256": "74024590609a54a45394b92568f7b06ec030db80ed568e5b8660d4791963b21e",
         "tracks": [
           {
             "trackId": 1,
@@ -6611,8 +6611,8 @@
         ]
       },
       "deliveredInitializationSegment": {
-        "byteLength": 1334,
-        "sha256": "280fdd918c22795d9f692f5159e156db97044d3fb680e1d7811ca65a7685a208"
+        "byteLength": 1357,
+        "sha256": "74024590609a54a45394b92568f7b06ec030db80ed568e5b8660d4791963b21e"
       },
       "segments": [
         {
@@ -6621,7 +6621,7 @@
           "firstFragmentIndex": 0,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 9405
+          "byteLength": 9365
         },
         {
           "number": 1,
@@ -6629,7 +6629,7 @@
           "firstFragmentIndex": 6,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 9246
+          "byteLength": 8947
         },
         {
           "number": 2,
@@ -6637,7 +6637,7 @@
           "firstFragmentIndex": 12,
           "fragmentCount": 7,
           "keyframeCount": 1,
-          "byteLength": 9916
+          "byteLength": 9566
         },
         {
           "number": 3,
@@ -6645,7 +6645,7 @@
           "firstFragmentIndex": 19,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 9118
+          "byteLength": 8760
         },
         {
           "number": 4,
@@ -6653,7 +6653,7 @@
           "firstFragmentIndex": 25,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 9280
+          "byteLength": 9114
         }
       ],
       "discardedPreroll": [],
@@ -6670,7 +6670,7 @@
         "leadingFragmentsWithoutVideo": 0,
         "fragmentsWithAKeyframeInside": [],
         "videoSamples": 720,
-        "largestFragmentByteLength": 2285,
+        "largestFragmentByteLength": 2330,
         "firstVideoPresentationTime": 0,
         "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
         "startPlusDurationsMissesNextStartByTicks": {
@@ -6813,7 +6813,7 @@
         "-profile:v",
         "main",
         "-vf",
-        "scale=-2:36,format=yuv420p",
+        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p",
         "-b:v",
         "6000",
         "-maxrate",
@@ -6850,10 +6850,10 @@
       "mediaSegmentCount": 12,
       "videoTrackId": 1,
       "videoTimescale": 24000,
-      "byteLength": 99534,
+      "byteLength": 100128,
       "initializationSegment": {
-        "byteLength": 3848,
-        "sha256": "848e6a7b94faaa6a8243f99f0709e9a6013af207aa2b0bb1b2c0277c9035cab4",
+        "byteLength": 3870,
+        "sha256": "92c9bf195e51b79354923690828baecb3b460d02bdacc943cd1ca2cc8e25b3d4",
         "tracks": [
           {
             "trackId": 1,
@@ -6886,8 +6886,8 @@
         ]
       },
       "deliveredInitializationSegment": {
-        "byteLength": 1421,
-        "sha256": "c3ee2404d3f96760ce3f5c2d81e5d62f62d7c881a12a831fbb18cc244e9e50e8"
+        "byteLength": 1443,
+        "sha256": "aea92a22aa9c20d74f9a97ece6d0badc5d3e1cffb1f0417d7f155a22693eb315"
       },
       "segments": [
         {
@@ -6896,7 +6896,7 @@
           "firstFragmentIndex": 0,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 7998
+          "byteLength": 8678
         },
         {
           "number": 1,
@@ -6904,7 +6904,7 @@
           "firstFragmentIndex": 6,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8751
+          "byteLength": 8705
         },
         {
           "number": 2,
@@ -6912,7 +6912,7 @@
           "firstFragmentIndex": 12,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8800
+          "byteLength": 8744
         },
         {
           "number": 3,
@@ -6920,7 +6920,7 @@
           "firstFragmentIndex": 18,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8670
+          "byteLength": 8762
         },
         {
           "number": 4,
@@ -6928,7 +6928,7 @@
           "firstFragmentIndex": 24,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8811
+          "byteLength": 8654
         },
         {
           "number": 5,
@@ -6936,7 +6936,7 @@
           "firstFragmentIndex": 30,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8741
+          "byteLength": 8796
         },
         {
           "number": 6,
@@ -6944,7 +6944,7 @@
           "firstFragmentIndex": 36,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8658
+          "byteLength": 8699
         },
         {
           "number": 7,
@@ -6952,7 +6952,7 @@
           "firstFragmentIndex": 42,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8716
+          "byteLength": 8654
         },
         {
           "number": 8,
@@ -6960,7 +6960,7 @@
           "firstFragmentIndex": 48,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8732
+          "byteLength": 8707
         },
         {
           "number": 9,
@@ -6968,7 +6968,7 @@
           "firstFragmentIndex": 54,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8732
+          "byteLength": 8737
         },
         {
           "number": 10,
@@ -6976,7 +6976,7 @@
           "firstFragmentIndex": 60,
           "fragmentCount": 7,
           "keyframeCount": 1,
-          "byteLength": 9077
+          "byteLength": 9122
         }
       ],
       "discardedPreroll": [],
@@ -6993,7 +6993,7 @@
         "leadingFragmentsWithoutVideo": 0,
         "fragmentsWithAKeyframeInside": [],
         "videoSamples": 1583,
-        "largestFragmentByteLength": 2138,
+        "largestFragmentByteLength": 2128,
         "firstVideoPresentationTime": 0,
         "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
         "startPlusDurationsMissesNextStartByTicks": {
@@ -7198,7 +7198,7 @@
         "-profile:v",
         "main",
         "-vf",
-        "scale=-2:36,format=yuv420p",
+        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p",
         "-b:v",
         "6000",
         "-maxrate",
@@ -7235,10 +7235,10 @@
       "mediaSegmentCount": 12,
       "videoTrackId": 1,
       "videoTimescale": 24000,
-      "byteLength": 65006,
+      "byteLength": 65048,
       "initializationSegment": {
-        "byteLength": 3848,
-        "sha256": "848e6a7b94faaa6a8243f99f0709e9a6013af207aa2b0bb1b2c0277c9035cab4",
+        "byteLength": 3870,
+        "sha256": "92c9bf195e51b79354923690828baecb3b460d02bdacc943cd1ca2cc8e25b3d4",
         "tracks": [
           {
             "trackId": 1,
@@ -7271,8 +7271,8 @@
         ]
       },
       "deliveredInitializationSegment": {
-        "byteLength": 1421,
-        "sha256": "c3ee2404d3f96760ce3f5c2d81e5d62f62d7c881a12a831fbb18cc244e9e50e8"
+        "byteLength": 1443,
+        "sha256": "aea92a22aa9c20d74f9a97ece6d0badc5d3e1cffb1f0417d7f155a22693eb315"
       },
       "segments": [
         {
@@ -7281,7 +7281,7 @@
           "firstFragmentIndex": 6,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8789
+          "byteLength": 8772
         },
         {
           "number": 6,
@@ -7289,7 +7289,7 @@
           "firstFragmentIndex": 12,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8693
+          "byteLength": 8658
         },
         {
           "number": 7,
@@ -7297,7 +7297,7 @@
           "firstFragmentIndex": 18,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8697
+          "byteLength": 8723
         },
         {
           "number": 8,
@@ -7305,7 +7305,7 @@
           "firstFragmentIndex": 24,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8747
+          "byteLength": 8773
         },
         {
           "number": 9,
@@ -7313,7 +7313,7 @@
           "firstFragmentIndex": 30,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8741
+          "byteLength": 8684
         },
         {
           "number": 10,
@@ -7321,7 +7321,7 @@
           "firstFragmentIndex": 36,
           "fragmentCount": 7,
           "keyframeCount": 1,
-          "byteLength": 8871
+          "byteLength": 8915
         }
       ],
       "discardedPreroll": [
@@ -7331,7 +7331,7 @@
           "firstFragmentIndex": 0,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8620
+          "byteLength": 8653
         }
       ],
       "failure": null,
@@ -7347,7 +7347,7 @@
         "leadingFragmentsWithoutVideo": 0,
         "fragmentsWithAKeyframeInside": [],
         "videoSamples": 1007,
-        "largestFragmentByteLength": 2103,
+        "largestFragmentByteLength": 1929,
         "firstVideoPresentationTime": 576576,
         "firstAudioBaseMediaDecodeTimeUnsigned": 1150976,
         "startPlusDurationsMissesNextStartByTicks": {
@@ -7573,7 +7573,7 @@
         "-profile:v",
         "main",
         "-vf",
-        "scale=-2:36,format=yuv420p",
+        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p",
         "-b:v",
         "6000",
         "-maxrate",
@@ -7610,10 +7610,10 @@
       "mediaSegmentCount": 5,
       "videoTrackId": 1,
       "videoTimescale": 24000,
-      "byteLength": 47232,
+      "byteLength": 47752,
       "initializationSegment": {
-        "byteLength": 3848,
-        "sha256": "848e6a7b94faaa6a8243f99f0709e9a6013af207aa2b0bb1b2c0277c9035cab4",
+        "byteLength": 3870,
+        "sha256": "92c9bf195e51b79354923690828baecb3b460d02bdacc943cd1ca2cc8e25b3d4",
         "tracks": [
           {
             "trackId": 1,
@@ -7646,8 +7646,8 @@
         ]
       },
       "deliveredInitializationSegment": {
-        "byteLength": 1421,
-        "sha256": "c3ee2404d3f96760ce3f5c2d81e5d62f62d7c881a12a831fbb18cc244e9e50e8"
+        "byteLength": 1443,
+        "sha256": "aea92a22aa9c20d74f9a97ece6d0badc5d3e1cffb1f0417d7f155a22693eb315"
       },
       "segments": [
         {
@@ -7656,7 +7656,7 @@
           "firstFragmentIndex": 0,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 7998
+          "byteLength": 8678
         },
         {
           "number": 1,
@@ -7664,7 +7664,7 @@
           "firstFragmentIndex": 6,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8751
+          "byteLength": 8705
         },
         {
           "number": 2,
@@ -7672,7 +7672,7 @@
           "firstFragmentIndex": 12,
           "fragmentCount": 7,
           "keyframeCount": 1,
-          "byteLength": 9118
+          "byteLength": 9006
         },
         {
           "number": 3,
@@ -7680,7 +7680,7 @@
           "firstFragmentIndex": 19,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 8535
+          "byteLength": 8638
         },
         {
           "number": 4,
@@ -7688,7 +7688,7 @@
           "firstFragmentIndex": 25,
           "fragmentCount": 7,
           "keyframeCount": 1,
-          "byteLength": 8982
+          "byteLength": 8855
         }
       ],
       "discardedPreroll": [],
@@ -7705,7 +7705,7 @@
         "leadingFragmentsWithoutVideo": 0,
         "fragmentsWithAKeyframeInside": [],
         "videoSamples": 720,
-        "largestFragmentByteLength": 2103,
+        "largestFragmentByteLength": 1975,
         "firstVideoPresentationTime": 0,
         "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
         "startPlusDurationsMissesNextStartByTicks": {
@@ -7850,7 +7850,7 @@
         "-profile:v",
         "main",
         "-vf",
-        "scale=-2:36,format=yuv420p",
+        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p",
         "-b:v",
         "6000",
         "-maxrate",
@@ -7887,10 +7887,10 @@
       "mediaSegmentCount": 5,
       "videoTrackId": 1,
       "videoTimescale": 24000,
-      "byteLength": 48116,
+      "byteLength": 48735,
       "initializationSegment": {
-        "byteLength": 3848,
-        "sha256": "ee8d58b34a84d131614476f93b4db74e59a0b77ea20cabb1382e935f15e65ce8",
+        "byteLength": 3870,
+        "sha256": "07f99711b5f27695e835cbbed5ef996cdae636c82bdf4c525b3afc0b0172e9fc",
         "tracks": [
           {
             "trackId": 1,
@@ -7923,8 +7923,8 @@
         ]
       },
       "deliveredInitializationSegment": {
-        "byteLength": 1421,
-        "sha256": "c3ee2404d3f96760ce3f5c2d81e5d62f62d7c881a12a831fbb18cc244e9e50e8"
+        "byteLength": 1443,
+        "sha256": "aea92a22aa9c20d74f9a97ece6d0badc5d3e1cffb1f0417d7f155a22693eb315"
       },
       "segments": [
         {
@@ -7933,7 +7933,7 @@
           "firstFragmentIndex": 0,
           "fragmentCount": 7,
           "keyframeCount": 2,
-          "byteLength": 8776
+          "byteLength": 9270
         },
         {
           "number": 1,
@@ -7941,7 +7941,7 @@
           "firstFragmentIndex": 7,
           "fragmentCount": 7,
           "keyframeCount": 2,
-          "byteLength": 8902
+          "byteLength": 8943
         },
         {
           "number": 2,
@@ -7949,7 +7949,7 @@
           "firstFragmentIndex": 14,
           "fragmentCount": 7,
           "keyframeCount": 2,
-          "byteLength": 8956
+          "byteLength": 8886
         },
         {
           "number": 3,
@@ -7957,7 +7957,7 @@
           "firstFragmentIndex": 21,
           "fragmentCount": 7,
           "keyframeCount": 2,
-          "byteLength": 8829
+          "byteLength": 8959
         },
         {
           "number": 4,
@@ -7965,7 +7965,7 @@
           "firstFragmentIndex": 28,
           "fragmentCount": 7,
           "keyframeCount": 2,
-          "byteLength": 8805
+          "byteLength": 8807
         }
       ],
       "discardedPreroll": [],
@@ -7982,7 +7982,7 @@
         "leadingFragmentsWithoutVideo": 0,
         "fragmentsWithAKeyframeInside": [],
         "videoSamples": 720,
-        "largestFragmentByteLength": 1638,
+        "largestFragmentByteLength": 1596,
         "firstVideoPresentationTime": 0,
         "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
         "startPlusDurationsMissesNextStartByTicks": {
@@ -8177,7 +8177,7 @@
       "byteLength": 28116,
       "initializationSegment": {
         "byteLength": 1328,
-        "sha256": "96ef999a46439b6528797204d51e13b130d90953f9430f1f3d26993672c1a83e",
+        "sha256": "4ca3549863d430486c976a1f32030c565079b25aa9daa32e41fd471f7129e856",
         "tracks": [
           {
             "trackId": 1,
@@ -8211,7 +8211,7 @@
       },
       "deliveredInitializationSegment": {
         "byteLength": 1328,
-        "sha256": "96ef999a46439b6528797204d51e13b130d90953f9430f1f3d26993672c1a83e"
+        "sha256": "4ca3549863d430486c976a1f32030c565079b25aa9daa32e41fd471f7129e856"
       },
       "segments": [
         {
@@ -8496,7 +8496,7 @@
       "byteLength": 36299,
       "initializationSegment": {
         "byteLength": 1328,
-        "sha256": "7fd374f2b23d9fb048a51fa004f8c273483f44bb323d17fff0c2f1176d96c3aa",
+        "sha256": "a1f684fd2ab4e5a3e9536fb6afc4b03aea053fec4c88947aeda0c3a2a4163669",
         "tracks": [
           {
             "trackId": 1,
@@ -8530,7 +8530,7 @@
       },
       "deliveredInitializationSegment": {
         "byteLength": 1328,
-        "sha256": "7fd374f2b23d9fb048a51fa004f8c273483f44bb323d17fff0c2f1176d96c3aa"
+        "sha256": "a1f684fd2ab4e5a3e9536fb6afc4b03aea053fec4c88947aeda0c3a2a4163669"
       },
       "segments": [
         {
@@ -8913,7 +8913,7 @@
       "byteLength": 105150,
       "initializationSegment": {
         "byteLength": 1348,
-        "sha256": "bb78124304f2920a1617a379ca2222d8352d0e0399c2e9609c96a9b003111dbc",
+        "sha256": "057085e240ec2c605c96ed81f6a40b0a197994f6a55abde39f2fdfcd13b3045f",
         "tracks": [
           {
             "trackId": 1,
@@ -8947,7 +8947,7 @@
       },
       "deliveredInitializationSegment": {
         "byteLength": 1348,
-        "sha256": "bb78124304f2920a1617a379ca2222d8352d0e0399c2e9609c96a9b003111dbc"
+        "sha256": "057085e240ec2c605c96ed81f6a40b0a197994f6a55abde39f2fdfcd13b3045f"
       },
       "segments": [
         {
@@ -9347,7 +9347,7 @@
       "byteLength": 60279,
       "initializationSegment": {
         "byteLength": 1348,
-        "sha256": "bb78124304f2920a1617a379ca2222d8352d0e0399c2e9609c96a9b003111dbc",
+        "sha256": "057085e240ec2c605c96ed81f6a40b0a197994f6a55abde39f2fdfcd13b3045f",
         "tracks": [
           {
             "trackId": 1,
@@ -9381,7 +9381,7 @@
       },
       "deliveredInitializationSegment": {
         "byteLength": 1348,
-        "sha256": "bb78124304f2920a1617a379ca2222d8352d0e0399c2e9609c96a9b003111dbc"
+        "sha256": "057085e240ec2c605c96ed81f6a40b0a197994f6a55abde39f2fdfcd13b3045f"
       },
       "segments": [
         {
@@ -9666,7 +9666,7 @@
       "byteLength": 282422,
       "initializationSegment": {
         "byteLength": 1328,
-        "sha256": "c03ce0e6204be1e8dce996b66cc50f9f77279934bce4a0c0bd752aa7014b0b74",
+        "sha256": "3e7e7f72ea958b1d7b796e0e6818eb38e1e582c5ea3f32c6aefabfcfbb632385",
         "tracks": [
           {
             "trackId": 1,
@@ -9700,7 +9700,7 @@
       },
       "deliveredInitializationSegment": {
         "byteLength": 1328,
-        "sha256": "c03ce0e6204be1e8dce996b66cc50f9f77279934bce4a0c0bd752aa7014b0b74"
+        "sha256": "3e7e7f72ea958b1d7b796e0e6818eb38e1e582c5ea3f32c6aefabfcfbb632385"
       },
       "segments": [
         {
@@ -10572,7 +10572,7 @@
         "-level:v",
         "10",
         "-vf",
-        "scale=-2:36,format=yuv420p",
+        "scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p",
         "-b:v",
         "6000",
         "-maxrate",
@@ -10609,10 +10609,10 @@
       "mediaSegmentCount": 31,
       "videoTrackId": 1,
       "videoTimescale": 24000,
-      "byteLength": 236831,
+      "byteLength": 236944,
       "initializationSegment": {
-        "byteLength": 1346,
-        "sha256": "edf910eb4d1ba85822c73286c2223ad7f35560b077bf7f15bcbbe87d53f56184",
+        "byteLength": 1368,
+        "sha256": "84c027c8d6e5ac09b53668eebfc246b0114663ea6d6fe23438da9af5dcffd16a",
         "tracks": [
           {
             "trackId": 1,
@@ -10645,8 +10645,8 @@
         ]
       },
       "deliveredInitializationSegment": {
-        "byteLength": 1346,
-        "sha256": "edf910eb4d1ba85822c73286c2223ad7f35560b077bf7f15bcbbe87d53f56184"
+        "byteLength": 1368,
+        "sha256": "84c027c8d6e5ac09b53668eebfc246b0114663ea6d6fe23438da9af5dcffd16a"
       },
       "segments": [
         {
@@ -10655,7 +10655,7 @@
           "firstFragmentIndex": 0,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 20758
+          "byteLength": 20506
         },
         {
           "number": 1,
@@ -10663,7 +10663,7 @@
           "firstFragmentIndex": 6,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 19608
+          "byteLength": 19652
         },
         {
           "number": 2,
@@ -10671,7 +10671,7 @@
           "firstFragmentIndex": 12,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 19707
+          "byteLength": 19752
         },
         {
           "number": 3,
@@ -10679,7 +10679,7 @@
           "firstFragmentIndex": 18,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 10803
+          "byteLength": 10870
         },
         {
           "number": 4,
@@ -10687,7 +10687,7 @@
           "firstFragmentIndex": 24,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6246
+          "byteLength": 6361
         },
         {
           "number": 5,
@@ -10695,7 +10695,7 @@
           "firstFragmentIndex": 30,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6397
+          "byteLength": 6351
         },
         {
           "number": 6,
@@ -10703,7 +10703,7 @@
           "firstFragmentIndex": 36,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6346
+          "byteLength": 6401
         },
         {
           "number": 7,
@@ -10711,7 +10711,7 @@
           "firstFragmentIndex": 42,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6359
+          "byteLength": 6376
         },
         {
           "number": 8,
@@ -10719,7 +10719,7 @@
           "firstFragmentIndex": 48,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6312
+          "byteLength": 6308
         },
         {
           "number": 9,
@@ -10727,7 +10727,7 @@
           "firstFragmentIndex": 54,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6322
+          "byteLength": 6330
         },
         {
           "number": 10,
@@ -10735,7 +10735,7 @@
           "firstFragmentIndex": 60,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6290
+          "byteLength": 6300
         },
         {
           "number": 11,
@@ -10743,7 +10743,7 @@
           "firstFragmentIndex": 66,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6361
+          "byteLength": 6335
         },
         {
           "number": 12,
@@ -10751,7 +10751,7 @@
           "firstFragmentIndex": 72,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6355
+          "byteLength": 6398
         },
         {
           "number": 13,
@@ -10759,7 +10759,7 @@
           "firstFragmentIndex": 78,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6314
+          "byteLength": 6290
         },
         {
           "number": 14,
@@ -10767,7 +10767,7 @@
           "firstFragmentIndex": 84,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6303
+          "byteLength": 6278
         },
         {
           "number": 15,
@@ -10775,7 +10775,7 @@
           "firstFragmentIndex": 90,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6307
+          "byteLength": 6288
         },
         {
           "number": 16,
@@ -10783,7 +10783,7 @@
           "firstFragmentIndex": 96,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6311
+          "byteLength": 6343
         },
         {
           "number": 17,
@@ -10791,7 +10791,7 @@
           "firstFragmentIndex": 102,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6328
+          "byteLength": 6335
         },
         {
           "number": 18,
@@ -10799,7 +10799,7 @@
           "firstFragmentIndex": 108,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6344
+          "byteLength": 6337
         },
         {
           "number": 19,
@@ -10807,7 +10807,7 @@
           "firstFragmentIndex": 114,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6336
+          "byteLength": 6394
         },
         {
           "number": 20,
@@ -10815,7 +10815,7 @@
           "firstFragmentIndex": 120,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6312
+          "byteLength": 6277
         },
         {
           "number": 21,
@@ -10823,7 +10823,7 @@
           "firstFragmentIndex": 126,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6344
+          "byteLength": 6318
         },
         {
           "number": 22,
@@ -10831,7 +10831,7 @@
           "firstFragmentIndex": 132,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6309
+          "byteLength": 6319
         },
         {
           "number": 23,
@@ -10839,7 +10839,7 @@
           "firstFragmentIndex": 138,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6341
+          "byteLength": 6343
         },
         {
           "number": 24,
@@ -10847,7 +10847,7 @@
           "firstFragmentIndex": 144,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6334
+          "byteLength": 6306
         },
         {
           "number": 25,
@@ -10855,7 +10855,7 @@
           "firstFragmentIndex": 150,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6250
+          "byteLength": 6317
         },
         {
           "number": 26,
@@ -10863,7 +10863,7 @@
           "firstFragmentIndex": 156,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6355
+          "byteLength": 6346
         },
         {
           "number": 27,
@@ -10871,7 +10871,7 @@
           "firstFragmentIndex": 162,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6355
+          "byteLength": 6357
         },
         {
           "number": 28,
@@ -10879,7 +10879,7 @@
           "firstFragmentIndex": 168,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6513
+          "byteLength": 6489
         },
         {
           "number": 29,
@@ -10887,7 +10887,7 @@
           "firstFragmentIndex": 174,
           "fragmentCount": 6,
           "keyframeCount": 1,
-          "byteLength": 6265
+          "byteLength": 6299
         }
       ],
       "discardedPreroll": [],
@@ -10915,7 +10915,7 @@
         "leadingFragmentsWithoutVideo": 0,
         "fragmentsWithAKeyframeInside": [],
         "videoSamples": 4316,
-        "largestFragmentByteLength": 4663,
+        "largestFragmentByteLength": 4536,
         "firstVideoPresentationTime": 0,
         "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
         "startPlusDurationsMissesNextStartByTicks": {
@@ -11090,12 +11090,12 @@
       ],
       "identical": true,
       "byteLengths": [
-        1346,
-        1346
+        1368,
+        1368
       ],
       "sha256": [
-        "edf910eb4d1ba85822c73286c2223ad7f35560b077bf7f15bcbbe87d53f56184",
-        "edf910eb4d1ba85822c73286c2223ad7f35560b077bf7f15bcbbe87d53f56184"
+        "84c027c8d6e5ac09b53668eebfc246b0114663ea6d6fe23438da9af5dcffd16a",
+        "84c027c8d6e5ac09b53668eebfc246b0114663ea6d6fe23438da9af5dcffd16a"
       ]
     },
     {
@@ -11110,8 +11110,8 @@
         1328
       ],
       "sha256": [
-        "38975fc0535d12aa37700234f287cda80b467b6cda2bde1765f66d6d8989b648",
-        "38975fc0535d12aa37700234f287cda80b467b6cda2bde1765f66d6d8989b648"
+        "dc4943920ecaa93eeb55132008fd357b364c1fa0f49ed4a26ed27c3d0c26350f",
+        "dc4943920ecaa93eeb55132008fd357b364c1fa0f49ed4a26ed27c3d0c26350f"
       ]
     },
     {
@@ -11126,8 +11126,8 @@
         1348
       ],
       "sha256": [
-        "bb78124304f2920a1617a379ca2222d8352d0e0399c2e9609c96a9b003111dbc",
-        "bb78124304f2920a1617a379ca2222d8352d0e0399c2e9609c96a9b003111dbc"
+        "057085e240ec2c605c96ed81f6a40b0a197994f6a55abde39f2fdfcd13b3045f",
+        "057085e240ec2c605c96ed81f6a40b0a197994f6a55abde39f2fdfcd13b3045f"
       ]
     },
     {
@@ -11142,8 +11142,8 @@
         1305
       ],
       "sha256": [
-        "9b728e14aa1fa40af47ef4505af49f237dc73572f5186412738f2df38d8649a2",
-        "9b728e14aa1fa40af47ef4505af49f237dc73572f5186412738f2df38d8649a2"
+        "42959f1f86f813cd72d423cd305a5352a95427c44d5540b2aad9521d2094c66a",
+        "42959f1f86f813cd72d423cd305a5352a95427c44d5540b2aad9521d2094c66a"
       ]
     },
     {
@@ -11154,12 +11154,12 @@
       ],
       "identical": true,
       "byteLengths": [
-        1334,
-        1334
+        1357,
+        1357
       ],
       "sha256": [
-        "280fdd918c22795d9f692f5159e156db97044d3fb680e1d7811ca65a7685a208",
-        "280fdd918c22795d9f692f5159e156db97044d3fb680e1d7811ca65a7685a208"
+        "74024590609a54a45394b92568f7b06ec030db80ed568e5b8660d4791963b21e",
+        "74024590609a54a45394b92568f7b06ec030db80ed568e5b8660d4791963b21e"
       ]
     },
     {
@@ -11170,12 +11170,12 @@
       ],
       "identical": true,
       "byteLengths": [
-        3848,
-        3848
+        3870,
+        3870
       ],
       "sha256": [
-        "848e6a7b94faaa6a8243f99f0709e9a6013af207aa2b0bb1b2c0277c9035cab4",
-        "848e6a7b94faaa6a8243f99f0709e9a6013af207aa2b0bb1b2c0277c9035cab4"
+        "92c9bf195e51b79354923690828baecb3b460d02bdacc943cd1ca2cc8e25b3d4",
+        "92c9bf195e51b79354923690828baecb3b460d02bdacc943cd1ca2cc8e25b3d4"
       ]
     }
   ],
@@ -11188,12 +11188,12 @@
       ],
       "identical": false,
       "byteLengths": [
-        1346,
+        1368,
         1328
       ],
       "sha256": [
-        "edf910eb4d1ba85822c73286c2223ad7f35560b077bf7f15bcbbe87d53f56184",
-        "38975fc0535d12aa37700234f287cda80b467b6cda2bde1765f66d6d8989b648"
+        "84c027c8d6e5ac09b53668eebfc246b0114663ea6d6fe23438da9af5dcffd16a",
+        "dc4943920ecaa93eeb55132008fd357b364c1fa0f49ed4a26ed27c3d0c26350f"
       ]
     }
   ],

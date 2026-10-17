@@ -4,6 +4,7 @@ import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.copiedVideo;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.requestBuilder;
+import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.sdrDynamicRange;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.start;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variantJobBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerBuilder;
@@ -11,6 +12,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import build.buf.gen.streamarr.transcode.v1.AudioMode;
+import build.buf.gen.streamarr.transcode.v1.CompatibleBase;
+import build.buf.gen.streamarr.transcode.v1.DolbyVisionAbsent;
+import build.buf.gen.streamarr.transcode.v1.DolbyVisionConfiguration;
+import build.buf.gen.streamarr.transcode.v1.DolbyVisionPresent;
 import build.buf.gen.streamarr.transcode.v1.EncoderPreset;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
@@ -22,6 +27,7 @@ import build.buf.gen.streamarr.transcode.v1.KeyframePositionSource;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositions;
 import build.buf.gen.streamarr.transcode.v1.KeyframesUnavailable;
 import build.buf.gen.streamarr.transcode.v1.KeyframesUnavailableReason;
+import build.buf.gen.streamarr.transcode.v1.Presence;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeKeyframePositionsPart;
@@ -39,6 +45,7 @@ import build.buf.gen.streamarr.transcode.v1.VideoCodecFamily;
 import build.buf.gen.streamarr.transcode.v1.VideoCodecProfile;
 import build.buf.gen.streamarr.transcode.v1.VideoCodecTier;
 import build.buf.gen.streamarr.transcode.v1.VideoDecision;
+import build.buf.gen.streamarr.transcode.v1.VideoDynamicRange;
 import build.buf.gen.streamarr.transcode.v1.VideoMode;
 import build.buf.gen.streamarr.transcode.v1.WorkerRegistration;
 import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
@@ -628,6 +635,302 @@ class WorkerMediaSmokeTest {
     assertDecodes(media);
     assertThat(video(media).getCodec()).isEqualTo(codecFamily);
     assertThat(pixelFormatOf(media)).isEqualTo("yuv420p");
+  }
+
+  @Test
+  @DisplayName("Should upload BT.709 limited 8-bit video when a PQ source is encoded to SDR")
+  void shouldUploadBt709LimitedEightBitVideoWhenAPqSourceIsEncodedToSdr() throws Exception {
+    var source = hdr10SourceWithStaticMetadataOnlyInItsRecord();
+    var job = tenBitSdrSourceJob(source, "h264");
+    job.getExecutionBuilder().setTargetSegmentDurationSeconds(1).setMediaSegmentCount(2);
+    job.getDecisionBuilder()
+        .getVideoBuilder()
+        .setSourceDynamicRange(
+            VideoDynamicRange.newBuilder().setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_PQ))
+        .setOutputDynamicRange(
+            VideoDynamicRange.newBuilder()
+                .setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_SDR)
+                .setHdr10Plus(Presence.PRESENCE_ABSENT)
+                .setDolbyVisionAbsent(DolbyVisionAbsent.getDefaultInstance()));
+
+    var uploads = execute(engine(softwareCapabilities()), root, job.build());
+
+    var media = playable(uploads.contentOf(uploads.names()));
+    assertDecodes(media);
+    assertSdrVideo(media);
+  }
+
+  @ParameterizedTest(name = "{0} source, {1}")
+  @CsvSource({
+    "COMPATIBLE_BASE_SDR, h264",
+    "COMPATIBLE_BASE_SDR, hevc",
+    "COMPATIBLE_BASE_SDR, av1",
+    "COMPATIBLE_BASE_UNSPECIFIED, h264",
+    "COMPATIBLE_BASE_UNSPECIFIED, hevc",
+    "COMPATIBLE_BASE_UNSPECIFIED, av1"
+  })
+  @DisplayName("Should upload BT.709 limited video when an SDR or unspecified source is encoded")
+  void shouldUploadBt709LimitedVideoWhenAnSdrOrUnspecifiedSourceIsEncoded(
+      CompatibleBase sourceBase, String codecFamily) throws Exception {
+    var source = sdrColorSource(sourceBase);
+    var job = tenBitSdrSourceJob(source, codecFamily);
+    job.getExecutionBuilder().setTargetSegmentDurationSeconds(1).setMediaSegmentCount(2);
+    job.getDecisionBuilder()
+        .getVideoBuilder()
+        .setSourceDynamicRange(VideoDynamicRange.newBuilder().setCompatibleBase(sourceBase));
+
+    var uploads = execute(engine(softwareCapabilities()), root, job.build());
+
+    var media = playable(uploads.contentOf(uploads.names()));
+    assertDecodes(media);
+    assertSdrVideo(media);
+  }
+
+  private Path sdrColorSource(CompatibleBase sourceBase) throws Exception {
+    var source = root.resolve("sdr-color.mp4");
+    var arguments =
+        new ArrayList<>(
+            List.of(
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=64x36:rate=24:duration=2",
+                "-c:v",
+                "libx265",
+                "-preset",
+                "ultrafast",
+                "-pix_fmt",
+                "yuv420p10le",
+                "-x265-params",
+                "keyint=24:min-keyint=24:scenecut=0:log-level=error"));
+    if (sourceBase == CompatibleBase.COMPATIBLE_BASE_SDR) {
+      arguments.addAll(
+          List.of(
+              "-vf",
+              "scale=in_range=tv:out_range=pc",
+              "-color_range",
+              "pc",
+              "-color_primaries",
+              "bt709",
+              "-color_trc",
+              "bt709",
+              "-colorspace",
+              "bt709"));
+    }
+
+    runFfmpeg(arguments, source);
+    return source;
+  }
+
+  private static void assertSdrVideo(Path media) throws Exception {
+    assertThat(
+            videoStreamFields(
+                media, "pix_fmt,color_range,color_space,color_transfer,color_primaries"))
+        .containsExactlyInAnyOrderEntriesOf(
+            Map.of(
+                "pix_fmt", "yuv420p",
+                "color_range", "tv",
+                "color_space", "bt709",
+                "color_transfer", "bt709",
+                "color_primaries", "bt709"));
+  }
+
+  @ParameterizedTest(name = "{0} source, {1}")
+  @CsvSource({
+    "COMPATIBLE_BASE_PQ, h264",
+    "COMPATIBLE_BASE_PQ, hevc",
+    "COMPATIBLE_BASE_PQ, av1",
+    "COMPATIBLE_BASE_HLG, h264",
+    "COMPATIBLE_BASE_HLG, hevc",
+    "COMPATIBLE_BASE_HLG, av1"
+  })
+  @DisplayName(
+      "Should upload matching SDR initialization without HDR metadata when an HDR encode seeks")
+  void shouldUploadMatchingSdrInitializationWithoutHdrMetadataWhenAnHdrEncodeSeeks(
+      CompatibleBase sourceBase, String codecFamily) throws Exception {
+    var source = hdrColorSource(sourceBase);
+    addAmbientViewingEnvironment(source);
+    assertThat(streamSideData(source)).contains("Ambient viewing environment");
+    assertThat(frameSideDataPerFrame(source))
+        .isNotEmpty()
+        .allSatisfy(sideData -> assertThat(sideData).contains("Ambient viewing environment"));
+    if (sourceBase == CompatibleBase.COMPATIBLE_BASE_PQ) {
+      assertThat(frameSideDataPerFrame(source))
+          .anySatisfy(
+              sideData ->
+                  assertThat(sideData)
+                      .contains("Mastering display metadata", "Content light level metadata"));
+    }
+
+    var fromStart = tenBitSdrSourceJob(source, codecFamily);
+    fromStart.getExecutionBuilder().setTargetSegmentDurationSeconds(1).setMediaSegmentCount(3);
+    fromStart
+        .getDecisionBuilder()
+        .getVideoBuilder()
+        .setSourceDynamicRange(VideoDynamicRange.newBuilder().setCompatibleBase(sourceBase));
+    var replacement = fromStart.clone();
+    replacement.setJobAttemptId(toProto(UUID.randomUUID()));
+    replacement.getExecutionBuilder().setStartSequenceNumber(2);
+
+    var initialUploads = execute(engine(softwareCapabilities()), root, fromStart.build());
+    var replacementUploads = execute(engine(softwareCapabilities()), root, replacement.build());
+
+    assertThat(replacementUploads.names()).containsExactly("init.mp4", "segment2.m4s");
+    assertThat(replacementUploads.segments())
+        .containsEntry("init.mp4", initialUploads.segments().get("init.mp4"));
+    assertSdrUploads(initialUploads);
+    assertSdrUploads(replacementUploads);
+  }
+
+  private Path assertSdrUploads(MediaUploads uploads) throws Exception {
+    var media = playable(uploads.contentOf(uploads.names()));
+    assertDecodes(media);
+    assertSdrVideo(media);
+    assertThat(streamSideData(media))
+        .doesNotContain(
+            "Ambient viewing environment",
+            "Mastering display metadata",
+            "Content light level metadata");
+    assertThat(frameSideDataPerFrame(media))
+        .allSatisfy(
+            sideData ->
+                assertThat(sideData)
+                    .doesNotContain(
+                        "Ambient viewing environment",
+                        "Mastering display metadata",
+                        "Content light level metadata"));
+    for (var box : List.of("amve", "mdcv", "clli", "dvcC", "dvvC")) {
+      assertThat(
+              indexOf(uploads.segments().get("init.mp4"), box.getBytes(StandardCharsets.US_ASCII)))
+          .as("the SDR initialization segment's %s box", box)
+          .isNegative();
+    }
+
+    return media;
+  }
+
+  private Path hdrColorSource(CompatibleBase sourceBase) throws Exception {
+    var source = root.resolve("hdr-color.mp4");
+    var transfer =
+        switch (sourceBase) {
+          case COMPATIBLE_BASE_PQ -> "smpte2084";
+          case COMPATIBLE_BASE_HLG -> "arib-std-b67";
+          default -> throw new IllegalArgumentException("An HDR fixture requires PQ or HLG");
+        };
+    var metadata =
+        sourceBase == CompatibleBase.COMPATIBLE_BASE_PQ
+            ? ":master-display="
+                + HDR10_MASTERING_DISPLAY.x265Parameter()
+                + ":max-cll="
+                + HDR10_CONTENT_LIGHT_LEVEL.x265Parameter()
+            : "";
+    runFfmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=64x36:rate=24:duration=3",
+            "-c:v",
+            "libx265",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p10le",
+            "-color_primaries",
+            "bt2020",
+            "-color_trc",
+            transfer,
+            "-colorspace",
+            "bt2020nc",
+            "-x265-params",
+            "keyint=24:min-keyint=24:scenecut=0:log-level=error" + metadata),
+        source);
+    return source;
+  }
+
+  // FFmpeg reads amve but has no option to write it. These generated files have one video track
+  // and moov after mdat, so extending the sample entry does not move any media chunk.
+  private static void addAmbientViewingEnvironment(Path source) throws Exception {
+    var original = Files.readAllBytes(source);
+    assertThat(TopLevelBoxes.of(original))
+        .extracting(Box::type)
+        .containsSubsequence("mdat", "moov");
+    var stsd = indexOf(original, "stsd".getBytes(StandardCharsets.US_ASCII));
+    assertThat(ByteBuffer.wrap(original).getInt(stsd + 8)).as("sample entry count").isEqualTo(1);
+    var entry = sampleEntryTypeIndex(original) - 4;
+    var insertAt = entry + ByteBuffer.wrap(original).getInt(entry);
+    var ambient =
+        ByteBuffer.allocate(16)
+            .putInt(16)
+            .put("amve".getBytes(StandardCharsets.US_ASCII))
+            .putInt(1_000_000)
+            .putShort((short) 15635)
+            .putShort((short) 16450)
+            .array();
+    var amended = ByteBuffer.allocate(original.length + ambient.length);
+    amended
+        .put(original, 0, insertAt)
+        .put(ambient)
+        .put(original, insertAt, original.length - insertAt);
+    for (var type : List.of("moov", "trak", "mdia", "minf", "stbl", "stsd")) {
+      var start = indexOf(original, type.getBytes(StandardCharsets.US_ASCII)) - 4;
+      assertThat(start).as("the generated source's %s box", type).isNotNegative();
+      amended.putInt(start, amended.getInt(start) + ambient.length);
+    }
+
+    amended.putInt(entry, amended.getInt(entry) + ambient.length);
+    Files.write(source, amended.array());
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"h264", "hevc", "av1"})
+  @DisplayName(
+      "Should encode the SDR compatible base when a Dolby Vision profile 8.2 source is encoded")
+  void shouldEncodeTheSdrCompatibleBaseWhenADolbyVisionProfile82SourceIsEncoded(String codecFamily)
+      throws Exception {
+    var source = sampleEntryFixture(DOLBY_VISION_FIXTURE, "dvh1");
+    assertThat(
+            runToCompletion(
+                List.of(
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v:0",
+                    "-show_entries",
+                    "stream_side_data=dv_profile,dv_bl_signal_compatibility_id",
+                    "-of",
+                    "default=noprint_wrappers=1",
+                    source.toString())))
+        .contains("dv_profile=8", "dv_bl_signal_compatibility_id=2");
+    assertThat(frameSideDataPerFrame(source))
+        .isNotEmpty()
+        .allSatisfy(sideData -> assertThat(sideData).contains("Dolby Vision RPU Data"));
+    var job = tenBitSdrSourceJob(source, codecFamily);
+    job.getExecutionBuilder().setTargetSegmentDurationSeconds(1).setMediaSegmentCount(2);
+    job.getVariantBuilder().setWidth(64).setHeight(64);
+    job.getDecisionBuilder()
+        .getVideoBuilder()
+        .setSourceDynamicRange(
+            VideoDynamicRange.newBuilder()
+                .setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_SDR)
+                .setHdr10Plus(Presence.PRESENCE_ABSENT)
+                .setDolbyVisionPresent(
+                    DolbyVisionPresent.newBuilder()
+                        .setDeclared(
+                            DolbyVisionConfiguration.newBuilder()
+                                .setProfile(8)
+                                .setBaseLayerCompatibilityId(2)
+                                .setBaseLayer(true)
+                                .setRpu(true))
+                        .setObservedRpu(Presence.PRESENCE_PRESENT)));
+
+    var uploads = execute(engine(softwareCapabilities()), root, job.build());
+
+    var media = assertSdrUploads(uploads);
+    assertThat(streamSideData(media)).doesNotContain("DOVI configuration record");
+    assertThat(frameSideDataPerFrame(media))
+        .allSatisfy(sideData -> assertThat(sideData).doesNotContain("Dolby Vision RPU Data"));
   }
 
   @ParameterizedTest(name = "{0}")
@@ -2151,7 +2454,12 @@ class WorkerMediaSmokeTest {
   // An 8-bit encode of the codec family that forces the level, with the codec string that the
   // worker's encoder writes for it: High for H.264, and Main at the Main tier for H.265 and AV1.
   private static VideoDecision.Builder forcedSoftwareEncode(String codecFamily, int level) {
-    var video = VideoDecision.newBuilder().setMode(VideoMode.VIDEO_MODE_ENCODE).setLevel(level);
+    var video =
+        VideoDecision.newBuilder()
+            .setMode(VideoMode.VIDEO_MODE_ENCODE)
+            .setLevel(level)
+            .setSourceDynamicRange(VideoDynamicRange.getDefaultInstance())
+            .setOutputDynamicRange(sdrDynamicRange());
     return switch (codecFamily) {
       case "h264" ->
           video

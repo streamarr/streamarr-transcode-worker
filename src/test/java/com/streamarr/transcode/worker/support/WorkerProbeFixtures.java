@@ -10,10 +10,13 @@ import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
 import build.buf.gen.streamarr.transcode.v1.AudioDecision;
 import build.buf.gen.streamarr.transcode.v1.AudioMode;
 import build.buf.gen.streamarr.transcode.v1.CancelProbeCommand;
+import build.buf.gen.streamarr.transcode.v1.CompatibleBase;
 import build.buf.gen.streamarr.transcode.v1.ContainerFormat;
+import build.buf.gen.streamarr.transcode.v1.DolbyVisionAbsent;
 import build.buf.gen.streamarr.transcode.v1.EncoderPreset;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
 import build.buf.gen.streamarr.transcode.v1.MediaSourceRef;
+import build.buf.gen.streamarr.transcode.v1.Presence;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
@@ -30,6 +33,7 @@ import build.buf.gen.streamarr.transcode.v1.VariantSpec;
 import build.buf.gen.streamarr.transcode.v1.VideoCodecFamily;
 import build.buf.gen.streamarr.transcode.v1.VideoCodecProfile;
 import build.buf.gen.streamarr.transcode.v1.VideoDecision;
+import build.buf.gen.streamarr.transcode.v1.VideoDynamicRange;
 import build.buf.gen.streamarr.transcode.v1.VideoMode;
 import com.streamarr.transcode.engine.FfmpegRecordings.Recording;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
@@ -184,10 +188,20 @@ public final class WorkerProbeFixtures {
   public static VideoDecision.Builder encodedRecordingVideo() {
     return VideoDecision.newBuilder()
         .setMode(VideoMode.VIDEO_MODE_ENCODE)
+        .setSourceDynamicRange(VideoDynamicRange.getDefaultInstance())
+        .setOutputDynamicRange(sdrDynamicRange())
         .setCodecFamily(VideoCodecFamily.VIDEO_CODEC_FAMILY_H264)
         .setCodecProfile(VideoCodecProfile.VIDEO_CODEC_PROFILE_H264_HIGH)
         .setLevel(ENCODED_RECORDING_LEVEL)
         .setCodecString(ENCODED_RECORDING_CODEC_STRING);
+  }
+
+  public static VideoDynamicRange sdrDynamicRange() {
+    return VideoDynamicRange.newBuilder()
+        .setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_SDR)
+        .setHdr10Plus(Presence.PRESENCE_ABSENT)
+        .setDolbyVisionAbsent(DolbyVisionAbsent.getDefaultInstance())
+        .build();
   }
 
   private static VideoDecision.Builder recordingVideoFor(TranscodeMode mode) {

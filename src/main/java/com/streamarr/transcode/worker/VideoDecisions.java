@@ -6,6 +6,7 @@ import com.streamarr.transcode.engine.TranscodeMode;
 import com.streamarr.transcode.engine.VideoCodecProfile;
 import com.streamarr.transcode.engine.VideoCodecTier;
 import com.streamarr.transcode.engine.VideoDecision;
+import com.streamarr.transcode.engine.VideoDynamicRange;
 import java.util.Optional;
 
 // Translates the contract's video decision into the engine's, and refuses one that contradicts the
@@ -90,6 +91,17 @@ final class VideoDecisions {
       throw new InvalidJobSpecificationException("The encode carries no level");
     }
 
+    if (!video.hasSourceDynamicRange() || !video.hasOutputDynamicRange()) {
+      throw new InvalidJobSpecificationException(
+          "An encode requires source and output dynamic range");
+    }
+
+    var outputDynamicRange = VideoDynamicRanges.of(video.getOutputDynamicRange());
+    if (!outputDynamicRange.equals(VideoDynamicRange.sdr())) {
+      throw new InvalidJobSpecificationException(
+          "Only fully specified SDR video output without HDR enhancements is supported");
+    }
+
     var profile = codecProfile(video.getCodecProfile());
     if (!familyOf(profile).equals(video.getCodecFamily())) {
       throw new InvalidJobSpecificationException(
@@ -110,6 +122,8 @@ final class VideoDecisions {
         .tier(tier)
         .level(video.getLevel())
         .codecString(video.getCodecString())
+        .sourceDynamicRange(VideoDynamicRanges.of(video.getSourceDynamicRange()))
+        .outputDynamicRange(outputDynamicRange)
         .build();
   }
 

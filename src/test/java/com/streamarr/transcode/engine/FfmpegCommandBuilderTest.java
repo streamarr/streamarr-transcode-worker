@@ -2,6 +2,7 @@ package com.streamarr.transcode.engine;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.streamarr.transcode.engine.VideoDynamicRange.CompatibleBase;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -25,6 +26,8 @@ class FfmpegCommandBuilderTest {
 
   private static final AudioDecision NO_AUDIO =
       AudioDecision.builder().mode(AudioMode.NONE).codec(null).channels(0).bitrate(0L).build();
+  private static final String BT709_LIMITED_SCALE_OPTIONS =
+      ":out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709";
 
   private final FfmpegCommandBuilder builder =
       new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1));
@@ -211,7 +214,11 @@ class FfmpegCommandBuilderTest {
 
   static Stream<Arguments> fullTranscodeExpectedFlags() {
     return Stream.of(
-        Arguments.of("scale filter", new String[] {"-vf", "scale=-2:1080,format=yuv420p"}),
+        Arguments.of(
+            "scale filter",
+            new String[] {
+              "-vf", "scale=-2:1080" + BT709_LIMITED_SCALE_OPTIONS + ",format=yuv420p"
+            }),
         Arguments.of("forced IDR", new String[] {"-forced-idr", "1"}),
         Arguments.of("audio downmix to stereo", new String[] {"-ac", "2"}));
   }
@@ -240,7 +247,7 @@ class FfmpegCommandBuilderTest {
             "libx264");
 
     assertThat(cmd)
-        .contains("-vf", "scale=-2:720,format=yuv420p")
+        .contains("-vf", "scale=-2:720" + BT709_LIMITED_SCALE_OPTIONS + ",format=yuv420p")
         .contains("-b:v", "3000000")
         .contains("-bufsize", "6000000");
   }
@@ -268,7 +275,8 @@ class FfmpegCommandBuilderTest {
       String encoder) {
     var cmd = command(request(TranscodeMode.FULL_TRANSCODE).height(720).build(), encoder);
 
-    assertThat(videoFilter(cmd)).isEqualTo("scale=-2:720,format=yuv420p");
+    assertThat(videoFilter(cmd))
+        .isEqualTo("scale=-2:720" + BT709_LIMITED_SCALE_OPTIONS + ",format=yuv420p");
   }
 
   @ParameterizedTest(name = "{0}")
@@ -278,7 +286,80 @@ class FfmpegCommandBuilderTest {
   void shouldEndTheVideoFilterChainInNv12WhenAQsvOrVaapiEncoderRuns(String encoder) {
     var cmd = command(request(TranscodeMode.VIDEO_TRANSCODE).height(720).build(), encoder);
 
-    assertThat(videoFilter(cmd)).isEqualTo("scale=-2:720,format=nv12");
+    assertThat(videoFilter(cmd))
+        .isEqualTo("scale=-2:720" + BT709_LIMITED_SCALE_OPTIONS + ",format=nv12");
+  }
+
+  @ParameterizedTest(name = "{0} to {1}, {2}")
+  @MethodSource("toneMappedConversions")
+  @DisplayName(
+      "Should tone map to BT.709 limited planar video when an HDR source requests SDR output")
+  void shouldToneMapToBt709LimitedPlanarVideoWhenAnHdrSourceRequestsSdrOutput(
+      CompatibleBase source, CompatibleBase output, String encoder) {
+    var encode =
+        softwareEncode(encoder)
+            .sourceDynamicRange(dynamicRange(source))
+            .outputDynamicRange(dynamicRange(output));
+
+    var cmd = command(request(encoding(encode)).height(720).build(), encoder);
+
+    assertThat(videoFilter(cmd))
+        .isEqualTo(
+            "scale=-2:720,tonemapx=tonemap=mobius:peak=100:desat=0:t=bt709:m=bt709:p=bt709:r=tv:"
+                + "format=yuv420p,sidedata=mode=delete:type=AMBIENT_VIEWING_ENVIRONMENT");
+  }
+
+  private static Stream<Arguments> toneMappedConversions() {
+    return Stream.of(CompatibleBase.PQ, CompatibleBase.HLG, CompatibleBase.NONE)
+        .flatMap(source -> softwareEncodersFor(source, CompatibleBase.SDR));
+  }
+
+  @ParameterizedTest(name = "{0} to {1}, {2}")
+  @MethodSource("conversionsWithoutToneMapping")
+  @DisplayName("Should omit tone mapping when the source needs none")
+  void shouldOmitToneMappingWhenTheSourceNeedsNone(
+      CompatibleBase source, CompatibleBase output, String encoder) {
+    var encode =
+        softwareEncode(encoder)
+            .sourceDynamicRange(dynamicRange(source))
+            .outputDynamicRange(dynamicRange(output));
+
+    var cmd = command(request(encoding(encode)).height(720).build(), encoder);
+
+    assertThat(videoFilter(cmd))
+        .isEqualTo("scale=-2:720" + BT709_LIMITED_SCALE_OPTIONS + ",format=yuv420p");
+  }
+
+  private static Stream<Arguments> conversionsWithoutToneMapping() {
+    return Stream.of(CompatibleBase.SDR, CompatibleBase.UNSPECIFIED)
+        .flatMap(source -> softwareEncodersFor(source, CompatibleBase.SDR));
+  }
+
+  private static Stream<Arguments> softwareEncodersFor(
+      CompatibleBase source, CompatibleBase output) {
+    return Stream.of("libx264", "libx265", "libsvtav1")
+        .map(encoder -> Arguments.of(source, output, encoder));
+  }
+
+  private static VideoDynamicRange dynamicRange(CompatibleBase compatibleBase) {
+    return new VideoDynamicRange(
+        compatibleBase,
+        VideoDynamicRange.Presence.ABSENT,
+        new VideoDynamicRange.DolbyVision.Absent());
+  }
+
+  private static VideoDecision.Encode.EncodeBuilder softwareEncode(String encoder) {
+    return switch (encoder) {
+      case "libx264" -> VideoDecisionFixtures.encodeBuilder();
+      case "libx265" -> hevcEncode();
+      case "libsvtav1" ->
+          VideoDecisionFixtures.encodeBuilder()
+              .codecProfile(VideoCodecProfile.AV1_MAIN)
+              .tier(Optional.of(VideoCodecTier.MAIN))
+              .level(41)
+              .codecString("av01.0.09M.08");
+      default -> throw new AssertionError("No software encode for " + encoder);
+    };
   }
 
   @ParameterizedTest
@@ -292,7 +373,11 @@ class FfmpegCommandBuilderTest {
     assertThat(cmd)
         .containsSequence("-c:v", "copy")
         .doesNotContain("-vf", "-pix_fmt")
-        .noneMatch(argument -> argument.contains("format="));
+        .noneMatch(
+            argument ->
+                argument.contains("format=")
+                    || argument.contains("tonemap")
+                    || argument.contains("sidedata"));
   }
 
   @Test
@@ -347,6 +432,8 @@ class FfmpegCommandBuilderTest {
   void shouldForceTheLevelWhenLibsvtav1Encodes() {
     var encode =
         VideoDecision.Encode.builder()
+            .sourceDynamicRange(VideoDynamicRange.unspecified())
+            .outputDynamicRange(VideoDynamicRange.sdr())
             .codecProfile(VideoCodecProfile.AV1_MAIN)
             .tier(Optional.of(VideoCodecTier.MAIN))
             .level(41)
@@ -423,6 +510,8 @@ class FfmpegCommandBuilderTest {
 
   private static VideoDecision.Encode.EncodeBuilder hevcEncode() {
     return VideoDecision.Encode.builder()
+        .sourceDynamicRange(VideoDynamicRange.unspecified())
+        .outputDynamicRange(VideoDynamicRange.sdr())
         .codecProfile(VideoCodecProfile.HEVC_MAIN)
         .tier(Optional.empty())
         .level(41)
@@ -1185,7 +1274,7 @@ class FfmpegCommandBuilderTest {
         .isNotEmpty()
         .contains("-c:v", "libx264")
         .contains("-c:a", "copy")
-        .contains("-vf", "scale=-2:1080,format=yuv420p")
+        .contains("-vf", "scale=-2:1080" + BT709_LIMITED_SCALE_OPTIONS + ",format=yuv420p")
         .doesNotContain("-ac");
     assertThat(audioBitrate(cmd)).isEqualTo("0");
   }

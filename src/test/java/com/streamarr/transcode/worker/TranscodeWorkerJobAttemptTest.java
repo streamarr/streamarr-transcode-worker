@@ -23,10 +23,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 import build.buf.gen.streamarr.transcode.v1.AudioMode;
+import build.buf.gen.streamarr.transcode.v1.CompatibleBase;
+import build.buf.gen.streamarr.transcode.v1.DolbyVisionAbsent;
+import build.buf.gen.streamarr.transcode.v1.DolbyVisionConfiguration;
+import build.buf.gen.streamarr.transcode.v1.DolbyVisionPresent;
 import build.buf.gen.streamarr.transcode.v1.EncoderPreset;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest.EventCase;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
+import build.buf.gen.streamarr.transcode.v1.Presence;
 import build.buf.gen.streamarr.transcode.v1.SegmentContentType;
 import build.buf.gen.streamarr.transcode.v1.SubtitleMode;
 import build.buf.gen.streamarr.transcode.v1.TranscodeDecision;
@@ -37,6 +42,7 @@ import build.buf.gen.streamarr.transcode.v1.VideoCodecFamily;
 import build.buf.gen.streamarr.transcode.v1.VideoCodecProfile;
 import build.buf.gen.streamarr.transcode.v1.VideoCodecTier;
 import build.buf.gen.streamarr.transcode.v1.VideoDecision;
+import build.buf.gen.streamarr.transcode.v1.VideoDynamicRange;
 import build.buf.gen.streamarr.transcode.v1.VideoMode;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
@@ -449,7 +455,157 @@ class TranscodeWorkerJobAttemptTest {
         Arguments.of("codec family", unary(VideoDecision.Builder::clearCodecFamily)),
         Arguments.of("codec profile", unary(VideoDecision.Builder::clearCodecProfile)),
         Arguments.of("level", unary(VideoDecision.Builder::clearLevel)),
-        Arguments.of("codec string", unary(VideoDecision.Builder::clearCodecString)));
+        Arguments.of("codec string", unary(VideoDecision.Builder::clearCodecString)),
+        Arguments.of("source dynamic range", unary(VideoDecision.Builder::clearSourceDynamicRange)),
+        Arguments.of(
+            "output dynamic range", unary(VideoDecision.Builder::clearOutputDynamicRange)));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = CompatibleBase.class,
+      names = {"COMPATIBLE_BASE_SDR", "UNRECOGNIZED"},
+      mode = EnumSource.Mode.EXCLUDE)
+  @DisplayName(
+      "Should refuse the job when an encode requests an unsupported output compatible base")
+  void shouldRefuseTheJobWhenAnEncodeRequestsAnUnsupportedOutputCompatibleBase(
+      CompatibleBase compatibleBase) throws Exception {
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getDecisionBuilder()
+        .getVideoBuilder()
+        .setSourceDynamicRange(VideoDynamicRange.getDefaultInstance())
+        .setOutputDynamicRange(
+            VideoDynamicRange.newBuilder()
+                .setCompatibleBase(compatibleBase)
+                .setHdr10Plus(Presence.PRESENCE_ABSENT)
+                .setDolbyVisionAbsent(DolbyVisionAbsent.getDefaultInstance()));
+
+    assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
+  @ParameterizedTest
+  @MethodSource("unsupportedSdrOutputs")
+  @DisplayName("Should refuse the job when SDR output does not exclude HDR enhancements")
+  void shouldRefuseTheJobWhenSdrOutputDoesNotExcludeHdrEnhancements(VideoDynamicRange output)
+      throws Exception {
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getDecisionBuilder().getVideoBuilder().setOutputDynamicRange(output);
+
+    assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
+  static Stream<VideoDynamicRange> unsupportedSdrOutputs() {
+    var sdr =
+        VideoDynamicRange.newBuilder()
+            .setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_SDR)
+            .setHdr10Plus(Presence.PRESENCE_ABSENT)
+            .setDolbyVisionAbsent(DolbyVisionAbsent.getDefaultInstance());
+    return Stream.of(
+        sdr.clone().clearHdr10Plus().build(),
+        sdr.clone().setHdr10Plus(Presence.PRESENCE_PRESENT).build(),
+        sdr.clone().clearDolbyVision().build(),
+        sdr.clone().setDolbyVisionPresent(DolbyVisionPresent.getDefaultInstance()).build());
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("sourceDynamicRanges")
+  @DisplayName("Should follow the server's compatible base when an encode carries HDR details")
+  void shouldFollowTheServersCompatibleBaseWhenAnEncodeCarriesHdrDetails(
+      String description, VideoDynamicRange source, boolean toneMapped) throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getDecisionBuilder().getVideoBuilder().setSourceDynamicRange(source);
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      var command = launcher.command(fromProto(job.getJobAttemptId()));
+      var filter = command.get(command.indexOf("-vf") + 1);
+      assertThat(filter.contains("tonemapx=")).as(description).isEqualTo(toneMapped);
+    }
+  }
+
+  static Stream<Arguments> sourceDynamicRanges() {
+    var pq = VideoDynamicRange.newBuilder().setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_PQ);
+    var declared =
+        DolbyVisionConfiguration.newBuilder()
+            .setProfile(5)
+            .setLevel(6)
+            .setBaseLayerCompatibilityId(0)
+            .setBaseLayer(true)
+            .setRpu(true);
+    var dolbyVision =
+        VideoDynamicRange.newBuilder()
+            .setHdr10Plus(Presence.PRESENCE_ABSENT)
+            .setDolbyVisionPresent(
+                DolbyVisionPresent.newBuilder()
+                    .setDeclared(declared)
+                    .setObservedRpu(Presence.PRESENCE_PRESENT));
+    return Stream.of(
+        Arguments.of("unspecified", VideoDynamicRange.getDefaultInstance(), false),
+        Arguments.of("PQ", pq.build(), true),
+        Arguments.of("HDR10+", pq.clone().setHdr10Plus(Presence.PRESENCE_PRESENT).build(), true),
+        Arguments.of(
+            "profile 5",
+            dolbyVision.clone().setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_NONE).build(),
+            true),
+        Arguments.of(
+            "profile 8.2",
+            dolbyVision
+                .clone()
+                .setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_SDR)
+                .setDolbyVisionPresent(
+                    DolbyVisionPresent.newBuilder()
+                        .setDeclared(declared.clone().setProfile(8).setBaseLayerCompatibilityId(2))
+                        .setObservedRpu(Presence.PRESENCE_ABSENT))
+                .build(),
+            false),
+        Arguments.of(
+            "RPU without declared configuration",
+            pq.clone()
+                .setDolbyVisionPresent(
+                    DolbyVisionPresent.newBuilder().setObservedRpu(Presence.PRESENCE_PRESENT))
+                .build(),
+            true),
+        Arguments.of(
+            "incomplete declared configuration",
+            pq.clone()
+                .setDolbyVisionPresent(
+                    DolbyVisionPresent.newBuilder()
+                        .setDeclared(DolbyVisionConfiguration.getDefaultInstance()))
+                .build(),
+            true),
+        Arguments.of(
+            "HLG without enhancements",
+            VideoDynamicRange.newBuilder()
+                .setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_HLG)
+                .setHdr10Plus(Presence.PRESENCE_ABSENT)
+                .setDolbyVisionAbsent(DolbyVisionAbsent.getDefaultInstance())
+                .build(),
+            true));
+  }
+
+  @ParameterizedTest
+  @MethodSource("unknownSourceDynamicRangeValues")
+  @DisplayName("Should refuse the job when source dynamic range carries an unknown enum value")
+  void shouldRefuseTheJobWhenSourceDynamicRangeCarriesAnUnknownEnumValue(VideoDynamicRange source)
+      throws Exception {
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getDecisionBuilder().getVideoBuilder().setSourceDynamicRange(source);
+
+    assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
+  static Stream<VideoDynamicRange> unknownSourceDynamicRangeValues() {
+    return Stream.of(
+        VideoDynamicRange.newBuilder().setCompatibleBaseValue(100).build(),
+        VideoDynamicRange.newBuilder().setHdr10PlusValue(100).build(),
+        VideoDynamicRange.newBuilder()
+            .setDolbyVisionPresent(DolbyVisionPresent.newBuilder().setObservedRpuValue(100))
+            .build());
   }
 
   @ParameterizedTest(name = "{0}")

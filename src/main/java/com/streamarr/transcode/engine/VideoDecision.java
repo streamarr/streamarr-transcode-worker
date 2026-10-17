@@ -24,6 +24,8 @@ public sealed interface VideoDecision {
       @NonNull VideoCodecProfile codecProfile,
       @NonNull Optional<VideoCodecTier> tier,
       int level,
-      @NonNull String codecString)
+      @NonNull String codecString,
+      @NonNull VideoDynamicRange sourceDynamicRange,
+      @NonNull VideoDynamicRange outputDynamicRange)
       implements VideoDecision {}
 }
