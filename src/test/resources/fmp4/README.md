@@ -67,11 +67,11 @@ not start a fragment, a verified encoder's keyframe that does not start a closed
 initialization-segment pairs, or an ADR side claim.
 
 Every FFmpeg and ffprobe invocation happens inside
-`streamarr/streamarr-transcode-worker:0.1.0-SNAPSHOT@sha256:9d2d286c…caa`
-(FFmpeg 8.1.2-Jellyfin, SVT-AV1 v4.1.0) unless `WORKER_IMAGE` names another; `expected.json`
+`streamarr/streamarr-transcode-worker:0.1.0-SNAPSHOT@sha256:6248ba61…64c`
+(FFmpeg 8.1.3-Jellyfin, SVT-AV1 v4.2.0) unless `WORKER_IMAGE` names another; `expected.json`
 records the image. Homebrew's FFmpeg is never used. Sources are synthesized with lavfi (`testsrc`
-64x36, silent mono AAC at 48 kHz) and are not delivered. Two complete recordings in separate
-directories produced byte-identical streams, sources and `expected.json`.
+64x36, silent mono AAC at 48 kHz) and are not delivered. Encoder threading is fixed so
+re-recordings can be compared byte for byte.
 
 ## Recipe
 
@@ -88,15 +88,19 @@ ffmpeg -hide_banner -nostdin -loglevel error
   copy with encoded audio (16): -c:v copy -bsf:v h264_mp4toannexb -tag:v avc1 -strict unofficial
           -c:a aac -ac 1 -b:a 8k
   x264:   -c:v libx264 -preset faster -tag:v avc1 -profile:v high -level:v 10
-          -vf scale=-2:36,format=yuv420p -b:v 6000 -maxrate 6000 -bufsize 12000 -c:a aac -ac 1 -b:a 8k
+          -vf scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p
+          -b:v 6000 -maxrate 6000 -bufsize 12000 -c:a aac -ac 1 -b:a 8k
           -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6
           -sc_threshold:v:0 0 -g:v:0 145                      (fixture 11: -g:v:0 143)
-  svtav1: -c:v libsvtav1 -preset 10 -level:v 20 -vf scale=-2:36,format=yuv420p -crf 35 -maxrate 6000 -svtav1-params mbr-overshoot-pct=0:lp=1
+  svtav1: -c:v libsvtav1 -preset 10 -level:v 20
+          -vf scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p
+          -crf 35 -maxrate 6000 -svtav1-params mbr-overshoot-pct=0:lp=1
           -c:a aac -ac 1 -b:a 8k
           -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6
           -g:v:0 145 -keyint_min:v:0 145
   x265:   -c:v libx265 -preset veryfast -tag:v hvc1 -profile:v main
-          -vf scale=-2:36,format=yuv420p -b:v 6000 -maxrate 6000 -bufsize 12000 -c:a aac -ac 1 -b:a 8k
+          -vf scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p
+          -b:v 6000 -maxrate 6000 -bufsize 12000 -c:a aac -ac 1 -b:a 8k
           -r:v:0 23.976023976023978 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6
           -x265-params no-scenecut=1:no-open-gop=1:level-idc=10:high-tier=0:pools=none:frame-threads=1:log-level=error
           -g:v:0 145                                           (fixture 13c: -g:v:0 143)
@@ -108,6 +112,8 @@ Each encode forces the codec profile, tier and level that the job carries, as th
 the 64x36 sources at 23.976 fps they are the values each encoder chooses when nothing is forced:
 H.264 High at level 1.0 (`avc1.64000A`), AV1 Main at level 2.0 (`av01.0.00M.08`), and H.265 Main at
 level 1.0 in the Main tier. Forcing them left the libx264 and SVT-AV1 recordings byte-identical.
+The scale filter converts the sources to BT.709 limited range before encoding in 8-bit 4:2:0,
+matching the worker's SDR output contract.
 
 The H.264 and HEVC output carries the playable sample entry of ADR 0013's tag rule: `avc1` and
 `hvc1`. FFmpeg writes `avc1` for libx264 anyway, so the tag left the libx264 recordings
@@ -124,7 +130,7 @@ different keyframes would deliver different initialization segments, which ADR 0
 samples keep their SEI messages. `deliveredInitializationSegment` in `expected.json` gives the
 length and SHA-256 of the initialization segment that the producer delivers. It differs from the
 recorded one only for the libx265 recordings, whose record holds libx265's settings as an SEI
-message: 1,421 bytes instead of 3,848.
+message: 1,443 bytes instead of 3,870.
 
 An encode forces its keyframes with FFmpeg's list mode: every segment boundary k × 6 in whole
 seconds, for each k from the attempt's start sequence number K up to, not including, the media
@@ -241,7 +247,7 @@ Timescale 24000 unless stated. `n@t` means segment n starts at t seconds.
 | 6 | `06-encode-audio-tail.fmp4` | 0 | 20 s video, 23.5 s audio. The recording ends in 4 audio-only fragments (19.95, 20.95, 21.95, 22.95 s), which join segment 3. No fragment without video precedes the first segment. |
 | 7 | `07-copy-start0.fmp4` | 0 | 2.002 s-GOP 23.976 fps copy from the start: 11 segments of 3 keyframes each. |
 | 7b | `07-copy-seek30.fmp4` | 5 | Stream-copy replacement attempt at `-ss 30`. The seek lands on the keyframe at 28.028 s (segment 4 < 5). That keyframe fragment and the non-sync fragment after it (2 fragments) are discarded preroll. Segments 5–10 carry exactly 7's video samples at the same ticks. Their audio is the same packets at the same times, but each fragment starts one AAC frame earlier (see findings). |
-| 8 | (pairs over 1, 5b, 7, 9, 13, 16) | – | `initializationSegmentIdentityPairs`: `ftyp`+`moov` is byte-identical between the start-0 and seek recordings for libx264 (1346 B), stream copy (1328 B), the MPEG-TS stream copy (1305 B), stream copy with encoded audio (1348 B), SVT-AV1 (1334 B) and libx265 (3848 B). `initializationSegmentDifferencePairs`: the encode and copy initialization segments of the same source differ. Each initialization segment has a zero edit list and zero `trex` defaults. |
+| 8 | (pairs over 1, 5b, 7, 9, 13, 16) | – | `initializationSegmentIdentityPairs`: `ftyp`+`moov` is byte-identical between the start-0 and seek recordings for libx264 (1368 B), stream copy (1328 B), the MPEG-TS stream copy (1305 B), stream copy with encoded audio (1348 B), SVT-AV1 (1357 B) and libx265 (3870 B). `initializationSegmentDifferencePairs`: the encode and copy initialization segments of the same source differ. Each initialization segment has a zero edit list and zero `trex` defaults. |
 | 9 | `09-svtav1-vfr.fmp4` | 0 | The VFR source through SVT-AV1 (145-frame GOP + the list): 1582 frames, exactly one keyframe in every interval, segment starts on exactly the ticks of 3 (libx264). SVT-AV1 honours the forced keyframe. No B-frame reordering, so composition offsets are 0. |
 | 9b | `09-svtav1-vfr-seek30.fmp4` | 5 | The same as a replacement attempt from segment 5, seeking one period early (`-ss 24`): starts at 24.024 s, 1007 frames, no padding. Segment 4 (one keyframe) is discarded preroll. Every delivered segment, 5–10, starts on exactly 9's ticks, including segment 5 at 30.030 s, which a seek to 30 s itself missed (see Observations). |
 | 10 | `10-copy-gop-exceeds-period.fmp4` | 0 | A copy with a keyframe every 10.01 s. The sync-first fragment at 20.02 s (fragment 20) is segment 3 while 2 is expected. It closes segment 1 (10.01–20.02 s, fragments 10–19), so segments 0 and 1 are delivered, then grouping fails with `SKIPPED_SEGMENT_NUMBER` and fragment 20 onwards is never grouped. |
@@ -264,7 +270,7 @@ Box facts every recording shares (useful for the reader):
 - `moov` holds `mvhd`, two `trak`s (video track 1, audio track 2), `mvex` and `udta`. The video sample entry is `avc1` (libx264 and copies), `av01` (SVT-AV1) or `hvc1` (libx265).
 - Every `traf` has `tfhd` flags `0x02003a` (default-base-is-moof plus default duration, size and flags), `tfdt` version 1 and exactly one `trun`.
 - Every `trun` is version 1 (signed composition offsets) with a data offset. Sync status is carried by `trun` first_sample_flags (0x4) when present, otherwise by the `tfhd` default flags. Per-sample flags (0x400) never occur.
-- The largest fragment is 4.7 KB (17b), and 3.0 KB outside 17 and 17b; every keyframe starts a fragment, except the keyframe at 30.030 s inside 16b's first fragment.
+- The largest fragment is 4,536 bytes (17b), and 2,934 bytes outside 17 and 17b; every keyframe starts a fragment, except the keyframe at 30.030 s inside 16b's first fragment.
 - In every recording from the start except 5b the first audio `tfdt` is 2^64 − 1024: the unsigned wrap of −1024, the AAC priming. 5b copies the ADTS audio of an MPEG-TS source, which carries no priming frame, so its audio starts at 0.
 
 ## Verified encoders
@@ -313,8 +319,8 @@ later each time and eventually skip a whole interval. When the list from the var
 ends before the last advertised boundary, every encoder therefore takes floor(P × fps),
 keyframe-verified or not. Every attempt of the variant takes that GOP, even one whose own list fits:
 libx265 writes its settings into the initialization segment, and 13 and 13c, keyint=145 and
-keyint=143, differ from byte 1,205 of their 3,848-byte initialization segments. Those settings are an SEI
-message in the record, which the producer removes, so the worker delivers the same 1,421-byte
+keyint=143, differ from byte 1,208 of their 3,870-byte initialization segments. Those settings are an SEI
+message in the record, which the producer removes, so the worker delivers the same 1,443-byte
 initialization segment for both.
 
 ## The HLS muxer as differential evidence
@@ -380,9 +386,11 @@ the muxer receives. The model reproduces the observed HLS cut list in all 35 HLS
    frame at or after N·P, which lies less than one frame past it (6.006, 12.012 … s), so hlsenc can
    never cut there: it cuts at the next forced keyframe, one period later, and from segment 1 on its
    numbers run one behind the grid's (the video-only runs of 3 and 9, 5a's pipe-keyframes-with-audio
-   run). The HLS recipe's expression measures `t` from the same first frame as hlsenc, so its forced
-   keyframes sit one frame after the list's (6.048 against 6.006 s) and hlsenc cuts at each of them,
-   one frame after the grid (3's and 5a's hls-recipe runs). In 4, the source keyframe at 18.017 s lies
+   run). The HLS recipe's expression measures `t` from the same first frame as hlsenc, so its
+   first later keyframe sits one frame after the list's (6.048 against 6.006 s), and hlsenc cuts at
+   each of its own keyframes. The two recipes encode different keyframes, so their B-frame
+   reordering can also differ; mapping cuts by decode ordinal can shift the reported reference
+   time by more than one frame (3's and 5a's hls-recipe runs). In 4, the source keyframe at 18.017 s lies
    inside [18, 18.041), so hlsenc cuts one keyframe later (19.018 s).
 2. **Seek recordings** (1b, 9b, 13d, 7b). hlsenc measures from the seek's first frame (24.024 s for
    the encodes, 28.028 s for 7b), not from the grid. The lists of 1b, 9b and 13d force the frames the

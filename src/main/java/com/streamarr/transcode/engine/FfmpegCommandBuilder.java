@@ -274,8 +274,11 @@ public class FfmpegCommandBuilder {
     var request = job.request();
     // Every variant is 8-bit 4:2:0: an encoder otherwise keeps a 10-bit or 4:4:4 source's format,
     // and few hardware decoders accept 10-bit H.264.
-    var videoFilter =
-        "scale=-2:" + request.height() + ",format=" + traitsOf(job).eightBitPixelFormat();
+    var colorConversion =
+        toneMaps(job)
+            ? ""
+            : ":out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709";
+    var videoFilter = "scale=-2:" + request.height() + colorConversion + "," + videoFormat(job);
     cmd.addAll(List.of("-vf", videoFilter));
     var bitrate = String.valueOf(request.bitrate());
     // SVT-AV1 supports a bitrate cap only in CRF mode. Its default CRF is 35.
@@ -290,6 +293,24 @@ public class FfmpegCommandBuilder {
             "-b:v", bitrate,
             "-maxrate", bitrate,
             "-bufsize", String.valueOf(request.bitrate() * 2)));
+  }
+
+  private static String videoFormat(TranscodeJob job) {
+    if (toneMaps(job)) {
+      return "tonemapx=tonemap=mobius:peak=100:desat=0:t=bt709:m=bt709:p=bt709:r=tv:format=yuv420p,"
+          + "sidedata=mode=delete:type=AMBIENT_VIEWING_ENVIRONMENT";
+    }
+
+    return "format=" + traitsOf(job).eightBitPixelFormat();
+  }
+
+  private static boolean toneMaps(TranscodeJob job) {
+    return job.request().transcodeDecision().videoDecision() instanceof VideoDecision.Encode encode
+        && encode.outputDynamicRange().compatibleBase() == VideoDynamicRange.CompatibleBase.SDR
+        && switch (encode.sourceDynamicRange().compatibleBase()) {
+          case PQ, HLG, NONE -> true;
+          case SDR, UNSPECIFIED -> false;
+        };
   }
 
   // The rate the frame-count GOP is computed from; without -fps_mode FFmpeg then emits the

@@ -2,7 +2,7 @@
 # Regenerates the fragmented-MP4 grouping fixtures (ADR 0037 "Tests substitute the process").
 #
 # Every FFmpeg and ffprobe run happens inside the pinned worker image, so every recorded byte comes
-# from the worker's own FFmpeg 8.1.2-Jellyfin. The host needs only Docker and Node (the major in
+# from the worker's own FFmpeg 8.1.3-Jellyfin. The host needs only Docker and Node (the major in
 # buildpacks/ffmpeg/.nvmrc, no packages): analyze.mjs reads the recorded boxes itself, groups the
 # fragments by the ADR rules, measures the HLS muxer's cut points for the same sources, and writes
 # expected.json.
@@ -16,7 +16,7 @@
 # Sources are synthesized with lavfi inside the container; nothing is downloaded.
 set -euo pipefail
 
-IMAGE="${WORKER_IMAGE:-streamarr/streamarr-transcode-worker:0.1.0-SNAPSHOT@sha256:9d2d286c4f192e5e359cd7ead44ca05c7d0c720d491c3d5b4a6becfffcd61caa}"
+IMAGE="${WORKER_IMAGE:-streamarr/streamarr-transcode-worker:0.1.0-SNAPSHOT@sha256:6248ba61f42b1e2b4130b95fd0b2d20aa7f4488625eacbe13e7c0b073d9c164c}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 FIXTURES="$(cd "$HERE/../resources/fmp4" && pwd)"
 WORK="${WORK:-$(mktemp -d)}"
@@ -55,9 +55,10 @@ DET=(-threads 1)
 # scale number 10 for SVT-AV1, and veryfast for libx265. Each encode forces the codec profile, tier
 # and level that a job carries. For 64x36 at 23.976 fps these are H.264 1.0, AV1 2.0 and H.265 1.0.
 # H.264 and HEVC encodes carry the playable sample entry of ADR 0013's tag rule: avc1 and hvc1.
-X264=(-c:v libx264 -preset faster -tag:v avc1 -profile:v high -level:v 10 -vf scale=-2:36,format=yuv420p -b:v 6000 -maxrate 6000 -bufsize 12000)
-SVT=(-c:v libsvtav1 -preset 10 -level:v 20 -vf scale=-2:36,format=yuv420p -crf 35 -maxrate 6000 -svtav1-params mbr-overshoot-pct=0:lp=1)
-X265=(-c:v libx265 -preset veryfast -tag:v hvc1 -profile:v main -vf scale=-2:36,format=yuv420p -b:v 6000 -maxrate 6000 -bufsize 12000)
+SDR_VIDEO_FILTER=scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p
+X264=(-c:v libx264 -preset faster -tag:v avc1 -profile:v high -level:v 10 -vf "$SDR_VIDEO_FILTER" -b:v 6000 -maxrate 6000 -bufsize 12000)
+SVT=(-c:v libsvtav1 -preset 10 -level:v 20 -vf "$SDR_VIDEO_FILTER" -crf 35 -maxrate 6000 -svtav1-params mbr-overshoot-pct=0:lp=1)
+X265=(-c:v libx265 -preset veryfast -tag:v hvc1 -profile:v main -vf "$SDR_VIDEO_FILTER" -b:v 6000 -maxrate 6000 -bufsize 12000)
 # The worker's libx265 parameters, which close its GOPs, turn off its scene cuts and force the level
 # and Main tier, followed by the fixture-only ones that keep it single-threaded and quiet. FFmpeg
 # keeps only the last -x265-params, so the fixture-only keys join the worker's string instead of

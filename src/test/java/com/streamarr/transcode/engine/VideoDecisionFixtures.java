@@ -13,6 +13,8 @@ final class VideoDecisionFixtures {
   /** An H.264 High encode at level 1.0, which every libx264 recording declares. */
   static VideoDecision.Encode.EncodeBuilder encodeBuilder() {
     return VideoDecision.Encode.builder()
+        .sourceDynamicRange(VideoDynamicRange.unspecified())
+        .outputDynamicRange(VideoDynamicRange.sdr())
         .codecProfile(VideoCodecProfile.H264_HIGH)
         .tier(Optional.empty())
         .level(ENCODED_RECORDING_LEVEL)

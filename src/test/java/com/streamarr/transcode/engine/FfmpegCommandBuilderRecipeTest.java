@@ -136,6 +136,8 @@ class FfmpegCommandBuilderRecipeTest {
     return switch (encoder) {
       case "libsvtav1" ->
           VideoDecision.Encode.builder()
+              .sourceDynamicRange(VideoDynamicRange.unspecified())
+              .outputDynamicRange(VideoDynamicRange.sdr())
               .codecProfile(VideoCodecProfile.AV1_MAIN)
               .tier(Optional.of(VideoCodecTier.MAIN))
               .level(20)
@@ -143,6 +145,8 @@ class FfmpegCommandBuilderRecipeTest {
               .build();
       case "libx265" ->
           VideoDecision.Encode.builder()
+              .sourceDynamicRange(VideoDynamicRange.unspecified())
+              .outputDynamicRange(VideoDynamicRange.sdr())
               .codecProfile(VideoCodecProfile.HEVC_MAIN)
               .tier(Optional.of(VideoCodecTier.MAIN))
               .level(10)

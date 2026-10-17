@@ -3,6 +3,7 @@ package com.streamarr.transcode.worker;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.SOURCE_NAMESPACE_ID;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.requestBuilder;
+import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.sdrDynamicRange;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.sourceBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variantJobBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -25,6 +26,7 @@ import build.buf.gen.streamarr.transcode.v1.VideoCodecFamily;
 import build.buf.gen.streamarr.transcode.v1.VideoCodecProfile;
 import build.buf.gen.streamarr.transcode.v1.VideoCodecTier;
 import build.buf.gen.streamarr.transcode.v1.VideoDecision;
+import build.buf.gen.streamarr.transcode.v1.VideoDynamicRange;
 import build.buf.gen.streamarr.transcode.v1.VideoMode;
 import build.buf.gen.streamarr.transcode.v1.WorkerRegistration;
 import build.buf.gen.streamarr.transcode.v1.WorkerVerifiedVideoEncoder;
@@ -287,7 +289,11 @@ class WorkerImageIT {
   // The encode that a 160x90 variant at 24 fps and 500 kb/s needs: H.264 High at level 1.3, or AV1
   // Main at level 2.0, with the codec string that the worker's encoder writes for it.
   private static VideoDecision.Builder presetVariantVideo(String codecFamily) {
-    var video = VideoDecision.newBuilder().setMode(VideoMode.VIDEO_MODE_ENCODE);
+    var video =
+        VideoDecision.newBuilder()
+            .setMode(VideoMode.VIDEO_MODE_ENCODE)
+            .setSourceDynamicRange(VideoDynamicRange.getDefaultInstance())
+            .setOutputDynamicRange(sdrDynamicRange());
     return switch (codecFamily) {
       case "h264" ->
           video
