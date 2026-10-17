@@ -654,8 +654,8 @@ class WorkerMediaSmokeTest {
     var replacement = execute(engine(softwareCapabilities()), root, job.build());
 
     assertThat(replacement.names()).containsExactly("init.mp4", "segment2.m4s", "segment3.m4s");
-    assertThat(replacement.segments().get("init.mp4"))
-        .isEqualTo(initial.segments().get("init.mp4"));
+    assertThat(replacement.segments())
+        .containsEntry("init.mp4", initial.segments().get("init.mp4"));
     for (var uploads : List.of(initial, replacement)) {
       var media = playable(uploads.contentOf(uploads.names()));
       assertDecodes(media);
