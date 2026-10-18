@@ -373,7 +373,7 @@ class WorkerProbeFrameRateTest {
     long timestamp = 0;
     for (var interval : intervals) {
       timestamp += interval;
-      output.append("%d,%d,100,___,\n".formatted(timestamp, timestamp));
+      output.append("%d,%d,100,___,".formatted(timestamp, timestamp)).append('\n');
     }
 
     return output.toString();
