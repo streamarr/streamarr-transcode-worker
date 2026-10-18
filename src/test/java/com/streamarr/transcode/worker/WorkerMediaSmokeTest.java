@@ -869,6 +869,10 @@ class WorkerMediaSmokeTest {
       CompatibleBase sourceBase, String codecFamily) throws Exception {
     var source = hdrColorSource(sourceBase);
     addAmbientViewingEnvironment(source);
+    assertThat(video(source).getDynamicRange().getCompatibleBase()).isEqualTo(sourceBase);
+    assertThat(videoStreamFields(source, "color_primaries,color_space"))
+        .containsExactlyInAnyOrderEntriesOf(
+            Map.of("color_primaries", "bt2020", "color_space", "bt2020nc"));
     assertThat(streamSideData(source)).contains("Ambient viewing environment");
     assertThat(frameSideDataPerFrame(source))
         .isNotEmpty()
@@ -949,6 +953,8 @@ class WorkerMediaSmokeTest {
             "lavfi",
             "-i",
             "testsrc2=size=64x36:rate=24:duration=3",
+            "-vf",
+            "setparams=color_primaries=bt2020:color_trc=" + transfer + ":colorspace=bt2020nc",
             "-c:v",
             "libx265",
             "-preset",
