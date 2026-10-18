@@ -15,6 +15,7 @@ import java.util.HexFormat;
 import java.util.Set;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Named;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -188,12 +189,10 @@ class FfprobeExecutorCodecStringTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @CsvSource({
-      "h264, 01 42 c0 33 ff e0 00",
-      "hevc, 01 02 20 00 00 00 b0 00 00 00 00 00 7b f0 00 fc fd fa fa 00 00 0f 00",
-    })
-    @DisplayName("Should report no codec string when the record has no parameter sets")
-    void shouldReportNoCodecStringWhenTheRecordHasNoParameterSets(String codec, String extradata) {
+    @MethodSource("absentOrIncompleteParameterSets")
+    @DisplayName("Should report no codec string when parameter sets are absent or incomplete")
+    void shouldReportNoCodecStringWhenParameterSetsAreAbsentOrIncomplete(
+        String codec, String extradata) {
       var video = stream(codec, extradata);
 
       assertThat(video.hasCodecString()).isFalse();
@@ -207,20 +206,23 @@ class FfprobeExecutorCodecStringTest {
       assertThat(video.hasCodecString()).isFalse();
     }
 
-    @ParameterizedTest(name = "{0} {1}")
-    @CsvSource({
-      "h264, 01 64 00 1f ff e1 00 40 67",
-      "h264, 01 64 00 1f ff e1 00 00",
-      "h264, 01 64 00 1f ff e1 00",
-      "hevc, 01 02 20 00 00 00 b0 00 00 00 00 00 7b f0 00 fc fd fa fa 00 00 0f 01 a0 00 01 00 40",
-      "hevc, 01 02 20 00 00 00 b0 00 00 00 00 00 7b f0 00 fc fd fa fa 00 00 0f 01 a0",
-    })
-    @DisplayName("Should report no codec string when the record ends inside its parameter sets")
-    void shouldReportNoCodecStringWhenTheRecordEndsInsideItsParameterSets(
-        String codec, String extradata) {
-      var video = stream(codec, extradata);
-
-      assertThat(video.hasCodecString()).isFalse();
+    private static Stream<Arguments> absentOrIncompleteParameterSets() {
+      return Stream.of(
+          Arguments.of(Named.of("AVC without parameter sets", "h264"), "01 42 c0 33 ff e0 00"),
+          Arguments.of(
+              Named.of("HEVC without parameter sets", "hevc"),
+              "01 02 20 00 00 00 b0 00 00 00 00 00 7b f0 00 fc fd fa fa 00 00 0f 00"),
+          Arguments.of(
+              Named.of("AVC truncated parameter set", "h264"), "01 64 00 1f ff e1 00 40 67"),
+          Arguments.of(Named.of("AVC empty parameter set", "h264"), "01 64 00 1f ff e1 00 00"),
+          Arguments.of(
+              Named.of("AVC truncated parameter-set length", "h264"), "01 64 00 1f ff e1 00"),
+          Arguments.of(
+              Named.of("HEVC truncated parameter set", "hevc"),
+              "01 02 20 00 00 00 b0 00 00 00 00 00 7b f0 00 fc fd fa fa 00 00 0f 01 a0 00 01 00 40"),
+          Arguments.of(
+              Named.of("HEVC truncated parameter-set array", "hevc"),
+              "01 02 20 00 00 00 b0 00 00 00 00 00 7b f0 00 fc fd fa fa 00 00 0f 01 a0"));
     }
   }
 
