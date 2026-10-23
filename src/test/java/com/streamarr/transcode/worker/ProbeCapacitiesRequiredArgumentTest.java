@@ -32,11 +32,27 @@ class ProbeCapacitiesRequiredArgumentTest {
 
   static Stream<Arguments> callsLackingARequiredArgument() {
     return Stream.of(
-        Arguments.of("clock", (ThrowingCallable) () -> builder().clock(null).build()),
+        Arguments.of(
+            "clock",
+            (ThrowingCallable)
+                () ->
+                    ProbeCapacities.builder()
+                        .backgroundProbeCapacity(new BackgroundProbeCapacity.Adaptive(4))
+                        .onChange(() -> {})
+                        .build()),
         Arguments.of(
             "backgroundProbeCapacity",
-            (ThrowingCallable) () -> builder().backgroundProbeCapacity(null).build()),
-        Arguments.of("onChange", (ThrowingCallable) () -> builder().onChange(null).build()),
+            (ThrowingCallable)
+                () -> ProbeCapacities.builder().clock(CLOCK).onChange(() -> {}).build()),
+        Arguments.of(
+            "onChange",
+            (ThrowingCallable)
+                () ->
+                    ProbeCapacities.builder()
+                        .clock(CLOCK)
+                        .backgroundProbeCapacity(new BackgroundProbeCapacity.Adaptive(4))
+                        .build()),
+        Arguments.of("clock", (ThrowingCallable) () -> new ProbeSummary(null)),
         Arguments.of("kind", (ThrowingCallable) () -> capacities().tryAcquire(null)),
         Arguments.of("kind", (ThrowingCallable) () -> capacities().release(null)),
         Arguments.of("jobAttemptId", (ThrowingCallable) () -> capacities().jobAttemptStarted(null)),
@@ -52,14 +68,11 @@ class ProbeCapacitiesRequiredArgumentTest {
             "timing", (ThrowingCallable) () -> new ProductionSpeedWindow(CLOCK).add(null)));
   }
 
-  private static ProbeCapacities.ProbeCapacitiesBuilder builder() {
+  private static ProbeCapacities capacities() {
     return ProbeCapacities.builder()
         .clock(CLOCK)
         .backgroundProbeCapacity(new BackgroundProbeCapacity.Adaptive(4))
-        .onChange(() -> {});
-  }
-
-  private static ProbeCapacities capacities() {
-    return builder().build();
+        .onChange(() -> {})
+        .build();
   }
 }

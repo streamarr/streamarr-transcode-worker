@@ -255,9 +255,31 @@ class ProbeCapacitiesTest {
     clock.advance(Duration.ofSeconds(30));
     var before = capacities.granted().backgroundProbeCapacity();
 
-    produce(capacities, attempt, 10, 2.2);
+    produce(capacities, attempt, 20, 2.2);
 
     assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(before);
+    assertThat(capacities.takeBrakeCount())
+        .as("only the brake at the attempt's start")
+        .isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName(
+      "Should grow the background probe capacity again when a slow job attempt recovers above the"
+          + " floor")
+  void shouldGrowTheBackgroundProbeCapacityAgainWhenASlowJobAttemptRecoversAboveTheFloor() {
+    var capacities = adaptive(16);
+    var attempt = UUID.randomUUID();
+    capacities.jobAttemptStarted(attempt);
+    produce(capacities, attempt, 6, 1.0);
+    produce(capacities, attempt, 20, 3.0);
+    clock.advance(Duration.ofSeconds(30));
+    var before = capacities.granted().backgroundProbeCapacity();
+    acquire(capacities, ProbeKind.BACKGROUND, before);
+
+    capacities.release(ProbeKind.BACKGROUND);
+
+    assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(before + 1);
   }
 
   @Test
