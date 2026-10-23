@@ -12,7 +12,7 @@ public record ProbeCommand(
   }
 
   /** A command at the worker's own CPU priority. */
-  public ProbeCommand(@NonNull ProbeTool tool, @NonNull List<String> arguments) {
+  public ProbeCommand(ProbeTool tool, List<String> arguments) {
     this(tool, arguments, CpuPriority.NORMAL);
   }
 
