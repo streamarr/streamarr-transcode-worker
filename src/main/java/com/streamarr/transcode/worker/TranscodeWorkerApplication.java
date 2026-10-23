@@ -41,12 +41,16 @@ public class TranscodeWorkerApplication {
     var settings = TranscodeWorkerSettings.fromEnvironment(System.getenv());
     var worker = settings.workerConfiguration();
     log.info(
-        "The worker runs {} job attempts, {} playback probes and {} at once",
+        "The worker runs {} job attempts, {} playback probes, {} and one keyframe packet scan"
+            + " at once, and no keyframe packet scan while a job attempt runs",
         worker.availableSlots(),
         ProbeCapacities.PLAYBACK_PROBE_CAPACITY,
         switch (worker.backgroundProbeCapacity()) {
           case BackgroundProbeCapacity.Adaptive(var maximum) ->
-              "an adaptive number of background probes, from 1 to " + maximum;
+              "an adaptive number of background probes, starting at "
+                  + Math.min(ProbeCapacities.STARTING_BACKGROUND_PROBE_CAPACITY, maximum)
+                  + " and kept from 1 to "
+                  + maximum;
           case BackgroundProbeCapacity.Fixed(var capacity) ->
               capacity + " background probes, as TRANSCODE_WORKER_PROBE_CAPACITY fixes";
         });

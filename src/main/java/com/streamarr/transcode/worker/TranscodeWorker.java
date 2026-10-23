@@ -256,13 +256,14 @@ public final class TranscodeWorker implements AutoCloseable {
             interval ->
                 log.info(
                     "Probes in the last {}: {} started, {} finished, failures {}, average time {}"
-                        + " ms, {} running; capacities {}; {} brakes",
+                        + " ms, {} running; {} playback slots, capacities {}; {} brakes",
                     PROBE_SUMMARY_INTERVAL,
                     interval.started(),
                     interval.finished(),
                     interval.failures(),
                     interval.averageDuration().toMillis(),
                     interval.running(),
+                    configuration.availableSlots(),
                     probeCapacities.granted(),
                     probeCapacities.takeBrakeCount()));
   }

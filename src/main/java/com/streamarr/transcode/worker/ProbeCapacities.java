@@ -31,9 +31,9 @@ import lombok.NonNull;
 final class ProbeCapacities {
 
   static final int PLAYBACK_PROBE_CAPACITY = 2;
+  static final int STARTING_BACKGROUND_PROBE_CAPACITY = 4;
   static final double SPEED_FLOOR = 2.10;
 
-  private static final int STARTING_BACKGROUND_PROBE_CAPACITY = 4;
   private static final int IDLE_KEYFRAME_PACKET_SCAN_CAPACITY = 1;
   private static final Duration GROWTH_HOLD_AFTER_BRAKE = Duration.ofSeconds(30);
   private static final Duration IDLE_BEFORE_KEYFRAME_PACKET_SCANS = Duration.ofSeconds(30);
