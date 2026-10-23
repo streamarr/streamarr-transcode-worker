@@ -21,6 +21,7 @@ import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.ProbeCapacityChanged;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbePriority;
+import com.streamarr.transcode.engine.MonotonicClock;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import com.streamarr.transcode.fixtures.SteppedClock;
 import com.streamarr.transcode.probe.FfprobeExecutor;
@@ -28,7 +29,6 @@ import com.streamarr.transcode.worker.support.ControlledProbeProcess;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -242,7 +242,7 @@ class TranscodeWorkerProbeCapacityTest {
   @DisplayName("Should count started, finished and failed probes when the worker runs probes")
   void shouldCountStartedFinishedAndFailedProbesWhenTheWorkerRunsProbes() throws Exception {
     var held = processBuilder().running(true).build();
-    var summary = new ProbeSummary(Clock.systemUTC());
+    var summary = new ProbeSummary(MonotonicClock.system());
 
     try (var worker =
         workerBuilder(tempDir)

@@ -1,8 +1,6 @@
 package com.streamarr.transcode.engine;
 
 import java.time.Duration;
-import java.time.Instant;
-import java.time.InstantSource;
 import lombok.NonNull;
 
 /**
@@ -14,31 +12,30 @@ import lombok.NonNull;
  */
 final class ProductionTimer {
 
-  private final InstantSource clock;
+  private final MonotonicClock clock;
 
   // Guarded by this monitor.
-  private Instant lapStart;
-  private Instant pausedAt;
+  private long lapStartNanos;
+  private long pausedAtNanos;
   private Duration pausedInLap = Duration.ZERO;
 
-  ProductionTimer(@NonNull InstantSource clock) {
+  ProductionTimer(@NonNull MonotonicClock clock) {
     this.clock = clock;
-    this.lapStart = clock.instant();
+    this.lapStartNanos = clock.nanoTime();
   }
 
   synchronized void pause() {
-    pausedAt = clock.instant();
+    pausedAtNanos = clock.nanoTime();
   }
 
   synchronized void resume() {
-    pausedInLap = pausedInLap.plus(Duration.between(pausedAt, clock.instant()));
+    pausedInLap = pausedInLap.plus(clock.since(pausedAtNanos));
   }
 
   /** The production time since the previous lap, which starts the next lap. */
   synchronized Duration lap() {
-    var now = clock.instant();
-    var production = Duration.between(lapStart, now).minus(pausedInLap);
-    lapStart = now;
+    var production = clock.since(lapStartNanos).minus(pausedInLap);
+    lapStartNanos = clock.nanoTime();
     pausedInLap = Duration.ZERO;
     return production;
   }

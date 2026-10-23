@@ -1,32 +1,20 @@
 package com.streamarr.transcode.fixtures;
 
-import java.time.Clock;
+import com.streamarr.transcode.engine.MonotonicClock;
 import java.time.Duration;
-import java.time.Instant;
-import java.time.ZoneId;
-import java.time.ZoneOffset;
 
-/** A clock that stands still until the test advances it. Safe to read from any thread. */
-public final class SteppedClock extends Clock {
+/** A monotonic clock that stands still until the test advances it. Safe to read from any thread. */
+public final class SteppedClock implements MonotonicClock {
 
-  private volatile Instant now = Instant.parse("2026-10-16T12:00:00Z");
+  // A reading far from zero, as System.nanoTime() gives, so no code may treat zero as unset.
+  private volatile long nanos = 7_000_000_000_000L;
 
   public void advance(Duration duration) {
-    now = now.plus(duration);
+    nanos += duration.toNanos();
   }
 
   @Override
-  public ZoneId getZone() {
-    return ZoneOffset.UTC;
-  }
-
-  @Override
-  public Clock withZone(ZoneId zone) {
-    return this;
-  }
-
-  @Override
-  public Instant instant() {
-    return now;
+  public long nanoTime() {
+    return nanos;
   }
 }

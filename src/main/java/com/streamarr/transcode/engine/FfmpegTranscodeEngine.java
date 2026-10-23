@@ -67,6 +67,7 @@ public class FfmpegTranscodeEngine {
             .videoDecision(request.transcodeDecision().videoDecision())
             .memoryBudget(memoryBudget)
             .sink(sink)
+            .clock(MonotonicClock.system())
             .start();
     log.info(
         "Started transcode for session {} variant {} job attempt {} (encoder: {}, PID: {})",

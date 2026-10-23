@@ -2,9 +2,8 @@ package com.streamarr.transcode.worker;
 
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
-import java.time.Clock;
+import com.streamarr.transcode.engine.MonotonicClock;
 import java.time.Duration;
-import java.time.Instant;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.Map;
@@ -19,21 +18,21 @@ import lombok.NonNull;
  */
 final class ProbeSummary {
 
-  private final Clock clock;
-  private final Map<UUID, Instant> running = new HashMap<>();
+  private final MonotonicClock clock;
+  private final Map<UUID, Long> running = new HashMap<>();
   private final Map<ProbeFailure, Integer> failures = new EnumMap<>(ProbeFailure.class);
   private int started;
   private int finished;
   private int timedProbes;
   private Duration timedTotal = Duration.ZERO;
 
-  ProbeSummary(@NonNull Clock clock) {
+  ProbeSummary(@NonNull MonotonicClock clock) {
     this.clock = clock;
   }
 
   synchronized void started(@NonNull UUID attemptId) {
     started++;
-    running.put(attemptId, clock.instant());
+    running.put(attemptId, clock.nanoTime());
   }
 
   /** Counts a sent result. A probe that the worker refused before it started has no start. */
@@ -49,7 +48,7 @@ final class ProbeSummary {
     }
 
     timedProbes++;
-    timedTotal = timedTotal.plus(Duration.between(startedAt, clock.instant()));
+    timedTotal = timedTotal.plus(clock.since(startedAt));
   }
 
   /** Empty when no probe started, finished or ran during the interval. */

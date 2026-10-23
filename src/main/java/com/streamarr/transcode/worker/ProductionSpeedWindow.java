@@ -1,9 +1,8 @@
 package com.streamarr.transcode.worker;
 
+import com.streamarr.transcode.engine.MonotonicClock;
 import com.streamarr.transcode.engine.ProductionTiming;
-import java.time.Clock;
 import java.time.Duration;
-import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.OptionalDouble;
@@ -20,16 +19,16 @@ final class ProductionSpeedWindow {
   static final Duration WINDOW = Duration.ofSeconds(15);
   private static final int MINIMUM_SEGMENTS = 2;
 
-  private final Clock clock;
+  private final MonotonicClock clock;
   private final Deque<FinishedSegment> segments = new ArrayDeque<>();
   private Duration produced = Duration.ZERO;
 
-  ProductionSpeedWindow(@NonNull Clock clock) {
+  ProductionSpeedWindow(@NonNull MonotonicClock clock) {
     this.clock = clock;
   }
 
   void add(@NonNull ProductionTiming timing) {
-    segments.addLast(new FinishedSegment(clock.instant(), timing));
+    segments.addLast(new FinishedSegment(clock.nanoTime(), timing));
     produced = produced.plus(timing.productionTime());
   }
 
@@ -55,12 +54,11 @@ final class ProductionSpeedWindow {
   }
 
   private void dropSegmentsBeforeTheWindow() {
-    var start = clock.instant().minus(WINDOW);
     while (segments.size() > MINIMUM_SEGMENTS
-        && segments.peekFirst().finishedAt().isBefore(start)) {
+        && clock.since(segments.peekFirst().finishedAtNanos()).compareTo(WINDOW) > 0) {
       segments.removeFirst();
     }
   }
 
-  private record FinishedSegment(Instant finishedAt, ProductionTiming timing) {}
+  private record FinishedSegment(long finishedAtNanos, ProductionTiming timing) {}
 }

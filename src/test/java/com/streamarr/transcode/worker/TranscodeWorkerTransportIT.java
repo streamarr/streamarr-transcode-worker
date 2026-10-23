@@ -7,6 +7,7 @@ import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.fileCon
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.streamarr.transcode.engine.MonotonicClock;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import com.streamarr.transcode.worker.support.WorkerApplicationControlPlane;
 import java.io.IOException;
@@ -151,6 +152,7 @@ class TranscodeWorkerTransportIT {
         .configuration(configuration)
         .engine(engine(ScriptedProcessLauncher.running()))
         .ffprobe(fileContentsProducer())
+        .clock(MonotonicClock.system())
         .build();
   }
 

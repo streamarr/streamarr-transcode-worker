@@ -2,6 +2,7 @@ package com.streamarr.transcode.worker;
 
 import com.streamarr.transcode.engine.FfmpegCommandBuilder;
 import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
+import com.streamarr.transcode.engine.MonotonicClock;
 import com.streamarr.transcode.engine.ProcessBuilderLauncher;
 import com.streamarr.transcode.engine.TranscodeCapabilityService;
 import com.streamarr.transcode.probe.FfprobeExecutor;
@@ -83,6 +84,7 @@ public class TranscodeWorkerApplication {
         .ffprobe(
             FfprobeExecutor.forBinaries(
                 Path.of(settings.ffprobePath()), Path.of(settings.ffmpegPath())))
+        .clock(MonotonicClock.system())
         .build();
   }
 

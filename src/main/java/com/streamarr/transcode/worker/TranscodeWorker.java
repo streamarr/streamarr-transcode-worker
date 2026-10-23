@@ -36,6 +36,7 @@ import com.streamarr.transcode.engine.AttemptOutcome.Stopped;
 import com.streamarr.transcode.engine.DeliveryCancellation;
 import com.streamarr.transcode.engine.EncoderBackend;
 import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
+import com.streamarr.transcode.engine.MonotonicClock;
 import com.streamarr.transcode.engine.ProducedSegment;
 import com.streamarr.transcode.engine.Producer;
 import com.streamarr.transcode.engine.ProducerFailure;
@@ -51,7 +52,6 @@ import io.grpc.stub.ClientResponseObserver;
 import io.grpc.stub.StreamObserver;
 import java.io.IOException;
 import java.net.InetSocketAddress;
-import java.time.Clock;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -109,16 +109,15 @@ public final class TranscodeWorker implements AutoCloseable {
       @NonNull FfprobeExecutor ffprobe,
       @NonNull WorkerRuntime runtime,
       ProbeSummary probeSummary,
-      Clock clock) {
+      @NonNull MonotonicClock clock) {
     this.configuration = configuration;
     this.engine = engine;
     this.ffprobe = ffprobe;
     this.runtime = runtime;
-    var workerClock = clock == null ? Clock.systemUTC() : clock;
-    this.probeSummary = probeSummary == null ? new ProbeSummary(workerClock) : probeSummary;
+    this.probeSummary = probeSummary == null ? new ProbeSummary(clock) : probeSummary;
     this.probeCapacities =
         ProbeCapacities.builder()
-            .clock(workerClock)
+            .clock(clock)
             .backgroundProbeCapacity(configuration.backgroundProbeCapacity())
             .onChange(this::sendProbeCapacityChange)
             .build();

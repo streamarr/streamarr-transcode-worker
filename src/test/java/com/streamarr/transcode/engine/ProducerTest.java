@@ -128,10 +128,18 @@ class ProducerTest {
         Arguments.of(
             "encodedFrameRate",
             producerThatMustNotLaunch()
-                .videoDecision(VideoDecisionFixtures.encodeBuilder().build())),
+                .videoDecision(VideoDecisionFixtures.encodeBuilder().build())
+                .clock(MonotonicClock.system())),
         Arguments.of(
             "videoDecision",
-            producerThatMustNotLaunch().encodedFrameRate(Optional.<OutputFrameRate>empty())));
+            producerThatMustNotLaunch()
+                .encodedFrameRate(Optional.<OutputFrameRate>empty())
+                .clock(MonotonicClock.system())),
+        Arguments.of(
+            "clock",
+            producerThatMustNotLaunch()
+                .encodedFrameRate(Optional.<OutputFrameRate>empty())
+                .videoDecision(VideoDecisionFixtures.encodeBuilder().build())));
   }
 
   private static Producer.ProducerBuilder producerThatMustNotLaunch() {
@@ -3063,7 +3071,8 @@ class ProducerTest {
         .encodedFrameRate(Optional.<OutputFrameRate>empty())
         .videoDecision(new VideoDecision.Copy(0, RecordingFixtures.ENCODED_RECORDING_CODEC_STRING))
         .memoryBudget(SegmentMemoryBudget.forSlots(1))
-        .sink(sink);
+        .sink(sink)
+        .clock(MonotonicClock.system());
   }
 
   // Replays the recording through a producer and waits for its outcome, whichever it is.

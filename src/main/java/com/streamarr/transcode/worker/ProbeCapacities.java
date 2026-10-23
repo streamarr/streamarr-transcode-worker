@@ -2,16 +2,15 @@ package com.streamarr.transcode.worker;
 
 import build.buf.gen.streamarr.transcode.v1.BackgroundProbeCapacityControl;
 import com.netflix.concurrency.limits.limit.AIMDLimit;
+import com.streamarr.transcode.engine.MonotonicClock;
 import com.streamarr.transcode.engine.ProductionTiming;
 import com.streamarr.transcode.probe.ProbeKind;
-import java.time.Clock;
 import java.time.Duration;
-import java.time.Instant;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
-import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
 import lombok.Builder;
@@ -38,7 +37,7 @@ final class ProbeCapacities {
   private static final Duration GROWTH_HOLD_AFTER_BRAKE = Duration.ofSeconds(30);
   private static final Duration IDLE_BEFORE_KEYFRAME_PACKET_SCANS = Duration.ofSeconds(30);
 
-  private final Clock clock;
+  private final MonotonicClock clock;
   private final Runnable onChange;
   private final BackgroundLimit backgroundLimit;
 
@@ -47,14 +46,13 @@ final class ProbeCapacities {
   private final Set<UUID> slowJobAttempts = new HashSet<>();
   private final Map<ProbeKind, Integer> running = new EnumMap<>(ProbeKind.class);
   private int keyframePacketScanCapacity = IDLE_KEYFRAME_PACKET_SCAN_CAPACITY;
-  private Instant growthHeldUntil = Instant.MIN;
-  private Instant lastBrake = Instant.MIN;
-  private Optional<Instant> lastJobAttemptEnd = Optional.empty();
+  private OptionalLong lastBrakeNanos = OptionalLong.empty();
+  private OptionalLong lastJobAttemptEndNanos = OptionalLong.empty();
   private int brakes;
 
   @Builder
   private ProbeCapacities(
-      @NonNull Clock clock,
+      @NonNull MonotonicClock clock,
       @NonNull BackgroundProbeCapacity backgroundProbeCapacity,
       @NonNull Runnable onChange) {
     this.clock = clock;
@@ -116,7 +114,7 @@ final class ProbeCapacities {
           jobAttempts.remove(jobAttemptId);
           slowJobAttempts.remove(jobAttemptId);
           if (jobAttempts.isEmpty()) {
-            lastJobAttemptEnd = Optional.of(clock.instant());
+            lastJobAttemptEndNanos = OptionalLong.of(clock.nanoTime());
           }
         });
   }
@@ -142,7 +140,7 @@ final class ProbeCapacities {
           }
 
           slowJobAttempts.add(jobAttemptId);
-          if (!clock.instant().isBefore(lastBrake.plus(ProductionSpeedWindow.WINDOW))) {
+          if (hasBeenSinceLastBrake(ProductionSpeedWindow.WINDOW)) {
             brake();
           }
         });
@@ -156,8 +154,8 @@ final class ProbeCapacities {
             return;
           }
 
-          var idleSince = lastJobAttemptEnd.orElseThrow();
-          if (!clock.instant().isBefore(idleSince.plus(IDLE_BEFORE_KEYFRAME_PACKET_SCANS))) {
+          var idleSince = lastJobAttemptEndNanos.orElseThrow();
+          if (clock.since(idleSince).compareTo(IDLE_BEFORE_KEYFRAME_PACKET_SCANS) >= 0) {
             keyframePacketScanCapacity = IDLE_KEYFRAME_PACKET_SCAN_CAPACITY;
           }
         });
@@ -190,7 +188,7 @@ final class ProbeCapacities {
 
   // Guarded by this monitor.
   private boolean isGrowthAllowed() {
-    return slowJobAttempts.isEmpty() && !clock.instant().isBefore(growthHeldUntil);
+    return slowJobAttempts.isEmpty() && hasBeenSinceLastBrake(GROWTH_HOLD_AFTER_BRAKE);
   }
 
   // Guarded by this monitor.
@@ -199,10 +197,14 @@ final class ProbeCapacities {
       return;
     }
 
-    var now = clock.instant();
-    growthHeldUntil = now.plus(GROWTH_HOLD_AFTER_BRAKE);
-    lastBrake = now;
+    lastBrakeNanos = OptionalLong.of(clock.nanoTime());
     brakes++;
+  }
+
+  // Guarded by this monitor.
+  private boolean hasBeenSinceLastBrake(Duration interval) {
+    return lastBrakeNanos.isEmpty()
+        || clock.since(lastBrakeNanos.getAsLong()).compareTo(interval) >= 0;
   }
 
   private void changeCapacities(Runnable mutation) {

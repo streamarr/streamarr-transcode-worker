@@ -11,7 +11,6 @@ import com.streamarr.transcode.engine.ReadingEnding.TruncatedOutput;
 import com.streamarr.transcode.engine.SegmentAssembler.Closing;
 import java.io.IOException;
 import java.time.Duration;
-import java.time.InstantSource;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -107,7 +106,7 @@ public final class Producer {
    *     the attempt as an output mismatch, before it delivers anything, when it declares other
    *     video
    * @param memoryBudget the worker's segment memory, which every producer of the worker shares
-   * @param clock the clock that times each media segment's production; the system clock when unset
+   * @param clock the clock that times each media segment's production
    * @throws TranscodeException when FFmpeg cannot be started
    */
   @Builder(buildMethodName = "start")
@@ -123,7 +122,7 @@ public final class Producer {
       @NonNull VideoDecision videoDecision,
       @NonNull SegmentMemoryBudget memoryBudget,
       @NonNull SegmentSink sink,
-      InstantSource clock) {
+      @NonNull MonotonicClock clock) {
     var settings =
         Settings.builder()
             .jobAttemptId(jobAttemptId)
@@ -138,7 +137,7 @@ public final class Producer {
             .sink(sink)
             .memoryBudget(memoryBudget)
             .stallTimeout(stallTimeout)
-            .clock(clock == null ? InstantSource.system() : clock)
+            .clock(clock)
             .build();
     var ffmpeg =
         FfmpegProcess.builder()
@@ -747,5 +746,5 @@ public final class Producer {
       SegmentSink sink,
       SegmentMemoryBudget memoryBudget,
       Duration stallTimeout,
-      InstantSource clock) {}
+      MonotonicClock clock) {}
 }
