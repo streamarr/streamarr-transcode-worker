@@ -73,6 +73,11 @@ class RequiredComponentTest {
         Arguments.of(
             "timing", (ThrowingCallable) () -> ProducedSegment.Media.of(0, List.of(), null)),
         Arguments.of(
+            "mediaDuration", (ThrowingCallable) () -> new ProductionTiming(null, Duration.ZERO)),
+        Arguments.of(
+            "productionTime", (ThrowingCallable) () -> new ProductionTiming(Duration.ZERO, null)),
+        Arguments.of("clock", (ThrowingCallable) () -> new ProductionTimer(null)),
+        Arguments.of(
             "closedSegments",
             (ThrowingCallable) () -> new SegmentAssembler.Closing(null, Optional.empty())),
         Arguments.of(

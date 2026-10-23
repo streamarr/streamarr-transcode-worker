@@ -178,7 +178,7 @@ public final class TranscodeWorker implements AutoCloseable {
         PROBE_SUMMARY_INTERVAL.toMillis(),
         TimeUnit.MILLISECONDS);
     probeTimers.scheduleAtFixedRate(
-        probeCapacities::refresh,
+        probeCapacities::reopenKeyframePacketScansWhenIdle,
         PROBE_CAPACITY_REFRESH_INTERVAL.toMillis(),
         PROBE_CAPACITY_REFRESH_INTERVAL.toMillis(),
         TimeUnit.MILLISECONDS);
@@ -235,7 +235,7 @@ public final class TranscodeWorker implements AutoCloseable {
   // sent always carries the latest values, whichever thread changed them.
   private synchronized void sendProbeCapacityChange() {
     var granted = probeCapacities.granted();
-    if (requests == null || sentCapacities.map(granted::equals).orElse(true)) {
+    if (requests == null || sentCapacities.isEmpty() || sentCapacities.get().equals(granted)) {
       return;
     }
 

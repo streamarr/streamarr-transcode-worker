@@ -185,11 +185,11 @@ class ProbeCapacitiesTest {
     capacities.jobAttemptEnded(attempt);
 
     clock.advance(Duration.ofSeconds(29));
-    capacities.refresh();
+    capacities.reopenKeyframePacketScansWhenIdle();
     assertThat(capacities.granted().keyframePacketScanCapacity()).isZero();
 
     clock.advance(Duration.ofSeconds(1));
-    capacities.refresh();
+    capacities.reopenKeyframePacketScansWhenIdle();
     assertThat(capacities.granted().keyframePacketScanCapacity()).isEqualTo(1);
     assertThat(changes).hasValue(2);
   }
@@ -204,7 +204,7 @@ class ProbeCapacitiesTest {
     capacities.jobAttemptEnded(ended);
 
     clock.advance(Duration.ofMinutes(1));
-    capacities.refresh();
+    capacities.reopenKeyframePacketScansWhenIdle();
 
     assertThat(capacities.granted().keyframePacketScanCapacity()).isZero();
   }

@@ -7,6 +7,7 @@ import com.streamarr.transcode.probe.ProbeKind;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -44,9 +45,7 @@ final class ProbeCapacities {
   // Guarded by this monitor.
   private final Map<UUID, ProductionSpeedWindow> jobAttempts = new HashMap<>();
   private final Set<UUID> slowJobAttempts = new HashSet<>();
-  private int playbackProbes;
-  private int backgroundProbes;
-  private int keyframePacketScans;
+  private final Map<ProbeKind, Integer> running = new EnumMap<>(ProbeKind.class);
   private int keyframePacketScanCapacity = IDLE_KEYFRAME_PACKET_SCAN_CAPACITY;
   private Instant growthHeldUntil = Instant.MIN;
   private Instant lastBrake = Instant.MIN;
@@ -60,6 +59,10 @@ final class ProbeCapacities {
       @NonNull Runnable onChange) {
     this.clock = clock;
     this.onChange = onChange;
+    for (var kind : ProbeKind.values()) {
+      running.put(kind, 0);
+    }
+
     this.backgroundLimit =
         switch (backgroundProbeCapacity) {
           case BackgroundProbeCapacity.Adaptive(var maximum) -> new AdaptiveLimit(maximum);
@@ -81,26 +84,16 @@ final class ProbeCapacities {
       return false;
     }
 
-    switch (kind) {
-      case PLAYBACK -> playbackProbes++;
-      case BACKGROUND -> backgroundProbes++;
-      case KEYFRAME_PACKET_SCAN -> keyframePacketScans++;
-    }
-
+    running.merge(kind, 1, Integer::sum);
     return true;
   }
 
   /** Frees the unit of a probe that ended, and grows the background limit when it was busy. */
   void release(@NonNull ProbeKind kind) {
-    changing(
+    changeCapacities(
         () -> {
           var inUse = backgroundUnitsInUse();
-          switch (kind) {
-            case PLAYBACK -> playbackProbes--;
-            case BACKGROUND -> backgroundProbes--;
-            case KEYFRAME_PACKET_SCAN -> keyframePacketScans--;
-          }
-
+          running.merge(kind, -1, Integer::sum);
           if (backgroundUnitsInUse() < inUse && isGrowthAllowed()) {
             backgroundLimit.grow(inUse);
           }
@@ -109,7 +102,7 @@ final class ProbeCapacities {
 
   // A job attempt that starts clears background probes from the host while its viewer waits.
   void jobAttemptStarted(@NonNull UUID jobAttemptId) {
-    changing(
+    changeCapacities(
         () -> {
           jobAttempts.put(jobAttemptId, new ProductionSpeedWindow(clock));
           keyframePacketScanCapacity = 0;
@@ -118,7 +111,7 @@ final class ProbeCapacities {
   }
 
   void jobAttemptEnded(@NonNull UUID jobAttemptId) {
-    changing(
+    changeCapacities(
         () -> {
           jobAttempts.remove(jobAttemptId);
           slowJobAttempts.remove(jobAttemptId);
@@ -130,7 +123,7 @@ final class ProbeCapacities {
 
   /** Judges the job attempt's production speed, and brakes once per window while it is slow. */
   void mediaSegmentProduced(@NonNull UUID jobAttemptId, @NonNull ProductionTiming timing) {
-    changing(
+    changeCapacities(
         () -> {
           var window = jobAttempts.get(jobAttemptId);
           if (window == null) {
@@ -156,8 +149,8 @@ final class ProbeCapacities {
   }
 
   /** Reopens keyframe packet scans once no job attempt has run for 30 s. */
-  void refresh() {
-    changing(
+  void reopenKeyframePacketScansWhenIdle() {
+    changeCapacities(
         () -> {
           if (keyframePacketScanCapacity > 0 || !jobAttempts.isEmpty()) {
             return;
@@ -181,16 +174,18 @@ final class ProbeCapacities {
   private boolean fits(ProbeKind kind) {
     return switch (kind) {
       case PLAYBACK ->
-          playbackProbes < PLAYBACK_PROBE_CAPACITY
+          running.get(ProbeKind.PLAYBACK) < PLAYBACK_PROBE_CAPACITY
               || backgroundUnitsInUse() < backgroundLimit.value();
       case BACKGROUND -> backgroundUnitsInUse() < backgroundLimit.value();
-      case KEYFRAME_PACKET_SCAN -> keyframePacketScans < keyframePacketScanCapacity;
+      case KEYFRAME_PACKET_SCAN ->
+          running.get(ProbeKind.KEYFRAME_PACKET_SCAN) < keyframePacketScanCapacity;
     };
   }
 
   // Guarded by this monitor.
   private int backgroundUnitsInUse() {
-    return backgroundProbes + Math.max(0, playbackProbes - PLAYBACK_PROBE_CAPACITY);
+    return running.get(ProbeKind.BACKGROUND)
+        + Math.max(0, running.get(ProbeKind.PLAYBACK) - PLAYBACK_PROBE_CAPACITY);
   }
 
   // Guarded by this monitor.
@@ -200,7 +195,7 @@ final class ProbeCapacities {
 
   // Guarded by this monitor.
   private void brake() {
-    if (!backgroundLimit.brake()) {
+    if (!backgroundLimit.tryBrake()) {
       return;
     }
 
@@ -210,7 +205,7 @@ final class ProbeCapacities {
     brakes++;
   }
 
-  private void changing(Runnable mutation) {
+  private void changeCapacities(Runnable mutation) {
     GrantedCapacities before;
     GrantedCapacities after;
     synchronized (this) {
@@ -232,8 +227,8 @@ final class ProbeCapacities {
 
     void grow(int inUse);
 
-    /** False when the limit never changes. */
-    boolean brake();
+    /** Lowers the limit; false when the limit never changes. */
+    boolean tryBrake();
   }
 
   // AIMDLimit grows by 1 when the units in use reach half of the limit, and halves on a drop.
@@ -267,7 +262,7 @@ final class ProbeCapacities {
     }
 
     @Override
-    public boolean brake() {
+    public boolean tryBrake() {
       limit.onSample(0, 0, 0, true);
       return true;
     }
@@ -286,7 +281,7 @@ final class ProbeCapacities {
     }
 
     @Override
-    public boolean brake() {
+    public boolean tryBrake() {
       return false;
     }
   }

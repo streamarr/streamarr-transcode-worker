@@ -9,7 +9,8 @@ import lombok.NonNull;
  * Measures how long a producer takes to produce each media segment. The first lap starts when
  * FFmpeg starts, and each lap ends when the producer writes a media segment. The timer leaves out
  * each pause, in which the producer holds FFmpeg back until an earlier segment's delivery is
- * accepted. The producer pauses and laps only from its reader, and never laps during a pause.
+ * accepted or until the worker's segment memory, which other job attempts' uploads also hold, has
+ * room. The producer pauses and laps only from its reader, and never laps during a pause.
  */
 final class ProductionTimer {
 
