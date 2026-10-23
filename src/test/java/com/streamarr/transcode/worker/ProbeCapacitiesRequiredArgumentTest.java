@@ -1,10 +1,15 @@
 package com.streamarr.transcode.worker;
 
+import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerBuilder;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 
+import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import com.streamarr.transcode.engine.ProductionTiming;
 import com.streamarr.transcode.fixtures.SteppedClock;
+import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
+import java.nio.file.Path;
 import java.time.Duration;
+import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Stream;
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
@@ -53,6 +58,34 @@ class ProbeCapacitiesRequiredArgumentTest {
                         .backgroundProbeCapacity(new BackgroundProbeCapacity.Adaptive(4))
                         .build()),
         Arguments.of("clock", (ThrowingCallable) () -> new ProbeSummary(null)),
+        Arguments.of("attemptId", (ThrowingCallable) () -> new ProbeSummary(CLOCK).started(null)),
+        Arguments.of(
+            "attemptId",
+            (ThrowingCallable)
+                () ->
+                    new ProbeSummary(CLOCK)
+                        .finished(null, ProbeAttemptResult.getDefaultInstance())),
+        Arguments.of(
+            "result",
+            (ThrowingCallable) () -> new ProbeSummary(CLOCK).finished(UUID.randomUUID(), null)),
+        Arguments.of(
+            "failures",
+            (ThrowingCallable)
+                () -> ProbeSummary.Interval.builder().averageDuration(Duration.ZERO).build()),
+        Arguments.of(
+            "averageDuration",
+            (ThrowingCallable) () -> ProbeSummary.Interval.builder().failures(Map.of()).build()),
+        Arguments.of(
+            "runtime",
+            (ThrowingCallable) () -> workerBuilder(Path.of("/media")).runtime(null).build()),
+        Arguments.of(
+            "clock",
+            (ThrowingCallable)
+                () ->
+                    workerBuilder(Path.of("/media"))
+                        .runtime(new ScriptedWorkerRuntime())
+                        .clock(null)
+                        .build()),
         Arguments.of("kind", (ThrowingCallable) () -> capacities().tryAcquire(null)),
         Arguments.of("kind", (ThrowingCallable) () -> capacities().release(null)),
         Arguments.of("jobAttemptId", (ThrowingCallable) () -> capacities().jobAttemptStarted(null)),

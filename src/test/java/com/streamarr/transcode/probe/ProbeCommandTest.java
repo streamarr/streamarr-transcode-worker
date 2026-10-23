@@ -29,4 +29,14 @@ class ProbeCommandTest {
         .isThrownBy(() -> new ProbeCommand(ProbeTool.FFMPEG, null))
         .withMessageContaining("arguments");
   }
+
+  @Test
+  @DisplayName("Should reject the command when it names no CPU priority")
+  void shouldRejectCommandWhenItNamesNoCpuPriority() {
+    var arguments = List.of("-version");
+
+    assertThatNullPointerException()
+        .isThrownBy(() -> new ProbeCommand(ProbeTool.FFMPEG, arguments, null))
+        .withMessageContaining("cpuPriority");
+  }
 }

@@ -131,6 +131,34 @@ class TranscodeWorkerSettingsTest {
         .isEqualTo(new BackgroundProbeCapacity.Adaptive(availableCores));
   }
 
+  @Test
+  @DisplayName("Should adapt the background probe capacity when the capacity setting is blank")
+  void shouldAdaptTheBackgroundProbeCapacityWhenTheCapacitySettingIsBlank() {
+    var environment = new HashMap<>(requiredEnvironment());
+    environment.put("TRANSCODE_WORKER_PROBE_CAPACITY", " ");
+
+    var settings = TranscodeWorkerSettings.fromEnvironment(environment, 8);
+
+    assertThat(settings.workerConfiguration().backgroundProbeCapacity())
+        .isEqualTo(new BackgroundProbeCapacity.Adaptive(8));
+  }
+
+  @Test
+  @DisplayName(
+      "Should reject a worker configuration without a background probe capacity when building it")
+  void shouldRejectAWorkerConfigurationWithoutABackgroundProbeCapacityWhenBuildingIt() {
+    var configuration =
+        TranscodeWorkerConfiguration.builder()
+            .workerId(UUID.randomUUID())
+            .bootId(UUID.randomUUID())
+            .availableSlots(1)
+            .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, Path.of("/media")));
+
+    assertThatThrownBy(configuration::build)
+        .isInstanceOf(NullPointerException.class)
+        .hasMessageContaining("backgroundProbeCapacity");
+  }
+
   @ParameterizedTest(name = "{0} cores")
   @ValueSource(ints = {1, 72})
   @DisplayName("Should use the configured probe capacity whatever the host's cores")
