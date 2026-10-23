@@ -2018,9 +2018,12 @@ class TranscodeWorkerJobAttemptTest {
   private static int sizeFieldOfFirstSample(ByteBuffer fields, int run) {
     var flags = fields.getInt(run + 8) & 0xFF_FFFF;
     var field = run + 16;
-    field += (flags & 0x1) != 0 ? 4 : 0;
-    field += (flags & 0x4) != 0 ? 4 : 0;
-    field += (flags & 0x100) != 0 ? 4 : 0;
+    for (var presentField : new int[] {0x1, 0x4, 0x100}) {
+      if ((flags & presentField) != 0) {
+        field += 4;
+      }
+    }
+
     return field;
   }
 
