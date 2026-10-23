@@ -5,11 +5,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeMediaInfo;
-import java.time.Clock;
+import com.streamarr.transcode.fixtures.SteppedClock;
 import java.time.Duration;
-import java.time.Instant;
-import java.time.ZoneId;
-import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
@@ -106,29 +103,5 @@ class ProbeSummaryTest {
 
   private static ProbeAttemptResult failed(ProbeFailure failure) {
     return ProbeAttemptResult.newBuilder().setProbeVersion(1).setFailure(failure).build();
-  }
-
-  private static final class SteppedClock extends Clock {
-
-    private Instant now = Instant.parse("2026-10-16T12:00:00Z");
-
-    private void advance(Duration duration) {
-      now = now.plus(duration);
-    }
-
-    @Override
-    public ZoneId getZone() {
-      return ZoneOffset.UTC;
-    }
-
-    @Override
-    public Clock withZone(ZoneId zone) {
-      return this;
-    }
-
-    @Override
-    public Instant instant() {
-      return now;
-    }
   }
 }
