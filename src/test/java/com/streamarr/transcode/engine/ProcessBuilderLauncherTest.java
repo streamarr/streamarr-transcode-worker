@@ -140,7 +140,8 @@ class ProcessBuilderLauncherTest {
             .videoDecision(
                 new VideoDecision.Copy(0, RecordingFixtures.ENCODED_RECORDING_CODEC_STRING))
             .memoryBudget(SegmentMemoryBudget.forSlots(1))
-            .sink(sink);
+            .sink(sink)
+            .clock(MonotonicClock.system());
 
     assertThatThrownBy(producer::start)
         .isInstanceOf(TranscodeException.class)
@@ -160,6 +161,7 @@ class ProcessBuilderLauncherTest {
         .encodedFrameRate(Optional.<OutputFrameRate>empty())
         .videoDecision(new VideoDecision.Copy(0, RecordingFixtures.ENCODED_RECORDING_CODEC_STRING))
         .memoryBudget(SegmentMemoryBudget.forSlots(1))
-        .sink(sink);
+        .sink(sink)
+        .clock(MonotonicClock.system());
   }
 }

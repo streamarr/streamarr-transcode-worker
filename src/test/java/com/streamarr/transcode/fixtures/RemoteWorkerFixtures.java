@@ -4,6 +4,7 @@ import com.streamarr.transcode.engine.FfmpegCommandBuilder;
 import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
 import com.streamarr.transcode.engine.ProcessLauncher;
 import com.streamarr.transcode.engine.TranscodeCapabilityService;
+import com.streamarr.transcode.worker.BackgroundProbeCapacity;
 import com.streamarr.transcode.worker.TranscodeWorkerConfiguration;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
@@ -22,7 +23,10 @@ public final class RemoteWorkerFixtures {
 
   public static TranscodeWorkerConfiguration.TranscodeWorkerConfigurationBuilder
       workerConfigurationBuilder() {
-    return TranscodeWorkerConfiguration.builder().workerId(WORKER_ID).bootId(UUID.randomUUID());
+    return TranscodeWorkerConfiguration.builder()
+        .workerId(WORKER_ID)
+        .bootId(UUID.randomUUID())
+        .backgroundProbeCapacity(new BackgroundProbeCapacity.Adaptive(8));
   }
 
   /** An engine with a compatible FFmpeg that launches FFmpeg through the launcher. */

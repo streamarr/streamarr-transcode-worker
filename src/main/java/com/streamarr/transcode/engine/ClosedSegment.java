@@ -14,7 +14,8 @@ sealed interface ClosedSegment permits ClosedSegment.Initialization, RebuiltSegm
   /** The bytes that writing and delivering the segment holds besides those. */
   long additionalBytes();
 
-  ProducedSegment write();
+  /** Writes the segment; a media segment's production time ends the timer's lap. */
+  ProducedSegment write(ProductionTimer timer);
 
   /** The initialization segment, delivered exactly as read. */
   record Initialization(@NonNull InitializationSegment segment) implements ClosedSegment {
@@ -30,7 +31,7 @@ sealed interface ClosedSegment permits ClosedSegment.Initialization, RebuiltSegm
     }
 
     @Override
-    public ProducedSegment write() {
+    public ProducedSegment write(ProductionTimer timer) {
       return ProducedSegment.of(segment);
     }
   }

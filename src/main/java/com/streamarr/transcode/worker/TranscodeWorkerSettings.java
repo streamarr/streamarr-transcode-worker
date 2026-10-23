@@ -20,6 +20,7 @@ record TranscodeWorkerSettings(
     TranscodeWorkerConfiguration workerConfiguration) {
 
   private static final String PREFIX = "TRANSCODE_WORKER_";
+  private static final String PROBE_CAPACITY = PREFIX + "PROBE_CAPACITY";
   private static final String DEFAULT_FRAGMENTATION_TARGET = "250ms";
   private static final Pattern DURATION = Pattern.compile("(-?\\d+)(ns|us|ms|s|m|h)");
   private static final Map<String, ChronoUnit> DURATION_UNITS =
@@ -32,12 +33,19 @@ record TranscodeWorkerSettings(
           "h", ChronoUnit.HOURS);
 
   static TranscodeWorkerSettings fromEnvironment(Map<String, String> environment) {
+    return fromEnvironment(environment, Runtime.getRuntime().availableProcessors());
+  }
+
+  /** Reads the settings for a host whose JVM has {@code availableCores} cores available. */
+  static TranscodeWorkerSettings fromEnvironment(
+      Map<String, String> environment, int availableCores) {
     var sourceNamespaceId = uuid(environment, PREFIX + "SOURCE_NAMESPACE_ID");
     var workerConfiguration =
         TranscodeWorkerConfiguration.builder()
             .workerId(uuid(environment, PREFIX + "ID"))
             .bootId(UUID.randomUUID())
             .availableSlots(positiveInteger(environment, PREFIX + "SLOTS", 1))
+            .backgroundProbeCapacity(backgroundProbeCapacity(environment, availableCores))
             .sourceNamespaces(Map.of(sourceNamespaceId, path(environment, PREFIX + "SOURCE_ROOT")))
             .uploadReadinessTimeout(
                 positiveDuration(
@@ -68,6 +76,17 @@ record TranscodeWorkerSettings(
                 FfmpegTranscodeEngine.DEFAULT_ENCODER_STALL_TIMEOUT))
         .workerConfiguration(workerConfiguration)
         .build();
+  }
+
+  // The setting fixes the capacity; without it, the worker adapts the capacity up to its cores.
+  private static BackgroundProbeCapacity backgroundProbeCapacity(
+      Map<String, String> environment, int availableCores) {
+    var configured = environment.get(PROBE_CAPACITY);
+    if (configured == null || configured.isBlank()) {
+      return new BackgroundProbeCapacity.Adaptive(Math.max(1, availableCores));
+    }
+
+    return new BackgroundProbeCapacity.Fixed(positiveInteger(environment, PROBE_CAPACITY, 1));
   }
 
   private static String required(Map<String, String> environment, String key) {

@@ -37,6 +37,7 @@ import build.buf.gen.streamarr.transcode.v1.VideoDecision;
 import build.buf.gen.streamarr.transcode.v1.VideoDynamicRange;
 import build.buf.gen.streamarr.transcode.v1.VideoMode;
 import com.streamarr.transcode.engine.FfmpegRecordings.Recording;
+import com.streamarr.transcode.engine.MonotonicClock;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import com.streamarr.transcode.probe.FfprobeExecutor;
 import com.streamarr.transcode.worker.TranscodeWorker;
@@ -63,7 +64,8 @@ public final class WorkerProbeFixtures {
                 .availableSlots(2)
                 .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, root))
                 .build())
-        .engine(engine(ScriptedProcessLauncher.running()));
+        .engine(engine(ScriptedProcessLauncher.running()))
+        .clock(MonotonicClock.system());
   }
 
   public static ProbeRequest.Builder requestBuilder() {

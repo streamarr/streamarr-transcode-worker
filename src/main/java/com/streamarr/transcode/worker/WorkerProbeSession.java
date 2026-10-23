@@ -8,6 +8,7 @@ import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import com.streamarr.transcode.probe.FfprobeExecutor;
 import com.streamarr.transcode.probe.ProbeAttemptReport;
+import com.streamarr.transcode.probe.ProbeKind;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -31,21 +32,62 @@ final class WorkerProbeSession implements AutoCloseable {
   @NonNull private final WorkerMediaSourceResolver sources;
   @NonNull private final Consumer<ProbeAttemptReport> reports;
   @NonNull private final ExecutorService executor;
+  @NonNull private final ProbeSummary summary;
+  @NonNull private final ProbeCapacities capacities;
   private final Map<UUID, ProbeAttempt> attempts = new HashMap<>();
 
-  synchronized void start(ProbeRequest request) {
-    if (executor.isShutdown()) {
-      return;
+  void start(ProbeRequest request) {
+    if (tryAdmit(request) instanceof Admission.Refused(var report)) {
+      complete(report);
     }
+  }
 
-    var attempt = new ProbeAttempt(request);
+  private synchronized Admission tryAdmit(ProbeRequest request) {
     var attemptId = fromProto(request.getProbeAttemptId());
-    if (attempts.putIfAbsent(attemptId, attempt) != null) {
-      log.warn("Ignoring duplicate probe attempt {}", attemptId);
-      return;
+    if (executor.isShutdown()) {
+      return new Admission.Ignored();
     }
 
+    if (attempts.containsKey(attemptId)) {
+      log.warn("Ignoring duplicate probe attempt {}", attemptId);
+      return new Admission.Ignored();
+    }
+
+    // The server sends a probe only against a free unit, so a probe finds none only when the
+    // worker lowered the capacity before the server learned of the change.
+    var kind = ProbeKind.of(request);
+    if (!capacities.tryAcquire(kind)) {
+      log.debug("Refusing probe {}: the {} capacity has no free unit", attemptId, kind);
+      return new Admission.Refused(failed(request, ProbeFailure.PROBE_FAILURE_NO_FREE_CAPACITY));
+    }
+
+    var attempt = new ProbeAttempt(request, kind);
+    attempts.put(attemptId, attempt);
+    summary.started(attemptId);
     executor.execute(attempt);
+    return new Admission.Started();
+  }
+
+  private void complete(ProbeAttemptReport report) {
+    summary.finished(fromProto(report.result().getProbeAttemptId()), report.result());
+    reports.accept(report);
+  }
+
+  private static ProbeAttemptReport failed(ProbeRequest request, ProbeFailure failure) {
+    return ProbeAttemptReport.resultOnly(
+        ProbeAttemptResult.newBuilder()
+            .setProbeAttemptId(request.getProbeAttemptId())
+            .setProbeVersion(request.getProbeVersion())
+            .setFailure(failure)
+            .build());
+  }
+
+  private sealed interface Admission {
+    record Started() implements Admission {}
+
+    record Ignored() implements Admission {}
+
+    record Refused(ProbeAttemptReport report) implements Admission {}
   }
 
   synchronized void cancel(UUID attemptId) {
@@ -70,6 +112,7 @@ final class WorkerProbeSession implements AutoCloseable {
   private final class ProbeAttempt implements Runnable {
 
     private final ProbeRequest request;
+    private final ProbeKind kind;
     private final AtomicReference<Thread> thread = new AtomicReference<>();
     private volatile boolean cancelled;
 
@@ -135,20 +178,18 @@ final class WorkerProbeSession implements AutoCloseable {
     }
 
     private ProbeAttemptReport failed(ProbeFailure failure) {
-      return ProbeAttemptReport.resultOnly(
-          ProbeAttemptResult.newBuilder()
-              .setProbeAttemptId(request.getProbeAttemptId())
-              .setProbeVersion(request.getProbeVersion())
-              .setFailure(failure)
-              .build());
+      return WorkerProbeSession.failed(request, failure);
     }
 
+    // The unit is free before the result goes out, so the server's count never falls below the
+    // worker's.
     private void complete(ProbeAttemptReport report) {
       synchronized (WorkerProbeSession.this) {
         attempts.remove(fromProto(report.result().getProbeAttemptId()), this);
       }
 
-      reports.accept(report);
+      capacities.release(kind);
+      WorkerProbeSession.this.complete(report);
     }
   }
 }

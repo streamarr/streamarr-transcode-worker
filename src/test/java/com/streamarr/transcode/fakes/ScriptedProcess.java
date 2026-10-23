@@ -70,6 +70,7 @@ public final class ScriptedProcess extends Process {
   private boolean endOfOutputRead;
   private boolean terminated;
   private boolean destroyedForcibly;
+  private volatile Thread reader;
 
   @Builder
   private ScriptedProcess(
@@ -120,6 +121,11 @@ public final class ScriptedProcess extends Process {
    */
   public synchronized int bytesTaken() {
     return position;
+  }
+
+  /** The thread that last read the output, as FFmpeg's pipe would see it. */
+  public Optional<Thread> reader() {
+    return Optional.ofNullable(reader);
   }
 
   public synchronized boolean hasReachedPause() {
@@ -309,6 +315,7 @@ public final class ScriptedProcess extends Process {
         return 0;
       }
 
+      reader = Thread.currentThread();
       return ScriptedProcess.this.read(buffer, offset, length);
     }
   }

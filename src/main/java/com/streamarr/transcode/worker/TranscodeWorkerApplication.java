@@ -2,18 +2,21 @@ package com.streamarr.transcode.worker;
 
 import com.streamarr.transcode.engine.FfmpegCommandBuilder;
 import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
+import com.streamarr.transcode.engine.MonotonicClock;
 import com.streamarr.transcode.engine.ProcessBuilderLauncher;
 import com.streamarr.transcode.engine.TranscodeCapabilityService;
 import com.streamarr.transcode.probe.FfprobeExecutor;
 import java.io.IOException;
 import java.lang.ProcessBuilder.Redirect;
 import java.nio.file.Path;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.core.NestedExceptionUtils;
 
+@Slf4j
 @SpringBootApplication(proxyBeanMethods = false)
 public class TranscodeWorkerApplication {
 
@@ -36,7 +39,23 @@ public class TranscodeWorkerApplication {
 
   @Bean
   TranscodeWorkerSettings workerSettings() {
-    return TranscodeWorkerSettings.fromEnvironment(System.getenv());
+    var settings = TranscodeWorkerSettings.fromEnvironment(System.getenv());
+    var worker = settings.workerConfiguration();
+    log.info(
+        "The worker runs {} job attempts, {} playback probes, {} and one keyframe packet scan"
+            + " at once, and no keyframe packet scan while a job attempt runs",
+        worker.availableSlots(),
+        ProbeCapacities.PLAYBACK_PROBE_CAPACITY,
+        switch (worker.backgroundProbeCapacity()) {
+          case BackgroundProbeCapacity.Adaptive(var maximum) ->
+              "an adaptive number of background probes, starting at "
+                  + Math.min(ProbeCapacities.STARTING_BACKGROUND_PROBE_CAPACITY, maximum)
+                  + " and kept from 1 to "
+                  + maximum;
+          case BackgroundProbeCapacity.Fixed(var capacity) ->
+              capacity + " background probes, as TRANSCODE_WORKER_PROBE_CAPACITY fixes";
+        });
+    return settings;
   }
 
   @Bean(destroyMethod = "close")
@@ -65,6 +84,7 @@ public class TranscodeWorkerApplication {
         .ffprobe(
             FfprobeExecutor.forBinaries(
                 Path.of(settings.ffprobePath()), Path.of(settings.ffmpegPath())))
+        .clock(MonotonicClock.system())
         .build();
   }
 

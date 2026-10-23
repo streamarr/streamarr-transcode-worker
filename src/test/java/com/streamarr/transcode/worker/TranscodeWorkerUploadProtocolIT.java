@@ -34,6 +34,7 @@ import build.buf.gen.streamarr.transcode.v1.WorkerIdentity;
 import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
 import com.streamarr.transcode.engine.FfmpegCommandBuilder;
 import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
+import com.streamarr.transcode.engine.MonotonicClock;
 import com.streamarr.transcode.engine.TranscodeCapabilityService;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
@@ -144,6 +145,7 @@ class TranscodeWorkerUploadProtocolIT {
                 .configuration(configuration)
                 .engine(engine(launcher))
                 .ffprobe(fileContentsProducer())
+                .clock(MonotonicClock.system())
                 .build()) {
       server.start();
       worker.start("localhost", server.port());
@@ -195,6 +197,7 @@ class TranscodeWorkerUploadProtocolIT {
         .configuration(configurationBuilder(mediaRoot).build())
         .engine(engine)
         .ffprobe(fileContentsProducer())
+        .clock(MonotonicClock.system())
         .build();
   }
 
@@ -204,6 +207,7 @@ class TranscodeWorkerUploadProtocolIT {
         .workerId(WORKER_ID)
         .bootId(UUID.randomUUID())
         .availableSlots(1)
+        .backgroundProbeCapacity(new BackgroundProbeCapacity.Fixed(1))
         .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, mediaRoot))
         .uploadAcknowledgementTimeout(ACKNOWLEDGEMENT_TIMEOUT);
   }
@@ -320,8 +324,8 @@ class TranscodeWorkerUploadProtocolIT {
             failure.complete(request.getJobAttemptFailed());
           }
 
-          // Every event after the start ends the attempt.
-          if (!request.hasJobAttemptStarted()) {
+          // Every job attempt event after the start ends the attempt.
+          if (!request.hasJobAttemptStarted() && !request.hasProbeCapacityChanged()) {
             endAttempt(request.getEventCase());
           }
         }

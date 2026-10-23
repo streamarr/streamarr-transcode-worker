@@ -9,6 +9,7 @@ import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDI
 import static com.streamarr.transcode.fixtures.RecordingFixtures.uploadNames;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
+import static org.assertj.core.api.Assertions.within;
 import static org.awaitility.Awaitility.await;
 
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
@@ -25,10 +26,12 @@ import com.streamarr.transcode.fixtures.Mp4Samples.Movie;
 import com.streamarr.transcode.fixtures.Mp4Samples.MovieFragment;
 import com.streamarr.transcode.fixtures.Mp4Samples.Sample;
 import com.streamarr.transcode.fixtures.RecordingFixtures;
+import com.streamarr.transcode.fixtures.SteppedClock;
 import com.streamarr.transcode.fixtures.TopLevelBoxes;
 import com.streamarr.transcode.fixtures.TopLevelBoxes.Box;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.lang.Thread.State;
 import java.lang.management.ManagementFactory;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -125,10 +128,18 @@ class ProducerTest {
         Arguments.of(
             "encodedFrameRate",
             producerThatMustNotLaunch()
-                .videoDecision(VideoDecisionFixtures.encodeBuilder().build())),
+                .videoDecision(VideoDecisionFixtures.encodeBuilder().build())
+                .clock(MonotonicClock.system())),
         Arguments.of(
             "videoDecision",
-            producerThatMustNotLaunch().encodedFrameRate(Optional.<OutputFrameRate>empty())));
+            producerThatMustNotLaunch()
+                .encodedFrameRate(Optional.<OutputFrameRate>empty())
+                .clock(MonotonicClock.system())),
+        Arguments.of(
+            "clock",
+            producerThatMustNotLaunch()
+                .encodedFrameRate(Optional.<OutputFrameRate>empty())
+                .videoDecision(VideoDecisionFixtures.encodeBuilder().build())));
   }
 
   private static Producer.ProducerBuilder producerThatMustNotLaunch() {
@@ -765,6 +776,64 @@ class ProducerTest {
     sink.release();
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
     assertDeliveredInOrder(recording);
+  }
+
+  @Test
+  @DisplayName(
+      "Should leave the wait for an earlier segment's acceptance out of a media segment's"
+          + " production time")
+  void shouldLeaveTheWaitForAnEarlierSegmentsAcceptanceOutOfAMediaSegmentsProductionTime() {
+    var recording = recording(ENCODED_RECORDING);
+    var recorded = bytesOf(ENCODED_RECORDING);
+    var process = ScriptedProcess.builder().output(recorded).build();
+    var clock = new SteppedClock();
+    sink.holding(1);
+    var closingFragmentEnd = endOfFragmentAt(recorded, offsetOfMediaSegment(recording, 2));
+
+    var producer = producerFor(process, recording).clock(clock).start();
+
+    assertReaderStopsAt(process, closingFragmentEnd);
+    awaiting().until(() -> process.reader().map(Thread::getState).orElseThrow() == State.WAITING);
+    clock.advance(Duration.ofSeconds(10));
+    sink.release();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(sink.mediaTimings())
+        .hasSize(recording.segments().size())
+        .extracting(ProductionTiming::productionTime)
+        .containsOnly(Duration.ZERO);
+  }
+
+  @Test
+  @DisplayName(
+      "Should time the first media segment from FFmpeg's start and each segment's media duration"
+          + " from its video")
+  void shouldTimeTheFirstMediaSegmentFromFfmpegsStartAndEachSegmentsMediaDurationFromItsVideo() {
+    var recording = recording(ENCODED_RECORDING);
+    var process =
+        ScriptedProcess.builder()
+            .output(bytesOf(ENCODED_RECORDING))
+            .pauseAfter(offsetOfMediaSegment(recording, 0))
+            .build();
+    var clock = new SteppedClock();
+
+    var producer = producerFor(process, recording).clock(clock).start();
+
+    awaiting().until(process::hasReachedPause);
+    clock.advance(Duration.ofSeconds(5));
+    process.resume();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    var timings = sink.mediaTimings();
+    assertThat(timings)
+        .extracting(ProductionTiming::productionTime)
+        .startsWith(Duration.ofSeconds(5))
+        .containsOnly(Duration.ofSeconds(5), Duration.ZERO);
+    assertThat(timings.subList(0, timings.size() - 1))
+        .extracting(timing -> timing.mediaDuration().toNanos() / 1e9)
+        .allSatisfy(
+            seconds ->
+                assertThat(seconds)
+                    .as("A whole grid interval at the recording's frame rate")
+                    .isCloseTo(recording.period(), within(0.1)));
   }
 
   @Test
@@ -3002,7 +3071,8 @@ class ProducerTest {
         .encodedFrameRate(Optional.<OutputFrameRate>empty())
         .videoDecision(new VideoDecision.Copy(0, RecordingFixtures.ENCODED_RECORDING_CODEC_STRING))
         .memoryBudget(SegmentMemoryBudget.forSlots(1))
-        .sink(sink);
+        .sink(sink)
+        .clock(MonotonicClock.system());
   }
 
   // Replays the recording through a producer and waits for its outcome, whichever it is.

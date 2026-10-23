@@ -12,6 +12,7 @@ public record TranscodeWorkerConfiguration(
     @NonNull UUID workerId,
     @NonNull UUID bootId,
     int availableSlots,
+    @NonNull BackgroundProbeCapacity backgroundProbeCapacity,
     @NonNull Map<UUID, Path> sourceNamespaces,
     Duration uploadReadinessTimeout,
     Duration uploadAcknowledgementTimeout,

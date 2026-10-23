@@ -55,14 +55,22 @@ public abstract sealed class ProducedSegment {
   public static final class Media extends ProducedSegment {
 
     private final int sequenceNumber;
+    private final ProductionTiming timing;
 
-    private Media(int sequenceNumber, List<ByteBuffer> parts) {
+    private Media(int sequenceNumber, List<ByteBuffer> parts, ProductionTiming timing) {
       super(parts);
       this.sequenceNumber = sequenceNumber;
+      this.timing = timing;
     }
 
-    static Media of(int sequenceNumber, @NonNull List<ByteBuffer> parts) {
-      return new Media(sequenceNumber, parts);
+    static Media of(
+        int sequenceNumber, @NonNull List<ByteBuffer> parts, @NonNull ProductionTiming timing) {
+      return new Media(sequenceNumber, parts, timing);
+    }
+
+    /** The segment's media duration and the time the producer took to produce it. */
+    public ProductionTiming timing() {
+      return timing;
     }
 
     @Override

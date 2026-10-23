@@ -58,6 +58,7 @@ import build.buf.gen.streamarr.transcode.v1.WorkerRegistration;
 import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
 import build.buf.gen.streamarr.transcode.v1.WorkerVerifiedVideoEncoder;
 import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
+import com.streamarr.transcode.engine.MonotonicClock;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
@@ -868,6 +869,7 @@ class TranscodeWorkerControlPlaneIT {
         .configuration(configuration)
         .engine(engine)
         .ffprobe(fileContentsProducer())
+        .clock(MonotonicClock.system())
         .build();
   }
 
@@ -1019,6 +1021,12 @@ class TranscodeWorkerControlPlaneIT {
       return new StreamObserver<>() {
         @Override
         public void onNext(EstablishWorkerSessionRequest request) {
+          // These tests follow job attempt events. TranscodeWorkerProbeCapacityTest covers the
+          // probe capacity changes that a job attempt's start also sends.
+          if (request.hasProbeCapacityChanged()) {
+            return;
+          }
+
           if (!request.hasRegistration()) {
             receiveEvent(request);
             return;

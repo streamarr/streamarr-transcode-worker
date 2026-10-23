@@ -31,7 +31,8 @@
         <archunit.version>1.5.0</archunit.version>
         <native.access.args>--enable-native-access=ALL-UNNAMED</native.access.args>
         <grpc.version>1.84.0</grpc.version>
-        <buf.sdk.version>1.84.0.2.20261016175912.7b5809380fad</buf.sdk.version>
+        <buf.sdk.version>1.84.0.2.20261023114613.6c830dd9505e</buf.sdk.version>
+        <concurrency-limits.version>0.5.4</concurrency-limits.version>
         <protobuf-java.version>4.36.1</protobuf-java.version>
         <sonar.projectKey>streamarr_streamarr-transcode-worker</sonar.projectKey>
         <sonar.organization>streamarr</sonar.organization>
@@ -71,6 +72,11 @@
             <groupId>build.buf.gen</groupId>
             <artifactId>streamarr-org_transcode_grpc_java</artifactId>
             <version>${buf.sdk.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.netflix.concurrency-limits</groupId>
+            <artifactId>concurrency-limits-core</artifactId>
+            <version>${concurrency-limits.version}</version>
         </dependency>
         <dependency>
             <groupId>io.grpc</groupId>
