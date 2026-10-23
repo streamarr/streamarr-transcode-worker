@@ -11,6 +11,7 @@ import com.streamarr.transcode.engine.ReadingEnding.TruncatedOutput;
 import com.streamarr.transcode.engine.SegmentAssembler.Closing;
 import java.io.IOException;
 import java.time.Duration;
+import java.time.InstantSource;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -67,6 +68,7 @@ public final class Producer {
   private final SegmentMemoryBudget memoryBudget;
   private final Duration stallTimeout;
   private final StallWatchdog watchdog;
+  private final ProductionTimer productionTimer;
   private final String threadName;
   private final CompletableFuture<AttemptOutcome> outcome = new CompletableFuture<>();
   private final Object lock = new Object();
@@ -81,6 +83,7 @@ public final class Producer {
     this.ffmpeg = ffmpeg;
     this.stallTimeout = settings.stallTimeout();
     this.watchdog = new StallWatchdog(stallTimeout);
+    this.productionTimer = new ProductionTimer(settings.clock());
     this.reader =
         new FragmentedMp4Reader(
             watchdog.watch(ffmpeg.output()), MAXIMUM_SEGMENT_BYTES, this::tryAdmit);
@@ -104,6 +107,7 @@ public final class Producer {
    *     the attempt as an output mismatch, before it delivers anything, when it declares other
    *     video
    * @param memoryBudget the worker's segment memory, which every producer of the worker shares
+   * @param clock the clock that times each media segment's production; the system clock when unset
    * @throws TranscodeException when FFmpeg cannot be started
    */
   @Builder(buildMethodName = "start")
@@ -118,7 +122,8 @@ public final class Producer {
       @NonNull Optional<OutputFrameRate> encodedFrameRate,
       @NonNull VideoDecision videoDecision,
       @NonNull SegmentMemoryBudget memoryBudget,
-      @NonNull SegmentSink sink) {
+      @NonNull SegmentSink sink,
+      InstantSource clock) {
     var settings =
         Settings.builder()
             .jobAttemptId(jobAttemptId)
@@ -133,6 +138,7 @@ public final class Producer {
             .sink(sink)
             .memoryBudget(memoryBudget)
             .stallTimeout(stallTimeout)
+            .clock(clock == null ? InstantSource.system() : clock)
             .build();
     var ffmpeg =
         FfmpegProcess.builder()
@@ -299,11 +305,11 @@ public final class Producer {
       }
     }
 
-    watchdog.pause();
+    pauseTimers();
     try {
       awaitWhile(condition);
     } finally {
-      watchdog.resume();
+      resumeTimers();
     }
   }
 
@@ -568,12 +574,23 @@ public final class Producer {
       return true;
     }
 
-    watchdog.pause();
+    pauseTimers();
     try {
       return memoryBudget.tryReserve(bytes, this::isDecided);
     } finally {
-      watchdog.resume();
+      resumeTimers();
     }
+  }
+
+  // While the reader holds FFmpeg back, FFmpeg neither stalls nor spends time producing.
+  private void pauseTimers() {
+    watchdog.pause();
+    productionTimer.pause();
+  }
+
+  private void resumeTimers() {
+    productionTimer.resume();
+    watchdog.resume();
   }
 
   // Guarded by lock.
@@ -608,7 +625,7 @@ public final class Producer {
       return reservation;
     }
 
-    var segment = closedSegment.write();
+    var segment = closedSegment.write(productionTimer);
     var deliveryHeldBytes = closedSegment.heldBytes() + closedSegment.additionalBytes();
     Delivery delivery;
     synchronized (lock) {
@@ -729,5 +746,6 @@ public final class Producer {
       SegmentAssembler assembler,
       SegmentSink sink,
       SegmentMemoryBudget memoryBudget,
-      Duration stallTimeout) {}
+      Duration stallTimeout,
+      InstantSource clock) {}
 }

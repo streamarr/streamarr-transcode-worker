@@ -2,6 +2,7 @@ package com.streamarr.transcode.engine;
 
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -63,7 +64,14 @@ class RequiredComponentTest {
         Arguments.of("samples", (ThrowingCallable) () -> new MovieFragmentWriter.Track(1, null)),
         Arguments.of("samples", (ThrowingCallable) () -> new TrackSamples(1, null)),
         Arguments.of("trak", (ThrowingCallable) () -> new TrackBox(null)),
-        Arguments.of("parts", (ThrowingCallable) () -> ProducedSegment.Media.of(0, null)),
+        Arguments.of(
+            "parts",
+            (ThrowingCallable)
+                () ->
+                    ProducedSegment.Media.of(
+                        0, null, new ProductionTiming(Duration.ZERO, Duration.ZERO))),
+        Arguments.of(
+            "timing", (ThrowingCallable) () -> ProducedSegment.Media.of(0, List.of(), null)),
         Arguments.of(
             "closedSegments",
             (ThrowingCallable) () -> new SegmentAssembler.Closing(null, Optional.empty())),

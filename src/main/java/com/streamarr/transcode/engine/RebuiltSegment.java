@@ -1,6 +1,7 @@
 package com.streamarr.transcode.engine;
 
 import java.nio.ByteBuffer;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.IdentityHashMap;
@@ -63,12 +64,22 @@ final class RebuiltSegment implements ClosedSegment {
   }
 
   @Override
-  public ProducedSegment write() {
+  public ProducedSegment write(ProductionTimer timer) {
     var parts = new ArrayList<ByteBuffer>();
     parts.add(ByteBuffer.wrap(MovieFragmentWriter.header(sequenceNumber + 1L, tracks)));
     addSampleBytes(parts, videoSamples);
     addSampleBytes(parts, audioSamples);
-    return ProducedSegment.Media.of(sequenceNumber, parts);
+    return ProducedSegment.Media.of(
+        sequenceNumber, parts, new ProductionTiming(mediaDuration(), timer.lap()));
+  }
+
+  // The video samples run from the keyframe that opens the segment to the keyframe that opens the
+  // next, so their durations add up to the segment's media duration.
+  private Duration mediaDuration() {
+    var timescale = videoSamples.getFirst().fragment().tracks().video().orElseThrow().timescale();
+    var units = videoSamples.stream().mapToLong(sample -> sample.sample().duration()).sum();
+    return Duration.ofSeconds(units / timescale)
+        .plusNanos(Math.multiplyExact(units % timescale, 1_000_000_000L) / timescale);
   }
 
   private static List<MovieFragmentWriter.Track> tracksOf(

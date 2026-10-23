@@ -22,6 +22,7 @@ final class RecordingSegmentSink implements SegmentSink {
   private static final long HOLD_LIMIT_SECONDS = 10;
 
   private final List<Accepted> accepted = new CopyOnWriteArrayList<>();
+  private final List<ProductionTiming> mediaTimings = new CopyOnWriteArrayList<>();
   private final Map<String, byte[]> acceptedContent = new ConcurrentHashMap<>();
   private final ByteArrayOutputStream acceptedBytes = new ByteArrayOutputStream();
   private final AtomicInteger deliveries = new AtomicInteger();
@@ -128,6 +129,9 @@ final class RecordingSegmentSink implements SegmentSink {
 
     acceptedContent.put(segment.name(), bytes);
     accepted.add(new Accepted(segment.name(), segment.byteLength(), bytes.length));
+    if (segment instanceof ProducedSegment.Media media) {
+      mediaTimings.add(media.timing());
+    }
   }
 
   private void cancelHeldDelivery() {
@@ -152,6 +156,11 @@ final class RecordingSegmentSink implements SegmentSink {
 
   List<Accepted> accepted() {
     return List.copyOf(accepted);
+  }
+
+  /** The timing of each accepted media segment, in delivery order. */
+  List<ProductionTiming> mediaTimings() {
+    return List.copyOf(mediaTimings);
   }
 
   List<String> acceptedNames() {
