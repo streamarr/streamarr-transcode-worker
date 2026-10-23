@@ -8,6 +8,7 @@ import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import com.streamarr.transcode.probe.FfprobeExecutor;
 import com.streamarr.transcode.probe.ProbeAttemptReport;
+import com.streamarr.transcode.probe.ProbeKind;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -32,7 +33,7 @@ final class WorkerProbeSession implements AutoCloseable {
   @NonNull private final Consumer<ProbeAttemptReport> reports;
   @NonNull private final ExecutorService executor;
   @NonNull private final ProbeSummary summary;
-  private final int probeCapacity;
+  @NonNull private final ProbeCapacities capacities;
   private final Map<UUID, ProbeAttempt> attempts = new HashMap<>();
 
   void start(ProbeRequest request) {
@@ -52,17 +53,15 @@ final class WorkerProbeSession implements AutoCloseable {
       return new Admission.Ignored();
     }
 
-    // The server counts its probes against the advertised capacity, so a probe beyond it shows a
-    // server defect.
-    if (attempts.size() >= probeCapacity) {
-      log.warn(
-          "Refusing probe {}: all {} units of the advertised probe capacity are in use",
-          attemptId,
-          probeCapacity);
-      return new Admission.Refused(failed(request, ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED));
+    // The server sends a probe only against a free unit, so a probe finds none only when the
+    // worker lowered the capacity before the server learned of the change.
+    var kind = ProbeKind.of(request);
+    if (!capacities.tryAcquire(kind)) {
+      log.debug("Refusing probe {}: the {} capacity has no free unit", attemptId, kind);
+      return new Admission.Refused(failed(request, ProbeFailure.PROBE_FAILURE_NO_FREE_CAPACITY));
     }
 
-    var attempt = new ProbeAttempt(request);
+    var attempt = new ProbeAttempt(request, kind);
     attempts.put(attemptId, attempt);
     summary.started(attemptId);
     executor.execute(attempt);
@@ -113,6 +112,7 @@ final class WorkerProbeSession implements AutoCloseable {
   private final class ProbeAttempt implements Runnable {
 
     private final ProbeRequest request;
+    private final ProbeKind kind;
     private final AtomicReference<Thread> thread = new AtomicReference<>();
     private volatile boolean cancelled;
 
@@ -181,11 +181,14 @@ final class WorkerProbeSession implements AutoCloseable {
       return WorkerProbeSession.failed(request, failure);
     }
 
+    // The unit is free before the result goes out, so the server's count never falls below the
+    // worker's.
     private void complete(ProbeAttemptReport report) {
       synchronized (WorkerProbeSession.this) {
         attempts.remove(fromProto(report.result().getProbeAttemptId()), this);
       }
 
+      capacities.release(kind);
       WorkerProbeSession.this.complete(report);
     }
   }

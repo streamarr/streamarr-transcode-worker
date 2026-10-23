@@ -41,13 +41,15 @@ public class TranscodeWorkerApplication {
     var settings = TranscodeWorkerSettings.fromEnvironment(System.getenv());
     var worker = settings.workerConfiguration();
     log.info(
-        "The worker runs {} probes at once ({}) and {} job attempts at once",
-        worker.probeCapacity(),
-        switch (settings.probeCapacitySource()) {
-          case AVAILABLE_CORES -> "the available cores minus 3";
-          case SETTING -> "TRANSCODE_WORKER_PROBE_CAPACITY";
-        },
-        worker.availableSlots());
+        "The worker runs {} job attempts, {} playback probes and {} at once",
+        worker.availableSlots(),
+        ProbeCapacities.PLAYBACK_PROBE_CAPACITY,
+        switch (worker.backgroundProbeCapacity()) {
+          case BackgroundProbeCapacity.Adaptive(var maximum) ->
+              "an adaptive number of background probes, from 1 to " + maximum;
+          case BackgroundProbeCapacity.Fixed(var capacity) ->
+              capacity + " background probes, as TRANSCODE_WORKER_PROBE_CAPACITY fixes";
+        });
     return settings;
   }
 

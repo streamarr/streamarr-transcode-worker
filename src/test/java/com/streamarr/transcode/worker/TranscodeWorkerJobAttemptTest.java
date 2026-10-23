@@ -1934,16 +1934,23 @@ class TranscodeWorkerJobAttemptTest {
         .untilAsserted(() -> assertThat(eventsOf(connection)).containsExactly(expected));
   }
 
+  // The job attempt events, without the registration and the probe capacity changes.
   private static List<EventCase> eventsOf(ScriptedWorkerRuntime.Connection connection) {
     return connection.events().stream()
         .map(EstablishWorkerSessionRequest::getEventCase)
-        .filter(eventCase -> eventCase != EventCase.REGISTRATION)
+        .filter(
+            eventCase ->
+                eventCase != EventCase.REGISTRATION
+                    && eventCase != EventCase.PROBE_CAPACITY_CHANGED)
         .toList();
   }
 
   private static EstablishWorkerSessionRequest lastEvent(
       ScriptedWorkerRuntime.Connection connection) {
-    return connection.events().getLast();
+    return connection.events().stream()
+        .filter(event -> !event.hasProbeCapacityChanged())
+        .toList()
+        .getLast();
   }
 
   private static byte[] uploadedBytes(ScriptedWorkerRuntime.Connection connection) {

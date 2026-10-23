@@ -6,7 +6,11 @@ import static org.awaitility.Awaitility.await;
 
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
+import build.buf.gen.streamarr.transcode.v1.ProbePriority;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
@@ -26,6 +30,7 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import tools.jackson.databind.ObjectMapper;
 
 @Tag("UnitTest")
 @DisplayName("Ffprobe Executor Process Tests")
@@ -236,6 +241,63 @@ class FfprobeExecutorProcessTest {
     var runs = new ArrayList<>(probe);
     runs.addAll(extradataRead);
     assertThat(Files.readAllLines(Path.of(binary + ".args"))).isEqualTo(runs);
+  }
+
+  @Test
+  @DisplayName("Should run ffprobe at the lowest CPU priority when no playback request waits")
+  void shouldRunFfprobeAtTheLowestCpuPriorityWhenNoPlaybackRequestWaits() throws Exception {
+    var niceness = temporaryDirectory.resolve("niceness");
+    var binary = script("ps -o nice= -p $$ > '" + niceness + "'\nprintf '%s' '{\"streams\":[]}'\n");
+
+    executorFor(binary).probe(temporaryDirectory.resolve("movie.mkv"), request());
+
+    assertThat(Files.readString(niceness).strip())
+        .isEqualTo(String.valueOf(Math.min(19, ownNiceness() + 19)));
+  }
+
+  @Test
+  @DisplayName("Should run ffprobe at the worker's CPU priority when a playback request waits")
+  void shouldRunFfprobeAtTheWorkersCpuPriorityWhenAPlaybackRequestWaits() throws Exception {
+    var niceness = temporaryDirectory.resolve("niceness");
+    var binary = script("ps -o nice= -p $$ > '" + niceness + "'\nprintf '%s' '{\"streams\":[]}'\n");
+
+    executorFor(binary)
+        .probe(
+            temporaryDirectory.resolve("movie.mkv"),
+            request().toBuilder().setPriority(ProbePriority.PROBE_PRIORITY_PLAYBACK).build());
+
+    assertThat(Files.readString(niceness).strip()).isEqualTo(String.valueOf(ownNiceness()));
+  }
+
+  @Test
+  @DisplayName("Should run a keyframe packet scan at the lowest CPU priority whatever its priority")
+  void shouldRunAKeyframePacketScanAtTheLowestCpuPriorityWhateverItsPriority() {
+    var priorities = new ArrayList<ProbeCommand.CpuPriority>();
+    var executor =
+        new FfprobeExecutor(
+            new ObjectMapper(),
+            command -> {
+              priorities.add(command.cpuPriority());
+              throw new UncheckedIOException(new IOException("ffprobe is unavailable"));
+            });
+
+    executor.probe(
+        temporaryDirectory.resolve("movie.mkv"),
+        request().toBuilder()
+            .setScanKeyframePackets(true)
+            .setPriority(ProbePriority.PROBE_PRIORITY_PLAYBACK)
+            .build());
+
+    assertThat(priorities).containsExactly(ProbeCommand.CpuPriority.LOWEST);
+  }
+
+  private static int ownNiceness() throws Exception {
+    var nice =
+        new ProcessBuilder("ps", "-o", "nice=", "-p", String.valueOf(ProcessHandle.current().pid()))
+            .start();
+    try (var output = nice.getInputStream()) {
+      return Integer.parseInt(new String(output.readAllBytes(), StandardCharsets.UTF_8).strip());
+    }
   }
 
   private FfprobeExecutor executorFor(Path ffprobe) {

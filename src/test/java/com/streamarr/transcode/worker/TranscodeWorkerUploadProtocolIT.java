@@ -204,7 +204,7 @@ class TranscodeWorkerUploadProtocolIT {
         .workerId(WORKER_ID)
         .bootId(UUID.randomUUID())
         .availableSlots(1)
-        .probeCapacity(1)
+        .backgroundProbeCapacity(new BackgroundProbeCapacity.Fixed(1))
         .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, mediaRoot))
         .uploadAcknowledgementTimeout(ACKNOWLEDGEMENT_TIMEOUT);
   }
@@ -321,8 +321,8 @@ class TranscodeWorkerUploadProtocolIT {
             failure.complete(request.getJobAttemptFailed());
           }
 
-          // Every event after the start ends the attempt.
-          if (!request.hasJobAttemptStarted()) {
+          // Every job attempt event after the start ends the attempt.
+          if (!request.hasJobAttemptStarted() && !request.hasProbeCapacityChanged()) {
             endAttempt(request.getEventCase());
           }
         }

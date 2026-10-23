@@ -36,7 +36,22 @@ To build and run the worker from source, see [Developer Setup](docs/dev-setup.md
 
 ## Capacity
 
-Each worker advertises two capacities to the server. `TRANSCODE_WORKER_SLOTS` sets the playback slots: the job attempts that the worker runs at once. The default is 1. `TRANSCODE_WORKER_PROBE_CAPACITY` sets the probes that the worker runs at once. The default is the cores available to the worker minus 3, and at least 1, so a large first scan probes on most of the host's cores while 3 cores stay free for playback. Probes never take a playback slot, so a library scan never delays playback. While probes run, the worker logs a summary each minute. [Developer Setup](docs/dev-setup.md#configuration) lists every setting.
+Each worker grants the server a separate capacity for each kind of work, as [ADR 0032](https://github.com/streamarr/streamarr-adr/blob/main/adr/0032-media-file-probe-results-are-persisted.adoc#probe-capacity) decides. The server never sends work beyond a granted capacity.
+
+| Capacity | Work | Value |
+| --- | --- | --- |
+| Playback slots | Job attempts | `TRANSCODE_WORKER_SLOTS`, 1 by default |
+| Playback probe capacity | Probes that a playback request waits for | 2 |
+| Background probe capacity | Other probes, such as a library scan's | Adapts from 1 to the cores available to the JVM, starting at 4. `TRANSCODE_WORKER_PROBE_CAPACITY` fixes it instead |
+| Keyframe packet scan capacity | Keyframe packet scans | 0 while any job attempt runs, and 1 once no job attempt has run for 30 s |
+
+Probes never take a playback slot, and job attempts never take a probe capacity. A playback probe can also use a free unit of the background probe capacity, so it never waits behind a scan.
+
+The background probe capacity grows by 1 when a probe ends while at least half of it is in use. A brake halves it when a job attempt starts, and when a job attempt produces below 2.10× real time over 15 s. After a brake, the capacity does not grow for 30 s. Each media segment's production time leaves out the time the worker waited for an earlier upload, so the brake measures the encoder.
+
+`TRANSCODE_WORKER_SLOTS` decides how much playback the worker runs. `TRANSCODE_WORKER_PROBE_CAPACITY` only fixes the background probe capacity and turns the adaptation off. Leave it unset unless the host's disks cannot take as many probes as its cores.
+
+Background probes and keyframe packet scans run at nice 19, and playback probes at the worker's own priority. While probes run, the worker logs a summary each minute, with each capacity and the brakes since the previous summary. [Developer Setup](docs/dev-setup.md#configuration) lists every setting.
 
 ## Architecture
 

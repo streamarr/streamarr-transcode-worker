@@ -1019,6 +1019,12 @@ class TranscodeWorkerControlPlaneIT {
       return new StreamObserver<>() {
         @Override
         public void onNext(EstablishWorkerSessionRequest request) {
+          // These tests follow job attempt events. TranscodeWorkerProbeCapacityTest covers the
+          // probe capacity changes that a job attempt's start also sends.
+          if (request.hasProbeCapacityChanged()) {
+            return;
+          }
+
           if (!request.hasRegistration()) {
             receiveEvent(request);
             return;

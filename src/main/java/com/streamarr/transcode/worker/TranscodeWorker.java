@@ -12,6 +12,7 @@ import build.buf.gen.streamarr.transcode.v1.JobAttemptFailed;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptStarted;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptStopped;
+import build.buf.gen.streamarr.transcode.v1.ProbeCapacityChanged;
 import build.buf.gen.streamarr.transcode.v1.SegmentContentType;
 import build.buf.gen.streamarr.transcode.v1.SegmentUploadMetadata;
 import build.buf.gen.streamarr.transcode.v1.StartProbeCommand;
@@ -78,6 +79,7 @@ public final class TranscodeWorker implements AutoCloseable {
   private static final int CONNECTION_TIMEOUT_SECONDS = 5;
   private static final int UPLOAD_MESSAGE_BYTES = 64 * 1024;
   private static final Duration PROBE_SUMMARY_INTERVAL = Duration.ofMinutes(1);
+  private static final Duration PROBE_CAPACITY_REFRESH_INTERVAL = Duration.ofSeconds(1);
 
   private final TranscodeWorkerConfiguration configuration;
   private final FfmpegTranscodeEngine engine;
@@ -87,6 +89,7 @@ public final class TranscodeWorker implements AutoCloseable {
   private final WorkerRuntime runtime;
   private final SegmentMemoryBudget memoryBudget;
   private final ProbeSummary probeSummary;
+  private final ProbeCapacities probeCapacities;
   private final Map<UUID, ActiveAttempt> activeAttempts = new HashMap<>();
   private final Set<Thread> stopThreads = new HashSet<>();
 
@@ -94,7 +97,8 @@ public final class TranscodeWorker implements AutoCloseable {
   private StreamObserver<EstablishWorkerSessionRequest> requests;
   private WorkerSessionAccepted workerSession;
   private WorkerProbeSession probeSession;
-  private ScheduledExecutorService probeSummaryLogging;
+  private ScheduledExecutorService probeTimers;
+  private Optional<GrantedCapacities> sentCapacities = Optional.empty();
   private CompletableFuture<Void> disconnected;
   private final AtomicReference<WorkerResponseObserver> responseObserver = new AtomicReference<>();
 
@@ -104,12 +108,20 @@ public final class TranscodeWorker implements AutoCloseable {
       @NonNull FfmpegTranscodeEngine engine,
       @NonNull FfprobeExecutor ffprobe,
       @NonNull WorkerRuntime runtime,
-      ProbeSummary probeSummary) {
+      ProbeSummary probeSummary,
+      Clock clock) {
     this.configuration = configuration;
     this.engine = engine;
     this.ffprobe = ffprobe;
     this.runtime = runtime;
-    this.probeSummary = probeSummary == null ? new ProbeSummary(Clock.systemUTC()) : probeSummary;
+    var workerClock = clock == null ? Clock.systemUTC() : clock;
+    this.probeSummary = probeSummary == null ? new ProbeSummary(workerClock) : probeSummary;
+    this.probeCapacities =
+        ProbeCapacities.builder()
+            .clock(workerClock)
+            .backgroundProbeCapacity(configuration.backgroundProbeCapacity())
+            .onChange(this::sendProbeCapacityChange)
+            .build();
     memoryBudget = SegmentMemoryBudget.forSlots(configuration.availableSlots());
     sources = new WorkerMediaSourceResolver(configuration.sourceNamespaces());
     jobMapper = new WorkerVariantJobMapper(sources);
@@ -154,16 +166,21 @@ public final class TranscodeWorker implements AutoCloseable {
             .sources(sources)
             .reports(report -> sendProbeResult(sessionRequests.get(), report))
             .executor(runtime.newProbeScope())
-            .probeCapacity(configuration.probeCapacity())
+            .capacities(probeCapacities)
             .summary(probeSummary)
             .build();
-    probeSummaryLogging =
+    probeTimers =
         Executors.newSingleThreadScheduledExecutor(
-            Thread.ofVirtual().name("probe-summary").factory());
-    probeSummaryLogging.scheduleAtFixedRate(
+            Thread.ofVirtual().name("probe-timers").factory());
+    probeTimers.scheduleAtFixedRate(
         this::logProbeSummary,
         PROBE_SUMMARY_INTERVAL.toMillis(),
         PROBE_SUMMARY_INTERVAL.toMillis(),
+        TimeUnit.MILLISECONDS);
+    probeTimers.scheduleAtFixedRate(
+        probeCapacities::refresh,
+        PROBE_CAPACITY_REFRESH_INTERVAL.toMillis(),
+        PROBE_CAPACITY_REFRESH_INTERVAL.toMillis(),
         TimeUnit.MILLISECONDS);
     disconnected = new CompletableFuture<>();
     var observer = new WorkerResponseObserver(accepted, probeSession);
@@ -200,13 +217,36 @@ public final class TranscodeWorker implements AutoCloseable {
     configuration.sourceNamespaces().keySet().stream()
         .map(ProtoUuid::toProto)
         .forEach(capabilities::addSourceNamespaceIds);
+    var granted = probeCapacities.granted();
+    sentCapacities = Optional.of(granted);
     var registration =
         WorkerRegistration.newBuilder()
             .setWorker(identity())
             .setCapabilities(capabilities)
             .setAvailableSlots(configuration.availableSlots())
-            .setProbeCapacity(configuration.probeCapacity());
+            .setBackgroundProbeCapacity(granted.backgroundProbeCapacity())
+            .setPlaybackProbeCapacity(granted.playbackProbeCapacity())
+            .setKeyframePacketScanCapacity(granted.keyframePacketScanCapacity())
+            .setBackgroundProbeCapacityControl(granted.backgroundProbeCapacityControl());
     return EstablishWorkerSessionRequest.newBuilder().setRegistration(registration).build();
+  }
+
+  // Reads the capacities under the worker monitor that orders every message, so the last message
+  // sent always carries the latest values, whichever thread changed them.
+  private synchronized void sendProbeCapacityChange() {
+    var granted = probeCapacities.granted();
+    if (requests == null || sentCapacities.map(granted::equals).orElse(true)) {
+      return;
+    }
+
+    sentCapacities = Optional.of(granted);
+    tryReport(
+        EstablishWorkerSessionRequest.newBuilder()
+            .setProbeCapacityChanged(
+                ProbeCapacityChanged.newBuilder()
+                    .setBackgroundProbeCapacity(granted.backgroundProbeCapacity())
+                    .setKeyframePacketScanCapacity(granted.keyframePacketScanCapacity()))
+            .build());
   }
 
   private void logProbeSummary() {
@@ -216,14 +256,15 @@ public final class TranscodeWorker implements AutoCloseable {
             interval ->
                 log.info(
                     "Probes in the last {}: {} started, {} finished, failures {}, average time {}"
-                        + " ms, {} running of a probe capacity of {}",
+                        + " ms, {} running; capacities {}; {} brakes",
                     PROBE_SUMMARY_INTERVAL,
                     interval.started(),
                     interval.finished(),
                     interval.failures(),
                     interval.averageDuration().toMillis(),
                     interval.running(),
-                    configuration.probeCapacity()));
+                    probeCapacities.granted(),
+                    probeCapacities.takeBrakeCount()));
   }
 
   private WorkerIdentity identity() {
@@ -296,7 +337,10 @@ public final class TranscodeWorker implements AutoCloseable {
     }
 
     var attempt = new ActiveAttempt(job, producer);
-    activeAttempts.put(fromProto(job.getJobAttemptId()), attempt);
+    var jobAttemptId = fromProto(job.getJobAttemptId());
+    activeAttempts.put(jobAttemptId, attempt);
+    probeCapacities.jobAttemptStarted(jobAttemptId);
+    producer.outcome().whenComplete((_, _) -> probeCapacities.jobAttemptEnded(jobAttemptId));
     try {
       send(jobAttemptStarted(job.getJobAttemptId(), engine.encoderBackendOf(request)));
     } catch (RuntimeException e) {
@@ -352,6 +396,10 @@ public final class TranscodeWorker implements AutoCloseable {
   // The attempt's producer delivers each segment here and waits until the server accepts it.
   private void deliverToServer(
       VariantJob job, ProducedSegment segment, DeliveryCancellation cancellation) {
+    if (segment instanceof ProducedSegment.Media media) {
+      probeCapacities.mediaSegmentProduced(fromProto(job.getJobAttemptId()), media.timing());
+    }
+
     try {
       uploadSegment(job, segment, cancellation);
     } catch (InterruptedException e) {
@@ -371,12 +419,17 @@ public final class TranscodeWorker implements AutoCloseable {
     var metadataBuilder = openUpload(job, upload);
     cancellation.onCancel(
         () -> upload.cancel(new CancellationException("The job attempt stopped")));
-    var metadata =
-        metadataBuilder
-            .setSegmentName(segment.name())
-            .setContentType(SegmentContentType.SEGMENT_CONTENT_TYPE_VIDEO_MP4)
-            .setContentLengthBytes(segment.byteLength())
-            .build();
+    metadataBuilder
+        .setSegmentName(segment.name())
+        .setContentType(SegmentContentType.SEGMENT_CONTENT_TYPE_VIDEO_MP4)
+        .setContentLengthBytes(segment.byteLength());
+    if (segment instanceof ProducedSegment.Media media) {
+      metadataBuilder
+          .setMediaDuration(protoDuration(media.timing().mediaDuration()))
+          .setProductionTime(protoDuration(media.timing().productionTime()));
+    }
+
+    var metadata = metadataBuilder.build();
     UploadSegmentResponse accepted;
     try {
       upload.send(UploadSegmentRequest.newBuilder().setMetadata(metadata).build());
@@ -408,6 +461,15 @@ public final class TranscodeWorker implements AutoCloseable {
         .setJobId(job.getJobId())
         .setJobAttemptId(job.getJobAttemptId())
         .setVariantLabel(job.getVariant().getVariantLabel());
+  }
+
+  // The contract's Duration shares its simple name with java.time.Duration.
+  @SuppressWarnings("checkstyle:fullyQualifiedName")
+  private static com.google.protobuf.Duration protoDuration(Duration duration) {
+    return com.google.protobuf.Duration.newBuilder()
+        .setSeconds(duration.getSeconds())
+        .setNanos(duration.getNano())
+        .build();
   }
 
   private static void sendContent(SegmentUpload upload, ProducedSegment segment)
@@ -683,8 +745,8 @@ public final class TranscodeWorker implements AutoCloseable {
     }
 
     probeSession.shutdown();
-    probeSummaryLogging.shutdownNow();
-    probeSummaryLogging = null;
+    probeTimers.shutdownNow();
+    probeTimers = null;
     var attempts = claimActiveAttempts();
     try {
       if (requests != null) {

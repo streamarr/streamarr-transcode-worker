@@ -41,6 +41,8 @@ public final class FfprobeExecutor {
   static final List<String> READ_LIMITS =
       List.of("-analyzeduration", "200M", "-probesize", "1G", "-scan_all_pmts", "0");
 
+  private static final List<String> LOWEST_CPU_PRIORITY = List.of("nice", "-n", "19");
+
   // 30 s of fields at the 1000 fps limit of a usable rate, twice over.
   private static final int MAXIMUM_SCANNED_PACKETS = 120_000;
 
@@ -62,8 +64,13 @@ public final class FfprobeExecutor {
                 command));
   }
 
+  // A process needs no privilege to lower its own priority, so nice works in every container.
   private static Process start(Path binary, ProbeCommand probeCommand) {
     var command = new ArrayList<String>();
+    if (probeCommand.cpuPriority() == ProbeCommand.CpuPriority.LOWEST) {
+      command.addAll(LOWEST_CPU_PRIORITY);
+    }
+
     command.add(binary.toString());
     command.addAll(probeCommand.arguments());
     // The packet scan reads FFmpeg's diagnostics to find a source that stopped being readable.
@@ -96,7 +103,7 @@ public final class FfprobeExecutor {
 
     var attempt = new Attempt(source, request, result);
     try {
-      return execute(attempt);
+      return atCpuPriorityOf(request).execute(attempt);
     } catch (InterruptedException | ClosedByInterruptException _) {
       // An interrupt closes a FileChannel that the keyframe step is reading.
       Thread.currentThread().interrupt();
@@ -111,6 +118,16 @@ public final class FfprobeExecutor {
       return ProbeAttemptReport.resultOnly(
           result.setFailure(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED).build());
     }
+  }
+
+  // Every process of a probe that no playback request waits for starts at the lowest priority.
+  private FfprobeExecutor atCpuPriorityOf(ProbeRequest request) {
+    if (ProbeKind.of(request) == ProbeKind.PLAYBACK) {
+      return this;
+    }
+
+    return new FfprobeExecutor(
+        objectMapper, command -> processFactory.apply(command.atLowestCpuPriority()));
   }
 
   private ProbeAttemptReport execute(Attempt attempt)

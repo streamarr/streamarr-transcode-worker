@@ -95,7 +95,7 @@ class TranscodeWorkerSettingsTest {
             .workerId(UUID.randomUUID())
             .bootId(UUID.randomUUID())
             .availableSlots(0)
-            .probeCapacity(1)
+            .backgroundProbeCapacity(new BackgroundProbeCapacity.Fixed(1))
             .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, Path.of("/media")));
 
     assertThatThrownBy(configuration::build)
@@ -118,18 +118,17 @@ class TranscodeWorkerSettingsTest {
     assertThat(settings.workerConfiguration().availableSlots()).isEqualTo(2);
   }
 
-  @ParameterizedTest(name = "{0} cores give {1}")
-  @CsvSource({"1, 1", "2, 1", "3, 1", "4, 1", "5, 2", "8, 5", "72, 69"})
+  @ParameterizedTest(name = "{0} cores")
+  @ValueSource(ints = {1, 2, 72})
   @DisplayName(
-      "Should leave three cores free for playback and the worker when the probe capacity is not"
-          + " configured")
-  void shouldLeaveThreeCoresFreeForPlaybackAndTheWorkerWhenTheProbeCapacityIsNotConfigured(
-      int availableCores, int expectedProbeCapacity) {
+      "Should adapt the background probe capacity up to the available cores when the capacity is"
+          + " not configured")
+  void shouldAdaptTheBackgroundProbeCapacityUpToTheAvailableCoresWhenTheCapacityIsNotConfigured(
+      int availableCores) {
     var settings = TranscodeWorkerSettings.fromEnvironment(requiredEnvironment(), availableCores);
 
-    assertThat(settings.workerConfiguration().probeCapacity()).isEqualTo(expectedProbeCapacity);
-    assertThat(settings.probeCapacitySource())
-        .isEqualTo(TranscodeWorkerSettings.ProbeCapacitySource.AVAILABLE_CORES);
+    assertThat(settings.workerConfiguration().backgroundProbeCapacity())
+        .isEqualTo(new BackgroundProbeCapacity.Adaptive(availableCores));
   }
 
   @ParameterizedTest(name = "{0} cores")
@@ -141,9 +140,8 @@ class TranscodeWorkerSettingsTest {
 
     var settings = TranscodeWorkerSettings.fromEnvironment(environment, availableCores);
 
-    assertThat(settings.workerConfiguration().probeCapacity()).isEqualTo(12);
-    assertThat(settings.probeCapacitySource())
-        .isEqualTo(TranscodeWorkerSettings.ProbeCapacitySource.SETTING);
+    assertThat(settings.workerConfiguration().backgroundProbeCapacity())
+        .isEqualTo(new BackgroundProbeCapacity.Fixed(12));
   }
 
   @ParameterizedTest(name = "{0}")
@@ -171,19 +169,14 @@ class TranscodeWorkerSettingsTest {
   }
 
   @Test
-  @DisplayName("Should reject a worker configuration without probe capacity when loading settings")
-  void shouldRejectWorkerConfigurationWithoutProbeCapacityWhenLoadingSettings() {
-    var configuration =
-        TranscodeWorkerConfiguration.builder()
-            .workerId(UUID.randomUUID())
-            .bootId(UUID.randomUUID())
-            .availableSlots(1)
-            .probeCapacity(0)
-            .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, Path.of("/media")));
-
-    assertThatThrownBy(configuration::build)
+  @DisplayName("Should refuse a background probe capacity below 1 when building the configuration")
+  void shouldRefuseABackgroundProbeCapacityBelow1WhenBuildingTheConfiguration() {
+    assertThatThrownBy(() -> new BackgroundProbeCapacity.Fixed(0))
         .isInstanceOf(IllegalArgumentException.class)
-        .hasMessage("Probe capacity must be positive");
+        .hasMessage("A fixed background probe capacity must be positive");
+    assertThatThrownBy(() -> new BackgroundProbeCapacity.Adaptive(0))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("The maximum background probe capacity must be positive");
   }
 
   @Test

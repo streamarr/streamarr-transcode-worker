@@ -159,7 +159,7 @@ class TranscodeWorkerTransportIT {
         .workerId(UUID.randomUUID())
         .bootId(UUID.randomUUID())
         .availableSlots(1)
-        .probeCapacity(1)
+        .backgroundProbeCapacity(new BackgroundProbeCapacity.Fixed(1))
         .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, tempDir));
   }
 }
