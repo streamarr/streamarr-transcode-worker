@@ -102,6 +102,11 @@ final class KeyframePacketScan {
                                   .KEYFRAMES_UNAVAILABLE_REASON_KEYFRAME_WITHOUT_TIMESTAMP))));
     }
 
+    // The server stores a packet scan's invalid-media failure as keyframes that are unavailable.
+    if (keyframes.isKeyframeNotAfterPrevious()) {
+      return failed(probed, ProbeFailure.PROBE_FAILURE_INVALID_MEDIA);
+    }
+
     if (exitCode != 0) {
       throw new PacketScanException("FFmpeg exited with code " + exitCode);
     }
@@ -175,8 +180,13 @@ final class KeyframePacketScan {
     private final TimeRule rule;
     private final List<KeyframeTime> times = new ArrayList<>();
     private boolean missingTime;
+    private boolean keyframeNotAfterPrevious;
 
-    /** A keyframe without a time decides the outcome, so the scan needs no lines after it. */
+    /**
+     * A keyframe without a time, or one whose times are not both after the previous keyframe's,
+     * decides the outcome, so the scan needs no lines after it. A damaged source can make FFmpeg
+     * print the same keyframe twice.
+     */
     @Override
     public boolean take(String line) {
       if (line.startsWith("#")) {
@@ -191,6 +201,12 @@ final class KeyframePacketScan {
       var time = keyframeTime(packet.pts(), packet.dts());
       if (time.isEmpty()) {
         missingTime = true;
+        times.clear();
+        return false;
+      }
+
+      if (!times.isEmpty() && !time.get().isAfter(times.getLast())) {
+        keyframeNotAfterPrevious = true;
         times.clear();
         return false;
       }
@@ -218,6 +234,10 @@ final class KeyframePacketScan {
 
     boolean isMissingTime() {
       return missingTime;
+    }
+
+    boolean isKeyframeNotAfterPrevious() {
+      return keyframeNotAfterPrevious;
     }
 
     List<KeyframeTime> times() {
