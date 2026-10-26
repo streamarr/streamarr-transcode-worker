@@ -62,11 +62,7 @@ final class KeyframePacketScan {
       throws ExecutionException, InterruptedException {
     var chosen = ChosenVideoStream.find(probed.ffprobeOutput().path("streams"));
     if (chosen.isEmpty()) {
-      return ProbeAttemptReport.resultOnly(
-          probed.result().toBuilder()
-              .clearMedia()
-              .setFailure(ProbeFailure.PROBE_FAILURE_NO_VIDEO_STREAM)
-              .build());
+      return failed(probed, ProbeFailure.PROBE_FAILURE_NO_VIDEO_STREAM);
     }
 
     var stream = chosen.get().description();
@@ -122,6 +118,11 @@ final class KeyframePacketScan {
         .keyframes(keyframes.times())
         .build()
         .report();
+  }
+
+  private static ProbeAttemptReport failed(ProbedSource probed, ProbeFailure failure) {
+    return ProbeAttemptReport.resultOnly(
+        probed.result().toBuilder().clearMedia().setFailure(failure).build());
   }
 
   private static TimeBase timeBase(JsonNode stream) {
