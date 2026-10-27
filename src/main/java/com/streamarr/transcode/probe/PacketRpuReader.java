@@ -22,7 +22,7 @@ final class PacketRpuReader {
    */
   static Optional<RpuObservation> read(JsonNode stream, NalSyntax syntax) {
     var isEveryUnitWalked = !WalkCoverage.missesUnits(stream);
-    var isEverySampleDelimitable = !WalkCoverage.isReplacingExtradata(stream);
+    var isEverySampleDelimitable = !WalkCoverage.missesPacketUnits(stream);
     return FirstPacketSamples.read(stream, syntax)
         .flatMap(
             samples -> observation(samples, syntax, isEveryUnitWalked, isEverySampleDelimitable));

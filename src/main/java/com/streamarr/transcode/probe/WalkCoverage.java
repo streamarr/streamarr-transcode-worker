@@ -13,7 +13,8 @@ import tools.jackson.databind.JsonNode;
  * the frames. A packet can also carry a replacement record as new extradata side data, which
  * FFmpeg's MP4 demuxer attaches when a sample switches to another sample description. ffprobe
  * prints that side data's type but not its bytes, and FFmpeg's decoders apply the replacement. A
- * cut-short first-frames read leaves packets past the walk that can hold any unit.
+ * cut-short first-frames read leaves packets past the walk that can hold any unit, and so does a
+ * first-packets read that printed fewer packets than it asked for.
  */
 final class WalkCoverage {
 
@@ -24,18 +25,24 @@ final class WalkCoverage {
 
   /** Whether the stream holds units that the walks do not read, so that they rule nothing out. */
   static boolean missesUnits(JsonNode stream) {
-    return isReplacingExtradata(stream) || isUnwalkedExtradata(stream) || isCutShort(stream);
+    return missesPacketUnits(stream) || isUnwalkedExtradata(stream) || isCutShort(stream);
+  }
+
+  /**
+   * Whether the probe cannot delimit every NAL unit of every packet that the walk covers: a packet
+   * carries a replacement record, or the first-packets read printed fewer packets than it asked
+   * for.
+   */
+  static boolean missesPacketUnits(JsonNode stream) {
+    return isReplacingExtradata(stream)
+        || stream.path(FirstPacketsProbe.FIRST_PACKETS_CUT_SHORT).asBoolean();
   }
 
   private static boolean isCutShort(JsonNode stream) {
     return FirstFrames.of(stream).filter(FirstFrames::cutShort).isPresent();
   }
 
-  /**
-   * Whether a first packet carries a replacement record, so that the probe cannot tell how the
-   * packets after it delimit their NAL units.
-   */
-  static boolean isReplacingExtradata(JsonNode stream) {
+  private static boolean isReplacingExtradata(JsonNode stream) {
     return stream
         .path(FirstPacketsProbe.FIRST_PACKETS)
         .valueStream()

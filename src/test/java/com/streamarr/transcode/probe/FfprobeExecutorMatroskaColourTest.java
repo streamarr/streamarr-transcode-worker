@@ -347,8 +347,8 @@ class FfprobeExecutorMatroskaColourTest {
   }
 
   /**
-   * An HEVC stream in Matroska whose hvcC record and first packets the SEI walk reads in full, and
-   * whose 3 first frames carry no side data.
+   * An HEVC stream in Matroska whose hvcC record and 3 first packets the SEI walk reads in full,
+   * and whose 3 first frames carry no side data.
    */
   private ProbeStreamInfo probeWalkedMatroska(byte[] file) throws IOException {
     var source = Files.write(temporaryDirectory.resolve("source.mkv"), file);
@@ -358,7 +358,10 @@ class FfprobeExecutorMatroskaColourTest {
                 .ffprobeOutput(output(MATROSKA, "," + FirstReads.extradata(record)))
                 .firstFrames(FirstReads.frames("", "", ""))
                 .firstPackets(
-                    FirstReads.packets(FirstReads.lengthPrefixed("4e 01 05 01 00 80", "26 01 af")))
+                    FirstReads.packetsUpTo(
+                        3,
+                        FirstReads.lengthPrefixed("02 01 d0"),
+                        FirstReads.lengthPrefixed("4e 01 05 01 00 80", "26 01 af")))
                 .source(source)
                 .build())
         .getStreams(0);

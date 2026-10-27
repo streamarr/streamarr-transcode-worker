@@ -2,6 +2,7 @@ package com.streamarr.transcode.probe;
 
 import static com.streamarr.transcode.probe.RecordedFfprobe.ffprobeDump;
 
+import java.util.Arrays;
 import java.util.HexFormat;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
@@ -55,6 +56,17 @@ final class FirstReads {
     }
 
     return "{\"packets\":[" + packets + "]}";
+  }
+
+  /**
+   * The first-packets read's output for a read of {@code count} packets: the samples, then {@code
+   * filler} samples up to {@code count}, so that the read prints every packet that it asks for.
+   */
+  static String packetsUpTo(int count, String filler, String... samples) {
+    var all = new String[Math.max(count, samples.length)];
+    System.arraycopy(samples, 0, all, 0, samples.length);
+    Arrays.fill(all, samples.length, all.length, filler);
+    return packets(all);
   }
 
   /**

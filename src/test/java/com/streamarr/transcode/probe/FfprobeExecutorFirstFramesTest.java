@@ -6,6 +6,7 @@ import static com.streamarr.transcode.probe.FirstReads.frames;
 import static com.streamarr.transcode.probe.FirstReads.lengthPrefixed;
 import static com.streamarr.transcode.probe.FirstReads.output;
 import static com.streamarr.transcode.probe.FirstReads.packets;
+import static com.streamarr.transcode.probe.FirstReads.packetsUpTo;
 import static com.streamarr.transcode.probe.FirstReads.withNewExtradata;
 import static com.streamarr.transcode.probe.RecordedFfprobe.ffprobeDump;
 import static com.streamarr.transcode.probe.RecordedFfprobe.probe;
@@ -68,8 +69,10 @@ class FfprobeExecutorFirstFramesTest {
       HEVC
           + ","
           + extradata("01 01 60 00 00 00 90 00 00 00 00 00 5d f0 00 fc fd f8 f8 00 00 0f 00");
-  private static final String DELIMITED_PACKETS =
-      packets(lengthPrefixed("4e 01 05 01 00 80", "26 01 af 06 b8"));
+  private static final String DELIMITED_SAMPLE =
+      lengthPrefixed("4e 01 05 01 00 80", "26 01 af 06 b8");
+  private static final String SLICE_SAMPLE = lengthPrefixed("02 01 d0 09 7e");
+  private static final String DELIMITED_PACKETS = packetsUpTo(3, SLICE_SAMPLE, DELIMITED_SAMPLE);
 
   @Nested
   @DisplayName("Frames Read")
@@ -128,7 +131,7 @@ class FfprobeExecutorFirstFramesTest {
                       .ffprobeOutput(output(HEVC_WITH_RECORD))
                       .prerollPackets(3)
                       .firstFrames(frames("", "", "", HDR10_PLUS))
-                      .firstPackets(DELIMITED_PACKETS)
+                      .firstPackets(packetsUpTo(12, SLICE_SAMPLE, DELIMITED_SAMPLE))
                       .build())
               .getStreams(0);
 
@@ -684,7 +687,8 @@ class FfprobeExecutorFirstFramesTest {
     @DisplayName("Should place the RPUs ahead of the next picture when a sample holds only an RPU")
     void shouldPlaceTheRpusAheadOfTheNextPictureWhenASampleHoldsOnlyAnRpu() {
       var present =
-          h264(packets(lengthPrefixed(IDR_SLICE), lengthPrefixed(RPU)))
+          h264(packetsUpTo(
+                  3, lengthPrefixed(SLICE), lengthPrefixed(IDR_SLICE), lengthPrefixed(RPU)))
               .getDynamicRange()
               .getDolbyVisionPresent();
 
@@ -698,7 +702,11 @@ class FfprobeExecutorFirstFramesTest {
       var present =
           h264(
                   "00 00 00 01 67 64 00 28 01 00 00 00 01 68 ee 3c 80",
-                  packets(annexB(AUD, SEI, IDR_SLICE, RPU), annexB(AUD, SLICE, RPU)))
+                  packetsUpTo(
+                      3,
+                      annexB(AUD, SLICE),
+                      annexB(AUD, SEI, IDR_SLICE, RPU),
+                      annexB(AUD, SLICE, RPU)))
               .getDynamicRange()
               .getDolbyVisionPresent();
 
@@ -870,7 +878,9 @@ class FfprobeExecutorFirstFramesTest {
     @Test
     @DisplayName("Should read the RPU placement when zero bytes lead the first start code")
     void shouldReadTheRpuPlacementWhenZeroBytesLeadTheFirstStartCode() {
-      var present = mpegTs(packets("00 00 " + annexB(AUD), annexB(AUD, SLICE, RPU)));
+      var present =
+          mpegTs(
+              packetsUpTo(3, annexB(AUD, SLICE), "00 00 " + annexB(AUD), annexB(AUD, SLICE, RPU)));
 
       assertThat(present.getRpuPlacement())
           .isEqualTo(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_AFTER_OWN_PICTURE);
@@ -982,11 +992,12 @@ class FfprobeExecutorFirstFramesTest {
                       .prerollPackets(3)
                       .firstFrames(frames("", "", ""))
                       .firstPackets(
-                          packets(
+                          packetsUpTo(
+                              12,
+                              lengthPrefixed(AUD, PROFILE_5_RPU_UNIT, SLICE),
                               lengthPrefixed(IDR_SLICE),
                               lengthPrefixed(SLICE),
-                              lengthPrefixed(SLICE),
-                              lengthPrefixed(AUD, PROFILE_5_RPU_UNIT, SLICE))))
+                              lengthPrefixed(SLICE))))
               .getDynamicRange()
               .getDolbyVisionPresent();
 
@@ -1005,7 +1016,9 @@ class FfprobeExecutorFirstFramesTest {
                   hevc(extradata(HEVC_RECORD))
                       .firstFrames(frames(RPU_DATA + "," + PROFILE_8_RPU))
                       .firstPackets(
-                          packets(
+                          packetsUpTo(
+                              3,
+                              lengthPrefixed(SLICE, PROFILE_5_RPU_UNIT),
                               lengthPrefixed(IDR_SLICE, PROFILE_5_RPU_UNIT),
                               lengthPrefixed(SLICE, PROFILE_5_RPU_UNIT))))
               .getDynamicRange()
@@ -1025,7 +1038,11 @@ class FfprobeExecutorFirstFramesTest {
                   hevc(extradata(ANNEX_B_VPS))
                       .firstFrames(frames("", ""))
                       .firstPackets(
-                          packets(annexB(IDR_SLICE), annexB(AUD, PROFILE_8_RPU_UNIT, SLICE))))
+                          packetsUpTo(
+                              3,
+                              annexB(AUD, SLICE),
+                              annexB(IDR_SLICE),
+                              annexB(AUD, PROFILE_8_RPU_UNIT, SLICE))))
               .getDynamicRange()
               .getDolbyVisionPresent();
 
@@ -1219,11 +1236,53 @@ class FfprobeExecutorFirstFramesTest {
           .isEqualTo(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED);
     }
 
+    @Test
+    @DisplayName(
+        "Should rule nothing out and leave the RPU placement unspecified when the packet read"
+            + " returns fewer packets than the frames' read took")
+    void
+        shouldRuleNothingOutAndLeaveTheRpuPlacementUnspecifiedWhenThePacketReadReturnsFewerPacketsThanTheFramesReadTook() {
+      // ffprobe ends a read without an error when the file fails, so the packets past the last
+      // one that it printed can hold any unit.
+      var video =
+          probed(
+              hevc(extradata(HEVC_RECORD) + "," + record(8, 1))
+                  .firstFrames(frames("", "", ""))
+                  .firstPackets(
+                      packets(
+                          lengthPrefixed(IDR_SLICE),
+                          lengthPrefixed(AUD, PROFILE_8_RPU_UNIT, SLICE))));
+
+      var present = video.getDynamicRange().getDolbyVisionPresent();
+      assertThat(present.getObservedRpu()).isEqualTo(Presence.PRESENCE_PRESENT);
+      assertThat(present.getRpuPlacement())
+          .isEqualTo(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED);
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+      assertThat(video.getMasteringDisplayOmitted()).isTrue();
+      assertThat(video.getContentLightLevelOmitted()).isTrue();
+    }
+
+    @Test
+    @DisplayName(
+        "Should leave Dolby Vision unspecified when the packet read returns fewer packets than the"
+            + " frames' read took")
+    void
+        shouldLeaveDolbyVisionUnspecifiedWhenThePacketReadReturnsFewerPacketsThanTheFramesReadTook() {
+      var video =
+          probed(
+              hevc(extradata(HEVC_RECORD))
+                  .firstFrames(frames("", "", ""))
+                  .firstPackets(packets(lengthPrefixed(IDR_SLICE), lengthPrefixed(AUD, SLICE))));
+
+      assertThat(video.getDynamicRange().getDolbyVisionCase())
+          .isEqualTo(DolbyVisionCase.DOLBYVISION_NOT_SET);
+    }
+
     private static DolbyVisionPresent placed(String... samples) {
       return probed(
               hevc(extradata(HEVC_RECORD))
                   .firstFrames(frames("", "", ""))
-                  .firstPackets(packets(samples)))
+                  .firstPackets(packetsUpTo(3, lengthPrefixed(SLICE), samples)))
           .getDynamicRange()
           .getDolbyVisionPresent();
     }

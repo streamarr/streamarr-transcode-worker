@@ -4,6 +4,7 @@ import static com.streamarr.transcode.probe.FirstReads.extradata;
 import static com.streamarr.transcode.probe.FirstReads.frames;
 import static com.streamarr.transcode.probe.FirstReads.output;
 import static com.streamarr.transcode.probe.FirstReads.packets;
+import static com.streamarr.transcode.probe.FirstReads.packetsUpTo;
 import static com.streamarr.transcode.probe.FirstReads.withNewExtradata;
 import static com.streamarr.transcode.probe.RecordedFfprobe.probe;
 import static com.streamarr.transcode.probe.RecordedFfprobe.streamOf;
@@ -468,10 +469,16 @@ class FfprobeExecutorAv1MetadataTest {
               .put(32, 0)
               .bytes());
 
-  /** The stream, when its 3 first frames carry no side data and its packets hold the samples. */
+  /**
+   * The stream, when its 3 first frames carry no side data and its 3 first packets hold the
+   * temporal units, then temporal units of a frame alone.
+   */
   private static ProbeStreamInfo probed(String record, String... packets) {
     return probe(
-            answers(record).firstFrames(frames("", "", "")).firstPackets(packets(packets)).build())
+            answers(record)
+                .firstFrames(frames("", "", ""))
+                .firstPackets(packetsUpTo(3, temporalUnit(), packets))
+                .build())
         .getStreams(0);
   }
 

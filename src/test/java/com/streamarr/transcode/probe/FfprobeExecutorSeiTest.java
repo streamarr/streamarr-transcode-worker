@@ -6,6 +6,7 @@ import static com.streamarr.transcode.probe.FirstReads.frames;
 import static com.streamarr.transcode.probe.FirstReads.lengthPrefixed;
 import static com.streamarr.transcode.probe.FirstReads.output;
 import static com.streamarr.transcode.probe.FirstReads.packets;
+import static com.streamarr.transcode.probe.FirstReads.packetsUpTo;
 import static com.streamarr.transcode.probe.FirstReads.withNewExtradata;
 import static com.streamarr.transcode.probe.RecordedFfprobe.probe;
 import static com.streamarr.transcode.probe.RecordedFfprobe.streamOf;
@@ -401,7 +402,7 @@ class FfprobeExecutorSeiTest {
               Answers.builder()
                   .ffprobeOutput(output(Coding.HEVC.codecName() + "," + extradata(record)))
                   .firstFrames(frames("", "", ""))
-                  .firstPackets(packets(samples))
+                  .firstPackets(packetsUpTo(3, Coding.HEVC.sample(), samples))
                   .build())
           .getStreams(0);
     }
@@ -825,9 +826,16 @@ class FfprobeExecutorSeiTest {
       return Answers.builder().ffprobeOutput(output(codecName() + "," + extradata(record)));
     }
 
-    /** The stream, when its 3 first frames carry no side data and its packets hold the samples. */
+    /**
+     * The stream, when its 3 first frames carry no side data and its 3 first packets hold the
+     * samples, then slices.
+     */
     ProbeStreamInfo probed(String... samples) {
-      return probe(answers().firstFrames(frames("", "", "")).firstPackets(packets(samples)).build())
+      return probe(
+              answers()
+                  .firstFrames(frames("", "", ""))
+                  .firstPackets(packetsUpTo(3, sample(), samples))
+                  .build())
           .getStreams(0);
     }
   }

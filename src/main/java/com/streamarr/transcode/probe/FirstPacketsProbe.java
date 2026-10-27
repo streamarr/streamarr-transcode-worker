@@ -33,6 +33,13 @@ final class FirstPacketsProbe {
   /** The key under which the chosen video stream's description holds its first packets. */
   static final String FIRST_PACKETS = "first_packets";
 
+  /**
+   * The key whose true value says that the read printed fewer packets than it asked for: ffprobe
+   * ends a read without an error when the demuxer or the file fails, so the packets past the last
+   * one that it printed can hold any unit.
+   */
+  static final String FIRST_PACKETS_CUT_SHORT = "first_packets_cut_short";
+
   private static final Set<String> WALKED_CODECS = Set.of("h264", "hevc", "av1");
 
   /**
@@ -83,6 +90,7 @@ final class FirstPacketsProbe {
       var packets = objectMapper.readTree(output.stdout()).path("packets");
       if (packets instanceof ArrayNode list && !list.isEmpty()) {
         description.set(FIRST_PACKETS, list);
+        description.put(FIRST_PACKETS_CUT_SHORT, list.size() < count);
       }
     } catch (JacksonException failure) {
       log.warn("ffprobe's first-packets read of {} printed no JSON", source, failure);
