@@ -681,6 +681,24 @@ class FfprobeExecutorFirstFramesTest {
     }
 
     @Test
+    @DisplayName(
+        "Should leave Dolby Vision and HDR10+ unspecified when Annex B extradata can hold units the"
+            + " probe does not read")
+    void
+        shouldLeaveDolbyVisionAndHdr10PlusUnspecifiedWhenAnnexBExtradataCanHoldUnitsTheProbeDoesNotRead() {
+      var video =
+          h264(
+              "00 00 00 01 67 64 00 28 01 00 00 00 01 68 ee 3c 80",
+              packets(annexB(AUD, SEI, IDR_SLICE), annexB(AUD, SLICE)));
+
+      assertThat(video.getDynamicRange().getDolbyVisionCase())
+          .isEqualTo(DolbyVisionCase.DOLBYVISION_NOT_SET);
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+      assertThat(video.getMasteringDisplayOmitted()).isTrue();
+      assertThat(video.getContentLightLevelOmitted()).isTrue();
+    }
+
+    @Test
     @DisplayName("Should report Dolby Vision and HDR10+ absent when the packets hold neither")
     void shouldReportDolbyVisionAndHdr10PlusAbsentWhenThePacketsHoldNeither() {
       var video =
@@ -798,41 +816,32 @@ class FfprobeExecutorFirstFramesTest {
     }
 
     @Test
-    @DisplayName("Should leave Dolby Vision unspecified when a sample holds no start code")
-    void shouldLeaveDolbyVisionUnspecifiedWhenASampleHoldsNoStartCode() {
-      var dynamicRange =
-          h264(
-                  "00 00 00 01 67 64 00 28 01 00 00 00 01 68 ee 3c 80",
-                  packets(lengthPrefixed(IDR_SLICE), lengthPrefixed(SLICE)))
-              .getDynamicRange();
+    @DisplayName("Should leave the sample layout unspecified when a sample holds no start code")
+    void shouldLeaveTheSampleLayoutUnspecifiedWhenASampleHoldsNoStartCode() {
+      var present = mpegTs(packets(lengthPrefixed(AUD), annexB(AUD, SLICE, RPU)));
 
-      assertThat(dynamicRange.hasDolbyVisionAbsent()).isFalse();
+      assertThat(present.getObservedRpu()).isEqualTo(Presence.PRESENCE_PRESENT);
+      assertThat(present.getRpuStartsSample()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
     }
 
     @Test
     @DisplayName(
-        "Should leave Dolby Vision unspecified when bytes ahead of the first start code hold data")
-    void shouldLeaveDolbyVisionUnspecifiedWhenBytesAheadOfTheFirstStartCodeHoldData() {
-      // A damaged start code ahead of an RPU, then a slice.
-      var dynamicRange =
-          h264(
-                  "00 00 00 01 67 64 00 28 01 00 00 00 01 68 ee 3c 80",
-                  packets("00 01 " + RPU + " " + annexB(SLICE), annexB(AUD, SLICE)))
-              .getDynamicRange();
+        "Should leave the sample layout unspecified when bytes ahead of the first start code hold"
+            + " data")
+    void shouldLeaveTheSampleLayoutUnspecifiedWhenBytesAheadOfTheFirstStartCodeHoldData() {
+      // A damaged start code ahead of an RPU, then an access unit delimiter.
+      var present = mpegTs(packets("00 01 " + RPU + " " + annexB(AUD), annexB(AUD, SLICE, RPU)));
 
-      assertThat(dynamicRange.hasDolbyVisionAbsent()).isFalse();
+      assertThat(present.getObservedRpu()).isEqualTo(Presence.PRESENCE_PRESENT);
+      assertThat(present.getRpuStartsSample()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
     }
 
     @Test
-    @DisplayName("Should report Dolby Vision absent when zero bytes lead the first start code")
-    void shouldReportDolbyVisionAbsentWhenZeroBytesLeadTheFirstStartCode() {
-      var dynamicRange =
-          h264(
-                  "00 00 00 01 67 64 00 28 01 00 00 00 01 68 ee 3c 80",
-                  packets("00 00 " + annexB(AUD, SLICE), annexB(AUD, SLICE)))
-              .getDynamicRange();
+    @DisplayName("Should read the sample layout when zero bytes lead the first start code")
+    void shouldReadTheSampleLayoutWhenZeroBytesLeadTheFirstStartCode() {
+      var present = mpegTs(packets("00 00 " + annexB(AUD), annexB(AUD, SLICE, RPU)));
 
-      assertThat(dynamicRange.hasDolbyVisionAbsent()).isTrue();
+      assertThat(present.getRpuStartsSample()).isEqualTo(Presence.PRESENCE_ABSENT);
     }
 
     @Test
@@ -851,6 +860,13 @@ class FfprobeExecutorFirstFramesTest {
 
     private static ProbeStreamInfo h264(String packets) {
       return h264(AVC_RECORD, packets);
+    }
+
+    /** The stream as MPEG-TS carries it, with Annex B extradata. */
+    private static DolbyVisionPresent mpegTs(String packets) {
+      return h264("00 00 00 01 67 64 00 28 01 00 00 00 01 68 ee 3c 80", packets)
+          .getDynamicRange()
+          .getDolbyVisionPresent();
     }
 
     private static ProbeStreamInfo h264(String extradata, String packets) {
@@ -1080,17 +1096,22 @@ class FfprobeExecutorFirstFramesTest {
   class RecordedSourceTests {
 
     @Test
-    @DisplayName("Should tell HDR10 from PQ10 when only the bitstream carries the static metadata")
-    void shouldTellHdr10FromPq10WhenOnlyTheBitstreamCarriesTheStaticMetadata() {
+    @DisplayName(
+        "Should read HDR10 from the frames of MPEG-TS but never call a PQ stream without it PQ10")
+    void shouldReadHdr10FromTheFramesOfMpegTsButNeverCallAPqStreamWithoutItPq10() {
+      // MPEG-TS gives the stream Annex B extradata, which can hold SEI that the probe does not
+      // read, so a PQ stream whose frames carry no static metadata may still carry it.
       var hdr10 = streamOf("mpegts-hdr10-sei-only.ts", 0);
-      var pq10 = streamOf("mpegts-pq10.ts", 0);
+      var pq = streamOf("mpegts-pq10.ts", 0);
 
       assertThat(hdr10.getMasteringDisplay().getMaxLuminance()).isEqualTo(10_000_000);
       assertThat(hdr10.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(1000);
-      assertThat(pq10.getFirstFramesRead()).isTrue();
-      assertThat(pq10.hasMasteringDisplay()).isFalse();
-      assertThat(pq10.hasContentLightLevel()).isFalse();
-      assertThat(pq10.getDynamicRange().getCompatibleBase())
+      assertThat(pq.getFirstFramesRead()).isTrue();
+      assertThat(pq.hasMasteringDisplay()).isFalse();
+      assertThat(pq.hasContentLightLevel()).isFalse();
+      assertThat(pq.getMasteringDisplayOmitted()).isTrue();
+      assertThat(pq.getContentLightLevelOmitted()).isTrue();
+      assertThat(pq.getDynamicRange().getCompatibleBase())
           .isEqualTo(CompatibleBase.COMPATIBLE_BASE_PQ);
     }
 
@@ -1199,14 +1220,17 @@ class FfprobeExecutorFirstFramesTest {
 
     @Test
     @DisplayName(
-        "Should report the base layer's Dolby Vision absent when MPEG-TS carries the enhancement"
-            + " layer in another stream")
+        "Should leave the base layer's Dolby Vision unspecified when MPEG-TS carries the"
+            + " enhancement layer in another stream")
     void
-        shouldReportTheBaseLayersDolbyVisionAbsentWhenMpegTsCarriesTheEnhancementLayerInAnotherStream() {
-      // The base layer is the chosen video stream; the record and the RPUs sit in stream 1.
+        shouldLeaveTheBaseLayersDolbyVisionUnspecifiedWhenMpegTsCarriesTheEnhancementLayerInAnotherStream() {
+      // The base layer is the chosen video stream; the record and the RPUs sit in stream 1. The
+      // base layer's Annex B extradata can hold units that the probe does not read.
       var media = RecordedFfprobe.probeFixture("mpegts-dovi-p7-two-layers.ts");
 
-      assertThat(media.getStreams(0).getDynamicRange().hasDolbyVisionAbsent()).isTrue();
+      assertThat(media.getStreams(0).getFirstFramesRead()).isTrue();
+      assertThat(media.getStreams(0).getDynamicRange().getDolbyVisionCase())
+          .isEqualTo(DolbyVisionCase.DOLBYVISION_NOT_SET);
       assertThat(media.getStreams(1).getFirstFramesRead()).isFalse();
       assertThat(media.getStreams(1).getDynamicRange().getDolbyVisionPresent().getObservedRpu())
           .isEqualTo(Presence.PRESENCE_UNSPECIFIED);

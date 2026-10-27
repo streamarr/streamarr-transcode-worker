@@ -15,17 +15,21 @@ final class PacketRpuReader {
   /**
    * The RPUs that the packets show; empty when the probe read no packet, cannot parse one, or finds
    * no extradata to tell how the samples delimit their NAL units. A sample whose NAL units the
-   * reader cannot delimit to its end can hide an RPU, so it rules out no RPU.
+   * reader cannot delimit to its end can hide an RPU, and so can units that the walks miss, as
+   * {@link WalkCoverage} says, so they rule out no RPU.
    */
   static Optional<RpuObservation> read(JsonNode stream, NalSyntax syntax) {
-    return FirstPacketSamples.read(stream, syntax).flatMap(samples -> observation(samples, syntax));
+    var isEveryUnitWalked = !WalkCoverage.missesUnits(stream);
+    return FirstPacketSamples.read(stream, syntax)
+        .flatMap(samples -> observation(samples, syntax, isEveryUnitWalked));
   }
 
-  private static Optional<RpuObservation> observation(List<NalUnits> samples, NalSyntax syntax) {
+  private static Optional<RpuObservation> observation(
+      List<NalUnits> samples, NalSyntax syntax, boolean isEveryUnitWalked) {
     var rpus = samples.stream().flatMap(sample -> sample.units().stream()).filter(syntax::isRpu);
     var firstRpu = rpus.findFirst();
     var isEverySampleComplete = samples.stream().allMatch(NalUnits::complete);
-    if (firstRpu.isEmpty() && !isEverySampleComplete) {
+    if (firstRpu.isEmpty() && !(isEverySampleComplete && isEveryUnitWalked)) {
       return Optional.empty();
     }
 

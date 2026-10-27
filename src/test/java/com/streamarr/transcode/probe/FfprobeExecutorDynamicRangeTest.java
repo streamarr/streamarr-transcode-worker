@@ -135,7 +135,7 @@ class FfprobeExecutorDynamicRangeTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @ValueSource(strings = {"mpegts-pq10.ts", "mkv-pipe-hevc-10bit.mkv", "mpegts-hevc-ac3.ts"})
+    @ValueSource(strings = {"mkv-pipe-hevc-10bit.mkv", "mp4-sdr8-bt709.mp4"})
     @DisplayName(
         "Should report Dolby Vision and HDR10+ absent when neither the stream nor its first frames"
             + " and packets show them")
@@ -222,7 +222,7 @@ class FfprobeExecutorDynamicRangeTest {
     @Test
     @DisplayName("Should report no static metadata when neither the container nor a frame has it")
     void shouldReportNoStaticMetadataWhenNeitherTheContainerNorAFrameHasIt() {
-      var video = streamOf("mpegts-pq10.ts", 0);
+      var video = streamOf("mkv-pipe-hevc-10bit.mkv", 0);
 
       assertThat(video.getFirstFramesRead()).isTrue();
       assertThat(video.hasMasteringDisplay()).isFalse();

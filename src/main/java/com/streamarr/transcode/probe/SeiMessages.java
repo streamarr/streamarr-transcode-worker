@@ -47,6 +47,10 @@ record SeiMessages(List<SeiMessage> messages, boolean readAll) {
     }
 
     var walk = new Walk(syntax.get());
+    if (WalkCoverage.missesUnits(stream)) {
+      walk.missUnits();
+    }
+
     Extradata.of(stream)
         .filter(_ -> syntax.get() == NalSyntax.HEVC)
         .filter(extradata -> Byte.toUnsignedInt(extradata[0]) == HEVC_RECORD_VERSION)
