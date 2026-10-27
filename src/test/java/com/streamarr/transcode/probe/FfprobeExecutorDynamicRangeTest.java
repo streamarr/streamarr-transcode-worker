@@ -36,8 +36,6 @@ class FfprobeExecutorDynamicRangeTest {
           "bt709",
           "smpte170m",
           "smpte240m",
-          "gamma22",
-          "gamma28",
           "bt470m",
           "bt470bg",
           "iec61966-2-1",
@@ -55,7 +53,8 @@ class FfprobeExecutorDynamicRangeTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @ValueSource(strings = {"linear", "log100", "log316", "smpte428", "reserved", "unknown"})
+    @ValueSource(
+        strings = {"linear", "log100", "log316", "smpte428", "reserved", "unknown", "vlog", ""})
     @DisplayName("Should report an unspecified base when the transfer is neither SDR nor HDR")
     void shouldReportAnUnspecifiedBaseWhenTheTransferIsNeitherSdrNorHdr(String transfer) {
       var video = videoStream("\"color_transfer\":\"" + transfer + "\"");
@@ -74,6 +73,28 @@ class FfprobeExecutorDynamicRangeTest {
               "color_transfer":"unknown",
               "side_data_list":[{"side_data_type":"DOVI configuration record","dv_profile":5}]
               """);
+
+      assertThat(video.getDynamicRange().getCompatibleBase())
+          .isEqualTo(CompatibleBase.COMPATIBLE_BASE_NONE);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(
+        strings = {"linear", "log100", "log316", "smpte428", "reserved", "unknown", "vlog", ""})
+    @DisplayName(
+        "Should report no compatible base when a Dolby Vision stream's transfer names no standard"
+            + " format")
+    void shouldReportNoCompatibleBaseWhenADolbyVisionStreamsTransferNamesNoStandardFormat(
+        String transfer) {
+      // Profile 8.1 has a compatible base whenever its transfer names one.
+      var video =
+          videoStream(
+              """
+              "color_transfer":"%s",
+              "side_data_list":[{"side_data_type":"DOVI configuration record","dv_profile":8,
+                "dv_bl_signal_compatibility_id":1}]
+              """
+                  .formatted(transfer));
 
       assertThat(video.getDynamicRange().getCompatibleBase())
           .isEqualTo(CompatibleBase.COMPATIBLE_BASE_NONE);

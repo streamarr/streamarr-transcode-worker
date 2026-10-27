@@ -48,22 +48,6 @@ final class DynamicRangeReader {
           "disable_residual_flag",
           "vdr_bit_depth");
 
-  /** FFmpeg's names for the transfers of standard dynamic range. */
-  private static final Set<String> SDR_TRANSFERS =
-      Set.of(
-          "bt709",
-          "smpte170m",
-          "smpte240m",
-          "gamma22",
-          "gamma28",
-          "bt470m",
-          "bt470bg",
-          "iec61966-2-4",
-          "iec61966-2-1",
-          "bt1361e",
-          "bt2020-10",
-          "bt2020-12");
-
   private DynamicRangeReader() {}
 
   static VideoDynamicRange read(JsonNode stream, Optional<MetadataWalk> walk) {
@@ -117,20 +101,29 @@ final class DynamicRangeReader {
     return Presence.PRESENCE_UNSPECIFIED;
   }
 
-  /** The signaled transfer decides, even when a Dolby Vision record claims another base. */
+  /**
+   * The signaled transfer decides, even when a Dolby Vision record claims another base. A transfer
+   * that names none of SDR, PQ and HLG leaves a Dolby Vision stream without a compatible base.
+   */
   private static CompatibleBase compatibleBase(JsonNode stream, boolean dolbyVision) {
-    var transfer = text(stream, "color_transfer").filter(value -> !"unknown".equals(value));
-    if (transfer.isEmpty()) {
-      return dolbyVision
-          ? CompatibleBase.COMPATIBLE_BASE_NONE
-          : CompatibleBase.COMPATIBLE_BASE_UNSPECIFIED;
-    }
-
-    return switch (transfer.get()) {
-      case "smpte2084" -> CompatibleBase.COMPATIBLE_BASE_PQ;
-      case "arib-std-b67" -> CompatibleBase.COMPATIBLE_BASE_HLG;
-      case String name when SDR_TRANSFERS.contains(name) -> CompatibleBase.COMPATIBLE_BASE_SDR;
-      default -> CompatibleBase.COMPATIBLE_BASE_UNSPECIFIED;
+    return switch (ColorSignaling.transfer(stream)) {
+      case TRANSFER_CHARACTERISTICS_BT709,
+          TRANSFER_CHARACTERISTICS_BT470M,
+          TRANSFER_CHARACTERISTICS_BT470BG,
+          TRANSFER_CHARACTERISTICS_SMPTE170M,
+          TRANSFER_CHARACTERISTICS_SMPTE240M,
+          TRANSFER_CHARACTERISTICS_IEC61966_2_4,
+          TRANSFER_CHARACTERISTICS_BT1361,
+          TRANSFER_CHARACTERISTICS_IEC61966_2_1,
+          TRANSFER_CHARACTERISTICS_BT2020_10,
+          TRANSFER_CHARACTERISTICS_BT2020_12 ->
+          CompatibleBase.COMPATIBLE_BASE_SDR;
+      case TRANSFER_CHARACTERISTICS_SMPTE2084 -> CompatibleBase.COMPATIBLE_BASE_PQ;
+      case TRANSFER_CHARACTERISTICS_ARIB_STD_B67 -> CompatibleBase.COMPATIBLE_BASE_HLG;
+      default ->
+          dolbyVision
+              ? CompatibleBase.COMPATIBLE_BASE_NONE
+              : CompatibleBase.COMPATIBLE_BASE_UNSPECIFIED;
     };
   }
 
