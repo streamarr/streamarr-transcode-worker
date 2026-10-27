@@ -219,6 +219,28 @@ class FfprobeExecutorFirstFramesTest {
     }
 
     @Test
+    @DisplayName("Should leave Dolby Vision unspecified when an AV1 stream's frames show no RPU")
+    void shouldLeaveDolbyVisionUnspecifiedWhenAnAv1StreamsFramesShowNoRpu() {
+      // FFmpeg's AV1 decoders drop an RPU that they cannot parse.
+      var video = video(codec("av1"), frames("", ""));
+
+      assertThat(video.getFirstFramesRead()).isTrue();
+      assertThat(video.getDynamicRange().getDolbyVisionCase())
+          .isEqualTo(DolbyVisionCase.DOLBYVISION_NOT_SET);
+    }
+
+    @Test
+    @DisplayName(
+        "Should leave the observed RPU unspecified when an AV1 stream's record claims RPUs its"
+            + " frames do not show")
+    void shouldLeaveTheObservedRpuUnspecifiedWhenAnAv1StreamsRecordClaimsRpusItsFramesDoNotShow() {
+      var video = video(codec("av1") + "," + record(10, 1), frames("", ""));
+
+      assertThat(video.getDynamicRange().getDolbyVisionPresent().getObservedRpu())
+          .isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+    }
+
+    @Test
     @DisplayName("Should report the first RPU's header when a record-less stream carries RPUs")
     void shouldReportTheFirstRpusHeaderWhenARecordLessStreamCarriesRpus() {
       var video =
@@ -936,6 +958,16 @@ class FfprobeExecutorFirstFramesTest {
                   .setVdrBitDepth(12)
                   .build());
       assertThat(dynamicRange.getCompatibleBase()).isEqualTo(compatibleBase);
+    }
+
+    @Test
+    @DisplayName("Should leave Dolby Vision unspecified when an AV1 sample's frames show no RPU")
+    void shouldLeaveDolbyVisionUnspecifiedWhenAnAv1SamplesFramesShowNoRpu() {
+      var video = streamOf("mp4-av1-10bit.mp4", 0);
+
+      assertThat(video.getFirstFramesRead()).isTrue();
+      assertThat(video.getDynamicRange().getDolbyVisionCase())
+          .isEqualTo(DolbyVisionCase.DOLBYVISION_NOT_SET);
     }
 
     @Test

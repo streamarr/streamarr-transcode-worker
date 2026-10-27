@@ -162,28 +162,29 @@ final class DynamicRangeReader {
   /**
    * What the frames and, for a codec of NAL units, the packets that hold them show of the RPUs. A
    * decoder can ignore or drop an RPU, so no RPU in the frames rules out none: only packets whose
-   * every NAL unit the probe delimited do. The header comes from the frames, or from the packets
-   * when the frames show no RPU.
+   * every NAL unit the probe delimited do, and an AV1 stream's frames rule out none. The header
+   * comes from the frames, or from the packets when the frames show no RPU.
    */
   private static Optional<RpuObservation> rpus(
       JsonNode stream, String codec, Optional<FirstFrames> frames) {
-    var fromFrames = frames.map(DynamicRangeReader::rpusOf);
+    var inFrames =
+        frames
+            .map(DynamicRangeReader::rpusOf)
+            .filter(observed -> observed.presence() == Presence.PRESENCE_PRESENT);
     var syntax = NalSyntax.of(codec);
     if (syntax.isEmpty() || FirstFrames.of(stream).isEmpty()) {
-      return fromFrames;
+      return inFrames;
     }
 
     var fromPackets = PacketRpuReader.read(stream, syntax.get());
-    var isInFrames =
-        fromFrames.filter(observed -> observed.presence() == Presence.PRESENCE_PRESENT).isPresent();
-    if (!isInFrames) {
+    if (inFrames.isEmpty()) {
       return fromPackets;
     }
 
     return Optional.of(
         new RpuObservation(
             Presence.PRESENCE_PRESENT,
-            fromFrames.get().firstHeader(),
+            inFrames.get().firstHeader(),
             fromPackets.map(RpuObservation::startsSample).orElse(Presence.PRESENCE_UNSPECIFIED)));
   }
 
