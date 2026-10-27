@@ -477,7 +477,8 @@ PACKET_DATA=(mp4-sdr8-bt709.mp4 mp4-dovi-p9-avc1.mp4 mp4-dovi-p9-dva1.mp4 mpegts
   mpegts-dovi-p7-two-layers.ts mpegts-pq10.ts
   mkv-pipe-hevc-10bit.mkv mpegts-hevc-ac3.ts hevc-hdr10-plus-rejected-sei.hevc
   h264-hdr10-rejected-sei.h264 mp4-av1-pq.mp4 mp4-av1-hdr10-plus-rejected.mp4
-  mp4-av1-static-after-frame.mp4 mp4-av1-rpu.mp4 mp4-av1-rpu-bad-emdf.mp4)
+  mp4-av1-static-after-frame.mp4 mp4-av1-rpu.mp4 mp4-av1-rpu-bad-emdf.mp4 ivf-av1-10bit.ivf
+  obu-av1-10bit.obu mpegts-hdr10-sei-only.ts)
 mkdir -p "$FIXTURES/packet-data"
 for source in "${PACKET_DATA[@]}"; do
   if [ -f "$WORK/packet-data/$source.json" ]; then

@@ -718,20 +718,18 @@ class FfprobeExecutorFirstFramesTest {
 
     @Test
     @DisplayName(
-        "Should leave Dolby Vision and HDR10+ unspecified when Annex B extradata can hold units the"
-            + " probe does not read")
-    void
-        shouldLeaveDolbyVisionAndHdr10PlusUnspecifiedWhenAnnexBExtradataCanHoldUnitsTheProbeDoesNotRead() {
+        "Should report Dolby Vision and HDR10+ absent when Annex B extradata and the packets hold"
+            + " neither")
+    void shouldReportDolbyVisionAndHdr10PlusAbsentWhenAnnexBExtradataAndThePacketsHoldNeither() {
       var video =
           h264(
               "00 00 00 01 67 64 00 28 01 00 00 00 01 68 ee 3c 80",
-              packets(annexB(AUD, SEI, IDR_SLICE), annexB(AUD, SLICE)));
+              packets(annexB(AUD, SEI, IDR_SLICE), annexB(AUD, SLICE), annexB(AUD, SLICE)));
 
-      assertThat(video.getDynamicRange().getDolbyVisionCase())
-          .isEqualTo(DolbyVisionCase.DOLBYVISION_NOT_SET);
-      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
-      assertThat(video.getMasteringDisplayOmitted()).isTrue();
-      assertThat(video.getContentLightLevelOmitted()).isTrue();
+      assertThat(video.getDynamicRange().hasDolbyVisionAbsent()).isTrue();
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
+      assertThat(video.getMasteringDisplayOmitted()).isFalse();
+      assertThat(video.getContentLightLevelOmitted()).isFalse();
     }
 
     @Test
@@ -1132,6 +1130,20 @@ class FfprobeExecutorFirstFramesTest {
     }
 
     @Test
+    @DisplayName("Should leave Dolby Vision unspecified when the hvcC record runs past its end")
+    void shouldLeaveDolbyVisionUnspecifiedWhenTheHvccRecordRunsPastItsEnd() {
+      // The record's one array counts a NAL unit of 255 bytes that it does not hold.
+      var video =
+          probed(
+              hevc(extradata(HEVC_RECORD.replace("0f 00", "0f 01 20 00 01 00 ff")))
+                  .firstFrames(frames("", "", ""))
+                  .firstPackets(packetsUpTo(3, lengthPrefixed(SLICE), lengthPrefixed(IDR_SLICE))));
+
+      assertThat(video.getDynamicRange().getDolbyVisionCase())
+          .isEqualTo(DolbyVisionCase.DOLBYVISION_NOT_SET);
+    }
+
+    @Test
     @DisplayName("Should leave Dolby Vision unspecified when a sample's length runs past its end")
     void shouldLeaveDolbyVisionUnspecifiedWhenASamplesLengthRunsPastItsEnd() {
       var video =
@@ -1303,20 +1315,23 @@ class FfprobeExecutorFirstFramesTest {
 
     @Test
     @DisplayName(
-        "Should read HDR10 from the frames of MPEG-TS but never call a PQ stream without it PQ10")
-    void shouldReadHdr10FromTheFramesOfMpegTsButNeverCallAPqStreamWithoutItPq10() {
-      // MPEG-TS gives the stream Annex B extradata, which can hold SEI that the probe does not
-      // read, so a PQ stream whose frames carry no static metadata may still carry it.
+        "Should read HDR10 from the frames of MPEG-TS and rule static metadata out of a PQ stream"
+            + " without it")
+    void shouldReadHdr10FromTheFramesOfMpegTsAndRuleStaticMetadataOutOfAPqStreamWithoutIt() {
+      // MPEG-TS gives the stream its parameter sets as Annex B extradata, which the walk reads with
+      // the packets, so a PQ stream whose extradata, frames and packets carry no static metadata is
+      // PQ10.
       var hdr10 = streamOf("mpegts-hdr10-sei-only.ts", 0);
       var pq = streamOf("mpegts-pq10.ts", 0);
 
       assertThat(hdr10.getMasteringDisplay().getMaxLuminance()).isEqualTo(10_000_000);
       assertThat(hdr10.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(1000);
+      assertThat(hdr10.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
       assertThat(pq.getFirstFramesRead()).isTrue();
       assertThat(pq.hasMasteringDisplay()).isFalse();
       assertThat(pq.hasContentLightLevel()).isFalse();
-      assertThat(pq.getMasteringDisplayOmitted()).isTrue();
-      assertThat(pq.getContentLightLevelOmitted()).isTrue();
+      assertThat(pq.getMasteringDisplayOmitted()).isFalse();
+      assertThat(pq.getContentLightLevelOmitted()).isFalse();
       assertThat(pq.getDynamicRange().getCompatibleBase())
           .isEqualTo(CompatibleBase.COMPATIBLE_BASE_PQ);
     }
@@ -1426,17 +1441,16 @@ class FfprobeExecutorFirstFramesTest {
 
     @Test
     @DisplayName(
-        "Should leave the base layer's Dolby Vision unspecified when MPEG-TS carries the"
-            + " enhancement layer in another stream")
+        "Should report the base layer's Dolby Vision absent when MPEG-TS carries the enhancement"
+            + " layer and the RPUs in another stream")
     void
-        shouldLeaveTheBaseLayersDolbyVisionUnspecifiedWhenMpegTsCarriesTheEnhancementLayerInAnotherStream() {
-      // The base layer is the chosen video stream; the record and the RPUs sit in stream 1. The
-      // base layer's Annex B extradata can hold units that the probe does not read.
+        shouldReportTheBaseLayersDolbyVisionAbsentWhenMpegTsCarriesTheEnhancementLayerAndTheRpusInAnotherStream() {
+      // The base layer is the chosen video stream; the record and the RPUs sit in stream 1, so the
+      // base layer's extradata, frames and packets hold none.
       var media = RecordedFfprobe.probeFixture("mpegts-dovi-p7-two-layers.ts");
 
       assertThat(media.getStreams(0).getFirstFramesRead()).isTrue();
-      assertThat(media.getStreams(0).getDynamicRange().getDolbyVisionCase())
-          .isEqualTo(DolbyVisionCase.DOLBYVISION_NOT_SET);
+      assertThat(media.getStreams(0).getDynamicRange().hasDolbyVisionAbsent()).isTrue();
       assertThat(media.getStreams(1).getFirstFramesRead()).isFalse();
       assertThat(media.getStreams(1).getDynamicRange().getDolbyVisionPresent().getObservedRpu())
           .isEqualTo(Presence.PRESENCE_UNSPECIFIED);

@@ -14,14 +14,15 @@ import java.util.Set;
 import tools.jackson.databind.JsonNode;
 
 /**
- * The HDR metadata OBUs of an AV1 chosen video stream that the probe read: those of the av1C
- * record's configOBUs, then those of the first packets, in order. FFmpeg's AV1 decoders drop the
- * rest of a packet from an OBU that they cannot parse, drop a frame whose HDR10+ message they
- * cannot parse, and never apply the record's metadata OBUs, so the probe walks every OBU itself, in
- * the low-overhead bitstream format of AV1 section 5.
+ * The HDR metadata OBUs of an AV1 chosen video stream that the probe read: those of the extradata,
+ * the configOBUs of an av1C record or the bare OBUs that FFmpeg gives a stream in IVF or in a raw
+ * .obu file, then those of the first packets, in order. FFmpeg's AV1 decoders drop the rest of a
+ * packet from an OBU that they cannot parse, drop a frame whose HDR10+ message they cannot parse,
+ * and never apply the extradata's metadata OBUs, so the probe walks every OBU itself, in the
+ * low-overhead bitstream format of AV1 section 5.
  *
  * <p>An OBU is delimited when its header, its extension byte, its obu_size of at most 8 bytes and
- * its payload end within its packet or record; an OBU without a size field runs to the end of
+ * its payload end within its packet or extradata; an OBU without a size field runs to the end of
  * either. A metadata OBU is delimited when its metadata_type also ends within the OBU and, for
  * HDR_CLL, HDR_MDCV and ITUT_T35, its last nonzero byte is 0x80: the trailing bits. The walk read
  * all of the OBUs when it delimited every one. A metadata OBU with an extension byte names a layer
@@ -79,11 +80,7 @@ final class Av1MetadataObus implements MetadataWalk {
       walk.readAll = false;
     }
 
-    Extradata.of(stream)
-        .filter(DecoderConfiguration::isAv1Record)
-        .ifPresent(
-            record ->
-                walk.add(record, DecoderConfiguration.AV1_RECORD_HEADER_BYTES, record.length));
+    Extradata.of(stream).ifPresent(extradata -> walk.addExtradata(extradata));
     FirstPackets.of(stream)
         .ifPresentOrElse(
             packets -> packets.forEach(packet -> walk.add(packet, 0, packet.length)),
@@ -190,6 +187,24 @@ final class Av1MetadataObus implements MetadataWalk {
     private byte[] firstRpu;
     private boolean hasLayeredRpu;
     private boolean readAll = true;
+
+    /**
+     * Walks the OBUs of an av1C record's configOBUs or of bare OBUs; extradata of any other form
+     * holds OBUs that the walk cannot read.
+     */
+    void addExtradata(byte[] extradata) {
+      if (DecoderConfiguration.isAv1Record(extradata)) {
+        add(extradata, DecoderConfiguration.AV1_RECORD_HEADER_BYTES, extradata.length);
+        return;
+      }
+
+      if (DecoderConfiguration.isAv1Obus(extradata)) {
+        add(extradata, 0, extradata.length);
+        return;
+      }
+
+      readAll = false;
+    }
 
     /** Walks the OBUs from {@code start} to {@code end}, and stops at one it cannot delimit. */
     void add(byte[] bytes, int start, int end) {

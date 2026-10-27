@@ -13,15 +13,16 @@ import tools.jackson.databind.JsonNode;
 
 /**
  * The HDR SEI messages of an H.264 or HEVC chosen video stream that the probe read: those of the
- * HEVC configuration record (hvcC), then those of the first packets, in order. FFmpeg stops parsing
- * an SEI NAL unit at the first message that it rejects, and ignores nested messages, so the probe
- * walks every SEI NAL unit itself, message by message, and reads inside the nesting messages.
+ * extradata, as {@link NalSyntax#extradataUnits} reads it, then those of the first packets, in
+ * order. FFmpeg stops parsing an SEI NAL unit at the first message that it rejects, and ignores
+ * nested messages, so the probe walks every SEI NAL unit itself, message by message, and reads
+ * inside the nesting messages.
  *
- * <p>The walk read all of the SEI when it delimited every NAL unit of the record and the packets,
- * and every SEI NAL unit among them: the payload of every message ends within its NAL unit, every
- * nested message ends within the payload of its nesting message, no nesting message nests another,
- * no message is a nesting message that the walk does not read inside, and only the RBSP trailing
- * bits follow the last message.
+ * <p>The walk read all of the SEI when it delimited every NAL unit of the extradata and the
+ * packets, and every SEI NAL unit among them: the payload of every message ends within its NAL
+ * unit, every nested message ends within the payload of its nesting message, no nesting message
+ * nests another, no message is a nesting message that the walk does not read inside, and only the
+ * RBSP trailing bits follow the last message.
  */
 final class SeiMessages implements MetadataWalk {
 
@@ -33,7 +34,6 @@ final class SeiMessages implements MetadataWalk {
   // and application identifier 4 make it an HDR10+ message.
   private static final byte[] HDR10_PLUS_IDENTIFIER = {(byte) 0xB5, 0x00, 0x3C, 0x00, 0x01, 0x04};
   private static final int TRAILING_BITS = 0x80;
-  private static final int HEVC_RECORD_VERSION = 1;
 
   // The walk keeps the first payload of each kind and which kinds showed, not every message, so
   // that its memory stays bounded however many messages the packets hold.
@@ -64,11 +64,7 @@ final class SeiMessages implements MetadataWalk {
       walk.missUnits();
     }
 
-    Extradata.of(stream)
-        .filter(_ -> syntax.get() == NalSyntax.HEVC)
-        .filter(extradata -> Byte.toUnsignedInt(extradata[0]) == HEVC_RECORD_VERSION)
-        .map(DecoderConfiguration::hevcRecordUnits)
-        .ifPresent(walk::add);
+    Extradata.of(stream).map(syntax.get()::extradataUnits).ifPresent(walk::add);
     FirstPacketSamples.read(stream, syntax.get())
         .ifPresentOrElse(samples -> samples.forEach(walk::add), walk::missUnits);
     return Optional.of(new SeiMessages(walk, PacketRpuReader.read(stream, syntax.get())));

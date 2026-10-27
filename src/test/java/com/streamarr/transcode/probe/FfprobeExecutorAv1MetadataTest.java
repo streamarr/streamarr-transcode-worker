@@ -27,6 +27,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 @Tag("UnitTest")
 @DisplayName("Ffprobe Executor AV1 Metadata Tests")
@@ -154,15 +155,34 @@ class FfprobeExecutorAv1MetadataTest {
     }
 
     @Test
-    @DisplayName(
-        "Should leave HDR10+ unspecified when the extradata is bare OBUs rather than a record")
-    void shouldLeaveHdr10PlusUnspecifiedWhenTheExtradataIsBareObusRatherThanARecord() {
-      // FFmpeg gives an AV1 stream in IVF its sequence header and global metadata OBUs as
-      // extradata.
-      var video = probed(obu(1, "00 00 00"), temporalUnit());
+    @DisplayName("Should walk bare OBU extradata as FFmpeg gives it to an AV1 stream in IVF")
+    void shouldWalkBareObuExtradataAsFfmpegGivesItToAnAv1StreamInIvf() {
+      // FFmpeg gives an AV1 stream in IVF or a raw .obu file its sequence header and global
+      // metadata OBUs as extradata.
+      var video = probed(obu(1, "00 00 00") + " " + LIGHT_LEVEL, temporalUnit());
 
-      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
-      assertThat(video.getMasteringDisplayOmitted()).isTrue();
+      assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(1000);
+      assertThat(video.getMasteringDisplayOmitted()).isFalse();
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
+      assertThat(video.getDynamicRange().hasDolbyVisionAbsent()).isTrue();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+      "a high bit that names neither form, 82 00 0c 00",
+      "an av1C marker without the record's 4 bytes, 81 00 0c",
+      "a bare OBU whose size runs past the extradata, 0a 05 00 00"
+    })
+    @DisplayName("Should rule nothing out when the walk cannot read the extradata")
+    void shouldRuleNothingOutWhenTheWalkCannotReadTheExtradata(
+        String description, String extradata) {
+      var video = probed(extradata, temporalUnit());
+
+      assertThat(video.getDynamicRange().getHdr10Plus())
+          .as(description)
+          .isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+      assertThat(video.getDynamicRange().hasDolbyVisionAbsent()).as(description).isFalse();
+      assertThat(video.getMasteringDisplayOmitted()).as(description).isTrue();
     }
 
     @Test
@@ -380,6 +400,24 @@ class FfprobeExecutorAv1MetadataTest {
   @Nested
   @DisplayName("Recorded Sources")
   class RecordedSourceTests {
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"ivf-av1-10bit.ivf", "obu-av1-10bit.obu"})
+    @DisplayName(
+        "Should rule out HDR10+, Dolby Vision and static metadata when a stream's bare OBU"
+            + " extradata and packets hold none")
+    void
+        shouldRuleOutHdr10PlusDolbyVisionAndStaticMetadataWhenAStreamsBareObuExtradataAndPacketsHoldNone(
+            String fixture) {
+      // FFmpeg gives the stream in IVF or in a raw .obu file its sequence header OBU as extradata.
+      var video = streamOf(fixture, 0);
+
+      assertThat(video.getFirstFramesRead()).isTrue();
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
+      assertThat(video.getDynamicRange().hasDolbyVisionAbsent()).isTrue();
+      assertThat(video.getMasteringDisplayOmitted()).isFalse();
+      assertThat(video.getContentLightLevelOmitted()).isFalse();
+    }
 
     @Test
     @DisplayName("Should rule out HDR10+, Dolby Vision and static metadata when no OBU holds them")

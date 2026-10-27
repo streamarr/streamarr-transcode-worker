@@ -234,28 +234,61 @@ class FfprobeExecutorSeiTest {
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_PRESENT);
     }
 
-    @Test
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Coding.class)
     @DisplayName(
-        "Should leave HDR10+ unspecified when Annex B extradata can hold SEI that the probe does not"
-            + " read")
-    void shouldLeaveHdr10PlusUnspecifiedWhenAnnexBExtradataCanHoldSeiThatTheProbeDoesNotRead() {
+        "Should take the static values from Annex B extradata and rule out the rest when every unit"
+            + " is delimited")
+    void shouldTakeTheStaticValuesFromAnnexBExtradataAndRuleOutTheRestWhenEveryUnitIsDelimited(
+        Coding coding) {
       // FFmpeg's HEVC decoder applies the SEI NAL units of Annex B extradata to the frames.
       var video =
-          probe(
-                  Answers.builder()
-                      .ffprobeOutput(
-                          output(
-                              Coding.HEVC.codecName()
-                                  + ","
-                                  + extradata("00 00 00 01 40 01 0c 01 ff ff")))
-                      .firstFrames(frames("", "", ""))
-                      .firstPackets(packets(annexB(Coding.HEVC.sei(LIGHT_LEVEL), "26 01 af")))
-                      .build())
-              .getStreams(0);
+          annexBProbed(
+              coding,
+              annexB(coding.parameterSet, coding.sei(LIGHT_LEVEL)),
+              annexB(coding.sei(SHORT_UNREGISTERED), coding.slice));
+
+      assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(1000);
+      assertThat(video.getContentLightLevelOmitted()).isFalse();
+      assertThat(video.getMasteringDisplayOmitted()).isFalse();
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Coding.class)
+    @DisplayName("Should report HDR10+ present when Annex B extradata holds it")
+    void shouldReportHdr10PlusPresentWhenAnnexBExtradataHoldsIt(Coding coding) {
+      var video =
+          annexBProbed(
+              coding, annexB(coding.parameterSet, coding.sei(HDR10_PLUS)), annexB(coding.slice));
+
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_PRESENT);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Coding.class)
+    @DisplayName(
+        "Should rule nothing out when data ahead of the first start code leaves Annex B extradata"
+            + " undelimited")
+    void shouldRuleNothingOutWhenDataAheadOfTheFirstStartCodeLeavesAnnexBExtradataUndelimited(
+        Coding coding) {
+      var video = annexBProbed(coding, "02 " + annexB(coding.parameterSet), annexB(coding.slice));
 
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
-      assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(1000);
+      assertThat(video.getDynamicRange().hasDolbyVisionAbsent()).isFalse();
       assertThat(video.getMasteringDisplayOmitted()).isTrue();
+      assertThat(video.getContentLightLevelOmitted()).isTrue();
+    }
+
+    /** The stream with Annex B extradata, 3 first frames, and 3 first packets of the sample. */
+    private static ProbeStreamInfo annexBProbed(Coding coding, String extradata, String sample) {
+      return probe(
+              Answers.builder()
+                  .ffprobeOutput(output(coding.codecName() + "," + extradata(extradata)))
+                  .firstFrames(frames("", "", ""))
+                  .firstPackets(packetsUpTo(3, annexB(coding.slice), sample))
+                  .build())
+          .getStreams(0);
     }
 
     @ParameterizedTest(name = "{0}")
@@ -737,16 +770,16 @@ class FfprobeExecutorSeiTest {
 
     @Test
     @DisplayName(
-        "Should read an H.264 stream's mastering display from its packets and rule out nothing that"
-            + " its Annex B extradata could hold")
+        "Should read an H.264 stream's mastering display from its packets and rule out what its"
+            + " Annex B extradata and packets do not hold")
     void
-        shouldReadAnH264StreamsMasteringDisplayFromItsPacketsAndRuleOutNothingThatItsAnnexBExtradataCouldHold() {
+        shouldReadAnH264StreamsMasteringDisplayFromItsPacketsAndRuleOutWhatItsAnnexBExtradataAndPacketsDoNotHold() {
       var video = streamOf("h264-hdr10-rejected-sei.h264", 0);
 
-      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
       assertThat(video.getMasteringDisplay()).isEqualTo(RECORDED_MASTERING_DISPLAY);
       assertThat(video.hasContentLightLevel()).isFalse();
-      assertThat(video.getContentLightLevelOmitted()).isTrue();
+      assertThat(video.getContentLightLevelOmitted()).isFalse();
     }
 
     @ParameterizedTest(name = "{0}")
@@ -767,16 +800,18 @@ class FfprobeExecutorSeiTest {
     @ParameterizedTest(name = "{0}")
     @ValueSource(strings = {"mpegts-pq10.ts", "mpegts-hevc-ac3.ts"})
     @DisplayName(
-        "Should rule out neither HDR10+ nor static metadata when MPEG-TS gives the stream Annex B"
-            + " extradata")
-    void shouldRuleOutNeitherHdr10PlusNorStaticMetadataWhenMpegTsGivesTheStreamAnnexBExtradata(
-        String fixture) {
+        "Should rule out HDR10+, Dolby Vision and static metadata when an MPEG-TS stream's Annex B"
+            + " extradata and packets hold none")
+    void
+        shouldRuleOutHdr10PlusDolbyVisionAndStaticMetadataWhenAnMpegTsStreamsAnnexBExtradataAndPacketsHoldNone(
+            String fixture) {
+      // MPEG-TS gives the stream its parameter sets as Annex B extradata.
       var video = streamOf(fixture, 0);
 
-      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
-      assertThat(video.getDynamicRange().hasDolbyVisionAbsent()).isFalse();
-      assertThat(video.getMasteringDisplayOmitted()).isTrue();
-      assertThat(video.getContentLightLevelOmitted()).isTrue();
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
+      assertThat(video.getDynamicRange().hasDolbyVisionAbsent()).isTrue();
+      assertThat(video.getMasteringDisplayOmitted()).isFalse();
+      assertThat(video.getContentLightLevelOmitted()).isFalse();
     }
   }
 
@@ -786,23 +821,30 @@ class FfprobeExecutorSeiTest {
    */
   enum Coding {
     H264(
-        "h264", "01 64 00 28 ff e1 00 04 67 64 00 28 01 00 04 68 ee 3c 80", "06", "65 88 84 00 18"),
+        "h264",
+        "01 64 00 28 ff e1 00 04 67 64 00 28 01 00 04 68 ee 3c 80",
+        "06",
+        "65 88 84 00 18",
+        "67 64 00 28 01"),
     HEVC(
         "hevc",
         "01 01 60 00 00 00 90 00 00 00 00 00 5d f0 00 fc fd f8 f8 00 00 0f 00",
         "4e 01",
-        "26 01 af 06 b8");
+        "26 01 af 06 b8",
+        "40 01 0c 01 ff ff");
 
     private final String name;
     private final String record;
     private final String seiHeader;
     private final String slice;
+    private final String parameterSet;
 
-    Coding(String name, String record, String seiHeader, String slice) {
+    Coding(String name, String record, String seiHeader, String slice, String parameterSet) {
       this.name = name;
       this.record = record;
       this.seiHeader = seiHeader;
       this.slice = slice;
+      this.parameterSet = parameterSet;
     }
 
     String codecName() {

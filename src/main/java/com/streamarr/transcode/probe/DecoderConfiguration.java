@@ -89,6 +89,14 @@ final class DecoderConfiguration {
         && Byte.toUnsignedInt(extradata[0]) == AV1_RECORD_MARKER;
   }
 
+  /**
+   * Whether the extradata holds bare OBUs, as FFmpeg gives an AV1 stream in IVF or in a raw .obu
+   * file: its first byte, an OBU header, has its forbidden bit clear.
+   */
+  static boolean isAv1Obus(byte[] extradata) {
+    return (extradata[0] & 0x80) == 0;
+  }
+
   /** av1C bytes 1 and 2, or the same fields read from the sequence header OBU. */
   static Optional<Av1SequenceHeader> av1Profile(byte[] extradata) {
     if (Byte.toUnsignedInt(extradata[0]) == AV1_RECORD_MARKER) {

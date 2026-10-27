@@ -1,5 +1,6 @@
 package com.streamarr.transcode.probe;
 
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -81,6 +82,23 @@ enum NalSyntax {
 
   /** Whether the NAL unit holds SEI messages. */
   abstract boolean isSei(byte[] unit);
+
+  /**
+   * The NAL units of the extradata that the walks read. Extradata whose first byte is
+   * configurationVersion 1 is an avcC or an hvcC record: the walks read every NAL unit of an hvcC
+   * record's arrays, and none of an avcC record, which holds only parameter sets. Start codes
+   * delimit the NAL units of any other extradata, as in Annex B.
+   */
+  NalUnits extradataUnits(byte[] extradata) {
+    if (Byte.toUnsignedInt(extradata[0]) != RECORD_VERSION) {
+      return NalUnits.annexB(extradata);
+    }
+
+    return switch (this) {
+      case H264 -> new NalUnits(List.of(), true);
+      case HEVC -> DecoderConfiguration.hevcRecordUnits(extradata);
+    };
+  }
 
   boolean isRpu(byte[] unit) {
     return unit.length > headerLength
