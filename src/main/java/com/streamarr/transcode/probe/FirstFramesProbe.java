@@ -20,8 +20,9 @@ import tools.jackson.databind.node.ObjectNode;
  * for a packet ahead of an MP4 edit list. So the probe widens the read until it decodes 3 frames,
  * up to {@link #WIDEST_READ} packets, and keeps the first 3. When ffprobe fails or prints no frame,
  * the description gets no frames: the probe then read none. When a read fails before the probe
- * decodes 3 frames, the description also gets {@link #FIRST_FRAMES_CUT_SHORT}: the stream may hold
- * frames that the probe did not read.
+ * decodes 3 frames, or the widest read decodes fewer than 3 frames from a stream that holds more
+ * packets than it read, the description also gets {@link #FIRST_FRAMES_CUT_SHORT}: the stream may
+ * hold frames that the probe did not read.
  */
 @RequiredArgsConstructor
 @Slf4j
@@ -30,7 +31,10 @@ final class FirstFramesProbe {
   /** The key under which the chosen video stream's description holds its first frames. */
   static final String FIRST_FRAMES = "first_frames";
 
-  /** The key whose true value says that a failed read kept the probe from decoding 3 frames. */
+  /**
+   * The key whose true value says that a failed read, or the widest read's limit, kept the probe
+   * from decoding 3 frames.
+   */
   static final String FIRST_FRAMES_CUT_SHORT = "first_frames_cut_short";
 
   private static final int FRAME_COUNT = 3;
@@ -84,11 +88,33 @@ final class FirstFramesProbe {
         objectMapper
             .createArrayNode()
             .addAll(frames.subList(0, Math.min(FRAME_COUNT, frames.size()))));
-    if (readFailed && frames.size() < FRAME_COUNT) {
+    if (frames.size() < FRAME_COUNT && (readFailed || holdsPacketsPastWidestRead(reads))) {
       description.put(FIRST_FRAMES_CUT_SHORT, true);
     }
 
     return OptionalInt.of(framesPackets);
+  }
+
+  /**
+   * Whether the stream holds more packets than the widest read takes, so that an edit list's
+   * preroll, which can discard most of them, can hide frames past the widest read. True when
+   * ffprobe cannot count them.
+   */
+  private boolean holdsPacketsPastWidestRead(StreamReads reads)
+      throws ExecutionException, InterruptedException {
+    var output = ffprobe.run(reads.firstPackets(WIDEST_READ + 1, "packet=stream_index"));
+    if (output.exitCode() != 0) {
+      log.warn(
+          "ffprobe's packet count of {} exited with code {}", reads.source(), output.exitCode());
+      return true;
+    }
+
+    try {
+      return objectMapper.readTree(output.stdout()).path("packets").size() > WIDEST_READ;
+    } catch (JacksonException failure) {
+      log.warn("ffprobe's packet count of {} printed no JSON", reads.source(), failure);
+      return true;
+    }
   }
 
   /** The frames that the stream's first packets decode to; empty when ffprobe fails. */

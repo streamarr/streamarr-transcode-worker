@@ -243,8 +243,9 @@ class FfprobeExecutorProcessTest {
     runs.addAll(extradataRead);
     var recorded = Files.readAllLines(Path.of(binary + ".args"));
     assertThat(recorded.subList(0, runs.size())).isEqualTo(runs);
-    // The script prints one frame, so the first-frames read widens to its widest read, and the
-    // first-packets read takes the 3 packets of the read that decoded that frame.
+    // The script prints one frame, so the first-frames read widens to its widest read, counts the
+    // packets past it, and the first-packets read takes the 3 packets of the read that decoded
+    // that frame.
     var position = runs.size();
     for (var packets : List.of(3, 12, 48, 192)) {
       var firstFramesRead = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
@@ -260,6 +261,20 @@ class FfprobeExecutorProcessTest {
       position += 3;
     }
 
+    var packetCount = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
+    packetCount.addAll(readLimits);
+    packetCount.addAll(
+        List.of(
+            "-select_streams",
+            "0",
+            "-read_intervals",
+            "%+#193",
+            "-show_entries",
+            "packet=stream_index",
+            source.toString(),
+            "--"));
+    assertThat(recorded.subList(position, position + packetCount.size())).isEqualTo(packetCount);
+    position += packetCount.size();
     var firstPacketsRead = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
     firstPacketsRead.addAll(readLimits);
     firstPacketsRead.addAll(

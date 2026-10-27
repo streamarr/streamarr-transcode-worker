@@ -78,8 +78,10 @@ final class RecordedFfprobe {
    * What the scripted ffprobe prints. The first-frames read prints {@code firstFrames}, or fails
    * when the answers hold none, so that the probe reads no frames. A read of no more than {@code
    * prerollPackets} packets prints no frame, as when an edit list discards the first packets, and a
-   * read of more than {@code failingReadsBeyondPackets} packets fails. The probe reads {@code
-   * source}, by default a path that names no file.
+   * first-frames read or a packet count of more than {@code failingReadsBeyondPackets} packets
+   * fails. A packet count prints {@code streamPackets} packets at most, by default 192: no more
+   * than the widest first-frames read takes. The probe reads {@code source}, by default a path that
+   * names no file.
    */
   @Builder
   record Answers(
@@ -89,10 +91,12 @@ final class RecordedFfprobe {
       int prerollPackets,
       Integer failingReadsBeyondPackets,
       Optional<String> firstPackets,
+      Integer streamPackets,
       Path source) {
 
     Answers {
       source = source == null ? SOURCE : source;
+      streamPackets = streamPackets == null ? 192 : streamPackets;
       packetLines = packetLines == null ? "" : packetLines;
       failingReadsBeyondPackets =
           failingReadsBeyondPackets == null ? Integer.MAX_VALUE : failingReadsBeyondPackets;
@@ -187,9 +191,17 @@ final class RecordedFfprobe {
                 return scripted(answers.firstPackets().map(printed -> firstOf(printed, count)));
               }
 
-              if (isFirstFramesRead(command.arguments())
+              var isPacketCount = isPacketCount(command.arguments());
+              if ((isFirstFramesRead(command.arguments()) || isPacketCount)
                   && packetsRead(command.arguments()) > answers.failingReadsBeyondPackets()) {
                 return ScriptedProcess.builder().output(new byte[0]).exitCode(1).build();
+              }
+
+              if (isPacketCount) {
+                return scripted(
+                    Optional.of(
+                        packetCount(
+                            Math.min(packetsRead(command.arguments()), answers.streamPackets()))));
               }
 
               if (isFirstFramesRead(command.arguments())
@@ -248,6 +260,21 @@ final class RecordedFfprobe {
     } catch (JacksonException _) {
       return printed;
     }
+  }
+
+  private static boolean isPacketCount(List<String> arguments) {
+    return arguments.contains("packet=stream_index");
+  }
+
+  /** What a packet count prints: one entry for each packet. */
+  private static String packetCount(int packets) {
+    var output = MAPPER.createObjectNode();
+    var entries = output.putArray("packets");
+    for (var packet = 0; packet < packets; packet++) {
+      entries.addObject().put("stream_index", 0);
+    }
+
+    return output.toString();
   }
 
   private static boolean isFirstPacketsRead(List<String> arguments) {

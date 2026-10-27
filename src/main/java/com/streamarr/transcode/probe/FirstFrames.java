@@ -7,8 +7,9 @@ import tools.jackson.databind.JsonNode;
 /**
  * The side data of the first frames that the probe read from the chosen video stream, as {@link
  * FirstFramesProbe} adds them to the stream's description. At least one frame: a stream without
- * frames has no first frames. Cut short when a failed read kept the probe from decoding 3 frames,
- * so that frames the probe did not read can carry what these frames do not.
+ * frames has no first frames. Cut short when a failed read, or the widest read's limit on a longer
+ * stream, kept the probe from decoding 3 frames, so that frames the probe did not read can carry
+ * what these frames do not.
  */
 record FirstFrames(List<JsonNode> frames, boolean cutShort) {
 

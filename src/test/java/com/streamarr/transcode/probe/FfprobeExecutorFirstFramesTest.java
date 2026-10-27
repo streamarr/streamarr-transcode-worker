@@ -183,6 +183,34 @@ class FfprobeExecutorFirstFramesTest {
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
     }
 
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+      "the stream holds more packets than the widest read takes, 288, 2147483647",
+      "the probe cannot count the packets, 288, 192"
+    })
+    @DisplayName(
+        "Should leave HDR10+ unspecified when the widest read keeps fewer than 3 frames of a longer"
+            + " stream")
+    void shouldLeaveHdr10PlusUnspecifiedWhenTheWidestReadKeepsFewerThan3FramesOfALongerStream(
+        String reason, int streamPackets, int failingReadsBeyondPackets) {
+      // An edit list's preroll can discard most of the widest read's packets, so the stream's
+      // later frames, which the probe did not read, could carry HDR10+.
+      var video =
+          probe(
+                  Answers.builder()
+                      .ffprobeOutput(output(HEVC_WITH_RECORD))
+                      .prerollPackets(48)
+                      .firstFrames(frames(""))
+                      .streamPackets(streamPackets)
+                      .failingReadsBeyondPackets(failingReadsBeyondPackets)
+                      .firstPackets(DELIMITED_PACKETS)
+                      .build())
+              .getStreams(0);
+
+      assertThat(video.getFirstFramesRead()).isTrue();
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+    }
+
     @Test
     @DisplayName("Should report no frames read when the widest read decodes no frame")
     void shouldReportNoFramesReadWhenTheWidestReadDecodesNoFrame() {
