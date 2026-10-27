@@ -20,7 +20,11 @@ final class Extradata {
 
   /** The extradata's bytes; empty when ffprobe printed none or printed a malformed dump. */
   static Optional<byte[]> of(JsonNode stream) {
-    var dump = FfprobeJson.text(stream, "extradata").orElse("");
+    return dumped(FfprobeJson.text(stream, "extradata").orElse(""));
+  }
+
+  /** The bytes of a -show_data hex dump; empty when the dump holds none or is malformed. */
+  static Optional<byte[]> dumped(String dump) {
     var bytes = new ByteArrayOutputStream();
     for (var line : dump.split("\n")) {
       if (line.isBlank()) {

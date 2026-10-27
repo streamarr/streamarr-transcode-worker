@@ -92,7 +92,7 @@ final class DynamicRangeReader {
             .or(
                 () ->
                     observedRpus
-                        .flatMap(Rpus::firstHeader)
+                        .flatMap(RpuObservation::firstHeader)
                         .flatMap(header -> guess(codec, header)));
     if (profile.filter(value -> value == PROFILE_WITHOUT_COMPATIBLE_BASE).isPresent()) {
       return dynamicRange.setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_NONE).build();
@@ -118,13 +118,16 @@ final class DynamicRangeReader {
     };
   }
 
-  private static DolbyVisionPresent present(Optional<JsonNode> record, Optional<Rpus> rpus) {
+  private static DolbyVisionPresent present(
+      Optional<JsonNode> record, Optional<RpuObservation> rpus) {
     var present =
         DolbyVisionPresent.newBuilder()
-            .setObservedRpu(rpus.map(Rpus::presence).orElse(Presence.PRESENCE_UNSPECIFIED))
-            .setRpuStartsSample(Presence.PRESENCE_UNSPECIFIED);
+            .setObservedRpu(
+                rpus.map(RpuObservation::presence).orElse(Presence.PRESENCE_UNSPECIFIED))
+            .setRpuStartsSample(
+                rpus.map(RpuObservation::startsSample).orElse(Presence.PRESENCE_UNSPECIFIED));
     record.ifPresent(claim -> present.setDeclared(configuration(claim)));
-    rpus.flatMap(Rpus::firstHeader).ifPresent(present::setFirstRpuHeader);
+    rpus.flatMap(RpuObservation::firstHeader).ifPresent(present::setFirstRpuHeader);
     return present.build();
   }
 
@@ -133,11 +136,13 @@ final class DynamicRangeReader {
     return profile.isPresent() ? Optional.of(profile.getAsInt()) : Optional.empty();
   }
 
-  private static Rpus rpusOf(FirstFrames frames) {
+  // A decoder hides where an RPU sits in its sample.
+  private static RpuObservation rpusOf(FirstFrames frames) {
     var observed = frames.carries(RPU_DATA) || frames.carries(RPU_METADATA);
-    return new Rpus(
+    return new RpuObservation(
         presence(observed),
-        frames.earliestSideData(RPU_METADATA).flatMap(DynamicRangeReader::header));
+        frames.earliestSideData(RPU_METADATA).flatMap(DynamicRangeReader::header),
+        Presence.PRESENCE_UNSPECIFIED);
   }
 
   /** The header that ffprobe parsed; empty when ffprobe printed only part of it. */
@@ -191,7 +196,4 @@ final class DynamicRangeReader {
 
     return Optional.empty();
   }
-
-  /** What the frames show of a stream's Dolby Vision RPUs. */
-  private record Rpus(Presence presence, Optional<DolbyVisionRpuHeader> firstHeader) {}
 }

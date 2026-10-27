@@ -147,7 +147,7 @@ final class DecoderConfiguration {
   }
 
   /** The NAL units of an Annex B byte stream, each without its start code or emulation bytes. */
-  private static List<byte[]> annexB(byte[] stream) {
+  static List<byte[]> annexB(byte[] stream) {
     var units = new ArrayList<byte[]>();
     var start = -1;
     var index = 0;
@@ -181,7 +181,7 @@ final class DecoderConfiguration {
     }
   }
 
-  private static byte[] withoutEmulationPrevention(byte[] stream, int start, int end) {
+  static byte[] withoutEmulationPrevention(byte[] stream, int start, int end) {
     var output = new ByteArrayOutputStream();
     var zeros = 0;
     for (var index = start; index < end; index++) {
