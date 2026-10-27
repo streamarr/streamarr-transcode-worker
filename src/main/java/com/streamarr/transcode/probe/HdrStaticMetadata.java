@@ -3,6 +3,7 @@ package com.streamarr.transcode.probe;
 import build.buf.gen.streamarr.transcode.v1.ChromaticityCoordinates;
 import build.buf.gen.streamarr.transcode.v1.ContentLightLevel;
 import build.buf.gen.streamarr.transcode.v1.MasteringDisplayColorVolume;
+import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.math.RoundingMode;
@@ -29,29 +30,44 @@ final class HdrStaticMetadata {
   private static final long MAXIMUM_LUMINANCE = 0xFFFF_FFFFL;
   private static final long MAXIMUM_LIGHT_LEVEL = 0xFFFF;
 
+  static final String MASTERING_DISPLAY = "Mastering display metadata";
+  static final String CONTENT_LIGHT_LEVEL = "Content light level metadata";
+
   private HdrStaticMetadata() {}
 
-  static Optional<MasteringDisplayColorVolume> masteringDisplay(JsonNode stream) {
-    return VideoStreamFacts.sideData(stream, "Mastering display metadata")
-        .flatMap(HdrStaticMetadata::masteringDisplayOf);
+  /**
+   * Sets the mastering display and the content light level from the stream's side data. A side data
+   * entry that the worker cannot convert leaves its value absent and sets its omitted flag.
+   */
+  static void add(JsonNode stream, ProbeStreamInfo.Builder builder) {
+    VideoStreamFacts.sideData(stream, MASTERING_DISPLAY)
+        .ifPresent(
+            side ->
+                masteringDisplayOf(side)
+                    .ifPresentOrElse(
+                        builder::setMasteringDisplay,
+                        () -> builder.setMasteringDisplayOmitted(true)));
+    VideoStreamFacts.sideData(stream, CONTENT_LIGHT_LEVEL)
+        .ifPresent(
+            side ->
+                contentLightLevelOf(side)
+                    .ifPresentOrElse(
+                        builder::setContentLightLevel,
+                        () -> builder.setContentLightLevelOmitted(true)));
   }
 
-  static Optional<ContentLightLevel> contentLightLevel(JsonNode stream) {
-    return VideoStreamFacts.sideData(stream, "Content light level metadata")
-        .flatMap(
-            side -> {
-              var maxContent = lightLevel(side.path("max_content"));
-              var maxAverage = lightLevel(side.path("max_average"));
-              if (maxContent.isEmpty() || maxAverage.isEmpty()) {
-                return Optional.empty();
-              }
+  private static Optional<ContentLightLevel> contentLightLevelOf(JsonNode side) {
+    var maxContent = lightLevel(side.path("max_content"));
+    var maxAverage = lightLevel(side.path("max_average"));
+    if (maxContent.isEmpty() || maxAverage.isEmpty()) {
+      return Optional.empty();
+    }
 
-              return Optional.of(
-                  ContentLightLevel.newBuilder()
-                      .setMaxContentLightLevel(maxContent.get())
-                      .setMaxFrameAverageLightLevel(maxAverage.get())
-                      .build());
-            });
+    return Optional.of(
+        ContentLightLevel.newBuilder()
+            .setMaxContentLightLevel(maxContent.get())
+            .setMaxFrameAverageLightLevel(maxAverage.get())
+            .build());
   }
 
   private static Optional<MasteringDisplayColorVolume> masteringDisplayOf(JsonNode side) {

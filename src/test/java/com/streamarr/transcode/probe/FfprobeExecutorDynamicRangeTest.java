@@ -178,6 +178,8 @@ class FfprobeExecutorDynamicRangeTest {
 
       assertThat(video.hasMasteringDisplay()).isFalse();
       assertThat(video.hasContentLightLevel()).isFalse();
+      assertThat(video.getMasteringDisplayOmitted()).isFalse();
+      assertThat(video.getContentLightLevelOmitted()).isFalse();
     }
 
     @Test
@@ -197,6 +199,7 @@ class FfprobeExecutorDynamicRangeTest {
       assertThat(video.getMasteringDisplay().getRed().getX()).isEqualTo(50000);
       assertThat(Integer.toUnsignedLong(video.getMasteringDisplay().getMinLuminance()))
           .isEqualTo(4294967295L);
+      assertThat(video.getMasteringDisplayOmitted()).isFalse();
     }
 
     @ParameterizedTest(name = "coordinate {0}, luminance {1}")
@@ -209,17 +212,19 @@ class FfprobeExecutorDynamicRangeTest {
       "0/0, 0/1",
       "half, 0/1",
     })
-    @DisplayName("Should report no mastering display when a value does not fit its SEI field")
-    void shouldReportNoMasteringDisplayWhenAValueDoesNotFitItsSeiField(
+    @DisplayName(
+        "Should mark the mastering display omitted when a value does not fit its SEI field")
+    void shouldMarkTheMasteringDisplayOmittedWhenAValueDoesNotFitItsSeiField(
         String coordinate, String luminance) {
       var video = videoStream(masteringDisplay(coordinate, luminance));
 
       assertThat(video.hasMasteringDisplay()).isFalse();
+      assertThat(video.getMasteringDisplayOmitted()).isTrue();
     }
 
     @Test
-    @DisplayName("Should report no mastering display when ffprobe prints only the primaries")
-    void shouldReportNoMasteringDisplayWhenFfprobePrintsOnlyThePrimaries() {
+    @DisplayName("Should mark the mastering display omitted when ffprobe prints only the primaries")
+    void shouldMarkTheMasteringDisplayOmittedWhenFfprobePrintsOnlyThePrimaries() {
       var video =
           videoStream(
               """
@@ -231,11 +236,12 @@ class FfprobeExecutorDynamicRangeTest {
               """);
 
       assertThat(video.hasMasteringDisplay()).isFalse();
+      assertThat(video.getMasteringDisplayOmitted()).isTrue();
     }
 
     @Test
-    @DisplayName("Should report no mastering display when ffprobe prints only the luminance")
-    void shouldReportNoMasteringDisplayWhenFfprobePrintsOnlyTheLuminance() {
+    @DisplayName("Should mark the mastering display omitted when ffprobe prints only the luminance")
+    void shouldMarkTheMasteringDisplayOmittedWhenFfprobePrintsOnlyTheLuminance() {
       var video =
           videoStream(
               """
@@ -244,6 +250,7 @@ class FfprobeExecutorDynamicRangeTest {
               """);
 
       assertThat(video.hasMasteringDisplay()).isFalse();
+      assertThat(video.getMasteringDisplayOmitted()).isTrue();
     }
 
     /** Every coordinate set to {@code coordinate} and both luminances set to {@code luminance}. */
@@ -276,8 +283,9 @@ class FfprobeExecutorDynamicRangeTest {
     @ParameterizedTest(name = "{0}")
     @ValueSource(
         strings = {"red_x", "green_y", "blue_x", "white_point_y", "max_luminance", "min_luminance"})
-    @DisplayName("Should report no mastering display when ffprobe prints every field but one")
-    void shouldReportNoMasteringDisplayWhenFfprobePrintsEveryFieldButOne(String missing) {
+    @DisplayName(
+        "Should mark the mastering display omitted when ffprobe prints every field but one")
+    void shouldMarkTheMasteringDisplayOmittedWhenFfprobePrintsEveryFieldButOne(String missing) {
       var fields = new StringBuilder("\"side_data_type\":\"Mastering display metadata\"");
       for (var name :
           List.of(
@@ -299,6 +307,7 @@ class FfprobeExecutorDynamicRangeTest {
       var video = videoStream("\"side_data_list\":[{" + fields + "}]");
 
       assertThat(video.hasMasteringDisplay()).isFalse();
+      assertThat(video.getMasteringDisplayOmitted()).isTrue();
     }
   }
 
@@ -323,20 +332,22 @@ class FfprobeExecutorDynamicRangeTest {
 
       assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(65535);
       assertThat(video.getContentLightLevel().getMaxFrameAverageLightLevel()).isEqualTo(65535);
+      assertThat(video.getContentLightLevelOmitted()).isFalse();
     }
 
     @ParameterizedTest(name = "MaxCLL {0}, MaxFALL {1}")
     @CsvSource({"65536, 0", "0, 65536", "-1, 0", "0, -1"})
-    @DisplayName("Should report no light level when a value does not fit its SEI field")
-    void shouldReportNoLightLevelWhenAValueDoesNotFitItsSeiField(long maxCll, long maxFall) {
+    @DisplayName("Should mark the light level omitted when a value does not fit its SEI field")
+    void shouldMarkTheLightLevelOmittedWhenAValueDoesNotFitItsSeiField(long maxCll, long maxFall) {
       var video = videoStream(contentLightLevel(maxCll, maxFall));
 
       assertThat(video.hasContentLightLevel()).isFalse();
+      assertThat(video.getContentLightLevelOmitted()).isTrue();
     }
 
     @Test
-    @DisplayName("Should report no light level when ffprobe prints only MaxCLL")
-    void shouldReportNoLightLevelWhenFfprobePrintsOnlyMaxCll() {
+    @DisplayName("Should mark the light level omitted when ffprobe prints only MaxCLL")
+    void shouldMarkTheLightLevelOmittedWhenFfprobePrintsOnlyMaxCll() {
       var video =
           videoStream(
               """
@@ -344,13 +355,14 @@ class FfprobeExecutorDynamicRangeTest {
               """);
 
       assertThat(video.hasContentLightLevel()).isFalse();
+      assertThat(video.getContentLightLevelOmitted()).isTrue();
     }
 
     @ParameterizedTest(name = "{0}")
     @ValueSource(strings = {"\"1000\"", "99999999999999999999"})
     @DisplayName(
-        "Should report no light level when ffprobe prints MaxCLL as text or beyond 64 bits")
-    void shouldReportNoLightLevelWhenFfprobePrintsMaxCllAsTextOrBeyond64Bits(String maxCll) {
+        "Should mark the light level omitted when ffprobe prints MaxCLL as text or beyond 64 bits")
+    void shouldMarkTheLightLevelOmittedWhenFfprobePrintsMaxCllAsTextOrBeyond64Bits(String maxCll) {
       var video =
           videoStream(
               """
@@ -360,6 +372,7 @@ class FfprobeExecutorDynamicRangeTest {
                   .formatted(maxCll));
 
       assertThat(video.hasContentLightLevel()).isFalse();
+      assertThat(video.getContentLightLevelOmitted()).isTrue();
     }
 
     private static String contentLightLevel(long maxCll, long maxFall) {

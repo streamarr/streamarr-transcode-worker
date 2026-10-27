@@ -28,8 +28,7 @@ final class VideoStreamFacts {
         .map(VideoStreamFacts::cropping)
         .ifPresent(stream::setContainerCropping);
     stream.setDynamicRange(DynamicRangeReader.read(source));
-    HdrStaticMetadata.masteringDisplay(source).ifPresent(stream::setMasteringDisplay);
-    HdrStaticMetadata.contentLightLevel(source).ifPresent(stream::setContentLightLevel);
+    HdrStaticMetadata.add(source, stream);
     CodecProfileReader.add(source, stream);
     ColorSignaling.add(source, stream);
   }
