@@ -16,6 +16,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -185,7 +186,8 @@ public final class FfprobeExecutor {
       throws ExecutionException, InterruptedException {
     var framesPackets = new FirstFramesProbe(objectMapper, this::run).addTo(json, source);
     if (framesPackets.isPresent()) {
-      new FirstPacketsProbe(objectMapper, this::run).addTo(json, source, framesPackets.getAsInt());
+      new FirstPacketsProbe(objectMapper, this::runWithinOutputBudget)
+          .addTo(json, source, framesPackets.getAsInt());
     }
   }
 
@@ -238,6 +240,30 @@ public final class FfprobeExecutor {
       throws ExecutionException, InterruptedException {
     var finished = run(arguments, InputStream::readAllBytes);
     return new ProcessOutput(finished.output(), finished.exitCode());
+  }
+
+  /** Stops ffprobe once it prints more than {@code maximumOutputBytes}, and then gives nothing. */
+  private Optional<ProcessOutput> runWithinOutputBudget(
+      List<String> arguments, int maximumOutputBytes)
+      throws ExecutionException, InterruptedException {
+    var process = processFactory.apply(new ProbeCommand(ProbeTool.FFPROBE, arguments));
+    var stopped = new AtomicBoolean();
+    OutputReader<byte[]> reader =
+        stdout -> {
+          var output = stdout.readNBytes(maximumOutputBytes + 1);
+          if (output.length > maximumOutputBytes) {
+            stopped.set(true);
+            process.destroyForcibly();
+          }
+
+          return output;
+        };
+    var finished = run(process, reader, diagnosticsUntilStopped(stopped, _ -> {}));
+    if (stopped.get()) {
+      return Optional.empty();
+    }
+
+    return Optional.of(new ProcessOutput(finished.output(), finished.exitCode()));
   }
 
   private int runPacketScan(

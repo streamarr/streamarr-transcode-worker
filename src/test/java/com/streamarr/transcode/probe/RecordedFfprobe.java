@@ -14,6 +14,7 @@ import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -422,7 +423,7 @@ final class RecordedFfprobe {
       var line = new StringBuilder("%08x: ".formatted(offset));
       var end = Math.min(offset + 16, bytes.length);
       for (var index = offset; index < end; index++) {
-        line.append("%02x".formatted(bytes[index]));
+        line.append(HexFormat.of().toHexDigits(bytes[index]));
         if ((index - offset) % 2 == 1) {
           line.append(' ');
         }

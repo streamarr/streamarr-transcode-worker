@@ -3,6 +3,7 @@ package com.streamarr.transcode.probe;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import lombok.NonNull;
@@ -23,8 +24,8 @@ import tools.jackson.databind.node.ObjectNode;
  * follow one it rejects, so the probe reads HDR10+ and static HDR metadata from the packets too.
  * FFmpeg's AV1 decoders drop the metadata OBUs that they cannot parse, so the probe reads those
  * from the packets as well. The read also prints the type of each packet's side data, which tells a
- * packet that carries a replacement record. When ffprobe fails or prints no packet, the description
- * gets no packets.
+ * packet that carries a replacement record. When ffprobe fails, prints no packet, or prints more
+ * than {@link #MAXIMUM_OUTPUT_BYTES}, the description gets no packets.
  */
 @RequiredArgsConstructor
 @Slf4j
@@ -35,8 +36,22 @@ final class FirstPacketsProbe {
 
   private static final Set<String> WALKED_CODECS = Set.of("h264", "hevc", "av1");
 
+  /**
+   * The most that the read may print: hex dumps of about 15 MiB of packets, more than the first
+   * frames of a UHD Blu-ray stream take at its peak rate, so that hostile packets cannot fill the
+   * heap.
+   */
+  private static final int MAXIMUM_OUTPUT_BYTES = 64 << 20;
+
   @NonNull private final ObjectMapper objectMapper;
-  @NonNull private final ContainerIndexProbe.FfprobeRunner ffprobe;
+  @NonNull private final BoundedFfprobeRunner ffprobe;
+
+  /** Runs ffprobe; empty when it prints more than {@code maximumOutputBytes}. */
+  @FunctionalInterface
+  interface BoundedFfprobeRunner {
+    Optional<ProcessOutput> run(List<String> arguments, int maximumOutputBytes)
+        throws ExecutionException, InterruptedException;
+  }
 
   /** Adds the first {@code count} packets, as many as the read of the first frames took. */
   void addTo(JsonNode ffprobeOutput, Path source, int count)
@@ -60,7 +75,13 @@ final class FirstPacketsProbe {
             "packet=data:packet_side_data=side_data_type",
             "-show_data",
             source.toString()));
-    var output = ffprobe.run(arguments);
+    var bounded = ffprobe.run(arguments, MAXIMUM_OUTPUT_BYTES);
+    if (bounded.isEmpty()) {
+      log.warn("ffprobe's first-packets read of {} printed more than the probe holds", source);
+      return;
+    }
+
+    var output = bounded.get();
     if (output.exitCode() != 0) {
       log.warn("ffprobe's first-packets read of {} exited with code {}", source, output.exitCode());
       return;

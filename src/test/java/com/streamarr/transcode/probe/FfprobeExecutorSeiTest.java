@@ -18,6 +18,7 @@ import build.buf.gen.streamarr.transcode.v1.Presence;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import com.streamarr.transcode.probe.RecordedFfprobe.Answers;
 import java.io.ByteArrayOutputStream;
+import java.util.Arrays;
 import java.util.HexFormat;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -278,6 +279,34 @@ class FfprobeExecutorSeiTest {
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
       assertThat(video.getDynamicRange().hasDolbyVisionAbsent()).isFalse();
       assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(1000);
+      assertThat(video.getMasteringDisplayOmitted()).isTrue();
+    }
+
+    @Test
+    @DisplayName("Should leave HDR10+ unspecified when the first packets print too much to hold")
+    void shouldLeaveHdr10PlusUnspecifiedWhenTheFirstPacketsPrintTooMuchToHold() {
+      // A 16 MiB filler NAL unit, whose 69 MiB hex dump runs past the 64 MiB that the probe holds.
+      var sample = new byte[16 << 20];
+      var length = sample.length - 4;
+      sample[0] = (byte) (length >> 24);
+      sample[1] = (byte) (length >> 16);
+      sample[2] = (byte) (length >> 8);
+      sample[3] = (byte) length;
+      sample[4] = 0x4c;
+      sample[5] = 0x01;
+      Arrays.fill(sample, 6, sample.length, (byte) 0xff);
+      var video =
+          probe(
+                  Coding.HEVC
+                      .answers()
+                      .firstFrames(frames("", "", ""))
+                      .firstPackets(
+                          "{\"packets\":[{\"data\":\"%s\"}]}"
+                              .formatted(RecordedFfprobe.ffprobeDump(sample)))
+                      .build())
+              .getStreams(0);
+
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
       assertThat(video.getMasteringDisplayOmitted()).isTrue();
     }
 
@@ -682,8 +711,7 @@ class FfprobeExecutorSeiTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @ValueSource(
-        strings = {"mp4-sdr8-bt709.mp4", "mp4-dovi-p9-avc1.mp4"})
+    @ValueSource(strings = {"mp4-sdr8-bt709.mp4", "mp4-dovi-p9-avc1.mp4"})
     @DisplayName(
         "Should rule out HDR10+ and static metadata when a recorded stream's packets hold none")
     void shouldRuleOutHdr10PlusAndStaticMetadataWhenARecordedStreamsPacketsHoldNone(
