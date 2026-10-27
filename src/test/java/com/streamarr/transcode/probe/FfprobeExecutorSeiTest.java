@@ -6,6 +6,7 @@ import static com.streamarr.transcode.probe.FirstReads.frames;
 import static com.streamarr.transcode.probe.FirstReads.lengthPrefixed;
 import static com.streamarr.transcode.probe.FirstReads.output;
 import static com.streamarr.transcode.probe.FirstReads.packets;
+import static com.streamarr.transcode.probe.FirstReads.withNewExtradata;
 import static com.streamarr.transcode.probe.RecordedFfprobe.probe;
 import static com.streamarr.transcode.probe.RecordedFfprobe.streamOf;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -251,6 +252,31 @@ class FfprobeExecutorSeiTest {
               .getStreams(0);
 
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+      assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(1000);
+      assertThat(video.getMasteringDisplayOmitted()).isTrue();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Coding.class)
+    @DisplayName(
+        "Should leave HDR10+ unspecified when a packet carries a replacement record that the probe"
+            + " cannot read")
+    void shouldLeaveHdr10PlusUnspecifiedWhenAPacketCarriesAReplacementRecordThatTheProbeCannotRead(
+        Coding coding) {
+      // ffprobe prints the side data's type but not its bytes, and FFmpeg's decoders apply it.
+      var video =
+          probe(
+                  coding
+                      .answers()
+                      .firstFrames(frames("", "", ""))
+                      .firstPackets(
+                          withNewExtradata(
+                              packets(coding.sample(coding.sei(LIGHT_LEVEL)), coding.sample()), 1))
+                      .build())
+              .getStreams(0);
+
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+      assertThat(video.getDynamicRange().hasDolbyVisionAbsent()).isFalse();
       assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(1000);
       assertThat(video.getMasteringDisplayOmitted()).isTrue();
     }

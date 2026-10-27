@@ -3,6 +3,8 @@ package com.streamarr.transcode.probe;
 import static com.streamarr.transcode.probe.RecordedFfprobe.ffprobeDump;
 
 import java.util.HexFormat;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 
 /**
  * What ffprobe prints for a video stream and for the probe's first-frames and first-packets reads
@@ -53,6 +55,19 @@ final class FirstReads {
     }
 
     return "{\"packets\":[" + packets + "]}";
+  }
+
+  /**
+   * The first-packets read's output with new extradata side data on one packet, as FFmpeg's MP4
+   * demuxer attaches it when a sample switches to another sample description.
+   */
+  static String withNewExtradata(String packets, int packet) {
+    var output = (ObjectNode) new ObjectMapper().readTree(packets);
+    ((ObjectNode) output.path("packets").get(packet))
+        .putArray("side_data_list")
+        .addObject()
+        .put("side_data_type", "New Extradata");
+    return output.toString();
   }
 
   static String extradata(String hex) {
