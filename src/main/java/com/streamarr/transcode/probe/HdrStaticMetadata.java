@@ -49,12 +49,12 @@ final class HdrStaticMetadata {
    * dropped, an SEI walk that cannot rule the value out, and the chosen AV1 stream, when no source
    * gives the value.
    */
-  static void add(JsonNode stream, Optional<SeiMessages> sei, ProbeStreamInfo.Builder builder) {
+  static void add(JsonNode stream, Optional<MetadataWalk> walk, ProbeStreamInfo.Builder builder) {
     declared(stream, MASTERING_DISPLAY)
         .map(HdrStaticMetadata::masteringDisplayOf)
         .or(
             () ->
-                sei.flatMap(walked -> walked.firstPayload(SeiMessages.MASTERING_DISPLAY))
+                walk.flatMap(walked -> walked.firstPayload(HdrMessage.MASTERING_DISPLAY))
                     .map(HdrStaticMetadata::masteringDisplayOf))
         .ifPresentOrElse(
             value ->
@@ -63,14 +63,14 @@ final class HdrStaticMetadata {
             () ->
                 builder.setMasteringDisplayOmitted(
                     stream.path(MatroskaColourProbe.CONTAINER_MASTERING_METADATA).asBoolean()
-                        || mayCarry(stream, sei, SeiMessages.MASTERING_DISPLAY)));
+                        || mayCarry(stream, walk, HdrMessage.MASTERING_DISPLAY)));
     VideoStreamFacts.sideData(stream, CONTENT_LIGHT_LEVEL)
         .or(() -> Optional.ofNullable(stream.get(MatroskaColourProbe.CONTAINER_LIGHT_LEVEL)))
         .or(() -> firstFrameSideData(stream, CONTENT_LIGHT_LEVEL))
         .map(HdrStaticMetadata::contentLightLevelOf)
         .or(
             () ->
-                sei.flatMap(walked -> walked.firstPayload(SeiMessages.CONTENT_LIGHT_LEVEL))
+                walk.flatMap(walked -> walked.firstPayload(HdrMessage.CONTENT_LIGHT_LEVEL))
                     .map(HdrStaticMetadata::contentLightLevelOf))
         .ifPresentOrElse(
             value ->
@@ -78,7 +78,7 @@ final class HdrStaticMetadata {
                     builder::setContentLightLevel, () -> builder.setContentLightLevelOmitted(true)),
             () ->
                 builder.setContentLightLevelOmitted(
-                    mayCarry(stream, sei, SeiMessages.CONTENT_LIGHT_LEVEL)));
+                    mayCarry(stream, walk, HdrMessage.CONTENT_LIGHT_LEVEL)));
   }
 
   /**
@@ -87,9 +87,10 @@ final class HdrStaticMetadata {
    * cannot parse, and the frames that depend on it, and the probe parses no OBU, so the first frame
    * that the probe keeps can lack a value that an AV1 stream carries.
    */
-  private static boolean mayCarry(JsonNode stream, Optional<SeiMessages> sei, int payloadType) {
-    if (sei.isPresent()) {
-      return !sei.get().rulesOut(payloadType);
+  private static boolean mayCarry(
+      JsonNode stream, Optional<MetadataWalk> walk, HdrMessage message) {
+    if (walk.isPresent()) {
+      return !walk.get().rulesOut(message);
     }
 
     return "av1".equals(stream.path("codec_name").asString(""))

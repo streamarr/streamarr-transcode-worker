@@ -3,10 +3,12 @@ package com.streamarr.transcode.probe;
 import static com.streamarr.transcode.probe.FfprobeJson.text;
 
 import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.EnumMap;
+import java.util.EnumSet;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.Set;
 import tools.jackson.databind.JsonNode;
 
 /**
@@ -21,11 +23,11 @@ import tools.jackson.databind.JsonNode;
  * no message is a nesting message that the walk does not read inside, and only the RBSP trailing
  * bits follow the last message.
  */
-record SeiMessages(List<SeiMessage> messages, boolean readAll) {
+final class SeiMessages implements MetadataWalk {
 
-  static final int HDR10_PLUS = 4;
-  static final int MASTERING_DISPLAY = 137;
-  static final int CONTENT_LIGHT_LEVEL = 144;
+  private static final int HDR10_PLUS_PAYLOAD_TYPE = 4;
+  private static final int MASTERING_DISPLAY_PAYLOAD_TYPE = 137;
+  private static final int CONTENT_LIGHT_LEVEL_PAYLOAD_TYPE = 144;
 
   // An ITU-T T.35 message's country code 0xB5, provider code 0x003C, provider-oriented code 0x0001
   // and application identifier 4 make it an HDR10+ message.
@@ -33,8 +35,17 @@ record SeiMessages(List<SeiMessage> messages, boolean readAll) {
   private static final int TRAILING_BITS = 0x80;
   private static final int HEVC_RECORD_VERSION = 1;
 
-  /** One HDR message: an HDR10+, mastering display or content light level message. */
-  record SeiMessage(int payloadType, ByteBuffer payload, boolean nested) {}
+  // The walk keeps the first payload of each kind and which kinds showed, not every message, so
+  // that its memory stays bounded however many messages the packets hold.
+  private final Map<HdrMessage, ByteBuffer> firstPayloads;
+  private final Set<HdrMessage> nestedMessages;
+  private final boolean readAll;
+
+  private SeiMessages(Walk walk) {
+    this.firstPayloads = walk.firstPayloads;
+    this.nestedMessages = walk.nestedMessages;
+    this.readAll = walk.readAll;
+  }
 
   /**
    * The HDR SEI messages of the stream; empty unless the probe read the stream's first frames,
@@ -58,38 +69,29 @@ record SeiMessages(List<SeiMessage> messages, boolean readAll) {
         .ifPresent(walk::add);
     FirstPacketSamples.read(stream, syntax.get())
         .ifPresentOrElse(samples -> samples.forEach(walk::add), walk::missUnits);
-    return Optional.of(new SeiMessages(List.copyOf(walk.messages), walk.readAll));
+    return Optional.of(new SeiMessages(walk));
   }
 
-  /** Whether an HDR10+ message that is not nested shows. */
-  boolean holdsHdr10Plus() {
-    return messages.stream()
-        .anyMatch(message -> message.payloadType() == HDR10_PLUS && !message.nested());
+  @Override
+  public boolean holds(HdrMessage message) {
+    return firstPayloads.containsKey(message);
   }
 
-  /** The payload of the first message of the type that is not nested, read-only. */
-  Optional<ByteBuffer> firstPayload(int payloadType) {
-    return messages.stream()
-        .filter(message -> message.payloadType() == payloadType && !message.nested())
-        .map(message -> message.payload().duplicate())
-        .findFirst();
+  @Override
+  public Optional<ByteBuffer> firstPayload(HdrMessage message) {
+    return Optional.ofNullable(firstPayloads.get(message)).map(ByteBuffer::duplicate);
   }
 
-  /**
-   * Whether the walk rules out a message of the type: it read all of the SEI, and no nesting
-   * message holds one. A nested message can apply only to a layer or a view that FFmpeg does not
-   * decode, so it neither proves nor rules out a feature of the decoded picture.
-   */
-  boolean rulesOut(int payloadType) {
-    return readAll
-        && messages.stream()
-            .noneMatch(message -> message.payloadType() == payloadType && message.nested());
+  @Override
+  public boolean rulesOut(HdrMessage message) {
+    return readAll && !nestedMessages.contains(message);
   }
 
   private static final class Walk {
 
     private final NalSyntax syntax;
-    private final List<SeiMessage> messages = new ArrayList<>();
+    private final Map<HdrMessage, ByteBuffer> firstPayloads = new EnumMap<>(HdrMessage.class);
+    private final Set<HdrMessage> nestedMessages = EnumSet.noneOf(HdrMessage.class);
     private boolean readAll = true;
 
     private Walk(NalSyntax syntax) {
@@ -170,13 +172,33 @@ record SeiMessages(List<SeiMessage> messages, boolean readAll) {
         return !nested && addNestedMessages(payloadType, payload);
       }
 
-      var isHdr = payloadType == MASTERING_DISPLAY || payloadType == CONTENT_LIGHT_LEVEL;
-      if (isHdr || (payloadType == HDR10_PLUS && isHdr10Plus(payload))) {
-        var copy = ByteBuffer.allocate(payload.remaining()).put(payload.duplicate()).flip();
-        messages.add(new SeiMessage(payloadType, copy.asReadOnlyBuffer(), nested));
+      kind(payloadType, payload).ifPresent(message -> add(message, payload, nested));
+      return true;
+    }
+
+    private void add(HdrMessage message, ByteBuffer payload, boolean isNested) {
+      if (isNested) {
+        nestedMessages.add(message);
+        return;
       }
 
-      return true;
+      firstPayloads.computeIfAbsent(
+          message,
+          _ ->
+              ByteBuffer.allocate(payload.remaining())
+                  .put(payload.duplicate())
+                  .flip()
+                  .asReadOnlyBuffer());
+    }
+
+    private static Optional<HdrMessage> kind(int payloadType, ByteBuffer payload) {
+      return switch (payloadType) {
+        case MASTERING_DISPLAY_PAYLOAD_TYPE -> Optional.of(HdrMessage.MASTERING_DISPLAY);
+        case CONTENT_LIGHT_LEVEL_PAYLOAD_TYPE -> Optional.of(HdrMessage.CONTENT_LIGHT_LEVEL);
+        case HDR10_PLUS_PAYLOAD_TYPE ->
+            Optional.of(HdrMessage.HDR10_PLUS).filter(_ -> isHdr10Plus(payload));
+        default -> Optional.empty();
+      };
     }
 
     /**

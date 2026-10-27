@@ -64,14 +64,14 @@ final class DynamicRangeReader {
 
   private DynamicRangeReader() {}
 
-  static VideoDynamicRange read(JsonNode stream, Optional<SeiMessages> sei) {
+  static VideoDynamicRange read(JsonNode stream, Optional<MetadataWalk> walk) {
     var codec = text(stream, "codec_name").orElse("");
     var frames =
         FirstFrames.of(stream).filter(_ -> DECODERS_SHOWING_FRAME_METADATA.contains(codec));
     var rpus = rpus(stream, codec, frames);
 
     var record = VideoStreamFacts.sideData(stream, DOLBY_VISION_RECORD);
-    var dynamicRange = VideoDynamicRange.newBuilder().setHdr10Plus(hdr10Plus(stream, frames, sei));
+    var dynamicRange = VideoDynamicRange.newBuilder().setHdr10Plus(hdr10Plus(stream, frames, walk));
     var hasSampleEntry =
         text(stream, "codec_tag_string").filter(DOLBY_VISION_SAMPLE_ENTRIES::contains).isPresent();
     var observedRpus = rpus.filter(observed -> observed.presence() == Presence.PRESENCE_PRESENT);
@@ -99,14 +99,14 @@ final class DynamicRangeReader {
    * a walk, as for AV1, HDR10+ is never ABSENT.
    */
   private static Presence hdr10Plus(
-      JsonNode stream, Optional<FirstFrames> frames, Optional<SeiMessages> sei) {
+      JsonNode stream, Optional<FirstFrames> frames, Optional<MetadataWalk> walk) {
     var isInFrames = frames.filter(observed -> observed.carries(HDR10_PLUS)).isPresent();
-    if (isInFrames || sei.filter(SeiMessages::holdsHdr10Plus).isPresent()) {
+    if (isInFrames || walk.filter(walked -> walked.holds(HdrMessage.HDR10_PLUS)).isPresent()) {
       return Presence.PRESENCE_PRESENT;
     }
 
     var isEveryFrameRead = FirstFrames.of(stream).filter(read -> !read.cutShort()).isPresent();
-    var isRuledOut = sei.filter(walked -> walked.rulesOut(SeiMessages.HDR10_PLUS)).isPresent();
+    var isRuledOut = walk.filter(walked -> walked.rulesOut(HdrMessage.HDR10_PLUS)).isPresent();
     if (isEveryFrameRead && isRuledOut) {
       return Presence.PRESENCE_ABSENT;
     }

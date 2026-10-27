@@ -27,10 +27,10 @@ final class VideoStreamFacts {
     sideData(source, "Frame Cropping")
         .map(VideoStreamFacts::cropping)
         .ifPresent(stream::setContainerCropping);
-    var sei = SeiMessages.of(source);
-    stream.setDynamicRange(DynamicRangeReader.read(source, sei));
+    var walk = MetadataWalk.of(source);
+    stream.setDynamicRange(DynamicRangeReader.read(source, walk));
     stream.setFirstFramesRead(FirstFrames.of(source).isPresent());
-    HdrStaticMetadata.add(source, sei, stream);
+    HdrStaticMetadata.add(source, walk, stream);
     CodecProfileReader.add(source, stream);
     ColorSignaling.add(source, stream);
   }
