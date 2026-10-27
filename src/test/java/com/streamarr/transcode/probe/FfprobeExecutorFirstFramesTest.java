@@ -134,6 +134,35 @@ class FfprobeExecutorFirstFramesTest {
     }
 
     @Test
+    @DisplayName(
+        "Should leave HDR10+ unspecified when a wider read fails before the probe decodes 3 frames")
+    void shouldLeaveHdr10PlusUnspecifiedWhenAWiderReadFailsBeforeTheProbeDecodes3Frames() {
+      // The frames that the failed read would have decoded could carry HDR10+.
+      var video =
+          probe(
+                  Answers.builder()
+                      .ffprobeOutput(output(HEVC))
+                      .firstFrames(frames(""))
+                      .failingReadsBeyondPackets(3)
+                      .build())
+              .getStreams(0);
+
+      assertThat(video.getFirstFramesRead()).isTrue();
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+    }
+
+    @Test
+    @DisplayName("Should report HDR10+ absent when the widest read decodes fewer than 3 frames")
+    void shouldReportHdr10PlusAbsentWhenTheWidestReadDecodesFewerThan3Frames() {
+      // Every read succeeds, so the stream holds no more frames than the probe read.
+      var video =
+          probe(Answers.builder().ffprobeOutput(output(HEVC)).firstFrames(frames("")).build())
+              .getStreams(0);
+
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
+    }
+
+    @Test
     @DisplayName("Should report no frames read when the widest read decodes no frame")
     void shouldReportNoFramesReadWhenTheWidestReadDecodesNoFrame() {
       var video =
@@ -843,6 +872,23 @@ class FfprobeExecutorFirstFramesTest {
       assertThat(present.getObservedRpu()).isEqualTo(Presence.PRESENCE_PRESENT);
       assertThat(present.getRpuStartsSample()).isEqualTo(Presence.PRESENCE_PRESENT);
       assertThat(present.getFirstRpuHeader().getVdrRpuProfile()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName(
+        "Should leave Dolby Vision unspecified when a wider read fails before the probe decodes 3"
+            + " frames")
+    void shouldLeaveDolbyVisionUnspecifiedWhenAWiderReadFailsBeforeTheProbeDecodes3Frames() {
+      var video =
+          probed(
+              hevc(extradata(HEVC_RECORD))
+                  .firstFrames(frames(""))
+                  .failingReadsBeyondPackets(3)
+                  .firstPackets(packets(lengthPrefixed(IDR_SLICE), lengthPrefixed(AUD, SLICE))));
+
+      assertThat(video.getFirstFramesRead()).isTrue();
+      assertThat(video.getDynamicRange().getDolbyVisionCase())
+          .isEqualTo(DolbyVisionCase.DOLBYVISION_NOT_SET);
     }
 
     @Test

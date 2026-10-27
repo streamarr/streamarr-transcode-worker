@@ -74,7 +74,7 @@ final class DynamicRangeReader {
         VideoDynamicRange.newBuilder()
             .setHdr10Plus(
                 frames
-                    .map(observed -> presence(observed.carries(HDR10_PLUS)))
+                    .map(observed -> observed.presenceOf(HDR10_PLUS))
                     .orElse(Presence.PRESENCE_UNSPECIFIED));
     var hasSampleEntry =
         text(stream, "codec_tag_string").filter(DOLBY_VISION_SAMPLE_ENTRIES::contains).isPresent();
@@ -162,8 +162,9 @@ final class DynamicRangeReader {
   /**
    * What the frames and, for a codec of NAL units, the packets that hold them show of the RPUs. A
    * decoder can ignore or drop an RPU, so no RPU in the frames rules out none: only packets whose
-   * every NAL unit the probe delimited do, and an AV1 stream's frames rule out none. The header
-   * comes from the frames, or from the packets when the frames show no RPU.
+   * every NAL unit the probe delimited do, and only when the frames are not cut short. An AV1
+   * stream's frames rule out none. The header comes from the frames, or from the packets when the
+   * frames show no RPU.
    */
   private static Optional<RpuObservation> rpus(
       JsonNode stream, String codec, Optional<FirstFrames> frames) {
@@ -172,13 +173,15 @@ final class DynamicRangeReader {
             .map(DynamicRangeReader::rpusOf)
             .filter(observed -> observed.presence() == Presence.PRESENCE_PRESENT);
     var syntax = NalSyntax.of(codec);
-    if (syntax.isEmpty() || FirstFrames.of(stream).isEmpty()) {
+    var read = FirstFrames.of(stream);
+    if (syntax.isEmpty() || read.isEmpty()) {
       return inFrames;
     }
 
     var fromPackets = PacketRpuReader.read(stream, syntax.get());
     if (inFrames.isEmpty()) {
-      return fromPackets;
+      return fromPackets.filter(
+          observed -> observed.presence() == Presence.PRESENCE_PRESENT || !read.get().cutShort());
     }
 
     return Optional.of(

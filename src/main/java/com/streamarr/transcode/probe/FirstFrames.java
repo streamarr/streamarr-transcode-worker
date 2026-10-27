@@ -1,5 +1,6 @@
 package com.streamarr.transcode.probe;
 
+import build.buf.gen.streamarr.transcode.v1.Presence;
 import java.util.List;
 import java.util.Optional;
 import tools.jackson.databind.JsonNode;
@@ -7,13 +8,31 @@ import tools.jackson.databind.JsonNode;
 /**
  * The side data of the first frames that the probe read from the chosen video stream, as {@link
  * FirstFramesProbe} adds them to the stream's description. At least one frame: a stream without
- * frames has no first frames.
+ * frames has no first frames. Cut short when a failed read kept the probe from decoding 3 frames,
+ * so that frames the probe did not read can carry what these frames do not.
  */
-record FirstFrames(List<JsonNode> frames) {
+record FirstFrames(List<JsonNode> frames, boolean cutShort) {
 
   static Optional<FirstFrames> of(JsonNode stream) {
     var frames = stream.path(FirstFramesProbe.FIRST_FRAMES).valueStream().toList();
-    return frames.isEmpty() ? Optional.empty() : Optional.of(new FirstFrames(frames));
+    var cutShort = stream.path(FirstFramesProbe.FIRST_FRAMES_CUT_SHORT).asBoolean();
+    return frames.isEmpty() ? Optional.empty() : Optional.of(new FirstFrames(frames, cutShort));
+  }
+
+  /**
+   * PRESENT when a frame carries side data of the type; ABSENT when none does and the frames are
+   * not cut short.
+   */
+  Presence presenceOf(String type) {
+    if (carries(type)) {
+      return Presence.PRESENCE_PRESENT;
+    }
+
+    if (cutShort) {
+      return Presence.PRESENCE_UNSPECIFIED;
+    }
+
+    return Presence.PRESENCE_ABSENT;
   }
 
   /** Whether any frame carries side data of the type. */

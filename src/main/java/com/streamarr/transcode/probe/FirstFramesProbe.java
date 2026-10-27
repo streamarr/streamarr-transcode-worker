@@ -3,6 +3,7 @@ package com.streamarr.transcode.probe;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.concurrent.ExecutionException;
 import lombok.NonNull;
@@ -18,7 +19,9 @@ import tools.jackson.databind.node.ObjectNode;
  * {@link #FIRST_FRAMES}. ffprobe limits a read by packets, and a packet can decode to no frame, as
  * for a packet ahead of an MP4 edit list. So the probe widens the read until it decodes 3 frames,
  * up to {@link #WIDEST_READ} packets, and keeps the first 3. When ffprobe fails or prints no frame,
- * the description gets no frames: the probe then read none.
+ * the description gets no frames: the probe then read none. When a read fails before the probe
+ * decodes 3 frames, the description also gets {@link #FIRST_FRAMES_CUT_SHORT}: the stream may hold
+ * frames that the probe did not read.
  */
 @RequiredArgsConstructor
 @Slf4j
@@ -26,6 +29,9 @@ final class FirstFramesProbe {
 
   /** The key under which the chosen video stream's description holds its first frames. */
   static final String FIRST_FRAMES = "first_frames";
+
+  /** The key whose true value says that a failed read kept the probe from decoding 3 frames. */
+  static final String FIRST_FRAMES_CUT_SHORT = "first_frames_cut_short";
 
   private static final int FRAME_COUNT = 3;
   private static final int WIDER_READ_FACTOR = 4;
@@ -56,12 +62,14 @@ final class FirstFramesProbe {
 
     var frames = List.<JsonNode>of();
     var framesPackets = 0;
+    var readFailed = false;
     for (var packets = FRAME_COUNT;
         packets <= WIDEST_READ && frames.size() < FRAME_COUNT;
         packets *= WIDER_READ_FACTOR) {
       var wider = read(source, chosen.get().streamIndex(), packets);
-      if (wider.size() > frames.size()) {
-        frames = wider;
+      readFailed |= wider.isEmpty();
+      if (wider.orElse(List.of()).size() > frames.size()) {
+        frames = wider.get();
         framesPackets = packets;
       }
     }
@@ -75,11 +83,15 @@ final class FirstFramesProbe {
         objectMapper
             .createArrayNode()
             .addAll(frames.subList(0, Math.min(FRAME_COUNT, frames.size()))));
+    if (readFailed && frames.size() < FRAME_COUNT) {
+      description.put(FIRST_FRAMES_CUT_SHORT, true);
+    }
+
     return OptionalInt.of(framesPackets);
   }
 
-  /** The frames that the stream's first packets decode to; none when ffprobe fails. */
-  private List<JsonNode> read(Path source, int streamIndex, int packets)
+  /** The frames that the stream's first packets decode to; empty when ffprobe fails. */
+  private Optional<List<JsonNode>> read(Path source, int streamIndex, int packets)
       throws ExecutionException, InterruptedException {
     var arguments = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
     arguments.addAll(FfprobeExecutor.READ_LIMITS);
@@ -95,14 +107,15 @@ final class FirstFramesProbe {
     var output = ffprobe.run(arguments);
     if (output.exitCode() != 0) {
       log.warn("ffprobe's first-frames read of {} exited with code {}", source, output.exitCode());
-      return List.of();
+      return Optional.empty();
     }
 
     try {
-      return objectMapper.readTree(output.stdout()).path("frames").valueStream().toList();
+      return Optional.of(
+          objectMapper.readTree(output.stdout()).path("frames").valueStream().toList());
     } catch (JacksonException failure) {
       log.warn("ffprobe's first-frames read of {} printed no JSON", source, failure);
-      return List.of();
+      return Optional.empty();
     }
   }
 }
