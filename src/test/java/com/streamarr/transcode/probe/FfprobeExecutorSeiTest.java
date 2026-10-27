@@ -342,6 +342,17 @@ class FfprobeExecutorSeiTest {
       "H264, 25, 40",
       // operation_point_flag 1, num_view_components_op_minus1 0, a view id, sei_op_temporal_id.
       "H264, 25, c0 00",
+      // MVCD: operation_point_flag 0, all_view_components_in_au_flag 1.
+      "H264, 30, 40",
+      // MVCD: operation_point_flag 0, all_view_components_in_au_flag 0,
+      // num_view_components_minus1 0, a view id and its applicability flag.
+      "H264, 30, 20 00",
+      // MVCD: operation_point_flag 1, sei_op_texture_only_flag 1, num_view_components_op_minus1 0,
+      // a view id, sei_op_temporal_id.
+      "H264, 30, e0 00",
+      // MVCD: operation_point_flag 1, sei_op_texture_only_flag 0, num_view_components_op_minus1 0,
+      // a view id with its depth and texture flags, sei_op_temporal_id.
+      "H264, 30, a0 00 00",
       // bitstream_subset_flag 0, nesting_op_flag 0, all_layers_flag 1.
       "HEVC, 85, 20",
       // nesting_op_flag 1, default_op_flag 0, nesting_num_ops_minus1 0, one operation point.
@@ -359,7 +370,13 @@ class FfprobeExecutorSeiTest {
     }
 
     @ParameterizedTest(name = "{0} payloadType {1}")
-    @CsvSource({"H264, 1e, 80", "H264, 25, 40", "HEVC, 85, 20"})
+    @CsvSource({
+      "H264, 1e, 80",
+      "H264, 25, 40",
+      "H264, 30, 40",
+      "H264, 30, a0 00 00",
+      "HEVC, 85, 20"
+    })
     @DisplayName("Should report HDR10+ absent when a nesting message holds other messages")
     void shouldReportHdr10PlusAbsentWhenANestingMessageHoldsOtherMessages(
         Coding coding, String payloadType, String header) {
@@ -381,7 +398,7 @@ class FfprobeExecutorSeiTest {
     }
 
     @ParameterizedTest(name = "{0} payloadType {1}")
-    @CsvSource({"H264, 1e, 80", "H264, 25, 40", "HEVC, 85, 20"})
+    @CsvSource({"H264, 1e, 80", "H264, 25, 40", "H264, 30, 40", "HEVC, 85, 20"})
     @DisplayName("Should leave HDR10+ unspecified when a nesting message nests another")
     void shouldLeaveHdr10PlusUnspecifiedWhenANestingMessageNestsAnother(
         Coding coding, String payloadType, String header) {

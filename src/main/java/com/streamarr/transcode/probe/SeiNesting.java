@@ -4,21 +4,26 @@ import java.util.OptionalInt;
 
 /**
  * The SEI messages that nest other SEI messages, whose nested messages FFmpeg ignores: scalable
- * nesting (payloadType 30) and MVC scalable nesting (payloadType 37) for H.264 (ITU-T H.264,
- * F.13.1.7 and G.13.1.2), and scalable nesting (payloadType 133) for HEVC. Each nesting message's
- * header ends at a byte boundary, and its nested messages follow.
+ * nesting (payloadType 30), MVC scalable nesting (payloadType 37) and MVCD scalable nesting
+ * (payloadType 48) for H.264 (ITU-T H.264, F.13.1.7, G.13.1.2 and I.13.1.2), and scalable nesting
+ * (payloadType 133) for HEVC. Each nesting message's header ends at a byte boundary, and its nested
+ * messages follow.
  */
 final class SeiNesting {
 
   private static final int H264_SCALABLE_NESTING = 30;
   private static final int H264_MVC_SCALABLE_NESTING = 37;
+  private static final int H264_MVCD_SCALABLE_NESTING = 48;
   private static final int HEVC_SCALABLE_NESTING = 133;
 
   private SeiNesting() {}
 
   static boolean isNesting(NalSyntax syntax, int payloadType) {
     return switch (syntax) {
-      case H264 -> payloadType == H264_SCALABLE_NESTING || payloadType == H264_MVC_SCALABLE_NESTING;
+      case H264 ->
+          payloadType == H264_SCALABLE_NESTING
+              || payloadType == H264_MVC_SCALABLE_NESTING
+              || payloadType == H264_MVCD_SCALABLE_NESTING;
       case HEVC -> payloadType == HEVC_SCALABLE_NESTING;
     };
   }
@@ -31,13 +36,7 @@ final class SeiNesting {
     var reader = new BitReader(payload);
     try {
       switch (syntax) {
-        case H264 -> {
-          if (payloadType == H264_SCALABLE_NESTING) {
-            skipScalableNestingHeader(reader);
-          } else {
-            skipMvcScalableNestingHeader(reader);
-          }
-        }
+        case H264 -> skipH264NestingHeader(payloadType, reader);
         case HEVC -> skipHevcScalableNestingHeader(reader);
       }
     } catch (BitReader.TruncatedBitstreamException _) {
@@ -45,6 +44,14 @@ final class SeiNesting {
     }
 
     return OptionalInt.of(reader.alignedBytes());
+  }
+
+  private static void skipH264NestingHeader(int payloadType, BitReader reader) {
+    switch (payloadType) {
+      case H264_SCALABLE_NESTING -> skipScalableNestingHeader(reader);
+      case H264_MVC_SCALABLE_NESTING -> skipMvcScalableNestingHeader(reader);
+      default -> skipMvcdScalableNestingHeader(reader);
+    }
   }
 
   private static void skipScalableNestingHeader(BitReader reader) {
@@ -75,6 +82,33 @@ final class SeiNesting {
     var isForAllViewComponents = reader.flag();
     if (!isForAllViewComponents) {
       skipViewIds(reader);
+    }
+  }
+
+  private static void skipMvcdScalableNestingHeader(BitReader reader) {
+    var isOperationPoint = reader.flag();
+    if (isOperationPoint) {
+      var isTextureOnly = reader.flag();
+      var viewComponents = reader.unsignedExpGolomb() + 1;
+      for (var index = 0L; index < viewComponents; index++) {
+        // sei_op_view_id, then sei_op_depth_flag and sei_op_texture_flag unless texture only.
+        reader.bits(isTextureOnly ? 10 : 12);
+      }
+
+      // sei_op_temporal_id.
+      reader.bits(3);
+      return;
+    }
+
+    var isForAllViewComponents = reader.flag();
+    if (isForAllViewComponents) {
+      return;
+    }
+
+    var viewComponents = reader.unsignedExpGolomb() + 1;
+    for (var index = 0L; index < viewComponents; index++) {
+      // sei_view_id and sei_view_applicability_flag.
+      reader.bits(11);
     }
   }
 
