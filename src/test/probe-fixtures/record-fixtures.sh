@@ -273,9 +273,16 @@ for source in "$@"; do
   # prints an empty field for it.
   chosen="${chosen%%[,$'\n']*}"
   if [ -n "$chosen" ]; then
-    ffprobe -v quiet -print_format json "${LIMITS[@]}" -select_streams "$chosen" \
-      -read_intervals '%+#3' -show_entries "frame=stream_index:frame_side_data=side_data_type,red_x,red_y,green_x,green_y,blue_x,blue_y,white_point_x,white_point_y,min_luminance,max_luminance,max_content,max_average,vdr_rpu_profile,bl_video_full_range_flag,el_spatial_resampling_filter_flag,disable_residual_flag,vdr_bit_depth" \
-      "$source" > "frames/$(basename "$source").json"
+    # The probe widens the read until it decodes 3 frames; the recording holds the widest read's
+    # output that the probe takes.
+    for packets in 3 12 48 192; do
+      ffprobe -v quiet -print_format json "${LIMITS[@]}" -select_streams "$chosen" \
+        -read_intervals "%+#$packets" -show_entries "frame=stream_index:frame_side_data=side_data_type,red_x,red_y,green_x,green_y,blue_x,blue_y,white_point_x,white_point_y,min_luminance,max_luminance,max_content,max_average,vdr_rpu_profile,bl_video_full_range_flag,el_spatial_resampling_filter_flag,disable_residual_flag,vdr_bit_depth" \
+        "$source" > "frames/$(basename "$source").json"
+      if [ "$(grep -c '"stream_index"' "frames/$(basename "$source").json")" -ge 3 ]; then
+        break
+      fi
+    done
     # The first-packets read of an H.264 chosen video stream, with FirstPacketsProbe's arguments.
     codec="$(ffprobe -v quiet "${LIMITS[@]}" -select_streams "$chosen" \
       -show_entries stream=codec_name -of csv=p=0 "$source")"

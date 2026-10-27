@@ -75,20 +75,26 @@ final class RecordedFfprobe {
 
   /**
    * What the scripted ffprobe prints. The first-frames read prints {@code firstFrames}, or fails
-   * when the answers hold none, so that the probe reads no frames. The probe reads {@code source},
-   * by default a path that names no file.
+   * when the answers hold none, so that the probe reads no frames. A read of no more than {@code
+   * prerollPackets} packets prints no frame, as when an edit list discards the first packets, and a
+   * read of more than {@code failingReadsBeyondPackets} packets fails. The probe reads {@code
+   * source}, by default a path that names no file.
    */
   @Builder
   record Answers(
       @NonNull String ffprobeOutput,
       String packetLines,
       Optional<String> firstFrames,
+      int prerollPackets,
+      Integer failingReadsBeyondPackets,
       Optional<String> firstPackets,
       Path source) {
 
     Answers {
       source = source == null ? SOURCE : source;
       packetLines = packetLines == null ? "" : packetLines;
+      failingReadsBeyondPackets =
+          failingReadsBeyondPackets == null ? Integer.MAX_VALUE : failingReadsBeyondPackets;
       firstFrames = firstFrames == null ? Optional.empty() : firstFrames;
       firstPackets = firstPackets == null ? Optional.empty() : firstPackets;
     }
@@ -176,6 +182,18 @@ final class RecordedFfprobe {
                 return scripted(answers.firstPackets());
               }
 
+              if (isFirstFramesRead(command.arguments())
+                  && packetsRead(command.arguments()) > answers.failingReadsBeyondPackets()) {
+                return ScriptedProcess.builder().output(new byte[0]).exitCode(1).build();
+              }
+
+              if (isFirstFramesRead(command.arguments())
+                  && packetsRead(command.arguments()) <= answers.prerollPackets()) {
+                return ScriptedProcess.builder()
+                    .output("{\"frames\":[]}".getBytes(StandardCharsets.UTF_8))
+                    .build();
+              }
+
               if (isFirstFramesRead(command.arguments())) {
                 return answers
                     .firstFrames()
@@ -216,6 +234,12 @@ final class RecordedFfprobe {
 
   private static boolean isFirstFramesRead(List<String> arguments) {
     return arguments.stream().anyMatch(argument -> argument.startsWith("frame="));
+  }
+
+  /** The packet count of a read's {@code %+#count} interval. */
+  private static int packetsRead(List<String> arguments) {
+    var interval = arguments.get(arguments.indexOf("-read_intervals") + 1);
+    return Integer.parseInt(interval.substring("%+#".length()));
   }
 
   /**

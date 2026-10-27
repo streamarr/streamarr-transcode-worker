@@ -87,6 +87,70 @@ class FfprobeExecutorFirstFramesTest {
     }
 
     @Test
+    @DisplayName("Should read the first frames when the first packets decode to no frame")
+    void shouldReadTheFirstFramesWhenTheFirstPacketsDecodeToNoFrame() {
+      var video =
+          probe(
+                  Answers.builder()
+                      .ffprobeOutput(output(HEVC))
+                      .prerollPackets(16)
+                      .firstFrames(frames(HDR10_PLUS, HDR10_PLUS, HDR10_PLUS))
+                      .build())
+              .getStreams(0);
+
+      assertThat(video.getFirstFramesRead()).isTrue();
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_PRESENT);
+    }
+
+    @Test
+    @DisplayName("Should judge only the first 3 frames when a wider read decodes more")
+    void shouldJudgeOnlyTheFirst3FramesWhenAWiderReadDecodesMore() {
+      var video =
+          probe(
+                  Answers.builder()
+                      .ffprobeOutput(output(HEVC))
+                      .prerollPackets(3)
+                      .firstFrames(frames("", "", "", HDR10_PLUS))
+                      .build())
+              .getStreams(0);
+
+      assertThat(video.getFirstFramesRead()).isTrue();
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
+    }
+
+    @Test
+    @DisplayName("Should keep a narrower read's frames when a wider read fails")
+    void shouldKeepANarrowerReadsFramesWhenAWiderReadFails() {
+      var video =
+          probe(
+                  Answers.builder()
+                      .ffprobeOutput(output(HEVC))
+                      .firstFrames(frames(HDR10_PLUS))
+                      .failingReadsBeyondPackets(3)
+                      .build())
+              .getStreams(0);
+
+      assertThat(video.getFirstFramesRead()).isTrue();
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_PRESENT);
+    }
+
+    @Test
+    @DisplayName("Should report no frames read when the widest read decodes no frame")
+    void shouldReportNoFramesReadWhenTheWidestReadDecodesNoFrame() {
+      var video =
+          probe(
+                  Answers.builder()
+                      .ffprobeOutput(output(HEVC))
+                      .prerollPackets(Integer.MAX_VALUE)
+                      .firstFrames(frames(HDR10_PLUS))
+                      .build())
+              .getStreams(0);
+
+      assertThat(video.getFirstFramesRead()).isFalse();
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+    }
+
+    @Test
     @DisplayName("Should read frames of the chosen video stream only")
     void shouldReadFramesOfTheChosenVideoStreamOnly() {
       var media =
@@ -733,14 +797,22 @@ class FfprobeExecutorFirstFramesTest {
     }
 
     @Test
-    @DisplayName("Should read no frames when every packet read lies ahead of the edit list")
-    void shouldReadNoFramesWhenEveryPacketReadLiesAheadOfTheEditList() {
-      // The recording's edit list discards its first 16 video packets.
+    @DisplayName(
+        "Should observe a phone original's RPUs in the frames after its edit list's preroll")
+    void shouldObserveAPhoneOriginalsRpusInTheFramesAfterItsEditListsPreroll() {
+      // The recording's edit list discards its first 16 video packets, so the probe read 48.
       var video = streamOf("mov-phone-one-gap.mov", 0);
 
-      assertThat(video.getFirstFramesRead()).isFalse();
+      assertThat(video.getFirstFramesRead()).isTrue();
       assertThat(video.getDynamicRange().getDolbyVisionPresent().getObservedRpu())
-          .isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+          .isEqualTo(Presence.PRESENCE_PRESENT);
+      assertThat(video.getDynamicRange().getDolbyVisionPresent().getFirstRpuHeader())
+          .isEqualTo(
+              DolbyVisionRpuHeader.newBuilder()
+                  .setVdrRpuProfile(1)
+                  .setDisableResidual(true)
+                  .setVdrBitDepth(12)
+                  .build());
     }
   }
 

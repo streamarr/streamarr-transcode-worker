@@ -1,3 +1,1383 @@
 {
-  "frames": []
+  "frames": [
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Ambient viewing environment"
+        },
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 1,
+          "bl_video_full_range_flag": 0,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Ambient viewing environment"
+        },
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 1,
+          "bl_video_full_range_flag": 0,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Ambient viewing environment"
+        },
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 1,
+          "bl_video_full_range_flag": 0,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Ambient viewing environment"
+        },
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 1,
+          "bl_video_full_range_flag": 0,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Ambient viewing environment"
+        },
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 1,
+          "bl_video_full_range_flag": 0,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Ambient viewing environment"
+        },
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 1,
+          "bl_video_full_range_flag": 0,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Ambient viewing environment"
+        },
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 1,
+          "bl_video_full_range_flag": 0,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Ambient viewing environment"
+        },
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 1,
+          "bl_video_full_range_flag": 0,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Ambient viewing environment"
+        },
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 1,
+          "bl_video_full_range_flag": 0,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Ambient viewing environment"
+        },
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 1,
+          "bl_video_full_range_flag": 0,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Ambient viewing environment"
+        },
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 1,
+          "bl_video_full_range_flag": 0,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Ambient viewing environment"
+        },
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 1,
+          "bl_video_full_range_flag": 0,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Ambient viewing environment"
+        },
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 1,
+          "bl_video_full_range_flag": 0,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Ambient viewing environment"
+        },
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 1,
+          "bl_video_full_range_flag": 0,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Ambient viewing environment"
+        },
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 1,
+          "bl_video_full_range_flag": 0,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Ambient viewing environment"
+        },
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 1,
+          "bl_video_full_range_flag": 0,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "H.26[45] User Data Unregistered SEI message"
+        },
+        {
+          "side_data_type": "Ambient viewing environment"
+        },
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 1,
+          "bl_video_full_range_flag": 0,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Ambient viewing environment"
+        },
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 1,
+          "bl_video_full_range_flag": 0,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Ambient viewing environment"
+        },
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 1,
+          "bl_video_full_range_flag": 0,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Ambient viewing environment"
+        },
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 1,
+          "bl_video_full_range_flag": 0,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Ambient viewing environment"
+        },
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 1,
+          "bl_video_full_range_flag": 0,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Ambient viewing environment"
+        },
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 1,
+          "bl_video_full_range_flag": 0,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Ambient viewing environment"
+        },
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 1,
+          "bl_video_full_range_flag": 0,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Ambient viewing environment"
+        },
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 1,
+          "bl_video_full_range_flag": 0,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Ambient viewing environment"
+        },
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 1,
+          "bl_video_full_range_flag": 0,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Ambient viewing environment"
+        },
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 1,
+          "bl_video_full_range_flag": 0,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Ambient viewing environment"
+        },
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 1,
+          "bl_video_full_range_flag": 0,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Ambient viewing environment"
+        },
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 1,
+          "bl_video_full_range_flag": 0,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Ambient viewing environment"
+        },
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 1,
+          "bl_video_full_range_flag": 0,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Ambient viewing environment"
+        },
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 1,
+          "bl_video_full_range_flag": 0,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Ambient viewing environment"
+        },
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 1,
+          "bl_video_full_range_flag": 0,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Ambient viewing environment"
+        },
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 1,
+          "bl_video_full_range_flag": 0,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
 }

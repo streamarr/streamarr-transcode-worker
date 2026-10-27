@@ -238,16 +238,26 @@ class FfprobeExecutorProcessTest {
             "-show_data",
             source.toString(),
             "--"));
-    var firstFramesRead = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
-    firstFramesRead.addAll(readLimits);
-    firstFramesRead.addAll(List.of("-select_streams", "0", "-read_intervals", "%+#3"));
     var runs = new ArrayList<>(probe);
     runs.addAll(extradataRead);
-    runs.addAll(firstFramesRead);
     var recorded = Files.readAllLines(Path.of(binary + ".args"));
     assertThat(recorded.subList(0, runs.size())).isEqualTo(runs);
-    assertThat(recorded.get(runs.size())).isEqualTo("-show_entries");
-    assertThat(recorded.get(runs.size() + 1)).startsWith("frame=");
+    // The script prints no frame, so the first-frames read widens to its widest read.
+    var position = runs.size();
+    for (var packets : List.of(3, 12, 48, 192)) {
+      var firstFramesRead = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
+      firstFramesRead.addAll(readLimits);
+      firstFramesRead.addAll(
+          List.of("-select_streams", "0", "-read_intervals", "%+#" + packets, "-show_entries"));
+      assertThat(recorded.subList(position, position + firstFramesRead.size()))
+          .isEqualTo(firstFramesRead);
+      position += firstFramesRead.size();
+      assertThat(recorded.get(position)).startsWith("frame=");
+      assertThat(recorded.subList(position + 1, position + 3))
+          .isEqualTo(List.of(source.toString(), "--"));
+      position += 3;
+    }
+
     var firstPacketsRead = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
     firstPacketsRead.addAll(readLimits);
     firstPacketsRead.addAll(
@@ -261,9 +271,7 @@ class FfprobeExecutorProcessTest {
             "-show_data",
             source.toString(),
             "--"));
-    var afterFirstFramesRead = new ArrayList<>(List.of(source.toString(), "--"));
-    afterFirstFramesRead.addAll(firstPacketsRead);
-    assertThat(recorded.subList(runs.size() + 2, recorded.size())).isEqualTo(afterFirstFramesRead);
+    assertThat(recorded.subList(position, recorded.size())).isEqualTo(firstPacketsRead);
   }
 
   @Test
