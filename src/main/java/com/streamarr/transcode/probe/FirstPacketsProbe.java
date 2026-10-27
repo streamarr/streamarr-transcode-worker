@@ -3,7 +3,6 @@ package com.streamarr.transcode.probe;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import lombok.NonNull;
@@ -45,13 +44,6 @@ final class FirstPacketsProbe {
 
   @NonNull private final ObjectMapper objectMapper;
   @NonNull private final BoundedFfprobeRunner ffprobe;
-
-  /** Runs ffprobe; empty when it prints more than {@code maximumOutputBytes}. */
-  @FunctionalInterface
-  interface BoundedFfprobeRunner {
-    Optional<ProcessOutput> run(List<String> arguments, int maximumOutputBytes)
-        throws ExecutionException, InterruptedException;
-  }
 
   /** Adds the first {@code count} packets, as many as the read of the first frames took. */
   void addTo(JsonNode ffprobeOutput, Path source, int count)
