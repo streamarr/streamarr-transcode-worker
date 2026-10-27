@@ -1504,8 +1504,14 @@ class FfmpegCommandBuilderTest {
                     "128",
                     "-max_interleave_delta",
                     "10000000",
-                    "-c",
+                    "-c:v",
                     "copy",
+                    "-c:a",
+                    "aac",
+                    "-ac",
+                    "2",
+                    "-b:a",
+                    "128k",
                     "-muxdelay",
                     "0",
                     "-f",
@@ -1552,13 +1558,11 @@ class FfmpegCommandBuilderTest {
                     "-bufsize",
                     "10000000",
                     "-c:a",
-                    "aac",
-                    "-ac",
-                    "2",
+                    "copy",
+                    "-bsf:a",
+                    "aac_adtstoasc",
                     "-b:a",
-                    "128k",
-                    "-af",
-                    "atrim=start=0",
+                    "0",
                     "-r:v:0",
                     "24000/1001",
                     "-forced-idr",
@@ -1580,10 +1584,10 @@ class FfmpegCommandBuilderTest {
 
   @Test
   @DisplayName(
-      "Should seek the copy and trim the encode's video and audio at the seek when a replacement"
-          + " attempt encodes a profile 5 source whose RPU starts its sample")
+      "Should seek the copy, encode its audio there, and trim the encode's video at the seek when a"
+          + " replacement attempt encodes a profile 5 source whose RPU starts its sample")
   void
-      shouldSeekTheCopyAndTrimTheEncodesVideoAndAudioAtTheSeekWhenAReplacementAttemptEncodesAProfile5SourceWhoseRpuStartsItsSample() {
+      shouldSeekTheCopyEncodeItsAudioThereAndTrimTheEncodesVideoAtTheSeekWhenAReplacementAttemptEncodesAProfile5SourceWhoseRpuStartsItsSample() {
     var request =
         request(encoding(profile5Encode(Presence.PRESENT)))
             .height(720)
@@ -1593,11 +1597,12 @@ class FfmpegCommandBuilderTest {
     var pipe = transportStreamPipe(builder.buildPipeline(job(request, "libx264")));
 
     assertThat(pipe.copyCommand())
-        .containsSequence("ffmpeg", "-y", "-ss", "12", "-i", "/media/movie.mkv", "-map", "0:0");
+        .containsSequence("ffmpeg", "-y", "-ss", "12", "-i", "/media/movie.mkv", "-map", "0:0")
+        .containsSequence("-c:v", "copy", "-c:a", "aac", "-ac", "2", "-b:a", "128k", "-muxdelay");
     assertThat(pipe.encodeCommand())
         .containsSequence("-f", "mpegts", "-i", "pipe:0", "-map", "0:v:0")
-        .containsSequence("-c:a", "aac", "-ac", "2", "-b:a", "128k", "-af", "atrim=start=12")
-        .doesNotContain("-ss", "-start_at_zero");
+        .containsSequence("-c:a", "copy", "-bsf:a", "aac_adtstoasc", "-b:a", "0", "-r:v:0")
+        .doesNotContain("-ss", "-start_at_zero", "-af");
     assertThat(videoFilter(pipe.encodeCommand()))
         .isEqualTo("trim=start=12,scale=-2:720," + TONE_MAPPED_TO_SDR);
   }
@@ -1616,6 +1621,7 @@ class FfmpegCommandBuilderTest {
 
     var pipe = transportStreamPipe(builder.buildPipeline(job(request, "libx264")));
 
+    assertThat(pipe.copyCommand()).containsSequence("-c", "copy", "-muxdelay");
     assertThat(pipe.encodeCommand())
         .containsSequence("-map", "0:v:0", "-map", "0:a:0")
         .containsSequence("-c:a", "copy", "-bsf:a", "aac_adtstoasc", "-b:a", "0", "-r:v:0")
@@ -1684,7 +1690,7 @@ class FfmpegCommandBuilderTest {
 
   @ParameterizedTest(name = "{0}")
   @NullSource
-  @ValueSource(strings = {"flac", "alac"})
+  @ValueSource(strings = {"flac", "alac", "opus"})
   @DisplayName(
       "Should keep one FFmpeg when the encode of a profile 5 source whose RPU starts its sample"
           + " copies audio that MPEG-TS may not carry")
@@ -1695,6 +1701,31 @@ class FfmpegCommandBuilderTest {
         decision(TranscodeMode.VIDEO_TRANSCODE)
             .videoDecision(profile5Encode(Presence.PRESENT).build())
             .audioDecision(copiedAudio(audioCodec))
+            .build();
+
+    var pipeline = builder.buildPipeline(job(request(decision).build(), "libx264"));
+
+    assertThat(pipeline).isInstanceOf(FfmpegPipeline.SingleProcess.class);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"flac", "alac", "opus"})
+  @DisplayName(
+      "Should keep one FFmpeg when the encode of a profile 5 source whose RPU starts its sample"
+          + " encodes audio that MPEG-TS may not carry")
+  void
+      shouldKeepOneFfmpegWhenTheEncodeOfAProfile5SourceWhoseRpuStartsItsSampleEncodesAudioThatMpegTsMayNotCarry(
+          String audioCodec) {
+    var decision =
+        decision(TranscodeMode.FULL_TRANSCODE)
+            .videoDecision(profile5Encode(Presence.PRESENT).build())
+            .audioDecision(
+                AudioDecision.builder()
+                    .mode(AudioMode.TRANSCODE)
+                    .codec(audioCodec)
+                    .channels(2)
+                    .bitrate(128_000)
+                    .build())
             .build();
 
     var pipeline = builder.buildPipeline(job(request(decision).build(), "libx264"));

@@ -1069,16 +1069,16 @@ class WorkerMediaSmokeTest {
         .allSatisfy(sideData -> assertThat(sideData).doesNotContain("Dolby Vision RPU Data"));
   }
 
-  @ParameterizedTest(name = "start {0}")
-  @ValueSource(ints = {0, 2})
+  @ParameterizedTest(name = "{0} audio, start {1}")
+  @CsvSource({"aac, 0", "aac, 2", "flac, 0", "flac, 2"})
   @DisplayName(
       "Should upload what one FFmpeg encodes from the source whose RPUs follow their pictures when"
           + " a Dolby Vision profile 5 source's samples start with RPUs")
   void
       shouldUploadWhatOneFfmpegEncodesFromTheSourceWhoseRpusFollowTheirPicturesWhenADolbyVisionProfile5SourcesSamplesStartWithRpus(
-          int startSequenceNumber) throws Exception {
-    var rpusAhead = rpuLayoutSource(RpuLayout.AHEAD_OF_THE_NEXT_PICTURE);
-    var rpusBehind = rpuLayoutSource(RpuLayout.BEHIND_THEIR_PICTURE);
+          String sourceAudioCodec, int startSequenceNumber) throws Exception {
+    var rpusAhead = rpuLayoutSource(RpuLayout.AHEAD_OF_THE_NEXT_PICTURE, sourceAudioCodec);
+    var rpusBehind = rpuLayoutSource(RpuLayout.BEHIND_THEIR_PICTURE, sourceAudioCodec);
     var aheadCommands = new CopyOnWriteArrayList<List<String>>();
     var behindCommands = new CopyOnWriteArrayList<List<String>>();
 
@@ -1103,11 +1103,30 @@ class WorkerMediaSmokeTest {
         .containsExactlyElementsOf(fromRpusBehind.names())
         .hasSize(PROFILE_5_SEGMENT_COUNT - startSequenceNumber + 1);
     for (var name : fromRpusBehind.names()) {
-      assertThat(FfprobePackets.of(fromRpusAhead.contentOf(List.of("init.mp4", name)), root))
+      assertThat(packetsOfTheCopy(fromRpusAhead, name))
           .as(name)
-          .containsExactlyElementsOf(
-              FfprobePackets.of(fromRpusBehind.contentOf(List.of("init.mp4", name)), root));
+          .containsExactlyElementsOf(packetsOfTheCopy(fromRpusBehind, name));
     }
+  }
+
+  // The packets of the upload and its initialization segment. MPEG-TS does not carry the audio
+  // encoder's trim of the stream's last frame, so when the copy carries the encoded audio, that
+  // frame declares a whole frame's duration: the last segment's last audio frame lists none.
+  private List<Packet> packetsOfTheCopy(MediaUploads uploads, String name) throws Exception {
+    var packets = FfprobePackets.of(uploads.contentOf(List.of("init.mp4", name)), root);
+    var lastAudio =
+        IntStream.range(0, packets.size()).filter(index -> packets.get(index).isAudio()).max();
+    if (!name.equals(uploads.names().getLast()) || lastAudio.isEmpty()) {
+      return packets;
+    }
+
+    var withoutDuration = new ArrayList<>(packets);
+    var last = packets.get(lastAudio.getAsInt());
+    withoutDuration.set(
+        lastAudio.getAsInt(),
+        new Packet(
+            last.stream(), last.pts(), last.dts(), 0, last.size(), last.flags(), last.hash()));
+    return withoutDuration;
   }
 
   private static VariantJob.Builder profile5Job(
@@ -1145,8 +1164,8 @@ class WorkerMediaSmokeTest {
   }
 
   // FFmpeg's copy of Matroska's millisecond audio timestamps into MPEG-TS counts samples from the
-  // first packet, the AAC priming frame, whose rounding then shifts the copy's audio by a fraction
-  // of a millisecond; the encoder can then flush one frame more or fewer at the end.
+  // first packet, the AAC priming frame, whose rounding then shifts copied audio by a fraction of a
+  // millisecond.
   @ParameterizedTest(name = "{0}, {1}, start {2}")
   @MethodSource("sourceContainersEncodingModesAndStarts")
   @DisplayName(
@@ -1174,8 +1193,8 @@ class WorkerMediaSmokeTest {
     assertThat(commands).as("the FFmpegs of the attempt that reads the copy").hasSize(2);
     assertThat(fromTheCopy.names()).containsExactlyElementsOf(oneFfmpeg.names());
     for (var name : oneFfmpeg.names()) {
-      var expected = FfprobePackets.of(oneFfmpeg.contentOf(List.of("init.mp4", name)), root);
-      var actual = FfprobePackets.of(fromTheCopy.contentOf(List.of("init.mp4", name)), root);
+      var expected = packetsOfTheCopy(oneFfmpeg, name);
+      var actual = packetsOfTheCopy(fromTheCopy, name);
       assertThat(actual.stream().filter(packet -> !packet.isAudio()).toList())
           .as("%s video", name)
           .containsExactlyElementsOf(
@@ -1189,8 +1208,8 @@ class WorkerMediaSmokeTest {
   // The seekable sources' audio is 48 kHz, which is the audio's time base in the output.
   private static void assertAudioWithinAMillisecond(List<Packet> actual, List<Packet> expected) {
     var millisecond = within(48L);
-    assertThat(actual.size()).as("audio packets").isCloseTo(expected.size(), within(1));
-    for (var index = 0; index < Math.min(actual.size(), expected.size()); index++) {
+    assertThat(actual).as("audio packets").hasSameSizeAs(expected);
+    for (var index = 0; index < expected.size(); index++) {
       var packet = actual.get(index);
       var expectedPacket = expected.get(index);
       assertThat(packet.pts())
@@ -1219,12 +1238,16 @@ class WorkerMediaSmokeTest {
     AHEAD_OF_THE_NEXT_PICTURE
   }
 
-  // A 10-bit HEVC source with AAC audio that holds a stand-in Dolby Vision RPU for each picture:
+  // A 10-bit HEVC source with audio of the codec that holds a stand-in Dolby Vision RPU for each
+  // picture:
   // after its picture, or, as a muxer that starts a sample at each RPU writes it, behind the next
   // picture's access unit delimiter. Its stand-in RPUs carry no reshaping, so the decoder applies
   // none whichever layout it reads, and both sources decode to the same pictures.
-  private static synchronized Path rpuLayoutSource(RpuLayout layout) throws Exception {
-    var source = rpuLayoutSources.resolve(layout.name().toLowerCase(Locale.ROOT) + ".mp4");
+  private static synchronized Path rpuLayoutSource(RpuLayout layout, String audioCodec)
+      throws Exception {
+    var source =
+        rpuLayoutSources.resolve(
+            layout.name().toLowerCase(Locale.ROOT) + "-" + audioCodec + ".mp4");
     if (Files.exists(source)) {
       return source;
     }
@@ -1269,7 +1292,7 @@ class WorkerMediaSmokeTest {
             "-bsf:v",
             "setts=pts=N*1/24/TB:dts=N*1/24/TB",
             "-c:a",
-            "aac",
+            audioCodec,
             "-shortest"),
         source);
     return source;

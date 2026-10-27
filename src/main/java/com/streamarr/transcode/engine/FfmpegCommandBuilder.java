@@ -84,9 +84,10 @@ public class FfmpegCommandBuilder {
   // it adds a keyframe at each scene cut, inside a segment.
   private static final String CLOSED_GOP_X265_PARAMETERS = "no-scenecut=1:no-open-gop=1";
 
-  // The copied audio codecs that FFmpeg's MPEG-TS demuxer reads back as audio.
-  private static final Set<String> AUDIO_COPIED_THROUGH_MPEG_TS =
-      Set.of("aac", "ac3", "eac3", "opus");
+  // The audio codecs whose packets come back unchanged through FFmpeg's MPEG-TS muxer and demuxer,
+  // apart from the encoder's trim of the stream's last frame. MPEG-TS carries FLAC and ALAC only as
+  // private data, which the demuxer reads back as no audio, and Opus without its pre-skip.
+  private static final Set<String> AUDIO_CARRIED_BY_MPEG_TS = Set.of("aac", "ac3", "eac3");
 
   static final List<String> MP4_MOVFLAGS =
       List.of("cmaf", "delay_moov", "skip_trailer", "frag_keyframe", "frag_discont");
@@ -116,13 +117,13 @@ public class FfmpegCommandBuilder {
         && travelsInMpegTs(decision.audioDecision());
   }
 
-  // MPEG-TS carries FLAC and ALAC only as private data, which FFmpeg's demuxer reads back as no
-  // audio, so a job that copies them, or copies audio whose codec it does not name, keeps one
-  // FFmpeg.
+  // The audio travels as the job's output codec: the source's when the job copies it, and the one
+  // the copy encodes when the job encodes it. A job whose audio codec MPEG-TS does not carry, or
+  // which names none, keeps one FFmpeg.
   private static boolean travelsInMpegTs(AudioDecision audio) {
-    return audio.mode() != AudioMode.COPY
+    return audio.mode() == AudioMode.NONE
         || Optional.ofNullable(audio.codec())
-            .filter(AUDIO_COPIED_THROUGH_MPEG_TS::contains)
+            .filter(AUDIO_CARRIED_BY_MPEG_TS::contains)
             .isPresent();
   }
 
@@ -146,14 +147,23 @@ public class FfmpegCommandBuilder {
   }
 
   // The copy seeks as the single command would and keeps the timestamps that command reads;
-  // -muxdelay
-  // 0 stops the MPEG-TS muxer from shifting them, so the encode of the copy reads them unchanged.
+  // -muxdelay 0 stops the MPEG-TS muxer from shifting them, so the encode of the copy reads them
+  // unchanged. The copy encodes audio that the job encodes, as it decodes every source codec, and
+  // the seek trims that audio exactly as it trims the single command's.
   private List<String> buildSourceCopyCommand(TranscodeJob job) {
     var cmd = new ArrayList<String>();
+    var audio = job.request().transcodeDecision().audioDecision();
     addInputArgs(cmd, job.request());
     addStreamSelection(cmd, job.request().transcodeDecision());
     addCommonFlags(cmd, EncoderInput.SOURCE);
-    cmd.addAll(List.of("-c", "copy", "-muxdelay", "0", "-f", "mpegts", "pipe:1"));
+    if (audio.mode() == AudioMode.TRANSCODE) {
+      cmd.addAll(List.of("-c:v", "copy"));
+      addAudioArgs(cmd, audio);
+    } else {
+      cmd.addAll(List.of("-c", "copy"));
+    }
+
+    cmd.addAll(List.of("-muxdelay", "0", "-f", "mpegts", "pipe:1"));
     return List.copyOf(cmd);
   }
 
@@ -274,20 +284,26 @@ public class FfmpegCommandBuilder {
     PlayableSampleEntry.ofEncoder(job.videoEncoder())
         .ifPresent(entry -> cmd.addAll(List.of("-tag:v", entry.tag())));
     cmd.addAll(forcedCodecProfileArgs(job));
-    var trimStart = trimStart(job.request(), input);
-    addScaleAndBitrateArgs(cmd, job, trimStart);
+    addScaleAndBitrateArgs(cmd, job, trimStart(job.request(), input));
+    if (input == EncoderInput.COPY_OF_THE_SOURCE) {
+      addAudioOfTheCopyArgs(cmd, decision.audioDecision());
+      return;
+    }
+
     addAudioArgs(cmd, decision.audioDecision());
-    if (decision.audioDecision().mode() == AudioMode.TRANSCODE) {
-      trimStart.ifPresent(start -> cmd.addAll(List.of("-af", "atrim=start=" + start)));
+  }
+
+  // The copy carries the job's output audio, which the encode of the copy copies untrimmed.
+  private static void addAudioOfTheCopyArgs(List<String> cmd, AudioDecision audio) {
+    if (audio.mode() != AudioMode.NONE) {
+      cmd.addAll(copiedAudioArgs(audio.codec()));
     }
   }
 
-  // The FFmpeg that reads the source discards the frames and audio before its seek, and, through
-  // the source's own markings, such as an MP4 edit list or AAC priming, those before its start.
-  // MPEG-TS carries neither, so the encode of the copy trims at the attempt's start, seeking or
-  // not: after -start_at_zero, nothing else lies before zero. A copied stream is not trimmed, as
-  // the
-  // seek does not trim it either.
+  // The FFmpeg that decodes the source discards the frames before its seek, and, through the
+  // source's own markings, such as an MP4 edit list, those before its start. MPEG-TS carries
+  // neither, so the encode of the copy trims its video at the attempt's start, seeking or not:
+  // after -start_at_zero, nothing else lies before zero.
   private static Optional<String> trimStart(TranscodeRequest request, EncoderInput input) {
     if (input == EncoderInput.SOURCE) {
       return Optional.empty();
