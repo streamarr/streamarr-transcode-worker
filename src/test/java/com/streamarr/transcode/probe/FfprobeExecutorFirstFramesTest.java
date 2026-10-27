@@ -519,6 +519,41 @@ class FfprobeExecutorFirstFramesTest {
     }
 
     @Test
+    @DisplayName(
+        "Should mark an AV1 stream's static metadata omitted when its first frame has none")
+    void shouldMarkAnAv1StreamsStaticMetadataOmittedWhenItsFirstFrameHasNone() {
+      // FFmpeg's AV1 decoders drop a frame whose metadata OBU they cannot parse, and the frames
+      // that depend on it, so the first frame that the probe keeps can lack what the stream
+      // carries.
+      var video = video(codec("av1"), frames("", MASTERING_DISPLAY + "," + LIGHT_LEVEL, ""));
+
+      assertThat(video.hasMasteringDisplay()).isFalse();
+      assertThat(video.getMasteringDisplayOmitted()).isTrue();
+      assertThat(video.hasContentLightLevel()).isFalse();
+      assertThat(video.getContentLightLevelOmitted()).isTrue();
+    }
+
+    @Test
+    @DisplayName("Should take an AV1 stream's static metadata from its first frame unflagged")
+    void shouldTakeAnAv1StreamsStaticMetadataFromItsFirstFrameUnflagged() {
+      var video = video(codec("av1"), frames(MASTERING_DISPLAY + "," + LIGHT_LEVEL, "", ""));
+
+      assertThat(video.getMasteringDisplay().getMaxLuminance()).isEqualTo(10_000_000);
+      assertThat(video.getMasteringDisplayOmitted()).isFalse();
+      assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(1000);
+      assertThat(video.getContentLightLevelOmitted()).isFalse();
+    }
+
+    @Test
+    @DisplayName("Should leave a VP9 stream's missing static metadata unflagged")
+    void shouldLeaveAVp9StreamsMissingStaticMetadataUnflagged() {
+      var video = video(codec("vp9"), frames("", "", ""));
+
+      assertThat(video.getMasteringDisplayOmitted()).isFalse();
+      assertThat(video.getContentLightLevelOmitted()).isFalse();
+    }
+
+    @Test
     @DisplayName("Should mark the first frame's values omitted when they do not fit")
     void shouldMarkTheFirstFramesValuesOmittedWhenTheyDoNotFit() {
       var video =
@@ -1074,13 +1109,17 @@ class FfprobeExecutorFirstFramesTest {
     }
 
     @Test
-    @DisplayName("Should leave Dolby Vision unspecified when an AV1 sample's frames show no RPU")
-    void shouldLeaveDolbyVisionUnspecifiedWhenAnAv1SamplesFramesShowNoRpu() {
+    @DisplayName(
+        "Should leave an AV1 sample's frame features unspecified and its static metadata omitted")
+    void shouldLeaveAnAv1SamplesFrameFeaturesUnspecifiedAndItsStaticMetadataOmitted() {
       var video = streamOf("mp4-av1-10bit.mp4", 0);
 
       assertThat(video.getFirstFramesRead()).isTrue();
       assertThat(video.getDynamicRange().getDolbyVisionCase())
           .isEqualTo(DolbyVisionCase.DOLBYVISION_NOT_SET);
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+      assertThat(video.getMasteringDisplayOmitted()).isTrue();
+      assertThat(video.getContentLightLevelOmitted()).isTrue();
     }
 
     @Test

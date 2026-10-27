@@ -46,7 +46,8 @@ final class HdrStaticMetadata {
    * {@link SeiMessages} message of the type that is not nested. A Matroska track's own light level
    * elements come before the first frame's. A value that the worker cannot convert leaves its value
    * absent and sets its omitted flag. So does a Matroska MasteringMetadata element that ffprobe
-   * dropped, and an SEI walk that cannot rule the value out, when no source gives the value.
+   * dropped, an SEI walk that cannot rule the value out, and the chosen AV1 stream, when no source
+   * gives the value.
    */
   static void add(JsonNode stream, Optional<SeiMessages> sei, ProbeStreamInfo.Builder builder) {
     declared(stream, MASTERING_DISPLAY)
@@ -62,7 +63,7 @@ final class HdrStaticMetadata {
             () ->
                 builder.setMasteringDisplayOmitted(
                     stream.path(MatroskaColourProbe.CONTAINER_MASTERING_METADATA).asBoolean()
-                        || mayCarry(sei, SeiMessages.MASTERING_DISPLAY)));
+                        || mayCarry(stream, sei, SeiMessages.MASTERING_DISPLAY)));
     VideoStreamFacts.sideData(stream, CONTENT_LIGHT_LEVEL)
         .or(() -> Optional.ofNullable(stream.get(MatroskaColourProbe.CONTAINER_LIGHT_LEVEL)))
         .or(() -> firstFrameSideData(stream, CONTENT_LIGHT_LEVEL))
@@ -77,12 +78,22 @@ final class HdrStaticMetadata {
                     builder::setContentLightLevel, () -> builder.setContentLightLevelOmitted(true)),
             () ->
                 builder.setContentLightLevelOmitted(
-                    mayCarry(sei, SeiMessages.CONTENT_LIGHT_LEVEL)));
+                    mayCarry(stream, sei, SeiMessages.CONTENT_LIGHT_LEVEL)));
   }
 
-  /** Whether the stream may carry the value in SEI that the probe could not read. */
-  private static boolean mayCarry(Optional<SeiMessages> sei, int payloadType) {
-    return sei.filter(walked -> !walked.rulesOut(payloadType)).isPresent();
+  /**
+   * Whether the chosen video stream may carry a value that no source gave: for H.264 and HEVC, when
+   * the SEI walk cannot rule it out. FFmpeg's AV1 decoders drop a frame whose metadata OBU they
+   * cannot parse, and the frames that depend on it, and the probe parses no OBU, so the first frame
+   * that the probe keeps can lack a value that an AV1 stream carries.
+   */
+  private static boolean mayCarry(JsonNode stream, Optional<SeiMessages> sei, int payloadType) {
+    if (sei.isPresent()) {
+      return !sei.get().rulesOut(payloadType);
+    }
+
+    return "av1".equals(stream.path("codec_name").asString(""))
+        && FirstFrames.of(stream).isPresent();
   }
 
   private static Optional<JsonNode> declared(JsonNode stream, String type) {
