@@ -58,6 +58,15 @@ class FfprobeExecutorFirstFramesTest {
       """
       {"side_data_type":"Content light level metadata","max_content":1000,"max_average":400}""";
   private static final String HEVC = "\"codec_name\":\"hevc\"";
+  // An HEVC stream with an hvcC record, so that the probe can delimit its packets' NAL units, and
+  // packets whose NAL units and SEI messages the probe delimits, so that they rule out HDR10+ and
+  // static metadata.
+  private static final String HEVC_WITH_RECORD =
+      HEVC
+          + ","
+          + extradata("01 01 60 00 00 00 90 00 00 00 00 00 5d f0 00 fc fd f8 f8 00 00 0f 00");
+  private static final String DELIMITED_PACKETS =
+      packets(lengthPrefixed("4e 01 05 01 00 80", "26 01 af 06 b8"));
 
   @Nested
   @DisplayName("Frames Read")
@@ -113,9 +122,10 @@ class FfprobeExecutorFirstFramesTest {
       var video =
           probe(
                   Answers.builder()
-                      .ffprobeOutput(output(HEVC))
+                      .ffprobeOutput(output(HEVC_WITH_RECORD))
                       .prerollPackets(3)
                       .firstFrames(frames("", "", "", HDR10_PLUS))
+                      .firstPackets(DELIMITED_PACKETS)
                       .build())
               .getStreams(0);
 
@@ -162,7 +172,12 @@ class FfprobeExecutorFirstFramesTest {
     void shouldReportHdr10PlusAbsentWhenTheWidestReadDecodesFewerThan3Frames() {
       // Every read succeeds, so the stream holds no more frames than the probe read.
       var video =
-          probe(Answers.builder().ffprobeOutput(output(HEVC)).firstFrames(frames("")).build())
+          probe(
+                  Answers.builder()
+                      .ffprobeOutput(output(HEVC_WITH_RECORD))
+                      .firstFrames(frames(""))
+                      .firstPackets(DELIMITED_PACKETS)
+                      .build())
               .getStreams(0);
 
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
@@ -219,20 +234,35 @@ class FfprobeExecutorFirstFramesTest {
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_PRESENT);
     }
 
-    @ParameterizedTest(name = "{0}")
-    @ValueSource(strings = {"hevc", "av1"})
-    @DisplayName("Should report HDR10+ absent when no frame carries HDR10+ metadata")
-    void shouldReportHdr10PlusAbsentWhenNoFrameCarriesHdr10PlusMetadata(String codec) {
-      var video = video(codec(codec), frames("", ""));
+    @Test
+    @DisplayName(
+        "Should report HDR10+ absent when neither the frames nor the packets' SEI messages hold it")
+    void shouldReportHdr10PlusAbsentWhenNeitherTheFramesNorThePacketsSeiMessagesHoldIt() {
+      var video =
+          probe(
+                  Answers.builder()
+                      .ffprobeOutput(output(HEVC_WITH_RECORD))
+                      .firstFrames(frames("", ""))
+                      .firstPackets(DELIMITED_PACKETS)
+                      .build())
+              .getStreams(0);
 
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
     }
 
+    @Test
+    @DisplayName("Should leave HDR10+ unspecified when an AV1 stream's frames show none")
+    void shouldLeaveHdr10PlusUnspecifiedWhenAnAv1StreamsFramesShowNone() {
+      // FFmpeg's AV1 decoders drop a frame whose HDR10+ message they cannot parse.
+      var video = video(codec("av1"), frames("", "", ""));
+
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+    }
+
     @ParameterizedTest(name = "{0}")
-    @ValueSource(strings = {"h264", "vp9", "mpeg2video"})
-    @DisplayName("Should leave HDR10+ unspecified when the decoder cannot show it")
-    void shouldLeaveHdr10PlusUnspecifiedWhenTheDecoderCannotShowIt(String codec) {
-      // FFmpeg 8.1's H.264 decoder logs HDR10+ SEI messages as unsupported and exports none.
+    @ValueSource(strings = {"vp9", "mpeg2video"})
+    @DisplayName("Should leave HDR10+ unspecified when the probe cannot see it")
+    void shouldLeaveHdr10PlusUnspecifiedWhenTheProbeCannotSeeIt(String codec) {
       var video = video(codec(codec), frames(""));
 
       assertThat(video.getFirstFramesRead()).isTrue();
@@ -473,7 +503,14 @@ class FfprobeExecutorFirstFramesTest {
     @Test
     @DisplayName("Should read only the first frame's values when a later frame carries them")
     void shouldReadOnlyTheFirstFramesValuesWhenALaterFrameCarriesThem() {
-      var video = video(HEVC, frames("", MASTERING_DISPLAY + "," + LIGHT_LEVEL));
+      var video =
+          probe(
+                  Answers.builder()
+                      .ffprobeOutput(output(HEVC_WITH_RECORD))
+                      .firstFrames(frames("", MASTERING_DISPLAY + "," + LIGHT_LEVEL))
+                      .firstPackets(DELIMITED_PACKETS)
+                      .build())
+              .getStreams(0);
 
       assertThat(video.hasMasteringDisplay()).isFalse();
       assertThat(video.hasContentLightLevel()).isFalse();
@@ -581,8 +618,8 @@ class FfprobeExecutorFirstFramesTest {
     }
 
     @Test
-    @DisplayName("Should report Dolby Vision absent when the packets hold no RPU")
-    void shouldReportDolbyVisionAbsentWhenThePacketsHoldNoRpu() {
+    @DisplayName("Should report Dolby Vision and HDR10+ absent when the packets hold neither")
+    void shouldReportDolbyVisionAndHdr10PlusAbsentWhenThePacketsHoldNeither() {
       var video =
           h264(
               packets(
@@ -591,7 +628,7 @@ class FfprobeExecutorFirstFramesTest {
                   lengthPrefixed(SLICE)));
 
       assertThat(video.getDynamicRange().hasDolbyVisionAbsent()).isTrue();
-      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
     }
 
     @Test

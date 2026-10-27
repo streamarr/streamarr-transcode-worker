@@ -3,9 +3,9 @@ package com.streamarr.transcode.probe;
 import java.util.Optional;
 
 /**
- * How a codec's NAL units name their type, which of them carry a picture or a Dolby Vision RPU, and
- * how its decoder configuration record sets the length of each NAL unit in a sample. An RPU is a
- * NAL unit of the codec's RPU type whose payload starts with rpu_nal_prefix 25.
+ * How a codec's NAL units name their type, which of them carry a picture, SEI messages or a Dolby
+ * Vision RPU, and how its decoder configuration record sets the length of each NAL unit in a
+ * sample. An RPU is a NAL unit of the codec's RPU type whose payload starts with rpu_nal_prefix 25.
  */
 enum NalSyntax {
   /** H.264, whose avcC record holds lengthSizeMinusOne in the low 2 bits of its fifth byte. */
@@ -19,6 +19,11 @@ enum NalSyntax {
     Optional<Integer> lengthSize(byte[] extradata) {
       return recordLengthSize(extradata, 4);
     }
+
+    @Override
+    boolean isSei(byte[] unit) {
+      return type(unit) == 6;
+    }
   },
 
   /** HEVC, whose hvcC record holds lengthSizeMinusOne in the low 2 bits of its 22nd byte. */
@@ -31,6 +36,13 @@ enum NalSyntax {
     @Override
     Optional<Integer> lengthSize(byte[] extradata) {
       return recordLengthSize(extradata, 21);
+    }
+
+    /** A prefix (type 39) or a suffix (type 40) SEI NAL unit. */
+    @Override
+    boolean isSei(byte[] unit) {
+      var type = type(unit);
+      return type == 39 || type == 40;
     }
   };
 
@@ -66,6 +78,9 @@ enum NalSyntax {
    * decoder configuration record, so that start codes delimit the NAL units.
    */
   abstract Optional<Integer> lengthSize(byte[] extradata);
+
+  /** Whether the NAL unit holds SEI messages. */
+  abstract boolean isSei(byte[] unit);
 
   boolean isRpu(byte[] unit) {
     return unit.length > headerLength

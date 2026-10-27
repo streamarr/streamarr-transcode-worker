@@ -182,6 +182,26 @@ done
 "${FF[@]}" -i mp4-hdr10-sei-only.mp4 -c copy mpegts-hdr10-sei-only.ts
 "${FF[@]}" -f lavfi -i testsrc2=size=64x64:rate=24:duration=1 "${HDR10[@]}" "${X265[@]}" \
   -x265-params log-level=none mpegts-pq10.ts
+# Three frames of raw HEVC with HDR10+ and HDR10 SEI messages, and of raw H.264 with a mastering
+# display SEI message, which reject-hdr-sei.py hides from FFmpeg's decoders.
+HDR10_PLUS_SCENE='{"BezierCurveData":{"Anchors":[256,512,768],"KneePointX":0,"KneePointY":0},
+  "LuminanceParameters":{"AverageRGB":100,"LuminanceDistributions":{
+  "DistributionIndex":[1,5,10,25,50,75,90,95,99],"DistributionValues":[0,1,2,3,4,5,6,7,8]},
+  "MaxScl":[400,400,400]},"NumberOfWindows":1,"TargetedSystemDisplayMaximumLuminance":400,
+  "SceneFrameIndex":%d,"SceneId":0,"SequenceFrameIndex":%d}'
+{
+  printf '{"SceneInfo":['
+  printf "$HDR10_PLUS_SCENE," 0 0 1 1
+  printf "$HDR10_PLUS_SCENE" 2 2
+  printf '],"JSONInfo":{"HDR10plusProfile":"A","Version":"1.0"},'
+  printf '"SceneInfoSummary":{"SceneFirstFrameIndex":[0],"SceneFrameNumbers":[3]}}'
+} > hdr10-plus.json
+THREE_FRAMES=(-f lavfi -i testsrc2=size=64x36:rate=24:duration=0.125)
+"${FF[@]}" "${THREE_FRAMES[@]}" "${HDR10[@]}" "${X265[@]}" -x265-params \
+  "log-level=none:hdr10=1:master-display=$MASTERING:max-cll=1000,400:dhdr10-info=hdr10-plus.json" \
+  -f hevc hdr10-plus.hevc
+"${FF[@]}" "${THREE_FRAMES[@]}" "${HDR10[@]}" -c:v libx264 -preset ultrafast \
+  -x264-params "mastering-display=$MASTERING" -f h264 hdr10.h264
 
 # Codec strings. H.264 and HEVC in MPEG-TS carry their parameter sets in Annex B form. AV1 in IVF
 # and in a raw OBU file carries only its sequence header. AAC in ADTS has no AudioSpecificConfig.
@@ -309,6 +329,9 @@ python3 "$HERE/edit-mp4-boxes.py" record-level "$WORK/mp4-avc-record-level.mp4" 
 python3 "$HERE/edit-mp4-boxes.py" record-level "$WORK/mp4-hevc-record-level.mp4" 153
 python3 "$HERE/edit-adts-profile.py" "$WORK/aac-lc.adts" "$WORK/aac-main.adts" 0
 python3 "$HERE/edit-adts-profile.py" "$WORK/aac-lc.adts" "$WORK/aac-ltp.adts" 3
+python3 "$HERE/reject-hdr-sei.py" hevc "$WORK/hdr10-plus.hevc" \
+  "$WORK/hevc-hdr10-plus-rejected-sei.hevc"
+python3 "$HERE/reject-hdr-sei.py" h264 "$WORK/hdr10.h264" "$WORK/h264-hdr10-rejected-sei.h264"
 in_image cropped.sh
 in_image adts.sh
 
@@ -320,7 +343,8 @@ FIXTURES_TO_PROBE=(mp4-titled.mp4 mkv-remuxed-from-mp4.mkv mp4-default-handlers.
   mpegts-hdr10-sei-only.ts mpegts-pq10.ts
   mpegts-hevc-ac3.ts ivf-av1-10bit.ivf obu-av1-10bit.obu mkv-av1-10bit.mkv
   mp4-av1-10bit.mp4 mp4-audio-codecs.mp4 mp4-avc-record-level.mp4 mp4-hevc-record-level.mp4
-  mpegts-aac-main.ts mpegts-aac-ltp.ts mkv-120fps.mkv mp4-100fps.mp4 mp4-90fps.mp4 mp4-72fps.mp4)
+  mpegts-aac-main.ts mpegts-aac-ltp.ts mkv-120fps.mkv mp4-100fps.mp4 mp4-90fps.mp4 mp4-72fps.mp4
+  hevc-hdr10-plus-rejected-sei.hevc h264-hdr10-rejected-sei.h264)
 if [ -n "${FATE_SUITE:-}" ]; then
   in_image fate.sh
   python3 "$HERE/move-rpus-ahead.py" "$WORK/dovi-p5.hevc" "$WORK/hevc-dovi-p5-rpus-ahead.hevc"
@@ -384,13 +408,14 @@ done
 # Each video and audio stream that the probe computes a codec string for, copied with the worker's
 # copy arguments into a fragmented MP4. copy-codec-strings.py reads the codec string of each copy's
 # initialization segment, so the tests compare the probe's string with what a copy carries.
-# The raw stream whose RPUs move-rpus-ahead.py moved holds no timestamps, which the mp4 muxer
-# refuses, so it has no copy.
+# The raw streams that move-rpus-ahead.py and reject-hdr-sei.py wrote hold no timestamps, which the
+# mp4 muxer refuses, so they have no copy.
 FIXTURES_TO_COPY=()
 for source in "${FIXTURES_TO_PROBE[@]}"; do
-  if [ "$source" != hevc-dovi-p5-rpus-ahead.hevc ]; then
-    FIXTURES_TO_COPY+=("$source")
-  fi
+  case "$source" in
+    hevc-dovi-p5-rpus-ahead.hevc | *-rejected-sei.*) ;;
+    *) FIXTURES_TO_COPY+=("$source") ;;
+  esac
 done
 python3 "$HERE/copy-codec-strings.py" commands "$WORK" "${FIXTURES_TO_COPY[@]}" > "$WORK/copy-all.sh"
 in_image copy-all.sh
@@ -417,11 +442,13 @@ open(sys.argv[2], "a").write("\n")' "$WORK/frames/$source.json" "$FIXTURES/frame
   fi
 done
 # The first-packets reads that the tests answer with. Every other H.264 and HEVC source's read
-# fails, so only its frames show its RPUs, and a frame without an RPU rules out none. The large
-# local samples keep no read: 3 of their packets take hundreds of kilobytes.
+# fails, so only its frames show its RPUs and HDR10+, and its frames rule out neither, nor any static
+# HDR metadata that its SEI messages could hold. The large local samples keep no read: 3 of their
+# packets take hundreds of kilobytes.
 PACKET_DATA=(mp4-sdr8-bt709.mp4 mp4-dovi-p9-avc1.mp4 mp4-dovi-p9-dva1.mp4 mpegts-dovi-p9.ts
   mp4-dovi-p5-hev1.mp4 hevc-dovi-p5-rpus-ahead.hevc mpegts-dovi-p7-two-layers.ts mpegts-pq10.ts
-  mkv-pipe-hevc-10bit.mkv mpegts-hevc-ac3.ts)
+  mkv-pipe-hevc-10bit.mkv mpegts-hevc-ac3.ts hevc-hdr10-plus-rejected-sei.hevc
+  h264-hdr10-rejected-sei.h264)
 mkdir -p "$FIXTURES/packet-data"
 for source in "${PACKET_DATA[@]}"; do
   if [ -f "$WORK/packet-data/$source.json" ]; then

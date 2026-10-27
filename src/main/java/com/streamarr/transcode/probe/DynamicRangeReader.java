@@ -63,19 +63,14 @@ final class DynamicRangeReader {
 
   private DynamicRangeReader() {}
 
-  static VideoDynamicRange read(JsonNode stream) {
+  static VideoDynamicRange read(JsonNode stream, Optional<SeiMessages> sei) {
     var codec = text(stream, "codec_name").orElse("");
     var frames =
         FirstFrames.of(stream).filter(_ -> DECODERS_SHOWING_FRAME_METADATA.contains(codec));
     var rpus = rpus(stream, codec, frames);
 
     var record = VideoStreamFacts.sideData(stream, DOLBY_VISION_RECORD);
-    var dynamicRange =
-        VideoDynamicRange.newBuilder()
-            .setHdr10Plus(
-                frames
-                    .map(observed -> observed.presenceOf(HDR10_PLUS))
-                    .orElse(Presence.PRESENCE_UNSPECIFIED));
+    var dynamicRange = VideoDynamicRange.newBuilder().setHdr10Plus(hdr10Plus(stream, frames, sei));
     var hasSampleEntry =
         text(stream, "codec_tag_string").filter(DOLBY_VISION_SAMPLE_ENTRIES::contains).isPresent();
     var observedRpus = rpus.filter(observed -> observed.presence() == Presence.PRESENCE_PRESENT);
@@ -94,6 +89,28 @@ final class DynamicRangeReader {
     }
 
     return dynamicRange.setCompatibleBase(compatibleBase(stream, isDolbyVision)).build();
+  }
+
+  /**
+   * PRESENT when the frames or the SEI messages that the probe walked hold HDR10+. ABSENT only when
+   * the frames show none and are not cut short, and the walk rules HDR10+ out: FFmpeg drops the
+   * messages of an SEI NAL unit that follow one it rejects, so frames alone rule out none. Without
+   * a walk, as for AV1, HDR10+ is never ABSENT.
+   */
+  private static Presence hdr10Plus(
+      JsonNode stream, Optional<FirstFrames> frames, Optional<SeiMessages> sei) {
+    var isInFrames = frames.filter(observed -> observed.carries(HDR10_PLUS)).isPresent();
+    if (isInFrames || sei.filter(SeiMessages::holdsHdr10Plus).isPresent()) {
+      return Presence.PRESENCE_PRESENT;
+    }
+
+    var isEveryFrameRead = FirstFrames.of(stream).filter(read -> !read.cutShort()).isPresent();
+    var isRuledOut = sei.filter(walked -> walked.rulesOut(SeiMessages.HDR10_PLUS)).isPresent();
+    if (isEveryFrameRead && isRuledOut) {
+      return Presence.PRESENCE_ABSENT;
+    }
+
+    return Presence.PRESENCE_UNSPECIFIED;
   }
 
   /** The signaled transfer decides, even when a Dolby Vision record claims another base. */

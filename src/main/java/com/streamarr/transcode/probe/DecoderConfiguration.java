@@ -57,7 +57,7 @@ final class DecoderConfiguration {
   static Optional<byte[]> hevcProfile(byte[] extradata) {
     var isRecord = Byte.toUnsignedInt(extradata[0]) == HEVC_RECORD_VERSION;
     var merged = new HevcProfileMerge();
-    for (var nal : isRecord ? hevcRecordUnits(extradata) : annexB(extradata)) {
+    for (var nal : isRecord ? hevcRecordUnits(extradata).units() : annexB(extradata)) {
       if (nal.length < 2 || (nal[1] >> 3 & 0x1F) != 0 || (nal[0] & 0x01) != 0) {
         continue;
       }
@@ -107,26 +107,33 @@ final class DecoderConfiguration {
     return units;
   }
 
-  /** The NAL units of every array in an hvcC record (ISO/IEC 14496-15, 8.3.3.1.2). */
-  private static List<byte[]> hevcRecordUnits(byte[] hvcC) {
+  /**
+   * The NAL units of every array in an hvcC record (ISO/IEC 14496-15, 8.3.3.1.2), complete when
+   * every array and NAL unit that the record counts ends within it.
+   */
+  static NalUnits hevcRecordUnits(byte[] hvcC) {
     var units = new ArrayList<byte[]>();
     if (hvcC.length <= HVCC_ARRAY_COUNT) {
-      return units;
+      return new NalUnits(units, false);
     }
 
     var buffer = ByteBuffer.wrap(hvcC).position(HVCC_ARRAY_COUNT + 1);
     var arrays = Byte.toUnsignedInt(hvcC[HVCC_ARRAY_COUNT]);
-    for (var array = 0; array < arrays && buffer.remaining() >= 3; array++) {
+    for (var array = 0; array < arrays; array++) {
+      if (buffer.remaining() < 3) {
+        return new NalUnits(units, false);
+      }
+
       buffer.get();
       var count = Short.toUnsignedInt(buffer.getShort());
       for (var index = 0; index < count; index++) {
         if (!readLengthPrefixedUnit(buffer, units)) {
-          return units;
+          return new NalUnits(units, false);
         }
       }
     }
 
-    return units;
+    return new NalUnits(units, true);
   }
 
   /** Reads one NAL unit after its 2-byte length; false when the record ends first. */

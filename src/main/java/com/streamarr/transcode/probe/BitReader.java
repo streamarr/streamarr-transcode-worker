@@ -31,6 +31,13 @@ final class BitReader {
     return value;
   }
 
+  /**
+   * The count of bytes that the bits read so far take, once the reader skips to a byte boundary.
+   */
+  int alignedBytes() {
+    return (position + 7) / 8;
+  }
+
   boolean flag() {
     return bits(1) == 1;
   }

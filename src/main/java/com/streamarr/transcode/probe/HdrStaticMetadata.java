@@ -7,16 +7,17 @@ import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.math.RoundingMode;
+import java.nio.ByteBuffer;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.regex.Pattern;
 import tools.jackson.databind.JsonNode;
 
 /**
- * The HDR10 static metadata that the container or the first frame declares, in the units of the
- * HEVC SEI messages: the mastering display color volume (payload type 137) and the content light
- * level (payload type 144). A value that does not fit its SEI field leaves the whole message
- * absent.
+ * The HDR10 static metadata that the container, the first frame or an SEI message declares, in the
+ * units of the HEVC SEI messages: the mastering display color volume (payload type 137) and the
+ * content light level (payload type 144). A value that does not fit its SEI field leaves the whole
+ * message absent.
  */
 final class HdrStaticMetadata {
 
@@ -31,6 +32,9 @@ final class HdrStaticMetadata {
   private static final long MAXIMUM_LUMINANCE = 0xFFFF_FFFFL;
   private static final long MAXIMUM_LIGHT_LEVEL = 0xFFFF;
 
+  private static final int MASTERING_DISPLAY_PAYLOAD_BYTES = 24;
+  private static final int LIGHT_LEVEL_PAYLOAD_BYTES = 4;
+
   private static final String MASTERING_DISPLAY = "Mastering display metadata";
   private static final String CONTENT_LIGHT_LEVEL = "Content light level metadata";
 
@@ -38,31 +42,47 @@ final class HdrStaticMetadata {
 
   /**
    * Sets the mastering display and the content light level from the stream's side data, or from the
-   * side data of its first frame when the stream has none. A Matroska track's own light level
-   * elements come before the first frame's. A side data entry that the worker cannot convert leaves
-   * its value absent and sets its omitted flag, as does a Matroska MasteringMetadata element that
-   * ffprobe dropped when the first frame carries no mastering display either.
+   * side data of its first frame when the stream has none, or for H.264 and HEVC from the first
+   * {@link SeiMessages} message of the type that is not nested. A Matroska track's own light level
+   * elements come before the first frame's. A value that the worker cannot convert leaves its value
+   * absent and sets its omitted flag. So does a Matroska MasteringMetadata element that ffprobe
+   * dropped, and an SEI walk that cannot rule the value out, when no source gives the value.
    */
-  static void add(JsonNode stream, ProbeStreamInfo.Builder builder) {
+  static void add(JsonNode stream, Optional<SeiMessages> sei, ProbeStreamInfo.Builder builder) {
     declared(stream, MASTERING_DISPLAY)
+        .map(HdrStaticMetadata::masteringDisplayOf)
+        .or(
+            () ->
+                sei.flatMap(walked -> walked.firstPayload(SeiMessages.MASTERING_DISPLAY))
+                    .map(HdrStaticMetadata::masteringDisplayOf))
         .ifPresentOrElse(
-            side ->
-                masteringDisplayOf(side)
-                    .ifPresentOrElse(
-                        builder::setMasteringDisplay,
-                        () -> builder.setMasteringDisplayOmitted(true)),
+            value ->
+                value.ifPresentOrElse(
+                    builder::setMasteringDisplay, () -> builder.setMasteringDisplayOmitted(true)),
             () ->
                 builder.setMasteringDisplayOmitted(
-                    stream.path(MatroskaColourProbe.CONTAINER_MASTERING_METADATA).asBoolean()));
+                    stream.path(MatroskaColourProbe.CONTAINER_MASTERING_METADATA).asBoolean()
+                        || mayCarry(sei, SeiMessages.MASTERING_DISPLAY)));
     VideoStreamFacts.sideData(stream, CONTENT_LIGHT_LEVEL)
         .or(() -> Optional.ofNullable(stream.get(MatroskaColourProbe.CONTAINER_LIGHT_LEVEL)))
         .or(() -> firstFrameSideData(stream, CONTENT_LIGHT_LEVEL))
-        .ifPresent(
-            side ->
-                contentLightLevelOf(side)
-                    .ifPresentOrElse(
-                        builder::setContentLightLevel,
-                        () -> builder.setContentLightLevelOmitted(true)));
+        .map(HdrStaticMetadata::contentLightLevelOf)
+        .or(
+            () ->
+                sei.flatMap(walked -> walked.firstPayload(SeiMessages.CONTENT_LIGHT_LEVEL))
+                    .map(HdrStaticMetadata::contentLightLevelOf))
+        .ifPresentOrElse(
+            value ->
+                value.ifPresentOrElse(
+                    builder::setContentLightLevel, () -> builder.setContentLightLevelOmitted(true)),
+            () ->
+                builder.setContentLightLevelOmitted(
+                    mayCarry(sei, SeiMessages.CONTENT_LIGHT_LEVEL)));
+  }
+
+  /** Whether the stream may carry the value in SEI that the probe could not read. */
+  private static boolean mayCarry(Optional<SeiMessages> sei, int payloadType) {
+    return sei.filter(walked -> !walked.rulesOut(payloadType)).isPresent();
   }
 
   private static Optional<JsonNode> declared(JsonNode stream, String type) {
@@ -71,6 +91,62 @@ final class HdrStaticMetadata {
 
   private static Optional<JsonNode> firstFrameSideData(JsonNode stream, String type) {
     return FirstFrames.of(stream).flatMap(frames -> frames.firstFrameSideData(type));
+  }
+
+  /** MaxCLL, then MaxFALL, each in 2 bytes; empty when the payload ends first. */
+  private static Optional<ContentLightLevel> contentLightLevelOf(ByteBuffer payload) {
+    if (payload.remaining() < LIGHT_LEVEL_PAYLOAD_BYTES) {
+      return Optional.empty();
+    }
+
+    return Optional.of(
+        ContentLightLevel.newBuilder()
+            .setMaxContentLightLevel(unsignedShort(payload, 0))
+            .setMaxFrameAverageLightLevel(unsignedShort(payload, 2))
+            .build());
+  }
+
+  /**
+   * The green, blue and red primaries and the white point, each an x and a y in 2 bytes, then the
+   * maximum and the minimum luminance, each in 4 bytes. Empty when the payload ends first or a
+   * chromaticity lies beyond 50000.
+   */
+  private static Optional<MasteringDisplayColorVolume> masteringDisplayOf(ByteBuffer payload) {
+    if (payload.remaining() < MASTERING_DISPLAY_PAYLOAD_BYTES) {
+      return Optional.empty();
+    }
+
+    var green = coordinates(payload, 0);
+    var blue = coordinates(payload, 4);
+    var red = coordinates(payload, 8);
+    var whitePoint = coordinates(payload, 12);
+    if (green.isEmpty() || blue.isEmpty() || red.isEmpty() || whitePoint.isEmpty()) {
+      return Optional.empty();
+    }
+
+    return Optional.of(
+        MasteringDisplayColorVolume.newBuilder()
+            .setRed(red.get())
+            .setGreen(green.get())
+            .setBlue(blue.get())
+            .setWhitePoint(whitePoint.get())
+            .setMaxLuminance(payload.getInt(payload.position() + 16))
+            .setMinLuminance(payload.getInt(payload.position() + 20))
+            .build());
+  }
+
+  private static Optional<ChromaticityCoordinates> coordinates(ByteBuffer payload, int offset) {
+    var x = unsignedShort(payload, offset);
+    var y = unsignedShort(payload, offset + 2);
+    if (x > COORDINATE_UNITS || y > COORDINATE_UNITS) {
+      return Optional.empty();
+    }
+
+    return Optional.of(ChromaticityCoordinates.newBuilder().setX(x).setY(y).build());
+  }
+
+  private static int unsignedShort(ByteBuffer payload, int offset) {
+    return Short.toUnsignedInt(payload.getShort(payload.position() + offset));
   }
 
   private static Optional<ContentLightLevel> contentLightLevelOf(JsonNode side) {
