@@ -89,6 +89,38 @@ class FfprobeExecutorSeiTest {
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
     }
 
+    @ParameterizedTest(name = "{0} {1}")
+    @CsvSource({"H264, ''", "H264, 05 01 01", "HEVC, ''", "HEVC, 05 01 01"})
+    @DisplayName("Should leave HDR10+ unspecified when an SEI NAL unit lacks its trailing bits")
+    void shouldLeaveHdr10PlusUnspecifiedWhenAnSeiNalUnitLacksItsTrailingBits(
+        Coding coding, String messages) {
+      var video = coding.probed(coding.sample((coding.seiHeader + " " + messages).trim()));
+
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+      assertThat(video.getMasteringDisplayOmitted()).isTrue();
+      assertThat(video.getContentLightLevelOmitted()).isTrue();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Coding.class)
+    @DisplayName(
+        "Should report HDR10+ present when an SEI NAL unit that lacks its trailing bits holds it")
+    void shouldReportHdr10PlusPresentWhenAnSeiNalUnitThatLacksItsTrailingBitsHoldsIt(
+        Coding coding) {
+      var video = coding.probed(coding.sample(coding.seiHeader + " " + HDR10_PLUS));
+
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_PRESENT);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Coding.class)
+    @DisplayName("Should report HDR10+ absent when an SEI NAL unit holds only its trailing bits")
+    void shouldReportHdr10PlusAbsentWhenAnSeiNalUnitHoldsOnlyItsTrailingBits(Coding coding) {
+      var video = coding.probed(coding.sample(coding.sei()));
+
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
+    }
+
     @ParameterizedTest(name = "{0}")
     @EnumSource(Coding.class)
     @DisplayName("Should leave HDR10+ unspecified when bytes past the trailing bits follow")
@@ -142,7 +174,8 @@ class FfprobeExecutorSeiTest {
     void shouldReportHdr10PlusPresentWhenASuffixSeiNalUnitHoldsIt() {
       var video =
           Coding.HEVC.probed(
-              lengthPrefixed(Coding.HEVC.slice, withEmulationPrevention("50 01 " + HDR10_PLUS)));
+              lengthPrefixed(
+                  Coding.HEVC.slice, withEmulationPrevention("50 01 " + HDR10_PLUS + " 80")));
 
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_PRESENT);
     }
@@ -298,6 +331,24 @@ class FfprobeExecutorSeiTest {
               coding.sample(coding.sei(nesting(payloadType, header, "05 08 00 00"), LIGHT_LEVEL)));
 
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+    }
+
+    @ParameterizedTest(name = "{0} payloadType {1}")
+    @CsvSource({"H264, 1e, 80", "H264, 25, 40", "HEVC, 85, 20"})
+    @DisplayName("Should leave HDR10+ unspecified when a nesting message nests another")
+    void shouldLeaveHdr10PlusUnspecifiedWhenANestingMessageNestsAnother(
+        Coding coding, String payloadType, String header) {
+      // No nesting message may nest another, so the probe reads one level and rules out nothing
+      // that a deeper one could hold.
+      var video =
+          coding.probed(
+              coding.sample(
+                  coding.sei(
+                      nesting(payloadType, header, nesting(payloadType, header, OTHER_T35)))));
+
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+      assertThat(video.getMasteringDisplayOmitted()).isTrue();
+      assertThat(video.getContentLightLevelOmitted()).isTrue();
     }
 
     @Test

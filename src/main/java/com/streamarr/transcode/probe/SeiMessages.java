@@ -4,7 +4,6 @@ import static com.streamarr.transcode.probe.FfprobeJson.text;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -18,8 +17,8 @@ import tools.jackson.databind.JsonNode;
  *
  * <p>The walk read all of the SEI when it delimited every NAL unit of the record and the packets,
  * and every SEI NAL unit among them: the payload of every message ends within its NAL unit, every
- * nested message ends within the payload of its nesting message, and only the RBSP trailing bits
- * follow the last message.
+ * nested message ends within the payload of its nesting message, no nesting message nests another,
+ * and only the RBSP trailing bits follow the last message.
  */
 record SeiMessages(List<SeiMessage> messages, boolean readAll) {
 
@@ -104,7 +103,11 @@ record SeiMessages(List<SeiMessage> messages, boolean readAll) {
       readAll = false;
     }
 
-    // FFmpeg drops a NAL unit's trailing zero bytes before it reads the RBSP.
+    /**
+     * The messages of an SEI NAL unit, which must end in the RBSP trailing bits: the byte 0x80,
+     * after FFmpeg drops the NAL unit's trailing zero bytes. A unit that lacks them can have lost
+     * messages, so it rules out none, but the messages that it holds still count.
+     */
     private void addSeiUnit(byte[] unit) {
       var end = unit.length;
       while (end > 0 && unit[end - 1] == 0) {
@@ -112,7 +115,12 @@ record SeiMessages(List<SeiMessage> messages, boolean readAll) {
       }
 
       var start = syntax.payloadOffset();
-      if (start > end || !addMessages(ByteBuffer.wrap(unit, start, end - start), false)) {
+      var isTerminated = end > start && Byte.toUnsignedInt(unit[end - 1]) == TRAILING_BITS;
+      var messagesEnd = isTerminated ? end - 1 : end;
+      var isDelimited =
+          start <= messagesEnd
+              && addMessages(ByteBuffer.wrap(unit, start, messagesEnd - start), false);
+      if (!isTerminated || !isDelimited) {
         readAll = false;
       }
     }
@@ -128,8 +136,9 @@ record SeiMessages(List<SeiMessage> messages, boolean readAll) {
           return false;
         }
 
-        var payload = new byte[(int) payloadSize.getAsLong()];
-        bytes.get(payload);
+        var size = (int) payloadSize.getAsLong();
+        var payload = bytes.slice(bytes.position(), size);
+        bytes.position(bytes.position() + size);
         // A payloadType beyond the int range names no message that the walk looks for.
         var type = (int) Math.min(payloadType.getAsLong(), Integer.MAX_VALUE);
         if (!addMessage(type, payload, nested)) {
@@ -140,22 +149,33 @@ record SeiMessages(List<SeiMessage> messages, boolean readAll) {
       return true;
     }
 
-    private boolean addMessage(int payloadType, byte[] payload, boolean nested) {
+    /** Adds one message, or the messages that a nesting message holds. */
+    private boolean addMessage(int payloadType, ByteBuffer payload, boolean nested) {
       if (SeiNesting.isNesting(syntax, payloadType)) {
-        var offset = SeiNesting.nestedMessagesOffset(syntax, payloadType, payload);
-        return offset.isPresent()
-            && addMessages(
-                ByteBuffer.wrap(payload, offset.getAsInt(), payload.length - offset.getAsInt()),
-                true);
+        return !nested && addNestedMessages(payloadType, payload);
       }
 
       var isHdr = payloadType == MASTERING_DISPLAY || payloadType == CONTENT_LIGHT_LEVEL;
       if (isHdr || (payloadType == HDR10_PLUS && isHdr10Plus(payload))) {
-        messages.add(
-            new SeiMessage(payloadType, ByteBuffer.wrap(payload).asReadOnlyBuffer(), nested));
+        var copy = ByteBuffer.allocate(payload.remaining()).put(payload.duplicate()).flip();
+        messages.add(new SeiMessage(payloadType, copy.asReadOnlyBuffer(), nested));
       }
 
       return true;
+    }
+
+    /**
+     * Adds the messages that a nesting message holds; false when its header or a nested message
+     * runs past its payload. No nesting message may nest another, so the walk reads one level, and
+     * a nesting message inside another rules out nothing that it could hold.
+     */
+    private boolean addNestedMessages(int payloadType, ByteBuffer payload) {
+      var bytes = new byte[payload.remaining()];
+      payload.duplicate().get(bytes);
+      var offset = SeiNesting.nestedMessagesOffset(syntax, payloadType, bytes);
+      return offset.isPresent()
+          && addMessages(
+              ByteBuffer.wrap(bytes, offset.getAsInt(), bytes.length - offset.getAsInt()), true);
     }
 
     private static boolean isTrailingBits(ByteBuffer bytes) {
@@ -182,15 +202,11 @@ record SeiMessages(List<SeiMessage> messages, boolean readAll) {
       return OptionalLong.of(value);
     }
 
-    private static boolean isHdr10Plus(byte[] payload) {
-      return payload.length >= HDR10_PLUS_IDENTIFIER.length
-          && Arrays.equals(
-              payload,
-              0,
-              HDR10_PLUS_IDENTIFIER.length,
-              HDR10_PLUS_IDENTIFIER,
-              0,
-              HDR10_PLUS_IDENTIFIER.length);
+    private static boolean isHdr10Plus(ByteBuffer payload) {
+      return payload.remaining() >= HDR10_PLUS_IDENTIFIER.length
+          && payload
+              .slice(payload.position(), HDR10_PLUS_IDENTIFIER.length)
+              .equals(ByteBuffer.wrap(HDR10_PLUS_IDENTIFIER));
     }
   }
 }
