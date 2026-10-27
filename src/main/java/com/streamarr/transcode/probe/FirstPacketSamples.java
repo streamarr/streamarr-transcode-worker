@@ -45,10 +45,12 @@ final class FirstPacketSamples {
 
   /**
    * The sample's NAL units, each without its emulation prevention bytes. A length that runs past
-   * the sample, or bytes too few for a length, end the sample early.
+   * the sample, or bytes too few for a length, end the sample early, and a start code inside a
+   * length's bytes leaves the sample incomplete.
    */
   private static NalUnits lengthPrefixed(byte[] sample, int lengthSize) {
     var units = new ArrayList<byte[]>();
+    var isEveryRegionComplete = true;
     var position = 0;
     while (position + lengthSize <= sample.length) {
       var length = 0;
@@ -62,14 +64,16 @@ final class FirstPacketSamples {
       }
 
       if (length > 0) {
-        units.add(
-            DecoderConfiguration.withoutEmulationPrevention(sample, position, position + length));
+        var region = DecoderConfiguration.lengthPrefixedRegion(sample, position, position + length);
+        units.addAll(region.units());
+        isEveryRegionComplete &= region.complete();
       }
 
       position += length;
     }
 
-    return new NalUnits(units, position == sample.length && !units.isEmpty());
+    return new NalUnits(
+        units, isEveryRegionComplete && position == sample.length && !units.isEmpty());
   }
 
   /**

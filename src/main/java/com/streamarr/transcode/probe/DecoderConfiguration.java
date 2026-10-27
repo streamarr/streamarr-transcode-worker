@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalInt;
 
 /**
  * The profile, tier and level fields of a video stream's extradata: its decoder configuration
@@ -119,6 +120,7 @@ final class DecoderConfiguration {
 
     var buffer = ByteBuffer.wrap(hvcC).position(HVCC_ARRAY_COUNT + 1);
     var arrays = Byte.toUnsignedInt(hvcC[HVCC_ARRAY_COUNT]);
+    var isComplete = true;
     for (var array = 0; array < arrays; array++) {
       if (buffer.remaining() < 3) {
         return new NalUnits(units, false);
@@ -127,13 +129,54 @@ final class DecoderConfiguration {
       buffer.get();
       var count = Short.toUnsignedInt(buffer.getShort());
       for (var index = 0; index < count; index++) {
-        if (!readLengthPrefixedUnit(buffer, units)) {
+        if (buffer.remaining() < 2) {
           return new NalUnits(units, false);
         }
+
+        var length = Short.toUnsignedInt(buffer.getShort());
+        if (length == 0 || buffer.remaining() < length) {
+          return new NalUnits(units, false);
+        }
+
+        var region = lengthPrefixedRegion(hvcC, buffer.position(), buffer.position() + length);
+        units.addAll(region.units());
+        isComplete &= region.complete();
+        buffer.position(buffer.position() + length);
       }
     }
 
-    return new NalUnits(units, true);
+    return new NalUnits(units, isComplete);
+  }
+
+  /**
+   * The NAL units of the bytes that one length prefix covers, each without its emulation prevention
+   * bytes. FFmpeg ends a NAL unit at a start code that the bytes hold, and reads the bytes after it
+   * as Annex B NAL units, so the reader does too. A NAL unit cannot hold a start code, so such
+   * bytes are not complete.
+   */
+  static NalUnits lengthPrefixedRegion(byte[] bytes, int start, int end) {
+    var startCode = startCodeOffset(bytes, start, end);
+    if (startCode.isEmpty()) {
+      return new NalUnits(List.of(withoutEmulationPrevention(bytes, start, end)), true);
+    }
+
+    var units = new ArrayList<byte[]>();
+    if (startCode.getAsInt() > start) {
+      units.add(withoutEmulationPrevention(bytes, start, startCode.getAsInt()));
+    }
+
+    units.addAll(annexB(Arrays.copyOfRange(bytes, startCode.getAsInt(), end)));
+    return new NalUnits(units, false);
+  }
+
+  private static OptionalInt startCodeOffset(byte[] bytes, int start, int end) {
+    for (var index = start; index + 2 < end; index++) {
+      if (bytes[index] == 0 && bytes[index + 1] == 0 && bytes[index + 2] == 1) {
+        return OptionalInt.of(index);
+      }
+    }
+
+    return OptionalInt.empty();
   }
 
   /** Reads one NAL unit after its 2-byte length; false when the record ends first. */

@@ -114,6 +114,36 @@ class FfprobeExecutorSeiTest {
 
     @ParameterizedTest(name = "{0}")
     @EnumSource(Coding.class)
+    @DisplayName("Should leave HDR10+ unspecified when a second trailing byte follows the messages")
+    void shouldLeaveHdr10PlusUnspecifiedWhenASecondTrailingByteFollowsTheMessages(Coding coding) {
+      var video = coding.probed(coding.sample(coding.sei(LIGHT_LEVEL, "80")));
+
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+      assertThat(video.getMasteringDisplayOmitted()).isTrue();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Coding.class)
+    @DisplayName(
+        "Should read the NAL units after a start code that a NAL unit's length covers, and rule out"
+            + " nothing")
+    void shouldReadTheNalUnitsAfterAStartCodeThatANalUnitsLengthCoversAndRuleOutNothing(
+        Coding coding) {
+      // FFmpeg ends the NAL unit at the start code and reads the SEI NAL unit that follows it.
+      var video =
+          coding.probed(
+              coding.sample(
+                  coding.sei(SHORT_UNREGISTERED)
+                      + " 00 00 01 "
+                      + coding.sei(SHORT_UNREGISTERED, HDR10_PLUS)));
+
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_PRESENT);
+      assertThat(video.hasMasteringDisplay()).isFalse();
+      assertThat(video.getMasteringDisplayOmitted()).isTrue();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Coding.class)
     @DisplayName("Should report HDR10+ absent when an SEI NAL unit holds only its trailing bits")
     void shouldReportHdr10PlusAbsentWhenAnSeiNalUnitHoldsOnlyItsTrailingBits(Coding coding) {
       var video = coding.probed(coding.sample(coding.sei()));
@@ -248,6 +278,23 @@ class FfprobeExecutorSeiTest {
       var video = probed(cut, Coding.HEVC.sample());
 
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+    }
+
+    @Test
+    @DisplayName(
+        "Should read the NAL units after a start code that a record's NAL unit holds, and rule out"
+            + " nothing")
+    void shouldReadTheNalUnitsAfterAStartCodeThatARecordsNalUnitHoldsAndRuleOutNothing() {
+      var video =
+          probed(
+              recordWithSei(
+                  Coding.HEVC.sei(SHORT_UNREGISTERED)
+                      + " 00 00 01 "
+                      + Coding.HEVC.sei(SHORT_UNREGISTERED, HDR10_PLUS)),
+              Coding.HEVC.sample());
+
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_PRESENT);
+      assertThat(video.getMasteringDisplayOmitted()).isTrue();
     }
 
     @Test

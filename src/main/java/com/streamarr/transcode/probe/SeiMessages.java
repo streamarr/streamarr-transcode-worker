@@ -127,7 +127,10 @@ record SeiMessages(List<SeiMessage> messages, boolean readAll) {
 
     /** Adds the messages that the bytes hold; false when one of them runs past the bytes. */
     private boolean addMessages(ByteBuffer bytes, boolean nested) {
-      while (bytes.hasRemaining() && !isTrailingBits(bytes)) {
+      // The top-level messages must fill the RBSP up to its trailing bits, which the caller
+      // removed.
+      // A nested payload may end in payload alignment bits.
+      while (bytes.hasRemaining() && !(nested && isTrailingBits(bytes))) {
         var payloadType = varyingLengthValue(bytes);
         var payloadSize = varyingLengthValue(bytes);
         if (payloadType.isEmpty()
