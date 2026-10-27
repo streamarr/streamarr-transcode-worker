@@ -6,7 +6,6 @@ import static com.streamarr.transcode.probe.RecordedFfprobe.streamOf;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import build.buf.gen.streamarr.transcode.v1.CompatibleBase;
-import build.buf.gen.streamarr.transcode.v1.DolbyVisionAbsent;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionPresent;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionRpuHeader;
 import build.buf.gen.streamarr.transcode.v1.Presence;
@@ -217,8 +216,7 @@ class FfprobeExecutorFirstFramesTest {
     void shouldReportDolbyVisionAbsentWhenTheFramesTheRecordAndTheSampleEntryShowNone() {
       var video = video(HEVC, frames("", ""));
 
-      assertThat(video.getDynamicRange().getDolbyVisionAbsent())
-          .isEqualTo(DolbyVisionAbsent.getDefaultInstance());
+      assertThat(video.getDynamicRange().hasDolbyVisionAbsent()).isTrue();
     }
 
     @Test
@@ -500,8 +498,7 @@ class FfprobeExecutorFirstFramesTest {
                   lengthPrefixed("1c 18 08 09"),
                   lengthPrefixed(SLICE)));
 
-      assertThat(video.getDynamicRange().getDolbyVisionAbsent())
-          .isEqualTo(DolbyVisionAbsent.getDefaultInstance());
+      assertThat(video.getDynamicRange().hasDolbyVisionAbsent()).isTrue();
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
     }
 
@@ -643,8 +640,7 @@ class FfprobeExecutorFirstFramesTest {
                   packets("00 00 " + annexB(AUD, SLICE), annexB(AUD, SLICE)))
               .getDynamicRange();
 
-      assertThat(dynamicRange.getDolbyVisionAbsent())
-          .isEqualTo(DolbyVisionAbsent.getDefaultInstance());
+      assertThat(dynamicRange.hasDolbyVisionAbsent()).isTrue();
     }
 
     @Test
@@ -718,8 +714,7 @@ class FfprobeExecutorFirstFramesTest {
       var video = streamOf("hevc-hdr10-plus.hevc", 0);
 
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_PRESENT);
-      assertThat(video.getDynamicRange().getDolbyVisionAbsent())
-          .isEqualTo(DolbyVisionAbsent.getDefaultInstance());
+      assertThat(video.getDynamicRange().hasDolbyVisionAbsent()).isTrue();
       assertThat(video.getContentLightLevel().getMaxFrameAverageLightLevel()).isEqualTo(200);
     }
 
@@ -801,8 +796,7 @@ class FfprobeExecutorFirstFramesTest {
       // The base layer is the chosen video stream; the record and the RPUs sit in stream 1.
       var media = RecordedFfprobe.probeFixture("mpegts-dovi-p7-two-layers.ts");
 
-      assertThat(media.getStreams(0).getDynamicRange().getDolbyVisionAbsent())
-          .isEqualTo(DolbyVisionAbsent.getDefaultInstance());
+      assertThat(media.getStreams(0).getDynamicRange().hasDolbyVisionAbsent()).isTrue();
       assertThat(media.getStreams(1).getFirstFramesRead()).isFalse();
       assertThat(media.getStreams(1).getDynamicRange().getDolbyVisionPresent().getObservedRpu())
           .isEqualTo(Presence.PRESENCE_UNSPECIFIED);
