@@ -622,6 +622,33 @@ class FfprobeExecutorFirstFramesTest {
 
     @Test
     @DisplayName(
+        "Should leave Dolby Vision unspecified when bytes ahead of the first start code hold data")
+    void shouldLeaveDolbyVisionUnspecifiedWhenBytesAheadOfTheFirstStartCodeHoldData() {
+      // A damaged start code ahead of an RPU, then a slice.
+      var dynamicRange =
+          h264(
+                  "00 00 00 01 67 64 00 28 01 00 00 00 01 68 ee 3c 80",
+                  packets("00 01 " + RPU + " " + annexB(SLICE), annexB(AUD, SLICE)))
+              .getDynamicRange();
+
+      assertThat(dynamicRange.hasDolbyVisionAbsent()).isFalse();
+    }
+
+    @Test
+    @DisplayName("Should report Dolby Vision absent when zero bytes lead the first start code")
+    void shouldReportDolbyVisionAbsentWhenZeroBytesLeadTheFirstStartCode() {
+      var dynamicRange =
+          h264(
+                  "00 00 00 01 67 64 00 28 01 00 00 00 01 68 ee 3c 80",
+                  packets("00 00 " + annexB(AUD, SLICE), annexB(AUD, SLICE)))
+              .getDynamicRange();
+
+      assertThat(dynamicRange.getDolbyVisionAbsent())
+          .isEqualTo(DolbyVisionAbsent.getDefaultInstance());
+    }
+
+    @Test
+    @DisplayName(
         "Should leave the sample layout unspecified when a sample's length runs past its end before"
             + " its picture")
     void shouldLeaveTheSampleLayoutUnspecifiedWhenASamplesLengthRunsPastItsEndBeforeItsPicture() {

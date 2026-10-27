@@ -151,10 +151,20 @@ final class H264RpuReader {
     return new Sample(units, position == sample.length && !units.isEmpty());
   }
 
-  /** A sample without a start code holds NAL units that the reader cannot delimit. */
+  /**
+   * A sample without a start code, or with data ahead of its first one, holds bytes that the reader
+   * cannot delimit. Zero bytes may lead the first start code.
+   */
   private static Sample annexB(byte[] sample) {
     var units = DecoderConfiguration.annexB(sample);
-    return new Sample(units, !units.isEmpty());
+    var leading = 0;
+    while (leading < sample.length && sample[leading] == 0) {
+      leading++;
+    }
+
+    var startsWithStartCode =
+        leading >= 2 && leading < sample.length && Byte.toUnsignedInt(sample[leading]) == 1;
+    return new Sample(units, startsWithStartCode && !units.isEmpty());
   }
 
   /** A sample's NAL units, and whether they reach the sample's end. */
