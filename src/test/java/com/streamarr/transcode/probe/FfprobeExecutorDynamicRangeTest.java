@@ -154,9 +154,11 @@ class FfprobeExecutorDynamicRangeTest {
 
     @Test
     @DisplayName(
-        "Should leave Dolby Vision and HDR10+ unspecified when the decoder hides them from the"
-            + " frames")
-    void shouldLeaveDolbyVisionAndHdr10PlusUnspecifiedWhenTheDecoderHidesThemFromTheFrames() {
+        "Should report Dolby Vision absent and leave HDR10+ unspecified when an H.264 stream's"
+            + " packets hold no RPU")
+    void
+        shouldReportDolbyVisionAbsentAndLeaveHdr10PlusUnspecifiedWhenAnH264StreamsPacketsHoldNoRpu() {
+      // FFmpeg's H.264 decoder drops HDR10+ metadata, and the packets show the RPUs.
       var video = streamOf("mp4-sdr8-bt709.mp4", 0);
 
       assertThat(video.getFirstFramesRead()).isTrue();
@@ -165,6 +167,7 @@ class FfprobeExecutorDynamicRangeTest {
               VideoDynamicRange.newBuilder()
                   .setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_SDR)
                   .setHdr10Plus(Presence.PRESENCE_UNSPECIFIED)
+                  .setDolbyVisionAbsent(DolbyVisionAbsent.getDefaultInstance())
                   .build());
     }
 

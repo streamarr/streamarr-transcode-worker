@@ -257,7 +257,7 @@ CONTAINER
 cat > "$WORK/probe.sh" <<'CONTAINER'
 set -euo pipefail
 cd /work
-mkdir -p frames
+mkdir -p frames packet-data
 LIMITS=(-analyzeduration 200M -probesize 1G -scan_all_pmts 0)
 for source in "$@"; do
   # The probe's own arguments, as FfprobeExecutor passes them, and -show_data, which prints the
@@ -276,6 +276,14 @@ for source in "$@"; do
     ffprobe -v quiet -print_format json "${LIMITS[@]}" -select_streams "$chosen" \
       -read_intervals '%+#3' -show_entries "frame=stream_index:frame_side_data=side_data_type,red_x,red_y,green_x,green_y,blue_x,blue_y,white_point_x,white_point_y,min_luminance,max_luminance,max_content,max_average,vdr_rpu_profile,bl_video_full_range_flag,el_spatial_resampling_filter_flag,disable_residual_flag,vdr_bit_depth" \
       "$source" > "frames/$(basename "$source").json"
+    # The first-packets read of an H.264 chosen video stream, with FirstPacketsProbe's arguments.
+    codec="$(ffprobe -v quiet "${LIMITS[@]}" -select_streams "$chosen" \
+      -show_entries stream=codec_name -of csv=p=0 "$source")"
+    if [ "${codec%%[,$'\n']*}" = h264 ]; then
+      ffprobe -v quiet -print_format json "${LIMITS[@]}" -select_streams "$chosen" \
+        -read_intervals '%+#3' -show_entries packet=data -show_data \
+        "$source" > "packet-data/$(basename "$source").json"
+    fi
   fi
 done
 ffprobe -version | head -1 > ffprobe-version.txt
@@ -322,6 +330,8 @@ FF=(timeout 60 ffmpeg -hide_banner -nostdin -loglevel error -y)
   -tag:v hvc1 mp4-dovi-p5-no-record-bt709.mp4
 "${FF[@]}" -i /samples/mp4-dovi-p5-dvh1-no-record.mp4 -map 0:v -t 3 -c copy \
   mpegts-dovi-p5-no-descriptor.ts
+# Dolby Vision profile 9 in MPEG-TS, whose samples delimit their NAL units with start codes.
+"${FF[@]}" -i /samples/mp4-dovi-p9-avc1.mp4 -map 0:v -t 1 -c copy mpegts-dovi-p9.ts
 CONTAINER
 
 LOCAL_SAMPLE_NAMES=(mp4-dovi-p5-dvh1.mp4 mp4-dovi-p5-dvh1-no-record.mp4 mp4-dovi-p81.mp4
@@ -332,8 +342,9 @@ PROBE_ARGUMENTS=("${FIXTURES_TO_PROBE[@]}")
 if [ -n "${LOCAL_SAMPLES:-}" ]; then
   in_image local.sh
   FIXTURES_TO_PROBE+=(mpegts-aac-he.ts mp4-dovi-p5-no-record-bt709.mp4
-    mpegts-dovi-p5-no-descriptor.ts)
-  PROBE_ARGUMENTS+=(mpegts-aac-he.ts mp4-dovi-p5-no-record-bt709.mp4 mpegts-dovi-p5-no-descriptor.ts)
+    mpegts-dovi-p5-no-descriptor.ts mpegts-dovi-p9.ts)
+  PROBE_ARGUMENTS+=(mpegts-aac-he.ts mp4-dovi-p5-no-record-bt709.mp4 mpegts-dovi-p5-no-descriptor.ts
+    mpegts-dovi-p9.ts)
   for sample in "${LOCAL_SAMPLE_NAMES[@]}"; do
     PROBE_ARGUMENTS+=("/samples/$sample")
   done
@@ -382,6 +393,17 @@ for source in "${FIXTURES_TO_PROBE[@]}"; do
     python3 -c 'import json, sys
 json.dump(json.load(open(sys.argv[1])), open(sys.argv[2], "w"), indent=2)
 open(sys.argv[2], "a").write("\n")' "$WORK/frames/$source.json" "$FIXTURES/frames/$source.json"
+  fi
+done
+# The first-packets reads that the tests answer with. Every other H.264 source's read fails, so its
+# dynamic range keeps the facts of the frames alone.
+PACKET_DATA=(mp4-sdr8-bt709.mp4 mp4-dovi-p9-avc1.mp4 mp4-dovi-p9-dva1.mp4 mpegts-dovi-p9.ts)
+mkdir -p "$FIXTURES/packet-data"
+for source in "${PACKET_DATA[@]}"; do
+  if [ -f "$WORK/packet-data/$source.json" ]; then
+    python3 -c 'import json, sys
+json.dump(json.load(open(sys.argv[1])), open(sys.argv[2], "w"), indent=2)
+open(sys.argv[2], "a").write("\n")' "$WORK/packet-data/$source.json" "$FIXTURES/packet-data/$source.json"
   fi
 done
 cp "$WORK/ffprobe-version.txt" "$WORK/pixel-formats.json" "$FIXTURES/"

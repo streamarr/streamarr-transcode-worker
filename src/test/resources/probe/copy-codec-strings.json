@@ -198,6 +198,9 @@
   "mpegts-dovi-p7.ts": {
     "0": "hvc1.2.4.H153.B0"
   },
+  "mpegts-dovi-p9.ts": {
+    "0": "avc1.640028"
+  },
   "mpegts-empty-audio.ts": {
     "0": "avc1.42C00A",
     "1": "mp4a.40.2"

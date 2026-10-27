@@ -1,5 +1,6 @@
 package com.streamarr.transcode.probe;
 
+import static com.streamarr.transcode.probe.RecordedFfprobe.ffprobeDump;
 import static com.streamarr.transcode.probe.RecordedFfprobe.probe;
 import static com.streamarr.transcode.probe.RecordedFfprobe.streamOf;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -12,6 +13,7 @@ import build.buf.gen.streamarr.transcode.v1.Presence;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import build.buf.gen.streamarr.transcode.v1.VideoDynamicRange.DolbyVisionCase;
 import com.streamarr.transcode.probe.RecordedFfprobe.Answers;
+import java.util.HexFormat;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
@@ -346,6 +348,245 @@ class FfprobeExecutorFirstFramesTest {
   }
 
   @Nested
+  @DisplayName("H.264 RPUs")
+  class H264RpuTests {
+
+    // An avcC record whose NAL units take 4-byte lengths, with an SPS and a PPS.
+    private static final String AVC_RECORD =
+        "01 64 00 28 ff e1 00 04 67 64 00 28 01 00 04 68 ee 3c 80";
+    private static final String SEI = "06 05 01 00 80";
+    private static final String IDR_SLICE = "65 88 84 00 18";
+    private static final String SLICE = "41 9a 24 6c 41";
+    private static final String AUD = "09 f0";
+    // A profile 9 sample's first RPU, cut after its header.
+    private static final String RPU = "1c 19 08 09 08 40 61 59 41 bc 03 fe";
+
+    @Test
+    @DisplayName("Should report the RPU and its header when each RPU follows its picture")
+    void shouldReportTheRpuAndItsHeaderWhenEachRpuFollowsItsPicture() {
+      var present =
+          h264(packets(
+                  lengthPrefixed(SEI, IDR_SLICE, RPU),
+                  lengthPrefixed(SLICE, RPU),
+                  lengthPrefixed(SLICE, RPU)))
+              .getDynamicRange()
+              .getDolbyVisionPresent();
+
+      assertThat(present)
+          .isEqualTo(
+              DolbyVisionPresent.newBuilder()
+                  .setObservedRpu(Presence.PRESENCE_PRESENT)
+                  .setFirstRpuHeader(
+                      DolbyVisionRpuHeader.newBuilder()
+                          .setVdrRpuProfile(1)
+                          .setDisableResidual(true)
+                          .setVdrBitDepth(12))
+                  .setRpuStartsSample(Presence.PRESENCE_ABSENT)
+                  .build());
+    }
+
+    @Test
+    @DisplayName("Should report an RPU starting a sample when an RPU precedes the sample's picture")
+    void shouldReportAnRpuStartingASampleWhenAnRpuPrecedesTheSamplesPicture() {
+      var present =
+          h264(packets(
+                  lengthPrefixed(AUD, SEI, IDR_SLICE),
+                  lengthPrefixed(AUD, RPU, SLICE),
+                  lengthPrefixed(AUD, RPU, SLICE)))
+              .getDynamicRange()
+              .getDolbyVisionPresent();
+
+      assertThat(present.getRpuStartsSample()).isEqualTo(Presence.PRESENCE_PRESENT);
+      assertThat(present.getObservedRpu()).isEqualTo(Presence.PRESENCE_PRESENT);
+    }
+
+    @Test
+    @DisplayName("Should report an RPU starting a sample when a sample holds only an RPU")
+    void shouldReportAnRpuStartingASampleWhenASampleHoldsOnlyAnRpu() {
+      var present =
+          h264(packets(lengthPrefixed(IDR_SLICE), lengthPrefixed(RPU)))
+              .getDynamicRange()
+              .getDolbyVisionPresent();
+
+      assertThat(present.getRpuStartsSample()).isEqualTo(Presence.PRESENCE_PRESENT);
+    }
+
+    @Test
+    @DisplayName("Should read the RPUs from start codes when MPEG-TS carries the stream")
+    void shouldReadTheRpusFromStartCodesWhenMpegTsCarriesTheStream() {
+      var present =
+          h264(
+                  "00 00 00 01 67 64 00 28 01 00 00 00 01 68 ee 3c 80",
+                  packets(annexB(AUD, SEI, IDR_SLICE, RPU), annexB(AUD, SLICE, RPU)))
+              .getDynamicRange()
+              .getDolbyVisionPresent();
+
+      assertThat(present.getObservedRpu()).isEqualTo(Presence.PRESENCE_PRESENT);
+      assertThat(present.getRpuStartsSample()).isEqualTo(Presence.PRESENCE_ABSENT);
+      assertThat(present.getFirstRpuHeader().getVdrBitDepth()).isEqualTo(12);
+    }
+
+    @Test
+    @DisplayName("Should report Dolby Vision absent when the packets hold no RPU")
+    void shouldReportDolbyVisionAbsentWhenThePacketsHoldNoRpu() {
+      var video =
+          h264(
+              packets(
+                  lengthPrefixed(SEI, IDR_SLICE),
+                  lengthPrefixed("1c 18 08 09"),
+                  lengthPrefixed(SLICE)));
+
+      assertThat(video.getDynamicRange().getDolbyVisionAbsent())
+          .isEqualTo(DolbyVisionAbsent.getDefaultInstance());
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+    }
+
+    @Test
+    @DisplayName("Should keep the RPU and sample layout unspecified when the packet read fails")
+    void shouldKeepTheRpuAndSampleLayoutUnspecifiedWhenThePacketReadFails() {
+      var video =
+          probe(
+                  Answers.builder()
+                      .ffprobeOutput(h264Output(AVC_RECORD, ",\"codec_tag_string\":\"dvav\""))
+                      .firstFrames(frames(""))
+                      .build())
+              .getStreams(0);
+
+      var present = video.getDynamicRange().getDolbyVisionPresent();
+      assertThat(video.getFirstFramesRead()).isTrue();
+      assertThat(present.getObservedRpu()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+      assertThat(present.getRpuStartsSample()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+    }
+
+    @Test
+    @DisplayName("Should leave Dolby Vision unspecified when the probe read no frames")
+    void shouldLeaveDolbyVisionUnspecifiedWhenTheProbeReadNoFrames() {
+      var video =
+          probe(
+                  Answers.builder()
+                      .ffprobeOutput(h264Output(AVC_RECORD, ""))
+                      .firstPackets(packets(lengthPrefixed(SEI, IDR_SLICE)))
+                      .build())
+              .getStreams(0);
+
+      assertThat(video.getDynamicRange().getDolbyVisionCase())
+          .isEqualTo(DolbyVisionCase.DOLBYVISION_NOT_SET);
+    }
+
+    @Test
+    @DisplayName(
+        "Should keep the signaled transfer's base when an H.264 RPU has profile 5's fields")
+    void shouldKeepTheSignaledTransfersBaseWhenAnH264RpuHasProfile5sFields() {
+      // Every H.264 RPU means profile 9.
+      var video =
+          probe(
+                  Answers.builder()
+                      .ffprobeOutput(h264Output(AVC_RECORD, ",\"color_transfer\":\"bt709\""))
+                      .firstFrames(frames(""))
+                      .firstPackets(
+                          packets(lengthPrefixed(IDR_SLICE, "1c 19 08 09 00 40 61 b6 50 6f 00 3f")))
+                      .build())
+              .getStreams(0);
+
+      assertThat(
+              video
+                  .getDynamicRange()
+                  .getDolbyVisionPresent()
+                  .getFirstRpuHeader()
+                  .getBaseLayerFullRange())
+          .isTrue();
+      assertThat(video.getDynamicRange().getCompatibleBase())
+          .isEqualTo(CompatibleBase.COMPATIBLE_BASE_SDR);
+    }
+
+    @Test
+    @DisplayName("Should read the RPU when emulation prevention bytes sit inside it")
+    void shouldReadTheRpuWhenEmulationPreventionBytesSitInsideIt() {
+      // 00 00 03 01 carries the bytes 00 00 01; the header ends before them.
+      var present =
+          h264(packets(lengthPrefixed(IDR_SLICE, RPU + " 00 00 03 01 00")))
+              .getDynamicRange()
+              .getDolbyVisionPresent();
+
+      assertThat(present.getFirstRpuHeader().getVdrRpuProfile()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("Should report the RPU observed when a sample's length runs past its end")
+    void shouldReportTheRpuObservedWhenASamplesLengthRunsPastItsEnd() {
+      var present =
+          h264(packets(lengthPrefixed(IDR_SLICE, RPU) + " 00 00 01 00 41"))
+              .getDynamicRange()
+              .getDolbyVisionPresent();
+
+      assertThat(present.getObservedRpu()).isEqualTo(Presence.PRESENCE_PRESENT);
+    }
+
+    private static ProbeStreamInfo h264(String packets) {
+      return h264(AVC_RECORD, packets);
+    }
+
+    private static ProbeStreamInfo h264(String extradata, String packets) {
+      return probe(
+              Answers.builder()
+                  .ffprobeOutput(h264Output(extradata, ""))
+                  .firstFrames(frames(""))
+                  .firstPackets(packets)
+                  .build())
+          .getStreams(0);
+    }
+
+    private static String h264Output(String extradata, String fields) {
+      return output(
+          "\"codec_name\":\"h264\",\"extradata\":\"%s\"%s"
+              .formatted(ffprobeDump(HexFormat.ofDelimiter(" ").parseHex(extradata)), fields));
+    }
+
+    /** One sample whose NAL units each take a 4-byte length. */
+    private static String lengthPrefixed(String... units) {
+      var sample = new StringBuilder();
+      for (var unit : units) {
+        var length = HexFormat.ofDelimiter(" ").parseHex(unit).length;
+        sample
+            .append(
+                " %02x %02x %02x %02x "
+                    .formatted(
+                        length >> 24, (length >> 16) & 0xFF, (length >> 8) & 0xFF, length & 0xFF))
+            .append(unit);
+      }
+
+      return sample.toString().trim().replaceAll(" +", " ");
+    }
+
+    /** One sample whose NAL units each follow a start code. */
+    private static String annexB(String... units) {
+      var sample = new StringBuilder();
+      for (var unit : units) {
+        sample.append(" 00 00 00 01 ").append(unit);
+      }
+
+      return sample.toString().trim().replaceAll(" +", " ");
+    }
+
+    /** The first-packets read's output: one packet for each sample. */
+    private static String packets(String... samples) {
+      var packets = new StringBuilder();
+      for (var sample : samples) {
+        if (!packets.isEmpty()) {
+          packets.append(',');
+        }
+
+        packets
+            .append("{\"data\":\"")
+            .append(ffprobeDump(HexFormat.ofDelimiter(" ").parseHex(sample)))
+            .append("\"}");
+      }
+
+      return "{\"packets\":[" + packets + "]}";
+    }
+  }
+
+  @Nested
   @DisplayName("Recorded Sources")
   class RecordedSourceTests {
 
@@ -469,6 +710,26 @@ class FfprobeExecutorFirstFramesTest {
       assertThat(media.getStreams(1).getFirstFramesRead()).isFalse();
       assertThat(media.getStreams(1).getDynamicRange().getDolbyVisionPresent().getObservedRpu())
           .isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"mp4-dovi-p9-avc1.mp4", "mp4-dovi-p9-dva1.mp4", "mpegts-dovi-p9.ts"})
+    @DisplayName("Should find a profile 9 sample's RPUs in its packets after each picture")
+    void shouldFindAProfile9SamplesRpusInItsPacketsAfterEachPicture(String fixture) {
+      var dynamicRange = streamOf(fixture, 0).getDynamicRange();
+
+      assertThat(dynamicRange.getDolbyVisionPresent().getObservedRpu())
+          .isEqualTo(Presence.PRESENCE_PRESENT);
+      assertThat(dynamicRange.getDolbyVisionPresent().getRpuStartsSample())
+          .isEqualTo(Presence.PRESENCE_ABSENT);
+      assertThat(dynamicRange.getDolbyVisionPresent().getFirstRpuHeader())
+          .isEqualTo(
+              DolbyVisionRpuHeader.newBuilder()
+                  .setVdrRpuProfile(1)
+                  .setDisableResidual(true)
+                  .setVdrBitDepth(12)
+                  .build());
+      assertThat(dynamicRange.getCompatibleBase()).isEqualTo(CompatibleBase.COMPATIBLE_BASE_SDR);
     }
 
     @Test

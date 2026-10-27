@@ -199,11 +199,10 @@ class FfprobeExecutorProcessTest {
 
   @Test
   @DisplayName(
-      "Should pass the read limits to the probe, the extradata read and the first-frames read when"
-          + " executing the configured binary")
-  void
-      shouldPassTheReadLimitsToTheProbeTheExtradataReadAndTheFirstFramesReadWhenExecutingTheConfiguredBinary()
-          throws Exception {
+      "Should pass the read limits to the probe and each of its reads when executing the configured"
+          + " binary")
+  void shouldPassTheReadLimitsToTheProbeAndEachOfItsReadsWhenExecutingTheConfiguredBinary()
+      throws Exception {
     // Each run appends its arguments and a -- line.
     var binary =
         script(
@@ -249,8 +248,22 @@ class FfprobeExecutorProcessTest {
     assertThat(recorded.subList(0, runs.size())).isEqualTo(runs);
     assertThat(recorded.get(runs.size())).isEqualTo("-show_entries");
     assertThat(recorded.get(runs.size() + 1)).startsWith("frame=");
-    assertThat(recorded.subList(runs.size() + 2, recorded.size()))
-        .containsExactly(source.toString(), "--");
+    var firstPacketsRead = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
+    firstPacketsRead.addAll(readLimits);
+    firstPacketsRead.addAll(
+        List.of(
+            "-select_streams",
+            "0",
+            "-read_intervals",
+            "%+#3",
+            "-show_entries",
+            "packet=data",
+            "-show_data",
+            source.toString(),
+            "--"));
+    var afterFirstFramesRead = new ArrayList<>(List.of(source.toString(), "--"));
+    afterFirstFramesRead.addAll(firstPacketsRead);
+    assertThat(recorded.subList(runs.size() + 2, recorded.size())).isEqualTo(afterFirstFramesRead);
   }
 
   @Test

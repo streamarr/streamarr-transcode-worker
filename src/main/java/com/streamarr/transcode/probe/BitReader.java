@@ -36,6 +36,23 @@ final class BitReader {
   }
 
   /**
+   * The H.26x syntax's ue(v): a run of zero bits, a one bit, then as many value bits as the run
+   * held. No field that the probe reads holds a value beyond 32 bits, so a longer run reads as a
+   * bitstream that ended early.
+   */
+  long unsignedExpGolomb() {
+    var leadingZeros = 0;
+    while (!flag()) {
+      leadingZeros++;
+      if (leadingZeros > UVLC_LONGEST_VALUE) {
+        throw new TruncatedBitstreamException();
+      }
+    }
+
+    return (1L << leadingZeros) - 1 + bits(leadingZeros);
+  }
+
+  /**
    * AV1's uvlc(): a run of zero bits, a one bit, then as many value bits as the run held. A run of
    * 32 or more zeros has no value bits.
    */

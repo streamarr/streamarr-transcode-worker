@@ -36,6 +36,7 @@ from its lavfi test sources. No file comes from a media library.
 | `mkv-dovi-p7-hvce.mkv.json` | FFmpeg's FATE sample `mkv/dovi-p7-hvce.mkv`: Dolby Vision profile 7 in Matroska |
 | `mpegts-dovi-p7-two-layers.ts.json` | FFmpeg's FATE sample `mpegts/dovi-p7.ts`: Dolby Vision profile 7 whose base layer and enhancement layer are separate streams. Only the second stream carries the record and the RPUs |
 | `mp4-dovi-p5-no-record-bt709.mp4.json` | Local sample: the first 3 s of `mp4-dovi-p5-dvh1-no-record.mp4` under `hvc1`, with `hevc_metadata` rewriting its VUI to signal BT.709 |
+| `mpegts-dovi-p9.ts.json` | Local sample: the first second of `mp4-dovi-p9-avc1.mp4` copied into MPEG-TS, whose samples delimit their NAL units with start codes |
 | `mpegts-dovi-p5-no-descriptor.ts.json` | Local sample: the first 3 s of `mp4-dovi-p5-dvh1-no-record.mp4` copied into MPEG-TS, which then carries no Dolby Vision descriptor |
 | `mp4-sdr8-bt709.mp4.json` | 8-bit H.264 tagged BT.709 |
 | `mp4-dovi-p5-hev1.mp4.json` | FFmpeg's FATE sample `mov/dovi-p5.mp4`: Dolby Vision profile 5 under `hev1`, with a `dvcC` record |
@@ -67,6 +68,7 @@ from its lavfi test sources. No file comes from a media library.
 | `mov-phone-slow-motion.mov.json` | Local sample: a phone slow-motion original that runs at up to 240 fps (see Sources) |
 | `mpegts-avchd-interlaced.mts.json` | Local sample: an AVCHD camcorder file, top field first, one field per packet (see Sources) |
 | `frames/*.json` | The first-frames read of a recording's chosen video stream, with `FirstFramesProbe`'s arguments: the side data of the frames that ffprobe decodes from the stream's first 3 packets |
+| `packet-data/*.json` | The first-packets read of an H.264 recording's chosen video stream, with `FirstPacketsProbe`'s arguments: hex dumps of its first 3 packets. Only the recordings that the tests read keep theirs |
 | `packets/*.csv` | The frame-rate rule's packet scan of a recording's chosen video stream: the first 30 s of packets as `pts,dts,size,flags`, from `frame-rate-scans.py` |
 | `copy-codec-strings.json` | The codec string of each copied stream: `copy-codec-strings.py` copies every H.264, HEVC, AV1, AAC, AC-3, E-AC-3, Opus, FLAC and ALAC stream above with the worker's copy arguments, and reads the string from the copy's initialization segment |
 | `pixel-formats.json` | `ffprobe -show_pixel_formats`: FFmpeg's description of every pixel format it knows |

@@ -33,7 +33,7 @@ final class DynamicRangeReader {
       Set.of("dvh1", "dvhe", "dav1", "dva1", "dvav");
 
   // The decoders whose frames carry HDR10+ metadata and Dolby Vision RPUs. FFmpeg 8.1's H.264
-  // decoder drops both.
+  // decoder drops both, so the probe finds H.264 RPUs in the packets.
   private static final Set<String> DECODERS_SHOWING_FRAME_METADATA = Set.of("hevc", "av1");
 
   private static final List<String> RPU_HEADER_FIELDS =
@@ -67,6 +67,10 @@ final class DynamicRangeReader {
     var frames =
         FirstFrames.of(stream).filter(_ -> DECODERS_SHOWING_FRAME_METADATA.contains(codec));
     var rpus = frames.map(DynamicRangeReader::rpusOf);
+    if ("h264".equals(codec) && FirstFrames.of(stream).isPresent()) {
+      rpus = H264RpuReader.read(stream);
+    }
+
     var record = VideoStreamFacts.sideData(stream, DOLBY_VISION_RECORD);
     var dynamicRange =
         VideoDynamicRange.newBuilder()
