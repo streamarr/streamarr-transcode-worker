@@ -34,7 +34,7 @@ final class FirstPacketSamples {
                         bytes ->
                             lengthSize.isPresent()
                                 ? lengthPrefixed(bytes, lengthSize.get())
-                                : annexB(bytes))
+                                : NalUnits.annexB(bytes))
                     .toList());
   }
 
@@ -69,21 +69,5 @@ final class FirstPacketSamples {
 
     return new NalUnits(
         units, isEveryRegionComplete && position == sample.length && !units.isEmpty());
-  }
-
-  /**
-   * A sample without a start code, or with data ahead of its first one, holds bytes that the reader
-   * cannot delimit. Zero bytes may lead the first start code.
-   */
-  private static NalUnits annexB(byte[] sample) {
-    var units = DecoderConfiguration.annexB(sample);
-    var leading = 0;
-    while (leading < sample.length && sample[leading] == 0) {
-      leading++;
-    }
-
-    var startsWithStartCode =
-        leading >= 2 && leading < sample.length && Byte.toUnsignedInt(sample[leading]) == 1;
-    return new NalUnits(units, startsWithStartCode && !units.isEmpty());
   }
 }
