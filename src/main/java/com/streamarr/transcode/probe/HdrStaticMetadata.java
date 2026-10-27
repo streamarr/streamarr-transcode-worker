@@ -66,7 +66,7 @@ final class HdrStaticMetadata {
             () ->
                 builder.setMasteringDisplayOmitted(
                     stream.path(MatroskaColourProbe.CONTAINER_MASTERING_METADATA).asBoolean()
-                        || mayCarry(walk, HdrMessage.MASTERING_DISPLAY)));
+                        || mayCarry(stream, walk, HdrMessage.MASTERING_DISPLAY)));
     VideoStreamFacts.sideData(stream, CONTENT_LIGHT_LEVEL)
         .or(() -> Optional.ofNullable(stream.get(MatroskaColourProbe.CONTAINER_LIGHT_LEVEL)))
         .or(() -> firstFrameSideData(stream, CONTENT_LIGHT_LEVEL))
@@ -81,15 +81,20 @@ final class HdrStaticMetadata {
                     builder::setContentLightLevel, () -> builder.setContentLightLevelOmitted(true)),
             () ->
                 builder.setContentLightLevelOmitted(
-                    mayCarry(walk, HdrMessage.CONTENT_LIGHT_LEVEL)));
+                    mayCarry(stream, walk, HdrMessage.CONTENT_LIGHT_LEVEL)));
   }
 
   /**
    * Whether the chosen video stream may carry a value that no source gave: for H.264, HEVC and AV1,
-   * when the walk of the SEI messages or of the metadata OBUs cannot rule it out.
+   * when the walk of the SEI messages or of the metadata OBUs cannot rule it out, and for any codec
+   * whose first frames the probe read, when it could not read the Matroska track's Colour.
    */
-  private static boolean mayCarry(Optional<MetadataWalk> walk, HdrMessage message) {
-    return walk.filter(walked -> !walked.rulesOut(message)).isPresent();
+  private static boolean mayCarry(
+      JsonNode stream, Optional<MetadataWalk> walk, HdrMessage message) {
+    var isColourUnread =
+        stream.path(MatroskaColourProbe.CONTAINER_COLOUR_UNREAD).asBoolean()
+            && FirstFrames.of(stream).isPresent();
+    return isColourUnread || walk.filter(walked -> !walked.rulesOut(message)).isPresent();
   }
 
   /** The values of a mastering display SEI message or HDR_MDCV metadata OBU. */

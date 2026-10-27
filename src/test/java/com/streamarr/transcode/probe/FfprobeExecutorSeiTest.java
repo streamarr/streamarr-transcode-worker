@@ -683,7 +683,7 @@ class FfprobeExecutorSeiTest {
 
     @ParameterizedTest(name = "{0}")
     @ValueSource(
-        strings = {"mkv-pipe-hevc-10bit.mkv", "mp4-sdr8-bt709.mp4", "mp4-dovi-p9-avc1.mp4"})
+        strings = {"mp4-sdr8-bt709.mp4", "mp4-dovi-p9-avc1.mp4"})
     @DisplayName(
         "Should rule out HDR10+ and static metadata when a recorded stream's packets hold none")
     void shouldRuleOutHdr10PlusAndStaticMetadataWhenARecordedStreamsPacketsHoldNone(

@@ -277,6 +277,48 @@ class FfprobeExecutorMatroskaColourTest {
     assertThat(video.getMasteringDisplayOmitted()).isFalse();
   }
 
+  @Test
+  @DisplayName(
+      "Should mark both static values omitted when the probe cannot read the track's Colour")
+  void shouldMarkBothStaticValuesOmittedWhenTheProbeCannotReadTheTracksColour() throws IOException {
+    // The Colour can hold a MasteringMetadata element that FFmpeg drops, so a stream whose packets
+    // rule out every SEI message may still carry static HDR metadata.
+    var video = probeWalkedMatroska(new byte[] {0x00, 0x01});
+
+    assertThat(video.getMasteringDisplayOmitted()).isTrue();
+    assertThat(video.getContentLightLevelOmitted()).isTrue();
+  }
+
+  @Test
+  @DisplayName(
+      "Should leave both static values unflagged when the track's Colour and the packets hold"
+          + " neither")
+  void shouldLeaveBothStaticValuesUnflaggedWhenTheTracksColourAndThePacketsHoldNeither()
+      throws IOException {
+    var video = probeWalkedMatroska(videoTrack());
+
+    assertThat(video.getMasteringDisplayOmitted()).isFalse();
+    assertThat(video.getContentLightLevelOmitted()).isFalse();
+  }
+
+  /**
+   * An HEVC stream in Matroska whose hvcC record and first packets the SEI walk reads in full, and
+   * whose 3 first frames carry no side data.
+   */
+  private ProbeStreamInfo probeWalkedMatroska(byte[] file) throws IOException {
+    var source = Files.write(temporaryDirectory.resolve("source.mkv"), file);
+    var record = "01 01 60 00 00 00 90 00 00 00 00 00 5d f0 00 fc fd f8 f8 00 00 0f 00";
+    return probe(
+            Answers.builder()
+                .ffprobeOutput(output(MATROSKA, "," + FirstReads.extradata(record)))
+                .firstFrames(FirstReads.frames("", "", ""))
+                .firstPackets(
+                    FirstReads.packets(FirstReads.lengthPrefixed("4e 01 05 01 00 80", "26 01 af")))
+                .source(source)
+                .build())
+        .getStreams(0);
+  }
+
   /** A MasteringMetadata element that holds only LuminanceMax, 1000 cd/m^2 as a 4-byte float. */
   private static byte[] maxLuminanceOnly() {
     return element(

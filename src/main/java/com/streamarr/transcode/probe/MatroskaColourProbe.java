@@ -18,7 +18,9 @@ import tools.jackson.databind.node.ObjectNode;
  * #CONTAINER_LIGHT_LEVEL}, in the fields of ffprobe's Content light level metadata. A track that
  * holds either element reports both, with 0 for the other. FFmpeg's Matroska demuxer drops a
  * MasteringMetadata element whose primaries or luminance are incomplete, so the probe sets {@link
- * #CONTAINER_MASTERING_METADATA} when the track holds a MasteringMetadata element.
+ * #CONTAINER_MASTERING_METADATA} when the track holds a MasteringMetadata element. When the probe
+ * cannot find or read the track, it sets {@link #CONTAINER_COLOUR_UNREAD}: the track may hold
+ * either value.
  */
 @Slf4j
 final class MatroskaColourProbe {
@@ -28,6 +30,9 @@ final class MatroskaColourProbe {
 
   /** The key whose true value says that the chosen video track holds a MasteringMetadata. */
   static final String CONTAINER_MASTERING_METADATA = "matroska_mastering_metadata";
+
+  /** The key whose true value says that the probe could not read the chosen video track. */
+  static final String CONTAINER_COLOUR_UNREAD = "matroska_colour_unread";
 
   private static final String CONTENT_LIGHT_LEVEL = "Content light level metadata";
   private static final String MASTERING_DISPLAY = "Mastering display metadata";
@@ -57,6 +62,11 @@ final class MatroskaColourProbe {
     }
 
     var colour = colour(source, chosen.get().videoOrdinal());
+    if (colour.isEmpty()) {
+      description.put(CONTAINER_COLOUR_UNREAD, true);
+      return;
+    }
+
     if (needsLightLevel) {
       colour
           .flatMap(Colour::lightLevel)
@@ -73,17 +83,21 @@ final class MatroskaColourProbe {
     }
   }
 
+  /** The track's Colour, or none when the track holds none; empty when the probe cannot read it. */
   private static Optional<Colour> colour(Path source, int videoTrackOrdinal) {
     try (var channel = FileChannel.open(source, StandardOpenOption.READ)) {
       return MatroskaFile.TopLevel.tracks(channel)
           .map(tracks -> MatroskaFile.videoTrack(tracks, videoTrackOrdinal))
-          .flatMap(track -> MatroskaFile.child(track, VIDEO))
-          .flatMap(video -> MatroskaFile.child(video, COLOUR))
           .map(
-              colour ->
-                  new Colour(
-                      lightLevel(colour),
-                      MatroskaFile.child(colour, MASTERING_METADATA).isPresent()));
+              track ->
+                  MatroskaFile.child(track, VIDEO)
+                      .flatMap(video -> MatroskaFile.child(video, COLOUR))
+                      .map(
+                          colour ->
+                              new Colour(
+                                  lightLevel(colour),
+                                  MatroskaFile.child(colour, MASTERING_METADATA).isPresent()))
+                      .orElse(Colour.NONE));
     } catch (IOException
         | ContainerIndexException
         | BufferUnderflowException
@@ -105,5 +119,8 @@ final class MatroskaColourProbe {
 
   private record LightLevel(long maxContent, long maxAverage) {}
 
-  private record Colour(Optional<LightLevel> lightLevel, boolean hasMasteringMetadata) {}
+  private record Colour(Optional<LightLevel> lightLevel, boolean hasMasteringMetadata) {
+
+    static final Colour NONE = new Colour(Optional.empty(), false);
+  }
 }

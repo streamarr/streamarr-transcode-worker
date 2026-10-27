@@ -222,7 +222,7 @@ class FfprobeExecutorDynamicRangeTest {
     @Test
     @DisplayName("Should report no static metadata when neither the container nor a frame has it")
     void shouldReportNoStaticMetadataWhenNeitherTheContainerNorAFrameHasIt() {
-      var video = streamOf("mkv-pipe-hevc-10bit.mkv", 0);
+      var video = streamOf("mp4-sdr8-bt709.mp4", 0);
 
       assertThat(video.getFirstFramesRead()).isTrue();
       assertThat(video.hasMasteringDisplay()).isFalse();
