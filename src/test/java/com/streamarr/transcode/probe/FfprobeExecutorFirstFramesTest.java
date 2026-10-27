@@ -1,5 +1,11 @@
 package com.streamarr.transcode.probe;
 
+import static com.streamarr.transcode.probe.FirstReads.annexB;
+import static com.streamarr.transcode.probe.FirstReads.extradata;
+import static com.streamarr.transcode.probe.FirstReads.frames;
+import static com.streamarr.transcode.probe.FirstReads.lengthPrefixed;
+import static com.streamarr.transcode.probe.FirstReads.output;
+import static com.streamarr.transcode.probe.FirstReads.packets;
 import static com.streamarr.transcode.probe.RecordedFfprobe.ffprobeDump;
 import static com.streamarr.transcode.probe.RecordedFfprobe.probe;
 import static com.streamarr.transcode.probe.RecordedFfprobe.streamOf;
@@ -1181,53 +1187,6 @@ class FfprobeExecutorFirstFramesTest {
     }
   }
 
-  /** One sample whose NAL units each take a 4-byte length. */
-  private static String lengthPrefixed(String... units) {
-    var sample = new StringBuilder();
-    for (var unit : units) {
-      var length = HexFormat.ofDelimiter(" ").parseHex(unit).length;
-      sample
-          .append(
-              " %02x %02x %02x %02x "
-                  .formatted(
-                      length >> 24, (length >> 16) & 0xFF, (length >> 8) & 0xFF, length & 0xFF))
-          .append(unit);
-    }
-
-    return sample.toString().trim().replaceAll(" +", " ");
-  }
-
-  /** One sample whose NAL units each follow a start code. */
-  private static String annexB(String... units) {
-    var sample = new StringBuilder();
-    for (var unit : units) {
-      sample.append(" 00 00 00 01 ").append(unit);
-    }
-
-    return sample.toString().trim().replaceAll(" +", " ");
-  }
-
-  /** The first-packets read's output: one packet for each sample. */
-  private static String packets(String... samples) {
-    var packets = new StringBuilder();
-    for (var sample : samples) {
-      if (!packets.isEmpty()) {
-        packets.append(',');
-      }
-
-      packets
-          .append("{\"data\":\"")
-          .append(ffprobeDump(HexFormat.ofDelimiter(" ").parseHex(sample)))
-          .append("\"}");
-    }
-
-    return "{\"packets\":[" + packets + "]}";
-  }
-
-  private static String extradata(String hex) {
-    return "\"extradata\":\"%s\"".formatted(ffprobeDump(HexFormat.ofDelimiter(" ").parseHex(hex)));
-  }
-
   private static String codec(String codec) {
     return "\"codec_name\":\"" + codec + "\"";
   }
@@ -1238,27 +1197,6 @@ class FfprobeExecutorFirstFramesTest {
           "dv_level":6,"rpu_present_flag":1,"el_present_flag":0,"bl_present_flag":1,
           "dv_bl_signal_compatibility_id":%d}]"""
         .formatted(profile, compatibilityId);
-  }
-
-  /** The first-frames read's output: one frame for each argument, holding that side data. */
-  private static String frames(String... sideData) {
-    var frames = new StringBuilder();
-    for (var data : sideData) {
-      if (!frames.isEmpty()) {
-        frames.append(',');
-      }
-
-      frames.append("{\"stream_index\":0,\"side_data_list\":[").append(data).append("]}");
-    }
-
-    return "{\"frames\":[" + frames + "]}";
-  }
-
-  private static String output(String fields) {
-    return """
-        {"streams":[{"index":0,"codec_type":"video","time_base":"1/1000",%s}]}
-        """
-        .formatted(fields);
   }
 
   private static ProbeStreamInfo video(String fields, String firstFrames) {
