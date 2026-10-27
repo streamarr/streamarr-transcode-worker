@@ -18,7 +18,8 @@ import tools.jackson.databind.JsonNode;
  * <p>The walk read all of the SEI when it delimited every NAL unit of the record and the packets,
  * and every SEI NAL unit among them: the payload of every message ends within its NAL unit, every
  * nested message ends within the payload of its nesting message, no nesting message nests another,
- * and only the RBSP trailing bits follow the last message.
+ * no message is a nesting message that the walk does not read inside, and only the RBSP trailing
+ * bits follow the last message.
  */
 record SeiMessages(List<SeiMessage> messages, boolean readAll) {
 
@@ -152,8 +153,15 @@ record SeiMessages(List<SeiMessage> messages, boolean readAll) {
       return true;
     }
 
-    /** Adds one message, or the messages that a nesting message holds. */
+    /**
+     * Adds one message, or the messages that a nesting message holds; false when the message is a
+     * nesting message whose messages the walk cannot delimit.
+     */
     private boolean addMessage(int payloadType, ByteBuffer payload, boolean nested) {
+      if (SeiNesting.isUnreadNesting(syntax, payloadType)) {
+        return false;
+      }
+
       if (SeiNesting.isNesting(syntax, payloadType)) {
         return !nested && addNestedMessages(payloadType, payload);
       }

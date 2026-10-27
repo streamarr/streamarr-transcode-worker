@@ -415,6 +415,43 @@ class FfprobeExecutorSeiTest {
       assertThat(video.getContentLightLevelOmitted()).isTrue();
     }
 
+    @ParameterizedTest(name = "{0} payloadType {1}")
+    @CsvSource({
+      // Regional nesting, MCTS extraction information nesting and bitstream partition nesting.
+      "HEVC, 9d",
+      "HEVC, 9f",
+      "HEVC, a2",
+      // SEI processing order nesting, which ITU-T H.274 defines.
+      "H264, d6",
+      "HEVC, d6"
+    })
+    @DisplayName(
+        "Should leave HDR10+ unspecified when an SEI NAL unit holds a nesting message that the probe"
+            + " does not read")
+    void shouldLeaveHdr10PlusUnspecifiedWhenAnSeiNalUnitHoldsANestingMessageThatTheProbeDoesNotRead(
+        Coding coding, String payloadType) {
+      // FFmpeg ignores the messages inside it, and the walk cannot tell where they lie.
+      var video = coding.probed(coding.sample(coding.sei(nesting(payloadType, "00", OTHER_T35))));
+
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+      assertThat(video.getMasteringDisplayOmitted()).isTrue();
+      assertThat(video.getContentLightLevelOmitted()).isTrue();
+    }
+
+    @Test
+    @DisplayName(
+        "Should leave HDR10+ unspecified when a scalable nesting message holds a nesting message"
+            + " that the probe does not read")
+    void
+        shouldLeaveHdr10PlusUnspecifiedWhenAScalableNestingMessageHoldsANestingMessageThatTheProbeDoesNotRead() {
+      var video =
+          Coding.HEVC.probed(
+              Coding.HEVC.sample(
+                  Coding.HEVC.sei(nesting("85", "20", nesting("d6", "00", OTHER_T35)))));
+
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+    }
+
     @Test
     @DisplayName("Should leave HDR10+ unspecified when a nesting header runs past its payload")
     void shouldLeaveHdr10PlusUnspecifiedWhenANestingHeaderRunsPastItsPayload() {
