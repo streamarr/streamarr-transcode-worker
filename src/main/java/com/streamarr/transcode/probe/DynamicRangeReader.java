@@ -54,10 +54,10 @@ final class DynamicRangeReader {
     var codec = text(stream, "codec_name").orElse("");
     var frames =
         FirstFrames.of(stream).filter(_ -> DECODERS_SHOWING_FRAME_METADATA.contains(codec));
-    var rpus = rpus(stream, frames, walk);
+    var rpus = rpus(frames, walk);
 
     var record = VideoStreamFacts.sideData(stream, DOLBY_VISION_RECORD);
-    var dynamicRange = VideoDynamicRange.newBuilder().setHdr10Plus(hdr10Plus(stream, frames, walk));
+    var dynamicRange = VideoDynamicRange.newBuilder().setHdr10Plus(hdr10Plus(frames, walk));
     var hasSampleEntry =
         text(stream, "codec_tag_string").filter(DOLBY_VISION_SAMPLE_ENTRIES::contains).isPresent();
     var observedRpus = rpus.filter(observed -> observed.presence() == Presence.PRESENCE_PRESENT);
@@ -80,21 +80,17 @@ final class DynamicRangeReader {
 
   /**
    * PRESENT when the frames or the SEI messages or metadata OBUs that the probe walked hold HDR10+.
-   * ABSENT only when the frames show none and are not cut short, and the walk rules HDR10+ out:
-   * FFmpeg drops the messages of an SEI NAL unit that follow one it rejects, and a frame whose
-   * HDR10+ OBU it cannot parse, so frames alone rule out none. Without a walk, HDR10+ is never
-   * ABSENT.
+   * ABSENT only when the frames show none and the walk rules HDR10+ out: FFmpeg drops the messages
+   * of an SEI NAL unit that follow one it rejects, and a frame whose HDR10+ OBU it cannot parse, so
+   * frames alone rule out none. Without a walk, HDR10+ is never ABSENT.
    */
-  private static Presence hdr10Plus(
-      JsonNode stream, Optional<FirstFrames> frames, Optional<MetadataWalk> walk) {
+  private static Presence hdr10Plus(Optional<FirstFrames> frames, Optional<MetadataWalk> walk) {
     var isInFrames = frames.filter(observed -> observed.carries(HDR10_PLUS)).isPresent();
     if (isInFrames || walk.filter(walked -> walked.holds(HdrMessage.HDR10_PLUS)).isPresent()) {
       return Presence.PRESENCE_PRESENT;
     }
 
-    var isEveryFrameRead = FirstFrames.of(stream).filter(read -> !read.cutShort()).isPresent();
-    var isRuledOut = walk.filter(walked -> walked.rulesOut(HdrMessage.HDR10_PLUS)).isPresent();
-    if (isEveryFrameRead && isRuledOut) {
+    if (walk.filter(walked -> walked.rulesOut(HdrMessage.HDR10_PLUS)).isPresent()) {
       return Presence.PRESENCE_ABSENT;
     }
 
@@ -176,25 +172,23 @@ final class DynamicRangeReader {
 
   /**
    * What the frames and, for H.264, HEVC and AV1, the packets that hold them show of the RPUs. A
-   * decoder can ignore or drop an RPU, so no RPU in the frames rules out none: only packets whose
-   * every unit the walk delimited do, and only when the frames are not cut short. The header comes
-   * from the frames, or from the packets when the frames show no RPU.
+   * decoder can ignore or drop an RPU, so no RPU in the frames rules out none: only a walk that
+   * rules out every unit does. The header comes from the frames, or from the packets when the
+   * frames show no RPU.
    */
   private static Optional<RpuObservation> rpus(
-      JsonNode stream, Optional<FirstFrames> frames, Optional<MetadataWalk> walk) {
+      Optional<FirstFrames> frames, Optional<MetadataWalk> walk) {
     var inFrames =
         frames
             .map(DynamicRangeReader::rpusOf)
             .filter(observed -> observed.presence() == Presence.PRESENCE_PRESENT);
-    var read = FirstFrames.of(stream);
-    if (walk.isEmpty() || read.isEmpty()) {
+    if (walk.isEmpty()) {
       return inFrames;
     }
 
     var fromPackets = walk.get().rpus();
     if (inFrames.isEmpty()) {
-      return fromPackets.filter(
-          observed -> observed.presence() == Presence.PRESENCE_PRESENT || !read.get().cutShort());
+      return fromPackets;
     }
 
     return Optional.of(
