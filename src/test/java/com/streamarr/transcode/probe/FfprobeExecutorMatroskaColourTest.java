@@ -16,6 +16,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -235,6 +236,26 @@ class FfprobeExecutorMatroskaColourTest {
   }
 
   @Test
+  @DisplayName(
+      "Should read the track's Colour when the file ends inside the Cues that its SeekHead names")
+  void shouldReadTheTracksColourWhenTheFileEndsInsideTheCuesThatItsSeekHeadNames()
+      throws IOException {
+    // A partly copied file: the Cues come after the Clusters, and the copy stopped inside them.
+    var tracks =
+        element(0x1654AE6B, trackEntry(1, element(MAX_CLL, unsigned(900)), maxLuminanceOnly()));
+    var cluster = element(0x1F43B675, element(0xE7, unsigned(0)));
+    var cuesPosition = seekHead(0x1C53BB6B, 0).length + tracks.length + cluster.length;
+    var whole =
+        document(
+            seekHead(0x1C53BB6B, cuesPosition), tracks, cluster, element(0x1C53BB6B, new byte[64]));
+
+    var video = probeMatroska(MATROSKA, Arrays.copyOf(whole, whole.length - 32));
+
+    assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(900);
+    assertThat(video.getMasteringDisplayOmitted()).isTrue();
+  }
+
+  @Test
   @DisplayName("Should leave the mastering display unmarked when the container is not Matroska")
   void shouldLeaveTheMasteringDisplayUnmarkedWhenTheContainerIsNotMatroska() throws IOException {
     var video = probeMatroska("mov,mp4,m4a,3gp,3g2,mj2", videoTrack(maxLuminanceOnly()));
@@ -246,6 +267,16 @@ class FfprobeExecutorMatroskaColourTest {
   private static byte[] maxLuminanceOnly() {
     return element(
         MASTERING_METADATA, element(LUMINANCE_MAX, ByteBuffer.allocate(4).putFloat(1000).array()));
+  }
+
+  /** A SeekHead that names one element's position in the Segment, as an 8-byte number. */
+  private static byte[] seekHead(long id, long position) {
+    var seek =
+        element(
+            0x4DBB,
+            element(0x53AB, unsigned(id)),
+            element(0x53AC, ByteBuffer.allocate(8).putLong(position).array()));
+    return element(0x114D9B74, seek);
   }
 
   private ProbeStreamInfo probeMatroska(String formatName, byte[] file) throws IOException {

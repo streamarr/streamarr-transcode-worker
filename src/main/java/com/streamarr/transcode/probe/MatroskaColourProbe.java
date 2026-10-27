@@ -75,8 +75,7 @@ final class MatroskaColourProbe {
 
   private static Optional<Colour> colour(Path source, int videoTrackOrdinal) {
     try (var channel = FileChannel.open(source, StandardOpenOption.READ)) {
-      return MatroskaFile.TopLevel.read(channel)
-          .tracks()
+      return MatroskaFile.TopLevel.tracks(channel)
           .map(tracks -> MatroskaFile.videoTrack(tracks, videoTrackOrdinal))
           .flatMap(track -> MatroskaFile.child(track, VIDEO))
           .flatMap(video -> MatroskaFile.child(video, COLOUR))

@@ -9,6 +9,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * The EBML elements of a Matroska file. A reader that finds an element malformed throws {@link
@@ -147,21 +148,32 @@ final class MatroskaFile {
       Optional<ByteBuffer> info, Optional<ByteBuffer> tracks, Optional<ByteBuffer> cues) {
 
     static TopLevel read(FileChannel channel) throws IOException {
+      var found = elements(channel, Set.of(INFO, TRACKS, CUES));
+      return new TopLevel(
+          Optional.ofNullable(found.get(INFO)),
+          Optional.ofNullable(found.get(TRACKS)),
+          Optional.ofNullable(found.get(CUES)));
+    }
+
+    /** The Tracks element alone, so that a Cues element the file cannot hold loses no track. */
+    static Optional<ByteBuffer> tracks(FileChannel channel) throws IOException {
+      return Optional.ofNullable(elements(channel, Set.of(TRACKS)).get(TRACKS));
+    }
+
+    private static Map<Long, ByteBuffer> elements(FileChannel channel, Set<Long> ids)
+        throws IOException {
       var segment = firstSegment(channel);
-      var beforeFirstCluster = elementsBeforeFirstCluster(channel, segment);
+      var beforeFirstCluster = elementsBeforeFirstCluster(channel, segment, ids);
       var found = beforeFirstCluster.found();
       var seekPositions = beforeFirstCluster.seekPositions();
-      for (var id : List.of(INFO, TRACKS, CUES)) {
+      for (var id : ids) {
         if (!found.containsKey(id) && seekPositions.containsKey(id)) {
           seek(channel, segment.dataStart() + seekPositions.get(id), id)
               .ifPresent(payload -> found.put(id, payload));
         }
       }
 
-      return new TopLevel(
-          Optional.ofNullable(found.get(INFO)),
-          Optional.ofNullable(found.get(TRACKS)),
-          Optional.ofNullable(found.get(CUES)));
+      return found;
     }
 
     private static FileElement firstSegment(FileChannel channel) throws IOException {
@@ -186,7 +198,7 @@ final class MatroskaFile {
     private record BeforeFirstCluster(Map<Long, ByteBuffer> found, Map<Long, Long> seekPositions) {}
 
     private static BeforeFirstCluster elementsBeforeFirstCluster(
-        FileChannel channel, FileElement segment) throws IOException {
+        FileChannel channel, FileElement segment, Set<Long> ids) throws IOException {
       var fileSize = channel.size();
       var segmentEnd =
           segment.size() == UNKNOWN_SIZE ? fileSize : Math.min(segment.end(), fileSize);
@@ -203,7 +215,7 @@ final class MatroskaFile {
           seekPositions(payload(channel, element), seekPositions);
         }
 
-        if (element.id() == INFO || element.id() == TRACKS || element.id() == CUES) {
+        if (ids.contains(element.id())) {
           found.putIfAbsent(element.id(), payload(channel, element));
         }
 
