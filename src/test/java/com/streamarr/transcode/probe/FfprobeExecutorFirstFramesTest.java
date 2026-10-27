@@ -267,8 +267,8 @@ class FfprobeExecutorFirstFramesTest {
   }
 
   @Nested
-  @DisplayName("Profile 5 Compatible Base")
-  class Profile5CompatibleBaseTests {
+  @DisplayName("Profiles Without A Compatible Base")
+  class ProfilesWithoutACompatibleBaseTests {
 
     @Test
     @DisplayName(
@@ -316,13 +316,69 @@ class FfprobeExecutorFirstFramesTest {
     }
 
     @Test
-    @DisplayName("Should keep the signaled transfer's base when an AV1 RPU has profile 5's fields")
-    void shouldKeepTheSignaledTransfersBaseWhenAnAv1RpuHasProfile5sFields() {
-      // Every AV1 RPU means profile 10.
+    @DisplayName(
+        "Should report no compatible base when a record-less AV1 stream's RPU means profile 10.0")
+    void shouldReportNoCompatibleBaseWhenARecordLessAv1StreamsRpuMeansProfile10Point0() {
+      // No AV1 Dolby Vision sample is at hand, so the frames are constructed. Every AV1 RPU means
+      // profile 10, and profile 5's fields mean 10.0, which has no compatible base.
       var video =
           video(
               codec("av1") + ",\"color_transfer\":\"bt709\"",
               frames(RPU_DATA + "," + PROFILE_5_RPU));
+
+      assertThat(video.getDynamicRange().getCompatibleBase())
+          .isEqualTo(CompatibleBase.COMPATIBLE_BASE_NONE);
+    }
+
+    @Test
+    @DisplayName("Should keep the signaled transfer's base when an AV1 RPU has profile 8's fields")
+    void shouldKeepTheSignaledTransfersBaseWhenAnAv1RpuHasProfile8sFields() {
+      var video =
+          video(
+              codec("av1") + ",\"color_transfer\":\"smpte2084\"",
+              frames(RPU_DATA + "," + PROFILE_8_RPU));
+
+      assertThat(video.getDynamicRange().getCompatibleBase())
+          .isEqualTo(CompatibleBase.COMPATIBLE_BASE_PQ);
+    }
+
+    @Test
+    @DisplayName(
+        "Should report no compatible base when the record names profile 10 without a compatible"
+            + " base layer")
+    void shouldReportNoCompatibleBaseWhenTheRecordNamesProfile10WithoutACompatibleBaseLayer() {
+      var video =
+          video(codec("av1") + ",\"color_transfer\":\"bt709\"," + record(10, 0), frames(""));
+
+      assertThat(video.getDynamicRange().getCompatibleBase())
+          .isEqualTo(CompatibleBase.COMPATIBLE_BASE_NONE);
+    }
+
+    @Test
+    @DisplayName(
+        "Should keep the signaled transfer's base when the record names profile 10 with a"
+            + " compatible base layer")
+    void shouldKeepTheSignaledTransfersBaseWhenTheRecordNamesProfile10WithACompatibleBaseLayer() {
+      // The record decides over the RPU header's profile 10.0 fields.
+      var video =
+          video(
+              codec("av1") + ",\"color_transfer\":\"smpte2084\"," + record(10, 1),
+              frames(RPU_DATA + "," + PROFILE_5_RPU));
+
+      assertThat(video.getDynamicRange().getCompatibleBase())
+          .isEqualTo(CompatibleBase.COMPATIBLE_BASE_PQ);
+    }
+
+    @Test
+    @DisplayName(
+        "Should keep the signaled transfer's base when a profile 10 record names no compatibility"
+            + " identifier")
+    void shouldKeepTheSignaledTransfersBaseWhenAProfile10RecordNamesNoCompatibilityIdentifier() {
+      var record =
+          """
+          "side_data_list":[{"side_data_type":"DOVI configuration record","dv_profile":10,
+            "dv_level":6,"rpu_present_flag":1,"el_present_flag":0,"bl_present_flag":1}]""";
+      var video = video(codec("av1") + ",\"color_transfer\":\"bt709\"," + record, frames(""));
 
       assertThat(video.getDynamicRange().getCompatibleBase())
           .isEqualTo(CompatibleBase.COMPATIBLE_BASE_SDR);

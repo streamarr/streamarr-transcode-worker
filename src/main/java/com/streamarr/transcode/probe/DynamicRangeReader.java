@@ -27,7 +27,8 @@ final class DynamicRangeReader {
   private static final String HDR10_PLUS = "HDR Dynamic Metadata SMPTE2094-40 (HDR10+)";
   private static final String RPU_DATA = "Dolby Vision RPU Data";
   private static final String RPU_METADATA = "Dolby Vision Metadata";
-  private static final int PROFILE_WITHOUT_COMPATIBLE_BASE = 5;
+  private static final int PROFILE_5 = 5;
+  private static final int PROFILE_10 = 10;
 
   private static final Set<String> DOLBY_VISION_SAMPLE_ENTRIES =
       Set.of("dvh1", "dvhe", "dav1", "dva1", "dvav");
@@ -87,15 +88,8 @@ final class DynamicRangeReader {
       dynamicRange.setDolbyVisionAbsent(DolbyVisionAbsent.getDefaultInstance());
     }
 
-    var profile =
-        record
-            .flatMap(claim -> integer(claim, "dv_profile"))
-            .or(
-                () ->
-                    observedRpus
-                        .flatMap(RpuObservation::firstHeader)
-                        .flatMap(header -> guess(codec, header)));
-    if (profile.filter(value -> value == PROFILE_WITHOUT_COMPATIBLE_BASE).isPresent()) {
+    var header = observedRpus.flatMap(RpuObservation::firstHeader);
+    if (isWithoutCompatibleBase(record, header, codec)) {
       return dynamicRange.setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_NONE).build();
     }
 
@@ -132,9 +126,37 @@ final class DynamicRangeReader {
     return present.build();
   }
 
-  private static Optional<Integer> guess(String codec, DolbyVisionRpuHeader header) {
-    var profile = DolbyVisionProfileGuess.of(codec, header);
-    return profile.isPresent() ? Optional.of(profile.getAsInt()) : Optional.empty();
+  /**
+   * Whether the stream's Dolby Vision profile has no compatible base: profile 5, or profile 10.0,
+   * AV1 without a base layer that a player could use. The record's profile decides, and without
+   * one, the first RPU's header.
+   */
+  private static boolean isWithoutCompatibleBase(
+      Optional<JsonNode> record, Optional<DolbyVisionRpuHeader> header, String codec) {
+    var declared = record.flatMap(claim -> integer(claim, "dv_profile"));
+    if (declared.isPresent()) {
+      var compatibilityId =
+          record.flatMap(claim -> integer(claim, "dv_bl_signal_compatibility_id"));
+      return isBaseless(declared.get(), compatibilityId.filter(id -> id == 0).isPresent());
+    }
+
+    if (header.isEmpty()) {
+      return false;
+    }
+
+    var guessed = DolbyVisionProfileGuess.of(codec, header.get());
+    var hasProfile5Fields =
+        header.get().getVdrRpuProfile() == 0 && header.get().getBaseLayerFullRange();
+    return guessed.isPresent() && isBaseless(guessed.getAsInt(), hasProfile5Fields);
+  }
+
+  /** Profile 5 has no compatible base, and profile 10 has none in its subprofile 10.0. */
+  private static boolean isBaseless(int profile, boolean isProfile10Point0) {
+    return switch (profile) {
+      case PROFILE_5 -> true;
+      case PROFILE_10 -> isProfile10Point0;
+      default -> false;
+    };
   }
 
   /**
