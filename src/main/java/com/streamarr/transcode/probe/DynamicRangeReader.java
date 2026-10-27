@@ -19,7 +19,8 @@ import tools.jackson.databind.JsonNode;
  * The dynamic range of a video stream, as ADR 0036 defines it. The stream's headers and
  * configuration records give the Dolby Vision claim and the signaled transfer. For the chosen video
  * stream, the first frames that the probe read also show HDR10+ and Dolby Vision RPUs, when the
- * stream's decoder exports them. A feature that the probe cannot see stays unspecified.
+ * stream's decoder exports them, and for H.264 and HEVC so do the packets that hold those frames
+ * and the {@link SeiMessages} of the stream. A feature that the probe cannot see stays unspecified.
  */
 final class DynamicRangeReader {
 

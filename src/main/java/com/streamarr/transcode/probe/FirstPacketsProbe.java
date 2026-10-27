@@ -18,8 +18,9 @@ import tools.jackson.databind.node.ObjectNode;
  * description, under {@link #FIRST_PACKETS}, as ffprobe's hex dumps: as many packets as the read of
  * its first frames took, so that they hold those frames. FFmpeg's H.264 decoder drops the NAL units
  * that carry Dolby Vision RPUs, and its HEVC decoder ignores an RPU that is not the last NAL unit
- * of its sample, so the probe finds them in the packets. When ffprobe fails or prints no packet,
- * the description gets no packets.
+ * of its sample, so the probe finds them in the packets. FFmpeg also drops the SEI messages that
+ * follow one it rejects, so the probe reads HDR10+ and static HDR metadata from the packets too.
+ * When ffprobe fails or prints no packet, the description gets no packets.
  */
 @RequiredArgsConstructor
 @Slf4j
