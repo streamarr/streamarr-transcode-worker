@@ -386,6 +386,41 @@ class FfprobeExecutorMatroskaColourTest {
     assertThat(video.getMasteringDisplayOmitted()).isTrue();
   }
 
+  @Test
+  @DisplayName(
+      "Should mark the mastering display omitted when a later Video element holds the track's"
+          + " Colour")
+  void shouldMarkTheMasteringDisplayOmittedWhenALaterVideoElementHoldsTheTracksColour()
+      throws IOException {
+    // FFmpeg's Matroska demuxer reads every Video element of a track into one, and takes the first
+    // Colour of any of them.
+    var video = probeMatroska(MATROSKA, videoTrackWithColourInSecondVideo(maxLuminanceOnly()));
+
+    assertThat(video.hasMasteringDisplay()).isFalse();
+    assertThat(video.getMasteringDisplayOmitted()).isTrue();
+  }
+
+  @Test
+  @DisplayName("Should read the light level of a Colour that a later Video element holds")
+  void shouldReadTheLightLevelOfAColourThatALaterVideoElementHolds() throws IOException {
+    var video =
+        probeMatroska(MATROSKA, videoTrackWithColourInSecondVideo(element(MAX_CLL, unsigned(900))));
+
+    assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(900);
+  }
+
+  /** A Matroska file whose video track holds a Video element without Colour, then one with it. */
+  private static byte[] videoTrackWithColourInSecondVideo(byte[]... colour) {
+    var entry =
+        element(
+            0xAE,
+            element(0xD7, unsigned(1)),
+            element(0x83, unsigned(1)),
+            element(0xE0, element(0xB0, unsigned(64))),
+            element(0xE0, element(0x55B0, colour)));
+    return document(element(0x1654AE6B, entry));
+  }
+
   /** A MasteringMetadata element that holds only LuminanceMax, 1000 cd/m^2 as a 4-byte float. */
   private static byte[] maxLuminanceOnly() {
     return element(

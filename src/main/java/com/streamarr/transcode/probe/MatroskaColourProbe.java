@@ -83,15 +83,17 @@ final class MatroskaColourProbe {
     }
   }
 
-  /** The track's Colour, or none when the track holds none; empty when the probe cannot read it. */
+  /**
+   * The track's Colour, the first that any of its Video elements holds, as FFmpeg takes it; none
+   * when the track holds none, and empty when the probe cannot read it.
+   */
   private static Optional<Colour> colour(Path source, int videoTrackOrdinal) {
     try (var channel = FileChannel.open(source, StandardOpenOption.READ)) {
       return MatroskaFile.TopLevel.tracks(channel)
           .map(tracks -> MatroskaFile.videoTrack(tracks, videoTrackOrdinal))
           .map(
               track ->
-                  MatroskaFile.child(track, VIDEO)
-                      .flatMap(video -> MatroskaFile.child(video, COLOUR))
+                  MatroskaFile.firstChildOfAny(track, VIDEO, COLOUR)
                       .map(
                           colour ->
                               new Colour(

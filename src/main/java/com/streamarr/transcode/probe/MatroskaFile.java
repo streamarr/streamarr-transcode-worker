@@ -105,6 +105,24 @@ final class MatroskaFile {
     return Optional.ofNullable(first.get());
   }
 
+  /**
+   * The first child with ID {@code id} of any child with ID {@code childId}, in order; holds no
+   * other. FFmpeg's Matroska demuxer reads each repeat of a master element that may occur once,
+   * such as a track's Video, into the same element.
+   */
+  static Optional<ByteBuffer> firstChildOfAny(ByteBuffer parent, long childId, long id) {
+    var first = new AtomicReference<ByteBuffer>();
+    eachChild(
+        parent,
+        childId,
+        match -> {
+          if (first.get() == null) {
+            child(match, id).ifPresent(first::set);
+          }
+        });
+    return Optional.ofNullable(first.get());
+  }
+
   static List<ByteBuffer> children(ByteBuffer parent, long id) {
     var matches = new ArrayList<ByteBuffer>();
     eachChild(parent, id, matches::add);
