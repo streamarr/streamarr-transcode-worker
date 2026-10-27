@@ -680,49 +680,6 @@ class FfprobeExecutorFirstFramesTest {
           "\"codec_name\":\"h264\",\"extradata\":\"%s\"%s"
               .formatted(ffprobeDump(HexFormat.ofDelimiter(" ").parseHex(extradata)), fields));
     }
-
-    /** One sample whose NAL units each take a 4-byte length. */
-    private static String lengthPrefixed(String... units) {
-      var sample = new StringBuilder();
-      for (var unit : units) {
-        var length = HexFormat.ofDelimiter(" ").parseHex(unit).length;
-        sample
-            .append(
-                " %02x %02x %02x %02x "
-                    .formatted(
-                        length >> 24, (length >> 16) & 0xFF, (length >> 8) & 0xFF, length & 0xFF))
-            .append(unit);
-      }
-
-      return sample.toString().trim().replaceAll(" +", " ");
-    }
-
-    /** One sample whose NAL units each follow a start code. */
-    private static String annexB(String... units) {
-      var sample = new StringBuilder();
-      for (var unit : units) {
-        sample.append(" 00 00 00 01 ").append(unit);
-      }
-
-      return sample.toString().trim().replaceAll(" +", " ");
-    }
-
-    /** The first-packets read's output: one packet for each sample. */
-    private static String packets(String... samples) {
-      var packets = new StringBuilder();
-      for (var sample : samples) {
-        if (!packets.isEmpty()) {
-          packets.append(',');
-        }
-
-        packets
-            .append("{\"data\":\"")
-            .append(ffprobeDump(HexFormat.ofDelimiter(" ").parseHex(sample)))
-            .append("\"}");
-      }
-
-      return "{\"packets\":[" + packets + "]}";
-    }
   }
 
   @Nested
@@ -889,6 +846,49 @@ class FfprobeExecutorFirstFramesTest {
                   .setVdrBitDepth(12)
                   .build());
     }
+  }
+
+  /** One sample whose NAL units each take a 4-byte length. */
+  private static String lengthPrefixed(String... units) {
+    var sample = new StringBuilder();
+    for (var unit : units) {
+      var length = HexFormat.ofDelimiter(" ").parseHex(unit).length;
+      sample
+          .append(
+              " %02x %02x %02x %02x "
+                  .formatted(
+                      length >> 24, (length >> 16) & 0xFF, (length >> 8) & 0xFF, length & 0xFF))
+          .append(unit);
+    }
+
+    return sample.toString().trim().replaceAll(" +", " ");
+  }
+
+  /** One sample whose NAL units each follow a start code. */
+  private static String annexB(String... units) {
+    var sample = new StringBuilder();
+    for (var unit : units) {
+      sample.append(" 00 00 00 01 ").append(unit);
+    }
+
+    return sample.toString().trim().replaceAll(" +", " ");
+  }
+
+  /** The first-packets read's output: one packet for each sample. */
+  private static String packets(String... samples) {
+    var packets = new StringBuilder();
+    for (var sample : samples) {
+      if (!packets.isEmpty()) {
+        packets.append(',');
+      }
+
+      packets
+          .append("{\"data\":\"")
+          .append(ffprobeDump(HexFormat.ofDelimiter(" ").parseHex(sample)))
+          .append("\"}");
+    }
+
+    return "{\"packets\":[" + packets + "]}";
   }
 
   private static String codec(String codec) {
