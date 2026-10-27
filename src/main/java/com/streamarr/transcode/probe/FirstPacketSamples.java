@@ -20,27 +20,22 @@ final class FirstPacketSamples {
    * finds no extradata to tell how the samples delimit their NAL units.
    */
   static Optional<List<NalUnits>> read(JsonNode stream, NalSyntax syntax) {
-    var dumps = stream.path(FirstPacketsProbe.FIRST_PACKETS).valueStream().toList();
     var extradata = Extradata.of(stream);
-    if (dumps.isEmpty() || extradata.isEmpty()) {
+    if (extradata.isEmpty()) {
       return Optional.empty();
     }
 
     var lengthSize = syntax.lengthSize(extradata.get());
-    var samples = new ArrayList<NalUnits>();
-    for (var dump : dumps) {
-      var bytes = Extradata.dumped(dump.path("data").asString(""));
-      if (bytes.isEmpty()) {
-        return Optional.empty();
-      }
-
-      samples.add(
-          lengthSize.isPresent()
-              ? lengthPrefixed(bytes.get(), lengthSize.get())
-              : annexB(bytes.get()));
-    }
-
-    return Optional.of(samples);
+    return FirstPackets.of(stream)
+        .map(
+            packets ->
+                packets.stream()
+                    .map(
+                        bytes ->
+                            lengthSize.isPresent()
+                                ? lengthPrefixed(bytes, lengthSize.get())
+                                : annexB(bytes))
+                    .toList());
   }
 
   /**
