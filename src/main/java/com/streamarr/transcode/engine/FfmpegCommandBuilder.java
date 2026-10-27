@@ -282,16 +282,18 @@ public class FfmpegCommandBuilder {
     }
   }
 
-  // The seek that reads the source discards the decoded frames and audio before its position. The
-  // encode of a copy reads the copy from its start, so trim filters discard them; a copied stream
-  // is not trimmed, as the seek does not trim it either.
+  // The FFmpeg that reads the source discards the frames and audio before its seek, and, through
+  // the source's own markings, such as an MP4 edit list or AAC priming, those before its start.
+  // MPEG-TS carries neither, so the encode of the copy trims at the attempt's start, seeking or
+  // not: after -start_at_zero, nothing else lies before zero. A copied stream is not trimmed, as
+  // the
+  // seek does not trim it either.
   private static Optional<String> trimStart(TranscodeRequest request, EncoderInput input) {
-    var seekPosition = inputSeekPosition(request);
-    if (input == EncoderInput.SOURCE || !seekPosition.isPositive()) {
+    if (input == EncoderInput.SOURCE) {
       return Optional.empty();
     }
 
-    return Optional.of(seekArgument(seekPosition));
+    return Optional.of(seekArgument(inputSeekPosition(request)));
   }
 
   // A copy of H.264 or HEVC gets the codec family's playable sample entry. The mp4 muxer drops a

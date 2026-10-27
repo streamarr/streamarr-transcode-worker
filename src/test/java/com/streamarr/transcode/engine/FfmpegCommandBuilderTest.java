@@ -1544,7 +1544,7 @@ class FfmpegCommandBuilderTest {
                     "-level:v",
                     "10",
                     "-vf",
-                    "scale=-2:720," + TONE_MAPPED_TO_SDR,
+                    "trim=start=0,scale=-2:720," + TONE_MAPPED_TO_SDR,
                     "-b:v",
                     "5000000",
                     "-maxrate",
@@ -1557,6 +1557,8 @@ class FfmpegCommandBuilderTest {
                     "2",
                     "-b:a",
                     "128k",
+                    "-af",
+                    "atrim=start=0",
                     "-r:v:0",
                     "24000/1001",
                     "-forced-idr",
@@ -1637,6 +1639,7 @@ class FfmpegCommandBuilderTest {
 
     assertThat(pipe.copyCommand()).doesNotContain("0:a:0");
     assertThat(pipe.encodeCommand()).doesNotContain("0:a:0", "-c:a", "-af");
+    assertThat(videoFilter(pipe.encodeCommand())).startsWith("trim=start=0,");
   }
 
   @ParameterizedTest(name = "{0}")

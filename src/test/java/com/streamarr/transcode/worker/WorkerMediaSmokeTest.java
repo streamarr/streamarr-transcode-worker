@@ -9,6 +9,7 @@ import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.start;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variantJobBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import build.buf.gen.streamarr.transcode.v1.AudioMode;
@@ -82,6 +83,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -185,6 +187,14 @@ class WorkerMediaSmokeTest {
   // The fixture's 10-bit base layer: Main 10 at level 2.0 in the Main tier.
   private static final String DOLBY_VISION_BASE_LAYER_CODEC_STRING = "hvc1.2.4.L60.90";
 
+  // The profile 5 sources span three 2 s segments, with a keyframe every second.
+  private static final int PROFILE_5_PERIOD_SECONDS = 2;
+  private static final int PROFILE_5_SEGMENT_COUNT = 3;
+  private static final int ACCESS_UNIT_DELIMITER = 35;
+  // An HEVC NAL unit of type 62, as a Dolby Vision RPU, whose payload FFmpeg cannot parse as one.
+  private static final byte[] STAND_IN_RPU =
+      HexFormat.of().parseHex("000000017C01" + "19".repeat(24) + "80");
+
   // 18 s of video at the default 6 s period.
   private static final int ONE_FRAME_PER_SECOND_SEGMENT_COUNT = 3;
 
@@ -211,6 +221,7 @@ class WorkerMediaSmokeTest {
 
   @TempDir static Path tenBitSources;
   @TempDir static Path irregularKeyframeSources;
+  @TempDir static Path rpuLayoutSources;
 
   // A source joins only once FFmpeg has written it successfully, so that a later case generates it
   // again instead of reading what a failed or timed-out run left behind.
@@ -1056,6 +1067,261 @@ class WorkerMediaSmokeTest {
     assertThat(streamSideData(media)).doesNotContain("DOVI configuration record");
     assertThat(frameSideDataPerFrame(media))
         .allSatisfy(sideData -> assertThat(sideData).doesNotContain("Dolby Vision RPU Data"));
+  }
+
+  @ParameterizedTest(name = "start {0}")
+  @ValueSource(ints = {0, 2})
+  @DisplayName(
+      "Should upload what one FFmpeg encodes from the source whose RPUs follow their pictures when"
+          + " a Dolby Vision profile 5 source's samples start with RPUs")
+  void
+      shouldUploadWhatOneFfmpegEncodesFromTheSourceWhoseRpusFollowTheirPicturesWhenADolbyVisionProfile5SourcesSamplesStartWithRpus(
+          int startSequenceNumber) throws Exception {
+    var rpusAhead = rpuLayoutSource(RpuLayout.AHEAD_OF_THE_NEXT_PICTURE);
+    var rpusBehind = rpuLayoutSource(RpuLayout.BEHIND_THEIR_PICTURE);
+    var aheadCommands = new CopyOnWriteArrayList<List<String>>();
+    var behindCommands = new CopyOnWriteArrayList<List<String>>();
+
+    var fromRpusAhead =
+        execute(
+            engine(
+                softwareCapabilities(),
+                capturingCommands(new ProcessBuilderLauncher(), aheadCommands)),
+            rpusAhead.getParent(),
+            profile5Job(rpusAhead, Presence.PRESENCE_PRESENT, startSequenceNumber).build());
+    var fromRpusBehind =
+        execute(
+            engine(
+                softwareCapabilities(),
+                capturingCommands(new ProcessBuilderLauncher(), behindCommands)),
+            rpusBehind.getParent(),
+            profile5Job(rpusBehind, Presence.PRESENCE_ABSENT, startSequenceNumber).build());
+
+    assertThat(aheadCommands).as("FFmpegs for the source whose RPUs start samples").hasSize(2);
+    assertThat(behindCommands).as("FFmpegs for the source whose RPUs follow pictures").hasSize(1);
+    assertThat(fromRpusAhead.names())
+        .containsExactlyElementsOf(fromRpusBehind.names())
+        .hasSize(PROFILE_5_SEGMENT_COUNT - startSequenceNumber + 1);
+    for (var name : fromRpusBehind.names()) {
+      assertThat(FfprobePackets.of(fromRpusAhead.contentOf(List.of("init.mp4", name)), root))
+          .as(name)
+          .containsExactlyElementsOf(
+              FfprobePackets.of(fromRpusBehind.contentOf(List.of("init.mp4", name)), root));
+    }
+  }
+
+  private static VariantJob.Builder profile5Job(
+      Path source, Presence rpuStartsSample, int startSequenceNumber) {
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
+    withVideo(job, forcedSoftwareEncode("h264", TINY_VARIANT_LEVELS.get("h264")));
+    withProfile5Source(job, rpuStartsSample);
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setMode(AudioMode.AUDIO_MODE_TRANSCODE)
+        .setCodec("aac")
+        .setChannels(1)
+        .setBitrateBitsPerSecond(64_000);
+    job.getVariantBuilder().setWidth(64).setHeight(36).setBitrateBitsPerSecond(100_000);
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(PROFILE_5_PERIOD_SECONDS)
+        .setMediaSegmentCount(PROFILE_5_SEGMENT_COUNT)
+        .setStartSequenceNumber(startSequenceNumber);
+    return job;
+  }
+
+  // Dolby Vision profile 5, whose samples start with RPUs when rpuStartsSample is PRESENT.
+  private static void withProfile5Source(VariantJob.Builder job, Presence rpuStartsSample) {
+    job.getDecisionBuilder()
+        .getVideoBuilder()
+        .setSourceDynamicRange(
+            VideoDynamicRange.newBuilder()
+                .setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_NONE)
+                .setHdr10Plus(Presence.PRESENCE_ABSENT)
+                .setDolbyVisionPresent(
+                    DolbyVisionPresent.newBuilder()
+                        .setObservedRpu(Presence.PRESENCE_PRESENT)
+                        .setRpuStartsSample(rpuStartsSample)));
+  }
+
+  // FFmpeg's copy of Matroska's millisecond audio timestamps into MPEG-TS counts samples from the
+  // first packet, the AAC priming frame, whose rounding then shifts the copy's audio by a fraction
+  // of a millisecond; the encoder can then flush one frame more or fewer at the end.
+  @ParameterizedTest(name = "{0}, {1}, start {2}")
+  @MethodSource("sourceContainersEncodingModesAndStarts")
+  @DisplayName(
+      "Should upload the video packets one FFmpeg encodes from the source, and its audio within a"
+          + " millisecond, when the encode reads the source's MPEG-TS copy")
+  void
+      shouldUploadTheVideoPacketsOneFfmpegEncodesFromTheSourceAndItsAudioWithinAMillisecondWhenTheEncodeReadsTheSourcesMpegTsCopy(
+          String container, TranscodeMode mode, int startSequenceNumber) throws Exception {
+    var source = seekableSource(container);
+    var job = seekableSourceJob(source, mode);
+    job.getExecutionBuilder().setStartSequenceNumber(startSequenceNumber);
+    withProfile5Source(job, Presence.PRESENCE_ABSENT);
+    var oneFfmpeg = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+    withProfile5Source(job, Presence.PRESENCE_PRESENT);
+    job.setJobAttemptId(toProto(UUID.randomUUID()));
+    var commands = new CopyOnWriteArrayList<List<String>>();
+
+    var fromTheCopy =
+        execute(
+            engine(
+                softwareCapabilities(), capturingCommands(new ProcessBuilderLauncher(), commands)),
+            source.getParent(),
+            job.build());
+
+    assertThat(commands).as("the FFmpegs of the attempt that reads the copy").hasSize(2);
+    assertThat(fromTheCopy.names()).containsExactlyElementsOf(oneFfmpeg.names());
+    for (var name : oneFfmpeg.names()) {
+      var expected = FfprobePackets.of(oneFfmpeg.contentOf(List.of("init.mp4", name)), root);
+      var actual = FfprobePackets.of(fromTheCopy.contentOf(List.of("init.mp4", name)), root);
+      assertThat(actual.stream().filter(packet -> !packet.isAudio()).toList())
+          .as("%s video", name)
+          .containsExactlyElementsOf(
+              expected.stream().filter(packet -> !packet.isAudio()).toList());
+      assertAudioWithinAMillisecond(
+          actual.stream().filter(Packet::isAudio).toList(),
+          expected.stream().filter(Packet::isAudio).toList());
+    }
+  }
+
+  // The seekable sources' audio is 48 kHz, which is the audio's time base in the output.
+  private static void assertAudioWithinAMillisecond(List<Packet> actual, List<Packet> expected) {
+    var millisecond = within(48L);
+    assertThat(actual.size()).as("audio packets").isCloseTo(expected.size(), within(1));
+    for (var index = 0; index < Math.min(actual.size(), expected.size()); index++) {
+      var packet = actual.get(index);
+      var expectedPacket = expected.get(index);
+      assertThat(packet.pts())
+          .as("audio packet %d", index)
+          .isCloseTo(expectedPacket.pts(), millisecond);
+      assertThat(packet.dts())
+          .as("audio packet %d", index)
+          .isCloseTo(expectedPacket.dts(), millisecond);
+      assertThat(packet.duration())
+          .as("audio packet %d", index)
+          .isCloseTo(expectedPacket.duration(), millisecond);
+    }
+  }
+
+  static Stream<Arguments> sourceContainersEncodingModesAndStarts() {
+    return sourceContainersModesAndStarts()
+        .filter(
+            arguments ->
+                ((TranscodeMode) arguments.get()[1]) == TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE
+                    || ((TranscodeMode) arguments.get()[1])
+                        == TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+  }
+
+  private enum RpuLayout {
+    BEHIND_THEIR_PICTURE,
+    AHEAD_OF_THE_NEXT_PICTURE
+  }
+
+  // A 10-bit HEVC source with AAC audio that holds a stand-in Dolby Vision RPU for each picture:
+  // after its picture, or, as a muxer that starts a sample at each RPU writes it, behind the next
+  // picture's access unit delimiter. Its stand-in RPUs carry no reshaping, so the decoder applies
+  // none whichever layout it reads, and both sources decode to the same pictures.
+  private static synchronized Path rpuLayoutSource(RpuLayout layout) throws Exception {
+    var source = rpuLayoutSources.resolve(layout.name().toLowerCase(Locale.ROOT) + ".mp4");
+    if (Files.exists(source)) {
+      return source;
+    }
+
+    var pictures = rpuLayoutSources.resolve("pictures.hevc");
+    if (!Files.exists(pictures)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc2=size=64x36:rate=24",
+              "-t",
+              String.valueOf(PROFILE_5_PERIOD_SECONDS * PROFILE_5_SEGMENT_COUNT),
+              "-pix_fmt",
+              "yuv420p10le",
+              "-c:v",
+              "libx265",
+              "-x265-params",
+              "keyint=24:min-keyint=24:bframes=0:aud=1:log-level=error",
+              "-f",
+              "hevc"),
+          pictures);
+    }
+
+    var withRpus = rpuLayoutSources.resolve(layout.name().toLowerCase(Locale.ROOT) + ".hevc");
+    Files.write(withRpus, withStandInRpus(Files.readAllBytes(pictures), layout));
+    runFfmpeg(
+        List.of(
+            "-i",
+            withRpus.toString(),
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=48000",
+            "-map",
+            "0:v",
+            "-map",
+            "1:a",
+            "-c:v",
+            "copy",
+            "-bsf:v",
+            "setts=pts=N*1/24/TB:dts=N*1/24/TB",
+            "-c:a",
+            "aac",
+            "-shortest"),
+        source);
+    return source;
+  }
+
+  // Each access unit starts at its delimiter. The last picture's RPU has no next picture to
+  // precede.
+  private static byte[] withStandInRpus(byte[] pictures, RpuLayout layout) {
+    var accessUnits = annexBAccessUnits(pictures);
+    var withRpus = new ByteArrayOutputStream();
+    for (var index = 0; index < accessUnits.size(); index++) {
+      var accessUnit = accessUnits.get(index);
+      if (layout == RpuLayout.BEHIND_THEIR_PICTURE) {
+        withRpus.writeBytes(accessUnit);
+        withRpus.writeBytes(STAND_IN_RPU);
+        continue;
+      }
+
+      var delimiterEnd = accessUnitDelimiterEnd(accessUnit);
+      withRpus.write(accessUnit, 0, delimiterEnd);
+      if (index > 0) {
+        withRpus.writeBytes(STAND_IN_RPU);
+      }
+
+      withRpus.write(accessUnit, delimiterEnd, accessUnit.length - delimiterEnd);
+    }
+
+    return withRpus.toByteArray();
+  }
+
+  private static List<byte[]> annexBAccessUnits(byte[] stream) {
+    var starts = new ArrayList<Integer>();
+    for (var offset = 0; offset + 4 < stream.length; offset++) {
+      var startCode = stream[offset] == 0 && stream[offset + 1] == 0 && stream[offset + 2] == 1;
+      if (startCode
+          && hevcNalUnitType(Arrays.copyOfRange(stream, offset + 3, offset + 4))
+              == ACCESS_UNIT_DELIMITER) {
+        starts.add(offset > 0 && stream[offset - 1] == 0 ? offset - 1 : offset);
+      }
+    }
+
+    assertThat(starts).as("access unit delimiters").isNotEmpty().startsWith(0);
+    starts.add(stream.length);
+    return IntStream.range(0, starts.size() - 1)
+        .mapToObj(index -> Arrays.copyOfRange(stream, starts.get(index), starts.get(index + 1)))
+        .toList();
+  }
+
+  // The delimiter is a start code, a two-byte NAL unit header and one byte of payload.
+  private static int accessUnitDelimiterEnd(byte[] accessUnit) {
+    var startCodeLength = accessUnit[2] == 1 ? 3 : 4;
+    return startCodeLength + 3;
   }
 
   @ParameterizedTest(name = "{0}")
