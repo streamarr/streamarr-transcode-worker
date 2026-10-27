@@ -258,21 +258,24 @@ public final class FfprobeExecutor {
 
           return null;
         };
-    OutputReader<Void> diagnosticsReader =
-        stderr -> {
-          try {
-            return readLines(stderr, diagnosticLines);
-          } catch (IOException | UncheckedIOException failure) {
-            // Destroying a process closes its standard error, so the read fails once the scan
-            // has stopped FFmpeg.
-            if (stopped.get()) {
-              return null;
-            }
+    return run(process, reader, diagnosticsUntilStopped(stopped, diagnosticLines)).exitCode();
+  }
 
-            throw failure;
-          }
-        };
-    return run(process, reader, diagnosticsReader).exitCode();
+  private static OutputReader<Void> diagnosticsUntilStopped(
+      AtomicBoolean stopped, Consumer<String> diagnosticLines) {
+    return stderr -> {
+      try {
+        return readLines(stderr, diagnosticLines);
+      } catch (IOException | UncheckedIOException failure) {
+        // Destroying a process closes its standard error, so the read fails once the output's
+        // reader has stopped the process.
+        if (stopped.get()) {
+          return null;
+        }
+
+        throw failure;
+      }
+    };
   }
 
   private <T> Finished<T> run(List<String> arguments, OutputReader<T> reader)
