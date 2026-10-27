@@ -19,6 +19,19 @@ enum NalSyntax {
     Optional<Integer> lengthSize(byte[] extradata) {
       return recordLengthSize(extradata, 4);
     }
+  },
+
+  /** HEVC, whose hvcC record holds lengthSizeMinusOne in the low 2 bits of its 22nd byte. */
+  HEVC(2, 62, 0, 31) {
+    @Override
+    int type(byte[] unit) {
+      return (unit[0] >> 1) & 0x3F;
+    }
+
+    @Override
+    Optional<Integer> lengthSize(byte[] extradata) {
+      return recordLengthSize(extradata, 21);
+    }
   };
 
   private static final int RECORD_VERSION = 1;
@@ -34,6 +47,15 @@ enum NalSyntax {
     this.rpuType = rpuType;
     this.firstPictureType = firstPictureType;
     this.lastPictureType = lastPictureType;
+  }
+
+  /** The syntax of the codec, as ffprobe names it; empty for a codec without NAL units. */
+  static Optional<NalSyntax> of(String codec) {
+    return switch (codec) {
+      case "h264" -> Optional.of(H264);
+      case "hevc" -> Optional.of(HEVC);
+      default -> Optional.empty();
+    };
   }
 
   /** The NAL unit's type, from its header. */

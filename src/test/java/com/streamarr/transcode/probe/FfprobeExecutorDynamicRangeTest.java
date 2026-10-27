@@ -135,12 +135,13 @@ class FfprobeExecutorDynamicRangeTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @ValueSource(strings = {"mp4-hevc-hdr10.mp4", "mp4-hevc-sdr10-untagged.mp4"})
+    @ValueSource(strings = {"mpegts-pq10.ts", "mkv-pipe-hevc-10bit.mkv", "mpegts-hevc-ac3.ts"})
     @DisplayName(
         "Should report Dolby Vision and HDR10+ absent when neither the stream nor its first frames"
-            + " show them")
-    void shouldReportDolbyVisionAndHdr10PlusAbsentWhenNeitherTheStreamNorItsFirstFramesShowThem(
-        String fixture) {
+            + " and packets show them")
+    void
+        shouldReportDolbyVisionAndHdr10PlusAbsentWhenNeitherTheStreamNorItsFirstFramesAndPacketsShowThem(
+            String fixture) {
       var video = streamOf(fixture, 0);
 
       assertThat(video.getDynamicRange())

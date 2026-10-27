@@ -14,10 +14,11 @@ import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
 /**
- * Adds the bytes of an H.264 chosen video stream's first 3 packets to its ffprobe description,
- * under {@link #FIRST_PACKETS}, as ffprobe's hex dumps. FFmpeg's H.264 decoder drops the NAL units
- * that carry Dolby Vision RPUs, so the probe finds them in the packets. When ffprobe fails or
- * prints no packet, the description gets no packets.
+ * Adds the bytes of an H.264 or HEVC chosen video stream's first 3 packets to its ffprobe
+ * description, under {@link #FIRST_PACKETS}, as ffprobe's hex dumps. FFmpeg's H.264 decoder drops
+ * the NAL units that carry Dolby Vision RPUs, and its HEVC decoder ignores an RPU that is not the
+ * last NAL unit of its sample, so the probe finds them in the packets. When ffprobe fails or prints
+ * no packet, the description gets no packets.
  */
 @RequiredArgsConstructor
 @Slf4j
@@ -35,7 +36,7 @@ final class FirstPacketsProbe {
     var chosen = ChosenVideoStream.find(ffprobeOutput.path("streams"));
     if (chosen.isEmpty()
         || !(chosen.get().description() instanceof ObjectNode description)
-        || !"h264".equals(description.path("codec_name").asString(""))) {
+        || NalSyntax.of(description.path("codec_name").asString("")).isEmpty()) {
       return;
     }
 

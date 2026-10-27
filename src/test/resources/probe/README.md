@@ -40,6 +40,7 @@ from its lavfi test sources. No file comes from a media library.
 | `mpegts-dovi-p5-no-descriptor.ts.json` | Local sample: the first 3 s of `mp4-dovi-p5-dvh1-no-record.mp4` copied into MPEG-TS, which then carries no Dolby Vision descriptor |
 | `mp4-sdr8-bt709.mp4.json` | 8-bit H.264 tagged BT.709 |
 | `mp4-dovi-p5-hev1.mp4.json` | FFmpeg's FATE sample `mov/dovi-p5.mp4`: Dolby Vision profile 5 under `hev1`, with a `dvcC` record |
+| `hevc-dovi-p5-rpus-ahead.hevc.json` | FFmpeg's FATE sample `mov/dovi-p5.mp4` as raw HEVC, whose RPUs `move-rpus-ahead.py` moved ahead of the next picture, behind a copy of the parameter sets. FFmpeg's HEVC decoder ignores each RPU, so only the packets show them |
 | `mkv-hdr10-fate.mkv.json` | FFmpeg's FATE sample `mkv/hdr10tags-both.mkv`: HDR10 mastering values stored as 32-bit floats |
 | `mpegts-dovi-p7.ts.json` | FFmpeg's FATE sample `mov/dovi-p7-hvce.mp4` copied into MPEG-TS, whose Dolby Vision descriptor carries the profile 7 record |
 | `mp4-dovi-p5-dvh1.mp4.json` | Local sample: Dolby Vision profile 5 under `dvh1` with a `dvcC` record and no transfer tag |
@@ -68,7 +69,7 @@ from its lavfi test sources. No file comes from a media library.
 | `mov-phone-slow-motion.mov.json` | Local sample: a phone slow-motion original that runs at up to 240 fps (see Sources) |
 | `mpegts-avchd-interlaced.mts.json` | Local sample: an AVCHD camcorder file, top field first, one field per packet (see Sources) |
 | `frames/*.json` | The first-frames read of a recording's chosen video stream, with `FirstFramesProbe`'s arguments: the side data of the frames that ffprobe decodes from the stream's first packets. The probe widens the read from 3 to 12, 48 and 192 packets until it decodes 3 frames, and the recording holds the output of the read where it stops |
-| `packet-data/*.json` | The first-packets read of an H.264 recording's chosen video stream, with `FirstPacketsProbe`'s arguments: hex dumps of its first 3 packets. Only the recordings that the tests read keep theirs |
+| `packet-data/*.json` | The first-packets read of an H.264 or HEVC recording's chosen video stream, with `FirstPacketsProbe`'s arguments: hex dumps of its first 3 packets. Only the recordings that the tests read keep theirs |
 | `packets/*.csv` | The frame-rate rule's packet scan of a recording's chosen video stream: the first 30 s of packets as `pts,dts,size,flags`, from `frame-rate-scans.py` |
 | `copy-codec-strings.json` | The codec string of each copied stream: `copy-codec-strings.py` copies every H.264, HEVC, AV1, AAC, AC-3, E-AC-3, Opus, FLAC and ALAC stream above with the worker's copy arguments, and reads the string from the copy's initialization segment |
 | `pixel-formats.json` | `ffprobe -show_pixel_formats`: FFmpeg's description of every pixel format it knows |

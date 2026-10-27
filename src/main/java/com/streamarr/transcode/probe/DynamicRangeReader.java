@@ -33,7 +33,7 @@ final class DynamicRangeReader {
       Set.of("dvh1", "dvhe", "dav1", "dva1", "dvav");
 
   // The decoders whose frames carry HDR10+ metadata and Dolby Vision RPUs. FFmpeg 8.1's H.264
-  // decoder drops both, so the probe finds H.264 RPUs in the packets.
+  // decoder drops both, so the probe finds H.264 RPUs in the packets alone.
   private static final Set<String> DECODERS_SHOWING_FRAME_METADATA = Set.of("hevc", "av1");
 
   private static final List<String> RPU_HEADER_FIELDS =
@@ -66,10 +66,7 @@ final class DynamicRangeReader {
     var codec = text(stream, "codec_name").orElse("");
     var frames =
         FirstFrames.of(stream).filter(_ -> DECODERS_SHOWING_FRAME_METADATA.contains(codec));
-    var rpus = frames.map(DynamicRangeReader::rpusOf);
-    if ("h264".equals(codec) && FirstFrames.of(stream).isPresent()) {
-      rpus = PacketRpuReader.read(stream, NalSyntax.H264);
-    }
+    var rpus = rpus(stream, codec, frames);
 
     var record = VideoStreamFacts.sideData(stream, DOLBY_VISION_RECORD);
     var dynamicRange =
@@ -138,6 +135,34 @@ final class DynamicRangeReader {
   private static Optional<Integer> guess(String codec, DolbyVisionRpuHeader header) {
     var profile = DolbyVisionProfileGuess.of(codec, header);
     return profile.isPresent() ? Optional.of(profile.getAsInt()) : Optional.empty();
+  }
+
+  /**
+   * What the frames and, for a codec of NAL units, the packets that hold them show of the RPUs. A
+   * decoder can ignore or drop an RPU, so no RPU in the frames rules out none: only packets whose
+   * every NAL unit the probe delimited do. The header comes from the frames, or from the packets
+   * when the frames show no RPU.
+   */
+  private static Optional<RpuObservation> rpus(
+      JsonNode stream, String codec, Optional<FirstFrames> frames) {
+    var fromFrames = frames.map(DynamicRangeReader::rpusOf);
+    var syntax = NalSyntax.of(codec);
+    if (syntax.isEmpty() || FirstFrames.of(stream).isEmpty()) {
+      return fromFrames;
+    }
+
+    var fromPackets = PacketRpuReader.read(stream, syntax.get());
+    var isInFrames =
+        fromFrames.filter(observed -> observed.presence() == Presence.PRESENCE_PRESENT).isPresent();
+    if (!isInFrames) {
+      return fromPackets;
+    }
+
+    return Optional.of(
+        new RpuObservation(
+            Presence.PRESENCE_PRESENT,
+            fromFrames.get().firstHeader(),
+            fromPackets.map(RpuObservation::startsSample).orElse(Presence.PRESENCE_UNSPECIFIED)));
   }
 
   // A decoder hides where an RPU sits in its sample.

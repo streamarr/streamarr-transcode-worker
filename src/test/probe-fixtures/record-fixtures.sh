@@ -252,6 +252,8 @@ cp /fate/mkv/hdr10tags-both.mkv mkv-hdr10-fate.mkv
 cp /fate/hevc/hdr10_plus_h265_sample.hevc hevc-hdr10-plus.hevc
 cp /fate/mkv/dovi-p7-hvce.mkv mkv-dovi-p7-hvce.mkv
 cp /fate/mpegts/dovi-p7.ts mpegts-dovi-p7-two-layers.ts
+# The profile 5 sample as raw HEVC, whose RPUs move-rpus-ahead.py moves ahead of their pictures.
+"${FF[@]}" -i /fate/mov/dovi-p5.mp4 -map 0:v -c copy -f hevc dovi-p5.hevc
 CONTAINER
 
 cat > "$WORK/probe.sh" <<'CONTAINER'
@@ -283,10 +285,12 @@ for source in "$@"; do
         break
       fi
     done
-    # The first-packets read of an H.264 chosen video stream, with FirstPacketsProbe's arguments.
+    # The first-packets read of an H.264 or HEVC chosen video stream, with FirstPacketsProbe's
+    # arguments.
     codec="$(ffprobe -v quiet "${LIMITS[@]}" -select_streams "$chosen" \
       -show_entries stream=codec_name -of csv=p=0 "$source")"
-    if [ "${codec%%[,$'\n']*}" = h264 ]; then
+    codec="${codec%%[,$'\n']*}"
+    if [ "$codec" = h264 ] || [ "$codec" = hevc ]; then
       ffprobe -v quiet -print_format json "${LIMITS[@]}" -select_streams "$chosen" \
         -read_intervals '%+#3' -show_entries packet=data -show_data \
         "$source" > "packet-data/$(basename "$source").json"
@@ -319,8 +323,10 @@ FIXTURES_TO_PROBE=(mp4-titled.mp4 mkv-remuxed-from-mp4.mkv mp4-default-handlers.
   mpegts-aac-main.ts mpegts-aac-ltp.ts mkv-120fps.mkv mp4-100fps.mp4 mp4-90fps.mp4 mp4-72fps.mp4)
 if [ -n "${FATE_SUITE:-}" ]; then
   in_image fate.sh
+  python3 "$HERE/move-rpus-ahead.py" "$WORK/dovi-p5.hevc" "$WORK/hevc-dovi-p5-rpus-ahead.hevc"
   FIXTURES_TO_PROBE+=(mkv-eac3-atmos-dts-hd-ma.mkv mp4-dovi-p5-hev1.mp4 mkv-hdr10-fate.mkv
-    mpegts-dovi-p7.ts hevc-hdr10-plus.hevc mkv-dovi-p7-hvce.mkv mpegts-dovi-p7-two-layers.ts)
+    mpegts-dovi-p7.ts hevc-hdr10-plus.hevc mkv-dovi-p7-hvce.mkv mpegts-dovi-p7-two-layers.ts
+    hevc-dovi-p5-rpus-ahead.hevc)
 fi
 
 # HE-AAC in ADTS, which a local sample holds, next to a synthesized video stream in MPEG-TS. The
@@ -378,7 +384,15 @@ done
 # Each video and audio stream that the probe computes a codec string for, copied with the worker's
 # copy arguments into a fragmented MP4. copy-codec-strings.py reads the codec string of each copy's
 # initialization segment, so the tests compare the probe's string with what a copy carries.
-python3 "$HERE/copy-codec-strings.py" commands "$WORK" "${FIXTURES_TO_PROBE[@]}" > "$WORK/copy-all.sh"
+# The raw stream whose RPUs move-rpus-ahead.py moved holds no timestamps, which the mp4 muxer
+# refuses, so it has no copy.
+FIXTURES_TO_COPY=()
+for source in "${FIXTURES_TO_PROBE[@]}"; do
+  if [ "$source" != hevc-dovi-p5-rpus-ahead.hevc ]; then
+    FIXTURES_TO_COPY+=("$source")
+  fi
+done
+python3 "$HERE/copy-codec-strings.py" commands "$WORK" "${FIXTURES_TO_COPY[@]}" > "$WORK/copy-all.sh"
 in_image copy-all.sh
 python3 "$HERE/copy-codec-strings.py" read "$WORK" "$FIXTURES/copy-codec-strings.json"
 
@@ -402,9 +416,12 @@ json.dump(json.load(open(sys.argv[1])), open(sys.argv[2], "w"), indent=2)
 open(sys.argv[2], "a").write("\n")' "$WORK/frames/$source.json" "$FIXTURES/frames/$source.json"
   fi
 done
-# The first-packets reads that the tests answer with. Every other H.264 source's read fails, so its
-# dynamic range keeps the facts of the frames alone.
-PACKET_DATA=(mp4-sdr8-bt709.mp4 mp4-dovi-p9-avc1.mp4 mp4-dovi-p9-dva1.mp4 mpegts-dovi-p9.ts)
+# The first-packets reads that the tests answer with. Every other H.264 and HEVC source's read
+# fails, so only its frames show its RPUs, and a frame without an RPU rules out none. The large
+# local samples keep no read: 3 of their packets take hundreds of kilobytes.
+PACKET_DATA=(mp4-sdr8-bt709.mp4 mp4-dovi-p9-avc1.mp4 mp4-dovi-p9-dva1.mp4 mpegts-dovi-p9.ts
+  mp4-dovi-p5-hev1.mp4 hevc-dovi-p5-rpus-ahead.hevc mpegts-dovi-p7-two-layers.ts mpegts-pq10.ts
+  mkv-pipe-hevc-10bit.mkv mpegts-hevc-ac3.ts)
 mkdir -p "$FIXTURES/packet-data"
 for source in "${PACKET_DATA[@]}"; do
   if [ -f "$WORK/packet-data/$source.json" ]; then
