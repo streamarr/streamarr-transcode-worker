@@ -86,14 +86,12 @@ final class HdrStaticMetadata {
 
   /**
    * Whether the chosen video stream may carry a value that no source gave: for H.264, HEVC and AV1,
-   * when the walk of the SEI messages or of the metadata OBUs cannot rule it out, and for any codec
-   * whose first frames the probe read, when it could not read the Matroska track's Colour.
+   * when the walk of the SEI messages or of the metadata OBUs cannot rule it out, and for any
+   * codec, when the probe could not read the Matroska track's Colour.
    */
   private static boolean mayCarry(
       JsonNode stream, Optional<MetadataWalk> walk, HdrMessage message) {
-    var isColourUnread =
-        stream.path(MatroskaColourProbe.CONTAINER_COLOUR_UNREAD).asBoolean()
-            && FirstFrames.of(stream).isPresent();
+    var isColourUnread = stream.path(MatroskaColourProbe.CONTAINER_COLOUR_UNREAD).asBoolean();
     return isColourUnread || walk.filter(walked -> !walked.rulesOut(message)).isPresent();
   }
 

@@ -17,10 +17,14 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 @Tag("UnitTest")
 @DisplayName("FFprobe Executor Matroska Colour Tests")
@@ -139,8 +143,10 @@ class FfprobeExecutorMatroskaColourTest {
   }
 
   @Test
-  @DisplayName("Should leave the light level absent when the probe cannot open the source")
-  void shouldLeaveTheLightLevelAbsentWhenTheProbeCannotOpenTheSource() {
+  @DisplayName(
+      "Should mark both static values omitted when the probe cannot open the source and read no"
+          + " frames")
+  void shouldMarkBothStaticValuesOmittedWhenTheProbeCannotOpenTheSourceAndReadNoFrames() {
     var video =
         probe(
                 Answers.builder()
@@ -149,8 +155,47 @@ class FfprobeExecutorMatroskaColourTest {
                     .build())
             .getStreams(0);
 
+    assertThat(video.getFirstFramesRead()).isFalse();
     assertThat(video.hasContentLightLevel()).isFalse();
-    assertThat(video.getContentLightLevelOmitted()).isFalse();
+    assertThat(video.getContentLightLevelOmitted()).isTrue();
+    assertThat(video.getMasteringDisplayOmitted()).isTrue();
+  }
+
+  static Stream<Arguments> unreadableColours() {
+    return Stream.of(
+        Arguments.of("the file holds no Tracks element", document()),
+        Arguments.of(
+            "the Tracks element holds no video track",
+            document(element(0x1654AE6B, element(0xAE, element(0x83, unsigned(2)))))),
+        Arguments.of(
+            "a track entry's size runs past the Tracks element",
+            document(element(0x1654AE6B, new byte[] {(byte) 0xAE, (byte) 0x9F, 0x00}))));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("unreadableColours")
+  @DisplayName(
+      "Should mark both static values omitted for any codec when the probe cannot read the track's"
+          + " Colour")
+  void shouldMarkBothStaticValuesOmittedForAnyCodecWhenTheProbeCannotReadTheTracksColour(
+      String description, byte[] file) throws IOException {
+    var source = Files.write(temporaryDirectory.resolve("source.mkv"), file);
+    var video =
+        probe(
+                Answers.builder()
+                    .ffprobeOutput(
+                        """
+                        {"streams":[{"index":0,"codec_type":"video","codec_name":"vp9",
+                          "time_base":"1/1000"}],"format":{"format_name":"%s"}}
+                        """
+                            .formatted(MATROSKA))
+                    .firstFrames(FirstReads.frames("", "", ""))
+                    .source(source)
+                    .build())
+            .getStreams(0);
+
+    assertThat(video.getContentLightLevelOmitted()).as(description).isTrue();
+    assertThat(video.getMasteringDisplayOmitted()).as(description).isTrue();
   }
 
   @Test
