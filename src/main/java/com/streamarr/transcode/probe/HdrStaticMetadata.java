@@ -40,16 +40,20 @@ final class HdrStaticMetadata {
    * Sets the mastering display and the content light level from the stream's side data, or from the
    * side data of its first frame when the stream has none. A Matroska track's own light level
    * elements come before the first frame's. A side data entry that the worker cannot convert leaves
-   * its value absent and sets its omitted flag.
+   * its value absent and sets its omitted flag, as does a Matroska MasteringMetadata element that
+   * ffprobe dropped when the first frame carries no mastering display either.
    */
   static void add(JsonNode stream, ProbeStreamInfo.Builder builder) {
     declared(stream, MASTERING_DISPLAY)
-        .ifPresent(
+        .ifPresentOrElse(
             side ->
                 masteringDisplayOf(side)
                     .ifPresentOrElse(
                         builder::setMasteringDisplay,
-                        () -> builder.setMasteringDisplayOmitted(true)));
+                        () -> builder.setMasteringDisplayOmitted(true)),
+            () ->
+                builder.setMasteringDisplayOmitted(
+                    stream.path(MatroskaColourProbe.CONTAINER_MASTERING_METADATA).asBoolean()));
     VideoStreamFacts.sideData(stream, CONTENT_LIGHT_LEVEL)
         .or(() -> Optional.ofNullable(stream.get(MatroskaColourProbe.CONTAINER_LIGHT_LEVEL)))
         .or(() -> firstFrameSideData(stream, CONTENT_LIGHT_LEVEL))

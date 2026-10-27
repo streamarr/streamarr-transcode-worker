@@ -11,6 +11,7 @@ import build.buf.gen.streamarr.transcode.v1.ContentLightLevel;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import com.streamarr.transcode.probe.RecordedFfprobe.Answers;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -26,7 +27,16 @@ class FfprobeExecutorMatroskaColourTest {
 
   private static final long MAX_CLL = 0x55BC;
   private static final long MAX_FALL = 0x55BD;
+  private static final long MASTERING_METADATA = 0x55D0;
+  private static final long LUMINANCE_MAX = 0x55D9;
   private static final String MATROSKA = "matroska,webm";
+  private static final String FRAME_MASTERING_DISPLAY =
+      """
+      {"side_data_type":"Mastering display metadata","red_x":"34000/50000",
+       "red_y":"16000/50000","green_x":"13250/50000","green_y":"34500/50000",
+       "blue_x":"7500/50000","blue_y":"3000/50000","white_point_x":"15635/50000",
+       "white_point_y":"16450/50000","min_luminance":"50/10000",
+       "max_luminance":"10000000/10000"}""";
   private static final String FRAME_LIGHT_LEVEL =
       """
       {"side_data_type":"Content light level metadata","max_content":1000,"max_average":400}""";
@@ -172,6 +182,70 @@ class FfprobeExecutorMatroskaColourTest {
             .getStreams(0);
 
     assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(950);
+  }
+
+  @Test
+  @DisplayName(
+      "Should mark the mastering display omitted when ffprobe drops the track's incomplete"
+          + " MasteringMetadata")
+  void shouldMarkTheMasteringDisplayOmittedWhenFfprobeDropsTheTracksIncompleteMasteringMetadata()
+      throws IOException {
+    // FFmpeg's Matroska demuxer drops a MasteringMetadata element without all of its primaries.
+    var video = probeMatroska(MATROSKA, videoTrack(maxLuminanceOnly()));
+
+    assertThat(video.hasMasteringDisplay()).isFalse();
+    assertThat(video.getMasteringDisplayOmitted()).isTrue();
+  }
+
+  @Test
+  @DisplayName("Should take the first frame's mastering display when the track's is incomplete")
+  void shouldTakeTheFirstFramesMasteringDisplayWhenTheTracksIsIncomplete() throws IOException {
+    var video = probeMatroska(MATROSKA, videoTrack(maxLuminanceOnly()), FRAME_MASTERING_DISPLAY);
+
+    assertThat(video.getMasteringDisplay().getMaxLuminance()).isEqualTo(10_000_000);
+    assertThat(video.getMasteringDisplayOmitted()).isFalse();
+  }
+
+  @Test
+  @DisplayName("Should keep ffprobe's mastering display when ffprobe reports one for the stream")
+  void shouldKeepFfprobesMasteringDisplayWhenFfprobeReportsOneForTheStream() throws IOException {
+    var source =
+        Files.write(temporaryDirectory.resolve("source.mkv"), videoTrack(maxLuminanceOnly()));
+    var video =
+        probe(
+                Answers.builder()
+                    .ffprobeOutput(
+                        output(MATROSKA, ",\"side_data_list\":[" + FRAME_MASTERING_DISPLAY + "]"))
+                    .source(source)
+                    .build())
+            .getStreams(0);
+
+    assertThat(video.getMasteringDisplay().getMaxLuminance()).isEqualTo(10_000_000);
+    assertThat(video.getMasteringDisplayOmitted()).isFalse();
+  }
+
+  @Test
+  @DisplayName(
+      "Should leave the mastering display unmarked when the track holds no MasteringMetadata")
+  void shouldLeaveTheMasteringDisplayUnmarkedWhenTheTrackHoldsNoMasteringMetadata()
+      throws IOException {
+    var video = probeMatroska(MATROSKA, videoTrack(element(MAX_CLL, unsigned(900))));
+
+    assertThat(video.getMasteringDisplayOmitted()).isFalse();
+  }
+
+  @Test
+  @DisplayName("Should leave the mastering display unmarked when the container is not Matroska")
+  void shouldLeaveTheMasteringDisplayUnmarkedWhenTheContainerIsNotMatroska() throws IOException {
+    var video = probeMatroska("mov,mp4,m4a,3gp,3g2,mj2", videoTrack(maxLuminanceOnly()));
+
+    assertThat(video.getMasteringDisplayOmitted()).isFalse();
+  }
+
+  /** A MasteringMetadata element that holds only LuminanceMax, 1000 cd/m^2 as a 4-byte float. */
+  private static byte[] maxLuminanceOnly() {
+    return element(
+        MASTERING_METADATA, element(LUMINANCE_MAX, ByteBuffer.allocate(4).putFloat(1000).array()));
   }
 
   private ProbeStreamInfo probeMatroska(String formatName, byte[] file) throws IOException {
