@@ -68,7 +68,7 @@ final class DynamicRangeReader {
     var codec = text(stream, "codec_name").orElse("");
     var frames =
         FirstFrames.of(stream).filter(_ -> DECODERS_SHOWING_FRAME_METADATA.contains(codec));
-    var rpus = rpus(stream, codec, frames);
+    var rpus = rpus(stream, frames, walk);
 
     var record = VideoStreamFacts.sideData(stream, DOLBY_VISION_RECORD);
     var dynamicRange = VideoDynamicRange.newBuilder().setHdr10Plus(hdr10Plus(stream, frames, walk));
@@ -185,18 +185,17 @@ final class DynamicRangeReader {
    * frames show no RPU.
    */
   private static Optional<RpuObservation> rpus(
-      JsonNode stream, String codec, Optional<FirstFrames> frames) {
+      JsonNode stream, Optional<FirstFrames> frames, Optional<MetadataWalk> walk) {
     var inFrames =
         frames
             .map(DynamicRangeReader::rpusOf)
             .filter(observed -> observed.presence() == Presence.PRESENCE_PRESENT);
-    var syntax = NalSyntax.of(codec);
     var read = FirstFrames.of(stream);
-    if (syntax.isEmpty() || read.isEmpty()) {
+    if (walk.isEmpty() || read.isEmpty()) {
       return inFrames;
     }
 
-    var fromPackets = PacketRpuReader.read(stream, syntax.get());
+    var fromPackets = walk.get().rpus();
     if (inFrames.isEmpty()) {
       return fromPackets.filter(
           observed -> observed.presence() == Presence.PRESENCE_PRESENT || !read.get().cutShort());

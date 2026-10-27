@@ -30,4 +30,10 @@ sealed interface MetadataWalk permits SeiMessages {
 
   /** The payload of the first message of the kind that is not nested, read-only. */
   Optional<ByteBuffer> firstPayload(HdrMessage message);
+
+  /**
+   * What the walked packets show of the Dolby Vision RPUs; empty when they can neither show nor
+   * rule one out.
+   */
+  Optional<RpuObservation> rpus();
 }

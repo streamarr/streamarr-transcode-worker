@@ -40,8 +40,10 @@ final class SeiMessages implements MetadataWalk {
   private final Map<HdrMessage, ByteBuffer> firstPayloads;
   private final Set<HdrMessage> nestedMessages;
   private final boolean readAll;
+  private final Optional<RpuObservation> rpus;
 
-  private SeiMessages(Walk walk) {
+  private SeiMessages(Walk walk, Optional<RpuObservation> rpus) {
+    this.rpus = rpus;
     this.firstPayloads = walk.firstPayloads;
     this.nestedMessages = walk.nestedMessages;
     this.readAll = walk.readAll;
@@ -69,7 +71,7 @@ final class SeiMessages implements MetadataWalk {
         .ifPresent(walk::add);
     FirstPacketSamples.read(stream, syntax.get())
         .ifPresentOrElse(samples -> samples.forEach(walk::add), walk::missUnits);
-    return Optional.of(new SeiMessages(walk));
+    return Optional.of(new SeiMessages(walk, PacketRpuReader.read(stream, syntax.get())));
   }
 
   @Override
@@ -80,6 +82,11 @@ final class SeiMessages implements MetadataWalk {
   @Override
   public Optional<ByteBuffer> firstPayload(HdrMessage message) {
     return Optional.ofNullable(firstPayloads.get(message)).map(ByteBuffer::duplicate);
+  }
+
+  @Override
+  public Optional<RpuObservation> rpus() {
+    return rpus;
   }
 
   @Override
