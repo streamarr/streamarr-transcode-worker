@@ -68,7 +68,7 @@ final class DynamicRangeReader {
         FirstFrames.of(stream).filter(_ -> DECODERS_SHOWING_FRAME_METADATA.contains(codec));
     var rpus = frames.map(DynamicRangeReader::rpusOf);
     if ("h264".equals(codec) && FirstFrames.of(stream).isPresent()) {
-      rpus = H264RpuReader.read(stream);
+      rpus = PacketRpuReader.read(stream, NalSyntax.H264);
     }
 
     var record = VideoStreamFacts.sideData(stream, DOLBY_VISION_RECORD);

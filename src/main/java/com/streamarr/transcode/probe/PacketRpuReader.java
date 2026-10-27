@@ -9,36 +9,27 @@ import java.util.Optional;
 import tools.jackson.databind.JsonNode;
 
 /**
- * Finds the Dolby Vision RPUs in the first packets of an H.264 stream, as {@link FirstPacketsProbe}
- * adds them. An RPU is a NAL unit of type 28 whose payload starts with rpu_nal_prefix 25. An avcC
- * record means samples of length-prefixed NAL units, and Annex B extradata, as MPEG-TS carries,
- * means start codes.
+ * Finds the Dolby Vision RPUs in the first packets of a stream, as {@link FirstPacketsProbe} adds
+ * them, by the codec's {@link NalSyntax}. A decoder configuration record means samples of
+ * length-prefixed NAL units, and Annex B extradata, as MPEG-TS carries, means start codes.
  */
-final class H264RpuReader {
+final class PacketRpuReader {
 
-  private static final int AVC_RECORD_VERSION = 1;
-  // The avcC record's lengthSizeMinusOne sits in the low 2 bits of its fifth byte.
-  private static final int AVC_RECORD_LENGTH_SIZE = 4;
-  private static final int RPU_NAL_UNIT_TYPE = 28;
-  private static final int RPU_NAL_PREFIX = 25;
-  private static final int FIRST_VCL_NAL_UNIT_TYPE = 1;
-  private static final int LAST_VCL_NAL_UNIT_TYPE = 5;
-
-  private H264RpuReader() {}
+  private PacketRpuReader() {}
 
   /**
    * The RPUs that the packets show; empty when the probe read no packet, cannot parse one, or finds
    * no extradata to tell how the samples delimit their NAL units. A sample whose NAL units the
    * reader cannot delimit to its end can hide an RPU, so it rules out no RPU.
    */
-  static Optional<RpuObservation> read(JsonNode stream) {
+  static Optional<RpuObservation> read(JsonNode stream, NalSyntax syntax) {
     var dumps = stream.path(FirstPacketsProbe.FIRST_PACKETS).valueStream().toList();
     var extradata = Extradata.of(stream);
     if (dumps.isEmpty() || extradata.isEmpty()) {
       return Optional.empty();
     }
 
-    var lengthSize = lengthSize(extradata.get());
+    var lengthSize = syntax.lengthSize(extradata.get());
     var samples = new ArrayList<Sample>();
     for (var dump : dumps) {
       var bytes = Extradata.dumped(dump.path("data").asString(""));
@@ -52,12 +43,11 @@ final class H264RpuReader {
               : annexB(bytes.get()));
     }
 
-    return observation(samples);
+    return observation(samples, syntax);
   }
 
-  private static Optional<RpuObservation> observation(List<Sample> samples) {
-    var rpus =
-        samples.stream().flatMap(sample -> sample.units().stream()).filter(H264RpuReader::isRpu);
+  private static Optional<RpuObservation> observation(List<Sample> samples, NalSyntax syntax) {
+    var rpus = samples.stream().flatMap(sample -> sample.units().stream()).filter(syntax::isRpu);
     var firstRpu = rpus.findFirst();
     var isEverySampleComplete = samples.stream().allMatch(Sample::complete);
     if (firstRpu.isEmpty() && !isEverySampleComplete) {
@@ -70,7 +60,7 @@ final class H264RpuReader {
               Presence.PRESENCE_ABSENT, Optional.empty(), Presence.PRESENCE_UNSPECIFIED));
     }
 
-    var layouts = samples.stream().map(H264RpuReader::layout).toList();
+    var layouts = samples.stream().map(sample -> layout(sample, syntax)).toList();
     var startsSample = Presence.PRESENCE_ABSENT;
     if (layouts.contains(Layout.UNKNOWN)) {
       startsSample = Presence.PRESENCE_UNSPECIFIED;
@@ -81,21 +71,21 @@ final class H264RpuReader {
     }
 
     return Optional.of(
-        new RpuObservation(Presence.PRESENCE_PRESENT, header(firstRpu.get()), startsSample));
+        new RpuObservation(
+            Presence.PRESENCE_PRESENT, header(firstRpu.get(), syntax), startsSample));
   }
 
   /**
    * Whether an RPU comes ahead of the sample's first slice, or the sample holds no slice. Unknown
    * when the reader could not delimit the sample to its end and found neither ahead of the cut.
    */
-  private static Layout layout(Sample sample) {
+  private static Layout layout(Sample sample, NalSyntax syntax) {
     for (var unit : sample.units()) {
-      if (isRpu(unit)) {
+      if (syntax.isRpu(unit)) {
         return Layout.RPU_FIRST;
       }
 
-      var type = unit[0] & 0x1F;
-      if (type >= FIRST_VCL_NAL_UNIT_TYPE && type <= LAST_VCL_NAL_UNIT_TYPE) {
+      if (syntax.isPicture(unit)) {
         return Layout.PICTURE_FIRST;
       }
     }
@@ -103,23 +93,9 @@ final class H264RpuReader {
     return sample.complete() ? Layout.PICTURE_FIRST : Layout.UNKNOWN;
   }
 
-  private static boolean isRpu(byte[] unit) {
-    return unit.length > 1
-        && (unit[0] & 0x1F) == RPU_NAL_UNIT_TYPE
-        && Byte.toUnsignedInt(unit[1]) == RPU_NAL_PREFIX;
-  }
-
-  private static Optional<DolbyVisionRpuHeader> header(byte[] rpu) {
-    return DolbyVisionRpuHeaderReader.read(Arrays.copyOfRange(rpu, 1, rpu.length));
-  }
-
-  private static Optional<Integer> lengthSize(byte[] extradata) {
-    if (extradata.length <= AVC_RECORD_LENGTH_SIZE
-        || Byte.toUnsignedInt(extradata[0]) != AVC_RECORD_VERSION) {
-      return Optional.empty();
-    }
-
-    return Optional.of((extradata[AVC_RECORD_LENGTH_SIZE] & 0x03) + 1);
+  private static Optional<DolbyVisionRpuHeader> header(byte[] rpu, NalSyntax syntax) {
+    return DolbyVisionRpuHeaderReader.read(
+        Arrays.copyOfRange(rpu, syntax.payloadOffset(), rpu.length));
   }
 
   /**
