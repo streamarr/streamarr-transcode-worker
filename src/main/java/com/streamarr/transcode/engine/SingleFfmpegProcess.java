@@ -10,9 +10,6 @@ import java.util.concurrent.TimeUnit;
 /** A job attempt's FFmpeg that runs as one process. */
 final class SingleFfmpegProcess implements FfmpegProcess {
 
-  private static final Duration ERROR_OUTPUT_WAIT = Duration.ofSeconds(1);
-  private static final int ERROR_OUTPUT_DETAIL_LIMIT = 2000;
-
   private final Process process;
   private final StderrDrainer errorOutput;
   private final Duration gracePeriod;
@@ -84,20 +81,11 @@ final class SingleFfmpegProcess implements FfmpegProcess {
   public AttemptOutcome outcomeAtExit(AttemptOutcome outcomeOnCleanExit) {
     var exitCode = process.onExit().join().exitValue();
     if (exitCode != 0) {
-      return new Failed(ProducerFailure.PROCESS_EXITED_WITH_ERROR, exitDetail(exitCode));
+      return new Failed(
+          ProducerFailure.PROCESS_EXITED_WITH_ERROR, errorOutput.exitDetail("FFmpeg", exitCode));
     }
 
     return outcomeOnCleanExit;
-  }
-
-  // FFmpeg reports why it failed at the end of its error output.
-  private String exitDetail(int exitCode) {
-    var recentErrorOutput = String.join("\n", errorOutput.awaitRecentOutput(ERROR_OUTPUT_WAIT));
-    var tailStart = Math.max(0, recentErrorOutput.length() - ERROR_OUTPUT_DETAIL_LIMIT);
-    return "FFmpeg exited with exit code "
-        + exitCode
-        + ": "
-        + recentErrorOutput.substring(tailStart);
   }
 
   @Override
