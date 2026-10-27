@@ -143,6 +143,20 @@ final class VideoDecisions {
       case VIDEO_CODEC_PROFILE_AV1_MAIN -> VideoCodecProfile.AV1_MAIN;
       case VIDEO_CODEC_PROFILE_UNSPECIFIED, UNRECOGNIZED ->
           throw new InvalidJobSpecificationException("The encode carries no codec profile");
+      case VIDEO_CODEC_PROFILE_H264_CONSTRAINED_BASELINE,
+          VIDEO_CODEC_PROFILE_H264_BASELINE,
+          VIDEO_CODEC_PROFILE_H264_MAIN,
+          VIDEO_CODEC_PROFILE_H264_EXTENDED,
+          VIDEO_CODEC_PROFILE_H264_HIGH_10,
+          VIDEO_CODEC_PROFILE_H264_HIGH_422,
+          VIDEO_CODEC_PROFILE_H264_HIGH_444_PREDICTIVE,
+          VIDEO_CODEC_PROFILE_HEVC_MAIN_10,
+          VIDEO_CODEC_PROFILE_HEVC_MAIN_STILL_PICTURE,
+          VIDEO_CODEC_PROFILE_HEVC_FORMAT_RANGE_EXTENSIONS,
+          VIDEO_CODEC_PROFILE_AV1_HIGH,
+          VIDEO_CODEC_PROFILE_AV1_PROFESSIONAL ->
+          throw new InvalidJobSpecificationException(
+              "An encode forces only a Main or High profile, and carries " + profile);
     };
   }
 

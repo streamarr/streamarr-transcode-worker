@@ -821,6 +821,29 @@ class TranscodeWorkerJobAttemptTest {
 
   @ParameterizedTest(name = "{0}")
   @EnumSource(
+      value = VideoCodecProfile.class,
+      names = {
+        "VIDEO_CODEC_PROFILE_UNSPECIFIED",
+        "VIDEO_CODEC_PROFILE_H264_HIGH",
+        "VIDEO_CODEC_PROFILE_HEVC_MAIN",
+        "VIDEO_CODEC_PROFILE_AV1_MAIN",
+        "UNRECOGNIZED"
+      },
+      mode = EnumSource.Mode.EXCLUDE)
+  @DisplayName(
+      "Should refuse the job as an invalid specification when an encode carries a codec profile"
+          + " that only a probe reports")
+  void
+      shouldRefuseTheJobAsAnInvalidSpecificationWhenAnEncodeCarriesACodecProfileThatOnlyAProbeReports(
+          VideoCodecProfile profile) throws Exception {
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getDecisionBuilder().getVideoBuilder().setCodecProfile(profile);
+
+    assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
       value = TranscodeMode.class,
       names = {"TRANSCODE_MODE_REMUX", "TRANSCODE_MODE_FULL_TRANSCODE"})
   @DisplayName(
