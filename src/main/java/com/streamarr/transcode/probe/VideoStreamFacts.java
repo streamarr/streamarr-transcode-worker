@@ -30,6 +30,7 @@ final class VideoStreamFacts {
     stream.setDynamicRange(DynamicRangeReader.read(source));
     HdrStaticMetadata.masteringDisplay(source).ifPresent(stream::setMasteringDisplay);
     HdrStaticMetadata.contentLightLevel(source).ifPresent(stream::setContentLightLevel);
+    CodecProfileReader.add(source, stream);
   }
 
   private static int rotationDegrees(JsonNode matrix) {
