@@ -417,6 +417,12 @@ class WorkerProbeFrameRateTest {
         return ScriptedProcess.builder().output(json().getBytes(StandardCharsets.UTF_8)).build();
       }
 
+      if (option(arguments, "-show_entries").startsWith("frame=")) {
+        return ScriptedProcess.builder()
+            .output("{\"frames\":[]}".getBytes(StandardCharsets.UTF_8))
+            .build();
+      }
+
       if (!option(arguments, "-read_intervals").equals("%+30")
           || !option(arguments, "-show_entries").equals("packet=pts,dts,size,flags")
           || !option(arguments, "-of").equals("csv=p=0")) {

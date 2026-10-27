@@ -5,8 +5,11 @@ import static com.streamarr.transcode.probe.RecordedFfprobe.streamOf;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import build.buf.gen.streamarr.transcode.v1.CompatibleBase;
+import build.buf.gen.streamarr.transcode.v1.ContentLightLevel;
+import build.buf.gen.streamarr.transcode.v1.DolbyVisionAbsent;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionConfiguration;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionPresent;
+import build.buf.gen.streamarr.transcode.v1.DolbyVisionRpuHeader;
 import build.buf.gen.streamarr.transcode.v1.Presence;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import build.buf.gen.streamarr.transcode.v1.VideoDynamicRange;
@@ -100,14 +103,23 @@ class FfprobeExecutorDynamicRangeTest {
   class DolbyVisionTests {
 
     @Test
-    @DisplayName("Should report Dolby Vision without a record when only the sample entry names it")
-    void shouldReportDolbyVisionWithoutARecordWhenOnlyTheSampleEntryNamesIt() {
+    @DisplayName(
+        "Should report Dolby Vision without a record when only the sample entry and the RPUs show"
+            + " it")
+    void shouldReportDolbyVisionWithoutARecordWhenOnlyTheSampleEntryAndTheRpusShowIt() {
       var video = streamOf("mp4-dovi-p5-dvh1-no-record.mp4", 0);
 
       assertThat(video.getDynamicRange().getDolbyVisionPresent())
           .isEqualTo(
               DolbyVisionPresent.newBuilder()
-                  .setObservedRpu(Presence.PRESENCE_UNSPECIFIED)
+                  .setObservedRpu(Presence.PRESENCE_PRESENT)
+                  .setFirstRpuHeader(
+                      DolbyVisionRpuHeader.newBuilder()
+                          .setVdrRpuProfile(0)
+                          .setBaseLayerFullRange(true)
+                          .setDisableResidual(true)
+                          .setVdrBitDepth(12))
+                  .setRpuStartsSample(Presence.PRESENCE_UNSPECIFIED)
                   .build());
     }
 
@@ -123,16 +135,35 @@ class FfprobeExecutorDynamicRangeTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @ValueSource(
-        strings = {"mp4-hevc-hdr10.mp4", "mp4-hevc-sdr10-untagged.mp4", "mp4-sdr8-bt709.mp4"})
-    @DisplayName("Should leave Dolby Vision unspecified when the stream shows no sign of it")
-    void shouldLeaveDolbyVisionUnspecifiedWhenTheStreamShowsNoSignOfIt(String fixture) {
+    @ValueSource(strings = {"mp4-hevc-hdr10.mp4", "mp4-hevc-sdr10-untagged.mp4"})
+    @DisplayName(
+        "Should report Dolby Vision and HDR10+ absent when neither the stream nor its first frames"
+            + " show them")
+    void shouldReportDolbyVisionAndHdr10PlusAbsentWhenNeitherTheStreamNorItsFirstFramesShowThem(
+        String fixture) {
       var video = streamOf(fixture, 0);
 
       assertThat(video.getDynamicRange())
           .isEqualTo(
               VideoDynamicRange.newBuilder()
                   .setCompatibleBase(video.getDynamicRange().getCompatibleBase())
+                  .setHdr10Plus(Presence.PRESENCE_ABSENT)
+                  .setDolbyVisionAbsent(DolbyVisionAbsent.getDefaultInstance())
+                  .build());
+    }
+
+    @Test
+    @DisplayName(
+        "Should leave Dolby Vision and HDR10+ unspecified when the decoder hides them from the"
+            + " frames")
+    void shouldLeaveDolbyVisionAndHdr10PlusUnspecifiedWhenTheDecoderHidesThemFromTheFrames() {
+      var video = streamOf("mp4-sdr8-bt709.mp4", 0);
+
+      assertThat(video.getFirstFramesRead()).isTrue();
+      assertThat(video.getDynamicRange())
+          .isEqualTo(
+              VideoDynamicRange.newBuilder()
+                  .setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_SDR)
                   .setHdr10Plus(Presence.PRESENCE_UNSPECIFIED)
                   .build());
     }
@@ -172,10 +203,26 @@ class FfprobeExecutorDynamicRangeTest {
   class MasteringDisplayTests {
 
     @Test
-    @DisplayName("Should report no mastering display when only the bitstream carries it")
-    void shouldReportNoMasteringDisplayWhenOnlyTheBitstreamCarriesIt() {
+    @DisplayName("Should read the first frame's values when only the bitstream carries them")
+    void shouldReadTheFirstFramesValuesWhenOnlyTheBitstreamCarriesThem() {
       var video = streamOf("mp4-hdr10-sei-only.mp4", 0);
 
+      assertThat(video.getMasteringDisplay())
+          .isEqualTo(streamOf("mp4-hdr10-static.mp4", 0).getMasteringDisplay());
+      assertThat(video.getContentLightLevel())
+          .isEqualTo(
+              ContentLightLevel.newBuilder()
+                  .setMaxContentLightLevel(1000)
+                  .setMaxFrameAverageLightLevel(400)
+                  .build());
+    }
+
+    @Test
+    @DisplayName("Should report no static metadata when neither the container nor a frame has it")
+    void shouldReportNoStaticMetadataWhenNeitherTheContainerNorAFrameHasIt() {
+      var video = streamOf("mpegts-pq10.ts", 0);
+
+      assertThat(video.getFirstFramesRead()).isTrue();
       assertThat(video.hasMasteringDisplay()).isFalse();
       assertThat(video.hasContentLightLevel()).isFalse();
       assertThat(video.getMasteringDisplayOmitted()).isFalse();
@@ -316,12 +363,18 @@ class FfprobeExecutorDynamicRangeTest {
   class ContentLightLevelTests {
 
     @Test
-    @DisplayName("Should report no light level when Matroska stores a MaxFALL of 0")
-    void shouldReportNoLightLevelWhenMatroskaStoresAMaxFallOf0() {
-      // ffprobe reports a Matroska light level only when MaxCLL and MaxFALL are both nonzero.
+    @DisplayName("Should read the first frame's light level when Matroska stores a MaxFALL of 0")
+    void shouldReadTheFirstFramesLightLevelWhenMatroskaStoresAMaxFallOf0() {
+      // ffprobe reports a Matroska light level only when MaxCLL and MaxFALL are both nonzero, and
+      // the encode's SEI messages repeat the values.
       var video = streamOf("mkv-hdr10-maxfall-zero.mkv", 0);
 
-      assertThat(video.hasContentLightLevel()).isFalse();
+      assertThat(video.getContentLightLevel())
+          .isEqualTo(
+              ContentLightLevel.newBuilder()
+                  .setMaxContentLightLevel(1000)
+                  .setMaxFrameAverageLightLevel(0)
+                  .build());
       assertThat(video.hasMasteringDisplay()).isTrue();
     }
 

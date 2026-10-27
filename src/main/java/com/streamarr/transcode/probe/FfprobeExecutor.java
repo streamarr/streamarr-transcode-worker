@@ -151,6 +151,7 @@ public final class FfprobeExecutor {
 
     if (output.exitCode() == 0) {
       new StreamExtradataProbe(objectMapper, this::run).addTo(json, attempt.source());
+      new FirstFramesProbe(objectMapper, this::run).addTo(json, attempt.source());
     }
 
     var result = readResult(json, output, attempt);

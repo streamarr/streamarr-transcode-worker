@@ -177,6 +177,11 @@ done
 "${FF[@]}" -i sei-1000,0.hevc "${HDR10[@]}" "${X265[@]}" -x265-params log-level=none \
   mkv-hdr10-maxfall-zero.mkv
 "${FF[@]}" -i sei-1000,400.hevc -c copy -tag:v hvc1 mp4-hdr10-sei-only.mp4
+# HDR10 and PQ10 in MPEG-TS: the x265 stream whose SEI messages carry the HDR10 values, and a PQ
+# encode that carries none.
+"${FF[@]}" -i mp4-hdr10-sei-only.mp4 -c copy mpegts-hdr10-sei-only.ts
+"${FF[@]}" -f lavfi -i testsrc2=size=64x64:rate=24:duration=1 "${HDR10[@]}" "${X265[@]}" \
+  -x265-params log-level=none mpegts-pq10.ts
 
 # Codec strings. H.264 and HEVC in MPEG-TS carry their parameter sets in Annex B form. AV1 in IVF
 # and in a raw OBU file carries only its sequence header. AAC in ADTS has no AudioSpecificConfig.
@@ -242,17 +247,36 @@ cp /fate/mov/dovi-p5.mp4 mp4-dovi-p5-hev1.mp4
 cp /fate/mkv/hdr10tags-both.mkv mkv-hdr10-fate.mkv
 # Dolby Vision profile 7 in MPEG-TS, whose Dolby Vision descriptor carries the record.
 "${FF[@]}" -i /fate/mov/dovi-p7-hvce.mp4 -map 0:v -c copy -strict unofficial mpegts-dovi-p7.ts
+# HDR10+ in raw HEVC, profile 7 in Matroska, and profile 7 in MPEG-TS with its base and
+# enhancement layers in separate streams.
+cp /fate/hevc/hdr10_plus_h265_sample.hevc hevc-hdr10-plus.hevc
+cp /fate/mkv/dovi-p7-hvce.mkv mkv-dovi-p7-hvce.mkv
+cp /fate/mpegts/dovi-p7.ts mpegts-dovi-p7-two-layers.ts
 CONTAINER
 
 cat > "$WORK/probe.sh" <<'CONTAINER'
 set -euo pipefail
 cd /work
+mkdir -p frames
+LIMITS=(-analyzeduration 200M -probesize 1G -scan_all_pmts 0)
 for source in "$@"; do
   # The probe's own arguments, as FfprobeExecutor passes them, and -show_data, which prints the
   # extradata that the probe reads for each video and audio stream in separate runs.
-  ffprobe -v quiet -print_format json -analyzeduration 200M -probesize 1G -scan_all_pmts 0 \
+  ffprobe -v quiet -print_format json "${LIMITS[@]}" \
     -show_streams -show_format -show_chapters -show_data -show_error "$source" \
     > "$(basename "$source").json"
+  # The first-frames read of the chosen video stream, with FirstFramesProbe's arguments. V:0 selects
+  # the first video stream that is not an attached picture, which is the chosen video stream.
+  chosen="$(ffprobe -v quiet "${LIMITS[@]}" -select_streams V:0 -show_entries stream=index \
+    -of csv=p=0 "$source")"
+  # MPEG-TS prints the stream again inside each program that holds it, and a stream with side data
+  # prints an empty field for it.
+  chosen="${chosen%%[,$'\n']*}"
+  if [ -n "$chosen" ]; then
+    ffprobe -v quiet -print_format json "${LIMITS[@]}" -select_streams "$chosen" \
+      -read_intervals '%+#3' -show_entries "frame=stream_index:frame_side_data=side_data_type,red_x,red_y,green_x,green_y,blue_x,blue_y,white_point_x,white_point_y,min_luminance,max_luminance,max_content,max_average,vdr_rpu_profile,bl_video_full_range_flag,el_spatial_resampling_filter_flag,disable_residual_flag,vdr_bit_depth" \
+      "$source" > "frames/$(basename "$source").json"
+  fi
 done
 ffprobe -version | head -1 > ffprobe-version.txt
 ffprobe -v quiet -print_format json -show_pixel_formats > pixel-formats.json
@@ -274,22 +298,30 @@ FIXTURES_TO_PROBE=(mp4-titled.mp4 mkv-remuxed-from-mp4.mkv mp4-default-handlers.
   mkv-many-chapters.mkv mkv-title-tags.mkv mkv-many-titles.mkv mp4-clap.mp4 mkv-pixel-crop.mkv mp4-rotated.mp4
   mp4-cover-art-first.mp4 mp4-er-aac-lc.mp4 mp4-hdr10-static.mp4 mkv-hdr10-static.mkv
   mp4-hdr10-maxfall-zero.mp4 mkv-hdr10-maxfall-zero.mkv mp4-hdr10-sei-only.mp4 mp4-sdr8-bt709.mp4
+  mpegts-hdr10-sei-only.ts mpegts-pq10.ts
   mpegts-hevc-ac3.ts ivf-av1-10bit.ivf obu-av1-10bit.obu mkv-av1-10bit.mkv
   mp4-av1-10bit.mp4 mp4-audio-codecs.mp4 mp4-avc-record-level.mp4 mp4-hevc-record-level.mp4
   mpegts-aac-main.ts mpegts-aac-ltp.ts mkv-120fps.mkv mp4-100fps.mp4 mp4-90fps.mp4 mp4-72fps.mp4)
 if [ -n "${FATE_SUITE:-}" ]; then
   in_image fate.sh
   FIXTURES_TO_PROBE+=(mkv-eac3-atmos-dts-hd-ma.mkv mp4-dovi-p5-hev1.mp4 mkv-hdr10-fate.mkv
-    mpegts-dovi-p7.ts)
+    mpegts-dovi-p7.ts hevc-hdr10-plus.hevc mkv-dovi-p7-hvce.mkv mpegts-dovi-p7-two-layers.ts)
 fi
 
-# HE-AAC in ADTS, which a local sample holds, next to a synthesized video stream in MPEG-TS.
+# HE-AAC in ADTS, which a local sample holds, next to a synthesized video stream in MPEG-TS. The
+# record-less Dolby Vision profile 5 sample, rewritten to signal BT.709 in its VUI under hvc1, and
+# copied into MPEG-TS, which then carries no Dolby Vision descriptor.
 cat > "$WORK/local.sh" <<'CONTAINER'
 set -euo pipefail
 cd /work
-timeout 60 ffmpeg -hide_banner -nostdin -loglevel error -y \
-  -f lavfi -i testsrc2=size=64x36:rate=24:duration=2 -i /samples/aac-he.adts -map 0:v -map 1:a \
-  -c:v libx264 -preset ultrafast -pix_fmt yuv420p -c:a copy -t 2 mpegts-aac-he.ts
+FF=(timeout 60 ffmpeg -hide_banner -nostdin -loglevel error -y)
+"${FF[@]}" -f lavfi -i testsrc2=size=64x36:rate=24:duration=2 -i /samples/aac-he.adts \
+  -map 0:v -map 1:a -c:v libx264 -preset ultrafast -pix_fmt yuv420p -c:a copy -t 2 mpegts-aac-he.ts
+"${FF[@]}" -i /samples/mp4-dovi-p5-dvh1-no-record.mp4 -map 0:v -t 3 -c copy \
+  -bsf:v hevc_metadata=colour_primaries=1:transfer_characteristics=1:matrix_coefficients=1 \
+  -tag:v hvc1 mp4-dovi-p5-no-record-bt709.mp4
+"${FF[@]}" -i /samples/mp4-dovi-p5-dvh1-no-record.mp4 -map 0:v -t 3 -c copy \
+  mpegts-dovi-p5-no-descriptor.ts
 CONTAINER
 
 LOCAL_SAMPLE_NAMES=(mp4-dovi-p5-dvh1.mp4 mp4-dovi-p5-dvh1-no-record.mp4 mp4-dovi-p81.mp4
@@ -299,8 +331,9 @@ LOCAL_SAMPLE_NAMES=(mp4-dovi-p5-dvh1.mp4 mp4-dovi-p5-dvh1-no-record.mp4 mp4-dovi
 PROBE_ARGUMENTS=("${FIXTURES_TO_PROBE[@]}")
 if [ -n "${LOCAL_SAMPLES:-}" ]; then
   in_image local.sh
-  FIXTURES_TO_PROBE+=(mpegts-aac-he.ts)
-  PROBE_ARGUMENTS+=(mpegts-aac-he.ts)
+  FIXTURES_TO_PROBE+=(mpegts-aac-he.ts mp4-dovi-p5-no-record-bt709.mp4
+    mpegts-dovi-p5-no-descriptor.ts)
+  PROBE_ARGUMENTS+=(mpegts-aac-he.ts mp4-dovi-p5-no-record-bt709.mp4 mpegts-dovi-p5-no-descriptor.ts)
   for sample in "${LOCAL_SAMPLE_NAMES[@]}"; do
     PROBE_ARGUMENTS+=("/samples/$sample")
   done
@@ -342,6 +375,14 @@ for key in [key for key in tags if "location" in key.lower()]:
     del tags[key]
 json.dump(output, open(sys.argv[2], "w"), indent=2, ensure_ascii=False)
 open(sys.argv[2], "a").write("\n")' "$WORK/$source.json" "$FIXTURES/$source.json"
+done
+mkdir -p "$FIXTURES/frames"
+for source in "${FIXTURES_TO_PROBE[@]}"; do
+  if [ -f "$WORK/frames/$source.json" ]; then
+    python3 -c 'import json, sys
+json.dump(json.load(open(sys.argv[1])), open(sys.argv[2], "w"), indent=2)
+open(sys.argv[2], "a").write("\n")' "$WORK/frames/$source.json" "$FIXTURES/frames/$source.json"
+  fi
 done
 cp "$WORK/ffprobe-version.txt" "$WORK/pixel-formats.json" "$FIXTURES/"
 echo "recorded into $FIXTURES with $IMAGE"

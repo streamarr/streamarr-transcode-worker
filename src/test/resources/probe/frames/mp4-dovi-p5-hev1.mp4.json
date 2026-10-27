@@ -1,0 +1,103 @@
+{
+  "frames": [
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 0,
+          "bl_video_full_range_flag": 1,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 0,
+          "bl_video_full_range_flag": 1,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Dolby Vision RPU Data"
+        },
+        {
+          "side_data_type": "Dolby Vision Metadata",
+          "vdr_rpu_profile": 0,
+          "bl_video_full_range_flag": 1,
+          "vdr_bit_depth": 12,
+          "el_spatial_resampling_filter_flag": 0,
+          "disable_residual_flag": 1,
+          "components": [
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            },
+            {
+              "pieces": [
+                {}
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

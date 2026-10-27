@@ -13,9 +13,10 @@ import java.util.regex.Pattern;
 import tools.jackson.databind.JsonNode;
 
 /**
- * The HDR10 static metadata that the container declares, in the units of the HEVC SEI messages: the
- * mastering display color volume (payload type 137) and the content light level (payload type 144).
- * A value that does not fit its SEI field leaves the whole message absent.
+ * The HDR10 static metadata that the container or the first frame declares, in the units of the
+ * HEVC SEI messages: the mastering display color volume (payload type 137) and the content light
+ * level (payload type 144). A value that does not fit its SEI field leaves the whole message
+ * absent.
  */
 final class HdrStaticMetadata {
 
@@ -30,30 +31,36 @@ final class HdrStaticMetadata {
   private static final long MAXIMUM_LUMINANCE = 0xFFFF_FFFFL;
   private static final long MAXIMUM_LIGHT_LEVEL = 0xFFFF;
 
-  static final String MASTERING_DISPLAY = "Mastering display metadata";
-  static final String CONTENT_LIGHT_LEVEL = "Content light level metadata";
+  private static final String MASTERING_DISPLAY = "Mastering display metadata";
+  private static final String CONTENT_LIGHT_LEVEL = "Content light level metadata";
 
   private HdrStaticMetadata() {}
 
   /**
-   * Sets the mastering display and the content light level from the stream's side data. A side data
-   * entry that the worker cannot convert leaves its value absent and sets its omitted flag.
+   * Sets the mastering display and the content light level from the stream's side data, or from the
+   * side data of its first frame when the stream has none. A side data entry that the worker cannot
+   * convert leaves its value absent and sets its omitted flag.
    */
   static void add(JsonNode stream, ProbeStreamInfo.Builder builder) {
-    VideoStreamFacts.sideData(stream, MASTERING_DISPLAY)
+    declared(stream, MASTERING_DISPLAY)
         .ifPresent(
             side ->
                 masteringDisplayOf(side)
                     .ifPresentOrElse(
                         builder::setMasteringDisplay,
                         () -> builder.setMasteringDisplayOmitted(true)));
-    VideoStreamFacts.sideData(stream, CONTENT_LIGHT_LEVEL)
+    declared(stream, CONTENT_LIGHT_LEVEL)
         .ifPresent(
             side ->
                 contentLightLevelOf(side)
                     .ifPresentOrElse(
                         builder::setContentLightLevel,
                         () -> builder.setContentLightLevelOmitted(true)));
+  }
+
+  private static Optional<JsonNode> declared(JsonNode stream, String type) {
+    return VideoStreamFacts.sideData(stream, type)
+        .or(() -> FirstFrames.of(stream).flatMap(frames -> frames.firstFrameSideData(type)));
   }
 
   private static Optional<ContentLightLevel> contentLightLevelOf(JsonNode side) {

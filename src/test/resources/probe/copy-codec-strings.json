@@ -1,4 +1,7 @@
 {
+  "hevc-hdr10-plus.hevc": {
+    "0": "hvc1.2.4.L150.B0"
+  },
   "ivf-av1-10bit.ivf": {
     "0": "av01.0.00M.10"
   },
@@ -7,6 +10,9 @@
   },
   "mkv-av1-10bit.mkv": {
     "0": "av01.0.00M.10"
+  },
+  "mkv-dovi-p7-hvce.mkv": {
+    "0": "hvc1.2.4.H153.B0"
   },
   "mkv-eac3-atmos-dts-hd-ma.mkv": {
     "0": "avc1.42C00A",
@@ -115,6 +121,9 @@
   "mp4-dovi-p5-hev1.mp4": {
     "0": "hvc1.2.4.L120.90"
   },
+  "mp4-dovi-p5-no-record-bt709.mp4": {
+    "0": "hvc1.2.4.L123.B0"
+  },
   "mp4-dovi-p81.mp4": {
     "0": "hvc1.2.4.L123.B0"
   },
@@ -179,6 +188,13 @@
     "0": "avc1.640028",
     "1": "ac-3"
   },
+  "mpegts-dovi-p5-no-descriptor.ts": {
+    "0": "hvc1.2.4.L123.B0"
+  },
+  "mpegts-dovi-p7-two-layers.ts": {
+    "0": "hvc1.2.4.L120.90",
+    "1": "hvc1.2.4.L120.90"
+  },
   "mpegts-dovi-p7.ts": {
     "0": "hvc1.2.4.H153.B0"
   },
@@ -186,9 +202,15 @@
     "0": "avc1.42C00A",
     "1": "mp4a.40.2"
   },
+  "mpegts-hdr10-sei-only.ts": {
+    "0": "hvc1.2.4.L30.90"
+  },
   "mpegts-hevc-ac3.ts": {
     "0": "hvc1.1.6.L30.90",
     "1": "ac-3"
+  },
+  "mpegts-pq10.ts": {
+    "0": "hvc1.2.4.L30.90"
   },
   "obu-av1-10bit.obu": {
     "0": "av01.0.00M.10"

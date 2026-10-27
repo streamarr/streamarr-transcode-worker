@@ -30,6 +30,13 @@ from its lavfi test sources. No file comes from a media library.
 | `mp4-hdr10-maxfall-zero.mp4.json` | As `mp4-hdr10-static.mp4`, with a MaxFALL of 0 |
 | `mkv-hdr10-maxfall-zero.mkv.json` | As `mkv-hdr10-static.mkv`, with a MaxFALL of 0, which ffprobe does not report for Matroska |
 | `mp4-hdr10-sei-only.mp4.json` | The x265 stream copied into MP4, so only its SEI messages carry the HDR10 values |
+| `mpegts-hdr10-sei-only.ts.json` | The same copy in MPEG-TS |
+| `mpegts-pq10.ts.json` | 10-bit HEVC with PQ in MPEG-TS, encoded without static HDR metadata |
+| `hevc-hdr10-plus.hevc.json` | FFmpeg's FATE sample `hevc/hdr10_plus_h265_sample.hevc`: one raw HEVC frame with HDR10+ metadata |
+| `mkv-dovi-p7-hvce.mkv.json` | FFmpeg's FATE sample `mkv/dovi-p7-hvce.mkv`: Dolby Vision profile 7 in Matroska |
+| `mpegts-dovi-p7-two-layers.ts.json` | FFmpeg's FATE sample `mpegts/dovi-p7.ts`: Dolby Vision profile 7 whose base layer and enhancement layer are separate streams. Only the second stream carries the record and the RPUs |
+| `mp4-dovi-p5-no-record-bt709.mp4.json` | Local sample: the first 3 s of `mp4-dovi-p5-dvh1-no-record.mp4` under `hvc1`, with `hevc_metadata` rewriting its VUI to signal BT.709 |
+| `mpegts-dovi-p5-no-descriptor.ts.json` | Local sample: the first 3 s of `mp4-dovi-p5-dvh1-no-record.mp4` copied into MPEG-TS, which then carries no Dolby Vision descriptor |
 | `mp4-sdr8-bt709.mp4.json` | 8-bit H.264 tagged BT.709 |
 | `mp4-dovi-p5-hev1.mp4.json` | FFmpeg's FATE sample `mov/dovi-p5.mp4`: Dolby Vision profile 5 under `hev1`, with a `dvcC` record |
 | `mkv-hdr10-fate.mkv.json` | FFmpeg's FATE sample `mkv/hdr10tags-both.mkv`: HDR10 mastering values stored as 32-bit floats |
@@ -41,7 +48,7 @@ from its lavfi test sources. No file comes from a media library.
 | `mp4-dovi-p84-hlg.mp4.json` | Local sample: Dolby Vision profile 8.4 under `hvc1`, HLG |
 | `mp4-dovi-p9-avc1.mp4.json` | Local sample: Dolby Vision profile 9 under `avc1`, BT.709, made by adding a `dvvC` record to an SDR H.264 encode |
 | `mp4-dovi-p9-dva1.mp4.json` | Local sample: the same file with its sample entry renamed `dva1` |
-| `mp4-hevc-hdr10.mp4.json` | Local sample: 10-bit HEVC with PQ, whose HDR10 values travel only in SEI messages |
+| `mp4-hevc-hdr10.mp4.json` | Local sample: 10-bit HEVC with PQ. Neither its container nor the SEI messages of its first 600 frames carry static HDR metadata, so it is PQ10 |
 | `mp4-hevc-sdr10-untagged.mp4.json` | Local sample: 10-bit HEVC SDR without a transfer tag |
 | `mov-phone-hlg-dovi-p84.mov.json` | Local sample: a phone camera original, HEVC HLG with Dolby Vision 8.4 (see Sources) |
 | `mov-phone-rotated.mov.json` | Local sample: a phone camera original, H.264 recorded upright (see Sources) |
@@ -59,6 +66,7 @@ from its lavfi test sources. No file comes from a media library.
 | `mov-phone-60.mov.json` | Local sample: a phone camera original at 60 fps whose average rate is 59.956 (see Sources) |
 | `mov-phone-slow-motion.mov.json` | Local sample: a phone slow-motion original that runs at up to 240 fps (see Sources) |
 | `mpegts-avchd-interlaced.mts.json` | Local sample: an AVCHD camcorder file, top field first, one field per packet (see Sources) |
+| `frames/*.json` | The first-frames read of a recording's chosen video stream, with `FirstFramesProbe`'s arguments: the side data of the frames that ffprobe decodes from the stream's first 3 packets |
 | `packets/*.csv` | The frame-rate rule's packet scan of a recording's chosen video stream: the first 30 s of packets as `pts,dts,size,flags`, from `frame-rate-scans.py` |
 | `copy-codec-strings.json` | The codec string of each copied stream: `copy-codec-strings.py` copies every H.264, HEVC, AV1, AAC, AC-3, E-AC-3, Opus, FLAC and ALAC stream above with the worker's copy arguments, and reads the string from the copy's initialization segment |
 | `pixel-formats.json` | `ffprobe -show_pixel_formats`: FFmpeg's description of every pixel format it knows |
