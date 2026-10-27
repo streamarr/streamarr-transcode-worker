@@ -75,16 +75,19 @@ final class RecordedFfprobe {
 
   /**
    * What the scripted ffprobe prints. The first-frames read prints {@code firstFrames}, or fails
-   * when the answers hold none, so that the probe reads no frames.
+   * when the answers hold none, so that the probe reads no frames. The probe reads {@code source},
+   * by default a path that names no file.
    */
   @Builder
   record Answers(
       @NonNull String ffprobeOutput,
       String packetLines,
       Optional<String> firstFrames,
-      Optional<String> firstPackets) {
+      Optional<String> firstPackets,
+      Path source) {
 
     Answers {
+      source = source == null ? SOURCE : source;
       packetLines = packetLines == null ? "" : packetLines;
       firstFrames = firstFrames == null ? Optional.empty() : firstFrames;
       firstPackets = firstPackets == null ? Optional.empty() : firstPackets;
@@ -193,7 +196,7 @@ final class RecordedFfprobe {
                   .output(output.getBytes(StandardCharsets.UTF_8))
                   .build();
             });
-    return executor.probe(SOURCE, request()).result();
+    return executor.probe(answers.source(), request()).result();
   }
 
   private static boolean isFrameRateScan(List<String> arguments) {

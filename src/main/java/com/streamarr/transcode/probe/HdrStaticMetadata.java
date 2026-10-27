@@ -38,8 +38,9 @@ final class HdrStaticMetadata {
 
   /**
    * Sets the mastering display and the content light level from the stream's side data, or from the
-   * side data of its first frame when the stream has none. A side data entry that the worker cannot
-   * convert leaves its value absent and sets its omitted flag.
+   * side data of its first frame when the stream has none. A Matroska track's own light level
+   * elements come before the first frame's. A side data entry that the worker cannot convert leaves
+   * its value absent and sets its omitted flag.
    */
   static void add(JsonNode stream, ProbeStreamInfo.Builder builder) {
     declared(stream, MASTERING_DISPLAY)
@@ -49,7 +50,9 @@ final class HdrStaticMetadata {
                     .ifPresentOrElse(
                         builder::setMasteringDisplay,
                         () -> builder.setMasteringDisplayOmitted(true)));
-    declared(stream, CONTENT_LIGHT_LEVEL)
+    VideoStreamFacts.sideData(stream, CONTENT_LIGHT_LEVEL)
+        .or(() -> Optional.ofNullable(stream.get(MatroskaLightLevelProbe.CONTAINER_LIGHT_LEVEL)))
+        .or(() -> firstFrameSideData(stream, CONTENT_LIGHT_LEVEL))
         .ifPresent(
             side ->
                 contentLightLevelOf(side)
@@ -59,8 +62,11 @@ final class HdrStaticMetadata {
   }
 
   private static Optional<JsonNode> declared(JsonNode stream, String type) {
-    return VideoStreamFacts.sideData(stream, type)
-        .or(() -> FirstFrames.of(stream).flatMap(frames -> frames.firstFrameSideData(type)));
+    return VideoStreamFacts.sideData(stream, type).or(() -> firstFrameSideData(stream, type));
+  }
+
+  private static Optional<JsonNode> firstFrameSideData(JsonNode stream, String type) {
+    return FirstFrames.of(stream).flatMap(frames -> frames.firstFrameSideData(type));
   }
 
   private static Optional<ContentLightLevel> contentLightLevelOf(JsonNode side) {
