@@ -112,7 +112,7 @@ public final class Producer {
   @Builder(buildMethodName = "start")
   private static Producer launch(
       @NonNull ProcessLauncher launcher,
-      @NonNull List<String> command,
+      @NonNull FfmpegPipeline pipeline,
       @NonNull UUID jobAttemptId,
       int periodSeconds,
       int startSequenceNumber,
@@ -142,7 +142,7 @@ public final class Producer {
     var ffmpeg =
         FfmpegProcess.builder()
             .launcher(launcher)
-            .command(command)
+            .pipeline(pipeline)
             .jobAttemptId(jobAttemptId)
             .gracePeriod(gracePeriod)
             .start();

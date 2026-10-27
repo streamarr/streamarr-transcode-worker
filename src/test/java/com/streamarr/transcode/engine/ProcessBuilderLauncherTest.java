@@ -130,7 +130,9 @@ class ProcessBuilderLauncherTest {
     var producer =
         Producer.builder()
             .launcher(launcher)
-            .command(List.of(tempDir.resolve("missing-ffmpeg").toString()))
+            .pipeline(
+                new FfmpegPipeline.SingleProcess(
+                    List.of(tempDir.resolve("missing-ffmpeg").toString())))
             .jobAttemptId(UUID.randomUUID())
             .periodSeconds(6)
             .startSequenceNumber(0)
@@ -152,7 +154,7 @@ class ProcessBuilderLauncherTest {
   private Producer.ProducerBuilder producerRunning(String script, String argument) {
     return Producer.builder()
         .launcher(launcher)
-        .command(List.of("bash", "-c", script, argument))
+        .pipeline(new FfmpegPipeline.SingleProcess(List.of("bash", "-c", script, argument)))
         .jobAttemptId(UUID.randomUUID())
         .periodSeconds(6)
         .startSequenceNumber(0)

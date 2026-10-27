@@ -75,10 +75,12 @@ class FfmpegCommandBuilderRecipeTest {
         new FfmpegCommandBuilder(
             "ffmpeg", Duration.of(recording.fragmentationTargetMicros(), ChronoUnit.MICROS));
 
-    var command = builder.buildCommand(jobRecordedAs(recording));
+    var pipeline = builder.buildPipeline(jobRecordedAs(recording));
 
-    assertThat(command)
-        .containsExactlyElementsOf(withoutFixtureOnlyAdditions(recording.ffmpegArguments()));
+    assertThat(pipeline)
+        .isEqualTo(
+            new FfmpegPipeline.SingleProcess(
+                withoutFixtureOnlyAdditions(recording.ffmpegArguments())));
   }
 
   @Test

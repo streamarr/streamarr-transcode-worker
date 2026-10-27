@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Stream;
+import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -33,7 +34,14 @@ class FfmpegCommandBuilderTest {
       new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1));
 
   private List<String> command(TranscodeRequest request, String videoEncoder) {
-    return builder.buildCommand(job(request, videoEncoder));
+    return singleCommandOf(builder.buildPipeline(job(request, videoEncoder)));
+  }
+
+  private static List<String> singleCommandOf(FfmpegPipeline pipeline) {
+    return assertThat(pipeline)
+        .asInstanceOf(InstanceOfAssertFactories.type(FfmpegPipeline.SingleProcess.class))
+        .actual()
+        .command();
   }
 
   private static TranscodeJob job(TranscodeRequest request, String videoEncoder) {
@@ -1198,7 +1206,9 @@ class FfmpegCommandBuilderTest {
   void shouldCutFragmentsAtTheFragmentationTargetWhenBuildingCommand() {
     var targetedBuilder = new FfmpegCommandBuilder("ffmpeg", Duration.ofMillis(1500));
 
-    var cmd = targetedBuilder.buildCommand(job(request(TranscodeMode.REMUX).build(), "copy"));
+    var cmd =
+        singleCommandOf(
+            targetedBuilder.buildPipeline(job(request(TranscodeMode.REMUX).build(), "copy")));
 
     assertThat(cmd).containsSequence("-frag_duration", "1500000", "pipe:1");
   }

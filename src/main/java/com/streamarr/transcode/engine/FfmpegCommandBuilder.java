@@ -90,7 +90,11 @@ public class FfmpegCommandBuilder {
   // and its terminating NUL, and a page is at least 4 KiB.
   private static final int LONGEST_ARGUMENT_BYTES = 32 * 4096 - 1;
 
-  public List<String> buildCommand(TranscodeJob job) {
+  public FfmpegPipeline buildPipeline(TranscodeJob job) {
+    return new FfmpegPipeline.SingleProcess(buildCommand(job));
+  }
+
+  private List<String> buildCommand(TranscodeJob job) {
     var cmd = new ArrayList<String>();
     var decision = job.request().transcodeDecision();
     var mode = decision.transcodeMode();
