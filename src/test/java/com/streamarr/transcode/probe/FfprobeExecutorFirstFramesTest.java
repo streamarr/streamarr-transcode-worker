@@ -586,6 +586,54 @@ class FfprobeExecutorFirstFramesTest {
       assertThat(present.getObservedRpu()).isEqualTo(Presence.PRESENCE_PRESENT);
     }
 
+    @Test
+    @DisplayName("Should leave Dolby Vision unspecified when a sample's length runs past its end")
+    void shouldLeaveDolbyVisionUnspecifiedWhenASamplesLengthRunsPastItsEnd() {
+      var dynamicRange =
+          h264(packets(lengthPrefixed(IDR_SLICE) + " 00 00 01 00 41", lengthPrefixed(SLICE)))
+              .getDynamicRange();
+
+      assertThat(dynamicRange.hasDolbyVisionAbsent()).isFalse();
+      assertThat(dynamicRange.hasDolbyVisionPresent()).isFalse();
+    }
+
+    @Test
+    @DisplayName(
+        "Should leave Dolby Vision unspecified when bytes too short for a length end a sample")
+    void shouldLeaveDolbyVisionUnspecifiedWhenBytesTooShortForALengthEndASample() {
+      var dynamicRange =
+          h264(packets(lengthPrefixed(IDR_SLICE) + " 00 00", lengthPrefixed(SLICE)))
+              .getDynamicRange();
+
+      assertThat(dynamicRange.hasDolbyVisionAbsent()).isFalse();
+    }
+
+    @Test
+    @DisplayName("Should leave Dolby Vision unspecified when a sample holds no start code")
+    void shouldLeaveDolbyVisionUnspecifiedWhenASampleHoldsNoStartCode() {
+      var dynamicRange =
+          h264(
+                  "00 00 00 01 67 64 00 28 01 00 00 00 01 68 ee 3c 80",
+                  packets(lengthPrefixed(IDR_SLICE), lengthPrefixed(SLICE)))
+              .getDynamicRange();
+
+      assertThat(dynamicRange.hasDolbyVisionAbsent()).isFalse();
+    }
+
+    @Test
+    @DisplayName(
+        "Should leave the sample layout unspecified when a sample's length runs past its end before"
+            + " its picture")
+    void shouldLeaveTheSampleLayoutUnspecifiedWhenASamplesLengthRunsPastItsEndBeforeItsPicture() {
+      var present =
+          h264(packets(lengthPrefixed(IDR_SLICE, RPU), lengthPrefixed(AUD) + " 00 00 01 00 41"))
+              .getDynamicRange()
+              .getDolbyVisionPresent();
+
+      assertThat(present.getObservedRpu()).isEqualTo(Presence.PRESENCE_PRESENT);
+      assertThat(present.getRpuStartsSample()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+    }
+
     private static ProbeStreamInfo h264(String packets) {
       return h264(AVC_RECORD, packets);
     }

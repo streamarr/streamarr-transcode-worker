@@ -28,7 +28,8 @@ final class H264RpuReader {
 
   /**
    * The RPUs that the packets show; empty when the probe read no packet, cannot parse one, or finds
-   * no extradata to tell how the samples delimit their NAL units.
+   * no extradata to tell how the samples delimit their NAL units. A sample whose NAL units the
+   * reader cannot delimit to its end can hide an RPU, so it rules out no RPU.
    */
   static Optional<RpuObservation> read(JsonNode stream) {
     var dumps = stream.path(FirstPacketsProbe.FIRST_PACKETS).valueStream().toList();
@@ -38,7 +39,7 @@ final class H264RpuReader {
     }
 
     var lengthSize = lengthSize(extradata.get());
-    var samples = new ArrayList<List<byte[]>>();
+    var samples = new ArrayList<Sample>();
     for (var dump : dumps) {
       var bytes = Extradata.dumped(dump.path("data").asString(""));
       if (bytes.isEmpty()) {
@@ -48,40 +49,58 @@ final class H264RpuReader {
       samples.add(
           lengthSize.isPresent()
               ? lengthPrefixed(bytes.get(), lengthSize.get())
-              : DecoderConfiguration.annexB(bytes.get()));
+              : annexB(bytes.get()));
     }
 
-    return Optional.of(observation(samples));
+    return observation(samples);
   }
 
-  private static RpuObservation observation(List<List<byte[]>> samples) {
-    var rpus = samples.stream().flatMap(List::stream).filter(H264RpuReader::isRpu).toList();
-    if (rpus.isEmpty()) {
-      return new RpuObservation(
-          Presence.PRESENCE_ABSENT, Optional.empty(), Presence.PRESENCE_UNSPECIFIED);
+  private static Optional<RpuObservation> observation(List<Sample> samples) {
+    var rpus =
+        samples.stream().flatMap(sample -> sample.units().stream()).filter(H264RpuReader::isRpu);
+    var firstRpu = rpus.findFirst();
+    var isEverySampleComplete = samples.stream().allMatch(Sample::complete);
+    if (firstRpu.isEmpty() && !isEverySampleComplete) {
+      return Optional.empty();
     }
 
-    var startsSample = samples.stream().anyMatch(H264RpuReader::startsWithRpu);
-    return new RpuObservation(
-        Presence.PRESENCE_PRESENT,
-        header(rpus.getFirst()),
-        startsSample ? Presence.PRESENCE_PRESENT : Presence.PRESENCE_ABSENT);
+    if (firstRpu.isEmpty()) {
+      return Optional.of(
+          new RpuObservation(
+              Presence.PRESENCE_ABSENT, Optional.empty(), Presence.PRESENCE_UNSPECIFIED));
+    }
+
+    var layouts = samples.stream().map(H264RpuReader::layout).toList();
+    var startsSample = Presence.PRESENCE_ABSENT;
+    if (layouts.contains(Layout.UNKNOWN)) {
+      startsSample = Presence.PRESENCE_UNSPECIFIED;
+    }
+
+    if (layouts.contains(Layout.RPU_FIRST)) {
+      startsSample = Presence.PRESENCE_PRESENT;
+    }
+
+    return Optional.of(
+        new RpuObservation(Presence.PRESENCE_PRESENT, header(firstRpu.get()), startsSample));
   }
 
-  /** Whether an RPU comes ahead of the sample's first slice, or the sample holds no slice. */
-  private static boolean startsWithRpu(List<byte[]> sample) {
-    for (var unit : sample) {
+  /**
+   * Whether an RPU comes ahead of the sample's first slice, or the sample holds no slice. Unknown
+   * when the reader could not delimit the sample to its end and found neither ahead of the cut.
+   */
+  private static Layout layout(Sample sample) {
+    for (var unit : sample.units()) {
       if (isRpu(unit)) {
-        return true;
+        return Layout.RPU_FIRST;
       }
 
       var type = unit[0] & 0x1F;
       if (type >= FIRST_VCL_NAL_UNIT_TYPE && type <= LAST_VCL_NAL_UNIT_TYPE) {
-        return false;
+        return Layout.PICTURE_FIRST;
       }
     }
 
-    return false;
+    return sample.complete() ? Layout.PICTURE_FIRST : Layout.UNKNOWN;
   }
 
   private static boolean isRpu(byte[] unit) {
@@ -105,9 +124,9 @@ final class H264RpuReader {
 
   /**
    * The sample's NAL units, each without its emulation prevention bytes. A length that runs past
-   * the sample ends the sample.
+   * the sample, or bytes too few for a length, end the sample early.
    */
-  private static List<byte[]> lengthPrefixed(byte[] sample, int lengthSize) {
+  private static Sample lengthPrefixed(byte[] sample, int lengthSize) {
     var units = new ArrayList<byte[]>();
     var position = 0;
     while (position + lengthSize <= sample.length) {
@@ -118,7 +137,7 @@ final class H264RpuReader {
 
       position += lengthSize;
       if (length < 0 || length > sample.length - position) {
-        break;
+        return new Sample(units, false);
       }
 
       if (length > 0) {
@@ -129,6 +148,21 @@ final class H264RpuReader {
       position += length;
     }
 
-    return units;
+    return new Sample(units, position == sample.length && !units.isEmpty());
+  }
+
+  /** A sample without a start code holds NAL units that the reader cannot delimit. */
+  private static Sample annexB(byte[] sample) {
+    var units = DecoderConfiguration.annexB(sample);
+    return new Sample(units, !units.isEmpty());
+  }
+
+  /** A sample's NAL units, and whether they reach the sample's end. */
+  private record Sample(List<byte[]> units, boolean complete) {}
+
+  private enum Layout {
+    RPU_FIRST,
+    PICTURE_FIRST,
+    UNKNOWN
   }
 }
