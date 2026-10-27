@@ -60,13 +60,14 @@ final class FirstFramesProbe {
       return OptionalInt.empty();
     }
 
+    var reads = new StreamReads(source, chosen.get().streamIndex());
     var frames = List.<JsonNode>of();
     var framesPackets = 0;
     var readFailed = false;
     for (var packets = FRAME_COUNT;
         packets <= WIDEST_READ && frames.size() < FRAME_COUNT;
         packets *= WIDER_READ_FACTOR) {
-      var wider = read(source, chosen.get().streamIndex(), packets);
+      var wider = read(reads, packets);
       readFailed |= wider.isEmpty();
       if (wider.orElse(List.of()).size() > frames.size()) {
         frames = wider.get();
@@ -91,22 +92,14 @@ final class FirstFramesProbe {
   }
 
   /** The frames that the stream's first packets decode to; empty when ffprobe fails. */
-  private Optional<List<JsonNode>> read(Path source, int streamIndex, int packets)
+  private Optional<List<JsonNode>> read(StreamReads reads, int packets)
       throws ExecutionException, InterruptedException {
-    var arguments = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
-    arguments.addAll(FfprobeExecutor.READ_LIMITS);
-    arguments.addAll(
-        List.of(
-            "-select_streams",
-            String.valueOf(streamIndex),
-            "-read_intervals",
-            "%+#" + packets,
-            "-show_entries",
-            FRAME_ENTRIES,
-            source.toString()));
-    var output = ffprobe.run(arguments);
+    var output = ffprobe.run(reads.firstPackets(packets, FRAME_ENTRIES));
     if (output.exitCode() != 0) {
-      log.warn("ffprobe's first-frames read of {} exited with code {}", source, output.exitCode());
+      log.warn(
+          "ffprobe's first-frames read of {} exited with code {}",
+          reads.source(),
+          output.exitCode());
       return Optional.empty();
     }
 
@@ -114,8 +107,28 @@ final class FirstFramesProbe {
       return Optional.of(
           objectMapper.readTree(output.stdout()).path("frames").valueStream().toList());
     } catch (JacksonException failure) {
-      log.warn("ffprobe's first-frames read of {} printed no JSON", source, failure);
+      log.warn("ffprobe's first-frames read of {} printed no JSON", reads.source(), failure);
       return Optional.empty();
+    }
+  }
+
+  /** ffprobe's reads of one stream of a source. */
+  private record StreamReads(Path source, int streamIndex) {
+
+    /** The arguments that print the entries of the stream's first {@code packets} packets. */
+    List<String> firstPackets(int packets, String entries) {
+      var arguments = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
+      arguments.addAll(FfprobeExecutor.READ_LIMITS);
+      arguments.addAll(
+          List.of(
+              "-select_streams",
+              String.valueOf(streamIndex),
+              "-read_intervals",
+              "%+#" + packets,
+              "-show_entries",
+              entries,
+              source.toString()));
+      return arguments;
     }
   }
 }
