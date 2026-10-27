@@ -99,6 +99,21 @@
   "mp4-av1-10bit.mp4": {
     "0": "av01.0.00M.10"
   },
+  "mp4-av1-hdr10-plus-rejected.mp4": {
+    "0": "av01.0.00M.10"
+  },
+  "mp4-av1-pq.mp4": {
+    "0": "av01.0.00M.10"
+  },
+  "mp4-av1-rpu-bad-emdf.mp4": {
+    "0": "av01.0.00M.10"
+  },
+  "mp4-av1-rpu.mp4": {
+    "0": "av01.0.00M.10"
+  },
+  "mp4-av1-static-after-frame.mp4": {
+    "0": "av01.0.00M.10"
+  },
   "mp4-avc-record-level.mp4": {
     "0": "avc1.42C00A"
   },

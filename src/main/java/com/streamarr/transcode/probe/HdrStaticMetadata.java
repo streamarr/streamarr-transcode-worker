@@ -14,10 +14,10 @@ import java.util.regex.Pattern;
 import tools.jackson.databind.JsonNode;
 
 /**
- * The HDR10 static metadata that the container, the first frame or an SEI message declares, in the
- * units of the HEVC SEI messages: the mastering display color volume (payload type 137) and the
- * content light level (payload type 144). A value that does not fit its SEI field leaves the whole
- * message absent.
+ * The HDR10 static metadata that the container, the first frame, an SEI message or a metadata OBU
+ * declares, in the units of the HEVC SEI messages: the mastering display color volume (payload type
+ * 137) and the content light level (payload type 144). A value that does not fit its SEI field
+ * leaves the whole message absent.
  */
 final class HdrStaticMetadata {
 
@@ -42,20 +42,23 @@ final class HdrStaticMetadata {
 
   /**
    * Sets the mastering display and the content light level from the stream's side data, or from the
-   * side data of its first frame when the stream has none, or for H.264 and HEVC from the first
-   * {@link SeiMessages} message of the type that is not nested. A Matroska track's own light level
-   * elements come before the first frame's. A value that the worker cannot convert leaves its value
-   * absent and sets its omitted flag. So does a Matroska MasteringMetadata element that ffprobe
-   * dropped, an SEI walk that cannot rule the value out, and the chosen AV1 stream, when no source
-   * gives the value.
+   * side data of its first frame when the stream has none, or for H.264, HEVC and AV1 from the
+   * first message of the type that the {@link MetadataWalk} finds and that is not nested. A
+   * Matroska track's own light level elements come before the first frame's. A value that the
+   * worker cannot convert leaves its value absent and sets its omitted flag. So does a Matroska
+   * MasteringMetadata element that ffprobe dropped, and a walk that cannot rule the value out, when
+   * no source gives the value.
    */
   static void add(JsonNode stream, Optional<MetadataWalk> walk, ProbeStreamInfo.Builder builder) {
     declared(stream, MASTERING_DISPLAY)
         .map(HdrStaticMetadata::masteringDisplayOf)
         .or(
             () ->
-                walk.flatMap(walked -> walked.firstPayload(HdrMessage.MASTERING_DISPLAY))
-                    .map(HdrStaticMetadata::masteringDisplayOf))
+                walk.flatMap(
+                    walked ->
+                        walked
+                            .firstPayload(HdrMessage.MASTERING_DISPLAY)
+                            .map(payload -> masteringDisplayOf(walked, payload))))
         .ifPresentOrElse(
             value ->
                 value.ifPresentOrElse(
@@ -63,7 +66,7 @@ final class HdrStaticMetadata {
             () ->
                 builder.setMasteringDisplayOmitted(
                     stream.path(MatroskaColourProbe.CONTAINER_MASTERING_METADATA).asBoolean()
-                        || mayCarry(stream, walk, HdrMessage.MASTERING_DISPLAY)));
+                        || mayCarry(walk, HdrMessage.MASTERING_DISPLAY)));
     VideoStreamFacts.sideData(stream, CONTENT_LIGHT_LEVEL)
         .or(() -> Optional.ofNullable(stream.get(MatroskaColourProbe.CONTAINER_LIGHT_LEVEL)))
         .or(() -> firstFrameSideData(stream, CONTENT_LIGHT_LEVEL))
@@ -78,23 +81,71 @@ final class HdrStaticMetadata {
                     builder::setContentLightLevel, () -> builder.setContentLightLevelOmitted(true)),
             () ->
                 builder.setContentLightLevelOmitted(
-                    mayCarry(stream, walk, HdrMessage.CONTENT_LIGHT_LEVEL)));
+                    mayCarry(walk, HdrMessage.CONTENT_LIGHT_LEVEL)));
   }
 
   /**
-   * Whether the chosen video stream may carry a value that no source gave: for H.264 and HEVC, when
-   * the SEI walk cannot rule it out. FFmpeg's AV1 decoders drop a frame whose metadata OBU they
-   * cannot parse, and the frames that depend on it, and the probe parses no OBU, so the first frame
-   * that the probe keeps can lack a value that an AV1 stream carries.
+   * Whether the chosen video stream may carry a value that no source gave: for H.264, HEVC and AV1,
+   * when the walk of the SEI messages or of the metadata OBUs cannot rule it out.
    */
-  private static boolean mayCarry(
-      JsonNode stream, Optional<MetadataWalk> walk, HdrMessage message) {
-    if (walk.isPresent()) {
-      return !walk.get().rulesOut(message);
+  private static boolean mayCarry(Optional<MetadataWalk> walk, HdrMessage message) {
+    return walk.filter(walked -> !walked.rulesOut(message)).isPresent();
+  }
+
+  /** The values of a mastering display SEI message or HDR_MDCV metadata OBU. */
+  private static Optional<MasteringDisplayColorVolume> masteringDisplayOf(
+      MetadataWalk walk, ByteBuffer payload) {
+    return switch (walk) {
+      case SeiMessages _ -> masteringDisplayOf(payload);
+      case Av1MetadataObus _ -> av1MasteringDisplayOf(payload);
+    };
+  }
+
+  /**
+   * The red, green and blue primaries and the white point, each an x and a y in 2 bytes, then the
+   * maximum and the minimum luminance, each in 4 bytes. FFmpeg's AV1 decoders read the coordinates
+   * as fractions over 65536, the maximum luminance over 256 and the minimum over 16384. Empty when
+   * the payload ends first or the maximum luminance does not fit its SEI field.
+   */
+  private static Optional<MasteringDisplayColorVolume> av1MasteringDisplayOf(ByteBuffer payload) {
+    if (payload.remaining() < MASTERING_DISPLAY_PAYLOAD_BYTES) {
+      return Optional.empty();
     }
 
-    return "av1".equals(stream.path("codec_name").asString(""))
-        && FirstFrames.of(stream).isPresent();
+    var maxLuminance =
+        units(Integer.toUnsignedLong(payload.getInt(payload.position() + 16)), 1 << 8);
+    var minLuminance =
+        units(Integer.toUnsignedLong(payload.getInt(payload.position() + 20)), 1 << 14);
+    if (maxLuminance > MAXIMUM_LUMINANCE || minLuminance > MAXIMUM_LUMINANCE) {
+      return Optional.empty();
+    }
+
+    return Optional.of(
+        MasteringDisplayColorVolume.newBuilder()
+            .setRed(av1Coordinates(payload, 0))
+            .setGreen(av1Coordinates(payload, 4))
+            .setBlue(av1Coordinates(payload, 8))
+            .setWhitePoint(av1Coordinates(payload, 12))
+            .setMaxLuminance((int) maxLuminance)
+            .setMinLuminance((int) minLuminance)
+            .build());
+  }
+
+  /** A coordinate over 65536 never exceeds 50000 units, so it always fits. */
+  private static ChromaticityCoordinates av1Coordinates(ByteBuffer payload, int offset) {
+    return ChromaticityCoordinates.newBuilder()
+        .setX((int) coordinateUnits(unsignedShort(payload, offset)))
+        .setY((int) coordinateUnits(unsignedShort(payload, offset + 2)))
+        .build();
+  }
+
+  private static long coordinateUnits(int value) {
+    return (2L * value * COORDINATE_UNITS + (1 << 16)) / (2L << 16);
+  }
+
+  /** A luminance over {@code denominator}, in units, rounded to the nearest with a half up. */
+  private static long units(long value, long denominator) {
+    return (2 * value * LUMINANCE_UNITS + denominator) / (2 * denominator);
   }
 
   private static Optional<JsonNode> declared(JsonNode stream, String type) {

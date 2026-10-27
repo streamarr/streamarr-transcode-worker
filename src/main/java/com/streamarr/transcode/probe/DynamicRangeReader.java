@@ -19,8 +19,9 @@ import tools.jackson.databind.JsonNode;
  * The dynamic range of a video stream, as ADR 0036 defines it. The stream's headers and
  * configuration records give the Dolby Vision claim and the signaled transfer. For the chosen video
  * stream, the first frames that the probe read also show HDR10+ and Dolby Vision RPUs, when the
- * stream's decoder exports them, and for H.264 and HEVC so do the packets that hold those frames
- * and the {@link SeiMessages} of the stream. A feature that the probe cannot see stays unspecified.
+ * stream's decoder exports them, and for H.264, HEVC and AV1 so does the {@link MetadataWalk} of
+ * the stream's configuration record and the packets that hold those frames. A feature that the
+ * probe cannot see stays unspecified.
  */
 final class DynamicRangeReader {
 
@@ -93,10 +94,11 @@ final class DynamicRangeReader {
   }
 
   /**
-   * PRESENT when the frames or the SEI messages that the probe walked hold HDR10+. ABSENT only when
-   * the frames show none and are not cut short, and the walk rules HDR10+ out: FFmpeg drops the
-   * messages of an SEI NAL unit that follow one it rejects, so frames alone rule out none. Without
-   * a walk, as for AV1, HDR10+ is never ABSENT.
+   * PRESENT when the frames or the SEI messages or metadata OBUs that the probe walked hold HDR10+.
+   * ABSENT only when the frames show none and are not cut short, and the walk rules HDR10+ out:
+   * FFmpeg drops the messages of an SEI NAL unit that follow one it rejects, and a frame whose
+   * HDR10+ OBU it cannot parse, so frames alone rule out none. Without a walk, HDR10+ is never
+   * ABSENT.
    */
   private static Presence hdr10Plus(
       JsonNode stream, Optional<FirstFrames> frames, Optional<MetadataWalk> walk) {
@@ -178,11 +180,10 @@ final class DynamicRangeReader {
   }
 
   /**
-   * What the frames and, for a codec of NAL units, the packets that hold them show of the RPUs. A
+   * What the frames and, for H.264, HEVC and AV1, the packets that hold them show of the RPUs. A
    * decoder can ignore or drop an RPU, so no RPU in the frames rules out none: only packets whose
-   * every NAL unit the probe delimited do, and only when the frames are not cut short. An AV1
-   * stream's frames rule out none. The header comes from the frames, or from the packets when the
-   * frames show no RPU.
+   * every unit the walk delimited do, and only when the frames are not cut short. The header comes
+   * from the frames, or from the packets when the frames show no RPU.
    */
   private static Optional<RpuObservation> rpus(
       JsonNode stream, Optional<FirstFrames> frames, Optional<MetadataWalk> walk) {

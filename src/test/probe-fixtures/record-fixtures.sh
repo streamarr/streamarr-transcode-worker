@@ -212,6 +212,9 @@ SVTAV1=(-c:v libsvtav1 -preset 10 -svtav1-params log-level=0 -pix_fmt yuv420p10l
 "${FF[@]}" -i ivf-av1-10bit.ivf -c copy obu-av1-10bit.obu
 "${FF[@]}" -i ivf-av1-10bit.ivf -c copy mkv-av1-10bit.mkv
 "${FF[@]}" -i ivf-av1-10bit.ivf -c copy mp4-av1-10bit.mp4
+# Nine frames of PQ AV1 in IVF, into which insert-av1-metadata.py puts HDR metadata OBUs.
+"${FF[@]}" -f lavfi -i testsrc2=size=64x36:rate=24:duration=0.375 "${HDR10[@]}" "${SVTAV1[@]}" \
+  av1-pq.ivf
 # AC-3, E-AC-3, FLAC and ALAC in MP4.
 "${FF[@]}" "${VIDEO[@]}" "${TONE[@]}" -map 0:v -map 1:a -map 1:a -map 1:a -map 1:a "${X264[@]}" \
   -c:a:0 ac3 -c:a:1 eac3 -c:a:2 flac -c:a:3 alac -strict -2 mp4-audio-codecs.mp4
@@ -276,6 +279,16 @@ cp /fate/mpegts/dovi-p7.ts mpegts-dovi-p7-two-layers.ts
 "${FF[@]}" -i /fate/mov/dovi-p5.mp4 -map 0:v -c copy -f hevc dovi-p5.hevc
 CONTAINER
 
+# Each AV1 stream in IVF that insert-av1-metadata.py wrote, copied into MP4, whose av1C record the
+# probe's walk of the metadata OBUs reads.
+cat > "$WORK/av1.sh" <<'CONTAINER'
+set -euo pipefail
+cd /work
+for source in av1-*.ivf; do
+  ffmpeg -hide_banner -nostdin -loglevel error -y -i "$source" -c copy "mp4-${source%.ivf}.mp4"
+done
+CONTAINER
+
 cat > "$WORK/probe.sh" <<'CONTAINER'
 set -euo pipefail
 cd /work
@@ -305,12 +318,12 @@ for source in "$@"; do
         break
       fi
     done
-    # The first-packets read of an H.264 or HEVC chosen video stream, with FirstPacketsProbe's
+    # The first-packets read of an H.264, HEVC or AV1 chosen video stream, with FirstPacketsProbe's
     # arguments: as many packets as the first-frames read took.
     codec="$(ffprobe -v quiet "${LIMITS[@]}" -select_streams "$chosen" \
       -show_entries stream=codec_name -of csv=p=0 "$source")"
     codec="${codec%%[,$'\n']*}"
-    if [ "$codec" = h264 ] || [ "$codec" = hevc ]; then
+    if [ "$codec" = h264 ] || [ "$codec" = hevc ] || [ "$codec" = av1 ]; then
       ffprobe -v quiet -print_format json "${LIMITS[@]}" -select_streams "$chosen" \
         -read_intervals "%+#$packets" \
         -show_entries packet=data:packet_side_data=side_data_type -show_data \
@@ -333,6 +346,9 @@ python3 "$HERE/edit-adts-profile.py" "$WORK/aac-lc.adts" "$WORK/aac-ltp.adts" 3
 python3 "$HERE/reject-hdr-sei.py" hevc "$WORK/hdr10-plus.hevc" \
   "$WORK/hevc-hdr10-plus-rejected-sei.hevc"
 python3 "$HERE/reject-hdr-sei.py" h264 "$WORK/hdr10.h264" "$WORK/h264-hdr10-rejected-sei.h264"
+for variant in hdr10-plus-rejected static-after-frame; do
+  python3 "$HERE/insert-av1-metadata.py" "$variant" "$WORK/av1-pq.ivf" "$WORK/av1-$variant.ivf"
+done
 in_image cropped.sh
 in_image adts.sh
 
@@ -345,14 +361,20 @@ FIXTURES_TO_PROBE=(mp4-titled.mp4 mkv-remuxed-from-mp4.mkv mp4-default-handlers.
   mpegts-hevc-ac3.ts ivf-av1-10bit.ivf obu-av1-10bit.obu mkv-av1-10bit.mkv
   mp4-av1-10bit.mp4 mp4-audio-codecs.mp4 mp4-avc-record-level.mp4 mp4-hevc-record-level.mp4
   mpegts-aac-main.ts mpegts-aac-ltp.ts mkv-120fps.mkv mp4-100fps.mp4 mp4-90fps.mp4 mp4-72fps.mp4
-  hevc-hdr10-plus-rejected-sei.hevc h264-hdr10-rejected-sei.h264)
+  hevc-hdr10-plus-rejected-sei.hevc h264-hdr10-rejected-sei.h264 mp4-av1-pq.mp4
+  mp4-av1-hdr10-plus-rejected.mp4 mp4-av1-static-after-frame.mp4)
 if [ -n "${FATE_SUITE:-}" ]; then
   in_image fate.sh
   python3 "$HERE/move-rpus-ahead.py" "$WORK/dovi-p5.hevc" "$WORK/hevc-dovi-p5-rpus-ahead.hevc"
+  for variant in rpu rpu-bad-emdf; do
+    python3 "$HERE/insert-av1-metadata.py" "$variant" "$WORK/av1-pq.ivf" "$WORK/av1-$variant.ivf" \
+      "$WORK/dovi-p5.hevc"
+  done
   FIXTURES_TO_PROBE+=(mkv-eac3-atmos-dts-hd-ma.mkv mp4-dovi-p5-hev1.mp4 mkv-hdr10-fate.mkv
     mpegts-dovi-p7.ts hevc-hdr10-plus.hevc mkv-dovi-p7-hvce.mkv mpegts-dovi-p7-two-layers.ts
-    hevc-dovi-p5-rpus-ahead.hevc)
+    hevc-dovi-p5-rpus-ahead.hevc mp4-av1-rpu.mp4 mp4-av1-rpu-bad-emdf.mp4)
 fi
+in_image av1.sh
 
 # HE-AAC in ADTS, which a local sample holds, next to a synthesized video stream in MPEG-TS. The
 # record-less Dolby Vision profile 5 sample, rewritten to signal BT.709 in its VUI under hvc1, and
@@ -442,14 +464,15 @@ json.dump(json.load(open(sys.argv[1])), open(sys.argv[2], "w"), indent=2)
 open(sys.argv[2], "a").write("\n")' "$WORK/frames/$source.json" "$FIXTURES/frames/$source.json"
   fi
 done
-# The first-packets reads that the tests answer with. Every other H.264 and HEVC source's read
+# The first-packets reads that the tests answer with. Every other H.264, HEVC and AV1 source's read
 # fails, so only its frames show its RPUs and HDR10+, and its frames rule out neither, nor any static
-# HDR metadata that its SEI messages could hold. The large local samples keep no read: 3 of their
+# HDR metadata that its SEI messages or metadata OBUs could hold. The large local samples keep no read: 3 of their
 # packets take hundreds of kilobytes.
 PACKET_DATA=(mp4-sdr8-bt709.mp4 mp4-dovi-p9-avc1.mp4 mp4-dovi-p9-dva1.mp4 mpegts-dovi-p9.ts
   mp4-dovi-p5-hev1.mp4 hevc-dovi-p5-rpus-ahead.hevc mpegts-dovi-p7-two-layers.ts mpegts-pq10.ts
   mkv-pipe-hevc-10bit.mkv mpegts-hevc-ac3.ts hevc-hdr10-plus-rejected-sei.hevc
-  h264-hdr10-rejected-sei.h264)
+  h264-hdr10-rejected-sei.h264 mp4-av1-pq.mp4 mp4-av1-hdr10-plus-rejected.mp4
+  mp4-av1-static-after-frame.mp4 mp4-av1-rpu.mp4 mp4-av1-rpu-bad-emdf.mp4)
 mkdir -p "$FIXTURES/packet-data"
 for source in "${PACKET_DATA[@]}"; do
   if [ -f "$WORK/packet-data/$source.json" ]; then

@@ -6,7 +6,8 @@ import java.util.Optional;
 
 /**
  * Reads the profile-guessing fields of a Dolby Vision RPU header (rpu_data_header), as FFmpeg 8.1's
- * RPU parser does, from the RPU's bytes after its NAL unit header and without emulation prevention.
+ * RPU parser does, from the RPU's bytes after its NAL unit header and without emulation prevention,
+ * or from the bytes that an AV1 stream's EMDF container wraps.
  */
 final class DolbyVisionRpuHeaderReader {
 
@@ -26,6 +27,19 @@ final class DolbyVisionRpuHeaderReader {
    */
   static Optional<DolbyVisionRpuHeader> read(byte[] rpu) {
     try {
+      var reader = new BitReader(rpu);
+      return reader.bits(8) == RPU_NAL_PREFIX ? header(reader) : Optional.empty();
+    } catch (TruncatedBitstreamException _) {
+      return Optional.empty();
+    }
+  }
+
+  /**
+   * The header of an RPU without its rpu_nal_prefix, as an AV1 stream's EMDF container holds it;
+   * empty as for {@link #read}.
+   */
+  static Optional<DolbyVisionRpuHeader> readWithoutPrefix(byte[] rpu) {
+    try {
       return header(new BitReader(rpu));
     } catch (TruncatedBitstreamException _) {
       return Optional.empty();
@@ -33,7 +47,7 @@ final class DolbyVisionRpuHeaderReader {
   }
 
   private static Optional<DolbyVisionRpuHeader> header(BitReader reader) {
-    if (reader.bits(8) != RPU_NAL_PREFIX || reader.bits(6) != RPU_TYPE) {
+    if (reader.bits(6) != RPU_TYPE) {
       return Optional.empty();
     }
 

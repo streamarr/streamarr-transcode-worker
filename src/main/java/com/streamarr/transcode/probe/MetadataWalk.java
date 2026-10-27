@@ -9,14 +9,16 @@ import tools.jackson.databind.JsonNode;
  * of its {@link HdrMessage}s. A nested message can apply only to a layer or a view that FFmpeg does
  * not decode, so it neither proves nor rules out a feature of the decoded picture.
  */
-sealed interface MetadataWalk permits SeiMessages {
+sealed interface MetadataWalk permits Av1MetadataObus, SeiMessages {
 
   /**
    * The walk of the stream; empty unless the probe read the stream's first frames, which only the
    * chosen video stream has, and the walk covers the stream's codec.
    */
   static Optional<MetadataWalk> of(JsonNode stream) {
-    return SeiMessages.of(stream).map(MetadataWalk.class::cast);
+    return SeiMessages.of(stream)
+        .map(MetadataWalk.class::cast)
+        .or(() -> Av1MetadataObus.of(stream));
   }
 
   /** Whether a message of the kind that is not nested shows. */

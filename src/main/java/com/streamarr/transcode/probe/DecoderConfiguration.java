@@ -29,6 +29,9 @@ final class DecoderConfiguration {
   private static final int SPS_PROFILE_OFFSET = 1;
   private static final int AV1_RECORD_MARKER = 0x81;
 
+  /** The bytes of an av1C record ahead of its configOBUs. */
+  static final int AV1_RECORD_HEADER_BYTES = 4;
+
   private DecoderConfiguration() {}
 
   /**
@@ -75,6 +78,15 @@ final class DecoderConfiguration {
     }
 
     return merged.generalProfile();
+  }
+
+  /**
+   * Whether the extradata is an av1C record: its marker and version byte, then 3 bytes of fields,
+   * then its configOBUs.
+   */
+  static boolean isAv1Record(byte[] extradata) {
+    return extradata.length >= AV1_RECORD_HEADER_BYTES
+        && Byte.toUnsignedInt(extradata[0]) == AV1_RECORD_MARKER;
   }
 
   /** av1C bytes 1 and 2, or the same fields read from the sequence header OBU. */
