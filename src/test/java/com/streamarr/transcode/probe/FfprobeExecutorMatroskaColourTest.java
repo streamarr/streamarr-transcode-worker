@@ -106,6 +106,47 @@ class FfprobeExecutorMatroskaColourTest {
     assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(700);
   }
 
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("videoEntriesThatFfmpegSkips")
+  @DisplayName("Should read the chosen video track past a video TrackEntry that FFmpeg skips")
+  void shouldReadTheChosenVideoTrackPastAVideoTrackEntryThatFfmpegSkips(
+      String description, byte[] skipped) throws IOException {
+    // FFmpeg's Matroska demuxer makes no stream of a video track whose CodecID is missing or does
+    // not start with V, so ffprobe's first video stream is the track that follows it.
+    var video =
+        probeMatroska(
+            MATROSKA,
+            document(element(0x1654AE6B, skipped, trackEntry(2, element(MAX_CLL, unsigned(700))))));
+
+    assertThat(video.getContentLightLevel().getMaxContentLightLevel())
+        .as(description)
+        .isEqualTo(700);
+  }
+
+  static Stream<Arguments> videoEntriesThatFfmpegSkips() {
+    var colour = element(0xE0, element(0x55B0, element(MAX_CLL, unsigned(100))));
+    return Stream.of(
+        Arguments.of(
+            "a video track without CodecID",
+            element(0xAE, element(0xD7, unsigned(1)), element(0x83, unsigned(1)), colour)),
+        Arguments.of(
+            "a video track with an empty CodecID",
+            element(
+                0xAE,
+                element(0xD7, unsigned(1)),
+                element(0x83, unsigned(1)),
+                element(0x86),
+                colour)),
+        Arguments.of(
+            "a video track whose CodecID names an audio codec",
+            element(
+                0xAE,
+                element(0xD7, unsigned(1)),
+                element(0x83, unsigned(1)),
+                element(0x86, "A_AAC".getBytes(StandardCharsets.US_ASCII)),
+                colour)));
+  }
+
   @Test
   @DisplayName("Should mark the light level omitted when MaxCLL does not fit its SEI field")
   void shouldMarkTheLightLevelOmittedWhenMaxCllDoesNotFitItsSeiField() throws IOException {

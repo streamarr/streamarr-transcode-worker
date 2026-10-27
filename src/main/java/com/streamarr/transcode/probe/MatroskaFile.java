@@ -31,6 +31,7 @@ final class MatroskaFile {
   private static final long TRACKS = 0x1654AE6BL;
   private static final long TRACK_ENTRY = 0xAEL;
   private static final long TRACK_TYPE = 0x83L;
+  private static final long CODEC_ID = 0x86L;
   private static final long CUES = 0x1C53BB6BL;
   private static final long CLUSTER = 0x1F43B675L;
   private static final long VIDEO_TRACK_TYPE = 1;
@@ -41,8 +42,9 @@ final class MatroskaFile {
   private MatroskaFile() {}
 
   /**
-   * The TrackEntry of the video track at {@code videoTrackOrdinal}: zero for the first TrackEntry
-   * whose type is video, one for the second, and so on.
+   * The TrackEntry of the video track at {@code videoTrackOrdinal}: zero for the first video track
+   * that FFmpeg makes a stream of, one for the second, and so on. FFmpeg's Matroska demuxer makes
+   * none of a video TrackEntry whose CodecID is missing or does not start with V.
    */
   static ByteBuffer videoTrack(ByteBuffer tracks, int videoTrackOrdinal) {
     var videoTracksBefore = new AtomicInteger(videoTrackOrdinal);
@@ -53,6 +55,7 @@ final class MatroskaFile {
         entry -> {
           if (found.get() == null
               && unsigned(entry, TRACK_TYPE).orElse(0L) == VIDEO_TRACK_TYPE
+              && string(entry, CODEC_ID).filter(codec -> codec.startsWith("V")).isPresent()
               && videoTracksBefore.getAndDecrement() == 0) {
             found.set(entry);
           }
