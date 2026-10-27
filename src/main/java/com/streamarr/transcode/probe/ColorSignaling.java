@@ -20,7 +20,7 @@ final class ColorSignaling {
   static void add(JsonNode source, ProbeStreamInfo.Builder stream) {
     stream
         .setColorPrimaries(primaries(text(source, "color_primaries").orElse("")))
-        .setTransferCharacteristics(transfer(text(source, "color_transfer").orElse("")))
+        .setTransferCharacteristics(transfer(source))
         .setMatrixCoefficients(matrix(text(source, "color_space").orElse("")))
         .setColorRange(range(text(source, "color_range").orElse("")));
   }
@@ -42,8 +42,9 @@ final class ColorSignaling {
     };
   }
 
-  private static TransferCharacteristics transfer(String name) {
-    return switch (name) {
+  /** The stream's signaled transfer, from the name that ffprobe prints. */
+  static TransferCharacteristics transfer(JsonNode source) {
+    return switch (text(source, "color_transfer").orElse("")) {
       case "bt709" -> TransferCharacteristics.TRANSFER_CHARACTERISTICS_BT709;
       case "bt470m" -> TransferCharacteristics.TRANSFER_CHARACTERISTICS_BT470M;
       case "bt470bg" -> TransferCharacteristics.TRANSFER_CHARACTERISTICS_BT470BG;
