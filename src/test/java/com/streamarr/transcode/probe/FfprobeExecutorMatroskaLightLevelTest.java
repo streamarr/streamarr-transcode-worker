@@ -1,5 +1,6 @@
 package com.streamarr.transcode.probe;
 
+import static com.streamarr.transcode.probe.EbmlElements.concat;
 import static com.streamarr.transcode.probe.EbmlElements.document;
 import static com.streamarr.transcode.probe.EbmlElements.element;
 import static com.streamarr.transcode.probe.EbmlElements.unsigned;
@@ -10,6 +11,7 @@ import build.buf.gen.streamarr.transcode.v1.ContentLightLevel;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import com.streamarr.transcode.probe.RecordedFfprobe.Answers;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -51,6 +53,17 @@ class FfprobeExecutorMatroskaLightLevelTest {
 
     assertThat(video.getContentLightLevel())
         .isEqualTo(ContentLightLevel.newBuilder().setMaxFrameAverageLightLevel(300).build());
+  }
+
+  @Test
+  @DisplayName("Should read the track's light level when a Void element precedes the Segment")
+  void shouldReadTheTracksLightLevelWhenAVoidElementPrecedesTheSegment() throws IOException {
+    var header = element(0x1A45DFA3, element(0x4282, "matroska".getBytes(StandardCharsets.UTF_8)));
+    var segment =
+        element(0x18538067, element(0x1654AE6B, trackEntry(1, element(MAX_CLL, unsigned(900)))));
+    var video = probeMatroska(MATROSKA, concat(header, element(0xEC, new byte[4]), segment));
+
+    assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(900);
   }
 
   @Test

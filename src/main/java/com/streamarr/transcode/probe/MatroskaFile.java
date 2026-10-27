@@ -18,6 +18,7 @@ final class MatroskaFile {
 
   private static final long EBML = 0x1A45DFA3L;
   private static final long SEGMENT = 0x18538067L;
+  private static final long VOID = 0xECL;
   private static final long SEEK_HEAD = 0x114D9B74L;
   private static final long SEEK = 0x4DBBL;
   private static final long SEEK_ID = 0x53ABL;
@@ -170,6 +171,11 @@ final class MatroskaFile {
       }
 
       var segment = element(channel, ebml.end());
+      // A Void element may sit at the root, ahead of the Segment.
+      while (segment.id() == VOID && segment.size() != UNKNOWN_SIZE) {
+        segment = element(channel, segment.end());
+      }
+
       if (segment.id() != SEGMENT) {
         throw malformed("Segment");
       }
