@@ -18,12 +18,12 @@ import tools.jackson.databind.node.ObjectNode;
  * Adds the side data of the chosen video stream's first 3 frames to its ffprobe description, under
  * {@link #FIRST_FRAMES}. ffprobe limits a read by packets, and a packet can decode to no frame, as
  * for a packet ahead of an MP4 edit list. So the probe widens the read until it decodes 3 frames,
- * up to {@link #WIDEST_READ} packets, and keeps the first 3. When ffprobe fails or prints no frame,
- * the description gets no frames: the probe then read none. A read that prints more than {@link
- * #MAXIMUM_OUTPUT_BYTES} fails. When a read fails before the probe decodes 3 frames, or the widest
- * read decodes fewer than 3 frames from a stream that holds more packets than it read, the
- * description also gets {@link #FIRST_FRAMES_CUT_SHORT}: the stream may hold frames that the probe
- * did not read.
+ * up to {@link #WIDEST_READ} packets, and keeps the first 3 frames of the narrowest read that
+ * decodes the most. When ffprobe fails or prints no frame, the description gets no frames: the
+ * probe then read none. A read that prints more than {@link #MAXIMUM_OUTPUT_BYTES} fails. When the
+ * kept read holds fewer than 3 frames, the description also gets {@link #FIRST_FRAMES_CUT_SHORT}:
+ * ffprobe ends a read without an error when the demuxer or the file fails, so a short read does not
+ * show that the stream ends there, and the stream may hold frames that the probe did not read.
  */
 @RequiredArgsConstructor
 @Slf4j
@@ -32,10 +32,7 @@ final class FirstFramesProbe {
   /** The key under which the chosen video stream's description holds its first frames. */
   static final String FIRST_FRAMES = "first_frames";
 
-  /**
-   * The key whose true value says that a failed read, or the widest read's limit, kept the probe
-   * from decoding 3 frames.
-   */
+  /** The key whose true value says that the kept read holds fewer than 3 frames. */
   static final String FIRST_FRAMES_CUT_SHORT = "first_frames_cut_short";
 
   private static final int FRAME_COUNT = 3;
@@ -75,12 +72,10 @@ final class FirstFramesProbe {
     var reads = new StreamReads(source, chosen.get().streamIndex());
     var frames = List.<JsonNode>of();
     var framesPackets = 0;
-    var readFailed = false;
     for (var packets = FRAME_COUNT;
         packets <= WIDEST_READ && frames.size() < FRAME_COUNT;
         packets *= WIDER_READ_FACTOR) {
       var wider = read(reads, packets);
-      readFailed |= wider.isEmpty();
       if (wider.orElse(List.of()).size() > frames.size()) {
         frames = wider.get();
         framesPackets = packets;
@@ -96,41 +91,11 @@ final class FirstFramesProbe {
         objectMapper
             .createArrayNode()
             .addAll(frames.subList(0, Math.min(FRAME_COUNT, frames.size()))));
-    if (frames.size() < FRAME_COUNT && (readFailed || holdsPacketsPastWidestRead(reads))) {
+    if (frames.size() < FRAME_COUNT) {
       description.put(FIRST_FRAMES_CUT_SHORT, true);
     }
 
     return OptionalInt.of(framesPackets);
-  }
-
-  /**
-   * Whether the stream holds more packets than the widest read takes, so that an edit list's
-   * preroll, which can discard most of them, can hide frames past the widest read. True when
-   * ffprobe cannot count them.
-   */
-  private boolean holdsPacketsPastWidestRead(StreamReads reads)
-      throws ExecutionException, InterruptedException {
-    var bounded =
-        ffprobe.run(
-            reads.firstPackets(WIDEST_READ + 1, "packet=stream_index"), MAXIMUM_OUTPUT_BYTES);
-    if (bounded.isEmpty()) {
-      log.warn("ffprobe's packet count of {} printed more than the probe holds", reads.source());
-      return true;
-    }
-
-    var output = bounded.get();
-    if (output.exitCode() != 0) {
-      log.warn(
-          "ffprobe's packet count of {} exited with code {}", reads.source(), output.exitCode());
-      return true;
-    }
-
-    try {
-      return objectMapper.readTree(output.stdout()).path("packets").size() > WIDEST_READ;
-    } catch (JacksonException failure) {
-      log.warn("ffprobe's packet count of {} printed no JSON", reads.source(), failure);
-      return true;
-    }
   }
 
   /** The frames that the stream's first packets decode to; empty when ffprobe fails. */

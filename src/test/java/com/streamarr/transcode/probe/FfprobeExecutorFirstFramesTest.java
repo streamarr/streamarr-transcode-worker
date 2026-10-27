@@ -171,9 +171,11 @@ class FfprobeExecutorFirstFramesTest {
     }
 
     @Test
-    @DisplayName("Should report HDR10+ absent when the widest read decodes fewer than 3 frames")
-    void shouldReportHdr10PlusAbsentWhenTheWidestReadDecodesFewerThan3Frames() {
-      // Every read succeeds, so the stream holds no more frames than the probe read.
+    @DisplayName(
+        "Should leave HDR10+ unspecified when every read succeeds but decodes fewer than 3 frames")
+    void shouldLeaveHdr10PlusUnspecifiedWhenEveryReadSucceedsButDecodesFewerThan3Frames() {
+      // ffprobe ends a read without an error when the file fails, so a short read does not show
+      // that the stream ends there.
       var video =
           probe(
                   Answers.builder()
@@ -183,19 +185,16 @@ class FfprobeExecutorFirstFramesTest {
                       .build())
               .getStreams(0);
 
-      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
+      assertThat(video.getFirstFramesRead()).isTrue();
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
     }
 
-    @ParameterizedTest(name = "{0}")
-    @CsvSource({
-      "the stream holds more packets than the widest read takes, 288, 2147483647",
-      "the probe cannot count the packets, 288, 192"
-    })
+    @Test
     @DisplayName(
-        "Should leave HDR10+ unspecified when the widest read keeps fewer than 3 frames of a longer"
-            + " stream")
-    void shouldLeaveHdr10PlusUnspecifiedWhenTheWidestReadKeepsFewerThan3FramesOfALongerStream(
-        String reason, int streamPackets, int failingReadsBeyondPackets) {
+        "Should leave HDR10+ unspecified when the widest read keeps fewer than 3 frames after an"
+            + " edit list's preroll")
+    void
+        shouldLeaveHdr10PlusUnspecifiedWhenTheWidestReadKeepsFewerThan3FramesAfterAnEditListsPreroll() {
       // An edit list's preroll can discard most of the widest read's packets, so the stream's
       // later frames, which the probe did not read, could carry HDR10+.
       var video =
@@ -204,8 +203,6 @@ class FfprobeExecutorFirstFramesTest {
                       .ffprobeOutput(output(HEVC_WITH_RECORD))
                       .prerollPackets(48)
                       .firstFrames(frames(""))
-                      .streamPackets(streamPackets)
-                      .failingReadsBeyondPackets(failingReadsBeyondPackets)
                       .firstPackets(DELIMITED_PACKETS)
                       .build())
               .getStreams(0);
@@ -295,7 +292,7 @@ class FfprobeExecutorFirstFramesTest {
           probe(
                   Answers.builder()
                       .ffprobeOutput(output(HEVC_WITH_RECORD))
-                      .firstFrames(frames("", ""))
+                      .firstFrames(frames("", "", ""))
                       .firstPackets(DELIMITED_PACKETS)
                       .build())
               .getStreams(0);
@@ -909,7 +906,7 @@ class FfprobeExecutorFirstFramesTest {
       return probe(
               Answers.builder()
                   .ffprobeOutput(h264Output(extradata, ""))
-                  .firstFrames(frames(""))
+                  .firstFrames(frames("", "", ""))
                   .firstPackets(packets)
                   .build())
           .getStreams(0);
@@ -1063,8 +1060,12 @@ class FfprobeExecutorFirstFramesTest {
       var video =
           probed(
               hevc(extradata(HEVC_RECORD))
-                  .firstFrames(frames("", ""))
-                  .firstPackets(packets(lengthPrefixed(IDR_SLICE), lengthPrefixed(AUD, SLICE))));
+                  .firstFrames(frames("", "", ""))
+                  .firstPackets(
+                      packets(
+                          lengthPrefixed(IDR_SLICE),
+                          lengthPrefixed(AUD, SLICE),
+                          lengthPrefixed(AUD, SLICE))));
 
       assertThat(video.getDynamicRange().hasDolbyVisionAbsent()).isTrue();
     }
@@ -1075,8 +1076,12 @@ class FfprobeExecutorFirstFramesTest {
       var present =
           probed(
                   hevc(extradata(HEVC_RECORD) + "," + record(8, 1))
-                      .firstFrames(frames(""))
-                      .firstPackets(packets(lengthPrefixed(IDR_SLICE), lengthPrefixed(SLICE))))
+                      .firstFrames(frames("", "", ""))
+                      .firstPackets(
+                          packets(
+                              lengthPrefixed(IDR_SLICE),
+                              lengthPrefixed(SLICE),
+                              lengthPrefixed(SLICE))))
               .getDynamicRange()
               .getDolbyVisionPresent();
 
