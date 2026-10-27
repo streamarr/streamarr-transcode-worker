@@ -144,7 +144,36 @@ class FfprobeExecutorMatroskaColourTest {
                 element(0xD7, unsigned(1)),
                 element(0x83, unsigned(1)),
                 element(0x86, "A_AAC".getBytes(StandardCharsets.US_ASCII)),
+                colour)),
+        // FFmpeg's EBML parser keeps the last of an element that the track may hold only once.
+        Arguments.of(
+            "a video track whose TrackType repeats as audio",
+            element(
+                0xAE,
+                element(0xD7, unsigned(1)),
+                element(0x83, unsigned(1)),
+                element(0x83, unsigned(2)),
+                hevcCodecId(),
+                colour)),
+        Arguments.of(
+            "a video track whose CodecID repeats as an audio codec",
+            element(
+                0xAE,
+                element(0xD7, unsigned(1)),
+                element(0x83, unsigned(1)),
+                hevcCodecId(),
+                element(0x86, "A_AAC".getBytes(StandardCharsets.US_ASCII)),
                 colour)));
+  }
+
+  @Test
+  @DisplayName("Should take the last MaxCLL of a Colour that repeats it, as FFmpeg does")
+  void shouldTakeTheLastMaxCllOfAColourThatRepeatsItAsFfmpegDoes() throws IOException {
+    var video =
+        probeMatroska(
+            MATROSKA, videoTrack(element(MAX_CLL, unsigned(100)), element(MAX_CLL, unsigned(900))));
+
+    assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(900);
   }
 
   @Test

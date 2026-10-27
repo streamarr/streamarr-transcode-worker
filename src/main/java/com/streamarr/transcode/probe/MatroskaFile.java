@@ -64,7 +64,7 @@ final class MatroskaFile {
   }
 
   static Optional<Long> unsigned(ByteBuffer parent, long id) {
-    return child(parent, id).map(MatroskaFile::unsigned);
+    return value(parent, id).map(MatroskaFile::unsigned);
   }
 
   static long unsigned(ByteBuffer value) {
@@ -81,7 +81,7 @@ final class MatroskaFile {
   }
 
   static Optional<Double> floatValue(ByteBuffer parent, long id) {
-    return child(parent, id)
+    return value(parent, id)
         .map(
             value ->
                 switch (value.remaining()) {
@@ -92,13 +92,23 @@ final class MatroskaFile {
   }
 
   static Optional<String> string(ByteBuffer parent, long id) {
-    return child(parent, id)
+    return value(parent, id)
         .map(
             value -> {
               var bytes = new byte[value.remaining()];
               value.get(bytes);
               return new String(bytes, StandardCharsets.UTF_8);
             });
+  }
+
+  /**
+   * The value of the last child with this ID, as FFmpeg's EBML parser keeps the last of an element
+   * that may occur once; holds no other.
+   */
+  private static Optional<ByteBuffer> value(ByteBuffer parent, long id) {
+    var last = new AtomicReference<ByteBuffer>();
+    eachChild(parent, id, last::set);
+    return Optional.ofNullable(last.get());
   }
 
   /** The first child with this ID; holds no other, as a hostile element can hold millions. */
@@ -285,7 +295,7 @@ final class MatroskaFile {
 
     private static void seekPositions(ByteBuffer seekHead, Map<Long, Long> positions) {
       for (var seek : children(seekHead, SEEK)) {
-        var id = child(seek, SEEK_ID).map(MatroskaFile::unsigned);
+        var id = unsigned(seek, SEEK_ID);
         var position = unsigned(seek, SEEK_POSITION);
         if (id.isPresent() && position.isPresent()) {
           positions.putIfAbsent(id.get(), position.get());
