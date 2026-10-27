@@ -5,9 +5,9 @@ import java.util.Optional;
 import tools.jackson.databind.JsonNode;
 
 /**
- * What the probe's walk of the chosen video stream's configuration record and first packets found
- * of its {@link HdrMessage}s. A nested message can apply only to a layer or a view that FFmpeg does
- * not decode, so it neither proves nor rules out a feature of the decoded picture.
+ * What the probe's walk of the chosen video stream's extradata and first packets found of its
+ * {@link HdrMessage}s. A nested message can apply only to a layer or a view that FFmpeg does not
+ * decode, so it neither proves nor rules out a feature of the decoded picture.
  */
 sealed interface MetadataWalk permits Av1MetadataObus, SeiMessages {
 

@@ -21,8 +21,8 @@ import tools.jackson.databind.JsonNode;
  * configuration records give the Dolby Vision claim and the signaled transfer. For the chosen video
  * stream, the first frames that the probe read also show HDR10+ and Dolby Vision RPUs, when the
  * stream's decoder exports them, and for H.264, HEVC and AV1 so does the {@link MetadataWalk} of
- * the stream's configuration record and the packets that hold those frames. A feature that the
- * probe cannot see stays unspecified.
+ * the stream's extradata and the packets that hold those frames. A feature that the probe cannot
+ * see stays unspecified.
  */
 final class DynamicRangeReader {
 
