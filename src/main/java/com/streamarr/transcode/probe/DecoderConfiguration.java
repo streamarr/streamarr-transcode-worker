@@ -19,6 +19,7 @@ final class DecoderConfiguration {
   private static final int AVC_SEQUENCE_PARAMETER_SET = 7;
   // The avcC record's count of SPS NAL units follows its 5 header bytes.
   private static final int AVC_RECORD_SPS_COUNT = 5;
+  private static final int AVC_RECORD_MINIMUM_BYTES = 7;
   // The hvcC record's count of NAL unit arrays follows its 22 header bytes.
   private static final int HVCC_ARRAY_COUNT = 22;
   private static final int HEVC_RECORD_VERSION = 1;
@@ -87,6 +88,44 @@ final class DecoderConfiguration {
   static boolean isAv1Record(byte[] extradata) {
     return extradata.length >= AV1_RECORD_HEADER_BYTES
         && Byte.toUnsignedInt(extradata[0]) == AV1_RECORD_MARKER;
+  }
+
+  /**
+   * Whether FFmpeg reads the avcC record whole, and so takes its NAL unit length size: the record
+   * holds at least {@value #AVC_RECORD_MINIMUM_BYTES} bytes and each SPS and PPS ends inside it.
+   * FFmpeg reads a count past the record's end as 0.
+   */
+  static boolean isWholeAvcRecord(byte[] avcC) {
+    if (avcC.length < AVC_RECORD_MINIMUM_BYTES) {
+      return false;
+    }
+
+    var buffer = ByteBuffer.wrap(avcC).position(AVC_RECORD_SPS_COUNT);
+    var sequenceParameterSets = buffer.get() & 0x1F;
+    if (!skipsParameterSets(buffer, sequenceParameterSets)) {
+      return false;
+    }
+
+    var pictureParameterSets = buffer.hasRemaining() ? Byte.toUnsignedInt(buffer.get()) : 0;
+    return skipsParameterSets(buffer, pictureParameterSets);
+  }
+
+  /** Skips {@code count} parameter sets, each after its 2-byte length, if they fit. */
+  private static boolean skipsParameterSets(ByteBuffer buffer, int count) {
+    for (var index = 0; index < count; index++) {
+      if (buffer.remaining() < 2) {
+        return false;
+      }
+
+      var length = Short.toUnsignedInt(buffer.getShort());
+      if (length > buffer.remaining()) {
+        return false;
+      }
+
+      buffer.position(buffer.position() + length);
+    }
+
+    return true;
   }
 
   /**

@@ -280,6 +280,56 @@ class FfprobeExecutorSeiTest {
       assertThat(video.getContentLightLevelOmitted()).isTrue();
     }
 
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+      "a record too short for lengthSizeMinusOne, 01 64 00 28, true",
+      "a record under the 7 bytes that FFmpeg reads, 01 64 00 28 ff e1, false",
+      "an SPS that runs past the record, 01 64 00 28 ff e1 00 08 67 64 00 28, false",
+      "a PPS that runs past the record, 01 64 00 28 ff e1 00 04 67 64 00 28 01 00 04 68 ee, false"
+    })
+    @DisplayName("Should rule nothing out when FFmpeg cannot read an H.264 stream's avcC record")
+    void shouldRuleNothingOutWhenFfmpegCannotReadAnH264StreamsAvccRecord(
+        String description, String record, boolean isAnnexB) {
+      // FFmpeg takes the record's NAL unit length size only once its parameter sets end inside it,
+      // so it can delimit the packets otherwise than the walk does.
+      var sample = isAnnexB ? annexB(Coding.H264.slice) : lengthPrefixed(Coding.H264.slice);
+      var video =
+          probe(
+                  Answers.builder()
+                      .ffprobeOutput(output(Coding.H264.codecName() + "," + extradata(record)))
+                      .firstFrames(frames("", "", ""))
+                      .firstPackets(packetsUpTo(3, sample))
+                      .build())
+              .getStreams(0);
+
+      assertThat(video.getDynamicRange().getHdr10Plus())
+          .as(description)
+          .isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+      assertThat(video.getDynamicRange().hasDolbyVisionAbsent()).as(description).isFalse();
+      assertThat(video.getMasteringDisplayOmitted()).as(description).isTrue();
+    }
+
+    @Test
+    @DisplayName(
+        "Should rule out HDR10+ when an H.264 stream's avcC record ends without a PPS count")
+    void shouldRuleOutHdr10PlusWhenAnH264StreamsAvccRecordEndsWithoutAPpsCount() {
+      // FFmpeg reads the count past the record's end as 0, and so takes the record whole.
+      var video =
+          probe(
+                  Answers.builder()
+                      .ffprobeOutput(
+                          output(
+                              Coding.H264.codecName()
+                                  + ","
+                                  + extradata("01 64 00 28 ff e1 00 04 67 64 00 28")))
+                      .firstFrames(frames("", "", ""))
+                      .firstPackets(packetsUpTo(3, Coding.H264.sample()))
+                      .build())
+              .getStreams(0);
+
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
+    }
+
     /** The stream with Annex B extradata, 3 first frames, and 3 first packets of the sample. */
     private static ProbeStreamInfo annexBProbed(Coding coding, String extradata, String sample) {
       return probe(

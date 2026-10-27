@@ -86,8 +86,9 @@ enum NalSyntax {
   /**
    * The NAL units of the extradata that the walks read. Extradata whose first byte is
    * configurationVersion 1 is an avcC or an hvcC record: the walks read every NAL unit of an hvcC
-   * record's arrays, and none of an avcC record, which holds only parameter sets. Start codes
-   * delimit the NAL units of any other extradata, as in Annex B.
+   * record's arrays, and none of an avcC record, which holds only parameter sets, but count an avcC
+   * record that FFmpeg cannot read whole as incomplete. Start codes delimit the NAL units of any
+   * other extradata, as in Annex B.
    */
   NalUnits extradataUnits(byte[] extradata) {
     if (Byte.toUnsignedInt(extradata[0]) != RECORD_VERSION) {
@@ -95,7 +96,7 @@ enum NalSyntax {
     }
 
     return switch (this) {
-      case H264 -> new NalUnits(List.of(), true);
+      case H264 -> new NalUnits(List.of(), DecoderConfiguration.isWholeAvcRecord(extradata));
       case HEVC -> DecoderConfiguration.hevcRecordUnits(extradata);
     };
   }
