@@ -94,10 +94,13 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
     }
   }
 
+  // Process.destroy closes the process's standard input after signalling it, and that close waits
+  // for any write in progress: the transfer's write to an encoding FFmpeg that reads nothing. Its
+  // handle only signals it, so the grace period and the forced end that follow stay reachable.
   @Override
   public void requestTermination() {
     copy.destroy();
-    encode.destroy();
+    encode.toHandle().destroy();
   }
 
   @Override

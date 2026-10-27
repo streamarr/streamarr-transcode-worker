@@ -14,6 +14,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.stream.Stream;
 import lombok.Builder;
 import lombok.NonNull;
 
@@ -250,6 +251,72 @@ public final class ScriptedProcess extends Process {
     }
 
     return this;
+  }
+
+  /** A handle whose termination and destruction act on this process as its own methods do. */
+  @Override
+  public ProcessHandle toHandle() {
+    return new ScriptedHandle();
+  }
+
+  private final class ScriptedHandle implements ProcessHandle {
+
+    @Override
+    public long pid() {
+      return PROCESS_ID;
+    }
+
+    @Override
+    public Optional<ProcessHandle> parent() {
+      return Optional.empty();
+    }
+
+    @Override
+    public Stream<ProcessHandle> children() {
+      return Stream.empty();
+    }
+
+    @Override
+    public Stream<ProcessHandle> descendants() {
+      return Stream.empty();
+    }
+
+    @Override
+    public Info info() {
+      throw new UnsupportedOperationException("a scripted process has no process information");
+    }
+
+    @Override
+    public CompletableFuture<ProcessHandle> onExit() {
+      return exit.thenApply(_ -> this);
+    }
+
+    @Override
+    public boolean supportsNormalTermination() {
+      return true;
+    }
+
+    @Override
+    public boolean destroy() {
+      ScriptedProcess.this.destroy();
+      return true;
+    }
+
+    @Override
+    public boolean destroyForcibly() {
+      ScriptedProcess.this.destroyForcibly();
+      return true;
+    }
+
+    @Override
+    public boolean isAlive() {
+      return ScriptedProcess.this.isAlive();
+    }
+
+    @Override
+    public int compareTo(ProcessHandle other) {
+      return Long.compare(pid(), other.pid());
+    }
   }
 
   private void endOutput() {

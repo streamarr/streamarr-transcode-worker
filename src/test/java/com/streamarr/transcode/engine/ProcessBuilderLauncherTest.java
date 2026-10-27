@@ -151,6 +151,28 @@ class ProcessBuilderLauncherTest {
   }
 
   // A producer whose FFmpeg is this bash script, with $0 bound to the argument.
+  @Test
+  @DisplayName(
+      "Should end both FFmpegs when the encoding FFmpeg ignores termination while the copy waits"
+          + " for it to read")
+  void shouldEndBothFfmpegsWhenTheEncodingFfmpegIgnoresTerminationWhileTheCopyWaitsForItToRead() {
+    var producer =
+        producerRunning("unused", "unused")
+            .pipeline(
+                new FfmpegPipeline.TransportStreamPipe(
+                    List.of("bash", "-c", "exec cat /dev/zero"),
+                    List.of("bash", "-c", "trap '' TERM; exec sleep 600")))
+            .stallTimeout(Duration.ofMillis(300))
+            .gracePeriod(Duration.ofMillis(300))
+            .start();
+
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .asInstanceOf(InstanceOfAssertFactories.type(Failed.class))
+        .extracting(Failed::reason)
+        .isEqualTo(ProducerFailure.ENCODER_STALLED);
+  }
+
   private Producer.ProducerBuilder producerRunning(String script, String argument) {
     return Producer.builder()
         .launcher(launcher)
