@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Consumer;
 
 /**
  * The EBML elements of a Matroska file. A reader that finds an element malformed throws {@link
@@ -93,6 +94,15 @@ final class MatroskaFile {
 
   static List<ByteBuffer> children(ByteBuffer parent, long id) {
     var matches = new ArrayList<ByteBuffer>();
+    eachChild(parent, id, matches::add);
+    return matches;
+  }
+
+  /**
+   * Gives each child of {@code parent} with this ID to {@code matches}, in order; a malformed child
+   * anywhere in {@code parent} fails the walk.
+   */
+  private static void eachChild(ByteBuffer parent, long id, Consumer<ByteBuffer> matches) {
     var buffer = parent.duplicate();
     while (buffer.hasRemaining()) {
       var header = Header.read(buffer);
@@ -102,13 +112,11 @@ final class MatroskaFile {
 
       var end = buffer.position() + (int) header.size();
       if (header.id() == id) {
-        matches.add(buffer.duplicate().limit(end).slice());
+        matches.accept(buffer.duplicate().limit(end).slice());
       }
 
       buffer.position(end);
     }
-
-    return matches;
   }
 
   static ContainerIndexException malformed(String detail) {
