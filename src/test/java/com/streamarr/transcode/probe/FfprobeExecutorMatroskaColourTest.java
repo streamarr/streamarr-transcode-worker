@@ -3,6 +3,7 @@ package com.streamarr.transcode.probe;
 import static com.streamarr.transcode.probe.EbmlElements.concat;
 import static com.streamarr.transcode.probe.EbmlElements.document;
 import static com.streamarr.transcode.probe.EbmlElements.element;
+import static com.streamarr.transcode.probe.EbmlElements.hevcCodecId;
 import static com.streamarr.transcode.probe.EbmlElements.unsigned;
 import static com.streamarr.transcode.probe.RecordedFfprobe.probe;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -416,6 +417,7 @@ class FfprobeExecutorMatroskaColourTest {
             0xAE,
             element(0xD7, unsigned(1)),
             element(0x83, unsigned(1)),
+            hevcCodecId(),
             element(0xE0, element(0xB0, unsigned(64))),
             element(0xE0, element(0x55B0, colour)));
     return document(element(0x1654AE6B, entry));
@@ -462,6 +464,7 @@ class FfprobeExecutorMatroskaColourTest {
     var children = new ArrayList<byte[]>();
     children.add(element(0xD7, unsigned(number)));
     children.add(element(0x83, unsigned(1)));
+    children.add(hevcCodecId());
     children.add(element(0xE0, element(0xB0, unsigned(64)), element(0x55B0, colour)));
     return element(0xAE, children.toArray(byte[][]::new));
   }

@@ -2,6 +2,7 @@ package com.streamarr.transcode.probe;
 
 import static com.streamarr.transcode.probe.EbmlElements.document;
 import static com.streamarr.transcode.probe.EbmlElements.element;
+import static com.streamarr.transcode.probe.EbmlElements.hevcCodecId;
 import static com.streamarr.transcode.probe.EbmlElements.unsigned;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -345,6 +346,7 @@ class MatroskaCueReaderTest {
       var videoEntry = new ArrayList<byte[]>();
       videoEntry.add(element(0xD7, unsigned(VIDEO_TRACK)));
       videoEntry.add(element(0x83, unsigned(1)));
+      videoEntry.add(hevcCodecId());
       if (trackTimestampScale != null) {
         videoEntry.add(element(0x23314F, trackTimestampScale));
       }
@@ -355,7 +357,10 @@ class MatroskaCueReaderTest {
               element(0xAE, videoEntry.toArray(byte[][]::new)),
               element(0xAE, element(0xD7, unsigned(AUDIO_TRACK)), element(0x83, unsigned(2))),
               element(
-                  0xAE, element(0xD7, unsigned(SECOND_VIDEO_TRACK)), element(0x83, unsigned(1))));
+                  0xAE,
+                  element(0xD7, unsigned(SECOND_VIDEO_TRACK)),
+                  element(0x83, unsigned(1)),
+                  hevcCodecId()));
       var cueElement =
           element(0x1C53BB6B, cues.stream().map(this::cuePoint).toArray(byte[][]::new));
       var cluster = element(0x1F43B675, element(0xE7, unsigned(0)));
@@ -399,7 +404,8 @@ class MatroskaCueReaderTest {
   private static byte[] oneVideoTrack() {
     return element(
         0x1654AE6B,
-        element(0xAE, element(0xD7, unsigned(VIDEO_TRACK)), element(0x83, unsigned(1))));
+        element(
+            0xAE, element(0xD7, unsigned(VIDEO_TRACK)), element(0x83, unsigned(1)), hevcCodecId()));
   }
 
   private static byte[] videoCueAt(long time) {

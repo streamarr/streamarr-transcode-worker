@@ -15,6 +15,11 @@ final class EbmlElements {
     return concat(header, element(0x18538067, segmentChildren));
   }
 
+  /** The CodecID element of an HEVC video track; FFmpeg keeps a video track only with one. */
+  static byte[] hevcCodecId() {
+    return element(0x86, "V_MPEGH/ISO/HEVC".getBytes(StandardCharsets.US_ASCII));
+  }
+
   static byte[] element(long id, byte[]... children) {
     var payload = concat(children);
     var size = ByteBuffer.allocate(8).putLong(payload.length).array();
