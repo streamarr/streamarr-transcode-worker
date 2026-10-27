@@ -84,6 +84,7 @@ final class TransportStreamRpuMover {
 
     if (held.isPresent()) {
       held.orElseThrow().ride(packet);
+      releaseHeldBeyondItsBound();
       return;
     }
 
@@ -101,9 +102,17 @@ final class TransportStreamRpuMover {
       return;
     }
 
-    var payload = held.orElseThrow();
-    if (payload.leadingUnits(false).isPresent()
-        || payload.packets().size() >= MAXIMUM_HELD_PACKETS) {
+    if (held.orElseThrow().leadingUnits(false).isPresent()) {
+      releaseHeld(false);
+      return;
+    }
+
+    releaseHeldBeyondItsBound();
+  }
+
+  // The bound counts the packets of other streams that the payload holds as well as its own.
+  private void releaseHeldBeyondItsBound() throws IOException {
+    if (held.orElseThrow().packets().size() >= MAXIMUM_HELD_PACKETS) {
       releaseHeld(false);
     }
   }

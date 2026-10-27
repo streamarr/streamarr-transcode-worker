@@ -157,6 +157,55 @@ class TransportStreamRpuMoverTest {
   }
 
   @Test
+  @DisplayName(
+      "Should pass other streams' packets on before the input ends when a held RPU waits for more"
+          + " packets than the copy holds")
+  void
+      shouldPassOtherStreamsPacketsOnBeforeTheInputEndsWhenAHeldRpuWaitsForMorePacketsThanTheCopyHolds()
+          throws IOException {
+    var audioPackets = 4096;
+    var stream = hevc().pes(VIDEO_PID, accessUnit(AUD, RPU));
+    for (var index = 0; index < audioPackets; index++) {
+      stream.pes(AUDIO_PID, AUDIO_FRAME);
+    }
+
+    var source = stream.bytes();
+    var output = new ByteArrayOutputStream();
+    var input = new ObservedInput(source, output);
+
+    TransportStreamRpuMover.copy(input, output);
+
+    assertThat(input.bytesPassedOnWhenTheInputEnded())
+        .isGreaterThan(source.length - 1100L * TransportStreams.PACKET_BYTES);
+    assertThat(output.toByteArray()).isEqualTo(source);
+  }
+
+  // Remembers how much of the copy the output held when the copy first read the end of the input.
+  private static final class ObservedInput extends ByteArrayInputStream {
+
+    private final ByteArrayOutputStream output;
+    private long bytesPassedOnWhenTheInputEnded = -1;
+
+    ObservedInput(byte[] source, ByteArrayOutputStream output) {
+      super(source);
+      this.output = output;
+    }
+
+    @Override
+    public synchronized int read(byte[] buffer, int offset, int length) {
+      if (available() == 0 && bytesPassedOnWhenTheInputEnded < 0) {
+        bytesPassedOnWhenTheInputEnded = output.size();
+      }
+
+      return super.read(buffer, offset, length);
+    }
+
+    long bytesPassedOnWhenTheInputEnded() {
+      return bytesPassedOnWhenTheInputEnded;
+    }
+  }
+
+  @Test
   @DisplayName("Should leave the stream unchanged when its video is not HEVC")
   void shouldLeaveTheStreamUnchangedWhenItsVideoIsNotHevc() throws IOException {
     var source =
