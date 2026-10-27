@@ -54,7 +54,8 @@ final class VideoDynamicRanges {
             present.hasDeclared()
                 ? Optional.of(configuration(present.getDeclared()))
                 : Optional.<DolbyVisionConfiguration>empty();
-        yield new DolbyVision.Present(declared, presence(present.getObservedRpu()));
+        yield new DolbyVision.Present(
+            declared, presence(present.getObservedRpu()), presence(present.getRpuStartsSample()));
       }
       case DOLBYVISION_NOT_SET -> new DolbyVision.Unspecified();
     };

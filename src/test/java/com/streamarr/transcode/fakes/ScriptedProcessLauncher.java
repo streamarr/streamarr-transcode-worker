@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Launches a scripted process in place of FFmpeg for each job attempt and keeps it, so a test can
@@ -19,7 +20,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class ScriptedProcessLauncher implements ProcessLauncher {
 
   private final Script script;
-  private final Map<UUID, Launch> launches = new ConcurrentHashMap<>();
+  private final Map<UUID, List<Launch>> launches = new ConcurrentHashMap<>();
 
   public ScriptedProcessLauncher(Script script) {
     this.script = script;
@@ -48,7 +49,9 @@ public final class ScriptedProcessLauncher implements ProcessLauncher {
   @Override
   public Process launch(List<String> command, UUID jobAttemptId) throws IOException {
     var process = script.launch(jobAttemptId);
-    launches.put(jobAttemptId, new Launch(List.copyOf(command), process));
+    launches
+        .computeIfAbsent(jobAttemptId, _ -> new CopyOnWriteArrayList<>())
+        .add(new Launch(List.copyOf(command), process));
     return process;
   }
 
@@ -60,20 +63,27 @@ public final class ScriptedProcessLauncher implements ProcessLauncher {
     return !launches.isEmpty();
   }
 
-  /** The process launched for the job attempt. */
+  /** The process launched last for the job attempt: the one whose output the worker reads. */
   public ScriptedProcess process(UUID jobAttemptId) {
-    return recordedLaunch(jobAttemptId).process();
+    return recordedLaunches(jobAttemptId).getLast().process();
   }
 
-  /** The command FFmpeg was launched with for the job attempt. */
+  /** The command FFmpeg was launched with for the job attempt, which launched one FFmpeg. */
   public List<String> command(UUID jobAttemptId) {
-    return recordedLaunch(jobAttemptId).command();
+    var attemptLaunches = recordedLaunches(jobAttemptId);
+    assertThat(attemptLaunches).as("FFmpegs launched for job attempt %s", jobAttemptId).hasSize(1);
+    return attemptLaunches.getFirst().command();
   }
 
-  private Launch recordedLaunch(UUID jobAttemptId) {
-    var launch = launches.get(jobAttemptId);
-    assertThat(launch).as("FFmpeg launched for job attempt %s", jobAttemptId).isNotNull();
-    return launch;
+  /** The commands of every FFmpeg launched for the job attempt, in launch order. */
+  public List<List<String>> commands(UUID jobAttemptId) {
+    return recordedLaunches(jobAttemptId).stream().map(Launch::command).toList();
+  }
+
+  private List<Launch> recordedLaunches(UUID jobAttemptId) {
+    var attemptLaunches = launches.get(jobAttemptId);
+    assertThat(attemptLaunches).as("FFmpeg launched for job attempt %s", jobAttemptId).isNotNull();
+    return attemptLaunches;
   }
 
   /** Stands in for FFmpeg when a job attempt launches it. */

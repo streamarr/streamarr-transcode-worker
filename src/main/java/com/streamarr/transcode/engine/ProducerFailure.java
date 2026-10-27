@@ -33,7 +33,10 @@ public enum ProducerFailure {
    * delivered nothing.
    */
   OUTPUT_MISMATCH,
-  /** Reading FFmpeg's standard output failed. */
+  /**
+   * Reading FFmpeg's standard output failed, or the copy of the source did not reach the FFmpeg
+   * that encodes it.
+   */
   OUTPUT_UNREADABLE,
   /**
    * FFmpeg wrote nothing to its standard output for the stall timeout while the producer was

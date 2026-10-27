@@ -29,8 +29,14 @@ public record VideoDynamicRange(
 
     record Absent() implements DolbyVision {}
 
+    /**
+     * @param rpuStartsSample whether a sample that the probe read starts with an RPU ahead of its
+     *     picture: the RPU of the picture before, which FFmpeg's decoder skips there
+     */
     record Present(
-        @NonNull Optional<DolbyVisionConfiguration> declared, @NonNull Presence observedRpu)
+        @NonNull Optional<DolbyVisionConfiguration> declared,
+        @NonNull Presence observedRpu,
+        @NonNull Presence rpuStartsSample)
         implements DolbyVision {}
   }
 

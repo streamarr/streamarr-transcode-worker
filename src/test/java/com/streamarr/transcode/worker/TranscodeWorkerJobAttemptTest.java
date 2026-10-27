@@ -608,6 +608,41 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
+  @Test
+  @DisplayName(
+      "Should launch an FFmpeg that copies the source and an FFmpeg that encodes the copy when the"
+          + " encode's Dolby Vision profile 5 source starts samples with RPUs")
+  void
+      shouldLaunchAnFfmpegThatCopiesTheSourceAndAnFfmpegThatEncodesTheCopyWhenTheEncodesDolbyVisionProfile5SourceStartsSamplesWithRpus()
+          throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getDecisionBuilder()
+        .getVideoBuilder()
+        .setSourceDynamicRange(
+            VideoDynamicRange.newBuilder()
+                .setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_NONE)
+                .setHdr10Plus(Presence.PRESENCE_ABSENT)
+                .setDolbyVisionPresent(
+                    DolbyVisionPresent.newBuilder()
+                        .setObservedRpu(Presence.PRESENCE_PRESENT)
+                        .setRpuStartsSample(Presence.PRESENCE_PRESENT)));
+    job.getDecisionBuilder().getAudioBuilder().setCodec("eac3");
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      var commands = launcher.commands(fromProto(job.getJobAttemptId()));
+      assertThat(commands).hasSize(2);
+      assertThat(commands.getFirst())
+          .endsWith("-c", "copy", "-muxdelay", "0", "-f", "mpegts", "pipe:1");
+      assertThat(commands.getLast()).containsSequence("-f", "mpegts", "-i", "pipe:0");
+    }
+  }
+
   static Stream<Arguments> sourceDynamicRanges() {
     var pq = VideoDynamicRange.newBuilder().setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_PQ);
     var declared =

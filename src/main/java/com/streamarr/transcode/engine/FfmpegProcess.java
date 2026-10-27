@@ -13,7 +13,7 @@ import lombok.NonNull;
  * outlives the grace period, because a hung FFmpeg can ignore termination. Its error output is
  * drained throughout, so that a non-zero exit can be explained.
  */
-sealed interface FfmpegProcess permits SingleFfmpegProcess {
+sealed interface FfmpegProcess permits SingleFfmpegProcess, PipedFfmpegProcesses {
 
   /**
    * Starts FFmpeg for the job attempt.
@@ -33,6 +33,8 @@ sealed interface FfmpegProcess permits SingleFfmpegProcess {
     return switch (pipeline) {
       case FfmpegPipeline.SingleProcess(var command) ->
           new SingleFfmpegProcess(starter.start(command), gracePeriod);
+      case FfmpegPipeline.TransportStreamPipe pipe ->
+          PipedFfmpegProcesses.start(starter, pipe, gracePeriod);
     };
   }
 
