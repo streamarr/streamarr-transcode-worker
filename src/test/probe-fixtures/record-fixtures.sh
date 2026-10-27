@@ -286,13 +286,13 @@ for source in "$@"; do
       fi
     done
     # The first-packets read of an H.264 or HEVC chosen video stream, with FirstPacketsProbe's
-    # arguments.
+    # arguments: as many packets as the first-frames read took.
     codec="$(ffprobe -v quiet "${LIMITS[@]}" -select_streams "$chosen" \
       -show_entries stream=codec_name -of csv=p=0 "$source")"
     codec="${codec%%[,$'\n']*}"
     if [ "$codec" = h264 ] || [ "$codec" = hevc ]; then
       ffprobe -v quiet -print_format json "${LIMITS[@]}" -select_streams "$chosen" \
-        -read_intervals '%+#3' -show_entries packet=data -show_data \
+        -read_intervals "%+#$packets" -show_entries packet=data -show_data \
         "$source" > "packet-data/$(basename "$source").json"
     fi
   fi

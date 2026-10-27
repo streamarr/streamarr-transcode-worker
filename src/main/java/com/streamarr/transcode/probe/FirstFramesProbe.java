@@ -3,6 +3,7 @@ package com.streamarr.transcode.probe;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.OptionalInt;
 import java.util.concurrent.ExecutionException;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
@@ -42,29 +43,39 @@ final class FirstFramesProbe {
   @NonNull private final ObjectMapper objectMapper;
   @NonNull private final ContainerIndexProbe.FfprobeRunner ffprobe;
 
-  void addTo(JsonNode ffprobeOutput, Path source) throws ExecutionException, InterruptedException {
+  /**
+   * Adds the first frames, and returns the count of the first packets that the read of those frames
+   * took; empty when the probe read no frame.
+   */
+  OptionalInt addTo(JsonNode ffprobeOutput, Path source)
+      throws ExecutionException, InterruptedException {
     var chosen = ChosenVideoStream.find(ffprobeOutput.path("streams"));
     if (chosen.isEmpty() || !(chosen.get().description() instanceof ObjectNode description)) {
-      return;
+      return OptionalInt.empty();
     }
 
     var frames = List.<JsonNode>of();
+    var framesPackets = 0;
     for (var packets = FRAME_COUNT;
         packets <= WIDEST_READ && frames.size() < FRAME_COUNT;
         packets *= WIDER_READ_FACTOR) {
       var wider = read(source, chosen.get().streamIndex(), packets);
       if (wider.size() > frames.size()) {
         frames = wider;
+        framesPackets = packets;
       }
     }
 
-    if (!frames.isEmpty()) {
-      description.set(
-          FIRST_FRAMES,
-          objectMapper
-              .createArrayNode()
-              .addAll(frames.subList(0, Math.min(FRAME_COUNT, frames.size()))));
+    if (frames.isEmpty()) {
+      return OptionalInt.empty();
     }
+
+    description.set(
+        FIRST_FRAMES,
+        objectMapper
+            .createArrayNode()
+            .addAll(frames.subList(0, Math.min(FRAME_COUNT, frames.size()))));
+    return OptionalInt.of(framesPackets);
   }
 
   /** The frames that the stream's first packets decode to; none when ffprobe fails. */

@@ -151,8 +151,7 @@ public final class FfprobeExecutor {
 
     if (output.exitCode() == 0) {
       new StreamExtradataProbe(objectMapper, this::run).addTo(json, attempt.source());
-      new FirstFramesProbe(objectMapper, this::run).addTo(json, attempt.source());
-      new FirstPacketsProbe(objectMapper, this::run).addTo(json, attempt.source());
+      addFirstFramesAndPackets(json, attempt.source());
       MatroskaColourProbe.addTo(json, attempt.source());
     }
 
@@ -179,6 +178,15 @@ public final class FfprobeExecutor {
     }
 
     return new ContainerIndexProbe(objectMapper, this::run).addKeyframes(probed);
+  }
+
+  /** The packets that the probe reads hold the first frames, so their read follows the frames'. */
+  private void addFirstFramesAndPackets(JsonNode json, Path source)
+      throws ExecutionException, InterruptedException {
+    var framesPackets = new FirstFramesProbe(objectMapper, this::run).addTo(json, source);
+    if (framesPackets.isPresent()) {
+      new FirstPacketsProbe(objectMapper, this::run).addTo(json, source, framesPackets.getAsInt());
+    }
   }
 
   /**

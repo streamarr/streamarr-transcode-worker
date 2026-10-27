@@ -23,6 +23,7 @@ import lombok.NonNull;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
 /**
@@ -110,7 +111,10 @@ final class RecordedFfprobe {
         return this;
       }
 
-      /** What the first-packets read prints; without it, the read fails. */
+      /**
+       * What the first-packets read prints; without it, the read fails. A read of fewer packets
+       * prints only the first of them.
+       */
       AnswersBuilder firstPackets(String output) {
         this.firstPackets = Optional.of(output);
         return this;
@@ -179,7 +183,8 @@ final class RecordedFfprobe {
               }
 
               if (isFirstPacketsRead(command.arguments())) {
-                return scripted(answers.firstPackets());
+                var count = packetsRead(command.arguments());
+                return scripted(answers.firstPackets().map(printed -> firstOf(printed, count)));
               }
 
               if (isFirstFramesRead(command.arguments())
@@ -226,6 +231,23 @@ final class RecordedFfprobe {
         .map(printed -> ScriptedProcess.builder().output(printed.getBytes(StandardCharsets.UTF_8)))
         .orElseGet(() -> ScriptedProcess.builder().output(new byte[0]).exitCode(1))
         .build();
+  }
+
+  /** The printed packets as a read of only the first {@code count} packets prints them. */
+  private static String firstOf(String printed, int count) {
+    try {
+      if (!(new ObjectMapper().readTree(printed) instanceof ObjectNode output)
+          || !(output.path("packets") instanceof ArrayNode packets)
+          || packets.size() <= count) {
+        return printed;
+      }
+
+      var first = output.arrayNode();
+      packets.valueStream().limit(count).forEach(first::add);
+      return output.set("packets", first).toString();
+    } catch (JacksonException _) {
+      return printed;
+    }
   }
 
   private static boolean isFirstPacketsRead(List<String> arguments) {

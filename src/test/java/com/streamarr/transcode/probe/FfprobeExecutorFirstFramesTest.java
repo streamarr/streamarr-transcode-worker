@@ -785,6 +785,30 @@ class FfprobeExecutorFirstFramesTest {
 
     @Test
     @DisplayName(
+        "Should find the RPUs in the packets that hold the frames when an edit list discards the"
+            + " first packets")
+    void shouldFindTheRpusInThePacketsThatHoldTheFramesWhenAnEditListDiscardsTheFirstPackets() {
+      // The first 3 packets decode to no frame, so the frames come from a read of 12 packets.
+      var present =
+          probed(
+                  hevc(extradata(HEVC_RECORD))
+                      .prerollPackets(3)
+                      .firstFrames(frames("", "", ""))
+                      .firstPackets(
+                          packets(
+                              lengthPrefixed(IDR_SLICE),
+                              lengthPrefixed(SLICE),
+                              lengthPrefixed(SLICE),
+                              lengthPrefixed(AUD, PROFILE_5_RPU_UNIT, SLICE))))
+              .getDynamicRange()
+              .getDolbyVisionPresent();
+
+      assertThat(present.getObservedRpu()).isEqualTo(Presence.PRESENCE_PRESENT);
+      assertThat(present.getRpuStartsSample()).isEqualTo(Presence.PRESENCE_PRESENT);
+    }
+
+    @Test
+    @DisplayName(
         "Should take the frames' RPU header and the packets' layout when each RPU follows its"
             + " picture")
     void shouldTakeTheFramesRpuHeaderAndThePacketsLayoutWhenEachRpuFollowsItsPicture() {

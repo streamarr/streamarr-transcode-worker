@@ -208,7 +208,8 @@ class FfprobeExecutorProcessTest {
         script(
             """
         printf '%s\n' "$@" -- >> "$0.args"
-        printf '%s' '{"streams":[{"index":0,"codec_type":"video","codec_name":"h264"}]}'
+        printf '%s' '{"streams":[{"index":0,"codec_type":"video","codec_name":"h264"}],
+          "frames":[{"stream_index":0}]}'
         """);
     var source = temporaryDirectory.resolve("movie with spaces.mkv");
 
@@ -242,7 +243,8 @@ class FfprobeExecutorProcessTest {
     runs.addAll(extradataRead);
     var recorded = Files.readAllLines(Path.of(binary + ".args"));
     assertThat(recorded.subList(0, runs.size())).isEqualTo(runs);
-    // The script prints no frame, so the first-frames read widens to its widest read.
+    // The script prints one frame, so the first-frames read widens to its widest read, and the
+    // first-packets read takes the 3 packets of the read that decoded that frame.
     var position = runs.size();
     for (var packets : List.of(3, 12, 48, 192)) {
       var firstFramesRead = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));

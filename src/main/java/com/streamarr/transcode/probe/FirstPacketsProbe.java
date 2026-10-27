@@ -14,11 +14,12 @@ import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
 /**
- * Adds the bytes of an H.264 or HEVC chosen video stream's first 3 packets to its ffprobe
- * description, under {@link #FIRST_PACKETS}, as ffprobe's hex dumps. FFmpeg's H.264 decoder drops
- * the NAL units that carry Dolby Vision RPUs, and its HEVC decoder ignores an RPU that is not the
- * last NAL unit of its sample, so the probe finds them in the packets. When ffprobe fails or prints
- * no packet, the description gets no packets.
+ * Adds the bytes of the first packets of an H.264 or HEVC chosen video stream to its ffprobe
+ * description, under {@link #FIRST_PACKETS}, as ffprobe's hex dumps: as many packets as the read of
+ * its first frames took, so that they hold those frames. FFmpeg's H.264 decoder drops the NAL units
+ * that carry Dolby Vision RPUs, and its HEVC decoder ignores an RPU that is not the last NAL unit
+ * of its sample, so the probe finds them in the packets. When ffprobe fails or prints no packet,
+ * the description gets no packets.
  */
 @RequiredArgsConstructor
 @Slf4j
@@ -27,12 +28,12 @@ final class FirstPacketsProbe {
   /** The key under which the chosen video stream's description holds its first packets. */
   static final String FIRST_PACKETS = "first_packets";
 
-  private static final String PACKET_COUNT = "%+#3";
-
   @NonNull private final ObjectMapper objectMapper;
   @NonNull private final ContainerIndexProbe.FfprobeRunner ffprobe;
 
-  void addTo(JsonNode ffprobeOutput, Path source) throws ExecutionException, InterruptedException {
+  /** Adds the first {@code count} packets, as many as the read of the first frames took. */
+  void addTo(JsonNode ffprobeOutput, Path source, int count)
+      throws ExecutionException, InterruptedException {
     var chosen = ChosenVideoStream.find(ffprobeOutput.path("streams"));
     if (chosen.isEmpty()
         || !(chosen.get().description() instanceof ObjectNode description)
@@ -47,7 +48,7 @@ final class FirstPacketsProbe {
             "-select_streams",
             String.valueOf(chosen.get().streamIndex()),
             "-read_intervals",
-            PACKET_COUNT,
+            "%+#" + count,
             "-show_entries",
             "packet=data",
             "-show_data",
