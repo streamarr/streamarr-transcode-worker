@@ -556,7 +556,7 @@ class FfprobeExecutorFirstFramesTest {
           probe(
                   Answers.builder()
                       .ffprobeOutput(output(HEVC_WITH_RECORD))
-                      .firstFrames(frames("", MASTERING_DISPLAY + "," + LIGHT_LEVEL))
+                      .firstFrames(frames("", MASTERING_DISPLAY + "," + LIGHT_LEVEL, ""))
                       .firstPackets(DELIMITED_PACKETS)
                       .build())
               .getStreams(0);

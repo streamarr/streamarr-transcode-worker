@@ -12,7 +12,8 @@ import tools.jackson.databind.JsonNode;
  * probe does not read, and FFmpeg's HEVC decoder applies the SEI NAL units of Annex B extradata to
  * the frames. A packet can also carry a replacement record as new extradata side data, which
  * FFmpeg's MP4 demuxer attaches when a sample switches to another sample description. ffprobe
- * prints that side data's type but not its bytes, and FFmpeg's decoders apply the replacement.
+ * prints that side data's type but not its bytes, and FFmpeg's decoders apply the replacement. A
+ * cut-short first-frames read leaves packets past the walk that can hold any unit.
  */
 final class WalkCoverage {
 
@@ -23,7 +24,11 @@ final class WalkCoverage {
 
   /** Whether the stream holds units that the walks do not read, so that they rule nothing out. */
   static boolean missesUnits(JsonNode stream) {
-    return isReplacingExtradata(stream) || isUnwalkedExtradata(stream);
+    return isReplacingExtradata(stream) || isUnwalkedExtradata(stream) || isCutShort(stream);
+  }
+
+  private static boolean isCutShort(JsonNode stream) {
+    return FirstFrames.of(stream).filter(FirstFrames::cutShort).isPresent();
   }
 
   /**

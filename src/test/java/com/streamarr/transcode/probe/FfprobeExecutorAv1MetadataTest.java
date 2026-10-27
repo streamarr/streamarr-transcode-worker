@@ -294,6 +294,22 @@ class FfprobeExecutorAv1MetadataTest {
   class StaticHdrMetadataTests {
 
     @Test
+    @DisplayName("Should mark both static values omitted when a cut-short read's OBUs hold neither")
+    void shouldMarkBothStaticValuesOmittedWhenACutShortReadsObusHoldNeither() {
+      var video =
+          probe(
+                  answers(AV1C)
+                      .firstFrames(frames(""))
+                      .firstPackets(packets(temporalUnit(), temporalUnit(), temporalUnit()))
+                      .build())
+              .getStreams(0);
+
+      assertThat(video.getFirstFramesRead()).isTrue();
+      assertThat(video.getMasteringDisplayOmitted()).isTrue();
+      assertThat(video.getContentLightLevelOmitted()).isTrue();
+    }
+
+    @Test
     @DisplayName("Should convert the first metadata OBUs' values when the first frame has none")
     void shouldConvertTheFirstMetadataObusValuesWhenTheFirstFrameHasNone() {
       // A static OBU after the last kept frame's OBUs reaches no frame.

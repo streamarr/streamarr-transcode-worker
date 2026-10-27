@@ -564,6 +564,44 @@ class FfprobeExecutorSeiTest {
 
     @ParameterizedTest(name = "{0}")
     @EnumSource(Coding.class)
+    @DisplayName(
+        "Should mark both static values omitted when a cut-short read's packets hold neither")
+    void shouldMarkBothStaticValuesOmittedWhenACutShortReadsPacketsHoldNeither(Coding coding) {
+      // Packets past the kept read can hold any message.
+      var video =
+          probe(
+                  coding
+                      .answers()
+                      .firstFrames(frames(""))
+                      .firstPackets(packets(coding.sample(), coding.sample(), coding.sample()))
+                      .build())
+              .getStreams(0);
+
+      assertThat(video.getFirstFramesRead()).isTrue();
+      assertThat(video.getMasteringDisplayOmitted()).isTrue();
+      assertThat(video.getContentLightLevelOmitted()).isTrue();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Coding.class)
+    @DisplayName("Should take a cut-short read's static values from the packets that hold them")
+    void shouldTakeACutShortReadsStaticValuesFromThePacketsThatHoldThem(Coding coding) {
+      var video =
+          probe(
+                  coding
+                      .answers()
+                      .firstFrames(frames(""))
+                      .firstPackets(packets(coding.sample(coding.sei(LIGHT_LEVEL))))
+                      .build())
+              .getStreams(0);
+
+      assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(1000);
+      assertThat(video.getContentLightLevelOmitted()).isFalse();
+      assertThat(video.getMasteringDisplayOmitted()).isTrue();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Coding.class)
     @DisplayName("Should take the static metadata from the packets when the first frame has none")
     void shouldTakeTheStaticMetadataFromThePacketsWhenTheFirstFrameHasNone(Coding coding) {
       var video =
