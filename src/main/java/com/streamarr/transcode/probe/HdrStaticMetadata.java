@@ -51,7 +51,7 @@ final class HdrStaticMetadata {
                         builder::setMasteringDisplay,
                         () -> builder.setMasteringDisplayOmitted(true)));
     VideoStreamFacts.sideData(stream, CONTENT_LIGHT_LEVEL)
-        .or(() -> Optional.ofNullable(stream.get(MatroskaLightLevelProbe.CONTAINER_LIGHT_LEVEL)))
+        .or(() -> Optional.ofNullable(stream.get(MatroskaColourProbe.CONTAINER_LIGHT_LEVEL)))
         .or(() -> firstFrameSideData(stream, CONTENT_LIGHT_LEVEL))
         .ifPresent(
             side ->

@@ -21,8 +21,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 @Tag("UnitTest")
-@DisplayName("FFprobe Executor Matroska Light Level Tests")
-class FfprobeExecutorMatroskaLightLevelTest {
+@DisplayName("FFprobe Executor Matroska Colour Tests")
+class FfprobeExecutorMatroskaColourTest {
 
   private static final long MAX_CLL = 0x55BC;
   private static final long MAX_FALL = 0x55BD;

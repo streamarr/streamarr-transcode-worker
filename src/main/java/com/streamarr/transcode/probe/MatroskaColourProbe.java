@@ -19,7 +19,7 @@ import tools.jackson.databind.node.ObjectNode;
  * the other.
  */
 @Slf4j
-final class MatroskaLightLevelProbe {
+final class MatroskaColourProbe {
 
   /** The key under which the chosen video stream's description holds the track's light level. */
   static final String CONTAINER_LIGHT_LEVEL = "matroska_light_level";
@@ -30,7 +30,7 @@ final class MatroskaLightLevelProbe {
   private static final long MAX_CLL = 0x55BCL;
   private static final long MAX_FALL = 0x55BDL;
 
-  private MatroskaLightLevelProbe() {}
+  private MatroskaColourProbe() {}
 
   static void addTo(JsonNode ffprobeOutput, Path source) {
     var isMatroska =
@@ -60,7 +60,7 @@ final class MatroskaLightLevelProbe {
           .map(tracks -> MatroskaFile.videoTrack(tracks, videoTrackOrdinal))
           .flatMap(track -> MatroskaFile.child(track, VIDEO))
           .flatMap(video -> MatroskaFile.child(video, COLOUR))
-          .flatMap(MatroskaLightLevelProbe::lightLevel);
+          .flatMap(MatroskaColourProbe::lightLevel);
     } catch (IOException
         | ContainerIndexException
         | BufferUnderflowException
