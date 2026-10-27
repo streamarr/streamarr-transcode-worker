@@ -205,7 +205,9 @@ final class MatroskaFile {
       var found = new HashMap<Long, ByteBuffer>();
       var seekPositions = new HashMap<Long, Long>();
       var position = segment.dataStart();
-      while (position < segmentEnd) {
+      // The walk stops once it holds every element sought, so that a malformed element after them
+      // loses none.
+      while (position < segmentEnd && !found.keySet().containsAll(ids)) {
         var element = element(channel, position);
         if (element.id() == CLUSTER || element.size() == UNKNOWN_SIZE) {
           break;

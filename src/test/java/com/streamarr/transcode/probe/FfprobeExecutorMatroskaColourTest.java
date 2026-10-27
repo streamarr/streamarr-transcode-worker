@@ -256,6 +256,20 @@ class FfprobeExecutorMatroskaColourTest {
   }
 
   @Test
+  @DisplayName("Should read the track's Colour when a malformed SeekHead follows the Tracks")
+  void shouldReadTheTracksColourWhenAMalformedSeekHeadFollowsTheTracks() throws IOException {
+    var tracks =
+        element(0x1654AE6B, trackEntry(1, element(MAX_CLL, unsigned(900)), maxLuminanceOnly()));
+    // A zero byte starts no EBML element ID.
+    var malformedSeekHead = element(0x114D9B74, new byte[] {0x00, 0x00});
+
+    var video = probeMatroska(MATROSKA, document(tracks, malformedSeekHead));
+
+    assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(900);
+    assertThat(video.getMasteringDisplayOmitted()).isTrue();
+  }
+
+  @Test
   @DisplayName("Should leave the mastering display unmarked when the container is not Matroska")
   void shouldLeaveTheMasteringDisplayUnmarkedWhenTheContainerIsNotMatroska() throws IOException {
     var video = probeMatroska("mov,mp4,m4a,3gp,3g2,mj2", videoTrack(maxLuminanceOnly()));
