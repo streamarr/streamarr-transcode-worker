@@ -10,6 +10,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 /**
@@ -43,11 +45,19 @@ final class MatroskaFile {
    * whose type is video, one for the second, and so on.
    */
   static ByteBuffer videoTrack(ByteBuffer tracks, int videoTrackOrdinal) {
-    return children(tracks, TRACK_ENTRY).stream()
-        .filter(entry -> unsigned(entry, TRACK_TYPE).orElse(0L) == VIDEO_TRACK_TYPE)
-        .skip(videoTrackOrdinal)
-        .findFirst()
-        .orElseThrow(() -> malformed("video TrackEntry"));
+    var videoTracksBefore = new AtomicInteger(videoTrackOrdinal);
+    var found = new AtomicReference<ByteBuffer>();
+    eachChild(
+        tracks,
+        TRACK_ENTRY,
+        entry -> {
+          if (found.get() == null
+              && unsigned(entry, TRACK_TYPE).orElse(0L) == VIDEO_TRACK_TYPE
+              && videoTracksBefore.getAndDecrement() == 0) {
+            found.set(entry);
+          }
+        });
+    return Optional.ofNullable(found.get()).orElseThrow(() -> malformed("video TrackEntry"));
   }
 
   static Optional<Long> unsigned(ByteBuffer parent, long id) {
@@ -88,8 +98,11 @@ final class MatroskaFile {
             });
   }
 
+  /** The first child with this ID; holds no other, as a hostile element can hold millions. */
   static Optional<ByteBuffer> child(ByteBuffer parent, long id) {
-    return children(parent, id).stream().findFirst();
+    var first = new AtomicReference<ByteBuffer>();
+    eachChild(parent, id, match -> first.compareAndSet(null, match));
+    return Optional.ofNullable(first.get());
   }
 
   static List<ByteBuffer> children(ByteBuffer parent, long id) {

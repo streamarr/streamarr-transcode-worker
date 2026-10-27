@@ -319,6 +319,25 @@ class FfprobeExecutorMatroskaColourTest {
         .getStreams(0);
   }
 
+  @Test
+  @DisplayName(
+      "Should mark the mastering display omitted when the Colour holds millions of"
+          + " MasteringMetadata elements")
+  void shouldMarkTheMasteringDisplayOmittedWhenTheColourHoldsMillionsOfMasteringMetadataElements()
+      throws IOException {
+    // 18 MB of empty MasteringMetadata elements; the lookup of the first must not hold the rest,
+    // which exhausted a 256 MiB heap.
+    var empty = element(MASTERING_METADATA, new byte[0]);
+    var colour = new byte[empty.length * 6_000_000];
+    for (var offset = 0; offset < colour.length; offset += empty.length) {
+      System.arraycopy(empty, 0, colour, offset, empty.length);
+    }
+
+    var video = probeMatroska(MATROSKA, videoTrack(colour));
+
+    assertThat(video.getMasteringDisplayOmitted()).isTrue();
+  }
+
   /** A MasteringMetadata element that holds only LuminanceMax, 1000 cd/m^2 as a 4-byte float. */
   private static byte[] maxLuminanceOnly() {
     return element(
