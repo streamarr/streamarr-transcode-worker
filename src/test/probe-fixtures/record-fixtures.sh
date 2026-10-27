@@ -275,7 +275,8 @@ cp /fate/mkv/hdr10tags-both.mkv mkv-hdr10-fate.mkv
 cp /fate/hevc/hdr10_plus_h265_sample.hevc hevc-hdr10-plus.hevc
 cp /fate/mkv/dovi-p7-hvce.mkv mkv-dovi-p7-hvce.mkv
 cp /fate/mpegts/dovi-p7.ts mpegts-dovi-p7-two-layers.ts
-# The profile 5 sample as raw HEVC, whose RPUs move-rpus-ahead.py moves ahead of their pictures.
+# The profile 5 sample as raw HEVC, whose RPUs move-rpus-ahead.py moves ahead of the next picture
+# or of their own.
 "${FF[@]}" -i /fate/mov/dovi-p5.mp4 -map 0:v -c copy -f hevc dovi-p5.hevc
 CONTAINER
 
@@ -365,14 +366,17 @@ FIXTURES_TO_PROBE=(mp4-titled.mp4 mkv-remuxed-from-mp4.mkv mp4-default-handlers.
   mp4-av1-hdr10-plus-rejected.mp4 mp4-av1-static-after-frame.mp4)
 if [ -n "${FATE_SUITE:-}" ]; then
   in_image fate.sh
-  python3 "$HERE/move-rpus-ahead.py" "$WORK/dovi-p5.hevc" "$WORK/hevc-dovi-p5-rpus-ahead.hevc"
+  python3 "$HERE/move-rpus-ahead.py" next "$WORK/dovi-p5.hevc" "$WORK/hevc-dovi-p5-rpus-ahead.hevc"
+  python3 "$HERE/move-rpus-ahead.py" own "$WORK/dovi-p5.hevc" \
+    "$WORK/hevc-dovi-p5-rpus-before-own-picture.hevc"
   for variant in rpu rpu-bad-emdf; do
     python3 "$HERE/insert-av1-metadata.py" "$variant" "$WORK/av1-pq.ivf" "$WORK/av1-$variant.ivf" \
       "$WORK/dovi-p5.hevc"
   done
   FIXTURES_TO_PROBE+=(mkv-eac3-atmos-dts-hd-ma.mkv mp4-dovi-p5-hev1.mp4 mkv-hdr10-fate.mkv
     mpegts-dovi-p7.ts hevc-hdr10-plus.hevc mkv-dovi-p7-hvce.mkv mpegts-dovi-p7-two-layers.ts
-    hevc-dovi-p5-rpus-ahead.hevc mp4-av1-rpu.mp4 mp4-av1-rpu-bad-emdf.mp4)
+    hevc-dovi-p5-rpus-ahead.hevc hevc-dovi-p5-rpus-before-own-picture.hevc mp4-av1-rpu.mp4
+    mp4-av1-rpu-bad-emdf.mp4)
 fi
 in_image av1.sh
 
@@ -436,7 +440,7 @@ done
 FIXTURES_TO_COPY=()
 for source in "${FIXTURES_TO_PROBE[@]}"; do
   case "$source" in
-    hevc-dovi-p5-rpus-ahead.hevc | *-rejected-sei.*) ;;
+    hevc-dovi-p5-rpus-* | *-rejected-sei.*) ;;
     *) FIXTURES_TO_COPY+=("$source") ;;
   esac
 done
@@ -469,7 +473,8 @@ done
 # HDR metadata that its SEI messages or metadata OBUs could hold. The large local samples keep no read: 3 of their
 # packets take hundreds of kilobytes.
 PACKET_DATA=(mp4-sdr8-bt709.mp4 mp4-dovi-p9-avc1.mp4 mp4-dovi-p9-dva1.mp4 mpegts-dovi-p9.ts
-  mp4-dovi-p5-hev1.mp4 hevc-dovi-p5-rpus-ahead.hevc mpegts-dovi-p7-two-layers.ts mpegts-pq10.ts
+  mp4-dovi-p5-hev1.mp4 hevc-dovi-p5-rpus-ahead.hevc hevc-dovi-p5-rpus-before-own-picture.hevc
+  mpegts-dovi-p7-two-layers.ts mpegts-pq10.ts
   mkv-pipe-hevc-10bit.mkv mpegts-hevc-ac3.ts hevc-hdr10-plus-rejected-sei.hevc
   h264-hdr10-rejected-sei.h264 mp4-av1-pq.mp4 mp4-av1-hdr10-plus-rejected.mp4
   mp4-av1-static-after-frame.mp4 mp4-av1-rpu.mp4 mp4-av1-rpu-bad-emdf.mp4)

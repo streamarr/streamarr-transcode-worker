@@ -41,6 +41,7 @@ from its lavfi test sources. No file comes from a media library.
 | `mp4-sdr8-bt709.mp4.json` | 8-bit H.264 tagged BT.709 |
 | `mp4-dovi-p5-hev1.mp4.json` | FFmpeg's FATE sample `mov/dovi-p5.mp4`: Dolby Vision profile 5 under `hev1`, with a `dvcC` record |
 | `hevc-dovi-p5-rpus-ahead.hevc.json` | FFmpeg's FATE sample `mov/dovi-p5.mp4` as raw HEVC, whose RPUs `move-rpus-ahead.py` moved ahead of the next picture, behind a copy of the parameter sets. FFmpeg's HEVC decoder ignores each RPU, so only the packets show them |
+| `hevc-dovi-p5-rpus-before-own-picture.hevc.json` | The same sample, whose RPUs `move-rpus-ahead.py` moved ahead of their own pictures, behind the parameter sets that start each sample. No known muxer writes this layout. FFmpeg's HEVC decoder ignores each RPU, so only the packets show them |
 | `mkv-hdr10-fate.mkv.json` | FFmpeg's FATE sample `mkv/hdr10tags-both.mkv`: HDR10 mastering values stored as 32-bit floats |
 | `mpegts-dovi-p7.ts.json` | FFmpeg's FATE sample `mov/dovi-p7-hvce.mp4` copied into MPEG-TS, whose Dolby Vision descriptor carries the profile 7 record |
 | `mp4-dovi-p5-dvh1.mp4.json` | Local sample: Dolby Vision profile 5 under `dvh1` with a `dvcC` record and no transfer tag |

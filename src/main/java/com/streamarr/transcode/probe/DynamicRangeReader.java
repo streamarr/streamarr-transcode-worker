@@ -7,6 +7,7 @@ import build.buf.gen.streamarr.transcode.v1.DolbyVisionAbsent;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionConfiguration;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionPresent;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionRpuHeader;
+import build.buf.gen.streamarr.transcode.v1.DolbyVisionRpuPlacement;
 import build.buf.gen.streamarr.transcode.v1.Presence;
 import build.buf.gen.streamarr.transcode.v1.VideoDynamicRange;
 import java.util.List;
@@ -139,8 +140,9 @@ final class DynamicRangeReader {
         DolbyVisionPresent.newBuilder()
             .setObservedRpu(
                 rpus.map(RpuObservation::presence).orElse(Presence.PRESENCE_UNSPECIFIED))
-            .setRpuStartsSample(
-                rpus.map(RpuObservation::startsSample).orElse(Presence.PRESENCE_UNSPECIFIED));
+            .setRpuPlacement(
+                rpus.map(RpuObservation::placement)
+                    .orElse(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED));
     record.ifPresent(claim -> present.setDeclared(configuration(claim)));
     rpus.flatMap(RpuObservation::firstHeader).ifPresent(present::setFirstRpuHeader);
     return present.build();
@@ -206,7 +208,9 @@ final class DynamicRangeReader {
         new RpuObservation(
             Presence.PRESENCE_PRESENT,
             inFrames.get().firstHeader(),
-            fromPackets.map(RpuObservation::startsSample).orElse(Presence.PRESENCE_UNSPECIFIED)));
+            fromPackets
+                .map(RpuObservation::placement)
+                .orElse(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED)));
   }
 
   // A decoder hides where an RPU sits in its sample.
@@ -215,7 +219,7 @@ final class DynamicRangeReader {
     return new RpuObservation(
         presence(observed),
         frames.earliestSideData(RPU_METADATA).flatMap(DynamicRangeReader::header),
-        Presence.PRESENCE_UNSPECIFIED);
+        DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED);
   }
 
   /** The header that ffprobe parsed; empty when ffprobe printed only part of it. */

@@ -28,6 +28,7 @@ import build.buf.gen.streamarr.transcode.v1.CompatibleBase;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionAbsent;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionConfiguration;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionPresent;
+import build.buf.gen.streamarr.transcode.v1.DolbyVisionRpuPlacement;
 import build.buf.gen.streamarr.transcode.v1.EncoderPreset;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest.EventCase;
@@ -608,13 +609,19 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
-  @Test
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = DolbyVisionRpuPlacement.class,
+      names = {
+        "DOLBY_VISION_RPU_PLACEMENT_BEFORE_NEXT_PICTURE",
+        "DOLBY_VISION_RPU_PLACEMENT_BEFORE_OWN_PICTURE"
+      })
   @DisplayName(
       "Should launch an FFmpeg that copies the source and an FFmpeg that encodes the copy when the"
           + " encode's Dolby Vision profile 5 source starts samples with RPUs")
   void
-      shouldLaunchAnFfmpegThatCopiesTheSourceAndAnFfmpegThatEncodesTheCopyWhenTheEncodesDolbyVisionProfile5SourceStartsSamplesWithRpus()
-          throws Exception {
+      shouldLaunchAnFfmpegThatCopiesTheSourceAndAnFfmpegThatEncodesTheCopyWhenTheEncodesDolbyVisionProfile5SourceStartsSamplesWithRpus(
+          DolbyVisionRpuPlacement placement) throws Exception {
     var launcher = ScriptedProcessLauncher.running();
     var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
     job.getDecisionBuilder()
@@ -626,7 +633,7 @@ class TranscodeWorkerJobAttemptTest {
                 .setDolbyVisionPresent(
                     DolbyVisionPresent.newBuilder()
                         .setObservedRpu(Presence.PRESENCE_PRESENT)
-                        .setRpuStartsSample(Presence.PRESENCE_PRESENT)));
+                        .setRpuPlacement(placement)));
     job.getDecisionBuilder().getAudioBuilder().setCodec("eac3");
 
     try (var worker = worker(launcher)) {
@@ -640,6 +647,42 @@ class TranscodeWorkerJobAttemptTest {
       assertThat(commands.getFirst())
           .endsWith("-c", "copy", "-muxdelay", "0", "-f", "mpegts", "pipe:1");
       assertThat(commands.getLast()).containsSequence("-f", "mpegts", "-i", "pipe:0");
+    }
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = DolbyVisionRpuPlacement.class,
+      names = {
+        "DOLBY_VISION_RPU_PLACEMENT_AFTER_OWN_PICTURE",
+        "DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED"
+      })
+  @DisplayName(
+      "Should launch one FFmpeg when the encode's Dolby Vision profile 5 source does not start"
+          + " samples with RPUs")
+  void shouldLaunchOneFfmpegWhenTheEncodesDolbyVisionProfile5SourceDoesNotStartSamplesWithRpus(
+      DolbyVisionRpuPlacement placement) throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getDecisionBuilder()
+        .getVideoBuilder()
+        .setSourceDynamicRange(
+            VideoDynamicRange.newBuilder()
+                .setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_NONE)
+                .setHdr10Plus(Presence.PRESENCE_ABSENT)
+                .setDolbyVisionPresent(
+                    DolbyVisionPresent.newBuilder()
+                        .setObservedRpu(Presence.PRESENCE_PRESENT)
+                        .setRpuPlacement(placement)));
+    job.getDecisionBuilder().getAudioBuilder().setCodec("eac3");
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(launcher.commands(fromProto(job.getJobAttemptId()))).hasSize(1);
     }
   }
 

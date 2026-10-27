@@ -119,7 +119,6 @@ class FfprobeExecutorDynamicRangeTest {
                           .setBaseLayerFullRange(true)
                           .setDisableResidual(true)
                           .setVdrBitDepth(12))
-                  .setRpuStartsSample(Presence.PRESENCE_UNSPECIFIED)
                   .build());
     }
 

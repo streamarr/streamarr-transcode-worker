@@ -17,6 +17,7 @@ import build.buf.gen.streamarr.transcode.v1.CompatibleBase;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionAbsent;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionConfiguration;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionPresent;
+import build.buf.gen.streamarr.transcode.v1.DolbyVisionRpuPlacement;
 import build.buf.gen.streamarr.transcode.v1.EncoderPreset;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
@@ -1088,14 +1089,22 @@ class WorkerMediaSmokeTest {
                 softwareCapabilities(),
                 capturingCommands(new ProcessBuilderLauncher(), aheadCommands)),
             rpusAhead.getParent(),
-            profile5Job(rpusAhead, Presence.PRESENCE_PRESENT, startSequenceNumber).build());
+            profile5Job(
+                    rpusAhead,
+                    DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_BEFORE_NEXT_PICTURE,
+                    startSequenceNumber)
+                .build());
     var fromRpusBehind =
         execute(
             engine(
                 softwareCapabilities(),
                 capturingCommands(new ProcessBuilderLauncher(), behindCommands)),
             rpusBehind.getParent(),
-            profile5Job(rpusBehind, Presence.PRESENCE_ABSENT, startSequenceNumber).build());
+            profile5Job(
+                    rpusBehind,
+                    DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_AFTER_OWN_PICTURE,
+                    startSequenceNumber)
+                .build());
 
     assertThat(aheadCommands).as("FFmpegs for the source whose RPUs start samples").hasSize(2);
     assertThat(behindCommands).as("FFmpegs for the source whose RPUs follow pictures").hasSize(1);
@@ -1130,11 +1139,11 @@ class WorkerMediaSmokeTest {
   }
 
   private static VariantJob.Builder profile5Job(
-      Path source, Presence rpuStartsSample, int startSequenceNumber) {
+      Path source, DolbyVisionRpuPlacement rpuPlacement, int startSequenceNumber) {
     var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
     job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
     withVideo(job, forcedSoftwareEncode("h264", TINY_VARIANT_LEVELS.get("h264")));
-    withProfile5Source(job, rpuStartsSample);
+    withProfile5Source(job, rpuPlacement);
     job.getDecisionBuilder()
         .getAudioBuilder()
         .setMode(AudioMode.AUDIO_MODE_TRANSCODE)
@@ -1149,8 +1158,9 @@ class WorkerMediaSmokeTest {
     return job;
   }
 
-  // Dolby Vision profile 5, whose samples start with RPUs when rpuStartsSample is PRESENT.
-  private static void withProfile5Source(VariantJob.Builder job, Presence rpuStartsSample) {
+  // Dolby Vision profile 5, whose samples place each picture's RPU as rpuPlacement says.
+  private static void withProfile5Source(
+      VariantJob.Builder job, DolbyVisionRpuPlacement rpuPlacement) {
     job.getDecisionBuilder()
         .getVideoBuilder()
         .setSourceDynamicRange(
@@ -1160,7 +1170,7 @@ class WorkerMediaSmokeTest {
                 .setDolbyVisionPresent(
                     DolbyVisionPresent.newBuilder()
                         .setObservedRpu(Presence.PRESENCE_PRESENT)
-                        .setRpuStartsSample(rpuStartsSample)));
+                        .setRpuPlacement(rpuPlacement)));
   }
 
   // FFmpeg's copy of Matroska's millisecond audio timestamps into MPEG-TS counts samples from the
@@ -1177,9 +1187,9 @@ class WorkerMediaSmokeTest {
     var source = seekableSource(container);
     var job = seekableSourceJob(source, mode);
     job.getExecutionBuilder().setStartSequenceNumber(startSequenceNumber);
-    withProfile5Source(job, Presence.PRESENCE_ABSENT);
+    withProfile5Source(job, DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_AFTER_OWN_PICTURE);
     var oneFfmpeg = execute(engine(softwareCapabilities()), source.getParent(), job.build());
-    withProfile5Source(job, Presence.PRESENCE_PRESENT);
+    withProfile5Source(job, DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_BEFORE_NEXT_PICTURE);
     job.setJobAttemptId(toProto(UUID.randomUUID()));
     var commands = new CopyOnWriteArrayList<List<String>>();
 

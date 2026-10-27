@@ -26,7 +26,11 @@ final class WalkCoverage {
     return isReplacingExtradata(stream) || isUnwalkedExtradata(stream);
   }
 
-  private static boolean isReplacingExtradata(JsonNode stream) {
+  /**
+   * Whether a first packet carries a replacement record, so that the probe cannot tell how the
+   * packets after it delimit their NAL units.
+   */
+  static boolean isReplacingExtradata(JsonNode stream) {
     return stream
         .path(FirstPacketsProbe.FIRST_PACKETS)
         .valueStream()

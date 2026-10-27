@@ -1,6 +1,7 @@
 package com.streamarr.transcode.probe;
 
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionRpuHeader;
+import build.buf.gen.streamarr.transcode.v1.DolbyVisionRpuPlacement;
 import build.buf.gen.streamarr.transcode.v1.Presence;
 import com.streamarr.transcode.probe.BitReader.TruncatedBitstreamException;
 import java.nio.ByteBuffer;
@@ -113,21 +114,25 @@ final class Av1MetadataObus implements MetadataWalk {
   /**
    * PRESENT, with the header of the first RPU, when an RPU OBU without an extension byte shows.
    * ABSENT when the walk read all of the OBUs and no OBU with an extension byte holds an RPU.
-   * FFmpeg's AV1 decoders attach an RPU to the next shown frame, so a sample that starts with one
-   * has the expected layout, and the walk never tells it.
+   * FFmpeg's AV1 decoders attach an RPU to the next shown frame, so an RPU ahead of its frame is
+   * the layout that AV1 expects, and the walk never tells the placement.
    */
   @Override
   public Optional<RpuObservation> rpus() {
     if (firstRpu.isPresent()) {
       return Optional.of(
           new RpuObservation(
-              Presence.PRESENCE_PRESENT, header(firstRpu.get()), Presence.PRESENCE_UNSPECIFIED));
+              Presence.PRESENCE_PRESENT,
+              header(firstRpu.get()),
+              DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED));
     }
 
     if (readAll && !hasLayeredRpu) {
       return Optional.of(
           new RpuObservation(
-              Presence.PRESENCE_ABSENT, Optional.empty(), Presence.PRESENCE_UNSPECIFIED));
+              Presence.PRESENCE_ABSENT,
+              Optional.empty(),
+              DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED));
     }
 
     return Optional.empty();

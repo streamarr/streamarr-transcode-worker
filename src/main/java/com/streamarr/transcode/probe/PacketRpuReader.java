@@ -1,10 +1,12 @@
 package com.streamarr.transcode.probe;
 
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionRpuHeader;
+import build.buf.gen.streamarr.transcode.v1.DolbyVisionRpuPlacement;
 import build.buf.gen.streamarr.transcode.v1.Presence;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.IntStream;
 import tools.jackson.databind.JsonNode;
 
 /** Finds the Dolby Vision RPUs in the {@link FirstPacketSamples} of a stream. */
@@ -20,12 +22,17 @@ final class PacketRpuReader {
    */
   static Optional<RpuObservation> read(JsonNode stream, NalSyntax syntax) {
     var isEveryUnitWalked = !WalkCoverage.missesUnits(stream);
+    var isEverySampleDelimitable = !WalkCoverage.isReplacingExtradata(stream);
     return FirstPacketSamples.read(stream, syntax)
-        .flatMap(samples -> observation(samples, syntax, isEveryUnitWalked));
+        .flatMap(
+            samples -> observation(samples, syntax, isEveryUnitWalked, isEverySampleDelimitable));
   }
 
   private static Optional<RpuObservation> observation(
-      List<NalUnits> samples, NalSyntax syntax, boolean isEveryUnitWalked) {
+      List<NalUnits> samples,
+      NalSyntax syntax,
+      boolean isEveryUnitWalked,
+      boolean isEverySampleDelimitable) {
     var rpus = samples.stream().flatMap(sample -> sample.units().stream()).filter(syntax::isRpu);
     var firstRpu = rpus.findFirst();
     var isEverySampleComplete = samples.stream().allMatch(NalUnits::complete);
@@ -36,40 +43,47 @@ final class PacketRpuReader {
     if (firstRpu.isEmpty()) {
       return Optional.of(
           new RpuObservation(
-              Presence.PRESENCE_ABSENT, Optional.empty(), Presence.PRESENCE_UNSPECIFIED));
+              Presence.PRESENCE_ABSENT,
+              Optional.empty(),
+              DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED));
     }
 
-    var layouts = samples.stream().map(sample -> layout(sample, syntax)).toList();
-    var startsSample = Presence.PRESENCE_ABSENT;
-    if (layouts.contains(Layout.UNKNOWN)) {
-      startsSample = Presence.PRESENCE_UNSPECIFIED;
-    }
-
-    if (layouts.contains(Layout.RPU_FIRST)) {
-      startsSample = Presence.PRESENCE_PRESENT;
+    var placement = DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED;
+    if (isEverySampleComplete && isEverySampleDelimitable) {
+      placement = placement(samples.stream().map(sample -> Layout.of(sample, syntax)).toList());
     }
 
     return Optional.of(
-        new RpuObservation(
-            Presence.PRESENCE_PRESENT, header(firstRpu.get(), syntax), startsSample));
+        new RpuObservation(Presence.PRESENCE_PRESENT, header(firstRpu.get(), syntax), placement));
   }
 
   /**
-   * Whether an RPU comes ahead of the sample's first slice, or the sample holds no slice. Unknown
-   * when the reader could not delimit the sample to its end and found neither ahead of the cut.
+   * The placement whose rule the samples meet, in order; unspecified when a sample holds more than
+   * one RPU, a sample ahead of the first picture's sample holds one, or the samples meet no rule.
+   * At least one sample holds an RPU.
    */
-  private static Layout layout(NalUnits sample, NalSyntax syntax) {
-    for (var unit : sample.units()) {
-      if (syntax.isRpu(unit)) {
-        return Layout.RPU_FIRST;
-      }
-
-      if (syntax.isPicture(unit)) {
-        return Layout.PICTURE_FIRST;
-      }
+  private static DolbyVisionRpuPlacement placement(List<Layout> layouts) {
+    var firstPicture = layouts.stream().filter(Layout::hasPicture).findFirst();
+    var isAnyRpuAheadOfThePictures =
+        layouts.stream().takeWhile(layout -> !layout.hasPicture()).anyMatch(Layout::hasRpu);
+    if (firstPicture.isEmpty()
+        || isAnyRpuAheadOfThePictures
+        || layouts.stream().anyMatch(layout -> layout.rpus() > 1)) {
+      return DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED;
     }
 
-    return sample.complete() ? Layout.PICTURE_FIRST : Layout.UNKNOWN;
+    var withRpus = layouts.stream().filter(Layout::hasRpu).toList();
+    if (withRpus.stream().allMatch(Layout::rpuEndsPicture)) {
+      return DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_AFTER_OWN_PICTURE;
+    }
+
+    if (!withRpus.stream().allMatch(Layout::startsWithRpu)) {
+      return DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED;
+    }
+
+    return firstPicture.get().hasRpu()
+        ? DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_BEFORE_OWN_PICTURE
+        : DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_BEFORE_NEXT_PICTURE;
   }
 
   private static Optional<DolbyVisionRpuHeader> header(byte[] rpu, NalSyntax syntax) {
@@ -77,9 +91,37 @@ final class PacketRpuReader {
         Arrays.copyOfRange(rpu, syntax.payloadOffset(), rpu.length));
   }
 
-  private enum Layout {
-    RPU_FIRST,
-    PICTURE_FIRST,
-    UNKNOWN
+  /**
+   * Where a sample, which the reader delimited to its end, holds its RPU. A sample starts with an
+   * RPU when its only RPU comes ahead of its first slice, or it holds an RPU and no slice. The RPU
+   * ends the sample's picture when it follows a slice as the sample's last NAL unit.
+   */
+  private record Layout(
+      int rpus, boolean hasPicture, boolean startsWithRpu, boolean rpuEndsPicture) {
+
+    static Layout of(NalUnits sample, NalSyntax syntax) {
+      var units = sample.units();
+      var rpuIndexes =
+          IntStream.range(0, units.size())
+              .filter(index -> syntax.isRpu(units.get(index)))
+              .toArray();
+      var firstSlice =
+          IntStream.range(0, units.size())
+              .filter(index -> syntax.isPicture(units.get(index)))
+              .findFirst();
+      if (rpuIndexes.length != 1) {
+        return new Layout(rpuIndexes.length, firstSlice.isPresent(), false, false);
+      }
+
+      var rpu = rpuIndexes[0];
+      var isAheadOfTheSlices = firstSlice.isEmpty() || rpu < firstSlice.getAsInt();
+      var isLast = rpu == units.size() - 1;
+      return new Layout(
+          1, firstSlice.isPresent(), isAheadOfTheSlices, !isAheadOfTheSlices && isLast);
+    }
+
+    boolean hasRpu() {
+      return rpus > 0;
+    }
   }
 }

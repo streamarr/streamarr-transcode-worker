@@ -55,9 +55,25 @@ final class VideoDynamicRanges {
                 ? Optional.of(configuration(present.getDeclared()))
                 : Optional.<DolbyVisionConfiguration>empty();
         yield new DolbyVision.Present(
-            declared, presence(present.getObservedRpu()), presence(present.getRpuStartsSample()));
+            declared,
+            presence(present.getObservedRpu()),
+            rpuStartsSample(present.getRpuPlacement()));
       }
       case DOLBYVISION_NOT_SET -> new DolbyVision.Unspecified();
+    };
+  }
+
+  /** Whether the samples start with RPUs: each placement that puts an RPU ahead of a picture. */
+  @SuppressWarnings("checkstyle:fullyQualifiedName")
+  private static Presence rpuStartsSample(
+      build.buf.gen.streamarr.transcode.v1.DolbyVisionRpuPlacement value) {
+    return switch (value) {
+      case DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED -> Presence.UNSPECIFIED;
+      case DOLBY_VISION_RPU_PLACEMENT_AFTER_OWN_PICTURE -> Presence.ABSENT;
+      case DOLBY_VISION_RPU_PLACEMENT_BEFORE_NEXT_PICTURE,
+          DOLBY_VISION_RPU_PLACEMENT_BEFORE_OWN_PICTURE ->
+          Presence.PRESENT;
+      case UNRECOGNIZED -> throw new InvalidJobSpecificationException("Unknown RPU placement");
     };
   }
 

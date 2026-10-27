@@ -13,6 +13,7 @@ import build.buf.gen.streamarr.transcode.v1.ChromaticityCoordinates;
 import build.buf.gen.streamarr.transcode.v1.CompatibleBase;
 import build.buf.gen.streamarr.transcode.v1.ContentLightLevel;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionRpuHeader;
+import build.buf.gen.streamarr.transcode.v1.DolbyVisionRpuPlacement;
 import build.buf.gen.streamarr.transcode.v1.MasteringDisplayColorVolume;
 import build.buf.gen.streamarr.transcode.v1.Presence;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
@@ -220,7 +221,8 @@ class FfprobeExecutorAv1MetadataTest {
       var present = video.getDynamicRange().getDolbyVisionPresent();
       assertThat(present.getObservedRpu()).isEqualTo(Presence.PRESENCE_PRESENT);
       assertThat(present.getFirstRpuHeader()).isEqualTo(PROFILE_10_0_HEADER);
-      assertThat(present.getRpuStartsSample()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+      assertThat(present.getRpuPlacement())
+          .isEqualTo(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED);
       assertThat(video.getDynamicRange().getCompatibleBase())
           .isEqualTo(CompatibleBase.COMPATIBLE_BASE_NONE);
     }
