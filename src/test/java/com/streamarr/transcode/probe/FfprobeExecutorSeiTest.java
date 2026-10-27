@@ -488,6 +488,16 @@ class FfprobeExecutorSeiTest {
       "H264, 25, 40",
       "H264, 30, 40",
       "H264, 30, a0 00 00",
+      // MVCD headers of 8 views, as ITU-T H.264 (08/2024) H.13.1.2 gives them: a bit too few or
+      // too many for each view moves the nested messages a whole byte. operation_point_flag 0,
+      // all_view_components_in_au_flag 0, then each sei_view_id and sei_view_applicability_flag.
+      "H264, 30, 04 7f ff ff ff ff ff ff ff ff ff ff 80",
+      // operation_point_flag 1, sei_op_texture_only_flag 0, then each sei_op_view_id,
+      // sei_op_depth_flag and sei_op_texture_flag, then sei_op_temporal_id.
+      "H264, 30, 84 7f ff ff ff ff ff ff ff ff ff ff ff 80",
+      // operation_point_flag 1, sei_op_texture_only_flag 1, then each sei_op_view_id, then
+      // sei_op_temporal_id.
+      "H264, 30, c4 7f ff ff ff ff ff ff ff ff ff 80",
       "HEVC, 85, 20"
     })
     @DisplayName("Should report HDR10+ absent when a nesting message holds other messages")

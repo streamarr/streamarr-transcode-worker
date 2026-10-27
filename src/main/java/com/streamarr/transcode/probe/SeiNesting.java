@@ -5,7 +5,7 @@ import java.util.OptionalInt;
 /**
  * The SEI messages that nest other SEI messages, whose nested messages FFmpeg ignores: scalable
  * nesting (payloadType 30), MVC scalable nesting (payloadType 37) and MVCD scalable nesting
- * (payloadType 48) for H.264 (ITU-T H.264, F.13.1.7, G.13.1.2 and I.13.1.2), and scalable nesting
+ * (payloadType 48) for H.264 (ITU-T H.264, F.13.1.7, G.13.1.2 and H.13.1.2), and scalable nesting
  * (payloadType 133) for HEVC. Each nesting message's header ends at a byte boundary, and its nested
  * messages follow.
  *
