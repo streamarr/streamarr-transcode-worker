@@ -22,7 +22,16 @@ sealed interface KeyframeIndex {
   /** The index cannot give every keyframe, so only a packet scan can. */
   record Unusable(@NonNull KeyframePacketScanReason reason) implements KeyframeIndex {}
 
-  record KeyframeTime(long presentationTime, long decodeTime) {}
+  record KeyframeTime(long presentationTime, long decodeTime) {
+
+    /**
+     * Whether both of this keyframe's times are greater than the earlier keyframe's. A keyframe
+     * that is not after the one before it would start a segment of no length or a negative one.
+     */
+    boolean isAfter(KeyframeTime earlier) {
+      return presentationTime > earlier.presentationTime() && decodeTime > earlier.decodeTime();
+    }
+  }
 
   record TimeBase(long numerator, long denominator) {}
 }

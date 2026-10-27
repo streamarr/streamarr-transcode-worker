@@ -62,11 +62,7 @@ final class KeyframePacketScan {
       throws ExecutionException, InterruptedException {
     var chosen = ChosenVideoStream.find(probed.ffprobeOutput().path("streams"));
     if (chosen.isEmpty()) {
-      return ProbeAttemptReport.resultOnly(
-          probed.result().toBuilder()
-              .clearMedia()
-              .setFailure(ProbeFailure.PROBE_FAILURE_NO_VIDEO_STREAM)
-              .build());
+      return failed(probed, ProbeFailure.PROBE_FAILURE_NO_VIDEO_STREAM);
     }
 
     var stream = chosen.get().description();
@@ -106,6 +102,11 @@ final class KeyframePacketScan {
                                   .KEYFRAMES_UNAVAILABLE_REASON_KEYFRAME_WITHOUT_TIMESTAMP))));
     }
 
+    // The server stores a packet scan's invalid-media failure as keyframes that are unavailable.
+    if (keyframes.isKeyframeNotAfterPrevious()) {
+      return failed(probed, ProbeFailure.PROBE_FAILURE_INVALID_MEDIA);
+    }
+
     if (exitCode != 0) {
       throw new PacketScanException("FFmpeg exited with code " + exitCode);
     }
@@ -122,6 +123,11 @@ final class KeyframePacketScan {
         .keyframes(keyframes.times())
         .build()
         .report();
+  }
+
+  private static ProbeAttemptReport failed(ProbedSource probed, ProbeFailure failure) {
+    return ProbeAttemptReport.resultOnly(
+        probed.result().toBuilder().clearMedia().setFailure(failure).build());
   }
 
   private static TimeBase timeBase(JsonNode stream) {
@@ -174,8 +180,13 @@ final class KeyframePacketScan {
     private final TimeRule rule;
     private final List<KeyframeTime> times = new ArrayList<>();
     private boolean missingTime;
+    private boolean keyframeNotAfterPrevious;
 
-    /** A keyframe without a time decides the outcome, so the scan needs no lines after it. */
+    /**
+     * A keyframe without a time, or one whose times are not both after the previous keyframe's,
+     * decides the outcome, so the scan needs no lines after it. A damaged source can make FFmpeg
+     * print the same keyframe twice.
+     */
     @Override
     public boolean take(String line) {
       if (line.startsWith("#")) {
@@ -190,6 +201,12 @@ final class KeyframePacketScan {
       var time = keyframeTime(packet.pts(), packet.dts());
       if (time.isEmpty()) {
         missingTime = true;
+        times.clear();
+        return false;
+      }
+
+      if (!times.isEmpty() && !time.get().isAfter(times.getLast())) {
+        keyframeNotAfterPrevious = true;
         times.clear();
         return false;
       }
@@ -217,6 +234,10 @@ final class KeyframePacketScan {
 
     boolean isMissingTime() {
       return missingTime;
+    }
+
+    boolean isKeyframeNotAfterPrevious() {
+      return keyframeNotAfterPrevious;
     }
 
     List<KeyframeTime> times() {

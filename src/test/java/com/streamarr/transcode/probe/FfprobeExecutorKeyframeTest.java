@@ -583,6 +583,120 @@ class FfprobeExecutorKeyframeTest {
     assertThat(ffmpeg.isAlive()).isFalse();
   }
 
+  @ParameterizedTest
+  @CsvSource(
+      delimiter = ';',
+      value = {
+        "0, 4004, 4004, 1001, 100, 0x00000002",
+        "0, 4004, 6006, 1001, 100, 0x00000002",
+        "0, 6006, 4004, 1001, 100, 0x00000002",
+        "0, 2002, 6006, 1001, 100, 0x00000002",
+        "0, 6006, 2002, 1001, 100, 0x00000002"
+      })
+  @DisplayName(
+      "Should report invalid media when a scanned keyframe's times do not both come after the"
+          + " previous keyframe's")
+  void shouldReportInvalidMediaWhenScannedKeyframeTimesDoNotBothComeAfterPreviousKeyframe(
+      String keyframePacket) {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(MPEGTS_STREAMS)
+            .packetScan(
+                """
+                0, 0, 0, 1001, 100, 0x00000000
+                0, 1001, 1001, 1001, 100, 0x00000000, F=0x0
+                0, 2002, 2002, 1001, 100, 0x00000000
+                0, 4004, 4004, 1001, 100, 0x00000001
+                %s
+                0, 8008, 8008, 1001, 100, 0x00000000
+                """
+                    .formatted(keyframePacket))
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mpegts.ts"), packetScanRequest());
+
+    assertThat(report)
+        .isEqualTo(
+            ProbeAttemptReport.resultOnly(
+                ProbeAttemptResult.newBuilder()
+                    .setProbeAttemptId(report.result().getProbeAttemptId())
+                    .setProbeVersion(FfprobeExecutor.PROBE_VERSION)
+                    .setFailure(ProbeFailure.PROBE_FAILURE_INVALID_MEDIA)
+                    .build()));
+  }
+
+  @Test
+  @DisplayName(
+      "Should report invalid media when a Matroska keyframe repeats the previous keyframe's"
+          + " presentation time")
+  void shouldReportInvalidMediaWhenMatroskaKeyframeRepeatsPreviousKeyframePresentationTime() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(MATROSKA_STREAMS)
+            .packetScan(
+                """
+                0, 0, 0, 42, 100, 0x00000000
+                0, 12012, 12012, 42, 119090, 0x00000001
+                0, 12013, 12012, 42, 119090, 0x00000002
+                """)
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mkv-pipe.mkv"), packetScanRequest());
+
+    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_INVALID_MEDIA);
+    assertThat(report.keyframePositionsParts()).isEmpty();
+  }
+
+  @Test
+  @DisplayName(
+      "Should report keyframe positions when Matroska keyframes repeat a decode time and their"
+          + " presentation times increase")
+  void
+      shouldReportKeyframePositionsWhenMatroskaKeyframesRepeatDecodeTimeAndPresentationIncreases() {
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(MATROSKA_STREAMS)
+            .packetScan(
+                """
+                0, 0, 0, 42, 100, 0x00000000
+                0, 0, 625, 42, 100, 0x00000000
+                """)
+            .build();
+
+    var report = ffprobe.executor().probe(fixture("mkv-pipe.mkv"), packetScanRequest());
+
+    assertThat(report.keyframePositionsParts())
+        .singleElement()
+        .satisfies(
+            part -> {
+              assertThat(part.getPresentationTimeDeltasList()).containsExactly(23L, 625L);
+              assertThat(part.getDecodeTimeDeltasList()).containsExactly(23L, 625L);
+            });
+  }
+
+  @Test
+  @Timeout(value = 10, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
+  @DisplayName(
+      "Should stop FFmpeg and report invalid media when the packet scan finds a keyframe at the"
+          + " previous keyframe's times")
+  void shouldStopFfmpegAndReportInvalidMediaWhenPacketScanFindsKeyframeAtPreviousKeyframeTimes() {
+    var ffmpeg =
+        new EndlessPacketScan(
+            "0, 0, 0, 1001, 100, 0x00000000\n", "0, 2002, 2002, 1001, 100, 0x00000000\n");
+    var executor =
+        new FfprobeExecutor(
+            new ObjectMapper(),
+            command ->
+                command.tool() == ProbeCommand.ProbeTool.FFMPEG
+                    ? ffmpeg
+                    : new CompletedProcess(MPEGTS_STREAMS, 0, false));
+
+    var report = executor.probe(fixture("mpegts.ts"), packetScanRequest());
+
+    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_INVALID_MEDIA);
+    assertThat(ffmpeg.isAlive()).isFalse();
+  }
+
   @Test
   @DisplayName(
       "Should report keyframe positions without a keyframe when the packet scan finds no keyframe"
