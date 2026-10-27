@@ -184,7 +184,8 @@ public final class FfprobeExecutor {
   /** The packets that the probe reads hold the first frames, so their read follows the frames'. */
   private void addFirstFramesAndPackets(JsonNode json, Path source)
       throws ExecutionException, InterruptedException {
-    var framesPackets = new FirstFramesProbe(objectMapper, this::run).addTo(json, source);
+    var framesPackets =
+        new FirstFramesProbe(objectMapper, this::runWithinOutputBudget).addTo(json, source);
     if (framesPackets.isPresent()) {
       new FirstPacketsProbe(objectMapper, this::runWithinOutputBudget)
           .addTo(json, source, framesPackets.getAsInt());

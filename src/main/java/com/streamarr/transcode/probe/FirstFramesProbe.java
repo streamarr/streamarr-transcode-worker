@@ -19,10 +19,11 @@ import tools.jackson.databind.node.ObjectNode;
  * {@link #FIRST_FRAMES}. ffprobe limits a read by packets, and a packet can decode to no frame, as
  * for a packet ahead of an MP4 edit list. So the probe widens the read until it decodes 3 frames,
  * up to {@link #WIDEST_READ} packets, and keeps the first 3. When ffprobe fails or prints no frame,
- * the description gets no frames: the probe then read none. When a read fails before the probe
- * decodes 3 frames, or the widest read decodes fewer than 3 frames from a stream that holds more
- * packets than it read, the description also gets {@link #FIRST_FRAMES_CUT_SHORT}: the stream may
- * hold frames that the probe did not read.
+ * the description gets no frames: the probe then read none. A read that prints more than {@link
+ * #MAXIMUM_OUTPUT_BYTES} fails. When a read fails before the probe decodes 3 frames, or the widest
+ * read decodes fewer than 3 frames from a stream that holds more packets than it read, the
+ * description also gets {@link #FIRST_FRAMES_CUT_SHORT}: the stream may hold frames that the probe
+ * did not read.
  */
 @RequiredArgsConstructor
 @Slf4j
@@ -41,6 +42,13 @@ final class FirstFramesProbe {
   private static final int WIDER_READ_FACTOR = 4;
   private static final int WIDEST_READ = 192;
 
+  /**
+   * The most that a read may print: the frames of 192 packets print well under 1 MiB, but one AV1
+   * packet can show an earlier frame thousands of times, so that a read of a few packets could
+   * print millions of frames.
+   */
+  private static final int MAXIMUM_OUTPUT_BYTES = 4 << 20;
+
   // Only the side data fields that the probe reads, so that a Dolby Vision frame's reshaping curves
   // stay out of the output.
   private static final String FRAME_ENTRIES =
@@ -51,7 +59,7 @@ final class FirstFramesProbe {
           + "disable_residual_flag,vdr_bit_depth";
 
   @NonNull private final ObjectMapper objectMapper;
-  @NonNull private final ContainerIndexProbe.FfprobeRunner ffprobe;
+  @NonNull private final BoundedFfprobeRunner ffprobe;
 
   /**
    * Adds the first frames, and returns the count of the first packets that the read of those frames
@@ -102,7 +110,15 @@ final class FirstFramesProbe {
    */
   private boolean holdsPacketsPastWidestRead(StreamReads reads)
       throws ExecutionException, InterruptedException {
-    var output = ffprobe.run(reads.firstPackets(WIDEST_READ + 1, "packet=stream_index"));
+    var bounded =
+        ffprobe.run(
+            reads.firstPackets(WIDEST_READ + 1, "packet=stream_index"), MAXIMUM_OUTPUT_BYTES);
+    if (bounded.isEmpty()) {
+      log.warn("ffprobe's packet count of {} printed more than the probe holds", reads.source());
+      return true;
+    }
+
+    var output = bounded.get();
     if (output.exitCode() != 0) {
       log.warn(
           "ffprobe's packet count of {} exited with code {}", reads.source(), output.exitCode());
@@ -120,7 +136,14 @@ final class FirstFramesProbe {
   /** The frames that the stream's first packets decode to; empty when ffprobe fails. */
   private Optional<List<JsonNode>> read(StreamReads reads, int packets)
       throws ExecutionException, InterruptedException {
-    var output = ffprobe.run(reads.firstPackets(packets, FRAME_ENTRIES));
+    var bounded = ffprobe.run(reads.firstPackets(packets, FRAME_ENTRIES), MAXIMUM_OUTPUT_BYTES);
+    if (bounded.isEmpty()) {
+      log.warn(
+          "ffprobe's first-frames read of {} printed more than the probe holds", reads.source());
+      return Optional.empty();
+    }
+
+    var output = bounded.get();
     if (output.exitCode() != 0) {
       log.warn(
           "ffprobe's first-frames read of {} exited with code {}",

@@ -18,6 +18,7 @@ import build.buf.gen.streamarr.transcode.v1.Presence;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import build.buf.gen.streamarr.transcode.v1.VideoDynamicRange.DolbyVisionCase;
 import com.streamarr.transcode.probe.RecordedFfprobe.Answers;
+import java.util.Collections;
 import java.util.HexFormat;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -208,6 +209,28 @@ class FfprobeExecutorFirstFramesTest {
               .getStreams(0);
 
       assertThat(video.getFirstFramesRead()).isTrue();
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+    }
+
+    @Test
+    @DisplayName("Should report no frames read when the frames' read prints more than it holds")
+    void shouldReportNoFramesReadWhenTheFramesReadPrintsMoreThanItHolds() {
+      // One AV1 packet can show an earlier frame thousands of times, so a read of a few packets
+      // can print millions of frames.
+      var manyFrames =
+          "{\"frames\":["
+              + String.join(",", Collections.nCopies(250_000, "{\"stream_index\":0}"))
+              + "]}";
+      var video =
+          probe(
+                  Answers.builder()
+                      .ffprobeOutput(output(HEVC_WITH_RECORD))
+                      .firstFrames(manyFrames)
+                      .firstPackets(DELIMITED_PACKETS)
+                      .build())
+              .getStreams(0);
+
+      assertThat(video.getFirstFramesRead()).isFalse();
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
     }
 
