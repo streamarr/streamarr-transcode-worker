@@ -210,4 +210,27 @@ final class RecordedFfprobe {
         .setScanKeyframePackets(true)
         .build();
   }
+
+  /**
+   * The bytes as ffprobe's -show_data prints them, escaped for a JSON string: each line holds an
+   * offset, up to 16 bytes in groups of two, and the bytes as ASCII after column 51.
+   */
+  static String ffprobeDump(byte[] bytes) {
+    var dump = new StringBuilder("\\n");
+    for (var offset = 0; offset < bytes.length; offset += 16) {
+      var line = new StringBuilder("%08x: ".formatted(offset));
+      var end = Math.min(offset + 16, bytes.length);
+      for (var index = offset; index < end; index++) {
+        line.append("%02x".formatted(bytes[index]));
+        if ((index - offset) % 2 == 1) {
+          line.append(' ');
+        }
+      }
+
+      line.append(" ".repeat(51 - line.length())).append(".".repeat(end - offset));
+      dump.append(line).append("\\n");
+    }
+
+    return dump.toString();
+  }
 }
