@@ -1,5 +1,7 @@
 package com.streamarr.transcode.engine;
 
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -22,6 +24,8 @@ final class TrackRun {
   private static final int PER_SAMPLE_FIELDS =
       SAMPLE_DURATION | SAMPLE_SIZE | SAMPLE_FLAGS | SAMPLE_COMPOSITION_TIME_OFFSET;
   private static final int HEADER_BYTES = 8;
+  private static final int BOX_HEADER_BYTES = 8;
+  private static final byte[] TRUN_TYPE = "trun".getBytes(StandardCharsets.ISO_8859_1);
 
   private final BoxView box;
   private final Header header;
@@ -101,6 +105,46 @@ final class TrackRun {
     }
 
     return entries;
+  }
+
+  /**
+   * This run as a whole {@code trun} box whose samples start at the data offset and take the given
+   * sizes in order; its version, its first-sample flags and each sample's duration, flags and
+   * composition offset stay as read. The box declares a data offset and every sample's size,
+   * whatever the run declared.
+   *
+   * @param sampleSizes one size for each of the run's samples
+   */
+  byte[] rewritten(int dataOffset, long[] sampleSizes) {
+    var flags = header.flags() | DATA_OFFSET | SAMPLE_SIZE;
+    var hasFirstSampleFlags = header.has(FIRST_SAMPLE_FLAGS);
+    var entryBytes = 4 * Integer.bitCount(flags & PER_SAMPLE_FIELDS);
+    var boxBytes =
+        BOX_HEADER_BYTES
+            + HEADER_BYTES
+            + 4
+            + (hasFirstSampleFlags ? 4 : 0)
+            + Math.multiplyExact(entryBytes, sampleSizes.length);
+    var trun = ByteBuffer.allocate(boxBytes);
+    trun.putInt(boxBytes).put(TRUN_TYPE).putInt(header.version() << 24 | flags);
+    trun.putInt(sampleSizes.length).putInt(dataOffset);
+    firstSampleFlags().ifPresent(trun::putInt);
+    var fields = sampleTable();
+    for (var size : sampleSizes) {
+      copyIf(header.has(SAMPLE_DURATION), fields, trun);
+      fields.skipIf(header.has(SAMPLE_SIZE), 4);
+      trun.putInt((int) size);
+      copyIf(header.has(SAMPLE_FLAGS), fields, trun);
+      copyIf(header.has(SAMPLE_COMPOSITION_TIME_OFFSET), fields, trun);
+    }
+
+    return trun.array();
+  }
+
+  private static void copyIf(boolean present, BoxFields fields, ByteBuffer trun) {
+    if (present) {
+      trun.putInt(fields.s32());
+    }
   }
 
   private Optional<Integer> firstSampleFlags() {
