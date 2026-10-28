@@ -3,8 +3,9 @@
 #
 # Every FFmpeg and ffprobe run happens inside the pinned worker image, so the output comes from the
 # worker's own ffprobe, run with the probe's own arguments. Most sources are synthesized with lavfi.
-# edit-mp4-boxes.py adds the MP4 boxes that FFmpeg cannot write. Nothing is downloaded, and no
-# source file is kept: only ffprobe's output is.
+# edit-mp4-boxes.py adds the MP4 boxes that FFmpeg cannot write, and GPAC's MP4Box, run in its
+# pinned image, adds the Dolby Vision profile 9 record. No media file is downloaded, and no source
+# file is kept: only ffprobe's output is.
 #
 #   src/test/probe-fixtures/record-fixtures.sh
 #   WORKER_IMAGE=streamarr-worker:local src/test/probe-fixtures/record-fixtures.sh
@@ -15,11 +16,14 @@
 # The audio fixtures copy an E-AC-3 Atmos and a DTS-HD MA stream from it next to a synthesized video
 # stream, and the Dolby Vision and HDR10 fixtures probe or remux its Dolby Vision and HDR10 samples.
 # LOCAL_SAMPLES names a directory that holds the public Dolby Vision, HDR and phone samples that the
-# fixture README lists. Those samples stay local. Without either variable, the script keeps the
-# fixtures that need it as they are.
+# fixture README lists. Those samples stay local. The Dolby Vision profile 9 fixtures need dovi_tool
+# (https://github.com/quietvoid/dovi_tool) on the PATH, which generates their RPUs. Without either
+# variable or dovi_tool, the script keeps the fixtures that need it as they are.
 set -euo pipefail
 
 IMAGE="${WORKER_IMAGE:-streamarr/streamarr-transcode-worker:0.1.0-SNAPSHOT@sha256:ad4a844f8fa7f27946ceb79431d62719474b2f3332b80a2222e5a421dc2acaab}"
+# GPAC 26.08-DEV-rev132, whose image is built for amd64 only.
+GPAC_IMAGE="gpac/ubuntu@sha256:9a70c9ec3fe4383b49deb3416f59cb169db267d6c95c827874732bf2b8506ac3"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 FIXTURES="$(cd "$HERE/../resources/probe" && pwd)"
 WORK="$(mktemp -d)"
@@ -39,6 +43,12 @@ in_image() {
   docker run --rm --user "$(id -u):$(id -g)" --entrypoint /cnb/lifecycle/launcher \
     -v "$WORK":/work ${fate_mount[@]+"${fate_mount[@]}"} "$IMAGE" bash "/work/$1" > "$WORK/launcher.log" 2>&1 \
     || { cat "$WORK/launcher.log"; exit 1; }
+}
+
+# -for-test leaves out the creation time and GPAC's version, so a new recording changes nothing.
+in_gpac() {
+  docker run --rm --platform linux/amd64 --user "$(id -u):$(id -g)" -e HOME=/work -v "$WORK":/work \
+    -w /work "$GPAC_IMAGE" MP4Box -for-test "$@" > "$WORK/gpac.log" 2>&1 || { cat "$WORK/gpac.log"; exit 1; }
 }
 
 cat > "$WORK/sources.sh" <<'CONTAINER'
@@ -250,6 +260,12 @@ done
 "${FF[@]}" "${VIDEO[@]}" "${X264[@]}" \
   -vf setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709 mp4-sdr8-bt709.mp4
 
+# 8-bit H.264 at 1080p24, High at level 4.0, tagged BT.709, into which insert-avc-rpus.py puts the
+# Dolby Vision profile 9 RPUs. Without B-frames, the first 3 packets decode 3 frames.
+"${FF[@]}" -f lavfi -i testsrc2=size=1920x1080:rate=24:duration=1 -c:v libx264 -preset veryfast \
+  -profile:v high -level:v 4.0 -crf 40 -bf 0 -pix_fmt yuv420p \
+  -x264-params colorprim=bt709:transfer=bt709:colormatrix=bt709 -f h264 sdr-1080p.h264
+
 # MP4 whose clean aperture crops 4 pixels from the left and the right and 2 from the top and the
 # bottom of the 64x36 picture, and the same stream remuxed into Matroska as PixelCrop elements.
 "${FF[@]}" "${VIDEO[@]}" "${X264[@]}" -map_metadata -1 mp4-clap.mp4
@@ -423,6 +439,40 @@ if [ -n "${FATE_SUITE:-}" ]; then
 fi
 in_image av1.sh
 
+# Dolby Vision profile 9: the SDR encode with an RPU in an H.264 NAL unit of type 28 after each
+# picture, copied into MP4 by FFmpeg, which keeps each RPU in the sample of its own picture. MP4Box
+# then adds a dvvC record under avc1 and under dva1, and the avc1 copy goes into MPEG-TS, whose
+# samples delimit their NAL units with start codes. dovi_tool has no profile 9 preset, so it
+# generates profile 8.1 RPUs, whose header names RPU profile 1, no residual and 12 bits, as a
+# profile 9 RPU's does.
+cat > "$WORK/dovi-p9-copy.sh" <<'CONTAINER'
+set -euo pipefail
+cd /work
+timeout 60 ffmpeg -hide_banner -nostdin -loglevel error -y -r 24 -i sdr-1080p-rpus.h264 -c copy \
+  sdr-1080p-rpus.mp4
+CONTAINER
+cat > "$WORK/dovi-p9-ts.sh" <<'CONTAINER'
+set -euo pipefail
+cd /work
+timeout 60 ffmpeg -hide_banner -nostdin -loglevel error -y -i mp4-dovi-p9-avc1.mp4 -map 0:v -t 1 \
+  -c copy mpegts-dovi-p9.ts
+CONTAINER
+if command -v dovi_tool > /dev/null; then
+  cat > "$WORK/rpus.json" <<'JSON'
+{"profile": "8.1", "length": 24, "level6": {"max_display_mastering_luminance": 1000,
+  "min_display_mastering_luminance": 1, "max_content_light_level": 0,
+  "max_frame_average_light_level": 0}}
+JSON
+  dovi_tool generate -j "$WORK/rpus.json" -o "$WORK/rpus.bin" > /dev/null
+  python3 "$HERE/insert-avc-rpus.py" "$WORK/rpus.bin" "$WORK/sdr-1080p.h264" \
+    "$WORK/sdr-1080p-rpus.h264"
+  in_image dovi-p9-copy.sh
+  in_gpac -add sdr-1080p-rpus.mp4:dvp=9.bt709 -new mp4-dovi-p9-avc1.mp4
+  in_gpac -add sdr-1080p-rpus.mp4:dvp=f9.bt709 -new mp4-dovi-p9-dva1.mp4
+  in_image dovi-p9-ts.sh
+  FIXTURES_TO_PROBE+=(mp4-dovi-p9-avc1.mp4 mp4-dovi-p9-dva1.mp4 mpegts-dovi-p9.ts)
+fi
+
 # HE-AAC in ADTS, which a local sample holds, next to a synthesized video stream in MPEG-TS. The
 # record-less Dolby Vision profile 5 sample, rewritten to signal BT.709 in its VUI under hvc1, and
 # copied into MPEG-TS, which then carries no Dolby Vision descriptor.
@@ -437,21 +487,18 @@ FF=(timeout 60 ffmpeg -hide_banner -nostdin -loglevel error -y)
   -tag:v hvc1 mp4-dovi-p5-no-record-bt709.mp4
 "${FF[@]}" -i /samples/mp4-dovi-p5-dvh1-no-record.mp4 -map 0:v -t 3 -c copy \
   mpegts-dovi-p5-no-descriptor.ts
-# Dolby Vision profile 9 in MPEG-TS, whose samples delimit their NAL units with start codes.
-"${FF[@]}" -i /samples/mp4-dovi-p9-avc1.mp4 -map 0:v -t 1 -c copy mpegts-dovi-p9.ts
 CONTAINER
 
 LOCAL_SAMPLE_NAMES=(mp4-dovi-p5-dvh1.mp4 mp4-dovi-p5-dvh1-no-record.mp4 mp4-dovi-p81.mp4
-  mp4-dovi-p82.mp4 mp4-dovi-p84-hlg.mp4 mp4-dovi-p9-avc1.mp4 mp4-dovi-p9-dva1.mp4 mp4-hevc-hdr10.mp4
+  mp4-dovi-p82.mp4 mp4-dovi-p84-hlg.mp4 mp4-hevc-hdr10.mp4
   mp4-hevc-sdr10-untagged.mp4 mov-phone-hlg-dovi-p84.mov mov-phone-rotated.mov mov-phone-one-gap.mov
   mov-phone-120-declared.mov mov-phone-60.mov mov-phone-slow-motion.mov mpegts-avchd-interlaced.mts)
 PROBE_ARGUMENTS=("${FIXTURES_TO_PROBE[@]}")
 if [ -n "${LOCAL_SAMPLES:-}" ]; then
   in_image local.sh
   FIXTURES_TO_PROBE+=(mpegts-aac-he.ts mp4-dovi-p5-no-record-bt709.mp4
-    mpegts-dovi-p5-no-descriptor.ts mpegts-dovi-p9.ts)
-  PROBE_ARGUMENTS+=(mpegts-aac-he.ts mp4-dovi-p5-no-record-bt709.mp4 mpegts-dovi-p5-no-descriptor.ts
-    mpegts-dovi-p9.ts)
+    mpegts-dovi-p5-no-descriptor.ts)
+  PROBE_ARGUMENTS+=(mpegts-aac-he.ts mp4-dovi-p5-no-record-bt709.mp4 mpegts-dovi-p5-no-descriptor.ts)
   for sample in "${LOCAL_SAMPLE_NAMES[@]}"; do
     PROBE_ARGUMENTS+=("/samples/$sample")
   done

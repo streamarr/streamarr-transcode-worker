@@ -36,7 +36,7 @@ from its lavfi test sources. No file comes from a media library.
 | `mkv-dovi-p7-hvce.mkv.json` | FFmpeg's FATE sample `mkv/dovi-p7-hvce.mkv`: Dolby Vision profile 7 in Matroska |
 | `mpegts-dovi-p7-two-layers.ts.json` | FFmpeg's FATE sample `mpegts/dovi-p7.ts`: Dolby Vision profile 7 whose base layer and enhancement layer are separate streams. Only the second stream carries the record and the RPUs |
 | `mp4-dovi-p5-no-record-bt709.mp4.json` | Local sample: the first 3 s of `mp4-dovi-p5-dvh1-no-record.mp4` under `hvc1`, with `hevc_metadata` rewriting its VUI to signal BT.709 |
-| `mpegts-dovi-p9.ts.json` | Local sample: the first second of `mp4-dovi-p9-avc1.mp4` copied into MPEG-TS, whose samples delimit their NAL units with start codes |
+| `mpegts-dovi-p9.ts.json` | `mp4-dovi-p9-avc1.mp4` copied into MPEG-TS, whose samples delimit their NAL units with start codes |
 | `mpegts-dovi-p5-no-descriptor.ts.json` | Local sample: the first 3 s of `mp4-dovi-p5-dvh1-no-record.mp4` copied into MPEG-TS, which then carries no Dolby Vision descriptor |
 | `mp4-sdr8-bt709.mp4.json` | 8-bit H.264 tagged BT.709 |
 | `mp4-dovi-p5-hev1.mp4.json` | FFmpeg's FATE sample `mov/dovi-p5.mp4`: Dolby Vision profile 5 under `hev1`, with a `dvcC` record |
@@ -62,8 +62,8 @@ from its lavfi test sources. No file comes from a media library.
 | `mp4-dovi-p81.mp4.json` | Local sample: Dolby Vision profile 8.1 under `hvc1`, PQ |
 | `mp4-dovi-p82.mp4.json` | Local sample: Dolby Vision profile 8.2 under `hvc1`, BT.709, made by adding a `dvvC` record to an SDR HEVC encode |
 | `mp4-dovi-p84-hlg.mp4.json` | Local sample: Dolby Vision profile 8.4 under `hvc1`, HLG |
-| `mp4-dovi-p9-avc1.mp4.json` | Local sample: Dolby Vision profile 9 under `avc1`, BT.709, made by adding a `dvvC` record to an SDR H.264 encode |
-| `mp4-dovi-p9-dva1.mp4.json` | Local sample: the same file with its sample entry renamed `dva1` |
+| `mp4-dovi-p9-avc1.mp4.json` | Dolby Vision profile 9 under `avc1`: one second of 8-bit H.264 at 1080p24 tagged BT.709, after each picture of which `insert-avc-rpus.py` put an RPU that `dovi_tool generate` made, with a `dvvC` record that GPAC's MP4Box added |
+| `mp4-dovi-p9-dva1.mp4.json` | The same stream, to which MP4Box gave a `dva1` sample entry |
 | `mp4-hevc-hdr10.mp4.json` | Local sample: 10-bit HEVC with PQ. Neither its container nor the SEI messages of its first 600 frames carry static HDR metadata, so it is PQ10 |
 | `mp4-hevc-sdr10-untagged.mp4.json` | Local sample: 10-bit HEVC SDR without a transfer tag |
 | `mov-phone-hlg-dovi-p84.mov.json` | Local sample: a phone camera original, HEVC HLG with Dolby Vision 8.4 (see Sources) |
@@ -110,7 +110,7 @@ The phone and camcorder fixtures hold only ffprobe's description of each file an
 
 ## Regenerating
 
-From the repository root, with Docker and Python 3:
+From the repository root, with Docker, Python 3 and [dovi_tool](https://github.com/quietvoid/dovi_tool):
 
 ```
 src/test/probe-fixtures/record-fixtures.sh
@@ -118,7 +118,8 @@ FATE_SUITE=/path/to/fate-suite LOCAL_SAMPLES=/path/to/samples src/test/probe-fix
 ```
 
 The script overwrites the files in this directory, so `git diff` shows what a new recording
-changed. Without `FATE_SUITE`, it keeps the recordings of FATE samples as they are. The local
+changed. Without `FATE_SUITE`, it keeps the recordings of FATE samples as they are, and without
+`dovi_tool` on the `PATH`, the Dolby Vision profile 9 recordings. The local
 samples are public test files that stay out of the repository. `LOCAL_SAMPLES` names a directory
 that holds them under the names above, without the `.json` suffix. Without `LOCAL_SAMPLES`, the
 script keeps their recordings as they are. The script removes the source's path and any location
