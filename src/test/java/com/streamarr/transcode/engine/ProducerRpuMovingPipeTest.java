@@ -48,6 +48,10 @@ class ProducerRpuMovingPipeTest {
           initializationSegment(),
           fragmentBuilder().video(0, sample(aud(), slice(0))).build(),
           fragmentBuilder().video(1001, sample(aud(), rpu(0), slice(1))).build());
+  private static final byte[] NOT_HEVC =
+      concat(
+          initializationSegment(box("avc1", new byte[78], box("avcC", new byte[7]))),
+          fragmentBuilder().video(0, sample(slice(0))).build());
   private static final byte[] MOVED_SOURCE =
       concat(
           initializationSegment(),
@@ -217,12 +221,8 @@ class ProducerRpuMovingPipeTest {
           + " refuses the copy and the encoding FFmpeg exits cleanly")
   void
       shouldFailTheAttemptForTheMoversReasonAndEndTheCopyingFfmpegWhenTheMoverRefusesTheCopyAndTheEncodingFfmpegExitsCleanly() {
-    var notHevc =
-        concat(
-            initializationSegment(box("avc1", new byte[78], box("avcC", new byte[7]))),
-            fragmentBuilder().video(0, sample(slice(0))).build());
     var copy =
-        ScriptedProcess.builder().output(notHevc).exitTiming(ExitTiming.WHEN_TEST_EXITS).build();
+        ScriptedProcess.builder().output(NOT_HEVC).exitTiming(ExitTiming.WHEN_TEST_EXITS).build();
     var encode = encodingFfmpeg().build();
 
     var producer = producerOf(copy, encode).start();
@@ -232,6 +232,29 @@ class ProducerRpuMovingPipeTest {
     assertThat(failure.detail()).contains("copy of the source", "no HEVC video");
     assertThat(copy.wasTerminated()).isTrue();
     assertThat(encode.hasInputEnded()).isTrue();
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt for the mover's reason when the encoding FFmpeg exits with an error"
+          + " at the end of the input that the refusal cut")
+  void
+      shouldFailTheAttemptForTheMoversReasonWhenTheEncodingFfmpegExitsWithAnErrorAtTheEndOfTheInputThatTheRefusalCut() {
+    var copy =
+        ScriptedProcess.builder().output(NOT_HEVC).exitTiming(ExitTiming.WHEN_TEST_EXITS).build();
+    var encode =
+        encodingFfmpeg()
+            .output(new byte[0])
+            .exitCode(183)
+            .stderr("Error opening input: Invalid data found when processing input\n")
+            .build();
+
+    var producer = producerOf(copy, encode).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
+    assertThat(failure.detail()).contains("copy of the source", "no HEVC video");
+    assertThat(copy.wasTerminated()).isTrue();
   }
 
   @Test
