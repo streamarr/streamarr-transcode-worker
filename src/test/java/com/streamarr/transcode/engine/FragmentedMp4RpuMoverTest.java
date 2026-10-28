@@ -31,6 +31,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 @Tag("UnitTest")
@@ -123,6 +124,26 @@ class FragmentedMp4RpuMoverTest {
                 .build());
 
     assertThat(move(copy)).isEqualTo(copy);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({"TemporalId 1, 0x7C, 0x02", "layer 1, 0x7C, 0x09", "layer 32, 0x7D, 0x01"})
+  @DisplayName(
+      "Should pass the copy unchanged when its type 62 NAL units lie off layer 0 or TemporalId 0")
+  void shouldPassTheCopyUnchangedWhenItsType62NalUnitsLieOffLayer0OrTemporalId0(
+      String description, int firstHeaderByte, int secondHeaderByte) throws IOException {
+    // FFmpeg's HEVC decoder reads a type 62 NAL unit as an RPU only on layer 0 and TemporalId 0.
+    var unit = rpu(9);
+    unit[4] = (byte) firstHeaderByte;
+    unit[5] = (byte) secondHeaderByte;
+    var copy =
+        stream(
+            fragmentBuilder().video(0, sample(aud(), slice(0))).build(),
+            fragmentBuilder()
+                .video(1001, sample(aud(), unit, slice(1)), sample(slice(2), unit, suffixSei(2)))
+                .build());
+
+    assertThat(move(copy)).as(description).isEqualTo(copy);
   }
 
   @Test

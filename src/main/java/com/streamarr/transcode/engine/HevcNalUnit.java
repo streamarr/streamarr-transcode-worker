@@ -24,7 +24,8 @@ record HevcNalUnit(@NonNull ByteBuffer bytes, int type, boolean rpu) {
   // NAL unit types below this one hold picture slices (ITU-T H.265 table 7-1).
   private static final int FIRST_NON_PICTURE_TYPE = 32;
   private static final int UNSPECIFIED_62 = 62;
-  // A Dolby Vision RPU is an UNSPECIFIED_62 NAL unit whose payload starts with rpu_nal_prefix 25.
+  // A Dolby Vision RPU is an UNSPECIFIED_62 NAL unit on layer 0 and TemporalId 0 whose payload
+  // starts with rpu_nal_prefix 25: FFmpeg's HEVC decoder reads no other NAL unit as an RPU.
   private static final int RPU_NAL_PREFIX = 25;
 
   HevcNalUnit {
@@ -72,9 +73,17 @@ record HevcNalUnit(@NonNull ByteBuffer bytes, int type, boolean rpu) {
     var type = (Byte.toUnsignedInt(sample.get(unitStart)) >> 1) & 0x3F;
     var rpu =
         type == UNSPECIFIED_62
+            && isOnLayer0AndTemporalId0(sample, unitStart)
             && end - unitStart > NAL_UNIT_HEADER_BYTES
             && Byte.toUnsignedInt(sample.get(unitStart + NAL_UNIT_HEADER_BYTES)) == RPU_NAL_PREFIX;
     return new HevcNalUnit(sample.slice(start, end - start), type, rpu);
+  }
+
+  private static boolean isOnLayer0AndTemporalId0(ByteBuffer sample, int unitStart) {
+    var layerId =
+        (sample.get(unitStart) & 0x01) << 5 | Byte.toUnsignedInt(sample.get(unitStart + 1)) >> 3;
+    var temporalIdPlus1 = sample.get(unitStart + 1) & 0x07;
+    return layerId == 0 && temporalIdPlus1 == 1;
   }
 
   private static long lengthAt(ByteBuffer sample, int position, int lengthSize) {
