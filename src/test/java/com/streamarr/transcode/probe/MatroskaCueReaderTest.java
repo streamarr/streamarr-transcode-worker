@@ -284,6 +284,26 @@ class MatroskaCueReaderTest {
   }
 
   @ParameterizedTest(name = "{0}")
+  @CsvSource({"'an empty repeat', ''", "'a zero repeat', '00'"})
+  @DisplayName(
+      "Should list the cue times in milliseconds when the last TimestampScale is empty or zero, as"
+          + " FFmpeg reads it")
+  void shouldListTheCueTimesInMillisecondsWhenTheLastTimestampScaleIsEmptyOrZeroAsFfmpegReadsIt(
+      String repeat, String bytes) throws Exception {
+    var info =
+        element(
+            0x1549A966,
+            element(0x2AD7B1, unsigned(1_000)),
+            element(0x4D80, "Lavf61.7.100".getBytes(StandardCharsets.UTF_8)),
+            element(0x2AD7B1, hex(bytes)));
+    var source = write(document(info, oneVideoTrack(), videoCueAt(0)));
+
+    assertThat(MatroskaCueReader.read(source, 0))
+        .as(repeat)
+        .isEqualTo(new Listed(new TimeBase(1, 1_000), List.of(new KeyframeTime(0, 0))));
+  }
+
+  @ParameterizedTest(name = "{0}")
   @CsvSource({
     "'an empty file', ''",
     "'a Segment without an EBML header', '18 53 80 67 80'",

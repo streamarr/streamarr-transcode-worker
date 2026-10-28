@@ -79,7 +79,9 @@ final class MatroskaCueReader {
           KeyframePacketScanReason.KEYFRAME_PACKET_SCAN_REASON_INCOMPLETE_CONTAINER_INDEX);
     }
 
-    var timestampScale = unsigned(info, TIMESTAMP_SCALE).orElse(DEFAULT_TIMESTAMP_SCALE);
+    // FFmpeg reads an empty TimestampScale as its default, and replaces a zero one with it.
+    var timestampScale =
+        unsigned(info, TIMESTAMP_SCALE).filter(scale -> scale != 0).orElse(DEFAULT_TIMESTAMP_SCALE);
     var divisor =
         BigInteger.valueOf(timestampScale)
             .gcd(BigInteger.valueOf(NANOSECONDS_PER_SECOND))
