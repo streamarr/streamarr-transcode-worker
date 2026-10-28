@@ -28,7 +28,6 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
   private final StderrDrainer copyErrorOutput;
   private final StderrDrainer encodeErrorOutput;
   private final Duration gracePeriod;
-  private final RpuMove rpuMove;
   private final AtomicReference<Optional<IOException>> transferFailure =
       new AtomicReference<>(Optional.empty());
   private final AtomicReference<Optional<FragmentedMp4Exception>> refusedCopy =
@@ -37,11 +36,9 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
       new AtomicReference<>(Optional.empty());
   private final Thread transfer;
 
-  private PipedFfmpegProcesses(
-      Process copy, Process encode, RpuMove rpuMove, Duration gracePeriod) {
+  private PipedFfmpegProcesses(Process copy, Process encode, Duration gracePeriod) {
     this.copy = copy;
     this.encode = encode;
-    this.rpuMove = rpuMove;
     this.copyErrorOutput = new StderrDrainer(copy.getErrorStream());
     this.encodeErrorOutput = new StderrDrainer(encode.getErrorStream());
     this.gracePeriod = gracePeriod;
@@ -56,8 +53,7 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
       ProcessStarter starter, FfmpegPipeline.RpuMovingPipe pipe, Duration gracePeriod) {
     var copy = starter.start(pipe.copyCommand());
     try {
-      return new PipedFfmpegProcesses(
-          copy, starter.start(pipe.encodeCommand()), pipe.rpuMove(), gracePeriod);
+      return new PipedFfmpegProcesses(copy, starter.start(pipe.encodeCommand()), gracePeriod);
     } catch (RuntimeException e) {
       copy.destroyForcibly();
       throw e;
@@ -71,7 +67,7 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
   private void transferCopy() {
     var encoded = encode.getOutputStream();
     try (InputStream copied = copy.getInputStream()) {
-      FragmentedMp4RpuMover.copy(copied, encoded, rpuMove);
+      FragmentedMp4RpuMover.copy(copied, encoded);
     } catch (IOException e) {
       transferFailure.set(Optional.of(e));
       copy.destroy();

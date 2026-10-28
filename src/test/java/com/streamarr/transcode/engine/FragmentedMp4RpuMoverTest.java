@@ -28,7 +28,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 @Tag("UnitTest")
@@ -53,7 +52,7 @@ class FragmentedMp4RpuMoverTest {
                 .build(),
             fragmentBuilder().video(2002, sample(aud(), rpu(1), slice(2))).build());
 
-    var moved = move(copy, RpuMove.BEHIND_PREVIOUS_PICTURE);
+    var moved = move(copy);
 
     assertThat(videoSamplesOf(moved))
         .containsExactly(
@@ -72,7 +71,7 @@ class FragmentedMp4RpuMoverTest {
             fragmentBuilder().video(0, sample(aud(), rpu(9), slice(0))).build(),
             fragmentBuilder().video(1001, sample(aud(), rpu(0), slice(1))).build());
 
-    var moved = move(copy, RpuMove.BEHIND_PREVIOUS_PICTURE);
+    var moved = move(copy);
 
     assertThat(videoSamplesOf(moved))
         .containsExactly(hex(aud(), slice(0), rpu(0)), hex(aud(), slice(1)));
@@ -80,62 +79,33 @@ class FragmentedMp4RpuMoverTest {
 
   @Test
   @DisplayName(
-      "Should move each RPU that starts a sample to the end of that sample when the RPUs belong to"
-          + " their own picture")
-  void shouldMoveEachRpuThatStartsASampleToTheEndOfThatSampleWhenTheRpusBelongToTheirOwnPicture()
-      throws IOException {
-    var copy =
-        stream(
-            fragmentBuilder()
-                .video(0, sample(aud(), rpu(0), slice(0)), sample(aud(), rpu(1), slice(1)))
-                .audio(0, AUDIO_FRAME, AUDIO_FRAME)
-                .build(),
-            fragmentBuilder().video(2002, sample(aud(), rpu(2), slice(2))).build());
-
-    var moved = move(copy, RpuMove.BEHIND_OWN_PICTURE);
-
-    assertThat(videoSamplesOf(moved))
-        .containsExactly(
-            hex(aud(), slice(0), rpu(0)),
-            hex(aud(), slice(1), rpu(1)),
-            hex(aud(), slice(2), rpu(2)));
-    assertThat(timingOf(moved)).isEqualTo(timingOf(copy));
-    assertThat(audioSamplesOf(moved)).isEqualTo(audioSamplesOf(copy));
-  }
-
-  @ParameterizedTest(name = "{0}")
-  @EnumSource(RpuMove.class)
-  @DisplayName(
       "Should move an RPU that follows a slice to the end of its sample when another NAL unit"
           + " follows it")
-  void shouldMoveAnRpuThatFollowsASliceToTheEndOfItsSampleWhenAnotherNalUnitFollowsIt(RpuMove move)
+  void shouldMoveAnRpuThatFollowsASliceToTheEndOfItsSampleWhenAnotherNalUnitFollowsIt()
       throws IOException {
     var copy = stream(fragmentBuilder().video(0, sample(slice(0), rpu(0), suffixSei(0))).build());
 
-    var moved = move(copy, move);
+    var moved = move(copy);
 
     assertThat(videoSamplesOf(moved)).containsExactly(hex(slice(0), suffixSei(0), rpu(0)));
   }
 
-  @ParameterizedTest(name = "{0}")
-  @EnumSource(RpuMove.class)
+  @Test
   @DisplayName(
       "Should keep the RPU that ends a sample last when an earlier RPU follows the sample's slice")
-  void shouldKeepTheRpuThatEndsASampleLastWhenAnEarlierRpuFollowsTheSamplesSlice(RpuMove move)
+  void shouldKeepTheRpuThatEndsASampleLastWhenAnEarlierRpuFollowsTheSamplesSlice()
       throws IOException {
     var copy =
         stream(fragmentBuilder().video(0, sample(slice(0), rpu(8), suffixSei(0), rpu(0))).build());
 
-    var moved = move(copy, move);
+    var moved = move(copy);
 
     assertThat(videoSamplesOf(moved)).containsExactly(hex(slice(0), suffixSei(0), rpu(8), rpu(0)));
   }
 
-  @ParameterizedTest(name = "{0}")
-  @EnumSource(RpuMove.class)
+  @Test
   @DisplayName("Should pass the copy unchanged when every RPU ends its own picture's sample")
-  void shouldPassTheCopyUnchangedWhenEveryRpuEndsItsOwnPicturesSample(RpuMove move)
-      throws IOException {
+  void shouldPassTheCopyUnchangedWhenEveryRpuEndsItsOwnPicturesSample() throws IOException {
     var copy =
         stream(
             fragmentBuilder()
@@ -147,7 +117,7 @@ class FragmentedMp4RpuMoverTest {
                 .video(1001, sample(aud(), slice(1), rpu(1)), sample(slice(2), rpu(2)))
                 .build());
 
-    assertThat(move(copy, move)).isEqualTo(copy);
+    assertThat(move(copy)).isEqualTo(copy);
   }
 
   @Test
@@ -163,7 +133,7 @@ class FragmentedMp4RpuMoverTest {
             fragmentBuilder().audio(1024, new byte[] {2}).build(),
             fragmentBuilder().video(1001, sample(rpu(0), slice(1))).build());
 
-    var moved = move(copy, RpuMove.BEHIND_PREVIOUS_PICTURE);
+    var moved = move(copy);
 
     var fragments = Mp4Stream.read(Mp4Stream.readerOf(moved)).fragments();
     assertThat(fragments)
@@ -189,7 +159,7 @@ class FragmentedMp4RpuMoverTest {
             fragmentBuilder().audio(1024, half).build(),
             fragmentBuilder().video(1001, sample(rpu(0), slice(1))).build());
 
-    var moved = move(copy, RpuMove.BEHIND_PREVIOUS_PICTURE);
+    var moved = move(copy);
 
     assertThat(videoSamplesOf(moved)).containsExactly(hex(slice(0)), hex(slice(1)));
     assertThat(Mp4Stream.read(Mp4Stream.readerOf(moved)).fragments()).hasSize(4);
@@ -207,7 +177,7 @@ class FragmentedMp4RpuMoverTest {
             fragmentBuilder().video(0, sample(rpu(9), slice(0))).build(),
             fragmentBuilder().video(1001, sample(rpu(0))).build());
 
-    var moved = move(copy, RpuMove.BEHIND_PREVIOUS_PICTURE);
+    var moved = move(copy);
 
     assertThat(videoSamplesOf(moved)).containsExactly(hex(slice(0), rpu(0)), hex(rpu(0)));
   }
@@ -226,7 +196,7 @@ class FragmentedMp4RpuMoverTest {
             fragmentBuilder().video(2002, sample(rpu(3))).build(),
             fragmentBuilder().video(3003, sample(rpu(4), slice(1))).build());
 
-    var moved = move(copy, RpuMove.BEHIND_PREVIOUS_PICTURE);
+    var moved = move(copy);
 
     assertThat(videoSamplesOf(moved))
         .containsExactly(hex(slice(0), rpu(4)), hex(rpu(1), rpu(2)), hex(rpu(3)), hex(slice(1)));
@@ -245,7 +215,7 @@ class FragmentedMp4RpuMoverTest {
             fragmentBuilder().video(0, undelimited).build(),
             fragmentBuilder().video(1001, sample(rpu(0), slice(1))).build());
 
-    var moved = move(copy, RpuMove.BEHIND_PREVIOUS_PICTURE);
+    var moved = move(copy);
 
     assertThat(videoSamplesOf(moved)).containsExactly(hex(undelimited), hex(slice(1)));
   }
@@ -259,11 +229,11 @@ class FragmentedMp4RpuMoverTest {
     var copy =
         concat(
             initializationSegment(hevcSampleEntry("hvc1", lengthSize)),
-            fragmentBuilder().video(0, concat(shortRpu, shortSlice)).build());
+            fragmentBuilder().video(0, shortSlice, concat(shortRpu, shortSlice)).build());
 
-    var moved = move(copy, RpuMove.BEHIND_OWN_PICTURE);
+    var moved = move(copy);
 
-    assertThat(videoSamplesOf(moved)).containsExactly(hex(shortSlice, shortRpu));
+    assertThat(videoSamplesOf(moved)).containsExactly(hex(shortSlice, shortRpu), hex(shortSlice));
   }
 
   @Test
@@ -275,7 +245,7 @@ class FragmentedMp4RpuMoverTest {
             fragmentBuilder().video(0, sample(slice(0))).build());
 
     assertThatExceptionOfType(FragmentedMp4Exception.class)
-        .isThrownBy(() -> move(copy, RpuMove.BEHIND_OWN_PICTURE))
+        .isThrownBy(() -> move(copy))
         .extracting(FragmentedMp4Exception::getReason)
         .isEqualTo(Reason.OUTPUT_MISMATCH);
   }
@@ -290,11 +260,7 @@ class FragmentedMp4RpuMoverTest {
             .build();
 
     assertThatExceptionOfType(FragmentedMp4Exception.class)
-        .isThrownBy(
-            () ->
-                move(
-                    concat(initializationSegment(), withSampleDependencies),
-                    RpuMove.BEHIND_OWN_PICTURE))
+        .isThrownBy(() -> move(concat(initializationSegment(), withSampleDependencies)))
         .extracting(FragmentedMp4Exception::getReason)
         .isEqualTo(Reason.UNEXPECTED_BOX);
   }
@@ -309,7 +275,7 @@ class FragmentedMp4RpuMoverTest {
     var copy = concat(initializationSegment(), moof, box("mdat", new byte[1]));
 
     assertThatExceptionOfType(FragmentedMp4Exception.class)
-        .isThrownBy(() -> move(copy, RpuMove.BEHIND_OWN_PICTURE))
+        .isThrownBy(() -> move(copy))
         .extracting(FragmentedMp4Exception::getReason)
         .isEqualTo(Reason.UNEXPECTED_BOX);
   }
@@ -327,7 +293,7 @@ class FragmentedMp4RpuMoverTest {
     var copy = concat(initializationSegment(), moof, box("mdat", picture));
 
     assertThatExceptionOfType(FragmentedMp4Exception.class)
-        .isThrownBy(() -> move(copy, RpuMove.BEHIND_OWN_PICTURE))
+        .isThrownBy(() -> move(copy))
         .extracting(FragmentedMp4Exception::getReason)
         .isEqualTo(Reason.MALFORMED_BOX);
   }
@@ -344,7 +310,7 @@ class FragmentedMp4RpuMoverTest {
     var copy = concat(initializationSegment(), moof, box("mdat", new byte[0]));
 
     assertThatExceptionOfType(FragmentedMp4Exception.class)
-        .isThrownBy(() -> move(copy, RpuMove.BEHIND_PREVIOUS_PICTURE))
+        .isThrownBy(() -> move(copy))
         .extracting(FragmentedMp4Exception::getReason)
         .isEqualTo(Reason.EXCEEDS_SEGMENT_CAP);
   }
@@ -360,7 +326,7 @@ class FragmentedMp4RpuMoverTest {
     units[units.length - 1] = slice(0);
     var copy = stream(fragmentBuilder().video(0, sample(units)).build());
 
-    assertThat(move(copy, RpuMove.BEHIND_OWN_PICTURE)).isEqualTo(copy);
+    assertThat(move(copy)).isEqualTo(copy);
   }
 
   @Test
@@ -370,7 +336,7 @@ class FragmentedMp4RpuMoverTest {
     var truncated = Arrays.copyOf(copy, copy.length - 2);
 
     assertThatExceptionOfType(FragmentedMp4Exception.class)
-        .isThrownBy(() -> move(truncated, RpuMove.BEHIND_PREVIOUS_PICTURE))
+        .isThrownBy(() -> move(truncated))
         .extracting(FragmentedMp4Exception::getReason)
         .isEqualTo(Reason.END_OF_FILE_IN_BOX_BODY);
   }
@@ -378,7 +344,7 @@ class FragmentedMp4RpuMoverTest {
   @Test
   @DisplayName("Should write nothing when the copy is empty")
   void shouldWriteNothingWhenTheCopyIsEmpty() throws IOException {
-    assertThat(move(new byte[0], RpuMove.BEHIND_PREVIOUS_PICTURE)).isEmpty();
+    assertThat(move(new byte[0])).isEmpty();
   }
 
   private static byte[] moofCountingFromItsStart(int dataOffset) {
@@ -434,9 +400,9 @@ class FragmentedMp4RpuMoverTest {
     return concat(initializationSegment(), concat(fragments));
   }
 
-  private static byte[] move(byte[] copy, RpuMove move) throws IOException {
+  private static byte[] move(byte[] copy) throws IOException {
     var output = new ByteArrayOutputStream();
-    FragmentedMp4RpuMover.copy(new ByteArrayInputStream(copy), output, move);
+    FragmentedMp4RpuMover.copy(new ByteArrayInputStream(copy), output);
     return output.toByteArray();
   }
 

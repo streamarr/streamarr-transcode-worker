@@ -176,8 +176,7 @@ class ProcessBuilderLauncherTest {
                         endlessCopy,
                         initializationSegment.toString(),
                         fragment.toString()),
-                    List.of("bash", "-c", "trap '' TERM; exec sleep 600"),
-                    RpuMove.BEHIND_PREVIOUS_PICTURE))
+                    List.of("bash", "-c", "trap '' TERM; exec sleep 600")))
             .stallTimeout(Duration.ofMillis(300))
             .gracePeriod(Duration.ofMillis(300))
             .start();

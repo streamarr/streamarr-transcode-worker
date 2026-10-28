@@ -25,12 +25,9 @@ public sealed interface FfmpegPipeline {
   /**
    * An FFmpeg that copies the source into fragmented MP4, and an FFmpeg that encodes that copy once
    * the worker has moved each Dolby Vision RPU to the end of the sample of the picture it belongs
-   * to, as the move says.
+   * to, as {@link FragmentedMp4RpuMover} says.
    */
-  record RpuMovingPipe(
-      @NonNull List<String> copyCommand,
-      @NonNull List<String> encodeCommand,
-      @NonNull RpuMove rpuMove)
+  record RpuMovingPipe(@NonNull List<String> copyCommand, @NonNull List<String> encodeCommand)
       implements FfmpegPipeline {
 
     public RpuMovingPipe {

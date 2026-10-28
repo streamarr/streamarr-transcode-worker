@@ -19,7 +19,10 @@ import lombok.NonNull;
 /**
  * Copies the fragmented MP4 that FFmpeg writes of an HEVC source with {@code
  * delay_moov+default_base_moof+frag_keyframe}, moving each Dolby Vision RPU of a video sample to
- * the end of the sample of the picture it belongs to, as the {@link RpuMove} says.
+ * the end of the sample of the picture it belongs to. An RPU ahead of its sample's first slice
+ * belongs to the picture before, and moves to the end of that picture's sample; one that has no
+ * previous picture, such as the first after a seek, is dropped. An RPU that follows a slice of its
+ * sample but is not the sample's last NAL unit moves to the end of that sample.
  *
  * <p>FFmpeg's HEVC decoder reads an RPU only when it is the last NAL unit of the sample, so an RPU
  * ahead of the sample's first slice reshapes no picture. A sample whose RPU moves grows, shrinks or
@@ -50,17 +53,15 @@ final class FragmentedMp4RpuMover {
 
   private final FragmentedMp4Reader reader;
   private final OutputStream output;
-  private final RpuMove move;
   private final Deque<HeldFragment> held = new ArrayDeque<>();
   private long heldBytes;
   private long readBytes;
   private int lengthSize;
   private Optional<VideoSample> previousPicture = Optional.empty();
 
-  private FragmentedMp4RpuMover(InputStream input, OutputStream output, RpuMove move) {
+  private FragmentedMp4RpuMover(InputStream input, OutputStream output) {
     this.reader = new FragmentedMp4Reader(input, MAXIMUM_FRAGMENT_BYTES, this::admit);
     this.output = output;
-    this.move = move;
   }
 
   /**
@@ -70,9 +71,8 @@ final class FragmentedMp4RpuMover {
    * @throws FragmentedMp4Exception when the input is not the fragmented MP4 of an HEVC video track
    *     that FFmpeg writes with those flags, for the named reason
    */
-  static void copy(@NonNull InputStream input, @NonNull OutputStream output, @NonNull RpuMove move)
-      throws IOException {
-    new FragmentedMp4RpuMover(input, output, move).copyToEnd();
+  static void copy(@NonNull InputStream input, @NonNull OutputStream output) throws IOException {
+    new FragmentedMp4RpuMover(input, output).copyToEnd();
   }
 
   private void copyToEnd() throws IOException {
@@ -221,20 +221,13 @@ final class FragmentedMp4RpuMover {
       }
     }
 
-    if (move == RpuMove.BEHIND_OWN_PICTURE) {
-      behind.addAll(0, leading);
-    } else {
-      appendBehindPreviousPicture(leading);
-    }
-
+    appendBehindPreviousPicture(leading);
     if (!leading.isEmpty() || !behind.isEmpty()) {
       kept.addAll(endsWithRpu ? kept.size() - 1 : kept.size(), behind);
       sample.replace(kept);
     }
 
-    if (move == RpuMove.BEHIND_PREVIOUS_PICTURE) {
-      previousPicture = Optional.of(sample);
-    }
+    previousPicture = Optional.of(sample);
   }
 
   private static OptionalInt firstSliceOf(List<HevcNalUnit> units) {
@@ -248,9 +241,7 @@ final class FragmentedMp4RpuMover {
   }
 
   private void copyRpusBehindPreviousPicture(List<HevcNalUnit> units) {
-    if (move == RpuMove.BEHIND_PREVIOUS_PICTURE) {
-      appendBehindPreviousPicture(units.stream().filter(HevcNalUnit::rpu).toList());
-    }
+    appendBehindPreviousPicture(units.stream().filter(HevcNalUnit::rpu).toList());
   }
 
   // FFmpeg's HEVC decoder reads only a sample's last NAL unit as its RPU, so the previous picture

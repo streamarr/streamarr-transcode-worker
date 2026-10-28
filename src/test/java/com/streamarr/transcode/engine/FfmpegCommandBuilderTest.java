@@ -1598,22 +1598,7 @@ class FfmpegCommandBuilderTest {
                     "cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont",
                     "-frag_duration",
                     "1000000",
-                    "pipe:1"),
-                RpuMove.BEHIND_PREVIOUS_PICTURE));
-  }
-
-  @Test
-  @DisplayName(
-      "Should move each RPU behind its own picture when a Dolby Vision profile 5 sample starts with"
-          + " its own picture's RPU")
-  void
-      shouldMoveEachRpuBehindItsOwnPictureWhenADolbyVisionProfile5SampleStartsWithItsOwnPicturesRpu() {
-    var request =
-        request(encoding(profile5Encode(DolbyVisionRpuPlacement.BEFORE_OWN_PICTURE))).build();
-
-    var pipe = rpuMovingPipe(builder.buildPipeline(job(request, "libx264")));
-
-    assertThat(pipe.rpuMove()).isEqualTo(RpuMove.BEHIND_OWN_PICTURE);
+                    "pipe:1")));
   }
 
   @Test
@@ -1624,9 +1609,8 @@ class FfmpegCommandBuilderTest {
       shouldMoveEachRpuThatStartsASampleBehindThePreviousPictureWhenTheProbeDidNotObserveWhereADolbyVisionProfile5SourcePlacesItsRpus() {
     var request = request(encoding(profile5Encode(DolbyVisionRpuPlacement.UNSPECIFIED))).build();
 
-    var pipe = rpuMovingPipe(builder.buildPipeline(job(request, "libx264")));
-
-    assertThat(pipe.rpuMove()).isEqualTo(RpuMove.BEHIND_PREVIOUS_PICTURE);
+    assertThat(builder.buildPipeline(job(request, "libx264")))
+        .isInstanceOf(FfmpegPipeline.RpuMovingPipe.class);
   }
 
   @Test

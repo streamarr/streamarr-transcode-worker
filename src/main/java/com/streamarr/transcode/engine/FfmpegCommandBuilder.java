@@ -109,12 +109,9 @@ public class FfmpegCommandBuilder {
   private static final int LONGEST_ARGUMENT_BYTES = 32 * 4096 - 1;
 
   public FfmpegPipeline buildPipeline(TranscodeJob job) {
-    var rpuMove = rpuMoveOf(job);
-    if (rpuMove.isPresent()) {
+    if (needsRpuMove(job)) {
       return new FfmpegPipeline.RpuMovingPipe(
-          buildSourceCopyCommand(job),
-          buildCommand(job, EncoderInput.COPY_OF_THE_SOURCE),
-          rpuMove.orElseThrow());
+          buildSourceCopyCommand(job), buildCommand(job, EncoderInput.COPY_OF_THE_SOURCE));
     }
 
     return new FfmpegPipeline.SingleProcess(buildCommand(job, EncoderInput.SOURCE));
@@ -123,9 +120,10 @@ public class FfmpegCommandBuilder {
   // Dolby Vision profile 5 is the only profile without a compatible base, so only its picture
   // needs the RPU that FFmpeg's HEVC decoder skips when the RPU starts a sample. A copy decodes
   // nothing.
-  private static Optional<RpuMove> rpuMoveOf(TranscodeJob job) {
+  private static boolean needsRpuMove(TranscodeJob job) {
     return profile5HevcSourceOf(job.request().transcodeDecision().videoDecision())
-        .flatMap(present -> rpuMoveFor(present.rpuPlacement()));
+        .filter(present -> mayStartSamplesWithRpus(present.rpuPlacement()))
+        .isPresent();
   }
 
   private static Optional<VideoDynamicRange.DolbyVision.Present> profile5HevcSourceOf(
@@ -142,14 +140,16 @@ public class FfmpegCommandBuilder {
   }
 
   // A probe that did not observe the placement leaves the source's RPUs where they may start
-  // samples. Treated as the shifted layout, which mkvmerge wrote before version 57, a source whose
-  // RPUs follow their pictures passes unchanged; the own-first layout, which no known muxer writes,
-  // would give each picture the next one's RPU.
-  private static Optional<RpuMove> rpuMoveFor(VideoDynamicRange.DolbyVisionRpuPlacement placement) {
+  // samples. Moved as the shifted layout, which mkvmerge wrote before version 57, a source whose
+  // RPUs follow their pictures passes unchanged, and a shifted source whose start was cut away is
+  // repaired. The probe cannot tell that source from one whose RPUs start their own pictures'
+  // samples, a layout no known muxer writes, to each of whose pictures the move gives the next
+  // picture's RPU.
+  private static boolean mayStartSamplesWithRpus(
+      VideoDynamicRange.DolbyVisionRpuPlacement placement) {
     return switch (placement) {
-      case BEFORE_NEXT_PICTURE, UNSPECIFIED -> Optional.of(RpuMove.BEHIND_PREVIOUS_PICTURE);
-      case BEFORE_OWN_PICTURE -> Optional.of(RpuMove.BEHIND_OWN_PICTURE);
-      case AFTER_OWN_PICTURE -> Optional.empty();
+      case BEFORE_NEXT_PICTURE, UNSPECIFIED -> true;
+      case AFTER_OWN_PICTURE -> false;
     };
   }
 
