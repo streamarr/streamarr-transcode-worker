@@ -79,7 +79,7 @@ from its lavfi test sources. No file comes from a media library.
 | `mp4-av1-rpu.mp4.json` | The same stream, each of whose temporal units `insert-av1-metadata.py` gave the first Dolby Vision RPU of FFmpeg's FATE sample `mov/dovi-p5.mp4` in its EMDF container, ahead of the frame |
 | `mp4-av1-rpu-bad-emdf.mp4.json` | As `mp4-av1-rpu.mp4`, with an EMDF header that FFmpeg rejects, so only the packets show the RPUs |
 | `mp4-audio-codecs.mp4.json` | H.264 with AC-3, E-AC-3, FLAC and ALAC in MP4 |
-| `mpegts-aac-he.ts.json` | Local sample: HE-AAC in ADTS (`aac-he.adts`), next to a synthesized H.264 stream in MPEG-TS |
+| `mpegts-aac-he.ts.json` | FFmpeg's FATE sample `aac/al_sbr_cm_48_2.mp4`, HE-AAC copied into ADTS, next to a synthesized H.264 stream in MPEG-TS |
 | `mkv-120fps.mkv.json` | H.264 at 120 fps in Matroska, whose 1 ms timestamps alternate 8 and 9 ms |
 | `mp4-100fps.mp4.json`, `mp4-90fps.mp4.json`, `mp4-72fps.mp4.json` | H.264 at 100, 90 and 72 fps in MP4 |
 | `mov-phone-one-gap.mov.json` | Local sample: a phone camera original at 30 fps with one 133 ms gap (see Sources) |

@@ -325,6 +325,11 @@ cp /fate/h264/extradata-reload-multi-stsd.mov mov-h264-extradata-reload.mov
 cp /fate/hevc/extradata-reload-multi-stsd.mov mov-hevc-extradata-reload.mov
 cp /fate/h264/mixed-nal-coding.mp4 mp4-h264-mixed-nal-coding.mp4
 cp /fate/mkv/hdr10_plus_vp9_sample.webm webm-vp9-hdr10-plus.webm
+# HE-AAC with explicit SBR signaling, copied into ADTS, whose header says LC, next to a synthesized
+# video stream in MPEG-TS.
+"${FF[@]}" -i /fate/aac/al_sbr_cm_48_2.mp4 -map 0:a -c copy -f adts aac-he.adts
+"${FF[@]}" -f lavfi -i testsrc2=size=64x36:rate=24:duration=2 -i aac-he.adts -map 0:v -map 1:a \
+  -c:v libx264 -preset ultrafast -pix_fmt yuv420p -c:a copy -t 2 mpegts-aac-he.ts
 CONTAINER
 
 # Each AV1 stream in IVF that insert-av1-metadata.py wrote, copied into MP4, whose av1C record the
@@ -435,7 +440,7 @@ if [ -n "${FATE_SUITE:-}" ]; then
     mp4-av1-rpu-bad-emdf.mp4 mp4-dovi-p7-two-tracks.mp4 mp4-dovi-p81-fate.mp4
     hevc-dovi-p81-fate.hevc ivf-av1-hdr-sizeup.ivf h264-sei-1.h264 mp4-h264-sei-1.mp4
     mov-h264-extradata-reload.mov mov-hevc-extradata-reload.mov mp4-h264-mixed-nal-coding.mp4
-    webm-vp9-hdr10-plus.webm)
+    webm-vp9-hdr10-plus.webm mpegts-aac-he.ts)
 fi
 in_image av1.sh
 
@@ -473,15 +478,12 @@ JSON
   FIXTURES_TO_PROBE+=(mp4-dovi-p9-avc1.mp4 mp4-dovi-p9-dva1.mp4 mpegts-dovi-p9.ts)
 fi
 
-# HE-AAC in ADTS, which a local sample holds, next to a synthesized video stream in MPEG-TS. The
-# record-less Dolby Vision profile 5 sample, rewritten to signal BT.709 in its VUI under hvc1, and
-# copied into MPEG-TS, which then carries no Dolby Vision descriptor.
+# The record-less Dolby Vision profile 5 sample, rewritten to signal BT.709 in its VUI under hvc1,
+# and copied into MPEG-TS, which then carries no Dolby Vision descriptor.
 cat > "$WORK/local.sh" <<'CONTAINER'
 set -euo pipefail
 cd /work
 FF=(timeout 60 ffmpeg -hide_banner -nostdin -loglevel error -y)
-"${FF[@]}" -f lavfi -i testsrc2=size=64x36:rate=24:duration=2 -i /samples/aac-he.adts \
-  -map 0:v -map 1:a -c:v libx264 -preset ultrafast -pix_fmt yuv420p -c:a copy -t 2 mpegts-aac-he.ts
 "${FF[@]}" -i /samples/mp4-dovi-p5-dvh1-no-record.mp4 -map 0:v -t 3 -c copy \
   -bsf:v hevc_metadata=colour_primaries=1:transfer_characteristics=1:matrix_coefficients=1 \
   -tag:v hvc1 mp4-dovi-p5-no-record-bt709.mp4
@@ -496,9 +498,8 @@ LOCAL_SAMPLE_NAMES=(mp4-dovi-p5-dvh1.mp4 mp4-dovi-p5-dvh1-no-record.mp4 mp4-dovi
 PROBE_ARGUMENTS=("${FIXTURES_TO_PROBE[@]}")
 if [ -n "${LOCAL_SAMPLES:-}" ]; then
   in_image local.sh
-  FIXTURES_TO_PROBE+=(mpegts-aac-he.ts mp4-dovi-p5-no-record-bt709.mp4
-    mpegts-dovi-p5-no-descriptor.ts)
-  PROBE_ARGUMENTS+=(mpegts-aac-he.ts mp4-dovi-p5-no-record-bt709.mp4 mpegts-dovi-p5-no-descriptor.ts)
+  FIXTURES_TO_PROBE+=(mp4-dovi-p5-no-record-bt709.mp4 mpegts-dovi-p5-no-descriptor.ts)
+  PROBE_ARGUMENTS+=(mp4-dovi-p5-no-record-bt709.mp4 mpegts-dovi-p5-no-descriptor.ts)
   for sample in "${LOCAL_SAMPLE_NAMES[@]}"; do
     PROBE_ARGUMENTS+=("/samples/$sample")
   done
