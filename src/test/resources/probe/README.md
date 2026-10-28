@@ -103,7 +103,7 @@ The phone and camcorder fixtures hold only ffprobe's description of each file an
 | `mov-phone-hlg-dovi-p84` | [img-5945_202311](https://archive.org/details/img-5945_202311) | Simon Robin Lehn | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) |
 | `mov-phone-rotated` | [img-6851_202505](https://archive.org/details/img-6851_202505) | Imad Rahi | [Public Domain Mark 1.0](https://creativecommons.org/publicdomain/mark/1.0/) |
 | `mov-phone-one-gap` | [img-4999_202406](https://archive.org/details/img-4999_202406) | Maung Fate | [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) |
-| `mov-phone-120-declared` | [img-0233_202604](https://archive.org/details/img-0233_202604) | Gemma | [CC BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/) |
+| `mov-phone-120-declared` | [img-1119_202603](https://archive.org/details/img-1119_202603), file `IMG_1087.MOV` | Maen | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) |
 | `mov-phone-60` | [img-0372_202404](https://archive.org/details/img-0372_202404) | Uploader on the Internet Archive | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) |
 | `mov-phone-slow-motion` | [img-3068_202403](https://archive.org/details/img-3068_202403), file `IMG_3074.MOV` | Uploader on the Internet Archive | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) |
 | `mpegts-avchd-interlaced` | [Flickr-5838795894](https://archive.org/details/Flickr-5838795894) | Lawrence, via Flickr | [CC BY-SA 2.0](https://creativecommons.org/licenses/by-sa/2.0/) |

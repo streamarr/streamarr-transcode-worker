@@ -4,9 +4,6 @@
       "stream_index": 0,
       "side_data_list": [
         {
-          "side_data_type": "3x3 displaymatrix"
-        },
-        {
           "side_data_type": "H.26[45] User Data Unregistered SEI message"
         },
         {
@@ -53,9 +50,6 @@
       "stream_index": 0,
       "side_data_list": [
         {
-          "side_data_type": "3x3 displaymatrix"
-        },
-        {
           "side_data_type": "H.26[45] User Data Unregistered SEI message"
         },
         {
@@ -101,9 +95,6 @@
     {
       "stream_index": 0,
       "side_data_list": [
-        {
-          "side_data_type": "3x3 displaymatrix"
-        },
         {
           "side_data_type": "H.26[45] User Data Unregistered SEI message"
         },
