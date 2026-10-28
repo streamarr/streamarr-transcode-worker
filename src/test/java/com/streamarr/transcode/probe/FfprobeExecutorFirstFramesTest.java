@@ -279,7 +279,7 @@ class FfprobeExecutorFirstFramesTest {
   class Hdr10PlusTests {
 
     @ParameterizedTest(name = "{0}")
-    @ValueSource(strings = {"hevc", "av1"})
+    @ValueSource(strings = {"hevc", "av1", "vp9"})
     @DisplayName("Should report HDR10+ present when a frame carries HDR10+ metadata")
     void shouldReportHdr10PlusPresentWhenAFrameCarriesHdr10PlusMetadata(String codec) {
       var video = video(codec(codec), frames("", HDR10_PLUS));
@@ -1497,14 +1497,14 @@ class FfprobeExecutorFirstFramesTest {
     }
 
     @Test
-    @DisplayName("Should leave a VP9 stream's HDR10+ unspecified when its first frame carries it")
-    void shouldLeaveAVp9StreamsHdr10PlusUnspecifiedWhenItsFirstFrameCarriesIt() {
-      // Probe version 5 reads the frames' features of H.264, HEVC and AV1 only, so VP9 keeps the
-      // facts of probe version 4, although FFmpeg copies the WebM BlockAdditional to the frame.
+    @DisplayName("Should report a VP9 stream's HDR10+ present when its first frame carries it")
+    void shouldReportAVp9StreamsHdr10PlusPresentWhenItsFirstFrameCarriesIt() {
+      // FFmpeg copies the WebM BlockAdditional that holds the HDR10+ metadata to the frame. The
+      // probe walks no VP9 packets, so no feature that the frames do not show is ruled out.
       var video = streamOf("webm-vp9-hdr10-plus.webm", 0);
 
       assertThat(video.getFirstFramesRead()).isTrue();
-      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_PRESENT);
       assertThat(video.getDynamicRange().getDolbyVisionCase())
           .isEqualTo(DolbyVisionCase.DOLBYVISION_NOT_SET);
     }

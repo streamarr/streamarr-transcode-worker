@@ -36,10 +36,6 @@ final class DynamicRangeReader {
   private static final Set<String> DOLBY_VISION_SAMPLE_ENTRIES =
       Set.of("dvh1", "dvhe", "dav1", "dva1", "dvav");
 
-  // The decoders whose frames carry HDR10+ metadata and Dolby Vision RPUs. FFmpeg 8.1's H.264
-  // decoder drops both, so the probe finds H.264 RPUs in the packets alone.
-  private static final Set<String> DECODERS_SHOWING_FRAME_METADATA = Set.of("hevc", "av1");
-
   private static final List<String> RPU_HEADER_FIELDS =
       List.of(
           "vdr_rpu_profile",
@@ -52,8 +48,10 @@ final class DynamicRangeReader {
 
   static VideoDynamicRange read(JsonNode stream, Optional<MetadataWalk> walk) {
     var codec = text(stream, "codec_name").orElse("");
-    var frames =
-        FirstFrames.of(stream).filter(_ -> DECODERS_SHOWING_FRAME_METADATA.contains(codec));
+    // Frames only prove a feature present, so the frames of every codec count, whether or not its
+    // decoder exports the feature: FFmpeg 8.1's H.264 decoder drops HDR10+ and RPUs, while the
+    // Matroska demuxer gives a VP9 frame the HDR10+ metadata of its BlockAdditional.
+    var frames = FirstFrames.of(stream);
     var rpus = rpus(frames, walk);
 
     var record = VideoStreamFacts.sideData(stream, DOLBY_VISION_RECORD);
