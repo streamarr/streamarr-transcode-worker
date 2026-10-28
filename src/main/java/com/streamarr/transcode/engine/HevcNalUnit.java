@@ -20,10 +20,17 @@ import lombok.NonNull;
  * @param bytes the length prefix and the NAL unit, viewed without copying them
  * @param slice whether a picture slice reaches the decoder from the NAL unit's bytes
  * @param rpu whether the last NAL unit of those bytes that reaches the decoder is an RPU
+ * @param rpuAlone whether that RPU is the only NAL unit of those bytes that reaches the decoder, so
+ *     that moving the bytes moves no other NAL unit that the decoder reads
  * @param reachesDecoder whether FFmpeg's splitter hands the NAL unit, or one that a start code
  *     inside it begins, to the decoder
  */
-record HevcNalUnit(@NonNull ByteBuffer bytes, boolean slice, boolean rpu, boolean reachesDecoder) {
+record HevcNalUnit(
+    @NonNull ByteBuffer bytes,
+    boolean slice,
+    boolean rpu,
+    boolean rpuAlone,
+    boolean reachesDecoder) {
 
   /**
    * The most NAL units of a sample that {@link #delimit} returns: well above the 600 slice segments
@@ -98,7 +105,8 @@ record HevcNalUnit(@NonNull ByteBuffer bytes, boolean slice, boolean rpu, boolea
     }
 
     var rpu = reaching > 0 && isRpuAt(sample, lastReaching, end);
-    return new HevcNalUnit(sample.slice(start, end - start), slice, rpu, reaching > 0);
+    return new HevcNalUnit(
+        sample.slice(start, end - start), slice, rpu, rpu && reaching == 1, reaching > 0);
   }
 
   // The header behind the first start code at or after this header, which no earlier start code

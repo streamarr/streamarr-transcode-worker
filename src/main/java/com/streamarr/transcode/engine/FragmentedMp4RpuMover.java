@@ -283,9 +283,9 @@ final class FragmentedMp4RpuMover {
       if (index == lastIndex && endsWithRpu) {
         insertBehindAt = OptionalInt.of(kept.size());
         kept.add(unit);
-      } else if (!unit.rpu() || unit.slice()) {
-        // A length that holds a slice ahead of its RPU keeps its place: moving it would move the
-        // slice behind the picture's other slices.
+      } else if (!unit.rpuAlone()) {
+        // A length whose RPU follows another NAL unit that the decoder reads, such as a slice or a
+        // parameter set, keeps its place: moving it would move that NAL unit too.
         kept.add(unit);
       } else if (index < firstSlice.getAsInt()) {
         leading.add(unit);
@@ -324,7 +324,7 @@ final class FragmentedMp4RpuMover {
   }
 
   private void copyRpusBehindPreviousPicture(List<HevcNalUnit> units) {
-    appendBehindPreviousPicture(units.stream().filter(HevcNalUnit::rpu).toList());
+    appendBehindPreviousPicture(units.stream().filter(HevcNalUnit::rpuAlone).toList());
   }
 
   // FFmpeg's HEVC decoder reads only a sample's last NAL unit as its RPU, so the previous picture

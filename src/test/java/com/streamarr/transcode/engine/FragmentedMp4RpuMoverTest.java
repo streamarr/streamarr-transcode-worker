@@ -269,6 +269,25 @@ class FragmentedMp4RpuMoverTest {
 
   @Test
   @DisplayName(
+      "Should keep a length that holds a parameter set in place when a start code inside it begins"
+          + " the RPU that starts the sample")
+  void
+      shouldKeepALengthThatHoldsAParameterSetInPlaceWhenAStartCodeInsideItBeginsTheRpuThatStartsTheSample()
+          throws IOException {
+    // Moving the length behind the previous picture would take the PPS ahead of the RPU with it.
+    var ppsThenRpu = unit("44 01 C1 01 00 00 01 7C 01 19 01");
+    var copy =
+        stream(
+            fragmentBuilder().video(0, sample(slice(0))).build(),
+            fragmentBuilder().video(1001, sample(ppsThenRpu, slice(1))).build());
+
+    var moved = move(copy);
+
+    assertThat(videoSamplesOf(moved)).containsExactly(hex(slice(0)), hex(ppsThenRpu, slice(1)));
+  }
+
+  @Test
+  @DisplayName(
       "Should keep a length that holds a slice in place when a start code inside it begins an RPU"
           + " that another slice follows")
   void
