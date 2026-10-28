@@ -81,6 +81,44 @@ class ProducerRpuMovingPipeTest {
 
   @Test
   @DisplayName(
+      "Should pass each video sample to the encoding FFmpeg with the duration of its packet in the"
+          + " source when the copying FFmpeg writes that timing beside the copy")
+  void
+      shouldPassEachVideoSampleToTheEncodingFfmpegWithTheDurationOfItsPacketInTheSourceWhenTheCopyingFfmpegWritesThatTimingBesideTheCopy() {
+    var copy = ScriptedProcess.builder().output(COPIED_SOURCE).build();
+    var encode = encodingFfmpeg().build();
+    var framecrc =
+        """
+        #tb 0: 1/48000
+        0,          0,       4004,     1968,        9, 0x00000000, F=0x0
+        0,       2002,       6006,     1968,       20, 0x00000000, F=0x0
+        """;
+
+    var producer = producer(copyingWith(copy, framecrc), encode).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(videoDurationsOf(encode.stdinBytes())).containsExactly(984L, 984L);
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as a truncated output when the copying FFmpeg exits cleanly without"
+          + " writing the timing of the copy's video")
+  void
+      shouldFailTheAttemptAsATruncatedOutputWhenTheCopyingFfmpegExitsCleanlyWithoutWritingTheTimingOfTheCopysVideo() {
+    var copy =
+        ScriptedProcess.builder().output(COPIED_SOURCE).exitTiming(ExitTiming.AT_LAUNCH).build();
+    var encode = encodingFfmpeg().build();
+
+    var producer = producer(copyingWith(copy, ""), encode).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.TRUNCATED_OUTPUT);
+    assertThat(failure.detail()).contains("END_OF_VIDEO_TIMING");
+  }
+
+  @Test
+  @DisplayName(
       "Should ask the copying FFmpeg to quit, and let the encoding FFmpeg finish on the end of its"
           + " input, when the attempt is stopped")
   void
@@ -203,7 +241,7 @@ class ProducerRpuMovingPipeTest {
             .build();
     ProcessLauncher launcher =
         (command, jobAttemptId) -> {
-          if (command.equals(COPY_COMMAND)) {
+          if (isCopying(command)) {
             return copy;
           }
 
@@ -326,8 +364,48 @@ class ProducerRpuMovingPipeTest {
         .exitTiming(ExitTiming.AT_END_OF_INPUT);
   }
 
+  // The copying FFmpeg's stand-in writes the framecrc of the copied source's video, whatever the
+  // output it replays.
   private Producer.ProducerBuilder producerOf(ScriptedProcess copy, ScriptedProcess encode) {
-    return producer((command, jobAttemptId) -> command.equals(COPY_COMMAND) ? copy : encode);
+    try {
+      return producer(copyingWith(copy, CopiedVideoTiming.framecrcOf(COPIED_SOURCE)), encode);
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
+    }
+  }
+
+  private Producer.ProducerBuilder producer(CopyingFfmpeg copying, ScriptedProcess encode) {
+    return producer(
+        (command, jobAttemptId) -> {
+          if (!isCopying(command)) {
+            return encode;
+          }
+
+          CopiedVideoTiming.writeTo(command, copying.framecrc());
+          return copying.process();
+        });
+  }
+
+  private static CopyingFfmpeg copyingWith(ScriptedProcess process, String framecrc) {
+    return new CopyingFfmpeg(process, framecrc);
+  }
+
+  // The stand-in of the copying FFmpeg and the framecrc of the copy's video that it writes.
+  private record CopyingFfmpeg(ScriptedProcess process, String framecrc) {}
+
+  private static List<Long> videoDurationsOf(byte[] stream) {
+    try {
+      return Mp4Stream.read(Mp4Stream.readerOf(stream)).fragments().stream()
+          .flatMap(fragment -> fragment.videoSamples().stream())
+          .map(Sample::duration)
+          .toList();
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
+    }
+  }
+
+  private static boolean isCopying(List<String> command) {
+    return command.getFirst().equals(COPY_COMMAND.getFirst());
   }
 
   private Producer.ProducerBuilder producer(ProcessLauncher launcher) {

@@ -35,6 +35,15 @@ import lombok.NonNull;
  * then starts a sample has no previous picture. A sample the mover cannot delimit, or that holds no
  * slice, keeps its bytes; a sample without a slice decodes no picture, so its RPUs are copied
  * behind the previous picture instead of moved.
+ *
+ * <p>The muxer writes each video sample's duration as the gap to the next sample's decode time,
+ * where the source's demuxer read a duration of its own; FFmpeg's decoder gives each picture its
+ * packet's duration, and the encode's frame-rate conversion repeats and drops pictures by it. The
+ * mover therefore gives each video sample the duration of its packet in the source, which the
+ * copying FFmpeg writes beside the copy, and keeps every sample's decode time by giving each video
+ * sample of a rewritten fragment its own {@code traf}, whose {@code tfdt} states that time. A
+ * packet that is a keyframe where its sample is no sync sample, or the reverse, refuses the copy;
+ * one whose duration is unknown leaves its sample's.
  */
 final class FragmentedMp4RpuMover {
 
@@ -50,8 +59,10 @@ final class FragmentedMp4RpuMover {
   private static final int LENGTH_SIZE_FIELD =
       CodecConfigurationReader.HVCC_FIELDS_BEFORE_ARRAYS - 1;
   private static final int BOX_HEADER_BYTES = 8;
+  private static final long LARGEST_SAMPLE_DURATION = 0xFFFF_FFFFL;
 
   private final FragmentedMp4Reader reader;
+  private final VideoPacketTimings timings;
   private final OutputStream output;
   private final Deque<HeldFragment> held = new ArrayDeque<>();
   private long heldBytes;
@@ -59,8 +70,10 @@ final class FragmentedMp4RpuMover {
   private int lengthSize;
   private Optional<VideoSample> previousPicture = Optional.empty();
 
-  private FragmentedMp4RpuMover(InputStream input, OutputStream output) {
+  private FragmentedMp4RpuMover(
+      InputStream input, VideoPacketTimings timings, OutputStream output) {
     this.reader = new FragmentedMp4Reader(input, MAXIMUM_FRAGMENT_BYTES, this::admit);
+    this.timings = timings;
     this.output = output;
   }
 
@@ -68,11 +81,14 @@ final class FragmentedMp4RpuMover {
    * Copies the stream to the end of the input, writing each unit once no later sample can change
    * it.
    *
+   * @param timings the source's timing of each of the input's video packets
    * @throws FragmentedMp4Exception when the input is not the fragmented MP4 of an HEVC video track
-   *     that FFmpeg writes with those flags, for the named reason
+   *     that FFmpeg writes with those flags, or the timings do not match it, for the named reason
    */
-  static void copy(@NonNull InputStream input, @NonNull OutputStream output) throws IOException {
-    new FragmentedMp4RpuMover(input, output).copyToEnd();
+  static void copy(
+      @NonNull InputStream input, @NonNull VideoPacketTimings timings, @NonNull OutputStream output)
+      throws IOException {
+    new FragmentedMp4RpuMover(input, timings, output).copyToEnd();
   }
 
   private void copyToEnd() throws IOException {
@@ -134,6 +150,7 @@ final class FragmentedMp4RpuMover {
     requireSamplesWithinTheirMdat(fragment);
     var heldFragment = new HeldFragment(fragment, moof);
     for (var sample : heldFragment.videoSamples) {
+      restoreSourceDuration(sample, fragment.tracks());
       repair(sample);
     }
 
@@ -187,6 +204,55 @@ final class FragmentedMp4RpuMover {
             Reason.UNEXPECTED_BOX, box.type() + " holds " + child.type());
       }
     }
+  }
+
+  // FFmpeg passes both outputs the same packets in the same order, but repairs an invalid or
+  // non-monotonic decode time in each output's own time base, so only a packet's keyframe flag
+  // reliably names its sample.
+  private void restoreSourceDuration(VideoSample sample, MovieTracks tracks) throws IOException {
+    var packet = timings.next();
+    var video = tracks.video().orElseThrow();
+    var copied = sample.copied();
+    if (packet.keyframe() != video.startOf(copied).syncSample()) {
+      throw unusable(
+          "the video sample at decode time "
+              + copied.decodeTime()
+              + (packet.keyframe() ? " is no sync sample" : " is a sync sample")
+              + " where the source's packet "
+              + (packet.keyframe() ? "is" : "is not")
+              + " a keyframe");
+    }
+
+    if (packet.duration() > 0) {
+      sample.restoreDuration(
+          requireSampleDuration(ticksOf(packet, video.timescale(), packet.duration())));
+    }
+  }
+
+  private static long ticksOf(VideoPacketTiming packet, long timescale, long value) {
+    return packet
+        .timeBase()
+        .ticksIn(timescale, value)
+        .orElseThrow(
+            () ->
+                unusable(
+                    value
+                        + " in "
+                        + packet.timeBase()
+                        + " does not convert exactly into the video track's timescale of "
+                        + timescale));
+  }
+
+  private static long requireSampleDuration(long duration) {
+    if (duration > LARGEST_SAMPLE_DURATION) {
+      throw unusable("a source packet lasts " + duration + " ticks, more than a trun can state");
+    }
+
+    return duration;
+  }
+
+  private static FragmentedMp4Exception unusable(String detail) {
+    return new FragmentedMp4Exception(Reason.UNUSABLE_VIDEO_TIMING, detail);
   }
 
   private void repair(VideoSample sample) {
@@ -318,6 +384,7 @@ final class FragmentedMp4RpuMover {
                   sample ->
                       new VideoSample(
                           this,
+                          sample,
                           ByteBuffer.wrap(
                                   mediaData,
                                   sample.mediaDataPosition(),
@@ -348,7 +415,7 @@ final class FragmentedMp4RpuMover {
     private Layout layOut(int dataStart) {
       var tracks = fragment.tracks();
       var videoTrackId = tracks.video().map(VideoTrack::trackId);
-      var video = videoSamples.stream().map(VideoSample::content).iterator();
+      var video = videoSamples.iterator();
       var mediaData = fragment.mediaDataBox();
       var audio =
           fragment.audioSamples().stream()
@@ -360,12 +427,18 @@ final class FragmentedMp4RpuMover {
               .iterator();
       var layout = new Layout(new ArrayList<>(), new ArrayList<>(), dataStart);
       for (var child : moof.children()) {
-        if (child.type().equals("traf")) {
-          var trackId = TrackFragmentHeader.of(child.requiredChild("tfhd")).trackId();
-          layout.addTraf(child, videoTrackId.equals(Optional.of(trackId)) ? video : audio);
-        } else {
+        if (!child.type().equals("traf")) {
           layout.addBox(child);
+          continue;
         }
+
+        var trackId = TrackFragmentHeader.of(child.requiredChild("tfhd")).trackId();
+        if (videoTrackId.equals(Optional.of(trackId))) {
+          layout.addVideoTrafs(child, video);
+          continue;
+        }
+
+        layout.addTraf(child, audio);
       }
 
       return layout;
@@ -381,6 +454,30 @@ final class FragmentedMp4RpuMover {
 
     private int nextDataOffset() {
       return dataStart + samples.stream().mapToInt(ByteBuffer::remaining).sum();
+    }
+
+    // A traf of each of the video traf's samples, which keeps the video traf's tfhd and states the
+    // sample's decode time, so that no sample's duration moves the next one's decode time.
+    private void addVideoTrafs(BoxView traf, Iterator<VideoSample> videoSamples) {
+      var tfhd = boxBytes(traf.requiredChild("tfhd"));
+      var sampleCount =
+          traf.children("trun").stream().mapToLong(run -> TrackRun.of(run).sampleCount()).sum();
+      for (var index = 0L; index < sampleCount; index++) {
+        var sample = videoSamples.next();
+        var content = sample.content();
+        var run = TrackRun.ofOneSample(nextDataOffset(), sample.entry(content.remaining()));
+        samples.add(content);
+        var tfdt = ByteBuffer.allocate(BOX_HEADER_BYTES + 12);
+        tfdt.putInt(tfdt.capacity());
+        putType(tfdt, "tfdt");
+        tfdt.putInt(1 << 24).putLong(sample.copied().decodeTime());
+        var trafBytes = BOX_HEADER_BYTES + tfhd.length + tfdt.capacity() + run.length;
+        var bytes = ByteBuffer.allocate(trafBytes);
+        bytes.putInt(trafBytes);
+        putType(bytes, "traf");
+        bytes.put(tfhd).put(tfdt.array()).put(run);
+        moofChildren.add(bytes.array());
+      }
     }
 
     private void addBox(BoxView box) {
@@ -418,23 +515,33 @@ final class FragmentedMp4RpuMover {
 
   /**
    * One video sample's bytes: as read, or as the mover rearranged them, then the RPU moved behind
-   * it. A rearranged sample holds its own copy of its bytes rather than a view of each NAL unit, so
-   * what a held sample retains is bounded by its size.
+   * it; and its duration: as read, or its packet's in the source. A rearranged sample holds its own
+   * copy of its bytes rather than a view of each NAL unit, so what a held sample retains is bounded
+   * by its size.
    */
   private static final class VideoSample {
 
     private final HeldFragment fragment;
+    private final Sample copied;
     private final ByteBuffer original;
+    private long duration;
     private Optional<ByteBuffer> rearranged = Optional.empty();
     private Optional<ByteBuffer> movedRpu = Optional.empty();
 
-    private VideoSample(HeldFragment fragment, ByteBuffer original) {
+    private VideoSample(HeldFragment fragment, Sample copied, ByteBuffer original) {
       this.fragment = fragment;
+      this.copied = copied;
       this.original = original;
+      this.duration = copied.duration();
     }
 
     private HeldFragment fragment() {
       return fragment;
+    }
+
+    /** The sample as the copy holds it. */
+    private Sample copied() {
+      return copied;
     }
 
     private ByteBuffer original() {
@@ -442,7 +549,21 @@ final class FragmentedMp4RpuMover {
     }
 
     private boolean changed() {
-      return rearranged.isPresent() || movedRpu.isPresent();
+      return rearranged.isPresent() || movedRpu.isPresent() || duration != copied.duration();
+    }
+
+    private void restoreDuration(long sourceDuration) {
+      duration = sourceDuration;
+    }
+
+    /** The sample's run entry with its current duration and the size of its content. */
+    private TrackRun.Entry entry(long size) {
+      return TrackRun.Entry.builder()
+          .duration(duration)
+          .size(size)
+          .flags(copied.flags())
+          .compositionOffset(copied.compositionOffset())
+          .build();
     }
 
     private void replace(List<HevcNalUnit> nalUnits) {

@@ -21,7 +21,9 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.ArrayDeque;
 import java.util.Arrays;
+import java.util.Deque;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.stream.Stream;
@@ -36,6 +38,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 class FragmentedMp4RpuMoverTest {
 
   private static final byte[] AUDIO_FRAME = {0x21, 0x10, 0x04};
+  private static final TimeBase TRACK_TIME_BASE = new TimeBase(1, 24_000);
+  private static final int NON_SYNC_SAMPLE = 0x0001_0000;
 
   @Test
   @DisplayName(
@@ -261,6 +265,123 @@ class FragmentedMp4RpuMoverTest {
   }
 
   @Test
+  @DisplayName(
+      "Should give each video sample its source packet's duration, keeping every sample's decode"
+          + " time, composition offset and flags, when one run holds several video samples")
+  void
+      shouldGiveEachVideoSampleItsSourcePacketsDurationKeepingEverySamplesDecodeTimeCompositionOffsetAndFlagsWhenOneRunHoldsSeveralVideoSamples()
+          throws IOException {
+    var copy =
+        stream(
+            fragmentBuilder()
+                .video(0, sample(slice(0)), sample(slice(1)), sample(slice(2)))
+                .audio(0, AUDIO_FRAME)
+                .build());
+
+    var moved =
+        move(
+            copy,
+            timingsOf(
+                packetIn(TRACK_TIME_BASE).keyframe(true).duration(1000),
+                packetIn(TRACK_TIME_BASE).keyframe(false).duration(1000),
+                packetIn(TRACK_TIME_BASE).keyframe(false).duration(1000)));
+
+    assertThat(timingOf(moved))
+        .containsExactly(
+            "video 0/0/1000/" + Integer.toHexString(IsoBoxes.SYNC_SAMPLE_FLAGS),
+            "video 1001/1001/1000/" + Integer.toHexString(IsoBoxes.NON_SYNC_SAMPLE_FLAGS),
+            "video 2003/2002/1000/" + Integer.toHexString(IsoBoxes.NON_SYNC_SAMPLE_FLAGS),
+            "audio 0/0/1024/" + Integer.toHexString(IsoBoxes.SYNC_SAMPLE_FLAGS));
+    assertThat(videoSamplesOf(moved)).isEqualTo(videoSamplesOf(copy));
+    assertThat(audioSamplesOf(moved)).isEqualTo(audioSamplesOf(copy));
+  }
+
+  @Test
+  @DisplayName(
+      "Should convert each source packet's duration into the video track's timescale when the"
+          + " source's time base differs")
+  void
+      shouldConvertEachSourcePacketsDurationIntoTheVideoTracksTimescaleWhenTheSourcesTimeBaseDiffers()
+          throws IOException {
+    var copy =
+        stream(
+            fragmentBuilder().video(0, sample(slice(0))).build(),
+            fragmentBuilder().video(1001, sample(slice(1))).build());
+    var source = new TimeBase(1, 12_000);
+
+    var moved =
+        move(
+            copy,
+            timingsOf(
+                packetIn(source).keyframe(false).duration(492),
+                packetIn(source).keyframe(false).duration(5_000)));
+
+    assertThat(timingOf(moved))
+        .extracting(timing -> timing.substring(0, timing.lastIndexOf('/')))
+        .containsExactly("video 0/2002/984", "video 1001/2002/10000");
+  }
+
+  @Test
+  @DisplayName(
+      "Should pass a fragment unchanged when the source's packet leaves its duration unknown")
+  void shouldPassAFragmentUnchangedWhenTheSourcesPacketLeavesItsDurationUnknown()
+      throws IOException {
+    var copy = stream(fragmentBuilder().video(0, sample(slice(0))).build());
+
+    var moved = move(copy, timingsOf(packetIn(TRACK_TIME_BASE).keyframe(false).duration(0)));
+
+    assertThat(moved).isEqualTo(copy);
+  }
+
+  @ParameterizedTest(name = "source keyframe {0}")
+  @ValueSource(booleans = {true, false})
+  @DisplayName(
+      "Should fail as unusable video timing when a source packet is a keyframe where its sample is"
+          + " no sync sample, or the reverse")
+  void
+      shouldFailAsUnusableVideoTimingWhenASourcePacketIsAKeyframeWhereItsSampleIsNoSyncSampleOrTheReverse(
+          boolean firstIsKeyframe) {
+    var copy = stream(fragmentBuilder().video(0, sample(slice(0)), sample(slice(1))).build());
+    var timings =
+        timingsOf(
+            packetIn(TRACK_TIME_BASE).keyframe(firstIsKeyframe).duration(1001),
+            packetIn(TRACK_TIME_BASE).keyframe(true).duration(1001));
+
+    assertThatExceptionOfType(FragmentedMp4Exception.class)
+        .isThrownBy(() -> move(copy, timings))
+        .extracting(FragmentedMp4Exception::getReason)
+        .isEqualTo(Reason.UNUSABLE_VIDEO_TIMING);
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail as unusable video timing when a source packet's duration does not convert"
+          + " exactly into the video track's timescale")
+  void
+      shouldFailAsUnusableVideoTimingWhenASourcePacketsDurationDoesNotConvertExactlyIntoTheVideoTracksTimescale() {
+    var copy = stream(fragmentBuilder().video(0, sample(slice(0))).build());
+    var timings = timingsOf(packetIn(new TimeBase(1, 7_000)).keyframe(false).duration(1));
+
+    assertThatExceptionOfType(FragmentedMp4Exception.class)
+        .isThrownBy(() -> move(copy, timings))
+        .extracting(FragmentedMp4Exception::getReason)
+        .isEqualTo(Reason.UNUSABLE_VIDEO_TIMING);
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail as unusable video timing when a source packet lasts longer than a run can state")
+  void shouldFailAsUnusableVideoTimingWhenASourcePacketLastsLongerThanARunCanState() {
+    var copy = stream(fragmentBuilder().video(0, sample(slice(0))).build());
+    var timings = timingsOf(packetIn(new TimeBase(1, 1)).keyframe(false).duration(200_000));
+
+    assertThatExceptionOfType(FragmentedMp4Exception.class)
+        .isThrownBy(() -> move(copy, timings))
+        .extracting(FragmentedMp4Exception::getReason)
+        .isEqualTo(Reason.UNUSABLE_VIDEO_TIMING);
+  }
+
+  @Test
   @DisplayName("Should fail as an output mismatch when the copy declares video other than HEVC")
   void shouldFailAsAnOutputMismatchWhenTheCopyDeclaresVideoOtherThanHevc() {
     var copy =
@@ -425,9 +546,54 @@ class FragmentedMp4RpuMoverTest {
   }
 
   private static byte[] move(byte[] copy) throws IOException {
+    return move(copy, timingsAsCopied(copy));
+  }
+
+  private static byte[] move(byte[] copy, VideoPacketTimings timings) throws IOException {
     var output = new ByteArrayOutputStream();
-    FragmentedMp4RpuMover.copy(new ByteArrayInputStream(copy), output);
+    FragmentedMp4RpuMover.copy(new ByteArrayInputStream(copy), timings, output);
     return output.toByteArray();
+  }
+
+  // The timing the copy's own video samples state, read once the mover asks for it, since the
+  // mover refuses some copies before it reaches a sample.
+  private static VideoPacketTimings timingsAsCopied(byte[] copy) {
+    var remaining = new ArrayDeque<VideoPacketTiming>();
+    var read = new boolean[1];
+    return () -> {
+      if (!read[0]) {
+        read[0] = true;
+        Mp4Stream.read(Mp4Stream.readerOf(copy)).fragments().stream()
+            .flatMap(fragment -> fragment.videoSamples().stream())
+            .map(
+                sample ->
+                    packetIn(TRACK_TIME_BASE)
+                        .keyframe(!BoxFields.isSet(sample.flags(), NON_SYNC_SAMPLE))
+                        .duration(sample.duration())
+                        .build())
+            .forEach(remaining::add);
+      }
+
+      return nextOf(remaining);
+    };
+  }
+
+  private static VideoPacketTimings timingsOf(
+      VideoPacketTiming.VideoPacketTimingBuilder... packets) {
+    var remaining = new ArrayDeque<VideoPacketTiming>();
+    Arrays.stream(packets)
+        .map(VideoPacketTiming.VideoPacketTimingBuilder::build)
+        .forEach(remaining::add);
+    return () -> nextOf(remaining);
+  }
+
+  private static VideoPacketTiming nextOf(Deque<VideoPacketTiming> remaining) {
+    assertThat(remaining).as("the source's packets left for the copy's video samples").isNotEmpty();
+    return remaining.removeFirst();
+  }
+
+  private static VideoPacketTiming.VideoPacketTimingBuilder packetIn(TimeBase timeBase) {
+    return VideoPacketTiming.builder().timeBase(timeBase);
   }
 
   private static List<String> videoSamplesOf(byte[] stream) throws IOException {

@@ -198,7 +198,25 @@ public class FfmpegCommandBuilder {
     }
 
     cmd.addAll(SOURCE_COPY_OUTPUT);
+    addVideoTimingOutput(cmd, job.request().transcodeDecision().videoDecision());
     return List.copyOf(cmd);
+  }
+
+  // The copy's muxer replaces each video packet's duration with the gap to the next packet's
+  // decode time; this output's framecrc keeps the duration the source's demuxer read, which the
+  // worker writes back into the copy. The worker waits for each packet's record before it passes
+  // the packet's sample on, so every record is flushed as it is written.
+  private static void addVideoTimingOutput(List<String> cmd, VideoDecision video) {
+    cmd.addAll(
+        List.of(
+            "-map",
+            "0:" + video.streamIndex(),
+            "-c:v",
+            "copy",
+            "-f",
+            "framecrc",
+            "-flush_packets",
+            "1"));
   }
 
   // The copy holds only the chosen video stream and the audio. FFmpeg reads no commands from its

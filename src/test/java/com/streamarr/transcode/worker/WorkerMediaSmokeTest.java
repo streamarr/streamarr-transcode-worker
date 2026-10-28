@@ -1178,6 +1178,32 @@ class WorkerMediaSmokeTest {
     assertEncodeOfTheCopyUploadsWhatOneFfmpegEncodes(source, job);
   }
 
+  @ParameterizedTest(name = "{0}, start {1}")
+  @MethodSource("encodingModesAndStarts")
+  @DisplayName(
+      "Should upload the packets one FFmpeg encodes from the source when the encode reads the"
+          + " fragmented MP4 copy of a variable-frame-rate Matroska source whose video reorders"
+          + " pictures")
+  void
+      shouldUploadThePacketsOneFfmpegEncodesFromTheSourceWhenTheEncodeReadsTheFragmentedMp4CopyOfAVariableFrameRateMatroskaSourceWhoseVideoReordersPictures(
+          TranscodeMode mode, int startSequenceNumber) throws Exception {
+    var source = variableFrameRateHevcSource();
+    var job = seekableSourceJob(source, mode);
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(PROFILE_5_PERIOD_SECONDS)
+        .setMediaSegmentCount(PROFILE_5_SEGMENT_COUNT)
+        .setStartSequenceNumber(startSequenceNumber);
+
+    assertEncodeOfTheCopyUploadsWhatOneFfmpegEncodes(source, job);
+  }
+
+  static Stream<Arguments> encodingModesAndStarts() {
+    return Stream.of(
+            TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE,
+            TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE)
+        .flatMap(mode -> Stream.of(0, 2).map(start -> Arguments.of(mode, start)));
+  }
+
   // Runs the profile 5 job once as one FFmpeg, whose source's RPUs follow their pictures, and once
   // as the encode of the source's copy, whose RPUs may start samples, and compares their packets.
   private MediaUploads assertEncodeOfTheCopyUploadsWhatOneFfmpegEncodes(
@@ -2628,6 +2654,42 @@ class WorkerMediaSmokeTest {
     var source = seekableSources.resolve("seekable-hevc." + container);
     if (!generatedSeekableSources.contains(source)) {
       runFfmpeg(List.of("-i", matroska.toString(), "-c", "copy"), source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // libx265 HEVC with B-frames whose every third picture starts about 0.2 s late, and pink noise,
+  // in Matroska. Its demuxer gives every video packet the track's default duration, whatever the
+  // gap to the next picture, and FFmpeg's frame-rate conversion repeats and drops pictures by
+  // those durations.
+  private static synchronized Path variableFrameRateHevcSource() throws Exception {
+    var source = seekableSources.resolve("variable-frame-rate-hevc.mkv");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc2=size=64x36:rate=24",
+              "-f",
+              "lavfi",
+              "-i",
+              "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5",
+              "-frames:v",
+              "72",
+              "-t",
+              "8",
+              "-vf",
+              "setpts=PTS+0.2*floor(N/3)/TB",
+              "-c:v",
+              "libx265",
+              "-x265-params",
+              "keyint=12:min-keyint=12:bframes=4:log-level=error",
+              "-c:a",
+              "aac"),
+          source);
       generatedSeekableSources.add(source);
     }
 

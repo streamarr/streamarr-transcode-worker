@@ -647,7 +647,21 @@ class TranscodeWorkerJobAttemptTest {
       assertThat(commands).hasSize(2);
       assertThat(commands.getFirst())
           .containsSequence("-c:v", "copy")
-          .endsWith("-movie_timescale", "1000000", "-flush_packets", "1", "pipe:1");
+          .containsSequence(
+              "-movie_timescale",
+              "1000000",
+              "-flush_packets",
+              "1",
+              "pipe:1",
+              "-map",
+              "0:0",
+              "-c:v",
+              "copy",
+              "-f",
+              "framecrc",
+              "-flush_packets",
+              "1");
+      assertThat(commands.getFirst().getLast()).startsWith("unix:");
       assertThat(commands.getLast()).containsSequence("-f", "mp4", "-i", "pipe:0");
     }
   }

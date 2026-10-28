@@ -14,9 +14,10 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * A job attempt's FFmpeg that runs as two processes: one copies the source into fragmented MP4, and
  * one encodes that copy, which a virtual thread passes from the first to the second through {@link
- * FragmentedMp4RpuMover}. The encoding FFmpeg writes the attempt's output. A stop asks the copying
- * FFmpeg to quit, and the encoding FFmpeg then finishes at the end of its input; termination and
- * destruction end both.
+ * FragmentedMp4RpuMover}. The copying FFmpeg also writes the framecrc of the copy's video packets
+ * to a {@link VideoTimingChannel}, from which the mover restores each video sample's duration. The
+ * encoding FFmpeg writes the attempt's output. A stop asks the copying FFmpeg to quit, and the
+ * encoding FFmpeg then finishes at the end of its input; termination and destruction end both.
  */
 @Slf4j
 final class PipedFfmpegProcesses implements FfmpegProcess {
@@ -27,6 +28,7 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
   private final Process encode;
   private final StderrDrainer copyErrorOutput;
   private final StderrDrainer encodeErrorOutput;
+  private final VideoTimingChannel videoTimings;
   private final Duration gracePeriod;
   private final AtomicReference<Optional<IOException>> transferFailure =
       new AtomicReference<>(Optional.empty());
@@ -36,26 +38,50 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
       new AtomicReference<>(Optional.empty());
   private final Thread transfer;
 
-  private PipedFfmpegProcesses(Process copy, Process encode, Duration gracePeriod) {
+  private PipedFfmpegProcesses(
+      Process copy, Process encode, VideoTimingChannel videoTimings, Duration gracePeriod) {
     this.copy = copy;
     this.encode = encode;
     this.copyErrorOutput = new StderrDrainer(copy.getErrorStream());
     this.encodeErrorOutput = new StderrDrainer(encode.getErrorStream());
+    this.videoTimings = videoTimings;
     this.gracePeriod = gracePeriod;
     this.transfer = Thread.ofVirtual().name("ffmpeg-copy-transfer").start(this::transferCopy);
   }
 
   /**
-   * Starts the copying FFmpeg and then the encoding FFmpeg, and destroys the copying one when the
-   * encoding one cannot be started.
+   * Opens the channel of the copy's video timing, starts the copying FFmpeg and then the encoding
+   * FFmpeg, and destroys the copying one when the encoding one cannot be started.
    */
   static PipedFfmpegProcesses start(
       ProcessStarter starter, FfmpegPipeline.RpuMovingPipe pipe, Duration gracePeriod) {
-    var copy = starter.start(pipe.copyCommand());
+    var videoTimings = openVideoTimingChannel();
+    var copy = startCopying(starter, pipe, videoTimings);
     try {
-      return new PipedFfmpegProcesses(copy, starter.start(pipe.encodeCommand()), gracePeriod);
+      return new PipedFfmpegProcesses(
+          copy, starter.start(pipe.encodeCommand()), videoTimings, gracePeriod);
     } catch (RuntimeException e) {
       copy.destroyForcibly();
+      throw e;
+    }
+  }
+
+  private static VideoTimingChannel openVideoTimingChannel() {
+    try {
+      return VideoTimingChannel.open();
+    } catch (IOException e) {
+      throw new TranscodeException(TranscodeException.GENERIC_MESSAGE, e);
+    }
+  }
+
+  private static Process startCopying(
+      ProcessStarter starter, FfmpegPipeline.RpuMovingPipe pipe, VideoTimingChannel videoTimings) {
+    try {
+      var copy = starter.start(pipe.copyCommandWritingVideoTimingTo(videoTimings.url()));
+      copy.onExit().thenRun(videoTimings::copyExited);
+      return copy;
+    } catch (RuntimeException e) {
+      videoTimings.close();
       throw e;
     }
   }
@@ -67,7 +93,7 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
   private void transferCopy() {
     var encoded = encode.getOutputStream();
     try (InputStream copied = copy.getInputStream()) {
-      FragmentedMp4RpuMover.copy(copied, encoded);
+      FragmentedMp4RpuMover.copy(copied, videoTimings, encoded);
     } catch (IOException e) {
       transferFailure.set(Optional.of(e));
       copy.destroy();
@@ -237,5 +263,6 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
   public void stopDrainingErrorOutput() {
     copyErrorOutput.close();
     encodeErrorOutput.close();
+    videoTimings.close();
   }
 }

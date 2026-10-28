@@ -141,6 +141,22 @@ final class TrackRun {
     return trun.array();
   }
 
+  /**
+   * A whole {@code trun} box of one sample at the data offset that states the sample's duration,
+   * size, flags and composition offset; version 1 when the offset is negative, which version 0
+   * cannot state.
+   */
+  static byte[] ofOneSample(int dataOffset, Entry sample) {
+    var boxBytes = BOX_HEADER_BYTES + HEADER_BYTES + 4 + 4 * Integer.bitCount(PER_SAMPLE_FIELDS);
+    var version = sample.compositionOffset() < 0 ? 1 : 0;
+    var trun = ByteBuffer.allocate(boxBytes);
+    trun.putInt(boxBytes).put(TRUN_TYPE).putInt(version << 24 | DATA_OFFSET | PER_SAMPLE_FIELDS);
+    trun.putInt(1).putInt(dataOffset);
+    trun.putInt((int) sample.duration()).putInt((int) sample.size()).putInt(sample.flags());
+    trun.putInt((int) sample.compositionOffset());
+    return trun.array();
+  }
+
   private static void copyIf(boolean present, BoxFields fields, ByteBuffer trun) {
     if (present) {
       trun.putInt(fields.s32());

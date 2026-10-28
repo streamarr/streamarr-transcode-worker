@@ -1531,7 +1531,15 @@ class FfmpegCommandBuilderTest {
                     "1000000",
                     "-flush_packets",
                     "1",
-                    "pipe:1"),
+                    "pipe:1",
+                    "-map",
+                    "0:0",
+                    "-c:v",
+                    "copy",
+                    "-f",
+                    "framecrc",
+                    "-flush_packets",
+                    "1"),
                 List.of(
                     "ffmpeg",
                     "-y",
@@ -1599,6 +1607,34 @@ class FfmpegCommandBuilderTest {
                     "-frag_duration",
                     "1000000",
                     "pipe:1")));
+  }
+
+  @Test
+  @DisplayName(
+      "Should write the framecrc of the chosen video stream's packets to the given URL as the copy's"
+          + " last output when a Dolby Vision profile 5 source's RPUs may start samples")
+  void
+      shouldWriteTheFramecrcOfTheChosenVideoStreamsPacketsToTheGivenUrlAsTheCopysLastOutputWhenADolbyVisionProfile5SourcesRpusMayStartSamples() {
+    var request =
+        request(
+                encoding(
+                    profile5Encode(DolbyVisionRpuPlacement.BEFORE_NEXT_PICTURE).streamIndex(2)))
+            .build();
+
+    var pipe = rpuMovingPipe(builder.buildPipeline(job(request, "libx264")));
+
+    assertThat(pipe.copyCommandWritingVideoTimingTo("unix:/tmp/sts1/v"))
+        .endsWith(
+            "pipe:1",
+            "-map",
+            "0:2",
+            "-c:v",
+            "copy",
+            "-f",
+            "framecrc",
+            "-flush_packets",
+            "1",
+            "unix:/tmp/sts1/v");
   }
 
   @Test

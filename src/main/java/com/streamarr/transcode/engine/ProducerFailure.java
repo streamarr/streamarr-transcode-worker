@@ -10,7 +10,10 @@ public enum ProducerFailure {
   NO_MEDIA_SEGMENT,
   /** The sink did not accept a segment the producer closed. */
   SEGMENT_NOT_ACCEPTED,
-  /** The output ended inside a box header, inside a box body, or after a moof with no mdat. */
+  /**
+   * The output ended inside a box header, inside a box body, or after a moof with no mdat, or the
+   * timing of the copy of the source's video ended before the copy's video samples did.
+   */
   TRUNCATED_OUTPUT,
   /**
    * A box would make the initialization segment or a fragment exceed the server's segment cap, a
@@ -26,7 +29,10 @@ public enum ProducerFailure {
    * forced, which FFmpeg writes when the encoder emits packets out of decode order.
    */
   SHORT_VIDEO_SAMPLE,
-  /** The output is not fragmented MP4 that the producer can group into media segments. */
+  /**
+   * The output is not fragmented MP4 that the producer can group into media segments, or the timing
+   * of the copy of the source's video does not match the copy.
+   */
   MALFORMED_OUTPUT,
   /**
    * The initialization segment declares video other than the job's video decision, so the producer
@@ -54,7 +60,10 @@ public enum ProducerFailure {
   /** The failure of an attempt whose output was refused for the reason. */
   static ProducerFailure of(Reason reason) {
     return switch (reason) {
-      case END_OF_FILE_IN_BOX_HEADER, END_OF_FILE_IN_BOX_BODY, END_OF_FILE_AFTER_MOVIE_FRAGMENT ->
+      case END_OF_FILE_IN_BOX_HEADER,
+          END_OF_FILE_IN_BOX_BODY,
+          END_OF_FILE_AFTER_MOVIE_FRAGMENT,
+          END_OF_VIDEO_TIMING ->
           TRUNCATED_OUTPUT;
       case EXCEEDS_SEGMENT_CAP -> SEGMENT_CAP_EXCEEDED;
       case SKIPPED_SEGMENT_NUMBER -> SKIPPED_SEGMENT_NUMBER;
@@ -67,7 +76,8 @@ public enum ProducerFailure {
           MISPLACED_INITIALIZATION_SEGMENT,
           UNEXPECTED_BOX,
           MULTIPLE_VIDEO_TRACKS,
-          PRESENTATION_TIME_REGRESSED ->
+          PRESENTATION_TIME_REGRESSED,
+          UNUSABLE_VIDEO_TIMING ->
           MALFORMED_OUTPUT;
     };
   }
