@@ -13,10 +13,12 @@ import static com.streamarr.transcode.probe.RecordedFfprobe.streamOf;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import build.buf.gen.streamarr.transcode.v1.ChromaticityCoordinates;
+import build.buf.gen.streamarr.transcode.v1.CompatibleBase;
 import build.buf.gen.streamarr.transcode.v1.ContentLightLevel;
 import build.buf.gen.streamarr.transcode.v1.MasteringDisplayColorVolume;
 import build.buf.gen.streamarr.transcode.v1.Presence;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
+import build.buf.gen.streamarr.transcode.v1.VideoDynamicRange.DolbyVisionCase;
 import com.streamarr.transcode.probe.RecordedFfprobe.Answers;
 import java.io.ByteArrayOutputStream;
 import java.util.Arrays;
@@ -855,6 +857,104 @@ class FfprobeExecutorSeiTest {
       assertThat(video.hasContentLightLevel()).isFalse();
       assertThat(video.getMasteringDisplayOmitted()).isFalse();
       assertThat(video.getContentLightLevelOmitted()).isFalse();
+    }
+
+    @Test
+    @DisplayName(
+        "Should mark the mastering display omitted when the first frame carries only the part"
+            + " that FFmpeg accepts")
+    void
+        shouldMarkTheMasteringDisplayOmittedWhenTheFirstFrameCarriesOnlyThePartThatFfmpegAccepts() {
+      // FFmpeg drops the luminance of the SEI message, whose maximum exceeds 100,000,000, so the
+      // first frame carries the primaries alone, and the first frame's value takes precedence over
+      // the message's.
+      var video = streamOf("h264-sei-1.h264", 0);
+
+      assertThat(video.hasMasteringDisplay()).isFalse();
+      assertThat(video.getMasteringDisplayOmitted()).isTrue();
+      assertThat(video.hasContentLightLevel()).isFalse();
+      assertThat(video.getContentLightLevelOmitted()).isFalse();
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
+    }
+
+    @Test
+    @DisplayName(
+        "Should take the mastering display from the SEI message when the first frame carries none"
+            + " of it")
+    void shouldTakeTheMasteringDisplayFromTheSeiMessageWhenTheFirstFrameCarriesNoneOfIt() {
+      // In the copy of the same stream into MP4, a read of 3 packets decodes fewer than 3 frames,
+      // so the probe keeps the read of 12, whose first frame carries no mastering display. The 5
+      // packets of the file fall short of those 12, so the walk rules nothing out.
+      var video =
+          probe(RecordedFfprobe.recordedAnswers("mp4-h264-sei-1.mp4").prerollPackets(3).build())
+              .getStreams(0);
+
+      assertThat(video.getMasteringDisplay())
+          .isEqualTo(
+              MasteringDisplayColorVolume.newBuilder()
+                  .setRed(ChromaticityCoordinates.newBuilder().setX(5678).setY(4321))
+                  .setGreen(ChromaticityCoordinates.newBuilder().setX(1234).setY(8765))
+                  .setBlue(ChromaticityCoordinates.newBuilder().setX(3456).setY(6543))
+                  .setWhitePoint(ChromaticityCoordinates.newBuilder().setX(12_345).setY(34_567))
+                  .setMaxLuminance(123_456_789)
+                  .setMinLuminance(0)
+                  .build());
+      assertThat(video.getMasteringDisplayOmitted()).isFalse();
+      assertThat(video.getContentLightLevelOmitted()).isTrue();
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(
+        strings = {
+          "mov-h264-extradata-reload.mov",
+          "mov-hevc-extradata-reload.mov",
+          "mp4-h264-mixed-nal-coding.mp4",
+          "avi-h264-ref-10.avi"
+        })
+    @DisplayName(
+        "Should rule nothing out when a recorded stream holds units that the probe cannot"
+            + " delimit")
+    void shouldRuleNothingOutWhenARecordedStreamHoldsUnitsThatTheProbeCannotDelimit(
+        String fixture) {
+      // A packet carries a sample description's new extradata, an MP4 sample holds start codes, or
+      // the AVI extradata is neither a configuration record nor Annex B.
+      var video = streamOf(fixture, 0);
+
+      assertThat(video.getFirstFramesRead()).isTrue();
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+      assertThat(video.getDynamicRange().getDolbyVisionCase())
+          .isEqualTo(DolbyVisionCase.DOLBYVISION_NOT_SET);
+      assertThat(video.getMasteringDisplayOmitted()).isTrue();
+      assertThat(video.getContentLightLevelOmitted()).isTrue();
+    }
+
+    @Test
+    @DisplayName(
+        "Should rule out RPUs but not HDR10+ when an encoder leaves out an SEI NAL unit's"
+            + " trailing bits")
+    void shouldRuleOutRpusButNotHdr10PlusWhenAnEncoderLeavesOutAnSeiNalUnitsTrailingBits() {
+      var video = streamOf("flv-h264-brokensps.flv", 0);
+
+      assertThat(video.getDynamicRange().hasDolbyVisionAbsent()).isTrue();
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+      assertThat(video.getMasteringDisplayOmitted()).isTrue();
+      assertThat(video.getContentLightLevelOmitted()).isTrue();
+    }
+
+    @Test
+    @DisplayName("Should rule HDR10+ out when an HLG stream's only T.35 message is HDR Vivid")
+    void shouldRuleHdr10PlusOutWhenAnHlgStreamsOnlyT35MessageIsHdrVivid() {
+      // CUVA's HDR Vivid message carries country code 0x26, not HDR10+'s 0xB5.
+      var video = streamOf("hevc-hdr-vivid-repeated.hevc", 0);
+
+      assertThat(video.getDynamicRange().getCompatibleBase())
+          .isEqualTo(CompatibleBase.COMPATIBLE_BASE_HLG);
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
+      assertThat(video.getMasteringDisplay())
+          .isEqualTo(RECORDED_MASTERING_DISPLAY.toBuilder().setMaxLuminance(40_000_000).build());
+      assertThat(video.getContentLightLevel()).isEqualTo(ContentLightLevel.getDefaultInstance());
+      assertThat(video.hasContentLightLevel()).isTrue();
     }
 
     @ParameterizedTest(name = "{0}")

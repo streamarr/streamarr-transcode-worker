@@ -401,6 +401,31 @@ class FfprobeExecutorAv1MetadataTest {
   @DisplayName("Recorded Sources")
   class RecordedSourceTests {
 
+    @Test
+    @DisplayName(
+        "Should convert the static metadata that a libaom stream's first frame carries to SEI"
+            + " units")
+    void shouldConvertTheStaticMetadataThatALibaomStreamsFirstFrameCarriesToSeiUnits() {
+      // FFmpeg's AV1 decoders give the HDR_MDCV values as fractions: red_x as 6554/65536, the
+      // maximum luminance as 512/256 and the minimum as 16384/16384.
+      var video = streamOf("ivf-av1-hdr-sizeup.ivf", 0);
+
+      assertThat(video.getMasteringDisplay())
+          .isEqualTo(
+              MasteringDisplayColorVolume.newBuilder()
+                  .setRed(ChromaticityCoordinates.newBuilder().setX(5000).setY(10_000))
+                  .setGreen(ChromaticityCoordinates.newBuilder().setX(15_000).setY(20_000))
+                  .setBlue(ChromaticityCoordinates.newBuilder().setX(25_000).setY(30_000))
+                  .setWhitePoint(ChromaticityCoordinates.newBuilder().setX(35_000).setY(40_000))
+                  .setMaxLuminance(20_000)
+                  .setMinLuminance(10_000)
+                  .build());
+      assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(11_122);
+      assertThat(video.getContentLightLevel().getMaxFrameAverageLightLevel()).isEqualTo(22_211);
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
+      assertThat(video.getDynamicRange().hasDolbyVisionAbsent()).isTrue();
+    }
+
     @ParameterizedTest(name = "{0}")
     @ValueSource(strings = {"ivf-av1-10bit.ivf", "obu-av1-10bit.obu"})
     @DisplayName(

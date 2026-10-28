@@ -44,6 +44,18 @@ from its lavfi test sources. No file comes from a media library.
 | `hevc-dovi-p5-rpus-before-own-picture.hevc.json` | The same sample, whose RPUs `move-rpus-ahead.py` moved ahead of their own pictures, behind the parameter sets that start each sample. No known muxer writes this layout. FFmpeg's HEVC decoder ignores each RPU, so only the packets show them |
 | `mkv-hdr10-fate.mkv.json` | FFmpeg's FATE sample `mkv/hdr10tags-both.mkv`: HDR10 mastering values stored as 32-bit floats |
 | `mpegts-dovi-p7.ts.json` | FFmpeg's FATE sample `mov/dovi-p7-hvce.mp4` copied into MPEG-TS, whose Dolby Vision descriptor carries the profile 7 record |
+| `mp4-dovi-p7-two-tracks.mp4.json` | FFmpeg's FATE sample `mov/dovi-p7.mp4`: Dolby Vision profile 7 whose base layer and enhancement layer are separate MP4 tracks. Only the second track carries the record and the RPUs |
+| `mp4-dovi-p81-fate.mp4.json` | FFmpeg's FATE sample `mov/dovi-p81.mp4`: Dolby Vision profile 8.1 under `hev1`, PQ, with a `dvcC` record and each RPU after its own picture. Its HEVC parameter sets are only in its samples |
+| `hevc-dovi-p81-fate.hevc.json` | The same sample copied into raw HEVC, which keeps no record, so only the RPUs show Dolby Vision |
+| `ivf-av1-hdr-sizeup.ivf.json` | FFmpeg's FATE sample `av1-test-vectors/av1-1-b8-03-sizeup.ivf`: a libaom stream in IVF whose temporal units carry HDR_MDCV and HDR_CLL metadata OBUs |
+| `h264-sei-1.h264.json` | FFmpeg's FATE sample `h264/sei-1.h264`: raw H.264 whose mastering display SEI message has a maximum luminance above 100,000,000, which FFmpeg drops, so the first frame carries only the primaries |
+| `mp4-h264-sei-1.mp4.json` | The same stream copied into MP4, whose 5 packets decode fewer than 3 frames in a read of 3. The first frame of the read that the probe keeps carries no mastering display |
+| `mov-h264-extradata-reload.mov.json`, `mov-hevc-extradata-reload.mov.json` | FFmpeg's FATE samples `h264/extradata-reload-multi-stsd.mov` and `hevc/extradata-reload-multi-stsd.mov`: H.264 and HEVC whose packets switch between sample descriptions, so they carry new extradata side data |
+| `mp4-h264-mixed-nal-coding.mp4.json` | FFmpeg's FATE sample `h264/mixed-nal-coding.mp4`: length-prefixed MP4 samples that also hold start codes |
+| `flv-h264-brokensps.flv.json` | FFmpeg's FATE sample `h264/brokensps.flv`: an encoder's SEI NAL unit that ends without its RBSP trailing bits |
+| `avi-h264-ref-10.avi.json` | FFmpeg's FATE sample `h264/ref_10.avi`: H.264 in AVI whose 4-byte extradata is neither a configuration record nor Annex B. `h264_mp4toannexb` refuses that extradata, so the stream has no copy |
+| `webm-vp9-hdr10-plus.webm.json` | FFmpeg's FATE sample `mkv/hdr10_plus_vp9_sample.webm`: VP9 whose HDR10+ metadata a WebM BlockAdditional carries to the frame |
+| `hevc-hdr-vivid-repeated.hevc.json` | FFmpeg's FATE sample `hevc/hdr_vivid_h265_sample.hevc`, a single HLG frame with mastering display, light level and CUVA HDR Vivid SEI messages, repeated 3 times so that the stream holds 3 frames |
 | `mp4-dovi-p5-dvh1.mp4.json` | Local sample: Dolby Vision profile 5 under `dvh1` with a `dvcC` record and no transfer tag |
 | `mp4-dovi-p5-dvh1-no-record.mp4.json` | Local sample: the same file with its record removed |
 | `mp4-dovi-p81.mp4.json` | Local sample: Dolby Vision profile 8.1 under `hvc1`, PQ |

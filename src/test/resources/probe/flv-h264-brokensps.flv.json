@@ -1,0 +1,72 @@
+{
+  "streams": [
+    {
+      "index": 0,
+      "codec_name": "h264",
+      "codec_long_name": "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+      "profile": "Baseline",
+      "codec_type": "video",
+      "codec_tag_string": "[0][0][0][0]",
+      "codec_tag": "0x0000",
+      "mime_codec_string": "avc1.42001e",
+      "width": 192,
+      "height": 144,
+      "coded_width": 192,
+      "coded_height": 144,
+      "has_b_frames": 0,
+      "pix_fmt": "yuv420p",
+      "level": 30,
+      "color_range": "tv",
+      "chroma_location": "left",
+      "field_order": "progressive",
+      "is_avc": "true",
+      "nal_length_size": "4",
+      "r_frame_rate": "30000/1001",
+      "avg_frame_rate": "15/1",
+      "time_base": "1/1000",
+      "start_pts": 0,
+      "start_time": "0.000000",
+      "bits_per_raw_sample": "8",
+      "extradata": "\n00000000: 0142 001e ffe1 0016 6742 001e ab41 8276  .B......gB...A.v\n00000010: 00a0 c037 e31c 601b f18e 3da1 226a 0100  ...7..`...=.\"j..\n00000020: 0428 ce3c 30                             .(.<0\n",
+      "extradata_size": 37,
+      "disposition": {
+        "default": 0,
+        "dub": 0,
+        "original": 0,
+        "comment": 0,
+        "lyrics": 0,
+        "karaoke": 0,
+        "forced": 0,
+        "hearing_impaired": 0,
+        "visual_impaired": 0,
+        "clean_effects": 0,
+        "attached_pic": 0,
+        "timed_thumbnails": 0,
+        "non_diegetic": 0,
+        "captions": 0,
+        "descriptions": 0,
+        "metadata": 0,
+        "dependent": 0,
+        "still_image": 0,
+        "multilayer": 0
+      }
+    }
+  ],
+  "chapters": [],
+  "format": {
+    "nb_streams": 1,
+    "nb_programs": 0,
+    "nb_stream_groups": 0,
+    "format_name": "flv",
+    "format_long_name": "FLV (Flash Video)",
+    "start_time": "0.000000",
+    "duration": "6.036000",
+    "size": "133693",
+    "bit_rate": "177194",
+    "probe_score": 100,
+    "tags": {
+      "creationdate": "Wed May 8 10:49:33",
+      "encoder": "Lavf57.34.103"
+    }
+  }
+}

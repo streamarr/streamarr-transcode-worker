@@ -1,0 +1,73 @@
+{
+  "frames": [
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Mastering display metadata",
+          "red_x": "6554/65536",
+          "red_y": "13107/65536",
+          "green_x": "19661/65536",
+          "green_y": "26214/65536",
+          "blue_x": "32768/65536",
+          "blue_y": "39322/65536",
+          "white_point_x": "45875/65536",
+          "white_point_y": "52429/65536",
+          "min_luminance": "16384/16384",
+          "max_luminance": "512/256"
+        },
+        {
+          "side_data_type": "Content light level metadata",
+          "max_content": 11122,
+          "max_average": 22211
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Mastering display metadata",
+          "red_x": "6554/65536",
+          "red_y": "13107/65536",
+          "green_x": "19661/65536",
+          "green_y": "26214/65536",
+          "blue_x": "32768/65536",
+          "blue_y": "39322/65536",
+          "white_point_x": "45875/65536",
+          "white_point_y": "52429/65536",
+          "min_luminance": "16384/16384",
+          "max_luminance": "512/256"
+        },
+        {
+          "side_data_type": "Content light level metadata",
+          "max_content": 11122,
+          "max_average": 22211
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Mastering display metadata",
+          "red_x": "6554/65536",
+          "red_y": "13107/65536",
+          "green_x": "19661/65536",
+          "green_y": "26214/65536",
+          "blue_x": "32768/65536",
+          "blue_y": "39322/65536",
+          "white_point_x": "45875/65536",
+          "white_point_y": "52429/65536",
+          "min_luminance": "16384/16384",
+          "max_luminance": "512/256"
+        },
+        {
+          "side_data_type": "Content light level metadata",
+          "max_content": 11122,
+          "max_average": 22211
+        }
+      ]
+    }
+  ]
+}

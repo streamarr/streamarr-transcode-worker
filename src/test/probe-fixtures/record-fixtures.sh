@@ -278,6 +278,26 @@ cp /fate/mpegts/dovi-p7.ts mpegts-dovi-p7-two-layers.ts
 # The profile 5 sample as raw HEVC, whose RPUs move-rpus-ahead.py moves ahead of the next picture
 # or of their own.
 "${FF[@]}" -i /fate/mov/dovi-p5.mp4 -map 0:v -c copy -f hevc dovi-p5.hevc
+# FATE samples whose first frames and packets the probe reads as they come, and two copies: profile
+# 7 with its base and enhancement layers in separate MP4 tracks, profile 8.1 in MP4 and as raw HEVC
+# without its record, AV1 with HDR metadata OBUs in IVF, an H.264 mastering display SEI message
+# whose maximum luminance FFmpeg rejects as raw H.264 and in MP4, new extradata side data from
+# several sample descriptions, MP4 samples that hold start codes, an SEI NAL unit without trailing
+# bits in FLV, AVI extradata that is neither a record nor Annex B, VP9 HDR10+ in WebM, and HLG with
+# a CUVA HDR Vivid message, repeated so that the stream holds 3 frames.
+cp /fate/mov/dovi-p7.mp4 mp4-dovi-p7-two-tracks.mp4
+cp /fate/mov/dovi-p81.mp4 mp4-dovi-p81-fate.mp4
+"${FF[@]}" -i /fate/mov/dovi-p81.mp4 -map 0:v -c copy -f hevc hevc-dovi-p81-fate.hevc
+cp /fate/av1-test-vectors/av1-1-b8-03-sizeup.ivf ivf-av1-hdr-sizeup.ivf
+cp /fate/h264/sei-1.h264 h264-sei-1.h264
+"${FF[@]}" -i /fate/h264/sei-1.h264 -map 0:v -c copy mp4-h264-sei-1.mp4
+cp /fate/h264/extradata-reload-multi-stsd.mov mov-h264-extradata-reload.mov
+cp /fate/hevc/extradata-reload-multi-stsd.mov mov-hevc-extradata-reload.mov
+cp /fate/h264/mixed-nal-coding.mp4 mp4-h264-mixed-nal-coding.mp4
+cp /fate/h264/brokensps.flv flv-h264-brokensps.flv
+cp /fate/h264/ref_10.avi avi-h264-ref-10.avi
+cp /fate/mkv/hdr10_plus_vp9_sample.webm webm-vp9-hdr10-plus.webm
+for _ in 1 2 3; do cat /fate/hevc/hdr_vivid_h265_sample.hevc; done > hevc-hdr-vivid-repeated.hevc
 CONTAINER
 
 # Each AV1 stream in IVF that insert-av1-metadata.py wrote, copied into MP4, whose av1C record the
@@ -376,7 +396,11 @@ if [ -n "${FATE_SUITE:-}" ]; then
   FIXTURES_TO_PROBE+=(mkv-eac3-atmos-dts-hd-ma.mkv mp4-dovi-p5-hev1.mp4 mkv-hdr10-fate.mkv
     mpegts-dovi-p7.ts hevc-hdr10-plus.hevc mkv-dovi-p7-hvce.mkv mpegts-dovi-p7-two-layers.ts
     hevc-dovi-p5-rpus-ahead.hevc hevc-dovi-p5-rpus-before-own-picture.hevc mp4-av1-rpu.mp4
-    mp4-av1-rpu-bad-emdf.mp4)
+    mp4-av1-rpu-bad-emdf.mp4 mp4-dovi-p7-two-tracks.mp4 mp4-dovi-p81-fate.mp4
+    hevc-dovi-p81-fate.hevc ivf-av1-hdr-sizeup.ivf h264-sei-1.h264 mp4-h264-sei-1.mp4
+    mov-h264-extradata-reload.mov mov-hevc-extradata-reload.mov mp4-h264-mixed-nal-coding.mp4
+    flv-h264-brokensps.flv avi-h264-ref-10.avi webm-vp9-hdr10-plus.webm
+    hevc-hdr-vivid-repeated.hevc)
 fi
 in_image av1.sh
 
@@ -435,12 +459,16 @@ done
 # Each video and audio stream that the probe computes a codec string for, copied with the worker's
 # copy arguments into a fragmented MP4. copy-codec-strings.py reads the codec string of each copy's
 # initialization segment, so the tests compare the probe's string with what a copy carries.
-# The raw streams that move-rpus-ahead.py and reject-hdr-sei.py wrote hold no timestamps, which the
-# mp4 muxer refuses, so they have no copy.
+# The raw streams that move-rpus-ahead.py and reject-hdr-sei.py wrote, and the raw H.264 and HEVC
+# streams of several pictures that the FATE step wrote, hold no timestamps, which the mp4 muxer refuses, so
+# they have no copy.
 FIXTURES_TO_COPY=()
 for source in "${FIXTURES_TO_PROBE[@]}"; do
   case "$source" in
-    hevc-dovi-p5-rpus-* | *-rejected-sei.*) ;;
+    hevc-dovi-p5-rpus-* | *-rejected-sei.* | hevc-dovi-p81-fate.hevc | h264-sei-1.h264) ;;
+    hevc-hdr-vivid-repeated.hevc) ;;
+    # h264_mp4toannexb refuses this AVI's 4-byte extradata, so the copy fails.
+    avi-h264-ref-10.avi) ;;
     *) FIXTURES_TO_COPY+=("$source") ;;
   esac
 done
@@ -478,7 +506,10 @@ PACKET_DATA=(mp4-sdr8-bt709.mp4 mp4-dovi-p9-avc1.mp4 mp4-dovi-p9-dva1.mp4 mpegts
   mkv-pipe-hevc-10bit.mkv mpegts-hevc-ac3.ts hevc-hdr10-plus-rejected-sei.hevc
   h264-hdr10-rejected-sei.h264 mp4-av1-pq.mp4 mp4-av1-hdr10-plus-rejected.mp4
   mp4-av1-static-after-frame.mp4 mp4-av1-rpu.mp4 mp4-av1-rpu-bad-emdf.mp4 ivf-av1-10bit.ivf
-  obu-av1-10bit.obu mpegts-hdr10-sei-only.ts)
+  obu-av1-10bit.obu mpegts-hdr10-sei-only.ts mp4-dovi-p7-two-tracks.mp4 mp4-dovi-p81-fate.mp4
+  hevc-dovi-p81-fate.hevc ivf-av1-hdr-sizeup.ivf h264-sei-1.h264 mp4-h264-sei-1.mp4
+  mov-h264-extradata-reload.mov mov-hevc-extradata-reload.mov mp4-h264-mixed-nal-coding.mp4
+  flv-h264-brokensps.flv avi-h264-ref-10.avi hevc-hdr-vivid-repeated.hevc)
 mkdir -p "$FIXTURES/packet-data"
 for source in "${PACKET_DATA[@]}"; do
   if [ -f "$WORK/packet-data/$source.json" ]; then

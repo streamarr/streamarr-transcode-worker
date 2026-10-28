@@ -1376,7 +1376,9 @@ class FfprobeExecutorFirstFramesTest {
     @ParameterizedTest(name = "{0}")
     @CsvSource({
       "mp4-dovi-p81.mp4, COMPATIBLE_BASE_PQ",
-      "mp4-dovi-p84-hlg.mp4, COMPATIBLE_BASE_HLG"
+      "mp4-dovi-p84-hlg.mp4, COMPATIBLE_BASE_HLG",
+      "mp4-dovi-p81-fate.mp4, COMPATIBLE_BASE_PQ",
+      "hevc-dovi-p81-fate.hevc, COMPATIBLE_BASE_PQ"
     })
     @DisplayName("Should report a profile 8 RPU header when a profile 8 sample's frames carry RPUs")
     void shouldReportAProfile8RpuHeaderWhenAProfile8SamplesFramesCarryRpus(
@@ -1456,21 +1458,55 @@ class FfprobeExecutorFirstFramesTest {
                   .build());
     }
 
-    @Test
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"mpegts-dovi-p7-two-layers.ts", "mp4-dovi-p7-two-tracks.mp4"})
     @DisplayName(
-        "Should report the base layer's Dolby Vision absent when MPEG-TS carries the enhancement"
-            + " layer and the RPUs in another stream")
+        "Should report the base layer's Dolby Vision absent when another stream carries the"
+            + " enhancement layer and the RPUs")
     void
-        shouldReportTheBaseLayersDolbyVisionAbsentWhenMpegTsCarriesTheEnhancementLayerAndTheRpusInAnotherStream() {
+        shouldReportTheBaseLayersDolbyVisionAbsentWhenAnotherStreamCarriesTheEnhancementLayerAndTheRpus(
+            String fixture) {
       // The base layer is the chosen video stream; the record and the RPUs sit in stream 1, so the
       // base layer's extradata, frames and packets hold none.
-      var media = RecordedFfprobe.probeFixture("mpegts-dovi-p7-two-layers.ts");
+      var media = RecordedFfprobe.probeFixture(fixture);
+      var enhancementLayer = media.getStreams(1).getDynamicRange().getDolbyVisionPresent();
 
       assertThat(media.getStreams(0).getFirstFramesRead()).isTrue();
       assertThat(media.getStreams(0).getDynamicRange().hasDolbyVisionAbsent()).isTrue();
       assertThat(media.getStreams(1).getFirstFramesRead()).isFalse();
-      assertThat(media.getStreams(1).getDynamicRange().getDolbyVisionPresent().getObservedRpu())
-          .isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+      assertThat(enhancementLayer.getObservedRpu()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+      assertThat(enhancementLayer.getDeclared().getProfile()).isEqualTo(7);
+      assertThat(enhancementLayer.getDeclared().getEnhancementLayer()).isTrue();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({"mp4-dovi-p81-fate.mp4, true", "hevc-dovi-p81-fate.hevc, false"})
+    @DisplayName(
+        "Should place a profile 8.1 sample's RPUs after their own pictures whether or not its"
+            + " record survives the container")
+    void
+        shouldPlaceAProfile81SamplesRpusAfterTheirOwnPicturesWhetherOrNotItsRecordSurvivesTheContainer(
+            String fixture, boolean declared) {
+      // FFmpeg's raw HEVC muxer drops the dvcC record, so only the RPUs show Dolby Vision.
+      var dynamicRange = streamOf(fixture, 0).getDynamicRange();
+
+      assertThat(dynamicRange.getDolbyVisionPresent().hasDeclared()).isEqualTo(declared);
+      assertThat(dynamicRange.getDolbyVisionPresent().getRpuPlacement())
+          .isEqualTo(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_AFTER_OWN_PICTURE);
+      assertThat(dynamicRange.getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
+    }
+
+    @Test
+    @DisplayName("Should leave a VP9 stream's HDR10+ unspecified when its first frame carries it")
+    void shouldLeaveAVp9StreamsHdr10PlusUnspecifiedWhenItsFirstFrameCarriesIt() {
+      // Probe version 5 reads the frames' features of H.264, HEVC and AV1 only, so VP9 keeps the
+      // facts of probe version 4, although FFmpeg copies the WebM BlockAdditional to the frame.
+      var video = streamOf("webm-vp9-hdr10-plus.webm", 0);
+
+      assertThat(video.getFirstFramesRead()).isTrue();
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+      assertThat(video.getDynamicRange().getDolbyVisionCase())
+          .isEqualTo(DolbyVisionCase.DOLBYVISION_NOT_SET);
     }
 
     @Test

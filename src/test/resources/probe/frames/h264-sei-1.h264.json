@@ -1,0 +1,39 @@
+{
+  "frames": [
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "ATSC A53 Part 4 Closed Captions"
+        },
+        {
+          "side_data_type": "Mastering display metadata",
+          "red_x": "5678/50000",
+          "red_y": "4321/50000",
+          "green_x": "1234/50000",
+          "green_y": "8765/50000",
+          "blue_x": "3456/50000",
+          "blue_y": "6543/50000",
+          "white_point_x": "12345/50000",
+          "white_point_y": "34567/50000"
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "ATSC A53 Part 4 Closed Captions"
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "ATSC A53 Part 4 Closed Captions"
+        }
+      ]
+    }
+  ]
+}

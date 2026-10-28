@@ -42,7 +42,7 @@ class FfprobeExecutorCodecStringTest {
 
   // These videos' HEVC parameter sets are only in their samples.
   private static final Set<String> VIDEO_FIXTURES_WITHOUT_RECORD_PARAMETER_SETS =
-      Set.of("mp4-dovi-p5-hev1.mp4");
+      Set.of("mp4-dovi-p5-hev1.mp4", "mp4-dovi-p81-fate.mp4");
 
   @Nested
   @DisplayName("Stream Copies")

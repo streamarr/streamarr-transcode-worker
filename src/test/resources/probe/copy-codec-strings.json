@@ -1,9 +1,15 @@
 {
+  "flv-h264-brokensps.flv": {
+    "0": "avc1.42001E"
+  },
   "hevc-hdr10-plus.hevc": {
     "0": "hvc1.2.4.L150.B0"
   },
   "ivf-av1-10bit.ivf": {
     "0": "av01.0.00M.10"
+  },
+  "ivf-av1-hdr-sizeup.ivf": {
+    "0": "av01.0.00M.08"
   },
   "mkv-120fps.mkv": {
     "0": "avc1.42C00A"
@@ -55,6 +61,12 @@
     "0": "avc1.42C00A",
     "1": "mp4a.40.2",
     "2": "mp4a.40.2"
+  },
+  "mov-h264-extradata-reload.mov": {
+    "0": "avc1.64000C"
+  },
+  "mov-hevc-extradata-reload.mov": {
+    "0": "hvc1.1.6.L30.90"
   },
   "mov-phone-120-declared.mov": {
     "0": "hvc1.2.4.L120.B0",
@@ -139,6 +151,13 @@
   "mp4-dovi-p5-no-record-bt709.mp4": {
     "0": "hvc1.2.4.L123.B0"
   },
+  "mp4-dovi-p7-two-tracks.mp4": {
+    "0": "hvc1.2.4.L120.90",
+    "1": "hvc1.2.4.L120.90"
+  },
+  "mp4-dovi-p81-fate.mp4": {
+    "0": "hvc1.2.4.L120.90"
+  },
   "mp4-dovi-p81.mp4": {
     "0": "hvc1.2.4.L123.B0"
   },
@@ -157,6 +176,12 @@
   "mp4-er-aac-lc.mp4": {
     "0": "avc1.42C00A",
     "1": "mp4a.40.17"
+  },
+  "mp4-h264-mixed-nal-coding.mp4": {
+    "0": "avc1.4D401F"
+  },
+  "mp4-h264-sei-1.mp4": {
+    "0": "avc1.4D001F"
   },
   "mp4-hdr10-maxfall-zero.mp4": {
     "0": "hvc1.2.4.L30.90"
