@@ -20,6 +20,7 @@ import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
@@ -163,6 +164,29 @@ class FragmentedMp4RpuMoverTest {
 
     assertThat(videoSamplesOf(moved)).containsExactly(hex(slice(0)), hex(slice(1)));
     assertThat(Mp4Stream.read(Mp4Stream.readerOf(moved)).fragments()).hasSize(4);
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep each RPU behind the previous picture when consecutive fragments together exceed"
+          + " what the mover holds but the previous picture's fragment alone does not")
+  void
+      shouldKeepEachRpuBehindThePreviousPictureWhenConsecutiveFragmentsTogetherExceedWhatTheMoverHoldsButThePreviousPicturesFragmentAloneDoesNot()
+          throws IOException {
+    var filler = suffixSeiOf(Math.toIntExact(FragmentedMp4RpuMover.MAXIMUM_HELD_BYTES / 2));
+    var copy =
+        stream(
+            fragmentBuilder().video(0, sample(slice(0), filler)).build(),
+            fragmentBuilder().video(1001, sample(rpu(0), slice(1), filler)).build(),
+            fragmentBuilder().video(2002, sample(rpu(1), slice(2))).build());
+
+    var moved = move(copy);
+
+    // The test's RPUs and slices are units of one length, so this is each sample's last unit.
+    var unitLength = hex(rpu(0)).length();
+    assertThat(videoSamplesOf(moved))
+        .extracting(sample -> sample.substring(sample.length() - unitLength))
+        .containsExactly(hex(rpu(0)), hex(rpu(1)), hex(slice(2)));
   }
 
   @Test
@@ -449,6 +473,13 @@ class FragmentedMp4RpuMoverTest {
         + sample.duration()
         + "/"
         + Integer.toHexString(sample.flags());
+  }
+
+  // A length-prefixed suffix SEI NAL unit whose payload holds this many zero bytes.
+  private static byte[] suffixSeiOf(int payloadBytes) {
+    var unit = ByteBuffer.allocate(4 + 2 + payloadBytes);
+    unit.putInt(2 + payloadBytes).put((byte) (HevcCopies.SUFFIX_SEI << 1)).put((byte) 1);
+    return unit.array();
   }
 
   private static String hex(byte[]... nalUnits) {

@@ -139,11 +139,10 @@ final class FragmentedMp4RpuMover {
 
     held.addLast(heldFragment);
     heldBytes += fragment.heldBytes();
-    if (heldBytes > MAXIMUM_HELD_BYTES) {
-      previousPicture = Optional.empty();
-    }
-
     releaseBeforePreviousPicture();
+    if (heldBytes > MAXIMUM_HELD_BYTES) {
+      releaseAll();
+    }
   }
 
   private static void requireFfmpegLayout(BoxView moof) {
