@@ -17,9 +17,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
+import com.sun.management.ThreadMXBean;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.lang.management.ManagementFactory;
 import java.nio.ByteBuffer;
 import java.util.ArrayDeque;
 import java.util.Arrays;
@@ -762,6 +764,32 @@ class FragmentedMp4RpuMoverTest {
   }
 
   @Test
+  @DisplayName(
+      "Should allocate no more for a length that holds a start code every 3 bytes than for one of"
+          + " zeros")
+  void shouldAllocateNoMoreForALengthThatHoldsAStartCodeEvery3BytesThanForOneOfZeros()
+      throws IOException {
+    var lengthBytes = 3 * 1024 * 1024;
+    var startCodes = new byte[lengthBytes];
+    for (var index = 2; index < lengthBytes; index += 3) {
+      startCodes[index] = 1;
+    }
+
+    var zeros =
+        stream(fragmentBuilder().video(0, sample(slice(0), unitOf(new byte[lengthBytes]))).build());
+    var everyThirdByte =
+        stream(fragmentBuilder().video(0, sample(slice(0), unitOf(startCodes))).build());
+    move(zeros);
+
+    var allocatedForZeros = allocatedBytesOfMoving(zeros);
+    var allocatedForStartCodes = allocatedBytesOfMoving(everyThirdByte);
+
+    assertThat(allocatedForStartCodes)
+        .as("the bytes allocated for %d start codes", lengthBytes / 3)
+        .isLessThan(allocatedForZeros + lengthBytes / 3);
+  }
+
+  @Test
   @DisplayName("Should fail as the end of the file in a box body when the copy ends inside an mdat")
   void shouldFailAsTheEndOfTheFileInABoxBodyWhenTheCopyEndsInsideAnMdat() {
     var copy = stream(fragmentBuilder().video(0, sample(slice(0))).build());
@@ -937,8 +965,19 @@ class FragmentedMp4RpuMoverTest {
 
   // A NAL unit of the given bytes after a 4-byte length.
   private static byte[] unit(String bytes) {
-    var unit = HexFormat.ofDelimiter(" ").parseHex(bytes);
+    return unitOf(HexFormat.ofDelimiter(" ").parseHex(bytes));
+  }
+
+  private static byte[] unitOf(byte[] unit) {
     return concat(u32(unit.length), unit);
+  }
+
+  // The heap that this thread allocates while the mover moves the copy, garbage included.
+  private static long allocatedBytesOfMoving(byte[] copy) throws IOException {
+    var threads = (ThreadMXBean) ManagementFactory.getThreadMXBean();
+    var before = threads.getCurrentThreadAllocatedBytes();
+    move(copy);
+    return threads.getCurrentThreadAllocatedBytes() - before;
   }
 
   private static String hex(byte[]... nalUnits) {
