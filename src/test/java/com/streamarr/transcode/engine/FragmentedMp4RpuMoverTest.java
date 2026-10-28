@@ -146,6 +146,124 @@ class FragmentedMp4RpuMoverTest {
     assertThat(move(copy)).as(description).isEqualTo(copy);
   }
 
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({
+    "forbidden_zero_bit 1, C6 01 50",
+    "nuh_temporal_id_plus1 0, 46 00 50",
+    "nuh_layer_id 63, 47 F9 50",
+    "one byte, 46"
+  })
+  @DisplayName(
+      "Should pass the copy unchanged when a NAL unit that FFmpeg's splitter drops follows the RPU"
+          + " that ends its picture")
+  void
+      shouldPassTheCopyUnchangedWhenANalUnitThatFfmpegsSplitterDropsFollowsTheRpuThatEndsItsPicture(
+          String description, String dropped) throws IOException {
+    var copy =
+        stream(
+            fragmentBuilder()
+                .video(
+                    0,
+                    sample(slice(0), rpu(0), unit(dropped)),
+                    sample(slice(1), rpu(1), unit(dropped), unit(dropped)))
+                .build());
+
+    assertThat(move(copy)).as(description).isEqualTo(copy);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({
+    "forbidden_zero_bit 1, 82 01 AF 01",
+    "nuh_temporal_id_plus1 0, 02 00 AF 01",
+    "nuh_layer_id 63, 03 F9 AF 01"
+  })
+  @DisplayName(
+      "Should move the RPU that a slice which FFmpeg's splitter drops precedes behind the previous"
+          + " picture")
+  void shouldMoveTheRpuThatASliceWhichFfmpegsSplitterDropsPrecedesBehindThePreviousPicture(
+      String description, String dropped) throws IOException {
+    var copy =
+        stream(
+            fragmentBuilder().video(0, sample(slice(0))).build(),
+            fragmentBuilder().video(1001, sample(unit(dropped), rpu(0), slice(1))).build());
+
+    var moved = move(copy);
+
+    assertThat(videoSamplesOf(moved))
+        .as(description)
+        .containsExactly(hex(slice(0), rpu(0)), hex(unit(dropped), slice(1)));
+  }
+
+  @Test
+  @DisplayName(
+      "Should move an RPU that starts a sample behind the previous picture when the sample holds a"
+          + " NAL unit of one byte, which FFmpeg's splitter drops")
+  void
+      shouldMoveAnRpuThatStartsASampleBehindThePreviousPictureWhenTheSampleHoldsANalUnitOfOneByteWhichFfmpegsSplitterDrops()
+          throws IOException {
+    var copy =
+        stream(
+            fragmentBuilder().video(0, sample(slice(0))).build(),
+            fragmentBuilder().video(1001, sample(rpu(0), slice(1), unit("46"))).build());
+
+    var moved = move(copy);
+
+    assertThat(videoSamplesOf(moved))
+        .containsExactly(hex(slice(0), rpu(0)), hex(slice(1), unit("46")));
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep the RPU that FFmpeg's decoder reads last when NAL units that FFmpeg's splitter"
+          + " drops end the sample")
+  void shouldKeepTheRpuThatFfmpegsDecoderReadsLastWhenNalUnitsThatFfmpegsSplitterDropsEndTheSample()
+      throws IOException {
+    var dropped = unit("46 00 50");
+    var copy =
+        stream(
+            fragmentBuilder()
+                .video(0, sample(slice(0), rpu(8), suffixSei(0), rpu(0), dropped))
+                .build());
+
+    var moved = move(copy);
+
+    assertThat(videoSamplesOf(moved))
+        .containsExactly(hex(slice(0), suffixSei(0), rpu(8), rpu(0), dropped));
+  }
+
+  @Test
+  @DisplayName(
+      "Should pass the copy unchanged when the last NAL unit of a sample takes fewer than 4 bytes"
+          + " with its length, which FFmpeg's splitter never reads")
+  void
+      shouldPassTheCopyUnchangedWhenTheLastNalUnitOfASampleTakesFewerThan4BytesWithItsLengthWhichFfmpegsSplitterNeverReads()
+          throws IOException {
+    var shortRpu = nalWithLength(1, 62, 25, 7);
+    var shortSlice = nalWithLength(1, HevcCopies.TRAIL_R, 0xAF, 1);
+    var shortAud = nalWithLength(1, HevcCopies.AUD);
+    var copy =
+        concat(
+            initializationSegment(hevcSampleEntry("hvc1", 1)),
+            fragmentBuilder().video(0, concat(shortSlice, shortRpu, shortAud)).build());
+
+    assertThat(move(copy)).isEqualTo(copy);
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep the bytes of a sample that holds a length of 0, which makes FFmpeg reject the"
+          + " whole sample")
+  void shouldKeepTheBytesOfASampleThatHoldsALengthOf0WhichMakesFfmpegRejectTheWholeSample()
+      throws IOException {
+    var rejected = sample(rpu(0), slice(1), u32(0), aud());
+    var copy =
+        stream(
+            fragmentBuilder().video(0, sample(slice(0))).build(),
+            fragmentBuilder().video(1001, rejected).build());
+
+    assertThat(videoSamplesOf(move(copy))).containsExactly(hex(slice(0)), hex(rejected));
+  }
+
   @Test
   @DisplayName(
       "Should keep the fragments in order when audio fragments arrive while the previous picture"
@@ -667,6 +785,12 @@ class FragmentedMp4RpuMoverTest {
     var unit = ByteBuffer.allocate(4 + 2 + payloadBytes);
     unit.putInt(2 + payloadBytes).put((byte) (HevcCopies.SUFFIX_SEI << 1)).put((byte) 1);
     return unit.array();
+  }
+
+  // A NAL unit of the given bytes after a 4-byte length.
+  private static byte[] unit(String bytes) {
+    var unit = HexFormat.ofDelimiter(" ").parseHex(bytes);
+    return concat(u32(unit.length), unit);
   }
 
   private static String hex(byte[]... nalUnits) {

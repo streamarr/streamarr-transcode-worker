@@ -269,15 +269,20 @@ final class FragmentedMp4RpuMover {
       return;
     }
 
-    // An RPU that already ends the sample is the one FFmpeg's decoder reads, so it stays last.
-    var lastIndex = units.size() - 1;
+    // An RPU that already ends what the decoder sees of the sample is the one FFmpeg's decoder
+    // reads, so the RPUs that move behind the sample's slices go ahead of it.
+    var lastIndex = lastReachingDecoder(units);
     var endsWithRpu = units.get(lastIndex).rpu() && lastIndex > firstSlice.getAsInt();
     var leading = new ArrayList<HevcNalUnit>();
     var kept = new ArrayList<HevcNalUnit>();
     var behind = new ArrayList<HevcNalUnit>();
+    var insertBehindAt = OptionalInt.empty();
     for (var index = 0; index < units.size(); index++) {
       var unit = units.get(index);
-      if (!unit.rpu() || index == lastIndex && endsWithRpu) {
+      if (index == lastIndex && endsWithRpu) {
+        insertBehindAt = OptionalInt.of(kept.size());
+        kept.add(unit);
+      } else if (!unit.rpu()) {
         kept.add(unit);
       } else if (index < firstSlice.getAsInt()) {
         leading.add(unit);
@@ -288,11 +293,21 @@ final class FragmentedMp4RpuMover {
 
     appendBehindPreviousPicture(leading);
     if (!leading.isEmpty() || !behind.isEmpty()) {
-      kept.addAll(endsWithRpu ? kept.size() - 1 : kept.size(), behind);
+      kept.addAll(insertBehindAt.orElse(kept.size()), behind);
       sample.replace(kept);
     }
 
     previousPicture = Optional.of(sample);
+  }
+
+  // A sample with a slice holds a NAL unit that reaches the decoder.
+  private static int lastReachingDecoder(List<HevcNalUnit> units) {
+    var index = units.size() - 1;
+    while (!units.get(index).reachesDecoder()) {
+      index--;
+    }
+
+    return index;
   }
 
   private static OptionalInt firstSliceOf(List<HevcNalUnit> units) {

@@ -10,9 +10,17 @@ import lombok.NonNull;
  * One NAL unit of an HEVC sample whose NAL units each follow a big-endian length of the size that
  * the sample entry's {@code hvcC} declares (ISO/IEC 14496-15 8.3.2), with that length prefix.
  *
+ * <p>FFmpeg's ff_h2645_packet_split drops some NAL units before its HEVC decoder sees them: one
+ * whose forbidden_zero_bit is 1, one shorter than its 2-byte header, one whose
+ * nuh_temporal_id_plus1 is 0 or nuh_layer_id is 63, and the last one of a sample when it takes
+ * fewer than {@link #FEWEST_SPLIT_BYTES} bytes with its length. Such a NAL unit keeps its bytes,
+ * but it is no slice and no RPU, and it never keeps an RPU from being the last NAL unit that the
+ * decoder sees.
+ *
  * @param bytes the length prefix and the NAL unit, viewed without copying them
+ * @param reachesDecoder whether FFmpeg's splitter hands the NAL unit to the decoder
  */
-record HevcNalUnit(@NonNull ByteBuffer bytes, int type, boolean rpu) {
+record HevcNalUnit(@NonNull ByteBuffer bytes, int type, boolean rpu, boolean reachesDecoder) {
 
   /**
    * The most NAL units of a sample that {@link #delimit} returns: well above the 600 slice segments
@@ -20,6 +28,8 @@ record HevcNalUnit(@NonNull ByteBuffer bytes, int type, boolean rpu) {
    */
   static final int MAXIMUM_NAL_UNITS_PER_SAMPLE = 4096;
 
+  // FFmpeg's splitter reads the next NAL unit only while at least this many bytes remain.
+  private static final int FEWEST_SPLIT_BYTES = 4;
   private static final int NAL_UNIT_HEADER_BYTES = 2;
   // NAL unit types below this one hold picture slices (ITU-T H.265 table 7-1).
   private static final int FIRST_NON_PICTURE_TYPE = 32;
@@ -27,13 +37,14 @@ record HevcNalUnit(@NonNull ByteBuffer bytes, int type, boolean rpu) {
   // A Dolby Vision RPU is an UNSPECIFIED_62 NAL unit on layer 0 and TemporalId 0 whose payload
   // starts with rpu_nal_prefix 25: FFmpeg's HEVC decoder reads no other NAL unit as an RPU.
   private static final int RPU_NAL_PREFIX = 25;
+  private static final int UNDECODED_LAYER = 63;
 
   HevcNalUnit {
     bytes = bytes.slice();
   }
 
   boolean slice() {
-    return type < FIRST_NON_PICTURE_TYPE;
+    return reachesDecoder && type < FIRST_NON_PICTURE_TYPE;
   }
 
   int length() {
@@ -41,8 +52,8 @@ record HevcNalUnit(@NonNull ByteBuffer bytes, int type, boolean rpu) {
   }
 
   /**
-   * The sample's NAL units in order; empty when a length runs past the end of the sample, declares
-   * fewer bytes than a NAL unit header, or the sample holds more than {@link
+   * The sample's NAL units in order; empty when a length runs past the end of the sample, is 0,
+   * which makes FFmpeg reject the whole sample, or the sample holds more than {@link
    * #MAXIMUM_NAL_UNITS_PER_SAMPLE} NAL units.
    *
    * @param lengthSize the bytes of each length prefix: 1, 2 or 4
@@ -55,35 +66,42 @@ record HevcNalUnit(@NonNull ByteBuffer bytes, int type, boolean rpu) {
         return Optional.empty();
       }
 
+      var isSplit = sample.limit() - position >= FEWEST_SPLIT_BYTES;
       var length = lengthAt(sample, position, lengthSize);
       var unitStart = position + lengthSize;
-      if (length < NAL_UNIT_HEADER_BYTES || length > sample.limit() - unitStart) {
+      if (length == 0 || length > sample.limit() - unitStart) {
         return Optional.empty();
       }
 
       var end = unitStart + (int) length;
-      units.add(unitAt(sample, position, unitStart, end));
+      units.add(unitAt(sample, position, unitStart, end, isSplit));
       position = end;
     }
 
     return Optional.of(List.copyOf(units));
   }
 
-  private static HevcNalUnit unitAt(ByteBuffer sample, int start, int unitStart, int end) {
-    var type = (Byte.toUnsignedInt(sample.get(unitStart)) >> 1) & 0x3F;
+  private static HevcNalUnit unitAt(
+      ByteBuffer sample, int start, int unitStart, int end, boolean isSplit) {
+    var bytes = sample.slice(start, end - start);
+    if (!isSplit || end - unitStart < NAL_UNIT_HEADER_BYTES) {
+      return new HevcNalUnit(bytes, -1, false, false);
+    }
+
+    var first = Byte.toUnsignedInt(sample.get(unitStart));
+    var second = Byte.toUnsignedInt(sample.get(unitStart + 1));
+    var type = (first >> 1) & 0x3F;
+    var layerId = (first & 0x01) << 5 | second >> 3;
+    var temporalIdPlus1 = second & 0x07;
+    var reachesDecoder = (first & 0x80) == 0 && layerId != UNDECODED_LAYER && temporalIdPlus1 != 0;
     var rpu =
-        type == UNSPECIFIED_62
-            && isOnLayer0AndTemporalId0(sample, unitStart)
+        reachesDecoder
+            && type == UNSPECIFIED_62
+            && layerId == 0
+            && temporalIdPlus1 == 1
             && end - unitStart > NAL_UNIT_HEADER_BYTES
             && Byte.toUnsignedInt(sample.get(unitStart + NAL_UNIT_HEADER_BYTES)) == RPU_NAL_PREFIX;
-    return new HevcNalUnit(sample.slice(start, end - start), type, rpu);
-  }
-
-  private static boolean isOnLayer0AndTemporalId0(ByteBuffer sample, int unitStart) {
-    var layerId =
-        (sample.get(unitStart) & 0x01) << 5 | Byte.toUnsignedInt(sample.get(unitStart + 1)) >> 3;
-    var temporalIdPlus1 = sample.get(unitStart + 1) & 0x07;
-    return layerId == 0 && temporalIdPlus1 == 1;
+    return new HevcNalUnit(bytes, type, rpu, reachesDecoder);
   }
 
   private static long lengthAt(ByteBuffer sample, int position, int lengthSize) {
