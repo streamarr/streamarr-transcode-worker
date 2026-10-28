@@ -42,6 +42,7 @@ from its lavfi test sources. No file comes from a media library.
 | `mp4-dovi-p5-hev1.mp4.json` | FFmpeg's FATE sample `mov/dovi-p5.mp4`: Dolby Vision profile 5 under `hev1`, with a `dvcC` record |
 | `hevc-dovi-p5-rpus-ahead.hevc.json` | FFmpeg's FATE sample `mov/dovi-p5.mp4` as raw HEVC, whose RPUs `move-rpus-ahead.py` moved ahead of the next picture, behind a copy of the parameter sets. FFmpeg's HEVC decoder ignores each RPU, so only the packets show them |
 | `hevc-dovi-p5-rpus-before-own-picture.hevc.json` | The same sample, whose RPUs `move-rpus-ahead.py` moved ahead of their own pictures, behind the parameter sets that start each sample. No known muxer writes this layout. FFmpeg's HEVC decoder ignores each RPU, so only the packets show them |
+| `hevc-dovi-p5-rpus-temporal-id-1.hevc.json` | The same sample as raw HEVC, whose RPUs `raise-rpu-temporal-id.py` put on TemporalId 1. FFmpeg's HEVC decoder reads a type 62 NAL unit as an RPU only on layer 0 and TemporalId 0, so the stream holds no RPU |
 | `mkv-hdr10-fate.mkv.json` | FFmpeg's FATE sample `mkv/hdr10tags-both.mkv`: HDR10 mastering values stored as 32-bit floats |
 | `mpegts-dovi-p7.ts.json` | FFmpeg's FATE sample `mov/dovi-p7-hvce.mp4` copied into MPEG-TS, whose Dolby Vision descriptor carries the profile 7 record |
 | `mp4-dovi-p7-two-tracks.mp4.json` | FFmpeg's FATE sample `mov/dovi-p7.mp4`: Dolby Vision profile 7 whose base layer and enhancement layer are separate MP4 tracks. Only the second track carries the record and the RPUs |

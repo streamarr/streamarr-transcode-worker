@@ -944,6 +944,8 @@ class FfprobeExecutorFirstFramesTest {
     // RPUs cut after their headers: one with profile 5's fields and one with profile 8's.
     private static final String PROFILE_5_RPU_UNIT = "7c 01 19 08 09 00 40 61 b6 50 6f 00 3f";
     private static final String PROFILE_8_RPU_UNIT = "7c 01 19 08 09 08 40 61 59 41 bc 03 fe";
+    // Profile 5's RPU on TemporalId 1, which FFmpeg's HEVC decoder never reads as an RPU.
+    private static final String OFF_TEMPORAL_ID_0_UNIT = "7c 02 19 08 09 00 40 61 b6 50 6f 00 3f";
 
     @Test
     @DisplayName(
@@ -1307,6 +1309,94 @@ class FfprobeExecutorFirstFramesTest {
           .isEqualTo(DolbyVisionCase.DOLBYVISION_NOT_SET);
     }
 
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+      "TemporalId 1, 7c 02",
+      "layer 1, 7c 09",
+      "layer 32, 7d 01",
+      "nuh_temporal_id_plus1 0, 7c 00"
+    })
+    @DisplayName(
+        "Should rule Dolby Vision out when every type 62 unit lies off layer 0 or TemporalId 0")
+    void shouldRuleDolbyVisionOutWhenEveryType62UnitLiesOffLayer0OrTemporalId0(
+        String description, String header) {
+      // FFmpeg's HEVC decoder reads a type 62 NAL unit as an RPU only on layer 0 and TemporalId 0.
+      var unit = PROFILE_5_RPU_UNIT.replaceFirst("^7c 01", header);
+      var dynamicRange =
+          probed(
+                  hevc(extradata(HEVC_RECORD))
+                      .firstFrames(frames("", "", ""))
+                      .firstPackets(
+                          packets(
+                              lengthPrefixed(IDR_SLICE, unit),
+                              lengthPrefixed(SLICE, unit),
+                              lengthPrefixed(SLICE, unit))))
+              .getDynamicRange();
+
+      assertThat(dynamicRange.hasDolbyVisionAbsent()).as(description).isTrue();
+      assertThat(dynamicRange.getCompatibleBase())
+          .as(description)
+          .isEqualTo(CompatibleBase.COMPATIBLE_BASE_UNSPECIFIED);
+    }
+
+    @Test
+    @DisplayName(
+        "Should report the record's RPU absent when the only type 62 units lie off TemporalId 0")
+    void shouldReportTheRecordsRpuAbsentWhenTheOnlyType62UnitsLieOffTemporalId0() {
+      var present =
+          probed(
+                  hevc(extradata(HEVC_RECORD) + "," + record(8, 1))
+                      .firstFrames(frames("", "", ""))
+                      .firstPackets(
+                          packets(
+                              lengthPrefixed(IDR_SLICE, OFF_TEMPORAL_ID_0_UNIT),
+                              lengthPrefixed(SLICE, OFF_TEMPORAL_ID_0_UNIT),
+                              lengthPrefixed(SLICE, OFF_TEMPORAL_ID_0_UNIT))))
+              .getDynamicRange()
+              .getDolbyVisionPresent();
+
+      assertThat(present.getObservedRpu()).isEqualTo(Presence.PRESENCE_ABSENT);
+      assertThat(present.hasFirstRpuHeader()).isFalse();
+      assertThat(present.getRpuPlacement())
+          .isEqualTo(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @CsvSource(
+        delimiter = '|',
+        value = {
+          "a picture's sample holds it ahead of its slice | 46 01 50, 7c 02 19 08 09 00 40 61 b6 50"
+              + " 6f 00 3f, 26 01 af 06 b8, 7c 01 19 08 09 00 40 61 b6 50 6f 00 3f | 02 01 d0 09"
+              + " 7e, 7c 01 19 08 09 00 40 61 b6 50 6f 00 3f",
+          "a sample holds it and no slice | 26 01 af 06 b8, 7c 01 19 08 09 00 40 61 b6 50 6f 00 3f"
+              + " | 7c 02 19 08 09 00 40 61 b6 50 6f 00 3f"
+        })
+    @DisplayName(
+        "Should place each RPU after its own picture when a type 62 unit off TemporalId 0 sits"
+            + " elsewhere")
+    void shouldPlaceEachRpuAfterItsOwnPictureWhenAType62UnitOffTemporalId0SitsElsewhere(
+        String description, String first, String second) {
+      var present = placed(lengthPrefixed(first.split(", ")), lengthPrefixed(second.split(", ")));
+
+      assertThat(present.getObservedRpu()).as(description).isEqualTo(Presence.PRESENCE_PRESENT);
+      assertThat(present.getRpuPlacement())
+          .as(description)
+          .isEqualTo(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_AFTER_OWN_PICTURE);
+    }
+
+    @Test
+    @DisplayName(
+        "Should leave the RPU placement unspecified when a type 62 unit off TemporalId 0 follows"
+            + " the RPU")
+    void shouldLeaveTheRpuPlacementUnspecifiedWhenAType62UnitOffTemporalId0FollowsTheRpu() {
+      // The unit is no RPU, but as any other NAL unit it keeps the RPU from ending its sample.
+      var present = placed(lengthPrefixed(IDR_SLICE, PROFILE_5_RPU_UNIT, OFF_TEMPORAL_ID_0_UNIT));
+
+      assertThat(present.getObservedRpu()).isEqualTo(Presence.PRESENCE_PRESENT);
+      assertThat(present.getRpuPlacement())
+          .isEqualTo(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED);
+    }
+
     private static DolbyVisionPresent placed(String... samples) {
       return probed(
               hevc(extradata(HEVC_RECORD))
@@ -1565,6 +1655,18 @@ class FfprobeExecutorFirstFramesTest {
       assertThat(present.getRpuPlacement())
           .isEqualTo(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE);
       assertThat(present.getFirstRpuHeader().getVdrRpuProfile()).isZero();
+    }
+
+    @Test
+    @DisplayName("Should rule Dolby Vision out when a profile 5 sample's RPUs lie on TemporalId 1")
+    void shouldRuleDolbyVisionOutWhenAProfile5SamplesRpusLieOnTemporalId1() {
+      // raise-rpu-temporal-id.py put each RPU of the FATE sample on TemporalId 1, so FFmpeg's HEVC
+      // decoder reads none of them, and neither the frames nor the packets hold an RPU.
+      var dynamicRange = streamOf("hevc-dovi-p5-rpus-temporal-id-1.hevc", 0).getDynamicRange();
+
+      assertThat(dynamicRange.hasDolbyVisionAbsent()).isTrue();
+      assertThat(dynamicRange.getCompatibleBase())
+          .isEqualTo(CompatibleBase.COMPATIBLE_BASE_UNSPECIFIED);
     }
 
     @ParameterizedTest(name = "{0}")

@@ -6,7 +6,8 @@ import java.util.Optional;
 /**
  * How a codec's NAL units name their type, which of them carry a picture, SEI messages or a Dolby
  * Vision RPU, and how its decoder configuration record sets the length of each NAL unit in a
- * sample. An RPU is a NAL unit of the codec's RPU type whose payload starts with rpu_nal_prefix 25.
+ * sample. An RPU is a NAL unit of the codec's RPU type whose payload starts with rpu_nal_prefix 25,
+ * and for HEVC whose header names layer 0 and TemporalId 0.
  */
 enum NalSyntax {
   /** H.264, whose avcC record holds lengthSizeMinusOne in the low 2 bits of its fifth byte. */
@@ -44,6 +45,21 @@ enum NalSyntax {
     boolean isSei(byte[] unit) {
       var type = type(unit);
       return type == 39 || type == 40;
+    }
+
+    /**
+     * FFmpeg's HEVC decoder reads a type 62 NAL unit as an RPU only when its nuh_layer_id is 0 and
+     * its nuh_temporal_id_plus1 is 1.
+     */
+    @Override
+    boolean isRpu(byte[] unit) {
+      if (!super.isRpu(unit)) {
+        return false;
+      }
+
+      var layerId = (unit[0] & 0x01) << 5 | Byte.toUnsignedInt(unit[1]) >> 3;
+      var temporalIdPlus1 = unit[1] & 0x07;
+      return layerId == 0 && temporalIdPlus1 == 1;
     }
   };
 
