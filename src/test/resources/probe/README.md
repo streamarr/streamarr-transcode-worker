@@ -53,10 +53,10 @@ from its lavfi test sources. No file comes from a media library.
 | `mp4-h264-sei-1.mp4.json` | The same stream copied into MP4, whose 5 packets decode fewer than 3 frames in a read of 3. The first frame of the read that the probe keeps carries no mastering display |
 | `mov-h264-extradata-reload.mov.json`, `mov-hevc-extradata-reload.mov.json` | FFmpeg's FATE samples `h264/extradata-reload-multi-stsd.mov` and `hevc/extradata-reload-multi-stsd.mov`: H.264 and HEVC whose packets switch between sample descriptions, so they carry new extradata side data |
 | `mp4-h264-mixed-nal-coding.mp4.json` | FFmpeg's FATE sample `h264/mixed-nal-coding.mp4`: length-prefixed MP4 samples that also hold start codes |
-| `flv-h264-brokensps.flv.json` | FFmpeg's FATE sample `h264/brokensps.flv`: an encoder's SEI NAL unit that ends without its RBSP trailing bits |
-| `avi-h264-ref-10.avi.json` | FFmpeg's FATE sample `h264/ref_10.avi`: H.264 in AVI whose 4-byte extradata is neither a configuration record nor Annex B. `h264_mp4toannexb` refuses that extradata, so the stream has no copy |
+| `flv-h264-sei-without-trailing-bits.flv.json` | H.264 in FLV whose x264 SEI NAL unit `drop-sei-trailing-bits.py` ended without its RBSP trailing bits, as some encoders write it |
+| `avi-h264-unknown-extradata.avi.json` | H.264 in AVI whose extradata `set-avi-extradata.py` replaced with 4 bytes that are neither a configuration record nor Annex B. `h264_mp4toannexb` refuses that extradata, so the stream has no copy |
 | `webm-vp9-hdr10-plus.webm.json` | FFmpeg's FATE sample `mkv/hdr10_plus_vp9_sample.webm`: VP9 whose HDR10+ metadata a WebM BlockAdditional carries to the frame |
-| `hevc-hdr-vivid-repeated.hevc.json` | FFmpeg's FATE sample `hevc/hdr_vivid_h265_sample.hevc`, a single HLG frame with mastering display, light level and CUVA HDR Vivid SEI messages, repeated 3 times so that the stream holds 3 frames |
+| `hevc-hdr-vivid-repeated.hevc.json` | One HLG frame whose x265 SEI messages carry a mastering display and a light level of 0, and into which `insert-hdr-vivid-sei.py` put a CUVA HDR Vivid message, repeated 3 times so that the stream holds 3 frames |
 | `mp4-dovi-p5-dvh1.mp4.json` | Local sample: Dolby Vision profile 5 under `dvh1` with a `dvcC` record and no transfer tag |
 | `mp4-dovi-p5-dvh1-no-record.mp4.json` | Local sample: the same file with its record removed |
 | `mp4-dovi-p81.mp4.json` | Local sample: Dolby Vision profile 8.1 under `hvc1`, PQ |

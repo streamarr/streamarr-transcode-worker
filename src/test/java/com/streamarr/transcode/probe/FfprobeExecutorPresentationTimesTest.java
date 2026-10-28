@@ -30,7 +30,7 @@ class FfprobeExecutorPresentationTimesTest {
     "h264-sei-1.h264, false",
     "hevc-dovi-p81-fate.hevc, false",
     "hevc-dovi-p5-rpus-ahead.hevc, false",
-    "avi-h264-ref-10.avi, false",
+    "avi-h264-unknown-extradata.avi, false",
     "mp4-sdr8-bt709.mp4, true",
     "mp4-dovi-p5-hev1.mp4, true",
     "mkv-pipe-hevc-10bit.mkv, true",

@@ -202,6 +202,19 @@ THREE_FRAMES=(-f lavfi -i testsrc2=size=64x36:rate=24:duration=0.125)
   -f hevc hdr10-plus.hevc
 "${FF[@]}" "${THREE_FRAMES[@]}" "${HDR10[@]}" -c:v libx264 -preset ultrafast \
   -x264-params "mastering-display=$MASTERING" -f h264 hdr10.h264
+# Raw H.264, whose x264 SEI NAL unit drop-sei-trailing-bits.py ends without its RBSP trailing bits
+# before the FLV copy, and H.264 in AVI, whose extradata set-avi-extradata.py replaces with 4 bytes
+# that are neither a configuration record nor Annex B.
+"${FF[@]}" "${VIDEO[@]}" "${X264[@]}" -f h264 x264.h264
+"${FF[@]}" "${VIDEO[@]}" "${X264[@]}" avi-h264.avi
+# One HLG frame whose SEI messages carry a mastering display with a maximum luminance of 4000 and a
+# light level of 0, into which insert-hdr-vivid-sei.py puts a CUVA HDR Vivid message.
+HLG_MASTERING='G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(40000000,50)'
+"${FF[@]}" -f lavfi -i testsrc2=size=64x64:rate=25:duration=0.04 \
+  -vf setparams=color_primaries=bt2020:color_trc=arib-std-b67:colorspace=bt2020nc \
+  -pix_fmt yuv420p10le "${X265[@]}" \
+  -x265-params "log-level=none:master-display=$HLG_MASTERING:max-cll=0,0" \
+  -f hevc hlg.hevc
 
 # Codec strings. H.264 and HEVC in MPEG-TS carry their parameter sets in Annex B form. AV1 in IVF
 # and in a raw OBU file carries only its sequence header. AAC in ADTS has no AudioSpecificConfig.
@@ -242,10 +255,13 @@ done
 "${FF[@]}" "${VIDEO[@]}" "${X264[@]}" -map_metadata -1 mp4-clap.mp4
 CONTAINER
 
-cat > "$WORK/cropped.sh" <<'CONTAINER'
+cat > "$WORK/edited.sh" <<'CONTAINER'
 set -euo pipefail
 cd /work
-ffmpeg -hide_banner -nostdin -loglevel error -y -i mp4-clap.mp4 -c copy mkv-pixel-crop.mkv
+FF=(timeout 60 ffmpeg -hide_banner -nostdin -loglevel error -y)
+"${FF[@]}" -i mp4-clap.mp4 -c copy mkv-pixel-crop.mkv
+"${FF[@]}" -f h264 -framerate 24 -i x264-sei-without-trailing-bits.h264 -c copy \
+  flv-h264-sei-without-trailing-bits.flv
 CONTAINER
 
 cat > "$WORK/adts.sh" <<'CONTAINER'
@@ -282,9 +298,7 @@ cp /fate/mpegts/dovi-p7.ts mpegts-dovi-p7-two-layers.ts
 # 7 with its base and enhancement layers in separate MP4 tracks, profile 8.1 in MP4 and as raw HEVC
 # without its record, AV1 with HDR metadata OBUs in IVF, an H.264 mastering display SEI message
 # whose maximum luminance FFmpeg rejects as raw H.264 and in MP4, new extradata side data from
-# several sample descriptions, MP4 samples that hold start codes, an SEI NAL unit without trailing
-# bits in FLV, AVI extradata that is neither a record nor Annex B, VP9 HDR10+ in WebM, and HLG with
-# a CUVA HDR Vivid message, repeated so that the stream holds 3 frames.
+# several sample descriptions, MP4 samples that hold start codes, and VP9 HDR10+ in WebM.
 cp /fate/mov/dovi-p7.mp4 mp4-dovi-p7-two-tracks.mp4
 cp /fate/mov/dovi-p81.mp4 mp4-dovi-p81-fate.mp4
 "${FF[@]}" -i /fate/mov/dovi-p81.mp4 -map 0:v -c copy -f hevc hevc-dovi-p81-fate.hevc
@@ -294,10 +308,7 @@ cp /fate/h264/sei-1.h264 h264-sei-1.h264
 cp /fate/h264/extradata-reload-multi-stsd.mov mov-h264-extradata-reload.mov
 cp /fate/hevc/extradata-reload-multi-stsd.mov mov-hevc-extradata-reload.mov
 cp /fate/h264/mixed-nal-coding.mp4 mp4-h264-mixed-nal-coding.mp4
-cp /fate/h264/brokensps.flv flv-h264-brokensps.flv
-cp /fate/h264/ref_10.avi avi-h264-ref-10.avi
 cp /fate/mkv/hdr10_plus_vp9_sample.webm webm-vp9-hdr10-plus.webm
-for _ in 1 2 3; do cat /fate/hevc/hdr_vivid_h265_sample.hevc; done > hevc-hdr-vivid-repeated.hevc
 CONTAINER
 
 # Each AV1 stream in IVF that insert-av1-metadata.py wrote, copied into MP4, whose av1C record the
@@ -367,10 +378,15 @@ python3 "$HERE/edit-adts-profile.py" "$WORK/aac-lc.adts" "$WORK/aac-ltp.adts" 3
 python3 "$HERE/reject-hdr-sei.py" hevc "$WORK/hdr10-plus.hevc" \
   "$WORK/hevc-hdr10-plus-rejected-sei.hevc"
 python3 "$HERE/reject-hdr-sei.py" h264 "$WORK/hdr10.h264" "$WORK/h264-hdr10-rejected-sei.h264"
+python3 "$HERE/drop-sei-trailing-bits.py" "$WORK/x264.h264" \
+  "$WORK/x264-sei-without-trailing-bits.h264"
+python3 "$HERE/set-avi-extradata.py" "$WORK/avi-h264.avi" "$WORK/avi-h264-unknown-extradata.avi" \
+  06000600
+python3 "$HERE/insert-hdr-vivid-sei.py" "$WORK/hlg.hevc" "$WORK/hevc-hdr-vivid-repeated.hevc" 3
 for variant in hdr10-plus-rejected static-after-frame; do
   python3 "$HERE/insert-av1-metadata.py" "$variant" "$WORK/av1-pq.ivf" "$WORK/av1-$variant.ivf"
 done
-in_image cropped.sh
+in_image edited.sh
 in_image adts.sh
 
 FIXTURES_TO_PROBE=(mp4-titled.mp4 mkv-remuxed-from-mp4.mkv mp4-default-handlers.mp4
@@ -383,7 +399,8 @@ FIXTURES_TO_PROBE=(mp4-titled.mp4 mkv-remuxed-from-mp4.mkv mp4-default-handlers.
   mp4-av1-10bit.mp4 mp4-audio-codecs.mp4 mp4-avc-record-level.mp4 mp4-hevc-record-level.mp4
   mpegts-aac-main.ts mpegts-aac-ltp.ts mkv-120fps.mkv mp4-100fps.mp4 mp4-90fps.mp4 mp4-72fps.mp4
   hevc-hdr10-plus-rejected-sei.hevc h264-hdr10-rejected-sei.h264 mp4-av1-pq.mp4
-  mp4-av1-hdr10-plus-rejected.mp4 mp4-av1-static-after-frame.mp4)
+  mp4-av1-hdr10-plus-rejected.mp4 mp4-av1-static-after-frame.mp4
+  flv-h264-sei-without-trailing-bits.flv avi-h264-unknown-extradata.avi hevc-hdr-vivid-repeated.hevc)
 if [ -n "${FATE_SUITE:-}" ]; then
   in_image fate.sh
   python3 "$HERE/move-rpus-ahead.py" next "$WORK/dovi-p5.hevc" "$WORK/hevc-dovi-p5-rpus-ahead.hevc"
@@ -402,8 +419,7 @@ if [ -n "${FATE_SUITE:-}" ]; then
     mp4-av1-rpu-bad-emdf.mp4 mp4-dovi-p7-two-tracks.mp4 mp4-dovi-p81-fate.mp4
     hevc-dovi-p81-fate.hevc ivf-av1-hdr-sizeup.ivf h264-sei-1.h264 mp4-h264-sei-1.mp4
     mov-h264-extradata-reload.mov mov-hevc-extradata-reload.mov mp4-h264-mixed-nal-coding.mp4
-    flv-h264-brokensps.flv avi-h264-ref-10.avi webm-vp9-hdr10-plus.webm
-    hevc-hdr-vivid-repeated.hevc)
+    webm-vp9-hdr10-plus.webm)
 fi
 in_image av1.sh
 
@@ -471,7 +487,7 @@ for source in "${FIXTURES_TO_PROBE[@]}"; do
     hevc-dovi-p5-rpus-* | *-rejected-sei.* | hevc-dovi-p81-fate.hevc | h264-sei-1.h264) ;;
     hevc-hdr-vivid-repeated.hevc) ;;
     # h264_mp4toannexb refuses this AVI's 4-byte extradata, so the copy fails.
-    avi-h264-ref-10.avi) ;;
+    avi-h264-unknown-extradata.avi) ;;
     *) FIXTURES_TO_COPY+=("$source") ;;
   esac
 done
@@ -513,7 +529,7 @@ PACKET_DATA=(mp4-sdr8-bt709.mp4 mp4-dovi-p9-avc1.mp4 mp4-dovi-p9-dva1.mp4 mpegts
   obu-av1-10bit.obu mpegts-hdr10-sei-only.ts mp4-dovi-p7-two-tracks.mp4 mp4-dovi-p81-fate.mp4
   hevc-dovi-p81-fate.hevc ivf-av1-hdr-sizeup.ivf h264-sei-1.h264 mp4-h264-sei-1.mp4
   mov-h264-extradata-reload.mov mov-hevc-extradata-reload.mov mp4-h264-mixed-nal-coding.mp4
-  flv-h264-brokensps.flv avi-h264-ref-10.avi hevc-hdr-vivid-repeated.hevc)
+  flv-h264-sei-without-trailing-bits.flv avi-h264-unknown-extradata.avi hevc-hdr-vivid-repeated.hevc)
 mkdir -p "$FIXTURES/packet-data"
 for source in "${PACKET_DATA[@]}"; do
   if [ -f "$WORK/packet-data/$source.json" ]; then

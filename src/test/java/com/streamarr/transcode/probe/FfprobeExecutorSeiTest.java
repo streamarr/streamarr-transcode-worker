@@ -952,7 +952,7 @@ class FfprobeExecutorSeiTest {
           "mov-h264-extradata-reload.mov",
           "mov-hevc-extradata-reload.mov",
           "mp4-h264-mixed-nal-coding.mp4",
-          "avi-h264-ref-10.avi"
+          "avi-h264-unknown-extradata.avi"
         })
     @DisplayName(
         "Should rule nothing out when a recorded stream holds units that the probe cannot"
@@ -976,7 +976,7 @@ class FfprobeExecutorSeiTest {
         "Should rule out RPUs but not HDR10+ when an encoder leaves out an SEI NAL unit's"
             + " trailing bits")
     void shouldRuleOutRpusButNotHdr10PlusWhenAnEncoderLeavesOutAnSeiNalUnitsTrailingBits() {
-      var video = streamOf("flv-h264-brokensps.flv", 0);
+      var video = streamOf("flv-h264-sei-without-trailing-bits.flv", 0);
 
       assertThat(video.getDynamicRange().hasDolbyVisionAbsent()).isTrue();
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
