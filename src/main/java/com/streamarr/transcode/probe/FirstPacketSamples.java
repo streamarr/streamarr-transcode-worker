@@ -48,42 +48,34 @@ final class FirstPacketSamples {
   }
 
   /**
-   * The sample's NAL units, each without its emulation prevention bytes. A length that runs past
-   * the sample, or bytes too few for a length, end the sample early, and a start code inside a
-   * length's bytes leaves the sample incomplete. FFmpeg rejects a whole sample that holds a length
-   * of 0, so such a sample is incomplete and holds no NAL unit that a decoder sees. FFmpeg's
-   * ff_h2645_packet_split stops when fewer than {@link #FEWEST_SPLIT_BYTES} bytes remain, so the
-   * reader skips the NAL unit that such bytes hold.
+   * The sample's NAL units, each without its emulation prevention bytes. FFmpeg's
+   * ff_h2645_packet_split reads a length only while at least {@link #FEWEST_SPLIT_BYTES} bytes
+   * remain, so the reader drops the 1 to 3 bytes that can end a sample, whatever they hold. A
+   * length that it reads of 0, or one that runs past the sample, makes FFmpeg reject the whole
+   * sample, so such a sample is incomplete and holds no NAL unit that a decoder sees. A start code
+   * inside a length's bytes leaves the sample incomplete.
    */
   private static NalUnits lengthPrefixed(byte[] sample, int lengthSize) {
     var units = new ArrayList<byte[]>();
     var isEveryRegionComplete = true;
     var position = 0;
-    while (position + lengthSize <= sample.length) {
-      var isSplit = sample.length - position >= FEWEST_SPLIT_BYTES;
+    while (sample.length - position >= FEWEST_SPLIT_BYTES) {
       var length = 0;
       for (var index = 0; index < lengthSize; index++) {
         length = (length << 8) | Byte.toUnsignedInt(sample[position + index]);
       }
 
       position += lengthSize;
-      if (length == 0) {
+      if (length <= 0 || length > sample.length - position) {
         return new NalUnits(List.of(), false);
       }
 
-      if (length < 0 || length > sample.length - position) {
-        return new NalUnits(units, false);
-      }
-
       var region = DecoderConfiguration.lengthPrefixedRegion(sample, position, position + length);
-      if (isSplit) {
-        units.addAll(region.units());
-      }
-
+      units.addAll(region.units());
       isEveryRegionComplete &= region.complete();
       position += length;
     }
 
-    return new NalUnits(units, isEveryRegionComplete && position == sample.length);
+    return new NalUnits(units, isEveryRegionComplete);
   }
 }

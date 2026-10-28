@@ -818,14 +818,14 @@ class FfprobeExecutorFirstFramesTest {
     }
 
     @Test
-    @DisplayName("Should report the RPU observed when a sample's length runs past its end")
-    void shouldReportTheRpuObservedWhenASamplesLengthRunsPastItsEnd() {
-      var present =
-          h264(packets(lengthPrefixed(IDR_SLICE, RPU) + " 00 00 01 00 41"))
-              .getDynamicRange()
-              .getDolbyVisionPresent();
+    @DisplayName(
+        "Should take no RPU from a sample whose length runs past its end, which makes FFmpeg reject"
+            + " the whole sample")
+    void shouldTakeNoRpuFromASampleWhoseLengthRunsPastItsEndWhichMakesFfmpegRejectTheWholeSample() {
+      var dynamicRange =
+          h264(packets(lengthPrefixed(IDR_SLICE, RPU) + " 00 00 01 00 41")).getDynamicRange();
 
-      assertThat(present.getObservedRpu()).isEqualTo(Presence.PRESENCE_PRESENT);
+      assertThat(dynamicRange.getDolbyVisionCase()).isEqualTo(DolbyVisionCase.DOLBYVISION_NOT_SET);
     }
 
     @Test

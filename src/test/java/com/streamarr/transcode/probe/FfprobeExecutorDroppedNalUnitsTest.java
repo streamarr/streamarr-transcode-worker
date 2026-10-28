@@ -120,16 +120,34 @@ class FfprobeExecutorDroppedNalUnitsTest {
       assertThat(video.getDynamicRange().hasDolbyVisionAbsent()).as(description).isTrue();
     }
 
-    @Test
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+      "a length and a NAL unit of 2 bytes, 02 46 01",
+      "a length of 0, 00 46",
+      "a length that runs past the end, ff 46 01"
+    })
     @DisplayName(
-        "Should place each RPU after its own picture when the last NAL unit of a sample takes fewer"
-            + " than 4 bytes with its length")
-    void
-        shouldPlaceEachRpuAfterItsOwnPictureWhenTheLastNalUnitOfASampleTakesFewerThan4BytesWithItsLength() {
-      // FFmpeg's splitter stops when fewer than 4 bytes remain, so it never reads the 2-byte unit.
-      var sample = oneByteLengths(IDR_SLICE, RPU, "46 01");
+        "Should place each RPU after its own picture when 1 to 3 bytes end a sample, which FFmpeg's"
+            + " splitter drops whatever they hold")
+    void shouldPlaceEachRpuAfterItsOwnPictureWhen1To3BytesEndASample(
+        String description, String tail) {
+      var sample = oneByteLengths(IDR_SLICE, RPU) + " " + tail;
 
       var present = placed(ONE_BYTE_LENGTHS_RECORD, sample, sample, sample);
+
+      assertThat(present.getRpuPlacement())
+          .as(description)
+          .isEqualTo(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_AFTER_OWN_PICTURE);
+    }
+
+    @Test
+    @DisplayName(
+        "Should place each RPU after its own picture when a sample ends with bytes too few for a"
+            + " 4-byte length")
+    void shouldPlaceEachRpuAfterItsOwnPictureWhenASampleEndsWithBytesTooFewForA4ByteLength() {
+      var sample = lengthPrefixed(IDR_SLICE, RPU) + " 00 00 00";
+
+      var present = placed(HEVC_RECORD, sample, sample, sample);
 
       assertThat(present.getRpuPlacement())
           .isEqualTo(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_AFTER_OWN_PICTURE);
@@ -152,18 +170,26 @@ class FfprobeExecutorDroppedNalUnitsTest {
           .isEqualTo(DolbyVisionCase.DOLBYVISION_NOT_SET);
     }
 
-    @Test
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+      "a length of 0, 00 00 00 00 00 00 00 03 46 01 50",
+      "a length that runs past the end, 00 00 00 04 46 01 50",
+      "a 4-byte length with no byte after it, 00 00 00 01"
+    })
     @DisplayName(
-        "Should take no RPU from a sample that FFmpeg rejects for a length of 0 after the RPU")
-    void shouldTakeNoRpuFromASampleThatFfmpegRejectsForALengthOf0AfterTheRpu() {
+        "Should take no RPU from a sample that FFmpeg rejects for a length that it reads after the"
+            + " RPU")
+    void shouldTakeNoRpuFromASampleThatFfmpegRejectsForALengthThatItReadsAfterTheRpu(
+        String description, String rejecting) {
       var video =
           probed(
               HEVC_RECORD,
               lengthPrefixed(IDR_SLICE),
-              lengthPrefixed(SLICE, RPU) + " 00 00 00 00 " + lengthPrefixed(AUD),
+              lengthPrefixed(SLICE, RPU) + " " + rejecting,
               lengthPrefixed(SLICE));
 
       assertThat(video.getDynamicRange().getDolbyVisionCase())
+          .as(description)
           .isEqualTo(DolbyVisionCase.DOLBYVISION_NOT_SET);
     }
 
