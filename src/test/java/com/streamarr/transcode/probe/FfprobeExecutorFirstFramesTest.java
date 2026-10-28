@@ -1160,9 +1160,9 @@ class FfprobeExecutorFirstFramesTest {
 
     @Test
     @DisplayName(
-        "Should place each RPU ahead of its own picture when the first picture's sample starts with"
-            + " an RPU")
-    void shouldPlaceEachRpuAheadOfItsOwnPictureWhenTheFirstPicturesSampleStartsWithAnRpu() {
+        "Should leave the RPU placement unspecified when the first picture's sample starts with an"
+            + " RPU")
+    void shouldLeaveTheRpuPlacementUnspecifiedWhenTheFirstPicturesSampleStartsWithAnRpu() {
       var present =
           placed(
               lengthPrefixed(AUD, PROFILE_5_RPU_UNIT, IDR_SLICE),
@@ -1171,7 +1171,7 @@ class FfprobeExecutorFirstFramesTest {
 
       assertThat(present.getObservedRpu()).isEqualTo(Presence.PRESENCE_PRESENT);
       assertThat(present.getRpuPlacement())
-          .isEqualTo(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_BEFORE_OWN_PICTURE);
+          .isEqualTo(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED);
     }
 
     @Test
@@ -1498,9 +1498,9 @@ class FfprobeExecutorFirstFramesTest {
 
     @Test
     @DisplayName(
-        "Should place a profile 5 sample's RPUs ahead of their own pictures when each starts its"
+        "Should leave a profile 5 sample's RPU placement unspecified when each RPU starts its own"
             + " picture's sample")
-    void shouldPlaceAProfile5SamplesRpusAheadOfTheirOwnPicturesWhenEachStartsItsPicturesSample() {
+    void shouldLeaveAProfile5SamplesRpuPlacementUnspecifiedWhenEachRpuStartsItsOwnPicturesSample() {
       // move-rpus-ahead.py moved each RPU of the FATE sample ahead of its own picture's first
       // slice.
       var present =
@@ -1510,7 +1510,7 @@ class FfprobeExecutorFirstFramesTest {
 
       assertThat(present.getObservedRpu()).isEqualTo(Presence.PRESENCE_PRESENT);
       assertThat(present.getRpuPlacement())
-          .isEqualTo(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_BEFORE_OWN_PICTURE);
+          .isEqualTo(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED);
       assertThat(present.getFirstRpuHeader().getVdrRpuProfile()).isZero();
     }
 

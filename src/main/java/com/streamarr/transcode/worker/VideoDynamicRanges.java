@@ -71,8 +71,6 @@ final class VideoDynamicRanges {
           DolbyVisionRpuPlacement.AFTER_OWN_PICTURE;
       case DOLBY_VISION_RPU_PLACEMENT_BEFORE_NEXT_PICTURE ->
           DolbyVisionRpuPlacement.BEFORE_NEXT_PICTURE;
-      case DOLBY_VISION_RPU_PLACEMENT_BEFORE_OWN_PICTURE ->
-          DolbyVisionRpuPlacement.BEFORE_OWN_PICTURE;
       case UNRECOGNIZED -> throw new InvalidJobSpecificationException("Unknown RPU placement");
     };
   }

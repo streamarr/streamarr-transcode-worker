@@ -614,7 +614,6 @@ class TranscodeWorkerJobAttemptTest {
       value = DolbyVisionRpuPlacement.class,
       names = {
         "DOLBY_VISION_RPU_PLACEMENT_BEFORE_NEXT_PICTURE",
-        "DOLBY_VISION_RPU_PLACEMENT_BEFORE_OWN_PICTURE",
         "DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED"
       })
   @DisplayName(

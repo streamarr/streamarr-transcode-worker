@@ -1114,7 +1114,7 @@ class WorkerMediaSmokeTest {
   }
 
   static Stream<Arguments> rpuLayoutsAudioCodecsAndStarts() {
-    return Stream.of(RpuLayout.AHEAD_OF_THE_NEXT_PICTURE, RpuLayout.AHEAD_OF_THEIR_PICTURE)
+    return Stream.of(RpuLayout.AHEAD_OF_THE_NEXT_PICTURE, RpuLayout.AHEAD_OF_EVERY_PICTURE)
         .flatMap(
             layout ->
                 Stream.of("aac", "ac3", "eac3", "flac", "alac", "libopus")
@@ -1209,7 +1209,7 @@ class WorkerMediaSmokeTest {
     BEHIND_THEIR_PICTURE(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_AFTER_OWN_PICTURE),
     AHEAD_OF_THE_NEXT_PICTURE(
         DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_BEFORE_NEXT_PICTURE),
-    AHEAD_OF_THEIR_PICTURE(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_BEFORE_OWN_PICTURE);
+    AHEAD_OF_EVERY_PICTURE(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED);
 
     private final DolbyVisionRpuPlacement placement;
 
@@ -1224,9 +1224,10 @@ class WorkerMediaSmokeTest {
 
   // A 10-bit HEVC source with audio of the codec that holds a stand-in Dolby Vision RPU for each
   // picture: after its picture, or behind the access unit delimiter of the next picture, as
-  // mkvmerge wrote it before version 57, or of its own picture. Its stand-in RPUs carry no
-  // reshaping, so the decoder applies
-  // none whichever layout it reads, and both sources decode to the same pictures.
+  // mkvmerge wrote it before version 57, or behind the delimiter of every picture, as that layout
+  // reads once its start is cut away and as a layout whose RPUs start their own pictures would
+  // read. Its stand-in RPUs carry no reshaping, so the decoder applies none whichever layout it
+  // reads, and both sources decode to the same pictures.
   private static synchronized Path rpuLayoutSource(RpuLayout layout, String audioCodec)
       throws Exception {
     var source =
@@ -1297,7 +1298,7 @@ class WorkerMediaSmokeTest {
 
       var delimiterEnd = accessUnitDelimiterEnd(accessUnit);
       withRpus.write(accessUnit, 0, delimiterEnd);
-      if (layout == RpuLayout.AHEAD_OF_THEIR_PICTURE || index > 0) {
+      if (layout == RpuLayout.AHEAD_OF_EVERY_PICTURE || index > 0) {
         withRpus.writeBytes(STAND_IN_RPU);
       }
 

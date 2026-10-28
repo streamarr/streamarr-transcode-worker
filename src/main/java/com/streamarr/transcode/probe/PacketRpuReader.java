@@ -59,8 +59,10 @@ final class PacketRpuReader {
 
   /**
    * The placement whose rule the samples meet, in order; unspecified when a sample holds more than
-   * one RPU, a sample ahead of the first picture's sample holds one, or the samples meet no rule.
-   * At least one sample holds an RPU.
+   * one RPU, a sample ahead of the first picture's sample holds one, the samples meet no rule, or
+   * every RPU starts its sample and the first picture's sample holds one: the first packets cannot
+   * tell a file whose RPUs start the next picture's sample, with its start cut away, from one whose
+   * RPUs start their own picture's sample. At least one sample holds an RPU.
    */
   private static DolbyVisionRpuPlacement placement(List<Layout> layouts) {
     var firstPicture = layouts.stream().filter(Layout::hasPicture).findFirst();
@@ -77,13 +79,11 @@ final class PacketRpuReader {
       return DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_AFTER_OWN_PICTURE;
     }
 
-    if (!withRpus.stream().allMatch(Layout::startsWithRpu)) {
+    if (!withRpus.stream().allMatch(Layout::startsWithRpu) || firstPicture.get().hasRpu()) {
       return DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED;
     }
 
-    return firstPicture.get().hasRpu()
-        ? DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_BEFORE_OWN_PICTURE
-        : DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_BEFORE_NEXT_PICTURE;
+    return DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_BEFORE_NEXT_PICTURE;
   }
 
   private static Optional<DolbyVisionRpuHeader> header(byte[] rpu, NalSyntax syntax) {
