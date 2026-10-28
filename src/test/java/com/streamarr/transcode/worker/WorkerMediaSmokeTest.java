@@ -1174,6 +1174,14 @@ class WorkerMediaSmokeTest {
     var source = seekableHevcSource(container);
     var job = seekableSourceJob(source, mode);
     job.getExecutionBuilder().setStartSequenceNumber(startSequenceNumber);
+
+    assertEncodeOfTheCopyUploadsWhatOneFfmpegEncodes(source, job);
+  }
+
+  // Runs the profile 5 job once as one FFmpeg, whose source's RPUs follow their pictures, and once
+  // as the encode of the source's copy, whose RPUs may start samples, and compares their packets.
+  private MediaUploads assertEncodeOfTheCopyUploadsWhatOneFfmpegEncodes(
+      Path source, VariantJob.Builder job) throws Exception {
     withProfile5Source(job, DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_AFTER_OWN_PICTURE);
     var oneFfmpeg = execute(engine(softwareCapabilities()), source.getParent(), job.build());
     withProfile5Source(job, DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_BEFORE_NEXT_PICTURE);
@@ -1194,6 +1202,8 @@ class WorkerMediaSmokeTest {
           .as(name)
           .containsExactlyElementsOf(packetsOf(oneFfmpeg, name));
     }
+
+    return fromTheCopy;
   }
 
   static Stream<Arguments> sourceContainersEncodingModesAndStarts() {
