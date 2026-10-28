@@ -249,6 +249,26 @@ class FragmentedMp4RpuMoverTest {
 
   @Test
   @DisplayName(
+      "Should keep an RPU with its picture when a start code inside a dropped NAL unit's length"
+          + " begins the picture's slice")
+  void
+      shouldKeepAnRpuWithItsPictureWhenAStartCodeInsideADroppedNalUnitsLengthBeginsThePicturesSlice()
+          throws IOException {
+    // FFmpeg drops the NAL unit whose forbidden_zero_bit is 1 and decodes the slice behind it.
+    var embedding = unit("82 01 AF 01 00 00 01 02 01 AF 01");
+    var copy =
+        stream(
+            fragmentBuilder().video(0, sample(slice(0), rpu(0))).build(),
+            fragmentBuilder().video(1001, sample(embedding, rpu(1))).build());
+
+    var moved = move(copy);
+
+    assertThat(videoSamplesOf(moved))
+        .containsExactly(hex(slice(0), rpu(0)), hex(embedding, rpu(1)));
+  }
+
+  @Test
+  @DisplayName(
       "Should pass the copy unchanged when the last NAL unit of a sample takes fewer than 4 bytes"
           + " with its length, which FFmpeg's splitter never reads")
   void
