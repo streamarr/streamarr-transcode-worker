@@ -1618,6 +1618,19 @@ class FfmpegCommandBuilderTest {
 
   @Test
   @DisplayName(
+      "Should move each RPU that starts a sample behind the previous picture when the probe did not"
+          + " observe where a Dolby Vision profile 5 source places its RPUs")
+  void
+      shouldMoveEachRpuThatStartsASampleBehindThePreviousPictureWhenTheProbeDidNotObserveWhereADolbyVisionProfile5SourcePlacesItsRpus() {
+    var request = request(encoding(profile5Encode(DolbyVisionRpuPlacement.UNSPECIFIED))).build();
+
+    var pipe = rpuMovingPipe(builder.buildPipeline(job(request, "libx264")));
+
+    assertThat(pipe.rpuMove()).isEqualTo(RpuMove.BEHIND_PREVIOUS_PICTURE);
+  }
+
+  @Test
+  @DisplayName(
       "Should seek the copy, encode its audio there, and trim the encode's video at the seek when a"
           + " replacement attempt encodes a profile 5 source whose RPU starts its sample")
   void
@@ -1709,8 +1722,6 @@ class FfmpegCommandBuilderTest {
         Arguments.of(
             "profile 5, every RPU after its picture",
             profile5(DolbyVisionRpuPlacement.AFTER_OWN_PICTURE)),
-        Arguments.of(
-            "profile 5, layout unspecified", profile5(DolbyVisionRpuPlacement.UNSPECIFIED)),
         Arguments.of(
             "profile 8.1, RPU starts the sample",
             new VideoDynamicRange(

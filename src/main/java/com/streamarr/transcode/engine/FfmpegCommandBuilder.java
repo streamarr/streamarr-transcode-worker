@@ -141,11 +141,15 @@ public class FfmpegCommandBuilder {
     return Optional.of(present);
   }
 
+  // A probe that did not observe the placement leaves the source's RPUs where they may start
+  // samples. Treated as the shifted layout, which mkvmerge wrote before version 57, a source whose
+  // RPUs follow their pictures passes unchanged; the own-first layout, which no known muxer writes,
+  // would give each picture the next one's RPU.
   private static Optional<RpuMove> rpuMoveFor(VideoDynamicRange.DolbyVisionRpuPlacement placement) {
     return switch (placement) {
-      case BEFORE_NEXT_PICTURE -> Optional.of(RpuMove.BEHIND_PREVIOUS_PICTURE);
+      case BEFORE_NEXT_PICTURE, UNSPECIFIED -> Optional.of(RpuMove.BEHIND_PREVIOUS_PICTURE);
       case BEFORE_OWN_PICTURE -> Optional.of(RpuMove.BEHIND_OWN_PICTURE);
-      case UNSPECIFIED, AFTER_OWN_PICTURE -> Optional.empty();
+      case AFTER_OWN_PICTURE -> Optional.empty();
     };
   }
 

@@ -614,13 +614,14 @@ class TranscodeWorkerJobAttemptTest {
       value = DolbyVisionRpuPlacement.class,
       names = {
         "DOLBY_VISION_RPU_PLACEMENT_BEFORE_NEXT_PICTURE",
-        "DOLBY_VISION_RPU_PLACEMENT_BEFORE_OWN_PICTURE"
+        "DOLBY_VISION_RPU_PLACEMENT_BEFORE_OWN_PICTURE",
+        "DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED"
       })
   @DisplayName(
       "Should launch an FFmpeg that copies the source and an FFmpeg that encodes the copy when the"
-          + " encode's Dolby Vision profile 5 source starts samples with RPUs")
+          + " encode's Dolby Vision profile 5 source may start samples with RPUs")
   void
-      shouldLaunchAnFfmpegThatCopiesTheSourceAndAnFfmpegThatEncodesTheCopyWhenTheEncodesDolbyVisionProfile5SourceStartsSamplesWithRpus(
+      shouldLaunchAnFfmpegThatCopiesTheSourceAndAnFfmpegThatEncodesTheCopyWhenTheEncodesDolbyVisionProfile5SourceMayStartSamplesWithRpus(
           DolbyVisionRpuPlacement placement) throws Exception {
     var launcher = ScriptedProcessLauncher.running();
     var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
@@ -652,18 +653,13 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
-  @ParameterizedTest(name = "{0}")
-  @EnumSource(
-      value = DolbyVisionRpuPlacement.class,
-      names = {
-        "DOLBY_VISION_RPU_PLACEMENT_AFTER_OWN_PICTURE",
-        "DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED"
-      })
+  @Test
   @DisplayName(
-      "Should launch one FFmpeg when the encode's Dolby Vision profile 5 source does not start"
-          + " samples with RPUs")
-  void shouldLaunchOneFfmpegWhenTheEncodesDolbyVisionProfile5SourceDoesNotStartSamplesWithRpus(
-      DolbyVisionRpuPlacement placement) throws Exception {
+      "Should launch one FFmpeg when every RPU of the encode's Dolby Vision profile 5 source follows"
+          + " its picture")
+  void shouldLaunchOneFfmpegWhenEveryRpuOfTheEncodesDolbyVisionProfile5SourceFollowsItsPicture()
+      throws Exception {
+    var placement = DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_AFTER_OWN_PICTURE;
     var launcher = ScriptedProcessLauncher.running();
     var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
     job.getDecisionBuilder()
