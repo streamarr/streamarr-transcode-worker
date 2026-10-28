@@ -273,6 +273,30 @@ class ProducerRpuMovingPipeTest {
     assertThat(failure.detail()).contains("copies the source", "exit code 1");
   }
 
+  @Test
+  @DisplayName(
+      "Should fail the attempt as an unexpected error, and end the copying FFmpeg, when passing the"
+          + " copy on throws unexpectedly")
+  void
+      shouldFailTheAttemptAsAnUnexpectedErrorAndEndTheCopyingFfmpegWhenPassingTheCopyOnThrowsUnexpectedly() {
+    var copy =
+        ScriptedProcess.builder()
+            .output(COPIED_SOURCE)
+            .failReadAfter(initializationSegment().length)
+            .failReadWith(new IllegalStateException("defect in the copy's transfer"))
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    var encode = encodingFfmpeg().build();
+
+    var producer = producerOf(copy, encode).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.UNEXPECTED_ERROR);
+    assertThat(failure.detail()).contains("defect in the copy's transfer");
+    assertThat(copy.wasTerminated()).isTrue();
+    assertThat(encode.hasInputEnded()).isTrue();
+  }
+
   private static ScriptedProcess.ScriptedProcessBuilder encodingFfmpeg() {
     return ScriptedProcess.builder()
         .output(bytesOf(ENCODED_RECORDING))

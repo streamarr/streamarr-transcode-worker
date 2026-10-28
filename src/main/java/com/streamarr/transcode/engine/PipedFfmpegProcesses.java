@@ -9,6 +9,7 @@ import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * A job attempt's FFmpeg that runs as two processes: one copies the source into fragmented MP4, and
@@ -17,6 +18,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * FFmpeg to quit, and the encoding FFmpeg then finishes at the end of its input; termination and
  * destruction end both.
  */
+@Slf4j
 final class PipedFfmpegProcesses implements FfmpegProcess {
 
   private static final String COPYING_FFMPEG = "The FFmpeg that copies the source";
@@ -30,6 +32,8 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
   private final AtomicReference<Optional<IOException>> transferFailure =
       new AtomicReference<>(Optional.empty());
   private final AtomicReference<Optional<FragmentedMp4Exception>> refusedCopy =
+      new AtomicReference<>(Optional.empty());
+  private final AtomicReference<Optional<Throwable>> unexpectedTransferFailure =
       new AtomicReference<>(Optional.empty());
   private final Thread transfer;
 
@@ -73,6 +77,10 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
       copy.destroy();
     } catch (FragmentedMp4Exception e) {
       refusedCopy.set(Optional.of(e));
+      copy.destroy();
+    } catch (RuntimeException | Error e) {
+      log.error("The transfer of the copy of the source failed unexpectedly", e);
+      unexpectedTransferFailure.set(Optional.of(e));
       copy.destroy();
     } finally {
       endInput(encoded);
@@ -162,14 +170,20 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
   }
 
   /**
-   * The encoding FFmpeg's exit decides first, as a single FFmpeg's would. A copy that the mover
-   * refused, a copy that did not reach the encoding FFmpeg whole, or a copying FFmpeg that exited
-   * with an error, fails an attempt whose encoding FFmpeg exited cleanly, since its output then
-   * lacks the rest of the source. The copying FFmpeg's error explains a copy that ended inside a
-   * unit, so it decides before that end.
+   * A transfer that failed unexpectedly decides first, since the encoding FFmpeg's exit then only
+   * follows the cut in its input. The encoding FFmpeg's exit decides next, as a single FFmpeg's
+   * would. A copy that the mover refused, a copy that did not reach the encoding FFmpeg whole, or a
+   * copying FFmpeg that exited with an error, fails an attempt whose encoding FFmpeg exited
+   * cleanly, since its output then lacks the rest of the source. The copying FFmpeg's error
+   * explains a copy that ended inside a unit, so it decides before that end.
    */
   @Override
   public AttemptOutcome outcomeAtExit(AttemptOutcome outcomeOnCleanExit) {
+    var unexpected = unexpectedTransferFailure.get();
+    if (unexpected.isPresent()) {
+      return new Failed(ProducerFailure.UNEXPECTED_ERROR, unexpected.orElseThrow().toString());
+    }
+
     var encodeExitCode = encode.onExit().join().exitValue();
     if (encodeExitCode != 0) {
       return new Failed(
