@@ -299,6 +299,37 @@ class FragmentedMp4RpuMoverTest {
   }
 
   @Test
+  @DisplayName(
+      "Should fail as exceeding the segment cap when a fragment declares more samples than the"
+          + " mover's fragment budget holds")
+  void
+      shouldFailAsExceedingTheSegmentCapWhenAFragmentDeclaresMoreSamplesThanTheMoversFragmentBudgetHolds() {
+    var samples = FragmentedMp4RpuMover.MAXIMUM_FRAGMENT_BYTES / Fragment.HEAP_BYTES_PER_SAMPLE + 1;
+    var moof = moofOfEmptySamples(samples, 0);
+    moof = moofOfEmptySamples(samples, moof.length + 8);
+    var copy = concat(initializationSegment(), moof, box("mdat", new byte[0]));
+
+    assertThatExceptionOfType(FragmentedMp4Exception.class)
+        .isThrownBy(() -> move(copy, RpuMove.BEHIND_PREVIOUS_PICTURE))
+        .extracting(FragmentedMp4Exception::getReason)
+        .isEqualTo(Reason.EXCEEDS_SEGMENT_CAP);
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep a sample's bytes when it holds more NAL units than an HEVC picture's sample can")
+  void shouldKeepASamplesBytesWhenItHoldsMoreNalUnitsThanAnHevcPicturesSampleCan()
+      throws IOException {
+    var units = new byte[HevcNalUnit.MAXIMUM_NAL_UNITS_PER_SAMPLE + 1][];
+    units[0] = rpu(0);
+    Arrays.fill(units, 1, units.length - 1, aud());
+    units[units.length - 1] = slice(0);
+    var copy = stream(fragmentBuilder().video(0, sample(units)).build());
+
+    assertThat(move(copy, RpuMove.BEHIND_OWN_PICTURE)).isEqualTo(copy);
+  }
+
+  @Test
   @DisplayName("Should fail as the end of the file in a box body when the copy ends inside an mdat")
   void shouldFailAsTheEndOfTheFileInABoxBodyWhenTheCopyEndsInsideAnMdat() {
     var copy = stream(fragmentBuilder().video(0, sample(slice(0))).build());
@@ -345,6 +376,24 @@ class FragmentedMp4RpuMoverTest {
     trafChildren[1] = fullBox("tfdt", IsoBoxes.VERSION_1, IsoBoxes.u64(0));
     Arrays.fill(trafChildren, 2, trafChildren.length, run);
     return box("moof", fullBox("mfhd", 0, u32(1)), box("traf", trafChildren));
+  }
+
+  private static byte[] moofOfEmptySamples(long samples, int dataOffset) {
+    return box(
+        "moof",
+        fullBox("mfhd", 0, u32(1)),
+        box(
+            "traf",
+            fullBox(
+                "tfhd",
+                IsoBoxes.TFHD_DEFAULT_BASE_IS_MOOF
+                    | IsoBoxes.TFHD_DEFAULT_SAMPLE_DURATION
+                    | IsoBoxes.TFHD_DEFAULT_SAMPLE_SIZE,
+                u32(IsoBoxes.VIDEO_TRACK_ID),
+                u32(HevcCopies.VIDEO_SAMPLE_DURATION),
+                u32(0)),
+            fullBox("tfdt", IsoBoxes.VERSION_1, IsoBoxes.u64(0)),
+            fullBox("trun", IsoBoxes.TRUN_DATA_OFFSET, u32(samples), u32(dataOffset))));
   }
 
   private static byte[] stream(byte[]... fragments) {

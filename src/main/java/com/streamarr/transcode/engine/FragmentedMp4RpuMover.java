@@ -53,11 +53,12 @@ final class FragmentedMp4RpuMover {
   private final RpuMove move;
   private final Deque<HeldFragment> held = new ArrayDeque<>();
   private long heldBytes;
+  private long readBytes;
   private int lengthSize;
   private Optional<VideoSample> previousPicture = Optional.empty();
 
   private FragmentedMp4RpuMover(InputStream input, OutputStream output, RpuMove move) {
-    this.reader = new FragmentedMp4Reader(input, MAXIMUM_FRAGMENT_BYTES, _ -> true);
+    this.reader = new FragmentedMp4Reader(input, MAXIMUM_FRAGMENT_BYTES, this::admit);
     this.output = output;
     this.move = move;
   }
@@ -76,6 +77,7 @@ final class FragmentedMp4RpuMover {
 
   private void copyToEnd() throws IOException {
     for (var unit = reader.next(); unit.isPresent(); unit = reader.next()) {
+      readBytes = 0;
       switch (unit.orElseThrow()) {
         case InitializationSegment segment -> pass(segment);
         case Fragment fragment -> accept(fragment);
@@ -83,6 +85,20 @@ final class FragmentedMp4RpuMover {
     }
 
     releaseAll();
+  }
+
+  // The unit being read, its boxes and the heap of its samples, fits one fragment's cap.
+  private boolean admit(long bytes) {
+    readBytes = Math.addExact(readBytes, bytes);
+    if (readBytes > MAXIMUM_FRAGMENT_BYTES) {
+      throw new FragmentedMp4Exception(
+          Reason.EXCEEDS_SEGMENT_CAP,
+          "a unit of the copy of the source holds more than "
+              + MAXIMUM_FRAGMENT_BYTES
+              + " bytes with the heap of its samples");
+    }
+
+    return true;
   }
 
   private void pass(InitializationSegment segment) throws IOException {
@@ -122,7 +138,7 @@ final class FragmentedMp4RpuMover {
     }
 
     held.addLast(heldFragment);
-    heldBytes += fragment.byteLength();
+    heldBytes += fragment.heldBytes();
     if (heldBytes > MAXIMUM_HELD_BYTES) {
       previousPicture = Optional.empty();
     }
@@ -254,7 +270,7 @@ final class FragmentedMp4RpuMover {
   }
 
   private void write(HeldFragment fragment) throws IOException {
-    heldBytes -= fragment.fragment.byteLength();
+    heldBytes -= fragment.fragment.heldBytes();
     if (!fragment.changed()) {
       for (var box : fragment.fragment.boxes()) {
         output.write(box);

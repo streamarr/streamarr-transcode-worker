@@ -14,6 +14,12 @@ import lombok.NonNull;
  */
 record HevcNalUnit(@NonNull ByteBuffer bytes, int type, boolean rpu) {
 
+  /**
+   * The most NAL units of a sample that {@link #delimit} returns: well above the 600 slice segments
+   * of a picture at HEVC's highest level (ITU-T H.265 table A.8), with its parameter sets and SEI.
+   */
+  static final int MAXIMUM_NAL_UNITS_PER_SAMPLE = 4096;
+
   private static final int NAL_UNIT_HEADER_BYTES = 2;
   // NAL unit types below this one hold picture slices (ITU-T H.265 table 7-1).
   private static final int FIRST_NON_PICTURE_TYPE = 32;
@@ -34,8 +40,9 @@ record HevcNalUnit(@NonNull ByteBuffer bytes, int type, boolean rpu) {
   }
 
   /**
-   * The sample's NAL units in order; empty when a length runs past the end of the sample, or
-   * declares fewer bytes than a NAL unit header.
+   * The sample's NAL units in order; empty when a length runs past the end of the sample, declares
+   * fewer bytes than a NAL unit header, or the sample holds more than {@link
+   * #MAXIMUM_NAL_UNITS_PER_SAMPLE} NAL units.
    *
    * @param lengthSize the bytes of each length prefix: 1, 2 or 4
    */
@@ -43,7 +50,7 @@ record HevcNalUnit(@NonNull ByteBuffer bytes, int type, boolean rpu) {
     var units = new ArrayList<HevcNalUnit>();
     var position = sample.position();
     while (position < sample.limit()) {
-      if (sample.limit() - position < lengthSize) {
+      if (sample.limit() - position < lengthSize || units.size() == MAXIMUM_NAL_UNITS_PER_SAMPLE) {
         return Optional.empty();
       }
 
