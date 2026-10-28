@@ -98,7 +98,7 @@ public class FfmpegCommandBuilder {
 
   public FfmpegPipeline buildPipeline(TranscodeJob job) {
     if (needsRpusMovedBehindTheirPictures(job)) {
-      return new FfmpegPipeline.TransportStreamPipe(
+      return new FfmpegPipeline.RpuMovingPipe(
           buildSourceCopyCommand(job), buildCommand(job, EncoderInput.COPY_OF_THE_SOURCE));
     }
 

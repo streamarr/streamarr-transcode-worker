@@ -27,10 +27,10 @@ public sealed interface FfmpegPipeline {
    * worker has moved each Dolby Vision RPU that starts a sample to the end of the picture it
    * belongs to.
    */
-  record TransportStreamPipe(@NonNull List<String> copyCommand, @NonNull List<String> encodeCommand)
+  record RpuMovingPipe(@NonNull List<String> copyCommand, @NonNull List<String> encodeCommand)
       implements FfmpegPipeline {
 
-    public TransportStreamPipe {
+    public RpuMovingPipe {
       copyCommand = List.copyOf(copyCommand);
       encodeCommand = List.copyOf(encodeCommand);
     }

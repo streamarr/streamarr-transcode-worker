@@ -159,7 +159,7 @@ class ProcessBuilderLauncherTest {
     var producer =
         producerRunning("unused", "unused")
             .pipeline(
-                new FfmpegPipeline.TransportStreamPipe(
+                new FfmpegPipeline.RpuMovingPipe(
                     List.of("bash", "-c", "exec cat /dev/zero"),
                     List.of("bash", "-c", "trap '' TERM; exec sleep 600")))
             .stallTimeout(Duration.ofMillis(300))

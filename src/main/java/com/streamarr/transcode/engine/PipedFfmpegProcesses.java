@@ -44,7 +44,7 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
    * encoding one cannot be started.
    */
   static PipedFfmpegProcesses start(
-      ProcessStarter starter, FfmpegPipeline.TransportStreamPipe pipe, Duration gracePeriod) {
+      ProcessStarter starter, FfmpegPipeline.RpuMovingPipe pipe, Duration gracePeriod) {
     var copy = starter.start(pipe.copyCommand());
     try {
       return new PipedFfmpegProcesses(copy, starter.start(pipe.encodeCommand()), gracePeriod);

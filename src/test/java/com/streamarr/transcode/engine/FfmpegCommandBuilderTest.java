@@ -1484,7 +1484,7 @@ class FfmpegCommandBuilderTest {
 
     assertThat(pipeline)
         .isEqualTo(
-            new FfmpegPipeline.TransportStreamPipe(
+            new FfmpegPipeline.RpuMovingPipe(
                 List.of(
                     "ffmpeg",
                     "-y",
@@ -1598,7 +1598,7 @@ class FfmpegCommandBuilderTest {
             .startSequenceNumber(3)
             .build();
 
-    var pipe = transportStreamPipe(builder.buildPipeline(job(request, "libx264")));
+    var pipe = rpuMovingPipe(builder.buildPipeline(job(request, "libx264")));
 
     assertThat(pipe.copyCommand())
         .containsSequence("ffmpeg", "-y", "-ss", "12", "-i", "/media/movie.mkv", "-map", "0:0")
@@ -1623,7 +1623,7 @@ class FfmpegCommandBuilderTest {
             .build();
     var request = request(decision).startSequenceNumber(3).build();
 
-    var pipe = transportStreamPipe(builder.buildPipeline(job(request, "libx264")));
+    var pipe = rpuMovingPipe(builder.buildPipeline(job(request, "libx264")));
 
     assertThat(pipe.copyCommand()).containsSequence("-c", "copy", "-muxdelay");
     assertThat(pipe.encodeCommand())
@@ -1644,8 +1644,7 @@ class FfmpegCommandBuilderTest {
             .audioDecision(NO_AUDIO)
             .build();
 
-    var pipe =
-        transportStreamPipe(builder.buildPipeline(job(request(decision).build(), "libx264")));
+    var pipe = rpuMovingPipe(builder.buildPipeline(job(request(decision).build(), "libx264")));
 
     assertThat(pipe.copyCommand()).doesNotContain("0:a:0");
     assertThat(pipe.encodeCommand()).doesNotContain("0:a:0", "-c:a", "-af");
@@ -1762,9 +1761,9 @@ class FfmpegCommandBuilderTest {
         Optional.empty(), Presence.PRESENT, rpuPlacement);
   }
 
-  private static FfmpegPipeline.TransportStreamPipe transportStreamPipe(FfmpegPipeline pipeline) {
+  private static FfmpegPipeline.RpuMovingPipe rpuMovingPipe(FfmpegPipeline pipeline) {
     return assertThat(pipeline)
-        .asInstanceOf(InstanceOfAssertFactories.type(FfmpegPipeline.TransportStreamPipe.class))
+        .asInstanceOf(InstanceOfAssertFactories.type(FfmpegPipeline.RpuMovingPipe.class))
         .actual();
   }
 }

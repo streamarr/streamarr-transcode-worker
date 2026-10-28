@@ -33,7 +33,7 @@ sealed interface FfmpegProcess permits SingleFfmpegProcess, PipedFfmpegProcesses
     return switch (pipeline) {
       case FfmpegPipeline.SingleProcess(var command) ->
           new SingleFfmpegProcess(starter.start(command), gracePeriod);
-      case FfmpegPipeline.TransportStreamPipe pipe ->
+      case FfmpegPipeline.RpuMovingPipe pipe ->
           PipedFfmpegProcesses.start(starter, pipe, gracePeriod);
     };
   }
