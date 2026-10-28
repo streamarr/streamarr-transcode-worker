@@ -39,6 +39,8 @@ final class MatroskaFile {
   private static final long UNKNOWN_SIZE = -1;
   private static final int MAXIMUM_HEADER_BYTES = 12;
   private static final long MAXIMUM_ELEMENT_BYTES = 64L << 20;
+  // FFmpeg's EBML parser fails at a longer string.
+  private static final int MAXIMUM_STRING_BYTES = 16 << 20;
 
   private MatroskaFile() {}
 
@@ -98,6 +100,10 @@ final class MatroskaFile {
         parent,
         id,
         value -> {
+          if (value.remaining() > MAXIMUM_STRING_BYTES) {
+            throw malformed("string");
+          }
+
           var bytes = new byte[value.remaining()];
           value.get(bytes);
           return new String(bytes, StandardCharsets.UTF_8);

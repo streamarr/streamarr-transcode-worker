@@ -167,6 +167,30 @@ class FfprobeExecutorMatroskaColourTest {
   }
 
   @Test
+  @DisplayName("Should leave the Colour unread when a CodecID repeat runs past FFmpeg's 16 MiB")
+  void shouldLeaveTheColourUnreadWhenACodecIdRepeatRunsPastFfmpegs16MiB() throws IOException {
+    // FFmpeg's EBML parser fails at a string longer than 16 MiB and keeps the valid CodecID
+    // ahead of it, so ffprobe's first video stream is this track, not the one that follows.
+    var oversized = new byte[(16 << 20) + 1];
+    Arrays.fill(oversized, (byte) 'A');
+    var first =
+        element(
+            0xAE,
+            element(0xD7, unsigned(1)),
+            element(0x83, unsigned(1)),
+            hevcCodecId(),
+            element(0x86, oversized),
+            element(0xE0, element(0x55B0, element(MAX_CLL, unsigned(900)))));
+    var video =
+        probeMatroska(
+            MATROSKA,
+            document(element(0x1654AE6B, first, trackEntry(2, element(MAX_FALL, unsigned(400))))));
+
+    assertThat(video.getContentLightLevelOmitted()).isTrue();
+    assertThat(video.getMasteringDisplayOmitted()).isTrue();
+  }
+
+  @Test
   @DisplayName("Should take the last MaxCLL of a Colour that repeats it, as FFmpeg does")
   void shouldTakeTheLastMaxCllOfAColourThatRepeatsItAsFfmpegDoes() throws IOException {
     var video =
