@@ -13,6 +13,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 /**
  * The EBML elements of a Matroska file. A reader that finds an element malformed throws {@link
@@ -64,7 +65,7 @@ final class MatroskaFile {
   }
 
   static Optional<Long> unsigned(ByteBuffer parent, long id) {
-    return value(parent, id).map(MatroskaFile::unsigned);
+    return lastValue(parent, id, MatroskaFile::unsigned);
   }
 
   static long unsigned(ByteBuffer value) {
@@ -81,33 +82,37 @@ final class MatroskaFile {
   }
 
   static Optional<Double> floatValue(ByteBuffer parent, long id) {
-    return value(parent, id)
-        .map(
-            value ->
-                switch (value.remaining()) {
-                  case Float.BYTES -> (double) value.getFloat();
-                  case Double.BYTES -> value.getDouble();
-                  default -> throw malformed("float");
-                });
+    return lastValue(
+        parent,
+        id,
+        value ->
+            switch (value.remaining()) {
+              case Float.BYTES -> (double) value.getFloat();
+              case Double.BYTES -> value.getDouble();
+              default -> throw malformed("float");
+            });
   }
 
   static Optional<String> string(ByteBuffer parent, long id) {
-    return value(parent, id)
-        .map(
-            value -> {
-              var bytes = new byte[value.remaining()];
-              value.get(bytes);
-              return new String(bytes, StandardCharsets.UTF_8);
-            });
+    return lastValue(
+        parent,
+        id,
+        value -> {
+          var bytes = new byte[value.remaining()];
+          value.get(bytes);
+          return new String(bytes, StandardCharsets.UTF_8);
+        });
   }
 
   /**
    * The value of the last child with this ID, as FFmpeg's EBML parser keeps the last of an element
-   * that may occur once; holds no other.
+   * that may occur once; holds no other. Each child is decoded, so that a malformed one fails the
+   * read, as it fails FFmpeg's parse.
    */
-  private static Optional<ByteBuffer> value(ByteBuffer parent, long id) {
-    var last = new AtomicReference<ByteBuffer>();
-    eachChild(parent, id, last::set);
+  private static <T> Optional<T> lastValue(
+      ByteBuffer parent, long id, Function<ByteBuffer, T> decode) {
+    var last = new AtomicReference<T>();
+    eachChild(parent, id, value -> last.set(decode.apply(value)));
     return Optional.ofNullable(last.get());
   }
 

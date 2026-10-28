@@ -238,6 +238,23 @@ class FfprobeExecutorMatroskaColourTest {
         Arguments.of(
             "the Tracks element holds no video track",
             document(element(0x1654AE6B, element(0xAE, element(0x83, unsigned(2)))))),
+        // FFmpeg's EBML parser fails at an unsigned integer longer than 8 bytes, though a valid
+        // repeat follows.
+        Arguments.of(
+            "a TrackType longer than 8 bytes ahead of a valid one",
+            document(
+                element(
+                    0x1654AE6B,
+                    element(
+                        0xAE,
+                        element(0xD7, unsigned(1)),
+                        element(0x83, new byte[9]),
+                        element(0x83, unsigned(1)),
+                        hevcCodecId(),
+                        element(0xE0, element(0x55B0, element(MAX_CLL, unsigned(900)))))))),
+        Arguments.of(
+            "a MaxCLL longer than 8 bytes ahead of a valid one",
+            videoTrack(element(MAX_CLL, new byte[9]), element(MAX_CLL, unsigned(900)))),
         Arguments.of(
             "a track entry's size runs past the Tracks element",
             document(element(0x1654AE6B, new byte[] {(byte) 0xAE, (byte) 0x9F, 0x00}))));
