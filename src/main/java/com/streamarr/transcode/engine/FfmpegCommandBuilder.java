@@ -106,10 +106,12 @@ public class FfmpegCommandBuilder {
   }
 
   // Dolby Vision profile 5 is the only profile without a compatible base, so only its picture
-  // needs the RPU that FFmpeg's decoder skips when the RPU starts a sample. A copy decodes nothing.
+  // needs the RPU that FFmpeg's HEVC decoder skips when the RPU starts a sample. A copy decodes
+  // nothing.
   private static boolean needsRpusMovedBehindTheirPictures(TranscodeJob job) {
     var decision = job.request().transcodeDecision();
     return decision.videoDecision() instanceof VideoDecision.Encode encode
+        && encode.sourceCodecFamily().equals(Optional.of(CodecFamily.HEVC))
         && encode.sourceDynamicRange().compatibleBase() == VideoDynamicRange.CompatibleBase.NONE
         && encode.sourceDynamicRange().dolbyVision()
             instanceof VideoDynamicRange.DolbyVision.Present present

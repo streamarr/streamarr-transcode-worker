@@ -443,6 +443,7 @@ class FfmpegCommandBuilderTest {
   void shouldForceTheLevelWhenLibsvtav1Encodes() {
     var encode =
         VideoDecision.Encode.builder()
+            .sourceCodecFamily(Optional.empty())
             .sourceDynamicRange(VideoDynamicRange.unspecified())
             .outputDynamicRange(VideoDynamicRange.sdr())
             .codecProfile(VideoCodecProfile.AV1_MAIN)
@@ -521,6 +522,7 @@ class FfmpegCommandBuilderTest {
 
   private static VideoDecision.Encode.EncodeBuilder hevcEncode() {
     return VideoDecision.Encode.builder()
+        .sourceCodecFamily(Optional.empty())
         .sourceDynamicRange(VideoDynamicRange.unspecified())
         .outputDynamicRange(VideoDynamicRange.sdr())
         .codecProfile(VideoCodecProfile.HEVC_MAIN)
@@ -1701,6 +1703,37 @@ class FfmpegCommandBuilderTest {
   }
 
   @ParameterizedTest(name = "{0}")
+  @MethodSource("sourceCodecFamiliesOtherThanHevc")
+  @DisplayName(
+      "Should build the command of a source without Dolby Vision when the encode's profile 5 source"
+          + " whose RPUs start their samples is not HEVC")
+  void
+      shouldBuildTheCommandOfASourceWithoutDolbyVisionWhenTheEncodesProfile5SourceWhoseRpusStartTheirSamplesIsNotHevc(
+          Optional<CodecFamily> sourceCodecFamily) {
+    var source = profile5(DolbyVisionRpuPlacement.BEFORE_NEXT_PICTURE);
+    var withoutDolbyVision =
+        new VideoDynamicRange(
+            source.compatibleBase(),
+            source.hdr10Plus(),
+            new VideoDynamicRange.DolbyVision.Absent());
+    var encode =
+        profile5Encode(DolbyVisionRpuPlacement.BEFORE_NEXT_PICTURE)
+            .sourceCodecFamily(sourceCodecFamily);
+    var request = request(encoding(encode)).build();
+    var requestWithoutDolbyVision =
+        request(encoding(encode.sourceDynamicRange(withoutDolbyVision))).build();
+
+    var pipeline = builder.buildPipeline(job(request, "libx264"));
+
+    assertThat(pipeline)
+        .isEqualTo(new FfmpegPipeline.SingleProcess(command(requestWithoutDolbyVision, "libx264")));
+  }
+
+  private static Stream<Optional<CodecFamily>> sourceCodecFamiliesOtherThanHevc() {
+    return Stream.of(Optional.empty(), Optional.of(CodecFamily.H264), Optional.of(CodecFamily.AV1));
+  }
+
+  @ParameterizedTest(name = "{0}")
   @NullSource
   @ValueSource(strings = {"flac", "alac", "opus"})
   @DisplayName(
@@ -1747,7 +1780,9 @@ class FfmpegCommandBuilderTest {
 
   private static VideoDecision.Encode.EncodeBuilder profile5Encode(
       DolbyVisionRpuPlacement rpuPlacement) {
-    return VideoDecisionFixtures.encodeBuilder().sourceDynamicRange(profile5(rpuPlacement));
+    return VideoDecisionFixtures.encodeBuilder()
+        .sourceCodecFamily(Optional.of(CodecFamily.HEVC))
+        .sourceDynamicRange(profile5(rpuPlacement));
   }
 
   private static VideoDynamicRange profile5(DolbyVisionRpuPlacement rpuPlacement) {

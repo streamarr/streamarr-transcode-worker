@@ -2,6 +2,7 @@ package com.streamarr.transcode.worker;
 
 import build.buf.gen.streamarr.transcode.v1.VideoCodecFamily;
 import build.buf.gen.streamarr.transcode.v1.VideoMode;
+import com.streamarr.transcode.engine.CodecFamily;
 import com.streamarr.transcode.engine.TranscodeMode;
 import com.streamarr.transcode.engine.VideoCodecProfile;
 import com.streamarr.transcode.engine.VideoCodecTier;
@@ -51,6 +52,15 @@ final class VideoDecisions {
       case VIDEO_CODEC_FAMILY_H264 -> Optional.of("h264");
       case VIDEO_CODEC_FAMILY_HEVC -> Optional.of("hevc");
       case VIDEO_CODEC_FAMILY_AV1 -> Optional.of("av1");
+      case VIDEO_CODEC_FAMILY_UNSPECIFIED, UNRECOGNIZED -> Optional.empty();
+    };
+  }
+
+  private static Optional<CodecFamily> codecFamily(VideoCodecFamily family) {
+    return switch (family) {
+      case VIDEO_CODEC_FAMILY_H264 -> Optional.of(CodecFamily.H264);
+      case VIDEO_CODEC_FAMILY_HEVC -> Optional.of(CodecFamily.HEVC);
+      case VIDEO_CODEC_FAMILY_AV1 -> Optional.of(CodecFamily.AV1);
       case VIDEO_CODEC_FAMILY_UNSPECIFIED, UNRECOGNIZED -> Optional.empty();
     };
   }
@@ -125,6 +135,7 @@ final class VideoDecisions {
 
     return VideoDecision.Encode.builder()
         .streamIndex(video.getStreamIndex())
+        .sourceCodecFamily(codecFamily(video.getSourceCodecFamily()))
         .codecProfile(profile)
         .tier(tier)
         .level(video.getLevel())

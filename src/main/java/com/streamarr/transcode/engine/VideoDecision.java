@@ -19,12 +19,15 @@ public sealed interface VideoDecision {
   /**
    * An encode, which forces the codec profile, the tier and the level.
    *
+   * @param sourceCodecFamily the codec family of the chosen source stream; empty for a codec of no
+   *     family the worker encodes
    * @param tier empty for H.264, which has no tier
    * @param level the level as major × 10 + minor, for example 41 for level 4.1
    */
   @Builder
   record Encode(
       int streamIndex,
+      @NonNull Optional<CodecFamily> sourceCodecFamily,
       @NonNull VideoCodecProfile codecProfile,
       @NonNull Optional<VideoCodecTier> tier,
       int level,

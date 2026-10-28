@@ -626,6 +626,7 @@ class TranscodeWorkerJobAttemptTest {
     var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
     job.getDecisionBuilder()
         .getVideoBuilder()
+        .setSourceCodecFamily(VideoCodecFamily.VIDEO_CODEC_FAMILY_HEVC)
         .setSourceDynamicRange(
             VideoDynamicRange.newBuilder()
                 .setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_NONE)
@@ -666,6 +667,7 @@ class TranscodeWorkerJobAttemptTest {
     var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
     job.getDecisionBuilder()
         .getVideoBuilder()
+        .setSourceCodecFamily(VideoCodecFamily.VIDEO_CODEC_FAMILY_HEVC)
         .setSourceDynamicRange(
             VideoDynamicRange.newBuilder()
                 .setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_NONE)
@@ -674,6 +676,47 @@ class TranscodeWorkerJobAttemptTest {
                     DolbyVisionPresent.newBuilder()
                         .setObservedRpu(Presence.PRESENCE_PRESENT)
                         .setRpuPlacement(placement)));
+    job.getDecisionBuilder().getAudioBuilder().setCodec("eac3");
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(launcher.commands(fromProto(job.getJobAttemptId()))).hasSize(1);
+    }
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = VideoCodecFamily.class,
+      names = {
+        "VIDEO_CODEC_FAMILY_UNSPECIFIED",
+        "VIDEO_CODEC_FAMILY_H264",
+        "VIDEO_CODEC_FAMILY_AV1"
+      })
+  @DisplayName(
+      "Should launch one FFmpeg when the encode's Dolby Vision profile 5 source starts samples with"
+          + " RPUs and is not HEVC")
+  void
+      shouldLaunchOneFfmpegWhenTheEncodesDolbyVisionProfile5SourceStartsSamplesWithRpusAndIsNotHevc(
+          VideoCodecFamily sourceCodecFamily) throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getDecisionBuilder()
+        .getVideoBuilder()
+        .setSourceCodecFamily(sourceCodecFamily)
+        .setSourceDynamicRange(
+            VideoDynamicRange.newBuilder()
+                .setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_NONE)
+                .setHdr10Plus(Presence.PRESENCE_ABSENT)
+                .setDolbyVisionPresent(
+                    DolbyVisionPresent.newBuilder()
+                        .setObservedRpu(Presence.PRESENCE_PRESENT)
+                        .setRpuPlacement(
+                            DolbyVisionRpuPlacement
+                                .DOLBY_VISION_RPU_PLACEMENT_BEFORE_NEXT_PICTURE)));
     job.getDecisionBuilder().getAudioBuilder().setCodec("eac3");
 
     try (var worker = worker(launcher)) {
