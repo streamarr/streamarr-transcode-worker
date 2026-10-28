@@ -1149,12 +1149,14 @@ class WorkerMediaSmokeTest {
     return job;
   }
 
-  // Dolby Vision profile 5 HEVC, whose samples place each picture's RPU as rpuPlacement says.
+  // Dolby Vision profile 5 HEVC, whose samples place each picture's RPU as rpuPlacement says, in a
+  // container whose packets carry presentation times.
   private static void withProfile5Source(
       VariantJob.Builder job, DolbyVisionRpuPlacement rpuPlacement) {
     job.getDecisionBuilder()
         .getVideoBuilder()
         .setSourceCodecFamily(VideoCodecFamily.VIDEO_CODEC_FAMILY_HEVC)
+        .setSourcePacketsCarryPresentationTimes(true)
         .setSourceDynamicRange(
             VideoDynamicRange.newBuilder()
                 .setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_NONE)

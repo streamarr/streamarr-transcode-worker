@@ -142,6 +142,7 @@ final class VideoDecisions {
         .codecString(video.getCodecString())
         .sourceDynamicRange(VideoDynamicRanges.of(video.getSourceDynamicRange()))
         .outputDynamicRange(outputDynamicRange)
+        .sourcePacketsCarryPresentationTimes(video.getSourcePacketsCarryPresentationTimes())
         .build();
   }
 

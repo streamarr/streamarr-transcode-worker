@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Supplier;
 import java.util.stream.Stream;
 import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.DisplayName;
@@ -1647,6 +1648,90 @@ class FfmpegCommandBuilderTest {
         .isInstanceOf(FfmpegPipeline.RpuMovingPipe.class);
   }
 
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = DolbyVisionRpuPlacement.class,
+      names = {"STARTS_SAMPLE", "UNSPECIFIED"})
+  @DisplayName(
+      "Should encode the source's samples unchanged in one FFmpeg when the packets of a Dolby Vision"
+          + " profile 5 source whose RPUs may start samples carry no presentation times")
+  void
+      shouldEncodeTheSourcesSamplesUnchangedInOneFfmpegWhenThePacketsOfADolbyVisionProfile5SourceWhoseRpusMayStartSamplesCarryNoPresentationTimes(
+          DolbyVisionRpuPlacement placement) {
+    var request =
+        request(encoding(profile5Encode(placement).sourcePacketsCarryPresentationTimes(false)))
+            .build();
+    var requestWithoutDolbyVision =
+        request(
+                encoding(
+                    profile5Encode(placement)
+                        .sourcePacketsCarryPresentationTimes(false)
+                        .sourceDynamicRange(withoutDolbyVision(profile5(placement)))))
+            .build();
+
+    var pipeline = builder.buildPipeline(job(request, "libx264"));
+
+    assertThat(pipeline)
+        .isEqualTo(new FfmpegPipeline.SingleProcess(command(requestWithoutDolbyVision, "libx264")));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("encodesThatNeedNoMovedRpu")
+  @DisplayName(
+      "Should build the same command whether or not the source's packets carry presentation times"
+          + " when the encode needs no moved RPU")
+  void
+      shouldBuildTheSameCommandWhetherOrNotTheSourcesPacketsCarryPresentationTimesWhenTheEncodeNeedsNoMovedRpu(
+          String description, Supplier<VideoDecision.Encode.EncodeBuilder> encode) {
+    var withPresentationTimes =
+        request(encoding(encode.get().sourcePacketsCarryPresentationTimes(true))).build();
+    var withoutPresentationTimes =
+        request(encoding(encode.get().sourcePacketsCarryPresentationTimes(false))).build();
+
+    assertThat(builder.buildPipeline(job(withoutPresentationTimes, "libx264")))
+        .isEqualTo(builder.buildPipeline(job(withPresentationTimes, "libx264")))
+        .isInstanceOf(FfmpegPipeline.SingleProcess.class);
+  }
+
+  private static Stream<Arguments> encodesThatNeedNoMovedRpu() {
+    Stream<Arguments> ranges =
+        dynamicRangesThatKeepOneFfmpeg()
+            .map(
+                arguments ->
+                    Arguments.of(
+                        arguments.get()[0],
+                        (Supplier<VideoDecision.Encode.EncodeBuilder>)
+                            () ->
+                                profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE)
+                                    .sourceDynamicRange((VideoDynamicRange) arguments.get()[1])));
+    Stream<Arguments> families =
+        sourceCodecFamiliesOtherThanHevc()
+            .map(
+                family ->
+                    Arguments.of(
+                        "profile 5, RPU starts the sample, source " + family,
+                        (Supplier<VideoDecision.Encode.EncodeBuilder>)
+                            () ->
+                                profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE)
+                                    .sourceCodecFamily(family)));
+    Stream<Arguments> others =
+        Stream.of(
+            Arguments.of(
+                "unspecified dynamic range",
+                (Supplier<VideoDecision.Encode.EncodeBuilder>)
+                    VideoDecisionFixtures::encodeBuilder),
+            Arguments.of(
+                "HEVC without Dolby Vision",
+                (Supplier<VideoDecision.Encode.EncodeBuilder>)
+                    () -> hevcEncode().sourceCodecFamily(Optional.of(CodecFamily.HEVC))));
+    return Stream.of(ranges, families, others).flatMap(arguments -> arguments);
+  }
+
+  private static VideoDynamicRange withoutDolbyVision(VideoDynamicRange source) {
+    return new VideoDynamicRange(
+        source.compatibleBase(), source.hdr10Plus(), new VideoDynamicRange.DolbyVision.Absent());
+  }
+
   @Test
   @DisplayName(
       "Should seek the copy, encode its audio there, and trim the encode's video at the seek when a"
@@ -1841,7 +1926,8 @@ class FfmpegCommandBuilderTest {
       DolbyVisionRpuPlacement rpuPlacement) {
     return VideoDecisionFixtures.encodeBuilder()
         .sourceCodecFamily(Optional.of(CodecFamily.HEVC))
-        .sourceDynamicRange(profile5(rpuPlacement));
+        .sourceDynamicRange(profile5(rpuPlacement))
+        .sourcePacketsCarryPresentationTimes(true);
   }
 
   private static VideoDynamicRange profile5(DolbyVisionRpuPlacement rpuPlacement) {

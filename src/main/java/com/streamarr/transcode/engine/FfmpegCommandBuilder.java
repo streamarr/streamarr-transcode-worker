@@ -126,9 +126,15 @@ public class FfmpegCommandBuilder {
         .isPresent();
   }
 
+  // The copy stamps a packet without a presentation time with its decode time, so the encode of
+  // the copy loses the pictures that B-frames reorder. A source whose packets the probe did not see
+  // carry presentation times stays with one FFmpeg. For a raw HEVC stream that is enough: FFmpeg's
+  // HEVC parser starts each packet at a unit that begins an access unit, never at an RPU after the
+  // first packet, so an RPU after its picture's slices ends the packet where the decoder reads it.
   private static Optional<VideoDynamicRange.DolbyVision.Present> profile5HevcSourceOf(
       VideoDecision video) {
     if (!(video instanceof VideoDecision.Encode encode)
+        || !encode.sourcePacketsCarryPresentationTimes()
         || !encode.sourceCodecFamily().equals(Optional.of(CodecFamily.HEVC))
         || encode.sourceDynamicRange().compatibleBase() != VideoDynamicRange.CompatibleBase.NONE
         || !(encode.sourceDynamicRange().dolbyVision()

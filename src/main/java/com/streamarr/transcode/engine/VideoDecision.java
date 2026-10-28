@@ -23,6 +23,8 @@ public sealed interface VideoDecision {
    *     family the worker encodes
    * @param tier empty for H.264, which has no tier
    * @param level the level as major × 10 + minor, for example 41 for level 4.1
+   * @param sourcePacketsCarryPresentationTimes whether the probe saw a presentation time on every
+   *     packet of the source stream that it read; false also when it could not tell
    */
   @Builder
   record Encode(
@@ -33,6 +35,7 @@ public sealed interface VideoDecision {
       int level,
       @NonNull String codecString,
       @NonNull VideoDynamicRange sourceDynamicRange,
-      @NonNull VideoDynamicRange outputDynamicRange)
+      @NonNull VideoDynamicRange outputDynamicRange,
+      boolean sourcePacketsCarryPresentationTimes)
       implements VideoDecision {}
 }

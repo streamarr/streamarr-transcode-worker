@@ -627,6 +627,7 @@ class TranscodeWorkerJobAttemptTest {
     job.getDecisionBuilder()
         .getVideoBuilder()
         .setSourceCodecFamily(VideoCodecFamily.VIDEO_CODEC_FAMILY_HEVC)
+        .setSourcePacketsCarryPresentationTimes(true)
         .setSourceDynamicRange(
             VideoDynamicRange.newBuilder()
                 .setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_NONE)
@@ -663,6 +664,45 @@ class TranscodeWorkerJobAttemptTest {
               "1");
       assertThat(commands.getFirst().getLast()).startsWith("unix:");
       assertThat(commands.getLast()).containsSequence("-f", "mp4", "-i", "pipe:0");
+    }
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = DolbyVisionRpuPlacement.class,
+      names = {
+        "DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE",
+        "DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED"
+      })
+  @DisplayName(
+      "Should launch one FFmpeg when the packets of the encode's Dolby Vision profile 5 source, which"
+          + " may start samples with RPUs, carry no presentation times")
+  void
+      shouldLaunchOneFfmpegWhenThePacketsOfTheEncodesDolbyVisionProfile5SourceWhichMayStartSamplesWithRpusCarryNoPresentationTimes(
+          DolbyVisionRpuPlacement placement) throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getDecisionBuilder()
+        .getVideoBuilder()
+        .setSourceCodecFamily(VideoCodecFamily.VIDEO_CODEC_FAMILY_HEVC)
+        .setSourcePacketsCarryPresentationTimes(false)
+        .setSourceDynamicRange(
+            VideoDynamicRange.newBuilder()
+                .setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_NONE)
+                .setHdr10Plus(Presence.PRESENCE_ABSENT)
+                .setDolbyVisionPresent(
+                    DolbyVisionPresent.newBuilder()
+                        .setObservedRpu(Presence.PRESENCE_PRESENT)
+                        .setRpuPlacement(placement)));
+    job.getDecisionBuilder().getAudioBuilder().setCodec("eac3");
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(launcher.commands(fromProto(job.getJobAttemptId()))).hasSize(1);
     }
   }
 
