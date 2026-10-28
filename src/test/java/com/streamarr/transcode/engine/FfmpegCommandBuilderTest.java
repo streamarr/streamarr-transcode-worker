@@ -3,6 +3,7 @@ package com.streamarr.transcode.engine;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.streamarr.transcode.engine.VideoDynamicRange.CompatibleBase;
+import com.streamarr.transcode.engine.VideoDynamicRange.DolbyVisionRpuPlacement;
 import com.streamarr.transcode.engine.VideoDynamicRange.Presence;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -1474,7 +1475,10 @@ class FfmpegCommandBuilderTest {
           + " sample starts with its RPU")
   void
       shouldCopyTheSourceIntoMpegTsAndEncodeTheCopyWhenADolbyVisionProfile5SampleStartsWithItsRpu() {
-    var request = request(encoding(profile5Encode(Presence.PRESENT))).height(720).build();
+    var request =
+        request(encoding(profile5Encode(DolbyVisionRpuPlacement.BEFORE_NEXT_PICTURE)))
+            .height(720)
+            .build();
 
     var pipeline = builder.buildPipeline(job(request, "libx264"));
 
@@ -1589,7 +1593,7 @@ class FfmpegCommandBuilderTest {
   void
       shouldSeekTheCopyEncodeItsAudioThereAndTrimTheEncodesVideoAtTheSeekWhenAReplacementAttemptEncodesAProfile5SourceWhoseRpuStartsItsSample() {
     var request =
-        request(encoding(profile5Encode(Presence.PRESENT)))
+        request(encoding(profile5Encode(DolbyVisionRpuPlacement.BEFORE_NEXT_PICTURE)))
             .height(720)
             .startSequenceNumber(3)
             .build();
@@ -1615,7 +1619,7 @@ class FfmpegCommandBuilderTest {
       shouldCopyTheCopiedSourcesAudioUntrimmedWhenTheEncodeOfAProfile5SourceWhoseRpuStartsItsSampleSeeks() {
     var decision =
         decision(TranscodeMode.VIDEO_TRANSCODE)
-            .videoDecision(profile5Encode(Presence.PRESENT).build())
+            .videoDecision(profile5Encode(DolbyVisionRpuPlacement.BEFORE_NEXT_PICTURE).build())
             .build();
     var request = request(decision).startSequenceNumber(3).build();
 
@@ -1636,7 +1640,7 @@ class FfmpegCommandBuilderTest {
       shouldMapNoAudioInEitherFfmpegWhenTheEncodeOfAProfile5SourceWhoseRpuStartsItsSampleHasNone() {
     var decision =
         decision(TranscodeMode.FULL_TRANSCODE)
-            .videoDecision(profile5Encode(Presence.PRESENT).build())
+            .videoDecision(profile5Encode(DolbyVisionRpuPlacement.BEFORE_NEXT_PICTURE).build())
             .audioDecision(NO_AUDIO)
             .build();
 
@@ -1672,20 +1676,29 @@ class FfmpegCommandBuilderTest {
 
   private static Stream<Arguments> dynamicRangesThatKeepOneFfmpeg() {
     return Stream.of(
-        Arguments.of("profile 5, every RPU after its picture", profile5(Presence.ABSENT)),
-        Arguments.of("profile 5, layout unspecified", profile5(Presence.UNSPECIFIED)),
+        Arguments.of(
+            "profile 5, every RPU after its picture",
+            profile5(DolbyVisionRpuPlacement.AFTER_OWN_PICTURE)),
+        Arguments.of(
+            "profile 5, layout unspecified", profile5(DolbyVisionRpuPlacement.UNSPECIFIED)),
         Arguments.of(
             "profile 8.1, RPU starts the sample",
             new VideoDynamicRange(
-                CompatibleBase.PQ, Presence.ABSENT, dolbyVisionPresent(Presence.PRESENT))),
+                CompatibleBase.PQ,
+                Presence.ABSENT,
+                dolbyVisionPresent(DolbyVisionRpuPlacement.BEFORE_NEXT_PICTURE))),
         Arguments.of(
             "profile 8.4, RPU starts the sample",
             new VideoDynamicRange(
-                CompatibleBase.HLG, Presence.ABSENT, dolbyVisionPresent(Presence.PRESENT))),
+                CompatibleBase.HLG,
+                Presence.ABSENT,
+                dolbyVisionPresent(DolbyVisionRpuPlacement.BEFORE_NEXT_PICTURE))),
         Arguments.of(
             "profile 9, RPU starts the sample",
             new VideoDynamicRange(
-                CompatibleBase.SDR, Presence.ABSENT, dolbyVisionPresent(Presence.PRESENT))));
+                CompatibleBase.SDR,
+                Presence.ABSENT,
+                dolbyVisionPresent(DolbyVisionRpuPlacement.BEFORE_NEXT_PICTURE))));
   }
 
   @ParameterizedTest(name = "{0}")
@@ -1699,7 +1712,7 @@ class FfmpegCommandBuilderTest {
           String audioCodec) {
     var decision =
         decision(TranscodeMode.VIDEO_TRANSCODE)
-            .videoDecision(profile5Encode(Presence.PRESENT).build())
+            .videoDecision(profile5Encode(DolbyVisionRpuPlacement.BEFORE_NEXT_PICTURE).build())
             .audioDecision(copiedAudio(audioCodec))
             .build();
 
@@ -1718,7 +1731,7 @@ class FfmpegCommandBuilderTest {
           String audioCodec) {
     var decision =
         decision(TranscodeMode.FULL_TRANSCODE)
-            .videoDecision(profile5Encode(Presence.PRESENT).build())
+            .videoDecision(profile5Encode(DolbyVisionRpuPlacement.BEFORE_NEXT_PICTURE).build())
             .audioDecision(
                 AudioDecision.builder()
                     .mode(AudioMode.TRANSCODE)
@@ -1733,19 +1746,20 @@ class FfmpegCommandBuilderTest {
     assertThat(pipeline).isInstanceOf(FfmpegPipeline.SingleProcess.class);
   }
 
-  private static VideoDecision.Encode.EncodeBuilder profile5Encode(Presence rpuStartsSample) {
-    return VideoDecisionFixtures.encodeBuilder().sourceDynamicRange(profile5(rpuStartsSample));
+  private static VideoDecision.Encode.EncodeBuilder profile5Encode(
+      DolbyVisionRpuPlacement rpuPlacement) {
+    return VideoDecisionFixtures.encodeBuilder().sourceDynamicRange(profile5(rpuPlacement));
   }
 
-  private static VideoDynamicRange profile5(Presence rpuStartsSample) {
+  private static VideoDynamicRange profile5(DolbyVisionRpuPlacement rpuPlacement) {
     return new VideoDynamicRange(
-        CompatibleBase.NONE, Presence.ABSENT, dolbyVisionPresent(rpuStartsSample));
+        CompatibleBase.NONE, Presence.ABSENT, dolbyVisionPresent(rpuPlacement));
   }
 
   private static VideoDynamicRange.DolbyVision.Present dolbyVisionPresent(
-      Presence rpuStartsSample) {
+      DolbyVisionRpuPlacement rpuPlacement) {
     return new VideoDynamicRange.DolbyVision.Present(
-        Optional.empty(), Presence.PRESENT, rpuStartsSample);
+        Optional.empty(), Presence.PRESENT, rpuPlacement);
   }
 
   private static FfmpegPipeline.TransportStreamPipe transportStreamPipe(FfmpegPipeline pipeline) {

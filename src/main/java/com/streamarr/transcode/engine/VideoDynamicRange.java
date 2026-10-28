@@ -30,14 +30,28 @@ public record VideoDynamicRange(
     record Absent() implements DolbyVision {}
 
     /**
-     * @param rpuStartsSample whether a sample that the probe read starts with an RPU ahead of its
-     *     picture: the RPU of the picture before, which FFmpeg's decoder skips there
+     * @param rpuPlacement where the samples that the probe read place each picture's RPU
      */
     record Present(
         @NonNull Optional<DolbyVisionConfiguration> declared,
         @NonNull Presence observedRpu,
-        @NonNull Presence rpuStartsSample)
+        @NonNull DolbyVisionRpuPlacement rpuPlacement)
         implements DolbyVision {}
+  }
+
+  /**
+   * Where the samples of an H.264 or HEVC Dolby Vision stream place each picture's RPU, which
+   * belongs after the slices of that picture, as the last NAL unit of the same sample.
+   */
+  public enum DolbyVisionRpuPlacement {
+    /** The probe could not decide, the stream is AV1, or the samples match no other value. */
+    UNSPECIFIED,
+    /** Each RPU is the last NAL unit of its own picture's sample. */
+    AFTER_OWN_PICTURE,
+    /** Each picture's RPU starts the sample of the next picture. */
+    BEFORE_NEXT_PICTURE,
+    /** Each picture's RPU starts the sample of its own picture. */
+    BEFORE_OWN_PICTURE
   }
 
   @Builder

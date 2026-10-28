@@ -113,8 +113,15 @@ public class FfmpegCommandBuilder {
         && encode.sourceDynamicRange().compatibleBase() == VideoDynamicRange.CompatibleBase.NONE
         && encode.sourceDynamicRange().dolbyVision()
             instanceof VideoDynamicRange.DolbyVision.Present present
-        && present.rpuStartsSample() == VideoDynamicRange.Presence.PRESENT
+        && startsSamples(present.rpuPlacement())
         && travelsInMpegTs(decision.audioDecision());
+  }
+
+  private static boolean startsSamples(VideoDynamicRange.DolbyVisionRpuPlacement placement) {
+    return switch (placement) {
+      case BEFORE_NEXT_PICTURE, BEFORE_OWN_PICTURE -> true;
+      case UNSPECIFIED, AFTER_OWN_PICTURE -> false;
+    };
   }
 
   // The audio travels as the job's output codec: the source's when the job copies it, and the one

@@ -4,6 +4,7 @@ import com.streamarr.transcode.engine.VideoDynamicRange;
 import com.streamarr.transcode.engine.VideoDynamicRange.CompatibleBase;
 import com.streamarr.transcode.engine.VideoDynamicRange.DolbyVision;
 import com.streamarr.transcode.engine.VideoDynamicRange.DolbyVisionConfiguration;
+import com.streamarr.transcode.engine.VideoDynamicRange.DolbyVisionRpuPlacement;
 import com.streamarr.transcode.engine.VideoDynamicRange.Presence;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -55,24 +56,23 @@ final class VideoDynamicRanges {
                 ? Optional.of(configuration(present.getDeclared()))
                 : Optional.<DolbyVisionConfiguration>empty();
         yield new DolbyVision.Present(
-            declared,
-            presence(present.getObservedRpu()),
-            rpuStartsSample(present.getRpuPlacement()));
+            declared, presence(present.getObservedRpu()), rpuPlacement(present.getRpuPlacement()));
       }
       case DOLBYVISION_NOT_SET -> new DolbyVision.Unspecified();
     };
   }
 
-  /** Whether the samples start with RPUs: each placement that puts an RPU ahead of a picture. */
   @SuppressWarnings("checkstyle:fullyQualifiedName")
-  private static Presence rpuStartsSample(
+  private static DolbyVisionRpuPlacement rpuPlacement(
       build.buf.gen.streamarr.transcode.v1.DolbyVisionRpuPlacement value) {
     return switch (value) {
-      case DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED -> Presence.UNSPECIFIED;
-      case DOLBY_VISION_RPU_PLACEMENT_AFTER_OWN_PICTURE -> Presence.ABSENT;
-      case DOLBY_VISION_RPU_PLACEMENT_BEFORE_NEXT_PICTURE,
-          DOLBY_VISION_RPU_PLACEMENT_BEFORE_OWN_PICTURE ->
-          Presence.PRESENT;
+      case DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED -> DolbyVisionRpuPlacement.UNSPECIFIED;
+      case DOLBY_VISION_RPU_PLACEMENT_AFTER_OWN_PICTURE ->
+          DolbyVisionRpuPlacement.AFTER_OWN_PICTURE;
+      case DOLBY_VISION_RPU_PLACEMENT_BEFORE_NEXT_PICTURE ->
+          DolbyVisionRpuPlacement.BEFORE_NEXT_PICTURE;
+      case DOLBY_VISION_RPU_PLACEMENT_BEFORE_OWN_PICTURE ->
+          DolbyVisionRpuPlacement.BEFORE_OWN_PICTURE;
       case UNRECOGNIZED -> throw new InvalidJobSpecificationException("Unknown RPU placement");
     };
   }
