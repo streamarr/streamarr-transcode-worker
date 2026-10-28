@@ -301,6 +301,66 @@ class FragmentedMp4RpuMoverTest {
     assertThat(move(copy)).isEqualTo(copy);
   }
 
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({
+    "a 1-byte length of 0, 1, 00 46",
+    "a 1-byte length that runs past the end, 1, FF 46 01",
+    "1 byte under 4-byte lengths, 4, 00",
+    "3 bytes under 4-byte lengths, 4, FF FF FF"
+  })
+  @DisplayName(
+      "Should move an RPU that starts a sample behind the previous picture when 1 to 3 bytes, which"
+          + " FFmpeg's splitter drops whatever they hold, end the sample")
+  void shouldMoveAnRpuThatStartsASampleBehindThePreviousPictureWhen1To3BytesEndTheSample(
+      String description, int lengthSize, String tail) throws IOException {
+    var firstSlice = nalWithLength(lengthSize, HevcCopies.TRAIL_R, 0xAF, 0);
+    var secondSlice = nalWithLength(lengthSize, HevcCopies.TRAIL_R, 0xAF, 1);
+    var rpu = nalWithLength(lengthSize, 62, 25, 0);
+    var dropped = HexFormat.ofDelimiter(" ").parseHex(tail);
+    var copy =
+        concat(
+            initializationSegment(hevcSampleEntry("hvc1", lengthSize)),
+            fragmentBuilder().video(0, firstSlice, concat(rpu, secondSlice, dropped)).build());
+
+    var moved = move(copy);
+
+    assertThat(videoSamplesOf(moved))
+        .as(description)
+        .containsExactly(hex(firstSlice, rpu), hex(secondSlice, dropped));
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep the 1 to 3 bytes that FFmpeg's splitter drops last when an RPU moves to the end"
+          + " of their sample")
+  void shouldKeepThe1To3BytesThatFfmpegsSplitterDropsLastWhenAnRpuMovesToTheEndOfTheirSample()
+      throws IOException {
+    var dropped = new byte[] {(byte) 0xFF, (byte) 0xFF, (byte) 0xFF};
+    var copy = stream(fragmentBuilder().video(0, sample(slice(0), rpu(0), aud(), dropped)).build());
+
+    var moved = move(copy);
+
+    assertThat(videoSamplesOf(moved)).containsExactly(hex(slice(0), aud(), rpu(0), dropped));
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep the 1 to 3 bytes that FFmpeg's splitter drops last when an RPU moves behind"
+          + " their picture")
+  void shouldKeepThe1To3BytesThatFfmpegsSplitterDropsLastWhenAnRpuMovesBehindTheirPicture()
+      throws IOException {
+    var dropped = new byte[] {(byte) 0xFF, (byte) 0xFF, (byte) 0xFF};
+    var copy =
+        stream(
+            fragmentBuilder().video(0, sample(slice(0), dropped)).build(),
+            fragmentBuilder().video(1001, sample(rpu(0), slice(1))).build());
+
+    var moved = move(copy);
+
+    assertThat(videoSamplesOf(moved))
+        .containsExactly(hex(slice(0), rpu(0), dropped), hex(slice(1)));
+  }
+
   @Test
   @DisplayName(
       "Should keep the bytes of a sample that holds a length of 0, which makes FFmpeg reject the"

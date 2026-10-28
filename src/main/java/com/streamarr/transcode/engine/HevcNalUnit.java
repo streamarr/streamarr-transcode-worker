@@ -12,12 +12,10 @@ import lombok.NonNull;
  *
  * <p>FFmpeg's ff_h2645_packet_split drops some NAL units before its HEVC decoder sees them: one
  * whose forbidden_zero_bit is 1, one shorter than its 2-byte header, one whose
- * nuh_temporal_id_plus1 is 0 or nuh_layer_id is 63, and the last one of a sample when it takes
- * fewer than {@link #FEWEST_SPLIT_BYTES} bytes with its length. Such a NAL unit keeps its bytes,
- * but it is no slice and no RPU, and it never keeps an RPU from being the last NAL unit that the
- * decoder sees. A start code inside a NAL unit's length begins NAL units that FFmpeg reads on their
- * own, so the NAL unit reaches the decoder, holds a slice, or ends with an RPU when one of them
- * does.
+ * nuh_temporal_id_plus1 is 0 or nuh_layer_id is 63. Such a NAL unit keeps its bytes, but it is no
+ * slice and no RPU, and it never keeps an RPU from being the last NAL unit that the decoder sees. A
+ * start code inside a NAL unit's length begins NAL units that FFmpeg reads on their own, so the NAL
+ * unit reaches the decoder, holds a slice, or ends with an RPU when one of them does.
  *
  * @param bytes the length prefix and the NAL unit, viewed without copying them
  * @param slice whether a picture slice reaches the decoder from the NAL unit's bytes
@@ -33,7 +31,7 @@ record HevcNalUnit(@NonNull ByteBuffer bytes, boolean slice, boolean rpu, boolea
    */
   static final int MAXIMUM_NAL_UNITS_PER_SAMPLE = 4096;
 
-  // FFmpeg's splitter reads the next NAL unit only while at least this many bytes remain.
+  // FFmpeg's splitter reads the next length only while at least this many bytes remain.
   private static final int FEWEST_SPLIT_BYTES = 4;
   private static final int NAL_UNIT_HEADER_BYTES = 2;
   // NAL unit types below this one hold picture slices (ITU-T H.265 table 7-1).
@@ -53,21 +51,22 @@ record HevcNalUnit(@NonNull ByteBuffer bytes, boolean slice, boolean rpu, boolea
   }
 
   /**
-   * The sample's NAL units in order; empty when a length runs past the end of the sample, is 0,
-   * which makes FFmpeg reject the whole sample, or the sample holds more than {@link
-   * #MAXIMUM_NAL_UNITS_PER_SAMPLE} NAL units.
+   * The sample's NAL units in order. FFmpeg's splitter reads a length only while at least {@link
+   * #FEWEST_SPLIT_BYTES} bytes of the sample remain, so the 1 to 3 bytes that can follow the last
+   * NAL unit belong to none, whatever they hold. Empty when a length that the splitter reads is 0
+   * or runs past the end of the sample, which makes FFmpeg reject the whole sample, or when the
+   * sample holds more than {@link #MAXIMUM_NAL_UNITS_PER_SAMPLE} NAL units.
    *
    * @param lengthSize the bytes of each length prefix: 1, 2 or 4
    */
   static Optional<List<HevcNalUnit>> delimit(ByteBuffer sample, int lengthSize) {
     var units = new ArrayList<HevcNalUnit>();
     var position = sample.position();
-    while (position < sample.limit()) {
-      if (sample.limit() - position < lengthSize || units.size() == MAXIMUM_NAL_UNITS_PER_SAMPLE) {
+    while (sample.limit() - position >= FEWEST_SPLIT_BYTES) {
+      if (units.size() == MAXIMUM_NAL_UNITS_PER_SAMPLE) {
         return Optional.empty();
       }
 
-      var isSplit = sample.limit() - position >= FEWEST_SPLIT_BYTES;
       var length = lengthAt(sample, position, lengthSize);
       var unitStart = position + lengthSize;
       if (length == 0 || length > sample.limit() - unitStart) {
@@ -75,20 +74,15 @@ record HevcNalUnit(@NonNull ByteBuffer bytes, boolean slice, boolean rpu, boolea
       }
 
       var end = unitStart + (int) length;
-      units.add(unitAt(sample, position, unitStart, end, isSplit));
+      units.add(unitAt(sample, position, unitStart, end));
       position = end;
     }
 
     return Optional.of(List.copyOf(units));
   }
 
-  private static HevcNalUnit unitAt(
-      ByteBuffer sample, int start, int unitStart, int end, boolean isSplit) {
+  private static HevcNalUnit unitAt(ByteBuffer sample, int start, int unitStart, int end) {
     var bytes = sample.slice(start, end - start);
-    if (!isSplit) {
-      return new HevcNalUnit(bytes, false, false, false);
-    }
-
     var decoded = decodedHeaders(sample, unitStart, end);
     var slice =
         decoded.stream().anyMatch(header -> typeAt(sample, header) < FIRST_NON_PICTURE_TYPE);

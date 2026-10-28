@@ -263,6 +263,7 @@ final class FragmentedMp4RpuMover {
     }
 
     var units = delimited.orElseThrow();
+    sample.keepDroppedTailLast(units);
     var firstSlice = firstSliceOf(units);
     if (firstSlice.isEmpty()) {
       copyRpusBehindPreviousPicture(units);
@@ -542,6 +543,7 @@ final class FragmentedMp4RpuMover {
     private long duration;
     private Optional<ByteBuffer> rearranged = Optional.empty();
     private Optional<ByteBuffer> movedRpu = Optional.empty();
+    private int droppedTailBytes;
 
     private VideoSample(HeldFragment fragment, Sample copied, ByteBuffer original) {
       this.fragment = fragment;
@@ -581,9 +583,19 @@ final class FragmentedMp4RpuMover {
           .build();
     }
 
+    /**
+     * Keeps the bytes after these NAL units, which FFmpeg's splitter drops, at the end of the
+     * sample, behind any RPU that moves into it: ahead of an RPU, they would be read as its length.
+     */
+    private void keepDroppedTailLast(List<HevcNalUnit> nalUnits) {
+      droppedTailBytes =
+          original.remaining() - nalUnits.stream().mapToInt(HevcNalUnit::length).sum();
+    }
+
     private void replace(List<HevcNalUnit> nalUnits) {
       var bytes = ByteBuffer.allocate(original.remaining());
       nalUnits.forEach(unit -> bytes.put(unit.bytes().duplicate()));
+      bytes.put(original.slice(original.limit() - droppedTailBytes, droppedTailBytes));
       rearranged = Optional.of(bytes.flip());
     }
 
@@ -599,7 +611,12 @@ final class FragmentedMp4RpuMover {
 
       var rpu = movedRpu.orElseThrow().duplicate();
       var content = ByteBuffer.allocate(base.remaining() + rpu.remaining());
-      return content.put(base).put(rpu).flip();
+      var tailStart = base.limit() - droppedTailBytes;
+      return content
+          .put(base.duplicate().limit(tailStart))
+          .put(rpu)
+          .put(base.position(tailStart))
+          .flip();
     }
 
     private static ByteBuffer copyOf(ByteBuffer bytes) {
