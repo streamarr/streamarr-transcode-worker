@@ -204,12 +204,15 @@ final class FragmentedMp4RpuMover {
       return;
     }
 
+    // An RPU that already ends the sample is the one FFmpeg's decoder reads, so it stays last.
+    var lastIndex = units.size() - 1;
+    var endsWithRpu = units.get(lastIndex).rpu() && lastIndex > firstSlice.getAsInt();
     var leading = new ArrayList<HevcNalUnit>();
     var kept = new ArrayList<HevcNalUnit>();
     var behind = new ArrayList<HevcNalUnit>();
     for (var index = 0; index < units.size(); index++) {
       var unit = units.get(index);
-      if (!unit.rpu() || index == units.size() - 1 && index > firstSlice.getAsInt()) {
+      if (!unit.rpu() || index == lastIndex && endsWithRpu) {
         kept.add(unit);
       } else if (index < firstSlice.getAsInt()) {
         leading.add(unit);
@@ -225,7 +228,7 @@ final class FragmentedMp4RpuMover {
     }
 
     if (!leading.isEmpty() || !behind.isEmpty()) {
-      kept.addAll(behind);
+      kept.addAll(endsWithRpu ? kept.size() - 1 : kept.size(), behind);
       sample.replace(kept);
     }
 

@@ -119,6 +119,20 @@ class FragmentedMp4RpuMoverTest {
 
   @ParameterizedTest(name = "{0}")
   @EnumSource(RpuMove.class)
+  @DisplayName(
+      "Should keep the RPU that ends a sample last when an earlier RPU follows the sample's slice")
+  void shouldKeepTheRpuThatEndsASampleLastWhenAnEarlierRpuFollowsTheSamplesSlice(RpuMove move)
+      throws IOException {
+    var copy =
+        stream(fragmentBuilder().video(0, sample(slice(0), rpu(8), suffixSei(0), rpu(0))).build());
+
+    var moved = move(copy, move);
+
+    assertThat(videoSamplesOf(moved)).containsExactly(hex(slice(0), suffixSei(0), rpu(8), rpu(0)));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(RpuMove.class)
   @DisplayName("Should pass the copy unchanged when every RPU ends its own picture's sample")
   void shouldPassTheCopyUnchangedWhenEveryRpuEndsItsOwnPicturesSample(RpuMove move)
       throws IOException {
