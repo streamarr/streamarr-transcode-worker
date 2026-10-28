@@ -222,6 +222,67 @@ class MatroskaCueReaderTest {
     assertThat(MatroskaCueReader.read(source, 0)).as(malformation).isEqualTo(INCOMPLETE);
   }
 
+  @Test
+  @DisplayName(
+      "Should require a packet scan when a malformed CueTrack precedes a repeat of its CuePoint's"
+          + " CueTime")
+  void shouldRequirePacketScanWhenAMalformedCueTrackPrecedesARepeatOfItsCuePointsCueTime()
+      throws Exception {
+    // FFmpeg's parse of the CuePoint stops at the nine-byte CueTrack, so it never reads 5000.
+    var point =
+        element(
+            0xBB,
+            element(0xB3, unsigned(2_000)),
+            element(0xB7, element(0xF7, unsigned(VIDEO_TRACK))),
+            element(0xB7, element(0xF7, hex("00 00 00 00 00 00 00 00 01"))),
+            element(0xB3, unsigned(5_000)));
+    var cues =
+        element(
+            0x1C53BB6B,
+            point,
+            element(
+                0xBB,
+                element(0xB3, unsigned(10_000)),
+                element(0xB7, element(0xF7, unsigned(VIDEO_TRACK)))));
+    var source = write(document(lavfInfo(), oneVideoTrack(), cues));
+
+    assertThat(MatroskaCueReader.read(source, 0)).isEqualTo(INCOMPLETE);
+  }
+
+  @Test
+  @DisplayName(
+      "Should require a packet scan when a malformed Duration precedes a repeat of the Info's"
+          + " TimestampScale")
+  void shouldRequirePacketScanWhenAMalformedDurationPrecedesARepeatOfTheInfosTimestampScale()
+      throws Exception {
+    // FFmpeg's parse of the Info stops at the three-byte Duration, so it never reads 1000.
+    var info =
+        element(
+            0x1549A966,
+            element(0x2AD7B1, unsigned(1_000_000)),
+            element(0x4D80, "Lavf61.7.100".getBytes(StandardCharsets.UTF_8)),
+            element(0x4489, hex("00 00 00")),
+            element(0x2AD7B1, unsigned(1_000)));
+    var source = write(document(info, oneVideoTrack(), videoCueAt(0)));
+
+    assertThat(MatroskaCueReader.read(source, 0)).isEqualTo(INCOMPLETE);
+  }
+
+  @Test
+  @DisplayName(
+      "Should list the cue times when the Info holds an empty Duration, which FFmpeg reads")
+  void shouldListTheCueTimesWhenTheInfoHoldsAnEmptyDurationWhichFfmpegReads() throws Exception {
+    var info =
+        element(
+            0x1549A966,
+            element(0x4D80, "Lavf61.7.100".getBytes(StandardCharsets.UTF_8)),
+            element(0x4489, new byte[0]));
+    var source = write(document(info, oneVideoTrack(), videoCueAt(0)));
+
+    assertThat(MatroskaCueReader.read(source, 0))
+        .isEqualTo(new Listed(new TimeBase(1, 1_000), List.of(new KeyframeTime(0, 0))));
+  }
+
   @ParameterizedTest(name = "{0}")
   @CsvSource({
     "'an empty file', ''",

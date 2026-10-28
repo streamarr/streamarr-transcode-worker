@@ -61,17 +61,42 @@ final class MatroskaFile {
             return;
           }
 
-          // FFmpeg's parse of a TrackEntry stops at its first malformed element, so a malformed
-          // repeat fails the read whichever type the TrackEntry names.
-          var trackType = unsigned(entry, TRACK_TYPE);
-          var codecId = string(entry, CODEC_ID);
-          if (trackType.orElse(0L) == VIDEO_TRACK_TYPE
-              && codecId.filter(codec -> codec.startsWith("V")).isPresent()
+          requireReadable(entry, MatroskaSyntax.TRACK_ENTRY);
+          if (unsigned(entry, TRACK_TYPE).orElse(0L) == VIDEO_TRACK_TYPE
+              && string(entry, CODEC_ID).filter(codec -> codec.startsWith("V")).isPresent()
               && videoTracksBefore.getAndDecrement() == 0) {
             found.set(entry);
           }
         });
     return Optional.ofNullable(found.get()).orElseThrow(() -> malformed("video TrackEntry"));
+  }
+
+  /**
+   * Fails the read at a child of {@code master}, nested at any depth, whose value its type in
+   * FFmpeg's syntax cannot hold. FFmpeg's parse of the master stops at that child and keeps what
+   * precedes it, which a lookup of the last value of an ID cannot tell from what follows.
+   */
+  static void requireReadable(ByteBuffer master, MatroskaSyntax.Master syntax) {
+    eachChild(
+        master,
+        (id, child) -> {
+          switch (syntax.children().get(id)) {
+            case null -> {
+              // FFmpeg skips a child its syntax does not list.
+            }
+            case MatroskaSyntax.Value.UNSIGNED -> unsigned(child);
+            case MatroskaSyntax.Value.FLOAT -> requireFloat(child);
+            case MatroskaSyntax.Value.STRING -> string(child);
+            case MatroskaSyntax.Master nested -> requireReadable(child, nested);
+          }
+        });
+  }
+
+  // FFmpeg reads an empty float as zero.
+  private static void requireFloat(ByteBuffer value) {
+    if (value.hasRemaining()) {
+      floatValue(value);
+    }
   }
 
   static Optional<Long> unsigned(ByteBuffer parent, long id) {

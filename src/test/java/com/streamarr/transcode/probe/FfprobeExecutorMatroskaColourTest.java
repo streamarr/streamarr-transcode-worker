@@ -219,6 +219,58 @@ class FfprobeExecutorMatroskaColourTest {
   }
 
   @Test
+  @DisplayName(
+      "Should leave the Colour unread when a TrackType that follows a malformed TrackNumber names"
+          + " another type")
+  void shouldLeaveTheColourUnreadWhenATrackTypeThatFollowsAMalformedTrackNumberNamesAnotherType()
+      throws IOException {
+    // FFmpeg's parse of the TrackEntry stops at the nine-byte TrackNumber, so the TrackType that
+    // follows it never reaches FFmpeg, which keeps this track as its first video stream.
+    var first =
+        element(
+            0xAE,
+            element(0xD7, unsigned(1)),
+            element(0x83, unsigned(1)),
+            hevcCodecId(),
+            element(0xD7, new byte[9]),
+            element(0x83, unsigned(2)),
+            element(0xE0, element(0x55B0, element(MAX_CLL, unsigned(900)))));
+    var video =
+        probeMatroska(
+            MATROSKA,
+            document(element(0x1654AE6B, first, trackEntry(2, element(MAX_FALL, unsigned(400))))));
+
+    assertThat(video.getContentLightLevelOmitted()).isTrue();
+    assertThat(video.getMasteringDisplayOmitted()).isTrue();
+  }
+
+  @Test
+  @DisplayName(
+      "Should leave the Colour unread when a malformed value nested in the track's Video precedes a"
+          + " TrackType that names another type")
+  void
+      shouldLeaveTheColourUnreadWhenAMalformedValueNestedInTheTracksVideoPrecedesATrackTypeThatNamesAnotherType()
+          throws IOException {
+    // FFmpeg's parse of the TrackEntry stops inside the Video at the nine-byte PixelWidth.
+    var first =
+        element(
+            0xAE,
+            element(0xD7, unsigned(1)),
+            element(0x83, unsigned(1)),
+            hevcCodecId(),
+            element(
+                0xE0, element(0x55B0, element(MAX_CLL, unsigned(900))), element(0xB0, new byte[9])),
+            element(0x83, unsigned(2)));
+    var video =
+        probeMatroska(
+            MATROSKA,
+            document(element(0x1654AE6B, first, trackEntry(2, element(MAX_FALL, unsigned(400))))));
+
+    assertThat(video.getContentLightLevelOmitted()).isTrue();
+    assertThat(video.getMasteringDisplayOmitted()).isTrue();
+  }
+
+  @Test
   @DisplayName("Should take the last MaxCLL of a Colour that repeats it, as FFmpeg does")
   void shouldTakeTheLastMaxCllOfAColourThatRepeatsItAsFfmpegDoes() throws IOException {
     var video =

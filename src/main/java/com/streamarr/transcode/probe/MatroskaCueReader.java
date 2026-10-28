@@ -72,6 +72,7 @@ final class MatroskaCueReader {
     }
 
     var info = topLevel.info().orElseThrow(() -> malformed("Info"));
+    MatroskaFile.requireReadable(info, MatroskaSyntax.INFO);
     var cueTimes = cueTimes(topLevel.cues().get(), trackNumber);
     if (!writesCueForEveryVideoKeyframe(info) || cueTimes.isEmpty()) {
       return unusable(
@@ -96,6 +97,7 @@ final class MatroskaCueReader {
   private static TreeSet<Long> cueTimes(ByteBuffer cues, long trackNumber) {
     var times = new TreeSet<Long>();
     for (var point : children(cues, CUE_POINT)) {
+      MatroskaFile.requireReadable(point, MatroskaSyntax.CUE_POINT);
       var listsTrack =
           children(point, CUE_TRACK_POSITIONS).stream()
               .anyMatch(positions -> unsigned(positions, CUE_TRACK).orElse(0L) == trackNumber);
