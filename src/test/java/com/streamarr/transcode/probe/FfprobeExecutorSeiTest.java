@@ -804,6 +804,31 @@ class FfprobeExecutorSeiTest {
       assertThat(video.getMasteringDisplayOmitted()).isFalse();
       assertThat(video.getContentLightLevelOmitted()).isFalse();
     }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Coding.class)
+    @DisplayName(
+        "Should take no static value from the packets and flag none when no read decodes a frame")
+    void shouldTakeNoStaticValueFromThePacketsAndFlagNoneWhenNoReadDecodesAFrame(Coding coding) {
+      // A read that decodes no frame is not cut short: the probe walks neither the extradata nor
+      // the packets, so only the container gives static values.
+      var video =
+          probe(
+                  coding
+                      .answers()
+                      .prerollPackets(Integer.MAX_VALUE)
+                      .firstFrames(frames("", "", ""))
+                      .firstPackets(
+                          packets(coding.sample(coding.sei(MASTERING_DISPLAY, LIGHT_LEVEL))))
+                      .build())
+              .getStreams(0);
+
+      assertThat(video.getFirstFramesRead()).isFalse();
+      assertThat(video.hasMasteringDisplay()).isFalse();
+      assertThat(video.hasContentLightLevel()).isFalse();
+      assertThat(video.getMasteringDisplayOmitted()).isFalse();
+      assertThat(video.getContentLightLevelOmitted()).isFalse();
+    }
   }
 
   @Nested
