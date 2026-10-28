@@ -56,9 +56,16 @@ final class MatroskaFile {
         tracks,
         TRACK_ENTRY,
         entry -> {
-          if (found.get() == null
-              && unsigned(entry, TRACK_TYPE).orElse(0L) == VIDEO_TRACK_TYPE
-              && string(entry, CODEC_ID).filter(codec -> codec.startsWith("V")).isPresent()
+          if (found.get() != null) {
+            return;
+          }
+
+          // FFmpeg's parse of a TrackEntry stops at its first malformed element, so a malformed
+          // repeat fails the read whichever type the TrackEntry names.
+          var trackType = unsigned(entry, TRACK_TYPE);
+          var codecId = string(entry, CODEC_ID);
+          if (trackType.orElse(0L) == VIDEO_TRACK_TYPE
+              && codecId.filter(codec -> codec.startsWith("V")).isPresent()
               && videoTracksBefore.getAndDecrement() == 0) {
             found.set(entry);
           }

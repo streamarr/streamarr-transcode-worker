@@ -191,6 +191,34 @@ class FfprobeExecutorMatroskaColourTest {
   }
 
   @Test
+  @DisplayName(
+      "Should leave the Colour unread when a TrackType that follows an oversized CodecID repeat"
+          + " names another type")
+  void shouldLeaveTheColourUnreadWhenATrackTypeThatFollowsAnOversizedCodecIdRepeatNamesAnotherType()
+      throws IOException {
+    // FFmpeg's parse of the TrackEntry stops at the oversized CodecID, so the TrackType that
+    // follows it never reaches FFmpeg, which keeps this track as its first video stream.
+    var oversized = new byte[(16 << 20) + 1];
+    Arrays.fill(oversized, (byte) 'A');
+    var first =
+        element(
+            0xAE,
+            element(0xD7, unsigned(1)),
+            element(0x83, unsigned(1)),
+            hevcCodecId(),
+            element(0x86, oversized),
+            element(0x83, unsigned(2)),
+            element(0xE0, element(0x55B0, element(MAX_CLL, unsigned(900)))));
+    var video =
+        probeMatroska(
+            MATROSKA,
+            document(element(0x1654AE6B, first, trackEntry(2, element(MAX_FALL, unsigned(400))))));
+
+    assertThat(video.getContentLightLevelOmitted()).isTrue();
+    assertThat(video.getMasteringDisplayOmitted()).isTrue();
+  }
+
+  @Test
   @DisplayName("Should take the last MaxCLL of a Colour that repeats it, as FFmpeg does")
   void shouldTakeTheLastMaxCllOfAColourThatRepeatsItAsFfmpegDoes() throws IOException {
     var video =
