@@ -57,15 +57,15 @@ from its lavfi test sources. No file comes from a media library.
 | `avi-h264-unknown-extradata.avi.json` | H.264 in AVI whose extradata `set-avi-extradata.py` replaced with 4 bytes that are neither a configuration record nor Annex B. `h264_mp4toannexb` refuses that extradata, so the stream has no copy |
 | `webm-vp9-hdr10-plus.webm.json` | FFmpeg's FATE sample `mkv/hdr10_plus_vp9_sample.webm`: VP9 whose HDR10+ metadata a WebM BlockAdditional carries to the frame |
 | `hevc-hdr-vivid-repeated.hevc.json` | One HLG frame whose x265 SEI messages carry a mastering display and a light level of 0, and into which `insert-hdr-vivid-sei.py` put a CUVA HDR Vivid message, repeated 3 times so that the stream holds 3 frames |
-| `mp4-dovi-p5-dvh1.mp4.json` | Local sample: Dolby Vision profile 5 under `dvh1` with a `dvcC` record and no transfer tag |
+| `mp4-dovi-p5-dvh1.mp4.json` | Local sample: Dolby Vision profile 5 under `dvh1` with a `dvcC` record and no transfer tag (see Sources) |
 | `mp4-dovi-p5-dvh1-no-record.mp4.json` | Local sample: the same file with its record removed |
-| `mp4-dovi-p81.mp4.json` | Local sample: Dolby Vision profile 8.1 under `hvc1`, PQ |
+| `mp4-dovi-p81.mp4.json` | Local sample: Dolby Vision profile 8.1 under `hvc1`, PQ (see Sources) |
 | `mp4-dovi-p82.mp4.json` | Local sample: Dolby Vision profile 8.2 under `hvc1`, BT.709, made by adding a `dvvC` record to an SDR HEVC encode |
-| `mp4-dovi-p84-hlg.mp4.json` | Local sample: Dolby Vision profile 8.4 under `hvc1`, HLG |
+| `mp4-dovi-p84-hlg.mp4.json` | Local sample: Dolby Vision profile 8.4 under `hvc1`, HLG (see Sources) |
 | `mp4-dovi-p9-avc1.mp4.json` | Dolby Vision profile 9 under `avc1`: one second of 8-bit H.264 at 1080p24 tagged BT.709, after each picture of which `insert-avc-rpus.py` put an RPU that `dovi_tool generate` made, with a `dvvC` record that GPAC's MP4Box added |
 | `mp4-dovi-p9-dva1.mp4.json` | The same stream, to which MP4Box gave a `dva1` sample entry |
-| `mp4-hevc-hdr10.mp4.json` | Local sample: 10-bit HEVC with PQ. Neither its container nor the SEI messages of its first 600 frames carry static HDR metadata, so it is PQ10 |
-| `mp4-hevc-sdr10-untagged.mp4.json` | Local sample: 10-bit HEVC SDR without a transfer tag |
+| `mp4-hevc-hdr10.mp4.json` | Local sample: 10-bit HEVC with PQ. Neither its container nor the SEI messages of its first 600 frames carry static HDR metadata, so it is PQ10 (see Sources) |
+| `mp4-hevc-sdr10-untagged.mp4.json` | Local sample: 10-bit HEVC SDR without a transfer tag (see Sources) |
 | `mov-phone-hlg-dovi-p84.mov.json` | Local sample: a phone camera original, HEVC HLG with Dolby Vision 8.4 (see Sources) |
 | `mov-phone-rotated.mov.json` | Local sample: a phone camera original, H.264 recorded upright (see Sources) |
 | `mpegts-hevc-ac3.ts.json` | HEVC and AC-3 in MPEG-TS, whose HEVC parameter sets ffprobe dumps in Annex B form |
@@ -96,10 +96,15 @@ from its lavfi test sources. No file comes from a media library.
 
 ## Sources
 
-The phone and camcorder fixtures hold only ffprobe's description of each file and its packet timing. The files themselves stay local. Each file was downloaded from the Internet Archive.
+These fixtures hold only ffprobe's description of each file, and the phone and camcorder fixtures also its packet timing. The files themselves stay local. The phone and camcorder files come from the Internet Archive, and the Dolby Vision and HEVC files from the Jellyfin project's [test videos](https://repo.jellyfin.org/test-videos/), which it states are courtesy of Gnattu and licensed under CC BY-SA 4.0.
 
 | Fixture | Source | Author | License |
 | --- | --- | --- | --- |
+| `mp4-dovi-p5-dvh1`, `mp4-dovi-p5-dvh1-no-record`, `mp4-dovi-p5-no-record-bt709`, `mpegts-dovi-p5-no-descriptor` | [Test Jellyfin 1080p DV P5.mp4](https://repo.jellyfin.org/test-videos/HDR/Dolby%20Vision/Test%20Jellyfin%201080p%20DV%20P5.mp4) | Gnattu, via the Jellyfin project | [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) |
+| `mp4-dovi-p81` | [Test Jellyfin 1080p DV P8.1.mp4](https://repo.jellyfin.org/test-videos/HDR/Dolby%20Vision/Test%20Jellyfin%201080p%20DV%20P8.1.mp4) | Gnattu, via the Jellyfin project | [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) |
+| `mp4-dovi-p84-hlg` | [Test Jellyfin 1080p DV P8.4.mp4](https://repo.jellyfin.org/test-videos/HDR/Dolby%20Vision/Test%20Jellyfin%201080p%20DV%20P8.4.mp4) | Gnattu, via the Jellyfin project | [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) |
+| `mp4-hevc-hdr10` | [Test Jellyfin 1080p HEVC HDR10 10M.mp4](https://repo.jellyfin.org/test-videos/HDR/HDR10/HEVC/Test%20Jellyfin%201080p%20HEVC%20HDR10%2010M.mp4) | Gnattu, via the Jellyfin project | [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) |
+| `mp4-hevc-sdr10-untagged` | [Test Jellyfin 1080p HEVC 10bit 10M.mp4](https://repo.jellyfin.org/test-videos/SDR/HEVC%2010bit/Test%20Jellyfin%201080p%20HEVC%2010bit%2010M.mp4) | Gnattu, via the Jellyfin project | [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) |
 | `mov-phone-hlg-dovi-p84` | [img-5945_202311](https://archive.org/details/img-5945_202311) | Simon Robin Lehn | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) |
 | `mov-phone-rotated` | [img-6851_202505](https://archive.org/details/img-6851_202505) | Imad Rahi | [Public Domain Mark 1.0](https://creativecommons.org/publicdomain/mark/1.0/) |
 | `mov-phone-one-gap` | [img-4999_202406](https://archive.org/details/img-4999_202406) | Maung Fate | [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) |
