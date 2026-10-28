@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Set;
+import java.util.stream.Stream;
 import lombok.NonNull;
 
 /**
@@ -114,6 +115,7 @@ final class FragmentedMp4RpuMover {
   private void accept(Fragment fragment) throws IOException {
     var moof = boxView(fragment.boxes().getFirst());
     requireFfmpegLayout(moof);
+    requireSamplesWithinTheirMdat(fragment);
     var heldFragment = new HeldFragment(fragment, moof);
     for (var sample : heldFragment.videoSamples) {
       repair(sample);
@@ -143,6 +145,23 @@ final class FragmentedMp4RpuMover {
                 + header.trackId()
                 + " places its data other than from the start of its moof");
       }
+    }
+  }
+
+  // Each run lies inside the mdat, but runs may still overlap; a rewrite writes every sample
+  // apart, so samples that hold more bytes than their mdat would grow the copy past its input.
+  private static void requireSamplesWithinTheirMdat(Fragment fragment) {
+    var sampleBytes =
+        Stream.concat(fragment.videoSamples().stream(), fragment.audioSamples().stream())
+            .mapToLong(Sample::size)
+            .sum();
+    if (sampleBytes > fragment.mediaDataBox().length - BOX_HEADER_BYTES) {
+      throw FragmentedMp4Exception.malformed(
+          "the runs of a fragment place "
+              + sampleBytes
+              + " sample bytes in an mdat of "
+              + fragment.mediaDataBox().length
+              + " bytes");
     }
   }
 

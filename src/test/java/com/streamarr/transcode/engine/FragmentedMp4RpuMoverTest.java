@@ -280,6 +280,24 @@ class FragmentedMp4RpuMoverTest {
         .isEqualTo(Reason.UNEXPECTED_BOX);
   }
 
+  @ParameterizedTest(name = "{0} runs")
+  @ValueSource(ints = {2, 4096})
+  @DisplayName(
+      "Should fail as a malformed box when the runs of a fragment place more sample bytes than its"
+          + " mdat holds")
+  void shouldFailAsAMalformedBoxWhenTheRunsOfAFragmentPlaceMoreSampleBytesThanItsMdatHolds(
+      int runs) {
+    var picture = sample(rpu(0), aud(), slice(0));
+    var moof = moofOfRunsOverOneSample(runs, picture.length, 0);
+    moof = moofOfRunsOverOneSample(runs, picture.length, moof.length + 8);
+    var copy = concat(initializationSegment(), moof, box("mdat", picture));
+
+    assertThatExceptionOfType(FragmentedMp4Exception.class)
+        .isThrownBy(() -> move(copy, RpuMove.BEHIND_OWN_PICTURE))
+        .extracting(FragmentedMp4Exception::getReason)
+        .isEqualTo(Reason.MALFORMED_BOX);
+  }
+
   @Test
   @DisplayName("Should fail as the end of the file in a box body when the copy ends inside an mdat")
   void shouldFailAsTheEndOfTheFileInABoxBodyWhenTheCopyEndsInsideAnMdat() {
@@ -307,6 +325,26 @@ class FragmentedMp4RpuMoverTest {
             fullBox("tfhd", IsoBoxes.TFHD_DEFAULT_SAMPLE_SIZE, u32(1), u32(1)),
             fullBox("tfdt", 0, u32(0)),
             fullBox("trun", IsoBoxes.TRUN_DATA_OFFSET, u32(1), u32(dataOffset))));
+  }
+
+  // Runs of one video sample each, which all place that sample at the same data offset.
+  private static byte[] moofOfRunsOverOneSample(int runs, int sampleBytes, int dataOffset) {
+    var run = fullBox("trun", IsoBoxes.TRUN_DATA_OFFSET, u32(1), u32(dataOffset));
+    var trafChildren = new byte[runs + 2][];
+    trafChildren[0] =
+        fullBox(
+            "tfhd",
+            IsoBoxes.TFHD_DEFAULT_BASE_IS_MOOF
+                | IsoBoxes.TFHD_DEFAULT_SAMPLE_DURATION
+                | IsoBoxes.TFHD_DEFAULT_SAMPLE_SIZE
+                | IsoBoxes.TFHD_DEFAULT_SAMPLE_FLAGS,
+            u32(IsoBoxes.VIDEO_TRACK_ID),
+            u32(HevcCopies.VIDEO_SAMPLE_DURATION),
+            u32(sampleBytes),
+            u32(IsoBoxes.SYNC_SAMPLE_FLAGS));
+    trafChildren[1] = fullBox("tfdt", IsoBoxes.VERSION_1, IsoBoxes.u64(0));
+    Arrays.fill(trafChildren, 2, trafChildren.length, run);
+    return box("moof", fullBox("mfhd", 0, u32(1)), box("traf", trafChildren));
   }
 
   private static byte[] stream(byte[]... fragments) {
