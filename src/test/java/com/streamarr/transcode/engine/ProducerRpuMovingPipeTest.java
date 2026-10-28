@@ -2,11 +2,14 @@ package com.streamarr.transcode.engine;
 
 import static com.streamarr.transcode.engine.FfmpegRecordings.bytesOf;
 import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
-import static com.streamarr.transcode.engine.TransportStreams.AUD;
-import static com.streamarr.transcode.engine.TransportStreams.RPU;
-import static com.streamarr.transcode.engine.TransportStreams.TRAIL_R;
-import static com.streamarr.transcode.engine.TransportStreams.VIDEO_PID;
-import static com.streamarr.transcode.engine.TransportStreams.accessUnit;
+import static com.streamarr.transcode.engine.HevcCopies.aud;
+import static com.streamarr.transcode.engine.HevcCopies.fragmentBuilder;
+import static com.streamarr.transcode.engine.HevcCopies.initializationSegment;
+import static com.streamarr.transcode.engine.HevcCopies.rpu;
+import static com.streamarr.transcode.engine.HevcCopies.sample;
+import static com.streamarr.transcode.engine.HevcCopies.slice;
+import static com.streamarr.transcode.engine.IsoBoxes.box;
+import static com.streamarr.transcode.engine.IsoBoxes.concat;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
@@ -18,7 +21,10 @@ import com.streamarr.transcode.engine.AttemptOutcome.Stopped;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -29,8 +35,8 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 @Tag("UnitTest")
-@DisplayName("Producer Transport Stream Pipe Tests")
-class ProducerTransportStreamPipeTest {
+@DisplayName("Producer RPU Moving Pipe Tests")
+class ProducerRpuMovingPipeTest {
 
   private static final Duration OUTCOME_LIMIT = Duration.ofSeconds(10);
   private static final UUID JOB_ATTEMPT_ID =
@@ -38,15 +44,15 @@ class ProducerTransportStreamPipeTest {
   private static final List<String> COPY_COMMAND = List.of("copy-ffmpeg");
   private static final List<String> ENCODE_COMMAND = List.of("encode-ffmpeg");
   private static final byte[] COPIED_SOURCE =
-      TransportStreams.withProgram(TransportStreams.HEVC)
-          .pes(VIDEO_PID, accessUnit(AUD, TRAIL_R))
-          .pes(VIDEO_PID, accessUnit(AUD, RPU, TRAIL_R))
-          .bytes();
+      concat(
+          initializationSegment(),
+          fragmentBuilder().video(0, sample(aud(), slice(0))).build(),
+          fragmentBuilder().video(1001, sample(aud(), rpu(0), slice(1))).build());
   private static final byte[] MOVED_SOURCE =
-      TransportStreams.withProgram(TransportStreams.HEVC)
-          .pes(VIDEO_PID, accessUnit(AUD, TRAIL_R))
-          .pes(VIDEO_PID, accessUnit(RPU, AUD, TRAIL_R))
-          .bytes();
+      concat(
+          initializationSegment(),
+          fragmentBuilder().video(0, sample(aud(), slice(0), rpu(0))).build(),
+          fragmentBuilder().video(1001, sample(aud(), slice(1))).build());
 
   private final RecordingSegmentSink sink = new RecordingSegmentSink();
 
@@ -62,7 +68,7 @@ class ProducerTransportStreamPipeTest {
     var producer = producerOf(copy, encode).start();
 
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
-    assertThat(encode.stdinBytes()).isEqualTo(MOVED_SOURCE);
+    assertThat(videoSamplesOf(encode.stdinBytes())).isEqualTo(videoSamplesOf(MOVED_SOURCE));
     assertThat(encode.hasInputEnded()).isTrue();
     assertThat(sink.acceptedNames())
         .hasSize(recording(ENCODED_RECORDING).segments().size() + 1)
@@ -90,7 +96,7 @@ class ProducerTransportStreamPipeTest {
 
     assertThat(producer.outcome()).isCompletedWithValue(new Stopped());
     assertThat(copy.stdinText()).isEqualTo("q");
-    assertThat(encode.stdinBytes()).isEqualTo(MOVED_SOURCE);
+    assertThat(videoSamplesOf(encode.stdinBytes())).isEqualTo(videoSamplesOf(MOVED_SOURCE));
     assertThat(encode.hasInputEnded()).isTrue();
     assertThat(copy.wasDestroyedForcibly()).isFalse();
     assertThat(encode.wasDestroyedForcibly()).isFalse();
@@ -205,6 +211,68 @@ class ProducerTransportStreamPipeTest {
     assertThat(copy.wasDestroyedForcibly()).isTrue();
   }
 
+  @Test
+  @DisplayName(
+      "Should fail the attempt for the mover's reason, and end the copying FFmpeg, when the mover"
+          + " refuses the copy and the encoding FFmpeg exits cleanly")
+  void
+      shouldFailTheAttemptForTheMoversReasonAndEndTheCopyingFfmpegWhenTheMoverRefusesTheCopyAndTheEncodingFfmpegExitsCleanly() {
+    var notHevc =
+        concat(
+            initializationSegment(box("avc1", new byte[78], box("avcC", new byte[7]))),
+            fragmentBuilder().video(0, sample(slice(0))).build());
+    var copy =
+        ScriptedProcess.builder().output(notHevc).exitTiming(ExitTiming.WHEN_TEST_EXITS).build();
+    var encode = encodingFfmpeg().build();
+
+    var producer = producerOf(copy, encode).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
+    assertThat(failure.detail()).contains("copy of the source", "no HEVC video");
+    assertThat(copy.wasTerminated()).isTrue();
+    assertThat(encode.hasInputEnded()).isTrue();
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as a truncated output when the copy ends inside a box and both"
+          + " FFmpegs exit cleanly")
+  void shouldFailTheAttemptAsATruncatedOutputWhenTheCopyEndsInsideABoxAndBothFfmpegsExitCleanly() {
+    var copy =
+        ScriptedProcess.builder()
+            .output(Arrays.copyOf(COPIED_SOURCE, COPIED_SOURCE.length - 1))
+            .build();
+    var encode = encodingFfmpeg().build();
+
+    var producer = producerOf(copy, encode).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.TRUNCATED_OUTPUT);
+    assertThat(failure.detail()).contains("copy of the source");
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt with the copying FFmpeg's error output when the copy ends inside a"
+          + " box and the copying FFmpeg exits with an error")
+  void
+      shouldFailTheAttemptWithTheCopyingFfmpegsErrorOutputWhenTheCopyEndsInsideABoxAndTheCopyingFfmpegExitsWithAnError() {
+    var copy =
+        ScriptedProcess.builder()
+            .output(Arrays.copyOf(COPIED_SOURCE, COPIED_SOURCE.length - 1))
+            .exitCode(1)
+            .stderr("Error reading the source: Input/output error\n")
+            .build();
+    var encode = encodingFfmpeg().build();
+
+    var producer = producerOf(copy, encode).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.PROCESS_EXITED_WITH_ERROR);
+    assertThat(failure.detail()).contains("copies the source", "exit code 1");
+  }
+
   private static ScriptedProcess.ScriptedProcessBuilder encodingFfmpeg() {
     return ScriptedProcess.builder()
         .output(bytesOf(ENCODED_RECORDING))
@@ -219,7 +287,9 @@ class ProducerTransportStreamPipeTest {
     var recording = recording(ENCODED_RECORDING);
     return Producer.builder()
         .launcher(launcher)
-        .pipeline(new FfmpegPipeline.RpuMovingPipe(COPY_COMMAND, ENCODE_COMMAND))
+        .pipeline(
+            new FfmpegPipeline.RpuMovingPipe(
+                COPY_COMMAND, ENCODE_COMMAND, RpuMove.BEHIND_PREVIOUS_PICTURE))
         .jobAttemptId(JOB_ATTEMPT_ID)
         .gracePeriod(Duration.ofSeconds(5))
         .stallTimeout(Duration.ofMinutes(1))
@@ -230,6 +300,25 @@ class ProducerTransportStreamPipeTest {
         .memoryBudget(SegmentMemoryBudget.forSlots(1))
         .sink(sink)
         .clock(MonotonicClock.system());
+  }
+
+  private static List<String> videoSamplesOf(byte[] stream) {
+    try {
+      return Mp4Stream.read(Mp4Stream.readerOf(stream)).fragments().stream()
+          .flatMap(
+              fragment ->
+                  fragment.videoSamples().stream()
+                      .map(
+                          sample ->
+                              HexFormat.of()
+                                  .formatHex(
+                                      fragment.mediaDataBox(),
+                                      sample.mediaDataPosition(),
+                                      sample.mediaDataPosition() + Math.toIntExact(sample.size()))))
+          .toList();
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
+    }
   }
 
   private static Failed failureOf(Producer producer) {

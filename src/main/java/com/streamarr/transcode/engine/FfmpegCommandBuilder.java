@@ -7,7 +7,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import lombok.Builder;
 import lombok.NonNull;
@@ -84,10 +83,23 @@ public class FfmpegCommandBuilder {
   // it adds a keyframe at each scene cut, inside a segment.
   private static final String CLOSED_GOP_X265_PARAMETERS = "no-scenecut=1:no-open-gop=1";
 
-  // The audio codecs whose packets come back unchanged through FFmpeg's MPEG-TS muxer and demuxer,
-  // apart from the encoder's trim of the stream's last frame. MPEG-TS carries FLAC and ALAC only as
-  // private data, which the demuxer reads back as no audio, and Opus without its pre-skip.
-  private static final Set<String> AUDIO_CARRIED_BY_MPEG_TS = Set.of("aac", "ac3", "eac3");
+  // The copy of the source that the encode of a profile 5 source reads: fragmented MP4, whose
+  // muxer writes each packet as soon as it has one and whose movie timescale keeps every timestamp
+  // the source's demuxer reads. skip_trailer stops the muxer from keeping an index entry of every
+  // fragment for a random-access index that the pipe has no use for.
+  private static final List<String> SOURCE_COPY_OUTPUT =
+      List.of(
+          "-f",
+          "mp4",
+          "-movflags",
+          "delay_moov+default_base_moof+frag_keyframe+skip_trailer",
+          "-frag_duration",
+          "1",
+          "-movie_timescale",
+          "1000000",
+          "-flush_packets",
+          "1",
+          "pipe:1");
 
   static final List<String> MP4_MOVFLAGS =
       List.of("cmaf", "delay_moov", "skip_trailer", "frag_keyframe", "frag_discont");
@@ -97,9 +109,12 @@ public class FfmpegCommandBuilder {
   private static final int LONGEST_ARGUMENT_BYTES = 32 * 4096 - 1;
 
   public FfmpegPipeline buildPipeline(TranscodeJob job) {
-    if (needsRpusMovedBehindTheirPictures(job)) {
+    var rpuMove = rpuMoveOf(job);
+    if (rpuMove.isPresent()) {
       return new FfmpegPipeline.RpuMovingPipe(
-          buildSourceCopyCommand(job), buildCommand(job, EncoderInput.COPY_OF_THE_SOURCE));
+          buildSourceCopyCommand(job),
+          buildCommand(job, EncoderInput.COPY_OF_THE_SOURCE),
+          rpuMove.orElseThrow());
     }
 
     return new FfmpegPipeline.SingleProcess(buildCommand(job, EncoderInput.SOURCE));
@@ -108,32 +123,30 @@ public class FfmpegCommandBuilder {
   // Dolby Vision profile 5 is the only profile without a compatible base, so only its picture
   // needs the RPU that FFmpeg's HEVC decoder skips when the RPU starts a sample. A copy decodes
   // nothing.
-  private static boolean needsRpusMovedBehindTheirPictures(TranscodeJob job) {
-    var decision = job.request().transcodeDecision();
-    return decision.videoDecision() instanceof VideoDecision.Encode encode
-        && encode.sourceCodecFamily().equals(Optional.of(CodecFamily.HEVC))
-        && encode.sourceDynamicRange().compatibleBase() == VideoDynamicRange.CompatibleBase.NONE
-        && encode.sourceDynamicRange().dolbyVision()
-            instanceof VideoDynamicRange.DolbyVision.Present present
-        && startsSamples(present.rpuPlacement())
-        && travelsInMpegTs(decision.audioDecision());
+  private static Optional<RpuMove> rpuMoveOf(TranscodeJob job) {
+    return profile5HevcSourceOf(job.request().transcodeDecision().videoDecision())
+        .flatMap(present -> rpuMoveFor(present.rpuPlacement()));
   }
 
-  private static boolean startsSamples(VideoDynamicRange.DolbyVisionRpuPlacement placement) {
+  private static Optional<VideoDynamicRange.DolbyVision.Present> profile5HevcSourceOf(
+      VideoDecision video) {
+    if (!(video instanceof VideoDecision.Encode encode)
+        || !encode.sourceCodecFamily().equals(Optional.of(CodecFamily.HEVC))
+        || encode.sourceDynamicRange().compatibleBase() != VideoDynamicRange.CompatibleBase.NONE
+        || !(encode.sourceDynamicRange().dolbyVision()
+            instanceof VideoDynamicRange.DolbyVision.Present present)) {
+      return Optional.empty();
+    }
+
+    return Optional.of(present);
+  }
+
+  private static Optional<RpuMove> rpuMoveFor(VideoDynamicRange.DolbyVisionRpuPlacement placement) {
     return switch (placement) {
-      case BEFORE_NEXT_PICTURE, BEFORE_OWN_PICTURE -> true;
-      case UNSPECIFIED, AFTER_OWN_PICTURE -> false;
+      case BEFORE_NEXT_PICTURE -> Optional.of(RpuMove.BEHIND_PREVIOUS_PICTURE);
+      case BEFORE_OWN_PICTURE -> Optional.of(RpuMove.BEHIND_OWN_PICTURE);
+      case UNSPECIFIED, AFTER_OWN_PICTURE -> Optional.empty();
     };
-  }
-
-  // The audio travels as the job's output codec: the source's when the job copies it, and the one
-  // the copy encodes when the job encodes it. A job whose audio codec MPEG-TS does not carry, or
-  // which names none, keeps one FFmpeg.
-  private static boolean travelsInMpegTs(AudioDecision audio) {
-    return audio.mode() == AudioMode.NONE
-        || Optional.ofNullable(audio.codec())
-            .filter(AUDIO_CARRIED_BY_MPEG_TS::contains)
-            .isPresent();
   }
 
   private List<String> buildCommand(TranscodeJob job, EncoderInput input) {
@@ -155,24 +168,32 @@ public class FfmpegCommandBuilder {
     return List.copyOf(cmd);
   }
 
-  // The copy seeks as the single command would and keeps the timestamps that command reads;
-  // -muxdelay 0 stops the MPEG-TS muxer from shifting them, so the encode of the copy reads them
-  // unchanged. The copy encodes audio that the job encodes, as it decodes every source codec, and
-  // the seek trims that audio exactly as it trims the single command's.
+  // The copy seeks as the single command would and keeps the timestamps that command reads, so
+  // the encode of the copy reads them unchanged. The copy encodes audio that the job encodes, as
+  // it decodes every source codec, and the seek trims that audio exactly as it trims the single
+  // command's. FFmpeg's opus encoder is experimental, so the copy names libopus. The mp4 muxer
+  // keeps a Dolby Vision configuration record only when the compliance is unofficial.
   private List<String> buildSourceCopyCommand(TranscodeJob job) {
     var cmd = new ArrayList<String>();
     var audio = job.request().transcodeDecision().audioDecision();
     addInputArgs(cmd, job.request());
     addStreamSelection(cmd, job.request().transcodeDecision());
     addCommonFlags(cmd, EncoderInput.SOURCE);
-    if (audio.mode() == AudioMode.TRANSCODE) {
-      cmd.addAll(List.of("-c:v", "copy"));
-      addAudioArgs(cmd, audio);
+    cmd.addAll(List.of("-c:v", "copy", "-strict", "unofficial"));
+    if (audio.mode() == AudioMode.TRANSCODE && "opus".equals(audio.codec())) {
+      addAudioArgs(
+          cmd,
+          AudioDecision.builder()
+              .mode(audio.mode())
+              .codec("libopus")
+              .channels(audio.channels())
+              .bitrate(audio.bitrate())
+              .build());
     } else {
-      cmd.addAll(List.of("-c", "copy"));
+      addAudioArgs(cmd, audio);
     }
 
-    cmd.addAll(List.of("-muxdelay", "0", "-f", "mpegts", "pipe:1"));
+    cmd.addAll(SOURCE_COPY_OUTPUT);
     return List.copyOf(cmd);
   }
 
@@ -186,7 +207,20 @@ public class FfmpegCommandBuilder {
       return;
     }
 
-    cmd.addAll(List.of(ffmpegPath, "-y", "-f", "mpegts", "-i", "pipe:0", "-map", "0:v:0"));
+    cmd.addAll(
+        List.of(
+            ffmpegPath,
+            "-y",
+            "-analyzeduration",
+            "1",
+            "-fpsprobesize",
+            "0",
+            "-f",
+            "mp4",
+            "-i",
+            "pipe:0",
+            "-map",
+            "0:v:0"));
     if (decision.audioDecision().mode() != AudioMode.NONE) {
       cmd.addAll(List.of("-map", "0:a:0"));
     }
@@ -310,9 +344,10 @@ public class FfmpegCommandBuilder {
   }
 
   // The FFmpeg that decodes the source discards the frames before its seek, and, through the
-  // source's own markings, such as an MP4 edit list, those before its start. MPEG-TS carries
-  // neither, so the encode of the copy trims its video at the attempt's start, seeking or not:
-  // after -start_at_zero, nothing else lies before zero.
+  // source's own markings, such as an MP4 edit list, those before its start. The stream copy keeps
+  // every packet from the keyframe at or before its seek, which the FFmpeg that reads the copy
+  // would decode and keep, so the encode of the copy trims its video at the attempt's start,
+  // seeking or not: after -start_at_zero, nothing else lies before zero.
   private static Optional<String> trimStart(TranscodeRequest request, EncoderInput input) {
     if (input == EncoderInput.SOURCE) {
       return Optional.empty();

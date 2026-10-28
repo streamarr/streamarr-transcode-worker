@@ -1473,10 +1473,11 @@ class FfmpegCommandBuilderTest {
 
   @Test
   @DisplayName(
-      "Should copy the source into MPEG-TS and encode the copy when a Dolby Vision profile 5"
-          + " sample starts with its RPU")
+      "Should copy the source into fragmented MP4 and encode the copy once its RPUs move behind the"
+          + " previous picture when a Dolby Vision profile 5 sample starts with the RPU of the"
+          + " picture before")
   void
-      shouldCopyTheSourceIntoMpegTsAndEncodeTheCopyWhenADolbyVisionProfile5SampleStartsWithItsRpu() {
+      shouldCopyTheSourceIntoFragmentedMp4AndEncodeTheCopyOnceItsRpusMoveBehindThePreviousPictureWhenADolbyVisionProfile5SampleStartsWithTheRpuOfThePictureBefore() {
     var request =
         request(encoding(profile5Encode(DolbyVisionRpuPlacement.BEFORE_NEXT_PICTURE)))
             .height(720)
@@ -1512,22 +1513,34 @@ class FfmpegCommandBuilderTest {
                     "10000000",
                     "-c:v",
                     "copy",
+                    "-strict",
+                    "unofficial",
                     "-c:a",
                     "aac",
                     "-ac",
                     "2",
                     "-b:a",
                     "128k",
-                    "-muxdelay",
-                    "0",
                     "-f",
-                    "mpegts",
+                    "mp4",
+                    "-movflags",
+                    "delay_moov+default_base_moof+frag_keyframe+skip_trailer",
+                    "-frag_duration",
+                    "1",
+                    "-movie_timescale",
+                    "1000000",
+                    "-flush_packets",
+                    "1",
                     "pipe:1"),
                 List.of(
                     "ffmpeg",
                     "-y",
+                    "-analyzeduration",
+                    "1",
+                    "-fpsprobesize",
+                    "0",
                     "-f",
-                    "mpegts",
+                    "mp4",
                     "-i",
                     "pipe:0",
                     "-map",
@@ -1585,7 +1598,22 @@ class FfmpegCommandBuilderTest {
                     "cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont",
                     "-frag_duration",
                     "1000000",
-                    "pipe:1")));
+                    "pipe:1"),
+                RpuMove.BEHIND_PREVIOUS_PICTURE));
+  }
+
+  @Test
+  @DisplayName(
+      "Should move each RPU behind its own picture when a Dolby Vision profile 5 sample starts with"
+          + " its own picture's RPU")
+  void
+      shouldMoveEachRpuBehindItsOwnPictureWhenADolbyVisionProfile5SampleStartsWithItsOwnPicturesRpu() {
+    var request =
+        request(encoding(profile5Encode(DolbyVisionRpuPlacement.BEFORE_OWN_PICTURE))).build();
+
+    var pipe = rpuMovingPipe(builder.buildPipeline(job(request, "libx264")));
+
+    assertThat(pipe.rpuMove()).isEqualTo(RpuMove.BEHIND_OWN_PICTURE);
   }
 
   @Test
@@ -1604,9 +1632,9 @@ class FfmpegCommandBuilderTest {
 
     assertThat(pipe.copyCommand())
         .containsSequence("ffmpeg", "-y", "-ss", "12", "-i", "/media/movie.mkv", "-map", "0:0")
-        .containsSequence("-c:v", "copy", "-c:a", "aac", "-ac", "2", "-b:a", "128k", "-muxdelay");
+        .containsSequence("-c:a", "aac", "-ac", "2", "-b:a", "128k", "-f", "mp4");
     assertThat(pipe.encodeCommand())
-        .containsSequence("-f", "mpegts", "-i", "pipe:0", "-map", "0:v:0")
+        .containsSequence("-f", "mp4", "-i", "pipe:0", "-map", "0:v:0")
         .containsSequence("-c:a", "copy", "-bsf:a", "aac_adtstoasc", "-b:a", "0", "-r:v:0")
         .doesNotContain("-ss", "-start_at_zero", "-af");
     assertThat(videoFilter(pipe.encodeCommand()))
@@ -1627,7 +1655,8 @@ class FfmpegCommandBuilderTest {
 
     var pipe = rpuMovingPipe(builder.buildPipeline(job(request, "libx264")));
 
-    assertThat(pipe.copyCommand()).containsSequence("-c", "copy", "-muxdelay");
+    assertThat(pipe.copyCommand())
+        .containsSequence("-c:a", "copy", "-bsf:a", "aac_adtstoasc", "-b:a", "0", "-f", "mp4");
     assertThat(pipe.encodeCommand())
         .containsSequence("-map", "0:v:0", "-map", "0:a:0")
         .containsSequence("-c:a", "copy", "-bsf:a", "aac_adtstoasc", "-b:a", "0", "-r:v:0")
@@ -1735,12 +1764,12 @@ class FfmpegCommandBuilderTest {
 
   @ParameterizedTest(name = "{0}")
   @NullSource
-  @ValueSource(strings = {"flac", "alac", "opus"})
+  @ValueSource(strings = {"aac", "ac3", "eac3", "flac", "alac", "opus"})
   @DisplayName(
-      "Should keep one FFmpeg when the encode of a profile 5 source whose RPU starts its sample"
-          + " copies audio that MPEG-TS may not carry")
+      "Should copy the audio into the copy of the source, and copy it from there, whatever the"
+          + " codec, when the encode of a profile 5 source whose RPU starts its sample copies audio")
   void
-      shouldKeepOneFfmpegWhenTheEncodeOfAProfile5SourceWhoseRpuStartsItsSampleCopiesAudioThatMpegTsMayNotCarry(
+      shouldCopyTheAudioIntoTheCopyOfTheSourceAndCopyItFromThereWhateverTheCodecWhenTheEncodeOfAProfile5SourceWhoseRpuStartsItsSampleCopiesAudio(
           String audioCodec) {
     var decision =
         decision(TranscodeMode.VIDEO_TRANSCODE)
@@ -1748,19 +1777,20 @@ class FfmpegCommandBuilderTest {
             .audioDecision(copiedAudio(audioCodec))
             .build();
 
-    var pipeline = builder.buildPipeline(job(request(decision).build(), "libx264"));
+    var pipe = rpuMovingPipe(builder.buildPipeline(job(request(decision).build(), "libx264")));
 
-    assertThat(pipeline).isInstanceOf(FfmpegPipeline.SingleProcess.class);
+    assertThat(pipe.copyCommand()).containsSequence("-c:a", "copy");
+    assertThat(pipe.encodeCommand()).containsSequence("-c:a", "copy");
   }
 
-  @ParameterizedTest(name = "{0}")
-  @ValueSource(strings = {"flac", "alac", "opus"})
+  @ParameterizedTest(name = "{0} as {1}")
+  @CsvSource({"aac, aac", "ac3, ac3", "eac3, eac3", "flac, flac", "alac, alac", "opus, libopus"})
   @DisplayName(
-      "Should keep one FFmpeg when the encode of a profile 5 source whose RPU starts its sample"
-          + " encodes audio that MPEG-TS may not carry")
+      "Should encode the audio in the copy of the source, with libopus for Opus, when the encode of"
+          + " a profile 5 source whose RPU starts its sample encodes audio")
   void
-      shouldKeepOneFfmpegWhenTheEncodeOfAProfile5SourceWhoseRpuStartsItsSampleEncodesAudioThatMpegTsMayNotCarry(
-          String audioCodec) {
+      shouldEncodeTheAudioInTheCopyOfTheSourceWithLibopusForOpusWhenTheEncodeOfAProfile5SourceWhoseRpuStartsItsSampleEncodesAudio(
+          String audioCodec, String encoder) {
     var decision =
         decision(TranscodeMode.FULL_TRANSCODE)
             .videoDecision(profile5Encode(DolbyVisionRpuPlacement.BEFORE_NEXT_PICTURE).build())
@@ -1773,9 +1803,10 @@ class FfmpegCommandBuilderTest {
                     .build())
             .build();
 
-    var pipeline = builder.buildPipeline(job(request(decision).build(), "libx264"));
+    var pipe = rpuMovingPipe(builder.buildPipeline(job(request(decision).build(), "libx264")));
 
-    assertThat(pipeline).isInstanceOf(FfmpegPipeline.SingleProcess.class);
+    assertThat(pipe.copyCommand()).containsSequence("-c:a", encoder, "-ac", "2", "-b:a", "128k");
+    assertThat(pipe.encodeCommand()).containsSequence("-c:a", "copy").doesNotContain("-ac");
   }
 
   private static VideoDecision.Encode.EncodeBuilder profile5Encode(

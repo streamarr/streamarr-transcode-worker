@@ -9,7 +9,6 @@ import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.start;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variantJobBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.within;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import build.buf.gen.streamarr.transcode.v1.AudioMode;
@@ -1070,15 +1069,15 @@ class WorkerMediaSmokeTest {
         .allSatisfy(sideData -> assertThat(sideData).doesNotContain("Dolby Vision RPU Data"));
   }
 
-  @ParameterizedTest(name = "{0} audio, start {1}")
-  @CsvSource({"aac, 0", "aac, 2", "flac, 0", "flac, 2"})
+  @ParameterizedTest(name = "{0}, {1} audio, start {2}")
+  @MethodSource("rpuLayoutsAudioCodecsAndStarts")
   @DisplayName(
       "Should upload what one FFmpeg encodes from the source whose RPUs follow their pictures when"
           + " a Dolby Vision profile 5 source's samples start with RPUs")
   void
       shouldUploadWhatOneFfmpegEncodesFromTheSourceWhoseRpusFollowTheirPicturesWhenADolbyVisionProfile5SourcesSamplesStartWithRpus(
-          String sourceAudioCodec, int startSequenceNumber) throws Exception {
-    var rpusAhead = rpuLayoutSource(RpuLayout.AHEAD_OF_THE_NEXT_PICTURE, sourceAudioCodec);
+          RpuLayout layout, String sourceAudioCodec, int startSequenceNumber) throws Exception {
+    var rpusAhead = rpuLayoutSource(layout, sourceAudioCodec);
     var rpusBehind = rpuLayoutSource(RpuLayout.BEHIND_THEIR_PICTURE, sourceAudioCodec);
     var aheadCommands = new CopyOnWriteArrayList<List<String>>();
     var behindCommands = new CopyOnWriteArrayList<List<String>>();
@@ -1089,11 +1088,7 @@ class WorkerMediaSmokeTest {
                 softwareCapabilities(),
                 capturingCommands(new ProcessBuilderLauncher(), aheadCommands)),
             rpusAhead.getParent(),
-            profile5Job(
-                    rpusAhead,
-                    DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_BEFORE_NEXT_PICTURE,
-                    startSequenceNumber)
-                .build());
+            profile5Job(rpusAhead, layout.placement(), startSequenceNumber).build());
     var fromRpusBehind =
         execute(
             engine(
@@ -1112,30 +1107,24 @@ class WorkerMediaSmokeTest {
         .containsExactlyElementsOf(fromRpusBehind.names())
         .hasSize(PROFILE_5_SEGMENT_COUNT - startSequenceNumber + 1);
     for (var name : fromRpusBehind.names()) {
-      assertThat(packetsOfTheCopy(fromRpusAhead, name))
+      assertThat(packetsOf(fromRpusAhead, name))
           .as(name)
-          .containsExactlyElementsOf(packetsOfTheCopy(fromRpusBehind, name));
+          .containsExactlyElementsOf(packetsOf(fromRpusBehind, name));
     }
   }
 
-  // The packets of the upload and its initialization segment. MPEG-TS does not carry the audio
-  // encoder's trim of the stream's last frame, so when the copy carries the encoded audio, that
-  // frame declares a whole frame's duration: the last segment's last audio frame lists none.
-  private List<Packet> packetsOfTheCopy(MediaUploads uploads, String name) throws Exception {
-    var packets = FfprobePackets.of(uploads.contentOf(List.of("init.mp4", name)), root);
-    var lastAudio =
-        IntStream.range(0, packets.size()).filter(index -> packets.get(index).isAudio()).max();
-    if (!name.equals(uploads.names().getLast()) || lastAudio.isEmpty()) {
-      return packets;
-    }
+  static Stream<Arguments> rpuLayoutsAudioCodecsAndStarts() {
+    return Stream.of(RpuLayout.AHEAD_OF_THE_NEXT_PICTURE, RpuLayout.AHEAD_OF_THEIR_PICTURE)
+        .flatMap(
+            layout ->
+                Stream.of("aac", "ac3", "eac3", "flac", "alac", "libopus")
+                    .flatMap(
+                        codec -> Stream.of(0, 2).map(start -> Arguments.of(layout, codec, start))));
+  }
 
-    var withoutDuration = new ArrayList<>(packets);
-    var last = packets.get(lastAudio.getAsInt());
-    withoutDuration.set(
-        lastAudio.getAsInt(),
-        new Packet(
-            last.stream(), last.pts(), last.dts(), 0, last.size(), last.flags(), last.hash()));
-    return withoutDuration;
+  // The packets of the upload and its initialization segment.
+  private List<Packet> packetsOf(MediaUploads uploads, String name) throws Exception {
+    return FfprobePackets.of(uploads.contentOf(List.of("init.mp4", name)), root);
   }
 
   private static VariantJob.Builder profile5Job(
@@ -1174,18 +1163,15 @@ class WorkerMediaSmokeTest {
                         .setRpuPlacement(rpuPlacement)));
   }
 
-  // FFmpeg's copy of Matroska's millisecond audio timestamps into MPEG-TS counts samples from the
-  // first packet, the AAC priming frame, whose rounding then shifts copied audio by a fraction of a
-  // millisecond.
   @ParameterizedTest(name = "{0}, {1}, start {2}")
   @MethodSource("sourceContainersEncodingModesAndStarts")
   @DisplayName(
-      "Should upload the video packets one FFmpeg encodes from the source, and its audio within a"
-          + " millisecond, when the encode reads the source's MPEG-TS copy")
+      "Should upload the packets one FFmpeg encodes from the source when the encode reads the"
+          + " source's fragmented MP4 copy")
   void
-      shouldUploadTheVideoPacketsOneFfmpegEncodesFromTheSourceAndItsAudioWithinAMillisecondWhenTheEncodeReadsTheSourcesMpegTsCopy(
+      shouldUploadThePacketsOneFfmpegEncodesFromTheSourceWhenTheEncodeReadsTheSourcesFragmentedMp4Copy(
           String container, TranscodeMode mode, int startSequenceNumber) throws Exception {
-    var source = seekableSource(container);
+    var source = seekableHevcSource(container);
     var job = seekableSourceJob(source, mode);
     job.getExecutionBuilder().setStartSequenceNumber(startSequenceNumber);
     withProfile5Source(job, DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_AFTER_OWN_PICTURE);
@@ -1204,34 +1190,9 @@ class WorkerMediaSmokeTest {
     assertThat(commands).as("the FFmpegs of the attempt that reads the copy").hasSize(2);
     assertThat(fromTheCopy.names()).containsExactlyElementsOf(oneFfmpeg.names());
     for (var name : oneFfmpeg.names()) {
-      var expected = packetsOfTheCopy(oneFfmpeg, name);
-      var actual = packetsOfTheCopy(fromTheCopy, name);
-      assertThat(actual.stream().filter(packet -> !packet.isAudio()).toList())
-          .as("%s video", name)
-          .containsExactlyElementsOf(
-              expected.stream().filter(packet -> !packet.isAudio()).toList());
-      assertAudioWithinAMillisecond(
-          actual.stream().filter(Packet::isAudio).toList(),
-          expected.stream().filter(Packet::isAudio).toList());
-    }
-  }
-
-  // The seekable sources' audio is 48 kHz, which is the audio's time base in the output.
-  private static void assertAudioWithinAMillisecond(List<Packet> actual, List<Packet> expected) {
-    var millisecond = within(48L);
-    assertThat(actual).as("audio packets").hasSameSizeAs(expected);
-    for (var index = 0; index < expected.size(); index++) {
-      var packet = actual.get(index);
-      var expectedPacket = expected.get(index);
-      assertThat(packet.pts())
-          .as("audio packet %d", index)
-          .isCloseTo(expectedPacket.pts(), millisecond);
-      assertThat(packet.dts())
-          .as("audio packet %d", index)
-          .isCloseTo(expectedPacket.dts(), millisecond);
-      assertThat(packet.duration())
-          .as("audio packet %d", index)
-          .isCloseTo(expectedPacket.duration(), millisecond);
+      assertThat(packetsOf(fromTheCopy, name))
+          .as(name)
+          .containsExactlyElementsOf(packetsOf(oneFfmpeg, name));
     }
   }
 
@@ -1245,14 +1206,26 @@ class WorkerMediaSmokeTest {
   }
 
   private enum RpuLayout {
-    BEHIND_THEIR_PICTURE,
-    AHEAD_OF_THE_NEXT_PICTURE
+    BEHIND_THEIR_PICTURE(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_AFTER_OWN_PICTURE),
+    AHEAD_OF_THE_NEXT_PICTURE(
+        DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_BEFORE_NEXT_PICTURE),
+    AHEAD_OF_THEIR_PICTURE(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_BEFORE_OWN_PICTURE);
+
+    private final DolbyVisionRpuPlacement placement;
+
+    RpuLayout(DolbyVisionRpuPlacement placement) {
+      this.placement = placement;
+    }
+
+    DolbyVisionRpuPlacement placement() {
+      return placement;
+    }
   }
 
   // A 10-bit HEVC source with audio of the codec that holds a stand-in Dolby Vision RPU for each
-  // picture:
-  // after its picture, or, as a muxer that starts a sample at each RPU writes it, behind the next
-  // picture's access unit delimiter. Its stand-in RPUs carry no reshaping, so the decoder applies
+  // picture: after its picture, or behind the access unit delimiter of the next picture, as
+  // mkvmerge wrote it before version 57, or of its own picture. Its stand-in RPUs carry no
+  // reshaping, so the decoder applies
   // none whichever layout it reads, and both sources decode to the same pictures.
   private static synchronized Path rpuLayoutSource(RpuLayout layout, String audioCodec)
       throws Exception {
@@ -1324,7 +1297,7 @@ class WorkerMediaSmokeTest {
 
       var delimiterEnd = accessUnitDelimiterEnd(accessUnit);
       withRpus.write(accessUnit, 0, delimiterEnd);
-      if (index > 0) {
+      if (layout == RpuLayout.AHEAD_OF_THEIR_PICTURE || index > 0) {
         withRpus.writeBytes(STAND_IN_RPU);
       }
 
@@ -2606,6 +2579,42 @@ class WorkerMediaSmokeTest {
     }
 
     var source = seekableSources.resolve("seekable." + container);
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(List.of("-i", matroska.toString(), "-c", "copy"), source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // The seekable source's frames and noise as libx265 HEVC, which reorders frames, with the same
+  // keyframes. The MP4 and MPEG-TS sources carry the Matroska source's streams unchanged.
+  private static synchronized Path seekableHevcSource(String container) throws Exception {
+    var matroska = seekableSources.resolve("seekable-hevc.mkv");
+    if (!generatedSeekableSources.contains(matroska)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24",
+              "-f",
+              "lavfi",
+              "-i",
+              "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5",
+              "-t",
+              String.valueOf(SEEKABLE_SOURCE_SECONDS),
+              "-c:v",
+              "libx265",
+              "-x265-params",
+              "keyint=48:min-keyint=48:log-level=error",
+              "-c:a",
+              "aac"),
+          matroska);
+      generatedSeekableSources.add(matroska);
+    }
+
+    var source = seekableSources.resolve("seekable-hevc." + container);
     if (!generatedSeekableSources.contains(source)) {
       runFfmpeg(List.of("-i", matroska.toString(), "-c", "copy"), source);
       generatedSeekableSources.add(source);

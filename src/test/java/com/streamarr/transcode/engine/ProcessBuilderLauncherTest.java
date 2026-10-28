@@ -155,13 +155,29 @@ class ProcessBuilderLauncherTest {
   @DisplayName(
       "Should end both FFmpegs when the encoding FFmpeg ignores termination while the copy waits"
           + " for it to read")
-  void shouldEndBothFfmpegsWhenTheEncodingFfmpegIgnoresTerminationWhileTheCopyWaitsForItToRead() {
+  void shouldEndBothFfmpegsWhenTheEncodingFfmpegIgnoresTerminationWhileTheCopyWaitsForItToRead()
+      throws IOException {
+    var initializationSegment = tempDir.resolve("init.mp4");
+    var fragment = tempDir.resolve("fragment.m4s");
+    Files.write(initializationSegment, HevcCopies.initializationSegment());
+    Files.write(
+        fragment,
+        HevcCopies.fragmentBuilder()
+            .video(0, HevcCopies.sample(HevcCopies.slice(0), new byte[64 * 1024]))
+            .build());
+    var endlessCopy = "cat \"$0\"; while :; do cat \"$1\"; done";
     var producer =
         producerRunning("unused", "unused")
             .pipeline(
                 new FfmpegPipeline.RpuMovingPipe(
-                    List.of("bash", "-c", "exec cat /dev/zero"),
-                    List.of("bash", "-c", "trap '' TERM; exec sleep 600")))
+                    List.of(
+                        "bash",
+                        "-c",
+                        endlessCopy,
+                        initializationSegment.toString(),
+                        fragment.toString()),
+                    List.of("bash", "-c", "trap '' TERM; exec sleep 600"),
+                    RpuMove.BEHIND_PREVIOUS_PICTURE))
             .stallTimeout(Duration.ofMillis(300))
             .gracePeriod(Duration.ofMillis(300))
             .start();

@@ -646,8 +646,9 @@ class TranscodeWorkerJobAttemptTest {
       var commands = launcher.commands(fromProto(job.getJobAttemptId()));
       assertThat(commands).hasSize(2);
       assertThat(commands.getFirst())
-          .endsWith("-c", "copy", "-muxdelay", "0", "-f", "mpegts", "pipe:1");
-      assertThat(commands.getLast()).containsSequence("-f", "mpegts", "-i", "pipe:0");
+          .containsSequence("-c:v", "copy")
+          .endsWith("-movie_timescale", "1000000", "-flush_packets", "1", "pipe:1");
+      assertThat(commands.getLast()).containsSequence("-f", "mp4", "-i", "pipe:0");
     }
   }
 

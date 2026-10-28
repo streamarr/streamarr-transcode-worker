@@ -11,11 +11,11 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * A job attempt's FFmpeg that runs as two processes: one copies the source into MPEG-TS, and one
- * encodes that copy, which a virtual thread passes from the first to the second through {@link
- * TransportStreamRpuMover}. The encoding FFmpeg writes the attempt's output. A stop asks the
- * copying FFmpeg to quit, and the encoding FFmpeg then finishes at the end of its input;
- * termination and destruction end both.
+ * A job attempt's FFmpeg that runs as two processes: one copies the source into fragmented MP4, and
+ * one encodes that copy, which a virtual thread passes from the first to the second through {@link
+ * FragmentedMp4RpuMover}. The encoding FFmpeg writes the attempt's output. A stop asks the copying
+ * FFmpeg to quit, and the encoding FFmpeg then finishes at the end of its input; termination and
+ * destruction end both.
  */
 final class PipedFfmpegProcesses implements FfmpegProcess {
 
@@ -26,13 +26,18 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
   private final StderrDrainer copyErrorOutput;
   private final StderrDrainer encodeErrorOutput;
   private final Duration gracePeriod;
+  private final RpuMove rpuMove;
   private final AtomicReference<Optional<IOException>> transferFailure =
+      new AtomicReference<>(Optional.empty());
+  private final AtomicReference<Optional<FragmentedMp4Exception>> refusedCopy =
       new AtomicReference<>(Optional.empty());
   private final Thread transfer;
 
-  private PipedFfmpegProcesses(Process copy, Process encode, Duration gracePeriod) {
+  private PipedFfmpegProcesses(
+      Process copy, Process encode, RpuMove rpuMove, Duration gracePeriod) {
     this.copy = copy;
     this.encode = encode;
+    this.rpuMove = rpuMove;
     this.copyErrorOutput = new StderrDrainer(copy.getErrorStream());
     this.encodeErrorOutput = new StderrDrainer(encode.getErrorStream());
     this.gracePeriod = gracePeriod;
@@ -47,7 +52,8 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
       ProcessStarter starter, FfmpegPipeline.RpuMovingPipe pipe, Duration gracePeriod) {
     var copy = starter.start(pipe.copyCommand());
     try {
-      return new PipedFfmpegProcesses(copy, starter.start(pipe.encodeCommand()), gracePeriod);
+      return new PipedFfmpegProcesses(
+          copy, starter.start(pipe.encodeCommand()), pipe.rpuMove(), gracePeriod);
     } catch (RuntimeException e) {
       copy.destroyForcibly();
       throw e;
@@ -55,15 +61,29 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
   }
 
   // The copy ends when the copying FFmpeg exits, and the end of the encoding FFmpeg's input lets it
-  // finish. Once the encoding FFmpeg stops reading, the copying FFmpeg could only block on a full
-  // pipe, so it is asked to terminate.
+  // finish. Once the encoding FFmpeg stops reading, or the mover refuses the copy, the copying
+  // FFmpeg could only block on a full pipe, so it is asked to terminate. A failure is recorded
+  // before the encoding FFmpeg's input ends, so that its exit never settles the attempt first.
   private void transferCopy() {
-    try (InputStream copied = copy.getInputStream();
-        OutputStream encoded = encode.getOutputStream()) {
-      TransportStreamRpuMover.copy(copied, encoded);
+    var encoded = encode.getOutputStream();
+    try (InputStream copied = copy.getInputStream()) {
+      FragmentedMp4RpuMover.copy(copied, encoded, rpuMove);
     } catch (IOException e) {
       transferFailure.set(Optional.of(e));
       copy.destroy();
+    } catch (FragmentedMp4Exception e) {
+      refusedCopy.set(Optional.of(e));
+      copy.destroy();
+    } finally {
+      endInput(encoded);
+    }
+  }
+
+  private static void endInput(OutputStream encoded) {
+    try {
+      encoded.close();
+    } catch (IOException _) {
+      // The encoding FFmpeg has already closed its input; its exit settles what it read.
     }
   }
 
@@ -142,9 +162,11 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
   }
 
   /**
-   * The encoding FFmpeg's exit decides first, as a single FFmpeg's would. A copy that did not reach
-   * the encoding FFmpeg whole, or a copying FFmpeg that exited with an error, fails an attempt
-   * whose encoding FFmpeg exited cleanly, since its output then lacks the rest of the source.
+   * The encoding FFmpeg's exit decides first, as a single FFmpeg's would. A copy that the mover
+   * refused, a copy that did not reach the encoding FFmpeg whole, or a copying FFmpeg that exited
+   * with an error, fails an attempt whose encoding FFmpeg exited cleanly, since its output then
+   * lacks the rest of the source. The copying FFmpeg's error explains a copy that ended inside a
+   * unit, so it decides before that end.
    */
   @Override
   public AttemptOutcome outcomeAtExit(AttemptOutcome outcomeOnCleanExit) {
@@ -153,6 +175,11 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
       return new Failed(
           ProducerFailure.PROCESS_EXITED_WITH_ERROR,
           encodeErrorOutput.exitDetail("FFmpeg", encodeExitCode));
+    }
+
+    var refused = refusedCopy.get().filter(failure -> !endsEarly(failure));
+    if (refused.isPresent()) {
+      return refusal(refused.orElseThrow());
     }
 
     var failedTransfer = transferFailure.get();
@@ -170,7 +197,21 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
           copyErrorOutput.exitDetail(COPYING_FFMPEG, copyExitCode));
     }
 
-    return outcomeOnCleanExit;
+    return refusedCopy
+        .get()
+        .<AttemptOutcome>map(PipedFfmpegProcesses::refusal)
+        .orElse(outcomeOnCleanExit);
+  }
+
+  private static boolean endsEarly(FragmentedMp4Exception failure) {
+    return ProducerFailure.of(failure.getReason()) == ProducerFailure.TRUNCATED_OUTPUT;
+  }
+
+  private static Failed refusal(FragmentedMp4Exception failure) {
+    return new Failed(
+        ProducerFailure.of(failure.getReason()),
+        "The copy of the source cannot be passed to the FFmpeg that encodes it: "
+            + failure.getMessage());
   }
 
   @Override
