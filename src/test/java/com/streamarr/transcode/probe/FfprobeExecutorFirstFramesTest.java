@@ -666,10 +666,10 @@ class FfprobeExecutorFirstFramesTest {
 
     @Test
     @DisplayName(
-        "Should place each RPU ahead of the next picture when the first picture's sample holds none"
+        "Should report that every RPU starts its sample when the first picture's sample holds none"
             + " and later samples start with one")
     void
-        shouldPlaceEachRpuAheadOfTheNextPictureWhenTheFirstPicturesSampleHoldsNoneAndLaterSamplesStartWithOne() {
+        shouldReportThatEveryRpuStartsItsSampleWhenTheFirstPicturesSampleHoldsNoneAndLaterSamplesStartWithOne() {
       var present =
           h264(packets(
                   lengthPrefixed(AUD, SEI, IDR_SLICE),
@@ -679,13 +679,13 @@ class FfprobeExecutorFirstFramesTest {
               .getDolbyVisionPresent();
 
       assertThat(present.getRpuPlacement())
-          .isEqualTo(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_BEFORE_NEXT_PICTURE);
+          .isEqualTo(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE);
       assertThat(present.getObservedRpu()).isEqualTo(Presence.PRESENCE_PRESENT);
     }
 
     @Test
-    @DisplayName("Should place the RPUs ahead of the next picture when a sample holds only an RPU")
-    void shouldPlaceTheRpusAheadOfTheNextPictureWhenASampleHoldsOnlyAnRpu() {
+    @DisplayName("Should report that every RPU starts its sample when a sample holds only an RPU")
+    void shouldReportThatEveryRpuStartsItsSampleWhenASampleHoldsOnlyAnRpu() {
       var present =
           h264(packetsUpTo(
                   3, lengthPrefixed(SLICE), lengthPrefixed(IDR_SLICE), lengthPrefixed(RPU)))
@@ -693,7 +693,7 @@ class FfprobeExecutorFirstFramesTest {
               .getDolbyVisionPresent();
 
       assertThat(present.getRpuPlacement())
-          .isEqualTo(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_BEFORE_NEXT_PICTURE);
+          .isEqualTo(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE);
     }
 
     @Test
@@ -947,9 +947,9 @@ class FfprobeExecutorFirstFramesTest {
 
     @Test
     @DisplayName(
-        "Should place each RPU ahead of the next picture when the decoder ignores RPUs ahead of"
+        "Should report that every RPU starts its sample when the decoder ignores RPUs ahead of"
             + " their pictures")
-    void shouldPlaceEachRpuAheadOfTheNextPictureWhenTheDecoderIgnoresRpusAheadOfTheirPictures() {
+    void shouldReportThatEveryRpuStartsItsSampleWhenTheDecoderIgnoresRpusAheadOfTheirPictures() {
       // FFmpeg's HEVC decoder exports an RPU only when it is the last NAL unit of its sample.
       var dynamicRange =
           probed(
@@ -972,8 +972,7 @@ class FfprobeExecutorFirstFramesTest {
                           .setBaseLayerFullRange(true)
                           .setDisableResidual(true)
                           .setVdrBitDepth(12))
-                  .setRpuPlacement(
-                      DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_BEFORE_NEXT_PICTURE)
+                  .setRpuPlacement(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE)
                   .build());
       assertThat(dynamicRange.getCompatibleBase()).isEqualTo(CompatibleBase.COMPATIBLE_BASE_NONE);
     }
@@ -1001,7 +1000,7 @@ class FfprobeExecutorFirstFramesTest {
 
       assertThat(present.getObservedRpu()).isEqualTo(Presence.PRESENCE_PRESENT);
       assertThat(present.getRpuPlacement())
-          .isEqualTo(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_BEFORE_NEXT_PICTURE);
+          .isEqualTo(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE);
     }
 
     @Test
@@ -1046,7 +1045,7 @@ class FfprobeExecutorFirstFramesTest {
 
       assertThat(present.getObservedRpu()).isEqualTo(Presence.PRESENCE_PRESENT);
       assertThat(present.getRpuPlacement())
-          .isEqualTo(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_BEFORE_NEXT_PICTURE);
+          .isEqualTo(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE);
       assertThat(present.getFirstRpuHeader().getVdrRpuProfile()).isEqualTo(1);
     }
 
@@ -1176,8 +1175,8 @@ class FfprobeExecutorFirstFramesTest {
 
     @Test
     @DisplayName(
-        "Should place each RPU ahead of the next picture when the last sample holds only an RPU")
-    void shouldPlaceEachRpuAheadOfTheNextPictureWhenTheLastSampleHoldsOnlyAnRpu() {
+        "Should report that every RPU starts its sample when the last sample holds only an RPU")
+    void shouldReportThatEveryRpuStartsItsSampleWhenTheLastSampleHoldsOnlyAnRpu() {
       var present =
           placed(
               lengthPrefixed(IDR_SLICE),
@@ -1185,7 +1184,7 @@ class FfprobeExecutorFirstFramesTest {
               lengthPrefixed(PROFILE_5_RPU_UNIT));
 
       assertThat(present.getRpuPlacement())
-          .isEqualTo(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_BEFORE_NEXT_PICTURE);
+          .isEqualTo(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE);
     }
 
     @Test
@@ -1475,8 +1474,7 @@ class FfprobeExecutorFirstFramesTest {
                           .setBaseLayerFullRange(true)
                           .setDisableResidual(true)
                           .setVdrBitDepth(12))
-                  .setRpuPlacement(
-                      DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_BEFORE_NEXT_PICTURE)
+                  .setRpuPlacement(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE)
                   .build());
       assertThat(video.getDynamicRange().getCompatibleBase())
           .isEqualTo(CompatibleBase.COMPATIBLE_BASE_NONE);

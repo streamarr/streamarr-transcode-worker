@@ -48,8 +48,8 @@ public record VideoDynamicRange(
     UNSPECIFIED,
     /** Each RPU is the last NAL unit of its own picture's sample. */
     AFTER_OWN_PICTURE,
-    /** Each picture's RPU starts the sample of the next picture. */
-    BEFORE_NEXT_PICTURE
+    /** Every RPU starts its sample. */
+    STARTS_SAMPLE
   }
 
   @Builder

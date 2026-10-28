@@ -613,7 +613,7 @@ class TranscodeWorkerJobAttemptTest {
   @EnumSource(
       value = DolbyVisionRpuPlacement.class,
       names = {
-        "DOLBY_VISION_RPU_PLACEMENT_BEFORE_NEXT_PICTURE",
+        "DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE",
         "DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED"
       })
   @DisplayName(
@@ -725,8 +725,7 @@ class TranscodeWorkerJobAttemptTest {
                     DolbyVisionPresent.newBuilder()
                         .setObservedRpu(Presence.PRESENCE_PRESENT)
                         .setRpuPlacement(
-                            DolbyVisionRpuPlacement
-                                .DOLBY_VISION_RPU_PLACEMENT_BEFORE_NEXT_PICTURE)));
+                            DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE)));
     job.getDecisionBuilder().getAudioBuilder().setCodec("eac3");
 
     try (var worker = worker(launcher)) {

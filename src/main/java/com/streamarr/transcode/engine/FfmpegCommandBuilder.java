@@ -148,7 +148,7 @@ public class FfmpegCommandBuilder {
   private static boolean mayStartSamplesWithRpus(
       VideoDynamicRange.DolbyVisionRpuPlacement placement) {
     return switch (placement) {
-      case BEFORE_NEXT_PICTURE, UNSPECIFIED -> true;
+      case STARTS_SAMPLE, UNSPECIFIED -> true;
       case AFTER_OWN_PICTURE -> false;
     };
   }

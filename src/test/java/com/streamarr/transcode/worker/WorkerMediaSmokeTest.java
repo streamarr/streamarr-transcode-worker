@@ -1432,7 +1432,7 @@ class WorkerMediaSmokeTest {
             engine(softwareCapabilities(), adjustment.apply(new ProcessBuilderLauncher())),
             source.getParent(),
             job.build());
-    withProfile5Source(job, DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_BEFORE_NEXT_PICTURE);
+    withProfile5Source(job, DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE);
     job.setJobAttemptId(toProto(UUID.randomUUID()));
     var commands = new CopyOnWriteArrayList<List<String>>();
 
@@ -1466,8 +1466,7 @@ class WorkerMediaSmokeTest {
 
   private enum RpuLayout {
     BEHIND_THEIR_PICTURE(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_AFTER_OWN_PICTURE),
-    AHEAD_OF_THE_NEXT_PICTURE(
-        DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_BEFORE_NEXT_PICTURE),
+    AHEAD_OF_THE_NEXT_PICTURE(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE),
     AHEAD_OF_EVERY_PICTURE(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED);
 
     private final DolbyVisionRpuPlacement placement;

@@ -83,7 +83,7 @@ final class PacketRpuReader {
       return DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED;
     }
 
-    return DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_BEFORE_NEXT_PICTURE;
+    return DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE;
   }
 
   private static Optional<DolbyVisionRpuHeader> header(byte[] rpu, NalSyntax syntax) {

@@ -1479,7 +1479,7 @@ class FfmpegCommandBuilderTest {
   void
       shouldCopyTheSourceIntoFragmentedMp4AndEncodeTheCopyOnceItsRpusMoveBehindThePreviousPictureWhenADolbyVisionProfile5SampleStartsWithTheRpuOfThePictureBefore() {
     var request =
-        request(encoding(profile5Encode(DolbyVisionRpuPlacement.BEFORE_NEXT_PICTURE)))
+        request(encoding(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE)))
             .height(720)
             .build();
 
@@ -1616,9 +1616,7 @@ class FfmpegCommandBuilderTest {
   void
       shouldWriteTheFramecrcOfTheChosenVideoStreamsPacketsToTheGivenUrlAsTheCopysLastOutputWhenADolbyVisionProfile5SourcesRpusMayStartSamples() {
     var request =
-        request(
-                encoding(
-                    profile5Encode(DolbyVisionRpuPlacement.BEFORE_NEXT_PICTURE).streamIndex(2)))
+        request(encoding(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE).streamIndex(2)))
             .build();
 
     var pipe = rpuMovingPipe(builder.buildPipeline(job(request, "libx264")));
@@ -1656,7 +1654,7 @@ class FfmpegCommandBuilderTest {
   void
       shouldSeekTheCopyEncodeItsAudioThereAndTrimTheEncodesVideoAtTheSeekWhenAReplacementAttemptEncodesAProfile5SourceWhoseRpuStartsItsSample() {
     var request =
-        request(encoding(profile5Encode(DolbyVisionRpuPlacement.BEFORE_NEXT_PICTURE)))
+        request(encoding(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE)))
             .height(720)
             .startSequenceNumber(3)
             .build();
@@ -1682,7 +1680,7 @@ class FfmpegCommandBuilderTest {
       shouldCopyTheCopiedSourcesAudioUntrimmedWhenTheEncodeOfAProfile5SourceWhoseRpuStartsItsSampleSeeks() {
     var decision =
         decision(TranscodeMode.VIDEO_TRANSCODE)
-            .videoDecision(profile5Encode(DolbyVisionRpuPlacement.BEFORE_NEXT_PICTURE).build())
+            .videoDecision(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE).build())
             .build();
     var request = request(decision).startSequenceNumber(3).build();
 
@@ -1704,7 +1702,7 @@ class FfmpegCommandBuilderTest {
       shouldMapNoAudioInEitherFfmpegWhenTheEncodeOfAProfile5SourceWhoseRpuStartsItsSampleHasNone() {
     var decision =
         decision(TranscodeMode.FULL_TRANSCODE)
-            .videoDecision(profile5Encode(DolbyVisionRpuPlacement.BEFORE_NEXT_PICTURE).build())
+            .videoDecision(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE).build())
             .audioDecision(NO_AUDIO)
             .build();
 
@@ -1747,19 +1745,19 @@ class FfmpegCommandBuilderTest {
             new VideoDynamicRange(
                 CompatibleBase.PQ,
                 Presence.ABSENT,
-                dolbyVisionPresent(DolbyVisionRpuPlacement.BEFORE_NEXT_PICTURE))),
+                dolbyVisionPresent(DolbyVisionRpuPlacement.STARTS_SAMPLE))),
         Arguments.of(
             "profile 8.4, RPU starts the sample",
             new VideoDynamicRange(
                 CompatibleBase.HLG,
                 Presence.ABSENT,
-                dolbyVisionPresent(DolbyVisionRpuPlacement.BEFORE_NEXT_PICTURE))),
+                dolbyVisionPresent(DolbyVisionRpuPlacement.STARTS_SAMPLE))),
         Arguments.of(
             "profile 9, RPU starts the sample",
             new VideoDynamicRange(
                 CompatibleBase.SDR,
                 Presence.ABSENT,
-                dolbyVisionPresent(DolbyVisionRpuPlacement.BEFORE_NEXT_PICTURE))));
+                dolbyVisionPresent(DolbyVisionRpuPlacement.STARTS_SAMPLE))));
   }
 
   @ParameterizedTest(name = "{0}")
@@ -1770,15 +1768,14 @@ class FfmpegCommandBuilderTest {
   void
       shouldBuildTheCommandOfASourceWithoutDolbyVisionWhenTheEncodesProfile5SourceWhoseRpusStartTheirSamplesIsNotHevc(
           Optional<CodecFamily> sourceCodecFamily) {
-    var source = profile5(DolbyVisionRpuPlacement.BEFORE_NEXT_PICTURE);
+    var source = profile5(DolbyVisionRpuPlacement.STARTS_SAMPLE);
     var withoutDolbyVision =
         new VideoDynamicRange(
             source.compatibleBase(),
             source.hdr10Plus(),
             new VideoDynamicRange.DolbyVision.Absent());
     var encode =
-        profile5Encode(DolbyVisionRpuPlacement.BEFORE_NEXT_PICTURE)
-            .sourceCodecFamily(sourceCodecFamily);
+        profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE).sourceCodecFamily(sourceCodecFamily);
     var request = request(encoding(encode)).build();
     var requestWithoutDolbyVision =
         request(encoding(encode.sourceDynamicRange(withoutDolbyVision))).build();
@@ -1804,7 +1801,7 @@ class FfmpegCommandBuilderTest {
           String audioCodec) {
     var decision =
         decision(TranscodeMode.VIDEO_TRANSCODE)
-            .videoDecision(profile5Encode(DolbyVisionRpuPlacement.BEFORE_NEXT_PICTURE).build())
+            .videoDecision(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE).build())
             .audioDecision(copiedAudio(audioCodec))
             .build();
 
@@ -1824,7 +1821,7 @@ class FfmpegCommandBuilderTest {
           String audioCodec, String encoder) {
     var decision =
         decision(TranscodeMode.FULL_TRANSCODE)
-            .videoDecision(profile5Encode(DolbyVisionRpuPlacement.BEFORE_NEXT_PICTURE).build())
+            .videoDecision(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE).build())
             .audioDecision(
                 AudioDecision.builder()
                     .mode(AudioMode.TRANSCODE)
