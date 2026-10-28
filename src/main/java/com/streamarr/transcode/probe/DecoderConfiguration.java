@@ -193,7 +193,7 @@ final class DecoderConfiguration {
         }
 
         var length = Short.toUnsignedInt(buffer.getShort());
-        if (length == 0 || buffer.remaining() < length) {
+        if (buffer.remaining() < length) {
           return new NalUnits(units, false);
         }
 

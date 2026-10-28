@@ -8,6 +8,12 @@ import java.util.Optional;
  * Vision RPU, and how its decoder configuration record sets the length of each NAL unit in a
  * sample. An RPU is a NAL unit of the codec's RPU type whose payload starts with rpu_nal_prefix 25,
  * and for HEVC whose header names layer 0 and TemporalId 0.
+ *
+ * <p>The walks read only the NAL units that reach FFmpeg's decoders. FFmpeg's ff_h2645_packet_split
+ * drops a NAL unit whose forbidden_zero_bit is 1, an H.264 NAL unit whose bytes are all 0, and an
+ * HEVC NAL unit shorter than its 2-byte header or whose nuh_temporal_id_plus1 is 0 or nuh_layer_id
+ * is 63, so the walks skip each of them as if the bytes did not hold it: it is no RPU, no SEI NAL
+ * unit and no slice.
  */
 enum NalSyntax {
   /** H.264, whose avcC record holds lengthSizeMinusOne in the low 2 bits of its fifth byte. */
@@ -25,6 +31,21 @@ enum NalSyntax {
     @Override
     boolean isSei(byte[] unit) {
       return type(unit) == 6;
+    }
+
+    @Override
+    boolean reachesDecoder(byte[] unit) {
+      if (!super.reachesDecoder(unit)) {
+        return false;
+      }
+
+      for (var value : unit) {
+        if (value != 0) {
+          return true;
+        }
+      }
+
+      return false;
     }
   },
 
@@ -53,13 +74,23 @@ enum NalSyntax {
      */
     @Override
     boolean isRpu(byte[] unit) {
-      if (!super.isRpu(unit)) {
-        return false;
-      }
+      return super.isRpu(unit) && layerId(unit) == 0 && temporalIdPlus1(unit) == 1;
+    }
 
-      var layerId = (unit[0] & 0x01) << 5 | Byte.toUnsignedInt(unit[1]) >> 3;
-      var temporalIdPlus1 = unit[1] & 0x07;
-      return layerId == 0 && temporalIdPlus1 == 1;
+    @Override
+    boolean reachesDecoder(byte[] unit) {
+      return unit.length >= 2
+          && super.reachesDecoder(unit)
+          && layerId(unit) != 63
+          && temporalIdPlus1(unit) != 0;
+    }
+
+    private static int layerId(byte[] unit) {
+      return (unit[0] & 0x01) << 5 | Byte.toUnsignedInt(unit[1]) >> 3;
+    }
+
+    private static int temporalIdPlus1(byte[] unit) {
+      return unit[1] & 0x07;
     }
   };
 
@@ -108,13 +139,24 @@ enum NalSyntax {
    */
   NalUnits extradataUnits(byte[] extradata) {
     if (Byte.toUnsignedInt(extradata[0]) != RECORD_VERSION) {
-      return NalUnits.annexB(extradata);
+      return reachingDecoder(NalUnits.annexB(extradata));
     }
 
     return switch (this) {
       case H264 -> new NalUnits(List.of(), DecoderConfiguration.isWholeAvcRecord(extradata));
-      case HEVC -> DecoderConfiguration.hevcRecordUnits(extradata);
+      case HEVC -> reachingDecoder(DecoderConfiguration.hevcRecordUnits(extradata));
     };
+  }
+
+  /** The NAL units that reach FFmpeg's decoders, and whether all of them reach the bytes' end. */
+  NalUnits reachingDecoder(NalUnits delimited) {
+    return new NalUnits(
+        delimited.units().stream().filter(this::reachesDecoder).toList(), delimited.complete());
+  }
+
+  /** Whether FFmpeg's ff_h2645_packet_split hands the NAL unit to the codec's decoder. */
+  boolean reachesDecoder(byte[] unit) {
+    return unit.length > 0 && (unit[0] & 0x80) == 0;
   }
 
   boolean isRpu(byte[] unit) {

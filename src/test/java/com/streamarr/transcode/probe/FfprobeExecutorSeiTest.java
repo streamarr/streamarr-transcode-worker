@@ -87,6 +87,23 @@ class FfprobeExecutorSeiTest {
 
     @ParameterizedTest(name = "{0}")
     @EnumSource(Coding.class)
+    @DisplayName(
+        "Should report HDR10+ absent when only an SEI NAL unit whose forbidden_zero_bit is 1 holds"
+            + " it")
+    void shouldReportHdr10PlusAbsentWhenOnlyAnSeiNalUnitWhoseForbiddenZeroBitIs1HoldsIt(
+        Coding coding) {
+      // FFmpeg's splitter drops the NAL unit before any decoder sees it.
+      var sei = coding.sei(HDR10_PLUS);
+      var dropped =
+          "%02x".formatted(Integer.parseInt(sei.substring(0, 2), 16) | 0x80) + sei.substring(2);
+
+      var video = coding.probed(coding.sample(dropped));
+
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Coding.class)
     @DisplayName("Should leave HDR10+ unspecified when an SEI message runs past its NAL unit")
     void shouldLeaveHdr10PlusUnspecifiedWhenAnSeiMessageRunsPastItsNalUnit(Coding coding) {
       var video = coding.probed(coding.sample(coding.sei(LIGHT_LEVEL, "05 10 00")));
