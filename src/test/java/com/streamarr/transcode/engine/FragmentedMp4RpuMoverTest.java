@@ -269,6 +269,23 @@ class FragmentedMp4RpuMoverTest {
 
   @Test
   @DisplayName(
+      "Should keep a length that holds a slice in place when a start code inside it begins an RPU"
+          + " that another slice follows")
+  void
+      shouldKeepALengthThatHoldsASliceInPlaceWhenAStartCodeInsideItBeginsAnRpuThatAnotherSliceFollows()
+          throws IOException {
+    // FFmpeg reads the slice, the RPU and then the next slice of the same picture, so moving the
+    // whole length behind that slice would reverse the picture's slices.
+    var sliceThenRpu = unit("02 01 AF 01 00 00 01 7C 01 19 00");
+    var copy = stream(fragmentBuilder().video(0, sample(sliceThenRpu, slice(0))).build());
+
+    var moved = move(copy);
+
+    assertThat(videoSamplesOf(moved)).containsExactly(hex(sliceThenRpu, slice(0)));
+  }
+
+  @Test
+  @DisplayName(
       "Should pass the copy unchanged when a start code inside a dropped NAL unit's length begins"
           + " the RPU that ends the sample")
   void

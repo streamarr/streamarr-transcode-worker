@@ -283,7 +283,9 @@ final class FragmentedMp4RpuMover {
       if (index == lastIndex && endsWithRpu) {
         insertBehindAt = OptionalInt.of(kept.size());
         kept.add(unit);
-      } else if (!unit.rpu()) {
+      } else if (!unit.rpu() || unit.slice()) {
+        // A length that holds a slice ahead of its RPU keeps its place: moving it would move the
+        // slice behind the picture's other slices.
         kept.add(unit);
       } else if (index < firstSlice.getAsInt()) {
         leading.add(unit);
