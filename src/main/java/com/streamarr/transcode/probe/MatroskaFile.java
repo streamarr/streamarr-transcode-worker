@@ -12,6 +12,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -91,30 +92,29 @@ final class MatroskaFile {
   }
 
   static Optional<Double> floatValue(ByteBuffer parent, long id) {
-    return lastValue(
-        parent,
-        id,
-        value ->
-            switch (value.remaining()) {
-              case Float.BYTES -> (double) value.getFloat();
-              case Double.BYTES -> value.getDouble();
-              default -> throw malformed("float");
-            });
+    return lastValue(parent, id, MatroskaFile::floatValue);
+  }
+
+  private static double floatValue(ByteBuffer value) {
+    return switch (value.remaining()) {
+      case Float.BYTES -> value.getFloat();
+      case Double.BYTES -> value.getDouble();
+      default -> throw malformed("float");
+    };
   }
 
   static Optional<String> string(ByteBuffer parent, long id) {
-    return lastValue(
-        parent,
-        id,
-        value -> {
-          if (value.remaining() > MAXIMUM_STRING_BYTES) {
-            throw malformed("string");
-          }
+    return lastValue(parent, id, MatroskaFile::string);
+  }
 
-          var bytes = new byte[value.remaining()];
-          value.get(bytes);
-          return new String(bytes, StandardCharsets.UTF_8);
-        });
+  private static String string(ByteBuffer value) {
+    if (value.remaining() > MAXIMUM_STRING_BYTES) {
+      throw malformed("string");
+    }
+
+    var bytes = new byte[value.remaining()];
+    value.get(bytes);
+    return new String(bytes, StandardCharsets.UTF_8);
   }
 
   /**
@@ -165,6 +165,17 @@ final class MatroskaFile {
    * anywhere in {@code parent} fails the walk.
    */
   private static void eachChild(ByteBuffer parent, long id, Consumer<ByteBuffer> matches) {
+    eachChild(
+        parent,
+        (childId, child) -> {
+          if (childId == id) {
+            matches.accept(child);
+          }
+        });
+  }
+
+  /** Gives each child of {@code parent} and its ID to {@code children}, in order. */
+  private static void eachChild(ByteBuffer parent, BiConsumer<Long, ByteBuffer> children) {
     var buffer = parent.duplicate();
     while (buffer.hasRemaining()) {
       var header = Header.read(buffer);
@@ -173,10 +184,7 @@ final class MatroskaFile {
       }
 
       var end = buffer.position() + (int) header.size();
-      if (header.id() == id) {
-        matches.accept(buffer.duplicate().limit(end).slice());
-      }
-
+      children.accept(header.id(), buffer.duplicate().limit(end).slice());
       buffer.position(end);
     }
   }
