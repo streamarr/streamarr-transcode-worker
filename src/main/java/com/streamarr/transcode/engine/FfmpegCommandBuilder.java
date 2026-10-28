@@ -139,12 +139,12 @@ public class FfmpegCommandBuilder {
     return Optional.of(present);
   }
 
-  // A probe that did not observe the placement leaves the source's RPUs where they may start
-  // samples. Moved as the shifted layout, which mkvmerge wrote before version 57, a source whose
-  // RPUs follow their pictures passes unchanged, and a shifted source whose start was cut away is
-  // repaired. The probe cannot tell that source from one whose RPUs start their own pictures'
-  // samples, a layout no known muxer writes, to each of whose pictures the move gives the next
-  // picture's RPU.
+  // Samples that start with RPUs are moved as the shifted layout, which mkvmerge wrote before
+  // version 57, whether or not its start was cut away. The probe cannot tell that layout from one
+  // whose RPUs start their own pictures' samples, which no known muxer writes, and to each of whose
+  // pictures the move gives the next picture's RPU. A probe that could not tell the placement may
+  // leave RPUs where they start samples or where the decoder ignores them, so the move covers it
+  // too: a source whose every RPU ends its sample passes unchanged.
   private static boolean mayStartSamplesWithRpus(
       VideoDynamicRange.DolbyVisionRpuPlacement placement) {
     return switch (placement) {

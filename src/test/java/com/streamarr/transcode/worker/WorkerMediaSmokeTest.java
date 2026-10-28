@@ -1467,7 +1467,7 @@ class WorkerMediaSmokeTest {
   private enum RpuLayout {
     BEHIND_THEIR_PICTURE(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_AFTER_OWN_PICTURE),
     AHEAD_OF_THE_NEXT_PICTURE(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE),
-    AHEAD_OF_EVERY_PICTURE(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED);
+    AHEAD_OF_EVERY_PICTURE(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE);
 
     private final DolbyVisionRpuPlacement placement;
 

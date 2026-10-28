@@ -44,7 +44,7 @@ public record VideoDynamicRange(
    * belongs after the slices of that picture, as the last NAL unit of the same sample.
    */
   public enum DolbyVisionRpuPlacement {
-    /** The probe could not decide, the stream is AV1, or the samples match no other value. */
+    /** The probe could not tell the placement, or the stream is AV1. */
     UNSPECIFIED,
     /** Each RPU is the last NAL unit of its own picture's sample. */
     AFTER_OWN_PICTURE,

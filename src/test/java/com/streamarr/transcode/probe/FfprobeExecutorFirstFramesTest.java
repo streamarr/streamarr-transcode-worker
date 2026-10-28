@@ -1159,9 +1159,9 @@ class FfprobeExecutorFirstFramesTest {
 
     @Test
     @DisplayName(
-        "Should leave the RPU placement unspecified when the first picture's sample starts with an"
-            + " RPU")
-    void shouldLeaveTheRpuPlacementUnspecifiedWhenTheFirstPicturesSampleStartsWithAnRpu() {
+        "Should report that every RPU starts its sample when the first picture's sample starts with"
+            + " an RPU")
+    void shouldReportThatEveryRpuStartsItsSampleWhenTheFirstPicturesSampleStartsWithAnRpu() {
       var present =
           placed(
               lengthPrefixed(AUD, PROFILE_5_RPU_UNIT, IDR_SLICE),
@@ -1170,7 +1170,25 @@ class FfprobeExecutorFirstFramesTest {
 
       assertThat(present.getObservedRpu()).isEqualTo(Presence.PRESENCE_PRESENT);
       assertThat(present.getRpuPlacement())
-          .isEqualTo(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED);
+          .isEqualTo(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE);
+    }
+
+    @Test
+    @DisplayName(
+        "Should report that every RPU starts its sample when the first picture's sample starts with"
+            + " an RPU and the last sample holds only an RPU")
+    void
+        shouldReportThatEveryRpuStartsItsSampleWhenTheFirstPicturesSampleStartsWithAnRpuAndTheLastSampleHoldsOnlyAnRpu() {
+      // A shifted stream whose start was cut away: its first picture's sample starts with the RPU
+      // of a picture that the cut removed.
+      var present =
+          placed(
+              lengthPrefixed(AUD, PROFILE_5_RPU_UNIT, IDR_SLICE),
+              lengthPrefixed(AUD, PROFILE_5_RPU_UNIT, SLICE),
+              lengthPrefixed(PROFILE_5_RPU_UNIT));
+
+      assertThat(present.getRpuPlacement())
+          .isEqualTo(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE);
     }
 
     @Test
@@ -1496,9 +1514,10 @@ class FfprobeExecutorFirstFramesTest {
 
     @Test
     @DisplayName(
-        "Should leave a profile 5 sample's RPU placement unspecified when each RPU starts its own"
-            + " picture's sample")
-    void shouldLeaveAProfile5SamplesRpuPlacementUnspecifiedWhenEachRpuStartsItsOwnPicturesSample() {
+        "Should report that every RPU of a profile 5 sample starts its sample when each RPU starts"
+            + " its own picture's sample")
+    void
+        shouldReportThatEveryRpuOfAProfile5SampleStartsItsSampleWhenEachRpuStartsItsOwnPicturesSample() {
       // move-rpus-ahead.py moved each RPU of the FATE sample ahead of its own picture's first
       // slice.
       var present =
@@ -1508,7 +1527,7 @@ class FfprobeExecutorFirstFramesTest {
 
       assertThat(present.getObservedRpu()).isEqualTo(Presence.PRESENCE_PRESENT);
       assertThat(present.getRpuPlacement())
-          .isEqualTo(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED);
+          .isEqualTo(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE);
       assertThat(present.getFirstRpuHeader().getVdrRpuProfile()).isZero();
     }
 

@@ -58,17 +58,14 @@ final class PacketRpuReader {
   }
 
   /**
-   * The placement whose rule the samples meet, in order; unspecified when a sample holds more than
-   * one RPU, a sample ahead of the first picture's sample holds one, the samples meet no rule, or
-   * every RPU starts its sample and the first picture's sample holds one: the first packets cannot
-   * tell a file whose RPUs start the next picture's sample, with its start cut away, from one whose
-   * RPUs start their own picture's sample. At least one sample holds an RPU.
+   * The placement whose rule the samples meet, in order; unspecified when no sample holds a
+   * picture, a sample holds more than one RPU, a sample ahead of the first picture's sample holds
+   * one, or the samples meet neither rule. At least one sample holds an RPU.
    */
   private static DolbyVisionRpuPlacement placement(List<Layout> layouts) {
-    var firstPicture = layouts.stream().filter(Layout::hasPicture).findFirst();
     var isAnyRpuAheadOfThePictures =
         layouts.stream().takeWhile(layout -> !layout.hasPicture()).anyMatch(Layout::hasRpu);
-    if (firstPicture.isEmpty()
+    if (layouts.stream().noneMatch(Layout::hasPicture)
         || isAnyRpuAheadOfThePictures
         || layouts.stream().anyMatch(layout -> layout.rpus() > 1)) {
       return DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED;
@@ -79,11 +76,11 @@ final class PacketRpuReader {
       return DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_AFTER_OWN_PICTURE;
     }
 
-    if (!withRpus.stream().allMatch(Layout::startsWithRpu) || firstPicture.get().hasRpu()) {
-      return DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED;
+    if (withRpus.stream().allMatch(Layout::startsWithRpu)) {
+      return DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE;
     }
 
-    return DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE;
+    return DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED;
   }
 
   private static Optional<DolbyVisionRpuHeader> header(byte[] rpu, NalSyntax syntax) {
