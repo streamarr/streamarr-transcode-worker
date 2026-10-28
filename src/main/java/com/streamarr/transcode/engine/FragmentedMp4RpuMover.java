@@ -287,10 +287,12 @@ final class FragmentedMp4RpuMover {
         header.type(), ByteBuffer.wrap(box, header.length(), box.length - header.length()));
   }
 
-  private static void putBox(ByteBuffer target, BoxView box) {
-    target.putInt(BOX_HEADER_BYTES + box.body().remaining());
-    putType(target, box.type());
-    target.put(box.body().duplicate());
+  private static byte[] boxBytes(BoxView box) {
+    var bytes = ByteBuffer.allocate(BOX_HEADER_BYTES + box.body().remaining());
+    bytes.putInt(bytes.capacity());
+    putType(bytes, box.type());
+    bytes.put(box.body().duplicate());
+    return bytes.array();
   }
 
   private static void putType(ByteBuffer target, String type) {
@@ -377,25 +379,25 @@ final class FragmentedMp4RpuMover {
       return moofChildren.stream().mapToInt(child -> child.length).sum();
     }
 
+    private int nextDataOffset() {
+      return dataStart + samples.stream().mapToInt(ByteBuffer::remaining).sum();
+    }
+
     private void addBox(BoxView box) {
-      var bytes = ByteBuffer.allocate(BOX_HEADER_BYTES + box.body().remaining());
-      putBox(bytes, box);
-      moofChildren.add(bytes.array());
+      moofChildren.add(boxBytes(box));
     }
 
     private void addTraf(BoxView traf, Iterator<ByteBuffer> trackSamples) {
       var children = new ArrayList<byte[]>();
       for (var child : traf.children()) {
         if (!child.type().equals("trun")) {
-          var bytes = ByteBuffer.allocate(BOX_HEADER_BYTES + child.body().remaining());
-          putBox(bytes, child);
-          children.add(bytes.array());
+          children.add(boxBytes(child));
           continue;
         }
 
         var run = TrackRun.of(child);
         var sizes = new long[Math.toIntExact(run.sampleCount())];
-        var dataOffset = dataStart + samples.stream().mapToInt(ByteBuffer::remaining).sum();
+        var dataOffset = nextDataOffset();
         for (var index = 0; index < sizes.length; index++) {
           var sample = trackSamples.next();
           sizes[index] = sample.remaining();
