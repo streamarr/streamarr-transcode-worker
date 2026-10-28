@@ -154,6 +154,39 @@ class FfprobeExecutorDroppedNalUnitsTest {
 
     @Test
     @DisplayName(
+        "Should take no RPU from a sample that FFmpeg rejects for a length of 0 after the RPU")
+    void shouldTakeNoRpuFromASampleThatFfmpegRejectsForALengthOf0AfterTheRpu() {
+      var video =
+          probed(
+              HEVC_RECORD,
+              lengthPrefixed(IDR_SLICE),
+              lengthPrefixed(SLICE, RPU) + " 00 00 00 00 " + lengthPrefixed(AUD),
+              lengthPrefixed(SLICE));
+
+      assertThat(video.getDynamicRange().getDolbyVisionCase())
+          .isEqualTo(DolbyVisionCase.DOLBYVISION_NOT_SET);
+    }
+
+    @Test
+    @DisplayName(
+        "Should take no content light level from a sample that FFmpeg rejects for a length of 0"
+            + " after its SEI")
+    void shouldTakeNoContentLightLevelFromASampleThatFfmpegRejectsForALengthOf0AfterItsSei() {
+      // A prefix SEI NAL unit with a content light level of 1000 and 400.
+      var sei = "4e 01 90 04 03 e8 01 90 80";
+
+      var video =
+          probed(
+              HEVC_RECORD,
+              lengthPrefixed(sei, IDR_SLICE) + " 00 00 00 00 " + lengthPrefixed(AUD),
+              lengthPrefixed(SLICE),
+              lengthPrefixed(SLICE));
+
+      assertThat(video.hasContentLightLevel()).isFalse();
+    }
+
+    @Test
+    @DisplayName(
         "Should rule Dolby Vision out when the hvcC record holds an empty NAL unit, which FFmpeg's"
             + " splitter drops")
     void shouldRuleDolbyVisionOutWhenTheHvcCRecordHoldsAnEmptyNalUnitWhichFfmpegsSplitterDrops() {

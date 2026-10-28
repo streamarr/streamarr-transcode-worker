@@ -51,9 +51,9 @@ final class FirstPacketSamples {
    * The sample's NAL units, each without its emulation prevention bytes. A length that runs past
    * the sample, or bytes too few for a length, end the sample early, and a start code inside a
    * length's bytes leaves the sample incomplete. FFmpeg rejects a whole sample that holds a length
-   * of 0, so such a sample is incomplete too. FFmpeg's ff_h2645_packet_split stops when fewer than
-   * {@link #FEWEST_SPLIT_BYTES} bytes remain, so the reader skips the NAL unit that such bytes
-   * hold.
+   * of 0, so such a sample is incomplete and holds no NAL unit that a decoder sees. FFmpeg's
+   * ff_h2645_packet_split stops when fewer than {@link #FEWEST_SPLIT_BYTES} bytes remain, so the
+   * reader skips the NAL unit that such bytes hold.
    */
   private static NalUnits lengthPrefixed(byte[] sample, int lengthSize) {
     var units = new ArrayList<byte[]>();
@@ -67,7 +67,11 @@ final class FirstPacketSamples {
       }
 
       position += lengthSize;
-      if (length <= 0 || length > sample.length - position) {
+      if (length == 0) {
+        return new NalUnits(List.of(), false);
+      }
+
+      if (length < 0 || length > sample.length - position) {
         return new NalUnits(units, false);
       }
 
