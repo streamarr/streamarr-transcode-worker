@@ -41,6 +41,7 @@ record HevcNalUnit(@NonNull ByteBuffer bytes, boolean slice, boolean rpu, boolea
   // starts with rpu_nal_prefix 25: FFmpeg's HEVC decoder reads no other NAL unit as an RPU.
   private static final int RPU_NAL_PREFIX = 25;
   private static final int UNDECODED_LAYER = 63;
+  private static final int NO_HEADER = -1;
 
   HevcNalUnit {
     bytes = bytes.slice();
@@ -81,28 +82,35 @@ record HevcNalUnit(@NonNull ByteBuffer bytes, boolean slice, boolean rpu, boolea
     return Optional.of(List.copyOf(units));
   }
 
-  private static HevcNalUnit unitAt(ByteBuffer sample, int start, int unitStart, int end) {
-    var bytes = sample.slice(start, end - start);
-    var decoded = decodedHeaders(sample, unitStart, end);
-    var slice =
-        decoded.stream().anyMatch(header -> typeAt(sample, header) < FIRST_NON_PICTURE_TYPE);
-    var rpu = !decoded.isEmpty() && isRpuAt(sample, decoded.getLast(), end);
-    return new HevcNalUnit(bytes, slice, rpu, !decoded.isEmpty());
-  }
-
   // FFmpeg ends a NAL unit at a start code that its length's bytes hold, and splits the bytes after
-  // the start code into NAL units of their own, which reach the decoder by the same rules.
-  private static List<Integer> decodedHeaders(ByteBuffer sample, int unitStart, int end) {
-    var headers = new ArrayList<Integer>();
-    headers.add(unitStart);
-    for (var index = unitStart; index + 2 < end; index++) {
-      if (sample.get(index) == 0 && sample.get(index + 1) == 0 && sample.get(index + 2) == 1) {
-        headers.add(index + 3);
+  // the start code into NAL units of their own, which reach the decoder by the same rules. The scan
+  // holds no list of those NAL units: a length can hold a start code every 3 bytes.
+  private static HevcNalUnit unitAt(ByteBuffer sample, int start, int unitStart, int end) {
+    var slice = false;
+    var reaching = 0;
+    var lastReaching = unitStart;
+    for (var header = unitStart; header != NO_HEADER; header = nextHeader(sample, header, end)) {
+      if (headerReachesDecoder(sample, header, end)) {
+        slice |= typeAt(sample, header) < FIRST_NON_PICTURE_TYPE;
+        reaching++;
+        lastReaching = header;
       }
     }
 
-    headers.removeIf(header -> !headerReachesDecoder(sample, header, end));
-    return headers;
+    var rpu = reaching > 0 && isRpuAt(sample, lastReaching, end);
+    return new HevcNalUnit(sample.slice(start, end - start), slice, rpu, reaching > 0);
+  }
+
+  // The header behind the first start code at or after this header, which no earlier start code
+  // overlaps.
+  private static int nextHeader(ByteBuffer sample, int header, int end) {
+    for (var index = header; index + 2 < end; index++) {
+      if (sample.get(index) == 0 && sample.get(index + 1) == 0 && sample.get(index + 2) == 1) {
+        return index + 3;
+      }
+    }
+
+    return NO_HEADER;
   }
 
   private static int typeAt(ByteBuffer sample, int header) {
