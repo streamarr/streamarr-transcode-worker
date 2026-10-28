@@ -501,6 +501,25 @@ class FragmentedMp4RpuMoverTest {
 
   @Test
   @DisplayName(
+      "Should copy nothing behind the previous picture from a sample that holds no slice when a"
+          + " start code inside a parameter set's length begins its RPU")
+  void
+      shouldCopyNothingBehindThePreviousPictureFromASampleThatHoldsNoSliceWhenAStartCodeInsideAParameterSetsLengthBeginsItsRpu()
+          throws IOException {
+    // Copying the length behind the previous picture would put the PPS ahead of the RPU there.
+    var ppsThenRpu = unit("44 01 C1 01 00 00 01 7C 01 19 01");
+    var copy =
+        stream(
+            fragmentBuilder().video(0, sample(slice(0))).build(),
+            fragmentBuilder().video(1001, sample(ppsThenRpu)).build());
+
+    var moved = move(copy);
+
+    assertThat(videoSamplesOf(moved)).containsExactly(hex(slice(0)), hex(ppsThenRpu));
+  }
+
+  @Test
+  @DisplayName(
       "Should end the previous picture with only the last RPU that the samples after it move there"
           + " when several samples carry RPUs for it")
   void
