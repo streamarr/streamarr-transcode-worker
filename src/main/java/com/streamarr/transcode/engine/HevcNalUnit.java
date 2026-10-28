@@ -15,10 +15,13 @@ import lombok.NonNull;
  * nuh_temporal_id_plus1 is 0 or nuh_layer_id is 63, and the last one of a sample when it takes
  * fewer than {@link #FEWEST_SPLIT_BYTES} bytes with its length. Such a NAL unit keeps its bytes,
  * but it is no slice and no RPU, and it never keeps an RPU from being the last NAL unit that the
- * decoder sees.
+ * decoder sees. A start code inside a NAL unit's length begins NAL units that FFmpeg reads on their
+ * own, so the NAL unit reaches the decoder when one of them does.
  *
  * @param bytes the length prefix and the NAL unit, viewed without copying them
- * @param reachesDecoder whether FFmpeg's splitter hands the NAL unit to the decoder
+ * @param type the type in the first NAL unit header, or -1 when FFmpeg drops that NAL unit
+ * @param reachesDecoder whether FFmpeg's splitter hands the NAL unit, or one that a start code
+ *     inside it begins, to the decoder
  */
 record HevcNalUnit(@NonNull ByteBuffer bytes, int type, boolean rpu, boolean reachesDecoder) {
 
@@ -44,7 +47,7 @@ record HevcNalUnit(@NonNull ByteBuffer bytes, int type, boolean rpu, boolean rea
   }
 
   boolean slice() {
-    return reachesDecoder && type < FIRST_NON_PICTURE_TYPE;
+    return type >= 0 && type < FIRST_NON_PICTURE_TYPE;
   }
 
   int length() {
@@ -84,24 +87,54 @@ record HevcNalUnit(@NonNull ByteBuffer bytes, int type, boolean rpu, boolean rea
   private static HevcNalUnit unitAt(
       ByteBuffer sample, int start, int unitStart, int end, boolean isSplit) {
     var bytes = sample.slice(start, end - start);
-    if (!isSplit || end - unitStart < NAL_UNIT_HEADER_BYTES) {
+    if (!isSplit) {
       return new HevcNalUnit(bytes, -1, false, false);
+    }
+
+    var isEmbeddedUnitDecoded = isEmbeddedUnitDecoded(sample, unitStart, end);
+    if (!headerReachesDecoder(sample, unitStart, end)) {
+      return new HevcNalUnit(bytes, -1, false, isEmbeddedUnitDecoded);
     }
 
     var first = Byte.toUnsignedInt(sample.get(unitStart));
     var second = Byte.toUnsignedInt(sample.get(unitStart + 1));
     var type = (first >> 1) & 0x3F;
-    var layerId = (first & 0x01) << 5 | second >> 3;
-    var temporalIdPlus1 = second & 0x07;
-    var reachesDecoder = (first & 0x80) == 0 && layerId != UNDECODED_LAYER && temporalIdPlus1 != 0;
     var rpu =
-        reachesDecoder
-            && type == UNSPECIFIED_62
-            && layerId == 0
-            && temporalIdPlus1 == 1
+        type == UNSPECIFIED_62
+            && layerId(first, second) == 0
+            && (second & 0x07) == 1
             && end - unitStart > NAL_UNIT_HEADER_BYTES
             && Byte.toUnsignedInt(sample.get(unitStart + NAL_UNIT_HEADER_BYTES)) == RPU_NAL_PREFIX;
-    return new HevcNalUnit(bytes, type, rpu, reachesDecoder);
+    return new HevcNalUnit(bytes, type, rpu, true);
+  }
+
+  // FFmpeg ends a NAL unit at a start code that its length's bytes hold, and splits the bytes after
+  // the start code into NAL units of their own, which reach the decoder by the same rules.
+  private static boolean isEmbeddedUnitDecoded(ByteBuffer sample, int unitStart, int end) {
+    for (var index = unitStart; index + 2 < end; index++) {
+      if (sample.get(index) == 0
+          && sample.get(index + 1) == 0
+          && sample.get(index + 2) == 1
+          && headerReachesDecoder(sample, index + 3, end)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private static boolean headerReachesDecoder(ByteBuffer sample, int unitStart, int end) {
+    if (end - unitStart < NAL_UNIT_HEADER_BYTES) {
+      return false;
+    }
+
+    var first = Byte.toUnsignedInt(sample.get(unitStart));
+    var second = Byte.toUnsignedInt(sample.get(unitStart + 1));
+    return (first & 0x80) == 0 && layerId(first, second) != UNDECODED_LAYER && (second & 0x07) != 0;
+  }
+
+  private static int layerId(int first, int second) {
+    return (first & 0x01) << 5 | second >> 3;
   }
 
   private static long lengthAt(ByteBuffer sample, int position, int lengthSize) {

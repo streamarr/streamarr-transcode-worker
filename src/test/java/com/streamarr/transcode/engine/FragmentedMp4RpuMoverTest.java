@@ -233,6 +233,22 @@ class FragmentedMp4RpuMoverTest {
 
   @Test
   @DisplayName(
+      "Should move an RPU behind the NAL unit that a start code inside a dropped NAL unit's length"
+          + " begins, which FFmpeg's splitter hands to the decoder")
+  void
+      shouldMoveAnRpuBehindTheNalUnitThatAStartCodeInsideADroppedNalUnitsLengthBeginsWhichFfmpegsSplitterHandsToTheDecoder()
+          throws IOException {
+    // FFmpeg ends the dropped NAL unit at the start code and reads the AUD that follows it.
+    var embedding = unit("C6 01 50 00 00 01 46 01 50");
+    var copy = stream(fragmentBuilder().video(0, sample(slice(0), rpu(0), embedding)).build());
+
+    var moved = move(copy);
+
+    assertThat(videoSamplesOf(moved)).containsExactly(hex(slice(0), embedding, rpu(0)));
+  }
+
+  @Test
+  @DisplayName(
       "Should pass the copy unchanged when the last NAL unit of a sample takes fewer than 4 bytes"
           + " with its length, which FFmpeg's splitter never reads")
   void
