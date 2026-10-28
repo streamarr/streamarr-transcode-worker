@@ -200,6 +200,26 @@ class FragmentedMp4RpuMoverTest {
 
   @Test
   @DisplayName(
+      "Should end the previous picture with only the last RPU that the samples after it move there"
+          + " when several samples carry RPUs for it")
+  void
+      shouldEndThePreviousPictureWithOnlyTheLastRpuThatTheSamplesAfterItMoveThereWhenSeveralSamplesCarryRpusForIt()
+          throws IOException {
+    var copy =
+        stream(
+            fragmentBuilder().video(0, sample(slice(0))).build(),
+            fragmentBuilder().video(1001, sample(rpu(1), rpu(2))).build(),
+            fragmentBuilder().video(2002, sample(rpu(3))).build(),
+            fragmentBuilder().video(3003, sample(rpu(4), slice(1))).build());
+
+    var moved = move(copy, RpuMove.BEHIND_PREVIOUS_PICTURE);
+
+    assertThat(videoSamplesOf(moved))
+        .containsExactly(hex(slice(0), rpu(4)), hex(rpu(1), rpu(2)), hex(rpu(3)), hex(slice(1)));
+  }
+
+  @Test
+  @DisplayName(
       "Should keep the bytes of a sample it cannot delimit, and drop the next RPU that starts a"
           + " sample, when the RPUs belong to the picture before")
   void

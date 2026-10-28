@@ -250,8 +250,14 @@ final class FragmentedMp4RpuMover {
     }
   }
 
+  // FFmpeg's HEVC decoder reads only a sample's last NAL unit as its RPU, so the previous picture
+  // keeps only the last RPU moved behind it, however many samples carry RPUs for it.
   private void appendBehindPreviousPicture(List<HevcNalUnit> rpus) {
-    previousPicture.ifPresent(picture -> rpus.forEach(picture::append));
+    if (rpus.isEmpty()) {
+      return;
+    }
+
+    previousPicture.ifPresent(picture -> picture.endWithMovedRpu(rpus.getLast()));
   }
 
   // Every fragment ahead of the previous picture's is final: only that picture can still grow.
@@ -415,12 +421,17 @@ final class FragmentedMp4RpuMover {
     }
   }
 
-  /** One video sample's bytes: as read, or the NAL units the mover gave it. */
+  /**
+   * One video sample's bytes: as read, or as the mover rearranged them, then the RPU moved behind
+   * it. A rearranged sample holds its own copy of its bytes rather than a view of each NAL unit, so
+   * what a held sample retains is bounded by its size.
+   */
   private static final class VideoSample {
 
     private final HeldFragment fragment;
     private final ByteBuffer original;
-    private Optional<List<ByteBuffer>> units = Optional.empty();
+    private Optional<ByteBuffer> rearranged = Optional.empty();
+    private Optional<ByteBuffer> movedRpu = Optional.empty();
 
     private VideoSample(HeldFragment fragment, ByteBuffer original) {
       this.fragment = fragment;
@@ -436,30 +447,33 @@ final class FragmentedMp4RpuMover {
     }
 
     private boolean changed() {
-      return units.isPresent();
+      return rearranged.isPresent() || movedRpu.isPresent();
     }
 
     private void replace(List<HevcNalUnit> nalUnits) {
-      units = Optional.of(new ArrayList<>(nalUnits.stream().map(HevcNalUnit::bytes).toList()));
+      var bytes = ByteBuffer.allocate(original.remaining());
+      nalUnits.forEach(unit -> bytes.put(unit.bytes().duplicate()));
+      rearranged = Optional.of(bytes.flip());
     }
 
-    private void append(HevcNalUnit rpu) {
-      if (units.isEmpty()) {
-        units = Optional.of(new ArrayList<>(List.of(original())));
-      }
-
-      units.orElseThrow().add(rpu.bytes());
+    private void endWithMovedRpu(HevcNalUnit rpu) {
+      movedRpu = Optional.of(copyOf(rpu.bytes()));
     }
 
     private ByteBuffer content() {
-      if (units.isEmpty()) {
-        return original();
+      var base = rearranged.orElse(original).duplicate();
+      if (movedRpu.isEmpty()) {
+        return base;
       }
 
-      var parts = units.orElseThrow();
-      var content = ByteBuffer.allocate(parts.stream().mapToInt(ByteBuffer::remaining).sum());
-      parts.forEach(part -> content.put(part.duplicate()));
-      return content.flip();
+      var rpu = movedRpu.orElseThrow().duplicate();
+      var content = ByteBuffer.allocate(base.remaining() + rpu.remaining());
+      return content.put(base).put(rpu).flip();
+    }
+
+    private static ByteBuffer copyOf(ByteBuffer bytes) {
+      var copy = ByteBuffer.allocate(bytes.remaining());
+      return copy.put(bytes.duplicate()).flip();
     }
   }
 }
