@@ -40,13 +40,16 @@ final class RecordedFfprobe {
   private RecordedFfprobe() {}
 
   static ProbeMediaInfo probeFixture(String fixture) {
-    return probe(
-        Answers.builder()
-            .ffprobeOutput(fixture(fixture))
-            .packetLines(packets(fixture))
-            .firstFrames(recordedFirstFrames(fixture))
-            .firstPackets(recordedFirstPackets(fixture))
-            .build());
+    return probe(recordedAnswers(fixture).build());
+  }
+
+  /** The answers that the pinned worker image recorded for the fixture, for a test to customize. */
+  static Answers.AnswersBuilder recordedAnswers(String fixture) {
+    return Answers.builder()
+        .ffprobeOutput(fixture(fixture))
+        .packetLines(packets(fixture))
+        .firstFrames(recordedFirstFrames(fixture))
+        .firstPackets(recordedFirstPackets(fixture));
   }
 
   static ProbeStreamInfo streamOf(String fixture, int index) {

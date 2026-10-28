@@ -40,6 +40,10 @@ class FfprobeExecutorCodecStringTest {
           "mp4-dovi-p9-dva1.mp4",
           "mp4-dovi-p82.mp4");
 
+  // These videos' HEVC parameter sets are only in their samples.
+  private static final Set<String> VIDEO_FIXTURES_WITHOUT_RECORD_PARAMETER_SETS =
+      Set.of("mp4-dovi-p5-hev1.mp4");
+
   @Nested
   @DisplayName("Stream Copies")
   class StreamCopyTests {
@@ -68,11 +72,11 @@ class FfprobeExecutorCodecStringTest {
                           copy ->
                               !copy.getKey().equals("0")
                                   || !SESSION_COVERED_VIDEO_FIXTURES.contains(file.getKey()))
-                      // This video's HEVC parameter sets are only in its samples.
                       .filter(
                           copy ->
-                              !file.getKey().equals("mp4-dovi-p5-hev1.mp4")
-                                  || !copy.getKey().equals("0"))
+                              !copy.getKey().equals("0")
+                                  || !VIDEO_FIXTURES_WITHOUT_RECORD_PARAMETER_SETS.contains(
+                                      file.getKey()))
                       .map(
                           copy ->
                               Arguments.of(
