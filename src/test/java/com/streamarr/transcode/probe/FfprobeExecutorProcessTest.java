@@ -269,7 +269,7 @@ class FfprobeExecutorProcessTest {
             "-read_intervals",
             "%+#3",
             "-show_entries",
-            "packet=data:packet_side_data=side_data_type",
+            "packet=pts,data:packet_side_data=side_data_type",
             "-show_data",
             source.toString(),
             "--"));

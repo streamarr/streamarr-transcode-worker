@@ -23,8 +23,9 @@ import tools.jackson.databind.node.ObjectNode;
  * follow one it rejects, so the probe reads HDR10+ and static HDR metadata from the packets too.
  * FFmpeg's AV1 decoders drop the metadata OBUs that they cannot parse, so the probe reads those
  * from the packets as well. The read also prints the type of each packet's side data, which tells a
- * packet that carries a replacement record. When ffprobe fails, prints no packet, or prints more
- * than {@link #MAXIMUM_OUTPUT_BYTES}, the description gets no packets.
+ * packet that carries a replacement record, and each packet's pts, which ffprobe leaves out when
+ * the demuxer gives the packet no presentation time. When ffprobe fails, prints no packet, or
+ * prints more than {@link #MAXIMUM_OUTPUT_BYTES}, the description gets no packets.
  */
 @RequiredArgsConstructor
 @Slf4j
@@ -71,7 +72,7 @@ final class FirstPacketsProbe {
             "-read_intervals",
             "%+#" + count,
             "-show_entries",
-            "packet=data:packet_side_data=side_data_type",
+            "packet=pts,data:packet_side_data=side_data_type",
             "-show_data",
             source.toString()));
     var bounded = ffprobe.run(arguments, MAXIMUM_OUTPUT_BYTES);

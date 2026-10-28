@@ -32,4 +32,18 @@ final class FirstPackets {
 
     return Optional.of(packets);
   }
+
+  /**
+   * Whether every packet that the read printed has a pts; empty when the probe read no packet.
+   * ffprobe leaves out the pts of a packet that its demuxer gives no presentation time, as FFmpeg's
+   * raw H.264 and HEVC demuxers do for every packet.
+   */
+  static Optional<Boolean> carryPresentationTimes(JsonNode stream) {
+    var packets = stream.path(FirstPacketsProbe.FIRST_PACKETS).valueStream().toList();
+    if (packets.isEmpty()) {
+      return Optional.empty();
+    }
+
+    return Optional.of(packets.stream().allMatch(packet -> packet.path("pts").isIntegralNumber()));
+  }
 }

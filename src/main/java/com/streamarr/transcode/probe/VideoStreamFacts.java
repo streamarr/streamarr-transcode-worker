@@ -30,6 +30,8 @@ final class VideoStreamFacts {
     var walk = MetadataWalk.of(source);
     stream.setDynamicRange(DynamicRangeReader.read(source, walk));
     stream.setFirstFramesRead(FirstFrames.of(source).isPresent());
+    FirstPackets.carryPresentationTimes(source)
+        .ifPresent(stream::setFirstPacketsCarryPresentationTimes);
     HdrStaticMetadata.add(source, walk, stream);
     CodecProfileReader.add(source, stream);
     ColorSignaling.add(source, stream);

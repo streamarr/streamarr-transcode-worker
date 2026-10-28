@@ -347,7 +347,7 @@ for source in "$@"; do
     if [ "$codec" = h264 ] || [ "$codec" = hevc ] || [ "$codec" = av1 ]; then
       ffprobe -v quiet -print_format json "${LIMITS[@]}" -select_streams "$chosen" \
         -read_intervals "%+#$packets" \
-        -show_entries packet=data:packet_side_data=side_data_type -show_data \
+        -show_entries packet=pts,data:packet_side_data=side_data_type -show_data \
         "$source" > "packet-data/$(basename "$source").json"
     fi
   fi

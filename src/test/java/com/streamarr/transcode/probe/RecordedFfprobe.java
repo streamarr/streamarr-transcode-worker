@@ -255,7 +255,7 @@ final class RecordedFfprobe {
   }
 
   private static boolean isFirstPacketsRead(List<String> arguments) {
-    return arguments.stream().anyMatch(argument -> argument.startsWith("packet=data"));
+    return arguments.stream().anyMatch(argument -> argument.startsWith("packet=pts,data"));
   }
 
   private static boolean isFirstFramesRead(List<String> arguments) {

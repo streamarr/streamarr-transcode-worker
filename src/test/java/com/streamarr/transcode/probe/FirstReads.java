@@ -82,6 +82,16 @@ final class FirstReads {
     return output.toString();
   }
 
+  /**
+   * The first-packets read's output with a presentation time on one packet, as ffprobe prints the
+   * pts of a packet whose demuxer gives it one.
+   */
+  static String withPresentationTime(String packets, int packet, long pts) {
+    var output = (ObjectNode) new ObjectMapper().readTree(packets);
+    ((ObjectNode) output.path("packets").get(packet)).put("pts", pts);
+    return output.toString();
+  }
+
   static String extradata(String hex) {
     return "\"extradata\":\"%s\"".formatted(ffprobeDump(HexFormat.ofDelimiter(" ").parseHex(hex)));
   }
