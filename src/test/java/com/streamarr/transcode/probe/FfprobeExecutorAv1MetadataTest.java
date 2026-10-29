@@ -133,23 +133,28 @@ class FfprobeExecutorAv1MetadataTest {
     @CsvSource({
       "'12 00 32 05 10 00', an obu_size that runs past the packet",
       "'12 00 36', an extension byte past the packet",
-      "'12 00 32 80 80 80 80 80 80 80 80 01 00', an obu_size longer than 8 bytes",
-      "'12 00 32 ff ff ff ff 7f', an obu_size beyond 32 bits",
+      "'12 00 34', an extension byte past the packet of an OBU without a size field",
+      "'12 00 32 80 80 80 80 80 80 80 80 00', an obu_size of 0 written in 9 bytes",
+      "'12 00 2a 06 ff ff ff ff 7f 80', a metadata_type beyond 32 bits",
       "'12 00 2a 00', a metadata OBU without its metadata_type",
-      "'12 00 2a 01 80', a metadata_type that runs past its OBU",
+      "'12 00 2a 01 81 32 01 00', a metadata_type that runs past its OBU into the next",
       "'12 00 2a 03 01 00 00', an HDR_CLL OBU without its trailing bits",
       "'12 00 2a 03 04 b5 81', a T.35 OBU whose last nonzero byte is not 0x80"
     })
-    @DisplayName("Should leave HDR10+ unspecified when the walk cannot delimit an OBU")
-    void shouldLeaveHdr10PlusUnspecifiedWhenTheWalkCannotDelimitAnObu(
-        String packet, String reason) {
+    @DisplayName("Should rule nothing out when the walk cannot delimit an OBU")
+    void shouldRuleNothingOutWhenTheWalkCannotDelimitAnObu(String packet, String reason) {
+      // Every other packet that the read asks for is a whole temporal unit, so only the named OBU
+      // can leave the walk incomplete.
       var video = probed(AV1C, packet);
 
-      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+      assertThat(video.getDynamicRange().getHdr10Plus())
+          .as(reason)
+          .isEqualTo(Presence.PRESENCE_UNSPECIFIED);
       assertThat(video.getDynamicRange().getDolbyVisionCase())
+          .as(reason)
           .isEqualTo(DolbyVisionCase.DOLBYVISION_NOT_SET);
-      assertThat(video.getMasteringDisplayOmitted()).isTrue();
-      assertThat(video.getContentLightLevelOmitted()).isTrue();
+      assertThat(video.getMasteringDisplayOmitted()).as(reason).isTrue();
+      assertThat(video.getContentLightLevelOmitted()).as(reason).isTrue();
     }
 
     @Test
@@ -159,6 +164,7 @@ class FfprobeExecutorAv1MetadataTest {
       var video = probed(AV1C, temporalUnit(layered(4, "b5 00 3c 00 01 04 01 40")));
 
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+      assertThat(video.getMasteringDisplayOmitted()).as("the walk read every OBU").isFalse();
     }
 
     @Test
@@ -199,7 +205,7 @@ class FfprobeExecutorAv1MetadataTest {
           probe(
                   answers(AV1C)
                       .firstFrames(frames("", "", ""))
-                      .firstPackets(withNewExtradata(packets(temporalUnit(), temporalUnit()), 1))
+                      .firstPackets(withNewExtradata(packetsUpTo(3, temporalUnit()), 1))
                       .build())
               .getStreams(0);
 
@@ -223,7 +229,7 @@ class FfprobeExecutorAv1MetadataTest {
                   answers(AV1C)
                       .firstFrames(frames(""))
                       .failingReadsBeyondPackets(3)
-                      .firstPackets(packets(temporalUnit()))
+                      .firstPackets(packetsUpTo(3, temporalUnit()))
                       .build())
               .getStreams(0);
 
@@ -249,9 +255,19 @@ class FfprobeExecutorAv1MetadataTest {
 
     @Test
     @DisplayName(
-        "Should report no compatible base when the walk's RPU header has profile 10.0's fields")
-    void shouldReportNoCompatibleBaseWhenTheWalksRpuHeaderHasProfile100sFields() {
-      var video = probed(AV1C, temporalUnit(rpuObu(profile100Emdf().build())));
+        "Should report no compatible base when the walk's RPU header has profile 10.0's fields on"
+            + " a PQ stream")
+    void shouldReportNoCompatibleBaseWhenTheWalksRpuHeaderHasProfile100sFieldsOnAPqStream() {
+      // A PQ transfer alone gives a PQ base, so only the profile 10.0 rule can give none.
+      var video =
+          probe(
+                  answersWithFields("\"color_transfer\":\"smpte2084\"," + extradata(AV1C))
+                      .firstFrames(frames("", "", ""))
+                      .firstPackets(
+                          packetsUpTo(
+                              3, temporalUnit(), temporalUnit(rpuObu(profile100Emdf().build()))))
+                      .build())
+              .getStreams(0);
 
       assertThat(video.getDynamicRange().getCompatibleBase())
           .isEqualTo(CompatibleBase.COMPATIBLE_BASE_NONE);
@@ -286,6 +302,9 @@ class FfprobeExecutorAv1MetadataTest {
 
       assertThat(video.getDynamicRange().getDolbyVisionCase())
           .isEqualTo(DolbyVisionCase.DOLBYVISION_NOT_SET);
+      assertThat(video.getDynamicRange().getHdr10Plus())
+          .as("the walk read every OBU")
+          .isEqualTo(Presence.PRESENCE_ABSENT);
     }
 
     @Test
@@ -570,8 +589,12 @@ class FfprobeExecutorAv1MetadataTest {
   }
 
   private static Answers.AnswersBuilder answers(String extradata) {
-    return Answers.builder()
-        .ffprobeOutput(output("\"codec_name\":\"av1\"," + extradata(extradata)));
+    return answersWithFields(extradata(extradata));
+  }
+
+  /** The answers for an AV1 stream with the given fields. */
+  private static Answers.AnswersBuilder answersWithFields(String fields) {
+    return Answers.builder().ffprobeOutput(output("\"codec_name\":\"av1\"," + fields));
   }
 
   /** An av1C record whose configOBUs are the given OBUs. */
