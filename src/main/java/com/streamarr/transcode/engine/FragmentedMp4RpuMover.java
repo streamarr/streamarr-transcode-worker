@@ -295,8 +295,9 @@ final class FragmentedMp4RpuMover {
     }
 
     appendBehindPreviousPicture(leading);
-    if (!leading.isEmpty() || !behind.isEmpty()) {
-      kept.addAll(insertBehindAt.orElse(kept.size()), behind);
+    kept.addAll(insertBehindAt.orElse(kept.size()), behind);
+    // RPUs already right ahead of the RPU that ends the sample land where they were.
+    if (!kept.equals(units)) {
       sample.replace(kept);
     }
 
