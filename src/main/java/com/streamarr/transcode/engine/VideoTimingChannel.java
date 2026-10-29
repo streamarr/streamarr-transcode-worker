@@ -119,12 +119,13 @@ final class VideoTimingChannel implements VideoPacketTimings, AutoCloseable {
     selector.wakeup();
   }
 
-  /** Stops listening and reading. */
+  /** Stops listening and reading, and returns once the socket and its directory are removed. */
   @Override
   public void close() {
     closed = true;
     copyExited();
     connection.get().ifPresent(VideoTimingChannel::closeQuietly);
+    removeSocket();
   }
 
   private void read() {

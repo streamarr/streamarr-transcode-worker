@@ -281,6 +281,23 @@ class ProducerRpuMovingPipeTest {
 
   @Test
   @DisplayName(
+      "Should refuse to start the attempt, leaving no timing socket, when the copying FFmpeg cannot"
+          + " be started")
+  void shouldRefuseToStartTheAttemptLeavingNoTimingSocketWhenTheCopyingFfmpegCannotBeStarted() {
+    var copyCommand = new AtomicReference<List<String>>();
+    ProcessLauncher launcher =
+        (command, jobAttemptId) -> {
+          copyCommand.set(command);
+          throw new IOException("Cannot run program copy-ffmpeg");
+        };
+
+    assertThatExceptionOfType(TranscodeException.class)
+        .isThrownBy(() -> producer(launcher).start());
+    assertThat(socketDirectoryOf(copyCommand.get())).doesNotExist();
+  }
+
+  @Test
+  @DisplayName(
       "Should fail the attempt for the mover's reason, and end the copying FFmpeg, when the mover"
           + " refuses the copy and the encoding FFmpeg exits cleanly")
   void

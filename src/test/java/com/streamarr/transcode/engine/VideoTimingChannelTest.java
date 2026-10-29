@@ -82,6 +82,19 @@ class VideoTimingChannelTest {
 
   @Test
   @DisplayName(
+      "Should have removed its socket and the socket's directory when closing returns before the"
+          + " copying FFmpeg connects")
+  void
+      shouldHaveRemovedItsSocketAndTheSocketsDirectoryWhenClosingReturnsBeforeTheCopyingFfmpegConnects() {
+    var directory = socket().getParent();
+
+    channel.close();
+
+    assertThat(directory).doesNotExist();
+  }
+
+  @Test
+  @DisplayName(
       "Should give the packets of the copying FFmpeg when it connects, writes and exits at once")
   void shouldGiveThePacketsOfTheCopyingFfmpegWhenItConnectsWritesAndExitsAtOnce()
       throws IOException {
