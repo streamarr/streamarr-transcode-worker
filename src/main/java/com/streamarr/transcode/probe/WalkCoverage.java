@@ -1,7 +1,5 @@
 package com.streamarr.transcode.probe;
 
-import static com.streamarr.transcode.probe.FfprobeJson.text;
-
 import tools.jackson.databind.JsonNode;
 
 /**
@@ -18,7 +16,6 @@ import tools.jackson.databind.JsonNode;
 final class WalkCoverage {
 
   private static final String NEW_EXTRADATA = "New Extradata";
-  private static final String AV1 = "av1";
 
   private WalkCoverage() {}
 
@@ -59,13 +56,6 @@ final class WalkCoverage {
       return false;
     }
 
-    var codec = text(stream, "codec_name").orElse("");
-    if (AV1.equals(codec)) {
-      return !DecoderConfiguration.isAv1Record(extradata.get())
-          && !DecoderConfiguration.isAv1Obus(extradata.get());
-    }
-
-    var syntax = NalSyntax.of(codec);
-    return syntax.isEmpty() || !syntax.get().extradataUnits(extradata.get()).complete();
+    return !StreamCodec.of(stream).walksEveryUnitOf(extradata.get());
   }
 }

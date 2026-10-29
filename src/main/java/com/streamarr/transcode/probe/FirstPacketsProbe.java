@@ -3,7 +3,6 @@ package com.streamarr.transcode.probe;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
@@ -41,8 +40,6 @@ final class FirstPacketsProbe {
    */
   static final String FIRST_PACKETS_CUT_SHORT = "first_packets_cut_short";
 
-  private static final Set<String> WALKED_CODECS = Set.of("h264", "hevc", "av1");
-
   /**
    * The most that the read may print: hex dumps of about 15 MiB of packets, more than the first
    * frames of a UHD Blu-ray stream take at its peak rate, so that hostile packets cannot fill the
@@ -59,7 +56,7 @@ final class FirstPacketsProbe {
     var chosen = ChosenVideoStream.find(ffprobeOutput.path("streams"));
     if (chosen.isEmpty()
         || !(chosen.get().description() instanceof ObjectNode description)
-        || !WALKED_CODECS.contains(description.path("codec_name").asString(""))) {
+        || !(StreamCodec.of(description) instanceof StreamCodec.Walked)) {
       return;
     }
 

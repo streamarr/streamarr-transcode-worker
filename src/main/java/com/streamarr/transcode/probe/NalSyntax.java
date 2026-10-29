@@ -109,15 +109,6 @@ enum NalSyntax {
     this.lastPictureType = lastPictureType;
   }
 
-  /** The syntax of the codec, as ffprobe names it; empty for a codec without NAL units. */
-  static Optional<NalSyntax> of(String codec) {
-    return switch (codec) {
-      case "h264" -> Optional.of(H264);
-      case "hevc" -> Optional.of(HEVC);
-      default -> Optional.empty();
-    };
-  }
-
   /** The NAL unit's type, from its header. */
   abstract int type(byte[] unit);
 

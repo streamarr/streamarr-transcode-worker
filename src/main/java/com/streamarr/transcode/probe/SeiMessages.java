@@ -1,7 +1,5 @@
 package com.streamarr.transcode.probe;
 
-import static com.streamarr.transcode.probe.FfprobeJson.text;
-
 import java.nio.ByteBuffer;
 import java.util.EnumMap;
 import java.util.EnumSet;
@@ -54,7 +52,7 @@ final class SeiMessages implements MetadataWalk {
    * which only the chosen video stream has, and the stream's codec has NAL units.
    */
   static Optional<SeiMessages> of(JsonNode stream) {
-    var syntax = NalSyntax.of(text(stream, "codec_name").orElse(""));
+    var syntax = StreamCodec.of(stream).nalSyntax();
     if (syntax.isEmpty() || FirstFrames.of(stream).isEmpty()) {
       return Optional.empty();
     }
