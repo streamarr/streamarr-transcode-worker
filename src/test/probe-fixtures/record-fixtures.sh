@@ -352,7 +352,11 @@ cat > "$WORK/probe.sh" <<'CONTAINER'
 set -euo pipefail
 cd /work
 mkdir -p frames packet-data
+: > frames-kept-reads.csv
 LIMITS=(-analyzeduration 200M -probesize 1G -scan_all_pmts 0)
+# The entries of FirstFramesProbe's and FirstPacketsProbe's reads, which RecordedFfprobe answers.
+FRAME_ENTRIES="$(sed -n 's/^frames=//p' read-entries.properties)"
+PACKET_ENTRIES="$(sed -n 's/^packets=//p' read-entries.properties)"
 for source in "$@"; do
   # The probe's own arguments, as FfprobeExecutor passes them, and -show_data, which prints the
   # extradata that the probe reads for each video and audio stream in separate runs.
@@ -367,16 +371,28 @@ for source in "$@"; do
   # prints an empty field for it.
   chosen="${chosen%%[,$'\n']*}"
   if [ -n "$chosen" ]; then
-    # The probe widens the read until it decodes 3 frames; the recording holds the widest read's
-    # output that the probe takes.
+    # The probe widens the read until it decodes 3 frames and keeps the narrowest read that decodes
+    # the most frames; the recording holds that read's output, and frames-kept-reads.csv the packet
+    # count of each kept read wider than 3.
+    kept=0
+    kept_frames=-1
     for packets in 3 12 48 192; do
       ffprobe -v quiet -print_format json "${LIMITS[@]}" -select_streams "$chosen" \
-        -read_intervals "%+#$packets" -show_entries "frame=stream_index:frame_side_data=side_data_type,red_x,red_y,green_x,green_y,blue_x,blue_y,white_point_x,white_point_y,min_luminance,max_luminance,max_content,max_average,vdr_rpu_profile,bl_video_full_range_flag,el_spatial_resampling_filter_flag,disable_residual_flag,vdr_bit_depth" \
-        "$source" > "frames/$(basename "$source").json"
-      if [ "$(grep -c '"stream_index"' "frames/$(basename "$source").json")" -ge 3 ]; then
+        -read_intervals "%+#$packets" -show_entries "$FRAME_ENTRIES" "$source" > frames-read.json
+      decoded="$(grep -c '"stream_index"' frames-read.json || true)"
+      if [ "$decoded" -gt "$kept_frames" ]; then
+        mv frames-read.json "frames/$(basename "$source").json"
+        kept="$packets"
+        kept_frames="$decoded"
+      fi
+      if [ "$decoded" -ge 3 ]; then
         break
       fi
     done
+    rm -f frames-read.json
+    if [ "$kept" -gt 3 ]; then
+      echo "$(basename "$source"),$kept" >> frames-kept-reads.csv
+    fi
     # The first-packets read of an H.264, HEVC or AV1 chosen video stream, with FirstPacketsProbe's
     # arguments: as many packets as the first-frames read took.
     codec="$(ffprobe -v quiet "${LIMITS[@]}" -select_streams "$chosen" \
@@ -384,8 +400,7 @@ for source in "$@"; do
     codec="${codec%%[,$'\n']*}"
     if [ "$codec" = h264 ] || [ "$codec" = hevc ] || [ "$codec" = av1 ]; then
       ffprobe -v quiet -print_format json "${LIMITS[@]}" -select_streams "$chosen" \
-        -read_intervals "%+#$packets" \
-        -show_entries packet=pts,data:packet_side_data=side_data_type -show_data \
+        -read_intervals "%+#$kept" -show_entries "$PACKET_ENTRIES" -show_data \
         "$source" > "packet-data/$(basename "$source").json"
     fi
   fi
@@ -517,7 +532,9 @@ if [ -n "${LOCAL_SAMPLES:-}" ]; then
 fi
 
 printf 'bash /work/probe.sh %s\n' "${PROBE_ARGUMENTS[*]}" > "$WORK/probe-all.sh"
+cp "$FIXTURES/read-entries.properties" "$WORK/"
 in_image probe-all.sh
+cp "$WORK/frames-kept-reads.csv" "$FIXTURES/"
 
 # The frame-rate rule's packet scan of the chosen video stream, with the probe's own arguments, for
 # the sources that the frame-rate tests read.
