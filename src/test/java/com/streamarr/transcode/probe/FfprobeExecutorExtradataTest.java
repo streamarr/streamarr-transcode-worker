@@ -44,11 +44,11 @@ class FfprobeExecutorExtradataTest {
     @DisplayName("Should rule nothing out when the hvcC record ends before what it counts")
     void shouldRuleNothingOutWhenTheHvcCRecordEndsBeforeWhatItCounts(
         String description, String afterHeader) {
-      var record = (HevcSamples.RECORD_HEADER + " " + afterHeader).trim();
+      var hvccRecord = (HevcSamples.RECORD_HEADER + " " + afterHeader).trim();
 
       var video =
           HevcSamples.probed(
-              record,
+              hvccRecord,
               lengthPrefixed(HevcSamples.IDR_SLICE),
               lengthPrefixed(HevcSamples.SLICE),
               lengthPrefixed(HevcSamples.SLICE));
@@ -121,10 +121,10 @@ class FfprobeExecutorExtradataTest {
     })
     @DisplayName("Should rule nothing out when FFmpeg cannot read the avcC record whole")
     void shouldRuleNothingOutWhenFfmpegCannotReadTheAvcCRecordWhole(
-        String description, String record) {
+        String description, String hvccRecord) {
       var video =
           AvcSamples.probed(
-              record,
+              hvccRecord,
               lengthPrefixed(AvcSamples.IDR_SLICE),
               lengthPrefixed(AvcSamples.SLICE),
               lengthPrefixed(AvcSamples.SLICE));

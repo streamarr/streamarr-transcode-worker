@@ -362,8 +362,8 @@ class FfprobeExecutorCodecProfileTest {
           .isEqualTo(VideoCodecProfile.VIDEO_CODEC_PROFILE_UNSPECIFIED);
     }
 
-    private static ProbeStreamInfo av1(Av1Record.Av1RecordBuilder record) {
-      return stream("av1", record.build().bytes());
+    private static ProbeStreamInfo av1(Av1Record.Av1RecordBuilder av1cRecord) {
+      return stream("av1", av1cRecord.build().bytes());
     }
   }
 

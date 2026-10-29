@@ -349,7 +349,7 @@ class FfprobeExecutorSeiTest {
     })
     @DisplayName("Should rule nothing out when FFmpeg cannot read an H.264 stream's avcC record")
     void shouldRuleNothingOutWhenFfmpegCannotReadAnH264StreamsAvccRecord(
-        String description, String record, boolean isAnnexB) {
+        String description, String configurationRecord, boolean isAnnexB) {
       // FFmpeg takes the record's NAL unit length size only once its parameter sets end inside it,
       // so it can delimit the packets otherwise than the walk does.
       var sample =
@@ -357,7 +357,8 @@ class FfprobeExecutorSeiTest {
       var video =
           probe(
                   Answers.builder()
-                      .ffprobeOutput(output(Coding.H264.codecName() + "," + extradata(record)))
+                      .ffprobeOutput(
+                          output(Coding.H264.codecName() + "," + extradata(configurationRecord)))
                       .firstFrames(frames("", "", ""))
                       .firstPackets(packetsUpTo(3, sample))
                       .build())
@@ -507,9 +508,10 @@ class FfprobeExecutorSeiTest {
     @DisplayName("Should leave HDR10+ unspecified when a NAL unit runs past the record's end")
     void shouldLeaveHdr10PlusUnspecifiedWhenANalUnitRunsPastTheRecordsEnd() {
       var sei = Coding.HEVC.sei(OTHER_T35);
-      var record = recordWithUnit(sei, HexFormat.ofDelimiter(" ").parseHex(sei).length + 1);
+      var configurationRecord =
+          recordWithUnit(sei, HexFormat.ofDelimiter(" ").parseHex(sei).length + 1);
 
-      var video = probed(record, Coding.HEVC.sample());
+      var video = probed(configurationRecord, Coding.HEVC.sample());
 
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
     }
@@ -552,16 +554,17 @@ class FfprobeExecutorSeiTest {
 
     /** The record of {@link #recordWithSei}, with the SEI NAL unit's length as declared. */
     private static String recordWithUnit(String sei, int declaredLength) {
-      var record = Coding.HEVC.units.configurationRecord();
-      return record.substring(0, record.length() - "00".length())
+      var configurationRecord = Coding.HEVC.units.configurationRecord();
+      return configurationRecord.substring(0, configurationRecord.length() - "00".length())
           + "01 27 00 01 %02x %02x ".formatted(declaredLength >> 8, declaredLength & 0xFF)
           + sei;
     }
 
-    private static ProbeStreamInfo probed(String record, String... samples) {
+    private static ProbeStreamInfo probed(String configurationRecord, String... samples) {
       return probe(
               Answers.builder()
-                  .ffprobeOutput(output(Coding.HEVC.codecName() + "," + extradata(record)))
+                  .ffprobeOutput(
+                      output(Coding.HEVC.codecName() + "," + extradata(configurationRecord)))
                   .firstFrames(frames("", "", ""))
                   .firstPackets(packetsUpTo(3, Coding.HEVC.sample(), samples))
                   .build())
