@@ -55,16 +55,15 @@ final class PacketRpuReader {
   }
 
   /**
-   * The placement whose rule the samples meet, in order; unspecified when no sample holds a
-   * picture, a sample holds more than one RPU, a sample ahead of the first picture's sample holds
-   * one, or the samples meet neither rule. At least one sample holds an RPU.
+   * The placement whose rule the samples meet, in order; unspecified when a sample holds more than
+   * one RPU, a sample ahead of the first picture's sample holds one, or the samples meet neither
+   * rule. At least one sample holds an RPU, so when no sample holds a picture, an RPU lies ahead of
+   * the pictures.
    */
   private static DolbyVisionRpuPlacement placement(List<Layout> layouts) {
     var isAnyRpuAheadOfThePictures =
         layouts.stream().takeWhile(layout -> !layout.hasPicture()).anyMatch(Layout::hasRpu);
-    if (layouts.stream().noneMatch(Layout::hasPicture)
-        || isAnyRpuAheadOfThePictures
-        || layouts.stream().anyMatch(layout -> layout.rpus() > 1)) {
+    if (isAnyRpuAheadOfThePictures || layouts.stream().anyMatch(layout -> layout.rpus() > 1)) {
       return DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED;
     }
 
