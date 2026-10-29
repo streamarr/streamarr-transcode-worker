@@ -26,7 +26,7 @@ final class CodecStringReader {
 
   static Optional<String> read(JsonNode stream) {
     try {
-      return switch (StreamCodec.of(stream)) {
+      return switch (ProbedCodecFamily.of(stream)) {
         case H264 -> Extradata.of(stream).flatMap(CodecStringReader::avc);
         case HEVC -> Extradata.of(stream).flatMap(CodecStringReader::hevc);
         case AV1 -> Extradata.of(stream).flatMap(CodecStringReader::av1);

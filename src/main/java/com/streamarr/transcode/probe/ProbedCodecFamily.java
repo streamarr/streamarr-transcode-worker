@@ -9,24 +9,24 @@ import lombok.NonNull;
 import tools.jackson.databind.JsonNode;
 
 /**
- * The codec that ffprobe's codec_name names for a stream, with the rules that differ between the
- * codecs the probe reads. The probe walks the extradata and first packets of H.264, HEVC and AV1
- * only; every other codec reads as {@link #OTHER}.
+ * The codec family of the codec that ffprobe's codec_name names for a stream, with the rules that
+ * differ between the families the probe reads. The probe walks the extradata and first packets of
+ * H.264, HEVC and AV1 only; every other codec reads as {@link #OTHER}.
  */
-enum StreamCodec {
+enum ProbedCodecFamily {
   H264,
   HEVC,
   AV1,
-  /** A codec that the probe does not walk. */
+  /** Every codec that the probe does not walk. */
   OTHER;
 
-  /** The codec of the stream; {@link #OTHER} when ffprobe names none. */
-  static StreamCodec of(JsonNode stream) {
+  /** The codec family of the stream; {@link #OTHER} when ffprobe names no codec. */
+  static ProbedCodecFamily of(JsonNode stream) {
     return named(text(stream, "codec_name").orElse(""));
   }
 
-  /** The codec that ffprobe calls by the name. */
-  static StreamCodec named(@NonNull String codecName) {
+  /** The codec family of the codec that ffprobe calls by the name. */
+  static ProbedCodecFamily named(@NonNull String codecName) {
     return switch (codecName) {
       case "h264" -> H264;
       case "hevc" -> HEVC;
@@ -35,7 +35,7 @@ enum StreamCodec {
     };
   }
 
-  /** The syntax of the codec's NAL units; empty for a codec without NAL units. */
+  /** The syntax of the family's NAL units; empty for a family without NAL units. */
   Optional<NalSyntax> nalSyntax() {
     return switch (this) {
       case H264 -> Optional.of(NalSyntax.H264);
@@ -60,8 +60,8 @@ enum StreamCodec {
 
   /**
    * The Dolby Vision profile that an RPU header names when no configuration record names one, as
-   * FFmpeg 8.1 guesses it for each codec. Empty when the header names no profile, and for a codec
-   * that carries no Dolby Vision.
+   * FFmpeg 8.1 guesses it for each codec family. Empty when the header names no profile, and for a
+   * codec that carries no Dolby Vision.
    */
   OptionalInt guessDolbyVisionProfile(DolbyVisionRpuHeader header) {
     return switch (this) {

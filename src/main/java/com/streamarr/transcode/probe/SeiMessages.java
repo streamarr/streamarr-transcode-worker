@@ -52,7 +52,7 @@ final class SeiMessages implements MetadataWalk {
    * which only the chosen video stream has, and the stream's codec has NAL units.
    */
   static Optional<SeiMessages> of(JsonNode stream) {
-    var syntax = StreamCodec.of(stream).nalSyntax();
+    var syntax = ProbedCodecFamily.of(stream).nalSyntax();
     if (syntax.isEmpty() || FirstFrames.of(stream).isEmpty()) {
       return Optional.empty();
     }

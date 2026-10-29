@@ -56,6 +56,6 @@ final class WalkCoverage {
       return false;
     }
 
-    return !StreamCodec.of(stream).walksEveryUnitOf(extradata.get());
+    return !ProbedCodecFamily.of(stream).walksEveryUnitOf(extradata.get());
   }
 }

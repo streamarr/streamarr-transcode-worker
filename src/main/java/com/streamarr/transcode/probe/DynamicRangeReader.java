@@ -47,7 +47,7 @@ final class DynamicRangeReader {
   private DynamicRangeReader() {}
 
   static VideoDynamicRange read(JsonNode stream, Optional<MetadataWalk> walk) {
-    var codec = StreamCodec.of(stream);
+    var codecFamily = ProbedCodecFamily.of(stream);
     // Frames only prove a feature present, so the frames of every codec count, whether or not its
     // decoder exports the feature: FFmpeg 8.1's H.264 decoder drops HDR10+ and RPUs, while the
     // Matroska demuxer gives a VP9 frame the HDR10+ metadata of its BlockAdditional.
@@ -69,7 +69,7 @@ final class DynamicRangeReader {
     }
 
     var header = observedRpus.flatMap(RpuObservation::firstHeader);
-    if (isWithoutCompatibleBase(record, header, codec)) {
+    if (isWithoutCompatibleBase(record, header, codecFamily)) {
       return dynamicRange.setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_NONE).build();
     }
 
@@ -141,7 +141,9 @@ final class DynamicRangeReader {
    * one, the first RPU's header.
    */
   private static boolean isWithoutCompatibleBase(
-      Optional<JsonNode> record, Optional<DolbyVisionRpuHeader> header, StreamCodec codec) {
+      Optional<JsonNode> record,
+      Optional<DolbyVisionRpuHeader> header,
+      ProbedCodecFamily codecFamily) {
     var declared = record.flatMap(claim -> integer(claim, "dv_profile"));
     if (declared.isPresent()) {
       var compatibilityId =
@@ -153,7 +155,7 @@ final class DynamicRangeReader {
       return false;
     }
 
-    var guessed = codec.guessDolbyVisionProfile(header.get());
+    var guessed = codecFamily.guessDolbyVisionProfile(header.get());
     var hasProfile5Fields =
         header.get().getVdrRpuProfile() == 0 && header.get().getBaseLayerFullRange();
     return guessed.isPresent() && isBaseless(guessed.getAsInt(), hasProfile5Fields);

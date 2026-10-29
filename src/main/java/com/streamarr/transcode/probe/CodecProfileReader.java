@@ -31,7 +31,7 @@ final class CodecProfileReader {
     var extradata = Extradata.of(source);
     try {
       Optional<Runnable> addProfile =
-          switch (StreamCodec.of(source)) {
+          switch (ProbedCodecFamily.of(source)) {
             case H264 ->
                 extradata
                     .flatMap(DecoderConfiguration::avcProfile)
