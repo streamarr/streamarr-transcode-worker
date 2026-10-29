@@ -86,12 +86,12 @@ class FfprobeExecutorFirstFramesTest {
           + ","
           + extradata("01 01 60 00 00 00 90 00 00 00 00 00 5d f0 00 fc fd f8 f8 00 00 0f 00");
   private static final String DELIMITED_SAMPLE =
-      lengthPrefixed("4e 01 05 01 00 80", "26 01 af 06 b8");
-  private static final String SLICE_SAMPLE = lengthPrefixed("02 01 d0 09 7e");
+      lengthPrefixed("4e 01 05 01 00 80", HevcSamples.IDR_SLICE);
+  private static final String SLICE_SAMPLE = lengthPrefixed(HevcSamples.SLICE);
   private static final String DELIMITED_PACKETS = packetsUpTo(3, SLICE_SAMPLE, DELIMITED_SAMPLE);
   // A sample whose prefix SEI NAL unit holds an HDR10+ message.
   private static final String HDR10_PLUS_SAMPLE =
-      lengthPrefixed("4e 01 04 08 b5 00 3c 00 01 04 01 40 80", "02 01 d0 09 7e");
+      lengthPrefixed("4e 01 04 08 b5 00 3c 00 01 04 01 40 80", HevcSamples.SLICE);
   // An av1C record without configOBUs, and a temporal unit of a temporal delimiter and a frame.
   private static final String AV1_RECORD = "81 00 0c 00";
   private static final String AV1_TEMPORAL_UNIT = "12 00 32 03 10 00 80";
@@ -912,7 +912,7 @@ class FfprobeExecutorFirstFramesTest {
                   .ffprobeOutput(output(HEVC_WITH_RECORD))
                   .firstFrames(frames("", "", ""))
                   .firstPackets(
-                      packetsUpTo(3, SLICE_SAMPLE, lengthPrefixed(message, "26 01 af 06 b8")))
+                      packetsUpTo(3, SLICE_SAMPLE, lengthPrefixed(message, HevcSamples.IDR_SLICE)))
                   .build())
           .getStreams(0);
     }
@@ -945,12 +945,10 @@ class FfprobeExecutorFirstFramesTest {
   @DisplayName("H.264 RPUs")
   class H264RpuTests {
 
-    // An avcC record whose NAL units take 4-byte lengths, with an SPS and a PPS.
-    private static final String AVC_RECORD =
-        "01 64 00 28 ff e1 00 04 67 64 00 28 01 00 04 68 ee 3c 80";
+    private static final String AVC_RECORD = AvcSamples.RECORD;
     private static final String SEI = "06 05 01 00 80";
-    private static final String IDR_SLICE = "65 88 84 00 18";
-    private static final String SLICE = "41 9a 24 6c 41";
+    private static final String IDR_SLICE = AvcSamples.IDR_SLICE;
+    private static final String SLICE = AvcSamples.SLICE;
     private static final String AUD = "09 f0";
     // A profile 9 sample's first RPU, cut after its header.
     private static final String RPU = "1c 19 08 09 08 40 61 59 41 bc 03 fe";
@@ -1328,9 +1326,9 @@ class FfprobeExecutorFirstFramesTest {
         "01 01 60 00 00 00 90 00 00 00 00 00 5d f0 00 fc fd f8 f8 00 00 0f 00";
     private static final String ANNEX_B_VPS =
         "00 00 00 01 40 01 0c 01 ff ff 02 20 00 00 03 00 b0 00 00 03 00 00 03 00 7b 15 c0 90";
-    private static final String IDR_SLICE = "26 01 af 06 b8";
-    private static final String SLICE = "02 01 d0 09 7e";
-    private static final String AUD = "46 01 50";
+    private static final String IDR_SLICE = HevcSamples.IDR_SLICE;
+    private static final String SLICE = HevcSamples.SLICE;
+    private static final String AUD = HevcSamples.AUD;
     // A suffix SEI NAL unit that holds a decoded picture hash message.
     private static final String SUFFIX_SEI = "50 01 84 01 00 80";
     // RPUs cut after their headers: one with profile 5's fields and one with profile 8's.
