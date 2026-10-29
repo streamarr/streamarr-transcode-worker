@@ -233,26 +233,26 @@ final class Av1MetadataObus implements MetadataWalk {
 
       var payload =
           hasSizeField
-              ? sizedPayload(new Region(bytes, position, end))
-              : Optional.of(new Region(bytes, position, end));
+              ? sizedPayload(bytes, new Region(position, end))
+              : Optional.of(new Region(position, end));
       if (payload.isEmpty()) {
         return OptionalLong.empty();
       }
 
-      var isDelimited = type != METADATA_OBU || addMetadata(payload.get(), isLayered);
+      var isDelimited = type != METADATA_OBU || addMetadata(bytes, payload.get(), isLayered);
       return isDelimited ? OptionalLong.of(payload.get().end()) : OptionalLong.empty();
     }
 
     /** The payload that the obu_size at the region's start gives; empty when it runs past. */
-    private static Optional<Region> sizedPayload(Region rest) {
-      return leb128(rest)
+    private static Optional<Region> sizedPayload(byte[] bytes, Region rest) {
+      return leb128(bytes, rest)
           .filter(size -> size.end() + size.value() <= rest.end())
-          .map(size -> new Region(rest.bytes(), size.end(), (int) (size.end() + size.value())));
+          .map(size -> new Region(size.end(), (int) (size.end() + size.value())));
     }
 
     /** Adds a metadata OBU; false when it is not delimited. */
-    private boolean addMetadata(Region payload, boolean isLayered) {
-      var metadataType = leb128(payload);
+    private boolean addMetadata(byte[] bytes, Region payload, boolean isLayered) {
+      var metadataType = leb128(bytes, payload);
       if (metadataType.isEmpty()) {
         return false;
       }
@@ -262,7 +262,6 @@ final class Av1MetadataObus implements MetadataWalk {
         return true;
       }
 
-      var bytes = payload.bytes();
       var valuesStart = metadataType.get().end();
       var last = payload.end() - 1;
       while (last >= valuesStart && bytes[last] == 0) {
@@ -342,7 +341,7 @@ final class Av1MetadataObus implements MetadataWalk {
      * The leb128 value at the region's start, of at most 8 bytes and fitting 32 bits, as dav1d
      * accepts it; empty when it runs past the region, takes more bytes, or is larger.
      */
-    private static Optional<Leb128> leb128(Region region) {
+    private static Optional<Leb128> leb128(byte[] bytes, Region region) {
       var value = 0L;
       for (var index = 0; index < LONGEST_LEB128; index++) {
         var position = region.start() + index;
@@ -350,7 +349,7 @@ final class Av1MetadataObus implements MetadataWalk {
           return Optional.empty();
         }
 
-        var octet = Byte.toUnsignedInt(region.bytes()[position]);
+        var octet = Byte.toUnsignedInt(bytes[position]);
         value |= (long) (octet & 0x7F) << (7 * index);
         if ((octet & 0x80) == 0) {
           return value > LARGEST_OBU_SIZE
@@ -363,8 +362,8 @@ final class Av1MetadataObus implements MetadataWalk {
     }
   }
 
-  /** The bytes from {@code start} up to {@code end} of an array. */
-  private record Region(byte[] bytes, int start, int end) {}
+  /** The offsets from {@code start} up to {@code end} of the bytes being walked. */
+  private record Region(int start, int end) {}
 
   /** A leb128 value, and the offset after its last byte. */
   private record Leb128(long value, int end) {}
