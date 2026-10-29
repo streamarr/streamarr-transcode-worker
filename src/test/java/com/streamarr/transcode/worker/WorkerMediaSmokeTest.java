@@ -78,6 +78,7 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -1490,61 +1491,56 @@ class WorkerMediaSmokeTest {
   // reads, and both sources decode to the same pictures.
   private static synchronized Path rpuLayoutSource(RpuLayout layout, String audioCodec)
       throws Exception {
-    var source =
-        rpuLayoutSources.resolve(
-            layout.name().toLowerCase(Locale.ROOT) + "-" + audioCodec + ".mp4");
-    if (Files.exists(source)) {
-      return source;
-    }
-
-    var withRpus = rpuLayoutSources.resolve(layout.name().toLowerCase(Locale.ROOT) + ".hevc");
-    Files.write(withRpus, withStandInRpus(Files.readAllBytes(rpuLayoutPictures()), layout));
-    runFfmpeg(
-        List.of(
-            "-i",
-            withRpus.toString(),
-            "-f",
-            "lavfi",
-            "-i",
-            "sine=frequency=440:sample_rate=48000",
-            "-map",
-            "0:v",
-            "-map",
-            "1:a",
-            "-c:v",
-            "copy",
-            "-bsf:v",
-            "setts=pts=N*1/24/TB:dts=N*1/24/TB",
-            "-c:a",
-            audioCodec,
-            "-shortest"),
-        source);
-    return source;
+    var layoutName = layout.name().toLowerCase(Locale.ROOT);
+    return buildFixtureOnce(
+        rpuLayoutSources.resolve(layoutName + "-" + audioCodec + ".mp4"),
+        output -> {
+          var withRpus = rpuLayoutSources.resolve(layoutName + ".hevc");
+          Files.write(withRpus, withStandInRpus(Files.readAllBytes(rpuLayoutPictures()), layout));
+          runFfmpeg(
+              List.of(
+                  "-i",
+                  withRpus.toString(),
+                  "-f",
+                  "lavfi",
+                  "-i",
+                  "sine=frequency=440:sample_rate=48000",
+                  "-map",
+                  "0:v",
+                  "-map",
+                  "1:a",
+                  "-c:v",
+                  "copy",
+                  "-bsf:v",
+                  "setts=pts=N*1/24/TB:dts=N*1/24/TB",
+                  "-c:a",
+                  audioCodec,
+                  "-shortest"),
+              output);
+        });
   }
 
   private static synchronized Path rpuLayoutPictures() throws Exception {
-    var pictures = rpuLayoutSources.resolve("pictures.hevc");
-    if (!Files.exists(pictures)) {
-      runFfmpeg(
-          List.of(
-              "-f",
-              "lavfi",
-              "-i",
-              "testsrc2=size=64x36:rate=24",
-              "-t",
-              String.valueOf(PROFILE_5_PERIOD_SECONDS * PROFILE_5_SEGMENT_COUNT),
-              "-pix_fmt",
-              "yuv420p10le",
-              "-c:v",
-              "libx265",
-              "-x265-params",
-              "keyint=24:min-keyint=24:bframes=0:aud=1:log-level=error",
-              "-f",
-              "hevc"),
-          pictures);
-    }
-
-    return pictures;
+    return buildFixtureOnce(
+        rpuLayoutSources.resolve("pictures.hevc"),
+        output ->
+            runFfmpeg(
+                List.of(
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc2=size=64x36:rate=24",
+                    "-t",
+                    String.valueOf(PROFILE_5_PERIOD_SECONDS * PROFILE_5_SEGMENT_COUNT),
+                    "-pix_fmt",
+                    "yuv420p10le",
+                    "-c:v",
+                    "libx265",
+                    "-x265-params",
+                    "keyint=24:min-keyint=24:bframes=0:aud=1:log-level=error",
+                    "-f",
+                    "hevc"),
+                output));
   }
 
   // Each access unit starts at its delimiter. The last picture's RPU has no next picture to
@@ -3357,7 +3353,8 @@ class WorkerMediaSmokeTest {
     return longSource;
   }
 
-  // The build writes a sibling file, which takes the fixture's name only once the build succeeds.
+  // The build writes a sibling file, which takes the fixture's name only once the build succeeds,
+  // so that a later case builds the fixture again instead of reading a failed build's output.
   private static synchronized Path buildFixtureOnce(Path fixture, FixtureBuild build)
       throws Exception {
     if (Files.exists(fixture)) {
@@ -3365,8 +3362,13 @@ class WorkerMediaSmokeTest {
     }
 
     var partial = fixture.resolveSibling("partial-" + fixture.getFileName());
-    build.writeTo(partial);
-    Files.move(partial, fixture);
+    try {
+      build.writeTo(partial);
+      Files.move(partial, fixture, StandardCopyOption.ATOMIC_MOVE);
+    } finally {
+      Files.deleteIfExists(partial);
+    }
+
     return fixture;
   }
 
@@ -3398,7 +3400,8 @@ class WorkerMediaSmokeTest {
       assertThat(process.exitValue()).as(output).isZero();
       return output;
     } finally {
-      process.destroyForcibly();
+      // The process must end here, because buildFixtureOnce deletes a failed build's file next.
+      process.destroyForcibly().onExit().join();
     }
   }
 
