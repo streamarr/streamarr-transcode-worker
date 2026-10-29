@@ -21,6 +21,9 @@ import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import build.buf.gen.streamarr.transcode.v1.VideoDynamicRange.DolbyVisionCase;
 import com.streamarr.transcode.probe.RecordedFfprobe.Answers;
 import java.util.HexFormat;
+import java.util.List;
+import lombok.Builder;
+import lombok.NonNull;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
@@ -36,6 +39,8 @@ class FfprobeExecutorAv1MetadataTest {
   // An av1C record's four header bytes: marker and version, profile and level, the bit depth and
   // subsampling flags, and no initial presentation delay.
   private static final String AV1C = "81 00 0c 00";
+  // A sequence header OBU, whose payload the walk does not read, as bare OBU extradata starts.
+  private static final String SEQUENCE_HEADER = obu(1, "00 00 00");
   // A temporal delimiter, and a frame OBU whose payload the walk does not read.
   private static final String TEMPORAL_DELIMITER = "12 00";
   private static final String FRAME = obu(6, "10 00 80");
@@ -43,6 +48,8 @@ class FfprobeExecutorAv1MetadataTest {
   // The same ITU-T T.35 provider and code, but application identifier 5.
   private static final String OTHER_T35 = metadata(4, "b5 00 3c 00 01 05 01 40");
   private static final String RPU_PREFIX = "b5 00 3b 00 00 08 00";
+  private static final long EMDF_HEADER = 0x01BE6841L;
+  private static final long EMDF_PROTECTION = 0x400;
   private static final DolbyVisionRpuHeader PROFILE_10_0_HEADER =
       DolbyVisionRpuHeader.newBuilder()
           .setVdrRpuProfile(0)
@@ -96,7 +103,7 @@ class FfprobeExecutorAv1MetadataTest {
     @DisplayName("Should report HDR10+ present when the record's configOBUs hold it")
     void shouldReportHdr10PlusPresentWhenTheRecordsConfigObusHoldIt() {
       // FFmpeg's AV1 decoders never apply the record's metadata OBUs to the frames.
-      var video = probed(av1cRecord(HDR10_PLUS), temporalUnit());
+      var video = probed(record(HDR10_PLUS), temporalUnit());
 
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_PRESENT);
     }
@@ -106,7 +113,7 @@ class FfprobeExecutorAv1MetadataTest {
     void shouldReportHdr10PlusAbsentWhenTheWalkDelimitsEveryObuAndNoneHoldsIt() {
       var video =
           probed(
-              av1cRecord(metadata(3, "01 02")),
+              record(metadata(3, "01 02")),
               temporalUnit(OTHER_T35),
               temporalUnit(LIGHT_LEVEL) + " " + obu(6, "10"));
 
@@ -155,14 +162,14 @@ class FfprobeExecutorAv1MetadataTest {
     }
 
     @Test
-    @DisplayName("Should walk bare OBU extradata as FFmpeg gives it to an AV1 stream in IVF")
-    void shouldWalkBareObuExtradataAsFfmpegGivesItToAnAv1StreamInIvf() {
+    @DisplayName(
+        "Should rule out HDR10+ and Dolby Vision when bare OBU extradata and the packets hold"
+            + " neither")
+    void shouldRuleOutHdr10PlusAndDolbyVisionWhenBareObuExtradataAndThePacketsHoldNeither() {
       // FFmpeg gives an AV1 stream in IVF or a raw .obu file its sequence header and global
       // metadata OBUs as extradata.
-      var video = probed(obu(1, "00 00 00") + " " + LIGHT_LEVEL, temporalUnit());
+      var video = probed(SEQUENCE_HEADER + " " + LIGHT_LEVEL, temporalUnit());
 
-      assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(1000);
-      assertThat(video.getMasteringDisplayOmitted()).isFalse();
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
       assertThat(video.getDynamicRange().hasDolbyVisionAbsent()).isTrue();
     }
@@ -229,21 +236,23 @@ class FfprobeExecutorAv1MetadataTest {
   class DolbyVisionTests {
 
     @Test
-    @DisplayName(
-        "Should report the walk's RPU and its header when the frames show none, and no compatible"
-            + " base for profile 10.0")
-    void
-        shouldReportTheWalksRpuAndItsHeaderWhenTheFramesShowNoneAndNoCompatibleBaseForProfile100() {
-      var video =
-          probed(
-              AV1C,
-              temporalUnit(metadata(4, RPU_PREFIX + " " + emdf(PROFILE_10_0_RPU, 0x01BE6841))));
+    @DisplayName("Should report the walk's RPU and its header when the frames show none")
+    void shouldReportTheWalksRpuAndItsHeaderWhenTheFramesShowNone() {
+      var video = probed(AV1C, temporalUnit(rpuObu(profile100Emdf().build())));
 
       var present = video.getDynamicRange().getDolbyVisionPresent();
       assertThat(present.getObservedRpu()).isEqualTo(Presence.PRESENCE_PRESENT);
       assertThat(present.getFirstRpuHeader()).isEqualTo(PROFILE_10_0_HEADER);
       assertThat(present.getRpuPlacement())
           .isEqualTo(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED);
+    }
+
+    @Test
+    @DisplayName(
+        "Should report no compatible base when the walk's RPU header has profile 10.0's fields")
+    void shouldReportNoCompatibleBaseWhenTheWalksRpuHeaderHasProfile100sFields() {
+      var video = probed(AV1C, temporalUnit(rpuObu(profile100Emdf().build())));
+
       assertThat(video.getDynamicRange().getCompatibleBase())
           .isEqualTo(CompatibleBase.COMPATIBLE_BASE_NONE);
     }
@@ -252,10 +261,7 @@ class FfprobeExecutorAv1MetadataTest {
     @DisplayName("Should report the RPU without a header when its EMDF container is malformed")
     void shouldReportTheRpuWithoutAHeaderWhenItsEmdfContainerIsMalformed() {
       // FFmpeg drops an RPU whose container it cannot open.
-      var video =
-          probed(
-              AV1C,
-              temporalUnit(metadata(4, RPU_PREFIX + " " + emdf(PROFILE_10_0_RPU, 0x01BE6840))));
+      var video = probed(AV1C, temporalUnit(rpuObu(profile100Emdf().header(0x01BE6840).build())));
 
       var present = video.getDynamicRange().getDolbyVisionPresent();
       assertThat(present.getObservedRpu()).isEqualTo(Presence.PRESENCE_PRESENT);
@@ -276,9 +282,7 @@ class FfprobeExecutorAv1MetadataTest {
         "Should leave Dolby Vision unspecified when an OBU with an extension byte holds an RPU")
     void shouldLeaveDolbyVisionUnspecifiedWhenAnObuWithAnExtensionByteHoldsAnRpu() {
       var video =
-          probed(
-              AV1C,
-              temporalUnit(layered(4, RPU_PREFIX + " " + emdf(PROFILE_10_0_RPU, 0x01BE6841))));
+          probed(AV1C, temporalUnit(layered(4, RPU_PREFIX + " " + profile100Emdf().build().hex())));
 
       assertThat(video.getDynamicRange().getDolbyVisionCase())
           .isEqualTo(DolbyVisionCase.DOLBYVISION_NOT_SET);
@@ -296,11 +300,7 @@ class FfprobeExecutorAv1MetadataTest {
                               {"side_data_type":"Dolby Vision Metadata","vdr_rpu_profile":1,
                                "bl_video_full_range_flag":0,"vdr_bit_depth":10,
                                "el_spatial_resampling_filter_flag":0,"disable_residual_flag":1}"""))
-                      .firstPackets(
-                          packets(
-                              temporalUnit(
-                                  metadata(
-                                      4, RPU_PREFIX + " " + emdf(PROFILE_10_0_RPU, 0x01BE6841)))))
+                      .firstPackets(packets(temporalUnit(rpuObu(profile100Emdf().build()))))
                       .build())
               .getStreams(0);
 
@@ -352,11 +352,22 @@ class FfprobeExecutorAv1MetadataTest {
     }
 
     @Test
-    @DisplayName("Should take the record's values ahead of the packets'")
-    void shouldTakeTheRecordsValuesAheadOfThePackets() {
-      var video = probed(av1cRecord(LIGHT_LEVEL), temporalUnit(metadata(1, "00 64 00 32")));
+    @DisplayName(
+        "Should take the record's content light level when the record and a packet both hold one")
+    void shouldTakeTheRecordsContentLightLevelWhenTheRecordAndAPacketBothHoldOne() {
+      var video = probed(record(LIGHT_LEVEL), temporalUnit(metadata(1, "00 64 00 32")));
 
       assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(1000);
+    }
+
+    @Test
+    @DisplayName("Should read the content light level when bare OBU extradata holds it")
+    void shouldReadTheContentLightLevelWhenBareObuExtradataHoldsIt() {
+      var video = probed(SEQUENCE_HEADER + " " + LIGHT_LEVEL, temporalUnit());
+
+      assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(1000);
+      assertThat(video.getContentLightLevelOmitted()).isFalse();
+      assertThat(video.getMasteringDisplayOmitted()).isFalse();
     }
 
     @ParameterizedTest(name = "{1}")
@@ -376,8 +387,9 @@ class FfprobeExecutorAv1MetadataTest {
     }
 
     @Test
-    @DisplayName("Should mark only the value of an OBU with an extension byte omitted")
-    void shouldMarkOnlyTheValueOfAnObuWithAnExtensionByteOmitted() {
+    @DisplayName(
+        "Should mark only the content light level omitted when its OBU has an extension byte")
+    void shouldMarkOnlyTheContentLightLevelOmittedWhenItsObuHasAnExtensionByte() {
       var video = probed(AV1C, temporalUnit(layered(1, "03 e8 01 90")));
 
       assertThat(video.hasContentLightLevel()).isFalse();
@@ -403,9 +415,10 @@ class FfprobeExecutorAv1MetadataTest {
 
     @Test
     @DisplayName(
-        "Should convert the static metadata that a libaom stream's first frame carries to SEI"
-            + " units")
-    void shouldConvertTheStaticMetadataThatALibaomStreamsFirstFrameCarriesToSeiUnits() {
+        "Should convert the first frame's static metadata to SEI units when a libaom stream"
+            + " carries it in every frame")
+    void
+        shouldConvertTheFirstFramesStaticMetadataToSeiUnitsWhenALibaomStreamCarriesItInEveryFrame() {
       // FFmpeg's AV1 decoders give the HDR_MDCV values as fractions: red_x as 6554/65536, the
       // maximum luminance as 512/256 and the minimum as 16384/16384.
       var video = streamOf("ivf-av1-hdr-sizeup.ivf", 0);
@@ -422,6 +435,15 @@ class FfprobeExecutorAv1MetadataTest {
                   .build());
       assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(11_122);
       assertThat(video.getContentLightLevel().getMaxFrameAverageLightLevel()).isEqualTo(22_211);
+    }
+
+    @Test
+    @DisplayName(
+        "Should rule out HDR10+ and Dolby Vision when a libaom stream's OBUs hold only static"
+            + " metadata")
+    void shouldRuleOutHdr10PlusAndDolbyVisionWhenALibaomStreamsObusHoldOnlyStaticMetadata() {
+      var video = streamOf("ivf-av1-hdr-sizeup.ivf", 0);
+
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
       assertThat(video.getDynamicRange().hasDolbyVisionAbsent()).isTrue();
     }
@@ -469,8 +491,9 @@ class FfprobeExecutorAv1MetadataTest {
     }
 
     @Test
-    @DisplayName("Should read the static metadata that only frames after the first carry")
-    void shouldReadTheStaticMetadataThatOnlyFramesAfterTheFirstCarry() {
+    @DisplayName(
+        "Should read the static metadata from the OBUs when only frames after the first carry it")
+    void shouldReadTheStaticMetadataFromTheObusWhenOnlyFramesAfterTheFirstCarryIt() {
       var video = streamOf("mp4-av1-static-after-frame.mp4", 0);
 
       assertThat(video.getMasteringDisplay()).isEqualTo(CONVERTED_MASTERING_DISPLAY);
@@ -481,8 +504,10 @@ class FfprobeExecutorAv1MetadataTest {
     }
 
     @Test
-    @DisplayName("Should report the frames' RPU header and no compatible base for profile 10.0")
-    void shouldReportTheFramesRpuHeaderAndNoCompatibleBaseForProfile100() {
+    @DisplayName(
+        "Should report no compatible base when the frames' RPU header names profile 10.0 on a PQ"
+            + " stream")
+    void shouldReportNoCompatibleBaseWhenTheFramesRpuHeaderNamesProfile100OnAPqStream() {
       var video = streamOf("mp4-av1-rpu.mp4", 0);
 
       var present = video.getDynamicRange().getDolbyVisionPresent();
@@ -491,12 +516,11 @@ class FfprobeExecutorAv1MetadataTest {
       assertThat(present.getFirstRpuHeader().getBaseLayerFullRange()).isTrue();
       assertThat(video.getDynamicRange().getCompatibleBase())
           .isEqualTo(CompatibleBase.COMPATIBLE_BASE_NONE);
-      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
     }
 
     @Test
-    @DisplayName("Should report the RPU that FFmpeg drops without a header")
-    void shouldReportTheRpuThatFfmpegDropsWithoutAHeader() {
+    @DisplayName("Should report the RPU without a header when FFmpeg rejects its EMDF container")
+    void shouldReportTheRpuWithoutAHeaderWhenFfmpegRejectsItsEmdfContainer() {
       var video = streamOf("mp4-av1-rpu-bad-emdf.mp4", 0);
 
       var present = video.getDynamicRange().getDolbyVisionPresent();
@@ -536,9 +560,9 @@ class FfprobeExecutorAv1MetadataTest {
    * The stream, when its 3 first frames carry no side data and its 3 first packets hold the
    * temporal units, then temporal units of a frame alone.
    */
-  private static ProbeStreamInfo probed(String av1cRecord, String... packets) {
+  private static ProbeStreamInfo probed(String record, String... packets) {
     return probe(
-            answers(av1cRecord)
+            answers(record)
                 .firstFrames(frames("", "", ""))
                 .firstPackets(packetsUpTo(3, temporalUnit(), packets))
                 .build())
@@ -551,7 +575,7 @@ class FfprobeExecutorAv1MetadataTest {
   }
 
   /** An av1C record whose configOBUs are the given OBUs. */
-  private static String av1cRecord(String... obus) {
+  private static String record(String... obus) {
     return AV1C + " " + String.join(" ", obus);
   }
 
@@ -578,18 +602,47 @@ class FfprobeExecutorAv1MetadataTest {
     return "2e 00 %02x %s".formatted(length, payload);
   }
 
-  /**
-   * The RPU in an EMDF container: the 27-bit header, emdf_payload_size in 8 bits without extension,
-   * the RPU's bytes, and the 17-bit emdf_protection.
-   */
-  private static String emdf(String rpu, int header) {
-    var bytes = HexFormat.ofDelimiter(" ").parseHex(rpu);
-    var bits = new Bits().put(27, header).put(8, bytes.length).put(1, 0);
-    for (var value : bytes) {
-      bits.put(8, Byte.toUnsignedInt(value));
-    }
+  /** A profile 10.0 RPU in the EMDF container that FFmpeg opens. */
+  private static EmdfContainer.EmdfContainerBuilder profile100Emdf() {
+    return EmdfContainer.builder()
+        .header(EMDF_HEADER)
+        .rpu(PROFILE_10_0_RPU)
+        .protection(EMDF_PROTECTION);
+  }
 
-    return hex(bits.put(17, 0x400).bytes());
+  /** An RPU metadata OBU, whose values the trailing bits end. */
+  private static String rpuObu(EmdfContainer container) {
+    return metadata(4, RPU_PREFIX + " " + container.hex());
+  }
+
+  /**
+   * An RPU in an EMDF container: the 27-bit header, emdf_payload_size as the groups of
+   * variable_bits(8), by default the RPU's length in one group, the RPU's bytes, and the 17-bit
+   * emdf_protection.
+   */
+  @Builder
+  private record EmdfContainer(
+      long header, @NonNull String rpu, List<Integer> payloadSizeGroups, long protection) {
+
+    String hex() {
+      var bytes = HexFormat.ofDelimiter(" ").parseHex(rpu);
+      var groups = payloadSizeGroups;
+      if (groups == null) {
+        groups = List.of(bytes.length);
+      }
+
+      var bits = new Bits().put(27, header);
+      for (var index = 0; index < groups.size(); index++) {
+        var readMore = index < groups.size() - 1;
+        bits.put(8, groups.get(index)).put(1, readMore ? 1 : 0);
+      }
+
+      for (var value : bytes) {
+        bits.put(8, Byte.toUnsignedInt(value));
+      }
+
+      return FfprobeExecutorAv1MetadataTest.hex(bits.put(17, protection).bytes());
+    }
   }
 
   private static String hex(byte[] bytes) {
