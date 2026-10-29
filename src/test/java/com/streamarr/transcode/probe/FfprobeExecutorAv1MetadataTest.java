@@ -96,7 +96,7 @@ class FfprobeExecutorAv1MetadataTest {
     @DisplayName("Should report HDR10+ present when the record's configOBUs hold it")
     void shouldReportHdr10PlusPresentWhenTheRecordsConfigObusHoldIt() {
       // FFmpeg's AV1 decoders never apply the record's metadata OBUs to the frames.
-      var video = probed(record(HDR10_PLUS), temporalUnit());
+      var video = probed(av1cRecord(HDR10_PLUS), temporalUnit());
 
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_PRESENT);
     }
@@ -106,7 +106,7 @@ class FfprobeExecutorAv1MetadataTest {
     void shouldReportHdr10PlusAbsentWhenTheWalkDelimitsEveryObuAndNoneHoldsIt() {
       var video =
           probed(
-              record(metadata(3, "01 02")),
+              av1cRecord(metadata(3, "01 02")),
               temporalUnit(OTHER_T35),
               temporalUnit(LIGHT_LEVEL) + " " + obu(6, "10"));
 
@@ -354,7 +354,7 @@ class FfprobeExecutorAv1MetadataTest {
     @Test
     @DisplayName("Should take the record's values ahead of the packets'")
     void shouldTakeTheRecordsValuesAheadOfThePackets() {
-      var video = probed(record(LIGHT_LEVEL), temporalUnit(metadata(1, "00 64 00 32")));
+      var video = probed(av1cRecord(LIGHT_LEVEL), temporalUnit(metadata(1, "00 64 00 32")));
 
       assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(1000);
     }
@@ -536,9 +536,9 @@ class FfprobeExecutorAv1MetadataTest {
    * The stream, when its 3 first frames carry no side data and its 3 first packets hold the
    * temporal units, then temporal units of a frame alone.
    */
-  private static ProbeStreamInfo probed(String record, String... packets) {
+  private static ProbeStreamInfo probed(String av1cRecord, String... packets) {
     return probe(
-            answers(record)
+            answers(av1cRecord)
                 .firstFrames(frames("", "", ""))
                 .firstPackets(packetsUpTo(3, temporalUnit(), packets))
                 .build())
@@ -551,7 +551,7 @@ class FfprobeExecutorAv1MetadataTest {
   }
 
   /** An av1C record whose configOBUs are the given OBUs. */
-  private static String record(String... obus) {
+  private static String av1cRecord(String... obus) {
     return AV1C + " " + String.join(" ", obus);
   }
 

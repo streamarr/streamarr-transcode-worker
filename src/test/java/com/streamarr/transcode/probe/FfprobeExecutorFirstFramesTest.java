@@ -352,7 +352,7 @@ class FfprobeExecutorFirstFramesTest {
         "Should leave the observed RPU unspecified when an AV1 stream's record claims RPUs its"
             + " frames do not show")
     void shouldLeaveTheObservedRpuUnspecifiedWhenAnAv1StreamsRecordClaimsRpusItsFramesDoNotShow() {
-      var video = video(codec("av1") + "," + record(10, 1), frames("", ""));
+      var video = video(codec("av1") + "," + dolbyVisionRecord(10, 1), frames("", ""));
 
       assertThat(video.getDynamicRange().getDolbyVisionPresent().getObservedRpu())
           .isEqualTo(Presence.PRESENCE_UNSPECIFIED);
@@ -397,7 +397,8 @@ class FfprobeExecutorFirstFramesTest {
     @Test
     @DisplayName("Should report the record's RPU present when a frame carries an RPU")
     void shouldReportTheRecordsRpuPresentWhenAFrameCarriesAnRpu() {
-      var video = video(HEVC + "," + record(8, 1), frames(RPU_DATA + "," + PROFILE_8_RPU));
+      var video =
+          video(HEVC + "," + dolbyVisionRecord(8, 1), frames(RPU_DATA + "," + PROFILE_8_RPU));
 
       var present = video.getDynamicRange().getDolbyVisionPresent();
       assertThat(present.getObservedRpu()).isEqualTo(Presence.PRESENCE_PRESENT);
@@ -423,7 +424,8 @@ class FfprobeExecutorFirstFramesTest {
     @Test
     @DisplayName("Should report no compatible base when the record names profile 5")
     void shouldReportNoCompatibleBaseWhenTheRecordNamesProfile5() {
-      var video = video(HEVC + ",\"color_transfer\":\"bt709\"," + record(5, 0), frames(""));
+      var video =
+          video(HEVC + ",\"color_transfer\":\"bt709\"," + dolbyVisionRecord(5, 0), frames(""));
 
       assertThat(video.getDynamicRange().getCompatibleBase())
           .isEqualTo(CompatibleBase.COMPATIBLE_BASE_NONE);
@@ -435,7 +437,7 @@ class FfprobeExecutorFirstFramesTest {
       // The record decides over the RPU header.
       var video =
           video(
-              HEVC + ",\"color_transfer\":\"smpte2084\"," + record(8, 1),
+              HEVC + ",\"color_transfer\":\"smpte2084\"," + dolbyVisionRecord(8, 1),
               frames(RPU_DATA + "," + PROFILE_5_RPU));
 
       assertThat(video.getDynamicRange().getCompatibleBase())
@@ -487,7 +489,9 @@ class FfprobeExecutorFirstFramesTest {
             + " base layer")
     void shouldReportNoCompatibleBaseWhenTheRecordNamesProfile10WithoutACompatibleBaseLayer() {
       var video =
-          video(codec("av1") + ",\"color_transfer\":\"bt709\"," + record(10, 0), frames(""));
+          video(
+              codec("av1") + ",\"color_transfer\":\"bt709\"," + dolbyVisionRecord(10, 0),
+              frames(""));
 
       assertThat(video.getDynamicRange().getCompatibleBase())
           .isEqualTo(CompatibleBase.COMPATIBLE_BASE_NONE);
@@ -501,7 +505,7 @@ class FfprobeExecutorFirstFramesTest {
       // The record decides over the RPU header's profile 10.0 fields.
       var video =
           video(
-              codec("av1") + ",\"color_transfer\":\"smpte2084\"," + record(10, 1),
+              codec("av1") + ",\"color_transfer\":\"smpte2084\"," + dolbyVisionRecord(10, 1),
               frames(RPU_DATA + "," + PROFILE_5_RPU));
 
       assertThat(video.getDynamicRange().getCompatibleBase())
@@ -513,11 +517,12 @@ class FfprobeExecutorFirstFramesTest {
         "Should keep the signaled transfer's base when a profile 10 record names no compatibility"
             + " identifier")
     void shouldKeepTheSignaledTransfersBaseWhenAProfile10RecordNamesNoCompatibilityIdentifier() {
-      var record =
+      var dolbyVisionRecord =
           """
           "side_data_list":[{"side_data_type":"DOVI configuration record","dv_profile":10,
             "dv_level":6,"rpu_present_flag":1,"el_present_flag":0,"bl_present_flag":1}]""";
-      var video = video(codec("av1") + ",\"color_transfer\":\"bt709\"," + record, frames(""));
+      var video =
+          video(codec("av1") + ",\"color_transfer\":\"bt709\"," + dolbyVisionRecord, frames(""));
 
       assertThat(video.getDynamicRange().getCompatibleBase())
           .isEqualTo(CompatibleBase.COMPATIBLE_BASE_SDR);
@@ -1091,7 +1096,7 @@ class FfprobeExecutorFirstFramesTest {
     void shouldReportTheRecordsRpuAbsentWhenNeitherFramesNorPacketsHoldOne() {
       var present =
           probed(
-                  hevc(extradata(HEVC_RECORD) + "," + record(8, 1))
+                  hevc(extradata(HEVC_RECORD) + "," + dolbyVisionRecord(8, 1))
                       .firstFrames(frames("", "", ""))
                       .firstPackets(
                           packets(
@@ -1117,7 +1122,7 @@ class FfprobeExecutorFirstFramesTest {
       // The packets past the kept read, which the walk does not cover, can hold an RPU.
       var present =
           probed(
-                  hevc(extradata(HEVC_RECORD) + "," + record(8, 1))
+                  hevc(extradata(HEVC_RECORD) + "," + dolbyVisionRecord(8, 1))
                       .firstFrames(frames(""))
                       .firstPackets(
                           packets(
@@ -1136,7 +1141,7 @@ class FfprobeExecutorFirstFramesTest {
         "Should keep the record's RPU unspecified when the frames show none and the packet read"
             + " fails")
     void shouldKeepTheRecordsRpuUnspecifiedWhenTheFramesShowNoneAndThePacketReadFails() {
-      var video = video(HEVC + "," + record(8, 1), frames(""));
+      var video = video(HEVC + "," + dolbyVisionRecord(8, 1), frames(""));
 
       assertThat(video.getDynamicRange().getDolbyVisionPresent().getObservedRpu())
           .isEqualTo(Presence.PRESENCE_UNSPECIFIED);
@@ -1300,7 +1305,7 @@ class FfprobeExecutorFirstFramesTest {
       // one that it printed can hold any unit.
       var video =
           probed(
-              hevc(extradata(HEVC_RECORD) + "," + record(8, 1))
+              hevc(extradata(HEVC_RECORD) + "," + dolbyVisionRecord(8, 1))
                   .firstFrames(frames("", "", ""))
                   .firstPackets(
                       packets(
@@ -1368,7 +1373,7 @@ class FfprobeExecutorFirstFramesTest {
     void shouldReportTheRecordsRpuAbsentWhenTheOnlyType62UnitsLieOffTemporalId0() {
       var present =
           probed(
-                  hevc(extradata(HEVC_RECORD) + "," + record(8, 1))
+                  hevc(extradata(HEVC_RECORD) + "," + dolbyVisionRecord(8, 1))
                       .firstFrames(frames("", "", ""))
                       .firstPackets(
                           packets(
@@ -1783,7 +1788,7 @@ class FfprobeExecutorFirstFramesTest {
     return "\"codec_name\":\"" + codec + "\"";
   }
 
-  private static String record(int profile, int compatibilityId) {
+  private static String dolbyVisionRecord(int profile, int compatibilityId) {
     return """
         "side_data_list":[{"side_data_type":"DOVI configuration record","dv_profile":%d,
           "dv_level":6,"rpu_present_flag":1,"el_present_flag":0,"bl_present_flag":1,

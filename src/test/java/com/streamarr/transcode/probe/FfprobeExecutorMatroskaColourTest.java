@@ -544,10 +544,10 @@ class FfprobeExecutorMatroskaColourTest {
    */
   private ProbeStreamInfo probeWalkedMatroska(byte[] file) throws IOException {
     var source = Files.write(temporaryDirectory.resolve("source.mkv"), file);
-    var record = "01 01 60 00 00 00 90 00 00 00 00 00 5d f0 00 fc fd f8 f8 00 00 0f 00";
+    var hvccRecord = "01 01 60 00 00 00 90 00 00 00 00 00 5d f0 00 fc fd f8 f8 00 00 0f 00";
     return probe(
             Answers.builder()
-                .ffprobeOutput(output(MATROSKA, "," + FirstReads.extradata(record)))
+                .ffprobeOutput(output(MATROSKA, "," + FirstReads.extradata(hvccRecord)))
                 .firstFrames(FirstReads.frames("", "", ""))
                 .firstPackets(
                     FirstReads.packetsUpTo(

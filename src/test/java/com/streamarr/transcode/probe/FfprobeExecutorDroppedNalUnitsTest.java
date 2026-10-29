@@ -217,23 +217,24 @@ class FfprobeExecutorDroppedNalUnitsTest {
             + " splitter drops")
     void shouldRuleDolbyVisionOutWhenTheHvcCRecordHoldsAnEmptyNalUnitWhichFfmpegsSplitterDrops() {
       // One array of type 32 that holds one NAL unit of length 0.
-      var record =
+      var hvccRecord =
           HEVC_RECORD.substring(0, HEVC_RECORD.length() - "00".length()) + "01 20 00 01 00 00";
 
       var video =
-          probed(record, lengthPrefixed(IDR_SLICE), lengthPrefixed(SLICE), lengthPrefixed(SLICE));
+          probed(
+              hvccRecord, lengthPrefixed(IDR_SLICE), lengthPrefixed(SLICE), lengthPrefixed(SLICE));
 
       assertThat(video.getDynamicRange().hasDolbyVisionAbsent()).isTrue();
     }
 
-    private static DolbyVisionPresent placed(String record, String... samples) {
-      return probed(record, samples).getDynamicRange().getDolbyVisionPresent();
+    private static DolbyVisionPresent placed(String hvccRecord, String... samples) {
+      return probed(hvccRecord, samples).getDynamicRange().getDolbyVisionPresent();
     }
 
-    private static ProbeStreamInfo probed(String record, String... samples) {
+    private static ProbeStreamInfo probed(String hvccRecord, String... samples) {
       return probe(
               Answers.builder()
-                  .ffprobeOutput(output("\"codec_name\":\"hevc\"," + extradata(record)))
+                  .ffprobeOutput(output("\"codec_name\":\"hevc\"," + extradata(hvccRecord)))
                   .firstFrames(frames("", "", ""))
                   .firstPackets(packetsUpTo(3, lengthPrefixed(SLICE), samples))
                   .build())

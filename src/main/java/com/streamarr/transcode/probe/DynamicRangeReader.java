@@ -54,14 +54,14 @@ final class DynamicRangeReader {
     var frames = FirstFrames.of(stream);
     var rpus = rpus(frames, walk);
 
-    var record = VideoStreamFacts.sideData(stream, DOLBY_VISION_RECORD);
+    var dolbyVisionRecord = VideoStreamFacts.sideData(stream, DOLBY_VISION_RECORD);
     var dynamicRange = VideoDynamicRange.newBuilder().setHdr10Plus(hdr10Plus(frames, walk));
     var hasSampleEntry =
         text(stream, "codec_tag_string").filter(DOLBY_VISION_SAMPLE_ENTRIES::contains).isPresent();
     var observedRpus = rpus.filter(observed -> observed.presence() == Presence.PRESENCE_PRESENT);
-    var isDolbyVision = record.isPresent() || hasSampleEntry || observedRpus.isPresent();
+    var isDolbyVision = dolbyVisionRecord.isPresent() || hasSampleEntry || observedRpus.isPresent();
     if (isDolbyVision) {
-      dynamicRange.setDolbyVisionPresent(present(record, rpus));
+      dynamicRange.setDolbyVisionPresent(present(dolbyVisionRecord, rpus));
     }
 
     if (!isDolbyVision && rpus.isPresent()) {
@@ -69,7 +69,7 @@ final class DynamicRangeReader {
     }
 
     var header = observedRpus.flatMap(RpuObservation::firstHeader);
-    if (isWithoutCompatibleBase(record, header, codecFamily)) {
+    if (isWithoutCompatibleBase(dolbyVisionRecord, header, codecFamily)) {
       return dynamicRange.setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_NONE).build();
     }
 
@@ -122,7 +122,7 @@ final class DynamicRangeReader {
   }
 
   private static DolbyVisionPresent present(
-      Optional<JsonNode> record, Optional<RpuObservation> rpus) {
+      Optional<JsonNode> dolbyVisionRecord, Optional<RpuObservation> rpus) {
     var present =
         DolbyVisionPresent.newBuilder()
             .setObservedRpu(
@@ -130,7 +130,7 @@ final class DynamicRangeReader {
             .setRpuPlacement(
                 rpus.map(RpuObservation::placement)
                     .orElse(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED));
-    record.ifPresent(claim -> present.setDeclared(configuration(claim)));
+    dolbyVisionRecord.ifPresent(claim -> present.setDeclared(configuration(claim)));
     rpus.flatMap(RpuObservation::firstHeader).ifPresent(present::setFirstRpuHeader);
     return present.build();
   }
@@ -141,13 +141,13 @@ final class DynamicRangeReader {
    * one, the first RPU's header.
    */
   private static boolean isWithoutCompatibleBase(
-      Optional<JsonNode> record,
+      Optional<JsonNode> dolbyVisionRecord,
       Optional<DolbyVisionRpuHeader> header,
       ProbedCodecFamily codecFamily) {
-    var declared = record.flatMap(claim -> integer(claim, "dv_profile"));
+    var declared = dolbyVisionRecord.flatMap(claim -> integer(claim, "dv_profile"));
     if (declared.isPresent()) {
       var compatibilityId =
-          record.flatMap(claim -> integer(claim, "dv_bl_signal_compatibility_id"));
+          dolbyVisionRecord.flatMap(claim -> integer(claim, "dv_bl_signal_compatibility_id"));
       return isBaseless(declared.get(), compatibilityId.filter(id -> id == 0).isPresent());
     }
 
