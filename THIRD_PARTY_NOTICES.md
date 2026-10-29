@@ -22,7 +22,12 @@ The film is licensed under [Creative Commons Attribution 3.0 Unported](https://c
 
 ## Test samples
 
-`src/test/resources/probe/` holds ffprobe's output for the probe's test samples, not the samples themselves. The recordings in `src/test/resources/probe/packet-data/` also hold hex dumps of the first video packets of their sources, so they contain bytes of the samples below. Each sample remains subject to its own terms. The [Sources](src/test/resources/probe/README.md#sources) table in the fixture README lists where the phone, camcorder and Jellyfin samples come from. Their recordings hold only ffprobe's description of each file.
+`src/test/resources/probe/` holds ffprobe's output for the probe's test samples, not the samples themselves. That output still holds bytes of the samples in two places:
+
+- Every top-level recording is made with `-show_data`, so it holds a hex dump of each stream's extradata. For MP4, MOV and Matroska sources, that is the stream's decoder configuration record, such as `avcC` or `hvcC`; for raw streams and MPEG-TS, it is the parameter sets that FFmpeg's parser extracts. The extradata of a Matroska attachment is the attached file itself.
+- The recordings in `src/test/resources/probe/packet-data/` also hold hex dumps of the first video packets of their sources.
+
+Each sample remains subject to its own terms. The [Sources](src/test/resources/probe/README.md#sources) table in the fixture README lists where the phone, camcorder and Jellyfin samples come from. Their top-level recordings hold the extradata of those files: the `hvcC` records of the Jellyfin samples, which are licensed under CC BY-SA 4.0 (`mp4-dovi-p5-dvh1`, `mp4-dovi-p5-dvh1-no-record`, `mp4-dovi-p5-no-record-bt709`, `mpegts-dovi-p5-no-descriptor`, `mp4-dovi-p81`, `mp4-dovi-p84-hlg`, `mp4-hevc-hdr10` and `mp4-hevc-sdr10-untagged`), and the `avcC` or `hvcC` records of the phone and camcorder files (`mov-phone-*` and `mpegts-avchd-interlaced`). `mp4-dovi-p82.mp4.json` holds the `hvcC` record of a local sample that the Sources table does not list.
 
 ### AV1 test vector
 
@@ -47,3 +52,10 @@ The following `packet-data/` recordings hold the first packets of samples from F
 - `h264/sei-1.h264`: an artificial stream by Mark Thompson whose picture is a white frame counter on black, posted in "[PATCH 6/6] fate/cbs: Add an SEI test" ([ffmpeg-devel, May 2018](https://ffmpeg.org/pipermail/ffmpeg-devel/2018-May/229667.html)) and used by FFmpeg commit f995aa82d8. `h264-sei-1.h264.json` and `mp4-h264-sei-1.mp4.json` hold its bytes.
 - `h264/extradata-reload-multi-stsd.mov` and `hevc/extradata-reload-multi-stsd.mov`: FFmpeg's `testsrc` test pattern in H.264 and HEVC by Vittorio Giovara, posted in "[PATCH 3/3] fate: Add h264 and hevc extradata reload tests" ([ffmpeg-devel, November 2016](https://ffmpeg.org/pipermail/ffmpeg-devel/2016-November/202491.html)) and used by FFmpeg commit 481ff3cf01. `mov-h264-extradata-reload.mov.json` and `mov-hevc-extradata-reload.mov.json` hold their bytes.
 - `h264/mixed-nal-coding.mp4`: five black frames, added to FATE by Vittorio Giovara in FFmpeg commit 390b95b88b ("fate: Add a mixed NAL coding sample") for the MP4 samples that [FFmpeg ticket 5529](https://trac.ffmpeg.org/ticket/5529) describes. `mp4-h264-mixed-nal-coding.mp4.json` holds its bytes.
+
+The top-level recordings of the following FATE samples, and of copies the record script makes of them, hold the extradata dump of their video stream. The same terms apply: no license is stated for them.
+
+- `hevc/hdr10_plus_h265_sample.hevc`: `hevc-hdr10-plus.hevc.json` holds its 84-byte parameter sets.
+- `mkv/dovi-p7-hvce.mkv`: `mkv-dovi-p7-hvce.mkv.json` holds its 187-byte `hvcC` record.
+- `mov/dovi-p7-hvce.mp4`: `mpegts-dovi-p7.ts.json`, an MPEG-TS copy of it, holds 230 bytes of its parameter sets.
+- `mkv/hdr10tags-both.mkv`: `mkv-hdr10-fate.mkv.json` holds its 149-byte `hvcC` record and the whole of its 224-byte attachment `blarg.xpm`. The sample's own tags describe that attachment as an XPM3 file copied from [Wikipedia's X PixMap article](https://en.wikipedia.org/wiki/X_PixMap) under the [Creative Commons Attribution-ShareAlike 4.0 license](https://creativecommons.org/licenses/by-sa/4.0/).
