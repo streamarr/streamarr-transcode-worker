@@ -33,6 +33,11 @@ public enum CodecFamily {
         .findFirst();
   }
 
+  /** The name that FFmpeg gives the codec, such as h264. */
+  public String familyName() {
+    return familyName;
+  }
+
   String softwareEncoder() {
     return softwareEncoder;
   }

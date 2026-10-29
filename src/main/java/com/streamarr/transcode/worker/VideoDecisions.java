@@ -48,12 +48,7 @@ final class VideoDecisions {
 
   /** The engine's name for the codec family; empty when the decision names none. */
   static Optional<String> codecFamilyName(VideoCodecFamily family) {
-    return switch (family) {
-      case VIDEO_CODEC_FAMILY_H264 -> Optional.of("h264");
-      case VIDEO_CODEC_FAMILY_HEVC -> Optional.of("hevc");
-      case VIDEO_CODEC_FAMILY_AV1 -> Optional.of("av1");
-      case VIDEO_CODEC_FAMILY_UNSPECIFIED, UNRECOGNIZED -> Optional.empty();
-    };
+    return codecFamily(family).map(CodecFamily::familyName);
   }
 
   private static Optional<CodecFamily> codecFamily(VideoCodecFamily family) {
