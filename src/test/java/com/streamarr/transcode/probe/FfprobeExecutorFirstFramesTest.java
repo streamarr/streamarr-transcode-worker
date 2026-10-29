@@ -1110,6 +1110,29 @@ class FfprobeExecutorFirstFramesTest {
 
     @Test
     @DisplayName(
+        "Should keep the record's RPU unspecified when neither frames nor packets hold one but the"
+            + " frames' read is cut short")
+    void
+        shouldKeepTheRecordsRpuUnspecifiedWhenNeitherFramesNorPacketsHoldOneButTheFramesReadIsCutShort() {
+      // The packets past the kept read, which the walk does not cover, can hold an RPU.
+      var present =
+          probed(
+                  hevc(extradata(HEVC_RECORD) + "," + record(8, 1))
+                      .firstFrames(frames(""))
+                      .firstPackets(
+                          packets(
+                              lengthPrefixed(IDR_SLICE),
+                              lengthPrefixed(SLICE),
+                              lengthPrefixed(SLICE))))
+              .getDynamicRange()
+              .getDolbyVisionPresent();
+
+      assertThat(present.getObservedRpu()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+      assertThat(present.hasFirstRpuHeader()).isFalse();
+    }
+
+    @Test
+    @DisplayName(
         "Should keep the record's RPU unspecified when the frames show none and the packet read"
             + " fails")
     void shouldKeepTheRecordsRpuUnspecifiedWhenTheFramesShowNoneAndThePacketReadFails() {
