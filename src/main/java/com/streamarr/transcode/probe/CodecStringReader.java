@@ -3,6 +3,8 @@ package com.streamarr.transcode.probe;
 import static com.streamarr.transcode.probe.FfprobeJson.text;
 
 import com.streamarr.transcode.probe.BitReader.TruncatedBitstreamException;
+import com.streamarr.transcode.probe.StreamCodec.Other;
+import com.streamarr.transcode.probe.StreamCodec.Walked;
 import java.util.Optional;
 import tools.jackson.databind.JsonNode;
 
@@ -25,23 +27,28 @@ final class CodecStringReader {
   private CodecStringReader() {}
 
   static Optional<String> read(JsonNode stream) {
-    var codec = text(stream, "codec_name").orElse("");
     try {
-      return switch (codec) {
-        case "h264" -> Extradata.of(stream).flatMap(CodecStringReader::avc);
-        case "hevc" -> Extradata.of(stream).flatMap(CodecStringReader::hevc);
-        case "av1" -> Extradata.of(stream).flatMap(CodecStringReader::av1);
-        case "aac" -> aac(stream, Extradata.of(stream));
-        case "ac3" -> Optional.of("ac-3");
-        case "eac3" -> Optional.of("ec-3");
-        case "opus" -> Optional.of("Opus");
-        case "flac" -> Optional.of("fLaC");
-        case "alac" -> Optional.of("alac");
-        default -> Optional.empty();
+      return switch (StreamCodec.of(stream)) {
+        case Walked.H264 -> Extradata.of(stream).flatMap(CodecStringReader::avc);
+        case Walked.HEVC -> Extradata.of(stream).flatMap(CodecStringReader::hevc);
+        case Walked.AV1 -> Extradata.of(stream).flatMap(CodecStringReader::av1);
+        case Other(var name) -> audioCodecString(stream, name);
       };
     } catch (TruncatedBitstreamException _) {
       return Optional.empty();
     }
+  }
+
+  private static Optional<String> audioCodecString(JsonNode stream, String codecName) {
+    return switch (codecName) {
+      case "aac" -> aac(stream, Extradata.of(stream));
+      case "ac3" -> Optional.of("ac-3");
+      case "eac3" -> Optional.of("ec-3");
+      case "opus" -> Optional.of("Opus");
+      case "flac" -> Optional.of("fLaC");
+      case "alac" -> Optional.of("alac");
+      default -> Optional.empty();
+    };
   }
 
   private static Optional<String> avc(byte[] extradata) {

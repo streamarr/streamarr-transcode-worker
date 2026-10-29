@@ -1,11 +1,11 @@
 package com.streamarr.transcode.probe;
 
-import static com.streamarr.transcode.probe.FfprobeJson.text;
-
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import build.buf.gen.streamarr.transcode.v1.VideoCodecProfile;
 import build.buf.gen.streamarr.transcode.v1.VideoCodecTier;
 import com.streamarr.transcode.probe.BitReader.TruncatedBitstreamException;
+import com.streamarr.transcode.probe.StreamCodec.Other;
+import com.streamarr.transcode.probe.StreamCodec.Walked;
 import java.util.Optional;
 import tools.jackson.databind.JsonNode;
 
@@ -30,25 +30,24 @@ final class CodecProfileReader {
   private CodecProfileReader() {}
 
   static void add(JsonNode source, ProbeStreamInfo.Builder stream) {
-    var codec = text(source, "codec_name").orElse("");
     var extradata = Extradata.of(source);
     try {
       Optional<Runnable> addProfile =
-          switch (codec) {
-            case "h264" ->
+          switch (StreamCodec.of(source)) {
+            case Walked.H264 ->
                 extradata
                     .flatMap(DecoderConfiguration::avcProfile)
                     .map(bytes -> () -> addAvc(bytes, stream));
-            case "hevc" ->
+            case Walked.HEVC ->
                 extradata
                     .flatMap(DecoderConfiguration::hevcProfile)
                     .map(bytes -> () -> addHevc(bytes, stream));
-            case "av1" ->
+            case Walked.AV1 ->
                 extradata
                     .flatMap(DecoderConfiguration::av1Profile)
                     .map(header -> () -> addAv1(header, stream));
             // The contract names profiles of H.264, HEVC and AV1 only.
-            default -> Optional.empty();
+            case Other _ -> Optional.empty();
           };
       addProfile.ifPresent(Runnable::run);
     } catch (TruncatedBitstreamException _) {
