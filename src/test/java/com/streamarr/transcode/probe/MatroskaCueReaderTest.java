@@ -15,7 +15,6 @@ import static com.streamarr.transcode.probe.EbmlElements.SEEK;
 import static com.streamarr.transcode.probe.EbmlElements.SEEK_HEAD;
 import static com.streamarr.transcode.probe.EbmlElements.SEEK_ID;
 import static com.streamarr.transcode.probe.EbmlElements.SEEK_POSITION;
-import static com.streamarr.transcode.probe.EbmlElements.TIMESTAMP_SCALE;
 import static com.streamarr.transcode.probe.EbmlElements.TRACKS;
 import static com.streamarr.transcode.probe.EbmlElements.TRACK_TIMESTAMP_SCALE;
 import static com.streamarr.transcode.probe.EbmlElements.WRITING_APP;
@@ -87,12 +86,11 @@ class MatroskaCueReaderTest {
             MinimalMatroskaFile.builder()
                 .muxingApp("libebml v1.4.5 + libmatroska v1.7.1")
                 .writingApp("mkvmerge v88.0 ('All I Know') 64-bit")
-                .timestampScale(100_000L)
                 .cue(cue(41, VIDEO_TRACK))
                 .build());
 
     assertThat(MatroskaCueReader.read(source, 0))
-        .isEqualTo(new Listed(new TimeBase(1, 10_000), List.of(new KeyframeTime(41, 41))));
+        .isEqualTo(new Listed(new TimeBase(1, 1_000), List.of(new KeyframeTime(41, 41))));
   }
 
   @Test
@@ -345,7 +343,6 @@ class MatroskaCueReaderTest {
   private record MinimalMatroskaFile(
       String muxingApp,
       String writingApp,
-      Long timestampScale,
       byte[] trackTimestampScale,
       @Singular List<CuePoint> cues,
       boolean cuesAfterCluster,
@@ -353,10 +350,6 @@ class MatroskaCueReaderTest {
 
     byte[] bytes() {
       var info = new ArrayList<byte[]>();
-      if (timestampScale != null) {
-        info.add(element(TIMESTAMP_SCALE, unsigned(timestampScale)));
-      }
-
       info.add(element(MUXING_APP, muxingApp.getBytes(StandardCharsets.UTF_8)));
       if (writingApp != null) {
         info.add(element(WRITING_APP, writingApp.getBytes(StandardCharsets.UTF_8)));
