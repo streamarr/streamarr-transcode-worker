@@ -9,7 +9,6 @@ import static com.streamarr.transcode.probe.EbmlElements.CUE_POINT;
 import static com.streamarr.transcode.probe.EbmlElements.CUE_TIME;
 import static com.streamarr.transcode.probe.EbmlElements.CUE_TRACK;
 import static com.streamarr.transcode.probe.EbmlElements.CUE_TRACK_POSITIONS;
-import static com.streamarr.transcode.probe.EbmlElements.DURATION;
 import static com.streamarr.transcode.probe.EbmlElements.INFO;
 import static com.streamarr.transcode.probe.EbmlElements.MUXING_APP;
 import static com.streamarr.transcode.probe.EbmlElements.SEEK;
@@ -240,87 +239,6 @@ class MatroskaCueReaderTest {
     var source = write(document(lavfInfo(), element(TRACKS, hex(tracks)), videoCueAt(0)));
 
     assertThat(MatroskaCueReader.read(source, 0)).as(malformation).isEqualTo(INCOMPLETE);
-  }
-
-  @Test
-  @DisplayName(
-      "Should require a packet scan when a malformed CueTrack precedes a repeat of its CuePoint's"
-          + " CueTime")
-  void shouldRequirePacketScanWhenAMalformedCueTrackPrecedesARepeatOfItsCuePointsCueTime()
-      throws Exception {
-    // FFmpeg's parse of the CuePoint stops at the nine-byte CueTrack, so it never reads 5000.
-    var point =
-        element(
-            CUE_POINT,
-            element(CUE_TIME, unsigned(2_000)),
-            element(CUE_TRACK_POSITIONS, element(CUE_TRACK, unsigned(VIDEO_TRACK))),
-            element(CUE_TRACK_POSITIONS, element(CUE_TRACK, hex("00 00 00 00 00 00 00 00 01"))),
-            element(CUE_TIME, unsigned(5_000)));
-    var cues =
-        element(
-            CUES,
-            point,
-            element(
-                CUE_POINT,
-                element(CUE_TIME, unsigned(10_000)),
-                element(CUE_TRACK_POSITIONS, element(CUE_TRACK, unsigned(VIDEO_TRACK)))));
-    var source = write(document(lavfInfo(), oneVideoTrack(), cues));
-
-    assertThat(MatroskaCueReader.read(source, 0)).isEqualTo(INCOMPLETE);
-  }
-
-  @Test
-  @DisplayName(
-      "Should require a packet scan when a malformed Duration precedes a repeat of the Info's"
-          + " TimestampScale")
-  void shouldRequirePacketScanWhenAMalformedDurationPrecedesARepeatOfTheInfosTimestampScale()
-      throws Exception {
-    // FFmpeg's parse of the Info stops at the three-byte Duration, so it never reads 1000.
-    var info =
-        element(
-            INFO,
-            element(TIMESTAMP_SCALE, unsigned(1_000_000)),
-            element(MUXING_APP, "Lavf61.7.100".getBytes(StandardCharsets.UTF_8)),
-            element(DURATION, hex("00 00 00")),
-            element(TIMESTAMP_SCALE, unsigned(1_000)));
-    var source = write(document(info, oneVideoTrack(), videoCueAt(0)));
-
-    assertThat(MatroskaCueReader.read(source, 0)).isEqualTo(INCOMPLETE);
-  }
-
-  @Test
-  @DisplayName(
-      "Should list the cue times when the Info holds an empty Duration, which FFmpeg reads")
-  void shouldListTheCueTimesWhenTheInfoHoldsAnEmptyDurationWhichFfmpegReads() throws Exception {
-    var info =
-        element(
-            INFO,
-            element(MUXING_APP, "Lavf61.7.100".getBytes(StandardCharsets.UTF_8)),
-            element(DURATION, new byte[0]));
-    var source = write(document(info, oneVideoTrack(), videoCueAt(0)));
-
-    assertThat(MatroskaCueReader.read(source, 0))
-        .isEqualTo(new Listed(new TimeBase(1, 1_000), List.of(new KeyframeTime(0, 0))));
-  }
-
-  @ParameterizedTest(name = "{0}")
-  @CsvSource({"'an empty repeat', ''", "'a zero repeat', '00'"})
-  @DisplayName(
-      "Should list the cue times in milliseconds when the last TimestampScale is empty or zero, as"
-          + " FFmpeg reads it")
-  void shouldListTheCueTimesInMillisecondsWhenTheLastTimestampScaleIsEmptyOrZeroAsFfmpegReadsIt(
-      String repeat, String bytes) throws Exception {
-    var info =
-        element(
-            INFO,
-            element(TIMESTAMP_SCALE, unsigned(1_000)),
-            element(MUXING_APP, "Lavf61.7.100".getBytes(StandardCharsets.UTF_8)),
-            element(TIMESTAMP_SCALE, hex(bytes)));
-    var source = write(document(info, oneVideoTrack(), videoCueAt(0)));
-
-    assertThat(MatroskaCueReader.read(source, 0))
-        .as(repeat)
-        .isEqualTo(new Listed(new TimeBase(1, 1_000), List.of(new KeyframeTime(0, 0))));
   }
 
   @ParameterizedTest(name = "{0}")

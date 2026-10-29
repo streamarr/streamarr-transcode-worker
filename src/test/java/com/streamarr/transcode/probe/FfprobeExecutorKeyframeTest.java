@@ -1,5 +1,23 @@
 package com.streamarr.transcode.probe;
 
+import static com.streamarr.transcode.probe.EbmlElements.CUES;
+import static com.streamarr.transcode.probe.EbmlElements.CUE_POINT;
+import static com.streamarr.transcode.probe.EbmlElements.CUE_TIME;
+import static com.streamarr.transcode.probe.EbmlElements.CUE_TRACK;
+import static com.streamarr.transcode.probe.EbmlElements.CUE_TRACK_POSITIONS;
+import static com.streamarr.transcode.probe.EbmlElements.DURATION;
+import static com.streamarr.transcode.probe.EbmlElements.INFO;
+import static com.streamarr.transcode.probe.EbmlElements.MUXING_APP;
+import static com.streamarr.transcode.probe.EbmlElements.SEEK_HEAD;
+import static com.streamarr.transcode.probe.EbmlElements.SEGMENT;
+import static com.streamarr.transcode.probe.EbmlElements.TIMESTAMP_SCALE;
+import static com.streamarr.transcode.probe.EbmlElements.TRACKS;
+import static com.streamarr.transcode.probe.EbmlElements.VOID;
+import static com.streamarr.transcode.probe.EbmlElements.concat;
+import static com.streamarr.transcode.probe.EbmlElements.document;
+import static com.streamarr.transcode.probe.EbmlElements.element;
+import static com.streamarr.transcode.probe.EbmlElements.header;
+import static com.streamarr.transcode.probe.EbmlElements.unsigned;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -13,6 +31,7 @@ import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeKeyframePositionsPart;
 import build.buf.gen.streamarr.transcode.v1.ProbeKeyframes;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
+import com.streamarr.transcode.probe.EbmlElements.TrackEntry;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -22,20 +41,25 @@ import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
+import java.util.stream.Stream;
 import lombok.Builder;
 import lombok.Singular;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import tools.jackson.databind.ObjectMapper;
 
@@ -1012,6 +1036,214 @@ class FfprobeExecutorKeyframeTest {
     var report = executor.probe(fixture("mpegts.ts"), packetScanRequest());
 
     assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
+  }
+
+  @Nested
+  @DisplayName("Matroska Cues Tests")
+  class MatroskaCuesTests {
+
+    private static final String ONE_VIDEO_STREAM =
+        """
+        {"format":{"format_name":"matroska,webm","start_time":"0.000000"},
+         "streams":[{"index":0,"codec_type":"video","codec_name":"hevc","time_base":"1/1000",
+                     "disposition":{"attached_pic":0}}]}
+        """;
+
+    @TempDir Path temporaryDirectory;
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("infosThatFfmpegReadsInMilliseconds")
+    @DisplayName(
+        "Should report the cue times in milliseconds when the Info's last TimestampScale is empty,"
+            + " zero or missing")
+    void shouldReportTheCueTimesInMillisecondsWhenTheInfosLastTimestampScaleIsEmptyZeroOrMissing(
+        String description, byte[] info) throws IOException {
+      var report = probe(document(info, videoTrack(1), cues(cue(0, 1), cue(2_000, 1))));
+
+      assertThat(report.result().getMedia().getKeyframes().getPositions())
+          .as(description)
+          .isEqualTo(cuePositions(1_000, 2));
+      assertThat(report.keyframePositionsParts())
+          .singleElement()
+          .extracting(ProbeKeyframePositionsPart::getPresentationTimeDeltasList)
+          .isEqualTo(List.of(0L, 2_000L));
+    }
+
+    static Stream<Arguments> infosThatFfmpegReadsInMilliseconds() {
+      return Stream.of(
+          Arguments.of(
+              "an empty repeat",
+              info(element(TIMESTAMP_SCALE, unsigned(1_000)), element(TIMESTAMP_SCALE))),
+          Arguments.of(
+              "a zero repeat",
+              info(
+                  element(TIMESTAMP_SCALE, unsigned(1_000)),
+                  element(TIMESTAMP_SCALE, new byte[1]))),
+          // FFmpeg reads an empty float as zero.
+          Arguments.of("no TimestampScale and an empty Duration", info(element(DURATION))));
+    }
+
+    @Test
+    @DisplayName("Should report the cue times in the last TimestampScale when the Info repeats it")
+    void shouldReportTheCueTimesInTheLastTimestampScaleWhenTheInfoRepeatsIt() throws IOException {
+      var info =
+          info(
+              element(TIMESTAMP_SCALE, unsigned(1_000_000)),
+              element(TIMESTAMP_SCALE, unsigned(100_000)));
+
+      var report = probe(document(info, videoTrack(1), cues(cue(41, 1))));
+
+      assertThat(report.result().getMedia().getKeyframes().getPositions())
+          .isEqualTo(cuePositions(10_000, 1));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("malformedChildrenAheadOfARepeat")
+    @DisplayName(
+        "Should require a packet scan when a malformed child precedes a repeat in the Info or a"
+            + " CuePoint")
+    void shouldRequireAPacketScanWhenAMalformedChildPrecedesARepeatInTheInfoOrACuePoint(
+        String description, byte[] file) throws IOException {
+      var report = probe(file);
+
+      assertThat(report.result().getMedia().getKeyframes())
+          .as(description)
+          .isEqualTo(
+              ProbeKeyframes.newBuilder()
+                  .setPacketScanRequired(
+                      KeyframePacketScanReason
+                          .KEYFRAME_PACKET_SCAN_REASON_INCOMPLETE_CONTAINER_INDEX)
+                  .build());
+    }
+
+    static Stream<Arguments> malformedChildrenAheadOfARepeat() {
+      // FFmpeg's parse of the element stops at the malformed child, so it never reads the repeat.
+      var malformedDuration =
+          info(
+              element(TIMESTAMP_SCALE, unsigned(1_000_000)),
+              element(DURATION, new byte[3]),
+              element(TIMESTAMP_SCALE, unsigned(1_000)));
+      var malformedCueTrack =
+          element(
+              CUE_POINT,
+              element(CUE_TIME, unsigned(2_000)),
+              element(CUE_TRACK_POSITIONS, element(CUE_TRACK, unsigned(1))),
+              element(CUE_TRACK_POSITIONS, element(CUE_TRACK, new byte[9])),
+              element(CUE_TIME, unsigned(5_000)));
+      return Stream.of(
+          Arguments.of(
+              "a three-byte Duration ahead of a TimestampScale",
+              document(malformedDuration, videoTrack(1), cues(cue(0, 1)))),
+          Arguments.of(
+              "a nine-byte CueTrack ahead of a CueTime",
+              document(info(), videoTrack(1), element(CUES, malformedCueTrack, cue(10_000, 1)))));
+    }
+
+    @Test
+    @DisplayName("Should report the cue times when a Void element precedes the Segment")
+    void shouldReportTheCueTimesWhenAVoidElementPrecedesTheSegment() throws IOException {
+      var file =
+          concat(
+              header(),
+              element(VOID, new byte[4]),
+              element(SEGMENT, info(), videoTrack(1), cues(cue(0, 1), cue(2_000, 1))));
+
+      var report = probe(file);
+
+      assertThat(report.result().getMedia().getKeyframes().getPositions())
+          .isEqualTo(cuePositions(1_000, 2));
+    }
+
+    @Test
+    @DisplayName(
+        "Should report the cue times of the chosen track when FFmpeg skips an earlier video"
+            + " TrackEntry without a CodecID")
+    void shouldReportTheCueTimesOfTheChosenTrackWhenFfmpegSkipsAnEarlierVideoTrackEntry()
+        throws IOException {
+      // FFmpeg makes no stream of a video track without a CodecID, so ffprobe's first video
+      // stream is track 2.
+      var tracks =
+          element(
+              TRACKS,
+              TrackEntry.video().codecId(null).build().bytes(),
+              TrackEntry.video().number(2).build().bytes());
+
+      var report = probe(document(info(), tracks, cues(cue(0, 1, 2), cue(500, 1), cue(2_000, 2))));
+
+      assertThat(report.keyframePositionsParts())
+          .singleElement()
+          .extracting(ProbeKeyframePositionsPart::getPresentationTimeDeltasList)
+          .isEqualTo(List.of(0L, 2_000L));
+    }
+
+    @Test
+    @DisplayName(
+        "Should report the cue times when a malformed element follows the Info, Tracks and Cues")
+    void shouldReportTheCueTimesWhenAMalformedElementFollowsTheInfoTracksAndCues()
+        throws IOException {
+      // A zero byte starts no EBML element ID.
+      var malformed = element(SEEK_HEAD, new byte[] {0x00, 0x00});
+
+      var report =
+          probe(document(info(), videoTrack(1), cues(cue(0, 1), cue(2_000, 1)), malformed));
+
+      assertThat(report.result().getMedia().getKeyframes().getPositions())
+          .isEqualTo(cuePositions(1_000, 2));
+    }
+
+    /**
+     * Probes the file for its keyframes, with ffprobe finding the last cue's keyframe where the
+     * Cues place it.
+     */
+    private ProbeAttemptReport probe(byte[] file) throws IOException {
+      var source = Files.write(temporaryDirectory.resolve("source.mkv"), file);
+      var lastKeyframes =
+          Map.of(
+              "2.000000%+#1", "{\"packets\":[{\"pts\":2000,\"flags\":\"K__\"}]}",
+              "0.004100%+#1", "{\"packets\":[{\"pts\":41,\"flags\":\"K__\"}]}");
+      return ScriptedFfprobe.builder()
+          .streams(ONE_VIDEO_STREAM)
+          .packets(lastKeyframes)
+          .build()
+          .executor()
+          .probe(source, keyframeRequest());
+    }
+
+    private static KeyframePositions cuePositions(int denominator, int keyframeCount) {
+      return KeyframePositions.newBuilder()
+          .setStreamIndex(0)
+          .setTimeBaseNumerator(1)
+          .setTimeBaseDenominator(denominator)
+          .setSource(KeyframePositionSource.KEYFRAME_POSITION_SOURCE_CONTAINER_INDEX)
+          .setKeyframeCount(keyframeCount)
+          .build();
+    }
+
+    /** An Info written by libavformat, which writes a cue for every video keyframe. */
+    private static byte[] info(byte[]... children) {
+      return element(
+          INFO,
+          element(MUXING_APP, "Lavf62.12.103".getBytes(StandardCharsets.UTF_8)),
+          concat(children));
+    }
+
+    private static byte[] videoTrack(long number) {
+      return element(TRACKS, TrackEntry.video().number(number).build().bytes());
+    }
+
+    private static byte[] cues(byte[]... points) {
+      return element(CUES, points);
+    }
+
+    private static byte[] cue(long time, long... tracks) {
+      var children = new ArrayList<byte[]>();
+      children.add(element(CUE_TIME, unsigned(time)));
+      for (var track : tracks) {
+        children.add(element(CUE_TRACK_POSITIONS, element(CUE_TRACK, unsigned(track))));
+      }
+
+      return element(CUE_POINT, children.toArray(byte[][]::new));
+    }
   }
 
   private static String streamsOf(String formatName) {
