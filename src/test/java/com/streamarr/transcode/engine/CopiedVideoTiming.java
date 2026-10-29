@@ -11,7 +11,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 /** Stands in for the framecrc output of the FFmpeg that copies the source. */
-final class CopiedVideoTiming {
+public final class CopiedVideoTiming {
 
   private static final String URL_SCHEME = "unix:";
 
@@ -21,7 +21,7 @@ final class CopiedVideoTiming {
    * Writes the framecrc to the socket that the copying FFmpeg's last argument names, as its second
    * output does, before the test starts that FFmpeg's stand-in, and closes the connection.
    */
-  static void writeTo(List<String> copyCommand, String framecrc) throws IOException {
+  public static void writeTo(List<String> copyCommand, String framecrc) throws IOException {
     var url = copyCommand.getLast();
     assertThat(url).as("the copying FFmpeg's last output").startsWith(URL_SCHEME);
     var socket = UnixDomainSocketAddress.of(Path.of(url.substring(URL_SCHEME.length())));

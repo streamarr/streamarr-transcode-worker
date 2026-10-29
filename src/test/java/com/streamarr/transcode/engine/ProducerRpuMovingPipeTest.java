@@ -11,6 +11,7 @@ import static com.streamarr.transcode.engine.HevcCopies.slice;
 import static com.streamarr.transcode.engine.IsoBoxes.box;
 import static com.streamarr.transcode.engine.IsoBoxes.concat;
 import static com.streamarr.transcode.engine.IsoBoxes.u32;
+import static com.streamarr.transcode.engine.RpuMovingCopies.videoSamplesOf;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
@@ -54,30 +55,12 @@ class ProducerRpuMovingPipeTest {
       UUID.fromString("5b0f8a8e-29b5-4c48-9f0c-7f4f3c1a9d21");
   private static final List<String> COPY_COMMAND = List.of("copy-ffmpeg");
   private static final List<String> ENCODE_COMMAND = List.of("encode-ffmpeg");
-  private static final byte[] COPIED_SOURCE =
-      concat(
-          initializationSegment(),
-          fragmentBuilder().video(0, sample(aud(), slice(0))).build(),
-          fragmentBuilder().video(1001, sample(aud(), rpu(0), slice(1))).build());
-  // The framecrc that FFmpeg writes of COPIED_SOURCE's video: no packet is a keyframe, each lasts
-  // 1001 ticks of the copy's 24000 Hz timescale, and the framecrc counts in 1/48000.
-  private static final String COPIED_SOURCE_TIMING =
-      """
-      #tb 0: 1/48000
-      #media_type 0: video
-      #codec_id 0: hevc
-      0,          0,       4004,     2002,        9, 0x00000000, F=0x0
-      0,       2002,       6006,     2002,       20, 0x00000000, F=0x0
-      """;
+  private static final byte[] COPIED_SOURCE = RpuMovingCopies.copied();
   private static final byte[] NOT_HEVC =
       concat(
           initializationSegment(box("avc1", new byte[78], box("avcC", new byte[7]))),
           fragmentBuilder().video(0, sample(slice(0))).build());
-  private static final byte[] MOVED_SOURCE =
-      concat(
-          initializationSegment(),
-          fragmentBuilder().video(0, sample(aud(), slice(0), rpu(0))).build(),
-          fragmentBuilder().video(1001, sample(aud(), slice(1))).build());
+  private static final byte[] MOVED_SOURCE = RpuMovingCopies.moved();
 
   private final RecordingSegmentSink sink = new RecordingSegmentSink();
 
@@ -749,7 +732,7 @@ class ProducerRpuMovingPipeTest {
   // The copying FFmpeg's stand-in writes the framecrc of the copied source's video, whatever the
   // output it replays.
   private Producer.ProducerBuilder producerOf(ScriptedProcess copy, ScriptedProcess encode) {
-    return producer(copyingWith(copy, COPIED_SOURCE_TIMING), encode);
+    return producer(copyingWith(copy, RpuMovingCopies.copiedTiming()), encode);
   }
 
   private Producer.ProducerBuilder producer(CopyingFfmpeg copying, ScriptedProcess encode) {
@@ -801,25 +784,6 @@ class ProducerRpuMovingPipeTest {
         .memoryBudget(SegmentMemoryBudget.forSlots(1))
         .sink(sink)
         .clock(MonotonicClock.system());
-  }
-
-  private static List<String> videoSamplesOf(byte[] stream) {
-    try {
-      return Mp4Stream.read(Mp4Stream.readerOf(stream)).fragments().stream()
-          .flatMap(
-              fragment ->
-                  fragment.videoSamples().stream()
-                      .map(
-                          sample ->
-                              HexFormat.of()
-                                  .formatHex(
-                                      fragment.mediaDataBox(),
-                                      sample.mediaDataPosition(),
-                                      sample.mediaDataPosition() + Math.toIntExact(sample.size()))))
-          .toList();
-    } catch (IOException e) {
-      throw new UncheckedIOException(e);
-    }
   }
 
   private static Failed failureOf(Producer producer) {
