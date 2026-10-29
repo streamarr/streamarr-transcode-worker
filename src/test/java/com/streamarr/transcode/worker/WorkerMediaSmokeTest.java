@@ -1497,29 +1497,8 @@ class WorkerMediaSmokeTest {
       return source;
     }
 
-    var pictures = rpuLayoutSources.resolve("pictures.hevc");
-    if (!Files.exists(pictures)) {
-      runFfmpeg(
-          List.of(
-              "-f",
-              "lavfi",
-              "-i",
-              "testsrc2=size=64x36:rate=24",
-              "-t",
-              String.valueOf(PROFILE_5_PERIOD_SECONDS * PROFILE_5_SEGMENT_COUNT),
-              "-pix_fmt",
-              "yuv420p10le",
-              "-c:v",
-              "libx265",
-              "-x265-params",
-              "keyint=24:min-keyint=24:bframes=0:aud=1:log-level=error",
-              "-f",
-              "hevc"),
-          pictures);
-    }
-
     var withRpus = rpuLayoutSources.resolve(layout.name().toLowerCase(Locale.ROOT) + ".hevc");
-    Files.write(withRpus, withStandInRpus(Files.readAllBytes(pictures), layout));
+    Files.write(withRpus, withStandInRpus(Files.readAllBytes(rpuLayoutPictures()), layout));
     runFfmpeg(
         List.of(
             "-i",
@@ -1541,6 +1520,31 @@ class WorkerMediaSmokeTest {
             "-shortest"),
         source);
     return source;
+  }
+
+  private static synchronized Path rpuLayoutPictures() throws Exception {
+    var pictures = rpuLayoutSources.resolve("pictures.hevc");
+    if (!Files.exists(pictures)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc2=size=64x36:rate=24",
+              "-t",
+              String.valueOf(PROFILE_5_PERIOD_SECONDS * PROFILE_5_SEGMENT_COUNT),
+              "-pix_fmt",
+              "yuv420p10le",
+              "-c:v",
+              "libx265",
+              "-x265-params",
+              "keyint=24:min-keyint=24:bframes=0:aud=1:log-level=error",
+              "-f",
+              "hevc"),
+          pictures);
+    }
+
+    return pictures;
   }
 
   // Each access unit starts at its delimiter. The last picture's RPU has no next picture to
@@ -2216,31 +2220,26 @@ class WorkerMediaSmokeTest {
 
   // 10-bit 4:2:0 HEVC without HDR signaling, the common real 10-bit source.
   private static synchronized Path tenBitSdrSource() throws Exception {
-    var source = tenBitSources.resolve("ten-bit-sdr.mp4");
-    if (Files.exists(source)) {
-      return source;
-    }
-
-    var partial = tenBitSources.resolve("ten-bit-sdr.partial.mp4");
-    runFfmpeg(
-        List.of(
-            "-f",
-            "lavfi",
-            "-i",
-            "testsrc=size=64x36:rate=24",
-            "-t",
-            String.valueOf(TEN_BIT_SOURCE_SECONDS),
-            "-c:v",
-            "libx265",
-            "-pix_fmt",
-            "yuv420p10le",
-            "-x265-params",
-            "log-level=error",
-            "-tag:v",
-            "hvc1"),
-        partial);
-    Files.move(partial, source);
-    return source;
+    return buildFixtureOnce(
+        tenBitSources.resolve("ten-bit-sdr.mp4"),
+        output ->
+            runFfmpeg(
+                List.of(
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc=size=64x36:rate=24",
+                    "-t",
+                    String.valueOf(TEN_BIT_SOURCE_SECONDS),
+                    "-c:v",
+                    "libx265",
+                    "-pix_fmt",
+                    "yuv420p10le",
+                    "-x265-params",
+                    "log-level=error",
+                    "-tag:v",
+                    "hvc1"),
+                output));
   }
 
   private static String pixelFormatOf(Path media) throws Exception {
@@ -3356,6 +3355,24 @@ class WorkerMediaSmokeTest {
     }
 
     return longSource;
+  }
+
+  // The build writes a sibling file, which takes the fixture's name only once the build succeeds.
+  private static synchronized Path buildFixtureOnce(Path fixture, FixtureBuild build)
+      throws Exception {
+    if (Files.exists(fixture)) {
+      return fixture;
+    }
+
+    var partial = fixture.resolveSibling("partial-" + fixture.getFileName());
+    build.writeTo(partial);
+    Files.move(partial, fixture);
+    return fixture;
+  }
+
+  @FunctionalInterface
+  private interface FixtureBuild {
+    void writeTo(Path output) throws Exception;
   }
 
   private static void runFfmpeg(List<String> arguments, Path output) throws Exception {
