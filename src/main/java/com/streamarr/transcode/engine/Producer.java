@@ -48,6 +48,8 @@ import lombok.extern.slf4j.Slf4j;
  * termination.
  */
 @Slf4j
+// The launch builder's parameters only pass through to FFmpeg and the assembler (worker #109).
+@SuppressWarnings("java:S6539")
 public final class Producer {
 
   // The server's segment cap; the reader admits no initialization segment or fragment above it,
