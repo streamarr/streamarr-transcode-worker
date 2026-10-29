@@ -80,6 +80,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.Duration;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -102,6 +103,7 @@ import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
+import lombok.Builder;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -3384,24 +3386,77 @@ class WorkerMediaSmokeTest {
                 arguments,
                 List.of(output.toString()))
             .flatMap(List::stream)
-            .toList());
+            .toList(),
+        output);
   }
 
-  // Returns the command's combined output after it exits successfully.
-  private static String runToCompletion(List<String> command) throws Exception {
+  // Returns the command's combined output after it exits successfully. A command still running
+  // after two minutes fails with a report of how far it got.
+  private static String runToCompletion(List<String> command, Path... outputs) throws Exception {
     var log = Files.createTempFile(longSources, command.getFirst(), ".log");
+    var started = System.nanoTime();
     var process =
         new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(log.toFile()).start();
     try {
-      assertThat(process.waitFor(2, TimeUnit.MINUTES))
-          .as(command.getFirst() + " finished")
-          .isTrue();
+      if (!process.waitFor(2, TimeUnit.MINUTES)) {
+        throw new AssertionError(
+            UnfinishedCommand.builder()
+                .command(command)
+                .process(process)
+                .ranFor(
+                    Duration.ofNanos(System.nanoTime() - started).truncatedTo(ChronoUnit.MILLIS))
+                .log(log)
+                .outputs(List.of(outputs))
+                .build()
+                .report());
+      }
+
       var output = Files.readString(log);
       assertThat(process.exitValue()).as(output).isZero();
       return output;
     } finally {
       // The process must end here, because buildFixtureOnce deletes a failed build's file next.
       process.destroyForcibly().onExit().join();
+    }
+  }
+
+  // A command that is still running, with what it has done so far: its run time and CPU time, the
+  // size of each output it writes, and the end of its log.
+  @Builder
+  private record UnfinishedCommand(
+      List<String> command, Process process, Duration ranFor, Path log, List<Path> outputs) {
+
+    private static final int LOG_TAIL_LINES = 40;
+
+    String report() throws IOException {
+      var report = new ArrayList<String>();
+      report.add("%s did not finish: %s".formatted(command.getFirst(), String.join(" ", command)));
+      report.add("It ran for %s and used %s of CPU time.".formatted(ranFor, cpuTime()));
+      for (var output : outputs) {
+        report.add(sizeOf(output));
+      }
+
+      report.add(sizeOf(log));
+      report.add("The end of its log:");
+      report.addAll(lastLines(log));
+      return String.join(System.lineSeparator(), report);
+    }
+
+    private String cpuTime() {
+      return process.info().totalCpuDuration().map(Duration::toString).orElse("an unknown amount");
+    }
+
+    private static String sizeOf(Path file) throws IOException {
+      if (Files.notExists(file)) {
+        return file + " does not exist";
+      }
+
+      return "%s holds %d bytes".formatted(file, Files.size(file));
+    }
+
+    private static List<String> lastLines(Path log) throws IOException {
+      var lines = new String(Files.readAllBytes(log), StandardCharsets.UTF_8).lines().toList();
+      return lines.subList(Math.max(0, lines.size() - LOG_TAIL_LINES), lines.size());
     }
   }
 
