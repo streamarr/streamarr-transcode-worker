@@ -903,7 +903,7 @@ class FfprobeExecutorKeyframeTest {
   void
       shouldReportTheKeyframesUnavailableWhenTheRecordedPacketScanOfAStreamThatReordersFramesFindsAKeyframeWhoseDemuxerGivesItNoPresentationTime(
           String recording) {
-    var report = recordedScan(recording).executor().probe(fixture("avi.avi"), packetScanRequest());
+    var report = recordedScan(recording).executor().probe(Path.of(recording), packetScanRequest());
 
     assertThat(report.result().getMedia().getKeyframes())
         .isEqualTo(
@@ -922,14 +922,15 @@ class FfprobeExecutorKeyframeTest {
       delimiter = '|',
       value = {"hevc-pir.hevc | 0", "avi.avi | 0, 18, 33, 20"})
   @DisplayName(
-      "Should report the scanned keyframe positions when the recorded packet scan reads a stream"
-          + " that does not reorder frames")
-  void
-      shouldReportTheScannedKeyframePositionsWhenTheRecordedPacketScanReadsAStreamThatDoesNotReorderFrames(
-          String recording, String deltas) {
+      "Should report the scanned keyframe positions when the recorded packet scan gives each"
+          + " keyframe both of its times")
+  void shouldReportTheScannedKeyframePositionsWhenTheRecordedPacketScanGivesEachKeyframeBothTimes(
+      String recording, String deltas) {
+    // These streams do not reorder frames, and FFmpeg fills the time their demuxer leaves out, so
+    // the probe's own rule for a missing time is left to the scripted scans.
     var expected = Arrays.stream(deltas.split(", ")).map(Long::valueOf).toList();
 
-    var report = recordedScan(recording).executor().probe(fixture("avi.avi"), packetScanRequest());
+    var report = recordedScan(recording).executor().probe(Path.of(recording), packetScanRequest());
 
     assertThat(report.result().getMedia().getKeyframes().getPositions().getSource())
         .isEqualTo(KeyframePositionSource.KEYFRAME_POSITION_SOURCE_PACKET_SCAN);
