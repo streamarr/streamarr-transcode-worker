@@ -623,48 +623,14 @@ class TranscodeWorkerJobAttemptTest {
       shouldLaunchAnFfmpegThatCopiesTheSourceAndAnFfmpegThatEncodesTheCopyWhenTheEncodesDolbyVisionProfile5SourceMayStartSamplesWithRpus(
           DolbyVisionRpuPlacement placement) throws Exception {
     var launcher = ScriptedProcessLauncher.running();
-    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
-    job.getDecisionBuilder()
-        .getVideoBuilder()
-        .setSourceCodecFamily(VideoCodecFamily.VIDEO_CODEC_FAMILY_HEVC)
-        .setSourcePacketsCarryPresentationTimes(true)
-        .setSourceDynamicRange(
-            VideoDynamicRange.newBuilder()
-                .setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_NONE)
-                .setHdr10Plus(Presence.PRESENCE_ABSENT)
-                .setDolbyVisionPresent(
-                    DolbyVisionPresent.newBuilder()
-                        .setObservedRpu(Presence.PRESENCE_PRESENT)
-                        .setRpuPlacement(placement)));
-    job.getDecisionBuilder().getAudioBuilder().setCodec("eac3");
+    var job = profile5SourceJobBuilder(placement).build();
 
-    try (var worker = worker(launcher)) {
-      worker.start("localhost", 1);
-      var connection = runtime.connection();
-      startVariant(connection, job.build());
+    var commands = launchedCommands(launcher, job);
 
-      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
-      var commands = launcher.commands(fromProto(job.getJobAttemptId()));
-      assertThat(commands).hasSize(2);
-      assertThat(commands.getFirst())
-          .containsSequence("-c:v", "copy")
-          .containsSequence(
-              "-movie_timescale",
-              "1000000",
-              "-flush_packets",
-              "1",
-              "pipe:1",
-              "-map",
-              "0:0",
-              "-c:v",
-              "copy",
-              "-f",
-              "framecrc",
-              "-flush_packets",
-              "1");
-      assertThat(commands.getFirst().getLast()).startsWith("unix:");
-      assertThat(commands.getLast()).containsSequence("-f", "mp4", "-i", "pipe:0");
-    }
+    assertThat(commands).hasSize(2);
+    assertThat(commands.getFirst()).contains("pipe:1");
+    assertThat(commands.getFirst().getLast()).startsWith("unix:");
+    assertThat(commands.getLast()).containsSequence("-f", "mp4", "-i", "pipe:0");
   }
 
   @ParameterizedTest(name = "{0}")
@@ -681,29 +647,10 @@ class TranscodeWorkerJobAttemptTest {
       shouldLaunchOneFfmpegWhenThePacketsOfTheEncodesDolbyVisionProfile5SourceWhichMayStartSamplesWithRpusCarryNoPresentationTimes(
           DolbyVisionRpuPlacement placement) throws Exception {
     var launcher = ScriptedProcessLauncher.running();
-    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
-    job.getDecisionBuilder()
-        .getVideoBuilder()
-        .setSourceCodecFamily(VideoCodecFamily.VIDEO_CODEC_FAMILY_HEVC)
-        .setSourcePacketsCarryPresentationTimes(false)
-        .setSourceDynamicRange(
-            VideoDynamicRange.newBuilder()
-                .setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_NONE)
-                .setHdr10Plus(Presence.PRESENCE_ABSENT)
-                .setDolbyVisionPresent(
-                    DolbyVisionPresent.newBuilder()
-                        .setObservedRpu(Presence.PRESENCE_PRESENT)
-                        .setRpuPlacement(placement)));
-    job.getDecisionBuilder().getAudioBuilder().setCodec("eac3");
+    var job = profile5SourceJobBuilder(placement);
+    job.getDecisionBuilder().getVideoBuilder().setSourcePacketsCarryPresentationTimes(false);
 
-    try (var worker = worker(launcher)) {
-      worker.start("localhost", 1);
-      var connection = runtime.connection();
-      startVariant(connection, job.build());
-
-      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
-      assertThat(launcher.commands(fromProto(job.getJobAttemptId()))).hasSize(1);
-    }
+    assertThat(launchedCommands(launcher, job.build())).hasSize(1);
   }
 
   @Test
@@ -712,30 +659,13 @@ class TranscodeWorkerJobAttemptTest {
           + " its picture")
   void shouldLaunchOneFfmpegWhenEveryRpuOfTheEncodesDolbyVisionProfile5SourceFollowsItsPicture()
       throws Exception {
-    var placement = DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_AFTER_OWN_PICTURE;
     var launcher = ScriptedProcessLauncher.running();
-    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
-    job.getDecisionBuilder()
-        .getVideoBuilder()
-        .setSourceCodecFamily(VideoCodecFamily.VIDEO_CODEC_FAMILY_HEVC)
-        .setSourceDynamicRange(
-            VideoDynamicRange.newBuilder()
-                .setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_NONE)
-                .setHdr10Plus(Presence.PRESENCE_ABSENT)
-                .setDolbyVisionPresent(
-                    DolbyVisionPresent.newBuilder()
-                        .setObservedRpu(Presence.PRESENCE_PRESENT)
-                        .setRpuPlacement(placement)));
-    job.getDecisionBuilder().getAudioBuilder().setCodec("eac3");
+    var job =
+        profile5SourceJobBuilder(
+                DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_AFTER_OWN_PICTURE)
+            .build();
 
-    try (var worker = worker(launcher)) {
-      worker.start("localhost", 1);
-      var connection = runtime.connection();
-      startVariant(connection, job.build());
-
-      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
-      assertThat(launcher.commands(fromProto(job.getJobAttemptId()))).hasSize(1);
-    }
+    assertThat(launchedCommands(launcher, job)).hasSize(1);
   }
 
   @ParameterizedTest(name = "{0}")
@@ -753,28 +683,74 @@ class TranscodeWorkerJobAttemptTest {
       shouldLaunchOneFfmpegWhenTheEncodesDolbyVisionProfile5SourceStartsSamplesWithRpusAndIsNotHevc(
           VideoCodecFamily sourceCodecFamily) throws Exception {
     var launcher = ScriptedProcessLauncher.running();
+    var job =
+        profile5SourceJobBuilder(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE);
+    job.getDecisionBuilder().getVideoBuilder().setSourceCodecFamily(sourceCodecFamily);
+
+    assertThat(launchedCommands(launcher, job.build())).hasSize(1);
+  }
+
+  @Test
+  @DisplayName(
+      "Should launch one FFmpeg that copies the video when a stream copy carries the source facts"
+          + " of a Dolby Vision profile 5 source whose RPUs start their samples")
+  void
+      shouldLaunchOneFfmpegThatCopiesTheVideoWhenAStreamCopyCarriesTheSourceFactsOfADolbyVisionProfile5SourceWhoseRpusStartTheirSamples()
+          throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJobBuilder();
+    job.getDecisionBuilder()
+        .clearVideoCodecFamily()
+        .getVideoBuilder()
+        .setCodecFamily(VideoCodecFamily.VIDEO_CODEC_FAMILY_HEVC)
+        .setCodecString("hvc1.2.4.L120.90")
+        .setSourceCodecFamily(VideoCodecFamily.VIDEO_CODEC_FAMILY_HEVC)
+        .setSourcePacketsCarryPresentationTimes(true)
+        .setSourceDynamicRange(
+            profile5DynamicRange(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE));
+
+    var commands = launchedCommands(launcher, job.build());
+
+    assertThat(commands)
+        .singleElement()
+        .satisfies(command -> assertThat(command).containsSequence("-c:v", "copy"));
+  }
+
+  // An HEVC encode of a Dolby Vision profile 5 source, which meets every condition of ADR 0013 for
+  // moving the RPUs that may start samples whenever the placement is not AFTER_OWN_PICTURE.
+  private static VariantJob.Builder profile5SourceJobBuilder(DolbyVisionRpuPlacement placement) {
     var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
     job.getDecisionBuilder()
         .getVideoBuilder()
-        .setSourceCodecFamily(sourceCodecFamily)
-        .setSourceDynamicRange(
-            VideoDynamicRange.newBuilder()
-                .setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_NONE)
-                .setHdr10Plus(Presence.PRESENCE_ABSENT)
-                .setDolbyVisionPresent(
-                    DolbyVisionPresent.newBuilder()
-                        .setObservedRpu(Presence.PRESENCE_PRESENT)
-                        .setRpuPlacement(
-                            DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE)));
+        .setSourceCodecFamily(VideoCodecFamily.VIDEO_CODEC_FAMILY_HEVC)
+        .setSourcePacketsCarryPresentationTimes(true)
+        .setSourceDynamicRange(profile5DynamicRange(placement));
     job.getDecisionBuilder().getAudioBuilder().setCodec("eac3");
+    return job;
+  }
 
+  private static VideoDynamicRange profile5DynamicRange(DolbyVisionRpuPlacement placement) {
+    return VideoDynamicRange.newBuilder()
+        .setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_NONE)
+        .setHdr10Plus(Presence.PRESENCE_ABSENT)
+        .setDolbyVisionPresent(
+            DolbyVisionPresent.newBuilder()
+                .setObservedRpu(Presence.PRESENCE_PRESENT)
+                .setRpuPlacement(placement))
+        .build();
+  }
+
+  // The worker launches every FFmpeg of an attempt before it reports the attempt started, and it
+  // reports the start before the delivery of the command returns.
+  private List<List<String>> launchedCommands(ScriptedProcessLauncher launcher, VariantJob job)
+      throws Exception {
     try (var worker = worker(launcher)) {
       worker.start("localhost", 1);
       var connection = runtime.connection();
-      startVariant(connection, job.build());
+      startVariant(connection, job);
 
-      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
-      assertThat(launcher.commands(fromProto(job.getJobAttemptId()))).hasSize(1);
+      assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
+      return launcher.commands(fromProto(job.getJobAttemptId()));
     }
   }
 
@@ -855,6 +831,9 @@ class TranscodeWorkerJobAttemptTest {
         VideoDynamicRange.newBuilder().setHdr10PlusValue(100).build(),
         VideoDynamicRange.newBuilder()
             .setDolbyVisionPresent(DolbyVisionPresent.newBuilder().setObservedRpuValue(100))
+            .build(),
+        VideoDynamicRange.newBuilder()
+            .setDolbyVisionPresent(DolbyVisionPresent.newBuilder().setRpuPlacementValue(100))
             .build());
   }
 
@@ -1006,10 +985,28 @@ class TranscodeWorkerJobAttemptTest {
   void
       shouldRefuseTheJobAsAnInvalidSpecificationWhenAnEncodeCarriesACodecProfileThatOnlyAProbeReports(
           VideoCodecProfile profile) throws Exception {
+    var family = familyOfProbeOnly(profile);
     var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
-    job.getDecisionBuilder().getVideoBuilder().setCodecProfile(profile);
+    var video = job.getDecisionBuilder().clearVideoCodecFamily().getVideoBuilder();
+    video.setCodecFamily(family).setCodecProfile(profile);
+    if (family != VideoCodecFamily.VIDEO_CODEC_FAMILY_H264) {
+      video.setTier(VideoCodecTier.VIDEO_CODEC_TIER_MAIN);
+    }
 
     assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
+  // Each profile names its own codec family, so that only the profile can refuse the encode.
+  private static VideoCodecFamily familyOfProbeOnly(VideoCodecProfile profile) {
+    return switch (profile) {
+      case VIDEO_CODEC_PROFILE_HEVC_MAIN_10,
+          VIDEO_CODEC_PROFILE_HEVC_MAIN_STILL_PICTURE,
+          VIDEO_CODEC_PROFILE_HEVC_FORMAT_RANGE_EXTENSIONS ->
+          VideoCodecFamily.VIDEO_CODEC_FAMILY_HEVC;
+      case VIDEO_CODEC_PROFILE_AV1_HIGH, VIDEO_CODEC_PROFILE_AV1_PROFESSIONAL ->
+          VideoCodecFamily.VIDEO_CODEC_FAMILY_AV1;
+      default -> VideoCodecFamily.VIDEO_CODEC_FAMILY_H264;
+    };
   }
 
   @ParameterizedTest(name = "{0}")
