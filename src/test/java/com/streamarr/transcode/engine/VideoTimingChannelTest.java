@@ -12,6 +12,7 @@ import java.nio.channels.SocketChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Duration;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -126,6 +127,13 @@ class VideoTimingChannelTest {
 
     assertEnds(Reason.END_OF_VIDEO_TIMING);
     await().atMost(LIMIT).until(() -> Files.notExists(directory));
+  }
+
+  @Test
+  @DisplayName("Should listen in a directory that only the worker's user can enter when opened")
+  void shouldListenInADirectoryThatOnlyTheWorkersUserCanEnterWhenOpened() throws IOException {
+    assertThat(Files.getPosixFilePermissions(socket().getParent()))
+        .isEqualTo(PosixFilePermissions.fromString("rwx------"));
   }
 
   private void assertEnds(Reason reason) {
