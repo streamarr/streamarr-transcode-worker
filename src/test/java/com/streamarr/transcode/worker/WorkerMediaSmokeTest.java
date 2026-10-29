@@ -570,6 +570,57 @@ class WorkerMediaSmokeTest {
         .satisfies(audio -> assertThat(audio.getCodec()).isEqualTo("aac"));
   }
 
+  @Test
+  @DisplayName(
+      "Should place media time zero at the earliest source stream when a stream copy maps only some"
+          + " of an MPEG-TS source's streams")
+  void
+      shouldPlaceMediaTimeZeroAtTheEarliestSourceStreamWhenAStreamCopyMapsOnlySomeOfAnMpegTsSourcesStreams()
+          throws Exception {
+    copyMedia();
+    // The video and the first audio stream start 0.5 s after a second audio stream that the job
+    // does not map.
+    var source = root.resolve("late-video.ts");
+    runFfmpeg(
+        List.of(
+            "-itsoffset",
+            "0.5",
+            "-i",
+            root.resolve("movie.mkv").toString(),
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=10",
+            "-map",
+            "0:v",
+            "-map",
+            "0:a",
+            "-map",
+            "1:a",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-f",
+            "mpegts"),
+        source);
+    var job = variantJobBuilder();
+    withVideo(job, copiedVideo(FIXTURE.codecString()));
+    job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
+    job.getExecutionBuilder().setMediaSegmentCount(FIXTURE_SEGMENT_COUNT);
+    job.getDecisionBuilder()
+        .setMode(TranscodeMode.TRANSCODE_MODE_REMUX)
+        .getAudioBuilder()
+        .setMode(AudioMode.AUDIO_MODE_COPY)
+        .setCodec("aac");
+
+    var uploads = execute(engine(realCapabilities()), root, job.build());
+
+    var media = playable(uploads.contentOf(uploads.names()));
+    assertThat(videoPackets(media).getFirst().decodeTime())
+        .isEqualByComparingTo(videoPacketsOnZeroBasedTimeline(source).getFirst().decodeTime());
+  }
+
   @ParameterizedTest
   @EnumSource(
       value = TranscodeMode.class,

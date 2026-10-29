@@ -1242,6 +1242,55 @@ class FfmpegCommandBuilderTest {
         .containsSequence("-avoid_negative_ts", "disabled");
   }
 
+  @ParameterizedTest(name = "{0}, start {1}")
+  @CsvSource({
+    "REMUX, 0",
+    "REMUX, 5",
+    "AUDIO_TRANSCODE, 0",
+    "AUDIO_TRANSCODE, 5",
+    "VIDEO_TRANSCODE, 0",
+    "VIDEO_TRANSCODE, 5",
+    "FULL_TRANSCODE, 0",
+    "FULL_TRANSCODE, 5"
+  })
+  @DisplayName(
+      "Should keep every source stream for media time zero when one FFmpeg reads the source,"
+          + " seeking or not")
+  void shouldKeepEverySourceStreamForMediaTimeZeroWhenOneFfmpegReadsTheSourceSeekingOrNot(
+      TranscodeMode mode, int startSequenceNumber) {
+    var cmd = command(request(mode).startSequenceNumber(startSequenceNumber).build(), "libx264");
+
+    assertThat(cmd).containsSequence("-discard", "none", "-i", "/media/movie.mkv");
+  }
+
+  @ParameterizedTest(name = "start {0}")
+  @ValueSource(ints = {0, 3})
+  @DisplayName(
+      "Should keep every source stream for media time zero in the copy when a profile 5 source's"
+          + " RPUs move, seeking or not")
+  void shouldKeepEverySourceStreamForMediaTimeZeroInTheCopyWhenAProfile5SourcesRpusMoveSeekingOrNot(
+      int startSequenceNumber) {
+    var request =
+        request(encoding(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE)))
+            .startSequenceNumber(startSequenceNumber)
+            .build();
+
+    var pipe = rpuMovingPipe(builder.buildPipeline(job(request, "libx264")));
+
+    assertThat(pipe.copyCommand()).containsSequence("-discard", "none", "-i", "/media/movie.mkv");
+  }
+
+  @Test
+  @DisplayName(
+      "Should read the copy's streams as the copy wrote them when a profile 5 source's RPUs move")
+  void shouldReadTheCopysStreamsAsTheCopyWroteThemWhenAProfile5SourcesRpusMove() {
+    var request = request(encoding(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE))).build();
+
+    var pipe = rpuMovingPipe(builder.buildPipeline(job(request, "libx264")));
+
+    assertThat(pipe.encodeCommand()).doesNotContain("-discard", "-start_at_zero");
+  }
+
   @Test
   @DisplayName("Should close GOPs when encoder is libx265")
   void shouldCloseGopsWhenEncoderIsLibx265() {
@@ -1491,6 +1540,8 @@ class FfmpegCommandBuilderTest {
             List.of(
                 "ffmpeg",
                 "-y",
+                "-discard",
+                "none",
                 "-i",
                 "/media/movie.mkv",
                 "-map",
@@ -1802,7 +1853,17 @@ class FfmpegCommandBuilderTest {
     var pipe = rpuMovingPipe(builder.buildPipeline(job(request, "libx264")));
 
     assertThat(pipe.copyCommand())
-        .containsSequence("ffmpeg", "-y", "-ss", "12", "-i", "/media/movie.mkv", "-map", "0:0")
+        .containsSequence(
+            "ffmpeg",
+            "-y",
+            "-ss",
+            "12",
+            "-discard",
+            "none",
+            "-i",
+            "/media/movie.mkv",
+            "-map",
+            "0:0")
         .containsSequence("-c:a", "aac", "-ac", "2", "-b:a", "128k", "-f", "mp4");
   }
 
