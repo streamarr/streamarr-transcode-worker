@@ -166,7 +166,7 @@ class TranscodeWorkerJobAttemptTest {
       var connection = runtime.connection();
       startVariant(connection, job.build());
 
-      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
       var command = launcher.command(fromProto(job.getJobAttemptId()));
       assertThat(command).containsSequence("-map", "0:2").doesNotContain("0:v:0", "0:v:2");
       assertThat(command.contains("-0:s")).isEqualTo(excludesSubtitles);
@@ -206,7 +206,7 @@ class TranscodeWorkerJobAttemptTest {
       var connection = runtime.connection();
       startVariant(connection, job.build());
 
-      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
       assertThat(launcher.command(fromProto(job.getJobAttemptId())))
           .containsSequence("-r:v:0", exactRate)
           .containsSequence("-g:v:0", expectedGop);
@@ -604,7 +604,7 @@ class TranscodeWorkerJobAttemptTest {
       var connection = runtime.connection();
       startVariant(connection, job.build());
 
-      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
       var command = launcher.command(fromProto(job.getJobAttemptId()));
       var filter = command.get(command.indexOf("-vf") + 1);
       assertThat(filter.contains("tonemapx=")).as(description).isEqualTo(toneMapped);
@@ -1090,7 +1090,7 @@ class TranscodeWorkerJobAttemptTest {
       var connection = runtime.connection();
       startVariant(connection, job.build());
 
-      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
       assertThat(launcher.command(fromProto(job.getJobAttemptId())))
           .containsSequence("-c:v", "libsvtav1");
     }
@@ -1115,7 +1115,7 @@ class TranscodeWorkerJobAttemptTest {
       var connection = runtime.connection();
       startVariant(connection, job.build());
 
-      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
       assertThat(launcher.command(fromProto(job.getJobAttemptId())))
           .containsSequence("-c:v", "libx265")
           .containsSequence("-profile:v", "main")
@@ -1135,7 +1135,7 @@ class TranscodeWorkerJobAttemptTest {
       var connection = runtime.connection();
       startVariant(connection, job.build());
 
-      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
       assertThat(launcher.command(fromProto(job.getJobAttemptId())))
           .containsSequence("-c:v", "libx264")
           .containsSequence("-profile:v", "high", "-level:v", "42");
@@ -1247,7 +1247,7 @@ class TranscodeWorkerJobAttemptTest {
       var connection = runtime.connection();
       startVariant(connection, job.build());
 
-      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
       assertThat(launcher.command(fromProto(job.getJobAttemptId())))
           .containsSequence("-c:v", "libx264", "-preset", presetName);
     }
@@ -1340,7 +1340,7 @@ class TranscodeWorkerJobAttemptTest {
       worker.start("localhost", 1);
       var connection = runtime.connection();
       startVariant(connection, first.build());
-      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
       startVariant(connection, replacement.build());
 
       awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_STARTED);
@@ -1368,7 +1368,7 @@ class TranscodeWorkerJobAttemptTest {
       var connection = runtime.connection();
       startVariant(connection, job.build());
 
-      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
       assertThat(launcher.command(fromProto(job.getJobAttemptId())))
           .containsSequence("-force_key_frames:0", "8,12,16");
     }
@@ -1396,7 +1396,7 @@ class TranscodeWorkerJobAttemptTest {
       var connection = runtime.connection();
       startVariant(connection, job.build());
 
-      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
       assertThat(launcher.command(fromProto(job.getJobAttemptId())))
           .containsSubsequence("-ss", "30", "-i");
     }
@@ -1426,7 +1426,7 @@ class TranscodeWorkerJobAttemptTest {
       var connection = runtime.connection();
       startVariant(connection, job.build());
 
-      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
       assertThat(launcher.command(fromProto(job.getJobAttemptId())))
           .containsSubsequence("-ss", "31.28125", "-i");
     }
