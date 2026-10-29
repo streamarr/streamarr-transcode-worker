@@ -175,6 +175,28 @@ class FfprobeExecutorSeiTest {
 
     @ParameterizedTest(name = "{0}")
     @EnumSource(Coding.class)
+    @DisplayName(
+        "Should report HDR10+ absent when zero bytes follow an SEI NAL unit's trailing bits")
+    void shouldReportHdr10PlusAbsentWhenZeroBytesFollowAnSeiNalUnitsTrailingBits(Coding coding) {
+      // FFmpeg drops a NAL unit's trailing zero bytes before it looks for the RBSP trailing bits.
+      var video = coding.probed(coding.sample(coding.sei(OTHER_T35) + " 00 00"));
+
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Coding.class)
+    @DisplayName(
+        "Should report HDR10+ absent when a T.35 message is shorter than the HDR10+ identifier")
+    void shouldReportHdr10PlusAbsentWhenAT35MessageIsShorterThanTheHdr10PlusIdentifier(
+        Coding coding) {
+      var video = coding.probed(coding.sample(coding.sei("04 05 b5 00 3c 00 01")));
+
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Coding.class)
     @DisplayName("Should leave HDR10+ unspecified when bytes past the trailing bits follow")
     void shouldLeaveHdr10PlusUnspecifiedWhenBytesPastTheTrailingBitsFollow(Coding coding) {
       var video = coding.probed(coding.sample(coding.sei(LIGHT_LEVEL) + " 01"));
@@ -601,6 +623,45 @@ class FfprobeExecutorSeiTest {
 
     @ParameterizedTest(name = "{0} payloadType {1}")
     @CsvSource({"H264, 1e, 80", "HEVC, 85, 20"})
+    @DisplayName("Should report HDR10+ absent when payload alignment bits end a nesting message")
+    void shouldReportHdr10PlusAbsentWhenPayloadAlignmentBitsEndANestingMessage(
+        Coding coding, String payloadType, String header) {
+      var video =
+          coding.probed(coding.sample(coding.sei(nesting(payloadType, header, OTHER_T35 + " 80"))));
+
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
+    }
+
+    @ParameterizedTest(name = "{0} payloadType {1}")
+    @CsvSource({"H264, 1e, 80", "HEVC, 85, 20"})
+    @DisplayName(
+        "Should leave HDR10+ unspecified when a byte other than the alignment bits ends a nesting"
+            + " message")
+    void shouldLeaveHdr10PlusUnspecifiedWhenAByteOtherThanTheAlignmentBitsEndsANestingMessage(
+        Coding coding, String payloadType, String header) {
+      var video =
+          coding.probed(coding.sample(coding.sei(nesting(payloadType, header, OTHER_T35 + " 01"))));
+
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+    }
+
+    @ParameterizedTest(name = "{0} payloadType {1}")
+    @CsvSource({"H264, 1e, 80", "HEVC, 85, 20"})
+    @DisplayName(
+        "Should leave HDR10+ unspecified when it follows a nested message whose payloadType is"
+            + " 0x80")
+    void shouldLeaveHdr10PlusUnspecifiedWhenItFollowsANestedMessageWhosePayloadTypeIs0x80(
+        Coding coding, String payloadType, String header) {
+      // Only a last byte of 0x80 is alignment bits; here it starts an empty message.
+      var video =
+          coding.probed(
+              coding.sample(coding.sei(nesting(payloadType, header, "80 00 " + HDR10_PLUS))));
+
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+    }
+
+    @ParameterizedTest(name = "{0} payloadType {1}")
+    @CsvSource({"H264, 1e, 80", "HEVC, 85, 20"})
     @DisplayName("Should leave HDR10+ unspecified when a nested message runs past its nesting one")
     void shouldLeaveHdr10PlusUnspecifiedWhenANestedMessageRunsPastItsNestingOne(
         Coding coding, String payloadType, String header) {
@@ -788,20 +849,61 @@ class FfprobeExecutorSeiTest {
       assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(1000);
     }
 
-    @ParameterizedTest(name = "{1}")
-    @CsvSource({
-      "'89 04 33 c2 86 c4', too short",
-      "'89 18 c3 51 86 c4 1d 4c 0b b8 84 d0 3e 80 3d 13 40 42 00 98 96 80 00 00 00 32',"
-          + " a primary beyond 50000"
-    })
-    @DisplayName("Should mark the mastering display omitted when its message cannot be reported")
-    void shouldMarkTheMasteringDisplayOmittedWhenItsMessageCannotBeReported(
-        String message, String reason) {
-      var video = Coding.HEVC.probed(Coding.HEVC.sample(Coding.HEVC.sei(message, LIGHT_LEVEL)));
+    @Test
+    @DisplayName("Should mark the mastering display omitted when its message is too short")
+    void shouldMarkTheMasteringDisplayOmittedWhenItsMessageIsTooShort() {
+      var video =
+          Coding.HEVC.probed(Coding.HEVC.sample(Coding.HEVC.sei("89 04 33 c2 86 c4", LIGHT_LEVEL)));
 
       assertThat(video.hasMasteringDisplay()).isFalse();
       assertThat(video.getMasteringDisplayOmitted()).isTrue();
       assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(1000);
+    }
+
+    @ParameterizedTest(name = "{1}")
+    @CsvSource({
+      "0, green x",
+      "2, green y",
+      "4, blue x",
+      "6, blue y",
+      "8, red x",
+      "10, red y",
+      "12, white point x",
+      "14, white point y"
+    })
+    @DisplayName(
+        "Should mark the mastering display omitted when a chromaticity coordinate lies beyond"
+            + " 50000")
+    void shouldMarkTheMasteringDisplayOmittedWhenAChromaticityCoordinateLiesBeyond50000(
+        int offset, String coordinate) {
+      var message = masteringDisplayWithCoordinate(offset, 50_001);
+
+      var video = Coding.HEVC.probed(Coding.HEVC.sample(Coding.HEVC.sei(message, LIGHT_LEVEL)));
+
+      assertThat(video.hasMasteringDisplay()).as(coordinate).isFalse();
+      assertThat(video.getMasteringDisplayOmitted()).as(coordinate).isTrue();
+    }
+
+    @ParameterizedTest(name = "{1}")
+    @CsvSource({"0, green x", "2, green y"})
+    @DisplayName("Should report the mastering display when a chromaticity coordinate is 50000")
+    void shouldReportTheMasteringDisplayWhenAChromaticityCoordinateIs50000(
+        int offset, String coordinate) {
+      var message = masteringDisplayWithCoordinate(offset, 50_000);
+
+      var video = Coding.HEVC.probed(Coding.HEVC.sample(Coding.HEVC.sei(message)));
+
+      assertThat(video.hasMasteringDisplay()).as(coordinate).isTrue();
+      assertThat(video.getMasteringDisplayOmitted()).as(coordinate).isFalse();
+    }
+
+    /** {@link #MASTERING_DISPLAY} with the coordinate at the payload's byte offset replaced. */
+    private static String masteringDisplayWithCoordinate(int offset, int value) {
+      var message = HexFormat.ofDelimiter(" ").parseHex(MASTERING_DISPLAY);
+      // The payloadType and the payloadSize lead the payload.
+      message[2 + offset] = (byte) (value >> 8);
+      message[3 + offset] = (byte) value;
+      return HexFormat.ofDelimiter(" ").formatHex(message);
     }
 
     @Test
