@@ -86,6 +86,7 @@ public final class ScriptedProcess extends Process {
   private int position;
   private int errorPosition;
   private boolean streamsClosed;
+  private boolean errorOutputClosed;
   private int endOffset;
   private boolean resumed;
   private boolean pauseReachedFlag;
@@ -275,15 +276,31 @@ public final class ScriptedProcess extends Process {
 
   @Override
   public void destroy() {
-    terminate();
+    synchronized (this) {
+      terminate();
+      closeErrorOutput();
+    }
+
     closeStreams();
   }
 
   @Override
   public Process destroyForcibly() {
-    kill();
+    synchronized (this) {
+      kill();
+      closeErrorOutput();
+    }
+
     closeStreams();
     return this;
+  }
+
+  // The JDK's destroy signals the process and then closes its streams, usually before its reaper
+  // sees the exit. A reader waiting for more error output then fails with "Stream closed" instead
+  // of reaching the end, so the fake closes the error output together with the signal.
+  private void closeErrorOutput() {
+    errorOutputClosed = true;
+    notifyAll();
   }
 
   private synchronized void terminate() {
@@ -458,11 +475,11 @@ public final class ScriptedProcess extends Process {
 
   private synchronized int readErrorOutput(byte[] buffer, int offset, int length)
       throws IOException {
-    while (!streamsClosed && errorPosition >= stderr.length && !exit.isDone()) {
+    while (!errorOutputClosed && errorPosition >= stderr.length && !exit.isDone()) {
       awaitChange("interrupted while reading the scripted error output");
     }
 
-    if (streamsClosed) {
+    if (errorOutputClosed) {
       throw streamClosed();
     }
 
