@@ -22,14 +22,17 @@ import build.buf.gen.streamarr.transcode.v1.VideoDynamicRange.DolbyVisionCase;
 import com.streamarr.transcode.probe.RecordedFfprobe.Answers;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.stream.Stream;
 import lombok.Builder;
 import lombok.NonNull;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Named;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 @Tag("UnitTest")
@@ -127,6 +130,30 @@ class FfprobeExecutorAv1MetadataTest {
       var video = probed(AV1C, TEMPORAL_DELIMITER + " 30 10 00 00 80");
 
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
+    }
+
+    @Test
+    @DisplayName(
+        "Should report HDR10+ absent when a metadata OBU of a type that the probe does not read"
+            + " lacks trailing bits")
+    void
+        shouldReportHdr10PlusAbsentWhenAMetadataObuOfATypeThatTheProbeDoesNotReadLacksTrailingBits() {
+      // metadata_type 3, scalability: the walk needs only its metadata_type to end inside the OBU.
+      var video = probed(AV1C, temporalUnit(obu(5, "03 01 02")));
+
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
+    }
+
+    @Test
+    @DisplayName("Should leave HDR10+ unspecified when the probe reads no first frames")
+    void shouldLeaveHdr10PlusUnspecifiedWhenTheProbeReadsNoFirstFrames() {
+      // Without a frame read, the probe reads neither the extradata nor the packets.
+      var video =
+          probe(answers(record(HDR10_PLUS)).firstPackets(packetsUpTo(3, temporalUnit())).build())
+              .getStreams(0);
+
+      assertThat(video.getFirstFramesRead()).isFalse();
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
     }
 
     @ParameterizedTest(name = "{1}")
@@ -274,10 +301,52 @@ class FfprobeExecutorAv1MetadataTest {
     }
 
     @Test
-    @DisplayName("Should report the RPU without a header when its EMDF container is malformed")
-    void shouldReportTheRpuWithoutAHeaderWhenItsEmdfContainerIsMalformed() {
+    @DisplayName(
+        "Should read the RPU header when its EMDF payload size takes a second group of bits")
+    void shouldReadTheRpuHeaderWhenItsEmdfPayloadSizeTakesASecondGroupOfBits() {
+      // variable_bits(8) reads the groups 1 and 0 as (1 + 1) * 256 + 0: the largest payload that
+      // FFmpeg opens.
+      var container =
+          profile100Emdf().rpu(profile100RpuOf(512)).payloadSizeGroups(List.of(1, 0)).build();
+
+      var video = probed(AV1C, temporalUnit(rpuObu(container)));
+
+      assertThat(video.getDynamicRange().getDolbyVisionPresent().getFirstRpuHeader())
+          .isEqualTo(PROFILE_10_0_HEADER);
+    }
+
+    static Stream<Named<String>> containersThatFfmpegCannotOpen() {
+      return Stream.of(
+          Named.of("a header other than EMDF's", profile100Emdf().header(0x01BE6840).build().hex()),
+          Named.of(
+              "a payload of 513 bytes",
+              profile100Emdf()
+                  .rpu(profile100RpuOf(513))
+                  .payloadSizeGroups(List.of(1, 1))
+                  .build()
+                  .hex()),
+          // Without its bound, the size would wrap past 64 bits to the RPU's 12 bytes.
+          Named.of(
+              "a payload size of more than 64 bits",
+              profile100Emdf()
+                  .payloadSizeGroups(List.of(0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFF, 12))
+                  .build()
+                  .hex()),
+          Named.of(
+              "an emdf_protection other than 0x400",
+              profile100Emdf().protection(0x401).build().hex()),
+          Named.of(
+              "a container that ends inside its header",
+              profile100Emdf().build().hex().substring(0, 8)));
+    }
+
+    @ParameterizedTest
+    @MethodSource("containersThatFfmpegCannotOpen")
+    @DisplayName(
+        "Should report the RPU without a header when FFmpeg cannot open its EMDF container")
+    void shouldReportTheRpuWithoutAHeaderWhenFfmpegCannotOpenItsEmdfContainer(String container) {
       // FFmpeg drops an RPU whose container it cannot open.
-      var video = probed(AV1C, temporalUnit(rpuObu(profile100Emdf().header(0x01BE6840).build())));
+      var video = probed(AV1C, temporalUnit(metadata(4, RPU_PREFIX + " " + container)));
 
       var present = video.getDynamicRange().getDolbyVisionPresent();
       assertThat(present.getObservedRpu()).isEqualTo(Presence.PRESENCE_PRESENT);
@@ -414,6 +483,39 @@ class FfprobeExecutorAv1MetadataTest {
       assertThat(video.hasContentLightLevel()).isFalse();
       assertThat(video.getContentLightLevelOmitted()).isTrue();
       assertThat(video.getMasteringDisplayOmitted()).isFalse();
+    }
+
+    @Test
+    @DisplayName("Should read the content light level when zero bytes follow its trailing bits")
+    void shouldReadTheContentLightLevelWhenZeroBytesFollowItsTrailingBits() {
+      var video = probed(AV1C, temporalUnit(obu(5, "01 03 e8 01 90 80 00 00")));
+
+      assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(1000);
+      assertThat(video.getContentLightLevelOmitted()).isFalse();
+    }
+
+    @Test
+    @DisplayName("Should mark the content light level omitted when its OBU lacks its trailing bits")
+    void shouldMarkTheContentLightLevelOmittedWhenItsObuLacksItsTrailingBits() {
+      // Its 4 values would convert, but the OBU does not end where they do.
+      var video = probed(AV1C, temporalUnit(obu(5, "01 03 e8 01 90")));
+
+      assertThat(video.hasContentLightLevel()).isFalse();
+      assertThat(video.getContentLightLevelOmitted()).isTrue();
+    }
+
+    @Test
+    @DisplayName(
+        "Should leave the content light level absent and unflagged when the probe reads no first"
+            + " frames")
+    void shouldLeaveTheContentLightLevelAbsentAndUnflaggedWhenTheProbeReadsNoFirstFrames() {
+      var video =
+          probe(answers(record(LIGHT_LEVEL)).firstPackets(packetsUpTo(3, temporalUnit())).build())
+              .getStreams(0);
+
+      assertThat(video.getFirstFramesRead()).isFalse();
+      assertThat(video.hasContentLightLevel()).isFalse();
+      assertThat(video.getContentLightLevelOmitted()).isFalse();
     }
 
     @Test
@@ -610,7 +712,7 @@ class FfprobeExecutorAv1MetadataTest {
   /** An OBU of the type with a size field. */
   private static String obu(int type, String payload) {
     var length = HexFormat.ofDelimiter(" ").parseHex(payload).length;
-    return "%02x %02x %s".formatted((type << 3) | 0x02, length, payload).trim();
+    return "%02x %s %s".formatted((type << 3) | 0x02, leb128(length), payload).trim();
   }
 
   /** A metadata OBU of the type, whose values the trailing bits end. */
@@ -622,7 +724,28 @@ class FfprobeExecutorAv1MetadataTest {
   private static String layered(int metadataType, String values) {
     var payload = "%02x %s 80".formatted(metadataType, values);
     var length = HexFormat.ofDelimiter(" ").parseHex(payload).length;
-    return "2e 00 %02x %s".formatted(length, payload);
+    return "2e 00 %s %s".formatted(leb128(length), payload);
+  }
+
+  /**
+   * The value in leb128: 7 bits a byte, least significant first, the high bit set on all but the
+   * last.
+   */
+  private static String leb128(int value) {
+    var bytes = new StringBuilder();
+    var rest = value;
+    while (rest >= 0x80) {
+      bytes.append("%02x ".formatted((rest & 0x7F) | 0x80));
+      rest >>= 7;
+    }
+
+    return bytes.append("%02x".formatted(rest)).toString();
+  }
+
+  /** The profile 10.0 RPU, padded with zero bytes to the length. */
+  private static String profile100RpuOf(int length) {
+    var padding = length - HexFormat.ofDelimiter(" ").parseHex(PROFILE_10_0_RPU).length;
+    return PROFILE_10_0_RPU + " 00".repeat(padding);
   }
 
   /** A profile 10.0 RPU in the EMDF container that FFmpeg opens. */
