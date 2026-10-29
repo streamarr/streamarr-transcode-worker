@@ -182,9 +182,9 @@ class FragmentedMp4RpuMoverTest {
     "nuh_layer_id 63, 03 F9 AF 01"
   })
   @DisplayName(
-      "Should move the RPU that a slice which FFmpeg's splitter drops precedes behind the previous"
-          + " picture")
-  void shouldMoveTheRpuThatASliceWhichFfmpegsSplitterDropsPrecedesBehindThePreviousPicture(
+      "Should move an RPU behind the previous picture when a slice that FFmpeg's splitter drops"
+          + " precedes it")
+  void shouldMoveAnRpuBehindThePreviousPictureWhenASliceThatFfmpegsSplitterDropsPrecedesIt(
       String description, String dropped) throws IOException {
     var copy =
         stream(
@@ -237,10 +237,10 @@ class FragmentedMp4RpuMoverTest {
 
   @Test
   @DisplayName(
-      "Should move an RPU behind the NAL unit that a start code inside a dropped NAL unit's length"
-          + " begins, which FFmpeg's splitter hands to the decoder")
+      "Should move an RPU to the end of its sample when a start code inside a dropped NAL unit's"
+          + " length begins a NAL unit that reaches the decoder")
   void
-      shouldMoveAnRpuBehindTheNalUnitThatAStartCodeInsideADroppedNalUnitsLengthBeginsWhichFfmpegsSplitterHandsToTheDecoder()
+      shouldMoveAnRpuToTheEndOfItsSampleWhenAStartCodeInsideADroppedNalUnitsLengthBeginsANalUnitThatReachesTheDecoder()
           throws IOException {
     // FFmpeg ends the dropped NAL unit at the start code and reads the AUD that follows it.
     var embedding = unit("C6 01 50 00 00 01 46 01 50");
@@ -422,10 +422,9 @@ class FragmentedMp4RpuMoverTest {
 
   @Test
   @DisplayName(
-      "Should keep the bytes of a sample that holds a length of 0, which makes FFmpeg reject the"
-          + " whole sample")
-  void shouldKeepTheBytesOfASampleThatHoldsALengthOf0WhichMakesFfmpegRejectTheWholeSample()
-      throws IOException {
+      "Should keep a sample's bytes when it holds a length of 0 that FFmpeg's splitter reads, which"
+          + " rejects the whole sample")
+  void shouldKeepASamplesBytesWhenItHoldsALengthOf0ThatFfmpegsSplitterReads() throws IOException {
     var rejected = sample(rpu(0), slice(1), u32(0), aud());
     var copy =
         stream(
@@ -579,8 +578,12 @@ class FragmentedMp4RpuMoverTest {
 
   @ParameterizedTest(name = "{0}-byte lengths")
   @ValueSource(ints = {1, 2})
-  @DisplayName("Should delimit NAL units by the length size that the hvcC declares")
-  void shouldDelimitNalUnitsByTheLengthSizeThatTheHvcCDeclares(int lengthSize) throws IOException {
+  @DisplayName(
+      "Should delimit NAL units by the length size that the hvcC declares when it declares lengths"
+          + " shorter than 4 bytes")
+  void
+      shouldDelimitNalUnitsByTheLengthSizeThatTheHvcCDeclaresWhenItDeclaresLengthsShorterThan4Bytes(
+          int lengthSize) throws IOException {
     var shortRpu = rpuUnit().lengthSize(lengthSize).picture(7).build();
     var shortSlice = sliceUnit().lengthSize(lengthSize).picture(1).build();
     var copy =
@@ -812,10 +815,8 @@ class FragmentedMp4RpuMoverTest {
 
   @Test
   @DisplayName(
-      "Should allocate no more for a length that holds a start code every 3 bytes than for one of"
-          + " zeros")
-  void shouldAllocateNoMoreForALengthThatHoldsAStartCodeEvery3BytesThanForOneOfZeros()
-      throws IOException {
+      "Should allocate no more than for zeros when a length holds a start code every 3 bytes")
+  void shouldAllocateNoMoreThanForZerosWhenALengthHoldsAStartCodeEvery3Bytes() throws IOException {
     var lengthBytes = 3 * 1024 * 1024;
     var startCodes = new byte[lengthBytes];
     for (var index = 2; index < lengthBytes; index += 3) {

@@ -33,9 +33,9 @@ class FramecrcTimingsTest {
 
   @Test
   @DisplayName(
-      "Should read whether each record is a keyframe, and its duration in the header's time base,"
-          + " whatever side data follows them")
-  void shouldReadWhetherEachRecordIsAKeyframeAndItsDurationInTheHeadersTimeBase()
+      "Should read each record's keyframe flag and duration in the header's time base when side"
+          + " data follows them")
+  void shouldReadEachRecordsKeyframeFlagAndDurationInTheHeadersTimeBaseWhenSideDataFollowsThem()
       throws IOException {
     var timings =
         timingsOf(
