@@ -203,12 +203,17 @@ class FfprobeExecutorCodecStringTest {
       assertThat(video.hasCodecString()).isFalse();
     }
 
-    @Test
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("videoFixturesWithoutRecordParameterSets")
     @DisplayName("Should report no codec string when the parameter sets are only in samples")
-    void shouldReportNoCodecStringWhenTheParameterSetsAreOnlyInSamples() {
-      var video = streamOf("mp4-dovi-p5-hev1.mp4", 0);
+    void shouldReportNoCodecStringWhenTheParameterSetsAreOnlyInSamples(String fixture) {
+      var video = streamOf(fixture, 0);
 
       assertThat(video.hasCodecString()).isFalse();
+    }
+
+    private static Stream<String> videoFixturesWithoutRecordParameterSets() {
+      return VIDEO_FIXTURES_WITHOUT_RECORD_PARAMETER_SETS.stream().sorted();
     }
 
     private static Stream<Arguments> absentOrIncompleteParameterSets() {

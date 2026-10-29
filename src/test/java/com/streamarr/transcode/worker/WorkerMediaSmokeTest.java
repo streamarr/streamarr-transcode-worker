@@ -100,7 +100,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Function;
-import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
@@ -1092,14 +1091,16 @@ class WorkerMediaSmokeTest {
         execute(
             engine(
                 softwareCapabilities(),
-                capturingCommands(new ProcessBuilderLauncher(), aheadCommands)),
+                capturingCommands(
+                    withX264ThreadsOfOne(new ProcessBuilderLauncher()), aheadCommands)),
             rpusAhead.getParent(),
             profile5Job(rpusAhead, layout.placement(), startSequenceNumber).build());
     var fromRpusBehind =
         execute(
             engine(
                 softwareCapabilities(),
-                capturingCommands(new ProcessBuilderLauncher(), behindCommands)),
+                capturingCommands(
+                    withX264ThreadsOfOne(new ProcessBuilderLauncher()), behindCommands)),
             rpusBehind.getParent(),
             profile5Job(
                     rpusBehind,
@@ -1220,9 +1221,7 @@ class WorkerMediaSmokeTest {
         .setTargetSegmentDurationSeconds(PROFILE_5_PERIOD_SECONDS)
         .setMediaSegmentCount(PROFILE_5_SEGMENT_COUNT);
 
-    var fromTheCopy =
-        assertEncodeOfTheCopyUploadsWhatOneFfmpegEncodes(
-            source, job, WorkerMediaSmokeTest::withX264ThreadsOfOne);
+    var fromTheCopy = assertEncodeOfTheCopyUploadsWhatOneFfmpegEncodes(source, job);
 
     assertThat(dimensionsOf(fromTheCopy)).isEqualTo(change.encodedDimensions());
   }
@@ -1421,21 +1420,15 @@ class WorkerMediaSmokeTest {
         .flatMap(mode -> Stream.of(0, 2).map(start -> Arguments.of(mode, start)));
   }
 
+  // Runs the profile 5 job once as one FFmpeg, whose source's RPUs follow their pictures, and once
+  // as the encode of the source's copy, whose RPUs may start samples, each with libx264 on one
+  // thread, and compares their packets.
   private MediaUploads assertEncodeOfTheCopyUploadsWhatOneFfmpegEncodes(
       Path source, VariantJob.Builder job) throws Exception {
-    return assertEncodeOfTheCopyUploadsWhatOneFfmpegEncodes(source, job, UnaryOperator.identity());
-  }
-
-  // Runs the profile 5 job once as one FFmpeg, whose source's RPUs follow their pictures, and once
-  // as the encode of the source's copy, whose RPUs may start samples, each through a launcher the
-  // adjustment wraps, and compares their packets.
-  private MediaUploads assertEncodeOfTheCopyUploadsWhatOneFfmpegEncodes(
-      Path source, VariantJob.Builder job, UnaryOperator<ProcessLauncher> adjustment)
-      throws Exception {
     withProfile5Source(job, DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_AFTER_OWN_PICTURE);
     var oneFfmpeg =
         execute(
-            engine(softwareCapabilities(), adjustment.apply(new ProcessBuilderLauncher())),
+            engine(softwareCapabilities(), withX264ThreadsOfOne(new ProcessBuilderLauncher())),
             source.getParent(),
             job.build());
     withProfile5Source(job, DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE);
@@ -1446,7 +1439,7 @@ class WorkerMediaSmokeTest {
         execute(
             engine(
                 softwareCapabilities(),
-                capturingCommands(adjustment.apply(new ProcessBuilderLauncher()), commands)),
+                capturingCommands(withX264ThreadsOfOne(new ProcessBuilderLauncher()), commands)),
             source.getParent(),
             job.build());
 

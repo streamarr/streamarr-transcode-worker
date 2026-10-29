@@ -39,7 +39,6 @@ import static com.streamarr.transcode.engine.Mp4Stream.readerOf;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
-import static org.awaitility.Awaitility.await;
 
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.engine.IsoBoxes.Track;
@@ -269,7 +268,7 @@ class FragmentedMp4ReaderTest {
 
     try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
       var reading = executor.submit(reader::next);
-      await().atMost(Duration.ofSeconds(10)).until(process::hasReachedPause);
+      assertThat(process.pauseReached()).succeedsWithin(Duration.ofSeconds(10));
 
       reader.cancel();
       process.resume();

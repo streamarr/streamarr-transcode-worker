@@ -54,7 +54,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import tools.jackson.databind.ObjectMapper;
@@ -496,19 +495,36 @@ class TranscodeWorkerProbeTest {
     }
   }
 
-  @ParameterizedTest
-  @CsvSource({
-    "5, PROBE_FAILURE_INVALID_MEDIA",
-    "1, PROBE_FAILURE_UNSUPPORTED_VERSION",
-    "4, PROBE_FAILURE_UNSUPPORTED_VERSION",
-    "6, PROBE_FAILURE_UNSUPPORTED_VERSION"
-  })
-  @DisplayName("Should retain typed probe failures when the worker rejects media or a version")
-  void shouldRetainTypedProbeFailuresWhenTheWorkerRejectsMediaOrAVersion(
-      int version, ProbeFailure expectedFailure) throws Exception {
+  @Test
+  @DisplayName(
+      "Should fail the probe as invalid media when ffprobe reports invalid data for the version the"
+          + " worker answers")
+  void shouldFailTheProbeAsInvalidMediaWhenFfprobeReportsInvalidDataForTheVersionTheWorkerAnswers()
+      throws Exception {
+    var request = requestBuilder().setProbeVersion(FfprobeExecutor.PROBE_VERSION).build();
+
+    assertThat(resultsWhenFfprobeReportsInvalidData(request))
+        .containsExactly(failure(request, ProbeFailure.PROBE_FAILURE_INVALID_MEDIA));
+  }
+
+  @ParameterizedTest(name = "probe version {0}")
+  @ValueSource(ints = {1, 4, 6})
+  @DisplayName(
+      "Should fail the probe as an unsupported version when the request names a version the worker"
+          + " does not answer")
+  void shouldFailTheProbeAsAnUnsupportedVersionWhenTheRequestNamesAVersionTheWorkerDoesNotAnswer(
+      int version) throws Exception {
+    var request = requestBuilder().setProbeVersion(version).build();
+
+    assertThat(resultsWhenFfprobeReportsInvalidData(request))
+        .containsExactly(failure(request, ProbeFailure.PROBE_FAILURE_UNSUPPORTED_VERSION));
+  }
+
+  // The worker's results for the probe when ffprobe would fail with AVERROR_INVALIDDATA.
+  private List<ProbeAttemptResult> resultsWhenFfprobeReportsInvalidData(ProbeRequest request)
+      throws Exception {
     Files.writeString(tempDir.resolve("movie.mkv"), "media");
     var runtime = new ScriptedWorkerRuntime();
-    var request = requestBuilder().setProbeVersion(version).build();
     var producer =
         new FfprobeExecutor(
             new ObjectMapper(),
@@ -526,7 +542,7 @@ class TranscodeWorkerProbeTest {
       start(runtime.connection(), request);
       runtime.probes().drain();
 
-      assertThat(runtime.connection().results()).containsExactly(failure(request, expectedFailure));
+      return runtime.connection().results();
     }
   }
 

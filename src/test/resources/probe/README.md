@@ -60,7 +60,7 @@ from its lavfi test sources. No file comes from a media library.
 | `mp4-dovi-p5-dvh1.mp4.json` | Local sample: Dolby Vision profile 5 under `dvh1` with a `dvcC` record and no transfer tag (see Sources) |
 | `mp4-dovi-p5-dvh1-no-record.mp4.json` | Local sample: the same file with its record removed |
 | `mp4-dovi-p81.mp4.json` | Local sample: Dolby Vision profile 8.1 under `hvc1`, PQ (see Sources) |
-| `mp4-dovi-p82.mp4.json` | Local sample: Dolby Vision profile 8.2 under `hvc1`, BT.709, made by adding a `dvvC` record to an SDR HEVC encode |
+| `mp4-dovi-p82.mp4.json` | Dolby Vision profile 8.2 under `hvc1`, synthesized from no third-party bytes: six frames of FFmpeg's `testsrc2` pattern at 64x64 and 24 fps, which x265 3.6 (Alpine's `x265=3.6-r0`) encodes as 10-bit Main 10 tagged BT.709 with an RPU after each picture. dovi_tool 2.3.4's profile 8.1 generator made the RPUs, and x265 signals profile 8.2. GPAC's MP4Box added a `dvvC` record that names profile 8, level 1 and compatibility identifier 2. The script pins every image and checks dovi_tool's SHA-256 |
 | `mp4-dovi-p84-hlg.mp4.json` | Local sample: Dolby Vision profile 8.4 under `hvc1`, HLG (see Sources) |
 | `mp4-dovi-p9-avc1.mp4.json` | Dolby Vision profile 9 under `avc1`: one second of 8-bit H.264 at 1080p24 tagged BT.709, after each picture of which `insert-avc-rpus.py` put an RPU that `dovi_tool generate` made, with a `dvvC` record that GPAC's MP4Box added |
 | `mp4-dovi-p9-dva1.mp4.json` | The same stream, to which MP4Box gave a `dva1` sample entry |
@@ -88,7 +88,9 @@ from its lavfi test sources. No file comes from a media library.
 | `mov-phone-60.mov.json` | Local sample: a phone camera original at 60 fps whose average rate is 59.956 (see Sources) |
 | `mov-phone-slow-motion.mov.json` | Local sample: a phone slow-motion original that runs at up to 240 fps (see Sources) |
 | `mpegts-avchd-interlaced.mts.json` | Local sample: an AVCHD camcorder file, top field first, one field per packet (see Sources) |
-| `frames/*.json` | The first-frames read of a recording's chosen video stream, with `FirstFramesProbe`'s arguments: the side data of the frames that ffprobe decodes from the stream's first packets. The probe widens the read from 3 to 12, 48 and 192 packets until it decodes 3 frames, and the recording holds the output of the read where it stops |
+| `frames/*.json` | The first-frames read of a recording's chosen video stream, with `FirstFramesProbe`'s arguments: the side data of the frames that ffprobe decodes from the stream's first packets. The probe widens the read from 3 to 12, 48 and 192 packets until it decodes 3 frames, and keeps the narrowest read that decodes the most frames. The recording holds that read's output |
+| `frames-kept-reads.csv` | The packet count of each kept first-frames read wider than 3 packets, by recording. `RecordedFfprobe` answers the narrower reads of such a recording with no frame, so the probe widens its read as it did when the image recorded it |
+| `read-entries.properties` | The `-show_entries` of the first-frames and first-packets reads. `record-fixtures.sh` records with them, and `RecordedFfprobe` fails a read that asks for other entries |
 | `packet-data/*.json` | The first-packets read of an H.264, HEVC or AV1 recording's chosen video stream, with `FirstPacketsProbe`'s arguments: hex dumps of as many of its first packets as the first-frames read took, their pts when the demuxer gives one, and the types of their side data. Only the recordings that the tests read keep theirs |
 | `packets/*.csv` | The frame-rate rule's packet scan of a recording's chosen video stream: the first 30 s of packets as `pts,dts,size,flags`, from `frame-rate-scans.py` |
 | `copy-codec-strings.json` | The codec string of each copied stream: `copy-codec-strings.py` copies every H.264, HEVC, AV1, AAC, AC-3, E-AC-3, Opus, FLAC and ALAC stream above with the worker's copy arguments, and reads the string from the copy's initialization segment |
@@ -97,7 +99,7 @@ from its lavfi test sources. No file comes from a media library.
 
 ## Sources
 
-These fixtures hold only ffprobe's description of each file, and the phone and camcorder fixtures also its packet timing. The files themselves stay local. The phone and camcorder files come from the Internet Archive, and the Dolby Vision and HEVC files from the Jellyfin project's [test videos](https://repo.jellyfin.org/test-videos/), which it states are courtesy of Gnattu and licensed under CC BY-SA 4.0.
+These fixtures hold ffprobe's description of each file, which includes each stream's extradata (its decoder configuration record), and the phone and camcorder fixtures also its packet timing. The files themselves stay local. The phone and camcorder files come from the Internet Archive, and the Dolby Vision and HEVC files from the Jellyfin project's [test videos](https://repo.jellyfin.org/test-videos/), which it states are courtesy of Gnattu and licensed under CC BY-SA 4.0.
 
 | Fixture | Source | Author | License |
 | --- | --- | --- | --- |
@@ -125,7 +127,11 @@ FATE_SUITE=/path/to/fate-suite LOCAL_SAMPLES=/path/to/samples src/test/probe-fix
 
 The script overwrites the files in this directory, so `git diff` shows what a new recording
 changed. Without `FATE_SUITE`, it keeps the recordings of FATE samples as they are, and without
-`dovi_tool` on the `PATH`, the Dolby Vision recordings whose RPUs `dovi_tool` generates. The local
+`dovi_tool` on the `PATH`, the Dolby Vision profile 9 recordings and the profile 8.1 raw HEVC
+recording, whose RPUs `dovi_tool` generates. The profile 8.2 recording needs no local tool: a pinned
+Alpine image downloads dovi_tool 2.3.4 and checks its SHA-256, so the step needs network access. The
+script rewrites `frames-kept-reads.csv` from the sources it probed, so a run without `FATE_SUITE` and
+`LOCAL_SAMPLES` drops their rows; keep those rows when committing such a run. The local
 samples are public test files that stay out of the repository. `LOCAL_SAMPLES` names a directory
 that holds them under the names above, without the `.json` suffix. Without `LOCAL_SAMPLES`, the
 script keeps their recordings as they are. The script removes the source's path and any location

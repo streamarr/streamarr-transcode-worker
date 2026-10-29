@@ -18,7 +18,7 @@
 # Without FATE_SUITE, the script keeps the recordings of the FATE samples as they are.
 set -euo pipefail
 
-IMAGE="${WORKER_IMAGE:-streamarr/streamarr-transcode-worker:0.1.0-SNAPSHOT@sha256:0a27081ce19e529fd6758346f403691c26455d5916bffc7b79e6a81e5dc139ee}"
+IMAGE="${WORKER_IMAGE:-streamarr/streamarr-transcode-worker:0.1.0-SNAPSHOT@sha256:ad4a844f8fa7f27946ceb79431d62719474b2f3332b80a2222e5a421dc2acaab}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 FIXTURES="$(cd "$HERE/../resources/keyframes" && pwd)"
 WORK="$(mktemp -d)"

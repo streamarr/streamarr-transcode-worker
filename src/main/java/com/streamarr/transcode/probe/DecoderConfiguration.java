@@ -82,6 +82,42 @@ final class DecoderConfiguration {
   }
 
   /**
+   * The bytes that {@link #avcProfile} reads, or, when the extradata is an avcC record without an
+   * SPS that names them, the record header's AVCProfileIndication, profile_compatibility and
+   * AVCLevelIndication, which take the same form.
+   */
+  static Optional<byte[]> avcProfileOrRecordHeader(byte[] extradata) {
+    return avcProfile(extradata)
+        .or(
+            () ->
+                recordHeaderProfile(extradata, AVC_RECORD_VERSION, CodecStrings.AVC_PROFILE_BYTES));
+  }
+
+  /**
+   * The bytes that {@link #hevcProfile} reads, or, when the extradata is an hvcC record without a
+   * parameter set that names them, the record header's general profile, tier and level, as hvcC
+   * bytes 1 to 12.
+   */
+  static Optional<byte[]> hevcProfileOrRecordHeader(byte[] extradata) {
+    return hevcProfile(extradata)
+        .or(
+            () ->
+                recordHeaderProfile(
+                    extradata, HEVC_RECORD_VERSION, CodecStrings.HEVC_PROFILE_BYTES));
+  }
+
+  // The profile fields that follow a record's configurationVersion; empty for extradata of another
+  // version or that ends inside them.
+  private static Optional<byte[]> recordHeaderProfile(
+      byte[] extradata, int version, int profileBytes) {
+    if (Byte.toUnsignedInt(extradata[0]) != version || extradata.length <= profileBytes) {
+      return Optional.empty();
+    }
+
+    return Optional.of(Arrays.copyOfRange(extradata, 1, 1 + profileBytes));
+  }
+
+  /**
    * Whether the extradata is an av1C record: its marker and version byte, then 3 bytes of fields,
    * then its configOBUs.
    */

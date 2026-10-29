@@ -16,9 +16,13 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Properties;
 import java.util.UUID;
 import java.util.function.IntFunction;
+import java.util.function.Supplier;
+import java.util.stream.Collectors;
 import lombok.Builder;
 import lombok.NonNull;
 import tools.jackson.core.JacksonException;
@@ -36,6 +40,15 @@ final class RecordedFfprobe {
 
   private static final Path SOURCE = Path.of("/media/source");
   private static final ObjectMapper MAPPER = new ObjectMapper();
+  private static final int NARROWEST_READ = 3;
+  private static final int WIDER_READ_FACTOR = 4;
+  private static final Properties READ_ENTRIES = readEntries();
+
+  /**
+   * The packet count of each recording whose first-frames read stopped past {@link #NARROWEST_READ}
+   * packets, from {@code src/test/resources/probe/frames-kept-reads.csv}.
+   */
+  private static final Map<String, Integer> KEPT_FRAMES_READS = keptFramesReads();
 
   private RecordedFfprobe() {}
 
@@ -43,11 +56,16 @@ final class RecordedFfprobe {
     return probe(recordedAnswers(fixture).build());
   }
 
-  /** The answers that the pinned worker image recorded for the fixture, for a test to customize. */
+  /**
+   * The answers that the pinned worker image recorded for the fixture, for a test to customize. A
+   * recording whose first-frames read stopped past 3 packets prints no frame for the narrower
+   * reads, so the probe widens its read as it widened when the image recorded it.
+   */
   static Answers.AnswersBuilder recordedAnswers(String fixture) {
     return Answers.builder()
         .ffprobeOutput(fixture(fixture))
         .packetLines(packets(fixture))
+        .prerollPackets(KEPT_FRAMES_READS.getOrDefault(fixture, NARROWEST_READ) / WIDER_READ_FACTOR)
         .firstFrames(recordedFirstFrames(fixture))
         .firstPackets(recordedFirstPackets(fixture));
   }
@@ -81,9 +99,13 @@ final class RecordedFfprobe {
   /**
    * What the scripted ffprobe prints. The first-frames read prints {@code firstFrames}, or fails
    * when the answers hold none, so that the probe reads no frames. A read of no more than {@code
-   * prerollPackets} packets prints no frame, as when an edit list discards the first packets, and a
-   * first-frames read of more than {@code failingReadsBeyondPackets} packets fails. The probe reads
-   * {@code source}, by default a path that names no file.
+   * prerollPackets} packets prints {@code prerollFrames}, by default no frame, as when an edit list
+   * discards the first packets, and a first-frames read of more than {@code
+   * failingReadsBeyondPackets} packets fails. A first-frames or first-packets read exits with
+   * {@code firstFramesExitCode} or {@code firstPacketsExitCode} after it prints. Each of those
+   * reads fails unless it asks for the stream that the first frames come from and for the entries
+   * that {@code read-entries.properties} lists. The probe reads {@code source}, by default a path
+   * that names no file.
    */
   @Builder
   record Answers(
@@ -91,8 +113,11 @@ final class RecordedFfprobe {
       String packetLines,
       Optional<String> firstFrames,
       int prerollPackets,
+      Optional<String> prerollFrames,
+      int firstFramesExitCode,
       Integer failingReadsBeyondPackets,
       Optional<String> firstPackets,
+      int firstPacketsExitCode,
       Path source) {
 
     Answers {
@@ -101,6 +126,7 @@ final class RecordedFfprobe {
       failingReadsBeyondPackets =
           failingReadsBeyondPackets == null ? Integer.MAX_VALUE : failingReadsBeyondPackets;
       firstFrames = firstFrames == null ? Optional.empty() : firstFrames;
+      prerollFrames = prerollFrames == null ? Optional.empty() : prerollFrames;
       firstPackets = firstPackets == null ? Optional.empty() : firstPackets;
     }
 
@@ -112,6 +138,12 @@ final class RecordedFfprobe {
 
       private AnswersBuilder firstFrames(Optional<String> output) {
         this.firstFrames = output;
+        return this;
+      }
+
+      /** What a first-frames read of no more than {@code prerollPackets} packets prints. */
+      AnswersBuilder prerollFrames(String output) {
+        this.prerollFrames = Optional.of(output);
         return this;
       }
 
@@ -138,16 +170,22 @@ final class RecordedFfprobe {
   /** Probes with the given ffprobe output while the frame-rate scan prints packets forever. */
   static ProbeAttemptResult probeResultWithEndlessScan(
       String ffprobeOutput, IntFunction<String> packetLines) {
+    return probeResultWithScan(ffprobeOutput, () -> new EndlessOutputProcess(packetLines));
+  }
+
+  /** Probes with the given ffprobe output while the given process runs the frame-rate scan. */
+  static ProbeAttemptResult probeResultWithScan(
+      String ffprobeOutput, Supplier<? extends Process> frameRateScan) {
     var executor =
         new FfprobeExecutor(
             new ObjectMapper(),
             command -> {
               if (isFrameRateScan(command.arguments())) {
-                return new EndlessOutputProcess(packetLines);
+                return frameRateScan.get();
               }
 
               if (isFirstFramesRead(command.arguments())) {
-                return ScriptedProcess.builder().output(new byte[0]).exitCode(1).build();
+                return failing();
               }
 
               var output =
@@ -178,6 +216,7 @@ final class RecordedFfprobe {
   }
 
   private static ProbeAttemptResult probeResult(Answers answers) {
+    var chosenStream = answers.firstFrames().flatMap(RecordedFfprobe::streamIndexOf).orElse("0");
     var executor =
         new FfprobeExecutor(
             new ObjectMapper(),
@@ -187,54 +226,82 @@ final class RecordedFfprobe {
               }
 
               if (isFirstPacketsRead(command.arguments())) {
-                var count = packetsRead(command.arguments());
-                return scripted(answers.firstPackets().map(printed -> firstOf(printed, count)));
-              }
-
-              if (isFirstFramesRead(command.arguments())
-                  && packetsRead(command.arguments()) > answers.failingReadsBeyondPackets()) {
-                return ScriptedProcess.builder().output(new byte[0]).exitCode(1).build();
-              }
-
-              if (isFirstFramesRead(command.arguments())
-                  && packetsRead(command.arguments()) <= answers.prerollPackets()) {
-                return ScriptedProcess.builder()
-                    .output("{\"frames\":[]}".getBytes(StandardCharsets.UTF_8))
-                    .build();
+                return firstPacketsRead(answers, command.arguments(), chosenStream);
               }
 
               if (isFirstFramesRead(command.arguments())) {
-                return answers
-                    .firstFrames()
-                    .map(
-                        frames ->
-                            ScriptedProcess.builder()
-                                .output(frames.getBytes(StandardCharsets.UTF_8))
-                                .build())
-                    .orElseGet(
-                        () -> ScriptedProcess.builder().output(new byte[0]).exitCode(1).build());
+                return firstFramesRead(answers, command.arguments(), chosenStream);
               }
 
               var output =
                   isFrameRateScan(command.arguments())
                       ? answers.packetLines()
                       : answer(answers.ffprobeOutput(), command.arguments());
-              return ScriptedProcess.builder()
-                  .output(output.getBytes(StandardCharsets.UTF_8))
-                  .build();
+              return printing(output, 0);
             });
     return executor.probe(answers.source(), request()).result();
   }
 
-  private static boolean isFrameRateScan(List<String> arguments) {
-    return arguments.contains("packet=pts,dts,size,flags");
+  private static Process firstFramesRead(
+      Answers answers, List<String> arguments, String chosenStream) {
+    var packets = packetsRead(arguments);
+    if (!isRequested(arguments, chosenStream, "frames")
+        || packets > answers.failingReadsBeyondPackets()) {
+      return failing();
+    }
+
+    if (packets <= answers.prerollPackets()) {
+      return printing(answers.prerollFrames().orElse("{\"frames\":[]}"), 0);
+    }
+
+    return answers
+        .firstFrames()
+        .map(frames -> printing(frames, answers.firstFramesExitCode()))
+        .orElseGet(RecordedFfprobe::failing);
   }
 
-  private static Process scripted(Optional<String> output) {
-    return output
-        .map(printed -> ScriptedProcess.builder().output(printed.getBytes(StandardCharsets.UTF_8)))
-        .orElseGet(() -> ScriptedProcess.builder().output(new byte[0]).exitCode(1))
+  private static Process firstPacketsRead(
+      Answers answers, List<String> arguments, String chosenStream) {
+    if (!isRequested(arguments, chosenStream, "packets") || !arguments.contains("-show_data")) {
+      return failing();
+    }
+
+    var count = packetsRead(arguments);
+    return answers
+        .firstPackets()
+        .map(printed -> printing(firstOf(printed, count), answers.firstPacketsExitCode()))
+        .orElseGet(RecordedFfprobe::failing);
+  }
+
+  /** Whether a read asks for the chosen stream and for the entries that the recordings hold. */
+  private static boolean isRequested(List<String> arguments, String chosenStream, String read) {
+    return chosenStream.equals(valueOf(arguments, "-select_streams"))
+        && READ_ENTRIES.getProperty(read).equals(valueOf(arguments, "-show_entries"));
+  }
+
+  /** The stream_index of the first frame that the read prints; empty when it prints none. */
+  private static Optional<String> streamIndexOf(String frames) {
+    try {
+      var index = MAPPER.readTree(frames).path("frames").path(0).path("stream_index");
+      return index.isIntegralNumber() ? Optional.of(index.asString()) : Optional.empty();
+    } catch (JacksonException _) {
+      return Optional.empty();
+    }
+  }
+
+  private static Process printing(String output, int exitCode) {
+    return ScriptedProcess.builder()
+        .output(output.getBytes(StandardCharsets.UTF_8))
+        .exitCode(exitCode)
         .build();
+  }
+
+  private static Process failing() {
+    return ScriptedProcess.builder().output(new byte[0]).exitCode(1).build();
+  }
+
+  private static boolean isFrameRateScan(List<String> arguments) {
+    return arguments.contains("packet=pts,dts,size,flags");
   }
 
   /** The printed packets as a read of only the first {@code count} packets prints them. */
@@ -254,18 +321,28 @@ final class RecordedFfprobe {
     }
   }
 
+  /** A read of the first packets' bytes: a read of a packet count whose entries name packets. */
   private static boolean isFirstPacketsRead(List<String> arguments) {
-    return arguments.stream().anyMatch(argument -> argument.startsWith("packet=pts,data"));
+    return isCountedRead(arguments) && valueOf(arguments, "-show_entries").startsWith("packet=");
   }
 
   private static boolean isFirstFramesRead(List<String> arguments) {
-    return arguments.stream().anyMatch(argument -> argument.startsWith("frame="));
+    return isCountedRead(arguments) && valueOf(arguments, "-show_entries").startsWith("frame=");
+  }
+
+  private static boolean isCountedRead(List<String> arguments) {
+    return valueOf(arguments, "-read_intervals").startsWith("%+#");
   }
 
   /** The packet count of a read's {@code %+#count} interval. */
   private static int packetsRead(List<String> arguments) {
-    var interval = arguments.get(arguments.indexOf("-read_intervals") + 1);
-    return Integer.parseInt(interval.substring("%+#".length()));
+    return Integer.parseInt(valueOf(arguments, "-read_intervals").substring("%+#".length()));
+  }
+
+  /** The argument after the option; empty when the arguments hold no such option. */
+  private static String valueOf(List<String> arguments, String option) {
+    var at = arguments.indexOf(option);
+    return at < 0 ? "" : arguments.get(at + 1);
   }
 
   /**
@@ -366,6 +443,31 @@ final class RecordedFfprobe {
     try (InputStream recorded =
         RecordedFfprobe.class.getResourceAsStream("/probe/packets/" + fixture + ".csv")) {
       return recorded == null ? "" : new String(recorded.readAllBytes(), StandardCharsets.UTF_8);
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
+    }
+  }
+
+  private static Properties readEntries() {
+    try (InputStream entries =
+        RecordedFfprobe.class.getResourceAsStream("/probe/read-entries.properties")) {
+      assertThat(entries).as("the recordings' read entries").isNotNull();
+      var properties = new Properties();
+      properties.load(entries);
+      return properties;
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
+    }
+  }
+
+  private static Map<String, Integer> keptFramesReads() {
+    try (InputStream reads =
+        RecordedFfprobe.class.getResourceAsStream("/probe/frames-kept-reads.csv")) {
+      assertThat(reads).as("the recordings' kept first-frames reads").isNotNull();
+      return new String(reads.readAllBytes(), StandardCharsets.UTF_8)
+          .lines()
+          .map(line -> line.split(","))
+          .collect(Collectors.toMap(fields -> fields[0], fields -> Integer.valueOf(fields[1])));
     } catch (IOException e) {
       throw new UncheckedIOException(e);
     }

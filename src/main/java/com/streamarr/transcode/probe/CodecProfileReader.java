@@ -9,7 +9,8 @@ import tools.jackson.databind.JsonNode;
 
 /**
  * A video stream's codec profile, level and tier, read from the same decoder configuration fields
- * that its codec string comes from. A profile that the contract does not name leaves all three
+ * that its codec string comes from, or, for a configuration record without a parameter set that
+ * names them, from the record header. A profile that the contract does not name leaves all three
  * unspecified.
  */
 final class CodecProfileReader {
@@ -34,11 +35,11 @@ final class CodecProfileReader {
           switch (ProbedCodecFamily.of(source)) {
             case H264 ->
                 extradata
-                    .flatMap(DecoderConfiguration::avcProfile)
+                    .flatMap(DecoderConfiguration::avcProfileOrRecordHeader)
                     .map(bytes -> () -> addAvc(bytes, stream));
             case HEVC ->
                 extradata
-                    .flatMap(DecoderConfiguration::hevcProfile)
+                    .flatMap(DecoderConfiguration::hevcProfileOrRecordHeader)
                     .map(bytes -> () -> addHevc(bytes, stream));
             case AV1 ->
                 extradata

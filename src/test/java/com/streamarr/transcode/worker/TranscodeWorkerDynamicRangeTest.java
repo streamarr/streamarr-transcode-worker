@@ -102,7 +102,7 @@ class TranscodeWorkerDynamicRangeTest {
             "mp4-dovi-p82.mp4",
             declaredConfiguration()
                 .setProfile(8)
-                .setLevel(3)
+                .setLevel(1)
                 .setBaseLayerCompatibilityId(2)
                 .build()),
         Arguments.of(

@@ -8,6 +8,8 @@ import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbePriority;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
+import com.streamarr.transcode.fakes.ScriptedProcess;
+import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
@@ -16,6 +18,7 @@ import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -35,6 +38,12 @@ import tools.jackson.databind.ObjectMapper;
 @Tag("UnitTest")
 @DisplayName("Ffprobe Executor Process Tests")
 class FfprobeExecutorProcessTest {
+
+  private static final List<String> READ_LIMITS =
+      List.of("-analyzeduration", "200M", "-probesize", "1G", "-scan_all_pmts", "0");
+  private static final String ONE_H264_STREAM =
+      """
+      {"streams":[{"index":0,"codec_type":"video","codec_name":"h264"}]}""";
 
   @TempDir Path temporaryDirectory;
 
@@ -199,11 +208,131 @@ class FfprobeExecutorProcessTest {
 
   @Test
   @DisplayName(
-      "Should pass the read limits to the probe and each of its reads when executing the configured"
-          + " binary")
-  void shouldPassTheReadLimitsToTheProbeAndEachOfItsReadsWhenExecutingTheConfiguredBinary()
+      "Should pass the read limits and the source path to every ffprobe run when executing the"
+          + " configured binary")
+  void shouldPassTheReadLimitsAndTheSourcePathToEveryFfprobeRunWhenExecutingTheConfiguredBinary()
       throws Exception {
-    // Each run appends its arguments and a -- line.
+    var source = temporaryDirectory.resolve("movie with spaces.mkv");
+
+    var runs = probeRecordingEachRun(source);
+
+    assertThat(runs)
+        .as("the probe, the extradata read, the first-frames reads and the first-packets read")
+        .hasSizeGreaterThan(3)
+        .allSatisfy(
+            run -> {
+              assertThat(run).containsSubsequence(READ_LIMITS);
+              assertThat(run).endsWith(source.toString());
+            });
+  }
+
+  @Test
+  @DisplayName(
+      "Should ask the configured binary for the streams and then the video extradata when"
+          + " probing a source")
+  void shouldAskTheConfiguredBinaryForTheStreamsAndThenTheVideoExtradataWhenProbingASource()
+      throws Exception {
+    var source = temporaryDirectory.resolve("movie with spaces.mkv");
+
+    var runs = probeRecordingEachRun(source);
+
+    assertThat(runs.get(0))
+        .isEqualTo(
+            jsonRun(
+                List.of("-show_streams", "-show_format", "-show_chapters", "-show_error"), source));
+    assertThat(runs.get(1))
+        .isEqualTo(
+            jsonRun(
+                List.of(
+                    "-select_streams",
+                    "V",
+                    "-show_entries",
+                    "stream=index,extradata",
+                    "-show_data"),
+                source));
+  }
+
+  @Test
+  @DisplayName(
+      "Should widen the first-frames read to 192 packets and read the packets of its narrowest read"
+          + " when every read decodes the same one frame")
+  void
+      shouldWidenTheFirstFramesReadTo192PacketsAndReadThePacketsOfItsNarrowestReadWhenEveryReadDecodesTheSameOneFrame()
+          throws Exception {
+    var source = temporaryDirectory.resolve("movie.mkv");
+
+    var reads = probeRecordingEachRun(source).subList(2, 7);
+
+    assertThat(reads)
+        .extracting(run -> run.get(run.indexOf("-read_intervals") + 1))
+        .containsExactly("%+#3", "%+#12", "%+#48", "%+#192", "%+#3");
+    assertThat(reads.subList(0, 4))
+        .allSatisfy(
+            run -> assertThat(run.get(run.indexOf("-show_entries") + 1)).startsWith("frame="));
+    assertThat(reads.get(4))
+        .containsSubsequence(
+            "-select_streams",
+            "0",
+            "-show_entries",
+            "packet=pts,data:packet_side_data=side_data_type",
+            "-show_data");
+  }
+
+  @Test
+  @DisplayName(
+      "Should report no frames read and keep the probe when ffprobe's error output closes as the"
+          + " frames read stops it")
+  void
+      shouldReportNoFramesReadAndKeepTheProbeWhenFfprobesErrorOutputClosesAsTheFramesReadStopsIt() {
+    var stoppedReads = new ArrayList<ScriptedProcess>();
+    var executor =
+        new FfprobeExecutor(
+            new ObjectMapper(),
+            command -> {
+              if (!isFirstFramesRead(command)) {
+                return printing(ONE_H264_STREAM);
+              }
+
+              var printsTooMuch =
+                  ScriptedProcess.builder()
+                      .output(framesPastTheReadLimit())
+                      .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+                      .stderr("[hevc @ 0x0] Could not find ref with POC 0\n")
+                      .build();
+              stoppedReads.add(printsTooMuch);
+              return printsTooMuch;
+            });
+
+    var result = executor.probe(temporaryDirectory.resolve("movie.mkv"), request()).result();
+
+    assertThat(stoppedReads)
+        .isNotEmpty()
+        .allSatisfy(read -> assertThat(read.wasDestroyedForcibly()).isTrue());
+    assertThat(result.hasMedia()).as("the probe of %s", result).isTrue();
+    assertThat(result.getMedia().getStreams(0).getFirstFramesRead()).isFalse();
+  }
+
+  private static boolean isFirstFramesRead(ProbeCommand command) {
+    var arguments = command.arguments();
+    var entries = arguments.indexOf("-show_entries");
+    return entries >= 0 && arguments.get(entries + 1).startsWith("frame=");
+  }
+
+  private static Process printing(String output) {
+    return ScriptedProcess.builder().output(output.getBytes(StandardCharsets.UTF_8)).build();
+  }
+
+  // One AV1 packet can show an earlier frame thousands of times, so a read of a few packets can
+  // print more than the 4 MiB that the probe holds.
+  private static byte[] framesPastTheReadLimit() {
+    return ("{\"frames\":["
+            + String.join(",", Collections.nCopies(250_000, "{\"stream_index\":0}"))
+            + "]}")
+        .getBytes(StandardCharsets.UTF_8);
+  }
+
+  // Each run appends its arguments and a -- line, and prints one video stream and one frame.
+  private List<List<String>> probeRecordingEachRun(Path source) throws Exception {
     var binary =
         script(
             """
@@ -211,69 +340,31 @@ class FfprobeExecutorProcessTest {
         printf '%s' '{"streams":[{"index":0,"codec_type":"video","codec_name":"h264"}],
           "frames":[{"stream_index":0}]}'
         """);
-    var source = temporaryDirectory.resolve("movie with spaces.mkv");
 
     var result = executorFor(binary).probe(source, request()).result();
 
-    assertThat(result.hasMedia()).isTrue();
     assertThat(result.getMedia().getStreams(0).getCodec()).isEqualTo("h264");
-    var readLimits = List.of("-analyzeduration", "200M", "-probesize", "1G", "-scan_all_pmts", "0");
-    var probe = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
-    probe.addAll(readLimits);
-    probe.addAll(
-        List.of(
-            "-show_streams",
-            "-show_format",
-            "-show_chapters",
-            "-show_error",
-            source.toString(),
-            "--"));
-    var extradataRead = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
-    extradataRead.addAll(readLimits);
-    extradataRead.addAll(
-        List.of(
-            "-select_streams",
-            "V",
-            "-show_entries",
-            "stream=index,extradata",
-            "-show_data",
-            source.toString(),
-            "--"));
-    var runs = new ArrayList<>(probe);
-    runs.addAll(extradataRead);
-    var recorded = Files.readAllLines(Path.of(binary + ".args"));
-    assertThat(recorded.subList(0, runs.size())).isEqualTo(runs);
-    // The script prints one frame, so the first-frames read widens to its widest read, and the
-    // first-packets read takes the 3 packets of the read that decoded that frame.
-    var position = runs.size();
-    for (var packets : List.of(3, 12, 48, 192)) {
-      var firstFramesRead = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
-      firstFramesRead.addAll(readLimits);
-      firstFramesRead.addAll(
-          List.of("-select_streams", "0", "-read_intervals", "%+#" + packets, "-show_entries"));
-      assertThat(recorded.subList(position, position + firstFramesRead.size()))
-          .isEqualTo(firstFramesRead);
-      position += firstFramesRead.size();
-      assertThat(recorded.get(position)).startsWith("frame=");
-      assertThat(recorded.subList(position + 1, position + 3))
-          .isEqualTo(List.of(source.toString(), "--"));
-      position += 3;
+    var runs = new ArrayList<List<String>>();
+    var run = new ArrayList<String>();
+    for (var argument : Files.readAllLines(Path.of(binary + ".args"))) {
+      if (argument.equals("--")) {
+        runs.add(List.copyOf(run));
+        run.clear();
+        continue;
+      }
+
+      run.add(argument);
     }
 
-    var firstPacketsRead = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
-    firstPacketsRead.addAll(readLimits);
-    firstPacketsRead.addAll(
-        List.of(
-            "-select_streams",
-            "0",
-            "-read_intervals",
-            "%+#3",
-            "-show_entries",
-            "packet=pts,data:packet_side_data=side_data_type",
-            "-show_data",
-            source.toString(),
-            "--"));
-    assertThat(recorded.subList(position, recorded.size())).isEqualTo(firstPacketsRead);
+    return runs;
+  }
+
+  private static List<String> jsonRun(List<String> entries, Path source) {
+    var run = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
+    run.addAll(READ_LIMITS);
+    run.addAll(entries);
+    run.add(source.toString());
+    return run;
   }
 
   @Test

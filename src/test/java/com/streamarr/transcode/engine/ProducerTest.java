@@ -355,7 +355,7 @@ class ProducerTest {
 
     // Closing segment 0 would keep the reader from reading on until the held initialization
     // segment returns.
-    awaiting().until(process::hasReachedPause);
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
     sink.release();
     process.resume();
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
@@ -444,7 +444,7 @@ class ProducerTest {
 
     var producer = producerOfOneSecondSegments(process).start();
 
-    awaiting().until(process::hasReachedPause);
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
     awaiting()
         .untilAsserted(
             () ->
@@ -506,7 +506,7 @@ class ProducerTest {
 
     var producer = producerFor(process, recording).start();
 
-    awaiting().until(process::hasReachedPause);
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
     awaiting()
         .untilAsserted(
             () ->
@@ -818,7 +818,7 @@ class ProducerTest {
 
     var producer = producerFor(process, recording).clock(clock).start();
 
-    awaiting().until(process::hasReachedPause);
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
     clock.advance(Duration.ofSeconds(5));
     process.resume();
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
@@ -1061,7 +1061,7 @@ class ProducerTest {
             .build();
     var heldBeforeReading = liveHeapBytes();
     var producer = producerOfOneSecondSegments(process).gracePeriod(Duration.ofMinutes(10)).start();
-    awaiting().until(process::hasReachedPause);
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
     assertThat(liveHeapBytes())
         .as("the reader holds three fragments and all of the next fragment's mdat")
         .isGreaterThan(heldBeforeReading + 150L * 1024 * 1024);
@@ -2142,7 +2142,7 @@ class ProducerTest {
             .exitCode(255)
             .build();
     var producer = producerFor(process, recording).start();
-    awaiting().until(process::hasReachedPause);
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
 
     producer.stop();
 
@@ -2171,7 +2171,7 @@ class ProducerTest {
             .resumesOnQuit(true)
             .build();
     var producer = producerFor(process, recording).start();
-    awaiting().until(process::hasReachedPause);
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
 
     producer.stop();
 
@@ -2194,7 +2194,7 @@ class ProducerTest {
             .resumesOnQuit(true)
             .build();
     var producer = producerFor(process, recording).gracePeriod(Duration.ofMillis(100)).start();
-    awaiting().until(process::hasReachedPause);
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
 
     producer.stop();
 
@@ -2213,7 +2213,7 @@ class ProducerTest {
             .pauseAfter(insideThirdMediaSegment(recording))
             .build();
     var producer = producerFor(process, recording).gracePeriod(Duration.ofMillis(100)).start();
-    awaiting().until(process::hasReachedPause);
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
 
     producer.stop();
 
@@ -2233,7 +2233,7 @@ class ProducerTest {
             .pauseAfter(insideThirdMediaSegment(recording))
             .build();
     var producer = producerFor(process, recording).gracePeriod(Duration.ofMinutes(10)).start();
-    awaiting().until(process::hasReachedPause);
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
     var stopping = Thread.ofVirtual().start(producer::stop);
     awaiting().until(() -> process.stdinText().equals("q"));
 
@@ -2322,7 +2322,7 @@ class ProducerTest {
             .resumesOnQuit(true)
             .build();
     var producer = producerFor(process, recording).start();
-    awaiting().until(process::hasReachedPause);
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
 
     producer.stop();
     producer.stop();
@@ -2786,7 +2786,7 @@ class ProducerTest {
             .stallTimeout(Duration.ofMillis(300))
             .gracePeriod(Duration.ofMinutes(10))
             .start();
-    awaiting().until(process::hasReachedPause);
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
     var stopping = Thread.ofVirtual().start(producer::stop);
     awaiting().until(() -> process.stdinText().equals("q"));
 
@@ -2812,7 +2812,7 @@ class ProducerTest {
             .exitTiming(ExitTiming.WHEN_TEST_EXITS)
             .build();
     var producer = producerFor(process, recording).gracePeriod(Duration.ofMillis(100)).start();
-    awaiting().until(process::hasReachedPause);
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
 
     var stopping = Thread.ofVirtual().start(producer::stop);
 
@@ -2837,7 +2837,7 @@ class ProducerTest {
             .pauseAfter(insideThirdMediaSegment(recording))
             .build();
     var producer = producerFor(process, recording).gracePeriod(Duration.ofMinutes(10)).start();
-    awaiting().until(process::hasReachedPause);
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
     var firstStop = Thread.ofVirtual().start(producer::stop);
     awaiting().until(() -> process.stdinText().equals("q"));
     var secondStop = Thread.ofVirtual().start(producer::stop);

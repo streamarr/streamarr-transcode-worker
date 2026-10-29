@@ -4,8 +4,10 @@
 # Every FFmpeg and ffprobe run happens inside the pinned worker image, so the output comes from the
 # worker's own ffprobe, run with the probe's own arguments. Most sources are synthesized with lavfi.
 # edit-mp4-boxes.py adds the MP4 boxes that FFmpeg cannot write, and GPAC's MP4Box, run in its
-# pinned image, adds the Dolby Vision profile 9 record. No media file is downloaded, and no source
-# file is kept: only ffprobe's output is.
+# pinned image, adds the Dolby Vision profile 8.2 and 9 records. x265 and dovi_tool, run in a pinned
+# Alpine image, encode the profile 8.2 stream. No media file is downloaded, and no source
+# file is kept whole: the recordings hold ffprobe's output, including each stream's extradata
+# (-show_data), and packet-data/ holds the bytes of the first packets of the sources it lists.
 #
 #   src/test/probe-fixtures/record-fixtures.sh
 #   WORKER_IMAGE=streamarr-worker:local src/test/probe-fixtures/record-fixtures.sh
@@ -19,12 +21,20 @@
 # fixture README lists. Those samples stay local. The Dolby Vision profile 9 fixtures and the
 # profile 8.1 fixture whose RPUs come ahead of a suffix SEI NAL unit need dovi_tool
 # (https://github.com/quietvoid/dovi_tool) on the PATH, which generates their RPUs. Without either
-# variable or dovi_tool, the script keeps the fixtures that need it as they are.
+# variable or dovi_tool, the script keeps the fixtures that need it as they are. The Dolby Vision
+# profile 8.2 fixture needs neither: its Alpine container downloads the pinned dovi_tool release and
+# checks its SHA-256.
 set -euo pipefail
 
 IMAGE="${WORKER_IMAGE:-streamarr/streamarr-transcode-worker:0.1.0-SNAPSHOT@sha256:ad4a844f8fa7f27946ceb79431d62719474b2f3332b80a2222e5a421dc2acaab}"
 # GPAC 26.08-DEV-rev132, whose image is built for amd64 only.
 GPAC_IMAGE="gpac/ubuntu@sha256:9a70c9ec3fe4383b49deb3416f59cb169db267d6c95c827874732bf2b8506ac3"
+# Alpine 3.22, whose x265 package and dovi_tool release encode the Dolby Vision profile 8.2 stream.
+ALPINE_IMAGE="alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8"
+X265_PACKAGE=x265=3.6-r0
+DOVI_TOOL_VERSION=2.3.4
+DOVI_TOOL_SHA256_aarch64=b4f22a7db56954efe4ed8d02276d0f991799e84602f3584711be6c9df950cb15
+DOVI_TOOL_SHA256_x86_64=1844258e13c26607b32224bf1fa82b595d3b35949f5467405fda560daad32b3f
 HERE="$(cd "$(dirname "$0")" && pwd)"
 FIXTURES="$(cd "$HERE/../resources/probe" && pwd)"
 WORK="$(mktemp -d)"
@@ -272,6 +282,10 @@ done
 "${FF[@]}" -f lavfi -i testsrc2=size=64x64:rate=24:duration=1 "${HDR10[@]}" "${X265[@]}" \
   -x265-params log-level=none:bframes=0:hash=2 -f hevc pq-picture-hash.hevc
 
+# Six frames of 10-bit 4:2:0 video, which x265 encodes as the Dolby Vision profile 8.2 stream.
+"${FF[@]}" -f lavfi -i testsrc2=size=64x64:rate=24:duration=0.25 -pix_fmt yuv420p10le -strict -1 \
+  sdr10-64x64.y4m
+
 # MP4 whose clean aperture crops 4 pixels from the left and the right and 2 from the top and the
 # bottom of the 64x36 picture, and the same stream remuxed into Matroska as PixelCrop elements.
 "${FF[@]}" "${VIDEO[@]}" "${X264[@]}" -map_metadata -1 mp4-clap.mp4
@@ -352,7 +366,11 @@ cat > "$WORK/probe.sh" <<'CONTAINER'
 set -euo pipefail
 cd /work
 mkdir -p frames packet-data
+: > frames-kept-reads.csv
 LIMITS=(-analyzeduration 200M -probesize 1G -scan_all_pmts 0)
+# The entries of FirstFramesProbe's and FirstPacketsProbe's reads, which RecordedFfprobe answers.
+FRAME_ENTRIES="$(sed -n 's/^frames=//p' read-entries.properties)"
+PACKET_ENTRIES="$(sed -n 's/^packets=//p' read-entries.properties)"
 for source in "$@"; do
   # The probe's own arguments, as FfprobeExecutor passes them, and -show_data, which prints the
   # extradata that the probe reads for each video and audio stream in separate runs.
@@ -367,16 +385,28 @@ for source in "$@"; do
   # prints an empty field for it.
   chosen="${chosen%%[,$'\n']*}"
   if [ -n "$chosen" ]; then
-    # The probe widens the read until it decodes 3 frames; the recording holds the widest read's
-    # output that the probe takes.
+    # The probe widens the read until it decodes 3 frames and keeps the narrowest read that decodes
+    # the most frames; the recording holds that read's output, and frames-kept-reads.csv the packet
+    # count of each kept read wider than 3.
+    kept=0
+    kept_frames=-1
     for packets in 3 12 48 192; do
       ffprobe -v quiet -print_format json "${LIMITS[@]}" -select_streams "$chosen" \
-        -read_intervals "%+#$packets" -show_entries "frame=stream_index:frame_side_data=side_data_type,red_x,red_y,green_x,green_y,blue_x,blue_y,white_point_x,white_point_y,min_luminance,max_luminance,max_content,max_average,vdr_rpu_profile,bl_video_full_range_flag,el_spatial_resampling_filter_flag,disable_residual_flag,vdr_bit_depth" \
-        "$source" > "frames/$(basename "$source").json"
-      if [ "$(grep -c '"stream_index"' "frames/$(basename "$source").json")" -ge 3 ]; then
+        -read_intervals "%+#$packets" -show_entries "$FRAME_ENTRIES" "$source" > frames-read.json
+      decoded="$(grep -c '"stream_index"' frames-read.json || true)"
+      if [ "$decoded" -gt "$kept_frames" ]; then
+        mv frames-read.json "frames/$(basename "$source").json"
+        kept="$packets"
+        kept_frames="$decoded"
+      fi
+      if [ "$decoded" -ge 3 ]; then
         break
       fi
     done
+    rm -f frames-read.json
+    if [ "$kept" -gt 3 ]; then
+      echo "$(basename "$source"),$kept" >> frames-kept-reads.csv
+    fi
     # The first-packets read of an H.264, HEVC or AV1 chosen video stream, with FirstPacketsProbe's
     # arguments: as many packets as the first-frames read took.
     codec="$(ffprobe -v quiet "${LIMITS[@]}" -select_streams "$chosen" \
@@ -384,8 +414,7 @@ for source in "$@"; do
     codec="${codec%%[,$'\n']*}"
     if [ "$codec" = h264 ] || [ "$codec" = hevc ] || [ "$codec" = av1 ]; then
       ffprobe -v quiet -print_format json "${LIMITS[@]}" -select_streams "$chosen" \
-        -read_intervals "%+#$packets" \
-        -show_entries packet=pts,data:packet_side_data=side_data_type -show_data \
+        -read_intervals "%+#$kept" -show_entries "$PACKET_ENTRIES" -show_data \
         "$source" > "packet-data/$(basename "$source").json"
     fi
   fi
@@ -450,6 +479,35 @@ if [ -n "${FATE_SUITE:-}" ]; then
 fi
 in_image av1.sh
 
+# Dolby Vision profile 8.2: dovi_tool's profile 8.1 generator writes one RPU per frame, and x265
+# encodes Main 10 tagged BT.709 with an RPU after each picture and signals profile 8.2, whose
+# compatible base is BT.709 SDR. MP4Box then adds a dvvC record that names profile 8 and
+# compatibility identifier 2 under hvc1.
+cat > "$WORK/dovi-p82.sh" <<'CONTAINER'
+set -euo pipefail
+apk add --no-cache "$X265_PACKAGE" curl > /dev/null
+arch="$(uname -m)"
+expected="DOVI_TOOL_SHA256_${arch}"
+curl -sSfL -o /tmp/dovi_tool.tar.gz \
+  "https://github.com/quietvoid/dovi_tool/releases/download/${DOVI_TOOL_VERSION}/dovi_tool-${DOVI_TOOL_VERSION}-${arch}-unknown-linux-musl.tar.gz"
+echo "${!expected}  /tmp/dovi_tool.tar.gz" | sha256sum -c - > /dev/null
+tar -xzf /tmp/dovi_tool.tar.gz -C /tmp
+cd /work
+echo '{"cm_version": "V40", "length": 6}' > p82-rpus.json
+/tmp/dovi_tool generate -p 8.1 -j p82-rpus.json -o p82-rpus.bin > /dev/null
+x265 --input sdr10-64x64.y4m --output dovi-p82.hevc --profile main10 --colorprim bt709 \
+  --transfer bt709 --colormatrix bt709 --range limited --dolby-vision-profile 8.2 \
+  --dolby-vision-rpu p82-rpus.bin --bframes 0 --vbv-bufsize 1000 --vbv-maxrate 1000 --pools none \
+  --frame-threads 1 --log-level error --no-progress
+CONTAINER
+docker run --rm -v "$WORK":/work -e X265_PACKAGE="$X265_PACKAGE" \
+  -e DOVI_TOOL_VERSION="$DOVI_TOOL_VERSION" -e DOVI_TOOL_SHA256_aarch64="$DOVI_TOOL_SHA256_aarch64" \
+  -e DOVI_TOOL_SHA256_x86_64="$DOVI_TOOL_SHA256_x86_64" "$ALPINE_IMAGE" \
+  sh -c 'apk add --no-cache bash > /dev/null && bash /work/dovi-p82.sh' > "$WORK/alpine.log" 2>&1 \
+  || { cat "$WORK/alpine.log"; exit 1; }
+in_gpac -add dovi-p82.hevc:dvp=8.2:fps=24 -new mp4-dovi-p82.mp4
+FIXTURES_TO_PROBE+=(mp4-dovi-p82.mp4)
+
 # Dolby Vision profile 9: the SDR encode with an RPU in an H.264 NAL unit of type 28 after each
 # picture, copied into MP4 by FFmpeg, which keeps each RPU in the sample of its own picture. MP4Box
 # then adds a dvvC record under avc1 and under dva1, and the avc1 copy goes into MPEG-TS, whose
@@ -502,7 +560,7 @@ FF=(timeout 60 ffmpeg -hide_banner -nostdin -loglevel error -y)
 CONTAINER
 
 LOCAL_SAMPLE_NAMES=(mp4-dovi-p5-dvh1.mp4 mp4-dovi-p5-dvh1-no-record.mp4 mp4-dovi-p81.mp4
-  mp4-dovi-p82.mp4 mp4-dovi-p84-hlg.mp4 mp4-hevc-hdr10.mp4
+  mp4-dovi-p84-hlg.mp4 mp4-hevc-hdr10.mp4
   mp4-hevc-sdr10-untagged.mp4 mov-phone-hlg-dovi-p84.mov mov-phone-rotated.mov mov-phone-one-gap.mov
   mov-phone-120-declared.mov mov-phone-60.mov mov-phone-slow-motion.mov mpegts-avchd-interlaced.mts)
 PROBE_ARGUMENTS=("${FIXTURES_TO_PROBE[@]}")
@@ -517,7 +575,9 @@ if [ -n "${LOCAL_SAMPLES:-}" ]; then
 fi
 
 printf 'bash /work/probe.sh %s\n' "${PROBE_ARGUMENTS[*]}" > "$WORK/probe-all.sh"
+cp "$FIXTURES/read-entries.properties" "$WORK/"
 in_image probe-all.sh
+cp "$WORK/frames-kept-reads.csv" "$FIXTURES/"
 
 # The frame-rate rule's packet scan of the chosen video stream, with the probe's own arguments, for
 # the sources that the frame-rate tests read.

@@ -117,9 +117,10 @@ final class HdrStaticMetadata {
 
     var maxLuminance =
         units(Integer.toUnsignedLong(payload.getInt(payload.position() + 16)), 1 << 8);
+    // A minimum over 16384 always fits: 0xFFFFFFFF over 16384 is about 2.6 billion units.
     var minLuminance =
         units(Integer.toUnsignedLong(payload.getInt(payload.position() + 20)), 1 << 14);
-    if (maxLuminance > MAXIMUM_LUMINANCE || minLuminance > MAXIMUM_LUMINANCE) {
+    if (maxLuminance > MAXIMUM_LUMINANCE) {
       return Optional.empty();
     }
 

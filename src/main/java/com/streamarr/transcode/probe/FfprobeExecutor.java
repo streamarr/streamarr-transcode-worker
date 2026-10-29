@@ -229,7 +229,7 @@ public final class FfprobeExecutor {
 
           return null;
         };
-    var exitCode = run(process, reader, stderr -> readLines(stderr, _ -> {})).exitCode();
+    var exitCode = run(process, reader, diagnosticsUntilStopped(stopped, _ -> {})).exitCode();
     if (!stopped.get() && exitCode != 0) {
       throw new PacketScanException("ffprobe's frame-rate scan exited with code " + exitCode);
     }

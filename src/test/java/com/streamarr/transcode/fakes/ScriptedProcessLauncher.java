@@ -19,11 +19,20 @@ import java.util.concurrent.CopyOnWriteArrayList;
  */
 public final class ScriptedProcessLauncher implements ProcessLauncher {
 
-  private final Script script;
+  private final CommandScript script;
   private final Map<UUID, List<Launch>> launches = new ConcurrentHashMap<>();
 
   public ScriptedProcessLauncher(Script script) {
+    this.script = (_, jobAttemptId) -> script.launch(jobAttemptId);
+  }
+
+  private ScriptedProcessLauncher(CommandScript script) {
     this.script = script;
+  }
+
+  /** FFmpeg that the script stands in for according to the command it is launched with. */
+  public static ScriptedProcessLauncher forCommands(CommandScript script) {
+    return new ScriptedProcessLauncher(script);
   }
 
   /** FFmpeg that writes nothing until it is asked to quit, and then exits cleanly. */
@@ -48,7 +57,7 @@ public final class ScriptedProcessLauncher implements ProcessLauncher {
 
   @Override
   public Process launch(List<String> command, UUID jobAttemptId) throws IOException {
-    var process = script.launch(jobAttemptId);
+    var process = script.launch(command, jobAttemptId);
     launches
         .computeIfAbsent(jobAttemptId, _ -> new CopyOnWriteArrayList<>())
         .add(new Launch(List.copyOf(command), process));
@@ -90,6 +99,12 @@ public final class ScriptedProcessLauncher implements ProcessLauncher {
   @FunctionalInterface
   public interface Script {
     ScriptedProcess launch(UUID jobAttemptId) throws IOException;
+  }
+
+  /** Stands in for FFmpeg when a job attempt launches it with the command. */
+  @FunctionalInterface
+  public interface CommandScript {
+    ScriptedProcess launch(List<String> command, UUID jobAttemptId) throws IOException;
   }
 
   private record Launch(List<String> command, ScriptedProcess process) {}

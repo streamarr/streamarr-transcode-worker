@@ -1,18 +1,21 @@
 package com.streamarr.transcode.probe;
 
+import static com.streamarr.transcode.probe.RecordedFfprobe.probe;
 import static com.streamarr.transcode.probe.RecordedFfprobe.probeOutput;
 import static com.streamarr.transcode.probe.RecordedFfprobe.streamOf;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import build.buf.gen.streamarr.transcode.v1.ChromaticityCoordinates;
 import build.buf.gen.streamarr.transcode.v1.CompatibleBase;
 import build.buf.gen.streamarr.transcode.v1.ContentLightLevel;
-import build.buf.gen.streamarr.transcode.v1.DolbyVisionAbsent;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionConfiguration;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionPresent;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionRpuHeader;
+import build.buf.gen.streamarr.transcode.v1.DolbyVisionRpuPlacement;
+import build.buf.gen.streamarr.transcode.v1.MasteringDisplayColorVolume;
 import build.buf.gen.streamarr.transcode.v1.Presence;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
-import build.buf.gen.streamarr.transcode.v1.VideoDynamicRange;
+import com.streamarr.transcode.probe.RecordedFfprobe.Answers;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -128,6 +131,7 @@ class FfprobeExecutorDynamicRangeTest {
         "Should report Dolby Vision without a record when only the sample entry and the RPUs show"
             + " it")
     void shouldReportDolbyVisionWithoutARecordWhenOnlyTheSampleEntryAndTheRpusShowIt() {
+      // The fixture keeps no first-packets read, so the probe cannot place the RPUs.
       var video = streamOf("mp4-dovi-p5-dvh1-no-record.mp4", 0);
 
       assertThat(video.getDynamicRange().getDolbyVisionPresent())
@@ -140,6 +144,7 @@ class FfprobeExecutorDynamicRangeTest {
                           .setBaseLayerFullRange(true)
                           .setDisableResidual(true)
                           .setVdrBitDepth(12))
+                  .setRpuPlacement(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED)
                   .build());
     }
 
@@ -162,32 +167,13 @@ class FfprobeExecutorDynamicRangeTest {
     void
         shouldReportDolbyVisionAndHdr10PlusAbsentWhenNeitherTheStreamNorItsFirstFramesAndPacketsShowThem(
             String fixture) {
+      // FFmpeg's H.264 decoder drops RPUs and HDR10+ messages, so for mp4-sdr8-bt709 only the
+      // packets can rule both out.
       var video = streamOf(fixture, 0);
 
-      assertThat(video.getDynamicRange())
-          .isEqualTo(
-              VideoDynamicRange.newBuilder()
-                  .setCompatibleBase(video.getDynamicRange().getCompatibleBase())
-                  .setHdr10Plus(Presence.PRESENCE_ABSENT)
-                  .setDolbyVisionAbsent(DolbyVisionAbsent.getDefaultInstance())
-                  .build());
-    }
-
-    @Test
-    @DisplayName(
-        "Should report Dolby Vision and HDR10+ absent when an H.264 stream's packets hold neither")
-    void shouldReportDolbyVisionAndHdr10PlusAbsentWhenAnH264StreamsPacketsHoldNeither() {
-      // FFmpeg's H.264 decoder drops RPUs and HDR10+ messages, so the packets show both.
-      var video = streamOf("mp4-sdr8-bt709.mp4", 0);
-
       assertThat(video.getFirstFramesRead()).isTrue();
-      assertThat(video.getDynamicRange())
-          .isEqualTo(
-              VideoDynamicRange.newBuilder()
-                  .setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_SDR)
-                  .setHdr10Plus(Presence.PRESENCE_ABSENT)
-                  .setDolbyVisionAbsent(DolbyVisionAbsent.getDefaultInstance())
-                  .build());
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
+      assertThat(video.getDynamicRange().hasDolbyVisionAbsent()).isTrue();
     }
 
     @Test
@@ -229,8 +215,17 @@ class FfprobeExecutorDynamicRangeTest {
     void shouldReadTheFirstFramesValuesWhenOnlyTheBitstreamCarriesThem() {
       var video = streamOf("mp4-hdr10-sei-only.mp4", 0);
 
+      // The values that record-fixtures.sh gave x265.
       assertThat(video.getMasteringDisplay())
-          .isEqualTo(streamOf("mp4-hdr10-static.mp4", 0).getMasteringDisplay());
+          .isEqualTo(
+              MasteringDisplayColorVolume.newBuilder()
+                  .setRed(coordinates(34_000, 16_000))
+                  .setGreen(coordinates(13_250, 34_500))
+                  .setBlue(coordinates(7500, 3000))
+                  .setWhitePoint(coordinates(15_635, 16_450))
+                  .setMaxLuminance(10_000_000)
+                  .setMinLuminance(50)
+                  .build());
       assertThat(video.getContentLightLevel())
           .isEqualTo(
               ContentLightLevel.newBuilder()
@@ -249,6 +244,28 @@ class FfprobeExecutorDynamicRangeTest {
       assertThat(video.hasContentLightLevel()).isFalse();
       assertThat(video.getMasteringDisplayOmitted()).isFalse();
       assertThat(video.getContentLightLevelOmitted()).isFalse();
+    }
+
+    @Test
+    @DisplayName(
+        "Should mark static metadata omitted when neither the container nor a frame has it and the"
+            + " first-packets read fails")
+    void
+        shouldMarkStaticMetadataOmittedWhenNeitherTheContainerNorAFrameHasItAndThePacketReadFails() {
+      // Without the packets, the walk cannot rule out an SEI message that holds either value.
+      var fixture = "mp4-sdr8-bt709.mp4";
+      var video =
+          probe(
+                  Answers.builder()
+                      .ffprobeOutput(RecordedFfprobe.fixture(fixture))
+                      .firstFrames(RecordedFfprobe.recordedFirstFrames(fixture).orElseThrow())
+                      .build())
+              .getStreams(0);
+
+      assertThat(video.hasMasteringDisplay()).isFalse();
+      assertThat(video.getMasteringDisplayOmitted()).isTrue();
+      assertThat(video.hasContentLightLevel()).isFalse();
+      assertThat(video.getContentLightLevelOmitted()).isTrue();
     }
 
     @Test
@@ -385,19 +402,31 @@ class FfprobeExecutorDynamicRangeTest {
   class ContentLightLevelTests {
 
     @Test
-    @DisplayName("Should read the first frame's light level when Matroska stores a MaxFALL of 0")
-    void shouldReadTheFirstFramesLightLevelWhenMatroskaStoresAMaxFallOf0() {
+    @DisplayName(
+        "Should read the first frame's light level when Matroska stores a MaxFALL of 0 that"
+            + " ffprobe drops")
+    void shouldReadTheFirstFramesLightLevelWhenMatroskaStoresAMaxFallOf0ThatFfprobeDrops() {
       // ffprobe reports a Matroska light level only when MaxCLL and MaxFALL are both nonzero, and
-      // the encode's SEI messages repeat the values.
-      var video = streamOf("mkv-hdr10-maxfall-zero.mkv", 0);
+      // the probe's source names no file, so it cannot read the track's Colour either. The hvcC
+      // record's SEI message holds 1000 and 0, so the frame's own values show which one counts.
+      var fixture = "mkv-hdr10-maxfall-zero.mkv";
+      var video =
+          probe(
+                  RecordedFfprobe.recordedAnswers(fixture)
+                      .firstFrames(
+                          """
+                          {"frames":[{"stream_index":0,"side_data_list":[
+                            {"side_data_type":"Content light level metadata","max_content":900,
+                             "max_average":0}]}]}""")
+                      .build())
+              .getStreams(0);
 
       assertThat(video.getContentLightLevel())
           .isEqualTo(
               ContentLightLevel.newBuilder()
-                  .setMaxContentLightLevel(1000)
+                  .setMaxContentLightLevel(900)
                   .setMaxFrameAverageLightLevel(0)
                   .build());
-      assertThat(video.hasMasteringDisplay()).isTrue();
     }
 
     @Test
@@ -433,6 +462,19 @@ class FfprobeExecutorDynamicRangeTest {
       assertThat(video.getContentLightLevelOmitted()).isTrue();
     }
 
+    @Test
+    @DisplayName("Should mark the light level omitted when ffprobe prints only MaxFALL")
+    void shouldMarkTheLightLevelOmittedWhenFfprobePrintsOnlyMaxFall() {
+      var video =
+          videoStream(
+              """
+              "side_data_list":[{"side_data_type":"Content light level metadata","max_average":400}]
+              """);
+
+      assertThat(video.hasContentLightLevel()).isFalse();
+      assertThat(video.getContentLightLevelOmitted()).isTrue();
+    }
+
     @ParameterizedTest(name = "{0}")
     @ValueSource(strings = {"\"1000\"", "99999999999999999999"})
     @DisplayName(
@@ -457,6 +499,10 @@ class FfprobeExecutorDynamicRangeTest {
           """
           .formatted(maxCll, maxFall);
     }
+  }
+
+  private static ChromaticityCoordinates coordinates(int x, int y) {
+    return ChromaticityCoordinates.newBuilder().setX(x).setY(y).build();
   }
 
   /** The probe result of one video stream with the given ffprobe fields. */

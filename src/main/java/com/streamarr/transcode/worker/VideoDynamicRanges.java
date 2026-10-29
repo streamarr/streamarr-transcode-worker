@@ -15,10 +15,14 @@ final class VideoDynamicRanges {
 
   @SuppressWarnings("checkstyle:fullyQualifiedName")
   static VideoDynamicRange of(build.buf.gen.streamarr.transcode.v1.VideoDynamicRange value) {
-    return new VideoDynamicRange(
-        compatibleBase(value.getCompatibleBase()),
-        presence(value.getHdr10Plus()),
-        dolbyVision(value));
+    var compatibleBase = compatibleBase(value.getCompatibleBase());
+    var dolbyVision = dolbyVision(value);
+    if (compatibleBase == CompatibleBase.NONE && !(dolbyVision instanceof DolbyVision.Present)) {
+      throw new InvalidJobSpecificationException(
+          "A dynamic range without a compatible base requires Dolby Vision");
+    }
+
+    return new VideoDynamicRange(compatibleBase, presence(value.getHdr10Plus()), dolbyVision);
   }
 
   @SuppressWarnings("checkstyle:fullyQualifiedName")

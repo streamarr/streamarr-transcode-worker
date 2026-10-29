@@ -119,9 +119,14 @@ public class FfmpegCommandBuilder {
 
   // Dolby Vision profiles 5 and 10.0 have no compatible base, and of those only profile 5 is
   // HEVC, so only its picture needs the RPU that FFmpeg's HEVC decoder skips when the RPU starts a
-  // sample. A copy decodes nothing.
+  // sample. A job whose mode copies the video decodes nothing, whatever its video decision.
   private static boolean needsRpuMove(TranscodeJob job) {
-    return profile5HevcSourceOf(job.request().transcodeDecision().videoDecision())
+    var decision = job.request().transcodeDecision();
+    if (!decision.transcodeMode().encodesVideo()) {
+      return false;
+    }
+
+    return profile5HevcSourceOf(decision.videoDecision())
         .filter(present -> mayStartSamplesWithRpus(present.rpuPlacement()))
         .isPresent();
   }

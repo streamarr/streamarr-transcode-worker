@@ -39,7 +39,7 @@ final class VideoTimingChannel implements VideoPacketTimings, AutoCloseable {
    * interleaving holds back at most ten seconds of the copy's packets, a few hundred at the frame
    * rates of video.
    */
-  static final int MAXIMUM_PACKETS_AHEAD = 65_536;
+  private static final int MAXIMUM_PACKETS_AHEAD = 65_536;
 
   private static final FileAttribute<Set<PosixFilePermission>> OWNER_ONLY =
       PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------"));
@@ -119,12 +119,13 @@ final class VideoTimingChannel implements VideoPacketTimings, AutoCloseable {
     selector.wakeup();
   }
 
-  /** Stops listening and reading. */
+  /** Stops listening and reading, and returns once the socket and its directory are removed. */
   @Override
   public void close() {
     closed = true;
     copyExited();
     connection.get().ifPresent(VideoTimingChannel::closeQuietly);
+    removeSocket();
   }
 
   private void read() {
