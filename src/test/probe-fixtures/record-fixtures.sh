@@ -4,7 +4,8 @@
 # Every FFmpeg and ffprobe run happens inside the pinned worker image, so the output comes from the
 # worker's own ffprobe, run with the probe's own arguments. Most sources are synthesized with lavfi.
 # edit-mp4-boxes.py adds the MP4 boxes that FFmpeg cannot write, and GPAC's MP4Box, run in its
-# pinned image, adds the Dolby Vision profile 9 record. No media file is downloaded, and no source
+# pinned image, adds the Dolby Vision profile 8.2 and 9 records. x265 and dovi_tool, run in a pinned
+# Alpine image, encode the profile 8.2 stream. No media file is downloaded, and no source
 # file is kept whole: the recordings hold ffprobe's output, including each stream's extradata
 # (-show_data), and packet-data/ holds the bytes of the first packets of the sources it lists.
 #
@@ -20,12 +21,20 @@
 # fixture README lists. Those samples stay local. The Dolby Vision profile 9 fixtures and the
 # profile 8.1 fixture whose RPUs come ahead of a suffix SEI NAL unit need dovi_tool
 # (https://github.com/quietvoid/dovi_tool) on the PATH, which generates their RPUs. Without either
-# variable or dovi_tool, the script keeps the fixtures that need it as they are.
+# variable or dovi_tool, the script keeps the fixtures that need it as they are. The Dolby Vision
+# profile 8.2 fixture needs neither: its Alpine container downloads the pinned dovi_tool release and
+# checks its SHA-256.
 set -euo pipefail
 
 IMAGE="${WORKER_IMAGE:-streamarr/streamarr-transcode-worker:0.1.0-SNAPSHOT@sha256:ad4a844f8fa7f27946ceb79431d62719474b2f3332b80a2222e5a421dc2acaab}"
 # GPAC 26.08-DEV-rev132, whose image is built for amd64 only.
 GPAC_IMAGE="gpac/ubuntu@sha256:9a70c9ec3fe4383b49deb3416f59cb169db267d6c95c827874732bf2b8506ac3"
+# Alpine 3.22, whose x265 package and dovi_tool release encode the Dolby Vision profile 8.2 stream.
+ALPINE_IMAGE="alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8"
+X265_PACKAGE=x265=3.6-r0
+DOVI_TOOL_VERSION=2.3.4
+DOVI_TOOL_SHA256_aarch64=b4f22a7db56954efe4ed8d02276d0f991799e84602f3584711be6c9df950cb15
+DOVI_TOOL_SHA256_x86_64=1844258e13c26607b32224bf1fa82b595d3b35949f5467405fda560daad32b3f
 HERE="$(cd "$(dirname "$0")" && pwd)"
 FIXTURES="$(cd "$HERE/../resources/probe" && pwd)"
 WORK="$(mktemp -d)"
@@ -273,6 +282,10 @@ done
 "${FF[@]}" -f lavfi -i testsrc2=size=64x64:rate=24:duration=1 "${HDR10[@]}" "${X265[@]}" \
   -x265-params log-level=none:bframes=0:hash=2 -f hevc pq-picture-hash.hevc
 
+# Six frames of 10-bit 4:2:0 video, which x265 encodes as the Dolby Vision profile 8.2 stream.
+"${FF[@]}" -f lavfi -i testsrc2=size=64x64:rate=24:duration=0.25 -pix_fmt yuv420p10le -strict -1 \
+  sdr10-64x64.y4m
+
 # MP4 whose clean aperture crops 4 pixels from the left and the right and 2 from the top and the
 # bottom of the 64x36 picture, and the same stream remuxed into Matroska as PixelCrop elements.
 "${FF[@]}" "${VIDEO[@]}" "${X264[@]}" -map_metadata -1 mp4-clap.mp4
@@ -466,6 +479,35 @@ if [ -n "${FATE_SUITE:-}" ]; then
 fi
 in_image av1.sh
 
+# Dolby Vision profile 8.2: dovi_tool's profile 8.1 generator writes one RPU per frame, and x265
+# encodes Main 10 tagged BT.709 with an RPU after each picture and signals profile 8.2, whose
+# compatible base is BT.709 SDR. MP4Box then adds a dvvC record that names profile 8 and
+# compatibility identifier 2 under hvc1.
+cat > "$WORK/dovi-p82.sh" <<'CONTAINER'
+set -euo pipefail
+apk add --no-cache "$X265_PACKAGE" curl > /dev/null
+arch="$(uname -m)"
+expected="DOVI_TOOL_SHA256_${arch}"
+curl -sSfL -o /tmp/dovi_tool.tar.gz \
+  "https://github.com/quietvoid/dovi_tool/releases/download/${DOVI_TOOL_VERSION}/dovi_tool-${DOVI_TOOL_VERSION}-${arch}-unknown-linux-musl.tar.gz"
+echo "${!expected}  /tmp/dovi_tool.tar.gz" | sha256sum -c - > /dev/null
+tar -xzf /tmp/dovi_tool.tar.gz -C /tmp
+cd /work
+echo '{"cm_version": "V40", "length": 6}' > p82-rpus.json
+/tmp/dovi_tool generate -p 8.1 -j p82-rpus.json -o p82-rpus.bin > /dev/null
+x265 --input sdr10-64x64.y4m --output dovi-p82.hevc --profile main10 --colorprim bt709 \
+  --transfer bt709 --colormatrix bt709 --range limited --dolby-vision-profile 8.2 \
+  --dolby-vision-rpu p82-rpus.bin --bframes 0 --vbv-bufsize 1000 --vbv-maxrate 1000 --pools none \
+  --frame-threads 1 --log-level error --no-progress
+CONTAINER
+docker run --rm -v "$WORK":/work -e X265_PACKAGE="$X265_PACKAGE" \
+  -e DOVI_TOOL_VERSION="$DOVI_TOOL_VERSION" -e DOVI_TOOL_SHA256_aarch64="$DOVI_TOOL_SHA256_aarch64" \
+  -e DOVI_TOOL_SHA256_x86_64="$DOVI_TOOL_SHA256_x86_64" "$ALPINE_IMAGE" \
+  sh -c 'apk add --no-cache bash > /dev/null && bash /work/dovi-p82.sh' > "$WORK/alpine.log" 2>&1 \
+  || { cat "$WORK/alpine.log"; exit 1; }
+in_gpac -add dovi-p82.hevc:dvp=8.2:fps=24 -new mp4-dovi-p82.mp4
+FIXTURES_TO_PROBE+=(mp4-dovi-p82.mp4)
+
 # Dolby Vision profile 9: the SDR encode with an RPU in an H.264 NAL unit of type 28 after each
 # picture, copied into MP4 by FFmpeg, which keeps each RPU in the sample of its own picture. MP4Box
 # then adds a dvvC record under avc1 and under dva1, and the avc1 copy goes into MPEG-TS, whose
@@ -518,7 +560,7 @@ FF=(timeout 60 ffmpeg -hide_banner -nostdin -loglevel error -y)
 CONTAINER
 
 LOCAL_SAMPLE_NAMES=(mp4-dovi-p5-dvh1.mp4 mp4-dovi-p5-dvh1-no-record.mp4 mp4-dovi-p81.mp4
-  mp4-dovi-p82.mp4 mp4-dovi-p84-hlg.mp4 mp4-hevc-hdr10.mp4
+  mp4-dovi-p84-hlg.mp4 mp4-hevc-hdr10.mp4
   mp4-hevc-sdr10-untagged.mp4 mov-phone-hlg-dovi-p84.mov mov-phone-rotated.mov mov-phone-one-gap.mov
   mov-phone-120-declared.mov mov-phone-60.mov mov-phone-slow-motion.mov mpegts-avchd-interlaced.mts)
 PROBE_ARGUMENTS=("${FIXTURES_TO_PROBE[@]}")

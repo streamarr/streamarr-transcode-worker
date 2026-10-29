@@ -40,7 +40,7 @@ class WorkerProbeCodecStringTest {
     "mp4-hdr10-static.mp4, hvc1.2.4.L30.90",
     "mp4-dovi-p5-dvh1.mp4, hvc1.2.4.L123.B0",
     "mp4-dovi-p9-dva1.mp4, avc1.640028",
-    "mp4-dovi-p82.mp4, hvc1.2.4.H120.90",
+    "mp4-dovi-p82.mp4, hvc1.2.4.L60.90",
   })
   @DisplayName("Should publish the copied codec string when the server probes a recorded stream")
   void shouldPublishTheCopiedCodecStringWhenTheServerProbesARecordedStream(
