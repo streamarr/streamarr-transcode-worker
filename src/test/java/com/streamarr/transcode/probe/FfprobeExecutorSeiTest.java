@@ -1105,8 +1105,7 @@ class FfprobeExecutorSeiTest {
     }
 
     private static ProbeStreamInfo mp4H264Sei1() {
-      return probe(RecordedFfprobe.recordedAnswers("mp4-h264-sei-1.mp4").prerollPackets(3).build())
-          .getStreams(0);
+      return probe(RecordedFfprobe.recordedAnswers("mp4-h264-sei-1.mp4").build()).getStreams(0);
     }
 
     @ParameterizedTest(name = "{0}")
