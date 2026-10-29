@@ -290,6 +290,25 @@ class FragmentedMp4RpuMoverTest {
 
   @Test
   @DisplayName(
+      "Should move a length that starts the sample behind the previous picture when a start code"
+          + " inside its RPU begins another RPU")
+  void
+      shouldMoveALengthThatStartsTheSampleBehindThePreviousPictureWhenAStartCodeInsideItsRpuBeginsAnotherRpu()
+          throws IOException {
+    // FFmpeg's HEVC decoder reads only the last of the two RPUs, and the length holds nothing else.
+    var twoRpus = unit("7C 01 19 08 00 00 01 7C 01 19 00");
+    var copy =
+        stream(
+            fragmentBuilder().video(0, sample(slice(0))).build(),
+            fragmentBuilder().video(1001, sample(twoRpus, slice(1))).build());
+
+    var moved = move(copy);
+
+    assertThat(videoSamplesOf(moved)).containsExactly(hex(slice(0), twoRpus), hex(slice(1)));
+  }
+
+  @Test
+  @DisplayName(
       "Should keep a length that holds a slice in place when a start code inside it begins an RPU"
           + " that another slice follows")
   void

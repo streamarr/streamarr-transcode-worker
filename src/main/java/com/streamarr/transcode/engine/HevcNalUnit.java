@@ -48,15 +48,18 @@ record HevcNalUnit(@NonNull ByteBuffer bytes, @NonNull Decoded decoded) {
     /** No NAL unit of the bytes reaches the decoder. */
     NOTHING,
     /**
-     * Only an RPU reaches the decoder, so that moving the bytes moves no other NAL unit that the
-     * decoder reads.
+     * Only RPUs reach the decoder, so that moving the bytes moves no other NAL unit that the
+     * decoder reads. The decoder reads only the last of them as an RPU.
      */
     ONLY_RPUS,
     /** A slice reaches the decoder, and the last NAL unit that does is an RPU. */
     SLICE_ENDING_IN_RPU,
     /** A slice reaches the decoder, and the last NAL unit that does is no RPU. */
     SLICE,
-    /** No slice reaches the decoder, and the last NAL unit that does is an RPU behind another. */
+    /**
+     * No slice reaches the decoder, and the last NAL unit that does is an RPU behind one that is no
+     * RPU.
+     */
     OTHER_ENDING_IN_RPU,
     /** No slice reaches the decoder, and the last NAL unit that does is no RPU. */
     OTHER
@@ -137,12 +140,18 @@ record HevcNalUnit(@NonNull ByteBuffer bytes, @NonNull Decoded decoded) {
   private static Decoded decodedOf(ByteBuffer bytes, int lengthSize) {
     var slice = false;
     var reaching = 0;
-    var lastReaching = lengthSize;
+    var rpus = 0;
+    var endsWithRpu = false;
     for (var header = lengthSize; header != NO_HEADER; header = nextHeader(bytes, header)) {
-      if (headerReachesDecoder(bytes, header)) {
-        slice |= typeAt(bytes, header) < FIRST_NON_PICTURE_TYPE;
-        reaching++;
-        lastReaching = header;
+      if (!headerReachesDecoder(bytes, header)) {
+        continue;
+      }
+
+      slice |= typeAt(bytes, header) < FIRST_NON_PICTURE_TYPE;
+      reaching++;
+      endsWithRpu = isRpuAt(bytes, header);
+      if (endsWithRpu) {
+        rpus++;
       }
     }
 
@@ -150,8 +159,7 @@ record HevcNalUnit(@NonNull ByteBuffer bytes, @NonNull Decoded decoded) {
       return Decoded.NOTHING;
     }
 
-    var endsWithRpu = isRpuAt(bytes, lastReaching);
-    if (endsWithRpu && reaching == 1) {
+    if (rpus == reaching) {
       return Decoded.ONLY_RPUS;
     }
 
