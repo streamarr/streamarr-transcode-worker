@@ -78,7 +78,9 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.time.Duration;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -91,6 +93,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -101,6 +104,7 @@ import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
+import lombok.Builder;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -1490,57 +1494,56 @@ class WorkerMediaSmokeTest {
   // reads, and both sources decode to the same pictures.
   private static synchronized Path rpuLayoutSource(RpuLayout layout, String audioCodec)
       throws Exception {
-    var source =
-        rpuLayoutSources.resolve(
-            layout.name().toLowerCase(Locale.ROOT) + "-" + audioCodec + ".mp4");
-    if (Files.exists(source)) {
-      return source;
-    }
+    var layoutName = layout.name().toLowerCase(Locale.ROOT);
+    return buildFixtureOnce(
+        rpuLayoutSources.resolve(layoutName + "-" + audioCodec + ".mp4"),
+        output -> {
+          var withRpus = rpuLayoutSources.resolve(layoutName + ".hevc");
+          Files.write(withRpus, withStandInRpus(Files.readAllBytes(rpuLayoutPictures()), layout));
+          runFfmpeg(
+              List.of(
+                  "-i",
+                  withRpus.toString(),
+                  "-f",
+                  "lavfi",
+                  "-i",
+                  "sine=frequency=440:sample_rate=48000",
+                  "-map",
+                  "0:v",
+                  "-map",
+                  "1:a",
+                  "-c:v",
+                  "copy",
+                  "-bsf:v",
+                  "setts=pts=N*1/24/TB:dts=N*1/24/TB",
+                  "-c:a",
+                  audioCodec,
+                  "-shortest"),
+              output);
+        });
+  }
 
-    var pictures = rpuLayoutSources.resolve("pictures.hevc");
-    if (!Files.exists(pictures)) {
-      runFfmpeg(
-          List.of(
-              "-f",
-              "lavfi",
-              "-i",
-              "testsrc2=size=64x36:rate=24",
-              "-t",
-              String.valueOf(PROFILE_5_PERIOD_SECONDS * PROFILE_5_SEGMENT_COUNT),
-              "-pix_fmt",
-              "yuv420p10le",
-              "-c:v",
-              "libx265",
-              "-x265-params",
-              "keyint=24:min-keyint=24:bframes=0:aud=1:log-level=error",
-              "-f",
-              "hevc"),
-          pictures);
-    }
-
-    var withRpus = rpuLayoutSources.resolve(layout.name().toLowerCase(Locale.ROOT) + ".hevc");
-    Files.write(withRpus, withStandInRpus(Files.readAllBytes(pictures), layout));
-    runFfmpeg(
-        List.of(
-            "-i",
-            withRpus.toString(),
-            "-f",
-            "lavfi",
-            "-i",
-            "sine=frequency=440:sample_rate=48000",
-            "-map",
-            "0:v",
-            "-map",
-            "1:a",
-            "-c:v",
-            "copy",
-            "-bsf:v",
-            "setts=pts=N*1/24/TB:dts=N*1/24/TB",
-            "-c:a",
-            audioCodec,
-            "-shortest"),
-        source);
-    return source;
+  private static synchronized Path rpuLayoutPictures() throws Exception {
+    return buildFixtureOnce(
+        rpuLayoutSources.resolve("pictures.hevc"),
+        output ->
+            runFfmpeg(
+                List.of(
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc2=size=64x36:rate=24",
+                    "-t",
+                    String.valueOf(PROFILE_5_PERIOD_SECONDS * PROFILE_5_SEGMENT_COUNT),
+                    "-pix_fmt",
+                    "yuv420p10le",
+                    "-c:v",
+                    "libx265",
+                    "-x265-params",
+                    "keyint=24:min-keyint=24:bframes=0:aud=1:log-level=error",
+                    "-f",
+                    "hevc"),
+                output));
   }
 
   // Each access unit starts at its delimiter. The last picture's RPU has no next picture to
@@ -2216,31 +2219,26 @@ class WorkerMediaSmokeTest {
 
   // 10-bit 4:2:0 HEVC without HDR signaling, the common real 10-bit source.
   private static synchronized Path tenBitSdrSource() throws Exception {
-    var source = tenBitSources.resolve("ten-bit-sdr.mp4");
-    if (Files.exists(source)) {
-      return source;
-    }
-
-    var partial = tenBitSources.resolve("ten-bit-sdr.partial.mp4");
-    runFfmpeg(
-        List.of(
-            "-f",
-            "lavfi",
-            "-i",
-            "testsrc=size=64x36:rate=24",
-            "-t",
-            String.valueOf(TEN_BIT_SOURCE_SECONDS),
-            "-c:v",
-            "libx265",
-            "-pix_fmt",
-            "yuv420p10le",
-            "-x265-params",
-            "log-level=error",
-            "-tag:v",
-            "hvc1"),
-        partial);
-    Files.move(partial, source);
-    return source;
+    return buildFixtureOnce(
+        tenBitSources.resolve("ten-bit-sdr.mp4"),
+        output ->
+            runFfmpeg(
+                List.of(
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc=size=64x36:rate=24",
+                    "-t",
+                    String.valueOf(TEN_BIT_SOURCE_SECONDS),
+                    "-c:v",
+                    "libx265",
+                    "-pix_fmt",
+                    "yuv420p10le",
+                    "-x265-params",
+                    "log-level=error",
+                    "-tag:v",
+                    "hvc1"),
+                output));
   }
 
   private static String pixelFormatOf(Path media) throws Exception {
@@ -3358,6 +3356,37 @@ class WorkerMediaSmokeTest {
     return longSource;
   }
 
+  // The build writes a sibling file, which takes the fixture's name only once the build succeeds,
+  // so that a later case builds the fixture again instead of reading a failed build's output.
+  private static synchronized Path buildFixtureOnce(Path fixture, FixtureBuild build)
+      throws Exception {
+    if (Files.exists(fixture)) {
+      return fixture;
+    }
+
+    try (var partial =
+        new PartialFile(fixture.resolveSibling("partial-" + fixture.getFileName()))) {
+      build.writeTo(partial.path());
+      Files.move(partial.path(), fixture, StandardCopyOption.ATOMIC_MOVE);
+    }
+
+    return fixture;
+  }
+
+  @FunctionalInterface
+  private interface FixtureBuild {
+    void writeTo(Path output) throws Exception;
+  }
+
+  // Closing deletes what a failed build wrote. A failure to delete the file joins the build's own
+  // failure as a suppressed exception instead of replacing that failure.
+  private record PartialFile(Path path) implements AutoCloseable {
+    @Override
+    public void close() throws IOException {
+      Files.deleteIfExists(path);
+    }
+  }
+
   private static void runFfmpeg(List<String> arguments, Path output) throws Exception {
     runToCompletion(
         Stream.of(
@@ -3365,23 +3394,111 @@ class WorkerMediaSmokeTest {
                 arguments,
                 List.of(output.toString()))
             .flatMap(List::stream)
-            .toList());
+            .toList(),
+        output);
   }
 
-  // Returns the command's combined output after it exits successfully.
-  private static String runToCompletion(List<String> command) throws Exception {
+  // Returns the command's combined output after it exits successfully. A command still running
+  // after two minutes fails with a report of how far it got.
+  private static String runToCompletion(List<String> command, Path... outputs) throws Exception {
     var log = Files.createTempFile(longSources, command.getFirst(), ".log");
-    var process =
-        new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(log.toFile()).start();
-    try {
-      assertThat(process.waitFor(2, TimeUnit.MINUTES))
-          .as(command.getFirst() + " finished")
-          .isTrue();
+    var started = System.nanoTime();
+    try (var owned =
+        new OwnedProcess(
+            new ProcessBuilder(command)
+                .redirectErrorStream(true)
+                .redirectOutput(log.toFile())
+                .start())) {
+      var process = owned.process();
+      if (!process.waitFor(2, TimeUnit.MINUTES)) {
+        throw new AssertionError(
+            UnfinishedCommand.builder()
+                .command(command)
+                .process(process)
+                .ranFor(
+                    Duration.ofNanos(System.nanoTime() - started).truncatedTo(ChronoUnit.MILLIS))
+                .log(log)
+                .outputs(List.of(outputs))
+                .build()
+                .report());
+      }
+
       var output = Files.readString(log);
       assertThat(process.exitValue()).as(output).isZero();
       return output;
-    } finally {
-      process.destroyForcibly();
+    }
+  }
+
+  // Closing kills the process and waits for it to end, because buildFixtureOnce deletes a failed
+  // build's file next. join() does not return on an interrupt, which stays set for the caller. A
+  // process that outlasts the guard fails the call, as a suppressed exception when the call has
+  // already failed.
+  private record OwnedProcess(Process process) implements AutoCloseable {
+    private static final Duration EXIT_AFTER_KILL_GUARD = Duration.ofMinutes(1);
+
+    @Override
+    public void close() {
+      try {
+        process
+            .destroyForcibly()
+            .onExit()
+            .orTimeout(EXIT_AFTER_KILL_GUARD.toMillis(), TimeUnit.MILLISECONDS)
+            .join();
+      } catch (CompletionException timeout) {
+        throw new AssertionError(
+            "PID %d was still running %s after it was killed"
+                .formatted(process.pid(), EXIT_AFTER_KILL_GUARD),
+            timeout);
+      }
+    }
+  }
+
+  // A command that is still running, with what it has done so far: its run time and CPU time, the
+  // size of each output it writes, and the end of its log. A file that cannot be read says so in
+  // the report, so that the timeout still fails with the rest of the report.
+  @Builder
+  private record UnfinishedCommand(
+      List<String> command, Process process, Duration ranFor, Path log, List<Path> outputs) {
+
+    private static final int LOG_TAIL_LINES = 40;
+
+    String report() {
+      var report = new ArrayList<String>();
+      report.add("%s did not finish: %s".formatted(command.getFirst(), String.join(" ", command)));
+      report.add("It ran for %s and used %s of CPU time.".formatted(ranFor, cpuTime()));
+      for (var output : outputs) {
+        report.add(sizeOf(output));
+      }
+
+      report.add(sizeOf(log));
+      report.add("The end of its log:");
+      report.addAll(lastLines(log));
+      return String.join(System.lineSeparator(), report);
+    }
+
+    private String cpuTime() {
+      return process.info().totalCpuDuration().map(Duration::toString).orElse("an unknown amount");
+    }
+
+    private static String sizeOf(Path file) {
+      if (Files.notExists(file)) {
+        return file + " does not exist";
+      }
+
+      try {
+        return "%s holds %d bytes".formatted(file, Files.size(file));
+      } catch (IOException exception) {
+        return "%s could not be measured: %s".formatted(file, exception);
+      }
+    }
+
+    private static List<String> lastLines(Path log) {
+      try {
+        var lines = new String(Files.readAllBytes(log), StandardCharsets.UTF_8).lines().toList();
+        return lines.subList(Math.max(0, lines.size() - LOG_TAIL_LINES), lines.size());
+      } catch (IOException exception) {
+        return List.of("The log could not be read: " + exception);
+      }
     }
   }
 
