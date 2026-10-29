@@ -1,12 +1,32 @@
 package com.streamarr.transcode.probe;
 
+import static com.streamarr.transcode.probe.EbmlElements.AUDIO_TRACK_TYPE;
+import static com.streamarr.transcode.probe.EbmlElements.CLUSTER;
+import static com.streamarr.transcode.probe.EbmlElements.CLUSTER_TIMESTAMP;
+import static com.streamarr.transcode.probe.EbmlElements.CUES;
+import static com.streamarr.transcode.probe.EbmlElements.CUE_CLUSTER_POSITION;
+import static com.streamarr.transcode.probe.EbmlElements.CUE_POINT;
+import static com.streamarr.transcode.probe.EbmlElements.CUE_TIME;
+import static com.streamarr.transcode.probe.EbmlElements.CUE_TRACK;
+import static com.streamarr.transcode.probe.EbmlElements.CUE_TRACK_POSITIONS;
+import static com.streamarr.transcode.probe.EbmlElements.DURATION;
+import static com.streamarr.transcode.probe.EbmlElements.INFO;
+import static com.streamarr.transcode.probe.EbmlElements.MUXING_APP;
+import static com.streamarr.transcode.probe.EbmlElements.SEEK;
+import static com.streamarr.transcode.probe.EbmlElements.SEEK_HEAD;
+import static com.streamarr.transcode.probe.EbmlElements.SEEK_ID;
+import static com.streamarr.transcode.probe.EbmlElements.SEEK_POSITION;
+import static com.streamarr.transcode.probe.EbmlElements.TIMESTAMP_SCALE;
+import static com.streamarr.transcode.probe.EbmlElements.TRACKS;
+import static com.streamarr.transcode.probe.EbmlElements.TRACK_TIMESTAMP_SCALE;
+import static com.streamarr.transcode.probe.EbmlElements.WRITING_APP;
 import static com.streamarr.transcode.probe.EbmlElements.document;
 import static com.streamarr.transcode.probe.EbmlElements.element;
-import static com.streamarr.transcode.probe.EbmlElements.hevcCodecId;
 import static com.streamarr.transcode.probe.EbmlElements.unsigned;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import build.buf.gen.streamarr.transcode.v1.KeyframePacketScanReason;
+import com.streamarr.transcode.probe.EbmlElements.TrackEntry;
 import com.streamarr.transcode.probe.KeyframeIndex.KeyframeTime;
 import com.streamarr.transcode.probe.KeyframeIndex.Listed;
 import com.streamarr.transcode.probe.KeyframeIndex.TimeBase;
@@ -217,7 +237,7 @@ class MatroskaCueReaderTest {
   @DisplayName("Should require a packet scan when the Tracks hold a malformed element")
   void shouldRequirePacketScanWhenTracksHoldMalformedElement(String malformation, String tracks)
       throws Exception {
-    var source = write(document(lavfInfo(), element(0x1654AE6B, hex(tracks)), videoCueAt(0)));
+    var source = write(document(lavfInfo(), element(TRACKS, hex(tracks)), videoCueAt(0)));
 
     assertThat(MatroskaCueReader.read(source, 0)).as(malformation).isEqualTo(INCOMPLETE);
   }
@@ -231,19 +251,19 @@ class MatroskaCueReaderTest {
     // FFmpeg's parse of the CuePoint stops at the nine-byte CueTrack, so it never reads 5000.
     var point =
         element(
-            0xBB,
-            element(0xB3, unsigned(2_000)),
-            element(0xB7, element(0xF7, unsigned(VIDEO_TRACK))),
-            element(0xB7, element(0xF7, hex("00 00 00 00 00 00 00 00 01"))),
-            element(0xB3, unsigned(5_000)));
+            CUE_POINT,
+            element(CUE_TIME, unsigned(2_000)),
+            element(CUE_TRACK_POSITIONS, element(CUE_TRACK, unsigned(VIDEO_TRACK))),
+            element(CUE_TRACK_POSITIONS, element(CUE_TRACK, hex("00 00 00 00 00 00 00 00 01"))),
+            element(CUE_TIME, unsigned(5_000)));
     var cues =
         element(
-            0x1C53BB6B,
+            CUES,
             point,
             element(
-                0xBB,
-                element(0xB3, unsigned(10_000)),
-                element(0xB7, element(0xF7, unsigned(VIDEO_TRACK)))));
+                CUE_POINT,
+                element(CUE_TIME, unsigned(10_000)),
+                element(CUE_TRACK_POSITIONS, element(CUE_TRACK, unsigned(VIDEO_TRACK)))));
     var source = write(document(lavfInfo(), oneVideoTrack(), cues));
 
     assertThat(MatroskaCueReader.read(source, 0)).isEqualTo(INCOMPLETE);
@@ -258,11 +278,11 @@ class MatroskaCueReaderTest {
     // FFmpeg's parse of the Info stops at the three-byte Duration, so it never reads 1000.
     var info =
         element(
-            0x1549A966,
-            element(0x2AD7B1, unsigned(1_000_000)),
-            element(0x4D80, "Lavf61.7.100".getBytes(StandardCharsets.UTF_8)),
-            element(0x4489, hex("00 00 00")),
-            element(0x2AD7B1, unsigned(1_000)));
+            INFO,
+            element(TIMESTAMP_SCALE, unsigned(1_000_000)),
+            element(MUXING_APP, "Lavf61.7.100".getBytes(StandardCharsets.UTF_8)),
+            element(DURATION, hex("00 00 00")),
+            element(TIMESTAMP_SCALE, unsigned(1_000)));
     var source = write(document(info, oneVideoTrack(), videoCueAt(0)));
 
     assertThat(MatroskaCueReader.read(source, 0)).isEqualTo(INCOMPLETE);
@@ -274,9 +294,9 @@ class MatroskaCueReaderTest {
   void shouldListTheCueTimesWhenTheInfoHoldsAnEmptyDurationWhichFfmpegReads() throws Exception {
     var info =
         element(
-            0x1549A966,
-            element(0x4D80, "Lavf61.7.100".getBytes(StandardCharsets.UTF_8)),
-            element(0x4489, new byte[0]));
+            INFO,
+            element(MUXING_APP, "Lavf61.7.100".getBytes(StandardCharsets.UTF_8)),
+            element(DURATION, new byte[0]));
     var source = write(document(info, oneVideoTrack(), videoCueAt(0)));
 
     assertThat(MatroskaCueReader.read(source, 0))
@@ -292,10 +312,10 @@ class MatroskaCueReaderTest {
       String repeat, String bytes) throws Exception {
     var info =
         element(
-            0x1549A966,
-            element(0x2AD7B1, unsigned(1_000)),
-            element(0x4D80, "Lavf61.7.100".getBytes(StandardCharsets.UTF_8)),
-            element(0x2AD7B1, hex(bytes)));
+            INFO,
+            element(TIMESTAMP_SCALE, unsigned(1_000)),
+            element(MUXING_APP, "Lavf61.7.100".getBytes(StandardCharsets.UTF_8)),
+            element(TIMESTAMP_SCALE, hex(bytes)));
     var source = write(document(info, oneVideoTrack(), videoCueAt(0)));
 
     assertThat(MatroskaCueReader.read(source, 0))
@@ -416,50 +436,42 @@ class MatroskaCueReaderTest {
     byte[] bytes() {
       var info = new ArrayList<byte[]>();
       if (timestampScale != null) {
-        info.add(element(0x2AD7B1, unsigned(timestampScale)));
+        info.add(element(TIMESTAMP_SCALE, unsigned(timestampScale)));
       }
 
-      info.add(element(0x4D80, muxingApp.getBytes(StandardCharsets.UTF_8)));
+      info.add(element(MUXING_APP, muxingApp.getBytes(StandardCharsets.UTF_8)));
       if (writingApp != null) {
-        info.add(element(0x5741, writingApp.getBytes(StandardCharsets.UTF_8)));
+        info.add(element(WRITING_APP, writingApp.getBytes(StandardCharsets.UTF_8)));
       }
 
-      var videoEntry = new ArrayList<byte[]>();
-      videoEntry.add(element(0xD7, unsigned(VIDEO_TRACK)));
-      videoEntry.add(element(0x83, unsigned(1)));
-      videoEntry.add(hevcCodecId());
+      var videoEntry = TrackEntry.video().number(VIDEO_TRACK);
       if (trackTimestampScale != null) {
-        videoEntry.add(element(0x23314F, trackTimestampScale));
+        videoEntry.child(element(TRACK_TIMESTAMP_SCALE, trackTimestampScale));
       }
 
       var tracks =
           element(
-              0x1654AE6B,
-              element(0xAE, videoEntry.toArray(byte[][]::new)),
-              element(0xAE, element(0xD7, unsigned(AUDIO_TRACK)), element(0x83, unsigned(2))),
-              element(
-                  0xAE,
-                  element(0xD7, unsigned(SECOND_VIDEO_TRACK)),
-                  element(0x83, unsigned(1)),
-                  hevcCodecId()));
-      var cueElement =
-          element(0x1C53BB6B, cues.stream().map(this::cuePoint).toArray(byte[][]::new));
-      var cluster = element(0x1F43B675, element(0xE7, unsigned(0)));
-      var infoElement = element(0x1549A966, info.toArray(byte[][]::new));
+              TRACKS,
+              videoEntry.build().bytes(),
+              TrackEntry.builder().number(AUDIO_TRACK).type(AUDIO_TRACK_TYPE).build().bytes(),
+              TrackEntry.video().number(SECOND_VIDEO_TRACK).build().bytes());
+      var cueElement = element(CUES, cues.stream().map(this::cuePoint).toArray(byte[][]::new));
+      var cluster = cluster();
+      var infoElement = element(INFO, info.toArray(byte[][]::new));
 
       // The SeekHead has a fixed size, so the Cues position is known before it is written.
-      var seekHeadSize = element(0x114D9B74, seekEntry(0x1C53BB6B, 0)).length;
+      var seekHeadSize = element(SEEK_HEAD, seekEntry(CUES, 0)).length;
       var cuesPosition =
           seekHeadSize
               + infoElement.length
               + tracks.length
               + (cuesAfterCluster ? cluster.length : 0);
-      var seekEntry = seekEntry(0x1549A966, seekHeadSize);
+      var seekEntry = seekEntry(INFO, seekHeadSize);
       if (seekHeadListsCues) {
-        seekEntry = seekEntry(0x1C53BB6B, cuesPosition);
+        seekEntry = seekEntry(CUES, cuesPosition);
       }
 
-      var seekHead = element(0x114D9B74, seekEntry);
+      var seekHead = element(SEEK_HEAD, seekEntry);
       var body =
           cuesAfterCluster
               ? List.of(seekHead, infoElement, tracks, cluster, cueElement)
@@ -469,40 +481,44 @@ class MatroskaCueReaderTest {
 
     private byte[] cuePoint(CuePoint point) {
       var children = new ArrayList<byte[]>();
-      children.add(element(0xB3, unsigned(point.time())));
+      children.add(element(CUE_TIME, unsigned(point.time())));
       for (var track : point.tracks()) {
-        children.add(element(0xB7, element(0xF7, unsigned(track)), element(0xF1, unsigned(0))));
+        children.add(
+            element(
+                CUE_TRACK_POSITIONS,
+                element(CUE_TRACK, unsigned(track)),
+                element(CUE_CLUSTER_POSITION, unsigned(0))));
       }
 
-      return element(0xBB, children.toArray(byte[][]::new));
+      return element(CUE_POINT, children.toArray(byte[][]::new));
     }
   }
 
   private static byte[] lavfInfo() {
-    return element(0x1549A966, element(0x4D80, "Lavf61.7.100".getBytes(StandardCharsets.UTF_8)));
+    return element(INFO, element(MUXING_APP, "Lavf61.7.100".getBytes(StandardCharsets.UTF_8)));
   }
 
   private static byte[] oneVideoTrack() {
-    return element(
-        0x1654AE6B,
-        element(
-            0xAE, element(0xD7, unsigned(VIDEO_TRACK)), element(0x83, unsigned(1)), hevcCodecId()));
+    return element(TRACKS, TrackEntry.video().number(VIDEO_TRACK).build().bytes());
   }
 
   private static byte[] videoCueAt(long time) {
     return element(
-        0x1C53BB6B,
-        element(0xBB, element(0xB3, unsigned(time)), element(0xB7, element(0xF7, unsigned(1)))));
+        CUES,
+        element(
+            CUE_POINT,
+            element(CUE_TIME, unsigned(time)),
+            element(CUE_TRACK_POSITIONS, element(CUE_TRACK, unsigned(VIDEO_TRACK)))));
   }
 
   private static byte[] cluster() {
-    return element(0x1F43B675, element(0xE7, unsigned(0)));
+    return element(CLUSTER, element(CLUSTER_TIMESTAMP, unsigned(0)));
   }
 
   /** A SeekHead that lists the Cues, then Info, Tracks and a Cluster, then {@code afterCluster}. */
   private static byte[] cuesSeekPastCluster(long cuesPosition, byte[] afterCluster) {
     return document(
-        element(0x114D9B74, seekEntry(0x1C53BB6B, cuesPosition)),
+        element(SEEK_HEAD, seekEntry(CUES, cuesPosition)),
         lavfInfo(),
         oneVideoTrack(),
         cluster(),
@@ -511,7 +527,7 @@ class MatroskaCueReaderTest {
 
   /** The position of the Cluster in {@link #cuesSeekPastCluster}, from the Segment's data. */
   private static long clusterPositionAfterCuesSeekHead() {
-    return element(0x114D9B74, seekEntry(0x1C53BB6B, 0)).length
+    return element(SEEK_HEAD, seekEntry(CUES, 0)).length
         + lavfInfo().length
         + oneVideoTrack().length;
   }
@@ -519,14 +535,15 @@ class MatroskaCueReaderTest {
   /** A SeekHead whose one Seek has no SeekID and whose other Seek has no SeekPosition. */
   private static byte[] incompleteSeekHead(long cuesPosition) {
     return element(
-        0x114D9B74,
-        element(0x4DBB, element(0x53AC, fixedUnsigned(cuesPosition))),
-        element(0x4DBB, element(0x53AB, unsigned(0x1C53BB6B))));
+        SEEK_HEAD,
+        element(SEEK, element(SEEK_POSITION, fixedUnsigned(cuesPosition))),
+        element(SEEK, element(SEEK_ID, unsigned(CUES))));
   }
 
   /** A Seek whose SeekPosition always takes eight bytes, so its size never depends on the value. */
   private static byte[] seekEntry(long id, long position) {
-    return element(0x4DBB, element(0x53AB, unsigned(id)), element(0x53AC, fixedUnsigned(position)));
+    return element(
+        SEEK, element(SEEK_ID, unsigned(id)), element(SEEK_POSITION, fixedUnsigned(position)));
   }
 
   private static byte[] hex(String bytes) {

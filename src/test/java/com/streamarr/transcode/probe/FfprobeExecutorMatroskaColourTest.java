@@ -1,8 +1,35 @@
 package com.streamarr.transcode.probe;
 
+import static com.streamarr.transcode.probe.EbmlElements.AUDIO_TRACK_TYPE;
+import static com.streamarr.transcode.probe.EbmlElements.CLUSTER;
+import static com.streamarr.transcode.probe.EbmlElements.CLUSTER_TIMESTAMP;
+import static com.streamarr.transcode.probe.EbmlElements.CODEC_ID;
+import static com.streamarr.transcode.probe.EbmlElements.COLOUR;
+import static com.streamarr.transcode.probe.EbmlElements.CUES;
+import static com.streamarr.transcode.probe.EbmlElements.HEVC_CODEC_ID;
+import static com.streamarr.transcode.probe.EbmlElements.LUMINANCE_MAX;
+import static com.streamarr.transcode.probe.EbmlElements.MASTERING_METADATA;
+import static com.streamarr.transcode.probe.EbmlElements.MAX_CLL;
+import static com.streamarr.transcode.probe.EbmlElements.MAX_FALL;
+import static com.streamarr.transcode.probe.EbmlElements.PIXEL_WIDTH;
+import static com.streamarr.transcode.probe.EbmlElements.RANGE;
+import static com.streamarr.transcode.probe.EbmlElements.SEEK;
+import static com.streamarr.transcode.probe.EbmlElements.SEEK_HEAD;
+import static com.streamarr.transcode.probe.EbmlElements.SEEK_ID;
+import static com.streamarr.transcode.probe.EbmlElements.SEEK_POSITION;
+import static com.streamarr.transcode.probe.EbmlElements.SEGMENT;
+import static com.streamarr.transcode.probe.EbmlElements.TRACKS;
+import static com.streamarr.transcode.probe.EbmlElements.TRACK_ENTRY;
+import static com.streamarr.transcode.probe.EbmlElements.TRACK_NUMBER;
+import static com.streamarr.transcode.probe.EbmlElements.TRACK_TYPE;
+import static com.streamarr.transcode.probe.EbmlElements.VIDEO;
+import static com.streamarr.transcode.probe.EbmlElements.VIDEO_TRACK_TYPE;
+import static com.streamarr.transcode.probe.EbmlElements.VOID;
+import static com.streamarr.transcode.probe.EbmlElements.codecId;
 import static com.streamarr.transcode.probe.EbmlElements.concat;
 import static com.streamarr.transcode.probe.EbmlElements.document;
 import static com.streamarr.transcode.probe.EbmlElements.element;
+import static com.streamarr.transcode.probe.EbmlElements.header;
 import static com.streamarr.transcode.probe.EbmlElements.hevcCodecId;
 import static com.streamarr.transcode.probe.EbmlElements.unsigned;
 import static com.streamarr.transcode.probe.RecordedFfprobe.probe;
@@ -10,13 +37,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import build.buf.gen.streamarr.transcode.v1.ContentLightLevel;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
+import com.streamarr.transcode.probe.EbmlElements.TrackEntry;
 import com.streamarr.transcode.probe.RecordedFfprobe.Answers;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
@@ -31,10 +57,6 @@ import org.junit.jupiter.params.provider.MethodSource;
 @DisplayName("FFprobe Executor Matroska Colour Tests")
 class FfprobeExecutorMatroskaColourTest {
 
-  private static final long MAX_CLL = 0x55BC;
-  private static final long MAX_FALL = 0x55BD;
-  private static final long MASTERING_METADATA = 0x55D0;
-  private static final long LUMINANCE_MAX = 0x55D9;
   private static final String MATROSKA = "matroska,webm";
   private static final String FRAME_MASTERING_DISPLAY =
       """
@@ -74,10 +96,8 @@ class FfprobeExecutorMatroskaColourTest {
   @Test
   @DisplayName("Should read the track's light level when a Void element precedes the Segment")
   void shouldReadTheTracksLightLevelWhenAVoidElementPrecedesTheSegment() throws IOException {
-    var header = element(0x1A45DFA3, element(0x4282, "matroska".getBytes(StandardCharsets.UTF_8)));
-    var segment =
-        element(0x18538067, element(0x1654AE6B, trackEntry(1, element(MAX_CLL, unsigned(900)))));
-    var video = probeMatroska(MATROSKA, concat(header, element(0xEC, new byte[4]), segment));
+    var segment = element(SEGMENT, element(TRACKS, trackEntry(1, element(MAX_CLL, unsigned(900)))));
+    var video = probeMatroska(MATROSKA, concat(header(), element(VOID, new byte[4]), segment));
 
     assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(900);
   }
@@ -97,11 +117,11 @@ class FfprobeExecutorMatroskaColourTest {
   @Test
   @DisplayName("Should read the chosen video track when an audio track comes first")
   void shouldReadTheChosenVideoTrackWhenAnAudioTrackComesFirst() throws IOException {
-    var audio = element(0xAE, element(0xD7, unsigned(1)), element(0x83, unsigned(2)));
+    var audio = TrackEntry.builder().number(1).type(AUDIO_TRACK_TYPE).build().bytes();
     var video =
         probeMatroska(
             MATROSKA,
-            document(element(0x1654AE6B, audio, trackEntry(2, element(MAX_CLL, unsigned(700))))));
+            document(element(TRACKS, audio, trackEntry(2, element(MAX_CLL, unsigned(700))))));
 
     assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(700);
   }
@@ -116,7 +136,7 @@ class FfprobeExecutorMatroskaColourTest {
     var video =
         probeMatroska(
             MATROSKA,
-            document(element(0x1654AE6B, skipped, trackEntry(2, element(MAX_CLL, unsigned(700))))));
+            document(element(TRACKS, skipped, trackEntry(2, element(MAX_CLL, unsigned(700))))));
 
     assertThat(video.getContentLightLevel().getMaxContentLightLevel())
         .as(description)
@@ -124,46 +144,30 @@ class FfprobeExecutorMatroskaColourTest {
   }
 
   static Stream<Arguments> videoEntriesThatFfmpegSkips() {
-    var colour = element(0xE0, element(0x55B0, element(MAX_CLL, unsigned(100))));
+    var colour = element(VIDEO, element(COLOUR, element(MAX_CLL, unsigned(100))));
     return Stream.of(
         Arguments.of(
             "a video track without CodecID",
-            element(0xAE, element(0xD7, unsigned(1)), element(0x83, unsigned(1)), colour)),
+            TrackEntry.video().codecId(null).child(colour).build().bytes()),
         Arguments.of(
             "a video track with an empty CodecID",
-            element(
-                0xAE,
-                element(0xD7, unsigned(1)),
-                element(0x83, unsigned(1)),
-                element(0x86),
-                colour)),
+            TrackEntry.video().codecId("").child(colour).build().bytes()),
         Arguments.of(
             "a video track whose CodecID names an audio codec",
-            element(
-                0xAE,
-                element(0xD7, unsigned(1)),
-                element(0x83, unsigned(1)),
-                element(0x86, "A_AAC".getBytes(StandardCharsets.US_ASCII)),
-                colour)),
+            TrackEntry.video().codecId("A_AAC").child(colour).build().bytes()),
         // FFmpeg's EBML parser keeps the last of an element that the track may hold only once.
         Arguments.of(
             "a video track whose TrackType repeats as audio",
-            element(
-                0xAE,
-                element(0xD7, unsigned(1)),
-                element(0x83, unsigned(1)),
-                element(0x83, unsigned(2)),
-                hevcCodecId(),
-                colour)),
+            TrackEntry.video()
+                .codecId(null)
+                .child(element(TRACK_TYPE, unsigned(AUDIO_TRACK_TYPE)))
+                .child(codecId(HEVC_CODEC_ID))
+                .child(colour)
+                .build()
+                .bytes()),
         Arguments.of(
             "a video track whose CodecID repeats as an audio codec",
-            element(
-                0xAE,
-                element(0xD7, unsigned(1)),
-                element(0x83, unsigned(1)),
-                hevcCodecId(),
-                element(0x86, "A_AAC".getBytes(StandardCharsets.US_ASCII)),
-                colour)));
+            TrackEntry.video().child(codecId("A_AAC")).child(colour).build().bytes()));
   }
 
   @Test
@@ -174,17 +178,15 @@ class FfprobeExecutorMatroskaColourTest {
     var oversized = new byte[(16 << 20) + 1];
     Arrays.fill(oversized, (byte) 'A');
     var first =
-        element(
-            0xAE,
-            element(0xD7, unsigned(1)),
-            element(0x83, unsigned(1)),
-            hevcCodecId(),
-            element(0x86, oversized),
-            element(0xE0, element(0x55B0, element(MAX_CLL, unsigned(900)))));
+        TrackEntry.video()
+            .child(element(CODEC_ID, oversized))
+            .child(element(VIDEO, element(COLOUR, element(MAX_CLL, unsigned(900)))))
+            .build()
+            .bytes();
     var video =
         probeMatroska(
             MATROSKA,
-            document(element(0x1654AE6B, first, trackEntry(2, element(MAX_FALL, unsigned(400))))));
+            document(element(TRACKS, first, trackEntry(2, element(MAX_FALL, unsigned(400))))));
 
     assertThat(video.getContentLightLevelOmitted()).isTrue();
     assertThat(video.getMasteringDisplayOmitted()).isTrue();
@@ -201,18 +203,16 @@ class FfprobeExecutorMatroskaColourTest {
     var oversized = new byte[(16 << 20) + 1];
     Arrays.fill(oversized, (byte) 'A');
     var first =
-        element(
-            0xAE,
-            element(0xD7, unsigned(1)),
-            element(0x83, unsigned(1)),
-            hevcCodecId(),
-            element(0x86, oversized),
-            element(0x83, unsigned(2)),
-            element(0xE0, element(0x55B0, element(MAX_CLL, unsigned(900)))));
+        TrackEntry.video()
+            .child(element(CODEC_ID, oversized))
+            .child(element(TRACK_TYPE, unsigned(AUDIO_TRACK_TYPE)))
+            .child(element(VIDEO, element(COLOUR, element(MAX_CLL, unsigned(900)))))
+            .build()
+            .bytes();
     var video =
         probeMatroska(
             MATROSKA,
-            document(element(0x1654AE6B, first, trackEntry(2, element(MAX_FALL, unsigned(400))))));
+            document(element(TRACKS, first, trackEntry(2, element(MAX_FALL, unsigned(400))))));
 
     assertThat(video.getContentLightLevelOmitted()).isTrue();
     assertThat(video.getMasteringDisplayOmitted()).isTrue();
@@ -227,18 +227,16 @@ class FfprobeExecutorMatroskaColourTest {
     // FFmpeg's parse of the TrackEntry stops at the nine-byte TrackNumber, so the TrackType that
     // follows it never reaches FFmpeg, which keeps this track as its first video stream.
     var first =
-        element(
-            0xAE,
-            element(0xD7, unsigned(1)),
-            element(0x83, unsigned(1)),
-            hevcCodecId(),
-            element(0xD7, new byte[9]),
-            element(0x83, unsigned(2)),
-            element(0xE0, element(0x55B0, element(MAX_CLL, unsigned(900)))));
+        TrackEntry.video()
+            .child(element(TRACK_NUMBER, new byte[9]))
+            .child(element(TRACK_TYPE, unsigned(AUDIO_TRACK_TYPE)))
+            .child(element(VIDEO, element(COLOUR, element(MAX_CLL, unsigned(900)))))
+            .build()
+            .bytes();
     var video =
         probeMatroska(
             MATROSKA,
-            document(element(0x1654AE6B, first, trackEntry(2, element(MAX_FALL, unsigned(400))))));
+            document(element(TRACKS, first, trackEntry(2, element(MAX_FALL, unsigned(400))))));
 
     assertThat(video.getContentLightLevelOmitted()).isTrue();
     assertThat(video.getMasteringDisplayOmitted()).isTrue();
@@ -253,18 +251,19 @@ class FfprobeExecutorMatroskaColourTest {
           throws IOException {
     // FFmpeg's parse of the TrackEntry stops inside the Video at the nine-byte PixelWidth.
     var first =
-        element(
-            0xAE,
-            element(0xD7, unsigned(1)),
-            element(0x83, unsigned(1)),
-            hevcCodecId(),
-            element(
-                0xE0, element(0x55B0, element(MAX_CLL, unsigned(900))), element(0xB0, new byte[9])),
-            element(0x83, unsigned(2)));
+        TrackEntry.video()
+            .child(
+                element(
+                    VIDEO,
+                    element(COLOUR, element(MAX_CLL, unsigned(900))),
+                    element(PIXEL_WIDTH, new byte[9])))
+            .child(element(TRACK_TYPE, unsigned(AUDIO_TRACK_TYPE)))
+            .build()
+            .bytes();
     var video =
         probeMatroska(
             MATROSKA,
-            document(element(0x1654AE6B, first, trackEntry(2, element(MAX_FALL, unsigned(400))))));
+            document(element(TRACKS, first, trackEntry(2, element(MAX_FALL, unsigned(400))))));
 
     assertThat(video.getContentLightLevelOmitted()).isTrue();
     assertThat(video.getMasteringDisplayOmitted()).isTrue();
@@ -293,8 +292,7 @@ class FfprobeExecutorMatroskaColourTest {
   @Test
   @DisplayName("Should take the first frame's light level when the Colour holds neither element")
   void shouldTakeTheFirstFramesLightLevelWhenTheColourHoldsNeitherElement() throws IOException {
-    var video =
-        probeMatroska(MATROSKA, videoTrack(element(0x55B9, unsigned(1))), FRAME_LIGHT_LEVEL);
+    var video = probeMatroska(MATROSKA, videoTrack(element(RANGE, unsigned(1))), FRAME_LIGHT_LEVEL);
 
     assertThat(video.getContentLightLevel().getMaxFrameAverageLightLevel()).isEqualTo(400);
     assertThat(video.getContentLightLevelOmitted()).isFalse();
@@ -341,27 +339,27 @@ class FfprobeExecutorMatroskaColourTest {
         Arguments.of("the file holds no Tracks element", document()),
         Arguments.of(
             "the Tracks element holds no video track",
-            document(element(0x1654AE6B, element(0xAE, element(0x83, unsigned(2)))))),
+            document(element(TRACKS, TrackEntry.builder().type(AUDIO_TRACK_TYPE).build().bytes()))),
         // FFmpeg's EBML parser fails at an unsigned integer longer than 8 bytes, though a valid
         // repeat follows.
         Arguments.of(
             "a TrackType longer than 8 bytes ahead of a valid one",
             document(
                 element(
-                    0x1654AE6B,
+                    TRACKS,
                     element(
-                        0xAE,
-                        element(0xD7, unsigned(1)),
-                        element(0x83, new byte[9]),
-                        element(0x83, unsigned(1)),
+                        TRACK_ENTRY,
+                        element(TRACK_NUMBER, unsigned(1)),
+                        element(TRACK_TYPE, new byte[9]),
+                        element(TRACK_TYPE, unsigned(VIDEO_TRACK_TYPE)),
                         hevcCodecId(),
-                        element(0xE0, element(0x55B0, element(MAX_CLL, unsigned(900)))))))),
+                        element(VIDEO, element(COLOUR, element(MAX_CLL, unsigned(900)))))))),
         Arguments.of(
             "a MaxCLL longer than 8 bytes ahead of a valid one",
             videoTrack(element(MAX_CLL, new byte[9]), element(MAX_CLL, unsigned(900)))),
         Arguments.of(
             "a track entry's size runs past the Tracks element",
-            document(element(0x1654AE6B, new byte[] {(byte) 0xAE, (byte) 0x9F, 0x00}))));
+            document(element(TRACKS, new byte[] {(byte) TRACK_ENTRY, (byte) 0x9F, 0x00}))));
   }
 
   @ParameterizedTest(name = "{0}")
@@ -479,12 +477,11 @@ class FfprobeExecutorMatroskaColourTest {
       throws IOException {
     // A partly copied file: the Cues come after the Clusters, and the copy stopped inside them.
     var tracks =
-        element(0x1654AE6B, trackEntry(1, element(MAX_CLL, unsigned(900)), maxLuminanceOnly()));
-    var cluster = element(0x1F43B675, element(0xE7, unsigned(0)));
-    var cuesPosition = seekHead(0x1C53BB6B, 0).length + tracks.length + cluster.length;
+        element(TRACKS, trackEntry(1, element(MAX_CLL, unsigned(900)), maxLuminanceOnly()));
+    var cluster = element(CLUSTER, element(CLUSTER_TIMESTAMP, unsigned(0)));
+    var cuesPosition = seekHead(CUES, 0).length + tracks.length + cluster.length;
     var whole =
-        document(
-            seekHead(0x1C53BB6B, cuesPosition), tracks, cluster, element(0x1C53BB6B, new byte[64]));
+        document(seekHead(CUES, cuesPosition), tracks, cluster, element(CUES, new byte[64]));
 
     var video = probeMatroska(MATROSKA, Arrays.copyOf(whole, whole.length - 32));
 
@@ -496,9 +493,9 @@ class FfprobeExecutorMatroskaColourTest {
   @DisplayName("Should read the track's Colour when a malformed SeekHead follows the Tracks")
   void shouldReadTheTracksColourWhenAMalformedSeekHeadFollowsTheTracks() throws IOException {
     var tracks =
-        element(0x1654AE6B, trackEntry(1, element(MAX_CLL, unsigned(900)), maxLuminanceOnly()));
+        element(TRACKS, trackEntry(1, element(MAX_CLL, unsigned(900)), maxLuminanceOnly()));
     // A zero byte starts no EBML element ID.
-    var malformedSeekHead = element(0x114D9B74, new byte[] {0x00, 0x00});
+    var malformedSeekHead = element(SEEK_HEAD, new byte[] {0x00, 0x00});
 
     var video = probeMatroska(MATROSKA, document(tracks, malformedSeekHead));
 
@@ -604,14 +601,12 @@ class FfprobeExecutorMatroskaColourTest {
   /** A Matroska file whose video track holds a Video element without Colour, then one with it. */
   private static byte[] videoTrackWithColourInSecondVideo(byte[]... colour) {
     var entry =
-        element(
-            0xAE,
-            element(0xD7, unsigned(1)),
-            element(0x83, unsigned(1)),
-            hevcCodecId(),
-            element(0xE0, element(0xB0, unsigned(64))),
-            element(0xE0, element(0x55B0, colour)));
-    return document(element(0x1654AE6B, entry));
+        TrackEntry.video()
+            .child(element(VIDEO, element(PIXEL_WIDTH, unsigned(64))))
+            .child(element(VIDEO, element(COLOUR, colour)))
+            .build()
+            .bytes();
+    return document(element(TRACKS, entry));
   }
 
   /** A MasteringMetadata element that holds only LuminanceMax, 1000 cd/m^2 as a 4-byte float. */
@@ -624,10 +619,10 @@ class FfprobeExecutorMatroskaColourTest {
   private static byte[] seekHead(long id, long position) {
     var seek =
         element(
-            0x4DBB,
-            element(0x53AB, unsigned(id)),
-            element(0x53AC, ByteBuffer.allocate(8).putLong(position).array()));
-    return element(0x114D9B74, seek);
+            SEEK,
+            element(SEEK_ID, unsigned(id)),
+            element(SEEK_POSITION, ByteBuffer.allocate(8).putLong(position).array()));
+    return element(SEEK_HEAD, seek);
   }
 
   private ProbeStreamInfo probeMatroska(String formatName, byte[] file) throws IOException {
@@ -648,16 +643,16 @@ class FfprobeExecutorMatroskaColourTest {
 
   /** A Matroska file whose one track is a video track with these Colour children. */
   private static byte[] videoTrack(byte[]... colour) {
-    return document(element(0x1654AE6B, trackEntry(1, colour)));
+    return document(element(TRACKS, trackEntry(1, colour)));
   }
 
+  /** A video track whose Video element holds a PixelWidth, then a Colour with these children. */
   private static byte[] trackEntry(long number, byte[]... colour) {
-    var children = new ArrayList<byte[]>();
-    children.add(element(0xD7, unsigned(number)));
-    children.add(element(0x83, unsigned(1)));
-    children.add(hevcCodecId());
-    children.add(element(0xE0, element(0xB0, unsigned(64)), element(0x55B0, colour)));
-    return element(0xAE, children.toArray(byte[][]::new));
+    return TrackEntry.video()
+        .number(number)
+        .child(element(VIDEO, element(PIXEL_WIDTH, unsigned(64)), element(COLOUR, colour)))
+        .build()
+        .bytes();
   }
 
   private static String output(String formatName, String fields) {
