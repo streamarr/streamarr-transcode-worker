@@ -47,6 +47,8 @@ import build.buf.gen.streamarr.transcode.v1.VideoCodecTier;
 import build.buf.gen.streamarr.transcode.v1.VideoDecision;
 import build.buf.gen.streamarr.transcode.v1.VideoDynamicRange;
 import build.buf.gen.streamarr.transcode.v1.VideoMode;
+import com.streamarr.transcode.engine.CopiedVideoTiming;
+import com.streamarr.transcode.engine.RpuMovingCopies;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
@@ -631,6 +633,49 @@ class TranscodeWorkerJobAttemptTest {
     assertThat(commands.getFirst()).contains("pipe:1");
     assertThat(commands.getFirst().getLast()).startsWith("unix:");
     assertThat(commands.getLast()).containsSequence("-f", "mp4", "-i", "pipe:0");
+  }
+
+  @Test
+  @DisplayName(
+      "Should upload the encoding FFmpeg's segments of the copy with its RPUs moved when the"
+          + " encode's Dolby Vision profile 5 source starts samples with RPUs")
+  void
+      shouldUploadTheEncodingFfmpegsSegmentsOfTheCopyWithItsRpusMovedWhenTheEncodesDolbyVisionProfile5SourceStartsSamplesWithRpus()
+          throws Exception {
+    var recording = recording(ENCODED_RECORDING);
+    var launcher =
+        ScriptedProcessLauncher.forCommands(
+            (command, _) -> {
+              if (!command.getLast().startsWith("unix:")) {
+                return ScriptedProcess.builder()
+                    .output(bytesOf(ENCODED_RECORDING))
+                    .readsMediaFromStdin(true)
+                    .exitTiming(ExitTiming.AT_END_OF_INPUT)
+                    .build();
+              }
+
+              CopiedVideoTiming.writeTo(command, RpuMovingCopies.copiedTiming());
+              return ScriptedProcess.builder().output(RpuMovingCopies.copied()).build();
+            });
+    var job =
+        profile5SourceJobBuilder(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE)
+            .build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_COMPLETED);
+      assertThat(launcher.commands(fromProto(job.getJobAttemptId()))).hasSize(2);
+      assertThat(
+              RpuMovingCopies.videoSamplesOf(
+                  launcher.process(fromProto(job.getJobAttemptId())).stdinBytes()))
+          .isEqualTo(RpuMovingCopies.videoSamplesOf(RpuMovingCopies.moved()));
+      assertThat(connection.uploads())
+          .extracting(upload -> upload.metadata().getSegmentName())
+          .containsExactlyElementsOf(uploadNames(recording));
+    }
   }
 
   @ParameterizedTest(name = "{0}")
