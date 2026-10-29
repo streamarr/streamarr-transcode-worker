@@ -1756,6 +1756,26 @@ class FfmpegCommandBuilderTest {
         source.compatibleBase(), source.hdr10Plus(), new VideoDynamicRange.DolbyVision.Absent());
   }
 
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"REMUX", "AUDIO_TRANSCODE"})
+  @DisplayName(
+      "Should copy the video in one FFmpeg when a job that copies video carries the encode decision"
+          + " of a Dolby Vision profile 5 source whose RPUs start their samples")
+  void
+      shouldCopyTheVideoInOneFfmpegWhenAJobThatCopiesVideoCarriesTheEncodeDecisionOfADolbyVisionProfile5SourceWhoseRpusStartTheirSamples(
+          TranscodeMode mode) {
+    var request =
+        request(
+                decision(mode)
+                    .videoDecision(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE).build())
+                    .build())
+            .build();
+
+    assertThat(command(request, "copy")).containsSequence("-c:v", "copy");
+  }
+
   @Test
   @DisplayName(
       "Should seek the copy and encode its audio there when a replacement attempt encodes a profile"
