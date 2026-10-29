@@ -274,11 +274,14 @@ final class Av1MetadataObus implements MetadataWalk {
           ByteBuffer.wrap(bytes, valuesStart, (isTerminated ? last : payload.end()) - valuesStart);
       // A value that lacks its trailing bits keeps no bytes, so that the probe cannot report it.
       var staticValues = isTerminated ? values : ByteBuffer.allocate(0);
-      switch ((int) type) {
-        case HDR_CLL -> addStatic(HdrMessage.CONTENT_LIGHT_LEVEL, staticValues, isLayered);
-        case HDR_MDCV -> addStatic(HdrMessage.MASTERING_DISPLAY, staticValues, isLayered);
-        default -> addT35(values, isLayered);
-      }
+      var staticMessage =
+          switch ((int) type) {
+            case HDR_CLL -> Optional.of(HdrMessage.CONTENT_LIGHT_LEVEL);
+            case HDR_MDCV -> Optional.of(HdrMessage.MASTERING_DISPLAY);
+            default -> Optional.<HdrMessage>empty();
+          };
+      staticMessage.ifPresentOrElse(
+          message -> addStatic(message, staticValues, isLayered), () -> addT35(values, isLayered));
 
       return isTerminated;
     }

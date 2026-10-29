@@ -6,6 +6,7 @@ import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import build.buf.gen.streamarr.transcode.v1.VideoCodecProfile;
 import build.buf.gen.streamarr.transcode.v1.VideoCodecTier;
 import com.streamarr.transcode.probe.BitReader.TruncatedBitstreamException;
+import java.util.Optional;
 import tools.jackson.databind.JsonNode;
 
 /**
@@ -30,24 +31,26 @@ final class CodecProfileReader {
 
   static void add(JsonNode source, ProbeStreamInfo.Builder stream) {
     var codec = text(source, "codec_name").orElse("");
+    var extradata = Extradata.of(source);
     try {
-      switch (codec) {
-        case "h264" ->
-            Extradata.of(source)
-                .flatMap(DecoderConfiguration::avcProfile)
-                .ifPresent(bytes -> addAvc(bytes, stream));
-        case "hevc" ->
-            Extradata.of(source)
-                .flatMap(DecoderConfiguration::hevcProfile)
-                .ifPresent(bytes -> addHevc(bytes, stream));
-        case "av1" ->
-            Extradata.of(source)
-                .flatMap(DecoderConfiguration::av1Profile)
-                .ifPresent(header -> addAv1(header, stream));
-        default -> {
-          // The contract names profiles of H.264, HEVC and AV1 only.
-        }
-      }
+      Optional<Runnable> addProfile =
+          switch (codec) {
+            case "h264" ->
+                extradata
+                    .flatMap(DecoderConfiguration::avcProfile)
+                    .map(bytes -> () -> addAvc(bytes, stream));
+            case "hevc" ->
+                extradata
+                    .flatMap(DecoderConfiguration::hevcProfile)
+                    .map(bytes -> () -> addHevc(bytes, stream));
+            case "av1" ->
+                extradata
+                    .flatMap(DecoderConfiguration::av1Profile)
+                    .map(header -> () -> addAv1(header, stream));
+            // The contract names profiles of H.264, HEVC and AV1 only.
+            default -> Optional.empty();
+          };
+      addProfile.ifPresent(Runnable::run);
     } catch (TruncatedBitstreamException _) {
       // A sequence header that ends early names no profile.
     }

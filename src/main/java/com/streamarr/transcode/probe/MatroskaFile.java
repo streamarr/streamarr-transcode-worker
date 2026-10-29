@@ -80,15 +80,16 @@ final class MatroskaFile {
     eachChild(
         master,
         (id, child) -> {
-          switch (syntax.children().get(id)) {
-            case null -> {
-              // FFmpeg skips a child its syntax does not list.
-            }
-            case MatroskaSyntax.Value.UNSIGNED -> unsigned(child);
-            case MatroskaSyntax.Value.FLOAT -> requireFloat(child);
-            case MatroskaSyntax.Value.STRING -> string(child);
-            case MatroskaSyntax.Master nested -> requireReadable(child, nested);
-          }
+          Consumer<ByteBuffer> requireValue =
+              switch (syntax.children().get(id)) {
+                // FFmpeg skips a child its syntax does not list.
+                case null -> _ -> {};
+                case MatroskaSyntax.Value.UNSIGNED -> MatroskaFile::unsigned;
+                case MatroskaSyntax.Value.FLOAT -> MatroskaFile::requireFloat;
+                case MatroskaSyntax.Value.STRING -> MatroskaFile::string;
+                case MatroskaSyntax.Master nested -> value -> requireReadable(value, nested);
+              };
+          requireValue.accept(child);
         });
   }
 

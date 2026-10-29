@@ -1,6 +1,7 @@
 package com.streamarr.transcode.probe;
 
 import java.util.OptionalInt;
+import java.util.function.Consumer;
 
 /**
  * The SEI messages that nest other SEI messages, whose nested messages FFmpeg ignores: scalable
@@ -54,12 +55,14 @@ final class SeiNesting {
    * runs past the payload.
    */
   static OptionalInt nestedMessagesOffset(NalSyntax syntax, int payloadType, byte[] payload) {
+    Consumer<BitReader> skipHeader =
+        switch (syntax) {
+          case H264 -> h264NestingHeaderSkip(payloadType);
+          case HEVC -> SeiNesting::skipHevcScalableNestingHeader;
+        };
     var reader = new BitReader(payload);
     try {
-      switch (syntax) {
-        case H264 -> skipH264NestingHeader(payloadType, reader);
-        case HEVC -> skipHevcScalableNestingHeader(reader);
-      }
+      skipHeader.accept(reader);
     } catch (BitReader.TruncatedBitstreamException _) {
       return OptionalInt.empty();
     }
@@ -67,12 +70,12 @@ final class SeiNesting {
     return OptionalInt.of(reader.alignedBytes());
   }
 
-  private static void skipH264NestingHeader(int payloadType, BitReader reader) {
-    switch (payloadType) {
-      case H264_SCALABLE_NESTING -> skipScalableNestingHeader(reader);
-      case H264_MVC_SCALABLE_NESTING -> skipMvcScalableNestingHeader(reader);
-      default -> skipMvcdScalableNestingHeader(reader);
-    }
+  private static Consumer<BitReader> h264NestingHeaderSkip(int payloadType) {
+    return switch (payloadType) {
+      case H264_SCALABLE_NESTING -> SeiNesting::skipScalableNestingHeader;
+      case H264_MVC_SCALABLE_NESTING -> SeiNesting::skipMvcScalableNestingHeader;
+      default -> SeiNesting::skipMvcdScalableNestingHeader;
+    };
   }
 
   private static void skipScalableNestingHeader(BitReader reader) {
