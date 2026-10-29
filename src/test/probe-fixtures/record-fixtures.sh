@@ -16,7 +16,8 @@
 # The audio fixtures copy an E-AC-3 Atmos and a DTS-HD MA stream from it next to a synthesized video
 # stream, and the Dolby Vision and HDR10 fixtures probe or remux its Dolby Vision and HDR10 samples.
 # LOCAL_SAMPLES names a directory that holds the public Dolby Vision, HDR and phone samples that the
-# fixture README lists. Those samples stay local. The Dolby Vision profile 9 fixtures need dovi_tool
+# fixture README lists. Those samples stay local. The Dolby Vision profile 9 fixtures and the
+# profile 8.1 fixture whose RPUs come ahead of a suffix SEI NAL unit need dovi_tool
 # (https://github.com/quietvoid/dovi_tool) on the PATH, which generates their RPUs. Without either
 # variable or dovi_tool, the script keeps the fixtures that need it as they are.
 set -euo pipefail
@@ -265,6 +266,11 @@ done
 "${FF[@]}" -f lavfi -i testsrc2=size=1920x1080:rate=24:duration=1 -c:v libx264 -preset veryfast \
   -profile:v high -level:v 4.0 -crf 40 -bf 0 -pix_fmt yuv420p \
   -x264-params colorprim=bt709:transfer=bt709:colormatrix=bt709 -f h264 sdr-1080p.h264
+# One second of raw 10-bit HEVC with PQ, whose x265 encode follows the slice of each picture with
+# a decoded picture hash in a suffix SEI NAL unit, and into which insert-rpus-before-suffix-sei.py
+# puts the Dolby Vision profile 8.1 RPUs. Without B-frames, the first 3 packets decode 3 frames.
+"${FF[@]}" -f lavfi -i testsrc2=size=64x64:rate=24:duration=1 "${HDR10[@]}" "${X265[@]}" \
+  -x265-params log-level=none:bframes=0:hash=2 -f hevc pq-picture-hash.hevc
 
 # MP4 whose clean aperture crops 4 pixels from the left and the right and 2 from the top and the
 # bottom of the 64x36 picture, and the same stream remuxed into Matroska as PixelCrop elements.
@@ -449,7 +455,8 @@ in_image av1.sh
 # then adds a dvvC record under avc1 and under dva1, and the avc1 copy goes into MPEG-TS, whose
 # samples delimit their NAL units with start codes. dovi_tool has no profile 9 preset, so it
 # generates profile 8.1 RPUs, whose header names RPU profile 1, no residual and 12 bits, as a
-# profile 9 RPU's does.
+# profile 9 RPU's does. The same RPUs go into the PQ encode, where each sample ends with its RPU
+# and the suffix SEI NAL unit of its picture's hash.
 cat > "$WORK/dovi-p9-copy.sh" <<'CONTAINER'
 set -euo pipefail
 cd /work
@@ -475,7 +482,10 @@ JSON
   in_gpac -add sdr-1080p-rpus.mp4:dvp=9.bt709 -new mp4-dovi-p9-avc1.mp4
   in_gpac -add sdr-1080p-rpus.mp4:dvp=f9.bt709 -new mp4-dovi-p9-dva1.mp4
   in_image dovi-p9-ts.sh
-  FIXTURES_TO_PROBE+=(mp4-dovi-p9-avc1.mp4 mp4-dovi-p9-dva1.mp4 mpegts-dovi-p9.ts)
+  python3 "$HERE/insert-rpus-before-suffix-sei.py" "$WORK/rpus.bin" "$WORK/pq-picture-hash.hevc" \
+    "$WORK/hevc-dovi-p81-rpus-before-suffix-sei.hevc"
+  FIXTURES_TO_PROBE+=(mp4-dovi-p9-avc1.mp4 mp4-dovi-p9-dva1.mp4 mpegts-dovi-p9.ts
+    hevc-dovi-p81-rpus-before-suffix-sei.hevc)
 fi
 
 # The record-less Dolby Vision profile 5 sample, rewritten to signal BT.709 in its VUI under hvc1,
@@ -526,13 +536,14 @@ done
 # Each video and audio stream that the probe computes a codec string for, copied with the worker's
 # copy arguments into a fragmented MP4. copy-codec-strings.py reads the codec string of each copy's
 # initialization segment, so the tests compare the probe's string with what a copy carries.
-# The raw streams that move-rpus-ahead.py, raise-rpu-temporal-id.py and reject-hdr-sei.py wrote,
-# and the raw H.264 and HEVC streams of several pictures that the FATE step wrote, hold no
-# timestamps, which the mp4 muxer refuses, so they have no copy.
+# The raw streams that move-rpus-ahead.py, raise-rpu-temporal-id.py, reject-hdr-sei.py and
+# insert-rpus-before-suffix-sei.py wrote, and the raw H.264 and HEVC streams of several pictures
+# that the FATE step wrote, hold no timestamps, which the mp4 muxer refuses, so they have no copy.
 FIXTURES_TO_COPY=()
 for source in "${FIXTURES_TO_PROBE[@]}"; do
   case "$source" in
     hevc-dovi-p5-rpus-* | *-rejected-sei.* | hevc-dovi-p81-fate.hevc | h264-sei-1.h264) ;;
+    hevc-dovi-p81-rpus-before-suffix-sei.hevc) ;;
     hevc-hdr-vivid-repeated.hevc) ;;
     # h264_mp4toannexb refuses this AVI's 4-byte extradata, so the copy fails.
     avi-h264-unknown-extradata.avi) ;;
@@ -577,7 +588,8 @@ PACKET_DATA=(mp4-sdr8-bt709.mp4 mp4-dovi-p9-avc1.mp4 mp4-dovi-p9-dva1.mp4 mpegts
   obu-av1-10bit.obu mpegts-hdr10-sei-only.ts mp4-dovi-p7-two-tracks.mp4 mp4-dovi-p81-fate.mp4
   hevc-dovi-p81-fate.hevc ivf-av1-hdr-sizeup.ivf h264-sei-1.h264 mp4-h264-sei-1.mp4
   mov-h264-extradata-reload.mov mov-hevc-extradata-reload.mov mp4-h264-mixed-nal-coding.mp4
-  flv-h264-sei-without-trailing-bits.flv avi-h264-unknown-extradata.avi hevc-hdr-vivid-repeated.hevc)
+  flv-h264-sei-without-trailing-bits.flv avi-h264-unknown-extradata.avi hevc-hdr-vivid-repeated.hevc
+  hevc-dovi-p81-rpus-before-suffix-sei.hevc)
 mkdir -p "$FIXTURES/packet-data"
 for source in "${PACKET_DATA[@]}"; do
   if [ -f "$WORK/packet-data/$source.json" ]; then

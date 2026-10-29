@@ -1681,6 +1681,53 @@ class FfprobeExecutorFirstFramesTest {
     }
 
     @Test
+    @DisplayName(
+        "Should leave the RPU placement unspecified when a suffix SEI NAL unit follows each RPU of"
+            + " a profile 8.1 stream")
+    void
+        shouldLeaveTheRpuPlacementUnspecifiedWhenASuffixSeiNalUnitFollowsEachRpuOfAProfile81Stream() {
+      // insert-rpus-before-suffix-sei.py put each RPU after its picture's slice and ahead of the
+      // decoded picture hash that x265 writes in a suffix SEI NAL unit, so each RPU neither starts
+      // nor ends its sample. Raw HEVC keeps no record, so only the RPUs show Dolby Vision.
+      var dynamicRange = streamOf("hevc-dovi-p81-rpus-before-suffix-sei.hevc", 0).getDynamicRange();
+
+      assertThat(dynamicRange.getDolbyVisionPresent())
+          .isEqualTo(
+              DolbyVisionPresent.newBuilder()
+                  .setObservedRpu(Presence.PRESENCE_PRESENT)
+                  .setFirstRpuHeader(
+                      DolbyVisionRpuHeader.newBuilder()
+                          .setVdrRpuProfile(1)
+                          .setDisableResidual(true)
+                          .setVdrBitDepth(12))
+                  .setRpuPlacement(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED)
+                  .build());
+      assertThat(dynamicRange.getCompatibleBase()).isEqualTo(CompatibleBase.COMPATIBLE_BASE_PQ);
+    }
+
+    @Test
+    @DisplayName(
+        "Should find no Dolby Vision in a profile 8.1 stream's frames alone when a suffix SEI NAL"
+            + " unit follows each RPU")
+    void
+        shouldFindNoDolbyVisionInAProfile81StreamsFramesAloneWhenASuffixSeiNalUnitFollowsEachRpu() {
+      // FFmpeg's HEVC decoder reads an RPU only from the last NAL unit of a packet, so the frames
+      // carry none. Without the first-packets read, the probe has only the frames to go on.
+      var fixture = "hevc-dovi-p81-rpus-before-suffix-sei.hevc";
+      var framesOnly =
+          probe(
+                  Answers.builder()
+                      .ffprobeOutput(RecordedFfprobe.fixture(fixture))
+                      .firstFrames(RecordedFfprobe.recordedFirstFrames(fixture).orElseThrow())
+                      .build())
+              .getStreams(0);
+
+      assertThat(framesOnly.getFirstFramesRead()).isTrue();
+      assertThat(framesOnly.getDynamicRange().getDolbyVisionCase())
+          .isEqualTo(DolbyVisionCase.DOLBYVISION_NOT_SET);
+    }
+
+    @Test
     @DisplayName("Should rule Dolby Vision out when a profile 5 sample's RPUs lie on TemporalId 1")
     void shouldRuleDolbyVisionOutWhenAProfile5SamplesRpusLieOnTemporalId1() {
       // raise-rpu-temporal-id.py put each RPU of the FATE sample on TemporalId 1, so FFmpeg's HEVC

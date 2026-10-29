@@ -64,6 +64,7 @@ from its lavfi test sources. No file comes from a media library.
 | `mp4-dovi-p84-hlg.mp4.json` | Local sample: Dolby Vision profile 8.4 under `hvc1`, HLG (see Sources) |
 | `mp4-dovi-p9-avc1.mp4.json` | Dolby Vision profile 9 under `avc1`: one second of 8-bit H.264 at 1080p24 tagged BT.709, after each picture of which `insert-avc-rpus.py` put an RPU that `dovi_tool generate` made, with a `dvvC` record that GPAC's MP4Box added |
 | `mp4-dovi-p9-dva1.mp4.json` | The same stream, to which MP4Box gave a `dva1` sample entry |
+| `hevc-dovi-p81-rpus-before-suffix-sei.hevc.json` | Dolby Vision profile 8.1 as raw HEVC, synthesized from no third-party bytes: one second of FFmpeg's `testsrc2` pattern in 10-bit HEVC with PQ, whose x265 encode follows the slice of each picture with a decoded picture hash in a suffix SEI NAL unit. `insert-rpus-before-suffix-sei.py` put an RPU that `dovi_tool generate` made between each slice and its hash, so every sample ends with its RPU and then the suffix SEI NAL unit. Raw HEVC keeps no record, and FFmpeg's HEVC decoder ignores each RPU, so only the packets show them |
 | `mp4-hevc-hdr10.mp4.json` | Local sample: 10-bit HEVC with PQ. Neither its container nor the SEI messages of its first 600 frames carry static HDR metadata, so it is PQ10 (see Sources) |
 | `mp4-hevc-sdr10-untagged.mp4.json` | Local sample: 10-bit HEVC SDR without a transfer tag (see Sources) |
 | `mov-phone-hlg-dovi-p84.mov.json` | Local sample: a phone camera original, HEVC HLG with Dolby Vision 8.4 (see Sources) |
@@ -124,7 +125,7 @@ FATE_SUITE=/path/to/fate-suite LOCAL_SAMPLES=/path/to/samples src/test/probe-fix
 
 The script overwrites the files in this directory, so `git diff` shows what a new recording
 changed. Without `FATE_SUITE`, it keeps the recordings of FATE samples as they are, and without
-`dovi_tool` on the `PATH`, the Dolby Vision profile 9 recordings. The local
+`dovi_tool` on the `PATH`, the Dolby Vision recordings whose RPUs `dovi_tool` generates. The local
 samples are public test files that stay out of the repository. `LOCAL_SAMPLES` names a directory
 that holds them under the names above, without the `.json` suffix. Without `LOCAL_SAMPLES`, the
 script keeps their recordings as they are. The script removes the source's path and any location
