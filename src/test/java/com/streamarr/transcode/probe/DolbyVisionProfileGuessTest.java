@@ -43,7 +43,7 @@ class DolbyVisionProfileGuessTest {
             .setVdrBitDepth(vdrBitDepth)
             .build();
 
-    assertThat(StreamCodec.Walked.HEVC.guessDolbyVisionProfile(header)).hasValue(profile);
+    assertThat(StreamCodec.HEVC.guessDolbyVisionProfile(header)).hasValue(profile);
   }
 
   @ParameterizedTest(name = "vdr_rpu_profile {0}, full range {1}")
@@ -56,7 +56,7 @@ class DolbyVisionProfileGuessTest {
             .setBaseLayerFullRange(fullRange)
             .build();
 
-    assertThat(StreamCodec.Walked.HEVC.guessDolbyVisionProfile(header)).isEmpty();
+    assertThat(StreamCodec.HEVC.guessDolbyVisionProfile(header)).isEmpty();
   }
 
   @ParameterizedTest(name = "{0}")

@@ -71,7 +71,7 @@ final class Av1MetadataObus implements MetadataWalk {
    * frames, which only the chosen video stream has.
    */
   static Optional<Av1MetadataObus> of(JsonNode stream) {
-    if (StreamCodec.of(stream) != StreamCodec.Walked.AV1 || FirstFrames.of(stream).isEmpty()) {
+    if (StreamCodec.of(stream) != StreamCodec.AV1 || FirstFrames.of(stream).isEmpty()) {
       return Optional.empty();
     }
 

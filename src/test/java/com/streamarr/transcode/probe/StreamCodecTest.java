@@ -18,23 +18,23 @@ class StreamCodecTest {
   @ParameterizedTest(name = "{0}")
   @CsvSource({"h264, H264", "hevc, HEVC", "av1, AV1"})
   @DisplayName("Should read a walked codec when ffprobe names it")
-  void shouldReadAWalkedCodecWhenFfprobeNamesIt(String codecName, StreamCodec.Walked codec) {
+  void shouldReadAWalkedCodecWhenFfprobeNamesIt(String codecName, StreamCodec codec) {
     var stream = JSON.createObjectNode().put("codec_name", codecName);
 
     assertThat(StreamCodec.of(stream)).isEqualTo(codec);
   }
 
   @Test
-  @DisplayName("Should keep the name of a codec when the probe does not walk it")
-  void shouldKeepTheNameOfACodecWhenTheProbeDoesNotWalkIt() {
+  @DisplayName("Should read another codec when the probe does not walk the named codec")
+  void shouldReadAnotherCodecWhenTheProbeDoesNotWalkTheNamedCodec() {
     var stream = JSON.createObjectNode().put("codec_name", "vp9");
 
-    assertThat(StreamCodec.of(stream)).isEqualTo(new StreamCodec.Other("vp9"));
+    assertThat(StreamCodec.of(stream)).isEqualTo(StreamCodec.OTHER);
   }
 
   @Test
-  @DisplayName("Should read an unnamed codec when ffprobe names no codec")
-  void shouldReadAnUnnamedCodecWhenFfprobeNamesNoCodec() {
-    assertThat(StreamCodec.of(JSON.createObjectNode())).isEqualTo(new StreamCodec.Other(""));
+  @DisplayName("Should read another codec when ffprobe names no codec")
+  void shouldReadAnotherCodecWhenFfprobeNamesNoCodec() {
+    assertThat(StreamCodec.of(JSON.createObjectNode())).isEqualTo(StreamCodec.OTHER);
   }
 }

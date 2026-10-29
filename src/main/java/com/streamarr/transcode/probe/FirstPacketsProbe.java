@@ -56,7 +56,7 @@ final class FirstPacketsProbe {
     var chosen = ChosenVideoStream.find(ffprobeOutput.path("streams"));
     if (chosen.isEmpty()
         || !(chosen.get().description() instanceof ObjectNode description)
-        || !(StreamCodec.of(description) instanceof StreamCodec.Walked)) {
+        || StreamCodec.of(description) == StreamCodec.OTHER) {
       return;
     }
 

@@ -3,8 +3,6 @@ package com.streamarr.transcode.probe;
 import static com.streamarr.transcode.probe.FfprobeJson.text;
 
 import com.streamarr.transcode.probe.BitReader.TruncatedBitstreamException;
-import com.streamarr.transcode.probe.StreamCodec.Other;
-import com.streamarr.transcode.probe.StreamCodec.Walked;
 import java.util.Optional;
 import tools.jackson.databind.JsonNode;
 
@@ -29,18 +27,18 @@ final class CodecStringReader {
   static Optional<String> read(JsonNode stream) {
     try {
       return switch (StreamCodec.of(stream)) {
-        case Walked.H264 -> Extradata.of(stream).flatMap(CodecStringReader::avc);
-        case Walked.HEVC -> Extradata.of(stream).flatMap(CodecStringReader::hevc);
-        case Walked.AV1 -> Extradata.of(stream).flatMap(CodecStringReader::av1);
-        case Other(var name) -> audioCodecString(stream, name);
+        case H264 -> Extradata.of(stream).flatMap(CodecStringReader::avc);
+        case HEVC -> Extradata.of(stream).flatMap(CodecStringReader::hevc);
+        case AV1 -> Extradata.of(stream).flatMap(CodecStringReader::av1);
+        case OTHER -> audioCodecString(stream);
       };
     } catch (TruncatedBitstreamException _) {
       return Optional.empty();
     }
   }
 
-  private static Optional<String> audioCodecString(JsonNode stream, String codecName) {
-    return switch (codecName) {
+  private static Optional<String> audioCodecString(JsonNode stream) {
+    return switch (text(stream, "codec_name").orElse("")) {
       case "aac" -> aac(stream, Extradata.of(stream));
       case "ac3" -> Optional.of("ac-3");
       case "eac3" -> Optional.of("ec-3");

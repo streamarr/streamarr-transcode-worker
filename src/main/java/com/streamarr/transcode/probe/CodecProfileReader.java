@@ -4,8 +4,6 @@ import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import build.buf.gen.streamarr.transcode.v1.VideoCodecProfile;
 import build.buf.gen.streamarr.transcode.v1.VideoCodecTier;
 import com.streamarr.transcode.probe.BitReader.TruncatedBitstreamException;
-import com.streamarr.transcode.probe.StreamCodec.Other;
-import com.streamarr.transcode.probe.StreamCodec.Walked;
 import java.util.Optional;
 import tools.jackson.databind.JsonNode;
 
@@ -34,20 +32,20 @@ final class CodecProfileReader {
     try {
       Optional<Runnable> addProfile =
           switch (StreamCodec.of(source)) {
-            case Walked.H264 ->
+            case H264 ->
                 extradata
                     .flatMap(DecoderConfiguration::avcProfile)
                     .map(bytes -> () -> addAvc(bytes, stream));
-            case Walked.HEVC ->
+            case HEVC ->
                 extradata
                     .flatMap(DecoderConfiguration::hevcProfile)
                     .map(bytes -> () -> addHevc(bytes, stream));
-            case Walked.AV1 ->
+            case AV1 ->
                 extradata
                     .flatMap(DecoderConfiguration::av1Profile)
                     .map(header -> () -> addAv1(header, stream));
             // The contract names profiles of H.264, HEVC and AV1 only.
-            case Other _ -> Optional.empty();
+            case OTHER -> Optional.empty();
           };
       addProfile.ifPresent(Runnable::run);
     } catch (TruncatedBitstreamException _) {
