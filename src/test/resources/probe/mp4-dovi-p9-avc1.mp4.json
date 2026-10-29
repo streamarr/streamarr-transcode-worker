@@ -13,7 +13,7 @@
       "height": 1080,
       "coded_width": 1920,
       "coded_height": 1080,
-      "has_b_frames": 2,
+      "has_b_frames": 0,
       "sample_aspect_ratio": "1:1",
       "display_aspect_ratio": "16:9",
       "pix_fmt": "yuv420p",
@@ -29,16 +29,16 @@
       "id": "0x1",
       "r_frame_rate": "24/1",
       "avg_frame_rate": "24/1",
-      "time_base": "1/24",
+      "time_base": "1/12288",
       "start_pts": 0,
       "start_time": "0.000000",
-      "duration_ts": 432,
-      "duration": "18.000000",
-      "bit_rate": "5688756",
+      "duration_ts": 12288,
+      "duration": "1.000000",
+      "bit_rate": "838232",
       "bits_per_raw_sample": "8",
-      "nb_frames": "432",
-      "extradata": "\n00000000: 0164 0028 ffe1 001e 6764 0028 acd9 4078  .d.(....gd.(..@x\n00000010: 0227 e5c0 5a80 8080 a000 0003 0020 0000  .'..Z........ ..\n00000020: 0611 e306 32c0 0100 0568 ebec b22c fdf8  ....2....h...,..\n00000030: f800                                     ..\n",
-      "extradata_size": 50,
+      "nb_frames": "24",
+      "extradata": "\n00000000: 0164 0028 ffe1 001e 6764 0028 acb4 03c0  .d.(....gd.(....\n00000010: 113f 2e02 d404 0405 0000 0300 0100 0003  .?..............\n00000020: 0030 0f18 32a0 0100 0668 ef03 9cb0 00fd  .0..2....h......\n00000030: f8f8 00                                  ...\n",
+      "extradata_size": 51,
       "disposition": {
         "default": 1,
         "dub": 0,
@@ -61,9 +61,8 @@
         "multilayer": 0
       },
       "tags": {
-        "creation_time": "2026-09-29T14:32:34.000000Z",
         "language": "und",
-        "handler_name": "h264:fps=24@GPAC26.08-DEV-rev132-g1b09ef3dd-master"
+        "handler_name": "VideoHandler"
       },
       "side_data_list": [
         {
@@ -89,16 +88,14 @@
     "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
     "format_long_name": "QuickTime / MOV",
     "start_time": "0.000000",
-    "duration": "18.000000",
-    "size": "12807568",
-    "bit_rate": "5692252",
+    "duration": "1.000000",
+    "size": "105750",
+    "bit_rate": "846000",
     "probe_score": 100,
     "tags": {
       "major_brand": "isom",
       "minor_version": "1",
-      "compatible_brands": "isomavc1",
-      "creation_time": "2026-09-29T14:32:34.000000Z",
-      "encoder": "GPAC-26.08-DEV-rev132-g1b09ef3dd-master"
+      "compatible_brands": "isom"
     }
   }
 }

@@ -199,16 +199,17 @@ class FfprobeExecutorProcessTest {
 
   @Test
   @DisplayName(
-      "Should pass the read limits to the probe and to the extradata read when executing the"
-          + " configured binary")
-  void shouldPassTheReadLimitsToTheProbeAndToTheExtradataReadWhenExecutingTheConfiguredBinary()
+      "Should pass the read limits to the probe and each of its reads when executing the configured"
+          + " binary")
+  void shouldPassTheReadLimitsToTheProbeAndEachOfItsReadsWhenExecutingTheConfiguredBinary()
       throws Exception {
     // Each run appends its arguments and a -- line.
     var binary =
         script(
             """
         printf '%s\n' "$@" -- >> "$0.args"
-        printf '%s' '{"streams":[{"index":0,"codec_type":"video","codec_name":"h264"}]}'
+        printf '%s' '{"streams":[{"index":0,"codec_type":"video","codec_name":"h264"}],
+          "frames":[{"stream_index":0}]}'
         """);
     var source = temporaryDirectory.resolve("movie with spaces.mkv");
 
@@ -240,7 +241,39 @@ class FfprobeExecutorProcessTest {
             "--"));
     var runs = new ArrayList<>(probe);
     runs.addAll(extradataRead);
-    assertThat(Files.readAllLines(Path.of(binary + ".args"))).isEqualTo(runs);
+    var recorded = Files.readAllLines(Path.of(binary + ".args"));
+    assertThat(recorded.subList(0, runs.size())).isEqualTo(runs);
+    // The script prints one frame, so the first-frames read widens to its widest read, and the
+    // first-packets read takes the 3 packets of the read that decoded that frame.
+    var position = runs.size();
+    for (var packets : List.of(3, 12, 48, 192)) {
+      var firstFramesRead = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
+      firstFramesRead.addAll(readLimits);
+      firstFramesRead.addAll(
+          List.of("-select_streams", "0", "-read_intervals", "%+#" + packets, "-show_entries"));
+      assertThat(recorded.subList(position, position + firstFramesRead.size()))
+          .isEqualTo(firstFramesRead);
+      position += firstFramesRead.size();
+      assertThat(recorded.get(position)).startsWith("frame=");
+      assertThat(recorded.subList(position + 1, position + 3))
+          .isEqualTo(List.of(source.toString(), "--"));
+      position += 3;
+    }
+
+    var firstPacketsRead = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
+    firstPacketsRead.addAll(readLimits);
+    firstPacketsRead.addAll(
+        List.of(
+            "-select_streams",
+            "0",
+            "-read_intervals",
+            "%+#3",
+            "-show_entries",
+            "packet=pts,data:packet_side_data=side_data_type",
+            "-show_data",
+            source.toString(),
+            "--"));
+    assertThat(recorded.subList(position, recorded.size())).isEqualTo(firstPacketsRead);
   }
 
   @Test

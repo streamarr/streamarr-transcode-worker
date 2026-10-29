@@ -17,10 +17,12 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.UncheckedIOException;
 import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -868,6 +870,54 @@ class FfprobeExecutorKeyframeTest {
             });
   }
 
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(
+      strings = {"h264-sei-1.h264", "hevc-food.hevc", "h264-ref_10.avi", "avi-bframes.avi"})
+  @DisplayName(
+      "Should report the keyframes unavailable when the recorded packet scan of a stream that"
+          + " reorders frames finds a keyframe whose demuxer gives it no presentation time")
+  void
+      shouldReportTheKeyframesUnavailableWhenTheRecordedPacketScanOfAStreamThatReordersFramesFindsAKeyframeWhoseDemuxerGivesItNoPresentationTime(
+          String recording) {
+    var report = recordedScan(recording).executor().probe(fixture("avi.avi"), packetScanRequest());
+
+    assertThat(report.result().getMedia().getKeyframes())
+        .isEqualTo(
+            ProbeKeyframes.newBuilder()
+                .setUnavailable(
+                    KeyframesUnavailable.newBuilder()
+                        .setReason(
+                            KeyframesUnavailableReason
+                                .KEYFRAMES_UNAVAILABLE_REASON_KEYFRAME_WITHOUT_TIMESTAMP))
+                .build());
+    assertThat(report.keyframePositionsParts()).isEmpty();
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @CsvSource(
+      delimiter = '|',
+      value = {"hevc-pir.hevc | 0", "avi.avi | 0, 18, 33, 20"})
+  @DisplayName(
+      "Should report the scanned keyframe positions when the recorded packet scan reads a stream"
+          + " that does not reorder frames")
+  void
+      shouldReportTheScannedKeyframePositionsWhenTheRecordedPacketScanReadsAStreamThatDoesNotReorderFrames(
+          String recording, String deltas) {
+    var expected = Arrays.stream(deltas.split(", ")).map(Long::valueOf).toList();
+
+    var report = recordedScan(recording).executor().probe(fixture("avi.avi"), packetScanRequest());
+
+    assertThat(report.result().getMedia().getKeyframes().getPositions().getSource())
+        .isEqualTo(KeyframePositionSource.KEYFRAME_POSITION_SOURCE_PACKET_SCAN);
+    assertThat(report.keyframePositionsParts())
+        .singleElement()
+        .satisfies(
+            part -> {
+              assertThat(part.getPresentationTimeDeltasList()).isEqualTo(expected);
+              assertThat(part.getDecodeTimeDeltasList()).isEqualTo(expected);
+            });
+  }
+
   @Test
   @DisplayName(
       "Should report the keyframes unavailable when ffprobe does not say whether the scanned stream"
@@ -982,6 +1032,24 @@ class FfprobeExecutorKeyframeTest {
         .setProbeAttemptId(toProto(UUID.randomUUID()))
         .setProbeVersion(FfprobeExecutor.PROBE_VERSION)
         .build();
+  }
+
+  /**
+   * The probe's ffprobe output and packet scan that the pinned worker image recorded into {@code
+   * src/test/resources/keyframes/scans}.
+   */
+  private static ScriptedFfprobe recordedScan(String recording) {
+    var diagnostics =
+        fixture("scans/" + recording + ".json").resolveSibling(recording + ".diagnostics");
+    try {
+      return ScriptedFfprobe.builder()
+          .streams(Files.readString(fixture("scans/" + recording + ".json")))
+          .packetScan(Files.readString(fixture("scans/" + recording + ".framecrc")))
+          .packetScanDiagnostics(Files.exists(diagnostics) ? Files.readString(diagnostics) : "")
+          .build();
+    } catch (IOException exception) {
+      throw new UncheckedIOException(exception);
+    }
   }
 
   private static Path fixture(String name) {

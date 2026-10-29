@@ -1,0 +1,63 @@
+{
+  "streams": [
+    {
+      "index": 0,
+      "codec_name": "hevc",
+      "codec_long_name": "H.265 / HEVC (High Efficiency Video Coding)",
+      "profile": "Main 10",
+      "codec_type": "video",
+      "codec_tag_string": "[0][0][0][0]",
+      "codec_tag": "0x0000",
+      "width": 1280,
+      "height": 720,
+      "coded_width": 1280,
+      "coded_height": 736,
+      "has_b_frames": 0,
+      "pix_fmt": "yuv420p10le",
+      "level": 150,
+      "color_range": "tv",
+      "color_space": "bt2020nc",
+      "color_transfer": "smpte2084",
+      "color_primaries": "bt2020",
+      "chroma_location": "left",
+      "view_ids_available": "",
+      "view_pos_available": "",
+      "r_frame_rate": "1200000/1",
+      "avg_frame_rate": "25/1",
+      "time_base": "1/1200000",
+      "extradata": "\n00000000: 0000 0140 010c 01ff ff02 2000 0003 00b0  ...@...... .....\n00000010: 0000 0300 0003 0096 ac09 0000 0001 4201  ..............B.\n00000020: 0102 2000 0003 00b0 0000 0300 0003 0096  .. .............\n00000030: a002 8080 2e1f 12d9 6bb9 324b a948 4880  ........k.2K.HH.\n00000040: 4817 6850 9400 0000 0144 01c0 e34f 0941  H.hP.....D...O.A\n00000050: 8e61 0800                                .a..\n",
+      "extradata_size": 84,
+      "disposition": {
+        "default": 0,
+        "dub": 0,
+        "original": 0,
+        "comment": 0,
+        "lyrics": 0,
+        "karaoke": 0,
+        "forced": 0,
+        "hearing_impaired": 0,
+        "visual_impaired": 0,
+        "clean_effects": 0,
+        "attached_pic": 0,
+        "timed_thumbnails": 0,
+        "non_diegetic": 0,
+        "captions": 0,
+        "descriptions": 0,
+        "metadata": 0,
+        "dependent": 0,
+        "still_image": 0,
+        "multilayer": 0
+      }
+    }
+  ],
+  "chapters": [],
+  "format": {
+    "nb_streams": 1,
+    "nb_programs": 0,
+    "nb_stream_groups": 0,
+    "format_name": "hevc",
+    "format_long_name": "raw HEVC video",
+    "size": "77718",
+    "probe_score": 51
+  }
+}

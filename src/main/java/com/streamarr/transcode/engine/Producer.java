@@ -48,6 +48,8 @@ import lombok.extern.slf4j.Slf4j;
  * termination.
  */
 @Slf4j
+// The launch builder's parameters only pass through to FFmpeg and the assembler (worker #109).
+@SuppressWarnings("java:S6539")
 public final class Producer {
 
   // The server's segment cap; the reader admits no initialization segment or fragment above it,
@@ -112,7 +114,7 @@ public final class Producer {
   @Builder(buildMethodName = "start")
   private static Producer launch(
       @NonNull ProcessLauncher launcher,
-      @NonNull List<String> command,
+      @NonNull FfmpegPipeline pipeline,
       @NonNull UUID jobAttemptId,
       int periodSeconds,
       int startSequenceNumber,
@@ -142,7 +144,7 @@ public final class Producer {
     var ffmpeg =
         FfmpegProcess.builder()
             .launcher(launcher)
-            .command(command)
+            .pipeline(pipeline)
             .jobAttemptId(jobAttemptId)
             .gracePeriod(gracePeriod)
             .start();

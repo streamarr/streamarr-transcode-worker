@@ -1,5 +1,9 @@
 package com.streamarr.transcode.probe;
 
+import static com.streamarr.transcode.probe.EbmlElements.document;
+import static com.streamarr.transcode.probe.EbmlElements.element;
+import static com.streamarr.transcode.probe.EbmlElements.hevcCodecId;
+import static com.streamarr.transcode.probe.EbmlElements.unsigned;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import build.buf.gen.streamarr.transcode.v1.KeyframePacketScanReason;
@@ -7,7 +11,6 @@ import com.streamarr.transcode.probe.KeyframeIndex.KeyframeTime;
 import com.streamarr.transcode.probe.KeyframeIndex.Listed;
 import com.streamarr.transcode.probe.KeyframeIndex.TimeBase;
 import com.streamarr.transcode.probe.KeyframeIndex.Unusable;
-import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -43,7 +46,7 @@ class MatroskaCueReaderTest {
   void shouldListEveryCueTimeOfVideoTrackWhenLibavformatWroteCues() throws Exception {
     var source =
         write(
-            MatroskaFile.builder()
+            MinimalMatroskaFile.builder()
                 .muxingApp("Lavf61.7.100")
                 .cue(cue(2_000, VIDEO_TRACK))
                 .cue(cue(0, VIDEO_TRACK, AUDIO_TRACK))
@@ -62,7 +65,7 @@ class MatroskaCueReaderTest {
   void shouldTrustCuesWhenMkvmergeWroteFile() throws Exception {
     var source =
         write(
-            MatroskaFile.builder()
+            MinimalMatroskaFile.builder()
                 .muxingApp("libebml v1.4.5 + libmatroska v1.7.1")
                 .writingApp("mkvmerge v88.0 ('All I Know') 64-bit")
                 .timestampScale(100_000L)
@@ -78,7 +81,7 @@ class MatroskaCueReaderTest {
   void shouldReadCuesOfChosenTrackWhenFileHasTwoVideoTracks() throws Exception {
     var source =
         write(
-            MatroskaFile.builder()
+            MinimalMatroskaFile.builder()
                 .muxingApp("Lavf")
                 .cue(cue(0, VIDEO_TRACK, SECOND_VIDEO_TRACK))
                 .cue(cue(500, SECOND_VIDEO_TRACK))
@@ -96,7 +99,7 @@ class MatroskaCueReaderTest {
   void shouldRequirePacketScanWhenCuesAreSparseAndSkipVideoTrack() throws Exception {
     var source =
         write(
-            MatroskaFile.builder()
+            MinimalMatroskaFile.builder()
                 .muxingApp("Lavf61.7.100")
                 .cue(cue(0, AUDIO_TRACK))
                 .cue(cue(1_000, AUDIO_TRACK))
@@ -113,7 +116,7 @@ class MatroskaCueReaderTest {
   void shouldRequirePacketScanWhenUnknownMuxingApplicationWroteCues() throws Exception {
     var source =
         write(
-            MatroskaFile.builder()
+            MinimalMatroskaFile.builder()
                 .muxingApp("Example Muxer 1.0")
                 .writingApp("Example Writer 1.0")
                 .cue(cue(0, VIDEO_TRACK))
@@ -131,7 +134,7 @@ class MatroskaCueReaderTest {
   void shouldReportNoContainerIndexWhenCuesFollowClusterThatSeekHeadSkips() throws Exception {
     var source =
         write(
-            MatroskaFile.builder()
+            MinimalMatroskaFile.builder()
                 .muxingApp("Lavf61.7.100")
                 .cue(cue(0, VIDEO_TRACK))
                 .cuesAfterCluster(true)
@@ -147,7 +150,7 @@ class MatroskaCueReaderTest {
   void shouldFindCuesThroughSeekHeadWhenTheyFollowClusters() throws Exception {
     var source =
         write(
-            MatroskaFile.builder()
+            MinimalMatroskaFile.builder()
                 .muxingApp("Lavf61.7.100")
                 .cue(cue(0, VIDEO_TRACK))
                 .cuesAfterCluster(true)
@@ -163,7 +166,7 @@ class MatroskaCueReaderTest {
   void shouldRequirePacketScanWhenVideoTrackScalesItsOwnTimestamps() throws Exception {
     var source =
         write(
-            MatroskaFile.builder()
+            MinimalMatroskaFile.builder()
                 .muxingApp("Lavf61.7.100")
                 .trackTimestampScale(ByteBuffer.allocate(Double.BYTES).putDouble(2.0).array())
                 .cue(cue(0, VIDEO_TRACK))
@@ -192,7 +195,7 @@ class MatroskaCueReaderTest {
   void shouldListCueTimesWhenVideoTrackStoresItsTimestampScaleInFourBytes() throws Exception {
     var source =
         write(
-            MatroskaFile.builder()
+            MinimalMatroskaFile.builder()
                 .muxingApp("Lavf61.7.100")
                 .trackTimestampScale(ByteBuffer.allocate(Float.BYTES).putFloat(1.0f).array())
                 .cue(cue(0, VIDEO_TRACK))
@@ -217,6 +220,87 @@ class MatroskaCueReaderTest {
     var source = write(document(lavfInfo(), element(0x1654AE6B, hex(tracks)), videoCueAt(0)));
 
     assertThat(MatroskaCueReader.read(source, 0)).as(malformation).isEqualTo(INCOMPLETE);
+  }
+
+  @Test
+  @DisplayName(
+      "Should require a packet scan when a malformed CueTrack precedes a repeat of its CuePoint's"
+          + " CueTime")
+  void shouldRequirePacketScanWhenAMalformedCueTrackPrecedesARepeatOfItsCuePointsCueTime()
+      throws Exception {
+    // FFmpeg's parse of the CuePoint stops at the nine-byte CueTrack, so it never reads 5000.
+    var point =
+        element(
+            0xBB,
+            element(0xB3, unsigned(2_000)),
+            element(0xB7, element(0xF7, unsigned(VIDEO_TRACK))),
+            element(0xB7, element(0xF7, hex("00 00 00 00 00 00 00 00 01"))),
+            element(0xB3, unsigned(5_000)));
+    var cues =
+        element(
+            0x1C53BB6B,
+            point,
+            element(
+                0xBB,
+                element(0xB3, unsigned(10_000)),
+                element(0xB7, element(0xF7, unsigned(VIDEO_TRACK)))));
+    var source = write(document(lavfInfo(), oneVideoTrack(), cues));
+
+    assertThat(MatroskaCueReader.read(source, 0)).isEqualTo(INCOMPLETE);
+  }
+
+  @Test
+  @DisplayName(
+      "Should require a packet scan when a malformed Duration precedes a repeat of the Info's"
+          + " TimestampScale")
+  void shouldRequirePacketScanWhenAMalformedDurationPrecedesARepeatOfTheInfosTimestampScale()
+      throws Exception {
+    // FFmpeg's parse of the Info stops at the three-byte Duration, so it never reads 1000.
+    var info =
+        element(
+            0x1549A966,
+            element(0x2AD7B1, unsigned(1_000_000)),
+            element(0x4D80, "Lavf61.7.100".getBytes(StandardCharsets.UTF_8)),
+            element(0x4489, hex("00 00 00")),
+            element(0x2AD7B1, unsigned(1_000)));
+    var source = write(document(info, oneVideoTrack(), videoCueAt(0)));
+
+    assertThat(MatroskaCueReader.read(source, 0)).isEqualTo(INCOMPLETE);
+  }
+
+  @Test
+  @DisplayName(
+      "Should list the cue times when the Info holds an empty Duration, which FFmpeg reads")
+  void shouldListTheCueTimesWhenTheInfoHoldsAnEmptyDurationWhichFfmpegReads() throws Exception {
+    var info =
+        element(
+            0x1549A966,
+            element(0x4D80, "Lavf61.7.100".getBytes(StandardCharsets.UTF_8)),
+            element(0x4489, new byte[0]));
+    var source = write(document(info, oneVideoTrack(), videoCueAt(0)));
+
+    assertThat(MatroskaCueReader.read(source, 0))
+        .isEqualTo(new Listed(new TimeBase(1, 1_000), List.of(new KeyframeTime(0, 0))));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({"'an empty repeat', ''", "'a zero repeat', '00'"})
+  @DisplayName(
+      "Should list the cue times in milliseconds when the last TimestampScale is empty or zero, as"
+          + " FFmpeg reads it")
+  void shouldListTheCueTimesInMillisecondsWhenTheLastTimestampScaleIsEmptyOrZeroAsFfmpegReadsIt(
+      String repeat, String bytes) throws Exception {
+    var info =
+        element(
+            0x1549A966,
+            element(0x2AD7B1, unsigned(1_000)),
+            element(0x4D80, "Lavf61.7.100".getBytes(StandardCharsets.UTF_8)),
+            element(0x2AD7B1, hex(bytes)));
+    var source = write(document(info, oneVideoTrack(), videoCueAt(0)));
+
+    assertThat(MatroskaCueReader.read(source, 0))
+        .as(repeat)
+        .isEqualTo(new Listed(new TimeBase(1, 1_000), List.of(new KeyframeTime(0, 0))));
   }
 
   @ParameterizedTest(name = "{0}")
@@ -301,7 +385,7 @@ class MatroskaCueReaderTest {
     assertThat(MatroskaCueReader.read(source, 0)).isEqualTo(NO_INDEX);
   }
 
-  private Path write(MatroskaFile file) throws Exception {
+  private Path write(MinimalMatroskaFile file) throws Exception {
     return write(file.bytes());
   }
 
@@ -320,7 +404,7 @@ class MatroskaCueReaderTest {
    * audio, video), Cues and one empty Cluster.
    */
   @Builder
-  private record MatroskaFile(
+  private record MinimalMatroskaFile(
       String muxingApp,
       String writingApp,
       Long timestampScale,
@@ -343,6 +427,7 @@ class MatroskaCueReaderTest {
       var videoEntry = new ArrayList<byte[]>();
       videoEntry.add(element(0xD7, unsigned(VIDEO_TRACK)));
       videoEntry.add(element(0x83, unsigned(1)));
+      videoEntry.add(hevcCodecId());
       if (trackTimestampScale != null) {
         videoEntry.add(element(0x23314F, trackTimestampScale));
       }
@@ -353,7 +438,10 @@ class MatroskaCueReaderTest {
               element(0xAE, videoEntry.toArray(byte[][]::new)),
               element(0xAE, element(0xD7, unsigned(AUDIO_TRACK)), element(0x83, unsigned(2))),
               element(
-                  0xAE, element(0xD7, unsigned(SECOND_VIDEO_TRACK)), element(0x83, unsigned(1))));
+                  0xAE,
+                  element(0xD7, unsigned(SECOND_VIDEO_TRACK)),
+                  element(0x83, unsigned(1)),
+                  hevcCodecId()));
       var cueElement =
           element(0x1C53BB6B, cues.stream().map(this::cuePoint).toArray(byte[][]::new));
       var cluster = element(0x1F43B675, element(0xE7, unsigned(0)));
@@ -390,12 +478,6 @@ class MatroskaCueReaderTest {
     }
   }
 
-  /** The EBML header, then a Segment that holds {@code segmentChildren}. */
-  private static byte[] document(byte[]... segmentChildren) {
-    var header = element(0x1A45DFA3, element(0x4282, "matroska".getBytes(StandardCharsets.UTF_8)));
-    return concat(header, element(0x18538067, segmentChildren));
-  }
-
   private static byte[] lavfInfo() {
     return element(0x1549A966, element(0x4D80, "Lavf61.7.100".getBytes(StandardCharsets.UTF_8)));
   }
@@ -403,7 +485,8 @@ class MatroskaCueReaderTest {
   private static byte[] oneVideoTrack() {
     return element(
         0x1654AE6B,
-        element(0xAE, element(0xD7, unsigned(VIDEO_TRACK)), element(0x83, unsigned(1))));
+        element(
+            0xAE, element(0xD7, unsigned(VIDEO_TRACK)), element(0x83, unsigned(1)), hevcCodecId()));
   }
 
   private static byte[] videoCueAt(long time) {
@@ -450,35 +533,7 @@ class MatroskaCueReaderTest {
     return HexFormat.of().parseHex(bytes.replace(" ", ""));
   }
 
-  private static byte[] element(long id, byte[]... children) {
-    var payload = concat(children);
-    var size = ByteBuffer.allocate(8).putLong(payload.length).array();
-    size[0] = 0x01;
-    return concat(unsigned(id), size, payload);
-  }
-
-  private static byte[] unsigned(long value) {
-    var bytes = ByteBuffer.allocate(8).putLong(value).array();
-    var first = 0;
-    while (first < 7 && bytes[first] == 0) {
-      first++;
-    }
-
-    var trimmed = new byte[8 - first];
-    System.arraycopy(bytes, first, trimmed, 0, trimmed.length);
-    return trimmed;
-  }
-
   private static byte[] fixedUnsigned(long value) {
     return ByteBuffer.allocate(8).putLong(value).array();
-  }
-
-  private static byte[] concat(byte[]... parts) {
-    var output = new ByteArrayOutputStream();
-    for (var part : parts) {
-      output.writeBytes(part);
-    }
-
-    return output.toByteArray();
   }
 }

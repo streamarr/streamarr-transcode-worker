@@ -2,6 +2,7 @@ package com.streamarr.transcode.worker;
 
 import build.buf.gen.streamarr.transcode.v1.VideoCodecFamily;
 import build.buf.gen.streamarr.transcode.v1.VideoMode;
+import com.streamarr.transcode.engine.CodecFamily;
 import com.streamarr.transcode.engine.TranscodeMode;
 import com.streamarr.transcode.engine.VideoCodecProfile;
 import com.streamarr.transcode.engine.VideoCodecTier;
@@ -47,10 +48,14 @@ final class VideoDecisions {
 
   /** The engine's name for the codec family; empty when the decision names none. */
   static Optional<String> codecFamilyName(VideoCodecFamily family) {
+    return codecFamily(family).map(CodecFamily::familyName);
+  }
+
+  private static Optional<CodecFamily> codecFamily(VideoCodecFamily family) {
     return switch (family) {
-      case VIDEO_CODEC_FAMILY_H264 -> Optional.of("h264");
-      case VIDEO_CODEC_FAMILY_HEVC -> Optional.of("hevc");
-      case VIDEO_CODEC_FAMILY_AV1 -> Optional.of("av1");
+      case VIDEO_CODEC_FAMILY_H264 -> Optional.of(CodecFamily.H264);
+      case VIDEO_CODEC_FAMILY_HEVC -> Optional.of(CodecFamily.HEVC);
+      case VIDEO_CODEC_FAMILY_AV1 -> Optional.of(CodecFamily.AV1);
       case VIDEO_CODEC_FAMILY_UNSPECIFIED, UNRECOGNIZED -> Optional.empty();
     };
   }
@@ -125,12 +130,14 @@ final class VideoDecisions {
 
     return VideoDecision.Encode.builder()
         .streamIndex(video.getStreamIndex())
+        .sourceCodecFamily(codecFamily(video.getSourceCodecFamily()))
         .codecProfile(profile)
         .tier(tier)
         .level(video.getLevel())
         .codecString(video.getCodecString())
         .sourceDynamicRange(VideoDynamicRanges.of(video.getSourceDynamicRange()))
         .outputDynamicRange(outputDynamicRange)
+        .sourcePacketsCarryPresentationTimes(video.getSourcePacketsCarryPresentationTimes())
         .build();
   }
 
@@ -143,6 +150,20 @@ final class VideoDecisions {
       case VIDEO_CODEC_PROFILE_AV1_MAIN -> VideoCodecProfile.AV1_MAIN;
       case VIDEO_CODEC_PROFILE_UNSPECIFIED, UNRECOGNIZED ->
           throw new InvalidJobSpecificationException("The encode carries no codec profile");
+      case VIDEO_CODEC_PROFILE_H264_CONSTRAINED_BASELINE,
+          VIDEO_CODEC_PROFILE_H264_BASELINE,
+          VIDEO_CODEC_PROFILE_H264_MAIN,
+          VIDEO_CODEC_PROFILE_H264_EXTENDED,
+          VIDEO_CODEC_PROFILE_H264_HIGH_10,
+          VIDEO_CODEC_PROFILE_H264_HIGH_422,
+          VIDEO_CODEC_PROFILE_H264_HIGH_444_PREDICTIVE,
+          VIDEO_CODEC_PROFILE_HEVC_MAIN_10,
+          VIDEO_CODEC_PROFILE_HEVC_MAIN_STILL_PICTURE,
+          VIDEO_CODEC_PROFILE_HEVC_FORMAT_RANGE_EXTENSIONS,
+          VIDEO_CODEC_PROFILE_AV1_HIGH,
+          VIDEO_CODEC_PROFILE_AV1_PROFESSIONAL ->
+          throw new InvalidJobSpecificationException(
+              "An encode forces only a Main or High profile, and carries " + profile);
     };
   }
 

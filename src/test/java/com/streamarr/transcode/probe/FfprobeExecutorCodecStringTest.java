@@ -1,5 +1,6 @@
 package com.streamarr.transcode.probe;
 
+import static com.streamarr.transcode.probe.RecordedFfprobe.ffprobeDump;
 import static com.streamarr.transcode.probe.RecordedFfprobe.fixture;
 import static com.streamarr.transcode.probe.RecordedFfprobe.probeOutput;
 import static com.streamarr.transcode.probe.RecordedFfprobe.request;
@@ -39,6 +40,10 @@ class FfprobeExecutorCodecStringTest {
           "mp4-dovi-p9-dva1.mp4",
           "mp4-dovi-p82.mp4");
 
+  // These videos' HEVC parameter sets are only in their samples.
+  private static final Set<String> VIDEO_FIXTURES_WITHOUT_RECORD_PARAMETER_SETS =
+      Set.of("mp4-dovi-p5-hev1.mp4", "mp4-dovi-p81-fate.mp4");
+
   @Nested
   @DisplayName("Stream Copies")
   class StreamCopyTests {
@@ -67,11 +72,11 @@ class FfprobeExecutorCodecStringTest {
                           copy ->
                               !copy.getKey().equals("0")
                                   || !SESSION_COVERED_VIDEO_FIXTURES.contains(file.getKey()))
-                      // This video's HEVC parameter sets are only in its samples.
                       .filter(
                           copy ->
-                              !file.getKey().equals("mp4-dovi-p5-hev1.mp4")
-                                  || !copy.getKey().equals("0"))
+                              !copy.getKey().equals("0")
+                                  || !VIDEO_FIXTURES_WITHOUT_RECORD_PARAMETER_SETS.contains(
+                                      file.getKey()))
                       .map(
                           copy ->
                               Arguments.of(
@@ -616,28 +621,5 @@ class FfprobeExecutorCodecStringTest {
             """
                 .formatted(codec, ffprobeDump(bytes)))
         .getStreams(0);
-  }
-
-  /**
-   * The bytes as ffprobe's -show_data prints them, escaped for a JSON string: each line holds an
-   * offset, up to 16 bytes in groups of two, and the bytes as ASCII after column 51.
-   */
-  private static String ffprobeDump(byte[] bytes) {
-    var dump = new StringBuilder("\\n");
-    for (var offset = 0; offset < bytes.length; offset += 16) {
-      var line = new StringBuilder("%08x: ".formatted(offset));
-      var end = Math.min(offset + 16, bytes.length);
-      for (var index = offset; index < end; index++) {
-        line.append("%02x".formatted(bytes[index]));
-        if ((index - offset) % 2 == 1) {
-          line.append(' ');
-        }
-      }
-
-      line.append(" ".repeat(51 - line.length())).append(".".repeat(end - offset));
-      dump.append(line).append("\\n");
-    }
-
-    return dump.toString();
   }
 }

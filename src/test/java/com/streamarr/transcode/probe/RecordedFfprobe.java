@@ -14,12 +14,17 @@ import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.HexFormat;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.function.IntFunction;
+import lombok.Builder;
+import lombok.NonNull;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
 /**
@@ -35,7 +40,16 @@ final class RecordedFfprobe {
   private RecordedFfprobe() {}
 
   static ProbeMediaInfo probeFixture(String fixture) {
-    return probeOutput(fixture(fixture), packets(fixture));
+    return probe(recordedAnswers(fixture).build());
+  }
+
+  /** The answers that the pinned worker image recorded for the fixture, for a test to customize. */
+  static Answers.AnswersBuilder recordedAnswers(String fixture) {
+    return Answers.builder()
+        .ffprobeOutput(fixture(fixture))
+        .packetLines(packets(fixture))
+        .firstFrames(recordedFirstFrames(fixture))
+        .firstPackets(recordedFirstPackets(fixture));
   }
 
   static ProbeStreamInfo streamOf(String fixture, int index) {
@@ -54,13 +68,71 @@ final class RecordedFfprobe {
    * given packet lines.
    */
   static ProbeMediaInfo probeOutput(String ffprobeOutput, String packetLines) {
-    var result = probeResult(ffprobeOutput, packetLines);
+    return probe(Answers.builder().ffprobeOutput(ffprobeOutput).packetLines(packetLines).build());
+  }
+
+  /** Probes with the answers that the scripted ffprobe gives, and expects the probe to succeed. */
+  static ProbeMediaInfo probe(Answers answers) {
+    var result = probeResult(answers);
     assertThat(result.hasMedia()).as("the probe succeeds").isTrue();
     return result.getMedia();
   }
 
+  /**
+   * What the scripted ffprobe prints. The first-frames read prints {@code firstFrames}, or fails
+   * when the answers hold none, so that the probe reads no frames. A read of no more than {@code
+   * prerollPackets} packets prints no frame, as when an edit list discards the first packets, and a
+   * first-frames read of more than {@code failingReadsBeyondPackets} packets fails. The probe reads
+   * {@code source}, by default a path that names no file.
+   */
+  @Builder
+  record Answers(
+      @NonNull String ffprobeOutput,
+      String packetLines,
+      Optional<String> firstFrames,
+      int prerollPackets,
+      Integer failingReadsBeyondPackets,
+      Optional<String> firstPackets,
+      Path source) {
+
+    Answers {
+      source = source == null ? SOURCE : source;
+      packetLines = packetLines == null ? "" : packetLines;
+      failingReadsBeyondPackets =
+          failingReadsBeyondPackets == null ? Integer.MAX_VALUE : failingReadsBeyondPackets;
+      firstFrames = firstFrames == null ? Optional.empty() : firstFrames;
+      firstPackets = firstPackets == null ? Optional.empty() : firstPackets;
+    }
+
+    static final class AnswersBuilder {
+      AnswersBuilder firstFrames(String output) {
+        this.firstFrames = Optional.of(output);
+        return this;
+      }
+
+      private AnswersBuilder firstFrames(Optional<String> output) {
+        this.firstFrames = output;
+        return this;
+      }
+
+      /**
+       * What the first-packets read prints; without it, the read fails. A read of fewer packets
+       * prints only the first of them.
+       */
+      AnswersBuilder firstPackets(String output) {
+        this.firstPackets = Optional.of(output);
+        return this;
+      }
+
+      private AnswersBuilder firstPackets(Optional<String> output) {
+        this.firstPackets = output;
+        return this;
+      }
+    }
+  }
+
   static ProbeAttemptResult probeResult(String ffprobeOutput) {
-    return probeResult(ffprobeOutput, "");
+    return probeResult(Answers.builder().ffprobeOutput(ffprobeOutput).build());
   }
 
   /** Probes with the given ffprobe output while the frame-rate scan prints packets forever. */
@@ -70,8 +142,12 @@ final class RecordedFfprobe {
         new FfprobeExecutor(
             new ObjectMapper(),
             command -> {
-              if (command.arguments().contains("-read_intervals")) {
+              if (isFrameRateScan(command.arguments())) {
                 return new EndlessOutputProcess(packetLines);
+              }
+
+              if (isFirstFramesRead(command.arguments())) {
+                return ScriptedProcess.builder().output(new byte[0]).exitCode(1).build();
               }
 
               var output =
@@ -92,7 +168,7 @@ final class RecordedFfprobe {
         new FfprobeExecutor(
             new ObjectMapper(),
             command -> {
-              var isScan = command.arguments().contains("-read_intervals");
+              var isScan = isFrameRateScan(command.arguments());
               return ScriptedProcess.builder()
                   .output(isScan ? new byte[0] : ffprobeOutput.getBytes(StandardCharsets.UTF_8))
                   .exitCode(isScan ? exitCode : 0)
@@ -101,23 +177,125 @@ final class RecordedFfprobe {
     return executor.probe(SOURCE, request()).result();
   }
 
-  private static ProbeAttemptResult probeResult(String ffprobeOutput, String packetLines) {
+  private static ProbeAttemptResult probeResult(Answers answers) {
     var executor =
         new FfprobeExecutor(
             new ObjectMapper(),
-            command ->
-                ScriptedProcess.builder()
-                    .output(
-                        switch (command.tool()) {
-                          case FFPROBE ->
-                              (command.arguments().contains("-read_intervals")
-                                      ? packetLines
-                                      : answer(ffprobeOutput, command.arguments()))
-                                  .getBytes(StandardCharsets.UTF_8);
-                          case FFMPEG -> new byte[0];
-                        })
-                    .build());
-    return executor.probe(SOURCE, request()).result();
+            command -> {
+              if (command.tool() == ProbeCommand.ProbeTool.FFMPEG) {
+                return ScriptedProcess.builder().output(new byte[0]).build();
+              }
+
+              if (isFirstPacketsRead(command.arguments())) {
+                var count = packetsRead(command.arguments());
+                return scripted(answers.firstPackets().map(printed -> firstOf(printed, count)));
+              }
+
+              if (isFirstFramesRead(command.arguments())
+                  && packetsRead(command.arguments()) > answers.failingReadsBeyondPackets()) {
+                return ScriptedProcess.builder().output(new byte[0]).exitCode(1).build();
+              }
+
+              if (isFirstFramesRead(command.arguments())
+                  && packetsRead(command.arguments()) <= answers.prerollPackets()) {
+                return ScriptedProcess.builder()
+                    .output("{\"frames\":[]}".getBytes(StandardCharsets.UTF_8))
+                    .build();
+              }
+
+              if (isFirstFramesRead(command.arguments())) {
+                return answers
+                    .firstFrames()
+                    .map(
+                        frames ->
+                            ScriptedProcess.builder()
+                                .output(frames.getBytes(StandardCharsets.UTF_8))
+                                .build())
+                    .orElseGet(
+                        () -> ScriptedProcess.builder().output(new byte[0]).exitCode(1).build());
+              }
+
+              var output =
+                  isFrameRateScan(command.arguments())
+                      ? answers.packetLines()
+                      : answer(answers.ffprobeOutput(), command.arguments());
+              return ScriptedProcess.builder()
+                  .output(output.getBytes(StandardCharsets.UTF_8))
+                  .build();
+            });
+    return executor.probe(answers.source(), request()).result();
+  }
+
+  private static boolean isFrameRateScan(List<String> arguments) {
+    return arguments.contains("packet=pts,dts,size,flags");
+  }
+
+  private static Process scripted(Optional<String> output) {
+    return output
+        .map(printed -> ScriptedProcess.builder().output(printed.getBytes(StandardCharsets.UTF_8)))
+        .orElseGet(() -> ScriptedProcess.builder().output(new byte[0]).exitCode(1))
+        .build();
+  }
+
+  /** The printed packets as a read of only the first {@code count} packets prints them. */
+  private static String firstOf(String printed, int count) {
+    try {
+      if (!(new ObjectMapper().readTree(printed) instanceof ObjectNode output)
+          || !(output.path("packets") instanceof ArrayNode packets)
+          || packets.size() <= count) {
+        return printed;
+      }
+
+      var first = output.arrayNode();
+      packets.valueStream().limit(count).forEach(first::add);
+      return output.set("packets", first).toString();
+    } catch (JacksonException _) {
+      return printed;
+    }
+  }
+
+  private static boolean isFirstPacketsRead(List<String> arguments) {
+    return arguments.stream().anyMatch(argument -> argument.startsWith("packet=pts,data"));
+  }
+
+  private static boolean isFirstFramesRead(List<String> arguments) {
+    return arguments.stream().anyMatch(argument -> argument.startsWith("frame="));
+  }
+
+  /** The packet count of a read's {@code %+#count} interval. */
+  private static int packetsRead(List<String> arguments) {
+    var interval = arguments.get(arguments.indexOf("-read_intervals") + 1);
+    return Integer.parseInt(interval.substring("%+#".length()));
+  }
+
+  /**
+   * The first-packets read that the pinned worker image recorded into {@code
+   * src/test/resources/probe/packet-data}; none when the fixture has no recorded read.
+   */
+  static Optional<String> recordedFirstPackets(String fixture) {
+    try (InputStream recorded =
+        RecordedFfprobe.class.getResourceAsStream("/probe/packet-data/" + fixture + ".json")) {
+      return recorded == null
+          ? Optional.empty()
+          : Optional.of(new String(recorded.readAllBytes(), StandardCharsets.UTF_8));
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
+    }
+  }
+
+  /**
+   * The first-frames read that the pinned worker image recorded into {@code
+   * src/test/resources/probe/frames}; none when the fixture has no recorded read.
+   */
+  static Optional<String> recordedFirstFrames(String fixture) {
+    try (InputStream recorded =
+        RecordedFfprobe.class.getResourceAsStream("/probe/frames/" + fixture + ".json")) {
+      return recorded == null
+          ? Optional.empty()
+          : Optional.of(new String(recorded.readAllBytes(), StandardCharsets.UTF_8));
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
+    }
   }
 
   /**
@@ -209,5 +387,28 @@ final class RecordedFfprobe {
         .setProbeVersion(FfprobeExecutor.PROBE_VERSION)
         .setScanKeyframePackets(true)
         .build();
+  }
+
+  /**
+   * The bytes as ffprobe's -show_data prints them, escaped for a JSON string: each line holds an
+   * offset, up to 16 bytes in groups of two, and the bytes as ASCII after column 51.
+   */
+  static String ffprobeDump(byte[] bytes) {
+    var dump = new StringBuilder("\\n");
+    for (var offset = 0; offset < bytes.length; offset += 16) {
+      var line = new StringBuilder("%08x: ".formatted(offset));
+      var end = Math.min(offset + 16, bytes.length);
+      for (var index = offset; index < end; index++) {
+        line.append(HexFormat.of().toHexDigits(bytes[index]));
+        if ((index - offset) % 2 == 1) {
+          line.append(' ');
+        }
+      }
+
+      line.append(" ".repeat(51 - line.length())).append(".".repeat(end - offset));
+      dump.append(line).append("\\n");
+    }
+
+    return dump.toString();
   }
 }

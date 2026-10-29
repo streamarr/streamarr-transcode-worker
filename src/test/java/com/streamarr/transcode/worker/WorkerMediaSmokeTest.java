@@ -16,6 +16,7 @@ import build.buf.gen.streamarr.transcode.v1.CompatibleBase;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionAbsent;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionConfiguration;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionPresent;
+import build.buf.gen.streamarr.transcode.v1.DolbyVisionRpuPlacement;
 import build.buf.gen.streamarr.transcode.v1.EncoderPreset;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
@@ -82,6 +83,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -95,6 +97,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
@@ -185,6 +188,15 @@ class WorkerMediaSmokeTest {
   // The fixture's 10-bit base layer: Main 10 at level 2.0 in the Main tier.
   private static final String DOLBY_VISION_BASE_LAYER_CODEC_STRING = "hvc1.2.4.L60.90";
 
+  // The profile 5 sources span three 2 s segments, with a keyframe every second.
+  private static final int PROFILE_5_PERIOD_SECONDS = 2;
+  private static final int PROFILE_5_SEGMENT_COUNT = 3;
+  private static final int DISPLAY_SOURCE_HEIGHT = 180;
+  private static final int ACCESS_UNIT_DELIMITER = 35;
+  // An HEVC NAL unit of type 62, as a Dolby Vision RPU, whose payload FFmpeg cannot parse as one.
+  private static final byte[] STAND_IN_RPU =
+      HexFormat.of().parseHex("000000017C01" + "19".repeat(24) + "80");
+
   // 18 s of video at the default 6 s period.
   private static final int ONE_FRAME_PER_SECOND_SEGMENT_COUNT = 3;
 
@@ -211,6 +223,7 @@ class WorkerMediaSmokeTest {
 
   @TempDir static Path tenBitSources;
   @TempDir static Path irregularKeyframeSources;
+  @TempDir static Path rpuLayoutSources;
 
   // A source joins only once FFmpeg has written it successfully, so that a later case generates it
   // again instead of reading what a failed or timed-out run left behind.
@@ -1056,6 +1069,527 @@ class WorkerMediaSmokeTest {
     assertThat(streamSideData(media)).doesNotContain("DOVI configuration record");
     assertThat(frameSideDataPerFrame(media))
         .allSatisfy(sideData -> assertThat(sideData).doesNotContain("Dolby Vision RPU Data"));
+  }
+
+  @ParameterizedTest(name = "{0}, {1} audio, start {2}")
+  @MethodSource("rpuLayoutsAudioCodecsAndStarts")
+  @DisplayName(
+      "Should upload what one FFmpeg encodes from the source whose RPUs follow their pictures when"
+          + " a Dolby Vision profile 5 source's samples start with RPUs")
+  void
+      shouldUploadWhatOneFfmpegEncodesFromTheSourceWhoseRpusFollowTheirPicturesWhenADolbyVisionProfile5SourcesSamplesStartWithRpus(
+          RpuLayout layout, String sourceAudioCodec, int startSequenceNumber) throws Exception {
+    var rpusAhead = rpuLayoutSource(layout, sourceAudioCodec);
+    var rpusBehind = rpuLayoutSource(RpuLayout.BEHIND_THEIR_PICTURE, sourceAudioCodec);
+    var aheadCommands = new CopyOnWriteArrayList<List<String>>();
+    var behindCommands = new CopyOnWriteArrayList<List<String>>();
+
+    var fromRpusAhead =
+        execute(
+            engine(
+                softwareCapabilities(),
+                capturingCommands(new ProcessBuilderLauncher(), aheadCommands)),
+            rpusAhead.getParent(),
+            profile5Job(rpusAhead, layout.placement(), startSequenceNumber).build());
+    var fromRpusBehind =
+        execute(
+            engine(
+                softwareCapabilities(),
+                capturingCommands(new ProcessBuilderLauncher(), behindCommands)),
+            rpusBehind.getParent(),
+            profile5Job(
+                    rpusBehind,
+                    DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_AFTER_OWN_PICTURE,
+                    startSequenceNumber)
+                .build());
+
+    assertThat(aheadCommands).as("FFmpegs for the source whose RPUs start samples").hasSize(2);
+    assertThat(behindCommands).as("FFmpegs for the source whose RPUs follow pictures").hasSize(1);
+    assertThat(fromRpusAhead.names())
+        .containsExactlyElementsOf(fromRpusBehind.names())
+        .hasSize(PROFILE_5_SEGMENT_COUNT - startSequenceNumber + 1);
+    for (var name : fromRpusBehind.names()) {
+      assertThat(packetsOf(fromRpusAhead, name))
+          .as(name)
+          .containsExactlyElementsOf(packetsOf(fromRpusBehind, name));
+    }
+  }
+
+  static Stream<Arguments> rpuLayoutsAudioCodecsAndStarts() {
+    return Stream.of(RpuLayout.AHEAD_OF_THE_NEXT_PICTURE, RpuLayout.AHEAD_OF_EVERY_PICTURE)
+        .flatMap(
+            layout ->
+                Stream.of("aac", "ac3", "eac3", "flac", "alac", "libopus")
+                    .flatMap(
+                        codec -> Stream.of(0, 2).map(start -> Arguments.of(layout, codec, start))));
+  }
+
+  // The packets of the upload and its initialization segment.
+  private List<Packet> packetsOf(MediaUploads uploads, String name) throws Exception {
+    return FfprobePackets.of(uploads.contentOf(List.of("init.mp4", name)), root);
+  }
+
+  private static VariantJob.Builder profile5Job(
+      Path source, DolbyVisionRpuPlacement rpuPlacement, int startSequenceNumber) {
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
+    withVideo(job, forcedSoftwareEncode("h264", TINY_VARIANT_LEVELS.get("h264")));
+    withProfile5Source(job, rpuPlacement);
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setMode(AudioMode.AUDIO_MODE_TRANSCODE)
+        .setCodec("aac")
+        .setChannels(1)
+        .setBitrateBitsPerSecond(64_000);
+    job.getVariantBuilder().setWidth(64).setHeight(36).setBitrateBitsPerSecond(100_000);
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(PROFILE_5_PERIOD_SECONDS)
+        .setMediaSegmentCount(PROFILE_5_SEGMENT_COUNT)
+        .setStartSequenceNumber(startSequenceNumber);
+    return job;
+  }
+
+  // Dolby Vision profile 5 HEVC, whose samples place each picture's RPU as rpuPlacement says, in a
+  // container whose packets carry presentation times.
+  private static void withProfile5Source(
+      VariantJob.Builder job, DolbyVisionRpuPlacement rpuPlacement) {
+    job.getDecisionBuilder()
+        .getVideoBuilder()
+        .setSourceCodecFamily(VideoCodecFamily.VIDEO_CODEC_FAMILY_HEVC)
+        .setSourcePacketsCarryPresentationTimes(true)
+        .setSourceDynamicRange(
+            VideoDynamicRange.newBuilder()
+                .setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_NONE)
+                .setHdr10Plus(Presence.PRESENCE_ABSENT)
+                .setDolbyVisionPresent(
+                    DolbyVisionPresent.newBuilder()
+                        .setObservedRpu(Presence.PRESENCE_PRESENT)
+                        .setRpuPlacement(rpuPlacement)));
+  }
+
+  @ParameterizedTest(name = "{0}, {1}, start {2}")
+  @MethodSource("sourceContainersEncodingModesAndStarts")
+  @DisplayName(
+      "Should upload the packets one FFmpeg encodes from the source when the encode reads the"
+          + " source's fragmented MP4 copy")
+  void
+      shouldUploadThePacketsOneFfmpegEncodesFromTheSourceWhenTheEncodeReadsTheSourcesFragmentedMp4Copy(
+          String container, TranscodeMode mode, int startSequenceNumber) throws Exception {
+    var source = seekableHevcSource(container);
+    var job = seekableSourceJob(source, mode);
+    job.getExecutionBuilder().setStartSequenceNumber(startSequenceNumber);
+
+    assertEncodeOfTheCopyUploadsWhatOneFfmpegEncodes(source, job);
+  }
+
+  @ParameterizedTest(name = "{0}, start {1}")
+  @MethodSource("encodingModesAndStarts")
+  @DisplayName(
+      "Should upload the packets one FFmpeg encodes from the source when the encode reads the"
+          + " fragmented MP4 copy of a variable-frame-rate Matroska source whose video reorders"
+          + " pictures")
+  void
+      shouldUploadThePacketsOneFfmpegEncodesFromTheSourceWhenTheEncodeReadsTheFragmentedMp4CopyOfAVariableFrameRateMatroskaSourceWhoseVideoReordersPictures(
+          TranscodeMode mode, int startSequenceNumber) throws Exception {
+    var source = variableFrameRateHevcSource();
+    var job = seekableSourceJob(source, mode);
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(PROFILE_5_PERIOD_SECONDS)
+        .setMediaSegmentCount(PROFILE_5_SEGMENT_COUNT)
+        .setStartSequenceNumber(startSequenceNumber);
+
+    assertEncodeOfTheCopyUploadsWhatOneFfmpegEncodes(source, job);
+  }
+
+  @ParameterizedTest(name = "{0}, {1}")
+  @MethodSource("displayChangesAndContainers")
+  @DisplayName(
+      "Should upload what one FFmpeg encodes, turned and cropped as the source's container says,"
+          + " when the encode reads the fragmented MP4 copy of a rotated or cropped source")
+  void
+      shouldUploadWhatOneFfmpegEncodesTurnedAndCroppedAsTheSourcesContainerSaysWhenTheEncodeReadsTheFragmentedMp4CopyOfARotatedOrCroppedSource(
+          DisplayChange change, String container) throws Exception {
+    var source = displayChangedSource(change, container);
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getVariantBuilder().setHeight(DISPLAY_SOURCE_HEIGHT / 2);
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(PROFILE_5_PERIOD_SECONDS)
+        .setMediaSegmentCount(PROFILE_5_SEGMENT_COUNT);
+
+    var fromTheCopy =
+        assertEncodeOfTheCopyUploadsWhatOneFfmpegEncodes(
+            source, job, WorkerMediaSmokeTest::withX264ThreadsOfOne);
+
+    assertThat(dimensionsOf(fromTheCopy)).isEqualTo(change.encodedDimensions());
+  }
+
+  // libx264's frame threads under a bitrate cap make its rate control depend on when each frame
+  // arrives, which differs between one FFmpeg and the encode of the copy once frames take more than
+  // an instant to encode; with one thread, the same frames encode to the same packets.
+  private static ProcessLauncher withX264ThreadsOfOne(ProcessLauncher launcher) {
+    return (command, jobAttemptId) -> {
+      var encoder = command.indexOf("libx264");
+      if (encoder < 0) {
+        return launcher.launch(command, jobAttemptId);
+      }
+
+      var adjusted = new ArrayList<>(command);
+      adjusted.addAll(encoder + 1, List.of("-threads:v", "1"));
+      return launcher.launch(adjusted, jobAttemptId);
+    };
+  }
+
+  static Stream<Arguments> displayChangesAndContainers() {
+    return Arrays.stream(DisplayChange.values())
+        .flatMap(
+            change -> Stream.of("mp4", "mkv").map(container -> Arguments.of(change, container)));
+  }
+
+  // What the source's container says of its 320x180 pictures, and the size of their encode at half
+  // that height, whose width FFmpeg rounds to an even number from the turned and cropped aspect.
+  private enum DisplayChange {
+    ROTATED(true, false, "50x90"),
+    CROPPED(false, true, "144x90"),
+    ROTATED_AND_CROPPED(true, true, "56x90");
+
+    private final boolean rotated;
+    private final boolean cropped;
+    private final String encodedDimensions;
+
+    DisplayChange(boolean rotated, boolean cropped, String encodedDimensions) {
+      this.rotated = rotated;
+      this.cropped = cropped;
+      this.encodedDimensions = encodedDimensions;
+    }
+
+    String encodedDimensions() {
+      return encodedDimensions;
+    }
+  }
+
+  private String dimensionsOf(MediaUploads uploads) throws Exception {
+    var media = playable(uploads.contentOf(uploads.names()));
+    return runToCompletion(
+            List.of(
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height",
+                "-of",
+                "csv=p=0:s=x",
+                media.toString()))
+        .strip();
+  }
+
+  // HEVC with noise, in MP4 whose display matrix turns the pictures 90 degrees, or whose clap box
+  // crops 32, 96, 20 and 40 pixels from their left, right, top and bottom, to 192x120, or both.
+  // The Matroska source carries the MP4 source's streams, with its rotation and cropping.
+  private static synchronized Path displayChangedSource(DisplayChange change, String container)
+      throws Exception {
+    var name = change.name().toLowerCase(Locale.ROOT);
+    var source = seekableSources.resolve(name + "." + container);
+    if (generatedSeekableSources.contains(source)) {
+      return source;
+    }
+
+    var mp4 = seekableSources.resolve(name + ".mp4");
+    if (!generatedSeekableSources.contains(mp4)) {
+      writeDisplayChangedMp4(change, mp4);
+      generatedSeekableSources.add(mp4);
+    }
+
+    if (!container.equals("mp4")) {
+      runFfmpeg(List.of("-i", mp4.toString(), "-map", "0", "-c", "copy"), source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  private static void writeDisplayChangedMp4(DisplayChange change, Path mp4) throws Exception {
+    var input = new ArrayList<String>();
+    if (change.rotated) {
+      input.addAll(List.of("-display_rotation", "90"));
+    }
+
+    input.addAll(List.of("-i", displaySource().toString(), "-c", "copy"));
+    runFfmpeg(input, mp4);
+    if (change.cropped) {
+      cropInPlace(mp4);
+    }
+  }
+
+  private static synchronized Path displaySource() throws Exception {
+    var source = seekableSources.resolve("display.mp4");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc2=size=320x" + DISPLAY_SOURCE_HEIGHT + ":rate=24",
+              "-f",
+              "lavfi",
+              "-i",
+              "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5",
+              "-t",
+              String.valueOf(PROFILE_5_PERIOD_SECONDS * PROFILE_5_SEGMENT_COUNT),
+              "-c:v",
+              "libx265",
+              "-x265-params",
+              "keyint=24:min-keyint=24:log-level=error",
+              "-c:a",
+              "aac"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // Inserts the clap box into the video sample entry of an MP4 whose moov follows its mdat, so no
+  // chunk offset moves, and grows every box that holds the entry by its size.
+  private static void cropInPlace(Path mp4) throws IOException {
+    var bytes = Files.readAllBytes(mp4);
+    var enclosing = new ArrayList<Integer>();
+    var position = 0;
+    var end = bytes.length;
+    for (var type : List.of("moov", "trak", "mdia", "minf", "stbl", "stsd")) {
+      position = childOf(bytes, position, end, type);
+      enclosing.add(position);
+      end = position + ByteBuffer.wrap(bytes, position, 4).getInt();
+      position += type.equals("stsd") ? 16 : 8;
+    }
+
+    var entry = position;
+    enclosing.add(entry);
+    var entryEnd = entry + ByteBuffer.wrap(bytes, entry, 4).getInt();
+    var width = ByteBuffer.wrap(bytes, entry + 32, 2).getShort();
+    var height = ByteBuffer.wrap(bytes, entry + 34, 2).getShort();
+    var clap =
+        ByteBuffer.allocate(40)
+            .putInt(40)
+            .put("clap".getBytes(StandardCharsets.US_ASCII))
+            .putInt(width - 32 - 96)
+            .putInt(1)
+            .putInt(height - 20 - 40)
+            .putInt(1)
+            .putInt(32 - 96)
+            .putInt(2)
+            .putInt(20 - 40)
+            .putInt(2)
+            .array();
+    var cropped = new ByteArrayOutputStream();
+    cropped.write(bytes, 0, entryEnd);
+    cropped.writeBytes(clap);
+    cropped.write(bytes, entryEnd, bytes.length - entryEnd);
+    var result = ByteBuffer.wrap(cropped.toByteArray());
+    for (var box : enclosing) {
+      result.putInt(box, result.getInt(box) + clap.length);
+    }
+
+    Files.write(mp4, result.array());
+  }
+
+  // The position of the first child of the type between the positions; the movie holds one video
+  // track, its first trak.
+  private static int childOf(byte[] bytes, int start, int end, String type) {
+    for (var position = start; position < end; ) {
+      var size = ByteBuffer.wrap(bytes, position, 4).getInt();
+      var found = new String(bytes, position + 4, 4, StandardCharsets.US_ASCII);
+      if (found.equals(type)) {
+        return position;
+      }
+
+      position += size;
+    }
+
+    throw new AssertionError("no " + type + " between " + start + " and " + end);
+  }
+
+  static Stream<Arguments> encodingModesAndStarts() {
+    return Stream.of(
+            TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE,
+            TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE)
+        .flatMap(mode -> Stream.of(0, 2).map(start -> Arguments.of(mode, start)));
+  }
+
+  private MediaUploads assertEncodeOfTheCopyUploadsWhatOneFfmpegEncodes(
+      Path source, VariantJob.Builder job) throws Exception {
+    return assertEncodeOfTheCopyUploadsWhatOneFfmpegEncodes(source, job, UnaryOperator.identity());
+  }
+
+  // Runs the profile 5 job once as one FFmpeg, whose source's RPUs follow their pictures, and once
+  // as the encode of the source's copy, whose RPUs may start samples, each through a launcher the
+  // adjustment wraps, and compares their packets.
+  private MediaUploads assertEncodeOfTheCopyUploadsWhatOneFfmpegEncodes(
+      Path source, VariantJob.Builder job, UnaryOperator<ProcessLauncher> adjustment)
+      throws Exception {
+    withProfile5Source(job, DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_AFTER_OWN_PICTURE);
+    var oneFfmpeg =
+        execute(
+            engine(softwareCapabilities(), adjustment.apply(new ProcessBuilderLauncher())),
+            source.getParent(),
+            job.build());
+    withProfile5Source(job, DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE);
+    job.setJobAttemptId(toProto(UUID.randomUUID()));
+    var commands = new CopyOnWriteArrayList<List<String>>();
+
+    var fromTheCopy =
+        execute(
+            engine(
+                softwareCapabilities(),
+                capturingCommands(adjustment.apply(new ProcessBuilderLauncher()), commands)),
+            source.getParent(),
+            job.build());
+
+    assertThat(commands).as("the FFmpegs of the attempt that reads the copy").hasSize(2);
+    assertThat(fromTheCopy.names()).containsExactlyElementsOf(oneFfmpeg.names());
+    for (var name : oneFfmpeg.names()) {
+      assertThat(packetsOf(fromTheCopy, name))
+          .as(name)
+          .containsExactlyElementsOf(packetsOf(oneFfmpeg, name));
+    }
+
+    return fromTheCopy;
+  }
+
+  static Stream<Arguments> sourceContainersEncodingModesAndStarts() {
+    return sourceContainersModesAndStarts()
+        .filter(
+            arguments ->
+                ((TranscodeMode) arguments.get()[1]) == TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE
+                    || ((TranscodeMode) arguments.get()[1])
+                        == TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+  }
+
+  private enum RpuLayout {
+    BEHIND_THEIR_PICTURE(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_AFTER_OWN_PICTURE),
+    AHEAD_OF_THE_NEXT_PICTURE(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE),
+    AHEAD_OF_EVERY_PICTURE(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE);
+
+    private final DolbyVisionRpuPlacement placement;
+
+    RpuLayout(DolbyVisionRpuPlacement placement) {
+      this.placement = placement;
+    }
+
+    DolbyVisionRpuPlacement placement() {
+      return placement;
+    }
+  }
+
+  // A 10-bit HEVC source with audio of the codec that holds a stand-in Dolby Vision RPU for each
+  // picture: after its picture, or behind the access unit delimiter of the next picture, as
+  // mkvmerge wrote it before version 57, or behind the delimiter of every picture, as that layout
+  // reads once its start is cut away and as a layout whose RPUs start their own pictures would
+  // read. Its stand-in RPUs carry no reshaping, so the decoder applies none whichever layout it
+  // reads, and both sources decode to the same pictures.
+  private static synchronized Path rpuLayoutSource(RpuLayout layout, String audioCodec)
+      throws Exception {
+    var source =
+        rpuLayoutSources.resolve(
+            layout.name().toLowerCase(Locale.ROOT) + "-" + audioCodec + ".mp4");
+    if (Files.exists(source)) {
+      return source;
+    }
+
+    var pictures = rpuLayoutSources.resolve("pictures.hevc");
+    if (!Files.exists(pictures)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc2=size=64x36:rate=24",
+              "-t",
+              String.valueOf(PROFILE_5_PERIOD_SECONDS * PROFILE_5_SEGMENT_COUNT),
+              "-pix_fmt",
+              "yuv420p10le",
+              "-c:v",
+              "libx265",
+              "-x265-params",
+              "keyint=24:min-keyint=24:bframes=0:aud=1:log-level=error",
+              "-f",
+              "hevc"),
+          pictures);
+    }
+
+    var withRpus = rpuLayoutSources.resolve(layout.name().toLowerCase(Locale.ROOT) + ".hevc");
+    Files.write(withRpus, withStandInRpus(Files.readAllBytes(pictures), layout));
+    runFfmpeg(
+        List.of(
+            "-i",
+            withRpus.toString(),
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=48000",
+            "-map",
+            "0:v",
+            "-map",
+            "1:a",
+            "-c:v",
+            "copy",
+            "-bsf:v",
+            "setts=pts=N*1/24/TB:dts=N*1/24/TB",
+            "-c:a",
+            audioCodec,
+            "-shortest"),
+        source);
+    return source;
+  }
+
+  // Each access unit starts at its delimiter. The last picture's RPU has no next picture to
+  // precede.
+  private static byte[] withStandInRpus(byte[] pictures, RpuLayout layout) {
+    var accessUnits = annexBAccessUnits(pictures);
+    var withRpus = new ByteArrayOutputStream();
+    for (var index = 0; index < accessUnits.size(); index++) {
+      var accessUnit = accessUnits.get(index);
+      if (layout == RpuLayout.BEHIND_THEIR_PICTURE) {
+        withRpus.writeBytes(accessUnit);
+        withRpus.writeBytes(STAND_IN_RPU);
+        continue;
+      }
+
+      var delimiterEnd = accessUnitDelimiterEnd(accessUnit);
+      withRpus.write(accessUnit, 0, delimiterEnd);
+      if (layout == RpuLayout.AHEAD_OF_EVERY_PICTURE || index > 0) {
+        withRpus.writeBytes(STAND_IN_RPU);
+      }
+
+      withRpus.write(accessUnit, delimiterEnd, accessUnit.length - delimiterEnd);
+    }
+
+    return withRpus.toByteArray();
+  }
+
+  private static List<byte[]> annexBAccessUnits(byte[] stream) {
+    var starts = new ArrayList<Integer>();
+    for (var offset = 0; offset + 4 < stream.length; offset++) {
+      var startCode = stream[offset] == 0 && stream[offset + 1] == 0 && stream[offset + 2] == 1;
+      if (startCode
+          && hevcNalUnitType(Arrays.copyOfRange(stream, offset + 3, offset + 4))
+              == ACCESS_UNIT_DELIMITER) {
+        starts.add(offset > 0 && stream[offset - 1] == 0 ? offset - 1 : offset);
+      }
+    }
+
+    assertThat(starts).as("access unit delimiters").isNotEmpty().startsWith(0);
+    starts.add(stream.length);
+    return IntStream.range(0, starts.size() - 1)
+        .mapToObj(index -> Arrays.copyOfRange(stream, starts.get(index), starts.get(index + 1)))
+        .toList();
+  }
+
+  // The delimiter is a start code, a two-byte NAL unit header and one byte of payload.
+  private static int accessUnitDelimiterEnd(byte[] accessUnit) {
+    var startCodeLength = accessUnit[2] == 1 ? 3 : 4;
+    return startCodeLength + 3;
   }
 
   @ParameterizedTest(name = "{0}")
@@ -2308,6 +2842,78 @@ class WorkerMediaSmokeTest {
     var source = seekableSources.resolve("seekable." + container);
     if (!generatedSeekableSources.contains(source)) {
       runFfmpeg(List.of("-i", matroska.toString(), "-c", "copy"), source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // The seekable source's frames and noise as libx265 HEVC, which reorders frames, with the same
+  // keyframes. The MP4 and MPEG-TS sources carry the Matroska source's streams unchanged.
+  private static synchronized Path seekableHevcSource(String container) throws Exception {
+    var matroska = seekableSources.resolve("seekable-hevc.mkv");
+    if (!generatedSeekableSources.contains(matroska)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24",
+              "-f",
+              "lavfi",
+              "-i",
+              "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5",
+              "-t",
+              String.valueOf(SEEKABLE_SOURCE_SECONDS),
+              "-c:v",
+              "libx265",
+              "-x265-params",
+              "keyint=48:min-keyint=48:log-level=error",
+              "-c:a",
+              "aac"),
+          matroska);
+      generatedSeekableSources.add(matroska);
+    }
+
+    var source = seekableSources.resolve("seekable-hevc." + container);
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(List.of("-i", matroska.toString(), "-c", "copy"), source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // libx265 HEVC with B-frames whose every third picture starts about 0.2 s late, and pink noise,
+  // in Matroska. Its demuxer gives every video packet the track's default duration, whatever the
+  // gap to the next picture, and FFmpeg's frame-rate conversion repeats and drops pictures by
+  // those durations.
+  private static synchronized Path variableFrameRateHevcSource() throws Exception {
+    var source = seekableSources.resolve("variable-frame-rate-hevc.mkv");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc2=size=64x36:rate=24",
+              "-f",
+              "lavfi",
+              "-i",
+              "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5",
+              "-frames:v",
+              "72",
+              "-t",
+              "8",
+              "-vf",
+              "setpts=PTS+0.2*floor(N/3)/TB",
+              "-c:v",
+              "libx265",
+              "-x265-params",
+              "keyint=12:min-keyint=12:bframes=4:log-level=error",
+              "-c:a",
+              "aac"),
+          source);
       generatedSeekableSources.add(source);
     }
 

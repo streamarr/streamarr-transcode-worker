@@ -29,9 +29,27 @@ public record VideoDynamicRange(
 
     record Absent() implements DolbyVision {}
 
+    /**
+     * @param rpuPlacement where the samples that the probe read place each picture's RPU
+     */
     record Present(
-        @NonNull Optional<DolbyVisionConfiguration> declared, @NonNull Presence observedRpu)
+        @NonNull Optional<DolbyVisionConfiguration> declared,
+        @NonNull Presence observedRpu,
+        @NonNull DolbyVisionRpuPlacement rpuPlacement)
         implements DolbyVision {}
+  }
+
+  /**
+   * Where the samples of an H.264 or HEVC Dolby Vision stream place each picture's RPU, which
+   * belongs after the slices of that picture, as the last NAL unit of the same sample.
+   */
+  public enum DolbyVisionRpuPlacement {
+    /** The probe could not tell the placement, or the stream is AV1. */
+    UNSPECIFIED,
+    /** Each RPU is the last NAL unit of its own picture's sample. */
+    AFTER_OWN_PICTURE,
+    /** Every RPU starts its sample. */
+    STARTS_SAMPLE
   }
 
   @Builder

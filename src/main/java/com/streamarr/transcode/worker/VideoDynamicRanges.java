@@ -4,6 +4,7 @@ import com.streamarr.transcode.engine.VideoDynamicRange;
 import com.streamarr.transcode.engine.VideoDynamicRange.CompatibleBase;
 import com.streamarr.transcode.engine.VideoDynamicRange.DolbyVision;
 import com.streamarr.transcode.engine.VideoDynamicRange.DolbyVisionConfiguration;
+import com.streamarr.transcode.engine.VideoDynamicRange.DolbyVisionRpuPlacement;
 import com.streamarr.transcode.engine.VideoDynamicRange.Presence;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -54,9 +55,22 @@ final class VideoDynamicRanges {
             present.hasDeclared()
                 ? Optional.of(configuration(present.getDeclared()))
                 : Optional.<DolbyVisionConfiguration>empty();
-        yield new DolbyVision.Present(declared, presence(present.getObservedRpu()));
+        yield new DolbyVision.Present(
+            declared, presence(present.getObservedRpu()), rpuPlacement(present.getRpuPlacement()));
       }
       case DOLBYVISION_NOT_SET -> new DolbyVision.Unspecified();
+    };
+  }
+
+  @SuppressWarnings("checkstyle:fullyQualifiedName")
+  private static DolbyVisionRpuPlacement rpuPlacement(
+      build.buf.gen.streamarr.transcode.v1.DolbyVisionRpuPlacement value) {
+    return switch (value) {
+      case DOLBY_VISION_RPU_PLACEMENT_UNSPECIFIED -> DolbyVisionRpuPlacement.UNSPECIFIED;
+      case DOLBY_VISION_RPU_PLACEMENT_AFTER_OWN_PICTURE ->
+          DolbyVisionRpuPlacement.AFTER_OWN_PICTURE;
+      case DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE -> DolbyVisionRpuPlacement.STARTS_SAMPLE;
+      case UNRECOGNIZED -> throw new InvalidJobSpecificationException("Unknown RPU placement");
     };
   }
 

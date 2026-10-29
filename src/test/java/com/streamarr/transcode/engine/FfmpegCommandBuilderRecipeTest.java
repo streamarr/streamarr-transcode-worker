@@ -75,10 +75,12 @@ class FfmpegCommandBuilderRecipeTest {
         new FfmpegCommandBuilder(
             "ffmpeg", Duration.of(recording.fragmentationTargetMicros(), ChronoUnit.MICROS));
 
-    var command = builder.buildCommand(jobRecordedAs(recording));
+    var pipeline = builder.buildPipeline(jobRecordedAs(recording));
 
-    assertThat(command)
-        .containsExactlyElementsOf(withoutFixtureOnlyAdditions(recording.ffmpegArguments()));
+    assertThat(pipeline)
+        .isEqualTo(
+            new FfmpegPipeline.SingleProcess(
+                withoutFixtureOnlyAdditions(recording.ffmpegArguments())));
   }
 
   @Test
@@ -136,6 +138,7 @@ class FfmpegCommandBuilderRecipeTest {
     return switch (encoder) {
       case "libsvtav1" ->
           VideoDecision.Encode.builder()
+              .sourceCodecFamily(Optional.empty())
               .sourceDynamicRange(VideoDynamicRange.unspecified())
               .outputDynamicRange(VideoDynamicRange.sdr())
               .codecProfile(VideoCodecProfile.AV1_MAIN)
@@ -145,6 +148,7 @@ class FfmpegCommandBuilderRecipeTest {
               .build();
       case "libx265" ->
           VideoDecision.Encode.builder()
+              .sourceCodecFamily(Optional.empty())
               .sourceDynamicRange(VideoDynamicRange.unspecified())
               .outputDynamicRange(VideoDynamicRange.sdr())
               .codecProfile(VideoCodecProfile.HEVC_MAIN)

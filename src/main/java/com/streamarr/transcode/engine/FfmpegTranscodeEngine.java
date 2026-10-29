@@ -51,13 +51,12 @@ public class FfmpegTranscodeEngine {
     requireAvailableFfmpeg();
     var videoEncoder = encoderBackendOf(request).map(EncoderBackend::encoder).orElse("copy");
     var job = TranscodeJob.builder().request(request).videoEncoder(videoEncoder).build();
-    var command = commandBuilder.buildCommand(job);
-    log.debug(
-        "FFmpeg command for job attempt {}: {}", request.attemptId(), String.join(" ", command));
+    var pipeline = commandBuilder.buildPipeline(job);
+    log.debug("FFmpeg command for job attempt {}: {}", request.attemptId(), pipeline.commandLine());
     var producer =
         Producer.builder()
             .launcher(launcher)
-            .command(command)
+            .pipeline(pipeline)
             .jobAttemptId(request.attemptId())
             .periodSeconds(request.targetSegmentDuration())
             .startSequenceNumber(request.startSequenceNumber())

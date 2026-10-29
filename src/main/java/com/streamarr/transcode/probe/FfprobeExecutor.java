@@ -16,6 +16,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -32,7 +33,7 @@ import tools.jackson.databind.ObjectMapper;
 public final class FfprobeExecutor {
 
   /** The only probe version that this worker answers. */
-  public static final int PROBE_VERSION = 4;
+  public static final int PROBE_VERSION = 5;
 
   /**
    * The read limits let ffprobe reach streams whose first packet comes late, such as PGS subtitles.
@@ -151,6 +152,8 @@ public final class FfprobeExecutor {
 
     if (output.exitCode() == 0) {
       new StreamExtradataProbe(objectMapper, this::run).addTo(json, attempt.source());
+      addFirstFramesAndPackets(json, attempt.source());
+      MatroskaColourProbe.addTo(json, attempt.source());
     }
 
     var result = readResult(json, output, attempt);
@@ -176,6 +179,17 @@ public final class FfprobeExecutor {
     }
 
     return new ContainerIndexProbe(objectMapper, this::run).addKeyframes(probed);
+  }
+
+  /** The packets that the probe reads hold the first frames, so their read follows the frames'. */
+  private void addFirstFramesAndPackets(JsonNode json, Path source)
+      throws ExecutionException, InterruptedException {
+    var framesPackets =
+        new FirstFramesProbe(objectMapper, this::runWithinOutputBudget).addTo(json, source);
+    if (framesPackets.isPresent()) {
+      new FirstPacketsProbe(objectMapper, this::runWithinOutputBudget)
+          .addTo(json, source, framesPackets.getAsInt());
+    }
   }
 
   /**
@@ -229,6 +243,30 @@ public final class FfprobeExecutor {
     return new ProcessOutput(finished.output(), finished.exitCode());
   }
 
+  /** Stops ffprobe once it prints more than {@code maximumOutputBytes}, and then gives nothing. */
+  private Optional<ProcessOutput> runWithinOutputBudget(
+      List<String> arguments, int maximumOutputBytes)
+      throws ExecutionException, InterruptedException {
+    var process = processFactory.apply(new ProbeCommand(ProbeTool.FFPROBE, arguments));
+    var stopped = new AtomicBoolean();
+    OutputReader<byte[]> reader =
+        stdout -> {
+          var output = stdout.readNBytes(maximumOutputBytes + 1);
+          if (output.length > maximumOutputBytes) {
+            stopped.set(true);
+            process.destroyForcibly();
+          }
+
+          return output;
+        };
+    var finished = run(process, reader, diagnosticsUntilStopped(stopped, _ -> {}));
+    if (stopped.get()) {
+      return Optional.empty();
+    }
+
+    return Optional.of(new ProcessOutput(finished.output(), finished.exitCode()));
+  }
+
   private int runPacketScan(
       List<String> arguments,
       KeyframePacketScan.PacketLines packetLines,
@@ -247,21 +285,24 @@ public final class FfprobeExecutor {
 
           return null;
         };
-    OutputReader<Void> diagnosticsReader =
-        stderr -> {
-          try {
-            return readLines(stderr, diagnosticLines);
-          } catch (IOException | UncheckedIOException failure) {
-            // Destroying a process closes its standard error, so the read fails once the scan
-            // has stopped FFmpeg.
-            if (stopped.get()) {
-              return null;
-            }
+    return run(process, reader, diagnosticsUntilStopped(stopped, diagnosticLines)).exitCode();
+  }
 
-            throw failure;
-          }
-        };
-    return run(process, reader, diagnosticsReader).exitCode();
+  private static OutputReader<Void> diagnosticsUntilStopped(
+      AtomicBoolean stopped, Consumer<String> diagnosticLines) {
+    return stderr -> {
+      try {
+        return readLines(stderr, diagnosticLines);
+      } catch (IOException | UncheckedIOException failure) {
+        // Destroying a process closes its standard error, so the read fails once the output's
+        // reader has stopped the process.
+        if (stopped.get()) {
+          return null;
+        }
+
+        throw failure;
+      }
+    };
   }
 
   private <T> Finished<T> run(List<String> arguments, OutputReader<T> reader)

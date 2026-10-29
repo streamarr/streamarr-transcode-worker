@@ -31,8 +31,32 @@ final class BitReader {
     return value;
   }
 
+  /**
+   * The count of bytes that the bits read so far take, once the reader skips to a byte boundary.
+   */
+  int alignedBytes() {
+    return (position + 7) / 8;
+  }
+
   boolean flag() {
     return bits(1) == 1;
+  }
+
+  /**
+   * The H.26x syntax's ue(v): a run of zero bits, a one bit, then as many value bits as the run
+   * held. No field that the probe reads holds a value beyond 32 bits, so a longer run reads as a
+   * bitstream that ended early.
+   */
+  long unsignedExpGolomb() {
+    var leadingZeros = 0;
+    while (!flag()) {
+      leadingZeros++;
+      if (leadingZeros > UVLC_LONGEST_VALUE) {
+        throw new TruncatedBitstreamException();
+      }
+    }
+
+    return (1L << leadingZeros) - 1 + bits(leadingZeros);
   }
 
   /**

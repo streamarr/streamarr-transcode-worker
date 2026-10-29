@@ -12,6 +12,8 @@ import lombok.extern.slf4j.Slf4j;
 final class StderrDrainer implements AutoCloseable {
 
   static final int CAPACITY = 200;
+  private static final Duration EXIT_DETAIL_WAIT = Duration.ofSeconds(1);
+  private static final int EXIT_DETAIL_LIMIT = 2000;
 
   private final CircularLineBuffer buffer = new CircularLineBuffer(CAPACITY);
   private final Thread drainThread;
@@ -45,6 +47,20 @@ final class StderrDrainer implements AutoCloseable {
     }
 
     return buffer.getLines();
+  }
+
+  /**
+   * Names the exited process and its exit code, followed by the end of its error output, where
+   * FFmpeg reports why it failed.
+   */
+  String exitDetail(String process, int exitCode) {
+    var recentErrorOutput = String.join("\n", awaitRecentOutput(EXIT_DETAIL_WAIT));
+    var tailStart = Math.max(0, recentErrorOutput.length() - EXIT_DETAIL_LIMIT);
+    return process
+        + " exited with exit code "
+        + exitCode
+        + ": "
+        + recentErrorOutput.substring(tailStart);
   }
 
   @Override

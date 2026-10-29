@@ -148,7 +148,7 @@ class ProducerTest {
             (command, jobAttemptId) -> {
               throw new AssertionError("FFmpeg must not start");
             })
-        .command(List.of("ffmpeg"))
+        .pipeline(new FfmpegPipeline.SingleProcess(List.of("ffmpeg")))
         .jobAttemptId(JOB_ATTEMPT_ID)
         .gracePeriod(Duration.ofSeconds(5))
         .stallTimeout(Duration.ofMinutes(1))
@@ -3064,7 +3064,7 @@ class ProducerTest {
   private Producer.ProducerBuilder producerLaunching(ScriptedProcess process) {
     return Producer.builder()
         .launcher((command, jobAttemptId) -> process)
-        .command(List.of("ffmpeg"))
+        .pipeline(new FfmpegPipeline.SingleProcess(List.of("ffmpeg")))
         .jobAttemptId(JOB_ATTEMPT_ID)
         .gracePeriod(Duration.ofSeconds(5))
         .stallTimeout(Duration.ofMinutes(1))

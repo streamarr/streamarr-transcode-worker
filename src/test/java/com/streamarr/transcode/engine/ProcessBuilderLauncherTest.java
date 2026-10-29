@@ -130,7 +130,9 @@ class ProcessBuilderLauncherTest {
     var producer =
         Producer.builder()
             .launcher(launcher)
-            .command(List.of(tempDir.resolve("missing-ffmpeg").toString()))
+            .pipeline(
+                new FfmpegPipeline.SingleProcess(
+                    List.of(tempDir.resolve("missing-ffmpeg").toString())))
             .jobAttemptId(UUID.randomUUID())
             .periodSeconds(6)
             .startSequenceNumber(0)
@@ -149,10 +151,64 @@ class ProcessBuilderLauncherTest {
   }
 
   // A producer whose FFmpeg is this bash script, with $0 bound to the argument.
+  @Test
+  @DisplayName(
+      "Should end both FFmpegs when the encoding FFmpeg ignores termination while the copy waits"
+          + " for it to read")
+  void shouldEndBothFfmpegsWhenTheEncodingFfmpegIgnoresTerminationWhileTheCopyWaitsForItToRead()
+      throws IOException {
+    var initializationSegment = tempDir.resolve("init.mp4");
+    var fragment = tempDir.resolve("fragment.m4s");
+    Files.write(initializationSegment, HevcCopies.initializationSegment());
+    Files.write(
+        fragment,
+        HevcCopies.fragmentBuilder()
+            .video(0, HevcCopies.sample(HevcCopies.slice(0), new byte[64 * 1024]))
+            .build());
+    var endlessCopy = "cat \"$0\"; while :; do cat \"$1\"; done";
+    // The header and the record of the fragment's one sample, which every repeat repeats.
+    var framecrc =
+        CopiedVideoTiming.framecrcOf(
+                IsoBoxes.concat(HevcCopies.initializationSegment(), Files.readAllBytes(fragment)))
+            .lines()
+            .toList();
+    var timingPastWhatThePipeHolds =
+        framecrc.getFirst() + "\n" + (framecrc.getLast() + "\n").repeat(64);
+    ProcessLauncher copyWritingTiming =
+        (command, jobAttemptId) -> {
+          if (command.contains(endlessCopy)) {
+            CopiedVideoTiming.writeTo(command, timingPastWhatThePipeHolds);
+          }
+
+          return launcher.launch(command, jobAttemptId);
+        };
+    var producer =
+        producerRunning("unused", "unused")
+            .launcher(copyWritingTiming)
+            .pipeline(
+                new FfmpegPipeline.RpuMovingPipe(
+                    List.of(
+                        "bash",
+                        "-c",
+                        endlessCopy,
+                        initializationSegment.toString(),
+                        fragment.toString()),
+                    List.of("bash", "-c", "trap '' TERM; exec sleep 600")))
+            .stallTimeout(Duration.ofMillis(300))
+            .gracePeriod(Duration.ofMillis(300))
+            .start();
+
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .asInstanceOf(InstanceOfAssertFactories.type(Failed.class))
+        .extracting(Failed::reason)
+        .isEqualTo(ProducerFailure.ENCODER_STALLED);
+  }
+
   private Producer.ProducerBuilder producerRunning(String script, String argument) {
     return Producer.builder()
         .launcher(launcher)
-        .command(List.of("bash", "-c", script, argument))
+        .pipeline(new FfmpegPipeline.SingleProcess(List.of("bash", "-c", script, argument)))
         .jobAttemptId(UUID.randomUUID())
         .periodSeconds(6)
         .startSequenceNumber(0)

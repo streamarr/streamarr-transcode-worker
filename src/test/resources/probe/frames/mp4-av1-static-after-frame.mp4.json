@@ -1,0 +1,53 @@
+{
+  "frames": [
+    {
+      "stream_index": 0
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Mastering display metadata",
+          "red_x": "44564/65536",
+          "red_y": "20972/65536",
+          "green_x": "17367/65536",
+          "green_y": "45220/65536",
+          "blue_x": "9830/65536",
+          "blue_y": "3932/65536",
+          "white_point_x": "20493/65536",
+          "white_point_y": "21561/65536",
+          "min_luminance": "82/16384",
+          "max_luminance": "256000/256"
+        },
+        {
+          "side_data_type": "Content light level metadata",
+          "max_content": 1000,
+          "max_average": 400
+        }
+      ]
+    },
+    {
+      "stream_index": 0,
+      "side_data_list": [
+        {
+          "side_data_type": "Mastering display metadata",
+          "red_x": "44564/65536",
+          "red_y": "20972/65536",
+          "green_x": "17367/65536",
+          "green_y": "45220/65536",
+          "blue_x": "9830/65536",
+          "blue_y": "3932/65536",
+          "white_point_x": "20493/65536",
+          "white_point_y": "21561/65536",
+          "min_luminance": "82/16384",
+          "max_luminance": "256000/256"
+        },
+        {
+          "side_data_type": "Content light level metadata",
+          "max_content": 1000,
+          "max_average": 400
+        }
+      ]
+    }
+  ]
+}

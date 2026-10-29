@@ -24,14 +24,14 @@
       "view_pos_available": "",
       "id": "0x1",
       "r_frame_rate": "120/1",
-      "avg_frame_rate": "8231400/274411",
+      "avg_frame_rate": "12620/421",
       "time_base": "1/600",
       "start_pts": 0,
       "start_time": "0.000000",
-      "duration_ts": 274410,
-      "duration": "457.350000",
-      "bit_rate": "4640109",
-      "nb_frames": "13719",
+      "duration_ts": 12630,
+      "duration": "21.050000",
+      "bit_rate": "10639710",
+      "nb_frames": "631",
       "extradata": "\n00000000: 0102 2000 0000 b000 0000 0000 78f0 00fc  .. .........x...\n00000010: fdfa fa00 000b 04a0 0001 0018 4001 0c01  ............@...\n00000020: ffff 0220 0000 0300 b000 0003 0000 0300  ... ............\n00000030: 7815 c090 a100 0100 2442 0101 0220 0000  x.......$B... ..\n00000040: 0300 b000 0003 0000 0300 78a0 03c0 8011  ..........x.....\n00000050: 07ca d881 5ee4 5954 d424 4824 02a2 0001  ....^.YT.$H$....\n00000060: 0008 4401 c02c b864 14c9 a700 0100 0d4e  ..D..,.d.......N\n00000070: 0194 0800 2fe9 a03d 1340 4280            ..../..=.@B.\n",
       "extradata_size": 124,
       "disposition": {
@@ -56,7 +56,7 @@
         "multilayer": 0
       },
       "tags": {
-        "creation_time": "2026-03-29T03:06:16.000000Z",
+        "creation_time": "2026-03-05T18:23:16.000000Z",
         "language": "und",
         "handler_name": "Core Media Video",
         "vendor_id": "[0][0][0][0]",
@@ -74,11 +74,6 @@
           "bl_present_flag": 1,
           "dv_bl_signal_compatibility_id": 4,
           "dv_md_compression": "none"
-        },
-        {
-          "side_data_type": "Display Matrix",
-          "displaymatrix": "\n00000000:            0       65536           0\n00000001:       -65536           0           0\n00000002:     70778880           0  1073741824\n",
-          "rotation": -90
         },
         {
           "side_data_type": "Ambient viewing environment",
@@ -109,10 +104,10 @@
       "time_base": "1/48000",
       "start_pts": 0,
       "start_time": "0.000000",
-      "duration_ts": 21952800,
-      "duration": "457.350000",
-      "bit_rate": "145115",
-      "nb_frames": "21441",
+      "duration_ts": 1010320,
+      "duration": "21.048333",
+      "bit_rate": "183594",
+      "nb_frames": "989",
       "extradata": "\n00000000: 1190                                     ..\n",
       "extradata_size": 2,
       "disposition": {
@@ -137,7 +132,7 @@
         "multilayer": 0
       },
       "tags": {
-        "creation_time": "2026-03-29T03:06:16.000000Z",
+        "creation_time": "2026-03-05T18:23:16.000000Z",
         "language": "und",
         "handler_name": "Core Media Audio",
         "vendor_id": "[0][0][0][0]"
@@ -145,17 +140,66 @@
     },
     {
       "index": 2,
+      "codec_type": "audio",
+      "codec_tag_string": "apac",
+      "codec_tag": "0x63617061",
+      "sample_rate": "48000",
+      "channels": 4,
+      "bits_per_sample": 0,
+      "initial_padding": 0,
+      "id": "0x3",
+      "r_frame_rate": "0/0",
+      "avg_frame_rate": "0/0",
+      "time_base": "1/48000",
+      "start_pts": 0,
+      "start_time": "0.000000",
+      "duration_ts": 1010320,
+      "duration": "21.048333",
+      "bit_rate": "397072",
+      "nb_frames": "989",
+      "extradata": "\n",
+      "disposition": {
+        "default": 0,
+        "dub": 0,
+        "original": 0,
+        "comment": 0,
+        "lyrics": 0,
+        "karaoke": 0,
+        "forced": 0,
+        "hearing_impaired": 0,
+        "visual_impaired": 0,
+        "clean_effects": 0,
+        "attached_pic": 0,
+        "timed_thumbnails": 0,
+        "non_diegetic": 0,
+        "captions": 0,
+        "descriptions": 0,
+        "metadata": 0,
+        "dependent": 0,
+        "still_image": 0,
+        "multilayer": 0
+      },
+      "tags": {
+        "creation_time": "2026-03-05T18:23:16.000000Z",
+        "language": "und",
+        "handler_name": "Core Media Audio",
+        "vendor_id": "[0][0][0][0]"
+      }
+    },
+    {
+      "index": 3,
       "codec_type": "data",
       "codec_tag_string": "mebx",
       "codec_tag": "0x7862656d",
-      "id": "0x3",
+      "id": "0x4",
       "r_frame_rate": "0/0",
       "avg_frame_rate": "0/0",
       "time_base": "1/600",
       "start_pts": 0,
       "start_time": "0.000000",
-      "duration_ts": 274410,
-      "duration": "457.350000",
+      "duration_ts": 12630,
+      "duration": "21.050000",
+      "bit_rate": "3",
       "nb_frames": "1",
       "extradata": "\n",
       "disposition": {
@@ -180,50 +224,7 @@
         "multilayer": 0
       },
       "tags": {
-        "creation_time": "2026-03-29T03:06:16.000000Z",
-        "language": "und",
-        "handler_name": "Core Media Metadata"
-      }
-    },
-    {
-      "index": 3,
-      "codec_type": "data",
-      "codec_tag_string": "mebx",
-      "codec_tag": "0x7862656d",
-      "id": "0x4",
-      "r_frame_rate": "0/0",
-      "avg_frame_rate": "0/0",
-      "time_base": "1/600",
-      "start_pts": 0,
-      "start_time": "0.000000",
-      "duration_ts": 274410,
-      "duration": "457.350000",
-      "bit_rate": "58",
-      "nb_frames": "35",
-      "extradata": "\n",
-      "disposition": {
-        "default": 1,
-        "dub": 0,
-        "original": 0,
-        "comment": 0,
-        "lyrics": 0,
-        "karaoke": 0,
-        "forced": 0,
-        "hearing_impaired": 0,
-        "visual_impaired": 0,
-        "clean_effects": 0,
-        "attached_pic": 0,
-        "timed_thumbnails": 0,
-        "non_diegetic": 0,
-        "captions": 0,
-        "descriptions": 0,
-        "metadata": 0,
-        "dependent": 0,
-        "still_image": 0,
-        "multilayer": 0
-      },
-      "tags": {
-        "creation_time": "2026-03-29T03:06:16.000000Z",
+        "creation_time": "2026-03-05T18:23:16.000000Z",
         "language": "und",
         "handler_name": "Core Media Metadata"
       }
@@ -236,13 +237,13 @@
       "id": "0x5",
       "r_frame_rate": "0/0",
       "avg_frame_rate": "0/0",
-      "time_base": "1/600",
+      "time_base": "1/10000",
       "start_pts": 0,
       "start_time": "0.000000",
-      "duration_ts": 274410,
-      "duration": "457.350000",
-      "bit_rate": "35340",
-      "nb_frames": "13719",
+      "duration_ts": 210483,
+      "duration": "21.048300",
+      "bit_rate": "149",
+      "nb_frames": "1",
       "extradata": "\n",
       "disposition": {
         "default": 1,
@@ -266,7 +267,7 @@
         "multilayer": 0
       },
       "tags": {
-        "creation_time": "2026-03-29T03:06:16.000000Z",
+        "creation_time": "2026-03-05T18:23:16.000000Z",
         "language": "und",
         "handler_name": "Core Media Metadata"
       }
@@ -279,13 +280,13 @@
       "id": "0x6",
       "r_frame_rate": "0/0",
       "avg_frame_rate": "0/0",
-      "time_base": "1/10000",
+      "time_base": "1/600",
       "start_pts": 0,
       "start_time": "0.000000",
-      "duration_ts": 4573500,
-      "duration": "457.350000",
-      "bit_rate": "2879",
-      "nb_frames": "13719",
+      "duration_ts": 12630,
+      "duration": "21.050000",
+      "bit_rate": "1529",
+      "nb_frames": "43",
       "extradata": "\n",
       "disposition": {
         "default": 1,
@@ -309,7 +310,7 @@
         "multilayer": 0
       },
       "tags": {
-        "creation_time": "2026-03-29T03:06:16.000000Z",
+        "creation_time": "2026-03-05T18:23:16.000000Z",
         "language": "und",
         "handler_name": "Core Media Metadata"
       }
@@ -325,8 +326,95 @@
       "time_base": "1/600",
       "start_pts": 0,
       "start_time": "0.000000",
-      "duration_ts": 274410,
-      "duration": "457.350000",
+      "duration_ts": 12630,
+      "duration": "21.050000",
+      "bit_rate": "38983",
+      "nb_frames": "631",
+      "extradata": "\n",
+      "disposition": {
+        "default": 1,
+        "dub": 0,
+        "original": 0,
+        "comment": 0,
+        "lyrics": 0,
+        "karaoke": 0,
+        "forced": 0,
+        "hearing_impaired": 0,
+        "visual_impaired": 0,
+        "clean_effects": 0,
+        "attached_pic": 0,
+        "timed_thumbnails": 0,
+        "non_diegetic": 0,
+        "captions": 0,
+        "descriptions": 0,
+        "metadata": 0,
+        "dependent": 0,
+        "still_image": 0,
+        "multilayer": 0
+      },
+      "tags": {
+        "creation_time": "2026-03-05T18:23:16.000000Z",
+        "language": "und",
+        "handler_name": "Core Media Metadata"
+      }
+    },
+    {
+      "index": 7,
+      "codec_type": "data",
+      "codec_tag_string": "mebx",
+      "codec_tag": "0x7862656d",
+      "id": "0x8",
+      "r_frame_rate": "0/0",
+      "avg_frame_rate": "0/0",
+      "time_base": "1/10000",
+      "start_pts": 0,
+      "start_time": "0.000000",
+      "duration_ts": 210483,
+      "duration": "21.048300",
+      "bit_rate": "2877",
+      "nb_frames": "631",
+      "extradata": "\n",
+      "disposition": {
+        "default": 1,
+        "dub": 0,
+        "original": 0,
+        "comment": 0,
+        "lyrics": 0,
+        "karaoke": 0,
+        "forced": 0,
+        "hearing_impaired": 0,
+        "visual_impaired": 0,
+        "clean_effects": 0,
+        "attached_pic": 0,
+        "timed_thumbnails": 0,
+        "non_diegetic": 0,
+        "captions": 0,
+        "descriptions": 0,
+        "metadata": 0,
+        "dependent": 0,
+        "still_image": 0,
+        "multilayer": 0
+      },
+      "tags": {
+        "creation_time": "2026-03-05T18:23:16.000000Z",
+        "language": "und",
+        "handler_name": "Core Media Metadata"
+      }
+    },
+    {
+      "index": 8,
+      "codec_type": "data",
+      "codec_tag_string": "mebx",
+      "codec_tag": "0x7862656d",
+      "id": "0x9",
+      "r_frame_rate": "0/0",
+      "avg_frame_rate": "0/0",
+      "time_base": "1/600",
+      "start_pts": 0,
+      "start_time": "0.000000",
+      "duration_ts": 12630,
+      "duration": "21.050000",
+      "bit_rate": "16",
       "nb_frames": "1",
       "extradata": "\n",
       "disposition": {
@@ -351,7 +439,7 @@
         "multilayer": 0
       },
       "tags": {
-        "creation_time": "2026-03-29T03:06:16.000000Z",
+        "creation_time": "2026-03-05T18:23:16.000000Z",
         "language": "und",
         "handler_name": "Core Media Metadata"
       }
@@ -359,26 +447,26 @@
   ],
   "chapters": [],
   "format": {
-    "nb_streams": 7,
+    "nb_streams": 9,
     "nb_programs": 0,
     "nb_stream_groups": 0,
     "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
     "format_long_name": "QuickTime / MOV",
     "start_time": "0.000000",
-    "duration": "457.350000",
-    "size": "276615957",
-    "bit_rate": "4838586",
+    "duration": "21.050000",
+    "size": "29711696",
+    "bit_rate": "11291855",
     "probe_score": 100,
     "tags": {
       "major_brand": "qt  ",
       "minor_version": "0",
       "compatible_brands": "qt  ",
-      "creation_time": "2026-03-29T03:06:16.000000Z",
+      "creation_time": "2026-03-05T18:23:16.000000Z",
       "com.apple.quicktime.full-frame-rate-playback-intent": "0",
       "com.apple.quicktime.make": "Apple",
-      "com.apple.quicktime.model": "iPhone 15 Pro",
-      "com.apple.quicktime.software": "26.3.1",
-      "com.apple.quicktime.creationdate": "2026-03-28T23:06:16-0400"
+      "com.apple.quicktime.model": "iPhone 16",
+      "com.apple.quicktime.software": "26.1",
+      "com.apple.quicktime.creationdate": "2026-03-05T13:23:16-0500"
     }
   }
 }

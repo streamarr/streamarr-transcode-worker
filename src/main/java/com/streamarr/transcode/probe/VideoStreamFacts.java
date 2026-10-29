@@ -27,9 +27,14 @@ final class VideoStreamFacts {
     sideData(source, "Frame Cropping")
         .map(VideoStreamFacts::cropping)
         .ifPresent(stream::setContainerCropping);
-    stream.setDynamicRange(DynamicRangeReader.read(source));
-    HdrStaticMetadata.masteringDisplay(source).ifPresent(stream::setMasteringDisplay);
-    HdrStaticMetadata.contentLightLevel(source).ifPresent(stream::setContentLightLevel);
+    var walk = MetadataWalk.of(source);
+    stream.setDynamicRange(DynamicRangeReader.read(source, walk));
+    stream.setFirstFramesRead(FirstFrames.of(source).isPresent());
+    FirstPackets.carryPresentationTimes(source)
+        .ifPresent(stream::setFirstPacketsCarryPresentationTimes);
+    HdrStaticMetadata.add(source, walk, stream);
+    CodecProfileReader.add(source, stream);
+    ColorSignaling.add(source, stream);
   }
 
   private static int rotationDegrees(JsonNode matrix) {

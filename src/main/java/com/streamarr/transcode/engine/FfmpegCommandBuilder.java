@@ -83,6 +83,24 @@ public class FfmpegCommandBuilder {
   // it adds a keyframe at each scene cut, inside a segment.
   private static final String CLOSED_GOP_X265_PARAMETERS = "no-scenecut=1:no-open-gop=1";
 
+  // The copy of the source that the encode of a profile 5 source reads: fragmented MP4, whose
+  // muxer writes each packet as soon as it has one and whose movie timescale keeps every timestamp
+  // the source's demuxer reads. skip_trailer stops the muxer from keeping an index entry of every
+  // fragment for a random-access index that the pipe has no use for.
+  private static final List<String> SOURCE_COPY_OUTPUT =
+      List.of(
+          "-f",
+          "mp4",
+          "-movflags",
+          "delay_moov+default_base_moof+frag_keyframe+skip_trailer",
+          "-frag_duration",
+          "1",
+          "-movie_timescale",
+          "1000000",
+          "-flush_packets",
+          "1",
+          "pipe:1");
+
   static final List<String> MP4_MOVFLAGS =
       List.of("cmaf", "delay_moov", "skip_trailer", "frag_keyframe", "frag_discont");
 
@@ -90,15 +108,65 @@ public class FfmpegCommandBuilder {
   // and its terminating NUL, and a page is at least 4 KiB.
   private static final int LONGEST_ARGUMENT_BYTES = 32 * 4096 - 1;
 
-  public List<String> buildCommand(TranscodeJob job) {
+  public FfmpegPipeline buildPipeline(TranscodeJob job) {
+    if (needsRpuMove(job)) {
+      return new FfmpegPipeline.RpuMovingPipe(
+          buildSourceCopyCommand(job), buildCommand(job, EncoderInput.COPY_OF_THE_SOURCE));
+    }
+
+    return new FfmpegPipeline.SingleProcess(buildCommand(job, EncoderInput.SOURCE));
+  }
+
+  // Dolby Vision profiles 5 and 10.0 have no compatible base, and of those only profile 5 is
+  // HEVC, so only its picture needs the RPU that FFmpeg's HEVC decoder skips when the RPU starts a
+  // sample. A copy decodes nothing.
+  private static boolean needsRpuMove(TranscodeJob job) {
+    return profile5HevcSourceOf(job.request().transcodeDecision().videoDecision())
+        .filter(present -> mayStartSamplesWithRpus(present.rpuPlacement()))
+        .isPresent();
+  }
+
+  // The copy stamps a packet without a presentation time with its decode time, so the encode of
+  // the copy loses the pictures that B-frames reorder. A source whose packets the probe did not see
+  // carry presentation times stays with one FFmpeg. For a raw HEVC stream that is enough: FFmpeg's
+  // HEVC parser starts each packet at a unit that begins an access unit, never at an RPU after the
+  // first packet, so an RPU after its picture's slices ends the packet where the decoder reads it.
+  private static Optional<VideoDynamicRange.DolbyVision.Present> profile5HevcSourceOf(
+      VideoDecision video) {
+    if (!(video instanceof VideoDecision.Encode encode)
+        || !encode.sourcePacketsCarryPresentationTimes()
+        || !encode.sourceCodecFamily().equals(Optional.of(CodecFamily.HEVC))
+        || encode.sourceDynamicRange().compatibleBase() != VideoDynamicRange.CompatibleBase.NONE
+        || !(encode.sourceDynamicRange().dolbyVision()
+            instanceof VideoDynamicRange.DolbyVision.Present present)) {
+      return Optional.empty();
+    }
+
+    return Optional.of(present);
+  }
+
+  // Samples that start with RPUs are moved as the shifted layout, which mkvmerge wrote before
+  // version 57, whether or not its start was cut away. The probe cannot tell that layout from one
+  // whose RPUs start their own pictures' samples, which no known muxer writes, and to each of whose
+  // pictures the move gives the next picture's RPU. A probe that could not tell the placement may
+  // leave RPUs where they start samples or where the decoder ignores them, so the move covers it
+  // too: a source whose every RPU ends its sample passes unchanged.
+  private static boolean mayStartSamplesWithRpus(
+      VideoDynamicRange.DolbyVisionRpuPlacement placement) {
+    return switch (placement) {
+      case STARTS_SAMPLE, UNSPECIFIED -> true;
+      case AFTER_OWN_PICTURE -> false;
+    };
+  }
+
+  private List<String> buildCommand(TranscodeJob job, EncoderInput input) {
     var cmd = new ArrayList<String>();
     var decision = job.request().transcodeDecision();
     var mode = decision.transcodeMode();
 
-    addInputArgs(cmd, job.request());
-    addStreamSelection(cmd, decision);
-    addCommonFlags(cmd);
-    addCodecArgs(cmd, job);
+    addInputAndStreamSelection(cmd, job, input);
+    addCommonFlags(cmd, input);
+    addCodecArgs(cmd, job, input);
 
     if (mode.encodesVideo()) {
       addFrameRateArgs(cmd, job.request());
@@ -108,6 +176,82 @@ public class FfmpegCommandBuilder {
     addFragmentedMp4Output(cmd);
 
     return List.copyOf(cmd);
+  }
+
+  // The copy seeks as the single command would and keeps the timestamps that command reads, so
+  // the encode of the copy reads them unchanged. The copy encodes audio that the job encodes, as
+  // it decodes every source codec, and the seek trims that audio exactly as it trims the single
+  // command's. FFmpeg's opus encoder is experimental, so the copy names libopus. The mp4 muxer
+  // keeps a Dolby Vision configuration record only when the compliance is unofficial.
+  private List<String> buildSourceCopyCommand(TranscodeJob job) {
+    var cmd = new ArrayList<String>();
+    var audio = job.request().transcodeDecision().audioDecision();
+    addInputArgs(cmd, job.request());
+    addStreamSelection(cmd, job.request().transcodeDecision());
+    addCommonFlags(cmd, EncoderInput.SOURCE);
+    cmd.addAll(List.of("-c:v", "copy", "-strict", "unofficial"));
+    var copiedAudio = audio;
+    if (audio.mode() == AudioMode.TRANSCODE && "opus".equals(audio.codec())) {
+      copiedAudio =
+          AudioDecision.builder()
+              .mode(audio.mode())
+              .codec("libopus")
+              .channels(audio.channels())
+              .bitrate(audio.bitrate())
+              .build();
+    }
+
+    addAudioArgs(cmd, copiedAudio);
+
+    cmd.addAll(SOURCE_COPY_OUTPUT);
+    addVideoTimingOutput(cmd, job.request().transcodeDecision().videoDecision());
+    return List.copyOf(cmd);
+  }
+
+  // The copy's muxer replaces each video packet's duration with the gap to the next packet's
+  // decode time; this output's framecrc keeps the duration the source's demuxer read, which the
+  // worker writes back into the copy. The worker waits for each packet's record before it passes
+  // the packet's sample on, so every record is flushed as it is written.
+  private static void addVideoTimingOutput(List<String> cmd, VideoDecision video) {
+    cmd.addAll(
+        List.of(
+            "-map",
+            "0:" + video.streamIndex(),
+            "-c:v",
+            "copy",
+            "-f",
+            "framecrc",
+            "-flush_packets",
+            "1"));
+  }
+
+  // The copy holds only the chosen video stream and the audio. FFmpeg reads no commands from its
+  // standard input while it reads media there.
+  private void addInputAndStreamSelection(List<String> cmd, TranscodeJob job, EncoderInput input) {
+    var decision = job.request().transcodeDecision();
+    if (input == EncoderInput.SOURCE) {
+      addInputArgs(cmd, job.request());
+      addStreamSelection(cmd, decision);
+      return;
+    }
+
+    cmd.addAll(
+        List.of(
+            ffmpegPath,
+            "-y",
+            "-analyzeduration",
+            "1",
+            "-fpsprobesize",
+            "0",
+            "-f",
+            "mp4",
+            "-i",
+            "pipe:0",
+            "-map",
+            "0:v:0"));
+    if (decision.audioDecision().mode() != AudioMode.NONE) {
+      cmd.addAll(List.of("-map", "0:a:0"));
+    }
   }
 
   private void addInputArgs(List<String> cmd, TranscodeRequest request) {
@@ -173,7 +317,8 @@ public class FfmpegCommandBuilder {
     }
   }
 
-  private void addCommonFlags(List<String> cmd) {
+  // The copy of the source already starts at zero, so the encode of the copy keeps its timestamps.
+  private void addCommonFlags(List<String> cmd, EncoderInput input) {
     cmd.addAll(
         List.of(
             "-map_metadata",
@@ -182,15 +327,20 @@ public class FfmpegCommandBuilder {
             "-1",
             "-copyts",
             "-avoid_negative_ts",
-            "disabled",
-            "-start_at_zero",
+            "disabled"));
+    if (input == EncoderInput.SOURCE) {
+      cmd.add("-start_at_zero");
+    }
+
+    cmd.addAll(
+        List.of(
             "-max_muxing_queue_size",
             "128",
             "-max_interleave_delta",
             MAX_INTERLEAVE_DELTA_MICROSECONDS));
   }
 
-  private void addCodecArgs(List<String> cmd, TranscodeJob job) {
+  private void addCodecArgs(List<String> cmd, TranscodeJob job, EncoderInput input) {
     var decision = job.request().transcodeDecision();
 
     if (!decision.transcodeMode().encodesVideo()) {
@@ -205,8 +355,33 @@ public class FfmpegCommandBuilder {
     PlayableSampleEntry.ofEncoder(job.videoEncoder())
         .ifPresent(entry -> cmd.addAll(List.of("-tag:v", entry.tag())));
     cmd.addAll(forcedCodecProfileArgs(job));
-    addScaleAndBitrateArgs(cmd, job);
+    addScaleAndBitrateArgs(cmd, job, trimStart(job.request(), input));
+    if (input == EncoderInput.COPY_OF_THE_SOURCE) {
+      addAudioOfTheCopyArgs(cmd, decision.audioDecision());
+      return;
+    }
+
     addAudioArgs(cmd, decision.audioDecision());
+  }
+
+  // The copy carries the job's output audio, which the encode of the copy copies untrimmed.
+  private static void addAudioOfTheCopyArgs(List<String> cmd, AudioDecision audio) {
+    if (audio.mode() != AudioMode.NONE) {
+      cmd.addAll(copiedAudioArgs(audio.codec()));
+    }
+  }
+
+  // The FFmpeg that decodes the source discards the frames before its seek, and, through the
+  // source's own markings, such as an MP4 edit list, those before its start. The stream copy keeps
+  // every packet from the keyframe at or before its seek, which the FFmpeg that reads the copy
+  // would decode and keep, so the encode of the copy trims its video at the attempt's start,
+  // seeking or not: after -start_at_zero, nothing else lies before zero.
+  private static Optional<String> trimStart(TranscodeRequest request, EncoderInput input) {
+    if (input == EncoderInput.SOURCE) {
+      return Optional.empty();
+    }
+
+    return Optional.of(seekArgument(inputSeekPosition(request)));
   }
 
   // A copy of H.264 or HEVC gets the codec family's playable sample entry. The mp4 muxer drops a
@@ -269,7 +444,8 @@ public class FfmpegCommandBuilder {
     return List.copyOf(args);
   }
 
-  private void addScaleAndBitrateArgs(List<String> cmd, TranscodeJob job) {
+  private void addScaleAndBitrateArgs(
+      List<String> cmd, TranscodeJob job, Optional<String> trimStart) {
     var request = job.request();
     // Every variant is 8-bit 4:2:0: an encoder otherwise keeps a 10-bit or 4:4:4 source's format,
     // and few hardware decoders accept 10-bit H.264.
@@ -277,7 +453,13 @@ public class FfmpegCommandBuilder {
         toneMaps(job)
             ? ""
             : ":out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709";
-    var videoFilter = "scale=-2:" + request.height() + colorConversion + "," + videoFormat(job);
+    var videoFilter =
+        trimStart.map(start -> "trim=start=" + start + ",").orElse("")
+            + "scale=-2:"
+            + request.height()
+            + colorConversion
+            + ","
+            + videoFormat(job);
     cmd.addAll(List.of("-vf", videoFilter));
     var bitrate = String.valueOf(request.bitrate());
     // SVT-AV1 supports a bitrate cap only in CRF mode. Its default CRF is 35.
@@ -507,4 +689,10 @@ public class FfmpegCommandBuilder {
   }
 
   private record ForcedKeyframes(@NonNull String times, boolean reachesLastBoundary) {}
+
+  /** What the encoding FFmpeg reads: the source, or the copy of it that the worker passes on. */
+  private enum EncoderInput {
+    SOURCE,
+    COPY_OF_THE_SOURCE
+  }
 }

@@ -47,7 +47,19 @@ final class FragmentedMp4Exception extends RuntimeException {
      * The initialization segment declares video other than the job's video decision, or video whose
      * decoder configuration record cannot be read.
      */
-    OUTPUT_MISMATCH
+    OUTPUT_MISMATCH,
+    /**
+     * The timing the FFmpeg that copies the source wrote of the copy's video packets ended before
+     * the timing of one of the copy's video samples.
+     */
+    END_OF_VIDEO_TIMING,
+    /**
+     * The timing the FFmpeg that copies the source wrote of the copy's video packets cannot be
+     * read, runs too far ahead of the copy, or does not match a video sample of the copy: the
+     * packet is a keyframe where the sample is no sync sample, or the reverse, or its duration does
+     * not convert exactly into a duration of the video track.
+     */
+    UNUSABLE_VIDEO_TIMING
   }
 
   private final Reason reason;

@@ -5,8 +5,11 @@ import static com.streamarr.transcode.probe.RecordedFfprobe.streamOf;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import build.buf.gen.streamarr.transcode.v1.CompatibleBase;
+import build.buf.gen.streamarr.transcode.v1.ContentLightLevel;
+import build.buf.gen.streamarr.transcode.v1.DolbyVisionAbsent;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionConfiguration;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionPresent;
+import build.buf.gen.streamarr.transcode.v1.DolbyVisionRpuHeader;
 import build.buf.gen.streamarr.transcode.v1.Presence;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import build.buf.gen.streamarr.transcode.v1.VideoDynamicRange;
@@ -33,8 +36,6 @@ class FfprobeExecutorDynamicRangeTest {
           "bt709",
           "smpte170m",
           "smpte240m",
-          "gamma22",
-          "gamma28",
           "bt470m",
           "bt470bg",
           "iec61966-2-1",
@@ -52,7 +53,8 @@ class FfprobeExecutorDynamicRangeTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @ValueSource(strings = {"linear", "log100", "log316", "smpte428", "reserved", "unknown"})
+    @ValueSource(
+        strings = {"linear", "log100", "log316", "smpte428", "reserved", "unknown", "vlog", ""})
     @DisplayName("Should report an unspecified base when the transfer is neither SDR nor HDR")
     void shouldReportAnUnspecifiedBaseWhenTheTransferIsNeitherSdrNorHdr(String transfer) {
       var video = videoStream("\"color_transfer\":\"" + transfer + "\"");
@@ -71,6 +73,28 @@ class FfprobeExecutorDynamicRangeTest {
               "color_transfer":"unknown",
               "side_data_list":[{"side_data_type":"DOVI configuration record","dv_profile":5}]
               """);
+
+      assertThat(video.getDynamicRange().getCompatibleBase())
+          .isEqualTo(CompatibleBase.COMPATIBLE_BASE_NONE);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(
+        strings = {"linear", "log100", "log316", "smpte428", "reserved", "unknown", "vlog", ""})
+    @DisplayName(
+        "Should report no compatible base when a Dolby Vision stream's transfer names no standard"
+            + " format")
+    void shouldReportNoCompatibleBaseWhenADolbyVisionStreamsTransferNamesNoStandardFormat(
+        String transfer) {
+      // Profile 8.1 has a compatible base whenever its transfer names one.
+      var video =
+          videoStream(
+              """
+              "color_transfer":"%s",
+              "side_data_list":[{"side_data_type":"DOVI configuration record","dv_profile":8,
+                "dv_bl_signal_compatibility_id":1}]
+              """
+                  .formatted(transfer));
 
       assertThat(video.getDynamicRange().getCompatibleBase())
           .isEqualTo(CompatibleBase.COMPATIBLE_BASE_NONE);
@@ -100,14 +124,22 @@ class FfprobeExecutorDynamicRangeTest {
   class DolbyVisionTests {
 
     @Test
-    @DisplayName("Should report Dolby Vision without a record when only the sample entry names it")
-    void shouldReportDolbyVisionWithoutARecordWhenOnlyTheSampleEntryNamesIt() {
+    @DisplayName(
+        "Should report Dolby Vision without a record when only the sample entry and the RPUs show"
+            + " it")
+    void shouldReportDolbyVisionWithoutARecordWhenOnlyTheSampleEntryAndTheRpusShowIt() {
       var video = streamOf("mp4-dovi-p5-dvh1-no-record.mp4", 0);
 
       assertThat(video.getDynamicRange().getDolbyVisionPresent())
           .isEqualTo(
               DolbyVisionPresent.newBuilder()
-                  .setObservedRpu(Presence.PRESENCE_UNSPECIFIED)
+                  .setObservedRpu(Presence.PRESENCE_PRESENT)
+                  .setFirstRpuHeader(
+                      DolbyVisionRpuHeader.newBuilder()
+                          .setVdrRpuProfile(0)
+                          .setBaseLayerFullRange(true)
+                          .setDisableResidual(true)
+                          .setVdrBitDepth(12))
                   .build());
     }
 
@@ -123,17 +155,38 @@ class FfprobeExecutorDynamicRangeTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @ValueSource(
-        strings = {"mp4-hevc-hdr10.mp4", "mp4-hevc-sdr10-untagged.mp4", "mp4-sdr8-bt709.mp4"})
-    @DisplayName("Should leave Dolby Vision unspecified when the stream shows no sign of it")
-    void shouldLeaveDolbyVisionUnspecifiedWhenTheStreamShowsNoSignOfIt(String fixture) {
+    @ValueSource(strings = {"mkv-pipe-hevc-10bit.mkv", "mp4-sdr8-bt709.mp4"})
+    @DisplayName(
+        "Should report Dolby Vision and HDR10+ absent when neither the stream nor its first frames"
+            + " and packets show them")
+    void
+        shouldReportDolbyVisionAndHdr10PlusAbsentWhenNeitherTheStreamNorItsFirstFramesAndPacketsShowThem(
+            String fixture) {
       var video = streamOf(fixture, 0);
 
       assertThat(video.getDynamicRange())
           .isEqualTo(
               VideoDynamicRange.newBuilder()
                   .setCompatibleBase(video.getDynamicRange().getCompatibleBase())
-                  .setHdr10Plus(Presence.PRESENCE_UNSPECIFIED)
+                  .setHdr10Plus(Presence.PRESENCE_ABSENT)
+                  .setDolbyVisionAbsent(DolbyVisionAbsent.getDefaultInstance())
+                  .build());
+    }
+
+    @Test
+    @DisplayName(
+        "Should report Dolby Vision and HDR10+ absent when an H.264 stream's packets hold neither")
+    void shouldReportDolbyVisionAndHdr10PlusAbsentWhenAnH264StreamsPacketsHoldNeither() {
+      // FFmpeg's H.264 decoder drops RPUs and HDR10+ messages, so the packets show both.
+      var video = streamOf("mp4-sdr8-bt709.mp4", 0);
+
+      assertThat(video.getFirstFramesRead()).isTrue();
+      assertThat(video.getDynamicRange())
+          .isEqualTo(
+              VideoDynamicRange.newBuilder()
+                  .setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_SDR)
+                  .setHdr10Plus(Presence.PRESENCE_ABSENT)
+                  .setDolbyVisionAbsent(DolbyVisionAbsent.getDefaultInstance())
                   .build());
     }
 
@@ -172,12 +225,30 @@ class FfprobeExecutorDynamicRangeTest {
   class MasteringDisplayTests {
 
     @Test
-    @DisplayName("Should report no mastering display when only the bitstream carries it")
-    void shouldReportNoMasteringDisplayWhenOnlyTheBitstreamCarriesIt() {
+    @DisplayName("Should read the first frame's values when only the bitstream carries them")
+    void shouldReadTheFirstFramesValuesWhenOnlyTheBitstreamCarriesThem() {
       var video = streamOf("mp4-hdr10-sei-only.mp4", 0);
 
+      assertThat(video.getMasteringDisplay())
+          .isEqualTo(streamOf("mp4-hdr10-static.mp4", 0).getMasteringDisplay());
+      assertThat(video.getContentLightLevel())
+          .isEqualTo(
+              ContentLightLevel.newBuilder()
+                  .setMaxContentLightLevel(1000)
+                  .setMaxFrameAverageLightLevel(400)
+                  .build());
+    }
+
+    @Test
+    @DisplayName("Should report no static metadata when neither the container nor a frame has it")
+    void shouldReportNoStaticMetadataWhenNeitherTheContainerNorAFrameHasIt() {
+      var video = streamOf("mp4-sdr8-bt709.mp4", 0);
+
+      assertThat(video.getFirstFramesRead()).isTrue();
       assertThat(video.hasMasteringDisplay()).isFalse();
       assertThat(video.hasContentLightLevel()).isFalse();
+      assertThat(video.getMasteringDisplayOmitted()).isFalse();
+      assertThat(video.getContentLightLevelOmitted()).isFalse();
     }
 
     @Test
@@ -197,6 +268,7 @@ class FfprobeExecutorDynamicRangeTest {
       assertThat(video.getMasteringDisplay().getRed().getX()).isEqualTo(50000);
       assertThat(Integer.toUnsignedLong(video.getMasteringDisplay().getMinLuminance()))
           .isEqualTo(4294967295L);
+      assertThat(video.getMasteringDisplayOmitted()).isFalse();
     }
 
     @ParameterizedTest(name = "coordinate {0}, luminance {1}")
@@ -209,17 +281,19 @@ class FfprobeExecutorDynamicRangeTest {
       "0/0, 0/1",
       "half, 0/1",
     })
-    @DisplayName("Should report no mastering display when a value does not fit its SEI field")
-    void shouldReportNoMasteringDisplayWhenAValueDoesNotFitItsSeiField(
+    @DisplayName(
+        "Should mark the mastering display omitted when a value does not fit its SEI field")
+    void shouldMarkTheMasteringDisplayOmittedWhenAValueDoesNotFitItsSeiField(
         String coordinate, String luminance) {
       var video = videoStream(masteringDisplay(coordinate, luminance));
 
       assertThat(video.hasMasteringDisplay()).isFalse();
+      assertThat(video.getMasteringDisplayOmitted()).isTrue();
     }
 
     @Test
-    @DisplayName("Should report no mastering display when ffprobe prints only the primaries")
-    void shouldReportNoMasteringDisplayWhenFfprobePrintsOnlyThePrimaries() {
+    @DisplayName("Should mark the mastering display omitted when ffprobe prints only the primaries")
+    void shouldMarkTheMasteringDisplayOmittedWhenFfprobePrintsOnlyThePrimaries() {
       var video =
           videoStream(
               """
@@ -231,11 +305,12 @@ class FfprobeExecutorDynamicRangeTest {
               """);
 
       assertThat(video.hasMasteringDisplay()).isFalse();
+      assertThat(video.getMasteringDisplayOmitted()).isTrue();
     }
 
     @Test
-    @DisplayName("Should report no mastering display when ffprobe prints only the luminance")
-    void shouldReportNoMasteringDisplayWhenFfprobePrintsOnlyTheLuminance() {
+    @DisplayName("Should mark the mastering display omitted when ffprobe prints only the luminance")
+    void shouldMarkTheMasteringDisplayOmittedWhenFfprobePrintsOnlyTheLuminance() {
       var video =
           videoStream(
               """
@@ -244,6 +319,7 @@ class FfprobeExecutorDynamicRangeTest {
               """);
 
       assertThat(video.hasMasteringDisplay()).isFalse();
+      assertThat(video.getMasteringDisplayOmitted()).isTrue();
     }
 
     /** Every coordinate set to {@code coordinate} and both luminances set to {@code luminance}. */
@@ -276,8 +352,9 @@ class FfprobeExecutorDynamicRangeTest {
     @ParameterizedTest(name = "{0}")
     @ValueSource(
         strings = {"red_x", "green_y", "blue_x", "white_point_y", "max_luminance", "min_luminance"})
-    @DisplayName("Should report no mastering display when ffprobe prints every field but one")
-    void shouldReportNoMasteringDisplayWhenFfprobePrintsEveryFieldButOne(String missing) {
+    @DisplayName(
+        "Should mark the mastering display omitted when ffprobe prints every field but one")
+    void shouldMarkTheMasteringDisplayOmittedWhenFfprobePrintsEveryFieldButOne(String missing) {
       var fields = new StringBuilder("\"side_data_type\":\"Mastering display metadata\"");
       for (var name :
           List.of(
@@ -299,6 +376,7 @@ class FfprobeExecutorDynamicRangeTest {
       var video = videoStream("\"side_data_list\":[{" + fields + "}]");
 
       assertThat(video.hasMasteringDisplay()).isFalse();
+      assertThat(video.getMasteringDisplayOmitted()).isTrue();
     }
   }
 
@@ -307,12 +385,18 @@ class FfprobeExecutorDynamicRangeTest {
   class ContentLightLevelTests {
 
     @Test
-    @DisplayName("Should report no light level when Matroska stores a MaxFALL of 0")
-    void shouldReportNoLightLevelWhenMatroskaStoresAMaxFallOf0() {
-      // ffprobe reports a Matroska light level only when MaxCLL and MaxFALL are both nonzero.
+    @DisplayName("Should read the first frame's light level when Matroska stores a MaxFALL of 0")
+    void shouldReadTheFirstFramesLightLevelWhenMatroskaStoresAMaxFallOf0() {
+      // ffprobe reports a Matroska light level only when MaxCLL and MaxFALL are both nonzero, and
+      // the encode's SEI messages repeat the values.
       var video = streamOf("mkv-hdr10-maxfall-zero.mkv", 0);
 
-      assertThat(video.hasContentLightLevel()).isFalse();
+      assertThat(video.getContentLightLevel())
+          .isEqualTo(
+              ContentLightLevel.newBuilder()
+                  .setMaxContentLightLevel(1000)
+                  .setMaxFrameAverageLightLevel(0)
+                  .build());
       assertThat(video.hasMasteringDisplay()).isTrue();
     }
 
@@ -323,20 +407,22 @@ class FfprobeExecutorDynamicRangeTest {
 
       assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(65535);
       assertThat(video.getContentLightLevel().getMaxFrameAverageLightLevel()).isEqualTo(65535);
+      assertThat(video.getContentLightLevelOmitted()).isFalse();
     }
 
     @ParameterizedTest(name = "MaxCLL {0}, MaxFALL {1}")
     @CsvSource({"65536, 0", "0, 65536", "-1, 0", "0, -1"})
-    @DisplayName("Should report no light level when a value does not fit its SEI field")
-    void shouldReportNoLightLevelWhenAValueDoesNotFitItsSeiField(long maxCll, long maxFall) {
+    @DisplayName("Should mark the light level omitted when a value does not fit its SEI field")
+    void shouldMarkTheLightLevelOmittedWhenAValueDoesNotFitItsSeiField(long maxCll, long maxFall) {
       var video = videoStream(contentLightLevel(maxCll, maxFall));
 
       assertThat(video.hasContentLightLevel()).isFalse();
+      assertThat(video.getContentLightLevelOmitted()).isTrue();
     }
 
     @Test
-    @DisplayName("Should report no light level when ffprobe prints only MaxCLL")
-    void shouldReportNoLightLevelWhenFfprobePrintsOnlyMaxCll() {
+    @DisplayName("Should mark the light level omitted when ffprobe prints only MaxCLL")
+    void shouldMarkTheLightLevelOmittedWhenFfprobePrintsOnlyMaxCll() {
       var video =
           videoStream(
               """
@@ -344,13 +430,14 @@ class FfprobeExecutorDynamicRangeTest {
               """);
 
       assertThat(video.hasContentLightLevel()).isFalse();
+      assertThat(video.getContentLightLevelOmitted()).isTrue();
     }
 
     @ParameterizedTest(name = "{0}")
     @ValueSource(strings = {"\"1000\"", "99999999999999999999"})
     @DisplayName(
-        "Should report no light level when ffprobe prints MaxCLL as text or beyond 64 bits")
-    void shouldReportNoLightLevelWhenFfprobePrintsMaxCllAsTextOrBeyond64Bits(String maxCll) {
+        "Should mark the light level omitted when ffprobe prints MaxCLL as text or beyond 64 bits")
+    void shouldMarkTheLightLevelOmittedWhenFfprobePrintsMaxCllAsTextOrBeyond64Bits(String maxCll) {
       var video =
           videoStream(
               """
@@ -360,6 +447,7 @@ class FfprobeExecutorDynamicRangeTest {
                   .formatted(maxCll));
 
       assertThat(video.hasContentLightLevel()).isFalse();
+      assertThat(video.getContentLightLevelOmitted()).isTrue();
     }
 
     private static String contentLightLevel(long maxCll, long maxFall) {

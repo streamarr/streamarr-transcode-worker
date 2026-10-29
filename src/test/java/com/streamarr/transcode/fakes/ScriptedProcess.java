@@ -14,6 +14,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.stream.Stream;
 import lombok.Builder;
 import lombok.NonNull;
 
@@ -46,7 +47,12 @@ public final class ScriptedProcess extends Process {
      * When {@code q} arrives on standard input, as FFmpeg quits; the output keeps whatever the
      * reader has not read.
      */
-    AT_QUIT
+    AT_QUIT,
+    /**
+     * Once standard input is closed and the reader has read every byte, as an FFmpeg that reads its
+     * media from standard input finishes; the close also continues the output past its pause.
+     */
+    AT_END_OF_INPUT
   }
 
   private final byte[] output;
@@ -70,6 +76,7 @@ public final class ScriptedProcess extends Process {
   private boolean endOfOutputRead;
   private boolean terminated;
   private boolean destroyedForcibly;
+  private boolean inputEnded;
   private volatile Thread reader;
 
   @Builder
@@ -150,6 +157,18 @@ public final class ScriptedProcess extends Process {
     synchronized (stdin) {
       return stdin.toString(StandardCharsets.UTF_8);
     }
+  }
+
+  /** Everything written to standard input. */
+  public byte[] stdinBytes() {
+    synchronized (stdin) {
+      return stdin.toByteArray();
+    }
+  }
+
+  /** Whether something closed standard input, as the end of FFmpeg's piped media input. */
+  public synchronized boolean hasInputEnded() {
+    return inputEnded;
   }
 
   @Override
@@ -234,6 +253,72 @@ public final class ScriptedProcess extends Process {
     return this;
   }
 
+  /** A handle whose termination and destruction act on this process as its own methods do. */
+  @Override
+  public ProcessHandle toHandle() {
+    return new ScriptedHandle();
+  }
+
+  private final class ScriptedHandle implements ProcessHandle {
+
+    @Override
+    public long pid() {
+      return PROCESS_ID;
+    }
+
+    @Override
+    public Optional<ProcessHandle> parent() {
+      return Optional.empty();
+    }
+
+    @Override
+    public Stream<ProcessHandle> children() {
+      return Stream.empty();
+    }
+
+    @Override
+    public Stream<ProcessHandle> descendants() {
+      return Stream.empty();
+    }
+
+    @Override
+    public Info info() {
+      throw new UnsupportedOperationException("a scripted process has no process information");
+    }
+
+    @Override
+    public CompletableFuture<ProcessHandle> onExit() {
+      return exit.thenApply(_ -> this);
+    }
+
+    @Override
+    public boolean supportsNormalTermination() {
+      return true;
+    }
+
+    @Override
+    public boolean destroy() {
+      ScriptedProcess.this.destroy();
+      return true;
+    }
+
+    @Override
+    public boolean destroyForcibly() {
+      ScriptedProcess.this.destroyForcibly();
+      return true;
+    }
+
+    @Override
+    public boolean isAlive() {
+      return ScriptedProcess.this.isAlive();
+    }
+
+    @Override
+    public int compareTo(ProcessHandle other) {
+      return Long.compare(pid(), other.pid());
+    }
+  }
+
   private void endOutput() {
     endOffset = position;
     notifyAll();
@@ -295,7 +380,20 @@ public final class ScriptedProcess extends Process {
 
   private void reachEndOfOutput() {
     endOfOutputRead = true;
-    if (exitTiming == ExitTiming.AT_END_OF_OUTPUT) {
+    if (exitTiming == ExitTiming.AT_END_OF_OUTPUT
+        || (exitTiming == ExitTiming.AT_END_OF_INPUT && inputEnded)) {
+      exit.complete(exitCode);
+    }
+  }
+
+  private synchronized void endInput() {
+    inputEnded = true;
+    if (exitTiming != ExitTiming.AT_END_OF_INPUT) {
+      return;
+    }
+
+    resume();
+    if (endOfOutputRead) {
       exit.complete(exitCode);
     }
   }
@@ -343,6 +441,11 @@ public final class ScriptedProcess extends Process {
       if (exitTiming == ExitTiming.AT_QUIT) {
         exit();
       }
+    }
+
+    @Override
+    public void close() {
+      endInput();
     }
   }
 }

@@ -10,9 +10,13 @@ final class VideoDecisionFixtures {
 
   private VideoDecisionFixtures() {}
 
-  /** An H.264 High encode at level 1.0, which every libx264 recording declares. */
+  /**
+   * An H.264 High encode at level 1.0, which every libx264 recording declares, of a source whose
+   * codec family the job leaves unspecified.
+   */
   static VideoDecision.Encode.EncodeBuilder encodeBuilder() {
     return VideoDecision.Encode.builder()
+        .sourceCodecFamily(Optional.empty())
         .sourceDynamicRange(VideoDynamicRange.unspecified())
         .outputDynamicRange(VideoDynamicRange.sdr())
         .codecProfile(VideoCodecProfile.H264_HIGH)
