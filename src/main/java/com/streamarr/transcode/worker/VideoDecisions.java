@@ -75,6 +75,10 @@ final class VideoDecisions {
           "A stream copy carries a codec profile, tier, level or output dynamic range");
     }
 
+    if (video.hasSourceDynamicRange()) {
+      VideoDynamicRanges.of(video.getSourceDynamicRange());
+    }
+
     return new VideoDecision.Copy(video.getStreamIndex(), video.getCodecString());
   }
 

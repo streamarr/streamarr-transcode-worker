@@ -590,6 +590,35 @@ class TranscodeWorkerJobAttemptTest {
         sdr.clone().setDolbyVisionPresent(DolbyVisionPresent.getDefaultInstance()).build());
   }
 
+  @ParameterizedTest(name = "{0} with Dolby Vision {1}")
+  @MethodSource("sourcesWithoutABaseOrDolbyVision")
+  @DisplayName(
+      "Should refuse the job as an invalid specification when its source has no compatible base"
+          + " and no Dolby Vision")
+  void shouldRefuseTheJobAsAnInvalidSpecificationWhenItsSourceHasNoCompatibleBaseAndNoDolbyVision(
+      TranscodeMode mode, String dolbyVision, VideoDynamicRange source) throws Exception {
+    var job = variantJobBuilder(mode);
+    job.getDecisionBuilder().getVideoBuilder().setSourceDynamicRange(source);
+
+    assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
+  static Stream<Arguments> sourcesWithoutABaseOrDolbyVision() {
+    var none =
+        VideoDynamicRange.newBuilder()
+            .setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_NONE)
+            .setHdr10Plus(Presence.PRESENCE_ABSENT);
+    var absent = none.clone().setDolbyVisionAbsent(DolbyVisionAbsent.getDefaultInstance()).build();
+    var unspecified = none.build();
+    return Stream.of(
+            TranscodeMode.TRANSCODE_MODE_REMUX, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE)
+        .flatMap(
+            mode ->
+                Stream.of(
+                    Arguments.of(mode, "absent", absent),
+                    Arguments.of(mode, "unspecified", unspecified)));
+  }
+
   @ParameterizedTest(name = "{0}")
   @MethodSource("sourceDynamicRanges")
   @DisplayName("Should follow the server's compatible base when an encode carries HDR details")
