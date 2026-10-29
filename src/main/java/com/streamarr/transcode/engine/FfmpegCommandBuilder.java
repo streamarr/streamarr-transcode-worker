@@ -117,9 +117,9 @@ public class FfmpegCommandBuilder {
     return new FfmpegPipeline.SingleProcess(buildCommand(job, EncoderInput.SOURCE));
   }
 
-  // Dolby Vision profile 5 is the only profile without a compatible base, so only its picture
-  // needs the RPU that FFmpeg's HEVC decoder skips when the RPU starts a sample. A copy decodes
-  // nothing.
+  // Dolby Vision profiles 5 and 10.0 have no compatible base, and of those only profile 5 is
+  // HEVC, so only its picture needs the RPU that FFmpeg's HEVC decoder skips when the RPU starts a
+  // sample. A copy decodes nothing.
   private static boolean needsRpuMove(TranscodeJob job) {
     return profile5HevcSourceOf(job.request().transcodeDecision().videoDecision())
         .filter(present -> mayStartSamplesWithRpus(present.rpuPlacement()))
@@ -190,18 +190,18 @@ public class FfmpegCommandBuilder {
     addStreamSelection(cmd, job.request().transcodeDecision());
     addCommonFlags(cmd, EncoderInput.SOURCE);
     cmd.addAll(List.of("-c:v", "copy", "-strict", "unofficial"));
+    var copiedAudio = audio;
     if (audio.mode() == AudioMode.TRANSCODE && "opus".equals(audio.codec())) {
-      addAudioArgs(
-          cmd,
+      copiedAudio =
           AudioDecision.builder()
               .mode(audio.mode())
               .codec("libopus")
               .channels(audio.channels())
               .bitrate(audio.bitrate())
-              .build());
-    } else {
-      addAudioArgs(cmd, audio);
+              .build();
     }
+
+    addAudioArgs(cmd, copiedAudio);
 
     cmd.addAll(SOURCE_COPY_OUTPUT);
     addVideoTimingOutput(cmd, job.request().transcodeDecision().videoDecision());

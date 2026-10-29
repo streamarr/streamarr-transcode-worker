@@ -339,11 +339,11 @@ final class DecoderConfiguration {
       var parameterSetConstraints = (reader.bits(16) << 32) | reader.bits(32);
       var parameterSetLevel = (int) reader.bits(8);
       if (tier < parameterSetTier) {
-        level = parameterSetLevel;
-      } else {
-        level = Math.max(level, parameterSetLevel);
+        // A parameter set of a higher tier discards the levels of the lower one.
+        level = 0;
       }
 
+      level = Math.max(level, parameterSetLevel);
       tier = Math.max(tier, parameterSetTier);
       profileIdc = Math.max(profileIdc, parameterSetProfile);
       compatibility &= parameterSetCompatibility;
