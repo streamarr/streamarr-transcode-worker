@@ -13,7 +13,6 @@ import static com.streamarr.transcode.probe.RecordedFfprobe.streamOf;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import build.buf.gen.streamarr.transcode.v1.ChromaticityCoordinates;
-import build.buf.gen.streamarr.transcode.v1.CompatibleBase;
 import build.buf.gen.streamarr.transcode.v1.ContentLightLevel;
 import build.buf.gen.streamarr.transcode.v1.MasteringDisplayColorVolume;
 import build.buf.gen.streamarr.transcode.v1.Presence;
@@ -120,8 +119,8 @@ class FfprobeExecutorSeiTest {
       var video = coding.probed(coding.sample((coding.units.seiHeader() + " " + messages).trim()));
 
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
-      assertThat(video.getMasteringDisplayOmitted()).isTrue();
-      assertThat(video.getContentLightLevelOmitted()).isTrue();
+      assertThat(video.getMasteringDisplayOmitted()).as("mastering display omitted").isTrue();
+      assertThat(video.getContentLightLevelOmitted()).as("light level omitted").isTrue();
     }
 
     @ParameterizedTest(name = "{0}")
@@ -142,15 +141,15 @@ class FfprobeExecutorSeiTest {
       var video = coding.probed(coding.sample(coding.sei(LIGHT_LEVEL, "80")));
 
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
-      assertThat(video.getMasteringDisplayOmitted()).isTrue();
+      assertThat(video.getMasteringDisplayOmitted()).as("mastering display omitted").isTrue();
     }
 
     @ParameterizedTest(name = "{0}")
     @EnumSource(Coding.class)
     @DisplayName(
-        "Should read the NAL units after a start code that a NAL unit's length covers, and rule out"
-            + " nothing")
-    void shouldReadTheNalUnitsAfterAStartCodeThatANalUnitsLengthCoversAndRuleOutNothing(
+        "Should report HDR10+ present and rule out nothing when a length-prefixed NAL unit holds a"
+            + " start code")
+    void shouldReportHdr10PlusPresentAndRuleOutNothingWhenALengthPrefixedNalUnitHoldsAStartCode(
         Coding coding) {
       // FFmpeg ends the NAL unit at the start code and reads the SEI NAL unit that follows it.
       var video =
@@ -471,9 +470,9 @@ class FfprobeExecutorSeiTest {
 
     @Test
     @DisplayName(
-        "Should read the NAL units after a start code that a record's NAL unit holds, and rule out"
-            + " nothing")
-    void shouldReadTheNalUnitsAfterAStartCodeThatARecordsNalUnitHoldsAndRuleOutNothing() {
+        "Should report HDR10+ present and rule out nothing when a record's NAL unit holds a start"
+            + " code")
+    void shouldReportHdr10PlusPresentAndRuleOutNothingWhenARecordsNalUnitHoldsAStartCode() {
       var video =
           probed(
               recordWithSei(
@@ -487,8 +486,10 @@ class FfprobeExecutorSeiTest {
     }
 
     @Test
-    @DisplayName("Should take the record's static metadata ahead of the packets'")
-    void shouldTakeTheRecordsStaticMetadataAheadOfThePackets() {
+    @DisplayName(
+        "Should take the record's content light level when the record and the packets both hold"
+            + " one")
+    void shouldTakeTheRecordsContentLightLevelWhenTheRecordAndThePacketsBothHoldOne() {
       var video =
           probed(
               recordWithSei(Coding.HEVC.sei(LIGHT_LEVEL)),
@@ -664,8 +665,9 @@ class FfprobeExecutorSeiTest {
     }
 
     @Test
-    @DisplayName("Should mark only the nested static value omitted")
-    void shouldMarkOnlyTheNestedStaticValueOmitted() {
+    @DisplayName(
+        "Should mark only the light level omitted when a scalable nesting message holds it")
+    void shouldMarkOnlyTheLightLevelOmittedWhenAScalableNestingMessageHoldsIt() {
       var video =
           Coding.HEVC.probed(Coding.HEVC.sample(Coding.HEVC.sei(nesting("85", "20", LIGHT_LEVEL))));
 
@@ -884,14 +886,23 @@ class FfprobeExecutorSeiTest {
 
     @Test
     @DisplayName(
-        "Should read an H.264 stream's mastering display from its packets and rule out what its"
-            + " Annex B extradata and packets do not hold")
+        "Should take an H.264 stream's mastering display from its packets when FFmpeg rejects the"
+            + " SEI that holds it")
+    void shouldTakeAnH264StreamsMasteringDisplayFromItsPacketsWhenFfmpegRejectsTheSeiThatHoldsIt() {
+      var video = streamOf("h264-hdr10-rejected-sei.h264", 0);
+
+      assertThat(video.getMasteringDisplay()).isEqualTo(RECORDED_MASTERING_DISPLAY);
+    }
+
+    @Test
+    @DisplayName(
+        "Should rule out HDR10+ and the light level when an H.264 stream's Annex B extradata and"
+            + " packets hold neither")
     void
-        shouldReadAnH264StreamsMasteringDisplayFromItsPacketsAndRuleOutWhatItsAnnexBExtradataAndPacketsDoNotHold() {
+        shouldRuleOutHdr10PlusAndTheLightLevelWhenAnH264StreamsAnnexBExtradataAndPacketsHoldNeither() {
       var video = streamOf("h264-hdr10-rejected-sei.h264", 0);
 
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
-      assertThat(video.getMasteringDisplay()).isEqualTo(RECORDED_MASTERING_DISPLAY);
       assertThat(video.hasContentLightLevel()).isFalse();
       assertThat(video.getContentLightLevelOmitted()).isFalse();
     }
@@ -935,11 +946,8 @@ class FfprobeExecutorSeiTest {
             + " of it")
     void shouldTakeTheMasteringDisplayFromTheSeiMessageWhenTheFirstFrameCarriesNoneOfIt() {
       // In the copy of the same stream into MP4, a read of 3 packets decodes fewer than 3 frames,
-      // so the probe keeps the read of 12, whose first frame carries no mastering display. The 5
-      // packets of the file fall short of those 12, so the walk rules nothing out.
-      var video =
-          probe(RecordedFfprobe.recordedAnswers("mp4-h264-sei-1.mp4").prerollPackets(3).build())
-              .getStreams(0);
+      // so the probe keeps the read of 12, whose first frame carries no mastering display.
+      var video = mp4H264Sei1();
 
       assertThat(video.getMasteringDisplay())
           .isEqualTo(
@@ -952,8 +960,23 @@ class FfprobeExecutorSeiTest {
                   .setMinLuminance(0)
                   .build());
       assertThat(video.getMasteringDisplayOmitted()).isFalse();
+    }
+
+    @Test
+    @DisplayName(
+        "Should rule nothing out when the first packets read prints fewer packets than it asked for")
+    void shouldRuleNothingOutWhenTheFirstPacketsReadPrintsFewerPacketsThanItAskedFor() {
+      // The probe keeps the read of 12 frames, and the 5 packets of the file fall short of those
+      // 12.
+      var video = mp4H264Sei1();
+
       assertThat(video.getContentLightLevelOmitted()).isTrue();
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+    }
+
+    private static ProbeStreamInfo mp4H264Sei1() {
+      return probe(RecordedFfprobe.recordedAnswers("mp4-h264-sei-1.mp4").prerollPackets(3).build())
+          .getStreams(0);
     }
 
     @ParameterizedTest(name = "{0}")
@@ -1000,13 +1023,26 @@ class FfprobeExecutorSeiTest {
       // CUVA's HDR Vivid message carries country code 0x26, not HDR10+'s 0xB5.
       var video = streamOf("hevc-hdr-vivid-repeated.hevc", 0);
 
-      assertThat(video.getDynamicRange().getCompatibleBase())
-          .isEqualTo(CompatibleBase.COMPATIBLE_BASE_HLG);
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
+    }
+
+    @Test
+    @DisplayName("Should report a zero light level present when an HLG stream's SEI declares it")
+    void shouldReportAZeroLightLevelPresentWhenAnHlgStreamsSeiDeclaresIt() {
+      // A declared 0 is still a present value.
+      var video = streamOf("hevc-hdr-vivid-repeated.hevc", 0);
+
+      assertThat(video.hasContentLightLevel()).isTrue();
+      assertThat(video.getContentLightLevel()).isEqualTo(ContentLightLevel.getDefaultInstance());
+    }
+
+    @Test
+    @DisplayName("Should read the mastering display when an HLG stream's SEI holds one")
+    void shouldReadTheMasteringDisplayWhenAnHlgStreamsSeiHoldsOne() {
+      var video = streamOf("hevc-hdr-vivid-repeated.hevc", 0);
+
       assertThat(video.getMasteringDisplay())
           .isEqualTo(RECORDED_MASTERING_DISPLAY.toBuilder().setMaxLuminance(40_000_000).build());
-      assertThat(video.getContentLightLevel()).isEqualTo(ContentLightLevel.getDefaultInstance());
-      assertThat(video.hasContentLightLevel()).isTrue();
     }
 
     @ParameterizedTest(name = "{0}")
