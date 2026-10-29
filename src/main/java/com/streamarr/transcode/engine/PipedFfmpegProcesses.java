@@ -9,6 +9,8 @@ import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import lombok.AccessLevel;
+import lombok.Builder;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -38,6 +40,7 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
       new AtomicReference<>(Optional.empty());
   private final Thread transfer;
 
+  @Builder(access = AccessLevel.PRIVATE)
   private PipedFfmpegProcesses(
       Process copy, Process encode, VideoTimingChannel videoTimings, Duration gracePeriod) {
     this.copy = copy;
@@ -58,8 +61,12 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
     var videoTimings = openVideoTimingChannel();
     var copy = startCopying(starter, pipe, videoTimings);
     try {
-      return new PipedFfmpegProcesses(
-          copy, starter.start(pipe.encodeCommand()), videoTimings, gracePeriod);
+      return PipedFfmpegProcesses.builder()
+          .copy(copy)
+          .encode(starter.start(pipe.encodeCommand()))
+          .videoTimings(videoTimings)
+          .gracePeriod(gracePeriod)
+          .build();
     } catch (RuntimeException e) {
       copy.destroyForcibly();
       throw e;

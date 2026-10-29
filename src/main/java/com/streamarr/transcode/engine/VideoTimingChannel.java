@@ -16,6 +16,8 @@ import java.util.Optional;
 import java.util.concurrent.BlockingDeque;
 import java.util.concurrent.LinkedBlockingDeque;
 import java.util.concurrent.atomic.AtomicReference;
+import lombok.AccessLevel;
+import lombok.Builder;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -45,6 +47,7 @@ final class VideoTimingChannel implements VideoPacketTimings, AutoCloseable {
   private volatile boolean listening = true;
   private volatile boolean closed;
 
+  @Builder(access = AccessLevel.PRIVATE)
   private VideoTimingChannel(
       Path directory, Path socket, ServerSocketChannel listener, Selector selector) {
     this.directory = directory;
@@ -63,7 +66,13 @@ final class VideoTimingChannel implements VideoPacketTimings, AutoCloseable {
       listener.configureBlocking(false);
       var selector = Selector.open();
       listener.register(selector, SelectionKey.OP_ACCEPT);
-      var channel = new VideoTimingChannel(directory, socket, listener, selector);
+      var channel =
+          VideoTimingChannel.builder()
+              .directory(directory)
+              .socket(socket)
+              .listener(listener)
+              .selector(selector)
+              .build();
       Thread.ofVirtual().name("ffmpeg-video-timing").start(channel::read);
       return channel;
     } catch (IOException e) {
