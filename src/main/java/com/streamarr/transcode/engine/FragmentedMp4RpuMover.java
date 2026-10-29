@@ -48,10 +48,10 @@ import lombok.NonNull;
 final class FragmentedMp4RpuMover {
 
   /** The largest initialization segment or fragment the mover reads. */
-  static final long MAXIMUM_FRAGMENT_BYTES = 32L * 1024 * 1024;
+  private static final long MAXIMUM_FRAGMENT_BYTES = 32L * 1024 * 1024;
 
   /** What the mover holds back at most, beyond the fragment it reads, before passing it on. */
-  static final long MAXIMUM_HELD_BYTES = 32L * 1024 * 1024;
+  private static final long MAXIMUM_HELD_BYTES = 32L * 1024 * 1024;
 
   private static final Set<String> HEVC_SAMPLE_ENTRIES = Set.of("hvc1", "hev1", "dvh1", "dvhe");
   private static final Set<String> MOOF_CHILDREN = Set.of("mfhd", "traf");

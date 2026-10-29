@@ -26,7 +26,7 @@ record HevcNalUnit(@NonNull ByteBuffer bytes, @NonNull Decoded decoded) {
    * The most NAL units of a sample that {@link #delimit} returns: well above the 600 slice segments
    * of a picture at HEVC's highest level (ITU-T H.265 table A.8), with its parameter sets and SEI.
    */
-  static final int MAXIMUM_NAL_UNITS_PER_SAMPLE = 4096;
+  private static final int MAXIMUM_NAL_UNITS_PER_SAMPLE = 4096;
 
   // FFmpeg's splitter reads the next length only while at least this many bytes remain.
   private static final int FEWEST_SPLIT_BYTES = 4;

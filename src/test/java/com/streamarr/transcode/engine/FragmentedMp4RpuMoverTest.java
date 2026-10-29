@@ -52,6 +52,8 @@ class FragmentedMp4RpuMoverTest {
   // ADR 0013: what the mover holds beyond the fragment it reads, and the NAL units of a sample.
   private static final int MOST_HELD_BYTES = 32 * 1024 * 1024;
   private static final int MOST_NAL_UNITS_PER_SAMPLE = 4096;
+  // The bytes of a fragment that the mover reads, its boxes and the heap of its samples together.
+  private static final long MOST_FRAGMENT_BYTES = 32L * 1024 * 1024;
 
   @Test
   @DisplayName(
@@ -942,7 +944,7 @@ class FragmentedMp4RpuMoverTest {
           + " mover's fragment budget holds")
   void
       shouldFailAsExceedingTheSegmentCapWhenAFragmentDeclaresMoreSamplesThanTheMoversFragmentBudgetHolds() {
-    var samples = FragmentedMp4RpuMover.MAXIMUM_FRAGMENT_BYTES / Fragment.HEAP_BYTES_PER_SAMPLE + 1;
+    var samples = MOST_FRAGMENT_BYTES / Fragment.HEAP_BYTES_PER_SAMPLE + 1;
     var moof = moofOfEmptySamples(samples, 0);
     moof = moofOfEmptySamples(samples, moof.length + 8);
     var copy = concat(initializationSegment(), moof, box("mdat", new byte[0]));
