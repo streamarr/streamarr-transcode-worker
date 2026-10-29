@@ -11,10 +11,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
 import java.util.stream.Stream;
 import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Named;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -1470,144 +1471,131 @@ class FfmpegCommandBuilderTest {
   private static final String TONE_MAPPED_TO_SDR =
       "tonemapx=tonemap=mobius:peak=100:desat=0:t=bt709:m=bt709:p=bt709:r=tv:format=yuv420p,"
           + "sidedata=mode=delete:type=AMBIENT_VIEWING_ENVIRONMENT";
-  private static final String EVERY_SEGMENTS_KEYFRAME = "0,6,12,18,24,30,36,42,48,54,60";
 
   @Test
   @DisplayName(
-      "Should copy the source into fragmented MP4 and encode the copy once its RPUs move behind the"
-          + " previous picture when a Dolby Vision profile 5 sample starts with the RPU of the"
+      "Should copy the source into fragmented MP4 on the copy's standard output and its video"
+          + " timing as framecrc when a Dolby Vision profile 5 sample starts with the RPU of the"
           + " picture before")
   void
-      shouldCopyTheSourceIntoFragmentedMp4AndEncodeTheCopyOnceItsRpusMoveBehindThePreviousPictureWhenADolbyVisionProfile5SampleStartsWithTheRpuOfThePictureBefore() {
+      shouldCopyTheSourceIntoFragmentedMp4OnTheCopysStandardOutputAndItsVideoTimingAsFramecrcWhenADolbyVisionProfile5SampleStartsWithTheRpuOfThePictureBefore() {
     var request =
         request(encoding(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE)))
             .height(720)
             .build();
 
-    var pipeline = builder.buildPipeline(job(request, "libx264"));
+    var pipe = rpuMovingPipe(builder.buildPipeline(job(request, "libx264")));
 
-    assertThat(pipeline)
+    assertThat(pipe.copyCommand())
         .isEqualTo(
-            new FfmpegPipeline.RpuMovingPipe(
-                List.of(
-                    "ffmpeg",
-                    "-y",
-                    "-i",
-                    "/media/movie.mkv",
-                    "-map",
-                    "0:0",
-                    "-map",
-                    "0:a:0",
-                    "-map",
-                    "-0:s",
-                    "-map_metadata",
-                    "-1",
-                    "-map_chapters",
-                    "-1",
-                    "-copyts",
-                    "-avoid_negative_ts",
-                    "disabled",
-                    "-start_at_zero",
-                    "-max_muxing_queue_size",
-                    "128",
-                    "-max_interleave_delta",
-                    "10000000",
-                    "-c:v",
-                    "copy",
-                    "-strict",
-                    "unofficial",
-                    "-c:a",
-                    "aac",
-                    "-ac",
-                    "2",
-                    "-b:a",
-                    "128k",
-                    "-f",
-                    "mp4",
-                    "-movflags",
-                    "delay_moov+default_base_moof+frag_keyframe+skip_trailer",
-                    "-frag_duration",
-                    "1",
-                    "-movie_timescale",
-                    "1000000",
-                    "-flush_packets",
-                    "1",
-                    "pipe:1",
-                    "-map",
-                    "0:0",
-                    "-c:v",
-                    "copy",
-                    "-f",
-                    "framecrc",
-                    "-flush_packets",
-                    "1"),
-                List.of(
-                    "ffmpeg",
-                    "-y",
-                    "-analyzeduration",
-                    "1",
-                    "-fpsprobesize",
-                    "0",
-                    "-f",
-                    "mp4",
-                    "-i",
-                    "pipe:0",
-                    "-map",
-                    "0:v:0",
-                    "-map",
-                    "0:a:0",
-                    "-map_metadata",
-                    "-1",
-                    "-map_chapters",
-                    "-1",
-                    "-copyts",
-                    "-avoid_negative_ts",
-                    "disabled",
-                    "-max_muxing_queue_size",
-                    "128",
-                    "-max_interleave_delta",
-                    "10000000",
-                    "-c:v",
-                    "libx264",
-                    "-preset",
-                    "faster",
-                    "-tag:v",
-                    "avc1",
-                    "-profile:v",
-                    "high",
-                    "-level:v",
-                    "10",
-                    "-vf",
-                    "trim=start=0,scale=-2:720," + TONE_MAPPED_TO_SDR,
-                    "-b:v",
-                    "5000000",
-                    "-maxrate",
-                    "5000000",
-                    "-bufsize",
-                    "10000000",
-                    "-c:a",
-                    "copy",
-                    "-bsf:a",
-                    "aac_adtstoasc",
-                    "-b:a",
-                    "0",
-                    "-r:v:0",
-                    "24000/1001",
-                    "-forced-idr",
-                    "1",
-                    "-force_key_frames:0",
-                    EVERY_SEGMENTS_KEYFRAME,
-                    "-sc_threshold:v:0",
-                    "0",
-                    "-g:v:0",
-                    "145",
-                    "-f",
-                    "mp4",
-                    "-movflags",
-                    "cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont",
-                    "-frag_duration",
-                    "1000000",
-                    "pipe:1")));
+            List.of(
+                "ffmpeg",
+                "-y",
+                "-i",
+                "/media/movie.mkv",
+                "-map",
+                "0:0",
+                "-map",
+                "0:a:0",
+                "-map",
+                "-0:s",
+                "-map_metadata",
+                "-1",
+                "-map_chapters",
+                "-1",
+                "-copyts",
+                "-avoid_negative_ts",
+                "disabled",
+                "-start_at_zero",
+                "-max_muxing_queue_size",
+                "128",
+                "-max_interleave_delta",
+                "10000000",
+                "-c:v",
+                "copy",
+                "-strict",
+                "unofficial",
+                "-c:a",
+                "aac",
+                "-ac",
+                "2",
+                "-b:a",
+                "128k",
+                "-f",
+                "mp4",
+                "-movflags",
+                "delay_moov+default_base_moof+frag_keyframe+skip_trailer",
+                "-frag_duration",
+                "1",
+                "-movie_timescale",
+                "1000000",
+                "-flush_packets",
+                "1",
+                "pipe:1",
+                "-map",
+                "0:0",
+                "-c:v",
+                "copy",
+                "-f",
+                "framecrc",
+                "-flush_packets",
+                "1"));
+  }
+
+  @Test
+  @DisplayName(
+      "Should encode the copy read from standard input as one FFmpeg encodes the source, trimmed at"
+          + " the start and copying the copy's audio, when a Dolby Vision profile 5 sample starts"
+          + " with the RPU of the picture before")
+  void
+      shouldEncodeTheCopyReadFromStandardInputAsOneFfmpegEncodesTheSourceTrimmedAtTheStartAndCopyingTheCopysAudioWhenADolbyVisionProfile5SampleStartsWithTheRpuOfThePictureBefore() {
+    var request =
+        request(encoding(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE)))
+            .height(720)
+            .build();
+    var oneFfmpeg =
+        command(
+            request(
+                    encoding(
+                        profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE)
+                            .sourcePacketsCarryPresentationTimes(false)))
+                .height(720)
+                .build(),
+            "libx264");
+
+    var pipe = rpuMovingPipe(builder.buildPipeline(job(request, "libx264")));
+
+    assertThat(pipe.encodeCommand()).isEqualTo(asTheEncodeOfTheCopy(oneFfmpeg));
+  }
+
+  // One FFmpeg's command, changed only where ADR 0013 makes the encode of the copy differ: it reads
+  // the copy's fragmented MP4 on its standard input at once, keeps the copy's timestamps, trims its
+  // video at the attempt's start, and copies the AAC that the copy encoded.
+  private static List<String> asTheEncodeOfTheCopy(List<String> oneFfmpeg) {
+    var expected =
+        new ArrayList<>(
+            List.of(
+                "ffmpeg",
+                "-y",
+                "-analyzeduration",
+                "1",
+                "-fpsprobesize",
+                "0",
+                "-f",
+                "mp4",
+                "-i",
+                "pipe:0",
+                "-map",
+                "0:v:0",
+                "-map",
+                "0:a:0"));
+    expected.addAll(oneFfmpeg.subList(oneFfmpeg.indexOf("-map_metadata"), oneFfmpeg.size()));
+    expected.remove("-start_at_zero");
+    expected.set(expected.indexOf("-vf") + 1, "trim=start=0," + videoFilter(oneFfmpeg));
+    var audio = expected.indexOf("-c:a");
+    expected.subList(audio, audio + 6).clear();
+    expected.addAll(audio, List.of("-c:a", "copy", "-bsf:a", "aac_adtstoasc", "-b:a", "0"));
+    return expected;
   }
 
   @Test
@@ -1676,55 +1664,91 @@ class FfmpegCommandBuilderTest {
   }
 
   @ParameterizedTest(name = "{0}")
-  @MethodSource("encodesThatNeedNoMovedRpu")
+  @MethodSource("profile5EncodesWithOneFactChanged")
   @DisplayName(
-      "Should build the same command whether or not the source's packets carry presentation times"
-          + " when the encode needs no moved RPU")
+      "Should build the command of the source without Dolby Vision, whether or not its packets carry"
+          + " presentation times, when one fact of the profile 5 source that the encode needs keeps"
+          + " every RPU where it is")
   void
-      shouldBuildTheSameCommandWhetherOrNotTheSourcesPacketsCarryPresentationTimesWhenTheEncodeNeedsNoMovedRpu(
-          String description, Supplier<VideoDecision.Encode.EncodeBuilder> encode) {
-    var withPresentationTimes =
-        request(encoding(encode.get().sourcePacketsCarryPresentationTimes(true))).build();
-    var withoutPresentationTimes =
-        request(encoding(encode.get().sourcePacketsCarryPresentationTimes(false))).build();
+      shouldBuildTheCommandOfTheSourceWithoutDolbyVisionWhetherOrNotItsPacketsCarryPresentationTimesWhenOneFactOfTheProfile5SourceThatTheEncodeNeedsKeepsEveryRpuWhereItIs(
+          UnaryOperator<VideoDecision.Encode.EncodeBuilder> changeOneFact) {
+    var source = changeOneFact.apply(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE));
+    var withoutDolbyVision =
+        command(
+            request(
+                    encoding(
+                        changeOneFact
+                            .apply(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE))
+                            .sourceDynamicRange(
+                                withoutDolbyVision(source.build().sourceDynamicRange()))))
+                .build(),
+            "libx264");
 
-    assertThat(builder.buildPipeline(job(withoutPresentationTimes, "libx264")))
-        .isEqualTo(builder.buildPipeline(job(withPresentationTimes, "libx264")))
-        .isInstanceOf(FfmpegPipeline.SingleProcess.class);
+    for (var presentationTimes : List.of(true, false)) {
+      var request =
+          request(
+                  encoding(
+                      changeOneFact
+                          .apply(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE))
+                          .sourcePacketsCarryPresentationTimes(presentationTimes)))
+              .build();
+
+      assertThat(builder.buildPipeline(job(request, "libx264")))
+          .as("packets carry presentation times: %s", presentationTimes)
+          .isEqualTo(new FfmpegPipeline.SingleProcess(withoutDolbyVision));
+    }
   }
 
-  private static Stream<Arguments> encodesThatNeedNoMovedRpu() {
-    Stream<Arguments> ranges =
-        dynamicRangesThatKeepOneFfmpeg()
-            .map(
-                arguments ->
-                    Arguments.of(
-                        arguments.get()[0],
-                        (Supplier<VideoDecision.Encode.EncodeBuilder>)
-                            () ->
-                                profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE)
-                                    .sourceDynamicRange((VideoDynamicRange) arguments.get()[1])));
-    Stream<Arguments> families =
-        sourceCodecFamiliesOtherThanHevc()
-            .map(
-                family ->
-                    Arguments.of(
-                        "profile 5, RPU starts the sample, source " + family,
-                        (Supplier<VideoDecision.Encode.EncodeBuilder>)
-                            () ->
-                                profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE)
-                                    .sourceCodecFamily(family)));
-    Stream<Arguments> others =
-        Stream.of(
-            Arguments.of(
-                "unspecified dynamic range",
-                (Supplier<VideoDecision.Encode.EncodeBuilder>)
-                    VideoDecisionFixtures::encodeBuilder),
-            Arguments.of(
-                "HEVC without Dolby Vision",
-                (Supplier<VideoDecision.Encode.EncodeBuilder>)
-                    () -> hevcEncode().sourceCodecFamily(Optional.of(CodecFamily.HEVC))));
-    return Stream.of(ranges, families, others).flatMap(arguments -> arguments);
+  // Each case changes exactly one of the facts that make a source need moved RPUs.
+  private static Stream<Named<UnaryOperator<VideoDecision.Encode.EncodeBuilder>>>
+      profile5EncodesWithOneFactChanged() {
+    return Stream.of(
+        oneFactChanged(
+            "every RPU after its picture",
+            encode ->
+                encode.sourceDynamicRange(profile5(DolbyVisionRpuPlacement.AFTER_OWN_PICTURE))),
+        oneFactChanged(
+            "PQ compatible base, as profile 8.1",
+            encode -> encode.sourceDynamicRange(rpusStartingSamplesOver(CompatibleBase.PQ))),
+        oneFactChanged(
+            "HLG compatible base, as profile 8.4",
+            encode -> encode.sourceDynamicRange(rpusStartingSamplesOver(CompatibleBase.HLG))),
+        oneFactChanged(
+            "SDR compatible base, as profile 9",
+            encode -> encode.sourceDynamicRange(rpusStartingSamplesOver(CompatibleBase.SDR))),
+        oneFactChanged(
+            "Dolby Vision absent",
+            encode ->
+                encode.sourceDynamicRange(
+                    new VideoDynamicRange(
+                        CompatibleBase.NONE,
+                        Presence.ABSENT,
+                        new VideoDynamicRange.DolbyVision.Absent()))),
+        oneFactChanged(
+            "Dolby Vision unspecified",
+            encode ->
+                encode.sourceDynamicRange(
+                    new VideoDynamicRange(
+                        CompatibleBase.NONE,
+                        Presence.ABSENT,
+                        new VideoDynamicRange.DolbyVision.Unspecified()))),
+        oneFactChanged(
+            "source codec family unspecified",
+            encode -> encode.sourceCodecFamily(Optional.empty())),
+        oneFactChanged(
+            "H.264 source", encode -> encode.sourceCodecFamily(Optional.of(CodecFamily.H264))),
+        oneFactChanged(
+            "AV1 source", encode -> encode.sourceCodecFamily(Optional.of(CodecFamily.AV1))));
+  }
+
+  private static Named<UnaryOperator<VideoDecision.Encode.EncodeBuilder>> oneFactChanged(
+      String fact, UnaryOperator<VideoDecision.Encode.EncodeBuilder> change) {
+    return Named.of(fact, change);
+  }
+
+  private static VideoDynamicRange rpusStartingSamplesOver(CompatibleBase compatibleBase) {
+    return new VideoDynamicRange(
+        compatibleBase, Presence.ABSENT, dolbyVisionPresent(DolbyVisionRpuPlacement.STARTS_SAMPLE));
   }
 
   private static VideoDynamicRange withoutDolbyVision(VideoDynamicRange source) {
@@ -1734,13 +1758,12 @@ class FfmpegCommandBuilderTest {
 
   @Test
   @DisplayName(
-      "Should seek the copy, encode its audio there, and trim the encode's video at the seek when a"
-          + " replacement attempt encodes a profile 5 source whose RPU starts its sample")
+      "Should seek the copy and encode its audio there when a replacement attempt encodes a profile"
+          + " 5 source whose RPU starts its sample")
   void
-      shouldSeekTheCopyEncodeItsAudioThereAndTrimTheEncodesVideoAtTheSeekWhenAReplacementAttemptEncodesAProfile5SourceWhoseRpuStartsItsSample() {
+      shouldSeekTheCopyAndEncodeItsAudioThereWhenAReplacementAttemptEncodesAProfile5SourceWhoseRpuStartsItsSample() {
     var request =
         request(encoding(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE)))
-            .height(720)
             .startSequenceNumber(3)
             .build();
 
@@ -1749,10 +1772,23 @@ class FfmpegCommandBuilderTest {
     assertThat(pipe.copyCommand())
         .containsSequence("ffmpeg", "-y", "-ss", "12", "-i", "/media/movie.mkv", "-map", "0:0")
         .containsSequence("-c:a", "aac", "-ac", "2", "-b:a", "128k", "-f", "mp4");
-    assertThat(pipe.encodeCommand())
-        .containsSequence("-f", "mp4", "-i", "pipe:0", "-map", "0:v:0")
-        .containsSequence("-c:a", "copy", "-bsf:a", "aac_adtstoasc", "-b:a", "0", "-r:v:0")
-        .doesNotContain("-ss", "-start_at_zero", "-af");
+  }
+
+  @Test
+  @DisplayName(
+      "Should trim the encode's video at the seek without seeking the copy again when a replacement"
+          + " attempt encodes a profile 5 source whose RPU starts its sample")
+  void
+      shouldTrimTheEncodesVideoAtTheSeekWithoutSeekingTheCopyAgainWhenAReplacementAttemptEncodesAProfile5SourceWhoseRpuStartsItsSample() {
+    var request =
+        request(encoding(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE)))
+            .height(720)
+            .startSequenceNumber(3)
+            .build();
+
+    var pipe = rpuMovingPipe(builder.buildPipeline(job(request, "libx264")));
+
+    assertThat(pipe.encodeCommand()).doesNotContain("-ss", "-start_at_zero");
     assertThat(videoFilter(pipe.encodeCommand()))
         .isEqualTo("trim=start=12,scale=-2:720," + TONE_MAPPED_TO_SDR);
   }
@@ -1776,7 +1812,7 @@ class FfmpegCommandBuilderTest {
     assertThat(pipe.encodeCommand())
         .containsSequence("-map", "0:v:0", "-map", "0:a:0")
         .containsSequence("-c:a", "copy", "-bsf:a", "aac_adtstoasc", "-b:a", "0", "-r:v:0")
-        .doesNotContain("-af");
+        .doesNotContain("-ss");
   }
 
   @Test
@@ -1794,85 +1830,7 @@ class FfmpegCommandBuilderTest {
     var pipe = rpuMovingPipe(builder.buildPipeline(job(request(decision).build(), "libx264")));
 
     assertThat(pipe.copyCommand()).doesNotContain("0:a:0");
-    assertThat(pipe.encodeCommand()).doesNotContain("0:a:0", "-c:a", "-af");
-    assertThat(videoFilter(pipe.encodeCommand())).startsWith("trim=start=0,");
-  }
-
-  @ParameterizedTest(name = "{0}")
-  @MethodSource("dynamicRangesThatKeepOneFfmpeg")
-  @DisplayName(
-      "Should build the command of a source without Dolby Vision when the encode's source needs no"
-          + " moved RPU")
-  void shouldBuildTheCommandOfASourceWithoutDolbyVisionWhenTheEncodesSourceNeedsNoMovedRpu(
-      String description, VideoDynamicRange source) {
-    var withoutDolbyVision =
-        new VideoDynamicRange(
-            source.compatibleBase(),
-            source.hdr10Plus(),
-            new VideoDynamicRange.DolbyVision.Absent());
-    var request = request(encoding(hevcEncode().sourceDynamicRange(source))).build();
-    var requestWithoutDolbyVision =
-        request(encoding(hevcEncode().sourceDynamicRange(withoutDolbyVision))).build();
-
-    var pipeline = builder.buildPipeline(job(request, "libx265"));
-
-    assertThat(pipeline)
-        .isEqualTo(new FfmpegPipeline.SingleProcess(command(requestWithoutDolbyVision, "libx265")));
-  }
-
-  private static Stream<Arguments> dynamicRangesThatKeepOneFfmpeg() {
-    return Stream.of(
-        Arguments.of(
-            "profile 5, every RPU after its picture",
-            profile5(DolbyVisionRpuPlacement.AFTER_OWN_PICTURE)),
-        Arguments.of(
-            "profile 8.1, RPU starts the sample",
-            new VideoDynamicRange(
-                CompatibleBase.PQ,
-                Presence.ABSENT,
-                dolbyVisionPresent(DolbyVisionRpuPlacement.STARTS_SAMPLE))),
-        Arguments.of(
-            "profile 8.4, RPU starts the sample",
-            new VideoDynamicRange(
-                CompatibleBase.HLG,
-                Presence.ABSENT,
-                dolbyVisionPresent(DolbyVisionRpuPlacement.STARTS_SAMPLE))),
-        Arguments.of(
-            "profile 9, RPU starts the sample",
-            new VideoDynamicRange(
-                CompatibleBase.SDR,
-                Presence.ABSENT,
-                dolbyVisionPresent(DolbyVisionRpuPlacement.STARTS_SAMPLE))));
-  }
-
-  @ParameterizedTest(name = "{0}")
-  @MethodSource("sourceCodecFamiliesOtherThanHevc")
-  @DisplayName(
-      "Should build the command of a source without Dolby Vision when the encode's profile 5 source"
-          + " whose RPUs start their samples is not HEVC")
-  void
-      shouldBuildTheCommandOfASourceWithoutDolbyVisionWhenTheEncodesProfile5SourceWhoseRpusStartTheirSamplesIsNotHevc(
-          Optional<CodecFamily> sourceCodecFamily) {
-    var source = profile5(DolbyVisionRpuPlacement.STARTS_SAMPLE);
-    var withoutDolbyVision =
-        new VideoDynamicRange(
-            source.compatibleBase(),
-            source.hdr10Plus(),
-            new VideoDynamicRange.DolbyVision.Absent());
-    var encode =
-        profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE).sourceCodecFamily(sourceCodecFamily);
-    var request = request(encoding(encode)).build();
-    var requestWithoutDolbyVision =
-        request(encoding(encode.sourceDynamicRange(withoutDolbyVision))).build();
-
-    var pipeline = builder.buildPipeline(job(request, "libx264"));
-
-    assertThat(pipeline)
-        .isEqualTo(new FfmpegPipeline.SingleProcess(command(requestWithoutDolbyVision, "libx264")));
-  }
-
-  private static Stream<Optional<CodecFamily>> sourceCodecFamiliesOtherThanHevc() {
-    return Stream.of(Optional.empty(), Optional.of(CodecFamily.H264), Optional.of(CodecFamily.AV1));
+    assertThat(pipe.encodeCommand()).doesNotContain("0:a:0", "-c:a");
   }
 
   @ParameterizedTest(name = "{0}")
@@ -1892,8 +1850,15 @@ class FfmpegCommandBuilderTest {
 
     var pipe = rpuMovingPipe(builder.buildPipeline(job(request(decision).build(), "libx264")));
 
-    assertThat(pipe.copyCommand()).containsSequence("-c:a", "copy");
-    assertThat(pipe.encodeCommand()).containsSequence("-c:a", "copy");
+    assertThat(pipe.copyCommand())
+        .containsSequence("-map", "0:a:0")
+        .containsSequence("-c:a", "copy");
+    assertThat(pipe.encodeCommand())
+        .containsSequence("-map", "0:a:0")
+        .containsSequence("-c:a", "copy");
+    assertThat(pipe.encodeCommand().contains("aac_adtstoasc"))
+        .as("only a copy of AAC passes through aac_adtstoasc")
+        .isEqualTo("aac".equals(audioCodec));
   }
 
   @ParameterizedTest(name = "{0} as {1}")
