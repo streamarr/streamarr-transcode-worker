@@ -459,6 +459,19 @@ class FfprobeExecutorAv1MetadataTest {
 
     @Test
     @DisplayName(
+        "Should report Dolby Vision absent when a T.35 OBU differs from an RPU's identifier only"
+            + " in its last byte")
+    void shouldReportDolbyVisionAbsentWhenAT35ObuDiffersFromAnRpusIdentifierOnlyInItsLastByte() {
+      var video =
+          probed(
+              AV1C,
+              temporalUnit(metadata(4, "b5 00 3b 00 00 08 01 " + profile100Emdf().build().hex())));
+
+      assertThat(video.getDynamicRange().hasDolbyVisionAbsent()).isTrue();
+    }
+
+    @Test
+    @DisplayName(
         "Should report Dolby Vision absent when the walk delimits every OBU and finds none")
     void shouldReportDolbyVisionAbsentWhenTheWalkDelimitsEveryObuAndFindsNone() {
       var video = probed(AV1C, temporalUnit(OTHER_T35), temporalUnit());
