@@ -19,6 +19,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.DisplayName;
@@ -27,6 +28,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 @Tag("UnitTest")
+@DisplayName("Process Builder Launcher Tests")
 class ProcessBuilderLauncherTest {
 
   private static final Duration OUTCOME_LIMIT = Duration.ofSeconds(10);
@@ -128,34 +130,21 @@ class ProcessBuilderLauncherTest {
   @DisplayName("Should refuse to start the attempt when the process cannot be launched")
   void shouldRefuseToStartTheAttemptWhenTheProcessCannotBeLaunched() {
     var producer =
-        Producer.builder()
-            .launcher(launcher)
+        producerRunning("unused", "unused")
             .pipeline(
                 new FfmpegPipeline.SingleProcess(
-                    List.of(tempDir.resolve("missing-ffmpeg").toString())))
-            .jobAttemptId(UUID.randomUUID())
-            .periodSeconds(6)
-            .startSequenceNumber(0)
-            .gracePeriod(Duration.ofSeconds(5))
-            .stallTimeout(Duration.ofMinutes(1))
-            .encodedFrameRate(Optional.<OutputFrameRate>empty())
-            .videoDecision(
-                new VideoDecision.Copy(0, RecordingFixtures.ENCODED_RECORDING_CODEC_STRING))
-            .memoryBudget(SegmentMemoryBudget.forSlots(1))
-            .sink(sink)
-            .clock(MonotonicClock.system());
+                    List.of(tempDir.resolve("missing-ffmpeg").toString())));
 
     assertThatThrownBy(producer::start)
         .isInstanceOf(TranscodeException.class)
         .hasCauseInstanceOf(IOException.class);
   }
 
-  // A producer whose FFmpeg is this bash script, with $0 bound to the argument.
   @Test
   @DisplayName(
-      "Should end both FFmpegs when the encoding FFmpeg ignores termination while the copy waits"
-          + " for it to read")
-  void shouldEndBothFfmpegsWhenTheEncodingFfmpegIgnoresTerminationWhileTheCopyWaitsForItToRead()
+      "Should end both FFmpegs when they ignore termination while the copy waits for the encoding"
+          + " FFmpeg to read")
+  void shouldEndBothFfmpegsWhenTheyIgnoreTerminationWhileTheCopyWaitsForTheEncodingFfmpegToRead()
       throws IOException {
     var initializationSegment = tempDir.resolve("init.mp4");
     var fragment = tempDir.resolve("fragment.m4s");
@@ -165,7 +154,7 @@ class ProcessBuilderLauncherTest {
         HevcCopies.fragmentBuilder()
             .video(0, HevcCopies.sample(HevcCopies.slice(0), new byte[64 * 1024]))
             .build());
-    var endlessCopy = "cat \"$0\"; while :; do cat \"$1\"; done";
+    var endlessCopy = "trap '' TERM; cat \"$0\"; while :; do cat \"$1\"; done";
     // The header and the record of the fragment's one sample, which every repeat repeats.
     var framecrc =
         CopiedVideoTiming.framecrcOf(
@@ -174,13 +163,16 @@ class ProcessBuilderLauncherTest {
             .toList();
     var timingPastWhatThePipeHolds =
         framecrc.getFirst() + "\n" + (framecrc.getLast() + "\n").repeat(64);
+    var launched = new CopyOnWriteArrayList<Process>();
     ProcessLauncher copyWritingTiming =
         (command, jobAttemptId) -> {
           if (command.contains(endlessCopy)) {
             CopiedVideoTiming.writeTo(command, timingPastWhatThePipeHolds);
           }
 
-          return launcher.launch(command, jobAttemptId);
+          var process = launcher.launch(command, jobAttemptId);
+          launched.add(process);
+          return process;
         };
     var producer =
         producerRunning("unused", "unused")
@@ -203,8 +195,12 @@ class ProcessBuilderLauncherTest {
         .asInstanceOf(InstanceOfAssertFactories.type(Failed.class))
         .extracting(Failed::reason)
         .isEqualTo(ProducerFailure.ENCODER_STALLED);
+    assertThat(launched).hasSize(2);
+    assertThat(launched.getFirst().isAlive()).as("the copying FFmpeg is alive").isFalse();
+    assertThat(launched.getLast().isAlive()).as("the encoding FFmpeg is alive").isFalse();
   }
 
+  // A producer whose FFmpeg is this bash script, with $0 bound to the argument.
   private Producer.ProducerBuilder producerRunning(String script, String argument) {
     return Producer.builder()
         .launcher(launcher)
