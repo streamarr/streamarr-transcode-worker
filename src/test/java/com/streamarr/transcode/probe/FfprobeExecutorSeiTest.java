@@ -23,6 +23,7 @@ import com.streamarr.transcode.probe.RecordedFfprobe.Answers;
 import java.io.ByteArrayOutputStream;
 import java.util.Arrays;
 import java.util.HexFormat;
+import lombok.Builder;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
@@ -116,7 +117,7 @@ class FfprobeExecutorSeiTest {
     @DisplayName("Should leave HDR10+ unspecified when an SEI NAL unit lacks its trailing bits")
     void shouldLeaveHdr10PlusUnspecifiedWhenAnSeiNalUnitLacksItsTrailingBits(
         Coding coding, String messages) {
-      var video = coding.probed(coding.sample((coding.seiHeader + " " + messages).trim()));
+      var video = coding.probed(coding.sample((coding.units.seiHeader() + " " + messages).trim()));
 
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
       assertThat(video.getMasteringDisplayOmitted()).isTrue();
@@ -129,7 +130,7 @@ class FfprobeExecutorSeiTest {
         "Should report HDR10+ present when an SEI NAL unit that lacks its trailing bits holds it")
     void shouldReportHdr10PlusPresentWhenAnSeiNalUnitThatLacksItsTrailingBitsHoldsIt(
         Coding coding) {
-      var video = coding.probed(coding.sample(coding.seiHeader + " " + HDR10_PLUS));
+      var video = coding.probed(coding.sample(coding.units.seiHeader() + " " + HDR10_PLUS));
 
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_PRESENT);
     }
@@ -227,7 +228,8 @@ class FfprobeExecutorSeiTest {
       var video =
           Coding.HEVC.probed(
               lengthPrefixed(
-                  Coding.HEVC.slice, withEmulationPrevention("50 01 " + HDR10_PLUS + " 80")));
+                  Coding.HEVC.units.slice(),
+                  withEmulationPrevention("50 01 " + HDR10_PLUS + " 80")));
 
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_PRESENT);
     }
@@ -264,8 +266,8 @@ class FfprobeExecutorSeiTest {
       var video =
           annexBProbed(
               coding,
-              annexB(coding.parameterSet, coding.sei(LIGHT_LEVEL)),
-              annexB(coding.sei(SHORT_UNREGISTERED), coding.slice));
+              annexB(coding.units.parameterSet(), coding.sei(LIGHT_LEVEL)),
+              annexB(coding.sei(SHORT_UNREGISTERED), coding.units.slice()));
 
       assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(1000);
       assertThat(video.getContentLightLevelOmitted()).isFalse();
@@ -279,7 +281,9 @@ class FfprobeExecutorSeiTest {
     void shouldReportHdr10PlusPresentWhenAnnexBExtradataHoldsIt(Coding coding) {
       var video =
           annexBProbed(
-              coding, annexB(coding.parameterSet, coding.sei(HDR10_PLUS)), annexB(coding.slice));
+              coding,
+              annexB(coding.units.parameterSet(), coding.sei(HDR10_PLUS)),
+              annexB(coding.units.slice()));
 
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_PRESENT);
     }
@@ -291,7 +295,9 @@ class FfprobeExecutorSeiTest {
             + " undelimited")
     void shouldRuleNothingOutWhenDataAheadOfTheFirstStartCodeLeavesAnnexBExtradataUndelimited(
         Coding coding) {
-      var video = annexBProbed(coding, "02 " + annexB(coding.parameterSet), annexB(coding.slice));
+      var video =
+          annexBProbed(
+              coding, "02 " + annexB(coding.units.parameterSet()), annexB(coding.units.slice()));
 
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
       assertThat(video.getDynamicRange().hasDolbyVisionAbsent()).isFalse();
@@ -308,15 +314,15 @@ class FfprobeExecutorSeiTest {
     })
     @DisplayName("Should rule nothing out when FFmpeg cannot read an H.264 stream's avcC record")
     void shouldRuleNothingOutWhenFfmpegCannotReadAnH264StreamsAvccRecord(
-        String description, String configurationRecord, boolean isAnnexB) {
+        String description, String record, boolean isAnnexB) {
       // FFmpeg takes the record's NAL unit length size only once its parameter sets end inside it,
       // so it can delimit the packets otherwise than the walk does.
-      var sample = isAnnexB ? annexB(Coding.H264.slice) : lengthPrefixed(Coding.H264.slice);
+      var sample =
+          isAnnexB ? annexB(Coding.H264.units.slice()) : lengthPrefixed(Coding.H264.units.slice());
       var video =
           probe(
                   Answers.builder()
-                      .ffprobeOutput(
-                          output(Coding.H264.codecName() + "," + extradata(configurationRecord)))
+                      .ffprobeOutput(output(Coding.H264.codecName() + "," + extradata(record)))
                       .firstFrames(frames("", "", ""))
                       .firstPackets(packetsUpTo(3, sample))
                       .build())
@@ -356,7 +362,7 @@ class FfprobeExecutorSeiTest {
               Answers.builder()
                   .ffprobeOutput(output(coding.codecName() + "," + extradata(extradata)))
                   .firstFrames(frames("", "", ""))
-                  .firstPackets(packetsUpTo(3, annexB(coding.slice), sample))
+                  .firstPackets(packetsUpTo(3, annexB(coding.units.slice()), sample))
                   .build())
           .getStreams(0);
     }
@@ -455,8 +461,8 @@ class FfprobeExecutorSeiTest {
     @Test
     @DisplayName("Should leave HDR10+ unspecified when a NAL unit runs past the record's end")
     void shouldLeaveHdr10PlusUnspecifiedWhenANalUnitRunsPastTheRecordsEnd() {
-      var configurationRecord = recordWithSei(Coding.HEVC.sei(LIGHT_LEVEL));
-      var cut = configurationRecord.substring(0, configurationRecord.length() - " 80".length());
+      var record = recordWithSei(Coding.HEVC.sei(LIGHT_LEVEL));
+      var cut = record.substring(0, record.length() - " 80".length());
 
       var video = probed(cut, Coding.HEVC.sample());
 
@@ -495,17 +501,18 @@ class FfprobeExecutorSeiTest {
     /** An hvcC record whose NAL units take 4-byte lengths, with one array of one SEI NAL unit. */
     private static String recordWithSei(String sei) {
       var length = HexFormat.ofDelimiter(" ").parseHex(sei).length;
-      return Coding.HEVC.configurationRecord.substring(
-              0, Coding.HEVC.configurationRecord.length() - "00".length())
+      return Coding.HEVC
+              .units
+              .configurationRecord()
+              .substring(0, Coding.HEVC.units.configurationRecord().length() - "00".length())
           + "01 27 00 01 %02x %02x ".formatted(length >> 8, length & 0xFF)
           + sei;
     }
 
-    private static ProbeStreamInfo probed(String configurationRecord, String... samples) {
+    private static ProbeStreamInfo probed(String record, String... samples) {
       return probe(
               Answers.builder()
-                  .ffprobeOutput(
-                      output(Coding.HEVC.codecName() + "," + extradata(configurationRecord)))
+                  .ffprobeOutput(output(Coding.HEVC.codecName() + "," + extradata(record)))
                   .firstFrames(frames("", "", ""))
                   .firstPackets(packetsUpTo(3, Coding.HEVC.sample(), samples))
                   .build())
@@ -1022,61 +1029,53 @@ class FfprobeExecutorSeiTest {
 
   /**
    * A codec of NAL units with what its tests need: a configuration record whose NAL units take
-   * 4-byte lengths, the header of its SEI NAL unit, and a slice.
+   * 4-byte lengths, the header of its SEI NAL unit, a slice, and a parameter set.
    */
   enum Coding {
     H264(
-        "h264",
-        "01 64 00 28 ff e1 00 04 67 64 00 28 01 00 04 68 ee 3c 80",
-        "06",
-        "65 88 84 00 18",
-        "67 64 00 28 01"),
+        CodingUnits.builder()
+            .codecName("h264")
+            .configurationRecord("01 64 00 28 ff e1 00 04 67 64 00 28 01 00 04 68 ee 3c 80")
+            .seiHeader("06")
+            .slice("65 88 84 00 18")
+            .parameterSet("67 64 00 28 01")
+            .build()),
     HEVC(
-        "hevc",
-        "01 01 60 00 00 00 90 00 00 00 00 00 5d f0 00 fc fd f8 f8 00 00 0f 00",
-        "4e 01",
-        "26 01 af 06 b8",
-        "40 01 0c 01 ff ff");
+        CodingUnits.builder()
+            .codecName("hevc")
+            .configurationRecord(
+                "01 01 60 00 00 00 90 00 00 00 00 00 5d f0 00 fc fd f8 f8 00 00 0f 00")
+            .seiHeader("4e 01")
+            .slice("26 01 af 06 b8")
+            .parameterSet("40 01 0c 01 ff ff")
+            .build());
 
-    private final String name;
-    private final String configurationRecord;
-    private final String seiHeader;
-    private final String slice;
-    private final String parameterSet;
+    private final CodingUnits units;
 
-    Coding(
-        String name,
-        String configurationRecord,
-        String seiHeader,
-        String slice,
-        String parameterSet) {
-      this.name = name;
-      this.configurationRecord = configurationRecord;
-      this.seiHeader = seiHeader;
-      this.slice = slice;
-      this.parameterSet = parameterSet;
+    Coding(CodingUnits units) {
+      this.units = units;
     }
 
     String codecName() {
-      return "\"codec_name\":\"%s\"".formatted(name);
+      return "\"codec_name\":\"%s\"".formatted(units.codecName());
     }
 
     /** An SEI NAL unit of the messages, then the RBSP trailing bits, with emulation prevention. */
     String sei(String... messages) {
-      return withEmulationPrevention(seiHeader + " " + String.join(" ", messages) + " 80");
+      return withEmulationPrevention(units.seiHeader() + " " + String.join(" ", messages) + " 80");
     }
 
     /** A length-prefixed sample of the NAL units, then a slice. */
-    String sample(String... units) {
-      var all = new String[units.length + 1];
-      System.arraycopy(units, 0, all, 0, units.length);
-      all[units.length] = slice;
+    String sample(String... nalUnits) {
+      var all = new String[nalUnits.length + 1];
+      System.arraycopy(nalUnits, 0, all, 0, nalUnits.length);
+      all[nalUnits.length] = units.slice();
       return lengthPrefixed(all);
     }
 
     Answers.AnswersBuilder answers() {
       return Answers.builder()
-          .ffprobeOutput(output(codecName() + "," + extradata(configurationRecord)));
+          .ffprobeOutput(output(codecName() + "," + extradata(units.configurationRecord())));
     }
 
     /**
@@ -1092,6 +1091,14 @@ class FfprobeExecutorSeiTest {
           .getStreams(0);
     }
   }
+
+  @Builder
+  private record CodingUnits(
+      String codecName,
+      String configurationRecord,
+      String seiHeader,
+      String slice,
+      String parameterSet) {}
 
   /** The bytes with an emulation prevention byte after each two zero bytes ahead of 0 to 3. */
   private static String withEmulationPrevention(String hex) {
