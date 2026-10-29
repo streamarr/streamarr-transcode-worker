@@ -13,7 +13,6 @@ import static com.streamarr.transcode.engine.IsoBoxes.concat;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
-import static org.awaitility.Awaitility.await;
 
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.engine.AttemptOutcome.Failed;
@@ -29,7 +28,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.assertj.core.api.InstanceOfAssertFactories;
-import org.awaitility.core.ConditionFactory;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -132,7 +130,7 @@ class ProducerRpuMovingPipeTest {
             .build();
     var encode = encodingFfmpeg().pauseAfter(0).build();
     var producer = producerOf(copy, encode).start();
-    awaiting().until(copy::hasReachedPause);
+    assertThat(copy.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
 
     producer.stop();
 
@@ -449,9 +447,5 @@ class ProducerRpuMovingPipeTest {
         .succeedsWithin(OUTCOME_LIMIT)
         .asInstanceOf(InstanceOfAssertFactories.type(Failed.class))
         .actual();
-  }
-
-  private static ConditionFactory awaiting() {
-    return await().atMost(OUTCOME_LIMIT).pollInterval(Duration.ofMillis(5));
   }
 }

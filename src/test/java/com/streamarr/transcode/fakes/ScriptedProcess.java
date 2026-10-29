@@ -67,12 +67,13 @@ public final class ScriptedProcess extends Process {
   private final byte[] stderr;
   private final ByteArrayOutputStream stdin = new ByteArrayOutputStream();
   private final CompletableFuture<Integer> exit = new CompletableFuture<>();
+  private final CompletableFuture<Void> pauseReached = new CompletableFuture<>();
   private final InputStream stdout = new ScriptedOutput();
 
   private int position;
   private int endOffset;
   private boolean resumed;
-  private boolean pauseReached;
+  private boolean pauseReachedFlag;
   private boolean endOfOutputRead;
   private boolean terminated;
   private boolean destroyedForcibly;
@@ -136,7 +137,12 @@ public final class ScriptedProcess extends Process {
   }
 
   public synchronized boolean hasReachedPause() {
-    return pauseReached;
+    return pauseReachedFlag;
+  }
+
+  /** Completes once the reader reaches the pause, where it waits before any other call proceeds. */
+  public CompletableFuture<Void> pauseReached() {
+    return pauseReached.copy();
   }
 
   public synchronized boolean hasReadToEndOfOutput() {
@@ -351,7 +357,8 @@ public final class ScriptedProcess extends Process {
 
   private void awaitResumeAtPause() throws InterruptedIOException {
     while (isPausedAt(position)) {
-      pauseReached = true;
+      pauseReachedFlag = true;
+      pauseReached.complete(null);
       try {
         wait();
       } catch (InterruptedException _) {
