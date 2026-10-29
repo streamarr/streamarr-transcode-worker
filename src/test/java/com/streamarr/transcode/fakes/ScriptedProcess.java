@@ -1,6 +1,5 @@
 package com.streamarr.transcode.fakes;
 
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -14,6 +13,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Stream;
 import lombok.Builder;
 import lombok.NonNull;
@@ -24,9 +24,16 @@ import lombok.NonNull;
  * <p>The output can pause at one offset until the test or a {@code q} on standard input resumes it,
  * and can fail at another, with an I/O error or with the unchecked exception the test supplies. The
  * process exits at the end of its output, at launch, on {@code q}, or when the test says so. A
- * destroy, like SIGTERM, ends the output where it stands and exits with 143 unless the process
- * ignores termination, as a hung FFmpeg does. A forcible destroy, like SIGKILL, ends the output and
+ * termination, like SIGTERM, ends the output where it stands and exits with 143 unless the process
+ * ignores termination, as a hung FFmpeg does. A forcible end, like SIGKILL, ends the output and
  * exits with 137, or lingers until the test says it exits.
+ *
+ * <p>Like the JDK's process on Unix, {@link #destroy()} and {@link #destroyForcibly()} also close
+ * the process's standard input, output and error: a read of either output then fails with "Stream
+ * closed", at once or once a read that waits for more output ends, and the close of standard input
+ * waits for a write in progress. Its {@link #toHandle() handle} only signals the process. Standard
+ * error stays open until the process exits, and standard input holds at most the capacity the test
+ * gives it, as a pipe to a process that reads nothing does.
  */
 public final class ScriptedProcess extends Process {
 
@@ -64,13 +71,21 @@ public final class ScriptedProcess extends Process {
   private final boolean resumesOnQuit;
   private final boolean ignoresTermination;
   private final boolean lingersAfterKill;
+  private final boolean readsMediaFromStdin;
+  private final OptionalInt stdinCapacity;
   private final byte[] stderr;
   private final ByteArrayOutputStream stdin = new ByteArrayOutputStream();
   private final CompletableFuture<Integer> exit = new CompletableFuture<>();
   private final CompletableFuture<Void> pauseReached = new CompletableFuture<>();
+  private final CompletableFuture<Void> inputBlocked = new CompletableFuture<>();
+  private final CompletableFuture<Void> exitAwaited = new CompletableFuture<>();
   private final InputStream stdout = new ScriptedOutput();
+  private final InputStream errorOutput = new ScriptedErrorOutput();
+  private final ScriptedInput stdinStream = new ScriptedInput();
 
   private int position;
+  private int errorPosition;
+  private boolean streamsClosed;
   private int endOffset;
   private boolean resumed;
   private boolean pauseReachedFlag;
@@ -91,6 +106,8 @@ public final class ScriptedProcess extends Process {
       boolean resumesOnQuit,
       boolean ignoresTermination,
       boolean lingersAfterKill,
+      boolean readsMediaFromStdin,
+      Integer stdinCapacity,
       String stderr) {
     this.output = output.clone();
     this.exitCode = exitCode;
@@ -101,11 +118,19 @@ public final class ScriptedProcess extends Process {
     this.resumesOnQuit = resumesOnQuit;
     this.ignoresTermination = ignoresTermination;
     this.lingersAfterKill = lingersAfterKill;
+    this.readsMediaFromStdin = readsMediaFromStdin;
+    this.stdinCapacity = optionalOffset(stdinCapacity);
     this.stderr = Objects.requireNonNullElse(stderr, "").getBytes(StandardCharsets.UTF_8);
     this.endOffset = this.output.length;
     if (this.exitTiming == ExitTiming.AT_LAUNCH) {
       exit.complete(exitCode);
     }
+
+    exit.whenComplete((_, _) -> wakeWaiters());
+  }
+
+  private synchronized void wakeWaiters() {
+    notifyAll();
   }
 
   private static OptionalInt optionalOffset(Integer offset) {
@@ -172,6 +197,16 @@ public final class ScriptedProcess extends Process {
     }
   }
 
+  /** Completes once a write to standard input waits because the input holds its capacity. */
+  public CompletableFuture<Void> inputBlocked() {
+    return inputBlocked.copy();
+  }
+
+  /** Completes once something waits for the process to exit without a bound. */
+  public CompletableFuture<Void> exitAwaited() {
+    return exitAwaited.copy();
+  }
+
   /** Whether something closed standard input, as the end of FFmpeg's piped media input. */
   public synchronized boolean hasInputEnded() {
     return inputEnded;
@@ -179,7 +214,7 @@ public final class ScriptedProcess extends Process {
 
   @Override
   public OutputStream getOutputStream() {
-    return new ScriptedInput();
+    return stdinStream;
   }
 
   @Override
@@ -189,11 +224,12 @@ public final class ScriptedProcess extends Process {
 
   @Override
   public InputStream getErrorStream() {
-    return new ByteArrayInputStream(stderr);
+    return errorOutput;
   }
 
   @Override
   public int waitFor() throws InterruptedException {
+    exitAwaited.complete(null);
     try {
       return exit.get();
     } catch (ExecutionException e) {
@@ -238,7 +274,19 @@ public final class ScriptedProcess extends Process {
   }
 
   @Override
-  public synchronized void destroy() {
+  public void destroy() {
+    terminate();
+    closeStreams();
+  }
+
+  @Override
+  public Process destroyForcibly() {
+    kill();
+    closeStreams();
+    return this;
+  }
+
+  private synchronized void terminate() {
     terminated = true;
     if (ignoresTermination) {
       return;
@@ -248,15 +296,21 @@ public final class ScriptedProcess extends Process {
     exit.complete(TERMINATED_EXIT_CODE);
   }
 
-  @Override
-  public synchronized Process destroyForcibly() {
+  private synchronized void kill() {
     destroyedForcibly = true;
     endOutput();
     if (!lingersAfterKill) {
       exit.complete(FORCIBLY_DESTROYED_EXIT_CODE);
     }
+  }
 
-    return this;
+  // Standard input closes first, and its close waits for a write in progress, as the JDK's does.
+  private void closeStreams() {
+    stdinStream.close();
+    synchronized (this) {
+      streamsClosed = true;
+      notifyAll();
+    }
   }
 
   /** A handle whose termination and destruction act on this process as its own methods do. */
@@ -304,13 +358,13 @@ public final class ScriptedProcess extends Process {
 
     @Override
     public boolean destroy() {
-      ScriptedProcess.this.destroy();
+      terminate();
       return true;
     }
 
     @Override
     public boolean destroyForcibly() {
-      ScriptedProcess.this.destroyForcibly();
+      kill();
       return true;
     }
 
@@ -332,6 +386,10 @@ public final class ScriptedProcess extends Process {
 
   private synchronized int read(byte[] buffer, int offset, int length) throws IOException {
     awaitResumeAtPause();
+    if (streamsClosed) {
+      throw streamClosed();
+    }
+
     if (readFailureOffset.equals(OptionalInt.of(position))) {
       throw readFailure();
     }
@@ -355,8 +413,13 @@ public final class ScriptedProcess extends Process {
     return new IOException("scripted read failure at byte " + position);
   }
 
+  private static IOException streamClosed() {
+    return new IOException("Stream closed");
+  }
+
+  // A read that waits at the pause of a process whose streams were closed ends once it exits.
   private void awaitResumeAtPause() throws InterruptedIOException {
-    while (isPausedAt(position)) {
+    while (isPausedAt(position) && !(streamsClosed && exit.isDone())) {
       pauseReachedFlag = true;
       pauseReached.complete(null);
       try {
@@ -393,6 +456,35 @@ public final class ScriptedProcess extends Process {
     }
   }
 
+  private synchronized int readErrorOutput(byte[] buffer, int offset, int length)
+      throws IOException {
+    while (!streamsClosed && errorPosition >= stderr.length && !exit.isDone()) {
+      awaitChange("interrupted while reading the scripted error output");
+    }
+
+    if (streamsClosed) {
+      throw streamClosed();
+    }
+
+    if (errorPosition >= stderr.length) {
+      return -1;
+    }
+
+    var readable = Math.min(length, stderr.length - errorPosition);
+    System.arraycopy(stderr, errorPosition, buffer, offset, readable);
+    errorPosition += readable;
+    return readable;
+  }
+
+  private void awaitChange(String interruption) throws InterruptedIOException {
+    try {
+      wait();
+    } catch (InterruptedException _) {
+      Thread.currentThread().interrupt();
+      throw new InterruptedIOException(interruption);
+    }
+  }
+
   private synchronized void endInput() {
     inputEnded = true;
     if (exitTiming != ExitTiming.AT_END_OF_INPUT) {
@@ -425,19 +517,44 @@ public final class ScriptedProcess extends Process {
     }
   }
 
+  private final class ScriptedErrorOutput extends InputStream {
+
+    @Override
+    public int read() throws IOException {
+      var single = new byte[1];
+      var read = read(single, 0, 1);
+      return read < 0 ? -1 : single[0] & 0xFF;
+    }
+
+    @Override
+    public int read(byte[] buffer, int offset, int length) throws IOException {
+      if (length == 0) {
+        return 0;
+      }
+
+      return readErrorOutput(buffer, offset, length);
+    }
+  }
+
+  // The lock stands for the one the JDK's stream holds through a write, which its close waits for.
   private final class ScriptedInput extends OutputStream {
+
+    private final ReentrantLock writing = new ReentrantLock();
+    private boolean closed;
 
     @Override
     public void write(int value) throws IOException {
-      if (exit.isDone()) {
-        throw new IOException("Broken pipe");
+      writing.lock();
+      try {
+        awaitRoom();
+        synchronized (stdin) {
+          stdin.write(value);
+        }
+      } finally {
+        writing.unlock();
       }
 
-      synchronized (stdin) {
-        stdin.write(value);
-      }
-
-      if (value != 'q') {
+      if (value != 'q' || readsMediaFromStdin) {
         return;
       }
 
@@ -450,8 +567,40 @@ public final class ScriptedProcess extends Process {
       }
     }
 
+    private void awaitRoom() throws IOException {
+      synchronized (ScriptedProcess.this) {
+        while (!closed && !exit.isDone() && isFull()) {
+          inputBlocked.complete(null);
+          awaitChange("interrupted while writing to the scripted standard input");
+        }
+
+        if (closed) {
+          throw streamClosed();
+        }
+
+        if (exit.isDone()) {
+          throw new IOException("Broken pipe");
+        }
+      }
+    }
+
+    private boolean isFull() {
+      synchronized (stdin) {
+        return stdinCapacity.isPresent() && stdin.size() >= stdinCapacity.getAsInt();
+      }
+    }
+
     @Override
     public void close() {
+      writing.lock();
+      try {
+        synchronized (ScriptedProcess.this) {
+          closed = true;
+        }
+      } finally {
+        writing.unlock();
+      }
+
       endInput();
     }
   }
