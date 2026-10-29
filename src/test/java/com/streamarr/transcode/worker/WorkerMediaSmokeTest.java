@@ -93,6 +93,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -3429,25 +3430,26 @@ class WorkerMediaSmokeTest {
   }
 
   // Closing kills the process and waits for it to end, because buildFixtureOnce deletes a failed
-  // build's file next. A process that outlasts the guard fails the call, as a suppressed exception
-  // when the call has already failed.
+  // build's file next. join() does not return on an interrupt, which stays set for the caller. A
+  // process that outlasts the guard fails the call, as a suppressed exception when the call has
+  // already failed.
   private record OwnedProcess(Process process) implements AutoCloseable {
     private static final Duration EXIT_AFTER_KILL_GUARD = Duration.ofMinutes(1);
 
     @Override
     public void close() {
-      process.destroyForcibly();
       try {
-        if (process.waitFor(EXIT_AFTER_KILL_GUARD)) {
-          return;
-        }
-      } catch (InterruptedException _) {
-        Thread.currentThread().interrupt();
+        process
+            .destroyForcibly()
+            .onExit()
+            .orTimeout(EXIT_AFTER_KILL_GUARD.toMillis(), TimeUnit.MILLISECONDS)
+            .join();
+      } catch (CompletionException timeout) {
+        throw new AssertionError(
+            "PID %d was still running %s after it was killed"
+                .formatted(process.pid(), EXIT_AFTER_KILL_GUARD),
+            timeout);
       }
-
-      throw new AssertionError(
-          "PID %d was not seen to end within %s of being killed"
-              .formatted(process.pid(), EXIT_AFTER_KILL_GUARD));
     }
   }
 
