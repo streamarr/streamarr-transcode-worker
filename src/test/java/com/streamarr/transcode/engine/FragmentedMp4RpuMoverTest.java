@@ -730,9 +730,10 @@ class FragmentedMp4RpuMoverTest {
             .video(0, sample(slice(0)))
             .extraVideoTrafBox(fullBox("sdtp", 0, new byte[1]))
             .build();
+    var copy = concat(initializationSegment(), withSampleDependencies);
 
     assertThatExceptionOfType(FragmentedMp4Exception.class)
-        .isThrownBy(() -> move(concat(initializationSegment(), withSampleDependencies)))
+        .isThrownBy(() -> move(copy))
         .extracting(FragmentedMp4Exception::getReason)
         .isEqualTo(Reason.UNEXPECTED_BOX);
   }

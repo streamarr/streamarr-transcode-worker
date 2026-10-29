@@ -247,9 +247,9 @@ class ProducerRpuMovingPipeTest {
 
           throw new IOException("Cannot run program encode-ffmpeg");
         };
+    var producer = producer(launcher);
 
-    assertThatExceptionOfType(TranscodeException.class)
-        .isThrownBy(() -> producer(launcher).start());
+    assertThatExceptionOfType(TranscodeException.class).isThrownBy(producer::start);
     assertThat(copy.wasDestroyedForcibly()).isTrue();
   }
 
