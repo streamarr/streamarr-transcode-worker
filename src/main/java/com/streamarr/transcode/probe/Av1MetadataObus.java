@@ -80,7 +80,7 @@ final class Av1MetadataObus implements MetadataWalk {
       walk.readAll = false;
     }
 
-    Extradata.of(stream).ifPresent(extradata -> walk.addExtradata(extradata));
+    Extradata.of(stream).ifPresent(walk::addExtradata);
     FirstPackets.of(stream)
         .ifPresentOrElse(
             packets -> packets.forEach(packet -> walk.add(packet, 0, packet.length)),

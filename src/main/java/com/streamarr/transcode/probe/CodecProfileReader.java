@@ -71,9 +71,9 @@ final class CodecProfileReader {
   private static VideoCodecProfile avcProfile(int profileIdc, int constraints) {
     return switch (profileIdc) {
       case AVC_BASELINE ->
-          (constraints & AVC_CONSTRAINT_SET1) != 0
-              ? VideoCodecProfile.VIDEO_CODEC_PROFILE_H264_CONSTRAINED_BASELINE
-              : VideoCodecProfile.VIDEO_CODEC_PROFILE_H264_BASELINE;
+          (constraints & AVC_CONSTRAINT_SET1) == 0
+              ? VideoCodecProfile.VIDEO_CODEC_PROFILE_H264_BASELINE
+              : VideoCodecProfile.VIDEO_CODEC_PROFILE_H264_CONSTRAINED_BASELINE;
       case AVC_MAIN -> VideoCodecProfile.VIDEO_CODEC_PROFILE_H264_MAIN;
       case AVC_EXTENDED -> VideoCodecProfile.VIDEO_CODEC_PROFILE_H264_EXTENDED;
       case 100 -> VideoCodecProfile.VIDEO_CODEC_PROFILE_H264_HIGH;
