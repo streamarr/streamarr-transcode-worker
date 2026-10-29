@@ -262,7 +262,7 @@ final class DecoderConfiguration {
     var index = 0;
     while (index + 2 < stream.length) {
       if (stream[index] == 0 && stream[index + 1] == 0 && stream[index + 2] == 1) {
-        addUnit(units, stream, start, index);
+        unitBetween(stream, start, index).ifPresent(units::add);
         start = index + 3;
         index = start;
         continue;
@@ -271,13 +271,15 @@ final class DecoderConfiguration {
       index++;
     }
 
-    addUnit(units, stream, start, stream.length);
+    unitBetween(stream, start, stream.length).ifPresent(units::add);
     return units;
   }
 
-  private static void addUnit(List<byte[]> units, byte[] stream, int start, int end) {
+  // The NAL unit that starts at start, without the zero bytes that end it; empty when no start code
+  // came before or only zero bytes follow it.
+  private static Optional<byte[]> unitBetween(byte[] stream, int start, int end) {
     if (start < 0) {
-      return;
+      return Optional.empty();
     }
 
     var last = end;
@@ -285,9 +287,11 @@ final class DecoderConfiguration {
       last--;
     }
 
-    if (last > start) {
-      units.add(withoutEmulationPrevention(stream, start, last));
+    if (last == start) {
+      return Optional.empty();
     }
+
+    return Optional.of(withoutEmulationPrevention(stream, start, last));
   }
 
   static byte[] withoutEmulationPrevention(byte[] stream, int start, int end) {

@@ -234,8 +234,8 @@ final class HdrStaticMetadata {
     var green = coordinates(side, "green");
     var blue = coordinates(side, "blue");
     var whitePoint = coordinates(side, "white_point");
-    var maxLuminance = units(side, "max_luminance", LUMINANCE_UNITS, MAXIMUM_LUMINANCE);
-    var minLuminance = units(side, "min_luminance", LUMINANCE_UNITS, MAXIMUM_LUMINANCE);
+    var maxLuminance = units(side, "max_luminance", FractionScale.LUMINANCE);
+    var minLuminance = units(side, "min_luminance", FractionScale.LUMINANCE);
     if (red.isEmpty()
         || green.isEmpty()
         || blue.isEmpty()
@@ -257,8 +257,8 @@ final class HdrStaticMetadata {
   }
 
   private static Optional<ChromaticityCoordinates> coordinates(JsonNode side, String name) {
-    var x = units(side, name + "_x", COORDINATE_UNITS, COORDINATE_UNITS);
-    var y = units(side, name + "_y", COORDINATE_UNITS, COORDINATE_UNITS);
+    var x = units(side, name + "_x", FractionScale.COORDINATE);
+    var y = units(side, name + "_y", FractionScale.COORDINATE);
     if (x.isEmpty() || y.isEmpty()) {
       return Optional.empty();
     }
@@ -273,9 +273,9 @@ final class HdrStaticMetadata {
   /**
    * The fraction that ffprobe prints, times the units in one whole, rounded to the nearest unit
    * with a half rounding up. Empty when the field is missing, is no fraction, or does not fit from
-   * 0 to {@code maximum}.
+   * 0 to the scale's maximum.
    */
-  private static OptionalLong units(JsonNode side, String name, long unitsPerWhole, long maximum) {
+  private static OptionalLong units(JsonNode side, String name, FractionScale scale) {
     var matcher = FRACTION.matcher(side.path(name).asString(""));
     if (!matcher.matches()) {
       return OptionalLong.empty();
@@ -287,9 +287,10 @@ final class HdrStaticMetadata {
     }
 
     var units =
-        new BigDecimal(new BigInteger(matcher.group(1)).multiply(BigInteger.valueOf(unitsPerWhole)))
+        new BigDecimal(
+                new BigInteger(matcher.group(1)).multiply(BigInteger.valueOf(scale.unitsPerWhole)))
             .divide(new BigDecimal(denominator), 0, RoundingMode.HALF_UP);
-    if (units.signum() < 0 || units.compareTo(BigDecimal.valueOf(maximum)) > 0) {
+    if (units.signum() < 0 || units.compareTo(BigDecimal.valueOf(scale.maximum)) > 0) {
       return OptionalLong.empty();
     }
 
@@ -307,5 +308,19 @@ final class HdrStaticMetadata {
     }
 
     return Optional.of((int) level);
+  }
+
+  /** The units in one whole of a fraction that ffprobe prints, and the most units it may give. */
+  private enum FractionScale {
+    LUMINANCE(LUMINANCE_UNITS, MAXIMUM_LUMINANCE),
+    COORDINATE(COORDINATE_UNITS, COORDINATE_UNITS);
+
+    private final long unitsPerWhole;
+    private final long maximum;
+
+    FractionScale(long unitsPerWhole, long maximum) {
+      this.unitsPerWhole = unitsPerWhole;
+      this.maximum = maximum;
+    }
   }
 }
