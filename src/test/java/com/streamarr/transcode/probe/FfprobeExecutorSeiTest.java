@@ -217,6 +217,16 @@ class FfprobeExecutorSeiTest {
 
     @ParameterizedTest(name = "{0}")
     @EnumSource(Coding.class)
+    @DisplayName("Should leave HDR10+ unspecified when a sample holds no NAL unit")
+    void shouldLeaveHdr10PlusUnspecifiedWhenASampleHoldsNoNalUnit(Coding coding) {
+      // FFmpeg drops the 1 to 3 bytes that can end a sample, so no decoder sees this one's bytes.
+      var video = coding.probed("01 02 03");
+
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Coding.class)
     @DisplayName("Should leave HDR10+ unspecified when the packet read fails")
     void shouldLeaveHdr10PlusUnspecifiedWhenThePacketReadFails(Coding coding) {
       var video = probe(coding.answers().firstFrames(frames("", "", "")).build()).getStreams(0);
@@ -317,6 +327,8 @@ class FfprobeExecutorSeiTest {
             + " undelimited")
     void shouldRuleNothingOutWhenDataAheadOfTheFirstStartCodeLeavesAnnexBExtradataUndelimited(
         Coding coding) {
+      // ADR 0036 delimits such extradata as Annex B does, and the Annex B byte stream (H.264 B.1.1,
+      // HEVC B.2.1) lets only zero bytes precede the first start code: the data is no byte stream.
       var video =
           annexBProbed(
               coding, "02 " + annexB(coding.units.parameterSet()), annexB(coding.units.slice()));
