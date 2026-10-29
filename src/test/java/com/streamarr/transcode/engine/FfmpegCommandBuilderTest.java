@@ -1624,13 +1624,25 @@ class FfmpegCommandBuilderTest {
             "unix:/tmp/sts1/v");
   }
 
-  @Test
+  @ParameterizedTest(name = "observed RPU {0}")
+  @EnumSource(Presence.class)
   @DisplayName(
       "Should move each RPU that starts a sample behind the previous picture when the probe did not"
           + " observe where a Dolby Vision profile 5 source places its RPUs")
   void
-      shouldMoveEachRpuThatStartsASampleBehindThePreviousPictureWhenTheProbeDidNotObserveWhereADolbyVisionProfile5SourcePlacesItsRpus() {
-    var request = request(encoding(profile5Encode(DolbyVisionRpuPlacement.UNSPECIFIED))).build();
+      shouldMoveEachRpuThatStartsASampleBehindThePreviousPictureWhenTheProbeDidNotObserveWhereADolbyVisionProfile5SourcePlacesItsRpus(
+          Presence observedRpu) {
+    var source =
+        new VideoDynamicRange(
+            CompatibleBase.NONE,
+            Presence.ABSENT,
+            new VideoDynamicRange.DolbyVision.Present(
+                Optional.empty(), observedRpu, DolbyVisionRpuPlacement.UNSPECIFIED));
+    var request =
+        request(
+                encoding(
+                    profile5Encode(DolbyVisionRpuPlacement.UNSPECIFIED).sourceDynamicRange(source)))
+            .build();
 
     assertThat(builder.buildPipeline(job(request, "libx264")))
         .isInstanceOf(FfmpegPipeline.RpuMovingPipe.class);
