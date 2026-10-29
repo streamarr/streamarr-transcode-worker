@@ -37,13 +37,11 @@ final class DolbyVisionRpuHeaderReader {
   /**
    * The header of an RPU without its rpu_nal_prefix, as an AV1 stream's EMDF container holds it;
    * empty as for {@link #read}.
+   *
+   * @throws TruncatedBitstreamException when the bytes end inside the header
    */
   static Optional<DolbyVisionRpuHeader> readWithoutPrefix(byte[] rpu) {
-    try {
-      return header(new BitReader(rpu));
-    } catch (TruncatedBitstreamException _) {
-      return Optional.empty();
-    }
+    return header(new BitReader(rpu));
   }
 
   private static Optional<DolbyVisionRpuHeader> header(BitReader reader) {
