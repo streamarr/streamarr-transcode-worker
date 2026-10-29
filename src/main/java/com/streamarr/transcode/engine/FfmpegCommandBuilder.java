@@ -259,10 +259,6 @@ public class FfmpegCommandBuilder {
     }
   }
 
-  // On a source whose format allows timestamp discontinuities, such as MPEG-TS, -start_at_zero
-  // measures from the earliest stream that FFmpeg does not discard, and FFmpeg discards every
-  // stream that no output maps. -discard none keeps media time zero at the container's start time
-  // whatever streams the attempt maps (ADR 0037).
   private void addInputArgs(List<String> cmd, TranscodeRequest request) {
     cmd.add(ffmpegPath);
     cmd.add("-y");
@@ -272,7 +268,7 @@ public class FfmpegCommandBuilder {
       cmd.addAll(List.of("-ss", seekArgument(seekPosition)));
     }
 
-    cmd.addAll(List.of("-discard", "none", "-i", request.sourcePath().toString()));
+    cmd.addAll(List.of("-i", request.sourcePath().toString()));
   }
 
   // A stream copy that carries the server's keyframe position seeks to that position: the decode

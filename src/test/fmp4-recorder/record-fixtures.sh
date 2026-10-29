@@ -77,9 +77,6 @@ COPY_VIDEO_ENCODE_AUDIO=("${COPY_VIDEO_PIPE[@]}" "${AAC[@]}")
 # The HLS recipe's copies take the same video arguments, so that both recipes hold the same packets.
 COPY_HLS=("${COPY_VIDEO_PIPE[@]}" -c:a copy)
 COMMON_HLS=(-map_metadata -1 -map_chapters -1 -copyts -avoid_negative_ts disabled -max_muxing_queue_size 128 -max_delay 5000000)
-# The pipe recipe keeps every stream of the source, so that media time zero stays at the start of its
-# earliest stream whatever streams a recording maps (ADR 0037). The HLS recipe passes no -discard.
-INPUT_PIPE=(-discard none)
 COMMON_PIPE=(-map_metadata -1 -map_chapters -1 -copyts -avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128 -max_interleave_delta 10000000)
 
 # Two recipes: HLS = the HLS muxer recipe that ADR 0037 replaces, PIPE = ADR 0037's pipe recipe.
@@ -123,14 +120,14 @@ fill_boundaries() {  # LIST ARGS...
 #   KIND pipe: ADR 0037's recipe to pipe:1, recorded as out/NAME.fmp4, its command line one argument per
 #              line in out/NAME.args and the media segment count it forces keyframes up to in out/NAME.count
 #   KIND hls:  the HLS muxer (fMP4 segments) into hls/NAME/; "hls-recipe" swaps in the HLS recipe's common
-#              flags (no -discard none, no -start_at_zero, -max_delay), "video" maps the video stream only.
+#              flags (no -start_at_zero, -max_delay), "video" maps the video stream only.
 #   start=N     the start sequence number: the first forced keyframe time, and the HLS muxer's -start_number.
 #   hls-start=N the HLS muxer's -start_number instead: the preroll's number when the recorded attempt seeks one period early.
 #   duration=D  reads only the source's first D seconds.
 #   skip=T      leaves the time T out of the forced keyframe times.
 run() {
   local kind=$1 name=$2; shift 2
-  local start=0 seek=() input=("${INPUT_PIPE[@]}") common=("${COMMON_PIPE[@]}") maps=(-map 0:0 -map 0:a:0)
+  local start=0 seek=() common=("${COMMON_PIPE[@]}") maps=(-map 0:0 -map 0:a:0)
   local duration=() seconds="" skip="" hls_start_number=""
   while [ "$1" != "--" ] && [ $# -gt 1 ]; do
     case "$1" in
@@ -139,7 +136,7 @@ run() {
       seek=*) seek=(-ss "${1#seek=}") ;;
       duration=*) seconds=${1#duration=}; duration=(-t "$seconds") ;;
       skip=*) skip=${1#skip=} ;;
-      hls-recipe) input=(); common=("${COMMON_HLS[@]}") ;;
+      hls-recipe) common=("${COMMON_HLS[@]}") ;;
       video) maps=(-map 0:0) ;;
       *) break ;;
     esac
@@ -150,7 +147,7 @@ run() {
   fill_boundaries "$(boundaries "$start" "$count" "$skip")" "$@"
   if [ "$kind" = pipe ]; then
     # -map -0:s: the worker excludes subtitle streams; these sources have none.
-    local command=("${FF[@]}" -y "${seek[@]}" "${duration[@]}" "${input[@]}" -i "$src" "${maps[@]}" -map -0:s "${common[@]}" \
+    local command=("${FF[@]}" -y "${seek[@]}" "${duration[@]}" -i "$src" "${maps[@]}" -map -0:s "${common[@]}" \
       "${ARGS_WITH_BOUNDARIES[@]}" "${DET[@]}" -f mp4 -movflags "$MOVFLAGS" -frag_duration "$FRAG_US" pipe:1)
     printf '%s\n' "${command[@]}" > "out/$name.args"
     echo "$count" > "out/$name.count"
@@ -161,7 +158,7 @@ run() {
   local start_number=(); [ "$hls_start_number" -gt 0 ] && start_number=(-start_number "$hls_start_number")
   mkdir -p "hls/$name"
   local status=0
-  "${FF[@]}" -y "${seek[@]}" "${duration[@]}" "${input[@]}" -i "$src" "${maps[@]}" "${common[@]}" "${ARGS_WITH_BOUNDARIES[@]}" "${DET[@]}" \
+  "${FF[@]}" -y "${seek[@]}" "${duration[@]}" -i "$src" "${maps[@]}" "${common[@]}" "${ARGS_WITH_BOUNDARIES[@]}" "${DET[@]}" \
     -f hls -hls_time "$P" -hls_list_size 0 -hls_flags temp_file "${start_number[@]}" \
     -hls_segment_type fmp4 -hls_fmp4_init_filename init.mp4 -hls_segment_options movflags=+frag_discont \
     -hls_segment_filename "hls/$name/segment%d.m4s" "hls/$name/stream.m3u8" 2> "logs/hls-$name.log" || status=$?
@@ -342,13 +339,13 @@ claim() {
 }
 AV=(-map 0:0 -map 0:a:0)
 # delay_moov stops the mp4 muxer inserting aac_adtstoasc itself: an MPEG-TS AAC copy must fail without it ...
-claim ts-copy-without-adtstoasc 0 "${INPUT_PIPE[@]}" -i src/late.ts "${AV[@]}" "${COMMON_PIPE[@]}" "${COPY_PIPE_WITHOUT_ADTSTOASC[@]}"
+claim ts-copy-without-adtstoasc 0 -i src/late.ts "${AV[@]}" "${COMMON_PIPE[@]}" "${COPY_PIPE_WITHOUT_ADTSTOASC[@]}"
 # ... and the filter leaves a copy from an MP4 source byte-identical (compare with out/07-copy-start0.fmp4).
-claim mp4-copy-without-adtstoasc 0 "${INPUT_PIPE[@]}" -i src/cfr.mp4 "${AV[@]}" "${COMMON_PIPE[@]}" "${COPY_PIPE_WITHOUT_ADTSTOASC[@]}"
+claim mp4-copy-without-adtstoasc 0 -i src/cfr.mp4 "${AV[@]}" "${COMMON_PIPE[@]}" "${COPY_PIPE_WITHOUT_ADTSTOASC[@]}"
 # -max_delay 5000000 changes nothing in mp4 output (compare with out/01-encode-cfr.fmp4).
-claim encode-with-max-delay 0 "${INPUT_PIPE[@]}" -i src/cfr.mp4 "${AV[@]}" "${COMMON_PIPE[@]}" -max_delay 5000000 "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}"
+claim encode-with-max-delay 0 -i src/cfr.mp4 "${AV[@]}" "${COMMON_PIPE[@]}" -max_delay 5000000 "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}"
 # An explicit -fps_mode cfr after a seek pads from time zero (compare with out/01-encode-cfr-seek30.fmp4).
-claim encode-seek30-fps-mode-cfr 5 -ss 24 "${INPUT_PIPE[@]}" -i src/cfr.mp4 "${AV[@]}" "${COMMON_PIPE[@]}" "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}" -fps_mode:v:0 cfr
+claim encode-seek30-fps-mode-cfr 5 -ss 24 -i src/cfr.mp4 "${AV[@]}" "${COMMON_PIPE[@]}" "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}" -fps_mode:v:0 cfr
 
 ffmpeg -version | head -1 > ffmpeg-version.txt
 CONTAINER
