@@ -3363,12 +3363,10 @@ class WorkerMediaSmokeTest {
       return fixture;
     }
 
-    var partial = fixture.resolveSibling("partial-" + fixture.getFileName());
-    try {
-      build.writeTo(partial);
-      Files.move(partial, fixture, StandardCopyOption.ATOMIC_MOVE);
-    } finally {
-      Files.deleteIfExists(partial);
+    try (var partial =
+        new PartialFile(fixture.resolveSibling("partial-" + fixture.getFileName()))) {
+      build.writeTo(partial.path());
+      Files.move(partial.path(), fixture, StandardCopyOption.ATOMIC_MOVE);
     }
 
     return fixture;
@@ -3377,6 +3375,15 @@ class WorkerMediaSmokeTest {
   @FunctionalInterface
   private interface FixtureBuild {
     void writeTo(Path output) throws Exception;
+  }
+
+  // Closing deletes what a failed build wrote. A failure to delete the file joins the build's own
+  // failure as a suppressed exception instead of replacing that failure.
+  private record PartialFile(Path path) implements AutoCloseable {
+    @Override
+    public void close() throws IOException {
+      Files.deleteIfExists(path);
+    }
   }
 
   private static void runFfmpeg(List<String> arguments, Path output) throws Exception {
@@ -3395,9 +3402,13 @@ class WorkerMediaSmokeTest {
   private static String runToCompletion(List<String> command, Path... outputs) throws Exception {
     var log = Files.createTempFile(longSources, command.getFirst(), ".log");
     var started = System.nanoTime();
-    var process =
-        new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(log.toFile()).start();
-    try {
+    try (var owned =
+        new OwnedProcess(
+            new ProcessBuilder(command)
+                .redirectErrorStream(true)
+                .redirectOutput(log.toFile())
+                .start())) {
+      var process = owned.process();
       if (!process.waitFor(2, TimeUnit.MINUTES)) {
         throw new AssertionError(
             UnfinishedCommand.builder()
@@ -3414,9 +3425,29 @@ class WorkerMediaSmokeTest {
       var output = Files.readString(log);
       assertThat(process.exitValue()).as(output).isZero();
       return output;
-    } finally {
-      // The process must end here, because buildFixtureOnce deletes a failed build's file next.
-      process.destroyForcibly().onExit().join();
+    }
+  }
+
+  // Closing kills the process and waits for it to end, because buildFixtureOnce deletes a failed
+  // build's file next. A process that outlasts the guard fails the call, as a suppressed exception
+  // when the call has already failed.
+  private record OwnedProcess(Process process) implements AutoCloseable {
+    private static final Duration EXIT_AFTER_KILL_GUARD = Duration.ofMinutes(1);
+
+    @Override
+    public void close() {
+      process.destroyForcibly();
+      try {
+        if (process.waitFor(EXIT_AFTER_KILL_GUARD)) {
+          return;
+        }
+      } catch (InterruptedException _) {
+        Thread.currentThread().interrupt();
+      }
+
+      throw new AssertionError(
+          "PID %d was not seen to end within %s of being killed"
+              .formatted(process.pid(), EXIT_AFTER_KILL_GUARD));
     }
   }
 
