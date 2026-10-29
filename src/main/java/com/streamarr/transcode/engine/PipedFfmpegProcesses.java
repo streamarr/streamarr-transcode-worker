@@ -49,7 +49,11 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
     this.encodeErrorOutput = new StderrDrainer(encode.getErrorStream());
     this.videoTimings = videoTimings;
     this.gracePeriod = gracePeriod;
-    this.transfer = Thread.ofVirtual().name("ffmpeg-copy-transfer").start(this::transferCopy);
+    this.transfer =
+        Thread.ofVirtual()
+            .name("ffmpeg-copy-transfer")
+            .uncaughtExceptionHandler((_, failure) -> failTransferUnexpectedly(failure))
+            .start(this::transferCopy);
   }
 
   /**
@@ -107,13 +111,17 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
     } catch (FragmentedMp4Exception e) {
       refusedCopy.set(Optional.of(e));
       copy.destroy();
-    } catch (RuntimeException | Error e) {
-      log.error("The transfer of the copy of the source failed unexpectedly", e);
-      unexpectedTransferFailure.set(Optional.of(e));
-      copy.destroy();
-    } finally {
-      endInput(encoded);
     }
+
+    endInput(encoded);
+  }
+
+  // As in transferCopy, the failure is set before the encoding FFmpeg's input ends.
+  private void failTransferUnexpectedly(Throwable failure) {
+    unexpectedTransferFailure.set(Optional.of(failure));
+    copy.destroy();
+    endInput(encode.getOutputStream());
+    log.error("The transfer of the copy of the source failed unexpectedly", failure);
   }
 
   private static void endInput(OutputStream encoded) {
