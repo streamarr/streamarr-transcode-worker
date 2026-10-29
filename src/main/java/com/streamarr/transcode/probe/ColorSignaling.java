@@ -15,6 +15,14 @@ import tools.jackson.databind.JsonNode;
  */
 final class ColorSignaling {
 
+  // The names that ffprobe prints in more than one of FFmpeg's color enums.
+  private static final String BT709 = "bt709";
+  private static final String BT470M = "bt470m";
+  private static final String BT470BG = "bt470bg";
+  private static final String SMPTE170M = "smpte170m";
+  private static final String SMPTE240M = "smpte240m";
+  private static final String SMPTE428 = "smpte428";
+
   private ColorSignaling() {}
 
   static void add(JsonNode source, ProbeStreamInfo.Builder stream) {
@@ -27,14 +35,14 @@ final class ColorSignaling {
 
   private static ColorPrimaries primaries(String name) {
     return switch (name) {
-      case "bt709" -> ColorPrimaries.COLOR_PRIMARIES_BT709;
-      case "bt470m" -> ColorPrimaries.COLOR_PRIMARIES_BT470M;
-      case "bt470bg" -> ColorPrimaries.COLOR_PRIMARIES_BT470BG;
-      case "smpte170m" -> ColorPrimaries.COLOR_PRIMARIES_SMPTE170M;
-      case "smpte240m" -> ColorPrimaries.COLOR_PRIMARIES_SMPTE240M;
+      case BT709 -> ColorPrimaries.COLOR_PRIMARIES_BT709;
+      case BT470M -> ColorPrimaries.COLOR_PRIMARIES_BT470M;
+      case BT470BG -> ColorPrimaries.COLOR_PRIMARIES_BT470BG;
+      case SMPTE170M -> ColorPrimaries.COLOR_PRIMARIES_SMPTE170M;
+      case SMPTE240M -> ColorPrimaries.COLOR_PRIMARIES_SMPTE240M;
       case "film" -> ColorPrimaries.COLOR_PRIMARIES_FILM;
       case "bt2020" -> ColorPrimaries.COLOR_PRIMARIES_BT2020;
-      case "smpte428" -> ColorPrimaries.COLOR_PRIMARIES_SMPTE428;
+      case SMPTE428 -> ColorPrimaries.COLOR_PRIMARIES_SMPTE428;
       case "smpte431" -> ColorPrimaries.COLOR_PRIMARIES_SMPTE431;
       case "smpte432" -> ColorPrimaries.COLOR_PRIMARIES_SMPTE432;
       case "ebu3213" -> ColorPrimaries.COLOR_PRIMARIES_EBU3213;
@@ -45,11 +53,11 @@ final class ColorSignaling {
   /** The stream's signaled transfer, from the name that ffprobe prints. */
   static TransferCharacteristics transfer(JsonNode source) {
     return switch (text(source, "color_transfer").orElse("")) {
-      case "bt709" -> TransferCharacteristics.TRANSFER_CHARACTERISTICS_BT709;
-      case "bt470m" -> TransferCharacteristics.TRANSFER_CHARACTERISTICS_BT470M;
-      case "bt470bg" -> TransferCharacteristics.TRANSFER_CHARACTERISTICS_BT470BG;
-      case "smpte170m" -> TransferCharacteristics.TRANSFER_CHARACTERISTICS_SMPTE170M;
-      case "smpte240m" -> TransferCharacteristics.TRANSFER_CHARACTERISTICS_SMPTE240M;
+      case BT709 -> TransferCharacteristics.TRANSFER_CHARACTERISTICS_BT709;
+      case BT470M -> TransferCharacteristics.TRANSFER_CHARACTERISTICS_BT470M;
+      case BT470BG -> TransferCharacteristics.TRANSFER_CHARACTERISTICS_BT470BG;
+      case SMPTE170M -> TransferCharacteristics.TRANSFER_CHARACTERISTICS_SMPTE170M;
+      case SMPTE240M -> TransferCharacteristics.TRANSFER_CHARACTERISTICS_SMPTE240M;
       case "linear" -> TransferCharacteristics.TRANSFER_CHARACTERISTICS_LINEAR;
       case "log100" -> TransferCharacteristics.TRANSFER_CHARACTERISTICS_LOG100;
       case "log316" -> TransferCharacteristics.TRANSFER_CHARACTERISTICS_LOG316;
@@ -59,7 +67,7 @@ final class ColorSignaling {
       case "bt2020-10" -> TransferCharacteristics.TRANSFER_CHARACTERISTICS_BT2020_10;
       case "bt2020-12" -> TransferCharacteristics.TRANSFER_CHARACTERISTICS_BT2020_12;
       case "smpte2084" -> TransferCharacteristics.TRANSFER_CHARACTERISTICS_SMPTE2084;
-      case "smpte428" -> TransferCharacteristics.TRANSFER_CHARACTERISTICS_SMPTE428;
+      case SMPTE428 -> TransferCharacteristics.TRANSFER_CHARACTERISTICS_SMPTE428;
       case "arib-std-b67" -> TransferCharacteristics.TRANSFER_CHARACTERISTICS_ARIB_STD_B67;
       default -> TransferCharacteristics.TRANSFER_CHARACTERISTICS_UNSPECIFIED;
     };
@@ -68,11 +76,11 @@ final class ColorSignaling {
   private static MatrixCoefficients matrix(String name) {
     return switch (name) {
       case "gbr" -> MatrixCoefficients.MATRIX_COEFFICIENTS_IDENTITY;
-      case "bt709" -> MatrixCoefficients.MATRIX_COEFFICIENTS_BT709;
+      case BT709 -> MatrixCoefficients.MATRIX_COEFFICIENTS_BT709;
       case "fcc" -> MatrixCoefficients.MATRIX_COEFFICIENTS_FCC;
-      case "bt470bg" -> MatrixCoefficients.MATRIX_COEFFICIENTS_BT470BG;
-      case "smpte170m" -> MatrixCoefficients.MATRIX_COEFFICIENTS_SMPTE170M;
-      case "smpte240m" -> MatrixCoefficients.MATRIX_COEFFICIENTS_SMPTE240M;
+      case BT470BG -> MatrixCoefficients.MATRIX_COEFFICIENTS_BT470BG;
+      case SMPTE170M -> MatrixCoefficients.MATRIX_COEFFICIENTS_SMPTE170M;
+      case SMPTE240M -> MatrixCoefficients.MATRIX_COEFFICIENTS_SMPTE240M;
       case "ycgco" -> MatrixCoefficients.MATRIX_COEFFICIENTS_YCGCO;
       case "bt2020nc" -> MatrixCoefficients.MATRIX_COEFFICIENTS_BT2020_NCL;
       case "bt2020c" -> MatrixCoefficients.MATRIX_COEFFICIENTS_BT2020_CL;
