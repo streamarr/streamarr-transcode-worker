@@ -44,10 +44,10 @@ final class Av1MetadataObus implements MetadataWalk {
   private static final byte[] RPU_IDENTIFIER = {(byte) 0xB5, 0x00, 0x3B, 0x00, 0x00, 0x08, 0x00};
 
   // The EMDF container around an RPU, as FFmpeg 8.1 opens it: a fixed 27-bit header, a payload
-  // size of 6 to 512 bytes, and a fixed 17-bit emdf_protection.
+  // size of at most 512 bytes, and a fixed 17-bit emdf_protection. FFmpeg also refuses a payload
+  // under 6 bytes, which no RPU header that the probe reads fits in.
   private static final long EMDF_HEADER = 0x01BE6841L;
   private static final long EMDF_PROTECTION = 0x400;
-  private static final int SMALLEST_EMDF_PAYLOAD = 6;
   private static final int LARGEST_EMDF_PAYLOAD = 512;
 
   // The walk keeps the first payload of each kind and which kinds showed, not every OBU, so that
@@ -147,7 +147,7 @@ final class Av1MetadataObus implements MetadataWalk {
       }
 
       var size = variableBits(reader);
-      if (size < SMALLEST_EMDF_PAYLOAD || size > LARGEST_EMDF_PAYLOAD) {
+      if (size > LARGEST_EMDF_PAYLOAD) {
         return Optional.empty();
       }
 
