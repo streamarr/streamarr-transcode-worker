@@ -103,15 +103,20 @@ class FfprobeExecutorMatroskaColourTest {
   }
 
   @Test
-  @DisplayName("Should prefer the track's elements over the first frame's light level")
-  void shouldPreferTheTracksElementsOverTheFirstFramesLightLevel() throws IOException {
+  @DisplayName("Should report the track's light level when the first frame also carries one")
+  void shouldReportTheTracksLightLevelWhenTheFirstFrameAlsoCarriesOne() throws IOException {
     var video =
         probeMatroska(
             MATROSKA,
             videoTrack(element(MAX_CLL, unsigned(900)), element(MAX_FALL, unsigned(0))),
             FRAME_LIGHT_LEVEL);
 
-    assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(900);
+    assertThat(video.getContentLightLevel())
+        .isEqualTo(
+            ContentLightLevel.newBuilder()
+                .setMaxContentLightLevel(900)
+                .setMaxFrameAverageLightLevel(0)
+                .build());
   }
 
   @Test
@@ -128,8 +133,8 @@ class FfprobeExecutorMatroskaColourTest {
 
   @ParameterizedTest(name = "{0}")
   @MethodSource("videoEntriesThatFfmpegSkips")
-  @DisplayName("Should read the chosen video track past a video TrackEntry that FFmpeg skips")
-  void shouldReadTheChosenVideoTrackPastAVideoTrackEntryThatFfmpegSkips(
+  @DisplayName("Should read the chosen video track when FFmpeg skips an earlier video TrackEntry")
+  void shouldReadTheChosenVideoTrackWhenFfmpegSkipsAnEarlierVideoTrackEntry(
       String description, byte[] skipped) throws IOException {
     // FFmpeg's Matroska demuxer makes no stream of a video track whose CodecID is missing or does
     // not start with V, so ffprobe's first video stream is the track that follows it.
@@ -270,8 +275,8 @@ class FfprobeExecutorMatroskaColourTest {
   }
 
   @Test
-  @DisplayName("Should take the last MaxCLL of a Colour that repeats it, as FFmpeg does")
-  void shouldTakeTheLastMaxCllOfAColourThatRepeatsItAsFfmpegDoes() throws IOException {
+  @DisplayName("Should report the last MaxCLL when the Colour repeats it, as FFmpeg does")
+  void shouldReportTheLastMaxCllWhenTheColourRepeatsIt() throws IOException {
     var video =
         probeMatroska(
             MATROSKA, videoTrack(element(MAX_CLL, unsigned(100)), element(MAX_CLL, unsigned(900))));
@@ -431,6 +436,7 @@ class FfprobeExecutorMatroskaColourTest {
 
     assertThat(video.hasMasteringDisplay()).isFalse();
     assertThat(video.getMasteringDisplayOmitted()).isTrue();
+    assertThat(video.getContentLightLevelOmitted()).as("the Colour was read").isFalse();
   }
 
   @Test
@@ -587,11 +593,12 @@ class FfprobeExecutorMatroskaColourTest {
 
     assertThat(video.hasMasteringDisplay()).isFalse();
     assertThat(video.getMasteringDisplayOmitted()).isTrue();
+    assertThat(video.getContentLightLevelOmitted()).as("the Colour was read").isFalse();
   }
 
   @Test
-  @DisplayName("Should read the light level of a Colour that a later Video element holds")
-  void shouldReadTheLightLevelOfAColourThatALaterVideoElementHolds() throws IOException {
+  @DisplayName("Should read the light level when a later Video element holds the Colour")
+  void shouldReadTheLightLevelWhenALaterVideoElementHoldsTheColour() throws IOException {
     var video =
         probeMatroska(MATROSKA, videoTrackWithColourInSecondVideo(element(MAX_CLL, unsigned(900))));
 
