@@ -189,8 +189,8 @@ final class Av1MetadataObus implements MetadataWalk {
     private boolean readAll = true;
 
     /**
-     * Walks the OBUs of an av1C record's configOBUs or of bare OBUs; extradata of any other form
-     * holds OBUs that the walk cannot read.
+     * Walks the OBUs of an av1C record's configOBUs or of bare OBUs. Extradata of any other form
+     * holds OBUs that the walk cannot read, so {@link WalkCoverage} has the walk rule nothing out.
      */
     void addExtradata(byte[] extradata) {
       if (DecoderConfiguration.isAv1Record(extradata)) {
@@ -200,10 +200,7 @@ final class Av1MetadataObus implements MetadataWalk {
 
       if (DecoderConfiguration.isAv1Obus(extradata)) {
         add(extradata, 0, extradata.length);
-        return;
       }
-
-      readAll = false;
     }
 
     /** Walks the OBUs from {@code start} to {@code end}, and stops at one it cannot delimit. */
