@@ -235,7 +235,8 @@ class FfprobeExecutorSeiTest {
                       .answers()
                       .firstFrames(frames(""))
                       .failingReadsBeyondPackets(3)
-                      .firstPackets(packets(coding.sample(coding.sei(LIGHT_LEVEL))))
+                      .firstPackets(
+                          packetsUpTo(3, coding.sample(), coding.sample(coding.sei(LIGHT_LEVEL))))
                       .build())
               .getStreams(0);
 
@@ -391,9 +392,9 @@ class FfprobeExecutorSeiTest {
     @ParameterizedTest(name = "{0}")
     @EnumSource(Coding.class)
     @DisplayName(
-        "Should leave HDR10+ unspecified when a packet carries a replacement record that the probe"
-            + " cannot read")
-    void shouldLeaveHdr10PlusUnspecifiedWhenAPacketCarriesAReplacementRecordThatTheProbeCannotRead(
+        "Should rule nothing out when a packet carries a replacement record that the probe cannot"
+            + " read")
+    void shouldRuleNothingOutWhenAPacketCarriesAReplacementRecordThatTheProbeCannotRead(
         Coding coding) {
       // ffprobe prints the side data's type but not its bytes, and FFmpeg's decoders apply it.
       var video =
@@ -403,20 +404,27 @@ class FfprobeExecutorSeiTest {
                       .firstFrames(frames("", "", ""))
                       .firstPackets(
                           withNewExtradata(
-                              packets(coding.sample(coding.sei(LIGHT_LEVEL)), coding.sample()), 1))
+                              packetsUpTo(
+                                  3, coding.sample(), coding.sample(coding.sei(LIGHT_LEVEL))),
+                              1))
                       .build())
               .getStreams(0);
 
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
-      assertThat(video.getDynamicRange().hasDolbyVisionAbsent()).isFalse();
-      assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(1000);
-      assertThat(video.getMasteringDisplayOmitted()).isTrue();
+      assertThat(video.getDynamicRange().hasDolbyVisionAbsent())
+          .as("Dolby Vision absent")
+          .isFalse();
+      assertThat(video.getMasteringDisplayOmitted()).as("mastering display omitted").isTrue();
+      assertThat(video.getContentLightLevel().getMaxContentLightLevel())
+          .as("the light level that the packets hold")
+          .isEqualTo(1000);
     }
 
     @Test
-    @DisplayName("Should leave HDR10+ unspecified when the first packets print too much to hold")
-    void shouldLeaveHdr10PlusUnspecifiedWhenTheFirstPacketsPrintTooMuchToHold() {
-      // A 16 MiB filler NAL unit, whose 69 MiB hex dump runs past the 64 MiB that the probe holds.
+    @DisplayName("Should rule nothing out when the first packets print too much to hold")
+    void shouldRuleNothingOutWhenTheFirstPacketsPrintTooMuchToHold() {
+      // A 16 MiB filler NAL unit, whose 69 MiB hex dump runs past the 64 MiB that the probe holds,
+      // then 2 more packets, so that the read prints every packet that it asks for.
       var sample = new byte[16 << 20];
       var length = sample.length - 4;
       sample[0] = (byte) (length >> 24);
@@ -432,24 +440,27 @@ class FfprobeExecutorSeiTest {
                       .answers()
                       .firstFrames(frames("", "", ""))
                       .firstPackets(
-                          "{\"packets\":[{\"data\":\"%s\"}]}"
-                              .formatted(RecordedFfprobe.ffprobeDump(sample)))
+                          "{\"packets\":[{\"data\":\"%s\"},%s"
+                              .formatted(
+                                  RecordedFfprobe.ffprobeDump(sample),
+                                  packets(Coding.HEVC.sample(), Coding.HEVC.sample())
+                                      .substring("{\"packets\":[".length())))
                       .build())
               .getStreams(0);
 
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
-      assertThat(video.getMasteringDisplayOmitted()).isTrue();
+      assertThat(video.getMasteringDisplayOmitted()).as("mastering display omitted").isTrue();
     }
 
     @Test
-    @DisplayName("Should keep the frames' HDR10+ when the packets show none")
-    void shouldKeepTheFramesHdr10PlusWhenThePacketsShowNone() {
+    @DisplayName("Should keep the frames' HDR10+ when the walk rules it out of the packets")
+    void shouldKeepTheFramesHdr10PlusWhenTheWalkRulesItOutOfThePackets() {
       var video =
           probe(
                   Coding.HEVC
                       .answers()
-                      .firstFrames(frames(HDR10_PLUS_SIDE_DATA))
-                      .firstPackets(packets(Coding.HEVC.sample()))
+                      .firstFrames(frames(HDR10_PLUS_SIDE_DATA, "", ""))
+                      .firstPackets(packetsUpTo(3, Coding.HEVC.sample()))
                       .build())
               .getStreams(0);
 
@@ -482,10 +493,10 @@ class FfprobeExecutorSeiTest {
     @Test
     @DisplayName("Should leave HDR10+ unspecified when a NAL unit runs past the record's end")
     void shouldLeaveHdr10PlusUnspecifiedWhenANalUnitRunsPastTheRecordsEnd() {
-      var record = recordWithSei(Coding.HEVC.sei(LIGHT_LEVEL));
-      var cut = record.substring(0, record.length() - " 80".length());
+      var sei = Coding.HEVC.sei(OTHER_T35);
+      var record = recordWithUnit(sei, HexFormat.ofDelimiter(" ").parseHex(sei).length + 1);
 
-      var video = probed(cut, Coding.HEVC.sample());
+      var video = probed(record, Coding.HEVC.sample());
 
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
     }
@@ -523,12 +534,14 @@ class FfprobeExecutorSeiTest {
 
     /** An hvcC record whose NAL units take 4-byte lengths, with one array of one SEI NAL unit. */
     private static String recordWithSei(String sei) {
-      var length = HexFormat.ofDelimiter(" ").parseHex(sei).length;
-      return Coding.HEVC
-              .units
-              .configurationRecord()
-              .substring(0, Coding.HEVC.units.configurationRecord().length() - "00".length())
-          + "01 27 00 01 %02x %02x ".formatted(length >> 8, length & 0xFF)
+      return recordWithUnit(sei, HexFormat.ofDelimiter(" ").parseHex(sei).length);
+    }
+
+    /** The record of {@link #recordWithSei}, with the SEI NAL unit's length as declared. */
+    private static String recordWithUnit(String sei, int declaredLength) {
+      var record = Coding.HEVC.units.configurationRecord();
+      return record.substring(0, record.length() - "00".length())
+          + "01 27 00 01 %02x %02x ".formatted(declaredLength >> 8, declaredLength & 0xFF)
           + sei;
     }
 
