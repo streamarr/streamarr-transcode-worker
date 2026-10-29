@@ -14,6 +14,7 @@ import com.streamarr.transcode.probe.RecordedFfprobe.Answers;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -68,12 +69,7 @@ class FfprobeExecutorPresentationTimesTest {
       "Should report packets with presentation times when every packet that the read printed has a"
           + " pts")
   void shouldReportPacketsWithPresentationTimesWhenEveryPacketThatTheReadPrintedHasAPts() {
-    var printed = packets(SLICE_SAMPLE, SLICE_SAMPLE, SLICE_SAMPLE);
-    for (var packet = 0; packet < 3; packet++) {
-      printed = withPresentationTime(printed, packet, packet * 1001L);
-    }
-
-    var video = videoReading(printed);
+    var video = videoReading(packetsWithPresentationTimes());
 
     assertThat(video.getFirstPacketsCarryPresentationTimes()).isTrue();
   }
@@ -98,6 +94,38 @@ class FfprobeExecutorPresentationTimesTest {
   }
 
   @Test
+  @DisplayName(
+      "Should report no presentation-time fact when the first-packets read exits with an error"
+          + " after printing packets")
+  void shouldReportNoPresentationTimeFactWhenTheFirstPacketsReadExitsWithAnErrorAfterPrinting() {
+    var video =
+        probe(
+                Answers.builder()
+                    .ffprobeOutput(output(HEVC))
+                    .firstFrames(frames("", "", ""))
+                    .firstPackets(packetsWithPresentationTimes())
+                    .firstPacketsExitCode(1)
+                    .build())
+            .getStreams(0);
+
+    assertThat(video.hasFirstPacketsCarryPresentationTimes()).isFalse();
+  }
+
+  @Test
+  @Timeout(60)
+  @DisplayName(
+      "Should report no presentation-time fact when the first-packets read prints more than 64 MiB")
+  void shouldReportNoPresentationTimeFactWhenTheFirstPacketsReadPrintsMoreThan64MiB() {
+    var printed = packetsWithPresentationTimes();
+    var padded =
+        printed.substring(0, printed.length() - 1)
+            + " ".repeat((64 << 20) + 1 - printed.length())
+            + "}";
+
+    assertThat(videoReading(padded).hasFirstPacketsCarryPresentationTimes()).isFalse();
+  }
+
+  @Test
   @DisplayName("Should report no presentation-time fact when the probe reads no first frames")
   void shouldReportNoPresentationTimeFactWhenTheProbeReadsNoFirstFrames() {
     var video =
@@ -112,22 +140,68 @@ class FfprobeExecutorPresentationTimesTest {
     assertThat(video.hasFirstPacketsCarryPresentationTimes()).isFalse();
   }
 
-  @ParameterizedTest(name = "{0} stream {1}")
-  @CsvSource({"mkv-pipe-hevc-10bit.mkv, 1", "mp4-titled.mp4, 0", "webm-vp9-hdr10-plus.webm, 0"})
+  @Test
+  @DisplayName("Should report no presentation-time fact when the stream is audio")
+  void shouldReportNoPresentationTimeFactWhenTheStreamIsAudio() {
+    var audio = streamOf("mkv-pipe-hevc-10bit.mkv", 1);
+
+    assertThat(audio.hasFirstPacketsCarryPresentationTimes()).isFalse();
+  }
+
+  @Test
   @DisplayName(
-      "Should report no presentation-time fact when the probe reads no packets of the stream: an"
-          + " audio stream, a stream whose first-packets read fails, or a codec without a walk")
-  void
-      shouldReportNoPresentationTimeFactWhenTheProbeReadsNoPacketsOfTheStreamAnAudioStreamAStreamWhoseFirstPacketsReadFailsOrACodecWithoutAWalk(
-          String fixture, int index) {
-    assertThat(streamOf(fixture, index).hasFirstPacketsCarryPresentationTimes()).isFalse();
+      "Should report no presentation-time fact when the probe walks no packets of the codec")
+  void shouldReportNoPresentationTimeFactWhenTheProbeWalksNoPacketsOfTheCodec() {
+    // The probe reads packets only of H.264, HEVC and AV1.
+    var video =
+        probe(
+                Answers.builder()
+                    .ffprobeOutput(output("\"codec_name\":\"vp9\""))
+                    .firstFrames(frames("", "", ""))
+                    .firstPackets(packetsWithPresentationTimes())
+                    .build())
+            .getStreams(0);
+
+    assertThat(video.getFirstFramesRead()).isTrue();
+    assertThat(video.hasFirstPacketsCarryPresentationTimes()).isFalse();
+  }
+
+  @Test
+  @DisplayName(
+      "Should report no presentation-time fact for a video stream when the probe chose another")
+  void shouldReportNoPresentationTimeFactForAVideoStreamWhenTheProbeChoseAnother() {
+    var media =
+        probe(
+            Answers.builder()
+                .ffprobeOutput(
+                    """
+                    {"streams":[
+                      {"index":0,"codec_type":"video","codec_name":"hevc","time_base":"1/1000"},
+                      {"index":1,"codec_type":"video","codec_name":"hevc","time_base":"1/1000"}]}
+                    """)
+                .firstFrames(frames("", "", ""))
+                .firstPackets(packetsWithPresentationTimes())
+                .build());
+
+    assertThat(media.getStreams(0).getFirstPacketsCarryPresentationTimes()).isTrue();
+    assertThat(media.getStreams(1).hasFirstPacketsCarryPresentationTimes()).isFalse();
+  }
+
+  /** Three packets, each with a pts. */
+  private static String packetsWithPresentationTimes() {
+    var printed = packets(SLICE_SAMPLE, SLICE_SAMPLE, SLICE_SAMPLE);
+    for (var packet = 0; packet < 3; packet++) {
+      printed = withPresentationTime(printed, packet, packet * 1001L);
+    }
+
+    return printed;
   }
 
   private static ProbeStreamInfo videoReading(String firstPackets) {
     return probe(
             Answers.builder()
                 .ffprobeOutput(output(HEVC))
-                .firstFrames(frames(""))
+                .firstFrames(frames("", "", ""))
                 .firstPackets(firstPackets)
                 .build())
         .getStreams(0);
