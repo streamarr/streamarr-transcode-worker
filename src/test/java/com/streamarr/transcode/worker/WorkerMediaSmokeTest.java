@@ -3452,14 +3452,15 @@ class WorkerMediaSmokeTest {
   }
 
   // A command that is still running, with what it has done so far: its run time and CPU time, the
-  // size of each output it writes, and the end of its log.
+  // size of each output it writes, and the end of its log. A file that cannot be read says so in
+  // the report, so that the timeout still fails with the rest of the report.
   @Builder
   private record UnfinishedCommand(
       List<String> command, Process process, Duration ranFor, Path log, List<Path> outputs) {
 
     private static final int LOG_TAIL_LINES = 40;
 
-    String report() throws IOException {
+    String report() {
       var report = new ArrayList<String>();
       report.add("%s did not finish: %s".formatted(command.getFirst(), String.join(" ", command)));
       report.add("It ran for %s and used %s of CPU time.".formatted(ranFor, cpuTime()));
@@ -3477,17 +3478,25 @@ class WorkerMediaSmokeTest {
       return process.info().totalCpuDuration().map(Duration::toString).orElse("an unknown amount");
     }
 
-    private static String sizeOf(Path file) throws IOException {
+    private static String sizeOf(Path file) {
       if (Files.notExists(file)) {
         return file + " does not exist";
       }
 
-      return "%s holds %d bytes".formatted(file, Files.size(file));
+      try {
+        return "%s holds %d bytes".formatted(file, Files.size(file));
+      } catch (IOException exception) {
+        return "%s could not be measured: %s".formatted(file, exception);
+      }
     }
 
-    private static List<String> lastLines(Path log) throws IOException {
-      var lines = new String(Files.readAllBytes(log), StandardCharsets.UTF_8).lines().toList();
-      return lines.subList(Math.max(0, lines.size() - LOG_TAIL_LINES), lines.size());
+    private static List<String> lastLines(Path log) {
+      try {
+        var lines = new String(Files.readAllBytes(log), StandardCharsets.UTF_8).lines().toList();
+        return lines.subList(Math.max(0, lines.size() - LOG_TAIL_LINES), lines.size());
+      } catch (IOException exception) {
+        return List.of("The log could not be read: " + exception);
+      }
     }
   }
 
