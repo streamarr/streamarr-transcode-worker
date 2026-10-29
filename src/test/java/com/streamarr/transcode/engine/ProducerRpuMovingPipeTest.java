@@ -58,6 +58,16 @@ class ProducerRpuMovingPipeTest {
           initializationSegment(),
           fragmentBuilder().video(0, sample(aud(), slice(0))).build(),
           fragmentBuilder().video(1001, sample(aud(), rpu(0), slice(1))).build());
+  // The framecrc that FFmpeg writes of COPIED_SOURCE's video: no packet is a keyframe, each lasts
+  // 1001 ticks of the copy's 24000 Hz timescale, and the framecrc counts in 1/48000.
+  private static final String COPIED_SOURCE_TIMING =
+      """
+      #tb 0: 1/48000
+      #media_type 0: video
+      #codec_id 0: hevc
+      0,          0,       4004,     2002,        9, 0x00000000, F=0x0
+      0,       2002,       6006,     2002,       20, 0x00000000, F=0x0
+      """;
   private static final byte[] NOT_HEVC =
       concat(
           initializationSegment(box("avc1", new byte[78], box("avcC", new byte[7]))),
@@ -84,6 +94,37 @@ class ProducerRpuMovingPipeTest {
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT);
     assertThat(videoSamplesOf(encode.stdinBytes())).isEqualTo(videoSamplesOf(MOVED_SOURCE));
     assertThat(encode.hasInputEnded()).isTrue();
+  }
+
+  @Test
+  @DisplayName(
+      "Should pass the copy on with its RPUs moved when the framecrc's keyframe opens a fragment"
+          + " whose first sample flags make it a sync sample")
+  void
+      shouldPassTheCopyOnWithItsRpusMovedWhenTheFramecrcsKeyframeOpensAFragmentWhoseFirstSampleFlagsMakeItASyncSample() {
+    var copy =
+        ScriptedProcess.builder()
+            .output(
+                concat(
+                    initializationSegment(),
+                    fragmentBuilder()
+                        .startsWithKeyframe(true)
+                        .video(0, sample(aud(), slice(0)))
+                        .build(),
+                    fragmentBuilder().video(1001, sample(aud(), rpu(0), slice(1))).build()))
+            .build();
+    var encode = encodingFfmpeg().build();
+    var framecrc =
+        """
+        #tb 0: 1/48000
+        0,          0,       4004,     2002,        9, 0x00000000
+        0,       2002,       6006,     2002,       20, 0x00000000, F=0x0
+        """;
+
+    var producer = producer(copyingWith(copy, framecrc), encode).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(videoSamplesOf(encode.stdinBytes())).isEqualTo(videoSamplesOf(MOVED_SOURCE));
   }
 
   @Test
@@ -683,11 +724,7 @@ class ProducerRpuMovingPipeTest {
   // The copying FFmpeg's stand-in writes the framecrc of the copied source's video, whatever the
   // output it replays.
   private Producer.ProducerBuilder producerOf(ScriptedProcess copy, ScriptedProcess encode) {
-    try {
-      return producer(copyingWith(copy, CopiedVideoTiming.framecrcOf(COPIED_SOURCE)), encode);
-    } catch (IOException e) {
-      throw new UncheckedIOException(e);
-    }
+    return producer(copyingWith(copy, COPIED_SOURCE_TIMING), encode);
   }
 
   private Producer.ProducerBuilder producer(CopyingFfmpeg copying, ScriptedProcess encode) {

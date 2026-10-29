@@ -149,20 +149,16 @@ class ProcessBuilderLauncherTest {
     var initializationSegment = tempDir.resolve("init.mp4");
     var fragment = tempDir.resolve("fragment.m4s");
     Files.write(initializationSegment, HevcCopies.initializationSegment());
-    Files.write(
-        fragment,
-        HevcCopies.fragmentBuilder()
-            .video(0, HevcCopies.sample(HevcCopies.slice(0), new byte[64 * 1024]))
-            .build());
+    var sample = HevcCopies.sample(HevcCopies.slice(0), new byte[64 * 1024]);
+    Files.write(fragment, HevcCopies.fragmentBuilder().video(0, sample).build());
     var endlessCopy = "trap '' TERM; cat \"$0\"; while :; do cat \"$1\"; done";
-    // The header and the record of the fragment's one sample, which every repeat repeats.
-    var framecrc =
-        CopiedVideoTiming.framecrcOf(
-                IsoBoxes.concat(HevcCopies.initializationSegment(), Files.readAllBytes(fragment)))
-            .lines()
-            .toList();
+    // The fragment's one sample is no keyframe and lasts 1001 ticks of the copy's 24000 Hz
+    // timescale; every repeat of the fragment repeats its record.
     var timingPastWhatThePipeHolds =
-        framecrc.getFirst() + "\n" + (framecrc.getLast() + "\n").repeat(64);
+        "#tb 0: 1/48000\n"
+            + "0,          0,       4004,     2002, %8d, 0x00000000, F=0x0\n"
+                .formatted(sample.length)
+                .repeat(64);
     var launched = new CopyOnWriteArrayList<Process>();
     ProcessLauncher copyWritingTiming =
         (command, jobAttemptId) -> {
