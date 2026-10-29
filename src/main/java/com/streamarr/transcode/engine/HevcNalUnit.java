@@ -18,19 +18,9 @@ import lombok.NonNull;
  * unit reaches the decoder, holds a slice, or ends with an RPU when one of them does.
  *
  * @param bytes the length prefix and the NAL unit, viewed without copying them
- * @param slice whether a picture slice reaches the decoder from the NAL unit's bytes
- * @param rpu whether the last NAL unit of those bytes that reaches the decoder is an RPU
- * @param rpuAlone whether that RPU is the only NAL unit of those bytes that reaches the decoder, so
- *     that moving the bytes moves no other NAL unit that the decoder reads
- * @param reachesDecoder whether FFmpeg's splitter hands the NAL unit, or one that a start code
- *     inside it begins, to the decoder
+ * @param decoded what FFmpeg's HEVC decoder reads of those bytes
  */
-record HevcNalUnit(
-    @NonNull ByteBuffer bytes,
-    boolean slice,
-    boolean rpu,
-    boolean rpuAlone,
-    boolean reachesDecoder) {
+record HevcNalUnit(@NonNull ByteBuffer bytes, @NonNull Decoded decoded) {
 
   /**
    * The most NAL units of a sample that {@link #delimit} returns: well above the 600 slice segments
@@ -50,12 +40,63 @@ record HevcNalUnit(
   private static final int UNDECODED_LAYER = 63;
   private static final int NO_HEADER = -1;
 
+  /**
+   * What FFmpeg's HEVC decoder reads of a NAL unit's bytes: whether any of the NAL units that they
+   * hold reaches it, whether one of those is a slice, and whether the last one is an RPU.
+   */
+  enum Decoded {
+    /** No NAL unit of the bytes reaches the decoder. */
+    NOTHING,
+    /**
+     * Only an RPU reaches the decoder, so that moving the bytes moves no other NAL unit that the
+     * decoder reads.
+     */
+    ONLY_RPUS,
+    /** A slice reaches the decoder, and the last NAL unit that does is an RPU. */
+    SLICE_ENDING_IN_RPU,
+    /** A slice reaches the decoder, and the last NAL unit that does is no RPU. */
+    SLICE,
+    /** No slice reaches the decoder, and the last NAL unit that does is an RPU behind another. */
+    OTHER_ENDING_IN_RPU,
+    /** No slice reaches the decoder, and the last NAL unit that does is no RPU. */
+    OTHER
+  }
+
   HevcNalUnit {
     bytes = bytes.slice();
   }
 
   int length() {
     return bytes.remaining();
+  }
+
+  /** Whether a picture slice reaches the decoder from the NAL unit's bytes. */
+  boolean slice() {
+    return switch (decoded) {
+      case SLICE_ENDING_IN_RPU, SLICE -> true;
+      case NOTHING, ONLY_RPUS, OTHER_ENDING_IN_RPU, OTHER -> false;
+    };
+  }
+
+  /** Whether the last NAL unit of the bytes that reaches the decoder is an RPU. */
+  boolean endsWithRpu() {
+    return switch (decoded) {
+      case ONLY_RPUS, SLICE_ENDING_IN_RPU, OTHER_ENDING_IN_RPU -> true;
+      case NOTHING, SLICE, OTHER -> false;
+    };
+  }
+
+  /** Whether only RPUs reach the decoder from the NAL unit's bytes. */
+  boolean holdsOnlyRpus() {
+    return decoded == Decoded.ONLY_RPUS;
+  }
+
+  /**
+   * Whether FFmpeg's splitter hands the NAL unit, or one that a start code inside it begins, to the
+   * decoder.
+   */
+  boolean reachesDecoder() {
+    return decoded != Decoded.NOTHING;
   }
 
   /**
@@ -82,7 +123,8 @@ record HevcNalUnit(
       }
 
       var end = unitStart + (int) length;
-      units.add(unitAt(sample, position, unitStart, end));
+      var bytes = sample.slice(position, end - position);
+      units.add(new HevcNalUnit(bytes, decodedOf(bytes, lengthSize)));
       position = end;
     }
 
@@ -92,28 +134,47 @@ record HevcNalUnit(
   // FFmpeg ends a NAL unit at a start code that its length's bytes hold, and splits the bytes after
   // the start code into NAL units of their own, which reach the decoder by the same rules. The scan
   // holds no list of those NAL units: a length can hold a start code every 3 bytes.
-  private static HevcNalUnit unitAt(ByteBuffer sample, int start, int unitStart, int end) {
+  private static Decoded decodedOf(ByteBuffer bytes, int lengthSize) {
     var slice = false;
     var reaching = 0;
-    var lastReaching = unitStart;
-    for (var header = unitStart; header != NO_HEADER; header = nextHeader(sample, header, end)) {
-      if (headerReachesDecoder(sample, header, end)) {
-        slice |= typeAt(sample, header) < FIRST_NON_PICTURE_TYPE;
+    var lastReaching = lengthSize;
+    for (var header = lengthSize; header != NO_HEADER; header = nextHeader(bytes, header)) {
+      if (headerReachesDecoder(bytes, header)) {
+        slice |= typeAt(bytes, header) < FIRST_NON_PICTURE_TYPE;
         reaching++;
         lastReaching = header;
       }
     }
 
-    var rpu = reaching > 0 && isRpuAt(sample, lastReaching, end);
-    return new HevcNalUnit(
-        sample.slice(start, end - start), slice, rpu, rpu && reaching == 1, reaching > 0);
+    if (reaching == 0) {
+      return Decoded.NOTHING;
+    }
+
+    var endsWithRpu = isRpuAt(bytes, lastReaching);
+    if (endsWithRpu && reaching == 1) {
+      return Decoded.ONLY_RPUS;
+    }
+
+    if (slice && endsWithRpu) {
+      return Decoded.SLICE_ENDING_IN_RPU;
+    }
+
+    if (slice) {
+      return Decoded.SLICE;
+    }
+
+    if (endsWithRpu) {
+      return Decoded.OTHER_ENDING_IN_RPU;
+    }
+
+    return Decoded.OTHER;
   }
 
   // The header behind the first start code at or after this header, which no earlier start code
   // overlaps.
-  private static int nextHeader(ByteBuffer sample, int header, int end) {
-    for (var index = header; index + 2 < end; index++) {
-      if (sample.get(index) == 0 && sample.get(index + 1) == 0 && sample.get(index + 2) == 1) {
+  private static int nextHeader(ByteBuffer bytes, int header) {
+    for (var index = header; index + 2 < bytes.limit(); index++) {
+      if (bytes.get(index) == 0 && bytes.get(index + 1) == 0 && bytes.get(index + 2) == 1) {
         return index + 3;
       }
     }
@@ -121,27 +182,27 @@ record HevcNalUnit(
     return NO_HEADER;
   }
 
-  private static int typeAt(ByteBuffer sample, int header) {
-    return (Byte.toUnsignedInt(sample.get(header)) >> 1) & 0x3F;
+  private static int typeAt(ByteBuffer bytes, int header) {
+    return (Byte.toUnsignedInt(bytes.get(header)) >> 1) & 0x3F;
   }
 
-  private static boolean isRpuAt(ByteBuffer sample, int header, int end) {
-    var first = Byte.toUnsignedInt(sample.get(header));
-    var second = Byte.toUnsignedInt(sample.get(header + 1));
-    return typeAt(sample, header) == UNSPECIFIED_62
+  private static boolean isRpuAt(ByteBuffer bytes, int header) {
+    var first = Byte.toUnsignedInt(bytes.get(header));
+    var second = Byte.toUnsignedInt(bytes.get(header + 1));
+    return typeAt(bytes, header) == UNSPECIFIED_62
         && layerId(first, second) == 0
         && (second & 0x07) == 1
-        && end - header > NAL_UNIT_HEADER_BYTES
-        && Byte.toUnsignedInt(sample.get(header + NAL_UNIT_HEADER_BYTES)) == RPU_NAL_PREFIX;
+        && bytes.limit() - header > NAL_UNIT_HEADER_BYTES
+        && Byte.toUnsignedInt(bytes.get(header + NAL_UNIT_HEADER_BYTES)) == RPU_NAL_PREFIX;
   }
 
-  private static boolean headerReachesDecoder(ByteBuffer sample, int unitStart, int end) {
-    if (end - unitStart < NAL_UNIT_HEADER_BYTES) {
+  private static boolean headerReachesDecoder(ByteBuffer bytes, int header) {
+    if (bytes.limit() - header < NAL_UNIT_HEADER_BYTES) {
       return false;
     }
 
-    var first = Byte.toUnsignedInt(sample.get(unitStart));
-    var second = Byte.toUnsignedInt(sample.get(unitStart + 1));
+    var first = Byte.toUnsignedInt(bytes.get(header));
+    var second = Byte.toUnsignedInt(bytes.get(header + 1));
     return (first & 0x80) == 0 && layerId(first, second) != UNDECODED_LAYER && (second & 0x07) != 0;
   }
 
