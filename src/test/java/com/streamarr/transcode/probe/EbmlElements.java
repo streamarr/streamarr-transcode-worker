@@ -76,9 +76,14 @@ final class EbmlElements {
 
   static byte[] element(long id, byte[]... children) {
     var payload = concat(children);
-    var size = ByteBuffer.allocate(8).putLong(payload.length).array();
-    size[0] = 0x01;
-    return concat(unsigned(id), size, payload);
+    return concat(elementHeader(id, payload.length), payload);
+  }
+
+  /** The ID and 8-byte size of an element whose payload takes {@code size} bytes. */
+  static byte[] elementHeader(long id, long size) {
+    var sizeBytes = ByteBuffer.allocate(8).putLong(size).array();
+    sizeBytes[0] = 0x01;
+    return concat(unsigned(id), sizeBytes);
   }
 
   static byte[] unsigned(long value) {

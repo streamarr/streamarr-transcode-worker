@@ -30,6 +30,7 @@ import static com.streamarr.transcode.probe.EbmlElements.codecId;
 import static com.streamarr.transcode.probe.EbmlElements.concat;
 import static com.streamarr.transcode.probe.EbmlElements.document;
 import static com.streamarr.transcode.probe.EbmlElements.element;
+import static com.streamarr.transcode.probe.EbmlElements.elementHeader;
 import static com.streamarr.transcode.probe.EbmlElements.header;
 import static com.streamarr.transcode.probe.EbmlElements.hevcCodecId;
 import static com.streamarr.transcode.probe.EbmlElements.unsigned;
@@ -41,8 +42,10 @@ import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import com.streamarr.transcode.probe.EbmlElements.TrackEntry;
 import com.streamarr.transcode.probe.RecordedFfprobe.Answers;
+import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
@@ -50,6 +53,7 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -748,22 +752,67 @@ class FfprobeExecutorMatroskaColourTest {
   }
 
   @Test
+  @Timeout(120)
   @DisplayName(
-      "Should mark the mastering display omitted when the Colour holds millions of"
-          + " MasteringMetadata elements")
-  void shouldMarkTheMasteringDisplayOmittedWhenTheColourHoldsMillionsOfMasteringMetadataElements()
-      throws IOException {
-    // 18 MB of empty MasteringMetadata elements; the lookup of the first must not hold the rest,
-    // which exhausted a 256 MiB heap.
-    var empty = element(MASTERING_METADATA, new byte[0]);
-    var colour = new byte[empty.length * 6_000_000];
-    for (var offset = 0; offset < colour.length; offset += empty.length) {
-      System.arraycopy(empty, 0, colour, offset, empty.length);
+      "Should read the Colour within a 96 MiB heap when it holds 4 million MasteringMetadata"
+          + " elements")
+  void shouldReadTheColourWithinA96MibHeapWhenItHolds4MillionMasteringMetadataElements()
+      throws IOException, InterruptedException {
+    // 40 MB of empty MasteringMetadata elements, which a lookup that held every match before
+    // taking the first could not hold in 96 MiB.
+    var source = temporaryDirectory.resolve("source.mkv");
+    writeColourOfEmptyMasteringMetadata(source, 4_000_000);
+    var result = temporaryDirectory.resolve("result.txt");
+    var java = Path.of(System.getProperty("java.home"), "bin", "java");
+    var probe =
+        new ProcessBuilder(
+                java.toString(),
+                "-Xmx96m",
+                "-cp",
+                System.getProperty("java.class.path"),
+                MatroskaColourBoundedHeapProbe.class.getName(),
+                source.toString(),
+                result.toString())
+            .redirectErrorStream(true)
+            .start();
+
+    var output = new String(probe.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+
+    assertThat(probe.waitFor()).as(output).isZero();
+    assertThat(Files.readString(result))
+        .isEqualTo("mastering_display_omitted=true content_light_level_omitted=false");
+  }
+
+  /**
+   * Writes a Matroska file whose one video track's Colour holds {@code count} empty
+   * MasteringMetadata elements, one at a time, so that the test never holds the whole file.
+   */
+  private static void writeColourOfEmptyMasteringMetadata(Path file, int count) throws IOException {
+    var empty = element(MASTERING_METADATA);
+    var colourSize = (long) empty.length * count;
+    var videoSize = elementHeader(COLOUR, colourSize).length + colourSize;
+    var entryPrefix =
+        concat(
+            element(TRACK_NUMBER, unsigned(1)),
+            element(TRACK_TYPE, unsigned(VIDEO_TRACK_TYPE)),
+            hevcCodecId());
+    var entrySize = entryPrefix.length + elementHeader(VIDEO, videoSize).length + videoSize;
+    var tracksSize = elementHeader(TRACK_ENTRY, entrySize).length + entrySize;
+    var segmentSize = elementHeader(TRACKS, tracksSize).length + tracksSize;
+    try (var output = new BufferedOutputStream(Files.newOutputStream(file))) {
+      output.write(
+          concat(
+              header(),
+              elementHeader(SEGMENT, segmentSize),
+              elementHeader(TRACKS, tracksSize),
+              elementHeader(TRACK_ENTRY, entrySize),
+              entryPrefix,
+              elementHeader(VIDEO, videoSize),
+              elementHeader(COLOUR, colourSize)));
+      for (var written = 0; written < count; written++) {
+        output.write(empty);
+      }
     }
-
-    var video = probeMatroska(MATROSKA, videoTrack(colour));
-
-    assertThat(video.getMasteringDisplayOmitted()).isTrue();
   }
 
   @Test
