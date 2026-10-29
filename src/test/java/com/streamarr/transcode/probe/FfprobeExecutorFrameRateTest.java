@@ -4,6 +4,7 @@ import static com.streamarr.transcode.probe.RecordedFfprobe.packets;
 import static com.streamarr.transcode.probe.RecordedFfprobe.probeFixture;
 import static com.streamarr.transcode.probe.RecordedFfprobe.probeOutput;
 import static com.streamarr.transcode.probe.RecordedFfprobe.probeResultWithEndlessScan;
+import static com.streamarr.transcode.probe.RecordedFfprobe.probeResultWithScan;
 import static com.streamarr.transcode.probe.RecordedFfprobe.probeResultWithScanExitCode;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -15,6 +16,9 @@ import build.buf.gen.streamarr.transcode.v1.MatroskaStatistics;
 import build.buf.gen.streamarr.transcode.v1.OutputFrameRateBasis;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import com.google.protobuf.Duration;
+import com.streamarr.transcode.fakes.ScriptedProcess;
+import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
+import java.nio.charset.StandardCharsets;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import lombok.Builder;
@@ -476,6 +480,34 @@ class FfprobeExecutorFrameRateTest {
     assertThat(scan.getScannedFrameCount()).isEqualTo(120_000);
     assertThat(scan.getScannedDuration())
         .isEqualTo(Duration.newBuilder().setSeconds(119).setNanos(999_000_000).build());
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep the scanned packets when ffprobe's error output closes as the scan stops it")
+  void shouldKeepTheScannedPacketsWhenFfprobesErrorOutputClosesAsTheScanStopsIt() {
+    // Stopping ffprobe at 120,000 packets closes its error output, which ffprobe holds open until
+    // it exits.
+    var stream =
+        VideoStream.builder().baseRate("25/1").averageRate("50/1").timeBase("1/1000").build();
+    var scan =
+        ScriptedProcess.builder()
+            .output(
+                IntStream.range(0, 120_001)
+                    .mapToObj(packet -> "%d,%d,100,___,\n".formatted(packet, packet))
+                    .collect(Collectors.joining())
+                    .getBytes(StandardCharsets.UTF_8))
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .stderr("[h264 @ 0x0] non-existing PPS 0 referenced\n")
+            .build();
+
+    var result = probeResultWithScan(stream.ffprobeOutput(), () -> scan);
+
+    assertThat(scan.wasDestroyedForcibly()).isTrue();
+    assertThat(result.getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_UNSPECIFIED);
+    assertThat(
+            result.getMedia().getFrameRateRule().getInputs().getPacketScan().getScannedFrameCount())
+        .isEqualTo(120_000);
   }
 
   @Test

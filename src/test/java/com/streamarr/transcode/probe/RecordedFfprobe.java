@@ -21,6 +21,7 @@ import java.util.Optional;
 import java.util.Properties;
 import java.util.UUID;
 import java.util.function.IntFunction;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import lombok.Builder;
 import lombok.NonNull;
@@ -169,12 +170,18 @@ final class RecordedFfprobe {
   /** Probes with the given ffprobe output while the frame-rate scan prints packets forever. */
   static ProbeAttemptResult probeResultWithEndlessScan(
       String ffprobeOutput, IntFunction<String> packetLines) {
+    return probeResultWithScan(ffprobeOutput, () -> new EndlessOutputProcess(packetLines));
+  }
+
+  /** Probes with the given ffprobe output while the given process runs the frame-rate scan. */
+  static ProbeAttemptResult probeResultWithScan(
+      String ffprobeOutput, Supplier<? extends Process> frameRateScan) {
     var executor =
         new FfprobeExecutor(
             new ObjectMapper(),
             command -> {
               if (isFrameRateScan(command.arguments())) {
-                return new EndlessOutputProcess(packetLines);
+                return frameRateScan.get();
               }
 
               if (isFirstFramesRead(command.arguments())) {
