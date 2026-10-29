@@ -99,7 +99,7 @@ from its lavfi test sources. No file comes from a media library.
 
 ## Sources
 
-These fixtures hold only ffprobe's description of each file, and the phone and camcorder fixtures also its packet timing. The files themselves stay local. The phone and camcorder files come from the Internet Archive, and the Dolby Vision and HEVC files from the Jellyfin project's [test videos](https://repo.jellyfin.org/test-videos/), which it states are courtesy of Gnattu and licensed under CC BY-SA 4.0.
+These fixtures hold ffprobe's description of each file, which includes each stream's extradata (its decoder configuration record), and the phone and camcorder fixtures also its packet timing. The files themselves stay local. The phone and camcorder files come from the Internet Archive, and the Dolby Vision and HEVC files from the Jellyfin project's [test videos](https://repo.jellyfin.org/test-videos/), which it states are courtesy of Gnattu and licensed under CC BY-SA 4.0.
 
 | Fixture | Source | Author | License |
 | --- | --- | --- | --- |

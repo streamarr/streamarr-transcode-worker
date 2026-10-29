@@ -5,7 +5,8 @@
 # worker's own ffprobe, run with the probe's own arguments. Most sources are synthesized with lavfi.
 # edit-mp4-boxes.py adds the MP4 boxes that FFmpeg cannot write, and GPAC's MP4Box, run in its
 # pinned image, adds the Dolby Vision profile 9 record. No media file is downloaded, and no source
-# file is kept: only ffprobe's output is.
+# file is kept whole: the recordings hold ffprobe's output, including each stream's extradata
+# (-show_data), and packet-data/ holds the bytes of the first packets of the sources it lists.
 #
 #   src/test/probe-fixtures/record-fixtures.sh
 #   WORKER_IMAGE=streamarr-worker:local src/test/probe-fixtures/record-fixtures.sh
