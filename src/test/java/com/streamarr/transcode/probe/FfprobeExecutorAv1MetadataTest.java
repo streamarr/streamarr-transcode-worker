@@ -62,22 +62,21 @@ class FfprobeExecutorAv1MetadataTest {
           .build();
   // Red, green and blue primaries and the D65 white point as fractions over 65536, then 1000 cd/m^2
   // over 256 and 0.005 cd/m^2 over 16384.
-  private static final String MASTERING_DISPLAY =
-      metadata(
-          2,
-          hex(
-              new Bits()
-                  .put(16, 44_564)
-                  .put(16, 20_972)
-                  .put(16, 17_367)
-                  .put(16, 45_220)
-                  .put(16, 9830)
-                  .put(16, 3932)
-                  .put(16, 20_493)
-                  .put(16, 21_561)
-                  .put(32, 256_000)
-                  .put(32, 82)
-                  .bytes()));
+  private static final String MASTERING_DISPLAY_VALUES =
+      hex(
+          new Bits()
+              .put(16, 44_564)
+              .put(16, 20_972)
+              .put(16, 17_367)
+              .put(16, 45_220)
+              .put(16, 9830)
+              .put(16, 3932)
+              .put(16, 20_493)
+              .put(16, 21_561)
+              .put(32, 256_000)
+              .put(32, 82)
+              .bytes());
+  private static final String MASTERING_DISPLAY = metadata(2, MASTERING_DISPLAY_VALUES);
   private static final String LIGHT_LEVEL = metadata(1, "03 e8 01 90");
   private static final MasteringDisplayColorVolume CONVERTED_MASTERING_DISPLAY =
       MasteringDisplayColorVolume.newBuilder()
@@ -112,6 +111,23 @@ class FfprobeExecutorAv1MetadataTest {
     }
 
     @Test
+    @DisplayName("Should report HDR10+ present when bare OBU extradata holds it")
+    void shouldReportHdr10PlusPresentWhenBareObuExtradataHoldsIt() {
+      var video = probed(SEQUENCE_HEADER + " " + HDR10_PLUS, temporalUnit());
+
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_PRESENT);
+    }
+
+    @Test
+    @DisplayName("Should report HDR10+ present when its OBU lacks its trailing bits")
+    void shouldReportHdr10PlusPresentWhenItsObuLacksItsTrailingBits() {
+      // The OBU holds HDR10+ although the walk cannot delimit it.
+      var video = probed(AV1C, temporalUnit(obu(5, "04 b5 00 3c 00 01 04 01 40")));
+
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_PRESENT);
+    }
+
+    @Test
     @DisplayName("Should report HDR10+ absent when the walk delimits every OBU and none holds it")
     void shouldReportHdr10PlusAbsentWhenTheWalkDelimitsEveryObuAndNoneHoldsIt() {
       var video =
@@ -128,6 +144,16 @@ class FfprobeExecutorAv1MetadataTest {
     void shouldReportHdr10PlusAbsentWhenTheLastObuHasNoSizeField() {
       // obu_has_size_field 0: the frame OBU runs to the end of its packet.
       var video = probed(AV1C, TEMPORAL_DELIMITER + " 30 10 00 00 80");
+
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
+    }
+
+    @Test
+    @DisplayName(
+        "Should report HDR10+ absent when an OBU without a size field runs over the bytes after it")
+    void shouldReportHdr10PlusAbsentWhenAnObuWithoutASizeFieldRunsOverTheBytesAfterIt() {
+      // The frame OBU's payload takes the rest of the packet, the HDR10+ OBU's bytes included.
+      var video = probed(AV1C, TEMPORAL_DELIMITER + " 30 " + HDR10_PLUS);
 
       assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_ABSENT);
     }
@@ -354,6 +380,84 @@ class FfprobeExecutorAv1MetadataTest {
     }
 
     @Test
+    @DisplayName("Should report the RPU and its header when bare OBU extradata holds it")
+    void shouldReportTheRpuAndItsHeaderWhenBareObuExtradataHoldsIt() {
+      var video = probed(SEQUENCE_HEADER + " " + rpuObu(profile100Emdf().build()), temporalUnit());
+
+      var present = video.getDynamicRange().getDolbyVisionPresent();
+      assertThat(present.getObservedRpu()).isEqualTo(Presence.PRESENCE_PRESENT);
+      assertThat(present.getFirstRpuHeader()).isEqualTo(PROFILE_10_0_HEADER);
+    }
+
+    @Test
+    @DisplayName(
+        "Should take the record's RPU header when the record and a packet both hold an RPU")
+    void shouldTakeTheRecordsRpuHeaderWhenTheRecordAndAPacketBothHoldAnRpu() {
+      var video =
+          probed(
+              record(rpuObu(profile100Emdf().build())),
+              temporalUnit(rpuObu(profile100Emdf().rpu(rpuWithProfile(1)).build())));
+
+      assertThat(video.getDynamicRange().getDolbyVisionPresent().getFirstRpuHeader())
+          .isEqualTo(PROFILE_10_0_HEADER);
+    }
+
+    @Test
+    @DisplayName("Should read the RPU header when the record names another Dolby Vision profile")
+    void shouldReadTheRpuHeaderWhenTheRecordNamesAnotherDolbyVisionProfile() {
+      // FFmpeg opens the EMDF container only without a record or with one that names profile 10.
+      var video =
+          probe(
+                  answersWithFields(
+                          """
+                          "side_data_list":[{"side_data_type":"DOVI configuration record",
+                            "dv_profile":8,"dv_bl_signal_compatibility_id":1}],"""
+                              + extradata(AV1C))
+                      .firstFrames(frames("", "", ""))
+                      .firstPackets(
+                          packetsUpTo(
+                              3, temporalUnit(), temporalUnit(rpuObu(profile100Emdf().build()))))
+                      .build())
+              .getStreams(0);
+
+      var present = video.getDynamicRange().getDolbyVisionPresent();
+      assertThat(present.getDeclared().getProfile()).isEqualTo(8);
+      assertThat(present.getFirstRpuHeader()).isEqualTo(PROFILE_10_0_HEADER);
+    }
+
+    @Test
+    @DisplayName("Should report the RPU when its OBU lacks its trailing bits")
+    void shouldReportTheRpuWhenItsObuLacksItsTrailingBits() {
+      // A last byte of 1 leaves the OBU without trailing bits.
+      var video =
+          probed(
+              AV1C,
+              temporalUnit(
+                  obu(5, "04 " + RPU_PREFIX + " " + profile100Emdf().build().hex() + " 01")));
+
+      assertThat(video.getDynamicRange().getDolbyVisionPresent().getObservedRpu())
+          .isEqualTo(Presence.PRESENCE_PRESENT);
+    }
+
+    @Test
+    @DisplayName(
+        "Should take no RPU header from an OBU with an extension byte when another OBU holds the"
+            + " RPU")
+    void shouldTakeNoRpuHeaderFromAnObuWithAnExtensionByteWhenAnotherObuHoldsTheRpu() {
+      // The OBU with an extension byte comes first and holds a header that FFmpeg could read.
+      var video =
+          probed(
+              AV1C,
+              temporalUnit(
+                  layered(4, RPU_PREFIX + " " + profile100Emdf().build().hex()),
+                  rpuObu(profile100Emdf().header(0x01BE6840).build())));
+
+      var present = video.getDynamicRange().getDolbyVisionPresent();
+      assertThat(present.getObservedRpu()).isEqualTo(Presence.PRESENCE_PRESENT);
+      assertThat(present.hasFirstRpuHeader()).isFalse();
+    }
+
+    @Test
     @DisplayName(
         "Should report Dolby Vision absent when the walk delimits every OBU and finds none")
     void shouldReportDolbyVisionAbsentWhenTheWalkDelimitsEveryObuAndFindsNone() {
@@ -440,6 +544,32 @@ class FfprobeExecutorAv1MetadataTest {
     }
 
     @Test
+    @DisplayName("Should round an AV1 fraction half up when it lies halfway between two units")
+    void shouldRoundAnAv1FractionHalfUpWhenItLiesHalfwayBetweenTwoUnits() {
+      // 2048/65536 is 1562.5 coordinate units, 8/256 and 512/16384 cd/m^2 are 312.5 luminance
+      // units.
+      var halfway = new Bits();
+      for (var coordinate = 0; coordinate < 8; coordinate++) {
+        halfway.put(16, 2048);
+      }
+
+      var video =
+          probed(AV1C, temporalUnit(metadata(2, hex(halfway.put(32, 8).put(32, 512).bytes()))));
+
+      var coordinates = ChromaticityCoordinates.newBuilder().setX(1563).setY(1563);
+      assertThat(video.getMasteringDisplay())
+          .isEqualTo(
+              MasteringDisplayColorVolume.newBuilder()
+                  .setRed(coordinates)
+                  .setGreen(coordinates)
+                  .setBlue(coordinates)
+                  .setWhitePoint(coordinates)
+                  .setMaxLuminance(313)
+                  .setMinLuminance(313)
+                  .build());
+    }
+
+    @Test
     @DisplayName(
         "Should take the record's content light level when the record and a packet both hold one")
     void shouldTakeTheRecordsContentLightLevelWhenTheRecordAndAPacketBothHoldOne() {
@@ -483,6 +613,17 @@ class FfprobeExecutorAv1MetadataTest {
       assertThat(video.hasContentLightLevel()).isFalse();
       assertThat(video.getContentLightLevelOmitted()).isTrue();
       assertThat(video.getMasteringDisplayOmitted()).isFalse();
+    }
+
+    @Test
+    @DisplayName(
+        "Should mark only the mastering display omitted when its OBU has an extension byte")
+    void shouldMarkOnlyTheMasteringDisplayOmittedWhenItsObuHasAnExtensionByte() {
+      var video = probed(AV1C, temporalUnit(layered(2, MASTERING_DISPLAY_VALUES)));
+
+      assertThat(video.hasMasteringDisplay()).isFalse();
+      assertThat(video.getMasteringDisplayOmitted()).isTrue();
+      assertThat(video.getContentLightLevelOmitted()).isFalse();
     }
 
     @Test
@@ -650,32 +791,36 @@ class FfprobeExecutorAv1MetadataTest {
     }
   }
 
-  // A profile 10.0 RPU's header: rpu_type 2, rpu_format 0, vdr_rpu_profile 0, vdr_rpu_level 0,
-  // sequence information with fixed-point coefficients of log2 denominator 23, the normalized idc
-  // 1,
-  // a full-range base layer, base and enhancement bit depths of 10, a VDR bit depth of 12, then
-  // disable_residual_flag 1, padded to the 6 bytes that FFmpeg's container needs at least.
-  private static final String PROFILE_10_0_RPU =
-      hex(
-          new Bits()
-              .put(6, 2)
-              .put(11, 0)
-              .put(4, 0)
-              .put(4, 0)
-              .put(1, 1)
-              .put(1, 0)
-              .put(2, 0)
-              .put(9, 0b000011000)
-              .put(2, 1)
-              .put(1, 1)
-              .put(3, 0b011)
-              .put(3, 0b011)
-              .put(5, 0b00101)
-              .put(4, 0)
-              .put(1, 0)
-              .put(1, 1)
-              .put(32, 0)
-              .bytes());
+  private static final String PROFILE_10_0_RPU = rpuWithProfile(0);
+
+  /**
+   * An RPU whose header holds rpu_type 2, rpu_format 0, the vdr_rpu_profile, vdr_rpu_level 0,
+   * sequence information with fixed-point coefficients of log2 denominator 23, the normalized idc
+   * 1, a full-range base layer, base and enhancement bit depths of 10, a VDR bit depth of 12, then
+   * disable_residual_flag 1, padded to the 6 bytes that FFmpeg's container needs at least.
+   */
+  private static String rpuWithProfile(int vdrRpuProfile) {
+    return hex(
+        new Bits()
+            .put(6, 2)
+            .put(11, 0)
+            .put(4, vdrRpuProfile)
+            .put(4, 0)
+            .put(1, 1)
+            .put(1, 0)
+            .put(2, 0)
+            .put(9, 0b000011000)
+            .put(2, 1)
+            .put(1, 1)
+            .put(3, 0b011)
+            .put(3, 0b011)
+            .put(5, 0b00101)
+            .put(4, 0)
+            .put(1, 0)
+            .put(1, 1)
+            .put(32, 0)
+            .bytes());
+  }
 
   /**
    * The stream, when its 3 first frames carry no side data and its 3 first packets hold the
