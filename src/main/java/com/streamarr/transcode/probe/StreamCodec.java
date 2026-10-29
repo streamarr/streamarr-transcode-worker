@@ -2,8 +2,10 @@ package com.streamarr.transcode.probe;
 
 import static com.streamarr.transcode.probe.FfprobeJson.text;
 
+import build.buf.gen.streamarr.transcode.v1.DolbyVisionRpuHeader;
 import java.util.Arrays;
 import java.util.Optional;
+import java.util.OptionalInt;
 import lombok.NonNull;
 import tools.jackson.databind.JsonNode;
 
@@ -50,6 +52,20 @@ sealed interface StreamCodec permits StreamCodec.Walked, StreamCodec.Other {
     }
 
     return nalSyntax().filter(syntax -> syntax.extradataUnits(extradata).complete()).isPresent();
+  }
+
+  /**
+   * The Dolby Vision profile that an RPU header names when no configuration record names one, as
+   * FFmpeg 8.1 guesses it for each codec. Empty when the header names no profile, and for a codec
+   * that carries no Dolby Vision.
+   */
+  default OptionalInt guessDolbyVisionProfile(DolbyVisionRpuHeader header) {
+    return switch (this) {
+      case Walked.HEVC -> DolbyVisionProfileGuess.ofHevc(header);
+      case Walked.AV1 -> OptionalInt.of(10);
+      case Walked.H264 -> OptionalInt.of(9);
+      case Other _ -> OptionalInt.empty();
+    };
   }
 
   /** A codec whose extradata and first packets the probe walks. */

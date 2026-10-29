@@ -4,8 +4,8 @@ import build.buf.gen.streamarr.transcode.v1.DolbyVisionRpuHeader;
 import java.util.OptionalInt;
 
 /**
- * The Dolby Vision profile that an RPU header names when no configuration record names one, as
- * FFmpeg 8.1 guesses it for each codec. Empty when the header names no profile.
+ * The Dolby Vision profile that an HEVC RPU header names when no configuration record names one, as
+ * FFmpeg 8.1 guesses it. {@link StreamCodec#guessDolbyVisionProfile} guesses for the other codecs.
  */
 final class DolbyVisionProfileGuess {
 
@@ -13,16 +13,8 @@ final class DolbyVisionProfileGuess {
 
   private DolbyVisionProfileGuess() {}
 
-  static OptionalInt of(String codec, DolbyVisionRpuHeader header) {
-    return switch (codec) {
-      case "hevc" -> hevc(header);
-      case "av1" -> OptionalInt.of(10);
-      case "h264" -> OptionalInt.of(9);
-      default -> OptionalInt.empty();
-    };
-  }
-
-  private static OptionalInt hevc(DolbyVisionRpuHeader header) {
+  /** The guessed profile; empty when the header names no profile. */
+  static OptionalInt ofHevc(DolbyVisionRpuHeader header) {
     return switch (header.getVdrRpuProfile()) {
       case 0 -> header.getBaseLayerFullRange() ? OptionalInt.of(5) : OptionalInt.empty();
       case 1 -> OptionalInt.of(profileOneLayers(header));

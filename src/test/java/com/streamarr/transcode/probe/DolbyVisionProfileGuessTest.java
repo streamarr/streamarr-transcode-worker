@@ -43,7 +43,7 @@ class DolbyVisionProfileGuessTest {
             .setVdrBitDepth(vdrBitDepth)
             .build();
 
-    assertThat(DolbyVisionProfileGuess.of("hevc", header)).hasValue(profile);
+    assertThat(StreamCodec.Walked.HEVC.guessDolbyVisionProfile(header)).hasValue(profile);
   }
 
   @ParameterizedTest(name = "vdr_rpu_profile {0}, full range {1}")
@@ -56,7 +56,7 @@ class DolbyVisionProfileGuessTest {
             .setBaseLayerFullRange(fullRange)
             .build();
 
-    assertThat(DolbyVisionProfileGuess.of("hevc", header)).isEmpty();
+    assertThat(StreamCodec.Walked.HEVC.guessDolbyVisionProfile(header)).isEmpty();
   }
 
   @ParameterizedTest(name = "{0}")
@@ -66,13 +66,16 @@ class DolbyVisionProfileGuessTest {
     var profileFiveFields =
         DolbyVisionRpuHeader.newBuilder().setVdrRpuProfile(0).setBaseLayerFullRange(true).build();
 
-    assertThat(DolbyVisionProfileGuess.of(codec, profileFiveFields)).hasValue(profile);
+    assertThat(StreamCodec.named(codec).guessDolbyVisionProfile(profileFiveFields))
+        .hasValue(profile);
   }
 
   @Test
   @DisplayName("Should guess no profile when the codec carries no Dolby Vision")
   void shouldGuessNoProfileWhenTheCodecCarriesNoDolbyVision() {
-    assertThat(DolbyVisionProfileGuess.of("vp9", DolbyVisionRpuHeader.getDefaultInstance()))
+    assertThat(
+            StreamCodec.named("vp9")
+                .guessDolbyVisionProfile(DolbyVisionRpuHeader.getDefaultInstance()))
         .isEqualTo(OptionalInt.empty());
   }
 }
