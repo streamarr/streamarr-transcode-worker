@@ -1,12 +1,6 @@
 package com.streamarr.transcode.probe;
 
-import static com.streamarr.transcode.probe.FirstReads.extradata;
-import static com.streamarr.transcode.probe.FirstReads.frames;
 import static com.streamarr.transcode.probe.FirstReads.lengthPrefixed;
-import static com.streamarr.transcode.probe.FirstReads.output;
-import static com.streamarr.transcode.probe.FirstReads.packets;
-import static com.streamarr.transcode.probe.FirstReads.packetsUpTo;
-import static com.streamarr.transcode.probe.RecordedFfprobe.probe;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionPresent;
@@ -14,7 +8,6 @@ import build.buf.gen.streamarr.transcode.v1.DolbyVisionRpuPlacement;
 import build.buf.gen.streamarr.transcode.v1.Presence;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import build.buf.gen.streamarr.transcode.v1.VideoDynamicRange.DolbyVisionCase;
-import com.streamarr.transcode.probe.RecordedFfprobe.Answers;
 import java.util.HexFormat;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -36,15 +29,13 @@ class FfprobeExecutorDroppedNalUnitsTest {
   @DisplayName("HEVC")
   class HevcTests {
 
-    // An hvcC record without arrays whose NAL units take 4-byte lengths.
-    private static final String HEVC_RECORD =
-        "01 01 60 00 00 00 90 00 00 00 00 00 5d f0 00 fc fd f8 f8 00 00 0f 00";
+    private static final String HEVC_RECORD = HevcSamples.RECORD;
     // The same record, whose NAL units take 1-byte lengths.
     private static final String ONE_BYTE_LENGTHS_RECORD =
-        "01 01 60 00 00 00 90 00 00 00 00 00 5d f0 00 fc fd f8 f8 00 00 0c 00";
-    private static final String IDR_SLICE = "26 01 af 06 b8";
-    private static final String SLICE = "02 01 d0 09 7e";
-    private static final String AUD = "46 01 50";
+        HevcSamples.RECORD_HEADER.replaceFirst("0f$", "0c") + " 00";
+    private static final String IDR_SLICE = HevcSamples.IDR_SLICE;
+    private static final String SLICE = HevcSamples.SLICE;
+    private static final String AUD = HevcSamples.AUD;
     private static final String RPU = "7c 01 19 08 09 00 40 61 b6 50 6f 00 3f";
 
     @ParameterizedTest(name = "{0}")
@@ -97,18 +88,13 @@ class FfprobeExecutorDroppedNalUnitsTest {
           .isEqualTo(DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE);
     }
 
-    @ParameterizedTest(name = "{0}")
-    @CsvSource({
-      "forbidden_zero_bit 1, fc 01",
-      "nuh_temporal_id_plus1 0, 7c 00",
-      "nuh_layer_id 63, 7d f9"
-    })
+    @Test
     @DisplayName(
-        "Should rule Dolby Vision out when FFmpeg's splitter drops every NAL unit that looks like an"
-            + " RPU")
-    void shouldRuleDolbyVisionOutWhenFfmpegsSplitterDropsEveryNalUnitThatLooksLikeAnRpu(
-        String description, String header) {
-      var dropped = RPU.replaceFirst("^7c 01", header);
+        "Should rule Dolby Vision out when every NAL unit that looks like an RPU sets its"
+            + " forbidden_zero_bit")
+    void shouldRuleDolbyVisionOutWhenEveryNalUnitThatLooksLikeAnRpuSetsItsForbiddenZeroBit() {
+      // Only the splitter rules this unit out: its type, layer and TemporalId name an RPU.
+      var dropped = RPU.replaceFirst("^7c 01", "fc 01");
 
       var video =
           probed(
@@ -117,11 +103,12 @@ class FfprobeExecutorDroppedNalUnitsTest {
               lengthPrefixed(SLICE, dropped),
               lengthPrefixed(SLICE, dropped));
 
-      assertThat(video.getDynamicRange().hasDolbyVisionAbsent()).as(description).isTrue();
+      assertThat(video.getDynamicRange().hasDolbyVisionAbsent()).isTrue();
     }
 
     @ParameterizedTest(name = "{0}")
     @CsvSource({
+      "one byte, 05",
       "a length and a NAL unit of 2 bytes, 02 46 01",
       "a length of 0, 00 46",
       "a length that runs past the end, ff 46 01"
@@ -217,28 +204,21 @@ class FfprobeExecutorDroppedNalUnitsTest {
             + " splitter drops")
     void shouldRuleDolbyVisionOutWhenTheHvcCRecordHoldsAnEmptyNalUnitWhichFfmpegsSplitterDrops() {
       // One array of type 32 that holds one NAL unit of length 0.
-      var hvccRecord =
+      var record =
           HEVC_RECORD.substring(0, HEVC_RECORD.length() - "00".length()) + "01 20 00 01 00 00";
 
       var video =
-          probed(
-              hvccRecord, lengthPrefixed(IDR_SLICE), lengthPrefixed(SLICE), lengthPrefixed(SLICE));
+          probed(record, lengthPrefixed(IDR_SLICE), lengthPrefixed(SLICE), lengthPrefixed(SLICE));
 
       assertThat(video.getDynamicRange().hasDolbyVisionAbsent()).isTrue();
     }
 
-    private static DolbyVisionPresent placed(String hvccRecord, String... samples) {
-      return probed(hvccRecord, samples).getDynamicRange().getDolbyVisionPresent();
+    private static DolbyVisionPresent placed(String record, String... samples) {
+      return probed(record, samples).getDynamicRange().getDolbyVisionPresent();
     }
 
-    private static ProbeStreamInfo probed(String hvccRecord, String... samples) {
-      return probe(
-              Answers.builder()
-                  .ffprobeOutput(output("\"codec_name\":\"hevc\"," + extradata(hvccRecord)))
-                  .firstFrames(frames("", "", ""))
-                  .firstPackets(packetsUpTo(3, lengthPrefixed(SLICE), samples))
-                  .build())
-          .getStreams(0);
+    private static ProbeStreamInfo probed(String record, String... samples) {
+      return HevcSamples.probed(record, samples);
     }
 
     /** One sample whose NAL units each take a 1-byte length. */
@@ -257,11 +237,8 @@ class FfprobeExecutorDroppedNalUnitsTest {
   @DisplayName("H.264")
   class H264Tests {
 
-    // An avcC record whose NAL units take 4-byte lengths, with an SPS and a PPS.
-    private static final String AVC_RECORD =
-        "01 64 00 28 ff e1 00 04 67 64 00 28 01 00 04 68 ee 3c 80";
-    private static final String IDR_SLICE = "65 88 84 00 18";
-    private static final String SLICE = "41 9a 24 6c 41";
+    private static final String IDR_SLICE = AvcSamples.IDR_SLICE;
+    private static final String SLICE = AvcSamples.SLICE;
     private static final String RPU = "1c 19 08 09 08 40 61 59 41 bc 03 fe";
 
     @ParameterizedTest(name = "{0}")
@@ -301,13 +278,7 @@ class FfprobeExecutorDroppedNalUnitsTest {
     }
 
     private static ProbeStreamInfo probed(String... samples) {
-      return probe(
-              Answers.builder()
-                  .ffprobeOutput(output("\"codec_name\":\"h264\"," + extradata(AVC_RECORD)))
-                  .firstFrames(frames("", "", ""))
-                  .firstPackets(packets(samples))
-                  .build())
-          .getStreams(0);
+      return AvcSamples.probed(AvcSamples.RECORD, samples);
     }
   }
 }
