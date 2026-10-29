@@ -5,6 +5,7 @@ import static com.streamarr.transcode.engine.HevcCopies.endOfSequenceUnit;
 import static com.streamarr.transcode.engine.HevcCopies.fragmentBuilder;
 import static com.streamarr.transcode.engine.HevcCopies.hevcSampleEntry;
 import static com.streamarr.transcode.engine.HevcCopies.initializationSegment;
+import static com.streamarr.transcode.engine.HevcCopies.parameterSet;
 import static com.streamarr.transcode.engine.HevcCopies.rpu;
 import static com.streamarr.transcode.engine.HevcCopies.rpuUnit;
 import static com.streamarr.transcode.engine.HevcCopies.sample;
@@ -31,11 +32,14 @@ import java.util.Deque;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.stream.Stream;
+import lombok.Builder;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Named;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 @Tag("UnitTest")
@@ -45,6 +49,9 @@ class FragmentedMp4RpuMoverTest {
   private static final byte[] AUDIO_FRAME = {0x21, 0x10, 0x04};
   private static final TimeBase TRACK_TIME_BASE = new TimeBase(1, 24_000);
   private static final int NON_SYNC_SAMPLE = 0x0001_0000;
+  // ADR 0013: what the mover holds beyond the fragment it reads, and the NAL units of a sample.
+  private static final int MOST_HELD_BYTES = 32 * 1024 * 1024;
+  private static final int MOST_NAL_UNITS_PER_SAMPLE = 4096;
 
   @Test
   @DisplayName(
@@ -67,8 +74,82 @@ class FragmentedMp4RpuMoverTest {
     assertThat(videoSamplesOf(moved))
         .containsExactly(
             hex(aud(), slice(0), rpu(0)), hex(aud(), slice(1), rpu(1)), hex(aud(), slice(2)));
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep every sample's decode time, composition offset, duration and flags, and every"
+          + " audio sample, when RPUs move across fragments")
+  void
+      shouldKeepEverySamplesDecodeTimeCompositionOffsetDurationAndFlagsAndEveryAudioSampleWhenRpusMoveAcrossFragments()
+          throws IOException {
+    var copy =
+        stream(
+            fragmentBuilder()
+                .startsWithKeyframe(true)
+                .video(0, sample(aud(), slice(0)))
+                .audio(0, AUDIO_FRAME, AUDIO_FRAME)
+                .build(),
+            fragmentBuilder()
+                .video(1001, sample(aud(), rpu(0), slice(1)), sample(rpu(1), slice(2)))
+                .audio(2048, AUDIO_FRAME)
+                .build());
+
+    var moved = move(copy);
+
+    assertThat(videoSamplesOf(moved)).isNotEqualTo(videoSamplesOf(copy));
     assertThat(timingOf(moved)).isEqualTo(timingOf(copy));
     assertThat(audioSamplesOf(moved)).isEqualTo(audioSamplesOf(copy));
+  }
+
+  @Test
+  @DisplayName("Should keep each moof's mfhd when it rewrites the moof's video trafs")
+  void shouldKeepEachMoofsMfhdWhenItRewritesTheMoofsVideoTrafs() throws IOException {
+    var copy =
+        stream(
+            fragmentBuilder().video(0, sample(aud(), slice(0))).build(),
+            fragmentBuilder().video(1001, sample(aud(), rpu(0), slice(1))).build());
+
+    var moved = move(copy);
+
+    assertThat(videoSamplesOf(moved)).isNotEqualTo(videoSamplesOf(copy));
+    assertThat(moofChildrenOtherThanTrafsOf(moved))
+        .isEqualTo(moofChildrenOtherThanTrafsOf(copy))
+        .hasSize(2);
+  }
+
+  @Test
+  @DisplayName(
+      "Should end the previous picture's sample with the moved RPU after the RPU it already held"
+          + " when the stream mixes the conforming and the shifted layouts")
+  void
+      shouldEndThePreviousPicturesSampleWithTheMovedRpuAfterTheRpuItAlreadyHeldWhenTheStreamMixesTheConformingAndTheShiftedLayouts()
+          throws IOException {
+    var copy =
+        stream(
+            fragmentBuilder().video(0, sample(slice(0), rpu(0))).build(),
+            fragmentBuilder().video(1001, sample(rpu(5), slice(1))).build());
+
+    var moved = move(copy);
+
+    assertThat(videoSamplesOf(moved)).containsExactly(hex(slice(0), rpu(0), rpu(5)), hex(slice(1)));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"hvc1", "hev1", "dvh1", "dvhe"})
+  @DisplayName(
+      "Should move RPUs when the copy's video sample entry is any that FFmpeg writes of HEVC")
+  void shouldMoveRpusWhenTheCopysVideoSampleEntryIsAnyThatFfmpegWritesOfHevc(String sampleEntry)
+      throws IOException {
+    var copy =
+        concat(
+            initializationSegment(hevcSampleEntry(sampleEntry, 4)),
+            fragmentBuilder().video(0, sample(slice(0))).build(),
+            fragmentBuilder().video(1001, sample(rpu(0), slice(1))).build());
+
+    var moved = move(copy);
+
+    assertThat(videoSamplesOf(moved)).containsExactly(hex(slice(0), rpu(0)), hex(slice(1)));
   }
 
   @Test
@@ -79,12 +160,11 @@ class FragmentedMp4RpuMoverTest {
     var copy =
         stream(
             fragmentBuilder().video(0, sample(aud(), rpu(9), slice(0))).build(),
-            fragmentBuilder().video(1001, sample(aud(), rpu(0), slice(1))).build());
+            fragmentBuilder().video(1001, sample(aud(), slice(1))).build());
 
     var moved = move(copy);
 
-    assertThat(videoSamplesOf(moved))
-        .containsExactly(hex(aud(), slice(0), rpu(0)), hex(aud(), slice(1)));
+    assertThat(videoSamplesOf(moved)).containsExactly(hex(aud(), slice(0)), hex(aud(), slice(1)));
   }
 
   @Test
@@ -173,6 +253,46 @@ class FragmentedMp4RpuMoverTest {
                 .build());
 
     assertThat(move(copy)).as(description).isEqualTo(copy);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({
+    "type 63 with rpu_nal_prefix 25, 7E 01 19 00",
+    "type 62 with a prefix other than 25, 7C 01 18 00",
+    "type 62 without a payload byte, 7C 01"
+  })
+  @DisplayName(
+      "Should pass the copy unchanged when a NAL unit that starts a sample is no RPU that FFmpeg's"
+          + " decoder reads")
+  void shouldPassTheCopyUnchangedWhenANalUnitThatStartsASampleIsNoRpuThatFfmpegsDecoderReads(
+      String description, String notAnRpu) throws IOException {
+    var copy =
+        stream(
+            fragmentBuilder().video(0, sample(slice(0))).build(),
+            fragmentBuilder().video(1001, sample(unit(notAnRpu), slice(1))).build());
+
+    assertThat(move(copy)).as(description).isEqualTo(copy);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({"VPS, 32", "SPS, 33", "PPS, 34"})
+  @DisplayName(
+      "Should move an RPU behind the previous picture when a parameter set rather than a slice"
+          + " precedes it in its sample")
+  void
+      shouldMoveAnRpuBehindThePreviousPictureWhenAParameterSetRatherThanASlicePrecedesItInItsSample(
+          String description, int parameterSetType) throws IOException {
+    var parameterSet = parameterSet(parameterSetType);
+    var copy =
+        stream(
+            fragmentBuilder().video(0, sample(slice(0))).build(),
+            fragmentBuilder().video(1001, sample(parameterSet, rpu(1), slice(1))).build());
+
+    var moved = move(copy);
+
+    assertThat(videoSamplesOf(moved))
+        .as(description)
+        .containsExactly(hex(slice(0), rpu(1)), hex(parameterSet, slice(1)));
   }
 
   @ParameterizedTest(name = "{0}")
@@ -465,7 +585,7 @@ class FragmentedMp4RpuMoverTest {
   void
       shouldPassOnWhatItHoldsAndDropTheNextRpuThatStartsASampleWhenAudioPastThePreviousPictureExceedsWhatTheMoverHolds()
           throws IOException {
-    var half = new byte[Math.toIntExact(FragmentedMp4RpuMover.MAXIMUM_HELD_BYTES / 2)];
+    var half = new byte[MOST_HELD_BYTES / 2];
     var copy =
         stream(
             fragmentBuilder().video(0, sample(slice(0))).build(),
@@ -486,7 +606,7 @@ class FragmentedMp4RpuMoverTest {
   void
       shouldKeepEachRpuBehindThePreviousPictureWhenConsecutiveFragmentsTogetherExceedWhatTheMoverHoldsButThePreviousPicturesFragmentAloneDoesNot()
           throws IOException {
-    var filler = suffixSeiOf(Math.toIntExact(FragmentedMp4RpuMover.MAXIMUM_HELD_BYTES / 2));
+    var filler = suffixSeiOf(MOST_HELD_BYTES / 2);
     var copy =
         stream(
             fragmentBuilder().video(0, sample(slice(0), filler)).build(),
@@ -549,13 +669,12 @@ class FragmentedMp4RpuMoverTest {
         stream(
             fragmentBuilder().video(0, sample(slice(0))).build(),
             fragmentBuilder().video(1001, sample(rpu(1), rpu(2))).build(),
-            fragmentBuilder().video(2002, sample(rpu(3))).build(),
-            fragmentBuilder().video(3003, sample(rpu(4), slice(1))).build());
+            fragmentBuilder().video(2002, sample(rpu(3), rpu(4), slice(1))).build());
 
     var moved = move(copy);
 
     assertThat(videoSamplesOf(moved))
-        .containsExactly(hex(slice(0), rpu(4)), hex(rpu(1), rpu(2)), hex(rpu(3)), hex(slice(1)));
+        .containsExactly(hex(slice(0), rpu(4)), hex(rpu(1), rpu(2)), hex(slice(1)));
   }
 
   @Test
@@ -565,15 +684,17 @@ class FragmentedMp4RpuMoverTest {
   void
       shouldKeepTheBytesOfASampleItCannotDelimitAndDropTheNextRpuThatStartsASampleWhenTheRpusBelongToThePictureBefore()
           throws IOException {
-    var undelimited = concat(slice(0), u32(64));
+    var undelimited = concat(slice(1), u32(64));
     var copy =
         stream(
-            fragmentBuilder().video(0, undelimited).build(),
-            fragmentBuilder().video(1001, sample(rpu(0), slice(1))).build());
+            fragmentBuilder().video(0, sample(slice(0))).build(),
+            fragmentBuilder().video(1001, undelimited).build(),
+            fragmentBuilder().video(2002, sample(rpu(1), slice(2))).build());
 
     var moved = move(copy);
 
-    assertThat(videoSamplesOf(moved)).containsExactly(hex(undelimited), hex(slice(1)));
+    assertThat(videoSamplesOf(moved))
+        .containsExactly(hex(slice(0)), hex(undelimited), hex(slice(2)));
   }
 
   @ParameterizedTest(name = "{0}-byte lengths")
@@ -594,6 +715,22 @@ class FragmentedMp4RpuMoverTest {
     var moved = move(copy);
 
     assertThat(videoSamplesOf(moved)).containsExactly(hex(shortSlice, shortRpu), hex(shortSlice));
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail as a malformed box when the hvcC declares NAL unit lengths of 3 bytes, which"
+          + " ISO/IEC 14496-15 does not allow")
+  void shouldFailAsAMalformedBoxWhenTheHvcCDeclaresNalUnitLengthsOf3Bytes() {
+    var copy =
+        concat(
+            initializationSegment(hevcSampleEntry("hvc1", 3)),
+            fragmentBuilder().video(0, sample(slice(0))).build());
+
+    assertThatExceptionOfType(FragmentedMp4Exception.class)
+        .isThrownBy(() -> move(copy))
+        .extracting(FragmentedMp4Exception::getReason)
+        .isEqualTo(Reason.MALFORMED_BOX);
   }
 
   @Test
@@ -620,75 +757,60 @@ class FragmentedMp4RpuMoverTest {
                 packetIn(TRACK_TIME_BASE).keyframe(false).duration(1000)));
 
     assertThat(timingOf(moved))
-        .containsExactly(
-            "video 0/0/1000/" + Integer.toHexString(IsoBoxes.SYNC_SAMPLE_FLAGS),
-            "video 1001/1001/1000/" + Integer.toHexString(IsoBoxes.NON_SYNC_SAMPLE_FLAGS),
-            "video 2003/2002/1000/" + Integer.toHexString(IsoBoxes.NON_SYNC_SAMPLE_FLAGS),
-            "audio 0/0/1024/" + Integer.toHexString(IsoBoxes.SYNC_SAMPLE_FLAGS));
+        .isEqualTo(
+            timingOf(copy).stream()
+                .map(timing -> timing.video() ? timing.withDuration(1000) : timing)
+                .toList());
     assertThat(videoSamplesOf(moved)).isEqualTo(videoSamplesOf(copy));
     assertThat(audioSamplesOf(moved)).isEqualTo(audioSamplesOf(copy));
   }
 
-  @Test
-  @DisplayName(
-      "Should convert each source packet's duration into the video track's timescale when the"
-          + " source's time base differs")
-  void
-      shouldConvertEachSourcePacketsDurationIntoTheVideoTracksTimescaleWhenTheSourcesTimeBaseDiffers()
-          throws IOException {
-    var copy =
-        stream(
-            fragmentBuilder().video(0, sample(slice(0))).build(),
-            fragmentBuilder().video(1001, sample(slice(1))).build());
-    var source = new TimeBase(1, 12_000);
-
-    var moved =
-        move(
-            copy,
-            timingsOf(
-                packetIn(source).keyframe(false).duration(492),
-                packetIn(source).keyframe(false).duration(5_000)));
-
-    assertThat(timingOf(moved))
-        .extracting(timing -> timing.substring(0, timing.lastIndexOf('/')))
-        .containsExactly("video 0/2002/984", "video 1001/2002/10000");
-  }
-
-  @Test
+  @ParameterizedTest(name = "duration {0}")
+  @ValueSource(longs = {0, -1001})
   @DisplayName(
       "Should pass a fragment unchanged when the source's packet leaves its duration unknown")
-  void shouldPassAFragmentUnchangedWhenTheSourcesPacketLeavesItsDurationUnknown()
+  void shouldPassAFragmentUnchangedWhenTheSourcesPacketLeavesItsDurationUnknown(long duration)
       throws IOException {
     var copy = stream(fragmentBuilder().video(0, sample(slice(0))).build());
 
-    var moved = move(copy, timingsOf(packetIn(TRACK_TIME_BASE).keyframe(false).duration(0)));
+    var moved = move(copy, timingsOf(packetIn(TRACK_TIME_BASE).keyframe(false).duration(duration)));
 
     assertThat(moved).isEqualTo(copy);
   }
 
-  @ParameterizedTest(name = "source keyframe {0}")
-  @ValueSource(booleans = {true, false})
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("keyframeMismatches")
   @DisplayName(
-      "Should fail as unusable video timing when a source packet is a keyframe where its sample is"
-          + " no sync sample, or the reverse")
-  void
-      shouldFailAsUnusableVideoTimingWhenASourcePacketIsAKeyframeWhereItsSampleIsNoSyncSampleOrTheReverse(
-          boolean firstIsKeyframe) {
+      "Should fail as unusable video timing when a source packet's keyframe flag disagrees with its"
+          + " sample's sync flag")
+  void shouldFailAsUnusableVideoTimingWhenASourcePacketsKeyframeFlagDisagreesWithItsSamplesSyncFlag(
+      VideoPacketTimings timings) {
+    // The copy's first video sample is a sync sample and its second is not.
     var copy =
         stream(
             fragmentBuilder()
                 .startsWithKeyframe(true)
                 .video(0, sample(slice(0)), sample(slice(1)))
                 .build());
-    var timings =
-        timingsOf(
-            packetIn(TRACK_TIME_BASE).keyframe(firstIsKeyframe).duration(1001),
-            packetIn(TRACK_TIME_BASE).keyframe(true).duration(1001));
 
     assertThatExceptionOfType(FragmentedMp4Exception.class)
         .isThrownBy(() -> move(copy, timings))
         .extracting(FragmentedMp4Exception::getReason)
         .isEqualTo(Reason.UNUSABLE_VIDEO_TIMING);
+  }
+
+  static Stream<Named<VideoPacketTimings>> keyframeMismatches() {
+    return Stream.of(
+        Named.of(
+            "a keyframe where its sample is no sync sample",
+            timingsOf(
+                packetIn(TRACK_TIME_BASE).keyframe(true).duration(1001),
+                packetIn(TRACK_TIME_BASE).keyframe(true).duration(1001))),
+        Named.of(
+            "no keyframe where its sample is a sync sample",
+            timingsOf(
+                packetIn(TRACK_TIME_BASE).keyframe(false).duration(1001),
+                packetIn(TRACK_TIME_BASE).keyframe(false).duration(1001))));
   }
 
   @Test
@@ -720,17 +842,20 @@ class FragmentedMp4RpuMoverTest {
   }
 
   @Test
-  @DisplayName("Should fail as an output mismatch when the copy declares video other than HEVC")
-  void shouldFailAsAnOutputMismatchWhenTheCopyDeclaresVideoOtherThanHevc() {
-    var copy =
-        concat(
-            initializationSegment(box("avc1", new byte[78], box("avcC", new byte[7]))),
-            fragmentBuilder().video(0, sample(slice(0))).build());
+  @DisplayName(
+      "Should fail as unusable video timing when a source packet's duration in the video track's"
+          + " timescale exceeds a signed 64-bit count")
+  void
+      shouldFailAsUnusableVideoTimingWhenASourcePacketsDurationInTheVideoTracksTimescaleExceedsASigned64BitCount() {
+    var copy = stream(fragmentBuilder().video(0, sample(slice(0))).build());
+    // 768,614,336,404,565 seconds are 2^64 + 8,384 ticks at 24,000 ticks a second.
+    var timings =
+        timingsOf(packetIn(new TimeBase(1, 1)).keyframe(false).duration(768_614_336_404_565L));
 
     assertThatExceptionOfType(FragmentedMp4Exception.class)
-        .isThrownBy(() -> move(copy))
+        .isThrownBy(() -> move(copy, timings))
         .extracting(FragmentedMp4Exception::getReason)
-        .isEqualTo(Reason.OUTPUT_MISMATCH);
+        .isEqualTo(Reason.UNUSABLE_VIDEO_TIMING);
   }
 
   @Test
@@ -742,6 +867,37 @@ class FragmentedMp4RpuMoverTest {
             .extraVideoTrafBox(fullBox("sdtp", 0, new byte[1]))
             .build();
     var copy = concat(initializationSegment(), withSampleDependencies);
+
+    assertThatExceptionOfType(FragmentedMp4Exception.class)
+        .isThrownBy(() -> move(copy))
+        .extracting(FragmentedMp4Exception::getReason)
+        .isEqualTo(Reason.UNEXPECTED_BOX);
+  }
+
+  @Test
+  @DisplayName("Should fail as an unexpected box when a moof holds a box FFmpeg does not write")
+  void shouldFailAsAnUnexpectedBoxWhenAMoofHoldsABoxFfmpegDoesNotWrite() {
+    var withProtection =
+        fragmentBuilder()
+            .video(0, sample(slice(0)))
+            .extraMoofBox(fullBox("pssh", 0, new byte[20]))
+            .build();
+
+    assertThatExceptionOfType(FragmentedMp4Exception.class)
+        .isThrownBy(() -> move(concat(initializationSegment(), withProtection)))
+        .extracting(FragmentedMp4Exception::getReason)
+        .isEqualTo(Reason.UNEXPECTED_BOX);
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail as an unexpected box when a tfhd that counts from its moof also declares a base"
+          + " data offset")
+  void shouldFailAsAnUnexpectedBoxWhenATfhdThatCountsFromItsMoofAlsoDeclaresABaseDataOffset() {
+    // The base data offset is where the moof starts, so the run places its sample in the mdat.
+    var moof = moofWithBaseDataOffset(0);
+    moof = moofWithBaseDataOffset(moof.length + 8);
+    var copy = concat(initializationSegment(), moof, box("mdat", new byte[1]));
 
     assertThatExceptionOfType(FragmentedMp4Exception.class)
         .isThrownBy(() -> move(copy))
@@ -804,13 +960,26 @@ class FragmentedMp4RpuMoverTest {
       "Should keep a sample's bytes when it holds more NAL units than an HEVC picture's sample can")
   void shouldKeepASamplesBytesWhenItHoldsMoreNalUnitsThanAnHevcPicturesSampleCan()
       throws IOException {
-    var units = new byte[HevcNalUnit.MAXIMUM_NAL_UNITS_PER_SAMPLE + 1][];
-    units[0] = rpu(0);
-    Arrays.fill(units, 1, units.length - 1, aud());
-    units[units.length - 1] = slice(0);
-    var copy = stream(fragmentBuilder().video(0, sample(units)).build());
+    var copy =
+        stream(fragmentBuilder().video(0, sliceRpuThenAuds(MOST_NAL_UNITS_PER_SAMPLE + 1)).build());
 
     assertThat(move(copy)).isEqualTo(copy);
+  }
+
+  @Test
+  @DisplayName(
+      "Should move an RPU to the end of its sample when the sample holds as many NAL units as an"
+          + " HEVC picture's sample can")
+  void shouldMoveAnRpuToTheEndOfItsSampleWhenTheSampleHoldsAsManyNalUnitsAsAnHevcPicturesSampleCan()
+      throws IOException {
+    var auds = new byte[MOST_NAL_UNITS_PER_SAMPLE - 2][];
+    Arrays.fill(auds, aud());
+    var copy =
+        stream(fragmentBuilder().video(0, sliceRpuThenAuds(MOST_NAL_UNITS_PER_SAMPLE)).build());
+
+    var moved = move(copy);
+
+    assertThat(videoSamplesOf(moved)).containsExactly(hex(slice(0), sample(auds), rpu(0)));
   }
 
   @Test
@@ -838,18 +1007,6 @@ class FragmentedMp4RpuMoverTest {
   }
 
   @Test
-  @DisplayName("Should fail as the end of the file in a box body when the copy ends inside an mdat")
-  void shouldFailAsTheEndOfTheFileInABoxBodyWhenTheCopyEndsInsideAnMdat() {
-    var copy = stream(fragmentBuilder().video(0, sample(slice(0))).build());
-    var truncated = Arrays.copyOf(copy, copy.length - 2);
-
-    assertThatExceptionOfType(FragmentedMp4Exception.class)
-        .isThrownBy(() -> move(truncated))
-        .extracting(FragmentedMp4Exception::getReason)
-        .isEqualTo(Reason.END_OF_FILE_IN_BOX_BODY);
-  }
-
-  @Test
   @DisplayName("Should write nothing when the copy is empty")
   void shouldWriteNothingWhenTheCopyIsEmpty() throws IOException {
     assertThat(move(new byte[0])).isEmpty();
@@ -864,6 +1021,33 @@ class FragmentedMp4RpuMoverTest {
             fullBox("tfhd", IsoBoxes.TFHD_DEFAULT_SAMPLE_SIZE, u32(1), u32(1)),
             fullBox("tfdt", 0, u32(0)),
             fullBox("trun", IsoBoxes.TRUN_DATA_OFFSET, u32(1), u32(dataOffset))));
+  }
+
+  private static byte[] moofWithBaseDataOffset(int dataOffset) {
+    return box(
+        "moof",
+        fullBox("mfhd", 0, u32(1)),
+        box(
+            "traf",
+            fullBox(
+                "tfhd",
+                IsoBoxes.TFHD_BASE_DATA_OFFSET
+                    | IsoBoxes.TFHD_DEFAULT_BASE_IS_MOOF
+                    | IsoBoxes.TFHD_DEFAULT_SAMPLE_SIZE,
+                u32(IsoBoxes.VIDEO_TRACK_ID),
+                IsoBoxes.u64(initializationSegment().length),
+                u32(1)),
+            fullBox("tfdt", 0, u32(0)),
+            fullBox("trun", IsoBoxes.TRUN_DATA_OFFSET, u32(1), u32(dataOffset))));
+  }
+
+  // A slice, the RPU behind it and then AUDs, this many NAL units in all.
+  private static byte[] sliceRpuThenAuds(int nalUnits) {
+    var units = new byte[nalUnits][];
+    units[0] = slice(0);
+    units[1] = rpu(0);
+    Arrays.fill(units, 2, nalUnits, aud());
+    return sample(units);
   }
 
   // Runs of one video sample each, which all place that sample at the same data offset.
@@ -984,24 +1168,51 @@ class FragmentedMp4RpuMoverTest {
   }
 
   // Every sample's track, decode time, composition offset, duration and flags, in order.
-  private static List<String> timingOf(byte[] stream) throws IOException {
+  private static List<SampleTiming> timingOf(byte[] stream) throws IOException {
     return Mp4Stream.read(Mp4Stream.readerOf(stream)).fragments().stream()
         .flatMap(
             fragment ->
                 Stream.concat(
-                    fragment.videoSamples().stream().map(sample -> "video " + timing(sample)),
-                    fragment.audioSamples().stream().map(sample -> "audio " + timing(sample))))
+                    fragment.videoSamples().stream().map(sample -> SampleTiming.of(true, sample)),
+                    fragment.audioSamples().stream().map(sample -> SampleTiming.of(false, sample))))
         .toList();
   }
 
-  private static String timing(Sample sample) {
-    return sample.decodeTime()
-        + "/"
-        + sample.compositionOffset()
-        + "/"
-        + sample.duration()
-        + "/"
-        + Integer.toHexString(sample.flags());
+  @Builder(toBuilder = true)
+  private record SampleTiming(
+      boolean video, long decodeTime, long compositionOffset, long duration, int flags) {
+
+    static SampleTiming of(boolean video, Sample sample) {
+      return SampleTiming.builder()
+          .video(video)
+          .decodeTime(sample.decodeTime())
+          .compositionOffset(sample.compositionOffset())
+          .duration(sample.duration())
+          .flags(sample.flags())
+          .build();
+    }
+
+    SampleTiming withDuration(long duration) {
+      return toBuilder().duration(duration).build();
+    }
+  }
+
+  // The children of each moof other than its trafs, as type and body.
+  private static List<String> moofChildrenOtherThanTrafsOf(byte[] stream) throws IOException {
+    return Mp4Stream.read(Mp4Stream.readerOf(stream)).fragments().stream()
+        .map(fragment -> fragment.boxes().getFirst())
+        .flatMap(
+            moof ->
+                new BoxView("moof", ByteBuffer.wrap(moof, 8, moof.length - 8)).children().stream())
+        .filter(child -> !child.type().equals("traf"))
+        .map(child -> child.type() + " " + HexFormat.of().formatHex(bytesOf(child.body())))
+        .toList();
+  }
+
+  private static byte[] bytesOf(ByteBuffer body) {
+    var bytes = new byte[body.remaining()];
+    body.duplicate().get(bytes);
+    return bytes;
   }
 
   // A length-prefixed suffix SEI NAL unit whose payload holds this many zero bytes.
