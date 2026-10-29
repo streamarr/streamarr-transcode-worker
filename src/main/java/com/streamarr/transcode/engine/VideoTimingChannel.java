@@ -12,7 +12,11 @@ import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileAttribute;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.BlockingDeque;
 import java.util.concurrent.LinkedBlockingDeque;
 import java.util.concurrent.atomic.AtomicReference;
@@ -37,6 +41,9 @@ final class VideoTimingChannel implements VideoPacketTimings, AutoCloseable {
    */
   static final int MAXIMUM_PACKETS_AHEAD = 65_536;
 
+  private static final FileAttribute<Set<PosixFilePermission>> OWNER_ONLY =
+      PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------"));
+
   private final Path directory;
   private final Path socket;
   private final ServerSocketChannel listener;
@@ -58,7 +65,7 @@ final class VideoTimingChannel implements VideoPacketTimings, AutoCloseable {
 
   /** Listens on a new socket, and reads the framecrc of the first FFmpeg that connects to it. */
   static VideoTimingChannel open() throws IOException {
-    var directory = Files.createTempDirectory("sts");
+    var directory = Files.createTempDirectory("sts", OWNER_ONLY);
     var socket = directory.resolve("v");
     try {
       var listener = ServerSocketChannel.open(StandardProtocolFamily.UNIX);
