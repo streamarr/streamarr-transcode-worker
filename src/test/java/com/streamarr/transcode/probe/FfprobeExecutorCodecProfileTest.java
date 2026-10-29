@@ -46,6 +46,49 @@ class FfprobeExecutorCodecProfileTest {
     assertThat(streamOf(fixture, 0).getCodecLevel()).isEqualTo(level);
   }
 
+  @Nested
+  @DisplayName("Record Headers")
+  class RecordHeaderTests {
+
+    @Test
+    @DisplayName(
+        "Should read the profile, level and tier from the hvcC header when the record holds no"
+            + " parameter set")
+    void shouldReadTheProfileLevelAndTierFromTheHvcCHeaderWhenTheRecordHoldsNoParameterSet() {
+      // general_profile_idc 2, the Main tier and general_level_idc 120.
+      var video = stream("hevc", HevcSamples.RECORD);
+
+      assertThat(video.getCodecProfile())
+          .isEqualTo(VideoCodecProfile.VIDEO_CODEC_PROFILE_HEVC_MAIN_10);
+      assertThat(video.getCodecTier()).isEqualTo(VideoCodecTier.VIDEO_CODEC_TIER_MAIN);
+      assertThat(video.getCodecLevel()).isEqualTo(40);
+    }
+
+    @Test
+    @DisplayName(
+        "Should read the profile and level from the avcC header when the record holds no SPS")
+    void shouldReadTheProfileAndLevelFromTheAvcCHeaderWhenTheRecordHoldsNoSps() {
+      // AVCProfileIndication 100 and AVCLevelIndication 40, no SPS and no PPS.
+      var video = stream("h264", "01 64 00 28 ff e0 00");
+
+      assertThat(video.getCodecProfile())
+          .isEqualTo(VideoCodecProfile.VIDEO_CODEC_PROFILE_H264_HIGH);
+      assertThat(video.getCodecTier()).isEqualTo(VideoCodecTier.VIDEO_CODEC_TIER_UNSPECIFIED);
+      assertThat(video.getCodecLevel()).isEqualTo(40);
+    }
+
+    @Test
+    @DisplayName(
+        "Should leave the profile unspecified when the record ends inside its header's profile"
+            + " fields")
+    void shouldLeaveTheProfileUnspecifiedWhenTheRecordEndsInsideItsHeadersProfileFields() {
+      var video = stream("hevc", "01 02 20 00 00 00 90");
+
+      assertThat(video.getCodecProfile())
+          .isEqualTo(VideoCodecProfile.VIDEO_CODEC_PROFILE_UNSPECIFIED);
+    }
+  }
+
   static Stream<Named<RecordedStream>> recordedStreams() {
     return Stream.of(
             h264Stream()
@@ -70,6 +113,14 @@ class FfprobeExecutorCodecProfileTest {
                 .profile(VideoCodecProfile.VIDEO_CODEC_PROFILE_HEVC_MAIN_10)
                 .level(51)
                 .tier(VideoCodecTier.VIDEO_CODEC_TIER_HIGH),
+            mainTierStream()
+                .fixture("mp4-dovi-p5-hev1.mp4")
+                .profile(VideoCodecProfile.VIDEO_CODEC_PROFILE_HEVC_MAIN_10)
+                .level(40),
+            mainTierStream()
+                .fixture("mp4-dovi-p81-fate.mp4")
+                .profile(VideoCodecProfile.VIDEO_CODEC_PROFILE_HEVC_MAIN_10)
+                .level(40),
             mainTierStream()
                 .fixture("mpegts-hevc-ac3.ts")
                 .profile(VideoCodecProfile.VIDEO_CODEC_PROFILE_HEVC_MAIN)
