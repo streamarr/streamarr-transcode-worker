@@ -529,10 +529,35 @@ class FfprobeExecutorSeiTest {
     @CsvSource({
       // all_layer_representations_in_au_flag 1, then alignment.
       "H264, 1e, 80",
+      // operation_point_flag 0, all_view_components_in_au_flag 1.
+      "H264, 25, 40",
+      // MVCD: operation_point_flag 0, all_view_components_in_au_flag 1.
+      "H264, 30, 40",
+      // bitstream_subset_flag 0, nesting_op_flag 0, all_layers_flag 1.
+      "HEVC, 85, 20"
+    })
+    @DisplayName("Should leave HDR10+ unspecified when only a nesting message holds it")
+    void shouldLeaveHdr10PlusUnspecifiedWhenOnlyANestingMessageHoldsIt(
+        Coding coding, String payloadType, String header) {
+      var video =
+          coding.probed(coding.sample(coding.sei(nesting(payloadType, header, HDR10_PLUS))));
+
+      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
+    }
+
+    // A header that the walk misreads moves the nested message, which then runs past its nesting
+    // message, so only a correctly skipped header leaves HDR10+ absent.
+    @ParameterizedTest(name = "{0} payloadType {1} header {2}")
+    @CsvSource({
+      // all_layer_representations_in_au_flag 1, then alignment.
+      "H264, 1e, 80",
       // num_layer_representations_minus1 0, one dependency and quality id, sei_temporal_id 0.
       "H264, 1e, 40 00",
       // operation_point_flag 0, all_view_components_in_au_flag 1.
       "H264, 25, 40",
+      // operation_point_flag 0, all_view_components_in_au_flag 0, num_view_components_minus1 0,
+      // a view id.
+      "H264, 25, 20 00",
       // operation_point_flag 1, num_view_components_op_minus1 0, a view id, sei_op_temporal_id.
       "H264, 25, c0 00",
       // MVCD: operation_point_flag 0, all_view_components_in_au_flag 1.
@@ -546,28 +571,6 @@ class FfprobeExecutorSeiTest {
       // MVCD: operation_point_flag 1, sei_op_texture_only_flag 0, num_view_components_op_minus1 0,
       // a view id with its depth and texture flags, sei_op_temporal_id.
       "H264, 30, a0 00 00",
-      // bitstream_subset_flag 0, nesting_op_flag 0, all_layers_flag 1.
-      "HEVC, 85, 20",
-      // nesting_op_flag 1, default_op_flag 0, nesting_num_ops_minus1 0, one operation point.
-      "HEVC, 85, 51",
-      // all_layers_flag 0, a maximum temporal id, nesting_num_layers_minus1 0, one layer id.
-      "HEVC, 85, 02 00"
-    })
-    @DisplayName("Should leave HDR10+ unspecified when only a nesting message holds it")
-    void shouldLeaveHdr10PlusUnspecifiedWhenOnlyANestingMessageHoldsIt(
-        Coding coding, String payloadType, String header) {
-      var video =
-          coding.probed(coding.sample(coding.sei(nesting(payloadType, header, HDR10_PLUS))));
-
-      assertThat(video.getDynamicRange().getHdr10Plus()).isEqualTo(Presence.PRESENCE_UNSPECIFIED);
-    }
-
-    @ParameterizedTest(name = "{0} payloadType {1}")
-    @CsvSource({
-      "H264, 1e, 80",
-      "H264, 25, 40",
-      "H264, 30, 40",
-      "H264, 30, a0 00 00",
       // MVCD headers of 8 views, as ITU-T H.264 (08/2024) H.13.1.2 gives them: a bit too few or
       // too many for each view moves the nested messages a whole byte. operation_point_flag 0,
       // all_view_components_in_au_flag 0, then each sei_view_id and sei_view_applicability_flag.
@@ -578,7 +581,15 @@ class FfprobeExecutorSeiTest {
       // operation_point_flag 1, sei_op_texture_only_flag 1, then each sei_op_view_id, then
       // sei_op_temporal_id.
       "H264, 30, c4 7f ff ff ff ff ff ff ff ff ff 80",
-      "HEVC, 85, 20"
+      // bitstream_subset_flag 0, nesting_op_flag 0, all_layers_flag 1.
+      "HEVC, 85, 20",
+      // nesting_op_flag 1, default_op_flag 0, nesting_num_ops_minus1 0, one operation point.
+      "HEVC, 85, 51",
+      // nesting_op_flag 1, default_op_flag 1, nesting_num_ops_minus1 0: the default operation
+      // point alone, so no operation point follows.
+      "HEVC, 85, 70",
+      // all_layers_flag 0, a maximum temporal id, nesting_num_layers_minus1 0, one layer id.
+      "HEVC, 85, 02 00"
     })
     @DisplayName("Should report HDR10+ absent when a nesting message holds other messages")
     void shouldReportHdr10PlusAbsentWhenANestingMessageHoldsOtherMessages(
