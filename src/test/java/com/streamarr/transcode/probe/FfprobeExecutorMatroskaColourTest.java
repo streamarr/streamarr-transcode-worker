@@ -12,6 +12,7 @@ import static com.streamarr.transcode.probe.EbmlElements.MASTERING_METADATA;
 import static com.streamarr.transcode.probe.EbmlElements.MAX_CLL;
 import static com.streamarr.transcode.probe.EbmlElements.MAX_FALL;
 import static com.streamarr.transcode.probe.EbmlElements.PIXEL_WIDTH;
+import static com.streamarr.transcode.probe.EbmlElements.PRIMARY_R_CHROMATICITY_X;
 import static com.streamarr.transcode.probe.EbmlElements.RANGE;
 import static com.streamarr.transcode.probe.EbmlElements.SEEK;
 import static com.streamarr.transcode.probe.EbmlElements.SEEK_HEAD;
@@ -36,6 +37,7 @@ import static com.streamarr.transcode.probe.RecordedFfprobe.probe;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import build.buf.gen.streamarr.transcode.v1.ContentLightLevel;
+import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import com.streamarr.transcode.probe.EbmlElements.TrackEntry;
 import com.streamarr.transcode.probe.RecordedFfprobe.Answers;
@@ -364,7 +366,44 @@ class FfprobeExecutorMatroskaColourTest {
             videoTrack(element(MAX_CLL, new byte[9]), element(MAX_CLL, unsigned(900)))),
         Arguments.of(
             "a track entry's size runs past the Tracks element",
-            document(element(TRACKS, new byte[] {(byte) TRACK_ENTRY, (byte) 0x9F, 0x00}))));
+            document(element(TRACKS, new byte[] {(byte) TRACK_ENTRY, (byte) 0x9F, 0x00}))),
+        // The first byte of a two-byte element ID ends the Tracks element.
+        Arguments.of(
+            "an element ID cut short by the end of the Tracks element",
+            document(element(TRACKS, new byte[] {0x42}))),
+        // The Segment's data starts 42 bytes into the file, so the Tracks would start before it.
+        Arguments.of(
+            "a SeekPosition past 2^63 names the Tracks",
+            document(seekHead(TRACKS, -1_000_000), cluster(), tracksWithMaxCll(900))),
+        Arguments.of(
+            "a SeekID longer than 8 bytes ahead of a valid one",
+            document(
+                element(
+                    SEEK_HEAD,
+                    element(
+                        SEEK,
+                        element(SEEK_ID, new byte[9]),
+                        element(SEEK_ID, unsigned(TRACKS)),
+                        element(SEEK_POSITION, unsigned(0)))),
+                tracksWithMaxCll(900))),
+        Arguments.of(
+            "a Range longer than 8 bytes ahead of MaxCLL",
+            videoTrack(element(RANGE, new byte[9]), element(MAX_CLL, unsigned(900)))),
+        Arguments.of(
+            "a three-byte primary in a MasteringMetadata ahead of MaxCLL",
+            videoTrack(
+                element(MASTERING_METADATA, element(PRIMARY_R_CHROMATICITY_X, new byte[3])),
+                element(MAX_CLL, unsigned(900)))),
+        Arguments.of(
+            "a MaxCLL longer than 8 bytes in a later Video element's Colour",
+            document(
+                element(
+                    TRACKS,
+                    TrackEntry.video()
+                        .child(element(VIDEO, element(COLOUR, element(MAX_CLL, unsigned(900)))))
+                        .child(element(VIDEO, element(COLOUR, element(MAX_CLL, new byte[9]))))
+                        .build()
+                        .bytes()))));
   }
 
   @ParameterizedTest(name = "{0}")
@@ -541,6 +580,152 @@ class FfprobeExecutorMatroskaColourTest {
     assertThat(video.getContentLightLevelOmitted()).isFalse();
   }
 
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("tracksWithoutAColour")
+  @DisplayName("Should leave both static values unflagged when the track holds no Colour")
+  void shouldLeaveBothStaticValuesUnflaggedWhenTheTrackHoldsNoColour(
+      String description, byte[] track) throws IOException {
+    var video = probeWalkedMatroska(document(element(TRACKS, track)));
+
+    assertThat(video.getMasteringDisplayOmitted()).as(description).isFalse();
+    assertThat(video.getContentLightLevelOmitted()).as(description).isFalse();
+  }
+
+  static Stream<Arguments> tracksWithoutAColour() {
+    return Stream.of(
+        Arguments.of("a track entry without a Video element", TrackEntry.video().build().bytes()),
+        Arguments.of(
+            "a Video element without a Colour element",
+            TrackEntry.video()
+                .child(element(VIDEO, element(PIXEL_WIDTH, unsigned(64))))
+                .build()
+                .bytes()));
+  }
+
+  @Test
+  @DisplayName("Should report no video stream when a Matroska source holds only audio")
+  void shouldReportNoVideoStreamWhenAMatroskaSourceHoldsOnlyAudio() {
+    var result =
+        RecordedFfprobe.probeResult(
+            """
+            {"streams":[{"index":0,"codec_type":"audio","codec_name":"opus"}],
+             "format":{"format_name":"%s"}}
+            """
+                .formatted(MATROSKA));
+
+    assertThat(result.getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_NO_VIDEO_STREAM);
+  }
+
+  @Test
+  @DisplayName(
+      "Should mark the mastering display omitted when ffprobe reports only the stream's light level")
+  void shouldMarkTheMasteringDisplayOmittedWhenFfprobeReportsOnlyTheStreamsLightLevel()
+      throws IOException {
+    var video = probeWithFfprobeSideData(videoTrack(maxLuminanceOnly()), FRAME_LIGHT_LEVEL);
+
+    assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(1000);
+    assertThat(video.getMasteringDisplayOmitted()).isTrue();
+  }
+
+  @Test
+  @DisplayName(
+      "Should read the track's light level when ffprobe reports only the stream's mastering"
+          + " display")
+  void shouldReadTheTracksLightLevelWhenFfprobeReportsOnlyTheStreamsMasteringDisplay()
+      throws IOException {
+    var video =
+        probeWithFfprobeSideData(
+            videoTrack(element(MAX_CLL, unsigned(900))), FRAME_MASTERING_DISPLAY);
+
+    assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(900);
+  }
+
+  @Test
+  @DisplayName("Should read the chosen track's Colour when a malformed TrackEntry follows it")
+  void shouldReadTheChosenTracksColourWhenAMalformedTrackEntryFollowsIt() throws IOException {
+    // FFmpeg's parse of the Tracks stops at the nine-byte TrackNumber, after the chosen track.
+    var malformed =
+        TrackEntry.video().number(2).child(element(TRACK_NUMBER, new byte[9])).build().bytes();
+    var video =
+        probeMatroska(
+            MATROSKA,
+            document(element(TRACKS, trackEntry(1, element(MAX_CLL, unsigned(900))), malformed)));
+
+    assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(900);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("tracksWithTwoColours")
+  @DisplayName("Should read the first Colour when the track holds two, as FFmpeg does")
+  void shouldReadTheFirstColourWhenTheTrackHoldsTwo(String description, byte[] track)
+      throws IOException {
+    var video = probeMatroska(MATROSKA, document(element(TRACKS, track)));
+
+    assertThat(video.getContentLightLevel().getMaxContentLightLevel())
+        .as(description)
+        .isEqualTo(900);
+  }
+
+  static Stream<Arguments> tracksWithTwoColours() {
+    var first = element(COLOUR, element(MAX_CLL, unsigned(900)));
+    var second = element(COLOUR, element(MAX_CLL, unsigned(100)));
+    return Stream.of(
+        Arguments.of(
+            "one Video element holds both",
+            TrackEntry.video().child(element(VIDEO, first, second)).build().bytes()),
+        Arguments.of(
+            "each of two Video elements holds one",
+            TrackEntry.video()
+                .child(element(VIDEO, first))
+                .child(element(VIDEO, second))
+                .build()
+                .bytes()));
+  }
+
+  @Test
+  @DisplayName("Should seek to the Tracks when a Seek repeats its SeekID, as FFmpeg does")
+  void shouldSeekToTheTracksWhenASeekRepeatsItsSeekId() throws IOException {
+    // FFmpeg keeps the last SeekID of a Seek, so this Seek names the Tracks, not the Cues.
+    var seekHeadLength =
+        element(SEEK_HEAD, seek(element(SEEK_ID, unsigned(CUES)), TRACKS, 0)).length;
+    var tracksPosition = seekHeadLength + cluster().length;
+    var seekHead =
+        element(SEEK_HEAD, seek(element(SEEK_ID, unsigned(CUES)), TRACKS, tracksPosition));
+
+    var video = probeMatroska(MATROSKA, document(seekHead, cluster(), tracksWithMaxCll(900)));
+
+    assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(900);
+  }
+
+  @Test
+  @DisplayName("Should read a CodecID of exactly FFmpeg's 16 MiB when it names a video codec")
+  void shouldReadACodecIdOfExactlyFfmpegs16MiBWhenItNamesAVideoCodec() throws IOException {
+    var codec = new byte[16 << 20];
+    Arrays.fill(codec, (byte) 'V');
+    var first =
+        TrackEntry.video()
+            .codecId(null)
+            .child(element(CODEC_ID, codec))
+            .child(element(VIDEO, element(COLOUR, element(MAX_CLL, unsigned(900)))))
+            .build()
+            .bytes();
+    var video =
+        probeMatroska(
+            MATROSKA,
+            document(element(TRACKS, first, trackEntry(2, element(MAX_FALL, unsigned(400))))));
+
+    assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(900);
+  }
+
+  @Test
+  @DisplayName("Should report a MaxCLL of 65535 when it fits its SEI field")
+  void shouldReportAMaxCllOf65535WhenItFitsItsSeiField() throws IOException {
+    var video = probeMatroska(MATROSKA, videoTrack(element(MAX_CLL, unsigned(65_535))));
+
+    assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(65_535);
+    assertThat(video.getContentLightLevelOmitted()).isFalse();
+  }
+
   /**
    * An HEVC stream in Matroska whose hvcC record and 3 first packets the SEI walk reads in full,
    * and whose 3 first frames carry no side data.
@@ -624,12 +809,36 @@ class FfprobeExecutorMatroskaColourTest {
 
   /** A SeekHead that names one element's position in the Segment, as an 8-byte number. */
   private static byte[] seekHead(long id, long position) {
-    var seek =
-        element(
-            SEEK,
-            element(SEEK_ID, unsigned(id)),
-            element(SEEK_POSITION, ByteBuffer.allocate(8).putLong(position).array()));
-    return element(SEEK_HEAD, seek);
+    return element(SEEK_HEAD, seek(new byte[0], id, position));
+  }
+
+  /** A Seek whose {@code leading} children precede its SeekID and 8-byte SeekPosition. */
+  private static byte[] seek(byte[] leading, long id, long position) {
+    return element(
+        SEEK,
+        leading,
+        element(SEEK_ID, unsigned(id)),
+        element(SEEK_POSITION, ByteBuffer.allocate(8).putLong(position).array()));
+  }
+
+  private static byte[] cluster() {
+    return element(CLUSTER, element(CLUSTER_TIMESTAMP, unsigned(0)));
+  }
+
+  private static byte[] tracksWithMaxCll(long maxCll) {
+    return element(TRACKS, trackEntry(1, element(MAX_CLL, unsigned(maxCll))));
+  }
+
+  /** Probes a Matroska file for which ffprobe reports this side data of the video stream. */
+  private ProbeStreamInfo probeWithFfprobeSideData(byte[] file, String sideData)
+      throws IOException {
+    var source = Files.write(temporaryDirectory.resolve("source.mkv"), file);
+    return probe(
+            Answers.builder()
+                .ffprobeOutput(output(MATROSKA, ",\"side_data_list\":[" + sideData + "]"))
+                .source(source)
+                .build())
+        .getStreams(0);
   }
 
   private ProbeStreamInfo probeMatroska(String formatName, byte[] file) throws IOException {
