@@ -10,6 +10,7 @@ import static com.streamarr.transcode.engine.HevcCopies.sample;
 import static com.streamarr.transcode.engine.HevcCopies.slice;
 import static com.streamarr.transcode.engine.IsoBoxes.box;
 import static com.streamarr.transcode.engine.IsoBoxes.concat;
+import static com.streamarr.transcode.engine.IsoBoxes.u32;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
@@ -125,6 +126,30 @@ class ProducerRpuMovingPipeTest {
 
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
     assertThat(videoSamplesOf(encode.stdinBytes())).isEqualTo(videoSamplesOf(MOVED_SOURCE));
+  }
+
+  @Test
+  @DisplayName(
+      "Should pass the copy on unchanged when a NAL unit that FFmpeg's splitter drops follows the"
+          + " RPU that ends its picture")
+  void
+      shouldPassTheCopyOnUnchangedWhenANalUnitThatFfmpegsSplitterDropsFollowsTheRpuThatEndsItsPicture() {
+    // nuh_temporal_id_plus1 is 0, so FFmpeg's HEVC splitter drops the unit before the decoder.
+    var dropped = HexFormat.of().parseHex("460050");
+    var copied =
+        concat(
+            initializationSegment(),
+            fragmentBuilder()
+                .video(0, sample(aud(), slice(0), rpu(0), concat(u32(dropped.length), dropped)))
+                .build(),
+            fragmentBuilder().video(1001, sample(aud(), slice(1), rpu(1))).build());
+    var copy = ScriptedProcess.builder().output(copied).build();
+    var encode = encodingFfmpeg().build();
+
+    var producer = producerOf(copy, encode).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(videoSamplesOf(encode.stdinBytes())).isEqualTo(videoSamplesOf(copied));
   }
 
   @Test
