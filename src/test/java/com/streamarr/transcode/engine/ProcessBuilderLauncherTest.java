@@ -156,8 +156,9 @@ class ProcessBuilderLauncherTest {
     // timescale; every repeat of the fragment repeats its record.
     var timingPastWhatThePipeHolds =
         "#tb 0: 1/48000\n"
-            + "0,          0,       4004,     2002, %8d, 0x00000000, F=0x0\n"
-                .formatted(sample.length)
+            + ("0,          0,       4004,     2002, %8d, 0x00000000, F=0x0"
+                        .formatted(sample.length)
+                    + "\n")
                 .repeat(64);
     var launched = new CopyOnWriteArrayList<Process>();
     ProcessLauncher copyWritingTiming =

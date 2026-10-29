@@ -340,8 +340,9 @@ class ProducerRpuMovingPipeTest {
           throw new IOException("Cannot run program copy-ffmpeg");
         };
 
-    assertThatExceptionOfType(TranscodeException.class)
-        .isThrownBy(() -> producer(launcher).start());
+    var producer = producer(launcher);
+
+    assertThatExceptionOfType(TranscodeException.class).isThrownBy(producer::start);
     assertThat(socketDirectoryOf(copyCommand.get())).doesNotExist();
   }
 

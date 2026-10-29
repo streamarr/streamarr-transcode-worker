@@ -882,9 +882,10 @@ class FragmentedMp4RpuMoverTest {
             .video(0, sample(slice(0)))
             .extraMoofBox(fullBox("pssh", 0, new byte[20]))
             .build();
+    var copy = concat(initializationSegment(), withProtection);
 
     assertThatExceptionOfType(FragmentedMp4Exception.class)
-        .isThrownBy(() -> move(concat(initializationSegment(), withProtection)))
+        .isThrownBy(() -> move(copy))
         .extracting(FragmentedMp4Exception::getReason)
         .isEqualTo(Reason.UNEXPECTED_BOX);
   }

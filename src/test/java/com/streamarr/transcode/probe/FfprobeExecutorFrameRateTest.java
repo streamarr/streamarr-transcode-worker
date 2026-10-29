@@ -494,7 +494,7 @@ class FfprobeExecutorFrameRateTest {
         ScriptedProcess.builder()
             .output(
                 IntStream.range(0, 120_001)
-                    .mapToObj(packet -> "%d,%d,100,___,\n".formatted(packet, packet))
+                    .mapToObj(packet -> "%d,%d,100,___,".formatted(packet, packet) + "\n")
                     .collect(Collectors.joining())
                     .getBytes(StandardCharsets.UTF_8))
             .exitTiming(ExitTiming.WHEN_TEST_EXITS)

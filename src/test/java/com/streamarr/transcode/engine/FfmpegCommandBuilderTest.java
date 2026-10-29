@@ -1288,7 +1288,7 @@ class FfmpegCommandBuilderTest {
 
     var pipe = rpuMovingPipe(builder.buildPipeline(job(request, "libx264")));
 
-    assertThat(pipe.encodeCommand()).doesNotContain("-discard", "-start_at_zero");
+    assertThat(pipe.encodeCommand()).isNotEmpty().doesNotContain("-discard", "-start_at_zero");
   }
 
   @Test
