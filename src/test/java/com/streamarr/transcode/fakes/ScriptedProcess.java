@@ -89,7 +89,6 @@ public final class ScriptedProcess extends Process {
   private boolean errorOutputClosed;
   private int endOffset;
   private boolean resumed;
-  private boolean pauseReachedFlag;
   private boolean endOfOutputRead;
   private boolean terminated;
   private boolean destroyedForcibly;
@@ -160,10 +159,6 @@ public final class ScriptedProcess extends Process {
   /** The thread that last read the output, as FFmpeg's pipe would see it. */
   public Optional<Thread> reader() {
     return Optional.ofNullable(reader);
-  }
-
-  public synchronized boolean hasReachedPause() {
-    return pauseReachedFlag;
   }
 
   /** Completes once the reader reaches the pause, where it waits before any other call proceeds. */
@@ -437,7 +432,6 @@ public final class ScriptedProcess extends Process {
   // A read that waits at the pause of a process whose streams were closed ends once it exits.
   private void awaitResumeAtPause() throws InterruptedIOException {
     while (isPausedAt(position) && !(streamsClosed && exit.isDone())) {
-      pauseReachedFlag = true;
       pauseReached.complete(null);
       try {
         wait();

@@ -1895,7 +1895,7 @@ class TranscodeWorkerJobAttemptTest {
       var connection = runtime.connection();
       startVariant(connection, job);
       var process = processOf(launcher, job);
-      promptly().until(process::hasReachedPause);
+      assertThat(process.pauseReached()).succeedsWithin(EVENT_LIMIT);
       stopVariant(connection, job);
       promptly().until(() -> process.stdinText().equals("q"));
 
@@ -1977,7 +1977,7 @@ class TranscodeWorkerJobAttemptTest {
         jobs.add(job);
         startVariant(connection, job);
         var process = processOf(launcher, job);
-        promptly().until(process::hasReachedPause);
+        assertThat(process.pauseReached()).succeedsWithin(EVENT_LIMIT);
         var start = new CyclicBarrier(2);
         var failing = Thread.ofVirtual().start(() -> resumeAt(start, process));
 
