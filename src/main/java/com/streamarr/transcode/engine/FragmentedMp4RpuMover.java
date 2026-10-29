@@ -371,14 +371,6 @@ final class FragmentedMp4RpuMover {
         header.type(), ByteBuffer.wrap(box, header.length(), box.length - header.length()));
   }
 
-  private static byte[] boxBytes(BoxView box) {
-    var bytes = ByteBuffer.allocate(BOX_HEADER_BYTES + box.body().remaining());
-    bytes.putInt(bytes.capacity());
-    putType(bytes, box.type());
-    bytes.put(box.body().duplicate());
-    return bytes.array();
-  }
-
   private static void putType(ByteBuffer target, String type) {
     for (var index = 0; index < type.length(); index++) {
       target.put((byte) type.charAt(index));
@@ -431,8 +423,6 @@ final class FragmentedMp4RpuMover {
     }
 
     private Layout layOut(int dataStart) {
-      var tracks = fragment.tracks();
-      var videoTrackId = tracks.video().map(VideoTrack::trackId);
       var video = videoSamples.iterator();
       var mediaData = fragment.mediaDataBox();
       var audio =
@@ -445,21 +435,34 @@ final class FragmentedMp4RpuMover {
               .iterator();
       var layout = new Layout(new ArrayList<>(), new ArrayList<>(), dataStart);
       for (var child : moof.children()) {
-        if (!child.type().equals("traf")) {
-          layout.addBox(child);
-          continue;
+        switch (kindOf(child)) {
+          case VIDEO_TRAF -> layout.addVideoTrafs(child, video);
+          case AUDIO_TRAF -> layout.addTraf(child, audio);
+          case OTHER_BOX -> layout.addBox(child);
         }
-
-        var trackId = TrackFragmentHeader.of(child.requiredChild("tfhd")).trackId();
-        if (videoTrackId.equals(Optional.of(trackId))) {
-          layout.addVideoTrafs(child, video);
-          continue;
-        }
-
-        layout.addTraf(child, audio);
       }
 
       return layout;
+    }
+
+    private MoofChild kindOf(BoxView child) {
+      if (!child.type().equals("traf")) {
+        return MoofChild.OTHER_BOX;
+      }
+
+      var trackId = TrackFragmentHeader.of(child.requiredChild("tfhd")).trackId();
+      var videoTrackId = fragment.tracks().video().map(VideoTrack::trackId);
+      if (videoTrackId.equals(Optional.of(trackId))) {
+        return MoofChild.VIDEO_TRAF;
+      }
+
+      return MoofChild.AUDIO_TRAF;
+    }
+
+    private enum MoofChild {
+      VIDEO_TRAF,
+      AUDIO_TRAF,
+      OTHER_BOX
     }
   }
 
@@ -500,6 +503,14 @@ final class FragmentedMp4RpuMover {
 
     private void addBox(BoxView box) {
       moofChildren.add(boxBytes(box));
+    }
+
+    private static byte[] boxBytes(BoxView box) {
+      var bytes = ByteBuffer.allocate(BOX_HEADER_BYTES + box.body().remaining());
+      bytes.putInt(bytes.capacity());
+      putType(bytes, box.type());
+      bytes.put(box.body().duplicate());
+      return bytes.array();
     }
 
     private void addTraf(BoxView traf, Iterator<ByteBuffer> trackSamples) {
