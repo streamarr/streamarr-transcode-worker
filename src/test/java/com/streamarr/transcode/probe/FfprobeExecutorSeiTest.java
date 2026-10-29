@@ -42,7 +42,8 @@ class FfprobeExecutorSeiTest {
   private static final String HDR10_PLUS = "04 08 b5 00 3c 00 01 04 01 40";
   // The same ITU-T T.35 provider and code, but application identifier 5.
   private static final String OTHER_T35 = "04 08 b5 00 3c 00 01 05 01 40";
-  // Green, blue and red primaries, the D65 white point, 1000 cd/m^2 and 0.005 cd/m^2.
+  // Green, blue and red primaries, the D65 white point, 1000 cd/m^2 and 0.005 cd/m^2: the values
+  // of RECORDED_MASTERING_DISPLAY.
   private static final String MASTERING_DISPLAY =
       "89 18 33 c2 86 c4 1d 4c 0b b8 84 d0 3e 80 3d 13 40 42 00 98 96 80 00 00 00 32";
   private static final String LIGHT_LEVEL = "90 04 03 e8 01 90";
@@ -830,16 +831,7 @@ class FfprobeExecutorSeiTest {
           coding.probed(
               coding.sample(coding.sei(SHORT_UNREGISTERED, MASTERING_DISPLAY, LIGHT_LEVEL)));
 
-      assertThat(video.getMasteringDisplay().getRed().getX()).isEqualTo(34_000);
-      assertThat(video.getMasteringDisplay().getRed().getY()).isEqualTo(16_000);
-      assertThat(video.getMasteringDisplay().getGreen().getX()).isEqualTo(13_250);
-      assertThat(video.getMasteringDisplay().getGreen().getY()).isEqualTo(34_500);
-      assertThat(video.getMasteringDisplay().getBlue().getX()).isEqualTo(7500);
-      assertThat(video.getMasteringDisplay().getBlue().getY()).isEqualTo(3000);
-      assertThat(video.getMasteringDisplay().getWhitePoint().getX()).isEqualTo(15_635);
-      assertThat(video.getMasteringDisplay().getWhitePoint().getY()).isEqualTo(16_450);
-      assertThat(video.getMasteringDisplay().getMaxLuminance()).isEqualTo(10_000_000);
-      assertThat(video.getMasteringDisplay().getMinLuminance()).isEqualTo(50);
+      assertThat(video.getMasteringDisplay()).isEqualTo(RECORDED_MASTERING_DISPLAY);
       assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(1000);
       assertThat(video.getContentLightLevel().getMaxFrameAverageLightLevel()).isEqualTo(400);
     }
