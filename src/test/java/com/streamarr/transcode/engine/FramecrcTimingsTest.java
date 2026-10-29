@@ -45,10 +45,16 @@ class FramecrcTimingsTest {
                 0,        -42,        375,       41,     6404, 0x0b4f1c2d, F=0x0
                 0,          0,        292,       42,     1978, 0x5c3a2e1f, F=0x0, S=1,        8, 0x01b200c3
                 0,         41,       1000,        0,     9184, 0x0c6e170a, F=0x5
+                0,         82,       1083,       41,      812, 0x1d2e3f40, F=0x14
                 """);
 
     assertThat(timings)
-        .containsExactly(packet(true, 41), packet(false, 41), packet(false, 42), packet(true, 0));
+        .containsExactly(
+            packet(true, 41),
+            packet(false, 41),
+            packet(false, 42),
+            packet(true, 0),
+            packet(false, 41));
   }
 
   @Test
@@ -62,6 +68,7 @@ class FramecrcTimingsTest {
       strings = {
         "#tb 0: 0/1000",
         "#tb 0: 1",
+        "#tb 0: 1/0",
         "[hevc @ 0x5581d0c0] 0,          0,          0,       41,     7369, 0x7e1c3b5a",
         "1,          0,          0,       41,     7369, 0x7e1c3b5a",
         "0,          0,          0,       41",
