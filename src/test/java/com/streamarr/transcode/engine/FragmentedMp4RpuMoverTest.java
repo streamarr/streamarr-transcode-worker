@@ -1,13 +1,15 @@
 package com.streamarr.transcode.engine;
 
 import static com.streamarr.transcode.engine.HevcCopies.aud;
+import static com.streamarr.transcode.engine.HevcCopies.endOfSequenceUnit;
 import static com.streamarr.transcode.engine.HevcCopies.fragmentBuilder;
 import static com.streamarr.transcode.engine.HevcCopies.hevcSampleEntry;
 import static com.streamarr.transcode.engine.HevcCopies.initializationSegment;
-import static com.streamarr.transcode.engine.HevcCopies.nalWithLength;
 import static com.streamarr.transcode.engine.HevcCopies.rpu;
+import static com.streamarr.transcode.engine.HevcCopies.rpuUnit;
 import static com.streamarr.transcode.engine.HevcCopies.sample;
 import static com.streamarr.transcode.engine.HevcCopies.slice;
+import static com.streamarr.transcode.engine.HevcCopies.sliceUnit;
 import static com.streamarr.transcode.engine.HevcCopies.suffixSei;
 import static com.streamarr.transcode.engine.IsoBoxes.box;
 import static com.streamarr.transcode.engine.IsoBoxes.concat;
@@ -347,13 +349,13 @@ class FragmentedMp4RpuMoverTest {
   void
       shouldPassTheCopyUnchangedWhenTheLastNalUnitOfASampleTakesFewerThan4BytesWithItsLengthWhichFfmpegsSplitterNeverReads()
           throws IOException {
-    var shortRpu = nalWithLength(1, 62, 25, 7);
-    var shortSlice = nalWithLength(1, HevcCopies.TRAIL_R, 0xAF, 1);
-    var shortAud = nalWithLength(1, HevcCopies.AUD);
+    var shortRpu = rpuUnit().lengthSize(1).picture(7).build();
+    var shortSlice = sliceUnit().lengthSize(1).picture(1).build();
+    var endOfSequence = endOfSequenceUnit().lengthSize(1).build();
     var copy =
         concat(
             initializationSegment(hevcSampleEntry("hvc1", 1)),
-            fragmentBuilder().video(0, concat(shortSlice, shortRpu, shortAud)).build());
+            fragmentBuilder().video(0, concat(shortSlice, shortRpu, endOfSequence)).build());
 
     assertThat(move(copy)).isEqualTo(copy);
   }
@@ -370,9 +372,9 @@ class FragmentedMp4RpuMoverTest {
           + " FFmpeg's splitter drops whatever they hold, end the sample")
   void shouldMoveAnRpuThatStartsASampleBehindThePreviousPictureWhen1To3BytesEndTheSample(
       String description, int lengthSize, String tail) throws IOException {
-    var firstSlice = nalWithLength(lengthSize, HevcCopies.TRAIL_R, 0xAF, 0);
-    var secondSlice = nalWithLength(lengthSize, HevcCopies.TRAIL_R, 0xAF, 1);
-    var rpu = nalWithLength(lengthSize, 62, 25, 0);
+    var firstSlice = sliceUnit().lengthSize(lengthSize).picture(0).build();
+    var secondSlice = sliceUnit().lengthSize(lengthSize).picture(1).build();
+    var rpu = rpuUnit().lengthSize(lengthSize).picture(0).build();
     var dropped = HexFormat.ofDelimiter(" ").parseHex(tail);
     var copy =
         concat(
@@ -579,8 +581,8 @@ class FragmentedMp4RpuMoverTest {
   @ValueSource(ints = {1, 2})
   @DisplayName("Should delimit NAL units by the length size that the hvcC declares")
   void shouldDelimitNalUnitsByTheLengthSizeThatTheHvcCDeclares(int lengthSize) throws IOException {
-    var shortRpu = nalWithLength(lengthSize, 62, 25, 7);
-    var shortSlice = nalWithLength(lengthSize, HevcCopies.TRAIL_R, 0xAF, 1);
+    var shortRpu = rpuUnit().lengthSize(lengthSize).picture(7).build();
+    var shortSlice = sliceUnit().lengthSize(lengthSize).picture(1).build();
     var copy =
         concat(
             initializationSegment(hevcSampleEntry("hvc1", lengthSize)),
@@ -601,6 +603,7 @@ class FragmentedMp4RpuMoverTest {
     var copy =
         stream(
             fragmentBuilder()
+                .startsWithKeyframe(true)
                 .video(0, sample(slice(0)), sample(slice(1)), sample(slice(2)))
                 .audio(0, AUDIO_FRAME)
                 .build());
@@ -668,7 +671,12 @@ class FragmentedMp4RpuMoverTest {
   void
       shouldFailAsUnusableVideoTimingWhenASourcePacketIsAKeyframeWhereItsSampleIsNoSyncSampleOrTheReverse(
           boolean firstIsKeyframe) {
-    var copy = stream(fragmentBuilder().video(0, sample(slice(0)), sample(slice(1))).build());
+    var copy =
+        stream(
+            fragmentBuilder()
+                .startsWithKeyframe(true)
+                .video(0, sample(slice(0)), sample(slice(1)))
+                .build());
     var timings =
         timingsOf(
             packetIn(TRACK_TIME_BASE).keyframe(firstIsKeyframe).duration(1001),
