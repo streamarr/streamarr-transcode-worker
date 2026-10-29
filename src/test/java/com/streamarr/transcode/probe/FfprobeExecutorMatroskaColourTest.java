@@ -6,6 +6,8 @@ import static com.streamarr.transcode.probe.EbmlElements.CLUSTER_TIMESTAMP;
 import static com.streamarr.transcode.probe.EbmlElements.CODEC_ID;
 import static com.streamarr.transcode.probe.EbmlElements.COLOUR;
 import static com.streamarr.transcode.probe.EbmlElements.CUES;
+import static com.streamarr.transcode.probe.EbmlElements.DOC_TYPE;
+import static com.streamarr.transcode.probe.EbmlElements.EBML;
 import static com.streamarr.transcode.probe.EbmlElements.HEVC_CODEC_ID;
 import static com.streamarr.transcode.probe.EbmlElements.LUMINANCE_MAX;
 import static com.streamarr.transcode.probe.EbmlElements.MASTERING_METADATA;
@@ -31,8 +33,10 @@ import static com.streamarr.transcode.probe.EbmlElements.concat;
 import static com.streamarr.transcode.probe.EbmlElements.document;
 import static com.streamarr.transcode.probe.EbmlElements.element;
 import static com.streamarr.transcode.probe.EbmlElements.elementHeader;
+import static com.streamarr.transcode.probe.EbmlElements.elementWithSize;
 import static com.streamarr.transcode.probe.EbmlElements.header;
 import static com.streamarr.transcode.probe.EbmlElements.hevcCodecId;
+import static com.streamarr.transcode.probe.EbmlElements.unknownSize;
 import static com.streamarr.transcode.probe.EbmlElements.unsigned;
 import static com.streamarr.transcode.probe.RecordedFfprobe.probe;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -104,6 +108,48 @@ class FfprobeExecutorMatroskaColourTest {
   void shouldReadTheTracksLightLevelWhenAVoidElementPrecedesTheSegment() throws IOException {
     var segment = element(SEGMENT, element(TRACKS, trackEntry(1, element(MAX_CLL, unsigned(900)))));
     var video = probeMatroska(MATROSKA, concat(header(), element(VOID, new byte[4]), segment));
+
+    assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(900);
+  }
+
+  @Test
+  @DisplayName("Should read the track's light level when every element size takes 1 byte")
+  void shouldReadTheTracksLightLevelWhenEveryElementSizeTakes1Byte() throws IOException {
+    var entry =
+        elementWithSize(
+            TRACK_ENTRY,
+            1,
+            elementWithSize(TRACK_NUMBER, 1, unsigned(1)),
+            elementWithSize(TRACK_TYPE, 1, unsigned(VIDEO_TRACK_TYPE)),
+            elementWithSize(CODEC_ID, 1, HEVC_CODEC_ID.getBytes(StandardCharsets.US_ASCII)),
+            elementWithSize(
+                VIDEO, 1, elementWithSize(COLOUR, 1, elementWithSize(MAX_CLL, 1, unsigned(900)))));
+    var file =
+        concat(
+            elementWithSize(
+                EBML, 1, elementWithSize(DOC_TYPE, 1, "matroska".getBytes(StandardCharsets.UTF_8))),
+            elementWithSize(SEGMENT, 1, elementWithSize(TRACKS, 1, entry)));
+
+    var video = probeMatroska(MATROSKA, file);
+
+    assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(900);
+  }
+
+  @Test
+  @DisplayName(
+      "Should read the track's light level when the Segment and its Cluster have an unknown size")
+  void shouldReadTheTracksLightLevelWhenTheSegmentAndItsClusterHaveAnUnknownSize()
+      throws IOException {
+    // FFmpeg's Matroska muxer writes both sizes as unknown when it writes to a pipe.
+    var file =
+        concat(
+            header(),
+            unknownSize(
+                SEGMENT,
+                tracksWithMaxCll(900),
+                unknownSize(CLUSTER, element(CLUSTER_TIMESTAMP, unsigned(0)))));
+
+    var video = probeMatroska(MATROSKA, file);
 
     assertThat(video.getContentLightLevel().getMaxContentLightLevel()).isEqualTo(900);
   }

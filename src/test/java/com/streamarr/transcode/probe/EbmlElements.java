@@ -79,6 +79,21 @@ final class EbmlElements {
     return concat(elementHeader(id, payload.length), payload);
   }
 
+  /** An element whose size takes {@code sizeLength} bytes, from 1 to 8, as muxers may write it. */
+  static byte[] elementWithSize(long id, int sizeLength, byte[]... children) {
+    var payload = concat(children);
+    var size = ByteBuffer.allocate(8).putLong(payload.length).array();
+    var sizeBytes = new byte[sizeLength];
+    System.arraycopy(size, 8 - sizeLength, sizeBytes, 0, sizeLength);
+    sizeBytes[0] |= (byte) (0x80 >>> (sizeLength - 1));
+    return concat(unsigned(id), sizeBytes, payload);
+  }
+
+  /** An element of unknown size, as FFmpeg's Matroska muxer writes the Segment to a pipe. */
+  static byte[] unknownSize(long id, byte[]... children) {
+    return concat(unsigned(id), new byte[] {(byte) 0xFF}, concat(children));
+  }
+
   /** The ID and 8-byte size of an element whose payload takes {@code size} bytes. */
   static byte[] elementHeader(long id, long size) {
     var sizeBytes = ByteBuffer.allocate(8).putLong(size).array();
