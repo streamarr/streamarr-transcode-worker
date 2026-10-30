@@ -5,6 +5,7 @@ import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDI
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.SOURCE_NAMESPACE_ID;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engine;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.workerConfigurationBuilder;
+import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.cancel;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.failure;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.processBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.requestBuilder;
@@ -18,6 +19,7 @@ import static org.awaitility.Awaitility.await;
 
 import build.buf.gen.streamarr.transcode.v1.BackgroundProbeCapacityControl;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
+import build.buf.gen.streamarr.transcode.v1.ProbeCancelReason;
 import build.buf.gen.streamarr.transcode.v1.ProbeCapacityChanged;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbePriority;
@@ -33,6 +35,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -42,6 +45,8 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import tools.jackson.databind.ObjectMapper;
 
 @Tag("UnitTest")
@@ -357,6 +362,149 @@ class TranscodeWorkerProbeCapacityTest {
 
   @Test
   @DisplayName(
+      "Should halve the background probe capacity and hold its growth for 30 s when the server"
+          + " cancels a probe at the probe timeout")
+  void
+      shouldHalveTheBackgroundProbeCapacityAndHoldItsGrowthFor30SWhenTheServerCancelsAProbeAtTheProbeTimeout()
+          throws Exception {
+    var clock = new SteppedClock();
+    var timedOut = processBuilder().running(true).build();
+    var first = processBuilder().running(true).build();
+    var second = processBuilder().running(true).build();
+    var ffprobe = probesStarting(List.of(timedOut, first, second), new AtomicInteger());
+    var request = requestBuilder().build();
+
+    try (var worker =
+        workerBuilder(tempDir)
+            .configuration(configurationBuilder().availableSlots(1).build())
+            .runtime(runtime)
+            .ffprobe(ffprobe)
+            .clock(clock)
+            .build()) {
+      try {
+        worker.start("localhost", 1);
+        var connection = runtime.connection();
+        start(connection, request);
+        var timedOutTask = runtime.probes().runNext();
+        timedOut.awaitStarted(timedOutTask);
+
+        cancel(connection, request, ProbeCancelReason.PROBE_CANCEL_REASON_TIMEOUT);
+        timedOutTask.get();
+
+        assertThat(connection.results())
+            .containsExactly(failure(request, ProbeFailure.PROBE_FAILURE_CANCELLED));
+        assertThat(capacityChanges(connection)).containsExactly(changed(2, 1));
+        clock.advance(Duration.ofSeconds(29));
+        var firstTask = startHeld(connection, first);
+        var secondTask = startHeld(connection, second);
+        first.finish();
+        firstTask.get();
+        assertThat(capacityChanges(connection))
+            .as("A probe that ends with every unit in use grows nothing during the hold")
+            .containsExactly(changed(2, 1));
+        clock.advance(Duration.ofSeconds(1));
+        second.finish();
+        secondTask.get();
+        assertThat(capacityChanges(connection)).containsExactly(changed(2, 1), changed(3, 1));
+      } finally {
+        timedOut.finish();
+        first.finish();
+        second.finish();
+      }
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should halve the background probe capacity when the server cancels a probe at the probe"
+          + " timeout before its ffprobe exits")
+  void
+      shouldHalveTheBackgroundProbeCapacityWhenTheServerCancelsAProbeAtTheProbeTimeoutBeforeItsFfprobeExits()
+          throws Exception {
+    var stuck = processBuilder().running(true).deferredTermination(true).build();
+    var first = processBuilder().running(true).build();
+    var second = processBuilder().running(true).build();
+    var ffprobe = probesStarting(List.of(stuck, first, second), new AtomicInteger());
+    var request = requestBuilder().build();
+
+    try (var worker =
+        workerBuilder(tempDir)
+            .configuration(configurationBuilder().availableSlots(1).build())
+            .runtime(runtime)
+            .ffprobe(ffprobe)
+            .clock(new SteppedClock())
+            .build()) {
+      try {
+        worker.start("localhost", 1);
+        var connection = runtime.connection();
+        start(connection, request);
+        var stuckTask = runtime.probes().runNext();
+        stuck.awaitStarted(stuckTask);
+        var firstTask = startHeld(connection, first);
+        startHeld(connection, second);
+
+        cancel(connection, request, ProbeCancelReason.PROBE_CANCEL_REASON_TIMEOUT);
+        stuck.awaitExitWait(stuckTask);
+
+        assertThat(capacityChanges(connection)).containsExactly(changed(2, 1));
+        first.finish();
+        firstTask.get();
+        assertThat(capacityChanges(connection))
+            .as("A probe that ends while the timed-out ffprobe still runs grows nothing")
+            .containsExactly(changed(2, 1));
+        stuck.finish();
+        stuckTask.get();
+        assertThat(capacityChanges(connection)).containsExactly(changed(2, 1));
+      } finally {
+        stuck.finish();
+        first.finish();
+        second.finish();
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @EnumSource(
+      value = ProbeCancelReason.class,
+      names = {"PROBE_CANCEL_REASON_TIMEOUT", "UNRECOGNIZED"},
+      mode = EnumSource.Mode.EXCLUDE)
+  @DisplayName(
+      "Should keep the background probe capacity when the server cancels a probe for a reason"
+          + " other than the probe timeout")
+  void
+      shouldKeepTheBackgroundProbeCapacityWhenTheServerCancelsAProbeForAReasonOtherThanTheProbeTimeout(
+          ProbeCancelReason reason) throws Exception {
+    var cancelled = processBuilder().running(true).build();
+    var request = requestBuilder().build();
+
+    try (var worker =
+        workerBuilder(tempDir)
+            .configuration(configurationBuilder().availableSlots(1).build())
+            .runtime(runtime)
+            .ffprobe(launchCounting(new AtomicInteger(), cancelled))
+            .clock(new SteppedClock())
+            .build()) {
+      try {
+        worker.start("localhost", 1);
+        var connection = runtime.connection();
+        start(connection, request);
+        var task = runtime.probes().runNext();
+        cancelled.awaitStarted(task);
+
+        cancel(connection, request, reason);
+        task.get();
+
+        assertThat(connection.results())
+            .containsExactly(failure(request, ProbeFailure.PROBE_FAILURE_CANCELLED));
+        assertThat(capacityChanges(connection)).isEmpty();
+      } finally {
+        cancelled.finish();
+      }
+    }
+  }
+
+  @Test
+  @DisplayName(
       "Should send each media segment's timing with its upload and none with the initialization"
           + " segment")
   void shouldSendEachMediaSegmentsTimingWithItsUploadAndNoneWithTheInitializationSegment()
@@ -412,6 +560,15 @@ class TranscodeWorkerProbeCapacityTest {
             () ->
                 connection.events().stream()
                     .anyMatch(EstablishWorkerSessionRequest::hasJobAttemptCompleted));
+  }
+
+  private CompletableFuture<Void> startHeld(
+      ScriptedWorkerRuntime.Connection connection, ControlledProbeProcess process)
+      throws Exception {
+    start(connection, requestBuilder().build());
+    var task = runtime.probes().runNext();
+    process.awaitStarted(task);
+    return task;
   }
 
   private static List<ProbeCapacityChanged> capacityChanges(

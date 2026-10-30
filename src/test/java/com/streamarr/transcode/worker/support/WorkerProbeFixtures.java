@@ -19,6 +19,7 @@ import build.buf.gen.streamarr.transcode.v1.Fraction;
 import build.buf.gen.streamarr.transcode.v1.MediaSourceRef;
 import build.buf.gen.streamarr.transcode.v1.Presence;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
+import build.buf.gen.streamarr.transcode.v1.ProbeCancelReason;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.StartProbeCommand;
@@ -108,12 +109,18 @@ public final class WorkerProbeFixtures {
   }
 
   public static void cancel(ScriptedWorkerRuntime.Connection connection, ProbeRequest request) {
+    cancel(connection, request, ProbeCancelReason.PROBE_CANCEL_REASON_UNSPECIFIED);
+  }
+
+  public static void cancel(
+      ScriptedWorkerRuntime.Connection connection, ProbeRequest request, ProbeCancelReason reason) {
     connection.deliver(
         EstablishWorkerSessionResponse.newBuilder()
             .setCancelProbe(
                 CancelProbeCommand.newBuilder()
                     .setTarget(connection.registration().getWorker())
-                    .setProbeAttemptId(request.getProbeAttemptId()))
+                    .setProbeAttemptId(request.getProbeAttemptId())
+                    .setReason(reason))
             .build());
   }
 

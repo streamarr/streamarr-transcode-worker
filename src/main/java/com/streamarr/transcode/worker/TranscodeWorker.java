@@ -836,7 +836,7 @@ public final class TranscodeWorker implements AutoCloseable {
         return;
       }
 
-      sessionProbes.cancel(fromProto(command.getProbeAttemptId()));
+      sessionProbes.cancel(fromProto(command.getProbeAttemptId()), command.getReason());
     }
 
     @Override
