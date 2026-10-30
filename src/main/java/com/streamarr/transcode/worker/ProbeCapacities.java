@@ -35,6 +35,7 @@ final class ProbeCapacities {
   static final double SPEED_FLOOR = 2.10;
 
   private static final int IDLE_KEYFRAME_PACKET_SCAN_CAPACITY = 1;
+  private static final Duration MINIMUM_INTERVAL_BETWEEN_BRAKES = ProductionSpeedWindow.WINDOW;
   private static final Duration GROWTH_HOLD_AFTER_BRAKE = Duration.ofSeconds(30);
   private static final Duration IDLE_BEFORE_KEYFRAME_PACKET_SCANS = Duration.ofSeconds(30);
 
@@ -141,7 +142,7 @@ final class ProbeCapacities {
           }
 
           slowJobAttempts.add(jobAttemptId);
-          if (hasBeenSinceLastBrake(ProductionSpeedWindow.WINDOW)) {
+          if (hasBeenSinceLastBrake(MINIMUM_INTERVAL_BETWEEN_BRAKES)) {
             brake();
           }
         });
