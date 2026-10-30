@@ -42,9 +42,9 @@ public class TranscodeCapabilityService {
   private HardwareEncodingCapability hardwareEncodingCapability =
       HardwareEncodingCapability.builder().available(false).encoders(Set.of()).build();
 
-  // Each codec family's worker-verified encoder backend, resolved once after detection, so that
-  // every job of a codec family runs the backend that registration advertises.
-  private Map<CodecFamily, EncoderBackend> encoderBackends = Map.of();
+  // Each codec family's worker-verified encoder, resolved once after detection, so that every job
+  // of a codec family runs the backend that registration advertises.
+  private Map<CodecFamily, WorkerVerifiedEncoder> encoders = Map.of();
 
   public TranscodeCapabilityService(String ffmpegPath, ProcessFactory processFactory) {
     this.ffmpegPath = ffmpegPath;
@@ -76,14 +76,14 @@ public class TranscodeCapabilityService {
             .encoders(hwEncoders)
             .accelerator(accelerator)
             .build();
-    encoderBackends = resolveEncoderBackends(hwEncoders, detectSoftwareEncoders());
+    encoders = resolveEncoders(hwEncoders, detectSoftwareEncoders());
 
     log.info(
         "FFmpeg capabilities: GPU={}, encoders={}, accelerator={}, encoder backends={}",
         hasGpu,
         hwEncoders,
         accelerator,
-        encoderBackends.values());
+        encoders.values());
   }
 
   private void markUnavailable(String reason) {
@@ -97,14 +97,7 @@ public class TranscodeCapabilityService {
    * passed its test encode, with its keyframe-verified trait.
    */
   public List<WorkerVerifiedEncoder> workerVerifiedEncoders() {
-    return encoderBackends.values().stream()
-        .map(
-            backend ->
-                WorkerVerifiedEncoder.builder()
-                    .backend(backend)
-                    .keyframeVerified(FfmpegCommandBuilder.isKeyframeVerified(backend.encoder()))
-                    .build())
-        .toList();
+    return List.copyOf(encoders.values());
   }
 
   /**
@@ -112,55 +105,45 @@ public class TranscodeCapabilityService {
    * advertises no encoder for the codec family.
    */
   public Optional<EncoderBackend> resolveEncoder(String codecFamily) {
-    return CodecFamily.named(codecFamily).map(encoderBackends::get);
+    return CodecFamily.named(codecFamily).map(encoders::get).map(WorkerVerifiedEncoder::backend);
   }
 
-  private static Map<CodecFamily, EncoderBackend> resolveEncoderBackends(
+  private static Map<CodecFamily, WorkerVerifiedEncoder> resolveEncoders(
       Set<String> hardwareEncoders, Set<CodecFamily> softwareEncoderFamilies) {
-    var backends = new EnumMap<CodecFamily, EncoderBackend>(CodecFamily.class);
+    var resolved = new EnumMap<CodecFamily, WorkerVerifiedEncoder>(CodecFamily.class);
     for (var family : CodecFamily.values()) {
-      hardwareBackend(family, hardwareEncoders)
-          .or(() -> softwareBackendIfVerified(family, softwareEncoderFamilies))
-          .ifPresent(backend -> backends.put(family, backend));
+      usableEncoders(family, hardwareEncoders, softwareEncoderFamilies)
+          .min(EncoderPreference.ORDER)
+          .ifPresent(encoder -> resolved.put(family, encoder));
     }
 
-    return Collections.unmodifiableMap(backends);
+    return Collections.unmodifiableMap(resolved);
   }
 
-  private static Optional<EncoderBackend> hardwareBackend(
-      CodecFamily family, Set<String> hardwareEncoders) {
-    // The iteration order of an immutable Set changes between JVM runs. Sorting by name keeps the
-    // advertised backend the same across worker restarts until a hardware preference order exists.
-    return hardwareEncoders.stream()
-        .filter(family::isHardwareEncoderOfThisFamily)
-        // The producer fails an attempt whose output differs from the job's codec profile, tier
-        // and level, so a hardware encoder runs only once the command forces them on it.
-        .filter(FfmpegCommandBuilder::forcesCodecProfile)
-        .sorted()
-        .findFirst()
-        .map(
-            encoder ->
-                EncoderBackend.builder()
-                    .codecFamily(family)
-                    .encoder(encoder)
-                    .hardware(true)
-                    .build());
+  private static Stream<WorkerVerifiedEncoder> usableEncoders(
+      CodecFamily family, Set<String> hardwareEncoders, Set<CodecFamily> softwareEncoderFamilies) {
+    var hardware =
+        hardwareEncoders.stream()
+            .filter(family::isHardwareEncoderOfThisFamily)
+            // The producer fails an attempt whose output differs from the job's codec profile,
+            // tier and level, so a hardware encoder runs only once the command forces them on it.
+            .filter(FfmpegCommandBuilder::forcesCodecProfile)
+            .map(encoder -> backend(family, encoder, true));
+    var software =
+        softwareEncoderFamilies.contains(family)
+            ? Stream.of(backend(family, family.softwareEncoder(), false))
+            : Stream.<EncoderBackend>empty();
+    return Stream.concat(hardware, software).map(TranscodeCapabilityService::workerVerified);
   }
 
-  private static Optional<EncoderBackend> softwareBackendIfVerified(
-      CodecFamily family, Set<CodecFamily> softwareEncoderFamilies) {
-    if (!softwareEncoderFamilies.contains(family)) {
-      return Optional.empty();
-    }
-
-    return Optional.of(softwareBackend(family));
+  private static EncoderBackend backend(CodecFamily family, String encoder, boolean hardware) {
+    return EncoderBackend.builder().codecFamily(family).encoder(encoder).hardware(hardware).build();
   }
 
-  private static EncoderBackend softwareBackend(CodecFamily family) {
-    return EncoderBackend.builder()
-        .codecFamily(family)
-        .encoder(family.softwareEncoder())
-        .hardware(false)
+  private static WorkerVerifiedEncoder workerVerified(EncoderBackend backend) {
+    return WorkerVerifiedEncoder.builder()
+        .backend(backend)
+        .keyframeVerified(FfmpegCommandBuilder.isKeyframeVerified(backend.encoder()))
         .build();
   }
 
