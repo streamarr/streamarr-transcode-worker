@@ -17,6 +17,7 @@ final class DecoderConfiguration {
 
   private static final int AVC_RECORD_VERSION = 1;
   private static final int AVC_SEQUENCE_PARAMETER_SET = 7;
+  private static final int AVC_PICTURE_PARAMETER_SET = 8;
   // The avcC record's count of SPS NAL units follows its 5 header bytes.
   private static final int AVC_RECORD_SPS_COUNT = 5;
   private static final int AVC_RECORD_MINIMUM_BYTES = 7;
@@ -39,12 +40,78 @@ final class DecoderConfiguration {
    * The three bytes after the first SPS's NAL unit header. The copy's Annex B filter turns an avcC
    * record into its parameter sets, and the mp4 muxer builds the copy's avcC from the first SPS, so
    * the copy keeps the SPS's profile and level rather than the record header's. A record without an
-   * SPS leaves the muxer to read the parameter sets in the first sample, so the record header alone
-   * cannot determine the copy's profile.
+   * SPS cannot determine the copy's profile: see {@link #avcFirstSampleProfile}.
    */
   static Optional<byte[]> avcProfile(byte[] extradata) {
     var isRecord = Byte.toUnsignedInt(extradata[0]) == AVC_RECORD_VERSION;
-    var units = isRecord ? avcRecordSequenceParameterSets(extradata) : annexB(extradata);
+    return avcProfileOf(isRecord ? avcRecordSequenceParameterSets(extradata) : annexB(extradata));
+  }
+
+  /**
+   * The bytes that {@link #avcProfile} reads, unless the extradata is an avcC record that leaves
+   * the copy without one. The copy's Annex B filter refuses an avcC record that FFmpeg cannot read
+   * whole, and gives the mp4 muxer the parameter sets of one that it can. The muxer then reads no
+   * sample, and FFmpeg's avcC writer needs a PPS NAL unit as well as an SPS, so without one in the
+   * record the copy's avcC box holds no record. A counted PPS of 0 bytes is no NAL unit.
+   */
+  static Optional<byte[]> avcCopyProfile(byte[] extradata) {
+    var isRecord = Byte.toUnsignedInt(extradata[0]) == AVC_RECORD_VERSION;
+    if (isRecord && !isWholeAvcRecordWithPictureParameterSet(extradata)) {
+      return Optional.empty();
+    }
+
+    return avcProfile(extradata);
+  }
+
+  private static boolean isWholeAvcRecordWithPictureParameterSet(byte[] avcC) {
+    if (!isWholeAvcRecord(avcC)) {
+      return false;
+    }
+
+    var buffer = ByteBuffer.wrap(avcC).position(AVC_RECORD_SPS_COUNT);
+    skipsParameterSets(buffer, buffer.get() & 0x1F);
+    var count = buffer.hasRemaining() ? Byte.toUnsignedInt(buffer.get()) : 0;
+    var units = new ArrayList<byte[]>();
+    for (var index = 0; index < count; index++) {
+      if (!readLengthPrefixedUnit(buffer, units)) {
+        break;
+      }
+    }
+
+    return holdsPictureParameterSet(units);
+  }
+
+  private static boolean holdsPictureParameterSet(List<byte[]> units) {
+    return units.stream().anyMatch(nal -> (nal[0] & 0x1F) == AVC_PICTURE_PARAMETER_SET);
+  }
+
+  /**
+   * The bytes that {@link #avcProfile} reads, from the first sample's first SPS, when the extradata
+   * is a whole avcC record that holds no NAL unit; empty otherwise. The copy's Annex B filter then
+   * gives the mp4 muxer no parameter set, so the muxer builds the copy's record from the parameter
+   * sets in the copy's first sample, and writes none unless the sample holds an SPS and a PPS. A
+   * record that holds a PPS gives the muxer that PPS instead, and without an SPS the copy has no
+   * record.
+   */
+  static Optional<byte[]> avcFirstSampleProfile(byte[] extradata, List<byte[]> firstSample) {
+    if (!isAvcRecordWithoutNalUnits(extradata) || !holdsPictureParameterSet(firstSample)) {
+      return Optional.empty();
+    }
+
+    return avcProfileOf(firstSample);
+  }
+
+  // A whole avcC record that counts no SPS and, in the byte after that count, no PPS.
+  private static boolean isAvcRecordWithoutNalUnits(byte[] extradata) {
+    return Byte.toUnsignedInt(extradata[0]) == AVC_RECORD_VERSION
+        && isWholeAvcRecord(extradata)
+        && (extradata[AVC_RECORD_SPS_COUNT] & 0x1F) == 0
+        && extradata[AVC_RECORD_SPS_COUNT + 1] == 0;
+  }
+
+  // The three bytes after the header of the first SPS among the NAL units, which FFmpeg's avcC
+  // writer copies into the record header.
+  private static Optional<byte[]> avcProfileOf(List<byte[]> units) {
     return units.stream()
         .filter(nal -> (nal[0] & 0x1F) == AVC_SEQUENCE_PARAMETER_SET)
         .findFirst()
@@ -70,14 +137,14 @@ final class DecoderConfiguration {
    * the parameter sets in the copy's first sample. A record that holds any NAL unit gives the muxer
    * those NAL units instead, and without a VPS and an SPS among them the copy has no record.
    */
-  static Optional<byte[]> hevcFirstSampleProfile(byte[] extradata, NalUnits firstSample) {
+  static Optional<byte[]> hevcFirstSampleProfile(byte[] extradata, List<byte[]> firstSample) {
     var isRecord = Byte.toUnsignedInt(extradata[0]) == HEVC_RECORD_VERSION;
     var record = hevcRecordUnits(extradata);
-    if (!isRecord || !record.complete() || !record.units().isEmpty() || !firstSample.complete()) {
+    if (!isRecord || !record.complete() || !record.units().isEmpty()) {
       return Optional.empty();
     }
 
-    return hevcProfileOf(firstSample.units());
+    return hevcProfileOf(firstSample);
   }
 
   // The VPS and SPS among the NAL units, merged as FFmpeg's hvcC writer merges them.
