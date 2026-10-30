@@ -26,6 +26,9 @@ public class FfmpegCommandBuilder {
   private static final String DEFAULT_EIGHT_BIT_PIXEL_FORMAT = "yuv420p";
   private static final EncoderTraits UNLISTED_ENCODER = traits().build();
   private static final EncoderTraits FIXED_GOP = traits().fixedGop(true).build();
+  // NVENC is not keyframe-verified until recordings show its forced keyframes (worker #56).
+  private static final EncoderTraits NVENC =
+      traits().fixedGop(true).codecProfileForcing(CodecProfileForcing.NVENC).build();
   // QSV and VAAPI take nv12 from system memory and refuse yuv420p.
   private static final String NV12 = "nv12";
   private static final EncoderTraits QSV =
@@ -64,8 +67,8 @@ public class FfmpegCommandBuilder {
                   .closesGopsByX265Parameters(true)
                   .codecProfileForcing(CodecProfileForcing.LIBX265)
                   .build()),
-          Map.entry("h264_nvenc", FIXED_GOP),
-          Map.entry("hevc_nvenc", FIXED_GOP),
+          Map.entry("h264_nvenc", NVENC),
+          Map.entry("hevc_nvenc", NVENC),
           Map.entry("av1_nvenc", FIXED_GOP),
           Map.entry("h264_qsv", QSV),
           Map.entry("hevc_qsv", QSV),
@@ -647,8 +650,8 @@ public class FfmpegCommandBuilder {
         .codecProfileForcing(CodecProfileForcing.NONE);
   }
 
-  // How an encoder takes the codec profile, tier and level that the job forces. The hardware
-  // encoders force nothing until each passes the forced-value check (worker #14, #56 and #57); the
+  // How an encoder takes the codec profile, tier and level that the job forces. The other hardware
+  // encoders force nothing until each passes the forced-value check (worker #14 and #57); the
   // producer's output check fails an attempt whose output differs from the job, so until then the
   // worker runs the software encoder instead.
   private enum CodecProfileForcing {
@@ -657,7 +660,8 @@ public class FfmpegCommandBuilder {
     // libx265 ignores FFmpeg's -level, and writes the High tier unless told otherwise.
     LIBX265,
     // SVT-AV1 writes the Main tier and the only profile that 8-bit 4:2:0 allows.
-    LIBSVTAV1;
+    LIBSVTAV1,
+    NVENC;
 
     List<String> argumentsFor(VideoDecision.Encode encode) {
       var level = String.valueOf(encode.level());
@@ -667,13 +671,32 @@ public class FfmpegCommandBuilder {
             List.of("-profile:v", profileName(encode.codecProfile()), "-level:v", level);
         case LIBX265 -> List.of("-profile:v", profileName(encode.codecProfile()));
         case LIBSVTAV1 -> List.of("-level:v", level);
+        case NVENC -> nvencProfileLevelAndTier(encode);
       };
     }
 
     List<String> x265ParametersFor(VideoDecision.Encode encode) {
       return switch (this) {
         case LIBX265 -> x265LevelAndTier(encode);
-        case NONE, LIBX264, LIBSVTAV1 -> List.of();
+        case NONE, LIBX264, LIBSVTAV1, NVENC -> List.of();
+      };
+    }
+
+    // NVENC reads a number as the level's own code, which for HEVC is 30 times the level, so the
+    // level goes by the name that both NVENC encoders accept, such as 4.1.
+    private static List<String> nvencProfileLevelAndTier(VideoDecision.Encode encode) {
+      var levelName = encode.level() / 10 + "." + encode.level() % 10;
+      var arguments =
+          new ArrayList<>(
+              List.of("-profile:v", profileName(encode.codecProfile()), "-level:v", levelName));
+      encode.tier().ifPresent(tier -> arguments.addAll(List.of("-tier:v", tierName(tier))));
+      return List.copyOf(arguments);
+    }
+
+    private static String tierName(VideoCodecTier tier) {
+      return switch (tier) {
+        case MAIN -> "main";
+        case HIGH -> "high";
       };
     }
 

@@ -458,16 +458,57 @@ class FfmpegCommandBuilderTest {
     assertThat(cmd).containsSequence("-level:v", "41").doesNotContain("-profile:v");
   }
 
+  @ParameterizedTest(name = "level {0}")
+  @CsvSource({"10, 1.0", "31, 3.1", "40, 4.0", "52, 5.2"})
+  @DisplayName("Should force the High profile and the level by name when h264_nvenc encodes")
+  void shouldForceTheHighProfileAndTheLevelByNameWhenH264NvencEncodes(int level, String name) {
+    var encode = VideoDecisionFixtures.encodeBuilder().level(level);
+
+    var cmd = command(request(encoding(encode)).build(), "h264_nvenc");
+
+    assertThat(cmd)
+        .containsSequence("-c:v", "h264_nvenc")
+        .containsSequence("-profile:v", "high", "-level:v", name)
+        .doesNotContain("-tier:v", "-x265-params");
+  }
+
+  @ParameterizedTest(name = "{0} tier")
+  @CsvSource({"MAIN, main", "HIGH, high"})
+  @DisplayName("Should force the Main profile, the level and the tier when hevc_nvenc encodes")
+  void shouldForceTheMainProfileTheLevelAndTheTierWhenHevcNvencEncodes(
+      VideoCodecTier tier, String tierName) {
+    var encode = hevcEncode().tier(Optional.of(tier));
+
+    var cmd = command(request(encoding(encode)).build(), "hevc_nvenc");
+
+    assertThat(cmd)
+        .containsSequence("-c:v", "hevc_nvenc")
+        .containsSequence("-profile:v", "main", "-level:v", "4.1", "-tier:v", tierName)
+        .doesNotContain("-x265-params");
+  }
+
+  @Test
+  @DisplayName("Should force no tier when hevc_nvenc encodes without one")
+  void shouldForceNoTierWhenHevcNvencEncodesWithoutOne() {
+    var cmd = command(request(encoding(hevcEncode())).build(), "hevc_nvenc");
+
+    assertThat(cmd)
+        .containsSequence("-profile:v", "main", "-level:v", "4.1")
+        .doesNotContain("-tier:v");
+  }
+
   @ParameterizedTest(name = "{0}")
-  @ValueSource(strings = {"h264_nvenc", "h264_videotoolbox", "h264_qsv", "h264_vaapi"})
+  @ValueSource(strings = {"av1_nvenc", "h264_videotoolbox", "h264_qsv", "h264_vaapi"})
   @DisplayName(
-      "Should leave the codec profile and level to the encoder when a hardware encoder runs")
-  void shouldLeaveTheCodecProfileAndLevelToTheEncoderWhenAHardwareEncoderRuns(String encoder) {
+      "Should leave the codec profile and level to the encoder when a hardware encoder the worker"
+          + " cannot force runs")
+  void shouldLeaveTheCodecProfileAndLevelToTheEncoderWhenAHardwareEncoderTheWorkerCannotForceRuns(
+      String encoder) {
     var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), encoder);
 
     assertThat(cmd)
         .containsSequence("-c:v", encoder)
-        .doesNotContain("-profile:v", "-level:v", "-x265-params");
+        .doesNotContain("-profile:v", "-level:v", "-tier:v", "-x265-params");
   }
 
   @ParameterizedTest
@@ -507,14 +548,19 @@ class FfmpegCommandBuilderTest {
     "libx264, true",
     "libx265, true",
     "libsvtav1, true",
-    "h264_nvenc, false",
+    "h264_nvenc, true",
+    "hevc_nvenc, true",
+    "av1_nvenc, false",
     "hevc_qsv, false",
     "av1_vaapi, false",
     "h264_videotoolbox, false"
   })
-  @DisplayName("Should force the job's codec profile and level only on a software encoder")
-  void shouldForceTheJobsCodecProfileAndLevelOnlyOnASoftwareEncoder(
-      String encoder, boolean forces) {
+  @DisplayName(
+      "Should force the job's codec profile and level only on the software encoders and the H.264"
+          + " and HEVC NVENC encoders")
+  void
+      shouldForceTheJobsCodecProfileAndLevelOnlyOnTheSoftwareEncodersAndTheH264AndHevcNvencEncoders(
+          String encoder, boolean forces) {
     assertThat(FfmpegCommandBuilder.forcesCodecProfile(encoder)).isEqualTo(forces);
   }
 
