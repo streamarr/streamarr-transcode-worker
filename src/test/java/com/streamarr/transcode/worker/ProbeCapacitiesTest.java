@@ -382,6 +382,21 @@ class ProbeCapacitiesTest {
 
   @Test
   @DisplayName(
+      "Should apply no brake when a probe that started before a job attempt's brake times out")
+  void shouldApplyNoBrakeWhenAProbeThatStartedBeforeAJobAttemptsBrakeTimesOut() {
+    var capacities = adaptive(16);
+    var startedBeforeBrake = acquire(capacities, ProbeKind.BACKGROUND, 1);
+    capacities.jobAttemptStarted(UUID.randomUUID());
+    clock.advance(Duration.ofSeconds(15));
+
+    timeOut(capacities, startedBeforeBrake.getFirst());
+
+    assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(2);
+    assertThat(capacities.takeBrakeCount()).isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName(
       "Should apply no brake for a timed-out probe until 15 s have passed since the previous"
           + " brake")
   void shouldApplyNoBrakeForATimedOutProbeUntil15SHavePassedSinceThePreviousBrake() {
@@ -420,10 +435,14 @@ class ProbeCapacitiesTest {
   @Test
   @DisplayName("Should keep the background probe capacity at 1 when a probe times out at 1")
   void shouldKeepTheBackgroundProbeCapacityAt1WhenAProbeTimesOutAt1() {
-    var capacities = adaptive(1);
-    var probes = acquire(capacities, ProbeKind.BACKGROUND, 1);
+    var capacities = adaptive(16);
+    for (var brake = 0; brake < 2; brake++) {
+      timeOut(capacities, capacities.tryAcquire(ProbeKind.BACKGROUND).orElseThrow());
+      clock.advance(Duration.ofSeconds(15));
+    }
 
-    timeOut(capacities, probes.getFirst());
+    assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(1);
+    timeOut(capacities, capacities.tryAcquire(ProbeKind.BACKGROUND).orElseThrow());
 
     assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(1);
     assertThat(capacities.tryAcquire(ProbeKind.BACKGROUND)).isPresent();
