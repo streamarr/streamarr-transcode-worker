@@ -259,7 +259,7 @@ SVTAV1=(-c:v libsvtav1 -preset 10 -svtav1-params log-level=0 -pix_fmt yuv420p10l
 "${FF[@]}" "${VIDEO[@]}" -c:v libx265 -preset ultrafast -x265-params log-level=none -tag:v hvc1 \
   mp4-hevc-record-level.mp4
 # 10-bit HEVC tagged BT.709 in Matroska, whose keyframes repeat the parameter sets and whose hvcC
-# record empty-hvcc-arrays.py empties, so that only the samples hold them.
+# record edit-codec-private.py empties, so that only the samples hold them.
 "${FF[@]}" "${VIDEO[@]}" -c:v libx265 -preset ultrafast -pix_fmt yuv420p10le \
   -x265-params log-level=none:repeat-headers=1 -color_primaries bt709 -color_trc bt709 \
   -colorspace bt709 mkv-hevc-repeated-parameter-sets.mkv
@@ -434,7 +434,8 @@ python3 "$HERE/edit-mp4-boxes.py" udta-first "$WORK/mp4-cover-art-first.mp4"
 python3 "$HERE/edit-mp4-boxes.py" er-aac-lc "$WORK/mp4-er-aac-lc.mp4"
 python3 "$HERE/edit-mp4-boxes.py" record-level "$WORK/mp4-avc-record-level.mp4" 51
 python3 "$HERE/edit-mp4-boxes.py" record-level "$WORK/mp4-hevc-record-level.mp4" 153
-python3 "$HERE/empty-hvcc-arrays.py" "$WORK/mkv-hevc-repeated-parameter-sets.mkv" \
+python3 "$HERE/edit-codec-private.py" hvcc-without-arrays \
+  "$WORK/mkv-hevc-repeated-parameter-sets.mkv" \
   "$WORK/mkv-hevc-parameter-sets-in-samples.mkv"
 python3 "$HERE/edit-adts-profile.py" "$WORK/aac-lc.adts" "$WORK/aac-main.adts" 0
 python3 "$HERE/edit-adts-profile.py" "$WORK/aac-lc.adts" "$WORK/aac-ltp.adts" 3
