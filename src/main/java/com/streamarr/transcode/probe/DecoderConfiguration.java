@@ -93,12 +93,12 @@ final class DecoderConfiguration {
    * record that holds a PPS gives the muxer that PPS instead, and without an SPS the copy has no
    * record.
    */
-  static Optional<byte[]> avcFirstSampleProfile(byte[] extradata, NalUnits firstSample) {
-    if (!isAvcRecordWithoutNalUnits(extradata) || !holdsPictureParameterSet(firstSample.units())) {
+  static Optional<byte[]> avcFirstSampleProfile(byte[] extradata, List<byte[]> firstSample) {
+    if (!isAvcRecordWithoutNalUnits(extradata) || !holdsPictureParameterSet(firstSample)) {
       return Optional.empty();
     }
 
-    return avcProfileOf(firstSample.units());
+    return avcProfileOf(firstSample);
   }
 
   // A whole avcC record that counts no SPS and, in the byte after that count, no PPS.
@@ -137,14 +137,14 @@ final class DecoderConfiguration {
    * the parameter sets in the copy's first sample. A record that holds any NAL unit gives the muxer
    * those NAL units instead, and without a VPS and an SPS among them the copy has no record.
    */
-  static Optional<byte[]> hevcFirstSampleProfile(byte[] extradata, NalUnits firstSample) {
+  static Optional<byte[]> hevcFirstSampleProfile(byte[] extradata, List<byte[]> firstSample) {
     var isRecord = Byte.toUnsignedInt(extradata[0]) == HEVC_RECORD_VERSION;
     var record = hevcRecordUnits(extradata);
-    if (!isRecord || !record.complete() || !record.units().isEmpty() || !firstSample.complete()) {
+    if (!isRecord || !record.complete() || !record.units().isEmpty()) {
       return Optional.empty();
     }
 
-    return hevcProfileOf(firstSample.units());
+    return hevcProfileOf(firstSample);
   }
 
   // The VPS and SPS among the NAL units, merged as FFmpeg's hvcC writer merges them.

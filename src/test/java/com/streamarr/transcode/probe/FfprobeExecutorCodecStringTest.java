@@ -13,6 +13,7 @@ import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import build.buf.gen.streamarr.transcode.v1.VideoCodecProfile;
 import com.streamarr.transcode.fakes.ScriptedProcess;
+import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.HexFormat;
@@ -379,6 +380,86 @@ class FfprobeExecutorCodecStringTest {
               .getStreams(0);
 
       assertThat(video.hasCodecString()).isFalse();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("firstSamplesThatTheCopyAndTheDecoderReadDifferently")
+    @DisplayName(
+        "Should report no codec string when the record holds no NAL unit and the copy may read the"
+            + " first sample differently from the decoder")
+    void shouldReportNoCodecStringWhenTheCopyMayReadTheFirstSampleDifferentlyFromTheDecoder(
+        String fixture, String prefix, String suffix) {
+      var edited = concatenated(hex(prefix), firstSample(fixture), hex(suffix));
+
+      var video =
+          probe(
+                  recordedAnswers(fixture)
+                      .firstPackets(
+                          "{\"packets\":[{\"pts\":0,\"data\":\"%s\"}]}"
+                              .formatted(ffprobeDump(edited)))
+                      .build())
+              .getStreams(0);
+
+      assertThat(video.hasCodecString()).isFalse();
+    }
+
+    private static Stream<Arguments> firstSamplesThatTheCopyAndTheDecoderReadDifferently() {
+      return Stream.of(
+          // FFmpeg's decoders drop a NAL unit whose forbidden_zero_bit is 1, while the copy's
+          // record writers read it. With this SPS ahead, the copy carries avc1.42C033.
+          Arguments.of(
+              Named.of("H.264 SPS with its forbidden bit set", AVC_SAMPLE_PARAMETER_SETS),
+              "00 00 00 04 e7 42 c0 33",
+              ""),
+          // An SPS of this stream with its forbidden bit set and level 3.1. The copy merges it and
+          // carries hvc1.2.4.L93.90.
+          Arguments.of(
+              Named.of("HEVC SPS with its forbidden bit set", HEVC_SAMPLE_PARAMETER_SETS),
+              "00 00 00 2d c2 01 01 02 20 00 00 03 00 90 00 00 03 00 00 03 00 5d a0 20 83 1f 3b 65"
+                  + " 95 95 29 30 bc 05 a8 10 10 08 20 00 00 03 00 20 00 00 03 03 01",
+              ""),
+          // The decoders ignore 1 to 3 bytes after the last NAL unit, while the copy's Annex B
+          // filter refuses the sample, so the copy's record box holds no record.
+          Arguments.of(Named.of("H.264 trailing bytes", AVC_SAMPLE_PARAMETER_SETS), "", "00 00"),
+          Arguments.of(Named.of("HEVC trailing bytes", HEVC_SAMPLE_PARAMETER_SETS), "", "00 00"),
+          // A NAL unit of 0 bytes leaves the copy's avcC box without a record. A length that runs
+          // past the sample's end makes the Annex B filter refuse the sample.
+          Arguments.of(
+              Named.of("H.264 NAL unit of 0 bytes", AVC_SAMPLE_PARAMETER_SETS), "00 00 00 00", ""),
+          // The copy's record writers split the sample again at each start code, which the probe
+          // does not imitate.
+          Arguments.of(
+              Named.of("H.264 start code inside a NAL unit", AVC_SAMPLE_PARAMETER_SETS),
+              "00 00 00 09 09 f0 00 00 01 67 42 c0 33",
+              ""),
+          Arguments.of(
+              Named.of("H.264 length past the sample's end", AVC_SAMPLE_PARAMETER_SETS),
+              "",
+              "00 00 00 08 09 f0"));
+    }
+
+    private static byte[] firstSample(String fixture) {
+      var packets =
+          new ObjectMapper()
+              .readTree(fixture("packet-data/" + fixture))
+              .get("packets")
+              .get(0)
+              .get("data")
+              .asString();
+      return Extradata.dumped(packets).orElseThrow();
+    }
+
+    private static byte[] hex(String bytes) {
+      return HexFormat.ofDelimiter(" ").parseHex(bytes);
+    }
+
+    private static byte[] concatenated(byte[]... parts) {
+      var joined = new ByteArrayOutputStream();
+      for (var part : parts) {
+        joined.writeBytes(part);
+      }
+
+      return joined.toByteArray();
     }
 
     private static String packets(String dump) {

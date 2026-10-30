@@ -41,6 +41,57 @@ final class FirstPacketSamples {
                     .toList());
   }
 
+  /**
+   * The NAL units of the stream's first packet, when the copy's Annex B filter and FFmpeg's
+   * decoders read the same ones from it; empty otherwise. The filter refuses a sample whose lengths
+   * do not end at its end, which the decoders accept by dropping the 1 to 3 bytes that can end it.
+   * The copy's record writers read a NAL unit that the decoders drop, such as one whose
+   * forbidden_zero_bit is 1, and split the sample again at a start code that a NAL unit holds. A
+   * NAL unit of 0 bytes leaves the copy without a record. The probe refuses each of these samples
+   * rather than imitate the copy.
+   */
+  static Optional<List<byte[]>> firstAsCopied(JsonNode stream, NalSyntax syntax) {
+    var lengthSize = Extradata.of(stream).flatMap(syntax::lengthSize);
+    if (lengthSize.isEmpty()) {
+      return Optional.empty();
+    }
+
+    return FirstPackets.of(stream)
+        .flatMap(packets -> packets.stream().findFirst())
+        .flatMap(sample -> unitsAsCopied(sample, lengthSize.get(), syntax));
+  }
+
+  private static Optional<List<byte[]>> unitsAsCopied(
+      byte[] sample, int lengthSize, NalSyntax syntax) {
+    var units = new ArrayList<byte[]>();
+    var position = 0;
+    while (position < sample.length) {
+      if (sample.length - position < lengthSize) {
+        return Optional.empty();
+      }
+
+      var length = 0;
+      for (var index = 0; index < lengthSize; index++) {
+        length = (length << 8) | Byte.toUnsignedInt(sample[position + index]);
+      }
+
+      position += lengthSize;
+      if (length <= 0 || length > sample.length - position) {
+        return Optional.empty();
+      }
+
+      var region = DecoderConfiguration.lengthPrefixedRegion(sample, position, position + length);
+      if (!region.complete() || !region.units().stream().allMatch(syntax::reachesDecoder)) {
+        return Optional.empty();
+      }
+
+      units.addAll(region.units());
+      position += length;
+    }
+
+    return Optional.of(units);
+  }
+
   /** The sample's NAL units that reach FFmpeg's decoders; incomplete when none does. */
   private static NalUnits reachingDecoder(NalUnits sample, NalSyntax syntax) {
     var reaching = syntax.reachingDecoder(sample);

@@ -54,7 +54,7 @@ final class CodecStringReader {
     return DecoderConfiguration.avcCopyProfile(extradata)
         .or(
             () ->
-                firstSample(stream, NalSyntax.H264)
+                FirstPacketSamples.firstAsCopied(stream, NalSyntax.H264)
                     .flatMap(
                         sample -> DecoderConfiguration.avcFirstSampleProfile(extradata, sample)))
         .map(bytes -> CodecStrings.avc("avc1", bytes));
@@ -64,15 +64,10 @@ final class CodecStringReader {
     return DecoderConfiguration.hevcProfile(extradata)
         .or(
             () ->
-                firstSample(stream, NalSyntax.HEVC)
+                FirstPacketSamples.firstAsCopied(stream, NalSyntax.HEVC)
                     .flatMap(
                         sample -> DecoderConfiguration.hevcFirstSampleProfile(extradata, sample)))
         .map(bytes -> CodecStrings.hevc("hvc1", bytes));
-  }
-
-  // The probe reads the first packets of the chosen video stream only.
-  private static Optional<NalUnits> firstSample(JsonNode stream, NalSyntax syntax) {
-    return FirstPacketSamples.read(stream, syntax).flatMap(samples -> samples.stream().findFirst());
   }
 
   private static Optional<String> av1(byte[] extradata) {
