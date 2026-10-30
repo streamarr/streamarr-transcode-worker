@@ -61,8 +61,13 @@ final class DecoderConfiguration {
    */
   static Optional<byte[]> hevcProfile(byte[] extradata) {
     var isRecord = Byte.toUnsignedInt(extradata[0]) == HEVC_RECORD_VERSION;
+    return hevcProfileOf(isRecord ? hevcRecordUnits(extradata).units() : annexB(extradata));
+  }
+
+  // The VPS and SPS among the NAL units, merged as FFmpeg's hvcC writer merges them.
+  private static Optional<byte[]> hevcProfileOf(List<byte[]> units) {
     var merged = new HevcProfileMerge();
-    for (var nal : isRecord ? hevcRecordUnits(extradata).units() : annexB(extradata)) {
+    for (var nal : units) {
       if (nal.length < 2 || (nal[1] >> 3 & 0x1F) != 0 || (nal[0] & 0x01) != 0) {
         continue;
       }
