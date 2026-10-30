@@ -77,7 +77,7 @@ class TranscodeCapabilityServiceProcessTest {
     assertThat(service.getHardwareEncodingCapability().encoders()).containsExactly("h264_nvenc");
     assertThat(service.workerVerifiedEncoders())
         .extracting(encoder -> encoder.backend().encoder())
-        .containsExactlyInAnyOrder("libx264", "libx265", "libsvtav1");
+        .containsExactlyInAnyOrder("h264_nvenc", "libx265", "libsvtav1");
   }
 
   private TranscodeCapabilityService detectCapabilities(FloodedCommand flooded) throws Exception {
