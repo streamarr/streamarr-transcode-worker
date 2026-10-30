@@ -51,8 +51,8 @@ final class DecoderConfiguration {
    * The bytes that {@link #avcProfile} reads, unless the extradata is an avcC record that leaves
    * the copy without one. The copy's Annex B filter refuses an avcC record that FFmpeg cannot read
    * whole, and gives the mp4 muxer the parameter sets of one that it can. The muxer then reads no
-   * sample, and FFmpeg's avcC writer needs a PPS as well as an SPS, so without a PPS in the record
-   * the copy's avcC box holds no record.
+   * sample, and FFmpeg's avcC writer needs a PPS NAL unit as well as an SPS, so without one in the
+   * record the copy's avcC box holds no record. A counted PPS of 0 bytes is no NAL unit.
    */
   static Optional<byte[]> avcCopyProfile(byte[] extradata) {
     var isRecord = Byte.toUnsignedInt(extradata[0]) == AVC_RECORD_VERSION;
@@ -70,7 +70,19 @@ final class DecoderConfiguration {
 
     var buffer = ByteBuffer.wrap(avcC).position(AVC_RECORD_SPS_COUNT);
     skipsParameterSets(buffer, buffer.get() & 0x1F);
-    return buffer.hasRemaining() && buffer.get() != 0;
+    var count = buffer.hasRemaining() ? Byte.toUnsignedInt(buffer.get()) : 0;
+    var units = new ArrayList<byte[]>();
+    for (var index = 0; index < count; index++) {
+      if (!readLengthPrefixedUnit(buffer, units)) {
+        break;
+      }
+    }
+
+    return holdsPictureParameterSet(units);
+  }
+
+  private static boolean holdsPictureParameterSet(List<byte[]> units) {
+    return units.stream().anyMatch(nal -> (nal[0] & 0x1F) == AVC_PICTURE_PARAMETER_SET);
   }
 
   /**
@@ -82,9 +94,7 @@ final class DecoderConfiguration {
    * record.
    */
   static Optional<byte[]> avcFirstSampleProfile(byte[] extradata, NalUnits firstSample) {
-    var holdsPictureParameterSet =
-        firstSample.units().stream().anyMatch(nal -> (nal[0] & 0x1F) == AVC_PICTURE_PARAMETER_SET);
-    if (!isAvcRecordWithoutNalUnits(extradata) || !holdsPictureParameterSet) {
+    if (!isAvcRecordWithoutNalUnits(extradata) || !holdsPictureParameterSet(firstSample.units())) {
       return Optional.empty();
     }
 

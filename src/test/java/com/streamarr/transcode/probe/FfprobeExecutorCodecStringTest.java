@@ -354,7 +354,8 @@ class FfprobeExecutorCodecStringTest {
       return Stream.of(
           Arguments.of(Named.of("no PPS", " 00")),
           Arguments.of(Named.of("no PPS count", "")),
-          Arguments.of(Named.of("a PPS that ends early", " 01 00 04 68 ce")));
+          Arguments.of(Named.of("a PPS that ends early", " 01 00 04 68 ce")),
+          Arguments.of(Named.of("a counted PPS of 0 bytes", " 01 00 00")));
     }
 
     @Test
