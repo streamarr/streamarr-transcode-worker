@@ -5,11 +5,11 @@
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
         <version>4.1.1</version>
-        <relativePath />
+        <relativePath/>
     </parent>
     <groupId>com.streamarr</groupId>
     <artifactId>transcode-worker</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+    <version>0.1.0</version>
     <name>Streamarr Transcode Worker</name>
     <description>Independent media probing and transcoding worker.</description>
     <properties>
@@ -40,8 +40,8 @@
         <sonar.java.jdkHome>${java.home}</sonar.java.jdkHome>
         <sonar-maven-plugin.version>5.8.0.7211</sonar-maven-plugin.version>
         <sonar.coverage.jacoco.xmlReportPaths>target/site/jacoco-merged-test-coverage-report/jacoco.xml</sonar.coverage.jacoco.xmlReportPaths>
-        <surefire.jacoco.args />
-        <failsafe.jacoco.args />
+        <surefire.jacoco.args/>
+        <failsafe.jacoco.args/>
     </properties>
     <repositories>
         <repository>
@@ -270,7 +270,7 @@
                 <version>${spotless.version}</version>
                 <configuration>
                     <java>
-                        <googleJavaFormat />
+                        <googleJavaFormat/>
                     </java>
                 </configuration>
                 <executions>
