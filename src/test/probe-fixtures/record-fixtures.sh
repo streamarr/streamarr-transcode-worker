@@ -444,6 +444,9 @@ python3 "$HERE/edit-codec-private.py" hvcc-without-arrays \
 python3 "$HERE/edit-codec-private.py" avcc-without-parameter-sets \
   "$WORK/mkv-h264-repeated-parameter-sets.mkv" \
   "$WORK/mkv-h264-parameter-sets-in-samples.mkv"
+# Without its av1C record, ffprobe extracts the sequence header OBU of the first packet.
+python3 "$HERE/edit-codec-private.py" without-record "$WORK/mkv-av1-10bit.mkv" \
+  "$WORK/mkv-av1-without-codec-private.mkv"
 python3 "$HERE/edit-adts-profile.py" "$WORK/aac-lc.adts" "$WORK/aac-main.adts" 0
 python3 "$HERE/edit-adts-profile.py" "$WORK/aac-lc.adts" "$WORK/aac-ltp.adts" 3
 python3 "$HERE/reject-hdr-sei.py" hevc "$WORK/hdr10-plus.hevc" \
@@ -469,6 +472,7 @@ FIXTURES_TO_PROBE=(mp4-titled.mp4 mkv-remuxed-from-mp4.mkv mp4-default-handlers.
   mpegts-hevc-ac3.ts ivf-av1-10bit.ivf obu-av1-10bit.obu mkv-av1-10bit.mkv
   mp4-av1-10bit.mp4 mp4-audio-codecs.mp4 mp4-avc-record-level.mp4 mp4-hevc-record-level.mp4
   mkv-hevc-parameter-sets-in-samples.mkv mkv-h264-parameter-sets-in-samples.mkv
+  mkv-av1-without-codec-private.mkv
   mpegts-aac-main.ts mpegts-aac-ltp.ts mkv-120fps.mkv mp4-100fps.mp4 mp4-90fps.mp4 mp4-72fps.mp4
   hevc-hdr10-plus-rejected-sei.hevc h264-hdr10-rejected-sei.h264 mp4-av1-pq.mp4
   mp4-av1-hdr10-plus-rejected.mp4 mp4-av1-static-after-frame.mp4

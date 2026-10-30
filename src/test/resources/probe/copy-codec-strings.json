@@ -17,6 +17,9 @@
   "mkv-av1-10bit.mkv": {
     "0": "av01.0.00M.10"
   },
+  "mkv-av1-without-codec-private.mkv": {
+    "0": "av01.0.00M.10"
+  },
   "mkv-dovi-p7-hvce.mkv": {
     "0": "hvc1.2.4.H153.B0"
   },

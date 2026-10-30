@@ -482,6 +482,17 @@ class FfprobeExecutorCodecStringTest {
   class Av1SequenceHeaderTests {
 
     @Test
+    @DisplayName(
+        "Should read the first packet's sequence header when the container holds no av1C record")
+    void shouldReadTheFirstPacketsSequenceHeaderWhenTheContainerHoldsNoAv1CRecord() {
+      // ffprobe prints the sequence header OBU that it extracts from the first packet as the
+      // stream's extradata, and the mp4 muxer builds the copy's av1C record from the same OBU.
+      var video = streamOf("mkv-av1-without-codec-private.mkv", 0);
+
+      assertThat(video.getCodecString()).isEqualTo("av01.0.00M.10");
+    }
+
+    @Test
     @DisplayName("Should read the level of a reduced still picture header when the OBU has one")
     void shouldReadTheLevelOfAReducedStillPictureHeaderWhenTheObuHasOne() {
       // seq_profile 1, still_picture 1, reduced_still_picture_header 1, seq_level_idx 5. 1x1
