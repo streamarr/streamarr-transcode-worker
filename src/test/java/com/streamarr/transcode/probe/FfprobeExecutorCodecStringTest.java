@@ -2,13 +2,16 @@ package com.streamarr.transcode.probe;
 
 import static com.streamarr.transcode.probe.RecordedFfprobe.ffprobeDump;
 import static com.streamarr.transcode.probe.RecordedFfprobe.fixture;
+import static com.streamarr.transcode.probe.RecordedFfprobe.probe;
 import static com.streamarr.transcode.probe.RecordedFfprobe.probeOutput;
+import static com.streamarr.transcode.probe.RecordedFfprobe.recordedAnswers;
 import static com.streamarr.transcode.probe.RecordedFfprobe.request;
 import static com.streamarr.transcode.probe.RecordedFfprobe.streamOf;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
+import build.buf.gen.streamarr.transcode.v1.VideoCodecProfile;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -40,9 +43,9 @@ class FfprobeExecutorCodecStringTest {
           "mp4-dovi-p9-dva1.mp4",
           "mp4-dovi-p82.mp4");
 
-  // These videos' HEVC parameter sets are only in their samples.
-  private static final Set<String> VIDEO_FIXTURES_WITHOUT_RECORD_PARAMETER_SETS =
-      Set.of("mp4-dovi-p5-hev1.mp4", "mp4-dovi-p81-fate.mp4");
+  // 10-bit HEVC in Matroska whose hvcC record holds no NAL unit, and whose samples repeat the
+  // parameter sets.
+  private static final String SAMPLE_PARAMETER_SETS = "mkv-hevc-parameter-sets-in-samples.mkv";
 
   @Nested
   @DisplayName("Stream Copies")
@@ -72,11 +75,6 @@ class FfprobeExecutorCodecStringTest {
                           copy ->
                               !copy.getKey().equals("0")
                                   || !SESSION_COVERED_VIDEO_FIXTURES.contains(file.getKey()))
-                      .filter(
-                          copy ->
-                              !copy.getKey().equals("0")
-                                  || !VIDEO_FIXTURES_WITHOUT_RECORD_PARAMETER_SETS.contains(
-                                      file.getKey()))
                       .map(
                           copy ->
                               Arguments.of(
@@ -203,17 +201,74 @@ class FfprobeExecutorCodecStringTest {
       assertThat(video.hasCodecString()).isFalse();
     }
 
-    @ParameterizedTest(name = "{0}")
-    @MethodSource("videoFixturesWithoutRecordParameterSets")
-    @DisplayName("Should report no codec string when the parameter sets are only in samples")
-    void shouldReportNoCodecStringWhenTheParameterSetsAreOnlyInSamples(String fixture) {
-      var video = streamOf(fixture, 0);
+    @Test
+    @DisplayName(
+        "Should take the codec string from the first sample when the record holds no NAL unit")
+    void shouldTakeTheCodecStringFromTheFirstSampleWhenTheRecordHoldsNoNalUnit() {
+      // The copy's Annex B filter gives the mp4 muxer no parameter set, so the muxer builds the
+      // copy's hvcC record from the parameter sets that the first sample repeats.
+      var video = streamOf(SAMPLE_PARAMETER_SETS, 0);
+
+      assertThat(video.getCodecProfile())
+          .isEqualTo(VideoCodecProfile.VIDEO_CODEC_PROFILE_HEVC_MAIN_10);
+      assertThat(video.getCodecString()).isEqualTo("hvc1.2.4.L30.90");
+    }
+
+    @Test
+    @DisplayName(
+        "Should report no codec string when the record holds no NAL unit and no packet was read")
+    void shouldReportNoCodecStringWhenTheRecordHoldsNoNalUnitAndNoPacketWasRead() {
+      var video =
+          probe(recordedAnswers(SAMPLE_PARAMETER_SETS).firstPacketsExitCode(1).build())
+              .getStreams(0);
 
       assertThat(video.hasCodecString()).isFalse();
     }
 
-    private static Stream<String> videoFixturesWithoutRecordParameterSets() {
-      return VIDEO_FIXTURES_WITHOUT_RECORD_PARAMETER_SETS.stream().sorted();
+    @Test
+    @DisplayName(
+        "Should report no codec string when the record holds no NAL unit and the first sample no"
+            + " parameter set")
+    void shouldReportNoCodecStringWhenTheRecordHoldsNoNalUnitAndTheFirstSampleNoParameterSet() {
+      // One IDR slice NAL unit after its 4-byte length.
+      var video =
+          probe(
+                  recordedAnswers(SAMPLE_PARAMETER_SETS)
+                      .firstPackets(packets("00000000: 0000 0004 2601 af80"))
+                      .build())
+              .getStreams(0);
+
+      assertThat(video.hasCodecString()).isFalse();
+    }
+
+    @Test
+    @DisplayName("Should report no codec string when the record holds a NAL unit but no VPS or SPS")
+    void shouldReportNoCodecStringWhenTheRecordHoldsANalUnitButNoVpsOrSps() {
+      // The copy's Annex B filter gives the muxer the record's PPS, so the muxer reads no sample
+      // and writes an hvcC box without a record.
+      var recorded = fixture(SAMPLE_PARAMETER_SETS);
+      var withPictureParameterSet =
+          recorded.replace(
+              "00000010: fdfa fa00 000f 00                        .......",
+              "00000010: fdfa fa00 000f 01a2 0001 0006 4401 c073  ............D..s\\n"
+                  + "00000020: c189                                     ..");
+      assertThat(withPictureParameterSet).isNotEqualTo(recorded);
+
+      var video =
+          probe(
+                  recordedAnswers(SAMPLE_PARAMETER_SETS)
+                      .ffprobeOutput(withPictureParameterSet)
+                      .build())
+              .getStreams(0);
+
+      assertThat(video.hasCodecString()).isFalse();
+    }
+
+    private static String packets(String dump) {
+      return """
+          {"packets":[{"pts":0,"data":"\\n%s\\n"}]}
+          """
+          .formatted(dump);
     }
 
     private static Stream<Arguments> absentOrIncompleteParameterSets() {

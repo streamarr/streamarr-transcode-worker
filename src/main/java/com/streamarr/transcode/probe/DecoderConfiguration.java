@@ -56,13 +56,34 @@ final class DecoderConfiguration {
    * The VPS and SPS merged as FFmpeg's hvcC writer merges them, as hvcC bytes 1 to 12. The copy's
    * Annex B filter turns an hvcC record into its parameter sets, so the copy's record takes its
    * profile, tier and level from them rather than from the source record's header. A record without
-   * them leaves the muxer to read the parameter sets in the first sample, so the record header
-   * alone cannot determine the copy's profile.
+   * them cannot determine the copy's profile: see {@link #hevcFirstSampleProfile}.
    */
   static Optional<byte[]> hevcProfile(byte[] extradata) {
     var isRecord = Byte.toUnsignedInt(extradata[0]) == HEVC_RECORD_VERSION;
+    return hevcProfileOf(isRecord ? hevcRecordUnits(extradata).units() : annexB(extradata));
+  }
+
+  /**
+   * The first sample's VPS and SPS merged as {@link #hevcProfile} merges a record's, when the
+   * extradata is a whole hvcC record that holds no NAL unit; empty otherwise. The copy's Annex B
+   * filter then gives the mp4 muxer no parameter set, so the muxer builds the copy's record from
+   * the parameter sets in the copy's first sample. A record that holds any NAL unit gives the muxer
+   * those NAL units instead, and without a VPS and an SPS among them the copy has no record.
+   */
+  static Optional<byte[]> hevcFirstSampleProfile(byte[] extradata, NalUnits firstSample) {
+    var isRecord = Byte.toUnsignedInt(extradata[0]) == HEVC_RECORD_VERSION;
+    var record = hevcRecordUnits(extradata);
+    if (!isRecord || !record.complete() || !record.units().isEmpty() || !firstSample.complete()) {
+      return Optional.empty();
+    }
+
+    return hevcProfileOf(firstSample.units());
+  }
+
+  // The VPS and SPS among the NAL units, merged as FFmpeg's hvcC writer merges them.
+  private static Optional<byte[]> hevcProfileOf(List<byte[]> units) {
     var merged = new HevcProfileMerge();
-    for (var nal : isRecord ? hevcRecordUnits(extradata).units() : annexB(extradata)) {
+    for (var nal : units) {
       if (nal.length < 2 || (nal[1] >> 3 & 0x1F) != 0 || (nal[0] & 0x01) != 0) {
         continue;
       }

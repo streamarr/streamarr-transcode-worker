@@ -8,10 +8,11 @@ import tools.jackson.databind.JsonNode;
 
 /**
  * The RFC 6381 codec string that a stream copy carries, computed from the stream's decoder
- * configuration record or its parameter sets. The tag rule writes avc1 for every H.264 copy and
- * hvc1 for every HEVC copy, so a Dolby Vision copy names its base layer's sample entry. MPEG-TS
- * carries H.264 and HEVC parameter sets in Annex B form, and IVF and raw OBU files carry AV1's
- * sequence header OBU.
+ * configuration record or its parameter sets, or, for an hvcC record that holds no NAL unit, from
+ * the parameter sets in the first sample. The tag rule writes avc1 for every H.264 copy and hvc1
+ * for every HEVC copy, so a Dolby Vision copy names its base layer's sample entry. MPEG-TS carries
+ * H.264 and HEVC parameter sets in Annex B form, and IVF and raw OBU files carry AV1's sequence
+ * header OBU.
  */
 final class CodecStringReader {
 
@@ -28,7 +29,7 @@ final class CodecStringReader {
     try {
       return switch (ProbedCodecFamily.of(stream)) {
         case H264 -> Extradata.of(stream).flatMap(CodecStringReader::avc);
-        case HEVC -> Extradata.of(stream).flatMap(CodecStringReader::hevc);
+        case HEVC -> Extradata.of(stream).flatMap(extradata -> hevc(stream, extradata));
         case AV1 -> Extradata.of(stream).flatMap(CodecStringReader::av1);
         case OTHER -> audioCodecString(stream);
       };
@@ -53,9 +54,20 @@ final class CodecStringReader {
     return DecoderConfiguration.avcProfile(extradata).map(bytes -> CodecStrings.avc("avc1", bytes));
   }
 
-  private static Optional<String> hevc(byte[] extradata) {
+  private static Optional<String> hevc(JsonNode stream, byte[] extradata) {
     return DecoderConfiguration.hevcProfile(extradata)
+        .or(
+            () ->
+                firstSample(stream)
+                    .flatMap(
+                        sample -> DecoderConfiguration.hevcFirstSampleProfile(extradata, sample)))
         .map(bytes -> CodecStrings.hevc("hvc1", bytes));
+  }
+
+  // The probe reads the first packets of the chosen video stream only.
+  private static Optional<NalUnits> firstSample(JsonNode stream) {
+    return FirstPacketSamples.read(stream, NalSyntax.HEVC)
+        .flatMap(samples -> samples.stream().findFirst());
   }
 
   private static Optional<String> av1(byte[] extradata) {
