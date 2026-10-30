@@ -48,6 +48,32 @@ final class DecoderConfiguration {
   }
 
   /**
+   * The bytes that {@link #avcProfile} reads, unless the extradata is an avcC record that leaves
+   * the copy without one. The copy's Annex B filter refuses an avcC record that FFmpeg cannot read
+   * whole, and gives the mp4 muxer the parameter sets of one that it can. The muxer then reads no
+   * sample, and FFmpeg's avcC writer needs a PPS as well as an SPS, so without a PPS in the record
+   * the copy's avcC box holds no record.
+   */
+  static Optional<byte[]> avcCopyProfile(byte[] extradata) {
+    var isRecord = Byte.toUnsignedInt(extradata[0]) == AVC_RECORD_VERSION;
+    if (isRecord && !isWholeAvcRecordWithPictureParameterSet(extradata)) {
+      return Optional.empty();
+    }
+
+    return avcProfile(extradata);
+  }
+
+  private static boolean isWholeAvcRecordWithPictureParameterSet(byte[] avcC) {
+    if (!isWholeAvcRecord(avcC)) {
+      return false;
+    }
+
+    var buffer = ByteBuffer.wrap(avcC).position(AVC_RECORD_SPS_COUNT);
+    skipsParameterSets(buffer, buffer.get() & 0x1F);
+    return buffer.hasRemaining() && buffer.get() != 0;
+  }
+
+  /**
    * The bytes that {@link #avcProfile} reads, from the first sample's first SPS, when the extradata
    * is a whole avcC record that holds no NAL unit; empty otherwise. The copy's Annex B filter then
    * gives the mp4 muxer no parameter set, so the muxer builds the copy's record from the parameter

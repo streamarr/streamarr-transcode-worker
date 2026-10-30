@@ -51,7 +51,7 @@ final class CodecStringReader {
   }
 
   private static Optional<String> avc(JsonNode stream, byte[] extradata) {
-    return DecoderConfiguration.avcProfile(extradata)
+    return DecoderConfiguration.avcCopyProfile(extradata)
         .or(
             () ->
                 firstSample(stream, NalSyntax.H264)

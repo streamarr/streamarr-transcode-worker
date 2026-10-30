@@ -48,6 +48,11 @@ class FfprobeExecutorCodecStringTest {
   private static final String HEVC_SAMPLE_PARAMETER_SETS = "mkv-hevc-parameter-sets-in-samples.mkv";
   private static final String AVC_SAMPLE_PARAMETER_SETS = "mkv-h264-parameter-sets-in-samples.mkv";
 
+  // An avcC header and the SPS of that fixture's first sample, which names Constrained Baseline
+  // level 1.0.
+  private static final String CONSTRAINED_BASELINE_SPS_RECORD =
+      "01 42 c0 0a ff e1 00 16 67 42 c0 0a da 11 fe 7c 04 40 00 00 03 00 40 00 00 0c 03 c4 89 a8";
+
   @Nested
   @DisplayName("Stream Copies")
   class StreamCopyTests {
@@ -309,6 +314,47 @@ class FfprobeExecutorCodecStringTest {
               .getStreams(0);
 
       assertThat(video.hasCodecString()).isFalse();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("avcCRecordsWithAnSpsButNoPpsThatFfmpegReads")
+    @DisplayName(
+        "Should report no codec string when the avcC record holds an SPS but no PPS that FFmpeg"
+            + " reads")
+    void shouldReportNoCodecStringWhenTheAvcCRecordHoldsAnSpsButNoPpsThatFfmpegReads(
+        String pictureParameterSets) {
+      // The copy's Annex B filter refuses a record that FFmpeg cannot read whole, and otherwise
+      // gives the muxer the record's SPS, so the muxer reads no sample, although the recorded
+      // first sample holds a PPS. FFmpeg's avcC writer needs a PPS as well, so the copy's avcC box
+      // holds no record.
+      var recorded = fixture(AVC_SAMPLE_PARAMETER_SETS);
+      var withSequenceParameterSet =
+          recorded.replace(
+              "\"\\n00000000: 0142 c00a ffe0 00                        .B.....\\n\"",
+              "\"%s\""
+                  .formatted(
+                      ffprobeDump(
+                          HexFormat.ofDelimiter(" ")
+                              .parseHex(CONSTRAINED_BASELINE_SPS_RECORD + pictureParameterSets))));
+      assertThat(withSequenceParameterSet).isNotEqualTo(recorded);
+
+      var video =
+          probe(
+                  recordedAnswers(AVC_SAMPLE_PARAMETER_SETS)
+                      .ffprobeOutput(withSequenceParameterSet)
+                      .build())
+              .getStreams(0);
+
+      assertThat(video.getCodecProfile())
+          .isEqualTo(VideoCodecProfile.VIDEO_CODEC_PROFILE_H264_CONSTRAINED_BASELINE);
+      assertThat(video.hasCodecString()).isFalse();
+    }
+
+    private static Stream<Arguments> avcCRecordsWithAnSpsButNoPpsThatFfmpegReads() {
+      return Stream.of(
+          Arguments.of(Named.of("no PPS", " 00")),
+          Arguments.of(Named.of("no PPS count", "")),
+          Arguments.of(Named.of("a PPS that ends early", " 01 00 04 68 ce")));
     }
 
     @Test
