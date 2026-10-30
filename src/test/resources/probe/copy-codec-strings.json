@@ -33,6 +33,9 @@
   "mkv-hdr10-static.mkv": {
     "0": "hvc1.2.4.L30.90"
   },
+  "mkv-hevc-parameter-sets-in-samples.mkv": {
+    "0": "hvc1.2.4.L30.90"
+  },
   "mkv-many-chapters.mkv": {
     "0": "avc1.42C00A"
   },
