@@ -51,6 +51,7 @@ final class ProbeCapacities {
   private OptionalLong lastBrakeNanos = OptionalLong.empty();
   private OptionalLong lastJobAttemptEndNanos = OptionalLong.empty();
   private int brakes;
+  private long brakesApplied;
 
   @Builder
   private ProbeCapacities(
@@ -85,7 +86,7 @@ final class ProbeCapacities {
     }
 
     running.merge(kind, 1, Integer::sum);
-    return Optional.of(new CountedProbe(kind));
+    return Optional.of(new CountedProbe(kind, brakesApplied));
   }
 
   /** Frees the unit of a probe that ended, and grows the background limit when it was busy. */
@@ -96,6 +97,20 @@ final class ProbeCapacities {
           running.merge(probe.kind(), -1, Integer::sum);
           if (backgroundUnitsInUse() < inUse && isGrowthAllowed()) {
             backgroundLimit.grow(inUse);
+          }
+        });
+  }
+
+  /**
+   * Frees the unit of a probe that the server cancelled at the probe timeout. The probe brakes the
+   * background limit when it started after the latest brake, and never grows it.
+   */
+  void releaseTimedOut(@NonNull CountedProbe probe) {
+    changeCapacities(
+        () -> {
+          running.merge(probe.kind(), -1, Integer::sum);
+          if (isTimeoutBrakeDue(probe)) {
+            brake();
           }
         });
   }
@@ -193,6 +208,19 @@ final class ProbeCapacities {
     return slowJobAttempts.isEmpty() && hasBeenSinceLastBrake(GROWTH_HOLD_AFTER_BRAKE);
   }
 
+  // Guarded by this monitor. The probes that were running at the latest brake already count in
+  // that brake, as TCP halves its window once for each window of data in flight (RFC 5681).
+  private boolean isTimeoutBrakeDue(CountedProbe probe) {
+    var loadsTheBackgroundUnits =
+        switch (probe.kind()) {
+          case BACKGROUND, PLAYBACK -> true;
+          case KEYFRAME_PACKET_SCAN -> false;
+        };
+    return loadsTheBackgroundUnits
+        && probe.brakesAppliedAtStart() == brakesApplied
+        && hasBeenSinceLastBrake(MINIMUM_INTERVAL_BETWEEN_BRAKES);
+  }
+
   // Guarded by this monitor.
   private void brake() {
     if (!backgroundLimit.tryBrake()) {
@@ -201,6 +229,7 @@ final class ProbeCapacities {
 
     lastBrakeNanos = OptionalLong.of(clock.nanoTime());
     brakes++;
+    brakesApplied++;
   }
 
   // Guarded by this monitor.
@@ -223,8 +252,8 @@ final class ProbeCapacities {
     }
   }
 
-  /** A probe that counts against its capacity until {@link #release} frees its unit. */
-  record CountedProbe(ProbeKind kind) {}
+  /** A probe that counts against its capacity until a release frees its unit. */
+  record CountedProbe(ProbeKind kind, long brakesAppliedAtStart) {}
 
   private sealed interface BackgroundLimit {
 

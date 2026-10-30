@@ -16,6 +16,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 @Tag("UnitTest")
@@ -314,6 +315,115 @@ class ProbeCapacitiesTest {
     capacities.release(probes.getFirst());
 
     assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(before);
+  }
+
+  @ParameterizedTest
+  @EnumSource(
+      value = ProbeKind.class,
+      names = {"BACKGROUND", "PLAYBACK"})
+  @DisplayName("Should halve the background probe capacity when a probe ends at the probe timeout")
+  void shouldHalveTheBackgroundProbeCapacityWhenAProbeEndsAtTheProbeTimeout(ProbeKind kind) {
+    var capacities = adaptive(16);
+    var probes = acquire(capacities, kind, 1);
+
+    capacities.releaseTimedOut(probes.getFirst());
+
+    assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(2);
+    assertThat(capacities.takeBrakeCount()).isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("Should apply no brake when a keyframe packet scan ends at its timeout")
+  void shouldApplyNoBrakeWhenAKeyframePacketScanEndsAtItsTimeout() {
+    var capacities = adaptive(16);
+    var scans = acquire(capacities, ProbeKind.KEYFRAME_PACKET_SCAN, 1);
+
+    capacities.releaseTimedOut(scans.getFirst());
+
+    assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(4);
+    assertThat(capacities.takeBrakeCount()).isZero();
+    assertThat(changes).hasValue(0);
+  }
+
+  @Test
+  @DisplayName(
+      "Should apply a brake for a timed-out probe only when the probe started after the latest"
+          + " brake")
+  void shouldApplyABrakeForATimedOutProbeOnlyWhenTheProbeStartedAfterTheLatestBrake() {
+    var capacities = adaptive(16);
+    var startedBeforeBrake = acquire(capacities, ProbeKind.BACKGROUND, 2);
+    capacities.releaseTimedOut(startedBeforeBrake.getFirst());
+    clock.advance(Duration.ofSeconds(15));
+
+    capacities.releaseTimedOut(startedBeforeBrake.getLast());
+    assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(2);
+
+    var startedAfterBrake = acquire(capacities, ProbeKind.BACKGROUND, 1);
+    capacities.releaseTimedOut(startedAfterBrake.getFirst());
+    assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(1);
+    assertThat(capacities.takeBrakeCount()).isEqualTo(2);
+  }
+
+  @Test
+  @DisplayName(
+      "Should apply no brake for a timed-out probe until 15 s have passed since the previous"
+          + " brake")
+  void shouldApplyNoBrakeForATimedOutProbeUntil15SHavePassedSinceThePreviousBrake() {
+    var capacities = adaptive(16);
+    capacities.jobAttemptStarted(UUID.randomUUID());
+    var probes = acquire(capacities, ProbeKind.BACKGROUND, 2);
+
+    clock.advance(Duration.ofSeconds(14));
+    capacities.releaseTimedOut(probes.getFirst());
+    assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(2);
+
+    clock.advance(Duration.ofSeconds(1));
+    capacities.releaseTimedOut(probes.getLast());
+    assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName(
+      "Should never grow the background probe capacity when a busy probe ends at the probe"
+          + " timeout")
+  void shouldNeverGrowTheBackgroundProbeCapacityWhenABusyProbeEndsAtTheProbeTimeout() {
+    var capacities = adaptive(16);
+    var probes = acquire(capacities, ProbeKind.BACKGROUND, 4);
+    capacities.releaseTimedOut(probes.get(0));
+    clock.advance(Duration.ofSeconds(30));
+
+    capacities.releaseTimedOut(probes.get(1));
+    assertThat(capacities.granted().backgroundProbeCapacity())
+        .as("The probe started before the brake, so it neither brakes nor grows")
+        .isEqualTo(2);
+
+    capacities.release(probes.get(2));
+    assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(3);
+  }
+
+  @Test
+  @DisplayName("Should keep the background probe capacity at 1 when a probe times out at 1")
+  void shouldKeepTheBackgroundProbeCapacityAt1WhenAProbeTimesOutAt1() {
+    var capacities = adaptive(1);
+    var probes = acquire(capacities, ProbeKind.BACKGROUND, 1);
+
+    capacities.releaseTimedOut(probes.getFirst());
+
+    assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(1);
+    assertThat(capacities.tryAcquire(ProbeKind.BACKGROUND)).isPresent();
+  }
+
+  @Test
+  @DisplayName("Should keep a fixed background probe capacity when a probe ends at the timeout")
+  void shouldKeepAFixedBackgroundProbeCapacityWhenAProbeEndsAtTheTimeout() {
+    var capacities = fixed(12);
+    var probes = acquire(capacities, ProbeKind.BACKGROUND, 1);
+
+    capacities.releaseTimedOut(probes.getFirst());
+
+    assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(12);
+    assertThat(capacities.takeBrakeCount()).isZero();
+    assertThat(changes).hasValue(0);
   }
 
   @Test

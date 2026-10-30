@@ -47,7 +47,7 @@ Each worker grants the server a separate capacity for each kind of work, as [ADR
 
 Probes never take a playback slot, and job attempts never take a probe capacity. A playback probe can also use a free unit of the background probe capacity, so it never waits behind a scan.
 
-The background probe capacity grows by 1 when a probe ends while at least half of it is in use. A brake halves it when a job attempt starts, and when a job attempt produces below 2.10× real time over 15 s. After a brake, the capacity does not grow for 30 s. Each media segment's production time leaves out the time the worker waited for an earlier upload, so the brake measures the encoder.
+The background probe capacity grows by 1 when a probe ends while at least half of it is in use. A brake halves it when a job attempt starts, and when a job attempt produces below 2.10× real time over 15 s. A brake also halves it when the server cancels a background or playback probe at the server's probe timeout, so a busy disk lowers it while nothing plays; only a probe that started after the latest brake applies that brake, and a probe that ends at the timeout never grows the capacity. A brake for a slow job attempt or a timed-out probe waits until 15 s have passed since the previous brake. After a brake, the capacity does not grow for 30 s. Each media segment's production time leaves out the time the worker waited for an earlier upload, so the brake measures the encoder.
 
 `TRANSCODE_WORKER_SLOTS` decides how much playback the worker runs. `TRANSCODE_WORKER_PROBE_CAPACITY` only fixes the background probe capacity and turns the adaptation off. Leave it unset unless the host's disks cannot take as many probes as its cores.
 

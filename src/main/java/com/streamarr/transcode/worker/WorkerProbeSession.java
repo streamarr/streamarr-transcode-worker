@@ -4,6 +4,7 @@ import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
+import build.buf.gen.streamarr.transcode.v1.ProbeCancelReason;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import com.streamarr.transcode.probe.FfprobeExecutor;
@@ -91,11 +92,18 @@ final class WorkerProbeSession implements AutoCloseable {
     record Refused(ProbeAttemptReport report) implements Admission {}
   }
 
-  synchronized void cancel(UUID attemptId) {
+  synchronized void cancel(UUID attemptId, ProbeCancelReason reason) {
     var attempt = attempts.get(attemptId);
-    if (attempt != null) {
-      attempt.cancel();
+    if (attempt == null) {
+      return;
     }
+
+    if (reason == ProbeCancelReason.PROBE_CANCEL_REASON_TIMEOUT) {
+      attempt.cancelAtProbeTimeout();
+      return;
+    }
+
+    attempt.cancel();
   }
 
   synchronized void shutdown() {
@@ -116,6 +124,13 @@ final class WorkerProbeSession implements AutoCloseable {
     private final ProbeCapacities.CountedProbe counted;
     private final AtomicReference<Thread> thread = new AtomicReference<>();
     private volatile boolean cancelled;
+    // Guarded by WorkerProbeSession.this.
+    private boolean timedOut;
+
+    private void cancelAtProbeTimeout() {
+      timedOut = true;
+      cancel();
+    }
 
     private void cancel() {
       cancelled = true;
@@ -185,12 +200,23 @@ final class WorkerProbeSession implements AutoCloseable {
     // The unit is free before the result goes out, so the server's count never falls below the
     // worker's.
     private void complete(ProbeAttemptReport report) {
+      boolean endedAtProbeTimeout;
       synchronized (WorkerProbeSession.this) {
         attempts.remove(fromProto(report.result().getProbeAttemptId()), this);
+        endedAtProbeTimeout = timedOut;
+      }
+
+      releaseUnit(endedAtProbeTimeout);
+      WorkerProbeSession.this.complete(report);
+    }
+
+    private void releaseUnit(boolean endedAtProbeTimeout) {
+      if (endedAtProbeTimeout) {
+        capacities.releaseTimedOut(counted);
+        return;
       }
 
       capacities.release(counted);
-      WorkerProbeSession.this.complete(report);
     }
   }
 }
