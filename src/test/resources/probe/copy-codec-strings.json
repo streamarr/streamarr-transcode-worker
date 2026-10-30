@@ -24,6 +24,9 @@
     "0": "avc1.42C00A",
     "1": "ec-3"
   },
+  "mkv-h264-parameter-sets-in-samples.mkv": {
+    "0": "avc1.42C00A"
+  },
   "mkv-hdr10-fate.mkv": {
     "0": "hvc1.2.4.L93.90"
   },

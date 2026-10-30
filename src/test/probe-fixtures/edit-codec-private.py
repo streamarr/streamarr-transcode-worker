@@ -3,10 +3,12 @@
 stream.
 
     edit-codec-private.py hvcc-without-arrays <source> <target>
+    edit-codec-private.py avcc-without-parameter-sets <source> <target>
 
 hvcc-without-arrays keeps the hvcC record's 22 header bytes, whose general profile, tier and level
-stay, and gives it no NAL unit arrays, so that only the samples hold the parameter sets. The
-source's encoder must repeat its parameter sets in its keyframes.
+stay, and gives it no NAL unit arrays. avcc-without-parameter-sets keeps the avcC record's 5 header
+bytes, whose profile and level stay, and counts no SPS and no PPS. Either way only the samples hold
+the parameter sets, so the source's encoder must repeat them in its keyframes.
 
 An EBML Void element fills the bytes that the edit frees, so that every element after the
 CodecPrivate element keeps its offset and the SeekHead and Cues stay valid.
@@ -16,6 +18,7 @@ import sys
 CODEC_PRIVATE = b"\x63\xa2"
 VOID = b"\xec"
 HVCC_HEADER_BYTES = 22
+AVCC_HEADER_BYTES = 5
 
 
 def size_at(data, at):
@@ -40,7 +43,17 @@ def hvcc_without_arrays(record):
     return record[:HVCC_HEADER_BYTES] + b"\x00"
 
 
-EDITS = {"hvcc-without-arrays": hvcc_without_arrays}
+def avcc_without_parameter_sets(record):
+    if record[0] != 1 or len(record) <= AVCC_HEADER_BYTES or not record[AVCC_HEADER_BYTES] & 0x1F:
+        raise SystemExit("the CodecPrivate element holds no avcC record with an SPS")
+    # numOfSequenceParameterSets 0 below its 3 reserved bits, then numOfPictureParameterSets 0.
+    return record[:AVCC_HEADER_BYTES] + b"\xe0\x00"
+
+
+EDITS = {
+    "hvcc-without-arrays": hvcc_without_arrays,
+    "avcc-without-parameter-sets": avcc_without_parameter_sets,
+}
 
 edit, source, target = EDITS[sys.argv[1]], sys.argv[2], sys.argv[3]
 data = bytearray(open(source, "rb").read())

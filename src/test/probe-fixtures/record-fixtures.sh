@@ -263,6 +263,10 @@ SVTAV1=(-c:v libsvtav1 -preset 10 -svtav1-params log-level=0 -pix_fmt yuv420p10l
 "${FF[@]}" "${VIDEO[@]}" -c:v libx265 -preset ultrafast -pix_fmt yuv420p10le \
   -x265-params log-level=none:repeat-headers=1 -color_primaries bt709 -color_trc bt709 \
   -colorspace bt709 mkv-hevc-repeated-parameter-sets.mkv
+# H.264 in Matroska, whose keyframes repeat the parameter sets and whose avcC record
+# edit-codec-private.py empties, so that only the samples hold them.
+"${FF[@]}" "${VIDEO[@]}" "${X264[@]}" -x264-params repeat-headers=1 \
+  mkv-h264-repeated-parameter-sets.mkv
 # AAC LC in ADTS, whose frame headers edit-adts-profile.py rewrites as AAC Main and AAC LTP.
 "${FF[@]}" "${TONE[@]}" -c:a aac -f adts aac-lc.adts
 # Frame rates above 60, which the frame-rate rule divides evenly: 120 in Matroska, whose 1 ms
@@ -437,6 +441,9 @@ python3 "$HERE/edit-mp4-boxes.py" record-level "$WORK/mp4-hevc-record-level.mp4"
 python3 "$HERE/edit-codec-private.py" hvcc-without-arrays \
   "$WORK/mkv-hevc-repeated-parameter-sets.mkv" \
   "$WORK/mkv-hevc-parameter-sets-in-samples.mkv"
+python3 "$HERE/edit-codec-private.py" avcc-without-parameter-sets \
+  "$WORK/mkv-h264-repeated-parameter-sets.mkv" \
+  "$WORK/mkv-h264-parameter-sets-in-samples.mkv"
 python3 "$HERE/edit-adts-profile.py" "$WORK/aac-lc.adts" "$WORK/aac-main.adts" 0
 python3 "$HERE/edit-adts-profile.py" "$WORK/aac-lc.adts" "$WORK/aac-ltp.adts" 3
 python3 "$HERE/reject-hdr-sei.py" hevc "$WORK/hdr10-plus.hevc" \
@@ -461,7 +468,7 @@ FIXTURES_TO_PROBE=(mp4-titled.mp4 mkv-remuxed-from-mp4.mkv mp4-default-handlers.
   mpegts-hdr10-sei-only.ts mpegts-pq10.ts
   mpegts-hevc-ac3.ts ivf-av1-10bit.ivf obu-av1-10bit.obu mkv-av1-10bit.mkv
   mp4-av1-10bit.mp4 mp4-audio-codecs.mp4 mp4-avc-record-level.mp4 mp4-hevc-record-level.mp4
-  mkv-hevc-parameter-sets-in-samples.mkv
+  mkv-hevc-parameter-sets-in-samples.mkv mkv-h264-parameter-sets-in-samples.mkv
   mpegts-aac-main.ts mpegts-aac-ltp.ts mkv-120fps.mkv mp4-100fps.mp4 mp4-90fps.mp4 mp4-72fps.mp4
   hevc-hdr10-plus-rejected-sei.hevc h264-hdr10-rejected-sei.h264 mp4-av1-pq.mp4
   mp4-av1-hdr10-plus-rejected.mp4 mp4-av1-static-after-frame.mp4
@@ -658,7 +665,8 @@ PACKET_DATA=(mp4-sdr8-bt709.mp4 mp4-dovi-p9-avc1.mp4 mp4-dovi-p9-dva1.mp4 mpegts
   hevc-dovi-p81-fate.hevc ivf-av1-hdr-sizeup.ivf h264-sei-1.h264 mp4-h264-sei-1.mp4
   mov-h264-extradata-reload.mov mov-hevc-extradata-reload.mov mp4-h264-mixed-nal-coding.mp4
   flv-h264-sei-without-trailing-bits.flv avi-h264-unknown-extradata.avi hevc-hdr-vivid-repeated.hevc
-  hevc-dovi-p81-rpus-before-suffix-sei.hevc mkv-hevc-parameter-sets-in-samples.mkv)
+  hevc-dovi-p81-rpus-before-suffix-sei.hevc mkv-hevc-parameter-sets-in-samples.mkv
+  mkv-h264-parameter-sets-in-samples.mkv)
 mkdir -p "$FIXTURES/packet-data"
 for source in "${PACKET_DATA[@]}"; do
   if [ -f "$WORK/packet-data/$source.json" ]; then

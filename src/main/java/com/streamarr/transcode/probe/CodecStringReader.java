@@ -8,11 +8,11 @@ import tools.jackson.databind.JsonNode;
 
 /**
  * The RFC 6381 codec string that a stream copy carries, computed from the stream's decoder
- * configuration record or its parameter sets, or, for an hvcC record that holds no NAL unit, from
- * the parameter sets in the first sample. The tag rule writes avc1 for every H.264 copy and hvc1
- * for every HEVC copy, so a Dolby Vision copy names its base layer's sample entry. MPEG-TS carries
- * H.264 and HEVC parameter sets in Annex B form, and IVF and raw OBU files carry AV1's sequence
- * header OBU.
+ * configuration record or its parameter sets, or, for an avcC or hvcC record that holds no NAL
+ * unit, from the parameter sets in the first sample. The tag rule writes avc1 for every H.264 copy
+ * and hvc1 for every HEVC copy, so a Dolby Vision copy names its base layer's sample entry. MPEG-TS
+ * carries H.264 and HEVC parameter sets in Annex B form, and IVF and raw OBU files carry AV1's
+ * sequence header OBU.
  */
 final class CodecStringReader {
 
@@ -28,7 +28,7 @@ final class CodecStringReader {
   static Optional<String> read(JsonNode stream) {
     try {
       return switch (ProbedCodecFamily.of(stream)) {
-        case H264 -> Extradata.of(stream).flatMap(CodecStringReader::avc);
+        case H264 -> Extradata.of(stream).flatMap(extradata -> avc(stream, extradata));
         case HEVC -> Extradata.of(stream).flatMap(extradata -> hevc(stream, extradata));
         case AV1 -> Extradata.of(stream).flatMap(CodecStringReader::av1);
         case OTHER -> audioCodecString(stream);
@@ -50,8 +50,14 @@ final class CodecStringReader {
     };
   }
 
-  private static Optional<String> avc(byte[] extradata) {
-    return DecoderConfiguration.avcProfile(extradata).map(bytes -> CodecStrings.avc("avc1", bytes));
+  private static Optional<String> avc(JsonNode stream, byte[] extradata) {
+    return DecoderConfiguration.avcProfile(extradata)
+        .or(
+            () ->
+                firstSample(stream, NalSyntax.H264)
+                    .flatMap(
+                        sample -> DecoderConfiguration.avcFirstSampleProfile(extradata, sample)))
+        .map(bytes -> CodecStrings.avc("avc1", bytes));
   }
 
   private static Optional<String> hevc(JsonNode stream, byte[] extradata) {

@@ -43,9 +43,10 @@ class FfprobeExecutorCodecStringTest {
           "mp4-dovi-p9-dva1.mp4",
           "mp4-dovi-p82.mp4");
 
-  // 10-bit HEVC in Matroska whose hvcC record holds no NAL unit, and whose samples repeat the
-  // parameter sets.
-  private static final String SAMPLE_PARAMETER_SETS = "mkv-hevc-parameter-sets-in-samples.mkv";
+  // Matroska whose decoder configuration record holds no NAL unit, and whose samples repeat the
+  // parameter sets: 10-bit HEVC, and H.264.
+  private static final String HEVC_SAMPLE_PARAMETER_SETS = "mkv-hevc-parameter-sets-in-samples.mkv";
+  private static final String AVC_SAMPLE_PARAMETER_SETS = "mkv-h264-parameter-sets-in-samples.mkv";
 
   @Nested
   @DisplayName("Stream Copies")
@@ -201,41 +202,87 @@ class FfprobeExecutorCodecStringTest {
       assertThat(video.hasCodecString()).isFalse();
     }
 
-    @Test
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+      HEVC_SAMPLE_PARAMETER_SETS + ", VIDEO_CODEC_PROFILE_HEVC_MAIN_10, hvc1.2.4.L30.90",
+      AVC_SAMPLE_PARAMETER_SETS + ", VIDEO_CODEC_PROFILE_H264_CONSTRAINED_BASELINE, avc1.42C00A",
+    })
     @DisplayName(
         "Should take the codec string from the first sample when the record holds no NAL unit")
-    void shouldTakeTheCodecStringFromTheFirstSampleWhenTheRecordHoldsNoNalUnit() {
+    void shouldTakeTheCodecStringFromTheFirstSampleWhenTheRecordHoldsNoNalUnit(
+        String fixture, VideoCodecProfile profile, String codecString) {
       // The copy's Annex B filter gives the mp4 muxer no parameter set, so the muxer builds the
-      // copy's hvcC record from the parameter sets that the first sample repeats.
-      var video = streamOf(SAMPLE_PARAMETER_SETS, 0);
+      // copy's record from the parameter sets that the first sample repeats.
+      var video = streamOf(fixture, 0);
 
-      assertThat(video.getCodecProfile())
-          .isEqualTo(VideoCodecProfile.VIDEO_CODEC_PROFILE_HEVC_MAIN_10);
-      assertThat(video.getCodecString()).isEqualTo("hvc1.2.4.L30.90");
+      assertThat(video.getCodecProfile()).isEqualTo(profile);
+      assertThat(video.getCodecString()).isEqualTo(codecString);
     }
 
-    @Test
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {HEVC_SAMPLE_PARAMETER_SETS, AVC_SAMPLE_PARAMETER_SETS})
     @DisplayName(
         "Should report no codec string when the record holds no NAL unit and no packet was read")
-    void shouldReportNoCodecStringWhenTheRecordHoldsNoNalUnitAndNoPacketWasRead() {
+    void shouldReportNoCodecStringWhenTheRecordHoldsNoNalUnitAndNoPacketWasRead(String fixture) {
+      var video = probe(recordedAnswers(fixture).firstPacketsExitCode(1).build()).getStreams(0);
+
+      assertThat(video.hasCodecString()).isFalse();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+      // One IDR slice NAL unit after its 4-byte length.
+      HEVC_SAMPLE_PARAMETER_SETS + ", 00000000: 0000 0004 2601 af80",
+      AVC_SAMPLE_PARAMETER_SETS + ", 00000000: 0000 0004 6588 843a",
+    })
+    @DisplayName(
+        "Should report no codec string when the record holds no NAL unit and the first sample no"
+            + " parameter set")
+    void shouldReportNoCodecStringWhenTheRecordHoldsNoNalUnitAndTheFirstSampleNoParameterSet(
+        String fixture, String firstSample) {
       var video =
-          probe(recordedAnswers(SAMPLE_PARAMETER_SETS).firstPacketsExitCode(1).build())
-              .getStreams(0);
+          probe(recordedAnswers(fixture).firstPackets(packets(firstSample)).build()).getStreams(0);
 
       assertThat(video.hasCodecString()).isFalse();
     }
 
     @Test
     @DisplayName(
-        "Should report no codec string when the record holds no NAL unit and the first sample no"
-            + " parameter set")
-    void shouldReportNoCodecStringWhenTheRecordHoldsNoNalUnitAndTheFirstSampleNoParameterSet() {
-      // One IDR slice NAL unit after its 4-byte length.
+        "Should report no codec string when the avcC record holds no NAL unit and the first sample"
+            + " an SPS but no PPS")
+    void shouldReportNoCodecStringWhenTheAvcCRecordHoldsNoNalUnitAndTheFirstSampleAnSpsButNoPps() {
+      // FFmpeg's avcC writer needs a PPS as well as an SPS, so the muxer writes an avcC box
+      // without a record. The sample holds an SPS that names Constrained Baseline level 1.0, then
+      // an IDR slice, each after its 4-byte length.
       var video =
           probe(
-                  recordedAnswers(SAMPLE_PARAMETER_SETS)
-                      .firstPackets(packets("00000000: 0000 0004 2601 af80"))
+                  recordedAnswers(AVC_SAMPLE_PARAMETER_SETS)
+                      .firstPackets(packets("00000000: 0000 0004 6742 c00a 0000 0004 6588 843a"))
                       .build())
+              .getStreams(0);
+
+      assertThat(video.hasCodecString()).isFalse();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("extradataOtherThanAnAvcCRecordWithoutNalUnits")
+    @DisplayName(
+        "Should report no codec string when the first sample holds the parameter sets but the"
+            + " extradata is no whole avcC record without NAL units")
+    void shouldReportNoCodecStringWhenTheExtradataIsNoWholeAvcCRecordWithoutNalUnits(
+        String extradata) {
+      // The recorded first sample holds an SPS and a PPS. The copy's Annex B filter gives the
+      // muxer a record's parameter sets, so the muxer reads no sample, and without an SPS that it
+      // can read writes an avcC box without a record.
+      var recorded = fixture(AVC_SAMPLE_PARAMETER_SETS);
+      var edited =
+          recorded.replace(
+              "\"\\n00000000: 0142 c00a ffe0 00                        .B.....\\n\"",
+              "\"%s\"".formatted(ffprobeDump(HexFormat.ofDelimiter(" ").parseHex(extradata))));
+      assertThat(edited).isNotEqualTo(recorded);
+
+      var video =
+          probe(recordedAnswers(AVC_SAMPLE_PARAMETER_SETS).ffprobeOutput(edited).build())
               .getStreams(0);
 
       assertThat(video.hasCodecString()).isFalse();
@@ -246,7 +293,7 @@ class FfprobeExecutorCodecStringTest {
     void shouldReportNoCodecStringWhenTheRecordHoldsANalUnitButNoVpsOrSps() {
       // The copy's Annex B filter gives the muxer the record's PPS, so the muxer reads no sample
       // and writes an hvcC box without a record.
-      var recorded = fixture(SAMPLE_PARAMETER_SETS);
+      var recorded = fixture(HEVC_SAMPLE_PARAMETER_SETS);
       var withPictureParameterSet =
           recorded.replace(
               "00000010: fdfa fa00 000f 00                        .......",
@@ -256,8 +303,31 @@ class FfprobeExecutorCodecStringTest {
 
       var video =
           probe(
-                  recordedAnswers(SAMPLE_PARAMETER_SETS)
+                  recordedAnswers(HEVC_SAMPLE_PARAMETER_SETS)
                       .ffprobeOutput(withPictureParameterSet)
+                      .build())
+              .getStreams(0);
+
+      assertThat(video.hasCodecString()).isFalse();
+    }
+
+    @Test
+    @DisplayName(
+        "Should report no codec string when Annex B extradata holds no SPS and the first sample"
+            + " holds the parameter sets")
+    void shouldReportNoCodecStringWhenAnnexBExtradataHoldsNoSps() {
+      // The Annex B filter passes Annex B extradata through, so the muxer reads this access unit
+      // delimiter rather than the sample, and writes an avcC box without a record. Its bytes would
+      // count no SPS and no PPS if they were an avcC record.
+      var video =
+          probe(
+                  recordedAnswers(AVC_SAMPLE_PARAMETER_SETS)
+                      .ffprobeOutput(
+                          fixture(AVC_SAMPLE_PARAMETER_SETS)
+                              .replace(
+                                  "0142 c00a ffe0 00                        .B.....",
+                                  "0000 0109 f000 00                        ......."))
+                      .firstPackets(packets("00000000: 0000 0001 6742 c00a 0000 0001 68ce 0fc8"))
                       .build())
               .getStreams(0);
 
@@ -269,6 +339,19 @@ class FfprobeExecutorCodecStringTest {
           {"packets":[{"pts":0,"data":"\\n%s\\n"}]}
           """
           .formatted(dump);
+    }
+
+    private static Stream<Arguments> extradataOtherThanAnAvcCRecordWithoutNalUnits() {
+      return Stream.of(
+          Arguments.of(
+              Named.of(
+                  "avcC record with a PPS but no SPS", "01 42 c0 0a ff e0 01 00 04 68 ce 0f c8")),
+          Arguments.of(
+              Named.of(
+                  "avcC record with an SPS that ends before its level",
+                  "01 42 c0 0a ff e1 00 02 67 42 01 00 04 68 ce 0f c8")),
+          Arguments.of(
+              Named.of("avcC record that ends before its PPS count", "01 42 c0 0a ff e0")));
     }
 
     private static Stream<Arguments> absentOrIncompleteParameterSets() {

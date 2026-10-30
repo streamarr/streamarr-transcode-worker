@@ -17,6 +17,7 @@ final class DecoderConfiguration {
 
   private static final int AVC_RECORD_VERSION = 1;
   private static final int AVC_SEQUENCE_PARAMETER_SET = 7;
+  private static final int AVC_PICTURE_PARAMETER_SET = 8;
   // The avcC record's count of SPS NAL units follows its 5 header bytes.
   private static final int AVC_RECORD_SPS_COUNT = 5;
   private static final int AVC_RECORD_MINIMUM_BYTES = 7;
@@ -39,12 +40,37 @@ final class DecoderConfiguration {
    * The three bytes after the first SPS's NAL unit header. The copy's Annex B filter turns an avcC
    * record into its parameter sets, and the mp4 muxer builds the copy's avcC from the first SPS, so
    * the copy keeps the SPS's profile and level rather than the record header's. A record without an
-   * SPS leaves the muxer to read the parameter sets in the first sample, so the record header alone
-   * cannot determine the copy's profile.
+   * SPS cannot determine the copy's profile: see {@link #avcFirstSampleProfile}.
    */
   static Optional<byte[]> avcProfile(byte[] extradata) {
     var isRecord = Byte.toUnsignedInt(extradata[0]) == AVC_RECORD_VERSION;
     return avcProfileOf(isRecord ? avcRecordSequenceParameterSets(extradata) : annexB(extradata));
+  }
+
+  /**
+   * The bytes that {@link #avcProfile} reads, from the first sample's first SPS, when the extradata
+   * is a whole avcC record that holds no NAL unit; empty otherwise. The copy's Annex B filter then
+   * gives the mp4 muxer no parameter set, so the muxer builds the copy's record from the parameter
+   * sets in the copy's first sample, and writes none unless the sample holds an SPS and a PPS. A
+   * record that holds a PPS gives the muxer that PPS instead, and without an SPS the copy has no
+   * record.
+   */
+  static Optional<byte[]> avcFirstSampleProfile(byte[] extradata, NalUnits firstSample) {
+    var holdsPictureParameterSet =
+        firstSample.units().stream().anyMatch(nal -> (nal[0] & 0x1F) == AVC_PICTURE_PARAMETER_SET);
+    if (!isAvcRecordWithoutNalUnits(extradata) || !holdsPictureParameterSet) {
+      return Optional.empty();
+    }
+
+    return avcProfileOf(firstSample.units());
+  }
+
+  // A whole avcC record that counts no SPS and, in the byte after that count, no PPS.
+  private static boolean isAvcRecordWithoutNalUnits(byte[] extradata) {
+    return Byte.toUnsignedInt(extradata[0]) == AVC_RECORD_VERSION
+        && isWholeAvcRecord(extradata)
+        && (extradata[AVC_RECORD_SPS_COUNT] & 0x1F) == 0
+        && extradata[AVC_RECORD_SPS_COUNT + 1] == 0;
   }
 
   // The three bytes after the header of the first SPS among the NAL units, which FFmpeg's avcC
