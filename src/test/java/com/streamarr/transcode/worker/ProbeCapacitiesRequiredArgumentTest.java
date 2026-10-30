@@ -87,7 +87,7 @@ class ProbeCapacitiesRequiredArgumentTest {
                         .clock(null)
                         .build()),
         Arguments.of("kind", (ThrowingCallable) () -> capacities().tryAcquire(null)),
-        Arguments.of("kind", (ThrowingCallable) () -> capacities().release(null)),
+        Arguments.of("probe", (ThrowingCallable) () -> capacities().release(null)),
         Arguments.of("jobAttemptId", (ThrowingCallable) () -> capacities().jobAttemptStarted(null)),
         Arguments.of("jobAttemptId", (ThrowingCallable) () -> capacities().jobAttemptEnded(null)),
         Arguments.of(

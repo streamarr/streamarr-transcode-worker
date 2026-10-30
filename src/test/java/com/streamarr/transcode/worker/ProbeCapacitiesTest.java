@@ -53,9 +53,9 @@ class ProbeCapacitiesTest {
       "Should grow the background probe capacity by 1 when a probe ends with every unit in use")
   void shouldGrowTheBackgroundProbeCapacityBy1WhenAProbeEndsWithEveryUnitInUse() {
     var capacities = adaptive(16);
-    acquire(capacities, ProbeKind.BACKGROUND, 4);
+    var probes = acquire(capacities, ProbeKind.BACKGROUND, 4);
 
-    capacities.release(ProbeKind.BACKGROUND);
+    capacities.release(probes.getFirst());
 
     assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(5);
     assertThat(changes).hasValue(1);
@@ -66,9 +66,9 @@ class ProbeCapacitiesTest {
       "Should keep the background probe capacity when a probe ends with less than half in use")
   void shouldKeepTheBackgroundProbeCapacityWhenAProbeEndsWithLessThanHalfInUse() {
     var capacities = adaptive(16);
-    acquire(capacities, ProbeKind.BACKGROUND, 1);
+    var probes = acquire(capacities, ProbeKind.BACKGROUND, 1);
 
-    capacities.release(ProbeKind.BACKGROUND);
+    capacities.release(probes.getFirst());
 
     assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(4);
     assertThat(changes).hasValue(0);
@@ -78,9 +78,9 @@ class ProbeCapacitiesTest {
   @DisplayName("Should never grow the background probe capacity beyond the maximum")
   void shouldNeverGrowTheBackgroundProbeCapacityBeyondTheMaximum() {
     var capacities = adaptive(4);
-    acquire(capacities, ProbeKind.BACKGROUND, 4);
+    var probes = acquire(capacities, ProbeKind.BACKGROUND, 4);
 
-    capacities.release(ProbeKind.BACKGROUND);
+    capacities.release(probes.getFirst());
 
     assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(4);
   }
@@ -90,11 +90,11 @@ class ProbeCapacitiesTest {
   void shouldCountPlaybackProbesBeyondTheirOwnCapacityAsBackgroundUnitsInUse() {
     var capacities = adaptive(16);
     acquire(capacities, ProbeKind.BACKGROUND, 2);
-    acquire(capacities, ProbeKind.PLAYBACK, 4);
+    var playback = acquire(capacities, ProbeKind.PLAYBACK, 4);
 
-    assertThat(capacities.tryAcquire(ProbeKind.BACKGROUND)).isFalse();
-    capacities.release(ProbeKind.PLAYBACK);
-    assertThat(capacities.tryAcquire(ProbeKind.BACKGROUND)).isTrue();
+    assertThat(capacities.tryAcquire(ProbeKind.BACKGROUND)).isEmpty();
+    capacities.release(playback.getFirst());
+    assertThat(capacities.tryAcquire(ProbeKind.BACKGROUND)).isPresent();
   }
 
   @Test
@@ -104,9 +104,9 @@ class ProbeCapacitiesTest {
     acquire(capacities, ProbeKind.BACKGROUND, 4);
     acquire(capacities, ProbeKind.KEYFRAME_PACKET_SCAN, 1);
 
-    assertThat(capacities.tryAcquire(ProbeKind.PLAYBACK)).isTrue();
-    assertThat(capacities.tryAcquire(ProbeKind.PLAYBACK)).isTrue();
-    assertThat(capacities.tryAcquire(ProbeKind.PLAYBACK)).isFalse();
+    assertThat(capacities.tryAcquire(ProbeKind.PLAYBACK)).isPresent();
+    assertThat(capacities.tryAcquire(ProbeKind.PLAYBACK)).isPresent();
+    assertThat(capacities.tryAcquire(ProbeKind.PLAYBACK)).isEmpty();
   }
 
   @Test
@@ -115,19 +115,19 @@ class ProbeCapacitiesTest {
     var capacities = fixed(1);
     acquire(capacities, ProbeKind.BACKGROUND, 1);
 
-    assertThat(capacities.tryAcquire(ProbeKind.BACKGROUND)).isFalse();
-    assertThat(capacities.tryAcquire(ProbeKind.PLAYBACK)).isTrue();
+    assertThat(capacities.tryAcquire(ProbeKind.BACKGROUND)).isEmpty();
+    assertThat(capacities.tryAcquire(ProbeKind.PLAYBACK)).isPresent();
   }
 
   @Test
   @DisplayName("Should refuse a keyframe packet scan when the scan capacity is in use")
   void shouldRefuseAKeyframePacketScanWhenTheScanCapacityIsInUse() {
     var capacities = adaptive(16);
-    acquire(capacities, ProbeKind.KEYFRAME_PACKET_SCAN, 1);
+    var scans = acquire(capacities, ProbeKind.KEYFRAME_PACKET_SCAN, 1);
 
-    assertThat(capacities.tryAcquire(ProbeKind.KEYFRAME_PACKET_SCAN)).isFalse();
-    capacities.release(ProbeKind.KEYFRAME_PACKET_SCAN);
-    assertThat(capacities.tryAcquire(ProbeKind.KEYFRAME_PACKET_SCAN)).isTrue();
+    assertThat(capacities.tryAcquire(ProbeKind.KEYFRAME_PACKET_SCAN)).isEmpty();
+    capacities.release(scans.getFirst());
+    assertThat(capacities.tryAcquire(ProbeKind.KEYFRAME_PACKET_SCAN)).isPresent();
   }
 
   @Test
@@ -163,15 +163,15 @@ class ProbeCapacitiesTest {
     var attempt = UUID.randomUUID();
     capacities.jobAttemptStarted(attempt);
     capacities.jobAttemptEnded(attempt);
-    acquire(capacities, ProbeKind.BACKGROUND, 2);
+    var probes = acquire(capacities, ProbeKind.BACKGROUND, 2);
 
     clock.advance(Duration.ofSeconds(29));
-    capacities.release(ProbeKind.BACKGROUND);
+    capacities.release(probes.getFirst());
     assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(2);
 
-    capacities.tryAcquire(ProbeKind.BACKGROUND);
+    var next = capacities.tryAcquire(ProbeKind.BACKGROUND).orElseThrow();
     clock.advance(Duration.ofSeconds(1));
-    capacities.release(ProbeKind.BACKGROUND);
+    capacities.release(next);
     assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(3);
   }
 
@@ -231,8 +231,8 @@ class ProbeCapacitiesTest {
       "Should halve the background probe capacity when a job attempt produces below the floor for one window")
   void shouldHalveTheBackgroundProbeCapacityWhenAJobAttemptProducesBelowTheFloorForOneWindow() {
     var capacities = adaptive(16);
-    acquire(capacities, ProbeKind.BACKGROUND, 4);
-    capacities.release(ProbeKind.BACKGROUND);
+    var probes = acquire(capacities, ProbeKind.BACKGROUND, 4);
+    capacities.release(probes.getFirst());
     var attempt = UUID.randomUUID();
     capacities.jobAttemptStarted(attempt);
     clock.advance(Duration.ofSeconds(30));
@@ -275,9 +275,9 @@ class ProbeCapacitiesTest {
     produce(capacities, attempt, 20, 3.0);
     clock.advance(Duration.ofSeconds(30));
     var before = capacities.granted().backgroundProbeCapacity();
-    acquire(capacities, ProbeKind.BACKGROUND, before);
+    var probes = acquire(capacities, ProbeKind.BACKGROUND, before);
 
-    capacities.release(ProbeKind.BACKGROUND);
+    capacities.release(probes.getFirst());
 
     assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(before + 1);
   }
@@ -309,9 +309,9 @@ class ProbeCapacitiesTest {
     produce(capacities, attempt, 6, 1.0);
     clock.advance(Duration.ofMinutes(1));
     var before = capacities.granted().backgroundProbeCapacity();
-    acquire(capacities, ProbeKind.BACKGROUND, before);
+    var probes = acquire(capacities, ProbeKind.BACKGROUND, before);
 
-    capacities.release(ProbeKind.BACKGROUND);
+    capacities.release(probes.getFirst());
 
     assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(before);
   }
@@ -320,8 +320,8 @@ class ProbeCapacitiesTest {
   @DisplayName("Should keep a fixed background probe capacity through brakes and busy probes")
   void shouldKeepAFixedBackgroundProbeCapacityThroughBrakesAndBusyProbes() {
     var capacities = fixed(12);
-    acquire(capacities, ProbeKind.BACKGROUND, 12);
-    capacities.release(ProbeKind.BACKGROUND);
+    var probes = acquire(capacities, ProbeKind.BACKGROUND, 12);
+    capacities.release(probes.getFirst());
 
     capacities.jobAttemptStarted(UUID.randomUUID());
 
@@ -341,7 +341,7 @@ class ProbeCapacitiesTest {
     var capacities = fixed(1);
     var random = new Random(seed);
     var server = new ServerCounts(2, 1);
-    var running = new ArrayList<ProbeKind>();
+    var running = new ArrayList<ProbeCapacities.CountedProbe>();
     var unreported = new ArrayList<ProbeKind>();
 
     for (var step = 0; step < 2_000; step++) {
@@ -350,15 +350,16 @@ class ProbeCapacitiesTest {
           var kind = random.nextBoolean() ? ProbeKind.PLAYBACK : ProbeKind.BACKGROUND;
           if (server.fits(kind)) {
             server.sent(kind);
-            assertThat(capacities.tryAcquire(kind)).as("step %d sends %s", step, kind).isTrue();
-            running.add(kind);
+            var counted = capacities.tryAcquire(kind);
+            assertThat(counted).as("step %d sends %s", step, kind).isPresent();
+            running.add(counted.get());
           }
         }
         case 1 -> {
           if (!running.isEmpty()) {
-            var kind = running.remove(random.nextInt(running.size()));
-            capacities.release(kind);
-            unreported.add(kind);
+            var probe = running.remove(random.nextInt(running.size()));
+            capacities.release(probe);
+            unreported.add(probe.kind());
           }
         }
         default -> {
@@ -386,10 +387,16 @@ class ProbeCapacitiesTest {
         .build();
   }
 
-  private static void acquire(ProbeCapacities capacities, ProbeKind kind, int count) {
+  private static List<ProbeCapacities.CountedProbe> acquire(
+      ProbeCapacities capacities, ProbeKind kind, int count) {
+    var probes = new ArrayList<ProbeCapacities.CountedProbe>();
     for (var probe = 0; probe < count; probe++) {
-      assertThat(capacities.tryAcquire(kind)).isTrue();
+      var counted = capacities.tryAcquire(kind);
+      assertThat(counted).isPresent();
+      probes.add(counted.get());
     }
+
+    return probes;
   }
 
   // Produces 3 s media segments at the speed, advancing the clock by each segment's production

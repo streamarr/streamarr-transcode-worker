@@ -10,6 +10,7 @@ import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
@@ -76,22 +77,22 @@ final class ProbeCapacities {
         backgroundLimit.control());
   }
 
-  /** Counts the probe against its capacity; false when the capacity has no free unit. */
-  synchronized boolean tryAcquire(@NonNull ProbeKind kind) {
+  /** Counts the probe against its capacity; empty when the capacity has no free unit. */
+  synchronized Optional<CountedProbe> tryAcquire(@NonNull ProbeKind kind) {
     if (!fits(kind)) {
-      return false;
+      return Optional.empty();
     }
 
     running.merge(kind, 1, Integer::sum);
-    return true;
+    return Optional.of(new CountedProbe(kind));
   }
 
   /** Frees the unit of a probe that ended, and grows the background limit when it was busy. */
-  void release(@NonNull ProbeKind kind) {
+  void release(@NonNull CountedProbe probe) {
     changeCapacities(
         () -> {
           var inUse = backgroundUnitsInUse();
-          running.merge(kind, -1, Integer::sum);
+          running.merge(probe.kind(), -1, Integer::sum);
           if (backgroundUnitsInUse() < inUse && isGrowthAllowed()) {
             backgroundLimit.grow(inUse);
           }
@@ -220,6 +221,9 @@ final class ProbeCapacities {
       onChange.run();
     }
   }
+
+  /** A probe that counts against its capacity until {@link #release} frees its unit. */
+  record CountedProbe(ProbeKind kind) {}
 
   private sealed interface BackgroundLimit {
 

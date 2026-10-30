@@ -56,12 +56,13 @@ final class WorkerProbeSession implements AutoCloseable {
     // The server sends a probe only against a free unit, so a probe finds none only when the
     // worker lowered the capacity before the server learned of the change.
     var kind = ProbeKind.of(request);
-    if (!capacities.tryAcquire(kind)) {
+    var counted = capacities.tryAcquire(kind);
+    if (counted.isEmpty()) {
       log.debug("Refusing probe {}: the {} capacity has no free unit", attemptId, kind);
       return new Admission.Refused(failed(request, ProbeFailure.PROBE_FAILURE_NO_FREE_CAPACITY));
     }
 
-    var attempt = new ProbeAttempt(request, kind);
+    var attempt = new ProbeAttempt(request, counted.get());
     attempts.put(attemptId, attempt);
     summary.started(attemptId);
     executor.execute(attempt);
@@ -112,7 +113,7 @@ final class WorkerProbeSession implements AutoCloseable {
   private final class ProbeAttempt implements Runnable {
 
     private final ProbeRequest request;
-    private final ProbeKind kind;
+    private final ProbeCapacities.CountedProbe counted;
     private final AtomicReference<Thread> thread = new AtomicReference<>();
     private volatile boolean cancelled;
 
@@ -188,7 +189,7 @@ final class WorkerProbeSession implements AutoCloseable {
         attempts.remove(fromProto(report.result().getProbeAttemptId()), this);
       }
 
-      capacities.release(kind);
+      capacities.release(counted);
       WorkerProbeSession.this.complete(report);
     }
   }
