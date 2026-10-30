@@ -58,16 +58,15 @@ final class CodecStringReader {
     return DecoderConfiguration.hevcProfile(extradata)
         .or(
             () ->
-                firstSample(stream)
+                firstSample(stream, NalSyntax.HEVC)
                     .flatMap(
                         sample -> DecoderConfiguration.hevcFirstSampleProfile(extradata, sample)))
         .map(bytes -> CodecStrings.hevc("hvc1", bytes));
   }
 
   // The probe reads the first packets of the chosen video stream only.
-  private static Optional<NalUnits> firstSample(JsonNode stream) {
-    return FirstPacketSamples.read(stream, NalSyntax.HEVC)
-        .flatMap(samples -> samples.stream().findFirst());
+  private static Optional<NalUnits> firstSample(JsonNode stream, NalSyntax syntax) {
+    return FirstPacketSamples.read(stream, syntax).flatMap(samples -> samples.stream().findFirst());
   }
 
   private static Optional<String> av1(byte[] extradata) {

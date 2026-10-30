@@ -44,7 +44,12 @@ final class DecoderConfiguration {
    */
   static Optional<byte[]> avcProfile(byte[] extradata) {
     var isRecord = Byte.toUnsignedInt(extradata[0]) == AVC_RECORD_VERSION;
-    var units = isRecord ? avcRecordSequenceParameterSets(extradata) : annexB(extradata);
+    return avcProfileOf(isRecord ? avcRecordSequenceParameterSets(extradata) : annexB(extradata));
+  }
+
+  // The three bytes after the header of the first SPS among the NAL units, which FFmpeg's avcC
+  // writer copies into the record header.
+  private static Optional<byte[]> avcProfileOf(List<byte[]> units) {
     return units.stream()
         .filter(nal -> (nal[0] & 0x1F) == AVC_SEQUENCE_PARAMETER_SET)
         .findFirst()
