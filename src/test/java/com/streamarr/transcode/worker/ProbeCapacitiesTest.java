@@ -326,10 +326,26 @@ class ProbeCapacitiesTest {
     var capacities = adaptive(16);
     var probes = acquire(capacities, kind, 1);
 
-    capacities.releaseTimedOut(probes.getFirst());
+    timeOut(capacities, probes.getFirst());
 
     assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(2);
     assertThat(capacities.takeBrakeCount()).isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName(
+      "Should halve the background probe capacity when a probe times out before its unit is free")
+  void shouldHalveTheBackgroundProbeCapacityWhenAProbeTimesOutBeforeItsUnitIsFree() {
+    var capacities = adaptive(16);
+    var probes = acquire(capacities, ProbeKind.BACKGROUND, 3);
+
+    capacities.probeTimedOut(probes.getFirst());
+    assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(2);
+
+    capacities.release(probes.get(1));
+    assertThat(capacities.granted().backgroundProbeCapacity())
+        .as("Growth holds after the brake although most units are in use")
+        .isEqualTo(2);
   }
 
   @Test
@@ -338,7 +354,7 @@ class ProbeCapacitiesTest {
     var capacities = adaptive(16);
     var scans = acquire(capacities, ProbeKind.KEYFRAME_PACKET_SCAN, 1);
 
-    capacities.releaseTimedOut(scans.getFirst());
+    timeOut(capacities, scans.getFirst());
 
     assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(4);
     assertThat(capacities.takeBrakeCount()).isZero();
@@ -352,14 +368,14 @@ class ProbeCapacitiesTest {
   void shouldApplyABrakeForATimedOutProbeOnlyWhenTheProbeStartedAfterTheLatestBrake() {
     var capacities = adaptive(16);
     var startedBeforeBrake = acquire(capacities, ProbeKind.BACKGROUND, 2);
-    capacities.releaseTimedOut(startedBeforeBrake.getFirst());
+    timeOut(capacities, startedBeforeBrake.getFirst());
     clock.advance(Duration.ofSeconds(15));
 
-    capacities.releaseTimedOut(startedBeforeBrake.getLast());
+    timeOut(capacities, startedBeforeBrake.getLast());
     assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(2);
 
     var startedAfterBrake = acquire(capacities, ProbeKind.BACKGROUND, 1);
-    capacities.releaseTimedOut(startedAfterBrake.getFirst());
+    timeOut(capacities, startedAfterBrake.getFirst());
     assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(1);
     assertThat(capacities.takeBrakeCount()).isEqualTo(2);
   }
@@ -374,11 +390,11 @@ class ProbeCapacitiesTest {
     var probes = acquire(capacities, ProbeKind.BACKGROUND, 2);
 
     clock.advance(Duration.ofSeconds(14));
-    capacities.releaseTimedOut(probes.getFirst());
+    timeOut(capacities, probes.getFirst());
     assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(2);
 
     clock.advance(Duration.ofSeconds(1));
-    capacities.releaseTimedOut(probes.getLast());
+    timeOut(capacities, probes.getLast());
     assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(1);
   }
 
@@ -389,10 +405,10 @@ class ProbeCapacitiesTest {
   void shouldNeverGrowTheBackgroundProbeCapacityWhenABusyProbeEndsAtTheProbeTimeout() {
     var capacities = adaptive(16);
     var probes = acquire(capacities, ProbeKind.BACKGROUND, 4);
-    capacities.releaseTimedOut(probes.get(0));
+    timeOut(capacities, probes.get(0));
     clock.advance(Duration.ofSeconds(30));
 
-    capacities.releaseTimedOut(probes.get(1));
+    timeOut(capacities, probes.get(1));
     assertThat(capacities.granted().backgroundProbeCapacity())
         .as("The probe started before the brake, so it neither brakes nor grows")
         .isEqualTo(2);
@@ -407,7 +423,7 @@ class ProbeCapacitiesTest {
     var capacities = adaptive(1);
     var probes = acquire(capacities, ProbeKind.BACKGROUND, 1);
 
-    capacities.releaseTimedOut(probes.getFirst());
+    timeOut(capacities, probes.getFirst());
 
     assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(1);
     assertThat(capacities.tryAcquire(ProbeKind.BACKGROUND)).isPresent();
@@ -419,7 +435,7 @@ class ProbeCapacitiesTest {
     var capacities = fixed(12);
     var probes = acquire(capacities, ProbeKind.BACKGROUND, 1);
 
-    capacities.releaseTimedOut(probes.getFirst());
+    timeOut(capacities, probes.getFirst());
 
     assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(12);
     assertThat(capacities.takeBrakeCount()).isZero();
@@ -507,6 +523,12 @@ class ProbeCapacitiesTest {
     }
 
     return probes;
+  }
+
+  // The server's cancel at the probe timeout arrives, then ffprobe exits.
+  private static void timeOut(ProbeCapacities capacities, ProbeCapacities.CountedProbe probe) {
+    capacities.probeTimedOut(probe);
+    capacities.releaseTimedOut(probe);
   }
 
   // Produces 3 s media segments at the speed, advancing the clock by each segment's production

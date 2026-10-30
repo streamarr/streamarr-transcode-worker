@@ -102,17 +102,22 @@ final class ProbeCapacities {
   }
 
   /**
-   * Frees the unit of a probe that the server cancelled at the probe timeout. The probe brakes the
-   * background limit when it started after the latest brake, and never grows it.
+   * Brakes the background limit when the server cancels a probe at the probe timeout and the probe
+   * started after the latest brake. The probe keeps its unit until {@link #releaseTimedOut} frees
+   * it.
    */
-  void releaseTimedOut(@NonNull CountedProbe probe) {
+  void probeTimedOut(@NonNull CountedProbe probe) {
     changeCapacities(
         () -> {
-          running.merge(probe.kind(), -1, Integer::sum);
           if (isTimeoutBrakeDue(probe)) {
             brake();
           }
         });
+  }
+
+  /** Frees the unit of a probe that the server cancelled at the probe timeout, and never grows. */
+  void releaseTimedOut(@NonNull CountedProbe probe) {
+    changeCapacities(() -> running.merge(probe.kind(), -1, Integer::sum));
   }
 
   // A job attempt that starts clears background probes from the host while its viewer waits.

@@ -12,6 +12,7 @@ import com.streamarr.transcode.probe.ProbeAttemptReport;
 import com.streamarr.transcode.probe.ProbeKind;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicReference;
@@ -92,18 +93,28 @@ final class WorkerProbeSession implements AutoCloseable {
     record Refused(ProbeAttemptReport report) implements Admission {}
   }
 
-  synchronized void cancel(UUID attemptId, ProbeCancelReason reason) {
+  // A timed-out ffprobe can wait for the disk long after the cancel, so the brake applies when the
+  // cancel arrives rather than when the unit frees. The brake runs outside this monitor because its
+  // capacity change takes the worker monitor.
+  void cancel(UUID attemptId, ProbeCancelReason reason) {
+    cancelAttempt(attemptId, reason).ifPresent(capacities::probeTimedOut);
+  }
+
+  // Returns the probe when the cancel ends it at the probe timeout.
+  private synchronized Optional<ProbeCapacities.CountedProbe> cancelAttempt(
+      UUID attemptId, ProbeCancelReason reason) {
     var attempt = attempts.get(attemptId);
     if (attempt == null) {
-      return;
+      return Optional.empty();
     }
 
     if (reason == ProbeCancelReason.PROBE_CANCEL_REASON_TIMEOUT) {
       attempt.cancelAtProbeTimeout();
-      return;
+      return Optional.of(attempt.counted);
     }
 
     attempt.cancel();
+    return Optional.empty();
   }
 
   synchronized void shutdown() {

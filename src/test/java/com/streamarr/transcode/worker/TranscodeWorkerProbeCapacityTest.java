@@ -414,6 +414,55 @@ class TranscodeWorkerProbeCapacityTest {
     }
   }
 
+  @Test
+  @DisplayName(
+      "Should halve the background probe capacity when the server cancels a probe at the probe"
+          + " timeout before its ffprobe exits")
+  void
+      shouldHalveTheBackgroundProbeCapacityWhenTheServerCancelsAProbeAtTheProbeTimeoutBeforeItsFfprobeExits()
+          throws Exception {
+    var stuck = processBuilder().running(true).deferredTermination(true).build();
+    var first = processBuilder().running(true).build();
+    var second = processBuilder().running(true).build();
+    var ffprobe = probesStarting(List.of(stuck, first, second), new AtomicInteger());
+    var request = requestBuilder().build();
+
+    try (var worker =
+        workerBuilder(tempDir)
+            .configuration(configurationBuilder().availableSlots(1).build())
+            .runtime(runtime)
+            .ffprobe(ffprobe)
+            .clock(new SteppedClock())
+            .build()) {
+      try {
+        worker.start("localhost", 1);
+        var connection = runtime.connection();
+        start(connection, request);
+        var stuckTask = runtime.probes().runNext();
+        stuck.awaitStarted(stuckTask);
+        var firstTask = startHeld(connection, first);
+        startHeld(connection, second);
+
+        cancel(connection, request, ProbeCancelReason.PROBE_CANCEL_REASON_TIMEOUT);
+        stuck.awaitExitWait(stuckTask);
+
+        assertThat(capacityChanges(connection)).containsExactly(changed(2, 1));
+        first.finish();
+        firstTask.get();
+        assertThat(capacityChanges(connection))
+            .as("A probe that ends while the timed-out ffprobe still runs grows nothing")
+            .containsExactly(changed(2, 1));
+        stuck.finish();
+        stuckTask.get();
+        assertThat(capacityChanges(connection)).containsExactly(changed(2, 1));
+      } finally {
+        stuck.finish();
+        first.finish();
+        second.finish();
+      }
+    }
+  }
+
   @ParameterizedTest
   @EnumSource(
       value = ProbeCancelReason.class,
