@@ -93,15 +93,14 @@ function facts(frames, sampleEntry = 'hvc1') {
   };
 }
 
-/** 30 frames in order, with IDR keyframes at the given frames. */
+/** COUNT frames (30 by default) in order, with keyframes of the given NAL unit type at the given frames. */
 function inOrder(keyframes, count = 30, type = 20) {
   return Array.from({ length: count }, (_, frame) => [frame, keyframes.includes(frame), keyframes.includes(frame) ? type : null]);
 }
 
-// One "second" here is 10 frames: the forced times count in units of 10 frames.
-const TEN_FRAMES = { ...facts([]), timescale: 10 * FRAME };
+/** Facts whose second lasts 10 frames, so that forced time t falls on frame 10 t. */
 function tenFrameFacts(frames, sampleEntry) {
-  return { ...facts(frames, sampleEntry), timescale: TEN_FRAMES.timescale };
+  return { ...facts(frames, sampleEntry), timescale: 10 * FRAME };
 }
 
 function plan(overrides = {}) {

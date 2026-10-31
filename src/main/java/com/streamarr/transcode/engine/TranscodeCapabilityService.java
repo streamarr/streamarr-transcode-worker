@@ -128,16 +128,24 @@ public class TranscodeCapabilityService {
             // The producer fails an attempt whose output differs from the job's codec profile,
             // tier and level, so a hardware encoder runs only once the command forces them on it.
             .filter(FfmpegCommandBuilder::forcesCodecProfile)
-            .map(encoder -> backend(family, encoder, true));
+            .map(encoder -> hardwareBackend(family, encoder));
     var software =
-        softwareEncoderFamilies.contains(family)
-            ? Stream.of(backend(family, family.softwareEncoder(), false))
-            : Stream.<EncoderBackend>empty();
+        Stream.of(family)
+            .filter(softwareEncoderFamilies::contains)
+            .map(TranscodeCapabilityService::softwareBackend);
     return Stream.concat(hardware, software).map(TranscodeCapabilityService::workerVerified);
   }
 
-  private static EncoderBackend backend(CodecFamily family, String encoder, boolean hardware) {
-    return EncoderBackend.builder().codecFamily(family).encoder(encoder).hardware(hardware).build();
+  private static EncoderBackend hardwareBackend(CodecFamily family, String encoder) {
+    return EncoderBackend.builder().codecFamily(family).encoder(encoder).hardware(true).build();
+  }
+
+  private static EncoderBackend softwareBackend(CodecFamily family) {
+    return EncoderBackend.builder()
+        .codecFamily(family)
+        .encoder(family.softwareEncoder())
+        .hardware(false)
+        .build();
   }
 
   private static WorkerVerifiedEncoder workerVerified(EncoderBackend backend) {
