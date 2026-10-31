@@ -16,6 +16,8 @@ file with the FFmpeg in the pinned worker image. Each source is 4 s of 64x36 `te
 | `avi.avi` | AVI without B-frames | A packet scan: no container index |
 | `mp4-truncated.mp4` | `faststart` MP4 cut just before the last keyframe's packet | A packet scan: unreadable last keyframe |
 | `mkv-truncated-cues-front.mkv` | Matroska with Cues at the front, cut just before the last keyframe's packet | A packet scan: unreadable last keyframe |
+| `mp4-h264-aac-ac3.mp4` | H.264 with B-frames, AAC and AC-3 (a 660 Hz tone), each with the edit list FFmpeg writes for its delay or priming | Positions and a measurement from the sample tables |
+| `mov-hevc-aac.mov` | HEVC with B-frames and AAC in MOV | Positions and a measurement from the sample tables |
 | `ffmpeg-version.txt` | The first line of `ffmpeg -version` from the recording image | |
 
 `scans/` keeps no source. For each recording it holds the probe's own ffprobe output, without the
@@ -32,6 +34,11 @@ presentation time, and its AVI demuxer gives none to a stream with B-frames.
 | `h264-ref_10.avi` | FFmpeg's FATE sample `h264/ref_10.avi`: H.264 with B-frames in AVI | Keyframes unavailable: a keyframe without a time |
 | `hevc-food.hevc` | FFmpeg's FATE sample `hevc/food.hevc`: raw HEVC with B-frames | Keyframes unavailable: a keyframe without a time |
 | `hevc-pir.hevc` | FFmpeg's FATE sample `hevc/pir.hevc`: raw HEVC without B-frames | Positions from a packet scan |
+
+`measurements/` holds, for each measured source, the probe's own ffprobe output without the source's
+path (`.json`), and the streams and packets that ffprobe lists for it (`.packets.json`). A stream's
+measured bytes must equal the sum of its listed packet sizes, and its bytes in each keyframe interval
+the sum of the sizes of the packets in that interval.
 
 `FfprobeExecutorKeyframeTest` reads these files with a scripted ffprobe, and answers its packet
 scans with the recordings in `scans/`. `WorkerMediaSmokeTest`

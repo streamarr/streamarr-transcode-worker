@@ -21,6 +21,7 @@ import static com.streamarr.transcode.probe.EbmlElements.unsigned;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.KeyframePacketScanReason;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositionSource;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositions;
@@ -31,6 +32,8 @@ import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeKeyframePositionsPart;
 import build.buf.gen.streamarr.transcode.v1.ProbeKeyframes;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
+import build.buf.gen.streamarr.transcode.v1.ProbeStreamMeasurementPart;
+import build.buf.gen.streamarr.transcode.v1.StreamMeasurementSource;
 import com.streamarr.transcode.probe.EbmlElements.TrackEntry;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -297,6 +300,52 @@ class FfprobeExecutorKeyframeTest {
         .extracting(ProbeKeyframePositionsPart::getDecodeTimeDeltasCount)
         .containsExactly(4_096, 904);
     assertThat(report.keyframePositionsParts().get(1).getDecodeTimeDeltas(0)).isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName(
+      "Should split each stream's interval bytes into parts that fit one session message when a"
+          + " three-hour source has a keyframe every half second")
+  void shouldSplitEachStreamsIntervalBytesIntoPartsWhenThreeHourSourceHasKeyframeEveryHalfSecond(
+      @TempDir Path directory) throws Exception {
+    var source =
+        Files.write(
+            directory.resolve("source.mp4"),
+            SyntheticMp4.builder()
+                .mediaTimescale(1_000)
+                .sampleDurations(21_600, 500)
+                .sampleSizes(21_600, 4_000)
+                .build()
+                .bytes());
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(
+                """
+                {"format":{"format_name":"mov,mp4,m4a,3gp,3g2,mj2","start_time":"0.000000"},
+                 "streams":[{"index":0,"codec_type":"video","id":"0x1"}]}
+                """)
+            .packet(
+                "10799.500000%+#1",
+                "{\"packets\":[{\"pts\":10799500,\"dts\":10799500,\"flags\":\"K__\"}]}")
+            .build();
+
+    var report = ffprobe.executor().probe(source, keyframeRequest());
+
+    var video = report.result().getMedia().getStreamMeasurements().getStreams(0);
+    assertThat(video.getMeasuredBytes()).isEqualTo(86_400_000L);
+    assertThat(video.getMeasuredDuration()).isEqualTo(10_800_000L);
+    assertThat(report.streamMeasurementParts())
+        .extracting(ProbeStreamMeasurementPart::getKeyframeIntervalBytesCount)
+        .containsExactly(4_096, 4_096, 4_096, 4_096, 4_096, 1_120);
+    assertThat(report.streamMeasurementParts())
+        .allSatisfy(
+            part ->
+                assertThat(
+                        EstablishWorkerSessionRequest.newBuilder()
+                            .setProbeStreamMeasurementPart(part)
+                            .build()
+                            .getSerializedSize())
+                    .isLessThan(131_072));
   }
 
   @ParameterizedTest
@@ -1260,6 +1309,71 @@ class FfprobeExecutorKeyframeTest {
     return keyframeRequest().toBuilder().setScanKeyframePackets(true).build();
   }
 
+  @ParameterizedTest
+  @ValueSource(strings = {"mp4-h264-aac-ac3.mp4", "mov-hevc-aac.mov"})
+  @DisplayName(
+      "Should measure every video and audio stream as ffprobe lists its packets when the sample"
+          + " tables of an MP4 or MOV source list every sample")
+  void shouldMeasureEveryVideoAndAudioStreamAsFfprobeListsItsPacketsWhenSampleTablesListEverySample(
+      String source) throws IOException {
+    var listing = RecordedPackets.read(fixture("measurements/" + source + ".packets.json"));
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(Files.readString(fixture("measurements/" + source + ".json")))
+            .anyPacket(listing.lastKeyframePacketJson())
+            .build();
+    var request = keyframeRequest();
+
+    var report = ffprobe.executor().probe(fixture(source), request);
+
+    var measurements = report.result().getMedia().getStreamMeasurements();
+    assertThat(measurements.getSource())
+        .isEqualTo(StreamMeasurementSource.STREAM_MEASUREMENT_SOURCE_SAMPLE_TABLE);
+    assertThat(measurements.getStreamsList()).hasSize(listing.streams().size());
+    for (var stream : listing.streams().values()) {
+      var measured =
+          measurements.getStreamsList().stream()
+              .filter(candidate -> candidate.getStreamIndex() == stream.index())
+              .findFirst()
+              .orElseThrow();
+      assertThat(measured.getMeasuredBytes())
+          .as("stream %d bytes", stream.index())
+          .isEqualTo(stream.bytes());
+      assertThat(measured.getPacketCount())
+          .as("stream %d packets", stream.index())
+          .isEqualTo(stream.packets().size());
+      assertThat(measured.getTimeBaseDenominator()).isEqualTo((int) stream.timeBaseDenominator());
+      // FFmpeg re-parses an AC-3 packet and lists the samples its frame header declares, so the
+      // last packet that ffprobe lists can outlast the duration that the sample table gives it.
+      assertThat(measured.getMeasuredDuration())
+          .as("stream %d duration", stream.index())
+          .isGreaterThan(stream.spanToLastPacket())
+          .isLessThanOrEqualTo(stream.duration());
+      assertThat(intervalBytes(report, stream.index()))
+          .as("stream %d bytes per keyframe interval", stream.index())
+          .containsExactly(listing.intervalBytes(stream.index()));
+    }
+  }
+
+  @Test
+  @DisplayName("Should report no measurement when the MP4 is fragmented")
+  void shouldReportNoMeasurementWhenMp4IsFragmented() {
+    var ffprobe = ScriptedFfprobe.builder().streams(MP4_STREAMS).build();
+
+    var report = ffprobe.executor().probe(fixture("mp4-fragmented.mp4"), keyframeRequest());
+
+    assertThat(report.result().getMedia().hasStreamMeasurements()).isFalse();
+    assertThat(report.streamMeasurementParts()).isEmpty();
+  }
+
+  private static long[] intervalBytes(ProbeAttemptReport report, int streamIndex) {
+    return report.streamMeasurementParts().stream()
+        .filter(part -> part.getStreamIndex() == streamIndex)
+        .flatMap(part -> part.getKeyframeIntervalBytesList().stream())
+        .mapToLong(Integer::toUnsignedLong)
+        .toArray();
+  }
+
   private static ProbeRequest keyframeRequest() {
     return ProbeRequest.newBuilder()
         .setProbeAttemptId(toProto(UUID.randomUUID()))
@@ -1298,12 +1412,14 @@ class FfprobeExecutorKeyframeTest {
   /**
    * Answers the probe command with recorded stream JSON, a last-keyframe read with the packets
    * recorded for its exact read interval and {@code packetReadExitCode}, and FFmpeg's packet scan
-   * with recorded framecrc lines and diagnostics. Any other read interval finds no packet.
+   * with recorded framecrc lines and diagnostics. Any other read interval finds {@code anyPacket},
+   * or no packet without it.
    */
   @Builder
   private record ScriptedFfprobe(
       String streams,
       @Singular Map<String, String> packets,
+      String anyPacket,
       int packetReadExitCode,
       String packetScan,
       String packetScanDiagnostics,
@@ -1319,7 +1435,8 @@ class FfprobeExecutorKeyframeTest {
       var interval = arguments.indexOf("-read_intervals");
       if (interval >= 0) {
         return new CompletedProcess(
-            packets.getOrDefault(arguments.get(interval + 1), NO_PACKETS),
+            packets.getOrDefault(
+                arguments.get(interval + 1), anyPacket == null ? NO_PACKETS : anyPacket),
             packetReadExitCode,
             false);
       }

@@ -7,15 +7,19 @@ import build.buf.gen.streamarr.transcode.v1.ProbeKeyframes;
 import com.streamarr.transcode.probe.KeyframeIndex.KeyframeTime;
 import com.streamarr.transcode.probe.KeyframeIndex.Listed;
 import com.streamarr.transcode.probe.KeyframeIndex.Unusable;
+import com.streamarr.transcode.probe.Mp4StreamMeasurer.TrackMeasurement;
+import com.streamarr.transcode.probe.Mp4StreamMeasurer.TrackStream;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.math.RoundingMode;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -48,28 +52,63 @@ final class ContainerIndexProbe {
     }
 
     var index = readIndex(probed, chosen.get());
-    return switch (index) {
+    return switch (index.keyframes()) {
       case Unusable(var reason) -> packetScanRequired(probed, reason);
-      case Listed listed -> report(probed, chosen.get(), listed);
+      case Listed listed -> report(probed, chosen.get(), listed, index.measured());
     };
   }
 
-  private KeyframeIndex readIndex(ProbedSource probed, ChosenVideoStream chosen)
+  private ContainerIndex readIndex(ProbedSource probed, ChosenVideoStream chosen)
       throws IOException {
     return switch (probed.formatName()) {
       case ProbedSource.MP4_FORMAT ->
           chosen.trackId().isPresent()
-              ? Mp4SyncSampleReader.read(probed.source(), chosen.trackId().get())
-              : new Unusable(
-                  KeyframePacketScanReason.KEYFRAME_PACKET_SCAN_REASON_INCOMPLETE_CONTAINER_INDEX);
+              ? Mp4SyncSampleReader.read(
+                  probed.source(),
+                  new TrackStream(chosen.streamIndex(), chosen.trackId().get()),
+                  measuredStreams(probed.ffprobeOutput().path("streams"), chosen))
+              : ContainerIndex.keyframesOnly(
+                  new Unusable(
+                      KeyframePacketScanReason
+                          .KEYFRAME_PACKET_SCAN_REASON_INCOMPLETE_CONTAINER_INDEX));
       case ProbedSource.MATROSKA_FORMAT ->
-          MatroskaCueReader.read(probed.source(), chosen.videoOrdinal());
+          ContainerIndex.keyframesOnly(
+              MatroskaCueReader.read(probed.source(), chosen.videoOrdinal()));
       default ->
-          new Unusable(KeyframePacketScanReason.KEYFRAME_PACKET_SCAN_REASON_NO_CONTAINER_INDEX);
+          ContainerIndex.keyframesOnly(
+              new Unusable(
+                  KeyframePacketScanReason.KEYFRAME_PACKET_SCAN_REASON_NO_CONTAINER_INDEX));
     };
   }
 
-  private ProbeAttemptReport report(ProbedSource probed, ChosenVideoStream chosen, Listed listed)
+  /**
+   * The streams that a measurement holds: the chosen video stream and every audio stream, each with
+   * the MP4 track that ffprobe names as its id. An audio stream without a track leaves nothing to
+   * measure, because the measurement must hold every audio stream.
+   */
+  private static List<TrackStream> measuredStreams(JsonNode streams, ChosenVideoStream chosen) {
+    var measured = new ArrayList<TrackStream>();
+    measured.add(new TrackStream(chosen.streamIndex(), chosen.trackId().orElseThrow()));
+    var position = 0;
+    for (var stream : streams) {
+      var index = stream.path("index").asInt(position++);
+      if (!"audio".equals(stream.path("codec_type").asString(""))) {
+        continue;
+      }
+
+      var track = ChosenVideoStream.trackId(stream);
+      if (track.isEmpty()) {
+        return List.of();
+      }
+
+      measured.add(new TrackStream(index, track.get()));
+    }
+
+    return measured;
+  }
+
+  private ProbeAttemptReport report(
+      ProbedSource probed, ChosenVideoStream chosen, Listed listed, List<TrackMeasurement> measured)
       throws ExecutionException, InterruptedException {
     if (!isLastKeyframeReadable(probed.source(), chosen, listed)) {
       return packetScanRequired(
@@ -83,6 +122,7 @@ final class ContainerIndexProbe {
         .timeBase(listed.timeBase())
         .source(KeyframePositionSource.KEYFRAME_POSITION_SOURCE_CONTAINER_INDEX)
         .keyframes(listed.keyframes())
+        .measured(measured)
         .build()
         .report();
   }

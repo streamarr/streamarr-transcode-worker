@@ -169,9 +169,11 @@ class TranscodeWorkerProbeTest {
 
   @Test
   @DisplayName(
-      "Should send the keyframe positions before the probe result when the worker reads a container index")
-  void shouldSendKeyframePositionsBeforeProbeResultWhenWorkerReadsContainerIndex()
-      throws Exception {
+      "Should send the keyframe positions, then the stream measurements, before the probe result"
+          + " when the worker reads a container index")
+  void
+      shouldSendKeyframePositionsThenStreamMeasurementsBeforeProbeResultWhenWorkerReadsContainerIndex()
+          throws Exception {
     var fixture = getClass().getResource("/keyframes/mp4-bframes-editlist.mp4");
     assertThat(fixture).isNotNull();
     Files.copy(Path.of(fixture.toURI()), tempDir.resolve("movie.mp4"));
@@ -209,6 +211,12 @@ class TranscodeWorkerProbeTest {
               part ->
                   assertThat(part.getProbeKeyframePositionsPart().getPresentationTimeDeltasList())
                       .containsExactly(0L, 8_704L, 16_896L, 10_240L),
+              measurement ->
+                  assertThat(
+                          measurement
+                              .getProbeStreamMeasurementPart()
+                              .getKeyframeIntervalBytesList())
+                      .hasSize(4),
               result ->
                   assertThat(
                           result

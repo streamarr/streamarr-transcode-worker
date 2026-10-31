@@ -99,9 +99,9 @@ final class Mp4SampleTables {
    * normal rate from a media time. Other edit lists change which samples the demuxer returns, so
    * the reader leaves them to a packet scan.
    */
-  record Edit(long emptyDuration, long mediaTime) {
+  record Edit(long emptyDuration, long mediaTime, long duration) {
 
-    static final Edit NONE = new Edit(0, 0);
+    static final Edit NONE = new Edit(0, 0, 0);
 
     static Optional<Edit> read(ByteBuffer box) {
       var version = box.get() & 0xFF;
@@ -122,7 +122,7 @@ final class Mp4SampleTables {
           return Optional.empty();
         }
 
-        return Optional.of(new Edit(emptyDuration, mediaTime));
+        return Optional.of(new Edit(emptyDuration, mediaTime, duration));
       }
 
       return Optional.empty();
@@ -133,7 +133,7 @@ final class Mp4SampleTables {
      * time, and shifts every time by the empty edits minus that media time.
      */
     List<KeyframeTime> apply(List<KeyframeTime> keyframes, long movieTimescale, long timescale) {
-      var shift = rescale(emptyDuration, timescale, movieTimescale) - mediaTime;
+      var shift = shift(movieTimescale, timescale);
       var first = 0;
       for (var i = 0; i < keyframes.size(); i++) {
         if (keyframes.get(i).presentationTime() <= mediaTime) {
@@ -147,6 +147,23 @@ final class Mp4SampleTables {
                   new KeyframeTime(
                       keyframe.presentationTime() + shift, keyframe.decodeTime() + shift))
           .toList();
+    }
+
+    /** What FFmpeg adds to every media time of the track: the empty edits minus the media time. */
+    long shift(long movieTimescale, long timescale) {
+      return rescale(emptyDuration, timescale, movieTimescale) - mediaTime;
+    }
+
+    /**
+     * The media time at which the edit stops playing the media, or empty when the edit list names
+     * no duration.
+     */
+    Optional<Long> mediaEnd(long movieTimescale, long timescale) {
+      if (duration == 0) {
+        return Optional.empty();
+      }
+
+      return Optional.of(Math.addExact(mediaTime, rescale(duration, timescale, movieTimescale)));
     }
 
     private static long rescale(long value, long multiplier, long divisor) {

@@ -288,6 +288,14 @@ public final class TranscodeWorker implements AutoCloseable {
                     EstablishWorkerSessionRequest.newBuilder()
                         .setProbeKeyframePositionsPart(part)
                         .build()));
+    report
+        .streamMeasurementParts()
+        .forEach(
+            part ->
+                send(
+                    EstablishWorkerSessionRequest.newBuilder()
+                        .setProbeStreamMeasurementPart(part)
+                        .build()));
     send(EstablishWorkerSessionRequest.newBuilder().setProbeResult(report.result()).build());
   }
 

@@ -18,6 +18,7 @@ import com.streamarr.transcode.probe.KeyframeIndex.Unusable;
 import com.streamarr.transcode.probe.Mp4SampleTables.Edit;
 import com.streamarr.transcode.probe.Mp4SampleTables.Run;
 import com.streamarr.transcode.probe.Mp4SampleTables.RunCursor;
+import com.streamarr.transcode.probe.Mp4StreamMeasurer.TrackStream;
 import java.io.IOException;
 import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
@@ -44,16 +45,33 @@ final class Mp4SyncSampleReader {
   private Mp4SyncSampleReader() {}
 
   static KeyframeIndex read(Path source, long trackId) throws IOException {
+    return read(source, new TrackStream(0, trackId), List.of()).keyframes();
+  }
+
+  /**
+   * Reads the chosen track's keyframes and, from the same movie box, measures the {@code measured}
+   * streams. The measurement is empty when {@code measured} is.
+   */
+  static ContainerIndex read(Path source, TrackStream chosen, List<TrackStream> measured)
+      throws IOException {
     try (var channel = FileChannel.open(source, StandardOpenOption.READ)) {
       var movie = Mp4MovieBox.read(channel);
       if (child(movie, "mvex").isPresent()) {
-        return new Unusable(
-            KeyframePacketScanReason.KEYFRAME_PACKET_SCAN_REASON_NO_CONTAINER_INDEX);
+        return ContainerIndex.keyframesOnly(
+            new Unusable(KeyframePacketScanReason.KEYFRAME_PACKET_SCAN_REASON_NO_CONTAINER_INDEX));
       }
 
-      return read(movie, trackId);
+      var keyframes = read(movie, chosen.trackId());
+      if (!(keyframes instanceof Listed listed) || measured.isEmpty()) {
+        return ContainerIndex.keyframesOnly(keyframes);
+      }
+
+      return new ContainerIndex(
+          listed,
+          Mp4StreamMeasurer.measure(movie, chosen, measured, listed.keyframes().size())
+              .orElse(List.of()));
     } catch (ContainerIndexException | BufferUnderflowException _) {
-      return incomplete();
+      return ContainerIndex.keyframesOnly(incomplete());
     }
   }
 
