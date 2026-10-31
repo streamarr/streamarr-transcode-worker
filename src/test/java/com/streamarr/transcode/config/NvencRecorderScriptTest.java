@@ -112,7 +112,8 @@ class NvencRecorderScriptTest {
 
   /**
    * Runs the recorder to the point where it publishes, over previous results, with every other step
-   * succeeding and the given mv, and returns the results directory.
+   * succeeding and the given mv, and returns the results directory. The recorder gets a symbolic
+   * link to that directory, as --results-dir may name one.
    */
   private Path stopWhilePublishing(String mv) throws Exception {
     var bin = Files.createDirectory(temporaryDirectory.resolve("bin"));
@@ -141,7 +142,9 @@ class NvencRecorderScriptTest {
         """);
     executable(bin.resolve("mv"), mv);
 
-    var status = runToTheEnd(bin, "--results-dir", results.toString());
+    var link = Files.createSymbolicLink(temporaryDirectory.resolve("results-link"), results);
+
+    var status = runToTheEnd(bin, "--results-dir", link.toString());
 
     assertThat(status).as("the exit status of a stopped recorder").isEqualTo(124);
     return results;
