@@ -310,8 +310,10 @@ WORK="$RESULTS_DIR/.$RUN_ID"
 mkdir "$WORK" "$WORK/out" "$WORK/logs"
 CHILD=""
 WATCHDOG=""
+PUBLISHING=0
 
-# bounded <seconds> <command...>: runs the command and stops it after that many seconds.
+# bounded <seconds> <command...>: runs the command, asks it to stop after that many seconds and
+# kills it two seconds later. Commands started by cleanup ignore TERM, so only the kill stops them.
 bounded() {
   local seconds=$1 pid guard status
   shift
@@ -321,13 +323,19 @@ bounded() {
   # run even when cleanup ignores the signals that would stop it. It holds no output, so that a
   # command substitution or a pipe around this script never waits for it.
   (
-    ticks=$((seconds * 10))
-    while ((ticks > 0)) && kill -0 "$pid" 2>/dev/null; do
-      sleep 0.1
-      ticks=$((ticks - 1))
-    done
-    if ((ticks == 0)); then
+    running() {
+      local ticks=$(($1 * 10))
+      while ((ticks > 0)) && kill -0 "$pid" 2>/dev/null; do
+        sleep 0.1
+        ticks=$((ticks - 1))
+      done
+      ((ticks == 0))
+    }
+    if running "$seconds"; then
       kill "$pid" 2>/dev/null
+      if running 2; then
+        kill -KILL "$pid" 2>/dev/null
+      fi
     fi
   ) >/dev/null 2>&1 3>&- &
   guard=$!
@@ -335,6 +343,13 @@ bounded() {
   status=$?
   wait "$guard" 2>/dev/null
   return "$status"
+}
+
+# result_files <directory> <find action...>: the recordings.json and initialization segments there.
+result_files() {
+  local directory=$1
+  shift
+  find "$directory" -maxdepth 1 -type f \( -name '*.init.mp4' -o -name 'recordings.json' \) "$@"
 }
 
 cleanup() {
@@ -348,9 +363,14 @@ cleanup() {
   if [[ -n "$CHILD" ]]; then
     kill "$CHILD" 2>/dev/null
   fi
-  for container in $(bounded 30 docker ps -q --filter "label=streamarr.nvenc-recorder=$RUN_ID" 2>/dev/null); do
-    bounded 30 docker rm -f "$container" >/dev/null 2>&1
+  # --all lists a container in every state, including one the runtime is still creating.
+  for container in $(bounded 10 docker ps --all -q --filter "label=streamarr.nvenc-recorder=$RUN_ID" 2>/dev/null); do
+    bounded 10 docker rm -f "$container" >/dev/null 2>&1
   done
+  if ((PUBLISHING)); then
+    result_files "$RESULTS_DIR" -delete
+    result_files "$WORK/previous" -exec mv {} "$RESULTS_DIR/" \;
+  fi
   rm -rf "$WORK"
   if ((CREATED_RESULTS_DIR)); then
     rmdir "$RESULTS_DIR" 2>/dev/null
@@ -469,8 +489,12 @@ run_child docker "${DOCKER_RUN[@]}" -v "$WORK:/work" --entrypoint /cnb/lifecycle
 
 mkdir "$WORK/results"
 run_child node "$HERE/nvenc-recordings.mjs" analyze "$WORK" "$WORK/results"
-# The old results go only once every recording and its analysis have succeeded.
-find "$RESULTS_DIR" -maxdepth 1 -type f \( -name '*.init.mp4' -o -name 'recordings.json' \) -delete
+# The old results move aside only once every recording and its analysis have succeeded, and
+# cleanup puts them back unless every new result is in place.
+mkdir "$WORK/previous"
+PUBLISHING=1
+result_files "$RESULTS_DIR" -exec mv {} "$WORK/previous/" \;
 mv "$WORK/results/"* "$RESULTS_DIR/"
+PUBLISHING=0
 printf 'wrote %s/recordings.json; check it with: node src/test/fmp4-recorder/nvenc-recordings.mjs check %s\n' \
   "$RESULTS_DIR" "$RESULTS_DIR"
