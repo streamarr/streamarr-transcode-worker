@@ -305,7 +305,8 @@ if [[ ! -d "$RESULTS_DIR" ]]; then
 fi
 
 mkdir -p "$RESULTS_DIR"
-RESULTS_DIR="$(cd "$RESULTS_DIR" && pwd)"
+# The physical path: find would not look inside a results directory named by a symbolic link.
+RESULTS_DIR="$(cd "$RESULTS_DIR" && pwd -P)"
 WORK="$RESULTS_DIR/.$RUN_ID"
 mkdir "$WORK" "$WORK/out" "$WORK/logs"
 CHILD=""
