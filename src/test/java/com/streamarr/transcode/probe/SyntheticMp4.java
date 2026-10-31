@@ -10,8 +10,9 @@ import lombok.Builder;
 import lombok.Singular;
 
 /**
- * A minimal MP4 file: ftyp, then a moov with track 1, whose movie timescale is 1,000. With {@code
- * version1Headers}, the mvhd, tkhd and mdhd boxes use their version 1 layout with 64-bit times.
+ * A minimal MP4 file: ftyp, then a moov with track 1, whose movie timescale is 1,000, and track 2
+ * when {@code secondTrack} describes one. With {@code version1Headers}, the mvhd, tkhd and mdhd
+ * boxes use their version 1 layout with 64-bit times.
  */
 @Builder
 record SyntheticMp4(
@@ -30,9 +31,13 @@ record SyntheticMp4(
     List<Long> syncSamples,
     int editListVersion,
     @Singular List<Edit> edits,
-    boolean fragmented) {
+    boolean fragmented,
+    SyntheticMp4 secondTrack) {
 
   static final long TRACK_ID = 1;
+
+  /** The track ID of {@code secondTrack}, whose own movie-level fields the file ignores. */
+  static final long SECOND_TRACK_ID = 2;
 
   /** One elst entry; {@code rate} is a 16.16 fixed-point number. */
   record Edit(long duration, long mediaTime, int rate) {
@@ -47,6 +52,24 @@ record SyntheticMp4(
   record CompositionRun(int count, int offset) {}
 
   byte[] bytes() {
+    var movie = new ArrayList<byte[]>();
+    movie.add(timedHeader("mvhd", 1_000));
+    movie.add(trackBox(TRACK_ID));
+    if (secondTrack != null) {
+      movie.add(secondTrack.trackBox(SECOND_TRACK_ID));
+    }
+
+    if (fragmented) {
+      movie.add(box("mvex", fullBox("trex", 0, new byte[20])));
+    }
+
+    var moov = concat(movie.toArray(byte[][]::new));
+    return concat(
+        box("ftyp", ascii("isom"), int32(0)),
+        largeMovieBox ? largeBox("moov", moov) : box("moov", moov));
+  }
+
+  private byte[] trackBox(long trackId) {
     var sampleTable = new ArrayList<byte[]>();
     sampleTable.add(fullBox("stts", 0, int32(1), int32(sampleCount), int32(sampleDuration)));
     sampleTable.add(sampleSizeBox());
@@ -78,24 +101,14 @@ record SyntheticMp4(
     var track = new ArrayList<byte[]>();
     track.add(
         version1Headers
-            ? fullBox("tkhd", 1, int64(0), int64(0), int32((int) TRACK_ID))
-            : fullBox("tkhd", 0, int32(0), int32(0), int32((int) TRACK_ID)));
+            ? fullBox("tkhd", 1, int64(0), int64(0), int32((int) trackId))
+            : fullBox("tkhd", 0, int32(0), int32(0), int32((int) trackId)));
     if (!edits.isEmpty()) {
       track.add(box("edts", editList()));
     }
 
     track.add(media);
-    var movie = new ArrayList<byte[]>();
-    movie.add(timedHeader("mvhd", 1_000));
-    movie.add(box("trak", track.toArray(byte[][]::new)));
-    if (fragmented) {
-      movie.add(box("mvex", fullBox("trex", 0, new byte[20])));
-    }
-
-    var moov = concat(movie.toArray(byte[][]::new));
-    return concat(
-        box("ftyp", ascii("isom"), int32(0)),
-        largeMovieBox ? largeBox("moov", moov) : box("moov", moov));
+    return box("trak", track.toArray(byte[][]::new));
   }
 
   static class SyntheticMp4Builder {
