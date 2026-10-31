@@ -168,7 +168,8 @@ class NvencRecorderScriptTest {
     var results = Files.createDirectory(temporaryDirectory.resolve("results"));
     executable(bin.resolve("uname"), "echo Linux");
     executable(bin.resolve("node"), "echo v24.0.0");
-    executable(bin.resolve("docker"), "echo \"$*\" >> '%s'\n%s".formatted(dockerLog, docker));
+    executable(
+        bin.resolve("docker"), String.join("\n", "echo \"$*\" >> '" + dockerLog + "'", docker));
 
     var status = runToTheEnd(bin, "--results-dir", results.toString(), "--time-limit", "2");
 

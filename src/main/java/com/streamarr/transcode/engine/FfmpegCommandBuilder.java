@@ -24,6 +24,8 @@ public class FfmpegCommandBuilder {
   private static final String MAX_INTERLEAVE_DELTA_MICROSECONDS = "10000000";
   // The 8-bit 4:2:0 format every encoder takes unless its traits name another.
   private static final String DEFAULT_EIGHT_BIT_PIXEL_FORMAT = "yuv420p";
+  private static final String PROFILE_OPTION = "-profile:v";
+  private static final String LEVEL_OPTION = "-level:v";
   private static final EncoderTraits UNLISTED_ENCODER = traits().build();
   private static final EncoderTraits FIXED_GOP = traits().fixedGop(true).build();
   // NVENC is not keyframe-verified until recordings show its forced keyframes (worker #56).
@@ -668,9 +670,9 @@ public class FfmpegCommandBuilder {
       return switch (this) {
         case NONE -> List.of();
         case LIBX264 ->
-            List.of("-profile:v", profileName(encode.codecProfile()), "-level:v", level);
-        case LIBX265 -> List.of("-profile:v", profileName(encode.codecProfile()));
-        case LIBSVTAV1 -> List.of("-level:v", level);
+            List.of(PROFILE_OPTION, profileName(encode.codecProfile()), LEVEL_OPTION, level);
+        case LIBX265 -> List.of(PROFILE_OPTION, profileName(encode.codecProfile()));
+        case LIBSVTAV1 -> List.of(LEVEL_OPTION, level);
         case NVENC -> nvencProfileLevelAndTier(encode);
       };
     }
@@ -688,7 +690,7 @@ public class FfmpegCommandBuilder {
       var levelName = encode.level() / 10 + "." + encode.level() % 10;
       var arguments =
           new ArrayList<>(
-              List.of("-profile:v", profileName(encode.codecProfile()), "-level:v", levelName));
+              List.of(PROFILE_OPTION, profileName(encode.codecProfile()), LEVEL_OPTION, levelName));
       encode.tier().ifPresent(tier -> arguments.addAll(List.of("-tier:v", tierName(tier))));
       return List.copyOf(arguments);
     }
