@@ -36,10 +36,14 @@ final class ProbeMediaReader {
       throw new IllegalArgumentException("ffprobe returned a malformed stream list");
     }
 
+    var statisticsBitrates = MatroskaStatistics.bitrates(format, streams);
     var parsed = new ArrayList<ProbeStreamInfo.Builder>();
     var labels = new IdentityHashMap<ProbeStreamInfo.Builder, StreamLabels>();
     for (var stream : streams) {
       var parsedStream = parseStream(stream, parsed.size(), endTimes);
+      Optional.ofNullable(statisticsBitrates.get(parsed.size()))
+          .filter(_ -> !parsedStream.hasBitrateBitsPerSecond())
+          .ifPresent(parsedStream::setBitrateBitsPerSecond);
       parsed.add(parsedStream);
       if (isLabeled(parsedStream.getCodecType())) {
         labels.put(parsedStream, StreamLabels.of(stream));

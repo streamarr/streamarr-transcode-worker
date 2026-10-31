@@ -154,6 +154,7 @@ public final class FfprobeExecutor {
       new StreamExtradataProbe(objectMapper, this::run).addTo(json, attempt.source());
       addFirstFramesAndPackets(json, attempt.source());
       MatroskaColourProbe.addTo(json, attempt.source());
+      MatroskaWritingApp.addTo(json, attempt.source());
     }
 
     var result = readResult(json, output, attempt);
