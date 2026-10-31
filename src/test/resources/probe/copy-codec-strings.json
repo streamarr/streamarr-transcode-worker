@@ -66,6 +66,30 @@
     "1": "mp4a.40.2",
     "2": "mp4a.40.2"
   },
+  "mkv-statistics-ffmpeg-cut-same-date.mkv": {
+    "0": "avc1.42C00A",
+    "1": "mp4a.40.2"
+  },
+  "mkv-statistics-ffmpeg-cut.mkv": {
+    "0": "avc1.42C00A",
+    "1": "mp4a.40.2"
+  },
+  "mkv-statistics-ffmpeg-reencode-same-date.mkv": {
+    "0": "avc1.F4000A",
+    "1": "mp4a.40.2"
+  },
+  "mkv-statistics-ffmpeg-trim-same-date.mkv": {
+    "0": "avc1.42C00A",
+    "1": "mp4a.40.2"
+  },
+  "mkv-statistics-mkvmerge.mkv": {
+    "0": "avc1.42C00A",
+    "1": "mp4a.40.2"
+  },
+  "mkv-statistics-mkvpropedit.mkv": {
+    "0": "avc1.42C00A",
+    "1": "mp4a.40.2"
+  },
   "mkv-title-tags.mkv": {
     "0": "avc1.42C00A",
     "1": "mp4a.40.2",
