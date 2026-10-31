@@ -450,7 +450,7 @@ class TranscodeWorkerProbeTest {
       worker.start("localhost", 1);
 
       assertThat(runtime.connection().registration().getCapabilities().getProbeVersionsList())
-          .containsExactly(5);
+          .containsExactly(6);
     }
   }
 
@@ -508,7 +508,7 @@ class TranscodeWorkerProbeTest {
   }
 
   @ParameterizedTest(name = "probe version {0}")
-  @ValueSource(ints = {1, 4, 6})
+  @ValueSource(ints = {1, 5, 7})
   @DisplayName(
       "Should fail the probe as an unsupported version when the request names a version the worker"
           + " does not answer")

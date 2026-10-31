@@ -33,7 +33,7 @@ import tools.jackson.databind.ObjectMapper;
 public final class FfprobeExecutor {
 
   /** The only probe version that this worker answers. */
-  public static final int PROBE_VERSION = 5;
+  public static final int PROBE_VERSION = 6;
 
   /**
    * The read limits let ffprobe reach streams whose first packet comes late, such as PGS subtitles.
