@@ -73,8 +73,48 @@ class NvencRecorderScriptTest {
 
   @Test
   @DisplayName(
-      "Should keep the previous results when the recorder is stopped while it replaces them")
-  void shouldKeepThePreviousResultsWhenTheRecorderIsStoppedWhileItReplacesThem() throws Exception {
+      "Should keep the previous results when the recorder is stopped while it moves the new"
+          + " results into place")
+  void shouldKeepThePreviousResultsWhenTheRecorderIsStoppedWhileItMovesTheNewResultsIntoPlace()
+      throws Exception {
+    var results =
+        stopWhilePublishing(
+            """
+            case "$1" in
+              */.nvenc-*/results/*) kill -TERM "$PPID"; exit 1 ;;
+            esac
+            exec /bin/mv "$@"
+            """);
+
+    assertPreviousResultsKept(results);
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep the previous results when the recorder is stopped while it moves them aside")
+  void shouldKeepThePreviousResultsWhenTheRecorderIsStoppedWhileItMovesThemAside()
+      throws Exception {
+    // The second move aside stops the recorder, the parent of find, and moves nothing.
+    var results =
+        stopWhilePublishing(
+            """
+            case "$2" in
+              */.nvenc-*/previous/)
+                count=$(($(cat "${2%%/previous/}/moved-aside" 2>/dev/null || echo 0) + 1))
+                echo "$count" > "${2%%/previous/}/moved-aside"
+                if [ "$count" = 2 ]; then kill -TERM "$(ps -o ppid= -p "$PPID")"; exit 1; fi ;;
+            esac
+            exec /bin/mv "$@"
+            """);
+
+    assertPreviousResultsKept(results);
+  }
+
+  /**
+   * Runs the recorder to the point where it publishes, over previous results, with every other step
+   * succeeding and the given mv, and returns the results directory.
+   */
+  private Path stopWhilePublishing(String mv) throws Exception {
     var bin = Files.createDirectory(temporaryDirectory.resolve("bin"));
     var results = Files.createDirectory(temporaryDirectory.resolve("results"));
     Files.writeString(results.resolve("recordings.json"), "previous");
@@ -99,19 +139,15 @@ class NvencRecorderScriptTest {
           esac
         done
         """);
-    // The recorder is stopped as it starts to move the new results into place.
-    executable(
-        bin.resolve("mv"),
-        """
-        case "$1" in
-          */.nvenc-*/results/*) kill -TERM "$PPID"; exit 1 ;;
-        esac
-        exec /bin/mv "$@"
-        """);
+    executable(bin.resolve("mv"), mv);
 
     var status = runToTheEnd(bin, "--results-dir", results.toString());
 
     assertThat(status).as("the exit status of a stopped recorder").isEqualTo(124);
+    return results;
+  }
+
+  private static void assertPreviousResultsKept(Path results) throws IOException {
     try (var left = Files.list(results)) {
       assertThat(left.map(path -> path.getFileName().toString()))
           .as("what the recorder left in its results directory")

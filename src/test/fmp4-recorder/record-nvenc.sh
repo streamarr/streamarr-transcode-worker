@@ -310,7 +310,7 @@ WORK="$RESULTS_DIR/.$RUN_ID"
 mkdir "$WORK" "$WORK/out" "$WORK/logs"
 CHILD=""
 WATCHDOG=""
-PUBLISHING=0
+PUBLISH_STAGE=0
 
 # bounded <seconds> <command...>: runs the command, asks it to stop after that many seconds and
 # kills it two seconds later. Commands started by cleanup ignore TERM, so only the kill stops them.
@@ -367,8 +367,12 @@ cleanup() {
   for container in $(bounded 10 docker ps --all -q --filter "label=streamarr.nvenc-recorder=$RUN_ID" 2>/dev/null); do
     bounded 10 docker rm -f "$container" >/dev/null 2>&1
   done
-  if ((PUBLISHING)); then
+  # Stage 1 moves the old results aside, stage 2 moves the new ones in. Only in stage 2 has every
+  # old result been moved aside, so only then may the results directory be cleared.
+  if ((PUBLISH_STAGE == 2)); then
     result_files "$RESULTS_DIR" -delete
+  fi
+  if ((PUBLISH_STAGE > 0)); then
     result_files "$WORK/previous" -exec mv {} "$RESULTS_DIR/" \;
   fi
   rm -rf "$WORK"
@@ -492,9 +496,14 @@ run_child node "$HERE/nvenc-recordings.mjs" analyze "$WORK" "$WORK/results"
 # The old results move aside only once every recording and its analysis have succeeded, and
 # cleanup puts them back unless every new result is in place.
 mkdir "$WORK/previous"
-PUBLISHING=1
+PUBLISH_STAGE=1
 result_files "$RESULTS_DIR" -exec mv {} "$WORK/previous/" \;
+if [[ -n "$(result_files "$RESULTS_DIR" -print)" ]]; then
+  echo "$SCRIPT_NAME: cannot move the old results in $RESULTS_DIR aside" >&2
+  exit 4
+fi
+PUBLISH_STAGE=2
 mv "$WORK/results/"* "$RESULTS_DIR/"
-PUBLISHING=0
+PUBLISH_STAGE=0
 printf 'wrote %s/recordings.json; check it with: node src/test/fmp4-recorder/nvenc-recordings.mjs check %s\n' \
   "$RESULTS_DIR" "$RESULTS_DIR"
