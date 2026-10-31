@@ -155,15 +155,11 @@ final class Mp4SampleTables {
     }
 
     /**
-     * The media time at which the edit stops playing the media, or empty when the edit list names
-     * no duration.
+     * The media time at which the edit stops playing the media. FFmpeg applies an edit of no
+     * duration as one that ends at its media time.
      */
-    Optional<Long> mediaEnd(long movieTimescale, long timescale) {
-      if (duration == 0) {
-        return Optional.empty();
-      }
-
-      return Optional.of(Math.addExact(mediaTime, rescale(duration, timescale, movieTimescale)));
+    long mediaEnd(long movieTimescale, long timescale) {
+      return Math.addExact(mediaTime, rescale(duration, timescale, movieTimescale));
     }
 
     private static long rescale(long value, long multiplier, long divisor) {

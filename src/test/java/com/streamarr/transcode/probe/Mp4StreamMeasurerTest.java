@@ -18,8 +18,10 @@ import org.junit.jupiter.api.io.TempDir;
 @DisplayName("MP4 Stream Measurer Tests")
 class Mp4StreamMeasurerTest {
 
-  private static final TrackStream VIDEO = new TrackStream(0, SyntheticMp4.TRACK_ID);
-  private static final TrackStream AUDIO = new TrackStream(1, SyntheticMp4.SECOND_TRACK_ID);
+  private static final TrackStream VIDEO = new TrackStream(0, SyntheticMp4.TRACK_ID, true);
+  private static final TrackStream AUDIO = new TrackStream(1, SyntheticMp4.SECOND_TRACK_ID, true);
+  private static final TrackStream OTHER_VIDEO =
+      new TrackStream(1, SyntheticMp4.SECOND_TRACK_ID, false);
 
   @TempDir Path temporaryDirectory;
 
@@ -215,6 +217,143 @@ class Mp4StreamMeasurerTest {
 
     assertThat(index.measured().getFirst().measuredBytes()).isEqualTo(0xFFFF_FFFFL);
     assertThat(index.measured().getFirst().intervalBytes()).containsExactly(-1);
+  }
+
+  @Test
+  @DisplayName(
+      "Should place each sample of another video track in the interval that holds its decode time")
+  void shouldPlaceEachSampleOfAnotherVideoTrackInIntervalHoldingItsDecodeTime() throws Exception {
+    var source =
+        write(
+            SyntheticMp4.builder()
+                .mediaTimescale(1_000)
+                .sampleDurations(4, 500)
+                .secondTrack(
+                    SyntheticMp4.builder()
+                        .mediaTimescale(90_000)
+                        .sampleDurations(8, 22_500)
+                        .sampleSizes(8, 5)
+                        .build()));
+
+    var index = Mp4SyncSampleReader.read(source, VIDEO, List.of(VIDEO, OTHER_VIDEO));
+
+    assertThat(index.measured().get(1).intervalBytes()).containsExactly(10, 10, 10, 10);
+  }
+
+  @Test
+  @DisplayName(
+      "Should leave out another video track but measure the required streams when that track"
+          + " cannot be measured")
+  void shouldLeaveOutAnotherVideoTrackButMeasureRequiredStreamsWhenThatTrackCannotBeMeasured()
+      throws Exception {
+    var source =
+        write(
+            SyntheticMp4.builder()
+                .mediaTimescale(1_000)
+                .sampleDurations(4, 500)
+                .secondTrack(
+                    SyntheticMp4.builder()
+                        .mediaTimescale(90_000)
+                        .sampleDurations(8, 22_500)
+                        .edit(new Edit(1_000, 0))
+                        .edit(new Edit(1_000, 0))
+                        .build()));
+
+    var index = Mp4SyncSampleReader.read(source, VIDEO, List.of(VIDEO, OTHER_VIDEO));
+
+    assertThat(index.measured()).extracting(TrackMeasurement::streamIndex).containsExactly(0);
+  }
+
+  @Test
+  @DisplayName(
+      "Should measure nothing when an audio track gives every sample a duration of one tick")
+  void shouldMeasureNothingWhenAudioTrackGivesEverySampleDurationOfOneTick() throws Exception {
+    var source =
+        write(
+            SyntheticMp4.builder()
+                .mediaTimescale(1_000)
+                .sampleDurations(4, 500)
+                .secondTrack(audio().sampleDurations(96_000, 1).sampleSizes(96_000, 4).build()));
+
+    var index = Mp4SyncSampleReader.read(source, VIDEO, List.of(VIDEO, AUDIO));
+
+    assertThat(index.keyframes()).isInstanceOf(Listed.class);
+    assertThat(index.measured()).isEmpty();
+  }
+
+  @Test
+  @DisplayName("Should measure nothing when an audio track has more samples than the reader lists")
+  void shouldMeasureNothingWhenAudioTrackHasMoreSamplesThanReaderLists() throws Exception {
+    var source =
+        write(
+            SyntheticMp4.builder()
+                .mediaTimescale(1_000)
+                .sampleDurations(4, 500)
+                .secondTrack(
+                    audio().sampleDurations(4_194_305, 2).sampleSizes(4_194_305, 4).build()));
+
+    var index = Mp4SyncSampleReader.read(source, VIDEO, List.of(VIDEO, AUDIO));
+
+    assertThat(index.measured()).isEmpty();
+  }
+
+  @Test
+  @DisplayName("Should sum the compact sample sizes when the track lists them in stz2")
+  void shouldSumCompactSampleSizesWhenTrackListsThemInStz2() throws Exception {
+    var source =
+        write(
+            SyntheticMp4.builder()
+                .mediaTimescale(1_000)
+                .sampleDurations(4, 500)
+                .sampleSizes(4, 9)
+                .compactSampleSizes(true));
+
+    var index = Mp4SyncSampleReader.read(source, VIDEO, List.of(VIDEO));
+
+    assertThat(index.measured().getFirst().measuredBytes()).isEqualTo(36);
+  }
+
+  @Test
+  @DisplayName(
+      "Should measure nothing when an audio edit's empty duration moves a sample past the largest"
+          + " time")
+  void shouldMeasureNothingWhenAudioEditsEmptyDurationMovesSamplePastLargestTime()
+      throws Exception {
+    var source =
+        write(
+            SyntheticMp4.builder()
+                .movieTimescale(1)
+                .mediaTimescale(1)
+                .sampleDurations(4, 1)
+                .secondTrack(
+                    SyntheticMp4.builder()
+                        .handler("soun")
+                        .mediaTimescale(1)
+                        .sampleDurations(4, 1_024)
+                        .editListVersion(1)
+                        .edit(new Edit(Long.MAX_VALUE - 2_048, -1))
+                        .edit(new Edit(4_096, 0))
+                        .build()));
+
+    var index = Mp4SyncSampleReader.read(source, VIDEO, List.of(VIDEO, AUDIO));
+
+    assertThat(index.keyframes()).isInstanceOf(Listed.class);
+    assertThat(index.measured()).isEmpty();
+  }
+
+  @Test
+  @DisplayName("Should measure nothing when an audio track's edit has no duration")
+  void shouldMeasureNothingWhenAudioTracksEditHasNoDuration() throws Exception {
+    var source =
+        write(
+            SyntheticMp4.builder()
+                .mediaTimescale(1_000)
+                .sampleDurations(4, 500)
+                .secondTrack(audio().sampleDurations(4, 24_000).edit(new Edit(0, 0)).build()));
+
+    var index = Mp4SyncSampleReader.read(source, VIDEO, List.of(VIDEO, AUDIO));
+
+    assertThat(index.measured()).isEmpty();
   }
 
   private static SyntheticMp4.SyntheticMp4Builder audio() {

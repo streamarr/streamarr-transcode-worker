@@ -65,7 +65,7 @@ final class ContainerIndexProbe {
           chosen.trackId().isPresent()
               ? Mp4SyncSampleReader.read(
                   probed.source(),
-                  new TrackStream(chosen.streamIndex(), chosen.trackId().get()),
+                  new TrackStream(chosen.streamIndex(), chosen.trackId().get(), true),
                   measuredStreams(probed.ffprobeOutput().path("streams"), chosen))
               : ContainerIndex.keyframesOnly(
                   new Unusable(
@@ -82,26 +82,30 @@ final class ContainerIndexProbe {
   }
 
   /**
-   * The streams that a measurement holds: the chosen video stream and every audio stream, each with
-   * the MP4 track that ffprobe names as its id. An audio stream without a track leaves nothing to
-   * measure, because the measurement must hold every audio stream.
+   * The streams that a measurement holds, each with the MP4 track that ffprobe names as its id: the
+   * chosen video stream and every audio stream, which it requires, and every other video stream
+   * that is not an attached picture. A required stream without a track leaves nothing to measure.
    */
   private static List<TrackStream> measuredStreams(JsonNode streams, ChosenVideoStream chosen) {
     var measured = new ArrayList<TrackStream>();
-    measured.add(new TrackStream(chosen.streamIndex(), chosen.trackId().orElseThrow()));
     var position = 0;
     for (var stream : streams) {
       var index = stream.path("index").asInt(position++);
-      if (!"audio".equals(stream.path("codec_type").asString(""))) {
-        continue;
-      }
-
+      var codecType = stream.path("codec_type").asString("");
+      var isChosen = index == chosen.streamIndex();
+      var isRequired = isChosen || "audio".equals(codecType);
+      var isOtherVideo =
+          !isChosen
+              && "video".equals(codecType)
+              && stream.path("disposition").path("attached_pic").asInt() != 1;
       var track = ChosenVideoStream.trackId(stream);
-      if (track.isEmpty()) {
+      if (isRequired && track.isEmpty()) {
         return List.of();
       }
 
-      measured.add(new TrackStream(index, track.get()));
+      if ((isRequired || isOtherVideo) && track.isPresent()) {
+        measured.add(new TrackStream(index, track.get(), isRequired));
+      }
     }
 
     return measured;

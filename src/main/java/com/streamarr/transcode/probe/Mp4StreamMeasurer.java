@@ -42,47 +42,59 @@ final class Mp4StreamMeasurer {
 
   private Mp4StreamMeasurer() {}
 
-  /** One video or audio stream that ffprobe listed, with the MP4 track that holds it. */
-  record TrackStream(int streamIndex, long trackId) {}
+  /**
+   * One video or audio stream that ffprobe listed, with the MP4 track that holds it. A measurement
+   * holds every required stream. A stream that is not required, such as a second video stream, is
+   * left out when it cannot be measured.
+   */
+  record TrackStream(int streamIndex, long trackId, boolean isRequired) {}
 
   /**
-   * Measures the chosen video track and every listed track, or nothing when a track cannot be
-   * measured exactly. {@code keyframeCount} is the number of keyframes that the keyframe reader
-   * listed for the chosen track, which the measurement's intervals must match.
+   * Measures the listed streams, or nothing when a required stream cannot be measured exactly.
+   * {@code keyframeCount} is the number of keyframes that the keyframe reader listed for the chosen
+   * track, which the measurement's intervals must match.
    */
   static Optional<List<TrackMeasurement>> measure(
       ByteBuffer movie, TrackStream chosen, List<TrackStream> streams, int keyframeCount) {
     try {
       var movieTimescale = timescale(child(movie, "mvhd").orElseThrow(() -> malformed("mvhd")));
       var chosenTrack = Track.read(movie, chosen.trackId(), movieTimescale);
-      if (chosenTrack.isEmpty()) {
+      if (chosenTrack.isEmpty() || chosenTrack.get().keyframes().size() != keyframeCount) {
         return Optional.empty();
       }
 
-      var keyframes = chosenTrack.get().keyframes();
-      if (keyframes.size() != keyframeCount) {
-        return Optional.empty();
-      }
-
+      var measuring = new Measuring(movie, movieTimescale, chosen.trackId(), chosenTrack.get());
       var measured = new ArrayList<TrackMeasurement>();
       for (var stream : streams) {
-        var track =
-            stream.trackId() == chosen.trackId()
-                ? chosenTrack
-                : Track.read(movie, stream.trackId(), movieTimescale);
-        var measurement =
-            track.flatMap(
-                candidate -> candidate.measure(stream.streamIndex(), chosenTrack.get(), keyframes));
-        if (measurement.isEmpty()) {
+        var measurement = measuring.measure(stream);
+        if (measurement.isEmpty() && stream.isRequired()) {
           return Optional.empty();
         }
 
-        measured.add(measurement.get());
+        measurement.ifPresent(measured::add);
       }
 
       return Optional.of(List.copyOf(measured));
     } catch (ContainerIndexException | BufferUnderflowException | ArithmeticException _) {
       return Optional.empty();
+    }
+  }
+
+  /** The movie box and the chosen track, whose keyframe intervals every measured stream follows. */
+  private record Measuring(
+      ByteBuffer movie, long movieTimescale, long chosenTrackId, Track chosen) {
+
+    Optional<TrackMeasurement> measure(TrackStream stream) {
+      try {
+        var track =
+            stream.trackId() == chosenTrackId
+                ? Optional.of(chosen)
+                : Track.read(movie, stream.trackId(), movieTimescale);
+        return track.flatMap(
+            candidate -> candidate.measure(stream.streamIndex(), chosen, chosen.keyframes()));
+      } catch (ContainerIndexException | BufferUnderflowException | ArithmeticException _) {
+        return Optional.empty();
+      }
     }
   }
 
@@ -187,6 +199,10 @@ final class Mp4StreamMeasurer {
       }
 
       var durationRuns = runs(child(sampleTable, "stts").orElseThrow(() -> malformed("stts")));
+      if ("soun".equals(handler) && isChunkedAudio(durationRuns)) {
+        return Optional.empty();
+      }
+
       var sizes = sampleSizes(sampleTable);
       if (sizes.length == 0 || sizes.length != totalCount(durationRuns)) {
         return Optional.empty();
@@ -235,7 +251,7 @@ final class Mp4StreamMeasurer {
         intervals[interval] += size;
         bytes += size;
         firstPresentation = Math.min(firstPresentation, presentationTimes[sample]);
-        lastEnd = Math.max(lastEnd, presentationTimes[sample] + durations[sample]);
+        lastEnd = Math.max(lastEnd, Math.addExact(presentationTimes[sample], durations[sample]));
       }
 
       if (Arrays.stream(intervals).anyMatch(count -> count > LARGEST_INTERVAL_BYTES)) {
@@ -253,7 +269,7 @@ final class Mp4StreamMeasurer {
               bytes,
               sizes.length - (long) first,
               timescale,
-              lastEnd - firstPresentation,
+              Math.subtractExact(lastEnd, firstPresentation),
               counts));
     }
 
@@ -329,15 +345,13 @@ final class Mp4StreamMeasurer {
     }
 
     var first = firstKept(timing, presentationTimes, sync);
-    var mediaEnd = timing.edit().mediaEnd(timing.movieTimescale(), timing.timescale());
-    if (mediaEnd.isPresent()
-        && dropsSamplesAfterEnd(timing, presentationTimes, durations, mediaEnd.get())) {
+    if (timing.hasEditList() && dropsSamplesAfterEnd(timing, presentationTimes, durations)) {
       throw malformed("edit list ends before the track's last sample");
     }
 
     for (var i = 0; i < count; i++) {
-      presentationTimes[i] += shift;
-      decodeTimes[i] += shift;
+      presentationTimes[i] = Math.addExact(presentationTimes[i], shift);
+      decodeTimes[i] = Math.addExact(decodeTimes[i], shift);
     }
 
     return new Track(
@@ -400,7 +414,8 @@ final class Mp4StreamMeasurer {
    * it.
    */
   private static boolean dropsSamplesAfterEnd(
-      Timing timing, long[] presentationTimes, long[] durations, long mediaEnd) {
+      Timing timing, long[] presentationTimes, long[] durations) {
+    var mediaEnd = timing.edit().mediaEnd(timing.movieTimescale(), timing.timescale());
     var last = presentationTimes.length - 1;
     for (var sample = 0; sample < presentationTimes.length; sample++) {
       if (timing.isVideo() && presentationTimes[sample] >= mediaEnd) {
@@ -500,6 +515,15 @@ final class Mp4StreamMeasurer {
     }
 
     return (int) count;
+  }
+
+  /**
+   * FFmpeg's mov demuxer returns an audio track whose only stts entry gives every sample a duration
+   * of 1, as uncompressed audio often has, as packets of whole chunks rather than one packet for
+   * each sample. The measurer measures samples, so it leaves such a track out.
+   */
+  private static boolean isChunkedAudio(List<Run> durationRuns) {
+    return durationRuns.size() == 1 && durationRuns.getFirst().value() == 1;
   }
 
   private static long totalCount(List<Run> runs) {

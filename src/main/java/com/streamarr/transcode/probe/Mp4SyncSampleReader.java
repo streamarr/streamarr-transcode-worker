@@ -45,7 +45,7 @@ final class Mp4SyncSampleReader {
   private Mp4SyncSampleReader() {}
 
   static KeyframeIndex read(Path source, long trackId) throws IOException {
-    return read(source, new TrackStream(0, trackId), List.of()).keyframes();
+    return read(source, new TrackStream(0, trackId, true), List.of()).keyframes();
   }
 
   /**

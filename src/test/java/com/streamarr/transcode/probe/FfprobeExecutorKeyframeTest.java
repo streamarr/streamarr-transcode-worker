@@ -27,6 +27,7 @@ import build.buf.gen.streamarr.transcode.v1.KeyframePositionSource;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositions;
 import build.buf.gen.streamarr.transcode.v1.KeyframesUnavailable;
 import build.buf.gen.streamarr.transcode.v1.KeyframesUnavailableReason;
+import build.buf.gen.streamarr.transcode.v1.MeasuredStream;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeKeyframePositionsPart;
@@ -346,6 +347,63 @@ class FfprobeExecutorKeyframeTest {
                             .build()
                             .getSerializedSize())
                     .isLessThan(131_072));
+  }
+
+  @Test
+  @DisplayName(
+      "Should measure another video stream but no attached picture when the MP4 holds both")
+  void shouldMeasureAnotherVideoStreamButNoAttachedPictureWhenMp4HoldsBoth(@TempDir Path directory)
+      throws Exception {
+    var ffprobe =
+        twoTrackFfprobe(
+            """
+            {"index":1,"codec_type":"video","id":"0x2"},
+            {"index":2,"codec_type":"video","disposition":{"attached_pic":1}}
+            """);
+
+    var report = ffprobe.executor().probe(twoTrackSource(directory), keyframeRequest());
+
+    assertThat(report.result().getMedia().getStreamMeasurements().getStreamsList())
+        .extracting(MeasuredStream::getStreamIndex)
+        .containsExactly(0, 1);
+  }
+
+  @Test
+  @DisplayName("Should report no measurement when ffprobe names no track for an audio stream")
+  void shouldReportNoMeasurementWhenFfprobeNamesNoTrackForAudioStream(@TempDir Path directory)
+      throws Exception {
+    var ffprobe = twoTrackFfprobe("{\"index\":1,\"codec_type\":\"audio\"}");
+
+    var report = ffprobe.executor().probe(twoTrackSource(directory), keyframeRequest());
+
+    assertThat(report.result().getMedia().getKeyframes().hasPositions()).isTrue();
+    assertThat(report.result().getMedia().hasStreamMeasurements()).isFalse();
+    assertThat(report.streamMeasurementParts()).isEmpty();
+  }
+
+  /** An MP4 whose video track 1 has keyframes at 0, 0.5, 1 and 1.5 s, beside video track 2. */
+  private static Path twoTrackSource(Path directory) throws IOException {
+    return Files.write(
+        directory.resolve("source.mp4"),
+        SyntheticMp4.builder()
+            .mediaTimescale(1_000)
+            .sampleDurations(4, 500)
+            .secondTrack(
+                SyntheticMp4.builder().mediaTimescale(1_000).sampleDurations(4, 500).build())
+            .build()
+            .bytes());
+  }
+
+  private static ScriptedFfprobe twoTrackFfprobe(String otherStreams) {
+    return ScriptedFfprobe.builder()
+        .streams(
+            """
+            {"format":{"format_name":"mov,mp4,m4a,3gp,3g2,mj2","start_time":"0.000000"},
+             "streams":[{"index":0,"codec_type":"video","id":"0x1"},%s]}
+            """
+                .formatted(otherStreams))
+        .packet("1.500000%+#1", "{\"packets\":[{\"pts\":1500,\"dts\":1500,\"flags\":\"K__\"}]}")
+        .build();
   }
 
   @ParameterizedTest

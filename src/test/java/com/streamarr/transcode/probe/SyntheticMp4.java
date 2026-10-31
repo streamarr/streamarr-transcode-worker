@@ -10,9 +10,9 @@ import lombok.Builder;
 import lombok.Singular;
 
 /**
- * A minimal MP4 file: ftyp, then a moov with track 1, whose movie timescale is 1,000, and track 2
- * when {@code secondTrack} describes one. With {@code version1Headers}, the mvhd, tkhd and mdhd
- * boxes use their version 1 layout with 64-bit times.
+ * A minimal MP4 file: ftyp, then a moov with track 1, whose movie timescale is 1,000 unless {@code
+ * movieTimescale} names another, and track 2 when {@code secondTrack} describes one. With {@code
+ * version1Headers}, the mvhd, tkhd and mdhd boxes use their version 1 layout with 64-bit times.
  */
 @Builder
 record SyntheticMp4(
@@ -32,7 +32,8 @@ record SyntheticMp4(
     int editListVersion,
     @Singular List<Edit> edits,
     boolean fragmented,
-    SyntheticMp4 secondTrack) {
+    SyntheticMp4 secondTrack,
+    long movieTimescale) {
 
   static final long TRACK_ID = 1;
 
@@ -53,7 +54,7 @@ record SyntheticMp4(
 
   byte[] bytes() {
     var movie = new ArrayList<byte[]>();
-    movie.add(timedHeader("mvhd", 1_000));
+    movie.add(timedHeader("mvhd", movieTimescale == 0 ? 1_000 : movieTimescale));
     movie.add(trackBox(TRACK_ID));
     if (secondTrack != null) {
       movie.add(secondTrack.trackBox(SECOND_TRACK_ID));
