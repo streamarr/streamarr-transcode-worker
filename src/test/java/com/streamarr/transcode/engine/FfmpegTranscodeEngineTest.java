@@ -229,8 +229,8 @@ class FfmpegTranscodeEngineTest {
     var hardware =
         HardwareEncodingCapability.builder()
             .available(true)
-            .encoders(Set.of("h264_nvenc"))
-            .accelerator("cuda")
+            .encoders(Set.of("h264_qsv"))
+            .accelerator("qsv")
             .build();
     executor = engineLaunching(runningProcess(), createCapabilityService(true, hardware));
     var request = createRequest(TranscodeMode.FULL_TRANSCODE, "h264");

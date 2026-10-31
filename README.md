@@ -53,6 +53,18 @@ The background probe capacity grows by 1 when a probe ends while at least half o
 
 Background probes and keyframe packet scans run at nice 19, and playback probes at the worker's own priority. While probes run, the worker logs a summary each minute, with each capacity and the brakes since the previous summary. [Developer Setup](docs/dev-setup.md#configuration) lists every setting.
 
+## Encoders
+
+At startup the worker gives each codec family one encoder backend and reports it when it registers. Every job of that codec family runs that backend. The worker tries each hardware encoder that FFmpeg lists with a one-frame test encode. A hardware encoder becomes usable only if it passes that encode and the worker knows how to force the job's codec profile, tier and level on it. The software encoder (libx264, libx265 or libsvtav1) becomes usable if it passes the same encode.
+
+When a codec family has several usable encoders, the worker always picks them in this order:
+
+1. A hardware encoder that [ADR 0037](https://github.com/streamarr/streamarr-adr/blob/main/adr/0037-worker-delivers-fmp4-segments-from-ffmpeg-stdout.adoc) lists as keyframe-verified
+2. Any other hardware encoder
+3. The software encoder
+
+Among equally verified hardware encoders, the API decides: NVENC, QSV, AMF, VideoToolbox, then VAAPI. A host therefore always resolves a codec family to the same backend, and a variant's replacement attempts keep the backend of its first job attempt.
+
 ## Architecture
 
 The worker runs as a separate Java service. It connects to the server over gRPC, reads files from a shared media library, reads FFmpeg's fragmented MP4 output from a pipe, and uploads each HLS media segment back to the server. Workers can run alongside the server or on other machines.

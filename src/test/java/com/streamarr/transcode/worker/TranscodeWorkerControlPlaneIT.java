@@ -95,9 +95,11 @@ import org.junit.jupiter.params.provider.CsvSource;
 @Timeout(value = 2, unit = TimeUnit.MINUTES)
 class TranscodeWorkerControlPlaneIT {
 
-  // The scripted FFmpeg lists this encoder in -encoders and passes its test encode.
+  // The scripted FFmpeg lists these encoders in -encoders and passes their test encodes.
   private static final String H264_NVENC_ENCODERS =
       "V....D h264_nvenc           NVIDIA NVENC H.264 encoder (codec h264)\n";
+  private static final String H264_QSV_ENCODERS =
+      "V....D h264_qsv             H.264 (Intel Quick Sync Video acceleration) (codec h264)\n";
 
   @TempDir Path tempDir;
 
@@ -138,7 +140,9 @@ class TranscodeWorkerControlPlaneIT {
     var service = new ControllableWorkerService();
 
     try (var server = new ControlPlaneServer(service);
-        var worker = hardwareWorker(preparedMediaRoot(), ScriptedProcessLauncher.running())) {
+        var worker =
+            hardwareWorker(
+                preparedMediaRoot(), ScriptedProcessLauncher.running(), H264_QSV_ENCODERS)) {
       server.start();
       worker.start("localhost", server.port());
 
@@ -156,6 +160,42 @@ class TranscodeWorkerControlPlaneIT {
                   backend(VideoCodecFamily.VIDEO_CODEC_FAMILY_AV1, "libsvtav1")
                       .setKind(EncoderKind.ENCODER_KIND_SOFTWARE),
                   true));
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should advertise h264_nvenc as not keyframe-verified and force the job's codec profile and"
+          + " level on it when NVENC passes its test encode")
+  void
+      shouldAdvertiseH264NvencAsNotKeyframeVerifiedAndForceTheJobsCodecProfileAndLevelOnItWhenNvencPassesItsTestEncode()
+          throws Exception {
+    var service = new ControllableWorkerService();
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJob();
+    var encode =
+        job.toBuilder()
+            .setDecision(
+                job.getDecision().toBuilder()
+                    .setVideoCodecFamily("h264")
+                    .setVideo(levelFortyEncodeOf(VideoCodecFamily.VIDEO_CODEC_FAMILY_H264)))
+            .build();
+
+    try (var server = new ControlPlaneServer(service);
+        var worker = hardwareWorker(preparedMediaRoot(), launcher, H264_NVENC_ENCODERS)) {
+      server.start();
+      worker.start("localhost", server.port());
+
+      assertThat(service.registration().getCapabilities().getVideoEncodersList())
+          .contains(
+              workerVerifiedEncoder(
+                  backend(VideoCodecFamily.VIDEO_CODEC_FAMILY_H264, "h264_nvenc")
+                      .setKind(EncoderKind.ENCODER_KIND_HARDWARE),
+                  false));
+      service.sendStart(service.registeredWorker(), encode);
+      service.awaitStarted(encode);
+      assertThat(launcher.command(fromProto(encode.getJobAttemptId())))
+          .containsSubsequence("-c:v", "h264_nvenc", "-profile:v", "high", "-level:v", "4.0");
     }
   }
 
@@ -180,7 +220,7 @@ class TranscodeWorkerControlPlaneIT {
             .build();
 
     try (var server = new ControlPlaneServer(service);
-        var worker = hardwareWorker(preparedMediaRoot(), launcher)) {
+        var worker = hardwareWorker(preparedMediaRoot(), launcher, H264_NVENC_ENCODERS)) {
       server.start();
       worker.start("localhost", server.port());
 
@@ -253,7 +293,9 @@ class TranscodeWorkerControlPlaneIT {
             .build();
 
     try (var server = new ControlPlaneServer(service);
-        var worker = hardwareWorker(preparedMediaRoot(), ScriptedProcessLauncher.running())) {
+        var worker =
+            hardwareWorker(
+                preparedMediaRoot(), ScriptedProcessLauncher.running(), H264_NVENC_ENCODERS)) {
       server.start();
       worker.start("localhost", server.port());
 
@@ -855,8 +897,9 @@ class TranscodeWorkerControlPlaneIT {
     return worker(mediaRoot, engine(launcher), slots);
   }
 
-  private TranscodeWorker hardwareWorker(Path mediaRoot, ScriptedProcessLauncher launcher) {
-    return worker(mediaRoot, engineBuilder(launcher, H264_NVENC_ENCODERS).build(), 1);
+  private TranscodeWorker hardwareWorker(
+      Path mediaRoot, ScriptedProcessLauncher launcher, String encodersOutput) {
+    return worker(mediaRoot, engineBuilder(launcher, encodersOutput).build(), 1);
   }
 
   private TranscodeWorker worker(Path mediaRoot, FfmpegTranscodeEngine engine, int slots) {
