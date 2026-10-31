@@ -74,12 +74,15 @@ function keyframe(facts, frame) {
   };
 }
 
-/** The first frame at or after each forced time that the recording reaches, in presentation order. */
+// A planned forced time that the recording never reaches, so that a truncated recording fails.
+const MISSING_KEYFRAME = { presentationTime: null, sync: false, nalUnitType: null, leadingPictures: null, startsClosedGop: false };
+
+/** The first frame at or after each forced time, in presentation order, else undefined. */
 function forcedFrames(facts, order, forcedKeyframeTimes) {
-  return forcedKeyframeTimes.flatMap((time) => {
-    const frame = order.find((entry) => entry.presentationTime >= time * facts.timescale);
-    return frame === undefined ? [] : [{ time, frame }];
-  });
+  return forcedKeyframeTimes.map((time) => ({
+    time,
+    frame: order.find((entry) => entry.presentationTime >= time * facts.timescale),
+  }));
 }
 
 function gopRestart(facts, order, { forcedKeyframeTimes, gopFrames, skippedForcedTime }) {
@@ -112,7 +115,7 @@ export function keyframeVerdicts(facts, plan) {
   const order = presentationOrder(facts);
   const forced = forcedFrames(facts, order, plan.forcedKeyframeTimes).map(({ time, frame }) => ({
     time,
-    ...keyframe(facts, frame),
+    ...(frame === undefined ? MISSING_KEYFRAME : keyframe(facts, frame)),
   }));
   const forcedTimes = new Set(forced.map((entry) => entry.presentationTime));
   const extraKeyframes = [];

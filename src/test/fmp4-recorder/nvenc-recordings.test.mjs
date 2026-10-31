@@ -237,10 +237,10 @@ describe('keyframe verdicts', () => {
     assert.equal(verdicts.encoderAddsKeyframes, true);
   });
 
-  it('Should leave out forced times after the last frame and describe the first frame when a replacement attempt starts between boundaries', () => {
+  it('Should describe the first frame when a replacement attempt starts between boundaries', () => {
     const frames = inOrder([0, 6]).slice(4, 16);
 
-    const verdicts = keyframeVerdicts(tenFrameFacts(frames.map(([frame, sync]) => [frame, frame === 4 || sync, 20])), plan({ forcedKeyframeTimes: [1, 2] }));
+    const verdicts = keyframeVerdicts(tenFrameFacts(frames.map(([frame, sync]) => [frame, frame === 4 || sync, 20])), plan({ forcedKeyframeTimes: [1] }));
 
     assert.deepEqual(verdicts.firstFrame, {
       presentationTime: 4 * FRAME,
@@ -253,6 +253,21 @@ describe('keyframe verdicts', () => {
       verdicts.forcedKeyframes.map((entry) => entry.time),
       [1],
     );
+  });
+
+  it('Should find a forced keyframe missing and fail both keyframe verdicts when the recording ends before a planned forced time', () => {
+    const verdicts = keyframeVerdicts(tenFrameFacts(inOrder([0, 10], 16)), plan());
+
+    assert.deepEqual(verdicts.forcedKeyframes[2], {
+      time: 2,
+      presentationTime: null,
+      sync: false,
+      nalUnitType: null,
+      leadingPictures: null,
+      startsClosedGop: false,
+    });
+    assert.equal(verdicts.everyForcedKeyframeIsASyncSample, false);
+    assert.equal(verdicts.everyForcedKeyframeStartsAClosedGop, false);
   });
 
   it('Should find that the GOP count restarts at the forced keyframe before a missed one when the next keyframe lands one GOP after it', () => {
@@ -443,7 +458,7 @@ describe('analysis and offline check', () => {
       'expectedCodecString=hvc1.1.6.L120.90',
       'startSequenceNumber=0',
       'gopFrames=9',
-      'forcedKeyframeTimes=0,1,2',
+      'forcedKeyframeTimes=0,1',
       'skippedForcedTime=',
       `replaces=${replaces}`,
     ].join('\n');
