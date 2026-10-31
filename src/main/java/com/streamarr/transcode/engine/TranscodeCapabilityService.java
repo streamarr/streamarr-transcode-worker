@@ -216,7 +216,7 @@ public class TranscodeCapabilityService {
   private Set<String> detectHardwareEncoders() {
     try {
       var process = processFactory.start(ffmpegReadingStandardOutput("-encoders"));
-      var encoders = new HashSet<String>();
+      var hardwareEncoders = new HashSet<String>();
 
       try (var reader =
           new BufferedReader(
@@ -225,14 +225,14 @@ public class TranscodeCapabilityService {
         while ((line = reader.readLine()) != null) {
           var matcher = HW_ENCODER_PATTERN.matcher(line);
           if (matcher.find()) {
-            encoders.add(matcher.group(1));
+            hardwareEncoders.add(matcher.group(1));
           }
         }
       }
 
       process.waitFor();
       var usableEncoders =
-          encoders.stream()
+          hardwareEncoders.stream()
               .filter(this::canEncodeCpuFrames)
               .collect(Collectors.toUnmodifiableSet());
       if (Thread.currentThread().isInterrupted()) {
