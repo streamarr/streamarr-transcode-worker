@@ -134,7 +134,7 @@ while [[ $# -gt 0 ]]; do
     --rungs) need_value "$@"; RUNGS=$(only_from "$ALL_RUNGS" "$2"); shift ;;
     --time-limit)
       need_value "$@"
-      [[ "$2" =~ ^[0-9]+$ && "$2" -ge 60 ]] || die "--time-limit needs whole seconds, at least 60"
+      [[ "$2" =~ ^[1-9][0-9]*$ ]] || die "--time-limit needs whole seconds, at least 1"
       TIME_LIMIT_S=$2
       shift
       ;;
@@ -290,40 +290,19 @@ gpu_failed() {
 
 [[ "$(uname -s)" == Linux ]] || skip "this host runs $(uname -s); the recordings need Linux with an NVIDIA GPU"
 command -v docker >/dev/null 2>&1 || skip "Docker is not on PATH"
-docker info >/dev/null 2>&1 || skip "cannot reach the Docker daemon (try a user in the docker group)"
 command -v node >/dev/null 2>&1 || skip "Node $(node_major_wanted) is not on PATH (the analysis runs on the host)"
 NODE_MAJOR=$(node --version | sed 's/^v//; s/\..*//')
 [[ "$NODE_MAJOR" == "$(node_major_wanted)" ]] || skip "Node $(node_major_wanted) is needed, and node is version $NODE_MAJOR"
 
+# ---------------------------------------------------------------------------------------------
+# Work directory, time limit and cleanup, in place before the first Docker call
+# ---------------------------------------------------------------------------------------------
+
 RUN_ID="nvenc-$(date +%Y%m%d%H%M%S)-$$"
-# Every container: no network, no capabilities, no privilege gain, a read-only root filesystem
-# with a small /tmp, the GPU, the host user's ids so the files it writes stay the user's, and a
-# label so that cleanup finds exactly this run's containers.
-DOCKER_RUN=(run --rm --network none --cap-drop ALL --security-opt no-new-privileges
-  --read-only --tmpfs "/tmp:rw,noexec,nosuid,size=64m" --label "streamarr.nvenc-recorder=$RUN_ID"
-  --user "$(id -u):$(id -g)" "${GPU_RUN_ARGS[@]}")
-
-docker image inspect "$IMAGE" >/dev/null 2>&1 || docker pull "$IMAGE" >/dev/null ||
-  skip "cannot pull $IMAGE"
-
-if ! GPU_INFO=$(docker "${DOCKER_RUN[@]}" --entrypoint nvidia-smi "$IMAGE" \
-  --query-gpu=driver_version,compute_cap --format=csv,noheader 2>&1); then
-  gpu_failed "nvidia-smi in a container with the GPU" "$GPU_INFO"
+CREATED_RESULTS_DIR=0
+if [[ ! -d "$RESULTS_DIR" ]]; then
+  CREATED_RESULTS_DIR=1
 fi
-GPU_INFO=$(printf '%s\n' "$GPU_INFO" | head -n 1)
-for encoder in $ENCODERS; do
-  if ! out=$(docker "${DOCKER_RUN[@]}" --entrypoint /cnb/lifecycle/launcher "$IMAGE" \
-    ffmpeg -nostdin -hide_banner -v error -f lavfi -i color=size=320x240:rate=24 -frames:v 1 \
-    -c:v "$encoder" -f null - 2>&1); then
-    gpu_failed "a one-frame $encoder encode" "$out"
-  fi
-done
-printf 'preflight: GPU driver %s, compute capability %s; %s encode one frame\n' \
-  "${GPU_INFO%%,*}" "${GPU_INFO#*, }" "${ENCODERS// /, }"
-
-# ---------------------------------------------------------------------------------------------
-# Work directory, time limit and cleanup
-# ---------------------------------------------------------------------------------------------
 
 mkdir -p "$RESULTS_DIR"
 RESULTS_DIR="$(cd "$RESULTS_DIR" && pwd)"
@@ -332,8 +311,34 @@ mkdir "$WORK" "$WORK/out" "$WORK/logs"
 CHILD=""
 WATCHDOG=""
 
+# bounded <seconds> <command...>: runs the command and stops it after that many seconds.
+bounded() {
+  local seconds=$1 pid guard status
+  shift
+  "$@" &
+  pid=$!
+  # The guard polls and ends by itself soon after the command does, so that no guard outlives a
+  # run even when cleanup ignores the signals that would stop it. It holds no output, so that a
+  # command substitution or a pipe around this script never waits for it.
+  (
+    ticks=$((seconds * 10))
+    while ((ticks > 0)) && kill -0 "$pid" 2>/dev/null; do
+      sleep 0.1
+      ticks=$((ticks - 1))
+    done
+    if ((ticks == 0)); then
+      kill "$pid" 2>/dev/null
+    fi
+  ) >/dev/null 2>&1 3>&- &
+  guard=$!
+  wait "$pid"
+  status=$?
+  wait "$guard" 2>/dev/null
+  return "$status"
+}
+
 cleanup() {
-  local status=$?
+  local status=$? container
   trap '' INT TERM HUP
   set +e
   if [[ -n "$WATCHDOG" ]]; then
@@ -343,8 +348,13 @@ cleanup() {
   if [[ -n "$CHILD" ]]; then
     kill "$CHILD" 2>/dev/null
   fi
-  docker ps -q --filter "label=streamarr.nvenc-recorder=$RUN_ID" | xargs docker rm -f >/dev/null 2>&1
+  for container in $(bounded 30 docker ps -q --filter "label=streamarr.nvenc-recorder=$RUN_ID" 2>/dev/null); do
+    bounded 30 docker rm -f "$container" >/dev/null 2>&1
+  done
   rm -rf "$WORK"
+  if ((CREATED_RESULTS_DIR)); then
+    rmdir "$RESULTS_DIR" 2>/dev/null
+  fi
   exit "$status"
 }
 trap cleanup EXIT
@@ -352,12 +362,13 @@ trap 'exit 130' INT
 trap 'exit 124' TERM
 trap 'exit 129' HUP
 
-# The watchdog ends the run at the time limit; each long step runs as a background child that the
-# shell waits for, so the TERM trap runs at once instead of after the child.
-# Its own messages go to /dev/null, so that stopping it after a complete run prints nothing.
+# The watchdog ends the run at the time limit; each Docker call and long step runs as a background
+# child that the shell waits for, so the TERM trap runs at once instead of after the child.
+# It writes only its message, to the saved standard error, so that stopping it prints nothing and
+# a pipe that reads this script's output never waits for it.
 exec 3>&2
 (sleep "$TIME_LIMIT_S" && printf '%s: the time limit of %s s is reached\n' "$SCRIPT_NAME" "$TIME_LIMIT_S" >&3 &&
-  kill -TERM $$) 2>/dev/null &
+  kill -TERM $$) >/dev/null 2>&1 &
 WATCHDOG=$!
 
 run_child() {
@@ -368,6 +379,43 @@ run_child() {
   CHILD=""
   return "$status"
 }
+
+# capture <name> <command...>: runs the command as a child, its output in $WORK/<name>.
+capture() {
+  local name=$1
+  shift
+  run_child "$@" >"$WORK/$name" 2>&1
+}
+
+# Every container: no network, no capabilities, no privilege gain, a read-only root filesystem
+# with a small /tmp, the GPU, the host user's ids so the files it writes stay the user's, and a
+# label so that cleanup finds exactly this run's containers.
+DOCKER_RUN=(run --rm --network none --cap-drop ALL --security-opt no-new-privileges
+  --read-only --tmpfs "/tmp:rw,noexec,nosuid,size=64m" --label "streamarr.nvenc-recorder=$RUN_ID"
+  --user "$(id -u):$(id -g)" "${GPU_RUN_ARGS[@]}")
+
+# ---------------------------------------------------------------------------------------------
+# GPU preflight
+# ---------------------------------------------------------------------------------------------
+
+capture docker-info docker info || skip "cannot reach the Docker daemon (try a user in the docker group)"
+capture image docker image inspect "$IMAGE" || capture image docker pull "$IMAGE" ||
+  skip "cannot pull $IMAGE"
+
+if ! capture gpu docker "${DOCKER_RUN[@]}" --entrypoint nvidia-smi "$IMAGE" \
+  --query-gpu=driver_version,compute_cap --format=csv,noheader; then
+  gpu_failed "nvidia-smi in a container with the GPU" "$(cat "$WORK/gpu")"
+fi
+GPU_INFO=$(head -n 1 "$WORK/gpu")
+for encoder in $ENCODERS; do
+  if ! capture one-frame docker "${DOCKER_RUN[@]}" --entrypoint /cnb/lifecycle/launcher "$IMAGE" \
+    ffmpeg -nostdin -hide_banner -v error -f lavfi -i color=size=320x240:rate=24 -frames:v 1 \
+    -c:v "$encoder" -f null -; then
+    gpu_failed "a one-frame $encoder encode" "$(cat "$WORK/one-frame")"
+  fi
+done
+printf 'preflight: GPU driver %s, compute capability %s; %s encode one frame\n' \
+  "${GPU_INFO%%,*}" "${GPU_INFO#*, }" "${ENCODERS// /, }"
 
 write_recording() {
   printf '%s\n' "${COMMAND[@]}" >"$WORK/out/$NAME.args"
