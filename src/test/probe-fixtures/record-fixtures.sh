@@ -5,7 +5,8 @@
 # worker's own ffprobe, run with the probe's own arguments. Most sources are synthesized with lavfi.
 # edit-mp4-boxes.py adds the MP4 boxes that FFmpeg cannot write, and GPAC's MP4Box, run in its
 # pinned image, adds the Dolby Vision profile 8.2 and 9 records. x265 and dovi_tool, run in a pinned
-# Alpine image, encode the profile 8.2 stream. No media file is downloaded, and no source
+# Alpine image, encode the profile 8.2 stream, and MKVToolNix, run in the same image, writes the
+# Matroska statistics tags. No media file is downloaded, and no source
 # file is kept whole: the recordings hold ffprobe's output, including each stream's extradata
 # (-show_data), and packet-data/ holds the bytes of the first packets of the sources it lists.
 #
@@ -35,6 +36,9 @@ X265_PACKAGE=x265=3.6-r0
 DOVI_TOOL_VERSION=2.3.4
 DOVI_TOOL_SHA256_aarch64=b4f22a7db56954efe4ed8d02276d0f991799e84602f3584711be6c9df950cb15
 DOVI_TOOL_SHA256_x86_64=1844258e13c26607b32224bf1fa82b595d3b35949f5467405fda560daad32b3f
+# MKVToolNix writes the Matroska statistics tags, and libfaketime fixes the dates it writes.
+MKVTOOLNIX_PACKAGE=mkvtoolnix=92.0-r0
+LIBFAKETIME_PACKAGE=libfaketime=0.9.10-r3
 HERE="$(cd "$(dirname "$0")" && pwd)"
 FIXTURES="$(cd "$HERE/../resources/probe" && pwd)"
 WORK="$(mktemp -d)"
@@ -111,6 +115,9 @@ CHAPTERS
 # MP3 at 11,025 Hz in Matroska.
 "${FF[@]}" "${VIDEO[@]}" -f lavfi -i sine=frequency=440:duration=2:sample_rate=11025 "${X264[@]}" \
   -c:a libmp3lame mkv-mp3-11khz.mkv
+
+# H.264 and AAC in MP4, which mkvmerge muxes into the Matroska statistics fixtures.
+"${FF[@]}" "${VIDEO[@]}" "${TONE[@]}" "${X264[@]}" -c:a aac statistics-source.mp4
 
 # Matroska that starts at 10 s, with three chapters: one before the container's start time, one
 # without a title, and one whose title takes 513 bytes of UTF-8.
@@ -433,6 +440,39 @@ ffprobe -v quiet -print_format json -show_pixel_formats > pixel-formats.json
 CONTAINER
 
 in_image sources.sh
+
+# Matroska statistics tags. mkvmerge names itself as the segment's WritingApp and as each stream's
+# _STATISTICS_WRITING_APP, and mkvpropedit, run a day later, writes fresh statistics into a copy and
+# names itself only in them. FFmpeg then rewrites the mkvmerge file and copies its stale statistics:
+# a 1 s cut, the same cut and a 1.9 s trim that keep the segment's date (-map_metadata 0), and a
+# lossless re-encode of the video that keeps the date too. libfaketime fixes the dates that
+# MKVToolNix writes, so a new recording changes nothing.
+cat > "$WORK/statistics.sh" <<'CONTAINER'
+set -euo pipefail
+apk add --no-cache "$MKVTOOLNIX_PACKAGE" "$LIBFAKETIME_PACKAGE" > /dev/null
+cd /work
+FAKE=(env LD_PRELOAD=/usr/lib/faketime/libfaketime.so.1)
+"${FAKE[@]}" FAKETIME='2026-01-02 03:04:05' mkvmerge -q -o mkv-statistics-mkvmerge.mkv \
+  statistics-source.mp4
+cp mkv-statistics-mkvmerge.mkv mkv-statistics-mkvpropedit.mkv
+"${FAKE[@]}" FAKETIME='2026-01-03 03:04:05' mkvpropedit -q mkv-statistics-mkvpropedit.mkv \
+  --add-track-statistics-tags
+CONTAINER
+docker run --rm -v "$WORK":/work -e MKVTOOLNIX_PACKAGE="$MKVTOOLNIX_PACKAGE" \
+  -e LIBFAKETIME_PACKAGE="$LIBFAKETIME_PACKAGE" "$ALPINE_IMAGE" \
+  sh -c 'apk add --no-cache bash > /dev/null && bash /work/statistics.sh' > "$WORK/alpine.log" 2>&1 \
+  || { cat "$WORK/alpine.log"; exit 1; }
+cat > "$WORK/statistics-cuts.sh" <<'CONTAINER'
+set -euo pipefail
+cd /work
+FF=(timeout 60 ffmpeg -hide_banner -nostdin -loglevel error -y -i mkv-statistics-mkvmerge.mkv)
+"${FF[@]}" -t 1 -c copy mkv-statistics-ffmpeg-cut.mkv
+"${FF[@]}" -t 1 -map_metadata 0 -c copy mkv-statistics-ffmpeg-cut-same-date.mkv
+"${FF[@]}" -t 1.9 -map_metadata 0 -c copy mkv-statistics-ffmpeg-trim-same-date.mkv
+"${FF[@]}" -map_metadata 0 -c:v libx264 -preset ultrafast -qp 0 -c:a copy \
+  mkv-statistics-ffmpeg-reencode-same-date.mkv
+CONTAINER
+in_image statistics-cuts.sh
 python3 "$HERE/edit-mp4-boxes.py" clap "$WORK/mp4-clap.mp4" 56 32
 python3 "$HERE/edit-mp4-boxes.py" udta-first "$WORK/mp4-cover-art-first.mp4"
 python3 "$HERE/edit-mp4-boxes.py" er-aac-lc "$WORK/mp4-er-aac-lc.mp4"
@@ -463,6 +503,9 @@ done
 in_image edited.sh
 in_image adts.sh
 
+MATROSKA_STATISTICS=(mkv-statistics-mkvmerge.mkv mkv-statistics-mkvpropedit.mkv
+  mkv-statistics-ffmpeg-cut.mkv mkv-statistics-ffmpeg-cut-same-date.mkv
+  mkv-statistics-ffmpeg-trim-same-date.mkv mkv-statistics-ffmpeg-reencode-same-date.mkv)
 FIXTURES_TO_PROBE=(mp4-titled.mp4 mkv-remuxed-from-mp4.mkv mp4-default-handlers.mp4
   mkv-pipe-hevc-10bit.mkv mpegts-empty-audio.ts mkv-mp3-11khz.mkv mkv-offset-chapters.mkv
   mkv-many-chapters.mkv mkv-title-tags.mkv mkv-many-titles.mkv mp4-clap.mp4 mkv-pixel-crop.mkv mp4-rotated.mp4
@@ -476,7 +519,8 @@ FIXTURES_TO_PROBE=(mp4-titled.mp4 mkv-remuxed-from-mp4.mkv mp4-default-handlers.
   mpegts-aac-main.ts mpegts-aac-ltp.ts mkv-120fps.mkv mp4-100fps.mp4 mp4-90fps.mp4 mp4-72fps.mp4
   hevc-hdr10-plus-rejected-sei.hevc h264-hdr10-rejected-sei.h264 mp4-av1-pq.mp4
   mp4-av1-hdr10-plus-rejected.mp4 mp4-av1-static-after-frame.mp4
-  flv-h264-sei-without-trailing-bits.flv avi-h264-unknown-extradata.avi hevc-hdr-vivid-repeated.hevc)
+  flv-h264-sei-without-trailing-bits.flv avi-h264-unknown-extradata.avi hevc-hdr-vivid-repeated.hevc
+  "${MATROSKA_STATISTICS[@]}")
 if [ -n "${FATE_SUITE:-}" ]; then
   in_image fate.sh
   python3 "$HERE/move-rpus-ahead.py" next "$WORK/dovi-p5.hevc" "$WORK/hevc-dovi-p5-rpus-ahead.hevc"
@@ -680,4 +724,13 @@ open(sys.argv[2], "a").write("\n")' "$WORK/packet-data/$source.json" "$FIXTURES/
   fi
 done
 cp "$WORK/ffprobe-version.txt" "$WORK/pixel-formats.json" "$FIXTURES/"
+# The bytes of each Matroska statistics source before its first Cluster, which hold the segment's
+# Info and its WritingApp, so that the probe reads the WritingApp from a file.
+mkdir -p "$FIXTURES/matroska-heads"
+for source in "${MATROSKA_STATISTICS[@]}"; do
+  python3 -c 'import sys
+data = open(sys.argv[1], "rb").read()
+open(sys.argv[2], "wb").write(data[:data.index(bytes.fromhex("1F43B675"))])' \
+    "$WORK/$source" "$FIXTURES/matroska-heads/$source"
+done
 echo "recorded into $FIXTURES with $IMAGE"
