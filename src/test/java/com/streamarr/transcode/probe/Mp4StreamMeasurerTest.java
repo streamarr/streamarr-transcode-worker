@@ -356,6 +356,46 @@ class Mp4StreamMeasurerTest {
     assertThat(index.measured()).isEmpty();
   }
 
+  @Test
+  @DisplayName("Should measure nothing when an audio track has composition offsets")
+  void shouldMeasureNothingWhenAudioTrackHasCompositionOffsets() throws Exception {
+    var source =
+        write(
+            SyntheticMp4.builder()
+                .mediaTimescale(1_000)
+                .sampleDurations(4, 500)
+                .secondTrack(
+                    audio().sampleDurations(4, 24_000).compositionOffsets(4, 1_024).build()));
+
+    var index = Mp4SyncSampleReader.read(source, VIDEO, List.of(VIDEO, AUDIO));
+
+    assertThat(index.measured()).isEmpty();
+  }
+
+  @Test
+  @DisplayName(
+      "Should leave out another video track when it keeps a sample that presents before its edit's"
+          + " start")
+  void shouldLeaveOutAnotherVideoTrackWhenItKeepsSampleThatPresentsBeforeItsEditStart()
+      throws Exception {
+    var source =
+        write(
+            SyntheticMp4.builder()
+                .mediaTimescale(1_000)
+                .sampleDurations(4, 500)
+                .secondTrack(
+                    SyntheticMp4.builder()
+                        .mediaTimescale(90_000)
+                        .sampleDurations(8, 22_500)
+                        .syncSamples(List.of(1L, 5L))
+                        .edit(new Edit(2_000, 30_000))
+                        .build()));
+
+    var index = Mp4SyncSampleReader.read(source, VIDEO, List.of(VIDEO, OTHER_VIDEO));
+
+    assertThat(index.measured()).extracting(TrackMeasurement::streamIndex).containsExactly(0);
+  }
+
   private static SyntheticMp4.SyntheticMp4Builder audio() {
     return SyntheticMp4.builder().handler("soun").mediaTimescale(48_000);
   }

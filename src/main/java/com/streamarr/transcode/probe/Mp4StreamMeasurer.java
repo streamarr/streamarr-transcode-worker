@@ -84,12 +84,22 @@ final class Mp4StreamMeasurer {
   private record Measuring(
       ByteBuffer movie, long movieTimescale, long chosenTrackId, Track chosen) {
 
+    /**
+     * FFmpeg rewrites the decode times of the video samples that it keeps before an edit's start,
+     * and another video track's intervals follow those times. The chosen track's intervals follow
+     * its decode order, which the rewrite keeps.
+     */
+    private static boolean isMeasurableBesideChosen(Track track) {
+      return !track.isVideo() || !track.presentsBeforeEditStart();
+    }
+
     Optional<TrackMeasurement> measure(TrackStream stream) {
       try {
         var track =
             stream.trackId() == chosenTrackId
                 ? Optional.of(chosen)
-                : Track.read(movie, stream.trackId(), movieTimescale);
+                : Track.read(movie, stream.trackId(), movieTimescale)
+                    .filter(Measuring::isMeasurableBesideChosen);
         return track.flatMap(
             candidate -> candidate.measure(stream.streamIndex(), chosen, chosen.keyframes()));
       } catch (ContainerIndexException | BufferUnderflowException | ArithmeticException _) {
@@ -172,7 +182,8 @@ final class Mp4StreamMeasurer {
       long[] decodeTimes,
       long[] durations,
       boolean[] sync,
-      int first) {
+      int first,
+      boolean presentsBeforeEditStart) {
 
     static Optional<Track> read(ByteBuffer movie, long trackId, long movieTimescale) {
       var trak =
@@ -199,7 +210,8 @@ final class Mp4StreamMeasurer {
       }
 
       var durationRuns = runs(child(sampleTable, "stts").orElseThrow(() -> malformed("stts")));
-      if ("soun".equals(handler) && isChunkedAudio(durationRuns)) {
+      if ("soun".equals(handler)
+          && (isChunkedAudio(durationRuns) || child(sampleTable, "ctts").isPresent())) {
         return Optional.empty();
       }
 
@@ -345,6 +357,11 @@ final class Mp4StreamMeasurer {
     }
 
     var first = firstKept(timing, presentationTimes, sync);
+    var presentsBeforeEditStart = false;
+    for (var i = first; timing.hasEditList() && i < count; i++) {
+      presentsBeforeEditStart |= presentationTimes[i] < timing.edit().mediaTime();
+    }
+
     if (timing.hasEditList() && dropsSamplesAfterEnd(timing, presentationTimes, durations)) {
       throw malformed("edit list ends before the track's last sample");
     }
@@ -362,7 +379,8 @@ final class Mp4StreamMeasurer {
         decodeTimes,
         durations,
         sync,
-        first);
+        first,
+        presentsBeforeEditStart);
   }
 
   /**
@@ -520,7 +538,8 @@ final class Mp4StreamMeasurer {
   /**
    * FFmpeg's mov demuxer returns an audio track whose only stts entry gives every sample a duration
    * of 1, as uncompressed audio often has, as packets of whole chunks rather than one packet for
-   * each sample. The measurer measures samples, so it leaves such a track out.
+   * each sample. The measurer measures samples, so it leaves such a track out. It also leaves out
+   * an audio track with composition offsets, whose times it does not model.
    */
   private static boolean isChunkedAudio(List<Run> durationRuns) {
     return durationRuns.size() == 1 && durationRuns.getFirst().value() == 1;
