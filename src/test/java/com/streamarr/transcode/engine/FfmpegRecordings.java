@@ -86,6 +86,8 @@ public final class FfmpegRecordings {
    * @param mode whether the recording encodes or copies the video
    * @param audio whether the recording encodes or copies the audio
    * @param encoder the video encoder of an encode; empty for a stream copy
+   * @param copyKeepsPacketBytes whether the job of a stream copy says that the copy keeps every
+   *     packet's bytes; false for every encode
    * @param recipeDeviation how the recording deliberately departs from the worker's recipe; empty
    *     when it follows the recipe
    * @param mediaSegmentCount the media segment count the server advertises for what the recording
@@ -96,6 +98,7 @@ public final class FfmpegRecordings {
       Mode mode,
       Mode audio,
       Optional<String> encoder,
+      boolean copyKeepsPacketBytes,
       Source source,
       int period,
       long fragmentationTargetMicros,
@@ -118,13 +121,14 @@ public final class FfmpegRecordings {
     }
 
     /**
-     * The codec string that the recording's initialization segment declares for its video: every
-     * copy is of a 64x36 libx264 High 4:4:4 Predictive source at level 1.0, and every encode forces
-     * the level that its encoder chooses for 64x36 at 23.976 fps.
+     * The codec string that the recording's initialization segment declares for its video: a copy
+     * is of a 64x36 libx264 High 4:4:4 Predictive source at level 1.0, or of the 64x36 libx265 Main
+     * source at level 1.0, and every encode forces the level that its encoder chooses for 64x36 at
+     * 23.976 fps.
      */
     public String videoCodecString() {
       return switch (videoEncoder()) {
-        case "copy" -> "avc1.F4000A";
+        case "copy" -> "hevc.mp4".equals(source.file()) ? "hvc1.1.6.L30.90" : "avc1.F4000A";
         case "libx264" -> RecordingFixtures.ENCODED_RECORDING_CODEC_STRING;
         case "libsvtav1" -> "av01.0.00M.08";
         case "libx265" -> "hvc1.1.6.L30.90";

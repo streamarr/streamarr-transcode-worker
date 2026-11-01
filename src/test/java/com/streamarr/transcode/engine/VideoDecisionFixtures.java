@@ -28,7 +28,8 @@ final class VideoDecisionFixtures {
   /** The video decision that a job for the recording carries. */
   static VideoDecision forRecording(FfmpegRecordings.Recording recording) {
     if (recording.encoder().isEmpty()) {
-      return new VideoDecision.Copy(0, recording.videoCodecString(), false);
+      return new VideoDecision.Copy(
+          0, recording.videoCodecString(), recording.copyKeepsPacketBytes());
     }
 
     return encodeBuilder().codecString(recording.videoCodecString()).build();

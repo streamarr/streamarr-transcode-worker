@@ -462,6 +462,8 @@ describe('violated claims', () => {
         mpegTsAacCopyWithoutAdtstoasc: { exitStatus: 0 },
         adtstoascLeavesMp4SourceCopyByteIdentical: false,
         maxDelayLeavesMp4OutputByteIdentical: false,
+        hevcCopyWithoutAnnexBKeepsEveryPacketSize: false,
+        hevcAnnexBFilterGrowsOnlyKeyframes: { grownKeyframes: 9, keyframes: 10, changedOtherSamples: 1 },
         seekWithFpsModeCfr: { firstVideoPresentationTime: 720720n, videoSamples: 863, videoSamplesWithoutFpsMode: 863 },
       },
     };
@@ -480,6 +482,8 @@ describe('violated claims', () => {
       'an MPEG-TS AAC copy without aac_adtstoasc no longer fails',
       'aac_adtstoasc changes a copy from an MP4 source',
       '-max_delay changes mp4 output',
+      'an HEVC copy without the Annex B filter changes the size of a source packet',
+      'hevc_mp4toannexb no longer adds the record to every keyframe sample and to nothing else',
       'an explicit -fps_mode cfr after a seek no longer pads from zero',
     ]);
   });

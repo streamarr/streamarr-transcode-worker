@@ -14,6 +14,7 @@
       "mode": "encode",
       "audio": "encode",
       "encoder": "libx264",
+      "copyKeepsPacketBytes": false,
       "source": {
         "file": "cfr.mp4",
         "containerStartTimeMicros": 0,
@@ -524,6 +525,7 @@
       "mode": "encode",
       "audio": "encode",
       "encoder": "libx264",
+      "copyKeepsPacketBytes": false,
       "source": {
         "file": "cfr.mp4",
         "containerStartTimeMicros": 0,
@@ -894,6 +896,7 @@
       "mode": "copy",
       "audio": "copy",
       "encoder": null,
+      "copyKeepsPacketBytes": false,
       "source": {
         "file": "irregular.mp4",
         "containerStartTimeMicros": 0,
@@ -1331,6 +1334,7 @@
       "mode": "encode",
       "audio": "encode",
       "encoder": "libx264",
+      "copyKeepsPacketBytes": false,
       "source": {
         "file": "vfr.mp4",
         "containerStartTimeMicros": 0,
@@ -1871,6 +1875,7 @@
       "mode": "copy",
       "audio": "copy",
       "encoder": null,
+      "copyKeepsPacketBytes": false,
       "source": {
         "file": "vfr.mp4",
         "containerStartTimeMicros": 0,
@@ -2374,6 +2379,7 @@
       "mode": "encode",
       "audio": "encode",
       "encoder": "libx264",
+      "copyKeepsPacketBytes": false,
       "source": {
         "file": "late.ts",
         "containerStartTimeMicros": 11978667,
@@ -2755,6 +2761,7 @@
       "mode": "copy",
       "audio": "copy",
       "encoder": null,
+      "copyKeepsPacketBytes": false,
       "source": {
         "file": "late.ts",
         "containerStartTimeMicros": 11978667,
@@ -3120,6 +3127,7 @@
       "mode": "copy",
       "audio": "copy",
       "encoder": null,
+      "copyKeepsPacketBytes": false,
       "source": {
         "file": "late.ts",
         "containerStartTimeMicros": 11978667,
@@ -3383,6 +3391,7 @@
       "mode": "encode",
       "audio": "encode",
       "encoder": "libx264",
+      "copyKeepsPacketBytes": false,
       "source": {
         "file": "tail.mp4",
         "containerStartTimeMicros": 0,
@@ -3678,6 +3687,7 @@
       "mode": "copy",
       "audio": "copy",
       "encoder": null,
+      "copyKeepsPacketBytes": false,
       "source": {
         "file": "cfr.mp4",
         "containerStartTimeMicros": 0,
@@ -4247,6 +4257,7 @@
       "mode": "copy",
       "audio": "copy",
       "encoder": null,
+      "copyKeepsPacketBytes": false,
       "source": {
         "file": "cfr.mp4",
         "containerStartTimeMicros": 0,
@@ -4703,6 +4714,7 @@
       "mode": "encode",
       "audio": "encode",
       "encoder": "libsvtav1",
+      "copyKeepsPacketBytes": false,
       "source": {
         "file": "vfr.mp4",
         "containerStartTimeMicros": 0,
@@ -5318,6 +5330,7 @@
       "mode": "encode",
       "audio": "encode",
       "encoder": "libsvtav1",
+      "copyKeepsPacketBytes": false,
       "source": {
         "file": "vfr.mp4",
         "containerStartTimeMicros": 0,
@@ -5691,6 +5704,7 @@
       "mode": "copy",
       "audio": "copy",
       "encoder": null,
+      "copyKeepsPacketBytes": false,
       "source": {
         "file": "gop10.mp4",
         "containerStartTimeMicros": 0,
@@ -5920,6 +5934,7 @@
       "mode": "encode",
       "audio": "encode",
       "encoder": "libx264",
+      "copyKeepsPacketBytes": false,
       "source": {
         "file": "cfr.mp4",
         "containerStartTimeMicros": 0,
@@ -6219,6 +6234,7 @@
       "mode": "encode",
       "audio": "encode",
       "encoder": "libx264",
+      "copyKeepsPacketBytes": false,
       "source": {
         "file": "cfr.mp4",
         "containerStartTimeMicros": 0,
@@ -6493,6 +6509,7 @@
       "mode": "encode",
       "audio": "encode",
       "encoder": "libsvtav1",
+      "copyKeepsPacketBytes": false,
       "source": {
         "file": "cfr.mp4",
         "containerStartTimeMicros": 0,
@@ -6768,6 +6785,7 @@
       "mode": "encode",
       "audio": "encode",
       "encoder": "libx265",
+      "copyKeepsPacketBytes": false,
       "source": {
         "file": "cfr.mp4",
         "containerStartTimeMicros": 0,
@@ -7151,6 +7169,7 @@
       "mode": "encode",
       "audio": "encode",
       "encoder": "libx265",
+      "copyKeepsPacketBytes": false,
       "source": {
         "file": "cfr.mp4",
         "containerStartTimeMicros": 0,
@@ -7526,6 +7545,7 @@
       "mode": "encode",
       "audio": "encode",
       "encoder": "libx265",
+      "copyKeepsPacketBytes": false,
       "source": {
         "file": "cfr.mp4",
         "containerStartTimeMicros": 0,
@@ -7803,6 +7823,7 @@
       "mode": "encode",
       "audio": "encode",
       "encoder": "libx265",
+      "copyKeepsPacketBytes": false,
       "source": {
         "file": "cfr.mp4",
         "containerStartTimeMicros": 0,
@@ -8110,6 +8131,7 @@
       "mode": "copy",
       "audio": "copy",
       "encoder": null,
+      "copyKeepsPacketBytes": false,
       "source": {
         "file": "short-audio.mp4",
         "containerStartTimeMicros": 0,
@@ -8429,6 +8451,7 @@
       "mode": "copy",
       "audio": "copy",
       "encoder": null,
+      "copyKeepsPacketBytes": false,
       "source": {
         "file": "adjacent-keyframes.mp4",
         "containerStartTimeMicros": 0,
@@ -8846,6 +8869,7 @@
       "mode": "copy",
       "audio": "encode",
       "encoder": null,
+      "copyKeepsPacketBytes": false,
       "source": {
         "file": "cfr.mp4",
         "containerStartTimeMicros": 0,
@@ -9278,6 +9302,7 @@
       "mode": "copy",
       "audio": "encode",
       "encoder": null,
+      "copyKeepsPacketBytes": false,
       "source": {
         "file": "cfr.mp4",
         "containerStartTimeMicros": 0,
@@ -9599,6 +9624,7 @@
       "mode": "copy",
       "audio": "copy",
       "encoder": null,
+      "copyKeepsPacketBytes": false,
       "source": {
         "file": "long-video.mp4",
         "containerStartTimeMicros": 0,
@@ -10525,6 +10551,7 @@
       "mode": "encode",
       "audio": "encode",
       "encoder": "libx264",
+      "copyKeepsPacketBytes": false,
       "source": {
         "file": "long-video.mp4",
         "containerStartTimeMicros": 0,
@@ -11079,6 +11106,502 @@
         }
       },
       "hlsComparisons": []
+    },
+    {
+      "name": "18-copy-hevc-keeping-packet-bytes",
+      "file": "18-copy-hevc-keeping-packet-bytes.fmp4",
+      "proves": "Stream copy of an HEVC source whose hvcC record holds its VPS, SPS and PPS and whose samples carry none, without the Annex B filter, as a job that says the copy keeps every packet's bytes runs it: every video sample keeps its source packet's bytes, so no keyframe sample repeats a parameter set that the hvc1 record declares complete.",
+      "recipeDeviation": null,
+      "mode": "copy",
+      "audio": "copy",
+      "encoder": null,
+      "copyKeepsPacketBytes": true,
+      "source": {
+        "file": "hevc.mp4",
+        "containerStartTimeMicros": 0,
+        "videoRealFrameRate": "24000/1001",
+        "videoAverageFrameRate": "24000/1001"
+      },
+      "seekSeconds": 0,
+      "period": 6,
+      "fragmentationTargetMicros": 1000000,
+      "ffmpegArguments": [
+        "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        "src/hevc.mp4",
+        "-map",
+        "0:0",
+        "-map",
+        "0:a:0",
+        "-map",
+        "-0:s",
+        "-map_metadata",
+        "-1",
+        "-map_chapters",
+        "-1",
+        "-copyts",
+        "-avoid_negative_ts",
+        "disabled",
+        "-start_at_zero",
+        "-max_muxing_queue_size",
+        "128",
+        "-max_interleave_delta",
+        "10000000",
+        "-c:v",
+        "copy",
+        "-tag:v",
+        "hvc1",
+        "-strict",
+        "unofficial",
+        "-c:a",
+        "copy",
+        "-bsf:a",
+        "aac_adtstoasc",
+        "-b:a",
+        "0",
+        "-threads",
+        "1",
+        "-f",
+        "mp4",
+        "-movflags",
+        "cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont",
+        "-frag_duration",
+        "1000000",
+        "pipe:1"
+      ],
+      "startSequenceNumber": 0,
+      "mediaSegmentCount": 4,
+      "videoTrackId": 1,
+      "videoTimescale": 24000,
+      "byteLength": 38784,
+      "initializationSegment": {
+        "byteLength": 1401,
+        "sha256": "da4fe72332cfe822ffaad51bd9f86e52688b5ed7e184203bf47e2ca0c3c52b26",
+        "tracks": [
+          {
+            "trackId": 1,
+            "handler": "vide",
+            "sampleEntry": "hvc1",
+            "timescale": 24000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          },
+          {
+            "trackId": 2,
+            "handler": "soun",
+            "sampleEntry": "mp4a",
+            "timescale": 48000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          }
+        ]
+      },
+      "deliveredInitializationSegment": {
+        "byteLength": 1401,
+        "sha256": "da4fe72332cfe822ffaad51bd9f86e52688b5ed7e184203bf47e2ca0c3c52b26"
+      },
+      "segments": [
+        {
+          "number": 0,
+          "firstVideoPresentationTime": 0,
+          "firstFragmentIndex": 0,
+          "fragmentCount": 6,
+          "keyframeCount": 3,
+          "byteLength": 11092
+        },
+        {
+          "number": 1,
+          "firstVideoPresentationTime": 144144,
+          "firstFragmentIndex": 6,
+          "fragmentCount": 6,
+          "keyframeCount": 3,
+          "byteLength": 11263
+        },
+        {
+          "number": 2,
+          "firstVideoPresentationTime": 288288,
+          "firstFragmentIndex": 12,
+          "fragmentCount": 6,
+          "keyframeCount": 3,
+          "byteLength": 11248
+        },
+        {
+          "number": 3,
+          "firstVideoPresentationTime": 432432,
+          "firstFragmentIndex": 18,
+          "fragmentCount": 3,
+          "keyframeCount": 1,
+          "byteLength": 3780
+        }
+      ],
+      "discardedPreroll": [],
+      "failure": null,
+      "droppedAudioSamples": [],
+      "endsWithAudioOnlyFragments": true,
+      "trailingAudioOnlyFragmentCount": 1,
+      "sourceKeyframeCheck": {
+        "recordedKeyframesEqualSourceKeyframes": true,
+        "keyframePresentationTimes": [
+          0,
+          48048,
+          96096,
+          144144,
+          192192,
+          240240,
+          288288,
+          336336,
+          384384,
+          432432
+        ]
+      },
+      "diagnostics": {
+        "fragmentCount": 21,
+        "syncFirstFragments": 10,
+        "nonSyncFirstFragments": 10,
+        "fragmentsWithoutVideo": 1,
+        "leadingFragmentsWithoutVideo": 0,
+        "fragmentsWithAKeyframeInside": [],
+        "videoSamples": 480,
+        "largestFragmentByteLength": 2326,
+        "firstVideoPresentationTime": 0,
+        "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
+        "startPlusDurationsMissesNextStartByTicks": {
+          "min": 0,
+          "max": 0
+        },
+        "videoPictures": {
+          "sampleEntry": "hvc1",
+          "keyframes": [
+            {
+              "presentationTime": 0,
+              "nalUnitType": 20,
+              "raslPictures": 0,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 48048,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 96096,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 144144,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 192192,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 240240,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 288288,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 336336,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 384384,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 432432,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            }
+          ]
+        }
+      },
+      "hlsComparisons": []
+    },
+    {
+      "name": "18-copy-hevc-annex-b",
+      "file": "18-copy-hevc-annex-b.fmp4",
+      "proves": "The same source copied through hevc_mp4toannexb, as every other job runs it: the filter puts the record's VPS, SPS and PPS in front of every keyframe sample, bytes that the source packets do not hold.",
+      "recipeDeviation": null,
+      "mode": "copy",
+      "audio": "copy",
+      "encoder": null,
+      "copyKeepsPacketBytes": false,
+      "source": {
+        "file": "hevc.mp4",
+        "containerStartTimeMicros": 0,
+        "videoRealFrameRate": "24000/1001",
+        "videoAverageFrameRate": "24000/1001"
+      },
+      "seekSeconds": 0,
+      "period": 6,
+      "fragmentationTargetMicros": 1000000,
+      "ffmpegArguments": [
+        "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        "src/hevc.mp4",
+        "-map",
+        "0:0",
+        "-map",
+        "0:a:0",
+        "-map",
+        "-0:s",
+        "-map_metadata",
+        "-1",
+        "-map_chapters",
+        "-1",
+        "-copyts",
+        "-avoid_negative_ts",
+        "disabled",
+        "-start_at_zero",
+        "-max_muxing_queue_size",
+        "128",
+        "-max_interleave_delta",
+        "10000000",
+        "-c:v",
+        "copy",
+        "-bsf:v",
+        "hevc_mp4toannexb",
+        "-tag:v",
+        "hvc1",
+        "-strict",
+        "unofficial",
+        "-c:a",
+        "copy",
+        "-bsf:a",
+        "aac_adtstoasc",
+        "-b:a",
+        "0",
+        "-threads",
+        "1",
+        "-f",
+        "mp4",
+        "-movflags",
+        "cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont",
+        "-frag_duration",
+        "1000000",
+        "pipe:1"
+      ],
+      "startSequenceNumber": 0,
+      "mediaSegmentCount": 4,
+      "videoTrackId": 1,
+      "videoTimescale": 24000,
+      "byteLength": 39594,
+      "initializationSegment": {
+        "byteLength": 1401,
+        "sha256": "da4fe72332cfe822ffaad51bd9f86e52688b5ed7e184203bf47e2ca0c3c52b26",
+        "tracks": [
+          {
+            "trackId": 1,
+            "handler": "vide",
+            "sampleEntry": "hvc1",
+            "timescale": 24000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          },
+          {
+            "trackId": 2,
+            "handler": "soun",
+            "sampleEntry": "mp4a",
+            "timescale": 48000,
+            "editList": [
+              [
+                0,
+                0
+              ]
+            ],
+            "trexDefaultSampleFlags": 0,
+            "trexDefaultSampleDuration": 0
+          }
+        ]
+      },
+      "deliveredInitializationSegment": {
+        "byteLength": 1401,
+        "sha256": "da4fe72332cfe822ffaad51bd9f86e52688b5ed7e184203bf47e2ca0c3c52b26"
+      },
+      "segments": [
+        {
+          "number": 0,
+          "firstVideoPresentationTime": 0,
+          "firstFragmentIndex": 0,
+          "fragmentCount": 6,
+          "keyframeCount": 3,
+          "byteLength": 11335
+        },
+        {
+          "number": 1,
+          "firstVideoPresentationTime": 144144,
+          "firstFragmentIndex": 6,
+          "fragmentCount": 6,
+          "keyframeCount": 3,
+          "byteLength": 11506
+        },
+        {
+          "number": 2,
+          "firstVideoPresentationTime": 288288,
+          "firstFragmentIndex": 12,
+          "fragmentCount": 6,
+          "keyframeCount": 3,
+          "byteLength": 11491
+        },
+        {
+          "number": 3,
+          "firstVideoPresentationTime": 432432,
+          "firstFragmentIndex": 18,
+          "fragmentCount": 3,
+          "keyframeCount": 1,
+          "byteLength": 3861
+        }
+      ],
+      "discardedPreroll": [],
+      "failure": null,
+      "droppedAudioSamples": [],
+      "endsWithAudioOnlyFragments": true,
+      "trailingAudioOnlyFragmentCount": 1,
+      "sourceKeyframeCheck": {
+        "recordedKeyframesEqualSourceKeyframes": true,
+        "keyframePresentationTimes": [
+          0,
+          48048,
+          96096,
+          144144,
+          192192,
+          240240,
+          288288,
+          336336,
+          384384,
+          432432
+        ]
+      },
+      "diagnostics": {
+        "fragmentCount": 21,
+        "syncFirstFragments": 10,
+        "nonSyncFirstFragments": 10,
+        "fragmentsWithoutVideo": 1,
+        "leadingFragmentsWithoutVideo": 0,
+        "fragmentsWithAKeyframeInside": [],
+        "videoSamples": 480,
+        "largestFragmentByteLength": 2407,
+        "firstVideoPresentationTime": 0,
+        "firstAudioBaseMediaDecodeTimeUnsigned": 18446744073709550592,
+        "startPlusDurationsMissesNextStartByTicks": {
+          "min": 0,
+          "max": 0
+        },
+        "videoPictures": {
+          "sampleEntry": "hvc1",
+          "keyframes": [
+            {
+              "presentationTime": 0,
+              "nalUnitType": 20,
+              "raslPictures": 0,
+              "startsClosedGop": true
+            },
+            {
+              "presentationTime": 48048,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 96096,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 144144,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 192192,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 240240,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 288288,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 336336,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 384384,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            },
+            {
+              "presentationTime": 432432,
+              "nalUnitType": 21,
+              "raslPictures": 0,
+              "startsClosedGop": false
+            }
+          ]
+        }
+      },
+      "hlsComparisons": []
     }
   ],
   "initializationSegmentIdentityPairs": [
@@ -11177,6 +11700,22 @@
         "92c9bf195e51b79354923690828baecb3b460d02bdacc943cd1ca2cc8e25b3d4",
         "92c9bf195e51b79354923690828baecb3b460d02bdacc943cd1ca2cc8e25b3d4"
       ]
+    },
+    {
+      "label": "HEVC stream copy whose record holds its parameter sets, without vs with the Annex B filter",
+      "files": [
+        "18-copy-hevc-keeping-packet-bytes.fmp4",
+        "18-copy-hevc-annex-b.fmp4"
+      ],
+      "identical": true,
+      "byteLengths": [
+        1401,
+        1401
+      ],
+      "sha256": [
+        "da4fe72332cfe822ffaad51bd9f86e52688b5ed7e184203bf47e2ca0c3c52b26",
+        "da4fe72332cfe822ffaad51bd9f86e52688b5ed7e184203bf47e2ca0c3c52b26"
+      ]
     }
   ],
   "initializationSegmentDifferencePairs": [
@@ -11198,6 +11737,14 @@
     }
   ],
   "adrSideClaims": {
+    "hevcCopyWithoutAnnexBKeepsEveryPacketSize": true,
+    "hevcAnnexBFilterGrowsOnlyKeyframes": {
+      "videoSamples": 480,
+      "sourcePackets": 480,
+      "grownKeyframes": 10,
+      "keyframes": 10,
+      "changedOtherSamples": 0
+    },
     "mpegTsAacCopyWithoutAdtstoasc": {
       "exitStatus": 255,
       "firstLogLine": "[mp4] Malformed AAC bitstream detected: use the audio bitstream filter 'aac_adtstoasc' to fix it ('-bsf:a aac_adtstoasc' option with ffmpeg)"

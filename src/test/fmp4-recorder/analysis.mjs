@@ -708,6 +708,13 @@ function sideClaimViolations(expected) {
   if (!claims.maxDelayLeavesMp4OutputByteIdentical) {
     found.push('-max_delay changes mp4 output');
   }
+  if (!claims.hevcCopyWithoutAnnexBKeepsEveryPacketSize) {
+    found.push('an HEVC copy without the Annex B filter changes the size of a source packet');
+  }
+  const annexB = claims.hevcAnnexBFilterGrowsOnlyKeyframes;
+  if (annexB.grownKeyframes !== annexB.keyframes || annexB.changedOtherSamples !== 0) {
+    found.push('hevc_mp4toannexb no longer adds the record to every keyframe sample and to nothing else');
+  }
   const cfr = claims.seekWithFpsModeCfr;
   if (BigInt(cfr.firstVideoPresentationTime) !== 0n || cfr.videoSamples <= cfr.videoSamplesWithoutFpsMode) {
     found.push('an explicit -fps_mode cfr after a seek no longer pads from zero');

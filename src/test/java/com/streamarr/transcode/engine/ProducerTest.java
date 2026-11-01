@@ -33,16 +33,19 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.lang.Thread.State;
 import java.lang.management.ManagementFactory;
+import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -261,6 +264,33 @@ class ProducerTest {
                 assertThat(mediaSegmentOf(sink, name).fragments())
                     .extracting(MovieFragment::sequenceNumber)
                     .containsExactly(numberOf(name) + 1L));
+  }
+
+  // An hvc1 record whose parameter set arrays are complete promises that no sample repeats a
+  // parameter set (ISO/IEC 14496-15). The Annex B filter puts the record's VPS, SPS and PPS in
+  // front
+  // of every keyframe sample, so only a copy that keeps every packet's bytes keeps that promise.
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({"18-copy-hevc-keeping-packet-bytes.fmp4, false", "18-copy-hevc-annex-b.fmp4, true"})
+  @DisplayName(
+      "Should deliver HEVC keyframe samples that repeat the parameter sets of a complete hvc1 record"
+          + " only when the copy runs the Annex B filter")
+  void shouldDeliverHevcKeyframeSamplesThatRepeatTheParameterSetsOfACompleteRecordOnlyWithTheFilter(
+      String file, boolean repeatsParameterSets) {
+    var deliveries = deliveredBy(recording(file));
+
+    assertThat(completeArrayTypes(deliveries.contentOf("init.mp4")))
+        .containsExactlyInAnyOrder(HevcCopies.VPS, HevcCopies.SPS, HevcCopies.PPS);
+    assertThat(deliveries.acceptedNames())
+        .filteredOn(name -> name.startsWith("segment"))
+        .flatMap(name -> videoSamplesOf(deliveries, name))
+        .filteredOn(Sample::isSync)
+        .isNotEmpty()
+        .allSatisfy(
+            keyframe ->
+                assertThat(holdsParameterSet(keyframe.data()))
+                    .as("a parameter set in a keyframe sample")
+                    .isEqualTo(repeatsParameterSets));
   }
 
   // Stream copies of an MP4 source: FFmpeg writes the same packets at the same decode times in
@@ -3090,6 +3120,51 @@ class ProducerTest {
     var producer = producerFor(process, recording).sink(deliveries).start();
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
     return deliveries;
+  }
+
+  // The NAL unit types of the hvcC arrays whose array_completeness bit is set.
+  private static Set<Integer> completeArrayTypes(byte[] initializationSegment) {
+    var sampleEntry =
+        CodecConfigurationReader.firstVideoSampleEntryOf(
+                new InitializationSegment(initializationSegment))
+            .orElseThrow();
+    var hvcC =
+        sampleEntry
+            .after(CodecConfigurationReader.VISUAL_SAMPLE_ENTRY_BYTES)
+            .requiredChild("hvcC")
+            .fields();
+    hvcC.skip(CodecConfigurationReader.HVCC_FIELDS_BEFORE_ARRAYS);
+    var arrays = hvcC.u8();
+    var complete = new HashSet<Integer>();
+    for (var array = 0; array < arrays; array++) {
+      var completenessAndType = hvcC.u8();
+      var nalUnits = hvcC.u16();
+      for (var nalUnit = 0; nalUnit < nalUnits; nalUnit++) {
+        hvcC.skip(hvcC.u16());
+      }
+
+      if ((completenessAndType & 0x80) != 0) {
+        complete.add(completenessAndType & 0x3F);
+      }
+    }
+
+    return complete;
+  }
+
+  // Whether a sample of 4-byte length-prefixed HEVC NAL units holds a VPS, an SPS or a PPS.
+  private static boolean holdsParameterSet(ByteBuffer sample) {
+    var data = sample.duplicate();
+    while (data.remaining() >= Integer.BYTES) {
+      var length = data.getInt();
+      var type = (data.get(data.position()) >> 1) & 0x3F;
+      if (type == HevcCopies.VPS || type == HevcCopies.SPS || type == HevcCopies.PPS) {
+        return true;
+      }
+
+      data.position(data.position() + length);
+    }
+
+    return false;
   }
 
   // The samples of the delivered media segment, read after the initialization segment.

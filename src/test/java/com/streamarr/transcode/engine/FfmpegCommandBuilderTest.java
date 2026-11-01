@@ -599,15 +599,43 @@ class FfmpegCommandBuilderTest {
         .containsOnlyOnce("-bsf:v", "-tag:v");
   }
 
-  @ParameterizedTest(name = "{0}")
-  @ValueSource(strings = {"av01.0.08M.08", "vp09.00.40.08", "mp4v.20.9"})
+  @ParameterizedTest(name = "{0} source, {1}")
+  @CsvSource({
+    "hvc1, REMUX, hvc1",
+    "dvh1, AUDIO_TRANSCODE, hvc1",
+    "avc1, AUDIO_TRANSCODE, avc1",
+    "dva1, REMUX, avc1"
+  })
+  @DisplayName(
+      "Should copy the samples without the Annex B filter when the job says that the copy keeps"
+          + " every packet's bytes")
+  void shouldCopyTheSamplesWithoutTheAnnexBFilterWhenTheJobSaysThatTheCopyKeepsEveryPacketsBytes(
+      String sourceSampleEntry, TranscodeMode mode, String sampleEntry) {
+    var copy = new VideoDecision.Copy(0, sourceSampleEntry + ".64001F", true);
+    var request = request(decision(mode).videoDecision(copy).build()).build();
+
+    var cmd = command(request, "copy");
+
+    assertThat(cmd)
+        .containsSequence("-c:v", "copy", "-tag:v", sampleEntry, "-strict", "unofficial")
+        .doesNotContain("-bsf:v");
+  }
+
+  @ParameterizedTest(name = "{0}, keeps packet bytes {1}")
+  @CsvSource({
+    "av01.0.08M.08, false",
+    "vp09.00.40.08, false",
+    "mp4v.20.9, false",
+    "av01.0.08M.08, true"
+  })
   @DisplayName(
       "Should leave the sample entry to FFmpeg when the copied video is neither H.264 nor HEVC")
-  void shouldLeaveTheSampleEntryToFfmpegWhenTheCopiedVideoIsNeitherH264NorHevc(String codecString) {
+  void shouldLeaveTheSampleEntryToFfmpegWhenTheCopiedVideoIsNeitherH264NorHevc(
+      String codecString, boolean keepsPacketBytes) {
     var request =
         request(
                 decision(TranscodeMode.REMUX)
-                    .videoDecision(new VideoDecision.Copy(0, codecString, false))
+                    .videoDecision(new VideoDecision.Copy(0, codecString, keepsPacketBytes))
                     .build())
             .build();
 

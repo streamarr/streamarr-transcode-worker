@@ -85,6 +85,10 @@ ffmpeg -hide_banner -nostdin -loglevel error
   -max_interleave_delta 10000000
   copy:   -c:v copy -bsf:v h264_mp4toannexb -tag:v avc1 -strict unofficial
           -c:a copy -bsf:a aac_adtstoasc -b:a 0
+  HEVC copy (18):          -c:v copy -bsf:v hevc_mp4toannexb -tag:v hvc1 -strict unofficial
+                           -c:a copy -bsf:a aac_adtstoasc -b:a 0
+  HEVC copy that keeps every packet's bytes (18): -c:v copy -tag:v hvc1 -strict unofficial
+                           -c:a copy -bsf:a aac_adtstoasc -b:a 0
   copy with encoded audio (16): -c:v copy -bsf:v h264_mp4toannexb -tag:v avc1 -strict unofficial
           -c:a aac -ac 1 -b:a 8k
   x264:   -c:v libx264 -preset faster -tag:v avc1 -profile:v high -level:v 10
@@ -122,6 +126,15 @@ every keyframe in the samples; the MPEG-TS copy already carried them, so its rec
 change. The HLS recipe's copies take the same video arguments, so that both recipes hold the same
 packets.
 libx265 writes its parameters into the initialization segment, so its recordings grew by one byte.
+
+A copy leaves the Annex B filter out when its job says that the copy keeps every packet's bytes, which
+the probe decides from the source's decoder configuration record. Fixture 18 copies a libx265 source
+whose `hvcC` holds its VPS, SPS and PPS and whose samples carry none, once without the filter and once
+with it. The side claims pin what that changes: without the filter every video sample keeps its source
+packet's size, and with it every keyframe sample, and nothing else, grows by the record's parameter
+sets, which a complete `hvc1` record promises no sample repeats. Both copies deliver the same
+initialization segment. The recorder makes this source with `info=0`, because libx265's settings SEI
+names the host's CPU features, which would make a re-recording on another host differ.
 
 The producer removes the SEI messages from every `hvc1` record before it delivers the
 initialization segment. FFmpeg builds the record from the first sample when the source's record
@@ -264,10 +277,12 @@ Timescale 24000 unless stated. `n@t` means segment n starts at t seconds.
 | 16b | `16-copy-encode-audio-seek30.fmp4` | 5 | Its replacement attempt at `-ss 30`. The seek lands on the keyframe at 28.028 s, but the encoded audio starts at the seek point (29.979 s, its priming frame). `delay_moov` writes nothing until every track has a sample, so the first fragment holds the video from 28.028 s to 30.072 s, with the keyframe at 30.030 s as its 49th sample, and one audio sample. That keyframe opens segment 5 inside the fragment: the 48 samples before it are segment 4's discarded preroll, and segment 5 carries exactly 16's video samples at the same ticks. The next two fragments start with non-sync samples; the next keyframe that starts a fragment is at 32.032 s. Ends with one audio-only fragment. |
 | 17 | `17-copy-audio-ends-long-before-video.fmp4` | 0 | 180 s of video, 20 s of a sine tone, copied: the audio outlasts FFmpeg's 10 s muxer interleave bound many times over. The fragment at 20.020 s carries the last three audio samples, which end at 20.0 s, and fragments 21–179 carry video alone, so no audio sample ever starts at or after the end of segments 3–28; 30 segments, the last from 174.174 s. |
 | 17b | `17-encode-audio-ends-long-before-video.fmp4` | 0 | The same source encoded under the recipe: the fragment at 20.020 s carries an audio sample at 19.947 s, and the AAC encoder's last two frames (19.968–20.011 s, segment 3) arrive only in fragment 169, at 169.002 s, inside segment 28: FFmpeg flushes the encoder once the whole input has ended, so the producer drops them. Every other fragment from 21 on carries video alone; 30 segments of one forced keyframe each. |
+| 18 | `18-copy-hevc-keeping-packet-bytes.fmp4` | 0 | libx265 Main source (23.976 fps, a keyframe every 48 frames, B-frames, 20 s) whose `hvcC` holds the parameter sets, copied without the Annex B filter: no keyframe sample repeats a VPS, SPS or PPS, and every video sample keeps its source packet's size. 4 segments: 0@0, 1@6.006, 2@12.012, 3@18.018. |
+| 18b | `18-copy-hevc-annex-b.fmp4` | 0 | The same source copied through `hevc_mp4toannexb`: every keyframe sample starts with the record's VPS, SPS and PPS, and no other sample changes. The same segments and initialization segment as 18. |
 
 Box facts every recording shares (useful for the reader):
 - Top-level boxes are only `ftyp`, `moov`, `moof` and `mdat`, in that order, with no `largesize`, `styp` or `sidx`.
-- `moov` holds `mvhd`, two `trak`s (video track 1, audio track 2), `mvex` and `udta`. The video sample entry is `avc1` (libx264 and copies), `av01` (SVT-AV1) or `hvc1` (libx265).
+- `moov` holds `mvhd`, two `trak`s (video track 1, audio track 2), `mvex` and `udta`. The video sample entry is `avc1` (libx264 and the H.264 copies), `av01` (SVT-AV1) or `hvc1` (libx265 and the HEVC copies).
 - Every `traf` has `tfhd` flags `0x02003a` (default-base-is-moof plus default duration, size and flags), `tfdt` version 1 and exactly one `trun`.
 - Every `trun` is version 1 (signed composition offsets) with a data offset. Sync status is carried by `trun` first_sample_flags (0x4) when present, otherwise by the `tfhd` default flags. Per-sample flags (0x400) never occur.
 - The largest fragment is 4,536 bytes (17b), and 2,934 bytes outside 17 and 17b; every keyframe starts a fragment, except the keyframe at 30.030 s inside 16b's first fragment.
@@ -363,6 +378,7 @@ Agreement, exact in ticks:
 | 15 | – | agrees | |
 | 16, 16b | – | – | no HLS run: the video packets and cut points are 7's |
 | 17, 17b | – | – | no HLS run: they record when audio stops arriving, not where the muxer cuts |
+| 18, 18b | – | – | no HLS run: they record what the Annex B filter adds to the samples, not where the muxer cuts |
 
 The list anchors the pipe recipe's keyframes on the zero-based timeline, while hlsenc and the HLS
 recipe's expression both measure from the attempt's first frame. Before the list, the pipe recipe forced
