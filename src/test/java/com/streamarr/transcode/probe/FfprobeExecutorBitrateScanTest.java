@@ -400,6 +400,13 @@ class FfprobeExecutorBitrateScanTest {
             source().streams(MATROSKA_STREAMS.formatted("aac")).extradata(1, AUDIO_SPECIFIC_CONFIG),
             0),
         Arguments.of(
+            "H.264 in FLV, which can carry a new decoder configuration record in any packet",
+            source()
+                .streams(MATROSKA_STREAMS.formatted("aac").replace("\"matroska,webm\"", "\"flv\""))
+                .extradata(0, KEPT_AVC_RECORD)
+                .extradata(1, AUDIO_SPECIFIC_CONFIG),
+            0),
+        Arguments.of(
             "AV1, whose OBUs the mp4 muxer may drop",
             source()
                 .streams(MATROSKA_STREAMS.formatted("aac").replace("\"h264\"", "\"av1\""))

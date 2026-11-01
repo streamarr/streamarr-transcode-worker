@@ -177,7 +177,8 @@ final class BitrateScanChunkRun {
       throws ExecutionException, InterruptedException {
     return switch (stream.copyRule()) {
       case H264_RECORD, HEVC_RECORD ->
-          keepsPacketsWhen(CopiedPacketBytes.of(stream.description()).orElse(false));
+          keepsPacketsWhen(
+              CopiedPacketBytes.of(stream.description(), probed.formatName()).orElse(false));
       case ALWAYS_CHANGED -> PacketCopy.CHANGES_PACKETS;
       case AAC_WITHOUT_ADTS ->
           Extradata.of(stream.description()).isPresent()
