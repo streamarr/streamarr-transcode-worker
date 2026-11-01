@@ -66,21 +66,21 @@ final class CopiedSampleSizes {
         child(media, "minf")
             .flatMap(info -> child(info, "stbl"))
             .orElseThrow(() -> malformed("stbl"));
-    return switch (stream.codecName()) {
-      case "h264" ->
+    return switch (CopiedPacketRule.of(stream.codecName())) {
+      case H264_RECORD ->
           sampleEntry(sampleTable)
               .filter(entry -> keepsPacketBytes(entry, ProbedCodecFamily.H264, "avcC"))
               .isPresent();
-      case "hevc" ->
+      case HEVC_RECORD ->
           sampleEntry(sampleTable)
               .filter(entry -> keepsPacketBytes(entry, ProbedCodecFamily.HEVC, "hvcC"))
               .isPresent();
-      case "av1", "vp9" -> false;
-      case "aac" ->
+      case ALWAYS_CHANGED -> false;
+      case AAC_WITHOUT_ADTS ->
           sampleEntry(sampleTable).filter(CopiedSampleSizes::hasAudioSpecificConfig).isPresent()
               && !startsWithAdtsSyncWord(source.channel(), sampleTable);
-      case "eac3" -> holdsSixBlocksPerSample(media, sampleTable, stream.sampleRate());
-      default -> true;
+      case SIX_BLOCK_EAC3 -> holdsSixBlocksPerSample(media, sampleTable, stream.sampleRate());
+      case KEPT -> true;
     };
   }
 
