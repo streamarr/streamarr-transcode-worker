@@ -199,18 +199,7 @@ final class BitrateScanChunkRun {
    */
   private PacketCopy firstAacPacketCopy(ProbedSource probed, int streamIndex)
       throws ExecutionException, InterruptedException {
-    var arguments = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
-    arguments.addAll(FfprobeExecutor.READ_LIMITS);
-    arguments.addAll(
-        List.of(
-            "-select_streams",
-            String.valueOf(streamIndex),
-            "-read_intervals",
-            "%+#1",
-            "-show_entries",
-            "packet=data",
-            "-show_data",
-            probed.source().toString()));
+    var arguments = firstPacketRead(probed, streamIndex, List.of("packet=data", "-show_data"));
     var output = boundedFfprobe.run(arguments, FIRST_PACKET_OUTPUT_BYTES);
     if (output.isEmpty()) {
       return PacketCopy.UNREADABLE;
@@ -229,6 +218,19 @@ final class BitrateScanChunkRun {
     var data = Extradata.dumped(packets.get(0).path("data").asString("")).orElse(new byte[0]);
     var isAdts = data.length > 2 && (data[0] & 0xFF) == 0xFF && (data[1] & 0xF0) == 0xF0;
     return keepsPacketsWhen(!isAdts);
+  }
+
+  /** The arguments of a read of the stream's first packet that shows the entries. */
+  private static List<String> firstPacketRead(
+      ProbedSource probed, int streamIndex, List<String> entries) {
+    var arguments = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
+    arguments.addAll(FfprobeExecutor.READ_LIMITS);
+    arguments.addAll(
+        List.of("-select_streams", String.valueOf(streamIndex), "-read_intervals", "%+#1"));
+    arguments.add("-show_entries");
+    arguments.addAll(entries);
+    arguments.add(probed.source().toString());
+    return arguments;
   }
 
   private static Optional<Long> sampleRate(MeasuredStream stream) {
