@@ -259,7 +259,12 @@ final class BitrateScanChunkRun {
               new TimeBase(chunk.getTimeBaseNumerator(), chunk.getTimeBaseDenominator()),
               hasEnd,
               ffprobeOutput);
-      var chosen = streams.getFirst();
+      // A well-formed chunk measures its chosen stream, in any place of its list.
+      var chosen =
+          streams.stream()
+              .filter(stream -> stream.index() == chunk.getChosenVideoStreamIndex())
+              .findFirst()
+              .orElseThrow();
       var video = keyframes.rescaledExactly(chosen.timeBase());
       if (video.isEmpty()) {
         return Optional.empty();

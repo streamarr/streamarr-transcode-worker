@@ -233,6 +233,28 @@ class FfprobeExecutorBitrateScanTest {
 
   @Test
   @DisplayName(
+      "Should count the chosen video stream as video when the chunk lists it after an audio stream")
+  void shouldCountTheChosenVideoStreamAsVideoWhenTheChunkListsItAfterAnAudioStream() {
+    var ffprobe = keptAacSource().listing(FROM_FILE_START, WHOLE_FILE).build();
+    var chunk =
+        POSITIONS
+            .chunk(0, 2)
+            .clearMeasuredStreamIndexes()
+            .addMeasuredStreamIndexes(1)
+            .addMeasuredStreamIndexes(0);
+
+    var report = ffprobe.executor().probe(SOURCE, request(chunk));
+
+    // The same counts as the chunk that lists the video first, in the chunk's order.
+    assertThat(intervalCounts(report.streamMeasurementParts()))
+        .containsExactly(
+            Map.entry(
+                1, counts(List.of(10L + 11 + 12 + 13 + 14, 15L + 16 + 17 + 18), List.of(5L, 4L))),
+            Map.entry(0, counts(List.of(1000L + 200, 1001L + 201), List.of(2L, 2L))));
+  }
+
+  @Test
+  @DisplayName(
       "Should keep each audio time within the chunk's keyframes on the zero-based timeline when the"
           + " container start is no whole tick of both time bases")
   void shouldKeepEachAudioTimeWithinTheChunksKeyframesOnTheZeroBasedTimelineWhenTheStartIsUneven() {
