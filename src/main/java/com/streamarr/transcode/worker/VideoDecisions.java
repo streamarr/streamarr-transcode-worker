@@ -79,10 +79,9 @@ final class VideoDecisions {
       VideoDynamicRanges.of(video.getSourceDynamicRange());
     }
 
-    // The contract does not yet say whether a copy keeps every packet's bytes, so every copy keeps
-    // the Annex B filter.
-    var keepsPacketBytes = false;
-    return new VideoDecision.Copy(video.getStreamIndex(), video.getCodecString(), keepsPacketBytes);
+    // A server that does not send the field leaves it false, so the copy keeps the Annex B filter.
+    return new VideoDecision.Copy(
+        video.getStreamIndex(), video.getCodecString(), video.getCopyKeepsPacketBytes());
   }
 
   @SuppressWarnings("checkstyle:fullyQualifiedName")
