@@ -31,6 +31,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
 @Tag("UnitTest")
@@ -203,6 +204,28 @@ class FfprobeExecutorCopyPacketBytesTest {
                 stream.remove("id");
                 return stream;
               }));
+    }
+
+    @Test
+    @DisplayName(
+        "Should report that a copy may change packet bytes when another stream that ffprobe reports"
+            + " has the stream's track ID")
+    void
+        shouldReportThatACopyMayChangePacketBytesWhenAnotherStreamThatFfprobeReportsHasTheStreamsTrackId() {
+      // FFmpeg also reads a trak outside the movie box, whose sample entries the probe does not
+      // count, so a track ID that two streams carry names no single track.
+      var recorded = fixture(AVC1_MP4);
+      var output = (ObjectNode) MAPPER.readTree(recorded);
+      ((ArrayNode) output.path("streams"))
+          .addObject()
+          .put("index", 1)
+          .put("codec_type", "audio")
+          .put("codec_name", "aac")
+          .put("id", "0x1");
+
+      var video = edited(AVC1_MP4, recorded, MAPPER.writeValueAsString(output));
+
+      assertThat(copyKeepsPacketBytes(video)).isFalse();
     }
 
     @ParameterizedTest(name = "{0}")
