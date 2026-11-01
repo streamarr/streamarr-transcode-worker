@@ -376,6 +376,30 @@ class FfprobeExecutorBitrateScanTest {
                     """),
             1),
         Arguments.of(
+            "E-AC-3 at 44.1 kHz whose packet lasts more than a tick beyond 1,536 samples",
+            source()
+                .streams(MATROSKA_STREAMS.formatted("eac3").replace("\"48000\"", "\"44100\""))
+                .extradata(0, KEPT_AVC_RECORD)
+                .listing(
+                    FROM_FILE_START,
+                    """
+                    stream_index=0|pts=500|dts=500|duration=500|size=1000|flags=K__
+                    stream_index=1|pts=500|dts=500|duration=36|size=100|flags=K__
+                    """),
+            1),
+        Arguments.of(
+            "E-AC-3 at 44.1 kHz whose packet ends more than a tick before 1,536 samples",
+            source()
+                .streams(MATROSKA_STREAMS.formatted("eac3").replace("\"48000\"", "\"44100\""))
+                .extradata(0, KEPT_AVC_RECORD)
+                .listing(
+                    FROM_FILE_START,
+                    """
+                    stream_index=0|pts=500|dts=500|duration=500|size=1000|flags=K__
+                    stream_index=1|pts=500|dts=500|duration=33|size=100|flags=K__
+                    """),
+            1),
+        Arguments.of(
             "E-AC-3 whose packets hold 256 audio samples",
             source()
                 .streams(MATROSKA_STREAMS.formatted("eac3"))
@@ -435,21 +459,32 @@ class FfprobeExecutorBitrateScanTest {
     assertThat(ffprobe.listingStarts()).isEmpty();
   }
 
-  @Test
-  @DisplayName("Should measure E-AC-3 when each of its packets holds 1,536 audio samples")
-  void shouldMeasureEac3WhenEachOfItsPacketsHolds1536AudioSamples() {
-    // 1,536 samples at 48 kHz last 32 ms.
+  static Stream<Arguments> sixBlockDurations() {
+    return Stream.of(
+        Arguments.of("48 kHz, where 1,536 samples last exactly 32 ms", "48000", 32, 32),
+        Arguments.of(
+            "44.1 kHz, where 1,536 samples last 34.83 ms, rounded either way", "44100", 35, 34));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("sixBlockDurations")
+  @DisplayName(
+      "Should measure E-AC-3 when each packet's duration rounds 1,536 audio samples to the time"
+          + " base")
+  void shouldMeasureEac3WhenEachPacketsDurationRounds1536AudioSamplesToTheTimeBase(
+      String description, String sampleRate, int firstDuration, int secondDuration) {
     var ffprobe =
         source()
-            .streams(MATROSKA_STREAMS.formatted("eac3"))
+            .streams(MATROSKA_STREAMS.formatted("eac3").replace("48000", sampleRate))
             .extradata(0, KEPT_AVC_RECORD)
             .listing(
                 FROM_FILE_START,
                 """
                 stream_index=0|pts=500|dts=500|duration=500|size=1000|flags=K__
-                stream_index=1|pts=500|dts=500|duration=32|size=100|flags=K__
-                stream_index=1|pts=532|dts=532|duration=32|size=100|flags=K__
-                """)
+                stream_index=1|pts=500|dts=500|duration=%d|size=100|flags=K__
+                stream_index=1|pts=535|dts=535|duration=%d|size=100|flags=K__
+                """
+                    .formatted(firstDuration, secondDuration))
             .build();
 
     var report =
@@ -771,6 +806,64 @@ class FfprobeExecutorBitrateScanTest {
     assertThat(intervalCounts(report.streamMeasurementParts()))
         .containsEntry(1, counts(List.of(30L + 60), List.of(2L)));
     assertThat(ffprobe.listingStarts()).containsExactly("10.500000", FROM_FILE_START);
+  }
+
+  @Test
+  @DisplayName(
+      "Should measure the chunk whatever the listing's exit code when the chunk's packets end the"
+          + " listing early")
+  void shouldMeasureTheChunkWhateverTheListingsExitCodeWhenTheChunksPacketsEndTheListingEarly() {
+    // Stopping ffprobe once every stream passes the chunk's end breaks its output pipe, so it
+    // exits with SIGPIPE's code.
+    var ffprobe = keptAacSource().listing(FROM_FILE_START, WHOLE_FILE).listingExitCode(141).build();
+
+    var report = ffprobe.executor().probe(SOURCE, request(POSITIONS.chunk(0, 2)));
+
+    assertThat(intervalCounts(report.streamMeasurementParts()))
+        .containsEntry(0, counts(List.of(1000L + 200, 1001L + 201), List.of(2L, 2L)));
+  }
+
+  @Test
+  @DisplayName(
+      "Should list the chunk from the second seek's margin when the first seek lands after the"
+          + " chunk's first keyframe")
+  void
+      shouldListTheChunkFromTheSecondSeeksMarginWhenTheFirstSeekLandsAfterTheChunksFirstKeyframe() {
+    // The chunk's first keyframe presents at 200.5 s on the demuxer's timeline, so the seeks aim
+    // at 190.5 s and then at 80.5 s.
+    var positions =
+        POSITIONS.toBuilder()
+            .clearKeyframes()
+            .keyframe(new Keyframe(0, 0))
+            .keyframe(new Keyframe(200_000, 200_000))
+            .keyframe(new Keyframe(220_000, 220_000))
+            .build();
+    var afterTheFirstSeek =
+        """
+        stream_index=0|pts=220500|dts=220500|duration=500|size=1002|flags=K__
+        """;
+    var afterTheSecondSeek =
+        """
+        stream_index=0|pts=80500|dts=80500|duration=500|size=900|flags=K__
+        stream_index=1|pts=80500|dts=80500|duration=250|size=9|flags=K__
+        stream_index=0|pts=200500|dts=200500|duration=500|size=1001|flags=K__
+        stream_index=1|pts=200500|dts=200500|duration=250|size=10|flags=K__
+        stream_index=0|pts=220500|dts=220500|duration=500|size=1002|flags=K__
+        stream_index=1|pts=220500|dts=220500|duration=250|size=11|flags=K__
+        """;
+    var ffprobe =
+        keptAacSource()
+            .listing("190.500000", afterTheFirstSeek)
+            .listing("80.500000", afterTheSecondSeek)
+            .build();
+
+    var report = ffprobe.executor().probe(SOURCE, request(positions.chunk(1, 2)));
+
+    assertThat(intervalCounts(report.streamMeasurementParts()))
+        .containsExactly(
+            Map.entry(0, counts(List.of(1001L), List.of(1L))),
+            Map.entry(1, counts(List.of(10L), List.of(1L))));
+    assertThat(ffprobe.listingStarts()).containsExactly("190.500000", "80.500000");
   }
 
   @Test
