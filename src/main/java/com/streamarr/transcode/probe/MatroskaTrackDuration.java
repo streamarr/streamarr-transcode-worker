@@ -100,9 +100,10 @@ final class MatroskaTrackDuration {
   }
 
   /**
-   * Whether the Tag's last SimpleTag named DURATION, ignoring case as FFmpeg's demuxer matches tag
-   * names, has no TagLanguage; true when the Tag has none. False when a SimpleTag nests another,
-   * which FFmpeg never writes and {@link MatroskaSyntax#TAGS} leaves unchecked.
+   * Whether the Tag's last SimpleTag named DURATION, ignoring the case of ASCII letters as FFmpeg's
+   * demuxer matches tag names, has no TagLanguage; true when the Tag has none. False when a
+   * SimpleTag nests another, which FFmpeg never writes and {@link MatroskaSyntax#TAGS} leaves
+   * unchecked.
    */
   private static boolean isLastDurationUncopied(ByteBuffer tag) {
     var lastDuration = new AtomicReference<ByteBuffer>();
@@ -116,7 +117,7 @@ final class MatroskaTrackDuration {
           }
 
           if (MatroskaFile.string(simpleTag, TAG_NAME)
-              .filter("DURATION"::equalsIgnoreCase)
+              .filter(name -> StreamTags.equalsIgnoringAsciiCase(name, "DURATION"))
               .isPresent()) {
             lastDuration.set(simpleTag);
           }

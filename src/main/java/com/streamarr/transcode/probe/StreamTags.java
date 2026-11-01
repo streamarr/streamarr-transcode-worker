@@ -55,9 +55,35 @@ final class StreamTags {
    * followed by the zeros of the space reserved for it.
    */
   static Optional<BigDecimal> unsuffixedMatroskaDuration(JsonNode stream) {
-    return tag(stream, "DURATION")
+    return tags(stream)
+        .filter(tag -> equalsIgnoringAsciiCase(tag.getKey(), "DURATION"))
+        .map(tag -> tag.getValue().asString())
+        .findFirst()
         .filter(duration -> COMPLETE_MATROSKA_DURATION.matcher(duration).matches())
         .flatMap(StreamTags::seconds);
+  }
+
+  /**
+   * Whether two tag names are equal when only ASCII letters are compared without regard to case, as
+   * FFmpeg compares the keys of its metadata dictionary. Java's {@link String#equalsIgnoreCase}
+   * also matches other letters, such as U+0130 to I.
+   */
+  static boolean equalsIgnoringAsciiCase(String name, String other) {
+    if (name.length() != other.length()) {
+      return false;
+    }
+
+    for (var i = 0; i < name.length(); i++) {
+      if (asciiUpperCase(name.charAt(i)) != asciiUpperCase(other.charAt(i))) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  private static char asciiUpperCase(char letter) {
+    return letter >= 'a' && letter <= 'z' ? (char) (letter - 'a' + 'A') : letter;
   }
 
   private static Optional<BigDecimal> seconds(String duration) {

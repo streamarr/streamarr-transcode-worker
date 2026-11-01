@@ -108,6 +108,8 @@ class FfprobeExecutorBitrateScanTest {
           .keyframe(new Keyframe(40_000, 40_000))
           .build();
 
+  // DURATION with U+0130, which Java's equalsIgnoreCase matches to DURATION and FFmpeg does not.
+  private static final String DOTTED_DURATION = "DURAT\u0130ON";
   private static final long VIDEO_TRACK_UID = 1;
   private static final long AUDIO_TRACK_UID = 2;
   private static final String MKVMERGE = "mkvmerge v92.0 ('Everglow') 64-bit";
@@ -1479,6 +1481,31 @@ class FfprobeExecutorBitrateScanTest {
                         ffmpegDuration("00:00:30.000000000"),
                         simpleTag("duration", "00:00:05.000000000", string(TAG_LANGUAGE, "und"))))
                 .tags("{\"duration\":\"00:00:05.000000000\"}")
+                .build()),
+        Arguments.of(
+            "a stopped run's copied DURATION before a copied tag named DURATION with a dotted"
+                + " capital I, which FFmpeg tells apart from DURATION",
+            ffmpegWritten()
+                .file(
+                    withAudioTag(
+                        copiedDuration("00:00:05.000000000"),
+                        simpleTag(DOTTED_DURATION, "00:00:30.000000000"),
+                        element(VOID, new byte[34])))
+                .tags(
+                    "{\"DURATION\":\"00:00:05.000000000\",\"%s\":\"00:00:30.000000000\"}"
+                        .formatted(DOTTED_DURATION))
+                .build()),
+        Arguments.of(
+            "a copied tag named DURATION with a dotted capital I, which ffprobe lists before"
+                + " FFmpeg's DURATION",
+            ffmpegWritten()
+                .file(
+                    withAudioTag(
+                        simpleTag(DOTTED_DURATION, "00:00:05.000000000"),
+                        ffmpegDuration("00:00:30.000000000")))
+                .tags(
+                    "{\"%s\":\"00:00:05.000000000\",\"DURATION\":\"00:00:30.000000000\"}"
+                        .formatted(DOTTED_DURATION))
                 .build()),
         Arguments.of(
             "a SimpleTag nested in another, which FFmpeg never writes",
