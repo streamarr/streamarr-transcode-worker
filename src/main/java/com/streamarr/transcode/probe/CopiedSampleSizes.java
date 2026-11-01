@@ -232,7 +232,7 @@ final class CopiedSampleSizes {
     var timescale = timescale(child(media, "mdhd").orElseThrow(() -> malformed("mdhd")));
     var sixBlocks = Math.multiplyExact(E_AC_3_SAMPLES_PER_SIX_BLOCKS, timescale);
     return runs(child(sampleTable, "stts").orElseThrow(() -> malformed("stts"))).stream()
-        .allMatch(run -> Math.multiplyExact((long) run.value(), sampleRate) == sixBlocks);
+        .allMatch(run -> Math.multiplyExact(run.value(), sampleRate) == sixBlocks);
   }
 
   private static ByteBuffer children(Box entry, int fieldBytes) {
