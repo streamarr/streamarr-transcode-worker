@@ -36,7 +36,7 @@ final class ContainerIndexProbe {
     ProcessOutput run(List<String> arguments) throws ExecutionException, InterruptedException;
   }
 
-  ProbeAttemptReport addKeyframes(Path source, ProbedSource probed)
+  ProbeAttemptReport addKeyframes(ProbedSource probed)
       throws IOException, ExecutionException, InterruptedException {
     var chosen = ChosenVideoStream.find(probed.ffprobeOutput().path("streams"));
     if (chosen.isEmpty()) {
@@ -47,34 +47,36 @@ final class ContainerIndexProbe {
               .build());
     }
 
-    var index = readIndex(source, probed.formatName(), chosen.get());
+    var index = readIndex(probed, chosen.get());
     return switch (index) {
       case Unusable(var reason) -> packetScanRequired(probed, reason);
-      case Listed listed when !isLastKeyframeReadable(source, chosen.get(), listed) ->
-          packetScanRequired(
-              probed,
-              KeyframePacketScanReason
-                  .KEYFRAME_PACKET_SCAN_REASON_UNREADABLE_LAST_INDEXED_KEYFRAME);
       case Listed listed -> report(probed, chosen.get(), listed);
     };
   }
 
-  private static KeyframeIndex readIndex(Path source, String formatName, ChosenVideoStream chosen)
+  private KeyframeIndex readIndex(ProbedSource probed, ChosenVideoStream chosen)
       throws IOException {
-    return switch (formatName) {
+    return switch (probed.formatName()) {
       case ProbedSource.MP4_FORMAT ->
           chosen.trackId().isPresent()
-              ? Mp4SyncSampleReader.read(source, chosen.trackId().get())
+              ? Mp4SyncSampleReader.read(probed.source(), chosen.trackId().get())
               : new Unusable(
                   KeyframePacketScanReason.KEYFRAME_PACKET_SCAN_REASON_INCOMPLETE_CONTAINER_INDEX);
-      case ProbedSource.MATROSKA_FORMAT -> MatroskaCueReader.read(source, chosen.videoOrdinal());
+      case ProbedSource.MATROSKA_FORMAT ->
+          MatroskaCueReader.read(probed.source(), chosen.videoOrdinal());
       default ->
           new Unusable(KeyframePacketScanReason.KEYFRAME_PACKET_SCAN_REASON_NO_CONTAINER_INDEX);
     };
   }
 
-  private static ProbeAttemptReport report(
-      ProbedSource probed, ChosenVideoStream chosen, Listed listed) {
+  private ProbeAttemptReport report(ProbedSource probed, ChosenVideoStream chosen, Listed listed)
+      throws ExecutionException, InterruptedException {
+    if (!isLastKeyframeReadable(probed.source(), chosen, listed)) {
+      return packetScanRequired(
+          probed,
+          KeyframePacketScanReason.KEYFRAME_PACKET_SCAN_REASON_UNREADABLE_LAST_INDEXED_KEYFRAME);
+    }
+
     return KeyframePositionsReport.builder()
         .probed(probed)
         .streamIndex(chosen.streamIndex())
