@@ -358,14 +358,6 @@ class FfprobeExecutorBitrateScanTest {
             keptAacSource().firstAudioPacket("ff f1 50 80 02 1f fc"),
             1),
         Arguments.of(
-            "AAC whose first packet the read cannot print",
-            keptAacSource().firstAudioPacketExitCode(1),
-            1),
-        Arguments.of(
-            "AAC whose first packet read prints more than the read holds",
-            keptAacSource().firstAudioPacketOutput("x".repeat((1 << 20) + 1)),
-            1),
-        Arguments.of(
             "E-AC-3 whose sample rate is 0",
             source()
                 .streams(MATROSKA_STREAMS.formatted("eac3").replace("\"48000\"", "\"0\""))
@@ -413,6 +405,34 @@ class FfprobeExecutorBitrateScanTest {
                     BitrateScanCopyChangesPackets.newBuilder().setStreamIndex(streamIndex))
                 .build());
     assertThat(report.streamMeasurementParts()).isEmpty();
+  }
+
+  static Stream<Arguments> unreadableFirstAacPackets() {
+    return Stream.of(
+        Arguments.of(
+            "a read that exits with an error, which a retry can pass",
+            keptAacSource().firstAudioPacketExitCode(1),
+            ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED),
+        Arguments.of(
+            "a read that prints more than any AAC packet's dump",
+            keptAacSource().firstAudioPacketOutput("x".repeat((1 << 20) + 1)),
+            ProbeFailure.PROBE_FAILURE_INVALID_MEDIA));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("unreadableFirstAacPackets")
+  @DisplayName(
+      "Should fail the chunk without claiming a changed copy when the first AAC packet's read gives"
+          + " no packet")
+  void shouldFailTheChunkWithoutClaimingAChangedCopyWhenTheFirstAacPacketsReadGivesNoPacket(
+      String description, ScriptedSource.ScriptedSourceBuilder source, ProbeFailure failure) {
+    var ffprobe = source.listing(FROM_FILE_START, WHOLE_FILE).build();
+
+    var report = ffprobe.executor().probe(SOURCE, request(POSITIONS.chunk(0, 4)));
+
+    assertThat(report.result().getFailure()).isEqualTo(failure);
+    assertThat(report.streamMeasurementParts()).isEmpty();
+    assertThat(ffprobe.listingStarts()).isEmpty();
   }
 
   @Test

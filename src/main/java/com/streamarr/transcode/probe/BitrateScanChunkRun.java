@@ -90,8 +90,13 @@ final class BitrateScanChunkRun {
     }
 
     for (var stream : streams.get()) {
-      if (!keepsPackets(probed, stream)) {
+      var copy = packetCopy(probed, stream);
+      if (copy == PacketCopy.CHANGES_PACKETS) {
         return copyChangesPackets(probed, stream.index());
+      }
+
+      if (copy == PacketCopy.UNREADABLE) {
+        return failed(probed, ProbeFailure.PROBE_FAILURE_INVALID_MEDIA);
       }
     }
 
@@ -155,28 +160,42 @@ final class BitrateScanChunkRun {
     return Optional.of(measured);
   }
 
+  /** What a stream copy does to a stream's packets. */
+  private enum PacketCopy {
+    KEEPS_PACKETS,
+    CHANGES_PACKETS,
+    /** The stream's first packet is too large to be one of its codec's. */
+    UNREADABLE
+  }
+
   /**
-   * Whether a copy keeps the stream's packets, as far as the stream's description and first packet
+   * What a copy does to the stream's packets, as far as the stream's description and first packet
    * tell. The E-AC-3 rule needs each packet's duration, so the listing checks it.
    */
-  private boolean keepsPackets(ProbedSource probed, MeasuredStream stream)
+  private PacketCopy packetCopy(ProbedSource probed, MeasuredStream stream)
       throws ExecutionException, InterruptedException {
     return switch (stream.copyRule()) {
-      case H264_RECORD, HEVC_RECORD -> CopiedPacketBytes.of(stream.description()).orElse(false);
-      case ALWAYS_CHANGED -> false;
+      case H264_RECORD, HEVC_RECORD ->
+          keepsPacketsWhen(CopiedPacketBytes.of(stream.description()).orElse(false));
+      case ALWAYS_CHANGED -> PacketCopy.CHANGES_PACKETS;
       case AAC_WITHOUT_ADTS ->
           Extradata.of(stream.description()).isPresent()
-              && !firstPacketStartsWithAdtsSyncWord(probed, stream.index());
-      case SIX_BLOCK_EAC3 -> sampleRate(stream).isPresent();
-      case KEPT -> true;
+              ? firstAacPacketCopy(probed, stream.index())
+              : PacketCopy.CHANGES_PACKETS;
+      case SIX_BLOCK_EAC3 -> keepsPacketsWhen(sampleRate(stream).isPresent());
+      case KEPT -> PacketCopy.KEEPS_PACKETS;
     };
+  }
+
+  private static PacketCopy keepsPacketsWhen(boolean isKept) {
+    return isKept ? PacketCopy.KEEPS_PACKETS : PacketCopy.CHANGES_PACKETS;
   }
 
   /**
    * The mp4 muxer adds {@code aac_adtstoasc} when the first AAC packet it receives starts with an
-   * ADTS sync word. A first packet that the read cannot print counts as one that does.
+   * ADTS sync word. A read that fails says nothing about the packet, so it fails the chunk.
    */
-  private boolean firstPacketStartsWithAdtsSyncWord(ProbedSource probed, int streamIndex)
+  private PacketCopy firstAacPacketCopy(ProbedSource probed, int streamIndex)
       throws ExecutionException, InterruptedException {
     var arguments = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
     arguments.addAll(FfprobeExecutor.READ_LIMITS);
@@ -191,17 +210,23 @@ final class BitrateScanChunkRun {
             "-show_data",
             probed.source().toString()));
     var output = boundedFfprobe.run(arguments, FIRST_PACKET_OUTPUT_BYTES);
-    if (output.isEmpty() || output.get().exitCode() != 0) {
-      return true;
+    if (output.isEmpty()) {
+      return PacketCopy.UNREADABLE;
+    }
+
+    if (output.get().exitCode() != 0) {
+      throw new PacketScanException(
+          "ffprobe's first AAC packet read exited with code " + output.get().exitCode());
     }
 
     var packets = objectMapper.readTree(output.get().stdout()).path("packets");
     if (packets.isEmpty()) {
-      return false;
+      return PacketCopy.KEEPS_PACKETS;
     }
 
     var data = Extradata.dumped(packets.get(0).path("data").asString("")).orElse(new byte[0]);
-    return data.length > 2 && (data[0] & 0xFF) == 0xFF && (data[1] & 0xF0) == 0xF0;
+    var isAdts = data.length > 2 && (data[0] & 0xFF) == 0xFF && (data[1] & 0xF0) == 0xF0;
+    return keepsPacketsWhen(!isAdts);
   }
 
   private static Optional<Long> sampleRate(MeasuredStream stream) {
