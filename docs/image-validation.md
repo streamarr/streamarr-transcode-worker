@@ -40,7 +40,8 @@ The aggregate `build` check includes both image jobs.
 
 After human review and merge, a push to `main` publishes each tested native image to Docker Hub
 `streamarr/streamarr-transcode-worker`. The publishing steps reuse the tested image without rebuilding.
-Pull requests and manual CI runs do not authenticate or publish. The workflow uses the existing
+Pull request CI and manual CI runs do not authenticate or publish; see [preview images](#preview-images)
+for the one opt-in exception. The workflow uses the existing
 `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` organization secrets and a read-only GitHub token.
 
 Each native job records its registry digest. After both jobs pass, the shared publication workflow
@@ -62,6 +63,20 @@ Published GitHub releases also trigger Release Publisher, which rebuilds the tag
 both native runners. It runs the same media checks and `WorkerImageIT` command before Docker Hub
 authentication, then publishes native commit tags and a multi-architecture version tag.
 Only GitHub's latest release updates `latest`. See [releases](releases.md) for validation and retry behavior.
+
+## Preview images
+
+A repository owner, member, or collaborator can comment `/deploy-preview` on a pull request to
+publish its head as `streamarr/streamarr-transcode-worker:pr-<number>`, the same command and tag
+form the server uses. A server preview and a worker preview can then run together on one test host.
+The build job checks out the pull request head with a read-only token, no secrets, and no cache. It
+builds the amd64 image with `build-worker-image.sh`, so the preview passes the same media runtime
+checks as CI. It does not run `WorkerImageIT`; the pull request's own CI does. A separate job, which
+never checks out repository code, loads that image, pushes the preview tag, and comments the source
+commit on the pull request. The build checks out the head when the job starts, so check that
+commit in the comment before relying on the preview. Closing the pull request deletes the tag.
+GitHub runs comment-triggered workflows from the default branch, so the command works only after
+this workflow is on `main`.
 
 Hardware encoder support and redistribution materials remain in the moved buildpack. Ordinary
 CI runners prove CPU operation. They do not claim to exercise GPU devices or drivers.
