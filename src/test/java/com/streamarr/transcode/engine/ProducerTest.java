@@ -194,6 +194,56 @@ class ProducerTest {
                     .containsExactly("moof", "mdat"));
   }
 
+  // worker_session.proto pins this layout: the server adds a copy's framing to its measured bytes.
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("recordings")
+  @DisplayName(
+      "Should frame each media segment with 32 bytes, 64 bytes for each track and 16 bytes for each"
+          + " sample when it rebuilds the media segments")
+  void shouldFrameEachMediaSegmentWithFixedBytesPerSegmentTrackAndSampleWhenItRebuildsSegments(
+      Recording recording) {
+    deliverEverySegmentOf(recording);
+
+    assertThat(mediaSegmentNames())
+        .isNotEmpty()
+        .allSatisfy(name -> assertPinnedSegmentLayout(sink.contentOf(name)));
+  }
+
+  private static void assertPinnedSegmentLayout(byte[] segment) {
+    var boxes = TopLevelBoxes.of(segment);
+    assertThat(boxes).extracting(Box::type).containsExactly("moof", "mdat");
+    var moof = childrenOf(segment, boxes.getFirst());
+    assertThat(moof.getFirst().type()).isEqualTo("mfhd");
+    assertThat(moof.getFirst().size()).isEqualTo(16);
+    var trafs = moof.subList(1, moof.size());
+    assertThat(trafs).isNotEmpty().hasSizeLessThanOrEqualTo(2);
+    var samples = 0L;
+    for (var traf : trafs) {
+      assertThat(traf.type()).isEqualTo("traf");
+      var children = childrenOf(segment, traf);
+      assertThat(children).extracting(Box::type).containsExactly("tfhd", "tfdt", "trun");
+      var buffer = ByteBuffer.wrap(segment);
+      assertThat(children.get(0).size()).isEqualTo(16);
+      assertThat(buffer.getInt(children.get(0).start() + 8)).isEqualTo(0x02_0000);
+      assertThat(children.get(1).size()).isEqualTo(20);
+      assertThat(buffer.getInt(children.get(1).start() + 8)).isEqualTo(0x0100_0000);
+      var trun = children.get(2);
+      assertThat(buffer.getInt(trun.start() + 8)).isEqualTo(0x0100_0F01);
+      var sampleCount = Integer.toUnsignedLong(buffer.getInt(trun.start() + 12));
+      assertThat(trun.size()).isEqualTo(20 + 16 * sampleCount);
+      samples += sampleCount;
+    }
+
+    var mediaData = boxes.get(1).size() - 8;
+    assertThat(segment.length - mediaData).isEqualTo(32 + 64L * trafs.size() + 16 * samples);
+  }
+
+  private static List<Box> childrenOf(byte[] output, Box parent) {
+    return TopLevelBoxes.of(Arrays.copyOfRange(output, parent.start() + 8, parent.end())).stream()
+        .map(child -> new Box(parent.start() + 8 + child.start(), child.size(), child.type()))
+        .toList();
+  }
+
   @ParameterizedTest(name = "{0}")
   @MethodSource("recordings")
   @DisplayName("Should deliver FFmpeg's own samples when it rebuilds the media segments")
