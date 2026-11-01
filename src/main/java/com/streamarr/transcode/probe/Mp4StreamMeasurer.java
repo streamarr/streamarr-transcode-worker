@@ -200,18 +200,49 @@ final class Mp4StreamMeasurer {
 
   /**
    * The samples of one track that FFmpeg's mov demuxer returns, from {@code first} on, with their
-   * demuxer times in ticks of 1 / {@code timescale} seconds.
+   * demuxer times in ticks of 1 / {@code timescale} seconds. The measurer reads the arrays in place
+   * and compares tracks by identity, so a track is not a value.
    */
-  private record Track(
-      boolean isVideo,
-      long timescale,
-      int[] sizes,
-      long[] presentationTimes,
-      long[] decodeTimes,
-      long[] durations,
-      boolean[] sync,
-      int first,
-      boolean presentsBeforeEditStart) {
+  private static final class Track {
+    private final boolean isVideo;
+    private final long timescale;
+    private final int[] sizes;
+    private final long[] presentationTimes;
+    private final long[] decodeTimes;
+    private final long[] durations;
+    private final boolean[] sync;
+    private final int first;
+    private final boolean presentsBeforeEditStart;
+
+    @Builder
+    private Track(
+        boolean isVideo,
+        long timescale,
+        int[] sizes,
+        long[] presentationTimes,
+        long[] decodeTimes,
+        long[] durations,
+        boolean[] sync,
+        int first,
+        boolean presentsBeforeEditStart) {
+      this.isVideo = isVideo;
+      this.timescale = timescale;
+      this.sizes = sizes;
+      this.presentationTimes = presentationTimes;
+      this.decodeTimes = decodeTimes;
+      this.durations = durations;
+      this.sync = sync;
+      this.first = first;
+      this.presentsBeforeEditStart = presentsBeforeEditStart;
+    }
+
+    boolean isVideo() {
+      return isVideo;
+    }
+
+    boolean presentsBeforeEditStart() {
+      return presentsBeforeEditStart;
+    }
 
     static Optional<Track> read(ByteBuffer movie, long trackId, long movieTimescale) {
       var trak = track(movie, trackId);
@@ -244,18 +275,17 @@ final class Mp4StreamMeasurer {
         return Optional.empty();
       }
 
-      return Optional.of(
-          timed(
-              Timing.builder()
-                  .isVideo("vide".equals(handler))
-                  .timescale(timescale)
-                  .movieTimescale(movieTimescale)
-                  .hasEditList(editList.isPresent())
-                  .edit(edit.get())
-                  .sampleTable(sampleTable)
-                  .durationRuns(durationRuns)
-                  .sizes(sizes)
-                  .build()));
+      var timing =
+          Timing.builder()
+              .isVideo("vide".equals(handler))
+              .timescale(timescale)
+              .movieTimescale(movieTimescale)
+              .hasEditList(editList.isPresent())
+              .edit(edit.get())
+              .sampleTable(sampleTable)
+              .durationRuns(durationRuns)
+              .build();
+      return Optional.of(timed(timing, sizes));
     }
 
     /** The kept keyframes of this track, in decode order. */
@@ -333,7 +363,7 @@ final class Mp4StreamMeasurer {
         }
 
         var time = isVideo ? keyframe.decodeTime() : keyframe.presentationTime();
-        boundaries[i] = rescaleUp(time, timescale, chosen.timescale());
+        boundaries[i] = rescaleUp(time, timescale, chosen.timescale);
       }
 
       return boundaries;
@@ -357,11 +387,10 @@ final class Mp4StreamMeasurer {
       boolean hasEditList,
       Edit edit,
       ByteBuffer sampleTable,
-      List<Run> durationRuns,
-      int[] sizes) {}
+      List<Run> durationRuns) {}
 
-  private static Track timed(Timing timing) {
-    var count = timing.sizes().length;
+  private static Track timed(Timing timing, int[] sizes) {
+    var count = sizes.length;
     var offsets =
         timing.isVideo()
             ? child(timing.sampleTable(), "ctts").map(Mp4SampleTables::runs).orElse(List.<Run>of())
@@ -404,16 +433,17 @@ final class Mp4StreamMeasurer {
       decodeTimes[i] = Math.addExact(decodeTimes[i], shift);
     }
 
-    return new Track(
-        timing.isVideo(),
-        timing.timescale(),
-        timing.sizes(),
-        presentationTimes,
-        decodeTimes,
-        durations,
-        sync,
-        first,
-        presentsBeforeEditStart);
+    return Track.builder()
+        .isVideo(timing.isVideo())
+        .timescale(timing.timescale())
+        .sizes(sizes)
+        .presentationTimes(presentationTimes)
+        .decodeTimes(decodeTimes)
+        .durations(durations)
+        .sync(sync)
+        .first(first)
+        .presentsBeforeEditStart(presentsBeforeEditStart)
+        .build();
   }
 
   /**
