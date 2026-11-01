@@ -75,6 +75,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 @Tag("UnitTest")
+@DisplayName("Producer Tests")
 class ProducerTest {
 
   private static final Duration OUTCOME_LIMIT = Duration.ofSeconds(10);
