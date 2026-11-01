@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
+import lombok.Builder;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -19,6 +20,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.yaml.snakeyaml.Yaml;
+import tools.jackson.databind.ObjectMapper;
 
 @Tag("UnitTest")
 @DisplayName("Preview Image Workflow Tests")
@@ -26,13 +28,16 @@ class PreviewImageWorkflowTest {
 
   private static final String PREVIEW_WORKFLOW = ".github/workflows/preview.yml";
   private static final String CLEANUP_WORKFLOW = ".github/workflows/preview-cleanup.yml";
+  private static final String AUTHORIZE_JOB = "authorize_preview";
   private static final String BUILD_JOB = "build_preview";
   private static final String PUBLISH_JOB = "publish_preview";
+  private static final String CLEANUP_JOB = "delete_preview_tag";
   private static final String PULL_REQUEST = "42";
+  private static final String REPOSITORY = "streamarr/streamarr-transcode-worker";
   private static final String BUILT_IMAGE = "streamarr-worker:preview-amd64";
   private static final String PREVIEW_TAG =
       "index.docker.io/streamarr/streamarr-transcode-worker:pr-" + PULL_REQUEST;
-  private static final String HEAD_REVISION = "a".repeat(40);
+  private static final String HEAD_REVISION = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   private static final String HUB_TAG_URL =
       "https://hub.docker.com/v2/repositories/streamarr/streamarr-transcode-worker/tags/pr-"
           + PULL_REQUEST;
@@ -50,7 +55,7 @@ class PreviewImageWorkflowTest {
     assertThat(map(workflow.get(true)))
         .containsOnly(entry("issue_comment", Map.of("types", List.of("created"))));
     assertThat(workflow).containsEntry("permissions", Map.of());
-    assertThat(job(workflow, BUILD_JOB).get("if").toString().strip())
+    assertThat(job(workflow, AUTHORIZE_JOB).get("if").toString().strip())
         .isEqualTo(
             "github.event.issue.pull_request"
                 + " && github.event.comment.body == '/deploy-preview'"
@@ -59,26 +64,67 @@ class PreviewImageWorkflowTest {
   }
 
   @Test
-  @DisplayName("Should check out the pull request head without credentials when building a preview")
-  void shouldCheckOutThePullRequestHeadWithoutCredentialsWhenBuildingAPreview() throws IOException {
+  @DisplayName("Should authorize with pinned actions and no repository code when a command arrives")
+  void shouldAuthorizeWithPinnedActionsAndNoRepositoryCodeWhenACommandArrives() throws IOException {
+    var authorize = job(yaml(PREVIEW_WORKFLOW), AUTHORIZE_JOB);
+
+    assertThat(authorize).containsEntry("permissions", Map.of("pull-requests", "read"));
+    assertThat(map(authorize.get("outputs")))
+        .containsOnly(entry("revision", "${{ steps.authorize.outputs.revision }}"));
+    assertThat(steps(authorize))
+        .allSatisfy(step -> assertThat(step.get("uses").toString()).matches(PINNED_ACTION));
+    assertThat(authorize.toString()).doesNotContain("actions/checkout", "secrets.");
+  }
+
+  @ParameterizedTest(name = "{0} access, {1} pull request from {2}")
+  @CsvSource({
+    "admin, open, " + REPOSITORY + ", 0, output revision=" + HEAD_REVISION,
+    "write, open, " + REPOSITORY + ", 0, output revision=" + HEAD_REVISION,
+    "read, open, " + REPOSITORY + ", 1, needs write access",
+    "none, open, " + REPOSITORY + ", 1, needs write access",
+    "write, closed, " + REPOSITORY + ", 1, only for open pull requests",
+    "write, open, someone/streamarr-transcode-worker, 1, only for branches of this repository",
+    "write, open, '', 1, only for branches of this repository"
+  })
+  @DisplayName("Should build only an open branch of this repository when a writer comments")
+  void shouldBuildOnlyAnOpenBranchOfThisRepositoryWhenAWriterComments(
+      String permission, String state, String headRepository, int exitCode, String outcome)
+      throws Exception {
+    var authorize = job(yaml(PREVIEW_WORKFLOW), AUTHORIZE_JOB);
+
+    var result =
+        runScript(
+            stepNamed(
+                steps(authorize),
+                "Require write access and an open pull request from this repository"),
+            GitHubState.openBranchByWriter()
+                .permission(permission)
+                .state(state)
+                .headRepository(headRepository)
+                .build(),
+            Map.of());
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(exitCode);
+    assertThat(result.output()).contains(outcome);
+  }
+
+  @Test
+  @DisplayName(
+      "Should check out the authorized revision without credentials when building a preview")
+  void shouldCheckOutTheAuthorizedRevisionWithoutCredentialsWhenBuildingAPreview()
+      throws IOException {
     var build = job(yaml(PREVIEW_WORKFLOW), BUILD_JOB);
-    var steps = steps(build);
-    var checkout = steps.getFirst();
-    var revision = stepNamed(steps, "Resolve PR head SHA");
+    var checkout = steps(build).getFirst();
 
     assertThat(build)
+        .containsEntry("needs", AUTHORIZE_JOB)
         .containsEntry("permissions", Map.of("contents", "read"))
         .containsEntry("runs-on", "ubuntu-24.04");
     assertThat(checkout.get("uses").toString()).startsWith("actions/checkout@");
     assertThat(map(checkout.get("with")))
         .containsOnly(
-            entry("ref", "refs/pull/${{ github.event.issue.number }}/head"),
+            entry("ref", "${{ needs.authorize_preview.outputs.revision }}"),
             entry("persist-credentials", false));
-    assertThat(steps.indexOf(revision))
-        .as("The head is resolved before any pull request code runs")
-        .isEqualTo(1);
-    assertThat(map(build.get("outputs")))
-        .containsOnly(entry("revision", "${{ steps.pr_head.outputs.sha }}"));
     assertThat(build.toString()).doesNotContain("secrets.");
   }
 
@@ -109,7 +155,7 @@ class PreviewImageWorkflowTest {
             "run",
             ".github/actions/pack-build/build-worker-image.sh \"$WORKER_IMAGE\" \"$PREVIEW_REVISION\"");
     assertThat(map(build.get("env")))
-        .containsOnly(entry("PREVIEW_REVISION", "${{ steps.pr_head.outputs.sha }}"));
+        .containsOnly(entry("PREVIEW_REVISION", "${{ needs.authorize_preview.outputs.revision }}"));
   }
 
   @Test
@@ -119,7 +165,7 @@ class PreviewImageWorkflowTest {
     var steps = steps(publish);
 
     assertThat(publish)
-        .containsEntry("needs", BUILD_JOB)
+        .containsEntry("needs", List.of(AUTHORIZE_JOB, BUILD_JOB))
         .containsEntry("permissions", Map.of("pull-requests", "write"));
     assertThat(steps)
         .allSatisfy(
@@ -132,7 +178,37 @@ class PreviewImageWorkflowTest {
         .allSatisfy(
             step -> assertThat(String.valueOf(step.get("run"))).doesNotContain("./", ".github/"));
     assertThat(steps.indexOf(stepNamed(steps, "Load preview image")))
+        .isLessThan(steps.indexOf(stepNamed(steps, "Require an open pull request")));
+    assertThat(steps.indexOf(stepNamed(steps, "Require an open pull request")))
         .isLessThan(steps.indexOf(stepNamed(steps, "Login to Docker Hub")));
+  }
+
+  @ParameterizedTest(name = "{0} pull request")
+  @CsvSource({"open, 0", "closed, 1"})
+  @DisplayName("Should publish only while the pull request is open when the build finishes")
+  void shouldPublishOnlyWhileThePullRequestIsOpenWhenTheBuildFinishes(String state, int exitCode)
+      throws Exception {
+    var publish = job(yaml(PREVIEW_WORKFLOW), PUBLISH_JOB);
+
+    var result =
+        runScript(
+            stepNamed(steps(publish), "Require an open pull request"),
+            GitHubState.openBranchByWriter().state(state).build(),
+            Map.of());
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(exitCode);
+  }
+
+  @Test
+  @DisplayName("Should hold cleanup until publication ends when a pull request closes mid-publish")
+  void shouldHoldCleanupUntilPublicationEndsWhenAPullRequestClosesMidPublish() throws IOException {
+    var publication = map(job(yaml(PREVIEW_WORKFLOW), PUBLISH_JOB).get("concurrency"));
+    var cleanup = map(job(yaml(CLEANUP_WORKFLOW), CLEANUP_JOB).get("concurrency"));
+
+    assertThat(resolve(publication, Map.of("github.event.issue.number", PULL_REQUEST)))
+        .containsOnly(entry("group", "preview-image-42"), entry("cancel-in-progress", "false"));
+    assertThat(resolve(cleanup, Map.of("github.event.pull_request.number", PULL_REQUEST)))
+        .containsOnly(entry("group", "preview-image-42"), entry("cancel-in-progress", "false"));
   }
 
   @Test
@@ -165,22 +241,19 @@ class PreviewImageWorkflowTest {
   @Test
   @DisplayName("Should name the pulled tag and built commit when reporting a published preview")
   void shouldNameThePulledTagAndBuiltCommitWhenReportingAPublishedPreview() throws Exception {
-    var result = runReport(HEAD_REVISION);
+    var report = stepNamed(steps(job(yaml(PREVIEW_WORKFLOW), PUBLISH_JOB)), "Comment on PR");
+
+    var result =
+        runScript(
+            report,
+            GitHubState.openBranchByWriter().build(),
+            Map.of("needs.authorize_preview.outputs.revision", HEAD_REVISION));
 
     assertThat(result.exitCode()).as(result.output()).isZero();
     assertThat(result.output())
-        .contains("issue 42:")
+        .contains("comment on 42:")
         .contains("docker pull streamarr/streamarr-transcode-worker:pr-42")
         .contains(HEAD_REVISION);
-  }
-
-  @Test
-  @DisplayName("Should post no report when the build job hands over a malformed revision")
-  void shouldPostNoReportWhenTheBuildJobHandsOverAMalformedRevision() throws Exception {
-    var result = runReport("abc`\n@someone");
-
-    assertThat(result.exitCode()).isNotZero();
-    assertThat(result.output()).doesNotContain("issue 42:");
   }
 
   @Test
@@ -191,6 +264,8 @@ class PreviewImageWorkflowTest {
     assertThat(map(workflow.get(true)))
         .containsOnly(entry("pull_request", Map.of("types", List.of("closed"))));
     assertThat(workflow).containsEntry("permissions", Map.of("contents", "read"));
+    assertThat(job(workflow, CLEANUP_JOB))
+        .containsEntry("if", "github.event.pull_request.head.repo.full_name == github.repository");
     assertThat(workflow.toString()).doesNotContain("actions/checkout");
   }
 
@@ -295,7 +370,7 @@ class PreviewImageWorkflowTest {
 
   private ScriptCommand.Result runCleanup() throws Exception {
     var workflow = yaml(CLEANUP_WORKFLOW);
-    var cleanup = job(workflow, "delete_preview_tag");
+    var cleanup = job(workflow, CLEANUP_JOB);
     var expressions =
         Map.of(
             "github.event.pull_request.number", PULL_REQUEST,
@@ -304,30 +379,55 @@ class PreviewImageWorkflowTest {
     return runSteps(List.of(map(cleanup.get("env"))), expressions, steps(cleanup));
   }
 
-  private ScriptCommand.Result runReport(String revision) throws Exception {
-    var publish = job(yaml(PREVIEW_WORKFLOW), PUBLISH_JOB);
-    var report = stepNamed(steps(publish), "Comment on PR");
+  private ScriptCommand.Result runScript(
+      Map<String, Object> step, GitHubState state, Map<String, String> expressions)
+      throws Exception {
     var harness =
         """
+        const state = JSON.parse(process.env['FAKE_GITHUB']);
         const context = {
           repo: { owner: 'streamarr', repo: 'streamarr-transcode-worker' },
           issue: { number: 42 },
+          payload: { comment: { id: 7, user: { login: 'commenter' } } },
         };
-        const github = { rest: { issues: { createComment: async (comment) =>
-          console.log(`issue ${comment.issue_number}:\\n${comment.body}`) } } };
+        const github = { rest: {
+          repos: { getCollaboratorPermissionLevel: async ({ username }) =>
+            ({ data: { permission: username === 'commenter' ? state.permission : 'none' } }) },
+          pulls: { get: async ({ pull_number }) => ({ data: pull_number === 42 ? {
+            state: state.state,
+            head: { sha: state.head, repo: state.headRepository ? { full_name: state.headRepository } : null },
+          } : null }) },
+          issues: { createComment: async (comment) =>
+            console.log(`comment on ${comment.issue_number}:\n${comment.body}`) },
+        } };
+        const core = { setOutput: (name, value) => console.log(`output ${name}=${value}`) };
         (async () => {
         %s
         })().catch((error) => { console.error(error.message); process.exitCode = 1; });
         """
-            .formatted(map(report.get("with")).get("script"));
-    var script = Files.writeString(directory.resolve("report.cjs"), harness);
+            .formatted(map(step.get("with")).get("script"));
+    var script = Files.writeString(directory.resolve("github-script.cjs"), harness);
     var command = new ProcessBuilder("node", script.toString());
+    command.environment().putAll(resolve(map(step.get("env")), expressions));
     command
         .environment()
-        .putAll(
-            resolve(
-                map(report.get("env")), Map.of("needs.build_preview.outputs.revision", revision)));
+        .put(
+            "FAKE_GITHUB",
+            new ObjectMapper()
+                .writeValueAsString(
+                    Map.of(
+                        "permission", state.permission(),
+                        "state", state.state(),
+                        "head", HEAD_REVISION,
+                        "headRepository", state.headRepository())));
     return run(command);
+  }
+
+  @Builder
+  private record GitHubState(String permission, String state, String headRepository) {
+    static GitHubStateBuilder openBranchByWriter() {
+      return builder().permission("write").state("open").headRepository(REPOSITORY);
+    }
   }
 
   private ScriptCommand.Result runSteps(

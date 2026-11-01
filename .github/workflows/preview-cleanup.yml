@@ -10,7 +10,12 @@ permissions:
 
 jobs:
   delete_preview_tag:
+    # Previews are published only for branches of this repository; fork pull requests get no secrets.
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    concurrency:
+      group: preview-image-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
 
     env:
       DOCKERHUB_REPO: streamarr/streamarr-transcode-worker

@@ -66,15 +66,19 @@ Only GitHub's latest release updates `latest`. See [releases](releases.md) for v
 
 ## Preview images
 
-A repository owner, member, or collaborator can comment `/deploy-preview` on a pull request to
-publish its head as `streamarr/streamarr-transcode-worker:pr-<number>`, the same command and tag
-form the server uses. A server preview and a worker preview can then run together on one test host.
-The build job checks out the pull request head with a read-only token, no secrets, and no cache. It
-builds the amd64 image with `build-worker-image.sh`, so the preview passes the same media runtime
-checks as CI. It does not run `WorkerImageIT`; the pull request's own CI does. A separate job, which
-never checks out repository code, loads that image, pushes the preview tag, and comments the source
-commit on the pull request. The build checks out the head when the job starts, so check that
-commit in the comment before relying on the preview. Closing the pull request deletes the tag.
+A repository owner, member, or collaborator with write access can comment `/deploy-preview` on an
+open pull request from a branch of this repository. The workflow publishes its head as
+`streamarr/streamarr-transcode-worker:pr-<number>`, the same command and tag form the server uses,
+so a server preview and a worker preview can run together on one test host.
+
+An authorization job without repository code checks the commenter's access and the pull request,
+then records the head commit. The build job checks out that commit with a read-only token, no
+secrets, and no cache. It builds the amd64 image with `build-worker-image.sh`, so the preview
+passes the same media runtime checks as CI. It does not run `WorkerImageIT`; the pull request's own
+CI does. A separate job that never checks out repository code loads the image, confirms the pull
+request is still open, pushes the preview tag, and comments the source commit on the pull request.
+Closing the pull request deletes the tag; the deletion waits for a publication already in progress.
+Pull requests from forks get no preview, because their head can change after the command.
 GitHub runs comment-triggered workflows from the default branch, so the command works only after
 this workflow is on `main`.
 
