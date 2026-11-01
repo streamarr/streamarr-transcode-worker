@@ -2,12 +2,14 @@ package com.streamarr.transcode.probe;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import build.buf.gen.streamarr.transcode.v1.BitrateScanChunk;
 import build.buf.gen.streamarr.transcode.v1.ProbePriority;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
 
 @Tag("UnitTest")
 @DisplayName("Probe Kind Tests")
@@ -31,5 +33,23 @@ class ProbeKindTest {
             .build();
 
     assertThat(ProbeKind.of(request)).isEqualTo(expected);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = ProbePriority.class,
+      names = {"PROBE_PRIORITY_PLAYBACK", "PROBE_PRIORITY_BACKGROUND"})
+  @DisplayName(
+      "Should count a bitrate scan chunk as a keyframe packet scan whatever its priority when it"
+          + " arrives")
+  void shouldCountABitrateScanChunkAsAKeyframePacketScanWhateverItsPriorityWhenItArrives(
+      ProbePriority priority) {
+    var request =
+        ProbeRequest.newBuilder()
+            .setPriority(priority)
+            .setBitrateScanChunk(BitrateScanChunk.newBuilder().setMeasurementVersion(2))
+            .build();
+
+    assertThat(ProbeKind.of(request)).isEqualTo(ProbeKind.KEYFRAME_PACKET_SCAN);
   }
 }

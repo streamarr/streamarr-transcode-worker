@@ -130,7 +130,7 @@ final class KeyframePacketScan {
         probed.result().toBuilder().clearMedia().setFailure(failure).build());
   }
 
-  private static TimeBase timeBase(JsonNode stream) {
+  static TimeBase timeBase(JsonNode stream) {
     var value = stream.path("time_base").asString("");
     var parts = value.split("/");
     try {

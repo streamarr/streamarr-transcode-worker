@@ -14,6 +14,9 @@ final class StreamTags {
 
   private static final Pattern MATROSKA_DURATION =
       Pattern.compile("(\\d+):([0-5]\\d):([0-5]\\d(?:\\.\\d+)?)");
+  // FFmpeg and mkvpropedit write all nine digits of a DURATION's fraction.
+  private static final Pattern COMPLETE_MATROSKA_DURATION =
+      Pattern.compile("\\d+:\\d{2}:\\d{2}\\.\\d{9}");
 
   private StreamTags() {}
 
@@ -43,8 +46,48 @@ final class StreamTags {
 
   /** The DURATION tag, with or without a language suffix such as DURATION-eng, in seconds. */
   static Optional<BigDecimal> matroskaDuration(JsonNode stream) {
-    return matroskaStatistic(stream, "DURATION")
-        .map(MATROSKA_DURATION::matcher)
+    return matroskaStatistic(stream, "DURATION").flatMap(StreamTags::seconds);
+  }
+
+  /**
+   * The DURATION tag without a language suffix, in seconds; empty when its fraction lacks a digit.
+   * A run that stopped inside the trailer's write of the value leaves only its first characters,
+   * followed by the zeros of the space reserved for it.
+   */
+  static Optional<BigDecimal> unsuffixedMatroskaDuration(JsonNode stream) {
+    return tags(stream)
+        .filter(tag -> equalsIgnoringAsciiCase(tag.getKey(), "DURATION"))
+        .map(tag -> tag.getValue().asString())
+        .findFirst()
+        .filter(duration -> COMPLETE_MATROSKA_DURATION.matcher(duration).matches())
+        .flatMap(StreamTags::seconds);
+  }
+
+  /**
+   * Whether two tag names are equal when only ASCII letters are compared without regard to case, as
+   * FFmpeg compares the keys of its metadata dictionary. Java's {@link String#equalsIgnoreCase}
+   * also matches other letters, such as U+0130 to I.
+   */
+  static boolean equalsIgnoringAsciiCase(String name, String other) {
+    if (name.length() != other.length()) {
+      return false;
+    }
+
+    for (var i = 0; i < name.length(); i++) {
+      if (asciiUpperCase(name.charAt(i)) != asciiUpperCase(other.charAt(i))) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  private static char asciiUpperCase(char letter) {
+    return letter >= 'a' && letter <= 'z' ? (char) (letter - 'a' + 'A') : letter;
+  }
+
+  private static Optional<BigDecimal> seconds(String duration) {
+    return Optional.of(MATROSKA_DURATION.matcher(duration))
         .filter(Matcher::matches)
         .map(
             match ->

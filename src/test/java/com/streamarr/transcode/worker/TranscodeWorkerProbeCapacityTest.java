@@ -27,6 +27,9 @@ import com.streamarr.transcode.engine.MonotonicClock;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import com.streamarr.transcode.fixtures.SteppedClock;
 import com.streamarr.transcode.probe.FfprobeExecutor;
+import com.streamarr.transcode.worker.support.BitrateScanChunks;
+import com.streamarr.transcode.worker.support.BitrateScanChunks.Keyframe;
+import com.streamarr.transcode.worker.support.BitrateScanChunks.Positions;
 import com.streamarr.transcode.worker.support.ControlledProbeProcess;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
 import java.nio.file.Files;
@@ -205,6 +208,42 @@ class TranscodeWorkerProbeCapacityTest {
       } finally {
         held.finish();
       }
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should refuse a bitrate scan chunk before ffprobe starts when a job attempt runs on the"
+          + " worker")
+  void shouldRefuseABitrateScanChunkBeforeFfprobeStartsWhenAJobAttemptRunsOnTheWorker()
+      throws Exception {
+    var launches = new AtomicInteger();
+    var chunk =
+        BitrateScanChunks.request(
+            Positions.builder()
+                .timeBaseNumerator(1)
+                .timeBaseDenominator(1000)
+                .keyframe(new Keyframe(0, 0))
+                .measuredStreamIndex(0)
+                .build()
+                .chunk(0, 1));
+
+    try (var worker =
+        workerBuilder(tempDir)
+            .configuration(configurationBuilder().availableSlots(1).build())
+            .runtime(runtime)
+            .ffprobe(launchCounting(launches, processBuilder().build()))
+            .build()) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, variantJobBuilder().build());
+
+      start(connection, chunk);
+
+      assertThat(connection.results())
+          .containsExactly(failure(chunk, ProbeFailure.PROBE_FAILURE_NO_FREE_CAPACITY));
+      runtime.probes().drain();
+      assertThat(launches).hasValue(0);
     }
   }
 

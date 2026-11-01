@@ -1,17 +1,24 @@
 package com.streamarr.transcode.probe;
 
 import static com.streamarr.transcode.probe.Mp4MovieBox.child;
-import static com.streamarr.transcode.probe.Mp4MovieBox.children;
 import static com.streamarr.transcode.probe.Mp4MovieBox.fourCharacterCode;
 import static com.streamarr.transcode.probe.Mp4MovieBox.skip;
-import static com.streamarr.transcode.probe.Mp4MovieBox.skipFlags;
-import static com.streamarr.transcode.probe.Mp4MovieBox.trackId;
+import static com.streamarr.transcode.probe.Mp4SampleTables.decodeShift;
+import static com.streamarr.transcode.probe.Mp4SampleTables.malformed;
+import static com.streamarr.transcode.probe.Mp4SampleTables.runs;
+import static com.streamarr.transcode.probe.Mp4SampleTables.timescale;
+import static com.streamarr.transcode.probe.Mp4SampleTables.track;
 
 import build.buf.gen.streamarr.transcode.v1.KeyframePacketScanReason;
+import com.streamarr.transcode.probe.CopiedSampleSizes.SourceMovie;
 import com.streamarr.transcode.probe.KeyframeIndex.KeyframeTime;
 import com.streamarr.transcode.probe.KeyframeIndex.Listed;
 import com.streamarr.transcode.probe.KeyframeIndex.TimeBase;
 import com.streamarr.transcode.probe.KeyframeIndex.Unusable;
+import com.streamarr.transcode.probe.Mp4SampleTables.Edit;
+import com.streamarr.transcode.probe.Mp4SampleTables.Run;
+import com.streamarr.transcode.probe.Mp4SampleTables.RunCursor;
+import com.streamarr.transcode.probe.Mp4StreamMeasurer.TrackStream;
 import java.io.IOException;
 import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
@@ -38,26 +45,41 @@ final class Mp4SyncSampleReader {
   private Mp4SyncSampleReader() {}
 
   static KeyframeIndex read(Path source, long trackId) throws IOException {
+    return read(source, TrackStream.builder().trackId(trackId).isRequired(true).build(), List.of())
+        .keyframes();
+  }
+
+  /**
+   * Reads the chosen track's keyframes and, from the same movie box, measures the {@code measured}
+   * streams. The measurement is empty when {@code measured} is.
+   */
+  static ContainerIndex read(Path source, TrackStream chosen, List<TrackStream> measured)
+      throws IOException {
     try (var channel = FileChannel.open(source, StandardOpenOption.READ)) {
       var movie = Mp4MovieBox.read(channel);
       if (child(movie, "mvex").isPresent()) {
-        return new Unusable(
-            KeyframePacketScanReason.KEYFRAME_PACKET_SCAN_REASON_NO_CONTAINER_INDEX);
+        return ContainerIndex.keyframesOnly(
+            new Unusable(KeyframePacketScanReason.KEYFRAME_PACKET_SCAN_REASON_NO_CONTAINER_INDEX));
       }
 
-      return read(movie, trackId);
+      var keyframes = read(movie, chosen.trackId());
+      if (!(keyframes instanceof Listed listed) || measured.isEmpty()) {
+        return ContainerIndex.keyframesOnly(keyframes);
+      }
+
+      return new ContainerIndex(
+          listed,
+          Mp4StreamMeasurer.measure(
+                  new SourceMovie(movie, channel), chosen, measured, listed.keyframes().size())
+              .orElse(List.of()));
     } catch (ContainerIndexException | BufferUnderflowException _) {
-      return incomplete();
+      return ContainerIndex.keyframesOnly(incomplete());
     }
   }
 
   private static KeyframeIndex read(ByteBuffer movie, long trackId) {
     var movieTimescale = timescale(child(movie, "mvhd").orElseThrow(() -> malformed("mvhd")));
-    var track =
-        children(movie, "trak").stream()
-            .filter(candidate -> trackId(candidate) == trackId)
-            .findFirst()
-            .orElseThrow(() -> malformed("trak"));
+    var track = track(movie, trackId);
     var media = child(track, "mdia").orElseThrow(() -> malformed("mdia"));
     if (!isVideoHandler(child(media, "hdlr").orElseThrow(() -> malformed("hdlr")))) {
       return incomplete();
@@ -123,7 +145,7 @@ final class Mp4SyncSampleReader {
   }
 
   private static List<KeyframeTime> rawKeyframes(ByteBuffer sampleTable, List<Run> durations) {
-    var offsets = child(sampleTable, "ctts").map(Mp4SyncSampleReader::runs).orElse(List.of());
+    var offsets = child(sampleTable, "ctts").map(Mp4SampleTables::runs).orElse(List.of());
     var syncSamples = child(sampleTable, "stss").map(Mp4SyncSampleReader::syncSamples);
     if (syncSamples.isPresent() && syncSamples.get().isEmpty()) {
       return List.of();
@@ -149,40 +171,6 @@ final class Mp4SyncSampleReader {
     return keyframes;
   }
 
-  /**
-   * FFmpeg's mov demuxer moves every decode time earlier by the most negative composition offset,
-   * so that no decode time follows its presentation time. It skips the last two ctts entries and
-   * the entries that count no samples. It drops an entry whose count exceeds a signed 32-bit
-   * integer, so the reader treats that entry as damaged.
-   */
-  private static long decodeShift(List<Run> offsets) {
-    if (offsets.stream().anyMatch(run -> run.count() > Integer.MAX_VALUE)) {
-      throw malformed("ctts count");
-    }
-
-    long shift = 0;
-    for (var i = 0; i + 2 < offsets.size(); i++) {
-      var run = offsets.get(i);
-      if (run.count() > 0) {
-        shift = Math.max(shift, -Math.max(run.value(), Integer.MIN_VALUE + 1L));
-      }
-    }
-
-    return shift;
-  }
-
-  private static List<Run> runs(ByteBuffer box) {
-    // ctts version 0 declares unsigned offsets; FFmpeg reads every version as signed.
-    box.getInt();
-    var entries = Integer.toUnsignedLong(box.getInt());
-    var runs = new ArrayList<Run>();
-    for (long i = 0; i < entries; i++) {
-      runs.add(new Run(Integer.toUnsignedLong(box.getInt()), box.getInt()));
-    }
-
-    return runs;
-  }
-
   private static List<Long> syncSamples(ByteBuffer box) {
     box.getInt();
     var entries = Integer.toUnsignedLong(box.getInt());
@@ -194,18 +182,6 @@ final class Mp4SyncSampleReader {
     return samples;
   }
 
-  private static long timescale(ByteBuffer header) {
-    var version = header.get() & 0xFF;
-    skipFlags(header);
-    skip(header, version == 1 ? 16 : 8);
-    var timescale = Integer.toUnsignedLong(header.getInt());
-    if (timescale == 0) {
-      throw malformed("zero timescale");
-    }
-
-    return timescale;
-  }
-
   private static boolean isVideoHandler(ByteBuffer handler) {
     skip(handler, 8);
     return "vide".equals(fourCharacterCode(handler));
@@ -214,37 +190,6 @@ final class Mp4SyncSampleReader {
   private static Unusable incomplete() {
     return new Unusable(
         KeyframePacketScanReason.KEYFRAME_PACKET_SCAN_REASON_INCOMPLETE_CONTAINER_INDEX);
-  }
-
-  private static ContainerIndexException malformed(String detail) {
-    return new ContainerIndexException("Unusable MP4 sample tables: " + detail);
-  }
-
-  private record Run(long count, int value) {}
-
-  /** Walks the composition offset runs one sample at a time; a track without ctts has none. */
-  private static final class RunCursor {
-    private final List<Run> runs;
-    private int run;
-    private long used;
-
-    private RunCursor(List<Run> runs) {
-      this.runs = runs;
-    }
-
-    private int next() {
-      while (run < runs.size() && used == runs.get(run).count()) {
-        run++;
-        used = 0;
-      }
-
-      if (run == runs.size()) {
-        return 0;
-      }
-
-      used++;
-      return runs.get(run).value();
-    }
   }
 
   /** Answers, for each sample number in increasing order, whether it is a sync sample. */
@@ -276,71 +221,6 @@ final class Mp4SyncSampleReader {
       }
 
       return next < samples.size() && samples.get(next) == sample;
-    }
-  }
-
-  /**
-   * An edit list FFmpeg applies as one shift: empty edits, then one edit that plays the media at
-   * normal rate from a media time. Other edit lists change which samples the demuxer returns, so
-   * the reader leaves them to a packet scan.
-   */
-  private record Edit(long emptyDuration, long mediaTime) {
-
-    private static final Edit NONE = new Edit(0, 0);
-
-    static Optional<Edit> read(ByteBuffer box) {
-      var version = box.get() & 0xFF;
-      skipFlags(box);
-      var entries = Integer.toUnsignedLong(box.getInt());
-      long emptyDuration = 0;
-      for (long i = 0; i < entries; i++) {
-        var duration = version == 1 ? box.getLong() : Integer.toUnsignedLong(box.getInt());
-        var mediaTime = version == 1 ? box.getLong() : box.getInt();
-        var rate = box.getInt();
-        if (mediaTime == -1) {
-          emptyDuration += duration;
-          continue;
-        }
-
-        var isLast = i == entries - 1;
-        if (!isLast || rate != 0x0001_0000 || mediaTime < 0) {
-          return Optional.empty();
-        }
-
-        return Optional.of(new Edit(emptyDuration, mediaTime));
-      }
-
-      return Optional.empty();
-    }
-
-    /**
-     * FFmpeg keeps the samples from the last keyframe that presents at or before the edit's media
-     * time, and shifts every time by the empty edits minus that media time.
-     */
-    List<KeyframeTime> apply(List<KeyframeTime> keyframes, long movieTimescale, long timescale) {
-      var shift = rescale(emptyDuration, timescale, movieTimescale) - mediaTime;
-      var first = 0;
-      for (var i = 0; i < keyframes.size(); i++) {
-        if (keyframes.get(i).presentationTime() <= mediaTime) {
-          first = i;
-        }
-      }
-
-      return keyframes.subList(first, keyframes.size()).stream()
-          .map(
-              keyframe ->
-                  new KeyframeTime(
-                      keyframe.presentationTime() + shift, keyframe.decodeTime() + shift))
-          .toList();
-    }
-
-    private static long rescale(long value, long multiplier, long divisor) {
-      try {
-        return Math.floorDiv(
-            Math.addExact(Math.multiplyExact(value, multiplier), divisor / 2), divisor);
-      } catch (ArithmeticException _) {
-        throw malformed("edit duration out of range");
-      }
     }
   }
 }

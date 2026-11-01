@@ -35,6 +35,9 @@ public final class FfprobeExecutor {
   /** The only probe version that this worker answers. */
   public static final int PROBE_VERSION = 6;
 
+  /** The only stream measurement version (ADR 0054) whose bitrate scan chunks this worker runs. */
+  public static final int MEASUREMENT_VERSION = 2;
+
   /**
    * The read limits let ffprobe reach streams whose first packet comes late, such as PGS subtitles.
    * Without -scan_all_pmts 0, ffprobe reads an MPEG-TS source to those limits.
@@ -49,6 +52,9 @@ public final class FfprobeExecutor {
 
   private static final int AVERROR_INVALIDDATA = -1094995529;
   private static final int AVERROR_EOF = -541478725;
+
+  // The object that ffprobe prints in place of its result when it fails.
+  private static final String ERROR_FIELD = "error";
 
   @NonNull private final ObjectMapper objectMapper;
   @NonNull private final Function<ProbeCommand, Process> processFactory;
@@ -74,14 +80,10 @@ public final class FfprobeExecutor {
 
     command.add(binary.toString());
     command.addAll(probeCommand.arguments());
-    // The packet scan reads FFmpeg's diagnostics to find a source that stopped being readable.
-    var diagnostics =
-        switch (probeCommand.tool()) {
-          case FFPROBE -> ProcessBuilder.Redirect.DISCARD;
-          case FFMPEG -> ProcessBuilder.Redirect.PIPE;
-        };
+    // The packet scan and the bitrate scan read the diagnostics to find a source that stopped
+    // being readable; every run drains them.
     try {
-      return new ProcessBuilder(command).redirectError(diagnostics).start();
+      return new ProcessBuilder(command).redirectError(ProcessBuilder.Redirect.PIPE).start();
     } catch (IOException e) {
       throw new UncheckedIOException("Failed to start " + binary, e);
     }
@@ -133,6 +135,10 @@ public final class FfprobeExecutor {
 
   private ProbeAttemptReport execute(Attempt attempt)
       throws ExecutionException, InterruptedException, IOException {
+    if (attempt.request().hasBitrateScanChunk()) {
+      return scanChunk(attempt);
+    }
+
     var arguments = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
     arguments.addAll(READ_LIMITS);
     arguments.addAll(
@@ -181,6 +187,53 @@ public final class FfprobeExecutor {
     }
 
     return new ContainerIndexProbe(objectMapper, this::run).addKeyframes(probed);
+  }
+
+  /**
+   * Measures one bitrate scan chunk. The chunk's copy checks read the descriptions and extradata of
+   * the source's streams, which the probe's first ffprobe run prints.
+   */
+  private ProbeAttemptReport scanChunk(Attempt attempt)
+      throws ExecutionException, InterruptedException {
+    var arguments = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
+    arguments.addAll(READ_LIMITS);
+    arguments.addAll(
+        List.of("-show_streams", "-show_format", "-show_error", attempt.source().toString()));
+    var output = run(arguments);
+    JsonNode json;
+    try {
+      json = objectMapper.readTree(output.stdout());
+    } catch (RuntimeException failure) {
+      return ProbeAttemptReport.resultOnly(unusableOutput(output, attempt, failure));
+    }
+
+    if (output.exitCode() != 0) {
+      return ProbeAttemptReport.resultOnly(
+          attempt
+              .result()
+              .setFailure(failureFor(json.path(ERROR_FIELD).path("code").asInt()))
+              .build());
+    }
+
+    new StreamExtradataProbe(objectMapper, this::run).addTo(json, attempt.source());
+    // Unknown sample entries say nothing about what a copy does to a track's packets, so the
+    // chunk fails for a retry rather than report a changed copy.
+    if (!Mp4SampleEntries.addTo(json, attempt.source())) {
+      throw new PacketScanException("The chunk could not read the MP4 sample entries");
+    }
+
+    var probed =
+        ProbedSource.builder()
+            .source(attempt.source())
+            .ffprobeOutput(json)
+            .result(attempt.result().build())
+            .build();
+    return new BitrateScanChunkRun(
+            (listing, lines, diagnostics) ->
+                runPacketLines(new ProbeCommand(ProbeTool.FFPROBE, listing), lines, diagnostics),
+            this::runWithinOutputBudget,
+            objectMapper)
+        .measure(probed, attempt.request().getBitrateScanChunk());
   }
 
   /** The packets that the probe reads hold the first frames, so their read follows the frames'. */
@@ -274,7 +327,16 @@ public final class FfprobeExecutor {
       KeyframePacketScan.PacketLines packetLines,
       Consumer<String> diagnosticLines)
       throws ExecutionException, InterruptedException {
-    var process = processFactory.apply(new ProbeCommand(ProbeTool.FFMPEG, arguments));
+    return runPacketLines(
+        new ProbeCommand(ProbeTool.FFMPEG, arguments), packetLines, diagnosticLines);
+  }
+
+  private int runPacketLines(
+      ProbeCommand command,
+      KeyframePacketScan.PacketLines packetLines,
+      Consumer<String> diagnosticLines)
+      throws ExecutionException, InterruptedException {
+    var process = processFactory.apply(command);
     var stopped = new AtomicBoolean();
     OutputReader<Void> reader =
         stdout -> {
@@ -403,7 +465,7 @@ public final class FfprobeExecutor {
     }
 
     if (exitCode != 0) {
-      var error = json.path("error");
+      var error = json.path(ERROR_FIELD);
       var errorCode = error.path("code").asInt();
       log.warn(
           "ffprobe attempt {} for source {} exited with code {}: error {} ({})",

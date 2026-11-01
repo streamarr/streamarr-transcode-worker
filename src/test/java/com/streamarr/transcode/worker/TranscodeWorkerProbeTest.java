@@ -169,9 +169,11 @@ class TranscodeWorkerProbeTest {
 
   @Test
   @DisplayName(
-      "Should send the keyframe positions before the probe result when the worker reads a container index")
-  void shouldSendKeyframePositionsBeforeProbeResultWhenWorkerReadsContainerIndex()
-      throws Exception {
+      "Should send the keyframe positions, then the stream measurements, before the probe result"
+          + " when the worker reads a container index")
+  void
+      shouldSendKeyframePositionsThenStreamMeasurementsBeforeProbeResultWhenWorkerReadsContainerIndex()
+          throws Exception {
     var fixture = getClass().getResource("/keyframes/mp4-bframes-editlist.mp4");
     assertThat(fixture).isNotNull();
     Files.copy(Path.of(fixture.toURI()), tempDir.resolve("movie.mp4"));
@@ -209,6 +211,11 @@ class TranscodeWorkerProbeTest {
               part ->
                   assertThat(part.getProbeKeyframePositionsPart().getPresentationTimeDeltasList())
                       .containsExactly(0L, 8_704L, 16_896L, 10_240L),
+              measurement -> {
+                var part = measurement.getProbeStreamMeasurementPart();
+                assertThat(part.getKeyframeIntervalBytesList()).hasSize(4);
+                assertThat(part.getKeyframeIntervalPacketCountsList()).hasSize(4);
+              },
               result ->
                   assertThat(
                           result
@@ -451,6 +458,22 @@ class TranscodeWorkerProbeTest {
 
       assertThat(runtime.connection().registration().getCapabilities().getProbeVersionsList())
           .containsExactly(6);
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should advertise the stream measurement version whose bitrate scan chunks it runs when it"
+          + " registers")
+  void shouldAdvertiseTheStreamMeasurementVersionWhoseBitrateScanChunksItRunsWhenItRegisters()
+      throws Exception {
+    var runtime = new ScriptedWorkerRuntime();
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
+      worker.start("localhost", 1);
+
+      assertThat(runtime.connection().registration().getCapabilities().getMeasurementVersionsList())
+          .containsExactly(2);
     }
   }
 

@@ -47,6 +47,15 @@ final class EbmlElements {
   static final long CUE_CLUSTER_POSITION = 0xF1;
   static final long CLUSTER = 0x1F43B675;
   static final long CLUSTER_TIMESTAMP = 0xE7;
+  static final long TAGS = 0x1254C367;
+  static final long TAG = 0x7373;
+  static final long TARGETS = 0x63C0;
+  static final long TAG_TRACK_UID = 0x63C5;
+  static final long SIMPLE_TAG = 0x67C8;
+  static final long TAG_NAME = 0x45A3;
+  static final long TAG_LANGUAGE = 0x447A;
+  static final long TAG_DEFAULT = 0x4484;
+  static final long TAG_STRING = 0x4487;
 
   static final long VIDEO_TRACK_TYPE = 1;
   static final long AUDIO_TRACK_TYPE = 2;
@@ -72,6 +81,34 @@ final class EbmlElements {
 
   static byte[] codecId(String codec) {
     return element(CODEC_ID, codec.getBytes(StandardCharsets.US_ASCII));
+  }
+
+  static byte[] string(long id, String value) {
+    return element(id, value.getBytes(StandardCharsets.UTF_8));
+  }
+
+  /** A Tag whose Targets name the track of {@code trackUid}, holding {@code simpleTags}. */
+  static byte[] trackTag(long trackUid, byte[]... simpleTags) {
+    return element(
+        TAG, element(TARGETS, element(TAG_TRACK_UID, unsigned(trackUid))), concat(simpleTags));
+  }
+
+  /**
+   * A SimpleTag: its TagName, then {@code children} such as a TagLanguage, then its TagString, in
+   * the order FFmpeg writes them.
+   */
+  static byte[] simpleTag(String name, String value, byte[]... children) {
+    return element(SIMPLE_TAG, string(TAG_NAME, name), concat(children), string(TAG_STRING, value));
+  }
+
+  /** The DURATION SimpleTag that FFmpeg writes last in a track's Tag, from the track's packets. */
+  static byte[] ffmpegDuration(String value) {
+    return simpleTag("DURATION", value + "\0");
+  }
+
+  /** A DURATION tag that FFmpeg copied from its input key {@code DURATION-und}. */
+  static byte[] copiedDuration(String value) {
+    return simpleTag("DURATION", value, string(TAG_LANGUAGE, "und"));
   }
 
   static byte[] element(long id, byte[]... children) {

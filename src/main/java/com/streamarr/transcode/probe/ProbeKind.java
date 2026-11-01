@@ -9,9 +9,10 @@ public enum ProbeKind {
   BACKGROUND,
   KEYFRAME_PACKET_SCAN;
 
-  // A keyframe packet scan is never a playback probe, whatever its priority.
+  // A keyframe packet scan or a bitrate scan chunk is never a playback probe, whatever its
+  // priority; a chunk uses the keyframe packet scan capacity (ADR 0054).
   public static ProbeKind of(ProbeRequest request) {
-    if (request.getScanKeyframePackets()) {
+    if (request.getScanKeyframePackets() || request.hasBitrateScanChunk()) {
       return KEYFRAME_PACKET_SCAN;
     }
 

@@ -4,14 +4,20 @@ import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import lombok.Builder;
 import lombok.Singular;
 
 /**
- * A minimal MP4 file: ftyp, then a moov with track 1, whose movie timescale is 1,000. With {@code
- * version1Headers}, the mvhd, tkhd and mdhd boxes use their version 1 layout with 64-bit times.
+ * A minimal MP4 file: ftyp, then a moov with track 1, whose movie timescale is 1,000 unless {@code
+ * movieTimescale} names another, and track 2 when {@code secondTrack} describes one. With {@code
+ * version1Headers}, the mvhd, tkhd and mdhd boxes use their version 1 layout with 64-bit times. A
+ * track has an stsd only when {@code sampleEntries} lists entries, as {@link SyntheticSampleEntry}
+ * builds them. A track with {@code mediaData} has an stco of one chunk that holds those bytes, in
+ * an mdat between the ftyp and the moov, or a co64 of that chunk with {@code largeChunkOffsets}. A
+ * track with a {@code largeChunkOffset} has a co64 of one chunk at that offset instead. With {@code
+ * compactSampleSizes}, the sizes take fields of {@code compactFieldBits} bits in an stz2, 8 unless
+ * set.
  */
 @Builder
 record SyntheticMp4(
@@ -30,9 +36,19 @@ record SyntheticMp4(
     List<Long> syncSamples,
     int editListVersion,
     @Singular List<Edit> edits,
-    boolean fragmented) {
+    boolean fragmented,
+    SyntheticMp4 secondTrack,
+    long movieTimescale,
+    @Singular List<byte[]> sampleEntries,
+    byte[] mediaData,
+    long largeChunkOffset,
+    boolean largeChunkOffsets,
+    int compactFieldBits) {
 
   static final long TRACK_ID = 1;
+
+  /** The track ID of {@code secondTrack}, whose own movie-level fields the file ignores. */
+  static final long SECOND_TRACK_ID = 2;
 
   /** One elst entry; {@code rate} is a 16.16 fixed-point number. */
   record Edit(long duration, long mediaTime, int rate) {
@@ -47,9 +63,50 @@ record SyntheticMp4(
   record CompositionRun(int count, int offset) {}
 
   byte[] bytes() {
+    var fileType = box("ftyp", ascii("isom"), int32(0));
+    var firstData = mediaData == null ? new byte[0] : mediaData;
+    var secondData =
+        secondTrack == null || secondTrack.mediaData == null ? new byte[0] : secondTrack.mediaData;
+    var mediaDataBox = box("mdat", firstData, secondData);
+    var firstChunk = fileType.length + 8;
+    var movie = new ArrayList<byte[]>();
+    movie.add(timedHeader("mvhd", movieTimescale == 0 ? 1_000 : movieTimescale));
+    movie.add(trackBox(TRACK_ID, firstChunk));
+    if (secondTrack != null) {
+      movie.add(secondTrack.trackBox(SECOND_TRACK_ID, firstChunk + firstData.length));
+    }
+
+    if (fragmented) {
+      movie.add(box("mvex", fullBox("trex", 0, new byte[20])));
+    }
+
+    var moov = concat(movie.toArray(byte[][]::new));
+    return concat(
+        fileType,
+        firstData.length + secondData.length == 0 ? new byte[0] : mediaDataBox,
+        largeMovieBox ? largeBox("moov", moov) : box("moov", moov));
+  }
+
+  private byte[] trackBox(long trackId, int chunkOffset) {
     var sampleTable = new ArrayList<byte[]>();
+    if (!sampleEntries.isEmpty()) {
+      sampleTable.add(
+          fullBox(
+              "stsd",
+              0,
+              int32(sampleEntries.size()),
+              concat(sampleEntries.toArray(byte[][]::new))));
+    }
+
     sampleTable.add(fullBox("stts", 0, int32(1), int32(sampleCount), int32(sampleDuration)));
     sampleTable.add(sampleSizeBox());
+    if (largeChunkOffset != 0) {
+      sampleTable.add(fullBox("co64", 0, int32(1), int64(largeChunkOffset)));
+    } else if (mediaData != null && largeChunkOffsets) {
+      sampleTable.add(fullBox("co64", 0, int32(1), int64(chunkOffset)));
+    } else if (mediaData != null) {
+      sampleTable.add(fullBox("stco", 0, int32(1), int32(chunkOffset)));
+    }
     if (compositionOffsetCount > 0) {
       sampleTable.add(
           fullBox("ctts", 1, int32(1), int32(compositionOffsetCount), int32(compositionOffset)));
@@ -78,24 +135,14 @@ record SyntheticMp4(
     var track = new ArrayList<byte[]>();
     track.add(
         version1Headers
-            ? fullBox("tkhd", 1, int64(0), int64(0), int32((int) TRACK_ID))
-            : fullBox("tkhd", 0, int32(0), int32(0), int32((int) TRACK_ID)));
+            ? fullBox("tkhd", 1, int64(0), int64(0), int32((int) trackId))
+            : fullBox("tkhd", 0, int32(0), int32(0), int32((int) trackId)));
     if (!edits.isEmpty()) {
       track.add(box("edts", editList()));
     }
 
     track.add(media);
-    var movie = new ArrayList<byte[]>();
-    movie.add(timedHeader("mvhd", 1_000));
-    movie.add(box("trak", track.toArray(byte[][]::new)));
-    if (fragmented) {
-      movie.add(box("mvex", fullBox("trex", 0, new byte[20])));
-    }
-
-    var moov = concat(movie.toArray(byte[][]::new));
-    return concat(
-        box("ftyp", ascii("isom"), int32(0)),
-        largeMovieBox ? largeBox("moov", moov) : box("moov", moov));
+    return box("trak", track.toArray(byte[][]::new));
   }
 
   static class SyntheticMp4Builder {
@@ -117,10 +164,20 @@ record SyntheticMp4(
     var count = sampleSizeCount == null ? sampleCount : sampleSizeCount;
     var size = sampleSizeCount == null ? 1 : sampleSize;
     if (compactSampleSizes) {
-      // stz2 with 8-bit fields: three reserved bytes, the field size, the count, then the fields.
-      var fields = new byte[count];
-      Arrays.fill(fields, (byte) size);
-      return fullBox("stz2", 0, new byte[] {0, 0, 0, 8}, int32(count), fields);
+      // stz2: three reserved bytes, the field size, the count, then the fields.
+      var bits = compactFieldBits == 0 ? 8 : compactFieldBits;
+      var fields = ByteBuffer.allocate((count * bits + 7) / 8);
+      for (var i = 0; i < count; i++) {
+        switch (bits) {
+          case 4 ->
+              fields.put(i / 2, (byte) (fields.get(i / 2) | (size & 0x0F) << (i % 2 == 0 ? 4 : 0)));
+          case 8 -> fields.put(i, (byte) size);
+          case 16 -> fields.putShort(2 * i, (short) size);
+          default -> fields.putInt(4 * i, size);
+        }
+      }
+
+      return fullBox("stz2", 0, new byte[] {0, 0, 0, (byte) bits}, int32(count), fields.array());
     }
 
     return fullBox("stsz", 0, int32(size), int32(count));
