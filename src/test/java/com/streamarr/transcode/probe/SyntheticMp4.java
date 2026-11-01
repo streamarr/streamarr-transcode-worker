@@ -15,7 +15,8 @@ import lombok.Singular;
  * version1Headers}, the mvhd, tkhd and mdhd boxes use their version 1 layout with 64-bit times. A
  * track has an stsd only when {@code sampleEntries} lists entries, as {@link SyntheticSampleEntry}
  * builds them. A track with {@code mediaData} has an stco of one chunk that holds those bytes, in
- * an mdat between the ftyp and the moov.
+ * an mdat between the ftyp and the moov. A track with a {@code largeChunkOffset} has a co64 of one
+ * chunk at that offset instead.
  */
 @Builder
 record SyntheticMp4(
@@ -38,7 +39,8 @@ record SyntheticMp4(
     SyntheticMp4 secondTrack,
     long movieTimescale,
     @Singular List<byte[]> sampleEntries,
-    byte[] mediaData) {
+    byte[] mediaData,
+    long largeChunkOffset) {
 
   static final long TRACK_ID = 1;
 
@@ -95,7 +97,9 @@ record SyntheticMp4(
 
     sampleTable.add(fullBox("stts", 0, int32(1), int32(sampleCount), int32(sampleDuration)));
     sampleTable.add(sampleSizeBox());
-    if (mediaData != null) {
+    if (largeChunkOffset != 0) {
+      sampleTable.add(fullBox("co64", 0, int32(1), int64(largeChunkOffset)));
+    } else if (mediaData != null) {
       sampleTable.add(fullBox("stco", 0, int32(1), int32(chunkOffset)));
     }
     if (compositionOffsetCount > 0) {

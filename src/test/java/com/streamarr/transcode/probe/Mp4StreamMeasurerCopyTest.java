@@ -208,6 +208,13 @@ class Mp4StreamMeasurerCopyTest {
             audio("aac", 48_000),
             aacTrack(SyntheticSampleEntry.mp4aWithEsds(AUDIO_SPECIFIC_CONFIG), ADTS_FRAME)),
         arguments(
+            "AAC whose first chunk offset exceeds what a file position can hold",
+            audio("aac", 48_000),
+            audioTrack(48_000, 1_024)
+                .sampleEntry(SyntheticSampleEntry.mp4aWithEsds(AUDIO_SPECIFIC_CONFIG))
+                .largeChunkOffset(Long.MIN_VALUE)
+                .build()),
+        arguments(
             "AAC whose track lists no chunk offsets",
             audio("aac", 48_000),
             audioTrack(48_000, 1_024)

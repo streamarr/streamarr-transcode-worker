@@ -247,7 +247,16 @@ final class CopiedSampleSizes {
       throw malformed("no chunk");
     }
 
-    return isLarge ? table.getLong() : Integer.toUnsignedLong(table.getInt());
+    if (!isLarge) {
+      return Integer.toUnsignedLong(table.getInt());
+    }
+
+    var offset = table.getLong();
+    if (offset < 0) {
+      throw malformed("chunk offset beyond a file position");
+    }
+
+    return offset;
   }
 
   private static boolean holdsSixBlocksPerSample(
