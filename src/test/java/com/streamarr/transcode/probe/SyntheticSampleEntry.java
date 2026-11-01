@@ -9,6 +9,7 @@ import java.util.Collection;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import lombok.Builder;
 import lombok.experimental.UtilityClass;
 
 /** Sample entries for {@link SyntheticMp4}'s stsd, with only the fields the measurer reads. */
@@ -43,18 +44,28 @@ class SyntheticSampleEntry {
           HEVC_PREFIX_SEI,
           HexFormat.of().parseHex("4e0105142ca2de09b51747dbbb55a4fe7fc2fc4e7832363580"));
 
-  /** An H.264 entry whose avcC holds these parameter sets behind NAL lengths of these bytes. */
-  static byte[] avc(String type, int lengthBytes, int sequenceParameterSets, int pictureSets) {
-    return avcNamingLevel(type, lengthBytes, sequenceParameterSets, pictureSets, AVC_PROFILE[2]);
+  /**
+   * The builder of an H.264 entry whose avcC holds {@code sequenceParameterSets} SPS and {@code
+   * pictureParameterSets} PPS behind NAL lengths of {@code lengthBytes}, and whose header names
+   * {@code levelIdc}. Unless the caller sets them, the entry is an avc1 with NAL lengths of 4
+   * bytes, one SPS and one PPS, and its header names level 4.0, as its SPS does.
+   */
+  static AvcBuilder avc() {
+    return avcEntry()
+        .type("avc1")
+        .lengthBytes(4)
+        .sequenceParameterSets(1)
+        .pictureParameterSets(1)
+        .levelIdc(AVC_PROFILE[2]);
   }
 
-  /** An avc1 entry whose avcC header names this level_idc, while its SPS names level 4.0. */
-  static byte[] avcNamingLevel(int levelIdc) {
-    return avcNamingLevel("avc1", 4, 1, 1, levelIdc);
-  }
-
-  private static byte[] avcNamingLevel(
-      String type, int lengthBytes, int sequenceParameterSets, int pictureSets, int levelIdc) {
+  @Builder(builderMethodName = "avcEntry", builderClassName = "AvcBuilder")
+  private static byte[] avcEntryBytes(
+      String type,
+      int lengthBytes,
+      int sequenceParameterSets,
+      int pictureParameterSets,
+      int levelIdc) {
     var record = new ByteArrayOutputStream();
     record.write(1);
     record.writeBytes(new byte[] {AVC_PROFILE[0], AVC_PROFILE[1], (byte) levelIdc});
@@ -64,17 +75,26 @@ class SyntheticSampleEntry {
       writeUnit(record, AVC_SPS);
     }
 
-    record.write(pictureSets);
-    for (var i = 0; i < pictureSets; i++) {
+    record.write(pictureParameterSets);
+    for (var i = 0; i < pictureParameterSets; i++) {
       writeUnit(record, AVC_PPS);
     }
 
     return visual(type, box("avcC", record.toByteArray()));
   }
 
-  /** An HEVC entry whose hvcC holds one NAL unit of each listed type behind these length bytes. */
-  static byte[] hevc(String type, int lengthBytes, List<Integer> unitTypes) {
-    return hevc(type, lengthBytes, unitTypes.stream().map(HEVC_UNITS::get).toList());
+  /**
+   * The builder of an HEVC entry whose hvcC holds one NAL unit of each of {@code unitTypes} behind
+   * NAL lengths of {@code lengthBytes}. Unless the caller sets them, the entry is an hvc1 with NAL
+   * lengths of 4 bytes and a VPS, an SPS and a PPS.
+   */
+  static HevcBuilder hevc() {
+    return hevcEntry().type("hvc1").lengthBytes(4).unitTypes(List.of(HEVC_VPS, HEVC_SPS, HEVC_PPS));
+  }
+
+  @Builder(builderMethodName = "hevcEntry", builderClassName = "HevcBuilder")
+  private static byte[] hevcEntryBytes(String type, int lengthBytes, List<Integer> unitTypes) {
+    return hevcWithUnits(type, lengthBytes, unitTypes.stream().map(HEVC_UNITS::get).toList());
   }
 
   /**
@@ -83,13 +103,13 @@ class SyntheticSampleEntry {
    */
   static byte[] hevcWithSeiMessage(int payloadType) {
     var sei = new byte[] {0x4E, 0x01, (byte) payloadType, 1, 0, (byte) 0x80};
-    return hevc(
+    return hevcWithUnits(
         "hvc1",
         4,
         List.of(HEVC_UNITS.get(HEVC_VPS), HEVC_UNITS.get(HEVC_SPS), HEVC_UNITS.get(HEVC_PPS), sei));
   }
 
-  private static byte[] hevc(String type, int lengthBytes, Collection<byte[]> units) {
+  private static byte[] hevcWithUnits(String type, int lengthBytes, Collection<byte[]> units) {
     var record = new ByteArrayOutputStream();
     record.write(1);
     record.writeBytes(HEVC_PROFILE);

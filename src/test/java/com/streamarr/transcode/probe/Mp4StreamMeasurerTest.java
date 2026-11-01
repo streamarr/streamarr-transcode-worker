@@ -208,8 +208,11 @@ class Mp4StreamMeasurerTest {
   }
 
   @Test
-  @DisplayName("Should measure an interval of exactly the largest unsigned 32-bit count")
-  void shouldMeasureIntervalOfExactlyLargestUnsigned32BitCount() throws Exception {
+  @DisplayName(
+      "Should measure the interval when one keyframe interval holds exactly the largest unsigned"
+          + " 32-bit count")
+  void shouldMeasureIntervalWhenKeyframeIntervalHoldsExactlyLargestUnsigned32BitCount()
+      throws Exception {
     var source =
         write(
             SyntheticMp4.builder()
@@ -225,8 +228,10 @@ class Mp4StreamMeasurerTest {
 
   @Test
   @DisplayName(
-      "Should place each sample of another video track in the interval that holds its decode time")
-  void shouldPlaceEachSampleOfAnotherVideoTrackInIntervalHoldingItsDecodeTime() throws Exception {
+      "Should place each sample of another video track in the interval that holds its decode time"
+          + " when the MP4 holds a second video track")
+  void shouldPlaceEachSampleOfAnotherVideoTrackInIntervalHoldingItsDecodeTimeWhenMp4HoldsTwo()
+      throws Exception {
     var source =
         write(
             SyntheticMp4.builder()
