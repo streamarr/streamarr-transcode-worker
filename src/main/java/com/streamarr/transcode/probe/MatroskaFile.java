@@ -35,6 +35,7 @@ final class MatroskaFile {
   private static final long TRACK_TYPE = 0x83L;
   private static final long CODEC_ID = 0x86L;
   private static final long CUES = 0x1C53BB6BL;
+  private static final long TAGS = 0x1254C367L;
   private static final long CLUSTER = 0x1F43B675L;
   private static final long VIDEO_TRACK_TYPE = 1;
   private static final long UNKNOWN_SIZE = -1;
@@ -190,7 +191,7 @@ final class MatroskaFile {
    * Gives each child of {@code parent} with this ID to {@code matches}, in order; a malformed child
    * anywhere in {@code parent} fails the walk.
    */
-  private static void eachChild(ByteBuffer parent, long id, Consumer<ByteBuffer> matches) {
+  static void eachChild(ByteBuffer parent, long id, Consumer<ByteBuffer> matches) {
     eachChild(
         parent,
         (childId, child) -> {
@@ -264,6 +265,16 @@ final class MatroskaFile {
      */
     static Optional<ByteBuffer> info(FileChannel channel) throws IOException {
       return Optional.ofNullable(elements(channel, Set.of(INFO)).get(INFO));
+    }
+
+    /**
+     * The Info and Tags elements alone, so that a Tracks or Cues element the file cannot hold loses
+     * neither.
+     */
+    static InfoAndTags infoAndTags(FileChannel channel) throws IOException {
+      var found = elements(channel, Set.of(INFO, TAGS));
+      return new InfoAndTags(
+          Optional.ofNullable(found.get(INFO)), Optional.ofNullable(found.get(TAGS)));
     }
 
     /** The Tracks element alone, so that a Cues element the file cannot hold loses no track. */
@@ -381,6 +392,9 @@ final class MatroskaFile {
       return ContainerFileBytes.read(channel, element.dataStart(), (int) element.size());
     }
   }
+
+  /** The Info and Tags elements of the first Segment, as FFmpeg's demuxer finds them. */
+  record InfoAndTags(Optional<ByteBuffer> info, Optional<ByteBuffer> tags) {}
 
   private record FileElement(long id, long dataStart, long size) {
 

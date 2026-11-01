@@ -163,6 +163,29 @@ final class MatroskaSyntax {
               entry(0x41E4L, BLOCK_ADDITION_MAPPING),
               entry(0x56BBL, Value.UNSIGNED)));
 
+  private static final Master TARGETS =
+      new Master(
+          Map.of(
+              0x63CAL, Value.STRING,
+              0x68CAL, Value.UNSIGNED,
+              0x63C5L, Value.UNSIGNED,
+              0x63C4L, Value.UNSIGNED,
+              0x63C6L, Value.UNSIGNED));
+
+  // FFmpeg reads a SimpleTag nested in another with this syntax too. The table leaves it out, so a
+  // reader that relies on the table must not trust a nested SimpleTag.
+  private static final Master SIMPLE_TAG =
+      new Master(
+          Map.of(
+              0x45A3L, Value.STRING,
+              0x4487L, Value.STRING,
+              0x447AL, Value.STRING,
+              0x4484L, Value.UNSIGNED,
+              0x44B4L, Value.UNSIGNED));
+
+  static final Master TAGS =
+      new Master(Map.of(0x7373L, new Master(Map.of(0x63C0L, TARGETS, 0x67C8L, SIMPLE_TAG))));
+
   static final Master CUE_POINT =
       new Master(
           Map.of(

@@ -5,7 +5,11 @@ import static com.streamarr.transcode.probe.EbmlElements.CUE_POINT;
 import static com.streamarr.transcode.probe.EbmlElements.CUE_TIME;
 import static com.streamarr.transcode.probe.EbmlElements.INFO;
 import static com.streamarr.transcode.probe.EbmlElements.MUXING_APP;
+import static com.streamarr.transcode.probe.EbmlElements.SIMPLE_TAG;
 import static com.streamarr.transcode.probe.EbmlElements.TAGS;
+import static com.streamarr.transcode.probe.EbmlElements.TAG_DEFAULT;
+import static com.streamarr.transcode.probe.EbmlElements.TAG_LANGUAGE;
+import static com.streamarr.transcode.probe.EbmlElements.VOID;
 import static com.streamarr.transcode.probe.EbmlElements.copiedDuration;
 import static com.streamarr.transcode.probe.EbmlElements.document;
 import static com.streamarr.transcode.probe.EbmlElements.element;
@@ -1311,6 +1315,12 @@ class FfprobeExecutorBitrateScanTest {
                 .firstPacketTime(-21L)
                 .build()),
         Arguments.of(
+            "FFmpeg's DURATION in a file without Cues, which the Tags alone show",
+            ffmpegWritten()
+                .file(ffmpegSegment().hasCues(false).build().write())
+                .tags("{\"DURATION\":\"00:00:10.000000000\"}")
+                .build()),
+        Arguments.of(
             "FFmpeg's DURATION, after a DURATION that it copied from its input",
             ffmpegWritten()
                 .file(
@@ -1415,6 +1425,60 @@ class FfprobeExecutorBitrateScanTest {
                         .tag(trackTag(AUDIO_TRACK_UID, copiedDuration("00:00:05.000000000")))
                         .build()
                         .write())
+                .tags("{\"DURATION\":\"00:00:05.000000000\"}")
+                .build()),
+        Arguments.of(
+            "a DURATION that FFmpeg copied from its input, kept by a run that stopped before it"
+                + " wrote its own over the Void after it",
+            ffmpegWritten()
+                .file(
+                    withAudioTag(copiedDuration("00:00:05.000000000"), element(VOID, new byte[34])))
+                .tags("{\"DURATION\":\"00:00:05.000000000\"}")
+                .build()),
+        Arguments.of(
+            "a DURATION with a TagLanguage after FFmpeg's, which FFmpeg never writes",
+            ffmpegWritten()
+                .file(
+                    withAudioTag(
+                        ffmpegDuration("00:00:30.000000000"), copiedDuration("00:00:05.000000000")))
+                .tags("{\"DURATION\":\"00:00:05.000000000\"}")
+                .build()),
+        Arguments.of(
+            "a duration tag with a TagLanguage after FFmpeg's, whose name FFmpeg's demuxer matches"
+                + " to DURATION ignoring case",
+            ffmpegWritten()
+                .file(
+                    withAudioTag(
+                        ffmpegDuration("00:00:30.000000000"),
+                        simpleTag("duration", "00:00:05.000000000", string(TAG_LANGUAGE, "und"))))
+                .tags("{\"duration\":\"00:00:05.000000000\"}")
+                .build()),
+        Arguments.of(
+            "a SimpleTag nested in another, which FFmpeg never writes",
+            ffmpegWritten()
+                .file(
+                    withAudioTag(
+                        simpleTag(
+                            "ENCODER",
+                            "Lavc62.28.103 aac",
+                            simpleTag("DURATION", "00:00:05.000000000")),
+                        ffmpegDuration("00:00:05.000000000")))
+                .tags("{\"DURATION\":\"00:00:05.000000000\"}")
+                .build()),
+        Arguments.of(
+            "a TagDefault longer than FFmpeg's demuxer reads, where its parse of the Tags stops",
+            ffmpegWritten()
+                .file(
+                    withAudioTag(
+                        copiedDuration("00:00:05.000000000"),
+                        element(SIMPLE_TAG, element(TAG_DEFAULT, new byte[9])),
+                        ffmpegDuration("00:00:30.000000000")))
+                .tags("{\"DURATION\":\"00:00:05.000000000\"}")
+                .build()),
+        Arguments.of(
+            "FFmpeg's file whose Tags the probe cannot find",
+            ffmpegWritten()
+                .file(ffmpegSegment().clearTags().build().write())
                 .tags("{\"DURATION\":\"00:00:05.000000000\"}")
                 .build()),
         Arguments.of(
@@ -1549,6 +1613,11 @@ class FfprobeExecutorBitrateScanTest {
                 AUDIO_TRACK_UID,
                 simpleTag("ENCODER", "Lavc62.28.103 aac"),
                 ffmpegDuration("00:00:20.021000000")));
+  }
+
+  /** FFmpeg 8.1's file, whose Tag of the audio track holds {@code simpleTags}. */
+  private static Path withAudioTag(byte[]... simpleTags) {
+    return ffmpegSegment().clearTags().tag(trackTag(AUDIO_TRACK_UID, simpleTags)).build().write();
   }
 
   /**

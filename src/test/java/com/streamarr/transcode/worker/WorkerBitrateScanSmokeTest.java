@@ -39,6 +39,30 @@ class WorkerBitrateScanSmokeTest {
   private static final int SECONDS = 20;
   private static final List<Integer> CHUNK_STARTS = List.of(0, 6, 13);
 
+  // The ID of a Matroska Tags element, and the start of the DURATION SimpleTag that FFmpeg's
+  // muxer writes for a track: SimpleTag, TagName "DURATION", and a 19-byte TagString.
+  private static final byte[] TAGS = {0x12, 0x54, (byte) 0xC3, 0x67};
+  private static final byte[] FFMPEG_DURATION = {
+    0x67,
+    (byte) 0xC8,
+    (byte) 0xA1,
+    0x45,
+    (byte) 0xA3,
+    (byte) 0x88,
+    'D',
+    'U',
+    'R',
+    'A',
+    'T',
+    'I',
+    'O',
+    'N',
+    0x44,
+    (byte) 0x87,
+    (byte) 0x93
+  };
+  private static final int FFMPEG_DURATION_BYTES = FFMPEG_DURATION.length + 19;
+
   private static final FfprobeExecutor FFPROBE =
       FfprobeExecutor.forBinaries(Path.of("ffprobe"), Path.of("ffmpeg"));
 
@@ -164,10 +188,10 @@ class WorkerBitrateScanSmokeTest {
           + " audio of a synthetic Matroska source ends before its video")
   void shouldMeasureAChunkAfterTheAudiosEndWithoutReadingToTheFilesEndWhenTheAudioEndsEarly()
       throws Exception {
-    // FFmpeg writes each track's DURATION tag, and its Cues in space reserved before the first
-    // Cluster, so that a cut keeps them. The AAC stream ends after 4 s and the Opus stream, whose
-    // first packet presents before zero, after 9 s, while the video runs for 40 s with a keyframe
-    // every second.
+    // FFmpeg writes each track's DURATION tag, after the 30 s one it copies for the AAC stream,
+    // and its Cues in space reserved before the first Cluster, so that a cut keeps them. The AAC
+    // stream ends after 4 s and the Opus stream, whose first packet presents before zero, after
+    // 9 s, while the video runs for 40 s with a keyframe every second.
     var file = root.resolve("short-audio.mkv");
     run(
         List.of(
@@ -206,6 +230,8 @@ class WorkerBitrateScanSmokeTest {
             "aac",
             "-c:a:1",
             "libopus",
+            "-metadata:s:a:0",
+            "DURATION-und=00:00:30.000000000",
             "-reserve_index_space",
             "50000",
             file.toString()));
@@ -223,6 +249,122 @@ class WorkerBitrateScanSmokeTest {
         .isEqualTo(BitrateScanChunkResult.ResultCase.MEASURED);
     assertThat(intervalCounts(afterTheAudio.streamMeasurementParts()))
         .isEqualTo(intervals(wholeFile, 13, 25));
+  }
+
+  @Test
+  @DisplayName(
+      "Should count every audio packet of a later chunk when an FFmpeg run stopped before it wrote"
+          + " its own DURATION over a copied one")
+  void shouldCountEveryAudioPacketOfALaterChunkWhenAnFfmpegRunStoppedBeforeItWroteItsDuration()
+      throws Exception {
+    // The muxer copies the key DURATION-und as a DURATION tag with a language, which ends the 20 s
+    // audio after 2 s. Its trailer writes the Cues into the space reserved for them before it
+    // writes each track's DURATION, so a run stopped between the two keeps the copied tag.
+    var file = root.resolve("stopped.mkv");
+    run(
+        List.of(
+            "ffmpeg",
+            "-nostdin",
+            "-v",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=s=320x240:r=24:d=" + SECONDS,
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=sample_rate=48000:d=" + SECONDS,
+            "-c:v",
+            "libx264",
+            "-g",
+            "24",
+            "-c:a",
+            "aac",
+            "-metadata:s:a:0",
+            "DURATION-und=00:00:02.000000000",
+            "-reserve_index_space",
+            "50000",
+            file.toString()));
+    undoTheTrailersTagsWrites(file);
+    assertThat(audioDuration(file)).isEqualTo("00:00:02.000000000");
+    var positions = positions(file);
+
+    var counts = chunkCounts(file, positions, CHUNK_STARTS);
+
+    assertThat(counts)
+        .isEqualTo(WholeFileListing.read(file, positions.streamIndex()).intervalCounts());
+  }
+
+  /**
+   * Puts the Tags element back as FFmpeg's Matroska muxer writes it before its trailer: a 6-byte
+   * Void where the trailer writes the CRC-32, and a 36-byte Void where it writes each track's
+   * DURATION SimpleTag, the one without a TagLanguage.
+   */
+  private static void undoTheTrailersTagsWrites(Path file) throws Exception {
+    var bytes = Files.readAllBytes(file);
+    var segment = EbmlElement.at(bytes, EbmlElement.at(bytes, 0).end());
+    var tags = EbmlElement.at(bytes, segment.payload());
+    while (!Arrays.equals(bytes, tags.start(), tags.start() + TAGS.length, TAGS, 0, TAGS.length)) {
+      tags = EbmlElement.at(bytes, tags.end());
+    }
+
+    assertThat(Arrays.copyOfRange(bytes, tags.payload(), tags.payload() + 2))
+        .as("the CRC-32 that starts the Tags")
+        .isEqualTo(new byte[] {(byte) 0xBF, (byte) 0x84});
+    System.arraycopy(
+        new byte[] {(byte) 0xEC, (byte) 0x84, 0, 0, 0, 0}, 0, bytes, tags.payload(), 6);
+    var placeholder = new byte[FFMPEG_DURATION_BYTES];
+    placeholder[0] = (byte) 0xEC;
+    placeholder[1] = (byte) (0x80 | (FFMPEG_DURATION_BYTES - 2));
+    var durations = 0;
+    for (var i = tags.payload(); i + FFMPEG_DURATION_BYTES <= tags.end(); i++) {
+      if (Arrays.equals(
+          bytes, i, i + FFMPEG_DURATION.length, FFMPEG_DURATION, 0, FFMPEG_DURATION.length)) {
+        System.arraycopy(placeholder, 0, bytes, i, FFMPEG_DURATION_BYTES);
+        durations++;
+      }
+    }
+
+    assertThat(durations).as("the DURATION of the video and of the audio").isEqualTo(2);
+    Files.write(file, bytes);
+  }
+
+  /** The bounds of the EBML element that starts at {@code start}: its payload's start and end. */
+  private record EbmlElement(int start, int payload, int end) {
+
+    static EbmlElement at(byte[] bytes, int start) {
+      var sizeStart = start + vintLength(bytes[start]);
+      var sizeLength = vintLength(bytes[sizeStart]);
+      long size = bytes[sizeStart] & (0xFF >> sizeLength);
+      for (var i = 1; i < sizeLength; i++) {
+        size = (size << 8) | (bytes[sizeStart + i] & 0xFF);
+      }
+
+      var payload = sizeStart + sizeLength;
+      return new EbmlElement(start, payload, Math.toIntExact(payload + size));
+    }
+
+    private static int vintLength(byte first) {
+      return Integer.numberOfLeadingZeros(first & 0xFF) - 23;
+    }
+  }
+
+  /** The DURATION tag of the file's audio stream, as ffprobe reports it. */
+  private static String audioDuration(Path file) throws Exception {
+    return run(List.of(
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream_tags=DURATION",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            file.toString()))
+        .strip();
   }
 
   /** Each stream's counts of the intervals from {@code from} up to {@code to}. */

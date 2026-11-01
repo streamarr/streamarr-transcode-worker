@@ -255,7 +255,7 @@ final class BitrateScanChunkRun {
   }
 
   /**
-   * The {@link LatestEnds} of a source's Matroska tracks. It reads the file's MuxingApp and Cues
+   * The {@link LatestEnds} of a source's Matroska tracks. It reads the file's MuxingApp and Tags
    * once, and a track's first packet, only when the track's DURATION alone lies before the limit.
    */
   private final class TrackEnds implements LatestEnds {
