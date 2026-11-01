@@ -522,6 +522,28 @@ class FfprobeExecutorBitrateScanTest {
 
   @Test
   @DisplayName(
+      "Should report an execution failure and no changed copy when the MP4 movie box cannot be read"
+          + " after ffprobe described the streams")
+  void
+      shouldReportAnExecutionFailureWhenTheMp4MovieBoxCannotBeReadAfterFfprobeDescribedTheStreams() {
+    // ffprobe describes an MP4 source whose file the worker then cannot open, so its H.264 track's
+    // sample entries stay unknown, which says nothing about what a copy does to its packets.
+    var mp4 =
+        MATROSKA_STREAMS
+            .formatted("aac")
+            .replace("\"matroska,webm\"", "\"mov,mp4,m4a,3gp,3g2,mj2\"")
+            .replace("\"index\":0,", "\"index\":0,\"id\":\"0x1\",");
+    var ffprobe = keptAacSource().streams(mp4).listing(FROM_FILE_START, WHOLE_FILE).build();
+
+    var report =
+        ffprobe.executor().probe(Path.of("/media/missing.mp4"), request(POSITIONS.chunk(0, 2)));
+
+    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
+    assertThat(report.result().hasBitrateScanChunk()).isFalse();
+  }
+
+  @Test
+  @DisplayName(
       "Should report an unsupported version when the chunk names another measurement version")
   void shouldReportAnUnsupportedVersionWhenTheChunkNamesAnotherMeasurementVersion() {
     var ffprobe = keptAacSource().build();

@@ -210,7 +210,12 @@ public final class FfprobeExecutor {
     }
 
     new StreamExtradataProbe(objectMapper, this::run).addTo(json, attempt.source());
-    Mp4SampleEntries.addTo(json, attempt.source());
+    // Unknown sample entries say nothing about what a copy does to a track's packets, so the
+    // chunk fails for a retry rather than report a changed copy.
+    if (!Mp4SampleEntries.addTo(json, attempt.source())) {
+      throw new PacketScanException("The chunk could not read the MP4 sample entries");
+    }
+
     var probed =
         ProbedSource.builder()
             .source(attempt.source())
