@@ -1,15 +1,13 @@
 package com.streamarr.transcode.probe;
 
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
-import java.nio.file.Path;
 import lombok.Builder;
 import lombok.NonNull;
 import tools.jackson.databind.JsonNode;
 
 /** A successful probe result together with the ffprobe output it came from. */
 @Builder
-record ProbedSource(
-    @NonNull Path source, @NonNull JsonNode ffprobeOutput, @NonNull ProbeAttemptResult result) {
+record ProbedSource(@NonNull JsonNode ffprobeOutput, @NonNull ProbeAttemptResult result) {
 
   static final String MATROSKA_FORMAT = "matroska,webm";
   static final String MP4_FORMAT = "mov,mp4,m4a,3gp,3g2,mj2";

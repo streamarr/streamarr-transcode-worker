@@ -7,6 +7,7 @@ import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeKeyframes;
 import com.streamarr.transcode.probe.KeyframeIndex.KeyframeTime;
 import com.streamarr.transcode.probe.KeyframeIndex.TimeBase;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -58,7 +59,7 @@ final class KeyframePacketScan {
     boolean take(String line);
   }
 
-  ProbeAttemptReport addKeyframes(ProbedSource probed)
+  ProbeAttemptReport addKeyframes(Path source, ProbedSource probed)
       throws ExecutionException, InterruptedException {
     var chosen = ChosenVideoStream.find(probed.ffprobeOutput().path("streams"));
     if (chosen.isEmpty()) {
@@ -80,7 +81,7 @@ final class KeyframePacketScan {
                 "error",
                 "-copyts",
                 "-i",
-                probed.source().toString(),
+                source.toString(),
                 "-map",
                 "0:" + chosen.get().streamIndex(),
                 "-c",

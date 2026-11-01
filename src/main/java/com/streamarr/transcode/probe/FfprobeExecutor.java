@@ -174,13 +174,12 @@ public final class FfprobeExecutor {
               .build();
     }
 
-    var probed =
-        ProbedSource.builder().source(attempt.source()).ffprobeOutput(json).result(result).build();
+    var probed = ProbedSource.builder().ffprobeOutput(json).result(result).build();
     if (attempt.request().getScanKeyframePackets()) {
-      return new KeyframePacketScan(this::runPacketScan).addKeyframes(probed);
+      return new KeyframePacketScan(this::runPacketScan).addKeyframes(attempt.source(), probed);
     }
 
-    return new ContainerIndexProbe(objectMapper, this::run).addKeyframes(probed);
+    return new ContainerIndexProbe(objectMapper, this::run).addKeyframes(attempt.source(), probed);
   }
 
   /** The packets that the probe reads hold the first frames, so their read follows the frames'. */

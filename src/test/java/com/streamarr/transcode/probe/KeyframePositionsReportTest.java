@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositionSource;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import com.streamarr.transcode.probe.KeyframeIndex.TimeBase;
-import java.nio.file.Path;
 import java.util.List;
 import java.util.function.UnaryOperator;
 import java.util.stream.Stream;
@@ -51,7 +50,6 @@ class KeyframePositionsReportTest {
     return KeyframePositionsReport.builder()
         .probed(
             ProbedSource.builder()
-                .source(Path.of("/media/movie.ts"))
                 .ffprobeOutput(new ObjectMapper().createObjectNode())
                 .result(ProbeAttemptResult.getDefaultInstance())
                 .build())
