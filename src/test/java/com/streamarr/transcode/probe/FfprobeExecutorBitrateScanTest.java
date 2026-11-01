@@ -108,6 +108,7 @@ class FfprobeExecutorBitrateScanTest {
           .keyframe(new Keyframe(40_000, 40_000))
           .build();
 
+  private static final long VIDEO_TRACK_UID = 1;
   private static final long AUDIO_TRACK_UID = 2;
   private static final String MKVMERGE = "mkvmerge v92.0 ('Everglow') 64-bit";
   private static final String MKVPROPEDIT = "mkvpropedit v92.0 ('Everglow') 64-bit";
@@ -1429,10 +1430,23 @@ class FfprobeExecutorBitrateScanTest {
                 .build()),
         Arguments.of(
             "a DURATION that FFmpeg copied from its input, kept by a run that stopped before it"
-                + " wrote its own over the Void after it",
+                + " wrote its own over the Void after it, in the Tag of the first stream",
             ffmpegWritten()
                 .file(
-                    withAudioTag(copiedDuration("00:00:05.000000000"), element(VOID, new byte[34])))
+                    ffmpegSegment()
+                        .clearTags()
+                        .tag(
+                            trackTag(
+                                AUDIO_TRACK_UID,
+                                copiedDuration("00:00:05.000000000"),
+                                element(VOID, new byte[34])))
+                        .tag(
+                            trackTag(
+                                VIDEO_TRACK_UID,
+                                simpleTag("ENCODER", "Lavc62.28.103 libx264"),
+                                element(VOID, new byte[34])))
+                        .build()
+                        .write())
                 .tags("{\"DURATION\":\"00:00:05.000000000\"}")
                 .build()),
         Arguments.of(

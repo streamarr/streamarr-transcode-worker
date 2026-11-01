@@ -82,8 +82,8 @@ final class MatroskaTrackDuration {
   }
 
   /**
-   * Fails the read at a value where FFmpeg's parse of the Tags would stop, which would leave it an
-   * earlier DURATION tag than the last one in the file.
+   * Whether the last DURATION tag of every Tag is FFmpeg's own. Fails the read at a value where
+   * FFmpeg's parse of the Tags stops, since ffprobe would then report an earlier DURATION tag.
    */
   private static boolean isEachLastDurationUncopied(ByteBuffer tags) {
     MatroskaFile.requireReadable(tags, MatroskaSyntax.TAGS);

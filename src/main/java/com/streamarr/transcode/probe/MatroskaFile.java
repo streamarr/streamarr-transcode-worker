@@ -393,7 +393,10 @@ final class MatroskaFile {
     }
   }
 
-  /** The Info and Tags elements of the first Segment, as FFmpeg's demuxer finds them. */
+  /**
+   * The Info and Tags elements of the first Segment: the first of each before the first Cluster, or
+   * else where a SeekHead there points.
+   */
   record InfoAndTags(Optional<ByteBuffer> info, Optional<ByteBuffer> tags) {}
 
   private record FileElement(long id, long dataStart, long size) {
