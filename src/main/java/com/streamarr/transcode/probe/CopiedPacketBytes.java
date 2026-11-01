@@ -89,7 +89,9 @@ final class CopiedPacketBytes {
     }
 
     return Optional.of(
-        Extradata.of(stream).filter(record -> areKept(family, sampleEntry, record)).isPresent());
+        Extradata.of(stream)
+            .filter(configurationRecord -> areKept(family, sampleEntry, configurationRecord))
+            .isPresent());
   }
 
   /**
@@ -105,47 +107,48 @@ final class CopiedPacketBytes {
 
   /**
    * Whether a copy without the filter keeps every packet's bytes. {@code sampleEntry} is the
-   * source's sample entry type, empty for a container without sample entries, and {@code record} is
-   * the stream's extradata.
+   * source's sample entry type, empty for a container without sample entries, and {@code
+   * configurationRecord} is the stream's extradata.
    */
   static boolean areKept(
       @NonNull ProbedCodecFamily family,
       @NonNull Optional<String> sampleEntry,
-      byte @NonNull [] record) {
+      byte @NonNull [] configurationRecord) {
     return switch (family) {
       case H264 ->
           sampleEntry.map(AVC_RECORD_SAMPLE_ENTRIES::contains).orElse(true)
-              && isKeptAvcRecord(record);
+              && isKeptAvcRecord(configurationRecord);
       case HEVC ->
           sampleEntry.map(HEVC_RECORD_SAMPLE_ENTRIES::contains).orElse(true)
-              && isKeptHevcRecord(record);
+              && isKeptHevcRecord(configurationRecord);
       case AV1, OTHER -> false;
     };
   }
 
-  private static boolean isKeptAvcRecord(byte[] record) {
-    if (!isRecordWithFourByteLengths(record, NalSyntax.H264)
-        || !DecoderConfiguration.isWholeAvcRecord(record)
-        || !avcRecordUnits(record).stream().allMatch(NalSyntax.H264::reachesDecoder)) {
+  private static boolean isKeptAvcRecord(byte[] configurationRecord) {
+    if (!isRecordWithFourByteLengths(configurationRecord, NalSyntax.H264)
+        || !DecoderConfiguration.isWholeAvcRecord(configurationRecord)
+        || !avcRecordUnits(configurationRecord).stream().allMatch(NalSyntax.H264::reachesDecoder)) {
       return false;
     }
 
-    return DecoderConfiguration.avcCopyProfile(record)
-        .filter(profile -> headerEquals(record, profile, CodecStrings.AVC_PROFILE_BYTES))
+    return DecoderConfiguration.avcCopyProfile(configurationRecord)
+        .filter(
+            profile -> headerEquals(configurationRecord, profile, CodecStrings.AVC_PROFILE_BYTES))
         .isPresent();
   }
 
-  private static boolean isKeptHevcRecord(byte[] record) {
-    if (!isRecordWithFourByteLengths(record, NalSyntax.HEVC)) {
+  private static boolean isKeptHevcRecord(byte[] configurationRecord) {
+    if (!isRecordWithFourByteLengths(configurationRecord, NalSyntax.HEVC)) {
       return false;
     }
 
     // A record whose NAL unit FFmpeg's splitter drops is no whole record, and FFmpeg's hvcC writer
     // sorts NAL units by the type that their array names.
-    var units = DecoderConfiguration.hevcRecordUnits(record);
+    var units = DecoderConfiguration.hevcRecordUnits(configurationRecord);
     if (!units.complete()
         || !units.units().stream().allMatch(NalSyntax.HEVC::reachesDecoder)
-        || !arraysNameTheirUnitsTypes(record)
+        || !arraysNameTheirUnitsTypes(configurationRecord)
         || !holdsHevcParameterSets(units.units())) {
       return false;
     }
@@ -153,8 +156,10 @@ final class CopiedPacketBytes {
     return units.units().stream()
             .filter(NalSyntax.HEVC::isSei)
             .allMatch(CopiedPacketBytes::holdsOnlyUserDataUnregistered)
-        && DecoderConfiguration.hevcProfile(record)
-            .filter(profile -> headerEquals(record, profile, CodecStrings.HEVC_PROFILE_BYTES))
+        && DecoderConfiguration.hevcProfile(configurationRecord)
+            .filter(
+                profile ->
+                    headerEquals(configurationRecord, profile, CodecStrings.HEVC_PROFILE_BYTES))
             .isPresent();
   }
 
@@ -195,9 +200,12 @@ final class CopiedPacketBytes {
     }
   }
 
-  private static boolean isRecordWithFourByteLengths(byte[] record, NalSyntax syntax) {
-    return Byte.toUnsignedInt(record[0]) == RECORD_VERSION
-        && syntax.lengthSize(record).filter(size -> size == NAL_LENGTH_BYTES).isPresent();
+  private static boolean isRecordWithFourByteLengths(byte[] configurationRecord, NalSyntax syntax) {
+    return Byte.toUnsignedInt(configurationRecord[0]) == RECORD_VERSION
+        && syntax
+            .lengthSize(configurationRecord)
+            .filter(size -> size == NAL_LENGTH_BYTES)
+            .isPresent();
   }
 
   private static boolean holdsHevcParameterSets(List<byte[]> units) {
@@ -208,9 +216,10 @@ final class CopiedPacketBytes {
   }
 
   // The profile fields follow the record's configurationVersion.
-  private static boolean headerEquals(byte[] record, byte[] profile, int profileBytes) {
-    return record.length > profileBytes
-        && Arrays.equals(record, 1, 1 + profileBytes, profile, 0, profileBytes);
+  private static boolean headerEquals(
+      byte[] configurationRecord, byte[] profile, int profileBytes) {
+    return configurationRecord.length > profileBytes
+        && Arrays.equals(configurationRecord, 1, 1 + profileBytes, profile, 0, profileBytes);
   }
 
   /**

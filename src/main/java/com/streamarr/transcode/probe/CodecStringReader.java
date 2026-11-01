@@ -92,8 +92,8 @@ final class CodecStringReader {
   }
 
   // The profile fields that follow the record's configurationVersion.
-  private static byte[] recordHeader(byte[] record, int profileBytes) {
-    return Arrays.copyOfRange(record, 1, 1 + profileBytes);
+  private static byte[] recordHeader(byte[] configurationRecord, int profileBytes) {
+    return Arrays.copyOfRange(configurationRecord, 1, 1 + profileBytes);
   }
 
   private static Optional<String> av1(byte[] extradata) {

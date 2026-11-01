@@ -348,10 +348,10 @@ class FfprobeExecutorCopyPacketBytesTest {
       var video =
           editedRecord(
               X265_MATROSKA,
-              record -> {
-                var edited = Arrays.copyOf(record, record.length + 5);
+              hvcC -> {
+                var edited = Arrays.copyOf(hvcC, hvcC.length + 5);
                 edited[HVCC_ARRAY_COUNT]++;
-                System.arraycopy(new byte[] {35, 0, 1, 0, 0}, 0, edited, record.length, 5);
+                System.arraycopy(new byte[] {35, 0, 1, 0, 0}, 0, edited, hvcC.length, 5);
                 return edited;
               });
 
@@ -368,8 +368,8 @@ class FfprobeExecutorCopyPacketBytesTest {
       var video =
           editedRecord(
               X265_MATROSKA,
-              record -> {
-                var edited = record.clone();
+              hvcC -> {
+                var edited = hvcC.clone();
                 edited[HVCC_LENGTH_SIZE] =
                     (byte) ((edited[HVCC_LENGTH_SIZE] & 0xFC) | lengthSizeMinusOne);
                 return edited;
@@ -388,8 +388,8 @@ class FfprobeExecutorCopyPacketBytesTest {
       var video =
           editedRecord(
               X265_MATROSKA,
-              record -> {
-                var edited = record.clone();
+              hvcC -> {
+                var edited = hvcC.clone();
                 edited[HVCC_ARRAY_COUNT + 1] = (byte) ((edited[HVCC_ARRAY_COUNT + 1] & 0xC0) | 39);
                 return edited;
               });
@@ -417,8 +417,8 @@ class FfprobeExecutorCopyPacketBytesTest {
       var video =
           editedRecord(
               X265_MATROSKA,
-              record -> {
-                var edited = record.clone();
+              hvcC -> {
+                var edited = hvcC.clone();
                 edited[0] = 2;
                 return edited;
               });
@@ -432,7 +432,7 @@ class FfprobeExecutorCopyPacketBytesTest {
     @DisplayName(
         "Should report that a copy may change packet bytes when the hvcC holds no VPS, SPS or PPS")
     void shouldReportThatACopyMayChangePacketBytesWhenTheHvcCHoldsNoVpsSpsOrPps(int type) {
-      var video = editedRecord(X265_MATROSKA, record -> withoutArray(record, type));
+      var video = editedRecord(X265_MATROSKA, hvcC -> withoutArray(hvcC, type));
 
       assertThat(copyKeepsPacketBytes(video)).isFalse();
     }
@@ -442,7 +442,7 @@ class FfprobeExecutorCopyPacketBytesTest {
         "Should report that a copy may change packet bytes when the hvcC ends inside its last NAL"
             + " unit")
     void shouldReportThatACopyMayChangePacketBytesWhenTheHvcCEndsInsideItsLastNalUnit() {
-      var video = editedRecord(X265_MATROSKA, record -> Arrays.copyOf(record, record.length - 1));
+      var video = editedRecord(X265_MATROSKA, hvcC -> Arrays.copyOf(hvcC, hvcC.length - 1));
 
       assertThat(copyKeepsPacketBytes(video)).isFalse();
     }
@@ -458,8 +458,8 @@ class FfprobeExecutorCopyPacketBytesTest {
       var video =
           editedRecord(
               X265_MATROSKA,
-              record -> {
-                var edited = record.clone();
+              hvcC -> {
+                var edited = hvcC.clone();
                 edited[edited.length - 1] = (byte) 0x81;
                 return edited;
               });
@@ -474,8 +474,7 @@ class FfprobeExecutorCopyPacketBytesTest {
       // FFmpeg reads the missing PPS count as 0, so the record holds no PPS.
       var video =
           editedRecord(
-              AVC1_MP4,
-              record -> Arrays.copyOf(record, AVC_FIRST_SPS_LENGTH + 2 + spsLength(record)));
+              AVC1_MP4, avcC -> Arrays.copyOf(avcC, AVC_FIRST_SPS_LENGTH + 2 + spsLength(avcC)));
 
       assertThat(copyKeepsPacketBytes(video)).isFalse();
     }
@@ -491,10 +490,10 @@ class FfprobeExecutorCopyPacketBytesTest {
       var video =
           editedRecord(
               X265_MATROSKA,
-              record -> {
-                var edited = Arrays.copyOf(record, record.length + 1);
-                var lengthOffset = lastNalUnitLengthOffset(record);
-                var length = ByteBuffer.wrap(record, lengthOffset, 2).getShort();
+              hvcC -> {
+                var edited = Arrays.copyOf(hvcC, hvcC.length + 1);
+                var lengthOffset = lastNalUnitLengthOffset(hvcC);
+                var length = ByteBuffer.wrap(hvcC, lengthOffset, 2).getShort();
                 ByteBuffer.wrap(edited, lengthOffset, 2).putShort((short) (length + 1));
                 return edited;
               });
@@ -534,19 +533,19 @@ class FfprobeExecutorCopyPacketBytesTest {
 
     /** The offset of the length field of the hvcC record's last NAL unit. */
     private static int lastNalUnitLengthOffset(byte[] hvcC) {
-      var record = ByteBuffer.wrap(hvcC).position(HVCC_ARRAY_COUNT + 1);
+      var nalUnitArrays = ByteBuffer.wrap(hvcC).position(HVCC_ARRAY_COUNT + 1);
       var lengthOffset = -1;
       for (var array = 0; array < Byte.toUnsignedInt(hvcC[HVCC_ARRAY_COUNT]); array++) {
-        record.get();
-        var units = Short.toUnsignedInt(record.getShort());
+        nalUnitArrays.get();
+        var units = Short.toUnsignedInt(nalUnitArrays.getShort());
         for (var unit = 0; unit < units; unit++) {
-          lengthOffset = record.position();
-          var length = Short.toUnsignedInt(record.getShort());
-          record.position(record.position() + length);
+          lengthOffset = nalUnitArrays.position();
+          var length = Short.toUnsignedInt(nalUnitArrays.getShort());
+          nalUnitArrays.position(nalUnitArrays.position() + length);
         }
       }
 
-      assertThat(record.hasRemaining()).as("the last NAL unit ends the record").isFalse();
+      assertThat(nalUnitArrays.hasRemaining()).as("the last NAL unit ends the record").isFalse();
       return lengthOffset;
     }
 
@@ -554,18 +553,18 @@ class FfprobeExecutorCopyPacketBytesTest {
     private static byte[] withoutArray(byte[] hvcC, int type) {
       var kept = new ByteArrayOutputStream();
       kept.write(hvcC, 0, HVCC_ARRAY_COUNT + 1);
-      var record = ByteBuffer.wrap(hvcC).position(HVCC_ARRAY_COUNT + 1);
+      var nalUnitArrays = ByteBuffer.wrap(hvcC).position(HVCC_ARRAY_COUNT + 1);
       for (var array = 0; array < Byte.toUnsignedInt(hvcC[HVCC_ARRAY_COUNT]); array++) {
-        var start = record.position();
-        var arrayType = record.get() & 0x3F;
-        var units = Short.toUnsignedInt(record.getShort());
+        var start = nalUnitArrays.position();
+        var arrayType = nalUnitArrays.get() & 0x3F;
+        var units = Short.toUnsignedInt(nalUnitArrays.getShort());
         for (var unit = 0; unit < units; unit++) {
-          var length = Short.toUnsignedInt(record.getShort());
-          record.position(record.position() + length);
+          var length = Short.toUnsignedInt(nalUnitArrays.getShort());
+          nalUnitArrays.position(nalUnitArrays.position() + length);
         }
 
         if (arrayType != type) {
-          kept.write(hvcC, start, record.position() - start);
+          kept.write(hvcC, start, nalUnitArrays.position() - start);
         }
       }
 
@@ -581,8 +580,8 @@ class FfprobeExecutorCopyPacketBytesTest {
       var recorded = fixture(fixture);
       var output = (ObjectNode) MAPPER.readTree(recorded);
       var stream = (ObjectNode) output.path("streams").get(0);
-      var record = Extradata.of(stream).orElseThrow();
-      stream.put("extradata", ffprobeDump(edit.apply(record)).replace("\\n", "\n"));
+      var configurationRecord = Extradata.of(stream).orElseThrow();
+      stream.put("extradata", ffprobeDump(edit.apply(configurationRecord)).replace("\\n", "\n"));
       return edited(fixture, recorded, MAPPER.writeValueAsString(output));
     }
 
