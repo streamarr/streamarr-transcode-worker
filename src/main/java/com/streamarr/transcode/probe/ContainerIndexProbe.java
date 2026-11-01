@@ -1,5 +1,8 @@
 package com.streamarr.transcode.probe;
 
+import static com.streamarr.transcode.probe.FfprobeJson.number;
+import static com.streamarr.transcode.probe.FfprobeJson.text;
+
 import build.buf.gen.streamarr.transcode.v1.KeyframePacketScanReason;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositionSource;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
@@ -65,7 +68,11 @@ final class ContainerIndexProbe {
           chosen.trackId().isPresent()
               ? Mp4SyncSampleReader.read(
                   probed.source(),
-                  new TrackStream(chosen.streamIndex(), chosen.trackId().get(), true),
+                  TrackStream.builder()
+                      .streamIndex(chosen.streamIndex())
+                      .trackId(chosen.trackId().get())
+                      .isRequired(true)
+                      .build(),
                   measuredStreams(probed.ffprobeOutput().path("streams"), chosen))
               : ContainerIndex.keyframesOnly(
                   new Unusable(
@@ -82,9 +89,10 @@ final class ContainerIndexProbe {
   }
 
   /**
-   * The streams that a measurement holds, each with the MP4 track that ffprobe names as its id: the
-   * chosen video stream and every audio stream, which it requires, and every other video stream
-   * that is not an attached picture. A required stream without a track leaves nothing to measure.
+   * The streams that a measurement holds, each with the MP4 track that ffprobe names as its id and
+   * the codec and sample rate that a copy's sample sizes depend on: the chosen video stream and
+   * every audio stream, which it requires, and every other video stream that is not an attached
+   * picture. A required stream without a track leaves nothing to measure.
    */
   private static List<TrackStream> measuredStreams(JsonNode streams, ChosenVideoStream chosen) {
     var measured = new ArrayList<TrackStream>();
@@ -104,7 +112,14 @@ final class ContainerIndexProbe {
       }
 
       if ((isRequired || isOtherVideo) && track.isPresent()) {
-        measured.add(new TrackStream(index, track.get(), isRequired));
+        measured.add(
+            TrackStream.builder()
+                .streamIndex(index)
+                .trackId(track.get())
+                .isRequired(isRequired)
+                .codecName(text(stream, "codec_name").orElse(""))
+                .sampleRate(number(stream, "sample_rate", Long::parseLong).orElse(0L))
+                .build());
       }
     }
 

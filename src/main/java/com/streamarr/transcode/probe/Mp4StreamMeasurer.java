@@ -30,7 +30,9 @@ import lombok.Builder;
  *
  * <p>The measurer reads no media data. It measures nothing when one track's samples cannot be
  * listed exactly, such as under an edit list that FFmpeg applies by dropping samples the measurer
- * does not model.
+ * does not model, or when a stream copy would deliver a required track's samples at other sizes
+ * than its sample table lists ({@link CopiedSampleSizes}), because the server counts the measured
+ * bytes as the copy's delivered bytes.
  */
 final class Mp4StreamMeasurer {
 
@@ -42,11 +44,19 @@ final class Mp4StreamMeasurer {
   private Mp4StreamMeasurer() {}
 
   /**
-   * One video or audio stream that ffprobe listed, with the MP4 track that holds it. A measurement
-   * holds every required stream. A stream that is not required, such as a second video stream, is
-   * left out when it cannot be measured.
+   * One video or audio stream that ffprobe listed, with the MP4 track that holds it, the codec that
+   * ffprobe names, empty when it names none, and the audio sample rate, 0 when it names none. A
+   * measurement holds every required stream. A stream that is not required, such as a second video
+   * stream, is left out when it cannot be measured, or when a copy would change its samples' sizes.
    */
-  record TrackStream(int streamIndex, long trackId, boolean isRequired) {}
+  @Builder
+  record TrackStream(
+      int streamIndex, long trackId, boolean isRequired, String codecName, long sampleRate) {
+
+    TrackStream {
+      codecName = codecName == null ? "" : codecName;
+    }
+  }
 
   /**
    * Measures the listed streams, or nothing when a required stream cannot be measured exactly.
@@ -94,6 +104,10 @@ final class Mp4StreamMeasurer {
 
     Optional<TrackMeasurement> measure(TrackStream stream) {
       try {
+        if (!CopiedSampleSizes.areKept(movie, stream)) {
+          return Optional.empty();
+        }
+
         var track =
             stream.trackId() == chosenTrackId
                 ? Optional.of(chosen)

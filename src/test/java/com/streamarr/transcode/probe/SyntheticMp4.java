@@ -12,7 +12,9 @@ import lombok.Singular;
 /**
  * A minimal MP4 file: ftyp, then a moov with track 1, whose movie timescale is 1,000 unless {@code
  * movieTimescale} names another, and track 2 when {@code secondTrack} describes one. With {@code
- * version1Headers}, the mvhd, tkhd and mdhd boxes use their version 1 layout with 64-bit times.
+ * version1Headers}, the mvhd, tkhd and mdhd boxes use their version 1 layout with 64-bit times. A
+ * track has an stsd only when {@code sampleEntries} lists entries, as {@link SyntheticSampleEntry}
+ * builds them.
  */
 @Builder
 record SyntheticMp4(
@@ -33,7 +35,8 @@ record SyntheticMp4(
     @Singular List<Edit> edits,
     boolean fragmented,
     SyntheticMp4 secondTrack,
-    long movieTimescale) {
+    long movieTimescale,
+    @Singular List<byte[]> sampleEntries) {
 
   static final long TRACK_ID = 1;
 
@@ -72,6 +75,15 @@ record SyntheticMp4(
 
   private byte[] trackBox(long trackId) {
     var sampleTable = new ArrayList<byte[]>();
+    if (!sampleEntries.isEmpty()) {
+      sampleTable.add(
+          fullBox(
+              "stsd",
+              0,
+              int32(sampleEntries.size()),
+              concat(sampleEntries.toArray(byte[][]::new))));
+    }
+
     sampleTable.add(fullBox("stts", 0, int32(1), int32(sampleCount), int32(sampleDuration)));
     sampleTable.add(sampleSizeBox());
     if (compositionOffsetCount > 0) {

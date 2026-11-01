@@ -18,10 +18,20 @@ import org.junit.jupiter.api.io.TempDir;
 @DisplayName("MP4 Stream Measurer Tests")
 class Mp4StreamMeasurerTest {
 
-  private static final TrackStream VIDEO = new TrackStream(0, SyntheticMp4.TRACK_ID, true);
-  private static final TrackStream AUDIO = new TrackStream(1, SyntheticMp4.SECOND_TRACK_ID, true);
+  private static final TrackStream VIDEO =
+      TrackStream.builder().streamIndex(0).trackId(SyntheticMp4.TRACK_ID).isRequired(true).build();
+  private static final TrackStream AUDIO =
+      TrackStream.builder()
+          .streamIndex(1)
+          .trackId(SyntheticMp4.SECOND_TRACK_ID)
+          .isRequired(true)
+          .build();
   private static final TrackStream OTHER_VIDEO =
-      new TrackStream(1, SyntheticMp4.SECOND_TRACK_ID, false);
+      TrackStream.builder()
+          .streamIndex(1)
+          .trackId(SyntheticMp4.SECOND_TRACK_ID)
+          .isRequired(false)
+          .build();
 
   @TempDir Path temporaryDirectory;
 
