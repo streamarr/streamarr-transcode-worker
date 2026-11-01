@@ -339,6 +339,9 @@ class FfprobeExecutorKeyframeTest {
         .extracting(ProbeStreamMeasurementPart::getKeyframeIntervalBytesCount)
         .containsExactly(4_096, 4_096, 4_096, 4_096, 4_096, 1_120);
     assertThat(report.streamMeasurementParts())
+        .extracting(ProbeStreamMeasurementPart::getKeyframeIntervalPacketCountsCount)
+        .containsExactly(4_096, 4_096, 4_096, 4_096, 4_096, 1_120);
+    assertThat(report.streamMeasurementParts())
         .allSatisfy(
             part ->
                 assertThat(
@@ -1410,6 +1413,9 @@ class FfprobeExecutorKeyframeTest {
       assertThat(intervalBytes(report, stream.index()))
           .as("stream %d bytes per keyframe interval", stream.index())
           .containsExactly(listing.intervalBytes(stream.index()));
+      assertThat(intervalPacketCounts(report, stream.index()))
+          .as("stream %d packets per keyframe interval", stream.index())
+          .containsExactly(listing.intervalPacketCounts(stream.index()));
     }
   }
 
@@ -1428,6 +1434,14 @@ class FfprobeExecutorKeyframeTest {
     return report.streamMeasurementParts().stream()
         .filter(part -> part.getStreamIndex() == streamIndex)
         .flatMap(part -> part.getKeyframeIntervalBytesList().stream())
+        .mapToLong(Integer::toUnsignedLong)
+        .toArray();
+  }
+
+  private static long[] intervalPacketCounts(ProbeAttemptReport report, int streamIndex) {
+    return report.streamMeasurementParts().stream()
+        .filter(part -> part.getStreamIndex() == streamIndex)
+        .flatMap(part -> part.getKeyframeIntervalPacketCountsList().stream())
         .mapToLong(Integer::toUnsignedLong)
         .toArray();
   }

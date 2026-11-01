@@ -50,6 +50,7 @@ class Mp4StreamMeasurerTest {
               assertThat(video.timescale()).isEqualTo(1_000);
               assertThat(video.measuredDuration()).isEqualTo(600);
               assertThat(video.intervalBytes()).containsExactly(40, 20);
+              assertThat(video.intervalPacketCounts()).containsExactly(4, 2);
             });
   }
 
@@ -82,6 +83,7 @@ class Mp4StreamMeasurerTest {
     assertThat(audio.timescale()).isEqualTo(48_000);
     assertThat(audio.measuredDuration()).isEqualTo(108_000);
     assertThat(audio.intervalBytes()).containsExactly(14, 14, 14, 21);
+    assertThat(audio.intervalPacketCounts()).containsExactly(2, 2, 2, 3);
   }
 
   @Test

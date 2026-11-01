@@ -110,7 +110,8 @@ final class Mp4StreamMeasurer {
 
   /**
    * One stream's measurement. {@code measuredDuration} counts ticks of 1 / {@code timescale}
-   * seconds. {@code intervalBytes} holds one unsigned 32-bit count for each keyframe interval.
+   * seconds. {@code intervalBytes} and {@code intervalPacketCounts} each hold one unsigned 32-bit
+   * count for each keyframe interval: the stream's bytes and its samples in that interval.
    */
   static final class TrackMeasurement {
     private final int streamIndex;
@@ -119,20 +120,24 @@ final class Mp4StreamMeasurer {
     private final long timescale;
     private final long measuredDuration;
     private final int[] intervalBytes;
+    private final int[] intervalPacketCounts;
 
+    @Builder
     private TrackMeasurement(
         int streamIndex,
         long measuredBytes,
         long packetCount,
         long timescale,
         long measuredDuration,
-        int[] intervalBytes) {
+        int[] intervalBytes,
+        int[] intervalPacketCounts) {
       this.streamIndex = streamIndex;
       this.measuredBytes = measuredBytes;
       this.packetCount = packetCount;
       this.timescale = timescale;
       this.measuredDuration = measuredDuration;
       this.intervalBytes = intervalBytes;
+      this.intervalPacketCounts = intervalPacketCounts;
     }
 
     int streamIndex() {
@@ -155,9 +160,14 @@ final class Mp4StreamMeasurer {
       return measuredDuration;
     }
 
-    /** The unsigned 32-bit counts, in interval order. The array is a copy. */
+    /** The unsigned 32-bit byte counts, in interval order. The array is a copy. */
     int[] intervalBytes() {
       return intervalBytes.clone();
+    }
+
+    /** The unsigned 32-bit sample counts, in interval order. The array is a copy. */
+    int[] intervalPacketCounts() {
+      return intervalPacketCounts.clone();
     }
 
     @Override
@@ -248,6 +258,7 @@ final class Mp4StreamMeasurer {
 
     Optional<TrackMeasurement> measure(int streamIndex, Track chosen, List<Keyframe> keyframes) {
       var intervals = new long[keyframes.size()];
+      var packets = new int[keyframes.size()];
       var boundaries = boundaries(chosen, keyframes);
       var interval = 0;
       long bytes = 0;
@@ -261,6 +272,7 @@ final class Mp4StreamMeasurer {
         }
 
         intervals[interval] += size;
+        packets[interval]++;
         bytes += size;
         firstPresentation = Math.min(firstPresentation, presentationTimes[sample]);
         lastEnd = Math.max(lastEnd, Math.addExact(presentationTimes[sample], durations[sample]));
@@ -276,13 +288,15 @@ final class Mp4StreamMeasurer {
       }
 
       return Optional.of(
-          new TrackMeasurement(
-              streamIndex,
-              bytes,
-              sizes.length - (long) first,
-              timescale,
-              Math.subtractExact(lastEnd, firstPresentation),
-              counts));
+          TrackMeasurement.builder()
+              .streamIndex(streamIndex)
+              .measuredBytes(bytes)
+              .packetCount(sizes.length - (long) first)
+              .timescale(timescale)
+              .measuredDuration(Math.subtractExact(lastEnd, firstPresentation))
+              .intervalBytes(counts)
+              .intervalPacketCounts(packets)
+              .build());
     }
 
     /**

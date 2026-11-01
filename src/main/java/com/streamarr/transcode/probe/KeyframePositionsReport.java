@@ -125,6 +125,7 @@ record KeyframePositionsReport(
     var parts = new ArrayList<ProbeStreamMeasurementPart>();
     for (var stream : measured) {
       var intervals = stream.intervalBytes();
+      var packets = stream.intervalPacketCounts();
       for (var first = 0; first < intervals.length; first += MAXIMUM_INTERVALS_PER_PART) {
         var part =
             ProbeStreamMeasurementPart.newBuilder()
@@ -132,7 +133,7 @@ record KeyframePositionsReport(
                 .setStreamIndex(stream.streamIndex());
         var end = Math.min(first + MAXIMUM_INTERVALS_PER_PART, intervals.length);
         for (var i = first; i < end; i++) {
-          part.addKeyframeIntervalBytes(intervals[i]);
+          part.addKeyframeIntervalBytes(intervals[i]).addKeyframeIntervalPacketCounts(packets[i]);
         }
 
         parts.add(part.build());

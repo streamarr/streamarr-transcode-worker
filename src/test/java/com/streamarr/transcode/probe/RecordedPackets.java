@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.ToLongFunction;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
@@ -94,18 +95,27 @@ record RecordedPackets(Map<Integer, Stream> streams, List<Packet> keyframes) {
 
   /** The stream's bytes in each keyframe interval of the first stream. */
   long[] intervalBytes(int streamIndex) {
+    return perInterval(streamIndex, Packet::size);
+  }
+
+  /** The stream's packets in each keyframe interval of the first stream. */
+  long[] intervalPacketCounts(int streamIndex) {
+    return perInterval(streamIndex, _ -> 1);
+  }
+
+  private long[] perInterval(int streamIndex, ToLongFunction<Packet> value) {
     var stream = streams.get(streamIndex);
     var intervals = new long[keyframes.size()];
     var interval = -1;
     for (var packet : stream.packets()) {
       if (streamIndex == 0) {
         interval += packet.flags().startsWith("K") ? 1 : 0;
-        intervals[Math.max(interval, 0)] += packet.size();
+        intervals[Math.max(interval, 0)] += value.applyAsLong(packet);
         continue;
       }
 
       intervals[intervalHolding(packet.presentationTime(), stream.timeBaseDenominator())] +=
-          packet.size();
+          value.applyAsLong(packet);
     }
 
     return intervals;

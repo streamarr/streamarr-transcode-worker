@@ -211,12 +211,11 @@ class TranscodeWorkerProbeTest {
               part ->
                   assertThat(part.getProbeKeyframePositionsPart().getPresentationTimeDeltasList())
                       .containsExactly(0L, 8_704L, 16_896L, 10_240L),
-              measurement ->
-                  assertThat(
-                          measurement
-                              .getProbeStreamMeasurementPart()
-                              .getKeyframeIntervalBytesList())
-                      .hasSize(4),
+              measurement -> {
+                var part = measurement.getProbeStreamMeasurementPart();
+                assertThat(part.getKeyframeIntervalBytesList()).hasSize(4);
+                assertThat(part.getKeyframeIntervalPacketCountsList()).hasSize(4);
+              },
               result ->
                   assertThat(
                           result
