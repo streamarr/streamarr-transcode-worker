@@ -43,7 +43,9 @@ Each worker grants the server a separate capacity for each kind of work, as [ADR
 | Playback slots | Job attempts | `TRANSCODE_WORKER_SLOTS`, 1 by default |
 | Playback probe capacity | Probes that a playback request waits for | 2 |
 | Background probe capacity | Other probes, such as a library scan's | Adapts from 1 to the cores available to the JVM, starting at 4. `TRANSCODE_WORKER_PROBE_CAPACITY` fixes it instead |
-| Keyframe packet scan capacity | Keyframe packet scans | 0 while any job attempt runs, and 1 once no job attempt has run for 30 s |
+| Keyframe packet scan capacity | Keyframe packet scans and bitrate scan chunks | 0 while any job attempt runs, and 1 once no job attempt has run for 30 s |
+
+A bitrate scan chunk lists the packets of a run of keyframe intervals with ffprobe and reports each video and audio stream's bytes and packets in each interval ([ADR 0054](https://github.com/streamarr/streamarr-adr/blob/main/adr/0054-workers-measure-each-stream-bitrate-and-a-copy-advertises-its-measured-peak.adoc)). The worker advertises the stream measurement version whose chunks it runs, and the server sends chunks only to a worker that lists the server's version.
 
 Probes never take a playback slot, and job attempts never take a probe capacity. A playback probe can also use a free unit of the background probe capacity, so it never waits behind a scan.
 
@@ -51,7 +53,7 @@ The background probe capacity grows by 1 when a probe ends while at least half o
 
 `TRANSCODE_WORKER_SLOTS` decides how much playback the worker runs. `TRANSCODE_WORKER_PROBE_CAPACITY` only fixes the background probe capacity and turns the adaptation off. Leave it unset unless the host's disks cannot take as many probes as its cores.
 
-Background probes and keyframe packet scans run at nice 19, and playback probes at the worker's own priority. While probes run, the worker logs a summary each minute, with each capacity and the brakes since the previous summary. [Developer Setup](docs/dev-setup.md#configuration) lists every setting.
+Background probes, keyframe packet scans and bitrate scan chunks run at nice 19, and playback probes at the worker's own priority. While probes run, the worker logs a summary each minute, with each capacity and the brakes since the previous summary. [Developer Setup](docs/dev-setup.md#configuration) lists every setting.
 
 ## Architecture
 
