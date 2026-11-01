@@ -42,8 +42,7 @@ final class VideoOutputCheck {
               + " where every encode is 8-bit 4:2:0");
     }
 
-    if (decision instanceof VideoDecision.Encode
-        && readable(() -> InterlacedVideoSignals.declaresInterlacedVideo(sampleEntry))) {
+    if (encodeDeclaresInterlacedVideo(decision, sampleEntry)) {
       throw mismatch("the encode declares interlaced video where every encode is progressive");
     }
 
@@ -56,6 +55,15 @@ final class VideoOutputCheck {
               + " sample entry promises parameter sets that its decoder configuration record does"
               + " not hold");
     }
+  }
+
+  private static boolean encodeDeclaresInterlacedVideo(
+      VideoDecision decision, BoxView sampleEntry) {
+    if (!(decision instanceof VideoDecision.Encode)) {
+      return false;
+    }
+
+    return readable(() -> InterlacedVideoSignals.declaresInterlacedVideo(sampleEntry));
   }
 
   // A missing box on the way to the sample entry stays a malformed box; only a decoder

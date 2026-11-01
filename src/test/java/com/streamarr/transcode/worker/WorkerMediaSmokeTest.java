@@ -738,10 +738,10 @@ class WorkerMediaSmokeTest {
     var againstThePictures = psnrAgainst(media, interlacedSourcePictures(), "");
     assertThat(againstThePictures)
         .as("PSNR against the pictures, over PSNR against the woven frames")
-        .isGreaterThan(psnrAgainst(media, source, WOVEN_FRAMES_AT_THE_FIELD_RATE));
-    // Deinterlacing with the other field first swaps the two frames of each field pair, so each
-    // uploaded frame then resembles its pair partner more than the picture it should show.
-    assertThat(againstThePictures)
+        .isGreaterThan(psnrAgainst(media, source, WOVEN_FRAMES_AT_THE_FIELD_RATE))
+        // Deinterlacing with the other field first swaps the two frames of each field pair, so
+        // each uploaded frame then resembles its pair partner more than the picture it should
+        // show.
         .as("PSNR against the pictures, over PSNR against each picture's pair partner")
         .isGreaterThan(psnrAgainst(media, interlacedSourcePictures(), "shuffleframes=1 0,"));
   }
