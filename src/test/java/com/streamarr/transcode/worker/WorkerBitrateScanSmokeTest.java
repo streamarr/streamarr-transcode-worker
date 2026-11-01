@@ -580,10 +580,14 @@ class WorkerBitrateScanSmokeTest {
 
     static Packet parse(String line) {
       var fields = WholeFileListing.fields(line);
-      var time = "N/A".equals(fields.get("pts")) ? fields.get("dts") : fields.get("pts");
+      var timeField = "pts";
+      if ("N/A".equals(fields.get(timeField))) {
+        timeField = "dts";
+      }
+
       return new Packet(
           Integer.parseInt(fields.get("stream_index")),
-          Long.parseLong(time),
+          Long.parseLong(fields.get(timeField)),
           Long.parseLong(fields.get("size")),
           fields.get("flags").startsWith("K"));
     }

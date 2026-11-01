@@ -53,6 +53,9 @@ public final class FfprobeExecutor {
   private static final int AVERROR_INVALIDDATA = -1094995529;
   private static final int AVERROR_EOF = -541478725;
 
+  // The object that ffprobe prints in place of its result when it fails.
+  private static final String ERROR_FIELD = "error";
+
   @NonNull private final ObjectMapper objectMapper;
   @NonNull private final Function<ProbeCommand, Process> processFactory;
 
@@ -206,7 +209,10 @@ public final class FfprobeExecutor {
 
     if (output.exitCode() != 0) {
       return ProbeAttemptReport.resultOnly(
-          attempt.result().setFailure(failureFor(json.path("error").path("code").asInt())).build());
+          attempt
+              .result()
+              .setFailure(failureFor(json.path(ERROR_FIELD).path("code").asInt()))
+              .build());
     }
 
     new StreamExtradataProbe(objectMapper, this::run).addTo(json, attempt.source());
@@ -459,7 +465,7 @@ public final class FfprobeExecutor {
     }
 
     if (exitCode != 0) {
-      var error = json.path("error");
+      var error = json.path(ERROR_FIELD);
       var errorCode = error.path("code").asInt();
       log.warn(
           "ffprobe attempt {} for source {} exited with code {}: error {} ({})",
