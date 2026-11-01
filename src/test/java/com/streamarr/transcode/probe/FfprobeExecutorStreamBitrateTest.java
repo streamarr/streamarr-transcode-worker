@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 import lombok.Builder;
+import lombok.NonNull;
 import lombok.Singular;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -95,16 +96,54 @@ class FfprobeExecutorStreamBitrateTest {
   @DisplayName("Statistics Tags")
   class StatisticsTagTests {
 
-    @Test
-    @DisplayName("Should compute the bitrate from bytes and duration when the BPS tag is missing")
-    void shouldComputeTheBitrateFromBytesAndDurationWhenTheBpsTagIsMissing() {
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("derivedBitrates")
+    @DisplayName(
+        "Should compute the bitrate rounded half up from bytes and duration when the BPS tag is"
+            + " missing")
+    void shouldComputeTheBitrateRoundedHalfUpFromBytesAndDurationWhenTheBpsTagIsMissing(
+        DerivedBitrate derived) {
       var media =
           probeOutput(
-              output().stream(fresh("video", "7800").tag("DURATION", "00:00:05.023000000").build())
+              output().stream(
+                      fresh("video", derived.bytes()).tag("DURATION", derived.duration()).build())
                   .build());
 
-      // 7800 × 8 / 5.023 = 12,422.85
-      assertThat(bitrates(media)).containsExactly(12_423L);
+      assertThat(bitrates(media)).containsExactly(derived.bitsPerSecond());
+    }
+
+    static Stream<DerivedBitrate> derivedBitrates() {
+      return Stream.of(
+          DerivedBitrate.builder()
+              .rule("7800 × 8 / 5.023 = 12,422.85")
+              .bytes("7800")
+              .duration("00:00:05.023000000")
+              .bitsPerSecond(12_423)
+              .build(),
+          DerivedBitrate.builder()
+              .rule("5 × 8 / 16 = 2.5 rounds up")
+              .bytes("5")
+              .duration("00:00:16.000000000")
+              .bitsPerSecond(3)
+              .build(),
+          DerivedBitrate.builder()
+              .rule("3 × 8 / 10 = 2.4 rounds down")
+              .bytes("3")
+              .duration("00:00:10.000000000")
+              .bitsPerSecond(2)
+              .build());
+    }
+
+    @Test
+    @DisplayName(
+        "Should report the stream bitrate when the trusted byte counts equal the file size")
+    void shouldReportTheStreamBitrateWhenTheTrustedByteCountsEqualTheFileSize() {
+      var media =
+          probeOutput(
+              output().size("5400").stream(fresh("video", "5400").tag("BPS", "21589").build())
+                  .build());
+
+      assertThat(bitrates(media)).containsExactly(21_589L);
     }
 
     @Test
@@ -322,6 +361,15 @@ class FfprobeExecutorStreamBitrateTest {
         .codecType(codecType)
         .tag("NUMBER_OF_BYTES", bytes)
         .tag("_STATISTICS_WRITING_APP", MKVMERGE);
+  }
+
+  @Builder
+  private record DerivedBitrate(
+      @NonNull String rule, @NonNull String bytes, @NonNull String duration, long bitsPerSecond) {
+    @Override
+    public String toString() {
+      return rule;
+    }
   }
 
   @Builder

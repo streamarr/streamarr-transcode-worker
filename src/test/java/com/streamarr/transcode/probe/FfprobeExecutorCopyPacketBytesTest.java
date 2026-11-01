@@ -8,14 +8,19 @@ import static com.streamarr.transcode.probe.RecordedFfprobe.streamOf;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
+import java.io.ByteArrayOutputStream;
+import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.function.UnaryOperator;
+import java.util.stream.Stream;
+import lombok.Builder;
+import lombok.NonNull;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
@@ -35,6 +40,9 @@ class FfprobeExecutorCopyPacketBytesTest {
   // in the next.
   private static final int HVCC_LENGTH_SIZE = 21;
   private static final int HVCC_ARRAY_COUNT = 22;
+  private static final int HEVC_VIDEO_PARAMETER_SET = 32;
+  private static final int HEVC_SEQUENCE_PARAMETER_SET = 33;
+  private static final int HEVC_PICTURE_PARAMETER_SET = 34;
 
   private static final ObjectMapper MAPPER = new ObjectMapper();
 
@@ -43,69 +51,74 @@ class FfprobeExecutorCopyPacketBytesTest {
   class RecordedSourceTests {
 
     @ParameterizedTest(name = "{0}")
-    @CsvSource({
-      "mp4-sdr8-bt709.mp4, 0",
-      "mp4-dovi-p9-dva1.mp4, 0",
-      "mkv-120fps.mkv, 0",
-      "flv-h264-sei-without-trailing-bits.flv, 0",
-      "mp4-dovi-p5-dvh1.mp4, 0",
-      "mov-hevc-extradata-reload.mov, 0",
-      "mkv-pipe-hevc-10bit.mkv, 0",
-    })
+    @ValueSource(
+        strings = {
+          "mp4-sdr8-bt709.mp4",
+          "mp4-dovi-p9-dva1.mp4",
+          "mkv-120fps.mkv",
+          "flv-h264-sei-without-trailing-bits.flv",
+          "mp4-dovi-p5-dvh1.mp4",
+          "mov-hevc-extradata-reload.mov",
+          "mkv-pipe-hevc-10bit.mkv",
+        })
     @DisplayName(
         "Should report that a copy keeps every packet's bytes when the record holds the parameter"
             + " sets that its header names")
     void
         shouldReportThatACopyKeepsEveryPacketsBytesWhenTheRecordHoldsTheParameterSetsThatItsHeaderNames(
-            String fixture, int index) {
-      var video = streamOf(fixture, index);
+            String fixture) {
+      var video = streamOf(fixture, 0);
 
       assertThat(copyKeepsPacketBytes(video)).isTrue();
     }
 
     @ParameterizedTest(name = "{0}")
-    @CsvSource({
-      // The record header names another level than the SPS.
-      "mp4-avc-record-level.mp4, 0",
-      "mp4-h264-mixed-nal-coding.mp4, 0",
-      "mp4-hevc-record-level.mp4, 0",
-      // The hvcC holds mastering display, content light level or ambient viewing environment.
-      "mkv-hdr10-static.mkv, 0",
-      "mkv-hdr10-fate.mkv, 0",
-      "mov-phone-60.mov, 0",
-      // The sample entry keeps parameter sets in the samples.
-      "mp4-dovi-p5-hev1.mp4, 0",
-      "mp4-dovi-p7-two-tracks.mp4, 0",
-      // The record holds no NAL unit.
-      "mkv-hevc-parameter-sets-in-samples.mkv, 0",
-      "mkv-h264-parameter-sets-in-samples.mkv, 0",
-      // The extradata is Annex B or no record.
-      "mpegts-hevc-ac3.ts, 0",
-      "mpegts-aac-he.ts, 0",
-      "avi-h264-unknown-extradata.avi, 0",
-    })
+    @ValueSource(
+        strings = {
+          // The record header names another level than the SPS.
+          "mp4-avc-record-level.mp4",
+          "mp4-h264-mixed-nal-coding.mp4",
+          "mp4-hevc-record-level.mp4",
+          // The hvcC holds mastering display, content light level or ambient viewing environment.
+          "mkv-hdr10-static.mkv",
+          "mkv-hdr10-fate.mkv",
+          "mov-phone-60.mov",
+          // The sample entry keeps parameter sets in the samples.
+          "mp4-dovi-p5-hev1.mp4",
+          "mp4-dovi-p7-two-tracks.mp4",
+          // The record holds no NAL unit.
+          "mkv-hevc-parameter-sets-in-samples.mkv",
+          "mkv-h264-parameter-sets-in-samples.mkv",
+          // The extradata is Annex B or no record.
+          "mpegts-hevc-ac3.ts",
+          "mpegts-aac-he.ts",
+          "avi-h264-unknown-extradata.avi",
+        })
     @DisplayName(
         "Should report that a copy may change packet bytes when the source needs the Annex B"
             + " filter")
     void shouldReportThatACopyMayChangePacketBytesWhenTheSourceNeedsTheAnnexBFilter(
-        String fixture, int index) {
-      var video = streamOf(fixture, index);
+        String fixture) {
+      var video = streamOf(fixture, 0);
 
       assertThat(copyKeepsPacketBytes(video)).isFalse();
     }
 
-    @ParameterizedTest(name = "{0} stream {1}")
-    @CsvSource({
-      "mp4-av1-10bit.mp4, 0",
-      "mkv-av1-10bit.mkv, 0",
-      "mkv-eac3-atmos-dts-hd-ma.mkv, 1",
-      "mp4-audio-codecs.mp4, 1",
-    })
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("streamsOtherThanH264OrHevcVideo")
     @DisplayName("Should report no copy fact when the stream is neither H.264 nor HEVC video")
-    void shouldReportNoCopyFactWhenTheStreamIsNeitherH264NorHevcVideo(String fixture, int index) {
-      var stream = streamOf(fixture, index);
+    void shouldReportNoCopyFactWhenTheStreamIsNeitherH264NorHevcVideo(RecordedStream recorded) {
+      var stream = streamOf(recorded.fixture(), recorded.index());
 
       assertThat(stream.hasCopyKeepsPacketBytes()).isFalse();
+    }
+
+    static Stream<RecordedStream> streamsOtherThanH264OrHevcVideo() {
+      return Stream.of(
+          RecordedStream.builder().fixture("mp4-av1-10bit.mp4").index(0).build(),
+          RecordedStream.builder().fixture("mkv-av1-10bit.mkv").index(0).build(),
+          RecordedStream.builder().fixture("mkv-eac3-atmos-dts-hd-ma.mkv").index(1).build(),
+          RecordedStream.builder().fixture("mp4-audio-codecs.mp4").index(1).build());
     }
   }
 
@@ -228,19 +241,127 @@ class FfprobeExecutorCopyPacketBytesTest {
       assertThat(copyKeepsPacketBytes(video)).isFalse();
     }
 
+    @Test
+    @DisplayName(
+        "Should report that a copy may change packet bytes when the avcC names a"
+            + " configurationVersion other than 1")
+    void
+        shouldReportThatACopyMayChangePacketBytesWhenTheAvcCNamesAConfigurationVersionOtherThan1() {
+      var video = editedAvc1(AVC1_RECORD_HEADER, "0242 c00a ffe1");
+
+      assertThat(copyKeepsPacketBytes(video)).isFalse();
+    }
+
+    @Test
+    @DisplayName(
+        "Should report that a copy may change packet bytes when the hvcC names a"
+            + " configurationVersion other than 1")
+    void
+        shouldReportThatACopyMayChangePacketBytesWhenTheHvcCNamesAConfigurationVersionOtherThan1() {
+      var video =
+          editedRecord(
+              X265_MATROSKA,
+              record -> {
+                var edited = record.clone();
+                edited[0] = 2;
+                return edited;
+              });
+
+      assertThat(copyKeepsPacketBytes(video)).isFalse();
+    }
+
+    @ParameterizedTest(name = "without NAL unit type {0}")
+    @ValueSource(
+        ints = {HEVC_VIDEO_PARAMETER_SET, HEVC_SEQUENCE_PARAMETER_SET, HEVC_PICTURE_PARAMETER_SET})
+    @DisplayName(
+        "Should report that a copy may change packet bytes when the hvcC holds no VPS, SPS or PPS")
+    void shouldReportThatACopyMayChangePacketBytesWhenTheHvcCHoldsNoVpsSpsOrPps(int type) {
+      var video = editedRecord(X265_MATROSKA, record -> withoutArray(record, type));
+
+      assertThat(copyKeepsPacketBytes(video)).isFalse();
+    }
+
+    @Test
+    @DisplayName(
+        "Should report that a copy may change packet bytes when the hvcC ends inside its last NAL"
+            + " unit")
+    void shouldReportThatACopyMayChangePacketBytesWhenTheHvcCEndsInsideItsLastNalUnit() {
+      var video = editedRecord(X265_MATROSKA, record -> Arrays.copyOf(record, record.length - 1));
+
+      assertThat(copyKeepsPacketBytes(video)).isFalse();
+    }
+
+    @Test
+    @DisplayName(
+        "Should report that a copy may change packet bytes when an hvcC SEI NAL unit ends without"
+            + " its RBSP trailing bits")
+    void
+        shouldReportThatACopyMayChangePacketBytesWhenAnHvcCSeiNalUnitEndsWithoutItsRbspTrailingBits() {
+      // x265's information message is the record's last NAL unit, and its last byte holds the
+      // trailing bits.
+      var video =
+          editedRecord(
+              X265_MATROSKA,
+              record -> {
+                var edited = record.clone();
+                edited[edited.length - 1] = (byte) 0x81;
+                return edited;
+              });
+
+      assertThat(copyKeepsPacketBytes(video)).isFalse();
+    }
+
     @ParameterizedTest(name = "{0}")
-    @CsvSource({
-      "a PPS whose forbidden_zero_bit is set, 244d 4001 0004 68ce 0fc8, 244d 4001 0004 e8ce 0fc8",
-      "an empty second PPS, 244d 4001 0004 68ce 0fc8, 244d 4002 0004 68ce 0fc8 0000",
-    })
+    @MethodSource("avcCNalUnitsThatDoNotReachTheDecoder")
     @DisplayName(
         "Should report that a copy may change packet bytes when an avcC NAL unit does not reach the"
             + " decoder")
     void shouldReportThatACopyMayChangePacketBytesWhenAnAvcCNalUnitDoesNotReachTheDecoder(
-        String condition, String recordedText, String editedText) {
-      var video = editedAvc1(recordedText, editedText);
+        RecordEdit edit) {
+      var video = editedAvc1(edit.recordedText(), edit.editedText());
 
       assertThat(copyKeepsPacketBytes(video)).isFalse();
+    }
+
+    static Stream<RecordEdit> avcCNalUnitsThatDoNotReachTheDecoder() {
+      return Stream.of(
+          RecordEdit.builder()
+              .condition("a PPS whose forbidden_zero_bit is set")
+              .recordedText("244d 4001 0004 68ce 0fc8")
+              .editedText("244d 4001 0004 e8ce 0fc8")
+              .build(),
+          RecordEdit.builder()
+              .condition("an empty second PPS")
+              .recordedText("244d 4001 0004 68ce 0fc8")
+              .editedText("244d 4002 0004 68ce 0fc8 0000")
+              .build());
+    }
+
+    /** The hvcC record without its array of NAL units of the given type. */
+    private static byte[] withoutArray(byte[] hvcC, int type) {
+      var kept = new ByteArrayOutputStream();
+      kept.write(hvcC, 0, HVCC_ARRAY_COUNT + 1);
+      var record = ByteBuffer.wrap(hvcC).position(HVCC_ARRAY_COUNT + 1);
+      for (var array = 0; array < Byte.toUnsignedInt(hvcC[HVCC_ARRAY_COUNT]); array++) {
+        var start = record.position();
+        var arrayType = record.get() & 0x3F;
+        var units = Short.toUnsignedInt(record.getShort());
+        for (var unit = 0; unit < units; unit++) {
+          var length = Short.toUnsignedInt(record.getShort());
+          record.position(record.position() + length);
+        }
+
+        if (arrayType != type) {
+          kept.write(hvcC, start, record.position() - start);
+        }
+      }
+
+      var edited = kept.toByteArray();
+      assertThat(edited)
+          .as("the record holds an array of type %d", type)
+          .hasSizeLessThan(hvcC.length);
+      edited[HVCC_ARRAY_COUNT]--;
+      return edited;
     }
 
     private static ProbeStreamInfo editedRecord(String fixture, UnaryOperator<byte[]> edit) {
@@ -256,15 +377,32 @@ class FfprobeExecutorCopyPacketBytesTest {
       var recorded = fixture(AVC1_MP4);
       return edited(AVC1_MP4, recorded, recorded.replace(recordedText, editedText));
     }
+  }
 
-    private static ProbeStreamInfo edited(String fixture, String recorded, String edited) {
-      assertThat(edited).isNotEqualTo(recorded);
-      return probe(recordedAnswers(fixture).ffprobeOutput(edited).build()).getStreams(0);
-    }
+  private static ProbeStreamInfo edited(String fixture, String recorded, String edited) {
+    assertThat(edited).isNotEqualTo(recorded);
+    return probe(recordedAnswers(fixture).ffprobeOutput(edited).build()).getStreams(0);
   }
 
   private static boolean copyKeepsPacketBytes(ProbeStreamInfo video) {
     assertThat(video.hasCopyKeepsPacketBytes()).as("the probe reports the copy fact").isTrue();
     return video.getCopyKeepsPacketBytes();
+  }
+
+  @Builder
+  private record RecordedStream(@NonNull String fixture, int index) {
+    @Override
+    public String toString() {
+      return fixture + " stream " + index;
+    }
+  }
+
+  @Builder
+  private record RecordEdit(
+      @NonNull String condition, @NonNull String recordedText, @NonNull String editedText) {
+    @Override
+    public String toString() {
+      return condition;
+    }
   }
 }
