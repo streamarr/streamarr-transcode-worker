@@ -12,9 +12,7 @@ import com.streamarr.transcode.probe.Mp4MovieBox.Box;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
-import java.util.HashSet;
 import java.util.Optional;
-import java.util.Set;
 import lombok.NonNull;
 
 /**
@@ -22,10 +20,9 @@ import lombok.NonNull;
  * sample table lists (ADR 0054). A copy changes the sizes of:
  *
  * <ul>
- *   <li>H.264 and HEVC video that keeps its parameter sets in its samples ({@code avc3}, {@code
- *       hev1}, {@code dvav}, {@code dvhe}), or whose decoder configuration record is missing, holds
- *       no parameter sets or prefixes NAL units with other than 4 bytes: the copy runs the Annex B
- *       bitstream filter, which adds parameter sets and rewrites the NAL unit lengths;
+ *   <li>H.264 and HEVC video that a copy cannot deliver without the Annex B bitstream filter, which
+ *       adds parameter sets and rewrites the NAL unit lengths: {@link CopiedPacketBytes} decides it
+ *       from the track's only sample entry and its avcC or hvcC record;
  *   <li>AV1, whose padding and temporal delimiter OBUs the mp4 muxer drops, and VP9, which the mp4
  *       muxer passes through its superframe filter;
  *   <li>AAC whose samples are ADTS frames, whose headers the copy's {@code aac_adtstoasc} strips: a
@@ -40,17 +37,10 @@ import lombok.NonNull;
  */
 final class CopiedSampleSizes {
 
-  private static final Set<String> RECORD_AVC_ENTRIES = Set.of("avc1", "dva1");
-  private static final Set<String> RECORD_HEVC_ENTRIES = Set.of("hvc1", "dvh1");
-  private static final int NAL_LENGTH_BYTES = 4;
   private static final int VISUAL_SAMPLE_ENTRY_BYTES = 78;
   private static final int AUDIO_SAMPLE_ENTRY_BYTES = 28;
   private static final int SOUND_DESCRIPTION_VERSION_1_EXTRA_BYTES = 16;
   private static final int SOUND_DESCRIPTION_VERSION_2_EXTRA_BYTES = 36;
-  private static final int HEVC_VPS = 32;
-  private static final int HEVC_SPS = 33;
-  private static final int HEVC_PPS = 34;
-  private static final int HVCC_LENGTH_SIZE_OFFSET = 21;
   private static final long E_AC_3_SAMPLES_PER_SIX_BLOCKS = 1_536;
   private static final byte ES_DESCRIPTOR_TAG = 0x03;
   private static final byte DECODER_CONFIG_DESCRIPTOR_TAG = 0x04;
@@ -77,8 +67,14 @@ final class CopiedSampleSizes {
             .flatMap(info -> child(info, "stbl"))
             .orElseThrow(() -> malformed("stbl"));
     return switch (stream.codecName()) {
-      case "h264" -> sampleEntry(sampleTable).filter(CopiedSampleSizes::isRecordAvc).isPresent();
-      case "hevc" -> sampleEntry(sampleTable).filter(CopiedSampleSizes::isRecordHevc).isPresent();
+      case "h264" ->
+          sampleEntry(sampleTable)
+              .filter(entry -> keepsPacketBytes(entry, ProbedCodecFamily.H264, "avcC"))
+              .isPresent();
+      case "hevc" ->
+          sampleEntry(sampleTable)
+              .filter(entry -> keepsPacketBytes(entry, ProbedCodecFamily.HEVC, "hvcC"))
+              .isPresent();
       case "av1", "vp9" -> false;
       case "aac" ->
           sampleEntry(sampleTable).filter(CopiedSampleSizes::hasAudioSpecificConfig).isPresent()
@@ -102,57 +98,24 @@ final class CopiedSampleSizes {
     return boxes(descriptions.slice()).stream().findFirst();
   }
 
-  private static boolean isRecordAvc(Box entry) {
-    if (!RECORD_AVC_ENTRIES.contains(entry.type())) {
-      return false;
-    }
-
-    var record = child(children(entry, VISUAL_SAMPLE_ENTRY_BYTES), "avcC");
-    if (record.isEmpty()) {
-      return false;
-    }
-
-    var avcC = record.get();
-    skip(avcC, 4);
-    var lengthSize = (avcC.get() & 0x03) + 1;
-    var sequenceParameterSets = avcC.get() & 0x1F;
-    for (var i = 0; i < sequenceParameterSets; i++) {
-      skip(avcC, avcC.getShort() & 0xFFFF);
-    }
-
-    var pictureParameterSets = avcC.get() & 0xFF;
-    return lengthSize == NAL_LENGTH_BYTES && sequenceParameterSets > 0 && pictureParameterSets > 0;
-  }
-
-  private static boolean isRecordHevc(Box entry) {
-    if (!RECORD_HEVC_ENTRIES.contains(entry.type())) {
-      return false;
-    }
-
-    var record = child(children(entry, VISUAL_SAMPLE_ENTRY_BYTES), "hvcC");
-    if (record.isEmpty()) {
-      return false;
-    }
-
-    var hvcC = record.get();
-    skip(hvcC, HVCC_LENGTH_SIZE_OFFSET);
-    var lengthSize = (hvcC.get() & 0x03) + 1;
-    var arrays = hvcC.get() & 0xFF;
-    var heldTypes = new HashSet<Integer>();
-    for (var i = 0; i < arrays; i++) {
-      var type = hvcC.get() & 0x3F;
-      var units = hvcC.getShort() & 0xFFFF;
-      for (var unit = 0; unit < units; unit++) {
-        skip(hvcC, hvcC.getShort() & 0xFFFF);
-      }
-
-      if (units > 0) {
-        heldTypes.add(type);
-      }
-    }
-
-    return lengthSize == NAL_LENGTH_BYTES
-        && heldTypes.containsAll(Set.of(HEVC_VPS, HEVC_SPS, HEVC_PPS));
+  /**
+   * Whether a copy without the Annex B filter keeps the samples, by the same rule that decides the
+   * probe's copy fact. The entry's avcC or hvcC box holds the record that ffprobe gives as the
+   * stream's extradata.
+   */
+  private static boolean keepsPacketBytes(Box entry, ProbedCodecFamily family, String recordBox) {
+    return child(children(entry, VISUAL_SAMPLE_ENTRY_BYTES), recordBox)
+        .map(
+            record -> {
+              var bytes = new byte[record.remaining()];
+              record.duplicate().get(bytes);
+              return bytes;
+            })
+        .filter(
+            record ->
+                record.length > 0
+                    && CopiedPacketBytes.areKept(family, Optional.of(entry.type()), record))
+        .isPresent();
   }
 
   /**

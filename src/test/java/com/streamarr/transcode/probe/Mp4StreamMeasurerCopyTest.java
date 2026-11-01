@@ -28,6 +28,9 @@ class Mp4StreamMeasurerCopyTest {
 
   private static final byte[] RAW_AAC_FRAME = {0x21, 0x10};
   private static final byte[] ADTS_FRAME = {(byte) 0xFF, (byte) 0xF1};
+  private static final int USER_DATA_UNREGISTERED = 5;
+  private static final int MASTERING_DISPLAY = 137;
+  private static final int LEVEL_5_1 = 51;
   private static final List<Integer> EVERY_HEVC_PARAMETER_SET =
       List.of(HEVC_VPS, HEVC_SPS, HEVC_PPS);
 
@@ -52,6 +55,7 @@ class Mp4StreamMeasurerCopyTest {
         arguments("h264", SyntheticSampleEntry.avc("dva1", 4, 1, 1)),
         arguments("hevc", SyntheticSampleEntry.hevc("hvc1", 4, EVERY_HEVC_PARAMETER_SET)),
         arguments("hevc", SyntheticSampleEntry.hevc("dvh1", 4, EVERY_HEVC_PARAMETER_SET)),
+        arguments("hevc", SyntheticSampleEntry.hevcWithSeiMessage(USER_DATA_UNREGISTERED)),
         arguments("mpeg4", SyntheticSampleEntry.visual("mp4v")));
   }
 
@@ -87,6 +91,10 @@ class Mp4StreamMeasurerCopyTest {
             "H.264 whose record holds no PPS", "h264", SyntheticSampleEntry.avc("avc1", 4, 1, 0)),
         arguments("Annex B H.264", "h264", SyntheticSampleEntry.visual("avc1")),
         arguments(
+            "H.264 whose record header names another level than its SPS",
+            "h264",
+            SyntheticSampleEntry.avcNamingLevel(LEVEL_5_1)),
+        arguments(
             "HEVC with parameter sets in its samples",
             "hevc",
             SyntheticSampleEntry.hevc("hev1", 4, EVERY_HEVC_PARAMETER_SET)),
@@ -103,6 +111,10 @@ class Mp4StreamMeasurerCopyTest {
             "hevc",
             SyntheticSampleEntry.hevc("hvc1", 4, List.of(HEVC_VPS, HEVC_SPS))),
         arguments("Annex B HEVC", "hevc", SyntheticSampleEntry.visual("hvc1")),
+        arguments(
+            "HEVC whose record holds a mastering display SEI message",
+            "hevc",
+            SyntheticSampleEntry.hevcWithSeiMessage(MASTERING_DISPLAY)),
         arguments(
             "AV1, whose padding and temporal delimiter OBUs the muxer drops",
             "av1",
