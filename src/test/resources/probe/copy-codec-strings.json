@@ -216,6 +216,9 @@
   "mp4-h264-sei-1.mp4": {
     "0": "avc1.4D001F"
   },
+  "mp4-h264-two-sample-entries.mp4": {
+    "0": "avc1.42C00A"
+  },
   "mp4-hdr10-maxfall-zero.mp4": {
     "0": "hvc1.2.4.L30.90"
   },
@@ -233,6 +236,9 @@
   },
   "mp4-hevc-sdr10-untagged.mp4": {
     "0": "hvc1.2.4.L123.B0"
+  },
+  "mp4-hevc-two-sample-entries.mp4": {
+    "0": "hvc1.1.6.L30.90"
   },
   "mp4-rotated.mp4": {
     "0": "avc1.42C00A"

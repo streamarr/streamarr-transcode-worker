@@ -8,7 +8,8 @@
 # Alpine image, encode the profile 8.2 stream, and MKVToolNix, run in the same image, writes the
 # Matroska statistics tags. No media file is downloaded, and no source
 # file is kept whole: the recordings hold ffprobe's output, including each stream's extradata
-# (-show_data), and packet-data/ holds the bytes of the first packets of the sources it lists.
+# (-show_data), packet-data/ holds the bytes of the first packets of the sources it lists, and
+# mp4-movie-boxes/ the boxes other than the media data of the MP4 and MOV sources it lists.
 #
 #   src/test/probe-fixtures/record-fixtures.sh
 #   WORKER_IMAGE=streamarr-worker:local src/test/probe-fixtures/record-fixtures.sh
@@ -286,6 +287,19 @@ done
 # 8-bit SDR with BT.709 color signaling.
 "${FF[@]}" "${VIDEO[@]}" "${X264[@]}" \
   -vf setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709 mp4-sdr8-bt709.mp4
+
+# One second of H.264 and of HEVC, each encoded once in 8 bits and once in 10, which GPAC joins
+# into an MP4 track with two sample entries.
+for depth in 8 10; do
+  case "$depth" in
+    8) format=yuv420p ;;
+    10) format=yuv420p10le ;;
+  esac
+  "${FF[@]}" "${VIDEO[@]}" -t 1 -c:v libx264 -preset ultrafast -pix_fmt "$format" \
+    "two-entries-h264-$depth.mp4"
+  "${FF[@]}" "${VIDEO[@]}" -t 1 -c:v libx265 -preset ultrafast -pix_fmt "$format" \
+    -x265-params log-level=none "two-entries-hevc-$depth.mp4"
+done
 
 # 8-bit H.264 at 1080p24, High at level 4.0, tagged BT.709, into which insert-avc-rpus.py puts the
 # Dolby Vision profile 9 RPUs. Without B-frames, the first 3 packets decode 3 frames.
@@ -572,6 +586,19 @@ docker run --rm -v "$WORK":/work -e X265_PACKAGE="$X265_PACKAGE" \
 in_gpac -add dovi-p82.hevc:dvp=8.2:fps=24 -new mp4-dovi-p82.mp4
 FIXTURES_TO_PROBE+=(mp4-dovi-p82.mp4)
 
+# MP4 tracks with two sample entries: GPAC's playlist input joins the 8-bit and the 10-bit encode,
+# and its MP4 muxer gives the 10-bit encode a sample entry of its own, because its decoder
+# configuration record names another bit depth. ffprobe describes each track by its first entry.
+for codec in h264 hevc; do
+  printf 'two-entries-%s-8.mp4\ntwo-entries-%s-10.mp4\n' "$codec" "$codec" \
+    > "$WORK/two-entries-$codec.txt"
+  docker run --rm --platform linux/amd64 --user "$(id -u):$(id -g)" -e HOME=/work \
+    -v "$WORK":/work -w /work "$GPAC_IMAGE" gpac -for-test -i "two-entries-$codec.txt" \
+    -o "mp4-$codec-two-sample-entries.mp4" > "$WORK/gpac.log" 2>&1 \
+    || { cat "$WORK/gpac.log"; exit 1; }
+done
+FIXTURES_TO_PROBE+=(mp4-h264-two-sample-entries.mp4 mp4-hevc-two-sample-entries.mp4)
+
 # Dolby Vision profile 9: the SDR encode with an RPU in an H.264 NAL unit of type 28 after each
 # picture, copied into MP4 by FFmpeg, which keeps each RPU in the sample of its own picture. MP4Box
 # then adds a dvvC record under avc1 and under dva1, and the avc1 copy goes into MPEG-TS, whose
@@ -732,5 +759,38 @@ for source in "${MATROSKA_STATISTICS[@]}"; do
 data = open(sys.argv[1], "rb").read()
 open(sys.argv[2], "wb").write(data[:data.index(bytes.fromhex("1F43B675"))])' \
     "$WORK/$source" "$FIXTURES/matroska-heads/$source"
+done
+# The movie box of each MP4 and MOV source whose copy fact the tests read, so that the probe reads
+# the number of sample entries of each track from a file. Every top-level box but the media data
+# (mdat) is kept, so a box holds no sample.
+MOVIE_BOXES=(mp4-sdr8-bt709.mp4 mp4-avc-record-level.mp4 mp4-hevc-record-level.mp4
+  mp4-h264-two-sample-entries.mp4 mp4-hevc-two-sample-entries.mp4)
+if [ -n "${FATE_SUITE:-}" ]; then
+  MOVIE_BOXES+=(mp4-dovi-p5-hev1.mp4 mp4-dovi-p7-two-tracks.mp4 mov-h264-extradata-reload.mov
+    mov-hevc-extradata-reload.mov mp4-h264-mixed-nal-coding.mp4)
+fi
+if command -v dovi_tool > /dev/null; then
+  MOVIE_BOXES+=(mp4-dovi-p9-dva1.mp4)
+fi
+if [ -n "${LOCAL_SAMPLES:-}" ]; then
+  cp "$LOCAL_SAMPLES/mp4-dovi-p5-dvh1.mp4" "$WORK/"
+  MOVIE_BOXES+=(mp4-dovi-p5-dvh1.mp4)
+fi
+mkdir -p "$FIXTURES/mp4-movie-boxes"
+for source in "${MOVIE_BOXES[@]}"; do
+  python3 -c 'import struct, sys
+data = open(sys.argv[1], "rb").read()
+kept = bytearray()
+position = 0
+while position + 8 <= len(data):
+    size, kind = struct.unpack(">I4s", data[position:position + 8])
+    if size == 1:
+        size = struct.unpack(">Q", data[position + 8:position + 16])[0]
+    elif size == 0:
+        size = len(data) - position
+    if kind != b"mdat":
+        kept += data[position:position + size]
+    position += size
+open(sys.argv[2], "wb").write(kept)' "$WORK/$source" "$FIXTURES/mp4-movie-boxes/$source"
 done
 echo "recorded into $FIXTURES with $IMAGE"
