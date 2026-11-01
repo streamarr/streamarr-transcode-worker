@@ -25,6 +25,8 @@ import static org.awaitility.Awaitility.await;
 
 import build.buf.gen.streamarr.transcode.v1.AudioMode;
 import build.buf.gen.streamarr.transcode.v1.CompatibleBase;
+import build.buf.gen.streamarr.transcode.v1.Deinterlace;
+import build.buf.gen.streamarr.transcode.v1.DeinterlaceOutput;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionAbsent;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionConfiguration;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionPresent;
@@ -32,6 +34,7 @@ import build.buf.gen.streamarr.transcode.v1.DolbyVisionRpuPlacement;
 import build.buf.gen.streamarr.transcode.v1.EncoderPreset;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest.EventCase;
+import build.buf.gen.streamarr.transcode.v1.FieldOrder;
 import build.buf.gen.streamarr.transcode.v1.Fraction;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
 import build.buf.gen.streamarr.transcode.v1.Presence;
@@ -1047,7 +1050,89 @@ class TranscodeWorkerJobAttemptTest {
             unary(video -> video.setOutputDynamicRange(VideoDynamicRange.getDefaultInstance()))),
         Arguments.of(
             "SDR output dynamic range",
-            unary(video -> video.setOutputDynamicRange(sdrDynamicRange()))));
+            unary(video -> video.setOutputDynamicRange(sdrDynamicRange()))),
+        Arguments.of(
+            "deinterlace instruction",
+            unary(
+                video ->
+                    video.setDeinterlace(
+                        deinterlace(
+                            FieldOrder.FIELD_ORDER_TT,
+                            DeinterlaceOutput.DEINTERLACE_OUTPUT_ONE_FRAME_PER_FIELD)))));
+  }
+
+  @ParameterizedTest(name = "{0}, {1}")
+  @CsvSource({
+    "FIELD_ORDER_TT, DEINTERLACE_OUTPUT_ONE_FRAME_PER_FIELD, send_field, tff",
+    "FIELD_ORDER_BT, DEINTERLACE_OUTPUT_ONE_FRAME_PER_FIELD, send_field, tff",
+    "FIELD_ORDER_BB, DEINTERLACE_OUTPUT_ONE_FRAME_PER_FIELD, send_field, bff",
+    "FIELD_ORDER_TB, DEINTERLACE_OUTPUT_ONE_FRAME_PER_FRAME, send_frame, bff"
+  })
+  @DisplayName(
+      "Should deinterlace first with the field displayed first and write the job's output frame rate when an encode carries a deinterlace instruction")
+  void
+      shouldDeinterlaceFirstWithTheFieldDisplayedFirstAndWriteTheJobsOutputFrameRateWhenAnEncodeCarriesADeinterlaceInstruction(
+          FieldOrder fieldOrder, DeinterlaceOutput output, String mode, String parity)
+          throws Exception {
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getDecisionBuilder().getVideoBuilder().setDeinterlace(deinterlace(fieldOrder, output));
+    job.getVariantBuilder().setWidth(1280).setHeight(720).setBitrateBitsPerSecond(3_000_000);
+    job.getExecutionBuilder()
+        .setOutputFrameRate(Fraction.newBuilder().setNumerator(60000).setDenominator(1001));
+
+    var command = launchedCommands(ScriptedProcessLauncher.running(), job.build()).getFirst();
+
+    var videoFilter = command.get(command.indexOf("-vf") + 1);
+    assertThat(videoFilter)
+        .startsWith("bwdif=mode=" + mode + ":parity=" + parity + ":deint=all,scale=-2:720");
+    assertThat(command.get(command.indexOf("-r:v:0") + 1)).isEqualTo("60000/1001");
+  }
+
+  @Test
+  @DisplayName("Should run no deinterlacer when an encode carries no deinterlace instruction")
+  void shouldRunNoDeinterlacerWhenAnEncodeCarriesNoDeinterlaceInstruction() throws Exception {
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE).build();
+
+    var command = launchedCommands(ScriptedProcessLauncher.running(), job).getFirst();
+
+    assertThat(command.get(command.indexOf("-vf") + 1)).doesNotContain("bwdif");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("deinterlaceInstructionsWithoutAnAcceptedValue")
+  @DisplayName(
+      "Should refuse the job as an invalid specification when a deinterlace instruction names a value the contract does not accept")
+  void
+      shouldRefuseTheJobAsAnInvalidSpecificationWhenADeinterlaceInstructionNamesAValueTheContractDoesNotAccept(
+          String naming, Deinterlace.Builder instruction) throws Exception {
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getDecisionBuilder().getVideoBuilder().setDeinterlace(instruction);
+
+    assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
+  static Stream<Arguments> deinterlaceInstructionsWithoutAnAcceptedValue() {
+    var perField = DeinterlaceOutput.DEINTERLACE_OUTPUT_ONE_FRAME_PER_FIELD;
+    return Stream.of(
+        Arguments.of(
+            "an unspecified field order",
+            deinterlace(FieldOrder.FIELD_ORDER_UNSPECIFIED, perField)),
+        Arguments.of(
+            "a progressive field order", deinterlace(FieldOrder.FIELD_ORDER_PROGRESSIVE, perField)),
+        Arguments.of(
+            "an undefined field order",
+            Deinterlace.newBuilder().setFieldOrderValue(99).setOutput(perField)),
+        Arguments.of(
+            "an unspecified output",
+            deinterlace(
+                FieldOrder.FIELD_ORDER_TT, DeinterlaceOutput.DEINTERLACE_OUTPUT_UNSPECIFIED)),
+        Arguments.of(
+            "an undefined output",
+            Deinterlace.newBuilder().setFieldOrder(FieldOrder.FIELD_ORDER_TT).setOutputValue(99)));
+  }
+
+  private static Deinterlace.Builder deinterlace(FieldOrder fieldOrder, DeinterlaceOutput output) {
+    return Deinterlace.newBuilder().setFieldOrder(fieldOrder).setOutput(output);
   }
 
   private static VideoCodecProfile mainProfileOf(VideoCodecFamily family) {

@@ -1,8 +1,11 @@
 package com.streamarr.transcode.worker;
 
+import build.buf.gen.streamarr.transcode.v1.DeinterlaceOutput;
+import build.buf.gen.streamarr.transcode.v1.FieldOrder;
 import build.buf.gen.streamarr.transcode.v1.VideoCodecFamily;
 import build.buf.gen.streamarr.transcode.v1.VideoMode;
 import com.streamarr.transcode.engine.CodecFamily;
+import com.streamarr.transcode.engine.Deinterlace;
 import com.streamarr.transcode.engine.TranscodeMode;
 import com.streamarr.transcode.engine.VideoCodecProfile;
 import com.streamarr.transcode.engine.VideoCodecTier;
@@ -72,7 +75,8 @@ final class VideoDecisions {
   private static VideoDecision.Copy copy(build.buf.gen.streamarr.transcode.v1.VideoDecision video) {
     if (carriesEncodeValues(video)) {
       throw new InvalidJobSpecificationException(
-          "A stream copy carries a codec profile, tier, level or output dynamic range");
+          "A stream copy carries a codec profile, tier, level, output dynamic range or"
+              + " deinterlace instruction");
     }
 
     if (video.hasSourceDynamicRange()) {
@@ -94,7 +98,8 @@ final class VideoDecisions {
             != build.buf.gen.streamarr.transcode.v1.VideoCodecTier
                 .VIDEO_CODEC_TIER_UNSPECIFIED_VALUE
         || video.hasLevel()
-        || video.hasOutputDynamicRange();
+        || video.hasOutputDynamicRange()
+        || video.hasDeinterlace();
   }
 
   @SuppressWarnings("checkstyle:fullyQualifiedName")
@@ -144,7 +149,42 @@ final class VideoDecisions {
         .sourceDynamicRange(VideoDynamicRanges.of(video.getSourceDynamicRange()))
         .outputDynamicRange(outputDynamicRange)
         .sourcePacketsCarryPresentationTimes(video.getSourcePacketsCarryPresentationTimes())
+        .deinterlace(deinterlace(video))
         .build();
+  }
+
+  @SuppressWarnings("checkstyle:fullyQualifiedName")
+  private static Optional<Deinterlace> deinterlace(
+      build.buf.gen.streamarr.transcode.v1.VideoDecision video) {
+    if (!video.hasDeinterlace()) {
+      return Optional.empty();
+    }
+
+    var deinterlace = video.getDeinterlace();
+    return Optional.of(
+        new Deinterlace(firstField(deinterlace.getFieldOrder()), output(deinterlace.getOutput())));
+  }
+
+  // The field displayed first is the earlier one: the top field for TT and BT, the bottom field for
+  // BB and TB.
+  private static Deinterlace.FirstField firstField(FieldOrder fieldOrder) {
+    return switch (fieldOrder) {
+      case FIELD_ORDER_TT, FIELD_ORDER_BT -> Deinterlace.FirstField.TOP;
+      case FIELD_ORDER_BB, FIELD_ORDER_TB -> Deinterlace.FirstField.BOTTOM;
+      case FIELD_ORDER_UNSPECIFIED, FIELD_ORDER_PROGRESSIVE, UNRECOGNIZED ->
+          throw new InvalidJobSpecificationException(
+              "A deinterlace instruction requires an interlaced field order, not " + fieldOrder);
+    };
+  }
+
+  private static Deinterlace.Output output(DeinterlaceOutput output) {
+    return switch (output) {
+      case DEINTERLACE_OUTPUT_ONE_FRAME_PER_FIELD -> Deinterlace.Output.ONE_FRAME_PER_FIELD;
+      case DEINTERLACE_OUTPUT_ONE_FRAME_PER_FRAME -> Deinterlace.Output.ONE_FRAME_PER_FRAME;
+      case DEINTERLACE_OUTPUT_UNSPECIFIED, UNRECOGNIZED ->
+          throw new InvalidJobSpecificationException(
+              "A deinterlace instruction requires an output, not " + output);
+    };
   }
 
   @SuppressWarnings("checkstyle:fullyQualifiedName")

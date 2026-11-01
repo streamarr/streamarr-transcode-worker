@@ -32,6 +32,8 @@ public sealed interface VideoDecision {
    * @param level the level as major × 10 + minor, for example 41 for level 4.1
    * @param sourcePacketsCarryPresentationTimes whether the probe saw a presentation time on every
    *     packet of the source stream that it read; false also when it could not tell
+   * @param deinterlace how the encode deinterlaces an interlaced source; empty for every other
+   *     source
    */
   @Builder
   record Encode(
@@ -43,6 +45,14 @@ public sealed interface VideoDecision {
       @NonNull String codecString,
       @NonNull VideoDynamicRange sourceDynamicRange,
       @NonNull VideoDynamicRange outputDynamicRange,
-      boolean sourcePacketsCarryPresentationTimes)
-      implements VideoDecision {}
+      boolean sourcePacketsCarryPresentationTimes,
+      @NonNull Optional<Deinterlace> deinterlace)
+      implements VideoDecision {
+
+    // Lombok builder default — its generated setter assigns it
+    @SuppressWarnings({"java:S1068", "java:S9438"})
+    public static class EncodeBuilder {
+      private Optional<Deinterlace> deinterlace = Optional.empty();
+    }
+  }
 }
