@@ -1,7 +1,9 @@
 package com.streamarr.transcode.probe;
 
+import static com.streamarr.transcode.probe.Mp4MovieBox.children;
 import static com.streamarr.transcode.probe.Mp4MovieBox.skip;
 import static com.streamarr.transcode.probe.Mp4MovieBox.skipFlags;
+import static com.streamarr.transcode.probe.Mp4MovieBox.trackId;
 
 import com.streamarr.transcode.probe.KeyframeIndex.KeyframeTime;
 import java.nio.ByteBuffer;
@@ -49,6 +51,14 @@ final class Mp4SampleTables {
     }
 
     return runs;
+  }
+
+  /** The {@code trak} of the track with this ID. */
+  static ByteBuffer track(ByteBuffer movie, long trackId) {
+    return children(movie, "trak").stream()
+        .filter(candidate -> trackId(candidate) == trackId)
+        .findFirst()
+        .orElseThrow(() -> malformed("trak"));
   }
 
   static long timescale(ByteBuffer header) {

@@ -1,14 +1,13 @@
 package com.streamarr.transcode.probe;
 
 import static com.streamarr.transcode.probe.Mp4MovieBox.child;
-import static com.streamarr.transcode.probe.Mp4MovieBox.children;
 import static com.streamarr.transcode.probe.Mp4MovieBox.fourCharacterCode;
 import static com.streamarr.transcode.probe.Mp4MovieBox.skip;
-import static com.streamarr.transcode.probe.Mp4MovieBox.trackId;
 import static com.streamarr.transcode.probe.Mp4SampleTables.decodeShift;
 import static com.streamarr.transcode.probe.Mp4SampleTables.malformed;
 import static com.streamarr.transcode.probe.Mp4SampleTables.runs;
 import static com.streamarr.transcode.probe.Mp4SampleTables.timescale;
+import static com.streamarr.transcode.probe.Mp4SampleTables.track;
 
 import com.streamarr.transcode.probe.Mp4SampleTables.Edit;
 import com.streamarr.transcode.probe.Mp4SampleTables.Run;
@@ -196,11 +195,7 @@ final class Mp4StreamMeasurer {
       boolean presentsBeforeEditStart) {
 
     static Optional<Track> read(ByteBuffer movie, long trackId, long movieTimescale) {
-      var trak =
-          children(movie, "trak").stream()
-              .filter(candidate -> trackId(candidate) == trackId)
-              .findFirst()
-              .orElseThrow(() -> malformed("trak"));
+      var trak = track(movie, trackId);
       var media = child(trak, "mdia").orElseThrow(() -> malformed("mdia"));
       var handler = handlerType(child(media, "hdlr").orElseThrow(() -> malformed("hdlr")));
       if (!"vide".equals(handler) && !"soun".equals(handler)) {

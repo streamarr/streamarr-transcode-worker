@@ -1,14 +1,13 @@
 package com.streamarr.transcode.probe;
 
 import static com.streamarr.transcode.probe.Mp4MovieBox.child;
-import static com.streamarr.transcode.probe.Mp4MovieBox.children;
 import static com.streamarr.transcode.probe.Mp4MovieBox.fourCharacterCode;
 import static com.streamarr.transcode.probe.Mp4MovieBox.skip;
-import static com.streamarr.transcode.probe.Mp4MovieBox.trackId;
 import static com.streamarr.transcode.probe.Mp4SampleTables.decodeShift;
 import static com.streamarr.transcode.probe.Mp4SampleTables.malformed;
 import static com.streamarr.transcode.probe.Mp4SampleTables.runs;
 import static com.streamarr.transcode.probe.Mp4SampleTables.timescale;
+import static com.streamarr.transcode.probe.Mp4SampleTables.track;
 
 import build.buf.gen.streamarr.transcode.v1.KeyframePacketScanReason;
 import com.streamarr.transcode.probe.KeyframeIndex.KeyframeTime;
@@ -77,11 +76,7 @@ final class Mp4SyncSampleReader {
 
   private static KeyframeIndex read(ByteBuffer movie, long trackId) {
     var movieTimescale = timescale(child(movie, "mvhd").orElseThrow(() -> malformed("mvhd")));
-    var track =
-        children(movie, "trak").stream()
-            .filter(candidate -> trackId(candidate) == trackId)
-            .findFirst()
-            .orElseThrow(() -> malformed("trak"));
+    var track = track(movie, trackId);
     var media = child(track, "mdia").orElseThrow(() -> malformed("mdia"));
     if (!isVideoHandler(child(media, "hdlr").orElseThrow(() -> malformed("hdlr")))) {
       return incomplete();
