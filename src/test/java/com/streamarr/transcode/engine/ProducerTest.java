@@ -1724,7 +1724,7 @@ class ProducerTest {
 
     var producer =
         producerFor(process, recording)
-            .videoDecision(new VideoDecision.Copy(0, "avc1.640028", false))
+            .videoDecision(VideoDecisionFixtures.copyOf("avc1.640028"))
             .start();
 
     assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
@@ -1843,7 +1843,7 @@ class ProducerTest {
     var producer =
         producerLaunching(process)
             .periodSeconds(6)
-            .videoDecision(new VideoDecision.Copy(0, "hvc1.1.6.L93.90", false))
+            .videoDecision(VideoDecisionFixtures.copyOf("hvc1.1.6.L93.90"))
             .start();
 
     assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
@@ -1854,21 +1854,18 @@ class ProducerTest {
   // entry promises, as FFmpeg writes them when the source carries its parameter sets only in its
   // samples.
   @ParameterizedTest(name = "{0}")
-  @CsvSource({
-    "hvc1, hvcC, 0101600000009000000000005AF000FCFDF8F800000F00, hvc1.1.6.L90.90",
-    "avc1, avcC, 0142C00AFFE000, avc1.42C00A"
-  })
+  @MethodSource("recordsWithoutParameterSets")
   @DisplayName(
       "Should fail the attempt as an output mismatch when the record holds none of the parameter"
           + " sets that its sample entry promises")
   void
       shouldFailTheAttemptAsAnOutputMismatchWhenTheRecordHoldsNoneOfTheParameterSetsThatItsSampleEntryPromises(
-          String sampleEntryType, String recordType, String recordHex, String codecString) {
+          RecordWithoutParameterSets record) {
     var sampleEntry =
         IsoBoxes.box(
-            sampleEntryType,
+            record.sampleEntryType(),
             new byte[78],
-            IsoBoxes.box(recordType, HexFormat.of().parseHex(recordHex)));
+            IsoBoxes.box(record.recordType(), HexFormat.of().parseHex(record.recordHex())));
     var output =
         IsoBoxes.concat(
             IsoBoxes.ftyp(),
@@ -1878,13 +1875,40 @@ class ProducerTest {
     var producer =
         producerLaunching(process)
             .periodSeconds(6)
-            .videoDecision(new VideoDecision.Copy(0, codecString, false))
+            .videoDecision(VideoDecisionFixtures.copyOf(record.codecString()))
             .start();
 
     var failure = failureOf(producer);
     assertThat(failure.reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
     assertThat(failure.detail()).contains("parameter sets");
     assertThat(sink.acceptedNames()).isEmpty();
+  }
+
+  static Stream<RecordWithoutParameterSets> recordsWithoutParameterSets() {
+    return Stream.of(
+        RecordWithoutParameterSets.builder()
+            .sampleEntryType("hvc1")
+            .recordType("hvcC")
+            .recordHex("0101600000009000000000005AF000FCFDF8F800000F00")
+            .codecString("hvc1.1.6.L90.90")
+            .build(),
+        RecordWithoutParameterSets.builder()
+            .sampleEntryType("avc1")
+            .recordType("avcC")
+            .recordHex("0142C00AFFE000")
+            .codecString("avc1.42C00A")
+            .build());
+  }
+
+  // A record that declares the codec string of the job's copy and holds no parameter set.
+  @Builder
+  private record RecordWithoutParameterSets(
+      String sampleEntryType, String recordType, String recordHex, String codecString) {
+
+    @Override
+    public String toString() {
+      return sampleEntryType;
+    }
   }
 
   @Test
@@ -1903,7 +1927,7 @@ class ProducerTest {
     var producer =
         producerLaunching(process)
             .periodSeconds(6)
-            .videoDecision(new VideoDecision.Copy(0, "hvc1.1.6.L90.90", false))
+            .videoDecision(VideoDecisionFixtures.copyOf("hvc1.1.6.L90.90"))
             .start();
 
     assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
@@ -1927,7 +1951,7 @@ class ProducerTest {
 
     var producer =
         producerOfOneSecondSegments(process)
-            .videoDecision(new VideoDecision.Copy(0, HVC1_RECORD_CODEC_STRING, false))
+            .videoDecision(VideoDecisionFixtures.copyOf(HVC1_RECORD_CODEC_STRING))
             .start();
 
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
@@ -1952,7 +1976,7 @@ class ProducerTest {
 
     var producer =
         producerOfOneSecondSegments(process)
-            .videoDecision(new VideoDecision.Copy(0, HVC1_RECORD_CODEC_STRING, false))
+            .videoDecision(VideoDecisionFixtures.copyOf(HVC1_RECORD_CODEC_STRING))
             .start();
 
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
@@ -1983,7 +2007,7 @@ class ProducerTest {
 
     var producer =
         producerOfOneSecondSegments(process)
-            .videoDecision(new VideoDecision.Copy(0, HVC1_RECORD_CODEC_STRING, false))
+            .videoDecision(VideoDecisionFixtures.copyOf(HVC1_RECORD_CODEC_STRING))
             .start();
 
     assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.MALFORMED_OUTPUT);
@@ -3100,7 +3124,7 @@ class ProducerTest {
         .stallTimeout(Duration.ofMinutes(1))
         .encodedFrameRate(Optional.<OutputFrameRate>empty())
         .videoDecision(
-            new VideoDecision.Copy(0, RecordingFixtures.ENCODED_RECORDING_CODEC_STRING, false))
+            VideoDecisionFixtures.copyOf(RecordingFixtures.ENCODED_RECORDING_CODEC_STRING))
         .memoryBudget(SegmentMemoryBudget.forSlots(1))
         .sink(sink)
         .clock(MonotonicClock.system());

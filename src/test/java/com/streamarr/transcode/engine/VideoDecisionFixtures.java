@@ -41,6 +41,16 @@ final class VideoDecisionFixtures {
       return encodeBuilder().build();
     }
 
-    return new VideoDecision.Copy(0, ENCODED_RECORDING_CODEC_STRING, false);
+    return copyOf(ENCODED_RECORDING_CODEC_STRING);
+  }
+
+  /** A copy of stream 0 whose job does not say that the copy keeps every packet's bytes. */
+  static VideoDecision.Copy copyOf(String codecString) {
+    return new VideoDecision.Copy(0, codecString, false);
+  }
+
+  /** A copy of stream 0 whose job says that the copy keeps every packet's bytes. */
+  static VideoDecision.Copy copyKeepingPacketBytesOf(String codecString) {
+    return new VideoDecision.Copy(0, codecString, true);
   }
 }

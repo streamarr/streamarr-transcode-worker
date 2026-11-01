@@ -13,6 +13,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.function.UnaryOperator;
 import java.util.stream.Stream;
+import lombok.Builder;
 import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Named;
@@ -490,7 +491,7 @@ class FfmpegCommandBuilderTest {
           + " stream copy")
   void shouldForceNoCodecProfileOrLevelWhenAnEncodingRequestsVideoDecisionIsAStreamCopy(
       String encoder) {
-    var copy = new VideoDecision.Copy(0, "avc1.64000A", false);
+    var copy = VideoDecisionFixtures.copyOf("avc1.64000A");
     var request =
         request(decision(TranscodeMode.FULL_TRANSCODE).videoDecision(copy).build()).build();
 
@@ -572,74 +573,114 @@ class FfmpegCommandBuilderTest {
     assertThat(cmd).containsSequence("-c:v", "libsvtav1");
   }
 
-  @ParameterizedTest(name = "{0} source, {1}")
-  @CsvSource({
-    "hvc1, REMUX, hevc_mp4toannexb, hvc1",
-    "hev1, REMUX, hevc_mp4toannexb, hvc1",
-    "dvh1, AUDIO_TRANSCODE, hevc_mp4toannexb, hvc1",
-    "dvhe, REMUX, hevc_mp4toannexb, hvc1",
-    "avc1, AUDIO_TRANSCODE, h264_mp4toannexb, avc1",
-    "avc3, REMUX, h264_mp4toannexb, avc1",
-    "dva1, REMUX, h264_mp4toannexb, avc1",
-    "dvav, AUDIO_TRANSCODE, h264_mp4toannexb, avc1"
-  })
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("copiedSampleEntries")
   @DisplayName(
-      "Should write the codec family's playable sample entry from parameter sets the record or the"
-          + " samples hold when the video is copied")
+      "Should run the codec family's Annex B filter and write its playable sample entry when the job"
+          + " does not say that the copy keeps every packet's bytes")
   void
-      shouldWriteTheCodecFamilysPlayableSampleEntryFromParameterSetsTheRecordOrTheSamplesHoldWhenTheVideoIsCopied(
-          String sourceSampleEntry, TranscodeMode mode, String filter, String sampleEntry) {
-    var copy = new VideoDecision.Copy(0, sourceSampleEntry + ".64001F", false);
-    var request = request(decision(mode).videoDecision(copy).build()).build();
+      shouldRunTheCodecFamilysAnnexBFilterAndWriteItsPlayableSampleEntryWhenTheJobDoesNotSayThatTheCopyKeepsEveryPacketsBytes(
+          CopiedSampleEntry copied) {
+    var request =
+        request(
+                decision(copied.mode())
+                    .videoDecision(VideoDecisionFixtures.copyOf(copied.codecString()))
+                    .build())
+            .build();
 
     var cmd = command(request, "copy");
 
     assertThat(cmd)
-        .containsSequence("-c:v", "copy", "-bsf:v", filter, "-tag:v", sampleEntry)
+        .containsSequence(
+            "-c:v", "copy", "-bsf:v", copied.annexBFilter(), "-tag:v", copied.playableSampleEntry())
         .containsOnlyOnce("-bsf:v", "-tag:v");
   }
 
-  @ParameterizedTest(name = "{0} source, {1}")
-  @CsvSource({
-    "hvc1, REMUX, hvc1",
-    "dvh1, AUDIO_TRANSCODE, hvc1",
-    "avc1, AUDIO_TRANSCODE, avc1",
-    "dva1, REMUX, avc1"
-  })
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("copiedSampleEntries")
   @DisplayName(
       "Should copy the samples without the Annex B filter when the job says that the copy keeps"
           + " every packet's bytes")
   void shouldCopyTheSamplesWithoutTheAnnexBFilterWhenTheJobSaysThatTheCopyKeepsEveryPacketsBytes(
-      String sourceSampleEntry, TranscodeMode mode, String sampleEntry) {
-    var copy = new VideoDecision.Copy(0, sourceSampleEntry + ".64001F", true);
-    var request = request(decision(mode).videoDecision(copy).build()).build();
+      CopiedSampleEntry copied) {
+    var request =
+        request(
+                decision(copied.mode())
+                    .videoDecision(
+                        VideoDecisionFixtures.copyKeepingPacketBytesOf(copied.codecString()))
+                    .build())
+            .build();
 
     var cmd = command(request, "copy");
 
     assertThat(cmd)
-        .containsSequence("-c:v", "copy", "-tag:v", sampleEntry, "-strict", "unofficial")
+        .containsSequence(
+            "-c:v", "copy", "-tag:v", copied.playableSampleEntry(), "-strict", "unofficial")
         .doesNotContain("-bsf:v");
   }
 
-  @ParameterizedTest(name = "{0}, keeps packet bytes {1}")
-  @CsvSource({
-    "av01.0.08M.08, false",
-    "vp09.00.40.08, false",
-    "mp4v.20.9, false",
-    "av01.0.08M.08, true"
-  })
+  static Stream<CopiedSampleEntry> copiedSampleEntries() {
+    return Stream.of(
+        hevcSource("hvc1").mode(TranscodeMode.REMUX).build(),
+        hevcSource("hev1").mode(TranscodeMode.REMUX).build(),
+        hevcSource("dvh1").mode(TranscodeMode.AUDIO_TRANSCODE).build(),
+        hevcSource("dvhe").mode(TranscodeMode.REMUX).build(),
+        h264Source("avc1").mode(TranscodeMode.AUDIO_TRANSCODE).build(),
+        h264Source("avc3").mode(TranscodeMode.REMUX).build(),
+        h264Source("dva1").mode(TranscodeMode.REMUX).build(),
+        h264Source("dvav").mode(TranscodeMode.AUDIO_TRANSCODE).build());
+  }
+
+  private static CopiedSampleEntry.CopiedSampleEntryBuilder hevcSource(String sampleEntry) {
+    return CopiedSampleEntry.builder()
+        .sourceSampleEntry(sampleEntry)
+        .annexBFilter("hevc_mp4toannexb")
+        .playableSampleEntry("hvc1");
+  }
+
+  private static CopiedSampleEntry.CopiedSampleEntryBuilder h264Source(String sampleEntry) {
+    return CopiedSampleEntry.builder()
+        .sourceSampleEntry(sampleEntry)
+        .annexBFilter("h264_mp4toannexb")
+        .playableSampleEntry("avc1");
+  }
+
+  // A copy of a source whose sample entry is sourceSampleEntry, the Annex B filter of its codec
+  // family and the playable sample entry that the copy writes.
+  @Builder
+  private record CopiedSampleEntry(
+      String sourceSampleEntry,
+      TranscodeMode mode,
+      String annexBFilter,
+      String playableSampleEntry) {
+
+    private String codecString() {
+      return sourceSampleEntry + ".64001F";
+    }
+
+    @Override
+    public String toString() {
+      return sourceSampleEntry + " source, " + mode;
+    }
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("copiesOfNeitherH264NorHevc")
   @DisplayName(
       "Should leave the sample entry to FFmpeg when the copied video is neither H.264 nor HEVC")
   void shouldLeaveTheSampleEntryToFfmpegWhenTheCopiedVideoIsNeitherH264NorHevc(
-      String codecString, boolean keepsPacketBytes) {
-    var request =
-        request(
-                decision(TranscodeMode.REMUX)
-                    .videoDecision(new VideoDecision.Copy(0, codecString, keepsPacketBytes))
-                    .build())
-            .build();
+      VideoDecision.Copy copy) {
+    var request = request(decision(TranscodeMode.REMUX).videoDecision(copy).build()).build();
 
     assertThat(command(request, "copy")).doesNotContain("-tag:v", "-bsf:v");
+  }
+
+  static Stream<VideoDecision.Copy> copiesOfNeitherH264NorHevc() {
+    return Stream.of(
+        VideoDecisionFixtures.copyOf("av01.0.08M.08"),
+        VideoDecisionFixtures.copyOf("vp09.00.40.08"),
+        VideoDecisionFixtures.copyOf("mp4v.20.9"),
+        VideoDecisionFixtures.copyKeepingPacketBytesOf("av01.0.08M.08"));
   }
 
   @Test
@@ -665,7 +706,7 @@ class FfmpegCommandBuilderTest {
     var request =
         request(
                 decision(TranscodeMode.AUDIO_TRANSCODE)
-                    .videoDecision(new VideoDecision.Copy(0, codecString, false))
+                    .videoDecision(VideoDecisionFixtures.copyOf(codecString))
                     .build())
             .build();
 
