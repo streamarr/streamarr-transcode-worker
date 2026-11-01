@@ -25,8 +25,9 @@ import lombok.Builder;
  *
  * <p>A listing that starts at a seek must reach back to the chunk's start: the first video keyframe
  * must not present after the chunk's first keyframe, and each audio stream's first packet must
- * present before it. Audio packets of one stream follow their presentation order in the file, so
- * every audio packet of the chunk follows that first packet.
+ * present before it, so a stream without a packet after the seek sends the listing back too. Audio
+ * packets of one stream follow their presentation order in the file, so every audio packet of the
+ * chunk follows that first packet.
  */
 final class ChunkPackets implements KeyframePacketScan.PacketLines {
 
@@ -233,9 +234,13 @@ final class ChunkPackets implements KeyframePacketScan.PacketLines {
     return isStoppedEarly;
   }
 
-  /** Whether the listing's seek landed after the chunk's start, so it must start earlier. */
+  /**
+   * Whether the listing's seek may have landed after the chunk's start, so it must start earlier.
+   * An audio stream that gives no packet after the seek may have its chunk's packets before it.
+   */
   boolean isSeekMissedStart() {
-    return isSeekMissedStart;
+    return isSeekMissedStart
+        || !isReadFromFileStart && audio.values().stream().anyMatch(stream -> !stream.isSeen());
   }
 
   /** Why the listing stopped before the chunk's end; empty when it read what the chunk needs. */

@@ -713,6 +713,48 @@ class FfprobeExecutorBitrateScanTest {
 
   @Test
   @DisplayName(
+      "Should list the chunk again from the file's start when an audio stream gives no packet after"
+          + " the seek")
+  void shouldListTheChunkAgainFromTheFilesStartWhenAnAudioStreamGivesNoPacketAfterTheSeek() {
+    var positions =
+        POSITIONS.toBuilder()
+            .clearKeyframes()
+            .keyframe(new Keyframe(0, 0))
+            .keyframe(new Keyframe(20_000, 20_000))
+            .keyframe(new Keyframe(40_000, 40_000))
+            .build();
+    // The muxer placed the audio's last packets, which present in the chunk, before the seek's
+    // target, so the listing from the seek holds none of them.
+    var afterTheSeek =
+        """
+        stream_index=0|pts=10500|dts=10500|duration=500|size=900|flags=K__
+        stream_index=0|pts=20500|dts=20500|duration=500|size=1001|flags=K__
+        stream_index=0|pts=40500|dts=40500|duration=500|size=1002|flags=K__
+        """;
+    var fromTheFileStart =
+        """
+        stream_index=0|pts=500|dts=500|duration=500|size=1000|flags=K__
+        stream_index=1|pts=20500|dts=20500|duration=250|size=30|flags=K__
+        stream_index=1|pts=25500|dts=25500|duration=250|size=60|flags=K__
+        stream_index=0|pts=10500|dts=10500|duration=500|size=900|flags=K__
+        stream_index=0|pts=20500|dts=20500|duration=500|size=1001|flags=K__
+        stream_index=0|pts=40500|dts=40500|duration=500|size=1002|flags=K__
+        """;
+    var ffprobe =
+        keptAacSource()
+            .listing("10.500000", afterTheSeek)
+            .listing(FROM_FILE_START, fromTheFileStart)
+            .build();
+
+    var report = ffprobe.executor().probe(SOURCE, request(positions.chunk(1, 2)));
+
+    assertThat(intervalCounts(report.streamMeasurementParts()))
+        .containsEntry(1, counts(List.of(30L + 60), List.of(2L)));
+    assertThat(ffprobe.listingStarts()).containsExactly("10.500000", FROM_FILE_START);
+  }
+
+  @Test
+  @DisplayName(
       "Should read on past the end keyframe until each audio stream passes the chunk's end when the"
           + " muxer places the audio behind the video")
   void shouldReadOnPastTheEndKeyframeUntilEachAudioStreamPassesTheChunksEndWhenAudioLags() {
