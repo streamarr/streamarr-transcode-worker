@@ -39,6 +39,8 @@ class FfprobeExecutorCopyPacketBytesTest {
   // The hvcC record's lengthSizeMinusOne sits in its 22nd byte, and its count of NAL unit arrays
   // in the next.
   private static final int HVCC_LENGTH_SIZE = 21;
+  // The avcC record's first SPS length follows its 6 header bytes.
+  private static final int AVC_FIRST_SPS_LENGTH = 6;
   private static final int HVCC_ARRAY_COUNT = 22;
   private static final int HEVC_VIDEO_PARAMETER_SET = 32;
   private static final int HEVC_SEQUENCE_PARAMETER_SET = 33;
@@ -311,6 +313,41 @@ class FfprobeExecutorCopyPacketBytesTest {
       assertThat(copyKeepsPacketBytes(video)).isFalse();
     }
 
+    @Test
+    @DisplayName(
+        "Should report that a copy may change packet bytes when the avcC ends after its SPS list")
+    void shouldReportThatACopyMayChangePacketBytesWhenTheAvcCEndsAfterItsSpsList() {
+      // FFmpeg reads the missing PPS count as 0, so the record holds no PPS.
+      var video =
+          editedRecord(
+              AVC1_MP4,
+              record -> Arrays.copyOf(record, AVC_FIRST_SPS_LENGTH + 2 + spsLength(record)));
+
+      assertThat(copyKeepsPacketBytes(video)).isFalse();
+    }
+
+    @Test
+    @DisplayName(
+        "Should report that a copy keeps every packet's bytes when zero bytes follow an hvcC SEI"
+            + " NAL unit's RBSP trailing bits")
+    void
+        shouldReportThatACopyKeepsEveryPacketsBytesWhenZeroBytesFollowAnHvcCSeiNalUnitsRbspTrailingBits() {
+      // x265's information message is the record's last NAL unit. FFmpeg's NAL unit reader drops
+      // the zero bytes after the trailing bits.
+      var video =
+          editedRecord(
+              X265_MATROSKA,
+              record -> {
+                var edited = Arrays.copyOf(record, record.length + 1);
+                var lengthOffset = lastNalUnitLengthOffset(record);
+                var length = ByteBuffer.wrap(record, lengthOffset, 2).getShort();
+                ByteBuffer.wrap(edited, lengthOffset, 2).putShort((short) (length + 1));
+                return edited;
+              });
+
+      assertThat(copyKeepsPacketBytes(video)).isTrue();
+    }
+
     @ParameterizedTest(name = "{0}")
     @MethodSource("avcCNalUnitsThatDoNotReachTheDecoder")
     @DisplayName(
@@ -335,6 +372,28 @@ class FfprobeExecutorCopyPacketBytesTest {
               .recordedText("244d 4001 0004 68ce 0fc8")
               .editedText("244d 4002 0004 68ce 0fc8 0000")
               .build());
+    }
+
+    private static int spsLength(byte[] avcC) {
+      return Short.toUnsignedInt(ByteBuffer.wrap(avcC, AVC_FIRST_SPS_LENGTH, 2).getShort());
+    }
+
+    /** The offset of the length field of the hvcC record's last NAL unit. */
+    private static int lastNalUnitLengthOffset(byte[] hvcC) {
+      var record = ByteBuffer.wrap(hvcC).position(HVCC_ARRAY_COUNT + 1);
+      var lengthOffset = -1;
+      for (var array = 0; array < Byte.toUnsignedInt(hvcC[HVCC_ARRAY_COUNT]); array++) {
+        record.get();
+        var units = Short.toUnsignedInt(record.getShort());
+        for (var unit = 0; unit < units; unit++) {
+          lengthOffset = record.position();
+          var length = Short.toUnsignedInt(record.getShort());
+          record.position(record.position() + length);
+        }
+      }
+
+      assertThat(record.hasRemaining()).as("the last NAL unit ends the record").isFalse();
+      return lengthOffset;
     }
 
     /** The hvcC record without its array of NAL units of the given type. */
