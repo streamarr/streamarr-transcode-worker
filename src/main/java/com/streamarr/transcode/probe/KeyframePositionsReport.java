@@ -145,7 +145,7 @@ record KeyframePositionsReport(
    * FFmpeg's -copyts -start_at_zero subtracts the container start time from every packet, rescaled
    * to the stream's time base with rounding half away from zero.
    */
-  private static long containerStart(JsonNode ffprobeOutput, TimeBase timeBase) {
+  static long containerStart(JsonNode ffprobeOutput, TimeBase timeBase) {
     var startTime = ffprobeOutput.path("format").path("start_time").asString("");
     BigDecimal seconds;
     try {
