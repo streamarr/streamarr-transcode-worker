@@ -218,10 +218,8 @@ final class BitrateScanChunkRun {
     /** Empty when a keyframe time is no whole tick of the chosen stream's time base. */
     static Optional<Timeline> of(
         JsonNode ffprobeOutput, BitrateScanChunk chunk, List<MeasuredStream> streams) {
-      var keyframeBase = new TimeBase(chunk.getTimeBaseNumerator(), chunk.getTimeBaseDenominator());
-      var start = KeyframePositionsReport.containerStart(ffprobeOutput, keyframeBase);
       var times = new long[chunk.getPresentationTimeDeltasCount() + 1];
-      long time = start;
+      long time = 0;
       for (var i = 0; i < chunk.getPresentationTimeDeltasCount(); i++) {
         time = Math.addExact(time, chunk.getPresentationTimeDeltas(i));
         times[i] = time;
@@ -229,8 +227,13 @@ final class BitrateScanChunkRun {
 
       // The last entry holds the end keyframe's time, when the chunk has one.
       var hasEnd = chunk.hasEndPresentationTime();
-      times[times.length - 1] = hasEnd ? Math.addExact(start, chunk.getEndPresentationTime()) : 0;
-      var keyframes = new KeyframeTimes(times, keyframeBase, hasEnd);
+      times[times.length - 1] = hasEnd ? chunk.getEndPresentationTime() : 0;
+      var keyframes =
+          new KeyframeTimes(
+              times,
+              new TimeBase(chunk.getTimeBaseNumerator(), chunk.getTimeBaseDenominator()),
+              hasEnd,
+              ffprobeOutput);
       var chosen = streams.getFirst();
       var video = keyframes.rescaledExactly(chosen.timeBase());
       if (video.isEmpty()) {
@@ -249,27 +252,40 @@ final class BitrateScanChunkRun {
                       .map(keyframes::audioWindow)
                       .toList())
               .build();
-      return Optional.of(new Timeline(plan, keyframes.firstSeconds(), streams));
+      return Optional.of(new Timeline(plan, seconds(video.get()[0], chosen.timeBase()), streams));
+    }
+
+    /** A time in seconds, rounded down to a microsecond. */
+    private static BigDecimal seconds(long ticks, TimeBase timeBase) {
+      return BigDecimal.valueOf(ticks)
+          .multiply(BigDecimal.valueOf(timeBase.numerator()))
+          .divide(BigDecimal.valueOf(timeBase.denominator()), SEEK_SCALE, RoundingMode.FLOOR);
     }
   }
 
   /**
-   * The chunk's keyframe presentation times on the demuxer's timeline, followed by the end
-   * keyframe's time, in the chunk's time base.
+   * The chunk's keyframe presentation times on the contract's zero-based timeline, followed by the
+   * end keyframe's time, in the chunk's time base. A stream's demuxer times are its zero-based
+   * times plus the container's start in its own time base, as the measured times are reported. Each
+   * audio interval therefore holds exactly the zero-based times from its keyframe up to the next,
+   * whatever the rounding of the container's start in each time base.
    */
   private static final class KeyframeTimes {
     private final long[] times;
     private final TimeBase timeBase;
     private final boolean hasEnd;
+    private final JsonNode ffprobeOutput;
 
-    private KeyframeTimes(long[] times, TimeBase timeBase, boolean hasEnd) {
+    private KeyframeTimes(long[] times, TimeBase timeBase, boolean hasEnd, JsonNode ffprobeOutput) {
       this.times = times;
       this.timeBase = timeBase;
       this.hasEnd = hasEnd;
+      this.ffprobeOutput = ffprobeOutput;
     }
 
-    /** The times in another time base; empty when one is no whole tick of it. */
+    /** The demuxer times in another time base; empty when one is no whole tick of it. */
     Optional<long[]> rescaledExactly(TimeBase other) {
+      var start = KeyframePositionsReport.containerStart(ffprobeOutput, other);
       var rescaled = new long[times.length];
       for (var i = 0; i < times.length; i++) {
         var time = rescaleExactly(times[i], timeBase, other);
@@ -277,7 +293,7 @@ final class BitrateScanChunkRun {
           return Optional.empty();
         }
 
-        rescaled[i] = time.getAsLong();
+        rescaled[i] = Math.addExact(time.getAsLong(), start);
       }
 
       return Optional.of(rescaled);
@@ -288,9 +304,10 @@ final class BitrateScanChunkRun {
     }
 
     AudioWindow audioWindow(MeasuredStream stream) {
+      var start = KeyframePositionsReport.containerStart(ffprobeOutput, stream.timeBase());
       var starts = new long[times.length];
       for (var i = 0; i < times.length; i++) {
-        starts[i] = rescaleUp(times[i], timeBase, stream.timeBase());
+        starts[i] = Math.addExact(rescaleUp(times[i], timeBase, stream.timeBase()), start);
       }
 
       var sixBlocks =
@@ -303,13 +320,6 @@ final class BitrateScanChunkRun {
           .end(end(starts))
           .sixBlocks(sixBlocks)
           .build();
-    }
-
-    /** The chunk's first keyframe time in seconds, rounded down to a microsecond. */
-    BigDecimal firstSeconds() {
-      return BigDecimal.valueOf(times[0])
-          .multiply(BigDecimal.valueOf(timeBase.numerator()))
-          .divide(BigDecimal.valueOf(timeBase.denominator()), SEEK_SCALE, RoundingMode.FLOOR);
     }
   }
 

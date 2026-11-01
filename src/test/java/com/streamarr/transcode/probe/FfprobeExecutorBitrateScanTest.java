@@ -233,6 +233,51 @@ class FfprobeExecutorBitrateScanTest {
 
   @Test
   @DisplayName(
+      "Should keep each audio time within the chunk's keyframes on the zero-based timeline when the"
+          + " container start is no whole tick of both time bases")
+  void shouldKeepEachAudioTimeWithinTheChunksKeyframesOnTheZeroBasedTimelineWhenTheStartIsUneven() {
+    // ffprobe prints the start in microseconds: 500.02 video ticks round to 500 and 24,000.96
+    // audio ticks to 24,001. The audio packet at 72,000 presents with the video keyframe at 1,500
+    // on the demuxer's timeline, but at 47,999 on the zero-based timeline: before the chunk's
+    // first keyframe at 1 s, where the contract does not allow the chunk's audio to start.
+    var streams =
+        MATROSKA_STREAMS
+            .formatted("aac")
+            .replace("\"0.500000\"", "\"0.500020\"")
+            .replace("\"aac\",\"time_base\":\"1/1000\"", "\"aac\",\"time_base\":\"1/48000\"");
+    var listing =
+        """
+        stream_index=0|pts=500|dts=500|duration=500|size=1000|flags=K__
+        stream_index=1|pts=60000|dts=60000|duration=12000|size=10|flags=K__
+        stream_index=0|pts=1500|dts=1500|duration=500|size=1001|flags=K__
+        stream_index=1|pts=72000|dts=72000|duration=12000|size=11|flags=K__
+        stream_index=1|pts=84000|dts=84000|duration=12000|size=12|flags=K__
+        stream_index=0|pts=2000|dts=2000|duration=500|size=201|flags=___
+        stream_index=1|pts=96000|dts=96000|duration=12000|size=13|flags=K__
+        stream_index=1|pts=108000|dts=108000|duration=12000|size=14|flags=K__
+        stream_index=0|pts=2500|dts=2500|duration=500|size=1002|flags=K__
+        stream_index=1|pts=120000|dts=120000|duration=12000|size=15|flags=K__
+        stream_index=1|pts=132000|dts=132000|duration=12000|size=16|flags=K__
+        """;
+    var ffprobe = keptAacSource().streams(streams).listing(FROM_FILE_START, listing).build();
+
+    var report = ffprobe.executor().probe(SOURCE, request(POSITIONS.chunk(1, 2)));
+
+    // The chunk's audio runs from 48,000 up to 96,000 on the zero-based timeline: 72,001 up to
+    // 120,001 on the demuxer's.
+    assertThat(report.result().getBitrateScanChunk().getMeasured().getStreams(1))
+        .isEqualTo(
+            stream(1)
+                .setTimeBaseDenominator(48_000)
+                .setMeasuredBytes(12 + 13 + 14 + 15)
+                .setPacketCount(4)
+                .setFirstPresentationTime(84_000 - 24_001)
+                .setEndTime(132_000 - 24_001)
+                .build());
+  }
+
+  @Test
+  @DisplayName(
       "Should fail the chunk as invalid media when the packets end before the next chunk's first"
           + " keyframe")
   void shouldFailTheChunkAsInvalidMediaWhenThePacketsEndBeforeTheNextChunksFirstKeyframe() {
