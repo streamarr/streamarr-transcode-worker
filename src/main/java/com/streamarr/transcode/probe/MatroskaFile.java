@@ -259,6 +259,13 @@ final class MatroskaFile {
           Optional.ofNullable(found.get(CUES)));
     }
 
+    /**
+     * The Info element alone, so that a Tracks or Cues element the file cannot hold loses no Info.
+     */
+    static Optional<ByteBuffer> info(FileChannel channel) throws IOException {
+      return Optional.ofNullable(elements(channel, Set.of(INFO)).get(INFO));
+    }
+
     /** The Tracks element alone, so that a Cues element the file cannot hold loses no track. */
     static Optional<ByteBuffer> tracks(FileChannel channel) throws IOException {
       return Optional.ofNullable(elements(channel, Set.of(TRACKS)).get(TRACKS));

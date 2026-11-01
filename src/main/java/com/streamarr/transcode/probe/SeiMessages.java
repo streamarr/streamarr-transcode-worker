@@ -88,6 +88,25 @@ final class SeiMessages implements MetadataWalk {
     return readAll && !nestedMessages.contains(message);
   }
 
+  /**
+   * A payloadType or a payloadSize of an SEI message: a run of 0xFF bytes, each adding 255, then
+   * the last byte; empty when the bytes end first.
+   */
+  static OptionalLong varyingLengthValue(ByteBuffer bytes) {
+    var value = 0L;
+    int last;
+    do {
+      if (!bytes.hasRemaining()) {
+        return OptionalLong.empty();
+      }
+
+      last = Byte.toUnsignedInt(bytes.get());
+      value += last;
+    } while (last == 0xFF);
+
+    return OptionalLong.of(value);
+  }
+
   private static final class Walk {
 
     private final NalSyntax syntax;
@@ -219,25 +238,6 @@ final class SeiMessages implements MetadataWalk {
     private static boolean isTrailingBits(ByteBuffer bytes) {
       return bytes.remaining() == 1
           && Byte.toUnsignedInt(bytes.get(bytes.position())) == TRAILING_BITS;
-    }
-
-    /**
-     * A payloadType or a payloadSize: a run of 0xFF bytes, each adding 255, then the last byte;
-     * empty when the bytes end first.
-     */
-    private static OptionalLong varyingLengthValue(ByteBuffer bytes) {
-      var value = 0L;
-      int last;
-      do {
-        if (!bytes.hasRemaining()) {
-          return OptionalLong.empty();
-        }
-
-        last = Byte.toUnsignedInt(bytes.get());
-        value += last;
-      } while (last == 0xFF);
-
-      return OptionalLong.of(value);
     }
 
     private static boolean isHdr10Plus(ByteBuffer payload) {
