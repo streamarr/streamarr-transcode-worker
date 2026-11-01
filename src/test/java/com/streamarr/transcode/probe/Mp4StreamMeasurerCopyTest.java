@@ -141,6 +141,11 @@ class Mp4StreamMeasurerCopyTest {
             .sampleEntry(SyntheticSampleEntry.visual("vp09"))
             .build(),
         VideoCase.builder()
+            .condition("H.264 whose avcC box is empty")
+            .codecName("h264")
+            .sampleEntry(SyntheticSampleEntry.visual("avc1", SyntheticMp4.box("avcC")))
+            .build(),
+        VideoCase.builder()
             .condition("H.264 in a track without an stsd")
             .codecName("h264")
             .build());
@@ -184,6 +189,15 @@ class Mp4StreamMeasurerCopyTest {
             .condition("QuickTime AAC with an AudioSpecificConfig in a wave box")
             .codecName("aac")
             .track(aacTrack(SyntheticSampleEntry.quickTimeMp4aWithEsdsInWave(), RAW_AAC_FRAME))
+            .build(),
+        AudioCase.builder()
+            .condition("QuickTime AAC with an AudioSpecificConfig in a version 2 sound description")
+            .codecName("aac")
+            .track(
+                aacTrack(
+                    SyntheticSampleEntry.audio(
+                        "mp4a", 2, SyntheticSampleEntry.esds(0, AUDIO_SPECIFIC_CONFIG)),
+                    RAW_AAC_FRAME))
             .build(),
         AudioCase.builder()
             .condition("E-AC-3 whose samples each hold six blocks")
@@ -242,6 +256,13 @@ class Mp4StreamMeasurerCopyTest {
         aac(
             "AAC whose samples are ADTS frames beside an AudioSpecificConfig",
             aacTrack(SyntheticSampleEntry.mp4aWithEsds(AUDIO_SPECIFIC_CONFIG), ADTS_FRAME)),
+        aac(
+            "AAC whose ADTS frames a co64 locates",
+            audioTrack(48_000, 1_024)
+                .sampleEntry(SyntheticSampleEntry.mp4aWithEsds(AUDIO_SPECIFIC_CONFIG))
+                .mediaData(firstSampleStartingWith(ADTS_FRAME))
+                .largeChunkOffsets(true)
+                .build()),
         aac(
             "AAC whose first chunk offset exceeds what a file position can hold",
             audioTrack(48_000, 1_024)
@@ -382,9 +403,17 @@ class Mp4StreamMeasurerCopyTest {
 
   /** An AAC track at 48 kHz whose four 7-byte samples start with these bytes. */
   private static SyntheticMp4 aacTrack(byte[] sampleEntry, byte[] firstBytes) {
+    return audioTrack(48_000, 1_024)
+        .sampleEntry(sampleEntry)
+        .mediaData(firstSampleStartingWith(firstBytes))
+        .build();
+  }
+
+  /** The media data of four 7-byte samples, the first of which starts with these bytes. */
+  private static byte[] firstSampleStartingWith(byte[] firstBytes) {
     var data = new byte[28];
     System.arraycopy(firstBytes, 0, data, 0, firstBytes.length);
-    return audioTrack(48_000, 1_024).sampleEntry(sampleEntry).mediaData(data).build();
+    return data;
   }
 
   private static SyntheticMp4.SyntheticMp4Builder audioTrack(long timescale, int sampleDuration) {
