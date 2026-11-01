@@ -1,5 +1,6 @@
 package com.streamarr.transcode.engine;
 
+import static com.streamarr.transcode.engine.InitializationSegmentFixtures.initializationSegment;
 import static com.streamarr.transcode.engine.IsoBoxes.box;
 import static com.streamarr.transcode.engine.IsoBoxes.concat;
 import static com.streamarr.transcode.engine.IsoBoxes.fourcc;
@@ -12,8 +13,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.engine.TrackCodec.Audio;
 import com.streamarr.transcode.engine.TrackCodec.Video;
-import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
@@ -507,16 +506,5 @@ class CodecConfigurationReaderTest {
 
   private static byte[] hex(String digits) {
     return HexFormat.of().parseHex(digits);
-  }
-
-  private static InitializationSegment initializationSegment(String file) {
-    try (var stream =
-        CodecConfigurationReaderTest.class.getResourceAsStream(
-            "/initialization-segments/" + file)) {
-      assertThat(stream).as("initialization segment %s", file).isNotNull();
-      return new InitializationSegment(stream.readAllBytes());
-    } catch (IOException e) {
-      throw new UncheckedIOException(e);
-    }
   }
 }

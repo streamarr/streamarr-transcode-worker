@@ -2,6 +2,7 @@ package com.streamarr.transcode.engine;
 
 import static com.streamarr.transcode.engine.FfmpegRecordings.bytesOf;
 import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
+import static com.streamarr.transcode.engine.InitializationSegmentFixtures.bytesOfInitializationSegment;
 import static com.streamarr.transcode.fixtures.DeliveredSamples.assertCarriesTheRecordedSamples;
 import static com.streamarr.transcode.fixtures.DeliveredSamples.audioSamplesOfTheDeliveredSegments;
 import static com.streamarr.transcode.fixtures.Races.awaitStart;
@@ -1755,6 +1756,31 @@ class ProducerTest {
     var failure = failureOf(producer);
     assertThat(failure.reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
     assertThat(failure.detail()).contains("4:4:4");
+    assertThat(sink.acceptedNames()).isEmpty();
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({
+    "libx264-1080i-field-coded.mp4, avc1.640028",
+    "libx265-1080i-woven.mp4, hvc1.1.6.L120.90",
+    "libsvtav1-1080i-woven.mp4, av01.0.08M.08"
+  })
+  @DisplayName(
+      "Should fail the attempt as an output mismatch, deliver nothing and end FFmpeg when an"
+          + " encode's initialization segment declares interlaced video")
+  void
+      shouldFailTheAttemptAsAnOutputMismatchDeliverNothingAndEndFfmpegWhenAnEncodesInitializationSegmentDeclaresInterlacedVideo(
+          String file, String codecString) {
+    var process = ScriptedProcess.builder().output(bytesOfInitializationSegment(file)).build();
+    var encode = VideoDecisionFixtures.encodeBuilder().codecString(codecString);
+
+    var producer =
+        producerLaunching(process).periodSeconds(6).videoDecision(encode.build()).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
+    assertThat(failure.detail()).contains("interlaced");
+    assertThat(process.wasDestroyedForcibly()).isTrue();
     assertThat(sink.acceptedNames()).isEmpty();
   }
 

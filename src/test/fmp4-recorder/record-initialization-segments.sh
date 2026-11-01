@@ -61,6 +61,23 @@ record libx264-high444 src/64x36.mkv -- -c:v libx264 -vf format=yuv444p "${AAC[@
 record libsvtav1-10bit src/64x36.mkv -- -c:v libsvtav1 -vf format=yuv420p10le \
   -svtav1-params lp=1 "${AAC[@]}"
 
+# Interlaced output, which the produced-output check refuses, and its deinterlaced counterpart. The
+# source weaves the fields of a 1080p60 picture into 1080i30, top field first. libx264 codes fields
+# only when told to, so its interlaced recording asks for field coding; libx265 and libsvtav1 encode
+# the woven frames as frames, and FFmpeg's mp4 muxer then writes a fiel box that counts two fields.
+"${FF[@]}" -i src/1080p60.mkv -vf tinterlace=mode=interleave_top,setfield=tff -c:v ffv1 \
+  -c:a copy src/1080i30.mkv
+record libx264-1080i-field-coded src/1080i30.mkv -- -c:v libx264 -profile:v high -level:v 40 \
+  -flags +ildct+ilme -x264opts tff=1 -vf format=yuv420p -b:v 5000000 "${AAC[@]}"
+record libx265-1080i-woven src/1080i30.mkv -- -c:v libx265 -profile:v main -tag:v hvc1 \
+  -x265-params level-idc=40:high-tier=0:pools=none:log-level=error -vf format=yuv420p \
+  -b:v 5000000 "${AAC[@]}"
+record libx265-1080i-deinterlaced src/1080i30.mkv -- -c:v libx265 -profile:v main -tag:v hvc1 \
+  -x265-params level-idc=41:high-tier=0:pools=none:log-level=error \
+  -vf bwdif=mode=send_field:parity=tff:deint=all,format=yuv420p -r 60 -b:v 5000000 "${AAC[@]}"
+record libsvtav1-1080i-woven src/1080i30.mkv -- -c:v libsvtav1 -level:v 40 \
+  -vf format=yuv420p -crf 35 -maxrate 5000000 -svtav1-params mbr-overshoot-pct=0:lp=1 "${AAC[@]}"
+
 # HEVC copies without the worker's tag rule, so that the reader meets both sample entries: an MP4
 # source keeps its hvc1 sample entry, and a Matroska source becomes hev1.
 X265=(-c:v libx265 -profile:v main -x265-params level-idc=40:high-tier=0:pools=none:log-level=error

@@ -6,9 +6,9 @@ import java.util.function.Supplier;
 
 /**
  * Compares the video that an initialization segment declares with the job's video decision: the
- * codec string always, and for an encode the 8-bit 4:2:0 picture format too. It also requires the
- * decoder configuration record to hold the parameter sets that its sample entry promises. Audio
- * codec strings are not compared, because the job carries none.
+ * codec string always, and for an encode the 8-bit 4:2:0 picture format and progressive video too.
+ * It also requires the decoder configuration record to hold the parameter sets that its sample
+ * entry promises. Audio codec strings are not compared, because the job carries none.
  */
 final class VideoOutputCheck {
 
@@ -16,9 +16,10 @@ final class VideoOutputCheck {
 
   /**
    * @throws FragmentedMp4Exception with {@link Reason#OUTPUT_MISMATCH} when the segment declares
-   *     other video than the decision, or video whose decoder configuration record cannot be read
-   *     or lacks a parameter set that its sample entry promises; with {@link Reason#MALFORMED_BOX}
-   *     when a box that leads to the video sample entry is missing or too short
+   *     other video than the decision, an encode that declares interlaced video, or video whose
+   *     decoder configuration record cannot be read or lacks a parameter set that its sample entry
+   *     promises; with {@link Reason#MALFORMED_BOX} when a box that leads to the video sample entry
+   *     is missing or too short
    */
   static void requireMatch(VideoDecision decision, InitializationSegment segment) {
     var sampleEntry =
@@ -41,6 +42,10 @@ final class VideoOutputCheck {
               + " where every encode is 8-bit 4:2:0");
     }
 
+    if (encodeDeclaresInterlacedVideo(decision, sampleEntry)) {
+      throw mismatch("the encode declares interlaced video where every encode is progressive");
+    }
+
     boolean holdsParameterSets =
         readable(() -> CodecConfigurationReader.holdsPromisedParameterSets(sampleEntry));
     if (!holdsParameterSets) {
@@ -50,6 +55,15 @@ final class VideoOutputCheck {
               + " sample entry promises parameter sets that its decoder configuration record does"
               + " not hold");
     }
+  }
+
+  private static boolean encodeDeclaresInterlacedVideo(
+      VideoDecision decision, BoxView sampleEntry) {
+    if (!(decision instanceof VideoDecision.Encode)) {
+      return false;
+    }
+
+    return readable(() -> InterlacedVideoSignals.declaresInterlacedVideo(sampleEntry));
   }
 
   // A missing box on the way to the sample entry stays a malformed box; only a decoder

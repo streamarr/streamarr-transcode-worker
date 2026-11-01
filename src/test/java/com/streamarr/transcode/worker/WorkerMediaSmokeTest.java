@@ -13,6 +13,8 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import build.buf.gen.streamarr.transcode.v1.AudioMode;
 import build.buf.gen.streamarr.transcode.v1.CompatibleBase;
+import build.buf.gen.streamarr.transcode.v1.Deinterlace;
+import build.buf.gen.streamarr.transcode.v1.DeinterlaceOutput;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionAbsent;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionConfiguration;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionPresent;
@@ -20,6 +22,7 @@ import build.buf.gen.streamarr.transcode.v1.DolbyVisionRpuPlacement;
 import build.buf.gen.streamarr.transcode.v1.EncoderPreset;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
+import build.buf.gen.streamarr.transcode.v1.FieldOrder;
 import build.buf.gen.streamarr.transcode.v1.Fraction;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptCompleted;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailed;
@@ -100,6 +103,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
@@ -210,6 +214,20 @@ class WorkerMediaSmokeTest {
   private static final Duration DEFAULT_FRAGMENTATION_TARGET = Duration.ofMillis(250);
 
   private static final Duration JOB_LIMIT = Duration.ofMinutes(5);
+
+  // The interlaced sources hold three 3 s segments of 29.97 fps frames, each weaving two fields.
+  // An encoded replacement attempt for segment 2 seeks to segment 1, past the source's start.
+  private static final int INTERLACED_SOURCE_SEGMENT_COUNT = 3;
+  private static final int INTERLACED_SOURCE_FRAMES = 270;
+  private static final int INTERLACED_REPLACEMENT_START = 2;
+  // Each woven frame of an interlaced source shown twice, as an encode that does not deinterlace
+  // writes it at the field rate. With the pinned FFmpeg, deinterlaced frames scored about 3 dB
+  // higher against their own pictures than against these frames; frames left woven, or
+  // deinterlaced with the other field first, scored about 1 dB lower.
+  private static final String WOVEN_FRAMES_AT_THE_FIELD_RATE = "fps=60000/1001,";
+  private static final Pattern IDET_MULTI_FRAME =
+      Pattern.compile("Multi frame detection: TFF: *(\\d+) BFF: *(\\d+) Progressive: *(\\d+)");
+  private static final Pattern PSNR_AVERAGE = Pattern.compile("average:([0-9.]+)");
   private static final String EMPTY_EDIT_SOURCE = "mp4-empty-edit.mp4";
   private static final String TRIMMED_START_SOURCE = "mp4-trimmed-start.mp4";
   private static final String MOV_SOURCE = "mov-bframes-editlist.mov";
@@ -227,6 +245,7 @@ class WorkerMediaSmokeTest {
   @TempDir static Path tenBitSources;
   @TempDir static Path irregularKeyframeSources;
   @TempDir static Path rpuLayoutSources;
+  @TempDir static Path interlacedSources;
 
   // A source joins only once FFmpeg has written it successfully, so that a later case generates it
   // again instead of reading what a failed or timed-out run left behind.
@@ -690,6 +709,226 @@ class WorkerMediaSmokeTest {
                   media.toString()));
       assertThat(frameRate.strip()).isEqualTo(numerator + "/" + denominator);
     }
+  }
+
+  @ParameterizedTest(name = "{1}")
+  @CsvSource({"FIELD_ORDER_TT, tff", "FIELD_ORDER_BB, bff"})
+  @DisplayName(
+      "Should upload progressive video with one frame per field in the source's field order when"
+          + " an encode deinterlaces an interlaced source")
+  void
+      shouldUploadProgressiveVideoWithOneFramePerFieldInTheSourcesFieldOrderWhenAnEncodeDeinterlacesAnInterlacedSource(
+          FieldOrder fieldOrder, String parity) throws Exception {
+    var source = interlacedSource(parity);
+    assertThat(idetMultiFrameCounts(source))
+        .as("idet's reading of the generated source")
+        .containsEntry(parity.toUpperCase(Locale.ROOT), INTERLACED_SOURCE_FRAMES);
+
+    var uploads =
+        execute(
+            engine(softwareCapabilities()),
+            source.getParent(),
+            interlacedSourceJob(source, fieldOrder).build());
+
+    var media = playable(uploads.contentOf(uploads.names()));
+    assertDecodes(media);
+    assertThat(videoStreamEntry(media, "r_frame_rate")).isEqualTo("60000/1001");
+    assertThat(videoStreamEntry(media, "field_order")).isEqualTo("progressive");
+    assertThat(countedFrames(media)).isEqualTo(2 * INTERLACED_SOURCE_FRAMES);
+    var againstThePictures = psnrAgainst(media, interlacedSourcePictures(), "");
+    assertThat(againstThePictures)
+        .as("PSNR against the pictures, over PSNR against the woven frames")
+        .isGreaterThan(psnrAgainst(media, source, WOVEN_FRAMES_AT_THE_FIELD_RATE))
+        // Deinterlacing with the other field first swaps the two frames of each field pair, so
+        // each uploaded frame then resembles its pair partner more than the picture it should
+        // show.
+        .as("PSNR against the pictures, over PSNR against each picture's pair partner")
+        .isGreaterThan(psnrAgainst(media, interlacedSourcePictures(), "shuffleframes=1 0,"));
+  }
+
+  @Test
+  @DisplayName(
+      "Should upload the same initialization segment and output frame rate when a replacement"
+          + " attempt deinterlaces from a seek")
+  void shouldUploadTheSameInitializationSegmentAndOutputFrameRateWhenAReplacementAttemptSeeks()
+      throws Exception {
+    var source = interlacedSource("tff");
+    var job = interlacedSourceJob(source, FieldOrder.FIELD_ORDER_TT);
+
+    var initial = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+    job.getExecutionBuilder().setStartSequenceNumber(INTERLACED_REPLACEMENT_START);
+    job.setJobAttemptId(toProto(UUID.randomUUID()));
+    var replacement = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(replacement.names()).containsExactly("init.mp4", "segment2.m4s");
+    assertThat(replacement.segments())
+        .containsEntry("init.mp4", initial.segments().get("init.mp4"));
+    var media = playable(replacement.contentOf(replacement.names()));
+    assertDecodes(media);
+    assertThat(videoStreamEntry(media, "r_frame_rate")).isEqualTo("60000/1001");
+    assertThat(videoStreamEntry(media, "field_order")).isEqualTo("progressive");
+    // One segment of one frame per field.
+    assertThat(countedFrames(media))
+        .isEqualTo(2 * INTERLACED_SOURCE_FRAMES / INTERLACED_SOURCE_SEGMENT_COUNT);
+    var framesBeforeTheReplacement =
+        countedFrames(playable(initial.contentOf(initial.names()))) - countedFrames(media);
+    var replacedFrames = "trim=start_frame=" + framesBeforeTheReplacement + ",";
+    assertThat(psnrAgainst(media, interlacedSourcePictures(), replacedFrames))
+        .as("PSNR against the pictures, over PSNR against the woven frames")
+        .isGreaterThan(psnrAgainst(media, source, WOVEN_FRAMES_AT_THE_FIELD_RATE + replacedFrames));
+  }
+
+  // Interlaced video at 320x180, written one frame per field at 59.94 fps.
+  private static VariantJob.Builder interlacedSourceJob(Path source, FieldOrder fieldOrder) {
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    // 320x180 at 59.94 fps needs H.264 level 2.1.
+    withVideo(
+        job,
+        forcedSoftwareEncode("h264", 21)
+            .setDeinterlace(
+                Deinterlace.newBuilder()
+                    .setFieldOrder(fieldOrder)
+                    .setOutput(DeinterlaceOutput.DEINTERLACE_OUTPUT_ONE_FRAME_PER_FIELD)));
+    job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
+    job.getDecisionBuilder().getAudioBuilder().setMode(AudioMode.AUDIO_MODE_NONE);
+    job.getVariantBuilder().setWidth(320).setHeight(180).setBitrateBitsPerSecond(1_000_000);
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(3)
+        .setMediaSegmentCount(INTERLACED_SOURCE_SEGMENT_COUNT)
+        .setFramerate(30000.0 / 1001)
+        .setOutputFrameRate(Fraction.newBuilder().setNumerator(60000).setDenominator(1001));
+    return job;
+  }
+
+  // The progressive 59.94 fps pictures whose fields the interlaced sources weave together.
+  private static synchronized Path interlacedSourcePictures() throws Exception {
+    return buildFixtureOnce(
+        interlacedSources.resolve("pictures.mkv"),
+        output ->
+            runFfmpeg(
+                List.of(
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc2=size=320x180:rate=60000/1001",
+                    "-frames:v",
+                    String.valueOf(2 * INTERLACED_SOURCE_FRAMES),
+                    "-c:v",
+                    "ffv1"),
+                output));
+  }
+
+  // libx264 codes the woven frames as field pairs, with the given field first.
+  private static synchronized Path interlacedSource(String parity) throws Exception {
+    var pictures = interlacedSourcePictures();
+    var interleave = parity.equals("tff") ? "interleave_top" : "interleave_bottom";
+    return buildFixtureOnce(
+        interlacedSources.resolve(parity + ".mp4"),
+        output ->
+            runFfmpeg(
+                List.of(
+                    "-i",
+                    pictures.toString(),
+                    "-vf",
+                    "tinterlace=mode=" + interleave + ",setfield=" + parity,
+                    "-c:v",
+                    "libx264",
+                    "-flags",
+                    "+ildct+ilme",
+                    "-x264opts",
+                    parity + "=1",
+                    "-qp",
+                    "10",
+                    "-g",
+                    "30",
+                    "-pix_fmt",
+                    "yuv420p"),
+                output));
+  }
+
+  private static Map<String, Integer> idetMultiFrameCounts(Path media) throws Exception {
+    var output =
+        runToCompletion(
+            List.of(
+                "ffmpeg",
+                "-nostdin",
+                "-hide_banner",
+                "-i",
+                media.toString(),
+                "-vf",
+                "idet",
+                "-f",
+                "null",
+                "-"));
+    // FFmpeg configures the filter graph twice and idet reports on each; the last report counts
+    // the frames.
+    var reports = IDET_MULTI_FRAME.matcher(output).results().toList();
+    assertThat(reports).as(output).isNotEmpty();
+    var counts = reports.getLast();
+    return Map.of(
+        "TFF", Integer.parseInt(counts.group(1)),
+        "BFF", Integer.parseInt(counts.group(2)),
+        "PROGRESSIVE", Integer.parseInt(counts.group(3)));
+  }
+
+  private static String videoStreamEntry(Path media, String entry) throws Exception {
+    return runToCompletion(
+            List.of(
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=" + entry,
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                media.toString()))
+        .strip();
+  }
+
+  private static int countedFrames(Path media) throws Exception {
+    return Integer.parseInt(
+        runToCompletion(
+                List.of(
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-count_frames",
+                    "-select_streams",
+                    "v:0",
+                    "-show_entries",
+                    "stream=nb_read_frames",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    media.toString()))
+            .strip());
+  }
+
+  // The average luma and chroma PSNR of the media against the reference after the reference
+  // filter, comparing frames by their order.
+  private static double psnrAgainst(Path media, Path reference, String referenceFilter)
+      throws Exception {
+    var output =
+        runToCompletion(
+            List.of(
+                "ffmpeg",
+                "-nostdin",
+                "-hide_banner",
+                "-i",
+                media.toString(),
+                "-i",
+                reference.toString(),
+                "-lavfi",
+                "[0:v]setpts=N/TB/100[media];[1:v]"
+                    + referenceFilter
+                    + "setpts=N/TB/100[reference];[media][reference]psnr",
+                "-f",
+                "null",
+                "-"));
+    var matcher = PSNR_AVERAGE.matcher(output);
+    assertThat(matcher.find()).as(output).isTrue();
+    return Double.parseDouble(matcher.group(1));
   }
 
   @Test

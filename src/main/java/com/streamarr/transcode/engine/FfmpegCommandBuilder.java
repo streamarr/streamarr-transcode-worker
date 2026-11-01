@@ -472,8 +472,10 @@ public class FfmpegCommandBuilder {
         toneMaps(job)
             ? ""
             : ":out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709";
+    // The deinterlacer runs first, so that no filter mixes the two fields of a frame.
     var videoFilter =
-        trimStart.map(start -> "trim=start=" + start + ",").orElse("")
+        deinterlaceFilter(job)
+            + trimStart.map(start -> "trim=start=" + start + ",").orElse("")
             + "scale=-2:"
             + request.height()
             + colorConversion
@@ -493,6 +495,14 @@ public class FfmpegCommandBuilder {
             "-b:v", bitrate,
             "-maxrate", bitrate,
             "-bufsize", String.valueOf(request.bitrate() * 2)));
+  }
+
+  private static String deinterlaceFilter(TranscodeJob job) {
+    return switch (job.request().transcodeDecision().videoDecision()) {
+      case VideoDecision.Copy _ -> "";
+      case VideoDecision.Encode encode ->
+          encode.deinterlace().map(deinterlace -> deinterlace.filter() + ",").orElse("");
+    };
   }
 
   private static String videoFormat(TranscodeJob job) {
