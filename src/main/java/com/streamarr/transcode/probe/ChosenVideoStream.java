@@ -32,7 +32,8 @@ record ChosenVideoStream(
     return Optional.empty();
   }
 
-  private static Optional<Long> trackId(JsonNode stream) {
+  /** The MP4 track_ID that ffprobe reports as the stream id; empty for other containers. */
+  static Optional<Long> trackId(JsonNode stream) {
     var id = stream.path("id").asString("");
     if (!id.startsWith("0x")) {
       return Optional.empty();
