@@ -35,11 +35,12 @@ class Mp4StreamMeasurerTest {
 
   @TempDir Path temporaryDirectory;
 
+  // A stream copy without -copyinkf drops a track's samples before its first keyframe.
   @Test
   @DisplayName(
-      "Should count the samples before the first keyframe in the first interval when the track has"
-          + " no edit list")
-  void shouldCountSamplesBeforeFirstKeyframeInFirstIntervalWhenTrackHasNoEditList()
+      "Should keep the keyframes but measure nothing when the track has no edit list and its first"
+          + " sample is not a keyframe")
+  void shouldKeepKeyframesButMeasureNothingWhenTrackHasNoEditListAndFirstSampleIsNotKeyframe()
       throws Exception {
     var source =
         write(
@@ -51,17 +52,8 @@ class Mp4StreamMeasurerTest {
 
     var index = Mp4SyncSampleReader.read(source, VIDEO, List.of(VIDEO));
 
-    assertThat(index.measured())
-        .singleElement()
-        .satisfies(
-            video -> {
-              assertThat(video.measuredBytes()).isEqualTo(60);
-              assertThat(video.packetCount()).isEqualTo(6);
-              assertThat(video.timescale()).isEqualTo(1_000);
-              assertThat(video.measuredDuration()).isEqualTo(600);
-              assertThat(video.intervalBytes()).containsExactly(40, 20);
-              assertThat(video.intervalPacketCounts()).containsExactly(4, 2);
-            });
+    assertThat(index.keyframes()).isInstanceOf(Listed.class);
+    assertThat(index.measured()).isEmpty();
   }
 
   @Test

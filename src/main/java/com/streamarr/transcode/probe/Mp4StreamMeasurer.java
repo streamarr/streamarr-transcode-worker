@@ -32,9 +32,10 @@ import lombok.Builder;
  *
  * <p>Apart from the two bytes that start an AAC track, the measurer reads no media data. It
  * measures nothing when one track's samples cannot be listed exactly, such as under an edit list
- * that FFmpeg applies by dropping samples the measurer does not model, or when a stream copy would
- * deliver a required track's samples at other sizes than its sample table lists ({@link
- * CopiedSampleSizes}), because the server counts the measured bytes as the copy's delivered bytes.
+ * that FFmpeg applies by dropping samples the measurer does not model, when a track's first kept
+ * sample is not a keyframe, which a stream copy drops, or when a stream copy would deliver a
+ * required track's samples at other sizes than its sample table lists ({@link CopiedSampleSizes}),
+ * because the server counts the measured bytes as the copy's delivered bytes.
  */
 final class Mp4StreamMeasurer {
 
@@ -270,6 +271,11 @@ final class Mp4StreamMeasurer {
     }
 
     Optional<TrackMeasurement> measure(int streamIndex, Track chosen, List<Keyframe> keyframes) {
+      // A stream copy drops the samples before a track's first keyframe.
+      if (!sync[first]) {
+        return Optional.empty();
+      }
+
       var intervals = new long[keyframes.size()];
       var packets = new int[keyframes.size()];
       var boundaries = boundaries(chosen, keyframes);
