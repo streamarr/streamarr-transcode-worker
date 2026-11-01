@@ -358,7 +358,7 @@ public class FfmpegCommandBuilder {
     cmd.addAll(List.of("-c:v", job.videoEncoder()));
     addPresetArgs(cmd, job);
     PlayableSampleEntry.ofEncoder(job.videoEncoder())
-        .ifPresent(entry -> cmd.addAll(List.of("-tag:v", entry.tag())));
+        .ifPresent(entry -> cmd.addAll(tagArgs(entry)));
     cmd.addAll(forcedCodecProfileArgs(job));
     addScaleAndBitrateArgs(cmd, job, trimStart(job.request(), input));
     if (input == EncoderInput.COPY_OF_THE_SOURCE) {
@@ -406,10 +406,16 @@ public class FfmpegCommandBuilder {
   // record to the mp4 muxer unchanged. Any other copy turns its samples into Annex B first.
   private static List<String> sampleEntryArgs(VideoDecision.Copy copy, PlayableSampleEntry entry) {
     if (copy.keepsPacketBytes()) {
-      return List.of("-tag:v", entry.tag());
+      return tagArgs(entry);
     }
 
-    return List.of("-bsf:v", entry.annexBFilter(), "-tag:v", entry.tag());
+    var args = new ArrayList<>(List.of("-bsf:v", entry.annexBFilter()));
+    args.addAll(tagArgs(entry));
+    return List.copyOf(args);
+  }
+
+  private static List<String> tagArgs(PlayableSampleEntry entry) {
+    return List.of("-tag:v", entry.tag());
   }
 
   // Hardware encoders take no preset until the preset scale has rows for them (ADR 0044).
