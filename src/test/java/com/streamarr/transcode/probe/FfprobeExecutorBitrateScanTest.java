@@ -255,6 +255,40 @@ class FfprobeExecutorBitrateScanTest {
 
   @Test
   @DisplayName(
+      "Should count the chunk's packets when its times are nanoseconds beyond the range of a"
+          + " product of two of them")
+  void shouldCountTheChunksPacketsWhenItsTimesAreNanosecondsBeyondTheRangeOfAProduct() {
+    // At 1/1,000,000,000, a time past 9.22 s times the time base's denominator overflows a long.
+    var nanoseconds = MATROSKA_STREAMS.formatted("aac").replace("\"1/1000\"", "\"1/1000000000\"");
+    var positions =
+        POSITIONS.toBuilder()
+            .timeBaseDenominator(1_000_000_000)
+            .clearKeyframes()
+            .keyframe(new Keyframe(0, 0))
+            .keyframe(new Keyframe(20_000_000_000L, 20_000_000_000L))
+            .keyframe(new Keyframe(40_000_000_000L, 40_000_000_000L))
+            .build();
+    var afterTheSeek =
+        """
+        stream_index=0|pts=10500000000|dts=10500000000|duration=500000000|size=900|flags=K__
+        stream_index=1|pts=10500000000|dts=10500000000|duration=250000000|size=9|flags=K__
+        stream_index=0|pts=20500000000|dts=20500000000|duration=500000000|size=1001|flags=K__
+        stream_index=1|pts=20500000000|dts=20500000000|duration=250000000|size=10|flags=K__
+        stream_index=0|pts=40500000000|dts=40500000000|duration=500000000|size=1002|flags=K__
+        stream_index=1|pts=40500000000|dts=40500000000|duration=250000000|size=11|flags=K__
+        """;
+    var ffprobe = keptAacSource().streams(nanoseconds).listing("10.500000", afterTheSeek).build();
+
+    var report = ffprobe.executor().probe(SOURCE, request(positions.chunk(1, 2)));
+
+    assertThat(intervalCounts(report.streamMeasurementParts()))
+        .containsExactly(
+            Map.entry(0, counts(List.of(1001L), List.of(1L))),
+            Map.entry(1, counts(List.of(10L), List.of(1L))));
+  }
+
+  @Test
+  @DisplayName(
       "Should keep each audio time within the chunk's keyframes on the zero-based timeline when the"
           + " container start is no whole tick of both time bases")
   void shouldKeepEachAudioTimeWithinTheChunksKeyframesOnTheZeroBasedTimelineWhenTheStartIsUneven() {
