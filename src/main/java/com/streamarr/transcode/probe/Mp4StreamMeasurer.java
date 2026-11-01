@@ -377,243 +377,245 @@ final class Mp4StreamMeasurer {
     private static long rescaleUp(long ticks, long timescale, long fromTimescale) {
       return Math.ceilDiv(Math.multiplyExact(ticks, timescale), fromTimescale);
     }
-  }
 
-  @Builder
-  private record Timing(
-      boolean isVideo,
-      long timescale,
-      long movieTimescale,
-      boolean hasEditList,
-      Edit edit,
-      ByteBuffer sampleTable,
-      List<Run> durationRuns) {}
+    @Builder
+    private record Timing(
+        boolean isVideo,
+        long timescale,
+        long movieTimescale,
+        boolean hasEditList,
+        Edit edit,
+        ByteBuffer sampleTable,
+        List<Run> durationRuns) {}
 
-  private static Track timed(Timing timing, int[] sizes) {
-    var count = sizes.length;
-    var offsets =
-        timing.isVideo()
-            ? child(timing.sampleTable(), "ctts").map(Mp4SampleTables::runs).orElse(List.<Run>of())
-            : List.<Run>of();
-    var shift = timing.edit().shift(timing.movieTimescale(), timing.timescale());
-    var decodeShift = decodeShift(offsets);
-    var sync = syncSamples(timing.sampleTable(), count);
-    var presentationTimes = new long[count];
-    var decodeTimes = new long[count];
-    var durations = new long[count];
-    var offsetRuns = new RunCursor(offsets);
-    var sample = 0;
-    long decodeTime = 0;
-    for (var run : timing.durationRuns()) {
-      if (run.value() < 0) {
-        throw malformed("negative stts duration");
+    private static Track timed(Timing timing, int[] sizes) {
+      var count = sizes.length;
+      var offsets =
+          timing.isVideo()
+              ? child(timing.sampleTable(), "ctts")
+                  .map(Mp4SampleTables::runs)
+                  .orElse(List.<Run>of())
+              : List.<Run>of();
+      var shift = timing.edit().shift(timing.movieTimescale(), timing.timescale());
+      var decodeShift = decodeShift(offsets);
+      var sync = syncSamples(timing.sampleTable(), count);
+      var presentationTimes = new long[count];
+      var decodeTimes = new long[count];
+      var durations = new long[count];
+      var offsetRuns = new RunCursor(offsets);
+      var sample = 0;
+      long decodeTime = 0;
+      for (var run : timing.durationRuns()) {
+        if (run.value() < 0) {
+          throw malformed("negative stts duration");
+        }
+
+        for (long i = 0; i < run.count(); i++, sample++) {
+          var offset = offsetRuns.next();
+          presentationTimes[sample] = decodeTime + offset;
+          decodeTimes[sample] = decodeTime - decodeShift;
+          durations[sample] = run.value();
+          decodeTime += run.value();
+        }
       }
 
-      for (long i = 0; i < run.count(); i++, sample++) {
-        var offset = offsetRuns.next();
-        presentationTimes[sample] = decodeTime + offset;
-        decodeTimes[sample] = decodeTime - decodeShift;
-        durations[sample] = run.value();
-        decodeTime += run.value();
+      var first = firstKept(timing, presentationTimes, sync);
+      var presentsBeforeEditStart = false;
+      for (var i = first; timing.hasEditList() && i < count; i++) {
+        presentsBeforeEditStart |= presentationTimes[i] < timing.edit().mediaTime();
       }
+
+      if (timing.hasEditList() && dropsSamplesAfterEnd(timing, presentationTimes, durations)) {
+        throw malformed("edit list ends before the track's last sample");
+      }
+
+      for (var i = 0; i < count; i++) {
+        presentationTimes[i] = Math.addExact(presentationTimes[i], shift);
+        decodeTimes[i] = Math.addExact(decodeTimes[i], shift);
+      }
+
+      return Track.builder()
+          .isVideo(timing.isVideo())
+          .timescale(timing.timescale())
+          .sizes(sizes)
+          .presentationTimes(presentationTimes)
+          .decodeTimes(decodeTimes)
+          .durations(durations)
+          .sync(sync)
+          .first(first)
+          .presentsBeforeEditStart(presentsBeforeEditStart)
+          .build();
     }
 
-    var first = firstKept(timing, presentationTimes, sync);
-    var presentsBeforeEditStart = false;
-    for (var i = first; timing.hasEditList() && i < count; i++) {
-      presentsBeforeEditStart |= presentationTimes[i] < timing.edit().mediaTime();
+    /**
+     * Without an edit list FFmpeg keeps every sample. Under one it keeps a video track's samples
+     * from the last keyframe that presents at or before the edit's media time, and an audio track's
+     * samples from one second before the media time, so the measurer measures an audio track only
+     * while that second reaches back to its first sample.
+     */
+    private static int firstKept(Timing timing, long[] presentationTimes, boolean[] sync) {
+      if (!timing.hasEditList()) {
+        return 0;
+      }
+
+      if (!timing.isVideo()) {
+        return firstKeptAudioSample(timing);
+      }
+
+      return lastSyncSampleAtOrBefore(timing.edit().mediaTime(), presentationTimes, sync);
     }
 
-    if (timing.hasEditList() && dropsSamplesAfterEnd(timing, presentationTimes, durations)) {
-      throw malformed("edit list ends before the track's last sample");
-    }
+    private static int firstKeptAudioSample(Timing timing) {
+      if (timing.edit().mediaTime() > timing.timescale()) {
+        throw malformed("edit list trims more than one second of audio");
+      }
 
-    for (var i = 0; i < count; i++) {
-      presentationTimes[i] = Math.addExact(presentationTimes[i], shift);
-      decodeTimes[i] = Math.addExact(decodeTimes[i], shift);
-    }
-
-    return Track.builder()
-        .isVideo(timing.isVideo())
-        .timescale(timing.timescale())
-        .sizes(sizes)
-        .presentationTimes(presentationTimes)
-        .decodeTimes(decodeTimes)
-        .durations(durations)
-        .sync(sync)
-        .first(first)
-        .presentsBeforeEditStart(presentsBeforeEditStart)
-        .build();
-  }
-
-  /**
-   * Without an edit list FFmpeg keeps every sample. Under one it keeps a video track's samples from
-   * the last keyframe that presents at or before the edit's media time, and an audio track's
-   * samples from one second before the media time, so the measurer measures an audio track only
-   * while that second reaches back to its first sample.
-   */
-  private static int firstKept(Timing timing, long[] presentationTimes, boolean[] sync) {
-    if (!timing.hasEditList()) {
       return 0;
     }
 
-    if (!timing.isVideo()) {
-      return firstKeptAudioSample(timing);
-    }
-
-    return lastSyncSampleAtOrBefore(timing.edit().mediaTime(), presentationTimes, sync);
-  }
-
-  private static int firstKeptAudioSample(Timing timing) {
-    if (timing.edit().mediaTime() > timing.timescale()) {
-      throw malformed("edit list trims more than one second of audio");
-    }
-
-    return 0;
-  }
-
-  private static int lastSyncSampleAtOrBefore(
-      long mediaTime, long[] presentationTimes, boolean[] sync) {
-    var first = -1;
-    for (var sample = 0; sample < presentationTimes.length; sample++) {
-      if (sync[sample] && presentationTimes[sample] <= mediaTime) {
-        first = sample;
-      }
-    }
-
-    if (first < 0) {
-      throw malformed("no sync sample presents at or before the edit's media time");
-    }
-
-    return first;
-  }
-
-  /**
-   * FFmpeg stops a track at the first audio sample that reaches the edit's end, and after the
-   * keyframes that follow a video track's end. The measurer models neither, so it measures a track
-   * only when no sample starts at or after that end, or, for audio, only the last sample reaches
-   * it.
-   */
-  private static boolean dropsSamplesAfterEnd(
-      Timing timing, long[] presentationTimes, long[] durations) {
-    var mediaEnd = timing.edit().mediaEnd(timing.movieTimescale(), timing.timescale());
-    var last = presentationTimes.length - 1;
-    for (var sample = 0; sample < presentationTimes.length; sample++) {
-      if (timing.isVideo() && presentationTimes[sample] >= mediaEnd) {
-        return true;
+    private static int lastSyncSampleAtOrBefore(
+        long mediaTime, long[] presentationTimes, boolean[] sync) {
+      var first = -1;
+      for (var sample = 0; sample < presentationTimes.length; sample++) {
+        if (sync[sample] && presentationTimes[sample] <= mediaTime) {
+          first = sample;
+        }
       }
 
-      if (!timing.isVideo()
-          && sample < last
-          && presentationTimes[sample] + durations[sample] >= mediaEnd) {
-        return true;
+      if (first < 0) {
+        throw malformed("no sync sample presents at or before the edit's media time");
       }
+
+      return first;
     }
 
-    return false;
-  }
+    /**
+     * FFmpeg stops a track at the first audio sample that reaches the edit's end, and after the
+     * keyframes that follow a video track's end. The measurer models neither, so it measures a
+     * track only when no sample starts at or after that end, or, for audio, only the last sample
+     * reaches it.
+     */
+    private static boolean dropsSamplesAfterEnd(
+        Timing timing, long[] presentationTimes, long[] durations) {
+      var mediaEnd = timing.edit().mediaEnd(timing.movieTimescale(), timing.timescale());
+      var last = presentationTimes.length - 1;
+      for (var sample = 0; sample < presentationTimes.length; sample++) {
+        if (timing.isVideo() && presentationTimes[sample] >= mediaEnd) {
+          return true;
+        }
 
-  private static boolean[] syncSamples(ByteBuffer sampleTable, int count) {
-    var sync = new boolean[count];
-    var table = child(sampleTable, "stss");
-    if (table.isEmpty()) {
-      Arrays.fill(sync, true);
+        if (!timing.isVideo()
+            && sample < last
+            && presentationTimes[sample] + durations[sample] >= mediaEnd) {
+          return true;
+        }
+      }
+
+      return false;
+    }
+
+    private static boolean[] syncSamples(ByteBuffer sampleTable, int count) {
+      var sync = new boolean[count];
+      var table = child(sampleTable, "stss");
+      if (table.isEmpty()) {
+        Arrays.fill(sync, true);
+        return sync;
+      }
+
+      var box = table.get();
+      box.getInt();
+      var entries = Integer.toUnsignedLong(box.getInt());
+      for (long i = 0; i < entries; i++) {
+        var sample = Integer.toUnsignedLong(box.getInt());
+        if (sample >= 1 && sample <= count) {
+          sync[(int) (sample - 1)] = true;
+        }
+      }
+
       return sync;
     }
 
-    var box = table.get();
-    box.getInt();
-    var entries = Integer.toUnsignedLong(box.getInt());
-    for (long i = 0; i < entries; i++) {
-      var sample = Integer.toUnsignedLong(box.getInt());
-      if (sample >= 1 && sample <= count) {
-        sync[(int) (sample - 1)] = true;
+    /** Every sample's size, from stsz or stz2, as unsigned 32-bit values. */
+    private static int[] sampleSizes(ByteBuffer sampleTable) {
+      var sizes = child(sampleTable, "stsz");
+      if (sizes.isPresent()) {
+        return sizeTable(sizes.get());
       }
+
+      return compactSizeTable(child(sampleTable, "stz2").orElseThrow(() -> malformed("stsz")));
     }
 
-    return sync;
-  }
+    private static int[] sizeTable(ByteBuffer box) {
+      skip(box, 4);
+      var constantSize = box.getInt();
+      var count = sampleCount(Integer.toUnsignedLong(box.getInt()));
+      var sizes = new int[count];
+      if (constantSize != 0) {
+        Arrays.fill(sizes, constantSize);
+        return sizes;
+      }
 
-  /** Every sample's size, from stsz or stz2, as unsigned 32-bit values. */
-  private static int[] sampleSizes(ByteBuffer sampleTable) {
-    var sizes = child(sampleTable, "stsz");
-    if (sizes.isPresent()) {
-      return sizeTable(sizes.get());
-    }
+      if (box.remaining() / Integer.BYTES < count) {
+        throw malformed("stsz shorter than its sample count");
+      }
 
-    return compactSizeTable(child(sampleTable, "stz2").orElseThrow(() -> malformed("stsz")));
-  }
+      for (var i = 0; i < count; i++) {
+        sizes[i] = box.getInt();
+      }
 
-  private static int[] sizeTable(ByteBuffer box) {
-    skip(box, 4);
-    var constantSize = box.getInt();
-    var count = sampleCount(Integer.toUnsignedLong(box.getInt()));
-    var sizes = new int[count];
-    if (constantSize != 0) {
-      Arrays.fill(sizes, constantSize);
       return sizes;
     }
 
-    if (box.remaining() / Integer.BYTES < count) {
-      throw malformed("stsz shorter than its sample count");
+    private static int[] compactSizeTable(ByteBuffer box) {
+      skip(box, 7);
+      var fieldBits = box.get() & 0xFF;
+      var count = sampleCount(Integer.toUnsignedLong(box.getInt()));
+      if (fieldBits != 4 && fieldBits != 8 && fieldBits != 16) {
+        throw malformed("stz2 field size");
+      }
+
+      if (box.remaining() * 8L / fieldBits < count) {
+        throw malformed("stz2 shorter than its sample count");
+      }
+
+      var sizes = new int[count];
+      for (var i = 0; i < count; i++) {
+        sizes[i] =
+            switch (fieldBits) {
+              case 4 -> (box.get(box.position() + i / 2) >> (i % 2 == 0 ? 4 : 0)) & 0x0F;
+              case 8 -> box.get(box.position() + i) & 0xFF;
+              default -> box.getShort(box.position() + 2 * i) & 0xFFFF;
+            };
+      }
+
+      return sizes;
     }
 
-    for (var i = 0; i < count; i++) {
-      sizes[i] = box.getInt();
+    private static int sampleCount(long count) {
+      if (count > MAXIMUM_SAMPLES) {
+        throw malformed("more samples than the measurer lists");
+      }
+
+      return (int) count;
     }
 
-    return sizes;
-  }
-
-  private static int[] compactSizeTable(ByteBuffer box) {
-    skip(box, 7);
-    var fieldBits = box.get() & 0xFF;
-    var count = sampleCount(Integer.toUnsignedLong(box.getInt()));
-    if (fieldBits != 4 && fieldBits != 8 && fieldBits != 16) {
-      throw malformed("stz2 field size");
+    /**
+     * FFmpeg's mov demuxer returns an audio track whose only stts entry gives every sample a
+     * duration of 1, as uncompressed audio often has, as packets of whole chunks rather than one
+     * packet for each sample. The measurer measures samples, so it leaves such a track out. It also
+     * leaves out an audio track with composition offsets, whose times it does not model.
+     */
+    private static boolean isChunkedAudio(List<Run> durationRuns) {
+      return durationRuns.size() == 1 && durationRuns.getFirst().value() == 1;
     }
 
-    if (box.remaining() * 8L / fieldBits < count) {
-      throw malformed("stz2 shorter than its sample count");
+    private static long totalCount(List<Run> runs) {
+      return runs.stream().mapToLong(Run::count).sum();
     }
 
-    var sizes = new int[count];
-    for (var i = 0; i < count; i++) {
-      sizes[i] =
-          switch (fieldBits) {
-            case 4 -> (box.get(box.position() + i / 2) >> (i % 2 == 0 ? 4 : 0)) & 0x0F;
-            case 8 -> box.get(box.position() + i) & 0xFF;
-            default -> box.getShort(box.position() + 2 * i) & 0xFFFF;
-          };
+    private static String handlerType(ByteBuffer handler) {
+      skip(handler, 8);
+      return fourCharacterCode(handler);
     }
-
-    return sizes;
-  }
-
-  private static int sampleCount(long count) {
-    if (count > MAXIMUM_SAMPLES) {
-      throw malformed("more samples than the measurer lists");
-    }
-
-    return (int) count;
-  }
-
-  /**
-   * FFmpeg's mov demuxer returns an audio track whose only stts entry gives every sample a duration
-   * of 1, as uncompressed audio often has, as packets of whole chunks rather than one packet for
-   * each sample. The measurer measures samples, so it leaves such a track out. It also leaves out
-   * an audio track with composition offsets, whose times it does not model.
-   */
-  private static boolean isChunkedAudio(List<Run> durationRuns) {
-    return durationRuns.size() == 1 && durationRuns.getFirst().value() == 1;
-  }
-
-  private static long totalCount(List<Run> runs) {
-    return runs.stream().mapToLong(Run::count).sum();
-  }
-
-  private static String handlerType(ByteBuffer handler) {
-    skip(handler, 8);
-    return fourCharacterCode(handler);
   }
 }
