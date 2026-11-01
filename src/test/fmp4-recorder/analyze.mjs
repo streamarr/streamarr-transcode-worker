@@ -301,6 +301,21 @@ const FIXTURES = [
       'inside segment 28: FFmpeg flushes the encoder once the whole input has ended.',
     hlsComparisons: [],
   },
+  {
+    name: '18-copy-hevc-keeping-packet-bytes', source: 'hevc.mp4', mode: 'copy', copyKeepsPacketBytes: true,
+    encoder: null, seek: 0, start: 0,
+    proves: 'Stream copy of an HEVC source whose hvcC record holds its VPS, SPS and PPS and whose samples carry ' +
+      'none, without the Annex B filter, as a job that says the copy keeps every packet\'s bytes runs it: every ' +
+      'video sample keeps its source packet\'s bytes, so no keyframe sample repeats a parameter set that the hvc1 ' +
+      'record declares complete.',
+    hlsComparisons: [],
+  },
+  {
+    name: '18-copy-hevc-annex-b', source: 'hevc.mp4', mode: 'copy', encoder: null, seek: 0, start: 0,
+    proves: 'The same source copied through hevc_mp4toannexb, as every other job runs it: the filter puts the ' +
+      'record\'s VPS, SPS and PPS in front of every keyframe sample, bytes that the source packets do not hold.',
+    hlsComparisons: [],
+  },
 ];
 
 const INITIALIZATION_SEGMENT_IDENTITY_PAIRS = [
@@ -318,6 +333,11 @@ const INITIALIZATION_SEGMENT_IDENTITY_PAIRS = [
   ],
   ['encode (libsvtav1), start 0 vs a replacement attempt from segment 5', '09-svtav1-vfr', '09-svtav1-vfr-seek30'],
   ['encode (libx265), start 0 vs a replacement attempt from segment 5', '13-x265-cfr', '13-x265-cfr-seek30'],
+  [
+    'HEVC stream copy whose record holds its parameter sets, without vs with the Annex B filter',
+    '18-copy-hevc-keeping-packet-bytes',
+    '18-copy-hevc-annex-b',
+  ],
 ];
 const INITIALIZATION_SEGMENT_DIFFERENCE_PAIRS = [
   ['encode vs stream copy of the same source', '01-encode-cfr', '07-copy-start0'],
@@ -377,6 +397,7 @@ function fixtureRecord({ fixture, record, source, pipe, work }) {
     mode: fixture.mode,
     audio: fixture.audio ?? fixture.mode,
     encoder: fixture.encoder,
+    copyKeepsPacketBytes: fixture.copyKeepsPacketBytes ?? false,
     source: {
       file: fixture.source,
       containerStartTimeMicros: source.startMicros,
@@ -402,6 +423,10 @@ function initializationSegmentPairOf(pipe, [label, first, second]) {
   return initializationSegmentPair(label, [first, pipe.get(first).stream], [second, pipe.get(second).stream]);
 }
 
+function sameSizes(first, second) {
+  return first.length === second.length && first.every((size, index) => size === second[index]);
+}
+
 function sideClaims(work, pipe) {
   const folder = join(work, 'claims');
   const claim = (name) => {
@@ -422,7 +447,26 @@ function sideClaims(work, pipe) {
   const cfr = claim('encode-seek30-fps-mode-cfr');
   const cfrSamples = videoSamples(readFiles([cfr.path]));
   const seekSamples = videoSamples(pipe.get('01-encode-cfr-seek30').stream);
+  const hevcPacketSizes = readFileSync(join(work, 'src', 'hevc.mp4.packet-sizes.csv'), 'utf8')
+    .trim()
+    .split('\n')
+    .map(Number);
+  const hevcCopy = (name) => videoSamples(pipe.get(name).stream);
+  const grownBy = (samples) =>
+    samples.map((sample, index) => ({ sync: sample.sync, grown: sample.size - hevcPacketSizes[index] }));
+  const annexB = grownBy(hevcCopy('18-copy-hevc-annex-b'));
   return {
+    hevcCopyWithoutAnnexBKeepsEveryPacketSize: sameSizes(
+      hevcCopy('18-copy-hevc-keeping-packet-bytes').map((sample) => sample.size),
+      hevcPacketSizes,
+    ),
+    hevcAnnexBFilterGrowsOnlyKeyframes: {
+      videoSamples: annexB.length,
+      sourcePackets: hevcPacketSizes.length,
+      grownKeyframes: annexB.filter((sample) => sample.sync && sample.grown > 0).length,
+      keyframes: annexB.filter((sample) => sample.sync).length,
+      changedOtherSamples: annexB.filter((sample) => !sample.sync && sample.grown !== 0).length,
+    },
     mpegTsAacCopyWithoutAdtstoasc: { exitStatus: ts.status, firstLogLine: ts.firstLogLine },
     adtstoascLeavesMp4SourceCopyByteIdentical: claim('mp4-copy-without-adtstoasc').data.equals(recorded('07-copy-start0')),
     maxDelayLeavesMp4OutputByteIdentical: claim('encode-with-max-delay').data.equals(recorded('01-encode-cfr')),

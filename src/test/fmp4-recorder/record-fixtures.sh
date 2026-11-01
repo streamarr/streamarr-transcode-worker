@@ -74,6 +74,11 @@ COPY_PIPE=("${COPY_VIDEO_PIPE[@]}" -c:a copy -bsf:a aac_adtstoasc -b:a 0)
 COPY_PIPE_WITHOUT_ADTSTOASC=("${COPY_VIDEO_PIPE[@]}" -c:a copy -b:a 0)
 # The worker's audio transcode: the video copied, the audio encoded.
 COPY_VIDEO_ENCODE_AUDIO=("${COPY_VIDEO_PIPE[@]}" "${AAC[@]}")
+# A copy of an HEVC source whose record holds its parameter sets, with and without the Annex B filter: the
+# worker leaves the filter out when the job says that the copy keeps every packet's bytes.
+COPY_HEVC_AUDIO=(-c:a copy -bsf:a aac_adtstoasc -b:a 0)
+COPY_HEVC_KEEPING_PACKET_BYTES=(-c:v copy -tag:v hvc1 -strict unofficial "${COPY_HEVC_AUDIO[@]}")
+COPY_HEVC_ANNEX_B=(-c:v copy -bsf:v hevc_mp4toannexb -tag:v hvc1 -strict unofficial "${COPY_HEVC_AUDIO[@]}")
 # The HLS recipe's copies take the same video arguments, so that both recipes hold the same packets.
 COPY_HLS=("${COPY_VIDEO_PIPE[@]}" -c:a copy)
 COMMON_HLS=(-map_metadata -1 -map_chapters -1 -copyts -avoid_negative_ts disabled -max_muxing_queue_size 128 -max_delay 5000000)
@@ -219,6 +224,14 @@ VFR_SELECT="select='if(lt(n,300),gte(mod(n*7919,97),20),if(lt(n,600),not(mod(n,2
 "${FF[@]}" -f lavfi -i "$(lavfi 24000/1001 25)" -f lavfi -i "$SILENCE:duration=25" -map 0:v -map 1:a \
   "${SRC_X264[@]}" -g 240 -keyint_min 240 "${SRC_AAC[@]}" -fflags +bitexact src/gop10.mp4
 
+# HEVC whose hvcC record holds its parameter sets and whose samples carry none: libx265 then writes its
+# headers into the record alone (info=0 also leaves out its settings SEI, whose text names the host's
+# CPU features). 23.976 fps, a keyframe every 48 frames, B-frames, 20 s.
+"${FF[@]}" -f lavfi -i "$(lavfi 24000/1001 20)" -f lavfi -i "$SILENCE:duration=20" -map 0:v -map 1:a \
+  -c:v libx265 -pix_fmt yuv420p -tag:v hvc1 -x265-params keyint=48:min-keyint=48:scenecut=0:pools=none:frame-threads=1:info=0:log-level=error \
+  "${SRC_AAC[@]}" -fflags +bitexact src/hevc.mp4
+ffprobe -v error -select_streams v:0 -show_entries packet=size -of csv=p=0 src/hevc.mp4 > src/hevc.mp4.packet-sizes.csv
+
 for s in src/*.mp4 src/*.ts; do
   ffprobe -v error -show_entries format=start_time:stream=index,codec_type,codec_name,time_base,start_pts,start_time,r_frame_rate,avg_frame_rate \
     -of json "$s" > "$s.probe.json"
@@ -325,6 +338,10 @@ run pipe 16-copy-encode-audio-seek30 start=5 seek=30 src/cfr.mp4 -- "${COPY_VIDE
 # ------------------------------------------------------------------ 17. audio that ends 160 s before the video, copied and encoded
 run pipe 17-copy-audio-ends-long-before-video src/long-video.mp4 -- "${COPY_PIPE[@]}"
 run pipe 17-encode-audio-ends-long-before-video src/long-video.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}"
+
+# ------------------------------------------------------------------ 18. HEVC stream copy, with and without the Annex B filter
+run pipe 18-copy-hevc-keeping-packet-bytes src/hevc.mp4 -- "${COPY_HEVC_KEEPING_PACKET_BYTES[@]}"
+run pipe 18-copy-hevc-annex-b src/hevc.mp4 -- "${COPY_HEVC_ANNEX_B[@]}"
 
 # ------------------------------------------------------------------ side claims of ADR 0037 (recorded, not delivered)
 mkdir -p claims

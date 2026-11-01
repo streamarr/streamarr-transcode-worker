@@ -462,6 +462,14 @@ describe('violated claims', () => {
         mpegTsAacCopyWithoutAdtstoasc: { exitStatus: 0 },
         adtstoascLeavesMp4SourceCopyByteIdentical: false,
         maxDelayLeavesMp4OutputByteIdentical: false,
+        hevcCopyWithoutAnnexBKeepsEveryPacketSize: false,
+        hevcAnnexBFilterGrowsOnlyKeyframes: {
+          videoSamples: 456,
+          sourcePackets: 480,
+          grownKeyframes: 9,
+          keyframes: 10,
+          changedOtherSamples: 1,
+        },
         seekWithFpsModeCfr: { firstVideoPresentationTime: 720720n, videoSamples: 863, videoSamplesWithoutFpsMode: 863 },
       },
     };
@@ -480,7 +488,49 @@ describe('violated claims', () => {
       'an MPEG-TS AAC copy without aac_adtstoasc no longer fails',
       'aac_adtstoasc changes a copy from an MP4 source',
       '-max_delay changes mp4 output',
+      'an HEVC copy without the Annex B filter changes the size of a source packet',
+      'the HEVC copy with the Annex B filter does not hold one video sample for every source packet',
+      'hevc_mp4toannexb no longer adds the record to every keyframe sample and to nothing else',
       'an explicit -fps_mode cfr after a seek no longer pads from zero',
+    ]);
+  });
+});
+
+describe('Annex B side claims', () => {
+  const holdingClaims = (annexB) => ({
+    fixtures: [],
+    initializationSegmentIdentityPairs: [],
+    initializationSegmentDifferencePairs: [],
+    adrSideClaims: {
+      mpegTsAacCopyWithoutAdtstoasc: { exitStatus: 255 },
+      adtstoascLeavesMp4SourceCopyByteIdentical: true,
+      maxDelayLeavesMp4OutputByteIdentical: true,
+      hevcCopyWithoutAnnexBKeepsEveryPacketSize: true,
+      hevcAnnexBFilterGrowsOnlyKeyframes: {
+        videoSamples: 480,
+        sourcePackets: 480,
+        grownKeyframes: 10,
+        keyframes: 10,
+        changedOtherSamples: 0,
+        ...annexB,
+      },
+      seekWithFpsModeCfr: { firstVideoPresentationTime: 0n, videoSamples: 1583, videoSamplesWithoutFpsMode: 1007 },
+    },
+  });
+
+  it('Should name no claim when the Annex B filter grows every keyframe sample and nothing else', () => {
+    assert.deepEqual(violatedClaims(holdingClaims({})), []);
+  });
+
+  it('Should name the Annex B copy when its recording holds no keyframe sample', () => {
+    assert.deepEqual(violatedClaims(holdingClaims({ grownKeyframes: 0, keyframes: 0 })), [
+      'the HEVC copy with the Annex B filter does not hold one video sample for every source packet',
+    ]);
+  });
+
+  it('Should name hevc_mp4toannexb when it changes a sample that is not a keyframe', () => {
+    assert.deepEqual(violatedClaims(holdingClaims({ changedOtherSamples: 1 })), [
+      'hevc_mp4toannexb no longer adds the record to every keyframe sample and to nothing else',
     ]);
   });
 });

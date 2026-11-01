@@ -79,7 +79,9 @@ final class VideoDecisions {
       VideoDynamicRanges.of(video.getSourceDynamicRange());
     }
 
-    return new VideoDecision.Copy(video.getStreamIndex(), video.getCodecString());
+    // A server that does not send the field leaves it false, so the copy keeps the Annex B filter.
+    return new VideoDecision.Copy(
+        video.getStreamIndex(), video.getCodecString(), video.getCopyKeepsPacketBytes());
   }
 
   @SuppressWarnings("checkstyle:fullyQualifiedName")

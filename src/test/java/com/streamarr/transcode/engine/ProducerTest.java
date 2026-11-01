@@ -33,16 +33,19 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.lang.Thread.State;
 import java.lang.management.ManagementFactory;
+import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -72,6 +75,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 @Tag("UnitTest")
+@DisplayName("Producer Tests")
 class ProducerTest {
 
   private static final Duration OUTCOME_LIMIT = Duration.ofSeconds(10);
@@ -261,6 +265,42 @@ class ProducerTest {
                 assertThat(mediaSegmentOf(sink, name).fragments())
                     .extracting(MovieFragment::sequenceNumber)
                     .containsExactly(numberOf(name) + 1L));
+  }
+
+  // An hvc1 record whose parameter set arrays are complete promises that no sample holds a
+  // parameter set of those types (ISO/IEC 14496-15).
+  @Test
+  @DisplayName(
+      "Should deliver no sample that repeats a parameter set of the complete hvc1 record when the"
+          + " HEVC copy keeps every packet's bytes")
+  void
+      shouldDeliverNoSampleThatRepeatsAParameterSetOfTheCompleteRecordWhenTheCopyKeepsPacketBytes() {
+    var deliveries = deliveredBy(recording("18-copy-hevc-keeping-packet-bytes.fmp4"));
+
+    assertThat(completeArrayTypes(deliveries.contentOf("init.mp4")))
+        .as("the parameter set arrays that the delivered hvc1 record declares complete")
+        .containsExactlyInAnyOrder(HevcCopies.VPS, HevcCopies.SPS, HevcCopies.PPS);
+    assertThat(deliveredVideoSamplesOf(deliveries))
+        .as("delivered video samples")
+        .isNotEmpty()
+        .noneMatch(sample -> holdsParameterSet(sample.data()));
+  }
+
+  // The Annex B filter puts the record's VPS, SPS and PPS in front of every keyframe sample; this
+  // copy shows that the parameter set reader above finds them when they are there.
+  @Test
+  @DisplayName(
+      "Should deliver keyframe samples that repeat the hvc1 record's parameter sets when the HEVC"
+          + " copy runs the Annex B filter")
+  void
+      shouldDeliverKeyframeSamplesThatRepeatTheRecordsParameterSetsWhenTheCopyRunsTheAnnexBFilter() {
+    var deliveries = deliveredBy(recording("18-copy-hevc-annex-b.fmp4"));
+
+    assertThat(deliveredVideoSamplesOf(deliveries))
+        .filteredOn(Sample::isSync)
+        .as("delivered keyframe samples")
+        .isNotEmpty()
+        .allMatch(keyframe -> holdsParameterSet(keyframe.data()));
   }
 
   // Stream copies of an MP4 source: FFmpeg writes the same packets at the same decode times in
@@ -1694,7 +1734,7 @@ class ProducerTest {
 
     var producer =
         producerFor(process, recording)
-            .videoDecision(new VideoDecision.Copy(0, "avc1.640028"))
+            .videoDecision(VideoDecisionFixtures.copyOf("avc1.640028"))
             .start();
 
     assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
@@ -1813,7 +1853,7 @@ class ProducerTest {
     var producer =
         producerLaunching(process)
             .periodSeconds(6)
-            .videoDecision(new VideoDecision.Copy(0, "hvc1.1.6.L93.90"))
+            .videoDecision(VideoDecisionFixtures.copyOf("hvc1.1.6.L93.90"))
             .start();
 
     assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
@@ -1824,21 +1864,20 @@ class ProducerTest {
   // entry promises, as FFmpeg writes them when the source carries its parameter sets only in its
   // samples.
   @ParameterizedTest(name = "{0}")
-  @CsvSource({
-    "hvc1, hvcC, 0101600000009000000000005AF000FCFDF8F800000F00, hvc1.1.6.L90.90",
-    "avc1, avcC, 0142C00AFFE000, avc1.42C00A"
-  })
+  @MethodSource("recordsWithoutParameterSets")
   @DisplayName(
       "Should fail the attempt as an output mismatch when the record holds none of the parameter"
           + " sets that its sample entry promises")
   void
       shouldFailTheAttemptAsAnOutputMismatchWhenTheRecordHoldsNoneOfTheParameterSetsThatItsSampleEntryPromises(
-          String sampleEntryType, String recordType, String recordHex, String codecString) {
+          RecordWithoutParameterSets recordWithoutParameterSets) {
     var sampleEntry =
         IsoBoxes.box(
-            sampleEntryType,
+            recordWithoutParameterSets.sampleEntryType(),
             new byte[78],
-            IsoBoxes.box(recordType, HexFormat.of().parseHex(recordHex)));
+            IsoBoxes.box(
+                recordWithoutParameterSets.recordType(),
+                HexFormat.of().parseHex(recordWithoutParameterSets.recordHex())));
     var output =
         IsoBoxes.concat(
             IsoBoxes.ftyp(),
@@ -1848,13 +1887,40 @@ class ProducerTest {
     var producer =
         producerLaunching(process)
             .periodSeconds(6)
-            .videoDecision(new VideoDecision.Copy(0, codecString))
+            .videoDecision(VideoDecisionFixtures.copyOf(recordWithoutParameterSets.codecString()))
             .start();
 
     var failure = failureOf(producer);
     assertThat(failure.reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
     assertThat(failure.detail()).contains("parameter sets");
     assertThat(sink.acceptedNames()).isEmpty();
+  }
+
+  static Stream<RecordWithoutParameterSets> recordsWithoutParameterSets() {
+    return Stream.of(
+        RecordWithoutParameterSets.builder()
+            .sampleEntryType("hvc1")
+            .recordType("hvcC")
+            .recordHex("0101600000009000000000005AF000FCFDF8F800000F00")
+            .codecString("hvc1.1.6.L90.90")
+            .build(),
+        RecordWithoutParameterSets.builder()
+            .sampleEntryType("avc1")
+            .recordType("avcC")
+            .recordHex("0142C00AFFE000")
+            .codecString("avc1.42C00A")
+            .build());
+  }
+
+  // A record that declares the codec string of the job's copy and holds no parameter set.
+  @Builder
+  private record RecordWithoutParameterSets(
+      String sampleEntryType, String recordType, String recordHex, String codecString) {
+
+    @Override
+    public String toString() {
+      return sampleEntryType;
+    }
   }
 
   @Test
@@ -1873,7 +1939,7 @@ class ProducerTest {
     var producer =
         producerLaunching(process)
             .periodSeconds(6)
-            .videoDecision(new VideoDecision.Copy(0, "hvc1.1.6.L90.90"))
+            .videoDecision(VideoDecisionFixtures.copyOf("hvc1.1.6.L90.90"))
             .start();
 
     assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
@@ -1897,7 +1963,7 @@ class ProducerTest {
 
     var producer =
         producerOfOneSecondSegments(process)
-            .videoDecision(new VideoDecision.Copy(0, HVC1_RECORD_CODEC_STRING))
+            .videoDecision(VideoDecisionFixtures.copyOf(HVC1_RECORD_CODEC_STRING))
             .start();
 
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
@@ -1922,7 +1988,7 @@ class ProducerTest {
 
     var producer =
         producerOfOneSecondSegments(process)
-            .videoDecision(new VideoDecision.Copy(0, HVC1_RECORD_CODEC_STRING))
+            .videoDecision(VideoDecisionFixtures.copyOf(HVC1_RECORD_CODEC_STRING))
             .start();
 
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
@@ -1953,7 +2019,7 @@ class ProducerTest {
 
     var producer =
         producerOfOneSecondSegments(process)
-            .videoDecision(new VideoDecision.Copy(0, HVC1_RECORD_CODEC_STRING))
+            .videoDecision(VideoDecisionFixtures.copyOf(HVC1_RECORD_CODEC_STRING))
             .start();
 
     assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.MALFORMED_OUTPUT);
@@ -3069,7 +3135,8 @@ class ProducerTest {
         .gracePeriod(Duration.ofSeconds(5))
         .stallTimeout(Duration.ofMinutes(1))
         .encodedFrameRate(Optional.<OutputFrameRate>empty())
-        .videoDecision(new VideoDecision.Copy(0, RecordingFixtures.ENCODED_RECORDING_CODEC_STRING))
+        .videoDecision(
+            VideoDecisionFixtures.copyOf(RecordingFixtures.ENCODED_RECORDING_CODEC_STRING))
         .memoryBudget(SegmentMemoryBudget.forSlots(1))
         .sink(sink)
         .clock(MonotonicClock.system());
@@ -3089,6 +3156,58 @@ class ProducerTest {
     var producer = producerFor(process, recording).sink(deliveries).start();
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
     return deliveries;
+  }
+
+  private static List<Sample> deliveredVideoSamplesOf(RecordingSegmentSink deliveries) {
+    return deliveries.acceptedNames().stream()
+        .filter(name -> name.startsWith("segment"))
+        .flatMap(name -> videoSamplesOf(deliveries, name).stream())
+        .toList();
+  }
+
+  // The NAL unit types of the hvcC arrays whose array_completeness bit is set.
+  private static Set<Integer> completeArrayTypes(byte[] initializationSegment) {
+    var sampleEntry =
+        CodecConfigurationReader.firstVideoSampleEntryOf(
+                new InitializationSegment(initializationSegment))
+            .orElseThrow();
+    var hvcC =
+        sampleEntry
+            .after(CodecConfigurationReader.VISUAL_SAMPLE_ENTRY_BYTES)
+            .requiredChild("hvcC")
+            .fields();
+    hvcC.skip(CodecConfigurationReader.HVCC_FIELDS_BEFORE_ARRAYS);
+    var arrays = hvcC.u8();
+    var complete = new HashSet<Integer>();
+    for (var array = 0; array < arrays; array++) {
+      var completenessAndType = hvcC.u8();
+      var nalUnits = hvcC.u16();
+      for (var nalUnit = 0; nalUnit < nalUnits; nalUnit++) {
+        hvcC.skip(hvcC.u16());
+      }
+
+      if ((completenessAndType & 0x80) != 0) {
+        complete.add(completenessAndType & 0x3F);
+      }
+    }
+
+    return complete;
+  }
+
+  // Whether a sample of 4-byte length-prefixed HEVC NAL units holds a VPS, an SPS or a PPS.
+  private static boolean holdsParameterSet(ByteBuffer sample) {
+    var data = sample.duplicate();
+    while (data.remaining() >= Integer.BYTES) {
+      var length = data.getInt();
+      var type = (data.get(data.position()) >> 1) & 0x3F;
+      if (type == HevcCopies.VPS || type == HevcCopies.SPS || type == HevcCopies.PPS) {
+        return true;
+      }
+
+      data.position(data.position() + length);
+    }
+
+    return false;
   }
 
   // The samples of the delivered media segment, read after the initialization segment.

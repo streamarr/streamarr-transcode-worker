@@ -3,7 +3,6 @@ package com.streamarr.transcode.engine;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.streamarr.transcode.engine.FfmpegRecordings.Recording;
-import com.streamarr.transcode.fixtures.RecordingFixtures;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.temporal.ChronoUnit;
@@ -129,7 +128,8 @@ class FfmpegCommandBuilderRecipeTest {
   private static VideoDecision videoDecisionRecordedIn(Recording recording) {
     return switch (recording.mode()) {
       case ENCODE -> encodeRecordedBy(recording.videoEncoder());
-      case COPY -> new VideoDecision.Copy(0, RecordingFixtures.ENCODED_RECORDING_CODEC_STRING);
+      case COPY ->
+          new VideoDecision.Copy(0, recording.videoCodecString(), recording.copyKeepsPacketBytes());
     };
   }
 

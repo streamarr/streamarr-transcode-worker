@@ -358,7 +358,7 @@ public class FfmpegCommandBuilder {
     cmd.addAll(List.of("-c:v", job.videoEncoder()));
     addPresetArgs(cmd, job);
     PlayableSampleEntry.ofEncoder(job.videoEncoder())
-        .ifPresent(entry -> cmd.addAll(List.of("-tag:v", entry.tag())));
+        .ifPresent(entry -> cmd.addAll(tagArgs(entry)));
     cmd.addAll(forcedCodecProfileArgs(job));
     addScaleAndBitrateArgs(cmd, job, trimStart(job.request(), input));
     if (input == EncoderInput.COPY_OF_THE_SOURCE) {
@@ -393,15 +393,29 @@ public class FfmpegCommandBuilder {
   // Dolby Vision configuration record unless the compliance is unofficial; no encode writes one.
   private static List<String> copiedVideoArgs(VideoDecision decision) {
     var args = new ArrayList<String>();
-    var sampleEntry =
-        switch (decision) {
-          case VideoDecision.Copy copy -> PlayableSampleEntry.ofCopy(copy);
-          case VideoDecision.Encode _ -> Optional.<PlayableSampleEntry>empty();
-        };
-    sampleEntry.ifPresent(
-        entry -> args.addAll(List.of("-bsf:v", entry.annexBFilter(), "-tag:v", entry.tag())));
+    if (decision instanceof VideoDecision.Copy copy) {
+      PlayableSampleEntry.ofCopy(copy)
+          .ifPresent(entry -> args.addAll(sampleEntryArgs(copy, entry)));
+    }
+
     args.addAll(List.of("-strict", "unofficial"));
     return List.copyOf(args);
+  }
+
+  // A copy that keeps every packet's bytes passes the source's samples and decoder configuration
+  // record to the mp4 muxer unchanged. Any other copy turns its samples into Annex B first.
+  private static List<String> sampleEntryArgs(VideoDecision.Copy copy, PlayableSampleEntry entry) {
+    if (copy.keepsPacketBytes()) {
+      return tagArgs(entry);
+    }
+
+    var args = new ArrayList<>(List.of("-bsf:v", entry.annexBFilter()));
+    args.addAll(tagArgs(entry));
+    return List.copyOf(args);
+  }
+
+  private static List<String> tagArgs(PlayableSampleEntry entry) {
+    return List.of("-tag:v", entry.tag());
   }
 
   // Hardware encoders take no preset until the preset scale has rows for them (ADR 0044).
