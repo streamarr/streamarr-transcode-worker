@@ -490,7 +490,7 @@ class FfmpegCommandBuilderTest {
           + " stream copy")
   void shouldForceNoCodecProfileOrLevelWhenAnEncodingRequestsVideoDecisionIsAStreamCopy(
       String encoder) {
-    var copy = new VideoDecision.Copy(0, "avc1.64000A");
+    var copy = new VideoDecision.Copy(0, "avc1.64000A", false);
     var request =
         request(decision(TranscodeMode.FULL_TRANSCODE).videoDecision(copy).build()).build();
 
@@ -589,7 +589,7 @@ class FfmpegCommandBuilderTest {
   void
       shouldWriteTheCodecFamilysPlayableSampleEntryFromParameterSetsTheRecordOrTheSamplesHoldWhenTheVideoIsCopied(
           String sourceSampleEntry, TranscodeMode mode, String filter, String sampleEntry) {
-    var copy = new VideoDecision.Copy(0, sourceSampleEntry + ".64001F");
+    var copy = new VideoDecision.Copy(0, sourceSampleEntry + ".64001F", false);
     var request = request(decision(mode).videoDecision(copy).build()).build();
 
     var cmd = command(request, "copy");
@@ -607,7 +607,7 @@ class FfmpegCommandBuilderTest {
     var request =
         request(
                 decision(TranscodeMode.REMUX)
-                    .videoDecision(new VideoDecision.Copy(0, codecString))
+                    .videoDecision(new VideoDecision.Copy(0, codecString, false))
                     .build())
             .build();
 
@@ -637,7 +637,7 @@ class FfmpegCommandBuilderTest {
     var request =
         request(
                 decision(TranscodeMode.AUDIO_TRANSCODE)
-                    .videoDecision(new VideoDecision.Copy(0, codecString))
+                    .videoDecision(new VideoDecision.Copy(0, codecString, false))
                     .build())
             .build();
 

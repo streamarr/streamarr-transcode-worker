@@ -13,8 +13,15 @@ public sealed interface VideoDecision {
   /** The codec string that every initialization segment of the variant declares for its video. */
   String codecString();
 
-  /** A stream copy, whose codec string the probe computed for the source stream. */
-  record Copy(int streamIndex, @NonNull String codecString) implements VideoDecision {}
+  /**
+   * A stream copy, whose codec string the probe computed for the source stream.
+   *
+   * @param keepsPacketBytes whether the copy delivers every packet of the source stream with its
+   *     bytes unchanged, which the probe decides from the source's decoder configuration record;
+   *     false when the job does not say so
+   */
+  record Copy(int streamIndex, @NonNull String codecString, boolean keepsPacketBytes)
+      implements VideoDecision {}
 
   /**
    * An encode, which forces the codec profile, the tier and the level.

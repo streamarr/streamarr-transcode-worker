@@ -790,6 +790,24 @@ class TranscodeWorkerJobAttemptTest {
         .satisfies(command -> assertThat(command).containsSequence("-c:v", "copy"));
   }
 
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"avc1.640028", "hvc1.1.6.L93.90"})
+  @DisplayName(
+      "Should keep the Annex B filter on a video copy when the job does not say that the copy keeps"
+          + " every packet's bytes")
+  void shouldKeepTheAnnexBFilterOnAVideoCopyWhenTheJobDoesNotSayThatTheCopyKeepsEveryPacketsBytes(
+      String codecString) throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJobBuilder();
+    job.getDecisionBuilder().getVideoBuilder().setCodecString(codecString);
+
+    var commands = launchedCommands(launcher, job.build());
+
+    assertThat(commands)
+        .singleElement()
+        .satisfies(command -> assertThat(command).containsSequence("-c:v", "copy", "-bsf:v"));
+  }
+
   // An HEVC encode of a Dolby Vision profile 5 source, which meets every condition of ADR 0013 for
   // moving the RPUs that may start samples whenever the placement is not AFTER_OWN_PICTURE.
   private static VariantJob.Builder profile5SourceJobBuilder(DolbyVisionRpuPlacement placement) {

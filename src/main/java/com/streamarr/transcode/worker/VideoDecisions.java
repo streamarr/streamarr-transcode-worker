@@ -79,7 +79,10 @@ final class VideoDecisions {
       VideoDynamicRanges.of(video.getSourceDynamicRange());
     }
 
-    return new VideoDecision.Copy(video.getStreamIndex(), video.getCodecString());
+    // The contract does not yet say whether a copy keeps every packet's bytes, so every copy keeps
+    // the Annex B filter.
+    var keepsPacketBytes = false;
+    return new VideoDecision.Copy(video.getStreamIndex(), video.getCodecString(), keepsPacketBytes);
   }
 
   @SuppressWarnings("checkstyle:fullyQualifiedName")

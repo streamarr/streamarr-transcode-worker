@@ -129,7 +129,8 @@ class FfmpegCommandBuilderRecipeTest {
   private static VideoDecision videoDecisionRecordedIn(Recording recording) {
     return switch (recording.mode()) {
       case ENCODE -> encodeRecordedBy(recording.videoEncoder());
-      case COPY -> new VideoDecision.Copy(0, RecordingFixtures.ENCODED_RECORDING_CODEC_STRING);
+      case COPY ->
+          new VideoDecision.Copy(0, RecordingFixtures.ENCODED_RECORDING_CODEC_STRING, false);
     };
   }
 
