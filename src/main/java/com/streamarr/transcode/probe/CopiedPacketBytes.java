@@ -83,7 +83,8 @@ final class CopiedPacketBytes {
     }
 
     var sampleEntry = sampleEntry(stream);
-    if (sampleEntry.isPresent() && stream.path(Mp4SampleEntries.KEY).asLong(0) != 1) {
+    if (sampleEntry.isPresent()
+        && stream.path(Mp4SampleEntries.SAMPLE_ENTRY_COUNT_FIELD).asLong(0) != 1) {
       return Optional.of(false);
     }
 

@@ -21,15 +21,16 @@ import tools.jackson.databind.node.ObjectNode;
 
 /**
  * Adds to the ffprobe description of each H.264 and HEVC track of an MP4 or MOV file the number of
- * sample entries in its sample description box (stsd), under {@link #KEY}. ffprobe describes a
- * track by its first sample entry and does not report the others. The probe adds nothing when it
- * cannot read the movie box, or when no single track or stream carries the stream's ID.
+ * sample entries in its sample description box (stsd), under {@link #SAMPLE_ENTRY_COUNT_FIELD}.
+ * ffprobe describes a track by its first sample entry and does not report the others. The probe
+ * adds nothing when it cannot read the movie box, or when no single track or stream carries the
+ * stream's ID.
  */
 @Slf4j
 final class Mp4SampleEntries {
 
-  /** The key under which a stream's description holds its track's number of sample entries. */
-  static final String KEY = "mp4_sample_entries";
+  /** The field under which a stream's description holds its track's number of sample entries. */
+  static final String SAMPLE_ENTRY_COUNT_FIELD = "mp4_sample_entries";
 
   private Mp4SampleEntries() {}
 
@@ -66,7 +67,7 @@ final class Mp4SampleEntries {
                 streams.forEach(
                     (trackId, description) ->
                         Optional.ofNullable(counts.get(trackId))
-                            .ifPresent(count -> description.put(KEY, count))));
+                            .ifPresent(count -> description.put(SAMPLE_ENTRY_COUNT_FIELD, count))));
   }
 
   /**
