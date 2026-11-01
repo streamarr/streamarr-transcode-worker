@@ -1870,12 +1870,14 @@ class ProducerTest {
           + " sets that its sample entry promises")
   void
       shouldFailTheAttemptAsAnOutputMismatchWhenTheRecordHoldsNoneOfTheParameterSetsThatItsSampleEntryPromises(
-          RecordWithoutParameterSets record) {
+          RecordWithoutParameterSets recordWithoutParameterSets) {
     var sampleEntry =
         IsoBoxes.box(
-            record.sampleEntryType(),
+            recordWithoutParameterSets.sampleEntryType(),
             new byte[78],
-            IsoBoxes.box(record.recordType(), HexFormat.of().parseHex(record.recordHex())));
+            IsoBoxes.box(
+                recordWithoutParameterSets.recordType(),
+                HexFormat.of().parseHex(recordWithoutParameterSets.recordHex())));
     var output =
         IsoBoxes.concat(
             IsoBoxes.ftyp(),
@@ -1885,7 +1887,7 @@ class ProducerTest {
     var producer =
         producerLaunching(process)
             .periodSeconds(6)
-            .videoDecision(VideoDecisionFixtures.copyOf(record.codecString()))
+            .videoDecision(VideoDecisionFixtures.copyOf(recordWithoutParameterSets.codecString()))
             .start();
 
     var failure = failureOf(producer);
