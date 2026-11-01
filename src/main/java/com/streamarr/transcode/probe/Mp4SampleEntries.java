@@ -10,6 +10,7 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -21,7 +22,7 @@ import tools.jackson.databind.node.ObjectNode;
  * Adds to the ffprobe description of each H.264 and HEVC track of an MP4 or MOV file the number of
  * sample entries in its sample description box (stsd), under {@link #KEY}. ffprobe describes a
  * track by its first sample entry and does not report the others. The probe adds nothing when it
- * cannot read the movie box or finds no track with the stream's ID.
+ * cannot read the movie box or finds no single track with the stream's ID.
  */
 @Slf4j
 final class Mp4SampleEntries {
@@ -59,13 +60,21 @@ final class Mp4SampleEntries {
                             .ifPresent(count -> description.put(KEY, count))));
   }
 
-  /** The number of sample entries of each track, by track ID. */
+  /**
+   * The number of sample entries of each track, by track ID. FFmpeg reads every trak, so an ID that
+   * several traks carry names no single track and gets no count.
+   */
   private static Optional<Map<Long, Long>> read(Path source) {
     try (var channel = FileChannel.open(source, StandardOpenOption.READ)) {
+      var tracks = children(Mp4MovieBox.read(channel), "trak");
+      var trackIds = tracks.stream().map(Mp4MovieBox::trackId).toList();
       var counts = new HashMap<Long, Long>();
-      for (var track : children(Mp4MovieBox.read(channel), "trak")) {
-        sampleDescription(track)
-            .ifPresent(box -> counts.put(Mp4MovieBox.trackId(track), entryCount(box)));
+      for (var index = 0; index < tracks.size(); index++) {
+        var trackId = trackIds.get(index);
+        if (Collections.frequency(trackIds, trackId) == 1) {
+          sampleDescription(tracks.get(index))
+              .ifPresent(box -> counts.put(trackId, entryCount(box)));
+        }
       }
 
       return Optional.of(counts);

@@ -10,8 +10,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import com.streamarr.transcode.probe.RecordedFfprobe.Answers;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.net.URISyntaxException;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.function.UnaryOperator;
@@ -23,6 +26,7 @@ import org.junit.jupiter.api.Named;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -36,6 +40,9 @@ class FfprobeExecutorCopyPacketBytesTest {
   // An x264 avcC record that holds an SPS and a PPS, under an avc1 sample entry.
   private static final String AVC1_MP4 = "mp4-sdr8-bt709.mp4";
   private static final String AVC1_RECORD_HEADER = "0142 c00a ffe1";
+
+  // An MP4 track whose two avc1 sample entries hold an 8-bit and a 10-bit record.
+  private static final String TWO_ENTRY_H264_MP4 = "mp4-h264-two-sample-entries.mp4";
 
   // An x265 hvcC record that holds a VPS, an SPS, a PPS and x265's information SEI message.
   private static final String X265_MATROSKA = "mkv-pipe-hevc-10bit.mkv";
@@ -139,7 +146,7 @@ class FfprobeExecutorCopyPacketBytesTest {
     @ParameterizedTest(name = "{0}")
     @ValueSource(
         strings = {
-          "mp4-h264-two-sample-entries.mp4",
+          TWO_ENTRY_H264_MP4,
           "mp4-hevc-two-sample-entries.mp4",
           "mov-hevc-extradata-reload.mov",
         })
@@ -196,6 +203,54 @@ class FfprobeExecutorCopyPacketBytesTest {
                 stream.remove("id");
                 return stream;
               }));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("otherTrackPositions")
+    @DisplayName(
+        "Should report that a copy may change packet bytes when another track of the movie box has"
+            + " the track's ID")
+    void shouldReportThatACopyMayChangePacketBytesWhenAnotherTrackOfTheMovieBoxHasTheTracksId(
+        boolean otherTrackFirst, @TempDir Path directory) throws IOException {
+      // FFmpeg reads every trak, so a one-entry trak that repeats the two-entry track's ID must not
+      // hide the second entry.
+      var source = directory.resolve("repeated-track-id.mp4");
+      Files.write(source, movieBoxWithAvc1Track(TWO_ENTRY_H264_MP4, otherTrackFirst));
+
+      var video = probe(recordedAnswers(TWO_ENTRY_H264_MP4).source(source).build()).getStreams(0);
+
+      assertThat(copyKeepsPacketBytes(video)).isFalse();
+    }
+
+    static Stream<Named<Boolean>> otherTrackPositions() {
+      return Stream.of(
+          Named.of("the other track first", true), Named.of("the other track last", false));
+    }
+
+    /**
+     * The fixture's movie box with the track box of {@link #AVC1_MP4}, which holds one sample entry
+     * under the same track ID, before or after the fixture's own track.
+     */
+    private static byte[] movieBoxWithAvc1Track(String fixture, boolean otherTrackFirst)
+        throws IOException {
+      var file = Files.readAllBytes(resource("/probe/mp4-movie-boxes/" + fixture));
+      var donor = Files.readAllBytes(resource("/probe/mp4-movie-boxes/" + AVC1_MP4));
+      var movie = BoxRange.find(file, 0, file.length, "moov");
+      var donorMovie = BoxRange.find(donor, 0, donor.length, "moov");
+      var track = BoxRange.find(donor, donorMovie.payload(), donorMovie.end(), "trak");
+      var trackBytes = Arrays.copyOfRange(donor, track.start(), track.end());
+      var children = Arrays.copyOfRange(file, movie.payload(), movie.end());
+
+      var edited = new ByteArrayOutputStream();
+      edited.write(file, 0, movie.start());
+      edited.write(
+          ByteBuffer.allocate(8)
+              .putInt(8 + children.length + trackBytes.length)
+              .put("moov".getBytes(StandardCharsets.ISO_8859_1))
+              .array());
+      edited.write(otherTrackFirst ? trackBytes : children);
+      edited.write(otherTrackFirst ? children : trackBytes);
+      return edited.toByteArray();
     }
   }
 
@@ -554,6 +609,26 @@ class FfprobeExecutorCopyPacketBytesTest {
     @Override
     public String toString() {
       return fixture + " stream " + index;
+    }
+  }
+
+  /** A box of an MP4 file: where it starts, where its payload starts and where it ends. */
+  private record BoxRange(int start, int payload, int end) {
+
+    static BoxRange find(byte[] bytes, int from, int to, String type) {
+      var position = from;
+      while (position + 8 <= to) {
+        var size = ByteBuffer.wrap(bytes, position, 4).getInt();
+        var boxType = new String(bytes, position + 4, 4, StandardCharsets.ISO_8859_1);
+        assertThat(size).as("a 32-bit box size").isGreaterThanOrEqualTo(8);
+        if (boxType.equals(type)) {
+          return new BoxRange(position, position + 8, position + size);
+        }
+
+        position += size;
+      }
+
+      throw new AssertionError("no " + type + " box");
     }
   }
 
