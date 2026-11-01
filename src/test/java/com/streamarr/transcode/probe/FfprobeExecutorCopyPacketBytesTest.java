@@ -209,6 +209,40 @@ class FfprobeExecutorCopyPacketBytesTest {
       assertThat(copyKeepsPacketBytes(video)).isFalse();
     }
 
+    @Test
+    @DisplayName(
+        "Should report that a copy may change packet bytes when an hvcC array names another type"
+            + " than its NAL unit")
+    void shouldReportThatACopyMayChangePacketBytesWhenAnHvcCArrayNamesAnotherTypeThanItsNalUnit() {
+      // The VPS array, the record's first, names the prefix SEI type. FFmpeg's hvcC writer sorts
+      // NAL units by the type that their array names.
+      var video =
+          editedRecord(
+              X265_MATROSKA,
+              record -> {
+                var edited = record.clone();
+                edited[HVCC_ARRAY_COUNT + 1] = (byte) ((edited[HVCC_ARRAY_COUNT + 1] & 0xC0) | 39);
+                return edited;
+              });
+
+      assertThat(copyKeepsPacketBytes(video)).isFalse();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+      "a PPS whose forbidden_zero_bit is set, 244d 4001 0004 68ce 0fc8, 244d 4001 0004 e8ce 0fc8",
+      "an empty second PPS, 244d 4001 0004 68ce 0fc8, 244d 4002 0004 68ce 0fc8 0000",
+    })
+    @DisplayName(
+        "Should report that a copy may change packet bytes when an avcC NAL unit does not reach the"
+            + " decoder")
+    void shouldReportThatACopyMayChangePacketBytesWhenAnAvcCNalUnitDoesNotReachTheDecoder(
+        String condition, String recordedText, String editedText) {
+      var video = editedAvc1(recordedText, editedText);
+
+      assertThat(copyKeepsPacketBytes(video)).isFalse();
+    }
+
     private static ProbeStreamInfo editedRecord(String fixture, UnaryOperator<byte[]> edit) {
       var recorded = fixture(fixture);
       var output = (ObjectNode) MAPPER.readTree(recorded);

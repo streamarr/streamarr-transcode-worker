@@ -3,6 +3,7 @@ package com.streamarr.transcode.probe;
 import static com.streamarr.transcode.probe.FfprobeJson.text;
 
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
@@ -34,6 +35,11 @@ final class CopiedPacketBytes {
   private static final Set<String> AVC_RECORD_SAMPLE_ENTRIES = Set.of("avc1", "dva1");
   private static final Set<String> HEVC_RECORD_SAMPLE_ENTRIES = Set.of("hvc1", "dvh1");
   private static final int RECORD_VERSION = 1;
+  // The avcC record's count of SPS NAL units follows its 5 header bytes, and the hvcC record's
+  // count
+  // of NAL unit arrays follows its 22.
+  private static final int AVC_RECORD_SPS_COUNT = 5;
+  private static final int HVCC_ARRAY_COUNT = 22;
   private static final int NAL_LENGTH_BYTES = 4;
   private static final int HEVC_VIDEO_PARAMETER_SET = 32;
   private static final int HEVC_SEQUENCE_PARAMETER_SET = 33;
@@ -86,7 +92,9 @@ final class CopiedPacketBytes {
   }
 
   private static boolean isKeptAvcRecord(byte[] record) {
-    if (!isRecordWithFourByteLengths(record, NalSyntax.H264)) {
+    if (!isRecordWithFourByteLengths(record, NalSyntax.H264)
+        || !DecoderConfiguration.isWholeAvcRecord(record)
+        || !avcRecordUnits(record).stream().allMatch(NalSyntax.H264::reachesDecoder)) {
       return false;
     }
 
@@ -100,10 +108,12 @@ final class CopiedPacketBytes {
       return false;
     }
 
+    // A record whose NAL unit FFmpeg's splitter drops is no whole record, and FFmpeg's hvcC writer
+    // sorts NAL units by the type that their array names.
     var units = DecoderConfiguration.hevcRecordUnits(record);
-    // A record whose NAL unit FFmpeg's splitter drops is no whole record.
     if (!units.complete()
         || !units.units().stream().allMatch(NalSyntax.HEVC::reachesDecoder)
+        || !arraysNameTheirUnitsTypes(record)
         || !holdsHevcParameterSets(units.units())) {
       return false;
     }
@@ -114,6 +124,43 @@ final class CopiedPacketBytes {
         && DecoderConfiguration.hevcProfile(record)
             .filter(profile -> headerEquals(record, profile, CodecStrings.HEVC_PROFILE_BYTES))
             .isPresent();
+  }
+
+  /**
+   * The NAL units that a whole avcC record counts in its SPS and PPS lists, each as the record
+   * holds it. FFmpeg reads a PPS count past the record's end as 0.
+   */
+  private static List<byte[]> avcRecordUnits(byte[] avcC) {
+    var units = new ArrayList<byte[]>();
+    var buffer = ByteBuffer.wrap(avcC).position(AVC_RECORD_SPS_COUNT);
+    addLengthPrefixedUnits(buffer, buffer.get() & 0x1F, units);
+    addLengthPrefixedUnits(
+        buffer, buffer.hasRemaining() ? Byte.toUnsignedInt(buffer.get()) : 0, units);
+    return units;
+  }
+
+  /** Whether every NAL unit of the whole hvcC record has the NAL_unit_type that its array names. */
+  private static boolean arraysNameTheirUnitsTypes(byte[] hvcC) {
+    var buffer = ByteBuffer.wrap(hvcC).position(HVCC_ARRAY_COUNT + 1);
+    for (var array = 0; array < Byte.toUnsignedInt(hvcC[HVCC_ARRAY_COUNT]); array++) {
+      var type = buffer.get() & 0x3F;
+      var units = new ArrayList<byte[]>();
+      addLengthPrefixedUnits(buffer, Short.toUnsignedInt(buffer.getShort()), units);
+      if (!units.stream().allMatch(unit -> NalSyntax.HEVC.type(unit) == type)) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  // The caller has checked that every unit ends within the record.
+  private static void addLengthPrefixedUnits(ByteBuffer buffer, int count, List<byte[]> units) {
+    for (var index = 0; index < count; index++) {
+      var unit = new byte[Short.toUnsignedInt(buffer.getShort())];
+      buffer.get(unit);
+      units.add(unit);
+    }
   }
 
   private static boolean isRecordWithFourByteLengths(byte[] record, NalSyntax syntax) {
