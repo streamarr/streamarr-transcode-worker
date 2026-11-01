@@ -260,7 +260,7 @@ final class BitrateScanChunkRun {
    */
   private final class TrackEnds implements LatestEnds {
     private final ProbedSource probed;
-    private Optional<Boolean> isWrittenByFfmpeg = Optional.empty();
+    private Optional<Boolean> areWrittenByFfmpeg = Optional.empty();
 
     private TrackEnds(ProbedSource probed) {
       this.probed = probed;
@@ -277,7 +277,7 @@ final class BitrateScanChunkRun {
           MatroskaTrackDuration.of(stream.description())
               .map(seconds -> ticksUp(seconds, stream.timeBase()))
               .filter(ticks -> ticks.compareTo(BigInteger.valueOf(limit)) < 0);
-      if (duration.isEmpty() || !isWrittenByFfmpeg()) {
+      if (duration.isEmpty() || !areWrittenByFfmpeg()) {
         return OptionalLong.empty();
       }
 
@@ -291,12 +291,12 @@ final class BitrateScanChunkRun {
       return OptionalLong.of(end.min(BigInteger.valueOf(Long.MAX_VALUE)).longValueExact());
     }
 
-    private boolean isWrittenByFfmpeg() {
-      if (isWrittenByFfmpeg.isEmpty()) {
-        isWrittenByFfmpeg = Optional.of(MatroskaTrackDuration.isWrittenByFfmpeg(probed.source()));
+    private boolean areWrittenByFfmpeg() {
+      if (areWrittenByFfmpeg.isEmpty()) {
+        areWrittenByFfmpeg = Optional.of(MatroskaTrackDuration.areWrittenByFfmpeg(probed.source()));
       }
 
-      return isWrittenByFfmpeg.get();
+      return areWrittenByFfmpeg.get();
     }
 
     private OptionalLong firstPacketTime(int streamIndex)

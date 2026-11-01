@@ -40,7 +40,7 @@ final class MatroskaTrackDuration {
    * Whether FFmpeg 3.2 or later wrote the Matroska source to a seekable output, so that its tracks'
    * DURATION tags count; false when the source's Info or Cues cannot be read.
    */
-  static boolean isWrittenByFfmpeg(Path source) {
+  static boolean areWrittenByFfmpeg(Path source) {
     try (var channel = FileChannel.open(source, StandardOpenOption.READ)) {
       var topLevel = MatroskaFile.TopLevel.read(channel);
       return topLevel.cues().isPresent()
