@@ -712,6 +712,9 @@ function sideClaimViolations(expected) {
     found.push('an HEVC copy without the Annex B filter changes the size of a source packet');
   }
   const annexB = claims.hevcAnnexBFilterGrowsOnlyKeyframes;
+  if (annexB.videoSamples !== annexB.sourcePackets || annexB.keyframes === 0) {
+    found.push('the HEVC copy with the Annex B filter does not hold one video sample for every source packet');
+  }
   if (annexB.grownKeyframes !== annexB.keyframes || annexB.changedOtherSamples !== 0) {
     found.push('hevc_mp4toannexb no longer adds the record to every keyframe sample and to nothing else');
   }
