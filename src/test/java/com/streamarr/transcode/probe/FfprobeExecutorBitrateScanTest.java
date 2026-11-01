@@ -5,8 +5,14 @@ import static com.streamarr.transcode.probe.EbmlElements.CUE_POINT;
 import static com.streamarr.transcode.probe.EbmlElements.CUE_TIME;
 import static com.streamarr.transcode.probe.EbmlElements.INFO;
 import static com.streamarr.transcode.probe.EbmlElements.MUXING_APP;
+import static com.streamarr.transcode.probe.EbmlElements.TAGS;
+import static com.streamarr.transcode.probe.EbmlElements.copiedDuration;
 import static com.streamarr.transcode.probe.EbmlElements.document;
 import static com.streamarr.transcode.probe.EbmlElements.element;
+import static com.streamarr.transcode.probe.EbmlElements.ffmpegDuration;
+import static com.streamarr.transcode.probe.EbmlElements.simpleTag;
+import static com.streamarr.transcode.probe.EbmlElements.string;
+import static com.streamarr.transcode.probe.EbmlElements.trackTag;
 import static com.streamarr.transcode.probe.EbmlElements.unsigned;
 import static com.streamarr.transcode.probe.RecordedFfprobe.ffprobeDump;
 import static com.streamarr.transcode.worker.support.BitrateScanChunks.intervalCounts;
@@ -98,11 +104,27 @@ class FfprobeExecutorBitrateScanTest {
           .keyframe(new Keyframe(40_000, 40_000))
           .build();
 
-  // Matroska files that FFmpeg 8.1 and mkvmerge wrote to a seekable output, as their Cues show.
-  private static final Path FFMPEG_FILE = segment("Lavf62.12.103", true);
-  private static final Path MKVMERGE_FILE = segment("libebml v1.4.5 + libmatroska v1.7.1", true);
+  private static final long AUDIO_TRACK_UID = 2;
   private static final String MKVMERGE = "mkvmerge v92.0 ('Everglow') 64-bit";
   private static final String MKVPROPEDIT = "mkvpropedit v92.0 ('Everglow') 64-bit";
+
+  // Matroska files that FFmpeg 8.1 and mkvmerge wrote to a seekable output, as their Cues show.
+  private static final Path FFMPEG_FILE = ffmpegSegment().build().write();
+  private static final Path MKVMERGE_FILE =
+      MatroskaSegment.builder()
+          .muxingApp("libebml v1.4.5 + libmatroska v1.7.1")
+          .hasCues(true)
+          .tag(statisticsTag(MKVMERGE))
+          .build()
+          .write();
+  // mkvpropedit keeps FFmpeg's MuxingApp, drops each DURATION and adds a Tag of statistics.
+  private static final Path MKVPROPEDIT_FILE =
+      ffmpegSegment()
+          .clearTags()
+          .tag(trackTag(AUDIO_TRACK_UID, simpleTag("ENCODER", "Lavc62.28.103 aac")))
+          .tag(statisticsTag(MKVPROPEDIT))
+          .build()
+          .write();
 
   // Every packet of the source in file order: video every 500 ms with a keyframe every second,
   // audio every 250 ms, and a subtitle that no chunk measures. Audio leads the video by 125 ms.
@@ -1261,14 +1283,23 @@ class FfprobeExecutorBitrateScanTest {
         Arguments.of(
             "mkvpropedit's DURATION, which starts at the track's first packet, in FFmpeg's file",
             AudioEnd.builder()
-                .file(FFMPEG_FILE)
+                .file(MKVPROPEDIT_FILE)
                 .tags(statisticsTags(MKVPROPEDIT, "DURATION", "00:00:05.000000000"))
                 .firstPacketTime(5_000L)
                 .build()),
         Arguments.of(
-            "FFmpeg 3.2's DURATION, the first FFmpeg that never copies the tag",
+            "FFmpeg 3.2's DURATION, in a Tag of its own, the first FFmpeg that never copies the tag",
             AudioEnd.builder()
-                .file(segment("Lavf57.56.100", true))
+                .file(
+                    ffmpegSegment()
+                        .muxingApp("Lavf57.56.100")
+                        .clearTags()
+                        .tag(trackTag(AUDIO_TRACK_UID, simpleTag("ENCODER", "Lavc57.64.100 aac")))
+                        .tag(
+                            trackTag(
+                                AUDIO_TRACK_UID, simpleTag("DURATION", "00:00:10.000000000\0\0")))
+                        .build()
+                        .write())
                 .tags("{\"DURATION\":\"00:00:10.000000000\"}")
                 .firstPacketTime(375L)
                 .build()),
@@ -1278,6 +1309,21 @@ class FfprobeExecutorBitrateScanTest {
                 .file(FFMPEG_FILE)
                 .tags("{\"DURATION\":\"00:00:20.000000000\"}")
                 .firstPacketTime(-21L)
+                .build()),
+        Arguments.of(
+            "FFmpeg's DURATION, after a DURATION that it copied from its input",
+            ffmpegWritten()
+                .file(
+                    ffmpegSegment()
+                        .clearTags()
+                        .tag(
+                            trackTag(
+                                AUDIO_TRACK_UID,
+                                copiedDuration("00:00:30.000000000"),
+                                ffmpegDuration("00:00:10.000000000")))
+                        .build()
+                        .write())
+                .tags("{\"DURATION\":\"00:00:10.000000000\"}")
                 .build()));
   }
 
@@ -1322,7 +1368,7 @@ class FfprobeExecutorBitrateScanTest {
         Arguments.of(
             "mkvpropedit's DURATION from a first packet late enough to end inside the chunk",
             AudioEnd.builder()
-                .file(FFMPEG_FILE)
+                .file(MKVPROPEDIT_FILE)
                 .tags(statisticsTags(MKVPROPEDIT, "DURATION", "00:00:05.000000000"))
                 .firstPacketTime(16_000L)
                 .build()),
@@ -1341,28 +1387,34 @@ class FfprobeExecutorBitrateScanTest {
                 .firstPacketTime(-600L)
                 .build()),
         Arguments.of(
-            "FFmpeg 3.1's DURATION, which it may have copied from its input",
+            "FFmpeg 3.1's DURATION, which it may have copied from its input without a language",
             ffmpegWritten()
-                .file(segment("Lavf57.41.100", true))
+                .file(copiedWithoutLanguage("Lavf57.41.100"))
                 .tags("{\"DURATION\":\"00:00:05.000000000\"}")
                 .build()),
         Arguments.of(
-            "FFmpeg 2.8's DURATION, which it may have copied from its input",
+            "FFmpeg 2.8's DURATION, which it may have copied from its input without a language",
             ffmpegWritten()
-                .file(segment("Lavf56.40.101", true))
+                .file(copiedWithoutLanguage("Lavf56.40.101"))
                 .tags("{\"DURATION\":\"00:00:05.000000000\"}")
                 .build()),
         Arguments.of(
             "the DURATION of an FFmpeg that names no version",
             ffmpegWritten()
-                .file(segment("Lavf", true))
+                .file(ffmpegSegment().muxingApp("Lavf").build().write())
                 .tags("{\"DURATION\":\"00:00:05.000000000\"}")
                 .build()),
         Arguments.of(
             "FFmpeg's file without Cues, written to an output it could not seek, where it writes"
                 + " no DURATION of its own and may pass on a copied one",
             ffmpegWritten()
-                .file(segment("Lavf62.12.103", false))
+                .file(
+                    ffmpegSegment()
+                        .hasCues(false)
+                        .clearTags()
+                        .tag(trackTag(AUDIO_TRACK_UID, copiedDuration("00:00:05.000000000")))
+                        .build()
+                        .write())
                 .tags("{\"DURATION\":\"00:00:05.000000000\"}")
                 .build()),
         Arguments.of(
@@ -1456,19 +1508,69 @@ class FfprobeExecutorBitrateScanTest {
   }
 
   /**
-   * A file holding a Matroska segment whose Info names the muxing library, followed by Cues with
-   * one point when the library wrote to a seekable output.
+   * A file that a Matroska muxer wrote: a Segment whose Info names the muxing library, then a Tags
+   * element of {@code tags} when there are any, then Cues with one point when the library wrote to
+   * a seekable output.
    */
-  private static Path segment(String muxingApp, boolean hasCues) {
-    var info = element(INFO, element(MUXING_APP, muxingApp.getBytes(StandardCharsets.UTF_8)));
-    var cues = element(CUES, element(CUE_POINT, element(CUE_TIME, unsigned(0))));
-    try {
-      var file = Files.createTempFile("segment", ".mkv");
-      file.toFile().deleteOnExit();
-      return Files.write(file, hasCues ? document(info, cues) : document(info));
-    } catch (IOException e) {
-      throw new UncheckedIOException(e);
+  @Builder
+  private record MatroskaSegment(String muxingApp, boolean hasCues, @Singular List<byte[]> tags) {
+
+    Path write() {
+      var children = new ArrayList<byte[]>();
+      children.add(element(INFO, string(MUXING_APP, muxingApp)));
+      if (!tags.isEmpty()) {
+        children.add(element(TAGS, tags.toArray(byte[][]::new)));
+      }
+
+      if (hasCues) {
+        children.add(element(CUES, element(CUE_POINT, element(CUE_TIME, unsigned(0)))));
+      }
+
+      try {
+        var file = Files.createTempFile("segment", ".mkv");
+        file.toFile().deleteOnExit();
+        return Files.write(file, document(children.toArray(byte[][]::new)));
+      } catch (IOException e) {
+        throw new UncheckedIOException(e);
+      }
     }
+  }
+
+  /**
+   * A file that FFmpeg 8.1 wrote to a seekable output, whose Tag of the audio track ends with the
+   * DURATION it wrote from the track's packets.
+   */
+  private static MatroskaSegment.MatroskaSegmentBuilder ffmpegSegment() {
+    return MatroskaSegment.builder()
+        .muxingApp("Lavf62.12.103")
+        .hasCues(true)
+        .tag(
+            trackTag(
+                AUDIO_TRACK_UID,
+                simpleTag("ENCODER", "Lavc62.28.103 aac"),
+                ffmpegDuration("00:00:20.021000000")));
+  }
+
+  /**
+   * A file that an FFmpeg before 3.2 wrote to an output it could not seek, where it writes no
+   * DURATION of its own and copies its input's DURATION without a language.
+   */
+  private static Path copiedWithoutLanguage(String muxingApp) {
+    return MatroskaSegment.builder()
+        .muxingApp(muxingApp)
+        .tag(trackTag(AUDIO_TRACK_UID, simpleTag("DURATION", "00:00:05.000000000")))
+        .build()
+        .write();
+  }
+
+  /** The Tag of an audio track's statistics, which mkvmerge and mkvpropedit write. */
+  private static byte[] statisticsTag(String program) {
+    return trackTag(
+        AUDIO_TRACK_UID,
+        simpleTag("BPS", "64341"),
+        simpleTag("DURATION", "00:00:05.000000000"),
+        simpleTag("NUMBER_OF_FRAMES", "939"),
+        simpleTag("_STATISTICS_WRITING_APP", program));
   }
 
   /** An audio stream of a file that FFmpeg wrote, whose first packet presents at 375 ms. */
