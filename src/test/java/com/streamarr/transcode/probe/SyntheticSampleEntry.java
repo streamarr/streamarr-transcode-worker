@@ -5,7 +5,10 @@ import static com.streamarr.transcode.probe.SyntheticMp4.concat;
 import static com.streamarr.transcode.probe.SyntheticMp4.int32;
 
 import java.io.ByteArrayOutputStream;
+import java.util.Collection;
+import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 import lombok.experimental.UtilityClass;
 
 /** Sample entries for {@link SyntheticMp4}'s stsd, with only the fields the measurer reads. */
@@ -16,19 +19,54 @@ class SyntheticSampleEntry {
   static final int HEVC_SPS = 33;
   static final int HEVC_PPS = 34;
 
+  static final int HEVC_PREFIX_SEI = 39;
+
+  // High profile level 4.0, as the avcC header and the SPS both name it.
+  private static final byte[] AVC_PROFILE = {0x64, 0, 0x28};
+  private static final byte[] AVC_SPS = {0x67, 0x64, 0, 0x28, (byte) 0xAC, (byte) 0xD9};
+  private static final byte[] AVC_PPS = {0x68, (byte) 0xEE, 0x3C, (byte) 0x80};
+
+  // An x265 hvcC header, Main 10 level 4.1, and the parameter sets whose profile it names.
+  private static final byte[] HEVC_PROFILE = HexFormat.of().parseHex("0220000000b000000000007b");
+  private static final byte[] HEVC_HEADER_TAIL = HexFormat.of().parseHex("f000fcfdfafa0000");
+  private static final Map<Integer, byte[]> HEVC_UNITS =
+      Map.of(
+          HEVC_VPS,
+          HexFormat.of().parseHex("40010c01ffff022000000300b0000003000003007b170240"),
+          HEVC_SPS,
+          HexFormat.of()
+              .parseHex(
+                  "420101022000000300b0000003000003007ba003c0801107cad8817b916452ffcb9fc4feb016a020402010"),
+          HEVC_PPS,
+          HexFormat.of().parseHex("4401c072f05324"),
+          // x265's information message: user data unregistered, payload type 5.
+          HEVC_PREFIX_SEI,
+          HexFormat.of().parseHex("4e0105142ca2de09b51747dbbb55a4fe7fc2fc4e7832363580"));
+
   /** An H.264 entry whose avcC holds these parameter sets behind NAL lengths of these bytes. */
   static byte[] avc(String type, int lengthBytes, int sequenceParameterSets, int pictureSets) {
+    return avcNamingLevel(type, lengthBytes, sequenceParameterSets, pictureSets, AVC_PROFILE[2]);
+  }
+
+  /** An avc1 entry whose avcC header names this level_idc, while its SPS names level 4.0. */
+  static byte[] avcNamingLevel(int levelIdc) {
+    return avcNamingLevel("avc1", 4, 1, 1, levelIdc);
+  }
+
+  private static byte[] avcNamingLevel(
+      String type, int lengthBytes, int sequenceParameterSets, int pictureSets, int levelIdc) {
     var record = new ByteArrayOutputStream();
-    record.writeBytes(new byte[] {1, 0x64, 0, 0x28});
+    record.write(1);
+    record.writeBytes(new byte[] {AVC_PROFILE[0], AVC_PROFILE[1], (byte) levelIdc});
     record.write(0xFC | (lengthBytes - 1));
     record.write(0xE0 | sequenceParameterSets);
     for (var i = 0; i < sequenceParameterSets; i++) {
-      record.writeBytes(new byte[] {0, 2, 0x67, 0x64});
+      writeUnit(record, AVC_SPS);
     }
 
     record.write(pictureSets);
     for (var i = 0; i < pictureSets; i++) {
-      record.writeBytes(new byte[] {0, 2, 0x68, (byte) 0xEE});
+      writeUnit(record, AVC_PPS);
     }
 
     return visual(type, box("avcC", record.toByteArray()));
@@ -36,15 +74,40 @@ class SyntheticSampleEntry {
 
   /** An HEVC entry whose hvcC holds one NAL unit of each listed type behind these length bytes. */
   static byte[] hevc(String type, int lengthBytes, List<Integer> unitTypes) {
+    return hevc(type, lengthBytes, unitTypes.stream().map(HEVC_UNITS::get).toList());
+  }
+
+  /**
+   * An hvc1 entry whose hvcC holds a VPS, an SPS, a PPS and a prefix SEI NAL unit with one message
+   * of this payload type and a 1-byte payload.
+   */
+  static byte[] hevcWithSeiMessage(int payloadType) {
+    var sei = new byte[] {0x4E, 0x01, (byte) payloadType, 1, 0, (byte) 0x80};
+    return hevc(
+        "hvc1",
+        4,
+        List.of(HEVC_UNITS.get(HEVC_VPS), HEVC_UNITS.get(HEVC_SPS), HEVC_UNITS.get(HEVC_PPS), sei));
+  }
+
+  private static byte[] hevc(String type, int lengthBytes, Collection<byte[]> units) {
     var record = new ByteArrayOutputStream();
-    record.writeBytes(new byte[21]);
+    record.write(1);
+    record.writeBytes(HEVC_PROFILE);
+    record.writeBytes(HEVC_HEADER_TAIL);
     record.write(0x0C | (lengthBytes - 1));
-    record.write(unitTypes.size());
-    for (var unitType : unitTypes) {
-      record.writeBytes(new byte[] {(byte) (0x80 | unitType), 0, 1, 0, 2, 0x40, 0x01});
+    record.write(units.size());
+    for (var unit : units) {
+      record.write(0x80 | ((unit[0] >> 1) & 0x3F));
+      record.writeBytes(new byte[] {0, 1});
+      writeUnit(record, unit);
     }
 
     return visual(type, box("hvcC", record.toByteArray()));
+  }
+
+  private static void writeUnit(ByteArrayOutputStream record, byte[] unit) {
+    record.writeBytes(new byte[] {(byte) (unit.length >> 8), (byte) unit.length});
+    record.writeBytes(unit);
   }
 
   /** A video entry of this type with these child boxes, such as none for Annex B video. */
