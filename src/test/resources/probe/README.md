@@ -2,7 +2,7 @@
 
 ffprobe's JSON output for small sources, recorded with the ffprobe in the pinned worker image and
 the probe's own arguments, which include `-show_data` for the extradata.
-`../../probe-fixtures/record-fixtures.sh` makes the sources and records the output. It keeps only the output, without the source's path. FFmpeg synthesizes most sources
+`../../probe-fixtures/record-fixtures.sh` makes the sources and records the output. It keeps only the output, without the source's path, the first bytes of the Matroska statistics sources, and the movie boxes of the MP4 and MOV sources whose copy fact the tests read. FFmpeg synthesizes most sources
 from its lavfi test sources. No file comes from a media library.
 
 | File | What the source is |
@@ -13,6 +13,15 @@ from its lavfi test sources. No file comes from a media library.
 | `mkv-pipe-hevc-10bit.mkv.json` | 10-bit 4:2:2 HEVC and Opus in Matroska written to a pipe, so no stream has a `DURATION` tag |
 | `mpegts-empty-audio.ts.json` | H.264 and AAC in MPEG-TS, which starts at 1.4 s, with a second AAC stream that has no packets |
 | `mkv-mp3-11khz.mkv.json` | MP3 at 11,025 Hz in Matroska |
+| `mkv-statistics-mkvmerge.mkv.json` | H.264 and AAC that mkvmerge 92.0 (Alpine's `mkvtoolnix=92.0-r0`) muxed into Matroska. mkvmerge names itself as the segment's WritingApp and as each stream's `_STATISTICS_WRITING_APP`. libfaketime fixes the dates it writes at 2026-01-02 03:04:05 UTC |
+| `mkv-statistics-mkvpropedit.mkv.json` | `mkv-statistics-mkvmerge.mkv`, into which mkvpropedit wrote fresh statistics tags a day later. mkvpropedit names itself only in the statistics and keeps the WritingApp |
+| `mkv-statistics-ffmpeg-cut.mkv.json` | `mkv-statistics-mkvmerge.mkv` cut to 1 s by FFmpeg, which names itself as the WritingApp, copies the 2 s statistics tags, rewrites only `DURATION` and drops the segment's date |
+| `mkv-statistics-ffmpeg-cut-same-date.mkv.json` | The same cut with `-map_metadata 0`, which keeps the segment's date. The stale byte counts add up to more than the file holds |
+| `mkv-statistics-ffmpeg-trim-same-date.mkv.json` | `mkv-statistics-mkvmerge.mkv` trimmed to 1.9 s with `-map_metadata 0`, whose stale byte counts still fit in the file |
+| `mkv-statistics-ffmpeg-reencode-same-date.mkv.json` | `mkv-statistics-mkvmerge.mkv` with its video re-encoded losslessly (`-qp 0`) and its audio copied, with `-map_metadata 0`, whose stale byte counts still fit in the file |
+| `mp4-h264-two-sample-entries.mp4.json`, `mp4-hevc-two-sample-entries.mp4.json` | One second of H.264 and of HEVC, each encoded in 8 bits and in 10, which GPAC's playlist input joined into one MP4 track. Its MP4 muxer gave the 10-bit encode a second sample entry, because that record names another bit depth. ffprobe describes each track by its first entry |
+| `mp4-movie-boxes/*` | Every top-level box but the media data (`mdat`) of the MP4 and MOV sources whose copy fact the tests read, so that the probe reads the number of sample entries of each track from a file. Each first sample entry holds the record that the source's recording prints |
+| `matroska-heads/*.mkv` | The bytes of each Matroska statistics source before its first Cluster, which hold the segment's Info and its WritingApp. The tests give them to the probe as the source, so that it reads the WritingApp from a file. No other source is kept |
 | `mp4-avc-record-level.mp4.json`, `mp4-hevc-record-level.mp4.json` | H.264 and HEVC in MP4 whose record headers `edit-mp4-boxes.py` rewrote to name level 5.1, while their parameter sets name level 1.0 |
 | `mkv-hevc-parameter-sets-in-samples.mkv.json` | 10-bit 4:2:0 HEVC tagged BT.709 in Matroska, whose keyframes repeat the parameter sets and whose `hvcC` record `edit-codec-private.py` emptied of its arrays, so only the samples hold the parameter sets. The record header keeps the general profile, tier and level |
 | `mkv-h264-parameter-sets-in-samples.mkv.json` | H.264 Constrained Baseline in Matroska, whose keyframes repeat the parameter sets and whose `avcC` record `edit-codec-private.py` emptied of its SPS and PPS, so only the samples hold the parameter sets. The record header keeps the profile and level |
@@ -102,7 +111,7 @@ from its lavfi test sources. No file comes from a media library.
 
 ## Sources
 
-These fixtures hold ffprobe's description of each file, which includes each stream's extradata (its decoder configuration record), and the phone and camcorder fixtures also its packet timing. The files themselves stay local. The phone and camcorder files come from the Internet Archive, and the Dolby Vision and HEVC files from the Jellyfin project's [test videos](https://repo.jellyfin.org/test-videos/), which it states are courtesy of Gnattu and licensed under CC BY-SA 4.0.
+These fixtures hold ffprobe's description of each file, which includes each stream's extradata (its decoder configuration record), and the phone and camcorder fixtures also its packet timing. The files themselves stay local. Only the movie box of `mp4-dovi-p5-dvh1` is kept, in `mp4-movie-boxes/`. The phone and camcorder files come from the Internet Archive, and the Dolby Vision and HEVC files from the Jellyfin project's [test videos](https://repo.jellyfin.org/test-videos/), which it states are courtesy of Gnattu and licensed under CC BY-SA 4.0.
 
 | Fixture | Source | Author | License |
 | --- | --- | --- | --- |
@@ -132,7 +141,7 @@ The script overwrites the files in this directory, so `git diff` shows what a ne
 changed. Without `FATE_SUITE`, it keeps the recordings of FATE samples as they are, and without
 `dovi_tool` on the `PATH`, the Dolby Vision profile 9 recordings and the profile 8.1 raw HEVC
 recording, whose RPUs `dovi_tool` generates. The profile 8.2 recording needs no local tool: a pinned
-Alpine image downloads dovi_tool 2.3.4 and checks its SHA-256, so the step needs network access. The
+Alpine image downloads dovi_tool 2.3.4 and checks its SHA-256, so the step needs network access. The Matroska statistics step installs MKVToolNix and libfaketime from Alpine's packages, which needs network access too. The movie boxes of the FATE samples, of `mp4-dovi-p9-dva1.mp4` and of `mp4-dovi-p5-dvh1.mp4` need `FATE_SUITE`, `dovi_tool` and `LOCAL_SAMPLES` as their recordings do. The
 script rewrites `frames-kept-reads.csv` from the sources it probed, so a run without `FATE_SUITE` and
 `LOCAL_SAMPLES` drops their rows; keep those rows when committing such a run. The local
 samples are public test files that stay out of the repository. `LOCAL_SAMPLES` names a directory

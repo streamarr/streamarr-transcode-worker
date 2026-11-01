@@ -26,7 +26,6 @@ import tools.jackson.databind.ObjectMapper;
 @RequiredArgsConstructor
 final class ContainerIndexProbe {
 
-  private static final String MP4_FORMAT = "mov,mp4,m4a,3gp,3g2,mj2";
   private static final BigInteger MICROSECONDS_PER_SECOND = BigInteger.valueOf(1_000_000);
 
   @NonNull private final ObjectMapper objectMapper;
@@ -58,7 +57,7 @@ final class ContainerIndexProbe {
   private KeyframeIndex readIndex(ProbedSource probed, ChosenVideoStream chosen)
       throws IOException {
     return switch (probed.formatName()) {
-      case MP4_FORMAT ->
+      case ProbedSource.MP4_FORMAT ->
           chosen.trackId().isPresent()
               ? Mp4SyncSampleReader.read(probed.source(), chosen.trackId().get())
               : new Unusable(

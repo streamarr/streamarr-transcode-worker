@@ -1,8 +1,11 @@
 package com.streamarr.transcode.probe;
 
+import static com.streamarr.transcode.probe.CodecStrings.AVC_PROFILE_BYTES;
+import static com.streamarr.transcode.probe.CodecStrings.HEVC_PROFILE_BYTES;
 import static com.streamarr.transcode.probe.FfprobeJson.text;
 
 import com.streamarr.transcode.probe.BitReader.TruncatedBitstreamException;
+import java.util.Arrays;
 import java.util.Optional;
 import tools.jackson.databind.JsonNode;
 
@@ -51,6 +54,10 @@ final class CodecStringReader {
   }
 
   private static Optional<String> avc(JsonNode stream, byte[] extradata) {
+    if (isCopiedWithoutFilter(stream)) {
+      return Optional.of(CodecStrings.avc("avc1", recordHeader(extradata, AVC_PROFILE_BYTES)));
+    }
+
     return DecoderConfiguration.avcCopyProfile(extradata)
         .or(
             () ->
@@ -61,6 +68,10 @@ final class CodecStringReader {
   }
 
   private static Optional<String> hevc(JsonNode stream, byte[] extradata) {
+    if (isCopiedWithoutFilter(stream)) {
+      return Optional.of(CodecStrings.hevc("hvc1", recordHeader(extradata, HEVC_PROFILE_BYTES)));
+    }
+
     return DecoderConfiguration.hevcProfile(extradata)
         .or(
             () ->
@@ -68,6 +79,21 @@ final class CodecStringReader {
                     .flatMap(
                         sample -> DecoderConfiguration.hevcFirstSampleProfile(extradata, sample)))
         .map(bytes -> CodecStrings.hevc("hvc1", bytes));
+  }
+
+  /**
+   * Whether a copy without the Annex B filter would keep the record. The mp4 muxer then writes the
+   * source's record, so the record header names the copy's codec string. {@link CopiedPacketBytes}
+   * holds only when that header names what the record's parameter sets name, so the codec string is
+   * the same whether or not the container lets the copy drop the filter.
+   */
+  private static boolean isCopiedWithoutFilter(JsonNode stream) {
+    return CopiedPacketBytes.recordKeepsPacketBytes(stream).orElse(false);
+  }
+
+  // The profile fields that follow the record's configurationVersion.
+  private static byte[] recordHeader(byte[] configurationRecord, int profileBytes) {
+    return Arrays.copyOfRange(configurationRecord, 1, 1 + profileBytes);
   }
 
   private static Optional<String> av1(byte[] extradata) {

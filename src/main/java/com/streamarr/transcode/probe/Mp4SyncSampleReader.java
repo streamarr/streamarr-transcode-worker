@@ -1,5 +1,12 @@
 package com.streamarr.transcode.probe;
 
+import static com.streamarr.transcode.probe.Mp4MovieBox.child;
+import static com.streamarr.transcode.probe.Mp4MovieBox.children;
+import static com.streamarr.transcode.probe.Mp4MovieBox.fourCharacterCode;
+import static com.streamarr.transcode.probe.Mp4MovieBox.skip;
+import static com.streamarr.transcode.probe.Mp4MovieBox.skipFlags;
+import static com.streamarr.transcode.probe.Mp4MovieBox.trackId;
+
 import build.buf.gen.streamarr.transcode.v1.KeyframePacketScanReason;
 import com.streamarr.transcode.probe.KeyframeIndex.KeyframeTime;
 import com.streamarr.transcode.probe.KeyframeIndex.Listed;
@@ -9,7 +16,6 @@ import java.io.IOException;
 import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
@@ -23,10 +29,6 @@ import java.util.Optional;
  */
 final class Mp4SyncSampleReader {
 
-  private static final long MAXIMUM_MOVIE_BOX_BYTES = 256L << 20;
-  private static final int BOX_HEADER_BYTES = 8;
-  private static final int LARGE_BOX_HEADER_BYTES = 16;
-
   /**
    * The reader lists at most this many samples. A 24-hour source at 48 fps has 4,147,200 samples. A
    * track with more samples gets a packet scan.
@@ -37,7 +39,7 @@ final class Mp4SyncSampleReader {
 
   static KeyframeIndex read(Path source, long trackId) throws IOException {
     try (var channel = FileChannel.open(source, StandardOpenOption.READ)) {
-      var movie = movieBox(channel);
+      var movie = Mp4MovieBox.read(channel);
       if (child(movie, "mvex").isPresent()) {
         return new Unusable(
             KeyframePacketScanReason.KEYFRAME_PACKET_SCAN_REASON_NO_CONTAINER_INDEX);
@@ -192,14 +194,6 @@ final class Mp4SyncSampleReader {
     return samples;
   }
 
-  private static long trackId(ByteBuffer track) {
-    var header = child(track, "tkhd").orElseThrow(() -> malformed("tkhd"));
-    var version = header.get() & 0xFF;
-    skipFlags(header);
-    skip(header, version == 1 ? 16 : 8);
-    return Integer.toUnsignedLong(header.getInt());
-  }
-
   private static long timescale(ByteBuffer header) {
     var version = header.get() & 0xFF;
     skipFlags(header);
@@ -217,81 +211,6 @@ final class Mp4SyncSampleReader {
     return "vide".equals(fourCharacterCode(handler));
   }
 
-  private static ByteBuffer movieBox(FileChannel channel) throws IOException {
-    var size = channel.size();
-    long position = 0;
-    while (position + BOX_HEADER_BYTES <= size) {
-      var header =
-          ContainerFileBytes.read(
-              channel, position, (int) Math.min(LARGE_BOX_HEADER_BYTES, size - position));
-      var box = BoxHeader.read(header, size - position);
-      if ("moov".equals(box.type())) {
-        return payload(channel, position, box);
-      }
-
-      position += box.size();
-    }
-
-    throw malformed("moov");
-  }
-
-  private static ByteBuffer payload(FileChannel channel, long position, BoxHeader box)
-      throws IOException {
-    if (box.payloadSize() > MAXIMUM_MOVIE_BOX_BYTES) {
-      throw malformed("oversized moov");
-    }
-
-    return ContainerFileBytes.read(channel, position + box.headerSize(), (int) box.payloadSize());
-  }
-
-  private static Optional<ByteBuffer> child(ByteBuffer parent, String type) {
-    return boxes(parent).stream()
-        .filter(box -> type.equals(box.type()))
-        .map(Box::payload)
-        .findFirst();
-  }
-
-  private static List<ByteBuffer> children(ByteBuffer parent, String type) {
-    return boxes(parent).stream().filter(box -> type.equals(box.type())).map(Box::payload).toList();
-  }
-
-  private static List<Box> boxes(ByteBuffer parent) {
-    var boxes = new ArrayList<Box>();
-    var position = parent.position();
-    while (parent.limit() - position >= BOX_HEADER_BYTES) {
-      var view = parent.duplicate().position(position);
-      var header = BoxHeader.read(view, view.remaining());
-      var payload =
-          parent
-              .duplicate()
-              .position(position + header.headerSize())
-              .limit(Math.toIntExact(position + header.size()))
-              .slice();
-      boxes.add(new Box(header.type(), payload));
-      position = Math.toIntExact(position + header.size());
-    }
-
-    return boxes;
-  }
-
-  private static String fourCharacterCode(ByteBuffer buffer) {
-    var bytes = new byte[4];
-    buffer.get(bytes);
-    return new String(bytes, StandardCharsets.ISO_8859_1);
-  }
-
-  private static void skipFlags(ByteBuffer box) {
-    skip(box, 3);
-  }
-
-  private static void skip(ByteBuffer buffer, int bytes) {
-    if (bytes > buffer.remaining()) {
-      throw malformed("box shorter than its fields");
-    }
-
-    buffer.position(buffer.position() + bytes);
-  }
-
   private static Unusable incomplete() {
     return new Unusable(
         KeyframePacketScanReason.KEYFRAME_PACKET_SCAN_REASON_INCOMPLETE_CONTAINER_INDEX);
@@ -299,35 +218,6 @@ final class Mp4SyncSampleReader {
 
   private static ContainerIndexException malformed(String detail) {
     return new ContainerIndexException("Unusable MP4 sample tables: " + detail);
-  }
-
-  private record Box(String type, ByteBuffer payload) {}
-
-  private record BoxHeader(String type, long size, int headerSize) {
-
-    static BoxHeader read(ByteBuffer buffer, long available) {
-      var size = Integer.toUnsignedLong(buffer.getInt());
-      var type = fourCharacterCode(buffer);
-      var headerSize = BOX_HEADER_BYTES;
-      if (size == 1) {
-        size = buffer.getLong();
-        headerSize = LARGE_BOX_HEADER_BYTES;
-      }
-
-      if (size == 0) {
-        size = available;
-      }
-
-      if (size < headerSize || size > available) {
-        throw malformed("box size");
-      }
-
-      return new BoxHeader(type, size, headerSize);
-    }
-
-    long payloadSize() {
-      return size - headerSize;
-    }
   }
 
   private record Run(long count, int value) {}

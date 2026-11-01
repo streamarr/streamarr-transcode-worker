@@ -12,6 +12,7 @@ record ProbedSource(
     @NonNull Path source, @NonNull JsonNode ffprobeOutput, @NonNull ProbeAttemptResult result) {
 
   static final String MATROSKA_FORMAT = "matroska,webm";
+  static final String MP4_FORMAT = "mov,mp4,m4a,3gp,3g2,mj2";
 
   /** The demuxer names that ffprobe reports as the container's format_name. */
   String formatName() {
