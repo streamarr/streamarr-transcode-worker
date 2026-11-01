@@ -1450,6 +1450,19 @@ class FfprobeExecutorBitrateScanTest {
                 .tags("{\"DURATION\":\"00:00:05.000000000\"}")
                 .build()),
         Arguments.of(
+            "FFmpeg's DURATION cut inside its fraction, where a run stopped during the trailer's"
+                + " write left the reserved zeros",
+            ffmpegWritten()
+                .file(withAudioTag(simpleTag("DURATION", "00:00:05.9" + "\0".repeat(9))))
+                .tags("{\"DURATION\":\"00:00:05.9\"}")
+                .build()),
+        Arguments.of(
+            "FFmpeg's DURATION cut before its fraction",
+            ffmpegWritten()
+                .file(withAudioTag(simpleTag("DURATION", "00:00:05" + "\0".repeat(11))))
+                .tags("{\"DURATION\":\"00:00:05\"}")
+                .build()),
+        Arguments.of(
             "a DURATION with a TagLanguage after FFmpeg's, which FFmpeg never writes",
             ffmpegWritten()
                 .file(

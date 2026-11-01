@@ -14,6 +14,9 @@ final class StreamTags {
 
   private static final Pattern MATROSKA_DURATION =
       Pattern.compile("(\\d+):([0-5]\\d):([0-5]\\d(?:\\.\\d+)?)");
+  // FFmpeg and mkvpropedit write all nine digits of a DURATION's fraction.
+  private static final Pattern COMPLETE_MATROSKA_DURATION =
+      Pattern.compile("\\d+:\\d{2}:\\d{2}\\.\\d{9}");
 
   private StreamTags() {}
 
@@ -46,9 +49,15 @@ final class StreamTags {
     return matroskaStatistic(stream, "DURATION").flatMap(StreamTags::seconds);
   }
 
-  /** The DURATION tag without a language suffix, in seconds. */
+  /**
+   * The DURATION tag without a language suffix, in seconds; empty when its fraction lacks a digit.
+   * A run that stopped inside the trailer's write of the value leaves only its first characters,
+   * followed by the zeros of the space reserved for it.
+   */
   static Optional<BigDecimal> unsuffixedMatroskaDuration(JsonNode stream) {
-    return tag(stream, "DURATION").flatMap(StreamTags::seconds);
+    return tag(stream, "DURATION")
+        .filter(duration -> COMPLETE_MATROSKA_DURATION.matcher(duration).matches())
+        .flatMap(StreamTags::seconds);
   }
 
   private static Optional<BigDecimal> seconds(String duration) {
