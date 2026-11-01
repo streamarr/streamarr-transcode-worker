@@ -267,31 +267,40 @@ class ProducerTest {
                     .containsExactly(numberOf(name) + 1L));
   }
 
-  // An hvc1 record whose parameter set arrays are complete promises that no sample repeats a
-  // parameter set (ISO/IEC 14496-15). The Annex B filter puts the record's VPS, SPS and PPS in
-  // front
-  // of every keyframe sample, so only a copy that keeps every packet's bytes keeps that promise.
-  @ParameterizedTest(name = "{0}")
-  @CsvSource({"18-copy-hevc-keeping-packet-bytes.fmp4, false", "18-copy-hevc-annex-b.fmp4, true"})
+  // An hvc1 record whose parameter set arrays are complete promises that no sample holds a
+  // parameter set of those types (ISO/IEC 14496-15).
+  @Test
   @DisplayName(
-      "Should deliver HEVC keyframe samples that repeat the parameter sets of a complete hvc1 record"
-          + " only when the copy runs the Annex B filter")
-  void shouldDeliverHevcKeyframeSamplesThatRepeatTheParameterSetsOfACompleteRecordOnlyWithTheFilter(
-      String file, boolean repeatsParameterSets) {
-    var deliveries = deliveredBy(recording(file));
+      "Should deliver no sample that repeats a parameter set of the complete hvc1 record when the"
+          + " HEVC copy keeps every packet's bytes")
+  void
+      shouldDeliverNoSampleThatRepeatsAParameterSetOfTheCompleteRecordWhenTheCopyKeepsPacketBytes() {
+    var deliveries = deliveredBy(recording("18-copy-hevc-keeping-packet-bytes.fmp4"));
 
     assertThat(completeArrayTypes(deliveries.contentOf("init.mp4")))
+        .as("the parameter set arrays that the delivered hvc1 record declares complete")
         .containsExactlyInAnyOrder(HevcCopies.VPS, HevcCopies.SPS, HevcCopies.PPS);
-    assertThat(deliveries.acceptedNames())
-        .filteredOn(name -> name.startsWith("segment"))
-        .flatMap(name -> videoSamplesOf(deliveries, name))
-        .filteredOn(Sample::isSync)
+    assertThat(deliveredVideoSamplesOf(deliveries))
+        .as("delivered video samples")
         .isNotEmpty()
-        .allSatisfy(
-            keyframe ->
-                assertThat(holdsParameterSet(keyframe.data()))
-                    .as("a parameter set in a keyframe sample")
-                    .isEqualTo(repeatsParameterSets));
+        .noneMatch(sample -> holdsParameterSet(sample.data()));
+  }
+
+  // The Annex B filter puts the record's VPS, SPS and PPS in front of every keyframe sample; this
+  // copy shows that the parameter set reader above finds them when they are there.
+  @Test
+  @DisplayName(
+      "Should deliver keyframe samples that repeat the hvc1 record's parameter sets when the HEVC"
+          + " copy runs the Annex B filter")
+  void
+      shouldDeliverKeyframeSamplesThatRepeatTheRecordsParameterSetsWhenTheCopyRunsTheAnnexBFilter() {
+    var deliveries = deliveredBy(recording("18-copy-hevc-annex-b.fmp4"));
+
+    assertThat(deliveredVideoSamplesOf(deliveries))
+        .filteredOn(Sample::isSync)
+        .as("delivered keyframe samples")
+        .isNotEmpty()
+        .allMatch(keyframe -> holdsParameterSet(keyframe.data()));
   }
 
   // Stream copies of an MP4 source: FFmpeg writes the same packets at the same decode times in
@@ -3145,6 +3154,13 @@ class ProducerTest {
     var producer = producerFor(process, recording).sink(deliveries).start();
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
     return deliveries;
+  }
+
+  private static List<Sample> deliveredVideoSamplesOf(RecordingSegmentSink deliveries) {
+    return deliveries.acceptedNames().stream()
+        .filter(name -> name.startsWith("segment"))
+        .flatMap(name -> videoSamplesOf(deliveries, name).stream())
+        .toList();
   }
 
   // The NAL unit types of the hvcC arrays whose array_completeness bit is set.
