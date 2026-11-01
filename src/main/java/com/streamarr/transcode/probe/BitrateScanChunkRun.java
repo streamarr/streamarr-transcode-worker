@@ -52,6 +52,7 @@ final class BitrateScanChunkRun {
 
   private static final int SEEK_SCALE = 6;
   private static final int FIRST_PACKET_OUTPUT_BYTES = 1 << 20;
+  private static final int FIRST_PACKET_TIME_OUTPUT_BYTES = 1 << 16;
 
   private final PacketListingRunner ffprobe;
   private final BoundedFfprobeRunner boundedFfprobe;
@@ -101,7 +102,10 @@ final class BitrateScanChunkRun {
       }
     }
 
-    var timeline = Timeline.of(probed.ffprobeOutput(), chunk, streams.get());
+    // The first chunk counts the packets before its first keyframe, so every stream can hold some.
+    LatestEnds latestEnds =
+        chunk.getFirstChunk() ? (stream, limit) -> OptionalLong.empty() : new TrackEnds(probed);
+    var timeline = Timeline.of(probed.ffprobeOutput(), chunk, streams.get(), latestEnds);
     if (timeline.isEmpty()) {
       return failed(probed, ProbeFailure.PROBE_FAILURE_INVALID_MEDIA);
     }
@@ -233,6 +237,91 @@ final class BitrateScanChunkRun {
     return arguments;
   }
 
+  /**
+   * A time that no packet of an audio stream presents after, in its time base, its latest end;
+   * empty when it is unknown, or when it could not lie before the limit, so that no read is spent
+   * on it. The end is known for a Matroska track from its trusted DURATION tag ({@link
+   * MatroskaTrackDuration}). FFmpeg writes as DURATION the end of the track's last packet, where
+   * mkvmerge and mkvpropedit write that end less the track's first timestamp. The demuxer gives
+   * each packet its stored time less the track's codec delay, which can put the first packet time
+   * before zero. So the track's first packet time, or zero when it is before zero, plus DURATION is
+   * at or after every packet's presentation time in either case, even where the writer leaves out
+   * the last packet's duration. It shows no more than that: several packets can end at it.
+   */
+  @FunctionalInterface
+  private interface LatestEnds {
+    OptionalLong before(MeasuredStream stream, long limit)
+        throws ExecutionException, InterruptedException;
+  }
+
+  /**
+   * The {@link LatestEnds} of a source's Matroska tracks. It reads the file's MuxingApp and Cues
+   * once, and a track's first packet, only when the track's DURATION alone lies before the limit.
+   */
+  private final class TrackEnds implements LatestEnds {
+    private final ProbedSource probed;
+    private Optional<Boolean> isWrittenByFfmpeg = Optional.empty();
+
+    private TrackEnds(ProbedSource probed) {
+      this.probed = probed;
+    }
+
+    @Override
+    public OptionalLong before(MeasuredStream stream, long limit)
+        throws ExecutionException, InterruptedException {
+      if (!ProbedSource.MATROSKA_FORMAT.equals(probed.formatName())) {
+        return OptionalLong.empty();
+      }
+
+      var duration =
+          MatroskaTrackDuration.of(stream.description())
+              .map(seconds -> ticksUp(seconds, stream.timeBase()))
+              .filter(ticks -> ticks.compareTo(BigInteger.valueOf(limit)) < 0);
+      if (duration.isEmpty() || !isWrittenByFfmpeg()) {
+        return OptionalLong.empty();
+      }
+
+      var first = firstPacketTime(stream.index());
+      if (first.isEmpty()) {
+        return OptionalLong.empty();
+      }
+
+      // An end past the largest long is past every packet, as the largest long is.
+      var end = BigInteger.valueOf(Math.max(0, first.getAsLong())).add(duration.get());
+      return OptionalLong.of(end.min(BigInteger.valueOf(Long.MAX_VALUE)).longValueExact());
+    }
+
+    private boolean isWrittenByFfmpeg() {
+      if (isWrittenByFfmpeg.isEmpty()) {
+        isWrittenByFfmpeg = Optional.of(MatroskaTrackDuration.isWrittenByFfmpeg(probed.source()));
+      }
+
+      return isWrittenByFfmpeg.get();
+    }
+
+    private OptionalLong firstPacketTime(int streamIndex)
+        throws ExecutionException, InterruptedException {
+      var output =
+          boundedFfprobe.run(
+              firstPacketRead(probed, streamIndex, List.of("packet=pts")),
+              FIRST_PACKET_TIME_OUTPUT_BYTES);
+      if (output.isEmpty() || output.get().exitCode() != 0) {
+        return OptionalLong.empty();
+      }
+
+      var time = objectMapper.readTree(output.get().stdout()).path("packets").path(0).path("pts");
+      return time.isIntegralNumber() ? OptionalLong.of(time.asLong()) : OptionalLong.empty();
+    }
+  }
+
+  // The seconds in ticks of the time base, rounded up.
+  private static BigInteger ticksUp(BigDecimal seconds, TimeBase timeBase) {
+    return seconds
+        .multiply(BigDecimal.valueOf(timeBase.denominator()))
+        .divide(BigDecimal.valueOf(timeBase.numerator()), 0, RoundingMode.CEILING)
+        .toBigIntegerExact();
+  }
+
   private static Optional<Long> sampleRate(MeasuredStream stream) {
     return number(stream.description(), "sample_rate", Long::parseLong).filter(rate -> rate > 0);
   }
@@ -246,7 +335,11 @@ final class BitrateScanChunkRun {
 
     /** Empty when a keyframe time is no whole tick of the chosen stream's time base. */
     static Optional<Timeline> of(
-        JsonNode ffprobeOutput, BitrateScanChunk chunk, List<MeasuredStream> streams) {
+        JsonNode ffprobeOutput,
+        BitrateScanChunk chunk,
+        List<MeasuredStream> streams,
+        LatestEnds latestEnds)
+        throws ExecutionException, InterruptedException {
       var times = new long[chunk.getPresentationTimeDeltasCount() + 1];
       long time = 0;
       for (var i = 0; i < chunk.getPresentationTimeDeltasCount(); i++) {
@@ -274,17 +367,20 @@ final class BitrateScanChunkRun {
         return Optional.empty();
       }
 
+      var audioWindows = new ArrayList<AudioWindow>();
+      for (var stream : streams) {
+        if (stream.isAudio()) {
+          audioWindows.add(keyframes.audioWindow(stream, latestEnds));
+        }
+      }
+
       var plan =
           ListingPlan.builder()
               .chosenStreamIndex(chosen.index())
               .keyframes(Arrays.copyOf(video.get(), video.get().length - 1))
               .end(keyframes.end(video.get()))
               .isFirstChunk(chunk.getFirstChunk())
-              .audioWindows(
-                  streams.stream()
-                      .filter(MeasuredStream::isAudio)
-                      .map(keyframes::audioWindow)
-                      .toList())
+              .audioWindows(audioWindows)
               .build();
       return Optional.of(new Timeline(plan, seconds(video.get()[0], chosen.timeBase()), streams));
     }
@@ -337,7 +433,9 @@ final class BitrateScanChunkRun {
       return hasEnd ? OptionalLong.of(rescaled[rescaled.length - 1]) : OptionalLong.empty();
     }
 
-    AudioWindow audioWindow(MeasuredStream stream) {
+    /** The stream's window, whose latest end counts only before the chunk's first keyframe. */
+    AudioWindow audioWindow(MeasuredStream stream, LatestEnds latestEnds)
+        throws ExecutionException, InterruptedException {
       var start = KeyframePositionsReport.containerStart(ffprobeOutput, stream.timeBase());
       var starts = new long[times.length];
       for (var i = 0; i < times.length; i++) {
@@ -352,6 +450,7 @@ final class BitrateScanChunkRun {
           .streamIndex(stream.index())
           .starts(Arrays.copyOf(starts, starts.length - 1))
           .end(end(starts))
+          .latestEnd(latestEnds.before(stream, starts[0]))
           .sixBlocks(sixBlocks)
           .build();
     }

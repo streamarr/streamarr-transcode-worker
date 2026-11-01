@@ -28,6 +28,9 @@ import lombok.Builder;
  * present before it, so a stream without a packet after the seek sends the listing back too. Audio
  * packets of one stream follow their presentation order in the file, so every audio packet of the
  * chunk follows that first packet.
+ *
+ * <p>A stream whose packets all present before the chunk's first keyframe, as its latest end shows,
+ * holds none of a later chunk's packets: it neither sends the listing back nor holds it open.
  */
 final class ChunkPackets implements KeyframePacketScan.PacketLines {
 
@@ -72,28 +75,45 @@ final class ChunkPackets implements KeyframePacketScan.PacketLines {
     this.isCountingVideo = isFirstChunk;
     this.video = new StreamCounts(chosenStreamIndex, keyframes.length);
     for (var window : audioWindows) {
-      audio.put(window.streamIndex, new AudioCounts(window, keyframes.length));
+      var stream = new AudioCounts(window, keyframes.length);
+      if (window.endsBeforeTheChunk()) {
+        stream.see();
+        stream.passEnd();
+      }
+
+      audio.put(window.streamIndex, stream);
     }
   }
 
   /**
    * One audio stream's interval starts and end in its own time base: the first tick at or after
-   * each keyframe's presentation time, and at or after the end keyframe's. {@code sixBlocks} holds
-   * the E-AC-3 rule that each counted packet must meet.
+   * each keyframe's presentation time, and at or after the end keyframe's. {@code latestEnd}, when
+   * it is known, is a time that no packet of the stream presents after. {@code sixBlocks} holds the
+   * E-AC-3 rule that each counted packet must meet.
    */
   static final class AudioWindow {
     private final int streamIndex;
     private final long[] starts;
     private final OptionalLong end;
+    private final OptionalLong latestEnd;
     private final Optional<SixBlockDuration> sixBlocks;
 
     @Builder
     private AudioWindow(
-        int streamIndex, long[] starts, OptionalLong end, Optional<SixBlockDuration> sixBlocks) {
+        int streamIndex,
+        long[] starts,
+        OptionalLong end,
+        OptionalLong latestEnd,
+        Optional<SixBlockDuration> sixBlocks) {
       this.streamIndex = streamIndex;
       this.starts = starts.clone();
       this.end = end;
+      this.latestEnd = latestEnd;
       this.sixBlocks = sixBlocks;
+    }
+
+    private boolean endsBeforeTheChunk() {
+      return latestEnd.isPresent() && latestEnd.getAsLong() < starts[0];
     }
   }
 

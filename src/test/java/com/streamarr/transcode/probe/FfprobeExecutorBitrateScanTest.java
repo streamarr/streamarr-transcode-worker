@@ -1,5 +1,13 @@
 package com.streamarr.transcode.probe;
 
+import static com.streamarr.transcode.probe.EbmlElements.CUES;
+import static com.streamarr.transcode.probe.EbmlElements.CUE_POINT;
+import static com.streamarr.transcode.probe.EbmlElements.CUE_TIME;
+import static com.streamarr.transcode.probe.EbmlElements.INFO;
+import static com.streamarr.transcode.probe.EbmlElements.MUXING_APP;
+import static com.streamarr.transcode.probe.EbmlElements.document;
+import static com.streamarr.transcode.probe.EbmlElements.element;
+import static com.streamarr.transcode.probe.EbmlElements.unsigned;
 import static com.streamarr.transcode.probe.RecordedFfprobe.ffprobeDump;
 import static com.streamarr.transcode.worker.support.BitrateScanChunks.intervalCounts;
 import static com.streamarr.transcode.worker.support.BitrateScanChunks.request;
@@ -16,9 +24,12 @@ import com.streamarr.transcode.worker.support.BitrateScanChunks.IntervalCounts;
 import com.streamarr.transcode.worker.support.BitrateScanChunks.Keyframe;
 import com.streamarr.transcode.worker.support.BitrateScanChunks.Positions;
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HexFormat;
@@ -43,6 +54,7 @@ class FfprobeExecutorBitrateScanTest {
   private static final Path SOURCE = Path.of("/media/movie.mkv");
   private static final String LISTING_ENTRIES = "packet=stream_index,pts,dts,duration,size,flags";
   private static final String FROM_FILE_START = "";
+  private static final String FIRST_PACKET_TIME_ENTRIES = "packet=pts";
 
   // An avcC record of High profile level 4.0 whose NAL units take 4-byte lengths, as its SPS names.
   private static final String KEPT_AVC_RECORD =
@@ -75,6 +87,22 @@ class FfprobeExecutorBitrateScanTest {
           .measuredStreamIndex(0)
           .measuredStreamIndex(1)
           .build();
+
+  // Keyframes at 0, 20 and 40 s on the zero-based timeline. The chunk of the middle keyframe
+  // starts at 20.5 s on the demuxer's timeline, so its first listing seeks to 10.5 s.
+  private static final Positions TWENTY_SECOND_KEYFRAMES =
+      POSITIONS.toBuilder()
+          .clearKeyframes()
+          .keyframe(new Keyframe(0, 0))
+          .keyframe(new Keyframe(20_000, 20_000))
+          .keyframe(new Keyframe(40_000, 40_000))
+          .build();
+
+  // Matroska files that FFmpeg 8.1 and mkvmerge wrote to a seekable output, as their Cues show.
+  private static final Path FFMPEG_FILE = segment("Lavf62.12.103", true);
+  private static final Path MKVMERGE_FILE = segment("libebml v1.4.5 + libmatroska v1.7.1", true);
+  private static final String MKVMERGE = "mkvmerge v92.0 ('Everglow') 64-bit";
+  private static final String MKVPROPEDIT = "mkvpropedit v92.0 ('Everglow') 64-bit";
 
   // Every packet of the source in file order: video every 500 ms with a keyframe every second,
   // audio every 250 ms, and a subtitle that no chunk measures. Audio leads the video by 125 ms.
@@ -1193,6 +1221,300 @@ class FfprobeExecutorBitrateScanTest {
         .containsOnly(ProbeCommand.CpuPriority.LOWEST);
   }
 
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("audioEndsBeforeTheChunk")
+  @DisplayName(
+      "Should list the chunk once from the seek when a trusted DURATION tag ends an audio stream"
+          + " before the chunk's first keyframe")
+  void shouldListTheChunkOnceFromTheSeekWhenATrustedDurationTagEndsAnAudioStreamBeforeTheChunk(
+      String description, AudioEnd audioEnd) {
+    // The audio ended before the seek's target, so the listing from the seek holds none of it.
+    // Reading the line after the end keyframe would mean that the listing waited for the audio.
+    var afterTheSeek =
+        """
+        stream_index=0|pts=10500|dts=10500|duration=500|size=900|flags=K__
+        stream_index=0|pts=20500|dts=20500|duration=500|size=1001|flags=K__
+        stream_index=0|pts=40500|dts=40500|duration=500|size=1002|flags=K__
+        stream_index=0|pts=60500|dts=60500|duration=500|size=1003|flags=K__
+        """;
+    var ffprobe = audioEnd.source().listing("10.500000", afterTheSeek).listingExitCode(141).build();
+
+    var report =
+        ffprobe.executor().probe(audioEnd.file(), request(TWENTY_SECOND_KEYFRAMES.chunk(1, 2)));
+
+    assertThat(intervalCounts(report.streamMeasurementParts()))
+        .containsExactly(
+            Map.entry(0, counts(List.of(1001L), List.of(1L))),
+            Map.entry(1, counts(List.of(0L), List.of(0L))));
+    assertThat(ffprobe.listingStarts()).containsExactly("10.500000");
+  }
+
+  static Stream<Arguments> audioEndsBeforeTheChunk() {
+    return Stream.of(
+        Arguments.of(
+            "FFmpeg's DURATION, the end of the track's last packet",
+            AudioEnd.builder()
+                .file(FFMPEG_FILE)
+                .tags("{\"DURATION\":\"00:00:10.000000000\"}")
+                .firstPacketTime(375L)
+                .build()),
+        Arguments.of(
+            "mkvpropedit's DURATION, which starts at the track's first packet, in FFmpeg's file",
+            AudioEnd.builder()
+                .file(FFMPEG_FILE)
+                .tags(statisticsTags(MKVPROPEDIT, "DURATION", "00:00:05.000000000"))
+                .firstPacketTime(5_000L)
+                .build()),
+        Arguments.of(
+            "FFmpeg 3.2's DURATION, the first FFmpeg that never copies the tag",
+            AudioEnd.builder()
+                .file(segment("Lavf57.56.100", true))
+                .tags("{\"DURATION\":\"00:00:10.000000000\"}")
+                .firstPacketTime(375L)
+                .build()),
+        Arguments.of(
+            "FFmpeg's DURATION of a track whose first packet presents before zero",
+            AudioEnd.builder()
+                .file(FFMPEG_FILE)
+                .tags("{\"DURATION\":\"00:00:20.000000000\"}")
+                .firstPacketTime(-21L)
+                .build()));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("audioEndsThatLeaveTheChunkOpen")
+  @DisplayName(
+      "Should list the chunk again from the file's start when an audio stream that gives no packet"
+          + " after the seek may still end inside the chunk")
+  void shouldListTheChunkAgainFromTheFilesStartWhenAnAudioStreamMayStillEndInsideTheChunk(
+      String description, AudioEnd audioEnd) {
+    var afterTheSeek =
+        """
+        stream_index=0|pts=10500|dts=10500|duration=500|size=900|flags=K__
+        stream_index=0|pts=20500|dts=20500|duration=500|size=1001|flags=K__
+        stream_index=0|pts=40500|dts=40500|duration=500|size=1002|flags=K__
+        """;
+    var fromTheFileStart =
+        """
+        stream_index=0|pts=500|dts=500|duration=500|size=1000|flags=K__
+        stream_index=0|pts=20500|dts=20500|duration=500|size=1001|flags=K__
+        stream_index=0|pts=40500|dts=40500|duration=500|size=1002|flags=K__
+        stream_index=1|pts=20500|dts=20500|duration=250|size=10|flags=K__
+        stream_index=1|pts=40500|dts=40500|duration=250|size=11|flags=K__
+        """;
+    var ffprobe =
+        audioEnd
+            .source()
+            .listing("10.500000", afterTheSeek)
+            .listing(FROM_FILE_START, fromTheFileStart)
+            .build();
+
+    var report =
+        ffprobe.executor().probe(audioEnd.file(), request(TWENTY_SECOND_KEYFRAMES.chunk(1, 2)));
+
+    assertThat(intervalCounts(report.streamMeasurementParts()))
+        .containsEntry(1, counts(List.of(10L), List.of(1L)));
+    assertThat(ffprobe.listingStarts()).containsExactly("10.500000", FROM_FILE_START);
+  }
+
+  static Stream<Arguments> audioEndsThatLeaveTheChunkOpen() {
+    return Stream.of(
+        Arguments.of(
+            "mkvpropedit's DURATION from a first packet late enough to end inside the chunk",
+            AudioEnd.builder()
+                .file(FFMPEG_FILE)
+                .tags(statisticsTags(MKVPROPEDIT, "DURATION", "00:00:05.000000000"))
+                .firstPacketTime(16_000L)
+                .build()),
+        Arguments.of(
+            "mkvmerge's statistics in mkvmerge's file, which a remux can keep while it moves the"
+                + " packets",
+            AudioEnd.builder()
+                .file(MKVMERGE_FILE)
+                .tags(statisticsTags(MKVMERGE, "DURATION", "00:00:05.000000000"))
+                .firstPacketTime(375L)
+                .build()),
+        Arguments.of(
+            "FFmpeg's DURATION, longer than the first packet's lead before zero",
+            ffmpegWritten()
+                .tags("{\"DURATION\":\"00:00:21.000000000\"}")
+                .firstPacketTime(-600L)
+                .build()),
+        Arguments.of(
+            "FFmpeg 3.1's DURATION, which it may have copied from its input",
+            ffmpegWritten()
+                .file(segment("Lavf57.41.100", true))
+                .tags("{\"DURATION\":\"00:00:05.000000000\"}")
+                .build()),
+        Arguments.of(
+            "FFmpeg 2.8's DURATION, which it may have copied from its input",
+            ffmpegWritten()
+                .file(segment("Lavf56.40.101", true))
+                .tags("{\"DURATION\":\"00:00:05.000000000\"}")
+                .build()),
+        Arguments.of(
+            "the DURATION of an FFmpeg that names no version",
+            ffmpegWritten()
+                .file(segment("Lavf", true))
+                .tags("{\"DURATION\":\"00:00:05.000000000\"}")
+                .build()),
+        Arguments.of(
+            "FFmpeg's file without Cues, written to an output it could not seek, where it writes"
+                + " no DURATION of its own and may pass on a copied one",
+            ffmpegWritten()
+                .file(segment("Lavf62.12.103", false))
+                .tags("{\"DURATION\":\"00:00:05.000000000\"}")
+                .build()),
+        Arguments.of(
+            "a source whose Info cannot be read",
+            ffmpegWritten()
+                .file(Path.of("/media/missing.mkv"))
+                .tags("{\"DURATION\":\"00:00:05.000000000\"}")
+                .build()),
+        Arguments.of(
+            "a DURATION with a language suffix, which FFmpeg copies from its input",
+            ffmpegWritten().tags("{\"DURATION-eng\":\"00:00:05.000000000\"}").build()),
+        Arguments.of(
+            "a DURATION of zero",
+            ffmpegWritten().tags("{\"DURATION\":\"00:00:00.000000000\"}").build()),
+        Arguments.of(
+            "a first packet read that exits with an error",
+            ffmpegWritten()
+                .tags("{\"DURATION\":\"00:00:05.000000000\"}")
+                .firstPacketTimeExitCode(1)
+                .build()),
+        Arguments.of(
+            "a first packet read that prints more than any first packet time takes",
+            ffmpegWritten()
+                .tags("{\"DURATION\":\"00:00:05.000000000\"}")
+                .firstPacketOutput("x".repeat((1 << 16) + 1))
+                .build()),
+        Arguments.of(
+            "a first packet read that finds no packet",
+            ffmpegWritten()
+                .tags("{\"DURATION\":\"00:00:05.000000000\"}")
+                .firstPacketTime(null)
+                .build()),
+        Arguments.of(
+            "a source that is not Matroska",
+            ffmpegWritten()
+                .tags("{\"DURATION\":\"00:00:05.000000000\"}")
+                .formatName("avi")
+                .build()));
+  }
+
+  @Test
+  @DisplayName(
+      "Should count the first chunk's audio before its first keyframe when the audio ends before"
+          + " that keyframe and the muxer places it after the end keyframe")
+  void shouldCountTheFirstChunksAudioBeforeItsFirstKeyframeWhenTheAudioEndsBeforeThatKeyframe() {
+    // The audio presents from 100 ms to 350 ms, before the first keyframe at 500 ms, which the
+    // first chunk counts in its first interval wherever the file holds it.
+    var listing =
+        """
+        stream_index=0|pts=500|dts=500|duration=500|size=1000|flags=K__
+        stream_index=0|pts=1500|dts=1500|duration=500|size=1001|flags=K__
+        stream_index=0|pts=2500|dts=2500|duration=500|size=1002|flags=K__
+        stream_index=1|pts=100|dts=100|duration=250|size=10|flags=K__
+        """;
+    var audioEnd =
+        ffmpegWritten().tags("{\"DURATION\":\"00:00:00.350000000\"}").firstPacketTime(100L).build();
+    var ffprobe = audioEnd.source().listing(FROM_FILE_START, listing).build();
+
+    var report = ffprobe.executor().probe(audioEnd.file(), request(POSITIONS.chunk(0, 2)));
+
+    assertThat(intervalCounts(report.streamMeasurementParts()))
+        .containsEntry(1, counts(List.of(10L, 0L), List.of(1L, 0L)));
+  }
+
+  @Test
+  @DisplayName(
+      "Should not read an audio stream's first packet when its DURATION tag reaches the chunk's"
+          + " first keyframe")
+  void shouldNotReadAnAudioStreamsFirstPacketWhenItsDurationTagReachesTheChunksFirstKeyframe() {
+    // DURATION reaches 20.5 s, where the chunk's first keyframe presents on the demuxer's
+    // timeline, so no first packet time could end the stream before the chunk.
+    var afterTheSeek =
+        """
+        stream_index=0|pts=10500|dts=10500|duration=500|size=900|flags=K__
+        stream_index=1|pts=10500|dts=10500|duration=250|size=9|flags=K__
+        stream_index=0|pts=20500|dts=20500|duration=500|size=1001|flags=K__
+        stream_index=1|pts=20500|dts=20500|duration=250|size=10|flags=K__
+        stream_index=0|pts=40500|dts=40500|duration=500|size=1002|flags=K__
+        stream_index=1|pts=40500|dts=40500|duration=250|size=11|flags=K__
+        """;
+    var audioEnd = ffmpegWritten().tags("{\"DURATION\":\"00:00:20.500000000\"}").build();
+    var ffprobe = audioEnd.source().listing("10.500000", afterTheSeek).build();
+
+    var report =
+        ffprobe.executor().probe(audioEnd.file(), request(TWENTY_SECOND_KEYFRAMES.chunk(1, 2)));
+
+    assertThat(intervalCounts(report.streamMeasurementParts()))
+        .containsEntry(1, counts(List.of(10L), List.of(1L)));
+    assertThat(ffprobe.commands())
+        .noneMatch(command -> command.arguments().contains(FIRST_PACKET_TIME_ENTRIES));
+  }
+
+  /**
+   * A file holding a Matroska segment whose Info names the muxing library, followed by Cues with
+   * one point when the library wrote to a seekable output.
+   */
+  private static Path segment(String muxingApp, boolean hasCues) {
+    var info = element(INFO, element(MUXING_APP, muxingApp.getBytes(StandardCharsets.UTF_8)));
+    var cues = element(CUES, element(CUE_POINT, element(CUE_TIME, unsigned(0))));
+    try {
+      var file = Files.createTempFile("segment", ".mkv");
+      file.toFile().deleteOnExit();
+      return Files.write(file, hasCues ? document(info, cues) : document(info));
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
+    }
+  }
+
+  /** An audio stream of a file that FFmpeg wrote, whose first packet presents at 375 ms. */
+  private static AudioEnd.AudioEndBuilder ffmpegWritten() {
+    return AudioEnd.builder().file(FFMPEG_FILE).firstPacketTime(375L);
+  }
+
+  /** The statistics tags that mkvmerge or mkvpropedit wrote for an audio stream. */
+  private static String statisticsTags(String program, String durationKey, String duration) {
+    return "{\"_STATISTICS_WRITING_APP\":\"%s\",\"%s\":\"%s\"}"
+        .formatted(program, durationKey, duration);
+  }
+
+  /**
+   * A Matroska file that names the library that muxed it, and the kept AAC stream's tags and first
+   * packet time, in ms on the demuxer's timeline. A missing time gives a read without a packet, and
+   * {@code firstPacketOutput} replaces the read's output. Another format name makes the video
+   * MPEG-4 Part 2, which a copy keeps in any container.
+   */
+  @Builder
+  private record AudioEnd(
+      Path file,
+      String tags,
+      String formatName,
+      Long firstPacketTime,
+      String firstPacketOutput,
+      int firstPacketTimeExitCode) {
+
+    ScriptedSource.ScriptedSourceBuilder source() {
+      var streams =
+          MATROSKA_STREAMS
+              .formatted("aac")
+              .replace("\"sample_rate\":\"48000\"", "\"sample_rate\":\"48000\",\"tags\":" + tags)
+              .replace(
+                  "\"matroska,webm\"",
+                  "\"%s\"".formatted(formatName == null ? "matroska,webm" : formatName))
+              .replace("\"h264\"", formatName == null ? "\"h264\"" : "\"mpeg4\"");
+      var packets = firstPacketTime == null ? "[]" : "[{\"pts\":%d}]".formatted(firstPacketTime);
+      return keptAacSource()
+          .streams(streams)
+          .firstPacketTimes(
+              firstPacketOutput == null ? "{\"packets\":%s}".formatted(packets) : firstPacketOutput)
+          .firstPacketTimeExitCode(firstPacketTimeExitCode);
+    }
+  }
+
   private static ScriptedSource.ScriptedSourceBuilder source() {
     return ScriptedSource.builder();
   }
@@ -1219,8 +1541,9 @@ class FfprobeExecutorBitrateScanTest {
 
   /**
    * Answers the chunk's ffprobe runs: the streams and format, each stream's extradata, the first
-   * AAC packet, and a packet listing for each read interval start, {@code ""} for one from the
-   * file's start. The listing's diagnostics and exit code are the same for every start.
+   * AAC packet, the time of an audio stream's first packet, and a packet listing for each read
+   * interval start, {@code ""} for one from the file's start. The listing's diagnostics and exit
+   * code are the same for every start.
    */
   @Builder
   record ScriptedSource(
@@ -1230,6 +1553,8 @@ class FfprobeExecutorBitrateScanTest {
       String firstAudioPacket,
       String firstAudioPacketOutput,
       int firstAudioPacketExitCode,
+      String firstPacketTimes,
+      int firstPacketTimeExitCode,
       @Singular Map<String, String> listings,
       String listingDiagnostics,
       int listingExitCode,
@@ -1257,6 +1582,13 @@ class FfprobeExecutorBitrateScanTest {
             listings.get(start),
             listingDiagnostics == null ? "" : listingDiagnostics,
             listingExitCode);
+      }
+
+      if (arguments.contains(FIRST_PACKET_TIME_ENTRIES)) {
+        return new ScriptedProcess(
+            firstPacketTimes == null ? "{\"packets\":[]}" : firstPacketTimes,
+            "",
+            firstPacketTimeExitCode);
       }
 
       if (arguments.contains("packet=data")) {

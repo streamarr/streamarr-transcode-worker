@@ -158,6 +158,87 @@ class WorkerBitrateScanSmokeTest {
         .isEqualTo(WholeFileListing.read(file, positions.streamIndex()).intervalCounts());
   }
 
+  @Test
+  @DisplayName(
+      "Should measure a chunk after the audio's end without reading to the file's end when the"
+          + " audio of a synthetic Matroska source ends before its video")
+  void shouldMeasureAChunkAfterTheAudiosEndWithoutReadingToTheFilesEndWhenTheAudioEndsEarly()
+      throws Exception {
+    // FFmpeg writes each track's DURATION tag, and its Cues in space reserved before the first
+    // Cluster, so that a cut keeps them. The AAC stream ends after 4 s and the Opus stream, whose
+    // first packet presents before zero, after 9 s, while the video runs for 40 s with a keyframe
+    // every second.
+    var file = root.resolve("short-audio.mkv");
+    run(
+        List.of(
+            "ffmpeg",
+            "-nostdin",
+            "-v",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=s=320x240:r=24:d=40",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=sample_rate=48000:d=4",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=880:sample_rate=48000:d=9",
+            "-map",
+            "0:v",
+            "-map",
+            "1:a",
+            "-map",
+            "2:a",
+            "-c:v",
+            "libx264",
+            "-bf",
+            "2",
+            "-g",
+            "24",
+            "-sc_threshold",
+            "0",
+            "-c:a:0",
+            "aac",
+            "-c:a:1",
+            "libopus",
+            "-reserve_index_space",
+            "50000",
+            file.toString()));
+    var positions = positions(file);
+    var wholeFile = WholeFileListing.read(file, positions.streamIndex()).intervalCounts();
+    assertThat(chunkCounts(file, positions, List.of(0, 6, 13, 25))).isEqualTo(wholeFile);
+    // A chunk that reads on to the end of the cut file fails as invalid media.
+    var bytes = Files.readAllBytes(file);
+    Files.write(file, Arrays.copyOf(bytes, bytes.length * 8 / 10));
+
+    var afterTheAudio = FFPROBE.probe(file, request(positions.chunk(13, 25)));
+
+    assertThat(afterTheAudio.result().getBitrateScanChunk().getResultCase())
+        .as("%s", afterTheAudio.result())
+        .isEqualTo(BitrateScanChunkResult.ResultCase.MEASURED);
+    assertThat(intervalCounts(afterTheAudio.streamMeasurementParts()))
+        .isEqualTo(intervals(wholeFile, 13, 25));
+  }
+
+  /** Each stream's counts of the intervals from {@code from} up to {@code to}. */
+  private static Map<Integer, IntervalCounts> intervals(
+      Map<Integer, IntervalCounts> counts, int from, int to) {
+    var intervals = new LinkedHashMap<Integer, IntervalCounts>();
+    counts.forEach(
+        (stream, streamCounts) ->
+            intervals.put(
+                stream,
+                new IntervalCounts(
+                    streamCounts.bytes().subList(from, to),
+                    streamCounts.packets().subList(from, to))));
+    return intervals;
+  }
+
   /** The counts of the chunks that start at the keyframes, joined per stream; each is measured. */
   private static Map<Integer, IntervalCounts> chunkCounts(
       Path file, Positions positions, List<Integer> chunkStarts) {
