@@ -65,15 +65,14 @@ class FfprobeExecutorCopyPacketBytesTest {
   class RecordedSourceTests {
 
     // An MP4 or MOV source counts only with its movie box, from which the probe reads how many
-    // sample entries the track holds. Matroska and FLV sources have no sample entries, so the
-    // probe reads no file for them.
+    // sample entries the track holds. Matroska sources have no sample entries, so the probe reads
+    // no file for them.
     @ParameterizedTest(name = "{0}")
     @ValueSource(
         strings = {
           "mp4-sdr8-bt709.mp4",
           "mp4-dovi-p9-dva1.mp4",
           "mkv-120fps.mkv",
-          "flv-h264-sei-without-trailing-bits.flv",
           "mp4-dovi-p5-dvh1.mp4",
           "mkv-pipe-hevc-10bit.mkv",
         })
@@ -104,6 +103,8 @@ class FfprobeExecutorCopyPacketBytesTest {
           // The record holds no NAL unit.
           "mkv-hevc-parameter-sets-in-samples.mkv",
           "mkv-h264-parameter-sets-in-samples.mkv",
+          // FLV can carry a new record in any packet, and only the filter delivers it.
+          "flv-h264-sei-without-trailing-bits.flv",
           // The extradata is Annex B or no record.
           "mpegts-hevc-ac3.ts",
           "mpegts-aac-he.ts",

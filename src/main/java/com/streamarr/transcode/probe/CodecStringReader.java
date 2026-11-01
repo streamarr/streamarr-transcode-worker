@@ -82,12 +82,13 @@ final class CodecStringReader {
   }
 
   /**
-   * Whether the copy runs without the Annex B filter. The mp4 muxer then writes the source's
-   * record, so the record header names the copy's codec string, and {@link CopiedPacketBytes} holds
-   * only when that header names what the record's parameter sets name.
+   * Whether a copy without the Annex B filter would keep the record. The mp4 muxer then writes the
+   * source's record, so the record header names the copy's codec string. {@link CopiedPacketBytes}
+   * holds only when that header names what the record's parameter sets name, so the codec string is
+   * the same whether or not the container lets the copy drop the filter.
    */
   private static boolean isCopiedWithoutFilter(JsonNode stream) {
-    return CopiedPacketBytes.of(stream).orElse(false);
+    return CopiedPacketBytes.recordKeepsPacketBytes(stream).orElse(false);
   }
 
   // The profile fields that follow the record's configurationVersion.

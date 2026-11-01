@@ -30,7 +30,9 @@ import tools.jackson.databind.JsonNode;
  *       or {@code dvh1} for HEVC, the entries whose records hold the parameter sets;
  *   <li>a source with a sample entry holds no other, as {@link Mp4SampleEntries} reads, because
  *       ffprobe describes only the first and only the filter carries another entry's parameter sets
- *       into the samples.
+ *       into the samples;
+ *   <li>a source without sample entries is Matroska, whose track keeps one record. An FLV stream
+ *       can carry a new record in any packet, and only the filter delivers its parameter sets.
  * </ul>
  */
 final class CopiedPacketBytes {
@@ -56,27 +58,48 @@ final class CopiedPacketBytes {
 
   /**
    * Whether a copy of the H.264 or HEVC stream keeps every packet's bytes; empty for any other
-   * codec. A stream without extradata has no record. ffprobe names a codec tag of 0 for a container
-   * without sample entries, such as Matroska, and otherwise names the tag, which is the type of the
-   * first sample entry of an MP4 or MOV track. A track whose number of sample entries the probe
-   * could not read counts as one with several.
+   * codec. {@code formatName} is the container's format_name, as ffprobe reports it. A stream
+   * without sample entries counts only in Matroska.
    */
-  static Optional<Boolean> of(JsonNode stream) {
+  static Optional<Boolean> of(@NonNull JsonNode stream, @NonNull String formatName) {
+    var kept = recordKeepsPacketBytes(stream);
+    if (kept.isEmpty() || sampleEntry(stream).isPresent()) {
+      return kept;
+    }
+
+    return kept.map(isKept -> isKept && ProbedSource.MATROSKA_FORMAT.equals(formatName));
+  }
+
+  /**
+   * Whether the stream's record and sample entries keep every packet's bytes in a copy, whatever
+   * the container; empty for a codec other than H.264 and HEVC. A stream without extradata has no
+   * record. A track whose number of sample entries the probe could not read counts as one with
+   * several.
+   */
+  static Optional<Boolean> recordKeepsPacketBytes(JsonNode stream) {
     var family = ProbedCodecFamily.of(stream);
     if (family != ProbedCodecFamily.H264 && family != ProbedCodecFamily.HEVC) {
       return Optional.empty();
     }
 
-    var sampleEntry =
-        text(stream, "codec_tag")
-            .filter(tag -> !NO_CODEC_TAG.equals(tag))
-            .flatMap(_ -> text(stream, "codec_tag_string"));
+    var sampleEntry = sampleEntry(stream);
     if (sampleEntry.isPresent() && stream.path(Mp4SampleEntries.KEY).asLong(0) != 1) {
       return Optional.of(false);
     }
 
     return Optional.of(
         Extradata.of(stream).filter(record -> areKept(family, sampleEntry, record)).isPresent());
+  }
+
+  /**
+   * The type of the stream's first sample entry. ffprobe names a codec tag of 0 for a container
+   * without sample entries, such as Matroska or FLV, and otherwise names the tag, which is the type
+   * of the first sample entry of an MP4 or MOV track.
+   */
+  private static Optional<String> sampleEntry(JsonNode stream) {
+    return text(stream, "codec_tag")
+        .filter(tag -> !NO_CODEC_TAG.equals(tag))
+        .flatMap(_ -> text(stream, "codec_tag_string"));
   }
 
   /**
