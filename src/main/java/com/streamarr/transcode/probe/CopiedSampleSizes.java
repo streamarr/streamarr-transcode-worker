@@ -106,15 +106,16 @@ final class CopiedSampleSizes {
   private static boolean keepsPacketBytes(Box entry, ProbedCodecFamily family, String recordBox) {
     return child(children(entry, VISUAL_SAMPLE_ENTRY_BYTES), recordBox)
         .map(
-            record -> {
-              var bytes = new byte[record.remaining()];
-              record.duplicate().get(bytes);
+            recordBuffer -> {
+              var bytes = new byte[recordBuffer.remaining()];
+              recordBuffer.duplicate().get(bytes);
               return bytes;
             })
         .filter(
-            record ->
-                record.length > 0
-                    && CopiedPacketBytes.areKept(family, Optional.of(entry.type()), record))
+            configurationRecord ->
+                configurationRecord.length > 0
+                    && CopiedPacketBytes.areKept(
+                        family, Optional.of(entry.type()), configurationRecord))
         .isPresent();
   }
 

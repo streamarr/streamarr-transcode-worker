@@ -66,21 +66,21 @@ class SyntheticSampleEntry {
       int sequenceParameterSets,
       int pictureParameterSets,
       int levelIdc) {
-    var record = new ByteArrayOutputStream();
-    record.write(1);
-    record.writeBytes(new byte[] {AVC_PROFILE[0], AVC_PROFILE[1], (byte) levelIdc});
-    record.write(0xFC | (lengthBytes - 1));
-    record.write(0xE0 | sequenceParameterSets);
+    var avcC = new ByteArrayOutputStream();
+    avcC.write(1);
+    avcC.writeBytes(new byte[] {AVC_PROFILE[0], AVC_PROFILE[1], (byte) levelIdc});
+    avcC.write(0xFC | (lengthBytes - 1));
+    avcC.write(0xE0 | sequenceParameterSets);
     for (var i = 0; i < sequenceParameterSets; i++) {
-      writeUnit(record, AVC_SPS);
+      writeUnit(avcC, AVC_SPS);
     }
 
-    record.write(pictureParameterSets);
+    avcC.write(pictureParameterSets);
     for (var i = 0; i < pictureParameterSets; i++) {
-      writeUnit(record, AVC_PPS);
+      writeUnit(avcC, AVC_PPS);
     }
 
-    return visual(type, box("avcC", record.toByteArray()));
+    return visual(type, box("avcC", avcC.toByteArray()));
   }
 
   /**
@@ -110,24 +110,24 @@ class SyntheticSampleEntry {
   }
 
   private static byte[] hevcWithUnits(String type, int lengthBytes, Collection<byte[]> units) {
-    var record = new ByteArrayOutputStream();
-    record.write(1);
-    record.writeBytes(HEVC_PROFILE);
-    record.writeBytes(HEVC_HEADER_TAIL);
-    record.write(0x0C | (lengthBytes - 1));
-    record.write(units.size());
+    var hvcC = new ByteArrayOutputStream();
+    hvcC.write(1);
+    hvcC.writeBytes(HEVC_PROFILE);
+    hvcC.writeBytes(HEVC_HEADER_TAIL);
+    hvcC.write(0x0C | (lengthBytes - 1));
+    hvcC.write(units.size());
     for (var unit : units) {
-      record.write(0x80 | ((unit[0] >> 1) & 0x3F));
-      record.writeBytes(new byte[] {0, 1});
-      writeUnit(record, unit);
+      hvcC.write(0x80 | ((unit[0] >> 1) & 0x3F));
+      hvcC.writeBytes(new byte[] {0, 1});
+      writeUnit(hvcC, unit);
     }
 
-    return visual(type, box("hvcC", record.toByteArray()));
+    return visual(type, box("hvcC", hvcC.toByteArray()));
   }
 
-  private static void writeUnit(ByteArrayOutputStream record, byte[] unit) {
-    record.writeBytes(new byte[] {(byte) (unit.length >> 8), (byte) unit.length});
-    record.writeBytes(unit);
+  private static void writeUnit(ByteArrayOutputStream configurationRecord, byte[] unit) {
+    configurationRecord.writeBytes(new byte[] {(byte) (unit.length >> 8), (byte) unit.length});
+    configurationRecord.writeBytes(unit);
   }
 
   /** A video entry of this type with these child boxes, such as none for Annex B video. */
