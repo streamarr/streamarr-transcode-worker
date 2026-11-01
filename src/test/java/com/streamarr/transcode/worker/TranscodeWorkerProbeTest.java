@@ -462,6 +462,22 @@ class TranscodeWorkerProbeTest {
   }
 
   @Test
+  @DisplayName(
+      "Should advertise the stream measurement version whose bitrate scan chunks it runs when it"
+          + " registers")
+  void shouldAdvertiseTheStreamMeasurementVersionWhoseBitrateScanChunksItRunsWhenItRegisters()
+      throws Exception {
+    var runtime = new ScriptedWorkerRuntime();
+
+    try (var worker = workerBuilder(tempDir).runtime(runtime).build()) {
+      worker.start("localhost", 1);
+
+      assertThat(runtime.connection().registration().getCapabilities().getMeasurementVersionsList())
+          .containsExactly(2);
+    }
+  }
+
+  @Test
   @DisplayName("Should reject a probe source when a symlink escapes its namespace")
   void shouldRejectAProbeSourceWhenASymlinkEscapesItsNamespace() throws Exception {
     var root = Files.createDirectory(tempDir.resolve("media"));

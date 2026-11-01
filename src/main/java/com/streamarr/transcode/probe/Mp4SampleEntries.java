@@ -34,10 +34,14 @@ final class Mp4SampleEntries {
 
   private Mp4SampleEntries() {}
 
-  static void addTo(JsonNode ffprobeOutput, Path source) {
+  /**
+   * Adds the counts, and returns false when an I/O error stopped the read of the movie box, so that
+   * the counts are unknown rather than absent. A malformed movie box adds nothing and returns true.
+   */
+  static boolean addTo(JsonNode ffprobeOutput, Path source) {
     if (!ProbedSource.MP4_FORMAT.equals(
         ffprobeOutput.path("format").path("format_name").asString(""))) {
-      return;
+      return true;
     }
 
     // FFmpeg also reads a trak outside the movie box, so a track ID that several streams carry
@@ -58,23 +62,31 @@ final class Mp4SampleEntries {
     }
 
     if (streams.isEmpty()) {
-      return;
+      return true;
     }
 
-    read(source)
-        .ifPresent(
-            counts ->
-                streams.forEach(
-                    (trackId, description) ->
-                        Optional.ofNullable(counts.get(trackId))
-                            .ifPresent(count -> description.put(SAMPLE_ENTRY_COUNT_FIELD, count))));
+    Optional<Map<Long, Long>> counts;
+    try {
+      counts = read(source);
+    } catch (IOException failure) {
+      log.warn("The probe could not read the MP4 sample entries of {}", source, failure);
+      return false;
+    }
+
+    counts.ifPresent(
+        byTrack ->
+            streams.forEach(
+                (trackId, description) ->
+                    Optional.ofNullable(byTrack.get(trackId))
+                        .ifPresent(count -> description.put(SAMPLE_ENTRY_COUNT_FIELD, count))));
+    return true;
   }
 
   /**
    * The number of sample entries of each track, by track ID. FFmpeg reads every trak, so an ID that
    * several traks carry names no single track and gets no count.
    */
-  private static Optional<Map<Long, Long>> read(Path source) {
+  private static Optional<Map<Long, Long>> read(Path source) throws IOException {
     try (var channel = FileChannel.open(source, StandardOpenOption.READ)) {
       var tracks = children(Mp4MovieBox.read(channel), "trak");
       var trackIds = tracks.stream().map(Mp4MovieBox::trackId).toList();
@@ -88,7 +100,7 @@ final class Mp4SampleEntries {
       }
 
       return Optional.of(counts);
-    } catch (IOException | ContainerIndexException | BufferUnderflowException failure) {
+    } catch (ContainerIndexException | BufferUnderflowException failure) {
       log.warn("The probe could not read the MP4 sample entries of {}", source, failure);
       return Optional.empty();
     }

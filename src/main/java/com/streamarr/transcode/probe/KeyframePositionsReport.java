@@ -37,9 +37,6 @@ record KeyframePositionsReport(
   /** The contract bounds each list of a ProbeKeyframePositionsPart to this many entries. */
   static final int MAXIMUM_KEYFRAMES_PER_PART = 4_096;
 
-  /** The contract bounds each list of a ProbeStreamMeasurementPart to this many entries. */
-  static final int MAXIMUM_INTERVALS_PER_PART = 4_096;
-
   /** The contract bounds the interval entries across one attempt's measurement parts. */
   static final long MAXIMUM_INTERVALS_PER_PROBE = 8_388_608;
 
@@ -124,20 +121,14 @@ record KeyframePositionsReport(
       ProbeAttemptResult result, List<TrackMeasurement> measured) {
     var parts = new ArrayList<ProbeStreamMeasurementPart>();
     for (var stream : measured) {
-      var intervals = stream.intervalBytes();
-      var packets = stream.intervalPacketCounts();
-      for (var first = 0; first < intervals.length; first += MAXIMUM_INTERVALS_PER_PART) {
-        var part =
-            ProbeStreamMeasurementPart.newBuilder()
-                .setProbeAttemptId(result.getProbeAttemptId())
-                .setStreamIndex(stream.streamIndex());
-        var end = Math.min(first + MAXIMUM_INTERVALS_PER_PART, intervals.length);
-        for (var i = first; i < end; i++) {
-          part.addKeyframeIntervalBytes(intervals[i]).addKeyframeIntervalPacketCounts(packets[i]);
-        }
-
-        parts.add(part.build());
-      }
+      parts.addAll(
+          StreamMeasurementParts.of(
+              ProbeStreamMeasurementPart.newBuilder()
+                  .setProbeAttemptId(result.getProbeAttemptId())
+                  .setStreamIndex(stream.streamIndex())
+                  .build(),
+              stream.intervalBytes(),
+              stream.intervalPacketCounts()));
     }
 
     return parts;
@@ -154,7 +145,7 @@ record KeyframePositionsReport(
    * FFmpeg's -copyts -start_at_zero subtracts the container start time from every packet, rescaled
    * to the stream's time base with rounding half away from zero.
    */
-  private static long containerStart(JsonNode ffprobeOutput, TimeBase timeBase) {
+  static long containerStart(JsonNode ffprobeOutput, TimeBase timeBase) {
     var startTime = ffprobeOutput.path("format").path("start_time").asString("");
     BigDecimal seconds;
     try {
