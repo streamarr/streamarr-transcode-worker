@@ -175,8 +175,7 @@ class PreviewImageWorkflowTest {
               if (step.get("uses") instanceof String action) {
                 assertThat(action).matches(PINNED_ACTION).doesNotStartWith("actions/checkout@");
               }
-            });
-    assertThat(steps)
+            })
         .allSatisfy(
             step -> assertThat(String.valueOf(step.get("run"))).doesNotContain("./", ".github/"));
     assertThat(steps.indexOf(stepNamed(steps, "Load preview image")))
