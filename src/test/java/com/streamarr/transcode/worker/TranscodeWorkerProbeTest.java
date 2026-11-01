@@ -981,7 +981,10 @@ class TranscodeWorkerProbeTest {
                             .setWidth(1920)
                             .setHeight(1080)
                             .setFramerate(24000.0 / 1001)
-                            .setBitrateBitsPerSecond(3_000_000))
+                            .setBitrateBitsPerSecond(3_000_000)
+                            // Without extradata the stream has no record, so a copy runs the
+                            // Annex B filter.
+                            .setCopyKeepsPacketBytes(false))
                     .addStreams(
                         ProbeStreamInfo.newBuilder()
                             .setIndex(7)

@@ -32,6 +32,7 @@ final class VideoStreamFacts {
     stream.setFirstFramesRead(FirstFrames.of(source).isPresent());
     FirstPackets.carryPresentationTimes(source)
         .ifPresent(stream::setFirstPacketsCarryPresentationTimes);
+    CopiedPacketBytes.of(source).ifPresent(stream::setCopyKeepsPacketBytes);
     HdrStaticMetadata.add(source, walk, stream);
     CodecProfileReader.add(source, stream);
     ColorSignaling.add(source, stream);
