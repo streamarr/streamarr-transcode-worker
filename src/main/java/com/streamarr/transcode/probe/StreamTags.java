@@ -43,8 +43,11 @@ final class StreamTags {
 
   /** The DURATION tag, with or without a language suffix such as DURATION-eng, in seconds. */
   static Optional<BigDecimal> matroskaDuration(JsonNode stream) {
-    return matroskaStatistic(stream, "DURATION")
-        .map(MATROSKA_DURATION::matcher)
+    return matroskaStatistic(stream, "DURATION").flatMap(StreamTags::seconds);
+  }
+
+  private static Optional<BigDecimal> seconds(String duration) {
+    return Optional.of(MATROSKA_DURATION.matcher(duration))
         .filter(Matcher::matches)
         .map(
             match ->
