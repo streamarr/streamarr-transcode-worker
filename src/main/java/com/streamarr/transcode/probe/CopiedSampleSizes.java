@@ -9,10 +9,13 @@ import static com.streamarr.transcode.probe.Mp4SampleTables.timescale;
 import static com.streamarr.transcode.probe.Mp4SampleTables.track;
 
 import com.streamarr.transcode.probe.Mp4MovieBox.Box;
+import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.util.HashSet;
 import java.util.Optional;
 import java.util.Set;
+import lombok.NonNull;
 
 /**
  * Whether a stream copy delivers every sample of an MP4 or MOV track with the size that the track's
@@ -23,12 +26,17 @@ import java.util.Set;
  *       hev1}, {@code dvav}, {@code dvhe}), or whose decoder configuration record is missing, holds
  *       no parameter sets or prefixes NAL units with other than 4 bytes: the copy runs the Annex B
  *       bitstream filter, which adds parameter sets and rewrites the NAL unit lengths;
- *   <li>AAC without an AudioSpecificConfig, whose samples are ADTS frames that the copy strips;
+ *   <li>AV1, whose padding and temporal delimiter OBUs the mp4 muxer drops, and VP9, which the mp4
+ *       muxer passes through its superframe filter;
+ *   <li>AAC whose samples are ADTS frames, whose headers the copy's {@code aac_adtstoasc} strips: a
+ *       track without an AudioSpecificConfig in its {@code esds}, or whose first sample starts with
+ *       an ADTS sync word;
  *   <li>E-AC-3 whose samples hold fewer than 1,536 audio samples, which the mp4 muxer joins into
  *       samples of six audio blocks.
  * </ul>
  *
- * Other codecs reach the delivered segment as their samples are.
+ * Other codecs reach the delivered segment as their samples are. Of the media data, the check reads
+ * only the first two bytes of an AAC track's first sample.
  */
 final class CopiedSampleSizes {
 
@@ -44,6 +52,13 @@ final class CopiedSampleSizes {
   private static final int HEVC_PPS = 34;
   private static final int HVCC_LENGTH_SIZE_OFFSET = 21;
   private static final long E_AC_3_SAMPLES_PER_SIX_BLOCKS = 1_536;
+  private static final byte ES_DESCRIPTOR_TAG = 0x03;
+  private static final byte DECODER_CONFIG_DESCRIPTOR_TAG = 0x04;
+  private static final byte DECODER_SPECIFIC_INFO_TAG = 0x05;
+  private static final int DECODER_CONFIG_DESCRIPTOR_FIXED_BYTES = 13;
+  private static final int STREAM_DEPENDENCE_FLAG = 0x80;
+  private static final int URL_FLAG = 0x40;
+  private static final int OCR_STREAM_FLAG = 0x20;
 
   private CopiedSampleSizes() {}
 
@@ -53,8 +68,10 @@ final class CopiedSampleSizes {
    *
    * @throws ContainerIndexException when the track's boxes are malformed
    */
-  static boolean areKept(ByteBuffer movie, Mp4StreamMeasurer.TrackStream stream) {
-    var media = child(track(movie, stream.trackId()), "mdia").orElseThrow(() -> malformed("mdia"));
+  static boolean areKept(SourceMovie source, Mp4StreamMeasurer.TrackStream stream)
+      throws IOException {
+    var media =
+        child(track(source.movie(), stream.trackId()), "mdia").orElseThrow(() -> malformed("mdia"));
     var sampleTable =
         child(media, "minf")
             .flatMap(info -> child(info, "stbl"))
@@ -62,12 +79,17 @@ final class CopiedSampleSizes {
     return switch (stream.codecName()) {
       case "h264" -> sampleEntry(sampleTable).filter(CopiedSampleSizes::isRecordAvc).isPresent();
       case "hevc" -> sampleEntry(sampleTable).filter(CopiedSampleSizes::isRecordHevc).isPresent();
+      case "av1", "vp9" -> false;
       case "aac" ->
-          sampleEntry(sampleTable).filter(CopiedSampleSizes::hasAudioSpecificConfig).isPresent();
+          sampleEntry(sampleTable).filter(CopiedSampleSizes::hasAudioSpecificConfig).isPresent()
+              && !startsWithAdtsSyncWord(source.channel(), sampleTable);
       case "eac3" -> holdsSixBlocksPerSample(media, sampleTable, stream.sampleRate());
       default -> true;
     };
   }
+
+  /** The movie box of an MP4 or MOV file and the file it came from. */
+  record SourceMovie(@NonNull ByteBuffer movie, @NonNull FileChannel channel) {}
 
   /** The track's only sample entry; a track with several takes the copy's first for all. */
   private static Optional<Box> sampleEntry(ByteBuffer sampleTable) {
@@ -134,8 +156,9 @@ final class CopiedSampleSizes {
   }
 
   /**
-   * An MP4 {@code mp4a} entry holds its AudioSpecificConfig in an {@code esds} box, which a
-   * QuickTime entry can wrap in a {@code wave} box.
+   * An MP4 {@code mp4a} entry holds its AudioSpecificConfig as the DecoderSpecificInfo of the
+   * DecoderConfigDescriptor in its {@code esds} box, which a QuickTime entry can wrap in a {@code
+   * wave} box.
    */
   private static boolean hasAudioSpecificConfig(Box entry) {
     if (!"mp4a".equals(entry.type())) {
@@ -156,8 +179,75 @@ final class CopiedSampleSizes {
     }
 
     var boxes = children(entry, AUDIO_SAMPLE_ENTRY_BYTES + extraBytes);
-    return child(boxes, "esds").isPresent()
-        || child(boxes, "wave").flatMap(wave -> child(wave, "esds")).isPresent();
+    return child(boxes, "esds")
+        .or(() -> child(boxes, "wave").flatMap(wave -> child(wave, "esds")))
+        .filter(CopiedSampleSizes::holdsDecoderSpecificInfo)
+        .isPresent();
+  }
+
+  // ISO/IEC 14496-1: an ES_Descriptor, whose flags announce optional fields, then a
+  // DecoderConfigDescriptor of 13 fixed bytes, then the DecoderSpecificInfo.
+  private static boolean holdsDecoderSpecificInfo(ByteBuffer esds) {
+    skip(esds, 4);
+    if (esds.get() != ES_DESCRIPTOR_TAG) {
+      return false;
+    }
+
+    descriptorLength(esds);
+    skip(esds, 2);
+    var flags = esds.get() & 0xFF;
+    if ((flags & STREAM_DEPENDENCE_FLAG) != 0) {
+      skip(esds, 2);
+    }
+
+    if ((flags & URL_FLAG) != 0) {
+      skip(esds, esds.get() & 0xFF);
+    }
+
+    if ((flags & OCR_STREAM_FLAG) != 0) {
+      skip(esds, 2);
+    }
+
+    if (esds.get() != DECODER_CONFIG_DESCRIPTOR_TAG) {
+      return false;
+    }
+
+    descriptorLength(esds);
+    skip(esds, DECODER_CONFIG_DESCRIPTOR_FIXED_BYTES);
+    return esds.get() == DECODER_SPECIFIC_INFO_TAG && descriptorLength(esds) > 0;
+  }
+
+  // Each byte gives 7 bits of the length, and its top bit says whether another byte follows.
+  private static int descriptorLength(ByteBuffer descriptor) {
+    var length = 0;
+    for (var i = 0; i < 4; i++) {
+      var next = descriptor.get() & 0xFF;
+      length = (length << 7) | (next & 0x7F);
+      if ((next & 0x80) == 0) {
+        break;
+      }
+    }
+
+    return length;
+  }
+
+  private static boolean startsWithAdtsSyncWord(FileChannel channel, ByteBuffer sampleTable)
+      throws IOException {
+    var firstChunk = firstChunkOffset(sampleTable);
+    var head = ContainerFileBytes.read(channel, firstChunk, 2);
+    return (head.get(0) & 0xFF) == 0xFF && (head.get(1) & 0xF0) == 0xF0;
+  }
+
+  private static long firstChunkOffset(ByteBuffer sampleTable) {
+    var offsets = child(sampleTable, "stco");
+    var isLarge = offsets.isEmpty();
+    var table = offsets.or(() -> child(sampleTable, "co64")).orElseThrow(() -> malformed("stco"));
+    skip(table, 4);
+    if (table.getInt() == 0) {
+      throw malformed("no chunk");
+    }
+
+    return isLarge ? table.getLong() : Integer.toUnsignedLong(table.getInt());
   }
 
   private static boolean holdsSixBlocksPerSample(

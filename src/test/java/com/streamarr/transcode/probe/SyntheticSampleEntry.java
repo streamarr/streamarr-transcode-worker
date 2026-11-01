@@ -52,14 +52,64 @@ class SyntheticSampleEntry {
     return box(type, concat(new byte[78], concat(children)));
   }
 
-  /** An mp4a entry whose esds holds an AudioSpecificConfig. */
-  static byte[] mp4aWithEsds() {
-    return audio("mp4a", 0, box("esds", int32(0), new byte[] {3, 5, 0, 1, 0, 4, 0}));
+  /** An AAC-LC AudioSpecificConfig for 48 kHz stereo. */
+  static final byte[] AUDIO_SPECIFIC_CONFIG = {0x11, (byte) 0x90};
+
+  /** An mp4a entry whose esds holds this DecoderSpecificInfo. */
+  static byte[] mp4aWithEsds(byte[] decoderSpecificInfo) {
+    return audio("mp4a", 0, esds(0, decoderSpecificInfo));
   }
 
-  /** A QuickTime version 1 mp4a entry that wraps its esds in a wave box. */
+  /**
+   * A QuickTime version 1 mp4a entry that wraps its esds in a wave box, with an ES_Descriptor whose
+   * flags announce a stream dependence, a URL and an OCR stream.
+   */
   static byte[] quickTimeMp4aWithEsdsInWave() {
-    return audio("mp4a", 1, box("wave", box("esds", int32(0), new byte[] {3, 0})));
+    return audio("mp4a", 1, box("wave", esds(0xE0, AUDIO_SPECIFIC_CONFIG)));
+  }
+
+  /**
+   * An esds whose ES_Descriptor has these flags and the optional fields they announce, then a
+   * DecoderConfigDescriptor for AAC that holds this DecoderSpecificInfo, or none when it is null.
+   * Each descriptor length takes the four-byte form that some muxers write.
+   */
+  static byte[] esds(int flags, byte[] decoderSpecificInfo) {
+    var config = new ByteArrayOutputStream();
+    config.writeBytes(new byte[] {0x40, 0x15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+    if (decoderSpecificInfo != null) {
+      config.writeBytes(descriptor(5, decoderSpecificInfo));
+    }
+
+    var stream = new ByteArrayOutputStream();
+    stream.writeBytes(new byte[] {0, 1, (byte) flags});
+    if ((flags & 0x80) != 0) {
+      stream.writeBytes(new byte[] {0, 2});
+    }
+
+    if ((flags & 0x40) != 0) {
+      stream.writeBytes(new byte[] {3, 'u', 'r', 'l'});
+    }
+
+    if ((flags & 0x20) != 0) {
+      stream.writeBytes(new byte[] {0, 3});
+    }
+
+    stream.writeBytes(descriptor(4, config.toByteArray()));
+    stream.writeBytes(descriptor(6, new byte[] {2}));
+    return box("esds", int32(0), descriptor(3, stream.toByteArray()));
+  }
+
+  private static byte[] descriptor(int tag, byte[] payload) {
+    var length = payload.length;
+    return concat(
+        new byte[] {
+          (byte) tag,
+          (byte) (0x80 | (length >> 21)),
+          (byte) (0x80 | ((length >> 14) & 0x7F)),
+          (byte) (0x80 | ((length >> 7) & 0x7F)),
+          (byte) (length & 0x7F)
+        },
+        payload);
   }
 
   /** An audio entry of this type with a sound description version and these child boxes. */

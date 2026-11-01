@@ -9,9 +9,11 @@ import static com.streamarr.transcode.probe.Mp4SampleTables.runs;
 import static com.streamarr.transcode.probe.Mp4SampleTables.timescale;
 import static com.streamarr.transcode.probe.Mp4SampleTables.track;
 
+import com.streamarr.transcode.probe.CopiedSampleSizes.SourceMovie;
 import com.streamarr.transcode.probe.Mp4SampleTables.Edit;
 import com.streamarr.transcode.probe.Mp4SampleTables.Run;
 import com.streamarr.transcode.probe.Mp4SampleTables.RunCursor;
+import java.io.IOException;
 import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -28,11 +30,11 @@ import lombok.Builder;
  * sizes of the packets that ffprobe lists. A video sample belongs to the interval that its decode
  * order places it in, and an audio sample to the interval that holds its presentation time.
  *
- * <p>The measurer reads no media data. It measures nothing when one track's samples cannot be
- * listed exactly, such as under an edit list that FFmpeg applies by dropping samples the measurer
- * does not model, or when a stream copy would deliver a required track's samples at other sizes
- * than its sample table lists ({@link CopiedSampleSizes}), because the server counts the measured
- * bytes as the copy's delivered bytes.
+ * <p>Apart from the two bytes that start an AAC track, the measurer reads no media data. It
+ * measures nothing when one track's samples cannot be listed exactly, such as under an edit list
+ * that FFmpeg applies by dropping samples the measurer does not model, or when a stream copy would
+ * deliver a required track's samples at other sizes than its sample table lists ({@link
+ * CopiedSampleSizes}), because the server counts the measured bytes as the copy's delivered bytes.
  */
 final class Mp4StreamMeasurer {
 
@@ -64,7 +66,9 @@ final class Mp4StreamMeasurer {
    * track, which the measurement's intervals must match.
    */
   static Optional<List<TrackMeasurement>> measure(
-      ByteBuffer movie, TrackStream chosen, List<TrackStream> streams, int keyframeCount) {
+      SourceMovie source, TrackStream chosen, List<TrackStream> streams, int keyframeCount)
+      throws IOException {
+    var movie = source.movie();
     try {
       var movieTimescale = timescale(child(movie, "mvhd").orElseThrow(() -> malformed("mvhd")));
       var chosenTrack = Track.read(movie, chosen.trackId(), movieTimescale);
@@ -72,7 +76,7 @@ final class Mp4StreamMeasurer {
         return Optional.empty();
       }
 
-      var measuring = new Measuring(movie, movieTimescale, chosen.trackId(), chosenTrack.get());
+      var measuring = new Measuring(source, movieTimescale, chosen.trackId(), chosenTrack.get());
       var measured = new ArrayList<TrackMeasurement>();
       for (var stream : streams) {
         var measurement = measuring.measure(stream);
@@ -91,7 +95,7 @@ final class Mp4StreamMeasurer {
 
   /** The movie box and the chosen track, whose keyframe intervals every measured stream follows. */
   private record Measuring(
-      ByteBuffer movie, long movieTimescale, long chosenTrackId, Track chosen) {
+      SourceMovie source, long movieTimescale, long chosenTrackId, Track chosen) {
 
     /**
      * FFmpeg rewrites the decode times of the video samples that it keeps before an edit's start,
@@ -102,16 +106,16 @@ final class Mp4StreamMeasurer {
       return !track.isVideo() || !track.presentsBeforeEditStart();
     }
 
-    Optional<TrackMeasurement> measure(TrackStream stream) {
+    Optional<TrackMeasurement> measure(TrackStream stream) throws IOException {
       try {
-        if (!CopiedSampleSizes.areKept(movie, stream)) {
+        if (!CopiedSampleSizes.areKept(source, stream)) {
           return Optional.empty();
         }
 
         var track =
             stream.trackId() == chosenTrackId
                 ? Optional.of(chosen)
-                : Track.read(movie, stream.trackId(), movieTimescale)
+                : Track.read(source.movie(), stream.trackId(), movieTimescale)
                     .filter(Measuring::isMeasurableBesideChosen);
         return track.flatMap(
             candidate -> candidate.measure(stream.streamIndex(), chosen, chosen.keyframes()));

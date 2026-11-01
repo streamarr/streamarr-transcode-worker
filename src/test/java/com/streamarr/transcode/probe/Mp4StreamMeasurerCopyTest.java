@@ -1,5 +1,6 @@
 package com.streamarr.transcode.probe;
 
+import static com.streamarr.transcode.probe.SyntheticSampleEntry.AUDIO_SPECIFIC_CONFIG;
 import static com.streamarr.transcode.probe.SyntheticSampleEntry.HEVC_PPS;
 import static com.streamarr.transcode.probe.SyntheticSampleEntry.HEVC_SPS;
 import static com.streamarr.transcode.probe.SyntheticSampleEntry.HEVC_VPS;
@@ -25,6 +26,8 @@ import org.junit.jupiter.params.provider.MethodSource;
 @DisplayName("MP4 Stream Measurer Copy Tests")
 class Mp4StreamMeasurerCopyTest {
 
+  private static final byte[] RAW_AAC_FRAME = {0x21, 0x10};
+  private static final byte[] ADTS_FRAME = {(byte) 0xFF, (byte) 0xF1};
   private static final List<Integer> EVERY_HEVC_PARAMETER_SET =
       List.of(HEVC_VPS, HEVC_SPS, HEVC_PPS);
 
@@ -49,7 +52,7 @@ class Mp4StreamMeasurerCopyTest {
         arguments("h264", SyntheticSampleEntry.avc("dva1", 4, 1, 1)),
         arguments("hevc", SyntheticSampleEntry.hevc("hvc1", 4, EVERY_HEVC_PARAMETER_SET)),
         arguments("hevc", SyntheticSampleEntry.hevc("dvh1", 4, EVERY_HEVC_PARAMETER_SET)),
-        arguments("av1", SyntheticSampleEntry.visual("av01")));
+        arguments("mpeg4", SyntheticSampleEntry.visual("mp4v")));
   }
 
   @ParameterizedTest(name = "{0}")
@@ -100,6 +103,14 @@ class Mp4StreamMeasurerCopyTest {
             "hevc",
             SyntheticSampleEntry.hevc("hvc1", 4, List.of(HEVC_VPS, HEVC_SPS))),
         arguments("Annex B HEVC", "hevc", SyntheticSampleEntry.visual("hvc1")),
+        arguments(
+            "AV1, whose padding and temporal delimiter OBUs the muxer drops",
+            "av1",
+            SyntheticSampleEntry.visual("av01")),
+        arguments(
+            "VP9, which the muxer passes through its superframe filter",
+            "vp9",
+            SyntheticSampleEntry.visual("vp09")),
         arguments("H.264 in a track without an stsd", "h264", null));
   }
 
@@ -132,15 +143,13 @@ class Mp4StreamMeasurerCopyTest {
   static Stream<Arguments> audioKeptByCopy() {
     return Stream.of(
         arguments(
-            "AAC with an esds",
+            "AAC with an AudioSpecificConfig",
             audio("aac", 48_000),
-            audioTrack(48_000, 1_024).sampleEntry(SyntheticSampleEntry.mp4aWithEsds()).build()),
+            aacTrack(SyntheticSampleEntry.mp4aWithEsds(AUDIO_SPECIFIC_CONFIG), RAW_AAC_FRAME)),
         arguments(
-            "QuickTime AAC with an esds in a wave box",
+            "QuickTime AAC with an AudioSpecificConfig in a wave box",
             audio("aac", 48_000),
-            audioTrack(48_000, 1_024)
-                .sampleEntry(SyntheticSampleEntry.quickTimeMp4aWithEsdsInWave())
-                .build()),
+            aacTrack(SyntheticSampleEntry.quickTimeMp4aWithEsdsInWave(), RAW_AAC_FRAME)),
         arguments(
             "E-AC-3 whose samples each hold six blocks",
             audio("eac3", 48_000),
@@ -171,7 +180,39 @@ class Mp4StreamMeasurerCopyTest {
         arguments(
             "AAC without an esds",
             audio("aac", 48_000),
-            audioTrack(48_000, 1_024).sampleEntry(SyntheticSampleEntry.audio("mp4a", 0)).build()),
+            aacTrack(SyntheticSampleEntry.audio("mp4a", 0), RAW_AAC_FRAME)),
+        arguments(
+            "AAC whose esds holds no DecoderSpecificInfo",
+            audio("aac", 48_000),
+            aacTrack(SyntheticSampleEntry.mp4aWithEsds(null), RAW_AAC_FRAME)),
+        arguments(
+            "AAC whose DecoderSpecificInfo is empty",
+            audio("aac", 48_000),
+            aacTrack(SyntheticSampleEntry.mp4aWithEsds(new byte[0]), RAW_AAC_FRAME)),
+        arguments(
+            "AAC whose esds starts with another descriptor",
+            audio("aac", 48_000),
+            aacTrack(
+                SyntheticSampleEntry.audio(
+                    "mp4a", 0, SyntheticMp4.box("esds", new byte[] {0, 0, 0, 0, 4, 0})),
+                RAW_AAC_FRAME)),
+        arguments(
+            "AAC whose ES_Descriptor holds no DecoderConfigDescriptor",
+            audio("aac", 48_000),
+            aacTrack(
+                SyntheticSampleEntry.audio(
+                    "mp4a", 0, SyntheticMp4.box("esds", new byte[] {0, 0, 0, 0, 3, 4, 0, 1, 0, 6})),
+                RAW_AAC_FRAME)),
+        arguments(
+            "AAC whose samples are ADTS frames beside an AudioSpecificConfig",
+            audio("aac", 48_000),
+            aacTrack(SyntheticSampleEntry.mp4aWithEsds(AUDIO_SPECIFIC_CONFIG), ADTS_FRAME)),
+        arguments(
+            "AAC whose track lists no chunk offsets",
+            audio("aac", 48_000),
+            audioTrack(48_000, 1_024)
+                .sampleEntry(SyntheticSampleEntry.mp4aWithEsds(AUDIO_SPECIFIC_CONFIG))
+                .build()),
         arguments(
             "AAC in another sample entry",
             audio("aac", 48_000),
@@ -244,6 +285,13 @@ class Mp4StreamMeasurerCopyTest {
     }
 
     return track;
+  }
+
+  /** An AAC track at 48 kHz whose four 7-byte samples start with these bytes. */
+  private static SyntheticMp4 aacTrack(byte[] sampleEntry, byte[] firstBytes) {
+    var data = new byte[28];
+    System.arraycopy(firstBytes, 0, data, 0, firstBytes.length);
+    return audioTrack(48_000, 1_024).sampleEntry(sampleEntry).mediaData(data).build();
   }
 
   private static SyntheticMp4.SyntheticMp4Builder audioTrack(long timescale, int sampleDuration) {

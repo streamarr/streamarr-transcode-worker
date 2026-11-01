@@ -10,6 +10,7 @@ import static com.streamarr.transcode.probe.Mp4SampleTables.timescale;
 import static com.streamarr.transcode.probe.Mp4SampleTables.track;
 
 import build.buf.gen.streamarr.transcode.v1.KeyframePacketScanReason;
+import com.streamarr.transcode.probe.CopiedSampleSizes.SourceMovie;
 import com.streamarr.transcode.probe.KeyframeIndex.KeyframeTime;
 import com.streamarr.transcode.probe.KeyframeIndex.Listed;
 import com.streamarr.transcode.probe.KeyframeIndex.TimeBase;
@@ -68,7 +69,8 @@ final class Mp4SyncSampleReader {
 
       return new ContainerIndex(
           listed,
-          Mp4StreamMeasurer.measure(movie, chosen, measured, listed.keyframes().size())
+          Mp4StreamMeasurer.measure(
+                  new SourceMovie(movie, channel), chosen, measured, listed.keyframes().size())
               .orElse(List.of()));
     } catch (ContainerIndexException | BufferUnderflowException _) {
       return ContainerIndex.keyframesOnly(incomplete());
