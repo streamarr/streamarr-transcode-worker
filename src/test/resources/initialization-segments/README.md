@@ -2,7 +2,7 @@
 
 Initialization segments (`ftyp` and `moov`) that the worker's pipe recipe wrote with the FFmpeg of
 the pinned worker image, `streamarr/streamarr-transcode-worker:0.1.0-SNAPSHOT@sha256:9d2d286c…caa`.
-`CodecConfigurationReaderTest` reads them and expects the codec strings below.
+`CodecConfigurationReaderTest`, `InterlacedVideoSignalsTest` and `VideoOutputCheckTest` read them and expect the codec strings and fields below.
 Every file also carries a stereo AAC track, `mp4a.40.2`.
 
 | File | Source and arguments | Video codec string | Picture format |
@@ -14,6 +14,10 @@ Every file also carries a stereo AAC track, `mp4a.40.2`.
 | `libx264-high10.mp4` | 64x36, `format=yuv420p10le` | `avc1.6E000A` | 10-bit 4:2:0 |
 | `libx264-high444.mp4` | 64x36, `format=yuv444p` | `avc1.F4000A` | 8-bit 4:4:4 |
 | `libsvtav1-10bit.mp4` | 64x36, `format=yuv420p10le` | `av01.0.00M.10` | 10-bit 4:2:0 |
+| `libx264-1080i-field-coded.mp4` | 1920x1080 woven to 30 interlaced frames, top field first, `-profile:v high -level:v 40 -flags +ildct+ilme` | `avc1.640028` | 8-bit 4:2:0, an SPS that may code fields |
+| `libx265-1080i-woven.mp4` | the same interlaced source, `-x265-params level-idc=40` | `hvc1.1.6.L120.90` | 8-bit 4:2:0, a `fiel` box that counts two fields |
+| `libx265-1080i-deinterlaced.mp4` | the same interlaced source, `bwdif=mode=send_field:parity=tff:deint=all`, `-r 60`, `-x265-params level-idc=41` | `hvc1.1.6.L123.90` | 8-bit 4:2:0, a `fiel` box that counts one field |
+| `libsvtav1-1080i-woven.mp4` | the same interlaced source, `-level:v 40` | `av01.0.08M.08` | 8-bit 4:2:0, a `fiel` box that counts two fields |
 | `copy-hvc1.mp4` | stream copy of a libx265 MP4 tagged `hvc1` | `hvc1.1.6.L120.90` | 8-bit 4:2:0 |
 | `copy-hev1.mp4` | stream copy of the same libx265 encode from Matroska | `hev1.1.6.L120.90` | 8-bit 4:2:0 |
 
