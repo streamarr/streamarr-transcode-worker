@@ -32,6 +32,8 @@ class PreviewImageWorkflowTest {
   private static final String BUILD_JOB = "build_preview";
   private static final String PUBLISH_JOB = "publish_preview";
   private static final String CLEANUP_JOB = "delete_preview_tag";
+  private static final String CURRENT_HEAD_CHECK =
+      "Require the authorized revision of an open pull request";
   private static final String PULL_REQUEST = "42";
   private static final String REPOSITORY = "streamarr/streamarr-transcode-worker";
   private static final String BUILT_IMAGE = "streamarr-worker:preview-amd64";
@@ -178,25 +180,31 @@ class PreviewImageWorkflowTest {
         .allSatisfy(
             step -> assertThat(String.valueOf(step.get("run"))).doesNotContain("./", ".github/"));
     assertThat(steps.indexOf(stepNamed(steps, "Load preview image")))
-        .isLessThan(steps.indexOf(stepNamed(steps, "Require an open pull request")));
-    assertThat(steps.indexOf(stepNamed(steps, "Require an open pull request")))
+        .isLessThan(steps.indexOf(stepNamed(steps, CURRENT_HEAD_CHECK)));
+    assertThat(steps.indexOf(stepNamed(steps, CURRENT_HEAD_CHECK)))
         .isLessThan(steps.indexOf(stepNamed(steps, "Login to Docker Hub")));
   }
 
-  @ParameterizedTest(name = "{0} pull request")
-  @CsvSource({"open, 0", "closed, 1"})
-  @DisplayName("Should publish only while the pull request is open when the build finishes")
-  void shouldPublishOnlyWhileThePullRequestIsOpenWhenTheBuildFinishes(String state, int exitCode)
-      throws Exception {
+  @ParameterizedTest(name = "{0} pull request at {1}")
+  @CsvSource({
+    "open, " + HEAD_REVISION + ", 0, ''",
+    "closed, " + HEAD_REVISION + ", 1, closed before its preview was published",
+    "open, bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, 1, moved to bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  })
+  @DisplayName(
+      "Should publish only the current head of an open pull request when the build finishes")
+  void shouldPublishOnlyTheCurrentHeadOfAnOpenPullRequestWhenTheBuildFinishes(
+      String state, String head, int exitCode, String message) throws Exception {
     var publish = job(yaml(PREVIEW_WORKFLOW), PUBLISH_JOB);
 
     var result =
         runScript(
-            stepNamed(steps(publish), "Require an open pull request"),
-            GitHubState.openBranchByWriter().state(state).build(),
-            Map.of());
+            stepNamed(steps(publish), CURRENT_HEAD_CHECK),
+            GitHubState.openBranchByWriter().state(state).head(head).build(),
+            Map.of("needs.authorize_preview.outputs.revision", HEAD_REVISION));
 
     assertThat(result.exitCode()).as(result.output()).isEqualTo(exitCode);
+    assertThat(result.output()).contains(message);
   }
 
   @Test
@@ -424,15 +432,19 @@ class PreviewImageWorkflowTest {
                     Map.of(
                         "permission", state.permission(),
                         "state", state.state(),
-                        "head", HEAD_REVISION,
+                        "head", state.head(),
                         "headRepository", state.headRepository())));
     return run(command);
   }
 
   @Builder
-  private record GitHubState(String permission, String state, String headRepository) {
+  private record GitHubState(String permission, String state, String head, String headRepository) {
     static GitHubStateBuilder openBranchByWriter() {
-      return builder().permission("write").state("open").headRepository(REPOSITORY);
+      return builder()
+          .permission("write")
+          .state("open")
+          .head(HEAD_REVISION)
+          .headRepository(REPOSITORY);
     }
   }
 

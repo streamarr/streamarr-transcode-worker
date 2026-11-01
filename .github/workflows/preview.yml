@@ -135,8 +135,11 @@ jobs:
           docker image load --input "${archive}"
           docker image inspect "${WORKER_IMAGE}" >/dev/null
 
-      - name: Require an open pull request
+      # Builds can finish out of order, so a later command's image may already be published.
+      - name: Require the authorized revision of an open pull request
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          PREVIEW_REVISION: ${{ needs.authorize_preview.outputs.revision }}
         with:
           script: |
             const { data: pull } = await github.rest.pulls.get({
@@ -146,6 +149,9 @@ jobs:
             });
             if (pull.state !== 'open') {
               throw new Error('The pull request closed before its preview was published.');
+            }
+            if (pull.head.sha !== process.env.PREVIEW_REVISION) {
+              throw new Error(`The pull request moved to ${pull.head.sha}; comment /deploy-preview again.`);
             }
 
       - name: Login to Docker Hub

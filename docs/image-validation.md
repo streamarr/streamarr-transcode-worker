@@ -75,9 +75,11 @@ An authorization job without repository code checks the commenter's access and t
 then records the head commit. The build job checks out that commit with a read-only token, no
 secrets, and no cache. It builds the amd64 image with `build-worker-image.sh`, so the preview
 passes the same media runtime checks as CI. It does not run `WorkerImageIT`; the pull request's own
-CI does. A separate job that never checks out repository code loads the image, confirms the pull
-request is still open, pushes the preview tag, and comments the source commit on the pull request.
-Closing the pull request deletes the tag; the deletion waits for a publication already in progress.
+CI does. A separate job that never checks out repository code loads the image and confirms the
+pull request is still open at the built commit. A push during the build cancels the publication,
+so comment again. Otherwise the job pushes the preview tag and comments the source commit on the
+pull request. Closing the pull request deletes the tag; the deletion waits for a publication already
+in progress.
 Pull requests from forks get no preview, because their head can change after the command.
 GitHub runs comment-triggered workflows from the default branch, so the command works only after
 this workflow is on `main`.
