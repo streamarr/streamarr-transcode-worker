@@ -8,14 +8,18 @@ import static com.streamarr.transcode.probe.RecordedFfprobe.streamOf;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
+import com.streamarr.transcode.probe.RecordedFfprobe.Answers;
 import java.io.ByteArrayOutputStream;
+import java.net.URISyntaxException;
 import java.nio.ByteBuffer;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.function.UnaryOperator;
 import java.util.stream.Stream;
 import lombok.Builder;
 import lombok.NonNull;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Named;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -52,6 +56,9 @@ class FfprobeExecutorCopyPacketBytesTest {
   @DisplayName("Recorded Sources")
   class RecordedSourceTests {
 
+    // An MP4 or MOV source counts only with its movie box, from which the probe reads how many
+    // sample entries the track holds. Matroska and FLV sources have no sample entries, so the
+    // probe reads no file for them.
     @ParameterizedTest(name = "{0}")
     @ValueSource(
         strings = {
@@ -60,7 +67,6 @@ class FfprobeExecutorCopyPacketBytesTest {
           "mkv-120fps.mkv",
           "flv-h264-sei-without-trailing-bits.flv",
           "mp4-dovi-p5-dvh1.mp4",
-          "mov-hevc-extradata-reload.mov",
           "mkv-pipe-hevc-10bit.mkv",
         })
     @DisplayName(
@@ -69,7 +75,7 @@ class FfprobeExecutorCopyPacketBytesTest {
     void
         shouldReportThatACopyKeepsEveryPacketsBytesWhenTheRecordHoldsTheParameterSetsThatItsHeaderNames(
             String fixture) {
-      var video = streamOf(fixture, 0);
+      var video = recordedVideo(fixture);
 
       assertThat(copyKeepsPacketBytes(video)).isTrue();
     }
@@ -81,10 +87,9 @@ class FfprobeExecutorCopyPacketBytesTest {
           "mp4-avc-record-level.mp4",
           "mp4-h264-mixed-nal-coding.mp4",
           "mp4-hevc-record-level.mp4",
-          // The hvcC holds mastering display, content light level or ambient viewing environment.
+          // The hvcC holds mastering display or content light level.
           "mkv-hdr10-static.mkv",
           "mkv-hdr10-fate.mkv",
-          "mov-phone-60.mov",
           // The sample entry keeps parameter sets in the samples.
           "mp4-dovi-p5-hev1.mp4",
           "mp4-dovi-p7-two-tracks.mp4",
@@ -101,7 +106,7 @@ class FfprobeExecutorCopyPacketBytesTest {
             + " filter")
     void shouldReportThatACopyMayChangePacketBytesWhenTheSourceNeedsTheAnnexBFilter(
         String fixture) {
-      var video = streamOf(fixture, 0);
+      var video = recordedVideo(fixture);
 
       assertThat(copyKeepsPacketBytes(video)).isFalse();
     }
@@ -121,6 +126,76 @@ class FfprobeExecutorCopyPacketBytesTest {
           RecordedStream.builder().fixture("mkv-av1-10bit.mkv").index(0).build(),
           RecordedStream.builder().fixture("mkv-eac3-atmos-dts-hd-ma.mkv").index(1).build(),
           RecordedStream.builder().fixture("mp4-audio-codecs.mp4").index(1).build());
+    }
+  }
+
+  @Nested
+  @DisplayName("Sample Entries")
+  class SampleEntryTests {
+
+    // ffprobe describes a track by its first sample entry. Without the filter, a later entry's
+    // parameter sets never reach the copy's record. The first entry of each source passes every
+    // other rule.
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(
+        strings = {
+          "mp4-h264-two-sample-entries.mp4",
+          "mp4-hevc-two-sample-entries.mp4",
+          "mov-hevc-extradata-reload.mov",
+        })
+    @DisplayName(
+        "Should report that a copy may change packet bytes when the track holds more than one"
+            + " sample entry")
+    void shouldReportThatACopyMayChangePacketBytesWhenTheTrackHoldsMoreThanOneSampleEntry(
+        String fixture) {
+      var video = recordedVideo(fixture);
+
+      assertThat(copyKeepsPacketBytes(video)).isFalse();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("unreadableMovieBoxes")
+    @DisplayName(
+        "Should report that a copy may change packet bytes when the probe cannot read the movie"
+            + " box")
+    void shouldReportThatACopyMayChangePacketBytesWhenTheProbeCannotReadTheMovieBox(Path source) {
+      var video = probe(recordedAnswers(AVC1_MP4).source(source).build()).getStreams(0);
+
+      assertThat(copyKeepsPacketBytes(video)).isFalse();
+    }
+
+    static Stream<Named<Path>> unreadableMovieBoxes() {
+      return Stream.of(
+          Named.of("no file", Path.of("/media/source")),
+          Named.of(
+              "a Matroska file", resource("/probe/matroska-heads/mkv-statistics-mkvmerge.mkv")));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("streamIdsWithoutATrack")
+    @DisplayName(
+        "Should report that a copy may change packet bytes when the movie box holds no track for"
+            + " the stream")
+    void shouldReportThatACopyMayChangePacketBytesWhenTheMovieBoxHoldsNoTrackForTheStream(
+        UnaryOperator<ObjectNode> edit) {
+      var recorded = fixture(AVC1_MP4);
+      var output = (ObjectNode) MAPPER.readTree(recorded);
+      edit.apply((ObjectNode) output.path("streams").get(0));
+
+      var video = edited(AVC1_MP4, recorded, MAPPER.writeValueAsString(output));
+
+      assertThat(copyKeepsPacketBytes(video)).isFalse();
+    }
+
+    static Stream<Named<UnaryOperator<ObjectNode>>> streamIdsWithoutATrack() {
+      return Stream.of(
+          Named.of("another track ID", stream -> stream.put("id", "0x2")),
+          Named.of(
+              "no stream id",
+              stream -> {
+                stream.remove("id");
+                return stream;
+              }));
     }
   }
 
@@ -438,9 +513,35 @@ class FfprobeExecutorCopyPacketBytesTest {
     }
   }
 
+  /** Probes the recording with the source's movie box, which an MP4 or MOV source needs. */
+  private static ProbeStreamInfo recordedVideo(String fixture) {
+    return probe(withMovieBox(fixture, recordedAnswers(fixture)).build()).getStreams(0);
+  }
+
+  /** Probes the edited output of the recording with the source's movie box. */
   private static ProbeStreamInfo edited(String fixture, String recorded, String edited) {
     assertThat(edited).isNotEqualTo(recorded);
-    return probe(recordedAnswers(fixture).ffprobeOutput(edited).build()).getStreams(0);
+    return probe(withMovieBox(fixture, recordedAnswers(fixture).ffprobeOutput(edited)).build())
+        .getStreams(0);
+  }
+
+  private static Answers.AnswersBuilder withMovieBox(
+      String fixture, Answers.AnswersBuilder answers) {
+    if (!fixture.endsWith(".mp4") && !fixture.endsWith(".mov")) {
+      return answers;
+    }
+
+    return answers.source(resource("/probe/mp4-movie-boxes/" + fixture));
+  }
+
+  private static Path resource(String name) {
+    var resource = FfprobeExecutorCopyPacketBytesTest.class.getResource(name);
+    assertThat(resource).as(name).isNotNull();
+    try {
+      return Path.of(resource.toURI());
+    } catch (URISyntaxException e) {
+      throw new IllegalStateException(e);
+    }
   }
 
   private static boolean copyKeepsPacketBytes(ProbeStreamInfo video) {

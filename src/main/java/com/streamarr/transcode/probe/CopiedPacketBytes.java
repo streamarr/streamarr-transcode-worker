@@ -27,7 +27,10 @@ import tools.jackson.databind.JsonNode;
  *       arrays from the copy's record and only the filter would repeat their messages in the
  *       samples;
  *   <li>a source with a sample entry names {@code avc1} or {@code dva1} for H.264 and {@code hvc1}
- *       or {@code dvh1} for HEVC, the entries whose records hold the parameter sets.
+ *       or {@code dvh1} for HEVC, the entries whose records hold the parameter sets;
+ *   <li>a source with a sample entry holds no other, as {@link Mp4SampleEntries} reads, because
+ *       ffprobe describes only the first and only the filter carries another entry's parameter sets
+ *       into the samples.
  * </ul>
  */
 final class CopiedPacketBytes {
@@ -54,8 +57,9 @@ final class CopiedPacketBytes {
   /**
    * Whether a copy of the H.264 or HEVC stream keeps every packet's bytes; empty for any other
    * codec. A stream without extradata has no record. ffprobe names a codec tag of 0 for a container
-   * without sample entries, such as Matroska, and otherwise names the tag, which is the sample
-   * entry type of an MP4 or MOV track.
+   * without sample entries, such as Matroska, and otherwise names the tag, which is the type of the
+   * first sample entry of an MP4 or MOV track. A track whose number of sample entries the probe
+   * could not read counts as one with several.
    */
   static Optional<Boolean> of(JsonNode stream) {
     var family = ProbedCodecFamily.of(stream);
@@ -67,6 +71,10 @@ final class CopiedPacketBytes {
         text(stream, "codec_tag")
             .filter(tag -> !NO_CODEC_TAG.equals(tag))
             .flatMap(_ -> text(stream, "codec_tag_string"));
+    if (sampleEntry.isPresent() && stream.path(Mp4SampleEntries.KEY).asLong(0) != 1) {
+      return Optional.of(false);
+    }
+
     return Optional.of(
         Extradata.of(stream).filter(record -> areKept(family, sampleEntry, record)).isPresent());
   }
