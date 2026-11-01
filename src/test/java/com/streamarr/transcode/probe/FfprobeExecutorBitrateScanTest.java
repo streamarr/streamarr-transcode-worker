@@ -912,6 +912,70 @@ class FfprobeExecutorBitrateScanTest {
 
   @Test
   @DisplayName(
+      "Should count every audio packet of the chunk when the muxer places the audio more than the"
+          + " widest seek margin behind the video")
+  void shouldCountEveryAudioPacketOfTheChunkWhenTheMuxerPlacesTheAudioFarBehindTheVideo() {
+    // No muxer bound holds: the chunk's audio comes after 160 s of video past the chunk's end.
+    var listing =
+        """
+        stream_index=0|pts=500|dts=500|duration=500|size=1000|flags=K__
+        stream_index=0|pts=1500|dts=1500|duration=500|size=1001|flags=K__
+        stream_index=0|pts=2500|dts=2500|duration=500|size=1002|flags=K__
+        stream_index=0|pts=162500|dts=162500|duration=500|size=1003|flags=K__
+        stream_index=1|pts=500|dts=500|duration=250|size=10|flags=K__
+        stream_index=1|pts=1500|dts=1500|duration=250|size=11|flags=K__
+        stream_index=1|pts=2500|dts=2500|duration=250|size=12|flags=K__
+        """;
+    var ffprobe = keptAacSource().listing(FROM_FILE_START, listing).build();
+
+    var report = ffprobe.executor().probe(SOURCE, request(POSITIONS.chunk(0, 2)));
+
+    assertThat(intervalCounts(report.streamMeasurementParts()))
+        .containsEntry(1, counts(List.of(10L, 11L), List.of(1L, 1L)));
+  }
+
+  @Test
+  @DisplayName(
+      "Should list the chunk from the file's start when an audio stream gives no packet after the"
+          + " widest seek")
+  void shouldListTheChunkFromTheFilesStartWhenAnAudioStreamGivesNoPacketAfterTheWidestSeek() {
+    // The muxer placed the chunk's audio more than 120 s ahead of its video.
+    var positions =
+        POSITIONS.toBuilder()
+            .clearKeyframes()
+            .keyframe(new Keyframe(0, 0))
+            .keyframe(new Keyframe(200_000, 200_000))
+            .keyframe(new Keyframe(220_000, 220_000))
+            .build();
+    var afterEitherSeek =
+        """
+        stream_index=0|pts=200500|dts=200500|duration=500|size=1001|flags=K__
+        stream_index=0|pts=220500|dts=220500|duration=500|size=1002|flags=K__
+        """;
+    var fromTheFileStart =
+        """
+        stream_index=0|pts=500|dts=500|duration=500|size=1000|flags=K__
+        stream_index=1|pts=200500|dts=200500|duration=250|size=10|flags=K__
+        stream_index=1|pts=220500|dts=220500|duration=250|size=11|flags=K__
+        stream_index=0|pts=200500|dts=200500|duration=500|size=1001|flags=K__
+        stream_index=0|pts=220500|dts=220500|duration=500|size=1002|flags=K__
+        """;
+    var ffprobe =
+        keptAacSource()
+            .listing("190.500000", afterEitherSeek)
+            .listing("80.500000", afterEitherSeek)
+            .listing(FROM_FILE_START, fromTheFileStart)
+            .build();
+
+    var report = ffprobe.executor().probe(SOURCE, request(positions.chunk(1, 2)));
+
+    assertThat(intervalCounts(report.streamMeasurementParts()))
+        .containsEntry(1, counts(List.of(10L), List.of(1L)));
+    assertThat(ffprobe.listingStarts()).containsExactly("190.500000", "80.500000", FROM_FILE_START);
+  }
+
+  @Test
+  @DisplayName(
       "Should read on past the end keyframe until each audio stream passes the chunk's end when the"
           + " muxer places the audio behind the video")
   void shouldReadOnPastTheEndKeyframeUntilEachAudioStreamPassesTheChunksEndWhenAudioLags() {

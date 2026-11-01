@@ -39,6 +39,9 @@ class WorkerBitrateScanSmokeTest {
   private static final int SECONDS = 20;
   private static final List<Integer> CHUNK_STARTS = List.of(0, 6, 13);
 
+  private static final FfprobeExecutor FFPROBE =
+      FfprobeExecutor.forBinaries(Path.of("ffprobe"), Path.of("ffmpeg"));
+
   @TempDir Path root;
 
   /**
@@ -103,22 +106,72 @@ class WorkerBitrateScanSmokeTest {
   void shouldCountEveryPacketInTheIntervalOfTheWholeFilesPacketListingWhenTheChunksAreReadOneByOne(
       Source source) throws Exception {
     var file = source.generate(root);
-    var ffprobe = FfprobeExecutor.forBinaries(Path.of("ffprobe"), Path.of("ffmpeg"));
-    var positions = positions(ffprobe, file);
-    var listing = WholeFileListing.read(file, positions.streamIndex());
 
+    var positions = positions(file);
+
+    assertThat(chunkCounts(file, positions, CHUNK_STARTS))
+        .isEqualTo(WholeFileListing.read(file, positions.streamIndex()).intervalCounts());
+  }
+
+  @Test
+  @DisplayName(
+      "Should count every audio packet once when a synthetic Matroska source places its audio more"
+          + " than 120 s behind the video")
+  void shouldCountEveryAudioPacketOnceWhenASyntheticMatroskaSourcePlacesItsAudioFarBehind()
+      throws Exception {
+    // areverse holds back every audio frame until the input ends, so the muxer writes the first
+    // audio packet after at least 200 s of video: a frame every 40 s, each one a keyframe. The
+    // first chunk ends at 40 s, so its audio lies more than 120 s behind its end in the file.
+    var file = root.resolve("late-audio.mkv");
+    run(
+        List.of(
+            "ffmpeg",
+            "-nostdin",
+            "-v",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=s=160x120:r=0.025:d=600",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=sample_rate=48000:d=600",
+            "-map",
+            "0:v",
+            "-map",
+            "1:a",
+            "-af",
+            "areverse",
+            "-c:v",
+            "libx264",
+            "-g",
+            "1",
+            "-c:a",
+            "aac",
+            file.toString()));
+
+    var positions = positions(file);
+
+    assertThat(chunkCounts(file, positions, List.of(0, 1, 2, 8)))
+        .isEqualTo(WholeFileListing.read(file, positions.streamIndex()).intervalCounts());
+  }
+
+  /** The counts of the chunks that start at the keyframes, joined per stream; each is measured. */
+  private static Map<Integer, IntervalCounts> chunkCounts(
+      Path file, Positions positions, List<Integer> chunkStarts) {
     var chunks = new ArrayList<Map<Integer, IntervalCounts>>();
-    for (var i = 0; i < CHUNK_STARTS.size(); i++) {
-      var end =
-          i + 1 < CHUNK_STARTS.size() ? CHUNK_STARTS.get(i + 1) : positions.keyframes().size();
-      var report = ffprobe.probe(file, request(positions.chunk(CHUNK_STARTS.get(i), end)));
+    for (var i = 0; i < chunkStarts.size(); i++) {
+      var end = i + 1 < chunkStarts.size() ? chunkStarts.get(i + 1) : positions.keyframes().size();
+      var report = FFPROBE.probe(file, request(positions.chunk(chunkStarts.get(i), end)));
       assertThat(report.result().getBitrateScanChunk().getResultCase())
           .as("chunk %d: %s", i, report.result())
           .isEqualTo(BitrateScanChunkResult.ResultCase.MEASURED);
       chunks.add(intervalCounts(report.streamMeasurementParts()));
     }
 
-    assertThat(joined(chunks)).isEqualTo(listing.intervalCounts());
+    return joined(chunks);
   }
 
   @Test
@@ -128,14 +181,13 @@ class WorkerBitrateScanSmokeTest {
   void shouldFailOnlyTheChunksThatReachTheTruncationWhenASyntheticMatroskaSourceIsCutShort()
       throws Exception {
     var file = Source.MATROSKA.generate(root);
-    var ffprobe = FfprobeExecutor.forBinaries(Path.of("ffprobe"), Path.of("ffmpeg"));
-    var positions = positions(ffprobe, file);
+    var positions = positions(file);
     var bytes = Files.readAllBytes(file);
     Files.write(file, Arrays.copyOf(bytes, bytes.length * 6 / 10));
 
-    var first = ffprobe.probe(file, request(positions.chunk(0, 6)));
-    var middle = ffprobe.probe(file, request(positions.chunk(6, 13)));
-    var last = ffprobe.probe(file, request(positions.chunk(13, positions.keyframes().size())));
+    var first = FFPROBE.probe(file, request(positions.chunk(0, 6)));
+    var middle = FFPROBE.probe(file, request(positions.chunk(6, 13)));
+    var last = FFPROBE.probe(file, request(positions.chunk(13, positions.keyframes().size())));
 
     assertThat(first.result().getBitrateScanChunk().getResultCase())
         .isEqualTo(BitrateScanChunkResult.ResultCase.MEASURED);
@@ -166,10 +218,9 @@ class WorkerBitrateScanSmokeTest {
             "-g",
             "24",
             file.toString()));
-    var ffprobe = FfprobeExecutor.forBinaries(Path.of("ffprobe"), Path.of("ffmpeg"));
-    var positions = positions(ffprobe, file);
+    var positions = positions(file);
 
-    var report = ffprobe.probe(file, request(positions.chunk(0, positions.keyframes().size())));
+    var report = FFPROBE.probe(file, request(positions.chunk(0, positions.keyframes().size())));
 
     assertThat(report.result().getBitrateScanChunk())
         .isEqualTo(
@@ -181,9 +232,9 @@ class WorkerBitrateScanSmokeTest {
     assertThat(report.streamMeasurementParts()).isEmpty();
   }
 
-  private static Positions positions(FfprobeExecutor ffprobe, Path file) {
+  private static Positions positions(Path file) {
     var scan = WorkerProbeFixtures.requestBuilder().setScanKeyframePackets(true).build();
-    return Positions.of(ffprobe.probe(file, scan));
+    return Positions.of(FFPROBE.probe(file, scan));
   }
 
   private static String run(List<String> command) throws Exception {
