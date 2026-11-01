@@ -40,7 +40,8 @@ The aggregate `build` check includes both image jobs.
 
 After human review and merge, a push to `main` publishes each tested native image to Docker Hub
 `streamarr/streamarr-transcode-worker`. The publishing steps reuse the tested image without rebuilding.
-Pull requests and manual CI runs do not authenticate or publish. The workflow uses the existing
+Pull request CI and manual CI runs do not authenticate or publish; see [preview images](#preview-images)
+for the one opt-in exception. The workflow uses the existing
 `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` organization secrets and a read-only GitHub token.
 
 Each native job records its registry digest. After both jobs pass, the shared publication workflow
@@ -62,6 +63,26 @@ Published GitHub releases also trigger Release Publisher, which rebuilds the tag
 both native runners. It runs the same media checks and `WorkerImageIT` command before Docker Hub
 authentication, then publishes native commit tags and a multi-architecture version tag.
 Only GitHub's latest release updates `latest`. See [releases](releases.md) for validation and retry behavior.
+
+## Preview images
+
+A repository owner, member, or collaborator with write access can comment `/deploy-preview` on an
+open pull request from a branch of this repository. The workflow publishes its head as
+`streamarr/streamarr-transcode-worker:pr-<number>`, the same command and tag form the server uses,
+so a server preview and a worker preview can run together on one test host.
+
+An authorization job without repository code checks the commenter's access and the pull request,
+then records the head commit. The build job checks out that commit with a read-only token, no
+secrets, and no cache. It builds the amd64 image with `build-worker-image.sh`, so the preview
+passes the same media runtime checks as CI. It does not run `WorkerImageIT`; the pull request's own
+CI does. A separate job that never checks out repository code loads the image and confirms the
+pull request is still open at the built commit. A push during the build cancels the publication,
+so comment again. Otherwise the job pushes the preview tag and comments the source commit on the
+pull request. Closing the pull request deletes the tag; the deletion waits for a publication already
+in progress.
+Pull requests from forks get no preview, because their head can change after the command.
+GitHub runs comment-triggered workflows from the default branch, so the command works only after
+this workflow is on `main`.
 
 Hardware encoder support and redistribution materials remain in the moved buildpack. Ordinary
 CI runners prove CPU operation. They do not claim to exercise GPU devices or drivers.
