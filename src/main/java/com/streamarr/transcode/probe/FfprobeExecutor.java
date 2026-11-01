@@ -56,6 +56,9 @@ public final class FfprobeExecutor {
   // The object that ffprobe prints in place of its result when it fails.
   private static final String ERROR_FIELD = "error";
 
+  // ffprobe's log level that prints only errors.
+  private static final String ERRORS_ONLY = "error";
+
   @NonNull private final ObjectMapper objectMapper;
   @NonNull private final Function<ProbeCommand, Process> processFactory;
 
@@ -257,7 +260,7 @@ public final class FfprobeExecutor {
     var arguments =
         List.of(
             "-v",
-            "error",
+            ERRORS_ONLY,
             "-select_streams",
             String.valueOf(streamIndex),
             "-read_intervals",
