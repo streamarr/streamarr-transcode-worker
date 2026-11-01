@@ -206,9 +206,15 @@ class PreviewImageWorkflowTest {
     var cleanup = map(job(yaml(CLEANUP_WORKFLOW), CLEANUP_JOB).get("concurrency"));
 
     assertThat(resolve(publication, Map.of("github.event.issue.number", PULL_REQUEST)))
-        .containsOnly(entry("group", "preview-image-42"), entry("cancel-in-progress", "false"));
+        .containsOnly(
+            entry("group", "preview-image-42"),
+            entry("cancel-in-progress", "false"),
+            entry("queue", "max"));
     assertThat(resolve(cleanup, Map.of("github.event.pull_request.number", PULL_REQUEST)))
-        .containsOnly(entry("group", "preview-image-42"), entry("cancel-in-progress", "false"));
+        .containsOnly(
+            entry("group", "preview-image-42"),
+            entry("cancel-in-progress", "false"),
+            entry("queue", "max"));
   }
 
   @Test

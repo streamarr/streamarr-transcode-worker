@@ -100,10 +100,12 @@ jobs:
     permissions:
       pull-requests: write
     # Shared with the cleanup workflow, so a pull request closed during publication loses its tag
-    # after the push instead of before it.
+    # after the push instead of before it. The default queue keeps one pending job and cancels the
+    # rest, which would let a later publication cancel a waiting cleanup.
     concurrency:
       group: preview-image-${{ github.event.issue.number }}
       cancel-in-progress: false
+      queue: max
     env:
       PREVIEW_IMAGE: index.docker.io/streamarr/streamarr-transcode-worker:pr-${{ github.event.issue.number }}
 
