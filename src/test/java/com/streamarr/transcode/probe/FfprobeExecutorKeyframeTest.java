@@ -21,16 +21,20 @@ import static com.streamarr.transcode.probe.EbmlElements.unsigned;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.KeyframePacketScanReason;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositionSource;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositions;
 import build.buf.gen.streamarr.transcode.v1.KeyframesUnavailable;
 import build.buf.gen.streamarr.transcode.v1.KeyframesUnavailableReason;
+import build.buf.gen.streamarr.transcode.v1.MeasuredStream;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeKeyframePositionsPart;
 import build.buf.gen.streamarr.transcode.v1.ProbeKeyframes;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
+import build.buf.gen.streamarr.transcode.v1.ProbeStreamMeasurementPart;
+import build.buf.gen.streamarr.transcode.v1.StreamMeasurementSource;
 import com.streamarr.transcode.probe.EbmlElements.TrackEntry;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -47,6 +51,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import lombok.Builder;
 import lombok.Singular;
@@ -110,7 +116,8 @@ class FfprobeExecutorKeyframeTest {
 
   @Test
   @DisplayName(
-      "Should report keyframe positions from the sync-sample table when the source is an MP4 with B-frames and an edit list")
+      "Should report keyframe positions from the sync-sample table when the source is an MP4 with"
+          + " B-frames and an edit list")
   void shouldReportKeyframePositionsFromSyncSampleTableWhenSourceIsMp4WithBFramesAndEditList() {
     var ffprobe =
         ScriptedFfprobe.builder()
@@ -143,7 +150,8 @@ class FfprobeExecutorKeyframeTest {
 
   @Test
   @DisplayName(
-      "Should report keyframe positions from the Cues when a libavformat Matroska source lists every keyframe")
+      "Should report keyframe positions from the Cues when a libavformat Matroska source lists"
+          + " every keyframe")
   void shouldReportKeyframePositionsFromCuesWhenLibavformatMatroskaSourceListsEveryKeyframe() {
     var ffprobe =
         ScriptedFfprobe.builder()
@@ -200,7 +208,8 @@ class FfprobeExecutorKeyframeTest {
   @ParameterizedTest
   @CsvSource({"mp4-truncated.mp4, 2.916667%+#1", "mkv-truncated-cues-front.mkv, 2.917000%+#1"})
   @DisplayName(
-      "Should require a packet scan when a truncated source lists a last keyframe that cannot be read")
+      "Should require a packet scan when a truncated source lists a last keyframe that cannot be"
+          + " read")
   void shouldRequirePacketScanWhenTruncatedSourceListsLastKeyframeThatCannotBeRead(
       String fixture, String lastKeyframeInterval) {
     var streams = fixture.endsWith(".mkv") ? MATROSKA_STREAMS : MP4_STREAMS;
@@ -299,6 +308,320 @@ class FfprobeExecutorKeyframeTest {
     assertThat(report.keyframePositionsParts().get(1).getDecodeTimeDeltas(0)).isEqualTo(1);
   }
 
+  @Test
+  @DisplayName(
+      "Should split each stream's interval bytes into parts that fit one session message when a"
+          + " three-hour source has a keyframe every half second")
+  void shouldSplitEachStreamsIntervalBytesIntoPartsWhenThreeHourSourceHasKeyframeEveryHalfSecond(
+      @TempDir Path directory) throws Exception {
+    var source =
+        Files.write(
+            directory.resolve("source.mp4"),
+            SyntheticMp4.builder()
+                .mediaTimescale(1_000)
+                .sampleDurations(21_600, 500)
+                .sampleSizes(21_600, 4_000)
+                .build()
+                .bytes());
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(
+                """
+                {"format":{"format_name":"mov,mp4,m4a,3gp,3g2,mj2","start_time":"0.000000"},
+                 "streams":[{"index":0,"codec_type":"video","id":"0x1"}]}
+                """)
+            .packet(
+                "10799.500000%+#1",
+                "{\"packets\":[{\"pts\":10799500,\"dts\":10799500,\"flags\":\"K__\"}]}")
+            .build();
+
+    var report = ffprobe.executor().probe(source, keyframeRequest());
+
+    var video = report.result().getMedia().getStreamMeasurements().getStreams(0);
+    assertThat(video.getMeasuredBytes()).isEqualTo(86_400_000L);
+    assertThat(video.getMeasuredDuration()).isEqualTo(10_800_000L);
+    assertThat(report.streamMeasurementParts())
+        .extracting(ProbeStreamMeasurementPart::getKeyframeIntervalBytesCount)
+        .containsExactly(4_096, 4_096, 4_096, 4_096, 4_096, 1_120);
+    assertThat(report.streamMeasurementParts())
+        .extracting(ProbeStreamMeasurementPart::getKeyframeIntervalPacketCountsCount)
+        .containsExactly(4_096, 4_096, 4_096, 4_096, 4_096, 1_120);
+    assertThat(report.streamMeasurementParts())
+        .allSatisfy(
+            part ->
+                assertThat(
+                        EstablishWorkerSessionRequest.newBuilder()
+                            .setProbeStreamMeasurementPart(part)
+                            .build()
+                            .getSerializedSize())
+                    .isLessThan(131_072));
+  }
+
+  @Test
+  @DisplayName("Should measure another video stream when the MP4 holds a second video track")
+  void shouldMeasureAnotherVideoStreamWhenMp4HoldsSecondVideoTrack(@TempDir Path directory)
+      throws Exception {
+    var ffprobe = twoTrackFfprobe("{\"index\":1,\"codec_type\":\"video\",\"id\":\"0x2\"}");
+
+    var report = ffprobe.executor().probe(twoTrackSource(directory), keyframeRequest());
+
+    assertThat(report.result().getMedia().getStreamMeasurements().getStreamsList())
+        .extracting(MeasuredStream::getStreamIndex)
+        .containsExactly(0, 1);
+  }
+
+  // FFmpeg marks a QuickTime chapter image track as an attached picture, and the track has
+  // samples that the sample tables list.
+  @Test
+  @DisplayName(
+      "Should measure no attached picture when the attached picture's track is in the movie box")
+  void shouldMeasureNoAttachedPictureWhenAttachedPicturesTrackIsInMovieBox(@TempDir Path directory)
+      throws Exception {
+    var ffprobe =
+        twoTrackFfprobe(
+            """
+            {"index":1,"codec_type":"video","id":"0x2","disposition":{"attached_pic":1}}
+            """);
+
+    var report = ffprobe.executor().probe(twoTrackSource(directory), keyframeRequest());
+
+    assertThat(report.result().getMedia().getStreamMeasurements().getStreamsList())
+        .extracting(MeasuredStream::getStreamIndex)
+        .containsExactly(0);
+  }
+
+  // ADR 0054: the measurement does not cover subtitle streams or data streams.
+  @ParameterizedTest(name = "{0} stream")
+  @CsvSource({"subtitle, sbtl", "data, tmcd"})
+  @DisplayName(
+      "Should measure only the video when the MP4's other track holds a subtitle or data stream")
+  void shouldMeasureOnlyVideoWhenMp4sOtherTrackHoldsSubtitleOrDataStream(
+      String codecType, String handler, @TempDir Path directory) throws Exception {
+    var source =
+        sourceBeside(
+            directory,
+            SyntheticMp4.builder().handler(handler).mediaTimescale(1_000).sampleDurations(4, 500));
+    var ffprobe =
+        twoTrackFfprobe("{\"index\":1,\"codec_type\":\"%s\",\"id\":\"0x2\"}".formatted(codecType));
+
+    var report = ffprobe.executor().probe(source, keyframeRequest());
+
+    assertThat(report.result().getMedia().getStreamMeasurements().getStreamsList())
+        .extracting(MeasuredStream::getStreamIndex)
+        .containsExactly(0);
+  }
+
+  @Test
+  @DisplayName(
+      "Should report no measurement when ffprobe names E-AC-3 for audio whose samples each hold one"
+          + " block")
+  void shouldReportNoMeasurementWhenFfprobeNamesEac3ForAudioWhoseSamplesEachHoldOneBlock(
+      @TempDir Path directory) throws Exception {
+    var source = sourceBeside(directory, audioAt48Kilohertz().sampleDurations(4, 256));
+
+    var report = eac3Ffprobe().executor().probe(source, keyframeRequest());
+
+    assertThat(report.result().getMedia().hasStreamMeasurements()).isFalse();
+    assertThat(report.streamMeasurementParts()).isEmpty();
+  }
+
+  @Test
+  @DisplayName(
+      "Should measure the audio when ffprobe names E-AC-3 at a sample rate whose six blocks fill"
+          + " each sample")
+  void shouldMeasureAudioWhenFfprobeNamesEac3AtSampleRateWhoseSixBlocksFillEachSample(
+      @TempDir Path directory) throws Exception {
+    var source = sourceBeside(directory, audioAt48Kilohertz().sampleDurations(4, 1_536));
+
+    var report = eac3Ffprobe().executor().probe(source, keyframeRequest());
+
+    assertThat(report.result().getMedia().getStreamMeasurements().getStreamsList())
+        .extracting(MeasuredStream::getStreamIndex)
+        .containsExactly(0, 1);
+  }
+
+  // A MeasuredStream's time base denominator is a uint32 that the contract keeps positive as an
+  // int32.
+  @Test
+  @DisplayName(
+      "Should report no measurement when an audio track's timescale exceeds the largest signed"
+          + " 32-bit value")
+  void shouldReportNoMeasurementWhenAudioTracksTimescaleExceedsLargestSigned32BitValue(
+      @TempDir Path directory) throws Exception {
+    var source =
+        sourceBeside(
+            directory,
+            SyntheticMp4.builder()
+                .handler("soun")
+                .mediaTimescale(2_147_483_648L)
+                .sampleDurations(4, 1_024));
+    var ffprobe = twoTrackFfprobe("{\"index\":1,\"codec_type\":\"audio\",\"id\":\"0x2\"}");
+
+    var report = ffprobe.executor().probe(source, keyframeRequest());
+
+    assertThat(report.result().getMedia().getKeyframes().hasPositions()).isTrue();
+    assertThat(report.result().getMedia().hasStreamMeasurements()).isFalse();
+  }
+
+  @Test
+  @DisplayName("Should report the measurement when it measures exactly 1,024 streams")
+  void shouldReportMeasurementWhenItMeasuresExactly1024Streams(@TempDir Path directory)
+      throws Exception {
+    var source = sourceBeside(directory, audioAt48Kilohertz().sampleDurations(4, 24_000));
+    var ffprobe = twoTrackFfprobe(audioStreamsOfSecondTrack(1_023));
+
+    var report = ffprobe.executor().probe(source, keyframeRequest());
+
+    assertThat(report.result().getMedia().getStreamMeasurements().getStreamsCount())
+        .isEqualTo(1_024);
+  }
+
+  // worker_session.proto: the parts of one attempt name at most 1,024 streams.
+  @Test
+  @DisplayName("Should report no measurement when it would measure more than 1,024 streams")
+  void shouldReportNoMeasurementWhenItWouldMeasureMoreThan1024Streams(@TempDir Path directory)
+      throws Exception {
+    var source = sourceBeside(directory, audioAt48Kilohertz().sampleDurations(4, 24_000));
+    var ffprobe = twoTrackFfprobe(audioStreamsOfSecondTrack(1_024));
+
+    var report = ffprobe.executor().probe(source, keyframeRequest());
+
+    assertThat(report.result().getMedia().getKeyframes().hasPositions()).isTrue();
+    assertThat(report.result().getMedia().hasStreamMeasurements()).isFalse();
+    assertThat(report.streamMeasurementParts()).isEmpty();
+  }
+
+  // worker_session.proto: the parts of one attempt hold at most 8,388,608 interval entries.
+  @Test
+  @DisplayName(
+      "Should report no measurement when its streams would hold more than 8,388,608 keyframe"
+          + " intervals in all")
+  void shouldReportNoMeasurementWhenItsStreamsWouldHoldMoreThan8388608KeyframeIntervals(
+      @TempDir Path directory) throws Exception {
+    // 8,193 keyframe intervals in each of 1,024 streams make 8,389,632.
+    var source =
+        Files.write(
+            directory.resolve("source.mp4"),
+            SyntheticMp4.builder()
+                .mediaTimescale(1_000)
+                .sampleDurations(8_193, 1)
+                .secondTrack(audioAt48Kilohertz().sampleDurations(4, 24_000).build())
+                .build()
+                .bytes());
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(streamsBesideVideoTrack(audioStreamsOfSecondTrack(1_023)))
+            .packet("8.192000%+#1", "{\"packets\":[{\"pts\":8192,\"dts\":8192,\"flags\":\"K__\"}]}")
+            .build();
+
+    var report = ffprobe.executor().probe(source, keyframeRequest());
+
+    assertThat(report.result().getMedia().getKeyframes().getPositions().getKeyframeCount())
+        .isEqualTo(8_193);
+    assertThat(report.result().getMedia().hasStreamMeasurements()).isFalse();
+    assertThat(report.streamMeasurementParts()).isEmpty();
+  }
+
+  // FFmpeg walks the stss in order, as the keyframe reader does, so a sync sample that the stss
+  // lists after a later one is no keyframe, and a copy drops the samples before the keyframe.
+  @Test
+  @DisplayName(
+      "Should report no measurement when the stss lists a sync sample after a later sync sample")
+  void shouldReportNoMeasurementWhenStssListsSyncSampleAfterLaterSyncSample(@TempDir Path directory)
+      throws Exception {
+    var source =
+        Files.write(
+            directory.resolve("source.mp4"),
+            SyntheticMp4.builder()
+                .mediaTimescale(1_000)
+                .sampleDurations(6, 100)
+                .syncSamples(List.of(3L, 1L))
+                .build()
+                .bytes());
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(streamsBesideVideoTrack(""))
+            .packet("0.200000%+#1", "{\"packets\":[{\"pts\":200,\"dts\":200,\"flags\":\"K__\"}]}")
+            .build();
+
+    var report = ffprobe.executor().probe(source, keyframeRequest());
+
+    assertThat(report.result().getMedia().getKeyframes().getPositions().getKeyframeCount())
+        .isEqualTo(1);
+    assertThat(report.result().getMedia().hasStreamMeasurements()).isFalse();
+    assertThat(report.streamMeasurementParts()).isEmpty();
+  }
+
+  @Test
+  @DisplayName("Should report no measurement when ffprobe names no track for an audio stream")
+  void shouldReportNoMeasurementWhenFfprobeNamesNoTrackForAudioStream(@TempDir Path directory)
+      throws Exception {
+    var ffprobe = twoTrackFfprobe("{\"index\":1,\"codec_type\":\"audio\"}");
+
+    var report = ffprobe.executor().probe(twoTrackSource(directory), keyframeRequest());
+
+    assertThat(report.result().getMedia().getKeyframes().hasPositions()).isTrue();
+    assertThat(report.result().getMedia().hasStreamMeasurements()).isFalse();
+    assertThat(report.streamMeasurementParts()).isEmpty();
+  }
+
+  /** An MP4 whose video track 1 has keyframes at 0, 0.5, 1 and 1.5 s, beside video track 2. */
+  private static Path twoTrackSource(Path directory) throws IOException {
+    return sourceBeside(
+        directory, SyntheticMp4.builder().mediaTimescale(1_000).sampleDurations(4, 500));
+  }
+
+  /** An MP4 whose video track 1 has keyframes at 0, 0.5, 1 and 1.5 s, beside this track 2. */
+  private static Path sourceBeside(Path directory, SyntheticMp4.SyntheticMp4Builder secondTrack)
+      throws IOException {
+    return Files.write(
+        directory.resolve("source.mp4"),
+        SyntheticMp4.builder()
+            .mediaTimescale(1_000)
+            .sampleDurations(4, 500)
+            .secondTrack(secondTrack.build())
+            .build()
+            .bytes());
+  }
+
+  private static SyntheticMp4.SyntheticMp4Builder audioAt48Kilohertz() {
+    return SyntheticMp4.builder().handler("soun").mediaTimescale(48_000);
+  }
+
+  private static ScriptedFfprobe eac3Ffprobe() {
+    return twoTrackFfprobe(
+        """
+        {"index":1,"codec_type":"audio","codec_name":"eac3","sample_rate":"48000","id":"0x2"}
+        """);
+  }
+
+  /** This many audio streams after the video stream, each of which names track 2. */
+  private static String audioStreamsOfSecondTrack(int count) {
+    return IntStream.rangeClosed(1, count)
+        .mapToObj("{\"index\":%d,\"codec_type\":\"audio\",\"id\":\"0x2\"}"::formatted)
+        .collect(Collectors.joining(","));
+  }
+
+  private static ScriptedFfprobe twoTrackFfprobe(String otherStreams) {
+    return ScriptedFfprobe.builder()
+        .streams(streamsBesideVideoTrack(otherStreams))
+        .packet("1.500000%+#1", "{\"packets\":[{\"pts\":1500,\"dts\":1500,\"flags\":\"K__\"}]}")
+        .build();
+  }
+
+  /** The ffprobe output of an MP4 whose stream 0 is video track 1, followed by these streams. */
+  private static String streamsBesideVideoTrack(String otherStreams) {
+    var streams =
+        otherStreams.isBlank()
+            ? "{\"index\":0,\"codec_type\":\"video\",\"id\":\"0x1\"}"
+            : "{\"index\":0,\"codec_type\":\"video\",\"id\":\"0x1\"}," + otherStreams;
+    return """
+    {"format":{"format_name":"mov,mp4,m4a,3gp,3g2,mj2","start_time":"0.000000"},
+     "streams":[%s]}
+    """
+        .formatted(streams);
+  }
+
   @ParameterizedTest
   @CsvSource({"mp4-bframes-editlist.mp4, MP4", "mkv-libavformat.mkv, MATROSKA"})
   @DisplayName("Should report cancellation when the attempt is cancelled before the index read")
@@ -321,7 +644,8 @@ class FfprobeExecutorKeyframeTest {
   @Test
   @Timeout(value = 10, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
   @DisplayName(
-      "Should require a packet scan when the decode durations declare more samples than the track has")
+      "Should require a packet scan when the decode durations declare more samples than the track"
+          + " has")
   void shouldRequirePacketScanWhenDecodeDurationsDeclareMoreSamplesThanTrackHas(
       @TempDir Path directory) throws Exception {
     var source =
@@ -355,7 +679,8 @@ class FfprobeExecutorKeyframeTest {
         "{\"packets\":[{\"pts\":35840,\"dts\":34816,\"flags\":\"___\"}]} | 0"
       })
   @DisplayName(
-      "Should require a packet scan when the read at the last indexed keyframe finds no such keyframe")
+      "Should require a packet scan when the read at the last indexed keyframe finds no such"
+          + " keyframe")
   void shouldRequirePacketScanWhenReadAtLastIndexedKeyframeFindsNoSuchKeyframe(
       String packets, int exitCode) {
     var ffprobe =
@@ -400,7 +725,8 @@ class FfprobeExecutorKeyframeTest {
 
   @Test
   @DisplayName(
-      "Should report the first video stream that is not a picture when audio and a picture precede it")
+      "Should report the first video stream that is not a picture when audio and a picture precede"
+          + " it")
   void shouldReportFirstVideoStreamThatIsNotPictureWhenAudioAndPicturePrecedeIt() {
     var ffprobe =
         ScriptedFfprobe.builder()
@@ -586,8 +912,8 @@ class FfprobeExecutorKeyframeTest {
   @Test
   @Timeout(value = 10, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
   @DisplayName(
-      "Should stop FFmpeg and report the keyframes unavailable when the packet scan finds a keyframe"
-          + " without a time")
+      "Should stop FFmpeg and report the keyframes unavailable when the packet scan finds a"
+          + " keyframe without a time")
   void shouldStopFfmpegAndReportKeyframesUnavailableWhenPacketScanFindsKeyframeWithoutTime() {
     var ffmpeg =
         new EndlessPacketScan(
@@ -1249,15 +1575,91 @@ class FfprobeExecutorKeyframeTest {
 
   private static String streamsOf(String formatName) {
     return """
-        {"format":{"format_name":"%s","start_time":"0.000000"},
-         "streams":[{"index":0,"codec_type":"video","codec_name":"h264","id":"0x1",
-                     "disposition":{"attached_pic":0}}]}
-        """
+    {"format":{"format_name":"%s","start_time":"0.000000"},
+     "streams":[{"index":0,"codec_type":"video","codec_name":"h264","id":"0x1",
+                 "disposition":{"attached_pic":0}}]}
+    """
         .formatted(formatName);
   }
 
   private static ProbeRequest packetScanRequest() {
     return keyframeRequest().toBuilder().setScanKeyframePackets(true).build();
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"mp4-h264-aac-ac3.mp4", "mov-hevc-aac.mov"})
+  @DisplayName(
+      "Should measure every video and audio stream as ffprobe lists its packets when the sample"
+          + " tables of an MP4 or MOV source list every sample")
+  void shouldMeasureEveryVideoAndAudioStreamAsFfprobeListsItsPacketsWhenSampleTablesListEverySample(
+      String source) throws IOException {
+    var listing = RecordedPackets.read(fixture("measurements/" + source + ".packets.json"));
+    var ffprobe =
+        ScriptedFfprobe.builder()
+            .streams(Files.readString(fixture("measurements/" + source + ".json")))
+            .anyPacket(listing.lastKeyframePacketJson())
+            .build();
+    var request = keyframeRequest();
+
+    var report = ffprobe.executor().probe(fixture(source), request);
+
+    var measurements = report.result().getMedia().getStreamMeasurements();
+    assertThat(measurements.getSource())
+        .isEqualTo(StreamMeasurementSource.STREAM_MEASUREMENT_SOURCE_SAMPLE_TABLE);
+    assertThat(measurements.getStreamsList()).hasSize(listing.streams().size());
+    for (var stream : listing.streams().values()) {
+      var measured =
+          measurements.getStreamsList().stream()
+              .filter(candidate -> candidate.getStreamIndex() == stream.index())
+              .findFirst()
+              .orElseThrow();
+      assertThat(measured.getMeasuredBytes())
+          .as("stream %d bytes", stream.index())
+          .isEqualTo(stream.bytes());
+      assertThat(measured.getPacketCount())
+          .as("stream %d packets", stream.index())
+          .isEqualTo(stream.packets().size());
+      assertThat(measured.getTimeBaseDenominator()).isEqualTo((int) stream.timeBaseDenominator());
+      // FFmpeg re-parses an AC-3 packet and lists the samples its frame header declares, so the
+      // last packet that ffprobe lists can outlast the duration that the sample table gives it.
+      assertThat(measured.getMeasuredDuration())
+          .as("stream %d duration", stream.index())
+          .isGreaterThan(stream.spanToLastPacket())
+          .isLessThanOrEqualTo(stream.duration());
+      assertThat(intervalBytes(report, stream.index()))
+          .as("stream %d bytes per keyframe interval", stream.index())
+          .containsExactly(listing.intervalBytes(stream.index()));
+      assertThat(intervalPacketCounts(report, stream.index()))
+          .as("stream %d packets per keyframe interval", stream.index())
+          .containsExactly(listing.intervalPacketCounts(stream.index()));
+    }
+  }
+
+  @Test
+  @DisplayName("Should report no measurement when the MP4 is fragmented")
+  void shouldReportNoMeasurementWhenMp4IsFragmented() {
+    var ffprobe = ScriptedFfprobe.builder().streams(MP4_STREAMS).build();
+
+    var report = ffprobe.executor().probe(fixture("mp4-fragmented.mp4"), keyframeRequest());
+
+    assertThat(report.result().getMedia().hasStreamMeasurements()).isFalse();
+    assertThat(report.streamMeasurementParts()).isEmpty();
+  }
+
+  private static long[] intervalBytes(ProbeAttemptReport report, int streamIndex) {
+    return report.streamMeasurementParts().stream()
+        .filter(part -> part.getStreamIndex() == streamIndex)
+        .flatMap(part -> part.getKeyframeIntervalBytesList().stream())
+        .mapToLong(Integer::toUnsignedLong)
+        .toArray();
+  }
+
+  private static long[] intervalPacketCounts(ProbeAttemptReport report, int streamIndex) {
+    return report.streamMeasurementParts().stream()
+        .filter(part -> part.getStreamIndex() == streamIndex)
+        .flatMap(part -> part.getKeyframeIntervalPacketCountsList().stream())
+        .mapToLong(Integer::toUnsignedLong)
+        .toArray();
   }
 
   private static ProbeRequest keyframeRequest() {
@@ -1298,12 +1700,14 @@ class FfprobeExecutorKeyframeTest {
   /**
    * Answers the probe command with recorded stream JSON, a last-keyframe read with the packets
    * recorded for its exact read interval and {@code packetReadExitCode}, and FFmpeg's packet scan
-   * with recorded framecrc lines and diagnostics. Any other read interval finds no packet.
+   * with recorded framecrc lines and diagnostics. Any other read interval finds {@code anyPacket},
+   * or no packet without it.
    */
   @Builder
   private record ScriptedFfprobe(
       String streams,
       @Singular Map<String, String> packets,
+      String anyPacket,
       int packetReadExitCode,
       String packetScan,
       String packetScanDiagnostics,
@@ -1319,7 +1723,8 @@ class FfprobeExecutorKeyframeTest {
       var interval = arguments.indexOf("-read_intervals");
       if (interval >= 0) {
         return new CompletedProcess(
-            packets.getOrDefault(arguments.get(interval + 1), NO_PACKETS),
+            packets.getOrDefault(
+                arguments.get(interval + 1), anyPacket == null ? NO_PACKETS : anyPacket),
             packetReadExitCode,
             false);
       }

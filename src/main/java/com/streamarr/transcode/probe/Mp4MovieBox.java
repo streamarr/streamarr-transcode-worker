@@ -90,7 +90,8 @@ final class Mp4MovieBox {
     return ContainerFileBytes.read(channel, position + box.headerSize(), (int) box.payloadSize());
   }
 
-  private static List<Box> boxes(ByteBuffer parent) {
+  /** Every child box of the parent, in file order. */
+  static List<Box> boxes(ByteBuffer parent) {
     var boxes = new ArrayList<Box>();
     var position = parent.position();
     while (parent.limit() - position >= BOX_HEADER_BYTES) {
@@ -113,7 +114,7 @@ final class Mp4MovieBox {
     return new ContainerIndexException("Unusable MP4 movie box: " + detail);
   }
 
-  private record Box(String type, ByteBuffer payload) {}
+  record Box(String type, ByteBuffer payload) {}
 
   private record BoxHeader(String type, long size, int headerSize) {
 

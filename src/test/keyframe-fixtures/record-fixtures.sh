@@ -54,6 +54,15 @@ truncate_before_last_keyframe() {
 truncate_before_last_keyframe mp4-truncated.mp4
 truncate_before_last_keyframe mkv-truncated-cues-front.mkv
 
+# Sources whose sample tables the probe measures: H.264 with B-frames, AAC and AC-3 in MP4, and
+# HEVC with B-frames and AAC in MOV. Each keeps the edit lists that FFmpeg writes for the B-frame
+# delay and for the AAC and AC-3 priming.
+SECOND_TONE=(-f lavfi -i sine=frequency=660:duration=4)
+X265=(-c:v libx265 -preset ultrafast -x265-params bframes=2:log-level=error -tag:v hvc1 -pix_fmt yuv420p "${KEYFRAMES[@]}")
+"${FF[@]}" "${SOURCE[@]}" "${SECOND_TONE[@]}" -map 0:v -map 1:a -map 2:a "${X264[@]}" "${BFRAMES[@]}" \
+  -c:a:0 aac -b:a:0 32k -c:a:1 ac3 -b:a:1 96k -flags:a +bitexact "${OUT[@]}" mp4-h264-aac-ac3.mp4
+"${FF[@]}" "${SOURCE[@]}" "${X265[@]}" "${AAC[@]}" "${OUT[@]}" mov-hevc-aac.mov
+
 ffmpeg -version | head -1 > ffmpeg-version.txt
 
 # An H.264 AVI with B-frames, whose packets the AVI demuxer gives no presentation time.
@@ -78,6 +87,20 @@ scan() {
 }
 scan avi.avi avi.avi
 scan avi-bframes.avi avi-bframes.avi
+# The probe's own ffprobe run of each measured source, and the packets that ffprobe lists for it,
+# which the measurement must add up to.
+mkdir -p measurements
+measure() {
+  local source="$1"
+  ffprobe -v quiet -print_format json -analyzeduration 200M -probesize 1G -scan_all_pmts 0 \
+    -show_streams -show_format -show_chapters -show_error "$source" \
+    | sed '/"filename":/d' > "measurements/$source.json"
+  ffprobe -v quiet -print_format json=compact=1 \
+    -show_entries stream=index,codec_type,time_base:packet=stream_index,pts,dts,duration,size,flags \
+    "$source" > "measurements/$source.packets.json"
+}
+measure mp4-h264-aac-ac3.mp4
+measure mov-hevc-aac.mov
 if [ -d /fate ]; then
   scan /fate/h264/sei-1.h264 h264-sei-1.h264
   scan /fate/h264/ref_10.avi h264-ref_10.avi
@@ -97,9 +120,12 @@ docker run --rm --user "$(id -u):$(id -g)" --entrypoint /cnb/lifecycle/launcher 
   > "$WORK/launcher.log" 2>&1 || { cat "$WORK/launcher.log"; exit 1; }
 
 for fixture in mp4-bframes-editlist.mp4 mp4-truncated.mp4 mp4-fragmented.mp4 mkv-libavformat.mkv \
-  mkv-pipe.mkv mkv-truncated-cues-front.mkv mpegts.ts avi.avi ffmpeg-version.txt; do
+  mkv-pipe.mkv mkv-truncated-cues-front.mkv mpegts.ts avi.avi mp4-h264-aac-ac3.mp4 mov-hevc-aac.mov \
+  ffmpeg-version.txt; do
   cp "$WORK/$fixture" "$FIXTURES/$fixture"
 done
 mkdir -p "$FIXTURES/scans"
 cp "$WORK"/scans/* "$FIXTURES/scans/"
+mkdir -p "$FIXTURES/measurements"
+cp "$WORK"/measurements/* "$FIXTURES/measurements/"
 echo "recorded into $FIXTURES with $IMAGE"
