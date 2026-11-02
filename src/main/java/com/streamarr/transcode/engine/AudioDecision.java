@@ -21,6 +21,8 @@ public record AudioDecision(
     @NonNull OptionalInt outputSampleRate,
     @NonNull OptionalInt outputBitDepth) {
 
+  // Lombok builder defaults — its generated setters assign them
+  @SuppressWarnings({"java:S1068", "java:S9438"})
   public static class AudioDecisionBuilder {
     private Optional<SpeakerLayout> channelLayout = Optional.empty();
     private OptionalInt outputSampleRate = OptionalInt.empty();
