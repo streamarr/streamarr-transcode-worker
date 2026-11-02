@@ -3318,6 +3318,38 @@ class WorkerMediaSmokeTest {
     }
   }
 
+  @Test
+  @DisplayName(
+      "Should keep the channels that a pad adds silent when a lossless encode resamples and pads the"
+          + " layout")
+  void shouldKeepTheChannelsThatAPadAddsSilentWhenALosslessEncodeResamplesAndPadsTheLayout()
+      throws Exception {
+    var source = losslessSource("4.0", 96_000);
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    var output = SpeakerLayout.named("6.1");
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setCodec("flac")
+        .setChannels(output.channelCount())
+        .setChannelLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_SIX_POINT_ONE)
+        .setOutputSampleRateHz(48_000);
+    job.getExecutionBuilder().setMediaSegmentCount(1);
+
+    var uploads = execute(engine(realCapabilities()), seekableSources, job.build());
+
+    var delivered = root.resolve("delivered.mp4");
+    Files.write(delivered, uploads.contentOf(uploadNames(1)));
+    var deliveredChannels = decodedChannels(delivered, output.channelCount());
+    for (var added : List.of(Speaker.LFE, Speaker.SL, Speaker.SR)) {
+      assertThat(deliveredChannels[output.speakers().indexOf(added)])
+          .as("added channel %s", added)
+          .containsOnly(0);
+    }
+
+    assertThat(deliveredChannels[output.speakers().indexOf(Speaker.FL)])
+        .isNotEqualTo(new int[deliveredChannels[0].length]);
+  }
+
   static Stream<LosslessLayoutChange> losslessLayoutChanges() {
     return Stream.of(
         new LosslessLayoutChange(

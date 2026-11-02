@@ -38,9 +38,10 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
     var encoder = Encoder.of(audio.codec());
     var channels = ChannelStage.of(source, output);
     var filters = new ArrayList<String>();
-    channels.filter().ifPresent(filters::add);
     var rate = targetSampleRate(encoder, audio, source);
+    // The format stage runs first, so its dither never reaches the silent channels that a pad adds.
     filters.add(formatStage(encoder, audio, source, rate));
+    channels.filter().ifPresent(filters::add);
 
     var outputOptions = new ArrayList<>(List.of("-c:a", encoder.ffmpegName(audio.codec())));
     outputOptions.addAll(List.of("-af", String.join(",", filters)));

@@ -60,7 +60,7 @@ class FfmpegCommandBuilderAudioLayoutTest {
       var cmd = command(encode("aac", "5.1"), source("truehd", "5.1(side)"));
 
       assertThat(audioFilter(cmd))
-          .startsWith("channelmap=map=FL-FL|FR-FR|FC-FC|LFE-LFE|SL-BL|SR-BR:channel_layout=5.1,");
+          .endsWith(",channelmap=map=FL-FL|FR-FR|FC-FC|LFE-LFE|SL-BL|SR-BR:channel_layout=5.1");
     }
 
     @Test
@@ -69,9 +69,9 @@ class FfmpegCommandBuilderAudioLayoutTest {
       var cmd = command(encode("alac", "6.1(back)"), source("flac", "6.1"));
 
       assertThat(audioFilter(cmd))
-          .startsWith(
-              "channelmap=map=FL-FL|FR-FR|FC-FC|LFE-LFE|SL-BL|SR-BR|BC-BC"
-                  + ":channel_layout=6.1(back),");
+          .endsWith(
+              ",channelmap=map=FL-FL|FR-FR|FC-FC|LFE-LFE|SL-BL|SR-BR|BC-BC"
+                  + ":channel_layout=6.1(back)");
     }
 
     @Test
@@ -80,7 +80,7 @@ class FfmpegCommandBuilderAudioLayoutTest {
       var cmd = command(encode("flac", "6.1"), source("pcm_s16le", "4.0"));
 
       assertThat(audioFilter(cmd))
-          .startsWith("pan=6.1|FL=FL|FR=FR|FC=FC|LFE=0*FL|BC=BC|SL=0*FL|SR=0*FL,");
+          .endsWith(",pan=6.1|FL=FL|FR=FR|FC=FC|LFE=0*FL|BC=BC|SL=0*FL|SR=0*FL");
       assertThat(cmd).containsSubsequence("-ch_layout", "6.1");
     }
 
@@ -90,7 +90,28 @@ class FfmpegCommandBuilderAudioLayoutTest {
       var cmd = command(encode("alac", "6.1(back)"), source("flac", "6.0"));
 
       assertThat(audioFilter(cmd))
-          .startsWith("pan=6.1(back)|FL=FL|FR=FR|FC=FC|LFE=0*FL|BL=SL|BR=SR|BC=BC,");
+          .endsWith(",pan=6.1(back)|FL=FL|FR=FR|FC=FC|LFE=0*FL|BL=SL|BR=SR|BC=BC");
+    }
+
+    @Test
+    @DisplayName(
+        "Should resample and dither before the pad when the encode pads a resampled layout, so the added channels stay silent")
+    void shouldResampleAndDitherBeforeThePadWhenTheEncodePadsAResampledLayout() {
+      var source =
+          sourceBuilder("flac", "4.0")
+              .sampleFormat(Optional.of("s32"))
+              .bitDepth(OptionalInt.of(24))
+              .sampleRate(OptionalInt.of(96_000))
+              .build();
+      var audio = encodeBuilder("flac", "6.1").outputSampleRate(OptionalInt.of(48_000)).build();
+
+      var cmd = command(audio, Optional.of(source));
+
+      assertThat(audioFilter(cmd))
+          .isEqualTo(
+              "aresample=osr=48000:osf=s32:output_sample_bits=24:dither_method=triangular:"
+                  + TUNED_RESAMPLER
+                  + ",pan=6.1|FL=FL|FR=FR|FC=FC|LFE=0*FL|BC=BC|SL=0*FL|SR=0*FL");
     }
 
     @Test

@@ -104,8 +104,8 @@ class TranscodeWorkerAudioLayoutTest {
         .containsSubsequence("-drc_scale:a:0", "0", "-i")
         .containsSubsequence(
             "-af",
-            "channelmap=map=FL-FL|FR-FR|FC-FC|LFE-LFE|SL-BL|SR-BR:channel_layout=5.1,"
-                + "aresample=filter_size=128:phase_shift=14:cutoff=0.95:kaiser_beta=14")
+            "aresample=filter_size=128:phase_shift=14:cutoff=0.95:kaiser_beta=14,"
+                + "channelmap=map=FL-FL|FR-FR|FC-FC|LFE-LFE|SL-BL|SR-BR:channel_layout=5.1")
         .containsSubsequence("-ch_layout", "5.1")
         .doesNotContain("-ac");
   }
