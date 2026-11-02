@@ -66,6 +66,7 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -92,6 +93,7 @@ public final class TranscodeWorker implements AutoCloseable {
   private final ProbeSummary probeSummary;
   private final ProbeCapacities probeCapacities;
   private final Map<UUID, ActiveAttempt> activeAttempts = new HashMap<>();
+  private final Map<UUID, PendingRead> pendingReads = new HashMap<>();
   private final Set<Thread> stopThreads = new HashSet<>();
 
   private ManagedChannel channel;
@@ -303,32 +305,79 @@ public final class TranscodeWorker implements AutoCloseable {
 
   @SuppressWarnings("java:S3398") // Job lifecycle belongs to the worker, not its gRPC observer.
   private void startVariant(StartVariantCommand command) {
-    // ffprobe reads the source without the monitor, and the stop waits for FFmpeg to exit, so both
-    // run without the monitor that uploads need.
-    var chosenAudio = readChosenAudio(command.getJob());
+    if (WorkerVariantJobMapper.namesAudioLayout(command.getJob())) {
+      startReadingAudio(command);
+      return;
+    }
+
+    startWith(command, new ChosenAudio.NotRead());
+  }
+
+  // The stop waits for FFmpeg to exit, so it runs without the monitor that uploads need.
+  private void startWith(StartVariantCommand command, ChosenAudio chosenAudio) {
     if (startAttempt(command, chosenAudio) instanceof Orphaned(var producer)) {
       producer.stop();
     }
   }
 
   // A job that names its audio's output layout needs the source layout and sample facts (ADR 0050).
-  private ChosenAudio readChosenAudio(VariantJob job) {
-    if (!WorkerVariantJobMapper.namesAudioLayout(job)) {
-      return new ChosenAudio.NotRead();
+  // ffprobe reads them on the attempt's own thread, so the control stream keeps delivering
+  // commands while it reads: a stop for the attempt or the session's end interrupts the read.
+  private synchronized void startReadingAudio(StartVariantCommand command) {
+    var jobAttemptId = fromProto(command.getJob().getJobAttemptId());
+    var reading =
+        Thread.ofVirtual()
+            .name("read-audio-" + jobAttemptId)
+            .unstarted(() -> readAudioAndStart(command));
+    pendingReads.put(jobAttemptId, new PendingRead(command.getJob(), reading));
+    reading.start();
+  }
+
+  private void readAudioAndStart(StartVariantCommand command) {
+    var chosenAudio = readChosenAudio(command.getJob());
+    if (startAfterRead(command, chosenAudio) instanceof Orphaned(var producer)) {
+      producer.stop();
+    }
+  }
+
+  // A stop or the session's end that claimed the attempt during the read already settled it.
+  private synchronized AttemptStart startAfterRead(
+      StartVariantCommand command, ChosenAudio chosenAudio) {
+    if (pendingReads.remove(fromProto(command.getJob().getJobAttemptId())) == null) {
+      return new Refused();
     }
 
+    return startAttempt(command, chosenAudio);
+  }
+
+  // ffprobe runs on a thread of its own, so the wait for it ends at the timeout even when the
+  // process cannot exit, as one blocked on an unresponsive mount cannot; the interrupt then asks
+  // the process to die.
+  private ChosenAudio readChosenAudio(VariantJob job) {
+    var read = new FutureTask<>(() -> readSourceAudio(job));
+    Thread.ofVirtual().name("ffprobe-audio-" + fromProto(job.getJobAttemptId())).start(read);
+    var timeout = configuration.audioStreamReadTimeout();
     try {
-      var source = sources.resolve(job.getSource());
-      return new ChosenAudio.Read(ChosenAudio.factsOf(ffprobe.readChosenAudio(source)));
-    } catch (InvalidJobSpecificationException _) {
-      // The mapper refuses the job for the same reason.
-      return new ChosenAudio.NotRead();
+      return new ChosenAudio.Read(read.get(timeout.toNanos(), TimeUnit.NANOSECONDS));
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       return new ChosenAudio.Unreadable(e);
-    } catch (ExecutionException | RuntimeException e) {
+    } catch (ExecutionException e) {
+      // The mapper refuses the job for the same reason.
+      return e.getCause() instanceof InvalidJobSpecificationException
+          ? new ChosenAudio.NotRead()
+          : new ChosenAudio.Unreadable(e);
+    } catch (TimeoutException e) {
       return new ChosenAudio.Unreadable(e);
+    } finally {
+      read.cancel(true);
     }
+  }
+
+  private SourceAudio readSourceAudio(VariantJob job)
+      throws ExecutionException, InterruptedException {
+    var source = sources.resolve(job.getSource());
+    return ChosenAudio.factsOf(ffprobe.readChosenAudio(source));
   }
 
   private synchronized AttemptStart startAttempt(
@@ -616,6 +665,7 @@ public final class TranscodeWorker implements AutoCloseable {
 
     var attempt = activeAttempts.get(fromProto(command.getJobAttemptId()));
     if (attempt == null) {
+      stopReading(command);
       return;
     }
 
@@ -627,6 +677,18 @@ public final class TranscodeWorker implements AutoCloseable {
             .unstarted(() -> finishStop(stop));
     stopThreads.add(stopping);
     stopping.start();
+  }
+
+  // An attempt that is still reading its audio stream has no producer, so its stop is settled at
+  // once; the interrupt ends the read.
+  private synchronized void stopReading(StopVariantCommand command) {
+    var pending = pendingReads.remove(fromProto(command.getJobAttemptId()));
+    if (pending == null) {
+      return;
+    }
+
+    pending.thread().interrupt();
+    tryReport(jobAttemptStopped(pending.job().getJobAttemptId()));
   }
 
   // The producer settles the stop unless it had already recorded another outcome, which the worker
@@ -748,7 +810,10 @@ public final class TranscodeWorker implements AutoCloseable {
     return claimActiveAttempts();
   }
 
+  // An attempt that is still reading its audio stream ends with the read, before any report.
   private synchronized List<Producer> claimActiveAttempts() {
+    pendingReads.values().forEach(pending -> pending.thread().interrupt());
+    pendingReads.clear();
     var attempts = List.copyOf(activeAttempts.values());
     attempts.forEach(this::claim);
     return attempts.stream().map(ActiveAttempt::producer).toList();
@@ -1040,6 +1105,9 @@ public final class TranscodeWorker implements AutoCloseable {
 
   private record ClaimedStop(
       ActiveAttempt attempt, StreamObserver<EstablishWorkerSessionRequest> session) {}
+
+  /** An attempt whose thread reads the job's audio stream before the attempt starts FFmpeg. */
+  private record PendingRead(VariantJob job, Thread thread) {}
 
   private sealed interface AttemptStart {}
 

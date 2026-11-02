@@ -301,6 +301,8 @@ class TranscodeWorkerSettingsTest {
         .isEqualTo(Duration.ofSeconds(30));
     assertThat(settings.workerConfiguration().uploadAcknowledgementTimeout())
         .isEqualTo(Duration.ofSeconds(60));
+    assertThat(settings.workerConfiguration().audioStreamReadTimeout())
+        .isEqualTo(Duration.ofSeconds(30));
   }
 
   @Test
@@ -310,6 +312,7 @@ class TranscodeWorkerSettingsTest {
     environment.put("TRANSCODE_WORKER_ENCODER_STALL_TIMEOUT", "45s");
     environment.put("TRANSCODE_WORKER_UPLOAD_READINESS_TIMEOUT", "2m");
     environment.put("TRANSCODE_WORKER_UPLOAD_ACKNOWLEDGEMENT_TIMEOUT", "1500ms");
+    environment.put("TRANSCODE_WORKER_AUDIO_STREAM_READ_TIMEOUT", "10s");
 
     var settings = TranscodeWorkerSettings.fromEnvironment(environment);
 
@@ -318,6 +321,8 @@ class TranscodeWorkerSettingsTest {
         .isEqualTo(Duration.ofMinutes(2));
     assertThat(settings.workerConfiguration().uploadAcknowledgementTimeout())
         .isEqualTo(Duration.ofMillis(1500));
+    assertThat(settings.workerConfiguration().audioStreamReadTimeout())
+        .isEqualTo(Duration.ofSeconds(10));
   }
 
   @Test
@@ -348,6 +353,7 @@ class TranscodeWorkerSettingsTest {
     "TRANSCODE_WORKER_ENCODER_STALL_TIMEOUT, 0s",
     "TRANSCODE_WORKER_ENCODER_STALL_TIMEOUT, -1s",
     "TRANSCODE_WORKER_UPLOAD_READINESS_TIMEOUT, 0ms",
+    "TRANSCODE_WORKER_AUDIO_STREAM_READ_TIMEOUT, 0s",
     "TRANSCODE_WORKER_UPLOAD_READINESS_TIMEOUT, -5m",
     "TRANSCODE_WORKER_UPLOAD_ACKNOWLEDGEMENT_TIMEOUT, 0ns",
     "TRANSCODE_WORKER_UPLOAD_ACKNOWLEDGEMENT_TIMEOUT, -1h",

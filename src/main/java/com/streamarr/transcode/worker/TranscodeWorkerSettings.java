@@ -62,6 +62,11 @@ record TranscodeWorkerSettings(
                     environment,
                     PREFIX + "SESSION_ACCEPTANCE_TIMEOUT",
                     TranscodeWorkerConfiguration.DEFAULT_SESSION_ACCEPTANCE_TIMEOUT))
+            .audioStreamReadTimeout(
+                positiveDuration(
+                    environment,
+                    PREFIX + "AUDIO_STREAM_READ_TIMEOUT",
+                    TranscodeWorkerConfiguration.DEFAULT_AUDIO_STREAM_READ_TIMEOUT))
             .build();
     return TranscodeWorkerSettings.builder()
         .controlPlaneHost(optional(environment, PREFIX + "CONTROL_PLANE_HOST", "127.0.0.1"))

@@ -1,12 +1,16 @@
 package com.streamarr.transcode.worker;
 
 import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
+import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.SOURCE_NAMESPACE_ID;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engine;
+import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.workerConfigurationBuilder;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.startVariant;
+import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.stopVariant;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variantJobBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 import build.buf.gen.streamarr.transcode.v1.AudioChannelLayout;
 import build.buf.gen.streamarr.transcode.v1.AudioMode;
@@ -22,9 +26,13 @@ import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -62,6 +70,7 @@ class TranscodeWorkerAudioLayoutTest {
   private final ScriptedWorkerRuntime runtime = new ScriptedWorkerRuntime();
   private final List<ProbeCommand> probeCommands = new ArrayList<>();
   private final List<TranscodeWorker> workers = new ArrayList<>();
+  private final List<ScriptedProcess> silentProcesses = new ArrayList<>();
 
   @BeforeEach
   void setUp() throws Exception {
@@ -71,6 +80,7 @@ class TranscodeWorkerAudioLayoutTest {
   @AfterEach
   void tearDown() {
     workers.forEach(TranscodeWorker::close);
+    silentProcesses.forEach(ScriptedProcess::exit);
   }
 
   @Test
@@ -130,6 +140,59 @@ class TranscodeWorkerAudioLayoutTest {
         start(launcher, failing, layoutJob(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO, 2));
 
     assertFailedAs(connection, JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED);
+    assertThat(launcher.hasLaunchedAny()).isFalse();
+  }
+
+  @Test
+  @DisplayName(
+      "Should report the attempt stopped and end ffprobe when a stop arrives while ffprobe reads the audio stream")
+  void shouldReportTheAttemptStoppedAndEndFfprobeWhenAStopArrivesWhileFfprobeReadsTheAudioStream()
+      throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var ffprobe = new SilentFfprobe();
+    var job = layoutJob(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO, 2);
+    var connection = connect(launcher, ffprobe.executor(), workerConfigurationBuilder());
+
+    var start = deliverOnItsOwnThread(() -> startVariant(connection, job));
+    ffprobe.awaitLaunched();
+    start.get(5, TimeUnit.SECONDS);
+    stopVariant(connection, job);
+
+    await()
+        .atMost(Duration.ofSeconds(5))
+        .untilAsserted(
+            () ->
+                assertThat(eventsOf(connection))
+                    .containsExactly(EstablishWorkerSessionRequest.EventCase.JOB_ATTEMPT_STOPPED));
+    await().atMost(Duration.ofSeconds(5)).until(ffprobe::wasDestroyedForcibly);
+    assertThat(launcher.hasLaunchedAny()).isFalse();
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt at startup when ffprobe gives no answer within the audio stream read timeout")
+  void shouldFailTheAttemptAtStartupWhenFfprobeGivesNoAnswerWithinTheAudioStreamReadTimeout()
+      throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var ffprobe = new SilentFfprobe();
+    var connection =
+        connect(
+            launcher,
+            ffprobe.executor(),
+            workerConfigurationBuilder().audioStreamReadTimeout(Duration.ofMillis(200)));
+
+    var start =
+        deliverOnItsOwnThread(
+            () ->
+                startVariant(
+                    connection, layoutJob(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO, 2)));
+    start.get(5, TimeUnit.SECONDS);
+
+    await()
+        .atMost(Duration.ofSeconds(5))
+        .untilAsserted(
+            () -> assertFailedAs(connection, JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED));
+    await().atMost(Duration.ofSeconds(5)).until(ffprobe::wasDestroyedForcibly);
     assertThat(launcher.hasLaunchedAny()).isFalse();
   }
 
@@ -244,7 +307,43 @@ class TranscodeWorkerAudioLayoutTest {
     closeAfterTest(worker);
     var connection = runtime.connection();
     startVariant(connection, job);
+    // The attempt reads the audio stream on its own thread, after the command returns.
+    await().atMost(Duration.ofSeconds(5)).until(() -> !eventsOf(connection).isEmpty());
     return connection;
+  }
+
+  private ScriptedWorkerRuntime.Connection connect(
+      ScriptedProcessLauncher launcher,
+      FfprobeExecutor ffprobe,
+      TranscodeWorkerConfiguration.TranscodeWorkerConfigurationBuilder configuration)
+      throws Exception {
+    var worker =
+        workerBuilder(tempDir)
+            .configuration(
+                configuration
+                    .availableSlots(2)
+                    .sourceNamespaces(Map.of(SOURCE_NAMESPACE_ID, tempDir))
+                    .build())
+            .runtime(runtime)
+            .engine(engine(launcher))
+            .ffprobe(ffprobe)
+            .build();
+    worker.start("localhost", 1);
+    closeAfterTest(worker);
+    return runtime.connection();
+  }
+
+  // The control stream delivers each command on its own thread; a command that never returns would
+  // otherwise hang the test.
+  private CompletableFuture<Void> deliverOnItsOwnThread(Runnable command) {
+    var delivered = new CompletableFuture<Void>();
+    Thread.ofVirtual()
+        .start(
+            () -> {
+              command.run();
+              delivered.complete(null);
+            });
+    return delivered;
   }
 
   private void closeAfterTest(TranscodeWorker worker) {
@@ -270,6 +369,43 @@ class TranscodeWorkerAudioLayoutTest {
         .setBitrateBitsPerSecond(384_000)
         .setChannelLayout(layout);
     return job.build();
+  }
+
+  /**
+   * An ffprobe that prints nothing and survives a kill, as one blocked on an unresponsive mount
+   * does, until the test ends.
+   */
+  private final class SilentFfprobe {
+
+    private final CompletableFuture<ScriptedProcess> launched = new CompletableFuture<>();
+
+    FfprobeExecutor executor() {
+      return new FfprobeExecutor(
+          new ObjectMapper(),
+          command -> {
+            var process =
+                ScriptedProcess.builder()
+                    .output(new byte[0])
+                    .pauseAfter(0)
+                    .exitTiming(ScriptedProcess.ExitTiming.WHEN_TEST_EXITS)
+                    .lingersAfterKill(true)
+                    .build();
+            synchronized (silentProcesses) {
+              silentProcesses.add(process);
+            }
+
+            launched.complete(process);
+            return process;
+          });
+    }
+
+    void awaitLaunched() throws Exception {
+      launched.get(5, TimeUnit.SECONDS);
+    }
+
+    boolean wasDestroyedForcibly() {
+      return launched.isDone() && launched.join().wasDestroyedForcibly();
+    }
   }
 
   private static VariantJob.Builder flacJob(AudioChannelLayout layout) {
