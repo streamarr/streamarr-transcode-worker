@@ -109,17 +109,35 @@ public class FfmpegCommandBuilder {
   // padded audio sample that starts at or after the advertised end.
   private static final Duration PADDED_AUDIO_RUN_PAST_ADVERTISED_END = Duration.ofSeconds(1);
 
-  // The sample rates each audio encoder takes, as FFmpeg's encoders list them; an encoder not
-  // listed takes any rate. A padded encode converts the rate before apad, as FFmpeg would before
-  // the encoder: a resampler that met silence instead of the end of its input would change the
-  // last source samples it writes.
-  private static final Map<String, String> AUDIO_ENCODER_SAMPLE_RATES =
+  // The input each audio encoder takes, as FFmpeg 8 negotiates it: the sample formats and rates
+  // that the encoder lists, and the channel layout that FFmpeg gives the job's channel count, the
+  // encoder's first layout of that count or else FFmpeg's default one. A padded encode converts its
+  // audio to that input before apad, in the one conversion FFmpeg would run before the encoder: a
+  // resampler that met silence instead of the end of its input would change the last source
+  // samples it writes, and a conversion split around apad rounds every sample differently.
+  private static final Map<Integer, String> DEFAULT_CHANNEL_LAYOUTS =
+      Map.of(1, "mono", 2, "stereo", 6, "5.1", 8, "7.1");
+
+  private static final Map<Integer, String> SIDE_SURROUND_CHANNEL_LAYOUTS =
+      Map.of(1, "mono", 2, "stereo", 6, "5.1(side)", 8, "7.1");
+
+  private static final Map<String, AudioEncoderInput> AUDIO_ENCODER_INPUTS =
       Map.of(
-          "aac", "96000|88200|64000|48000|44100|32000|24000|22050|16000|12000|11025|8000|7350",
-          "ac3", "48000|44100|32000",
-          "eac3", "48000|44100|32000",
-          "opus", "48000",
-          "libopus", "48000|24000|16000|12000|8000");
+          "aac",
+          AudioEncoderInput.of(
+              "fltp",
+              "96000|88200|64000|48000|44100|32000|24000|22050|16000|12000|11025|8000|7350",
+              DEFAULT_CHANNEL_LAYOUTS),
+          "ac3",
+          AudioEncoderInput.of("fltp", "48000|44100|32000", SIDE_SURROUND_CHANNEL_LAYOUTS),
+          "eac3",
+          AudioEncoderInput.of("fltp", "48000|44100|32000", SIDE_SURROUND_CHANNEL_LAYOUTS),
+          "opus",
+          AudioEncoderInput.of("fltp", "48000", Map.of(1, "mono", 2, "stereo")),
+          "libopus",
+          AudioEncoderInput.of("s16|flt", "48000|24000|16000|12000|8000", DEFAULT_CHANNEL_LAYOUTS),
+          "flac",
+          new AudioEncoderInput("s16|s32", Optional.empty(), SIDE_SURROUND_CHANNEL_LAYOUTS));
 
   // The longest argument Linux passes to a program: MAX_ARG_STRLEN, 32 pages, holds the argument
   // and its terminating NUL, and a page is at least 4 KiB.
@@ -537,7 +555,7 @@ public class FfmpegCommandBuilder {
           seekArgument(
               request.advertisedEnd().orElseThrow().plus(PADDED_AUDIO_RUN_PAST_ADVERTISED_END));
       return Optional.of(
-          sampleRateConversion(audio.codec())
+          encoderInputConversion(audio)
               + "apad,asetpts='if(isnan(PTS),"
               + start
               + "/TB+N/SR/TB,PTS)',atrim=start="
@@ -553,10 +571,31 @@ public class FfmpegCommandBuilder {
     return Optional.empty();
   }
 
-  private static String sampleRateConversion(String codec) {
-    return Optional.ofNullable(AUDIO_ENCODER_SAMPLE_RATES.get(codec))
-        .map(rates -> "aformat=sample_rates=" + rates + ",")
+  // Empty for an encoder not listed: FFmpeg then converts the padded audio before the encoder.
+  private static String encoderInputConversion(AudioDecision audio) {
+    return Optional.ofNullable(AUDIO_ENCODER_INPUTS.get(audio.codec()))
+        .map(input -> input.conversionFor(audio.channels()) + ",")
         .orElse("");
+  }
+
+  // An encoder that takes any sample rate keeps the source's, and a channel count that the table
+  // leaves out keeps FFmpeg's own choice of layout.
+  private record AudioEncoderInput(
+      String sampleFormats, Optional<String> sampleRates, Map<Integer, String> channelLayouts) {
+
+    static AudioEncoderInput of(
+        String sampleFormats, String sampleRates, Map<Integer, String> channelLayouts) {
+      return new AudioEncoderInput(sampleFormats, Optional.of(sampleRates), channelLayouts);
+    }
+
+    String conversionFor(int channels) {
+      return "aformat=sample_fmts="
+          + sampleFormats
+          + sampleRates.map(rates -> ":sample_rates=" + rates).orElse("")
+          + Optional.ofNullable(channelLayouts.get(channels))
+              .map(layout -> ":channel_layouts=" + layout)
+              .orElse("");
+    }
   }
 
   private static List<String> copiedAudioArgs(String codec) {
@@ -617,7 +656,10 @@ public class FfmpegCommandBuilder {
   }
 
   // fps puts the pictures on the output's frame grid, which -r then keeps, so that tpad repeats
-  // the last picture at the output frame rate. fps counts presentation times in frames, so trim
+  // the last picture at the output frame rate. At the end of its input fps passes on the pictures
+  // it holds: rounding there drops the last picture when its slot on the grid is where the input
+  // ends, as for a picture whose duration the source does not give. fps counts presentation times
+  // in frames, so trim
   // ends at the first frame of that grid at or after the advertised end, which a time in seconds
   // would round to the nearest frame; a picture keeps its full duration. Empty unless the attempt
   // holds the last frame.
@@ -631,7 +673,7 @@ public class FfmpegCommandBuilder {
     return Optional.of(
         "fps="
             + frameRate.ffmpegArgument()
-            + ",tpad=stop=-1:stop_mode=clone,trim="
+            + ":eof_action=pass,tpad=stop=-1:stop_mode=clone,trim="
             + trimStart.map(start -> "start=" + start + ":").orElse("")
             + "end_pts="
             + frameRate.framesStartingBefore(request.advertisedEnd().orElseThrow()));

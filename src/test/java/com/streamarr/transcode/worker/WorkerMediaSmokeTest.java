@@ -4625,6 +4625,32 @@ class WorkerMediaSmokeTest {
         .isLessThanOrEqualTo(advertisedEndBytes + FLAC_SAMPLES_PAST_THE_END_AT_MOST * 2);
   }
 
+  // The encoder takes 48 kHz stereo floats, so FFmpeg resamples and downmixes the 96 kHz 16-bit 5.1
+  // source. AC-3 codes the same frames from the same input, so the padded encode's frames before
+  // the source's end show that its encoder read the same samples there.
+  @Test
+  @DisplayName(
+      "Should write the unpadded encode's audio frames up to the source's end when a padded encode"
+          + " resamples and downmixes the audio")
+  void shouldWriteTheUnpaddedEncodesAudioFramesWhenAPaddedEncodeResamplesAndDownmixesTheAudio()
+      throws Exception {
+    var source = surroundAudioEndsBeforeVideoSource();
+    var padded = surroundAudioEndsBeforeVideoJob(source);
+    paddedTo(padded, FLAC_SOURCE_SEGMENT_COUNT);
+    var unpadded = surroundAudioEndsBeforeVideoJob(source);
+
+    var paddedUploads = execute(engine(softwareCapabilities()), source.getParent(), padded.build());
+    var unpaddedUploads =
+        execute(engine(softwareCapabilities()), source.getParent(), unpadded.build());
+
+    var paddedAudio = audioPacketsOf(paddedUploads);
+    var unpaddedAudio = audioPacketsOf(unpaddedUploads);
+    assertThat(paddedAudio).hasSizeGreaterThan(unpaddedAudio.size());
+    assertThat(paddedAudio.subList(0, unpaddedAudio.size()))
+        .isNotEmpty()
+        .containsExactlyElementsOf(unpaddedAudio);
+  }
+
   static Stream<Arguments> sourceContainersModesAndStarts() {
     return sourceContainersAndModes()
         .flatMap(
@@ -4996,6 +5022,52 @@ class WorkerMediaSmokeTest {
     }
 
     return source;
+  }
+
+  private static VariantJob.Builder surroundAudioEndsBeforeVideoJob(Path source) {
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    job.getExecutionBuilder().setMediaSegmentCount(FLAC_SOURCE_SEGMENT_COUNT);
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setCodec("ac3")
+        .setChannels(2)
+        .setBitrateBitsPerSecond(192_000);
+    return job;
+  }
+
+  // H.264 at 64x36 and 24 fps with a keyframe every 2 s for 18 s, and pink noise that ends at 10 s
+  // as 96 kHz 16-bit 5.1 FLAC.
+  private static synchronized Path surroundAudioEndsBeforeVideoSource() throws Exception {
+    var source = seekableSources.resolve("surround-audio-ends-before-video.mkv");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24:duration=18",
+              "-f",
+              "lavfi",
+              "-i",
+              "anoisesrc=color=pink:sample_rate=96000:amplitude=0.5:duration=10,"
+                  + "aformat=sample_fmts=s16:channel_layouts=5.1(side)",
+              "-c:v",
+              "libx264",
+              "-g",
+              "48",
+              "-c:a",
+              "flac"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  private List<Packet> audioPacketsOf(MediaUploads uploads) throws Exception {
+    return FfprobePackets.of(uploads.contentOf(uploads.names()), root).stream()
+        .filter(Packet::isAudio)
+        .toList();
   }
 
   // The first audio stream of the media, decoded to 16-bit little-endian samples.

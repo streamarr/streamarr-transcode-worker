@@ -35,10 +35,10 @@ class FfmpegCommandBuilderTest {
 
   private static final AudioDecision NO_AUDIO =
       AudioDecision.builder().mode(AudioMode.NONE).codec(null).channels(0).bitrate(0L).build();
-  // The sample rates FFmpeg's AAC encoder takes, to which a padded encode converts before apad.
-  private static final String AAC_SAMPLE_RATES =
-      "aformat=sample_rates=96000|88200|64000|48000|44100|32000|24000|22050|16000|12000|11025"
-          + "|8000|7350,";
+  // The stereo input FFmpeg's AAC encoder takes, to which a padded encode converts before apad.
+  private static final String AAC_STEREO_INPUT =
+      "aformat=sample_fmts=fltp:sample_rates=96000|88200|64000|48000|44100|32000|24000|22050"
+          + "|16000|12000|11025|8000|7350:channel_layouts=stereo,";
   private static final String BT709_LIMITED_SCALE_OPTIONS =
       ":out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709";
 
@@ -2141,7 +2141,7 @@ class FfmpegCommandBuilderTest {
         .isEqualTo(
             "scale=-2:1080"
                 + BT709_LIMITED_SCALE_OPTIONS
-                + ",format=yuv420p,fps=24000/1001,tpad=stop=-1:stop_mode=clone,trim=end_pts=1583");
+                + ",format=yuv420p,fps=24000/1001:eof_action=pass,tpad=stop=-1:stop_mode=clone,trim=end_pts=1583");
   }
 
   @Test
@@ -2158,7 +2158,7 @@ class FfmpegCommandBuilderTest {
         .isEqualTo(
             "scale=-2:1080"
                 + BT709_LIMITED_SCALE_OPTIONS
-                + ",format=yuv420p,fps=24000/1001,tpad=stop=-1:stop_mode=clone,trim=start=54:end_pts=1583");
+                + ",format=yuv420p,fps=24000/1001:eof_action=pass,tpad=stop=-1:stop_mode=clone,trim=start=54:end_pts=1583");
   }
 
   @Test
@@ -2187,7 +2187,7 @@ class FfmpegCommandBuilderTest {
                     .filter()
                 + ",scale=")
         .endsWith(
-            ",format=yuv420p,fps=24000/1001,tpad=stop=-1:stop_mode=clone,trim=start=54:end_pts=1583");
+            ",format=yuv420p,fps=24000/1001:eof_action=pass,tpad=stop=-1:stop_mode=clone,trim=start=54:end_pts=1583");
   }
 
   @ParameterizedTest
@@ -2207,7 +2207,7 @@ class FfmpegCommandBuilderTest {
     assertThat(cmd)
         .containsSequence(
             "-af",
-            AAC_SAMPLE_RATES
+            AAC_STEREO_INPUT
                 + "apad,asetpts='if(isnan(PTS),"
                 + start
                 + "/TB+N/SR/TB,PTS)',atrim=start="
@@ -2243,29 +2243,44 @@ class FfmpegCommandBuilderTest {
                 + numerator
                 + "/"
                 + denominator
-                + ",tpad=stop=-1:stop_mode=clone,trim=end_pts="
+                + ":eof_action=pass,tpad=stop=-1:stop_mode=clone,trim=end_pts="
                 + endFrame);
   }
 
-  @ParameterizedTest
-  @CsvSource({"ac3, 48000|44100|32000", "eac3, 48000|44100|32000", "opus, 48000"})
+  @ParameterizedTest(name = "{0}, {1} channels")
+  @CsvSource(
+      delimiter = ';',
+      value = {
+        "aac; 1; fltp; :sample_rates=96000|88200|64000|48000|44100|32000|24000|22050|16000|12000"
+            + "|11025|8000|7350; :channel_layouts=mono",
+        "aac; 6; fltp; :sample_rates=96000|88200|64000|48000|44100|32000|24000|22050|16000|12000"
+            + "|11025|8000|7350; :channel_layouts=5.1",
+        "aac; 3; fltp; :sample_rates=96000|88200|64000|48000|44100|32000|24000|22050|16000|12000"
+            + "|11025|8000|7350; ''",
+        "ac3; 2; fltp; :sample_rates=48000|44100|32000; :channel_layouts=stereo",
+        "ac3; 6; fltp; :sample_rates=48000|44100|32000; :channel_layouts=5.1(side)",
+        "eac3; 6; fltp; :sample_rates=48000|44100|32000; :channel_layouts=5.1(side)",
+        "opus; 2; fltp; :sample_rates=48000; :channel_layouts=stereo",
+        "flac; 2; s16|s32; ''; :channel_layouts=stereo",
+        "flac; 8; s16|s32; ''; :channel_layouts=7.1"
+      })
   @DisplayName(
-      "Should convert to a sample rate the encoder takes before the silence when an encode pads"
-          + " audio for an encoder of fixed sample rates")
-  void shouldConvertToARateTheEncoderTakesBeforeTheSilenceWhenAnEncodePadsForFixedRates(
-      String codec, String rates) {
-    var cmd = command(paddedAudio(codec), "copy");
+      "Should convert to the sample format, rate and channel layout that the encoder takes before"
+          + " the silence when an encode pads its audio")
+  void shouldConvertToTheEncodersInputBeforeTheSilenceWhenAnEncodePadsItsAudio(
+      String codec, int channels, String sampleFormats, String sampleRates, String layout) {
+    var cmd = command(paddedAudio(codec, channels), "copy");
 
     assertThat(cmd.get(cmd.indexOf("-af") + 1))
-        .startsWith("aformat=sample_rates=" + rates + ",apad,");
+        .startsWith("aformat=sample_fmts=" + sampleFormats + sampleRates + layout + ",apad,");
   }
 
   @Test
   @DisplayName(
       "Should append the silence to the decoded samples unconverted when an encode pads audio for"
-          + " an encoder of any sample rate")
-  void shouldAppendTheSilenceToTheDecodedSamplesUnconvertedWhenAnEncoderTakesAnySampleRate() {
-    var cmd = command(paddedAudio("flac"), "copy");
+          + " an encoder whose input FFmpeg chooses")
+  void shouldAppendTheSilenceToTheDecodedSamplesUnconvertedWhenFfmpegChoosesTheEncodersInput() {
+    var cmd = command(paddedAudio("alac", 2), "copy");
 
     assertThat(cmd.get(cmd.indexOf("-af") + 1)).startsWith("apad,");
   }
@@ -2287,7 +2302,7 @@ class FfmpegCommandBuilderTest {
         .containsSequence("-ss", "29.5", "-i")
         .containsSequence(
             "-af",
-            AAC_SAMPLE_RATES
+            AAC_STEREO_INPUT
                 + "apad,asetpts='if(isnan(PTS),29.5/TB+N/SR/TB,PTS)',atrim=start=29.5:end=67")
         .doesNotContain("-noaccurate_seek", "-vf");
   }
@@ -2352,11 +2367,12 @@ class FfmpegCommandBuilderTest {
         .containsSequence("-ss", "54", "-noaccurate_seek", "-i")
         .containsSequence(
             "-af",
-            AAC_SAMPLE_RATES
+            AAC_STEREO_INPUT
                 + "apad,asetpts='if(isnan(PTS),54/TB+N/SR/TB,PTS)',atrim=start=54:end=67");
     assertThat(videoFilter(pipe.encodeCommand()))
         .startsWith("scale=")
-        .endsWith(",fps=24000/1001,tpad=stop=-1:stop_mode=clone,trim=start=54:end_pts=1583");
+        .endsWith(
+            ",fps=24000/1001:eof_action=pass,tpad=stop=-1:stop_mode=clone,trim=start=54:end_pts=1583");
     assertThat(pipe.encodeCommand()).doesNotContain("-af");
   }
 
@@ -2386,8 +2402,8 @@ class FfmpegCommandBuilderTest {
     assertThat(pipe.copyCommand())
         .containsSequence(
             "-af",
-            "aformat=sample_rates=48000|24000|16000|12000|8000,"
-                + "apad,asetpts='if(isnan(PTS),0/TB+N/SR/TB,PTS)',atrim=start=0:end=67",
+            "aformat=sample_fmts=s16|flt:sample_rates=48000|24000|16000|12000|8000"
+                + ":channel_layouts=stereo,apad,asetpts='if(isnan(PTS),0/TB+N/SR/TB,PTS)',atrim=start=0:end=67",
             "-c:a",
             "libopus");
   }
@@ -2404,12 +2420,12 @@ class FfmpegCommandBuilderTest {
     return request(decision.build()).advertisedEnd(Optional.of(Duration.ofSeconds(66)));
   }
 
-  private static TranscodeRequest paddedAudio(String codec) {
+  private static TranscodeRequest paddedAudio(String codec, int channels) {
     var audio =
         AudioDecision.builder()
             .mode(AudioMode.TRANSCODE)
             .codec(codec)
-            .channels(2)
+            .channels(channels)
             .bitrate(192_000L)
             .padsWithSilenceToAdvertisedEnd(true)
             .build();
