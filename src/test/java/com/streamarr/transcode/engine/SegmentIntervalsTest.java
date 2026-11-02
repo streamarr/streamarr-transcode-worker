@@ -3,6 +3,7 @@ package com.streamarr.transcode.engine;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 
+import java.time.Duration;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -73,7 +74,64 @@ class SegmentIntervalsTest {
     assertThat(intervals.startOf(2, MILLISECONDS)).isEqualTo(18_000);
     assertThat(intervals.endOf(2, MILLISECONDS)).hasValue(30_000);
     assertThat(intervals.startOf(3, MILLISECONDS)).isEqualTo(30_000);
-    assertThat(intervals.endOf(3, MILLISECONDS)).as("runs to the end of the media").isEmpty();
+    assertThat(intervals.endOf(3, MILLISECONDS))
+        .as("without an advertised end, runs to the end of the media")
+        .isEmpty();
+  }
+
+  @Test
+  @DisplayName(
+      "Should end the last listed segment's audio at the advertised end and number later audio"
+          + " after it when the job carries an advertised end")
+  void shouldEndTheLastListedSegmentsAudioAtTheAdvertisedEndWhenTheJobCarriesOne() {
+    var intervals =
+        SegmentIntervals.onSegmentList(3, TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS)
+            .withLastListedSegmentEndingAt(Duration.ofMillis(34_500));
+
+    assertThat(intervals.endOf(3, MILLISECONDS)).hasValue(34_500);
+    assertThat(intervals.numberOfAudioSampleAt(34_499, MILLISECONDS)).isEqualTo(3);
+    assertThat(intervals.numberOfAudioSampleAt(34_500, MILLISECONDS))
+        .as("audio after the last listed segment")
+        .isEqualTo(4);
+    assertThat(intervals.endOf(4, MILLISECONDS)).as("past the list").isEmpty();
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep a keyframe past the advertised end in the last listed segment when the job"
+          + " carries an advertised end")
+  void shouldKeepAKeyframePastTheAdvertisedEndInTheLastListedSegmentWhenTheJobCarriesOne() {
+    var intervals =
+        SegmentIntervals.onSegmentList(3, TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS)
+            .withLastListedSegmentEndingAt(Duration.ofMillis(34_500));
+
+    assertThat(intervals.numberAt(34_500, MILLISECONDS)).isEqualTo(3);
+  }
+
+  @Test
+  @DisplayName(
+      "Should end the last listed segment at the first tick at or after the advertised end when"
+          + " that end falls between two ticks")
+  void shouldEndTheLastListedSegmentAtTheFirstTickAtOrAfterTheAdvertisedEndBetweenTwoTicks() {
+    var intervals =
+        SegmentIntervals.onSegmentList(3, TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS)
+            .withLastListedSegmentEndingAt(Duration.ofMillis(34_500).plusNanos(1));
+
+    assertThat(intervals.endOf(3, MILLISECONDS)).hasValue(34_501);
+    assertThat(intervals.numberOfAudioSampleAt(34_500, MILLISECONDS)).isEqualTo(3);
+    assertThat(intervals.numberOfAudioSampleAt(34_501, MILLISECONDS)).isEqualTo(4);
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep each segment of the plain grid one period long when the job carries an"
+          + " advertised end")
+  void shouldKeepEachSegmentOfThePlainGridOnePeriodLongWhenTheJobCarriesAnAdvertisedEnd() {
+    var intervals =
+        SegmentIntervals.onPlainGrid(3).withLastListedSegmentEndingAt(Duration.ofMillis(34_500));
+
+    assertThat(intervals.endOf(11, MILLISECONDS)).hasValue(36_000);
+    assertThat(intervals.numberOfAudioSampleAt(34_500, MILLISECONDS)).isEqualTo(11);
   }
 
   @Test

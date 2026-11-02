@@ -1834,6 +1834,45 @@ class TranscodeWorkerJobAttemptTest {
 
   @Test
   @DisplayName(
+      "Should close the last listed segment's audio at the job's advertised end when a held"
+          + " encode's audio outlasts the video and that end")
+  void shouldCloseTheLastListedSegmentsAudioAtTheAdvertisedEndWhenAHeldEncodesAudioOutlastsIt()
+      throws Exception {
+    // 20 s of video and 23.5 s of audio, with keyframes at 0 s, 6 s, 12 s and 18 s.
+    var recording = recording("06-encode-audio-tail.fmp4");
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE);
+    job.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
+    // 6 s slots: slot 2 merges into segment 1, and segment 2 runs from 18 s to 21 s.
+    job.getExecutionBuilder()
+        .setOutputFrameRate(Fraction.newBuilder().setNumerator(24_000).setDenominator(1001))
+        .setMediaSegmentCount(3)
+        .addAllSegmentStartSlots(List.of(0, 1, 3))
+        .getAdvertisedEndBuilder()
+        .setSeconds(21);
+
+    try (var worker = worker(ScriptedProcessLauncher.writing(recording.file()))) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_COMPLETED);
+      var uploads = uploadsOf(connection, job.build());
+      assertThat(uploads)
+          .extracting(upload -> upload.metadata().getSegmentName())
+          .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
+      var lastSegment =
+          Mp4Samples.read(uploadedBytes(List.of(uploads.getFirst(), uploads.getLast())));
+      var audioTimescale = lastSegment.audioTrack().timescale();
+      assertThat(lastSegment.samplesOf(lastSegment.audioTrack()))
+          .extracting(Mp4Samples.Sample::presentationTime)
+          .as("segment 2's audio starts from 18 s and before the advertised end")
+          .isNotEmpty()
+          .allMatch(start -> start >= 18 * audioTimescale && start < 21 * audioTimescale);
+    }
+  }
+
+  @Test
+  @DisplayName(
       "Should seek a stream copy to its first segment's listed start when the job carries a"
           + " segment list")
   void shouldSeekAStreamCopyToItsFirstSegmentsListedStartWhenTheJobCarriesASegmentList()

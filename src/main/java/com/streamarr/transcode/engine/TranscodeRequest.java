@@ -63,9 +63,13 @@ public record TranscodeRequest(
         .advertisedEnd(Optional.empty());
   }
 
-  /** The media segments' intervals: the job's segment list, or the plain grid when it has none. */
+  /**
+   * The media segments' intervals: the job's segment list, whose last segment ends at the
+   * advertised end when the job carries one, or the plain grid when it has no list.
+   */
   SegmentIntervals segmentIntervals() {
-    return SegmentIntervals.onSegmentList(targetSegmentDuration, segmentStartSlots);
+    var intervals = SegmentIntervals.onSegmentList(targetSegmentDuration, segmentStartSlots);
+    return advertisedEnd.map(intervals::withLastListedSegmentEndingAt).orElse(intervals);
   }
 
   private static boolean holdsOrPads(TranscodeDecision decision) {

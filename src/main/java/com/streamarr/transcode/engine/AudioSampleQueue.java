@@ -167,7 +167,7 @@ final class AudioSampleQueue {
   }
 
   private long numberOf(long presentationTime, long timescale) {
-    return intervals.numberAt(presentationTime, timescale);
+    return intervals.numberOfAudioSampleAt(presentationTime, timescale);
   }
 
   private static long audioTimescaleOf(Fragment fragment) {

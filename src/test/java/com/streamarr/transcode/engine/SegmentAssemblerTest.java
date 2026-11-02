@@ -148,6 +148,96 @@ class SegmentAssemblerTest {
 
   @Test
   @DisplayName(
+      "Should close the last listed segment with only the audio up to the advertised end, after"
+          + " the held picture opens the listed segments past the video's end, when audio outlasts"
+          + " the video and that end")
+  void shouldCloseTheLastListedSegmentWithOnlyTheAudioUpToTheAdvertisedEndWhenAudioOutlastsIt()
+      throws IOException {
+    // The source's video ends at 2 s; the held picture's keyframes open segments 1 and 2 at 2 s
+    // and 3 s, and the copied audio runs on to 5 s.
+    var output =
+        Mp4Stream.read(
+            Mp4Stream.readerOf(
+                IsoBoxes.concat(
+                    IsoBoxes.ftyp(),
+                    IsoBoxes.videoAndAudioMoov(),
+                    keyframeWithAudio(0, 0, 24_000, 24_000),
+                    IsoBoxes.concat(
+                        IsoBoxes.moof(
+                            IsoBoxes.videoTraf()
+                                .baseMediaDecodeTime(24_000L)
+                                .sampleDurations(List.of(Math.toIntExact(VIDEO_TICKS_PER_SECOND)))
+                                .firstSampleFlags(IsoBoxes.NON_SYNC_SAMPLE_FLAGS)
+                                .build(),
+                            IsoBoxes.audioTraf()
+                                .baseMediaDecodeTime(48_000L)
+                                .sampleDurations(List.of(24_000, 24_000))
+                                .build()),
+                        IsoBoxes.mdat(3)),
+                    keyframeWithAudio(48_000, 96_000, 24_000, 24_000),
+                    keyframeWithAudio(72_000, 144_000, 24_000, 24_000),
+                    audioOnly(192_000, 24_000, 24_000))));
+    // 1 s slots: slot 1 holds no keyframe, so segment 0 runs from 0 s to 2 s, and the last listed
+    // segment, 2, runs from 3 s to the advertised end at 4 s.
+    var assembler =
+        assemblerOfOneSecondSegments()
+            .intervals(
+                SegmentIntervals.onSegmentList(1, List.of(0L, 2L, 3L))
+                    .withLastListedSegmentEndingAt(Duration.ofSeconds(4)))
+            .build();
+
+    var closed = assembleEvery(assembler, output);
+
+    assertThat(closed).as("the initialization segment and segments 0, 1 and 2").hasSize(4);
+    assertThat(audioStartsOf(output, closed.get(2)))
+        .as("segment 1 holds 2 s to 3 s")
+        .containsExactly(96_000L, 120_000L);
+    assertThat(audioStartsOf(output, closed.get(3)))
+        .as("segment 2 holds 3 s up to the advertised end")
+        .containsExactly(144_000L, 168_000L);
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep the video past the advertised end in the last listed segment when a copied"
+          + " video runs past that end")
+  void shouldKeepTheVideoPastTheAdvertisedEndInTheLastListedSegmentWhenACopiedVideoRunsPastIt()
+      throws IOException {
+    var output =
+        Mp4Stream.read(
+            Mp4Stream.readerOf(
+                IsoBoxes.concat(
+                    IsoBoxes.ftyp(),
+                    IsoBoxes.videoAndAudioMoov(),
+                    keyframeWithAudio(0, 0, 24_000, 24_000),
+                    keyframeWithAudio(24_000, 48_000, 24_000, 24_000),
+                    keyframeWithAudio(48_000, 96_000, 24_000, 24_000))));
+    // 1 s slots, one listed segment that ends at the advertised end at 2 s; the source's keyframe
+    // at 2 s starts no segment that the playlist advertises.
+    var assembler =
+        assemblerOfOneSecondSegments()
+            .intervals(
+                SegmentIntervals.onSegmentList(1, List.of(0L))
+                    .withLastListedSegmentEndingAt(Duration.ofSeconds(2)))
+            .build();
+
+    var closed = assembleEvery(assembler, output);
+
+    assertThat(closed).as("the initialization segment and segment 0").hasSize(2);
+    var segment =
+        Mp4Samples.read(
+            IsoBoxes.concat(output.initializationSegment().bytes(), bytesOf(closed.getLast())));
+    assertThat(segment.samplesOf(segment.videoTrack()))
+        .extracting(Sample::presentationTime)
+        .as("segment 0 holds every video sample")
+        .containsExactly(0L, 24_000L, 48_000L);
+    assertThat(audioStartsOf(output, closed.getLast()))
+        .as("segment 0's audio stops at the advertised end")
+        .containsExactly(0L, 24_000L, 48_000L, 72_000L);
+  }
+
+  @Test
+  @DisplayName(
       "Should drop the padded audio that starts at or after the advertised end, without counting"
           + " it late, when an attempt pads its audio with silence")
   void shouldDropThePaddedAudioThatStartsAtOrAfterTheAdvertisedEndWhenAnAttemptPadsItsAudio()
