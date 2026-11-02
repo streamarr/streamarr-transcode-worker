@@ -204,6 +204,7 @@ public class FfmpegCommandBuilder {
               .channels(audio.channels())
               .bitrate(audio.bitrate())
               .channelLayout(audio.channelLayout())
+              .outputSampleRate(audio.outputSampleRate())
               .build();
     }
 

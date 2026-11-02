@@ -3,6 +3,7 @@ package com.streamarr.transcode.engine;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 import lombok.NonNull;
 
@@ -22,6 +23,7 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
   private static final int LOSSY_SAMPLE_RATE = 48_000;
   private static final Set<Integer> LOSSY_KEPT_SAMPLE_RATES = Set.of(44_100, 48_000);
   private static final int SIXTEEN_BITS = 16;
+  private static final int TWENTY_FOUR_BITS = 24;
   private static final Set<String> FLOATING_POINT_FORMATS = Set.of("flt", "fltp", "dbl", "dblp");
   private static final Set<String> LOSSLESS_CODECS = Set.of("truehd", "mlp", "flac", "alac");
 
@@ -36,7 +38,7 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
     var channels = ChannelStage.of(source, output);
     var filters = new ArrayList<String>();
     channels.filter().ifPresent(filters::add);
-    filters.add(formatStage(encoder, audio.codec(), source));
+    filters.add(formatStage(encoder, audio, source));
 
     var outputOptions = new ArrayList<>(List.of("-c:a", encoder.ffmpegName(audio.codec())));
     outputOptions.addAll(List.of("-af", String.join(",", filters)));
@@ -76,24 +78,30 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
     return options;
   }
 
-  private static String formatStage(Encoder encoder, String codec, SourceAudio source) {
+  private static String formatStage(Encoder encoder, AudioDecision audio, SourceAudio source) {
     var options = new ArrayList<String>();
-    targetSampleRate(encoder, source).ifPresent(rate -> options.add("osr=" + rate));
+    var rate = targetSampleRate(encoder, audio, source);
+    rate.ifPresent(target -> options.add("osr=" + target));
     if (encoder == Encoder.LOSSLESS) {
-      options.add("osf=" + losslessSampleFormat(codec, source));
-    }
-
-    if (encoder == Encoder.LOSSLESS && writesSixteenBits(source)) {
-      options.add(TPDF_DITHER);
+      options.addAll(losslessFormat(audio, source, rate.isPresent()));
     }
 
     options.add(TUNED_RESAMPLER);
     return "aresample=" + String.join(":", options);
   }
 
-  // ADR 0043: a lossy encode keeps 44.1 and 48 kHz and writes 48 kHz from any other rate, an Opus
-  // encode writes 48 kHz, and a FLAC or ALAC encode keeps the source's rate.
-  private static Optional<Integer> targetSampleRate(Encoder encoder, SourceAudio source) {
+  // A rate that the job names wins, and a rate equal to the source's needs no resampler. Without
+  // one, ADR 0043: a lossy encode keeps 44.1 and 48 kHz and writes 48 kHz from any other rate, an
+  // Opus encode writes 48 kHz, and a FLAC or ALAC encode keeps the source's rate.
+  private static Optional<Integer> targetSampleRate(
+      Encoder encoder, AudioDecision audio, SourceAudio source) {
+    if (audio.outputSampleRate().isPresent()) {
+      var named = audio.outputSampleRate().getAsInt();
+      return source.sampleRate().equals(OptionalInt.of(named))
+          ? Optional.empty()
+          : Optional.of(named);
+    }
+
     return switch (encoder) {
       case OPUS -> Optional.of(OPUS_SAMPLE_RATE);
       case LOSSY ->
@@ -105,11 +113,45 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
     };
   }
 
-  private static String losslessSampleFormat(String codec, SourceAudio source) {
-    // FFmpeg's FLAC encoder takes packed samples and its ALAC encoder planar ones; both write 24
-    // bits from 32-bit samples.
-    var format = writesSixteenBits(source) ? "s16" : "s32";
-    return "alac".equals(codec) ? format + "p" : format;
+  // FFmpeg's FLAC encoder takes packed samples and its ALAC encoder planar ones; both write 24 bits
+  // from 32-bit samples. ADR 0043: every conversion that loses precision carries TPDF dither, at
+  // the written depth, and a resample to 16 bits runs in floating point, where swresample can
+  // dither; on 16-bit samples it would round each one.
+  private static List<String> losslessFormat(
+      AudioDecision audio, SourceAudio source, boolean resamples) {
+    var depth =
+        audio.outputBitDepth().orElse(writesSixteenBits(source) ? SIXTEEN_BITS : TWENTY_FOUR_BITS);
+    var options = new ArrayList<String>();
+    if (resamples && depth == SIXTEEN_BITS) {
+      options.add("internal_sample_fmt=fltp");
+    }
+
+    var format = depth == SIXTEEN_BITS ? "s16" : "s32";
+    options.add("osf=" + ("alac".equals(audio.codec()) ? format + "p" : format));
+    if (!resamples && !losesPrecision(source, depth)) {
+      return options;
+    }
+
+    if (depth != SIXTEEN_BITS) {
+      options.add("output_sample_bits=" + depth);
+    }
+
+    options.add(TPDF_DITHER);
+    return options;
+  }
+
+  // Decoded lossy audio and floating-point samples lose precision at any integer depth.
+  private static boolean losesPrecision(SourceAudio source, int depth) {
+    if (!isLossless(source) || isFloatingPoint(source)) {
+      return true;
+    }
+
+    return source.bitDepth().orElse(writesSixteenBits(source) ? SIXTEEN_BITS : TWENTY_FOUR_BITS)
+        > depth;
+  }
+
+  private static boolean isFloatingPoint(SourceAudio source) {
+    return source.sampleFormat().filter(FLOATING_POINT_FORMATS::contains).isPresent();
   }
 
   // ADR 0043: decoded lossy audio writes 16 bits, and a lossless track keeps its depth up to 24
@@ -119,7 +161,7 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
       return true;
     }
 
-    if (source.sampleFormat().filter(FLOATING_POINT_FORMATS::contains).isPresent()) {
+    if (isFloatingPoint(source)) {
       return false;
     }
 

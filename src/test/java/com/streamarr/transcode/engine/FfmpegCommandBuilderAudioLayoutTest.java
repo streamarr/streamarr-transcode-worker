@@ -175,10 +175,11 @@ class FfmpegCommandBuilderAudioLayoutTest {
     @ParameterizedTest(name = "{0}, {1}, {2} bits")
     @CsvSource({
       "pcm_s24le, s32, 24, s32p",
-      "pcm_s16le, s16, 16, s16p:dither_method=triangular",
-      "pcm_f32le, flt, 32, s32p",
+      "pcm_s16le, s16, 16, s16p",
+      "pcm_f32le, flt, 32, s32p:output_sample_bits=24:dither_method=triangular",
+      "pcm_s32le, s32, 32, s32p:output_sample_bits=24:dither_method=triangular",
       "truehd, s32, 24, s32p",
-      "flac, s16, 16, s16p:dither_method=triangular"
+      "flac, s16, 16, s16p"
     })
     @DisplayName("Should keep a lossless track's depth up to 24 bits when ALAC encodes it")
     void shouldKeepALosslessTracksDepthUpTo24BitsWhenAlacEncodesIt(
@@ -211,13 +212,76 @@ class FfmpegCommandBuilderAudioLayoutTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @CsvSource({"pcm_s16be, s16:dither_method=triangular", "pcm_s24le, s32", "flac, s32"})
+    @CsvSource({"pcm_s16be, s16", "pcm_s24le, s32", "flac, s32"})
     @DisplayName("Should follow the codec name when the probe gives a lossless track no depth")
     void shouldFollowTheCodecNameWhenTheProbeGivesALosslessTrackNoDepth(
         String codec, String written) {
       var cmd = command(encode("flac", "stereo"), source(codec, "stereo"));
 
       assertThat(audioFilter(cmd)).isEqualTo("aresample=osf=" + written + ":" + TUNED_RESAMPLER);
+    }
+
+    @Test
+    @DisplayName(
+        "Should resample with the tuned settings and dither to 24 bits when the job names 48 kHz for 96 kHz FLAC")
+    void shouldResampleWithTheTunedSettingsAndDitherTo24BitsWhenTheJobNames48KhzFor96KhzFlac() {
+      var audio = encodeBuilder("flac", "stereo").outputSampleRate(OptionalInt.of(48_000)).build();
+
+      var cmd = command(audio, Optional.of(hiResFlac(96_000, 24)));
+
+      assertThat(audioFilter(cmd))
+          .isEqualTo(
+              "aresample=osr=48000:osf=s32:output_sample_bits=24:dither_method=triangular:"
+                  + TUNED_RESAMPLER);
+    }
+
+    @Test
+    @DisplayName("Should keep every sample when the job names the source's rate and depth")
+    void shouldKeepEverySampleWhenTheJobNamesTheSourcesRateAndDepth() {
+      var audio =
+          encodeBuilder("alac", "stereo")
+              .outputSampleRate(OptionalInt.of(96_000))
+              .outputBitDepth(OptionalInt.of(24))
+              .build();
+
+      var cmd = command(audio, Optional.of(hiResFlac(96_000, 24)));
+
+      assertThat(audioFilter(cmd)).isEqualTo("aresample=osf=s32p:" + TUNED_RESAMPLER);
+    }
+
+    @Test
+    @DisplayName("Should write 16 bits with TPDF dither when the job names 16 bits for 24-bit FLAC")
+    void shouldWrite16BitsWithTpdfDitherWhenTheJobNames16BitsFor24BitFlac() {
+      var audio = encodeBuilder("flac", "stereo").outputBitDepth(OptionalInt.of(16)).build();
+
+      var cmd = command(audio, Optional.of(hiResFlac(48_000, 24)));
+
+      assertThat(audioFilter(cmd))
+          .isEqualTo("aresample=osf=s16:dither_method=triangular:" + TUNED_RESAMPLER);
+    }
+
+    @Test
+    @DisplayName(
+        "Should resample in floating point with TPDF dither when the job resamples 16-bit FLAC")
+    void shouldResampleInFloatingPointWithTpdfDitherWhenTheJobResamples16BitFlac() {
+      var audio = encodeBuilder("flac", "stereo").outputSampleRate(OptionalInt.of(48_000)).build();
+
+      var cmd = command(audio, Optional.of(hiResFlac(44_100, 16)));
+
+      assertThat(audioFilter(cmd))
+          .isEqualTo(
+              "aresample=osr=48000:internal_sample_fmt=fltp:osf=s16:dither_method=triangular:"
+                  + TUNED_RESAMPLER);
+    }
+
+    @Test
+    @DisplayName("Should write the named rate when a lossy encode names one")
+    void shouldWriteTheNamedRateWhenALossyEncodeNamesOne() {
+      var audio = encodeBuilder("aac", "stereo").outputSampleRate(OptionalInt.of(44_100)).build();
+
+      var cmd = command(audio, Optional.of(hiResFlac(88_200, 24)));
+
+      assertThat(audioFilter(cmd)).isEqualTo("aresample=osr=44100:" + TUNED_RESAMPLER);
     }
 
     @Test
@@ -325,13 +389,24 @@ class FfmpegCommandBuilderAudioLayoutTest {
   }
 
   private static AudioDecision encode(String codec, String layout) {
+    return encodeBuilder(codec, layout).build();
+  }
+
+  private static AudioDecision.AudioDecisionBuilder encodeBuilder(String codec, String layout) {
     var named = SpeakerLayout.named(layout);
     return AudioDecision.builder()
         .mode(AudioMode.TRANSCODE)
         .codec(codec)
         .channels(named.channelCount())
         .bitrate(448_000)
-        .channelLayout(Optional.of(named))
+        .channelLayout(Optional.of(named));
+  }
+
+  private static SourceAudio hiResFlac(int sampleRate, int bitDepth) {
+    return sourceBuilder("flac", "stereo")
+        .sampleFormat(Optional.of(bitDepth == 16 ? "s16" : "s32"))
+        .bitDepth(OptionalInt.of(bitDepth))
+        .sampleRate(OptionalInt.of(sampleRate))
         .build();
   }
 

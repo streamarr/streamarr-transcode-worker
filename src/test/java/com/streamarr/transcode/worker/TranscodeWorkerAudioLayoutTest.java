@@ -25,6 +25,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -32,8 +33,10 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import tools.jackson.databind.ObjectMapper;
 
 @Tag("UnitTest")
@@ -45,6 +48,13 @@ class TranscodeWorkerAudioLayoutTest {
       """
       {"streams":[{"index":1,"codec_name":"ac3","codec_type":"audio","sample_fmt":"fltp",
         "sample_rate":"48000","channels":6,"channel_layout":"5.1(side)","bits_per_sample":0}]}
+      """;
+
+  // The pinned ffprobe's description of 96 kHz 24-bit stereo FLAC in Matroska.
+  private static final String HI_RES_FLAC =
+      """
+      {"streams":[{"index":1,"codec_name":"flac","codec_type":"audio","sample_fmt":"s32",
+        "sample_rate":"96000","channels":2,"channel_layout":"stereo","bits_per_raw_sample":"24"}]}
       """;
 
   @TempDir Path tempDir;
@@ -170,6 +180,53 @@ class TranscodeWorkerAudioLayoutTest {
     assertRefusedAsAnInvalidSpecification(layoutJob(layout, channels));
   }
 
+  @Test
+  @DisplayName(
+      "Should encode at the rate and depth that the job names when FLAC steps down to 48 kHz")
+  void shouldEncodeAtTheRateAndDepthThatTheJobNamesWhenFlacStepsDownTo48Khz() throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = flacJob(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO);
+    job.getDecisionBuilder().getAudioBuilder().setOutputSampleRateHz(48_000).setOutputBitDepth(16);
+
+    var connection = start(launcher, ffprobeAnswering(HI_RES_FLAC), job.build());
+
+    assertThat(eventsOf(connection))
+        .containsExactly(EstablishWorkerSessionRequest.EventCase.JOB_ATTEMPT_STARTED);
+    assertThat(launcher.command(fromProto(job.getJobAttemptId())))
+        .containsSubsequence(
+            "-af",
+            "aresample=osr=48000:internal_sample_fmt=fltp:osf=s16:dither_method=triangular:"
+                + "filter_size=128:phase_shift=14:cutoff=0.95:kaiser_beta=14");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("contradictorySampleFormats")
+  @DisplayName(
+      "Should refuse the job as an invalid specification when its output rate or depth contradicts the contract")
+  void shouldRefuseTheJobAsAnInvalidSpecificationWhenItsOutputRateOrDepthContradictsTheContract(
+      String contradiction, VariantJob job) throws Exception {
+    assertRefusedAsAnInvalidSpecification(job);
+  }
+
+  static Stream<Arguments> contradictorySampleFormats() {
+    var rateWithoutLayout = flacJob(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_UNSPECIFIED);
+    rateWithoutLayout.getDecisionBuilder().getAudioBuilder().setOutputSampleRateHz(48_000);
+    var zeroRate = flacJob(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO);
+    zeroRate.getDecisionBuilder().getAudioBuilder().setOutputSampleRateHz(0);
+    var depthWithoutLayout = flacJob(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_UNSPECIFIED);
+    depthWithoutLayout.getDecisionBuilder().getAudioBuilder().setOutputBitDepth(16);
+    var twentyBits = flacJob(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO);
+    twentyBits.getDecisionBuilder().getAudioBuilder().setOutputBitDepth(20);
+    var lossyDepth = layoutJob(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO, 2).toBuilder();
+    lossyDepth.getDecisionBuilder().getAudioBuilder().setOutputBitDepth(16);
+    return Stream.of(
+        Arguments.of("a rate without a named layout", rateWithoutLayout.build()),
+        Arguments.of("a rate of 0 Hz", zeroRate.build()),
+        Arguments.of("a depth without a named layout", depthWithoutLayout.build()),
+        Arguments.of("a depth of 20 bits", twentyBits.build()),
+        Arguments.of("a depth for AAC", lossyDepth.build()));
+  }
+
   private void assertRefusedAsAnInvalidSpecification(VariantJob job) throws Exception {
     var launcher = ScriptedProcessLauncher.writing(ENCODED_RECORDING);
 
@@ -213,6 +270,12 @@ class TranscodeWorkerAudioLayoutTest {
         .setBitrateBitsPerSecond(384_000)
         .setChannelLayout(layout);
     return job.build();
+  }
+
+  private static VariantJob.Builder flacJob(AudioChannelLayout layout) {
+    var job = layoutJob(layout, 2).toBuilder();
+    job.getDecisionBuilder().getAudioBuilder().setCodec("flac");
+    return job;
   }
 
   private static void assertFailedAs(

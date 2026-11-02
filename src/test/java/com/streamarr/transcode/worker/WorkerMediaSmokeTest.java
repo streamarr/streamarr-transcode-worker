@@ -3277,6 +3277,39 @@ class WorkerMediaSmokeTest {
     }
   }
 
+  @ParameterizedTest(name = "{0} at {1} bits")
+  @CsvSource({"flac, 24", "alac, 16"})
+  @DisplayName(
+      "Should write the named rate and depth when a lossless encode steps 96 kHz down to 48 kHz")
+  void shouldWriteTheNamedRateAndDepthWhenALosslessEncodeSteps96KhzDownTo48Khz(
+      String codec, int bitDepth) throws Exception {
+    var source = losslessSource("stereo", 96_000);
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setCodec(codec)
+        .setChannels(2)
+        .setChannelLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO)
+        .setOutputSampleRateHz(48_000)
+        .setOutputBitDepth(bitDepth);
+    job.getExecutionBuilder().setMediaSegmentCount(1);
+
+    var uploads = execute(engine(realCapabilities()), seekableSources, job.build());
+
+    var delivered = root.resolve("delivered.mp4");
+    Files.write(delivered, uploads.contentOf(uploadNames(1)));
+    assertThat(
+            ffprobe(
+                List.of("-select_streams", "a:0", "-show_entries", "stream=sample_rate"),
+                delivered))
+        .isEqualTo("48000");
+    var samples = Arrays.stream(decodedChannels(delivered, 2)).flatMapToInt(Arrays::stream);
+    var belowDepth = (1 << (Integer.SIZE - bitDepth)) - 1;
+    assertThat(samples.filter(sample -> (sample & belowDepth) != 0).count())
+        .as("samples with bits below %d", bitDepth)
+        .isZero();
+  }
+
   static Stream<LosslessLayoutChange> losslessLayoutChanges() {
     return Stream.of(
         new LosslessLayoutChange(
@@ -3325,8 +3358,14 @@ class WorkerMediaSmokeTest {
 
   // The seekable source's video, and 24-bit FLAC in the layout whose channels each hold pink
   // noise of their own seed, so that a moved channel cannot match its place.
-  private static synchronized Path losslessLayoutSource(String layout) throws Exception {
-    var source = seekableSources.resolve("lossless-" + layout.replaceAll("[()]", "_") + ".mkv");
+  private static Path losslessLayoutSource(String layout) throws Exception {
+    return losslessSource(layout, 48_000);
+  }
+
+  private static synchronized Path losslessSource(String layout, int sampleRate) throws Exception {
+    var source =
+        seekableSources.resolve(
+            "lossless-" + layout.replaceAll("[()]", "_") + "-" + sampleRate + ".mkv");
     if (generatedSeekableSources.contains(source)) {
       return source;
     }
@@ -3340,7 +3379,10 @@ class WorkerMediaSmokeTest {
               "-f",
               "lavfi",
               "-i",
-              "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5:seed=" + (channel + 11)));
+              "anoisesrc=color=pink:sample_rate="
+                  + sampleRate
+                  + ":amplitude=0.5:seed="
+                  + (channel + 11)));
       joined.append("[").append(channel + 1).append(":a]");
     }
 

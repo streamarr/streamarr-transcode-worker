@@ -20,12 +20,15 @@ import com.streamarr.transcode.engine.TranscodeRequest;
 import java.time.Duration;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.Set;
 
 // Domain and protobuf contracts intentionally share simple names.
 final class WorkerVariantJobMapper {
 
   // ADR 0050 caps an AAC encode at 5.1.
   private static final int AAC_MAXIMUM_CHANNELS = 6;
+  private static final Set<String> LOSSLESS_ENCODERS = Set.of("flac", "alac");
+  private static final Set<Integer> OUTPUT_BIT_DEPTHS = Set.of(16, 24);
 
   private final WorkerMediaSourceResolver sourceResolver;
 
@@ -135,12 +138,53 @@ final class WorkerVariantJobMapper {
         .channels(audio.getChannels())
         .bitrate(audio.getBitrateBitsPerSecond())
         .channelLayout(channelLayout(audio))
+        .outputSampleRate(outputSampleRate(audio))
+        .outputBitDepth(outputBitDepth(audio))
         .build();
+  }
+
+  // The contract sets an output rate only on an encode that names its layout, and never 0 Hz.
+  @SuppressWarnings("checkstyle:fullyQualifiedName")
+  private static OptionalInt outputSampleRate(
+      build.buf.gen.streamarr.transcode.v1.AudioDecision audio) {
+    if (!audio.hasOutputSampleRateHz()) {
+      return OptionalInt.empty();
+    }
+
+    if (!namesLayout(audio) || audio.getOutputSampleRateHz() == 0) {
+      throw new InvalidJobSpecificationException(
+          "Only an audio encode that names its layout names a sample rate, and never 0 Hz");
+    }
+
+    return OptionalInt.of(audio.getOutputSampleRateHz());
+  }
+
+  // The contract sets an output depth of 16 or 24 bits only on a FLAC or ALAC encode that names its
+  // layout.
+  @SuppressWarnings("checkstyle:fullyQualifiedName")
+  private static OptionalInt outputBitDepth(
+      build.buf.gen.streamarr.transcode.v1.AudioDecision audio) {
+    if (!audio.hasOutputBitDepth()) {
+      return OptionalInt.empty();
+    }
+
+    if (!namesLayout(audio)
+        || !LOSSLESS_ENCODERS.contains(audio.getCodec())
+        || !OUTPUT_BIT_DEPTHS.contains(audio.getOutputBitDepth())) {
+      throw new InvalidJobSpecificationException(
+          "Only a FLAC or ALAC encode that names its layout names a bit depth, of 16 or 24 bits");
+    }
+
+    return OptionalInt.of(audio.getOutputBitDepth());
   }
 
   /** Whether the job encodes its audio in a layout that it names. */
   static boolean namesAudioLayout(VariantJob job) {
-    var audio = job.getDecision().getAudio();
+    return namesLayout(job.getDecision().getAudio());
+  }
+
+  @SuppressWarnings("checkstyle:fullyQualifiedName")
+  private static boolean namesLayout(build.buf.gen.streamarr.transcode.v1.AudioDecision audio) {
     return audio.getMode() == AUDIO_MODE_TRANSCODE
         && audio.getChannelLayout() != AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_UNSPECIFIED;
   }
