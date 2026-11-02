@@ -16,7 +16,11 @@ import lombok.NonNull;
  * one that holds source media. Before it delivers any, the last segment is the one whose interval
  * holds the start of the last keyframe that a stream copy reads, as a copy opens its segments only
  * at keyframes, or of the last video frame that an encode reads. An encode that holds the last
- * frame carries every stream's samples to the advertised end, so the latest of them decides.
+ * frame carries every stream's samples to the advertised end, and converts each sample over its
+ * whole duration, so the latest instant that any stream's last sample covers decides.
+ *
+ * <p>The segment that holds the video's last keyframe or frame carries every video sample after it,
+ * so only the audio can have source media after the last segment.
  */
 @Builder
 record SourceEndRule(int periodSeconds, int mediaSegmentCount, @NonNull VideoDecision video) {
@@ -35,7 +39,7 @@ record SourceEndRule(int periodSeconds, int mediaSegmentCount, @NonNull VideoDec
       List<ObservedSourceStream> streams, OptionalInt lastDeliveredMediaSegment) {
     if (video instanceof VideoDecision.Encode encode && encode.holdsLastFrameToAdvertisedEnd()) {
       return streams.stream()
-          .map(ObservedSourceStream::lastStart)
+          .map(SourceEndRule::lastCoveredInstant)
           .max(Comparator.naturalOrder())
           .map(this::segmentAt);
     }
@@ -58,11 +62,22 @@ record SourceEndRule(int periodSeconds, int mediaSegmentCount, @NonNull VideoDec
     var segmentEnd = Duration.ofSeconds((segment + 1) * periodSeconds);
     var streamsWithMediaAfter =
         streams.stream()
+            .filter(stream -> stream.sourceIndex() != video.streamIndex())
             .filter(stream -> stream.lastStart().compareTo(segmentEnd) >= 0)
             .map(ObservedSourceStream::sourceIndex)
             .sorted()
             .toList();
     return new EndedEarly(Math.toIntExact(segment), streamsWithMediaAfter);
+  }
+
+  // The last nanosecond that the stream's last sample covers; its start when it lasts no time.
+  private static Duration lastCoveredInstant(ObservedSourceStream stream) {
+    var beforeEnd = stream.end().minusNanos(1);
+    if (beforeEnd.compareTo(stream.lastStart()) < 0) {
+      return stream.lastStart();
+    }
+
+    return beforeEnd;
   }
 
   private long segmentAt(Duration presentationTime) {

@@ -46,8 +46,8 @@ class SourceEndRuleTest {
 
   @Test
   @DisplayName(
-      "Should report the segment of the video's last keyframe when a stream copy that delivered no"
-          + " segment reads frames after it in a later segment")
+      "Should report the segment of the video's last keyframe, listing only the audio, when a stream"
+          + " copy that delivered no segment reads frames after it in a later interval")
   void shouldReportTheSegmentOfTheVideosLastKeyframeWhenAStreamCopyReadsFramesAfterIt() {
     var video =
         videoEndingAt64Seconds().lastKeyframeStart(Optional.of(Duration.ofMillis(59_000))).build();
@@ -55,7 +55,7 @@ class SourceEndRuleTest {
     var report =
         ruleFor(copy()).reportOn(List.of(video, AUDIO_ENDING_AT_84_SECONDS), NOTHING_DELIVERED);
 
-    assertThat(report.endedEarly()).contains(new EndedEarly(9, List.of(VIDEO_INDEX, AUDIO_INDEX)));
+    assertThat(report.endedEarly()).contains(new EndedEarly(9, List.of(AUDIO_INDEX)));
   }
 
   // Frame-rate conversion can move the last source frame, at 63.96 s, into the next segment.
@@ -118,6 +118,46 @@ class SourceEndRuleTest {
         ruleFor(held()).reportOn(List.of(VIDEO_ENDING_AT_64_SECONDS, audio), NOTHING_DELIVERED);
 
     assertThat(report.endedEarly()).contains(new EndedEarly(11, List.of()));
+  }
+
+  // fps repeats the source's last frame, from 5.5 s to 6.5 s, on the output grid into segment 1.
+  @Test
+  @DisplayName(
+      "Should report the segment where the last source frame ends when an encode that holds the"
+          + " last frame reads a final frame that spans a segment boundary")
+  void shouldReportTheSegmentWhereTheLastFrameEndsWhenAHeldEncodesFinalFrameSpansABoundary() {
+    var video =
+        videoEndingAt64Seconds()
+            .lastStart(Duration.ofMillis(5_500))
+            .end(Duration.ofMillis(6_500))
+            .lastKeyframeStart(Optional.of(Duration.ofMillis(5_500)))
+            .build();
+
+    var report = ruleFor(held()).reportOn(List.of(video), NOTHING_DELIVERED);
+
+    assertThat(report.endedEarly()).contains(new EndedEarly(1, List.of()));
+  }
+
+  @Test
+  @DisplayName(
+      "Should report the segment where the last source frame starts when an encode that holds the"
+          + " last frame reads a final frame that ends on a segment boundary or lasts no time")
+  void shouldReportTheSegmentWhereTheLastFrameStartsWhenItEndsOnABoundaryOrLastsNoTime() {
+    var endingOnTheBoundary =
+        videoEndingAt64Seconds()
+            .lastStart(Duration.ofMillis(5_958))
+            .end(Duration.ofSeconds(6))
+            .build();
+    var lastingNoTime =
+        audioEndingAt84Seconds()
+            .lastStart(Duration.ofMillis(5_000))
+            .end(Duration.ofMillis(5_000))
+            .build();
+
+    var report =
+        ruleFor(held()).reportOn(List.of(endingOnTheBoundary, lastingNoTime), NOTHING_DELIVERED);
+
+    assertThat(report.endedEarly()).contains(new EndedEarly(0, List.of()));
   }
 
   @Test
