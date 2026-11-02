@@ -22,9 +22,13 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 @Tag("UnitTest")
+@DisplayName("Segment Grouper Tests")
 class SegmentGrouperTest {
 
   private static final SegmentIntervals SIX_SECOND_INTERVALS = SegmentIntervals.onPlainGrid(6);
+  // Keyframes 10 s apart on 3 s slots: segments start at 0 s, 9 s, 18 s and 30 s.
+  private static final SegmentIntervals MERGED_THREE_SECOND_SLOTS =
+      SegmentIntervals.onSegmentList(3, List.of(0L, 3L, 6L, 10L));
   private static final long MILLISECONDS = 1000;
   private static final long SEGMENT_CAP = Mp4Stream.SEGMENT_CAP;
   private static final long FRAGMENT_BYTES = 2;
@@ -436,6 +440,79 @@ class SegmentGrouperTest {
                             .toList())),
                 1,
                 2));
+  }
+
+  @Test
+  @DisplayName(
+      "Should merge the slots without a keyframe into the segment before them when keyframes lie"
+          + " 10 s apart on 3 s slots")
+  void
+      shouldMergeTheSlotsWithoutAKeyframeIntoTheSegmentBeforeThemWhenKeyframesLieTenSecondsApart() {
+    var grouper = new SegmentGrouper(MERGED_THREE_SECOND_SLOTS, 0, SEGMENT_CAP);
+    var first = keyframeAt(0);
+    var firstNonSync = nonSyncAt(5_000);
+    var second = keyframeAt(10_000);
+    var third = keyframeAt(20_000);
+    var fourth = keyframeAt(30_000);
+
+    grouper.accept(first);
+    grouper.accept(firstNonSync);
+
+    assertThat(grouper.accept(second)).isEqualTo(closed(segment(0, first, firstNonSync)));
+    assertThat(grouper.accept(third)).isEqualTo(closed(segment(1, second)));
+    assertThat(grouper.accept(fourth)).isEqualTo(closed(segment(2, third)));
+    assertThat(grouper.finish()).contains(segment(3, fourth));
+  }
+
+  @Test
+  @DisplayName(
+      "Should number the segments from the attempt's first merged segment when a replacement"
+          + " attempt starts there")
+  void
+      shouldNumberTheSegmentsFromTheAttemptsFirstMergedSegmentWhenAReplacementAttemptStartsThere() {
+    var grouper = new SegmentGrouper(MERGED_THREE_SECOND_SLOTS, 2, SEGMENT_CAP);
+    var third = keyframeAt(20_000);
+    var thirdNonSync = nonSyncAt(25_000);
+    var fourth = keyframeAt(30_000);
+
+    assertThat(grouper.accept(keyframeAt(10_000))).as("preroll").isEqualTo(NOTHING_CLOSED);
+    grouper.accept(third);
+    grouper.accept(thirdNonSync);
+
+    assertThat(grouper.accept(fourth)).isEqualTo(closed(segment(2, third, thirdNonSync)));
+    assertThat(grouper.finish()).contains(segment(3, fourth));
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep an encoder's keyframes inside a merged segment when they start in its later"
+          + " slots")
+  void shouldKeepAnEncodersKeyframesInsideAMergedSegmentWhenTheyStartInItsLaterSlots() {
+    var grouper = new SegmentGrouper(MERGED_THREE_SECOND_SLOTS, 0, SEGMENT_CAP);
+    var first = keyframeAt(0);
+    var inSecondSlot = keyframeAt(3_000);
+    var inThirdSlot = keyframeAt(6_000);
+
+    grouper.accept(first);
+
+    assertThat(grouper.accept(inSecondSlot)).isEqualTo(NOTHING_CLOSED);
+    assertThat(grouper.accept(inThirdSlot)).isEqualTo(NOTHING_CLOSED);
+    assertThat(grouper.accept(keyframeAt(9_000)))
+        .isEqualTo(closed(segment(0, first, inSecondSlot, inThirdSlot)));
+  }
+
+  @Test
+  @DisplayName(
+      "Should report a skipped segment number when no keyframe starts a listed segment's interval")
+  void shouldReportASkippedSegmentNumberWhenNoKeyframeStartsAListedSegmentsInterval() {
+    var grouper = new SegmentGrouper(MERGED_THREE_SECOND_SLOTS, 0, SEGMENT_CAP);
+    var second = keyframeAt(10_000);
+
+    grouper.accept(keyframeAt(0));
+    grouper.accept(second);
+
+    assertThat(grouper.accept(keyframeAt(30_000)))
+        .isEqualTo(new SegmentNumberSkipped(List.of(segment(1, second)), 2, 3));
   }
 
   @Test

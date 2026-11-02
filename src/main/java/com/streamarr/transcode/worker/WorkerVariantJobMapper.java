@@ -18,6 +18,7 @@ import com.streamarr.transcode.engine.TranscodeDecision;
 import com.streamarr.transcode.engine.TranscodeMode;
 import com.streamarr.transcode.engine.TranscodeRequest;
 import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Set;
@@ -40,7 +41,9 @@ final class WorkerVariantJobMapper {
    * @throws InvalidJobSpecificationException when the job names no transcode, audio or subtitle
    *     mode, when its video decision is missing, contradicts the rest of the job, or lacks a value
    *     that the worker forces or checks, or when it holds the last frame or pads its audio without
-   *     encoding that stream or without a positive advertised end
+   *     encoding that stream or without a positive advertised end, or when its segment list is not
+   *     empty and does not hold one start slot for each media segment, from 0 and strictly
+   *     increasing
    */
   TranscodeRequest map(VariantJob job) {
     return map(job, Optional.empty());
@@ -71,10 +74,53 @@ final class WorkerVariantJobMapper {
         // so seek_position_seconds, which the server sets to that segment's boundary, is not read.
         .startSequenceNumber(execution.getStartSequenceNumber())
         .mediaSegmentCount(execution.getMediaSegmentCount())
+        .segmentStartSlots(segmentStartSlots(execution))
         .seekPosition(seekPosition(execution))
         .sourceAudio(sourceAudio)
         .advertisedEnd(advertisedEnd(job))
         .build();
+  }
+
+  // The contract's slots are uint32, which Java reads as int, so they compare as unsigned values.
+  private static List<Long> segmentStartSlots(TranscodeExecution execution) {
+    var slots = execution.getSegmentStartSlotsList().stream().map(Integer::toUnsignedLong).toList();
+    if (slots.isEmpty()) {
+      return slots;
+    }
+
+    if (slots.size() != execution.getMediaSegmentCount()) {
+      throw new InvalidJobSpecificationException(
+          "The segment list holds "
+              + slots.size()
+              + " start slots for "
+              + execution.getMediaSegmentCount()
+              + " media segments");
+    }
+
+    if (slots.getFirst() != 0) {
+      throw new InvalidJobSpecificationException(
+          "The segment list starts at slot " + slots.getFirst() + " instead of 0");
+    }
+
+    for (var index = 1; index < slots.size(); index++) {
+      requireLaterSlot(slots, index);
+    }
+
+    return slots;
+  }
+
+  private static void requireLaterSlot(List<Long> slots, int index) {
+    if (slots.get(index) <= slots.get(index - 1)) {
+      throw new InvalidJobSpecificationException(
+          "Segment "
+              + index
+              + " starts at slot "
+              + slots.get(index)
+              + ", not after segment "
+              + (index - 1)
+              + "'s slot "
+              + slots.get(index - 1));
+    }
   }
 
   // The worker reads the advertised end only from a job that holds the last frame or pads audio.

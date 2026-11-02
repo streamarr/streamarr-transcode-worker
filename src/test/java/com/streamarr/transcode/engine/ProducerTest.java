@@ -1989,6 +1989,26 @@ class ProducerTest {
     assertDeliveredInOrder(recording);
   }
 
+  @Test
+  @DisplayName(
+      "Should deliver every merged segment and complete when source keyframes further apart than"
+          + " the period open the job's listed segments")
+  void shouldDeliverEveryMergedSegmentAndCompleteWhenSourceKeyframesOpenTheJobsListedSegments() {
+    var recording = recording("10-copy-gop-exceeds-period.fmp4");
+    var process = ScriptedProcess.builder().output(bytesOf(recording.file())).build();
+
+    // Keyframes at 0 s, 10.01 s and 20.02 s on 6 s slots: slots 2 and 4 merge.
+    var producer =
+        producerFor(process, recording)
+            .intervals(SegmentIntervals.onSegmentList(6, List.of(0L, 1L, 3L)))
+            .mediaSegmentCount(3)
+            .start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isInstanceOf(Completed.class);
+    assertThat(sink.acceptedNames())
+        .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
+  }
+
   // ADR 0037: a skip lets the segment it closed finish delivery before the skip is recorded, but
   // a failed upload is recorded at once.
   @Test

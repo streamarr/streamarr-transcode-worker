@@ -69,7 +69,8 @@ record SourceEndRule(
   }
 
   private EndedEarly endedEarlyIn(long segment, List<ObservedSourceStream> streams) {
-    var segmentEnd = Duration.ofNanos(intervals.endOf(segment, NANOSECONDS_PER_SECOND));
+    var segmentEnd =
+        Duration.ofNanos(intervals.endOf(segment, NANOSECONDS_PER_SECOND).orElseThrow());
     var streamsWithMediaAfter =
         streams.stream()
             .filter(stream -> stream.sourceIndex() != video.streamIndex())

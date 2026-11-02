@@ -105,6 +105,49 @@ class SegmentAssemblerTest {
 
   @Test
   @DisplayName(
+      "Should give a merged segment the audio of every slot it spans when the segment list merges"
+          + " a slot without a keyframe")
+  void shouldGiveAMergedSegmentTheAudioOfEverySlotItSpansWhenTheSegmentListMergesASlot()
+      throws IOException {
+    var output =
+        Mp4Stream.read(
+            Mp4Stream.readerOf(
+                IsoBoxes.concat(
+                    IsoBoxes.ftyp(),
+                    IsoBoxes.videoAndAudioMoov(),
+                    keyframeWithAudio(0, 0, 24_000, 24_000),
+                    IsoBoxes.concat(
+                        IsoBoxes.moof(
+                            IsoBoxes.videoTraf()
+                                .baseMediaDecodeTime(24_000L)
+                                .sampleDurations(List.of(Math.toIntExact(VIDEO_TICKS_PER_SECOND)))
+                                .firstSampleFlags(IsoBoxes.NON_SYNC_SAMPLE_FLAGS)
+                                .build(),
+                            IsoBoxes.audioTraf()
+                                .baseMediaDecodeTime(48_000L)
+                                .sampleDurations(List.of(24_000, 24_000))
+                                .build()),
+                        IsoBoxes.mdat(3)),
+                    keyframeWithAudio(48_000, 96_000, 24_000, 24_000))));
+    // 1 s slots: slot 1 holds no keyframe, so segment 0 runs from 0 s to 2 s.
+    var assembler =
+        assemblerOfOneSecondSegments()
+            .intervals(SegmentIntervals.onSegmentList(1, List.of(0L, 2L)))
+            .build();
+
+    var closed = assembleEvery(assembler, output);
+
+    assertThat(closed).as("the initialization segment and segments 0 and 1").hasSize(3);
+    assertThat(audioStartsOf(output, closed.get(1)))
+        .as("segment 0 holds 0 s to 2 s")
+        .containsExactly(0L, 24_000L, 48_000L, 72_000L);
+    assertThat(audioStartsOf(output, closed.get(2)))
+        .as("segment 1 holds 2 s onwards")
+        .containsExactly(96_000L, 120_000L);
+  }
+
+  @Test
+  @DisplayName(
       "Should drop the padded audio that starts at or after the advertised end, without counting"
           + " it late, when an attempt pads its audio with silence")
   void shouldDropThePaddedAudioThatStartsAtOrAfterTheAdvertisedEndWhenAnAttemptPadsItsAudio()

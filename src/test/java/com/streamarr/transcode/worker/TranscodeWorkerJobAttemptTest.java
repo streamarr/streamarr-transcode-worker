@@ -97,6 +97,10 @@ import org.junit.jupiter.params.provider.ValueSource;
 @Timeout(value = 1, unit = TimeUnit.MINUTES)
 class TranscodeWorkerJobAttemptTest {
 
+  // Keyframes 10 s apart on 3 s slots: segments start at slots 0, 3, 6 and 10.
+  private static final List<Integer> TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS =
+      List.of(0, 3, 6, 10);
+
   private static final Duration EVENT_LIMIT = Duration.ofSeconds(10);
   private static final int UPLOAD_MESSAGE_BYTES = 64 * 1024;
   private static final int RACE_ITERATIONS = 100;
@@ -1797,6 +1801,58 @@ class TranscodeWorkerJobAttemptTest {
       assertThat(launcher.command(fromProto(job.getJobAttemptId())))
           .containsSubsequence("-ss", "30", "-i");
     }
+  }
+
+  @Test
+  @DisplayName(
+      "Should seek a stream copy to its first segment's listed start when the job carries a"
+          + " segment list")
+  void shouldSeekAStreamCopyToItsFirstSegmentsListedStartWhenTheJobCarriesASegmentList()
+      throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJobBuilder();
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(3)
+        .setMediaSegmentCount(4)
+        .addAllSegmentStartSlots(TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS)
+        .setStartSequenceNumber(3)
+        .setSeekPositionSeconds(30);
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(launcher.command(fromProto(job.getJobAttemptId())))
+          .as("segment 3 starts at slot 10")
+          .containsSubsequence("-ss", "30", "-i");
+    }
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("segmentListsThatBreakTheContract")
+  @DisplayName(
+      "Should refuse the job as an invalid specification when its segment list breaks the"
+          + " contract")
+  void shouldRefuseTheJobAsAnInvalidSpecificationWhenItsSegmentListBreaksTheContract(
+      String breach, List<Integer> startSlots) throws Exception {
+    var job = variantJobBuilder();
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(3)
+        .setMediaSegmentCount(4)
+        .addAllSegmentStartSlots(startSlots);
+
+    assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
+  static Stream<Arguments> segmentListsThatBreakTheContract() {
+    return Stream.of(
+        Arguments.of("fewer entries than media segments", List.of(0, 3, 6)),
+        Arguments.of("more entries than media segments", List.of(0, 3, 6, 10, 12)),
+        Arguments.of("a first entry after slot 0", List.of(1, 3, 6, 10)),
+        Arguments.of("a repeated entry", List.of(0, 3, 3, 10)),
+        Arguments.of("a decreasing entry", List.of(0, 6, 3, 10)));
   }
 
   @ParameterizedTest(name = "{0}")

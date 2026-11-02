@@ -382,12 +382,16 @@ public class FfmpegCommandBuilder {
   // discards that period as preroll: a seek to the boundary itself can drop the frame an earlier
   // attempt repeated there from a variable-frame-rate source, and lands after the boundary on an
   // MPEG-TS source. A stream copy without the server's keyframe position seeks to its first
-  // segment's boundary.
+  // segment's start.
   private static long inputSeekSeconds(TranscodeRequest request) {
     var firstSegment = (long) request.startSequenceNumber();
     var mode = request.transcodeDecision().transcodeMode();
-    if (!mode.encodesVideo() || firstSegment == 0) {
-      return firstSegment * request.targetSegmentDuration();
+    if (!mode.encodesVideo()) {
+      return request.segmentIntervals().startOf(firstSegment, 1);
+    }
+
+    if (firstSegment == 0) {
+      return 0;
     }
 
     return (firstSegment - 1) * request.targetSegmentDuration();
