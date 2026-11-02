@@ -10,9 +10,11 @@ import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.NavigableMap;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.UUID;
 import lombok.Builder;
 import lombok.NonNull;
@@ -24,6 +26,15 @@ import lombok.NonNull;
  * playback probe capacity, the formula that the server also uses. The server counts a probe until
  * its result arrives, so the worker accepts every probe that the server sends while no capacity
  * drops.
+ *
+ * <p>Until the host shows congestion, the background limit grows by 1 for each probe that ends
+ * while it is busy. A probe that started before a brake that a timed-out probe applied, and then
+ * times out too, shows congestion: it timed out beside that probe, so the host, not one file, is
+ * slow. From the limit at that moment upward, the limit then grows by 1 only once every probe that
+ * ran at its previous growth has ended, and never while a probe has run for a quarter of the probe
+ * timeout. The server cancels a probe at the timeout only after the delay of the timeout itself, so
+ * without these rules fast probes would grow the limit back to the overload long before the next
+ * timeout arrived. The congestion clears when the limit grows back to its maximum.
  *
  * <p>Each change to the granted capacities runs the change callback once, outside this object's
  * monitor.
@@ -38,20 +49,28 @@ final class ProbeCapacities {
   private static final Duration MINIMUM_INTERVAL_BETWEEN_BRAKES = ProductionSpeedWindow.WINDOW;
   private static final Duration GROWTH_HOLD_AFTER_BRAKE = Duration.ofSeconds(30);
   private static final Duration IDLE_BEFORE_KEYFRAME_PACKET_SCANS = Duration.ofSeconds(30);
+  private static final int PROBE_TIMEOUT_SHARE_THAT_HOLDS_GROWTH = 4;
 
   private final MonotonicClock clock;
   private final Runnable onChange;
   private final BackgroundLimit backgroundLimit;
+  private final int maximumBackgroundLimit;
 
   // Guarded by this monitor.
   private final Map<UUID, ProductionSpeedWindow> jobAttempts = new HashMap<>();
   private final Set<UUID> slowJobAttempts = new HashSet<>();
   private final Map<ProbeKind, Integer> running = new EnumMap<>(ProbeKind.class);
+  // The start times of the running probes that load the background units, with their counts.
+  private final NavigableMap<Long, Integer> loadingProbeStarts = new TreeMap<>();
   private int keyframePacketScanCapacity = IDLE_KEYFRAME_PACKET_SCAN_CAPACITY;
   private OptionalLong lastBrakeNanos = OptionalLong.empty();
   private OptionalLong lastJobAttemptEndNanos = OptionalLong.empty();
   private int brakes;
   private long brakesApplied;
+  private boolean latestBrakeForTimedOutProbe;
+  private long growths;
+  private int loadingProbesFromBeforeLatestGrowth;
+  private Optional<Congestion> congestion = Optional.empty();
 
   @Builder
   private ProbeCapacities(
@@ -68,6 +87,11 @@ final class ProbeCapacities {
         switch (backgroundProbeCapacity) {
           case BackgroundProbeCapacity.Adaptive(var maximum) -> new AdaptiveLimit(maximum);
           case BackgroundProbeCapacity.Fixed(var capacity) -> new FixedLimit(capacity);
+        };
+    this.maximumBackgroundLimit =
+        switch (backgroundProbeCapacity) {
+          case BackgroundProbeCapacity.Adaptive(var maximum) -> maximum;
+          case BackgroundProbeCapacity.Fixed(var capacity) -> capacity;
         };
   }
 
@@ -86,7 +110,18 @@ final class ProbeCapacities {
     }
 
     running.merge(kind, 1, Integer::sum);
-    return Optional.of(new CountedProbe(kind, brakesApplied));
+    var probe =
+        CountedProbe.builder()
+            .kind(kind)
+            .startNanos(clock.nanoTime())
+            .brakesAppliedAtStart(brakesApplied)
+            .growthsAtStart(growths)
+            .build();
+    if (loadsTheBackgroundUnits(kind)) {
+      loadingProbeStarts.merge(probe.startNanos(), 1, Integer::sum);
+    }
+
+    return Optional.of(probe);
   }
 
   /** Frees the unit of a probe that ended, and grows the background limit when it was busy. */
@@ -94,30 +129,41 @@ final class ProbeCapacities {
     changeCapacities(
         () -> {
           var inUse = backgroundUnitsInUse();
-          running.merge(probe.kind(), -1, Integer::sum);
+          end(probe);
           if (backgroundUnitsInUse() < inUse && isGrowthAllowed()) {
-            backgroundLimit.grow(inUse);
+            grow(inUse);
           }
         });
   }
 
   /**
    * Brakes the background limit when the server cancels a probe at the probe timeout and the probe
-   * started after the latest brake. The probe keeps its unit until {@link #releaseTimedOut} frees
+   * started after the latest brake; a probe that started before a brake that a timed-out probe
+   * applied shows congestion instead. The probe keeps its unit until {@link #releaseTimedOut} frees
    * it.
    */
   void probeTimedOut(@NonNull CountedProbe probe) {
     changeCapacities(
         () -> {
+          if (!loadsTheBackgroundUnits(probe.kind())) {
+            return;
+          }
+
           if (isTimeoutBrakeDue(probe)) {
             brake();
+            latestBrakeForTimedOutProbe = true;
+            return;
+          }
+
+          if (latestBrakeForTimedOutProbe && probe.brakesAppliedAtStart() < brakesApplied) {
+            showCongestion(probe);
           }
         });
   }
 
   /** Frees the unit of a probe that the server cancelled at the probe timeout, and never grows. */
   void releaseTimedOut(@NonNull CountedProbe probe) {
-    changeCapacities(() -> running.merge(probe.kind(), -1, Integer::sum));
+    changeCapacities(() -> end(probe));
   }
 
   // A job attempt that starts clears background probes from the host while its viewer waits.
@@ -191,6 +237,42 @@ final class ProbeCapacities {
   }
 
   // Guarded by this monitor.
+  private void end(CountedProbe probe) {
+    running.merge(probe.kind(), -1, Integer::sum);
+    if (!loadsTheBackgroundUnits(probe.kind())) {
+      return;
+    }
+
+    loadingProbeStarts.computeIfPresent(
+        probe.startNanos(), (_, count) -> count == 1 ? null : count - 1);
+    if (probe.growthsAtStart() < growths) {
+      loadingProbesFromBeforeLatestGrowth--;
+    }
+  }
+
+  // Guarded by this monitor.
+  private void grow(int inUse) {
+    var before = backgroundLimit.value();
+    backgroundLimit.grow(inUse);
+    if (backgroundLimit.value() == before) {
+      return;
+    }
+
+    growths++;
+    loadingProbesFromBeforeLatestGrowth =
+        running.get(ProbeKind.BACKGROUND) + running.get(ProbeKind.PLAYBACK);
+    if (backgroundLimit.value() == maximumBackgroundLimit) {
+      congestion = Optional.empty();
+    }
+  }
+
+  // Guarded by this monitor.
+  private void showCongestion(CountedProbe probe) {
+    congestion =
+        Optional.of(new Congestion(backgroundLimit.value(), clock.since(probe.startNanos())));
+  }
+
+  // Guarded by this monitor.
   private boolean fits(ProbeKind kind) {
     return switch (kind) {
       case PLAYBACK ->
@@ -210,20 +292,35 @@ final class ProbeCapacities {
 
   // Guarded by this monitor.
   private boolean isGrowthAllowed() {
-    return slowJobAttempts.isEmpty() && hasBeenSinceLastBrake(GROWTH_HOLD_AFTER_BRAKE);
+    return slowJobAttempts.isEmpty()
+        && hasBeenSinceLastBrake(GROWTH_HOLD_AFTER_BRAKE)
+        && congestion.filter(this::holdsGrowth).isEmpty();
+  }
+
+  // Guarded by this monitor.
+  private boolean holdsGrowth(Congestion shown) {
+    if (backgroundLimit.value() < shown.limit()) {
+      return false;
+    }
+
+    var growthHoldingAge = shown.probeTimeout().dividedBy(PROBE_TIMEOUT_SHARE_THAT_HOLDS_GROWTH);
+    return loadingProbesFromBeforeLatestGrowth > 0
+        || (!loadingProbeStarts.isEmpty()
+            && clock.since(loadingProbeStarts.firstKey()).compareTo(growthHoldingAge) >= 0);
   }
 
   // Guarded by this monitor. The probes that were running at the latest brake already count in
   // that brake, as TCP halves its window once for each window of data in flight (RFC 5681).
   private boolean isTimeoutBrakeDue(CountedProbe probe) {
-    var loadsTheBackgroundUnits =
-        switch (probe.kind()) {
-          case BACKGROUND, PLAYBACK -> true;
-          case KEYFRAME_PACKET_SCAN -> false;
-        };
-    return loadsTheBackgroundUnits
-        && probe.brakesAppliedAtStart() == brakesApplied
+    return probe.brakesAppliedAtStart() == brakesApplied
         && hasBeenSinceLastBrake(MINIMUM_INTERVAL_BETWEEN_BRAKES);
+  }
+
+  private static boolean loadsTheBackgroundUnits(ProbeKind kind) {
+    return switch (kind) {
+      case BACKGROUND, PLAYBACK -> true;
+      case KEYFRAME_PACKET_SCAN -> false;
+    };
   }
 
   // Guarded by this monitor.
@@ -235,6 +332,7 @@ final class ProbeCapacities {
     lastBrakeNanos = OptionalLong.of(clock.nanoTime());
     brakes++;
     brakesApplied++;
+    latestBrakeForTimedOutProbe = false;
   }
 
   // Guarded by this monitor.
@@ -258,7 +356,13 @@ final class ProbeCapacities {
   }
 
   /** A probe that counts against its capacity until a release frees its unit. */
-  record CountedProbe(ProbeKind kind, long brakesAppliedAtStart) {}
+  @Builder
+  record CountedProbe(
+      ProbeKind kind, long startNanos, long brakesAppliedAtStart, long growthsAtStart) {}
+
+  // The limit from which growth waits for the probes of the previous growth, and the probe timeout
+  // that the server applies, read from the age of a probe at its timeout.
+  private record Congestion(int limit, Duration probeTimeout) {}
 
   private sealed interface BackgroundLimit {
 
