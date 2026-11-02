@@ -1805,6 +1805,35 @@ class TranscodeWorkerJobAttemptTest {
 
   @Test
   @DisplayName(
+      "Should upload every listed segment and complete the attempt when source keyframes further"
+          + " apart than the period open the job's merged segments")
+  void shouldUploadEveryListedSegmentAndCompleteTheAttemptWhenSourceKeyframesOpenMergedSegments()
+      throws Exception {
+    var recording = recording("10-copy-gop-exceeds-period.fmp4");
+    var launcher = ScriptedProcessLauncher.writing(recording.file());
+    var jobBuilder = copyJobBuilderFor(recording);
+    // Keyframes at 0 s, 10.01 s and 20.02 s on 6 s slots: slots 2 and 4 merge.
+    jobBuilder
+        .getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(recording.period())
+        .setMediaSegmentCount(3)
+        .addAllSegmentStartSlots(List.of(0, 1, 3));
+    var job = jobBuilder.build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_COMPLETED);
+      assertThat(connection.uploads())
+          .extracting(upload -> upload.metadata().getSegmentName())
+          .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
+    }
+  }
+
+  @Test
+  @DisplayName(
       "Should seek a stream copy to its first segment's listed start when the job carries a"
           + " segment list")
   void shouldSeekAStreamCopyToItsFirstSegmentsListedStartWhenTheJobCarriesASegmentList()
