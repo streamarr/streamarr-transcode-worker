@@ -19,7 +19,7 @@ import lombok.NonNull;
  */
 final class SegmentGrouper {
 
-  private final int periodSeconds;
+  private final SegmentIntervals intervals;
   private final int startSequenceNumber;
   private final long maximumSegmentBytes;
   private final List<Fragment> openFragments = new ArrayList<>();
@@ -35,13 +35,11 @@ final class SegmentGrouper {
    * @param maximumSegmentBytes the most bytes of FFmpeg's fragments the grouper holds for one media
    *     segment, as read, which bounds what it holds rather than the segment rebuilt from them
    */
-  SegmentGrouper(int periodSeconds, int startSequenceNumber, long maximumSegmentBytes) {
-    if (periodSeconds <= 0 || startSequenceNumber < 0) {
+  SegmentGrouper(
+      @NonNull SegmentIntervals intervals, int startSequenceNumber, long maximumSegmentBytes) {
+    if (startSequenceNumber < 0) {
       throw new IllegalArgumentException(
-          "Period must be positive and start sequence number non-negative, got: "
-              + periodSeconds
-              + " and "
-              + startSequenceNumber);
+          "Start sequence number must be non-negative, got: " + startSequenceNumber);
     }
 
     if (maximumSegmentBytes <= 0) {
@@ -49,7 +47,7 @@ final class SegmentGrouper {
           "Segment cap must be positive, got: " + maximumSegmentBytes);
     }
 
-    this.periodSeconds = periodSeconds;
+    this.intervals = intervals;
     this.startSequenceNumber = startSequenceNumber;
     this.maximumSegmentBytes = maximumSegmentBytes;
   }
@@ -217,7 +215,7 @@ final class SegmentGrouper {
   }
 
   private long sequenceNumberOf(VideoStart keyframe) {
-    return Math.floorDiv(keyframe.presentationTime(), periodSeconds * keyframe.timescale());
+    return intervals.numberAt(keyframe.presentationTime(), keyframe.timescale());
   }
 
   private long nextDeliverableNumber() {

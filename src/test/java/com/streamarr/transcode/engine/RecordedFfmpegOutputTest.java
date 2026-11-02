@@ -366,7 +366,7 @@ class RecordedFfmpegOutputTest {
       shouldDeliverTheSegmentTheSkippingKeyframeClosedThenFailWhenSourceKeyframesAreFurtherApartThanThePeriod()
           throws IOException {
     var units = read("10-copy-gop-exceeds-period.fmp4");
-    var grouper = new SegmentGrouper(6, 0, Mp4Stream.SEGMENT_CAP);
+    var grouper = new SegmentGrouper(SegmentIntervals.onPlainGrid(6), 0, Mp4Stream.SEGMENT_CAP);
     var outcomes = units.fragments().subList(0, 21).stream().map(grouper::accept).toList();
     var segmentOne = segmentOf(1, units.fragments().subList(10, 20));
 
@@ -439,7 +439,9 @@ class RecordedFfmpegOutputTest {
     var units = read(recording.file());
     var grouper =
         new SegmentGrouper(
-            recording.period(), recording.startSequenceNumber(), maximumSegmentBytes);
+            SegmentIntervals.onPlainGrid(recording.period()),
+            recording.startSequenceNumber(),
+            maximumSegmentBytes);
     var delivered = new ArrayList<MediaSegment>();
     for (var index = 0; index < units.fragments().size(); index++) {
       try {

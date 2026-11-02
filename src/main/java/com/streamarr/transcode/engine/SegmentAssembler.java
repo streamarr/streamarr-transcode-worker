@@ -52,9 +52,10 @@ final class SegmentAssembler {
       long maximumSegmentBytes,
       @NonNull Optional<OutputFrameRate> encodedFrameRate,
       @NonNull VideoDecision videoDecision) {
-    this.grouper = new SegmentGrouper(periodSeconds, startSequenceNumber, maximumSegmentBytes);
-    this.audio = new AudioSampleQueue(periodSeconds, startSequenceNumber);
-    this.video = new VideoProgress(periodSeconds);
+    var intervals = SegmentIntervals.onPlainGrid(periodSeconds);
+    this.grouper = new SegmentGrouper(intervals, startSequenceNumber, maximumSegmentBytes);
+    this.audio = new AudioSampleQueue(intervals, startSequenceNumber);
+    this.video = new VideoProgress(intervals);
     this.maximumSegmentBytes = maximumSegmentBytes;
     this.encodedFrameRate = encodedFrameRate;
     this.videoDecision = videoDecision;
