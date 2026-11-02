@@ -7,6 +7,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 /**
  * ADR 0050's downmix filter: floating point, the named matrix in FFmpeg's pan filter, and a limiter
@@ -119,23 +120,18 @@ final class DownmixFilter {
       graph.append(limit).append("[g").append(group).append(']');
     }
 
+    // A channel that no limiter group holds joins as its own one-channel input.
     for (var speaker : speakers) {
       var group = groupOf(speaker, groups);
-      if (group.isEmpty()) {
-        map.add(joined.size() + ".0-" + speaker);
-        joined.add("[c" + speakers.indexOf(speaker) + "]");
-        continue;
-      }
-
-      var channels = group.orElseThrow();
-      if (channels.getFirst() != speaker) {
-        continue;
-      }
-
-      var input = joined.size();
-      joined.add("[g" + groups.indexOf(channels) + "]");
-      for (var channel = 0; channel < channels.size(); channel++) {
-        map.add(input + "." + channel + "-" + channels.get(channel));
+      var channels = group.orElseGet(() -> List.of(speaker));
+      if (channels.getFirst() == speaker) {
+        var input = joined.size();
+        joined.add(
+            group
+                .map(limited -> "[g" + groups.indexOf(limited) + "]")
+                .orElseGet(() -> "[c" + speakers.indexOf(speaker) + "]"));
+        IntStream.range(0, channels.size())
+            .forEach(channel -> map.add(input + "." + channel + "-" + channels.get(channel)));
       }
     }
 
