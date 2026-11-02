@@ -28,13 +28,13 @@ import lombok.NonNull;
  * drops.
  *
  * <p>Until the host shows congestion, the background limit grows by 1 for each probe that ends
- * while it is busy. A probe that times out without applying a brake, after a timed-out probe
- * applied the latest brake, shows congestion: it timed out beside that probe, so the host, not one
- * file, is slow. From the limit at that moment upward, the limit then grows by 1 only once every
- * probe that ran at its previous growth has ended, and never while a probe has run for a quarter of
- * the probe timeout. The server cancels a probe at the timeout only after the delay of the timeout
- * itself, so without these rules fast probes would grow the limit back to the overload long before
- * the next timeout arrived. The congestion clears when the limit grows back to its maximum.
+ * while it is busy. A probe that started before a brake that a timed-out probe applied, and then
+ * times out too, shows congestion: it timed out beside that probe, so the host, not one file, is
+ * slow. From the limit at that moment upward, the limit then grows by 1 only once every probe that
+ * ran at its previous growth has ended, and never while a probe has run for a quarter of the probe
+ * timeout. The server cancels a probe at the timeout only after the delay of the timeout itself, so
+ * without these rules fast probes would grow the limit back to the overload long before the next
+ * timeout arrived. The congestion clears when the limit grows back to its maximum.
  *
  * <p>Each change to the granted capacities runs the change callback once, outside this object's
  * monitor.
@@ -138,8 +138,9 @@ final class ProbeCapacities {
 
   /**
    * Brakes the background limit when the server cancels a probe at the probe timeout and the probe
-   * started after the latest brake; otherwise the timeout shows congestion when a timed-out probe
-   * applied that brake. The probe keeps its unit until {@link #releaseTimedOut} frees it.
+   * started after the latest brake; a probe that started before a brake that a timed-out probe
+   * applied shows congestion instead. The probe keeps its unit until {@link #releaseTimedOut} frees
+   * it.
    */
   void probeTimedOut(@NonNull CountedProbe probe) {
     changeCapacities(
@@ -154,7 +155,7 @@ final class ProbeCapacities {
             return;
           }
 
-          if (latestBrakeForTimedOutProbe) {
+          if (latestBrakeForTimedOutProbe && probe.brakesAppliedAtStart() < brakesApplied) {
             showCongestion(probe);
           }
         });

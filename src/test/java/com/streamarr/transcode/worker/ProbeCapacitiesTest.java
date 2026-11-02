@@ -559,22 +559,51 @@ class ProbeCapacitiesTest {
 
   @Test
   @DisplayName(
-      "Should show no congestion when a probe that started before a job attempt's brake times out")
-  void shouldShowNoCongestionWhenAProbeThatStartedBeforeAJobAttemptsBrakeTimesOut() {
+      "Should show no congestion when a probe times out after a job attempt applied the latest"
+          + " brake")
+  void shouldShowNoCongestionWhenAProbeTimesOutAfterAJobAttemptAppliedTheLatestBrake() {
     var capacities = adaptive(16);
-    var startedBeforeBrake = acquire(capacities, ProbeKind.BACKGROUND, 1);
+    var startedBeforeBrakes = acquire(capacities, ProbeKind.BACKGROUND, 2);
+    timeOut(capacities, startedBeforeBrakes.getFirst());
+    clock.advance(Duration.ofSeconds(15));
     var attempt = UUID.randomUUID();
     capacities.jobAttemptStarted(attempt);
     capacities.jobAttemptEnded(attempt);
-    clock.advance(Duration.ofMinutes(1));
-    timeOut(capacities, startedBeforeBrake.getFirst());
-    var probes = acquire(capacities, ProbeKind.BACKGROUND, 2);
+    clock.advance(Duration.ofSeconds(45));
+    timeOut(capacities, startedBeforeBrakes.getLast());
+    clock.advance(Duration.ofSeconds(30));
+    acquire(capacities, ProbeKind.PLAYBACK, 1);
+    var probes = acquire(capacities, ProbeKind.BACKGROUND, 1);
 
     clock.advance(Duration.ofSeconds(20));
     capacities.release(probes.getFirst());
 
     assertThat(capacities.granted().backgroundProbeCapacity())
-        .as("A job attempt, not a timed-out probe, applied the latest brake")
+        .as("The playback probe has run for 20 s, but a job attempt applied the latest brake")
+        .isEqualTo(2);
+  }
+
+  @Test
+  @DisplayName(
+      "Should show no congestion when a probe that started after the latest brake times out within"
+          + " 15 s of it")
+  void shouldShowNoCongestionWhenAProbeThatStartedAfterTheLatestBrakeTimesOutWithin15SOfIt() {
+    var capacities = adaptive(16);
+    var braking = acquire(capacities, ProbeKind.BACKGROUND, 1);
+    clock.advance(Duration.ofSeconds(5));
+    timeOut(capacities, braking.getFirst());
+    clock.advance(Duration.ofSeconds(1));
+    var startedAfterBrake = acquire(capacities, ProbeKind.BACKGROUND, 1);
+    clock.advance(Duration.ofSeconds(5));
+    timeOut(capacities, startedAfterBrake.getFirst());
+    clock.advance(Duration.ofSeconds(30));
+    var probes = acquire(capacities, ProbeKind.BACKGROUND, 2);
+
+    clock.advance(Duration.ofSeconds(2));
+    capacities.release(probes.getFirst());
+
+    assertThat(capacities.granted().backgroundProbeCapacity())
+        .as("Only the 15 s spacing kept the second timeout from braking")
         .isEqualTo(3);
   }
 
