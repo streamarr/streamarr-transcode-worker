@@ -22,6 +22,11 @@ public enum ProducerFailure {
    * awaiting their audio, while no delivery is in flight to free room.
    */
   SEGMENT_CAP_EXCEEDED,
+  /**
+   * A box or fragment of the copy of the source that the encoding FFmpeg reads through the Dolby
+   * Vision RPU mover is larger than what the mover reads, which no segment boundary changes.
+   */
+  COPY_UNIT_TOO_LARGE,
   /** A keyframe skipped a segment number, so the source has no keyframe inside that interval. */
   SKIPPED_SEGMENT_NUMBER,
   /**

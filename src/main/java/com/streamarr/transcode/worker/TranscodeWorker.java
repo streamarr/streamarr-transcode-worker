@@ -709,6 +709,7 @@ public final class TranscodeWorker implements AutoCloseable {
       case NOT_AN_AUDIO_STREAM -> JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION;
       case SEGMENT_CAP_EXCEEDED -> JobAttemptFailure.JOB_ATTEMPT_FAILURE_SEGMENT_CAP_EXCEEDED;
       case PROCESS_EXITED_WITH_ERROR,
+          COPY_UNIT_TOO_LARGE,
           NO_MEDIA_SEGMENT,
           SEGMENT_NOT_ACCEPTED,
           TRUNCATED_OUTPUT,
