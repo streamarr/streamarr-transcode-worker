@@ -24,6 +24,9 @@ import java.util.OptionalInt;
 // Domain and protobuf contracts intentionally share simple names.
 final class WorkerVariantJobMapper {
 
+  // ADR 0050 caps an AAC encode at 5.1.
+  private static final int AAC_MAXIMUM_CHANNELS = 6;
+
   private final WorkerMediaSourceResolver sourceResolver;
 
   WorkerVariantJobMapper(WorkerMediaSourceResolver sourceResolver) {
@@ -143,7 +146,7 @@ final class WorkerVariantJobMapper {
   }
 
   // The contract refuses a layout on a job that does not encode audio, a value that it does not
-  // define, and a channel count other than the layout's.
+  // define, a channel count other than the layout's, and an AAC layout of more than 6 channels.
   @SuppressWarnings("checkstyle:fullyQualifiedName")
   private static Optional<SpeakerLayout> channelLayout(
       build.buf.gen.streamarr.transcode.v1.AudioDecision audio) {
@@ -165,6 +168,11 @@ final class WorkerVariantJobMapper {
               + layout.channelCount()
               + " channels, but the job names "
               + audio.getChannels());
+    }
+
+    if ("aac".equals(audio.getCodec()) && layout.channelCount() > AAC_MAXIMUM_CHANNELS) {
+      throw new InvalidJobSpecificationException(
+          "AAC carries at most 6 channels, but the job names " + layout.name());
     }
 
     return Optional.of(layout);

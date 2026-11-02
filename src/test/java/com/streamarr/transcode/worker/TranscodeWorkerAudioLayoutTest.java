@@ -32,6 +32,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import tools.jackson.databind.ObjectMapper;
 
@@ -153,6 +154,20 @@ class TranscodeWorkerAudioLayoutTest {
       throws Exception {
     assertRefusedAsAnInvalidSpecification(
         layoutJob(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_QUAD, 6));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({
+    "AUDIO_CHANNEL_LAYOUT_SIX_POINT_ONE, 7",
+    "AUDIO_CHANNEL_LAYOUT_SIX_POINT_ONE_BACK, 7",
+    "AUDIO_CHANNEL_LAYOUT_SEVEN_POINT_ONE, 8",
+    "AUDIO_CHANNEL_LAYOUT_SEVEN_POINT_ONE_WIDE, 8"
+  })
+  @DisplayName(
+      "Should refuse the job as an invalid specification when AAC names a layout of more than 6 channels")
+  void shouldRefuseTheJobAsAnInvalidSpecificationWhenAacNamesALayoutOfMoreThan6Channels(
+      AudioChannelLayout layout, int channels) throws Exception {
+    assertRefusedAsAnInvalidSpecification(layoutJob(layout, channels));
   }
 
   private void assertRefusedAsAnInvalidSpecification(VariantJob job) throws Exception {
