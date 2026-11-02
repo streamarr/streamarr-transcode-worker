@@ -204,7 +204,7 @@ class SourceEndRuleTest {
             .build();
     var rule =
         SourceEndRule.builder()
-            .periodSeconds(6)
+            .intervals(SegmentIntervals.onPlainGrid(6))
             .mediaSegmentCount(14)
             .video(held())
             .copiesAudio(true)
@@ -232,7 +232,7 @@ class SourceEndRuleTest {
             .build();
     var rule =
         SourceEndRule.builder()
-            .periodSeconds(6)
+            .intervals(SegmentIntervals.onPlainGrid(6))
             .mediaSegmentCount(14)
             .video(VideoDecisionFixtures.encodeBuilder().streamIndex(VIDEO_INDEX).build())
             .copiesAudio(copiesAudio)
@@ -337,7 +337,11 @@ class SourceEndRuleTest {
 
   // 14 segments of 6 s: the last advertised segment, 13, runs from 78 s to 84 s.
   private static SourceEndRule ruleFor(VideoDecision video) {
-    return SourceEndRule.builder().periodSeconds(6).mediaSegmentCount(14).video(video).build();
+    return SourceEndRule.builder()
+        .intervals(SegmentIntervals.onPlainGrid(6))
+        .mediaSegmentCount(14)
+        .video(video)
+        .build();
   }
 
   private static VideoDecision copy() {

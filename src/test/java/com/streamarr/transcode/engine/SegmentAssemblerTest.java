@@ -210,7 +210,7 @@ class SegmentAssemblerTest {
 
   private static SegmentAssembler.SegmentAssemblerBuilder assemblerOfOneSecondSegments() {
     return SegmentAssembler.builder()
-        .periodSeconds(1)
+        .intervals(SegmentIntervals.onPlainGrid(1))
         .startSequenceNumber(0)
         .maximumSegmentBytes(Mp4Stream.SEGMENT_CAP)
         .encodedFrameRate(Optional.empty())
@@ -327,7 +327,7 @@ class SegmentAssemblerTest {
 
   private static SegmentAssembler.SegmentAssemblerBuilder assembler() {
     return SegmentAssembler.builder()
-        .periodSeconds(6)
+        .intervals(SegmentIntervals.onPlainGrid(6))
         .startSequenceNumber(0)
         .maximumSegmentBytes(1024);
   }

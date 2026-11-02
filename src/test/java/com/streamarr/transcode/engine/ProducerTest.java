@@ -179,6 +179,7 @@ class ProducerTest {
             })
         .pipeline(new FfmpegPipeline.SingleProcess(List.of("ffmpeg")))
         .jobAttemptId(JOB_ATTEMPT_ID)
+        .intervals(SegmentIntervals.onPlainGrid(6))
         .gracePeriod(Duration.ofSeconds(5))
         .stallTimeout(Duration.ofMinutes(1))
         .memoryBudget(SegmentMemoryBudget.forSlots(1))
@@ -2115,7 +2116,10 @@ class ProducerTest {
     var encode = VideoDecisionFixtures.encodeBuilder().codecString(codecString);
 
     var producer =
-        producerLaunching(process).periodSeconds(6).videoDecision(encode.build()).start();
+        producerLaunching(process)
+            .intervals(SegmentIntervals.onPlainGrid(6))
+            .videoDecision(encode.build())
+            .start();
 
     var failure = failureOf(producer);
     assertThat(failure.reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
@@ -2158,7 +2162,10 @@ class ProducerTest {
         VideoDecisionFixtures.encodeBuilder().codecString("avc1." + profileConstraintsAndLevel);
 
     var producer =
-        producerLaunching(process).periodSeconds(6).videoDecision(encode.build()).start();
+        producerLaunching(process)
+            .intervals(SegmentIntervals.onPlainGrid(6))
+            .videoDecision(encode.build())
+            .start();
 
     var failure = failureOf(producer);
     assertThat(failure.reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
@@ -2222,7 +2229,7 @@ class ProducerTest {
 
     var producer =
         producerLaunching(process)
-            .periodSeconds(6)
+            .intervals(SegmentIntervals.onPlainGrid(6))
             .videoDecision(VideoDecisionFixtures.copyOf("hvc1.1.6.L93.90"))
             .start();
 
@@ -2256,7 +2263,7 @@ class ProducerTest {
 
     var producer =
         producerLaunching(process)
-            .periodSeconds(6)
+            .intervals(SegmentIntervals.onPlainGrid(6))
             .videoDecision(VideoDecisionFixtures.copyOf(recordWithoutParameterSets.codecString()))
             .start();
 
@@ -2308,7 +2315,7 @@ class ProducerTest {
 
     var producer =
         producerLaunching(process)
-            .periodSeconds(6)
+            .intervals(SegmentIntervals.onPlainGrid(6))
             .videoDecision(VideoDecisionFixtures.copyOf("hvc1.1.6.L90.90"))
             .start();
 
@@ -2746,7 +2753,7 @@ class ProducerTest {
             IsoBoxes.moov(IsoBoxes.Track.video().sampleEntry(new byte[0]).build()));
     var process = ScriptedProcess.builder().output(output).build();
 
-    var producer = producerLaunching(process).periodSeconds(6).start();
+    var producer = producerLaunching(process).intervals(SegmentIntervals.onPlainGrid(6)).start();
 
     assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.MALFORMED_OUTPUT);
     assertThat(sink.acceptedNames()).isEmpty();
@@ -2760,7 +2767,7 @@ class ProducerTest {
     var output = IsoBoxes.concat(IsoBoxes.ftyp(), IsoBoxes.moov(IsoBoxes.Track.audio().build()));
     var process = ScriptedProcess.builder().output(output).build();
 
-    var producer = producerLaunching(process).periodSeconds(6).start();
+    var producer = producerLaunching(process).intervals(SegmentIntervals.onPlainGrid(6)).start();
 
     assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH);
     assertThat(sink.acceptedNames()).isEmpty();
@@ -3871,7 +3878,7 @@ class ProducerTest {
     return producerLaunching(process)
         .encodedFrameRate(encodedFrameRate)
         .videoDecision(VideoDecisionFixtures.forRecording(recording))
-        .periodSeconds(recording.period())
+        .intervals(SegmentIntervals.onPlainGrid(recording.period()))
         .startSequenceNumber(recording.startSequenceNumber());
   }
 
@@ -4088,7 +4095,9 @@ class ProducerTest {
   }
 
   private Producer.ProducerBuilder producerOfOneSecondSegments(ScriptedProcess process) {
-    return producerLaunching(process).periodSeconds(1).startSequenceNumber(0);
+    return producerLaunching(process)
+        .intervals(SegmentIntervals.onPlainGrid(1))
+        .startSequenceNumber(0);
   }
 
   // The parameter-set record with an array of one SEI message between its VPS and its SPS.

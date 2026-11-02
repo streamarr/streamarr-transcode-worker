@@ -102,6 +102,7 @@ public final class Producer {
   /**
    * Starts FFmpeg and reads its output until the attempt settles.
    *
+   * @param intervals the media segments' intervals, on which the producer groups the output
    * @param gracePeriod how long FFmpeg may take to exit once its output ends and the sink has
    *     accepted its last segment, after a stop asks it to quit, and after the producer asks it to
    *     terminate
@@ -130,7 +131,7 @@ public final class Producer {
       @NonNull ProcessLauncher launcher,
       @NonNull FfmpegPipeline pipeline,
       @NonNull UUID jobAttemptId,
-      int periodSeconds,
+      @NonNull SegmentIntervals intervals,
       int startSequenceNumber,
       int mediaSegmentCount,
       boolean copiesAudio,
@@ -148,7 +149,7 @@ public final class Producer {
             .jobAttemptId(jobAttemptId)
             .assembler(
                 SegmentAssembler.builder()
-                    .periodSeconds(periodSeconds)
+                    .intervals(intervals)
                     .startSequenceNumber(startSequenceNumber)
                     .maximumSegmentBytes(MAXIMUM_SEGMENT_BYTES)
                     .encodedFrameRate(encodedFrameRate)
@@ -162,7 +163,7 @@ public final class Producer {
             .clock(clock)
             .sourceEndRule(
                 SourceEndRule.builder()
-                    .periodSeconds(periodSeconds)
+                    .intervals(intervals)
                     .mediaSegmentCount(mediaSegmentCount)
                     .video(videoDecision)
                     .copiesAudio(copiesAudio)

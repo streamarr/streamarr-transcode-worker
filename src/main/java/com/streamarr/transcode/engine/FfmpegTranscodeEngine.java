@@ -58,7 +58,7 @@ public class FfmpegTranscodeEngine {
             .launcher(launcher)
             .pipeline(pipeline)
             .jobAttemptId(request.attemptId())
-            .periodSeconds(request.targetSegmentDuration())
+            .intervals(SegmentIntervals.onPlainGrid(request.targetSegmentDuration()))
             .startSequenceNumber(request.startSequenceNumber())
             .mediaSegmentCount(request.mediaSegmentCount())
             .copiesAudio(request.transcodeDecision().audioDecision().mode() == AudioMode.COPY)

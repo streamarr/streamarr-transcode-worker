@@ -209,7 +209,7 @@ class ProcessBuilderLauncherTest {
         .launcher(launcher)
         .pipeline(new FfmpegPipeline.SingleProcess(List.of("bash", "-c", script, argument)))
         .jobAttemptId(UUID.randomUUID())
-        .periodSeconds(6)
+        .intervals(SegmentIntervals.onPlainGrid(6))
         .startSequenceNumber(0)
         .gracePeriod(Duration.ofSeconds(5))
         .stallTimeout(Duration.ofMinutes(1))

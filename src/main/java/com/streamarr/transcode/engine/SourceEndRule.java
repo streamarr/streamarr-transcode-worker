@@ -28,7 +28,12 @@ import lombok.NonNull;
  */
 @Builder
 record SourceEndRule(
-    int periodSeconds, int mediaSegmentCount, @NonNull VideoDecision video, boolean copiesAudio) {
+    @NonNull SegmentIntervals intervals,
+    int mediaSegmentCount,
+    @NonNull VideoDecision video,
+    boolean copiesAudio) {
+
+  private static final long NANOSECONDS_PER_SECOND = Duration.ofSeconds(1).toNanos();
 
   SourceEnd reportOn(List<ObservedSourceStream> streams, OptionalInt lastDeliveredMediaSegment) {
     var ends =
@@ -64,7 +69,7 @@ record SourceEndRule(
   }
 
   private EndedEarly endedEarlyIn(long segment, List<ObservedSourceStream> streams) {
-    var segmentEnd = Duration.ofSeconds((segment + 1) * periodSeconds);
+    var segmentEnd = Duration.ofNanos(intervals.endOf(segment, NANOSECONDS_PER_SECOND));
     var streamsWithMediaAfter =
         streams.stream()
             .filter(stream -> stream.sourceIndex() != video.streamIndex())
@@ -94,6 +99,6 @@ record SourceEndRule(
   }
 
   private long segmentAt(Duration presentationTime) {
-    return Math.floorDiv(presentationTime.toNanos(), Duration.ofSeconds(periodSeconds).toNanos());
+    return intervals.numberAt(presentationTime.toNanos(), NANOSECONDS_PER_SECOND);
   }
 }
