@@ -23,6 +23,8 @@ import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import com.streamarr.transcode.probe.FfprobeExecutor;
 import com.streamarr.transcode.probe.ProbeCommand;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -158,13 +160,9 @@ class TranscodeWorkerAudioLayoutTest {
     start.get(5, TimeUnit.SECONDS);
     stopVariant(connection, job);
 
-    await()
-        .atMost(Duration.ofSeconds(5))
-        .untilAsserted(
-            () ->
-                assertThat(eventsOf(connection))
-                    .containsExactly(EstablishWorkerSessionRequest.EventCase.JOB_ATTEMPT_STOPPED));
-    await().atMost(Duration.ofSeconds(5)).until(ffprobe::wasDestroyedForcibly);
+    assertThat(eventsOf(connection))
+        .containsExactly(EstablishWorkerSessionRequest.EventCase.JOB_ATTEMPT_STOPPED);
+    ffprobe.awaitKilled();
     assertThat(launcher.hasLaunchedAny()).isFalse();
   }
 
@@ -192,7 +190,7 @@ class TranscodeWorkerAudioLayoutTest {
         .atMost(Duration.ofSeconds(5))
         .untilAsserted(
             () -> assertFailedAs(connection, JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED));
-    await().atMost(Duration.ofSeconds(5)).until(ffprobe::wasDestroyedForcibly);
+    ffprobe.awaitKilled();
     assertThat(launcher.hasLaunchedAny()).isFalse();
   }
 
@@ -377,7 +375,8 @@ class TranscodeWorkerAudioLayoutTest {
    */
   private final class SilentFfprobe {
 
-    private final CompletableFuture<ScriptedProcess> launched = new CompletableFuture<>();
+    private final CompletableFuture<Void> launched = new CompletableFuture<>();
+    private final CompletableFuture<Void> killed = new CompletableFuture<>();
 
     FfprobeExecutor executor() {
       return new FfprobeExecutor(
@@ -394,8 +393,8 @@ class TranscodeWorkerAudioLayoutTest {
               silentProcesses.add(process);
             }
 
-            launched.complete(process);
-            return process;
+            launched.complete(null);
+            return new KillSignalling(process, killed);
           });
     }
 
@@ -403,8 +402,67 @@ class TranscodeWorkerAudioLayoutTest {
       launched.get(5, TimeUnit.SECONDS);
     }
 
-    boolean wasDestroyedForcibly() {
-      return launched.isDone() && launched.join().wasDestroyedForcibly();
+    void awaitKilled() throws Exception {
+      killed.get(5, TimeUnit.SECONDS);
+    }
+  }
+
+  /** A process that completes {@code killed} when the worker kills it. */
+  private static final class KillSignalling extends Process {
+
+    private final ScriptedProcess process;
+    private final CompletableFuture<Void> killed;
+
+    private KillSignalling(ScriptedProcess process, CompletableFuture<Void> killed) {
+      this.process = process;
+      this.killed = killed;
+    }
+
+    @Override
+    public Process destroyForcibly() {
+      process.destroyForcibly();
+      killed.complete(null);
+      return this;
+    }
+
+    @Override
+    public void destroy() {
+      process.destroy();
+    }
+
+    @Override
+    public OutputStream getOutputStream() {
+      return process.getOutputStream();
+    }
+
+    @Override
+    public InputStream getInputStream() {
+      return process.getInputStream();
+    }
+
+    @Override
+    public InputStream getErrorStream() {
+      return process.getErrorStream();
+    }
+
+    @Override
+    public int waitFor() throws InterruptedException {
+      return process.waitFor();
+    }
+
+    @Override
+    public CompletableFuture<Process> onExit() {
+      return process.onExit().thenApply(_ -> this);
+    }
+
+    @Override
+    public boolean isAlive() {
+      return process.isAlive();
+    }
+
+    @Override
+    public int exitValue() {
+      return process.exitValue();
     }
   }
 
