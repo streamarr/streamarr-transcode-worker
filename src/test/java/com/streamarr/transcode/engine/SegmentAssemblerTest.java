@@ -104,6 +104,33 @@ class SegmentAssemblerTest {
 
   @Test
   @DisplayName(
+      "Should drop the padded audio that starts at or after the advertised end, without counting"
+          + " it late, when an attempt pads its audio with silence")
+  void shouldDropThePaddedAudioThatStartsAtOrAfterTheAdvertisedEndWhenAnAttemptPadsItsAudio()
+      throws IOException {
+    var output =
+        Mp4Stream.read(
+            Mp4Stream.readerOf(
+                IsoBoxes.concat(
+                    IsoBoxes.ftyp(),
+                    IsoBoxes.videoAndAudioMoov(),
+                    keyframeWithAudio(0, 0, 24_000, 24_000),
+                    keyframeWithAudio(24_000, 48_000, 12_000, 12_000, 12_000, 12_000))));
+    var assembler =
+        assemblerOfOneSecondSegments()
+            .paddedAudioEnd(Optional.of(Duration.ofMillis(1_500)))
+            .build();
+
+    var closed = assembleEvery(assembler, output);
+
+    assertThat(audioStartsOf(output, closed.getLast()))
+        .as("segment 1 up to the advertised end at 1.5 s; the last sample keeps its full length")
+        .containsExactly(48_000L, 60_000L);
+    assertThat(assembler.droppedLateAudioSampleCount()).isZero();
+  }
+
+  @Test
+  @DisplayName(
       "Should close the last media segment within the segment cap when audio past its interval"
           + " outgrows the cap")
   void shouldCloseTheLastMediaSegmentWithinTheSegmentCapWhenAudioPastItsIntervalOutgrowsTheCap()
@@ -172,7 +199,12 @@ class SegmentAssemblerTest {
             "encodedFrameRate",
             assembler().videoDecision(VideoDecisionFixtures.encodeBuilder().build())),
         Arguments.of(
-            "videoDecision", assembler().encodedFrameRate(Optional.<OutputFrameRate>empty())));
+            "videoDecision", assembler().encodedFrameRate(Optional.<OutputFrameRate>empty())),
+        Arguments.of(
+            "paddedAudioEnd",
+            assembler()
+                .encodedFrameRate(Optional.<OutputFrameRate>empty())
+                .videoDecision(VideoDecisionFixtures.encodeBuilder().build())));
   }
 
   private static SegmentAssembler.SegmentAssemblerBuilder assemblerOfOneSecondSegments() {
@@ -181,7 +213,8 @@ class SegmentAssemblerTest {
         .startSequenceNumber(0)
         .maximumSegmentBytes(Mp4Stream.SEGMENT_CAP)
         .encodedFrameRate(Optional.empty())
-        .videoDecision(VideoDecisionFixtures.copyOf("avc1.64000A"));
+        .videoDecision(VideoDecisionFixtures.copyOf("avc1.64000A"))
+        .paddedAudioEnd(Optional.empty());
   }
 
   // Every segment the units close, the initialization segment first, then those the end closes.

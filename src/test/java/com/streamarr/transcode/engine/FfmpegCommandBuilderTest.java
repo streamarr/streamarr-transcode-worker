@@ -2123,6 +2123,233 @@ class FfmpegCommandBuilderTest {
     assertThat(pipe.encodeCommand()).containsSequence("-c:a", "copy").doesNotContain("-ac");
   }
 
+  // --- Held last frame and silence padding up to the advertised end ---
+
+  @Test
+  @DisplayName(
+      "Should repeat the last picture the filters produce and end it at the advertised end when an"
+          + " encode from the start holds the last frame")
+  void shouldRepeatTheLastFilteredPictureUpToTheAdvertisedEndWhenAnEncodeFromTheStartHoldsIt() {
+    var cmd = command(heldAndPadded(TranscodeMode.FULL_TRANSCODE).build(), "libx264");
+
+    assertThat(cmd).doesNotContain("-ss", "-noaccurate_seek");
+    assertThat(videoFilter(cmd))
+        .isEqualTo(
+            "scale=-2:1080"
+                + BT709_LIMITED_SCALE_OPTIONS
+                + ",format=yuv420p,tpad=stop=-1:stop_mode=clone,trim=end=66");
+  }
+
+  @Test
+  @DisplayName(
+      "Should decode from the keyframe its seek reads and trim the start after the hold when an"
+          + " encode that holds the last frame seeks")
+  void shouldTrimTheStartAfterTheHoldWhenAnEncodeThatHoldsTheLastFrameSeeks() {
+    var cmd =
+        command(
+            heldAndPadded(TranscodeMode.FULL_TRANSCODE).startSequenceNumber(10).build(), "libx264");
+
+    assertThat(cmd).containsSequence("-ss", "54", "-noaccurate_seek", "-i");
+    assertThat(videoFilter(cmd))
+        .isEqualTo(
+            "scale=-2:1080"
+                + BT709_LIMITED_SCALE_OPTIONS
+                + ",format=yuv420p,tpad=stop=-1:stop_mode=clone,trim=start=54:end=66");
+  }
+
+  @Test
+  @DisplayName(
+      "Should deinterlace before the scale and hold the deinterlaced picture when an encode of an"
+          + " interlaced source holds the last frame")
+  void shouldHoldTheDeinterlacedPictureWhenAnEncodeOfAnInterlacedSourceHoldsTheLastFrame() {
+    var encode =
+        VideoDecisionFixtures.encodeBuilder()
+            .deinterlace(
+                Optional.of(
+                    new Deinterlace(
+                        Deinterlace.FirstField.TOP, Deinterlace.Output.ONE_FRAME_PER_FIELD)))
+            .holdsLastFrameToAdvertisedEnd(true);
+    var cmd =
+        command(
+            request(encoding(encode))
+                .advertisedEnd(Optional.of(Duration.ofSeconds(66)))
+                .startSequenceNumber(10)
+                .build(),
+            "libx264");
+
+    assertThat(videoFilter(cmd))
+        .startsWith(
+            new Deinterlace(Deinterlace.FirstField.TOP, Deinterlace.Output.ONE_FRAME_PER_FIELD)
+                    .filter()
+                + ",scale=")
+        .endsWith(",format=yuv420p,tpad=stop=-1:stop_mode=clone,trim=start=54:end=66");
+  }
+
+  @ParameterizedTest
+  @CsvSource({"0, 0", "10, 54"})
+  @DisplayName(
+      "Should append digital silence that starts where the attempt starts and runs past the"
+          + " advertised end when an encode pads its audio")
+  void shouldAppendSilenceFromTheAttemptsStartPastTheAdvertisedEndWhenAnEncodePadsItsAudio(
+      int startSequenceNumber, String start) {
+    var cmd =
+        command(
+            heldAndPadded(TranscodeMode.FULL_TRANSCODE)
+                .startSequenceNumber(startSequenceNumber)
+                .build(),
+            "libx264");
+
+    assertThat(cmd)
+        .containsSequence(
+            "-af",
+            "apad,asetpts='if(isnan(PTS),"
+                + start
+                + "/TB+N/SR/TB,PTS)',atrim=start="
+                + start
+                + ":end=67",
+            "-c:a",
+            "aac");
+  }
+
+  @Test
+  @DisplayName(
+      "Should pad the audio from the stream copy's seek position when a stream copy session pads"
+          + " its encoded audio")
+  void shouldPadTheAudioFromTheSeekPositionWhenAStreamCopySessionPadsItsEncodedAudio() {
+    var cmd =
+        command(
+            heldAndPadded(TranscodeMode.AUDIO_TRANSCODE)
+                .startSequenceNumber(5)
+                .seekPosition(Optional.of(Duration.ofMillis(29_500)))
+                .build(),
+            "copy");
+
+    assertThat(cmd)
+        .containsSequence("-ss", "29.5", "-i")
+        .containsSequence(
+            "-af", "apad,asetpts='if(isnan(PTS),29.5/TB+N/SR/TB,PTS)',atrim=start=29.5:end=67")
+        .doesNotContain("-noaccurate_seek", "-vf");
+  }
+
+  @Test
+  @DisplayName(
+      "Should trim the encoded audio at the attempt's start when an encode that holds the last"
+          + " frame seeks without padding its audio")
+  void shouldTrimTheEncodedAudioAtTheStartWhenAHoldingEncodeSeeksWithoutPaddingItsAudio() {
+    var decision =
+        decision(TranscodeMode.FULL_TRANSCODE)
+            .videoDecision(
+                VideoDecisionFixtures.encodeBuilder().holdsLastFrameToAdvertisedEnd(true).build())
+            .build();
+    var cmd =
+        command(
+            request(decision)
+                .advertisedEnd(Optional.of(Duration.ofSeconds(66)))
+                .startSequenceNumber(10)
+                .build(),
+            "libx264");
+
+    assertThat(cmd).containsSequence("-af", "atrim=start=54", "-c:a", "aac");
+  }
+
+  @Test
+  @DisplayName(
+      "Should hold no frame, pad no audio and keep FFmpeg's exact seek when an encode carries no"
+          + " early-end instruction")
+  void shouldHoldNoFramePadNoAudioAndKeepTheExactSeekWhenAnEncodeCarriesNoEarlyEndInstruction() {
+    var cmd =
+        command(request(TranscodeMode.FULL_TRANSCODE).startSequenceNumber(10).build(), "libx264");
+
+    assertThat(cmd).doesNotContain("-noaccurate_seek", "-af");
+    assertThat(videoFilter(cmd)).doesNotContain("tpad", "trim");
+  }
+
+  @Test
+  @DisplayName(
+      "Should pad in the copying FFmpeg and hold the frame after the encode's start trim when a"
+          + " profile 5 encode holds and pads")
+  void shouldPadInTheCopyAndHoldAfterTheStartTrimWhenAProfile5EncodeHoldsAndPads() {
+    var decision =
+        decision(TranscodeMode.FULL_TRANSCODE)
+            .videoDecision(
+                profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE)
+                    .holdsLastFrameToAdvertisedEnd(true)
+                    .build())
+            .audioDecision(paddedAac())
+            .build();
+    var pipe =
+        rpuMovingPipe(
+            builder.buildPipeline(
+                job(
+                    request(decision)
+                        .advertisedEnd(Optional.of(Duration.ofSeconds(66)))
+                        .startSequenceNumber(10)
+                        .build(),
+                    "libx264")));
+
+    assertThat(pipe.copyCommand())
+        .containsSequence("-ss", "54", "-noaccurate_seek", "-i")
+        .containsSequence(
+            "-af", "apad,asetpts='if(isnan(PTS),54/TB+N/SR/TB,PTS)',atrim=start=54:end=67");
+    assertThat(videoFilter(pipe.encodeCommand()))
+        .startsWith("scale=")
+        .endsWith("tpad=stop=-1:stop_mode=clone,trim=start=54:end=66");
+    assertThat(pipe.encodeCommand()).doesNotContain("-af");
+  }
+
+  @Test
+  @DisplayName(
+      "Should pad the libopus audio of the copying FFmpeg when a profile 5 encode pads Opus audio")
+  void shouldPadTheLibopusAudioOfTheCopyingFfmpegWhenAProfile5EncodePadsOpusAudio() {
+    var decision =
+        decision(TranscodeMode.FULL_TRANSCODE)
+            .videoDecision(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE).build())
+            .audioDecision(
+                AudioDecision.builder()
+                    .mode(AudioMode.TRANSCODE)
+                    .codec("opus")
+                    .channels(2)
+                    .bitrate(128_000L)
+                    .padsWithSilenceToAdvertisedEnd(true)
+                    .build())
+            .build();
+    var pipe =
+        rpuMovingPipe(
+            builder.buildPipeline(
+                job(
+                    request(decision).advertisedEnd(Optional.of(Duration.ofSeconds(66))).build(),
+                    "libx264")));
+
+    assertThat(pipe.copyCommand())
+        .containsSequence(
+            "-af",
+            "apad,asetpts='if(isnan(PTS),0/TB+N/SR/TB,PTS)',atrim=start=0:end=67",
+            "-c:a",
+            "libopus");
+  }
+
+  // An encode that holds the last frame and pads its audio up to an advertised end of 66 s, the
+  // end of the request's 11 segments of 6 s.
+  private static TranscodeRequest.TranscodeRequestBuilder heldAndPadded(TranscodeMode mode) {
+    var decision = decision(mode).audioDecision(paddedAac());
+    if (mode.encodesVideo()) {
+      decision.videoDecision(
+          VideoDecisionFixtures.encodeBuilder().holdsLastFrameToAdvertisedEnd(true).build());
+    }
+
+    return request(decision.build()).advertisedEnd(Optional.of(Duration.ofSeconds(66)));
+  }
+
+  private static AudioDecision paddedAac() {
+    return AudioDecision.builder()
+        .mode(AudioMode.TRANSCODE)
+        .codec("aac")
+        .channels(2)
+        .bitrate(128_000L)
+        .padsWithSilenceToAdvertisedEnd(true)
+        .build();
+  }
+
   private static VideoDecision.Encode.EncodeBuilder profile5Encode(
       DolbyVisionRpuPlacement rpuPlacement) {
     return VideoDecisionFixtures.encodeBuilder()

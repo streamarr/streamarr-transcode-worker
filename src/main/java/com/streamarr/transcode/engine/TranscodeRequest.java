@@ -23,7 +23,8 @@ public record TranscodeRequest(
     int startSequenceNumber,
     int mediaSegmentCount,
     @NonNull Optional<Duration> seekPosition,
-    @NonNull Optional<SourceAudio> sourceAudio) {
+    @NonNull Optional<SourceAudio> sourceAudio,
+    @NonNull Optional<Duration> advertisedEnd) {
 
   public TranscodeRequest {
     if (encoderPreset == null && encodesVideo(transcodeDecision)) {
@@ -43,13 +44,27 @@ public record TranscodeRequest(
       throw new IllegalArgumentException(
           "An audio encode in a named layout requires the chosen audio stream's facts");
     }
+
+    if (advertisedEnd.isEmpty() && holdsOrPads(transcodeDecision)) {
+      throw new IllegalArgumentException(
+          "Holding the last frame or padding with silence requires the advertised end");
+    }
   }
 
   public static TranscodeRequestBuilder builder() {
     return new TranscodeRequestBuilder()
         .seekPosition(Optional.empty())
         .outputFrameRate(Optional.empty())
-        .sourceAudio(Optional.empty());
+        .sourceAudio(Optional.empty())
+        .advertisedEnd(Optional.empty());
+  }
+
+  private static boolean holdsOrPads(TranscodeDecision decision) {
+    var holds =
+        decision.videoDecision() instanceof VideoDecision.Encode encode
+            && encode.holdsLastFrameToAdvertisedEnd();
+    var audio = decision.audioDecision();
+    return holds || (audio != null && audio.padsWithSilenceToAdvertisedEnd());
   }
 
   private static boolean encodesVideo(TranscodeDecision decision) {

@@ -210,6 +210,7 @@ class ProcessBuilderLauncherTest {
         .encodedFrameRate(Optional.<OutputFrameRate>empty())
         .videoDecision(
             VideoDecisionFixtures.copyOf(RecordingFixtures.ENCODED_RECORDING_CODEC_STRING))
+        .paddedAudioEnd(Optional.empty())
         .memoryBudget(SegmentMemoryBudget.forSlots(1))
         .sink(sink)
         .clock(MonotonicClock.system());

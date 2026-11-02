@@ -72,6 +72,9 @@ public sealed interface VideoDecision {
    *     packet of the source stream that it read; false also when it could not tell
    * @param deinterlace how the encode deinterlaces an interlaced source; empty for every other
    *     source
+   * @param holdsLastFrameToAdvertisedEnd whether the encode repeats the last picture its filters
+   *     produce from the source up to the request's advertised end, also when the attempt starts
+   *     after the source's last frame
    */
   @Builder
   record Encode(
@@ -84,7 +87,8 @@ public sealed interface VideoDecision {
       @NonNull VideoDynamicRange sourceDynamicRange,
       @NonNull VideoDynamicRange outputDynamicRange,
       boolean sourcePacketsCarryPresentationTimes,
-      @NonNull Optional<Deinterlace> deinterlace)
+      @NonNull Optional<Deinterlace> deinterlace,
+      boolean holdsLastFrameToAdvertisedEnd)
       implements VideoDecision {
 
     // Lombok builder default — its generated setter assigns it

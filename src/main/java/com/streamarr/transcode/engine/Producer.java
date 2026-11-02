@@ -110,6 +110,8 @@ public final class Producer {
    * @param requiresSoundTrack whether the initialization segment must declare a sound track, as it
    *     must when the job names its audio stream; the producer fails the attempt as not an audio
    *     stream, before it delivers anything, when it declares none
+   * @param paddedAudioEnd the advertised end of an attempt that pads its audio with silence, at or
+   *     after which the producer delivers no audio sample; empty for any other attempt
    * @param memoryBudget the worker's segment memory, which every producer of the worker shares
    * @param clock the clock that times each media segment's production
    * @throws TranscodeException when FFmpeg cannot be started
@@ -126,6 +128,7 @@ public final class Producer {
       @NonNull Optional<OutputFrameRate> encodedFrameRate,
       @NonNull VideoDecision videoDecision,
       boolean requiresSoundTrack,
+      @NonNull Optional<Duration> paddedAudioEnd,
       @NonNull SegmentMemoryBudget memoryBudget,
       @NonNull SegmentSink sink,
       @NonNull MonotonicClock clock) {
@@ -140,6 +143,7 @@ public final class Producer {
                     .encodedFrameRate(encodedFrameRate)
                     .videoDecision(videoDecision)
                     .requiresSoundTrack(requiresSoundTrack)
+                    .paddedAudioEnd(paddedAudioEnd)
                     .build())
             .sink(sink)
             .memoryBudget(memoryBudget)

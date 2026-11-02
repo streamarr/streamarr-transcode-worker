@@ -151,10 +151,17 @@ class ProducerTest {
                 .encodedFrameRate(Optional.<OutputFrameRate>empty())
                 .clock(MonotonicClock.system())),
         Arguments.of(
+            "paddedAudioEnd",
+            producerThatMustNotLaunch()
+                .encodedFrameRate(Optional.<OutputFrameRate>empty())
+                .videoDecision(VideoDecisionFixtures.encodeBuilder().build())
+                .clock(MonotonicClock.system())),
+        Arguments.of(
             "clock",
             producerThatMustNotLaunch()
                 .encodedFrameRate(Optional.<OutputFrameRate>empty())
-                .videoDecision(VideoDecisionFixtures.encodeBuilder().build())));
+                .videoDecision(VideoDecisionFixtures.encodeBuilder().build())
+                .paddedAudioEnd(Optional.empty())));
   }
 
   private static Producer.ProducerBuilder producerThatMustNotLaunch() {
@@ -3721,6 +3728,7 @@ class ProducerTest {
         .encodedFrameRate(Optional.<OutputFrameRate>empty())
         .videoDecision(
             VideoDecisionFixtures.copyOf(RecordingFixtures.ENCODED_RECORDING_CODEC_STRING))
+        .paddedAudioEnd(Optional.empty())
         .memoryBudget(SegmentMemoryBudget.forSlots(1))
         .sink(sink)
         .clock(MonotonicClock.system());

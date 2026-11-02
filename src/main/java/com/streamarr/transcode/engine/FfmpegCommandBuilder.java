@@ -104,6 +104,11 @@ public class FfmpegCommandBuilder {
   static final List<String> MP4_MOVFLAGS =
       List.of("cmaf", "delay_moov", "skip_trailer", "frag_keyframe", "frag_discont");
 
+  // How far past the advertised end the padded audio runs: further than any codec's frame lasts, so
+  // that the encoder writes the frame that holds the advertised end whole. The producer drops every
+  // padded audio sample that starts at or after the advertised end.
+  private static final Duration PADDED_AUDIO_RUN_PAST_ADVERTISED_END = Duration.ofSeconds(1);
+
   // The longest argument Linux passes to a program: MAX_ARG_STRLEN, 32 pages, holds the argument
   // and its terminating NUL, and a page is at least 4 KiB.
   private static final int LONGEST_ARGUMENT_BYTES = 32 * 4096 - 1;
@@ -206,10 +211,11 @@ public class FfmpegCommandBuilder {
               .bitrate(audio.bitrate())
               .channelLayout(audio.channelLayout())
               .outputSampleRate(audio.outputSampleRate())
+              .padsWithSilenceToAdvertisedEnd(audio.padsWithSilenceToAdvertisedEnd())
               .build();
     }
 
-    addAudioArgs(cmd, copiedAudio, job.request().sourceAudio());
+    addAudioArgs(cmd, copiedAudio, job.request());
 
     cmd.addAll(SOURCE_COPY_OUTPUT);
     addVideoTimingOutput(cmd, job.request().transcodeDecision().videoDecision());
@@ -270,11 +276,23 @@ public class FfmpegCommandBuilder {
     var seekPosition = inputSeekPosition(request);
     if (seekPosition.isPositive()) {
       cmd.addAll(List.of("-ss", seekArgument(seekPosition)));
+      addHeldFrameSeekArgs(cmd, request);
     }
 
     encodeInNamedLayout(request.transcodeDecision().audioDecision(), request.sourceAudio())
         .ifPresent(options -> cmd.addAll(options.inputOptions()));
     cmd.addAll(List.of("-i", request.sourcePath().toString()));
+  }
+
+  // An attempt that holds the last frame decodes from the keyframe its seek reads and trims its
+  // start
+  // after the hold, as the encode of the copy of the source does, so that an attempt that starts
+  // after the video's last frame still has that frame to repeat. Its encoded audio is trimmed at
+  // the same position.
+  private static void addHeldFrameSeekArgs(List<String> cmd, TranscodeRequest request) {
+    if (holdsLastFrame(request)) {
+      cmd.add("-noaccurate_seek");
+    }
   }
 
   // A stream copy that carries the server's keyframe position seeks to that position: the decode
@@ -377,7 +395,7 @@ public class FfmpegCommandBuilder {
     if (!decision.transcodeMode().encodesVideo()) {
       cmd.addAll(List.of("-c:v", "copy"));
       cmd.addAll(copiedVideoArgs(decision.videoDecision()));
-      addAudioArgs(cmd, decision.audioDecision(), job.request().sourceAudio());
+      addAudioArgs(cmd, decision.audioDecision(), job.request());
       return;
     }
 
@@ -392,7 +410,7 @@ public class FfmpegCommandBuilder {
       return;
     }
 
-    addAudioArgs(cmd, decision.audioDecision(), job.request().sourceAudio());
+    addAudioArgs(cmd, decision.audioDecision(), job.request());
   }
 
   // The copy carries the job's output audio, which the encode of the copy copies untrimmed.
@@ -406,9 +424,11 @@ public class FfmpegCommandBuilder {
   // source's own markings, such as an MP4 edit list, those before its start. The stream copy keeps
   // every packet from the keyframe at or before its seek, which the FFmpeg that reads the copy
   // would decode and keep, so the encode of the copy trims its video at the attempt's start,
-  // seeking or not: after -start_at_zero, nothing else lies before zero.
+  // seeking or not: after -start_at_zero, nothing else lies before zero. An attempt that holds the
+  // last frame and seeks keeps the frames before its seek too.
   private static Optional<String> trimStart(TranscodeRequest request, EncoderInput input) {
-    if (input == EncoderInput.SOURCE) {
+    if (input == EncoderInput.SOURCE
+        && !(holdsLastFrame(request) && inputSeekPosition(request).isPositive())) {
       return Optional.empty();
     }
 
@@ -461,8 +481,7 @@ public class FfmpegCommandBuilder {
     }
   }
 
-  private void addAudioArgs(
-      List<String> cmd, AudioDecision audio, Optional<SourceAudio> sourceAudio) {
+  private void addAudioArgs(List<String> cmd, AudioDecision audio, TranscodeRequest request) {
     if (audio.mode() == AudioMode.NONE) {
       return;
     }
@@ -472,12 +491,13 @@ public class FfmpegCommandBuilder {
       return;
     }
 
-    var namedLayout = encodeInNamedLayout(audio, sourceAudio);
+    var namedLayout = encodeInNamedLayout(audio, request.sourceAudio());
     if (namedLayout.isPresent()) {
       cmd.addAll(namedLayout.orElseThrow().outputOptions());
       return;
     }
 
+    audioFilter(audio, request).ifPresent(filter -> cmd.addAll(List.of("-af", filter)));
     cmd.addAll(List.of("-c:a", audio.codec()));
     cmd.addAll(List.of("-ac", String.valueOf(audio.channels())));
     cmd.addAll(List.of("-b:a", audio.bitrate() / 1000 + "k"));
@@ -491,6 +511,34 @@ public class FfmpegCommandBuilder {
     }
 
     return Optional.of(AudioEncodeOptions.of(audio, sourceAudio.orElseThrow()));
+  }
+
+  // apad appends digital silence after the last decoded sample and changes no sample before it.
+  // When the attempt reads no source sample, FFmpeg sets the filters up with the stream's own
+  // sample rate and layout, as for a decoded one, and apad's silence carries no timestamps, so
+  // asetpts starts it at the attempt's start. atrim drops the silence before the start and ends
+  // the padding. An attempt that holds the last frame trims the start of its encoded audio itself,
+  // as its seek no longer does.
+  private static Optional<String> audioFilter(AudioDecision audio, TranscodeRequest request) {
+    var start = seekArgument(inputSeekPosition(request));
+    if (audio.padsWithSilenceToAdvertisedEnd()) {
+      var end =
+          seekArgument(
+              request.advertisedEnd().orElseThrow().plus(PADDED_AUDIO_RUN_PAST_ADVERTISED_END));
+      return Optional.of(
+          "apad,asetpts='if(isnan(PTS),"
+              + start
+              + "/TB+N/SR/TB,PTS)',atrim=start="
+              + start
+              + ":end="
+              + end);
+    }
+
+    if (holdsLastFrame(request) && inputSeekPosition(request).isPositive()) {
+      return Optional.of("atrim=start=" + start);
+    }
+
+    return Optional.empty();
   }
 
   private static List<String> copiedAudioArgs(String codec) {
@@ -519,15 +567,21 @@ public class FfmpegCommandBuilder {
         toneMaps(job)
             ? ""
             : ":out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709";
-    // The deinterlacer runs first, so that no filter mixes the two fields of a frame.
+    // The deinterlacer runs first, so that no filter mixes the two fields of a frame. The held
+    // picture is the last one the filters produce from the source, and no filter sees it again.
+    var heldFrame = heldFrameFilter(request, trimStart);
     var videoFilter =
         deinterlaceFilter(job)
-            + trimStart.map(start -> "trim=start=" + start + ",").orElse("")
+            + trimStart
+                .filter(_ -> heldFrame.isEmpty())
+                .map(start -> "trim=start=" + start + ",")
+                .orElse("")
             + "scale=-2:"
             + request.height()
             + colorConversion
             + ","
-            + videoFormat(job);
+            + videoFormat(job)
+            + heldFrame.map(filter -> "," + filter).orElse("");
     cmd.addAll(List.of("-vf", videoFilter));
     var bitrate = String.valueOf(request.bitrate());
     // SVT-AV1 supports a bitrate cap only in CRF mode. Its default CRF is 35.
@@ -542,6 +596,28 @@ public class FfmpegCommandBuilder {
             "-b:v", bitrate,
             "-maxrate", bitrate,
             "-bufsize", String.valueOf(request.bitrate() * 2)));
+  }
+
+  // tpad repeats the last picture without end, and trim drops each picture at or after the
+  // advertised end, which ends it; a picture keeps its full duration. Empty unless the attempt
+  // holds
+  // the last frame.
+  private static Optional<String> heldFrameFilter(
+      TranscodeRequest request, Optional<String> trimStart) {
+    if (!holdsLastFrame(request)) {
+      return Optional.empty();
+    }
+
+    return Optional.of(
+        "tpad=stop=-1:stop_mode=clone,trim="
+            + trimStart.map(start -> "start=" + start + ":").orElse("")
+            + "end="
+            + seekArgument(request.advertisedEnd().orElseThrow()));
+  }
+
+  private static boolean holdsLastFrame(TranscodeRequest request) {
+    return request.transcodeDecision().videoDecision() instanceof VideoDecision.Encode encode
+        && encode.holdsLastFrameToAdvertisedEnd();
   }
 
   private static String deinterlaceFilter(TranscodeJob job) {
