@@ -8,10 +8,10 @@ import com.streamarr.transcode.engine.ReadingEnding.Abandoned;
 import com.streamarr.transcode.engine.ReadingEnding.Decided;
 import com.streamarr.transcode.engine.ReadingEnding.EndOfOutput;
 import com.streamarr.transcode.engine.ReadingEnding.TruncatedOutput;
-import com.streamarr.transcode.engine.SegmentAssembler.Closing;
 import java.io.IOException;
 import java.time.Duration;
-import java.util.List;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -453,36 +453,47 @@ public final class Producer {
     return ending.orElseThrow();
   }
 
-  // Reads the next unit and delivers the segment it closes; empty while reading goes on. The unit
-  // is referenced only until this returns, so no read from the pipe keeps it reachable.
+  // Reads the next unit and delivers the segments it closes; empty while reading goes on.
   private Optional<ReadingEnding> deliverNextUnit() throws IOException {
-    var unit = reader.next();
-    if (unit.isEmpty()) {
-      return Optional.of(deliverLastSegment());
-    }
-
-    return deliverClosedSegment(unit.orElseThrow());
+    var closedSegments = new ArrayDeque<ClosedSegment>();
+    var endingOnceHandedOff = closeSegmentsOfNextUnit(closedSegments);
+    return handOffInOrder(closedSegments).or(() -> endingOnceHandedOff);
   }
 
-  // Empty unless the unit ends reading, by closing a segment whose delivery ends it, by skipping a
-  // segment number, or because the attempt was decided. The assembler takes a unit only while the
-  // attempt is undecided, because the decision discards what the assembler holds.
-  private Optional<ReadingEnding> deliverClosedSegment(Mp4Unit unit) {
-    Closing closing;
+  // Moves the segments the next unit closes into the queue, the last segments at the end of the
+  // output, and returns what ends reading once they are handed off. Neither the unit nor anything
+  // else that references the segments outlives this, so a segment whose delivery has released its
+  // memory is unreachable while the next waits for its handoff.
+  private Optional<ReadingEnding> closeSegmentsOfNextUnit(Deque<ClosedSegment> closedSegments)
+      throws IOException {
+    var unit = reader.next();
+    if (unit.isEmpty()) {
+      return Optional.of(closeLastSegments(closedSegments));
+    }
+
+    return closeSegmentsOf(unit.orElseThrow(), closedSegments);
+  }
+
+  // Empty unless reading ends once the closed segments are handed off: because the unit skipped a
+  // segment number, whose complete segments are delivered before the skip fails the attempt, or
+  // because the attempt was decided. The assembler takes a unit only while the attempt is
+  // undecided, because the decision discards what the assembler holds.
+  private Optional<ReadingEnding> closeSegmentsOf(
+      Mp4Unit unit, Deque<ClosedSegment> closedSegments) {
     synchronized (lock) {
       if (decision.isPresent()) {
         return Optional.of(new Decided());
       }
 
-      closing = assembler.accept(unit);
+      var closing = assembler.accept(unit);
+      closedSegments.addAll(closing.closedSegments());
+      return closing.failure().map(ReadingEnding::refused);
     }
-
-    return deliverThenFail(closing);
   }
 
   // The audio after the last segment is released before the last segments' deliveries reserve
   // anything.
-  private ReadingEnding deliverLastSegment() {
+  private ReadingEnding closeLastSegments(Deque<ClosedSegment> closedSegments) {
     synchronized (lock) {
       if (decision.isPresent()) {
         return new Decided();
@@ -492,16 +503,15 @@ public final class Producer {
     }
 
     holdOnlyTheAssemblingSegment();
-    List<ClosedSegment> lastSegments;
     synchronized (lock) {
       if (decision.isPresent()) {
         return new Decided();
       }
 
-      lastSegments = assembler.finish();
+      closedSegments.addAll(assembler.finish());
     }
 
-    return handOffInOrder(lastSegments).orElseGet(EndOfOutput::new);
+    return new EndOfOutput();
   }
 
   private void discardHeldFragments() {
@@ -510,21 +520,12 @@ public final class Producer {
     }
   }
 
-  // The skipping fragment closes a complete segment, which is delivered before the skip fails the
-  // attempt; a stop or a failed delivery decided first ends reading instead.
-  private Optional<ReadingEnding> deliverThenFail(Closing closing) {
-    var handOffEnding = handOffInOrder(closing.closedSegments());
-    if (handOffEnding.isPresent()) {
-      return handOffEnding;
-    }
-
-    return closing.failure().map(ReadingEnding::refused);
-  }
-
   // Empty once every segment's delivery has started; the ending of the first that ends reading.
-  private Optional<ReadingEnding> handOffInOrder(List<ClosedSegment> closedSegments) {
-    for (var closedSegment : closedSegments) {
-      var ending = handOff(closedSegment);
+  // Each segment leaves the queue as its handoff begins: once its delivery ends and releases its
+  // memory, nothing keeps its fragments reachable while the next segment waits for its turn.
+  private Optional<ReadingEnding> handOffInOrder(Deque<ClosedSegment> closedSegments) {
+    while (!closedSegments.isEmpty()) {
+      var ending = handOff(closedSegments.removeFirst());
       if (ending.isPresent()) {
         return ending;
       }

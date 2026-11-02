@@ -1490,6 +1490,39 @@ class ProducerTest {
     assertReleasesEveryReservedByte(workerBudget);
   }
 
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(ThreeSegmentsClosedTogether.class)
+  @DisplayName(
+      "Should free the fragments a delivered segment took samples from when later segments it"
+          + " closed with are still to be delivered")
+  void
+      shouldFreeTheFragmentsADeliveredSegmentTookSamplesFromWhenLaterSegmentsItClosedWithAreStillToBeDelivered(
+          ThreeSegmentsClosedTogether output) {
+    var workerBudget = SegmentMemoryBudget.forSlots(1);
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+    sink.holding(2);
+    var heldBeforeReading = liveHeapBytes();
+
+    var producer = producerOfOneSecondSegments(process).memoryBudget(workerBudget).start();
+
+    awaiting().until(sink::isHolding);
+    awaiting().until(() -> process.reader().map(Thread::getState).orElseThrow() == State.WAITING);
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+    await()
+        .alias("the fragments segment 0 took samples from are freed")
+        .atMost(OUTCOME_LIMIT)
+        .pollInterval(Duration.ofMillis(100))
+        .until(
+            () ->
+                liveHeapBytes()
+                    <= heldBeforeReading + ThreeSegmentsClosedTogether.PADDING_BYTES / 2);
+    sink.release();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT);
+    assertThat(sink.acceptedNames())
+        .startsWith("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
+    assertReleasesEveryReservedByte(workerBudget);
+  }
+
   @Test
   @DisplayName(
       "Should fail the attempt with the segment cap and release its memory when segments awaiting"
@@ -3658,6 +3691,54 @@ class ProducerTest {
       TimedFragmentBuilder audioFrom(long start, Integer... durations) {
         return audioStart(start).audioDurations(List.of(durations));
       }
+    }
+  }
+
+  /**
+   * Outputs of 1 s segments in which one unit closes segments 0, 1 and 2 together, and a fragment
+   * that segment 0 takes samples from carries a large mdat. Segment 0's first audio sample arrives
+   * after segment 1's keyframe, so that the video's lead keeps segments 0 and 1 awaiting audio
+   * until segment 2 has closed.
+   */
+  private enum ThreeSegmentsClosedTogether {
+    BY_THE_END_OF_THE_OUTPUT,
+    BY_A_LATER_SEGMENTS_AUDIO,
+    // The skipping fragment also carries segment 0's second audio sample, beside a large mdat.
+    BY_A_KEYFRAME_THAT_SKIPS_A_SEGMENT;
+
+    static final int PADDING_BYTES = 32 * 1024 * 1024;
+
+    // Builds the output on each call, so that the scripted process holds its only copy.
+    byte[] bytes() {
+      var segmentsZeroToTwo =
+          IsoBoxes.concat(
+              IsoBoxes.ftyp(),
+              IsoBoxes.videoAndAudioMoov(),
+              TimedFragment.keyframeAt(0)
+                  .videoDuration(12_000)
+                  .paddingBytes(PADDING_BYTES)
+                  .build()
+                  .bytes(),
+              TimedFragment.keyframeAt(24_000).videoDuration(12_000).build().bytes(),
+              audioOnlyFragment(0, 0),
+              TimedFragment.keyframeAt(48_000).videoDuration(12_000).build().bytes());
+      return switch (this) {
+        case BY_THE_END_OF_THE_OUTPUT -> segmentsZeroToTwo;
+        case BY_A_LATER_SEGMENTS_AUDIO ->
+            IsoBoxes.concat(
+                segmentsZeroToTwo,
+                TimedFragment.keyframeAt(72_000).videoDuration(6_000).build().bytes(),
+                audioOnlyFragment(144_000, 0));
+        case BY_A_KEYFRAME_THAT_SKIPS_A_SEGMENT ->
+            IsoBoxes.concat(
+                segmentsZeroToTwo,
+                TimedFragment.keyframeAt(96_000)
+                    .videoDuration(6_000)
+                    .audioFrom(24_000, 24_000)
+                    .paddingBytes(PADDING_BYTES)
+                    .build()
+                    .bytes());
+      };
     }
   }
 
