@@ -378,23 +378,20 @@ public class FfmpegCommandBuilder {
         .toPlainString();
   }
 
-  // An encoded replacement attempt seeks one period before its first segment, and the producer
-  // discards that period as preroll: a seek to the boundary itself can drop the frame an earlier
-  // attempt repeated there from a variable-frame-rate source, and lands after the boundary on an
-  // MPEG-TS source. A stream copy without the server's keyframe position seeks to its first
+  // An encoded replacement attempt seeks one period before its first segment's start, and the
+  // producer discards that period as preroll: a seek to the start itself can drop the frame an
+  // earlier attempt repeated there from a variable-frame-rate source, and lands after the start on
+  // an MPEG-TS source. A stream copy without the server's keyframe position seeks to its first
   // segment's start.
   private static long inputSeekSeconds(TranscodeRequest request) {
     var firstSegment = (long) request.startSequenceNumber();
+    var firstSegmentStart = request.segmentIntervals().startOf(firstSegment, 1);
     var mode = request.transcodeDecision().transcodeMode();
-    if (!mode.encodesVideo()) {
-      return request.segmentIntervals().startOf(firstSegment, 1);
+    if (!mode.encodesVideo() || firstSegment == 0) {
+      return firstSegmentStart;
     }
 
-    if (firstSegment == 0) {
-      return 0;
-    }
-
-    return (firstSegment - 1) * request.targetSegmentDuration();
+    return firstSegmentStart - request.targetSegmentDuration();
   }
 
   private void addStreamSelection(List<String> cmd, TranscodeDecision decision) {
@@ -828,15 +825,16 @@ public class FfmpegCommandBuilder {
   }
 
   // FFmpeg's list mode compares each frame's own timestamp with these absolute media times, so
-  // every attempt forces the same frame at a boundary it shares with another attempt; an
+  // every attempt forces the same frame at a segment start it shares with another attempt; an
   // expression would measure from the attempt's first frame instead. An attempt's list starts at
   // its first segment, because FFmpeg consumes at most one time per frame, and ends at the last
-  // advertised boundary or the longest argument, past which the GOP places keyframes.
+  // advertised segment's start or the longest argument, past which the GOP places keyframes. A
+  // merged segment's later slots get no forced keyframe; the GOP's keyframes there stay inside it.
   private static ForcedKeyframes forcedKeyframes(TranscodeRequest request, long firstSegment) {
-    var period = (long) request.targetSegmentDuration();
-    var times = new StringBuilder().append(firstSegment * period);
+    var intervals = request.segmentIntervals();
+    var times = new StringBuilder().append(intervals.startOf(firstSegment, 1));
     for (var segment = firstSegment + 1; segment < request.mediaSegmentCount(); segment++) {
-      var next = "," + segment * period;
+      var next = "," + intervals.startOf(segment, 1);
       if (times.length() + next.length() > LONGEST_ARGUMENT_BYTES) {
         return new ForcedKeyframes(times.toString(), false);
       }

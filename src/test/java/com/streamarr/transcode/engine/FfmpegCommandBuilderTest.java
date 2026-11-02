@@ -857,6 +857,48 @@ class FfmpegCommandBuilderTest {
     assertThat(cmd).containsSequence("-force_key_frames:0", "20,24,28,32");
   }
 
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("everyEncoder")
+  @DisplayName(
+      "Should force a keyframe only at each listed segment start when the job carries a segment"
+          + " list")
+  void shouldForceAKeyframeOnlyAtEachListedSegmentStartWhenTheJobCarriesASegmentList(
+      String encoder) {
+    var cmd = command(mergedSegmentRequest().build(), encoder);
+
+    assertThat(cmd).containsSequence("-force_key_frames:0", "0,9,18,30");
+  }
+
+  @Test
+  @DisplayName(
+      "Should force keyframes from the attempt's first listed segment when a replacement attempt"
+          + " starts at a merged segment")
+  void
+      shouldForceKeyframesFromTheAttemptsFirstListedSegmentWhenAReplacementStartsAtAMergedSegment() {
+    var cmd = command(mergedSegmentRequest().startSequenceNumber(2).build(), "libx264");
+
+    assertThat(cmd).containsSequence("-force_key_frames:0", "18,30");
+  }
+
+  @Test
+  @DisplayName(
+      "Should seek one slot before its first listed segment when an encoded replacement attempt"
+          + " starts at a merged segment")
+  void
+      shouldSeekOneSlotBeforeItsFirstListedSegmentWhenAnEncodedReplacementStartsAtAMergedSegment() {
+    var cmd = command(mergedSegmentRequest().startSequenceNumber(3).build(), "libx264");
+
+    assertThat(cmd).as("segment 3 starts at slot 10, 30 s").containsSubsequence("-ss", "27", "-i");
+  }
+
+  // Keyframes 10 s apart on 3 s slots: the segments start at 0 s, 9 s, 18 s and 30 s.
+  private static TranscodeRequest.TranscodeRequestBuilder mergedSegmentRequest() {
+    return request(TranscodeMode.FULL_TRANSCODE)
+        .targetSegmentDuration(3)
+        .mediaSegmentCount(4)
+        .segmentStartSlots(List.of(0L, 3L, 6L, 10L));
+  }
+
   @Test
   @DisplayName("Should keep every boundary when the list fills the longest argument Linux accepts")
   void shouldKeepEveryBoundaryWhenTheListFillsTheLongestArgumentLinuxAccepts() {

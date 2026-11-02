@@ -5156,6 +5156,62 @@ class WorkerMediaSmokeTest {
     }
   }
 
+  @ParameterizedTest(name = "from segment {0}")
+  @ValueSource(ints = {0, 2})
+  @DisplayName(
+      "Should upload every listed segment, each opening at a keyframe on its listed start and"
+          + " keeping the encoder's other keyframes inside it, when an encode's job merges 3 s"
+          + " slots between source keyframes 10 s apart")
+  void shouldUploadEveryListedSegmentOpeningAtItsListedStartWhenAnEncodesJobMergesSlots(
+      int startSequenceNumber) throws Exception {
+    var source = tenSecondKeyframeSource();
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(SLOT_SECONDS)
+        .setMediaSegmentCount(TEN_SECOND_KEYFRAME_SEGMENT_STARTS.size())
+        .addAllSegmentStartSlots(TEN_SECOND_KEYFRAME_SEGMENT_STARTS)
+        .setStartSequenceNumber(startSequenceNumber)
+        .setSeekPositionSeconds(
+            TEN_SECOND_KEYFRAME_SEGMENT_STARTS.get(startSequenceNumber) * SLOT_SECONDS);
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(uploads.names())
+        .containsExactlyElementsOf(
+            uploadNames(TEN_SECOND_KEYFRAME_SEGMENT_STARTS.size()).stream()
+                .filter(
+                    name -> !name.startsWith("segment") || numberOf(name) >= startSequenceNumber)
+                .toList());
+    // The mp4 muxer shifts every presentation time by libx264's reordering delay of two frames.
+    var first =
+        Mp4Samples.read(uploads.contentOf(List.of("init.mp4", segmentName(startSequenceNumber))));
+    var timescale = first.videoTrack().timescale();
+    var shift =
+        first.samplesOf(first.videoTrack()).getFirst().presentationTime()
+            - listedInterval(startSequenceNumber, timescale).start();
+    assertThat(shift).as("the reordering delay").isEqualTo(2 * timescale / 24);
+    for (var number = startSequenceNumber;
+        number < TEN_SECOND_KEYFRAME_SEGMENT_STARTS.size();
+        number++) {
+      var movie = Mp4Samples.read(uploads.contentOf(List.of("init.mp4", segmentName(number))));
+      var listed = listedInterval(number, timescale);
+      var video = movie.samplesOf(movie.videoTrack());
+      assertThat(video.getFirst().isSync()).as("segment %d opens at a keyframe", number).isTrue();
+      assertThat(video.getFirst().presentationTime() - shift)
+          .as("segment %d opens on its listed start", number)
+          .isEqualTo(listed.start());
+      assertThat(video)
+          .as("segment %d's frames all start inside its listed interval", number)
+          .allMatch(sample -> listed.interval().holds(sample.presentationTime() - shift));
+    }
+
+    var merged = Mp4Samples.read(uploads.contentOf(List.of("init.mp4", segmentName(2))));
+    assertThat(merged.samplesOf(merged.videoTrack()))
+        .as("the 12 s merged segment 2 keeps the encoder's keyframes after its first")
+        .filteredOn(Mp4Samples.Sample::isSync)
+        .hasSizeGreaterThan(1);
+  }
+
   // Segment N's listed interval in ticks of the timescale; segment 0 keeps the AAC priming frame
   // from before zero, and the last runs to the end of the media.
   private static ListedInterval listedInterval(int number, long timescale) {
