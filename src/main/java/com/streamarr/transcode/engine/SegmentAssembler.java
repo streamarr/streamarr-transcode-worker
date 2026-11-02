@@ -31,7 +31,7 @@ final class SegmentAssembler {
   private final AudioSampleQueue audio;
   private final VideoProgress video;
   // Segments whose video the grouper closed while audio of their interval may still arrive.
-  private final Deque<MediaSegment> awaitingAudio = new ArrayDeque<>();
+  private final Deque<AwaitingSegment> awaitingAudio = new ArrayDeque<>();
   private final long maximumSegmentBytes;
   private final Optional<OutputFrameRate> encodedFrameRate;
   private final VideoDecision videoDecision;
@@ -92,7 +92,7 @@ final class SegmentAssembler {
    * assembler then holds only what the segments that {@link #finish()} closes need.
    */
   void dropAudioAfterTheLastSegment() {
-    grouper.finish().ifPresent(awaitingAudio::addLast);
+    grouper.finish().map(AwaitingSegment::of).ifPresent(awaitingAudio::addLast);
     if (!awaitingAudio.isEmpty()) {
       audio.discardAfter(awaitingAudio.getLast().sequenceNumber());
     }
@@ -154,14 +154,18 @@ final class SegmentAssembler {
     return switch (grouper.accept(fragment)) {
       case NothingClosed _ -> Closing.of(closeEveryCompleted());
       case SegmentsClosed(var segments) -> {
-        awaitingAudio.addAll(segments);
+        awaitAudio(segments);
         yield Closing.of(closeEveryCompleted());
       }
       case SegmentNumberSkipped skipped -> {
-        awaitingAudio.addAll(skipped.closedSegments());
+        awaitAudio(skipped.closedSegments());
         yield new Closing(closeEveryAwaiting(), Optional.of(skipped.failure()));
       }
     };
+  }
+
+  private void awaitAudio(List<MediaSegment> segments) {
+    segments.stream().map(AwaitingSegment::of).forEach(awaitingAudio::addLast);
   }
 
   // Closes each segment awaiting audio, in order, once no audio of its interval can still arrive.
@@ -214,9 +218,6 @@ final class SegmentAssembler {
     return rebuilt;
   }
 
-  // A segment awaiting audio needs only the fragments of its video samples: the audio queue holds
-  // the fragments of the audio samples it still takes, and the grouper's other fragments of it,
-  // such as the audio-only fragments after the video's end, hold nothing it delivers.
   private Set<Fragment> heldFragments() {
     var held = Collections.newSetFromMap(new IdentityHashMap<Fragment, Boolean>());
     held.addAll(grouper.heldFragments());
@@ -224,6 +225,17 @@ final class SegmentAssembler {
         segment -> segment.videoSamples().forEach(sample -> held.add(sample.fragment())));
     audio.heldFragments().forEach(held::add);
     return held;
+  }
+
+  // Keeps only the video samples, which reference the fragments that carried them, so that the
+  // assembler references exactly the fragments heldFragments() counts. The audio queue holds the
+  // fragments of the audio the segment still takes; the grouper's other fragments of it, such as
+  // an audio-only fragment of an earlier segment's audio, hold nothing it delivers.
+  private record AwaitingSegment(int sequenceNumber, List<CarriedSample> videoSamples) {
+
+    static AwaitingSegment of(MediaSegment segment) {
+      return new AwaitingSegment(segment.sequenceNumber(), segment.videoSamples());
+    }
   }
 
   /**

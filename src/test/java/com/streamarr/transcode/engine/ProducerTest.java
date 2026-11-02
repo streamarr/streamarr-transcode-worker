@@ -1456,6 +1456,42 @@ class ProducerTest {
 
   @Test
   @DisplayName(
+      "Should neither charge nor keep a delivered segment's audio fragment when a later segment"
+          + " awaiting its audio grouped that fragment")
+  void
+      shouldNeitherChargeNorKeepADeliveredSegmentsAudioFragmentWhenALaterSegmentAwaitingItsAudioGroupedThatFragment() {
+    var workerBudget = SegmentMemoryBudget.forSlots(1);
+    var output = LateAudioOfADeliveredSegment.build();
+    var process =
+        ScriptedProcess.builder().output(output.bytes()).pauseAfter(output.pauseOffset()).build();
+    var heldBeforeReading = liveHeapBytes();
+
+    var producer = producerOfOneSecondSegments(process).memoryBudget(workerBudget).start();
+
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
+    awaiting().until(() -> workerBudget.tryReserveAtOnce(ONE_SLOT_CAPACITY - output.heldAtPause()));
+    assertThat(workerBudget.tryReserveAtOnce(1))
+        .as("a byte of the fragments segments 1 and 2 still take")
+        .isFalse();
+    workerBudget.release(ONE_SLOT_CAPACITY - output.heldAtPause());
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+    await()
+        .alias("the delivered audio's fragment is freed")
+        .atMost(OUTCOME_LIMIT)
+        .pollInterval(Duration.ofMillis(100))
+        .until(
+            () ->
+                liveHeapBytes()
+                    <= heldBeforeReading + LateAudioOfADeliveredSegment.PADDING_BYTES / 2);
+    process.resume();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(sink.acceptedNames())
+        .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
+    assertReleasesEveryReservedByte(workerBudget);
+  }
+
+  @Test
+  @DisplayName(
       "Should fail the attempt with the segment cap and release its memory when segments awaiting"
           + " their audio leave the producer's budget no room for the next box")
   void
@@ -3622,6 +3658,46 @@ class ProducerTest {
       TimedFragmentBuilder audioFrom(long start, Integer... durations) {
         return audioStart(start).audioDurations(List.of(durations));
       }
+    }
+  }
+
+  /**
+   * An output of 1 s segments in which segment 0's second audio sample arrives in an audio-only
+   * fragment with a large mdat after segment 1's keyframe, so that segment 1 holds that fragment
+   * but takes nothing from it. It pauses once segment 1's first audio sample has closed segment 0,
+   * while segment 1 still awaits its audio and segment 2 is open.
+   *
+   * @param heldAtPause what the fragments segments 1 and 2 take hold, their bytes and their
+   *     samples' heap
+   */
+  private record LateAudioOfADeliveredSegment(byte[] bytes, int pauseOffset, long heldAtPause) {
+
+    static final int PADDING_BYTES = 32 * 1024 * 1024;
+
+    // Builds the output here so that the scripted process holds its only copy.
+    static LateAudioOfADeliveredSegment build() {
+      var segmentOneKeyframe = TimedFragment.keyframeAt(24_000).videoDuration(12_000).build();
+      var segmentTwoKeyframe = TimedFragment.keyframeAt(48_000).videoDuration(12_000).build();
+      var segmentOneAudio = audioOnlyFragment(48_000, 0);
+      var beforePause =
+          IsoBoxes.concat(
+              IsoBoxes.ftyp(),
+              IsoBoxes.videoAndAudioMoov(),
+              TimedFragment.keyframeAt(0)
+                  .videoDuration(12_000)
+                  .audioFrom(0, 24_000)
+                  .build()
+                  .bytes(),
+              segmentOneKeyframe.bytes(),
+              audioOnlyFragment(24_000, PADDING_BYTES),
+              segmentTwoKeyframe.bytes(),
+              segmentOneAudio);
+      return new LateAudioOfADeliveredSegment(
+          IsoBoxes.concat(beforePause, audioOnlyFragment(72_000, 0)),
+          beforePause.length,
+          heldBytesOf(segmentOneKeyframe.bytes(), 1)
+              + heldBytesOf(segmentTwoKeyframe.bytes(), 1)
+              + heldBytesOf(segmentOneAudio, 1));
     }
   }
 
