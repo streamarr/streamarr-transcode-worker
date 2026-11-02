@@ -119,8 +119,12 @@ final class ProbeMediaReader {
         CodecStringReader.read(source).ifPresent(stream::setCodecString);
         endTimes.of(source).ifPresent(stream::setEndTime);
         hearingImpaired(source).ifPresent(stream::setIsHearingImpaired);
+        AudioStreamFacts.addTo(source, stream);
       }
-      case "subtitle" -> hearingImpaired(source).ifPresent(stream::setIsHearingImpaired);
+      case "subtitle" -> {
+        hearingImpaired(source).ifPresent(stream::setIsHearingImpaired);
+        stream.setIsComment(disposition(source, "comment").asInt(0) == 1);
+      }
       default -> {
         // Other stream types report only the facts that every stream reports.
       }

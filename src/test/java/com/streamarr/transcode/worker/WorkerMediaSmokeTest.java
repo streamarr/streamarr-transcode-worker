@@ -351,6 +351,91 @@ class WorkerMediaSmokeTest {
     assertThat(result.getMedia().getStreams(0).getCodecString()).isEqualTo("avc1.42C00A");
   }
 
+  @Test
+  @DisplayName(
+      "Should report each audio stream's layout, depth, dispositions and FLAC block size when a"
+          + " worker probes a real Matroska file")
+  void
+      shouldReportEachAudioStreamsLayoutDepthDispositionsAndFlacBlockSizeWhenAWorkerProbesARealFile()
+          throws Exception {
+    var subtitle = root.resolve("commentary.srt");
+    Files.writeString(subtitle, "1\n00:00:00,000 --> 00:00:01,000\nHello\n");
+    var source = root.resolve("audio-facts.mkv");
+    // 24-bit quad FLAC in 144-sample blocks, marked original; quad PCM, whose layout Matroska does
+    // not store; mono AC-3 whose bitstream mode is commentary, which replaces its default
+    // disposition; and a subtitle stream marked as commentary.
+    runFfmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=64x36:rate=24:duration=1",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=1",
+            "-i",
+            subtitle.toString(),
+            "-filter_complex",
+            "[1]asplit=3[a][b][mono];[a]pan=quad|FL=c0|FR=c0|BL=c0|BR=c0[flac];"
+                + "[b]pan=quad|FL=c0|FR=c0|BL=c0|BR=c0[pcm]",
+            "-map",
+            "0:v",
+            "-map",
+            "[flac]",
+            "-map",
+            "[pcm]",
+            "-map",
+            "[mono]",
+            "-map",
+            "2:s",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-c:a:0",
+            "flac",
+            "-sample_fmt:a:0",
+            "s32",
+            "-frame_size:a:0",
+            "144",
+            "-c:a:1",
+            "pcm_s16le",
+            "-c:a:2",
+            "ac3",
+            "-audio_service_type:a:2",
+            "co",
+            "-disposition:a:0",
+            "original",
+            "-disposition:a:2",
+            "default",
+            "-disposition:s:0",
+            "comment",
+            "-c:s",
+            "srt"),
+        source);
+
+    var streams = probeExecutor().probe(source, keyframeRequest()).result().getMedia();
+
+    var flac = streams.getStreams(1);
+    assertThat(flac.getChannelLayout()).isEqualTo("quad");
+    assertThat(flac.getSampleFormat()).isEqualTo("s32");
+    assertThat(flac.getBitDepth()).isEqualTo(24);
+    assertThat(flac.getFlacMinimumBlockSizeSamples()).isEqualTo(144);
+    assertThat(flac.getIsOriginal()).isTrue();
+    var pcm = streams.getStreams(2);
+    assertThat(pcm.hasChannelLayout()).isFalse();
+    assertThat(pcm.getChannels()).isEqualTo(4);
+    assertThat(pcm.getBitDepth()).isEqualTo(16);
+    assertThat(pcm.hasFlacMinimumBlockSizeSamples()).isFalse();
+    var commentary = streams.getStreams(3);
+    assertThat(commentary.getChannelLayout()).isEqualTo("mono");
+    assertThat(commentary.hasBitDepth()).isFalse();
+    assertThat(commentary.getIsComment()).isTrue();
+    assertThat(commentary.getIsDefault()).isFalse();
+    assertThat(streams.getStreams(4).getIsComment()).isTrue();
+  }
+
   @ParameterizedTest(name = "{0}")
   @ValueSource(
       strings = {

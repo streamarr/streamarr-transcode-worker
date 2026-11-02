@@ -164,6 +164,13 @@ class FfprobeExecutorTest {
                 .setIndex(2)
                 .setCodecType("audio")
                 .setIsForced(true)
+                .setIsComment(false)
+                .setIsVisualImpaired(false)
+                .setIsDescriptions(false)
+                .setIsOriginal(false)
+                .setIsDub(false)
+                .setIsCleanEffects(false)
+                .setIsDependent(false)
                 .build());
   }
 
@@ -530,7 +537,7 @@ class FfprobeExecutorTest {
   }
 
   @ParameterizedTest
-  @ValueSource(ints = {0, 1, 2, 3, 4, 5, 7, -1})
+  @ValueSource(ints = {0, 1, 2, 3, 4, 5, 6, 8, -1})
   @DisplayName("Should refuse unsupported versions when receiving a probe request")
   void shouldRefuseUnsupportedVersionsWhenReceivingAProbeRequest(int version) {
     var executor =
