@@ -337,10 +337,11 @@ class WorkerImageIT {
     return "/media/svtav1-ffmpeg";
   }
 
-  // The worker's arguments between "-y" and its pipe:1 output, without its -preset option.
+  // The worker's arguments between "-y" and its pipe:1 output, without its -preset option. The
+  // worker's second output, the source's framecrc on pipe:2, follows pipe:1 and stays out.
   private static List<String> svtAv1ArgumentsWithoutPreset(List<String> recorded, String preset) {
-    assertThat(recorded).as("the worker's FFmpeg arguments").startsWith("-y").endsWith("pipe:1");
-    var arguments = new ArrayList<>(recorded.subList(1, recorded.size() - 1));
+    assertThat(recorded).as("the worker's FFmpeg arguments").startsWith("-y").contains("pipe:1");
+    var arguments = new ArrayList<>(recorded.subList(1, recorded.indexOf("pipe:1")));
     var position = arguments.indexOf("-preset");
     assertThat(position).as("the position of the worker's -preset option").isNotNegative();
     assertThat(arguments.subList(position, position + 2)).containsExactly("-preset", preset);
