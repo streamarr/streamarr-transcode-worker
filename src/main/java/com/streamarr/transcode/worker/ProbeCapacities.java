@@ -94,7 +94,7 @@ final class ProbeCapacities {
     changeCapacities(
         () -> {
           var inUse = backgroundUnitsInUse();
-          running.merge(probe.kind(), -1, Integer::sum);
+          end(probe);
           if (backgroundUnitsInUse() < inUse && isGrowthAllowed()) {
             backgroundLimit.grow(inUse);
           }
@@ -117,7 +117,7 @@ final class ProbeCapacities {
 
   /** Frees the unit of a probe that the server cancelled at the probe timeout, and never grows. */
   void releaseTimedOut(@NonNull CountedProbe probe) {
-    changeCapacities(() -> running.merge(probe.kind(), -1, Integer::sum));
+    changeCapacities(() -> end(probe));
   }
 
   // A job attempt that starts clears background probes from the host while its viewer waits.
@@ -191,6 +191,11 @@ final class ProbeCapacities {
   }
 
   // Guarded by this monitor.
+  private void end(CountedProbe probe) {
+    running.merge(probe.kind(), -1, Integer::sum);
+  }
+
+  // Guarded by this monitor.
   private boolean fits(ProbeKind kind) {
     return switch (kind) {
       case PLAYBACK ->
@@ -216,14 +221,16 @@ final class ProbeCapacities {
   // Guarded by this monitor. The probes that were running at the latest brake already count in
   // that brake, as TCP halves its window once for each window of data in flight (RFC 5681).
   private boolean isTimeoutBrakeDue(CountedProbe probe) {
-    var loadsTheBackgroundUnits =
-        switch (probe.kind()) {
-          case BACKGROUND, PLAYBACK -> true;
-          case KEYFRAME_PACKET_SCAN -> false;
-        };
-    return loadsTheBackgroundUnits
+    return loadsTheBackgroundUnits(probe.kind())
         && probe.brakesAppliedAtStart() == brakesApplied
         && hasBeenSinceLastBrake(MINIMUM_INTERVAL_BETWEEN_BRAKES);
+  }
+
+  private static boolean loadsTheBackgroundUnits(ProbeKind kind) {
+    return switch (kind) {
+      case BACKGROUND, PLAYBACK -> true;
+      case KEYFRAME_PACKET_SCAN -> false;
+    };
   }
 
   // Guarded by this monitor.
