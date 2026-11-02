@@ -147,15 +147,8 @@ final class AudioSampleQueue {
 
   private boolean startsAtOrAfterThePaddedEnd(long presentationTime, long timescale) {
     return paddedAudioEnd
-        .filter(end -> presentationTime >= firstTickAtOrAfter(end, timescale))
+        .filter(end -> presentationTime >= MediaTicks.firstTickAtOrAfter(end, timescale))
         .isPresent();
-  }
-
-  // The nanoseconds of a Duration times a 32-bit timescale stay within a signed 64-bit value.
-  private static long firstTickAtOrAfter(Duration time, long timescale) {
-    var wholeSeconds = Math.multiplyExact(time.getSeconds(), timescale);
-    return Math.addExact(
-        wholeSeconds, Math.ceilDiv(time.getNano() * timescale, Duration.ofSeconds(1).toNanos()));
   }
 
   private void requireNoRegression(Sample sample) {
