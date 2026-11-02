@@ -3,6 +3,7 @@ package com.streamarr.transcode.engine;
 import java.util.Optional;
 import java.util.OptionalInt;
 import lombok.Builder;
+import lombok.NonNull;
 
 /**
  * The job's audio. An encode that names {@code channelLayout} writes that layout; without it, the
@@ -16,21 +17,13 @@ public record AudioDecision(
     String codec,
     int channels,
     long bitrate,
-    Optional<SpeakerLayout> channelLayout,
-    OptionalInt outputSampleRate,
-    OptionalInt outputBitDepth) {
+    @NonNull Optional<SpeakerLayout> channelLayout,
+    @NonNull OptionalInt outputSampleRate,
+    @NonNull OptionalInt outputBitDepth) {
 
-  public AudioDecision {
-    if (channelLayout == null) {
-      channelLayout = Optional.empty();
-    }
-
-    if (outputSampleRate == null) {
-      outputSampleRate = OptionalInt.empty();
-    }
-
-    if (outputBitDepth == null) {
-      outputBitDepth = OptionalInt.empty();
-    }
+  public static class AudioDecisionBuilder {
+    private Optional<SpeakerLayout> channelLayout = Optional.empty();
+    private OptionalInt outputSampleRate = OptionalInt.empty();
+    private OptionalInt outputBitDepth = OptionalInt.empty();
   }
 }
