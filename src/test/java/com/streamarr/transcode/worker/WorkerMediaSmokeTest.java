@@ -210,6 +210,10 @@ class WorkerMediaSmokeTest {
   // 90 s of video at the default 6 s period.
   private static final int AUDIO_ENDS_LONG_BEFORE_VIDEO_SEGMENT_COUNT = 15;
 
+  // Segment 5 starts at 30 s, where an attempt that copies the video seeks: 20 s after the audio's
+  // end.
+  private static final int AFTER_THE_AUDIOS_END_SEQUENCE_NUMBER = 5;
+
   // 84 s of audio in 6 s segments; the 64 s of video end inside segment 10.
   private static final int VIDEO_ENDS_BEFORE_AUDIO_SEGMENT_COUNT = 14;
   private static final int VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT = 10;
@@ -3051,6 +3055,35 @@ class WorkerMediaSmokeTest {
         .isNotEmpty()
         .containsExactlyElementsOf(
             ffmpegAudio.stream().filter(packet -> interval.holds(packet.pts())).toList());
+  }
+
+  // With no audio frame to read, the mp4 muxer cannot write the AC-3 or E-AC-3 sample entry: FFmpeg
+  // logs that it cannot write the moov before the first packet, writes the moov's header with no
+  // size, and still exits 0.
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"ac3", "eac3"})
+  @DisplayName(
+      "Should report a failed transcode and upload no initialization segment when an attempt that"
+          + " encodes AC-3 or E-AC-3 audio starts after the audio's end")
+  void shouldReportAFailedTranscodeAndUploadNothingWhenAnAc3AttemptStartsAfterTheAudiosEnd(
+      String codec) throws Exception {
+    var source = audioEndsLongBeforeVideoSource();
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    job.getExecutionBuilder()
+        .setMediaSegmentCount(AUDIO_ENDS_LONG_BEFORE_VIDEO_SEGMENT_COUNT)
+        .setStartSequenceNumber(AFTER_THE_AUDIOS_END_SEQUENCE_NUMBER);
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setCodec(codec)
+        .setChannels(2)
+        .setBitrateBitsPerSecond(192_000);
+
+    var failure =
+        executeExpectingFailure(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(failure.failure().getFailure())
+        .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
+    assertThat(failure.uploads().names()).isEmpty();
   }
 
   static Stream<Arguments> sourceContainersModesAndStarts() {
