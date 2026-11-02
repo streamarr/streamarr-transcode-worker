@@ -1914,6 +1914,26 @@ class TranscodeWorkerJobAttemptTest {
     assertRefusedAsAnInvalidSpecification(job.build());
   }
 
+  @ParameterizedTest(name = "advertised end at {0} s")
+  @ValueSource(ints = {29, 30})
+  @DisplayName(
+      "Should refuse the job as an invalid specification when its advertised end does not lie"
+          + " after the last listed segment's start")
+  void shouldRefuseTheJobWhenItsAdvertisedEndDoesNotLieAfterTheLastListedSegmentsStart(
+      int advertisedEndSeconds) throws Exception {
+    var job = heldAndPaddedJob();
+    // Segment 3 starts at slot 10, 30 s.
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(3)
+        .setMediaSegmentCount(4)
+        .addAllSegmentStartSlots(TEN_SECOND_KEYFRAMES_ON_THREE_SECOND_SLOTS)
+        .getAdvertisedEndBuilder()
+        .setSeconds(advertisedEndSeconds)
+        .setNanos(0);
+
+    assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
   static Stream<Arguments> segmentListsThatBreakTheContract() {
     return Stream.of(
         Arguments.of("fewer entries than media segments", List.of(0, 3, 6)),

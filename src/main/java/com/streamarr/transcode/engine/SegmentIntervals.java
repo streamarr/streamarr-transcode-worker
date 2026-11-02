@@ -48,7 +48,8 @@ final class SegmentIntervals {
 
   /**
    * These intervals with the last listed segment's audio ending at the job's advertised end, so
-   * that no audio past that end joins it. The plain grid's segments each keep one period.
+   * that no audio past that end joins it. The plain grid's segments each keep one period. The job's
+   * mapping has checked that the end lies after the last listed segment's start.
    */
   SegmentIntervals withLastListedSegmentEndingAt(@NonNull Duration advertisedEnd) {
     if (isPlainGrid()) {

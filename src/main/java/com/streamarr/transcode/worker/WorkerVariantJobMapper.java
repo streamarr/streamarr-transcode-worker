@@ -43,7 +43,7 @@ final class WorkerVariantJobMapper {
    *     that the worker forces or checks, or when it holds the last frame or pads its audio without
    *     encoding that stream or without a positive advertised end, or when its segment list is not
    *     empty and does not hold one start slot for each media segment, from 0 and strictly
-   *     increasing
+   *     increasing, or when its advertised end does not lie after the last listed segment's start
    */
   TranscodeRequest map(VariantJob job) {
     return map(job, Optional.empty());
@@ -145,7 +145,28 @@ final class WorkerVariantJobMapper {
           "The advertised end must be positive, got: " + advertisedEnd);
     }
 
+    requireAfterTheLastListedStart(advertisedEnd, execution);
     return Optional.of(advertisedEnd);
+  }
+
+  // The last listed segment's audio ends at the advertised end, which must follow its start.
+  private static void requireAfterTheLastListedStart(
+      Duration advertisedEnd, TranscodeExecution execution) {
+    var slots = execution.getSegmentStartSlotsList();
+    if (slots.isEmpty()) {
+      return;
+    }
+
+    var lastStart =
+        Duration.ofSeconds(
+            Integer.toUnsignedLong(slots.getLast()) * execution.getTargetSegmentDurationSeconds());
+    if (advertisedEnd.compareTo(lastStart) <= 0) {
+      throw new InvalidJobSpecificationException(
+          "The advertised end "
+              + advertisedEnd
+              + " does not lie after the last listed segment's start at "
+              + lastStart);
+    }
   }
 
   private static Optional<OutputFrameRate> outputFrameRate(VariantJob job) {
