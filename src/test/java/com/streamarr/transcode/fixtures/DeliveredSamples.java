@@ -53,20 +53,15 @@ public final class DeliveredSamples {
    * The recording's audio samples that start inside the interval of a segment {@code expected.json}
    * delivers, in order, apart from those it lists as dropped because they arrive after their
    * segment was delivered: segment zero of an attempt from the start also takes the priming frame
-   * before zero, and the last segment of a completed attempt every sample after its interval.
+   * before zero, and no segment takes a sample after its interval.
    */
-  public static List<Sample> audioSamplesOfTheDeliveredSegments(
-      Recording recording, boolean completed) {
+  public static List<Sample> audioSamplesOfTheDeliveredSegments(Recording recording) {
     var recorded = Mp4Samples.read(bytesOf(recording.file()));
     var audio = recorded.audioTrack();
     var periodTicks = recording.period() * audio.timescale();
-    var last = recording.segments().getLast();
     var intervals =
         recording.segments().stream()
-            .map(
-                segment ->
-                    AudioInterval.ofDeliveredSegment(
-                        segment.number(), periodTicks, completed && segment.equals(last)))
+            .map(segment -> AudioInterval.ofDeliveredSegment(segment.number(), periodTicks))
             .toList();
     var dropped =
         recording.droppedAudioSamples().stream().map(DroppedAudioSample::presentationTime).toList();

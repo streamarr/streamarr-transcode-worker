@@ -24,7 +24,7 @@ final class SegmentGrouper {
   private final long maximumSegmentBytes;
   private final List<Fragment> openFragments = new ArrayList<>();
   private final List<CarriedSample> openVideoSamples = new ArrayList<>();
-  private long openBytes;
+  private long openVideoFragmentBytes;
   private OptionalLong openSequenceNumber = OptionalLong.empty();
   private OptionalLong lastKeyframeTime = OptionalLong.empty();
   private boolean ended;
@@ -32,8 +32,9 @@ final class SegmentGrouper {
   /**
    * @param startSequenceNumber the first segment this job attempt delivers; segments below it are
    *     preroll and are discarded
-   * @param maximumSegmentBytes the most bytes of FFmpeg's fragments the grouper holds for one media
-   *     segment, as read, which bounds what it holds rather than the segment rebuilt from them
+   * @param maximumSegmentBytes the most bytes of FFmpeg's fragments that carry video the grouper
+   *     holds for one media segment, as read, which bounds what it holds rather than the segment
+   *     rebuilt from them
    */
   SegmentGrouper(
       @NonNull SegmentIntervals intervals, int startSequenceNumber, long maximumSegmentBytes) {
@@ -61,7 +62,8 @@ final class SegmentGrouper {
    * fragment.
    *
    * @throws FragmentedMp4Exception when one of the fragment's keyframes starts before the previous
-   *     keyframe, or when the fragment would make a segment it joins larger than the segment cap
+   *     keyframe, or when the fragment carries video and would make the fragments with video of a
+   *     segment it joins larger than the segment cap
    * @throws IllegalStateException after a keyframe skipped a segment number
    */
   GroupingOutcome accept(@NonNull Fragment fragment) {
@@ -107,11 +109,6 @@ final class SegmentGrouper {
   Optional<MediaSegment> finish() {
     requireNotEnded();
     return close();
-  }
-
-  /** The bytes of the fragments the grouper holds for the open segment, or for the first one. */
-  long heldBytes() {
-    return openBytes;
   }
 
   /** The fragments the grouper holds for the open segment, or for the first one. */
@@ -167,28 +164,35 @@ final class SegmentGrouper {
 
   /**
    * Holds a fragment and those of its video samples that belong to the open segment, or to the
-   * first one; drops them when that is preroll.
+   * first one; drops them when that is preroll. Only a fragment that carries video counts toward
+   * the segment cap: the audio of a fragment without video can belong to later segments, which the
+   * segment never takes, as when the audio outlasts the video.
    */
   private void join(Fragment fragment, List<CarriedSample> videoSamples) {
     if (isPrerollOpen()) {
       return;
     }
 
-    var bytes = fragment.byteLength();
-    if (bytes > maximumSegmentBytes - openBytes) {
+    if (!videoSamples.isEmpty()) {
+      requireRoomUnderTheCap(fragment.byteLength());
+      openVideoFragmentBytes += fragment.byteLength();
+    }
+
+    openFragments.add(fragment);
+    openVideoSamples.addAll(videoSamples);
+  }
+
+  private void requireRoomUnderTheCap(long bytes) {
+    if (bytes > maximumSegmentBytes - openVideoFragmentBytes) {
       throw new FragmentedMp4Exception(
           Reason.EXCEEDS_SEGMENT_CAP,
           "a fragment of "
               + bytes
               + " bytes after "
-              + openBytes
+              + openVideoFragmentBytes
               + " exceeds the segment cap of "
               + maximumSegmentBytes);
     }
-
-    openFragments.add(fragment);
-    openVideoSamples.addAll(videoSamples);
-    openBytes += bytes;
   }
 
   private boolean isPrerollOpen() {
@@ -199,7 +203,7 @@ final class SegmentGrouper {
   void discardOpenFragments() {
     openFragments.clear();
     openVideoSamples.clear();
-    openBytes = 0;
+    openVideoFragmentBytes = 0;
   }
 
   private void requireNoRegression(VideoStart keyframe) {

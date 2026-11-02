@@ -210,6 +210,10 @@ class WorkerMediaSmokeTest {
   // 90 s of video at the default 6 s period.
   private static final int AUDIO_ENDS_LONG_BEFORE_VIDEO_SEGMENT_COUNT = 15;
 
+  // 84 s of audio in 6 s segments; the 64 s of video end inside segment 10.
+  private static final int VIDEO_ENDS_BEFORE_AUDIO_SEGMENT_COUNT = 14;
+  private static final int VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT = 10;
+
   // The fragmentation target that a worker passes FFmpeg unless its settings name another.
   private static final Duration DEFAULT_FRAGMENTATION_TARGET = Duration.ofMillis(250);
 
@@ -2834,8 +2838,7 @@ class WorkerMediaSmokeTest {
     assertThat(names).isNotEmpty();
     for (var name : names) {
       var interval =
-          AudioInterval.ofDeliveredSegment(
-              numberOf(name), SEEKABLE_SOURCE_AUDIO_PERIOD_TICKS, name.equals(names.getLast()));
+          AudioInterval.ofDeliveredSegment(numberOf(name), SEEKABLE_SOURCE_AUDIO_PERIOD_TICKS);
       var uploadedAudio =
           FfprobePackets.of(run.uploads().contentOf(List.of("init.mp4", name)), root).stream()
               .filter(Packet::isAudio)
@@ -2980,6 +2983,74 @@ class WorkerMediaSmokeTest {
     assertThat(uploadedAudio)
         .isNotEmpty()
         .containsExactlyElementsOf(ffmpegAudio.subList(0, uploadedAudio.size()));
+  }
+
+  @Test
+  @DisplayName(
+      "Should upload only the audio of its own interval in the segment that holds the video's end"
+          + " when a stream copy starts there and the audio outlasts the video")
+  void shouldUploadOnlyTheAudioOfItsOwnIntervalWhenAStreamCopyStartsWhereTheVideoEnds()
+      throws Exception {
+    var source = videoEndsBeforeAudioSource();
+    var launcher = new TeeingProcessLauncher(new ProcessBuilderLauncher());
+    var job = videoEndsBeforeAudioJob(source, TranscodeMode.TRANSCODE_MODE_REMUX);
+    job.getExecutionBuilder().setStartSequenceNumber(VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT);
+
+    var uploads =
+        execute(engine(softwareCapabilities(), launcher), source.getParent(), job.build());
+
+    var lastVideoSegment = "segment" + VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT + ".m4s";
+    assertThat(uploads.names()).containsExactly("init.mp4", lastVideoSegment);
+    var ffmpegPackets =
+        FfprobePackets.of(launcher.outputOf(fromProto(job.getJobAttemptId())), root);
+    var interval =
+        AudioInterval.ofDeliveredSegment(
+            VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT, SEEKABLE_SOURCE_AUDIO_PERIOD_TICKS);
+    var uploaded = packetsOf(uploads, lastVideoSegment);
+    assertThat(uploaded.stream().filter(Packet::isVideo).toList())
+        .isNotEmpty()
+        .containsExactlyElementsOf(ffmpegPackets.stream().filter(Packet::isVideo).toList());
+    assertThat(uploaded.stream().filter(Packet::isAudio).toList())
+        .as("the copied audio of 60 s to 66 s, packet for packet")
+        .isNotEmpty()
+        .containsExactlyElementsOf(
+            ffmpegPackets.stream()
+                .filter(Packet::isAudio)
+                .filter(packet -> interval.holds(packet.pts()))
+                .toList());
+  }
+
+  @Test
+  @DisplayName(
+      "Should upload the segment that holds the video's end with only its own interval's audio"
+          + " when an encode from segment 0 reads audio that outlasts the video")
+  void shouldUploadTheSegmentThatHoldsTheVideosEndWithOnlyItsOwnAudioWhenAnEncodeReadsTheTail()
+      throws Exception {
+    var source = videoEndsBeforeAudioSource();
+    var launcher = new TeeingProcessLauncher(new ProcessBuilderLauncher());
+    var job = videoEndsBeforeAudioJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+
+    var uploads =
+        execute(engine(softwareCapabilities(), launcher), source.getParent(), job.build());
+
+    assertThat(uploads.names())
+        .containsExactlyElementsOf(uploadNames(VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT + 1));
+    var ffmpegAudio =
+        FfprobePackets.of(launcher.outputOf(fromProto(job.getJobAttemptId())), root).stream()
+            .filter(Packet::isAudio)
+            .toList();
+    var interval =
+        AudioInterval.ofDeliveredSegment(
+            VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT, SEEKABLE_SOURCE_AUDIO_PERIOD_TICKS);
+    assertThat(
+            packetsOf(uploads, "segment" + VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT + ".m4s")
+                .stream()
+                .filter(Packet::isAudio)
+                .toList())
+        .as("the encoded audio of 60 s to 66 s")
+        .isNotEmpty()
+        .containsExactlyElementsOf(
+            ffmpegAudio.stream().filter(packet -> interval.holds(packet.pts())).toList());
   }
 
   static Stream<Arguments> sourceContainersModesAndStarts() {
@@ -3189,6 +3260,42 @@ class WorkerMediaSmokeTest {
     var source = irregularKeyframeSources.resolve("irregular." + container);
     if (!generatedSeekableSources.contains(source)) {
       runFfmpeg(List.of("-i", matroska.toString(), "-c", "copy"), source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  private static VariantJob.Builder videoEndsBeforeAudioJob(Path source, TranscodeMode mode) {
+    var job = seekableSourceJob(source, mode);
+    job.getExecutionBuilder().setMediaSegmentCount(VIDEO_ENDS_BEFORE_AUDIO_SEGMENT_COUNT);
+    return job;
+  }
+
+  // H.264 at 64x36 and 24 fps with a keyframe every 2 s for 64 s, and pink noise for 84 s: the
+  // video ends inside segment 10, and the audio runs on through segment 13.
+  private static synchronized Path videoEndsBeforeAudioSource() throws Exception {
+    var source = seekableSources.resolve("video-ends-before-audio.mp4");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24:duration=64",
+              "-f",
+              "lavfi",
+              "-i",
+              "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5:duration=84",
+              "-c:v",
+              "libx264",
+              "-g",
+              "48",
+              "-keyint_min",
+              "48",
+              "-c:a",
+              "aac"),
+          source);
       generatedSeekableSources.add(source);
     }
 

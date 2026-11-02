@@ -88,11 +88,11 @@ final class AudioSampleQueue {
     return samples;
   }
 
-  /** Removes every sample still held, which the end of the output leaves to the last segment. */
-  List<CarriedSample> closeAll() {
-    var samples = held.stream().map(Queued::sample).toList();
-    held.clear();
-    return samples;
+  /** Drops the samples held for segments after this one. */
+  void discardAfter(long number) {
+    while (!held.isEmpty() && held.peekLast().number() > number) {
+      held.removeLast();
+    }
   }
 
   /** The audio samples dropped because they arrived after their segment closed. */
