@@ -131,7 +131,7 @@ final class WorkerVariantJobMapper {
   }
 
   @SuppressWarnings("checkstyle:fullyQualifiedName")
-  private AudioDecision audio(build.buf.gen.streamarr.transcode.v1.AudioDecision audio) {
+  private static AudioDecision audio(build.buf.gen.streamarr.transcode.v1.AudioDecision audio) {
     return AudioDecision.builder()
         .mode(audioMode(audio.getMode()))
         .codec(audio.hasCodec() ? audio.getCodec() : null)
@@ -187,6 +187,15 @@ final class WorkerVariantJobMapper {
   private static boolean namesLayout(build.buf.gen.streamarr.transcode.v1.AudioDecision audio) {
     return audio.getMode() == AUDIO_MODE_TRANSCODE
         && audio.getChannelLayout() != AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_UNSPECIFIED;
+  }
+
+  /**
+   * The layout that the job names for its audio.
+   *
+   * @throws InvalidJobSpecificationException when the contract refuses the job's audio decision
+   */
+  static Optional<SpeakerLayout> audioLayoutOf(VariantJob job) {
+    return audio(job.getDecision().getAudio()).channelLayout();
   }
 
   // The contract refuses a layout on a job that does not encode audio, a value that it does not
@@ -299,7 +308,7 @@ final class WorkerVariantJobMapper {
   }
 
   @SuppressWarnings("checkstyle:fullyQualifiedName")
-  private AudioMode audioMode(build.buf.gen.streamarr.transcode.v1.AudioMode mode) {
+  private static AudioMode audioMode(build.buf.gen.streamarr.transcode.v1.AudioMode mode) {
     return switch (mode) {
       case AUDIO_MODE_COPY -> AudioMode.COPY;
       case AUDIO_MODE_TRANSCODE -> AudioMode.TRANSCODE;

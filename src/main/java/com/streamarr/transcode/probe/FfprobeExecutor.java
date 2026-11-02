@@ -21,6 +21,7 @@ import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import lombok.NonNull;
@@ -152,6 +153,54 @@ public final class FfprobeExecutor {
         .filter(stream -> "audio".equals(stream.getCodecType()))
         .findFirst()
         .orElseThrow(() -> new ChosenAudioException("The source has no audio stream"));
+  }
+
+  /**
+   * The centre and surround levels of the Lo/Ro downmix that the first frame of the source's first
+   * audio stream signals, as FFmpeg's AC-3 and E-AC-3 decoders export them (ADR 0050). Every job
+   * attempt of a stream session reads the same frame, so every attempt mixes with the same levels.
+   *
+   * @throws ChosenAudioException when FFmpeg fails or prints no levels
+   */
+  public DownmixLevels readDownmixLevels(@NonNull Path source)
+      throws ExecutionException, InterruptedException {
+    var arguments =
+        List.of(
+            "-nostdin",
+            "-hide_banner",
+            "-v",
+            "info",
+            "-i",
+            source.toString(),
+            "-map",
+            "0:a:0",
+            "-frames:a",
+            "1",
+            "-af",
+            "ashowinfo",
+            "-f",
+            "null",
+            "-");
+    var levels = new AtomicReference<Optional<DownmixLevels>>(Optional.empty());
+    var process = processFactory.apply(new ProbeCommand(ProbeTool.FFMPEG, arguments));
+    var finished =
+        run(
+            process,
+            InputStream::readAllBytes,
+            stderr ->
+                readLines(
+                    stderr,
+                    line ->
+                        DownmixLevels.parse(line)
+                            .filter(_ -> levels.get().isEmpty())
+                            .ifPresent(read -> levels.set(Optional.of(read)))));
+    if (finished.exitCode() != 0) {
+      throw new ChosenAudioException("FFmpeg exited with code " + finished.exitCode());
+    }
+
+    return levels
+        .get()
+        .orElseThrow(() -> new ChosenAudioException("The first audio frame signals no levels"));
   }
 
   /** A read of the chosen audio stream that failed. */

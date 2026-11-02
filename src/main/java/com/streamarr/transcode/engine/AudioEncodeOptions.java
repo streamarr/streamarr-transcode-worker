@@ -37,11 +37,8 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
     var output = audio.channelLayout().orElseThrow();
     var encoder = Encoder.of(audio.codec());
     var channels = ChannelStage.of(source, output);
-    var filters = new ArrayList<String>();
     var rate = targetSampleRate(encoder, audio, source);
-    // The format stage runs first, so its dither never reaches the silent channels that a pad adds.
-    filters.add(formatStage(encoder, audio, source, rate));
-    channels.filter().ifPresent(filters::add);
+    var filters = filters(encoder, audio, source, rate, channels);
 
     var outputOptions = new ArrayList<>(List.of("-c:a", encoder.ffmpegName(audio.codec())));
     outputOptions.addAll(List.of("-af", String.join(",", filters)));
@@ -96,12 +93,51 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
     return List.of("-frame_size:a", String.valueOf(written.getAsInt() / FLAC_FRAMES_PER_SECOND));
   }
 
+  // A downmix mixes in floating point, so the format stage follows it. Otherwise the format stage
+  // runs first, so its dither never reaches the silent channels that a pad adds.
+  private static List<String> filters(
+      Encoder encoder,
+      AudioDecision audio,
+      SourceAudio source,
+      Optional<Integer> rate,
+      ChannelStage channels) {
+    if (channels instanceof ChannelStage.Downmix downmix) {
+      var output = audio.channelLayout().orElseThrow();
+      return List.of(
+          downmix.filter(source.loRoLevels(), limiterFor(encoder, source, output)),
+          formatStage(
+              encoder, audio, source, rate, !downmix.onlyLeavesChannelsOut(source.loRoLevels())));
+    }
+
+    var filters = new ArrayList<>(List.of(formatStage(encoder, audio, source, rate, false)));
+    channels.filter().ifPresent(filters::add);
+    return filters;
+  }
+
+  private static DownmixLimiter limiterFor(
+      Encoder encoder, SourceAudio source, SpeakerLayout output) {
+    if (encoder == Encoder.LOSSLESS) {
+      return DownmixLimiter.forLossless(source);
+    }
+
+    return DownmixLimiter.forLossy(output);
+  }
+
+  static String resample(int sampleRate) {
+    return "aresample=osr=" + sampleRate + ":" + TUNED_RESAMPLER;
+  }
+
+  // A downmix that changes samples writes 16-bit FLAC or ALAC with TPDF dither.
   private static String formatStage(
-      Encoder encoder, AudioDecision audio, SourceAudio source, Optional<Integer> rate) {
+      Encoder encoder,
+      AudioDecision audio,
+      SourceAudio source,
+      Optional<Integer> rate,
+      boolean mixed) {
     var options = new ArrayList<String>();
     rate.ifPresent(target -> options.add("osr=" + target));
     if (encoder == Encoder.LOSSLESS) {
-      options.addAll(losslessFormat(audio, source, rate.isPresent()));
+      options.addAll(losslessFormat(audio, source, rate.isPresent(), mixed));
     }
 
     options.add(TUNED_RESAMPLER);
@@ -136,7 +172,7 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
   // the written depth, and a resample to 16 bits runs in floating point, where swresample can
   // dither; on 16-bit samples it would round each one.
   private static List<String> losslessFormat(
-      AudioDecision audio, SourceAudio source, boolean resamples) {
+      AudioDecision audio, SourceAudio source, boolean resamples, boolean mixed) {
     var depth =
         audio.outputBitDepth().orElse(writesSixteenBits(source) ? SIXTEEN_BITS : TWENTY_FOUR_BITS);
     var options = new ArrayList<String>();
@@ -146,7 +182,8 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
 
     var format = depth == SIXTEEN_BITS ? "s16" : "s32";
     options.add("osf=" + ("alac".equals(audio.codec()) ? format + "p" : format));
-    if (!resamples && !losesPrecision(source, depth)) {
+    var mixedToSixteenBits = mixed && depth == SIXTEEN_BITS;
+    if (!resamples && !mixedToSixteenBits && !losesPrecision(source, depth)) {
       return options;
     }
 
