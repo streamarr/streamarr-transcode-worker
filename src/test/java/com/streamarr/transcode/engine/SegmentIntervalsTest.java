@@ -11,6 +11,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 @Tag("UnitTest")
+@DisplayName("Segment Intervals Tests")
 class SegmentIntervalsTest {
 
   private static final long MILLISECONDS = 1000;
