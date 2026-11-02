@@ -154,7 +154,7 @@ class FfmpegCommandBuilderAudioLayoutTest {
     void shouldPassNoDecoderOptionsWhenTheSourceIsNotAc3OrEac3() {
       var cmd = command(encode("aac", "5.1"), source("dts", "5.1(side)"));
 
-      assertThat(cmd).doesNotContain("-drc_scale:a:0", "-target_level:a:0");
+      assertThat(cmd).isNotEmpty().doesNotContain("-drc_scale:a:0", "-target_level:a:0");
     }
 
     @ParameterizedTest(name = "{0} Hz")
@@ -325,7 +325,7 @@ class FfmpegCommandBuilderAudioLayoutTest {
     void shouldLeaveTheFrameSizeToTheEncoderWhenAlacEncodes() {
       var cmd = command(encode("alac", "stereo"), Optional.of(hiResFlac(48_000, 24)));
 
-      assertThat(cmd).doesNotContain("-frame_size:a");
+      assertThat(cmd).isNotEmpty().doesNotContain("-frame_size:a");
     }
 
     @Test
@@ -335,7 +335,7 @@ class FfmpegCommandBuilderAudioLayoutTest {
 
       var cmd = command(encode("flac", "stereo"), Optional.of(source));
 
-      assertThat(cmd).doesNotContain("-frame_size:a");
+      assertThat(cmd).isNotEmpty().doesNotContain("-frame_size:a");
     }
 
     @Test
@@ -343,7 +343,7 @@ class FfmpegCommandBuilderAudioLayoutTest {
     void shouldGiveFlacNoBitrateWhenTheJobCarriesOne() {
       var cmd = command(encode("flac", "stereo"), source("flac", "stereo"));
 
-      assertThat(cmd).doesNotContain("-b:a");
+      assertThat(cmd).isNotEmpty().doesNotContain("-b:a");
     }
   }
 
