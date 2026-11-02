@@ -488,6 +488,100 @@ class TranscodeWorkerJobAttemptTest {
 
   @Test
   @DisplayName(
+      "Should hold the last frame and pad the audio up to the job's advertised end when a job"
+          + " encodes both chosen streams with the early-end instructions")
+  void shouldHoldTheLastFrameAndPadTheAudioUpToTheAdvertisedEndWhenAJobCarriesBothInstructions()
+      throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = heldAndPaddedJob();
+    job.getExecutionBuilder().setStartSequenceNumber(10);
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
+      var command = launcher.command(fromProto(job.getJobAttemptId()));
+      assertThat(command).containsSequence("-ss", "54", "-noaccurate_seek");
+      assertThat(command.get(command.indexOf("-vf") + 1))
+          .endsWith(",tpad=stop=-1:stop_mode=clone,trim=start=54:end=84.5");
+      assertThat(command.get(command.indexOf("-af") + 1))
+          .isEqualTo("apad,asetpts='if(isnan(PTS),54/TB+N/SR/TB,PTS)',atrim=start=54:end=85.5");
+    }
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("earlyEndInstructionsThatTheJobContradicts")
+  @DisplayName(
+      "Should refuse the job as an invalid specification when it holds the last frame or pads"
+          + " the audio of a stream it does not encode, or without a positive advertised end")
+  void shouldRefuseTheJobWhenAnEarlyEndInstructionLacksAnEncodeOrAPositiveAdvertisedEnd(
+      String contradiction, UnaryOperator<VariantJob.Builder> change) throws Exception {
+    assertRefusedAsAnInvalidSpecification(change.apply(heldAndPaddedJob()).build());
+  }
+
+  static Stream<Arguments> earlyEndInstructionsThatTheJobContradicts() {
+    return Stream.of(
+        Arguments.of(
+            "a stream copy holds the last frame",
+            (UnaryOperator<VariantJob.Builder>)
+                job -> {
+                  var copy = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+                  copy.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
+                  copy.setExecution(job.getExecution());
+                  return copy;
+                }),
+        Arguments.of(
+            "copied audio is padded",
+            (UnaryOperator<VariantJob.Builder>)
+                job -> {
+                  job.getDecisionBuilder().getAudioBuilder().setMode(AudioMode.AUDIO_MODE_COPY);
+                  return job;
+                }),
+        Arguments.of(
+            "the advertised end is missing",
+            (UnaryOperator<VariantJob.Builder>)
+                job -> {
+                  job.getExecutionBuilder().clearAdvertisedEnd();
+                  return job;
+                }),
+        Arguments.of(
+            "the advertised end is missing for padding alone",
+            (UnaryOperator<VariantJob.Builder>)
+                job -> {
+                  job.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(false);
+                  job.getExecutionBuilder().clearAdvertisedEnd();
+                  return job;
+                }),
+        Arguments.of(
+            "the advertised end is zero",
+            (UnaryOperator<VariantJob.Builder>)
+                job -> {
+                  job.getExecutionBuilder().getAdvertisedEndBuilder().setSeconds(0).setNanos(0);
+                  return job;
+                }));
+  }
+
+  // A full transcode that holds the last frame and pads its encoded AAC up to an advertised end
+  // of 84.5 s, inside the last of 15 segments of 6 s.
+  private static VariantJob.Builder heldAndPaddedJob() {
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setMode(AudioMode.AUDIO_MODE_TRANSCODE)
+        .setCodec("aac")
+        .setChannels(2)
+        .setBitrateBitsPerSecond(128_000)
+        .setPadWithSilenceToAdvertisedEnd(true);
+    job.getExecutionBuilder().setMediaSegmentCount(15);
+    job.getExecutionBuilder().getAdvertisedEndBuilder().setSeconds(84).setNanos(500_000_000);
+    return job;
+  }
+
+  @Test
+  @DisplayName(
       "Should refuse the job as an invalid specification when it carries no video decision")
   void shouldRefuseTheJobAsAnInvalidSpecificationWhenItCarriesNoVideoDecision() throws Exception {
     var job = variantJobBuilder();

@@ -120,8 +120,10 @@ import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import lombok.Builder;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Named;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.function.ThrowingSupplier;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -240,6 +242,19 @@ class WorkerMediaSmokeTest {
   // 84 s of audio in 6 s segments; the 64 s of video end inside segment 10.
   private static final int VIDEO_ENDS_BEFORE_AUDIO_SEGMENT_COUNT = 14;
   private static final int VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT = 10;
+  // 1,764 s of audio in 6 s segments after the same 64 s of video.
+  private static final int LONG_AUDIO_AFTER_VIDEO_SEGMENT_COUNT = 294;
+  // The seekable sources' 6 s period at their 24 fps.
+  private static final int FRAMES_IN_A_PERIOD = 144;
+  // The longest frame among the audio codecs these tests encode: AC-3 and E-AC-3 code 1,536
+  // samples a frame, AAC 1,024.
+  private static final long LONGEST_AUDIO_FRAME_TICKS = 1536;
+
+  // 18 s of video and 10 s of FLAC audio in three 6 s segments.
+  private static final int FLAC_SOURCE_SEGMENT_COUNT = 3;
+  private static final int FLAC_SOURCE_SAMPLE_RATE = 48_000;
+  // FFmpeg's FLAC encoder codes 4,608 samples a frame at 48 kHz, less than 0.1 s.
+  private static final int FLAC_SAMPLES_PAST_THE_END_AT_MOST = 4_800;
 
   // The fragmentation target that a worker passes FFmpeg unless its settings name another.
   private static final Duration DEFAULT_FRAGMENTATION_TARGET = Duration.ofMillis(250);
@@ -4446,6 +4461,137 @@ class WorkerMediaSmokeTest {
     assertThat(failure.uploads().names()).isEmpty();
   }
 
+  @ParameterizedTest(name = "{0} from segment {2}")
+  @MethodSource("videoEndsBeforeAudioSourcesAndStarts")
+  @DisplayName(
+      "Should upload every advertised segment, each opening at a keyframe with one period of"
+          + " video and only its own interval's audio, when an encode holds the last frame of video"
+          + " that ends before the audio")
+  void shouldUploadEveryAdvertisedSegmentWhenAnEncodeHoldsTheLastFrameOfVideoThatEndsBeforeAudio(
+      ThrowingSupplier<Path> sourceOf, int segmentCount, int startSequenceNumber) throws Throwable {
+    var source = sourceOf.get();
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    paddedTo(job, segmentCount);
+    job.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
+    job.getExecutionBuilder().setStartSequenceNumber(startSequenceNumber);
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(uploads.names())
+        .containsExactlyElementsOf(
+            uploadNames(segmentCount).stream()
+                .filter(
+                    name -> !name.startsWith("segment") || numberOf(name) >= startSequenceNumber)
+                .toList());
+    for (var number = startSequenceNumber; number < segmentCount; number++) {
+      var movie = Mp4Samples.read(uploads.contentOf(List.of("init.mp4", segmentName(number))));
+      var video = movie.samplesOf(movie.videoTrack());
+      assertThat(video).as("segment %d's video", number).hasSize(FRAMES_IN_A_PERIOD);
+      assertThat(video.getFirst().isSync()).as("segment %d opens at a keyframe", number).isTrue();
+      var interval = AudioInterval.ofDeliveredSegment(number, SEEKABLE_SOURCE_AUDIO_PERIOD_TICKS);
+      var audio = movie.samplesOf(movie.audioTrack());
+      assertThat(audio)
+          .as("segment %d's audio starts inside its interval", number)
+          .isNotEmpty()
+          .allMatch(sample -> interval.holds(sample.presentationTime()));
+      if (number > VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT) {
+        assertThat(audio.stream().mapToLong(Mp4Samples.Sample::duration).sum())
+            .as("segment %d holds one period of audio", number)
+            .isGreaterThan(SEEKABLE_SOURCE_AUDIO_PERIOD_TICKS - LONGEST_AUDIO_FRAME_TICKS)
+            .isLessThanOrEqualTo(SEEKABLE_SOURCE_AUDIO_PERIOD_TICKS + LONGEST_AUDIO_FRAME_TICKS);
+      }
+    }
+  }
+
+  static Stream<Arguments> videoEndsBeforeAudioSourcesAndStarts() {
+    return Stream.of(
+            Arguments.of(
+                Named.<ThrowingSupplier<Path>>of(
+                    "84 s of stereo AAC", WorkerMediaSmokeTest::videoEndsBeforeAudioSource),
+                VIDEO_ENDS_BEFORE_AUDIO_SEGMENT_COUNT),
+            Arguments.of(
+                Named.<ThrowingSupplier<Path>>of(
+                    "1,764 s of 5.1 AC-3", WorkerMediaSmokeTest::longAudioAfterVideoEndSource),
+                LONG_AUDIO_AFTER_VIDEO_SEGMENT_COUNT))
+        .flatMap(
+            source ->
+                Stream.of(
+                        0,
+                        VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT,
+                        VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT + 1)
+                    .map(start -> Arguments.of(source.get()[0], source.get()[1], start)));
+  }
+
+  @ParameterizedTest(name = "{0} in {1}")
+  @MethodSource("paddedCodecsAndModes")
+  @DisplayName(
+      "Should write an initialization segment byte-identical to the normal attempt's and every"
+          + " advertised segment when an attempt that pads its audio starts after the audio's end")
+  void shouldWriteTheNormalAttemptsInitializationSegmentWhenAPaddedAttemptStartsAfterTheAudiosEnd(
+      String codec, TranscodeMode mode) throws Exception {
+    var source = audioEndsLongBeforeVideoSource();
+    var normal = audioEndsLongBeforeVideoPaddedJob(source, mode, codec);
+    var silenceOnly = audioEndsLongBeforeVideoPaddedJob(source, mode, codec);
+    silenceOnly.getExecutionBuilder().setStartSequenceNumber(AFTER_THE_AUDIOS_END_SEQUENCE_NUMBER);
+
+    var normalUploads = execute(engine(softwareCapabilities()), source.getParent(), normal.build());
+    var silenceOnlyUploads =
+        execute(engine(softwareCapabilities()), source.getParent(), silenceOnly.build());
+
+    assertThat(silenceOnlyUploads.segments().get("init.mp4"))
+        .isEqualTo(normalUploads.segments().get("init.mp4"));
+    assertThat(silenceOnlyUploads.names())
+        .containsExactlyElementsOf(
+            uploadNames(AUDIO_ENDS_LONG_BEFORE_VIDEO_SEGMENT_COUNT).stream()
+                .filter(
+                    name ->
+                        !name.startsWith("segment")
+                            || numberOf(name) >= AFTER_THE_AUDIOS_END_SEQUENCE_NUMBER)
+                .toList());
+  }
+
+  static Stream<Arguments> paddedCodecsAndModes() {
+    return Stream.of("aac", "ac3", "eac3")
+        .flatMap(
+            codec ->
+                Stream.of(
+                        TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE,
+                        TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE)
+                    .map(mode -> Arguments.of(codec, mode)));
+  }
+
+  @Test
+  @DisplayName(
+      "Should decode to every source sample unchanged and in place, then only digital silence up to"
+          + " the advertised end, when a lossless encode pads audio that ends early")
+  void shouldDecodeToEverySourceSampleThenOnlySilenceWhenALosslessEncodePadsAudioThatEndsEarly()
+      throws Exception {
+    var source = flacAudioEndsBeforeVideoSource();
+    var padded = flacAudioEndsBeforeVideoJob(source);
+    paddedTo(padded, FLAC_SOURCE_SEGMENT_COUNT);
+    var unpadded = flacAudioEndsBeforeVideoJob(source);
+
+    var paddedUploads = execute(engine(softwareCapabilities()), source.getParent(), padded.build());
+    var unpaddedUploads =
+        execute(engine(softwareCapabilities()), source.getParent(), unpadded.build());
+
+    var sourceSamples = decodedAudio(Files.readAllBytes(source));
+    var unpaddedSamples = decodedAudio(unpaddedUploads.contentOf(unpaddedUploads.names()));
+    var paddedSamples = decodedAudio(paddedUploads.contentOf(paddedUploads.names()));
+    var advertisedEndBytes = FLAC_SOURCE_SEGMENT_COUNT * 6 * FLAC_SOURCE_SAMPLE_RATE * 2;
+    assertThat(unpaddedSamples).as("the unpadded encode").isEqualTo(sourceSamples);
+    assertThat(Arrays.copyOf(paddedSamples, sourceSamples.length))
+        .as("the padded encode up to the source's end")
+        .isEqualTo(sourceSamples);
+    assertThat(Arrays.copyOfRange(paddedSamples, sourceSamples.length, paddedSamples.length))
+        .as("the padded encode after the source's end")
+        .isNotEmpty()
+        .containsOnly((byte) 0);
+    assertThat(paddedSamples.length)
+        .isGreaterThanOrEqualTo(advertisedEndBytes)
+        .isLessThanOrEqualTo(advertisedEndBytes + FLAC_SAMPLES_PAST_THE_END_AT_MOST * 2);
+  }
+
   static Stream<Arguments> sourceContainersModesAndStarts() {
     return sourceContainersAndModes()
         .flatMap(
@@ -4693,6 +4839,116 @@ class WorkerMediaSmokeTest {
     }
 
     return source;
+  }
+
+  // Pads the encoded audio up to the end of the job's last advertised segment of 6 s.
+  private static void paddedTo(VariantJob.Builder job, int segmentCount) {
+    job.getExecutionBuilder().setMediaSegmentCount(segmentCount);
+    job.getExecutionBuilder().getAdvertisedEndBuilder().setSeconds(segmentCount * 6L);
+    job.getDecisionBuilder().getAudioBuilder().setPadWithSilenceToAdvertisedEnd(true);
+  }
+
+  // A job that encodes the audio of the source whose audio ends 80 s before its video into this
+  // codec at two channels and pads it, holding the last frame too when it encodes the video.
+  private static VariantJob.Builder audioEndsLongBeforeVideoPaddedJob(
+      Path source, TranscodeMode mode, String codec) {
+    var job = seekableSourceJob(source, mode);
+    paddedTo(job, AUDIO_ENDS_LONG_BEFORE_VIDEO_SEGMENT_COUNT);
+    if (mode == TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE) {
+      job.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
+    }
+
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setCodec(codec)
+        .setChannels(2)
+        .setBitrateBitsPerSecond(192_000);
+    return job;
+  }
+
+  // H.264 at 64x36 and 24 fps with a keyframe every 2 s for 64 s, and 1,764 s of pink noise as
+  // 5.1 AC-3 at 384 kb/s: the video ends inside segment 10, and the audio runs on through segment
+  // 293.
+  private static synchronized Path longAudioAfterVideoEndSource() throws Exception {
+    var source = seekableSources.resolve("long-audio-after-video-end.mp4");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24:duration=64",
+              "-f",
+              "lavfi",
+              "-i",
+              "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5:duration=1764,"
+                  + "pan=5.1|c0=c0|c1=c0|c2=c0|c3=c0|c4=c0|c5=c0",
+              "-c:v",
+              "libx264",
+              "-g",
+              "48",
+              "-keyint_min",
+              "48",
+              "-c:a",
+              "ac3",
+              "-b:a",
+              "384k"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // A stream copy session that encodes the FLAC source's mono audio to FLAC, from segment 0.
+  private static VariantJob.Builder flacAudioEndsBeforeVideoJob(Path source) {
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    job.getExecutionBuilder().setMediaSegmentCount(FLAC_SOURCE_SEGMENT_COUNT);
+    job.getDecisionBuilder().getAudioBuilder().setCodec("flac").setChannels(1);
+    return job;
+  }
+
+  // H.264 at 64x36 and 24 fps with a keyframe every 2 s for 18 s, and a 440 Hz sine that ends at
+  // 10 s as 16-bit mono FLAC, which decodes to the same samples wherever FFmpeg reads it.
+  private static synchronized Path flacAudioEndsBeforeVideoSource() throws Exception {
+    var source = seekableSources.resolve("flac-audio-ends-before-video.mkv");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24:duration=18",
+              "-f",
+              "lavfi",
+              "-i",
+              "sine=frequency=440:sample_rate=" + FLAC_SOURCE_SAMPLE_RATE + ":duration=10",
+              "-c:v",
+              "libx264",
+              "-g",
+              "48",
+              "-c:a",
+              "flac",
+              "-sample_fmt",
+              "s16"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // The first audio stream of the media, decoded to 16-bit little-endian samples.
+  private byte[] decodedAudio(byte[] media) throws Exception {
+    var file = Files.createTempFile(root, "decoded", ".media");
+    Files.write(file, media);
+    var samples = Files.createTempFile(root, "decoded", ".s16le");
+    runFfmpeg(List.of("-i", file.toString(), "-map", "0:a:0", "-f", "s16le"), samples);
+    return Files.readAllBytes(samples);
+  }
+
+  private static String segmentName(int number) {
+    return "segment" + number + ".m4s";
   }
 
   private static VariantJob.Builder audioEndsLongBeforeVideoJob(Path source) {
