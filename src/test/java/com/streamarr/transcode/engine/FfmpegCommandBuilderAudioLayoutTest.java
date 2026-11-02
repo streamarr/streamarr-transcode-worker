@@ -289,6 +289,29 @@ class FfmpegCommandBuilderAudioLayoutTest {
     }
 
     @Test
+    @DisplayName("Should dither every channel when FLAC writes a drop-only downmix of AC-3")
+    void shouldDitherEveryChannelWhenFlacWritesADropOnlyDownmixOfAc3() {
+      var cmd = command(encode("flac", "5.0"), source("ac3", "5.1(side)"));
+
+      assertThat(audioFilter(cmd))
+          .isEqualTo(FLOAT_PAN + "5.0|FL=FL|FR=FR|FC=FC|BL=SL|BR=SR," + DITHERED_16_BITS);
+    }
+
+    @Test
+    @DisplayName("Should leave the surrounds out without a limiter when AC-3 signals a zero level")
+    void shouldLeaveTheSurroundsOutWithoutALimiterWhenAc3SignalsAZeroLevel() {
+      var source =
+          sourceBuilder("ac3", "quad(side)")
+              .loRoLevels(Optional.of(new SourceAudio.LoRoLevels(0.707107, 0.0)))
+              .build();
+
+      var cmd = command(encode("aac", "stereo"), Optional.of(source));
+
+      assertThat(audioFilter(cmd))
+          .isEqualTo(FLOAT_PAN + "stereo|FL=FL|FR=FR,aresample=" + TUNED_RESAMPLER);
+    }
+
+    @Test
     @DisplayName("Should resample before the matrix when a lossy downmix changes the sample rate")
     void shouldResampleBeforeTheMatrixWhenALossyDownmixChangesTheSampleRate() {
       var source = sourceBuilder("flac", "5.1(side)").sampleRate(OptionalInt.of(96_000)).build();

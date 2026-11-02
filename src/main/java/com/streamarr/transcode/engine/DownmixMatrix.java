@@ -159,7 +159,12 @@ final class DownmixMatrix {
       mix(speaker, front, surroundLevel * gain);
     }
 
+    // A track can signal a level of zero, which leaves the channel out rather than summing it.
     private void mix(Speaker from, Speaker to, double gain) {
+      if (Double.compare(gain, 0.0) == 0) {
+        return;
+      }
+
       matrix.get(to).merge(from, gain, Double::sum);
     }
 
