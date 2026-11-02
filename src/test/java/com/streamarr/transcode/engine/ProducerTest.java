@@ -257,25 +257,20 @@ class ProducerTest {
   @MethodSource("recordings")
   @DisplayName(
       "Should deliver each audio sample in the media segment whose interval holds its start, apart"
-          + " from segment zero's priming frame and the last segment's tail, when FFmpeg writes it in"
-          + " another segment's fragment")
+          + " from segment zero's priming frame, when FFmpeg writes it in another segment's"
+          + " fragment")
   void
-      shouldDeliverEachAudioSampleInTheMediaSegmentWhoseIntervalHoldsItsStartApartFromSegmentZerosPrimingFrameAndTheLastSegmentsTailWhenFfmpegWritesItInAnotherSegmentsFragment(
+      shouldDeliverEachAudioSampleInTheMediaSegmentWhoseIntervalHoldsItsStartApartFromSegmentZerosPrimingFrameWhenFfmpegWritesItInAnotherSegmentsFragment(
           Recording recording) {
-    var outcome = deliverEverySegmentOf(recording);
+    deliverEverySegmentOf(recording);
 
-    var names = mediaSegmentNames();
-    assertThat(names)
+    assertThat(mediaSegmentNames())
         .isNotEmpty()
         .allSatisfy(
             name -> {
               var segment = mediaSegmentOf(sink, name);
               var periodTicks = recording.period() * segment.audioTrack().timescale();
-              var interval =
-                  AudioInterval.ofDeliveredSegment(
-                      numberOf(name),
-                      periodTicks,
-                      name.equals(names.getLast()) && outcome instanceof Completed);
+              var interval = AudioInterval.ofDeliveredSegment(numberOf(name), periodTicks);
 
               assertThat(segment.samplesOf(segment.audioTrack()))
                   .extracting(Sample::presentationTime)
@@ -287,17 +282,16 @@ class ProducerTest {
   @ParameterizedTest(name = "{0}")
   @MethodSource("recordings")
   @DisplayName(
-      "Should deliver exactly once every audio sample FFmpeg writes before its media segment was"
-          + " delivered when it rebuilds the media segments")
+      "Should deliver exactly once every audio sample FFmpeg writes inside a delivered segment's"
+          + " interval before that segment was delivered when it rebuilds the media segments")
   void shouldDeliverEveryAudioSampleFfmpegWritesInTimeExactlyOnceWhenItRebuildsTheMediaSegments(
       Recording recording) {
-    var outcome = deliverEverySegmentOf(recording);
+    deliverEverySegmentOf(recording);
 
     var delivered = Mp4Samples.read(sink.acceptedBytes());
     assertThat(delivered.samplesOf(delivered.audioTrack()))
         .isNotEmpty()
-        .containsExactlyElementsOf(
-            audioSamplesOfTheDeliveredSegments(recording, outcome instanceof Completed));
+        .containsExactlyElementsOf(audioSamplesOfTheDeliveredSegments(recording));
   }
 
   @ParameterizedTest(name = "{0}")

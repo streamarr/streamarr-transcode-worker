@@ -319,22 +319,30 @@ class SegmentGrouperTest {
   }
 
   @Test
-  @DisplayName("Should fail when audio-only fragments would make the last segment exceed the cap")
-  void shouldFailWhenAudioOnlyFragmentsWouldMakeTheLastSegmentExceedTheCap() {
-    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 0, 2 * FRAGMENT_BYTES);
-    grouper.accept(keyframeAt(0));
-    grouper.accept(audioOnly());
-    var overflowing = audioOnly();
+  @DisplayName(
+      "Should keep audio-only fragments beyond the segment cap in the open segment when the audio"
+          + " outlasts the video")
+  void shouldKeepAudioOnlyFragmentsBeyondTheSegmentCapWhenTheAudioOutlastsTheVideo() {
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 0, FRAGMENT_BYTES);
+    var keyframe = keyframeAt(0);
+    var firstAudio = audioOnly();
+    var secondAudio = audioOnly();
 
-    assertFailure(() -> grouper.accept(overflowing), Reason.EXCEEDS_SEGMENT_CAP);
+    grouper.accept(keyframe);
+    grouper.accept(firstAudio);
+    grouper.accept(secondAudio);
+
+    assertThat(grouper.finish()).contains(segment(0, keyframe, firstAudio, secondAudio));
   }
 
   @Test
-  @DisplayName("Should fail when fragments waiting for the first segment exceed the segment cap")
-  void shouldFailWhenFragmentsWaitingForTheFirstSegmentExceedTheSegmentCap() {
+  @DisplayName(
+      "Should fail when video fragments waiting for the first segment exceed the segment cap")
+  void shouldFailWhenVideoFragmentsWaitingForTheFirstSegmentExceedTheSegmentCap() {
     var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 0, FRAGMENT_BYTES);
     grouper.accept(audioOnly());
-    var overflowing = audioOnly();
+    grouper.accept(nonSyncAt(0));
+    var overflowing = nonSyncAt(1_001);
 
     assertFailure(() -> grouper.accept(overflowing), Reason.EXCEEDS_SEGMENT_CAP);
   }

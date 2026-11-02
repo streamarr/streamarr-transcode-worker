@@ -275,7 +275,7 @@ class TranscodeWorkerJobAttemptTest {
       var uploadedMovie = Mp4Samples.read(uploaded);
       assertThat(uploadedMovie.samplesOf(uploadedMovie.audioTrack()))
           .containsExactlyElementsOf(
-              audioSamplesOfTheDeliveredSegments(recording(ENCODED_RECORDING), true));
+              audioSamplesOfTheDeliveredSegments(recording(ENCODED_RECORDING)));
     }
   }
 

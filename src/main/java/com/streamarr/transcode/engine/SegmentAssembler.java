@@ -22,7 +22,8 @@ import lombok.NonNull;
  * of the fragments its grouper groups and the audio samples that start inside its interval,
  * whichever fragment carried them. It closes once its grouper has closed it and an audio sample of
  * a later segment has arrived or the video has run a margin past its end, at once when the movie
- * has no sound track, or when the output ends.
+ * has no sound track, or when the output ends. No segment takes audio past its interval, not even
+ * the last when the audio outlasts the video.
  */
 final class SegmentAssembler {
 
@@ -86,22 +87,15 @@ final class SegmentAssembler {
   }
 
   /**
-   * The segments the end of the output closes: every one awaiting audio, and the last, which also
-   * takes the audio after its interval, since no later segment opened.
+   * The segments the end of the output closes: every one awaiting audio, and the last, each with
+   * only the audio of its own interval. The audio after the last segment's interval belongs to
+   * segments that no keyframe opened, because the video ended first, and is dropped.
    *
    * @throws FragmentedMp4Exception when one is larger than the segment cap once rebuilt
    */
   List<ClosedSegment> finish() {
     grouper.finish().ifPresent(awaitingAudio::addLast);
-    var closed = new ArrayList<ClosedSegment>();
-    while (awaitingAudio.size() > 1) {
-      closed.add(closeFirstAwaiting(List.of()));
-    }
-
-    if (!awaitingAudio.isEmpty()) {
-      closed.add(closeFirstAwaiting(audio.closeAll()));
-    }
-
+    var closed = closeEveryAwaiting();
     audio.discard();
     return closed;
   }
