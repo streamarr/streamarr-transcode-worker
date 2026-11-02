@@ -119,6 +119,8 @@ public final class Producer {
    *     after which the producer delivers no audio sample; empty for any other attempt
    * @param mediaSegmentCount the variant's advertised media segments, against whose last one the
    *     producer reports whether the source ended early
+   * @param copiesAudio whether the attempt copies the source's audio packets, which the producer
+   *     places whole in the segment whose interval holds their start
    * @param memoryBudget the worker's segment memory, which every producer of the worker shares
    * @param clock the clock that times each media segment's production
    * @throws TranscodeException when FFmpeg cannot be started
@@ -131,6 +133,7 @@ public final class Producer {
       int periodSeconds,
       int startSequenceNumber,
       int mediaSegmentCount,
+      boolean copiesAudio,
       @NonNull Duration gracePeriod,
       @NonNull Duration stallTimeout,
       @NonNull Optional<OutputFrameRate> encodedFrameRate,
@@ -162,6 +165,7 @@ public final class Producer {
                     .periodSeconds(periodSeconds)
                     .mediaSegmentCount(mediaSegmentCount)
                     .video(videoDecision)
+                    .copiesAudio(copiesAudio)
                     .build())
             .startSequenceNumber(startSequenceNumber)
             .build();

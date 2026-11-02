@@ -16,14 +16,17 @@ import lombok.NonNull;
  * one that holds source media. Before it delivers any, the last segment is the one whose interval
  * holds the start of the last keyframe that a stream copy reads, as a copy opens its segments only
  * at keyframes, or of the last video frame that an encode reads. An encode that holds the last
- * frame carries every stream's samples to the advertised end, and converts each sample over its
- * whole duration, so the latest instant that any stream's last sample covers decides.
+ * frame carries every stream's samples to the advertised end, so the latest of them decides: the
+ * last instant that the video's or encoded audio's last sample covers, as the encode converts each
+ * sample over its whole duration, or the start of the last copied audio packet, which the producer
+ * places whole by its start.
  *
  * <p>The segment that holds the video's last keyframe or frame carries every video sample after it,
  * so only the audio can have source media after the last segment.
  */
 @Builder
-record SourceEndRule(int periodSeconds, int mediaSegmentCount, @NonNull VideoDecision video) {
+record SourceEndRule(
+    int periodSeconds, int mediaSegmentCount, @NonNull VideoDecision video, boolean copiesAudio) {
 
   SourceEnd reportOn(List<ObservedSourceStream> streams, OptionalInt lastDeliveredMediaSegment) {
     var ends =
@@ -39,7 +42,7 @@ record SourceEndRule(int periodSeconds, int mediaSegmentCount, @NonNull VideoDec
       List<ObservedSourceStream> streams, OptionalInt lastDeliveredMediaSegment) {
     if (video instanceof VideoDecision.Encode encode && encode.holdsLastFrameToAdvertisedEnd()) {
       return streams.stream()
-          .map(SourceEndRule::lastCoveredInstant)
+          .map(this::lastSourceInstant)
           .max(Comparator.naturalOrder())
           .map(this::segmentAt);
     }
@@ -68,6 +71,14 @@ record SourceEndRule(int periodSeconds, int mediaSegmentCount, @NonNull VideoDec
             .sorted()
             .toList();
     return new EndedEarly(Math.toIntExact(segment), streamsWithMediaAfter);
+  }
+
+  private Duration lastSourceInstant(ObservedSourceStream stream) {
+    if (copiesAudio && stream.sourceIndex() != video.streamIndex()) {
+      return stream.lastStart();
+    }
+
+    return lastCoveredInstant(stream);
   }
 
   // The last nanosecond that the stream's last sample covers; its start when it lasts no time.

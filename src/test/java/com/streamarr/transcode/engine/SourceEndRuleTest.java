@@ -160,6 +160,36 @@ class SourceEndRuleTest {
     assertThat(report.endedEarly()).contains(new EndedEarly(0, List.of()));
   }
 
+  // The last copied AAC packet runs from 5.994 s to 6.015 s; the producer places it in segment 0.
+  @Test
+  @DisplayName(
+      "Should report the segment where the last copied audio packet starts when an encode that"
+          + " holds the last frame copies audio whose last packet crosses a segment boundary")
+  void shouldReportTheSegmentWhereTheLastCopiedAudioPacketStartsWhenItCrossesABoundary() {
+    var video =
+        videoEndingAt64Seconds()
+            .lastStart(Duration.ofMillis(958))
+            .end(Duration.ofSeconds(1))
+            .lastKeyframeStart(Optional.of(Duration.ZERO))
+            .build();
+    var audio =
+        audioEndingAt84Seconds()
+            .lastStart(Duration.ofMillis(5_994))
+            .end(Duration.ofMillis(6_015))
+            .build();
+    var rule =
+        SourceEndRule.builder()
+            .periodSeconds(6)
+            .mediaSegmentCount(14)
+            .video(held())
+            .copiesAudio(true)
+            .build();
+
+    var report = rule.reportOn(List.of(video, audio), NOTHING_DELIVERED);
+
+    assertThat(report.endedEarly()).contains(new EndedEarly(0, List.of()));
+  }
+
   @Test
   @DisplayName(
       "Should report no early end when a stream copy's last keyframe lies in the last advertised"
