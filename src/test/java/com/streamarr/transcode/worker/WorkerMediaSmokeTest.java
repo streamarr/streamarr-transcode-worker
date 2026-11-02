@@ -3319,14 +3319,19 @@ class WorkerMediaSmokeTest {
     }
   }
 
-  @Test
+  @ParameterizedTest(name = "{0}-bit")
+  @ValueSource(ints = {24, 16})
   @DisplayName(
-      "Should keep every unsummed channel's samples and hold the summed pair under -1 dBTP when FLAC"
-          + " writes 7.1 as 5.1")
+      "Should keep every unsummed channel's samples and hold the summed pair under its ceiling"
+          + " when FLAC writes 7.1 as 5.1")
   void
-      shouldKeepEveryUnsummedChannelsSamplesAndHoldTheSummedPairUnderTheCeilingWhenFlacWrites71As51()
-          throws Exception {
-    var source = noiseSource("7.1", "white", "1.0");
+      shouldKeepEveryUnsummedChannelsSamplesAndHoldTheSummedPairUnderItsCeilingWhenFlacWrites71As51(
+          int bitDepth) throws Exception {
+    var noise = noiseSource("7.1", "white", "1.0");
+    var source =
+        bitDepth == 16
+            ? reencodedAudio(noise, "s16", List.of("-c:a", "flac", "-sample_fmt", "s16"))
+            : noise;
     var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
     job.getDecisionBuilder()
         .getAudioBuilder()
@@ -3337,7 +3342,7 @@ class WorkerMediaSmokeTest {
 
     var uploads = execute(engine(realCapabilities()), seekableSources, job.build());
 
-    var delivered = root.resolve("downmix-7.1-to-5.1.mp4");
+    var delivered = root.resolve("downmix-7.1-to-5.1-" + bitDepth + ".mp4");
     Files.write(delivered, uploads.contentOf(uploadNames(1)));
     var sourceChannels = decodedChannels(source, 8);
     var deliveredChannels = decodedChannels(delivered, 6);
@@ -3462,21 +3467,11 @@ class WorkerMediaSmokeTest {
 
   // The seekable source's video, and AC-3 5.1(side) of quiet pink noise whose frames signal 0.5
   // for the Lo/Ro centre and surround levels.
-  private static synchronized Path ac3WithLoRoLevelsSource() throws Exception {
-    var source = seekableSources.resolve("ac3-loro-levels.mkv");
-    if (generatedSeekableSources.contains(source)) {
-      return source;
-    }
-
-    var noise = noiseSource("5.1(side)", "pink", "0.2");
-    runFfmpeg(
+  private static Path ac3WithLoRoLevelsSource() throws Exception {
+    return reencodedAudio(
+        noiseSource("5.1(side)", "pink", "0.2"),
+        "ac3-loro",
         List.of(
-            "-i",
-            noise.toString(),
-            "-map",
-            "0",
-            "-c:v",
-            "copy",
             "-c:a",
             "ac3",
             "-b:a",
@@ -3486,8 +3481,22 @@ class WorkerMediaSmokeTest {
             "-loro_cmixlev",
             "0.5",
             "-loro_surmixlev",
-            "0.5"),
-        source);
+            "0.5"));
+  }
+
+  // The source's video, and its audio encoded with the options.
+  private static synchronized Path reencodedAudio(
+      Path original, String suffix, List<String> audioOptions) throws Exception {
+    var name = original.getFileName().toString().replace(".mkv", "-" + suffix + ".mkv");
+    var source = original.resolveSibling(name);
+    if (generatedSeekableSources.contains(source)) {
+      return source;
+    }
+
+    var arguments =
+        new ArrayList<>(List.of("-i", original.toString(), "-map", "0", "-c:v", "copy"));
+    arguments.addAll(audioOptions);
+    runFfmpeg(arguments, source);
     generatedSeekableSources.add(source);
     return source;
   }

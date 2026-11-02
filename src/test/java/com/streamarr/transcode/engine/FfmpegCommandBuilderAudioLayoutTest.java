@@ -133,6 +133,8 @@ class FfmpegCommandBuilderAudioLayoutTest {
     private static final String LIMIT_TIMING = ":attack=5:release=50:level=0:latency=1";
     private static final String MINUS_3_DBFS = "alimiter=limit=0.707946" + LIMIT_TIMING;
     private static final String MINUS_1_DBFS = "alimiter=limit=0.891251" + LIMIT_TIMING;
+    private static final String DITHERED_16_BITS =
+        "aresample=osf=s16:dither_method=triangular:" + TUNED_RESAMPLER;
 
     @Test
     @DisplayName(
@@ -216,8 +218,7 @@ class FfmpegCommandBuilderAudioLayoutTest {
                   + TUNED_RESAMPLER
                   + "[g0];[c0][c1][c2][c3][g0]join=inputs=5:channel_layout=5.1"
                   + ":map=0.0-FL|1.0-FR|2.0-FC|3.0-LFE|4.0-BL|4.1-BR,"
-                  + "aresample=osf=s16:dither_method=triangular:"
-                  + TUNED_RESAMPLER);
+                  + DITHERED_16_BITS);
     }
 
     @Test
@@ -259,14 +260,44 @@ class FfmpegCommandBuilderAudioLayoutTest {
     }
 
     @Test
-    @DisplayName("Should dither to 16 bits when a FLAC downmix sums a 16-bit track")
-    void shouldDitherTo16BitsWhenAFlacDownmixSumsA16BitTrack() {
+    @DisplayName("Should dither the summed pair to 16 bits when a FLAC downmix sums a 16-bit track")
+    void shouldDitherTheSummedPairTo16BitsWhenAFlacDownmixSumsA16BitTrack() {
       var source = sourceBuilder("flac", "5.1(side)").bitDepth(OptionalInt.of(16)).build();
 
       var cmd = command(encode("flac", "stereo"), Optional.of(source));
 
       assertThat(audioFilter(cmd))
-          .endsWith(",aresample=osf=s16:dither_method=triangular:" + TUNED_RESAMPLER);
+          .endsWith(
+              ",aresample=osr=48000:"
+                  + TUNED_RESAMPLER
+                  + ","
+                  + DITHERED_16_BITS
+                  + ",aresample=osf=s16:"
+                  + TUNED_RESAMPLER);
+    }
+
+    @Test
+    @DisplayName(
+        "Should dither every channel when a FLAC downmix scales a channel that it does not sum")
+    void shouldDitherEveryChannelWhenAFlacDownmixScalesAChannelThatItDoesNotSum() {
+      var source = sourceBuilder("flac", "mono").bitDepth(OptionalInt.of(16)).build();
+
+      var cmd = command(encode("flac", "stereo"), Optional.of(source));
+
+      assertThat(audioFilter(cmd))
+          .isEqualTo(FLOAT_PAN + "stereo|FL=0.7071068*FC|FR=0.7071068*FC," + DITHERED_16_BITS);
+    }
+
+    @Test
+    @DisplayName("Should resample before the matrix when a lossy downmix changes the sample rate")
+    void shouldResampleBeforeTheMatrixWhenALossyDownmixChangesTheSampleRate() {
+      var source = sourceBuilder("flac", "5.1(side)").sampleRate(OptionalInt.of(96_000)).build();
+
+      var cmd = command(encode("aac", "stereo"), Optional.of(source));
+
+      assertThat(audioFilter(cmd))
+          .startsWith("aresample=osr=48000:" + TUNED_RESAMPLER + "," + FLOAT_PAN)
+          .endsWith(MINUS_3_DBFS + ",aresample=" + TUNED_RESAMPLER);
     }
 
     @Test

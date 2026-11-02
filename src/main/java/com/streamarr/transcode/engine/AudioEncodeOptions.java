@@ -19,6 +19,10 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
   private static final String TUNED_RESAMPLER =
       "filter_size=128:phase_shift=14:cutoff=0.95:kaiser_beta=14";
   private static final String TPDF_DITHER = "dither_method=triangular";
+  // A downmix whose only changed channels are the summed ones quantizes them with TPDF dither
+  // before join, so the channels that pass through keep their 16-bit values.
+  private static final String SIXTEEN_BIT_QUANTIZER =
+      "aresample=osf=s16:" + TPDF_DITHER + ":" + TUNED_RESAMPLER;
   private static final int OPUS_SAMPLE_RATE = 48_000;
   private static final int LOSSY_SAMPLE_RATE = 48_000;
   private static final Set<Integer> LOSSY_KEPT_SAMPLE_RATES = Set.of(44_100, 48_000);
@@ -102,11 +106,7 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
       Optional<Integer> rate,
       ChannelStage channels) {
     if (channels instanceof ChannelStage.Downmix downmix) {
-      var output = audio.channelLayout().orElseThrow();
-      return List.of(
-          downmix.filter(source.loRoLevels(), limiterFor(encoder, source, output)),
-          formatStage(
-              encoder, audio, source, rate, !downmix.onlyLeavesChannelsOut(source.loRoLevels())));
+      return downmixFilters(encoder, audio, source, rate, downmix);
     }
 
     var filters = new ArrayList<>(List.of(formatStage(encoder, audio, source, rate, false)));
@@ -114,10 +114,44 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
     return filters;
   }
 
+  // No resampler may follow the limiter, so the downmix runs at the output rate. When only the
+  // summed channels change and every other channel keeps its samples, each summed group is
+  // quantized with TPDF dither before join, so the channels that pass through keep their 16-bit
+  // values; otherwise the format stage dithers every channel. Decoded lossy audio is floating point
+  // in every channel, so every channel needs dither.
+  private static List<String> downmixFilters(
+      Encoder encoder,
+      AudioDecision audio,
+      SourceAudio source,
+      Optional<Integer> rate,
+      ChannelStage.Downmix downmix) {
+    var output = audio.channelLayout().orElseThrow();
+    var filters = new ArrayList<String>();
+    rate.ifPresent(target -> filters.add(resample(target)));
+    var matrix = downmix.matrix(source.loRoLevels());
+    var depth = writtenDepth(audio, source);
+    var quantizesSummedChannels =
+        encoder == Encoder.LOSSLESS
+            && depth == SIXTEEN_BITS
+            && rate.isEmpty()
+            && !losesPrecision(source, depth)
+            && DownmixFilter.onlySummedChannelsChange(matrix);
+    var writtenRate = rate.isPresent() ? OptionalInt.of(rate.orElseThrow()) : source.sampleRate();
+    filters.add(
+        DownmixFilter.of(
+            output,
+            matrix,
+            limiterFor(encoder, writtenRate, output),
+            quantizesSummedChannels ? Optional.of(SIXTEEN_BIT_QUANTIZER) : Optional.empty()));
+    filters.add(formatStage(encoder, audio, source, Optional.empty(), !quantizesSummedChannels));
+    return filters;
+  }
+
+  // The true-peak limiter oversamples the rate that the downmix runs at.
   private static DownmixLimiter limiterFor(
-      Encoder encoder, SourceAudio source, SpeakerLayout output) {
+      Encoder encoder, OptionalInt sampleRate, SpeakerLayout output) {
     if (encoder == Encoder.LOSSLESS) {
-      return DownmixLimiter.forLossless(source);
+      return DownmixLimiter.forLossless(sampleRate);
     }
 
     return DownmixLimiter.forLossy(output);
@@ -127,7 +161,7 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
     return "aresample=osr=" + sampleRate + ":" + TUNED_RESAMPLER;
   }
 
-  // A downmix that changes samples writes 16-bit FLAC or ALAC with TPDF dither.
+  // The format stage dithers FLAC or ALAC when it writes 16 bits from samples that a downmix mixed.
   private static String formatStage(
       Encoder encoder,
       AudioDecision audio,
@@ -173,8 +207,7 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
   // dither; on 16-bit samples it would round each one.
   private static List<String> losslessFormat(
       AudioDecision audio, SourceAudio source, boolean resamples, boolean mixed) {
-    var depth =
-        audio.outputBitDepth().orElse(writesSixteenBits(source) ? SIXTEEN_BITS : TWENTY_FOUR_BITS);
+    var depth = writtenDepth(audio, source);
     var options = new ArrayList<String>();
     if (resamples && depth == SIXTEEN_BITS) {
       options.add("internal_sample_fmt=fltp");
@@ -193,6 +226,12 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
 
     options.add(TPDF_DITHER);
     return options;
+  }
+
+  private static int writtenDepth(AudioDecision audio, SourceAudio source) {
+    return audio
+        .outputBitDepth()
+        .orElse(writesSixteenBits(source) ? SIXTEEN_BITS : TWENTY_FOUR_BITS);
   }
 
   // Decoded lossy audio and floating-point samples lose precision at any integer depth.

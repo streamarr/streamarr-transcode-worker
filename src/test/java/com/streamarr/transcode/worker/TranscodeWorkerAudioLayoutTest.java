@@ -350,6 +350,31 @@ class TranscodeWorkerAudioLayoutTest {
     assertThat(probeCommands).extracting(ProbeCommand::tool).containsExactly(ProbeTool.FFPROBE);
   }
 
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({"stereo, 2", "2.1, 3"})
+  @DisplayName(
+      "Should read no Lo/Ro levels when an AC-3 track has no centre or surround to mix at them")
+  void shouldReadNoLoRoLevelsWhenAnAc3TrackHasNoCentreOrSurroundToMixAtThem(
+      String layout, int channels) throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var stream =
+        """
+        {"streams":[{"index":1,"codec_name":"ac3","codec_type":"audio","sample_fmt":"fltp",
+          "sample_rate":"48000","channels":%d,"channel_layout":"%s","bits_per_sample":0}]}
+        """
+            .formatted(channels, layout);
+
+    var connection =
+        start(
+            launcher,
+            ffprobeAnswering(stream, ""),
+            layoutJob(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_MONO, 1));
+
+    assertThat(eventsOf(connection))
+        .containsExactly(EstablishWorkerSessionRequest.EventCase.JOB_ATTEMPT_STARTED);
+    assertThat(probeCommands).extracting(ProbeCommand::tool).containsExactly(ProbeTool.FFPROBE);
+  }
+
   @Test
   @DisplayName("Should fail the attempt at startup when the first AC-3 frame signals no levels")
   void shouldFailTheAttemptAtStartupWhenTheFirstAc3FrameSignalsNoLevels() throws Exception {

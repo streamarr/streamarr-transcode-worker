@@ -23,8 +23,8 @@ sealed interface DownmixLimiter {
     return new SamplePeak(output.channelCount() <= 2 ? MINUS_3_DBFS : MINUS_1_DBFS);
   }
 
-  static DownmixLimiter forLossless(SourceAudio source) {
-    return new TruePeak(source.sampleRate());
+  static DownmixLimiter forLossless(OptionalInt sampleRate) {
+    return new TruePeak(sampleRate);
   }
 
   private static String alimiter(double limit) {

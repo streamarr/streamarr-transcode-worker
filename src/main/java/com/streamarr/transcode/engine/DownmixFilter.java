@@ -19,19 +19,37 @@ final class DownmixFilter {
 
   private DownmixFilter() {}
 
+  /**
+   * The downmix filter. {@code quantizer}, when present, follows the limiter on each summed group,
+   * so that the channels that join takes unchanged are not dithered.
+   */
   static String of(
-      SpeakerLayout output, Map<Speaker, Map<Speaker, Double>> matrix, DownmixLimiter limiter) {
+      SpeakerLayout output,
+      Map<Speaker, Map<Speaker, Double>> matrix,
+      DownmixLimiter limiter,
+      Optional<String> quantizer) {
     var mix = "aformat=sample_fmts=fltp," + pan(output, matrix);
     var groups = summedGroups(output, matrix);
     if (groups.isEmpty()) {
       return mix;
     }
 
+    var limit = limiter.filter() + quantizer.map(filter -> "," + filter).orElse("");
     if (groups.size() == 1 && groups.getFirst().size() == output.channelCount()) {
-      return mix + "," + limiter.filter();
+      return mix + "," + limit;
     }
 
-    return mix + "," + splitAndLimit(output, groups, limiter);
+    return mix + "," + splitAndLimit(output, groups, limit);
+  }
+
+  /**
+   * Whether every output channel either holds one source channel at its own level, is silent, or
+   * sums two or more source channels.
+   */
+  static boolean onlySummedChannelsChange(Map<Speaker, Map<Speaker, Double>> matrix) {
+    return matrix.values().stream()
+        .allMatch(
+            row -> row.size() != 1 || Double.compare(row.values().iterator().next(), 1.0) == 0);
   }
 
   private static String pan(SpeakerLayout output, Map<Speaker, Map<Speaker, Double>> matrix) {
@@ -53,7 +71,7 @@ final class DownmixFilter {
   }
 
   private static String term(Speaker speaker, double gain) {
-    if (gain == 1.0) {
+    if (Double.compare(gain, 1.0) == 0) {
       return speaker.name();
     }
 
@@ -81,7 +99,7 @@ final class DownmixFilter {
   }
 
   private static String splitAndLimit(
-      SpeakerLayout output, List<List<Speaker>> groups, DownmixLimiter limiter) {
+      SpeakerLayout output, List<List<Speaker>> groups, String limit) {
     var speakers = output.speakers();
     var graph = new StringBuilder("channelsplit=channel_layout=").append(output.name());
     for (var index = 0; index < speakers.size(); index++) {
@@ -98,7 +116,7 @@ final class DownmixFilter {
         graph.append("join=inputs=2:channel_layout=stereo:map=0.0-FL|1.0-FR,");
       }
 
-      graph.append(limiter.filter()).append("[g").append(group).append(']');
+      graph.append(limit).append("[g").append(group).append(']');
     }
 
     for (var speaker : speakers) {

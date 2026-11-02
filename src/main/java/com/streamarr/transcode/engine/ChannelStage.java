@@ -119,15 +119,8 @@ sealed interface ChannelStage {
       return Optional.empty();
     }
 
-    /** Every output channel holds at most one source channel, at its own level. */
-    boolean onlyLeavesChannelsOut(Optional<SourceAudio.LoRoLevels> levels) {
-      return DownmixMatrix.of(source, output, levels).values().stream()
-          .allMatch(
-              row -> row.isEmpty() || row.equals(Map.of(row.keySet().iterator().next(), 1.0)));
-    }
-
-    String filter(Optional<SourceAudio.LoRoLevels> levels, DownmixLimiter limiter) {
-      return DownmixFilter.of(output, DownmixMatrix.of(source, output, levels), limiter);
+    Map<Speaker, Map<Speaker, Double>> matrix(Optional<SourceAudio.LoRoLevels> levels) {
+      return DownmixMatrix.of(source, output, levels);
     }
   }
 
