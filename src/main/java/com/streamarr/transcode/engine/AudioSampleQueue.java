@@ -23,7 +23,7 @@ import java.util.stream.Stream;
  */
 final class AudioSampleQueue {
 
-  private final int periodSeconds;
+  private final SegmentIntervals intervals;
   private final int startSequenceNumber;
   // Every held sample and its segment number, in arrival order, which is decode order.
   private final Deque<Queued> held = new ArrayDeque<>();
@@ -34,8 +34,8 @@ final class AudioSampleQueue {
   private long lastPresentationTime = Long.MIN_VALUE;
   private long droppedLateSampleCount;
 
-  AudioSampleQueue(int periodSeconds, int startSequenceNumber) {
-    this.periodSeconds = periodSeconds;
+  AudioSampleQueue(SegmentIntervals intervals, int startSequenceNumber) {
+    this.intervals = intervals;
     this.startSequenceNumber = startSequenceNumber;
     this.firstOpenNumber = startSequenceNumber;
   }
@@ -145,7 +145,7 @@ final class AudioSampleQueue {
   }
 
   private long numberOf(long presentationTime, long timescale) {
-    return Math.floorDiv(presentationTime, periodSeconds * timescale);
+    return intervals.numberAt(presentationTime, timescale);
   }
 
   private static long audioTimescaleOf(Fragment fragment) {

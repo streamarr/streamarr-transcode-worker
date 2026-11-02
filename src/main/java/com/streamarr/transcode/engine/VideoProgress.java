@@ -21,15 +21,15 @@ final class VideoProgress {
   // ended, and the assembler drops the samples that arrive after their segment was delivered.
   private static final long MARGIN_SECONDS = 1;
 
-  private final int periodSeconds;
+  private final SegmentIntervals intervals;
   // Before any video sample, no segment's end has passed.
   private long endTicks = Long.MIN_VALUE;
   private long timescale = 1;
   // The most the video's decode end has run ahead of an audio sample that arrived after it.
   private long leadTicks;
 
-  VideoProgress(int periodSeconds) {
-    this.periodSeconds = periodSeconds;
+  VideoProgress(SegmentIntervals intervals) {
+    this.intervals = intervals;
   }
 
   /**
@@ -63,7 +63,7 @@ final class VideoProgress {
    * which the segment closes without waiting for an audio sample of a later one.
    */
   boolean hasPassed(long number) {
-    return endTicks >= ((number + 1) * periodSeconds + MARGIN_SECONDS) * timescale + leadTicks;
+    return endTicks >= intervals.endOf(number, timescale) + MARGIN_SECONDS * timescale + leadTicks;
   }
 
   private long inVideoTicks(long presentationTime, long audioTimescale) {

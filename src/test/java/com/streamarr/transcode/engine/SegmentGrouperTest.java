@@ -24,7 +24,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 @Tag("UnitTest")
 class SegmentGrouperTest {
 
-  private static final int PERIOD_SECONDS = 6;
+  private static final SegmentIntervals SIX_SECOND_INTERVALS = SegmentIntervals.onPlainGrid(6);
   private static final long MILLISECONDS = 1000;
   private static final long SEGMENT_CAP = Mp4Stream.SEGMENT_CAP;
   private static final long FRAGMENT_BYTES = 2;
@@ -34,7 +34,7 @@ class SegmentGrouperTest {
   @Test
   @DisplayName("Should deliver nothing when the first keyframe opens a segment")
   void shouldDeliverNothingWhenTheFirstKeyframeOpensASegment() {
-    var grouper = new SegmentGrouper(PERIOD_SECONDS, 0, SEGMENT_CAP);
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 0, SEGMENT_CAP);
 
     assertThat(grouper.accept(keyframeAt(0))).isEqualTo(NOTHING_CLOSED);
   }
@@ -42,7 +42,7 @@ class SegmentGrouperTest {
   @Test
   @DisplayName("Should close the open segment when a keyframe starts inside the next interval")
   void shouldCloseTheOpenSegmentWhenAKeyframeStartsInsideTheNextInterval() {
-    var grouper = new SegmentGrouper(PERIOD_SECONDS, 0, SEGMENT_CAP);
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 0, SEGMENT_CAP);
     var first = keyframeAt(0);
     var second = nonSyncAt(1_001);
 
@@ -56,7 +56,7 @@ class SegmentGrouperTest {
   @DisplayName(
       "Should keep a second keyframe in the open segment when it starts in the same interval")
   void shouldKeepASecondKeyframeInTheOpenSegmentWhenItStartsInTheSameInterval() {
-    var grouper = new SegmentGrouper(PERIOD_SECONDS, 0, SEGMENT_CAP);
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 0, SEGMENT_CAP);
     var timescale = 24_000L;
     var first = keyframeAt(0, timescale);
     var gopKeyframe = keyframeAt(143_143, timescale);
@@ -72,7 +72,7 @@ class SegmentGrouperTest {
   @DisplayName(
       "Should keep a non-sync fragment in the open segment when it starts past the interval")
   void shouldKeepANonSyncFragmentInTheOpenSegmentWhenItStartsPastTheInterval() {
-    var grouper = new SegmentGrouper(PERIOD_SECONDS, 0, SEGMENT_CAP);
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 0, SEGMENT_CAP);
     var keyframe = keyframeAt(0);
     var lateNonSync = nonSyncAt(7_000);
 
@@ -86,7 +86,7 @@ class SegmentGrouperTest {
   @Test
   @DisplayName("Should keep video-less fragments in the open segment when they follow the video")
   void shouldKeepVideoLessFragmentsInTheOpenSegmentWhenTheyFollowTheVideo() {
-    var grouper = new SegmentGrouper(PERIOD_SECONDS, 0, SEGMENT_CAP);
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 0, SEGMENT_CAP);
     var keyframe = keyframeAt(0);
     var firstAudio = audioOnly();
     var secondAudio = audioOnly();
@@ -101,7 +101,7 @@ class SegmentGrouperTest {
   @Test
   @DisplayName("Should close the open segment when the stream ends")
   void shouldCloseTheOpenSegmentWhenTheStreamEnds() {
-    var grouper = new SegmentGrouper(PERIOD_SECONDS, 0, SEGMENT_CAP);
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 0, SEGMENT_CAP);
     var first = keyframeAt(0);
     var second = keyframeAt(6_000);
     var third = nonSyncAt(7_000);
@@ -117,7 +117,7 @@ class SegmentGrouperTest {
   @Test
   @DisplayName("Should deliver nothing when the stream ends before any segment opens")
   void shouldDeliverNothingWhenTheStreamEndsBeforeAnySegmentOpens() {
-    var grouper = new SegmentGrouper(PERIOD_SECONDS, 0, SEGMENT_CAP);
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 0, SEGMENT_CAP);
 
     grouper.accept(audioOnly());
 
@@ -128,7 +128,7 @@ class SegmentGrouperTest {
   @DisplayName(
       "Should add waiting fragments to the first segment when they arrive before any segment opens")
   void shouldAddWaitingFragmentsToTheFirstSegmentWhenTheyArriveBeforeAnySegmentOpens() {
-    var grouper = new SegmentGrouper(PERIOD_SECONDS, 0, SEGMENT_CAP);
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 0, SEGMENT_CAP);
     var audio = audioOnly();
     var nonSync = nonSyncAt(0);
     var keyframe = keyframeAt(40);
@@ -143,7 +143,7 @@ class SegmentGrouperTest {
   @Test
   @DisplayName("Should open the start sequence number when the first keyframe lies in its interval")
   void shouldOpenTheStartSequenceNumberWhenTheFirstKeyframeLiesInItsInterval() {
-    var grouper = new SegmentGrouper(PERIOD_SECONDS, 5, SEGMENT_CAP);
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 5, SEGMENT_CAP);
     var keyframe = keyframeAt(30_000);
 
     grouper.accept(keyframe);
@@ -154,7 +154,7 @@ class SegmentGrouperTest {
   @Test
   @DisplayName("Should discard preroll and its following fragments when a later keyframe opens")
   void shouldDiscardPrerollAndItsFollowingFragmentsWhenALaterKeyframeOpens() {
-    var grouper = new SegmentGrouper(PERIOD_SECONDS, 5, SEGMENT_CAP);
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 5, SEGMENT_CAP);
     var startKeyframe = keyframeAt(30_030);
 
     assertThat(grouper.accept(keyframeAt(27_000))).isEqualTo(NOTHING_CLOSED);
@@ -167,7 +167,7 @@ class SegmentGrouperTest {
   @Test
   @DisplayName("Should discard every preroll segment when the preroll spans several intervals")
   void shouldDiscardEveryPrerollSegmentWhenThePrerollSpansSeveralIntervals() {
-    var grouper = new SegmentGrouper(PERIOD_SECONDS, 5, SEGMENT_CAP);
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 5, SEGMENT_CAP);
     var startKeyframe = keyframeAt(30_000);
 
     assertThat(grouper.accept(keyframeAt(9_000))).isEqualTo(NOTHING_CLOSED);
@@ -180,7 +180,7 @@ class SegmentGrouperTest {
   @Test
   @DisplayName("Should discard fragments waiting for a segment when the first segment is preroll")
   void shouldDiscardFragmentsWaitingForASegmentWhenTheFirstSegmentIsPreroll() {
-    var grouper = new SegmentGrouper(PERIOD_SECONDS, 5, SEGMENT_CAP);
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 5, SEGMENT_CAP);
     var startKeyframe = keyframeAt(30_000);
 
     grouper.accept(audioOnly());
@@ -193,7 +193,7 @@ class SegmentGrouperTest {
   @Test
   @DisplayName("Should discard the preroll when the stream ends before the start sequence number")
   void shouldDiscardThePrerollWhenTheStreamEndsBeforeTheStartSequenceNumber() {
-    var grouper = new SegmentGrouper(PERIOD_SECONDS, 5, SEGMENT_CAP);
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 5, SEGMENT_CAP);
 
     grouper.accept(keyframeAt(27_000));
     grouper.accept(nonSyncAt(28_000));
@@ -204,7 +204,7 @@ class SegmentGrouperTest {
   @Test
   @DisplayName("Should place a keyframe below segment zero when its presentation time is negative")
   void shouldPlaceAKeyframeBelowSegmentZeroWhenItsPresentationTimeIsNegative() {
-    var grouper = new SegmentGrouper(PERIOD_SECONDS, 0, SEGMENT_CAP);
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 0, SEGMENT_CAP);
     var zero = keyframeAt(0);
 
     assertThat(grouper.accept(keyframeAt(-6_001))).isEqualTo(NOTHING_CLOSED);
@@ -217,7 +217,7 @@ class SegmentGrouperTest {
   @DisplayName(
       "Should report the open segment with the skip when a keyframe skips a segment number")
   void shouldReportTheOpenSegmentWithTheSkipWhenAKeyframeSkipsASegmentNumber() {
-    var grouper = new SegmentGrouper(PERIOD_SECONDS, 0, SEGMENT_CAP);
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 0, SEGMENT_CAP);
     var first = keyframeAt(0);
     var second = keyframeAt(6_000);
     var secondNonSync = nonSyncAt(7_000);
@@ -247,7 +247,7 @@ class SegmentGrouperTest {
   @Test
   @DisplayName("Should take no further fragment when a keyframe skipped a segment number")
   void shouldTakeNoFurtherFragmentWhenAKeyframeSkippedASegmentNumber() {
-    var grouper = new SegmentGrouper(PERIOD_SECONDS, 0, SEGMENT_CAP);
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 0, SEGMENT_CAP);
     grouper.accept(keyframeAt(0));
     grouper.accept(keyframeAt(12_000));
     var later = audioOnly();
@@ -261,7 +261,7 @@ class SegmentGrouperTest {
       "Should report the skip with no segment when the first keyframe lies past the start"
           + " sequence number")
   void shouldReportTheSkipWithNoSegmentWhenTheFirstKeyframeLiesPastTheStartSequenceNumber() {
-    var grouper = new SegmentGrouper(PERIOD_SECONDS, 5, SEGMENT_CAP);
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 5, SEGMENT_CAP);
     grouper.accept(audioOnly());
 
     assertThat(grouper.accept(keyframeAt(36_000)))
@@ -274,7 +274,7 @@ class SegmentGrouperTest {
           + " sequence number")
   void
       shouldDiscardThePrerollWithTheSkipWhenThePrerollsNextKeyframeLiesPastTheStartSequenceNumber() {
-    var grouper = new SegmentGrouper(PERIOD_SECONDS, 5, SEGMENT_CAP);
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 5, SEGMENT_CAP);
     grouper.accept(keyframeAt(27_000));
     grouper.accept(nonSyncAt(28_000));
 
@@ -286,7 +286,7 @@ class SegmentGrouperTest {
   @CsvSource({"6000, 5999", "3000, 2000"})
   @DisplayName("Should fail when a keyframe starts before the previous keyframe")
   void shouldFailWhenAKeyframeStartsBeforeThePreviousKeyframe(long previous, long next) {
-    var grouper = new SegmentGrouper(PERIOD_SECONDS, 0, SEGMENT_CAP);
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 0, SEGMENT_CAP);
     grouper.accept(keyframeAt(0));
     grouper.accept(keyframeAt(previous));
     var earlier = keyframeAt(next);
@@ -297,7 +297,7 @@ class SegmentGrouperTest {
   @Test
   @DisplayName("Should fail when a fragment would make the open segment exceed the segment cap")
   void shouldFailWhenAFragmentWouldMakeTheOpenSegmentExceedTheSegmentCap() {
-    var grouper = new SegmentGrouper(PERIOD_SECONDS, 0, 3 * FRAGMENT_BYTES - 1);
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 0, 3 * FRAGMENT_BYTES - 1);
     grouper.accept(keyframeAt(0));
     grouper.accept(nonSyncAt(1_001));
     var overflowing = keyframeAt(2_002);
@@ -308,7 +308,7 @@ class SegmentGrouperTest {
   @Test
   @DisplayName("Should deliver a segment when its bytes equal the segment cap")
   void shouldDeliverASegmentWhenItsBytesEqualTheSegmentCap() {
-    var grouper = new SegmentGrouper(PERIOD_SECONDS, 0, 2 * FRAGMENT_BYTES);
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 0, 2 * FRAGMENT_BYTES);
     var keyframe = keyframeAt(0);
     var nonSync = nonSyncAt(1_001);
 
@@ -321,7 +321,7 @@ class SegmentGrouperTest {
   @Test
   @DisplayName("Should fail when audio-only fragments would make the last segment exceed the cap")
   void shouldFailWhenAudioOnlyFragmentsWouldMakeTheLastSegmentExceedTheCap() {
-    var grouper = new SegmentGrouper(PERIOD_SECONDS, 0, 2 * FRAGMENT_BYTES);
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 0, 2 * FRAGMENT_BYTES);
     grouper.accept(keyframeAt(0));
     grouper.accept(audioOnly());
     var overflowing = audioOnly();
@@ -332,7 +332,7 @@ class SegmentGrouperTest {
   @Test
   @DisplayName("Should fail when fragments waiting for the first segment exceed the segment cap")
   void shouldFailWhenFragmentsWaitingForTheFirstSegmentExceedTheSegmentCap() {
-    var grouper = new SegmentGrouper(PERIOD_SECONDS, 0, FRAGMENT_BYTES);
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 0, FRAGMENT_BYTES);
     grouper.accept(audioOnly());
     var overflowing = audioOnly();
 
@@ -342,7 +342,7 @@ class SegmentGrouperTest {
   @Test
   @DisplayName("Should count only the new segment's fragments when a keyframe closes the open one")
   void shouldCountOnlyTheNewSegmentsFragmentsWhenAKeyframeClosesTheOpenOne() {
-    var grouper = new SegmentGrouper(PERIOD_SECONDS, 0, 2 * FRAGMENT_BYTES);
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 0, 2 * FRAGMENT_BYTES);
     grouper.accept(keyframeAt(0));
     grouper.accept(nonSyncAt(1_001));
     var next = keyframeAt(6_006);
@@ -357,7 +357,7 @@ class SegmentGrouperTest {
   @Test
   @DisplayName("Should discard the preroll without failing when the preroll exceeds the cap")
   void shouldDiscardThePrerollWithoutFailingWhenThePrerollExceedsTheCap() {
-    var grouper = new SegmentGrouper(PERIOD_SECONDS, 5, FRAGMENT_BYTES);
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 5, FRAGMENT_BYTES);
     var startKeyframe = keyframeAt(30_000);
 
     grouper.accept(audioOnly());
@@ -374,7 +374,7 @@ class SegmentGrouperTest {
   @DisplayName("Should reject a grouping when its segment cap admits no bytes")
   void shouldRejectAGroupingWhenItsSegmentCapAdmitsNoBytes(long maximumSegmentBytes) {
     assertThatIllegalArgumentException()
-        .isThrownBy(() -> new SegmentGrouper(PERIOD_SECONDS, 0, maximumSegmentBytes));
+        .isThrownBy(() -> new SegmentGrouper(SIX_SECOND_INTERVALS, 0, maximumSegmentBytes));
   }
 
   @Test
@@ -382,7 +382,7 @@ class SegmentGrouperTest {
       "Should close the open segment with the video samples before a keyframe inside a fragment"
           + " when that keyframe opens the next segment")
   void shouldCloseTheOpenSegmentWithTheVideoSamplesBeforeAKeyframeInsideAFragment() {
-    var grouper = new SegmentGrouper(PERIOD_SECONDS, 0, SEGMENT_CAP);
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 0, SEGMENT_CAP);
     var first = keyframeAt(0);
     var spanning =
         videoFragment(nonSyncSampleAt(5_000), nonSyncSampleAt(5_500), syncSampleAt(6_006));
@@ -409,7 +409,7 @@ class SegmentGrouperTest {
       "Should close the open segment with the video samples before a keyframe inside a fragment"
           + " when that keyframe skips a segment number")
   void shouldCloseTheOpenSegmentWithTheVideoSamplesBeforeAKeyframeInsideAFragmentThatSkips() {
-    var grouper = new SegmentGrouper(PERIOD_SECONDS, 0, SEGMENT_CAP);
+    var grouper = new SegmentGrouper(SIX_SECOND_INTERVALS, 0, SEGMENT_CAP);
     var first = keyframeAt(0);
     var skipping = videoFragment(nonSyncSampleAt(5_000), syncSampleAt(12_012));
 
@@ -430,13 +430,11 @@ class SegmentGrouperTest {
                 2));
   }
 
-  @ParameterizedTest
-  @CsvSource({"0, 0", "-6, 0", "6, -1"})
-  @DisplayName("Should reject a grouping when its period or start sequence number cannot exist")
-  void shouldRejectAGroupingWhenItsPeriodOrStartSequenceNumberCannotExist(
-      int periodSeconds, int startSequenceNumber) {
+  @Test
+  @DisplayName("Should reject a grouping when its start sequence number cannot exist")
+  void shouldRejectAGroupingWhenItsStartSequenceNumberCannotExist() {
     assertThatIllegalArgumentException()
-        .isThrownBy(() -> new SegmentGrouper(periodSeconds, startSequenceNumber, SEGMENT_CAP));
+        .isThrownBy(() -> new SegmentGrouper(SIX_SECOND_INTERVALS, -1, SEGMENT_CAP));
   }
 
   private static void assertFailure(Runnable accept, Reason reason) {
