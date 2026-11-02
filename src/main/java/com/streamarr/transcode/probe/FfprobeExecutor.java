@@ -46,6 +46,11 @@ public final class FfprobeExecutor {
   static final List<String> READ_LIMITS =
       List.of("-analyzeduration", "200M", "-probesize", "1G", "-scan_all_pmts", "0");
 
+  private static final List<String> QUIET_JSON_OUTPUT =
+      List.of("-v", "quiet", "-print_format", "json");
+
+  private static final String SHOW_STREAMS = "-show_streams";
+
   private static final List<String> LOWEST_CPU_PRIORITY = List.of("nice", "-n", "19");
 
   // 30 s of fields at the 1000 fps limit of a usable rate, twice over.
@@ -136,17 +141,9 @@ public final class FfprobeExecutor {
    */
   public ProbeStreamInfo readChosenAudio(@NonNull Path source)
       throws ExecutionException, InterruptedException {
-    var output =
-        run(
-            List.of(
-                "-v",
-                "quiet",
-                "-print_format",
-                "json",
-                "-show_streams",
-                "-select_streams",
-                "a:0",
-                source.toString()));
+    var arguments = new ArrayList<>(QUIET_JSON_OUTPUT);
+    arguments.addAll(List.of(SHOW_STREAMS, "-select_streams", "a:0", source.toString()));
+    var output = run(arguments);
     if (output.exitCode() != 0) {
       throw new ChosenAudioException("ffprobe exited with code " + output.exitCode());
     }
@@ -181,11 +178,11 @@ public final class FfprobeExecutor {
       return scanChunk(attempt);
     }
 
-    var arguments = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
+    var arguments = new ArrayList<>(QUIET_JSON_OUTPUT);
     arguments.addAll(READ_LIMITS);
     arguments.addAll(
         List.of(
-            "-show_streams",
+            SHOW_STREAMS,
             "-show_format",
             "-show_chapters",
             "-show_error",
@@ -237,10 +234,10 @@ public final class FfprobeExecutor {
    */
   private ProbeAttemptReport scanChunk(Attempt attempt)
       throws ExecutionException, InterruptedException {
-    var arguments = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
+    var arguments = new ArrayList<>(QUIET_JSON_OUTPUT);
     arguments.addAll(READ_LIMITS);
     arguments.addAll(
-        List.of("-show_streams", "-show_format", "-show_error", attempt.source().toString()));
+        List.of(SHOW_STREAMS, "-show_format", "-show_error", attempt.source().toString()));
     var output = run(arguments);
     JsonNode json;
     try {
