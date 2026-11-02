@@ -16,6 +16,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -429,6 +430,148 @@ class ProbeCapacitiesTest {
         .isEqualTo(2);
 
     capacities.release(probes.get(2));
+    capacities.release(probes.get(3));
+    assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(3);
+  }
+
+  @Test
+  @DisplayName(
+      "Should not grow the background probe capacity until every probe that ran at its previous"
+          + " growth has ended when the host showed congestion")
+  void
+      shouldNotGrowTheBackgroundProbeCapacityUntilEveryProbeThatRanAtItsPreviousGrowthHasEndedWhenTheHostShowedCongestion() {
+    var capacities = adaptive(16);
+    showCongestion(capacities, Duration.ofMinutes(1));
+    var first = acquire(capacities, ProbeKind.BACKGROUND, 2);
+    capacities.release(first.getFirst());
+    assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(3);
+    var second = acquire(capacities, ProbeKind.BACKGROUND, 2);
+
+    capacities.release(second.getFirst());
+    assertThat(capacities.granted().backgroundProbeCapacity())
+        .as("A probe that ran at the growth to 3 still runs")
+        .isEqualTo(3);
+
+    acquire(capacities, ProbeKind.BACKGROUND, 1);
+    capacities.release(first.getLast());
+    assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(4);
+  }
+
+  @ParameterizedTest
+  @CsvSource({"14, 3", "15, 2"})
+  @DisplayName(
+      "Should hold the background probe capacity's growth from a quarter of the probe timeout when"
+          + " the host showed congestion")
+  void
+      shouldHoldTheBackgroundProbeCapacitysGrowthFromAQuarterOfTheProbeTimeoutWhenTheHostShowedCongestion(
+          long runningSeconds, int capacity) {
+    var capacities = adaptive(16);
+    showCongestion(capacities, Duration.ofMinutes(1));
+    var probes = acquire(capacities, ProbeKind.BACKGROUND, 2);
+
+    clock.advance(Duration.ofSeconds(runningSeconds));
+    capacities.release(probes.getFirst());
+
+    assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(capacity);
+  }
+
+  @Test
+  @DisplayName(
+      "Should read the probe timeout from the age of a probe at its timeout when the host showed"
+          + " congestion")
+  void shouldReadTheProbeTimeoutFromTheAgeOfAProbeAtItsTimeoutWhenTheHostShowedCongestion() {
+    var capacities = adaptive(16);
+    showCongestion(capacities, Duration.ofMinutes(2));
+    var probes = acquire(capacities, ProbeKind.BACKGROUND, 2);
+
+    clock.advance(Duration.ofSeconds(29));
+    capacities.release(probes.getFirst());
+
+    assertThat(capacities.granted().backgroundProbeCapacity())
+        .as("29 s is less than a quarter of the 2 min probe timeout")
+        .isEqualTo(3);
+  }
+
+  @Test
+  @DisplayName(
+      "Should grow the background probe capacity for each busy probe that ends when the capacity is"
+          + " below the capacity at which the host showed congestion")
+  void
+      shouldGrowTheBackgroundProbeCapacityForEachBusyProbeThatEndsWhenTheCapacityIsBelowTheCapacityAtWhichTheHostShowedCongestion() {
+    var capacities = adaptive(16);
+    showCongestion(capacities, Duration.ofMinutes(1));
+    acquire(capacities, ProbeKind.PLAYBACK, 1);
+    var attempt = UUID.randomUUID();
+    capacities.jobAttemptStarted(attempt);
+    capacities.jobAttemptEnded(attempt);
+    clock.advance(Duration.ofSeconds(30));
+    var probes = acquire(capacities, ProbeKind.BACKGROUND, 1);
+
+    capacities.release(probes.getFirst());
+
+    assertThat(capacities.granted().backgroundProbeCapacity())
+        .as("The playback probe has run for 30 s, but 1 is below the congestion at 2")
+        .isEqualTo(2);
+  }
+
+  @Test
+  @DisplayName(
+      "Should grow the background probe capacity for each busy probe that ends again when the"
+          + " capacity grew back to its maximum after the host showed congestion")
+  void
+      shouldGrowTheBackgroundProbeCapacityForEachBusyProbeThatEndsAgainWhenTheCapacityGrewBackToItsMaximumAfterTheHostShowedCongestion() {
+    var capacities = adaptive(4);
+    showCongestion(capacities, Duration.ofMinutes(1));
+    var first = acquire(capacities, ProbeKind.BACKGROUND, 2);
+    capacities.release(first.getFirst());
+    var second = acquire(capacities, ProbeKind.BACKGROUND, 2);
+    capacities.release(first.getLast());
+    assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(4);
+    second.forEach(capacities::release);
+    var attempt = UUID.randomUUID();
+    capacities.jobAttemptStarted(attempt);
+    capacities.jobAttemptEnded(attempt);
+    clock.advance(Duration.ofSeconds(30));
+    var probes = acquire(capacities, ProbeKind.BACKGROUND, 2);
+
+    clock.advance(Duration.ofSeconds(20));
+    capacities.release(probes.getFirst());
+
+    assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(3);
+  }
+
+  @Test
+  @DisplayName(
+      "Should grow the background probe capacity while a keyframe packet scan runs long when the"
+          + " host showed congestion")
+  void
+      shouldGrowTheBackgroundProbeCapacityWhileAKeyframePacketScanRunsLongWhenTheHostShowedCongestion() {
+    var capacities = adaptive(16);
+    showCongestion(capacities, Duration.ofMinutes(1));
+    acquire(capacities, ProbeKind.KEYFRAME_PACKET_SCAN, 1);
+    clock.advance(Duration.ofMinutes(5));
+    var probes = acquire(capacities, ProbeKind.BACKGROUND, 2);
+
+    capacities.release(probes.getFirst());
+
+    assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(3);
+  }
+
+  @Test
+  @DisplayName(
+      "Should show no congestion when a keyframe packet scan that started before a brake times"
+          + " out")
+  void shouldShowNoCongestionWhenAKeyframePacketScanThatStartedBeforeABrakeTimesOut() {
+    var capacities = adaptive(16);
+    var scans = acquire(capacities, ProbeKind.KEYFRAME_PACKET_SCAN, 1);
+    timeOut(capacities, acquire(capacities, ProbeKind.BACKGROUND, 1).getFirst());
+    clock.advance(Duration.ofMinutes(1));
+    timeOut(capacities, scans.getFirst());
+    var probes = acquire(capacities, ProbeKind.BACKGROUND, 2);
+
+    clock.advance(Duration.ofSeconds(20));
+    capacities.release(probes.getFirst());
+
     assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(3);
   }
 
@@ -542,6 +685,16 @@ class ProbeCapacitiesTest {
     }
 
     return probes;
+  }
+
+  // Two probes reach the probe timeout together: the first halves the capacity from 4 to 2, and the
+  // second, which started before that brake, shows congestion at 2. The growth hold then passes.
+  private void showCongestion(ProbeCapacities capacities, Duration probeTimeout) {
+    var probes = acquire(capacities, ProbeKind.BACKGROUND, 2);
+    clock.advance(probeTimeout);
+    probes.forEach(probe -> timeOut(capacities, probe));
+    clock.advance(Duration.ofSeconds(30));
+    assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(2);
   }
 
   // The server's cancel at the probe timeout arrives, then ffprobe exits.

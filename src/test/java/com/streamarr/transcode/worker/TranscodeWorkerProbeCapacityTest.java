@@ -455,6 +455,67 @@ class TranscodeWorkerProbeCapacityTest {
 
   @Test
   @DisplayName(
+      "Should not grow the background probe capacity while a probe has run for a quarter of the"
+          + " probe timeout when probes that started before a brake also timed out")
+  void
+      shouldNotGrowTheBackgroundProbeCapacityWhileAProbeHasRunForAQuarterOfTheProbeTimeoutWhenProbesThatStartedBeforeABrakeAlsoTimedOut()
+          throws Exception {
+    var clock = new SteppedClock();
+    var firstTimedOut = processBuilder().running(true).build();
+    var secondTimedOut = processBuilder().running(true).build();
+    var fast = processBuilder().running(true).build();
+    var slow = processBuilder().running(true).build();
+    var ffprobe =
+        probesStarting(List.of(firstTimedOut, secondTimedOut, fast, slow), new AtomicInteger());
+    var firstRequest = requestBuilder().build();
+    var secondRequest = requestBuilder().build();
+
+    try (var worker =
+        workerBuilder(tempDir)
+            .configuration(configurationBuilder().availableSlots(1).build())
+            .runtime(runtime)
+            .ffprobe(ffprobe)
+            .clock(clock)
+            .build()) {
+      try {
+        worker.start("localhost", 1);
+        var connection = runtime.connection();
+        start(connection, firstRequest);
+        var firstTask = runtime.probes().runNext();
+        firstTimedOut.awaitStarted(firstTask);
+        start(connection, secondRequest);
+        var secondTask = runtime.probes().runNext();
+        secondTimedOut.awaitStarted(secondTask);
+        clock.advance(Duration.ofMinutes(1));
+        cancel(connection, firstRequest, ProbeCancelReason.PROBE_CANCEL_REASON_TIMEOUT);
+        cancel(connection, secondRequest, ProbeCancelReason.PROBE_CANCEL_REASON_TIMEOUT);
+        firstTask.get();
+        secondTask.get();
+        clock.advance(Duration.ofSeconds(30));
+        var fastTask = startHeld(connection, fast);
+        var slowTask = startHeld(connection, slow);
+
+        clock.advance(Duration.ofSeconds(15));
+        fast.finish();
+        fastTask.get();
+        assertThat(capacityChanges(connection))
+            .as("The slow probe has run for 15 s of the 60 s probe timeout")
+            .containsExactly(changed(2, 1));
+
+        slow.finish();
+        slowTask.get();
+        assertThat(capacityChanges(connection)).containsExactly(changed(2, 1), changed(3, 1));
+      } finally {
+        firstTimedOut.finish();
+        secondTimedOut.finish();
+        fast.finish();
+        slow.finish();
+      }
+    }
+  }
+
+  @Test
+  @DisplayName(
       "Should halve the background probe capacity when the server cancels a probe at the probe"
           + " timeout before its ffprobe exits")
   void
