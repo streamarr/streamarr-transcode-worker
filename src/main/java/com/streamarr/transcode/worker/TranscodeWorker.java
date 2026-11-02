@@ -107,7 +107,7 @@ public final class TranscodeWorker implements AutoCloseable {
   private StreamObserver<EstablishWorkerSessionRequest> requests;
   private WorkerSessionAccepted workerSession;
   private WorkerProbeSession probeSession;
-  private ScheduledExecutorService probeTimers;
+  private ScheduledExecutorService sessionTimers;
   private Optional<GrantedCapacities> sentCapacities = Optional.empty();
   private CompletableFuture<Void> disconnected;
   private final AtomicReference<WorkerResponseObserver> responseObserver = new AtomicReference<>();
@@ -178,15 +178,15 @@ public final class TranscodeWorker implements AutoCloseable {
             .capacities(probeCapacities)
             .summary(probeSummary)
             .build();
-    probeTimers =
+    sessionTimers =
         Executors.newSingleThreadScheduledExecutor(
-            Thread.ofVirtual().name("probe-timers").factory());
-    probeTimers.scheduleAtFixedRate(
+            Thread.ofVirtual().name("session-timers").factory());
+    sessionTimers.scheduleAtFixedRate(
         this::logProbeSummary,
         PROBE_SUMMARY_INTERVAL.toMillis(),
         PROBE_SUMMARY_INTERVAL.toMillis(),
         TimeUnit.MILLISECONDS);
-    probeTimers.scheduleAtFixedRate(
+    sessionTimers.scheduleAtFixedRate(
         probeCapacities::reopenKeyframePacketScansWhenIdle,
         PROBE_CAPACITY_REFRESH_INTERVAL.toMillis(),
         PROBE_CAPACITY_REFRESH_INTERVAL.toMillis(),
@@ -950,8 +950,8 @@ public final class TranscodeWorker implements AutoCloseable {
     }
 
     probeSession.shutdown();
-    probeTimers.shutdownNow();
-    probeTimers = null;
+    sessionTimers.shutdownNow();
+    sessionTimers = null;
     var attempts = claimActiveAttempts();
     try {
       if (requests != null) {
