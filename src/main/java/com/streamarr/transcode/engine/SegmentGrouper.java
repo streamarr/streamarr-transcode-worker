@@ -109,11 +109,6 @@ final class SegmentGrouper {
     return close();
   }
 
-  /** The bytes of the fragments the grouper holds for the open segment, or for the first one. */
-  long heldBytes() {
-    return openBytes;
-  }
-
   /** The fragments the grouper holds for the open segment, or for the first one. */
   List<Fragment> heldFragments() {
     return List.copyOf(openFragments);
