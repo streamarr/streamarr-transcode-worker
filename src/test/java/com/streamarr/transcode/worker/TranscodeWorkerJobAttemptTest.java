@@ -20,6 +20,7 @@ import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.startVa
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.stopVariant;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variantJobBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerBuilder;
+import static java.nio.charset.StandardCharsets.US_ASCII;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
@@ -61,6 +62,7 @@ import com.streamarr.transcode.fixtures.Mp4Samples;
 import com.streamarr.transcode.fixtures.TopLevelBoxes;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
 import java.io.ByteArrayOutputStream;
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -2052,6 +2054,40 @@ class TranscodeWorkerJobAttemptTest {
           .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
       assertThat(lastEvent(connection).getJobAttemptFailed().getJobAttemptId())
           .isEqualTo(job.getJobAttemptId());
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as over the segment cap and end FFmpeg when FFmpeg writes a"
+          + " fragment larger than the segment cap")
+  void
+      shouldFailTheAttemptAsOverTheSegmentCapAndEndFfmpegWhenFfmpegWritesAFragmentLargerThanTheCap()
+          throws Exception {
+    var initializationSegment =
+        Arrays.copyOf(
+            bytesOf(ENCODED_RECORDING),
+            recording(ENCODED_RECORDING).initializationSegment().byteLength());
+    // A moof whose header claims one byte more than the contract's segment cap of 128 MiB.
+    var output =
+        ByteBuffer.allocate(initializationSegment.length + 8)
+            .put(initializationSegment)
+            .putInt(134_217_728 + 1)
+            .put("moof".getBytes(US_ASCII))
+            .array();
+    var launcher =
+        new ScriptedProcessLauncher(_ -> ScriptedProcess.builder().output(output).build());
+    var job = variantJobBuilder().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_SEGMENT_CAP_EXCEEDED);
+      assertThat(processOf(launcher, job).wasDestroyedForcibly()).isTrue();
     }
   }
 
