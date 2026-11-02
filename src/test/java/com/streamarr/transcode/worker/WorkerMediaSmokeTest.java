@@ -4504,6 +4504,38 @@ class WorkerMediaSmokeTest {
         .containsExactlyInAnyOrderElementsOf(VIDEO_ENDS_BEFORE_AUDIO_STREAM_ENDS);
   }
 
+  // The source's last frame starts at 5.983 s, inside segment 0, but FFmpeg's conversion to 24 fps
+  // can place the output's last frame at 6 s, inside segment 1.
+  @Test
+  @DisplayName(
+      "Should report the last uploaded segment as the last with source media when an encode's"
+          + " frame-rate conversion moves the source's last frame into the next segment")
+  void shouldReportTheLastUploadedSegmentWhenFrameRateConversionMovesTheLastFrameIntoTheNext()
+      throws Exception {
+    var source = sixtyFramesPerSecondEndingBeforeABoundarySource();
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getExecutionBuilder().setMediaSegmentCount(3);
+
+    var completion =
+        executeToCompletion(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    var lastUploaded =
+        completion.uploads().names().stream()
+            .filter(name -> name.startsWith("segment"))
+            .map(name -> Integer.parseInt(name.substring("segment".length(), name.indexOf('.'))))
+            .max(Comparator.naturalOrder())
+            .orElseThrow();
+    assertThat(completion.report().getSourceEndedEarly().getLastSegmentWithSourceMedia())
+        .isEqualTo(lastUploaded);
+    assertThat(
+            completion
+                .report()
+                .getSourceEndedEarly()
+                .getStreamIndexesWithMediaAfterLastSegmentList())
+        .as("the audio runs on to 15 s, past every uploaded segment")
+        .containsExactly(1);
+  }
+
   // The truncated source's index promises 90 s, its data holds less, and its probe would say 90 s.
   @Test
   @DisplayName(
@@ -5251,6 +5283,34 @@ class WorkerMediaSmokeTest {
         .setChannelLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO)
         .setBitrateBitsPerSecond(192_000);
     return job;
+  }
+
+  // H.264 at 64x36 and 60 fps, 360 frames whose last starts at 5.983 s, and 15 s of pink noise.
+  private static synchronized Path sixtyFramesPerSecondEndingBeforeABoundarySource()
+      throws Exception {
+    var source = seekableSources.resolve("sixty-fps-ending-before-a-boundary.mp4");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=60:duration=5.99",
+              "-f",
+              "lavfi",
+              "-i",
+              "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5:duration=15",
+              "-c:v",
+              "libx264",
+              "-g",
+              "120",
+              "-c:a",
+              "aac"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
   }
 
   // H.264 at 64x36 and 24 fps with a keyframe every 2 s, and pink noise, both for 90 s, with the

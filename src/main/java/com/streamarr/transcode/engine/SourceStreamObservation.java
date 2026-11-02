@@ -21,10 +21,14 @@ import java.util.regex.Pattern;
 final class SourceStreamObservation {
 
   private static final Pattern TIME_BASE = Pattern.compile("#tb (\\d+): (\\d+)/(\\d+)$");
+  // The framecrc carries at most the video and one audio stream, so a record's stream index is the
+  // one digit before its first comma, even when a log line that ends in digits runs into it.
   private static final Pattern RECORD =
       Pattern.compile(
-          "(?<![\\d,-])(\\d+), *-?\\d+, *(-?\\d+), *(-?\\d+), *\\d+, 0x[0-9a-f]{8}"
+          "(\\d), *(-?\\d+), *(-?\\d+), *(-?\\d+), *\\d+, 0x[0-9a-f]{8}"
               + "(?:, F=0x([0-9A-F]{1,8}))?(?:, S=.*)?$");
+  // What framecrc prints for a time the packet does not carry: FFmpeg's AV_NOPTS_VALUE.
+  private static final long NO_TIME = Long.MIN_VALUE;
   private static final Pattern MAPPING =
       Pattern.compile("Stream #0:(\\d{1,9}) -> #(\\d{1,9}):(\\d{1,9})\\b");
   private static final int KEYFRAME = 0x1;
@@ -96,13 +100,23 @@ final class SourceStreamObservation {
     }
   }
 
+  // A packet without a presentation time, as a raw H.264 or HEVC stream's, counts at its decode
+  // time, which lies at most the reordering delay before it.
   private void readRecord(Matcher record) {
     try {
       var stream = Integer.parseInt(record.group(1));
-      var start = Long.parseLong(record.group(2));
-      var end = Math.addExact(start, Long.parseLong(record.group(3)));
+      var start = Long.parseLong(record.group(3));
+      if (start == NO_TIME) {
+        start = Long.parseLong(record.group(2));
+      }
+
+      if (start == NO_TIME) {
+        return;
+      }
+
+      var end = Math.addExact(start, Long.parseLong(record.group(4)));
       var keyframe =
-          Optional.ofNullable(record.group(4))
+          Optional.ofNullable(record.group(5))
               .map(flags -> (Integer.parseUnsignedInt(flags, 16) & KEYFRAME) != 0)
               .orElse(true);
       packets.merge(stream, Packets.of(start, end, keyframe), Packets::andThen);

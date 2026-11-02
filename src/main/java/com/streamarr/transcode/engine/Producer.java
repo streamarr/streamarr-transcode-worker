@@ -13,6 +13,7 @@ import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.BooleanSupplier;
@@ -80,7 +81,7 @@ public final class Producer {
   private Optional<AttemptOutcome> decision = Optional.empty();
   private Optional<Delivery> deliveryInFlight = Optional.empty();
   private long readerHeldBytes;
-  private boolean mediaSegmentDelivered;
+  private OptionalInt lastDeliveredMediaSegment = OptionalInt.empty();
 
   private Producer(FfmpegProcess ffmpeg, Settings settings) {
     this.ffmpeg = ffmpeg;
@@ -690,26 +691,34 @@ public final class Producer {
       return;
     }
 
-    endDelivery(segment instanceof ProducedSegment.Media);
+    var acceptedMediaSegment = OptionalInt.empty();
+    if (segment instanceof ProducedSegment.Media media) {
+      acceptedMediaSegment = OptionalInt.of(media.sequenceNumber());
+    }
+
+    endDelivery(acceptedMediaSegment);
   }
 
   // The failure is decided before the delivery ends, so the reader, waiting to hand off its next
   // segment, cannot complete the attempt in between.
   private void failDelivery(Failed failure) {
     var decided = tryDecide(failure);
-    endDelivery(false);
+    endDelivery(OptionalInt.empty());
     if (decided) {
       ffmpeg.endForcibly();
       settle(failure);
     }
   }
 
-  private void endDelivery(boolean mediaSegmentAccepted) {
+  private void endDelivery(OptionalInt acceptedMediaSegment) {
     long deliveredBytes;
     synchronized (lock) {
       deliveredBytes = deliveryInFlight.map(Delivery::heldBytes).orElse(0L);
       deliveryInFlight = Optional.empty();
-      mediaSegmentDelivered |= mediaSegmentAccepted;
+      if (acceptedMediaSegment.isPresent()) {
+        lastDeliveredMediaSegment = acceptedMediaSegment;
+      }
+
       lock.notifyAll();
     }
 
@@ -718,9 +727,10 @@ public final class Producer {
 
   // An attempt that starts after every source sample has no media segment to deliver.
   private AttemptOutcome outcomeOfCompleteOutput() {
-    var sourceEnd = sourceEndRule.reportOn(ffmpeg.observedSourceStreams());
+    var observedSourceStreams = ffmpeg.observedSourceStreams();
     synchronized (lock) {
-      if (!mediaSegmentDelivered && !sourceEnd.endsBefore(startSequenceNumber)) {
+      var sourceEnd = sourceEndRule.reportOn(observedSourceStreams, lastDeliveredMediaSegment);
+      if (lastDeliveredMediaSegment.isEmpty() && !sourceEnd.endsBefore(startSequenceNumber)) {
         return new Failed(
             ProducerFailure.NO_MEDIA_SEGMENT, "FFmpeg exited cleanly without a media segment");
       }

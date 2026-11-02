@@ -112,14 +112,17 @@ class TranscodeWorkerJobAttemptTest {
     Files.writeString(tempDir.resolve("movie.mkv"), "media");
   }
 
-  // The source's video, stream 0, has its last keyframe at 30 s, in segment 5 of 11, and its last
-  // frame at 31 s; its audio, stream 1, runs on to a frame at 40 s, in segment 6.
+  // The recording's last segment holds the source's last video frame; the source's audio, stream
+  // 1, runs on two segments further, and the job advertises three segments more than it delivers.
   @Test
   @DisplayName(
-      "Should report each chosen stream's end and the segment where the source ended when the"
-          + " FFmpeg that reads the source shows its streams ending before the last segment")
-  void shouldReportEachStreamsEndAndWhereTheSourceEndedWhenItsStreamsEndBeforeTheLastSegment()
+      "Should report each chosen stream's end and the last delivered segment, with the audio after"
+          + " it, when the FFmpeg that reads the source shows its audio running past the video")
+  void shouldReportEachStreamsEndAndTheLastDeliveredSegmentWhenTheAudioRunsPastTheVideo()
       throws Exception {
+    var recording = recording(ENCODED_RECORDING);
+    var lastSegment = recording.segments().getLast().number();
+    var audioStartTicks = (lastSegment + 2) * 6 * 48_000L;
     var launcher =
         ScriptedProcessLauncher.forCommands(
             (_, _) ->
@@ -128,36 +131,39 @@ class TranscodeWorkerJobAttemptTest {
                     .stderr(
                         """
                         Stream mapping:
-                          Stream #0:0 -> #0:0 (copy)
-                          Stream #0:1 -> #0:1 (copy)
                           Stream #0:0 -> #1:0 (copy)
                           Stream #0:1 -> #1:1 (copy)
                         #tb 0: 1/1000
                         #tb 1: 1/48000
-                        0,    30000,    30000,       40,     1000, 0x0a1b2c3d
-                        0,    31000,    31000,       40,      300, 0x0a1b2c3d, F=0x0
-                        1,  1920000,  1920000,     1024,      300, 0x0a1b2c3d
-                        """)
+                        0, %d, %d, 40, 1000, 0x0a1b2c3d
+                        1, %d, %d, 1024, 300, 0x0a1b2c3d
+                        """
+                            .formatted(
+                                lastSegment * 6_000L,
+                                lastSegment * 6_000L,
+                                audioStartTicks,
+                                audioStartTicks))
                     .build());
-    var job = copyJobBuilderFor(recording(ENCODED_RECORDING)).build();
+    var job = copyJobBuilderFor(recording);
+    job.getExecutionBuilder().setMediaSegmentCount(lastSegment + 4);
 
     try (var worker = worker(launcher)) {
       worker.start("localhost", 1);
       var connection = runtime.connection();
-      startVariant(connection, job);
+      startVariant(connection, job.build());
 
       awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_COMPLETED);
       var completed = lastEvent(connection).getJobAttemptCompleted();
       assertThat(completed.getSourceEndedEarly())
           .isEqualTo(
               SourceEndedEarly.newBuilder()
-                  .setLastSegmentWithSourceMedia(5)
+                  .setLastSegmentWithSourceMedia(lastSegment)
                   .addStreamIndexesWithMediaAfterLastSegment(1)
                   .build());
       assertThat(completed.getStreamEndsList())
           .containsExactly(
-              streamEnd(0, Duration.ofMillis(31_040)),
-              streamEnd(1, Duration.ofNanos(40_021_333_333L)));
+              streamEnd(0, Duration.ofMillis(lastSegment * 6_000L + 40)),
+              streamEnd(1, Duration.ofSeconds((lastSegment + 2) * 6L).plusNanos(21_333_333)));
     }
   }
 

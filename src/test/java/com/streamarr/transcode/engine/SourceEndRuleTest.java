@@ -7,6 +7,7 @@ import com.streamarr.transcode.engine.SourceEnd.StreamEnd;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalInt;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -15,6 +16,7 @@ import org.junit.jupiter.api.Test;
 @DisplayName("Source End Rule Tests")
 class SourceEndRuleTest {
 
+  private static final OptionalInt NOTHING_DELIVERED = OptionalInt.empty();
   private static final int VIDEO_INDEX = 0;
   private static final int AUDIO_INDEX = 1;
 
@@ -31,11 +33,12 @@ class SourceEndRuleTest {
   @Test
   @DisplayName(
       "Should report the segment of the video's last frame, and the audio after it, when an encode"
-          + " that holds no frame reads video that ends before the audio")
-  void shouldReportTheSegmentOfTheVideosLastFrameWhenAnEncodeHoldsNoFrame() {
+          + " that holds no frame and delivered no segment reads video that ends before the audio")
+  void shouldReportTheSegmentOfTheVideosLastFrameWhenAnEncodeHoldsNoFrameAndDeliveredNone() {
     var report =
         ruleFor(VideoDecisionFixtures.encodeBuilder().streamIndex(VIDEO_INDEX).build())
-            .reportOn(List.of(VIDEO_ENDING_AT_64_SECONDS, AUDIO_ENDING_AT_84_SECONDS));
+            .reportOn(
+                List.of(VIDEO_ENDING_AT_64_SECONDS, AUDIO_ENDING_AT_84_SECONDS), NOTHING_DELIVERED);
 
     assertThat(report)
         .isEqualTo(new SourceEnd(BOTH_ENDS, Optional.of(new EndedEarly(10, List.of(AUDIO_INDEX)))));
@@ -43,15 +46,48 @@ class SourceEndRuleTest {
 
   @Test
   @DisplayName(
-      "Should report the segment of the video's last keyframe when a stream copy reads frames"
-          + " after it in a later segment")
+      "Should report the segment of the video's last keyframe when a stream copy that delivered no"
+          + " segment reads frames after it in a later segment")
   void shouldReportTheSegmentOfTheVideosLastKeyframeWhenAStreamCopyReadsFramesAfterIt() {
     var video =
         videoEndingAt64Seconds().lastKeyframeStart(Optional.of(Duration.ofMillis(59_000))).build();
 
-    var report = ruleFor(copy()).reportOn(List.of(video, AUDIO_ENDING_AT_84_SECONDS));
+    var report =
+        ruleFor(copy()).reportOn(List.of(video, AUDIO_ENDING_AT_84_SECONDS), NOTHING_DELIVERED);
 
     assertThat(report.endedEarly()).contains(new EndedEarly(9, List.of(VIDEO_INDEX, AUDIO_INDEX)));
+  }
+
+  // Frame-rate conversion can move the last source frame, at 63.96 s, into the next segment.
+  @Test
+  @DisplayName(
+      "Should report the last delivered segment when an attempt that holds no frame delivered one"
+          + " after the segment of the source's last frame")
+  void shouldReportTheLastDeliveredSegmentWhenAnAttemptThatHoldsNoFrameDeliveredOneAfterIt() {
+    var report =
+        ruleFor(VideoDecisionFixtures.encodeBuilder().streamIndex(VIDEO_INDEX).build())
+            .reportOn(
+                List.of(VIDEO_ENDING_AT_64_SECONDS, AUDIO_ENDING_AT_84_SECONDS),
+                OptionalInt.of(11));
+
+    assertThat(report.endedEarly()).contains(new EndedEarly(11, List.of(AUDIO_INDEX)));
+  }
+
+  @Test
+  @DisplayName(
+      "Should decide from the source's streams, not the delivered segments, when an encode holds"
+          + " the last frame")
+  void shouldDecideFromTheSourcesStreamsWhenAnEncodeHoldsTheLastFrame() {
+    var audio =
+        audioEndingAt84Seconds()
+            .lastStart(Duration.ofMillis(71_989))
+            .end(Duration.ofSeconds(72))
+            .build();
+
+    var report =
+        ruleFor(held()).reportOn(List.of(VIDEO_ENDING_AT_64_SECONDS, audio), OptionalInt.of(13));
+
+    assertThat(report.endedEarly()).contains(new EndedEarly(11, List.of()));
   }
 
   @Test
@@ -60,7 +96,9 @@ class SourceEndRuleTest {
           + " reaches the last advertised segment")
   void shouldReportNoEarlyEndWhenAHeldEncodeReadsAudioThatReachesTheLastSegment() {
     var report =
-        ruleFor(held()).reportOn(List.of(VIDEO_ENDING_AT_64_SECONDS, AUDIO_ENDING_AT_84_SECONDS));
+        ruleFor(held())
+            .reportOn(
+                List.of(VIDEO_ENDING_AT_64_SECONDS, AUDIO_ENDING_AT_84_SECONDS), NOTHING_DELIVERED);
 
     assertThat(report).isEqualTo(new SourceEnd(BOTH_ENDS, Optional.empty()));
   }
@@ -76,7 +114,8 @@ class SourceEndRuleTest {
             .end(Duration.ofSeconds(72))
             .build();
 
-    var report = ruleFor(held()).reportOn(List.of(VIDEO_ENDING_AT_64_SECONDS, audio));
+    var report =
+        ruleFor(held()).reportOn(List.of(VIDEO_ENDING_AT_64_SECONDS, audio), NOTHING_DELIVERED);
 
     assertThat(report.endedEarly()).contains(new EndedEarly(11, List.of()));
   }
@@ -93,7 +132,8 @@ class SourceEndRuleTest {
             .lastKeyframeStart(Optional.of(Duration.ofSeconds(78)))
             .build();
 
-    var report = ruleFor(copy()).reportOn(List.of(video, AUDIO_ENDING_AT_84_SECONDS));
+    var report =
+        ruleFor(copy()).reportOn(List.of(video, AUDIO_ENDING_AT_84_SECONDS), NOTHING_DELIVERED);
 
     assertThat(report.endedEarly()).isEmpty();
   }
@@ -105,7 +145,8 @@ class SourceEndRuleTest {
   void shouldReportOnlyTheStreamEndsWhenTheAttemptReadNoKeyframeOfACopysVideo() {
     var video = videoEndingAt64Seconds().lastKeyframeStart(Optional.empty()).build();
 
-    var report = ruleFor(copy()).reportOn(List.of(video, AUDIO_ENDING_AT_84_SECONDS));
+    var report =
+        ruleFor(copy()).reportOn(List.of(video, AUDIO_ENDING_AT_84_SECONDS), NOTHING_DELIVERED);
 
     assertThat(report).isEqualTo(new SourceEnd(BOTH_ENDS, Optional.empty()));
   }
@@ -117,7 +158,7 @@ class SourceEndRuleTest {
   void shouldReportOnlyTheAudiosEndWhenAnEncodeReadNoneOfTheVideo() {
     var report =
         ruleFor(VideoDecisionFixtures.encodeBuilder().streamIndex(VIDEO_INDEX).build())
-            .reportOn(List.of(AUDIO_ENDING_AT_84_SECONDS));
+            .reportOn(List.of(AUDIO_ENDING_AT_84_SECONDS), NOTHING_DELIVERED);
 
     assertThat(report)
         .isEqualTo(
@@ -132,7 +173,7 @@ class SourceEndRuleTest {
     var audio =
         audioEndingAt84Seconds().lastStart(Duration.ofMillis(-21)).end(Duration.ZERO).build();
 
-    var report = ruleFor(held()).reportOn(List.of(audio));
+    var report = ruleFor(held()).reportOn(List.of(audio), NOTHING_DELIVERED);
 
     assertThat(report.endedEarly()).isEmpty();
   }

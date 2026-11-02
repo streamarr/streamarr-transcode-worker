@@ -68,6 +68,10 @@ public abstract sealed class ProducedSegment {
       return new Media(sequenceNumber, parts, timing);
     }
 
+    int sequenceNumber() {
+      return sequenceNumber;
+    }
+
     /** The segment's media duration and the time the producer took to produce it. */
     public ProductionTiming timing() {
       return timing;

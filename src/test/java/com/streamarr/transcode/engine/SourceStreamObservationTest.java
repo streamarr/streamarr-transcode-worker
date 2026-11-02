@@ -95,6 +95,49 @@ class SourceStreamObservationTest {
         .isEqualTo(Duration.ofMillis(80));
   }
 
+  @Test
+  @DisplayName(
+      "Should read the record's stream index as the one digit before its first comma when a log"
+          + " line that ends in digits runs into it")
+  void shouldReadTheStreamIndexAsTheDigitBeforeTheFirstCommaWhenALogLineEndingInDigitsRunsIn() {
+    readAll(MAPPING + HEADER);
+
+    observation.tryRead(
+        "    encoder         : Lavf62.3.1000,      771,        813,       41,  300, 0x0a1b2c3d");
+
+    assertThat(observation.streams())
+        .singleElement()
+        .satisfies(
+            stream -> {
+              assertThat(stream.sourceIndex()).isEqualTo(2);
+              assertThat(stream.end()).isEqualTo(Duration.ofMillis(854));
+            });
+  }
+
+  // Raw H.264 and HEVC streams carry decode times alone.
+  @Test
+  @DisplayName(
+      "Should place a packet at its decode time when it carries no presentation time, and skip it"
+          + " when it carries neither")
+  void shouldPlaceAPacketAtItsDecodeTimeWhenItCarriesNoPresentationTime() {
+    readAll(
+        MAPPING
+            + HEADER
+            + """
+            0,      120, -9223372036854775808,       40,     1000, 0x0a1b2c3d
+            0, -9223372036854775808, -9223372036854775808,       40,      300, 0x0a1b2c3d, F=0x0
+            """);
+
+    assertThat(observation.streams())
+        .containsExactly(
+            ObservedSourceStream.builder()
+                .sourceIndex(2)
+                .lastStart(Duration.ofMillis(120))
+                .end(Duration.ofMillis(160))
+                .lastKeyframeStart(Optional.of(Duration.ofMillis(120)))
+                .build());
+  }
+
   @ParameterizedTest
   @ValueSource(
       strings = {

@@ -6,40 +6,49 @@ import java.time.Duration;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalInt;
 import lombok.Builder;
 import lombok.NonNull;
 
 /**
- * Decides where an attempt's source ended from what FFmpeg read of its chosen streams. The last
- * media segment that holds a source sample is the one whose interval holds the start of the last
- * video sample that an encode reads, or of the last keyframe that a stream copy reads, as a copy
- * opens its segments only at keyframes. An encode that holds the last frame carries every stream's
- * samples to the advertised end, so the last of them decides.
+ * Decides where an attempt's source ended from what FFmpeg read of its chosen streams. An attempt
+ * that holds no frame delivers only source samples, so its last delivered media segment is the last
+ * one that holds source media. Before it delivers any, the last segment is the one whose interval
+ * holds the start of the last keyframe that a stream copy reads, as a copy opens its segments only
+ * at keyframes, or of the last video frame that an encode reads. An encode that holds the last
+ * frame carries every stream's samples to the advertised end, so the latest of them decides.
  */
 @Builder
 record SourceEndRule(int periodSeconds, int mediaSegmentCount, @NonNull VideoDecision video) {
 
-  SourceEnd reportOn(List<ObservedSourceStream> streams) {
+  SourceEnd reportOn(List<ObservedSourceStream> streams, OptionalInt lastDeliveredMediaSegment) {
     var ends =
         streams.stream().map(stream -> new StreamEnd(stream.sourceIndex(), stream.end())).toList();
     var endedEarly =
-        lastSegmentWithSourceMedia(streams)
+        lastSegmentWithSourceMedia(streams, lastDeliveredMediaSegment)
             .filter(segment -> segment >= 0 && segment < mediaSegmentCount - 1L)
             .map(segment -> endedEarlyIn(segment, streams));
     return new SourceEnd(ends, endedEarly);
   }
 
-  private Optional<Long> lastSegmentWithSourceMedia(List<ObservedSourceStream> streams) {
+  private Optional<Long> lastSegmentWithSourceMedia(
+      List<ObservedSourceStream> streams, OptionalInt lastDeliveredMediaSegment) {
+    if (video instanceof VideoDecision.Encode encode && encode.holdsLastFrameToAdvertisedEnd()) {
+      return streams.stream()
+          .map(ObservedSourceStream::lastStart)
+          .max(Comparator.naturalOrder())
+          .map(this::segmentAt);
+    }
+
+    if (lastDeliveredMediaSegment.isPresent()) {
+      return Optional.of((long) lastDeliveredMediaSegment.getAsInt());
+    }
+
     var videoStream =
         streams.stream().filter(stream -> stream.sourceIndex() == video.streamIndex()).findFirst();
     return switch (video) {
       case VideoDecision.Copy _ ->
           videoStream.flatMap(ObservedSourceStream::lastKeyframeStart).map(this::segmentAt);
-      case VideoDecision.Encode encode when encode.holdsLastFrameToAdvertisedEnd() ->
-          streams.stream()
-              .map(ObservedSourceStream::lastStart)
-              .max(Comparator.naturalOrder())
-              .map(this::segmentAt);
       case VideoDecision.Encode _ ->
           videoStream.map(ObservedSourceStream::lastStart).map(this::segmentAt);
     };
