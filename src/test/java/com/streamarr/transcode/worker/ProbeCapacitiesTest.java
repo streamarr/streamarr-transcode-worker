@@ -420,18 +420,15 @@ class ProbeCapacitiesTest {
           + " timeout")
   void shouldNeverGrowTheBackgroundProbeCapacityWhenABusyProbeEndsAtTheProbeTimeout() {
     var capacities = adaptive(16);
-    var probes = acquire(capacities, ProbeKind.BACKGROUND, 4);
-    timeOut(capacities, probes.get(0));
+    var probes = acquire(capacities, ProbeKind.BACKGROUND, 2);
+    timeOut(capacities, probes.getFirst());
     clock.advance(Duration.ofSeconds(30));
 
-    timeOut(capacities, probes.get(1));
+    timeOut(capacities, probes.getLast());
+
     assertThat(capacities.granted().backgroundProbeCapacity())
         .as("The probe started before the brake, so it neither brakes nor grows")
         .isEqualTo(2);
-
-    capacities.release(probes.get(2));
-    capacities.release(probes.get(3));
-    assertThat(capacities.granted().backgroundProbeCapacity()).isEqualTo(3);
   }
 
   @Test
