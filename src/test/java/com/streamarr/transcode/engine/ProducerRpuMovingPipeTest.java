@@ -50,6 +50,10 @@ import org.junit.jupiter.params.provider.MethodSource;
 @DisplayName("Producer RPU Moving Pipe Tests")
 class ProducerRpuMovingPipeTest {
 
+  // A scripted FFmpeg writes no framecrc of the source's streams.
+  private static final SourceEnd NOTHING_READ_FROM_THE_SOURCE =
+      new SourceEnd(List.of(), Optional.empty());
+
   private static final Duration OUTCOME_LIMIT = Duration.ofSeconds(10);
   private static final UUID JOB_ATTEMPT_ID =
       UUID.fromString("5b0f8a8e-29b5-4c48-9f0c-7f4f3c1a9d21");
@@ -107,7 +111,9 @@ class ProducerRpuMovingPipeTest {
 
     var producer = producer(copyingWith(copy, framecrc), encode).start();
 
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
     assertThat(videoSamplesOf(encode.stdinBytes())).isEqualTo(videoSamplesOf(MOVED_SOURCE));
   }
 
@@ -131,7 +137,9 @@ class ProducerRpuMovingPipeTest {
 
     var producer = producerOf(copy, encode).start();
 
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
     assertThat(videoSamplesOf(encode.stdinBytes())).isEqualTo(videoSamplesOf(copied));
   }
 
@@ -145,7 +153,9 @@ class ProducerRpuMovingPipeTest {
 
     var producer = producerOf(copy, encode).start();
 
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.acceptedNames())
         .hasSize(recording(ENCODED_RECORDING).segments().size() + 1)
         .startsWith("init.mp4", "segment0.m4s");
@@ -168,7 +178,9 @@ class ProducerRpuMovingPipeTest {
 
     var producer = producer(copyingWith(copy, framecrc), encode).start();
 
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
     assertThat(videoDurationsOf(encode.stdinBytes())).containsExactly(984L, 1476L);
   }
 

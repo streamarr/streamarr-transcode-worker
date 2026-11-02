@@ -71,6 +71,8 @@ public final class Producer {
   private final StallWatchdog watchdog;
   private final ProductionTimer productionTimer;
   private final String threadName;
+  private final SourceEndRule sourceEndRule;
+  private final int startSequenceNumber;
   private final CompletableFuture<AttemptOutcome> outcome = new CompletableFuture<>();
   private final Object lock = new Object();
 
@@ -92,6 +94,8 @@ public final class Producer {
     this.sink = settings.sink();
     this.memoryBudget = settings.memoryBudget();
     this.threadName = "producer-" + settings.jobAttemptId();
+    this.sourceEndRule = settings.sourceEndRule();
+    this.startSequenceNumber = settings.startSequenceNumber();
   }
 
   /**
@@ -112,6 +116,8 @@ public final class Producer {
    *     stream, before it delivers anything, when it declares none
    * @param paddedAudioEnd the advertised end of an attempt that pads its audio with silence, at or
    *     after which the producer delivers no audio sample; empty for any other attempt
+   * @param mediaSegmentCount the variant's advertised media segments, against whose last one the
+   *     producer reports whether the source ended early
    * @param memoryBudget the worker's segment memory, which every producer of the worker shares
    * @param clock the clock that times each media segment's production
    * @throws TranscodeException when FFmpeg cannot be started
@@ -123,6 +129,7 @@ public final class Producer {
       @NonNull UUID jobAttemptId,
       int periodSeconds,
       int startSequenceNumber,
+      int mediaSegmentCount,
       @NonNull Duration gracePeriod,
       @NonNull Duration stallTimeout,
       @NonNull Optional<OutputFrameRate> encodedFrameRate,
@@ -149,6 +156,13 @@ public final class Producer {
             .memoryBudget(memoryBudget)
             .stallTimeout(stallTimeout)
             .clock(clock)
+            .sourceEndRule(
+                SourceEndRule.builder()
+                    .periodSeconds(periodSeconds)
+                    .mediaSegmentCount(mediaSegmentCount)
+                    .video(videoDecision)
+                    .build())
+            .startSequenceNumber(startSequenceNumber)
             .build();
     var ffmpeg =
         FfmpegProcess.builder()
@@ -702,14 +716,16 @@ public final class Producer {
     memoryBudget.release(deliveredBytes);
   }
 
+  // An attempt that starts after every source sample has no media segment to deliver.
   private AttemptOutcome outcomeOfCompleteOutput() {
+    var sourceEnd = sourceEndRule.reportOn(ffmpeg.observedSourceStreams());
     synchronized (lock) {
-      if (!mediaSegmentDelivered) {
+      if (!mediaSegmentDelivered && !sourceEnd.endsBefore(startSequenceNumber)) {
         return new Failed(
             ProducerFailure.NO_MEDIA_SEGMENT, "FFmpeg exited cleanly without a media segment");
       }
 
-      return new Completed(assembler.droppedLateAudioSampleCount());
+      return new Completed(assembler.droppedLateAudioSampleCount(), sourceEnd);
     }
   }
 
@@ -769,5 +785,7 @@ public final class Producer {
       SegmentSink sink,
       SegmentMemoryBudget memoryBudget,
       Duration stallTimeout,
-      MonotonicClock clock) {}
+      MonotonicClock clock,
+      SourceEndRule sourceEndRule,
+      int startSequenceNumber) {}
 }

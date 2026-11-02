@@ -30,6 +30,10 @@ import org.junit.jupiter.params.provider.EnumSource;
 @DisplayName("FFmpeg Transcode Engine Tests")
 class FfmpegTranscodeEngineTest {
 
+  // A scripted FFmpeg writes no framecrc of the source's streams.
+  private static final SourceEnd NOTHING_READ_FROM_THE_SOURCE =
+      new SourceEnd(List.of(), Optional.empty());
+
   private static final Duration OUTCOME_LIMIT = Duration.ofSeconds(10);
 
   private ScriptedProcessLauncher launcher;
@@ -116,11 +120,12 @@ class FfmpegTranscodeEngineTest {
 
     var producer = executor.startProducer(request, sink, SegmentMemoryBudget.forSlots(1));
 
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
     assertThat(launcher.command(request.attemptId()))
         .startsWith("ffmpeg")
-        .containsSubsequence("-ss", "24", "-i", "/media/movie.mkv")
-        .endsWith("pipe:1");
+        .containsSubsequence("-ss", "24", "-i", "/media/movie.mkv", "pipe:1");
     assertThat(sink.acceptedNames())
         .containsExactly(
             "init.mp4",
@@ -160,7 +165,9 @@ class FfmpegTranscodeEngineTest {
       TranscodeMode mode) {
     var producer = startProducerOverAOneTickVideoSample(mode);
 
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
   }
 
   // FFmpeg writes three 1 s segments of 23.976 fps video whose second holds a 1-tick sample.

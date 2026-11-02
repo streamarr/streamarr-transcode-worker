@@ -83,6 +83,12 @@ public class FfmpegCommandBuilder {
   // it adds a keyframe at each scene cut, inside a segment.
   private static final String CLOSED_GOP_X265_PARAMETERS = "no-scenecut=1:no-open-gop=1";
 
+  // A negative map undoes the maps before it that it matches, so a named subtitle, data,
+  // attachment or cover art stream maps nothing and the producer refuses the output without a
+  // sound track, where FFmpeg would fail writing it. The chosen video stream is never cover art.
+  private static final List<String> NON_AUDIO_STREAM_EXCLUSIONS =
+      List.of("-map", "-0:d", "-map", "-0:t", "-map", "-0:disp:attached_pic");
+
   // The copy of the source that the encode of a profile 5 source reads: fragmented MP4, whose
   // muxer writes each packet as soon as it has one and whose movie timescale keeps every timestamp
   // the source's demuxer reads. skip_trailer stops the muxer from keeping an index entry of every
@@ -216,6 +222,9 @@ public class FfmpegCommandBuilder {
     }
 
     addFragmentedMp4Output(cmd);
+    if (input == EncoderInput.SOURCE) {
+      addSourceStreamsOutput(cmd, decision);
+    }
 
     return List.copyOf(cmd);
   }
@@ -250,8 +259,27 @@ public class FfmpegCommandBuilder {
     addAudioArgs(cmd, copiedAudio, job.request());
 
     cmd.addAll(SOURCE_COPY_OUTPUT);
+    addSourceStreamsOutput(cmd, job.request().transcodeDecision());
     addVideoTimingOutput(cmd, job.request().transcodeDecision().videoDecision());
     return List.copyOf(cmd);
+  }
+
+  // The FFmpeg that reads the source copies the chosen streams' packets, from the keyframe its
+  // seek reads on, to a framecrc on its error output, its second output: the worker reads there
+  // where each stream's last source sample ends. FFmpeg writes each record at once, so that no log
+  // line splits it.
+  private static void addSourceStreamsOutput(List<String> cmd, TranscodeDecision decision) {
+    cmd.addAll(List.of("-map", "0:" + decision.videoDecision().streamIndex()));
+    var audio = decision.audioDecision();
+    addAudioStreamSelection(cmd, audio);
+    if (namesAudioStream(audio)) {
+      cmd.addAll(List.of("-map", "-0:s"));
+      cmd.addAll(NON_AUDIO_STREAM_EXCLUSIONS);
+    }
+
+    cmd.addAll(
+        List.of(
+            "-c", "copy", "-copypriorss", "1", "-f", "framecrc", "-flush_packets", "1", "pipe:2"));
   }
 
   // The copy's muxer replaces each video packet's duration with the gap to the next packet's
@@ -369,21 +397,24 @@ public class FfmpegCommandBuilder {
   private void addStreamSelection(List<String> cmd, TranscodeDecision decision) {
     cmd.addAll(List.of("-map", "0:" + decision.videoDecision().streamIndex()));
     var audio = decision.audioDecision();
-    if (audio.mode() != AudioMode.NONE) {
-      cmd.addAll(List.of("-map", audioMap(audio, audio.sourceStreamSpecifier())));
-    }
-
-    var namesAudioStream = audio.mode() != AudioMode.NONE && audio.streamIndex().isPresent();
-    if (decision.subtitleDecision().mode() == SubtitleMode.EXCLUDE || namesAudioStream) {
+    addAudioStreamSelection(cmd, audio);
+    if (decision.subtitleDecision().mode() == SubtitleMode.EXCLUDE || namesAudioStream(audio)) {
       cmd.addAll(List.of("-map", "-0:s"));
     }
 
-    // A negative map undoes the maps before it that it matches, so a named subtitle, data,
-    // attachment or cover art stream maps nothing and the producer refuses the output without a
-    // sound track, where FFmpeg would fail writing it. The chosen video stream is never cover art.
-    if (namesAudioStream) {
-      cmd.addAll(List.of("-map", "-0:d", "-map", "-0:t", "-map", "-0:disp:attached_pic"));
+    if (namesAudioStream(audio)) {
+      cmd.addAll(NON_AUDIO_STREAM_EXCLUSIONS);
     }
+  }
+
+  private static void addAudioStreamSelection(List<String> cmd, AudioDecision audio) {
+    if (audio.mode() != AudioMode.NONE) {
+      cmd.addAll(List.of("-map", audioMap(audio, audio.sourceStreamSpecifier())));
+    }
+  }
+
+  private static boolean namesAudioStream(AudioDecision audio) {
+    return audio.mode() != AudioMode.NONE && audio.streamIndex().isPresent();
   }
 
   // A stream that the job names maps nothing when the source has no stream there, so that the

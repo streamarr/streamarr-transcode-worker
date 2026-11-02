@@ -44,6 +44,8 @@ import build.buf.gen.streamarr.transcode.v1.ProbeKeyframes;
 import build.buf.gen.streamarr.transcode.v1.ProbeMediaInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
+import build.buf.gen.streamarr.transcode.v1.SourceEndedEarly;
+import build.buf.gen.streamarr.transcode.v1.SourceStreamEnd;
 import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
 import build.buf.gen.streamarr.transcode.v1.SubtitleMode;
 import build.buf.gen.streamarr.transcode.v1.TranscodeExecution;
@@ -242,6 +244,13 @@ class WorkerMediaSmokeTest {
   // 84 s of audio in 6 s segments; the 64 s of video end inside segment 10.
   private static final int VIDEO_ENDS_BEFORE_AUDIO_SEGMENT_COUNT = 14;
   private static final int VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT = 10;
+  // The video stream, 0, ends at 64 s and the audio stream, 1, at 84 s.
+  private static final int VIDEO_ENDS_BEFORE_AUDIO_AUDIO_INDEX = 1;
+  private static final List<SourceStreamEnd> VIDEO_ENDS_BEFORE_AUDIO_STREAM_ENDS =
+      List.of(streamEnd(0, Duration.ofSeconds(64)), streamEnd(1, Duration.ofSeconds(84)));
+  // The 90 s that the truncated source's index promises, in 6 s segments.
+  private static final int TRUNCATED_SOURCE_INDEXED_SEGMENT_COUNT = 15;
+  private static final Duration ONE_FRAME_AT_24_FPS = Duration.ofNanos(1_000_000_000L / 24 + 1);
   // 1,764 s of audio in 6 s segments after the same 64 s of video.
   private static final int LONG_AUDIO_AFTER_VIDEO_SEGMENT_COUNT = 294;
   // The seekable sources' 6 s period at their 24 fps.
@@ -3524,9 +3533,10 @@ class WorkerMediaSmokeTest {
     };
   }
 
-  // The worker's arguments between "ffmpeg -y" and its pipe:1 output, without its -preset option.
+  // The worker's arguments between "ffmpeg -y" and its pipe:1 output, without its -preset option
+  // and without the framecrc of the source's streams that follows that output.
   private static List<String> svtAv1ArgumentsWithoutPreset(List<String> command) {
-    var arguments = new ArrayList<>(command.subList(2, command.size() - 1));
+    var arguments = new ArrayList<>(command.subList(2, command.indexOf("pipe:1")));
     var preset = arguments.indexOf("-preset");
     assertThat(preset).as("the position of the worker's -preset option").isNotNegative();
     assertThat(arguments.subList(preset, preset + 2)).containsExactly("-preset", "10");
@@ -4436,6 +4446,103 @@ class WorkerMediaSmokeTest {
             ffmpegAudio.stream().filter(packet -> interval.holds(packet.pts())).toList());
   }
 
+  @ParameterizedTest(name = "{0} from segment {1}")
+  @CsvSource({
+    "TRANSCODE_MODE_REMUX, 0",
+    "TRANSCODE_MODE_REMUX, 11",
+    "TRANSCODE_MODE_FULL_TRANSCODE, 0",
+    "TRANSCODE_MODE_FULL_TRANSCODE, 11"
+  })
+  @DisplayName(
+      "Should complete reporting that the source ended in the segment that holds the video's end,"
+          + " with audio after it, when an attempt that holds no frame reads video that ends"
+          + " before the audio")
+  void shouldCompleteReportingTheSourceEndedEarlyWhenAnAttemptReadsVideoThatEndsBeforeTheAudio(
+      TranscodeMode mode, int startSequenceNumber) throws Exception {
+    var source = videoEndsBeforeAudioSource();
+    var job = videoEndsBeforeAudioJob(source, mode);
+    job.getExecutionBuilder().setStartSequenceNumber(startSequenceNumber);
+
+    var completion =
+        executeToCompletion(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(completion.report().getSourceEndedEarly())
+        .isEqualTo(
+            SourceEndedEarly.newBuilder()
+                .setLastSegmentWithSourceMedia(VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT)
+                .addStreamIndexesWithMediaAfterLastSegment(VIDEO_ENDS_BEFORE_AUDIO_AUDIO_INDEX)
+                .build());
+    assertThat(completion.report().getStreamEndsList())
+        .containsExactlyInAnyOrderElementsOf(VIDEO_ENDS_BEFORE_AUDIO_STREAM_ENDS);
+    assertThat(completion.uploads().names())
+        .doesNotContainAnyElementsOf(
+            IntStream.range(
+                    VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT + 1,
+                    VIDEO_ENDS_BEFORE_AUDIO_SEGMENT_COUNT)
+                .mapToObj(WorkerMediaSmokeTest::segmentName)
+                .toList());
+  }
+
+  @ParameterizedTest(name = "from segment {0}")
+  @ValueSource(ints = {0, 11})
+  @DisplayName(
+      "Should complete reporting each stream's end and no early end when an encode holds the last"
+          + " frame of video that ends before the audio it pads")
+  void shouldCompleteReportingEachStreamsEndAndNoEarlyEndWhenAnEncodeHoldsAndPadsToTheEnd(
+      int startSequenceNumber) throws Exception {
+    var source = videoEndsBeforeAudioSource();
+    var job = videoEndsBeforeAudioJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    paddedTo(job, VIDEO_ENDS_BEFORE_AUDIO_SEGMENT_COUNT);
+    job.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
+    job.getExecutionBuilder().setStartSequenceNumber(startSequenceNumber);
+
+    var completion =
+        executeToCompletion(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(completion.report().hasSourceEndedEarly()).isFalse();
+    assertThat(completion.report().getStreamEndsList())
+        .containsExactlyInAnyOrderElementsOf(VIDEO_ENDS_BEFORE_AUDIO_STREAM_ENDS);
+  }
+
+  // The truncated source's index promises 90 s, its data holds less, and its probe would say 90 s.
+  @Test
+  @DisplayName(
+      "Should upload every advertised segment and report the segment where the source's data ends"
+          + " when an encode holds and pads a source truncated before its index's end")
+  void shouldUploadEverySegmentAndReportWhereTheDataEndsWhenAnEncodeHoldsAndPadsATruncatedSource()
+      throws Exception {
+    var source = truncatedSource();
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    paddedTo(job, TRUNCATED_SOURCE_INDEXED_SEGMENT_COUNT);
+    job.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
+
+    var completion =
+        executeToCompletion(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(completion.uploads().names())
+        .containsExactlyElementsOf(uploadNames(TRUNCATED_SOURCE_INDEXED_SEGMENT_COUNT));
+    var report = completion.report();
+    var lastSegment = report.getSourceEndedEarly().getLastSegmentWithSourceMedia();
+    assertThat(report.getSourceEndedEarly().getStreamIndexesWithMediaAfterLastSegmentList())
+        .as("a held encode carries every source sample")
+        .isEmpty();
+    assertThat(lastSegment).isBetween(1, TRUNCATED_SOURCE_INDEXED_SEGMENT_COUNT - 2);
+    assertThat(report.getStreamEndsList())
+        .extracting(SourceStreamEnd::getStreamIndex)
+        .containsExactlyInAnyOrder(0, 1);
+    var latestEnd =
+        report.getStreamEndsList().stream()
+            .map(
+                end ->
+                    Duration.ofSeconds(end.getEndTime().getSeconds(), end.getEndTime().getNanos()))
+            .max(Comparator.naturalOrder())
+            .orElseThrow();
+    assertThat(latestEnd)
+        .as("the end of the last source sample, which starts inside segment %d", lastSegment)
+        .isGreaterThan(Duration.ofSeconds(lastSegment * 6L))
+        .isLessThanOrEqualTo(Duration.ofSeconds((lastSegment + 1) * 6L).plus(ONE_FRAME_AT_24_FPS));
+  }
+
   // With no audio frame to read, the mp4 muxer cannot write the AC-3 or E-AC-3 sample entry: FFmpeg
   // logs that it cannot write the moov before the first packet, writes the moov's header with no
   // size, and still exits 0.
@@ -5146,6 +5253,42 @@ class WorkerMediaSmokeTest {
     return job;
   }
 
+  // H.264 at 64x36 and 24 fps with a keyframe every 2 s, and pink noise, both for 90 s, with the
+  // index at the front and only the first half of the file: FFmpeg reads the streams to where the
+  // data stops, partway through, and exits cleanly.
+  private static synchronized Path truncatedSource() throws Exception {
+    var source = seekableSources.resolve("truncated.mp4");
+    if (!generatedSeekableSources.contains(source)) {
+      var whole = seekableSources.resolve("whole-before-truncation.mp4");
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24:duration=90",
+              "-f",
+              "lavfi",
+              "-i",
+              "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5:duration=90",
+              "-c:v",
+              "libx264",
+              "-g",
+              "48",
+              "-keyint_min",
+              "48",
+              "-c:a",
+              "aac",
+              "-movflags",
+              "+faststart"),
+          whole);
+      var bytes = Files.readAllBytes(whole);
+      Files.write(source, Arrays.copyOf(bytes, bytes.length / 2));
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
   private static VariantJob.Builder surroundAudioEndsBeforeVideoJob(Path source) {
     var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
     job.getExecutionBuilder().setMediaSegmentCount(FLAC_SOURCE_SEGMENT_COUNT);
@@ -5479,6 +5622,17 @@ class WorkerMediaSmokeTest {
   private MediaUploads execute(
       FfmpegTranscodeEngine engine, Path sourceRoot, VariantJob job, Consumer<String> uploadStarted)
       throws Exception {
+    return executeToCompletion(engine, sourceRoot, job, uploadStarted).uploads();
+  }
+
+  private CompletedExecution executeToCompletion(
+      FfmpegTranscodeEngine engine, Path sourceRoot, VariantJob job) throws Exception {
+    return executeToCompletion(engine, sourceRoot, job, _ -> {});
+  }
+
+  private CompletedExecution executeToCompletion(
+      FfmpegTranscodeEngine engine, Path sourceRoot, VariantJob job, Consumer<String> uploadStarted)
+      throws Exception {
     try (var controlPlane = new MediaControlPlane(uploadStarted);
         var worker = workerBuilder(sourceRoot).engine(engine).ffprobe(probeExecutor()).build()) {
       worker.start("127.0.0.1", controlPlane.port());
@@ -5489,11 +5643,20 @@ class WorkerMediaSmokeTest {
                   StartVariantCommand.newBuilder().setTarget(registeredWorker).setJob(job))
               .build());
 
-      assertThat(controlPlane.completed.get(JOB_LIMIT.toSeconds(), TimeUnit.SECONDS))
-          .extracting(JobAttemptCompleted::getJobAttemptId)
-          .isEqualTo(job.getJobAttemptId());
-      return new MediaUploads(List.copyOf(controlPlane.names), Map.copyOf(controlPlane.segments));
+      var report = controlPlane.completed.get(JOB_LIMIT.toSeconds(), TimeUnit.SECONDS);
+      assertThat(report.getJobAttemptId()).isEqualTo(job.getJobAttemptId());
+      return new CompletedExecution(
+          report,
+          new MediaUploads(List.copyOf(controlPlane.names), Map.copyOf(controlPlane.segments)));
     }
+  }
+
+  private record CompletedExecution(JobAttemptCompleted report, MediaUploads uploads) {}
+
+  private static SourceStreamEnd streamEnd(int streamIndex, Duration endTime) {
+    var streamEnd = SourceStreamEnd.newBuilder().setStreamIndex(streamIndex);
+    streamEnd.getEndTimeBuilder().setSeconds(endTime.getSeconds()).setNanos(endTime.getNano());
+    return streamEnd.build();
   }
 
   private FailedExecution executeExpectingFailure(

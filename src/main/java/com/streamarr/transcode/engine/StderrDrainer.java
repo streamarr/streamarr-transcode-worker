@@ -16,6 +16,7 @@ final class StderrDrainer implements AutoCloseable {
   private static final int EXIT_DETAIL_LIMIT = 2000;
 
   private final CircularLineBuffer buffer = new CircularLineBuffer(CAPACITY);
+  private final SourceStreamObservation sourceStreams = new SourceStreamObservation();
   private final Thread drainThread;
 
   StderrDrainer(InputStream errorStream) {
@@ -27,11 +28,27 @@ final class StderrDrainer implements AutoCloseable {
         new BufferedReader(new InputStreamReader(errorStream, StandardCharsets.UTF_8))) {
       String line;
       while ((line = reader.readLine()) != null) {
-        buffer.add(line);
+        addUnlessFramecrc(line);
       }
     } catch (Exception e) {
       log.debug("Stderr drain thread terminated: {}", e.getMessage());
     }
+  }
+
+  // The framecrc of the chosen source streams stays out of the diagnostics.
+  private void addUnlessFramecrc(String line) {
+    if (!sourceStreams.tryRead(line)) {
+      buffer.add(line);
+    }
+  }
+
+  /**
+   * The chosen source streams that the error output's framecrc showed, once FFmpeg has exited: the
+   * drain reads to the end of the error output first, waiting at most a second.
+   */
+  List<ObservedSourceStream> observedSourceStreams() {
+    awaitRecentOutput(EXIT_DETAIL_WAIT);
+    return sourceStreams.streams();
   }
 
   /**

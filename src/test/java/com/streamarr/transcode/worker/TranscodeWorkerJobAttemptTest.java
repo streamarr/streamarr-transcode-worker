@@ -39,6 +39,8 @@ import build.buf.gen.streamarr.transcode.v1.Fraction;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
 import build.buf.gen.streamarr.transcode.v1.Presence;
 import build.buf.gen.streamarr.transcode.v1.SegmentContentType;
+import build.buf.gen.streamarr.transcode.v1.SourceEndedEarly;
+import build.buf.gen.streamarr.transcode.v1.SourceStreamEnd;
 import build.buf.gen.streamarr.transcode.v1.SubtitleMode;
 import build.buf.gen.streamarr.transcode.v1.TranscodeDecision;
 import build.buf.gen.streamarr.transcode.v1.TranscodeMode;
@@ -108,6 +110,74 @@ class TranscodeWorkerJobAttemptTest {
   @BeforeEach
   void setUp() throws Exception {
     Files.writeString(tempDir.resolve("movie.mkv"), "media");
+  }
+
+  // The source's video, stream 0, has its last keyframe at 30 s, in segment 5 of 11, and its last
+  // frame at 31 s; its audio, stream 1, runs on to a frame at 40 s, in segment 6.
+  @Test
+  @DisplayName(
+      "Should report each chosen stream's end and the segment where the source ended when the"
+          + " FFmpeg that reads the source shows its streams ending before the last segment")
+  void shouldReportEachStreamsEndAndWhereTheSourceEndedWhenItsStreamsEndBeforeTheLastSegment()
+      throws Exception {
+    var launcher =
+        ScriptedProcessLauncher.forCommands(
+            (_, _) ->
+                ScriptedProcess.builder()
+                    .output(bytesOf(ENCODED_RECORDING))
+                    .stderr(
+                        """
+                        Stream mapping:
+                          Stream #0:0 -> #0:0 (copy)
+                          Stream #0:1 -> #0:1 (copy)
+                          Stream #0:0 -> #1:0 (copy)
+                          Stream #0:1 -> #1:1 (copy)
+                        #tb 0: 1/1000
+                        #tb 1: 1/48000
+                        0,    30000,    30000,       40,     1000, 0x0a1b2c3d
+                        0,    31000,    31000,       40,      300, 0x0a1b2c3d, F=0x0
+                        1,  1920000,  1920000,     1024,      300, 0x0a1b2c3d
+                        """)
+                    .build());
+    var job = copyJobBuilderFor(recording(ENCODED_RECORDING)).build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_COMPLETED);
+      var completed = lastEvent(connection).getJobAttemptCompleted();
+      assertThat(completed.getSourceEndedEarly())
+          .isEqualTo(
+              SourceEndedEarly.newBuilder()
+                  .setLastSegmentWithSourceMedia(5)
+                  .addStreamIndexesWithMediaAfterLastSegment(1)
+                  .build());
+      assertThat(completed.getStreamEndsList())
+          .containsExactly(
+              streamEnd(0, Duration.ofMillis(31_040)),
+              streamEnd(1, Duration.ofNanos(40_021_333_333L)));
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should report no stream end and no early end when the FFmpeg that reads the source shows"
+          + " none of its streams")
+  void shouldReportNoStreamEndAndNoEarlyEndWhenTheSourceShowsNoneOfItsStreams() throws Exception {
+    var job = variantJobBuilder().build();
+
+    try (var worker = worker(ScriptedProcessLauncher.writing(ENCODED_RECORDING))) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_COMPLETED);
+      var completed = lastEvent(connection).getJobAttemptCompleted();
+      assertThat(completed.hasSourceEndedEarly()).isFalse();
+      assertThat(completed.getStreamEndsList()).isEmpty();
+    }
   }
 
   @Test
@@ -2483,6 +2553,12 @@ class TranscodeWorkerJobAttemptTest {
 
   private static ConditionFactory promptly() {
     return await().atMost(EVENT_LIMIT).pollInterval(Duration.ofMillis(5));
+  }
+
+  private static SourceStreamEnd streamEnd(int streamIndex, Duration endTime) {
+    var streamEnd = SourceStreamEnd.newBuilder().setStreamIndex(streamIndex);
+    streamEnd.getEndTimeBuilder().setSeconds(endTime.getSeconds()).setNanos(endTime.getNano());
+    return streamEnd.build();
   }
 
   private static void awaitEvents(
