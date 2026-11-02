@@ -81,7 +81,8 @@ final class SegmentIntervals {
       return found;
     }
 
-    return -found - 2;
+    var insertionPoint = -(found + 1);
+    return insertionPoint - 1L;
   }
 
   /** Where segment {@code number}'s interval starts, in ticks of this timescale. */
