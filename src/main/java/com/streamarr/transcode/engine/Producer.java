@@ -480,14 +480,25 @@ public final class Producer {
     return deliverThenFail(closing);
   }
 
+  // Once the output ends, the assembler holds nothing beyond the segments it closes, so what they
+  // do not hold, such as the audio after the last segment, is released before their delivery
+  // reserves anything.
   private ReadingEnding deliverLastSegment() {
     List<ClosedSegment> lastSegments;
+    long droppedBytes;
     synchronized (lock) {
       if (decision.isPresent()) {
         return new Decided();
       }
 
       lastSegments = assembler.finish();
+      droppedBytes =
+          readerHeldBytes - lastSegments.stream().mapToLong(ClosedSegment::heldBytes).sum();
+      readerHeldBytes -= droppedBytes;
+    }
+
+    if (droppedBytes > 0) {
+      memoryBudget.release(droppedBytes);
     }
 
     return handOffInOrder(lastSegments).orElseGet(EndOfOutput::new);

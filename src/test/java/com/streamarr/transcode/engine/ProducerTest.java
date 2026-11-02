@@ -1346,14 +1346,7 @@ class ProducerTest {
     // Segment 0's two fragments hold 120 MiB, and audio of segment 1, which no keyframe opens,
     // 50 MiB more. The second fragment also carries an audio sample of segment 1: counted once
     // more for the delivery, its 100 MiB would not fit beside the 170 MiB the reader holds.
-    var tailAudio =
-        IsoBoxes.concat(
-            IsoBoxes.moof(
-                IsoBoxes.audioTraf()
-                    .baseMediaDecodeTime(72_000L)
-                    .sampleDurations(List.of(24_000))
-                    .build()),
-            IsoBoxes.mdat(1 + 50 * 1024 * 1024));
+    var tailAudio = audioOnlyFragment(72_000, 50 * 1024 * 1024);
     var output =
         IsoBoxes.concat(
             IsoBoxes.ftyp(),
@@ -1381,6 +1374,46 @@ class ProducerTest {
     assertThat(segment.samplesOf(segment.audioTrack()))
         .extracting(Sample::presentationTime)
         .containsExactly(0L, 24_000L);
+    assertReleasesEveryReservedByte(workerBudget);
+  }
+
+  @Test
+  @DisplayName(
+      "Should deliver the last media segment and release its memory when the audio after it fills"
+          + " the producer's budget to within a byte")
+  void shouldDeliverTheLastMediaSegmentWhenTheAudioAfterItFillsTheBudgetToWithinAByte() {
+    var workerBudget = SegmentMemoryBudget.forSlots(1);
+    var hundredMebibytes = 100 * 1024 * 1024;
+    var keyframe =
+        TimedFragment.keyframeAt(0)
+            .videoDuration(12_000)
+            .audioFrom(0, 24_000)
+            .paddingBytes(hundredMebibytes)
+            .build()
+            .bytes();
+    var frame = TimedFragment.frameAt(12_000).videoDuration(12_000).audioFrom(24_000, 24_000);
+    var firstAfter = audioOnlyFragment(48_000, hundredMebibytes);
+    var held =
+        heldBytesOf(keyframe, 2)
+            + heldBytesOf(frame.build().bytes(), 2)
+            + heldBytesOf(firstAfter, 1)
+            + heldBytesOf(audioOnlyFragment(72_000, 0), 1);
+    // Segment 1's audio, which no keyframe opens, leaves one byte of the producer's budget, too
+    // little for the header of segment 0's moof and mdat unless the dropped audio is released.
+    var output =
+        IsoBoxes.concat(
+            IsoBoxes.ftyp(),
+            IsoBoxes.videoAndAudioMoov(),
+            keyframe,
+            frame.build().bytes(),
+            firstAfter,
+            audioOnlyFragment(72_000, Math.toIntExact(ONE_SLOT_CAPACITY - 1 - held)));
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer = producerOfOneSecondSegments(process).memoryBudget(workerBudget).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
     assertReleasesEveryReservedByte(workerBudget);
   }
 
@@ -3328,6 +3361,22 @@ class ProducerTest {
   }
 
   // The samples of the delivered media segment, read after the initialization segment.
+  // A fragment of one audio sample of 0.5 s and this many bytes of mdat beyond the sample.
+  private static byte[] audioOnlyFragment(long audioTime, int paddingBytes) {
+    return IsoBoxes.concat(
+        IsoBoxes.moof(
+            IsoBoxes.audioTraf()
+                .baseMediaDecodeTime(audioTime)
+                .sampleDurations(List.of(24_000))
+                .build()),
+        IsoBoxes.mdat(1 + paddingBytes));
+  }
+
+  // What the reader admits for a fragment: its bytes and the heap of its samples.
+  private static long heldBytesOf(byte[] fragment, int sampleCount) {
+    return fragment.length + Fragment.heapBytesOf(sampleCount);
+  }
+
   private static Movie mediaSegmentOf(RecordingSegmentSink deliveries, String name) {
     return Mp4Samples.read(
         IsoBoxes.concat(deliveries.contentOf("init.mp4"), deliveries.contentOf(name)));
