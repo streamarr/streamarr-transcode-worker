@@ -559,6 +559,27 @@ class ProbeCapacitiesTest {
 
   @Test
   @DisplayName(
+      "Should show no congestion when a probe that started before a job attempt's brake times out")
+  void shouldShowNoCongestionWhenAProbeThatStartedBeforeAJobAttemptsBrakeTimesOut() {
+    var capacities = adaptive(16);
+    var startedBeforeBrake = acquire(capacities, ProbeKind.BACKGROUND, 1);
+    var attempt = UUID.randomUUID();
+    capacities.jobAttemptStarted(attempt);
+    capacities.jobAttemptEnded(attempt);
+    clock.advance(Duration.ofMinutes(1));
+    timeOut(capacities, startedBeforeBrake.getFirst());
+    var probes = acquire(capacities, ProbeKind.BACKGROUND, 2);
+
+    clock.advance(Duration.ofSeconds(20));
+    capacities.release(probes.getFirst());
+
+    assertThat(capacities.granted().backgroundProbeCapacity())
+        .as("A job attempt, not a timed-out probe, applied the latest brake")
+        .isEqualTo(3);
+  }
+
+  @Test
+  @DisplayName(
       "Should show no congestion when a keyframe packet scan that started before a brake times"
           + " out")
   void shouldShowNoCongestionWhenAKeyframePacketScanThatStartedBeforeABrakeTimesOut() {
