@@ -5182,27 +5182,26 @@ class WorkerMediaSmokeTest {
                 .filter(
                     name -> !name.startsWith("segment") || numberOf(name) >= startSequenceNumber)
                 .toList());
-    // The mp4 muxer shifts every presentation time by libx264's reordering delay of two frames.
-    var first =
-        Mp4Samples.read(uploads.contentOf(List.of("init.mp4", segmentName(startSequenceNumber))));
-    var timescale = first.videoTrack().timescale();
-    var shift =
-        first.samplesOf(first.videoTrack()).getFirst().presentationTime()
-            - listedInterval(startSequenceNumber, timescale).start();
-    assertThat(shift).as("the reordering delay").isEqualTo(2 * timescale / 24);
+    // Unless the muxer writes negative composition offsets, it can shift presentation times by up
+    // to libx264's reordering delay of two frames; FFmpeg releases differ in what they write.
     for (var number = startSequenceNumber;
         number < TEN_SECOND_KEYFRAME_SEGMENT_STARTS.size();
         number++) {
       var movie = Mp4Samples.read(uploads.contentOf(List.of("init.mp4", segmentName(number))));
+      var timescale = movie.videoTrack().timescale();
+      var reorderingDelay = 2 * timescale / 24;
       var listed = listedInterval(number, timescale);
       var video = movie.samplesOf(movie.videoTrack());
       assertThat(video.getFirst().isSync()).as("segment %d opens at a keyframe", number).isTrue();
-      assertThat(video.getFirst().presentationTime() - shift)
+      assertThat(video.getFirst().presentationTime())
           .as("segment %d opens on its listed start", number)
-          .isEqualTo(listed.start());
+          .isBetween(listed.start(), listed.start() + reorderingDelay);
       assertThat(video)
           .as("segment %d's frames all start inside its listed interval", number)
-          .allMatch(sample -> listed.interval().holds(sample.presentationTime() - shift));
+          .allMatch(
+              sample ->
+                  sample.presentationTime() >= listed.start()
+                      && sample.presentationTime() - reorderingDelay < listed.interval().end());
     }
 
     var merged = Mp4Samples.read(uploads.contentOf(List.of("init.mp4", segmentName(2))));
