@@ -41,6 +41,7 @@ import com.streamarr.transcode.engine.ProducedSegment;
 import com.streamarr.transcode.engine.Producer;
 import com.streamarr.transcode.engine.ProducerFailure;
 import com.streamarr.transcode.engine.SegmentMemoryBudget;
+import com.streamarr.transcode.engine.SourceAudio;
 import com.streamarr.transcode.engine.TranscodeRequest;
 import com.streamarr.transcode.engine.UnadvertisedCodecFamilyException;
 import com.streamarr.transcode.probe.FfprobeExecutor;
@@ -302,13 +303,36 @@ public final class TranscodeWorker implements AutoCloseable {
 
   @SuppressWarnings("java:S3398") // Job lifecycle belongs to the worker, not its gRPC observer.
   private void startVariant(StartVariantCommand command) {
-    // The stop waits for FFmpeg to exit, so it runs without the monitor that uploads need.
-    if (startAttempt(command) instanceof Orphaned(var producer)) {
+    // ffprobe reads the source without the monitor, and the stop waits for FFmpeg to exit, so both
+    // run without the monitor that uploads need.
+    var chosenAudio = readChosenAudio(command.getJob());
+    if (startAttempt(command, chosenAudio) instanceof Orphaned(var producer)) {
       producer.stop();
     }
   }
 
-  private synchronized AttemptStart startAttempt(StartVariantCommand command) {
+  // A job that names its audio's output layout needs the source layout and sample facts (ADR 0050).
+  private ChosenAudio readChosenAudio(VariantJob job) {
+    if (!WorkerVariantJobMapper.namesAudioLayout(job)) {
+      return new ChosenAudio.NotRead();
+    }
+
+    try {
+      var source = sources.resolve(job.getSource());
+      return new ChosenAudio.Read(ChosenAudio.factsOf(ffprobe.readChosenAudio(source)));
+    } catch (InvalidJobSpecificationException _) {
+      // The mapper refuses the job for the same reason.
+      return new ChosenAudio.NotRead();
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      return new ChosenAudio.Unreadable(e);
+    } catch (ExecutionException | RuntimeException e) {
+      return new ChosenAudio.Unreadable(e);
+    }
+  }
+
+  private synchronized AttemptStart startAttempt(
+      StartVariantCommand command, ChosenAudio chosenAudio) {
     var job = command.getJob();
     if (!isRunnableHere(command)) {
       reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
@@ -326,10 +350,19 @@ public final class TranscodeWorker implements AutoCloseable {
       return new Refused();
     }
 
+    if (chosenAudio instanceof ChosenAudio.Unreadable(var failure)) {
+      log.error(
+          "Failed to read the audio stream of job attempt {}",
+          fromProto(job.getJobAttemptId()),
+          failure);
+      reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED);
+      return new Refused();
+    }
+
     TranscodeRequest request;
     Producer producer;
     try {
-      request = jobMapper.map(job);
+      request = jobMapper.map(job, sourceAudioOf(chosenAudio));
       producer =
           engine.startProducer(
               request,
@@ -361,6 +394,12 @@ public final class TranscodeWorker implements AutoCloseable {
 
     producer.outcome().thenAccept(outcome -> settleAttempt(attempt, outcome));
     return new Started();
+  }
+
+  private static Optional<SourceAudio> sourceAudioOf(ChosenAudio chosenAudio) {
+    return chosenAudio instanceof ChosenAudio.Read(var facts)
+        ? Optional.of(facts)
+        : Optional.empty();
   }
 
   private boolean isRunnableHere(StartVariantCommand command) {

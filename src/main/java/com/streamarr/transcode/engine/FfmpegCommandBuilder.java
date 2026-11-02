@@ -203,10 +203,11 @@ public class FfmpegCommandBuilder {
               .codec("libopus")
               .channels(audio.channels())
               .bitrate(audio.bitrate())
+              .channelLayout(audio.channelLayout())
               .build();
     }
 
-    addAudioArgs(cmd, copiedAudio);
+    addAudioArgs(cmd, copiedAudio, job.request().sourceAudio());
 
     cmd.addAll(SOURCE_COPY_OUTPUT);
     addVideoTimingOutput(cmd, job.request().transcodeDecision().videoDecision());
@@ -268,6 +269,8 @@ public class FfmpegCommandBuilder {
       cmd.addAll(List.of("-ss", seekArgument(seekPosition)));
     }
 
+    encodeInNamedLayout(request.transcodeDecision().audioDecision(), request.sourceAudio())
+        .ifPresent(options -> cmd.addAll(options.inputOptions()));
     cmd.addAll(List.of("-i", request.sourcePath().toString()));
   }
 
@@ -351,7 +354,7 @@ public class FfmpegCommandBuilder {
     if (!decision.transcodeMode().encodesVideo()) {
       cmd.addAll(List.of("-c:v", "copy"));
       cmd.addAll(copiedVideoArgs(decision.videoDecision()));
-      addAudioArgs(cmd, decision.audioDecision());
+      addAudioArgs(cmd, decision.audioDecision(), job.request().sourceAudio());
       return;
     }
 
@@ -366,7 +369,7 @@ public class FfmpegCommandBuilder {
       return;
     }
 
-    addAudioArgs(cmd, decision.audioDecision());
+    addAudioArgs(cmd, decision.audioDecision(), job.request().sourceAudio());
   }
 
   // The copy carries the job's output audio, which the encode of the copy copies untrimmed.
@@ -431,7 +434,8 @@ public class FfmpegCommandBuilder {
     }
   }
 
-  private void addAudioArgs(List<String> cmd, AudioDecision audio) {
+  private void addAudioArgs(
+      List<String> cmd, AudioDecision audio, Optional<SourceAudio> sourceAudio) {
     if (audio.mode() == AudioMode.NONE) {
       return;
     }
@@ -441,9 +445,25 @@ public class FfmpegCommandBuilder {
       return;
     }
 
+    var namedLayout = encodeInNamedLayout(audio, sourceAudio);
+    if (namedLayout.isPresent()) {
+      cmd.addAll(namedLayout.orElseThrow().outputOptions());
+      return;
+    }
+
     cmd.addAll(List.of("-c:a", audio.codec()));
     cmd.addAll(List.of("-ac", String.valueOf(audio.channels())));
     cmd.addAll(List.of("-b:a", audio.bitrate() / 1000 + "k"));
+  }
+
+  // A job that names its output layout encodes in it (ADR 0050); any other keeps -ac.
+  private static Optional<AudioEncodeOptions> encodeInNamedLayout(
+      AudioDecision audio, Optional<SourceAudio> sourceAudio) {
+    if (audio.mode() != AudioMode.TRANSCODE || audio.channelLayout().isEmpty()) {
+      return Optional.empty();
+    }
+
+    return Optional.of(AudioEncodeOptions.of(audio, sourceAudio.orElseThrow()));
   }
 
   private static List<String> copiedAudioArgs(String codec) {

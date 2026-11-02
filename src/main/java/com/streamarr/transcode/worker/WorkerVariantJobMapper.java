@@ -1,13 +1,17 @@
 package com.streamarr.transcode.worker;
 
+import static build.buf.gen.streamarr.transcode.v1.AudioMode.AUDIO_MODE_TRANSCODE;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 
+import build.buf.gen.streamarr.transcode.v1.AudioChannelLayout;
 import build.buf.gen.streamarr.transcode.v1.TranscodeExecution;
 import build.buf.gen.streamarr.transcode.v1.VariantJob;
 import com.streamarr.transcode.engine.AudioDecision;
 import com.streamarr.transcode.engine.AudioMode;
 import com.streamarr.transcode.engine.EncoderPreset;
 import com.streamarr.transcode.engine.OutputFrameRate;
+import com.streamarr.transcode.engine.SourceAudio;
+import com.streamarr.transcode.engine.SpeakerLayout;
 import com.streamarr.transcode.engine.SubtitleDecision;
 import com.streamarr.transcode.engine.SubtitleMode;
 import com.streamarr.transcode.engine.TranscodeDecision;
@@ -32,6 +36,16 @@ final class WorkerVariantJobMapper {
    *     value that the worker forces or checks
    */
   TranscodeRequest map(VariantJob job) {
+    return map(job, Optional.empty());
+  }
+
+  /**
+   * Maps the job with the facts of the audio stream that it encodes, which a job that names its
+   * audio's output layout needs.
+   *
+   * @throws InvalidJobSpecificationException as {@link #map(VariantJob)} does
+   */
+  TranscodeRequest map(VariantJob job, Optional<SourceAudio> sourceAudio) {
     var variant = job.getVariant();
     var execution = job.getExecution();
     return TranscodeRequest.builder()
@@ -51,6 +65,7 @@ final class WorkerVariantJobMapper {
         .startSequenceNumber(execution.getStartSequenceNumber())
         .mediaSegmentCount(execution.getMediaSegmentCount())
         .seekPosition(seekPosition(execution))
+        .sourceAudio(sourceAudio)
         .build();
   }
 
@@ -116,7 +131,66 @@ final class WorkerVariantJobMapper {
         .codec(audio.hasCodec() ? audio.getCodec() : null)
         .channels(audio.getChannels())
         .bitrate(audio.getBitrateBitsPerSecond())
+        .channelLayout(channelLayout(audio))
         .build();
+  }
+
+  /** Whether the job encodes its audio in a layout that it names. */
+  static boolean namesAudioLayout(VariantJob job) {
+    var audio = job.getDecision().getAudio();
+    return audio.getMode() == AUDIO_MODE_TRANSCODE
+        && audio.getChannelLayout() != AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_UNSPECIFIED;
+  }
+
+  // The contract refuses a layout on a job that does not encode audio, a value that it does not
+  // define, and a channel count other than the layout's.
+  @SuppressWarnings("checkstyle:fullyQualifiedName")
+  private static Optional<SpeakerLayout> channelLayout(
+      build.buf.gen.streamarr.transcode.v1.AudioDecision audio) {
+    var value = audio.getChannelLayout();
+    if (value == AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_UNSPECIFIED) {
+      return Optional.empty();
+    }
+
+    if (audio.getMode() != AUDIO_MODE_TRANSCODE) {
+      throw new InvalidJobSpecificationException("Only an audio encode names a channel layout");
+    }
+
+    var layout = SpeakerLayout.named(ffmpegName(value));
+    if (layout.channelCount() != audio.getChannels()) {
+      throw new InvalidJobSpecificationException(
+          "Channel layout "
+              + layout.name()
+              + " has "
+              + layout.channelCount()
+              + " channels, but the job names "
+              + audio.getChannels());
+    }
+
+    return Optional.of(layout);
+  }
+
+  private static String ffmpegName(AudioChannelLayout layout) {
+    return switch (layout) {
+      case AUDIO_CHANNEL_LAYOUT_MONO -> "mono";
+      case AUDIO_CHANNEL_LAYOUT_STEREO -> "stereo";
+      case AUDIO_CHANNEL_LAYOUT_TWO_POINT_ONE -> "2.1";
+      case AUDIO_CHANNEL_LAYOUT_THREE_POINT_ZERO -> "3.0";
+      case AUDIO_CHANNEL_LAYOUT_THREE_POINT_ZERO_BACK -> "3.0(back)";
+      case AUDIO_CHANNEL_LAYOUT_FOUR_POINT_ZERO -> "4.0";
+      case AUDIO_CHANNEL_LAYOUT_QUAD -> "quad";
+      case AUDIO_CHANNEL_LAYOUT_QUAD_SIDE -> "quad(side)";
+      case AUDIO_CHANNEL_LAYOUT_FIVE_POINT_ONE -> "5.1";
+      case AUDIO_CHANNEL_LAYOUT_FIVE_POINT_ONE_SIDE -> "5.1(side)";
+      case AUDIO_CHANNEL_LAYOUT_SEVEN_POINT_ONE -> "7.1";
+      case AUDIO_CHANNEL_LAYOUT_FIVE_POINT_ZERO -> "5.0";
+      case AUDIO_CHANNEL_LAYOUT_FIVE_POINT_ZERO_SIDE -> "5.0(side)";
+      case AUDIO_CHANNEL_LAYOUT_SIX_POINT_ONE -> "6.1";
+      case AUDIO_CHANNEL_LAYOUT_SIX_POINT_ONE_BACK -> "6.1(back)";
+      case AUDIO_CHANNEL_LAYOUT_SEVEN_POINT_ONE_WIDE -> "7.1(wide)";
+      case AUDIO_CHANNEL_LAYOUT_UNSPECIFIED, UNRECOGNIZED ->
+          throw new InvalidJobSpecificationException("The job names an undefined channel layout");
+    };
   }
 
   @SuppressWarnings("checkstyle:fullyQualifiedName")
