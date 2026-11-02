@@ -19,10 +19,6 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
   private static final String TUNED_RESAMPLER =
       "filter_size=128:phase_shift=14:cutoff=0.95:kaiser_beta=14";
   private static final String TPDF_DITHER = "dither_method=triangular";
-  // A downmix whose only changed channels are the summed ones quantizes them with TPDF dither
-  // before join, so the channels that pass through keep their 16-bit values.
-  private static final String SIXTEEN_BIT_QUANTIZER =
-      "aresample=osf=s16:" + TPDF_DITHER + ":" + TUNED_RESAMPLER;
   private static final int OPUS_SAMPLE_RATE = 48_000;
   private static final int LOSSY_SAMPLE_RATE = 48_000;
   private static final Set<Integer> LOSSY_KEPT_SAMPLE_RATES = Set.of(44_100, 48_000);
@@ -116,7 +112,7 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
 
   // No resampler may follow the limiter, so the downmix runs at the output rate. When only the
   // summed channels change and every other channel keeps its samples, each summed group is
-  // quantized with TPDF dither before join, so the channels that pass through keep their 16-bit
+  // quantized with TPDF dither before join, so the channels that pass through keep their integer
   // values; otherwise the format stage dithers every channel. Decoded lossy audio is floating point
   // in every channel, so every channel needs dither.
   private static List<String> downmixFilters(
@@ -132,7 +128,6 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
     var depth = writtenDepth(audio, source);
     var quantizesSummedChannels =
         encoder == Encoder.LOSSLESS
-            && depth == SIXTEEN_BITS
             && rate.isEmpty()
             && !losesPrecision(source, depth)
             && DownmixFilter.onlySummedChannelsChange(matrix);
@@ -142,9 +137,30 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
             output,
             matrix,
             limiterFor(encoder, writtenRate, output),
-            quantizesSummedChannels ? Optional.of(SIXTEEN_BIT_QUANTIZER) : Optional.empty()));
+            quantizesSummedChannels ? Optional.of(quantizer(depth)) : Optional.empty()));
     filters.add(formatStage(encoder, audio, source, Optional.empty(), !quantizesSummedChannels));
     return filters;
+  }
+
+  // The summed channels leave floating point at the written depth with TPDF dither.
+  private static String quantizer(int depth) {
+    var options = new ArrayList<>(List.of("osf=" + integerFormat(depth)));
+    options.addAll(ditherAt(depth));
+    options.add(TUNED_RESAMPLER);
+    return "aresample=" + String.join(":", options);
+  }
+
+  private static String integerFormat(int depth) {
+    return depth == SIXTEEN_BITS ? "s16" : "s32";
+  }
+
+  // swresample scales its dither to one step of the 32-bit format unless told the written depth.
+  private static List<String> ditherAt(int depth) {
+    if (depth == SIXTEEN_BITS) {
+      return List.of(TPDF_DITHER);
+    }
+
+    return List.of("output_sample_bits=" + depth, TPDF_DITHER);
   }
 
   // The true-peak limiter oversamples the rate that the downmix runs at.
@@ -161,7 +177,7 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
     return "aresample=osr=" + sampleRate + ":" + TUNED_RESAMPLER;
   }
 
-  // The format stage dithers FLAC or ALAC when it writes 16 bits from samples that a downmix mixed.
+  // The format stage dithers FLAC or ALAC when it writes samples that a downmix mixed.
   private static String formatStage(
       Encoder encoder,
       AudioDecision audio,
@@ -213,18 +229,12 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
       options.add("internal_sample_fmt=fltp");
     }
 
-    var format = depth == SIXTEEN_BITS ? "s16" : "s32";
+    var format = integerFormat(depth);
     options.add("osf=" + ("alac".equals(audio.codec()) ? format + "p" : format));
-    var mixedToSixteenBits = mixed && depth == SIXTEEN_BITS;
-    if (!resamples && !mixedToSixteenBits && !losesPrecision(source, depth)) {
-      return options;
+    if (resamples || mixed || losesPrecision(source, depth)) {
+      options.addAll(ditherAt(depth));
     }
 
-    if (depth != SIXTEEN_BITS) {
-      options.add("output_sample_bits=" + depth);
-    }
-
-    options.add(TPDF_DITHER);
     return options;
   }
 

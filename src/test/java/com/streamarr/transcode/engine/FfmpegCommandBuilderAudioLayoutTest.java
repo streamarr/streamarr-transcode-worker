@@ -135,6 +135,8 @@ class FfmpegCommandBuilderAudioLayoutTest {
     private static final String MINUS_1_DBFS = "alimiter=limit=0.891251" + LIMIT_TIMING;
     private static final String DITHERED_16_BITS =
         "aresample=osf=s16:dither_method=triangular:" + TUNED_RESAMPLER;
+    private static final String DITHERED_24_BITS =
+        "aresample=osf=s32:output_sample_bits=24:dither_method=triangular:" + TUNED_RESAMPLER;
 
     @Test
     @DisplayName(
@@ -286,6 +288,65 @@ class FfmpegCommandBuilderAudioLayoutTest {
 
       assertThat(audioFilter(cmd))
           .isEqualTo(FLOAT_PAN + "stereo|FL=0.7071068*FC|FR=0.7071068*FC," + DITHERED_16_BITS);
+    }
+
+    @Test
+    @DisplayName(
+        "Should quantize the summed pair with TPDF dither at 24 bits when FLAC writes 24-bit 7.1 as 5.1")
+    void shouldQuantizeTheSummedPairWithTpdfDitherAt24BitsWhenFlacWrites24Bit71As51() {
+      var cmd = command(encode("flac", "5.1"), Optional.of(hiResSource("7.1", 48_000)));
+
+      assertThat(audioFilter(cmd))
+          .endsWith(
+              ",aresample=osr=48000:"
+                  + TUNED_RESAMPLER
+                  + ","
+                  + DITHERED_24_BITS
+                  + "[g0];[c0][c1][c2][c3][g0]join=inputs=5:channel_layout=5.1"
+                  + ":map=0.0-FL|1.0-FR|2.0-FC|3.0-LFE|4.0-BL|4.1-BR,"
+                  + "aresample=osf=s32:"
+                  + TUNED_RESAMPLER);
+    }
+
+    @Test
+    @DisplayName(
+        "Should dither every channel at 24 bits when a 24-bit FLAC downmix scales a channel that it does not sum")
+    void shouldDitherEveryChannelAt24BitsWhenA24BitFlacDownmixScalesAChannelThatItDoesNotSum() {
+      var cmd = command(encode("flac", "stereo"), Optional.of(hiResSource("mono", 48_000)));
+
+      assertThat(audioFilter(cmd))
+          .isEqualTo(FLOAT_PAN + "stereo|FL=0.7071068*FC|FR=0.7071068*FC," + DITHERED_24_BITS);
+    }
+
+    @Test
+    @DisplayName("Should keep every sample when a 24-bit FLAC downmix only leaves channels out")
+    void shouldKeepEverySampleWhenA24BitFlacDownmixOnlyLeavesChannelsOut() {
+      var cmd = command(encode("flac", "5.0"), Optional.of(hiResSource("5.1(side)", 48_000)));
+
+      assertThat(audioFilter(cmd))
+          .isEqualTo(
+              FLOAT_PAN + "5.0|FL=FL|FR=FR|FC=FC|BL=SL|BR=SR,aresample=osf=s32:" + TUNED_RESAMPLER);
+    }
+
+    @Test
+    @DisplayName(
+        "Should limit at the named rate and dither every channel when FLAC steps a 96 kHz downmix to 48 kHz")
+    void shouldLimitAtTheNamedRateAndDitherEveryChannelWhenFlacStepsA96KhzDownmixTo48Khz() {
+      var audio = encodeBuilder("flac", "5.1").outputSampleRate(OptionalInt.of(48_000)).build();
+
+      var cmd = command(audio, Optional.of(hiResSource("7.1", 96_000)));
+
+      assertThat(audioFilter(cmd))
+          .startsWith("aresample=osr=48000:" + TUNED_RESAMPLER + "," + FLOAT_PAN)
+          .contains(
+              "aresample=osr=192000:"
+                  + TUNED_RESAMPLER
+                  + ","
+                  + MINUS_1_DBFS
+                  + ",aresample=osr=48000:"
+                  + TUNED_RESAMPLER
+                  + "[g0]")
+          .endsWith(":map=0.0-FL|1.0-FR|2.0-FC|3.0-LFE|4.0-BL|4.1-BR," + DITHERED_24_BITS);
     }
 
     @Test
@@ -660,6 +721,14 @@ class FfmpegCommandBuilderAudioLayoutTest {
         .channels(named.channelCount())
         .bitrate(448_000)
         .channelLayout(Optional.of(named));
+  }
+
+  private static SourceAudio hiResSource(String layout, int sampleRate) {
+    return sourceBuilder("flac", layout)
+        .sampleFormat(Optional.of("s32"))
+        .bitDepth(OptionalInt.of(24))
+        .sampleRate(OptionalInt.of(sampleRate))
+        .build();
   }
 
   private static SourceAudio hiResFlac(int sampleRate, int bitDepth) {

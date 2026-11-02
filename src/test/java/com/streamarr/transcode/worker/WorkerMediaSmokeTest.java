@@ -3501,6 +3501,92 @@ class WorkerMediaSmokeTest {
     return source;
   }
 
+  @Test
+  @DisplayName(
+      "Should dither the summed surrounds and keep every other channel's samples when FLAC writes"
+          + " 24-bit 7.1 as 5.1")
+  void shouldDitherTheSummedSurroundsAndKeepEveryOtherChannelsSamplesWhenFlacWrites24Bit71As51()
+      throws Exception {
+    var source = surroundsAtOneStepSource();
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setCodec("flac")
+        .setChannels(6)
+        .setChannelLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_FIVE_POINT_ONE);
+    job.getExecutionBuilder().setMediaSegmentCount(1);
+
+    var uploads = execute(engine(realCapabilities()), seekableSources, job.build());
+
+    var delivered = root.resolve("downmix-24-bit-7.1-to-5.1.mp4");
+    Files.write(delivered, uploads.contentOf(uploadNames(1)));
+    var sourceChannels = decodedChannels(source, 8);
+    var deliveredChannels = decodedChannels(delivered, 6);
+    for (var channel = 0; channel < 4; channel++) {
+      assertThat(deliveredChannels[channel])
+          .as("unsummed channel %s", SpeakerLayout.named("5.1").speakers().get(channel))
+          .isEqualTo(sourceChannels[channel]);
+    }
+
+    // Each surround sums a back and a side channel that hold one 24-bit step: 0.7071 × 2 = 1.414
+    // steps, which truncation writes as 1 in every sample and TPDF dither spreads around it.
+    var settled = 4_800;
+    for (var channel = 4; channel < 6; channel++) {
+      var steps =
+          Arrays.stream(
+                  deliveredChannels[channel], settled, deliveredChannels[channel].length - settled)
+              .map(sample -> sample >> 8)
+              .toArray();
+      assertThat(Arrays.stream(steps).distinct().count()).as("distinct steps").isGreaterThan(2);
+      assertThat(Arrays.stream(steps).average().orElseThrow())
+          .as("mean step")
+          .isCloseTo(Math.sqrt(2) - 0.5, within(0.05));
+    }
+  }
+
+  // The seekable source's video, and 24-bit FLAC 7.1 whose front channels hold pink noise and
+  // whose back and side channels hold a constant of one 24-bit step.
+  private static synchronized Path surroundsAtOneStepSource() throws Exception {
+    var source = seekableSources.resolve("lossless-7.1-surrounds-at-one-step.mkv");
+    if (generatedSeekableSources.contains(source)) {
+      return source;
+    }
+
+    var arguments = new ArrayList<>(List.of("-f", "lavfi", "-i", "testsrc=size=64x36:rate=24"));
+    var joined = new StringBuilder();
+    for (var channel = 0; channel < 8; channel++) {
+      var input =
+          channel < 4
+              ? "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5:seed=" + (channel + 11)
+              : "aevalsrc=exprs=1/8388608:sample_rate=48000";
+      arguments.addAll(List.of("-f", "lavfi", "-i", input));
+      joined.append("[").append(channel + 1).append(":a]");
+    }
+
+    joined.append("join=inputs=8:channel_layout=7.1");
+    arguments.addAll(
+        List.of(
+            "-filter_complex",
+            joined + "[audio]",
+            "-map",
+            "0:v",
+            "-map",
+            "[audio]",
+            "-t",
+            "6",
+            "-c:v",
+            "libx264",
+            "-g",
+            "48",
+            "-c:a",
+            "flac",
+            "-sample_fmt",
+            "s32"));
+    runFfmpeg(arguments, source);
+    generatedSeekableSources.add(source);
+    return source;
+  }
+
   static Stream<LosslessLayoutChange> losslessLayoutChanges() {
     return Stream.of(
         LosslessLayoutChange.builder()
