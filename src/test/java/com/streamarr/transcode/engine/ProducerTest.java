@@ -1339,6 +1339,53 @@ class ProducerTest {
 
   @Test
   @DisplayName(
+      "Should deliver the last media segment and release its memory when its last fragment also"
+          + " carries audio past its interval and the segment's fragments fill most of the budget")
+  void shouldDeliverTheLastMediaSegmentWhenItsLastFragmentAlsoCarriesAudioPastItsInterval() {
+    var workerBudget = SegmentMemoryBudget.forSlots(1);
+    // Segment 0's two fragments hold 120 MiB, and audio of segment 1, which no keyframe opens,
+    // 50 MiB more. The second fragment also carries an audio sample of segment 1: counted once
+    // more for the delivery, its 100 MiB would not fit beside the 170 MiB the reader holds.
+    var tailAudio =
+        IsoBoxes.concat(
+            IsoBoxes.moof(
+                IsoBoxes.audioTraf()
+                    .baseMediaDecodeTime(72_000L)
+                    .sampleDurations(List.of(24_000))
+                    .build()),
+            IsoBoxes.mdat(1 + 50 * 1024 * 1024));
+    var output =
+        IsoBoxes.concat(
+            IsoBoxes.ftyp(),
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0)
+                .videoDuration(12_000)
+                .audioFrom(0, 24_000)
+                .paddingBytes(20 * 1024 * 1024)
+                .build()
+                .bytes(),
+            TimedFragment.frameAt(12_000)
+                .videoDuration(12_000)
+                .audioFrom(24_000, 24_000, 24_000)
+                .paddingBytes(100 * 1024 * 1024)
+                .build()
+                .bytes(),
+            tailAudio);
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer = producerOfOneSecondSegments(process).memoryBudget(workerBudget).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s");
+    var segment = mediaSegmentOf(sink, "segment0.m4s");
+    assertThat(segment.samplesOf(segment.audioTrack()))
+        .extracting(Sample::presentationTime)
+        .containsExactly(0L, 24_000L);
+    assertReleasesEveryReservedByte(workerBudget);
+  }
+
+  @Test
+  @DisplayName(
       "Should fail the attempt with the segment cap and release its memory when segments awaiting"
           + " their audio leave the producer's budget no room for the next box")
   void

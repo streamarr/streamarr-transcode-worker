@@ -95,6 +95,11 @@ final class SegmentAssembler {
    */
   List<ClosedSegment> finish() {
     grouper.finish().ifPresent(awaitingAudio::addLast);
+    // Dropped first, so that no segment counts a fragment as still held for that audio.
+    if (!awaitingAudio.isEmpty()) {
+      audio.discardAfter(awaitingAudio.getLast().sequenceNumber());
+    }
+
     var closed = closeEveryAwaiting();
     audio.discard();
     return closed;
