@@ -2262,6 +2262,7 @@ class FfmpegCommandBuilderTest {
         "eac3; 6; fltp; :sample_rates=48000|44100|32000; :channel_layouts=5.1(side)",
         "opus; 2; fltp; :sample_rates=48000; :channel_layouts=stereo",
         "flac; 2; s16|s32; ''; :channel_layouts=stereo",
+        "flac; 6; s16|s32; ''; :channel_layouts=5.1",
         "flac; 8; s16|s32; ''; :channel_layouts=7.1"
       })
   @DisplayName(

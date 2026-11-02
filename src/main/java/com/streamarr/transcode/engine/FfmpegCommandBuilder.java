@@ -118,8 +118,8 @@ public class FfmpegCommandBuilder {
   private static final Map<Integer, String> DEFAULT_CHANNEL_LAYOUTS =
       Map.of(1, "mono", 2, "stereo", 6, "5.1", 8, "7.1");
 
-  private static final Map<Integer, String> SIDE_SURROUND_CHANNEL_LAYOUTS =
-      Map.of(1, "mono", 2, "stereo", 6, "5.1(side)", 8, "7.1");
+  private static final Map<Integer, String> AC3_CHANNEL_LAYOUTS =
+      Map.of(1, "mono", 2, "stereo", 6, "5.1(side)");
 
   private static final Map<String, AudioEncoderInput> AUDIO_ENCODER_INPUTS =
       Map.of(
@@ -129,15 +129,15 @@ public class FfmpegCommandBuilder {
               "96000|88200|64000|48000|44100|32000|24000|22050|16000|12000|11025|8000|7350",
               DEFAULT_CHANNEL_LAYOUTS),
           "ac3",
-          AudioEncoderInput.of("fltp", "48000|44100|32000", SIDE_SURROUND_CHANNEL_LAYOUTS),
+          AudioEncoderInput.of("fltp", "48000|44100|32000", AC3_CHANNEL_LAYOUTS),
           "eac3",
-          AudioEncoderInput.of("fltp", "48000|44100|32000", SIDE_SURROUND_CHANNEL_LAYOUTS),
+          AudioEncoderInput.of("fltp", "48000|44100|32000", AC3_CHANNEL_LAYOUTS),
           "opus",
           AudioEncoderInput.of("fltp", "48000", Map.of(1, "mono", 2, "stereo")),
           "libopus",
           AudioEncoderInput.of("s16|flt", "48000|24000|16000|12000|8000", DEFAULT_CHANNEL_LAYOUTS),
           "flac",
-          new AudioEncoderInput("s16|s32", Optional.empty(), SIDE_SURROUND_CHANNEL_LAYOUTS));
+          new AudioEncoderInput("s16|s32", Optional.empty(), DEFAULT_CHANNEL_LAYOUTS));
 
   // The longest argument Linux passes to a program: MAX_ARG_STRLEN, 32 pages, holds the argument
   // and its terminating NUL, and a page is at least 4 KiB.
