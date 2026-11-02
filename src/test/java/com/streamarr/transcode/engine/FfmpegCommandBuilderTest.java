@@ -35,6 +35,10 @@ class FfmpegCommandBuilderTest {
 
   private static final AudioDecision NO_AUDIO =
       AudioDecision.builder().mode(AudioMode.NONE).codec(null).channels(0).bitrate(0L).build();
+  // The sample rates FFmpeg's AAC encoder takes, to which a padded encode converts before apad.
+  private static final String AAC_SAMPLE_RATES =
+      "aformat=sample_rates=96000|88200|64000|48000|44100|32000|24000|22050|16000|12000|11025"
+          + "|8000|7350,";
   private static final String BT709_LIMITED_SCALE_OPTIONS =
       ":out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709";
 
@@ -2137,7 +2141,7 @@ class FfmpegCommandBuilderTest {
         .isEqualTo(
             "scale=-2:1080"
                 + BT709_LIMITED_SCALE_OPTIONS
-                + ",format=yuv420p,tpad=stop=-1:stop_mode=clone,trim=end=66");
+                + ",format=yuv420p,fps=24000/1001,tpad=stop=-1:stop_mode=clone,trim=end_pts=1583");
   }
 
   @Test
@@ -2154,7 +2158,7 @@ class FfmpegCommandBuilderTest {
         .isEqualTo(
             "scale=-2:1080"
                 + BT709_LIMITED_SCALE_OPTIONS
-                + ",format=yuv420p,tpad=stop=-1:stop_mode=clone,trim=start=54:end=66");
+                + ",format=yuv420p,fps=24000/1001,tpad=stop=-1:stop_mode=clone,trim=start=54:end_pts=1583");
   }
 
   @Test
@@ -2182,7 +2186,8 @@ class FfmpegCommandBuilderTest {
             new Deinterlace(Deinterlace.FirstField.TOP, Deinterlace.Output.ONE_FRAME_PER_FIELD)
                     .filter()
                 + ",scale=")
-        .endsWith(",format=yuv420p,tpad=stop=-1:stop_mode=clone,trim=start=54:end=66");
+        .endsWith(
+            ",format=yuv420p,fps=24000/1001,tpad=stop=-1:stop_mode=clone,trim=start=54:end_pts=1583");
   }
 
   @ParameterizedTest
@@ -2202,13 +2207,67 @@ class FfmpegCommandBuilderTest {
     assertThat(cmd)
         .containsSequence(
             "-af",
-            "apad,asetpts='if(isnan(PTS),"
+            AAC_SAMPLE_RATES
+                + "apad,asetpts='if(isnan(PTS),"
                 + start
                 + "/TB+N/SR/TB,PTS)',atrim=start="
                 + start
                 + ":end=67",
             "-c:a",
             "aac");
+  }
+
+  @ParameterizedTest(name = "{0}/{1} fps, {2} ms")
+  @CsvSource({
+    "24, 1, 15010, 361",
+    "24, 1, 84000, 2016",
+    "24000, 1001, 66000, 1583",
+    "30000, 1001, 6000, 180"
+  })
+  @DisplayName(
+      "Should end the held picture at the first frame of the output's grid at or after the"
+          + " advertised end when an encode holds the last frame")
+  void shouldEndTheHeldPictureAtTheFirstOutputFrameAtOrAfterTheAdvertisedEnd(
+      long numerator, long denominator, long advertisedEndMillis, long endFrame) {
+    var cmd =
+        command(
+            heldAndPadded(TranscodeMode.FULL_TRANSCODE)
+                .outputFrameRate(Optional.of(new OutputFrameRate(numerator, denominator)))
+                .advertisedEnd(Optional.of(Duration.ofMillis(advertisedEndMillis)))
+                .build(),
+            "libx264");
+
+    assertThat(videoFilter(cmd))
+        .endsWith(
+            ",fps="
+                + numerator
+                + "/"
+                + denominator
+                + ",tpad=stop=-1:stop_mode=clone,trim=end_pts="
+                + endFrame);
+  }
+
+  @ParameterizedTest
+  @CsvSource({"ac3, 48000|44100|32000", "eac3, 48000|44100|32000", "opus, 48000"})
+  @DisplayName(
+      "Should convert to a sample rate the encoder takes before the silence when an encode pads"
+          + " audio for an encoder of fixed sample rates")
+  void shouldConvertToARateTheEncoderTakesBeforeTheSilenceWhenAnEncodePadsForFixedRates(
+      String codec, String rates) {
+    var cmd = command(paddedAudio(codec), "copy");
+
+    assertThat(cmd.get(cmd.indexOf("-af") + 1))
+        .startsWith("aformat=sample_rates=" + rates + ",apad,");
+  }
+
+  @Test
+  @DisplayName(
+      "Should append the silence to the decoded samples unconverted when an encode pads audio for"
+          + " an encoder of any sample rate")
+  void shouldAppendTheSilenceToTheDecodedSamplesUnconvertedWhenAnEncoderTakesAnySampleRate() {
+    var cmd = command(paddedAudio("flac"), "copy");
+
+    assertThat(cmd.get(cmd.indexOf("-af") + 1)).startsWith("apad,");
   }
 
   @Test
@@ -2227,7 +2286,9 @@ class FfmpegCommandBuilderTest {
     assertThat(cmd)
         .containsSequence("-ss", "29.5", "-i")
         .containsSequence(
-            "-af", "apad,asetpts='if(isnan(PTS),29.5/TB+N/SR/TB,PTS)',atrim=start=29.5:end=67")
+            "-af",
+            AAC_SAMPLE_RATES
+                + "apad,asetpts='if(isnan(PTS),29.5/TB+N/SR/TB,PTS)',atrim=start=29.5:end=67")
         .doesNotContain("-noaccurate_seek", "-vf");
   }
 
@@ -2290,10 +2351,12 @@ class FfmpegCommandBuilderTest {
     assertThat(pipe.copyCommand())
         .containsSequence("-ss", "54", "-noaccurate_seek", "-i")
         .containsSequence(
-            "-af", "apad,asetpts='if(isnan(PTS),54/TB+N/SR/TB,PTS)',atrim=start=54:end=67");
+            "-af",
+            AAC_SAMPLE_RATES
+                + "apad,asetpts='if(isnan(PTS),54/TB+N/SR/TB,PTS)',atrim=start=54:end=67");
     assertThat(videoFilter(pipe.encodeCommand()))
         .startsWith("scale=")
-        .endsWith("tpad=stop=-1:stop_mode=clone,trim=start=54:end=66");
+        .endsWith(",fps=24000/1001,tpad=stop=-1:stop_mode=clone,trim=start=54:end_pts=1583");
     assertThat(pipe.encodeCommand()).doesNotContain("-af");
   }
 
@@ -2323,7 +2386,8 @@ class FfmpegCommandBuilderTest {
     assertThat(pipe.copyCommand())
         .containsSequence(
             "-af",
-            "apad,asetpts='if(isnan(PTS),0/TB+N/SR/TB,PTS)',atrim=start=0:end=67",
+            "aformat=sample_rates=48000|24000|16000|12000|8000,"
+                + "apad,asetpts='if(isnan(PTS),0/TB+N/SR/TB,PTS)',atrim=start=0:end=67",
             "-c:a",
             "libopus");
   }
@@ -2338,6 +2402,20 @@ class FfmpegCommandBuilderTest {
     }
 
     return request(decision.build()).advertisedEnd(Optional.of(Duration.ofSeconds(66)));
+  }
+
+  private static TranscodeRequest paddedAudio(String codec) {
+    var audio =
+        AudioDecision.builder()
+            .mode(AudioMode.TRANSCODE)
+            .codec(codec)
+            .channels(2)
+            .bitrate(192_000L)
+            .padsWithSilenceToAdvertisedEnd(true)
+            .build();
+    return request(decision(TranscodeMode.AUDIO_TRANSCODE).audioDecision(audio).build())
+        .advertisedEnd(Optional.of(Duration.ofSeconds(66)))
+        .build();
   }
 
   private static AudioDecision paddedAac() {

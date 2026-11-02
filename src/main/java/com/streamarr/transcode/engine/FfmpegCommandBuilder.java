@@ -109,6 +109,18 @@ public class FfmpegCommandBuilder {
   // padded audio sample that starts at or after the advertised end.
   private static final Duration PADDED_AUDIO_RUN_PAST_ADVERTISED_END = Duration.ofSeconds(1);
 
+  // The sample rates each audio encoder takes, as FFmpeg's encoders list them; an encoder not
+  // listed takes any rate. A padded encode converts the rate before apad, as FFmpeg would before
+  // the encoder: a resampler that met silence instead of the end of its input would change the
+  // last source samples it writes.
+  private static final Map<String, String> AUDIO_ENCODER_SAMPLE_RATES =
+      Map.of(
+          "aac", "96000|88200|64000|48000|44100|32000|24000|22050|16000|12000|11025|8000|7350",
+          "ac3", "48000|44100|32000",
+          "eac3", "48000|44100|32000",
+          "opus", "48000",
+          "libopus", "48000|24000|16000|12000|8000");
+
   // The longest argument Linux passes to a program: MAX_ARG_STRLEN, 32 pages, holds the argument
   // and its terminating NUL, and a page is at least 4 KiB.
   private static final int LONGEST_ARGUMENT_BYTES = 32 * 4096 - 1;
@@ -284,11 +296,10 @@ public class FfmpegCommandBuilder {
     cmd.addAll(List.of("-i", request.sourcePath().toString()));
   }
 
-  // An attempt that holds the last frame decodes from the keyframe its seek reads and trims its
-  // start
-  // after the hold, as the encode of the copy of the source does, so that an attempt that starts
-  // after the video's last frame still has that frame to repeat. Its encoded audio is trimmed at
-  // the same position.
+  // An attempt that holds the last frame decodes from the keyframe its seek reads and trims
+  // its start after the hold, as the encode of the copy of the source does, so that an attempt
+  // that starts after the video's last frame still has that frame to repeat. Its encoded audio
+  // is trimmed at the same position.
   private static void addHeldFrameSeekArgs(List<String> cmd, TranscodeRequest request) {
     if (holdsLastFrame(request)) {
       cmd.add("-noaccurate_seek");
@@ -526,7 +537,8 @@ public class FfmpegCommandBuilder {
           seekArgument(
               request.advertisedEnd().orElseThrow().plus(PADDED_AUDIO_RUN_PAST_ADVERTISED_END));
       return Optional.of(
-          "apad,asetpts='if(isnan(PTS),"
+          sampleRateConversion(audio.codec())
+              + "apad,asetpts='if(isnan(PTS),"
               + start
               + "/TB+N/SR/TB,PTS)',atrim=start="
               + start
@@ -539,6 +551,12 @@ public class FfmpegCommandBuilder {
     }
 
     return Optional.empty();
+  }
+
+  private static String sampleRateConversion(String codec) {
+    return Optional.ofNullable(AUDIO_ENCODER_SAMPLE_RATES.get(codec))
+        .map(rates -> "aformat=sample_rates=" + rates + ",")
+        .orElse("");
   }
 
   private static List<String> copiedAudioArgs(String codec) {
@@ -598,21 +616,25 @@ public class FfmpegCommandBuilder {
             "-bufsize", String.valueOf(request.bitrate() * 2)));
   }
 
-  // tpad repeats the last picture without end, and trim drops each picture at or after the
-  // advertised end, which ends it; a picture keeps its full duration. Empty unless the attempt
-  // holds
-  // the last frame.
+  // fps puts the pictures on the output's frame grid, which -r then keeps, so that tpad repeats
+  // the last picture at the output frame rate. fps counts presentation times in frames, so trim
+  // ends at the first frame of that grid at or after the advertised end, which a time in seconds
+  // would round to the nearest frame; a picture keeps its full duration. Empty unless the attempt
+  // holds the last frame.
   private static Optional<String> heldFrameFilter(
       TranscodeRequest request, Optional<String> trimStart) {
     if (!holdsLastFrame(request)) {
       return Optional.empty();
     }
 
+    var frameRate = request.outputFrameRate().orElseThrow();
     return Optional.of(
-        "tpad=stop=-1:stop_mode=clone,trim="
+        "fps="
+            + frameRate.ffmpegArgument()
+            + ",tpad=stop=-1:stop_mode=clone,trim="
             + trimStart.map(start -> "start=" + start + ":").orElse("")
-            + "end="
-            + seekArgument(request.advertisedEnd().orElseThrow()));
+            + "end_pts="
+            + frameRate.framesStartingBefore(request.advertisedEnd().orElseThrow()));
   }
 
   private static boolean holdsLastFrame(TranscodeRequest request) {

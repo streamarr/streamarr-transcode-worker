@@ -505,9 +505,9 @@ class TranscodeWorkerJobAttemptTest {
       var command = launcher.command(fromProto(job.getJobAttemptId()));
       assertThat(command).containsSequence("-ss", "54", "-noaccurate_seek");
       assertThat(command.get(command.indexOf("-vf") + 1))
-          .endsWith(",tpad=stop=-1:stop_mode=clone,trim=start=54:end=84.5");
+          .endsWith(",fps=24/1,tpad=stop=-1:stop_mode=clone,trim=start=54:end_pts=2028");
       assertThat(command.get(command.indexOf("-af") + 1))
-          .isEqualTo("apad,asetpts='if(isnan(PTS),54/TB+N/SR/TB,PTS)',atrim=start=54:end=85.5");
+          .endsWith("apad,asetpts='if(isnan(PTS),54/TB+N/SR/TB,PTS)',atrim=start=54:end=85.5");
     }
   }
 

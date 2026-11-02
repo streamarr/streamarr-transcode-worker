@@ -250,6 +250,10 @@ class WorkerMediaSmokeTest {
   // samples a frame, AAC 1,024.
   private static final long LONGEST_AUDIO_FRAME_TICKS = 1536;
 
+  // 10 s of 30 fps video and audio, advertised as three 6 s segments that end at 15.01 s.
+  private static final int THIRTY_FPS_SOURCE_SEGMENT_COUNT = 3;
+  private static final Duration INSIDE_THE_LAST_SEGMENT = Duration.ofMillis(15_010);
+
   // 18 s of video and 10 s of FLAC audio in three 6 s segments.
   private static final int FLAC_SOURCE_SEGMENT_COUNT = 3;
   private static final int FLAC_SOURCE_SAMPLE_RATE = 48_000;
@@ -4522,6 +4526,35 @@ class WorkerMediaSmokeTest {
                     .map(start -> Arguments.of(source.get()[0], source.get()[1], start)));
   }
 
+  @Test
+  @DisplayName(
+      "Should write no held picture and no padded audio frame that starts at or after the"
+          + " advertised end when it lies inside the last segment and the source's frame rate"
+          + " differs from the output's")
+  void shouldWriteNoPaddedMediaAtOrAfterTheAdvertisedEndWhenItLiesInsideTheLastSegment()
+      throws Exception {
+    var source = thirtyFramesPerSecondSource();
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    paddedTo(job, THIRTY_FPS_SOURCE_SEGMENT_COUNT);
+    job.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
+    job.getExecutionBuilder()
+        .getAdvertisedEndBuilder()
+        .setSeconds(INSIDE_THE_LAST_SEGMENT.getSeconds())
+        .setNanos(INSIDE_THE_LAST_SEGMENT.getNano());
+
+    var uploads = execute(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    var movie = Mp4Samples.read(uploads.contentOf(uploads.names()));
+    var advertisedEndTicks = INSIDE_THE_LAST_SEGMENT.toMillis() * 48;
+    assertThat(movie.samplesOf(movie.videoTrack()))
+        .as("one picture for each slot of the 24 fps grid that starts before 15.01 s")
+        .hasSize(361);
+    assertThat(movie.samplesOf(movie.audioTrack()))
+        .as("the padded audio frames up to the advertised end, the last one whole")
+        .allMatch(sample -> sample.presentationTime() < advertisedEndTicks)
+        .anyMatch(sample -> sample.presentationTime() + sample.duration() >= advertisedEndTicks);
+  }
+
   @ParameterizedTest(name = "{0} in {1}")
   @MethodSource("paddedCodecsAndModes")
   @DisplayName(
@@ -4867,8 +4900,8 @@ class WorkerMediaSmokeTest {
   }
 
   // H.264 at 64x36 and 24 fps with a keyframe every 2 s for 64 s, and 1,764 s of pink noise as
-  // 5.1 AC-3 at 384 kb/s: the video ends inside segment 10, and the audio runs on through segment
-  // 293.
+  // 5.1 AC-3 at 384 kb/s: the video ends inside segment 10, and the audio runs on through
+  // segment 293.
   private static synchronized Path longAudioAfterVideoEndSource() throws Exception {
     var source = seekableSources.resolve("long-audio-after-video-end.mp4");
     if (!generatedSeekableSources.contains(source)) {
@@ -4893,6 +4926,33 @@ class WorkerMediaSmokeTest {
               "ac3",
               "-b:a",
               "384k"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // H.264 at 64x36 and 30 fps with a keyframe every 2 s, and pink noise, both for 10 s.
+  private static synchronized Path thirtyFramesPerSecondSource() throws Exception {
+    var source = seekableSources.resolve("thirty-frames-per-second.mp4");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=30:duration=10",
+              "-f",
+              "lavfi",
+              "-i",
+              "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5:duration=10",
+              "-c:v",
+              "libx264",
+              "-g",
+              "60",
+              "-c:a",
+              "aac"),
           source);
       generatedSeekableSources.add(source);
     }

@@ -2,12 +2,34 @@ package com.streamarr.transcode.engine;
 
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import java.math.BigInteger;
+import java.time.Duration;
 
 /** The exact fraction an encode forces on its output and uses to count its GOP. */
 public record OutputFrameRate(long numerator, long denominator) {
 
   String ffmpegArgument() {
     return numerator + "/" + denominator;
+  }
+
+  /**
+   * The number of frames on this rate's grid from zero whose start lies before the time, which is
+   * also the presentation time, in frames, of the first frame at or after it.
+   */
+  long framesStartingBefore(Duration time) {
+    var numerator =
+        BigInteger.valueOf(time.getSeconds())
+            .multiply(BigInteger.valueOf(1_000_000_000L))
+            .add(BigInteger.valueOf(time.getNano()))
+            .multiply(BigInteger.valueOf(this.numerator));
+    var denominator =
+        BigInteger.valueOf(this.denominator).multiply(BigInteger.valueOf(1_000_000_000L));
+    var quotient = numerator.divideAndRemainder(denominator);
+    var frames = quotient[0];
+    if (quotient[1].signum() > 0) {
+      frames = frames.add(BigInteger.ONE);
+    }
+
+    return frames.longValueExact();
   }
 
   int wholeFramesIn(int seconds) {
