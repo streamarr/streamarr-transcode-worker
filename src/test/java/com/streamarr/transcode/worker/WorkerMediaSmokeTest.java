@@ -3308,6 +3308,14 @@ class WorkerMediaSmokeTest {
     assertThat(samples.filter(sample -> (sample & belowDepth) != 0).count())
         .as("samples with bits below %d", bitDepth)
         .isZero();
+    var frameDurations =
+        ffprobe(List.of("-select_streams", "a:0", "-show_entries", "packet=duration"), delivered)
+            .lines()
+            .toList();
+    if ("flac".equals(codec)) {
+      // ADR 0043: FLAC frames of the sample rate divided by 20; only the last may be shorter.
+      assertThat(frameDurations.subList(0, frameDurations.size() - 1)).containsOnly("2400");
+    }
   }
 
   static Stream<LosslessLayoutChange> losslessLayoutChanges() {

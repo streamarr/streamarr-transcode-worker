@@ -22,6 +22,7 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
   private static final int OPUS_SAMPLE_RATE = 48_000;
   private static final int LOSSY_SAMPLE_RATE = 48_000;
   private static final Set<Integer> LOSSY_KEPT_SAMPLE_RATES = Set.of(44_100, 48_000);
+  private static final int FLAC_FRAMES_PER_SECOND = 20;
   private static final int SIXTEEN_BITS = 16;
   private static final int TWENTY_FOUR_BITS = 24;
   private static final Set<String> FLOATING_POINT_FORMATS = Set.of("flt", "fltp", "dbl", "dblp");
@@ -38,7 +39,8 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
     var channels = ChannelStage.of(source, output);
     var filters = new ArrayList<String>();
     channels.filter().ifPresent(filters::add);
-    filters.add(formatStage(encoder, audio, source));
+    var rate = targetSampleRate(encoder, audio, source);
+    filters.add(formatStage(encoder, audio, source, rate));
 
     var outputOptions = new ArrayList<>(List.of("-c:a", encoder.ffmpegName(audio.codec())));
     outputOptions.addAll(List.of("-af", String.join(",", filters)));
@@ -49,6 +51,10 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
 
     if (encoder != Encoder.LOSSLESS) {
       outputOptions.addAll(List.of("-b:a", audio.bitrate() / 1000 + "k"));
+    }
+
+    if ("flac".equals(audio.codec())) {
+      outputOptions.addAll(flacFrameSize(rate, source));
     }
 
     return new AudioEncodeOptions(decoderOptions(source), outputOptions);
@@ -78,9 +84,20 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
     return options;
   }
 
-  private static String formatStage(Encoder encoder, AudioDecision audio, SourceAudio source) {
+  // ADR 0043: FLAC frames hold the written sample rate divided by 20, rounded down, so that they
+  // divide the audio frame grid; without a known rate the encoder keeps its default.
+  private static List<String> flacFrameSize(Optional<Integer> rate, SourceAudio source) {
+    var written = rate.isPresent() ? OptionalInt.of(rate.orElseThrow()) : source.sampleRate();
+    if (written.isEmpty()) {
+      return List.of();
+    }
+
+    return List.of("-frame_size:a", String.valueOf(written.getAsInt() / FLAC_FRAMES_PER_SECOND));
+  }
+
+  private static String formatStage(
+      Encoder encoder, AudioDecision audio, SourceAudio source, Optional<Integer> rate) {
     var options = new ArrayList<String>();
-    var rate = targetSampleRate(encoder, audio, source);
     rate.ifPresent(target -> options.add("osr=" + target));
     if (encoder == Encoder.LOSSLESS) {
       options.addAll(losslessFormat(audio, source, rate.isPresent()));

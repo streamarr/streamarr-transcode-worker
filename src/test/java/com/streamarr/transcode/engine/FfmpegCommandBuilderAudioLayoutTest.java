@@ -284,6 +284,39 @@ class FfmpegCommandBuilderAudioLayoutTest {
       assertThat(audioFilter(cmd)).isEqualTo("aresample=osr=44100:" + TUNED_RESAMPLER);
     }
 
+    @ParameterizedTest(name = "{0} Hz to {1} Hz")
+    @CsvSource({"48000, 0, 2400", "22050, 0, 1102", "96000, 48000, 2400", "8000, 0, 400"})
+    @DisplayName("Should give FLAC frames of the written sample rate divided by 20")
+    void shouldGiveFlacFramesOfTheWrittenSampleRateDividedBy20(
+        int sourceRate, int namedRate, String frameSize) {
+      var audio = encodeBuilder("flac", "stereo");
+      if (namedRate > 0) {
+        audio.outputSampleRate(OptionalInt.of(namedRate));
+      }
+
+      var cmd = command(audio.build(), Optional.of(hiResFlac(sourceRate, 24)));
+
+      assertThat(cmd).containsSubsequence("-frame_size:a", frameSize);
+    }
+
+    @Test
+    @DisplayName("Should leave the frame size to the encoder when ALAC encodes")
+    void shouldLeaveTheFrameSizeToTheEncoderWhenAlacEncodes() {
+      var cmd = command(encode("alac", "stereo"), Optional.of(hiResFlac(48_000, 24)));
+
+      assertThat(cmd).doesNotContain("-frame_size:a");
+    }
+
+    @Test
+    @DisplayName("Should leave the frame size to the encoder when the probe gives FLAC no rate")
+    void shouldLeaveTheFrameSizeToTheEncoderWhenTheProbeGivesFlacNoRate() {
+      var source = sourceBuilder("flac", "stereo").sampleRate(OptionalInt.empty()).build();
+
+      var cmd = command(encode("flac", "stereo"), Optional.of(source));
+
+      assertThat(cmd).doesNotContain("-frame_size:a");
+    }
+
     @Test
     @DisplayName("Should give FLAC no bitrate when the job carries one")
     void shouldGiveFlacNoBitrateWhenTheJobCarriesOne() {
