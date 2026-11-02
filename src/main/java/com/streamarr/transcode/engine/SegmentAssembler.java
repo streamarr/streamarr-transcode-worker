@@ -87,19 +87,26 @@ final class SegmentAssembler {
   }
 
   /**
+   * Ends the grouping at the end of the output and drops the audio samples after the last segment's
+   * interval, which belong to segments that no keyframe opened because the video ended first. The
+   * assembler then holds only what the segments that {@link #finish()} closes need.
+   */
+  void dropAudioAfterTheLastSegment() {
+    grouper.finish().ifPresent(awaitingAudio::addLast);
+    if (!awaitingAudio.isEmpty()) {
+      audio.discardAfter(awaitingAudio.getLast().sequenceNumber());
+    }
+  }
+
+  /**
    * The segments the end of the output closes: every one awaiting audio, and the last, each with
-   * only the audio of its own interval. The audio after the last segment's interval belongs to
-   * segments that no keyframe opened, because the video ended first, and is dropped.
+   * only the audio of its own interval; the audio after the last segment's interval is dropped
+   * first.
    *
    * @throws FragmentedMp4Exception when one is larger than the segment cap once rebuilt
    */
   List<ClosedSegment> finish() {
-    grouper.finish().ifPresent(awaitingAudio::addLast);
-    // Dropped first, so that no segment counts a fragment as still held for that audio.
-    if (!awaitingAudio.isEmpty()) {
-      audio.discardAfter(awaitingAudio.getLast().sequenceNumber());
-    }
-
+    dropAudioAfterTheLastSegment();
     var closed = closeEveryAwaiting();
     audio.discard();
     return closed;
@@ -207,10 +214,14 @@ final class SegmentAssembler {
     return rebuilt;
   }
 
+  // A segment awaiting audio needs only the fragments of its video samples: the audio queue holds
+  // the fragments of the audio samples it still takes, and the grouper's other fragments of it,
+  // such as the audio-only fragments after the video's end, hold nothing it delivers.
   private Set<Fragment> heldFragments() {
     var held = Collections.newSetFromMap(new IdentityHashMap<Fragment, Boolean>());
     held.addAll(grouper.heldFragments());
-    awaitingAudio.forEach(segment -> held.addAll(segment.fragments()));
+    awaitingAudio.forEach(
+        segment -> segment.videoSamples().forEach(sample -> held.add(sample.fragment())));
     audio.heldFragments().forEach(held::add);
     return held;
   }

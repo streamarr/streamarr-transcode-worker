@@ -1419,6 +1419,43 @@ class ProducerTest {
 
   @Test
   @DisplayName(
+      "Should keep charging a fragment that the last delivered segments still share when the"
+          + " output ends while an earlier delivery is in flight")
+  void shouldKeepChargingAFragmentTheLastSegmentsStillShareWhenTheOutputEndsDuringADelivery() {
+    var workerBudget = SegmentMemoryBudget.forSlots(1);
+    var initializationSegment = IsoBoxes.concat(IsoBoxes.ftyp(), IsoBoxes.videoAndAudioMoov());
+    var first = TimedFragment.keyframeAt(0).videoDuration(12_000).audioFrom(0, 24_000).build();
+    var second = TimedFragment.keyframeAt(24_000).videoDuration(12_000).build();
+    // Segment 0's second audio sample arrives after the keyframe that opens segment 1, in a
+    // fragment that segment 0 takes samples from and segment 1 holds but takes nothing from.
+    var lateAudio = audioOnlyFragment(24_000, 1024 * 1024);
+    var output = IsoBoxes.concat(initializationSegment, first.bytes(), second.bytes(), lateAudio);
+    var held =
+        initializationSegment.length
+            + heldBytesOf(first.bytes(), 2)
+            + heldBytesOf(second.bytes(), 1)
+            + heldBytesOf(lateAudio, 1);
+    var process = ScriptedProcess.builder().output(output).build();
+    sink.holding(0);
+
+    var producer = producerOfOneSecondSegments(process).memoryBudget(workerBudget).start();
+
+    awaiting().until(() -> process.reader().map(Thread::getState).orElseThrow() == State.WAITING);
+    assertThat(workerBudget.tryReserveAtOnce(ONE_SLOT_CAPACITY - held + 1))
+        .as("a byte of what the attempt still holds")
+        .isFalse();
+    assertThat(workerBudget.tryReserveAtOnce(ONE_SLOT_CAPACITY - held))
+        .as("all that the attempt does not hold")
+        .isTrue();
+    workerBudget.release(ONE_SLOT_CAPACITY - held);
+    sink.release();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(sink.acceptedNames()).containsExactly("init.mp4", "segment0.m4s", "segment1.m4s");
+    assertReleasesEveryReservedByte(workerBudget);
+  }
+
+  @Test
+  @DisplayName(
       "Should fail the attempt with the segment cap and release its memory when segments awaiting"
           + " their audio leave the producer's budget no room for the next box")
   void
