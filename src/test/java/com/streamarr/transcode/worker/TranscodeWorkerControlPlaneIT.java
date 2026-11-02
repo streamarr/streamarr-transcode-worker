@@ -1022,8 +1022,9 @@ class TranscodeWorkerControlPlaneIT {
         @Override
         public void onNext(EstablishWorkerSessionRequest request) {
           // These tests follow job attempt events. TranscodeWorkerProbeCapacityTest covers the
-          // probe capacity changes that a job attempt's start also sends.
-          if (request.hasProbeCapacityChanged()) {
+          // probe capacity changes that a job attempt's start also sends, and
+          // TranscodeWorkerJobAttemptTest the progress reports that a running attempt sends.
+          if (request.hasProbeCapacityChanged() || request.hasJobAttemptProgress()) {
             return;
           }
 

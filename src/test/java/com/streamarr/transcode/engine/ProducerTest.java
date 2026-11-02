@@ -442,6 +442,54 @@ class ProducerTest {
 
   @Test
   @DisplayName(
+      "Should take how far the output reached once, and again only after it advances, when the"
+          + " producer reads video inside a segment that has not closed")
+  void shouldTakeHowFarTheOutputReachedOnceAndAgainOnlyAfterItAdvancesWhenTheSegmentIsOpen() {
+    var output =
+        OneSecondSegments.of(
+            IsoBoxes.videoAndAudioMoov(),
+            TimedFragment.keyframeAt(0).videoDuration(12_000).build(),
+            TimedFragment.frameAt(12_000).videoDuration(12_000).build());
+    var process =
+        ScriptedProcess.builder().output(output.bytes()).pauseAfter(output.endOf(0)).build();
+
+    var producer = producerOfOneSecondSegments(process).start();
+
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
+    assertThat(producer.takeAdvancedOutputEnd())
+        .as("the first fragment's video sample ends at 0.5 s")
+        .contains(Duration.ofMillis(500));
+    assertThat(producer.takeAdvancedOutputEnd()).as("the output has not advanced").isEmpty();
+    process.resume();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT);
+    assertThat(producer.takeAdvancedOutputEnd())
+        .as("the second fragment's video sample ends at 1 s")
+        .contains(Duration.ofSeconds(1));
+  }
+
+  @Test
+  @DisplayName(
+      "Should take nothing for how far the output reached when the producer has read no video"
+          + " sample")
+  void shouldTakeNothingForHowFarTheOutputReachedWhenTheProducerHasReadNoVideoSample() {
+    var initializationSegment = IsoBoxes.concat(IsoBoxes.ftyp(), IsoBoxes.videoAndAudioMoov());
+    var output =
+        IsoBoxes.concat(
+            initializationSegment,
+            TimedFragment.keyframeAt(0).videoDuration(12_000).build().bytes());
+    var process =
+        ScriptedProcess.builder().output(output).pauseAfter(initializationSegment.length).build();
+
+    var producer = producerOfOneSecondSegments(process).start();
+
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
+    assertThat(producer.takeAdvancedOutputEnd()).isEmpty();
+    process.resume();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT);
+  }
+
+  @Test
+  @DisplayName(
       "Should hold a media segment until an audio sample at or after its end arrives when the audio"
           + " lags the keyframe that opens the next segment")
   void shouldHoldAMediaSegmentUntilAnAudioSampleAtOrAfterItsEndArrivesWhenTheAudioLags() {
