@@ -1235,73 +1235,140 @@ class FfmpegCommandBuilderTest {
     assertThat(cmd).containsSequence("-ss", "19.916667", "-noaccurate_seek", "-i");
   }
 
-  @ParameterizedTest(name = "{0}/{1} fps, start {2}")
-  @CsvSource({
-    "24, 1, 5, 720",
-    "24000, 1001, 5, 720",
-    "30000, 1001, 5, 900",
-    "25, 1, 1, 150",
-    "24000, 1001, 1, 144"
-  })
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("firstFramesOnOrAfterTheFirstSegmentsStart")
   @DisplayName(
       "Should trim the converted pictures at the first frame on or after the first segment's start"
           + " when an encoded replacement attempt decodes from an earlier keyframe")
   void shouldTrimTheConvertedPicturesAtTheFirstFrameOnOrAfterTheFirstSegmentsStart(
-      long numerator, long denominator, int startSequenceNumber, long firstFrame) {
+      FirstFrameCase firstFrameCase) {
     var cmd =
         command(
             request(TranscodeMode.FULL_TRANSCODE)
-                .outputFrameRate(Optional.of(new OutputFrameRate(numerator, denominator)))
-                .startSequenceNumber(startSequenceNumber)
+                .outputFrameRate(Optional.of(firstFrameCase.frameRate()))
+                .startSequenceNumber(firstFrameCase.startSequenceNumber())
                 .build(),
             "libx264");
 
     assertThat(videoFilter(cmd))
         .endsWith(
             ",format=yuv420p,fps="
-                + numerator
-                + "/"
-                + denominator
+                + firstFrameCase.frameRate().ffmpegArgument()
                 + ":eof_action=pass,trim=start_pts="
-                + firstFrame);
+                + firstFrameCase.firstFrame());
+  }
+
+  // Each first segment starts at a whole second, 6 s apart: 30 s for segment 5, 6 s for segment 1.
+  // At a fractional rate the first frame at or after it is the frame count rounded up.
+  static Stream<FirstFrameCase> firstFramesOnOrAfterTheFirstSegmentsStart() {
+    return Stream.of(
+        FirstFrameCase.builder()
+            .frameRate(new OutputFrameRate(24, 1))
+            .startSequenceNumber(5)
+            .firstFrame(720)
+            .build(),
+        FirstFrameCase.builder()
+            .frameRate(new OutputFrameRate(24_000, 1001))
+            .startSequenceNumber(5)
+            .firstFrame(720)
+            .build(),
+        FirstFrameCase.builder()
+            .frameRate(new OutputFrameRate(30_000, 1001))
+            .startSequenceNumber(5)
+            .firstFrame(900)
+            .build(),
+        FirstFrameCase.builder()
+            .frameRate(new OutputFrameRate(25, 1))
+            .startSequenceNumber(1)
+            .firstFrame(150)
+            .build(),
+        FirstFrameCase.builder()
+            .frameRate(new OutputFrameRate(24_000, 1001))
+            .startSequenceNumber(1)
+            .firstFrame(144)
+            .build());
+  }
+
+  @Builder
+  private record FirstFrameCase(
+      OutputFrameRate frameRate, int startSequenceNumber, long firstFrame) {
+    @Override
+    public String toString() {
+      return frameRate.ffmpegArgument() + " fps from segment " + startSequenceNumber;
+    }
   }
 
   @ParameterizedTest(name = "{0}")
-  @CsvSource(
-      delimiter = ';',
-      value = {
-        "aac; aformat=sample_fmts=fltp:sample_rates=96000|88200|64000|48000|44100|32000|24000|22050"
-            + "|16000|12000|11025|8000|7350:channel_layouts=stereo; 1024; 0",
-        "ac3; aformat=sample_fmts=fltp:sample_rates=48000|44100|32000:channel_layouts=stereo; 1536;"
-            + " 1280",
-        "eac3; aformat=sample_fmts=fltp:sample_rates=48000|44100|32000:channel_layouts=stereo; 1536;"
-            + " 1280",
-        "opus; aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo; 960; 840",
-        "libopus; aformat=sample_fmts=s16|flt:sample_rates=48000|24000|16000|12000|8000"
-            + ":channel_layouts=stereo; SR/50; SR*27/2000"
-      })
+  @MethodSource("audioEncodersThatPrime")
   @DisplayName(
       "Should start the encoder's input a whole number of frames, less its priming, before the"
           + " first segment's start, from its seek, when an encoded replacement attempt without the"
           + " server's keyframe position encodes its audio")
   void shouldStartAnEncodedAudioFrameOnTheFirstSegmentsStartWhenAnEncodedReplacementAttemptSeeks(
-      String codec, String encoderInput, String samplesPerFrame, String lead) {
-    var cmd = command(encodedAudioFromSegment5(codec), "libx264");
+      AudioEncoderCase encoder) {
+    var cmd = command(encodedAudioFromSegment5(encoder.codec()), "libx264");
 
     var shift =
         "round(("
-            + lead
+            + encoder.lead()
             + "+floor(6*SR/("
-            + samplesPerFrame
+            + encoder.samplesPerFrame()
             + "))*("
-            + samplesPerFrame
+            + encoder.samplesPerFrame()
             + "))/SR/TB)";
     assertThat(cmd)
         .containsSequence(
             "-af",
-            encoderInput + ",asetpts=PTS+" + shift + ",atrim=start=30,asetpts=PTS-" + shift,
+            encoder.input() + ",asetpts=PTS+" + shift + ",atrim=start=30,asetpts=PTS-" + shift,
             "-c:a",
-            codec);
+            encoder.codec());
+  }
+
+  // Each encoder's frame and the lead of its first input sample over its first frame without
+  // priming, in samples at its sample rate SR, as the pinned FFmpeg writes them. The input is the
+  // stereo conversion each encoder takes.
+  static Stream<AudioEncoderCase> audioEncodersThatPrime() {
+    return Stream.of(
+        AudioEncoderCase.builder()
+            .codec("aac")
+            .input(AAC_STEREO_INPUT.substring(0, AAC_STEREO_INPUT.length() - 1))
+            .samplesPerFrame("1024")
+            .lead("0")
+            .build(),
+        AudioEncoderCase.builder()
+            .codec("ac3")
+            .input("aformat=sample_fmts=fltp:sample_rates=48000|44100|32000:channel_layouts=stereo")
+            .samplesPerFrame("1536")
+            .lead("1280")
+            .build(),
+        AudioEncoderCase.builder()
+            .codec("eac3")
+            .input("aformat=sample_fmts=fltp:sample_rates=48000|44100|32000:channel_layouts=stereo")
+            .samplesPerFrame("1536")
+            .lead("1280")
+            .build(),
+        AudioEncoderCase.builder()
+            .codec("opus")
+            .input("aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo")
+            .samplesPerFrame("960")
+            .lead("840")
+            .build(),
+        AudioEncoderCase.builder()
+            .codec("libopus")
+            .input(
+                "aformat=sample_fmts=s16|flt:sample_rates=48000|24000|16000|12000|8000"
+                    + ":channel_layouts=stereo")
+            .samplesPerFrame("SR/50")
+            .lead("SR*27/2000")
+            .build());
+  }
+
+  @Builder
+  private record AudioEncoderCase(String codec, String input, String samplesPerFrame, String lead) {
+    @Override
+    public String toString() {
+      return codec;
+    }
   }
 
   @Test
