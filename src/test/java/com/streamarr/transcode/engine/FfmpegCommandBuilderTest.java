@@ -909,13 +909,18 @@ class FfmpegCommandBuilderTest {
 
   @Test
   @DisplayName(
-      "Should seek one slot before its first listed segment when an encoded replacement attempt"
-          + " starts at a merged segment")
+      "Should read from one slot before its first listed segment and trim at that segment's start"
+          + " when an encoded replacement attempt starts at a merged segment without a keyframe"
+          + " position")
   void
-      shouldSeekOneSlotBeforeItsFirstListedSegmentWhenAnEncodedReplacementStartsAtAMergedSegment() {
+      shouldReadFromOneSlotBeforeItsFirstListedSegmentWhenAnEncodedReplacementStartsAtAMergedSegment() {
     var cmd = command(mergedSegmentRequest().startSequenceNumber(3).build(), "libx264");
 
-    assertThat(cmd).as("segment 3 starts at slot 10, 30 s").containsSubsequence("-ss", "27", "-i");
+    assertThat(cmd)
+        .as("segment 3 starts at slot 10, 30 s")
+        .containsSequence("-ss", "27", "-noaccurate_seek", "-i")
+        .containsSequence("-af", "atrim=start=30");
+    assertThat(videoFilter(cmd)).endsWith(FRAME_GRID + ",trim=start_pts=720");
   }
 
   // Keyframes 10 s apart on 3 s slots: the segments start at 0 s, 9 s, 18 s and 30 s.
@@ -1025,8 +1030,9 @@ class FfmpegCommandBuilderTest {
     "libx265, 21371"
   })
   @DisplayName(
-      "Should give a replacement attempt the start attempt's encoder arguments apart from its seek"
-          + " and forced keyframes when the list from the first segment does or does not fit")
+      "Should give a replacement attempt the start attempt's encoder arguments apart from its seek,"
+          + " its start trims and its forced keyframes when the list from the first segment does or"
+          + " does not fit")
   void shouldGiveAReplacementAttemptTheStartAttemptsEncoderArgumentsWhetherOrNotTheListFits(
       String encoder, int mediaSegmentCount) {
     // libx265 writes its settings, the GOP among them, into the initialization segment.
@@ -1042,19 +1048,23 @@ class FfmpegCommandBuilderTest {
                 .build(),
             encoder);
 
-    assertThat(withoutSeekAndForcedKeyframes(replacementAttempt))
-        .containsExactlyElementsOf(withoutSeekAndForcedKeyframes(startAttempt));
+    assertThat(withoutTheStartsSeekTrimsAndForcedKeyframes(replacementAttempt))
+        .containsExactlyElementsOf(withoutTheStartsSeekTrimsAndForcedKeyframes(startAttempt));
   }
 
-  private static List<String> withoutSeekAndForcedKeyframes(List<String> cmd) {
+  private static List<String> withoutTheStartsSeekTrimsAndForcedKeyframes(List<String> cmd) {
     var remaining = new ArrayList<>(cmd);
-    for (var option : List.of("-ss", "-force_key_frames:0")) {
+    remaining.remove("-noaccurate_seek");
+    for (var option : List.of("-ss", "-af", "-force_key_frames:0")) {
       var index = remaining.indexOf(option);
       if (index >= 0) {
         remaining.subList(index, index + 2).clear();
       }
     }
 
+    var videoFilter = remaining.indexOf("-vf") + 1;
+    remaining.set(
+        videoFilter, remaining.get(videoFilter).replaceFirst(",trim=start_pts=\\d+$", ""));
     return remaining;
   }
 
@@ -1195,13 +1205,87 @@ class FfmpegCommandBuilderTest {
       value = TranscodeMode.class,
       names = {"VIDEO_TRANSCODE", "FULL_TRANSCODE"})
   @DisplayName(
-      "Should seek one period before its first segment when an encoded replacement attempt starts"
-          + " mid-stream")
-  void shouldSeekOnePeriodBeforeItsFirstSegmentWhenAnEncodedReplacementAttemptStartsMidStream(
-      TranscodeMode mode) {
+      "Should read from one period before its first segment without FFmpeg's exact seek when an"
+          + " encoded replacement attempt carries no keyframe position")
+  void
+      shouldReadFromOnePeriodBeforeItsFirstSegmentWhenAnEncodedReplacementCarriesNoKeyframePosition(
+          TranscodeMode mode) {
     var cmd = command(request(mode).startSequenceNumber(5).build(), "libsvtav1");
 
-    assertThat(cmd).containsSubsequence("-ss", "24", "-i");
+    assertThat(cmd).containsSequence("-ss", "24", "-noaccurate_seek", "-i");
+  }
+
+  @ParameterizedTest
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"VIDEO_TRANSCODE", "FULL_TRANSCODE"})
+  @DisplayName(
+      "Should read from the server's keyframe position without FFmpeg's exact seek when an encoded"
+          + " replacement attempt carries one")
+  void shouldReadFromTheServersKeyframePositionWhenAnEncodedReplacementAttemptCarriesOne(
+      TranscodeMode mode) {
+    var request =
+        request(mode)
+            .startSequenceNumber(5)
+            .seekPosition(Optional.of(Duration.ofNanos(19_916_666_667L)))
+            .build();
+
+    var cmd = command(request, "libx264");
+
+    assertThat(cmd).containsSequence("-ss", "19.916667", "-noaccurate_seek", "-i");
+  }
+
+  @ParameterizedTest(name = "{0}/{1} fps, start {2}")
+  @CsvSource({
+    "24, 1, 5, 720",
+    "24000, 1001, 5, 720",
+    "30000, 1001, 5, 900",
+    "25, 1, 1, 150",
+    "24000, 1001, 1, 144"
+  })
+  @DisplayName(
+      "Should trim the converted pictures at the first frame on or after the first segment's start"
+          + " when an encoded replacement attempt decodes from an earlier keyframe")
+  void shouldTrimTheConvertedPicturesAtTheFirstFrameOnOrAfterTheFirstSegmentsStart(
+      long numerator, long denominator, int startSequenceNumber, long firstFrame) {
+    var cmd =
+        command(
+            request(TranscodeMode.FULL_TRANSCODE)
+                .outputFrameRate(Optional.of(new OutputFrameRate(numerator, denominator)))
+                .startSequenceNumber(startSequenceNumber)
+                .build(),
+            "libx264");
+
+    assertThat(videoFilter(cmd))
+        .endsWith(
+            ",format=yuv420p,fps="
+                + numerator
+                + "/"
+                + denominator
+                + ":eof_action=pass,trim=start_pts="
+                + firstFrame);
+  }
+
+  @Test
+  @DisplayName(
+      "Should trim the encoded audio at the first segment's start when an encoded replacement"
+          + " attempt decodes from an earlier keyframe")
+  void shouldTrimTheEncodedAudioAtTheFirstSegmentsStartWhenAnEncodedReplacementAttemptSeeks() {
+    var cmd =
+        command(request(TranscodeMode.FULL_TRANSCODE).startSequenceNumber(5).build(), "libx264");
+
+    assertThat(cmd).containsSequence("-af", "atrim=start=30", "-c:a", "aac");
+  }
+
+  @Test
+  @DisplayName(
+      "Should copy the audio untrimmed when an encoded replacement attempt copies the source's"
+          + " audio")
+  void shouldCopyTheAudioUntrimmedWhenAnEncodedReplacementAttemptCopiesTheSourcesAudio() {
+    var cmd =
+        command(request(TranscodeMode.VIDEO_TRANSCODE).startSequenceNumber(5).build(), "libx264");
+
+    assertThat(cmd).doesNotContain("-af").containsSequence("-c:a", "copy");
   }
 
   @ParameterizedTest
@@ -1217,6 +1301,7 @@ class FfmpegCommandBuilderTest {
     assertThat(cmd)
         .doesNotContain("-ss")
         .containsSequence("-force_key_frames:0", "6,12,18,24,30,36,42,48,54,60");
+    assertThat(videoFilter(cmd)).endsWith(FRAME_GRID + ",trim=start_pts=144");
   }
 
   @ParameterizedTest
@@ -1280,33 +1365,6 @@ class FfmpegCommandBuilderTest {
     var cmd = command(request, "copy");
 
     assertThat(cmd).isNotEmpty().doesNotContain("-ss");
-  }
-
-  @ParameterizedTest
-  @EnumSource(
-      value = TranscodeMode.class,
-      names = {"VIDEO_TRANSCODE", "FULL_TRANSCODE"})
-  @DisplayName("Should keep the period-based seek when an encoded job carries no position")
-  void shouldKeepThePeriodBasedSeekWhenAnEncodedJobCarriesNoPosition(TranscodeMode mode) {
-    var request = request(mode).startSequenceNumber(5).seekPosition(Optional.empty()).build();
-
-    var cmd = command(request, "libx264");
-
-    assertThat(cmd).containsSubsequence("-ss", "24", "-i");
-  }
-
-  @Test
-  @DisplayName("Should keep the period-based seek when an encoded job carries a keyframe position")
-  void shouldKeepThePeriodBasedSeekWhenAnEncodedJobCarriesAKeyframePosition() {
-    var request =
-        request(TranscodeMode.FULL_TRANSCODE)
-            .startSequenceNumber(5)
-            .seekPosition(Optional.of(Duration.ofMillis(29_196)))
-            .build();
-
-    var cmd = command(request, "libx264");
-
-    assertThat(cmd).containsSubsequence("-ss", "24", "-i");
   }
 
   @Test
@@ -2190,16 +2248,27 @@ class FfmpegCommandBuilderTest {
     var pipe = rpuMovingPipe(builder.buildPipeline(job(request, "libx264")));
 
     assertThat(pipe.copyCommand())
-        .containsSequence("ffmpeg", "-y", "-ss", "12", "-i", "/media/movie.mkv", "-map", "0:0")
-        .containsSequence("-c:a", "aac", "-ac", "2", "-b:a", "128k", "-f", "mp4");
+        .containsSequence(
+            "ffmpeg",
+            "-y",
+            "-ss",
+            "12",
+            "-noaccurate_seek",
+            "-i",
+            "/media/movie.mkv",
+            "-map",
+            "0:0")
+        .containsSequence(
+            "-af", "atrim=start=18", "-c:a", "aac", "-ac", "2", "-b:a", "128k", "-f", "mp4");
   }
 
   @Test
   @DisplayName(
-      "Should trim the encode's video at the seek without seeking the copy again when a replacement"
-          + " attempt encodes a profile 5 source whose RPU starts its sample")
+      "Should trim the encode's converted pictures at the first segment's start without seeking the"
+          + " copy again when a replacement attempt encodes a profile 5 source whose RPU starts its"
+          + " sample")
   void
-      shouldTrimTheEncodesVideoAtTheSeekWithoutSeekingTheCopyAgainWhenAReplacementAttemptEncodesAProfile5SourceWhoseRpuStartsItsSample() {
+      shouldTrimTheEncodesConvertedPicturesAtTheFirstSegmentsStartWhenAReplacementAttemptEncodesAProfile5SourceWhoseRpuStartsItsSample() {
     var request =
         request(encoding(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE)))
             .height(720)
@@ -2210,7 +2279,7 @@ class FfmpegCommandBuilderTest {
 
     assertThat(pipe.encodeCommand()).doesNotContain("-ss", "-start_at_zero");
     assertThat(videoFilter(pipe.encodeCommand()))
-        .isEqualTo("trim=start=12,scale=-2:720," + TONE_MAPPED_TO_SDR + FRAME_GRID);
+        .isEqualTo("scale=-2:720," + TONE_MAPPED_TO_SDR + FRAME_GRID + ",trim=start_pts=432");
   }
 
   @Test
@@ -2347,7 +2416,7 @@ class FfmpegCommandBuilderTest {
 
   @Test
   @DisplayName(
-      "Should decode from the keyframe its seek reads and trim the start after the hold when an"
+      "Should decode from the keyframe its seek reads and trim at that seek after the hold when an"
           + " encode that holds the last frame seeks")
   void shouldTrimTheStartAfterTheHoldWhenAnEncodeThatHoldsTheLastFrameSeeks() {
     var cmd =
@@ -2359,7 +2428,7 @@ class FfmpegCommandBuilderTest {
         .isEqualTo(
             "scale=-2:1080"
                 + BT709_LIMITED_SCALE_OPTIONS
-                + ",format=yuv420p,fps=24000/1001:eof_action=pass,tpad=stop=-1:stop_mode=clone,trim=start=54:end_pts=1583");
+                + ",format=yuv420p,fps=24000/1001:eof_action=pass,tpad=stop=-1:stop_mode=clone,trim=start_pts=1295:end_pts=1583");
   }
 
   @Test
@@ -2388,7 +2457,7 @@ class FfmpegCommandBuilderTest {
                     .filter()
                 + ",scale=")
         .endsWith(
-            ",format=yuv420p,fps=24000/1001:eof_action=pass,tpad=stop=-1:stop_mode=clone,trim=start=54:end_pts=1583");
+            ",format=yuv420p,fps=24000/1001:eof_action=pass,tpad=stop=-1:stop_mode=clone,trim=start_pts=1295:end_pts=1583");
   }
 
   @ParameterizedTest
@@ -2532,14 +2601,13 @@ class FfmpegCommandBuilderTest {
 
   @Test
   @DisplayName(
-      "Should hold no frame, pad no audio and keep FFmpeg's exact seek when an encode carries no"
-          + " early-end instruction")
-  void shouldHoldNoFramePadNoAudioAndKeepTheExactSeekWhenAnEncodeCarriesNoEarlyEndInstruction() {
+      "Should hold no frame and pad no audio when an encode carries no early-end instruction")
+  void shouldHoldNoFrameAndPadNoAudioWhenAnEncodeCarriesNoEarlyEndInstruction() {
     var cmd =
         command(request(TranscodeMode.FULL_TRANSCODE).startSequenceNumber(10).build(), "libx264");
 
-    assertThat(cmd).doesNotContain("-noaccurate_seek", "-af");
-    assertThat(videoFilter(cmd)).doesNotContain("tpad", "trim");
+    assertThat(cmd).containsSequence("-af", "atrim=start=60");
+    assertThat(videoFilter(cmd)).doesNotContain("tpad", "end_pts");
   }
 
   @Test
@@ -2574,7 +2642,7 @@ class FfmpegCommandBuilderTest {
     assertThat(videoFilter(pipe.encodeCommand()))
         .startsWith("scale=")
         .endsWith(
-            ",fps=24000/1001:eof_action=pass,tpad=stop=-1:stop_mode=clone,trim=start=54:end_pts=1583");
+            ",fps=24000/1001:eof_action=pass,tpad=stop=-1:stop_mode=clone,trim=start_pts=1295:end_pts=1583");
     assertThat(pipe.encodeCommand()).doesNotContain("-af");
   }
 

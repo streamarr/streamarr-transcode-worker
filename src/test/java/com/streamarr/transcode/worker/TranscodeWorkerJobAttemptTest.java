@@ -589,7 +589,7 @@ class TranscodeWorkerJobAttemptTest {
       assertThat(command).containsSequence("-ss", "54", "-noaccurate_seek");
       assertThat(command.get(command.indexOf("-vf") + 1))
           .endsWith(
-              ",fps=24/1:eof_action=pass,tpad=stop=-1:stop_mode=clone,trim=start=54:end_pts=2028");
+              ",fps=24/1:eof_action=pass,tpad=stop=-1:stop_mode=clone,trim=start_pts=1296:end_pts=2028");
       assertThat(command.get(command.indexOf("-af") + 1))
           .endsWith("apad,asetpts='if(isnan(PTS),54/TB+N/SR/TB,PTS)',atrim=start=54:end=85.5");
     }

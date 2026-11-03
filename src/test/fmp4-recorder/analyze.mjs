@@ -66,9 +66,10 @@ const FIXTURES = [
   },
   {
     name: '01-encode-cfr-seek30', source: 'cfr.mp4', mode: 'encode', encoder: 'libx264', seek: 30, start: 5,
-    proves: 'An encoded replacement attempt from segment 5 (a job seeking to 30 s) seeks one period early, to ' +
-      '-ss 24, under -r without -fps_mode: it starts at the seek point (24.024 s), pads nothing from zero, and ' +
-      'segment 4 is preroll that the grouper discards. The forced keyframe times 30, 36, ..., 66 are absolute, so ' +
+    proves: 'An encoded replacement attempt from segment 5 (a job seeking to 30 s) without the server\'s keyframe ' +
+      'position reads from one period early, -ss 24 -noaccurate_seek, and trims after fps at frame 720 and its ' +
+      'audio at 30 s: it starts at 30.030 s, pads nothing from zero, and has no preroll. The forced keyframe ' +
+      'times 30, 36, ..., 66 are absolute, so ' +
       'it forces the frames the start-0 recording forced (720, 864, 1007, 1151, 1295, 1439) and every delivered ' +
       'segment starts on the start-0 recording\'s ticks.',
     hlsComparisons: [
@@ -178,10 +179,11 @@ const FIXTURES = [
   },
   {
     name: '09-svtav1-vfr-seek30', source: 'vfr.mp4', mode: 'encode', encoder: 'libsvtav1', seek: 30, start: 5,
-    proves: 'The same SVT-AV1 recipe as a replacement attempt from segment 5, seeking one period early (-ss 24): ' +
-      'it starts at 24.024 s, pads nothing from zero, and discards segment 4 as preroll. Every delivered segment ' +
-      'starts on the ticks of 09, including segment 5 at 30.030 s, the frame 09 repeats from the last source frame ' +
-      'before 30 s; a seek to 30 s itself started at the next source frame, 30.072 s.',
+    proves: 'The same SVT-AV1 recipe as a replacement attempt from segment 5, reading from one period early ' +
+      '(-ss 24 -noaccurate_seek) and trimmed at 30 s: it starts at 30.030 s, pads nothing from zero, and has no ' +
+      'preroll. Every delivered segment starts on the ticks of 09, including segment 5 at 30.030 s, the frame 09 ' +
+      'repeats from the last source frame before 30 s; an exact seek to 30 s started at the next source frame, ' +
+      '30.072 s.',
     hlsComparisons: [
       hlsComparison('09-svtav1-vfr-seek30.video-only', 'pipe-recipe', { audio: false, restrict: true, expect: false }),
       hlsComparison('09-svtav1-vfr.pipe-keyframes-with-audio', 'pipe-recipe', { reference: '09-svtav1-vfr', restrict: true }),
@@ -228,7 +230,8 @@ const FIXTURES = [
   },
   {
     name: '13-x265-cfr-seek30', source: 'cfr.mp4', mode: 'encode', encoder: 'libx265', seek: 30, start: 5,
-    proves: 'The libx265 replacement attempt from segment 5, seeking one period early (-ss 24): segment 4 is preroll, ' +
+    proves: 'The libx265 replacement attempt from segment 5, reading from one period early (-ss 24 ' +
+      '-noaccurate_seek) and trimmed at 30 s: no preroll, ' +
       'the list forces the frames 13 forced (720, 864, 1007, 1151, 1295, 1439), every delivered segment starts on ' +
       '13\'s ticks, and every keyframe is an IDR picture (NAL type 20).',
     hlsComparisons: [
@@ -344,10 +347,11 @@ const INITIALIZATION_SEGMENT_DIFFERENCE_PAIRS = [
 ];
 
 const RECIPE =
-  'ffmpeg -y [-ss S: (K-1)*6 for an encode with K > 0, else the job\'s seek] -i SRC -map 0:0 -map 0:a:0 -map -0:s -map_metadata -1 -map_chapters -1 -copyts ' +
+  'ffmpeg -y [-ss S: (K-1)*6 -noaccurate_seek for an encode with K > 0, else the job\'s seek] -i SRC -map 0:0 -map 0:a:0 -map -0:s -map_metadata -1 -map_chapters -1 -copyts ' +
   '-avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128 -max_interleave_delta 10000000 <codec args> [copy: -bsf:a aac_adtstoasc ' +
   'when copying AAC, then -b:a 0] [video copy with encoded audio (fixture 16): -c:v copy -c:a aac -ac 1 -b:a 8k] [encode: -r:v:0 24000/1001 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6 ' +
-  'in whole seconds, K = startSequenceNumber, N = mediaSegmentCount ' +
+  'in whole seconds, K = startSequenceNumber, N = mediaSegmentCount; -vf ending fps=24000/1001:eof_action=pass, ' +
+  'then for an encode with K > 0 trim=start_pts=ceil(K*6 x 23.976) and -af atrim=start=K*6 ' +
   '(-sc_threshold:v:0 0 for libx264, -x265-params no-scenecut=1:no-open-gop=1 for libx265) -g:v:0 145 = ceil(6 x 23.976) + 1 for an encoder verified to honour forced ' +
   'keyframes (libx264, SVT-AV1, libx265), else 143 = floor(6 x 23.976) (fixtures 11 and 13c) (-keyint_min:v:0 with the ' +
   'same value for SVT-AV1)] ' +

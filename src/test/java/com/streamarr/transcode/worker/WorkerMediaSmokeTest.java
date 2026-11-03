@@ -5401,6 +5401,67 @@ class WorkerMediaSmokeTest {
         .isGreaterThan(afterTheGap.size() / 2);
   }
 
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(PictureGapSource.class)
+  @DisplayName(
+      "Should open the replacement's first segment on its listed start with the start attempt's"
+          + " picture and frame count, and its audio on that start, when an encode reads from the"
+          + " server's keyframe before a gap between pictures")
+  void
+      shouldOpenTheReplacementWithTheStartAttemptsPictureWhenAnEncodeReadsFromTheKeyframeBeforeAGap(
+          PictureGapSource shape) throws Exception {
+    var source = pictureGapSource(shape);
+    var startAttempt =
+        execute(engine(softwareCapabilities()), source.getParent(), pictureGapJob(source).build());
+    var replacementJob = pictureGapJob(source);
+    replacementJob.getExecutionBuilder().setStartSequenceNumber(3).setSeekPositionSeconds(30);
+    setSeekPosition(
+        replacementJob.getExecutionBuilder(),
+        decodeTimeOfTheLastKeyframePresentedBy(source, new BigDecimal("29.5")));
+
+    var replacement =
+        execute(engine(softwareCapabilities()), source.getParent(), replacementJob.build());
+
+    var startSegment = startAttempt.contentOf(List.of("init.mp4", segmentName(3)));
+    var replacementSegment = replacement.contentOf(List.of("init.mp4", segmentName(3)));
+    var started = Mp4Samples.read(startSegment);
+    var replaced = Mp4Samples.read(replacementSegment);
+    var startedVideo = started.samplesOf(started.videoTrack());
+    var replacedVideo = replaced.samplesOf(replaced.videoTrack());
+    assertThat(replacedVideo.getFirst().isSync()).as("the segment opens at a keyframe").isTrue();
+    assertThat(replacedVideo.getFirst().presentationTime())
+        .as("the replacement's segment 3 opens where the start attempt's does")
+        .isEqualTo(startedVideo.getFirst().presentationTime());
+    assertThat(replacedVideo).as("segment 3's frames").hasSameSizeAs(startedVideo);
+    assertThat(decodedPictures(replacementSegment).getFirst().md5())
+        .as("segment 3's first picture, the picture held from 25.958 s")
+        .isEqualTo(decodedPictures(startSegment).getFirst().md5());
+    var listedStart = 30 * replaced.audioTrack().timescale();
+    assertThat(replaced.samplesOf(replaced.audioTrack()).getFirst().presentationTime())
+        .as("the replacement's audio opens on the listed start")
+        .isEqualTo(listedStart);
+    var before = Mp4Samples.read(startAttempt.contentOf(List.of("init.mp4", segmentName(2))));
+    var lastAudioBefore = before.samplesOf(before.audioTrack()).getLast();
+    assertThat(lastAudioBefore.end())
+        .as("the start attempt's segment 2 audio reaches the listed start, by less than a frame")
+        .isGreaterThanOrEqualTo(listedStart)
+        .isLessThan(listedStart + lastAudioBefore.duration());
+  }
+
+  // The decode time, as the worker's keyframe probe reports it, of the last keyframe that
+  // presents at or before the time: the keyframe that the server sends an encoded replacement
+  // attempt whose first segment starts 0.5 s after that time.
+  private static BigDecimal decodeTimeOfTheLastKeyframePresentedBy(Path source, BigDecimal time)
+      throws Exception {
+    var keyframe =
+        videoPacketsOnZeroBasedTimeline(source).stream()
+            .filter(VideoPacket::keyframe)
+            .filter(packet -> packet.presentationTime().compareTo(time) <= 0)
+            .max(Comparator.comparing(VideoPacket::presentationTime))
+            .orElseThrow();
+    return probedDecodeTime(source, keyframe);
+  }
+
   // A source whose pictures stop at 25.958 s and resume at 31.042 s, cut on the list [0, 3, 6, 10]
   // of 3 s slots: segment 3 starts at 30 s inside the gap, and the gap covers all of slot 9.
   private static VariantJob.Builder pictureGapJob(Path source) {

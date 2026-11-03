@@ -237,9 +237,9 @@ public class FfmpegCommandBuilder {
 
   // The copy seeks as the single command would and keeps the timestamps that command reads, so
   // the encode of the copy reads them unchanged. The copy encodes audio that the job encodes, as
-  // it decodes every source codec, and the seek trims that audio exactly as it trims the single
-  // command's. FFmpeg's opus encoder is experimental, so the copy names libopus. The mp4 muxer
-  // keeps a Dolby Vision configuration record only when the compliance is unofficial.
+  // it decodes every source codec, and trims that audio exactly as the single command does.
+  // FFmpeg's opus encoder is experimental, so the copy names libopus. The mp4 muxer keeps a Dolby
+  // Vision configuration record only when the compliance is unofficial.
   private List<String> buildSourceCopyCommand(TranscodeJob job) {
     var cmd = new ArrayList<String>();
     var audio = job.request().transcodeDecision().audioDecision();
@@ -335,7 +335,7 @@ public class FfmpegCommandBuilder {
     var seekPosition = inputSeekPosition(request);
     if (seekPosition.isPositive()) {
       cmd.addAll(List.of("-ss", seekArgument(seekPosition)));
-      addHeldFrameSeekArgs(cmd, request);
+      addDecodeOnlySeekArgs(cmd, request);
     }
 
     encodeInNamedLayout(request.transcodeDecision().audioDecision(), request.sourceAudio())
@@ -343,30 +343,27 @@ public class FfmpegCommandBuilder {
     cmd.addAll(List.of("-i", request.sourcePath().toString()));
   }
 
-  // An attempt that holds the last frame decodes from the keyframe its seek reads and trims
-  // its start after the hold, as the encode of the copy of the source does, so that an attempt
-  // that starts after the video's last frame still has that frame to repeat. Its encoded audio
-  // is trimmed at the same position.
-  private static void addHeldFrameSeekArgs(List<String> cmd, TranscodeRequest request) {
-    if (holdsLastFrame(request)) {
+  // An encode decodes every picture from the keyframe its seek reads, and its filters trim them at
+  // the first segment's start after the frame-rate conversion. FFmpeg's exact seek trims before
+  // every filter instead, which drops the picture that the conversion repeats across a gap between
+  // pictures up to that start.
+  private static void addDecodeOnlySeekArgs(List<String> cmd, TranscodeRequest request) {
+    if (encodesVideo(request)) {
       cmd.add("-noaccurate_seek");
     }
   }
 
-  // A stream copy that carries the server's keyframe position seeks to that position: the decode
-  // time of the keyframe that starts the copy's first segment. An MPEG-TS seek reads from the last
+  // A job that carries the server's keyframe position seeks to that position: a keyframe's decode
+  // time. A stream copy's keyframe starts the copy's first segment. An encode's keyframe is the
+  // last one whose presentation time lies at or before the first segment's start minus 0.5 s, so
+  // that the encode decodes the picture that fills that start. An MPEG-TS seek reads from the last
   // packet whose decode time is at or before the target, so a seek to the segment's boundary skips
   // that keyframe when its decode time lies far enough before the boundary. The seek can still
   // read from an earlier keyframe: for a stream with B-frames, FFmpeg moves the target 3/23 s
   // earlier unless the container seeks by presentation time, as Matroska and MPEG-TS do not. The
-  // producer discards what the attempt reads before its first segment as preroll.
+  // producer discards what a copy reads before its first segment as preroll.
   private static Duration inputSeekPosition(TranscodeRequest request) {
-    var copiesVideo = !request.transcodeDecision().transcodeMode().encodesVideo();
-    if (copiesVideo && request.seekPosition().isPresent()) {
-      return request.seekPosition().orElseThrow();
-    }
-
-    return Duration.ofSeconds(inputSeekSeconds(request));
+    return request.seekPosition().orElseGet(() -> Duration.ofSeconds(inputSeekSeconds(request)));
   }
 
   // FFmpeg reads microseconds. Rounding up keeps the target at or after the server's position.
@@ -378,11 +375,12 @@ public class FfmpegCommandBuilder {
         .toPlainString();
   }
 
-  // An encoded replacement attempt seeks one period before its first segment's start, and the
-  // producer discards that period as preroll: a seek to the start itself can drop the frame an
-  // earlier attempt repeated there from a variable-frame-rate source, and lands after the start on
-  // an MPEG-TS source. A stream copy without the server's keyframe position seeks to its first
-  // segment's start.
+  // An encoded replacement attempt without the server's keyframe position reads from one period
+  // before its first segment's start. That reaches the picture that fills the start unless a gap
+  // between pictures covers the whole period, or unless the demuxer lands after the start, as an
+  // MPEG-TS demuxer can, and as an MP4 demuxer does for a target inside a gap whose next keyframe
+  // carries a decode time inside it. A stream copy without the server's keyframe position seeks to
+  // its first segment's start.
   private static long inputSeekSeconds(TranscodeRequest request) {
     var firstSegment = (long) request.startSequenceNumber();
     var firstSegmentStart = request.segmentIntervals().startOf(firstSegment, 1);
@@ -392,6 +390,30 @@ public class FfmpegCommandBuilder {
     }
 
     return firstSegmentStart - request.targetSegmentDuration();
+  }
+
+  // Where an attempt that encodes video from a later segment starts encoding: its first segment's
+  // start, as it decodes from its seek up to there. An attempt that holds the last frame starts
+  // encoding at its seek instead, where the demuxer delivers a picture. tpad repeats the last
+  // picture only after the demuxer reaches the end of the whole source, so a start after that
+  // picture would hold back every encoded frame until the demuxer had read all of the audio. The
+  // producer discards what that attempt encodes before its first segment as preroll. Empty for any
+  // other attempt.
+  private static Optional<Duration> encodingStart(TranscodeRequest request) {
+    if (!encodesVideo(request) || request.startSequenceNumber() == 0) {
+      return Optional.empty();
+    }
+
+    if (holdsLastFrame(request)) {
+      return Optional.of(inputSeekPosition(request)).filter(Duration::isPositive);
+    }
+
+    return Optional.of(
+        Duration.ofSeconds(request.segmentIntervals().startOf(request.startSequenceNumber(), 1)));
+  }
+
+  private static boolean encodesVideo(TranscodeRequest request) {
+    return request.transcodeDecision().transcodeMode().encodesVideo();
   }
 
   private void addStreamSelection(List<String> cmd, TranscodeDecision decision) {
@@ -466,7 +488,7 @@ public class FfmpegCommandBuilder {
     PlayableSampleEntry.ofEncoder(job.videoEncoder())
         .ifPresent(entry -> cmd.addAll(tagArgs(entry)));
     cmd.addAll(forcedCodecProfileArgs(job));
-    addScaleAndBitrateArgs(cmd, job, trimStart(job.request(), input));
+    addScaleAndBitrateArgs(cmd, job, input);
     if (input == EncoderInput.COPY_OF_THE_SOURCE) {
       addAudioOfTheCopyArgs(cmd, decision.audioDecision());
       return;
@@ -482,19 +504,12 @@ public class FfmpegCommandBuilder {
     }
   }
 
-  // The FFmpeg that decodes the source discards the frames before its seek, and, through the
-  // source's own markings, such as an MP4 edit list, those before its start. The stream copy keeps
-  // every packet from the keyframe at or before its seek, which the FFmpeg that reads the copy
-  // would decode and keep, so the encode of the copy trims its video at the attempt's start,
-  // seeking or not: after -start_at_zero, nothing else lies before zero. An attempt that holds the
-  // last frame and seeks keeps the frames before its seek too.
-  private static Optional<String> trimStart(TranscodeRequest request, EncoderInput input) {
-    if (input == EncoderInput.SOURCE
-        && !(holdsLastFrame(request) && inputSeekPosition(request).isPositive())) {
-      return Optional.empty();
-    }
-
-    return Optional.of(seekArgument(inputSeekPosition(request)));
+  // The FFmpeg that decodes the source discards, through the source's own markings, such as an
+  // MP4 edit list, the frames before zero. The stream copy keeps them, so the encode of the copy
+  // of an attempt from zero trims its video at zero: after -start_at_zero, nothing else lies
+  // before zero. An attempt that holds the last frame trims after the hold.
+  private static boolean trimsTheCopyAtZero(TranscodeRequest request, EncoderInput input) {
+    return input == EncoderInput.COPY_OF_THE_SOURCE && encodingStart(request).isEmpty();
   }
 
   // A copy of H.264 or HEVC gets the codec family's playable sample entry. The mp4 muxer drops a
@@ -593,12 +608,14 @@ public class FfmpegCommandBuilder {
   // When the attempt reads no source sample, FFmpeg sets the filters up with the stream's own
   // sample rate and layout, as for a decoded one, and apad's silence carries no timestamps, so
   // asetpts starts it at the attempt's start. atrim drops the silence before the start and ends
-  // the padding. An attempt that holds the last frame trims the start of its encoded audio itself,
-  // as its seek no longer does. In a named layout's encode these filters follow its own: its
-  // resampler and limiter meet the end of the source instead of silence, its dither never reaches
-  // the silence, and no conversion replaces its layout with FFmpeg's default for the channel count.
+  // the padding. An attempt that encodes video from a later segment trims its encoded audio at
+  // that segment's start itself, as its seek no longer does: its first audio frame then starts on
+  // that start, and so overlaps the frame before it from another attempt by less than one frame.
+  // In a named layout's encode these filters follow its own: its resampler and limiter meet the
+  // end of the source instead of silence, its dither never reaches the silence, and no conversion
+  // replaces its layout with FFmpeg's default for the channel count.
   private static Optional<String> timingFilter(AudioDecision audio, TranscodeRequest request) {
-    var start = seekArgument(inputSeekPosition(request));
+    var start = seekArgument(encodingStart(request).orElseGet(() -> inputSeekPosition(request)));
     if (audio.padsWithSilenceToAdvertisedEnd()) {
       var end =
           seekArgument(
@@ -612,11 +629,7 @@ public class FfmpegCommandBuilder {
               + end);
     }
 
-    if (holdsLastFrame(request) && inputSeekPosition(request).isPositive()) {
-      return Optional.of("atrim=start=" + start);
-    }
-
-    return Optional.empty();
+    return encodingStart(request).map(_ -> "atrim=start=" + start);
   }
 
   // Empty for an encoder not listed: FFmpeg then converts the padded audio before the encoder.
@@ -663,8 +676,7 @@ public class FfmpegCommandBuilder {
     return List.copyOf(args);
   }
 
-  private void addScaleAndBitrateArgs(
-      List<String> cmd, TranscodeJob job, Optional<String> trimStart) {
+  private void addScaleAndBitrateArgs(List<String> cmd, TranscodeJob job, EncoderInput input) {
     var request = job.request();
     // Every variant is 8-bit 4:2:0: an encoder otherwise keeps a 10-bit or 4:4:4 source's format,
     // and few hardware decoders accept 10-bit H.264.
@@ -674,13 +686,9 @@ public class FfmpegCommandBuilder {
             : ":out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709";
     // The deinterlacer runs first, so that no filter mixes the two fields of a frame. The held
     // picture is the last one the filters produce from the source, and no filter sees it again.
-    var heldFrame = heldFrameFilter(request, trimStart);
     var videoFilter =
         deinterlaceFilter(job)
-            + trimStart
-                .filter(_ -> heldFrame.isEmpty())
-                .map(start -> "trim=start=" + start + ",")
-                .orElse("")
+            + trimBeforeTheScale(request, input)
             + "scale=-2:"
             + request.height()
             + colorConversion
@@ -688,7 +696,8 @@ public class FfmpegCommandBuilder {
             + videoFormat(job)
             + ","
             + frameGridFilter(request)
-            + heldFrame.map(filter -> "," + filter).orElse("");
+            + heldFrameFilter(request)
+            + trimAfterTheFrameGrid(request, input).map(trim -> ",trim=" + trim).orElse("");
     cmd.addAll(List.of("-vf", videoFilter));
     var bitrate = String.valueOf(request.bitrate());
     // SVT-AV1 supports a bitrate cap only in CRF mode. Its default CRF is 35.
@@ -716,22 +725,49 @@ public class FfmpegCommandBuilder {
     return "fps=" + request.outputFrameRate().orElseThrow().ffmpegArgument() + ":eof_action=pass";
   }
 
-  // tpad repeats the last picture at the output frame rate. fps counts presentation times in
-  // frames, so trim ends at the first frame of that grid at or after the advertised end, which a
-  // time in seconds would round to the nearest frame; a picture keeps its full duration. Empty
-  // unless the attempt holds the last frame.
-  private static Optional<String> heldFrameFilter(
-      TranscodeRequest request, Optional<String> trimStart) {
-    if (!holdsLastFrame(request)) {
+  // fps counts presentation times in frames, so the trim starts and ends on that grid: at the
+  // first frame at or after the encoding start, as the forced keyframe does at a segment's start,
+  // and at the first frame at or after the advertised end, after tpad has repeated the last picture
+  // up to it.
+  // A time in seconds would round to the nearest frame instead. The trim follows the hold, so that
+  // an attempt that starts after the video's last frame still has that frame to repeat.
+  private static Optional<String> trimAfterTheFrameGrid(
+      TranscodeRequest request, EncoderInput input) {
+    var frameRate = request.outputFrameRate().orElseThrow();
+    var options = new ArrayList<String>();
+    encodingStart(request)
+        .ifPresent(start -> options.add("start_pts=" + frameRate.framesStartingBefore(start)));
+    if (holdsLastFrame(request) && trimsTheCopyAtZero(request, input)) {
+      options.add("start=0");
+    }
+
+    if (holdsLastFrame(request)) {
+      options.add(
+          "end_pts=" + frameRate.framesStartingBefore(request.advertisedEnd().orElseThrow()));
+    }
+
+    if (options.isEmpty()) {
       return Optional.empty();
     }
 
-    var frameRate = request.outputFrameRate().orElseThrow();
-    return Optional.of(
-        "tpad=stop=-1:stop_mode=clone,trim="
-            + trimStart.map(start -> "start=" + start + ":").orElse("")
-            + "end_pts="
-            + frameRate.framesStartingBefore(request.advertisedEnd().orElseThrow()));
+    return Optional.of(String.join(":", options));
+  }
+
+  private static String trimBeforeTheScale(TranscodeRequest request, EncoderInput input) {
+    if (!trimsTheCopyAtZero(request, input) || holdsLastFrame(request)) {
+      return "";
+    }
+
+    return "trim=start=0,";
+  }
+
+  // tpad repeats the last picture at the output frame rate.
+  private static String heldFrameFilter(TranscodeRequest request) {
+    if (!holdsLastFrame(request)) {
+      return "";
+    }
+
+    return ",tpad=stop=-1:stop_mode=clone";
   }
 
   private static boolean holdsLastFrame(TranscodeRequest request) {
