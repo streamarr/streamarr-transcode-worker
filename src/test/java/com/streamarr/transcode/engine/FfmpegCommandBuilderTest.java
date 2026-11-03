@@ -2472,6 +2472,25 @@ class FfmpegCommandBuilderTest {
 
   @Test
   @DisplayName(
+      "Should read the copy from one period before its first segment when a replacement attempt"
+          + " that encodes a profile 5 source whose RPU starts its sample carries the server's"
+          + " keyframe position")
+  void shouldReadTheCopyFromOnePeriodBeforeItsFirstSegmentWhenAProfile5AttemptCarriesAKeyframe() {
+    var request =
+        request(encoding(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE)))
+            .startSequenceNumber(3)
+            .seekPosition(Optional.of(Duration.ofMillis(15_500)))
+            .build();
+
+    var pipe = rpuMovingPipe(builder.buildPipeline(job(request, "libx264")));
+
+    assertThat(pipe.copyCommand())
+        .containsSequence("-ss", "12", "-noaccurate_seek", "-i")
+        .containsSequence("-af", aacStereoFromTheFirstSegment("18", "6"));
+  }
+
+  @Test
+  @DisplayName(
       "Should trim the encode's converted pictures at the first segment's start without seeking the"
           + " copy again when a replacement attempt encodes a profile 5 source whose RPU starts its"
           + " sample")

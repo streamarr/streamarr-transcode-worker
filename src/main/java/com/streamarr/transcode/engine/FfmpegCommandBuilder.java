@@ -188,7 +188,7 @@ public class FfmpegCommandBuilder {
   private static final int LONGEST_ARGUMENT_BYTES = 32 * 4096 - 1;
 
   public FfmpegPipeline buildPipeline(TranscodeJob job) {
-    if (needsRpuMove(job)) {
+    if (needsRpuMove(job.request())) {
       return new FfmpegPipeline.RpuMovingPipe(
           buildSourceCopyCommand(job), buildCommand(job, EncoderInput.COPY_OF_THE_SOURCE));
     }
@@ -199,8 +199,8 @@ public class FfmpegCommandBuilder {
   // Dolby Vision profiles 5 and 10.0 have no compatible base, and of those only profile 5 is
   // HEVC, so only its picture needs the RPU that FFmpeg's HEVC decoder skips when the RPU starts a
   // sample. A job whose mode copies the video decodes nothing, whatever its video decision.
-  private static boolean needsRpuMove(TranscodeJob job) {
-    var decision = job.request().transcodeDecision();
+  private static boolean needsRpuMove(TranscodeRequest request) {
+    var decision = request.transcodeDecision();
     if (!decision.transcodeMode().encodesVideo()) {
       return false;
     }
@@ -395,7 +395,19 @@ public class FfmpegCommandBuilder {
   // earlier unless the container seeks by presentation time, as Matroska and MPEG-TS do not. The
   // producer discards what a copy reads before its first segment as preroll.
   private static Duration inputSeekPosition(TranscodeRequest request) {
-    return request.seekPosition().orElseGet(() -> Duration.ofSeconds(inputSeekSeconds(request)));
+    return keyframePosition(request).orElseGet(() -> Duration.ofSeconds(inputSeekSeconds(request)));
+  }
+
+  // The copy of a Dolby Vision profile 5 source reads from one period early whatever the server's
+  // keyframe position. The copy's muxer writes nothing until each track has a sample, so it holds
+  // back the copied video before the audio, and an MP4 demuxer lands a whole GOP before the decode
+  // time of a keyframe that B-frames follow. The mover refuses a fragment over 32 MiB.
+  private static Optional<Duration> keyframePosition(TranscodeRequest request) {
+    if (needsRpuMove(request)) {
+      return Optional.empty();
+    }
+
+    return request.seekPosition();
   }
 
   // FFmpeg reads microseconds. Rounding up keeps the target at or after the server's position.
@@ -726,7 +738,7 @@ public class FfmpegCommandBuilder {
   private static Duration audioReach(TranscodeRequest request) {
     var firstSegmentStart = firstSegmentStartOfAnEncode(request).orElseThrow();
     var reach = firstSegmentStart.minus(inputSeekPosition(request));
-    if (request.seekPosition().isPresent()) {
+    if (keyframePosition(request).isPresent()) {
       reach = reach.minus(AUDIO_AFTER_THE_KEYFRAME);
     }
 
