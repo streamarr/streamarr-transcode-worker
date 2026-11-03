@@ -509,6 +509,34 @@ class WorkerMediaSmokeTest {
     }
   }
 
+  @ParameterizedTest(name = "{1}-sample blocks in {0}")
+  @CsvSource({"mkv, 144", "mkv, 4608", "mp4, 144", "mp4, 4608"})
+  @DisplayName(
+      "Should report the STREAMINFO minimum block size of a FLAC stream and none for an ALAC"
+          + " stream when a worker probes a real file")
+  void shouldReportFlacMinimumBlockSizeAndNoneForAlacWhenAWorkerProbesARealFile(
+      String container, int frameSize) throws Exception {
+    var media =
+        probeAudioSource(
+            "block-size." + container,
+            List.of(
+                "-map",
+                "1:a",
+                "-map",
+                "1:a",
+                "-c:a:0",
+                "flac",
+                "-frame_size:a:0",
+                Integer.toString(frameSize),
+                "-c:a:1",
+                "alac"));
+
+    assertThat(media.getStreams(1).getFlacMinimumBlockSizeSamples()).isEqualTo(frameSize);
+    var alac = media.getStreams(2);
+    assertThat(alac.getCodec()).isEqualTo("alac");
+    assertThat(alac.hasFlacMinimumBlockSizeSamples()).isFalse();
+  }
+
   // Probes a one-second file whose stream 0 is a 64x36 H.264 picture track, because the probe
   // fails a file without video. Input 1 is a 48 kHz sine tone for the audio arguments to map.
   private ProbeMediaInfo probeAudioSource(String fileName, List<String> audioArguments)
