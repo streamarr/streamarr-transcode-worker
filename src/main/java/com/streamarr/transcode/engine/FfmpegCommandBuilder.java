@@ -163,8 +163,8 @@ public class FfmpegCommandBuilder {
           new AudioEncoderInput(
               "s16|s32", Optional.empty(), DEFAULT_CHANNEL_LAYOUTS, Optional.empty()));
 
-  // How much earlier than the seek's whole frames an encoded replacement attempt's audio starts:
-  // the demuxer may deliver the first audio sample after the seek by up to this much.
+  // How long after its seek an encoded replacement attempt's audio starts at the latest: a margin
+  // for a demuxer that delivers its first audio sample after the keyframe it seeks to.
   private static final Duration AUDIO_AFTER_THE_SEEK = Duration.ofSeconds(1);
 
   // The longest argument Linux passes to a program: MAX_ARG_STRLEN, 32 pages, holds the argument
@@ -802,9 +802,9 @@ public class FfmpegCommandBuilder {
   // fps counts presentation times in frames, so the trim starts and ends on that grid: at the
   // first frame at or after the encoding start, as the forced keyframe does at a segment's start,
   // and at the first frame at or after the advertised end, after tpad has repeated the last picture
-  // up to it.
-  // A time in seconds would round to the nearest frame instead. The trim follows the hold, so that
-  // an attempt that starts after the video's last frame still has that frame to repeat.
+  // up to it. A time in seconds would round to the nearest frame instead. The trim follows the
+  // hold, so that an attempt that starts after the video's last frame still has that frame to
+  // repeat.
   private static Optional<String> trimAfterTheFrameGrid(
       TranscodeRequest request, EncoderInput input) {
     var frameRate = request.outputFrameRate().orElseThrow();
