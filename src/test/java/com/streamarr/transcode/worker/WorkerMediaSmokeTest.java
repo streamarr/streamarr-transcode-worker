@@ -104,6 +104,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -255,6 +256,17 @@ class WorkerMediaSmokeTest {
   @TempDir static Path irregularKeyframeSources;
   @TempDir static Path rpuLayoutSources;
   @TempDir static Path interlacedSources;
+
+  // The seven audio dispositions of probe version 7, by the names that ffprobe prints.
+  private static final Map<String, Predicate<ProbeStreamInfo>> AUDIO_DISPOSITIONS =
+      Map.of(
+          "comment", ProbeStreamInfo::getIsComment,
+          "visual_impaired", ProbeStreamInfo::getIsVisualImpaired,
+          "descriptions", ProbeStreamInfo::getIsDescriptions,
+          "original", ProbeStreamInfo::getIsOriginal,
+          "dub", ProbeStreamInfo::getIsDub,
+          "clean_effects", ProbeStreamInfo::getIsCleanEffects,
+          "dependent", ProbeStreamInfo::getIsDependent);
 
   // A source joins only once FFmpeg has written it successfully, so that a later case generates it
   // again instead of reading what a failed or timed-out run left behind.
@@ -537,6 +549,88 @@ class WorkerMediaSmokeTest {
     assertThat(alac.hasFlacMinimumBlockSizeSamples()).isFalse();
   }
 
+  // Each row sets one disposition on an AAC stream and expects the flags that ffprobe reads back.
+  // Matroska stores the comment, visual impaired and original flags, and a dub as original 0 (RFC
+  // 9559). FFmpeg writes MP4 dispositions as DASH roles, and one role stands for both
+  // visual_impaired and descriptions. MPEG-TS stores one ISO 639 audio type: clean effects,
+  // hearing impaired or visual impaired commentary.
+  @ParameterizedTest(name = "{1} in {0}")
+  @CsvSource(
+      textBlock =
+          """
+          mkv, comment,         comment
+          mkv, visual_impaired, visual_impaired
+          mkv, descriptions,
+          mkv, original,        original
+          mkv, dub,             dub
+          mkv, clean_effects,
+          mkv, dependent,
+          mp4, comment,         comment
+          mp4, visual_impaired, descriptions visual_impaired
+          mp4, descriptions,    descriptions visual_impaired
+          mp4, original,
+          mp4, dub,             dub
+          mp4, clean_effects,
+          mp4, dependent,
+          ts,  comment,
+          ts,  visual_impaired, descriptions visual_impaired
+          ts,  descriptions,
+          ts,  original,
+          ts,  dub,
+          ts,  clean_effects,   clean_effects
+          ts,  dependent,
+          """)
+  @DisplayName(
+      "Should report the audio dispositions that survive the container when a worker probes a real"
+          + " file")
+  void shouldReportAudioDispositionsThatSurviveTheContainerWhenAWorkerProbesARealFile(
+      String container, String disposition, String surviving) throws Exception {
+    var media =
+        probeAudioSource(
+            "disposition." + container,
+            List.of("-map", "1:a", "-c:a", "aac", "-disposition:a", disposition));
+
+    assertThat(audioDispositionsOf(media.getStreams(1))).isEqualTo(flagsNamed(surviving));
+  }
+
+  // Both AC-3 streams carry the comment and visual impaired container flags. The first stream's
+  // bitstream mode is complete main, so ffprobe keeps the flags that the container stores. The
+  // second stream's bitstream mode is music and effects. ffprobe replaces every container flag of
+  // that stream with clean effects, a flag that Matroska and MP4 cannot store.
+  @ParameterizedTest(name = "{0}")
+  @CsvSource(
+      textBlock =
+          """
+          mkv, comment visual_impaired
+          mp4, comment descriptions visual_impaired
+          ts,  descriptions visual_impaired
+          """)
+  @DisplayName(
+      "Should report the bitstream mode's flag instead of the container flags when a worker probes"
+          + " a real AC-3 stream whose mode is not complete main")
+  void shouldReportBitstreamModeFlagInsteadOfContainerFlagsWhenAc3ModeIsNotCompleteMain(
+      String container, String containerFlags) throws Exception {
+    var media =
+        probeAudioSource(
+            "bitstream-mode." + container,
+            List.of(
+                "-map",
+                "1:a",
+                "-map",
+                "1:a",
+                "-c:a",
+                "ac3",
+                "-audio_service_type:a:0",
+                "ma",
+                "-audio_service_type:a:1",
+                "ef",
+                "-disposition:a",
+                "comment+visual_impaired"));
+
+    assertThat(audioDispositionsOf(media.getStreams(1))).isEqualTo(flagsNamed(containerFlags));
+    assertThat(audioDispositionsOf(media.getStreams(2))).containsExactly("clean_effects");
+  }
+
   // Probes a one-second file whose stream 0 is a 64x36 H.264 picture track, because the probe
   // fails a file without video. Input 1 is a 48 kHz sine tone for the audio arguments to map.
   private ProbeMediaInfo probeAudioSource(String fileName, List<String> audioArguments)
@@ -562,6 +656,18 @@ class WorkerMediaSmokeTest {
     arguments.addAll(audioArguments);
     runFfmpeg(arguments, source);
     return probeExecutor().probe(source, keyframeRequest()).result().getMedia();
+  }
+
+  private static Set<String> audioDispositionsOf(ProbeStreamInfo stream) {
+    return AUDIO_DISPOSITIONS.entrySet().stream()
+        .filter(disposition -> disposition.getValue().test(stream))
+        .map(Map.Entry::getKey)
+        .collect(Collectors.toSet());
+  }
+
+  // A blank CSV cell names no flag.
+  private static Set<String> flagsNamed(String names) {
+    return Optional.ofNullable(names).map(list -> Set.of(list.split(" "))).orElse(Set.of());
   }
 
   @ParameterizedTest(name = "{0}")
