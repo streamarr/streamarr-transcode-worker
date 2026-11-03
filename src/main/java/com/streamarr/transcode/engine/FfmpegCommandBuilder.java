@@ -132,6 +132,8 @@ public class FfmpegCommandBuilder {
   private static final Map<Integer, String> DEFAULT_CHANNEL_LAYOUTS =
       Map.of(1, "mono", 2, STEREO, 6, "5.1", 8, "7.1");
 
+  private static final String LIBOPUS = "libopus";
+
   private static final Map<Integer, String> AC3_CHANNEL_LAYOUTS =
       Map.of(1, "mono", 2, STEREO, 6, "5.1(side)");
 
@@ -148,7 +150,7 @@ public class FfmpegCommandBuilder {
           AudioEncoderInput.of("fltp", "48000|44100|32000", AC3_CHANNEL_LAYOUTS),
           "opus",
           AudioEncoderInput.of("fltp", "48000", Map.of(1, "mono", 2, STEREO)),
-          "libopus",
+          LIBOPUS,
           AudioEncoderInput.of("s16|flt", "48000|24000|16000|12000|8000", DEFAULT_CHANNEL_LAYOUTS),
           "flac",
           new AudioEncoderInput("s16|s32", Optional.empty(), DEFAULT_CHANNEL_LAYOUTS));
@@ -160,13 +162,20 @@ public class FfmpegCommandBuilder {
   // encoder frames the longest FLAC block size that lasts at most 105 ms.
   private static final Map<String, AudioFrames> AUDIO_ENCODER_FRAMES =
       Map.of(
-          "aac", new AudioFrames("1024", "0"),
-          "ac3", new AudioFrames("1536", "1280"),
-          "eac3", new AudioFrames("1536", "1280"),
-          "opus", new AudioFrames("960", "840"),
-          "libopus", new AudioFrames("SR/50", "SR*27/2000"),
-          "alac", new AudioFrames("4096", "0"),
-          "flac", new AudioFrames(longestBlockWithin105Milliseconds(), "0"));
+          "aac",
+          new AudioFrames("1024", "0"),
+          "ac3",
+          new AudioFrames("1536", "1280"),
+          "eac3",
+          new AudioFrames("1536", "1280"),
+          "opus",
+          new AudioFrames("960", "840"),
+          LIBOPUS,
+          new AudioFrames("SR/50", "SR*27/2000"),
+          "alac",
+          new AudioFrames("4096", "0"),
+          "flac",
+          new AudioFrames(longestBlockWithin105Milliseconds(), "0"));
 
   // How long after the server's keyframe position an encoded replacement attempt's audio starts at
   // the latest: a margin for a demuxer that delivers its first audio sample after the keyframe it
@@ -174,13 +183,14 @@ public class FfmpegCommandBuilder {
   private static final Duration AUDIO_AFTER_THE_KEYFRAME = Duration.ofSeconds(1);
 
   private static String longestBlockWithin105Milliseconds() {
-    var blockSize = "192";
-    for (var size :
-        List.of(256, 512, 576, 1024, 1152, 2048, 2304, 4096, 4608, 8192, 16384, 32768)) {
-      blockSize = "if(gte(trunc(SR*105/1000)," + size + ")," + size + "," + blockSize + ")";
+    var sizes = List.of(32768, 16384, 8192, 4608, 4096, 2304, 2048, 1152, 1024, 576, 512, 256);
+    var blockSize = new StringBuilder();
+    for (var size : sizes) {
+      blockSize.append("if(gte(trunc(SR*105/1000),").append(size).append("),").append(size);
+      blockSize.append(',');
     }
 
-    return blockSize;
+    return blockSize.append("192").append(")".repeat(sizes.size())).toString();
   }
 
   // The longest argument Linux passes to a program: MAX_ARG_STRLEN, 32 pages, holds the argument
@@ -283,7 +293,7 @@ public class FfmpegCommandBuilder {
           AudioDecision.builder()
               .mode(audio.mode())
               .streamIndex(audio.streamIndex())
-              .codec("libopus")
+              .codec(LIBOPUS)
               .channels(audio.channels())
               .bitrate(audio.bitrate())
               .channelLayout(audio.channelLayout())
