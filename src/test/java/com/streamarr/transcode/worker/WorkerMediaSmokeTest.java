@@ -5377,6 +5377,166 @@ class WorkerMediaSmokeTest {
         .hasSizeGreaterThan(1);
   }
 
+  @Test
+  @DisplayName(
+      "Should show the source's moving pictures after a gap between pictures when an encode from"
+          + " the start reads an MP4 that gives the picture after the gap the gap's duration")
+  void shouldShowTheSourcesMovingPicturesAfterAPictureGapWhenAnEncodeReadsAnMp4WithBFrames()
+      throws Exception {
+    var source = pictureGapSource(PictureGapSource.MP4_WITH_B_FRAMES);
+
+    var uploads =
+        execute(engine(softwareCapabilities()), source.getParent(), pictureGapJob(source).build());
+
+    // FFmpeg's constant-rate conversion repeated the picture after the gap for the 5.083 s that
+    // the MP4 gives as its duration, and showed 4 distinct pictures in these 5 s.
+    var afterTheGap =
+        decodedPictures(uploads.contentOf(List.of("init.mp4", segmentName(3)))).stream()
+            .filter(
+                picture -> picture.isWithin(Duration.ofMillis(31_200), Duration.ofMillis(36_200)))
+            .toList();
+    assertThat(afterTheGap).as("5 s of pictures at 24 fps").hasSize(120);
+    assertThat(afterTheGap.stream().map(DecodedPicture::md5).distinct().count())
+        .as("the distinct pictures of the source's moving test pattern")
+        .isGreaterThan(afterTheGap.size() / 2);
+  }
+
+  // A source whose pictures stop at 25.958 s and resume at 31.042 s, cut on the list [0, 3, 6, 10]
+  // of 3 s slots: segment 3 starts at 30 s inside the gap, and the gap covers all of slot 9.
+  private static VariantJob.Builder pictureGapJob(Path source) {
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(SLOT_SECONDS)
+        .setMediaSegmentCount(TEN_SECOND_KEYFRAME_SEGMENT_STARTS.size())
+        .addAllSegmentStartSlots(TEN_SECOND_KEYFRAME_SEGMENT_STARTS);
+    return job;
+  }
+
+  private enum PictureGapSource {
+    // libx264's B-frames give the keyframe after the gap a decode time 5 s before its presentation
+    // time, and the MP4 muxer gives the picture after the gap the gap's 5.083 s duration.
+    MP4_WITH_B_FRAMES("gap.mp4"),
+    MP4_WITHOUT_B_FRAMES("gap-without-b-frames.mp4"),
+    MATROSKA("gap.mkv"),
+    MPEG_TS("gap.ts");
+
+    private final String fileName;
+
+    PictureGapSource(String fileName) {
+      this.fileName = fileName;
+    }
+  }
+
+  // 40 s of a moving test pattern at 24 fps and a 440 Hz tone. Every picture in [26 s, 31 s) is
+  // dropped and the stream keeps variable-rate timestamps, so the picture at 25.958 s lasts until
+  // 31.042 s. Keyframes lie at 0, 10 and 20 s and on the first picture after the gap. The Matroska
+  // and MPEG-TS sources carry the B-frame MP4's streams unchanged.
+  private static synchronized Path pictureGapSource(PictureGapSource shape) throws Exception {
+    var withBFrames = seekableSources.resolve(PictureGapSource.MP4_WITH_B_FRAMES.fileName);
+    if (!generatedSeekableSources.contains(withBFrames)) {
+      runFfmpeg(pictureGapArguments(2), withBFrames);
+      generatedSeekableSources.add(withBFrames);
+    }
+
+    var source = seekableSources.resolve(shape.fileName);
+    if (generatedSeekableSources.contains(source)) {
+      return source;
+    }
+
+    switch (shape) {
+      case MP4_WITHOUT_B_FRAMES -> runFfmpeg(pictureGapArguments(0), source);
+      case MATROSKA, MPEG_TS ->
+          runFfmpeg(List.of("-i", withBFrames.toString(), "-map", "0", "-c", "copy"), source);
+      case MP4_WITH_B_FRAMES -> throw new IllegalStateException("generated above");
+    }
+
+    generatedSeekableSources.add(source);
+    return source;
+  }
+
+  private static List<String> pictureGapArguments(int bFrames) {
+    return List.of(
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=64x36:rate=24",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440:sample_rate=48000",
+        "-t",
+        "40",
+        "-vf",
+        "select=not(between(t\\,26\\,31))",
+        "-fps_mode",
+        "passthrough",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-x264-params",
+        "keyint=100000:min-keyint=1:scenecut=0:bframes=" + bFrames,
+        "-force_key_frames",
+        "0,10,20,31",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "96k");
+  }
+
+  // The media's decoded pictures in presentation order, each with its presentation time and the
+  // MD5 of its picture.
+  private static List<DecodedPicture> decodedPictures(byte[] media) throws Exception {
+    var file = Files.createTempFile(longSources, "decoded", ".mp4");
+    Files.write(file, media);
+    var lines =
+        runToCompletion(
+                List.of(
+                    "ffmpeg",
+                    "-nostdin",
+                    "-v",
+                    "error",
+                    "-copyts",
+                    "-i",
+                    file.toString(),
+                    "-map",
+                    "0:v:0",
+                    "-fps_mode",
+                    "passthrough",
+                    "-f",
+                    "framemd5",
+                    "-"))
+            .lines()
+            .toList();
+    var timeBase =
+        lines.stream()
+            .filter(line -> line.startsWith("#tb 0: "))
+            .map(line -> line.substring("#tb 0: ".length()).split("/"))
+            .findFirst()
+            .orElseThrow();
+    return lines.stream()
+        .filter(line -> !line.startsWith("#") && !line.isBlank())
+        .map(line -> line.split(",\\s*"))
+        .map(
+            fields ->
+                new DecodedPicture(
+                    Duration.ofNanos(
+                        new BigDecimal(fields[1])
+                            .multiply(new BigDecimal(timeBase[0]))
+                            .movePointRight(9)
+                            .divide(new BigDecimal(timeBase[1]), 0, RoundingMode.HALF_EVEN)
+                            .longValueExact()),
+                    fields[5]))
+        .toList();
+  }
+
+  private record DecodedPicture(Duration presentationTime, String md5) {
+
+    private boolean isWithin(Duration from, Duration until) {
+      return presentationTime.compareTo(from) >= 0 && presentationTime.compareTo(until) < 0;
+    }
+  }
+
   // Segment N's listed interval in ticks of the timescale; segment 0 keeps the AAC priming frame
   // from before zero, and the last runs to the end of the media.
   private static ListedInterval listedInterval(int number, long timescale) {

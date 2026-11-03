@@ -686,6 +686,8 @@ public class FfmpegCommandBuilder {
             + colorConversion
             + ","
             + videoFormat(job)
+            + ","
+            + frameGridFilter(request)
             + heldFrame.map(filter -> "," + filter).orElse("");
     cmd.addAll(List.of("-vf", videoFilter));
     var bitrate = String.valueOf(request.bitrate());
@@ -703,14 +705,21 @@ public class FfmpegCommandBuilder {
             "-bufsize", String.valueOf(request.bitrate() * 2)));
   }
 
-  // fps puts the pictures on the output's frame grid, which -r then keeps, so that tpad repeats
-  // the last picture at the output frame rate. At the end of its input fps passes on the pictures
-  // it holds: rounding there drops the last picture when its slot on the grid is where the input
-  // ends, as for a picture whose duration the source does not give. fps counts presentation times
-  // in frames, so trim
-  // ends at the first frame of that grid at or after the advertised end, which a time in seconds
-  // would round to the nearest frame; a picture keeps its full duration. Empty unless the attempt
-  // holds the last frame.
+  // fps places each picture on the output's frame grid by its presentation time alone, and -r
+  // then keeps that grid. FFmpeg's constant-rate conversion behind -r also reads each frame's
+  // duration: an MP4 written by a B-frame encoder can give the picture after a gap between pictures
+  // the gap's duration, and that conversion then repeated the picture for the gap's length and
+  // dropped the source's pictures behind it. At the end of its input fps passes on the picture it
+  // holds: rounding there drops the last picture when its slot on the grid is where the input
+  // ends, as for a picture whose duration the source does not give.
+  private static String frameGridFilter(TranscodeRequest request) {
+    return "fps=" + request.outputFrameRate().orElseThrow().ffmpegArgument() + ":eof_action=pass";
+  }
+
+  // tpad repeats the last picture at the output frame rate. fps counts presentation times in
+  // frames, so trim ends at the first frame of that grid at or after the advertised end, which a
+  // time in seconds would round to the nearest frame; a picture keeps its full duration. Empty
+  // unless the attempt holds the last frame.
   private static Optional<String> heldFrameFilter(
       TranscodeRequest request, Optional<String> trimStart) {
     if (!holdsLastFrame(request)) {
@@ -719,9 +728,7 @@ public class FfmpegCommandBuilder {
 
     var frameRate = request.outputFrameRate().orElseThrow();
     return Optional.of(
-        "fps="
-            + frameRate.ffmpegArgument()
-            + ":eof_action=pass,tpad=stop=-1:stop_mode=clone,trim="
+        "tpad=stop=-1:stop_mode=clone,trim="
             + trimStart.map(start -> "start=" + start + ":").orElse("")
             + "end_pts="
             + frameRate.framesStartingBefore(request.advertisedEnd().orElseThrow()));
@@ -758,8 +765,8 @@ public class FfmpegCommandBuilder {
         };
   }
 
-  // The rate the frame-count GOP is computed from; without -fps_mode FFmpeg then emits the
-  // constant-rate frames the GOP counts, and -copyts keeps a seek's first timestamp.
+  // The rate the frame-count GOP is computed from. The fps filter already emits frames at this
+  // rate, -r without -fps_mode keeps them, and -copyts keeps a seek's first timestamp.
   private static void addFrameRateArgs(List<String> cmd, TranscodeRequest request) {
     cmd.addAll(List.of("-r:v:0", request.outputFrameRate().orElseThrow().ffmpegArgument()));
   }

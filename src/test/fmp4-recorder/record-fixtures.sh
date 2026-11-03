@@ -55,7 +55,7 @@ DET=(-threads 1)
 # scale number 10 for SVT-AV1, and veryfast for libx265. Each encode forces the codec profile, tier
 # and level that a job carries. For 64x36 at 23.976 fps these are H.264 1.0, AV1 2.0 and H.265 1.0.
 # H.264 and HEVC encodes carry the playable sample entry of ADR 0013's tag rule: avc1 and hvc1.
-SDR_VIDEO_FILTER=scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p
+SDR_VIDEO_FILTER=scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p,fps=$FPS:eof_action=pass
 X264=(-c:v libx264 -preset faster -tag:v avc1 -profile:v high -level:v 10 -vf "$SDR_VIDEO_FILTER" -b:v 6000 -maxrate 6000 -bufsize 12000)
 SVT=(-c:v libsvtav1 -preset 10 -level:v 20 -vf "$SDR_VIDEO_FILTER" -crf 35 -maxrate 6000 -svtav1-params mbr-overshoot-pct=0:lp=1)
 X265=(-c:v libx265 -preset veryfast -tag:v hvc1 -profile:v main -vf "$SDR_VIDEO_FILTER" -b:v 6000 -maxrate 6000 -bufsize 12000)

@@ -41,6 +41,8 @@ class FfmpegCommandBuilderTest {
           + "|16000|12000|11025|8000|7350:channel_layouts=stereo,";
   private static final String BT709_LIMITED_SCALE_OPTIONS =
       ":out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709";
+  // The request's output frame rate, on whose grid every encode places its pictures.
+  private static final String FRAME_GRID = ",fps=24000/1001:eof_action=pass";
 
   private final FfmpegCommandBuilder builder =
       new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1));
@@ -237,7 +239,7 @@ class FfmpegCommandBuilderTest {
         Arguments.of(
             "scale filter",
             new String[] {
-              "-vf", "scale=-2:1080" + BT709_LIMITED_SCALE_OPTIONS + ",format=yuv420p"
+              "-vf", "scale=-2:1080" + BT709_LIMITED_SCALE_OPTIONS + ",format=yuv420p" + FRAME_GRID
             }),
         Arguments.of("forced IDR", new String[] {"-forced-idr", "1"}),
         Arguments.of("audio downmix to stereo", new String[] {"-ac", "2"}));
@@ -267,7 +269,8 @@ class FfmpegCommandBuilderTest {
             "libx264");
 
     assertThat(cmd)
-        .contains("-vf", "scale=-2:720" + BT709_LIMITED_SCALE_OPTIONS + ",format=yuv420p")
+        .contains(
+            "-vf", "scale=-2:720" + BT709_LIMITED_SCALE_OPTIONS + ",format=yuv420p" + FRAME_GRID)
         .contains("-b:v", "3000000")
         .contains("-bufsize", "6000000");
   }
@@ -296,7 +299,7 @@ class FfmpegCommandBuilderTest {
     var cmd = command(request(TranscodeMode.FULL_TRANSCODE).height(720).build(), encoder);
 
     assertThat(videoFilter(cmd))
-        .isEqualTo("scale=-2:720" + BT709_LIMITED_SCALE_OPTIONS + ",format=yuv420p");
+        .isEqualTo("scale=-2:720" + BT709_LIMITED_SCALE_OPTIONS + ",format=yuv420p" + FRAME_GRID);
   }
 
   @ParameterizedTest(name = "{0}")
@@ -307,7 +310,30 @@ class FfmpegCommandBuilderTest {
     var cmd = command(request(TranscodeMode.VIDEO_TRANSCODE).height(720).build(), encoder);
 
     assertThat(videoFilter(cmd))
-        .isEqualTo("scale=-2:720" + BT709_LIMITED_SCALE_OPTIONS + ",format=nv12");
+        .isEqualTo("scale=-2:720" + BT709_LIMITED_SCALE_OPTIONS + ",format=nv12" + FRAME_GRID);
+  }
+
+  @ParameterizedTest(name = "{0}/{1} fps, {2}")
+  @CsvSource({
+    "24, 1, FULL_TRANSCODE",
+    "24000, 1001, VIDEO_TRANSCODE",
+    "30000, 1001, FULL_TRANSCODE",
+    "60, 1, VIDEO_TRANSCODE"
+  })
+  @DisplayName(
+      "Should place the pictures on the output frame rate's grid by their presentation times and"
+          + " keep the last one when an attempt encodes video")
+  void shouldPlaceThePicturesOnTheOutputFrameRatesGridWhenAnAttemptEncodesVideo(
+      long numerator, long denominator, TranscodeMode mode) {
+    var cmd =
+        command(
+            request(mode)
+                .outputFrameRate(Optional.of(new OutputFrameRate(numerator, denominator)))
+                .build(),
+            "libx264");
+
+    assertThat(videoFilter(cmd))
+        .endsWith(",format=yuv420p,fps=" + numerator + "/" + denominator + ":eof_action=pass");
   }
 
   @ParameterizedTest(name = "{0} to {1}, {2}")
@@ -326,7 +352,8 @@ class FfmpegCommandBuilderTest {
     assertThat(videoFilter(cmd))
         .isEqualTo(
             "scale=-2:720,tonemapx=tonemap=mobius:peak=100:desat=0:t=bt709:m=bt709:p=bt709:r=tv:"
-                + "format=yuv420p,sidedata=mode=delete:type=AMBIENT_VIEWING_ENVIRONMENT");
+                + "format=yuv420p,sidedata=mode=delete:type=AMBIENT_VIEWING_ENVIRONMENT"
+                + FRAME_GRID);
   }
 
   private static Stream<Arguments> toneMappedConversions() {
@@ -347,7 +374,7 @@ class FfmpegCommandBuilderTest {
     var cmd = command(request(encoding(encode)).height(720).build(), encoder);
 
     assertThat(videoFilter(cmd))
-        .isEqualTo("scale=-2:720" + BT709_LIMITED_SCALE_OPTIONS + ",format=yuv420p");
+        .isEqualTo("scale=-2:720" + BT709_LIMITED_SCALE_OPTIONS + ",format=yuv420p" + FRAME_GRID);
   }
 
   private static Stream<Arguments> conversionsWithoutToneMapping() {
@@ -1571,7 +1598,8 @@ class FfmpegCommandBuilderTest {
         .isNotEmpty()
         .contains("-c:v", "libx264")
         .contains("-c:a", "copy")
-        .contains("-vf", "scale=-2:1080" + BT709_LIMITED_SCALE_OPTIONS + ",format=yuv420p")
+        .contains(
+            "-vf", "scale=-2:1080" + BT709_LIMITED_SCALE_OPTIONS + ",format=yuv420p" + FRAME_GRID)
         .doesNotContain("-ac");
     assertThat(audioBitrate(cmd)).isEqualTo("0");
   }
@@ -2182,7 +2210,7 @@ class FfmpegCommandBuilderTest {
 
     assertThat(pipe.encodeCommand()).doesNotContain("-ss", "-start_at_zero");
     assertThat(videoFilter(pipe.encodeCommand()))
-        .isEqualTo("trim=start=12,scale=-2:720," + TONE_MAPPED_TO_SDR);
+        .isEqualTo("trim=start=12,scale=-2:720," + TONE_MAPPED_TO_SDR + FRAME_GRID);
   }
 
   @Test

@@ -92,18 +92,18 @@ ffmpeg -hide_banner -nostdin -loglevel error
   copy with encoded audio (16): -c:v copy -bsf:v h264_mp4toannexb -tag:v avc1 -strict unofficial
           -c:a aac -ac 1 -b:a 8k
   x264:   -c:v libx264 -preset faster -tag:v avc1 -profile:v high -level:v 10
-          -vf scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p
+          -vf scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p,fps=24000/1001:eof_action=pass
           -b:v 6000 -maxrate 6000 -bufsize 12000 -c:a aac -ac 1 -b:a 8k
           -r:v:0 24000/1001 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6
           -sc_threshold:v:0 0 -g:v:0 145                      (fixture 11: -g:v:0 143)
   svtav1: -c:v libsvtav1 -preset 10 -level:v 20
-          -vf scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p
+          -vf scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p,fps=24000/1001:eof_action=pass
           -crf 35 -maxrate 6000 -svtav1-params mbr-overshoot-pct=0:lp=1
           -c:a aac -ac 1 -b:a 8k
           -r:v:0 24000/1001 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6
           -g:v:0 145 -keyint_min:v:0 145
   x265:   -c:v libx265 -preset veryfast -tag:v hvc1 -profile:v main
-          -vf scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p
+          -vf scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p,fps=24000/1001:eof_action=pass
           -b:v 6000 -maxrate 6000 -bufsize 12000 -c:a aac -ac 1 -b:a 8k
           -r:v:0 24000/1001 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6
           -x265-params no-scenecut=1:no-open-gop=1:level-idc=10:high-tier=0:pools=none:frame-threads=1:log-level=error
@@ -252,7 +252,7 @@ Timescale 24000 unless stated. `n@t` means segment n starts at t seconds.
 | 1 | `01-encode-cfr.fmp4` | 0 | Constant 23.976 fps libx264, 66 s, under the verified GOP of 145 frames. 11 segments: 0@0, 1@6.006 … 7@42.0003 … 10@60.018. The only keyframes are the forced ones, the first frame at or after each boundary (frames 0, 144, 288 … 864, 1007, 1151, 1295, 1439), so the GOP never fires and every segment holds one keyframe-first fragment. The list ends at 66 s, which no frame reaches. |
 | 1b | `01-encode-cfr-seek30.fmp4` | 5 | Encoded replacement attempt from segment 5, seeking one period early (`-ss 24`): starts at 24.024 s, 1007 frames, nothing padded from zero. Segment 4 (the first frame, a keyframe, and 5 non-sync fragments) is discarded preroll. The list `30,36,…,66` forces the frames 1 forced (720, 864, 1007, 1151, 1295, 1439), so every delivered segment, 5–10, starts on exactly 1's ticks. Ends with one audio-only fragment. |
 | 2 | `02-copy-irregular-keyframes.fmp4` | 0 | Timescale 12288 (24 fps). Keyframes only at 0, 6.5, 12, 18, 24.5, 30, 36.5, 42, 48, 54.5, 60 s. 11 segments, one keyframe each. Keyframes exactly on a boundary (12, 18, 30, 42, 48, 60 s) open that boundary's segment. |
-| 3 | `03-encode-vfr.fmp4` | 0 | VFR source (1068 frames, avg 16.2 fps on the 23.976 grid, first frame at 41.7 ms) encoded under `-r`: 1582 constant-rate frames, the same count as the HLS recipe's output. The list forces the first frame at or after each boundary (6.006, 12.012 … s, the same ticks as 1), exactly one keyframe in every interval, 11 segments. |
+| 3 | `03-encode-vfr.fmp4` | 0 | VFR source (1068 frames, avg 16.2 fps on the 23.976 grid, first frame at 41.7 ms) encoded through `fps` and `-r`: 1581 constant-rate frames, the same count as the HLS recipe's output. The list forces the first frame at or after each boundary (6.006, 12.012 … s, the same ticks as 1), exactly one keyframe in every interval, 11 segments. |
 | 4 | `04-copy-vfr-bframes.fmp4` | 0 | VFR stream copy with B-frames and one or two keyframes per interval. Keyframes at 5.922, 29.988, 47.922 and 59.976 s, just before a boundary, stay in the earlier segment. The keyframe meant for 17.95 s landed at 18.017 s (dropped frames) and opens segment 3. |
 | 5a | `05-encode-late-start.fmp4` | 0 | MPEG-TS source whose timestamps begin at 12 s. The container start is the AAC priming frame (11.978667 s), so video starts at 0.0417 s (encode): segment 0, not 2. The server advertises 6 segments for the 30.051 s source, and the last output frame (30.030 s) is the first at or after 30 s, so the list forces it: 6 segments, the last a 1-frame segment 5 with no audio-only fragment after it. |
 | 5b | `05-copy-late-start.fmp4` | 0 | Timescale 90000. The same source copied with `-bsf:a aac_adtstoasc`: video starts at 0.0213 s, audio at 0 with no priming frame, keyframes every 2.002 s, 5 segments. |
@@ -261,7 +261,7 @@ Timescale 24000 unless stated. `n@t` means segment n starts at t seconds.
 | 7 | `07-copy-start0.fmp4` | 0 | 2.002 s-GOP 23.976 fps copy from the start: 11 segments of 3 keyframes each. |
 | 7b | `07-copy-seek30.fmp4` | 5 | Stream-copy replacement attempt at `-ss 30`. The seek lands on the keyframe at 28.028 s (segment 4 < 5). That keyframe fragment and the non-sync fragment after it (2 fragments) are discarded preroll. Segments 5–10 carry exactly 7's video samples at the same ticks. Their audio is the same packets at the same times, but each fragment starts one AAC frame earlier (see findings). |
 | 8 | (pairs over 1, 5b, 7, 9, 13, 16) | – | `initializationSegmentIdentityPairs`: `ftyp`+`moov` is byte-identical between the start-0 and seek recordings for libx264 (1368 B), stream copy (1328 B), the MPEG-TS stream copy (1305 B), stream copy with encoded audio (1348 B), SVT-AV1 (1357 B) and libx265 (3870 B). `initializationSegmentDifferencePairs`: the encode and copy initialization segments of the same source differ. Each initialization segment has a zero edit list and zero `trex` defaults. |
-| 9 | `09-svtav1-vfr.fmp4` | 0 | The VFR source through SVT-AV1 (145-frame GOP + the list): 1582 frames, exactly one keyframe in every interval, segment starts on exactly the ticks of 3 (libx264). SVT-AV1 honours the forced keyframe. No B-frame reordering, so composition offsets are 0. |
+| 9 | `09-svtav1-vfr.fmp4` | 0 | The VFR source through SVT-AV1 (145-frame GOP + the list): 1581 frames, exactly one keyframe in every interval, segment starts on exactly the ticks of 3 (libx264). SVT-AV1 honours the forced keyframe. No B-frame reordering, so composition offsets are 0. |
 | 9b | `09-svtav1-vfr-seek30.fmp4` | 5 | The same as a replacement attempt from segment 5, seeking one period early (`-ss 24`): starts at 24.024 s, 1007 frames, no padding. Segment 4 (one keyframe) is discarded preroll. Every delivered segment, 5–10, starts on exactly 9's ticks, including segment 5 at 30.030 s, which a seek to 30 s itself missed (see Observations). |
 | 10 | `10-copy-gop-exceeds-period.fmp4` | 0 | A copy with a keyframe every 10.01 s. The sync-first fragment at 20.02 s (fragment 20) is segment 3 while 2 is expected. It closes segment 1 (10.01–20.02 s, fragments 10–19), so segments 0 and 1 are delivered, then grouping fails with `SKIPPED_SEGMENT_NUMBER` and fragment 20 onwards is never grouped. |
 | 11 | `11-encode-cfr-floored-gop.fmp4` | 0 | The unverified-encoder case: the first 30 s of 1 under the floored GOP of 143 frames. The GOP keyframe one frame before every later boundary (frames 143, 287, 431, 575) and on the last frame (719) is a 1-frame keyframe-first fragment inside the earlier interval, so each of the 5 segments holds two keyframes, and every segment still opens at its forced keyframe. |
@@ -459,8 +459,8 @@ Reproduced:
     seek to 30 s starts at 28.028 s, which is preroll.
   - The HLS recipe starts a stream-copy replacement attempt's segments at 28.028, 34.034 and 40.040 s.
 - Frame rate:
-  - `-r` with no `-fps_mode` yields the same constant-rate frames as the HLS recipe on a VFR
-    source (1582 = 1582).
+  - `fps` followed by `-r` with no `-fps_mode` yields the same constant-rate frames as the HLS
+    recipe on a VFR source (1581 = 1581).
   - After a seek it pads nothing. An explicit `-fps_mode cfr` after `-ss 24` pads from zero
     (1583 frames starting at 0, against 1007 starting at 24.024 s).
 - SVT-AV1:

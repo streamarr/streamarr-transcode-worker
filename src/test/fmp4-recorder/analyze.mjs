@@ -88,8 +88,8 @@ const FIXTURES = [
   },
   {
     name: '03-encode-vfr', source: 'vfr.mp4', mode: 'encode', encoder: 'libx264', seek: 0, start: 0,
-    proves: 'Variable-frame-rate source (avg 16.2 fps on a 23.976 grid) encoded with libx264 under ' +
-      '-r 23.976 and no -fps_mode: constant-rate output starting at the first source frame (41.7 ms); the forced ' +
+    proves: 'Variable-frame-rate source (avg 16.2 fps on a 23.976 grid) encoded with libx264 through ' +
+      'fps=24000/1001 and -r 23.976 with no -fps_mode: constant-rate output starting at the first source frame (41.7 ms); the forced ' +
       'keyframe times put a keyframe on the first frame at or after each boundary, one in every interval.',
     hlsComparisons: [
       hlsComparison('03-encode-vfr.hls-recipe', 'hls-recipe', { expect: false }),
@@ -167,7 +167,7 @@ const FIXTURES = [
   },
   {
     name: '09-svtav1-vfr', source: 'vfr.mp4', mode: 'encode', encoder: 'libsvtav1', seek: 0, start: 0,
-    proves: 'Irregular variable-frame-rate source through SVT-AV1 with -r 23.976, the verified-encoder GOP of ' +
+    proves: 'Irregular variable-frame-rate source through SVT-AV1 with fps and -r 23.976, the verified-encoder GOP of ' +
       '145 frames and the forced keyframe times: one keyframe in every interval, on the same frames libx264 ' +
       'chose in 03.',
     hlsComparisons: [
