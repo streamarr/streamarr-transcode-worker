@@ -5451,7 +5451,7 @@ class WorkerMediaSmokeTest {
   // With the server's keyframe positions 20 s and 21 s, the 44.1 kHz source's AAC and AC-3 audio
   // starts 9 s and 8 s of whole frames before 30 s.
   @ParameterizedTest(name = "{0}, keyframe {1}")
-  @CsvSource({"ac3,", "eac3,", "libopus,", "aac, 20", "ac3, 21"})
+  @CsvSource({"ac3,", "eac3,", "libopus,", "flac,", "alac,", "aac, 20", "ac3, 21"})
   @DisplayName(
       "Should open the replacement's audio with a frame on its first segment's start and leave no"
           + " gap after the start attempt's audio when an encoded replacement attempt encodes its"

@@ -1299,7 +1299,7 @@ class FfmpegCommandBuilderTest {
   }
 
   @ParameterizedTest(name = "{0}")
-  @MethodSource("audioEncodersThatPrime")
+  @MethodSource("audioEncoders")
   @DisplayName(
       "Should start the encoder's input a whole number of frames, less its priming, before the"
           + " first segment's start, from its seek, when an encoded replacement attempt without the"
@@ -1319,37 +1319,45 @@ class FfmpegCommandBuilderTest {
     assertThat(cmd)
         .containsSequence(
             "-af",
-            encoder.input() + ",asetpts=PTS+" + shift + ",atrim=start=30,asetpts=PTS-" + shift,
+            encoder.input()
+                + "asetpts='PTS+"
+                + shift
+                + "',atrim=start=30,asetpts='PTS-"
+                + shift
+                + "'",
             "-c:a",
             encoder.codec());
   }
 
   // Each encoder's frame and the lead of its first input sample over its first frame without
   // priming, in samples at its sample rate SR, as the pinned FFmpeg writes them. The input is the
-  // stereo conversion each encoder takes.
-  static Stream<AudioEncoderCase> audioEncodersThatPrime() {
+  // stereo conversion each encoder takes; FFmpeg chooses ALAC's. A FLAC frame is the longest FLAC
+  // block size that lasts at most 105 ms, as FFmpeg's FLAC encoder chooses it.
+  static Stream<AudioEncoderCase> audioEncoders() {
     return Stream.of(
         AudioEncoderCase.builder()
             .codec("aac")
-            .input(AAC_STEREO_INPUT.substring(0, AAC_STEREO_INPUT.length() - 1))
+            .input(AAC_STEREO_INPUT)
             .samplesPerFrame("1024")
             .lead("0")
             .build(),
         AudioEncoderCase.builder()
             .codec("ac3")
-            .input("aformat=sample_fmts=fltp:sample_rates=48000|44100|32000:channel_layouts=stereo")
+            .input(
+                "aformat=sample_fmts=fltp:sample_rates=48000|44100|32000:channel_layouts=stereo,")
             .samplesPerFrame("1536")
             .lead("1280")
             .build(),
         AudioEncoderCase.builder()
             .codec("eac3")
-            .input("aformat=sample_fmts=fltp:sample_rates=48000|44100|32000:channel_layouts=stereo")
+            .input(
+                "aformat=sample_fmts=fltp:sample_rates=48000|44100|32000:channel_layouts=stereo,")
             .samplesPerFrame("1536")
             .lead("1280")
             .build(),
         AudioEncoderCase.builder()
             .codec("opus")
-            .input("aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo")
+            .input("aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,")
             .samplesPerFrame("960")
             .lead("840")
             .build(),
@@ -1357,9 +1365,28 @@ class FfmpegCommandBuilderTest {
             .codec("libopus")
             .input(
                 "aformat=sample_fmts=s16|flt:sample_rates=48000|24000|16000|12000|8000"
-                    + ":channel_layouts=stereo")
+                    + ":channel_layouts=stereo,")
             .samplesPerFrame("SR/50")
             .lead("SR*27/2000")
+            .build(),
+        AudioEncoderCase.builder()
+            .codec("alac")
+            .input("")
+            .samplesPerFrame("4096")
+            .lead("0")
+            .build(),
+        AudioEncoderCase.builder()
+            .codec("flac")
+            .input("aformat=sample_fmts=s16|s32:channel_layouts=stereo,")
+            .samplesPerFrame(
+                "if(gte(trunc(SR*105/1000),32768),32768,if(gte(trunc(SR*105/1000),16384),16384,"
+                    + "if(gte(trunc(SR*105/1000),8192),8192,if(gte(trunc(SR*105/1000),4608),4608,"
+                    + "if(gte(trunc(SR*105/1000),4096),4096,if(gte(trunc(SR*105/1000),2304),2304,"
+                    + "if(gte(trunc(SR*105/1000),2048),2048,if(gte(trunc(SR*105/1000),1152),1152,"
+                    + "if(gte(trunc(SR*105/1000),1024),1024,if(gte(trunc(SR*105/1000),576),576,"
+                    + "if(gte(trunc(SR*105/1000),512),512,if(gte(trunc(SR*105/1000),256),256,"
+                    + "192))))))))))))")
+            .lead("0")
             .build());
   }
 
@@ -1373,12 +1400,12 @@ class FfmpegCommandBuilderTest {
 
   @Test
   @DisplayName(
-      "Should trim the encoded audio exactly at the first segment's start when an encoded"
-          + " replacement attempt encodes its audio with an encoder whose frame length varies")
-  void shouldTrimTheEncodedAudioAtTheFirstSegmentsStartWhenTheAudioEncodersFrameLengthVaries() {
-    var cmd = command(encodedAudioFromSegment5("flac"), "libx264");
+      "Should trim the encoded audio at the seek when an encoded replacement attempt encodes its"
+          + " audio with an encoder whose frames the worker does not know")
+  void shouldTrimTheEncodedAudioAtTheSeekWhenTheWorkerDoesNotKnowTheAudioEncodersFrames() {
+    var cmd = command(encodedAudioFromSegment5("libmp3lame"), "libx264");
 
-    assertThat(cmd).containsSequence("-af", "atrim=start=30", "-c:a", "flac");
+    assertThat(cmd).containsSequence("-af", "atrim=start=24", "-c:a", "libmp3lame");
   }
 
   @Test
@@ -1434,12 +1461,13 @@ class FfmpegCommandBuilderTest {
   private static String aacStereoFromTheFirstSegment(String start, String framesAhead) {
     var shift = aacShift(framesAhead);
     return AAC_STEREO_INPUT
-        + "asetpts=PTS+"
+        + "asetpts='PTS+"
         + shift
-        + ",atrim=start="
+        + "',atrim=start="
         + start
-        + ",asetpts=PTS-"
-        + shift;
+        + ",asetpts='PTS-"
+        + shift
+        + "'";
   }
 
   // The whole 1,024-sample frames of FFmpeg's AAC encoder that fit in framesAhead seconds, whose
@@ -2669,12 +2697,12 @@ class FfmpegCommandBuilderTest {
         .containsSequence(
             "-af",
             AAC_STEREO_INPUT
-                + "asetpts=PTS+"
+                + "asetpts='PTS+"
                 + aacShift("6")
-                + ",apad,asetpts='if(isnan(PTS),60/TB+N/SR/TB,PTS)',atrim=start=60"
-                + ",asetpts=PTS-"
+                + "',apad,asetpts='if(isnan(PTS),60/TB+N/SR/TB,PTS)',atrim=start=60"
+                + ",asetpts='PTS-"
                 + aacShift("6")
-                + ",atrim=end=67",
+                + "',atrim=end=67",
             "-c:a",
             "aac");
   }
@@ -2830,12 +2858,12 @@ class FfmpegCommandBuilderTest {
         .containsSequence(
             "-af",
             AAC_STEREO_INPUT
-                + "asetpts=PTS+"
+                + "asetpts='PTS+"
                 + aacShift("6")
-                + ",apad,asetpts='if(isnan(PTS),60/TB+N/SR/TB,PTS)',atrim=start=60"
-                + ",asetpts=PTS-"
+                + "',apad,asetpts='if(isnan(PTS),60/TB+N/SR/TB,PTS)',atrim=start=60"
+                + ",asetpts='PTS-"
                 + aacShift("6")
-                + ",atrim=end=67");
+                + "',atrim=end=67");
     assertThat(videoFilter(pipe.encodeCommand()))
         .startsWith("scale=")
         .endsWith(
