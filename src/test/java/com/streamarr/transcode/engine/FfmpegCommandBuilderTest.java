@@ -919,7 +919,7 @@ class FfmpegCommandBuilderTest {
     assertThat(cmd)
         .as("segment 3 starts at slot 10, 30 s")
         .containsSequence("-ss", "27", "-noaccurate_seek", "-i")
-        .containsSequence("-af", "atrim=start=30");
+        .containsSequence("-af", aacStereoFromTheFirstSegment("30", "2"));
     assertThat(videoFilter(cmd)).endsWith(FRAME_GRID + ",trim=start_pts=720");
   }
 
@@ -1266,15 +1266,100 @@ class FfmpegCommandBuilderTest {
                 + firstFrame);
   }
 
+  @ParameterizedTest(name = "{0}")
+  @CsvSource(
+      delimiter = ';',
+      value = {
+        "aac; aformat=sample_fmts=fltp:sample_rates=96000|88200|64000|48000|44100|32000|24000|22050"
+            + "|16000|12000|11025|8000|7350:channel_layouts=stereo; 1024; 0",
+        "ac3; aformat=sample_fmts=fltp:sample_rates=48000|44100|32000:channel_layouts=stereo; 1536;"
+            + " 1280",
+        "eac3; aformat=sample_fmts=fltp:sample_rates=48000|44100|32000:channel_layouts=stereo; 1536;"
+            + " 1280",
+        "opus; aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo; 960; 840",
+        "libopus; aformat=sample_fmts=s16|flt:sample_rates=48000|24000|16000|12000|8000"
+            + ":channel_layouts=stereo; SR/50; SR*27/2000"
+      })
+  @DisplayName(
+      "Should start the encoder's input a whole number of frames, less its priming, before the"
+          + " first segment's start, about a second after the seek, when an encoded replacement"
+          + " attempt encodes its audio")
+  void shouldStartAnEncodedAudioFrameOnTheFirstSegmentsStartWhenAnEncodedReplacementAttemptSeeks(
+      String codec, String encoderInput, String samplesPerFrame, String lead) {
+    var cmd = command(encodedAudioFromSegment5(codec), "libx264");
+
+    var shift = "(" + lead + "+floor(5*SR/(" + samplesPerFrame + "))*(" + samplesPerFrame + "))";
+    assertThat(cmd)
+        .containsSequence(
+            "-af",
+            encoderInput
+                + ",asetpts=PTS+"
+                + shift
+                + "/SR/TB,atrim=start=30,asetpts=PTS-"
+                + shift
+                + "/SR/TB",
+            "-c:a",
+            codec);
+  }
+
   @Test
   @DisplayName(
-      "Should trim the encoded audio at the first segment's start when an encoded replacement"
-          + " attempt decodes from an earlier keyframe")
-  void shouldTrimTheEncodedAudioAtTheFirstSegmentsStartWhenAnEncodedReplacementAttemptSeeks() {
-    var cmd =
-        command(request(TranscodeMode.FULL_TRANSCODE).startSequenceNumber(5).build(), "libx264");
+      "Should trim the encoded audio exactly at the first segment's start when an encoded"
+          + " replacement attempt encodes its audio with an encoder whose frame length varies")
+  void shouldTrimTheEncodedAudioAtTheFirstSegmentsStartWhenTheAudioEncodersFrameLengthVaries() {
+    var cmd = command(encodedAudioFromSegment5("flac"), "libx264");
 
-    assertThat(cmd).containsSequence("-af", "atrim=start=30", "-c:a", "aac");
+    assertThat(cmd).containsSequence("-af", "atrim=start=30", "-c:a", "flac");
+  }
+
+  @Test
+  @DisplayName(
+      "Should start the encoder's input on the first segment's start less its priming when the"
+          + " server's keyframe lies less than a second before that start")
+  void shouldStartTheEncodersInputOnTheFirstSegmentsStartWhenTheKeyframeLiesWithinASecond() {
+    var cmd =
+        command(
+            request(TranscodeMode.FULL_TRANSCODE)
+                .startSequenceNumber(5)
+                .seekPosition(Optional.of(Duration.ofMillis(29_500)))
+                .build(),
+            "libx264");
+
+    assertThat(cmd).containsSequence("-af", aacStereoFromTheFirstSegment("30", "0"));
+  }
+
+  private static TranscodeRequest encodedAudioFromSegment5(String codec) {
+    return request(
+            decision(TranscodeMode.FULL_TRANSCODE)
+                .audioDecision(
+                    AudioDecision.builder()
+                        .mode(AudioMode.TRANSCODE)
+                        .codec(codec)
+                        .channels(2)
+                        .bitrate(128_000L)
+                        .build())
+                .build())
+        .startSequenceNumber(5)
+        .build();
+  }
+
+  // The AAC stereo audio of an encoded replacement attempt whose first segment starts at start:
+  // the encoder's input starts the whole frames that fit in framesAhead seconds before that start.
+  private static String aacStereoFromTheFirstSegment(String start, String framesAhead) {
+    var shift = aacShift(framesAhead);
+    return AAC_STEREO_INPUT
+        + "asetpts=PTS+"
+        + shift
+        + ",atrim=start="
+        + start
+        + ",asetpts=PTS-"
+        + shift;
+  }
+
+  // The whole 1,024-sample frames of FFmpeg's AAC encoder that fit in framesAhead seconds, whose
+  // first frame is all priming.
+  private static String aacShift(String framesAhead) {
+    return "(0+floor(" + framesAhead + "*SR/(1024))*(1024))/SR/TB";
   }
 
   @Test
@@ -2259,7 +2344,16 @@ class FfmpegCommandBuilderTest {
             "-map",
             "0:0")
         .containsSequence(
-            "-af", "atrim=start=18", "-c:a", "aac", "-ac", "2", "-b:a", "128k", "-f", "mp4");
+            "-af",
+            aacStereoFromTheFirstSegment("18", "5"),
+            "-c:a",
+            "aac",
+            "-ac",
+            "2",
+            "-b:a",
+            "128k",
+            "-f",
+            "mp4");
   }
 
   @Test
@@ -2460,29 +2554,41 @@ class FfmpegCommandBuilderTest {
             ",format=yuv420p,fps=24000/1001:eof_action=pass,tpad=stop=-1:stop_mode=clone,trim=start_pts=1295:end_pts=1583");
   }
 
-  @ParameterizedTest
-  @CsvSource({"0, 0", "10, 54"})
+  @Test
   @DisplayName(
       "Should append digital silence that starts where the attempt starts and runs past the"
           + " advertised end when an encode pads its audio")
-  void shouldAppendSilenceFromTheAttemptsStartPastTheAdvertisedEndWhenAnEncodePadsItsAudio(
-      int startSequenceNumber, String start) {
-    var cmd =
-        command(
-            heldAndPadded(TranscodeMode.FULL_TRANSCODE)
-                .startSequenceNumber(startSequenceNumber)
-                .build(),
-            "libx264");
+  void shouldAppendSilenceFromTheAttemptsStartPastTheAdvertisedEndWhenAnEncodePadsItsAudio() {
+    var cmd = command(heldAndPadded(TranscodeMode.FULL_TRANSCODE).build(), "libx264");
 
     assertThat(cmd)
         .containsSequence(
             "-af",
             AAC_STEREO_INPUT
-                + "apad,asetpts='if(isnan(PTS),"
-                + start
-                + "/TB+N/SR/TB,PTS)',atrim=start="
-                + start
-                + ":end=67",
+                + "apad,asetpts='if(isnan(PTS),0/TB+N/SR/TB,PTS)',atrim=start=0:end=67",
+            "-c:a",
+            "aac");
+  }
+
+  @Test
+  @DisplayName(
+      "Should append digital silence from the first segment's start within the shifted audio when"
+          + " an encoded replacement attempt pads its audio")
+  void shouldAppendSilenceFromTheFirstSegmentsStartWhenAnEncodedReplacementAttemptPadsItsAudio() {
+    var cmd =
+        command(
+            heldAndPadded(TranscodeMode.FULL_TRANSCODE).startSequenceNumber(10).build(), "libx264");
+
+    assertThat(cmd)
+        .containsSequence(
+            "-af",
+            AAC_STEREO_INPUT
+                + "asetpts=PTS+"
+                + aacShift("5")
+                + ",apad,asetpts='if(isnan(PTS),60/TB+N/SR/TB,PTS)',atrim=start=60"
+                + ",asetpts=PTS-"
+                + aacShift("5")
+                + ",atrim=end=67",
             "-c:a",
             "aac");
   }
@@ -2596,7 +2702,7 @@ class FfmpegCommandBuilderTest {
                 .build(),
             "libx264");
 
-    assertThat(cmd).containsSequence("-af", "atrim=start=54", "-c:a", "aac");
+    assertThat(cmd).containsSequence("-af", aacStereoFromTheFirstSegment("60", "5"), "-c:a", "aac");
   }
 
   @Test
@@ -2606,7 +2712,7 @@ class FfmpegCommandBuilderTest {
     var cmd =
         command(request(TranscodeMode.FULL_TRANSCODE).startSequenceNumber(10).build(), "libx264");
 
-    assertThat(cmd).containsSequence("-af", "atrim=start=60");
+    assertThat(cmd).containsSequence("-af", aacStereoFromTheFirstSegment("60", "5"));
     assertThat(videoFilter(cmd)).doesNotContain("tpad", "end_pts");
   }
 
@@ -2638,7 +2744,12 @@ class FfmpegCommandBuilderTest {
         .containsSequence(
             "-af",
             AAC_STEREO_INPUT
-                + "apad,asetpts='if(isnan(PTS),54/TB+N/SR/TB,PTS)',atrim=start=54:end=67");
+                + "asetpts=PTS+"
+                + aacShift("5")
+                + ",apad,asetpts='if(isnan(PTS),60/TB+N/SR/TB,PTS)',atrim=start=60"
+                + ",asetpts=PTS-"
+                + aacShift("5")
+                + ",atrim=end=67");
     assertThat(videoFilter(pipe.encodeCommand()))
         .startsWith("scale=")
         .endsWith(

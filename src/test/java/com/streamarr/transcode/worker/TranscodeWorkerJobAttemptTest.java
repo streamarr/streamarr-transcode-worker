@@ -591,7 +591,9 @@ class TranscodeWorkerJobAttemptTest {
           .endsWith(
               ",fps=24/1:eof_action=pass,tpad=stop=-1:stop_mode=clone,trim=start_pts=1296:end_pts=2028");
       assertThat(command.get(command.indexOf("-af") + 1))
-          .endsWith("apad,asetpts='if(isnan(PTS),54/TB+N/SR/TB,PTS)',atrim=start=54:end=85.5");
+          .endsWith(
+              "apad,asetpts='if(isnan(PTS),60/TB+N/SR/TB,PTS)',atrim=start=60"
+                  + ",asetpts=PTS-(0+floor(5*SR/(1024))*(1024))/SR/TB,atrim=end=85.5");
     }
   }
 

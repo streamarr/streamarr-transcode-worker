@@ -67,8 +67,9 @@ const FIXTURES = [
   {
     name: '01-encode-cfr-seek30', source: 'cfr.mp4', mode: 'encode', encoder: 'libx264', seek: 30, start: 5,
     proves: 'An encoded replacement attempt from segment 5 (a job seeking to 30 s) without the server\'s keyframe ' +
-      'position reads from one period early, -ss 24 -noaccurate_seek, and trims after fps at frame 720 and its ' +
-      'audio at 30 s: it starts at 30.030 s, pads nothing from zero, and has no preroll. The forced keyframe ' +
+      'position reads from one period early, -ss 24 -noaccurate_seek, and trims after fps at frame 720: its ' +
+      'video starts at 30.030 s, it pads nothing from zero, and has no video preroll. Its audio starts whole AAC ' +
+      'frames before 30 s, so that a frame starts on 30 s. The forced keyframe ' +
       'times 30, 36, ..., 66 are absolute, so ' +
       'it forces the frames the start-0 recording forced (720, 864, 1007, 1151, 1295, 1439) and every delivered ' +
       'segment starts on the start-0 recording\'s ticks.',
@@ -351,7 +352,8 @@ const RECIPE =
   '-avoid_negative_ts disabled -start_at_zero -max_muxing_queue_size 128 -max_interleave_delta 10000000 <codec args> [copy: -bsf:a aac_adtstoasc ' +
   'when copying AAC, then -b:a 0] [video copy with encoded audio (fixture 16): -c:v copy -c:a aac -ac 1 -b:a 8k] [encode: -r:v:0 24000/1001 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6 ' +
   'in whole seconds, K = startSequenceNumber, N = mediaSegmentCount; -vf ending fps=24000/1001:eof_action=pass, ' +
-  'then for an encode with K > 0 trim=start_pts=ceil(K*6 x 23.976) and -af atrim=start=K*6 ' +
+  'then for an encode with K > 0 trim=start_pts=ceil(K*6 x 23.976) and -af ending atrim=start=K*6 between ' +
+  'asetpts shifts by the whole AAC frames that fit in 5 s ' +
   '(-sc_threshold:v:0 0 for libx264, -x265-params no-scenecut=1:no-open-gop=1 for libx265) -g:v:0 145 = ceil(6 x 23.976) + 1 for an encoder verified to honour forced ' +
   'keyframes (libx264, SVT-AV1, libx265), else 143 = floor(6 x 23.976) (fixtures 11 and 13c) (-keyint_min:v:0 with the ' +
   'same value for SVT-AV1)] ' +

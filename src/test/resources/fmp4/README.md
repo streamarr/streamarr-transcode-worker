@@ -161,8 +161,10 @@ A replacement attempt from segment K > 0 is a job that seeks to K × 6 (`seekSec
 7b, 9b and 13d). A stream copy passes that seek to FFmpeg (`-ss 30`) and lands on the keyframe at or before
 it. An encode without the server's keyframe position reads from one period earlier, (K − 1) × 6
 (`-ss 24 -noaccurate_seek`), decodes up to K × 6 and encodes only from there: `fps` then
-`trim=start_pts=720` cut its pictures at frame 720 (30.030 s), the first frame at or after 30 s, and
-`atrim=start=30` cuts its encoded audio at 30 s. Only the AAC priming frame lies before 30 s.
+`trim=start_pts=720` cut its pictures at frame 720 (30.030 s), the first frame at or after 30 s. Its
+encoded audio starts the whole 1,024-sample AAC frames that fit in the 5 s before 30 s, so that an
+AAC frame starts on 30 s: the two `asetpts` around `atrim=start=30` move the cut by that many samples.
+The producer drops the audio before 30 s.
 
 The frame-count GOP follows ADR 0037's amended ceiling: 145 = ceil(6 × 23.976) + 1 for an encoder
 verified to honour time-based forced keyframes and to restart its GOP count at each one (libx264,

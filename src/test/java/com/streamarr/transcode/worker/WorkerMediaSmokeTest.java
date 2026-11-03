@@ -5448,6 +5448,39 @@ class WorkerMediaSmokeTest {
         .isLessThan(listedStart + lastAudioBefore.duration());
   }
 
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"ac3", "eac3", "libopus"})
+  @DisplayName(
+      "Should open the replacement's audio with a frame on its first segment's start and leave no"
+          + " gap after the start attempt's audio when an encoded replacement attempt encodes audio"
+          + " whose encoder primes part of a frame")
+  void shouldOpenTheReplacementsAudioOnItsFirstSegmentsStartWhenTheAudioEncoderPrimesPartOfAFrame(
+      String codec) throws Exception {
+    var source = pictureGapSource(PictureGapSource.MP4_WITHOUT_B_FRAMES);
+    var startAttemptJob = pictureGapJob(source);
+    startAttemptJob.getDecisionBuilder().getAudioBuilder().setCodec(codec);
+    var startAttempt =
+        execute(engine(softwareCapabilities()), source.getParent(), startAttemptJob.build());
+    var replacementJob = pictureGapJob(source);
+    replacementJob.getDecisionBuilder().getAudioBuilder().setCodec(codec);
+    replacementJob.getExecutionBuilder().setStartSequenceNumber(3).setSeekPositionSeconds(30);
+
+    var replacement =
+        execute(engine(softwareCapabilities()), source.getParent(), replacementJob.build());
+
+    var replaced = Mp4Samples.read(replacement.contentOf(List.of("init.mp4", segmentName(3))));
+    var listedStart = 30 * replaced.audioTrack().timescale();
+    assertThat(replaced.samplesOf(replaced.audioTrack()).getFirst().presentationTime())
+        .as("the replacement's audio opens on the listed start")
+        .isEqualTo(listedStart);
+    var before = Mp4Samples.read(startAttempt.contentOf(List.of("init.mp4", segmentName(2))));
+    var lastAudioBefore = before.samplesOf(before.audioTrack()).getLast();
+    assertThat(lastAudioBefore.end())
+        .as("the start attempt's segment 2 audio reaches the listed start, by less than a frame")
+        .isGreaterThanOrEqualTo(listedStart)
+        .isLessThan(listedStart + lastAudioBefore.duration());
+  }
+
   // The decode time, as the worker's keyframe probe reports it, of the last keyframe that
   // presents at or before the time: the keyframe that the server sends an encoded replacement
   // attempt whose first segment starts 0.5 s after that time.

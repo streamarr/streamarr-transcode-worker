@@ -66,13 +66,15 @@ X265=(-c:v libx265 -preset veryfast -tag:v hvc1 -profile:v main -vf "$SDR_VIDEO_
 X265_PARAMS=(-x265-params no-scenecut=1:no-open-gop=1:level-idc=10:high-tier=0:pools=none:frame-threads=1:log-level=error)
 AAC=(-c:a aac -ac 1 -b:a 8k)
 # An encoded replacement attempt from segment 5 decodes from its seek without FFmpeg's exact seek
-# (run's decode-only) and encodes from 30 s on: fps's frame 720 is the first frame at or after
-# 30 s, and the encoded audio starts at 30 s.
+# (run's decode-only) and encodes its video from 30 s on: fps's frame 720 is the first frame at or
+# after 30 s. Its encoded audio starts the whole AAC frames that fit in 5 s before 30 s, so that a
+# frame starts on 30 s.
 FROM_SEGMENT_5_VIDEO_FILTER="$SDR_VIDEO_FILTER,trim=start_pts=720"
 X264_FROM_SEGMENT_5=(-c:v libx264 -preset faster -tag:v avc1 -profile:v high -level:v 10 -vf "$FROM_SEGMENT_5_VIDEO_FILTER" -b:v 6000 -maxrate 6000 -bufsize 12000)
 SVT_FROM_SEGMENT_5=(-c:v libsvtav1 -preset 10 -level:v 20 -vf "$FROM_SEGMENT_5_VIDEO_FILTER" -crf 35 -maxrate 6000 -svtav1-params mbr-overshoot-pct=0:lp=1)
 X265_FROM_SEGMENT_5=(-c:v libx265 -preset veryfast -tag:v hvc1 -profile:v main -vf "$FROM_SEGMENT_5_VIDEO_FILTER" -b:v 6000 -maxrate 6000 -bufsize 12000)
-AAC_FROM_SEGMENT_5=(-af atrim=start=30 "${AAC[@]}")
+AAC_SHIFT_FROM_SEGMENT_5="(0+floor(5*SR/(1024))*(1024))/SR/TB"
+AAC_FROM_SEGMENT_5=(-af "aformat=sample_fmts=fltp:sample_rates=96000|88200|64000|48000|44100|32000|24000|22050|16000|12000|11025|8000|7350:channel_layouts=mono,asetpts=PTS+$AAC_SHIFT_FROM_SEGMENT_5,atrim=start=30,asetpts=PTS-$AAC_SHIFT_FROM_SEGMENT_5" "${AAC[@]}")
 # The worker declares a copied stream's bitrate unknown (-b:a 0): the mp4 muxer would otherwise write
 # the demuxer's measurement, which a seek into an MPEG-TS source changes, into the initialization segment.
 # A copy of the H.264 sources carries avc1, with its record built from Annex B parameter sets, and

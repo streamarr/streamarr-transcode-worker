@@ -135,23 +135,37 @@ public class FfmpegCommandBuilder {
   private static final Map<Integer, String> AC3_CHANNEL_LAYOUTS =
       Map.of(1, "mono", 2, STEREO, 6, "5.1(side)");
 
+  // Each encoder's frame and the lead of its first input sample over its first frame without
+  // priming, in samples at its sample rate SR, as the pinned FFmpeg writes them: FFmpeg's AAC
+  // encoder primes a whole frame of 1,024 samples, AC-3 and E-AC-3 256 of 1,536, FFmpeg's opus
+  // encoder 120 of 960, and libopus 6.5 ms of 20 ms. A FLAC frame's length follows the sample rate.
   private static final Map<String, AudioEncoderInput> AUDIO_ENCODER_INPUTS =
       Map.of(
           "aac",
           AudioEncoderInput.of(
-              "fltp",
-              "96000|88200|64000|48000|44100|32000|24000|22050|16000|12000|11025|8000|7350",
-              DEFAULT_CHANNEL_LAYOUTS),
+                  "fltp",
+                  "96000|88200|64000|48000|44100|32000|24000|22050|16000|12000|11025|8000|7350",
+                  DEFAULT_CHANNEL_LAYOUTS)
+              .framedAs(new AudioFrames("1024", "0")),
           "ac3",
-          AudioEncoderInput.of("fltp", "48000|44100|32000", AC3_CHANNEL_LAYOUTS),
+          AudioEncoderInput.of("fltp", "48000|44100|32000", AC3_CHANNEL_LAYOUTS)
+              .framedAs(new AudioFrames("1536", "1280")),
           "eac3",
-          AudioEncoderInput.of("fltp", "48000|44100|32000", AC3_CHANNEL_LAYOUTS),
+          AudioEncoderInput.of("fltp", "48000|44100|32000", AC3_CHANNEL_LAYOUTS)
+              .framedAs(new AudioFrames("1536", "1280")),
           "opus",
-          AudioEncoderInput.of("fltp", "48000", Map.of(1, "mono", 2, STEREO)),
+          AudioEncoderInput.of("fltp", "48000", Map.of(1, "mono", 2, STEREO))
+              .framedAs(new AudioFrames("960", "840")),
           "libopus",
-          AudioEncoderInput.of("s16|flt", "48000|24000|16000|12000|8000", DEFAULT_CHANNEL_LAYOUTS),
+          AudioEncoderInput.of("s16|flt", "48000|24000|16000|12000|8000", DEFAULT_CHANNEL_LAYOUTS)
+              .framedAs(new AudioFrames("SR/50", "SR*27/2000")),
           "flac",
-          new AudioEncoderInput("s16|s32", Optional.empty(), DEFAULT_CHANNEL_LAYOUTS));
+          new AudioEncoderInput(
+              "s16|s32", Optional.empty(), DEFAULT_CHANNEL_LAYOUTS, Optional.empty()));
+
+  // How much earlier than the seek's whole frames an encoded replacement attempt's audio starts:
+  // the demuxer may deliver the first audio sample after the seek by up to this much.
+  private static final Duration AUDIO_AFTER_THE_SEEK = Duration.ofSeconds(1);
 
   // The longest argument Linux passes to a program: MAX_ARG_STRLEN, 32 pages, holds the argument
   // and its terminating NUL, and a page is at least 4 KiB.
@@ -392,20 +406,26 @@ public class FfmpegCommandBuilder {
     return firstSegmentStart - request.targetSegmentDuration();
   }
 
-  // Where an attempt that encodes video from a later segment starts encoding: its first segment's
-  // start, as it decodes from its seek up to there. An attempt that holds the last frame starts
-  // encoding at its seek instead, where the demuxer delivers a picture. tpad repeats the last
+  // Where an attempt that encodes video from a later segment starts encoding video: its first
+  // segment's start, as it decodes from its seek up to there. An attempt that holds the last frame
+  // starts at its seek instead, where the demuxer delivers a picture. tpad repeats the last
   // picture only after the demuxer reaches the end of the whole source, so a start after that
   // picture would hold back every encoded frame until the demuxer had read all of the audio. The
   // producer discards what that attempt encodes before its first segment as preroll. Empty for any
   // other attempt.
   private static Optional<Duration> encodingStart(TranscodeRequest request) {
-    if (!encodesVideo(request) || request.startSequenceNumber() == 0) {
-      return Optional.empty();
+    if (holdsLastFrame(request)) {
+      return firstSegmentStartOfAnEncode(request)
+          .map(_ -> inputSeekPosition(request))
+          .filter(Duration::isPositive);
     }
 
-    if (holdsLastFrame(request)) {
-      return Optional.of(inputSeekPosition(request)).filter(Duration::isPositive);
+    return firstSegmentStartOfAnEncode(request);
+  }
+
+  private static Optional<Duration> firstSegmentStartOfAnEncode(TranscodeRequest request) {
+    if (!encodesVideo(request) || request.startSequenceNumber() == 0) {
+      return Optional.empty();
     }
 
     return Optional.of(
@@ -595,9 +615,15 @@ public class FfmpegCommandBuilder {
     return Optional.of(AudioEncodeOptions.of(audio, sourceAudio.orElseThrow()));
   }
 
+  // The padding and the frame-aligned shift read the sample rate that the encoder takes, so the
+  // conversion to the encoder's input runs before them.
   private static Optional<String> audioFilter(AudioDecision audio, TranscodeRequest request) {
     var timing = timingFilter(audio, request);
-    if (!audio.padsWithSilenceToAdvertisedEnd()) {
+    var shifts =
+        firstSegmentStartOfAnEncode(request)
+            .flatMap(_ -> frameAlignedShift(audio, request))
+            .isPresent();
+    if (!audio.padsWithSilenceToAdvertisedEnd() && !shifts) {
       return timing;
     }
 
@@ -609,27 +635,63 @@ public class FfmpegCommandBuilder {
   // sample rate and layout, as for a decoded one, and apad's silence carries no timestamps, so
   // asetpts starts it at the attempt's start. atrim drops the silence before the start and ends
   // the padding. An attempt that encodes video from a later segment trims its encoded audio at
-  // that segment's start itself, as its seek no longer does: its first audio frame then starts on
-  // that start, and so overlaps the frame before it from another attempt by less than one frame.
-  // In a named layout's encode these filters follow its own: its resampler and limiter meet the
-  // end of the source instead of silence, its dither never reaches the silence, and no conversion
-  // replaces its layout with FFmpeg's default for the channel count.
+  // its first segment's start itself, as its seek no longer does. The padding ends after the shift
+  // back, on the attempt's own times. In a named layout's encode these filters follow its own: its
+  // resampler and limiter meet the end of the source instead of silence, its dither never reaches
+  // the silence, and no conversion replaces its layout with FFmpeg's default for the channel count.
   private static Optional<String> timingFilter(AudioDecision audio, TranscodeRequest request) {
-    var start = seekArgument(encodingStart(request).orElseGet(() -> inputSeekPosition(request)));
+    var firstSegmentStart = firstSegmentStartOfAnEncode(request);
+    var start = seekArgument(firstSegmentStart.orElseGet(() -> inputSeekPosition(request)));
+    var shift = firstSegmentStart.flatMap(_ -> frameAlignedShift(audio, request));
+    var shiftForward = shift.map(samples -> "asetpts=PTS+" + samples + ",").orElse("");
+    var shiftBack = shift.map(samples -> ",asetpts=PTS-" + samples).orElse("");
     if (audio.padsWithSilenceToAdvertisedEnd()) {
       var end =
           seekArgument(
               request.advertisedEnd().orElseThrow().plus(PADDED_AUDIO_RUN_PAST_ADVERTISED_END));
+      var endTrim = shift.map(_ -> shiftBack + ",atrim=end=" + end).orElse(":end=" + end);
       return Optional.of(
-          "apad,asetpts='if(isnan(PTS),"
+          shiftForward
+              + "apad,asetpts='if(isnan(PTS),"
               + start
               + "/TB+N/SR/TB,PTS)',atrim=start="
               + start
-              + ":end="
-              + end);
+              + endTrim);
     }
 
-    return encodingStart(request).map(_ -> "atrim=start=" + start);
+    return firstSegmentStart.map(_ -> shiftForward + "atrim=start=" + start + shiftBack);
+  }
+
+  // The encoder's first frame without priming starts on the first segment's start when its input
+  // starts the frame's lead, plus whole frames, before that start. The trim between the two shifts
+  // cuts the input there, at a time that depends on the sample rate the encoder takes, and so
+  // follows the conversion to that rate. The whole frames reach back to about a second after the
+  // seek, where the demuxer has delivered audio, so that the copy of a Dolby Vision source writes
+  // its audio from there, and its muxer, which writes nothing until each track has a sample, keeps
+  // only about a second of copied video back. Every frame from the first segment's start on then
+  // starts where the attempt that encodes from the start writes one, give or take less than a
+  // frame, and with no gap. Empty for an encoder whose frame length varies.
+  private static Optional<String> frameAlignedShift(AudioDecision audio, TranscodeRequest request) {
+    var firstSegmentStart = firstSegmentStartOfAnEncode(request).orElseThrow();
+    var reach = firstSegmentStart.minus(inputSeekPosition(request)).minus(AUDIO_AFTER_THE_SEEK);
+    if (reach.isNegative()) {
+      reach = Duration.ZERO;
+    }
+
+    var seconds = seekArgument(reach);
+    return Optional.ofNullable(AUDIO_ENCODER_INPUTS.get(audio.codec()))
+        .flatMap(AudioEncoderInput::frames)
+        .map(
+            frames ->
+                "("
+                    + frames.lead()
+                    + "+floor("
+                    + seconds
+                    + "*SR/("
+                    + frames.samples()
+                    + "))*("
+                    + frames.samples()
+                    + "))/SR/TB");
   }
 
   // Empty for an encoder not listed: FFmpeg then converts the padded audio before the encoder.
@@ -642,11 +704,20 @@ public class FfmpegCommandBuilder {
   // An encoder that takes any sample rate keeps the source's, and a channel count that the table
   // leaves out keeps FFmpeg's own choice of layout.
   private record AudioEncoderInput(
-      String sampleFormats, Optional<String> sampleRates, Map<Integer, String> channelLayouts) {
+      String sampleFormats,
+      Optional<String> sampleRates,
+      Map<Integer, String> channelLayouts,
+      Optional<AudioFrames> frames) {
 
     static AudioEncoderInput of(
         String sampleFormats, String sampleRates, Map<Integer, String> channelLayouts) {
-      return new AudioEncoderInput(sampleFormats, Optional.of(sampleRates), channelLayouts);
+      return new AudioEncoderInput(
+          sampleFormats, Optional.of(sampleRates), channelLayouts, Optional.empty());
+    }
+
+    AudioEncoderInput framedAs(AudioFrames audioFrames) {
+      return new AudioEncoderInput(
+          sampleFormats, sampleRates, channelLayouts, Optional.of(audioFrames));
     }
 
     String conversionFor(int channels) {
@@ -658,6 +729,9 @@ public class FfmpegCommandBuilder {
               .orElse("");
     }
   }
+
+  // FFmpeg expressions of the sample rate SR.
+  private record AudioFrames(String samples, String lead) {}
 
   private static List<String> copiedAudioArgs(String codec) {
     var args = new ArrayList<>(List.of("-c:a", "copy"));
