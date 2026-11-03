@@ -163,9 +163,10 @@ public class FfmpegCommandBuilder {
           new AudioEncoderInput(
               "s16|s32", Optional.empty(), DEFAULT_CHANNEL_LAYOUTS, Optional.empty()));
 
-  // How long after its seek an encoded replacement attempt's audio starts at the latest: a margin
-  // for a demuxer that delivers its first audio sample after the keyframe it seeks to.
-  private static final Duration AUDIO_AFTER_THE_SEEK = Duration.ofSeconds(1);
+  // How long after the server's keyframe position an encoded replacement attempt's audio starts at
+  // the latest: a margin for a demuxer that delivers its first audio sample after the keyframe it
+  // seeks to.
+  private static final Duration AUDIO_AFTER_THE_KEYFRAME = Duration.ofSeconds(1);
 
   // The longest argument Linux passes to a program: MAX_ARG_STRLEN, 32 pages, holds the argument
   // and its terminating NUL, and a page is at least 4 KiB.
@@ -665,15 +666,22 @@ public class FfmpegCommandBuilder {
   // The encoder's first frame without priming starts on the first segment's start when its input
   // starts the frame's lead, plus whole frames, before that start. The trim between the two shifts
   // cuts the input there, at a time that depends on the sample rate the encoder takes, and so
-  // follows the conversion to that rate. The whole frames reach back to about a second after the
-  // seek, where the demuxer has delivered audio, so that the copy of a Dolby Vision source writes
-  // its audio from there, and its muxer, which writes nothing until each track has a sample, keeps
-  // only about a second of copied video back. Every frame from the first segment's start on then
-  // starts where the attempt that encodes from the start writes one, give or take less than a
-  // frame, and with no gap. Empty for an encoder whose frame length varies.
+  // follows the conversion to that rate. Each shift is a whole number of ticks, so that the two
+  // cancel. The whole frames reach back to where the demuxer has delivered audio: the seek's
+  // target, when a seek without the server's keyframe position lands on a keyframe at or before
+  // it, or a second after the server's keyframe position. The copy of a Dolby Vision source then
+  // writes its audio
+  // from there, and its muxer, which writes nothing until each track has a sample, keeps back only
+  // the copied video before it. Every frame from the first segment's start on then starts where
+  // the attempt that encodes from the start writes one, give or take less than a frame, and with
+  // no gap. Empty for an encoder whose frame length varies.
   private static Optional<String> frameAlignedShift(AudioDecision audio, TranscodeRequest request) {
     var firstSegmentStart = firstSegmentStartOfAnEncode(request).orElseThrow();
-    var reach = firstSegmentStart.minus(inputSeekPosition(request)).minus(AUDIO_AFTER_THE_SEEK);
+    var reach = firstSegmentStart.minus(inputSeekPosition(request));
+    if (request.seekPosition().isPresent()) {
+      reach = reach.minus(AUDIO_AFTER_THE_KEYFRAME);
+    }
+
     if (reach.isNegative()) {
       reach = Duration.ZERO;
     }
@@ -683,7 +691,7 @@ public class FfmpegCommandBuilder {
         .flatMap(AudioEncoderInput::frames)
         .map(
             frames ->
-                "("
+                "round(("
                     + frames.lead()
                     + "+floor("
                     + seconds
@@ -691,7 +699,7 @@ public class FfmpegCommandBuilder {
                     + frames.samples()
                     + "))*("
                     + frames.samples()
-                    + "))/SR/TB");
+                    + "))/SR/TB)");
   }
 
   // Empty for an encoder not listed: FFmpeg then converts the padded audio before the encoder.

@@ -593,7 +593,7 @@ class TranscodeWorkerJobAttemptTest {
       assertThat(command.get(command.indexOf("-af") + 1))
           .endsWith(
               "apad,asetpts='if(isnan(PTS),60/TB+N/SR/TB,PTS)',atrim=start=60"
-                  + ",asetpts=PTS-(0+floor(5*SR/(1024))*(1024))/SR/TB,atrim=end=85.5");
+                  + ",asetpts=PTS-round((0+floor(6*SR/(1024))*(1024))/SR/TB),atrim=end=85.5");
     }
   }
 

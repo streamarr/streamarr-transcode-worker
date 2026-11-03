@@ -353,7 +353,7 @@ const RECIPE =
   'when copying AAC, then -b:a 0] [video copy with encoded audio (fixture 16): -c:v copy -c:a aac -ac 1 -b:a 8k] [encode: -r:v:0 24000/1001 -forced-idr 1 -force_key_frames:0 K*6,(K+1)*6,...,(N-1)*6 ' +
   'in whole seconds, K = startSequenceNumber, N = mediaSegmentCount; -vf ending fps=24000/1001:eof_action=pass, ' +
   'then for an encode with K > 0 trim=start_pts=ceil(K*6 x 23.976) and -af ending atrim=start=K*6 between ' +
-  'asetpts shifts by the whole AAC frames that fit in 5 s ' +
+  'asetpts shifts by the whole AAC frames that fit in 6 s ' +
   '(-sc_threshold:v:0 0 for libx264, -x265-params no-scenecut=1:no-open-gop=1 for libx265) -g:v:0 145 = ceil(6 x 23.976) + 1 for an encoder verified to honour forced ' +
   'keyframes (libx264, SVT-AV1, libx265), else 143 = floor(6 x 23.976) (fixtures 11 and 13c) (-keyint_min:v:0 with the ' +
   'same value for SVT-AV1)] ' +

@@ -5448,14 +5448,16 @@ class WorkerMediaSmokeTest {
         .isLessThan(listedStart + lastAudioBefore.duration());
   }
 
-  @ParameterizedTest(name = "{0}")
-  @ValueSource(strings = {"ac3", "eac3", "libopus"})
+  // With the server's keyframe positions 20 s and 21 s, the 44.1 kHz source's AAC and AC-3 audio
+  // starts 9 s and 8 s of whole frames before 30 s.
+  @ParameterizedTest(name = "{0}, keyframe {1}")
+  @CsvSource({"ac3,", "eac3,", "libopus,", "aac, 20", "ac3, 21"})
   @DisplayName(
       "Should open the replacement's audio with a frame on its first segment's start and leave no"
-          + " gap after the start attempt's audio when an encoded replacement attempt encodes audio"
-          + " whose encoder primes part of a frame")
-  void shouldOpenTheReplacementsAudioOnItsFirstSegmentsStartWhenTheAudioEncoderPrimesPartOfAFrame(
-      String codec) throws Exception {
+          + " gap after the start attempt's audio when an encoded replacement attempt encodes its"
+          + " audio")
+  void shouldOpenTheReplacementsAudioOnItsFirstSegmentsStartWhenAnEncodedReplacementEncodesAudio(
+      String codec, BigDecimal keyframePosition) throws Exception {
     var source = pictureGapSource(PictureGapSource.MP4_WITHOUT_B_FRAMES);
     var startAttemptJob = pictureGapJob(source);
     startAttemptJob.getDecisionBuilder().getAudioBuilder().setCodec(codec);
@@ -5464,6 +5466,9 @@ class WorkerMediaSmokeTest {
     var replacementJob = pictureGapJob(source);
     replacementJob.getDecisionBuilder().getAudioBuilder().setCodec(codec);
     replacementJob.getExecutionBuilder().setStartSequenceNumber(3).setSeekPositionSeconds(30);
+    if (keyframePosition != null) {
+      setSeekPosition(replacementJob.getExecutionBuilder(), keyframePosition);
+    }
 
     var replacement =
         execute(engine(softwareCapabilities()), source.getParent(), replacementJob.build());

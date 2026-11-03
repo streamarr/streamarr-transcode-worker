@@ -162,7 +162,7 @@ A replacement attempt from segment K > 0 is a job that seeks to K × 6 (`seekSec
 it. An encode without the server's keyframe position reads from one period earlier, (K − 1) × 6
 (`-ss 24 -noaccurate_seek`), decodes up to K × 6 and encodes only from there: `fps` then
 `trim=start_pts=720` cut its pictures at frame 720 (30.030 s), the first frame at or after 30 s. Its
-encoded audio starts the whole 1,024-sample AAC frames that fit in the 5 s before 30 s, so that an
+encoded audio starts the whole 1,024-sample AAC frames that fit in the 6 s before 30 s, so that an
 AAC frame starts on 30 s: the two `asetpts` around `atrim=start=30` move the cut by that many samples.
 The producer drops the audio before 30 s.
 
