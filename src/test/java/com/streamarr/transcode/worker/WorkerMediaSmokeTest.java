@@ -37,6 +37,7 @@ import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeKeyframePositionsPart;
 import build.buf.gen.streamarr.transcode.v1.ProbeKeyframes;
+import build.buf.gen.streamarr.transcode.v1.ProbeMediaInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
@@ -434,6 +435,105 @@ class WorkerMediaSmokeTest {
     assertThat(commentary.getIsComment()).isTrue();
     assertThat(commentary.getIsDefault()).isFalse();
     assertThat(streams.getStreams(4).getIsComment()).isTrue();
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("audioDepthCases")
+  @DisplayName(
+      "Should report the sample format and the bit depth that ffprobe prints when a worker probes"
+          + " a real audio stream")
+  void shouldReportSampleFormatAndBitDepthThatFfprobePrintsWhenAWorkerProbesARealAudioStream(
+      AudioDepthCase audioCase) throws Exception {
+    var arguments = new ArrayList<>(List.of("-map", "1:a"));
+    arguments.addAll(audioCase.audioArguments());
+
+    var audio = probeAudioSource("depth." + audioCase.container(), arguments).getStreams(1);
+
+    assertThat(audio.getSampleFormat()).isEqualTo(audioCase.sampleFormat());
+    assertThat(
+            Optional.of(audio)
+                .filter(ProbeStreamInfo::hasBitDepth)
+                .map(ProbeStreamInfo::getBitDepth))
+        .isEqualTo(Optional.ofNullable(audioCase.bitDepth()));
+  }
+
+  // FLAC, ALAC, TrueHD and PCM report a depth. ffprobe prints no depth for AC-3.
+  static Stream<AudioDepthCase> audioDepthCases() {
+    return Stream.of(
+        AudioDepthCase.builder()
+            .audioArguments(List.of("-c:a", "flac", "-sample_fmt", "s16"))
+            .container("mkv")
+            .sampleFormat("s16")
+            .bitDepth(16)
+            .build(),
+        AudioDepthCase.builder()
+            .audioArguments(List.of("-c:a", "pcm_s24le"))
+            .container("mkv")
+            .sampleFormat("s32")
+            .bitDepth(24)
+            .build(),
+        AudioDepthCase.builder()
+            .audioArguments(List.of("-c:a", "alac", "-sample_fmt", "s16p"))
+            .container("mp4")
+            .sampleFormat("s16p")
+            .bitDepth(16)
+            .build(),
+        AudioDepthCase.builder()
+            .audioArguments(List.of("-c:a", "alac", "-sample_fmt", "s32p"))
+            .container("mp4")
+            .sampleFormat("s32p")
+            .bitDepth(24)
+            .build(),
+        // FFmpeg's TrueHD encoder runs only when experimental encoders are allowed.
+        AudioDepthCase.builder()
+            .audioArguments(List.of("-c:a", "truehd", "-strict", "experimental"))
+            .container("mkv")
+            .sampleFormat("s32")
+            .bitDepth(24)
+            .build(),
+        AudioDepthCase.builder()
+            .audioArguments(List.of("-c:a", "ac3"))
+            .container("mkv")
+            .sampleFormat("fltp")
+            .build());
+  }
+
+  // An absent bit depth means that the probe reports none.
+  @Builder
+  private record AudioDepthCase(
+      List<String> audioArguments, String container, String sampleFormat, Integer bitDepth) {
+
+    @Override
+    public String toString() {
+      return String.join(" ", audioArguments) + " in " + container;
+    }
+  }
+
+  // Probes a one-second file whose stream 0 is a 64x36 H.264 picture track, because the probe
+  // fails a file without video. Input 1 is a 48 kHz sine tone for the audio arguments to map.
+  private ProbeMediaInfo probeAudioSource(String fileName, List<String> audioArguments)
+      throws Exception {
+    var source = root.resolve(fileName);
+    var arguments =
+        new ArrayList<>(
+            List.of(
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=64x36:rate=24:duration=1",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000:duration=1",
+                "-map",
+                "0:v",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast"));
+    arguments.addAll(audioArguments);
+    runFfmpeg(arguments, source);
+    return probeExecutor().probe(source, keyframeRequest()).result().getMedia();
   }
 
   @ParameterizedTest(name = "{0}")
