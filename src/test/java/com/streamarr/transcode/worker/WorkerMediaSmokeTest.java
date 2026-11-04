@@ -3352,38 +3352,45 @@ class WorkerMediaSmokeTest {
 
   static Stream<LosslessLayoutChange> losslessLayoutChanges() {
     return Stream.of(
-        new LosslessLayoutChange(
-            "6.1",
-            "alac",
-            "6.1(back)",
-            AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_SIX_POINT_ONE_BACK,
-            Map.of(
-                "FL", "FL", "FR", "FR", "FC", "FC", "LFE", "LFE", "BL", "SL", "BR", "SR", "BC",
-                "BC")),
-        new LosslessLayoutChange(
-            "5.1",
-            "flac",
-            "5.1(side)",
-            AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_FIVE_POINT_ONE_SIDE,
-            Map.of("FL", "FL", "FR", "FR", "FC", "FC", "LFE", "LFE", "SL", "BL", "SR", "BR")),
-        new LosslessLayoutChange(
-            "4.0",
-            "flac",
-            "6.1",
-            AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_SIX_POINT_ONE,
-            Map.of("FL", "FL", "FR", "FR", "FC", "FC", "BC", "BC")),
-        new LosslessLayoutChange(
-            "quad",
-            "alac",
-            "5.0",
-            AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_FIVE_POINT_ZERO,
-            Map.of("FL", "FL", "FR", "FR", "BL", "BL", "BR", "BR")));
+        LosslessLayoutChange.builder()
+            .sourceLayout("6.1")
+            .codec("alac")
+            .outputLayout("6.1(back)")
+            .contractLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_SIX_POINT_ONE_BACK)
+            .sources(
+                Map.of(
+                    "FL", "FL", "FR", "FR", "FC", "FC", "LFE", "LFE", "BL", "SL", "BR", "SR", "BC",
+                    "BC"))
+            .build(),
+        LosslessLayoutChange.builder()
+            .sourceLayout("5.1")
+            .codec("flac")
+            .outputLayout("5.1(side)")
+            .contractLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_FIVE_POINT_ONE_SIDE)
+            .sources(
+                Map.of("FL", "FL", "FR", "FR", "FC", "FC", "LFE", "LFE", "SL", "BL", "SR", "BR"))
+            .build(),
+        LosslessLayoutChange.builder()
+            .sourceLayout("4.0")
+            .codec("flac")
+            .outputLayout("6.1")
+            .contractLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_SIX_POINT_ONE)
+            .sources(Map.of("FL", "FL", "FR", "FR", "FC", "FC", "BC", "BC"))
+            .build(),
+        LosslessLayoutChange.builder()
+            .sourceLayout("quad")
+            .codec("alac")
+            .outputLayout("5.0")
+            .contractLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_FIVE_POINT_ZERO)
+            .sources(Map.of("FL", "FL", "FR", "FR", "BL", "BL", "BR", "BR"))
+            .build());
   }
 
   /**
    * A lossless encode from a source layout to an output layout, and the source channel that each
    * output channel holds; an output channel that the map leaves out is padding.
    */
+  @Builder
   record LosslessLayoutChange(
       String sourceLayout,
       String codec,
