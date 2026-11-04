@@ -19,6 +19,7 @@ import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.engine.AttemptOutcome.Failed;
 import com.streamarr.transcode.engine.AttemptOutcome.Stopped;
+import com.streamarr.transcode.engine.SourceEnd.StreamEnd;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcess.ExitTiming;
 import java.io.IOException;
@@ -159,6 +160,43 @@ class ProducerRpuMovingPipeTest {
     assertThat(sink.acceptedNames())
         .hasSize(recording(ENCODED_RECORDING).segments().size() + 1)
         .startsWith("init.mp4", "segment0.m4s");
+  }
+
+  // The encoding FFmpeg reads the source's audio itself, as its second input, and copies the
+  // source's streams to the framecrc there; the copying FFmpeg reads only the source's video.
+  @Test
+  @DisplayName(
+      "Should report where the source's streams end from the encoding FFmpeg's framecrc of its"
+          + " second input when both FFmpegs exit cleanly")
+  void
+      shouldReportWhereTheSourcesStreamsEndFromTheEncodingFfmpegsFramecrcOfItsSecondInputWhenBothFfmpegsExitCleanly() {
+    var copy = ScriptedProcess.builder().output(COPIED_SOURCE).build();
+    var encode =
+        encodingFfmpeg()
+            .stderr(
+                """
+                Stream mapping:
+                  Stream #0:0 -> #0:0 (hevc (native) -> h264 (libx264))
+                  Stream #1:1 -> #0:1 (aac (native) -> aac (native))
+                  Stream #1:0 -> #1:0 (copy)
+                  Stream #1:1 -> #1:1 (copy)
+                #tb 0: 1/1000
+                #tb 1: 1/48000
+                0, 20000, 20000, 40, 1000, 0x0a1b2c3d
+                1, 1200000, 1200000, 1024, 300, 0x0a1b2c3d
+                """)
+            .build();
+
+    var producer = producerOf(copy, encode).start();
+
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .asInstanceOf(InstanceOfAssertFactories.type(Completed.class))
+        .extracting(completed -> completed.sourceEnd().streamEnds())
+        .isEqualTo(
+            List.of(
+                new StreamEnd(0, Duration.ofMillis(20_040)),
+                new StreamEnd(1, Duration.ofNanos(25_021_333_333L))));
   }
 
   @Test

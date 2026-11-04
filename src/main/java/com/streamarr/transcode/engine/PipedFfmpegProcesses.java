@@ -15,12 +15,14 @@ import lombok.Builder;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * A job attempt's FFmpeg that runs as two processes: one copies the source into fragmented MP4, and
- * one encodes that copy, which a virtual thread passes from the first to the second through {@link
- * FragmentedMp4RpuMover}. The copying FFmpeg also writes the framecrc of the copy's video packets
- * to a {@link VideoTimingChannel}, from which the mover restores each video sample's duration. The
- * encoding FFmpeg writes the attempt's output. A stop asks the copying FFmpeg to quit, and the
- * encoding FFmpeg then finishes at the end of its input; termination and destruction end both.
+ * A job attempt's FFmpeg that runs as two processes: one copies the source's video into fragmented
+ * MP4, and one encodes that copy, which a virtual thread passes from the first to the second
+ * through {@link FragmentedMp4RpuMover}, with the source's audio, which it reads from the source
+ * itself. The copying FFmpeg also writes the framecrc of the copy's video packets to a {@link
+ * VideoTimingChannel}, from which the mover restores each video sample's duration. The encoding
+ * FFmpeg writes the attempt's output and the framecrc of the source's streams. A stop asks the
+ * copying FFmpeg to quit, and the encoding FFmpeg then finishes at the end of its input;
+ * termination and destruction end both.
  */
 @Slf4j
 final class PipedFfmpegProcesses implements FfmpegProcess {
@@ -284,7 +286,7 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
 
   @Override
   public List<ObservedSourceStream> observedSourceStreams() {
-    return copyErrorOutput.observedSourceStreams();
+    return encodeErrorOutput.observedSourceStreams();
   }
 
   @Override

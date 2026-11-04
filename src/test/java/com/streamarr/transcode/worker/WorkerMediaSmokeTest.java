@@ -236,6 +236,8 @@ class WorkerMediaSmokeTest {
   // The profile 5 sources span three 2 s segments, with a keyframe every second.
   private static final int PROFILE_5_PERIOD_SECONDS = 2;
   private static final int PROFILE_5_SEGMENT_COUNT = 3;
+  private static final int LARGE_PICTURE_SOURCE_SECONDS = 24;
+  private static final int LARGE_PICTURE_REPLACEMENT_START_SEQUENCE_NUMBER = 7;
   private static final int DISPLAY_SOURCE_HEIGHT = 180;
   private static final int ACCESS_UNIT_DELIMITER = 35;
   // An HEVC NAL unit of type 62, as a Dolby Vision RPU, whose payload FFmpeg cannot parse as one.
@@ -319,6 +321,7 @@ class WorkerMediaSmokeTest {
   @TempDir static Path tenBitSources;
   @TempDir static Path irregularKeyframeSources;
   @TempDir static Path rpuLayoutSources;
+  @TempDir static Path largePictureSources;
   @TempDir static Path interlacedSources;
 
   // The seven audio dispositions of probe version 7, by the names that ffprobe prints.
@@ -2127,6 +2130,80 @@ class WorkerMediaSmokeTest {
           .as(name)
           .containsExactlyElementsOf(packetsOf(fromRpusBehind, name));
     }
+  }
+
+  // The copy of a profile 5 source carries only the source's video, so its MP4 muxer writes each
+  // packet as it comes. A copy that also carried audio wrote nothing until the audio's first
+  // sample, and its first fragment then held every picture that the demuxer read before that
+  // sample: here the 8 s from the keyframe at 10 s up to the seek at 18 s, 63.8 MB on the pinned
+  // FFmpeg, over the 32 MiB that the mover reads.
+  @Test
+  @DisplayName(
+      "Should upload what one FFmpeg encodes when the copy of a profile 5 MP4 source with B-frames"
+          + " reads more pictures before its seek than the mover reads in one fragment")
+  void
+      shouldUploadWhatOneFfmpegEncodesWhenTheCopyOfAProfile5Mp4SourceWithBFramesReadsMorePicturesBeforeItsSeekThanTheMoverReadsInOneFragment()
+          throws Exception {
+    var source = largePictureHevcSource();
+
+    assertEncodeOfTheCopyUploadsWhatOneFfmpegEncodes(source, largePictureJob(source));
+  }
+
+  // A full encode of the large-picture source from segment 7, at 21 s on a 3 s period, which
+  // reads from one period early, 18 s, where the MP4 demuxer lands on the keyframe at 10 s.
+  private static VariantJob.Builder largePictureJob(Path source) {
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
+    withVideo(job, forcedSoftwareEncode("h264", TINY_VARIANT_LEVELS.get("h264")));
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setMode(AudioMode.AUDIO_MODE_TRANSCODE)
+        .setCodec("aac")
+        .setChannels(1)
+        .setBitrateBitsPerSecond(64_000);
+    job.getVariantBuilder().setWidth(64).setHeight(36).setBitrateBitsPerSecond(100_000);
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(SLOT_SECONDS)
+        .setMediaSegmentCount(LARGE_PICTURE_SOURCE_SECONDS / SLOT_SECONDS)
+        .setStartSequenceNumber(LARGE_PICTURE_REPLACEMENT_START_SEQUENCE_NUMBER);
+    return job;
+  }
+
+  // 24 s of 512x288 10-bit HEVC at 24 fps whose lossless noise makes each picture about 330 KB,
+  // with 3 B-frames and keyframes only at 0, 10 and 20 s, and a 440 Hz tone, in MP4.
+  private static synchronized Path largePictureHevcSource() throws Exception {
+    return buildFixtureOnce(
+        largePictureSources.resolve("large-pictures.mp4"),
+        output ->
+            runFfmpeg(
+                List.of(
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc2=size=512x288:rate=24,noise=alls=100:allf=t+u",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=frequency=440:sample_rate=48000",
+                    "-t",
+                    String.valueOf(LARGE_PICTURE_SOURCE_SECONDS),
+                    "-pix_fmt",
+                    "yuv420p10le",
+                    "-c:v",
+                    "libx265",
+                    "-x265-params",
+                    "lossless=1:keyint=100000:min-keyint=1:scenecut=0:bframes=3:log-level=error",
+                    "-forced-idr",
+                    "1",
+                    "-force_key_frames",
+                    "0,10,20",
+                    "-tag:v",
+                    "hvc1",
+                    "-c:a",
+                    "aac",
+                    "-b:a",
+                    "96k"),
+                output));
   }
 
   static Stream<Arguments> rpuLayoutsAudioCodecsAndStarts() {

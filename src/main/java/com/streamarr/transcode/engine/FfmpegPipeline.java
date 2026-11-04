@@ -24,9 +24,10 @@ public sealed interface FfmpegPipeline {
   }
 
   /**
-   * An FFmpeg that copies the source into fragmented MP4, and an FFmpeg that encodes that copy once
-   * the worker has moved each Dolby Vision RPU to the end of the sample of the picture it belongs
-   * to, as {@link FragmentedMp4RpuMover} says.
+   * An FFmpeg that copies the source's video into fragmented MP4, and an FFmpeg that encodes that
+   * copy, once the worker has moved each Dolby Vision RPU to the end of the sample of the picture
+   * it belongs to, as {@link FragmentedMp4RpuMover} says, with the source's audio, which it reads
+   * from the source.
    *
    * @param copyCommand the copying FFmpeg's command, whose last output, the framecrc of the copy's
    *     video packets, lacks the URL it writes to

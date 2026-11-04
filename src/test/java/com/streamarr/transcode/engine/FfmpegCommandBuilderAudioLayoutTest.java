@@ -787,11 +787,11 @@ class FfmpegCommandBuilderAudioLayoutTest {
   }
 
   @ParameterizedTest(name = "stream {0}")
-  @CsvSource({"'', a:0, 0:a:0", "2, 2, 0:2?"})
+  @CsvSource({"'', a:0, 1:a:0", "2, 2, 1:2?"})
   @DisplayName(
-      "Should encode the named layout of the job's audio stream in the source copy when the job"
-          + " moves Dolby Vision RPUs")
-  void shouldEncodeTheNamedLayoutOfTheJobsAudioStreamInTheSourceCopyWhenTheJobMovesDolbyVisionRpus(
+      "Should encode the named layout of the job's audio stream from the source input of the"
+          + " encode, and none in the source copy, when the job moves Dolby Vision RPUs")
+  void shouldEncodeTheNamedLayoutOfTheJobsAudioStreamFromTheEncodesSourceInputWhenItMovesRpus(
       String streamIndex, String specifier, String map) {
     var audio =
         encodeBuilder("opus", "5.1")
@@ -827,8 +827,9 @@ class FfmpegCommandBuilderAudioLayoutTest {
             builder.buildPipeline(
                 TranscodeJob.builder().request(request).videoEncoder("libx265").build());
 
-    assertThat(pipeline.copyCommand())
-        .containsSubsequence("-drc_scale:" + specifier, "0", "-i")
+    assertThat(pipeline.copyCommand()).doesNotContain("-drc_scale:" + specifier, "-c:a");
+    assertThat(pipeline.encodeCommand())
+        .containsSubsequence("pipe:0", "-drc_scale:" + specifier, "0", "-i", "/media/movie.mkv")
         .containsSequence("-map", map)
         .containsSubsequence("-c:a", "libopus", "-af")
         .containsSubsequence("-ch_layout", "5.1");

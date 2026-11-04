@@ -85,12 +85,6 @@ public class FfmpegCommandBuilder {
 
   private static final String FLUSH_PACKETS = "-flush_packets";
 
-  // A negative map undoes the maps before it that it matches, so a named subtitle, data,
-  // attachment or cover art stream maps nothing and the producer refuses the output without a
-  // sound track, where FFmpeg would fail writing it. The chosen video stream is never cover art.
-  private static final List<String> NON_AUDIO_STREAM_EXCLUSIONS =
-      List.of("-map", "-0:d", "-map", "-0:t", "-map", "-0:disp:attached_pic");
-
   // The copy of the source that the encode of a profile 5 source reads: fragmented MP4, whose
   // muxer writes each packet as soon as it has one and whose movie timescale keeps every timestamp
   // the source's demuxer reads. skip_trailer stops the muxer from keeping an index entry of every
@@ -259,7 +253,7 @@ public class FfmpegCommandBuilder {
     var mode = decision.transcodeMode();
 
     addInputAndStreamSelection(cmd, job, input);
-    addCommonFlags(cmd, input);
+    addCommonFlags(cmd);
     addCodecArgs(cmd, job, input);
 
     if (mode.encodesVideo()) {
@@ -268,61 +262,39 @@ public class FfmpegCommandBuilder {
     }
 
     addFragmentedMp4Output(cmd);
-    if (input == EncoderInput.SOURCE) {
-      addSourceStreamsOutput(cmd, decision);
-    }
-
+    addSourceStreamsOutput(cmd, decision, input);
     return List.copyOf(cmd);
   }
 
-  // The copy seeks as the single command would and keeps the timestamps that command reads, so
-  // the encode of the copy reads them unchanged. The copy encodes audio that the job encodes, as
-  // it decodes every source codec, and trims that audio exactly as the single command does.
-  // FFmpeg's opus encoder is experimental, so the copy names libopus. The mp4 muxer keeps a Dolby
+  // The copy reads the source's video with the single command's seek and keeps the timestamps that
+  // the source's demuxer reads, which the encode of the copy shifts as the single command's
+  // -start_at_zero shifts its own. The copy carries no audio: the mp4 muxer writes nothing until
+  // every track has a sample, so audio would hold back every picture read before its first sample,
+  // and the encode of the copy reads the audio from the source itself. The mp4 muxer keeps a Dolby
   // Vision configuration record only when the compliance is unofficial.
   private List<String> buildSourceCopyCommand(TranscodeJob job) {
-    var cmd = new ArrayList<String>();
-    var audio = job.request().transcodeDecision().audioDecision();
-    addInputArgs(cmd, job.request());
-    addStreamSelection(cmd, job.request().transcodeDecision());
-    addCommonFlags(cmd, EncoderInput.SOURCE);
+    var request = job.request();
+    var video = request.transcodeDecision().videoDecision();
+    var cmd = new ArrayList<>(List.of(ffmpegPath, "-y"));
+    addSeekArgs(cmd, request);
+    cmd.addAll(List.of("-i", request.sourcePath().toString(), "-map", "0:" + video.streamIndex()));
+    addTimestampFlags(cmd);
+    addMuxingFlags(cmd);
     cmd.addAll(List.of("-c:v", "copy", "-strict", "unofficial"));
-    var copiedAudio = audio;
-    if (audio.mode() == AudioMode.TRANSCODE && "opus".equals(audio.codec())) {
-      copiedAudio =
-          AudioDecision.builder()
-              .mode(audio.mode())
-              .streamIndex(audio.streamIndex())
-              .codec(LIBOPUS)
-              .channels(audio.channels())
-              .bitrate(audio.bitrate())
-              .channelLayout(audio.channelLayout())
-              .outputSampleRate(audio.outputSampleRate())
-              .padsWithSilenceToAdvertisedEnd(audio.padsWithSilenceToAdvertisedEnd())
-              .build();
-    }
-
-    addAudioArgs(cmd, copiedAudio, job.request());
-
     cmd.addAll(SOURCE_COPY_OUTPUT);
-    addSourceStreamsOutput(cmd, job.request().transcodeDecision());
-    addVideoTimingOutput(cmd, job.request().transcodeDecision().videoDecision());
+    addVideoTimingOutput(cmd, video);
     return List.copyOf(cmd);
   }
 
-  // The FFmpeg that reads the source copies the chosen streams' packets, from the keyframe its
-  // seek reads on, to a framecrc on its error output, its second output: the worker reads there
-  // where each stream's last source sample ends. FFmpeg writes each record at once, so that no log
-  // line splits it.
-  private static void addSourceStreamsOutput(List<String> cmd, TranscodeDecision decision) {
-    cmd.addAll(List.of("-map", "0:" + decision.videoDecision().streamIndex()));
-    var audio = decision.audioDecision();
-    addAudioStreamSelection(cmd, audio);
-    if (namesAudioStream(audio)) {
-      cmd.addAll(List.of("-map", "-0:s"));
-      cmd.addAll(NON_AUDIO_STREAM_EXCLUSIONS);
-    }
-
+  // The FFmpeg that encodes copies the chosen source streams' packets, from the keyframe its seek
+  // reads on, to a framecrc on its error output, its second output: the worker reads there where
+  // each stream's last source sample ends. FFmpeg writes each record at once, so that no log line
+  // splits it.
+  private static void addSourceStreamsOutput(
+      List<String> cmd, TranscodeDecision decision, EncoderInput input) {
+    var source = input.sourceInputIndex();
+    cmd.addAll(List.of("-map", source + ":" + decision.videoDecision().streamIndex()));
+    addAudioStreamSelection(cmd, decision.audioDecision(), source);
     cmd.addAll(List.of("-c", "copy", "-copypriorss", "1"));
     cmd.addAll(NO_SOURCE_METADATA);
     cmd.addAll(List.of("-f", "framecrc", FLUSH_PACKETS, "1", "pipe:2"));
@@ -338,49 +310,51 @@ public class FfmpegCommandBuilder {
     cmd.addAll(List.of("-f", "framecrc", FLUSH_PACKETS, "1"));
   }
 
-  // The copy holds only the chosen video stream and the audio. FFmpeg reads no commands from its
-  // standard input while it reads media there.
+  // The encode of the copy reads the copy's video on its standard input, where FFmpeg reads no
+  // commands while it reads media, and the source's audio from the source, seeked as the single
+  // command seeks it. -isync shifts the copy's timestamps by the difference between the two inputs'
+  // start times: with -start_at_zero, both then lie on the single command's timeline.
   private void addInputAndStreamSelection(List<String> cmd, TranscodeJob job, EncoderInput input) {
-    var decision = job.request().transcodeDecision();
+    var request = job.request();
+    var decision = request.transcodeDecision();
+    cmd.addAll(List.of(ffmpegPath, "-y"));
     if (input == EncoderInput.SOURCE) {
-      addInputArgs(cmd, job.request());
+      addSourceInput(cmd, request);
       addStreamSelection(cmd, decision);
       return;
     }
 
+    var source = input.sourceInputIndex();
     cmd.addAll(
         List.of(
-            ffmpegPath,
-            "-y",
             "-analyzeduration",
             "1",
             "-fpsprobesize",
             "0",
+            "-isync",
+            String.valueOf(source),
             "-f",
             "mp4",
             "-i",
-            "pipe:0",
-            "-map",
-            "0:v:0"));
-    var audio = decision.audioDecision();
-    if (audio.mode() != AudioMode.NONE) {
-      cmd.addAll(List.of("-map", audioMap(audio, "a:0")));
-    }
+            "pipe:0"));
+    addSourceInput(cmd, request);
+    cmd.addAll(List.of("-map", "0:v:0"));
+    addAudioStreamSelection(cmd, decision.audioDecision(), source);
   }
 
-  private void addInputArgs(List<String> cmd, TranscodeRequest request) {
-    cmd.add(ffmpegPath);
-    cmd.add("-y");
+  private void addSourceInput(List<String> cmd, TranscodeRequest request) {
+    addSeekArgs(cmd, request);
+    encodeInNamedLayout(request.transcodeDecision().audioDecision(), request.sourceAudio())
+        .ifPresent(options -> cmd.addAll(options.inputOptions()));
+    cmd.addAll(List.of("-i", request.sourcePath().toString()));
+  }
 
+  private static void addSeekArgs(List<String> cmd, TranscodeRequest request) {
     var seekPosition = inputSeekPosition(request);
     if (seekPosition.isPositive()) {
       cmd.addAll(List.of("-ss", seekArgument(seekPosition)));
       addDecodeOnlySeekArgs(cmd, request);
     }
-
-    encodeInNamedLayout(request.transcodeDecision().audioDecision(), request.sourceAudio())
-        .ifPresent(options -> cmd.addAll(options.inputOptions()));
-    cmd.addAll(List.of("-i", request.sourcePath().toString()));
   }
 
   // An encode decodes every picture from the keyframe its seek reads, and its filters trim them at
@@ -411,9 +385,7 @@ public class FfmpegCommandBuilder {
   }
 
   // The copy of a Dolby Vision profile 5 source reads from one period early whatever the server's
-  // keyframe position. The copy's muxer writes nothing until each track has a sample, so it holds
-  // back the copied video before the audio, and an MP4 demuxer lands a whole GOP before the decode
-  // time of a keyframe that B-frames follow. The mover refuses a fragment over 32 MiB.
+  // keyframe position.
   private static Optional<Duration> keyframePosition(TranscodeRequest request) {
     if (needsRpuMove(request)) {
       return Optional.empty();
@@ -481,19 +453,33 @@ public class FfmpegCommandBuilder {
   private void addStreamSelection(List<String> cmd, TranscodeDecision decision) {
     cmd.addAll(List.of("-map", "0:" + decision.videoDecision().streamIndex()));
     var audio = decision.audioDecision();
-    addAudioStreamSelection(cmd, audio);
-    if (decision.subtitleDecision().mode() == SubtitleMode.EXCLUDE || namesAudioStream(audio)) {
+    addAudioStreamSelection(cmd, audio, 0);
+    if (decision.subtitleDecision().mode() == SubtitleMode.EXCLUDE && !namesAudioStream(audio)) {
       cmd.addAll(List.of("-map", "-0:s"));
-    }
-
-    if (namesAudioStream(audio)) {
-      cmd.addAll(NON_AUDIO_STREAM_EXCLUSIONS);
     }
   }
 
-  private static void addAudioStreamSelection(List<String> cmd, AudioDecision audio) {
-    if (audio.mode() != AudioMode.NONE) {
-      cmd.addAll(List.of("-map", audioMap(audio, audio.sourceStreamSpecifier())));
+  // A negative map undoes the maps before it that it matches, so a named subtitle, data,
+  // attachment or cover art stream maps nothing and the producer refuses the output without a
+  // sound track, where FFmpeg would fail writing it. The chosen video stream is never cover art.
+  private static void addAudioStreamSelection(List<String> cmd, AudioDecision audio, int input) {
+    if (audio.mode() == AudioMode.NONE) {
+      return;
+    }
+
+    cmd.addAll(List.of("-map", audioMap(audio, input)));
+    if (namesAudioStream(audio)) {
+      var exclusion = "-" + input + ":";
+      cmd.addAll(
+          List.of(
+              "-map",
+              exclusion + "s",
+              "-map",
+              exclusion + "d",
+              "-map",
+              exclusion + "t",
+              "-map",
+              exclusion + "disp:attached_pic"));
     }
   }
 
@@ -504,16 +490,22 @@ public class FfmpegCommandBuilder {
   // A stream that the job names maps nothing when the source has no stream there, so that the
   // producer refuses the output that lacks its sound track as the job's error, where FFmpeg would
   // fail to start. Without a name, FFmpeg fails as before when the source has no audio stream.
-  private static String audioMap(AudioDecision audio, String specifier) {
+  private static String audioMap(AudioDecision audio, int input) {
+    var map = input + ":" + audio.sourceStreamSpecifier();
     if (audio.streamIndex().isPresent()) {
-      return "0:" + specifier + "?";
+      return map + "?";
     }
 
-    return "0:" + specifier;
+    return map;
   }
 
-  // The copy of the source already starts at zero, so the encode of the copy keeps its timestamps.
-  private void addCommonFlags(List<String> cmd, EncoderInput input) {
+  private static void addCommonFlags(List<String> cmd) {
+    addTimestampFlags(cmd);
+    cmd.add("-start_at_zero");
+    addMuxingFlags(cmd);
+  }
+
+  private static void addTimestampFlags(List<String> cmd) {
     cmd.addAll(
         List.of(
             "-map_metadata",
@@ -523,10 +515,9 @@ public class FfmpegCommandBuilder {
             "-copyts",
             "-avoid_negative_ts",
             "disabled"));
-    if (input == EncoderInput.SOURCE) {
-      cmd.add("-start_at_zero");
-    }
+  }
 
+  private static void addMuxingFlags(List<String> cmd) {
     cmd.addAll(
         List.of(
             "-max_muxing_queue_size",
@@ -551,19 +542,27 @@ public class FfmpegCommandBuilder {
         .ifPresent(entry -> cmd.addAll(tagArgs(entry)));
     cmd.addAll(forcedCodecProfileArgs(job));
     addScaleAndBitrateArgs(cmd, job, input);
-    if (input == EncoderInput.COPY_OF_THE_SOURCE) {
-      addAudioOfTheCopyArgs(cmd, decision.audioDecision());
-      return;
-    }
-
-    addAudioArgs(cmd, decision.audioDecision(), job.request());
+    addAudioArgs(cmd, encodedAudio(decision.audioDecision(), input), job.request());
   }
 
-  // The copy carries the job's output audio, which the encode of the copy copies untrimmed.
-  private static void addAudioOfTheCopyArgs(List<String> cmd, AudioDecision audio) {
-    if (audio.mode() != AudioMode.NONE) {
-      cmd.addAll(copiedAudioArgs(audio.codec()));
+  // FFmpeg's opus encoder is experimental, so the encode of the copy names libopus.
+  private static AudioDecision encodedAudio(AudioDecision audio, EncoderInput input) {
+    if (input == EncoderInput.SOURCE
+        || audio.mode() != AudioMode.TRANSCODE
+        || !"opus".equals(audio.codec())) {
+      return audio;
     }
+
+    return AudioDecision.builder()
+        .mode(audio.mode())
+        .streamIndex(audio.streamIndex())
+        .codec(LIBOPUS)
+        .channels(audio.channels())
+        .bitrate(audio.bitrate())
+        .channelLayout(audio.channelLayout())
+        .outputSampleRate(audio.outputSampleRate())
+        .padsWithSilenceToAdvertisedEnd(audio.padsWithSilenceToAdvertisedEnd())
+        .build();
   }
 
   // The FFmpeg that decodes the source discards, through the source's own markings, such as an
@@ -725,14 +724,11 @@ public class FfmpegCommandBuilder {
   // cuts the input there, at a time that depends on the sample rate the encoder takes, and so
   // follows the conversion to that rate. Each shift is a whole number of ticks, so that the two
   // cancel. The whole frames reach back to where the demuxer has delivered audio: the seek's
-  // target, when a seek without the server's keyframe position lands on a keyframe at or before
-  // it, or a second after the server's keyframe position. The copy of a Dolby Vision source then
-  // writes its audio from there, and its muxer, which writes nothing until each track has a
-  // sample, keeps back only the copied video before it. Every frame from the first segment's start
-  // on then starts where
-  // the attempt that encodes from the start writes one, give or take less than a frame, and with
-  // no gap. The expressions are quoted, as a FLAC frame's holds commas. Empty for an encoder whose
-  // frames the worker does not know.
+  // target, when a seek without the server's keyframe position lands on a keyframe at or before it,
+  // or a second after the server's keyframe position. Every frame from the first segment's start on
+  // then starts where the attempt that encodes from the start writes one, give or take less than a
+  // frame, and with no gap. The expressions are quoted, as a FLAC frame's holds commas. Empty for
+  // an encoder whose frames the worker does not know.
   private static Optional<String> frameAlignedShift(
       Optional<AudioFrames> frames, TranscodeRequest request) {
     var seconds = seekArgument(audioReach(request));
@@ -1150,9 +1146,22 @@ public class FfmpegCommandBuilder {
 
   private record ForcedKeyframes(@NonNull String times, boolean reachesLastBoundary) {}
 
-  /** What the encoding FFmpeg reads: the source, or the copy of it that the worker passes on. */
+  /**
+   * What the encoding FFmpeg reads its video from: the source, or the copy of the source's video
+   * that the worker passes on, beside the source, which it then reads as its second input.
+   */
   private enum EncoderInput {
-    SOURCE,
-    COPY_OF_THE_SOURCE
+    SOURCE(0),
+    COPY_OF_THE_SOURCE(1);
+
+    private final int sourceInputIndex;
+
+    EncoderInput(int sourceInputIndex) {
+      this.sourceInputIndex = sourceInputIndex;
+    }
+
+    int sourceInputIndex() {
+      return sourceInputIndex;
+    }
   }
 }
