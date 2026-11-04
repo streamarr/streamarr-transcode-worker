@@ -657,6 +657,9 @@ class ProducerRpuMovingPipeTest {
     assertThat(encode.hasInputEnded()).isTrue();
   }
 
+  // A stop terminates the encoding FFmpeg, and a transfer that then meets its closed pipe
+  // terminates the copying FFmpeg. A copy that ignores termination is still running whenever the
+  // interrupt arrives.
   @Test
   @DisplayName(
       "Should destroy the copying FFmpeg at once when the thread stopping the attempt is"
@@ -666,6 +669,7 @@ class ProducerRpuMovingPipeTest {
     var copy =
         ScriptedProcess.builder()
             .output(COPIED_SOURCE)
+            .ignoresTermination(true)
             .exitTiming(ExitTiming.WHEN_TEST_EXITS)
             .build();
     var encode = encodingFfmpeg().build();
