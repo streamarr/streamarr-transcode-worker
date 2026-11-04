@@ -54,7 +54,7 @@ final class DownmixLimiterPhases {
   static List<double[]> secondStage() {
     return NAMES.stream()
         .filter(name -> name.startsWith("bs"))
-        .map(name -> VECTORS.get(name))
+        .map(VECTORS::get)
         .map(taps -> Arrays.copyOfRange(taps, taps.length - ANNEX_TWO_TAPS, taps.length))
         .toList();
   }

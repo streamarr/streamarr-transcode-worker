@@ -37,8 +37,9 @@ class DownmixLimiterTest {
         .isEqualTo(1);
     assertThat(occurrences(filter, "atrim=start_sample=6,asetpts=round(PTS-6/(SR*TB))"))
         .isEqualTo(1);
-    assertThat(filter).contains("adelay=64S:all=1", "adelay=6S:all=1", "pan=stereo|c0=FL|c1=FR");
-    assertThat(filter).doesNotContain("aresample");
+    assertThat(filter)
+        .contains("adelay=64S:all=1", "adelay=6S:all=1", "pan=stereo|c0=FL|c1=FR")
+        .doesNotContain("aresample");
   }
 
   @Test
@@ -97,7 +98,7 @@ class DownmixLimiterTest {
     assertThat(groups).isGreaterThan(2);
     assertThat(IMPULSE_RESPONSE.matcher(filter).results()).hasSize(15);
     assertThat(occurrences(filter, ",asplit=" + groups + "[ir")).isEqualTo(15);
-    assertThat(filter.getBytes(StandardCharsets.UTF_8).length).isLessThan(LONGEST_ARGUMENT);
+    assertThat(filter.getBytes(StandardCharsets.UTF_8)).hasSizeLessThan(LONGEST_ARGUMENT);
   }
 
   private static String lossless(String source, String output, int sampleRate) {

@@ -40,10 +40,6 @@ sealed interface DownmixLimiter {
     return new TruePeak(MINUS_1_DBFS, sampleRate);
   }
 
-  private static String alimiter(String limit) {
-    return "alimiter=limit=" + limit + LIMITER_TIMING;
-  }
-
   /**
    * Two limiters in series. Each feeds alimiter the group beside short-FIR copies of it at the
    * group's own sample rate; each copy reads the waveform at one instant between a sample and the
@@ -97,6 +93,10 @@ sealed interface DownmixLimiter {
       return stage(first, channels, input, between)
           + ";"
           + stage(second, channels, between, output);
+    }
+
+    private static String alimiter(String limit) {
+      return "alimiter=limit=" + limit + LIMITER_TIMING;
     }
 
     private static List<String> labels(String vector, int vectors, int group) {
