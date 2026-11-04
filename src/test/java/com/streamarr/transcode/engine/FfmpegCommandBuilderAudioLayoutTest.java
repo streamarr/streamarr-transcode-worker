@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 @Tag("UnitTest")
 @DisplayName("FFmpeg Command Builder Audio Layout Tests")
@@ -202,6 +203,22 @@ class FfmpegCommandBuilderAudioLayoutTest {
                   + "mono|FC=0.7071068*FL+0.7071068*FR+0.8408970*FC"
                   + "+0.3535534*SL+0.3535534*SR[mix];aevalsrc=")
           .contains(MINUS_3_DBFS);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"flac", "alac", "aac"})
+    @DisplayName(
+        "Should leave channels out at the source rate when the probe gave no rate and nothing is"
+            + " summed")
+    void shouldLeaveChannelsOutAtTheSourceRateWhenTheProbeGaveNoRateAndNothingIsSummed(
+        String codec) {
+      var source = sourceBuilder("flac", "5.1(side)").sampleRate(OptionalInt.empty()).build();
+
+      var cmd = command(encode(codec, "5.0"), Optional.of(source));
+
+      assertThat(audioFilter(cmd))
+          .startsWith(FLOAT_PAN + "5.0|FL=FL|FR=FR|FC=FC|BL=SL|BR=SR")
+          .doesNotContain("alimiter", "aresample=osr");
     }
 
     @Test

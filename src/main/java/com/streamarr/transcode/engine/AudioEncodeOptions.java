@@ -2,6 +2,7 @@ package com.streamarr.transcode.engine;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Set;
@@ -123,9 +124,13 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
       ChannelStage.Downmix downmix) {
     var output = audio.channelLayout().orElseThrow();
     var filters = new ArrayList<String>();
-    var downmixRate = limitedRate(encoder, source, rate);
-    downmixRate.ifPresent(target -> filters.add(resample(target)));
     var matrix = downmix.matrix(source.loRoLevels());
+    var downmixRate = rate;
+    if (rate.isEmpty() && choosesTheLimitersRate(encoder, source, matrix)) {
+      downmixRate = Optional.of(LOSSY_SAMPLE_RATE);
+    }
+
+    downmixRate.ifPresent(target -> filters.add(resample(target)));
     var depth = writtenDepth(audio, source);
     var quantizesSummedChannels =
         encoder == Encoder.LOSSLESS
@@ -144,15 +149,13 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
     return filters;
   }
 
-  // The limiter's copies need the rate that the downmix runs at. A lossy encode can choose that
-  // rate when the probe gave none.
-  private static Optional<Integer> limitedRate(
-      Encoder encoder, SourceAudio source, Optional<Integer> rate) {
-    if (rate.isPresent() || source.sampleRate().isPresent() || encoder == Encoder.LOSSLESS) {
-      return rate;
-    }
-
-    return Optional.of(LOSSY_SAMPLE_RATE);
+  // The limiter's copies need the rate that the downmix runs at. A lossy encode that sums channels
+  // chooses that rate when the probe gave none.
+  private static boolean choosesTheLimitersRate(
+      Encoder encoder, SourceAudio source, Map<Speaker, Map<Speaker, Double>> matrix) {
+    return encoder != Encoder.LOSSLESS
+        && source.sampleRate().isEmpty()
+        && DownmixFilter.sumsChannels(matrix);
   }
 
   // The summed channels leave floating point at the written depth with TPDF dither.

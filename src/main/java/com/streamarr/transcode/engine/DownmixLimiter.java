@@ -33,17 +33,11 @@ sealed interface DownmixLimiter {
   String limit(int group, int channels, String input, String output);
 
   static DownmixLimiter forLossy(OptionalInt sampleRate) {
-    return new TruePeak(MINUS_3_DBFS, rateOf(sampleRate));
+    return new TruePeak(MINUS_3_DBFS, sampleRate);
   }
 
   static DownmixLimiter forLossless(OptionalInt sampleRate) {
-    return new TruePeak(MINUS_1_DBFS, rateOf(sampleRate));
-  }
-
-  // The copies' impulse responses run at the group's rate, which FFmpeg would otherwise resample.
-  private static int rateOf(OptionalInt sampleRate) {
-    return sampleRate.orElseThrow(
-        () -> new IllegalStateException("A true-peak limiter needs the source sample rate"));
+    return new TruePeak(MINUS_1_DBFS, sampleRate);
   }
 
   private static String alimiter(String limit) {
@@ -60,7 +54,8 @@ sealed interface DownmixLimiter {
    * 2 filter spans, so the filter does not read what the limiter held, and the second stage turns
    * that error into a second-order one.
    */
-  record TruePeak(@NonNull String limit, int sampleRate) implements DownmixLimiter {
+  record TruePeak(@NonNull String limit, @NonNull OptionalInt sampleRate)
+      implements DownmixLimiter {
 
     private static final String FILTER =
         "afir=gtype=none:irnorm=-1:irgain=1:irfmt=mono:precision=double:minp=128:maxp=128";
@@ -173,17 +168,19 @@ sealed interface DownmixLimiter {
               .mapToObj(tap -> taps[tap] + "*eq(n," + tap + ")")
               .toList();
       var chain =
-          "aevalsrc=exprs='"
-              + sum(terms)
-              + "':s="
-              + sampleRate
-              + ",atrim=end_sample="
-              + taps.length;
+          "aevalsrc=exprs='" + sum(terms) + "':s=" + rate() + ",atrim=end_sample=" + taps.length;
       var outputs =
           IntStream.range(0, groups)
               .mapToObj(group -> "[" + label + "g" + group + "]")
               .collect(Collectors.joining());
       return groups == 1 ? chain + outputs : chain + ",asplit=" + groups + outputs;
+    }
+
+    // The copies' impulse responses run at the group's rate, which FFmpeg would otherwise
+    // resample. A downmix that sums nothing builds no limiter, so it needs no rate.
+    private int rate() {
+      return sampleRate.orElseThrow(
+          () -> new IllegalStateException("A true-peak limiter needs the source sample rate"));
     }
 
     // FFmpeg's expression parser fails with ENOMEM on a flat sum of about a hundred terms, so the

@@ -69,6 +69,11 @@ final class DownmixFilter {
     }
   }
 
+  /** Whether any output channel sums two or more source channels, so that a limiter holds it. */
+  static boolean sumsChannels(Map<Speaker, Map<Speaker, Double>> matrix) {
+    return matrix.values().stream().anyMatch(row -> row.size() > 1);
+  }
+
   /**
    * Whether every output channel either holds one source channel at its own level, is silent, or
    * sums two or more source channels.
