@@ -303,6 +303,31 @@ class SegmentAssemblerBitstreamRewriteTest {
             exception -> assertThat(exception.getReason()).isEqualTo(Reason.OUTPUT_MISMATCH));
   }
 
+  @Test
+  @DisplayName(
+      "Should refuse a fragment as an output mismatch when an enhancement-layer NAL unit that the"
+          + " copy keeps wraps HDR10+ that it strips")
+  void shouldRefuseAFragmentWhenAnEnhancementLayerNalUnitThatTheCopyKeepsWrapsHdr10Plus()
+      throws IOException {
+    // A type 63 NAL unit that wraps a prefix SEI NAL unit (header 4E 01) of the enhancement layer.
+    var wrapped = nalUnit(63, HexFormat.of().parseHex("4E01" + HDR10_PLUS_MESSAGE + RBSP_STOP));
+    var keyframe = sample(aud(), slice(0), wrapped);
+    var output =
+        Mp4Stream.read(
+            Mp4Stream.readerOf(
+                concat(
+                    bytesOfInitializationSegment(HEVC_SEGMENT),
+                    fragmentBuilder().startsWithKeyframe(true).video(0, keyframe).build())));
+    var assembler = assemblerFor(copyOf(HEVC_CODEC_STRING, BitstreamRewrite.STRIP_HDR10_PLUS));
+    assembler.accept(output.initializationSegment());
+    var fragment = output.fragments().getFirst();
+
+    assertThatThrownBy(() -> assembler.accept(fragment))
+        .isInstanceOfSatisfying(
+            FragmentedMp4Exception.class,
+            exception -> assertThat(exception.getReason()).isEqualTo(Reason.OUTPUT_MISMATCH));
+  }
+
   @ParameterizedTest(name = "{0}")
   @MethodSource("av1RecordsThatHoldAStrippedObu")
   @DisplayName(

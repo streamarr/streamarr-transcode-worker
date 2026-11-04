@@ -22,7 +22,8 @@ final class HevcSampleRewrite implements SampleRewrite {
 
   // NAL unit types (ITU-T H.265 table 7-1).
   private static final Set<Integer> SEI_TYPES = Set.of(39, 40);
-  private static final Set<Integer> DOLBY_VISION_TYPES = Set.of(62, 63);
+  private static final int ENHANCEMENT_LAYER = 63;
+  private static final Set<Integer> DOLBY_VISION_TYPES = Set.of(62, ENHANCEMENT_LAYER);
   private static final int NAL_UNIT_HEADER_BYTES = 2;
   // user_data_registered_itu_t_t35 (ITU-T H.265 D.2.6); HDR10+ registers country code 0xB5,
   // provider code 0x003C, provider-oriented code 0x0001 and application identifier 4.
@@ -87,6 +88,12 @@ final class HevcSampleRewrite implements SampleRewrite {
 
     if (stripsHdr10Plus && SEI_TYPES.contains(type)) {
       return withoutHdr10Plus(unit);
+    }
+
+    if (stripsHdr10Plus && type == ENHANCEMENT_LAYER && wrapsHdr10Plus(unit)) {
+      throw new FragmentedMp4Exception(
+          FragmentedMp4Exception.Reason.OUTPUT_MISMATCH,
+          "an enhancement-layer NAL unit wraps HDR10+, which the copy cannot strip");
     }
 
     return Optional.of(unit);
@@ -174,12 +181,22 @@ final class HevcSampleRewrite implements SampleRewrite {
   // behind bit-level fields. Removing one of them would mean rewriting those fields, so the copy
   // refuses any other message whose payload holds HDR10+'s registration anywhere.
   private static boolean nestsHdr10Plus(byte[] rbsp, Message message) {
-    if (isHdr10Plus(rbsp, message)) {
-      return false;
-    }
+    return !isHdr10Plus(rbsp, message)
+        && holdsHdr10PlusAnywhere(rbsp, message.payloadStart(), message.end());
+  }
 
-    for (var start = message.payloadStart(); start < message.end(); start++) {
-      if (holdsAt(rbsp, start, message.end(), HDR10_PLUS_PREFIX)) {
+  // A type 63 NAL unit wraps a whole enhancement-layer NAL unit, which can be an SEI NAL unit; the
+  // registration bytes hold no two zero bytes in a row, so no emulation prevention byte splits
+  // them.
+  private static boolean wrapsHdr10Plus(ByteBuffer unit) {
+    var bytes = new byte[unit.remaining()];
+    unit.duplicate().get(bytes);
+    return holdsHdr10PlusAnywhere(bytes, NAL_UNIT_HEADER_BYTES, bytes.length);
+  }
+
+  private static boolean holdsHdr10PlusAnywhere(byte[] bytes, int start, int end) {
+    for (var at = start; at < end; at++) {
+      if (holdsAt(bytes, at, end, HDR10_PLUS_PREFIX)) {
         return true;
       }
     }
