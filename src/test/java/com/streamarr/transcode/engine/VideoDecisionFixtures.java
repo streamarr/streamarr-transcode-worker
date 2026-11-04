@@ -25,11 +25,18 @@ final class VideoDecisionFixtures {
         .codecString(ENCODED_RECORDING_CODEC_STRING);
   }
 
+  /** A copy of stream 0, to which a test adds the codec string and what else it needs. */
+  static VideoDecision.Copy.CopyBuilder copyBuilder() {
+    return VideoDecision.Copy.builder().streamIndex(0);
+  }
+
   /** The video decision that a job for the recording carries. */
   static VideoDecision forRecording(FfmpegRecordings.Recording recording) {
     if (recording.encoder().isEmpty()) {
-      return new VideoDecision.Copy(
-          0, recording.videoCodecString(), recording.copyKeepsPacketBytes());
+      return copyBuilder()
+          .codecString(recording.videoCodecString())
+          .keepsPacketBytes(recording.copyKeepsPacketBytes())
+          .build();
     }
 
     return encodeBuilder().codecString(recording.videoCodecString()).build();
@@ -46,11 +53,11 @@ final class VideoDecisionFixtures {
 
   /** A copy of stream 0 whose job does not say that the copy keeps every packet's bytes. */
   static VideoDecision.Copy copyOf(String codecString) {
-    return new VideoDecision.Copy(0, codecString, false);
+    return copyBuilder().codecString(codecString).build();
   }
 
   /** A copy of stream 0 whose job says that the copy keeps every packet's bytes. */
   static VideoDecision.Copy copyKeepingPacketBytesOf(String codecString) {
-    return new VideoDecision.Copy(0, codecString, true);
+    return copyBuilder().codecString(codecString).keepsPacketBytes(true).build();
   }
 }

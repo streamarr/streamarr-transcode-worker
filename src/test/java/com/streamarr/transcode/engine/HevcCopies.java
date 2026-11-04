@@ -48,6 +48,8 @@ final class HevcCopies {
   static final int END_OF_SEQUENCE = 36;
   static final int SUFFIX_SEI = 40;
   static final int UNSPECIFIED_62 = 62;
+  static final int UNSPECIFIED_63 = 63;
+  static final int PREFIX_SEI = 39;
   static final int RPU_NAL_PREFIX = 25;
 
   // The composition offset of a video run of one sample, as a stream with B-frames gives it.
@@ -111,6 +113,19 @@ final class HevcCopies {
   /** The RPU of the picture with the given number. */
   static byte[] rpu(int picture) {
     return rpuUnit().picture(picture).build();
+  }
+
+  /**
+   * A NAL unit of type 63, which carries the enhancement layer of a single-track Dolby Vision
+   * profile 7 stream, with the picture's number.
+   */
+  static byte[] enhancementLayer(int picture) {
+    return new NalUnitBuilder(UNSPECIFIED_63, OptionalInt.of(0x02)).picture(picture).build();
+  }
+
+  /** A NAL unit of the type, with its 2-byte header and the payload as given, after 4 bytes. */
+  static byte[] nalUnit(int type, byte[] payload) {
+    return concat(u32(2L + payload.length), new byte[] {(byte) (type << 1), 1}, payload);
   }
 
   static byte[] suffixSei(int picture) {
