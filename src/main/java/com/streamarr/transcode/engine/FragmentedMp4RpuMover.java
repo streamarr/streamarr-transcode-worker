@@ -56,8 +56,6 @@ final class FragmentedMp4RpuMover {
   private static final Set<String> HEVC_SAMPLE_ENTRIES = Set.of("hvc1", "hev1", "dvh1", "dvhe");
   private static final Set<String> MOOF_CHILDREN = Set.of("mfhd", "traf");
   private static final Set<String> TRAF_CHILDREN = Set.of("tfhd", "tfdt", "trun");
-  private static final int LENGTH_SIZE_FIELD =
-      CodecConfigurationReader.HVCC_FIELDS_BEFORE_ARRAYS - 1;
   private static final int BOX_HEADER_BYTES = 8;
   private static final long LARGEST_SAMPLE_DURATION = 0xFFFF_FFFFL;
 
@@ -131,17 +129,7 @@ final class FragmentedMp4RpuMover {
                 () ->
                     new FragmentedMp4Exception(
                         Reason.OUTPUT_MISMATCH, "the copy of the source declares no HEVC video"));
-    var hvcC =
-        entry
-            .after(CodecConfigurationReader.VISUAL_SAMPLE_ENTRY_BYTES)
-            .requiredChild("hvcC")
-            .fields();
-    var lengthSize = (hvcC.skip(LENGTH_SIZE_FIELD).u8() & 0x03) + 1;
-    if (lengthSize == 3) {
-      throw FragmentedMp4Exception.malformed("hvcC declares NAL unit lengths of 3 bytes");
-    }
-
-    return lengthSize;
+    return CodecConfigurationReader.nalUnitLengthSizeOf(entry);
   }
 
   private void accept(Fragment fragment) throws IOException {

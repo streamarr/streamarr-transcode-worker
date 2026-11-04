@@ -32,6 +32,8 @@ final class CodecConfigurationReader {
   // The hvcC fields before its array count (ISO/IEC 14496-15 8.3.2.1.2), and the NAL unit types of
   // the VPS, SPS and PPS (ITU-T H.265 table 7-1).
   static final int HVCC_FIELDS_BEFORE_ARRAYS = 22;
+  // lengthSizeMinusOne sits in the low 2 bits of the last field before the arrays.
+  private static final int HVCC_LENGTH_SIZE_FIELD = HVCC_FIELDS_BEFORE_ARRAYS - 1;
   private static final Set<Integer> HEVC_PARAMETER_SET_TYPES = Set.of(32, 33, 34);
   private static final int MPEG4_AUDIO = 0x40;
   private static final int ES_DESCRIPTOR = 0x03;
@@ -101,6 +103,23 @@ final class CodecConfigurationReader {
               .containsAll(HEVC_PARAMETER_SET_TYPES);
       default -> true;
     };
+  }
+
+  /**
+   * The bytes of the length before each NAL unit in the samples of an HEVC sample entry, as its
+   * hvcC declares them: 1, 2 or 4.
+   *
+   * @throws FragmentedMp4Exception when the hvcC is missing or too short, or declares lengths of 3
+   *     bytes
+   */
+  static int nalUnitLengthSizeOf(BoxView hevcSampleEntry) {
+    var hvcC = hevcSampleEntry.after(VISUAL_SAMPLE_ENTRY_BYTES).requiredChild("hvcC").fields();
+    var lengthSize = (hvcC.skip(HVCC_LENGTH_SIZE_FIELD).u8() & 0x03) + 1;
+    if (lengthSize == 3) {
+      throw FragmentedMp4Exception.malformed("hvcC declares NAL unit lengths of 3 bytes");
+    }
+
+    return lengthSize;
   }
 
   private static BoxView moovOf(InitializationSegment segment) {
