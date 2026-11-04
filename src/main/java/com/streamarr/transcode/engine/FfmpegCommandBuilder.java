@@ -257,8 +257,9 @@ public class FfmpegCommandBuilder {
             "pipe:0",
             "-map",
             "0:v:0"));
-    if (decision.audioDecision().mode() != AudioMode.NONE) {
-      cmd.addAll(List.of("-map", "0:a:0"));
+    var audio = decision.audioDecision();
+    if (audio.mode() != AudioMode.NONE) {
+      cmd.addAll(List.of("-map", audioMap(audio, "a:0")));
     }
   }
 
@@ -320,12 +321,23 @@ public class FfmpegCommandBuilder {
     cmd.addAll(List.of("-map", "0:" + decision.videoDecision().streamIndex()));
     var audio = decision.audioDecision();
     if (audio.mode() != AudioMode.NONE) {
-      cmd.addAll(List.of("-map", "0:" + audio.sourceStreamSpecifier()));
+      cmd.addAll(List.of("-map", audioMap(audio, audio.sourceStreamSpecifier())));
     }
 
     if (decision.subtitleDecision().mode() == SubtitleMode.EXCLUDE) {
       cmd.addAll(List.of("-map", "-0:s"));
     }
+  }
+
+  // A stream that the job names maps nothing when the source has no stream there, so that the
+  // producer refuses the output that lacks its sound track as the job's error, where FFmpeg would
+  // fail to start. Without a name, FFmpeg fails as before when the source has no audio stream.
+  private static String audioMap(AudioDecision audio, String specifier) {
+    if (audio.streamIndex().isPresent()) {
+      return "0:" + specifier + "?";
+    }
+
+    return "0:" + specifier;
   }
 
   // The copy of the source already starts at zero, so the encode of the copy keeps its timestamps.

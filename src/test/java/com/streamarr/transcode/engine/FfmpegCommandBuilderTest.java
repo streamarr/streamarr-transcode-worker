@@ -1590,8 +1590,16 @@ class FfmpegCommandBuilderTest {
     var cmd = command(request, mode.encodesVideo() ? "libx264" : "copy");
 
     assertThat(cmd)
-        .containsSequence("-map", "0:0", "-map", "0:2", "-map", "-0:s")
+        .containsSequence("-map", "0:0", "-map", "0:2?", "-map", "-0:s")
         .doesNotContain("0:a:0");
+  }
+
+  @Test
+  @DisplayName("Should map the first audio stream and require it when the job names none")
+  void shouldMapTheFirstAudioStreamAndRequireItWhenTheJobNamesNone() {
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), "libx264");
+
+    assertThat(cmd).containsSequence("-map", "0:0", "-map", "0:a:0", "-map", "-0:s");
   }
 
   @Test
@@ -2002,9 +2010,9 @@ class FfmpegCommandBuilderTest {
     var pipe = rpuMovingPipe(builder.buildPipeline(job(request(decision).build(), "libx264")));
 
     assertThat(pipe.copyCommand())
-        .containsSequence("-map", "0:0", "-map", "0:3", "-map", "-0:s")
+        .containsSequence("-map", "0:0", "-map", "0:3?", "-map", "-0:s")
         .doesNotContain("0:a:0");
-    assertThat(pipe.encodeCommand()).containsSequence("-map", "0:v:0", "-map", "0:a:0");
+    assertThat(pipe.encodeCommand()).containsSequence("-map", "0:v:0", "-map", "0:a:0?");
   }
 
   @Test

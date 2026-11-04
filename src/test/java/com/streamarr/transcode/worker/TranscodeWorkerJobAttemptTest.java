@@ -6,6 +6,7 @@ import static com.streamarr.transcode.fixtures.DeliveredSamples.assertCarriesThe
 import static com.streamarr.transcode.fixtures.DeliveredSamples.audioSamplesOfTheDeliveredSegments;
 import static com.streamarr.transcode.fixtures.Races.awaitStart;
 import static com.streamarr.transcode.fixtures.RecordingEdits.withBytesAfterTheFirstVideoSample;
+import static com.streamarr.transcode.fixtures.RecordingEdits.withSoundTrackHandledAs;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
 import static com.streamarr.transcode.fixtures.RecordingFixtures.uploadNames;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.SOURCE_NAMESPACE_ID;
@@ -1301,8 +1302,33 @@ class TranscodeWorkerJobAttemptTest {
 
       assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
       assertThat(launcher.command(fromProto(job.getJobAttemptId())))
-          .containsSequence("-map", "0:0", "-map", "0:2")
+          .containsSequence("-map", "0:0", "-map", "0:2?")
           .doesNotContain("0:a:0");
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should refuse the job as an invalid specification and upload nothing when the output holds"
+          + " no sound track of the audio stream that the job names")
+  void
+      shouldRefuseTheJobAsAnInvalidSpecificationAndUploadNothingWhenTheOutputHoldsNoSoundTrackOfTheAudioStreamThatTheJobNames()
+          throws Exception {
+    var output = withSoundTrackHandledAs(bytesOf(ENCODED_RECORDING), "sbtl");
+    var launcher =
+        new ScriptedProcessLauncher(_ -> ScriptedProcess.builder().output(output).build());
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getDecisionBuilder().getAudioBuilder().setStreamIndex(3);
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(lastEvent(connection).getJobAttemptFailed().getFailure())
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
+      assertThat(connection.uploads()).isEmpty();
     }
   }
 

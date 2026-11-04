@@ -1235,6 +1235,40 @@ class WorkerMediaSmokeTest {
             });
   }
 
+  @ParameterizedTest(name = "{0} naming stream {1}")
+  @CsvSource({
+    "TRANSCODE_MODE_REMUX, 0",
+    "TRANSCODE_MODE_REMUX, 9",
+    "TRANSCODE_MODE_FULL_TRANSCODE, 0",
+    "TRANSCODE_MODE_FULL_TRANSCODE, 9"
+  })
+  @DisplayName(
+      "Should report an invalid specification and upload nothing when the stream that the job names"
+          + " as its audio is the video or no stream of a real source")
+  void
+      shouldReportAnInvalidSpecificationAndUploadNothingWhenTheStreamThatTheJobNamesAsItsAudioIsTheVideoOrNoStreamOfARealSource(
+          TranscodeMode mode, int streamIndex) throws Exception {
+    var source = sourceWithTwoAudioTracks();
+    var job = variantJobBuilder(mode);
+    withVideo(job, h264VideoFor(mode, FIXTURE));
+    job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setMode(audioModeOf(mode))
+        .setCodec("aac")
+        .setChannels(2)
+        .setBitrateBitsPerSecond(128_000)
+        .setStreamIndex(streamIndex);
+    job.getVariantBuilder().setWidth(320).setHeight(180).setBitrateBitsPerSecond(500_000);
+    job.getExecutionBuilder().setMediaSegmentCount(FIXTURE_SEGMENT_COUNT);
+
+    var failure = executeExpectingFailure(engine(softwareCapabilities()), root, job.build());
+
+    assertThat(failure.failure().getFailure())
+        .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
+    assertThat(failure.uploads().names()).isEmpty();
+  }
+
   // The fixture's video and 48 kHz AAC track, then its audio again as a 44.1 kHz AC-3 track.
   private Path sourceWithTwoAudioTracks() throws Exception {
     copyMedia();

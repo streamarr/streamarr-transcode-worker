@@ -138,7 +138,8 @@ public final class FfprobeExecutor {
    * specifies as FFmpeg does, as one ffprobe run with FFmpeg's default read limits reads them, so
    * that ffprobe sees the stream as the attempt's FFmpeg does.
    *
-   * @throws ChosenAudioException when ffprobe fails or the stream is not an audio stream
+   * @throws ChosenAudioException when ffprobe fails
+   * @throws NotAnAudioStreamException when the specifier specifies no audio stream of the source
    */
   public ProbeStreamInfo readChosenAudio(@NonNull Path source, @NonNull String streamSpecifier)
       throws ExecutionException, InterruptedException {
@@ -152,7 +153,7 @@ public final class FfprobeExecutor {
     return ProbeMediaReader.read(objectMapper.readTree(output.stdout())).getStreamsList().stream()
         .filter(stream -> "audio".equals(stream.getCodecType()))
         .findFirst()
-        .orElseThrow(() -> new ChosenAudioException("The source has no audio stream"));
+        .orElseThrow(NotAnAudioStreamException::new);
   }
 
   /**
@@ -209,6 +210,14 @@ public final class FfprobeExecutor {
 
     ChosenAudioException(String message) {
       super(message);
+    }
+  }
+
+  /** A read of the chosen audio stream that found no audio stream where the specifier points. */
+  public static final class NotAnAudioStreamException extends RuntimeException {
+
+    NotAnAudioStreamException() {
+      super("The stream specifier specifies no audio stream of the source");
     }
   }
 

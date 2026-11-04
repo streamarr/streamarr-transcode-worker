@@ -14,6 +14,9 @@ sealed interface ChosenAudio {
 
   record Read(SourceAudio facts) implements ChosenAudio {}
 
+  /** The stream that the job names as its audio is not an audio stream of the source. */
+  record NotAnAudioStream() implements ChosenAudio {}
+
   /** The read failed, so the attempt cannot choose how to encode the audio. */
   record Unreadable(Exception failure) implements ChosenAudio {}
 

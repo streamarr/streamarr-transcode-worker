@@ -107,6 +107,9 @@ public final class Producer {
    * @param videoDecision the video that the initialization segment must declare; the producer fails
    *     the attempt as an output mismatch, before it delivers anything, when it declares other
    *     video
+   * @param requiresSoundTrack whether the initialization segment must declare a sound track, as it
+   *     must when the job names its audio stream; the producer fails the attempt as not an audio
+   *     stream, before it delivers anything, when it declares none
    * @param memoryBudget the worker's segment memory, which every producer of the worker shares
    * @param clock the clock that times each media segment's production
    * @throws TranscodeException when FFmpeg cannot be started
@@ -122,6 +125,7 @@ public final class Producer {
       @NonNull Duration stallTimeout,
       @NonNull Optional<OutputFrameRate> encodedFrameRate,
       @NonNull VideoDecision videoDecision,
+      boolean requiresSoundTrack,
       @NonNull SegmentMemoryBudget memoryBudget,
       @NonNull SegmentSink sink,
       @NonNull MonotonicClock clock) {
@@ -135,6 +139,7 @@ public final class Producer {
                     .maximumSegmentBytes(MAXIMUM_SEGMENT_BYTES)
                     .encodedFrameRate(encodedFrameRate)
                     .videoDecision(videoDecision)
+                    .requiresSoundTrack(requiresSoundTrack)
                     .build())
             .sink(sink)
             .memoryBudget(memoryBudget)

@@ -704,6 +704,36 @@ class ProducerTest {
         .containsExactly("init.mp4", "segment0.m4s", "segment1.m4s", "segment2.m4s");
   }
 
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("moviesWithoutTheSoundTrackOfAnAudioStream")
+  @DisplayName(
+      "Should fail the attempt as not an audio stream and deliver nothing when the movie lacks the"
+          + " sound track that the job's named audio stream gives it")
+  void
+      shouldFailTheAttemptAsNotAnAudioStreamAndDeliverNothingWhenTheMovieLacksTheSoundTrackThatTheJobsNamedAudioStreamGivesIt(
+          String description, byte[] moov) {
+    var output =
+        OneSecondSegments.of(
+            moov, TimedFragment.keyframeAt(0).build(), TimedFragment.keyframeAt(24_000).build());
+    var process = ScriptedProcess.builder().output(output.bytes()).build();
+
+    var producer = producerOfOneSecondSegments(process).requiresSoundTrack(true).start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.NOT_AN_AUDIO_STREAM);
+    assertThat(sink.acceptedNames()).isEmpty();
+  }
+
+  // FFmpeg maps nothing for a named stream that the source lacks, and maps a named video stream as
+  // a second video track.
+  static Stream<Arguments> moviesWithoutTheSoundTrackOfAnAudioStream() {
+    var secondVideoTrack = IsoBoxes.Track.video().trackId(3).build();
+    return Stream.of(
+        Arguments.of("no sound track", videoOnlyMoov()),
+        Arguments.of(
+            "a second video track",
+            IsoBoxes.moov(IsoBoxes.Track.video().build(), secondVideoTrack)));
+  }
+
   @Test
   @DisplayName("Should deliver a media segment still waiting for audio when the output ends")
   void shouldDeliverAMediaSegmentStillWaitingForAudioWhenTheOutputEnds() {

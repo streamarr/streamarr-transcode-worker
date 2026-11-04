@@ -467,7 +467,7 @@ class FfmpegCommandBuilderAudioLayoutTest {
 
       assertThat(cmd)
           .containsSubsequence("-drc_scale:2", "0", "-target_level:2", "-31", "-i")
-          .containsSequence("-map", "0:2")
+          .containsSequence("-map", "0:2?")
           .doesNotContain("-drc_scale:a:0", "0:a:0");
     }
 
@@ -697,12 +697,12 @@ class FfmpegCommandBuilderAudioLayoutTest {
   }
 
   @ParameterizedTest(name = "stream {0}")
-  @CsvSource({"'', a:0", "2, 2"})
+  @CsvSource({"'', a:0, 0:a:0", "2, 2, 0:2?"})
   @DisplayName(
       "Should encode the named layout of the job's audio stream in the source copy when the job"
           + " moves Dolby Vision RPUs")
   void shouldEncodeTheNamedLayoutOfTheJobsAudioStreamInTheSourceCopyWhenTheJobMovesDolbyVisionRpus(
-      String streamIndex, String specifier) {
+      String streamIndex, String specifier, String map) {
     var audio =
         encodeBuilder("opus", "5.1")
             .streamIndex(
@@ -739,7 +739,7 @@ class FfmpegCommandBuilderAudioLayoutTest {
 
     assertThat(pipeline.copyCommand())
         .containsSubsequence("-drc_scale:" + specifier, "0", "-i")
-        .containsSequence("-map", "0:" + specifier)
+        .containsSequence("-map", map)
         .containsSubsequence("-c:a", "libopus", "-af")
         .containsSubsequence("-ch_layout", "5.1");
   }

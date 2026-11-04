@@ -40,6 +40,35 @@ public final class RecordingEdits {
     return grown.toByteArray();
   }
 
+  /**
+   * The recording with its sound track's handler type replaced, as FFmpeg writes a track of the
+   * stream that a job maps as its audio when that stream is not an audio stream.
+   */
+  public static byte[] withSoundTrackHandledAs(byte[] recording, String handlerType) {
+    var edited = recording.clone();
+    var hdlr = "hdlr".getBytes(US_ASCII);
+    var soun = "soun".getBytes(US_ASCII);
+    // The handler type follows the hdlr box's type, version, flags and pre_defined field.
+    for (var type = 0; type + 16 <= edited.length; type++) {
+      if (matches(edited, type, hdlr) && matches(edited, type + 12, soun)) {
+        System.arraycopy(handlerType.getBytes(US_ASCII), 0, edited, type + 12, 4);
+        return edited;
+      }
+    }
+
+    throw new IllegalArgumentException("The recording declares no sound track");
+  }
+
+  private static boolean matches(byte[] bytes, int offset, byte[] expected) {
+    for (var i = 0; i < expected.length; i++) {
+      if (bytes[offset + i] != expected[i]) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
   // Where each trun of the moof starts, in traf order: the video traf's first, as FFmpeg writes it.
   private static List<Integer> runsOf(ByteBuffer fields, Box moof) {
     return childrenOf(fields, moof.start(), "traf").stream()
