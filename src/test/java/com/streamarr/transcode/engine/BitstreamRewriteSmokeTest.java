@@ -109,8 +109,7 @@ class BitstreamRewriteSmokeTest {
   @DisplayName(
       "Should deliver no NAL unit of type 62 or 63 and no configuration record when the copy strips"
           + " Dolby Vision from samples with several enhancement-layer units")
-  void shouldDeliverNoNalUnitOf62Or63AndNoRecordWhenTheCopyStripsDolbyVision(int firstSegment)
-      throws Exception {
+  void shouldDeliverNoNalUnitOf62Or63AndNoRecordWhenTheCopyStripsDolbyVision(int firstSegment) {
     var delivered = copied(EnumSet.of(BitstreamRewrite.STRIP_DOLBY_VISION), firstSegment);
 
     assertThat(delivered.names()).containsExactlyElementsOf(namesFrom(firstSegment));
@@ -128,8 +127,7 @@ class BitstreamRewriteSmokeTest {
   @DisplayName(
       "Should deliver the RPUs, the enhancement-layer units and the configuration record when the"
           + " copy lists no rewrite")
-  void shouldDeliverTheRpusEnhancementLayerUnitsAndRecordWhenTheCopyListsNoRewrite()
-      throws Exception {
+  void shouldDeliverTheRpusEnhancementLayerUnitsAndRecordWhenTheCopyListsNoRewrite() {
     var delivered = copied(Set.of(), 0);
 
     assertThat(delivered.recordTypes()).containsExactly("dvcC");
