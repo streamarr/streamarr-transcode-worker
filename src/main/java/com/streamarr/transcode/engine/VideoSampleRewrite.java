@@ -52,8 +52,10 @@ final class VideoSampleRewrite {
     SampleRewrite rewrite =
         switch (sampleEntry.type()) {
           case "hvc1", "hev1", "dvh1" ->
-              new HevcSampleRewrite(
-                  CodecConfigurationReader.nalUnitLengthSizeOf(sampleEntry), sampleRewrites);
+              new NalUnitSampleRewrite(
+                  NalSyntax.HEVC,
+                  CodecConfigurationReader.nalUnitLengthSizeOf(sampleEntry),
+                  sampleRewrites);
           case "av01" -> new Av1SampleRewrite(sampleRewrites);
           default ->
               throw mismatch(

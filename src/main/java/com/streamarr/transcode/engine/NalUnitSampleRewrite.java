@@ -9,28 +9,25 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * Strips Dolby Vision, HDR10+ or both from an HEVC sample whose NAL units each follow a big-endian
- * length of the size that the sample entry's {@code hvcC} declares (ISO/IEC 14496-15 8.3.2).
- * Stripping Dolby Vision removes every NAL unit of type 62, which holds the RPUs, and of type 63,
- * which holds a single-track profile 7 enhancement layer, whatever their layer and temporal id.
- * Stripping HDR10+ removes each HDR10+ message from the prefix and suffix SEI NAL units and keeps
- * their other messages; a NAL unit left with no message goes. Every other NAL unit keeps its bytes,
- * and so does an SEI NAL unit that holds no HDR10+ message. Bytes after the last NAL unit too few
- * to hold a length stay where they are.
+ * Strips Dolby Vision, HDR10+ or both from a sample whose NAL units each follow a big-endian length
+ * of the size that the sample entry's decoder configuration record declares (ISO/IEC 14496-15).
+ * Stripping Dolby Vision removes every NAL unit that the syntax names as Dolby Vision: in HEVC,
+ * type 62, which holds the RPUs, and type 63, which holds a single-track profile 7 enhancement
+ * layer, whatever their layer and temporal id. Stripping HDR10+ removes each HDR10+ message from
+ * the SEI NAL units and keeps their other messages; a NAL unit left with no message goes. Every
+ * other NAL unit keeps its bytes, and so does an SEI NAL unit that holds no HDR10+ message. Bytes
+ * after the last NAL unit too few to hold a length stay where they are.
  */
-final class HevcSampleRewrite implements SampleRewrite {
+final class NalUnitSampleRewrite implements SampleRewrite {
 
-  // NAL unit types (ITU-T H.265 table 7-1).
-  private static final Set<Integer> SEI_TYPES = Set.of(39, 40);
-  private static final int ENHANCEMENT_LAYER = 63;
-  private static final Set<Integer> DOLBY_VISION_TYPES = Set.of(62, ENHANCEMENT_LAYER);
-  private static final int NAL_UNIT_HEADER_BYTES = 2;
-  // user_data_registered_itu_t_t35 (ITU-T H.265 D.2.6); HDR10+ registers country code 0xB5,
+  // user_data_registered_itu_t_t35 (ITU-T H.265 D.2.6, ITU-T H.264 D.1.6); HDR10+ registers country
+  // code 0xB5,
   // provider code 0x003C, provider-oriented code 0x0001 and application identifier 4.
   private static final int REGISTERED_USER_DATA = 4;
   private static final byte[] HDR10_PLUS_PREFIX = {(byte) 0xB5, 0x00, 0x3C, 0x00, 0x01, 0x04};
   private static final int RBSP_STOP_BYTE = 0x80;
 
+  private final NalSyntax syntax;
   private final int lengthSize;
   private final boolean stripsDolbyVision;
   private final boolean stripsHdr10Plus;
@@ -38,7 +35,8 @@ final class HevcSampleRewrite implements SampleRewrite {
   /**
    * @param lengthSize the bytes of each NAL unit's length: 1, 2 or 4
    */
-  HevcSampleRewrite(int lengthSize, Set<BitstreamRewrite> rewrites) {
+  NalUnitSampleRewrite(NalSyntax syntax, int lengthSize, Set<BitstreamRewrite> rewrites) {
+    this.syntax = syntax;
     this.lengthSize = lengthSize;
     this.stripsDolbyVision = rewrites.contains(BitstreamRewrite.STRIP_DOLBY_VISION);
     this.stripsHdr10Plus = rewrites.contains(BitstreamRewrite.STRIP_HDR10_PLUS);
@@ -77,20 +75,20 @@ final class HevcSampleRewrite implements SampleRewrite {
 
   // The NAL unit as the copy keeps it: the same buffer, a rewritten SEI NAL unit, or nothing.
   private Optional<ByteBuffer> rewrittenUnit(ByteBuffer unit) {
-    if (unit.remaining() < NAL_UNIT_HEADER_BYTES) {
+    if (unit.remaining() < syntax.headerBytes()) {
       return Optional.of(unit);
     }
 
-    var type = (Byte.toUnsignedInt(unit.get(0)) >> 1) & 0x3F;
-    if (stripsDolbyVision && DOLBY_VISION_TYPES.contains(type)) {
+    var type = syntax.typeOf(unit.get(0));
+    if (stripsDolbyVision && syntax.isDolbyVision(type)) {
       return Optional.empty();
     }
 
-    if (stripsHdr10Plus && SEI_TYPES.contains(type)) {
+    if (stripsHdr10Plus && syntax.isSei(type)) {
       return withoutHdr10Plus(unit);
     }
 
-    if (stripsHdr10Plus && type == ENHANCEMENT_LAYER && wrapsHdr10Plus(unit)) {
+    if (stripsHdr10Plus && syntax.wrapsNalUnits(type) && wrapsHdr10Plus(unit)) {
       throw new FragmentedMp4Exception(
           FragmentedMp4Exception.Reason.OUTPUT_MISMATCH,
           "an enhancement-layer NAL unit wraps HDR10+, which the copy cannot strip");
@@ -99,9 +97,10 @@ final class HevcSampleRewrite implements SampleRewrite {
     return Optional.of(unit);
   }
 
-  private static Optional<ByteBuffer> withoutHdr10Plus(ByteBuffer unit) {
+  private Optional<ByteBuffer> withoutHdr10Plus(ByteBuffer unit) {
+    var headerBytes = syntax.headerBytes();
     var payload =
-        HevcEmulationPrevention.unescaped(unit.slice(NAL_UNIT_HEADER_BYTES, unit.remaining() - 2));
+        HevcEmulationPrevention.unescaped(unit.slice(headerBytes, unit.remaining() - headerBytes));
     var messages = messagesOf(payload);
     if (messages.stream().anyMatch(message -> nestsHdr10Plus(payload, message))) {
       throw new FragmentedMp4Exception(
@@ -122,8 +121,10 @@ final class HevcSampleRewrite implements SampleRewrite {
     kept.forEach(message -> rbsp.write(payload, message.start(), message.end() - message.start()));
     rbsp.write(RBSP_STOP_BYTE);
     var rewritten = new ByteArrayOutputStream();
-    rewritten.write(unit.get(0));
-    rewritten.write(unit.get(1));
+    for (var index = 0; index < headerBytes; index++) {
+      rewritten.write(unit.get(index));
+    }
+
     rewritten.writeBytes(HevcEmulationPrevention.escaped(rbsp.toByteArray()));
     return Optional.of(ByteBuffer.wrap(rewritten.toByteArray()));
   }
@@ -186,13 +187,13 @@ final class HevcSampleRewrite implements SampleRewrite {
         && holdsHdr10PlusAnywhere(rbsp, message.payloadStart(), message.end());
   }
 
-  // A type 63 NAL unit wraps a whole enhancement-layer NAL unit, which can be an SEI NAL unit; the
-  // registration bytes hold no two zero bytes in a row, so no emulation prevention byte splits
+  // A wrapping NAL unit, such as HEVC's type 63, holds whole NAL units, which can be SEI NAL units;
+  // the registration bytes hold no two zero bytes in a row, so no emulation prevention byte splits
   // them.
-  private static boolean wrapsHdr10Plus(ByteBuffer unit) {
+  private boolean wrapsHdr10Plus(ByteBuffer unit) {
     var bytes = new byte[unit.remaining()];
     unit.duplicate().get(bytes);
-    return holdsHdr10PlusAnywhere(bytes, NAL_UNIT_HEADER_BYTES, bytes.length);
+    return holdsHdr10PlusAnywhere(bytes, syntax.headerBytes(), bytes.length);
   }
 
   private static boolean holdsHdr10PlusAnywhere(byte[] bytes, int start, int end) {
