@@ -421,9 +421,9 @@ class TranscodeWorkerJobAttemptTest {
   void shouldRefuseAJobBeyondTheAdvertisedSlotsAsAStartupFailureWithoutLaunchingFfmpeg()
       throws Exception {
     var launcher = ScriptedProcessLauncher.running();
-    var first = variantJobBuilder().build();
-    var second = variantJobBuilder().build();
-    var beyond = variantJobBuilder().build();
+    var first = encodeJobBuilder().build();
+    var second = encodeJobBuilder().build();
+    var beyond = encodeJobBuilder().build();
 
     try (var worker = worker(launcher)) {
       worker.start("localhost", 1);
@@ -457,9 +457,9 @@ class TranscodeWorkerJobAttemptTest {
                 ScriptedProcessLauncher.runningProcessBuilder()
                     .exitTiming(ExitTiming.WHEN_TEST_EXITS)
                     .build());
-    var stopped = variantJobBuilder().build();
-    var running = variantJobBuilder().build();
-    var next = variantJobBuilder().build();
+    var stopped = encodeJobBuilder().build();
+    var running = encodeJobBuilder().build();
+    var next = encodeJobBuilder().build();
 
     try (var worker = worker(launcher)) {
       worker.start("localhost", 1);
@@ -539,8 +539,13 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
+  // A job attempt that encodes the video, which takes one of the worker's slots.
+  private static VariantJob.Builder encodeJobBuilder() {
+    return variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+  }
+
   private static List<VariantJob> startJobs(ScriptedWorkerRuntime.Connection connection) {
-    var jobs = IntStream.range(0, BURST_SLOTS).mapToObj(_ -> variantJobBuilder().build()).toList();
+    var jobs = IntStream.range(0, BURST_SLOTS).mapToObj(_ -> encodeJobBuilder().build()).toList();
     for (var job : jobs) {
       startVariant(connection, job);
     }
