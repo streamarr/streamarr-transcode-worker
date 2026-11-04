@@ -3,6 +3,7 @@ package com.streamarr.transcode.engine;
 import com.streamarr.transcode.engine.TrackCodec.Audio;
 import com.streamarr.transcode.engine.TrackCodec.Video;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
@@ -35,6 +36,8 @@ final class CodecConfigurationReader {
   // lengthSizeMinusOne sits in the low 2 bits of the last field before the arrays.
   private static final int HVCC_LENGTH_SIZE_FIELD = HVCC_FIELDS_BEFORE_ARRAYS - 1;
   private static final Set<Integer> HEVC_PARAMETER_SET_TYPES = Set.of(32, 33, 34);
+  // The NAL unit types of prefix and suffix SEI messages (ITU-T H.265 table 7-1).
+  private static final Set<Integer> HEVC_SEI_TYPES = Set.of(39, 40);
   private static final int MPEG4_AUDIO = 0x40;
   private static final int ES_DESCRIPTOR = 0x03;
   private static final int DECODER_CONFIG_DESCRIPTOR = 0x04;
@@ -103,6 +106,31 @@ final class CodecConfigurationReader {
               .containsAll(HEVC_PARAMETER_SET_TYPES);
       default -> true;
     };
+  }
+
+  /**
+   * The SEI NAL units of an HEVC sample entry's hvcC, prefix and suffix alike, in the order of its
+   * arrays, each without a length.
+   *
+   * @throws FragmentedMp4Exception when the hvcC is missing or ends before its arrays do
+   */
+  static List<byte[]> seiNalUnitsOf(BoxView hevcSampleEntry) {
+    var hvcC = hevcSampleEntry.after(VISUAL_SAMPLE_ENTRY_BYTES).requiredChild("hvcC").fields();
+    hvcC.skip(HVCC_FIELDS_BEFORE_ARRAYS);
+    var arrays = hvcC.u8();
+    var units = new ArrayList<byte[]>();
+    for (var array = 0; array < arrays; array++) {
+      var type = hvcC.u8() & 0x3F;
+      var nalUnits = hvcC.u16();
+      for (var nalUnit = 0; nalUnit < nalUnits; nalUnit++) {
+        var unit = hvcC.bytes(hvcC.u16());
+        if (HEVC_SEI_TYPES.contains(type)) {
+          units.add(unit);
+        }
+      }
+    }
+
+    return List.copyOf(units);
   }
 
   /**

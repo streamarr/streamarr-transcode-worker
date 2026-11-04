@@ -1,16 +1,20 @@
 package com.streamarr.transcode.engine;
 
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
+import java.util.Arrays;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Supplier;
+import java.util.stream.IntStream;
 
 /**
  * Compares the video that an initialization segment declares with the job's video decision: the
- * codec string always, for an encode the 8-bit 4:2:0 picture format and progressive video too, and
- * for a copy that strips Dolby Vision the absence of a Dolby Vision configuration record. It also
- * requires the decoder configuration record to hold the parameter sets that its sample entry
- * promises. Audio codec strings are not compared, because the job carries none.
+ * codec string always, for an encode the 8-bit 4:2:0 picture format and progressive video too, for
+ * a copy that strips Dolby Vision the absence of a Dolby Vision configuration record, and for a
+ * copy with a planned output an {@code hvc1} record that holds exactly the static HDR metadata
+ * messages that it plans. It also requires the decoder configuration record to hold the parameter
+ * sets that its sample entry promises. Audio codec strings are not compared, because the job
+ * carries none.
  */
 final class VideoOutputCheck {
 
@@ -23,9 +27,10 @@ final class VideoOutputCheck {
    * @throws FragmentedMp4Exception with {@link Reason#OUTPUT_MISMATCH} when the segment declares
    *     other video than the decision, an encode that declares interlaced video, or video whose
    *     decoder configuration record cannot be read or lacks a parameter set that its sample entry
-   *     promises, or a Dolby Vision configuration record that the copy strips; with {@link
-   *     Reason#MALFORMED_BOX} when a box that leads to the video sample entry is missing or too
-   *     short
+   *     promises, a Dolby Vision configuration record that the copy strips, or, for a copy with a
+   *     planned output, an hvc1 record whose SEI messages are not exactly the static HDR metadata
+   *     that it plans; with {@link Reason#MALFORMED_BOX} when a box that leads to the video sample
+   *     entry is missing or too short
    */
   static void requireMatch(VideoDecision decision, InitializationSegment segment) {
     var sampleEntry =
@@ -60,6 +65,10 @@ final class VideoOutputCheck {
               + " sample entry holds a Dolby Vision configuration record");
     }
 
+    if (plansOutput(decision) && sampleEntry.type().equals("hvc1")) {
+      requirePlannedStaticMetadata(decision, sampleEntry);
+    }
+
     boolean holdsParameterSets =
         readable(() -> CodecConfigurationReader.holdsPromisedParameterSets(sampleEntry));
     if (!holdsParameterSets) {
@@ -68,6 +77,27 @@ final class VideoOutputCheck {
               + sampleEntry.type()
               + " sample entry promises parameter sets that its decoder configuration record does"
               + " not hold");
+    }
+  }
+
+  private static boolean plansOutput(VideoDecision decision) {
+    return decision instanceof VideoDecision.Copy copy && copy.plannedOutput().isPresent();
+  }
+
+  // The rewrite writes exactly the planned messages, each on its own, so the record must hold those
+  // NAL units and no other SEI message.
+  private static void requirePlannedStaticMetadata(VideoDecision decision, BoxView sampleEntry) {
+    var held = readable(() -> CodecConfigurationReader.seiNalUnitsOf(sampleEntry));
+    var planned = InitializationSegmentRewrite.plannedSeiUnitsOf(decision);
+    if (held.size() != planned.size()
+        || IntStream.range(0, held.size())
+            .anyMatch(index -> !Arrays.equals(held.get(index), planned.get(index)))) {
+      throw mismatch(
+          "the hvcC holds "
+              + held.size()
+              + " SEI NAL units where the copy plans exactly "
+              + planned.size()
+              + " static HDR metadata messages");
     }
   }
 

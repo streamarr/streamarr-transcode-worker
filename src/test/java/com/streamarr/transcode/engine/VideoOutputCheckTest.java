@@ -7,12 +7,17 @@ import static org.assertj.core.api.Assertions.assertThatNoException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
+import java.io.ByteArrayOutputStream;
 import java.util.HexFormat;
+import java.util.List;
+import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 @Tag("UnitTest")
@@ -21,12 +26,10 @@ class VideoOutputCheckTest {
 
   // Main at level 3.0, 8-bit 4:2:0, with one VPS, SPS and PPS in the record.
   private static final String SYNTHETIC_HEVC_CODEC_STRING = "hvc1.1.6.L90.90";
-  private static final String HVCC =
-      "0101600000009000000000005AF000FCFDF8F800000F"
-          + "03"
-          + "A0000100024001"
-          + "A1000100024201"
-          + "A2000100024401";
+  private static final String HVCC_FIELDS = "0101600000009000000000005AF000FCFDF8F800000F";
+  private static final String HVCC_PARAMETER_SET_ARRAYS =
+      "A0000100024001" + "A1000100024201" + "A2000100024401";
+  private static final String HVCC = HVCC_FIELDS + "03" + HVCC_PARAMETER_SET_ARRAYS;
 
   @Test
   @DisplayName(
@@ -85,6 +88,95 @@ class VideoOutputCheckTest {
     var segment = hevcSegmentWith(box("dvcC", new byte[24]));
 
     assertThatNoException().isThrownBy(() -> VideoOutputCheck.requireMatch(copy, segment));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("recordsWithOtherStaticMetadata")
+  @DisplayName(
+      "Should refuse the copy as an output mismatch when its hvc1 record holds other static HDR"
+          + " metadata than the copy plans")
+  void shouldRefuseTheCopyWhenItsRecordHoldsOtherStaticHdrMetadataThanTheCopyPlans(
+      StaticMetadataCase staticMetadataCase) {
+    var copy = copyPlanning(staticMetadataCase.planned());
+    var segment = hevcSegmentWithSei(staticMetadataCase.seiUnits());
+
+    assertThatThrownBy(() -> VideoOutputCheck.requireMatch(copy, segment))
+        .isInstanceOfSatisfying(
+            FragmentedMp4Exception.class,
+            exception -> assertThat(exception.getReason()).isEqualTo(Reason.OUTPUT_MISMATCH));
+  }
+
+  static Stream<StaticMetadataCase> recordsWithOtherStaticMetadata() {
+    var otherLevel = PlannedCopyOutputs.CONTENT_LIGHT_LEVEL_SEI.clone();
+    otherLevel[5] = 0x01;
+    return Stream.of(
+        new StaticMetadataCase(
+            "a planned message missing", both(), List.of(PlannedCopyOutputs.MASTERING_DISPLAY_SEI)),
+        new StaticMetadataCase(
+            "a message that the copy does not plan",
+            PlannedCopyOutputs.pqOutputBuilder().build(),
+            List.of(PlannedCopyOutputs.CONTENT_LIGHT_LEVEL_SEI)),
+        new StaticMetadataCase(
+            "a message with other values",
+            PlannedCopyOutputs.pqOutputBuilder()
+                .contentLightLevel(Optional.of(PlannedCopyOutputs.CONTENT_LIGHT_LEVEL))
+                .build(),
+            List.of(otherLevel)));
+  }
+
+  @Test
+  @DisplayName(
+      "Should accept the copy when its hvc1 record holds exactly the static HDR messages that it"
+          + " plans")
+  void shouldAcceptTheCopyWhenItsRecordHoldsExactlyThePlannedStaticHdrMessages() {
+    var copy = copyPlanning(both());
+    var segment =
+        hevcSegmentWithSei(
+            List.of(
+                PlannedCopyOutputs.MASTERING_DISPLAY_SEI,
+                PlannedCopyOutputs.CONTENT_LIGHT_LEVEL_SEI));
+
+    assertThatNoException().isThrownBy(() -> VideoOutputCheck.requireMatch(copy, segment));
+  }
+
+  // The planned output, and the SEI NAL units that the record holds in one prefix SEI array.
+  record StaticMetadataCase(String name, PlannedCopyOutput planned, List<byte[]> seiUnits) {
+
+    @Override
+    public String toString() {
+      return name;
+    }
+  }
+
+  private static PlannedCopyOutput both() {
+    return PlannedCopyOutputs.pqOutputBuilder()
+        .masteringDisplay(Optional.of(PlannedCopyOutputs.MASTERING_DISPLAY))
+        .contentLightLevel(Optional.of(PlannedCopyOutputs.CONTENT_LIGHT_LEVEL))
+        .build();
+  }
+
+  private static VideoDecision.Copy copyPlanning(PlannedCopyOutput planned) {
+    return VideoDecisionFixtures.copyBuilder()
+        .codecString(SYNTHETIC_HEVC_CODEC_STRING)
+        .plannedOutput(Optional.of(planned))
+        .build();
+  }
+
+  private static InitializationSegment hevcSegmentWithSei(List<byte[]> seiUnits) {
+    var array = new ByteArrayOutputStream();
+    array.write(39);
+    array.writeBytes(IsoBoxes.u16(seiUnits.size()));
+    for (var unit : seiUnits) {
+      array.writeBytes(IsoBoxes.u16(unit.length));
+      array.writeBytes(unit);
+    }
+
+    var hvcC =
+        IsoBoxes.concat(
+            HexFormat.of().parseHex(HVCC_FIELDS + "04" + HVCC_PARAMETER_SET_ARRAYS),
+            array.toByteArray());
+    var sampleEntry = box("hvc1", new byte[78], box("hvcC", hvcC));
+    return new InitializationSegment(HevcCopies.initializationSegment(sampleEntry));
   }
 
   private static VideoDecision.Copy copyStrippingDolbyVision() {

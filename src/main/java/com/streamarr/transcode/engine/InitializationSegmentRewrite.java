@@ -3,16 +3,18 @@ package com.streamarr.transcode.engine;
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
+import java.util.List;
 import java.util.Set;
 import java.util.function.Supplier;
 
 /**
  * Rewrites the initialization segment that FFmpeg writes into the one the producer delivers. It
- * removes the SEI messages from every {@code hvc1} decoder configuration record, and resizes each
+ * removes the SEI messages from every {@code hvc1} decoder configuration record, then writes the
+ * static HDR metadata that a copy plans into that record as one prefix SEI array, and resizes each
  * box that holds a record. When a copy's source keeps its parameter sets only in its samples,
  * FFmpeg builds the record from the first sample and copies that sample's SEI messages into it.
- * Attempts that start at different keyframes then write different records, which ADR 0037 forbids.
- * The samples keep their SEI messages.
+ * Attempts that start at different keyframes would then write different records, which ADR 0037
+ * forbids, so the record holds only what the job names. The samples keep their SEI messages.
  */
 final class InitializationSegmentRewrite {
 
@@ -21,19 +23,36 @@ final class InitializationSegmentRewrite {
   // The stsd fields before its sample entries: version, flags and entry count.
   private static final int STSD_FIELDS = 8;
 
-  private InitializationSegmentRewrite() {}
+  private static final int PREFIX_SEI = 39;
+
+  // The SEI NAL units that every hvc1 record of the segment holds after the rewrite.
+  private final List<byte[]> seiUnits;
+
+  private InitializationSegmentRewrite(List<byte[]> seiUnits) {
+    this.seiUnits = seiUnits;
+  }
 
   /**
    * @throws FragmentedMp4Exception with {@link FragmentedMp4Exception.Reason#MALFORMED_BOX} when a
    *     box on the way to a record declares a size that its parent cannot hold; with {@link
    *     FragmentedMp4Exception.Reason#OUTPUT_MISMATCH} when a record ends before its arrays do
    */
-  static InitializationSegment rewrite(InitializationSegment segment) {
+  static InitializationSegment rewrite(VideoDecision decision, InitializationSegment segment) {
+    var rewrite = new InitializationSegmentRewrite(plannedSeiUnitsOf(decision));
     return new InitializationSegment(
-        rebuiltChildren("initialization segment", ByteBuffer.wrap(segment.bytes())));
+        rewrite.rebuiltChildren("initialization segment", ByteBuffer.wrap(segment.bytes())));
   }
 
-  private static byte[] rebuiltChildren(String parent, ByteBuffer content) {
+  /** The static HDR metadata SEI NAL units that the decision plans for an hvc1 record, in order. */
+  static List<byte[]> plannedSeiUnitsOf(VideoDecision decision) {
+    if (!(decision instanceof VideoDecision.Copy copy)) {
+      return List.of();
+    }
+
+    return copy.plannedOutput().map(HevcStaticMetadataSei::nalUnitsOf).orElse(List.of());
+  }
+
+  private byte[] rebuiltChildren(String parent, ByteBuffer content) {
     var rebuilt = new ByteArrayOutputStream();
     while (content.hasRemaining()) {
       var start = content.position();
@@ -53,22 +72,22 @@ final class InitializationSegmentRewrite {
     return rebuilt.toByteArray();
   }
 
-  private static byte[] rebuiltBody(String type, ByteBuffer body) {
+  private byte[] rebuiltBody(String type, ByteBuffer body) {
     return switch (type) {
       case "moov", "trak", "mdia", "minf", "stbl" -> rebuiltChildren(type, body);
       case "stsd" -> rebuiltAfter(type, body, STSD_FIELDS);
       case "hvc1" -> rebuiltAfter(type, body, CodecConfigurationReader.VISUAL_SAMPLE_ENTRY_BYTES);
-      case "hvcC" -> readable(() -> withoutSeiArrays(body));
+      case "hvcC" -> readable(() -> withPlannedSeiArray(body));
       default -> bytesOf(body);
     };
   }
 
-  private static byte[] rebuiltAfter(String type, ByteBuffer body, int fieldBytes) {
+  private byte[] rebuiltAfter(String type, ByteBuffer body, int fieldBytes) {
     var children = rebuiltChildren(type, new BoxView(type, body).after(fieldBytes).body());
     return concat(bytesOf(body.slice(0, fieldBytes)), children);
   }
 
-  private static byte[] withoutSeiArrays(ByteBuffer hvcC) {
+  private byte[] withPlannedSeiArray(ByteBuffer hvcC) {
     var reading = hvcC.duplicate();
     var fields = new BoxFields("hvcC", reading);
     fields.skip(CodecConfigurationReader.HVCC_FIELDS_BEFORE_ARRAYS);
@@ -89,11 +108,25 @@ final class InitializationSegmentRewrite {
       }
     }
 
+    if (!seiUnits.isEmpty()) {
+      kept.writeBytes(plannedSeiArray());
+      keptArrays++;
+    }
+
     return concat(
         bytesOf(hvcC.slice(0, CodecConfigurationReader.HVCC_FIELDS_BEFORE_ARRAYS)),
         new byte[] {(byte) keptArrays},
         kept.toByteArray(),
         bytesOf(reading));
+  }
+
+  // array_completeness stays 0: the samples keep their own SEI messages (ISO/IEC 14496-15
+  // 8.3.2.1.3).
+  private byte[] plannedSeiArray() {
+    var array = ByteBuffer.allocate(3 + seiUnits.stream().mapToInt(unit -> 2 + unit.length).sum());
+    array.put((byte) PREFIX_SEI).putShort((short) seiUnits.size());
+    seiUnits.forEach(unit -> array.putShort((short) unit.length).put(unit));
+    return array.array();
   }
 
   // A record that cannot be read is an output mismatch, as the output check reports it.

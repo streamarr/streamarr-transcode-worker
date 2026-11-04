@@ -163,6 +163,10 @@ final class IsoBoxes {
     return TrackFragment.builder().trackId(AUDIO_TRACK_ID).defaultSampleFlags(SYNC_SAMPLE_FLAGS);
   }
 
+  static byte[] u16(int value) {
+    return ByteBuffer.allocate(2).putShort((short) value).array();
+  }
+
   static byte[] u32(long value) {
     return ByteBuffer.allocate(4).putInt((int) value).array();
   }

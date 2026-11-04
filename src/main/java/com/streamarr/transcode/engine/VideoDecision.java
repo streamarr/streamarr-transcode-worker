@@ -27,13 +27,16 @@ public sealed interface VideoDecision {
    *     false when the job does not say so
    * @param bitstreamRewrites the changes that the copy makes to the source's video; empty for a
    *     copy that passes it through unchanged
+   * @param plannedOutput the output that the server planned for the copy; empty for a copy that
+   *     passes the source's range through
    */
   @Builder
   record Copy(
       int streamIndex,
       @NonNull String codecString,
       boolean keepsPacketBytes,
-      @NonNull Set<BitstreamRewrite> bitstreamRewrites)
+      @NonNull Set<BitstreamRewrite> bitstreamRewrites,
+      @NonNull Optional<PlannedCopyOutput> plannedOutput)
       implements VideoDecision {
 
     public Copy {
@@ -49,6 +52,7 @@ public sealed interface VideoDecision {
     @SuppressWarnings({"java:S1068", "java:S9438"})
     public static class CopyBuilder {
       private Set<BitstreamRewrite> bitstreamRewrites = Set.of();
+      private Optional<PlannedCopyOutput> plannedOutput = Optional.empty();
     }
   }
 

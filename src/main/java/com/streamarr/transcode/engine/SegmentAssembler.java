@@ -17,14 +17,14 @@ import lombok.NonNull;
 
 /**
  * Assembles the units a producer reads, in arrival order, into the segments it delivers: the
- * initialization segment as it arrives, without the SEI messages of its HEVC records, and each
- * media segment, rebuilt as one {@code moof} and one {@code mdat}, its video samples rewritten as
- * the copy's bitstream rewrites list. A media segment holds the video of the fragments its grouper
- * groups and the audio samples that start inside its interval, whichever fragment carried them. It
- * closes once its grouper has closed it and an audio sample of a later segment has arrived or the
- * video has run a margin past its end, at once when the movie has no sound track, or when the
- * output ends. No segment takes audio past its interval, not even the last when the audio outlasts
- * the video.
+ * initialization segment, its HEVC records holding only the static HDR metadata that the copy
+ * plans, and each media segment, rebuilt as one {@code moof} and one {@code mdat}, its video
+ * samples rewritten as the copy's bitstream rewrites list. A media segment holds the video of the
+ * fragments its grouper groups and the audio samples that start inside its interval, whichever
+ * fragment carried them. It closes once its grouper has closed it and an audio sample of a later
+ * segment has arrived or the video has run a margin past its end, at once when the movie has no
+ * sound track, or when the output ends. No segment takes audio past its interval, not even the last
+ * when the audio outlasts the video.
  */
 final class SegmentAssembler {
 
@@ -79,7 +79,7 @@ final class SegmentAssembler {
   Closing accept(@NonNull Mp4Unit unit) {
     return switch (unit) {
       case InitializationSegment initializationSegment -> {
-        var delivered = InitializationSegmentRewrite.rewrite(initializationSegment);
+        var delivered = InitializationSegmentRewrite.rewrite(videoDecision, initializationSegment);
         VideoOutputCheck.requireMatch(videoDecision, delivered);
         sampleRewrite = VideoSampleRewrite.of(videoDecision, delivered);
         yield Closing.of(List.of(new ClosedSegment.Initialization(delivered)));

@@ -2254,6 +2254,122 @@ class ProducerTest {
     assertThat(sink.contentOf("init.mp4")).isEqualTo(hevcInitializationSegment(expectedEntry));
   }
 
+  // FFmpeg writes neither message into the record of an HDR10 copy whose source keeps them in its
+  // samples, and the record it builds from a first sample holds that sample's own SEI message.
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("plannedStaticMetadata")
+  @DisplayName(
+      "Should deliver each static HDR message that the copy plans as its own SEI NAL unit in the"
+          + " hvc1 record, and no other SEI message, when the copy plans static HDR metadata")
+  void shouldDeliverEachPlannedStaticHdrMessageAsItsOwnSeiNalUnitInTheHvc1Record(
+      PlannedStaticMetadata planned) {
+    var output =
+        IsoBoxes.concat(
+            hevcInitializationSegment(hvc1Entry(recordWithSeiArray(39))), keyframeFragment(0, 1));
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer =
+        producerOfOneSecondSegments(process).videoDecision(hdr10Copy(planned.output())).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(sink.contentOf("init.mp4"))
+        .isEqualTo(hevcInitializationSegment(hvc1Entry(recordWithStaticSei(planned.seiUnits()))));
+  }
+
+  static Stream<PlannedStaticMetadata> plannedStaticMetadata() {
+    var both =
+        PlannedCopyOutputs.pqOutputBuilder()
+            .masteringDisplay(Optional.of(PlannedCopyOutputs.MASTERING_DISPLAY))
+            .contentLightLevel(Optional.of(PlannedCopyOutputs.CONTENT_LIGHT_LEVEL))
+            .build();
+    return Stream.of(
+        new PlannedStaticMetadata(
+            "both messages",
+            both,
+            List.of(
+                PlannedCopyOutputs.MASTERING_DISPLAY_SEI,
+                PlannedCopyOutputs.CONTENT_LIGHT_LEVEL_SEI)),
+        new PlannedStaticMetadata(
+            "only the mastering display",
+            PlannedCopyOutputs.pqOutputBuilder()
+                .masteringDisplay(Optional.of(PlannedCopyOutputs.MASTERING_DISPLAY))
+                .build(),
+            List.of(PlannedCopyOutputs.MASTERING_DISPLAY_SEI)),
+        new PlannedStaticMetadata(
+            "only the content light level",
+            PlannedCopyOutputs.pqOutputBuilder()
+                .contentLightLevel(Optional.of(PlannedCopyOutputs.CONTENT_LIGHT_LEVEL))
+                .build(),
+            List.of(PlannedCopyOutputs.CONTENT_LIGHT_LEVEL_SEI)),
+        new PlannedStaticMetadata(
+            "neither message", PlannedCopyOutputs.pqOutputBuilder().build(), List.of()));
+  }
+
+  // The planned output of an HDR10 copy and the SEI NAL units its record holds, in order.
+  record PlannedStaticMetadata(String name, PlannedCopyOutput output, List<byte[]> seiUnits) {
+
+    @Override
+    public String toString() {
+      return name;
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should deliver the same initialization segment from attempts whose FFmpeg records hold"
+          + " different SEI messages when the copy plans static HDR metadata")
+  void shouldDeliverTheSameInitializationSegmentWhenTheFfmpegRecordsHoldDifferentSeiMessages()
+      throws Exception {
+    var planned =
+        PlannedCopyOutputs.pqOutputBuilder()
+            .masteringDisplay(Optional.of(PlannedCopyOutputs.MASTERING_DISPLAY))
+            .contentLightLevel(Optional.of(PlannedCopyOutputs.CONTENT_LIGHT_LEVEL))
+            .build();
+    var delivered = new ArrayList<byte[]>();
+    for (var seiNalUnitType : List.of(39, 40)) {
+      var attemptSink = new RecordingSegmentSink();
+      var output =
+          IsoBoxes.concat(
+              hevcInitializationSegment(hvc1Entry(recordWithSeiArray(seiNalUnitType))),
+              keyframeFragment(0, 1));
+      var producer =
+          producerOfOneSecondSegments(ScriptedProcess.builder().output(output).build())
+              .sink(attemptSink)
+              .videoDecision(hdr10Copy(planned))
+              .start();
+      assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+      delivered.add(attemptSink.contentOf("init.mp4"));
+    }
+
+    assertThat(delivered.getFirst()).isEqualTo(delivered.getLast());
+  }
+
+  private static VideoDecision.Copy hdr10Copy(PlannedCopyOutput planned) {
+    return VideoDecisionFixtures.copyBuilder()
+        .codecString(HVC1_RECORD_CODEC_STRING)
+        .plannedOutput(Optional.of(planned))
+        .build();
+  }
+
+  // The parameter-set record followed by one prefix SEI array that holds the NAL units, if any.
+  private static byte[] recordWithStaticSei(List<byte[]> seiUnits) {
+    if (seiUnits.isEmpty()) {
+      return HVC1_PARAMETER_SET_RECORD;
+    }
+
+    var array = new ByteArrayOutputStream();
+    array.write(39);
+    array.writeBytes(IsoBoxes.u16(seiUnits.size()));
+    for (var unit : seiUnits) {
+      array.writeBytes(IsoBoxes.u16(unit.length));
+      array.writeBytes(unit);
+    }
+
+    return IsoBoxes.concat(
+        HexFormat.of().parseHex(HVCC_FIELDS + "04" + HVCC_VPS_ARRAY + HVCC_SPS_PPS_ARRAYS),
+        array.toByteArray());
+  }
+
   // The audio sample entry declares fewer bytes than its own header, or more than its stsd holds.
   @ParameterizedTest(name = "{0} bytes")
   @ValueSource(longs = {4, 10_000})
