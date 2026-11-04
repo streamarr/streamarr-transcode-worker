@@ -1271,6 +1271,58 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
+  @ParameterizedTest(name = "{0} with {1}")
+  @CsvSource({
+    "TRANSCODE_MODE_REMUX, AUDIO_MODE_COPY",
+    "TRANSCODE_MODE_AUDIO_TRANSCODE, AUDIO_MODE_TRANSCODE",
+    "TRANSCODE_MODE_VIDEO_TRANSCODE, AUDIO_MODE_COPY",
+    "TRANSCODE_MODE_FULL_TRANSCODE, AUDIO_MODE_TRANSCODE"
+  })
+  @DisplayName(
+      "Should map the audio stream that the job names when a replacement attempt copies or encodes"
+          + " it")
+  void shouldMapTheAudioStreamThatTheJobNamesWhenAReplacementAttemptCopiesOrEncodesIt(
+      TranscodeMode mode, AudioMode audioMode) throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJobBuilder(mode);
+    job.getExecutionBuilder().setStartSequenceNumber(3);
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setMode(audioMode)
+        .setCodec("aac")
+        .setChannels(2)
+        .setBitrateBitsPerSecond(128_000)
+        .setStreamIndex(2);
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(launcher.command(fromProto(job.getJobAttemptId())))
+          .containsSequence("-map", "0:0", "-map", "0:2")
+          .doesNotContain("0:a:0");
+    }
+  }
+
+  @Test
+  @DisplayName("Should map the first audio stream when the job names no audio stream")
+  void shouldMapTheFirstAudioStreamWhenTheJobNamesNoAudioStream() throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_REMUX).build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+
+      assertThat(eventsOf(connection)).containsExactly(EventCase.JOB_ATTEMPT_STARTED);
+      assertThat(launcher.command(fromProto(job.getJobAttemptId())))
+          .containsSequence("-map", "0:0", "-map", "0:a:0");
+    }
+  }
+
   @Test
   @DisplayName("Should force the job's codec profile and level when the job encodes H.264")
   void shouldForceTheJobsCodecProfileAndLevelWhenTheJobEncodesH264() throws Exception {

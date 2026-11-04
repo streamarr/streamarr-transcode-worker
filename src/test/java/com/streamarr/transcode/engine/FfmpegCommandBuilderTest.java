@@ -10,6 +10,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.UnaryOperator;
@@ -74,32 +75,32 @@ class FfmpegCommandBuilderTest {
   }
 
   private static TranscodeDecision.TranscodeDecisionBuilder decision(TranscodeMode mode) {
-    var audio =
-        switch (mode) {
-          case REMUX, VIDEO_TRANSCODE -> copiedAudio("aac");
-          case AUDIO_TRANSCODE, FULL_TRANSCODE ->
-              AudioDecision.builder()
-                  .mode(AudioMode.TRANSCODE)
-                  .codec("aac")
-                  .channels(2)
-                  .bitrate(128_000L)
-                  .build();
-        };
     return TranscodeDecision.builder()
         .transcodeMode(mode)
         .videoCodecFamily("h264")
         .videoDecision(VideoDecisionFixtures.forMode(mode))
-        .audioDecision(audio)
+        .audioDecision(audio(mode).build())
         .subtitleDecision(SubtitleDecisions.EXCLUDED);
   }
 
+  private static AudioDecision.AudioDecisionBuilder audio(TranscodeMode mode) {
+    return switch (mode) {
+      case REMUX, VIDEO_TRANSCODE -> copiedAudioBuilder("aac");
+      case AUDIO_TRANSCODE, FULL_TRANSCODE ->
+          AudioDecision.builder()
+              .mode(AudioMode.TRANSCODE)
+              .codec("aac")
+              .channels(2)
+              .bitrate(128_000L);
+    };
+  }
+
   private static AudioDecision copiedAudio(String codec) {
-    return AudioDecision.builder()
-        .mode(AudioMode.COPY)
-        .codec(codec)
-        .channels(2)
-        .bitrate(0L)
-        .build();
+    return copiedAudioBuilder(codec).build();
+  }
+
+  private static AudioDecision.AudioDecisionBuilder copiedAudioBuilder(String codec) {
+    return AudioDecision.builder().mode(AudioMode.COPY).codec(codec).channels(2).bitrate(0L);
   }
 
   // FFmpeg applies the last -b:a it reads, so a command must carry exactly one.
@@ -1571,6 +1572,28 @@ class FfmpegCommandBuilderTest {
     assertThat(cmd).containsSequence("-map", "0:0", "-map", "0:a:0", "-map", "-0:s");
   }
 
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(TranscodeMode.class)
+  @DisplayName(
+      "Should map the audio stream that the job names in place of the first when a replacement"
+          + " attempt seeks")
+  void shouldMapTheAudioStreamThatTheJobNamesInPlaceOfTheFirstWhenAReplacementAttemptSeeks(
+      TranscodeMode mode) {
+    var decision =
+        decision(mode).audioDecision(audio(mode).streamIndex(OptionalInt.of(2)).build()).build();
+    var request =
+        request(decision)
+            .startSequenceNumber(3)
+            .seekPosition(Optional.of(Duration.ofMillis(17_500)))
+            .build();
+
+    var cmd = command(request, mode.encodesVideo() ? "libx264" : "copy");
+
+    assertThat(cmd)
+        .containsSequence("-map", "0:0", "-map", "0:2", "-map", "-0:s")
+        .doesNotContain("0:a:0");
+  }
+
   @Test
   @DisplayName("Should map video and exclude subtitles without audio when audio mode is none")
   void shouldMapVideoAndExcludeSubtitlesWithoutAudioWhenAudioModeIsNone() {
@@ -1961,6 +1984,27 @@ class FfmpegCommandBuilderTest {
         .containsSequence("-map", "0:v:0", "-map", "0:a:0")
         .containsSequence("-c:a", "copy", "-bsf:a", "aac_adtstoasc", "-b:a", "0", "-r:v:0")
         .doesNotContain("-ss");
+  }
+
+  @Test
+  @DisplayName(
+      "Should copy the audio stream that the job names into the copy of the source, and take the"
+          + " copy's only audio stream from there, when the encode of a profile 5 source whose RPU"
+          + " starts its sample names one")
+  void
+      shouldCopyTheAudioStreamThatTheJobNamesIntoTheCopyOfTheSourceAndTakeTheCopysOnlyAudioStreamFromThereWhenTheEncodeOfAProfile5SourceWhoseRpuStartsItsSampleNamesOne() {
+    var decision =
+        decision(TranscodeMode.VIDEO_TRANSCODE)
+            .videoDecision(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE).build())
+            .audioDecision(copiedAudioBuilder("ac3").streamIndex(OptionalInt.of(3)).build())
+            .build();
+
+    var pipe = rpuMovingPipe(builder.buildPipeline(job(request(decision).build(), "libx264")));
+
+    assertThat(pipe.copyCommand())
+        .containsSequence("-map", "0:0", "-map", "0:3", "-map", "-0:s")
+        .doesNotContain("0:a:0");
+    assertThat(pipe.encodeCommand()).containsSequence("-map", "0:v:0", "-map", "0:a:0");
   }
 
   @Test

@@ -200,6 +200,7 @@ public class FfmpegCommandBuilder {
       copiedAudio =
           AudioDecision.builder()
               .mode(audio.mode())
+              .streamIndex(audio.streamIndex())
               .codec("libopus")
               .channels(audio.channels())
               .bitrate(audio.bitrate())
@@ -317,8 +318,9 @@ public class FfmpegCommandBuilder {
 
   private void addStreamSelection(List<String> cmd, TranscodeDecision decision) {
     cmd.addAll(List.of("-map", "0:" + decision.videoDecision().streamIndex()));
-    if (decision.audioDecision().mode() != AudioMode.NONE) {
-      cmd.addAll(List.of("-map", "0:a:0"));
+    var audio = decision.audioDecision();
+    if (audio.mode() != AudioMode.NONE) {
+      cmd.addAll(List.of("-map", "0:" + audio.sourceStreamSpecifier()));
     }
 
     if (decision.subtitleDecision().mode() == SubtitleMode.EXCLUDE) {

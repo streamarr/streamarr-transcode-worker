@@ -121,6 +121,30 @@ class TranscodeWorkerAudioLayoutTest {
   }
 
   @Test
+  @DisplayName(
+      "Should read, mix and encode the audio stream that the job names when it names a layout")
+  void shouldReadMixAndEncodeTheAudioStreamThatTheJobNamesWhenItNamesALayout() throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = layoutJob(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO, 2).toBuilder();
+    job.getDecisionBuilder().getAudioBuilder().setStreamIndex(2);
+    var secondAc3Track = AC3_SIDE_SURROUND.replace("\"index\":1", "\"index\":2");
+
+    var connection = start(launcher, ffprobeAnswering(secondAc3Track, AC3_LEVELS), job.build());
+
+    assertThat(eventsOf(connection))
+        .containsExactly(EstablishWorkerSessionRequest.EventCase.JOB_ATTEMPT_STARTED);
+    assertThat(probeCommands)
+        .extracting(ProbeCommand::arguments)
+        .satisfiesExactly(
+            ffprobe -> assertThat(ffprobe).containsSubsequence("-select_streams", "2"),
+            ffmpeg -> assertThat(ffmpeg).containsSubsequence("-map", "0:2", "-frames:a", "1"));
+    assertThat(launcher.command(fromProto(job.getJobAttemptId())))
+        .containsSubsequence("-drc_scale:2", "0", "-target_level:2", "-31", "-i")
+        .containsSequence("-map", "0:2")
+        .doesNotContain("-drc_scale:a:0", "0:a:0");
+  }
+
+  @Test
   @DisplayName("Should read no audio stream when the job encodes its audio without a layout")
   void shouldReadNoAudioStreamWhenTheJobEncodesItsAudioWithoutALayout() throws Exception {
     var launcher = ScriptedProcessLauncher.running();

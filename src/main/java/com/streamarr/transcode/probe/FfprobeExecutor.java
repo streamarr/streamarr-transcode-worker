@@ -134,16 +134,16 @@ public final class FfprobeExecutor {
   }
 
   /**
-   * The facts of the source's first audio stream, the stream that a job attempt encodes, as one
-   * ffprobe run with FFmpeg's default read limits reads them, so that ffprobe sees the stream as
-   * the attempt's FFmpeg does.
+   * The facts of the source stream that a job attempt encodes, which {@code streamSpecifier}
+   * specifies as FFmpeg does, as one ffprobe run with FFmpeg's default read limits reads them, so
+   * that ffprobe sees the stream as the attempt's FFmpeg does.
    *
-   * @throws ChosenAudioException when ffprobe fails or the source has no audio stream
+   * @throws ChosenAudioException when ffprobe fails or the stream is not an audio stream
    */
-  public ProbeStreamInfo readChosenAudio(@NonNull Path source)
+  public ProbeStreamInfo readChosenAudio(@NonNull Path source, @NonNull String streamSpecifier)
       throws ExecutionException, InterruptedException {
     var arguments = new ArrayList<>(QUIET_JSON_OUTPUT);
-    arguments.addAll(List.of(SHOW_STREAMS, "-select_streams", "a:0", source.toString()));
+    arguments.addAll(List.of(SHOW_STREAMS, "-select_streams", streamSpecifier, source.toString()));
     var output = run(arguments);
     if (output.exitCode() != 0) {
       throw new ChosenAudioException("ffprobe exited with code " + output.exitCode());
@@ -156,13 +156,14 @@ public final class FfprobeExecutor {
   }
 
   /**
-   * The centre and surround levels of the Lo/Ro downmix that the first frame of the source's first
-   * audio stream signals, as FFmpeg's AC-3 and E-AC-3 decoders export them (ADR 0050). Every job
-   * attempt of a stream session reads the same frame, so every attempt mixes with the same levels.
+   * The centre and surround levels of the Lo/Ro downmix that the first frame of the audio stream
+   * that {@code streamSpecifier} specifies signals, as FFmpeg's AC-3 and E-AC-3 decoders export
+   * them (ADR 0050). Every job attempt of a stream session reads the same frame, so every attempt
+   * mixes with the same levels.
    *
    * @throws ChosenAudioException when FFmpeg fails or prints no levels
    */
-  public DownmixLevels readDownmixLevels(@NonNull Path source)
+  public DownmixLevels readDownmixLevels(@NonNull Path source, @NonNull String streamSpecifier)
       throws ExecutionException, InterruptedException {
     var arguments =
         List.of(
@@ -173,7 +174,7 @@ public final class FfprobeExecutor {
             "-i",
             source.toString(),
             "-map",
-            "0:a:0",
+            "0:" + streamSpecifier,
             "-frames:a",
             "1",
             "-af",

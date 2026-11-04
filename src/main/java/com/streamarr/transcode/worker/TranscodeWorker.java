@@ -384,10 +384,11 @@ public final class TranscodeWorker implements AutoCloseable {
       throws ExecutionException, InterruptedException {
     var output = WorkerVariantJobMapper.audioLayoutOf(job).orElseThrow();
     var source = sources.resolve(job.getSource());
-    var stream = ffprobe.readChosenAudio(source);
+    var specifier = WorkerVariantJobMapper.audioStreamSpecifierOf(job);
+    var stream = ffprobe.readChosenAudio(source, specifier);
     var levels =
         mixesWithLoRoLevels(stream, output)
-            ? Optional.of(ffprobe.readDownmixLevels(source))
+            ? Optional.of(ffprobe.readDownmixLevels(source, specifier))
             : Optional.<DownmixLevels>empty();
     return ChosenAudio.factsOf(stream, levels);
   }

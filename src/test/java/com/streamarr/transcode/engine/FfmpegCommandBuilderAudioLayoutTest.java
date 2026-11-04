@@ -458,6 +458,20 @@ class FfmpegCommandBuilderAudioLayoutTest {
     }
 
     @Test
+    @DisplayName(
+        "Should decode the audio stream that the job names without compression when it is Dolby")
+    void shouldDecodeTheAudioStreamThatTheJobNamesWithoutCompressionWhenItIsDolby() {
+      var audio = encodeBuilder("aac", "stereo").streamIndex(OptionalInt.of(2)).build();
+
+      var cmd = command(audio, source("eac3", "5.1(side)"));
+
+      assertThat(cmd)
+          .containsSubsequence("-drc_scale:2", "0", "-target_level:2", "-31", "-i")
+          .containsSequence("-map", "0:2")
+          .doesNotContain("-drc_scale:a:0", "0:a:0");
+    }
+
+    @Test
     @DisplayName("Should pass no decoder options when the source is not AC-3 or E-AC-3")
     void shouldPassNoDecoderOptionsWhenTheSourceIsNotAc3OrEac3() {
       var cmd = command(encode("aac", "5.1"), source("dts", "5.1(side)"));
@@ -682,10 +696,20 @@ class FfmpegCommandBuilderAudioLayoutTest {
     }
   }
 
-  @Test
+  @ParameterizedTest(name = "stream {0}")
+  @CsvSource({"'', a:0", "2, 2"})
   @DisplayName(
-      "Should encode the named layout in the source copy when the job moves Dolby Vision RPUs")
-  void shouldEncodeTheNamedLayoutInTheSourceCopyWhenTheJobMovesDolbyVisionRpus() {
+      "Should encode the named layout of the job's audio stream in the source copy when the job"
+          + " moves Dolby Vision RPUs")
+  void shouldEncodeTheNamedLayoutOfTheJobsAudioStreamInTheSourceCopyWhenTheJobMovesDolbyVisionRpus(
+      String streamIndex, String specifier) {
+    var audio =
+        encodeBuilder("opus", "5.1")
+            .streamIndex(
+                streamIndex.isEmpty()
+                    ? OptionalInt.empty()
+                    : OptionalInt.of(Integer.parseInt(streamIndex)))
+            .build();
     var decision =
         TranscodeDecision.builder()
             .transcodeMode(TranscodeMode.FULL_TRANSCODE)
@@ -703,7 +727,7 @@ class FfmpegCommandBuilderAudioLayoutTest {
                                 VideoDynamicRange.DolbyVisionRpuPlacement.UNSPECIFIED)))
                     .sourcePacketsCarryPresentationTimes(true)
                     .build())
-            .audioDecision(encode("opus", "5.1"))
+            .audioDecision(audio)
             .subtitleDecision(SubtitleDecisions.EXCLUDED)
             .build();
     var request = request(decision).sourceAudio(source("ac3", "5.1(side)")).build();
@@ -714,7 +738,8 @@ class FfmpegCommandBuilderAudioLayoutTest {
                 TranscodeJob.builder().request(request).videoEncoder("libx265").build());
 
     assertThat(pipeline.copyCommand())
-        .containsSubsequence("-drc_scale:a:0", "0", "-i")
+        .containsSubsequence("-drc_scale:" + specifier, "0", "-i")
+        .containsSequence("-map", "0:" + specifier)
         .containsSubsequence("-c:a", "libopus", "-af")
         .containsSubsequence("-ch_layout", "5.1");
   }

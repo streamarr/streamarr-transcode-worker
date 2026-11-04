@@ -9,6 +9,7 @@ import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.start;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variantJobBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.assertj.core.api.Assertions.within;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -1190,6 +1191,78 @@ class WorkerMediaSmokeTest {
               assertThat(video.getWidth()).isEqualTo(320);
               assertThat(video.getHeight()).isEqualTo(180);
             });
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"TRANSCODE_MODE_UNSPECIFIED", "UNRECOGNIZED"},
+      mode = EnumSource.Mode.EXCLUDE)
+  @DisplayName("Should upload the second audio track when the job names it")
+  void shouldUploadTheSecondAudioTrackWhenTheJobNamesIt(TranscodeMode mode) throws Exception {
+    var source = sourceWithTwoAudioTracks();
+    var probe = probeExecutor().probe(source, requestBuilder().build()).result().getMedia();
+    assertThat(probe.getStreamsList())
+        .extracting(ProbeStreamInfo::getCodec, ProbeStreamInfo::getSampleRateHz)
+        .containsExactly(tuple("h264", 0), tuple("aac", 48_000), tuple("ac3", 44_100));
+    var audioCodec = audioModeOf(mode) == AudioMode.AUDIO_MODE_COPY ? "ac3" : "aac";
+    var job = variantJobBuilder(mode);
+    withVideo(job, h264VideoFor(mode, FIXTURE));
+    job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setMode(audioModeOf(mode))
+        .setCodec(audioCodec)
+        .setChannels(2)
+        .setBitrateBitsPerSecond(128_000)
+        .setStreamIndex(2);
+    job.getVariantBuilder().setWidth(320).setHeight(180).setBitrateBitsPerSecond(500_000);
+    job.getExecutionBuilder().setMediaSegmentCount(FIXTURE_SEGMENT_COUNT);
+
+    var uploads = execute(engine(softwareCapabilities()), root, job.build());
+
+    assertThat(uploads.names()).containsExactlyElementsOf(uploadNames(FIXTURE_SEGMENT_COUNT));
+    var media = playable(uploads.contentOf(uploads.names()));
+    assertDecodes(media);
+    // Only the second track holds 44.1 kHz audio, and the AAC encoder keeps the source's rate.
+    assertThat(streams(media))
+        .filteredOn(stream -> "audio".equals(stream.getCodecType()))
+        .singleElement()
+        .satisfies(
+            audio -> {
+              assertThat(audio.getCodec()).isEqualTo(audioCodec);
+              assertThat(audio.getSampleRateHz()).isEqualTo(44_100);
+            });
+  }
+
+  // The fixture's video and 48 kHz AAC track, then its audio again as a 44.1 kHz AC-3 track.
+  private Path sourceWithTwoAudioTracks() throws Exception {
+    copyMedia();
+    var source = root.resolve("two-audio-tracks.mkv");
+    runFfmpeg(
+        List.of(
+            "-i",
+            root.resolve("movie.mkv").toString(),
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a:0",
+            "-map",
+            "0:a:0",
+            "-c:v",
+            "copy",
+            "-c:a:0",
+            "copy",
+            "-c:a:1",
+            "ac3",
+            "-ar:a:1",
+            "44100",
+            "-metadata:s:a:0",
+            "language=eng",
+            "-metadata:s:a:1",
+            "language=jpn"),
+        source);
+    return source;
   }
 
   private Path sourceWithCoverArtBeforeVideo() throws Exception {
