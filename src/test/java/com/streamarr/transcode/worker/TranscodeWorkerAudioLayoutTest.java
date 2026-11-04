@@ -22,6 +22,7 @@ import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import com.streamarr.transcode.probe.FfprobeExecutor;
 import com.streamarr.transcode.probe.ProbeCommand;
+import com.streamarr.transcode.probe.ProbeCommand.ProbeTool;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -67,6 +68,12 @@ class TranscodeWorkerAudioLayoutTest {
       {"streams":[{"index":1,"codec_name":"flac","codec_type":"audio","sample_fmt":"s32",
         "sample_rate":"96000","channels":2,"channel_layout":"stereo","bits_per_raw_sample":"24"}]}
       """;
+
+  // The pinned FFmpeg's ashowinfo line for an AC-3 frame that signals Lo/Ro levels.
+  private static final String AC3_LEVELS =
+      "[Parsed_ashowinfo_0 @ 0x1]   side data - downmix: preferred downmix type - unknown Mix"
+          + " levels: center 0.594604 (0.707107 ltrt) - surround 0.500000 (0.707107 ltrt) - lfe"
+          + " 0.000000\n";
 
   @TempDir Path tempDir;
 
@@ -305,6 +312,84 @@ class TranscodeWorkerAudioLayoutTest {
     assertThat(launcher.hasLaunchedAny()).isFalse();
   }
 
+  @Test
+  @DisplayName(
+      "Should mix at the Lo/Ro levels of the first frame when an AC-3 track becomes stereo")
+  void shouldMixAtTheLoRoLevelsOfTheFirstFrameWhenAnAc3TrackBecomesStereo() throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = layoutJob(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO, 2);
+
+    var connection = start(launcher, ffprobeAnswering(AC3_SIDE_SURROUND, AC3_LEVELS), job);
+
+    assertThat(eventsOf(connection))
+        .containsExactly(EstablishWorkerSessionRequest.EventCase.JOB_ATTEMPT_STARTED);
+    assertThat(probeCommands)
+        .extracting(ProbeCommand::tool)
+        .containsExactly(ProbeTool.FFPROBE, ProbeTool.FFMPEG);
+    assertThat(probeCommands.getLast().arguments())
+        .containsSubsequence("-frames:a", "1", "-af", "ashowinfo");
+    assertThat(launcher.command(fromProto(job.getJobAttemptId())))
+        .anySatisfy(
+            argument ->
+                assertThat(argument)
+                    .startsWith(
+                        "aformat=sample_fmts=fltp,pan=stereo"
+                            + "|FL=FL+0.5946040*FC+0.5000000*SL|FR=FR+0.5946040*FC+0.5000000*SR[mix];"));
+  }
+
+  @Test
+  @DisplayName("Should read no Lo/Ro levels when an AC-3 track keeps more than two channels")
+  void shouldReadNoLoRoLevelsWhenAnAc3TrackKeepsMoreThanTwoChannels() throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = layoutJob(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_FIVE_POINT_ZERO, 5);
+
+    var connection = start(launcher, ffprobeAnswering(AC3_SIDE_SURROUND, AC3_LEVELS), job);
+
+    assertThat(eventsOf(connection))
+        .containsExactly(EstablishWorkerSessionRequest.EventCase.JOB_ATTEMPT_STARTED);
+    assertThat(probeCommands).extracting(ProbeCommand::tool).containsExactly(ProbeTool.FFPROBE);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({"stereo, 2", "2.1, 3"})
+  @DisplayName(
+      "Should read no Lo/Ro levels when an AC-3 track has no centre or surround to mix at them")
+  void shouldReadNoLoRoLevelsWhenAnAc3TrackHasNoCentreOrSurroundToMixAtThem(
+      String layout, int channels) throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var stream =
+        """
+        {"streams":[{"index":1,"codec_name":"ac3","codec_type":"audio","sample_fmt":"fltp",
+          "sample_rate":"48000","channels":%d,"channel_layout":"%s","bits_per_sample":0}]}
+        """
+            .formatted(channels, layout);
+
+    var connection =
+        start(
+            launcher,
+            ffprobeAnswering(stream, ""),
+            layoutJob(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_MONO, 1));
+
+    assertThat(eventsOf(connection))
+        .containsExactly(EstablishWorkerSessionRequest.EventCase.JOB_ATTEMPT_STARTED);
+    assertThat(probeCommands).extracting(ProbeCommand::tool).containsExactly(ProbeTool.FFPROBE);
+  }
+
+  @Test
+  @DisplayName("Should fail the attempt at startup when the first AC-3 frame signals no levels")
+  void shouldFailTheAttemptAtStartupWhenTheFirstAc3FrameSignalsNoLevels() throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+
+    var connection =
+        start(
+            launcher,
+            ffprobeAnswering(AC3_SIDE_SURROUND, "[Parsed_ashowinfo_0 @ 0x1] n:0 pts:0\n"),
+            layoutJob(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_MONO, 1));
+
+    assertFailedAs(connection, JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED);
+    assertThat(launcher.hasLaunchedAny()).isFalse();
+  }
+
   @ParameterizedTest(name = "{0}")
   @EnumSource(
       value = AudioMode.class,
@@ -460,11 +545,21 @@ class TranscodeWorkerAudioLayoutTest {
   }
 
   private FfprobeExecutor ffprobeAnswering(String output) {
+    return ffprobeAnswering(output, "");
+  }
+
+  // ffprobe prints the stream on standard output, and FFmpeg's ashowinfo prints its levels on
+  // standard error.
+  private FfprobeExecutor ffprobeAnswering(String streams, String levels) {
     return new FfprobeExecutor(
         new ObjectMapper(),
         command -> {
           probeCommands.add(command);
-          return ScriptedProcess.builder().output(output.getBytes(StandardCharsets.UTF_8)).build();
+          return switch (command.tool()) {
+            case FFPROBE ->
+                ScriptedProcess.builder().output(streams.getBytes(StandardCharsets.UTF_8)).build();
+            case FFMPEG -> ScriptedProcess.builder().output(new byte[0]).stderr(levels).build();
+          };
         });
   }
 

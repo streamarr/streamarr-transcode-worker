@@ -8,12 +8,14 @@ import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 @Tag("UnitTest")
 @DisplayName("FFmpeg Command Builder Audio Layout Tests")
@@ -123,13 +125,319 @@ class FfmpegCommandBuilderAudioLayoutTest {
 
       assertThat(audioFilter(cmd)).startsWith("aresample=");
     }
+  }
+
+  @Nested
+  @DisplayName("Downmix")
+  class DownmixTests {
+
+    private static final String FLOAT_PAN = "aformat=sample_fmts=fltp,pan=";
+    private static final String LIMIT_TIMING = ":attack=5:release=50:level=0:latency=1";
+    private static final String MINUS_3_DBFS = "alimiter=limit=0.707946" + LIMIT_TIMING;
+    private static final String MINUS_1_DBFS = "alimiter=limit=0.891251" + LIMIT_TIMING;
+    private static final String MINUS_1_DBTP_STAGE =
+        Pattern.quote("amerge=inputs=") + "\\d+," + Pattern.quote(MINUS_1_DBFS);
+    private static final String MINUS_3_DBTP_STAGE =
+        Pattern.quote("amerge=inputs=") + "\\d+," + Pattern.quote(MINUS_3_DBFS);
+    private static final String TRIMMED_SECOND_STAGE =
+        "atrim=start_sample=6,asetpts=round(PTS-6/(SR*TB))";
+    private static final String DITHERED_16_BITS =
+        "aresample=osf=s16:dither_method=triangular:" + TUNED_RESAMPLER;
+    private static final String DITHERED_24_BITS =
+        "aresample=osf=s32:output_sample_bits=24:dither_method=triangular:" + TUNED_RESAMPLER;
 
     @Test
-    @DisplayName("Should add no channel filter when the output lacks a source channel")
-    void shouldAddNoChannelFilterWhenTheOutputLacksASourceChannel() {
-      var cmd = command(encode("aac", "stereo"), source("aac", "5.1"));
+    @DisplayName(
+        "Should mix the centre and surrounds at -3 dB and limit the pair at -3 dBTP when stereo is"
+            + " lossy")
+    void shouldMixTheCentreAndSurroundsAtMinus3DbAndLimitThePairAtMinus3DbtpWhenStereoIsLossy() {
+      var cmd = command(encode("aac", "stereo"), source("dts", "5.1(side)"));
 
-      assertThat(audioFilter(cmd)).startsWith("aresample=");
+      var filter = audioFilter(cmd);
+      assertThat(filter)
+          .startsWith(
+              FLOAT_PAN
+                  + "stereo|FL=FL+0.7071068*FC+0.7071068*SL|FR=FR+0.7071068*FC+0.7071068*SR"
+                  + "[mix];aevalsrc=")
+          .endsWith(TRIMMED_SECOND_STAGE + "[l0];[l0]anull,aresample=" + TUNED_RESAMPLER);
+      assertThat(filter.split(MINUS_3_DBTP_STAGE, -1)).hasSize(3);
+      assertThat(cmd).containsSubsequence("-ch_layout", "stereo");
+    }
+
+    @Test
+    @DisplayName("Should mix each side's two surrounds at -3 dB each when 7.1 becomes stereo")
+    void shouldMixEachSidesTwoSurroundsAtMinus3DbEachWhen71BecomesStereo() {
+      var cmd = command(encode("aac", "stereo"), source("truehd", "7.1"));
+
+      assertThat(audioFilter(cmd))
+          .startsWith(
+              FLOAT_PAN
+                  + "stereo|FL=FL+0.7071068*FC+0.5000000*BL+0.5000000*SL"
+                  + "|FR=FR+0.7071068*FC+0.5000000*BR+0.5000000*SR[mix];");
+    }
+
+    @Test
+    @DisplayName(
+        "Should fold the low-frequency channel into stereo when the source has no surround")
+    void shouldFoldTheLowFrequencyChannelIntoStereoWhenTheSourceHasNoSurround() {
+      var cmd = command(encode("aac", "stereo"), source("flac", "2.1"));
+
+      assertThat(audioFilter(cmd))
+          .startsWith(FLOAT_PAN + "stereo|FL=FL+0.7071068*LFE|FR=FR+0.7071068*LFE[mix];aevalsrc=")
+          .contains(MINUS_3_DBFS);
+    }
+
+    @Test
+    @DisplayName("Should mix at the track's Lo/Ro levels when AC-3 becomes mono")
+    void shouldMixAtTheTracksLoRoLevelsWhenAc3BecomesMono() {
+      var source =
+          sourceBuilder("ac3", "5.1(side)")
+              .loRoLevels(Optional.of(new SourceAudio.LoRoLevels(0.594604, 0.5)))
+              .build();
+
+      var cmd = command(encode("aac", "mono"), Optional.of(source));
+
+      assertThat(audioFilter(cmd))
+          .startsWith(
+              FLOAT_PAN
+                  + "mono|FC=0.7071068*FL+0.7071068*FR+0.8408970*FC"
+                  + "+0.3535534*SL+0.3535534*SR[mix];aevalsrc=")
+          .contains(MINUS_3_DBFS);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"flac", "alac", "aac"})
+    @DisplayName(
+        "Should leave channels out at the source rate when the probe gave no rate and nothing is"
+            + " summed")
+    void shouldLeaveChannelsOutAtTheSourceRateWhenTheProbeGaveNoRateAndNothingIsSummed(
+        String codec) {
+      var source = sourceBuilder("flac", "5.1(side)").sampleRate(OptionalInt.empty()).build();
+
+      var cmd = command(encode(codec, "5.0"), Optional.of(source));
+
+      assertThat(audioFilter(cmd))
+          .startsWith(FLOAT_PAN + "5.0|FL=FL|FR=FR|FC=FC|BL=SL|BR=SR")
+          .doesNotContain("alimiter", "aresample=osr");
+    }
+
+    @Test
+    @DisplayName(
+        "Should mix and limit at 48 kHz when a lossy encode downmixes a track the probe gave no"
+            + " rate")
+    void shouldMixAndLimitAt48KhzWhenALossyEncodeDownmixesATrackTheProbeGaveNoRate() {
+      var source = sourceBuilder("dts", "5.1(side)").sampleRate(OptionalInt.empty()).build();
+
+      var cmd = command(encode("aac", "stereo"), Optional.of(source));
+
+      assertThat(audioFilter(cmd))
+          .startsWith("aresample=osr=48000:" + TUNED_RESAMPLER + "," + FLOAT_PAN)
+          .contains(":s=48000,atrim=end_sample=128")
+          .doesNotContain(":s=44100");
+    }
+
+    @Test
+    @DisplayName(
+        "Should limit only the summed surround pair at -1 dBTP when FLAC writes E-AC-3 7.1 as 5.1")
+    void shouldLimitOnlyTheSummedSurroundPairAtMinus1DbtpWhenFlacWritesEac371As51() {
+      var source =
+          sourceBuilder("eac3", "7.1")
+              .loRoLevels(Optional.of(new SourceAudio.LoRoLevels(0.5, 0.5)))
+              .build();
+
+      var cmd = command(encode("flac", "5.1"), Optional.of(source));
+
+      var filter = audioFilter(cmd);
+      assertThat(filter)
+          .startsWith(
+              FLOAT_PAN
+                  + "5.1|FL=FL|FR=FR|FC=FC|LFE=LFE"
+                  + "|BL=0.7071068*BL+0.7071068*SL|BR=0.7071068*BR+0.7071068*SR,"
+                  + "channelsplit=channel_layout=5.1[c0][c1][c2][c3][c4][c5];aevalsrc=")
+          .contains(
+              ";[c4][c5]join=inputs=2:channel_layout=stereo:map=0.0-FL|1.0-FR[j0];"
+                  + "[j0]aformat=sample_fmts=dblp,asplit=12")
+          .endsWith(
+              TRIMMED_SECOND_STAGE
+                  + "[g0];[c0][c1][c2][c3][g0]join=inputs=5:channel_layout=5.1"
+                  + ":map=0.0-FL|1.0-FR|2.0-FC|3.0-LFE|4.0-BL|4.1-BR,"
+                  + DITHERED_16_BITS);
+      assertThat(filter.split(MINUS_1_DBTP_STAGE, -1)).hasSize(3);
+    }
+
+    @Test
+    @DisplayName(
+        "Should mix the back centre into each surround at -3 dB and limit the pair at -3 dBTP when"
+            + " 6.1 becomes AAC 5.1")
+    void
+        shouldMixTheBackCentreIntoEachSurroundAtMinus3DbAndLimitThePairAtMinus3DbtpWhen61BecomesAac51() {
+      var cmd = command(encode("aac", "5.1"), source("dts", "6.1"));
+
+      var filter = audioFilter(cmd);
+      assertThat(filter)
+          .startsWith(
+              FLOAT_PAN
+                  + "5.1|FL=FL|FR=FR|FC=FC|LFE=LFE|BL=0.7071068*BC+SL|BR=0.7071068*BC+SR,"
+                  + "channelsplit=channel_layout=5.1[c0][c1][c2][c3][c4][c5];aevalsrc=")
+          .contains(
+              ";[c4][c5]join=inputs=2:channel_layout=stereo:map=0.0-FL|1.0-FR[j0];"
+                  + "[j0]aformat=sample_fmts=dblp,asplit=12")
+          .doesNotContain(MINUS_1_DBFS);
+      assertThat(filter.split(MINUS_3_DBTP_STAGE, -1)).hasSize(3);
+    }
+
+    @Test
+    @DisplayName("Should link the front pair alone when the front-of-centre channels fold into it")
+    void shouldLinkTheFrontPairAloneWhenTheFrontOfCentreChannelsFoldIntoIt() {
+      var cmd = command(encode("aac", "5.0"), source("flac", "7.0(front)"));
+
+      assertThat(audioFilter(cmd))
+          .contains("pan=5.0|FL=FL+0.7071068*FLC|FR=FR+0.7071068*FRC|FC=FC|BL=SL|BR=SR,")
+          .contains("[c0][c1]join=inputs=2:channel_layout=stereo:map=0.0-FL|1.0-FR[j0];")
+          .contains("[g0][c2][c3][c4]join=inputs=4:channel_layout=5.0");
+    }
+
+    @Test
+    @DisplayName("Should leave channels out without a limiter or dither when nothing is summed")
+    void shouldLeaveChannelsOutWithoutALimiterOrDitherWhenNothingIsSummed() {
+      var source = sourceBuilder("flac", "5.1(side)").bitDepth(OptionalInt.of(16)).build();
+
+      var cmd = command(encode("flac", "5.0"), Optional.of(source));
+
+      assertThat(audioFilter(cmd))
+          .isEqualTo(
+              FLOAT_PAN + "5.0|FL=FL|FR=FR|FC=FC|BL=SL|BR=SR,aresample=osf=s16:" + TUNED_RESAMPLER);
+    }
+
+    @Test
+    @DisplayName("Should dither the summed pair to 16 bits when a FLAC downmix sums a 16-bit track")
+    void shouldDitherTheSummedPairTo16BitsWhenAFlacDownmixSumsA16BitTrack() {
+      var source = sourceBuilder("flac", "5.1(side)").bitDepth(OptionalInt.of(16)).build();
+
+      var cmd = command(encode("flac", "stereo"), Optional.of(source));
+
+      assertThat(audioFilter(cmd))
+          .endsWith(
+              TRIMMED_SECOND_STAGE
+                  + "[l0];[l0]"
+                  + DITHERED_16_BITS
+                  + ",aresample=osf=s16:"
+                  + TUNED_RESAMPLER);
+    }
+
+    @Test
+    @DisplayName(
+        "Should dither every channel when a FLAC downmix scales a channel that it does not sum")
+    void shouldDitherEveryChannelWhenAFlacDownmixScalesAChannelThatItDoesNotSum() {
+      var source = sourceBuilder("flac", "mono").bitDepth(OptionalInt.of(16)).build();
+
+      var cmd = command(encode("flac", "stereo"), Optional.of(source));
+
+      assertThat(audioFilter(cmd))
+          .isEqualTo(FLOAT_PAN + "stereo|FL=0.7071068*FC|FR=0.7071068*FC," + DITHERED_16_BITS);
+    }
+
+    @Test
+    @DisplayName(
+        "Should quantize the summed pair with TPDF dither at 24 bits when FLAC writes 24-bit 7.1 as 5.1")
+    void shouldQuantizeTheSummedPairWithTpdfDitherAt24BitsWhenFlacWrites24Bit71As51() {
+      var cmd = command(encode("flac", "5.1"), Optional.of(hiResSource("7.1", 48_000)));
+
+      assertThat(audioFilter(cmd))
+          .endsWith(
+              TRIMMED_SECOND_STAGE
+                  + "[l0];[l0]"
+                  + DITHERED_24_BITS
+                  + "[g0];[c0][c1][c2][c3][g0]join=inputs=5:channel_layout=5.1"
+                  + ":map=0.0-FL|1.0-FR|2.0-FC|3.0-LFE|4.0-BL|4.1-BR,"
+                  + "aresample=osf=s32:"
+                  + TUNED_RESAMPLER);
+    }
+
+    @Test
+    @DisplayName(
+        "Should dither every channel at 24 bits when a 24-bit FLAC downmix scales a channel that it does not sum")
+    void shouldDitherEveryChannelAt24BitsWhenA24BitFlacDownmixScalesAChannelThatItDoesNotSum() {
+      var cmd = command(encode("flac", "stereo"), Optional.of(hiResSource("mono", 48_000)));
+
+      assertThat(audioFilter(cmd))
+          .isEqualTo(FLOAT_PAN + "stereo|FL=0.7071068*FC|FR=0.7071068*FC," + DITHERED_24_BITS);
+    }
+
+    @Test
+    @DisplayName("Should keep every sample when a 24-bit FLAC downmix only leaves channels out")
+    void shouldKeepEverySampleWhenA24BitFlacDownmixOnlyLeavesChannelsOut() {
+      var cmd = command(encode("flac", "5.0"), Optional.of(hiResSource("5.1(side)", 48_000)));
+
+      assertThat(audioFilter(cmd))
+          .isEqualTo(
+              FLOAT_PAN + "5.0|FL=FL|FR=FR|FC=FC|BL=SL|BR=SR,aresample=osf=s32:" + TUNED_RESAMPLER);
+    }
+
+    @Test
+    @DisplayName(
+        "Should limit at the named rate and dither every channel when FLAC steps a 96 kHz downmix to 48 kHz")
+    void shouldLimitAtTheNamedRateAndDitherEveryChannelWhenFlacStepsA96KhzDownmixTo48Khz() {
+      var audio = encodeBuilder("flac", "5.1").outputSampleRate(OptionalInt.of(48_000)).build();
+
+      var cmd = command(audio, Optional.of(hiResSource("7.1", 96_000)));
+
+      assertThat(audioFilter(cmd))
+          .startsWith("aresample=osr=48000:" + TUNED_RESAMPLER + "," + FLOAT_PAN)
+          .contains(":s=48000,atrim=end_sample=128")
+          .doesNotContain("osr=192000", ":s=96000")
+          .endsWith(":map=0.0-FL|1.0-FR|2.0-FC|3.0-LFE|4.0-BL|4.1-BR," + DITHERED_24_BITS);
+    }
+
+    @Test
+    @DisplayName("Should dither every channel when FLAC writes a drop-only downmix of AC-3")
+    void shouldDitherEveryChannelWhenFlacWritesADropOnlyDownmixOfAc3() {
+      var cmd = command(encode("flac", "5.0"), source("ac3", "5.1(side)"));
+
+      assertThat(audioFilter(cmd))
+          .isEqualTo(FLOAT_PAN + "5.0|FL=FL|FR=FR|FC=FC|BL=SL|BR=SR," + DITHERED_16_BITS);
+    }
+
+    @Test
+    @DisplayName("Should leave the surrounds out without a limiter when AC-3 signals a zero level")
+    void shouldLeaveTheSurroundsOutWithoutALimiterWhenAc3SignalsAZeroLevel() {
+      var source =
+          sourceBuilder("ac3", "quad(side)")
+              .loRoLevels(Optional.of(new SourceAudio.LoRoLevels(0.707107, 0.0)))
+              .build();
+
+      var cmd = command(encode("aac", "stereo"), Optional.of(source));
+
+      assertThat(audioFilter(cmd))
+          .isEqualTo(FLOAT_PAN + "stereo|FL=FL|FR=FR,aresample=" + TUNED_RESAMPLER);
+    }
+
+    @Test
+    @DisplayName("Should resample before the matrix when a lossy downmix changes the sample rate")
+    void shouldResampleBeforeTheMatrixWhenALossyDownmixChangesTheSampleRate() {
+      var source = sourceBuilder("flac", "5.1(side)").sampleRate(OptionalInt.of(96_000)).build();
+
+      var cmd = command(encode("aac", "stereo"), Optional.of(source));
+
+      assertThat(audioFilter(cmd))
+          .startsWith("aresample=osr=48000:" + TUNED_RESAMPLER + "," + FLOAT_PAN)
+          .contains(":s=48000,atrim=end_sample=128")
+          .endsWith(TRIMMED_SECOND_STAGE + "[l0];[l0]anull,aresample=" + TUNED_RESAMPLER);
+    }
+
+    @Test
+    @DisplayName("Should leave the downmix to FFmpeg when the source layout has an unknown channel")
+    void shouldLeaveTheDownmixToFfmpegWhenTheSourceLayoutHasAnUnknownChannel() {
+      var source =
+          SourceAudio.builder()
+              .codec("pcm_s24le")
+              .channels(3)
+              .channelLayout(Optional.of("3 channels (FL+FR+USR63)"))
+              .build();
+
+      var cmd = command(encode("aac", "stereo"), Optional.of(source));
+
+      assertThat(audioFilter(cmd)).isEqualTo("aresample=" + TUNED_RESAMPLER);
       assertThat(cmd).containsSubsequence("-ch_layout", "stereo");
     }
   }
@@ -454,6 +762,14 @@ class FfmpegCommandBuilderAudioLayoutTest {
         .channels(named.channelCount())
         .bitrate(448_000)
         .channelLayout(Optional.of(named));
+  }
+
+  private static SourceAudio hiResSource(String layout, int sampleRate) {
+    return sourceBuilder("flac", layout)
+        .sampleFormat(Optional.of("s32"))
+        .bitDepth(OptionalInt.of(24))
+        .sampleRate(OptionalInt.of(sampleRate))
+        .build();
   }
 
   private static SourceAudio hiResFlac(int sampleRate, int bitDepth) {

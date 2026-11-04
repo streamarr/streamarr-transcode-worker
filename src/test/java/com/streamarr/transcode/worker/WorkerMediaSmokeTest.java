@@ -9,6 +9,7 @@ import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.start;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variantJobBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import build.buf.gen.streamarr.transcode.v1.AudioChannelLayout;
@@ -3318,6 +3319,46 @@ class WorkerMediaSmokeTest {
     }
   }
 
+  @ParameterizedTest(name = "{0}-bit")
+  @ValueSource(ints = {24, 16})
+  @DisplayName(
+      "Should keep every unsummed channel's samples and hold the summed pair under its ceiling"
+          + " when FLAC writes 7.1 as 5.1")
+  void
+      shouldKeepEveryUnsummedChannelsSamplesAndHoldTheSummedPairUnderItsCeilingWhenFlacWrites71As51(
+          int bitDepth) throws Exception {
+    var noise = noiseSource("7.1", "white", "1.0");
+    var source =
+        bitDepth == 16
+            ? reencodedAudio(noise, "s16", List.of("-c:a", "flac", "-sample_fmt", "s16"))
+            : noise;
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setCodec("flac")
+        .setChannels(6)
+        .setChannelLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_FIVE_POINT_ONE);
+    job.getExecutionBuilder().setMediaSegmentCount(1);
+
+    var uploads = execute(engine(realCapabilities()), seekableSources, job.build());
+
+    var delivered = root.resolve("downmix-7.1-to-5.1-" + bitDepth + ".mp4");
+    Files.write(delivered, uploads.contentOf(uploadNames(1)));
+    var sourceChannels = decodedChannels(source, 8);
+    var deliveredChannels = decodedChannels(delivered, 6);
+    assertThat(deliveredChannels[0]).hasSameSizeAs(sourceChannels[0]);
+    for (var channel = 0; channel < 4; channel++) {
+      assertThat(deliveredChannels[channel])
+          .as("unsummed channel %s", SpeakerLayout.named("5.1").speakers().get(channel))
+          .isEqualTo(sourceChannels[channel]);
+    }
+
+    // 7.1 is FL FR FC LFE BL BR SL SR, so each 5.1 surround sums one back and one side channel.
+    assertThat(peakOf(matrixSum(sourceChannels[4], sourceChannels[6]))).isGreaterThan(1.0);
+    assertThat(peakOf(deliveredChannels[4])).isLessThan(MINUS_0_8_DBFS);
+    assertThat(peakOf(deliveredChannels[5])).isLessThan(MINUS_0_8_DBFS);
+  }
+
   @Test
   @DisplayName(
       "Should keep the channels that a pad adds silent when a lossless encode resamples and pads the"
@@ -3348,6 +3389,202 @@ class WorkerMediaSmokeTest {
 
     assertThat(deliveredChannels[output.speakers().indexOf(Speaker.FL)])
         .isNotEqualTo(new int[deliveredChannels[0].length]);
+  }
+
+  @Test
+  @DisplayName(
+      "Should mix at the Lo/Ro levels that the first AC-3 frame signals when FLAC writes stereo")
+  void shouldMixAtTheLoRoLevelsThatTheFirstAc3FrameSignalsWhenFlacWritesStereo() throws Exception {
+    var source = ac3WithLoRoLevelsSource();
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setCodec("flac")
+        .setChannels(2)
+        .setChannelLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO);
+    job.getExecutionBuilder().setMediaSegmentCount(1);
+
+    var uploads = execute(engine(realCapabilities()), seekableSources, job.build());
+
+    var delivered = root.resolve("downmix-ac3-to-stereo.mp4");
+    Files.write(delivered, uploads.contentOf(uploadNames(1)));
+    // 5.1(side) is FL FR FC LFE SL SR; the track signals 0.5 for its centre and its surrounds.
+    var sourceChannels = decodedChannels(source, 6, "-drc_scale", "0");
+    var deliveredChannels = decodedChannels(delivered, 2);
+    var left = loRoSum(sourceChannels[0], sourceChannels[2], sourceChannels[4]);
+    var right = loRoSum(sourceChannels[1], sourceChannels[2], sourceChannels[5]);
+    assertThat(relativeErrorOf(deliveredChannels[0], left)).isLessThan(0.01);
+    assertThat(relativeErrorOf(deliveredChannels[1], right)).isLessThan(0.01);
+  }
+
+  private static final double MINUS_0_8_DBFS = 0.912;
+
+  private static double[] matrixSum(int[] back, int[] side) {
+    var sum = new double[back.length];
+    for (var frame = 0; frame < back.length; frame++) {
+      sum[frame] = Math.sqrt(0.5) * ((double) back[frame] + side[frame]) / FULL_SCALE;
+    }
+
+    return sum;
+  }
+
+  private static double[] loRoSum(int[] front, int[] centre, int[] surround) {
+    var sum = new double[front.length];
+    for (var frame = 0; frame < front.length; frame++) {
+      sum[frame] = (front[frame] + 0.5 * centre[frame] + 0.5 * surround[frame]) / FULL_SCALE;
+    }
+
+    return sum;
+  }
+
+  private static final double FULL_SCALE = 2_147_483_648.0;
+
+  private static double peakOf(double[] samples) {
+    return Arrays.stream(samples).map(Math::abs).max().orElseThrow();
+  }
+
+  private static double peakOf(int[] samples) {
+    return Arrays.stream(samples)
+        .mapToDouble(sample -> Math.abs(sample / FULL_SCALE))
+        .max()
+        .orElseThrow();
+  }
+
+  // The RMS of the difference over the RMS of the expected samples.
+  // AC-3 holds whole frames of 1,536 samples, so the delivered audio may end a frame earlier.
+  private static double relativeErrorOf(int[] delivered, double[] expected) {
+    assertThat(delivered.length).isCloseTo(expected.length, within(1_536));
+    var error = 0.0;
+    var signal = 0.0;
+    for (var frame = 0; frame < Math.min(delivered.length, expected.length); frame++) {
+      var difference = delivered[frame] / FULL_SCALE - expected[frame];
+      error += difference * difference;
+      signal += expected[frame] * expected[frame];
+    }
+
+    return Math.sqrt(error / signal);
+  }
+
+  // The seekable source's video, and AC-3 5.1(side) of quiet pink noise whose frames signal 0.5
+  // for the Lo/Ro centre and surround levels.
+  private static Path ac3WithLoRoLevelsSource() throws Exception {
+    return reencodedAudio(
+        noiseSource("5.1(side)", "pink", "0.2"),
+        "ac3-loro",
+        List.of(
+            "-c:a",
+            "ac3",
+            "-b:a",
+            "640k",
+            "-dmix_mode",
+            "loro",
+            "-loro_cmixlev",
+            "0.5",
+            "-loro_surmixlev",
+            "0.5"));
+  }
+
+  // The source's video, and its audio encoded with the options.
+  private static synchronized Path reencodedAudio(
+      Path original, String suffix, List<String> audioOptions) throws Exception {
+    var name = original.getFileName().toString().replace(".mkv", "-" + suffix + ".mkv");
+    var source = original.resolveSibling(name);
+    if (generatedSeekableSources.contains(source)) {
+      return source;
+    }
+
+    var arguments =
+        new ArrayList<>(List.of("-i", original.toString(), "-map", "0", "-c:v", "copy"));
+    arguments.addAll(audioOptions);
+    runFfmpeg(arguments, source);
+    generatedSeekableSources.add(source);
+    return source;
+  }
+
+  @Test
+  @DisplayName(
+      "Should dither the summed surrounds and keep every other channel's samples when FLAC writes"
+          + " 24-bit 7.1 as 5.1")
+  void shouldDitherTheSummedSurroundsAndKeepEveryOtherChannelsSamplesWhenFlacWrites24Bit71As51()
+      throws Exception {
+    var source = surroundsAtOneStepSource();
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setCodec("flac")
+        .setChannels(6)
+        .setChannelLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_FIVE_POINT_ONE);
+    job.getExecutionBuilder().setMediaSegmentCount(1);
+
+    var uploads = execute(engine(realCapabilities()), seekableSources, job.build());
+
+    var delivered = root.resolve("downmix-24-bit-7.1-to-5.1.mp4");
+    Files.write(delivered, uploads.contentOf(uploadNames(1)));
+    var sourceChannels = decodedChannels(source, 8);
+    var deliveredChannels = decodedChannels(delivered, 6);
+    for (var channel = 0; channel < 4; channel++) {
+      assertThat(deliveredChannels[channel])
+          .as("unsummed channel %s", SpeakerLayout.named("5.1").speakers().get(channel))
+          .isEqualTo(sourceChannels[channel]);
+    }
+
+    // Each surround sums a back and a side channel that hold one 24-bit step: 0.7071 × 2 = 1.414
+    // steps, which truncation writes as 1 in every sample and TPDF dither spreads around it.
+    var settled = 4_800;
+    for (var channel = 4; channel < 6; channel++) {
+      var steps =
+          Arrays.stream(
+                  deliveredChannels[channel], settled, deliveredChannels[channel].length - settled)
+              .map(sample -> sample >> 8)
+              .toArray();
+      assertThat(Arrays.stream(steps).distinct().count()).as("distinct steps").isGreaterThan(2);
+      assertThat(Arrays.stream(steps).average().orElseThrow())
+          .as("mean step")
+          .isCloseTo(Math.sqrt(2) - 0.5, within(0.05));
+    }
+  }
+
+  // The seekable source's video, and 24-bit FLAC 7.1 whose front channels hold pink noise and
+  // whose back and side channels hold a constant of one 24-bit step.
+  private static synchronized Path surroundsAtOneStepSource() throws Exception {
+    var source = seekableSources.resolve("lossless-7.1-surrounds-at-one-step.mkv");
+    if (generatedSeekableSources.contains(source)) {
+      return source;
+    }
+
+    var arguments = new ArrayList<>(List.of("-f", "lavfi", "-i", "testsrc=size=64x36:rate=24"));
+    var joined = new StringBuilder();
+    for (var channel = 0; channel < 8; channel++) {
+      var input =
+          channel < 4
+              ? "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5:seed=" + (channel + 11)
+              : "aevalsrc=exprs=1/8388608:sample_rate=48000";
+      arguments.addAll(List.of("-f", "lavfi", "-i", input));
+      joined.append("[").append(channel + 1).append(":a]");
+    }
+
+    joined.append("join=inputs=8:channel_layout=7.1");
+    arguments.addAll(
+        List.of(
+            "-filter_complex",
+            joined + "[audio]",
+            "-map",
+            "0:v",
+            "-map",
+            "[audio]",
+            "-t",
+            "6",
+            "-c:v",
+            "libx264",
+            "-g",
+            "48",
+            "-c:a",
+            "flac",
+            "-sample_fmt",
+            "s32"));
+    runFfmpeg(arguments, source);
+    generatedSeekableSources.add(source);
+    return source;
   }
 
   static Stream<LosslessLayoutChange> losslessLayoutChanges() {
@@ -3403,16 +3640,32 @@ class WorkerMediaSmokeTest {
     }
   }
 
-  // The seekable source's video, and 24-bit FLAC in the layout whose channels each hold pink
-  // noise of their own seed, so that a moved channel cannot match its place.
+  // The seekable source's video, and 24-bit FLAC in the layout whose channels each hold noise of
+  // their own seed, so that a moved channel cannot match its place.
   private static Path losslessLayoutSource(String layout) throws Exception {
-    return losslessSource(layout, 48_000);
+    return noiseSource(layout, "pink", "0.5");
   }
 
-  private static synchronized Path losslessSource(String layout, int sampleRate) throws Exception {
+  private static Path losslessSource(String layout, int sampleRate) throws Exception {
+    return noiseSource(layout, "pink", "0.5", sampleRate);
+  }
+
+  private static Path noiseSource(String layout, String color, String amplitude) throws Exception {
+    return noiseSource(layout, color, amplitude, 48_000);
+  }
+
+  private static synchronized Path noiseSource(
+      String layout, String color, String amplitude, int sampleRate) throws Exception {
     var source =
         seekableSources.resolve(
-            "lossless-" + layout.replaceAll("[()]", "_") + "-" + sampleRate + ".mkv");
+            "lossless-"
+                + layout.replaceAll("[()]", "_")
+                + "-"
+                + color
+                + amplitude
+                + "-"
+                + sampleRate
+                + ".mkv");
     if (generatedSeekableSources.contains(source)) {
       return source;
     }
@@ -3426,9 +3679,13 @@ class WorkerMediaSmokeTest {
               "-f",
               "lavfi",
               "-i",
-              "anoisesrc=color=pink:sample_rate="
+              "anoisesrc=color="
+                  + color
+                  + ":sample_rate="
                   + sampleRate
-                  + ":amplitude=0.5:seed="
+                  + ":amplitude="
+                  + amplitude
+                  + ":seed="
                   + (channel + 11)));
       joined.append("[").append(channel + 1).append(":a]");
     }
@@ -3458,9 +3715,12 @@ class WorkerMediaSmokeTest {
   }
 
   // Each channel of the file's first audio stream, decoded to 32-bit samples in FFmpeg's order.
-  private int[][] decodedChannels(Path file, int channels) throws Exception {
+  private int[][] decodedChannels(Path file, int channels, String... decoderOptions)
+      throws Exception {
     var pcm = root.resolve(file.getFileName() + ".s32");
-    runFfmpeg(List.of("-i", file.toString(), "-map", "0:a:0", "-f", "s32le"), pcm);
+    var arguments = new ArrayList<>(List.of(decoderOptions));
+    arguments.addAll(List.of("-i", file.toString(), "-map", "0:a:0", "-f", "s32le"));
+    runFfmpeg(arguments, pcm);
     var samples = ByteBuffer.wrap(Files.readAllBytes(pcm)).order(ByteOrder.LITTLE_ENDIAN);
     var frames = samples.remaining() / Integer.BYTES / channels;
     var decoded = new int[channels][frames];

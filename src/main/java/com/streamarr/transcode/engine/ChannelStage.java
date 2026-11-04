@@ -26,7 +26,7 @@ sealed interface ChannelStage {
   static ChannelStage of(SourceAudio source, SpeakerLayout output) {
     var decoded = source.speakerLayout();
     if (decoded.isEmpty()) {
-      return new Remix();
+      return new UnnamedSource();
     }
 
     var layout = decoded.orElseThrow();
@@ -35,7 +35,7 @@ sealed interface ChannelStage {
     var used = new HashSet<Speaker>();
     sources.values().forEach(kept -> kept.ifPresent(used::add));
     if (!used.containsAll(layout.speakers())) {
-      return new Remix();
+      return new Downmix(layout, output);
     }
 
     if (sources.values().stream().anyMatch(Optional::isEmpty)) {
@@ -109,8 +109,26 @@ sealed interface ChannelStage {
     }
   }
 
-  /** The output lacks a source channel, so the encode mixes or leaves out source channels. */
-  record Remix() implements ChannelStage {
+  /**
+   * The output lacks a source channel, so ADR 0050's matrix mixes source channels together or
+   * leaves them out. The filter needs the limiter and the Lo/Ro levels, so the encode builds it.
+   */
+  record Downmix(SpeakerLayout source, SpeakerLayout output) implements ChannelStage {
+    @Override
+    public Optional<String> filter() {
+      return Optional.empty();
+    }
+
+    Map<Speaker, Map<Speaker, Double>> matrix(Optional<SourceAudio.LoRoLevels> levels) {
+      return DownmixMatrix.of(source, output, levels);
+    }
+  }
+
+  /**
+   * FFmpeg names a channel of the source layout that the worker does not know, so FFmpeg's default
+   * rematrixing writes the output layout.
+   */
+  record UnnamedSource() implements ChannelStage {
     @Override
     public Optional<String> filter() {
       return Optional.empty();

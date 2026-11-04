@@ -2,6 +2,7 @@ package com.streamarr.transcode.worker;
 
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import com.streamarr.transcode.engine.SourceAudio;
+import com.streamarr.transcode.probe.DownmixLevels;
 import java.util.Optional;
 import java.util.OptionalInt;
 
@@ -16,8 +17,9 @@ sealed interface ChosenAudio {
   /** The read failed, so the attempt cannot choose how to encode the audio. */
   record Unreadable(Exception failure) implements ChosenAudio {}
 
-  static SourceAudio factsOf(ProbeStreamInfo stream) {
+  static SourceAudio factsOf(ProbeStreamInfo stream, Optional<DownmixLevels> levels) {
     return SourceAudio.builder()
+        .loRoLevels(levels.map(read -> new SourceAudio.LoRoLevels(read.center(), read.surround())))
         .codec(stream.getCodec())
         .profile(
             stream.hasAudioProfile() ? Optional.of(stream.getAudioProfile()) : Optional.empty())

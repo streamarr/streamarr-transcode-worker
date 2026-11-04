@@ -13,6 +13,7 @@ import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptStarted;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptStopped;
 import build.buf.gen.streamarr.transcode.v1.ProbeCapacityChanged;
+import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import build.buf.gen.streamarr.transcode.v1.SegmentContentType;
 import build.buf.gen.streamarr.transcode.v1.SegmentUploadMetadata;
 import build.buf.gen.streamarr.transcode.v1.StartProbeCommand;
@@ -42,8 +43,11 @@ import com.streamarr.transcode.engine.Producer;
 import com.streamarr.transcode.engine.ProducerFailure;
 import com.streamarr.transcode.engine.SegmentMemoryBudget;
 import com.streamarr.transcode.engine.SourceAudio;
+import com.streamarr.transcode.engine.Speaker;
+import com.streamarr.transcode.engine.SpeakerLayout;
 import com.streamarr.transcode.engine.TranscodeRequest;
 import com.streamarr.transcode.engine.UnadvertisedCodecFamilyException;
+import com.streamarr.transcode.probe.DownmixLevels;
 import com.streamarr.transcode.probe.FfprobeExecutor;
 import com.streamarr.transcode.probe.ProbeAttemptReport;
 import com.streamarr.transcode.protocol.ProtoUuid;
@@ -376,8 +380,35 @@ public final class TranscodeWorker implements AutoCloseable {
 
   private SourceAudio readSourceAudio(VariantJob job)
       throws ExecutionException, InterruptedException {
+    var output = WorkerVariantJobMapper.audioLayoutOf(job).orElseThrow();
     var source = sources.resolve(job.getSource());
-    return ChosenAudio.factsOf(ffprobe.readChosenAudio(source));
+    var stream = ffprobe.readChosenAudio(source);
+    var levels =
+        mixesWithLoRoLevels(stream, output)
+            ? Optional.of(ffprobe.readDownmixLevels(source))
+            : Optional.<DownmixLevels>empty();
+    return ChosenAudio.factsOf(stream, levels);
+  }
+
+  // ADR 0050: a stereo or mono downmix of AC-3 or E-AC-3 mixes its centre and surrounds at the
+  // levels that the track signals. FFmpeg's decoder exports them only for a track with more than
+  // two channels besides the low-frequency channel, which is the only kind that has either.
+  private static boolean mixesWithLoRoLevels(ProbeStreamInfo stream, SpeakerLayout output) {
+    var codec = stream.getCodec();
+    if (!"ac3".equals(codec) && !"eac3".equals(codec) || output.channelCount() > 2) {
+      return false;
+    }
+
+    var mainChannels =
+        ChosenAudio.factsOf(stream, Optional.empty())
+            .speakerLayout()
+            .map(
+                layout ->
+                    layout.speakers().stream()
+                        .filter(speaker -> speaker != Speaker.LFE && speaker != Speaker.LFE2)
+                        .count())
+            .orElse((long) stream.getChannels());
+    return mainChannels > 2;
   }
 
   private synchronized AttemptStart startAttempt(
