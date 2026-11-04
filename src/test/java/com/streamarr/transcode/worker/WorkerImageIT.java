@@ -62,6 +62,7 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.BindMode;
 import org.testcontainers.containers.Container;
 import org.testcontainers.containers.GenericContainer;
@@ -600,7 +601,10 @@ class WorkerImageIT {
   @DisplayName("Worker Image Fixture")
   private static final class ImageFixture implements AutoCloseable {
 
+    private static final String WORKER_TMP = "/worker-tmp";
+
     private final UUID workerId = UUID.randomUUID();
+    private final String scratchVolume;
     private final GenericContainer<?> controlPlane;
     private final GenericContainer<?> worker;
     private final CompletableFuture<Integer> workerExit = new CompletableFuture<>();
@@ -614,12 +618,22 @@ class WorkerImageIT {
         throws IOException {
       Files.setPosixFilePermissions(media, PosixFilePermissions.fromString("rwxr-xr-x"));
       var image = workerImage();
+      // The worker's /tmp, with the scratch directory its tools write in, is a volume the control
+      // plane container mounts too, so that a reader there outlives the worker.
+      scratchVolume = "worker-image-tmp-" + workerId;
+      DockerClientFactory.instance()
+          .client()
+          .createVolumeCmd()
+          .withName(scratchVolume)
+          .withLabels(DockerClientFactory.DEFAULT_LABELS)
+          .exec();
       controlPlane =
           new GenericContainer<>(image)
               .withImagePullPolicy(_ -> false)
               .withLogConsumer(new Slf4jLogConsumer(log).withPrefix("control-plane-" + workerId))
               .withCopyFileToContainer(
                   MountableFile.forHostPath("target/test-classes"), "/test-classes")
+              .withFileSystemBind(scratchVolume, WORKER_TMP, BindMode.READ_WRITE)
               .withExposedPorts(8082, 9091)
               .withCreateContainerCmdModifier(
                   command -> command.withEntrypoint("/cnb/lifecycle/launcher"))
@@ -640,6 +654,7 @@ class WorkerImageIT {
               .withEnv("TRANSCODE_WORKER_SOURCE_NAMESPACE_ID", SOURCE_NAMESPACE_ID.toString())
               .withEnv("TRANSCODE_WORKER_SOURCE_ROOT", sourceRoot == null ? "/media" : sourceRoot)
               .withFileSystemBind(media.toAbsolutePath().toString(), "/media", BindMode.READ_ONLY)
+              .withFileSystemBind(scratchVolume, "/tmp", BindMode.READ_WRITE)
               // The exit watch reports a worker that exits at once, so the start only needs the
               // container to have started.
               .withStartupCheckStrategy(new StartedContainer());
@@ -766,19 +781,24 @@ class WorkerImageIT {
 
     // Makes a named pipe of the given name in the scratch directory and reads it to its end on
     // another thread, so that whatever a wrapper writes there reaches the test even after the
-    // worker has removed the directory. A wrapper's open of the pipe waits for this reader, so a
-    // wrapper that opens it before the stop makes the stop independent of the reader's start.
+    // worker has removed the directory. The reader runs in the control plane container: Linux ends
+    // every process in the worker's when the worker exits, bytes still in the pipe included. A
+    // wrapper's open of the pipe waits for this reader, so a wrapper that opens it before the stop
+    // makes the stop independent of the reader's start.
     private CompletableFuture<String> evidenceThroughPipe(String file) throws Exception {
+      var scratch = "$(echo " + WORKER_TMP + "/streamarr-tools-*)";
       var made =
-          worker.execInContainer(
-              "/bin/sh", "-c", "mkfifo \"$(echo /tmp/streamarr-tools-*)/" + file + "\"");
+          controlPlane.execInContainer("/bin/sh", "-c", "mkfifo \"" + scratch + "/" + file + "\"");
       assertThat(made.getExitCode()).as(made.getStderr()).isZero();
       var evidence = new CompletableFuture<String>();
       Thread.ofVirtual()
           .start(
               () -> {
                 try {
-                  evidence.complete(inScratch("cat", file).getStdout());
+                  var read =
+                      controlPlane.execInContainer(
+                          "/bin/sh", "-c", "cat " + WORKER_TMP + "/*/" + file);
+                  evidence.complete(read.getStdout());
                 } catch (Exception failure) {
                   evidence.completeExceptionally(failure);
                 }
@@ -839,6 +859,7 @@ class WorkerImageIT {
     public void close() {
       worker.close();
       controlPlane.close();
+      DockerClientFactory.instance().client().removeVolumeCmd(scratchVolume).exec();
       http.close();
       if (workerExitWait != null) {
         try {
