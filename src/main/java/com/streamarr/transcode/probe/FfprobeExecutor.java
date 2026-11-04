@@ -250,6 +250,7 @@ public final class FfprobeExecutor {
       MatroskaColourProbe.addTo(json, attempt.source());
       MatroskaWritingApp.addTo(json, attempt.source());
       Mp4SampleEntries.addTo(json, attempt.source());
+      Mp4SourceFacts.addMajorBrand(json, attempt.source());
     }
 
     var result = readResult(json, output, attempt);

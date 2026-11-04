@@ -9,36 +9,74 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * Reads the movie box (moov) of an MP4 or MOV file and the boxes it holds. A box whose size runs
- * past its parent, a movie box larger than 256 MiB and a file without a movie box throw {@link
- * ContainerIndexException}; a box shorter than its fields throws {@link
- * java.nio.BufferUnderflowException} or {@link ContainerIndexException}.
+ * Reads the movie box (moov) of an MP4 or MOV file and the boxes it holds, and the major brand of
+ * its file type box (ftyp). A box whose size runs past its parent, a movie box larger than 256 MiB
+ * and a file without a movie box throw {@link ContainerIndexException}; a box shorter than its
+ * fields throws {@link java.nio.BufferUnderflowException} or {@link ContainerIndexException}.
  */
 final class Mp4MovieBox {
 
   private static final long MAXIMUM_MOVIE_BOX_BYTES = 256L << 20;
   private static final int BOX_HEADER_BYTES = 8;
   private static final int LARGE_BOX_HEADER_BYTES = 16;
+  private static final int MAJOR_BRAND_BYTES = 4;
+  private static final String MOVIE_BOX = "moov";
+  private static final String FILE_TYPE_BOX = "ftyp";
 
   private Mp4MovieBox() {}
 
   /** The payload of the file's movie box. */
   static ByteBuffer read(FileChannel channel) throws IOException {
+    var movie = scanThroughMovieBox(channel).movie().orElseThrow(() -> malformed(MOVIE_BOX));
+    return payload(channel, movie.position(), movie.header());
+  }
+
+  /**
+   * The major brand of the last file type box (ftyp) before the movie box, or empty when no such
+   * box holds one. FFmpeg reads every ftyp box until the movie box adds streams, and each one
+   * replaces the brand.
+   */
+  static Optional<String> majorBrand(FileChannel channel) throws IOException {
+    var fileType =
+        scanThroughMovieBox(channel)
+            .lastFileType()
+            .filter(box -> box.header().payloadSize() >= MAJOR_BRAND_BYTES);
+    if (fileType.isEmpty()) {
+      return Optional.empty();
+    }
+
+    var box = fileType.get();
+    return Optional.of(
+        fourCharacterCode(
+            ContainerFileBytes.read(
+                channel, box.position() + box.header().headerSize(), MAJOR_BRAND_BYTES)));
+  }
+
+  // Walks the file's top-level boxes up to the first movie box and keeps only the boxes that the
+  // readers need, so a file of many small boxes takes no more memory than a file of few.
+  private static TopLevelScan scanThroughMovieBox(FileChannel channel) throws IOException {
+    TopLevelBox lastFileType = null;
     var size = channel.size();
     long position = 0;
     while (position + BOX_HEADER_BYTES <= size) {
       var header =
           ContainerFileBytes.read(
               channel, position, (int) Math.min(LARGE_BOX_HEADER_BYTES, size - position));
-      var box = BoxHeader.read(header, size - position);
-      if ("moov".equals(box.type())) {
-        return payload(channel, position, box);
+      var box = new TopLevelBox(position, BoxHeader.read(header, size - position));
+      switch (box.header().type()) {
+        case MOVIE_BOX -> {
+          return new TopLevelScan(Optional.ofNullable(lastFileType), Optional.of(box));
+        }
+        case FILE_TYPE_BOX -> lastFileType = box;
+        default -> {
+          // Other top-level boxes, such as mdat or free, hold nothing that the readers need.
+        }
       }
 
-      position += box.size();
+      position += box.header().size();
     }
 
-    throw malformed("moov");
+    return new TopLevelScan(Optional.ofNullable(lastFileType), Optional.empty());
   }
 
   /** The payload of the first child box of the given type. */
@@ -115,6 +153,10 @@ final class Mp4MovieBox {
   }
 
   record Box(String type, ByteBuffer payload) {}
+
+  private record TopLevelBox(long position, BoxHeader header) {}
+
+  private record TopLevelScan(Optional<TopLevelBox> lastFileType, Optional<TopLevelBox> movie) {}
 
   private record BoxHeader(String type, long size, int headerSize) {
 

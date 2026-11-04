@@ -676,6 +676,226 @@ class WorkerMediaSmokeTest {
   }
 
   @ParameterizedTest(name = "{0}")
+  @MethodSource("mp4SourceFactCases")
+  @DisplayName(
+      "Should report the sample entry and the major brand that an MP4 or MOV file stores when a"
+          + " worker probes a real file")
+  void shouldReportTheSampleEntryAndMajorBrandThatAnMp4OrMovFileStoresWhenAWorkerProbesARealFile(
+      Mp4SourceFactCase sourceCase) throws Exception {
+    var source = root.resolve(sourceCase.fileName());
+    runFfmpeg(videoSourceArguments(sourceCase.codec(), sourceCase.muxerArguments()), source);
+
+    var media = probeExecutor().probe(source, keyframeRequest()).result().getMedia();
+
+    assertThat(media.getStreams(0).getSampleEntry()).isEqualTo(sourceCase.sampleEntry());
+    assertThat(media.getContainer().getMajorBrand()).isEqualTo(sourceCase.majorBrand());
+  }
+
+  // FFmpeg's mp4 muxer writes hev1 for HEVC unless the tag option names hvc1. Its mov muxer writes
+  // the QuickTime brand, whose last two characters are spaces.
+  static Stream<Mp4SourceFactCase> mp4SourceFactCases() {
+    return Stream.of(
+        Mp4SourceFactCase.builder()
+            .fileName("source-facts-h264.mp4")
+            .codec("libx264")
+            .muxerArguments(List.of())
+            .sampleEntry("avc1")
+            .majorBrand("isom")
+            .build(),
+        Mp4SourceFactCase.builder()
+            .fileName("source-facts-hevc.mp4")
+            .codec("libx265")
+            .muxerArguments(List.of())
+            .sampleEntry("hev1")
+            .majorBrand("isom")
+            .build(),
+        Mp4SourceFactCase.builder()
+            .fileName("source-facts-hvc1.mp4")
+            .codec("libx265")
+            .muxerArguments(List.of("-tag:v", "hvc1"))
+            .sampleEntry("hvc1")
+            .majorBrand("isom")
+            .build(),
+        Mp4SourceFactCase.builder()
+            .fileName("source-facts-hvc1.mov")
+            .codec("libx265")
+            .muxerArguments(List.of("-tag:v", "hvc1"))
+            .sampleEntry("hvc1")
+            .majorBrand("qt  ")
+            .build(),
+        Mp4SourceFactCase.builder()
+            .fileName("source-facts-mp42.mp4")
+            .codec("libx264")
+            .muxerArguments(List.of("-brand", "mp42"))
+            .sampleEntry("avc1")
+            .majorBrand("mp42")
+            .build());
+  }
+
+  @Builder
+  private record Mp4SourceFactCase(
+      String fileName,
+      String codec,
+      List<String> muxerArguments,
+      String sampleEntry,
+      String majorBrand) {
+
+    @Override
+    public String toString() {
+      return String.join(" ", muxerArguments) + " " + codec + " in " + fileName;
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should report the ftyp box's major brand when a real MP4 file's metadata names the source's")
+  void shouldReportTheFtypBoxsMajorBrandWhenARealMp4FilesMetadataNamesTheSources()
+      throws Exception {
+    var quickTime = root.resolve("metadata-brand-source.mov");
+    runFfmpeg(videoSourceArguments("libx264", List.of()), quickTime);
+    // The mp4 muxer writes the isom brand, and use_metadata_tags keeps the QuickTime source's
+    // major_brand as metadata, which ffprobe then prints as the file's major_brand.
+    var source = root.resolve("metadata-brand.mp4");
+    runFfmpeg(
+        List.of("-i", quickTime.toString(), "-c", "copy", "-movflags", "use_metadata_tags"),
+        source);
+
+    var media = probeExecutor().probe(source, keyframeRequest()).result().getMedia();
+
+    assertThat(media.getContainer().getMajorBrand()).isEqualTo("isom");
+  }
+
+  @Test
+  @DisplayName(
+      "Should report the brand that ffprobe prints when a real MP4 file holds a second ftyp box"
+          + " before its movie box")
+  void shouldReportTheBrandThatFfprobePrintsWhenARealMp4FileHoldsASecondFtypBoxBeforeItsMovieBox()
+      throws Exception {
+    var written = root.resolve("two-brands-written.mp4");
+    runFfmpeg(videoSourceArguments("libx264", List.of()), written);
+    // FFmpeg's mp4 muxer writes ftyp(isom), free, mdat, moov. A second ftyp box between the mdat
+    // and the moov moves no sample, and FFmpeg reads it before the movie box adds streams.
+    var source = root.resolve("two-brands.mp4");
+    Files.write(source, withBoxBeforeMovieBox(Files.readAllBytes(written), quickTimeFileType()));
+
+    var media = probeExecutor().probe(source, keyframeRequest()).result().getMedia();
+
+    assertThat(media.getContainer().getMajorBrand()).isEqualTo("qt  ");
+    assertThat(formatTag(source, "major_brand")).isEqualTo("qt  ");
+  }
+
+  private static byte[] quickTimeFileType() {
+    var brand = "qt  ".getBytes(StandardCharsets.US_ASCII);
+    return ByteBuffer.allocate(20)
+        .putInt(20)
+        .put("ftyp".getBytes(StandardCharsets.US_ASCII))
+        .put(brand)
+        .putInt(0)
+        .put(brand)
+        .array();
+  }
+
+  // Inserts the box in front of the file's top-level moov box.
+  private static byte[] withBoxBeforeMovieBox(byte[] mp4, byte[] box) {
+    var buffer = ByteBuffer.wrap(mp4);
+    var position = 0;
+    while (true) {
+      var size = buffer.getInt(position);
+      var type = new String(mp4, position + 4, 4, StandardCharsets.US_ASCII);
+      if ("moov".equals(type)) {
+        break;
+      }
+
+      position += size;
+    }
+
+    var result = new byte[mp4.length + box.length];
+    System.arraycopy(mp4, 0, result, 0, position);
+    System.arraycopy(box, 0, result, position, box.length);
+    System.arraycopy(mp4, position, result, position + box.length, mp4.length - position);
+    return result;
+  }
+
+  private static String formatTag(Path media, String tag) throws Exception {
+    return runToCompletion(
+            List.of(
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format_tags=" + tag,
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                media.toString()),
+            media)
+        .replaceFirst("\\R\\z", "");
+  }
+
+  // FFmpeg cannot write the Dolby Vision sample entries without a Dolby Vision stream, so each
+  // case renames the sample entry that FFmpeg wrote.
+  @ParameterizedTest(name = "{1} renamed {2}")
+  @CsvSource({"libx265, hev1, dvh1, hvc1.", "libx264, avc1, dvav, avc1."})
+  @DisplayName(
+      "Should report the Dolby Vision sample entry apart from the copy's codec string when an MP4"
+          + " file stores one")
+  void shouldReportTheDolbyVisionSampleEntryApartFromTheCopysCodecStringWhenAnMp4FileStoresOne(
+      String codec, String written, String renamed, String codecStringPrefix) throws Exception {
+    var writtenSource = root.resolve("written-" + written + ".mp4");
+    runFfmpeg(videoSourceArguments(codec, List.of()), writtenSource);
+    var source =
+        withSampleEntry(
+            Files.readAllBytes(writtenSource), written, renamed, renamed + "-source.mp4");
+
+    var video = probeExecutor().probe(source, keyframeRequest()).result().getMedia().getStreams(0);
+
+    assertThat(video.getSampleEntry()).isEqualTo(renamed);
+    assertThat(video.getCodecString()).startsWith(codecStringPrefix);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"mkv", "ts"})
+  @DisplayName(
+      "Should report no sample entry and no major brand when a real file of another container"
+          + " holds video copied from an MP4 file")
+  void shouldReportNoSampleEntryAndNoMajorBrandWhenAnotherContainerHoldsVideoCopiedFromAnMp4File(
+      String container) throws Exception {
+    var mp4 = root.resolve("remuxed-from.mp4");
+    runFfmpeg(videoSourceArguments("libx265", List.of("-tag:v", "hvc1")), mp4);
+    // A copy keeps the MP4 file's major_brand as an ordinary tag of the new container.
+    var source = root.resolve("remuxed." + container);
+    runFfmpeg(List.of("-i", mp4.toString(), "-c", "copy"), source);
+
+    var media = probeExecutor().probe(source, keyframeRequest()).result().getMedia();
+
+    assertThat(media.getStreams(0).hasSampleEntry()).isFalse();
+    assertThat(media.getContainer().hasMajorBrand()).isFalse();
+  }
+
+  // A one-second 64x36 picture track, encoded with the given codec and written with the given
+  // muxer arguments.
+  private static List<String> videoSourceArguments(String codec, List<String> muxerArguments) {
+    var arguments =
+        new ArrayList<>(
+            List.of(
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=64x36:rate=24:duration=1",
+                "-c:v",
+                codec,
+                "-preset",
+                "ultrafast",
+                "-pix_fmt",
+                "yuv420p"));
+    if ("libx265".equals(codec)) {
+      arguments.addAll(List.of("-x265-params", "log-level=error"));
+    }
+
+    arguments.addAll(muxerArguments);
+    return arguments;
+  }
+
+  @ParameterizedTest(name = "{0}")
   @ValueSource(
       strings = {
         "mp4-bframes-editlist.mp4",
