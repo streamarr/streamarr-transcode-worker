@@ -38,12 +38,20 @@ class ExecutableSearchTest {
   }
 
   @Test
-  @DisplayName("Should take the command as the file when it names a path")
-  void shouldTakeTheCommandAsTheFileWhenItNamesAPath() throws Exception {
+  @DisplayName("Should take the command as the file when it names an executable path")
+  void shouldTakeTheCommandAsTheFileWhenItNamesAnExecutablePath() throws Exception {
     var elsewhere = Files.createDirectory(tempDir.resolve("elsewhere"));
     var tool = executable(tempDir.resolve("ffmpeg"));
 
     assertThat(ExecutableSearch.locate(tool.toString(), elsewhere.toString())).contains(tool);
+  }
+
+  @Test
+  @DisplayName("Should find nothing when the command names a missing path")
+  void shouldFindNothingWhenTheCommandNamesAMissingPath() throws Exception {
+    var elsewhere = Files.createDirectory(tempDir.resolve("elsewhere"));
+    executable(elsewhere.resolve("ffmpeg"));
+
     assertThat(ExecutableSearch.locate(tempDir.resolve("missing").toString(), elsewhere.toString()))
         .isEmpty();
   }

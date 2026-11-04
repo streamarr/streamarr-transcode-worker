@@ -253,6 +253,45 @@ class TranscodeWorkerApplicationIT {
   }
 
   @Test
+  @DisplayName(
+      "Should run every ffprobe and FFmpeg through landlock-exec with the media root listed when"
+          + " the application checks the tools and probes")
+  void
+      shouldRunEveryFfprobeAndFfmpegThroughLandlockExecWithTheMediaRootListedWhenTheApplicationChecksTheToolsAndProbes()
+          throws Exception {
+    Files.writeString(tempDir.resolve("movie.mkv"), "media");
+    var ffprobe = workingFfprobe();
+    var request =
+        ProbeRequest.newBuilder()
+            .setProbeAttemptId(toProto(UUID.randomUUID()))
+            .setProbeVersion(FfprobeExecutor.PROBE_VERSION)
+            .setSource(
+                MediaSourceRef.newBuilder()
+                    .setSourceNamespaceId(toProto(SOURCE_NAMESPACE_ID))
+                    .setRelativeKey("movie.mkv"))
+            .build();
+
+    try (var controlPlane = WorkerApplicationControlPlane.builder().build()) {
+      var fixture = ApplicationFixture.builder().port(controlPlane.port()).ffprobe(ffprobe).build();
+      try (var worker = start(applicationProcess(fixture))) {
+        worker.awaitRegistration(controlPlane);
+        controlPlane.startProbe(request);
+        assertThat(worker.awaitProbeResult(controlPlane).hasMedia()).isTrue();
+      }
+    }
+
+    var confined = Files.readAllLines(confinedCommandsLog());
+    assertThat(confined)
+        .as("every tool runs through landlock-exec with the source root readable")
+        .isNotEmpty()
+        .allSatisfy(command -> assertThat(command).contains("--read " + tempDir + " ", " -- "));
+    assertThat(confined)
+        .anyMatch(command -> command.endsWith(" -- " + ffprobe + " -version"))
+        .anyMatch(command -> command.contains(ffprobe.toString()) && command.endsWith("movie.mkv"))
+        .anyMatch(command -> command.contains(" -- " + tempDir.resolve("ffmpeg") + " "));
+  }
+
+  @Test
   @DisplayName("Should refuse startup when the host offers no Landlock")
   void shouldRefuseStartupWhenTheHostOffersNoLandlock() throws Exception {
     try (var controlPlane = WorkerApplicationControlPlane.builder().build()) {
@@ -526,8 +565,9 @@ class TranscodeWorkerApplicationIT {
     return process;
   }
 
-  // A landlock-exec on PATH that answers --abi as the report says and otherwise runs the tool as
-  // it is, so the scripted tools run on any operating system.
+  // A landlock-exec on PATH that answers --abi as the report says and otherwise appends its
+  // arguments to a log and runs the tool as it is, so the scripted tools run on any operating
+  // system.
   private Path landlockExecReporting(String abiReport) throws Exception {
     var helper = tempDir.resolve("landlock-exec");
     Files.writeString(
@@ -538,13 +578,18 @@ class TranscodeWorkerApplicationIT {
           %s
           exit $?
         fi
+        printf '%%s\n' "$*" >> '%s'
         while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done
         shift
         exec "$@"
         """
-            .formatted(abiReport));
+            .formatted(abiReport, confinedCommandsLog()));
     Files.setPosixFilePermissions(helper, PosixFilePermissions.fromString("rwx------"));
     return helper;
+  }
+
+  private Path confinedCommandsLog() {
+    return tempDir.resolve("landlock-exec.log");
   }
 
   private WorkerApplicationProcess start(ProcessBuilder processBuilder) throws IOException {

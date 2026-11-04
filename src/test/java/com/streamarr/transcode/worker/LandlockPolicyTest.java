@@ -104,8 +104,8 @@ class LandlockPolicyTest {
   }
 
   @Test
-  @DisplayName("Should list a tool directory once when both tools share it under the system tree")
-  void shouldListAToolDirectoryOnceWhenBothToolsShareItUnderTheSystemTree() throws Exception {
+  @DisplayName("Should list a shared tool directory once when both tools resolve to it")
+  void shouldListASharedToolDirectoryOnceWhenBothToolsResolveToIt() throws Exception {
     var usr = Files.createDirectory(tempDir.resolve("usr"));
     var bin = Files.createDirectory(usr.resolve("bin"));
     executable(bin.resolve("ffmpeg"));

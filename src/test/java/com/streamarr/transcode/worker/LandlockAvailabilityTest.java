@@ -12,6 +12,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 @Tag("UnitTest")
 @DisplayName("Landlock Availability Tests")
@@ -100,10 +102,12 @@ class LandlockAvailabilityTest {
             });
   }
 
-  @Test
-  @DisplayName("Should refuse the report when landlock-exec prints no version")
-  void shouldRefuseTheReportWhenLandlockExecPrintsNoVersion() throws Exception {
-    var helper = helper("echo ready\n");
+  @ParameterizedTest(name = "output {0}")
+  @ValueSource(strings = {"ready", "0", "-1", ""})
+  @DisplayName("Should refuse the report when landlock-exec prints no positive version")
+  void shouldRefuseTheReportWhenLandlockExecPrintsNoPositiveVersion(String output)
+      throws Exception {
+    var helper = helper("printf '%s' '" + output + "'\n");
 
     var availability = LandlockAvailability.check(helper.toString());
 
@@ -111,7 +115,7 @@ class LandlockAvailabilityTest {
         .asInstanceOf(InstanceOfAssertFactories.type(Unavailable.class))
         .extracting(Unavailable::reason)
         .asString()
-        .contains("reported no Landlock ABI version", "ready");
+        .contains("reported no Landlock ABI version", output);
   }
 
   @Test
