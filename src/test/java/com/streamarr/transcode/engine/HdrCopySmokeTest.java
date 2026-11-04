@@ -86,7 +86,7 @@ class HdrCopySmokeTest {
       "Should deliver the planned mastering display and content light level each as its own SEI"
           + " message in the hvcC when the copy plans an HDR10 output")
   void shouldDeliverThePlannedStaticMetadataAsSeiMessagesInTheHvccWhenTheCopyPlansHdr10(
-      int firstSegment) throws Exception {
+      int firstSegment) {
     var delivered = copied(hdr10, hdr10Copy(both()), firstSegment);
 
     assertThat(seiMessagesOfTheRecord(delivered))
@@ -99,8 +99,7 @@ class HdrCopySmokeTest {
   @DisplayName(
       "Should deliver the same initialization segment from attempts that start at different"
           + " keyframes when the copy plans an HDR10 output")
-  void shouldDeliverTheSameInitializationSegmentFromAttemptsThatStartAtDifferentKeyframes()
-      throws Exception {
+  void shouldDeliverTheSameInitializationSegmentFromAttemptsThatStartAtDifferentKeyframes() {
     var fromStart = copied(hdr10, hdr10Copy(both()), 0);
     var replacement = copied(hdr10, hdr10Copy(both()), 2);
 
@@ -112,8 +111,7 @@ class HdrCopySmokeTest {
   @DisplayName(
       "Should keep the static HDR messages in the keyframe samples when the copy writes them into"
           + " the hvcC")
-  void shouldKeepTheStaticHdrMessagesInTheKeyframeSamplesWhenTheCopyWritesThemIntoTheHvcc()
-      throws Exception {
+  void shouldKeepTheStaticHdrMessagesInTheKeyframeSamplesWhenTheCopyWritesThemIntoTheHvcc() {
     var sink = copiedSink(hdr10, hdr10Copy(both()), 0);
 
     var movie = Mp4Samples.read(sink.acceptedBytes());
@@ -132,7 +130,7 @@ class HdrCopySmokeTest {
       "Should deliver only the static HDR messages whose values the copy plans when it plans one"
           + " or neither")
   void shouldDeliverOnlyThePlannedStaticHdrMessagesWhenTheCopyPlansOneOrNeither(
-      PartialStaticMetadata partial) throws Exception {
+      PartialStaticMetadata partial) {
     var delivered = copied(hdr10, hdr10Copy(partial.planned()), 0);
 
     assertThat(seiMessagesOfTheRecord(delivered)).containsExactlyElementsOf(partial.messages());
@@ -164,7 +162,7 @@ class HdrCopySmokeTest {
       "Should deliver a colr box with the planned range's transfer when the copy plans the range"
           + " of its source")
   void shouldDeliverAColrBoxWithThePlannedTransferWhenTheCopyPlansTheRangeOfItsSource(
-      VideoDynamicRange.CompatibleBase base) throws Exception {
+      VideoDynamicRange.CompatibleBase base) {
     var colrCase =
         switch (base) {
           case PQ -> new ColrCase(hdr10, PlannedCopyOutputs.pq(), PQ_TRANSFER);
@@ -410,8 +408,7 @@ class HdrCopySmokeTest {
     return producer.outcome().get(OUTCOME_LIMIT.toSeconds(), TimeUnit.SECONDS);
   }
 
-  private static byte[] copied(Path source, VideoDecision.Copy copy, int firstSegment)
-      throws Exception {
+  private static byte[] copied(Path source, VideoDecision.Copy copy, int firstSegment) {
     return copiedSink(source, copy, firstSegment).contentOf("init.mp4");
   }
 
