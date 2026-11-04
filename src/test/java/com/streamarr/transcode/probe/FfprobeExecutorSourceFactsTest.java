@@ -1,16 +1,27 @@
 package com.streamarr.transcode.probe;
 
+import static com.streamarr.transcode.probe.RecordedFfprobe.probe;
 import static com.streamarr.transcode.probe.RecordedFfprobe.probeFixture;
 import static com.streamarr.transcode.probe.RecordedFfprobe.probeOutput;
 import static com.streamarr.transcode.probe.RecordedFfprobe.streamOf;
+import static com.streamarr.transcode.probe.SyntheticMp4.ascii;
+import static com.streamarr.transcode.probe.SyntheticMp4.box;
+import static com.streamarr.transcode.probe.SyntheticMp4.concat;
+import static com.streamarr.transcode.probe.SyntheticMp4.int32;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
 
+import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -18,6 +29,9 @@ import org.junit.jupiter.params.provider.ValueSource;
 @Tag("UnitTest")
 @DisplayName("Ffprobe Executor Source Facts Tests")
 class FfprobeExecutorSourceFactsTest {
+
+  private static final String VIDEO_STREAM =
+      "{\"index\":0,\"codec_type\":\"video\",\"time_base\":\"1/1000\",\"codec_tag_string\":\"avc1\"}";
 
   @Nested
   @DisplayName("Sample Entry")
@@ -110,30 +124,108 @@ class FfprobeExecutorSourceFactsTest {
     }
   }
 
+  // FFmpeg's metadata dictionary takes major_brand from the ftyp box and also from the file's
+  // metadata, which can name another brand, so each case writes the file that the probe reads.
   @Nested
   @DisplayName("Major Brand")
   class MajorBrandTests {
 
-    @ParameterizedTest(name = "{0}")
-    @CsvSource({
-      "mp4-sdr8-bt709.mp4, isom",
-      "mp4-dovi-p82.mp4, iso4",
-      "mov-hevc-extradata-reload.mov, mp42",
-    })
-    @DisplayName("Should report the ftyp box's major brand when an MP4 or MOV file names one")
-    void shouldReportTheFtypBoxsMajorBrandWhenAnMp4OrMovFileNamesOne(
-        String fixture, String majorBrand) {
-      var container = probeFixture(fixture).getContainer();
+    @TempDir Path directory;
 
-      assertThat(container.getMajorBrand()).isEqualTo(majorBrand);
+    @ParameterizedTest(name = "\"{0}\"")
+    @ValueSource(strings = {"isom", "mp42", "M4V ", "qt  "})
+    @DisplayName("Should report the ftyp box's major brand when an MP4 or MOV file names one")
+    void shouldReportTheFtypBoxsMajorBrandWhenAnMp4OrMovFileNamesOne(String brand)
+        throws IOException {
+      var file = write(fileType(brand), box("moov"));
+
+      assertThat(majorBrandOf(file, "isom")).contains(brand);
     }
 
     @Test
-    @DisplayName("Should keep the trailing spaces when a QuickTime file names the qt brand")
-    void shouldKeepTheTrailingSpacesWhenAQuickTimeFileNamesTheQtBrand() {
-      var container = probeFixture("mov-phone-60.mov").getContainer();
+    @DisplayName("Should report the ftyp box's brand when the file's metadata names another")
+    void shouldReportTheFtypBoxsBrandWhenTheFilesMetadataNamesAnother() throws IOException {
+      // FFmpeg's mp4 muxer with -movflags use_metadata_tags keeps a QuickTime source's
+      // major_brand as metadata, which replaces the ftyp box's brand in ffprobe's tags.
+      var file = write(fileType("isom"), box("moov"));
 
-      assertThat(container.getMajorBrand()).isEqualTo("qt  ");
+      assertThat(majorBrandOf(file, "qt  ")).contains("isom");
+    }
+
+    @Test
+    @DisplayName("Should report the ftyp box's brand when free space comes before the box")
+    void shouldReportTheFtypBoxsBrandWhenFreeSpaceComesBeforeTheBox() throws IOException {
+      var file = write(box("free", int32(0)), fileType("qt  "), box("moov"));
+
+      assertThat(majorBrandOf(file, "qt  ")).contains("qt  ");
+    }
+
+    @Test
+    @DisplayName(
+        "Should report no major brand when the file's metadata names one without an ftyp box")
+    void shouldReportNoMajorBrandWhenTheFilesMetadataNamesOneWithoutAnFtypBox() throws IOException {
+      var file = write(box("moov"));
+
+      assertThat(majorBrandOf(file, "isom")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Should report no major brand when the ftyp box follows the movie box")
+    void shouldReportNoMajorBrandWhenTheFtypBoxFollowsTheMovieBox() throws IOException {
+      // FFmpeg ignores an ftyp box once the movie box has added streams.
+      var file = write(box("moov"), fileType("isom"));
+
+      assertThat(majorBrandOf(file, "isom")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Should report no major brand when the ftyp box holds fewer than four bytes")
+    void shouldReportNoMajorBrandWhenTheFtypBoxHoldsFewerThanFourBytes() throws IOException {
+      var file = write(box("ftyp", ascii("is")), box("moov"));
+
+      assertThat(majorBrandOf(file, "isom")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Should report no major brand when the brand holds a zero byte")
+    void shouldReportNoMajorBrandWhenTheBrandHoldsAZeroByte() throws IOException {
+      var file = write(box("ftyp", ascii("is"), new byte[] {0, 'm'}, int32(0)), box("moov"));
+
+      assertThat(majorBrandOf(file, "is")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Should report no major brand when a top-level box runs past the end of the file")
+    void shouldReportNoMajorBrandWhenATopLevelBoxRunsPastTheEndOfTheFile() throws IOException {
+      // The free box's size claims 64 bytes, and the file ends after its 8-byte header.
+      var file = write(int32(64), ascii("free"));
+
+      assertThat(majorBrandOf(file, "isom")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Should fail the probe attempt when the probe cannot read the file")
+    void shouldFailTheProbeAttemptWhenTheProbeCannotReadTheFile() {
+      var output = mp4Output(VIDEO_STREAM, ",\"tags\":{\"major_brand\":\"isom\"}");
+
+      var result =
+          RecordedFfprobe.probeResult(
+              RecordedFfprobe.Answers.builder()
+                  .ffprobeOutput(output)
+                  .source(directory.resolve("missing.mp4"))
+                  .build());
+
+      assertThat(result.getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
+    }
+
+    @Test
+    @DisplayName("Should report the later ftyp box's brand when two come before the movie box")
+    void shouldReportTheLaterFtypBoxsBrandWhenTwoComeBeforeTheMovieBox() throws IOException {
+      // FFmpeg reads every ftyp box until the movie box adds streams, and each one replaces the
+      // brand.
+      var file = write(fileType("qt  "), fileType("isom"), box("moov"));
+
+      assertThat(majorBrandOf(file, "isom")).contains("isom");
     }
 
     @Test
@@ -146,28 +238,38 @@ class FfprobeExecutorSourceFactsTest {
     }
 
     @Test
-    @DisplayName("Should report no major brand when an MP4 file has no ftyp box")
-    void shouldReportNoMajorBrandWhenAnMp4FileHasNoFtypBox() {
-      var container = probeOutput(mp4Output(videoStream(), "")).getContainer();
+    @DisplayName("Should report no major brand when an FLV file starts with an ftyp box")
+    void shouldReportNoMajorBrandWhenAnFlvFileStartsWithAnFtypBox() throws IOException {
+      var file = write(fileType("isom"), box("moov"));
+      var output =
+          """
+          {"streams":[%s],"format":{"format_name":"flv","tags":{"major_brand":"isom"}}}
+          """
+              .formatted(VIDEO_STREAM);
 
-      assertThat(container.hasMajorBrand()).isFalse();
-    }
-
-    @ParameterizedTest(name = "\"{0}\"")
-    @ValueSource(strings = {"qt", "is\u00e9m", "isom2"})
-    @DisplayName(
-        "Should report no major brand when the brand is not four printable ASCII characters")
-    void shouldReportNoMajorBrandWhenTheBrandIsNotFourPrintableAsciiCharacters(String brand) {
-      // FFmpeg stores the brand as a C string, so a zero byte cuts it short.
       var container =
-          probeOutput(mp4Output(videoStream(), ",\"tags\":{\"major_brand\":\"" + brand + "\"}"))
+          probe(RecordedFfprobe.Answers.builder().ffprobeOutput(output).source(file).build())
               .getContainer();
 
       assertThat(container.hasMajorBrand()).isFalse();
     }
 
-    private static String videoStream() {
-      return "{\"index\":0,\"codec_type\":\"video\",\"time_base\":\"1/1000\",\"codec_tag_string\":\"avc1\"}";
+    private Optional<String> majorBrandOf(Path file, String taggedBrand) {
+      var output = mp4Output(VIDEO_STREAM, ",\"tags\":{\"major_brand\":\"" + taggedBrand + "\"}");
+      var container =
+          probe(RecordedFfprobe.Answers.builder().ffprobeOutput(output).source(file).build())
+              .getContainer();
+      return container.hasMajorBrand() ? Optional.of(container.getMajorBrand()) : Optional.empty();
+    }
+
+    private static byte[] fileType(String brand) {
+      return box("ftyp", ascii(brand), int32(0), ascii(brand), ascii("isom"));
+    }
+
+    private Path write(byte[]... boxes) throws IOException {
+      var file = directory.resolve("source.mp4");
+      Files.write(file, concat(boxes));
+      return file;
     }
   }
 

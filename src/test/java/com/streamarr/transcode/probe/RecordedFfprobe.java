@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HexFormat;
 import java.util.List;
@@ -34,11 +35,12 @@ import tools.jackson.databind.node.ObjectNode;
 /**
  * Probes with ffprobe output that the pinned worker image recorded into {@code
  * src/test/resources/probe}, or with output a test writes itself. The request asks for a packet
- * scan, which finds no packets, so a probe never reads the source file.
+ * scan, which finds no packets. By default the probe reads an empty source file, so its own reads
+ * of the container find nothing.
  */
 final class RecordedFfprobe {
 
-  private static final Path SOURCE = Path.of("/media/source");
+  private static final Path SOURCE = emptySource();
   private static final ObjectMapper MAPPER = new ObjectMapper();
   private static final int NARROWEST_READ = 3;
   private static final int WIDER_READ_FACTOR = 4;
@@ -51,6 +53,16 @@ final class RecordedFfprobe {
   private static final Map<String, Integer> KEPT_FRAMES_READS = keptFramesReads();
 
   private RecordedFfprobe() {}
+
+  private static Path emptySource() {
+    try {
+      var source = Files.createTempFile("recorded-ffprobe-source", ".media");
+      source.toFile().deleteOnExit();
+      return source;
+    } catch (IOException failure) {
+      throw new UncheckedIOException(failure);
+    }
+  }
 
   static ProbeMediaInfo probeFixture(String fixture) {
     return probe(recordedAnswers(fixture).build());
@@ -104,8 +116,8 @@ final class RecordedFfprobe {
    * failingReadsBeyondPackets} packets fails. A first-frames or first-packets read exits with
    * {@code firstFramesExitCode} or {@code firstPacketsExitCode} after it prints. Each of those
    * reads fails unless it asks for the stream that the first frames come from and for the entries
-   * that {@code read-entries.properties} lists. The probe reads {@code source}, by default a path
-   * that names no file.
+   * that {@code read-entries.properties} lists. The probe reads {@code source}, by default an empty
+   * file.
    */
   @Builder
   record Answers(
@@ -215,7 +227,7 @@ final class RecordedFfprobe {
     return executor.probe(SOURCE, request()).result();
   }
 
-  private static ProbeAttemptResult probeResult(Answers answers) {
+  static ProbeAttemptResult probeResult(Answers answers) {
     var chosenStream = answers.firstFrames().flatMap(RecordedFfprobe::streamIndexOf).orElse("0");
     var executor =
         new FfprobeExecutor(

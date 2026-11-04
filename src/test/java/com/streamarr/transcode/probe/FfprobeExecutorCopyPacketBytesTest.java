@@ -173,9 +173,11 @@ class FfprobeExecutorCopyPacketBytesTest {
       assertThat(copyKeepsPacketBytes(video)).isFalse();
     }
 
-    static Stream<Named<Path>> unreadableMovieBoxes() {
+    static Stream<Named<Path>> unreadableMovieBoxes() throws IOException {
+      var empty = Files.createTempFile("no-movie-box", ".mp4");
+      empty.toFile().deleteOnExit();
       return Stream.of(
-          Named.of("no file", Path.of("/media/source")),
+          Named.of("an empty file", empty),
           Named.of(
               "a Matroska file", resource("/probe/matroska-heads/mkv-statistics-mkvmerge.mkv")));
     }

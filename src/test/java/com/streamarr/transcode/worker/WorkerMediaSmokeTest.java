@@ -746,6 +746,91 @@ class WorkerMediaSmokeTest {
     }
   }
 
+  @Test
+  @DisplayName(
+      "Should report the ftyp box's major brand when a real MP4 file's metadata names the source's")
+  void shouldReportTheFtypBoxsMajorBrandWhenARealMp4FilesMetadataNamesTheSources()
+      throws Exception {
+    var quickTime = root.resolve("metadata-brand-source.mov");
+    runFfmpeg(videoSourceArguments("libx264", List.of()), quickTime);
+    // The mp4 muxer writes the isom brand, and use_metadata_tags keeps the QuickTime source's
+    // major_brand as metadata, which ffprobe then prints as the file's major_brand.
+    var source = root.resolve("metadata-brand.mp4");
+    runFfmpeg(
+        List.of("-i", quickTime.toString(), "-c", "copy", "-movflags", "use_metadata_tags"),
+        source);
+
+    var media = probeExecutor().probe(source, keyframeRequest()).result().getMedia();
+
+    assertThat(media.getContainer().getMajorBrand()).isEqualTo("isom");
+  }
+
+  @Test
+  @DisplayName(
+      "Should report the brand that ffprobe prints when a real MP4 file holds a second ftyp box"
+          + " before its movie box")
+  void shouldReportTheBrandThatFfprobePrintsWhenARealMp4FileHoldsASecondFtypBoxBeforeItsMovieBox()
+      throws Exception {
+    var written = root.resolve("two-brands-written.mp4");
+    runFfmpeg(videoSourceArguments("libx264", List.of()), written);
+    // FFmpeg's mp4 muxer writes ftyp(isom), free, mdat, moov. A second ftyp box between the mdat
+    // and the moov moves no sample, and FFmpeg reads it before the movie box adds streams.
+    var source = root.resolve("two-brands.mp4");
+    Files.write(source, withBoxBeforeMovieBox(Files.readAllBytes(written), quickTimeFileType()));
+
+    var media = probeExecutor().probe(source, keyframeRequest()).result().getMedia();
+
+    assertThat(media.getContainer().getMajorBrand()).isEqualTo("qt  ");
+    assertThat(formatTag(source, "major_brand")).isEqualTo("qt  ");
+  }
+
+  private static byte[] quickTimeFileType() {
+    var brand = "qt  ".getBytes(StandardCharsets.US_ASCII);
+    return ByteBuffer.allocate(20)
+        .putInt(20)
+        .put("ftyp".getBytes(StandardCharsets.US_ASCII))
+        .put(brand)
+        .putInt(0)
+        .put(brand)
+        .array();
+  }
+
+  // Inserts the box in front of the file's top-level moov box.
+  private static byte[] withBoxBeforeMovieBox(byte[] mp4, byte[] box) {
+    var buffer = ByteBuffer.wrap(mp4);
+    var position = 0;
+    while (true) {
+      var size = buffer.getInt(position);
+      var type = new String(mp4, position + 4, 4, StandardCharsets.US_ASCII);
+      if ("moov".equals(type)) {
+        break;
+      }
+
+      position += size;
+    }
+
+    var result = new byte[mp4.length + box.length];
+    System.arraycopy(mp4, 0, result, 0, position);
+    System.arraycopy(box, 0, result, position, box.length);
+    System.arraycopy(mp4, position, result, position + box.length, mp4.length - position);
+    return result;
+  }
+
+  private static String formatTag(Path media, String tag) throws Exception {
+    return runToCompletion(
+            List.of(
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format_tags=" + tag,
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                media.toString()),
+            media)
+        .replaceFirst("\\R\\z", "");
+  }
+
   // FFmpeg cannot write the Dolby Vision sample entries without a Dolby Vision stream, so each
   // case renames the sample entry that FFmpeg wrote.
   @ParameterizedTest(name = "{1} renamed {2}")
