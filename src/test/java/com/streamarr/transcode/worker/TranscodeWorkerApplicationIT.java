@@ -159,18 +159,7 @@ class TranscodeWorkerApplicationIT {
   void shouldProduceMediaWithTheConfiguredBinaryWhenTheApplicationStarts(BinaryLocation location)
       throws Exception {
     Files.writeString(tempDir.resolve("movie.mkv"), "media");
-    var binary = tempDir.resolve("working-ffprobe");
-    Files.writeString(
-        binary,
-        """
-        #!/bin/sh
-        if [ "$#" -eq 1 ]; then
-          [ "$1" = "-version" ] || exit 99
-          exit 0
-        fi
-        echo '{"streams":[{"index":0,"codec_type":"video","codec_name":"configured-codec"}]}'
-        """);
-    Files.setPosixFilePermissions(binary, PosixFilePermissions.fromString("rwx------"));
+    var binary = workingFfprobe();
     var request =
         ProbeRequest.newBuilder()
             .setProbeAttemptId(toProto(UUID.randomUUID()))
@@ -335,6 +324,23 @@ class TranscodeWorkerApplicationIT {
     assertThat(controlPlane.wasContacted())
         .as("the worker checks %s before it connects to the server", binary)
         .isFalse();
+  }
+
+  // Passes the version check and reports one video stream for any probe.
+  private Path workingFfprobe() throws Exception {
+    var binary = tempDir.resolve("working-ffprobe");
+    Files.writeString(
+        binary,
+        """
+        #!/bin/sh
+        if [ "$#" -eq 1 ]; then
+          [ "$1" = "-version" ] || exit 99
+          exit 0
+        fi
+        echo '{"streams":[{"index":0,"codec_type":"video","codec_name":"configured-codec"}]}'
+        """);
+    Files.setPosixFilePermissions(binary, PosixFilePermissions.fromString("rwx------"));
+    return binary;
   }
 
   private Path versionOnlyFfprobe() throws Exception {
