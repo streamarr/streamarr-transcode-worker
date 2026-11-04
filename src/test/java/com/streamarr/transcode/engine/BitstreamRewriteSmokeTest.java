@@ -183,8 +183,7 @@ class BitstreamRewriteSmokeTest {
     }
   }
 
-  private static Delivered copied(Set<BitstreamRewrite> rewrites, int firstSegment)
-      throws Exception {
+  private static Delivered copied(Set<BitstreamRewrite> rewrites, int firstSegment) {
     var copy =
         VideoDecision.Copy.builder()
             .streamIndex(0)
@@ -310,7 +309,7 @@ class BitstreamRewriteSmokeTest {
   // The MP4 with a dvcC box appended to its hvc1 sample entry. FFmpeg writes the moov behind the
   // mdat, so no chunk offset moves.
   private static byte[] withDolbyVisionRecord(byte[] mp4) {
-    var record = box("dvcC", DOLBY_VISION_RECORD);
+    var dvcC = box("dvcC", DOLBY_VISION_RECORD);
     var path = List.of("moov", "trak", "mdia", "minf", "stbl", "stsd", "hvc1");
     var rebuilt = new ByteArrayOutputStream();
     var position = 0;
@@ -322,7 +321,7 @@ class BitstreamRewriteSmokeTest {
       passedMdat |= type.equals("mdat");
       if (type.equals("moov")) {
         assertThat(passedMdat).as("the moov follows the mdat").isTrue();
-        bytes = appended(bytes, path.subList(1, path.size()), record);
+        bytes = appended(bytes, path.subList(1, path.size()), dvcC);
       }
 
       rebuilt.writeBytes(bytes);

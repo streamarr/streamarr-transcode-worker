@@ -68,8 +68,9 @@ final class VideoSampleRewrite {
     var rewrite = new Av1SampleRewrite(rewrites);
     var av1C =
         sampleEntry.after(CodecConfigurationReader.VISUAL_SAMPLE_ENTRY_BYTES).requiredChild("av1C");
-    var record = av1C.body();
-    var configurationObus = record.slice(AV1C_FIELDS, record.remaining() - AV1C_FIELDS);
+    var configuration = av1C.body();
+    var configurationObus =
+        configuration.slice(AV1C_FIELDS, configuration.remaining() - AV1C_FIELDS);
     if (rewrite.rewrite(configurationObus) != configurationObus) {
       throw mismatch("the av1C record holds a metadata OBU that the copy strips from its samples");
     }
@@ -160,10 +161,6 @@ final class VideoSampleRewrite {
         .flags(sample.flags())
         .mediaDataPosition(mediaDataPosition)
         .build();
-  }
-
-  private static ByteBuffer bytesOf(Fragment fragment, Sample sample) {
-    return bytesOf(fragment.mediaDataBox(), sample);
   }
 
   private static ByteBuffer bytesOf(byte[] mdat, Sample sample) {
