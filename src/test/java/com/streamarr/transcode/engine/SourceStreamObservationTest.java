@@ -161,7 +161,40 @@ class SourceStreamObservationTest {
       })
   @DisplayName("Should keep a line out of the diagnostics when it carries part of the framecrc")
   void shouldKeepALineOutOfTheDiagnosticsWhenItCarriesPartOfTheFramecrc(String line) {
+    readAll(MAPPING);
+
     assertThat(observation.tryRead(line)).isTrue();
+  }
+
+  // FFmpeg writes the input's metadata to its error output before the stream mapping, and the
+  // framecrc only after it.
+  @Test
+  @DisplayName(
+      "Should read nothing of the framecrc before FFmpeg's stream mapping when the input's"
+          + " metadata there carries text shaped like it")
+  void shouldReadNothingOfTheFramecrcBeforeTheStreamMappingWhenTheInputsMetadataIsShapedLikeIt() {
+    var metadata =
+        """
+        Input #0, mov,mp4,m4a,3gp,3g2,mj2, from '/media/source.mp4':
+          Metadata:
+            title           : Sample #tb 2: 1/1
+            comment         : 0, 999999999, 999999999, 1, 1000, 0x0a1b2c3d
+            album           : Stream #0:4 -> #1:2 (copy)
+        #tb 2: 1/1
+        2,     9999,       9999,        1,      100, 0x0a1b2c3d
+        """;
+
+    readAll(
+        metadata + MAPPING + HEADER + "0,        0,          0,       40,     1000, 0x0a1b2c3d\n");
+
+    assertThat(observation.streams())
+        .containsExactly(
+            ObservedSourceStream.builder()
+                .sourceIndex(2)
+                .lastStart(Duration.ZERO)
+                .end(Duration.ofMillis(40))
+                .lastKeyframeStart(Optional.of(Duration.ZERO))
+                .build());
   }
 
   @Test
@@ -171,6 +204,7 @@ class SourceStreamObservationTest {
   void shouldObserveNoStreamWhenTheMappingNamesNoSourceForTheFramecrcsStreams() {
     readAll(
         """
+        Stream mapping:
           Stream #0:2 -> #0:0 (copy)
           Stream #0:2 -> #2:0 (copy)
         """

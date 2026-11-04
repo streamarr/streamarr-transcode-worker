@@ -4504,6 +4504,32 @@ class WorkerMediaSmokeTest {
         .containsExactlyInAnyOrderElementsOf(VIDEO_ENDS_BEFORE_AUDIO_STREAM_ENDS);
   }
 
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"TRANSCODE_MODE_REMUX", "TRANSCODE_MODE_FULL_TRANSCODE"})
+  @DisplayName(
+      "Should report the source's own stream ends and early end when the source's metadata carries"
+          + " text shaped like the framecrc of its streams")
+  void shouldReportTheSourcesOwnStreamEndsWhenItsMetadataCarriesFramecrcShapedText(
+      TranscodeMode mode) throws Exception {
+    var source = videoEndsBeforeAudioSourceWithFramecrcShapedMetadata();
+    var job = videoEndsBeforeAudioJob(source, mode);
+    job.getExecutionBuilder().setStartSequenceNumber(11);
+
+    var completion =
+        executeToCompletion(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(completion.report().getStreamEndsList())
+        .containsExactlyInAnyOrderElementsOf(VIDEO_ENDS_BEFORE_AUDIO_STREAM_ENDS);
+    assertThat(completion.report().getSourceEndedEarly())
+        .isEqualTo(
+            SourceEndedEarly.newBuilder()
+                .setLastSegmentWithSourceMedia(VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT)
+                .addStreamIndexesWithMediaAfterLastSegment(VIDEO_ENDS_BEFORE_AUDIO_AUDIO_INDEX)
+                .build());
+  }
+
   // The source's last frame starts at 5.983 s, inside segment 0, but FFmpeg's conversion to 24 fps
   // can place the output's last frame at 6 s, inside segment 1.
   @Test
@@ -5098,6 +5124,30 @@ class WorkerMediaSmokeTest {
               "48",
               "-c:a",
               "aac"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // The source whose video ends before its audio, with a title that names a time base no stream
+  // has and a comment that reads as a packet of stream 0 ending far past the source's end.
+  // FFmpeg writes both to its error output among its logs, where the framecrc goes too.
+  private static synchronized Path videoEndsBeforeAudioSourceWithFramecrcShapedMetadata()
+      throws Exception {
+    var source = seekableSources.resolve("video-ends-before-audio-framecrc-metadata.mp4");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-i",
+              videoEndsBeforeAudioSource().toString(),
+              "-c",
+              "copy",
+              "-metadata",
+              "title=Sample #tb 0: 1/1000000000",
+              "-metadata",
+              "comment=0, 999999999, 999999999, 1, 1000, 0x0a1b2c3d"),
           source);
       generatedSeekableSources.add(source);
     }

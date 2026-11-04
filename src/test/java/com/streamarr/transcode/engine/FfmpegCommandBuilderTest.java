@@ -1335,11 +1335,47 @@ class FfmpegCommandBuilderTest {
             "copy",
             "-copypriorss",
             "1",
+            "-map_metadata",
+            "-1",
+            "-map_chapters",
+            "-1",
             "-f",
             "framecrc",
             "-flush_packets",
             "1",
             "pipe:2");
+  }
+
+  // FFmpeg writes each output's metadata to its error output, where the worker reads the framecrc.
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({"REMUX, copy", "FULL_TRANSCODE, libx264"})
+  @DisplayName(
+      "Should copy no metadata or chapters of the source into the framecrc of the chosen streams"
+          + " when building a command")
+  void shouldCopyNoMetadataOrChaptersIntoTheFramecrcOfTheChosenStreamsWhenBuildingACommand(
+      TranscodeMode mode, String videoEncoder) {
+    var cmd = command(request(mode).build(), videoEncoder);
+
+    assertThat(cmd.subList(cmd.indexOf("pipe:1") + 1, cmd.size()))
+        .containsSequence("-map_metadata", "-1", "-map_chapters", "-1");
+  }
+
+  @Test
+  @DisplayName(
+      "Should copy no metadata or chapters of the source into the framecrc of the copy's video"
+          + " when a Dolby Vision profile 5 source's RPUs may start samples")
+  void shouldCopyNoMetadataOrChaptersIntoTheFramecrcOfTheCopysVideoWhenAProfile5RpuStartsSamples() {
+    var pipe =
+        rpuMovingPipe(
+            builder.buildPipeline(
+                job(
+                    request(encoding(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE)))
+                        .build(),
+                    "libx264")));
+
+    var copy = pipe.copyCommandWritingVideoTimingTo("unix:/tmp/sts1/v");
+    assertThat(copy.subList(copy.indexOf("pipe:2") + 1, copy.size()))
+        .containsSequence("-map_metadata", "-1", "-map_chapters", "-1");
   }
 
   @Test
@@ -1795,6 +1831,10 @@ class FfmpegCommandBuilderTest {
                 "copy",
                 "-copypriorss",
                 "1",
+                "-map_metadata",
+                "-1",
+                "-map_chapters",
+                "-1",
                 "-f",
                 "framecrc",
                 "-flush_packets",
@@ -1804,6 +1844,10 @@ class FfmpegCommandBuilderTest {
                 "0:0",
                 "-c:v",
                 "copy",
+                "-map_metadata",
+                "-1",
+                "-map_chapters",
+                "-1",
                 "-f",
                 "framecrc",
                 "-flush_packets",
@@ -1887,6 +1931,10 @@ class FfmpegCommandBuilderTest {
             "0:2",
             "-c:v",
             "copy",
+            "-map_metadata",
+            "-1",
+            "-map_chapters",
+            "-1",
             "-f",
             "framecrc",
             "-flush_packets",

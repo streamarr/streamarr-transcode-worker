@@ -95,6 +95,10 @@ public class FfmpegCommandBuilder {
   // muxer writes each packet as soon as it has one and whose movie timescale keeps every timestamp
   // the source's demuxer reads. skip_trailer stops the muxer from keeping an index entry of every
   // fragment for a random-access index that the pipe has no use for.
+  // FFmpeg writes each output's metadata to its error output, where the worker reads the
+  // framecrc of the chosen source streams, so no output copies the source's metadata or chapters.
+  private static final List<String> NO_SOURCE_METADATA =
+      List.of("-map_metadata", "-1", "-map_chapters", "-1");
   private static final List<String> SOURCE_COPY_OUTPUT =
       List.of(
           "-f",
@@ -279,8 +283,9 @@ public class FfmpegCommandBuilder {
       cmd.addAll(NON_AUDIO_STREAM_EXCLUSIONS);
     }
 
-    cmd.addAll(
-        List.of("-c", "copy", "-copypriorss", "1", "-f", "framecrc", FLUSH_PACKETS, "1", "pipe:2"));
+    cmd.addAll(List.of("-c", "copy", "-copypriorss", "1"));
+    cmd.addAll(NO_SOURCE_METADATA);
+    cmd.addAll(List.of("-f", "framecrc", FLUSH_PACKETS, "1", "pipe:2"));
   }
 
   // The copy's muxer replaces each video packet's duration with the gap to the next packet's
@@ -288,16 +293,9 @@ public class FfmpegCommandBuilder {
   // worker writes back into the copy. The worker waits for each packet's record before it passes
   // the packet's sample on, so every record is flushed as it is written.
   private static void addVideoTimingOutput(List<String> cmd, VideoDecision video) {
-    cmd.addAll(
-        List.of(
-            "-map",
-            "0:" + video.streamIndex(),
-            "-c:v",
-            "copy",
-            "-f",
-            "framecrc",
-            FLUSH_PACKETS,
-            "1"));
+    cmd.addAll(List.of("-map", "0:" + video.streamIndex(), "-c:v", "copy"));
+    cmd.addAll(NO_SOURCE_METADATA);
+    cmd.addAll(List.of("-f", "framecrc", FLUSH_PACKETS, "1"));
   }
 
   // The copy holds only the chosen video stream and the audio. FFmpeg reads no commands from its
