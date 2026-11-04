@@ -24,6 +24,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.UnaryOperator;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -69,7 +70,14 @@ public final class FfprobeExecutor {
   @NonNull private final ObjectMapper objectMapper;
   @NonNull private final Function<ProbeCommand, Process> processFactory;
 
-  public static FfprobeExecutor forBinaries(@NonNull Path ffprobe, @NonNull Path ffmpeg) {
+  /**
+   * @param confinement prepares every probe process's builder before it starts, such as by running
+   *     the tool through a sandbox
+   */
+  public static FfprobeExecutor forBinaries(
+      @NonNull Path ffprobe,
+      @NonNull Path ffmpeg,
+      @NonNull UnaryOperator<ProcessBuilder> confinement) {
     return new FfprobeExecutor(
         new ObjectMapper(),
         command ->
@@ -78,11 +86,13 @@ public final class FfprobeExecutor {
                   case FFPROBE -> ffprobe;
                   case FFMPEG -> ffmpeg;
                 },
-                command));
+                command,
+                confinement));
   }
 
   // A process needs no privilege to lower its own priority, so nice works in every container.
-  private static Process start(Path binary, ProbeCommand probeCommand) {
+  private static Process start(
+      Path binary, ProbeCommand probeCommand, UnaryOperator<ProcessBuilder> confinement) {
     var command = new ArrayList<String>();
     if (probeCommand.cpuPriority() == ProbeCommand.CpuPriority.LOWEST) {
       command.addAll(LOWEST_CPU_PRIORITY);
@@ -93,7 +103,9 @@ public final class FfprobeExecutor {
     // The packet scan and the bitrate scan read the diagnostics to find a source that stopped
     // being readable; every run drains them.
     try {
-      return new ProcessBuilder(command).redirectError(ProcessBuilder.Redirect.PIPE).start();
+      return confinement
+          .apply(new ProcessBuilder(command).redirectError(ProcessBuilder.Redirect.PIPE))
+          .start();
     } catch (IOException e) {
       throw new UncheckedIOException("Failed to start " + binary, e);
     }

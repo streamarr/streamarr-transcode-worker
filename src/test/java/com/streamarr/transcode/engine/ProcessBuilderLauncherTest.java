@@ -21,6 +21,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.function.UnaryOperator;
 import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -35,7 +36,8 @@ class ProcessBuilderLauncherTest {
 
   @TempDir Path tempDir;
 
-  private final ProcessBuilderLauncher launcher = new ProcessBuilderLauncher();
+  private final ProcessBuilderLauncher launcher =
+      new ProcessBuilderLauncher(UnaryOperator.identity());
   private final RecordingSegmentSink sink = new RecordingSegmentSink();
 
   @Test

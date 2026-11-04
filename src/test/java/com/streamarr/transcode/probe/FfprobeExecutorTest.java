@@ -25,6 +25,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.UnaryOperator;
 import java.util.stream.Stream;
 import lombok.Builder;
 import org.junit.jupiter.api.DisplayName;
@@ -69,7 +70,7 @@ class FfprobeExecutorTest {
     var ffmpeg = Path.of("/usr/bin/ffmpeg");
 
     assertThatNullPointerException()
-        .isThrownBy(() -> FfprobeExecutor.forBinaries(null, ffmpeg))
+        .isThrownBy(() -> FfprobeExecutor.forBinaries(null, ffmpeg, UnaryOperator.identity()))
         .withMessageContaining("ffprobe");
   }
 
@@ -79,7 +80,7 @@ class FfprobeExecutorTest {
     var ffprobe = Path.of("/usr/bin/ffprobe");
 
     assertThatNullPointerException()
-        .isThrownBy(() -> FfprobeExecutor.forBinaries(ffprobe, null))
+        .isThrownBy(() -> FfprobeExecutor.forBinaries(ffprobe, null, UnaryOperator.identity()))
         .withMessageContaining("ffmpeg");
   }
 

@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
+import java.util.function.UnaryOperator;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -64,7 +65,7 @@ class WorkerBitrateScanSmokeTest {
   private static final int FFMPEG_DURATION_BYTES = FFMPEG_DURATION.length + 19;
 
   private static final FfprobeExecutor FFPROBE =
-      FfprobeExecutor.forBinaries(Path.of("ffprobe"), Path.of("ffmpeg"));
+      FfprobeExecutor.forBinaries(Path.of("ffprobe"), Path.of("ffmpeg"), UnaryOperator.identity());
 
   @TempDir Path root;
 

@@ -9,6 +9,7 @@ import com.streamarr.transcode.probe.FfprobeExecutor;
 import java.io.IOException;
 import java.lang.ProcessBuilder.Redirect;
 import java.nio.file.Path;
+import java.util.function.UnaryOperator;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.SpringApplication;
@@ -75,7 +76,7 @@ public class TranscodeWorkerApplication {
             .commandBuilder(
                 new FfmpegCommandBuilder(settings.ffmpegPath(), settings.fragmentationTarget()))
             .capabilityService(capabilities)
-            .launcher(new ProcessBuilderLauncher())
+            .launcher(new ProcessBuilderLauncher(UnaryOperator.identity()))
             .encoderStallTimeout(settings.encoderStallTimeout())
             .build();
     return TranscodeWorker.builder()
@@ -83,7 +84,9 @@ public class TranscodeWorkerApplication {
         .engine(engine)
         .ffprobe(
             FfprobeExecutor.forBinaries(
-                Path.of(settings.ffprobePath()), Path.of(settings.ffmpegPath())))
+                Path.of(settings.ffprobePath()),
+                Path.of(settings.ffmpegPath()),
+                UnaryOperator.identity()))
         .clock(MonotonicClock.system())
         .build();
   }
