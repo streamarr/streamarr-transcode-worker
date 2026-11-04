@@ -4,6 +4,7 @@ import static com.streamarr.transcode.engine.FfmpegRecordings.bytesOf;
 import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
 import static com.streamarr.transcode.fixtures.DeliveredSamples.assertCarriesTheRecordedSamples;
 import static com.streamarr.transcode.fixtures.RecordingEdits.withBytesAfterTheFirstVideoSample;
+import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engine;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.copyJobBuilderFor;
@@ -72,6 +73,8 @@ class TranscodeWorkerHdrCopyTest {
 
   private static final Recording HEVC_COPY = recording("18-copy-hevc-keeping-packet-bytes.fmp4");
   private static final Recording AV1_COPY = recording("09-svtav1-vfr.fmp4");
+  // libx264's High profile stream, whose colr box declares BT.709.
+  private static final Recording H264_COPY = recording(ENCODED_RECORDING);
   private static final Duration EVENT_LIMIT = Duration.ofSeconds(10);
   private static final int PREFIX_SEI = 39;
   private static final int SUFFIX_SEI = 40;
@@ -112,6 +115,10 @@ class TranscodeWorkerHdrCopyTest {
    * country 0xB5, provider 0x003C, provider-oriented code 0x0001 and application 4.
    */
   private static final String HDR10_PLUS_SEI = "0000000D" + "5001" + "0408B5003C0001040100" + "80";
+
+  /** The same HDR10+ message in an H.264 SEI NAL unit, whose 1-byte header names type 6. */
+  private static final String H264_HDR10_PLUS_SEI =
+      "0000000C" + "06" + "0408B5003C0001040100" + "80";
 
   /** A NAL unit of type 62 after its 4-byte length, as a Dolby Vision RPU: rpu_nal_prefix 25. */
   private static final String RPU = "00000004" + "7C01" + "1908";
@@ -308,25 +315,61 @@ class TranscodeWorkerHdrCopyTest {
       "Should deliver the samples without the units that a listed rewrite strips when a copy lists"
           + " a strip rewrite")
   void shouldDeliverTheSamplesWithoutTheUnitsThatAListedRewriteStripsWhenACopyListsAStripRewrite(
-      BitstreamRewrite rewrite, String strippedUnit) throws Exception {
-    var job = hevcCopyJob();
+      StrippedCopy stripped) throws Exception {
+    var job = copyJobBuilderFor(stripped.recording());
     job.getDecisionBuilder()
         .getVideoBuilder()
-        .setOutputDynamicRange(pq())
-        .addBitstreamRewrites(rewrite);
+        .setOutputDynamicRange(stripped.range())
+        .addBitstreamRewrites(stripped.rewrite());
     var output =
         withBytesAfterTheFirstVideoSample(
-            bytesOf(HEVC_COPY.file()), HexFormat.of().parseHex(strippedUnit));
+            bytesOf(stripped.recording().file()), HexFormat.of().parseHex(stripped.unit()));
 
     var uploads = uploadsOf(job.build(), output);
 
-    assertCarriesTheRecordedSamples(uploads, HEVC_COPY);
+    assertCarriesTheRecordedSamples(uploads, stripped.recording());
   }
 
-  static Stream<Arguments> strippedUnits() {
+  static Stream<StrippedCopy> strippedUnits() {
     return Stream.of(
-        Arguments.of(BitstreamRewrite.BITSTREAM_REWRITE_STRIP_HDR10_PLUS, HDR10_PLUS_SEI),
-        Arguments.of(BitstreamRewrite.BITSTREAM_REWRITE_STRIP_DOLBY_VISION, RPU));
+        StrippedCopy.builder()
+            .name("HDR10+ from HEVC")
+            .recording(HEVC_COPY)
+            .range(pq())
+            .rewrite(BitstreamRewrite.BITSTREAM_REWRITE_STRIP_HDR10_PLUS)
+            .unit(HDR10_PLUS_SEI)
+            .build(),
+        StrippedCopy.builder()
+            .name("Dolby Vision from HEVC")
+            .recording(HEVC_COPY)
+            .range(pq())
+            .rewrite(BitstreamRewrite.BITSTREAM_REWRITE_STRIP_DOLBY_VISION)
+            .unit(RPU)
+            .build(),
+        StrippedCopy.builder()
+            .name("HDR10+ from H.264")
+            .recording(H264_COPY)
+            .range(pq().toBuilder().setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_SDR).build())
+            .rewrite(BitstreamRewrite.BITSTREAM_REWRITE_STRIP_HDR10_PLUS)
+            .unit(H264_HDR10_PLUS_SEI)
+            .build());
+  }
+
+  /**
+   * A recorded copy, a NAL unit added to its first video sample, and the rewrite that strips it.
+   */
+  @Builder
+  record StrippedCopy(
+      String name,
+      Recording recording,
+      VideoDynamicRange range,
+      BitstreamRewrite rewrite,
+      String unit) {
+
+    @Override
+    public String toString() {
+      return name;
+    }
   }
 
   @ParameterizedTest(name = "{0}")

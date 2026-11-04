@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -31,8 +32,8 @@ final class VideoSampleRewrite {
    * samples.
    *
    * @throws FragmentedMp4Exception with {@link Reason#OUTPUT_MISMATCH} when the copy lists a
-   *     rewrite for video that is neither HEVC nor AV1; with {@link Reason#MALFORMED_BOX} when the
-   *     HEVC record declares no usable NAL unit length
+   *     rewrite for video that is neither HEVC nor AV1, other than an HDR10+ strip of H.264; with
+   *     {@link Reason#MALFORMED_BOX} when the HEVC or AVC record declares no usable NAL unit length
    */
   static Optional<VideoSampleRewrite> of(VideoDecision decision, InitializationSegment segment) {
     if (!(decision instanceof VideoDecision.Copy copy)) {
@@ -57,15 +58,33 @@ final class VideoSampleRewrite {
                   CodecConfigurationReader.nalUnitLengthSizeOf(sampleEntry),
                   sampleRewrites);
           case "av01" -> new Av1SampleRewrite(sampleRewrites);
-          default ->
-              throw mismatch(
-                  "the copy lists "
-                      + sampleRewrites
-                      + " for a "
-                      + sampleEntry.type()
-                      + " sample entry, which carries no such content");
+          case "avc1", "avc3" -> avcRewrite(sampleEntry, sampleRewrites);
+          default -> throw noSuchContent(sampleEntry, sampleRewrites);
         };
     return Optional.of(new VideoSampleRewrite(rewrite));
+  }
+
+  // H.264 carries HDR10+ in SEI messages; its Dolby Vision is profile 9, which no copy strips.
+  private static SampleRewrite avcRewrite(
+      BoxView sampleEntry, Set<BitstreamRewrite> sampleRewrites) {
+    if (!sampleRewrites.equals(Set.of(BitstreamRewrite.STRIP_HDR10_PLUS))) {
+      throw noSuchContent(sampleEntry, sampleRewrites);
+    }
+
+    return new NalUnitSampleRewrite(
+        NalSyntax.AVC,
+        CodecConfigurationReader.avcNalUnitLengthSizeOf(sampleEntry),
+        sampleRewrites);
+  }
+
+  private static FragmentedMp4Exception noSuchContent(
+      BoxView sampleEntry, Set<BitstreamRewrite> sampleRewrites) {
+    return mismatch(
+        "the copy lists "
+            + sampleRewrites
+            + " for a "
+            + sampleEntry.type()
+            + " sample entry, which carries no such content");
   }
 
   /**

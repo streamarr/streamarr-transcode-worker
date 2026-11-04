@@ -10,7 +10,13 @@ enum NalSyntax {
    * NAL units take types 39 and 40, Dolby Vision RPUs type 62, and a single-track profile 7
    * enhancement layer type 63, which wraps whole NAL units.
    */
-  HEVC(2, first -> (first >> 1) & 0x3F, Set.of(39, 40), Set.of(62, 63), Set.of(63));
+  HEVC(2, first -> (first >> 1) & 0x3F, Set.of(39, 40), Set.of(62, 63), Set.of(63)),
+  /**
+   * ITU-T H.264: a 1-byte header whose type takes the low 5 bits (table 7-1). SEI NAL units take
+   * type 6. Dolby Vision profile 9 keeps its RPUs in a type that the copy never strips (ADR 0036),
+   * and no H.264 NAL unit wraps SEI NAL units.
+   */
+  AVC(1, first -> first & 0x1F, Set.of(6), Set.of(), Set.of());
 
   private final int headerBytes;
   private final IntUnaryOperator typeOfFirstByte;
