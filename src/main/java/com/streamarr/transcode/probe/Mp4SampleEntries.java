@@ -7,9 +7,7 @@ import static com.streamarr.transcode.probe.Mp4MovieBox.skip;
 import java.io.IOException;
 import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -87,7 +85,7 @@ final class Mp4SampleEntries {
    * several traks carry names no single track and gets no count.
    */
   private static Optional<Map<Long, Long>> read(Path source) throws IOException {
-    try (var channel = FileChannel.open(source, StandardOpenOption.READ)) {
+    try (var channel = MediaSourceChannel.openForReading(source)) {
       var tracks = children(Mp4MovieBox.read(channel), "trak");
       var trackIds = tracks.stream().map(Mp4MovieBox::trackId).toList();
       var counts = new HashMap<Long, Long>();

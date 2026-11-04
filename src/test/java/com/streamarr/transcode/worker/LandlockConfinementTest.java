@@ -14,16 +14,19 @@ class LandlockConfinementTest {
 
   private static final LandlockPolicy POLICY =
       new LandlockPolicy(
-          List.of(Path.of("/media"), Path.of("/etc")),
+          List.of(new LandlockPolicy.PinnedDirectory(Path.of("/media"), 64769L, -1L)),
+          List.of(Path.of("/etc")),
           List.of(Path.of("/usr"), Path.of("/layers/ffmpeg/bin")),
-          Path.of("/tmp"),
+          Path.of("/tmp/streamarr-tools-1"),
           List.of(Path.of("/dev/dri"), Path.of("/dev/nvidiactl")));
 
   private final LandlockConfinement confinement = new LandlockConfinement("landlock-exec", POLICY);
 
   @Test
-  @DisplayName("Should run the tool through landlock-exec with one rule per path when applied")
-  void shouldRunTheToolThroughLandlockExecWithOneRulePerPathWhenApplied() {
+  @DisplayName(
+      "Should run the tool through landlock-exec with one rule per path and the media root pinned"
+          + " when applied")
+  void shouldRunTheToolThroughLandlockExecWithOneRulePerPathAndTheMediaRootPinnedWhenApplied() {
     var builder = new ProcessBuilder("ffprobe", "-v", "quiet", "/media/movie.mkv");
 
     var confined = confinement.apply(builder);
@@ -31,8 +34,9 @@ class LandlockConfinementTest {
     assertThat(confined.command())
         .containsExactly(
             "landlock-exec",
-            "--read",
+            "--read-pinned",
             "/media",
+            "64769:18446744073709551615",
             "--read",
             "/etc",
             "--read-execute",
@@ -40,7 +44,7 @@ class LandlockConfinementTest {
             "--read-execute",
             "/layers/ffmpeg/bin",
             "--read-write",
-            "/tmp",
+            "/tmp/streamarr-tools-1",
             "--device",
             "/dev/dri",
             "--device",
@@ -58,9 +62,9 @@ class LandlockConfinementTest {
     var confined = confinement.apply(new ProcessBuilder("ffmpeg"));
 
     assertThat(confined.environment())
-        .containsEntry("TMPDIR", "/tmp")
-        .containsEntry("XDG_CACHE_HOME", "/tmp")
-        .containsEntry("CUDA_CACHE_PATH", "/tmp");
+        .containsEntry("TMPDIR", "/tmp/streamarr-tools-1")
+        .containsEntry("XDG_CACHE_HOME", "/tmp/streamarr-tools-1")
+        .containsEntry("CUDA_CACHE_PATH", "/tmp/streamarr-tools-1");
   }
 
   @Test
@@ -84,6 +88,7 @@ class LandlockConfinementTest {
         new LandlockConfinement("/opt/landlock/landlock-exec", POLICY)
             .apply(new ProcessBuilder("ffmpeg"));
 
-    assertThat(confined.command()).startsWith("/opt/landlock/landlock-exec", "--read", "/media");
+    assertThat(confined.command())
+        .startsWith("/opt/landlock/landlock-exec", "--read-pinned", "/media");
   }
 }

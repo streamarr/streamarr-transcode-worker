@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -92,6 +92,56 @@ test('Should deny a soft-linked directory inside a listed path when its target l
     assert.doesNotMatch(result.stdout, /secret bytes/);
   } finally {
     remove();
+  }
+});
+
+function identityOf(directory) {
+  const attributes = statSync(directory, { bigint: true });
+  return `${attributes.dev}:${attributes.ino}`;
+}
+
+test('Should run the command against a pinned directory when it is still the directory pinned', { skip: !landlock }, () => {
+  const { media, remove } = fixture();
+  try {
+    const result = run(['--read-pinned', media, identityOf(media)], ['/bin/cat', join(media, 'movie')]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, 'public bytes\n');
+  } finally {
+    remove();
+  }
+});
+
+test('Should refuse to run the command when a soft link has replaced a pinned directory', { skip: !landlock }, () => {
+  const { media, outside, remove } = fixture();
+  try {
+    const identity = identityOf(media);
+    renameSync(media, `${media}-moved`);
+    symlinkSync(outside, media);
+    const result = run(['--read-pinned', media, identity], ['/bin/cat', join(media, 'secret')]);
+    assert.equal(result.status, 124);
+    assert.match(result.stderr, /is not the directory pinned at startup/);
+    assert.doesNotMatch(result.stdout, /secret bytes/);
+  } finally {
+    remove();
+  }
+});
+
+test('Should refuse to run the command when a pinned directory is missing', { skip: !landlock }, () => {
+  const { directory, remove } = fixture();
+  try {
+    const result = run(['--read-pinned', join(directory, 'gone'), '1:2'], ['/bin/true']);
+    assert.equal(result.status, 124);
+    assert.match(result.stderr, /pinned directory cannot be opened/);
+  } finally {
+    remove();
+  }
+});
+
+test('Should exit 125 with usage when a pinned identity is malformed', { skip: !linux }, () => {
+  for (const identity of ['abc', '12', '12:', ':3', '1:2:3']) {
+    const result = spawnSync(helper, ['--read-pinned', '/tmp', identity, '--', '/bin/true'], { encoding: 'utf8' });
+    assert.equal(result.status, 125, identity);
+    assert.match(result.stderr, /^usage: landlock-exec --abi/);
   }
 });
 

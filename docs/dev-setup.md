@@ -47,7 +47,7 @@ buildpacks/landlock/bin/compile target/landlock/landlock-exec
 export PATH="$PWD/target/landlock:$PATH"
 ```
 
-The worker checks the kernel's Landlock ABI through `landlock-exec --abi` before its FFmpeg checks and refuses to start on a host without Landlock, naming what to change: a newer kernel, `landlock` in the `lsm=` boot parameter (`cat /sys/kernel/security/lsm` lists the enabled modules), or a seccomp profile that allows the three `landlock_*` system calls, as Docker's default profile does. Development on macOS runs the tests, not the worker.
+The worker checks the kernel's Landlock ABI through `landlock-exec --abi` before its FFmpeg checks and refuses to start on a host without Landlock, naming what to change: a newer kernel, `landlock` in the `lsm=` boot parameter (`cat /sys/kernel/security/lsm` lists the enabled modules), or a seccomp profile that allows the three `landlock_*` system calls, as Docker's default profile does. The policy lists each media root read-only, pinned to the directory's device and inode numbers at startup, so a root renamed and replaced by a soft link grants nothing; the system directories the tools need read-only or executable; a scratch directory of the worker process alone read-write; the GPU device nodes; and no TCP. Linux 6.2 (Landlock ABI 3) adds the truncate right and Linux 6.7 (ABI 4) the TCP denial; on an older kernel the worker runs with those two rights unenforced and logs the ABI. Development on macOS runs the tests, not the worker.
 
 ### Configuration
 

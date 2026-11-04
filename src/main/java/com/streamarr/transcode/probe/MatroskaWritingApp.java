@@ -2,9 +2,7 @@ package com.streamarr.transcode.probe;
 
 import java.io.IOException;
 import java.nio.BufferUnderflowException;
-import java.nio.channels.FileChannel;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.util.Optional;
 import lombok.extern.slf4j.Slf4j;
 import tools.jackson.databind.JsonNode;
@@ -47,7 +45,7 @@ final class MatroskaWritingApp {
   }
 
   private static Optional<String> read(Path source) {
-    try (var channel = FileChannel.open(source, StandardOpenOption.READ)) {
+    try (var channel = MediaSourceChannel.openForReading(source)) {
       return MatroskaFile.TopLevel.info(channel)
           .flatMap(info -> MatroskaFile.string(info, WRITING_APP));
     } catch (IOException

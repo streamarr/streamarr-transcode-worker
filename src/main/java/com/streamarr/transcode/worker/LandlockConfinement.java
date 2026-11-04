@@ -22,6 +22,13 @@ final class LandlockConfinement implements UnaryOperator<ProcessBuilder> {
   LandlockConfinement(@NonNull String landlockExecPath, @NonNull LandlockPolicy policy) {
     var arguments = new ArrayList<String>();
     arguments.add(landlockExecPath);
+    policy
+        .mediaRoots()
+        .forEach(
+            root -> {
+              rule(arguments, "--read-pinned", root.path());
+              arguments.add(root.identity());
+            });
     policy.readOnly().forEach(path -> rule(arguments, "--read", path));
     policy.readExecute().forEach(path -> rule(arguments, "--read-execute", path));
     rule(arguments, "--read-write", policy.temporaryDirectory());

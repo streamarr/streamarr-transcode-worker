@@ -60,12 +60,17 @@ public class TranscodeWorkerApplication {
     return settings;
   }
 
+  @Bean(destroyMethod = "close")
+  ToolScratchDirectory toolScratchDirectory() throws IOException {
+    return ToolScratchDirectory.create(Path.of(System.getProperty("java.io.tmpdir")));
+  }
+
   // Every FFmpeg and ffprobe, the startup checks included, runs confined, so the worker never
   // advertises an encoder that cannot run that way.
   @Bean(destroyMethod = "close")
-  TranscodeWorker transcodeWorker(TranscodeWorkerSettings settings)
+  TranscodeWorker transcodeWorker(TranscodeWorkerSettings settings, ToolScratchDirectory scratch)
       throws IOException, InterruptedException {
-    var confinement = requireLandlock(settings);
+    var confinement = requireLandlock(settings, scratch.getPath());
     var capabilities =
         new TranscodeCapabilityService(
             settings.ffmpegPath(), command -> confinement.apply(command).start());
@@ -95,8 +100,8 @@ public class TranscodeWorkerApplication {
         .build();
   }
 
-  private static LandlockConfinement requireLandlock(TranscodeWorkerSettings settings)
-      throws InterruptedException {
+  private static LandlockConfinement requireLandlock(
+      TranscodeWorkerSettings settings, Path scratchDirectory) throws InterruptedException {
     var abiVersion =
         switch (LandlockAvailability.check(settings.landlockExecPath())) {
           case LandlockAvailability.Available(var version) -> version;
@@ -109,13 +114,14 @@ public class TranscodeWorkerApplication {
                 .mediaRoots(settings.workerConfiguration().sourceNamespaces().values())
                 .tools(List.of(settings.ffmpegPath(), settings.ffprobePath()))
                 .searchPath(System.getenv().getOrDefault("PATH", ""))
-                .temporaryDirectory(Path.of(System.getProperty("java.io.tmpdir")))
+                .temporaryDirectory(scratchDirectory)
                 .deviceDirectory(Path.of("/dev"))
                 .build());
     log.info(
-        "FFmpeg and ffprobe run under Landlock ABI {} and reach only {} read-only, {} read and"
-            + " execute, {} read and write, and the devices {}",
+        "FFmpeg and ffprobe run under Landlock ABI {} and reach only the media roots {}, {}"
+            + " read-only, {} read and execute, {} read and write, and the devices {}",
         abiVersion,
+        policy.mediaRoots().stream().map(LandlockPolicy.PinnedDirectory::path).toList(),
         policy.readOnly(),
         policy.readExecute(),
         policy.temporaryDirectory(),

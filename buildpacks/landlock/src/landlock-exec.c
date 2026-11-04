@@ -5,13 +5,16 @@
  * it, and nothing else does.
  *
  *   landlock-exec --abi
- *   landlock-exec [--read PATH]... [--read-execute PATH]... [--read-write PATH]...
- *                 [--device PATH]... -- COMMAND [ARGUMENT]...
+ *   landlock-exec [--read PATH]... [--read-pinned PATH DEVICE:INODE]... [--read-execute PATH]...
+ *                 [--read-write PATH]... [--device PATH]... -- COMMAND [ARGUMENT]...
  *
  * --abi prints the Landlock ABI version the kernel offers. A listed path that does not exist is
- * skipped, so one policy fits hosts with and without a device. Exit status: the command's own once
- * it runs; 2 when the kernel offers no Landlock; 125 for a usage error or a ruleset the kernel
- * refused; 126 when the command cannot be executed; 127 when it is not found.
+ * skipped, so one policy fits hosts with and without a device. A pinned path must still be the
+ * directory with the given device and inode numbers, so a directory renamed and replaced by a soft
+ * link since the caller pinned it grants nothing and the command does not run. Exit status: the
+ * command's own once it runs; 2 when the kernel offers no Landlock; 124 when a pinned path is no
+ * longer its directory; 125 for a usage error or a ruleset the kernel refused; 126 when the command
+ * cannot be executed; 127 when it is not found.
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -51,6 +54,7 @@ struct ruleset_attr {
 
 enum exit_status {
   EXIT_NO_LANDLOCK = 2,
+  EXIT_PINNED_REPLACED = 124,
   EXIT_USAGE_OR_RULESET = 125,
   EXIT_CANNOT_EXECUTE = 126,
   EXIT_NOT_FOUND = 127,
@@ -81,6 +85,9 @@ static const uint64_t ACCESS_FILE = LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS
 struct rule {
   const char *path;
   uint64_t access;
+  int pinned;
+  uint64_t device;
+  uint64_t inode;
 };
 
 static void fail(int status, const char *what, const char *subject) {
@@ -91,12 +98,34 @@ static void fail(int status, const char *what, const char *subject) {
   exit(status);
 }
 
+static void refuse(const char *path, const char *why) {
+  fprintf(stderr, "landlock-exec: %s %s\n", path, why);
+  exit(EXIT_PINNED_REPLACED);
+}
+
 static void usage(void) {
   fputs("usage: landlock-exec --abi\n"
-        "       landlock-exec [--read PATH]... [--read-execute PATH]... [--read-write PATH]...\n"
-        "                     [--device PATH]... -- COMMAND [ARGUMENT]...\n",
+        "       landlock-exec [--read PATH]... [--read-pinned PATH DEVICE:INODE]...\n"
+        "                     [--read-execute PATH]... [--read-write PATH]... [--device PATH]...\n"
+        "                     -- COMMAND [ARGUMENT]...\n",
         stderr);
   exit(EXIT_USAGE_OR_RULESET);
+}
+
+/* DEVICE:INODE as decimal numbers, the way stat reports them. */
+static void parse_identity(const char *identity, struct rule *rule) {
+  char *end = NULL;
+  errno = 0;
+  rule->device = strtoull(identity, &end, 10);
+  if (errno != 0 || end == identity || *end != ':') {
+    usage();
+  }
+  const char *inode = end + 1;
+  rule->inode = strtoull(inode, &end, 10);
+  if (errno != 0 || end == inode || *end != '\0') {
+    usage();
+  }
+  rule->pinned = 1;
 }
 
 static int landlock_abi(void) {
@@ -134,10 +163,16 @@ static uint64_t access_for(const char *option) {
   return 0;
 }
 
-/* Adds the rule for a path that exists; a missing path adds no rule and allows nothing. */
+/*
+ * Adds the rule for a path that exists; a missing path adds no rule and allows nothing, except a
+ * pinned path, which must be the directory it was pinned as.
+ */
 static void add_rule(int ruleset_fd, const struct rule *rule, uint64_t handled) {
   int fd = open(rule->path, O_PATH | O_CLOEXEC);
   if (fd < 0) {
+    if (rule->pinned) {
+      fail(EXIT_PINNED_REPLACED, "pinned directory cannot be opened:", rule->path);
+    }
     if (errno == ENOENT || errno == ENOTDIR) {
       return;
     }
@@ -147,6 +182,10 @@ static void add_rule(int ruleset_fd, const struct rule *rule, uint64_t handled) 
   struct stat attributes;
   if (fstat(fd, &attributes) != 0) {
     fail(EXIT_USAGE_OR_RULESET, "cannot stat", rule->path);
+  }
+  if (rule->pinned && (!S_ISDIR(attributes.st_mode) || attributes.st_dev != rule->device ||
+                       attributes.st_ino != rule->inode)) {
+    refuse(rule->path, "is not the directory pinned at startup");
   }
 
   uint64_t access = rule->access & handled;
@@ -216,6 +255,17 @@ int main(int argc, char **argv) {
     }
     if (i + 1 >= argc) {
       usage();
+    }
+    if (strcmp(argv[i], "--read-pinned") == 0) {
+      if (i + 2 >= argc) {
+        usage();
+      }
+      rules[rule_count].access = ACCESS_READ;
+      rules[rule_count].path = argv[i + 1];
+      parse_identity(argv[i + 2], &rules[rule_count]);
+      rule_count++;
+      i += 2;
+      continue;
     }
     rules[rule_count].access = access_for(argv[i]);
     rules[rule_count].path = argv[i + 1];

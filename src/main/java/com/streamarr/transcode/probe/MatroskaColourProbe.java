@@ -3,9 +3,7 @@ package com.streamarr.transcode.probe;
 import java.io.IOException;
 import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.util.Optional;
 import lombok.extern.slf4j.Slf4j;
 import tools.jackson.databind.JsonNode;
@@ -88,7 +86,7 @@ final class MatroskaColourProbe {
    * when the track holds none, and empty when the probe cannot read it.
    */
   private static Optional<Colour> colour(Path source, int videoTrackOrdinal) {
-    try (var channel = FileChannel.open(source, StandardOpenOption.READ)) {
+    try (var channel = MediaSourceChannel.openForReading(source)) {
       return MatroskaFile.TopLevel.tracks(channel)
           .map(tracks -> MatroskaFile.videoTrack(tracks, videoTrackOrdinal))
           .map(

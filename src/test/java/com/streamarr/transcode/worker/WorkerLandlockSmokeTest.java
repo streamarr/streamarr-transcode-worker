@@ -166,20 +166,47 @@ class WorkerLandlockSmokeTest {
     }
   }
 
-  // The control: the same swap leads an unconfined ffprobe to the file outside the media root, so
-  // the worker's check alone does not close the race, and the tests above pass because of Landlock.
+  // Without Landlock, ffprobe follows the swapped link, and the worker's own readers, which open
+  // the source without following a link, are what fails the probe.
   @Test
   @DisplayName(
-      "Should report the file outside the media root when a soft link replaces the source after"
-          + " the worker's check and FFmpeg runs unconfined")
+      "Should fail the probe when a soft link to a file replaces the source after the worker's"
+          + " check and ffprobe runs unconfined")
   void
-      shouldReportTheFileOutsideTheMediaRootWhenASoftLinkReplacesTheSourceAfterTheWorkersCheckAndFfmpegRunsUnconfined()
+      shouldFailTheProbeWhenASoftLinkToAFileReplacesTheSourceAfterTheWorkersCheckAndFfprobeRunsUnconfined()
           throws Exception {
     var runtime = new ScriptedWorkerRuntime();
     try (var worker = worker(runtime, swappingFile(UnaryOperator.identity()))) {
       worker.start("localhost", 1);
 
       probe(runtime, "movie.mp4");
+
+      assertThat(runtime.connection().results())
+          .singleElement()
+          .satisfies(
+              result -> {
+                assertThat(result.hasMedia()).isFalse();
+                assertThat(result.getFailure())
+                    .isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
+              });
+    }
+  }
+
+  // The control: a swapped directory defeats the worker's check and its readers alike, since the
+  // source's own name still names a regular file, so the directory test above passes because of
+  // Landlock.
+  @Test
+  @DisplayName(
+      "Should report the file outside the media root when a soft link to a directory replaces the"
+          + " source's directory after the worker's check and ffprobe runs unconfined")
+  void
+      shouldReportTheFileOutsideTheMediaRootWhenASoftLinkToADirectoryReplacesTheSourcesDirectoryAfterTheWorkersCheckAndFfprobeRunsUnconfined()
+          throws Exception {
+    var runtime = new ScriptedWorkerRuntime();
+    try (var worker = worker(runtime, swappingDirectory(UnaryOperator.identity()))) {
+      worker.start("localhost", 1);
+
+      probe(runtime, "show/episode.mp4");
 
       assertThat(runtime.connection().results())
           .singleElement()

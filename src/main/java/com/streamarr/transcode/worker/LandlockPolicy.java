@@ -17,14 +17,15 @@ import lombok.NonNull;
  * other path is denied, and so is every TCP connection, so a soft link swapped into a media root
  * after the worker's check leads FFmpeg to a file it cannot open.
  *
- * @param readOnly the media roots and the system files the tools read: the loader cache, fonts and
- *     device information
+ * @param mediaRoots the media roots, read-only, each pinned to the directory it was at startup
+ * @param readOnly the system files the tools read: the loader cache, fonts and device information
  * @param readExecute the directories holding the tools, their libraries and the loader
  * @param temporaryDirectory the one directory the tools may write: their temporary files and the
  *     caches that fontconfig and the CUDA runtime keep
  * @param devices the device nodes and device directories that hardware encoding opens
  */
 record LandlockPolicy(
+    @NonNull List<PinnedDirectory> mediaRoots,
     @NonNull List<Path> readOnly,
     @NonNull List<Path> readExecute,
     @NonNull Path temporaryDirectory,
@@ -44,21 +45,21 @@ record LandlockPolicy(
   private static final String NVIDIA_DEVICE_PREFIX = "nvidia";
 
   LandlockPolicy {
+    mediaRoots = List.copyOf(mediaRoots);
     readOnly = List.copyOf(readOnly);
     readExecute = List.copyOf(readExecute);
     devices = List.copyOf(devices);
   }
 
   /**
-   * The policy for a worker host: its media roots read-only, the directories of its FFmpeg tools
-   * executable, its temporary directory writable, and the DRM and NVIDIA device nodes present in
-   * its device directory. A tool that the host cannot locate adds no directory; the worker's tool
-   * checks report it.
+   * The policy for a worker host: its media roots read-only and pinned, the directories of its
+   * FFmpeg tools executable, its temporary directory writable, and the DRM and NVIDIA device nodes
+   * present in its device directory. A tool that the host cannot locate adds no directory; the
+   * worker's tool checks report it.
    */
   static LandlockPolicy forHost(@NonNull Host host) {
-    var readOnly = new ArrayList<Path>();
-    host.mediaRoots().stream().map(Path::toAbsolutePath).forEach(readOnly::add);
-    readOnly.addAll(SYSTEM_READ_ONLY);
+    var mediaRoots =
+        host.mediaRoots().stream().map(Path::toAbsolutePath).map(PinnedDirectory::of).toList();
 
     var readExecute = new ArrayList<>(SYSTEM_READ_EXECUTE);
     host.tools().stream()
@@ -69,7 +70,11 @@ record LandlockPolicy(
         .forEach(readExecute::add);
 
     return new LandlockPolicy(
-        readOnly, readExecute, host.temporaryDirectory().toAbsolutePath(), devicesIn(host));
+        mediaRoots,
+        SYSTEM_READ_ONLY,
+        readExecute,
+        host.temporaryDirectory().toAbsolutePath(),
+        devicesIn(host));
   }
 
   private static Path realParent(Path executable) {
@@ -103,13 +108,37 @@ record LandlockPolicy(
   }
 
   /**
+   * A media root with the device and inode numbers it had when the worker started. landlock-exec
+   * grants a root only while its path still names that directory, so a root renamed and replaced by
+   * a soft link grants nothing and the tool does not run.
+   */
+  record PinnedDirectory(@NonNull Path path, long device, long inode) {
+
+    static PinnedDirectory of(Path directory) {
+      try {
+        return new PinnedDirectory(
+            directory,
+            (Long) Files.getAttribute(directory, "unix:dev"),
+            (Long) Files.getAttribute(directory, "unix:ino"));
+      } catch (IOException e) {
+        throw new UncheckedIOException("Cannot pin the media root " + directory, e);
+      }
+    }
+
+    /** The identity as landlock-exec reads it: the device and inode numbers, unsigned. */
+    String identity() {
+      return Long.toUnsignedString(device) + ":" + Long.toUnsignedString(inode);
+    }
+  }
+
+  /**
    * What a worker host offers the policy.
    *
-   * @param mediaRoots the source roots of the worker's media namespaces
+   * @param mediaRoots the source roots of the worker's media namespaces, each an existing directory
    * @param tools the FFmpeg and ffprobe commands as configured: a path, or a name on the search
    *     path
    * @param searchPath the PATH variable that locates a tool configured by name
-   * @param temporaryDirectory the worker's temporary directory
+   * @param temporaryDirectory the directory the tools may write, of this worker alone
    * @param deviceDirectory the host's device directory, {@code /dev} on a Linux host
    */
   @Builder

@@ -1,7 +1,9 @@
 package com.streamarr.transcode.worker;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
@@ -19,30 +21,60 @@ class LandlockPolicyTest {
 
   @Test
   @DisplayName(
-      "Should list the media roots read-only beside the system files when built for a host")
-  void shouldListTheMediaRootsReadOnlyBesideTheSystemFilesWhenBuiltForAHost() throws Exception {
+      "Should pin each media root to the directory's device and inode numbers when built for a host")
+  void shouldPinEachMediaRootToTheDirectorysDeviceAndInodeNumbersWhenBuiltForAHost()
+      throws Exception {
     var movies = Files.createDirectory(tempDir.resolve("movies"));
     var shows = Files.createDirectory(tempDir.resolve("shows"));
 
     var policy = LandlockPolicy.forHost(hostBuilder().mediaRoots(List.of(movies, shows)).build());
 
+    assertThat(policy.mediaRoots())
+        .containsExactly(
+            new LandlockPolicy.PinnedDirectory(movies, deviceOf(movies), inodeOf(movies)),
+            new LandlockPolicy.PinnedDirectory(shows, deviceOf(shows), inodeOf(shows)));
+  }
+
+  @Test
+  @DisplayName("Should list only the system files read-only when built for a host")
+  void shouldListOnlyTheSystemFilesReadOnlyWhenBuiltForAHost() throws Exception {
+    var policy = LandlockPolicy.forHost(hostBuilder().build());
+
     assertThat(policy.readOnly())
         .containsExactly(
-            movies,
-            shows,
-            Path.of("/etc"),
-            Path.of("/proc"),
-            Path.of("/sys"),
-            Path.of("/var/cache/fontconfig"));
+            Path.of("/etc"), Path.of("/proc"), Path.of("/sys"), Path.of("/var/cache/fontconfig"));
   }
 
   @Test
   @DisplayName("Should make a media root absolute when the host configures a relative one")
-  void shouldMakeAMediaRootAbsoluteWhenTheHostConfiguresARelativeOne() {
-    var policy =
-        LandlockPolicy.forHost(hostBuilder().mediaRoots(List.of(Path.of("media"))).build());
+  void shouldMakeAMediaRootAbsoluteWhenTheHostConfiguresARelativeOne() throws Exception {
+    var media = Files.createDirectory(tempDir.resolve("media"));
+    var relative = Path.of("").toAbsolutePath().relativize(media.toRealPath());
 
-    assertThat(policy.readOnly()).first().isEqualTo(Path.of("media").toAbsolutePath());
+    var policy = LandlockPolicy.forHost(hostBuilder().mediaRoots(List.of(relative)).build());
+
+    assertThat(policy.mediaRoots())
+        .singleElement()
+        .extracting(LandlockPolicy.PinnedDirectory::path)
+        .isEqualTo(relative.toAbsolutePath());
+  }
+
+  @Test
+  @DisplayName("Should refuse to build the policy when a media root does not exist")
+  void shouldRefuseToBuildThePolicyWhenAMediaRootDoesNotExist() throws Exception {
+    var host = hostBuilder().mediaRoots(List.of(tempDir.resolve("missing"))).build();
+
+    assertThatThrownBy(() -> LandlockPolicy.forHost(host))
+        .isInstanceOf(UncheckedIOException.class)
+        .hasMessageContaining("missing");
+  }
+
+  @Test
+  @DisplayName("Should write the identity as unsigned device and inode numbers when pinned")
+  void shouldWriteTheIdentityAsUnsignedDeviceAndInodeNumbersWhenPinned() {
+    var pinned = new LandlockPolicy.PinnedDirectory(Path.of("/media"), -1L, 7L);
+
+    assertThat(pinned.identity()).isEqualTo("18446744073709551615:7");
   }
 
   @Test
@@ -91,7 +123,7 @@ class LandlockPolicyTest {
 
   @Test
   @DisplayName("Should add no directory for a tool when the host cannot locate it")
-  void shouldAddNoDirectoryForAToolWhenTheHostCannotLocateIt() {
+  void shouldAddNoDirectoryForAToolWhenTheHostCannotLocateIt() throws Exception {
     var policy =
         LandlockPolicy.forHost(
             hostBuilder()
@@ -121,7 +153,7 @@ class LandlockPolicyTest {
 
   @Test
   @DisplayName("Should make the temporary directory the one writable path when built for a host")
-  void shouldMakeTheTemporaryDirectoryTheOneWritablePathWhenBuiltForAHost() {
+  void shouldMakeTheTemporaryDirectoryTheOneWritablePathWhenBuiltForAHost() throws Exception {
     var policy =
         LandlockPolicy.forHost(hostBuilder().temporaryDirectory(Path.of("var/tmp")).build());
 
@@ -168,7 +200,7 @@ class LandlockPolicyTest {
 
   @Test
   @DisplayName("Should still list the DRM directory when the device directory is missing")
-  void shouldStillListTheDrmDirectoryWhenTheDeviceDirectoryIsMissing() {
+  void shouldStillListTheDrmDirectoryWhenTheDeviceDirectoryIsMissing() throws Exception {
     var dev = tempDir.resolve("no-dev");
 
     var policy = LandlockPolicy.forHost(hostBuilder().deviceDirectory(dev).build());
@@ -176,9 +208,18 @@ class LandlockPolicyTest {
     assertThat(policy.devices()).containsExactly(dev.resolve("dri"));
   }
 
-  private LandlockPolicy.Host.HostBuilder hostBuilder() {
+  private static long deviceOf(Path directory) throws Exception {
+    return (Long) Files.getAttribute(directory, "unix:dev");
+  }
+
+  private static long inodeOf(Path directory) throws Exception {
+    return (Long) Files.getAttribute(directory, "unix:ino");
+  }
+
+  // Pinning a media root reads its identity, so the default root exists.
+  private LandlockPolicy.Host.HostBuilder hostBuilder() throws Exception {
     return LandlockPolicy.Host.builder()
-        .mediaRoots(List.of(tempDir.resolve("media")))
+        .mediaRoots(List.of(Files.createDirectories(tempDir.resolve("library"))))
         .tools(List.of())
         .searchPath("")
         .temporaryDirectory(tempDir.resolve("tmp"))
