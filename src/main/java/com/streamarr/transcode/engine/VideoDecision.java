@@ -20,6 +20,7 @@ public sealed interface VideoDecision {
    *     bytes unchanged, which the probe decides from the source's decoder configuration record;
    *     false when the job does not say so
    */
+  @Builder
   record Copy(int streamIndex, @NonNull String codecString, boolean keepsPacketBytes)
       implements VideoDecision {}
 

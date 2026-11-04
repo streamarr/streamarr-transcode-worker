@@ -129,7 +129,11 @@ class FfmpegCommandBuilderRecipeTest {
     return switch (recording.mode()) {
       case ENCODE -> encodeRecordedBy(recording.videoEncoder());
       case COPY ->
-          new VideoDecision.Copy(0, recording.videoCodecString(), recording.copyKeepsPacketBytes());
+          VideoDecision.Copy.builder()
+              .streamIndex(0)
+              .codecString(recording.videoCodecString())
+              .keepsPacketBytes(recording.copyKeepsPacketBytes())
+              .build();
     };
   }
 

@@ -84,8 +84,11 @@ final class VideoDecisions {
     }
 
     // A server that does not send the field leaves it false, so the copy keeps the Annex B filter.
-    return new VideoDecision.Copy(
-        video.getStreamIndex(), video.getCodecString(), video.getCopyKeepsPacketBytes());
+    return VideoDecision.Copy.builder()
+        .streamIndex(video.getStreamIndex())
+        .codecString(video.getCodecString())
+        .keepsPacketBytes(video.getCopyKeepsPacketBytes())
+        .build();
   }
 
   @SuppressWarnings("checkstyle:fullyQualifiedName")
