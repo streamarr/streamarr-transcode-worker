@@ -313,7 +313,7 @@ class WorkerHealthServerIT {
       if (!release.await(30, TimeUnit.SECONDS)) {
         throw new InterruptedIOException("the test never released the launch");
       }
-    } catch (InterruptedException e) {
+    } catch (InterruptedException _) {
       Thread.currentThread().interrupt();
       throw new InterruptedIOException("interrupted while the launch waited");
     }
