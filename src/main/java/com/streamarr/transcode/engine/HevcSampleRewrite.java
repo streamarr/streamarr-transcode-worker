@@ -100,7 +100,8 @@ final class HevcSampleRewrite implements SampleRewrite {
   }
 
   private static Optional<ByteBuffer> withoutHdr10Plus(ByteBuffer unit) {
-    var payload = unescaped(unit.slice(NAL_UNIT_HEADER_BYTES, unit.remaining() - 2));
+    var payload =
+        HevcEmulationPrevention.unescaped(unit.slice(NAL_UNIT_HEADER_BYTES, unit.remaining() - 2));
     var messages = messagesOf(payload);
     if (messages.stream().anyMatch(message -> nestsHdr10Plus(payload, message))) {
       throw new FragmentedMp4Exception(
@@ -123,7 +124,7 @@ final class HevcSampleRewrite implements SampleRewrite {
     var rewritten = new ByteArrayOutputStream();
     rewritten.write(unit.get(0));
     rewritten.write(unit.get(1));
-    rewritten.writeBytes(escaped(rbsp.toByteArray()));
+    rewritten.writeBytes(HevcEmulationPrevention.escaped(rbsp.toByteArray()));
     return Optional.of(ByteBuffer.wrap(rewritten.toByteArray()));
   }
 
@@ -210,42 +211,6 @@ final class HevcSampleRewrite implements SampleRewrite {
     }
 
     return Arrays.equals(rbsp, start, start + expected.length, expected, 0, expected.length);
-  }
-
-  // Removes each emulation prevention byte, the 0x03 that follows two zero bytes.
-  private static byte[] unescaped(ByteBuffer escaped) {
-    var rbsp = new ByteArrayOutputStream(escaped.remaining());
-    var zeros = 0;
-    for (var index = 0; index < escaped.remaining(); index++) {
-      var octet = Byte.toUnsignedInt(escaped.get(index));
-      if (zeros >= 2 && octet == 0x03) {
-        zeros = 0;
-        continue;
-      }
-
-      zeros = octet == 0 ? zeros + 1 : 0;
-      rbsp.write(octet);
-    }
-
-    return rbsp.toByteArray();
-  }
-
-  // Inserts an emulation prevention byte wherever two zero bytes precede a byte of at most 0x03.
-  private static byte[] escaped(byte[] rbsp) {
-    var escaped = new ByteArrayOutputStream(rbsp.length + rbsp.length / 2);
-    var zeros = 0;
-    for (var octet : rbsp) {
-      var value = Byte.toUnsignedInt(octet);
-      if (zeros >= 2 && value <= 0x03) {
-        escaped.write(0x03);
-        zeros = 0;
-      }
-
-      zeros = value == 0 ? zeros + 1 : 0;
-      escaped.write(value);
-    }
-
-    return escaped.toByteArray();
   }
 
   private ByteBuffer joined(List<ByteBuffer> units, ByteBuffer trailing) {

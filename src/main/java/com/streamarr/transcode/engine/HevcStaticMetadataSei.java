@@ -60,25 +60,7 @@ final class HevcStaticMetadataSei {
     rbsp.write(RBSP_STOP_BYTE);
     var unit = new ByteArrayOutputStream();
     unit.writeBytes(PREFIX_SEI_HEADER);
-    unit.writeBytes(escaped(rbsp.toByteArray()));
+    unit.writeBytes(HevcEmulationPrevention.escaped(rbsp.toByteArray()));
     return unit.toByteArray();
-  }
-
-  // Inserts an emulation prevention byte wherever two zero bytes precede a byte of at most 0x03.
-  private static byte[] escaped(byte[] rbsp) {
-    var escaped = new ByteArrayOutputStream(rbsp.length + rbsp.length / 2);
-    var zeros = 0;
-    for (var octet : rbsp) {
-      var value = Byte.toUnsignedInt(octet);
-      if (zeros >= 2 && value <= 0x03) {
-        escaped.write(0x03);
-        zeros = 0;
-      }
-
-      zeros = value == 0 ? zeros + 1 : 0;
-      escaped.write(value);
-    }
-
-    return escaped.toByteArray();
   }
 }
