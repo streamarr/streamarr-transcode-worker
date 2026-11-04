@@ -13,6 +13,7 @@ import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
 import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
+import java.io.InterruptedIOException;
 import java.net.Inet4Address;
 import java.net.NetworkInterface;
 import java.net.URI;
@@ -25,6 +26,8 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -260,6 +263,59 @@ class WorkerHealthServerIT {
 
       assertThat(response.statusCode()).isEqualTo(200);
       assertThat(response.body()).contains("\"value\":" + fullness);
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should report the copy fullness when a job attempt's start holds the worker while FFmpeg"
+          + " launches")
+  void shouldReportTheCopyFullnessWhenAJobAttemptsStartHoldsTheWorkerWhileFfmpegLaunches()
+      throws Exception {
+    Files.writeString(directory.resolve("movie.mkv"), "media");
+    var runtime = new ScriptedWorkerRuntime();
+    var launching = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    var launcher =
+        new ScriptedProcessLauncher(
+            _ -> {
+              launching.countDown();
+              awaitRelease(release);
+              return ScriptedProcessLauncher.runningProcessBuilder().build();
+            });
+    try (var worker =
+            workerBuilder(directory)
+                .runtime(runtime)
+                .engine(engine(launcher))
+                .maximumHeapBytes(1536 * MIB)
+                .build();
+        var application = healthApplication(worker);
+        var client = HttpClient.newHttpClient();
+        var tasks = Executors.newVirtualThreadPerTaskExecutor()) {
+      worker.start("localhost", 1);
+      var start =
+          tasks.submit(() -> startVariant(runtime.connection(), variantJobBuilder().build()));
+      assertThat(launching.await(5, TimeUnit.SECONDS)).isTrue();
+
+      var response =
+          health(client, endpoint(application, "/actuator/metrics/streamarr.worker.copy_fullness"));
+
+      release.countDown();
+      start.get(5, TimeUnit.SECONDS);
+      assertThat(response.statusCode()).isEqualTo(200);
+      assertThat(response.body()).contains("\"value\":0.0");
+    }
+  }
+
+  // The launch stands in for FFmpeg's start on a stalled mount, inside the worker's start.
+  private static void awaitRelease(CountDownLatch release) throws InterruptedIOException {
+    try {
+      if (!release.await(30, TimeUnit.SECONDS)) {
+        throw new InterruptedIOException("the test never released the launch");
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new InterruptedIOException("interrupted while the launch waited");
     }
   }
 

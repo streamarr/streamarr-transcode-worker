@@ -63,7 +63,6 @@ import io.grpc.stub.StreamObserver;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.time.Duration;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -73,6 +72,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.FutureTask;
@@ -107,8 +107,11 @@ public final class TranscodeWorker implements AutoCloseable {
   private final SegmentMemoryBudget copyMemoryBudget;
   private final ProbeSummary probeSummary;
   private final ProbeCapacities probeCapacities;
-  private final Map<UUID, ActiveAttempt> activeAttempts = new HashMap<>();
-  private final Map<UUID, PendingRead> pendingReads = new HashMap<>();
+  // Changed under this monitor, and concurrent so that copyFullness reads them without it: a start
+  // holds the monitor while it resolves the source and launches FFmpeg, which a stalled mount can
+  // block.
+  private final Map<UUID, ActiveAttempt> activeAttempts = new ConcurrentHashMap<>();
+  private final Map<UUID, PendingRead> pendingReads = new ConcurrentHashMap<>();
   private final Set<Thread> stopThreads = new HashSet<>();
 
   private ManagedChannel channel;
@@ -172,7 +175,7 @@ public final class TranscodeWorker implements AutoCloseable {
    * The share of the copies that the worker's heap holds that run now, from 0 to 1; 1 when the heap
    * holds none, so an autoscaler reads a worker that cannot copy as full.
    */
-  public synchronized double copyFullness() {
+  public double copyFullness() {
     if (maximumCopies == 0) {
       return 1;
     }
@@ -661,8 +664,7 @@ public final class TranscodeWorker implements AutoCloseable {
     return true;
   }
 
-  // Holds this monitor. The active attempts and audio reads that copy the video, or those that do
-  // not.
+  // The active attempts and audio reads that copy the video, or those that do not.
   private long placesInUse(boolean copiesVideo) {
     var attempts = activeAttempts.values().stream().map(ActiveAttempt::job);
     var reads = pendingReads.values().stream().map(PendingRead::job);
