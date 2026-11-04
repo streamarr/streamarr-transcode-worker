@@ -1235,6 +1235,25 @@ class FfmpegCommandBuilderTest {
     assertThat(cmd).containsSequence("-ss", "19.916667", "-noaccurate_seek", "-i");
   }
 
+  @Test
+  @DisplayName(
+      "Should trim the converted pictures at the first segment's start, not at the keyframe, when an"
+          + " encoded replacement attempt carries the server's keyframe position")
+  void
+      shouldTrimTheConvertedPicturesAtTheFirstSegmentsStartWhenAnAttemptCarriesAKeyframePosition() {
+    var request =
+        request(TranscodeMode.FULL_TRANSCODE)
+            .startSequenceNumber(5)
+            .seekPosition(Optional.of(Duration.ofNanos(19_916_666_667L)))
+            .build();
+
+    var cmd = command(request, "libx264");
+
+    assertThat(videoFilter(cmd))
+        .as("frame 720, the first at or after segment 5's start of 30 s at 23.976 fps")
+        .endsWith(FRAME_GRID + ",trim=start_pts=720");
+  }
+
   @ParameterizedTest(name = "{0}")
   @MethodSource("firstFramesOnOrAfterTheFirstSegmentsStart")
   @DisplayName(
