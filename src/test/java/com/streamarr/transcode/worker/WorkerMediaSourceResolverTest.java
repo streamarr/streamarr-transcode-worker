@@ -212,8 +212,8 @@ class WorkerMediaSourceResolverTest {
 
   @Test
   @DisplayName(
-      "Should reject a symlink whose target escapes its source namespace when resolving a source")
-  void shouldRejectSymlinkWhoseTargetEscapesItsSourceNamespaceWhenResolvingSource()
+      "Should refuse a soft link whose target escapes its source namespace when resolving a source")
+  void shouldRefuseSoftLinkWhoseTargetEscapesItsSourceNamespaceWhenResolvingSource()
       throws Exception {
     var mediaRoot = Files.createDirectory(tempDir.resolve("media"));
     var secret = Files.writeString(tempDir.resolve("secret.mkv"), "secret");
@@ -221,20 +221,65 @@ class WorkerMediaSourceResolverTest {
     var resolver = new WorkerMediaSourceResolver(Map.of(SOURCE_NAMESPACE_ID, mediaRoot));
     var source = source("movie.mkv");
 
-    assertThatThrownBy(() -> resolver.resolve(source)).isInstanceOf(WorkerJobException.class);
+    assertThatThrownBy(() -> resolver.resolve(source))
+        .isInstanceOf(WorkerJobException.class)
+        .hasMessage("Media source path contains a soft link");
   }
 
+  // Decision: no soft links anywhere in a library, wherever they point, because a link can be
+  // swapped between this check and FFmpeg's open.
   @Test
   @DisplayName(
-      "Should resolve a symlink whose target remains inside its source namespace when resolving a source")
-  void shouldResolveSymlinkWhoseTargetRemainsInsideSourceNamespaceWhenResolvingSource()
+      "Should refuse a soft link whose target remains inside its source namespace when resolving a source")
+  void shouldRefuseSoftLinkWhoseTargetRemainsInsideSourceNamespaceWhenResolvingSource()
       throws Exception {
     var mediaRoot = Files.createDirectory(tempDir.resolve("media"));
     var target = Files.writeString(mediaRoot.resolve("stored-movie.mkv"), "test media");
     Files.createSymbolicLink(mediaRoot.resolve("movie.mkv"), target);
     var resolver = new WorkerMediaSourceResolver(Map.of(SOURCE_NAMESPACE_ID, mediaRoot));
+    var source = source("movie.mkv");
 
-    assertThat(resolver.resolve(source("movie.mkv"))).isEqualTo(target.toRealPath());
+    assertThatThrownBy(() -> resolver.resolve(source))
+        .isInstanceOf(WorkerJobException.class)
+        .hasMessage("Media source path contains a soft link");
+  }
+
+  @Test
+  @DisplayName(
+      "Should refuse a soft-linked directory on the way to a regular file when resolving a source")
+  void shouldRefuseSoftLinkedDirectoryOnTheWayToRegularFileWhenResolvingSource() throws Exception {
+    var mediaRoot = Files.createDirectory(tempDir.resolve("media"));
+    var stored = Files.createDirectory(mediaRoot.resolve("stored-show"));
+    Files.writeString(stored.resolve("episode.mkv"), "test media");
+    Files.createSymbolicLink(mediaRoot.resolve("show"), stored);
+    var resolver = new WorkerMediaSourceResolver(Map.of(SOURCE_NAMESPACE_ID, mediaRoot));
+    var source = source("show/episode.mkv");
+
+    assertThatThrownBy(() -> resolver.resolve(source))
+        .isInstanceOf(WorkerJobException.class)
+        .hasMessage("Media source path contains a soft link");
+  }
+
+  @Test
+  @DisplayName("Should resolve a hard link as an ordinary file when resolving a source")
+  void shouldResolveHardLinkAsOrdinaryFileWhenResolvingSource() throws Exception {
+    var mediaRoot = Files.createDirectory(tempDir.resolve("media"));
+    var stored = Files.writeString(mediaRoot.resolve("stored-movie.mkv"), "test media");
+    var linked = Files.createLink(mediaRoot.resolve("movie.mkv"), stored);
+    var resolver = new WorkerMediaSourceResolver(Map.of(SOURCE_NAMESPACE_ID, mediaRoot));
+
+    assertThat(resolver.resolve(source("movie.mkv"))).isEqualTo(linked.toRealPath());
+  }
+
+  @Test
+  @DisplayName("Should resolve a file beneath a soft-linked source root when resolving a source")
+  void shouldResolveFileBeneathSoftLinkedSourceRootWhenResolvingSource() throws Exception {
+    var storage = Files.createDirectory(tempDir.resolve("storage"));
+    var mediaFile = Files.writeString(storage.resolve("movie.mkv"), "test media");
+    var mediaRoot = Files.createSymbolicLink(tempDir.resolve("media"), storage);
+    var resolver = new WorkerMediaSourceResolver(Map.of(SOURCE_NAMESPACE_ID, mediaRoot));
+
+    assertThat(resolver.resolve(source("movie.mkv"))).isEqualTo(mediaFile.toRealPath());
   }
 
   private MediaSourceRef source(String relativeKey) {
