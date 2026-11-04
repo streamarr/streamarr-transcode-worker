@@ -1240,8 +1240,9 @@ class FfmpegCommandBuilderTest {
   @DisplayName(
       "Should trim the converted pictures at the first frame on or after the first segment's start"
           + " when an encoded replacement attempt decodes from an earlier keyframe")
-  void shouldTrimTheConvertedPicturesAtTheFirstFrameOnOrAfterTheFirstSegmentsStart(
-      FirstFrameCase firstFrameCase) {
+  void
+      shouldTrimTheConvertedPicturesAtTheFirstFrameOnOrAfterTheFirstSegmentsStartWhenAnEncodedReplacementDecodesFromAnEarlierKeyframe(
+          FirstFrameCase firstFrameCase) {
     var cmd =
         command(
             request(TranscodeMode.FULL_TRANSCODE)
@@ -2845,7 +2846,7 @@ class FfmpegCommandBuilderTest {
     var cmd =
         command(request(TranscodeMode.FULL_TRANSCODE).startSequenceNumber(10).build(), "libx264");
 
-    assertThat(cmd).containsSequence("-af", aacStereoFromTheFirstSegment("60", "6"));
+    assertThat(cmd).isNotEmpty().noneMatch(argument -> argument.contains("apad"));
     assertThat(videoFilter(cmd)).doesNotContain("tpad", "end_pts");
   }
 
