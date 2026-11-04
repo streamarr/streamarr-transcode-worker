@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 @Tag("UnitTest")
+@DisplayName("Downmix Limiter Tests")
 class DownmixLimiterTest {
 
   private static final String LOSSLESS_LIMITER =

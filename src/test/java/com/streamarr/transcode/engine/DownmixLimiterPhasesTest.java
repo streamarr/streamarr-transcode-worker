@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 @Tag("UnitTest")
+@DisplayName("Downmix Limiter Phases Tests")
 class DownmixLimiterPhasesTest {
 
   // The SHA-256 of the eleven vectors in resource order, each tap as little-endian binary64.

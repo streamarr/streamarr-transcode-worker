@@ -13,13 +13,14 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Objects;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Random;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
+import lombok.Builder;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -35,6 +36,7 @@ import org.junit.jupiter.params.provider.ValueSource;
  * measured result, not a proven bound: each input here is one that the research found hardest.
  */
 @Tag("SmokeTest")
+@DisplayName("Downmix Limiter Smoke Tests")
 class DownmixLimiterSmokeTest {
 
   // The Annex 2 filter read every two-stage output in the research within 0.0013 dB of −1 dBTP.
@@ -99,6 +101,24 @@ class DownmixLimiterSmokeTest {
     }
   }
 
+  /** Where a burst sits in the source of one job, at one sample rate. */
+  @Builder
+  record Placing(Job job, Placement placement, int sampleRate) {
+
+    @Override
+    public String toString() {
+      return sampleRate + " Hz, " + job + ", " + placement;
+    }
+  }
+
+  /** What every limited channel of an output must keep. */
+  @Builder
+  record Expected(int frames, Job job, double ceiling) {}
+
+  /** One FFmpeg run of a filter over raw floating-point frames. */
+  @Builder
+  record Filtering(String layout, String filter, int sampleRate, int channels) {}
+
   static Stream<Arguments> seed97Cases() {
     return RATES.stream()
         .flatMap(
@@ -107,23 +127,25 @@ class DownmixLimiterSmokeTest {
                     .flatMap(
                         job ->
                             Arrays.stream(Placement.values())
-                                .map(placement -> Arguments.of(rate, job, placement))));
+                                .map(placement -> Arguments.of(placing(job, placement, rate)))));
   }
 
-  @ParameterizedTest(name = "{0} Hz, {1}, {2}")
+  private static Placing placing(Job job, Placement placement, int sampleRate) {
+    return Placing.builder().job(job).placement(placement).sampleRate(sampleRate).build();
+  }
+
+  @ParameterizedTest(name = "{0}")
   @MethodSource("seed97Cases")
   @DisplayName(
       "Should hold the bounded burst within a hundredth of a decibel of the ceiling when FLAC"
           + " downmixes 5.1")
   void shouldHoldTheBoundedBurstWithinAHundredthOfADecibelOfTheCeilingWhenFlacDownmixes51(
-      int sampleRate, Job job, Placement placement) throws Exception {
-    var burst = new double[SEED_97_BURST.length][];
-    Arrays.setAll(burst, sample -> repeated(SEED_97_BURST[sample], FIVE_POINT_ONE_SUMMED.length));
-    var source = placed(burst, job, placement, sampleRate);
+      Placing placing) throws Exception {
+    var source = placed(seed97Burst(), placing);
 
-    var output = limitLossless(source, job, sampleRate);
+    var output = limitLossless(source, placing.job(), placing.sampleRate());
 
-    assertHeldAtTheCeiling(output, source.length, job);
+    assertHeldAtTheCeiling(output, source.length, placing.job());
   }
 
   static Stream<Arguments> lossyCases() {
@@ -134,19 +156,18 @@ class DownmixLimiterSmokeTest {
                     .flatMap(
                         job ->
                             Stream.of(Placement.MIDDLE, Placement.END)
-                                .map(placement -> Arguments.of(rate, job, placement))));
+                                .map(placement -> Arguments.of(placing(job, placement, rate)))));
   }
 
-  @ParameterizedTest(name = "{0} Hz, {1}, {2}")
+  @ParameterizedTest(name = "{0}")
   @MethodSource("lossyCases")
   @DisplayName(
       "Should hold the bounded burst within a hundredth of a decibel of -3 dBTP when an AAC encode"
           + " downmixes it")
   void shouldHoldTheBoundedBurstWithinAHundredthOfADecibelOfMinus3DbtpWhenAnAacEncodeDownmixesIt(
-      int sampleRate, Job job, Placement placement) throws Exception {
-    var burst = new double[SEED_97_BURST.length][];
-    Arrays.setAll(burst, sample -> repeated(SEED_97_BURST[sample], FIVE_POINT_ONE_SUMMED.length));
-    var source = placed(burst, job, placement, sampleRate);
+      Placing placing) throws Exception {
+    var job = placing.job();
+    var source = placed(seed97Burst(), placing);
     var audio =
         AudioDecision.builder()
             .mode(AudioMode.TRANSCODE)
@@ -160,14 +181,15 @@ class DownmixLimiterSmokeTest {
             .codec("flac")
             .channels(job.source.channelCount())
             .channelLayout(Optional.of(job.source.name()))
-            .sampleRate(OptionalInt.of(sampleRate))
+            .sampleRate(OptionalInt.of(placing.sampleRate()))
             .build();
     var options = AudioEncodeOptions.of(audio, sourceAudio).outputOptions();
     var filter = options.get(options.indexOf("-af") + 1);
 
-    var output = run(source, job.source.name(), filter, sampleRate, job.output.channelCount());
+    var output = run(source, filtering(job, filter, placing.sampleRate()));
 
-    assertHeldAt(output, source.length, job, LOSSY_CEILING);
+    assertHeldAt(
+        output, Expected.builder().frames(source.length).job(job).ceiling(LOSSY_CEILING).build());
   }
 
   static Stream<Arguments> searchedBurstCases() {
@@ -178,35 +200,37 @@ class DownmixLimiterSmokeTest {
             "one-stage-stereo-48000",
             "two-stage-mono-22050",
             "two-stage-mono-48000");
-    var placements = List.of(Placement.START, Placement.MIDDLE, Placement.END);
-    return Stream.concat(
+    var bursts =
+        Stream.concat(
             fiveChannelBursts.flatMap(
-                burst -> Stream.of(Job.STEREO, Job.MONO).map(job -> Arguments.of(burst, job))),
-            Stream.of(Arguments.of("one-stage-surround-pair-48000", Job.SURROUND_PAIR)))
-        .flatMap(
-            pair ->
-                RATES.stream()
-                    .flatMap(
-                        rate ->
-                            placements.stream()
-                                .map(
-                                    placement ->
-                                        Arguments.of(
-                                            pair.get()[0], pair.get()[1], rate, placement))));
+                burst -> Stream.of(Job.STEREO, Job.MONO).map(job -> Map.entry(burst, job))),
+            Stream.of(Map.entry("one-stage-surround-pair-48000", Job.SURROUND_PAIR)));
+    var placements = List.of(Placement.START, Placement.MIDDLE, Placement.END);
+    return bursts.flatMap(
+        burst ->
+            RATES.stream()
+                .flatMap(
+                    rate ->
+                        placements.stream()
+                            .map(
+                                placement ->
+                                    Arguments.of(
+                                        burst.getKey(),
+                                        placing(burst.getValue(), placement, rate)))));
   }
 
-  @ParameterizedTest(name = "{0}, {1}, {2} Hz, {3}")
+  @ParameterizedTest(name = "{0}, {1}")
   @MethodSource("searchedBurstCases")
   @DisplayName(
       "Should hold a searched burst within a hundredth of a decibel of the ceiling when FLAC"
           + " downmixes it")
   void shouldHoldASearchedBurstWithinAHundredthOfADecibelOfTheCeilingWhenFlacDownmixesIt(
-      String burst, Job job, int sampleRate, Placement placement) throws Exception {
-    var source = placed(searchedBurst(burst), job, placement, sampleRate);
+      String burst, Placing placing) throws Exception {
+    var source = placed(searchedBurst(burst), placing);
 
-    var output = limitLossless(source, job, sampleRate);
+    var output = limitLossless(source, placing.job(), placing.sampleRate());
 
-    assertHeldAtTheCeiling(output, source.length, job);
+    assertHeldAtTheCeiling(output, source.length, placing.job());
   }
 
   static Stream<Arguments> noiseCases() {
@@ -256,10 +280,13 @@ class DownmixLimiterSmokeTest {
     var sampleRate = 48_000;
 
     var end =
-        limitLossless(placed(burst, Job.STEREO, Placement.END, sampleRate), Job.STEREO, sampleRate);
+        limitLossless(
+            placed(burst, placing(Job.STEREO, Placement.END, sampleRate)), Job.STEREO, sampleRate);
     var middle =
         limitLossless(
-            placed(burst, Job.STEREO, Placement.MIDDLE, sampleRate), Job.STEREO, sampleRate);
+            placed(burst, placing(Job.STEREO, Placement.MIDDLE, sampleRate)),
+            Job.STEREO,
+            sampleRate);
 
     assertHeldAtTheCeiling(end, sampleRate, Job.STEREO);
     for (var channel = 0; channel < 2; channel++) {
@@ -303,7 +330,15 @@ class DownmixLimiterSmokeTest {
             DownmixMatrix.of(SpeakerLayout.named("2.1"), stereo, Optional.empty()),
             DownmixLimiter.forLossless(OptionalInt.of(sampleRate)),
             Optional.empty());
-    var output = run(source, "2.1", filter, sampleRate, 2);
+    var output =
+        run(
+            source,
+            Filtering.builder()
+                .layout("2.1")
+                .filter(filter)
+                .sampleRate(sampleRate)
+                .channels(2)
+                .build());
 
     for (var channel = 0; channel < 2; channel++) {
       var expected = new double[frames];
@@ -371,15 +406,16 @@ class DownmixLimiterSmokeTest {
   }
 
   private static void assertHeldAtTheCeiling(double[][] output, int frames, Job job) {
-    assertHeldAt(output, frames, job, CEILING);
+    assertHeldAt(output, Expected.builder().frames(frames).job(job).ceiling(CEILING).build());
   }
 
   // Every limited channel keeps its frames, reads within a hundredth of a decibel of the ceiling
   // on the Annex 2 filter, and keeps its samples at or below the ceiling.
-  private static void assertHeldAt(double[][] output, int frames, Job job, double ceiling) {
+  private static void assertHeldAt(double[][] output, Expected expected) {
+    var ceiling = expected.ceiling();
     var withinAHundredth = AnnexTwoMeter.decibels(ceiling) + 0.01;
-    for (var channel : job.limited()) {
-      assertThat(output[channel]).as("frames of channel %d", channel).hasSize(frames);
+    for (var channel : expected.job().limited()) {
+      assertThat(output[channel]).as("frames of channel %d", channel).hasSize(expected.frames());
       assertThat(AnnexTwoMeter.truePeakDb(output[channel]))
           .as("Annex 2 reading of channel %d, dBTP", channel)
           .isLessThanOrEqualTo(withinAHundredth);
@@ -396,11 +432,30 @@ class DownmixLimiterSmokeTest {
             DownmixMatrix.of(job.source, job.output, Optional.empty()),
             DownmixLimiter.forLossless(OptionalInt.of(sampleRate)),
             Optional.empty());
-    return run(source, job.source.name(), filter, sampleRate, job.output.channelCount());
+    return run(source, filtering(job, filter, sampleRate));
+  }
+
+  private static Filtering filtering(Job job, String filter, int sampleRate) {
+    return Filtering.builder()
+        .layout(job.source.name())
+        .filter(filter)
+        .sampleRate(sampleRate)
+        .channels(job.output.channelCount())
+        .build();
+  }
+
+  // The bounded burst in each of the five summed source channels of 5.1.
+  private static double[][] seed97Burst() {
+    var burst = new double[SEED_97_BURST.length][];
+    Arrays.setAll(burst, sample -> repeated(SEED_97_BURST[sample], FIVE_POINT_ONE_SUMMED.length));
+    return burst;
   }
 
   // The burst's columns in the job's summed source channels, in a file of the placement's length.
-  private static double[][] placed(double[][] burst, Job job, Placement placement, int sampleRate) {
+  private static double[][] placed(double[][] burst, Placing placing) {
+    var job = placing.job();
+    var placement = placing.placement();
+    var sampleRate = placing.sampleRate();
     var columns = job == Job.SURROUND_PAIR ? SEVEN_POINT_ONE_SURROUNDS : FIVE_POINT_ONE_SUMMED;
     var source = new double[placement.frames(burst.length, sampleRate)][job.source.channelCount()];
     var offset = placement.offset(burst.length, sampleRate);
@@ -416,9 +471,8 @@ class DownmixLimiterSmokeTest {
   private static double[][] searchedBurst(String name) throws IOException {
     try (InputStream stream =
         DownmixLimiterSmokeTest.class.getResourceAsStream("downmix-bursts/" + name + ".txt")) {
-      var text =
-          new String(
-              Objects.requireNonNull(stream, name).readAllBytes(), StandardCharsets.US_ASCII);
+      assertThat(stream).as(name).isNotNull();
+      var text = new String(stream.readAllBytes(), StandardCharsets.US_ASCII);
       return text.lines()
           .filter(line -> !line.startsWith("#") && !line.isBlank())
           .map(
@@ -439,9 +493,9 @@ class DownmixLimiterSmokeTest {
   }
 
   // Each output channel of FFmpeg's run of the filter over the interleaved source frames.
-  private double[][] run(
-      double[][] source, String layout, String filter, int sampleRate, int channels)
-      throws Exception {
+  private double[][] run(double[][] source, Filtering filtering) throws Exception {
+    var sampleRate = filtering.sampleRate();
+    var channels = filtering.channels();
     var input = writeRaw(source);
     var output = root.resolve("out-" + System.nanoTime() + ".raw");
     ffmpeg(
@@ -456,11 +510,11 @@ class DownmixLimiterSmokeTest {
             "-ar",
             String.valueOf(sampleRate),
             "-ch_layout",
-            layout,
+            filtering.layout(),
             "-i",
             input.toString(),
             "-af",
-            filter,
+            filtering.filter(),
             "-c:a",
             "pcm_f64le",
             "-f",

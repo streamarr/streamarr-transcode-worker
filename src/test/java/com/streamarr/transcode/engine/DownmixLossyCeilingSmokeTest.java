@@ -13,6 +13,7 @@ import java.util.OptionalInt;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
+import lombok.Builder;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.io.TempDir;
@@ -29,6 +30,7 @@ import org.junit.jupiter.params.provider.MethodSource;
  * wave and a clipped sweep fail at many steps, so none of those is checked here. Too slow for CI.
  */
 @Tag("SmokeTest")
+@DisplayName("Downmix Lossy Ceiling Smoke Tests")
 class DownmixLossyCeilingSmokeTest {
 
   private static final int SAMPLE_RATE = 48_000;
@@ -37,6 +39,7 @@ class DownmixLossyCeilingSmokeTest {
 
   @TempDir Path root;
 
+  @Builder
   record Step(String source, String output, String codec, long bitrate) {
 
     @Override
@@ -45,23 +48,27 @@ class DownmixLossyCeilingSmokeTest {
     }
   }
 
+  private static Step.StepBuilder step(String source, String output) {
+    return Step.builder().source(source).output(output);
+  }
+
   static Stream<Arguments> steps() {
     var steps =
         List.of(
-            new Step("5.1", "stereo", "ac3", 128_000),
-            new Step("5.1", "stereo", "ac3", 192_000),
-            new Step("5.1", "stereo", "eac3", 128_000),
-            new Step("5.1", "stereo", "eac3", 192_000),
-            new Step("5.1", "mono", "aac", 96_000),
-            new Step("5.1", "3.0", "aac", 192_000),
-            new Step("7.1", "5.1", "aac", 320_000),
-            new Step("7.1", "5.1", "ac3", 384_000),
-            new Step("7.1", "5.1", "eac3", 384_000),
-            new Step("7.1", "5.1", "libopus", 256_000),
-            new Step("7.1", "5.0", "ac3", 448_000),
-            new Step("7.1", "5.0", "eac3", 448_000),
-            new Step("7.1", "5.0", "eac3", 640_000),
-            new Step("7.1", "4.0", "eac3", 384_000));
+            step("5.1", "stereo").codec("ac3").bitrate(128_000).build(),
+            step("5.1", "stereo").codec("ac3").bitrate(192_000).build(),
+            step("5.1", "stereo").codec("eac3").bitrate(128_000).build(),
+            step("5.1", "stereo").codec("eac3").bitrate(192_000).build(),
+            step("5.1", "mono").codec("aac").bitrate(96_000).build(),
+            step("5.1", "3.0").codec("aac").bitrate(192_000).build(),
+            step("7.1", "5.1").codec("aac").bitrate(320_000).build(),
+            step("7.1", "5.1").codec("ac3").bitrate(384_000).build(),
+            step("7.1", "5.1").codec("eac3").bitrate(384_000).build(),
+            step("7.1", "5.1").codec("libopus").bitrate(256_000).build(),
+            step("7.1", "5.0").codec("ac3").bitrate(448_000).build(),
+            step("7.1", "5.0").codec("eac3").bitrate(448_000).build(),
+            step("7.1", "5.0").codec("eac3").bitrate(640_000).build(),
+            step("7.1", "4.0").codec("eac3").bitrate(384_000).build());
     return steps.stream()
         .flatMap(step -> IntStream.rangeClosed(1, 2).mapToObj(seed -> Arguments.of(step, seed)));
   }
@@ -75,7 +82,7 @@ class DownmixLossyCeilingSmokeTest {
     var source = SpeakerLayout.named(step.source());
     var output = SpeakerLayout.named(step.output());
     var input = pinkNoise(source, seed);
-    var encoded = encode(input, step, source, output);
+    var encoded = encode(input, step);
 
     var decoded = decode(encoded, output.channelCount());
 
@@ -131,8 +138,9 @@ class DownmixLossyCeilingSmokeTest {
   }
 
   // The worker's audio options for the step, applied to the source.
-  private Path encode(Path input, Step step, SpeakerLayout source, SpeakerLayout output)
-      throws Exception {
+  private Path encode(Path input, Step step) throws Exception {
+    var source = SpeakerLayout.named(step.source());
+    var output = SpeakerLayout.named(step.output());
     var audio =
         AudioDecision.builder()
             .mode(AudioMode.TRANSCODE)
