@@ -5440,27 +5440,41 @@ class WorkerMediaSmokeTest {
   }
 
   // With the server's keyframe positions 20 s and 21 s, the 48 kHz source's AAC and AC-3 audio
-  // starts 9 s and 8 s of whole frames before 30 s.
-  @ParameterizedTest(name = "{0}, keyframe {1}")
-  @CsvSource({"ac3,", "eac3,", "libopus,", "flac,", "alac,", "aac, 20", "ac3, 21"})
+  // starts 9 s and 8 s of whole frames before 30 s. A job that names stereo encodes Opus with
+  // libopus and FLAC in frames of 2,400 samples.
+  @ParameterizedTest(name = "{0}, keyframe {1}, named stereo {2}")
+  @CsvSource({
+    "ac3,, false",
+    "eac3,, false",
+    "libopus,, false",
+    "flac,, false",
+    "alac,, false",
+    "aac, 20, false",
+    "ac3, 21, false",
+    "opus,, true",
+    "flac,, true",
+    "aac, 20, true"
+  })
   @DisplayName(
       "Should open the replacement's audio with a frame on its first segment's start and leave no"
           + " gap after the start attempt's audio when an encoded replacement attempt encodes its"
           + " audio")
   void shouldOpenTheReplacementsAudioOnItsFirstSegmentsStartWhenAnEncodedReplacementEncodesAudio(
-      String codec, BigDecimal keyframePosition) throws Exception {
+      String codec, BigDecimal keyframePosition, boolean namedStereo) throws Exception {
     var source = pictureGapSource(PictureGapSource.MP4_WITHOUT_B_FRAMES);
     var startAttempt =
         execute(
             engine(softwareCapabilities()),
             source.getParent(),
-            pictureGapAudioJob(source, codec).build());
+            namingStereoWhen(namedStereo, pictureGapAudioJob(source, codec)).build());
 
     var replacement =
         execute(
             engine(softwareCapabilities()),
             source.getParent(),
-            pictureGapAudioReplacementJob(source, codec, keyframePosition).build());
+            namingStereoWhen(
+                    namedStereo, pictureGapAudioReplacementJob(source, codec, keyframePosition))
+                .build());
 
     var replaced = Mp4Samples.read(replacement.contentOf(List.of("init.mp4", segmentName(3))));
     assertAudioJoinsOnSegment3sStart(startAttempt, replaced);
@@ -5498,6 +5512,17 @@ class WorkerMediaSmokeTest {
         .isEqualTo(
             decodedAudioFrom30To36Seconds(
                 startAttempt.contentOf(List.of("init.mp4", segmentName(2), segmentName(3)))));
+  }
+
+  // The job, naming the stereo layout for its audio when namedStereo holds.
+  private static VariantJob.Builder namingStereoWhen(boolean namedStereo, VariantJob.Builder job) {
+    if (namedStereo) {
+      job.getDecisionBuilder()
+          .getAudioBuilder()
+          .setChannelLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO);
+    }
+
+    return job;
   }
 
   // A job that encodes the gap source's audio into this codec from the start.

@@ -634,7 +634,7 @@ public class FfmpegCommandBuilder {
     if (namedLayout.isPresent()) {
       var options = namedLayout.orElseThrow();
       cmd.addAll(
-          timingFilter(audio, request)
+          timingFilter(audio, request, framesOf(options))
               .map(options::withTrailingFilter)
               .orElse(options)
               .outputOptions());
@@ -660,10 +660,11 @@ public class FfmpegCommandBuilder {
   // The padding and the frame-aligned shift read the sample rate that the encoder takes, so the
   // conversion to the encoder's input runs before them.
   private static Optional<String> audioFilter(AudioDecision audio, TranscodeRequest request) {
-    var timing = timingFilter(audio, request);
+    var frames = framesOf(audio.codec());
+    var timing = timingFilter(audio, request, frames);
     var shifts =
         firstSegmentStartOfAnEncode(request)
-            .flatMap(_ -> frameAlignedShift(audio, request))
+            .flatMap(_ -> frameAlignedShift(frames, request))
             .isPresent();
     if (!audio.padsWithSilenceToAdvertisedEnd() && !shifts) {
       return timing;
@@ -681,11 +682,12 @@ public class FfmpegCommandBuilder {
   // times. In a named layout's encode these filters follow its own: its resampler and limiter meet
   // the end of the source instead of silence, its dither never reaches the silence, and no
   // conversion replaces its layout with FFmpeg's default for the channel count.
-  private static Optional<String> timingFilter(AudioDecision audio, TranscodeRequest request) {
-    var trimStart = audioTrimStart(audio, request);
+  private static Optional<String> timingFilter(
+      AudioDecision audio, TranscodeRequest request, Optional<AudioFrames> frames) {
+    var trimStart = audioTrimStart(frames, request);
     var start = seekArgument(trimStart.orElseGet(() -> inputSeekPosition(request)));
     var shift =
-        firstSegmentStartOfAnEncode(request).flatMap(_ -> frameAlignedShift(audio, request));
+        firstSegmentStartOfAnEncode(request).flatMap(_ -> frameAlignedShift(frames, request));
     var shiftForward = shift.map(samples -> "asetpts='PTS+" + samples + "',").orElse("");
     var shiftBack = shift.map(samples -> ",asetpts='PTS-" + samples + "'").orElse("");
     if (audio.padsWithSilenceToAdvertisedEnd()) {
@@ -708,9 +710,10 @@ public class FfmpegCommandBuilder {
   // Where an attempt that encodes video from a later segment trims its encoded audio: at the first
   // segment's start, between the shifts that align the encoder's frames on it, or, for an encoder
   // whose frames the worker does not know, where the audio's reach back from that start ends.
-  private static Optional<Duration> audioTrimStart(AudioDecision audio, TranscodeRequest request) {
+  private static Optional<Duration> audioTrimStart(
+      Optional<AudioFrames> frames, TranscodeRequest request) {
     var firstSegmentStart = firstSegmentStartOfAnEncode(request);
-    if (AUDIO_ENCODER_FRAMES.containsKey(audio.codec())) {
+    if (frames.isPresent()) {
       return firstSegmentStart;
     }
 
@@ -730,20 +733,37 @@ public class FfmpegCommandBuilder {
   // the attempt that encodes from the start writes one, give or take less than a frame, and with
   // no gap. The expressions are quoted, as a FLAC frame's holds commas. Empty for an encoder whose
   // frames the worker does not know.
-  private static Optional<String> frameAlignedShift(AudioDecision audio, TranscodeRequest request) {
+  private static Optional<String> frameAlignedShift(
+      Optional<AudioFrames> frames, TranscodeRequest request) {
     var seconds = seekArgument(audioReach(request));
-    return Optional.ofNullable(AUDIO_ENCODER_FRAMES.get(audio.codec()))
-        .map(
-            frames ->
-                "round(("
-                    + frames.lead()
-                    + "+floor("
-                    + seconds
-                    + "*SR/("
-                    + frames.samples()
-                    + "))*("
-                    + frames.samples()
-                    + "))/SR/TB)");
+    return frames.map(
+        encoderFrames ->
+            "round(("
+                + encoderFrames.lead()
+                + "+floor("
+                + seconds
+                + "*SR/("
+                + encoderFrames.samples()
+                + "))*("
+                + encoderFrames.samples()
+                + "))/SR/TB)");
+  }
+
+  private static Optional<AudioFrames> framesOf(String encoder) {
+    return Optional.ofNullable(AUDIO_ENCODER_FRAMES.get(encoder));
+  }
+
+  // A named layout's encode runs libopus for Opus, and FLAC frames of the size its options set.
+  private static Optional<AudioFrames> framesOf(AudioEncodeOptions options) {
+    var frames = framesOf(options.encoder());
+    var frameSize = options.frameSize();
+    if (frameSize.isEmpty()) {
+      return frames;
+    }
+
+    return frames.map(
+        encoderFrames ->
+            new AudioFrames(String.valueOf(frameSize.getAsInt()), encoderFrames.lead()));
   }
 
   // How far before the first segment's start an encoded replacement attempt's audio starts.
