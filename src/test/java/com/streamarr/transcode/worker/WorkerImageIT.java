@@ -31,7 +31,10 @@ import build.buf.gen.streamarr.transcode.v1.VideoMode;
 import build.buf.gen.streamarr.transcode.v1.WorkerRegistration;
 import build.buf.gen.streamarr.transcode.v1.WorkerVerifiedVideoEncoder;
 import com.github.dockerjava.api.DockerClient;
+import com.github.dockerjava.api.command.CreateContainerCmd;
 import com.github.dockerjava.api.command.WaitContainerResultCallback;
+import com.github.dockerjava.api.model.Mount;
+import com.github.dockerjava.api.model.MountType;
 import com.streamarr.transcode.fixtures.image.ImageControlPlane;
 import com.streamarr.transcode.worker.support.FfprobePackets;
 import com.streamarr.transcode.worker.support.FfprobePackets.Packet;
@@ -53,6 +56,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import lombok.Builder;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.DisplayName;
@@ -633,7 +637,7 @@ class WorkerImageIT {
               .withLogConsumer(new Slf4jLogConsumer(log).withPrefix("control-plane-" + workerId))
               .withCopyFileToContainer(
                   MountableFile.forHostPath("target/test-classes"), "/test-classes")
-              .withFileSystemBind(scratchVolume, WORKER_TMP, BindMode.READ_WRITE)
+              .withCreateContainerCmdModifier(mountScratchVolumeAt(WORKER_TMP))
               .withExposedPorts(8082, 9091)
               .withCreateContainerCmdModifier(
                   command -> command.withEntrypoint("/cnb/lifecycle/launcher"))
@@ -654,7 +658,7 @@ class WorkerImageIT {
               .withEnv("TRANSCODE_WORKER_SOURCE_NAMESPACE_ID", SOURCE_NAMESPACE_ID.toString())
               .withEnv("TRANSCODE_WORKER_SOURCE_ROOT", sourceRoot == null ? "/media" : sourceRoot)
               .withFileSystemBind(media.toAbsolutePath().toString(), "/media", BindMode.READ_ONLY)
-              .withFileSystemBind(scratchVolume, "/tmp", BindMode.READ_WRITE)
+              .withCreateContainerCmdModifier(mountScratchVolumeAt("/tmp"))
               // The exit watch reports a worker that exits at once, so the start only needs the
               // container to have started.
               .withStartupCheckStrategy(new StartedContainer());
@@ -676,6 +680,19 @@ class WorkerImageIT {
         close();
         throw failure;
       }
+    }
+
+    // A file system bind names a host path, so the named volume is mounted as one.
+    private Consumer<CreateContainerCmd> mountScratchVolumeAt(String target) {
+      return command ->
+          command
+              .getHostConfig()
+              .withMounts(
+                  List.of(
+                      new Mount()
+                          .withType(MountType.VOLUME)
+                          .withSource(scratchVolume)
+                          .withTarget(target)));
     }
 
     private void watchWorkerExit() {
