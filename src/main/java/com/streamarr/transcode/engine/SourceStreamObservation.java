@@ -17,8 +17,9 @@ import java.util.regex.Pattern;
  * and duration on the attempt's zero-based timeline. FFmpeg's stream mapping names the source
  * stream of each of that output's streams. FFmpeg writes each record at once, but its log can write
  * part of a line before it, so a record is read wherever it ends a line. FFmpeg writes the input's
- * metadata, which the source controls, before the stream mapping and the framecrc only after it, so
- * nothing before the mapping's first line is read.
+ * metadata, which the source controls, before the stream mapping and the framecrc only after it.
+ * That metadata can print the mapping's header itself, so each header discards what was read before
+ * it, and the last one, FFmpeg's own, leaves only what follows the real mapping.
  */
 final class SourceStreamObservation {
 
@@ -48,8 +49,15 @@ final class SourceStreamObservation {
    * then stays out of the diagnostics. A mapping line stays in them.
    */
   synchronized boolean tryRead(String line) {
+    if (line.equals(MAPPING_HEADER)) {
+      timeBases.clear();
+      sourceIndexes.clear();
+      packets.clear();
+      mappingStarted = true;
+      return false;
+    }
+
     if (!mappingStarted) {
-      mappingStarted = line.equals(MAPPING_HEADER);
       return false;
     }
 

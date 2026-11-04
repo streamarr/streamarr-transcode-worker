@@ -76,6 +76,38 @@ class SourceStreamObservationTest {
                 .build());
   }
 
+  // A metadata tag's name can hold line breaks, which FFmpeg prints unchanged, so the input's
+  // metadata can print the stream mapping's header before the real one.
+  @Test
+  @DisplayName(
+      "Should keep nothing it read before FFmpeg's last stream mapping header when the input's"
+          + " metadata prints that header itself")
+  void shouldKeepNothingReadBeforeTheLastStreamMappingHeaderWhenTheMetadataPrintsThatHeader() {
+    var metadata =
+        """
+        Input #0, mov,mp4,m4a,3gp,3g2,mj2, from '/media/source.mp4':
+          Metadata:
+            x
+        Stream mapping:
+          Stream #0:4 -> #1:2 (copy)
+        #tb 2: 1/1
+        2,     9999,       9999,        1,      100, 0x0a1b2c3d
+        0, 999999999, 999999999, 1, 1000, 0x0a1b2c3d
+        """;
+
+    readAll(
+        metadata + MAPPING + HEADER + "0,        0,          0,       40,     1000, 0x0a1b2c3d\n");
+
+    assertThat(observation.streams())
+        .containsExactly(
+            ObservedSourceStream.builder()
+                .sourceIndex(2)
+                .lastStart(Duration.ZERO)
+                .end(Duration.ofMillis(40))
+                .lastKeyframeStart(Optional.of(Duration.ZERO))
+                .build());
+  }
+
   @Test
   @DisplayName(
       "Should observe a record when part of a log line precedes it on the same line of the error"

@@ -5132,11 +5132,12 @@ class WorkerMediaSmokeTest {
   }
 
   // The source whose video ends before its audio, with a title that names a time base no stream
-  // has and a comment that reads as a packet of stream 0 ending far past the source's end.
-  // FFmpeg writes both to its error output among its logs, where the framecrc goes too.
+  // has, a comment that reads as a packet of stream 0 ending far past the source's end, and a tag
+  // whose name prints FFmpeg's stream mapping header on a line of its own before a packet's record.
+  // FFmpeg writes all three to its error output among its logs, where the framecrc goes too.
   private static synchronized Path videoEndsBeforeAudioSourceWithFramecrcShapedMetadata()
       throws Exception {
-    var source = seekableSources.resolve("video-ends-before-audio-framecrc-metadata.mp4");
+    var source = seekableSources.resolve("video-ends-before-audio-framecrc-metadata-tags.mp4");
     if (!generatedSeekableSources.contains(source)) {
       runFfmpeg(
           List.of(
@@ -5144,10 +5145,14 @@ class WorkerMediaSmokeTest {
               videoEndsBeforeAudioSource().toString(),
               "-c",
               "copy",
+              "-movflags",
+              "use_metadata_tags",
               "-metadata",
               "title=Sample #tb 0: 1/1000000000",
               "-metadata",
-              "comment=0, 999999999, 999999999, 1, 1000, 0x0a1b2c3d"),
+              "comment=0, 999999999, 999999999, 1, 1000, 0x0a1b2c3d",
+              "-metadata",
+              "x\nStream mapping:\nrecord=0, 888888888, 888888888, 1, 1000, 0x0a1b2c3d"),
           source);
       generatedSeekableSources.add(source);
     }
