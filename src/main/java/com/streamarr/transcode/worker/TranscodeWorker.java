@@ -193,7 +193,8 @@ public final class TranscodeWorker implements AutoCloseable {
         PROBE_CAPACITY_REFRESH_INTERVAL.toMillis(),
         PROBE_CAPACITY_REFRESH_INTERVAL.toMillis(),
         TimeUnit.MILLISECONDS);
-    sessionTimers.scheduleAtFixedRate(
+    // A fixed delay keeps a second between reports even after the monitor delayed one.
+    sessionTimers.scheduleWithFixedDelay(
         this::reportJobAttemptProgress,
         JOB_ATTEMPT_PROGRESS_INTERVAL.toMillis(),
         JOB_ATTEMPT_PROGRESS_INTERVAL.toMillis(),

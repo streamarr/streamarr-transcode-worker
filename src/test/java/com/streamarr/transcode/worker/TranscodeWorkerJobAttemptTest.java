@@ -2093,6 +2093,56 @@ class TranscodeWorkerJobAttemptTest {
     }
   }
 
+  // The test holds the worker's monitor, which the progress timer takes before each report, for
+  // 1.5 s after the first report, so a report falls due while it waits. FFmpeg's output advances
+  // during the wait and again once the monitor is free. A timer that keeps its original times
+  // sends the next report half a second after the delayed one.
+  @Test
+  @DisplayName(
+      "Should leave at least a second between an attempt's progress reports when the worker delays"
+          + " a report")
+  void shouldLeaveAtLeastASecondBetweenAnAttemptsProgressReportsWhenTheWorkerDelaysAReport()
+      throws Exception {
+    var output = bytesOf(ENCODED_RECORDING);
+    var launcher =
+        new ScriptedProcessLauncher(
+            _ ->
+                ScriptedProcess.builder()
+                    .output(output)
+                    .pauseAfter(endOfFragment(output, 1))
+                    .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+                    .build());
+    var job = variantJobBuilder().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+      awaitProgressReports(connection, 1);
+
+      synchronized (worker) {
+        launcher.process(fromProto(job.getJobAttemptId())).resume();
+        await().pollDelay(Duration.ofMillis(1_500)).atMost(EVENT_LIMIT).until(() -> true);
+      }
+
+      var delayed = awaitProgressReports(connection, 2);
+      var next = awaitProgressReports(connection, 3);
+      assertThat(Duration.ofNanos(next - delayed))
+          .as("the time between the delayed report and the next one")
+          .isGreaterThanOrEqualTo(Duration.ofMillis(900));
+      launcher.process(fromProto(job.getJobAttemptId())).exit();
+    }
+  }
+
+  // When the connection held this many progress reports, read every 5 ms.
+  private static long awaitProgressReports(ScriptedWorkerRuntime.Connection connection, int count) {
+    await()
+        .pollInterval(Duration.ofMillis(5))
+        .atMost(EVENT_LIMIT)
+        .until(() -> progressReportsOf(connection).size() >= count);
+    return System.nanoTime();
+  }
+
   private static List<JobAttemptProgress> progressReportsOf(
       ScriptedWorkerRuntime.Connection connection) {
     return connection.events().stream()
