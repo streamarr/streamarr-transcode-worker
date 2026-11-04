@@ -49,6 +49,7 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.function.UnaryOperator;
 import java.util.stream.Stream;
+import lombok.Builder;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -70,6 +71,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 class TranscodeWorkerHdrCopyTest {
 
   private static final Recording HEVC_COPY = recording("18-copy-hevc-keeping-packet-bytes.fmp4");
+  private static final Recording AV1_COPY = recording("09-svtav1-vfr.fmp4");
   private static final Duration EVENT_LIMIT = Duration.ofSeconds(10);
   private static final int PREFIX_SEI = 39;
   private static final int SUFFIX_SEI = 40;
@@ -121,6 +123,9 @@ class TranscodeWorkerHdrCopyTest {
   private static final String PROFILE_8_LEVEL_6_PQ_RECORD = "0100103510" + "00".repeat(19);
   // Profile 5, level 6, an RPU and a base layer, compatibility 0 and compression 0.
   private static final String PROFILE_5_LEVEL_6_RECORD = "01000A3500" + "00".repeat(19);
+  // Profile 10, level 6, an RPU and a base layer, compatibility 2 and compression 0. The recorded
+  // AV1 copy's colr box declares BT.709, so its planned base is SDR.
+  private static final String PROFILE_10_LEVEL_6_SDR_RECORD = "0100143520" + "00".repeat(19);
 
   @TempDir Path tempDir;
 
@@ -330,48 +335,83 @@ class TranscodeWorkerHdrCopyTest {
       "Should deliver the planned sample entry with the normalized Dolby Vision record when a copy"
           + " plans a Dolby Vision output and normalizes its record")
   void shouldDeliverThePlannedSampleEntryWithTheNormalizedRecordWhenACopyPlansADolbyVisionOutput(
-      String output,
-      VideoDynamicRange range,
-      DolbyVisionOutput dolbyVision,
-      String codecString,
-      String sampleEntry,
-      String record)
-      throws Exception {
-    var job = hevcCopyJob();
+      PlannedDolbyVision planned) throws Exception {
+    var job = copyJobBuilderFor(planned.recording());
     job.getDecisionBuilder()
         .getVideoBuilder()
-        .setCodecString(codecString)
-        .setOutputDynamicRange(range)
-        .setDolbyVisionOutput(dolbyVision)
+        .setCodecString(planned.codecString())
+        .setOutputDynamicRange(planned.range())
+        .setDolbyVisionOutput(planned.output())
         .addBitstreamRewrites(BitstreamRewrite.BITSTREAM_REWRITE_NORMALIZE_DOLBY_VISION_RECORD);
 
-    var initializationSegment = initializationSegmentOf(job.build(), bytesOf(HEVC_COPY.file()));
+    var initializationSegment =
+        initializationSegmentOf(job.build(), bytesOf(planned.recording().file()));
 
-    assertThat(sampleEntryTypeOf(initializationSegment)).isEqualTo(sampleEntry);
-    assertThat(dolbyVisionRecordsOf(initializationSegment)).containsExactly(record);
+    assertThat(sampleEntryTypeOf(initializationSegment)).isEqualTo(planned.sampleEntry());
+    assertThat(dolbyVisionRecordsOf(initializationSegment)).containsExactly(planned.record());
   }
 
-  static Stream<Arguments> dolbyVisionOutputs() {
+  static Stream<PlannedDolbyVision> dolbyVisionOutputs() {
     return Stream.of(
-        Arguments.of(
-            "profile 8.1 under hvc1",
-            pqWithDolbyVision(),
-            DolbyVisionOutput.newBuilder()
-                .setProfile(8)
-                .setLevel(6)
-                .setBaseLayerCompatibilityId(1)
-                .setSampleEntry(DolbyVisionSampleEntry.DOLBY_VISION_SAMPLE_ENTRY_HVC1)
-                .build(),
-            HEVC_COPY.videoCodecString(),
-            "hvc1",
-            "dvvC" + PROFILE_8_LEVEL_6_PQ_RECORD),
-        Arguments.of(
-            "profile 5 under dvh1",
-            profile5(),
-            profile5Output().build(),
-            "dvh1.05.06",
-            "dvh1",
-            "dvcC" + PROFILE_5_LEVEL_6_RECORD));
+        PlannedDolbyVision.builder()
+            .name("profile 8.1 under hvc1")
+            .recording(HEVC_COPY)
+            .range(pqWithDolbyVision())
+            .output(
+                DolbyVisionOutput.newBuilder()
+                    .setProfile(8)
+                    .setLevel(6)
+                    .setBaseLayerCompatibilityId(1)
+                    .setSampleEntry(DolbyVisionSampleEntry.DOLBY_VISION_SAMPLE_ENTRY_HVC1)
+                    .build())
+            .codecString(HEVC_COPY.videoCodecString())
+            .sampleEntry("hvc1")
+            .record("dvvC" + PROFILE_8_LEVEL_6_PQ_RECORD)
+            .build(),
+        PlannedDolbyVision.builder()
+            .name("profile 5 under dvh1")
+            .recording(HEVC_COPY)
+            .range(profile5())
+            .output(profile5Output().build())
+            .codecString("dvh1.05.06")
+            .sampleEntry("dvh1")
+            .record("dvcC" + PROFILE_5_LEVEL_6_RECORD)
+            .build(),
+        PlannedDolbyVision.builder()
+            .name("profile 10 on the SDR base of the recorded AV1 copy under av01")
+            .recording(AV1_COPY)
+            .range(
+                pqWithDolbyVision().toBuilder()
+                    .setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_SDR)
+                    .build())
+            .output(
+                DolbyVisionOutput.newBuilder()
+                    .setProfile(10)
+                    .setLevel(6)
+                    .setBaseLayerCompatibilityId(2)
+                    .setSampleEntry(DolbyVisionSampleEntry.DOLBY_VISION_SAMPLE_ENTRY_AV01)
+                    .build())
+            .codecString(AV1_COPY.videoCodecString())
+            .sampleEntry("av01")
+            .record("dvvC" + PROFILE_10_LEVEL_6_SDR_RECORD)
+            .build());
+  }
+
+  /** A planned Dolby Vision output of a recorded copy and the record that the copy delivers. */
+  @Builder
+  record PlannedDolbyVision(
+      String name,
+      Recording recording,
+      VideoDynamicRange range,
+      DolbyVisionOutput output,
+      String codecString,
+      String sampleEntry,
+      String record) {
+
+    @Override
+    public String toString() {
+      return name;
+    }
   }
 
   @ParameterizedTest(name = "{0}")
