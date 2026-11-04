@@ -484,8 +484,9 @@ class WorkerImageIT {
   void shouldStopTheMediaProcessGracefullyWhenTheContainerReceivesTermination() throws Exception {
     copyMedia();
     // Nothing a confined tool writes outlives the worker, which removes its scratch directory at
-    // shutdown, so the wrapper holds its exit until this test has read the marker that q leaves.
-    // The engine destroys it after its grace period, which bounds the read.
+    // shutdown, so the wrapper's evidence leaves through a named pipe that a reader holds open
+    // before the stop begins. The wrapper keeps the pipe open until it exits: q arrives when it is
+    // read, e only when the wrapper exits by itself, since a destroy runs no exit trap.
     var script =
         scriptedFfmpeg(
             """
@@ -493,10 +494,9 @@ class WorkerImageIT {
         if [[ $command != q ]]; then
           exit 71
         fi
-        printf q > "$TMPDIR/graceful-stop"
-        until [[ -e "$TMPDIR/graceful-stop-read" ]]; do
-          sleep 0.1
-        done
+        exec 3>"$TMPDIR/graceful-stop"
+        printf q >&3
+        trap 'printf e >&3' EXIT
         exit 0
         """);
     try (var image = ImageFixture.builder().media(media).ffmpegPath(script).build()) {
@@ -504,16 +504,18 @@ class WorkerImageIT {
       var request = fixtureJobBuilder(TranscodeMode.TRANSCODE_MODE_REMUX).build();
       var started = JobAttemptStarted.parseFrom(image.command("start-job", request.toByteArray()));
       assertThat(started.getJobAttemptId()).isEqualTo(request.getJobAttemptId());
+      var evidence = image.evidenceThroughPipe("graceful-stop");
 
-      var stopping = image.stopContainer();
-      var marker =
-          await()
-              .atMost(Duration.ofSeconds(30))
-              .until(() -> image.inScratch("cat", "graceful-stop").getStdout(), "q"::equals);
-      image.acknowledgeRead("graceful-stop");
-      stopping.get(30, TimeUnit.SECONDS);
+      image
+          .worker
+          .getDockerClient()
+          .stopContainerCmd(image.worker.getContainerId())
+          .withTimeout(10)
+          .exec();
 
-      assertThat(marker).isEqualTo("q");
+      assertThat(evidence.get(30, TimeUnit.SECONDS))
+          .as("the wrapper read q and exited by itself")
+          .isEqualTo("qe");
       assertThat(image.worker.getCurrentContainerInfo().getState().getExitCodeLong())
           .isIn(0L, 143L);
       assertThat(new String(image.command("disconnected", new byte[0]), StandardCharsets.UTF_8))
@@ -756,32 +758,25 @@ class WorkerImageIT {
       return worker.execInContainer("/bin/sh", "-c", command + " /tmp/*/" + file);
     }
 
-    // Creates the file a wrapper waits for beside the evidence it wrote, so that it may exit.
-    private void acknowledgeRead(String file) throws Exception {
-      var acknowledged =
+    // Makes a named pipe of the given name in the scratch directory and reads it to its end on
+    // another thread, so that whatever a wrapper writes there reaches the test even after the
+    // worker has removed the directory. A wrapper's open of the pipe waits for this reader.
+    private CompletableFuture<String> evidenceThroughPipe(String file) throws Exception {
+      var made =
           worker.execInContainer(
-              "/bin/sh", "-c", "touch \"$(dirname /tmp/*/" + file + ")/" + file + "-read\"");
-      assertThat(acknowledged.getExitCode()).as(acknowledged.getStderr()).isZero();
-    }
-
-    // Docker's stop blocks until the container has exited, so it runs beside the test's reads.
-    private CompletableFuture<Void> stopContainer() {
-      var stopped = new CompletableFuture<Void>();
+              "/bin/sh", "-c", "mkfifo \"$(echo /tmp/streamarr-tools-*)/" + file + "\"");
+      assertThat(made.getExitCode()).as(made.getStderr()).isZero();
+      var evidence = new CompletableFuture<String>();
       Thread.ofVirtual()
           .start(
               () -> {
                 try {
-                  worker
-                      .getDockerClient()
-                      .stopContainerCmd(worker.getContainerId())
-                      .withTimeout(10)
-                      .exec();
-                  stopped.complete(null);
-                } catch (RuntimeException failure) {
-                  stopped.completeExceptionally(failure);
+                  evidence.complete(inScratch("cat", file).getStdout());
+                } catch (Exception failure) {
+                  evidence.completeExceptionally(failure);
                 }
               });
-      return stopped;
+      return evidence;
     }
 
     // Read as base64 so no charset on the exec path can alter the recorded filename bytes.
