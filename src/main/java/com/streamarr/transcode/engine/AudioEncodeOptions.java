@@ -204,7 +204,9 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
     return "aresample=osr=" + sampleRate + ":" + TUNED_RESAMPLER;
   }
 
-  // The format stage dithers FLAC or ALAC when it writes samples that a downmix mixed.
+  // The format stage dithers FLAC or ALAC when it writes samples that a downmix mixed. Without a
+  // target rate, its resampler takes the rate that FFmpeg negotiates with the encoder, so a rate
+  // conversion that the encoder needs runs here, before any padding that follows the chain.
   private static String formatStage(
       Encoder encoder,
       AudioDecision audio,
