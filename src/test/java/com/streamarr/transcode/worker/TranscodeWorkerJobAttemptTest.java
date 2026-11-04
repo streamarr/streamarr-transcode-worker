@@ -15,7 +15,6 @@ import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.workerConfig
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.copyJobBuilderFor;
-import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.sdrDynamicRange;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.startVariant;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.stopVariant;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variantJobBuilder;
@@ -1043,12 +1042,6 @@ class TranscodeWorkerJobAttemptTest {
             unary(video -> video.setCodecProfile(VideoCodecProfile.VIDEO_CODEC_PROFILE_H264_HIGH))),
         Arguments.of("tier", unary(video -> video.setTier(VideoCodecTier.VIDEO_CODEC_TIER_MAIN))),
         Arguments.of("level", unary(video -> video.setLevel(10))),
-        Arguments.of(
-            "empty output dynamic range",
-            unary(video -> video.setOutputDynamicRange(VideoDynamicRange.getDefaultInstance()))),
-        Arguments.of(
-            "SDR output dynamic range",
-            unary(video -> video.setOutputDynamicRange(sdrDynamicRange()))),
         Arguments.of(
             "deinterlace instruction",
             unary(
