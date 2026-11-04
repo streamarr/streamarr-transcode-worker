@@ -5647,6 +5647,40 @@ class WorkerMediaSmokeTest {
                 startAttempt.contentOf(List.of("init.mp4", segmentName(2), segmentName(3)))));
   }
 
+  // The encode of a profile 5 source's copy reads the audio from the source, a second input beside
+  // the copy's video, so its FLAC frames carry the source's samples at the start attempt's times
+  // only when that input's seek and timestamps match the single FFmpeg's.
+  @ParameterizedTest(name = "keyframe {0}")
+  @NullSource
+  @ValueSource(strings = "20")
+  @DisplayName(
+      "Should decode a profile 5 replacement's audio from its first segment's start to the start"
+          + " attempt's samples when the encode of the source's copy reads lossless audio from the"
+          + " source")
+  void
+      shouldDecodeAProfile5ReplacementsAudioToTheStartAttemptsSamplesWhenTheEncodeOfTheCopyReadsLosslessAudioFromTheSource(
+          BigDecimal keyframePosition) throws Exception {
+    var source = hevcPictureGapSource("mp4");
+    var startJob = pictureGapAudioJob(source, "flac");
+    withProfile5Source(startJob, DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE);
+    var startAttempt =
+        execute(engine(softwareCapabilities()), source.getParent(), startJob.build());
+    var replacementJob = pictureGapAudioReplacementJob(source, "flac", keyframePosition);
+    withProfile5Source(
+        replacementJob, DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE);
+
+    var replacement =
+        execute(engine(softwareCapabilities()), source.getParent(), replacementJob.build());
+
+    assertThat(
+            decodedAudioFrom30To36Seconds(
+                replacement.contentOf(List.of("init.mp4", segmentName(3)))))
+        .as("the MD5 of the replacement's decoded samples from 30 s to 36 s")
+        .isEqualTo(
+            decodedAudioFrom30To36Seconds(
+                startAttempt.contentOf(List.of("init.mp4", segmentName(2), segmentName(3)))));
+  }
+
   // The job, naming the stereo layout for its audio when namedStereo holds.
   private static VariantJob.Builder namingStereoWhen(boolean namedStereo, VariantJob.Builder job) {
     if (namedStereo) {
