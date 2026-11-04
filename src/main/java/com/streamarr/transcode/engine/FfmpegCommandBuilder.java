@@ -393,17 +393,19 @@ public class FfmpegCommandBuilder {
     }
   }
 
-  // A job that carries the server's keyframe position seeks to that position: a keyframe's decode
-  // time. A stream copy's keyframe starts the copy's first segment. An encode's keyframe is the
-  // last one whose presentation time lies at or before the first segment's start minus 0.5 s, so
-  // that the encode decodes the picture that fills that start. An MP4 demuxer seeks by
-  // presentation time, so a decode time before the keyframe's presentation time reads from the
-  // keyframe before it, a whole GOP earlier. An MPEG-TS seek reads from the last
-  // packet whose decode time is at or before the target, so a seek to the segment's boundary skips
-  // that keyframe when its decode time lies far enough before the boundary. The seek can still
-  // read from an earlier keyframe: for a stream with B-frames, FFmpeg moves the target 3/23 s
-  // earlier unless the container seeks by presentation time, as Matroska and MPEG-TS do not. The
-  // producer discards what a copy reads before its first segment as preroll.
+  // A job that carries the server's keyframe position seeks to that position. A stream copy's
+  // keyframe starts the copy's first segment, and the server sends its decode time. An encode's
+  // keyframe is the last one whose presentation time lies at or before the first segment's start
+  // minus 0.5 s, so that the encode decodes the picture that fills that start. For an encode, the
+  // server sends that keyframe's presentation time from an MP4 or MOV source and its decode time
+  // from a Matroska, MPEG-TS or any other source. An MP4 demuxer seeks by presentation time, so a
+  // decode time before the keyframe's presentation time reads from the keyframe before it, a whole
+  // GOP earlier. An MPEG-TS seek reads from the last packet whose decode time is at or before the
+  // target, so a seek to the segment's boundary skips that keyframe when its decode time lies far
+  // enough before the boundary. The seek can still read from an earlier keyframe: for a stream
+  // with B-frames, FFmpeg moves the target 3/23 s earlier unless the container seeks by
+  // presentation time, as Matroska and MPEG-TS do not. The producer discards what a copy reads
+  // before its first segment as preroll.
   private static Duration inputSeekPosition(TranscodeRequest request) {
     return keyframePosition(request).orElseGet(() -> Duration.ofSeconds(inputSeekSeconds(request)));
   }
