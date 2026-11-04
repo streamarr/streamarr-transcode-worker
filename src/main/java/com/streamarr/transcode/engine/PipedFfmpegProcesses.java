@@ -231,41 +231,58 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
   @Override
   public AttemptOutcome outcomeAtExit(AttemptOutcome outcomeOnCleanExit) {
     var encodeExitCode = encode.onExit().join().exitValue();
-    var unexpected = unexpectedTransferFailure.get();
-    if (unexpected.isPresent()) {
-      return new Failed(ProducerFailure.UNEXPECTED_ERROR, unexpected.orElseThrow().toString());
-    }
-
-    var refused = refusedCopy.get().filter(failure -> !endsEarly(failure));
-    if (refused.isPresent()) {
-      return refusal(refused.orElseThrow());
-    }
-
-    if (encodeExitCode != 0) {
-      return new Failed(
-          ProducerFailure.PROCESS_EXITED_WITH_ERROR,
-          encodeErrorOutput.exitDetail("FFmpeg", encodeExitCode));
-    }
-
-    var failedTransfer = transferFailure.get();
-    if (failedTransfer.isPresent()) {
-      return new Failed(
-          ProducerFailure.OUTPUT_UNREADABLE,
-          "The copy of the source did not reach the FFmpeg that encodes it: "
-              + failedTransfer.orElseThrow());
-    }
-
-    var copyExitCode = copy.onExit().join().exitValue();
-    if (copyExitCode != 0) {
-      return new Failed(
-          ProducerFailure.PROCESS_EXITED_WITH_ERROR,
-          copyErrorOutput.exitDetail(COPYING_FFMPEG, copyExitCode));
-    }
-
-    return refusedCopy
-        .get()
-        .<AttemptOutcome>map(PipedFfmpegProcesses::refusal)
+    return failureOfTheCopyThatEndedTheEncodingFfmpeg()
+        .or(() -> failureOfTheEncodingFfmpeg(encodeExitCode))
+        .or(this::failureOfTheCopyAfterACleanEncode)
+        .<AttemptOutcome>map(failure -> failure)
         .orElse(outcomeOnCleanExit);
+  }
+
+  private Optional<Failed> failureOfTheCopyThatEndedTheEncodingFfmpeg() {
+    return unexpectedTransferFailure
+        .get()
+        .map(failure -> new Failed(ProducerFailure.UNEXPECTED_ERROR, failure.toString()))
+        .or(
+            () ->
+                refusedCopy
+                    .get()
+                    .filter(refused -> !endsEarly(refused))
+                    .map(PipedFfmpegProcesses::refusal));
+  }
+
+  private Optional<Failed> failureOfTheEncodingFfmpeg(int exitCode) {
+    if (exitCode == 0) {
+      return Optional.empty();
+    }
+
+    return Optional.of(
+        new Failed(
+            ProducerFailure.PROCESS_EXITED_WITH_ERROR,
+            encodeErrorOutput.exitDetail("FFmpeg", exitCode)));
+  }
+
+  private Optional<Failed> failureOfTheCopyAfterACleanEncode() {
+    return transferFailure
+        .get()
+        .map(
+            failure ->
+                new Failed(
+                    ProducerFailure.OUTPUT_UNREADABLE,
+                    "The copy of the source did not reach the FFmpeg that encodes it: " + failure))
+        .or(this::failureOfTheCopyingFfmpeg)
+        .or(() -> refusedCopy.get().map(PipedFfmpegProcesses::refusal));
+  }
+
+  private Optional<Failed> failureOfTheCopyingFfmpeg() {
+    var exitCode = copy.onExit().join().exitValue();
+    if (exitCode == 0) {
+      return Optional.empty();
+    }
+
+    return Optional.of(
+        new Failed(
+            ProducerFailure.PROCESS_EXITED_WITH_ERROR,
+            copyErrorOutput.exitDetail(COPYING_FFMPEG, exitCode)));
   }
 
   private static boolean endsEarly(FragmentedMp4Exception failure) {
