@@ -4,7 +4,6 @@ import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.engine.VideoDynamicRange.CompatibleBase;
 import java.util.Arrays;
 import java.util.Optional;
-import java.util.Set;
 import java.util.function.Supplier;
 import java.util.stream.IntStream;
 
@@ -19,8 +18,6 @@ import java.util.stream.IntStream;
  */
 final class VideoOutputCheck {
 
-  // The Dolby Vision configuration record boxes (ETSI TS 103 572 / Dolby's ISO BMFF spec).
-  private static final Set<String> DOLBY_VISION_RECORDS = Set.of("dvcC", "dvvC", "dvwC");
   // The transfer characteristics of BT.2100 PQ and HLG (ITU-T H.273 table 3).
   private static final int PQ_TRANSFER = 16;
   private static final int HLG_TRANSFER = 18;
@@ -33,9 +30,10 @@ final class VideoOutputCheck {
    *     decoder configuration record cannot be read or lacks a parameter set that its sample entry
    *     promises, a Dolby Vision configuration record that the copy strips, or, for a copy with a
    *     planned output, a colr box that names another transfer than the planned range or an hvc1
-   *     record whose SEI messages are not exactly the static HDR metadata that it plans; with
-   *     {@link Reason#MALFORMED_BOX} when a box that leads to the video sample entry is missing or
-   *     too short
+   *     record whose SEI messages are not exactly the static HDR metadata that it plans, or a
+   *     sample entry or Dolby Vision record other than the planned Dolby Vision output; with {@link
+   *     Reason#MALFORMED_BOX} when a box that leads to the video sample entry is missing or too
+   *     short
    */
   static void requireMatch(VideoDecision decision, InitializationSegment segment) {
     var sampleEntry =
@@ -91,6 +89,57 @@ final class VideoOutputCheck {
     if (sampleEntry.type().equals("hvc1")) {
       requirePlannedStaticMetadata(copy, sampleEntry);
     }
+
+    planned.dolbyVision().ifPresent(output -> requirePlannedDolbyVision(copy, output, sampleEntry));
+  }
+
+  // The playlist's codec string names the sample entry, and a player reads the Dolby Vision
+  // profile, level and compatibility from the one record.
+  private static void requirePlannedDolbyVision(
+      VideoDecision.Copy copy, PlannedCopyOutput.DolbyVisionOutput output, BoxView sampleEntry) {
+    if (!sampleEntry.type().equals(output.sampleEntry().type())) {
+      throw mismatch(
+          "the copy plans a "
+              + output.sampleEntry().type()
+              + " sample entry where the segment declares "
+              + sampleEntry.type());
+    }
+
+    var records =
+        readable(
+            () ->
+                DolbyVisionRecord.recordsAmong(
+                    sampleEntry
+                        .after(CodecConfigurationReader.VISUAL_SAMPLE_ENTRY_BYTES)
+                        .children()));
+    if (records.size() != 1) {
+      throw mismatch(
+          "the "
+              + sampleEntry.type()
+              + " sample entry holds "
+              + records.size()
+              + " Dolby Vision configuration records where the copy plans one");
+    }
+
+    var record = records.getFirst();
+    if (record.profile() != output.profile()
+        || record.level() != output.level()
+        || record.compatibilityId() != output.baseLayerCompatibilityId()) {
+      throw mismatch(
+          "the Dolby Vision configuration record declares "
+              + record
+              + " where the copy plans "
+              + output);
+    }
+
+    if (copy.lists(BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD)
+        && !record.equals(DolbyVisionRecord.normalizedFor(output))) {
+      throw mismatch(
+          "the Dolby Vision configuration record declares "
+              + record
+              + " where the copy normalizes it to "
+              + DolbyVisionRecord.normalizedFor(output));
+    }
   }
 
   // A copy keeps the source's colour description, which FFmpeg writes into the colr box when the
@@ -145,7 +194,7 @@ final class VideoOutputCheck {
                 .after(CodecConfigurationReader.VISUAL_SAMPLE_ENTRY_BYTES)
                 .children()
                 .stream()
-                .anyMatch(child -> DOLBY_VISION_RECORDS.contains(child.type())));
+                .anyMatch(child -> DolbyVisionRecord.BOX_TYPES.contains(child.type())));
   }
 
   private static boolean encodeDeclaresInterlacedVideo(

@@ -15,9 +15,9 @@ import java.util.Set;
 /**
  * Builds each track's RFC 6381 codec string from the sample entry and the decoder configuration
  * record that an initialization segment declares: {@code avcC} (ISO/IEC 14496-15 5.3.2), {@code
- * hvcC} (ISO/IEC 14496-15 8.3.2), {@code av1C} (AV1 ISOBMFF binding 2.3) and {@code esds} (ISO/IEC
- * 14496-1 7.2.6). Hexadecimal digits are uppercase, and every digit is ASCII whatever the default
- * locale.
+ * hvcC} (ISO/IEC 14496-15 8.3.2), with the Dolby Vision configuration record for {@code dvh1},
+ * {@code av1C} (AV1 ISOBMFF binding 2.3) and {@code esds} (ISO/IEC 14496-1 7.2.6). Hexadecimal
+ * digits are uppercase, and every digit is ASCII whatever the default locale.
  */
 final class CodecConfigurationReader {
 
@@ -86,6 +86,7 @@ final class CodecConfigurationReader {
     return switch (sampleEntry.type()) {
       case "avc1", "avc3" -> avc(sampleEntry.type(), children.requiredChild("avcC").fields());
       case "hvc1", "hev1" -> hevc(sampleEntry.type(), children.requiredChild("hvcC").fields());
+      case "dvh1" -> dolbyVisionHevc(children);
       case "av01" -> av1(children.requiredChild("av1C").fields());
       default -> new Video(sampleEntry.type(), Optional.empty());
     };
@@ -93,8 +94,9 @@ final class CodecConfigurationReader {
 
   /**
    * Whether the decoder configuration record holds every parameter set that the sample entry
-   * promises it holds: {@code avc1} promises an SPS and a PPS, and {@code hvc1} a VPS, an SPS and a
-   * PPS. Every other sample entry lets the samples carry its parameter sets, so it promises none.
+   * promises it holds: {@code avc1} promises an SPS and a PPS, and {@code hvc1} and {@code dvh1} a
+   * VPS, an SPS and a PPS. Every other sample entry lets the samples carry its parameter sets, so
+   * it promises none.
    *
    * @throws FragmentedMp4Exception when the record is missing or ends before its parameter sets do
    */
@@ -102,7 +104,7 @@ final class CodecConfigurationReader {
     var children = sampleEntry.after(VISUAL_SAMPLE_ENTRY_BYTES);
     return switch (sampleEntry.type()) {
       case "avc1" -> avcHoldsParameterSets(children.requiredChild("avcC").fields());
-      case "hvc1" ->
+      case "hvc1", "dvh1" ->
           hevcArrayTypes(children.requiredChild("hvcC").fields())
               .containsAll(HEVC_PARAMETER_SET_TYPES);
       default -> true;
@@ -269,6 +271,22 @@ final class CodecConfigurationReader {
             level,
             constraintSuffix(constraints));
     return new Video(codecString, Optional.of(new PictureFormat(bitDepth, chroma)));
+  }
+
+  // Dolby's codec string for dvh1 names the profile and level of the Dolby Vision configuration
+  // record as two decimal digits each, such as dvh1.05.06; the hvcC gives the picture format.
+  private static Video dolbyVisionHevc(BoxView children) {
+    var hevc = hevc("dvh1", children.requiredChild("hvcC").fields());
+    var record =
+        DolbyVisionRecord.recordsAmong(children.children()).stream()
+            .findFirst()
+            .orElseThrow(
+                () ->
+                    FragmentedMp4Exception.malformed(
+                        "dvh1 holds no Dolby Vision configuration record"));
+    var codecString =
+        String.format(Locale.ROOT, "dvh1.%02d.%02d", record.profile(), record.level());
+    return new Video(codecString, hevc.pictureFormat());
   }
 
   private static String profileSpace(int space) {

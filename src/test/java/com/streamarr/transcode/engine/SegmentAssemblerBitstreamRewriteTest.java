@@ -230,7 +230,8 @@ class SegmentAssemblerBitstreamRewriteTest {
     var copy =
         VideoDecisionFixtures.copyBuilder()
             .codecString(AV1_CODEC_STRING)
-            .bitstreamRewrites(EnumSet.allOf(BitstreamRewrite.class))
+            .bitstreamRewrites(
+                EnumSet.of(BitstreamRewrite.STRIP_DOLBY_VISION, BitstreamRewrite.STRIP_HDR10_PLUS))
             .build();
 
     var delivered =
@@ -271,7 +272,7 @@ class SegmentAssemblerBitstreamRewriteTest {
             List.of(
                 TEMPORAL_DELIMITER, DOLBY_VISION_METADATA, CONTENT_LIGHT_LEVEL_METADATA, FRAME)),
         Arguments.of(
-            EnumSet.allOf(BitstreamRewrite.class),
+            EnumSet.of(BitstreamRewrite.STRIP_DOLBY_VISION, BitstreamRewrite.STRIP_HDR10_PLUS),
             List.of(TEMPORAL_DELIMITER, CONTENT_LIGHT_LEVEL_METADATA, FRAME)));
   }
 

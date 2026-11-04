@@ -95,6 +95,16 @@ class ProducerTest {
   private static final String HVCC_VPS_ARRAY = "A0000100024001";
   private static final String HVCC_SPS_PPS_ARRAYS = "A1000100024201" + "A2000100024401";
   private static final String HVC1_RECORD_CODEC_STRING = "hvc1.1.6.L90.90";
+  // Dolby Vision configuration records (Dolby's ISO BMFF spec 3.2): version 1.0, then the profile
+  // (7 bits), level (6 bits), RPU, enhancement-layer and base-layer flags,
+  // bl_signal_compatibility_id (4 bits) and dv_md_compression (2 bits), then reserved zeros.
+  private static final String RECORD_RESERVED = "00".repeat(19);
+  // Profile 5, level 6, an RPU and a base layer, compatibility 0, compression 0.
+  private static final String PROFILE_5_LEVEL_6_RECORD = "01000A3500" + RECORD_RESERVED;
+  // Profile 8, level 6, an RPU and a base layer, compatibility 1, compression 0.
+  private static final String PROFILE_8_LEVEL_6_PQ_RECORD = "0100103510" + RECORD_RESERVED;
+  // Profile 8, level 6, an RPU and a base layer, compatibility 6, compression 3 (extended).
+  private static final String PROFILE_8_COMPATIBILITY_6_RECORD = "010010356C" + RECORD_RESERVED;
   private static final byte[] HVC1_PARAMETER_SET_RECORD =
       HexFormat.of().parseHex(HVCC_FIELDS + "03" + HVCC_VPS_ARRAY + HVCC_SPS_PPS_ARRAYS);
 
@@ -2342,6 +2352,118 @@ class ProducerTest {
     }
 
     assertThat(delivered.getFirst()).isEqualTo(delivered.getLast());
+  }
+
+  // The pinned FFmpeg writes no record into the hvc1 entry of a profile 5 copy, whatever the
+  // source's sample entry.
+  @Test
+  @DisplayName(
+      "Should deliver a dvh1 sample entry with the planned profile 5 record when the copy plans a"
+          + " dvh1 output and normalizes the record")
+  void shouldDeliverADvh1SampleEntryWithThePlannedProfile5RecordWhenTheCopyNormalizesTheRecord() {
+    var output =
+        IsoBoxes.concat(
+            hevcInitializationSegment(hvc1Entry(HVC1_PARAMETER_SET_RECORD)),
+            keyframeFragment(0, 1));
+    var process = ScriptedProcess.builder().output(output).build();
+    var copy =
+        dolbyVisionCopy(
+                "dvh1.05.06",
+                PlannedCopyOutput.DolbyVisionOutput.builder()
+                    .profile(5)
+                    .level(6)
+                    .baseLayerCompatibilityId(0)
+                    .sampleEntry(PlannedCopyOutput.SampleEntry.DVH1)
+                    .build())
+            .bitstreamRewrites(Set.of(BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD))
+            .build();
+
+    var producer = producerOfOneSecondSegments(process).videoDecision(copy).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(sink.contentOf("init.mp4"))
+        .isEqualTo(
+            hevcInitializationSegment(
+                hevcEntryWithRecord("dvh1", "dvcC", PROFILE_5_LEVEL_6_RECORD)));
+  }
+
+  @Test
+  @DisplayName(
+      "Should replace the source's record with compatibility 1 and compression 0 when the copy"
+          + " normalizes a profile 8 record with compatibility 6")
+  void shouldReplaceTheSourcesRecordWhenTheCopyNormalizesAProfile8RecordWithCompatibility6() {
+    var output =
+        IsoBoxes.concat(
+            hevcInitializationSegment(
+                hevcEntryWithRecord("hvc1", "dvvC", PROFILE_8_COMPATIBILITY_6_RECORD)),
+            keyframeFragment(0, 1));
+    var process = ScriptedProcess.builder().output(output).build();
+    var copy =
+        dolbyVisionCopy(
+                HVC1_RECORD_CODEC_STRING,
+                PlannedCopyOutput.DolbyVisionOutput.builder()
+                    .profile(8)
+                    .level(6)
+                    .baseLayerCompatibilityId(1)
+                    .sampleEntry(PlannedCopyOutput.SampleEntry.HVC1)
+                    .build())
+            .bitstreamRewrites(Set.of(BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD))
+            .build();
+
+    var producer = producerOfOneSecondSegments(process).videoDecision(copy).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(sink.contentOf("init.mp4"))
+        .isEqualTo(
+            hevcInitializationSegment(
+                hevcEntryWithRecord("hvc1", "dvvC", PROFILE_8_LEVEL_6_PQ_RECORD)));
+  }
+
+  @Test
+  @DisplayName(
+      "Should deliver the source's record unchanged when the copy plans a Dolby Vision output"
+          + " without normalizing the record")
+  void shouldDeliverTheSourcesRecordUnchangedWhenTheCopyPlansDolbyVisionWithoutNormalizing() {
+    var entry = hevcEntryWithRecord("hvc1", "dvvC", PROFILE_8_LEVEL_6_PQ_RECORD);
+    var output = IsoBoxes.concat(hevcInitializationSegment(entry), keyframeFragment(0, 1));
+    var process = ScriptedProcess.builder().output(output).build();
+    var copy =
+        dolbyVisionCopy(
+                HVC1_RECORD_CODEC_STRING,
+                PlannedCopyOutput.DolbyVisionOutput.builder()
+                    .profile(8)
+                    .level(6)
+                    .baseLayerCompatibilityId(1)
+                    .sampleEntry(PlannedCopyOutput.SampleEntry.HVC1)
+                    .build())
+            .build();
+
+    var producer = producerOfOneSecondSegments(process).videoDecision(copy).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(sink.contentOf("init.mp4")).isEqualTo(hevcInitializationSegment(entry));
+  }
+
+  private static VideoDecision.Copy.CopyBuilder dolbyVisionCopy(
+      String codecString, PlannedCopyOutput.DolbyVisionOutput dolbyVision) {
+    return VideoDecisionFixtures.copyBuilder()
+        .codecString(codecString)
+        .plannedOutput(
+            Optional.of(
+                PlannedCopyOutputs.pqOutputBuilder()
+                    .dolbyVision(Optional.of(dolbyVision))
+                    .build()));
+  }
+
+  // An HEVC sample entry of the type, with the parameter-set record, a pasp box and the Dolby
+  // Vision record.
+  private static byte[] hevcEntryWithRecord(String type, String recordType, String recordHex) {
+    return IsoBoxes.box(
+        type,
+        new byte[78],
+        IsoBoxes.box("hvcC", HVC1_PARAMETER_SET_RECORD),
+        IsoBoxes.box("pasp", IsoBoxes.u32(1), IsoBoxes.u32(1)),
+        IsoBoxes.box(recordType, HexFormat.of().parseHex(recordHex)));
   }
 
   private static VideoDecision.Copy hdr10Copy(PlannedCopyOutput planned) {

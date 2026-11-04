@@ -180,6 +180,143 @@ class VideoOutputCheckTest {
     assertThatNoException().isThrownBy(() -> VideoOutputCheck.requireMatch(copy, segment));
   }
 
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("segmentsThatMissThePlannedDolbyVision")
+  @DisplayName(
+      "Should refuse the copy as an output mismatch when its sample entry or Dolby Vision record"
+          + " differs from the planned Dolby Vision output")
+  void shouldRefuseTheCopyWhenItsSampleEntryOrRecordDiffersFromThePlannedDolbyVisionOutput(
+      DolbyVisionCase dolbyVisionCase) {
+    var segment =
+        hevcSegmentWithEntry(dolbyVisionCase.sampleEntry(), dolbyVisionCase.recordBoxes());
+
+    assertThatThrownBy(() -> VideoOutputCheck.requireMatch(dolbyVisionCase.copy(), segment))
+        .isInstanceOfSatisfying(
+            FragmentedMp4Exception.class,
+            exception -> assertThat(exception.getReason()).isEqualTo(Reason.OUTPUT_MISMATCH));
+  }
+
+  static Stream<DolbyVisionCase> segmentsThatMissThePlannedDolbyVision() {
+    var profile81 = copyPlanningDolbyVision(SYNTHETIC_HEVC_CODEC_STRING, profile8Level6()).build();
+    return Stream.of(
+        new DolbyVisionCase("no record", profile81, "hvc1", new byte[0]),
+        new DolbyVisionCase(
+            "a record of another level", profile81, "hvc1", record("dvvC", "0100102D10")),
+        new DolbyVisionCase(
+            "a record of another compatibility", profile81, "hvc1", record("dvvC", "0100103520")),
+        new DolbyVisionCase(
+            "two records",
+            profile81,
+            "hvc1",
+            IsoBoxes.concat(record("dvvC", "0100103510"), record("dvvC", "0100103510"))),
+        new DolbyVisionCase(
+            "compression 3 where the copy normalizes the record",
+            copyPlanningDolbyVision(SYNTHETIC_HEVC_CODEC_STRING, profile8Level6())
+                .bitstreamRewrites(Set.of(BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD))
+                .build(),
+            "hvc1",
+            record("dvvC", "010010351C")),
+        new DolbyVisionCase(
+            "a dvcC record of profile 8 where the copy normalizes the record",
+            copyPlanningDolbyVision(SYNTHETIC_HEVC_CODEC_STRING, profile8Level6())
+                .bitstreamRewrites(Set.of(BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD))
+                .build(),
+            "hvc1",
+            record("dvcC", "0100103510")),
+        new DolbyVisionCase(
+            "an hvc1 entry where the copy plans dvh1",
+            copyPlanningDolbyVision(
+                    SYNTHETIC_HEVC_CODEC_STRING,
+                    PlannedCopyOutput.DolbyVisionOutput.builder()
+                        .profile(5)
+                        .level(6)
+                        .baseLayerCompatibilityId(0)
+                        .sampleEntry(PlannedCopyOutput.SampleEntry.DVH1)
+                        .build())
+                .build(),
+            "hvc1",
+            record("dvcC", "01000A3500")));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("segmentsThatCarryThePlannedDolbyVision")
+  @DisplayName(
+      "Should accept the copy when its sample entry and Dolby Vision record carry the planned"
+          + " Dolby Vision output")
+  void shouldAcceptTheCopyWhenItsSampleEntryAndRecordCarryThePlannedDolbyVisionOutput(
+      DolbyVisionCase dolbyVisionCase) {
+    var segment =
+        hevcSegmentWithEntry(dolbyVisionCase.sampleEntry(), dolbyVisionCase.recordBoxes());
+
+    assertThatNoException()
+        .isThrownBy(() -> VideoOutputCheck.requireMatch(dolbyVisionCase.copy(), segment));
+  }
+
+  static Stream<DolbyVisionCase> segmentsThatCarryThePlannedDolbyVision() {
+    return Stream.of(
+        new DolbyVisionCase(
+            "profile 8.1 under hvc1 with the source's compression",
+            copyPlanningDolbyVision(SYNTHETIC_HEVC_CODEC_STRING, profile8Level6()).build(),
+            "hvc1",
+            record("dvvC", "010010351C")),
+        new DolbyVisionCase(
+            "profile 5 under dvh1 with a normalized record",
+            copyPlanningDolbyVision(
+                    "dvh1.05.06",
+                    PlannedCopyOutput.DolbyVisionOutput.builder()
+                        .profile(5)
+                        .level(6)
+                        .baseLayerCompatibilityId(0)
+                        .sampleEntry(PlannedCopyOutput.SampleEntry.DVH1)
+                        .build())
+                .bitstreamRewrites(Set.of(BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD))
+                .build(),
+            "dvh1",
+            record("dvcC", "01000A3500")));
+  }
+
+  // The copy, and the sample entry type and Dolby Vision record boxes of its segment.
+  record DolbyVisionCase(
+      String name, VideoDecision.Copy copy, String sampleEntry, byte[] recordBoxes) {
+
+    @Override
+    public String toString() {
+      return name;
+    }
+  }
+
+  // Profile 8 at level 6 on a PQ base, under hvc1.
+  private static PlannedCopyOutput.DolbyVisionOutput profile8Level6() {
+    return PlannedCopyOutput.DolbyVisionOutput.builder()
+        .profile(8)
+        .level(6)
+        .baseLayerCompatibilityId(1)
+        .sampleEntry(PlannedCopyOutput.SampleEntry.HVC1)
+        .build();
+  }
+
+  private static VideoDecision.Copy.CopyBuilder copyPlanningDolbyVision(
+      String codecString, PlannedCopyOutput.DolbyVisionOutput dolbyVision) {
+    return VideoDecisionFixtures.copyBuilder()
+        .codecString(codecString)
+        .plannedOutput(
+            Optional.of(
+                PlannedCopyOutputs.pqOutputBuilder()
+                    .dolbyVision(Optional.of(dolbyVision))
+                    .build()));
+  }
+
+  // A Dolby Vision configuration record box: its first 5 bytes, then 19 reserved zero bytes.
+  private static byte[] record(String type, String firstFields) {
+    return box(type, HexFormat.of().parseHex(firstFields + "00".repeat(19)));
+  }
+
+  private static InitializationSegment hevcSegmentWithEntry(String type, byte[] recordBoxes) {
+    var sampleEntry =
+        box(type, new byte[78], box("hvcC", HexFormat.of().parseHex(HVCC)), recordBoxes);
+    return new InitializationSegment(HevcCopies.initializationSegment(sampleEntry));
+  }
+
   private static PlannedCopyOutput outputOn(VideoDynamicRange.CompatibleBase base) {
     return PlannedCopyOutput.builder()
         .dynamicRange(

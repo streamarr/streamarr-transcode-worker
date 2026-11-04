@@ -8,12 +8,15 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
@@ -51,6 +54,13 @@ class HdrCopySmokeTest {
   // ITU-T H.273 table 3.
   private static final int PQ_TRANSFER = 16;
   private static final int HLG_TRANSFER = 18;
+  private static final String PROFILE_5_CODEC_STRING = "dvh1.05.01";
+  // The first 5 bytes of Dolby Vision records at level 1 with an RPU and a base layer: profile 5
+  // with compatibility 0, profile 8 with compatibility 1, and profile 8 with compatibility 6 and
+  // compression 3.
+  private static final String PROFILE_5_LEVEL_1 = "01000A0D00";
+  private static final String PROFILE_8_LEVEL_1_PQ = "0100100D10";
+  private static final String PROFILE_8_COMPATIBILITY_6 = "0100100D6C";
   private static final List<String> SAMPLE_ENTRY_PATH =
       List.of("moov", "trak", "mdia", "minf", "stbl", "stsd");
 
@@ -167,6 +177,84 @@ class HdrCopySmokeTest {
             failed -> assertThat(failed.reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH));
   }
 
+  // The question of risk 5 in the HDR output plan: the pinned FFmpeg keeps a 10-bit profile 8.1
+  // record under hvc1, so a copy that does not normalize the record can carry the source's.
+  @Test
+  @DisplayName(
+      "Should deliver the source's profile 8.1 record under hvc1 when the copy plans that Dolby"
+          + " Vision output")
+  void shouldDeliverTheSourcesProfile81RecordUnderHvc1WhenTheCopyPlansThatOutput()
+      throws Exception {
+    var source = withDolbyVisionRecord(hdr10, "hvc1", "dvvC", PROFILE_8_LEVEL_1_PQ);
+    var copy =
+        dolbyVisionCopy(CODEC_STRING, dolbyVisionOutput(8, 1, PlannedCopyOutput.SampleEntry.HVC1))
+            .build();
+
+    var initialization = copied(source, copy, 0);
+
+    assertThat(sampleEntry(initialization).type()).isEqualTo("hvc1");
+    assertThat(recordFieldsOf(initialization)).isEqualTo(new RecordFields("dvvC", 8, 1, 1, 0));
+  }
+
+  // The pinned FFmpeg drops the record from a profile 5 copy whatever the source's sample entry,
+  // so before the worker wrote the record this attempt failed its output check.
+  @ParameterizedTest(name = "from a {0} source")
+  @ValueSource(strings = {"hev1", "dvh1"})
+  @DisplayName(
+      "Should deliver a dvh1 sample entry that holds its parameter sets and the profile 5 record"
+          + " when the copy plans a dvh1 output and normalizes the record")
+  void shouldDeliverADvh1SampleEntryWithTheProfile5RecordWhenTheCopyPlansADvh1Output(
+      String sourceSampleEntry) throws Exception {
+    var source = withDolbyVisionRecord(hdr10, sourceSampleEntry, "dvcC", PROFILE_5_LEVEL_1);
+    var copy =
+        dolbyVisionCopy(
+                PROFILE_5_CODEC_STRING, dolbyVisionOutput(5, 0, PlannedCopyOutput.SampleEntry.DVH1))
+            .keepsPacketBytes(sourceSampleEntry.equals("dvh1"))
+            .bitstreamRewrites(Set.of(BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD))
+            .build();
+
+    var sink = copiedSink(source, copy, 0);
+
+    var initialization = sink.contentOf("init.mp4");
+    var record = recordFieldsOf(initialization);
+    assertThat(record).isEqualTo(new RecordFields("dvcC", 5, 1, 0, 0));
+    assertThat(PROFILE_5_CODEC_STRING)
+        .isEqualTo(
+            "%s.%02d.%02d"
+                .formatted(sampleEntry(initialization).type(), record.profile(), record.level()));
+    assertThat(hvccArrayTypes(initialization)).contains(32, 33, 34);
+    assertThat(probed(sink.acceptedBytes()))
+        .contains("codec_tag_string=dvh1", "dv_profile=5", "dv_level=1");
+  }
+
+  // An MPEG-TS source carries the record's fields in a descriptor, which FFmpeg reads into the
+  // same side data as an MP4 record, and its samples are Annex B.
+  @ParameterizedTest(name = "from {0}")
+  @ValueSource(strings = {"mp4", "mpegts"})
+  @DisplayName(
+      "Should deliver compatibility 1 and compression 0 when the copy normalizes a profile 8 record"
+          + " with compatibility 6")
+  void shouldDeliverCompatibility1AndCompression0WhenTheCopyNormalizesAProfile8Record(
+      String container) throws Exception {
+    var source = withDolbyVisionRecord(hdr10, "hvc1", "dvvC", PROFILE_8_COMPATIBILITY_6);
+    if (container.equals("mpegts")) {
+      source = remuxedToMpegTs(source);
+    }
+
+    var copy =
+        dolbyVisionCopy(CODEC_STRING, dolbyVisionOutput(8, 1, PlannedCopyOutput.SampleEntry.HVC1))
+            .keepsPacketBytes(container.equals("mp4"))
+            .bitstreamRewrites(Set.of(BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD))
+            .build();
+
+    var initialization = copied(source, copy, 0);
+
+    assertThat(recordFieldsOf(initialization)).isEqualTo(new RecordFields("dvvC", 8, 1, 1, 0));
+  }
+
+  /** A Dolby Vision record's box type, profile, level, compatibility id and compression. */
+  record RecordFields(String type, int profile, int level, int compatibility, int compression) {}
+
   // The planned output and the SEI messages of each SEI NAL unit in the delivered hvcC.
   record PartialStaticMetadata(
       String name, PlannedCopyOutput planned, List<List<SeiMessage>> messages) {
@@ -194,6 +282,29 @@ class HdrCopySmokeTest {
         .keepsPacketBytes(true)
         .plannedOutput(Optional.of(planned))
         .build();
+  }
+
+  private static PlannedCopyOutput.DolbyVisionOutput dolbyVisionOutput(
+      int profile, int compatibility, PlannedCopyOutput.SampleEntry sampleEntry) {
+    return PlannedCopyOutput.DolbyVisionOutput.builder()
+        .profile(profile)
+        .level(1)
+        .baseLayerCompatibilityId(compatibility)
+        .sampleEntry(sampleEntry)
+        .build();
+  }
+
+  private static VideoDecision.Copy.CopyBuilder dolbyVisionCopy(
+      String codecString, PlannedCopyOutput.DolbyVisionOutput dolbyVision) {
+    return VideoDecision.Copy.builder()
+        .streamIndex(0)
+        .codecString(codecString)
+        .keepsPacketBytes(true)
+        .plannedOutput(
+            Optional.of(
+                PlannedCopyOutputs.pqOutputBuilder()
+                    .dolbyVision(Optional.of(dolbyVision))
+                    .build()));
   }
 
   // x265 takes the primaries as G, B, R and the white point, then the luminances.
@@ -276,6 +387,11 @@ class HdrCopySmokeTest {
 
   private static byte[] copied(Path source, VideoDecision.Copy copy, int firstSegment)
       throws Exception {
+    return copiedSink(source, copy, firstSegment).contentOf("init.mp4");
+  }
+
+  private static RecordingSegmentSink copiedSink(
+      Path source, VideoDecision.Copy copy, int firstSegment) throws Exception {
     var sink = new RecordingSegmentSink();
 
     var producer =
@@ -284,7 +400,7 @@ class HdrCopySmokeTest {
                 request(source, copy, firstSegment), sink, SegmentMemoryBudget.forSlots(1));
 
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isInstanceOf(Completed.class);
-    return sink.contentOf("init.mp4");
+    return sink;
   }
 
   private static FfmpegTranscodeEngine engine() {
@@ -297,6 +413,157 @@ class HdrCopySmokeTest {
         .launcher(new ProcessBuilderLauncher())
         .encoderStallTimeout(FfmpegTranscodeEngine.DEFAULT_ENCODER_STALL_TIMEOUT)
         .build();
+  }
+
+  // The source with the Dolby Vision record appended to its video sample entry, which takes the
+  // given type. FFmpeg writes the moov behind the mdat, so no chunk offset moves.
+  private static Path withDolbyVisionRecord(
+      Path source, String sampleEntryType, String recordType, String recordFields)
+      throws IOException {
+    var record = box(recordType, HexFormat.of().parseHex(recordFields + "00".repeat(19)));
+    var rebuilt = new ByteArrayOutputStream();
+    var passedMdat = false;
+    for (var top : children(new Box("file", Files.readAllBytes(source)), 0)) {
+      passedMdat |= top.type().equals("mdat");
+      var body = top.body();
+      if (top.type().equals("moov")) {
+        assertThat(passedMdat).as("the moov follows the mdat").isTrue();
+        body = appended(top, SAMPLE_ENTRY_PATH.subList(1, SAMPLE_ENTRY_PATH.size()), record);
+        body = renamedSampleEntry(body, sampleEntryType);
+      }
+
+      rebuilt.writeBytes(box(top.type(), body));
+    }
+
+    var written =
+        root.resolve(
+            "%s-%s-%s.mp4".formatted(sampleEntryType, recordType, recordFields.toLowerCase()));
+    Files.write(written, rebuilt.toByteArray());
+    return written;
+  }
+
+  private static Path remuxedToMpegTs(Path source) throws Exception {
+    var remuxed = root.resolve(source.getFileName() + ".ts");
+    runFfmpeg(
+        List.of("-i", source.toString(), "-c", "copy", "-strict", "unofficial", "-f", "mpegts"),
+        remuxed);
+    assertThat(probed(remuxed)).contains("dv_bl_signal_compatibility_id=6");
+    return remuxed;
+  }
+
+  // The box's body with the child appended to the sample entry at the end of the path below it.
+  private static byte[] appended(Box box, List<String> path, byte[] child) {
+    var fields = fieldsOf(box.type());
+    var body = new ByteArrayOutputStream();
+    body.write(box.body(), 0, fields);
+    for (var nested : children(box, fields)) {
+      var nestedBody = nested.body();
+      if (path.isEmpty() || nested.type().equals(path.getFirst())) {
+        nestedBody = appendedBelow(nested, path, child);
+      }
+
+      body.writeBytes(box(nested.type(), nestedBody));
+    }
+
+    return body.toByteArray();
+  }
+
+  private static byte[] appendedBelow(Box nested, List<String> path, byte[] child) {
+    if (path.isEmpty()) {
+      return IsoBoxes.concat(nested.body(), child);
+    }
+
+    return appended(nested, path.subList(1, path.size()), child);
+  }
+
+  private static int fieldsOf(String type) {
+    return switch (type) {
+      case "stsd" -> 8;
+      case "hvc1", "hev1", "dvh1" -> 78;
+      default -> 0;
+    };
+  }
+
+  // The moov body with its hvc1 sample entry's type replaced; the type takes the same 4 bytes.
+  private static byte[] renamedSampleEntry(byte[] moov, String type) {
+    var bytes = moov.clone();
+    var hvc1 = "hvc1".getBytes(StandardCharsets.US_ASCII);
+    for (var index = 0; index + 4 <= bytes.length; index++) {
+      if (Arrays.equals(bytes, index, index + 4, hvc1, 0, 4)) {
+        System.arraycopy(type.getBytes(StandardCharsets.US_ASCII), 0, bytes, index, 4);
+        return bytes;
+      }
+    }
+
+    throw new AssertionError("the moov holds no hvc1 sample entry");
+  }
+
+  private static byte[] box(String type, byte[] body) {
+    return ByteBuffer.allocate(8 + body.length)
+        .putInt(8 + body.length)
+        .put(type.getBytes(StandardCharsets.US_ASCII))
+        .put(body)
+        .array();
+  }
+
+  // The fields of the one Dolby Vision record in the delivered sample entry (Dolby's ISO BMFF
+  // spec 3.2).
+  private static RecordFields recordFieldsOf(byte[] initialization) {
+    var records =
+        children(sampleEntry(initialization), 78).stream()
+            .filter(child -> child.type().matches("dv[cvw]C"))
+            .toList();
+    assertThat(records).as("the Dolby Vision records").hasSize(1);
+    var fields = records.getFirst().body();
+    var profile = Byte.toUnsignedInt(fields[2]) >> 1;
+    var level = ((fields[2] & 0x01) << 5) | (Byte.toUnsignedInt(fields[3]) >> 3);
+    var compatibility = Byte.toUnsignedInt(fields[4]) >> 4;
+    var compression = (fields[4] >> 2) & 0x03;
+    return new RecordFields(records.getFirst().type(), profile, level, compatibility, compression);
+  }
+
+  // The NAL unit types of the hvcC arrays that hold at least one NAL unit.
+  private static List<Integer> hvccArrayTypes(byte[] initialization) {
+    var hvcC = ByteBuffer.wrap(child(sampleEntry(initialization), 78, "hvcC"));
+    hvcC.position(22);
+    var arrays = Byte.toUnsignedInt(hvcC.get());
+    var types = new ArrayList<Integer>();
+    for (var array = 0; array < arrays; array++) {
+      var type = Byte.toUnsignedInt(hvcC.get()) & 0x3F;
+      var units = Short.toUnsignedInt(hvcC.getShort());
+      for (var unit = 0; unit < units; unit++) {
+        var length = Short.toUnsignedInt(hvcC.getShort());
+        hvcC.position(hvcC.position() + length);
+      }
+
+      if (units > 0) {
+        types.add(type);
+      }
+    }
+
+    return types;
+  }
+
+  // ffprobe's reading of the delivered stream's sample entry tag and Dolby Vision side data.
+  private static String probed(byte[] delivered) throws Exception {
+    var media = Files.createTempFile(root, "delivered", ".mp4");
+    Files.write(media, delivered);
+    return probed(media);
+  }
+
+  private static String probed(Path media) throws Exception {
+    return runToCompletion(
+        List.of(
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=codec_tag_string:stream_side_data",
+            "-of",
+            "default=nw=1",
+            media.toString()));
   }
 
   // The transfer characteristics of the nclx colr box of the delivered sample entry.

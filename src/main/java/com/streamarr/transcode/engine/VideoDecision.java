@@ -41,6 +41,11 @@ public sealed interface VideoDecision {
 
     public Copy {
       bitstreamRewrites = Set.copyOf(bitstreamRewrites);
+      if (bitstreamRewrites.contains(BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD)
+          && plannedOutput.flatMap(PlannedCopyOutput::dolbyVision).isEmpty()) {
+        throw new IllegalArgumentException(
+            "a copy that normalizes its Dolby Vision record plans a Dolby Vision output");
+      }
     }
 
     @Override

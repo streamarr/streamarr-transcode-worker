@@ -226,6 +226,39 @@ class CodecConfigurationReaderTest {
                 codecString, Optional.of(new PictureFormat(10, ChromaSubsampling.CHROMA_422))));
   }
 
+  // Dolby's codec string for dvh1 names the record's profile and level as two decimal digits each.
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({"dvcC, 01000A3500, dvh1.05.06", "dvvC, 0100106510, dvh1.08.12"})
+  @DisplayName(
+      "Should name the Dolby Vision profile and level of the configuration record in a dvh1 codec"
+          + " string")
+  void shouldNameTheDolbyVisionProfileAndLevelOfTheRecordInADvh1CodecString(
+      String recordType, String recordFields, String codecString) {
+    var hvcC = box("hvcC", hex("01" + "22" + "20000000" + "900000000000" + "5D" + "F000FCFDFAFA"));
+    var record = box(recordType, hex(recordFields + "00".repeat(19)));
+
+    assertThat(
+            CodecConfigurationReader.tracksOf(
+                withVideoSampleEntry(box("dvh1", new byte[78], hvcC, record))))
+        .containsExactly(
+            new Video(
+                codecString, Optional.of(new PictureFormat(10, ChromaSubsampling.CHROMA_420))));
+  }
+
+  @Test
+  @DisplayName(
+      "Should refuse the initialization segment when a dvh1 sample entry holds no Dolby Vision"
+          + " configuration record")
+  void shouldRefuseTheInitializationSegmentWhenADvh1SampleEntryHoldsNoRecord() {
+    var hvcC = box("hvcC", hex("01" + "22" + "20000000" + "900000000000" + "5D" + "F000FCFDFAFA"));
+    var segment = withVideoSampleEntry(box("dvh1", new byte[78], hvcC));
+
+    assertThatThrownBy(() -> CodecConfigurationReader.tracksOf(segment))
+        .isInstanceOfSatisfying(
+            FragmentedMp4Exception.class,
+            exception -> assertThat(exception.getReason()).isEqualTo(Reason.MALFORMED_BOX));
+  }
+
   @ParameterizedTest(name = "{0}")
   @CsvSource({
     "an escaped audio object type, 0, 00, 40, F840, mp4a.40.34",
