@@ -4,9 +4,7 @@ import static com.streamarr.transcode.probe.FfprobeJson.text;
 
 import java.io.IOException;
 import java.nio.BufferUnderflowException;
-import java.nio.channels.FileChannel;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.util.Optional;
 import java.util.regex.Pattern;
 import lombok.extern.slf4j.Slf4j;
@@ -45,7 +43,7 @@ final class Mp4SourceFacts {
       return;
     }
 
-    try (var channel = FileChannel.open(source, StandardOpenOption.READ)) {
+    try (var channel = MediaSourceChannel.openForReading(source)) {
       Mp4MovieBox.majorBrand(channel)
           .filter(MAJOR_BRAND.asMatchPredicate())
           .ifPresent(brand -> format.put(MAJOR_BRAND_KEY, brand));
