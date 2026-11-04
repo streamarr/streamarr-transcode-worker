@@ -457,7 +457,7 @@ class TranscodeWorkerProbeTest {
       worker.start("localhost", 1);
 
       assertThat(runtime.connection().registration().getCapabilities().getProbeVersionsList())
-          .containsExactly(6);
+          .containsExactly(7);
     }
   }
 
@@ -531,7 +531,7 @@ class TranscodeWorkerProbeTest {
   }
 
   @ParameterizedTest(name = "probe version {0}")
-  @ValueSource(ints = {1, 5, 7})
+  @ValueSource(ints = {1, 6, 8})
   @DisplayName(
       "Should fail the probe as an unsupported version when the request names a version the worker"
           + " does not answer")
@@ -1018,14 +1018,22 @@ class TranscodeWorkerProbeTest {
                             .setChannels(6)
                             .setBitrateBitsPerSecond(384_000)
                             .setLanguage("eng")
-                            .setIsDefault(true))
+                            .setIsDefault(true)
+                            .setIsComment(false)
+                            .setIsVisualImpaired(false)
+                            .setIsDescriptions(false)
+                            .setIsOriginal(false)
+                            .setIsDub(false)
+                            .setIsCleanEffects(false)
+                            .setIsDependent(false))
                     .addStreams(
                         ProbeStreamInfo.newBuilder()
                             .setIndex(9)
                             .setCodecType("subtitle")
                             .setCodec("subrip")
                             .setLanguage("fra")
-                            .setIsForced(true))
+                            .setIsForced(true)
+                            .setIsComment(false))
                     .setChosenVideoStreamIndex(4)
                     // Without a time base, the rule cannot scan, so it snaps the base rate.
                     .setFrameRateRule(

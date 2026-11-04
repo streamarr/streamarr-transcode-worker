@@ -37,6 +37,7 @@ import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeKeyframePositionsPart;
 import build.buf.gen.streamarr.transcode.v1.ProbeKeyframes;
+import build.buf.gen.streamarr.transcode.v1.ProbeMediaInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
@@ -103,6 +104,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -255,6 +257,17 @@ class WorkerMediaSmokeTest {
   @TempDir static Path rpuLayoutSources;
   @TempDir static Path interlacedSources;
 
+  // The seven audio dispositions of probe version 7, by the names that ffprobe prints.
+  private static final Map<String, Predicate<ProbeStreamInfo>> AUDIO_DISPOSITIONS =
+      Map.of(
+          "comment", ProbeStreamInfo::getIsComment,
+          "visual_impaired", ProbeStreamInfo::getIsVisualImpaired,
+          "descriptions", ProbeStreamInfo::getIsDescriptions,
+          "original", ProbeStreamInfo::getIsOriginal,
+          "dub", ProbeStreamInfo::getIsDub,
+          "clean_effects", ProbeStreamInfo::getIsCleanEffects,
+          "dependent", ProbeStreamInfo::getIsDependent);
+
   // A source joins only once FFmpeg has written it successfully, so that a later case generates it
   // again instead of reading what a failed or timed-out run left behind.
   private static final Set<Path> generatedSeekableSources = new HashSet<>();
@@ -349,6 +362,312 @@ class WorkerMediaSmokeTest {
 
     // Constrained Baseline at level 1.0.
     assertThat(result.getMedia().getStreams(0).getCodecString()).isEqualTo("avc1.42C00A");
+  }
+
+  @Test
+  @DisplayName(
+      "Should report each audio stream's layout, depth, dispositions and FLAC block size when a"
+          + " worker probes a real Matroska file")
+  void
+      shouldReportEachAudioStreamsLayoutDepthDispositionsAndFlacBlockSizeWhenAWorkerProbesARealFile()
+          throws Exception {
+    var subtitle = root.resolve("commentary.srt");
+    Files.writeString(subtitle, "1\n00:00:00,000 --> 00:00:01,000\nHello\n");
+    var source = root.resolve("audio-facts.mkv");
+    // 24-bit quad FLAC in 144-sample blocks, marked original; quad PCM, whose layout Matroska does
+    // not store; mono AC-3 whose bitstream mode is commentary, which replaces its default
+    // disposition; and a subtitle stream marked as commentary.
+    runFfmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=64x36:rate=24:duration=1",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=1",
+            "-i",
+            subtitle.toString(),
+            "-filter_complex",
+            "[1]asplit=3[a][b][mono];[a]pan=quad|FL=c0|FR=c0|BL=c0|BR=c0[flac];"
+                + "[b]pan=quad|FL=c0|FR=c0|BL=c0|BR=c0[pcm]",
+            "-map",
+            "0:v",
+            "-map",
+            "[flac]",
+            "-map",
+            "[pcm]",
+            "-map",
+            "[mono]",
+            "-map",
+            "2:s",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-c:a:0",
+            "flac",
+            "-sample_fmt:a:0",
+            "s32",
+            "-frame_size:a:0",
+            "144",
+            "-c:a:1",
+            "pcm_s16le",
+            "-c:a:2",
+            "ac3",
+            "-audio_service_type:a:2",
+            "co",
+            "-disposition:a:0",
+            "original",
+            "-disposition:a:2",
+            "default",
+            "-disposition:s:0",
+            "comment",
+            "-c:s",
+            "srt"),
+        source);
+
+    var streams = probeExecutor().probe(source, keyframeRequest()).result().getMedia();
+
+    var flac = streams.getStreams(1);
+    assertThat(flac.getChannelLayout()).isEqualTo("quad");
+    assertThat(flac.getSampleFormat()).isEqualTo("s32");
+    assertThat(flac.getBitDepth()).isEqualTo(24);
+    assertThat(flac.getFlacMinimumBlockSizeSamples()).isEqualTo(144);
+    assertThat(flac.getIsOriginal()).isTrue();
+    var pcm = streams.getStreams(2);
+    assertThat(pcm.hasChannelLayout()).isFalse();
+    assertThat(pcm.getChannels()).isEqualTo(4);
+    assertThat(pcm.getBitDepth()).isEqualTo(16);
+    assertThat(pcm.hasFlacMinimumBlockSizeSamples()).isFalse();
+    var commentary = streams.getStreams(3);
+    assertThat(commentary.getChannelLayout()).isEqualTo("mono");
+    assertThat(commentary.hasBitDepth()).isFalse();
+    assertThat(commentary.getIsComment()).isTrue();
+    assertThat(commentary.getIsDefault()).isFalse();
+    assertThat(streams.getStreams(4).getIsComment()).isTrue();
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("audioDepthCases")
+  @DisplayName(
+      "Should report the sample format and the bit depth that ffprobe prints when a worker probes"
+          + " a real audio stream")
+  void shouldReportSampleFormatAndBitDepthThatFfprobePrintsWhenAWorkerProbesARealAudioStream(
+      AudioDepthCase audioCase) throws Exception {
+    var arguments = new ArrayList<>(List.of("-map", "1:a"));
+    arguments.addAll(audioCase.audioArguments());
+
+    var audio = probeAudioSource("depth." + audioCase.container(), arguments).getStreams(1);
+
+    assertThat(audio.getSampleFormat()).isEqualTo(audioCase.sampleFormat());
+    assertThat(
+            Optional.of(audio)
+                .filter(ProbeStreamInfo::hasBitDepth)
+                .map(ProbeStreamInfo::getBitDepth))
+        .isEqualTo(Optional.ofNullable(audioCase.bitDepth()));
+  }
+
+  // FLAC, ALAC, TrueHD and PCM report a depth. ffprobe prints no depth for AC-3.
+  static Stream<AudioDepthCase> audioDepthCases() {
+    return Stream.of(
+        AudioDepthCase.builder()
+            .audioArguments(List.of("-c:a", "flac", "-sample_fmt", "s16"))
+            .container("mkv")
+            .sampleFormat("s16")
+            .bitDepth(16)
+            .build(),
+        AudioDepthCase.builder()
+            .audioArguments(List.of("-c:a", "pcm_s24le"))
+            .container("mkv")
+            .sampleFormat("s32")
+            .bitDepth(24)
+            .build(),
+        AudioDepthCase.builder()
+            .audioArguments(List.of("-c:a", "alac", "-sample_fmt", "s16p"))
+            .container("mp4")
+            .sampleFormat("s16p")
+            .bitDepth(16)
+            .build(),
+        AudioDepthCase.builder()
+            .audioArguments(List.of("-c:a", "alac", "-sample_fmt", "s32p"))
+            .container("mp4")
+            .sampleFormat("s32p")
+            .bitDepth(24)
+            .build(),
+        // FFmpeg's TrueHD encoder runs only when experimental encoders are allowed.
+        AudioDepthCase.builder()
+            .audioArguments(List.of("-c:a", "truehd", "-strict", "experimental"))
+            .container("mkv")
+            .sampleFormat("s32")
+            .bitDepth(24)
+            .build(),
+        AudioDepthCase.builder()
+            .audioArguments(List.of("-c:a", "ac3"))
+            .container("mkv")
+            .sampleFormat("fltp")
+            .build());
+  }
+
+  // An absent bit depth means that the probe reports none.
+  @Builder
+  private record AudioDepthCase(
+      List<String> audioArguments, String container, String sampleFormat, Integer bitDepth) {
+
+    @Override
+    public String toString() {
+      return String.join(" ", audioArguments) + " in " + container;
+    }
+  }
+
+  @ParameterizedTest(name = "{1}-sample blocks in {0}")
+  @CsvSource({"mkv, 144", "mkv, 4608", "mp4, 144", "mp4, 4608"})
+  @DisplayName(
+      "Should report the STREAMINFO minimum block size of a FLAC stream and none for an ALAC"
+          + " stream when a worker probes a real file")
+  void shouldReportFlacMinimumBlockSizeAndNoneForAlacWhenAWorkerProbesARealFile(
+      String container, int frameSize) throws Exception {
+    var media =
+        probeAudioSource(
+            "block-size." + container,
+            List.of(
+                "-map",
+                "1:a",
+                "-map",
+                "1:a",
+                "-c:a:0",
+                "flac",
+                "-frame_size:a:0",
+                Integer.toString(frameSize),
+                "-c:a:1",
+                "alac"));
+
+    assertThat(media.getStreams(1).getFlacMinimumBlockSizeSamples()).isEqualTo(frameSize);
+    var alac = media.getStreams(2);
+    assertThat(alac.getCodec()).isEqualTo("alac");
+    assertThat(alac.hasFlacMinimumBlockSizeSamples()).isFalse();
+  }
+
+  // Each row sets one disposition on an AAC stream and expects the flags that ffprobe reads back.
+  // Matroska stores the comment, visual impaired and original flags, and a dub as original 0 (RFC
+  // 9559). FFmpeg writes MP4 dispositions as DASH roles, and one role stands for both
+  // visual_impaired and descriptions. MPEG-TS stores one ISO 639 audio type: clean effects,
+  // hearing impaired or visual impaired commentary.
+  @ParameterizedTest(name = "{1} in {0}")
+  @CsvSource(
+      textBlock =
+          """
+          mkv, comment,         comment
+          mkv, visual_impaired, visual_impaired
+          mkv, descriptions,
+          mkv, original,        original
+          mkv, dub,             dub
+          mkv, clean_effects,
+          mkv, dependent,
+          mp4, comment,         comment
+          mp4, visual_impaired, descriptions visual_impaired
+          mp4, descriptions,    descriptions visual_impaired
+          mp4, original,
+          mp4, dub,             dub
+          mp4, clean_effects,
+          mp4, dependent,
+          ts,  comment,
+          ts,  visual_impaired, descriptions visual_impaired
+          ts,  descriptions,
+          ts,  original,
+          ts,  dub,
+          ts,  clean_effects,   clean_effects
+          ts,  dependent,
+          """)
+  @DisplayName(
+      "Should report the audio dispositions that survive the container when a worker probes a real"
+          + " file")
+  void shouldReportAudioDispositionsThatSurviveTheContainerWhenAWorkerProbesARealFile(
+      String container, String disposition, String surviving) throws Exception {
+    var media =
+        probeAudioSource(
+            "disposition." + container,
+            List.of("-map", "1:a", "-c:a", "aac", "-disposition:a", disposition));
+
+    assertThat(audioDispositionsOf(media.getStreams(1))).isEqualTo(flagsNamed(surviving));
+  }
+
+  // Both AC-3 streams carry the comment and visual impaired container flags. The first stream's
+  // bitstream mode is complete main, so ffprobe keeps the flags that the container stores. The
+  // second stream's bitstream mode is music and effects. ffprobe replaces every container flag of
+  // that stream with clean effects, a flag that Matroska and MP4 cannot store.
+  @ParameterizedTest(name = "{0}")
+  @CsvSource(
+      textBlock =
+          """
+          mkv, comment visual_impaired
+          mp4, comment descriptions visual_impaired
+          ts,  descriptions visual_impaired
+          """)
+  @DisplayName(
+      "Should report the bitstream mode's flag instead of the container flags when a worker probes"
+          + " a real AC-3 stream whose mode is not complete main")
+  void shouldReportBitstreamModeFlagInsteadOfContainerFlagsWhenAc3ModeIsNotCompleteMain(
+      String container, String containerFlags) throws Exception {
+    var media =
+        probeAudioSource(
+            "bitstream-mode." + container,
+            List.of(
+                "-map",
+                "1:a",
+                "-map",
+                "1:a",
+                "-c:a",
+                "ac3",
+                "-audio_service_type:a:0",
+                "ma",
+                "-audio_service_type:a:1",
+                "ef",
+                "-disposition:a",
+                "comment+visual_impaired"));
+
+    assertThat(audioDispositionsOf(media.getStreams(1))).isEqualTo(flagsNamed(containerFlags));
+    assertThat(audioDispositionsOf(media.getStreams(2))).containsExactly("clean_effects");
+  }
+
+  // Probes a one-second file whose stream 0 is a 64x36 H.264 picture track, because the probe
+  // fails a file without video. Input 1 is a 48 kHz sine tone for the audio arguments to map.
+  private ProbeMediaInfo probeAudioSource(String fileName, List<String> audioArguments)
+      throws Exception {
+    var source = root.resolve(fileName);
+    var arguments =
+        new ArrayList<>(
+            List.of(
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=64x36:rate=24:duration=1",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000:duration=1",
+                "-map",
+                "0:v",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast"));
+    arguments.addAll(audioArguments);
+    runFfmpeg(arguments, source);
+    return probeExecutor().probe(source, keyframeRequest()).result().getMedia();
+  }
+
+  private static Set<String> audioDispositionsOf(ProbeStreamInfo stream) {
+    return AUDIO_DISPOSITIONS.entrySet().stream()
+        .filter(disposition -> disposition.getValue().test(stream))
+        .map(Map.Entry::getKey)
+        .collect(Collectors.toSet());
+  }
+
+  // A blank CSV cell names no flag.
+  private static Set<String> flagsNamed(String names) {
+    return Optional.ofNullable(names).map(list -> Set.of(list.split(" "))).orElse(Set.of());
   }
 
   @ParameterizedTest(name = "{0}")
