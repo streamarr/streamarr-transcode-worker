@@ -109,6 +109,8 @@ public class FfmpegCommandBuilder {
   // padded audio sample that starts at or after the advertised end.
   private static final Duration PADDED_AUDIO_RUN_PAST_ADVERTISED_END = Duration.ofSeconds(1);
 
+  private static final String STEREO = "stereo";
+
   // The input each audio encoder takes, as FFmpeg 8 negotiates it: the sample formats and rates
   // that the encoder lists, and the channel layout that FFmpeg gives the job's channel count, the
   // encoder's first layout of that count or else FFmpeg's default one. A padded encode converts its
@@ -116,10 +118,10 @@ public class FfmpegCommandBuilder {
   // resampler that met silence instead of the end of its input would change the last source
   // samples it writes, and a conversion split around apad rounds every sample differently.
   private static final Map<Integer, String> DEFAULT_CHANNEL_LAYOUTS =
-      Map.of(1, "mono", 2, "stereo", 6, "5.1", 8, "7.1");
+      Map.of(1, "mono", 2, STEREO, 6, "5.1", 8, "7.1");
 
   private static final Map<Integer, String> AC3_CHANNEL_LAYOUTS =
-      Map.of(1, "mono", 2, "stereo", 6, "5.1(side)");
+      Map.of(1, "mono", 2, STEREO, 6, "5.1(side)");
 
   private static final Map<String, AudioEncoderInput> AUDIO_ENCODER_INPUTS =
       Map.of(
@@ -133,7 +135,7 @@ public class FfmpegCommandBuilder {
           "eac3",
           AudioEncoderInput.of("fltp", "48000|44100|32000", AC3_CHANNEL_LAYOUTS),
           "opus",
-          AudioEncoderInput.of("fltp", "48000", Map.of(1, "mono", 2, "stereo")),
+          AudioEncoderInput.of("fltp", "48000", Map.of(1, "mono", 2, STEREO)),
           "libopus",
           AudioEncoderInput.of("s16|flt", "48000|24000|16000|12000|8000", DEFAULT_CHANNEL_LAYOUTS),
           "flac",

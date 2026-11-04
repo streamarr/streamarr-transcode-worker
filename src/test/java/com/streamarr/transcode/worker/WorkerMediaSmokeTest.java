@@ -4571,8 +4571,8 @@ class WorkerMediaSmokeTest {
     var silenceOnlyUploads =
         execute(engine(softwareCapabilities()), source.getParent(), silenceOnly.build());
 
-    assertThat(silenceOnlyUploads.segments().get("init.mp4"))
-        .isEqualTo(normalUploads.segments().get("init.mp4"));
+    assertThat(silenceOnlyUploads.segments())
+        .containsEntry("init.mp4", normalUploads.segments().get("init.mp4"));
     assertThat(silenceOnlyUploads.names())
         .containsExactlyElementsOf(
             uploadNames(AUDIO_ENDS_LONG_BEFORE_VIDEO_SEGMENT_COUNT).stream()
@@ -4604,8 +4604,8 @@ class WorkerMediaSmokeTest {
     var silenceOnlyUploads =
         execute(engine(softwareCapabilities()), source.getParent(), silenceOnly.build());
 
-    assertThat(silenceOnlyUploads.segments().get("init.mp4"))
-        .isEqualTo(normalUploads.segments().get("init.mp4"));
+    assertThat(silenceOnlyUploads.segments())
+        .containsEntry("init.mp4", normalUploads.segments().get("init.mp4"));
     assertThat(silenceOnlyUploads.names())
         .containsExactlyElementsOf(
             uploadNames(segmentCount).stream()
