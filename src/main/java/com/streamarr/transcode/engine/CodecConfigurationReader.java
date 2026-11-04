@@ -9,6 +9,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 
 /**
@@ -106,6 +107,20 @@ final class CodecConfigurationReader {
               .containsAll(HEVC_PARAMETER_SET_TYPES);
       default -> true;
     };
+  }
+
+  /**
+   * The transfer characteristics (ITU-T H.273 table 3) that a visual sample entry's {@code nclx}
+   * colr box declares (ISO/IEC 14496-12 12.1.5); empty when it holds no such box.
+   *
+   * @throws FragmentedMp4Exception when the colr box ends before its transfer does
+   */
+  static OptionalInt transferCharacteristicsOf(BoxView sampleEntry) {
+    return sampleEntry.after(VISUAL_SAMPLE_ENTRY_BYTES).children("colr").stream()
+        .map(BoxView::fields)
+        .filter(colr -> colr.fourcc().equals("nclx"))
+        .mapToInt(colr -> colr.skip(2).u16())
+        .findFirst();
   }
 
   /**

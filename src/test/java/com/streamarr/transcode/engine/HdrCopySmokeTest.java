@@ -3,6 +3,7 @@ package com.streamarr.transcode.engine;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
+import com.streamarr.transcode.engine.AttemptOutcome.Failed;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -22,6 +23,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -46,14 +48,19 @@ class HdrCopySmokeTest {
   private static final int SUFFIX_SEI = 40;
   private static final int MASTERING_DISPLAY = 137;
   private static final int CONTENT_LIGHT_LEVEL = 144;
+  // ITU-T H.273 table 3.
+  private static final int PQ_TRANSFER = 16;
+  private static final int HLG_TRANSFER = 18;
   private static final List<String> SAMPLE_ENTRY_PATH =
       List.of("moov", "trak", "mdia", "minf", "stbl", "stsd");
 
   @TempDir static Path root;
   private static Path hdr10;
+  private static Path hlg;
 
   @BeforeAll
   static void writeTheSources() throws Exception {
+    hlg = encoded("hlg", "arib-std-b67", "");
     hdr10 =
         encoded(
             "hdr10",
@@ -116,6 +123,48 @@ class HdrCopySmokeTest {
             List.of(List.of(new SeiMessage(CONTENT_LIGHT_LEVEL, contentLightLevelPayload())))),
         new PartialStaticMetadata(
             "neither message", PlannedCopyOutputs.pqOutputBuilder().build(), List.of()));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = VideoDynamicRange.CompatibleBase.class,
+      names = {"PQ", "HLG"})
+  @DisplayName(
+      "Should deliver a colr box with the planned range's transfer when the copy plans the range"
+          + " of its source")
+  void shouldDeliverAColrBoxWithThePlannedTransferWhenTheCopyPlansTheRangeOfItsSource(
+      VideoDynamicRange.CompatibleBase base) throws Exception {
+    var colrCase =
+        switch (base) {
+          case PQ -> new ColrCase(hdr10, PlannedCopyOutputs.pq(), PQ_TRANSFER);
+          case HLG -> new ColrCase(hlg, PlannedCopyOutputs.hlg(), HLG_TRANSFER);
+          default -> throw new AssertionError(base);
+        };
+
+    var delivered =
+        copied(
+            colrCase.source(),
+            hdr10Copy(PlannedCopyOutput.builder().dynamicRange(colrCase.range()).build()),
+            0);
+
+    assertThat(transferOf(delivered)).isEqualTo(colrCase.transfer());
+  }
+
+  // A source of the range, and the transfer that its copy's colr box declares.
+  private record ColrCase(Path source, VideoDynamicRange range, int transfer) {}
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt as an output mismatch when the copy plans a PQ output of an HLG"
+          + " source")
+  void shouldFailTheAttemptAsAnOutputMismatchWhenTheCopyPlansAPqOutputOfAnHlgSource()
+      throws Exception {
+    var outcome = outcomeOf(hlg, hdr10Copy(PlannedCopyOutputs.pqOutputBuilder().build()));
+
+    assertThat(outcome)
+        .isInstanceOfSatisfying(
+            Failed.class,
+            failed -> assertThat(failed.reason()).isEqualTo(ProducerFailure.OUTPUT_MISMATCH));
   }
 
   // The planned output and the SEI messages of each SEI NAL unit in the delivered hvcC.
@@ -215,26 +264,49 @@ class HdrCopySmokeTest {
     return muxed;
   }
 
+  private static AttemptOutcome outcomeOf(Path source, VideoDecision.Copy copy) throws Exception {
+    var producer =
+        engine()
+            .startProducer(
+                request(source, copy, 0),
+                new RecordingSegmentSink(),
+                SegmentMemoryBudget.forSlots(1));
+    return producer.outcome().get(OUTCOME_LIMIT.toSeconds(), TimeUnit.SECONDS);
+  }
+
   private static byte[] copied(Path source, VideoDecision.Copy copy, int firstSegment)
       throws Exception {
-    var capabilities = new TranscodeCapabilityService("ffmpeg", ProcessBuilder::start);
-    capabilities.detectCapabilities();
-    assertThat(capabilities.isFfmpegAvailable()).as(capabilities.getUnavailableReason()).isTrue();
-    var engine =
-        FfmpegTranscodeEngine.builder()
-            .commandBuilder(new FfmpegCommandBuilder("ffmpeg", FRAGMENTATION_TARGET))
-            .capabilityService(capabilities)
-            .launcher(new ProcessBuilderLauncher())
-            .encoderStallTimeout(FfmpegTranscodeEngine.DEFAULT_ENCODER_STALL_TIMEOUT)
-            .build();
     var sink = new RecordingSegmentSink();
 
     var producer =
-        engine.startProducer(
-            request(source, copy, firstSegment), sink, SegmentMemoryBudget.forSlots(1));
+        engine()
+            .startProducer(
+                request(source, copy, firstSegment), sink, SegmentMemoryBudget.forSlots(1));
 
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isInstanceOf(Completed.class);
     return sink.contentOf("init.mp4");
+  }
+
+  private static FfmpegTranscodeEngine engine() {
+    var capabilities = new TranscodeCapabilityService("ffmpeg", ProcessBuilder::start);
+    capabilities.detectCapabilities();
+    assertThat(capabilities.isFfmpegAvailable()).as(capabilities.getUnavailableReason()).isTrue();
+    return FfmpegTranscodeEngine.builder()
+        .commandBuilder(new FfmpegCommandBuilder("ffmpeg", FRAGMENTATION_TARGET))
+        .capabilityService(capabilities)
+        .launcher(new ProcessBuilderLauncher())
+        .encoderStallTimeout(FfmpegTranscodeEngine.DEFAULT_ENCODER_STALL_TIMEOUT)
+        .build();
+  }
+
+  // The transfer characteristics of the nclx colr box of the delivered sample entry.
+  private static int transferOf(byte[] initialization) {
+    var colr = ByteBuffer.wrap(child(sampleEntry(initialization), 78, "colr"));
+    var colourType = new byte[4];
+    colr.get(colourType);
+    assertThat(new String(colourType, StandardCharsets.US_ASCII)).isEqualTo("nclx");
+    colr.getShort();
+    return Short.toUnsignedInt(colr.getShort());
   }
 
   private static TranscodeRequest request(Path source, VideoDecision.Copy copy, int firstSegment) {

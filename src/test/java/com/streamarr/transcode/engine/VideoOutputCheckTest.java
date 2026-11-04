@@ -17,6 +17,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -137,6 +138,67 @@ class VideoOutputCheckTest {
                 PlannedCopyOutputs.CONTENT_LIGHT_LEVEL_SEI));
 
     assertThatNoException().isThrownBy(() -> VideoOutputCheck.requireMatch(copy, segment));
+  }
+
+  @ParameterizedTest(name = "{0} with transfer {1}")
+  @CsvSource({"PQ, 18", "PQ, 1", "HLG, 16", "SDR, 16", "SDR, 18"})
+  @DisplayName(
+      "Should refuse the copy as an output mismatch when its colr box declares another transfer"
+          + " than the planned range")
+  void shouldRefuseTheCopyWhenItsColrBoxDeclaresAnotherTransferThanThePlannedRange(
+      VideoDynamicRange.CompatibleBase base, int transfer) {
+    var copy = copyPlanning(outputOn(base));
+    var segment = hevcSegmentWith(colr(transfer));
+
+    assertThatThrownBy(() -> VideoOutputCheck.requireMatch(copy, segment))
+        .isInstanceOfSatisfying(
+            FragmentedMp4Exception.class,
+            exception -> assertThat(exception.getReason()).isEqualTo(Reason.OUTPUT_MISMATCH));
+  }
+
+  // BT.2100 PQ is transfer 16 and HLG is 18 (ITU-T H.273 table 3); NONE, the base of profile 5,
+  // has no transfer that a player reads from colr.
+  @ParameterizedTest(name = "{0} with transfer {1}")
+  @CsvSource({"PQ, 16", "HLG, 18", "SDR, 1", "SDR, 2", "NONE, 16", "NONE, 2"})
+  @DisplayName(
+      "Should accept the copy when its colr box declares the transfer of the planned range")
+  void shouldAcceptTheCopyWhenItsColrBoxDeclaresTheTransferOfThePlannedRange(
+      VideoDynamicRange.CompatibleBase base, int transfer) {
+    var copy = copyPlanning(outputOn(base));
+    var segment = hevcSegmentWith(colr(transfer));
+
+    assertThatNoException().isThrownBy(() -> VideoOutputCheck.requireMatch(copy, segment));
+  }
+
+  // FFmpeg writes no colr box for a source that signals no colour; the SPS then tells the player.
+  @Test
+  @DisplayName("Should accept a copy with a planned PQ output when it has no colr box")
+  void shouldAcceptACopyWithAPlannedPqOutputWhenItHasNoColrBox() {
+    var copy = copyPlanning(PlannedCopyOutputs.pqOutputBuilder().build());
+    var segment = hevcSegmentWith(new byte[0]);
+
+    assertThatNoException().isThrownBy(() -> VideoOutputCheck.requireMatch(copy, segment));
+  }
+
+  private static PlannedCopyOutput outputOn(VideoDynamicRange.CompatibleBase base) {
+    return PlannedCopyOutput.builder()
+        .dynamicRange(
+            new VideoDynamicRange(
+                base,
+                VideoDynamicRange.Presence.ABSENT,
+                new VideoDynamicRange.DolbyVision.Absent()))
+        .build();
+  }
+
+  // An nclx colr box: BT.2020 primaries and matrix, the transfer, and limited range.
+  private static byte[] colr(int transfer) {
+    return box(
+        "colr",
+        IsoBoxes.fourcc("nclx"),
+        IsoBoxes.u16(9),
+        IsoBoxes.u16(transfer),
+        IsoBoxes.u16(9),
+        new byte[] {0});
   }
 
   // The planned output, and the SEI NAL units that the record holds in one prefix SEI array.
