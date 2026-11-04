@@ -3,6 +3,7 @@ package com.streamarr.transcode.worker;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engine;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
+import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.startVariant;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variantJobBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -31,6 +32,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.boot.availability.AvailabilityChangeEvent;
@@ -45,6 +47,8 @@ import org.springframework.context.annotation.Import;
 @DisplayName("Worker Actuator Integration Tests")
 @Timeout(value = 2, unit = TimeUnit.MINUTES)
 class WorkerHealthServerIT {
+
+  private static final long MIB = 1024 * 1024;
 
   @TempDir Path directory;
 
@@ -227,9 +231,41 @@ class WorkerHealthServerIT {
     }
   }
 
+  // Each copy holds up to 256 MiB of FFmpeg's output in the heap, beside a 512 MiB reserve and the
+  // 256 MiB of each of the worker's two slots: 1536 MiB hold two copies, 1279 MiB none.
+  @ParameterizedTest
+  @CsvSource({"1536, 0, 0.0", "1536, 1, 0.5", "1536, 2, 1.0", "1279, 0, 1.0"})
+  @DisplayName(
+      "Should report the share of the copies that the worker's heap holds that run as its copy"
+          + " fullness")
+  void shouldReportTheShareOfTheCopiesThatTheWorkersHeapHoldsThatRunAsItsCopyFullness(
+      int heapMiB, int runningCopies, double fullness) throws Exception {
+    Files.writeString(directory.resolve("movie.mkv"), "media");
+    var runtime = new ScriptedWorkerRuntime();
+    try (var worker =
+            workerBuilder(directory)
+                .runtime(runtime)
+                .engine(engine(ScriptedProcessLauncher.running()))
+                .maximumHeapBytes(heapMiB * MIB)
+                .build();
+        var application = healthApplication(worker);
+        var client = HttpClient.newHttpClient()) {
+      worker.start("localhost", 1);
+      for (var copy = 0; copy < runningCopies; copy++) {
+        startVariant(runtime.connection(), variantJobBuilder().build());
+      }
+
+      var response =
+          health(client, endpoint(application, "/actuator/metrics/streamarr.worker.copy_fullness"));
+
+      assertThat(response.statusCode()).isEqualTo(200);
+      assertThat(response.body()).contains("\"value\":" + fullness);
+    }
+  }
+
   @Test
-  @DisplayName("Should expose only health over HTTP when the management server starts")
-  void shouldExposeOnlyHealthOverHttpWhenTheManagementServerStarts() throws Exception {
+  @DisplayName("Should expose only health and metrics over HTTP when the management server starts")
+  void shouldExposeOnlyHealthAndMetricsOverHttpWhenTheManagementServerStarts() throws Exception {
     try (var worker = workerBuilder(directory).runtime(new ScriptedWorkerRuntime()).build();
         var application = healthApplication(worker);
         var client = HttpClient.newHttpClient()) {

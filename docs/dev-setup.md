@@ -78,6 +78,8 @@ It should report `UTF-8`. To recover, correct the locale and restart the worker.
 
 Spring Boot Actuator serves `/actuator/health/liveness` and `/actuator/health/readiness` on port `9091`. Readiness requires an accepted server session; a worker with all slots occupied remains ready.
 
+`/actuator/metrics/streamarr.worker.copy_fullness` reports the share of the copies that the worker's heap holds that run now, from 0 to 1, and 1 when the heap holds none. An autoscaler can read it, for example KEDA's Metrics API scaler with `valueLocation: measurements.0.value`, to add workers before copies are refused.
+
 At startup the worker waits for the server to accept its session, so the two can start in either order. Losing the server session stops active work and exits the worker process. A deployment supervisor should restart it. During shutdown, the worker asks each FFmpeg process to quit and waits for it to exit.
 
 ### Deploying Beyond Local Development

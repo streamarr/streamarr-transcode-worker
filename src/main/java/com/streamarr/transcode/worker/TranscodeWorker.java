@@ -168,6 +168,18 @@ public final class TranscodeWorker implements AutoCloseable {
   }
 
   /**
+   * The share of the copies that the worker's heap holds that run now, from 0 to 1; 1 when the heap
+   * holds none, so an autoscaler reads a worker that cannot copy as full.
+   */
+  public synchronized double copyFullness() {
+    if (maximumCopies == 0) {
+      return 1;
+    }
+
+    return (double) attemptsInUse(true) / maximumCopies;
+  }
+
+  /**
    * Connects to the server and waits until it accepts the worker session. The wait spans a server
    * that is still starting, up to the configured session acceptance timeout, and ends early when
    * the worker closes.
