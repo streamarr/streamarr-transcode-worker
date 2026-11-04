@@ -437,6 +437,89 @@ class FfprobeExecutorBitrateScanTest {
   }
 
   @Test
+  @DisplayName(
+      "Should measure the chunk when the demuxer logs an error only past the packet that ended"
+          + " the listing")
+  void shouldMeasureTheChunkWhenTheDemuxerLogsAnErrorOnlyPastThePacketThatEndedTheListing() {
+    // The audio packet at 2.625 s on the demuxer's timeline, the 16th, passes the chunk's end
+    // after the video's end keyframe, so the listing needs no later packet. ffprobe printed ahead
+    // of the listing's reader and read on to an 18th packet that the source cuts short.
+    var ffprobe =
+        keptAacSource().listing(FROM_FILE_START, WHOLE_FILE).demuxerErrorAtPacket(18).build();
+
+    var report = ffprobe.executor().probe(SOURCE, request(POSITIONS.chunk(0, 2)));
+
+    assertThat(report.result().getBitrateScanChunk().getResultCase())
+        .as("%s", report.result())
+        .isEqualTo(BitrateScanChunkResult.ResultCase.MEASURED);
+    assertThat(intervalCounts(report.streamMeasurementParts()))
+        .containsExactly(
+            Map.entry(0, counts(List.of(1000L + 200, 1001L + 201), List.of(2L, 2L))),
+            Map.entry(
+                1, counts(List.of(10L + 11 + 12 + 13 + 14, 15L + 16 + 17 + 18), List.of(5L, 4L))));
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the chunk as invalid media when the demuxer logs an error while it reads the"
+          + " packet that ended the listing")
+  void shouldFailTheChunkAsInvalidMediaWhenTheDemuxerLogsAnErrorWhileItReadsThePacketThatEnded() {
+    // A demuxer that resyncs after an error can drop packets before the one it then returns.
+    var ffprobe =
+        keptAacSource().listing(FROM_FILE_START, WHOLE_FILE).demuxerErrorAtPacket(16).build();
+
+    var report = ffprobe.executor().probe(SOURCE, request(POSITIONS.chunk(0, 2)));
+
+    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_INVALID_MEDIA);
+    assertThat(report.streamMeasurementParts()).isEmpty();
+  }
+
+  @Test
+  @DisplayName(
+      "Should measure a chunk listed from a seek when the demuxer logs an error only past the"
+          + " packet that ended the listing")
+  void shouldMeasureAChunkListedFromASeekWhenTheDemuxerLogsAnErrorOnlyPastThePacketThatEnded() {
+    // The end keyframe, the 5th packet, ends the listing, and the 7th is cut short.
+    var afterTheSeek =
+        """
+        stream_index=0|pts=20500|dts=20500|duration=500|size=1001|flags=K__
+        stream_index=1|pts=20250|dts=20250|duration=250|size=9|flags=K__
+        stream_index=1|pts=20500|dts=20500|duration=250|size=10|flags=K__
+        stream_index=1|pts=40500|dts=40500|duration=250|size=11|flags=K__
+        stream_index=0|pts=40500|dts=40500|duration=500|size=1002|flags=K__
+        stream_index=0|pts=41000|dts=41000|duration=500|size=202|flags=___
+        stream_index=1|pts=40750|dts=40750|duration=250|size=12|flags=K__
+        """;
+    var ffprobe =
+        keptAacSource().listing("10.500000", afterTheSeek).demuxerErrorAtPacket(7).build();
+
+    var report = ffprobe.executor().probe(SOURCE, request(TWENTY_SECOND_KEYFRAMES.chunk(1, 2)));
+
+    assertThat(intervalCounts(report.streamMeasurementParts()))
+        .containsExactly(
+            Map.entry(0, counts(List.of(1001L), List.of(1L))),
+            Map.entry(1, counts(List.of(10L), List.of(1L))));
+  }
+
+  @Test
+  @DisplayName(
+      "Should report an execution failure when the listing of the packets that a stopped listing"
+          + " took exits with an error")
+  void shouldReportAnExecutionFailureWhenTheListingOfThePacketsTakenExitsWithAnError() {
+    // The first listing's exit code tells nothing, as the chunk stopped it.
+    var ffprobe =
+        keptAacSource()
+            .listing(FROM_FILE_START, WHOLE_FILE)
+            .demuxerErrorAtPacket(18)
+            .listingExitCode(1)
+            .build();
+
+    var report = ffprobe.executor().probe(SOURCE, request(POSITIONS.chunk(0, 2)));
+
+    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_EXECUTION_FAILED);
+  }
+
+  @Test
   @DisplayName("Should measure the chunk when only a decoder logs an error during the listing")
   void shouldMeasureTheChunkWhenOnlyADecoderLogsAnErrorDuringTheListing() {
     var ffprobe =
@@ -1768,7 +1851,11 @@ class FfprobeExecutorBitrateScanTest {
    * Answers the chunk's ffprobe runs: the streams and format, each stream's extradata, the first
    * AAC packet, the time of an audio stream's first packet, and a packet listing for each read
    * interval start, {@code ""} for one from the file's start. The listing's diagnostics and exit
-   * code are the same for every start.
+   * code are the same for every start. A read interval that ends after a count of packets prints no
+   * more than that count. When {@code demuxerErrorAtPacket} names a packet of the listing, counted
+   * from 1, its read logs a demuxer error, and ffprobe reads it when the listing prints the packet
+   * before it: ffprobe reads one packet past those it prints, and past the last one reads the
+   * file's end.
    */
   @Builder
   record ScriptedSource(
@@ -1782,6 +1869,7 @@ class FfprobeExecutorBitrateScanTest {
       int firstPacketTimeExitCode,
       @Singular Map<String, String> listings,
       String listingDiagnostics,
+      Integer demuxerErrorAtPacket,
       int listingExitCode,
       List<ProbeCommand> commands,
       List<String> listingStarts) {
@@ -1799,14 +1887,7 @@ class FfprobeExecutorBitrateScanTest {
       commands.add(command);
       var arguments = command.arguments();
       if (arguments.contains(LISTING_ENTRIES)) {
-        var interval = arguments.indexOf("-read_intervals");
-        var start = interval < 0 ? FROM_FILE_START : arguments.get(interval + 1).replace("%", "");
-        listingStarts.add(start);
-        assertThat(listings).as("a listing from %s", start).containsKey(start);
-        return new ScriptedProcess(
-            listings.get(start),
-            listingDiagnostics == null ? "" : listingDiagnostics,
-            listingExitCode);
+        return listing(arguments);
       }
 
       if (arguments.contains(FIRST_PACKET_TIME_ENTRIES)) {
@@ -1834,6 +1915,28 @@ class FfprobeExecutorBitrateScanTest {
       }
 
       return new ScriptedProcess(streams, "", streamsExitCode);
+    }
+
+    private Process listing(List<String> arguments) {
+      var interval = arguments.indexOf("-read_intervals");
+      var readInterval = interval < 0 ? "%" : arguments.get(interval + 1);
+      var start = readInterval.substring(0, readInterval.indexOf('%'));
+      var packetCount = readInterval.substring(readInterval.indexOf('%') + 1);
+      listingStarts.add(start);
+      assertThat(listings).as("a listing from %s", start).containsKey(start);
+      var lines = listings.get(start).lines().toList();
+      var printed = lines.size();
+      if (!packetCount.isEmpty()) {
+        printed = Math.min(printed, Integer.parseInt(packetCount.replace("+#", "")));
+      }
+
+      var diagnostics = listingDiagnostics == null ? "" : listingDiagnostics;
+      if (demuxerErrorAtPacket != null && demuxerErrorAtPacket <= printed + 1) {
+        diagnostics += "[matroska,webm @ 0x5582] File ended prematurely at pos. 169438\n";
+      }
+
+      var stdout = lines.subList(0, printed).stream().map(line -> line + "\n");
+      return new ScriptedProcess(stdout.reduce("", String::concat), diagnostics, listingExitCode);
     }
 
     private String firstAudioPacketRead() {
