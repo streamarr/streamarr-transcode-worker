@@ -1,0 +1,12 @@
+#!/bin/bash
+# Compiles landlock-exec from this buildpack's source into the executable named by the argument.
+# The build image, CI's smoke job and developers all compile it this way; it is never committed.
+
+set -euo pipefail
+
+output="${1:?Usage: compile <output executable>}"
+buildpack_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+mkdir -p "$(dirname "${output}")"
+"${CC:-cc}" -std=gnu11 -O2 -Wall -Wextra -Werror -static \
+  -o "${output}" "${buildpack_dir}/src/landlock-exec.c"

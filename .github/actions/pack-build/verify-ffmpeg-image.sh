@@ -102,6 +102,22 @@ EXPECTED_FFMPEG_VERSION="${expected_ffmpeg_version}" \
   "${ffprobe}" -v error -select_streams v:0 \
     -show_entries stream=codec_name -of default=noprint_wrappers=1 \
     "${output_dir}/av1.mp4" | grep -Fx 'codec_name=av1'
+
+  # The worker runs both tools through landlock-exec, so the image must carry it, the host's kernel
+  # must offer Landlock, and a ruleset that lists the tools' directory must let ffprobe read a
+  # listed file and nothing else.
+  landlock_exec="$(command -v landlock-exec)"
+  abi="$("${landlock_exec}" --abi)"
+  [[ "${abi}" =~ ^[1-9][0-9]*$ ]]
+  confined=("${landlock_exec}" --read-execute /usr --read-execute /lib --read-execute /lib64
+    --read /etc --read /proc --read /sys --read-execute "$(dirname "${ffprobe}")")
+  "${confined[@]}" --read "${output_dir}" -- "${ffprobe}" -v error \
+    -show_entries format=format_name -of default=noprint_wrappers=1 \
+    "${output_dir}/fragmented.mp4" | grep -F "format_name=mov,mp4"
+  if "${confined[@]}" -- "${ffprobe}" -v quiet -show_format "${output_dir}/fragmented.mp4"; then
+    echo "landlock-exec let ffprobe read a file outside the listed paths" >&2
+    exit 1
+  fi
 SCRIPT
 
 docker run --rm --entrypoint /cnb/lifecycle/launcher "${image}" \

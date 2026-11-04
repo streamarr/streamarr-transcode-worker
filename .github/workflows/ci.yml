@@ -88,6 +88,8 @@ jobs:
           node --test .github/actions/pack-build/*.test.mjs
       - name: Verify analysis failure handling
         run: node --test .github/actions/sonar/test/*.test.mjs
+      - name: Verify the Landlock helper
+        run: node --test buildpacks/landlock/test/*.test.mjs
       - name: Verify the fMP4 fixture recorder
         run: >-
           node --test --experimental-test-coverage

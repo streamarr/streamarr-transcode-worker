@@ -13,6 +13,7 @@ pack build "$image" \
   --builder paketobuildpacks/ubuntu-noble-builder:0.0.190 \
   --buildpack paketo-buildpacks/java \
   --buildpack ./buildpacks/ffmpeg \
+  --buildpack ./buildpacks/landlock \
   --env BP_JVM_VERSION=25 \
   --env "BP_OCI_SOURCE=https://github.com/streamarr/streamarr-transcode-worker" \
   --env "BP_OCI_REVISION=$revision" \
