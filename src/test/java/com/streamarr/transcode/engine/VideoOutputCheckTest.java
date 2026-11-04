@@ -214,28 +214,31 @@ class VideoOutputCheckTest {
     return Stream.of(
         new DolbyVisionCase("no record", profile81, "hvc1", new byte[0]),
         new DolbyVisionCase(
-            "a record of another level", profile81, "hvc1", record("dvvC", "0100102D10")),
+            "a record of another level", profile81, "hvc1", recordBox("dvvC", "0100102D10")),
         new DolbyVisionCase(
-            "a record of another compatibility", profile81, "hvc1", record("dvvC", "0100103520")),
+            "a record of another compatibility",
+            profile81,
+            "hvc1",
+            recordBox("dvvC", "0100103520")),
         new DolbyVisionCase(
             "two records",
             profile81,
             "hvc1",
-            IsoBoxes.concat(record("dvvC", "0100103510"), record("dvvC", "0100103510"))),
+            IsoBoxes.concat(recordBox("dvvC", "0100103510"), recordBox("dvvC", "0100103510"))),
         new DolbyVisionCase(
             "compression 3 where the copy normalizes the record",
             copyPlanningDolbyVision(SYNTHETIC_HEVC_CODEC_STRING, profile8Level6())
                 .bitstreamRewrites(Set.of(BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD))
                 .build(),
             "hvc1",
-            record("dvvC", "010010351C")),
+            recordBox("dvvC", "010010351C")),
         new DolbyVisionCase(
             "a dvcC record of profile 8 where the copy normalizes the record",
             copyPlanningDolbyVision(SYNTHETIC_HEVC_CODEC_STRING, profile8Level6())
                 .bitstreamRewrites(Set.of(BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD))
                 .build(),
             "hvc1",
-            record("dvcC", "0100103510")),
+            recordBox("dvcC", "0100103510")),
         new DolbyVisionCase(
             "an hvc1 entry where the copy plans dvh1",
             copyPlanningDolbyVision(
@@ -248,7 +251,7 @@ class VideoOutputCheckTest {
                         .build())
                 .build(),
             "hvc1",
-            record("dvcC", "01000A3500")));
+            recordBox("dvcC", "01000A3500")));
   }
 
   @ParameterizedTest(name = "{0}")
@@ -271,7 +274,7 @@ class VideoOutputCheckTest {
             "profile 8.1 under hvc1 with the source's compression",
             copyPlanningDolbyVision(SYNTHETIC_HEVC_CODEC_STRING, profile8Level6()).build(),
             "hvc1",
-            record("dvvC", "010010351C")),
+            recordBox("dvvC", "010010351C")),
         new DolbyVisionCase(
             "profile 5 under dvh1 with a normalized record",
             copyPlanningDolbyVision(
@@ -285,7 +288,7 @@ class VideoOutputCheckTest {
                 .bitstreamRewrites(Set.of(BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD))
                 .build(),
             "dvh1",
-            record("dvcC", "01000A3500")));
+            recordBox("dvcC", "01000A3500")));
   }
 
   // The copy, and the sample entry type and Dolby Vision record boxes of its segment.
@@ -320,7 +323,7 @@ class VideoOutputCheckTest {
   }
 
   // A Dolby Vision configuration record box: its first 5 bytes, then 19 reserved zero bytes.
-  private static byte[] record(String type, String firstFields) {
+  private static byte[] recordBox(String type, String firstFields) {
     return box(type, HexFormat.of().parseHex(firstFields + "00".repeat(19)));
   }
 

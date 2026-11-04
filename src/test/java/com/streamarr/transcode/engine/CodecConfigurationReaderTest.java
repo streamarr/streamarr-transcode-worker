@@ -235,11 +235,11 @@ class CodecConfigurationReaderTest {
   void shouldNameTheDolbyVisionProfileAndLevelOfTheRecordInADvh1CodecString(
       String recordType, String recordFields, String codecString) {
     var hvcC = box("hvcC", hex("01" + "22" + "20000000" + "900000000000" + "5D" + "F000FCFDFAFA"));
-    var record = box(recordType, hex(recordFields + "00".repeat(19)));
+    var configuration = box(recordType, hex(recordFields + "00".repeat(19)));
 
     assertThat(
             CodecConfigurationReader.tracksOf(
-                withVideoSampleEntry(box("dvh1", new byte[78], hvcC, record))))
+                withVideoSampleEntry(box("dvh1", new byte[78], hvcC, configuration))))
         .containsExactly(
             new Video(
                 codecString, Optional.of(new PictureFormat(10, ChromaSubsampling.CHROMA_420))));

@@ -121,22 +121,22 @@ final class VideoOutputCheck {
               + " Dolby Vision configuration records where the copy plans one");
     }
 
-    var record = records.getFirst();
-    if (record.profile() != output.profile()
-        || record.level() != output.level()
-        || record.compatibilityId() != output.baseLayerCompatibilityId()) {
+    var configuration = records.getFirst();
+    if (configuration.profile() != output.profile()
+        || configuration.level() != output.level()
+        || configuration.compatibilityId() != output.baseLayerCompatibilityId()) {
       throw mismatch(
           "the Dolby Vision configuration record declares "
-              + record
+              + configuration
               + " where the copy plans "
               + output);
     }
 
     if (copy.lists(BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD)
-        && !record.equals(DolbyVisionRecord.normalizedFor(output))) {
+        && !configuration.equals(DolbyVisionRecord.normalizedFor(output))) {
       throw mismatch(
           "the Dolby Vision configuration record declares "
-              + record
+              + configuration
               + " where the copy normalizes it to "
               + DolbyVisionRecord.normalizedFor(output));
     }

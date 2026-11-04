@@ -2328,8 +2328,7 @@ class ProducerTest {
   @DisplayName(
       "Should deliver the same initialization segment from attempts whose FFmpeg records hold"
           + " different SEI messages when the copy plans static HDR metadata")
-  void shouldDeliverTheSameInitializationSegmentWhenTheFfmpegRecordsHoldDifferentSeiMessages()
-      throws Exception {
+  void shouldDeliverTheSameInitializationSegmentWhenTheFfmpegRecordsHoldDifferentSeiMessages() {
     var planned =
         PlannedCopyOutputs.pqOutputBuilder()
             .masteringDisplay(Optional.of(PlannedCopyOutputs.MASTERING_DISPLAY))
@@ -2467,9 +2466,9 @@ class ProducerTest {
             .start();
 
     assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
-    assertThat(sink.contentOf("init.mp4").length)
+    assertThat(sink.contentOf("init.mp4"))
         .as("the delivered initialization segment")
-        .isGreaterThan(hevcInitializationSegment(hvc1Entry(HVC1_PARAMETER_SET_RECORD)).length);
+        .hasSizeGreaterThan(hevcInitializationSegment(hvc1Entry(HVC1_PARAMETER_SET_RECORD)).length);
     assertReleasesEveryReservedByte(workerBudget);
   }
 

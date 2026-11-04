@@ -237,12 +237,16 @@ class HdrCopySmokeTest {
     var sink = copiedSink(source, copy, 0);
 
     var initialization = sink.contentOf("init.mp4");
-    var record = recordFieldsOf(initialization);
-    assertThat(record).isEqualTo(new RecordFields("dvcC", 5, 1, 0, 0));
-    assertThat(PROFILE_5_CODEC_STRING)
-        .isEqualTo(
+    var configuration = recordFieldsOf(initialization);
+    assertThat(configuration).isEqualTo(new RecordFields("dvcC", 5, 1, 0, 0));
+    assertThat(
             "%s.%02d.%02d"
-                .formatted(sampleEntry(initialization).type(), record.profile(), record.level()));
+                .formatted(
+                    sampleEntry(initialization).type(),
+                    configuration.profile(),
+                    configuration.level()))
+        .as("the codec string of the delivered sample entry and record")
+        .isEqualTo(PROFILE_5_CODEC_STRING);
     assertThat(hvccArrayTypes(initialization)).contains(32, 33, 34);
     assertThat(probed(sink.acceptedBytes()))
         .contains("codec_tag_string=dvh1", "dv_profile=5", "dv_level=1");
@@ -412,7 +416,7 @@ class HdrCopySmokeTest {
   }
 
   private static RecordingSegmentSink copiedSink(
-      Path source, VideoDecision.Copy copy, int firstSegment) throws Exception {
+      Path source, VideoDecision.Copy copy, int firstSegment) {
     var sink = new RecordingSegmentSink();
 
     var producer =
@@ -441,7 +445,7 @@ class HdrCopySmokeTest {
   private static Path withDolbyVisionRecord(
       Path source, String sampleEntryType, String recordType, String recordFields)
       throws IOException {
-    var record = box(recordType, HexFormat.of().parseHex(recordFields + "00".repeat(19)));
+    var configuration = box(recordType, HexFormat.of().parseHex(recordFields + "00".repeat(19)));
     var rebuilt = new ByteArrayOutputStream();
     var passedMdat = false;
     for (var top : children(new Box("file", Files.readAllBytes(source)), 0)) {
@@ -449,7 +453,7 @@ class HdrCopySmokeTest {
       var body = top.body();
       if (top.type().equals("moov")) {
         assertThat(passedMdat).as("the moov follows the mdat").isTrue();
-        body = appended(top, SAMPLE_ENTRY_PATH.subList(1, SAMPLE_ENTRY_PATH.size()), record);
+        body = appended(top, SAMPLE_ENTRY_PATH.subList(1, SAMPLE_ENTRY_PATH.size()), configuration);
         body = renamedSampleEntry(body, sampleEntryType);
       }
 

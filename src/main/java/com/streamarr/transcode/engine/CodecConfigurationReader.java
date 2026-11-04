@@ -277,7 +277,7 @@ final class CodecConfigurationReader {
   // record as two decimal digits each, such as dvh1.05.06; the hvcC gives the picture format.
   private static Video dolbyVisionHevc(BoxView children) {
     var hevc = hevc("dvh1", children.requiredChild("hvcC").fields());
-    var record =
+    var configuration =
         DolbyVisionRecord.recordsAmong(children.children()).stream()
             .findFirst()
             .orElseThrow(
@@ -285,7 +285,8 @@ final class CodecConfigurationReader {
                     FragmentedMp4Exception.malformed(
                         "dvh1 holds no Dolby Vision configuration record"));
     var codecString =
-        String.format(Locale.ROOT, "dvh1.%02d.%02d", record.profile(), record.level());
+        String.format(
+            Locale.ROOT, "dvh1.%02d.%02d", configuration.profile(), configuration.level());
     return new Video(codecString, hevc.pictureFormat());
   }
 
