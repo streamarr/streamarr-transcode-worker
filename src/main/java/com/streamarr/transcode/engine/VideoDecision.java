@@ -1,6 +1,7 @@
 package com.streamarr.transcode.engine;
 
 import java.util.Optional;
+import java.util.Set;
 import lombok.Builder;
 import lombok.NonNull;
 
@@ -13,16 +14,43 @@ public sealed interface VideoDecision {
   /** The codec string that every initialization segment of the variant declares for its video. */
   String codecString();
 
+  /** Whether the job lists the bitstream rewrite, which only a stream copy can. */
+  default boolean lists(BitstreamRewrite rewrite) {
+    return false;
+  }
+
   /**
    * A stream copy, whose codec string the probe computed for the source stream.
    *
    * @param keepsPacketBytes whether the copy delivers every packet of the source stream with its
    *     bytes unchanged, which the probe decides from the source's decoder configuration record;
    *     false when the job does not say so
+   * @param bitstreamRewrites the changes that the copy makes to the source's video; empty for a
+   *     copy that passes it through unchanged
    */
   @Builder
-  record Copy(int streamIndex, @NonNull String codecString, boolean keepsPacketBytes)
-      implements VideoDecision {}
+  record Copy(
+      int streamIndex,
+      @NonNull String codecString,
+      boolean keepsPacketBytes,
+      @NonNull Set<BitstreamRewrite> bitstreamRewrites)
+      implements VideoDecision {
+
+    public Copy {
+      bitstreamRewrites = Set.copyOf(bitstreamRewrites);
+    }
+
+    @Override
+    public boolean lists(BitstreamRewrite rewrite) {
+      return bitstreamRewrites.contains(rewrite);
+    }
+
+    // Lombok builder default — its generated setter assigns it
+    @SuppressWarnings({"java:S1068", "java:S9438"})
+    public static class CopyBuilder {
+      private Set<BitstreamRewrite> bitstreamRewrites = Set.of();
+    }
+  }
 
   /**
    * An encode, which forces the codec profile, the tier and the level.

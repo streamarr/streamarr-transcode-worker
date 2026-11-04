@@ -10,6 +10,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.UnaryOperator;
 import java.util.stream.Stream;
@@ -709,6 +710,40 @@ class FfmpegCommandBuilderTest {
                     .videoDecision(VideoDecisionFixtures.copyOf(codecString))
                     .build())
             .build();
+
+    assertThat(command(request, "copy")).containsSequence("-strict", "unofficial");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"hvc1.2.4.L63.90", "av01.0.08M.08"})
+  @DisplayName(
+      "Should keep the mp4 muxer from writing a Dolby Vision configuration record when the copy"
+          + " strips Dolby Vision")
+  void shouldKeepTheMp4MuxerFromWritingADolbyVisionRecordWhenTheCopyStripsDolbyVision(
+      String codecString) {
+    var copy =
+        VideoDecisionFixtures.copyBuilder()
+            .codecString(codecString)
+            .bitstreamRewrites(Set.of(BitstreamRewrite.STRIP_DOLBY_VISION))
+            .build();
+    var request =
+        request(decision(TranscodeMode.AUDIO_TRANSCODE).videoDecision(copy).build()).build();
+
+    assertThat(command(request, "copy")).isNotEmpty().doesNotContain("-strict", "unofficial");
+  }
+
+  @Test
+  @DisplayName(
+      "Should let the mp4 muxer keep the Dolby Vision configuration record when the copy strips"
+          + " only HDR10+")
+  void shouldLetTheMp4MuxerKeepTheDolbyVisionRecordWhenTheCopyStripsOnlyHdr10Plus() {
+    var copy =
+        VideoDecisionFixtures.copyBuilder()
+            .codecString("hvc1.2.4.L63.90")
+            .bitstreamRewrites(Set.of(BitstreamRewrite.STRIP_HDR10_PLUS))
+            .build();
+    var request =
+        request(decision(TranscodeMode.AUDIO_TRANSCODE).videoDecision(copy).build()).build();
 
     assertThat(command(request, "copy")).containsSequence("-strict", "unofficial");
   }

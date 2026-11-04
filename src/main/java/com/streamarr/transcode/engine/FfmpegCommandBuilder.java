@@ -394,7 +394,8 @@ public class FfmpegCommandBuilder {
   }
 
   // A copy of H.264 or HEVC gets the codec family's playable sample entry. The mp4 muxer drops a
-  // Dolby Vision configuration record unless the compliance is unofficial; no encode writes one.
+  // Dolby Vision configuration record unless the compliance is unofficial, which a copy that
+  // strips Dolby Vision therefore keeps; no encode writes one.
   private static List<String> copiedVideoArgs(VideoDecision decision) {
     var args = new ArrayList<String>();
     if (decision instanceof VideoDecision.Copy copy) {
@@ -402,7 +403,10 @@ public class FfmpegCommandBuilder {
           .ifPresent(entry -> args.addAll(sampleEntryArgs(copy, entry)));
     }
 
-    args.addAll(List.of("-strict", "unofficial"));
+    if (!decision.lists(BitstreamRewrite.STRIP_DOLBY_VISION)) {
+      args.addAll(List.of("-strict", "unofficial"));
+    }
+
     return List.copyOf(args);
   }
 

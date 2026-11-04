@@ -1,0 +1,165 @@
+package com.streamarr.transcode.engine;
+
+import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
+import java.io.ByteArrayOutputStream;
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Optional;
+import java.util.stream.IntStream;
+
+/**
+ * Applies the sample rewrites that a copy lists to the video samples of each fragment, and checks
+ * that no rewritten sample still holds what the rewrites strip. A fragment whose video samples keep
+ * their bytes passes unchanged. Any other fragment gets a new {@code mdat} that holds every sample
+ * of its tracks back to back, in their order in the old one, and samples that point into it; its
+ * other boxes stay as read, because a media segment writes its own {@code moof}.
+ */
+final class VideoSampleRewrite {
+
+  private final SampleRewrite sampleRewrite;
+
+  private VideoSampleRewrite(SampleRewrite sampleRewrite) {
+    this.sampleRewrite = sampleRewrite;
+  }
+
+  /**
+   * The rewrite of the copy's samples; empty when the decision lists no bitstream rewrite.
+   *
+   * @throws FragmentedMp4Exception with {@link Reason#OUTPUT_MISMATCH} when the copy lists a
+   *     rewrite for video that is neither HEVC nor AV1, or with {@link Reason#MALFORMED_BOX} when
+   *     the HEVC record declares no usable NAL unit length
+   */
+  static Optional<VideoSampleRewrite> of(VideoDecision decision, InitializationSegment segment) {
+    if (!(decision instanceof VideoDecision.Copy copy) || copy.bitstreamRewrites().isEmpty()) {
+      return Optional.empty();
+    }
+
+    // The output check has already found the video sample entry.
+    var sampleEntry = CodecConfigurationReader.firstVideoSampleEntryOf(segment).orElseThrow();
+    SampleRewrite rewrite =
+        switch (sampleEntry.type()) {
+          case "hvc1", "hev1" ->
+              new HevcSampleRewrite(
+                  CodecConfigurationReader.nalUnitLengthSizeOf(sampleEntry),
+                  copy.bitstreamRewrites());
+          case "av01" -> new Av1SampleRewrite(copy.bitstreamRewrites());
+          default ->
+              throw mismatch(
+                  "the copy lists "
+                      + copy.bitstreamRewrites()
+                      + " for a "
+                      + sampleEntry.type()
+                      + " sample entry, which carries no such content");
+        };
+    return Optional.of(new VideoSampleRewrite(rewrite));
+  }
+
+  /**
+   * The fragment with its video samples rewritten.
+   *
+   * @throws FragmentedMp4Exception with {@link Reason#MALFORMED_BOX} when a video sample cannot be
+   *     split, or with {@link Reason#OUTPUT_MISMATCH} when a rewritten sample still holds what the
+   *     rewrites strip
+   */
+  Fragment rewrite(Fragment fragment) {
+    var original =
+        fragment.videoSamples().stream().map(sample -> bytesOf(fragment, sample)).toList();
+    var rewritten = original.stream().map(sampleRewrite::rewrite).toList();
+    var changed =
+        IntStream.range(0, rewritten.size())
+            .anyMatch(index -> rewritten.get(index) != original.get(index));
+    if (!changed) {
+      return fragment;
+    }
+
+    var result = rebuilt(fragment, rewritten);
+    requireNothingLeftToStrip(result);
+    return result;
+  }
+
+  // Each rewritten sample, read back from the rebuilt mdat, must come through a second rewrite
+  // unchanged.
+  private void requireNothingLeftToStrip(Fragment fragment) {
+    for (var sample : fragment.videoSamples()) {
+      var bytes = bytesOf(fragment, sample);
+      if (sampleRewrite.rewrite(bytes) != bytes) {
+        throw mismatch("a rewritten video sample still holds what its rewrites strip");
+      }
+    }
+  }
+
+  private static Fragment rebuilt(Fragment fragment, List<ByteBuffer> rewrittenVideo) {
+    var placed = new ArrayList<Placed>();
+    for (var index = 0; index < fragment.videoSamples().size(); index++) {
+      placed.add(new Placed(true, index, fragment.videoSamples().get(index)));
+    }
+
+    for (var index = 0; index < fragment.audioSamples().size(); index++) {
+      placed.add(new Placed(false, index, fragment.audioSamples().get(index)));
+    }
+
+    placed.sort(Comparator.comparingInt(each -> each.sample().mediaDataPosition()));
+    var mdat = fragment.mediaDataBox();
+    var headerLength = BoxHeader.read(new BoxFields("mdat", ByteBuffer.wrap(mdat))).length();
+    var body = new ByteArrayOutputStream(mdat.length);
+    var video = new ArrayList<>(fragment.videoSamples());
+    var audio = new ArrayList<>(fragment.audioSamples());
+    for (var each : placed) {
+      var bytes =
+          each.video()
+              ? rewrittenVideo.get(each.index())
+              : bytesOf(mdat, each.sample()).duplicate();
+      var moved = withPlacement(each.sample(), headerLength + body.size(), bytes.remaining());
+      body.write(bytes.array(), bytes.arrayOffset() + bytes.position(), bytes.remaining());
+      (each.video() ? video : audio).set(each.index(), moved);
+    }
+
+    var boxes = new ArrayList<>(fragment.boxes());
+    boxes.set(boxes.size() - 1, mdatOf(mdat, headerLength, body.toByteArray()));
+    return Fragment.builder()
+        .boxes(boxes)
+        .tracks(fragment.tracks())
+        .videoSamples(video)
+        .audioSamples(audio)
+        .build();
+  }
+
+  private static Sample withPlacement(Sample sample, int mediaDataPosition, int size) {
+    return Sample.builder()
+        .decodeTime(sample.decodeTime())
+        .compositionOffset(sample.compositionOffset())
+        .duration(sample.duration())
+        .size(size)
+        .flags(sample.flags())
+        .mediaDataPosition(mediaDataPosition)
+        .build();
+  }
+
+  // The old mdat's header, with its 32-bit or 64-bit size changed to fit the new body.
+  private static byte[] mdatOf(byte[] old, int headerLength, byte[] body) {
+    var box = ByteBuffer.allocate(headerLength + body.length);
+    box.put(old, 0, headerLength).put(body);
+    if (headerLength == BoxHeader.LARGE_LENGTH) {
+      return box.putLong(BoxHeader.COMPACT_LENGTH, box.capacity()).array();
+    }
+
+    return box.putInt(0, box.capacity()).array();
+  }
+
+  private static ByteBuffer bytesOf(Fragment fragment, Sample sample) {
+    return bytesOf(fragment.mediaDataBox(), sample);
+  }
+
+  private static ByteBuffer bytesOf(byte[] mdat, Sample sample) {
+    return ByteBuffer.wrap(mdat, sample.mediaDataPosition(), Math.toIntExact(sample.size()))
+        .slice();
+  }
+
+  private static FragmentedMp4Exception mismatch(String detail) {
+    return new FragmentedMp4Exception(Reason.OUTPUT_MISMATCH, detail);
+  }
+
+  private record Placed(boolean video, int index, Sample sample) {}
+}

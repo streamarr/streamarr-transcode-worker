@@ -18,12 +18,13 @@ import lombok.NonNull;
 /**
  * Assembles the units a producer reads, in arrival order, into the segments it delivers: the
  * initialization segment as it arrives, without the SEI messages of its HEVC records, and each
- * media segment, rebuilt as one {@code moof} and one {@code mdat}. A media segment holds the video
- * of the fragments its grouper groups and the audio samples that start inside its interval,
- * whichever fragment carried them. It closes once its grouper has closed it and an audio sample of
- * a later segment has arrived or the video has run a margin past its end, at once when the movie
- * has no sound track, or when the output ends. No segment takes audio past its interval, not even
- * the last when the audio outlasts the video.
+ * media segment, rebuilt as one {@code moof} and one {@code mdat}, its video samples rewritten as
+ * the copy's bitstream rewrites list. A media segment holds the video of the fragments its grouper
+ * groups and the audio samples that start inside its interval, whichever fragment carried them. It
+ * closes once its grouper has closed it and an audio sample of a later segment has arrived or the
+ * video has run a margin past its end, at once when the movie has no sound track, or when the
+ * output ends. No segment takes audio past its interval, not even the last when the audio outlasts
+ * the video.
  */
 final class SegmentAssembler {
 
@@ -35,6 +36,8 @@ final class SegmentAssembler {
   private final long maximumSegmentBytes;
   private final Optional<OutputFrameRate> encodedFrameRate;
   private final VideoDecision videoDecision;
+  // Set by the initialization segment, which the reader returns before any fragment.
+  private Optional<VideoSampleRewrite> sampleRewrite = Optional.empty();
 
   /**
    * @param startSequenceNumber the first segment this job attempt delivers; segments below it are
@@ -68,7 +71,8 @@ final class SegmentAssembler {
    * failure that ends the output once they are delivered.
    *
    * @throws FragmentedMp4Exception when the initialization segment declares other video than the
-   *     decision, when the grouper refuses the fragment, when it holds a short video sample or an
+   *     decision, when a video sample cannot be rewritten or still holds what the copy's rewrites
+   *     strip, when the grouper refuses the fragment, when it holds a short video sample or an
    *     audio sample that starts before the one before it, or when a segment it closes is larger
    *     than the segment cap once rebuilt, after which nothing is delivered, not even the segments
    *     it would close
@@ -77,12 +81,13 @@ final class SegmentAssembler {
     return switch (unit) {
       case InitializationSegment initializationSegment -> {
         VideoOutputCheck.requireMatch(videoDecision, initializationSegment);
+        sampleRewrite = VideoSampleRewrite.of(videoDecision, initializationSegment);
         yield Closing.of(
             List.of(
                 new ClosedSegment.Initialization(
                     HevcRecordSeiRemoval.removeSeiMessages(initializationSegment))));
       }
-      case Fragment fragment -> closingOf(checkedForShortSamples(fragment));
+      case Fragment fragment -> closingOf(checkedForShortSamples(rewritten(fragment)));
     };
   }
 
@@ -134,6 +139,10 @@ final class SegmentAssembler {
     grouper.discardOpenFragments();
     awaitingAudio.clear();
     audio.discard();
+  }
+
+  private Fragment rewritten(Fragment fragment) {
+    return sampleRewrite.map(rewrite -> rewrite.rewrite(fragment)).orElse(fragment);
   }
 
   private Fragment checkedForShortSamples(Fragment fragment) {
