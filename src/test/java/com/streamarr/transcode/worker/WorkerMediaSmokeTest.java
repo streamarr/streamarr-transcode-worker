@@ -5647,6 +5647,67 @@ class WorkerMediaSmokeTest {
                 startAttempt.contentOf(List.of("init.mp4", segmentName(2), segmentName(3)))));
   }
 
+  // White noise in eight 24-bit channels at 96 kHz leaves FLAC nothing to compress, about 2.3 MB of
+  // audio a second. The source's only keyframe lies 96 s before the replacement's first segment,
+  // so audio decoded from a second after that keyframe would fill the first fragment far past the
+  // producer's 128 MiB cap before the first picture.
+  @Test
+  @DisplayName(
+      "Should complete an encoded replacement attempt of high-bitrate lossless audio when the"
+          + " server's keyframe lies far before its first segment")
+  void shouldCompleteAReplacementOfHighBitrateLosslessAudioWhenTheKeyframeLiesFarBeforeIt()
+      throws Exception {
+    var source = oneKeyframeEightChannelNoiseSource();
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setCodec("flac")
+        .setChannels(8)
+        .setBitrateBitsPerSecond(0);
+    job.getExecutionBuilder().setMediaSegmentCount(17).setStartSequenceNumber(16);
+    setSeekPosition(job.getExecutionBuilder(), BigDecimal.ZERO);
+
+    var completion =
+        executeToCompletion(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(completion.uploads().names()).contains(segmentName(16));
+  }
+
+  // 102 s of H.264 whose only keyframe is its first picture, and independent white noise in eight
+  // 24-bit FLAC channels at 96 kHz.
+  private static synchronized Path oneKeyframeEightChannelNoiseSource() throws Exception {
+    var source = seekableSources.resolve("one-keyframe-eight-channel-noise.mkv");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24",
+              "-f",
+              "lavfi",
+              "-i",
+              "aevalsrc=random(0)*2-1|random(1)*2-1|random(2)*2-1|random(3)*2-1"
+                  + "|random(4)*2-1|random(5)*2-1|random(6)*2-1|random(7)*2-1:s=96000:c=7.1",
+              "-t",
+              "102",
+              "-c:v",
+              "libx264",
+              "-x264-params",
+              "keyint=infinite:scenecut=0",
+              "-c:a",
+              "flac",
+              "-sample_fmt",
+              "s32",
+              "-bits_per_raw_sample",
+              "24"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
   // The encode of a profile 5 source's copy reads the audio from the source, a second input beside
   // the copy's video, so its FLAC frames carry the source's samples at the start attempt's times
   // only when that input's seek and timestamps match the single FFmpeg's.

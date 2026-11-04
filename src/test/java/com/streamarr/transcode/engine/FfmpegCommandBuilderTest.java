@@ -1448,17 +1448,36 @@ class FfmpegCommandBuilderTest {
   @DisplayName(
       "Should start the encoder's input a second after the server's keyframe position, in whole"
           + " frames before the first segment's start, when an encoded replacement attempt carries"
-          + " that position")
+          + " a position less than a segment period and a second before that start")
   void shouldStartTheEncodersInputASecondAfterTheServersKeyframePositionWhenAnAttemptCarriesIt() {
     var cmd =
         command(
             request(TranscodeMode.FULL_TRANSCODE)
                 .startSequenceNumber(5)
-                .seekPosition(Optional.of(Duration.ofSeconds(20)))
+                .seekPosition(Optional.of(Duration.ofSeconds(26)))
                 .build(),
             "libx264");
 
-    assertThat(cmd).containsSequence("-af", aacStereoFromTheFirstSegment("30", "9"));
+    assertThat(cmd).containsSequence("-af", aacStereoFromTheFirstSegment("30", "3"));
+  }
+
+  // ADR 0043 decodes each encoded track from one segment period before the attempt's first
+  // segment, so that the audio the attempt discards stays within a period however far back the
+  // keyframe lies.
+  @Test
+  @DisplayName(
+      "Should start the encoder's input whole frames within one segment period before the first"
+          + " segment's start when the server's keyframe position lies further back")
+  void shouldStartTheEncodersInputWithinOneSegmentPeriodWhenTheServersKeyframeLiesFurtherBack() {
+    var cmd =
+        command(
+            request(TranscodeMode.FULL_TRANSCODE)
+                .startSequenceNumber(10)
+                .seekPosition(Optional.of(Duration.ZERO))
+                .build(),
+            "libx264");
+
+    assertThat(cmd).containsSequence("-af", aacStereoFromTheFirstSegment("60", "6"));
   }
 
   private static TranscodeRequest encodedAudioFromSegment5(String codec) {

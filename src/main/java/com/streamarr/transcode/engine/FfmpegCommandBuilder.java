@@ -715,10 +715,10 @@ public class FfmpegCommandBuilder {
   // follows the conversion to that rate. Each shift is a whole number of ticks, so that the two
   // cancel. The whole frames reach back to where the demuxer has delivered audio: the seek's
   // target, when a seek without the server's keyframe position lands on a keyframe at or before it,
-  // or a second after the server's keyframe position. Every frame from the first segment's start on
-  // then starts where the attempt that encodes from the start writes one, give or take less than a
-  // frame, and with no gap. The expressions are quoted, as a FLAC frame's holds commas. Empty for
-  // an encoder whose frames the worker does not know.
+  // or a second after the server's keyframe position, and no more than one segment period. Every
+  // frame from the first segment's start on then starts where the attempt that encodes from the
+  // start writes one, give or take less than a frame, and with no gap. The expressions are quoted,
+  // as a FLAC frame's holds commas. Empty for an encoder whose frames the worker does not know.
   private static Optional<String> frameAlignedShift(
       Optional<AudioFrames> frames, TranscodeRequest request) {
     var seconds = seekArgument(audioReach(request));
@@ -752,7 +752,9 @@ public class FfmpegCommandBuilder {
             new AudioFrames(String.valueOf(frameSize.getAsInt()), encoderFrames.lead()));
   }
 
-  // How far before the first segment's start an encoded replacement attempt's audio starts.
+  // How far before the first segment's start an encoded replacement attempt's audio starts: at
+  // most one segment period, so that the audio the producer discards before the first picture
+  // stays small however far back the server's keyframe lies.
   private static Duration audioReach(TranscodeRequest request) {
     var firstSegmentStart = firstSegmentStartOfAnEncode(request).orElseThrow();
     var reach = firstSegmentStart.minus(inputSeekPosition(request));
@@ -762,6 +764,11 @@ public class FfmpegCommandBuilder {
 
     if (reach.isNegative()) {
       return Duration.ZERO;
+    }
+
+    var period = Duration.ofSeconds(request.targetSegmentDuration());
+    if (reach.compareTo(period) > 0) {
+      return period;
     }
 
     return reach;
