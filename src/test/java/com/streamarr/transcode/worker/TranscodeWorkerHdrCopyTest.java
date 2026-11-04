@@ -2,6 +2,8 @@ package com.streamarr.transcode.worker;
 
 import static com.streamarr.transcode.engine.FfmpegRecordings.bytesOf;
 import static com.streamarr.transcode.engine.FfmpegRecordings.recording;
+import static com.streamarr.transcode.fixtures.DeliveredSamples.assertCarriesTheRecordedSamples;
+import static com.streamarr.transcode.fixtures.RecordingEdits.withBytesAfterTheFirstVideoSample;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engine;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.copyJobBuilderFor;
@@ -11,10 +13,14 @@ import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerB
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
+import build.buf.gen.streamarr.transcode.v1.BitstreamRewrite;
 import build.buf.gen.streamarr.transcode.v1.ChromaticityCoordinates;
 import build.buf.gen.streamarr.transcode.v1.CompatibleBase;
 import build.buf.gen.streamarr.transcode.v1.ContentLightLevel;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionAbsent;
+import build.buf.gen.streamarr.transcode.v1.DolbyVisionOutput;
+import build.buf.gen.streamarr.transcode.v1.DolbyVisionPresent;
+import build.buf.gen.streamarr.transcode.v1.DolbyVisionSampleEntry;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest;
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest.EventCase;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
@@ -27,13 +33,16 @@ import build.buf.gen.streamarr.transcode.v1.VideoDynamicRange;
 import com.streamarr.transcode.engine.FfmpegRecordings.Recording;
 import com.streamarr.transcode.fakes.ScriptedProcess;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
+import com.streamarr.transcode.fixtures.TopLevelBoxes;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
+import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -93,6 +102,23 @@ class TranscodeWorkerHdrCopyTest {
 
   /** The prefix SEI NAL unit of {@link #CONTENT_LIGHT_LEVEL}: payload type 144 and size 4. */
   private static final String CONTENT_LIGHT_LEVEL_SEI = "4E01" + "9004" + "03E80190" + "80";
+
+  /**
+   * A suffix SEI NAL unit after its 4-byte length that holds one HDR10+ message: ITU-T T.35,
+   * country 0xB5, provider 0x003C, provider-oriented code 0x0001 and application 4.
+   */
+  private static final String HDR10_PLUS_SEI = "0000000D" + "5001" + "0408B5003C0001040100" + "80";
+
+  /** A NAL unit of type 62 after its 4-byte length, as a Dolby Vision RPU: rpu_nal_prefix 25. */
+  private static final String RPU = "00000004" + "7C01" + "1908";
+
+  // Dolby Vision configuration records (Dolby's ISO BMFF specification, 3.2): version 1.0, then
+  // the profile (7 bits), level (6 bits), the RPU, enhancement-layer and base-layer flags,
+  // bl_signal_compatibility_id (4 bits) and dv_md_compression (2 bits), then 19 reserved bytes.
+  // Profile 8, level 6, an RPU and a base layer, compatibility 1 and compression 0.
+  private static final String PROFILE_8_LEVEL_6_PQ_RECORD = "0100103510" + "00".repeat(19);
+  // Profile 5, level 6, an RPU and a base layer, compatibility 0 and compression 0.
+  private static final String PROFILE_5_LEVEL_6_RECORD = "01000A3500" + "00".repeat(19);
 
   @TempDir Path tempDir;
 
@@ -237,7 +263,200 @@ class TranscodeWorkerHdrCopyTest {
             "a mastering display", unary(video -> video.setMasteringDisplay(MASTERING_DISPLAY))),
         Arguments.of(
             "a content light level",
-            unary(video -> video.setContentLightLevel(CONTENT_LIGHT_LEVEL))));
+            unary(video -> video.setContentLightLevel(CONTENT_LIGHT_LEVEL))),
+        Arguments.of(
+            "a bitstream rewrite",
+            unary(
+                video ->
+                    video.addBitstreamRewrites(
+                        BitstreamRewrite.BITSTREAM_REWRITE_STRIP_HDR10_PLUS))),
+        Arguments.of(
+            "a Dolby Vision output", unary(video -> video.setDolbyVisionOutput(profile5Output()))));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("strippedUnits")
+  @DisplayName(
+      "Should deliver the samples without the units that a listed rewrite strips when a copy lists"
+          + " a strip rewrite")
+  void shouldDeliverTheSamplesWithoutTheUnitsThatAListedRewriteStripsWhenACopyListsAStripRewrite(
+      BitstreamRewrite rewrite, String strippedUnit) throws Exception {
+    var job = hevcCopyJob();
+    job.getDecisionBuilder()
+        .getVideoBuilder()
+        .setOutputDynamicRange(pq())
+        .addBitstreamRewrites(rewrite);
+    var output =
+        withBytesAfterTheFirstVideoSample(
+            bytesOf(HEVC_COPY.file()), HexFormat.of().parseHex(strippedUnit));
+
+    var uploads = uploadsOf(job.build(), output);
+
+    assertCarriesTheRecordedSamples(uploads, HEVC_COPY);
+  }
+
+  static Stream<Arguments> strippedUnits() {
+    return Stream.of(
+        Arguments.of(BitstreamRewrite.BITSTREAM_REWRITE_STRIP_HDR10_PLUS, HDR10_PLUS_SEI),
+        Arguments.of(BitstreamRewrite.BITSTREAM_REWRITE_STRIP_DOLBY_VISION, RPU));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("dolbyVisionOutputs")
+  @DisplayName(
+      "Should deliver the planned sample entry with the normalized Dolby Vision record when a copy"
+          + " plans a Dolby Vision output and normalizes its record")
+  void shouldDeliverThePlannedSampleEntryWithTheNormalizedRecordWhenACopyPlansADolbyVisionOutput(
+      String output,
+      VideoDynamicRange range,
+      DolbyVisionOutput dolbyVision,
+      String codecString,
+      String sampleEntry,
+      String record)
+      throws Exception {
+    var job = hevcCopyJob();
+    job.getDecisionBuilder()
+        .getVideoBuilder()
+        .setCodecString(codecString)
+        .setOutputDynamicRange(range)
+        .setDolbyVisionOutput(dolbyVision)
+        .addBitstreamRewrites(BitstreamRewrite.BITSTREAM_REWRITE_NORMALIZE_DOLBY_VISION_RECORD);
+
+    var initializationSegment = initializationSegmentOf(job.build(), bytesOf(HEVC_COPY.file()));
+
+    assertThat(sampleEntryTypeOf(initializationSegment)).isEqualTo(sampleEntry);
+    assertThat(dolbyVisionRecordsOf(initializationSegment)).containsExactly(record);
+  }
+
+  static Stream<Arguments> dolbyVisionOutputs() {
+    return Stream.of(
+        Arguments.of(
+            "profile 8.1 under hvc1",
+            pqWithDolbyVision(),
+            DolbyVisionOutput.newBuilder()
+                .setProfile(8)
+                .setLevel(6)
+                .setBaseLayerCompatibilityId(1)
+                .setSampleEntry(DolbyVisionSampleEntry.DOLBY_VISION_SAMPLE_ENTRY_HVC1)
+                .build(),
+            HEVC_COPY.videoCodecString(),
+            "hvc1",
+            "dvvC" + PROFILE_8_LEVEL_6_PQ_RECORD),
+        Arguments.of(
+            "profile 5 under dvh1",
+            profile5(),
+            profile5Output().build(),
+            "dvh1.05.06",
+            "dvh1",
+            "dvcC" + PROFILE_5_LEVEL_6_RECORD));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("contradictoryRewritesAndDolbyVisionOutputs")
+  @DisplayName(
+      "Should refuse the job as an invalid specification when its copy lists rewrites or a Dolby"
+          + " Vision output that the contract forbids or the worker cannot write")
+  void shouldRefuseTheJobWhenItsCopyListsRewritesOrADolbyVisionOutputThatItCannotDeliver(
+      String plan, UnaryOperator<VideoDecision.Builder> planned) throws Exception {
+    var job = hevcCopyJob();
+    planned.apply(job.getDecisionBuilder().getVideoBuilder());
+
+    assertRefusedAsAnInvalidSpecification(job.build());
+  }
+
+  static Stream<Arguments> contradictoryRewritesAndDolbyVisionOutputs() {
+    return Stream.of(
+        Arguments.of(
+            "a rewrite without a planned range",
+            unary(
+                video ->
+                    video.addBitstreamRewrites(
+                        BitstreamRewrite.BITSTREAM_REWRITE_STRIP_HDR10_PLUS))),
+        Arguments.of(
+            "an UNSPECIFIED rewrite",
+            unary(
+                video ->
+                    video
+                        .setOutputDynamicRange(pq())
+                        .addBitstreamRewrites(BitstreamRewrite.BITSTREAM_REWRITE_UNSPECIFIED))),
+        Arguments.of(
+            "the profile 7 to 8.1 conversion",
+            unary(
+                video ->
+                    video
+                        .setOutputDynamicRange(pq())
+                        .addBitstreamRewrites(
+                            BitstreamRewrite
+                                .BITSTREAM_REWRITE_CONVERT_DOLBY_VISION_PROFILE_7_TO_8_1))),
+        Arguments.of(
+            "a rewrite listed twice",
+            unary(
+                video ->
+                    video
+                        .setOutputDynamicRange(pq())
+                        .addBitstreamRewrites(BitstreamRewrite.BITSTREAM_REWRITE_STRIP_HDR10_PLUS)
+                        .addBitstreamRewrites(
+                            BitstreamRewrite.BITSTREAM_REWRITE_STRIP_HDR10_PLUS))),
+        Arguments.of(
+            "a Dolby Vision strip with a planned range that keeps Dolby Vision",
+            unary(
+                video ->
+                    video
+                        .setOutputDynamicRange(pqWithDolbyVision())
+                        .addBitstreamRewrites(
+                            BitstreamRewrite.BITSTREAM_REWRITE_STRIP_DOLBY_VISION))),
+        Arguments.of(
+            "an HDR10+ strip with a planned range that keeps HDR10+",
+            unary(
+                video ->
+                    video
+                        .setOutputDynamicRange(
+                            pq().toBuilder().setHdr10Plus(Presence.PRESENCE_PRESENT))
+                        .addBitstreamRewrites(
+                            BitstreamRewrite.BITSTREAM_REWRITE_STRIP_HDR10_PLUS))),
+        Arguments.of(
+            "a normalized record without a Dolby Vision output",
+            unary(
+                video ->
+                    video
+                        .setOutputDynamicRange(pqWithDolbyVision())
+                        .addBitstreamRewrites(
+                            BitstreamRewrite.BITSTREAM_REWRITE_NORMALIZE_DOLBY_VISION_RECORD))),
+        Arguments.of(
+            "a Dolby Vision output without a planned range",
+            unary(video -> video.setDolbyVisionOutput(profile5Output()))),
+        Arguments.of(
+            "a Dolby Vision output with a planned range without Dolby Vision",
+            unary(
+                video ->
+                    video
+                        .setOutputDynamicRange(pq())
+                        .setDolbyVisionOutput(
+                            profile5Output()
+                                .setProfile(8)
+                                .setBaseLayerCompatibilityId(1)
+                                .setSampleEntry(
+                                    DolbyVisionSampleEntry.DOLBY_VISION_SAMPLE_ENTRY_HVC1)))),
+        Arguments.of(
+            "an UNSPECIFIED sample entry",
+            dolbyVisionOutput(
+                output ->
+                    output.setSampleEntry(
+                        DolbyVisionSampleEntry.DOLBY_VISION_SAMPLE_ENTRY_UNSPECIFIED))),
+        Arguments.of(
+            "a dav1 sample entry",
+            dolbyVisionOutput(
+                output ->
+                    output
+                        .setProfile(10)
+                        .setSampleEntry(DolbyVisionSampleEntry.DOLBY_VISION_SAMPLE_ENTRY_DAV1))),
+        Arguments.of(
+            "a profile 8 output under dvh1", dolbyVisionOutput(output -> output.setProfile(8))),
+        Arguments.of("level 0", dolbyVisionOutput(output -> output.setLevel(0))),
+        Arguments.of("level 14", dolbyVisionOutput(output -> output.setLevel(14))),
+        Arguments.of(
+            "a compatibility identifier that another base takes",
+            dolbyVisionOutput(output -> output.setBaseLayerCompatibilityId(1))));
   }
 
   // A copy of the recorded libx265 stream that names the recording's codec string.
@@ -256,6 +475,40 @@ class TranscodeWorkerHdrCopyTest {
         .build();
   }
 
+  // A PQ range with Dolby Vision, as a profile 8.1 copy that keeps its RPUs plans it.
+  private static VideoDynamicRange pqWithDolbyVision() {
+    return pq().toBuilder()
+        .setDolbyVisionPresent(
+            DolbyVisionPresent.newBuilder().setObservedRpu(Presence.PRESENCE_PRESENT))
+        .build();
+  }
+
+  // The range of a Dolby Vision profile 5 copy, which has no compatible base.
+  private static VideoDynamicRange profile5() {
+    return pqWithDolbyVision().toBuilder()
+        .setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_NONE)
+        .build();
+  }
+
+  // The genuine dvh1 output of a profile 5 copy at level 6.
+  private static DolbyVisionOutput.Builder profile5Output() {
+    return DolbyVisionOutput.newBuilder()
+        .setProfile(5)
+        .setLevel(6)
+        .setBaseLayerCompatibilityId(0)
+        .setSampleEntry(DolbyVisionSampleEntry.DOLBY_VISION_SAMPLE_ENTRY_DVH1);
+  }
+
+  // A profile 5 copy whose Dolby Vision output takes the change.
+  private static UnaryOperator<VideoDecision.Builder> dolbyVisionOutput(
+      UnaryOperator<DolbyVisionOutput.Builder> change) {
+    return video ->
+        video
+            .setOutputDynamicRange(profile5())
+            .setDolbyVisionOutput(change.apply(profile5Output()))
+            .addBitstreamRewrites(BitstreamRewrite.BITSTREAM_REWRITE_NORMALIZE_DOLBY_VISION_RECORD);
+  }
+
   private static ChromaticityCoordinates coordinates(int x, int y) {
     return ChromaticityCoordinates.newBuilder().setX(x).setY(y).build();
   }
@@ -267,6 +520,18 @@ class TranscodeWorkerHdrCopyTest {
 
   // Runs the job over FFmpeg output and returns the initialization segment that the worker uploads.
   private byte[] initializationSegmentOf(VariantJob job, byte[] ffmpegOutput) throws Exception {
+    var uploads = uploadsOf(job, ffmpegOutput);
+    var initializationSegment =
+        TopLevelBoxes.of(uploads).stream()
+            .filter(box -> box.type().equals("moov"))
+            .findFirst()
+            .orElseThrow()
+            .end();
+    return Arrays.copyOf(uploads, initializationSegment);
+  }
+
+  // Runs the job over FFmpeg output and returns every segment that the worker uploads, in order.
+  private byte[] uploadsOf(VariantJob job, byte[] ffmpegOutput) throws Exception {
     var launcher =
         new ScriptedProcessLauncher(_ -> ScriptedProcess.builder().output(ffmpegOutput).build());
 
@@ -277,11 +542,9 @@ class TranscodeWorkerHdrCopyTest {
 
       awaitEvents(connection, EventCase.JOB_ATTEMPT_STARTED, EventCase.JOB_ATTEMPT_COMPLETED);
       assertThat(launcher.hasLaunched(fromProto(job.getJobAttemptId()))).isTrue();
-      return connection.uploads().stream()
-          .filter(upload -> upload.metadata().getSegmentName().equals("init.mp4"))
-          .findFirst()
-          .orElseThrow()
-          .content();
+      var uploaded = new ByteArrayOutputStream();
+      connection.uploads().forEach(upload -> uploaded.writeBytes(upload.content()));
+      return uploaded.toByteArray();
     }
   }
 
@@ -349,6 +612,30 @@ class TranscodeWorkerHdrCopyTest {
     }
 
     return seiNalUnits;
+  }
+
+  // The type of the first entry of the video track's stsd box, the one that the output writes.
+  private static String sampleEntryTypeOf(byte[] initializationSegment) {
+    var stsd = indexOf(initializationSegment, "stsd");
+    assertThat(stsd).as("the stsd box").isNotNegative();
+    // The entry follows the stsd's version, flags and entry count, then its own 4-byte size.
+    var type = stsd + 4 + 8 + 4;
+    return new String(initializationSegment, type, 4, StandardCharsets.US_ASCII);
+  }
+
+  // Each Dolby Vision configuration record box, as its type and its body in hexadecimal.
+  private static List<String> dolbyVisionRecordsOf(byte[] initializationSegment) {
+    var records = new ArrayList<String>();
+    for (var type : List.of("dvcC", "dvvC", "dvwC")) {
+      var at = indexOf(initializationSegment, type);
+      if (at >= 0) {
+        var size = ByteBuffer.wrap(initializationSegment).getInt(at - 4);
+        var body = Arrays.copyOfRange(initializationSegment, at + 4, at - 4 + size);
+        records.add(type + HexFormat.of().withUpperCase().formatHex(body));
+      }
+    }
+
+    return records;
   }
 
   // Where the four-character code first appears in the bytes, or -1.

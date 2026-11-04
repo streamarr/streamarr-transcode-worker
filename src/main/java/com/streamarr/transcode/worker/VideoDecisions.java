@@ -82,12 +82,14 @@ final class VideoDecisions {
       VideoDynamicRanges.of(video.getSourceDynamicRange());
     }
 
+    var rewrites = BitstreamRewrites.of(video.getBitstreamRewritesList());
     // A server that does not send the field leaves it false, so the copy keeps the Annex B filter.
     return VideoDecision.Copy.builder()
         .streamIndex(video.getStreamIndex())
         .codecString(video.getCodecString())
         .keepsPacketBytes(video.getCopyKeepsPacketBytes())
-        .plannedOutput(PlannedCopies.of(video))
+        .bitstreamRewrites(rewrites)
+        .plannedOutput(PlannedCopies.of(video, rewrites))
         .build();
   }
 
