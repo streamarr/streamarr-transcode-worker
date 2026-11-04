@@ -371,20 +371,26 @@ class SegmentAssemblerBitstreamRewriteTest {
             exception -> assertThat(exception.getReason()).isEqualTo(Reason.OUTPUT_MISMATCH));
   }
 
+  // FFmpeg copies the source's metadata OBUs into av1C's configOBUs, which the AV1 binding permits.
   @ParameterizedTest(name = "{0}")
   @MethodSource("av1RecordsThatHoldAStrippedObu")
   @DisplayName(
-      "Should refuse the initialization segment as an output mismatch when its av1C holds a"
-          + " metadata OBU that the copy strips")
-  void shouldRefuseTheInitializationSegmentWhenItsAv1CHoldsAMetadataObuThatTheCopyStrips(
-      String description, BitstreamRewrite rewrite, String configurationObus) {
+      "Should deliver the av1C without the metadata OBUs that the copy strips and with every other"
+          + " OBU when its av1C holds a metadata OBU that the copy strips")
+  void shouldDeliverTheAv1CWithoutTheMetadataObusThatTheCopyStripsWhenItsAv1CHoldsOne(
+      String description, BitstreamRewrite rewrite, String configurationObus, String keptObus) {
     var assembler = assemblerFor(copyOf(AV1_CODEC_STRING, rewrite));
-    var segment = av1SegmentWithConfigurationObus(configurationObus);
 
-    assertThatThrownBy(() -> assembler.accept(segment))
+    var closed =
+        assembler.accept(av1SegmentWithConfigurationObus(configurationObus)).closedSegments();
+
+    assertThat(closed)
+        .singleElement()
         .isInstanceOfSatisfying(
-            FragmentedMp4Exception.class,
-            exception -> assertThat(exception.getReason()).isEqualTo(Reason.OUTPUT_MISMATCH));
+            ClosedSegment.Initialization.class,
+            delivered ->
+                assertThat(delivered.segment().bytes())
+                    .isEqualTo(av1SegmentWithConfigurationObus(keptObus).bytes()));
   }
 
   static Stream<Arguments> av1RecordsThatHoldAStrippedObu() {
@@ -392,8 +398,45 @@ class SegmentAssemblerBitstreamRewriteTest {
         Arguments.of(
             "a Dolby Vision RPU",
             BitstreamRewrite.STRIP_DOLBY_VISION,
-            CONTENT_LIGHT_LEVEL_METADATA + DOLBY_VISION_METADATA),
-        Arguments.of("HDR10+", BitstreamRewrite.STRIP_HDR10_PLUS, HDR10_PLUS_METADATA));
+            CONTENT_LIGHT_LEVEL_METADATA + DOLBY_VISION_METADATA,
+            CONTENT_LIGHT_LEVEL_METADATA),
+        Arguments.of("HDR10+", BitstreamRewrite.STRIP_HDR10_PLUS, HDR10_PLUS_METADATA, ""));
+  }
+
+  @Test
+  @DisplayName(
+      "Should refuse the initialization segment as a malformed box when the copy strips av1C's"
+          + " configOBUs and one of them cannot be read")
+  void shouldRefuseTheInitializationSegmentAsMalformedWhenAnAv1CConfigurationObuCannotBeRead() {
+    var assembler = assemblerFor(copyOf(AV1_CODEC_STRING, BitstreamRewrite.STRIP_HDR10_PLUS));
+    // A metadata OBU whose size runs past the record.
+    var segment = av1SegmentWithConfigurationObus("2A0904B5");
+
+    assertThatThrownBy(() -> assembler.accept(segment))
+        .isInstanceOfSatisfying(
+            FragmentedMp4Exception.class,
+            exception -> assertThat(exception.getReason()).isEqualTo(Reason.MALFORMED_BOX));
+  }
+
+  // The record's codec fields fit in 3 bytes, so the output check reads it; it holds no configOBUs.
+  @Test
+  @DisplayName(
+      "Should deliver the av1C unchanged when the copy strips av1C's configOBUs and the record ends"
+          + " before them")
+  void shouldDeliverTheAv1CUnchangedWhenTheRecordEndsBeforeItsConfigurationObus() {
+    var assembler = assemblerFor(copyOf(AV1_CODEC_STRING, BitstreamRewrite.STRIP_HDR10_PLUS));
+    var av1C = IsoBoxes.box("av1C", HexFormat.of().parseHex("81080C"));
+    var segment =
+        new InitializationSegment(
+            HevcCopies.initializationSegment(IsoBoxes.box("av01", new byte[78], av1C)));
+
+    var closed = assembler.accept(segment).closedSegments();
+
+    assertThat(closed)
+        .singleElement()
+        .isInstanceOfSatisfying(
+            ClosedSegment.Initialization.class,
+            delivered -> assertThat(delivered.segment().bytes()).isEqualTo(segment.bytes()));
   }
 
   @Test
