@@ -483,17 +483,21 @@ class WorkerImageIT {
   @DisplayName("Should stop the media process gracefully when the container receives termination")
   void shouldStopTheMediaProcessGracefullyWhenTheContainerReceivesTermination() throws Exception {
     copyMedia();
-    // Landlock leaves the wrapper nothing to write that outlives the worker, so the proof is the
-    // stop report the worker sends before it disconnects, which only its stop path produces. That
-    // FFmpeg quits on the q the stop writes is proven with the exit status the next test records.
+    // Nothing a confined tool writes outlives the worker, which removes its scratch directory at
+    // shutdown, so the wrapper holds its exit until this test has read the marker that q leaves.
+    // The engine destroys it after its grace period, which bounds the read.
     var script =
         scriptedFfmpeg(
             """
         read -r -n 1 command
-        if [[ $command == q ]]; then
-          exit 0
+        if [[ $command != q ]]; then
+          exit 71
         fi
-        exit 71
+        printf q > "$TMPDIR/graceful-stop"
+        until [[ -e "$TMPDIR/graceful-stop-read" ]]; do
+          sleep 0.1
+        done
+        exit 0
         """);
     try (var image = ImageFixture.builder().media(media).ffmpegPath(script).build()) {
       image.accept();
@@ -501,15 +505,15 @@ class WorkerImageIT {
       var started = JobAttemptStarted.parseFrom(image.command("start-job", request.toByteArray()));
       assertThat(started.getJobAttemptId()).isEqualTo(request.getJobAttemptId());
 
-      image
-          .worker
-          .getDockerClient()
-          .stopContainerCmd(image.worker.getContainerId())
-          .withTimeout(10)
-          .exec();
+      var stopping = image.stopContainer();
+      var marker =
+          await()
+              .atMost(Duration.ofSeconds(30))
+              .until(() -> image.inScratch("cat", "graceful-stop").getStdout(), "q"::equals);
+      image.acknowledgeRead("graceful-stop");
+      stopping.get(30, TimeUnit.SECONDS);
 
-      var stopped = JobAttemptStopped.parseFrom(image.command("stopped", new byte[0]));
-      assertThat(stopped.getJobAttemptId()).isEqualTo(request.getJobAttemptId());
+      assertThat(marker).isEqualTo("q");
       assertThat(image.worker.getCurrentContainerInfo().getState().getExitCodeLong())
           .isIn(0L, 143L);
       assertThat(new String(image.command("disconnected", new byte[0]), StandardCharsets.UTF_8))
@@ -750,6 +754,34 @@ class WorkerImageIT {
     // under /tmp with a name of its own, so a file there is reached through the shell's glob.
     private Container.ExecResult inScratch(String command, String file) throws Exception {
       return worker.execInContainer("/bin/sh", "-c", command + " /tmp/*/" + file);
+    }
+
+    // Creates the file a wrapper waits for beside the evidence it wrote, so that it may exit.
+    private void acknowledgeRead(String file) throws Exception {
+      var acknowledged =
+          worker.execInContainer(
+              "/bin/sh", "-c", "touch \"$(dirname /tmp/*/" + file + ")/" + file + "-read\"");
+      assertThat(acknowledged.getExitCode()).as(acknowledged.getStderr()).isZero();
+    }
+
+    // Docker's stop blocks until the container has exited, so it runs beside the test's reads.
+    private CompletableFuture<Void> stopContainer() {
+      var stopped = new CompletableFuture<Void>();
+      Thread.ofVirtual()
+          .start(
+              () -> {
+                try {
+                  worker
+                      .getDockerClient()
+                      .stopContainerCmd(worker.getContainerId())
+                      .withTimeout(10)
+                      .exec();
+                  stopped.complete(null);
+                } catch (RuntimeException failure) {
+                  stopped.completeExceptionally(failure);
+                }
+              });
+      return stopped;
     }
 
     // Read as base64 so no charset on the exec path can alter the recorded filename bytes.

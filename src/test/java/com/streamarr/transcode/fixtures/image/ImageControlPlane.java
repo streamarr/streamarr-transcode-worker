@@ -158,8 +158,6 @@ public final class ImageControlPlane
       case "/job-awaiting-acknowledgement" ->
           jobAwaitingAcknowledgement(VariantJob.parseFrom(exchange.getRequestBody()));
       case "/stop-job" -> stopJob(VariantJob.parseFrom(exchange.getRequestBody()));
-      // The worker's report of a stop it began on its own, such as at shutdown.
-      case "/stopped" -> stopped.get(30, TimeUnit.SECONDS).toByteArray();
       case "/disconnected" ->
           disconnected.get(10, TimeUnit.SECONDS).toString().getBytes(StandardCharsets.UTF_8);
       case "/segment" -> firstMediaSegment();
