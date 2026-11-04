@@ -1473,7 +1473,13 @@ class FfmpegCommandBuilderTest {
   @Test
   @DisplayName("Should transcode to AC-3 5.1 when audio decision is AC-3 transcode")
   void shouldTranscodeToAc3SurroundWhenAudioDecisionIsAc3Transcode() {
-    var audio = new AudioDecision(AudioMode.TRANSCODE, "ac3", 6, 384_000L);
+    var audio =
+        AudioDecision.builder()
+            .mode(AudioMode.TRANSCODE)
+            .codec("ac3")
+            .channels(6)
+            .bitrate(384_000L)
+            .build();
     var cmd =
         command(
             request(decision(TranscodeMode.AUDIO_TRANSCODE).audioDecision(audio).build()).build(),
@@ -1486,7 +1492,13 @@ class FfmpegCommandBuilderTest {
   @Test
   @DisplayName("Should transcode to E-AC-3 7.1 when audio decision is E-AC-3 transcode")
   void shouldTranscodeToEac3SurroundWhenAudioDecisionIsEac3Transcode() {
-    var audio = new AudioDecision(AudioMode.TRANSCODE, "eac3", 8, 512_000L);
+    var audio =
+        AudioDecision.builder()
+            .mode(AudioMode.TRANSCODE)
+            .codec("eac3")
+            .channels(8)
+            .bitrate(512_000L)
+            .build();
     var cmd =
         command(
             request(decision(TranscodeMode.AUDIO_TRANSCODE).audioDecision(audio).build()).build(),

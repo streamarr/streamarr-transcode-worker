@@ -5,6 +5,7 @@ import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
+import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import com.streamarr.transcode.probe.ProbeCommand.ProbeTool;
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -44,6 +45,11 @@ public final class FfprobeExecutor {
    */
   static final List<String> READ_LIMITS =
       List.of("-analyzeduration", "200M", "-probesize", "1G", "-scan_all_pmts", "0");
+
+  private static final List<String> QUIET_JSON_OUTPUT =
+      List.of("-v", "quiet", "-print_format", "json");
+
+  private static final String SHOW_STREAMS = "-show_streams";
 
   private static final List<String> LOWEST_CPU_PRIORITY = List.of("nice", "-n", "19");
 
@@ -126,6 +132,36 @@ public final class FfprobeExecutor {
     }
   }
 
+  /**
+   * The facts of the source's first audio stream, the stream that a job attempt encodes, as one
+   * ffprobe run with FFmpeg's default read limits reads them, so that ffprobe sees the stream as
+   * the attempt's FFmpeg does.
+   *
+   * @throws ChosenAudioException when ffprobe fails or the source has no audio stream
+   */
+  public ProbeStreamInfo readChosenAudio(@NonNull Path source)
+      throws ExecutionException, InterruptedException {
+    var arguments = new ArrayList<>(QUIET_JSON_OUTPUT);
+    arguments.addAll(List.of(SHOW_STREAMS, "-select_streams", "a:0", source.toString()));
+    var output = run(arguments);
+    if (output.exitCode() != 0) {
+      throw new ChosenAudioException("ffprobe exited with code " + output.exitCode());
+    }
+
+    return ProbeMediaReader.read(objectMapper.readTree(output.stdout())).getStreamsList().stream()
+        .filter(stream -> "audio".equals(stream.getCodecType()))
+        .findFirst()
+        .orElseThrow(() -> new ChosenAudioException("The source has no audio stream"));
+  }
+
+  /** A read of the chosen audio stream that failed. */
+  public static final class ChosenAudioException extends RuntimeException {
+
+    ChosenAudioException(String message) {
+      super(message);
+    }
+  }
+
   // Every process of a probe that no playback request waits for starts at the lowest priority.
   private FfprobeExecutor atCpuPriorityOf(ProbeRequest request) {
     if (ProbeKind.of(request) == ProbeKind.PLAYBACK) {
@@ -142,11 +178,11 @@ public final class FfprobeExecutor {
       return scanChunk(attempt);
     }
 
-    var arguments = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
+    var arguments = new ArrayList<>(QUIET_JSON_OUTPUT);
     arguments.addAll(READ_LIMITS);
     arguments.addAll(
         List.of(
-            "-show_streams",
+            SHOW_STREAMS,
             "-show_format",
             "-show_chapters",
             "-show_error",
@@ -198,10 +234,10 @@ public final class FfprobeExecutor {
    */
   private ProbeAttemptReport scanChunk(Attempt attempt)
       throws ExecutionException, InterruptedException {
-    var arguments = new ArrayList<>(List.of("-v", "quiet", "-print_format", "json"));
+    var arguments = new ArrayList<>(QUIET_JSON_OUTPUT);
     arguments.addAll(READ_LIMITS);
     arguments.addAll(
-        List.of("-show_streams", "-show_format", "-show_error", attempt.source().toString()));
+        List.of(SHOW_STREAMS, "-show_format", "-show_error", attempt.source().toString()));
     var output = run(arguments);
     JsonNode json;
     try {

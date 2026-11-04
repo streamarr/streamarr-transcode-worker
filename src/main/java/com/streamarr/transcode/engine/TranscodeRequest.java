@@ -22,7 +22,8 @@ public record TranscodeRequest(
     String variantLabel,
     int startSequenceNumber,
     int mediaSegmentCount,
-    @NonNull Optional<Duration> seekPosition) {
+    @NonNull Optional<Duration> seekPosition,
+    @NonNull Optional<SourceAudio> sourceAudio) {
 
   public TranscodeRequest {
     if (encoderPreset == null && encodesVideo(transcodeDecision)) {
@@ -36,12 +37,19 @@ public record TranscodeRequest(
     if (attemptId == null) {
       attemptId = UUID.randomUUID();
     }
+
+    var audio = transcodeDecision.audioDecision();
+    if (audio != null && audio.channelLayout().isPresent() && sourceAudio.isEmpty()) {
+      throw new IllegalArgumentException(
+          "An audio encode in a named layout requires the chosen audio stream's facts");
+    }
   }
 
   public static TranscodeRequestBuilder builder() {
     return new TranscodeRequestBuilder()
         .seekPosition(Optional.empty())
-        .outputFrameRate(Optional.empty());
+        .outputFrameRate(Optional.empty())
+        .sourceAudio(Optional.empty());
   }
 
   private static boolean encodesVideo(TranscodeDecision decision) {

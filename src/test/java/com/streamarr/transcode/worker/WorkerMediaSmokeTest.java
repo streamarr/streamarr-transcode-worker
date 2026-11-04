@@ -11,6 +11,7 @@ import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerB
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+import build.buf.gen.streamarr.transcode.v1.AudioChannelLayout;
 import build.buf.gen.streamarr.transcode.v1.AudioMode;
 import build.buf.gen.streamarr.transcode.v1.CompatibleBase;
 import build.buf.gen.streamarr.transcode.v1.Deinterlace;
@@ -59,6 +60,8 @@ import com.streamarr.transcode.engine.FfmpegCommandBuilder;
 import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
 import com.streamarr.transcode.engine.ProcessBuilderLauncher;
 import com.streamarr.transcode.engine.ProcessLauncher;
+import com.streamarr.transcode.engine.Speaker;
+import com.streamarr.transcode.engine.SpeakerLayout;
 import com.streamarr.transcode.engine.TranscodeCapabilityService;
 import com.streamarr.transcode.fixtures.AudioInterval;
 import com.streamarr.transcode.fixtures.Mp4Samples;
@@ -79,6 +82,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -3234,6 +3238,241 @@ class WorkerMediaSmokeTest {
         .isEqualTo(videoPacketsOf(fromStartUploads, "segment2.m4s"));
   }
 
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("losslessLayoutChanges")
+  @DisplayName(
+      "Should keep every source sample in its channel when a lossless encode renames the surround"
+          + " pair or pads the layout")
+  void shouldKeepEverySourceSampleInItsChannelWhenALosslessEncodeRenamesOrPadsTheLayout(
+      LosslessLayoutChange change) throws Exception {
+    var source = losslessLayoutSource(change.sourceLayout());
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    var output = SpeakerLayout.named(change.outputLayout());
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setCodec(change.codec())
+        .setChannels(output.channelCount())
+        .setChannelLayout(change.contractLayout());
+    job.getExecutionBuilder().setMediaSegmentCount(1);
+
+    var uploads = execute(engine(realCapabilities()), seekableSources, job.build());
+
+    var delivered = root.resolve("delivered.mp4");
+    Files.write(delivered, uploads.contentOf(uploadNames(1)));
+    var sourceLayout = SpeakerLayout.named(change.sourceLayout());
+    var sourceChannels = decodedChannels(source, sourceLayout.channelCount());
+    var deliveredChannels = decodedChannels(delivered, output.channelCount());
+    assertThat(deliveredChannels[0]).hasSameSizeAs(sourceChannels[0]);
+    for (var index = 0; index < output.channelCount(); index++) {
+      var speaker = output.speakers().get(index);
+      var held = change.sources().get(speaker.name());
+      if (held == null) {
+        assertThat(deliveredChannels[index]).as("added channel %s", speaker).containsOnly(0);
+        continue;
+      }
+
+      assertThat(deliveredChannels[index])
+          .as("%s, which holds the source's %s", speaker, held)
+          .isEqualTo(sourceChannels[sourceLayout.speakers().indexOf(Speaker.valueOf(held))]);
+    }
+  }
+
+  @ParameterizedTest(name = "{0} at {1} bits")
+  @CsvSource({"flac, 24", "alac, 16"})
+  @DisplayName(
+      "Should write the named rate and depth when a lossless encode steps 96 kHz down to 48 kHz")
+  void shouldWriteTheNamedRateAndDepthWhenALosslessEncodeSteps96KhzDownTo48Khz(
+      String codec, int bitDepth) throws Exception {
+    var source = losslessSource("stereo", 96_000);
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setCodec(codec)
+        .setChannels(2)
+        .setChannelLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO)
+        .setOutputSampleRateHz(48_000)
+        .setOutputBitDepth(bitDepth);
+    job.getExecutionBuilder().setMediaSegmentCount(1);
+
+    var uploads = execute(engine(realCapabilities()), seekableSources, job.build());
+
+    var delivered = root.resolve("delivered.mp4");
+    Files.write(delivered, uploads.contentOf(uploadNames(1)));
+    assertThat(
+            ffprobe(
+                List.of("-select_streams", "a:0", "-show_entries", "stream=sample_rate"),
+                delivered))
+        .isEqualTo("48000");
+    var samples = Arrays.stream(decodedChannels(delivered, 2)).flatMapToInt(Arrays::stream);
+    var belowDepth = (1 << (Integer.SIZE - bitDepth)) - 1;
+    assertThat(samples.filter(sample -> (sample & belowDepth) != 0).count())
+        .as("samples with bits below %d", bitDepth)
+        .isZero();
+    var frameDurations =
+        ffprobe(List.of("-select_streams", "a:0", "-show_entries", "packet=duration"), delivered)
+            .lines()
+            .toList();
+    if ("flac".equals(codec)) {
+      // ADR 0043: FLAC frames of the sample rate divided by 20; only the last may be shorter.
+      assertThat(frameDurations.subList(0, frameDurations.size() - 1)).containsOnly("2400");
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep the channels that a pad adds silent when a lossless encode resamples and pads the"
+          + " layout")
+  void shouldKeepTheChannelsThatAPadAddsSilentWhenALosslessEncodeResamplesAndPadsTheLayout()
+      throws Exception {
+    var source = losslessSource("4.0", 96_000);
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    var output = SpeakerLayout.named("6.1");
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setCodec("flac")
+        .setChannels(output.channelCount())
+        .setChannelLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_SIX_POINT_ONE)
+        .setOutputSampleRateHz(48_000);
+    job.getExecutionBuilder().setMediaSegmentCount(1);
+
+    var uploads = execute(engine(realCapabilities()), seekableSources, job.build());
+
+    var delivered = root.resolve("delivered.mp4");
+    Files.write(delivered, uploads.contentOf(uploadNames(1)));
+    var deliveredChannels = decodedChannels(delivered, output.channelCount());
+    for (var added : List.of(Speaker.LFE, Speaker.SL, Speaker.SR)) {
+      assertThat(deliveredChannels[output.speakers().indexOf(added)])
+          .as("added channel %s", added)
+          .containsOnly(0);
+    }
+
+    assertThat(deliveredChannels[output.speakers().indexOf(Speaker.FL)])
+        .isNotEqualTo(new int[deliveredChannels[0].length]);
+  }
+
+  static Stream<LosslessLayoutChange> losslessLayoutChanges() {
+    return Stream.of(
+        LosslessLayoutChange.builder()
+            .sourceLayout("6.1")
+            .codec("alac")
+            .outputLayout("6.1(back)")
+            .contractLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_SIX_POINT_ONE_BACK)
+            .sources(
+                Map.of(
+                    "FL", "FL", "FR", "FR", "FC", "FC", "LFE", "LFE", "BL", "SL", "BR", "SR", "BC",
+                    "BC"))
+            .build(),
+        LosslessLayoutChange.builder()
+            .sourceLayout("5.1")
+            .codec("flac")
+            .outputLayout("5.1(side)")
+            .contractLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_FIVE_POINT_ONE_SIDE)
+            .sources(
+                Map.of("FL", "FL", "FR", "FR", "FC", "FC", "LFE", "LFE", "SL", "BL", "SR", "BR"))
+            .build(),
+        LosslessLayoutChange.builder()
+            .sourceLayout("4.0")
+            .codec("flac")
+            .outputLayout("6.1")
+            .contractLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_SIX_POINT_ONE)
+            .sources(Map.of("FL", "FL", "FR", "FR", "FC", "FC", "BC", "BC"))
+            .build(),
+        LosslessLayoutChange.builder()
+            .sourceLayout("quad")
+            .codec("alac")
+            .outputLayout("5.0")
+            .contractLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_FIVE_POINT_ZERO)
+            .sources(Map.of("FL", "FL", "FR", "FR", "BL", "BL", "BR", "BR"))
+            .build());
+  }
+
+  /**
+   * A lossless encode from a source layout to an output layout, and the source channel that each
+   * output channel holds; an output channel that the map leaves out is padding.
+   */
+  @Builder
+  record LosslessLayoutChange(
+      String sourceLayout,
+      String codec,
+      String outputLayout,
+      AudioChannelLayout contractLayout,
+      Map<String, String> sources) {
+    @Override
+    public String toString() {
+      return sourceLayout + " to " + codec + " " + outputLayout;
+    }
+  }
+
+  // The seekable source's video, and 24-bit FLAC in the layout whose channels each hold pink
+  // noise of their own seed, so that a moved channel cannot match its place.
+  private static Path losslessLayoutSource(String layout) throws Exception {
+    return losslessSource(layout, 48_000);
+  }
+
+  private static synchronized Path losslessSource(String layout, int sampleRate) throws Exception {
+    var source =
+        seekableSources.resolve(
+            "lossless-" + layout.replaceAll("[()]", "_") + "-" + sampleRate + ".mkv");
+    if (generatedSeekableSources.contains(source)) {
+      return source;
+    }
+
+    var channels = SpeakerLayout.named(layout).channelCount();
+    var arguments = new ArrayList<>(List.of("-f", "lavfi", "-i", "testsrc=size=64x36:rate=24"));
+    var joined = new StringBuilder();
+    for (var channel = 0; channel < channels; channel++) {
+      arguments.addAll(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "anoisesrc=color=pink:sample_rate="
+                  + sampleRate
+                  + ":amplitude=0.5:seed="
+                  + (channel + 11)));
+      joined.append("[").append(channel + 1).append(":a]");
+    }
+
+    joined.append("join=inputs=").append(channels).append(":channel_layout=").append(layout);
+    arguments.addAll(
+        List.of(
+            "-filter_complex",
+            joined + "[audio]",
+            "-map",
+            "0:v",
+            "-map",
+            "[audio]",
+            "-t",
+            "6",
+            "-c:v",
+            "libx264",
+            "-g",
+            "48",
+            "-c:a",
+            "flac",
+            "-sample_fmt",
+            "s32"));
+    runFfmpeg(arguments, source);
+    generatedSeekableSources.add(source);
+    return source;
+  }
+
+  // Each channel of the file's first audio stream, decoded to 32-bit samples in FFmpeg's order.
+  private int[][] decodedChannels(Path file, int channels) throws Exception {
+    var pcm = root.resolve(file.getFileName() + ".s32");
+    runFfmpeg(List.of("-i", file.toString(), "-map", "0:a:0", "-f", "s32le"), pcm);
+    var samples = ByteBuffer.wrap(Files.readAllBytes(pcm)).order(ByteOrder.LITTLE_ENDIAN);
+    var frames = samples.remaining() / Integer.BYTES / channels;
+    var decoded = new int[channels][frames];
+    for (var frame = 0; frame < frames; frame++) {
+      for (var channel = 0; channel < channels; channel++) {
+        decoded[channel][frame] = samples.getInt();
+      }
+    }
+
+    return decoded;
+  }
+
   @Test
   @DisplayName(
       "Should upload a media segment after the audio's end while FFmpeg's output continues when the"
@@ -3920,7 +4159,7 @@ class WorkerMediaSmokeTest {
       FfmpegTranscodeEngine engine, Path sourceRoot, VariantJob job, Consumer<String> uploadStarted)
       throws Exception {
     try (var controlPlane = new MediaControlPlane(uploadStarted);
-        var worker = workerBuilder(sourceRoot).engine(engine).build()) {
+        var worker = workerBuilder(sourceRoot).engine(engine).ffprobe(probeExecutor()).build()) {
       worker.start("127.0.0.1", controlPlane.port());
       var registeredWorker = controlPlane.registration.get(5, TimeUnit.SECONDS).getWorker();
       controlPlane.responses.onNext(
