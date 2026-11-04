@@ -334,7 +334,7 @@ class TranscodeWorkerAudioLayoutTest {
                 assertThat(argument)
                     .startsWith(
                         "aformat=sample_fmts=fltp,pan=stereo"
-                            + "|FL=FL+0.5946040*FC+0.5000000*SL|FR=FR+0.5946040*FC+0.5000000*SR,"));
+                            + "|FL=FL+0.5946040*FC+0.5000000*SL|FR=FR+0.5946040*FC+0.5000000*SR[mix];"));
   }
 
   @Test

@@ -163,7 +163,7 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
     return List.of("output_sample_bits=" + depth, TPDF_DITHER);
   }
 
-  // The true-peak limiter oversamples the rate that the downmix runs at.
+  // The true-peak limiter reads its copies at the rate that the downmix runs at.
   private static DownmixLimiter limiterFor(
       Encoder encoder, OptionalInt sampleRate, SpeakerLayout output) {
     if (encoder == Encoder.LOSSLESS) {

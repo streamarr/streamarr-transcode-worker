@@ -35,12 +35,38 @@ final class DownmixFilter {
       return mix;
     }
 
-    var limit = limiter.filter() + quantizer.map(filter -> "," + filter).orElse("");
+    var sources = limiter.sources(groups.size()).map(chains -> chains + ";").orElse("");
     if (groups.size() == 1 && groups.getFirst().size() == output.channelCount()) {
-      return mix + "," + limit;
+      return mix
+          + "[mix];"
+          + sources
+          + limiter.limit(0, output.channelCount(), "mix", "l0")
+          + ";[l0]"
+          + quantizer.orElse("anull");
     }
 
-    return mix + "," + splitAndLimit(output, groups, limit);
+    return mix + "," + splitAndLimit(output, groups, new Limit(limiter, sources, quantizer));
+  }
+
+  // The limiter of every summed group, the chains it reads, and the quantizer that follows it.
+  private record Limit(DownmixLimiter limiter, String sources, Optional<String> quantizer) {
+
+    // The limited group, from the labelled input to the labelled output.
+    String group(int group, int channels, String input, String output) {
+      if (quantizer.isEmpty()) {
+        return limiter.limit(group, channels, input, output);
+      }
+
+      var limited = "l" + group;
+      return limiter.limit(group, channels, input, limited)
+          + ";["
+          + limited
+          + "]"
+          + quantizer.orElseThrow()
+          + "["
+          + output
+          + "]";
+    }
   }
 
   /**
@@ -100,24 +126,28 @@ final class DownmixFilter {
   }
 
   private static String splitAndLimit(
-      SpeakerLayout output, List<List<Speaker>> groups, String limit) {
+      SpeakerLayout output, List<List<Speaker>> groups, Limit limit) {
     var speakers = output.speakers();
     var graph = new StringBuilder("channelsplit=channel_layout=").append(output.name());
     for (var index = 0; index < speakers.size(); index++) {
       graph.append("[c").append(index).append(']');
     }
 
+    graph.append(';').append(limit.sources());
+
     var joined = new ArrayList<String>();
     var map = new ArrayList<String>();
     for (var group = 0; group < groups.size(); group++) {
       var channels = groups.get(group);
-      graph.append(';');
-      channels.forEach(s -> graph.append("[c").append(speakers.indexOf(s)).append(']'));
+      var input = "c" + speakers.indexOf(channels.getFirst());
       if (channels.size() == 2) {
-        graph.append("join=inputs=2:channel_layout=stereo:map=0.0-FL|1.0-FR,");
+        input = "j" + group;
+        channels.forEach(s -> graph.append("[c").append(speakers.indexOf(s)).append(']'));
+        graph.append("join=inputs=2:channel_layout=stereo:map=0.0-FL|1.0-FR[").append(input);
+        graph.append("];");
       }
 
-      graph.append(limit).append("[g").append(group).append(']');
+      graph.append(limit.group(group, channels.size(), input, "g" + group)).append(';');
     }
 
     // A channel that no limiter group holds joins as its own one-channel input.
@@ -135,7 +165,7 @@ final class DownmixFilter {
       }
     }
 
-    graph.append(';').append(String.join("", joined));
+    graph.append(String.join("", joined));
     graph
         .append("join=inputs=")
         .append(joined.size())
