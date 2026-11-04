@@ -159,18 +159,7 @@ class TranscodeWorkerApplicationIT {
   void shouldProduceMediaWithTheConfiguredBinaryWhenTheApplicationStarts(BinaryLocation location)
       throws Exception {
     Files.writeString(tempDir.resolve("movie.mkv"), "media");
-    var binary = tempDir.resolve("working-ffprobe");
-    Files.writeString(
-        binary,
-        """
-        #!/bin/sh
-        if [ "$#" -eq 1 ]; then
-          [ "$1" = "-version" ] || exit 99
-          exit 0
-        fi
-        echo '{"streams":[{"index":0,"codec_type":"video","codec_name":"configured-codec"}]}'
-        """);
-    Files.setPosixFilePermissions(binary, PosixFilePermissions.fromString("rwx------"));
+    var binary = workingFfprobe();
     var request =
         ProbeRequest.newBuilder()
             .setProbeAttemptId(toProto(UUID.randomUUID()))
@@ -264,6 +253,85 @@ class TranscodeWorkerApplicationIT {
   }
 
   @Test
+  @DisplayName(
+      "Should run every ffprobe and FFmpeg through landlock-exec with the media root listed when"
+          + " the application checks the tools and probes")
+  void
+      shouldRunEveryFfprobeAndFfmpegThroughLandlockExecWithTheMediaRootListedWhenTheApplicationChecksTheToolsAndProbes()
+          throws Exception {
+    Files.writeString(tempDir.resolve("movie.mkv"), "media");
+    var ffprobe = workingFfprobe();
+    var request =
+        ProbeRequest.newBuilder()
+            .setProbeAttemptId(toProto(UUID.randomUUID()))
+            .setProbeVersion(FfprobeExecutor.PROBE_VERSION)
+            .setSource(
+                MediaSourceRef.newBuilder()
+                    .setSourceNamespaceId(toProto(SOURCE_NAMESPACE_ID))
+                    .setRelativeKey("movie.mkv"))
+            .build();
+
+    try (var controlPlane = WorkerApplicationControlPlane.builder().build()) {
+      var fixture = ApplicationFixture.builder().port(controlPlane.port()).ffprobe(ffprobe).build();
+      try (var worker = start(applicationProcess(fixture))) {
+        worker.awaitRegistration(controlPlane);
+        controlPlane.startProbe(request);
+        assertThat(worker.awaitProbeResult(controlPlane).hasMedia()).isTrue();
+      }
+    }
+
+    var confined = Files.readAllLines(confinedCommandsLog());
+    assertThat(confined)
+        .as("every tool runs through landlock-exec with the source root readable")
+        .isNotEmpty()
+        .allSatisfy(
+            command -> assertThat(command).contains("--read-pinned " + tempDir + " ", " -- "))
+        .anyMatch(command -> command.endsWith(" -- " + ffprobe + " -version"))
+        .anyMatch(command -> command.contains(ffprobe.toString()) && command.endsWith("movie.mkv"))
+        .anyMatch(command -> command.contains(" -- " + tempDir.resolve("ffmpeg") + " "));
+  }
+
+  @Test
+  @DisplayName("Should refuse startup when the host offers no Landlock")
+  void shouldRefuseStartupWhenTheHostOffersNoLandlock() throws Exception {
+    try (var controlPlane = WorkerApplicationControlPlane.builder().build()) {
+      var fixture =
+          ApplicationFixture.builder()
+              .port(controlPlane.port())
+              .ffprobe(versionOnlyFfprobe())
+              .build();
+      var processBuilder = applicationProcess(fixture);
+      landlockExecReporting(
+          "echo 'landlock-exec: Landlock is unavailable: landlock_create_ruleset: ENOSYS:"
+              + " Function not implemented' >&2; exit 2");
+      try (var worker = start(processBuilder)) {
+        assertStartupRefusedBeforeContact(worker, controlPlane, "Landlock");
+      }
+    }
+  }
+
+  @Test
+  @DisplayName("Should refuse startup when landlock-exec is missing")
+  void shouldRefuseStartupWhenLandlockExecIsMissing() throws Exception {
+    try (var controlPlane = WorkerApplicationControlPlane.builder().build()) {
+      var fixture =
+          ApplicationFixture.builder()
+              .port(controlPlane.port())
+              .ffprobe(versionOnlyFfprobe())
+              .build();
+      var processBuilder = applicationProcess(fixture);
+      processBuilder
+          .environment()
+          .put(
+              "TRANSCODE_WORKER_LANDLOCK_EXEC_PATH",
+              tempDir.resolve("missing-landlock-exec").toString());
+      try (var worker = start(processBuilder)) {
+        assertStartupRefusedBeforeContact(worker, controlPlane, "Landlock");
+      }
+    }
+  }
+
+  @Test
   @DisplayName("Should register its encoders when FFmpeg writes more than a pipe holds")
   void shouldRegisterItsEncodersWhenFfmpegWritesMoreThanAPipeHolds() throws Exception {
     try (var controlPlane = WorkerApplicationControlPlane.builder().build()) {
@@ -295,6 +363,23 @@ class TranscodeWorkerApplicationIT {
     assertThat(controlPlane.wasContacted())
         .as("the worker checks %s before it connects to the server", binary)
         .isFalse();
+  }
+
+  // Passes the version check and reports one video stream for any probe.
+  private Path workingFfprobe() throws Exception {
+    var binary = tempDir.resolve("working-ffprobe");
+    Files.writeString(
+        binary,
+        """
+        #!/bin/sh
+        if [ "$#" -eq 1 ]; then
+          [ "$1" = "-version" ] || exit 99
+          exit 0
+        fi
+        echo '{"streams":[{"index":0,"codec_type":"video","codec_name":"configured-codec"}]}'
+        """);
+    Files.setPosixFilePermissions(binary, PosixFilePermissions.fromString("rwx------"));
+    return binary;
   }
 
   private Path versionOnlyFfprobe() throws Exception {
@@ -449,6 +534,7 @@ class TranscodeWorkerApplicationIT {
         """
             .formatted(FRAGMENTED_MP4_MUXER_HELP));
     Files.setPosixFilePermissions(ffmpeg, PosixFilePermissions.fromString("rwx------"));
+    landlockExecReporting("echo 4");
     var command = new ArrayList<String>();
     command.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());
     ManagementFactory.getRuntimeMXBean().getInputArguments().stream()
@@ -477,6 +563,33 @@ class TranscodeWorkerApplicationIT {
                 Map.entry("TRANSCODE_WORKER_FFMPEG_PATH", ffmpeg.toString()),
                 Map.entry("TRANSCODE_WORKER_FFPROBE_PATH", fixture.ffprobe().toString())));
     return process;
+  }
+
+  // A landlock-exec on PATH that answers --abi as the report says and otherwise appends its
+  // arguments to a log and runs the tool as it is, so the scripted tools run on any operating
+  // system.
+  private Path landlockExecReporting(String abiReport) throws Exception {
+    var helper = tempDir.resolve("landlock-exec");
+    Files.writeString(
+        helper,
+        """
+        #!/bin/sh
+        if [ "$1" = --abi ]; then
+          %s
+          exit $?
+        fi
+        printf '%%s\n' "$*" >> '%s'
+        while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done
+        shift
+        exec "$@"
+        """
+            .formatted(abiReport, confinedCommandsLog()));
+    Files.setPosixFilePermissions(helper, PosixFilePermissions.fromString("rwx------"));
+    return helper;
+  }
+
+  private Path confinedCommandsLog() {
+    return tempDir.resolve("landlock-exec.log");
   }
 
   private WorkerApplicationProcess start(ProcessBuilder processBuilder) throws IOException {

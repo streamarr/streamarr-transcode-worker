@@ -4,9 +4,7 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -52,7 +50,7 @@ final class MatroskaTrackDuration {
    * be read.
    */
   static boolean areWrittenByFfmpeg(Path source) {
-    try (var channel = FileChannel.open(source, StandardOpenOption.READ)) {
+    try (var channel = MediaSourceChannel.openForReading(source)) {
       var elements = MatroskaFile.TopLevel.infoAndTags(channel);
       return elements
               .info()

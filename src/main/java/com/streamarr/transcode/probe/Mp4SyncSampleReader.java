@@ -22,9 +22,7 @@ import com.streamarr.transcode.probe.Mp4StreamMeasurer.TrackStream;
 import java.io.IOException;
 import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -55,7 +53,7 @@ final class Mp4SyncSampleReader {
    */
   static ContainerIndex read(Path source, TrackStream chosen, List<TrackStream> measured)
       throws IOException {
-    try (var channel = FileChannel.open(source, StandardOpenOption.READ)) {
+    try (var channel = MediaSourceChannel.openForReading(source)) {
       var movie = Mp4MovieBox.read(channel);
       if (child(movie, "mvex").isPresent()) {
         return ContainerIndex.keyframesOnly(

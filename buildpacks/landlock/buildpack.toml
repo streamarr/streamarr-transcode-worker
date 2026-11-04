@@ -1,0 +1,15 @@
+api = "0.10"
+
+[buildpack]
+id = "com.streamarr.landlock"
+version = "1.0.0"
+name = "Streamarr Landlock Buildpack"
+homepage = "https://github.com/streamarr/streamarr-transcode-worker"
+
+[[targets]]
+os = "linux"
+arch = "amd64"
+
+[[targets]]
+os = "linux"
+arch = "arm64"

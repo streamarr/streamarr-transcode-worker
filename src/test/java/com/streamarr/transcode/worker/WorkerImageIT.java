@@ -31,7 +31,10 @@ import build.buf.gen.streamarr.transcode.v1.VideoMode;
 import build.buf.gen.streamarr.transcode.v1.WorkerRegistration;
 import build.buf.gen.streamarr.transcode.v1.WorkerVerifiedVideoEncoder;
 import com.github.dockerjava.api.DockerClient;
+import com.github.dockerjava.api.command.CreateContainerCmd;
 import com.github.dockerjava.api.command.WaitContainerResultCallback;
+import com.github.dockerjava.api.model.Mount;
+import com.github.dockerjava.api.model.MountType;
 import com.streamarr.transcode.fixtures.image.ImageControlPlane;
 import com.streamarr.transcode.worker.support.FfprobePackets;
 import com.streamarr.transcode.worker.support.FfprobePackets.Packet;
@@ -53,6 +56,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import lombok.Builder;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.DisplayName;
@@ -62,7 +66,9 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.BindMode;
+import org.testcontainers.containers.Container;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.output.Slf4jLogConsumer;
 import org.testcontainers.containers.startupcheck.StartupCheckStrategy;
@@ -330,7 +336,7 @@ class WorkerImageIT {
           arguments+=("$argument")
           previous=$argument
         done
-        printf '%s\\0' "${arguments[@]}" > /tmp/ffmpeg-arguments
+        printf '%s\\0' "${arguments[@]}" > "$TMPDIR/ffmpeg-arguments"
         exec ffmpeg "${arguments[@]}"
         """);
     Files.setPosixFilePermissions(script, PosixFilePermissions.fromString("rwxr-xr-x"));
@@ -353,10 +359,10 @@ class WorkerImageIT {
       "Should probe and stream a Unicode source key when the image runs with its default locale")
   void shouldProbeAndStreamUnicodeSourceKeyWhenImageRunsWithItsDefaultLocale() throws Exception {
     copyMedia(UNICODE_KEY);
-    var ffmpeg = recordingExecutable("ffmpeg");
+    // FFmpeg runs unwrapped: with both tools wrapped, the Landlock policy would list no directory
+    // holding the real ones. The uploaded segment proves FFmpeg opened the source by its name.
     var ffprobe = recordingExecutable("ffprobe");
-    try (var image =
-        ImageFixture.builder().media(media).ffmpegPath(ffmpeg).ffprobePath(ffprobe).build()) {
+    try (var image = ImageFixture.builder().media(media).ffprobePath(ffprobe).build()) {
       image.accept();
       var probeRequest = requestBuilder().setSource(sourceBuilder().setRelativeKey(UNICODE_KEY));
 
@@ -379,7 +385,6 @@ class WorkerImageIT {
 
       assertThat(completed.getJobAttemptId()).isEqualTo(job.getJobAttemptId());
       assertThat(image.command("segment", new byte[0])).isNotEmpty();
-      assertThat(image.recordedArguments("ffmpeg")).contains("/media/" + UNICODE_KEY);
     }
   }
 
@@ -449,7 +454,7 @@ class WorkerImageIT {
         script,
         """
         #!/bin/bash
-        printf '%%s\\0' "$@" > /tmp/%s-arguments
+        printf '%%s\\0' "$@" > "$TMPDIR/%s-arguments"
         exec %s "$@"
         """
             .formatted(name, name));
@@ -483,21 +488,35 @@ class WorkerImageIT {
   @DisplayName("Should stop the media process gracefully when the container receives termination")
   void shouldStopTheMediaProcessGracefullyWhenTheContainerReceivesTermination() throws Exception {
     copyMedia();
+    // Nothing a confined tool writes outlives the worker, which removes its scratch directory at
+    // shutdown, so the wrapper's evidence leaves through a named pipe that a reader holds open. The
+    // wrapper opens the pipe as the job starts, which waits for that reader, and says so with a
+    // file, so the stop begins only once the pipe is connected. It keeps the pipe open until it
+    // exits: q arrives when it is read, e only when the wrapper then exits by itself with status
+    // zero, since a termination signal writes t instead and a forcible destroy runs no trap.
     var script =
         scriptedFfmpeg(
             """
+        exec 3>"$TMPDIR/graceful-stop"
+        : >"$TMPDIR/graceful-stop-open"
         read -r -n 1 command
-        if [[ $command == q ]]; then
-          printf q > /tmp/worker-image-graceful-stop
-          exit 0
+        if [[ $command != q ]]; then
+          exit 71
         fi
-        exit 71
+        printf q >&3
+        trap 'printf t >&3; exit 70' TERM INT HUP
+        trap '[[ $? -eq 0 ]] && printf e >&3' EXIT
+        exit 0
         """);
     try (var image = ImageFixture.builder().media(media).ffmpegPath(script).build()) {
       image.accept();
       var request = fixtureJobBuilder(TranscodeMode.TRANSCODE_MODE_REMUX).build();
+      var evidence = image.evidenceThroughPipe("graceful-stop");
       var started = JobAttemptStarted.parseFrom(image.command("start-job", request.toByteArray()));
       assertThat(started.getJobAttemptId()).isEqualTo(request.getJobAttemptId());
+      await()
+          .atMost(Duration.ofSeconds(30))
+          .until(() -> image.inScratch("test -e", "graceful-stop-open").getExitCode() == 0);
 
       image
           .worker
@@ -506,9 +525,9 @@ class WorkerImageIT {
           .withTimeout(10)
           .exec();
 
-      var marker = media.resolve("graceful-stop");
-      image.worker.copyFileFromContainer("/tmp/worker-image-graceful-stop", marker.toString());
-      assertThat(Files.readString(marker)).isEqualTo("q");
+      assertThat(evidence.get(30, TimeUnit.SECONDS))
+          .as("the wrapper read q and exited by itself")
+          .isEqualTo("qe");
       assertThat(image.worker.getCurrentContainerInfo().getState().getExitCodeLong())
           .isIn(0L, 143L);
       assertThat(new String(image.command("disconnected", new byte[0]), StandardCharsets.UTF_8))
@@ -526,13 +545,13 @@ class WorkerImageIT {
     // FFmpeg reads the source at its native rate, so it is still remuxing when the stop arrives. It
     // runs as this wrapper's child, and the wrapper records its exit status, which a forced kill of
     // the wrapper would never write.
-    var exitFile = "/tmp/worker-image-ffmpeg-exit";
+    var exitFile = "worker-image-ffmpeg-exit";
     var script =
         scriptedFfmpeg(
             """
         ffmpeg -re "$@"
         status=$?
-        printf '%%s' "$status" > %s
+        printf '%%s' "$status" > "$TMPDIR/%s"
         exit "$status"
         """
                 .formatted(exitFile));
@@ -540,14 +559,14 @@ class WorkerImageIT {
       image.accept();
       var request = fixtureJobBuilder(TranscodeMode.TRANSCODE_MODE_REMUX).build();
       image.command("job-awaiting-acknowledgement", request.toByteArray());
-      assertThat(image.worker.execInContainer("test", "-e", exitFile).getExitCode())
+      assertThat(image.inScratch("test -e", exitFile).getExitCode())
           .as("FFmpeg was still running when the stop was sent")
           .isNotZero();
 
       var stopped = JobAttemptStopped.parseFrom(image.command("stop-job", request.toByteArray()));
 
       assertThat(stopped.getJobAttemptId()).isEqualTo(request.getJobAttemptId());
-      var exitStatus = image.worker.execInContainer("cat", exitFile);
+      var exitStatus = image.inScratch("cat", exitFile);
       assertThat(exitStatus.getExitCode())
           .as("the wrapper recorded FFmpeg's exit, so no forced kill ended it")
           .isZero();
@@ -587,7 +606,10 @@ class WorkerImageIT {
   @DisplayName("Worker Image Fixture")
   private static final class ImageFixture implements AutoCloseable {
 
+    private static final String WORKER_TMP = "/worker-tmp";
+
     private final UUID workerId = UUID.randomUUID();
+    private final String scratchVolume;
     private final GenericContainer<?> controlPlane;
     private final GenericContainer<?> worker;
     private final CompletableFuture<Integer> workerExit = new CompletableFuture<>();
@@ -601,12 +623,22 @@ class WorkerImageIT {
         throws IOException {
       Files.setPosixFilePermissions(media, PosixFilePermissions.fromString("rwxr-xr-x"));
       var image = workerImage();
+      // The worker's /tmp, with the scratch directory its tools write in, is a volume the control
+      // plane container mounts too, so that a reader there outlives the worker.
+      scratchVolume = "worker-image-tmp-" + workerId;
+      DockerClientFactory.instance()
+          .client()
+          .createVolumeCmd()
+          .withName(scratchVolume)
+          .withLabels(DockerClientFactory.DEFAULT_LABELS)
+          .exec();
       controlPlane =
           new GenericContainer<>(image)
               .withImagePullPolicy(_ -> false)
               .withLogConsumer(new Slf4jLogConsumer(log).withPrefix("control-plane-" + workerId))
               .withCopyFileToContainer(
                   MountableFile.forHostPath("target/test-classes"), "/test-classes")
+              .withCreateContainerCmdModifier(mountScratchVolumeAt(WORKER_TMP))
               .withExposedPorts(8082, 9091)
               .withCreateContainerCmdModifier(
                   command -> command.withEntrypoint("/cnb/lifecycle/launcher"))
@@ -627,6 +659,7 @@ class WorkerImageIT {
               .withEnv("TRANSCODE_WORKER_SOURCE_NAMESPACE_ID", SOURCE_NAMESPACE_ID.toString())
               .withEnv("TRANSCODE_WORKER_SOURCE_ROOT", sourceRoot == null ? "/media" : sourceRoot)
               .withFileSystemBind(media.toAbsolutePath().toString(), "/media", BindMode.READ_ONLY)
+              .withCreateContainerCmdModifier(mountScratchVolumeAt("/tmp"))
               // The exit watch reports a worker that exits at once, so the start only needs the
               // container to have started.
               .withStartupCheckStrategy(new StartedContainer());
@@ -648,6 +681,19 @@ class WorkerImageIT {
         close();
         throw failure;
       }
+    }
+
+    // A file system bind names a host path, so the named volume is mounted as one.
+    private Consumer<CreateContainerCmd> mountScratchVolumeAt(String target) {
+      return command ->
+          command
+              .getHostConfig()
+              .withMounts(
+                  List.of(
+                      new Mount()
+                          .withType(MountType.VOLUME)
+                          .withSource(scratchVolume)
+                          .withTarget(target)));
     }
 
     private void watchWorkerExit() {
@@ -745,9 +791,42 @@ class WorkerImageIT {
       return response.body();
     }
 
+    // A confined tool writes only in the worker's scratch directory, which the worker creates
+    // under /tmp with a name of its own, so a file there is reached through the shell's glob.
+    private Container.ExecResult inScratch(String command, String file) throws Exception {
+      return worker.execInContainer("/bin/sh", "-c", command + " /tmp/*/" + file);
+    }
+
+    // Makes a named pipe of the given name in the scratch directory and reads it to its end on
+    // another thread, so that whatever a wrapper writes there reaches the test even after the
+    // worker has removed the directory. The reader runs in the control plane container: Linux ends
+    // every process in the worker's when the worker exits, bytes still in the pipe included. A
+    // wrapper's open of the pipe waits for this reader, so a wrapper that opens it before the stop
+    // makes the stop independent of the reader's start.
+    private CompletableFuture<String> evidenceThroughPipe(String file) throws Exception {
+      var scratch = "$(echo " + WORKER_TMP + "/streamarr-tools-*)";
+      var made =
+          controlPlane.execInContainer("/bin/sh", "-c", "mkfifo \"" + scratch + "/" + file + "\"");
+      assertThat(made.getExitCode()).as(made.getStderr()).isZero();
+      var evidence = new CompletableFuture<String>();
+      Thread.ofVirtual()
+          .start(
+              () -> {
+                try {
+                  var read =
+                      controlPlane.execInContainer(
+                          "/bin/sh", "-c", "cat " + WORKER_TMP + "/*/" + file);
+                  evidence.complete(read.getStdout());
+                } catch (Exception failure) {
+                  evidence.completeExceptionally(failure);
+                }
+              });
+      return evidence;
+    }
+
     // Read as base64 so no charset on the exec path can alter the recorded filename bytes.
     private List<String> recordedArguments(String executable) throws Exception {
-      var recorded = worker.execInContainer("base64", "-w0", "/tmp/" + executable + "-arguments");
+      var recorded = inScratch("base64 -w0", executable + "-arguments");
       assertThat(recorded.getExitCode()).as(recorded.getStderr()).isZero();
       var arguments =
           new String(
@@ -798,6 +877,7 @@ class WorkerImageIT {
     public void close() {
       worker.close();
       controlPlane.close();
+      DockerClientFactory.instance().client().removeVolumeCmd(scratchVolume).exec();
       http.close();
       if (workerExitWait != null) {
         try {

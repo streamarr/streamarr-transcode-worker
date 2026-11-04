@@ -16,9 +16,7 @@ import java.io.IOException;
 import java.math.BigInteger;
 import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.util.TreeSet;
 
 /**
@@ -50,7 +48,7 @@ final class MatroskaCueReader {
    * whose type is video, one for the second, and so on.
    */
   static KeyframeIndex read(Path source, int videoTrackOrdinal) throws IOException {
-    try (var channel = FileChannel.open(source, StandardOpenOption.READ)) {
+    try (var channel = MediaSourceChannel.openForReading(source)) {
       return read(TopLevel.read(channel), videoTrackOrdinal);
     } catch (ContainerIndexException | BufferUnderflowException | IllegalArgumentException _) {
       return unusable(

@@ -6,10 +6,17 @@ import build.buf.gen.streamarr.transcode.v1.MediaSourceRef;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Map;
 import java.util.UUID;
 
+/**
+ * Resolves a media source beneath its namespace's root. The walk from the root's real path follows
+ * no soft link: a link anywhere in the key's path refuses the source, wherever it points, because a
+ * link can be swapped between this check and FFmpeg's open. Hard links are ordinary files.
+ */
 final class WorkerMediaSourceResolver {
 
   private final Map<UUID, Path> sourceNamespaces;
@@ -26,10 +33,15 @@ final class WorkerMediaSourceResolver {
     }
 
     try {
-      var realRoot = root.toRealPath();
-      var mediaFile = realRoot.resolve(source.getRelativeKey()).toRealPath();
-      if (!mediaFile.startsWith(realRoot)
-          || !Files.isRegularFile(mediaFile)
+      var mediaFile = root.toRealPath();
+      for (var segment : source.getRelativeKey().split("/")) {
+        mediaFile = mediaFile.resolve(segment);
+        if (attributesWithoutFollowingLinks(mediaFile).isSymbolicLink()) {
+          throw new WorkerJobException("Media source path contains a soft link");
+        }
+      }
+
+      if (!Files.isRegularFile(mediaFile, LinkOption.NOFOLLOW_LINKS)
           || !Files.isReadable(mediaFile)) {
         throw new WorkerJobException("Media source is not a readable file in its namespace");
       }
@@ -37,6 +49,10 @@ final class WorkerMediaSourceResolver {
     } catch (IOException | InvalidPathException e) {
       throw new WorkerJobException("Media source is unavailable", e);
     }
+  }
+
+  private static BasicFileAttributes attributesWithoutFollowingLinks(Path path) throws IOException {
+    return Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
   }
 
   private void validateSegments(String relativeKey) {

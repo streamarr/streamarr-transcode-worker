@@ -1,0 +1,22 @@
+#!/bin/bash
+
+set -euo pipefail
+
+layers_dir="${CNB_LAYERS_DIR:?CNB_LAYERS_DIR is required}"
+buildpack_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+layer="${layers_dir}/landlock"
+rm -rf "${layer}"
+"${buildpack_dir}/bin/compile" "${layer}/bin/landlock-exec"
+
+# The build host's kernel says nothing about the run host's, so the ABI is reported, not required.
+if abi="$("${layer}/bin/landlock-exec" --abi 2>/dev/null)"; then
+  echo "landlock-exec built; the build host offers Landlock ABI ${abi}"
+else
+  echo "landlock-exec built; the build host offers no Landlock, the run host must"
+fi
+
+cat >"${layers_dir}/landlock.toml" <<EOF2
+[types]
+launch = true
+EOF2

@@ -52,8 +52,10 @@ class WorkerRotationSmokeTest {
     try (var worker =
         workerBuilder(sourceRoot)
             .runtime(runtime)
-            .ffprobe(FfprobeExecutor.forBinaries(Path.of("ffprobe"), Path.of("ffmpeg")))
-            .engine(engine(new ProcessBuilderLauncher()))
+            .ffprobe(
+                FfprobeExecutor.forBinaries(
+                    Path.of("ffprobe"), Path.of("ffmpeg"), HostConfinement.forMedia()))
+            .engine(engine(new ProcessBuilderLauncher(HostConfinement.forMedia())))
             .build()) {
       worker.start("localhost", 1);
       var connection = runtime.connection();

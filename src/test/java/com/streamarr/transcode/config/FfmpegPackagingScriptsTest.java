@@ -1184,7 +1184,7 @@ class FfmpegPackagingScriptsTest {
         if [[ " $* " != *" --interactive "* ]]; then
           exit
         fi
-        PATH="${FAKE_FFMPEG_ROOT}/bin:${PATH}" exec /bin/bash -euo pipefail -s
+        PATH="${FAKE_FFMPEG_ROOT}/bin:/usr/bin:/bin" exec /bin/bash -euo pipefail -s
         """);
     return new ImageVerifierFixture(
         runtime,
@@ -1216,7 +1216,8 @@ class FfmpegPackagingScriptsTest {
 
     assertThat(result.exitCode()).as(result.output()).isZero();
     assertThat(probes).exists();
-    assertThat(Files.readAllLines(probes)).containsExactly("fragmented-mp4", "av1");
+    assertThat(Files.readAllLines(probes))
+        .containsExactly("fragmented-mp4", "av1", "fragmented-mp4 confined");
   }
 
   @Test
@@ -1287,9 +1288,50 @@ class FfmpegPackagingScriptsTest {
     assertThat(result.output()).contains("FFmpeg's mp4 muxer lacks frag_discont");
   }
 
-  // FFmpeg and ffprobe inside the image: FFmpeg writes a fragmented MP4 stand-in to its standard
-  // output, and its arguments to PIPE_ARGUMENTS when set, and a file anywhere else; ffprobe records
-  // which output it recognized.
+  @Test
+  @DisplayName("Should reject the image when it carries no landlock-exec")
+  void shouldRejectTheImageWhenItCarriesNoLandlockExec() throws Exception {
+    var verifier = imageVerifier();
+    writeImageRuntime(verifier);
+    Files.delete(verifier.runtime().resolve("landlock-exec"));
+
+    var result =
+        verifier
+            .command()
+            .environment("STDIN_ENCODER", "none")
+            .environment("COMPLETED_PROBES", temporaryDirectory.resolve("probes").toString())
+            .execute();
+
+    assertThat(result.exitCode()).isEqualTo(1);
+    assertThat(result.output()).contains("The image carries no landlock-exec");
+  }
+
+  @Test
+  @DisplayName(
+      "Should reject the image when landlock-exec lets ffprobe read a file outside the listed"
+          + " paths")
+  void shouldRejectTheImageWhenLandlockExecLetsFfprobeReadAFileOutsideTheListedPaths()
+      throws Exception {
+    var verifier = imageVerifier();
+    writeImageRuntime(verifier);
+
+    var result =
+        verifier
+            .command()
+            .environment("STDIN_ENCODER", "none")
+            .environment("COMPLETED_PROBES", temporaryDirectory.resolve("probes").toString())
+            .environment("FAKE_LANDLOCK_GRANTS_EVERY_PATH", "1")
+            .execute();
+
+    assertThat(result.exitCode()).isEqualTo(1);
+    assertThat(result.output())
+        .contains("landlock-exec let ffprobe read a file outside the listed paths");
+  }
+
+  // FFmpeg, ffprobe and landlock-exec inside the image: FFmpeg writes a fragmented MP4 stand-in to
+  // its standard output, and its arguments to PIPE_ARGUMENTS when set, and a file anywhere else;
+  // landlock-exec hands the listed paths to the tool it starts; ffprobe refuses a file outside
+  // them, as the kernel would, and records which output it recognized.
   private static void writeImageRuntime(ImageVerifierFixture verifier) throws IOException {
     ScriptCommand.writeFake(
         verifier.runtime(),
@@ -1320,12 +1362,49 @@ class FfmpegPackagingScriptsTest {
         verifier.runtime(),
         "ffprobe",
         """
-        case "${!#}" in
+        source="${!#}"
+        suffix=
+        if [[ -n "${LANDLOCK_LISTED_PATHS:-}" ]]; then
+          suffix=' confined'
+          listed=
+          for path in ${LANDLOCK_LISTED_PATHS}; do
+            if [[ "${source}" == "${path}"/* ]]; then
+              listed=1
+            fi
+          done
+          if [[ -z "${listed}" ]]; then
+            echo "${source}: Permission denied" >&2
+            exit 1
+          fi
+        fi
+        case "${source}" in
           */fragmented.mp4)
-            echo fragmented-mp4 >>"${COMPLETED_PROBES}"
+            echo "fragmented-mp4${suffix}" >>"${COMPLETED_PROBES}"
             echo 'format_name=mov,mp4,m4a,3gp,3g2,mj2' ;;
-          */av1.mp4) echo av1 >>"${COMPLETED_PROBES}"; echo 'codec_name=av1' ;;
+          */av1.mp4) echo "av1${suffix}" >>"${COMPLETED_PROBES}"; echo 'codec_name=av1' ;;
         esac
+        """);
+    ScriptCommand.writeFake(
+        verifier.runtime(),
+        "landlock-exec",
+        """
+        if [[ "${1:-}" == --abi ]]; then
+          echo 5
+          exit 0
+        fi
+        listed=
+        while [[ "$1" != -- ]]; do
+          case "$1" in
+            --read|--read-execute|--read-write|--device) listed="${listed} $2"; shift 2 ;;
+            --read-pinned) listed="${listed} $2"; shift 3 ;;
+            *) echo "landlock-exec: unknown option $1" >&2; exit 125 ;;
+          esac
+        done
+        shift
+        if [[ -n "${FAKE_LANDLOCK_GRANTS_EVERY_PATH:-}" ]]; then
+          exec "$@"
+        fi
+        LANDLOCK_LISTED_PATHS="${listed}" exec "$@"
         """);
   }
 

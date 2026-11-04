@@ -25,6 +25,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.UnaryOperator;
 import lombok.Builder;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -52,7 +53,9 @@ class FfprobeExecutorProcessTest {
   void shouldReturnAnExecutionFailureWhenTheConfiguredBinaryIsUnavailable() {
     var executor =
         FfprobeExecutor.forBinaries(
-            temporaryDirectory.resolve("missing-ffprobe"), temporaryDirectory.resolve("ffmpeg"));
+            temporaryDirectory.resolve("missing-ffprobe"),
+            temporaryDirectory.resolve("ffmpeg"),
+            UnaryOperator.identity());
 
     assertThat(
             executor
@@ -150,7 +153,7 @@ class FfprobeExecutorProcessTest {
     var completed =
         probeUntilInterrupted(
             InterruptedProbe.builder()
-                .executor(FfprobeExecutor.forBinaries(ffprobe, ffmpeg))
+                .executor(FfprobeExecutor.forBinaries(ffprobe, ffmpeg, UnaryOperator.identity()))
                 .pidFile(Path.of(ffmpeg + ".pid"))
                 .source(source)
                 .request(request)
@@ -425,7 +428,8 @@ class FfprobeExecutorProcessTest {
   }
 
   private FfprobeExecutor executorFor(Path ffprobe) {
-    return FfprobeExecutor.forBinaries(ffprobe, temporaryDirectory.resolve("ffmpeg"));
+    return FfprobeExecutor.forBinaries(
+        ffprobe, temporaryDirectory.resolve("ffmpeg"), UnaryOperator.identity());
   }
 
   private ProbeRequest request() {

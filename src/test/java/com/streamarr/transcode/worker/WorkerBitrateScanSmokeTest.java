@@ -64,7 +64,8 @@ class WorkerBitrateScanSmokeTest {
   private static final int FFMPEG_DURATION_BYTES = FFMPEG_DURATION.length + 19;
 
   private static final FfprobeExecutor FFPROBE =
-      FfprobeExecutor.forBinaries(Path.of("ffprobe"), Path.of("ffmpeg"));
+      FfprobeExecutor.forBinaries(
+          Path.of("ffprobe"), Path.of("ffmpeg"), HostConfinement.forMedia());
 
   @TempDir Path root;
 
