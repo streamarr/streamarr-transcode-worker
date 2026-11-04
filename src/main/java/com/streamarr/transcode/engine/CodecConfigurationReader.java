@@ -175,12 +175,14 @@ final class CodecConfigurationReader {
     return lengthSizeOf(avcSampleEntry, "avcC", AVCC_LENGTH_SIZE_FIELD);
   }
 
-  // lengthSizeMinusOne sits in the low 2 bits of the record's field at the offset.
-  private static int lengthSizeOf(BoxView sampleEntry, String record, int field) {
-    var fields = sampleEntry.after(VISUAL_SAMPLE_ENTRY_BYTES).requiredChild(record).fields();
+  // lengthSizeMinusOne sits in the low 2 bits of the configuration box's field at the offset.
+  private static int lengthSizeOf(BoxView sampleEntry, String configurationBox, int field) {
+    var fields =
+        sampleEntry.after(VISUAL_SAMPLE_ENTRY_BYTES).requiredChild(configurationBox).fields();
     var lengthSize = (fields.skip(field).u8() & 0x03) + 1;
     if (lengthSize == 3) {
-      throw FragmentedMp4Exception.malformed(record + " declares NAL unit lengths of 3 bytes");
+      throw FragmentedMp4Exception.malformed(
+          configurationBox + " declares NAL unit lengths of 3 bytes");
     }
 
     return lengthSize;

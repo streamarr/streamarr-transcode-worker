@@ -391,7 +391,8 @@ class TranscodeWorkerHdrCopyTest {
         initializationSegmentOf(job.build(), bytesOf(planned.recording().file()));
 
     assertThat(sampleEntryTypeOf(initializationSegment)).isEqualTo(planned.sampleEntry());
-    assertThat(dolbyVisionRecordsOf(initializationSegment)).containsExactly(planned.record());
+    assertThat(dolbyVisionRecordsOf(initializationSegment))
+        .containsExactly(planned.deliveredRecord());
   }
 
   static Stream<PlannedDolbyVision> dolbyVisionOutputs() {
@@ -409,7 +410,7 @@ class TranscodeWorkerHdrCopyTest {
                     .build())
             .codecString(HEVC_COPY.videoCodecString())
             .sampleEntry("hvc1")
-            .record("dvvC" + PROFILE_8_LEVEL_6_PQ_RECORD)
+            .deliveredRecord("dvvC" + PROFILE_8_LEVEL_6_PQ_RECORD)
             .build(),
         PlannedDolbyVision.builder()
             .name("profile 5 under dvh1")
@@ -418,7 +419,7 @@ class TranscodeWorkerHdrCopyTest {
             .output(profile5Output().build())
             .codecString("dvh1.05.06")
             .sampleEntry("dvh1")
-            .record("dvcC" + PROFILE_5_LEVEL_6_RECORD)
+            .deliveredRecord("dvcC" + PROFILE_5_LEVEL_6_RECORD)
             .build(),
         PlannedDolbyVision.builder()
             .name("profile 10 on the SDR base of the recorded AV1 copy under av01")
@@ -436,7 +437,7 @@ class TranscodeWorkerHdrCopyTest {
                     .build())
             .codecString(AV1_COPY.videoCodecString())
             .sampleEntry("av01")
-            .record("dvvC" + PROFILE_10_LEVEL_6_SDR_RECORD)
+            .deliveredRecord("dvvC" + PROFILE_10_LEVEL_6_SDR_RECORD)
             .build());
   }
 
@@ -449,7 +450,7 @@ class TranscodeWorkerHdrCopyTest {
       DolbyVisionOutput output,
       String codecString,
       String sampleEntry,
-      String record) {
+      String deliveredRecord) {
 
     @Override
     public String toString() {
@@ -700,16 +701,16 @@ class TranscodeWorkerHdrCopyTest {
   private static List<String> seiNalUnitsOfTheRecord(byte[] initializationSegment) {
     var hvcC = indexOf(initializationSegment, "hvcC");
     assertThat(hvcC).as("the hvcC box").isNotNegative();
-    var record = ByteBuffer.wrap(initializationSegment);
-    record.position(hvcC + 4 + HVCC_FIELDS_BEFORE_ARRAYS);
-    var arrays = Byte.toUnsignedInt(record.get());
+    var arraysOfTheRecord = ByteBuffer.wrap(initializationSegment);
+    arraysOfTheRecord.position(hvcC + 4 + HVCC_FIELDS_BEFORE_ARRAYS);
+    var arrays = Byte.toUnsignedInt(arraysOfTheRecord.get());
     var seiNalUnits = new ArrayList<String>();
     for (var array = 0; array < arrays; array++) {
-      record.get();
-      var count = Short.toUnsignedInt(record.getShort());
+      arraysOfTheRecord.get();
+      var count = Short.toUnsignedInt(arraysOfTheRecord.getShort());
       for (var nalUnit = 0; nalUnit < count; nalUnit++) {
-        var bytes = new byte[Short.toUnsignedInt(record.getShort())];
-        record.get(bytes);
+        var bytes = new byte[Short.toUnsignedInt(arraysOfTheRecord.getShort())];
+        arraysOfTheRecord.get(bytes);
         var type = (bytes[0] >> 1) & 0x3F;
         if (type == PREFIX_SEI || type == SUFFIX_SEI) {
           seiNalUnits.add(HexFormat.of().withUpperCase().formatHex(bytes));

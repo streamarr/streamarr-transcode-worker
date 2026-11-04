@@ -2612,13 +2612,13 @@ class WorkerMediaSmokeTest {
     assertThat(videoStreamFields(media, "codec_tag_string,color_transfer"))
         .containsExactlyInAnyOrderEntriesOf(
             Map.of("codec_tag_string", "hvc1", "color_transfer", "smpte2084"));
-    var record = hevcRecordNalUnits(uploads.segments().get("init.mp4"));
-    assertThat(record)
+    var recordNalUnits = hevcRecordNalUnits(uploads.segments().get("init.mp4"));
+    assertThat(recordNalUnits)
         .as("the NAL unit types of the delivered record")
         .extracting(WorkerMediaSmokeTest::hevcNalUnitType)
         .containsExactly(HEVC_VPS, HEVC_SPS, HEVC_PPS, HEVC_PREFIX_SEI, HEVC_PREFIX_SEI);
-    var masteringDisplay = seiMessages(List.of(record.get(3)));
-    var contentLightLevel = seiMessages(List.of(record.get(4)));
+    var masteringDisplay = seiMessages(List.of(recordNalUnits.get(3)));
+    var contentLightLevel = seiMessages(List.of(recordNalUnits.get(4)));
     assertThat(masteringDisplay).containsOnlyKeys(HEVC_MASTERING_DISPLAY_SEI);
     assertThat(MasteringDisplayColourVolume.of(masteringDisplay.get(HEVC_MASTERING_DISPLAY_SEI)))
         .isEqualTo(HDR10_MASTERING_DISPLAY);
