@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.streamarr.transcode.engine.AttemptOutcome.Completed;
 import com.streamarr.transcode.engine.AttemptOutcome.Failed;
+import com.streamarr.transcode.fixtures.Mp4Samples;
+import com.streamarr.transcode.fixtures.Mp4Samples.Sample;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -103,6 +105,25 @@ class HdrCopySmokeTest {
     var replacement = copied(hdr10, hdr10Copy(both()), 2);
 
     assertThat(replacement).isEqualTo(fromStart);
+  }
+
+  // ADR 0036: the copy also keeps both messages in its samples, for players that read only those.
+  @Test
+  @DisplayName(
+      "Should keep the static HDR messages in the keyframe samples when the copy writes them into"
+          + " the hvcC")
+  void shouldKeepTheStaticHdrMessagesInTheKeyframeSamplesWhenTheCopyWritesThemIntoTheHvcc()
+      throws Exception {
+    var sink = copiedSink(hdr10, hdr10Copy(both()), 0);
+
+    var movie = Mp4Samples.read(sink.acceptedBytes());
+    var keyframes = movie.samplesOf(movie.videoTrack()).stream().filter(Sample::isSync).toList();
+    assertThat(keyframes).hasSize(SOURCE_SECONDS / PERIOD_SECONDS);
+    for (var keyframe : keyframes) {
+      assertThat(seiPayloadTypesOf(keyframe.data()))
+          .as("the SEI messages of the keyframe at %d", keyframe.decodeTime())
+          .contains(MASTERING_DISPLAY, CONTENT_LIGHT_LEVEL);
+    }
   }
 
   @ParameterizedTest(name = "{0}")
@@ -625,6 +646,21 @@ class HdrCopySmokeTest {
     return messages;
   }
 
+  // The payload types of the prefix SEI messages in a sample whose NAL units follow 4-byte lengths.
+  private static List<Integer> seiPayloadTypesOf(ByteBuffer sample) {
+    var data = sample.duplicate();
+    var types = new ArrayList<Integer>();
+    while (data.remaining() >= 4) {
+      var unit = new byte[data.getInt()];
+      data.get(unit);
+      if (((Byte.toUnsignedInt(unit[0]) >> 1) & 0x3F) == PREFIX_SEI) {
+        seiMessagesOf(unit).forEach(message -> types.add(message.payloadType()));
+      }
+    }
+
+    return types;
+  }
+
   private static List<SeiMessage> seiMessagesOf(byte[] nalUnit) {
     var rbsp = new ByteArrayOutputStream();
     var zeros = 0;
@@ -642,14 +678,26 @@ class HdrCopySmokeTest {
     var reading = ByteBuffer.wrap(rbsp.toByteArray());
     var messages = new ArrayList<SeiMessage>();
     while (reading.remaining() > 1) {
-      var type = Byte.toUnsignedInt(reading.get());
-      var payload = new byte[Byte.toUnsignedInt(reading.get())];
+      var type = codedValue(reading);
+      var payload = new byte[codedValue(reading)];
       reading.get(payload);
       messages.add(new SeiMessage(type, HexFormat.of().withUpperCase().formatHex(payload)));
     }
 
     assertThat(Byte.toUnsignedInt(reading.get())).as("the RBSP stop byte").isEqualTo(0x80);
     return messages;
+  }
+
+  // An SEI payload type or size: each 0xFF byte adds 255 until another byte ends the value.
+  private static int codedValue(ByteBuffer reading) {
+    var value = 0;
+    var octet = 0xFF;
+    while (octet == 0xFF) {
+      octet = Byte.toUnsignedInt(reading.get());
+      value += octet;
+    }
+
+    return value;
   }
 
   // The first sample entry of the first track: its type, then its fields and child boxes.
