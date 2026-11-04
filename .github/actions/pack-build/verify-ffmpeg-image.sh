@@ -106,7 +106,10 @@ EXPECTED_FFMPEG_VERSION="${expected_ffmpeg_version}" \
   # The worker runs both tools through landlock-exec, so the image must carry it, the host's kernel
   # must offer Landlock, and a ruleset that lists the tools' directory must let ffprobe read a
   # listed file and nothing else.
-  landlock_exec="$(command -v landlock-exec)"
+  landlock_exec="$(command -v landlock-exec)" || {
+    echo "The image carries no landlock-exec" >&2
+    exit 1
+  }
   abi="$("${landlock_exec}" --abi)"
   [[ "${abi}" =~ ^[1-9][0-9]*$ ]]
   confined=("${landlock_exec}" --read-execute /usr --read-execute /lib --read-execute /lib64
