@@ -1,31 +1,34 @@
 package com.streamarr.transcode.engine;
 
+import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.util.Set;
+import java.util.function.Supplier;
 
 /**
- * Removes the SEI messages from every {@code hvc1} decoder configuration record of an
- * initialization segment, and resizes each box that holds a record. When a copy's source keeps its
- * parameter sets only in its samples, FFmpeg builds the record from the first sample and copies
- * that sample's SEI messages into it. Attempts that start at different keyframes then write
- * different records, which ADR 0037 forbids. The samples keep their SEI messages.
+ * Rewrites the initialization segment that FFmpeg writes into the one the producer delivers. It
+ * removes the SEI messages from every {@code hvc1} decoder configuration record, and resizes each
+ * box that holds a record. When a copy's source keeps its parameter sets only in its samples,
+ * FFmpeg builds the record from the first sample and copies that sample's SEI messages into it.
+ * Attempts that start at different keyframes then write different records, which ADR 0037 forbids.
+ * The samples keep their SEI messages.
  */
-final class HevcRecordSeiRemoval {
+final class InitializationSegmentRewrite {
 
   // The NAL unit types of prefix and suffix SEI messages (ITU-T H.265 table 7-1).
   private static final Set<Integer> SEI_TYPES = Set.of(39, 40);
   // The stsd fields before its sample entries: version, flags and entry count.
   private static final int STSD_FIELDS = 8;
 
-  private HevcRecordSeiRemoval() {}
+  private InitializationSegmentRewrite() {}
 
   /**
    * @throws FragmentedMp4Exception with {@link FragmentedMp4Exception.Reason#MALFORMED_BOX} when a
-   *     box on the way to a record declares a size that its parent cannot hold, or a record ends
-   *     before its arrays do
+   *     box on the way to a record declares a size that its parent cannot hold; with {@link
+   *     FragmentedMp4Exception.Reason#OUTPUT_MISMATCH} when a record ends before its arrays do
    */
-  static InitializationSegment removeSeiMessages(InitializationSegment segment) {
+  static InitializationSegment rewrite(InitializationSegment segment) {
     return new InitializationSegment(
         rebuiltChildren("initialization segment", ByteBuffer.wrap(segment.bytes())));
   }
@@ -55,7 +58,7 @@ final class HevcRecordSeiRemoval {
       case "moov", "trak", "mdia", "minf", "stbl" -> rebuiltChildren(type, body);
       case "stsd" -> rebuiltAfter(type, body, STSD_FIELDS);
       case "hvc1" -> rebuiltAfter(type, body, CodecConfigurationReader.VISUAL_SAMPLE_ENTRY_BYTES);
-      case "hvcC" -> withoutSeiArrays(body);
+      case "hvcC" -> readable(() -> withoutSeiArrays(body));
       default -> bytesOf(body);
     };
   }
@@ -91,6 +94,17 @@ final class HevcRecordSeiRemoval {
         new byte[] {(byte) keptArrays},
         kept.toByteArray(),
         bytesOf(reading));
+  }
+
+  // A record that cannot be read is an output mismatch, as the output check reports it.
+  private static byte[] readable(Supplier<byte[]> reading) {
+    try {
+      return reading.get();
+    } catch (FragmentedMp4Exception e) {
+      throw new FragmentedMp4Exception(
+          Reason.OUTPUT_MISMATCH,
+          "the video codec configuration cannot be read: " + e.getMessage());
+    }
   }
 
   // The box's own header, with its 32-bit or 64-bit size changed to fit the body.

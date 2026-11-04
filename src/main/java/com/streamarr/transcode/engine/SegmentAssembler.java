@@ -70,21 +70,19 @@ final class SegmentAssembler {
    * the open segment and every segment awaiting audio, and the assembler reports them with the
    * failure that ends the output once they are delivered.
    *
-   * @throws FragmentedMp4Exception when the initialization segment declares other video than the
-   *     decision, when a video sample that the copy rewrites cannot be read, when the grouper
-   *     refuses the fragment, when it holds a short video sample or an audio sample that starts
-   *     before the one before it, or when a segment it closes is larger than the segment cap once
-   *     rebuilt, after which nothing is delivered, not even the segments it would close
+   * @throws FragmentedMp4Exception when the initialization segment it delivers declares other video
+   *     than the decision, when a video sample that the copy rewrites cannot be read, when the
+   *     grouper refuses the fragment, when it holds a short video sample or an audio sample that
+   *     starts before the one before it, or when a segment it closes is larger than the segment cap
+   *     once rebuilt, after which nothing is delivered, not even the segments it would close
    */
   Closing accept(@NonNull Mp4Unit unit) {
     return switch (unit) {
       case InitializationSegment initializationSegment -> {
-        VideoOutputCheck.requireMatch(videoDecision, initializationSegment);
-        sampleRewrite = VideoSampleRewrite.of(videoDecision, initializationSegment);
-        yield Closing.of(
-            List.of(
-                new ClosedSegment.Initialization(
-                    HevcRecordSeiRemoval.removeSeiMessages(initializationSegment))));
+        var delivered = InitializationSegmentRewrite.rewrite(initializationSegment);
+        VideoOutputCheck.requireMatch(videoDecision, delivered);
+        sampleRewrite = VideoSampleRewrite.of(videoDecision, delivered);
+        yield Closing.of(List.of(new ClosedSegment.Initialization(delivered)));
       }
       case Fragment fragment -> closingOf(checkedForShortSamples(rewritten(fragment)));
     };
