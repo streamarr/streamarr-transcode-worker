@@ -268,25 +268,26 @@ class ProducerRpuMovingPipeTest {
 
   @Test
   @DisplayName(
-      "Should fail the attempt with the copying FFmpeg's error output when it exits with an error"
-          + " and the encoding FFmpeg exits cleanly")
+      "Should fail the attempt with the copying FFmpeg's error output, and terminate the encoding"
+          + " FFmpeg, when the copying FFmpeg exits with an error after a copy of whole units")
   void
-      shouldFailTheAttemptWithTheCopyingFfmpegsErrorOutputWhenItExitsWithAnErrorAndTheEncodingFfmpegExitsCleanly() {
+      shouldFailTheAttemptWithTheCopyingFfmpegsErrorOutputAndTerminateTheEncodingFfmpegWhenTheCopyingFfmpegExitsWithAnErrorAfterACopyOfWholeUnits() {
     var copy =
         ScriptedProcess.builder()
             .output(COPIED_SOURCE)
             .exitCode(1)
             .stderr("Error reading the source: Input/output error\n")
             .build();
-    var encode = encodingFfmpeg().build();
+    var encode = encodingFfmpegReadingTheSourcesAudioUntilTerminated();
 
     var producer = producerOf(copy, encode).start();
 
     var failure = failureOf(producer);
     assertThat(failure.reason()).isEqualTo(ProducerFailure.PROCESS_EXITED_WITH_ERROR);
     assertThat(failure.detail())
-        .contains("copies the source", "exit code 1")
+        .startsWith("The FFmpeg that copies the source exited with exit code 1")
         .endsWith("Error reading the source: Input/output error");
+    assertThat(encode.wasTerminated()).isTrue();
   }
 
   @Test
@@ -618,11 +619,14 @@ class ProducerRpuMovingPipeTest {
     assertThat(failure.detail()).contains("defect in the copy's transfer");
   }
 
+  // The copy reached the encoding FFmpeg whole, so the copying FFmpeg failed while the encoding one
+  // still read the source's audio.
   @Test
   @DisplayName(
-      "Should fail the attempt with the encoding FFmpeg's error output when both FFmpegs exit with"
-          + " an error")
-  void shouldFailTheAttemptWithTheEncodingFfmpegsErrorOutputWhenBothFfmpegsExitWithAnError() {
+      "Should fail the attempt with the copying FFmpeg's error output when both FFmpegs exit with"
+          + " an error after a copy of whole units")
+  void
+      shouldFailTheAttemptWithTheCopyingFfmpegsErrorOutputWhenBothFfmpegsExitWithAnErrorAfterACopyOfWholeUnits() {
     var copy =
         ScriptedProcess.builder()
             .output(COPIED_SOURCE)
@@ -636,8 +640,8 @@ class ProducerRpuMovingPipeTest {
     var failure = failureOf(producer);
     assertThat(failure.reason()).isEqualTo(ProducerFailure.PROCESS_EXITED_WITH_ERROR);
     assertThat(failure.detail())
-        .startsWith("FFmpeg exited with exit code 1")
-        .endsWith("Conversion failed!");
+        .startsWith("The FFmpeg that copies the source exited with exit code 1")
+        .endsWith("Error reading the source: Input/output error");
   }
 
   @Test
