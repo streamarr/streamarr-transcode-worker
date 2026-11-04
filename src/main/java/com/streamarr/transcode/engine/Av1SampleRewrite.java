@@ -7,10 +7,11 @@ import java.util.Set;
 
 /**
  * Strips Dolby Vision, HDR10+ or both from an AV1 sample, a temporal unit of OBUs (AV1 5.3), by
- * removing the metadata OBUs of type ITU-T T.35 that carry them. A Dolby Vision RPU registers
- * country code 0xB5, provider code 0x003B and provider-oriented code 0x00000800; HDR10+ registers
- * country code 0xB5, provider code 0x003C, provider-oriented code 0x0001 and application identifier
- * 4. Every other OBU keeps its bytes. An OBU without a size field runs to the end of the sample.
+ * removing the metadata OBUs of type ITU-T T.35 that carry them, however many bytes their metadata
+ * type takes. A Dolby Vision RPU registers country code 0xB5, provider code 0x003B and
+ * provider-oriented code 0x00000800; HDR10+ registers country code 0xB5, provider code 0x003C,
+ * provider-oriented code 0x0001 and application identifier 4. Every other OBU keeps its bytes. An
+ * OBU without a size field runs to the end of the sample.
  */
 final class Av1SampleRewrite implements SampleRewrite {
 
@@ -84,7 +85,8 @@ final class Av1SampleRewrite implements SampleRewrite {
     return new Obu(type, reading.position(), reading.position() + (int) size);
   }
 
-  // An unsigned value of up to 8 bytes, 7 bits each, least significant first (AV1 4.10.5).
+  // An unsigned value of up to 8 bytes, 7 bits each, least significant first (AV1 4.10.5), which
+  // ends within the buffer's limit.
   private static long leb128(ByteBuffer reading) {
     var value = 0L;
     for (var index = 0; index < MAXIMUM_LEB128_BYTES && reading.hasRemaining(); index++) {
@@ -95,7 +97,7 @@ final class Av1SampleRewrite implements SampleRewrite {
       }
     }
 
-    throw FragmentedMp4Exception.malformed("an AV1 OBU's size field runs past its sample");
+    throw FragmentedMp4Exception.malformed("an AV1 OBU's leb128 value runs past its end");
   }
 
   private static void requireWithin(ByteBuffer sample, int position) {
@@ -104,17 +106,20 @@ final class Av1SampleRewrite implements SampleRewrite {
     }
   }
 
-  // A metadata OBU whose metadata_type, a leb128 that is one byte for ITU-T T.35, is followed by
+  // A metadata OBU whose metadata_type, a leb128 (AV1 6.7.1), names ITU-T T.35 and is followed by
   // the country code, provider code and provider-oriented code of a stripped registration.
   private boolean isStripped(ByteBuffer sample, Obu obu) {
-    if (obu.type() != OBU_METADATA
-        || obu.end() == obu.payloadStart()
-        || sample.get(obu.payloadStart()) != METADATA_TYPE_ITUT_T35) {
+    if (obu.type() != OBU_METADATA) {
+      return false;
+    }
+
+    var reading = sample.duplicate().limit(obu.end()).position(obu.payloadStart());
+    if (leb128(reading) != METADATA_TYPE_ITUT_T35) {
       return false;
     }
 
     return strippedPrefixes.stream()
-        .anyMatch(prefix -> startsWith(sample, obu.payloadStart() + 1, obu.end(), prefix));
+        .anyMatch(prefix -> startsWith(sample, reading.position(), obu.end(), prefix));
   }
 
   private static boolean startsWith(ByteBuffer sample, int start, int end, byte[] prefix) {

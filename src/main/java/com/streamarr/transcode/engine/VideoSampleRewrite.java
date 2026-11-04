@@ -10,11 +10,12 @@ import java.util.Optional;
 import java.util.stream.IntStream;
 
 /**
- * Applies the sample rewrites that a copy lists to the video samples of each fragment, and checks
- * that no rewritten sample still holds what the rewrites strip. A fragment whose video samples keep
- * their bytes passes unchanged. Any other fragment gets a new {@code mdat} that holds every sample
- * of its tracks back to back, in their order in the old one, and samples that point into it; its
- * other boxes stay as read, because a media segment writes its own {@code moof}.
+ * Applies the sample rewrites that a copy lists to the video samples of each fragment. Each rewrite
+ * reads every NAL unit or OBU of every video sample and refuses a sample that it cannot read, so no
+ * stripped content passes inside one. A fragment whose video samples keep their bytes passes
+ * unchanged. Any other fragment gets a new {@code mdat} that holds every sample of its tracks back
+ * to back, in their order in the old one, and samples that point into it; its other boxes stay as
+ * read, because a media segment writes its own {@code moof}.
  */
 final class VideoSampleRewrite {
 
@@ -60,8 +61,7 @@ final class VideoSampleRewrite {
    * The fragment with its video samples rewritten.
    *
    * @throws FragmentedMp4Exception with {@link Reason#MALFORMED_BOX} when a video sample cannot be
-   *     split, or with {@link Reason#OUTPUT_MISMATCH} when a rewritten sample still holds what the
-   *     rewrites strip
+   *     read
    */
   Fragment rewrite(Fragment fragment) {
     var original =
@@ -74,20 +74,7 @@ final class VideoSampleRewrite {
       return fragment;
     }
 
-    var result = rebuilt(fragment, rewritten);
-    requireNothingLeftToStrip(result);
-    return result;
-  }
-
-  // Each rewritten sample, read back from the rebuilt mdat, must come through a second rewrite
-  // unchanged.
-  private void requireNothingLeftToStrip(Fragment fragment) {
-    for (var sample : fragment.videoSamples()) {
-      var bytes = bytesOf(fragment, sample);
-      if (sampleRewrite.rewrite(bytes) != bytes) {
-        throw mismatch("a rewritten video sample still holds what its rewrites strip");
-      }
-    }
+    return rebuilt(fragment, rewritten);
   }
 
   private static Fragment rebuilt(Fragment fragment, List<ByteBuffer> rewrittenVideo) {

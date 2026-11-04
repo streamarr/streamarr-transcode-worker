@@ -1,6 +1,7 @@
 package com.streamarr.transcode.engine;
 
 import static com.streamarr.transcode.engine.HevcCopies.PREFIX_SEI;
+import static com.streamarr.transcode.engine.HevcCopies.SUFFIX_SEI;
 import static com.streamarr.transcode.engine.HevcCopies.aud;
 import static com.streamarr.transcode.engine.HevcCopies.enhancementLayer;
 import static com.streamarr.transcode.engine.HevcCopies.fragmentBuilder;
@@ -183,6 +184,54 @@ class SegmentAssemblerBitstreamRewriteTest {
     assertThat(delivered.video()).containsExactly(String.join("", keptObus));
   }
 
+  @Test
+  @DisplayName(
+      "Should strip the T.35 metadata OBUs that the rewrites name when their metadata type takes"
+          + " two bytes")
+  void shouldStripTheT35MetadataObusThatTheRewritesNameWhenTheirMetadataTypeTakesTwoBytes()
+      throws IOException {
+    // metadata_type is a leb128 (AV1 4.10.5), so 84 00 also encodes type 4, ITU-T T.35.
+    var temporalUnit =
+        HexFormat.of()
+            .parseHex(
+                TEMPORAL_DELIMITER
+                    + "2A0C8400B5003B00000800AABB80"
+                    + "2A0B8400B5003C00010401CC80"
+                    + FRAME);
+    var copy =
+        VideoDecisionFixtures.copyBuilder()
+            .codecString(AV1_CODEC_STRING)
+            .bitstreamRewrites(EnumSet.allOf(BitstreamRewrite.class))
+            .build();
+
+    var delivered =
+        deliveredSamples(
+            copy,
+            AV1_SEGMENT,
+            fragmentBuilder().startsWithKeyframe(true).video(0, temporalUnit).build());
+
+    assertThat(delivered.video()).containsExactly(TEMPORAL_DELIMITER + FRAME);
+  }
+
+  @Test
+  @DisplayName(
+      "Should remove the HDR10+ message of a suffix SEI NAL unit and keep its other message when"
+          + " the copy strips HDR10+")
+  void shouldRemoveTheHdr10PlusMessageOfASuffixSeiNalUnitWhenTheCopyStripsHdr10Plus()
+      throws IOException {
+    var keyframe =
+        sample(aud(), slice(0), suffixSeiOf(HDR10_PLUS_MESSAGE + UNREGISTERED_MESSAGE_ESCAPED));
+
+    var delivered =
+        deliveredSamples(
+            copyOf(HEVC_CODEC_STRING, BitstreamRewrite.STRIP_HDR10_PLUS),
+            HEVC_SEGMENT,
+            fragmentBuilder().startsWithKeyframe(true).video(0, keyframe).build());
+
+    assertThat(delivered.video())
+        .containsExactly(hex(sample(aud(), slice(0), suffixSeiOf(UNREGISTERED_MESSAGE_ESCAPED))));
+  }
+
   static Stream<Arguments> av1RewritesAndTheObusTheyKeep() {
     return Stream.of(
         Arguments.of(
@@ -352,6 +401,10 @@ class SegmentAssemblerBitstreamRewriteTest {
 
   private static byte[] seiOf(String escapedMessages) {
     return nalUnit(PREFIX_SEI, HexFormat.of().parseHex(escapedMessages + RBSP_STOP));
+  }
+
+  private static byte[] suffixSeiOf(String escapedMessages) {
+    return nalUnit(SUFFIX_SEI, HexFormat.of().parseHex(escapedMessages + RBSP_STOP));
   }
 
   private static String hex(byte[] bytes) {

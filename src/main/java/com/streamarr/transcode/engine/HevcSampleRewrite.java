@@ -12,15 +12,15 @@ import java.util.Set;
  * length of the size that the sample entry's {@code hvcC} declares (ISO/IEC 14496-15 8.3.2).
  * Stripping Dolby Vision removes every NAL unit of type 62, which holds the RPUs, and of type 63,
  * which holds a single-track profile 7 enhancement layer, whatever their layer and temporal id.
- * Stripping HDR10+ removes each HDR10+ message from the prefix SEI NAL units and keeps their other
- * messages; a NAL unit left with no message goes. Every other NAL unit keeps its bytes, and so does
- * an SEI NAL unit that holds no HDR10+ message. Bytes after the last NAL unit too few to hold a
- * length stay where they are.
+ * Stripping HDR10+ removes each HDR10+ message from the prefix and suffix SEI NAL units and keeps
+ * their other messages; a NAL unit left with no message goes. Every other NAL unit keeps its bytes,
+ * and so does an SEI NAL unit that holds no HDR10+ message. Bytes after the last NAL unit too few
+ * to hold a length stay where they are.
  */
 final class HevcSampleRewrite implements SampleRewrite {
 
   // NAL unit types (ITU-T H.265 table 7-1).
-  private static final int PREFIX_SEI = 39;
+  private static final Set<Integer> SEI_TYPES = Set.of(39, 40);
   private static final Set<Integer> DOLBY_VISION_TYPES = Set.of(62, 63);
   private static final int NAL_UNIT_HEADER_BYTES = 2;
   // user_data_registered_itu_t_t35 (ITU-T H.265 D.2.6); HDR10+ registers country code 0xB5,
@@ -84,7 +84,7 @@ final class HevcSampleRewrite implements SampleRewrite {
       return Optional.empty();
     }
 
-    if (stripsHdr10Plus && type == PREFIX_SEI) {
+    if (stripsHdr10Plus && SEI_TYPES.contains(type)) {
       return withoutHdr10Plus(unit);
     }
 
