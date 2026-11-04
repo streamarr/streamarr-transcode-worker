@@ -59,6 +59,17 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
     return new AudioEncodeOptions(decoderOptions(audio, source), outputOptions);
   }
 
+  /**
+   * These options with {@code filter} after the encode's own filters, in its one filter chain:
+   * FFmpeg keeps only the last {@code -af} that an output names.
+   */
+  AudioEncodeOptions withTrailingFilter(String filter) {
+    var options = new ArrayList<>(outputOptions);
+    var chain = options.indexOf("-af") + 1;
+    options.set(chain, options.get(chain) + "," + filter);
+    return new AudioEncodeOptions(inputOptions, options);
+  }
+
   // ADR 0043: no dynamic range compression, and the dialogue normalization that a hardware
   // decoder applies to the copy.
   private static List<String> decoderOptions(AudioDecision audio, SourceAudio source) {

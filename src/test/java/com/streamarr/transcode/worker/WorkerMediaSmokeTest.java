@@ -4583,6 +4583,48 @@ class WorkerMediaSmokeTest {
                 .toList());
   }
 
+  // The audio ends at 10 s, and each attempt seeks to 12 s: one that copies the video seeks to
+  // its first segment's start, and one that encodes it one 6 s period earlier and holds the last
+  // frame past the video's end at 18 s. Neither reads a source sample.
+  @ParameterizedTest(name = "{0} from segment {2} of {1}")
+  @CsvSource({"TRANSCODE_MODE_AUDIO_TRANSCODE, 3, 2", "TRANSCODE_MODE_FULL_TRANSCODE, 4, 3"})
+  @DisplayName(
+      "Should write the normal attempt's initialization segment and padded audio up to the"
+          + " advertised end when a padded downmix to a named layout starts after the audio's end")
+  void shouldWriteTheNormalAttemptsInitializationSegmentWhenAPaddedNamedDownmixStartsAfterTheEnd(
+      TranscodeMode mode, int segmentCount, int startSequenceNumber) throws Exception {
+    var source = surroundAudioEndsBeforeVideoSource();
+    var normal = surroundAudioEndsBeforeVideoNamedStereoJob(source, mode);
+    paddedTo(normal, segmentCount);
+    var silenceOnly = surroundAudioEndsBeforeVideoNamedStereoJob(source, mode);
+    paddedTo(silenceOnly, segmentCount);
+    silenceOnly.getExecutionBuilder().setStartSequenceNumber(startSequenceNumber);
+
+    var normalUploads = execute(engine(softwareCapabilities()), source.getParent(), normal.build());
+    var silenceOnlyUploads =
+        execute(engine(softwareCapabilities()), source.getParent(), silenceOnly.build());
+
+    assertThat(silenceOnlyUploads.segments().get("init.mp4"))
+        .isEqualTo(normalUploads.segments().get("init.mp4"));
+    assertThat(silenceOnlyUploads.names())
+        .containsExactlyElementsOf(
+            uploadNames(segmentCount).stream()
+                .filter(
+                    name -> !name.startsWith("segment") || numberOf(name) >= startSequenceNumber)
+                .toList());
+    var movie = Mp4Samples.read(silenceOnlyUploads.contentOf(silenceOnlyUploads.names()));
+    var audio = movie.samplesOf(movie.audioTrack());
+    var firstSegmentStartTicks = startSequenceNumber * 6L * 48_000;
+    var advertisedEndTicks = segmentCount * 6L * 48_000;
+    assertThat(audio.getFirst().presentationTime())
+        .as("the first padded AAC frame at 48 kHz, within a frame of the first segment's start")
+        .isBetween(firstSegmentStartTicks, firstSegmentStartTicks + 1023);
+    assertThat(audio)
+        .as("the padded AAC frames up to the advertised end, the last one whole")
+        .allMatch(sample -> sample.presentationTime() < advertisedEndTicks)
+        .anyMatch(sample -> sample.presentationTime() + sample.duration() >= advertisedEndTicks);
+  }
+
   static Stream<Arguments> paddedCodecsAndModes() {
     return Stream.of("aac", "ac3", "eac3")
         .flatMap(
@@ -5022,6 +5064,22 @@ class WorkerMediaSmokeTest {
     }
 
     return source;
+  }
+
+  // A job that downmixes the 5.1 source whose audio ends at 10 s to named stereo AAC through the
+  // limiter, holding the last frame too when it encodes the video.
+  private static VariantJob.Builder surroundAudioEndsBeforeVideoNamedStereoJob(
+      Path source, TranscodeMode mode) {
+    var job = seekableSourceJob(source, mode);
+    if (mode == TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE) {
+      job.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
+    }
+
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setChannelLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO)
+        .setBitrateBitsPerSecond(192_000);
+    return job;
   }
 
   private static VariantJob.Builder surroundAudioEndsBeforeVideoJob(Path source) {

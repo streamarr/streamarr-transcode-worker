@@ -696,6 +696,70 @@ class FfmpegCommandBuilderAudioLayoutTest {
     }
   }
 
+  @Nested
+  @DisplayName("Early End")
+  class EarlyEndTests {
+
+    @ParameterizedTest(name = "{0} {1} from {2} {3}")
+    @CsvSource({
+      "aac, stereo, dts, 5.1(side)",
+      "flac, 5.0, flac, 5.0(side)",
+      "eac3, 5.1, truehd, 5.1(side)",
+      "libopus, 7.0, truehd, 7.0"
+    })
+    @DisplayName(
+        "Should pad after the named layout's filters in its one filter chain when an encode in a"
+            + " named layout pads its audio")
+    void shouldPadAfterTheNamedLayoutsFiltersInItsOneFilterChainWhenANamedLayoutEncodePads(
+        String codec, String layout, String sourceCodec, String sourceLayout) {
+      var unpadded = command(encode(codec, layout), source(sourceCodec, sourceLayout));
+      var padded =
+          command(
+              encodeBuilder(codec, layout).padsWithSilenceToAdvertisedEnd(true).build(),
+              source(sourceCodec, sourceLayout),
+              Optional.of(Duration.ofSeconds(66)));
+
+      assertThat(audioFilter(padded))
+          .isEqualTo(
+              audioFilter(unpadded)
+                  + ",apad,asetpts='if(isnan(PTS),0/TB+N/SR/TB,PTS)',atrim=start=0:end=67");
+      assertThat(padded).containsSubsequence("-ch_layout", layout);
+    }
+
+    @Test
+    @DisplayName(
+        "Should trim the encoded audio at the attempt's start after the named layout's filters"
+            + " when an encode that holds the last frame seeks")
+    void shouldTrimTheAudioAfterTheNamedLayoutsFiltersWhenAHoldingEncodeSeeks() {
+      var audio = encode("aac", "stereo");
+      var held = VideoDecisionFixtures.encodeBuilder().holdsLastFrameToAdvertisedEnd(true).build();
+
+      var unheld = encodeCommand(audio, VideoDecisionFixtures.encodeBuilder().build());
+      var holding = encodeCommand(audio, held);
+
+      assertThat(audioFilter(holding)).isEqualTo(audioFilter(unheld) + ",atrim=start=54");
+    }
+
+    private List<String> encodeCommand(AudioDecision audio, VideoDecision video) {
+      var decision =
+          TranscodeDecision.builder()
+              .transcodeMode(TranscodeMode.FULL_TRANSCODE)
+              .videoCodecFamily("h264")
+              .videoDecision(video)
+              .audioDecision(audio)
+              .subtitleDecision(SubtitleDecisions.EXCLUDED)
+              .build();
+      var request =
+          request(decision)
+              .sourceAudio(source("dts", "5.1(side)"))
+              .startSequenceNumber(10)
+              .advertisedEnd(Optional.of(Duration.ofSeconds(66)))
+              .build();
+      var job = TranscodeJob.builder().request(request).videoEncoder("libx264").build();
+      return ((FfmpegPipeline.SingleProcess) builder.buildPipeline(job)).command();
+    }
+  }
+
   @ParameterizedTest(name = "stream {0}")
   @CsvSource({"'', a:0, 0:a:0", "2, 2, 0:2?"})
   @DisplayName(
@@ -745,6 +809,11 @@ class FfmpegCommandBuilderAudioLayoutTest {
   }
 
   private List<String> command(AudioDecision audio, Optional<SourceAudio> source) {
+    return command(audio, source, Optional.empty());
+  }
+
+  private List<String> command(
+      AudioDecision audio, Optional<SourceAudio> source, Optional<Duration> advertisedEnd) {
     var decision =
         TranscodeDecision.builder()
             .transcodeMode(TranscodeMode.AUDIO_TRANSCODE)
@@ -755,7 +824,7 @@ class FfmpegCommandBuilderAudioLayoutTest {
             .build();
     var job =
         TranscodeJob.builder()
-            .request(request(decision).sourceAudio(source).build())
+            .request(request(decision).sourceAudio(source).advertisedEnd(advertisedEnd).build())
             .videoEncoder("copy")
             .build();
     return ((FfmpegPipeline.SingleProcess) builder.buildPipeline(job)).command();

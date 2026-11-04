@@ -522,7 +522,12 @@ public class FfmpegCommandBuilder {
 
     var namedLayout = encodeInNamedLayout(audio, request.sourceAudio());
     if (namedLayout.isPresent()) {
-      cmd.addAll(namedLayout.orElseThrow().outputOptions());
+      var options = namedLayout.orElseThrow();
+      cmd.addAll(
+          timingFilter(audio, request)
+              .map(options::withTrailingFilter)
+              .orElse(options)
+              .outputOptions());
       return;
     }
 
@@ -542,21 +547,31 @@ public class FfmpegCommandBuilder {
     return Optional.of(AudioEncodeOptions.of(audio, sourceAudio.orElseThrow()));
   }
 
+  private static Optional<String> audioFilter(AudioDecision audio, TranscodeRequest request) {
+    var timing = timingFilter(audio, request);
+    if (!audio.padsWithSilenceToAdvertisedEnd()) {
+      return timing;
+    }
+
+    return timing.map(filter -> encoderInputConversion(audio) + filter);
+  }
+
   // apad appends digital silence after the last decoded sample and changes no sample before it.
   // When the attempt reads no source sample, FFmpeg sets the filters up with the stream's own
   // sample rate and layout, as for a decoded one, and apad's silence carries no timestamps, so
   // asetpts starts it at the attempt's start. atrim drops the silence before the start and ends
   // the padding. An attempt that holds the last frame trims the start of its encoded audio itself,
-  // as its seek no longer does.
-  private static Optional<String> audioFilter(AudioDecision audio, TranscodeRequest request) {
+  // as its seek no longer does. In a named layout's encode these filters follow its own: its
+  // resampler and limiter meet the end of the source instead of silence, its dither never reaches
+  // the silence, and no conversion replaces its layout with FFmpeg's default for the channel count.
+  private static Optional<String> timingFilter(AudioDecision audio, TranscodeRequest request) {
     var start = seekArgument(inputSeekPosition(request));
     if (audio.padsWithSilenceToAdvertisedEnd()) {
       var end =
           seekArgument(
               request.advertisedEnd().orElseThrow().plus(PADDED_AUDIO_RUN_PAST_ADVERTISED_END));
       return Optional.of(
-          encoderInputConversion(audio)
-              + "apad,asetpts='if(isnan(PTS),"
+          "apad,asetpts='if(isnan(PTS),"
               + start
               + "/TB+N/SR/TB,PTS)',atrim=start="
               + start
