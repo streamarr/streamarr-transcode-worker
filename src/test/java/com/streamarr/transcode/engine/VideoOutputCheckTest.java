@@ -170,6 +170,19 @@ class VideoOutputCheckTest {
     assertThatNoException().isThrownBy(() -> VideoOutputCheck.requireMatch(copy, segment));
   }
 
+  // An ICC profile colr box names no transfer characteristics.
+  @Test
+  @DisplayName(
+      "Should accept a copy with a planned PQ output when its only colr box holds an ICC profile")
+  void shouldAcceptACopyWithAPlannedPqOutputWhenItsOnlyColrBoxHoldsAnIccProfile() {
+    var copy = copyPlanning(PlannedCopyOutputs.pqOutputBuilder().build());
+    var segment =
+        hevcSegmentWith(
+            box("colr", IsoBoxes.fourcc("prof"), IsoBoxes.u16(9), IsoBoxes.u16(18), new byte[4]));
+
+    assertThatNoException().isThrownBy(() -> VideoOutputCheck.requireMatch(copy, segment));
+  }
+
   // FFmpeg writes no colr box for a source that signals no colour; the SPS then tells the player.
   @Test
   @DisplayName("Should accept a copy with a planned PQ output when it has no colr box")
