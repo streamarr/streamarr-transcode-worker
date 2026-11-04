@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.IntStream;
 
 /**
@@ -19,6 +20,9 @@ import java.util.stream.IntStream;
  */
 final class VideoSampleRewrite {
 
+  // The av1C fields before its configOBUs (AV1 ISOBMFF binding 2.3.3).
+  private static final int AV1C_FIELDS = 4;
+
   private final SampleRewrite sampleRewrite;
 
   private VideoSampleRewrite(SampleRewrite sampleRewrite) {
@@ -29,8 +33,9 @@ final class VideoSampleRewrite {
    * The rewrite of the copy's samples; empty when the decision lists no bitstream rewrite.
    *
    * @throws FragmentedMp4Exception with {@link Reason#OUTPUT_MISMATCH} when the copy lists a
-   *     rewrite for video that is neither HEVC nor AV1, or with {@link Reason#MALFORMED_BOX} when
-   *     the HEVC record declares no usable NAL unit length
+   *     rewrite for video that is neither HEVC nor AV1, or when the av1C record holds a metadata
+   *     OBU that the copy strips; with {@link Reason#MALFORMED_BOX} when the HEVC record declares
+   *     no usable NAL unit length, or the av1C record's OBUs cannot be read
    */
   static Optional<VideoSampleRewrite> of(VideoDecision decision, InitializationSegment segment) {
     if (!(decision instanceof VideoDecision.Copy copy) || copy.bitstreamRewrites().isEmpty()) {
@@ -45,7 +50,7 @@ final class VideoSampleRewrite {
               new HevcSampleRewrite(
                   CodecConfigurationReader.nalUnitLengthSizeOf(sampleEntry),
                   copy.bitstreamRewrites());
-          case "av01" -> new Av1SampleRewrite(copy.bitstreamRewrites());
+          case "av01" -> av1Rewrite(sampleEntry, copy.bitstreamRewrites());
           default ->
               throw mismatch(
                   "the copy lists "
@@ -55,6 +60,21 @@ final class VideoSampleRewrite {
                       + " sample entry, which carries no such content");
         };
     return Optional.of(new VideoSampleRewrite(rewrite));
+  }
+
+  // FFmpeg copies the source's metadata OBUs into av1C's configOBUs. The worker rewrites only
+  // samples, so a record that holds a stripped OBU fails the attempt instead of reaching a client.
+  private static SampleRewrite av1Rewrite(BoxView sampleEntry, Set<BitstreamRewrite> rewrites) {
+    var rewrite = new Av1SampleRewrite(rewrites);
+    var av1C =
+        sampleEntry.after(CodecConfigurationReader.VISUAL_SAMPLE_ENTRY_BYTES).requiredChild("av1C");
+    var record = av1C.body();
+    var configurationObus = record.slice(AV1C_FIELDS, record.remaining() - AV1C_FIELDS);
+    if (rewrite.rewrite(configurationObus) != configurationObus) {
+      throw mismatch("the av1C record holds a metadata OBU that the copy strips from its samples");
+    }
+
+    return rewrite;
   }
 
   /**

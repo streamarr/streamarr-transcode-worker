@@ -246,6 +246,43 @@ class SegmentAssemblerBitstreamRewriteTest {
             List.of(TEMPORAL_DELIMITER, CONTENT_LIGHT_LEVEL_METADATA, FRAME)));
   }
 
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("av1RecordsThatHoldAStrippedObu")
+  @DisplayName(
+      "Should refuse the initialization segment as an output mismatch when its av1C holds a"
+          + " metadata OBU that the copy strips")
+  void shouldRefuseTheInitializationSegmentWhenItsAv1CHoldsAMetadataObuThatTheCopyStrips(
+      String description, BitstreamRewrite rewrite, String configurationObus) {
+    var assembler = assemblerFor(copyOf(AV1_CODEC_STRING, rewrite));
+    var segment = av1SegmentWithConfigurationObus(configurationObus);
+
+    assertThatThrownBy(() -> assembler.accept(segment))
+        .isInstanceOfSatisfying(
+            FragmentedMp4Exception.class,
+            exception -> assertThat(exception.getReason()).isEqualTo(Reason.OUTPUT_MISMATCH));
+  }
+
+  static Stream<Arguments> av1RecordsThatHoldAStrippedObu() {
+    return Stream.of(
+        Arguments.of(
+            "a Dolby Vision RPU",
+            BitstreamRewrite.STRIP_DOLBY_VISION,
+            CONTENT_LIGHT_LEVEL_METADATA + DOLBY_VISION_METADATA),
+        Arguments.of("HDR10+", BitstreamRewrite.STRIP_HDR10_PLUS, HDR10_PLUS_METADATA));
+  }
+
+  @Test
+  @DisplayName(
+      "Should deliver the initialization segment when its av1C holds only metadata OBUs that the"
+          + " copy keeps")
+  void shouldDeliverTheInitializationSegmentWhenItsAv1CHoldsOnlyMetadataObusThatTheCopyKeeps() {
+    var assembler = assemblerFor(copyOf(AV1_CODEC_STRING, BitstreamRewrite.STRIP_HDR10_PLUS));
+    var segment =
+        av1SegmentWithConfigurationObus(CONTENT_LIGHT_LEVEL_METADATA + DOLBY_VISION_METADATA);
+
+    assertThat(assembler.accept(segment).closedSegments()).hasSize(1);
+  }
+
   @Test
   @DisplayName(
       "Should refuse the initialization segment as an output mismatch when the copy lists a"
@@ -343,6 +380,13 @@ class SegmentAssemblerBitstreamRewriteTest {
             fragmentBuilder().startsWithKeyframe(true).video(0, temporalUnit).build());
 
     assertThat(delivered.video()).containsExactly(TEMPORAL_DELIMITER + FRAME);
+  }
+
+  // An initialization segment of AV1 Main at level 4.0, 8-bit 4:2:0, whose av1C holds the OBUs.
+  private static InitializationSegment av1SegmentWithConfigurationObus(String obus) {
+    var av1C = IsoBoxes.box("av1C", HexFormat.of().parseHex("81080C00" + obus));
+    return new InitializationSegment(
+        HevcCopies.initializationSegment(IsoBoxes.box("av01", new byte[78], av1C)));
   }
 
   private static VideoDecision.Copy copyOf(String codecString, BitstreamRewrite rewrite) {
