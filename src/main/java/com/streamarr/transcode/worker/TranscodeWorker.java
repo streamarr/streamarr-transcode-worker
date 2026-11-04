@@ -516,9 +516,11 @@ public final class TranscodeWorker implements AutoCloseable {
   private synchronized AttemptStart startAttempt(
       StartVariantCommand command, ChosenAudio chosenAudio, Optional<Duration> readPosition) {
     var job = command.getJob();
-    // Only active attempts hold a slot: the server freed a stopped attempt's slot when it sent the
-    // stop, and the worker's memory budget charges its producer until it has released its segments.
-    if (activeAttempts.size() >= configuration.availableSlots()) {
+    // Only active attempts that do not copy the video hold a slot: the server freed a stopped
+    // attempt's slot when it sent the stop, and the worker's memory budget charges its producer
+    // until it has released its segments.
+    var copiesVideo = WorkerVariantJobMapper.copiesVideo(job);
+    if (!copiesVideo && slotsInUse() >= configuration.availableSlots()) {
       log.warn(
           "Refusing job attempt {}: all {} advertised slots are occupied",
           fromProto(job.getJobAttemptId()),
@@ -556,7 +558,7 @@ public final class TranscodeWorker implements AutoCloseable {
           engine.startProducer(
               request,
               (segment, cancellation) -> deliverToServer(job, segment, cancellation),
-              memoryBudget);
+              memoryBudgetFor(copiesVideo));
     } catch (InvalidJobSpecificationException | UnadvertisedCodecFamilyException e) {
       log.warn("Refusing job attempt {}: {}", fromProto(job.getJobAttemptId()), e.getMessage());
       reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
@@ -589,6 +591,24 @@ public final class TranscodeWorker implements AutoCloseable {
     return chosenAudio instanceof ChosenAudio.Read(var facts)
         ? Optional.of(facts)
         : Optional.empty();
+  }
+
+  // Encodes share the slots' memory. A copy takes no slot, so it brings its own producer's budget:
+  // copies beyond the slots that shared the slots' memory could each hold part of a segment and
+  // wait for room that none of them can free.
+  private SegmentMemoryBudget memoryBudgetFor(boolean copiesVideo) {
+    if (copiesVideo) {
+      return SegmentMemoryBudget.forSlots(1);
+    }
+
+    return memoryBudget;
+  }
+
+  // Holds this monitor.
+  private long slotsInUse() {
+    return activeAttempts.values().stream()
+        .filter(attempt -> !WorkerVariantJobMapper.copiesVideo(attempt.job()))
+        .count();
   }
 
   private boolean isRunnableHere(StartVariantCommand command) {

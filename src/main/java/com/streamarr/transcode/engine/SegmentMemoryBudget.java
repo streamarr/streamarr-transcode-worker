@@ -5,10 +5,10 @@ import java.util.Deque;
 import java.util.function.BooleanSupplier;
 
 /**
- * The segment memory of one worker: its slot count times each producer's own budget of two segment
- * caps. Every producer reserves each box of FFmpeg's output here as well as within its own budget,
- * and releases the bytes once it holds them no longer, so a stopping producer keeps its share until
- * it has released its segments.
+ * The segment memory that a worker's encodes share, its slot count times each producer's own budget
+ * of two segment caps, or the memory of one copy, which takes no slot. Every producer reserves each
+ * box of FFmpeg's output here as well as within its own budget, and releases the bytes once it
+ * holds them no longer, so a stopping producer keeps its share until it has released its segments.
  *
  * <p>Readers that wait for memory reserve it in the order they began to wait, and no reader
  * reserves while another waits, so a waiting reader never waits for a reader that asks after it.
