@@ -73,16 +73,20 @@ final class SegmentAssembler {
    * @throws FragmentedMp4Exception when the initialization segment it delivers declares other video
    *     than the decision, when a video sample that the copy rewrites cannot be read, when the
    *     grouper refuses the fragment, when it holds a short video sample or an audio sample that
-   *     starts before the one before it, or when a segment it closes is larger than the segment cap
-   *     once rebuilt, after which nothing is delivered, not even the segments it would close
+   *     starts before the one before it, or when the rewritten initialization segment or a segment
+   *     it closes is larger than the segment cap once rebuilt, after which nothing is delivered,
+   *     not even the segments it would close
    */
   Closing accept(@NonNull Mp4Unit unit) {
     return switch (unit) {
       case InitializationSegment initializationSegment -> {
         var delivered = InitializationSegmentRewrite.rewrite(videoDecision, initializationSegment);
+        requireWithinTheCap(delivered);
         VideoOutputCheck.requireMatch(videoDecision, delivered);
         sampleRewrite = VideoSampleRewrite.of(videoDecision, delivered);
-        yield Closing.of(List.of(new ClosedSegment.Initialization(delivered)));
+        yield Closing.of(
+            List.of(
+                new ClosedSegment.Initialization(delivered, initializationSegment.bytes().length)));
       }
       case Fragment fragment -> closingOf(checkedForShortSamples(rewritten(fragment)));
     };
@@ -136,6 +140,18 @@ final class SegmentAssembler {
     grouper.discardOpenFragments();
     awaitingAudio.clear();
     audio.discard();
+  }
+
+  // The reader admitted the segment as FFmpeg wrote it, before the rewrite could lengthen it.
+  private void requireWithinTheCap(InitializationSegment delivered) {
+    if (delivered.bytes().length > maximumSegmentBytes) {
+      throw new FragmentedMp4Exception(
+          Reason.EXCEEDS_SEGMENT_CAP,
+          "the rewritten initialization segment takes "
+              + delivered.bytes().length
+              + " bytes, over the segment cap of "
+              + maximumSegmentBytes);
+    }
   }
 
   private Fragment rewritten(Fragment fragment) {

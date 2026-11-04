@@ -2,8 +2,10 @@ package com.streamarr.transcode.engine;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 
+import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.fixtures.Mp4Samples;
 import com.streamarr.transcode.fixtures.Mp4Samples.Sample;
 import java.io.ByteArrayOutputStream;
@@ -13,6 +15,7 @@ import java.lang.ref.WeakReference;
 import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Stream;
@@ -30,6 +33,48 @@ class SegmentAssemblerTest {
   private static final long AUDIO_TICKS_PER_SECOND = 48_000;
   private static final long VIDEO_TICKS_PER_SECOND = 24_000;
   private static final int LATE_AUDIO_SAMPLE_BYTES = 1024 * 1024;
+
+  // The reader admitted the initialization segment within the cap before the rewrite added the
+  // planned static HDR metadata to its record.
+  @Test
+  @DisplayName(
+      "Should refuse the initialization segment as exceeding the segment cap when the rewrite makes"
+          + " it longer than the cap")
+  void shouldRefuseTheInitializationSegmentWhenTheRewriteMakesItLongerThanTheCap() {
+    var sampleEntry =
+        IsoBoxes.box(
+            "hvc1",
+            new byte[78],
+            IsoBoxes.box(
+                "hvcC",
+                HexFormat.of()
+                    .parseHex(
+                        "0101600000009000000000005AF000FCFDF8F800000F03"
+                            + "A0000100024001A1000100024201A2000100024401")));
+    var written = HevcCopies.initializationSegment(sampleEntry);
+    var copy =
+        VideoDecisionFixtures.copyBuilder()
+            .codecString("hvc1.1.6.L90.90")
+            .plannedOutput(
+                Optional.of(
+                    PlannedCopyOutputs.pqOutputBuilder()
+                        .contentLightLevel(Optional.of(PlannedCopyOutputs.CONTENT_LIGHT_LEVEL))
+                        .build()))
+            .build();
+    var assembler =
+        SegmentAssembler.builder()
+            .periodSeconds(1)
+            .startSequenceNumber(0)
+            .maximumSegmentBytes(written.length)
+            .encodedFrameRate(Optional.empty())
+            .videoDecision(copy)
+            .build();
+
+    assertThatThrownBy(() -> assembler.accept(new InitializationSegment(written)))
+        .isInstanceOfSatisfying(
+            FragmentedMp4Exception.class,
+            exception -> assertThat(exception.getReason()).isEqualTo(Reason.EXCEEDS_SEGMENT_CAP));
+  }
 
   @Test
   @DisplayName(

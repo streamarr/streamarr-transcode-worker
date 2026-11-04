@@ -2444,6 +2444,67 @@ class ProducerTest {
     assertThat(sink.contentOf("init.mp4")).isEqualTo(hevcInitializationSegment(entry));
   }
 
+  // The rewrite can make the initialization segment longer than the bytes that the reader reserved
+  // for it, so the delivery must reserve the growth before it releases the whole segment.
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("copiesWhoseInitializationSegmentGrows")
+  @DisplayName(
+      "Should release every byte it reserved when the rewrite makes the initialization segment"
+          + " longer than FFmpeg wrote it")
+  void shouldReleaseEveryReservedByteWhenTheRewriteMakesTheInitializationSegmentLonger(
+      GrowingCopy growingCopy) {
+    var workerBudget = SegmentMemoryBudget.forSlots(1);
+    var output =
+        IsoBoxes.concat(
+            hevcInitializationSegment(hvc1Entry(HVC1_PARAMETER_SET_RECORD)),
+            keyframeFragment(0, 1));
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer =
+        producerOfOneSecondSegments(process)
+            .memoryBudget(workerBudget)
+            .videoDecision(growingCopy.copy())
+            .start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(sink.contentOf("init.mp4").length)
+        .as("the delivered initialization segment")
+        .isGreaterThan(hevcInitializationSegment(hvc1Entry(HVC1_PARAMETER_SET_RECORD)).length);
+    assertReleasesEveryReservedByte(workerBudget);
+  }
+
+  static Stream<GrowingCopy> copiesWhoseInitializationSegmentGrows() {
+    return Stream.of(
+        new GrowingCopy(
+            "static HDR metadata",
+            hdr10Copy(
+                PlannedCopyOutputs.pqOutputBuilder()
+                    .masteringDisplay(Optional.of(PlannedCopyOutputs.MASTERING_DISPLAY))
+                    .contentLightLevel(Optional.of(PlannedCopyOutputs.CONTENT_LIGHT_LEVEL))
+                    .build())),
+        new GrowingCopy(
+            "a normalized Dolby Vision record",
+            dolbyVisionCopy(
+                    HVC1_RECORD_CODEC_STRING,
+                    PlannedCopyOutput.DolbyVisionOutput.builder()
+                        .profile(8)
+                        .level(6)
+                        .baseLayerCompatibilityId(1)
+                        .sampleEntry(PlannedCopyOutput.SampleEntry.HVC1)
+                        .build())
+                .bitstreamRewrites(Set.of(BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD))
+                .build()));
+  }
+
+  // A copy whose rewritten initialization segment is longer than FFmpeg's.
+  record GrowingCopy(String name, VideoDecision.Copy copy) {
+
+    @Override
+    public String toString() {
+      return name;
+    }
+  }
+
   private static VideoDecision.Copy.CopyBuilder dolbyVisionCopy(
       String codecString, PlannedCopyOutput.DolbyVisionOutput dolbyVision) {
     return VideoDecisionFixtures.copyBuilder()
