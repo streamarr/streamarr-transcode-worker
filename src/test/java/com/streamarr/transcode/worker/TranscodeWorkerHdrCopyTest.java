@@ -201,11 +201,11 @@ class TranscodeWorkerHdrCopyTest {
   }
 
   @ParameterizedTest(name = "{0}")
-  @MethodSource("contradictoryPlannedOutputs")
+  @MethodSource({"contradictoryPlannedOutputs", "contradictoryRewritesAndDolbyVisionOutputs"})
   @DisplayName(
-      "Should refuse the job as an invalid specification when its copy plans an output that the"
-          + " contract forbids")
-  void shouldRefuseTheJobAsAnInvalidSpecificationWhenItsCopyPlansAnOutputThatTheContractForbids(
+      "Should refuse the job as an invalid specification when its copy plans what the worker"
+          + " cannot deliver")
+  void shouldRefuseTheJobAsAnInvalidSpecificationWhenItsCopyPlansWhatTheWorkerCannotDeliver(
       String plan, UnaryOperator<VideoDecision.Builder> planned) throws Exception {
     var job = hevcCopyJob();
     planned.apply(job.getDecisionBuilder().getVideoBuilder());
@@ -456,19 +456,6 @@ class TranscodeWorkerHdrCopyTest {
     public String toString() {
       return name;
     }
-  }
-
-  @ParameterizedTest(name = "{0}")
-  @MethodSource("contradictoryRewritesAndDolbyVisionOutputs")
-  @DisplayName(
-      "Should refuse the job as an invalid specification when its copy lists rewrites or a Dolby"
-          + " Vision output that the worker cannot deliver")
-  void shouldRefuseTheJobAsAnInvalidSpecificationWhenItsCopyListsWhatTheWorkerCannotDeliver(
-      String plan, UnaryOperator<VideoDecision.Builder> planned) throws Exception {
-    var job = hevcCopyJob();
-    planned.apply(job.getDecisionBuilder().getVideoBuilder());
-
-    assertRefusedAsAnInvalidSpecification(job.build());
   }
 
   static Stream<Arguments> contradictoryRewritesAndDolbyVisionOutputs() {
