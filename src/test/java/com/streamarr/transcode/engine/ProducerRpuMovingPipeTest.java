@@ -230,7 +230,7 @@ class ProducerRpuMovingPipeTest {
       shouldFailTheAttemptAsATruncatedOutputWhenTheCopyingFfmpegExitsCleanlyWithoutWritingTheTimingOfTheCopysVideo() {
     var copy =
         ScriptedProcess.builder().output(COPIED_SOURCE).exitTiming(ExitTiming.AT_LAUNCH).build();
-    var encode = encodingFfmpeg().build();
+    var encode = encodingFfmpegReadingTheSourcesAudioUntilTerminated();
 
     var producer = producer(copyingWith(copy, ""), encode).start();
 
@@ -398,13 +398,12 @@ class ProducerRpuMovingPipeTest {
 
   @Test
   @DisplayName(
-      "Should fail the attempt for the mover's reason, and end the copying FFmpeg, when the mover"
-          + " refuses the copy and the encoding FFmpeg exits cleanly")
-  void
-      shouldFailTheAttemptForTheMoversReasonAndEndTheCopyingFfmpegWhenTheMoverRefusesTheCopyAndTheEncodingFfmpegExitsCleanly() {
+      "Should fail the attempt for the mover's reason, and end both FFmpegs, when the mover refuses"
+          + " the copy")
+  void shouldFailTheAttemptForTheMoversReasonAndEndBothFfmpegsWhenTheMoverRefusesTheCopy() {
     var copy =
         ScriptedProcess.builder().output(NOT_HEVC).exitTiming(ExitTiming.WHEN_TEST_EXITS).build();
-    var encode = encodingFfmpeg().build();
+    var encode = encodingFfmpegReadingTheSourcesAudioUntilTerminated();
 
     var producer = producerOf(copy, encode).start();
 
@@ -413,6 +412,7 @@ class ProducerRpuMovingPipeTest {
     assertThat(failure.detail()).contains("copy of the source", "no HEVC video");
     assertThat(copy.wasTerminated()).isTrue();
     assertThat(encode.hasInputEnded()).isTrue();
+    assertThat(encode.wasTerminated()).isTrue();
   }
 
   @Test
@@ -541,7 +541,7 @@ class ProducerRpuMovingPipeTest {
       shouldFailTheAttemptAsATruncatedOutputAndRemoveTheTimingsSocketWhenTheCopyingFfmpegExitsWithoutConnectingToIt() {
     var copy =
         ScriptedProcess.builder().output(COPIED_SOURCE).exitTiming(ExitTiming.AT_LAUNCH).build();
-    var encode = encodingFfmpeg().build();
+    var encode = encodingFfmpegReadingTheSourcesAudioUntilTerminated();
     var copyCommand = new AtomicReference<List<String>>();
     ProcessLauncher neverConnecting =
         (command, jobAttemptId) -> {
@@ -567,7 +567,7 @@ class ProducerRpuMovingPipeTest {
       "Should fail the attempt as malformed output when the copy's video timing is unusable")
   void shouldFailTheAttemptAsMalformedOutputWhenTheCopysVideoTimingIsUnusable(String framecrc) {
     var copy = ScriptedProcess.builder().output(COPIED_SOURCE).build();
-    var encode = encodingFfmpeg().build();
+    var encode = encodingFfmpegReadingTheSourcesAudioUntilTerminated();
     ProcessLauncher writingTiming =
         (command, jobAttemptId) -> {
           if (!isCopying(command)) {
@@ -608,7 +608,8 @@ class ProducerRpuMovingPipeTest {
             .failReadWith(new IllegalStateException("defect in the copy's transfer"))
             .exitTiming(ExitTiming.WHEN_TEST_EXITS)
             .build();
-    var encode = encodingFfmpeg().exitCode(1).stderr("Conversion failed!\n").build();
+    var encode =
+        encodingFfmpeg().output(new byte[0]).exitCode(1).stderr("Conversion failed!\n").build();
 
     var producer = producerOf(copy, encode).start();
 
