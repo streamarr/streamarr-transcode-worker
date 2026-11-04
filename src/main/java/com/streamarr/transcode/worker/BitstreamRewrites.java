@@ -1,6 +1,7 @@
 package com.streamarr.transcode.worker;
 
 import com.streamarr.transcode.engine.BitstreamRewrite;
+import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
@@ -28,6 +29,27 @@ final class BitstreamRewrites {
     }
 
     return rewrites;
+  }
+
+  /** Every rewrite that the engine applies, which the worker declares when it registers. */
+  @SuppressWarnings("checkstyle:fullyQualifiedName")
+  static List<build.buf.gen.streamarr.transcode.v1.BitstreamRewrite> declared() {
+    return Arrays.stream(BitstreamRewrite.values()).map(BitstreamRewrites::toProto).toList();
+  }
+
+  @SuppressWarnings("checkstyle:fullyQualifiedName")
+  private static build.buf.gen.streamarr.transcode.v1.BitstreamRewrite toProto(
+      BitstreamRewrite rewrite) {
+    return switch (rewrite) {
+      case STRIP_DOLBY_VISION ->
+          build.buf.gen.streamarr.transcode.v1.BitstreamRewrite
+              .BITSTREAM_REWRITE_STRIP_DOLBY_VISION;
+      case STRIP_HDR10_PLUS ->
+          build.buf.gen.streamarr.transcode.v1.BitstreamRewrite.BITSTREAM_REWRITE_STRIP_HDR10_PLUS;
+      case NORMALIZE_DOLBY_VISION_RECORD ->
+          build.buf.gen.streamarr.transcode.v1.BitstreamRewrite
+              .BITSTREAM_REWRITE_NORMALIZE_DOLBY_VISION_RECORD;
+    };
   }
 
   @SuppressWarnings("checkstyle:fullyQualifiedName")

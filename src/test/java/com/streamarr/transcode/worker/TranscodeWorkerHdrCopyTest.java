@@ -28,6 +28,7 @@ import build.buf.gen.streamarr.transcode.v1.MasteringDisplayColorVolume;
 import build.buf.gen.streamarr.transcode.v1.Presence;
 import build.buf.gen.streamarr.transcode.v1.TranscodeMode;
 import build.buf.gen.streamarr.transcode.v1.VariantJob;
+import build.buf.gen.streamarr.transcode.v1.VideoCopyFeature;
 import build.buf.gen.streamarr.transcode.v1.VideoDecision;
 import build.buf.gen.streamarr.transcode.v1.VideoDynamicRange;
 import com.streamarr.transcode.engine.FfmpegRecordings.Recording;
@@ -51,6 +52,7 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -127,6 +129,27 @@ class TranscodeWorkerHdrCopyTest {
   @BeforeEach
   void setUp() throws Exception {
     Files.writeString(tempDir.resolve("movie.mkv"), "media");
+  }
+
+  @Test
+  @DisplayName(
+      "Should declare the bitstream rewrites and copy features that it delivers when it registers")
+  void shouldDeclareTheBitstreamRewritesAndCopyFeaturesThatItDeliversWhenItRegisters()
+      throws Exception {
+    try (var worker = worker(ScriptedProcessLauncher.running())) {
+      worker.start("localhost", 1);
+
+      var capabilities = runtime.connection().registration().getCapabilities();
+      assertThat(capabilities.getBitstreamRewritesList())
+          .containsExactlyInAnyOrder(
+              BitstreamRewrite.BITSTREAM_REWRITE_STRIP_DOLBY_VISION,
+              BitstreamRewrite.BITSTREAM_REWRITE_STRIP_HDR10_PLUS,
+              BitstreamRewrite.BITSTREAM_REWRITE_NORMALIZE_DOLBY_VISION_RECORD);
+      assertThat(capabilities.getVideoCopyFeaturesList())
+          .containsExactlyInAnyOrder(
+              VideoCopyFeature.VIDEO_COPY_FEATURE_PLANNED_OUTPUT,
+              VideoCopyFeature.VIDEO_COPY_FEATURE_DVH1_SAMPLE_ENTRY);
+    }
   }
 
   @ParameterizedTest(name = "{0}")

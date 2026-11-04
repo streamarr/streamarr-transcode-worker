@@ -5,6 +5,7 @@ import build.buf.gen.streamarr.transcode.v1.ContentLightLevel;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionOutput;
 import build.buf.gen.streamarr.transcode.v1.DolbyVisionSampleEntry;
 import build.buf.gen.streamarr.transcode.v1.MasteringDisplayColorVolume;
+import build.buf.gen.streamarr.transcode.v1.VideoCopyFeature;
 import com.streamarr.transcode.engine.BitstreamRewrite;
 import com.streamarr.transcode.engine.PlannedCopyOutput;
 import com.streamarr.transcode.engine.PlannedCopyOutput.Chromaticity;
@@ -13,6 +14,9 @@ import com.streamarr.transcode.engine.VideoDynamicRange;
 import com.streamarr.transcode.engine.VideoDynamicRange.CompatibleBase;
 import com.streamarr.transcode.engine.VideoDynamicRange.DolbyVision;
 import com.streamarr.transcode.engine.VideoDynamicRange.Presence;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
@@ -145,6 +149,27 @@ final class PlannedCopies {
         .baseLayerCompatibilityId(compatibilityId)
         .sampleEntry(sampleEntry)
         .build();
+  }
+
+  /**
+   * The copy features that the worker declares when it registers: the planned output, and the
+   * feature of each Dolby Vision sample entry that the engine writes and the base entry lacks.
+   */
+  static List<VideoCopyFeature> declaredFeatures() {
+    var features = new ArrayList<VideoCopyFeature>();
+    features.add(VideoCopyFeature.VIDEO_COPY_FEATURE_PLANNED_OUTPUT);
+    Arrays.stream(SampleEntry.values())
+        .map(PlannedCopies::featureOf)
+        .flatMap(Optional::stream)
+        .forEach(features::add);
+    return List.copyOf(features);
+  }
+
+  private static Optional<VideoCopyFeature> featureOf(SampleEntry sampleEntry) {
+    return switch (sampleEntry) {
+      case DVH1 -> Optional.of(VideoCopyFeature.VIDEO_COPY_FEATURE_DVH1_SAMPLE_ENTRY);
+      case HVC1, AV01 -> Optional.empty();
+    };
   }
 
   private static SampleEntry sampleEntry(DolbyVisionSampleEntry value) {
