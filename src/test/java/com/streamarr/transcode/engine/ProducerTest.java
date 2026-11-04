@@ -2389,7 +2389,9 @@ class ProducerTest {
     var producer =
         producerOfOneSecondSegments(process).videoDecision(hdr10Copy(planned.output())).start();
 
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.contentOf("init.mp4"))
         .isEqualTo(hevcInitializationSegment(hvc1Entry(recordWithStaticSei(planned.seiUnits()))));
   }
@@ -2454,7 +2456,9 @@ class ProducerTest {
               .sink(attemptSink)
               .videoDecision(hdr10Copy(planned))
               .start();
-      assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+      assertThat(producer.outcome())
+          .succeedsWithin(OUTCOME_LIMIT)
+          .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
       delivered.add(attemptSink.contentOf("init.mp4"));
     }
 
@@ -2487,7 +2491,9 @@ class ProducerTest {
 
     var producer = producerOfOneSecondSegments(process).videoDecision(copy).start();
 
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.contentOf("init.mp4"))
         .isEqualTo(
             hevcInitializationSegment(
@@ -2519,7 +2525,9 @@ class ProducerTest {
 
     var producer = producerOfOneSecondSegments(process).videoDecision(copy).start();
 
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.contentOf("init.mp4"))
         .isEqualTo(
             hevcInitializationSegment(
@@ -2547,7 +2555,9 @@ class ProducerTest {
 
     var producer = producerOfOneSecondSegments(process).videoDecision(copy).start();
 
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.contentOf("init.mp4")).isEqualTo(hevcInitializationSegment(entry));
   }
 
@@ -2573,7 +2583,9 @@ class ProducerTest {
             .videoDecision(growingCopy.copy())
             .start();
 
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
     assertThat(sink.contentOf("init.mp4"))
         .as("the delivered initialization segment")
         .hasSizeGreaterThan(hevcInitializationSegment(hvc1Entry(HVC1_PARAMETER_SET_RECORD)).length);
