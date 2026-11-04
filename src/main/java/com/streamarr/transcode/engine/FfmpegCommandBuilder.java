@@ -381,17 +381,7 @@ public class FfmpegCommandBuilder {
   // presentation time, as Matroska and MPEG-TS do not. The producer discards what a copy reads
   // before its first segment as preroll.
   private static Duration inputSeekPosition(TranscodeRequest request) {
-    return keyframePosition(request).orElseGet(() -> Duration.ofSeconds(inputSeekSeconds(request)));
-  }
-
-  // The copy of a Dolby Vision profile 5 source reads from one period early whatever the server's
-  // keyframe position.
-  private static Optional<Duration> keyframePosition(TranscodeRequest request) {
-    if (needsRpuMove(request)) {
-      return Optional.empty();
-    }
-
-    return request.seekPosition();
+    return request.seekPosition().orElseGet(() -> Duration.ofSeconds(inputSeekSeconds(request)));
   }
 
   // FFmpeg reads microseconds. Rounding up keeps the target at or after the server's position.
@@ -766,7 +756,7 @@ public class FfmpegCommandBuilder {
   private static Duration audioReach(TranscodeRequest request) {
     var firstSegmentStart = firstSegmentStartOfAnEncode(request).orElseThrow();
     var reach = firstSegmentStart.minus(inputSeekPosition(request));
-    if (keyframePosition(request).isPresent()) {
+    if (request.seekPosition().isPresent()) {
       reach = reach.minus(AUDIO_AFTER_THE_KEYFRAME);
     }
 

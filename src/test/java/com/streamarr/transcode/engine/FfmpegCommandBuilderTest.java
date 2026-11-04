@@ -2474,12 +2474,15 @@ class FfmpegCommandBuilderTest {
             "128k");
   }
 
+  // The keyframe at 15.5 s lies 2.5 s before the first segment's start at 18 s, so the audio
+  // encoder's input starts the whole frames that fit in the 1.5 s from a second after it.
   @Test
   @DisplayName(
-      "Should read the copy and the encode's source input from one period before the first segment"
-          + " when a replacement attempt that encodes a profile 5 source whose RPU starts its sample"
-          + " carries the server's keyframe position")
-  void shouldReadTheCopyFromOnePeriodBeforeItsFirstSegmentWhenAProfile5AttemptCarriesAKeyframe() {
+      "Should read the copy and the encode's source input from the server's keyframe position when"
+          + " a replacement attempt that encodes a profile 5 source whose RPU starts its sample"
+          + " carries it")
+  void
+      shouldReadTheCopyAndTheEncodesSourceInputFromTheServersKeyframePositionWhenAProfile5ReplacementAttemptCarriesIt() {
     var request =
         request(encoding(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE)))
             .startSequenceNumber(3)
@@ -2488,10 +2491,10 @@ class FfmpegCommandBuilderTest {
 
     var pipe = rpuMovingPipe(builder.buildPipeline(job(request, "libx264")));
 
-    assertThat(pipe.copyCommand()).containsSequence("-ss", "12", "-noaccurate_seek", "-i");
+    assertThat(pipe.copyCommand()).containsSequence("-ss", "15.5", "-noaccurate_seek", "-i");
     assertThat(pipe.encodeCommand())
-        .containsSequence("pipe:0", "-ss", "12", "-noaccurate_seek", "-i")
-        .containsSequence("-af", aacStereoFromTheFirstSegment("18", "6"));
+        .containsSequence("pipe:0", "-ss", "15.5", "-noaccurate_seek", "-i")
+        .containsSequence("-af", aacStereoFromTheFirstSegment("18", "1.5"));
   }
 
   @Test

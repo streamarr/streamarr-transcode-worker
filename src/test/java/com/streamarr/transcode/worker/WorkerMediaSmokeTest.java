@@ -140,6 +140,7 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 @Tag("SmokeTest")
@@ -2135,22 +2136,32 @@ class WorkerMediaSmokeTest {
   // The copy of a profile 5 source carries only the source's video, so its MP4 muxer writes each
   // packet as it comes. A copy that also carried audio wrote nothing until the audio's first
   // sample, and its first fragment then held every picture that the demuxer read before that
-  // sample: here the 8 s from the keyframe at 10 s up to the seek at 18 s, 63.8 MB on the pinned
-  // FFmpeg, over the 32 MiB that the mover reads.
-  @Test
+  // sample. Without the server's keyframe position, the replacement reads from 18 s, one period
+  // before its first segment, and the MP4 demuxer lands on the keyframe at 10 s: 8 s of pictures,
+  // 63.8 MB on the pinned FFmpeg, over the 32 MiB that the mover reads. The decode time of the
+  // keyframe at 20 s, which B-frames follow, lies before its presentation time, so a seek there
+  // also lands on the keyframe at 10 s: 79.0 MB.
+  @ParameterizedTest(name = "server's keyframe presented by {0}")
+  @NullSource
+  @ValueSource(strings = "20.5")
   @DisplayName(
       "Should upload what one FFmpeg encodes when the copy of a profile 5 MP4 source with B-frames"
           + " reads more pictures before its seek than the mover reads in one fragment")
   void
-      shouldUploadWhatOneFfmpegEncodesWhenTheCopyOfAProfile5Mp4SourceWithBFramesReadsMorePicturesBeforeItsSeekThanTheMoverReadsInOneFragment()
-          throws Exception {
+      shouldUploadWhatOneFfmpegEncodesWhenTheCopyOfAProfile5Mp4SourceWithBFramesReadsMorePicturesBeforeItsSeekThanTheMoverReadsInOneFragment(
+          BigDecimal keyframePresentedBy) throws Exception {
     var source = largePictureHevcSource();
+    var job = largePictureJob(source);
+    if (keyframePresentedBy != null) {
+      setSeekPosition(
+          job.getExecutionBuilder(),
+          decodeTimeOfTheLastKeyframePresentedBy(source, keyframePresentedBy));
+    }
 
-    assertEncodeOfTheCopyUploadsWhatOneFfmpegEncodes(source, largePictureJob(source));
+    assertEncodeOfTheCopyUploadsWhatOneFfmpegEncodes(source, job);
   }
 
-  // A full encode of the large-picture source from segment 7, at 21 s on a 3 s period, which
-  // reads from one period early, 18 s, where the MP4 demuxer lands on the keyframe at 10 s.
+  // A full encode of the large-picture source from segment 7, at 21 s on a 3 s period.
   private static VariantJob.Builder largePictureJob(Path source) {
     var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
     job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
@@ -5502,6 +5513,43 @@ class WorkerMediaSmokeTest {
     assertSegment3OpensWithTheStartAttemptsPictureAndAudio(startAttempt, replacement);
   }
 
+  // An attempt that encodes a profile 5 source reads the server's keyframe position as every other
+  // encoded replacement does. Read from one period early instead, 27 s, inside the gap, the MP4
+  // demuxer landed on the keyframe after the gap, whose decode time lies before 27 s, and the
+  // replacement lost the picture held from 25.958 s. Both attempts run libx264 on one thread, as
+  // the encode of the copy feeds it frames at its own pace.
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"mp4", "mkv", "ts"})
+  @DisplayName(
+      "Should open a profile 5 replacement's first segment with the start attempt's picture, frame"
+          + " count and audio when it reads from the server's keyframe before a gap between"
+          + " pictures longer than a period")
+  void
+      shouldOpenAProfile5ReplacementWithTheStartAttemptsPictureWhenItReadsFromTheServersKeyframeBeforeAGapLongerThanAPeriod(
+          String container) throws Exception {
+    var source = hevcPictureGapSource(container);
+    var engine = engine(softwareCapabilities(), withX264ThreadsOfOne(new ProcessBuilderLauncher()));
+    var startAttempt = execute(engine, source.getParent(), profile5PictureGapJob(source).build());
+    var replacementJob = profile5PictureGapJob(source);
+    replacementJob.getExecutionBuilder().setStartSequenceNumber(3).setSeekPositionSeconds(30);
+    setSeekPosition(
+        replacementJob.getExecutionBuilder(),
+        decodeTimeOfTheLastKeyframePresentedBy(source, new BigDecimal("29.5")));
+
+    var replacement = execute(engine, source.getParent(), replacementJob.build());
+
+    assertSegment3OpensWithTheStartAttemptsPictureAndAudio(startAttempt, replacement);
+  }
+
+  // The gap job for a Dolby Vision profile 5 source whose RPUs may start samples, which the worker
+  // encodes from a copy of its video. The source holds no RPU, so the mover leaves every sample as
+  // it is.
+  private static VariantJob.Builder profile5PictureGapJob(Path source) {
+    var job = pictureGapJob(source);
+    withProfile5Source(job, DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE);
+    return job;
+  }
+
   // The replacement's segment 3 opens on a keyframe where the start attempt's does, with the same
   // frame count and first picture, the picture held from 25.958 s, and its audio joins the start
   // attempt's on segment 3's start.
@@ -5769,6 +5817,36 @@ class WorkerMediaSmokeTest {
     arguments.addAll(videoEncoder);
     arguments.addAll(List.of("-force_key_frames", "0,10,20,31", "-c:a", "aac", "-b:a", "96k"));
     return arguments;
+  }
+
+  // The gap source's pictures and tone as 10-bit HEVC from libx265 with 2 B-frames, in MP4, and
+  // that MP4's streams unchanged in Matroska and MPEG-TS.
+  private static synchronized Path hevcPictureGapSource(String container) throws Exception {
+    var mp4 =
+        buildFixtureOnce(
+            seekableSources.resolve("gap-hevc.mp4"),
+            output ->
+                runFfmpeg(
+                    pictureGapArguments(
+                        List.of(
+                            "-pix_fmt",
+                            "yuv420p10le",
+                            "-c:v",
+                            "libx265",
+                            "-x265-params",
+                            "keyint=100000:min-keyint=1:scenecut=0:bframes=2:log-level=error",
+                            "-forced-idr",
+                            "1",
+                            "-tag:v",
+                            "hvc1")),
+                    output));
+    if (container.equals("mp4")) {
+      return mp4;
+    }
+
+    return buildFixtureOnce(
+        seekableSources.resolve("gap-hevc." + container),
+        output -> runFfmpeg(List.of("-i", mp4.toString(), "-map", "0", "-c", "copy"), output));
   }
 
   // The media's decoded pictures in presentation order, each with its presentation time and the
