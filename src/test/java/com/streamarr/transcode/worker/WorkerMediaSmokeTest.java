@@ -5450,22 +5450,97 @@ class WorkerMediaSmokeTest {
   void shouldOpenTheReplacementsAudioOnItsFirstSegmentsStartWhenAnEncodedReplacementEncodesAudio(
       String codec, BigDecimal keyframePosition) throws Exception {
     var source = pictureGapSource(PictureGapSource.MP4_WITHOUT_B_FRAMES);
-    var startAttemptJob = pictureGapJob(source);
-    startAttemptJob.getDecisionBuilder().getAudioBuilder().setCodec(codec);
     var startAttempt =
-        execute(engine(softwareCapabilities()), source.getParent(), startAttemptJob.build());
-    var replacementJob = pictureGapJob(source);
-    replacementJob.getDecisionBuilder().getAudioBuilder().setCodec(codec);
-    replacementJob.getExecutionBuilder().setStartSequenceNumber(3).setSeekPositionSeconds(30);
-    if (keyframePosition != null) {
-      setSeekPosition(replacementJob.getExecutionBuilder(), keyframePosition);
-    }
+        execute(
+            engine(softwareCapabilities()),
+            source.getParent(),
+            pictureGapAudioJob(source, codec).build());
 
     var replacement =
-        execute(engine(softwareCapabilities()), source.getParent(), replacementJob.build());
+        execute(
+            engine(softwareCapabilities()),
+            source.getParent(),
+            pictureGapAudioReplacementJob(source, codec, keyframePosition).build());
 
     var replaced = Mp4Samples.read(replacement.contentOf(List.of("init.mp4", segmentName(3))));
     assertAudioJoinsOnSegment3sStart(startAttempt, replaced);
+  }
+
+  // FLAC and ALAC are lossless, so the replacement's audio decodes to the start attempt's samples
+  // only when its frames carry the source's samples from the listed start on, at the times that
+  // the start attempt gives them. Timestamps alone would also pass audio taken from a frame
+  // earlier.
+  @ParameterizedTest(name = "{0}, keyframe {1}")
+  @CsvSource({"flac,", "alac,", "flac, 20"})
+  @DisplayName(
+      "Should decode the replacement's audio from its first segment's start to the start attempt's"
+          + " samples when an encoded replacement attempt encodes lossless audio")
+  void
+      shouldDecodeTheReplacementsAudioToTheStartAttemptsSamplesWhenAReplacementEncodesLosslessAudio(
+          String codec, BigDecimal keyframePosition) throws Exception {
+    var source = pictureGapSource(PictureGapSource.MP4_WITHOUT_B_FRAMES);
+    var startAttempt =
+        execute(
+            engine(softwareCapabilities()),
+            source.getParent(),
+            pictureGapAudioJob(source, codec).build());
+
+    var replacement =
+        execute(
+            engine(softwareCapabilities()),
+            source.getParent(),
+            pictureGapAudioReplacementJob(source, codec, keyframePosition).build());
+
+    assertThat(
+            decodedAudioFrom30To36Seconds(
+                replacement.contentOf(List.of("init.mp4", segmentName(3)))))
+        .as("the MD5 of the replacement's decoded samples from 30 s to 36 s")
+        .isEqualTo(
+            decodedAudioFrom30To36Seconds(
+                startAttempt.contentOf(List.of("init.mp4", segmentName(2), segmentName(3)))));
+  }
+
+  // A job that encodes the gap source's audio into this codec from the start.
+  private static VariantJob.Builder pictureGapAudioJob(Path source, String codec) {
+    var job = pictureGapJob(source);
+    job.getDecisionBuilder().getAudioBuilder().setCodec(codec);
+    return job;
+  }
+
+  // That job's replacement attempt from segment 3, which carries the server's keyframe position
+  // when one is given.
+  private static VariantJob.Builder pictureGapAudioReplacementJob(
+      Path source, String codec, BigDecimal keyframePosition) {
+    var job = pictureGapAudioJob(source, codec);
+    job.getExecutionBuilder().setStartSequenceNumber(3).setSeekPositionSeconds(30);
+    if (keyframePosition != null) {
+      setSeekPosition(job.getExecutionBuilder(), keyframePosition);
+    }
+
+    return job;
+  }
+
+  // The MD5 of the media's decoded audio samples from 30 s to 36 s on the media's own timeline.
+  private static String decodedAudioFrom30To36Seconds(byte[] media) throws Exception {
+    var file = Files.createTempFile(longSources, "decoded", ".mp4");
+    Files.write(file, media);
+    return runToCompletion(
+            List.of(
+                "ffmpeg",
+                "-nostdin",
+                "-v",
+                "error",
+                "-copyts",
+                "-i",
+                file.toString(),
+                "-map",
+                "0:a:0",
+                "-af",
+                "atrim=start=30:end=36",
+                "-f",
+                "md5",
+                "-"))
+        .strip();
   }
 
   // Segment 3's listed start, 30 s, opens the replacement's audio with a frame, and the start
