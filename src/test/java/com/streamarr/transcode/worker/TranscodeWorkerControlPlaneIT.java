@@ -281,12 +281,14 @@ class TranscodeWorkerControlPlaneIT {
         var worker = worker(preparedMediaRoot(), launcher, 1)) {
       server.start();
       worker.start("localhost", server.port());
+      // A copy before the encode and one after it: the encode starts beside a copy, and the
+      // second copy starts while the encode holds the only slot.
       service.sendStart(service.registeredWorker(), copy);
       service.awaitStarted(copy);
-      service.sendStart(service.registeredWorker(), copyWithAudioEncode);
-      service.awaitStarted(copyWithAudioEncode);
       service.sendStart(service.registeredWorker(), encode);
       service.awaitStarted(encode);
+      service.sendStart(service.registeredWorker(), copyWithAudioEncode);
+      service.awaitStarted(copyWithAudioEncode);
 
       service.sendStart(service.registeredWorker(), secondEncode);
 
