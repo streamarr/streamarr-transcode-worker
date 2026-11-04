@@ -492,8 +492,8 @@ class WorkerImageIT {
     // shutdown, so the wrapper's evidence leaves through a named pipe that a reader holds open. The
     // wrapper opens the pipe as the job starts, which waits for that reader, and says so with a
     // file, so the stop begins only once the pipe is connected. It keeps the pipe open until it
-    // exits: q arrives when it is read, e only when the wrapper exits by itself, since a destroy
-    // runs no exit trap.
+    // exits: q arrives when it is read, e only when the wrapper then exits by itself with status
+    // zero, since a termination signal writes t instead and a forcible destroy runs no trap.
     var script =
         scriptedFfmpeg(
             """
@@ -504,7 +504,8 @@ class WorkerImageIT {
           exit 71
         fi
         printf q >&3
-        trap 'printf e >&3' EXIT
+        trap 'printf t >&3; exit 70' TERM INT HUP
+        trap '[[ $? -eq 0 ]] && printf e >&3' EXIT
         exit 0
         """);
     try (var image = ImageFixture.builder().media(media).ffmpegPath(script).build()) {
