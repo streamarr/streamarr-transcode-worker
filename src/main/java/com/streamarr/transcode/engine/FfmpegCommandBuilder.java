@@ -324,8 +324,16 @@ public class FfmpegCommandBuilder {
       cmd.addAll(List.of("-map", audioMap(audio, audio.sourceStreamSpecifier())));
     }
 
-    if (decision.subtitleDecision().mode() == SubtitleMode.EXCLUDE) {
+    var namesAudioStream = audio.mode() != AudioMode.NONE && audio.streamIndex().isPresent();
+    if (decision.subtitleDecision().mode() == SubtitleMode.EXCLUDE || namesAudioStream) {
       cmd.addAll(List.of("-map", "-0:s"));
+    }
+
+    // A negative map undoes the maps before it that it matches, so a named subtitle, data or
+    // attachment stream maps nothing and the producer refuses the output without a sound track,
+    // where FFmpeg would fail writing it.
+    if (namesAudioStream) {
+      cmd.addAll(List.of("-map", "-0:d", "-map", "-0:t"));
     }
   }
 

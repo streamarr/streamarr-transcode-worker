@@ -1594,12 +1594,37 @@ class FfmpegCommandBuilderTest {
         .doesNotContain("0:a:0");
   }
 
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(SubtitleMode.class)
+  @DisplayName(
+      "Should drop a subtitle, data or attachment stream that the job names as its audio when the"
+          + " job names its audio stream")
+  void
+      shouldDropASubtitleDataOrAttachmentStreamThatTheJobNamesAsItsAudioWhenTheJobNamesItsAudioStream(
+          SubtitleMode subtitleMode) {
+    var decision =
+        decision(TranscodeMode.REMUX)
+            .audioDecision(copiedAudioBuilder("aac").streamIndex(OptionalInt.of(4)).build())
+            .subtitleDecision(
+                new SubtitleDecision(
+                    subtitleMode, Optional.empty(), OptionalInt.empty(), Optional.empty()))
+            .build();
+
+    var cmd = command(request(decision).build(), "copy");
+
+    assertThat(cmd)
+        .containsSequence(
+            "-map", "0:0", "-map", "0:4?", "-map", "-0:s", "-map", "-0:d", "-map", "-0:t");
+  }
+
   @Test
   @DisplayName("Should map the first audio stream and require it when the job names none")
   void shouldMapTheFirstAudioStreamAndRequireItWhenTheJobNamesNone() {
     var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), "libx264");
 
-    assertThat(cmd).containsSequence("-map", "0:0", "-map", "0:a:0", "-map", "-0:s");
+    assertThat(cmd)
+        .containsSequence("-map", "0:0", "-map", "0:a:0", "-map", "-0:s", "-map_metadata")
+        .doesNotContain("-0:d", "-0:t");
   }
 
   @Test

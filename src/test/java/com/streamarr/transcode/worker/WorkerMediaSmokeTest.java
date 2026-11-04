@@ -45,6 +45,7 @@ import build.buf.gen.streamarr.transcode.v1.ProbeMediaInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
+import build.buf.gen.streamarr.transcode.v1.SubtitleMode;
 import build.buf.gen.streamarr.transcode.v1.TranscodeExecution;
 import build.buf.gen.streamarr.transcode.v1.TranscodeMode;
 import build.buf.gen.streamarr.transcode.v1.TranscodeWorkerServiceGrpc;
@@ -1235,20 +1236,24 @@ class WorkerMediaSmokeTest {
             });
   }
 
-  @ParameterizedTest(name = "{0} naming stream {1}")
+  @ParameterizedTest(name = "{0} naming stream {1} with subtitles {2}")
   @CsvSource({
-    "TRANSCODE_MODE_REMUX, 0",
-    "TRANSCODE_MODE_REMUX, 9",
-    "TRANSCODE_MODE_FULL_TRANSCODE, 0",
-    "TRANSCODE_MODE_FULL_TRANSCODE, 9"
+    "TRANSCODE_MODE_REMUX, 0, SUBTITLE_MODE_EXCLUDE",
+    "TRANSCODE_MODE_REMUX, 3, SUBTITLE_MODE_HLS",
+    "TRANSCODE_MODE_REMUX, 4, SUBTITLE_MODE_EXCLUDE",
+    "TRANSCODE_MODE_REMUX, 9, SUBTITLE_MODE_EXCLUDE",
+    "TRANSCODE_MODE_FULL_TRANSCODE, 0, SUBTITLE_MODE_EXCLUDE",
+    "TRANSCODE_MODE_FULL_TRANSCODE, 3, SUBTITLE_MODE_HLS",
+    "TRANSCODE_MODE_FULL_TRANSCODE, 4, SUBTITLE_MODE_EXCLUDE",
+    "TRANSCODE_MODE_FULL_TRANSCODE, 9, SUBTITLE_MODE_EXCLUDE"
   })
   @DisplayName(
       "Should report an invalid specification and upload nothing when the stream that the job names"
-          + " as its audio is the video or no stream of a real source")
+          + " as its audio is the video, a subtitle, an attachment or no stream of a real source")
   void
-      shouldReportAnInvalidSpecificationAndUploadNothingWhenTheStreamThatTheJobNamesAsItsAudioIsTheVideoOrNoStreamOfARealSource(
-          TranscodeMode mode, int streamIndex) throws Exception {
-    var source = sourceWithTwoAudioTracks();
+      shouldReportAnInvalidSpecificationAndUploadNothingWhenTheStreamThatTheJobNamesAsItsAudioIsNotAnAudioStreamOfARealSource(
+          TranscodeMode mode, int streamIndex, SubtitleMode subtitleMode) throws Exception {
+    var source = sourceWithSubtitleAndAttachment();
     var job = variantJobBuilder(mode);
     withVideo(job, h264VideoFor(mode, FIXTURE));
     job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
@@ -1259,6 +1264,7 @@ class WorkerMediaSmokeTest {
         .setChannels(2)
         .setBitrateBitsPerSecond(128_000)
         .setStreamIndex(streamIndex);
+    job.getDecisionBuilder().getSubtitleBuilder().setMode(subtitleMode);
     job.getVariantBuilder().setWidth(320).setHeight(180).setBitrateBitsPerSecond(500_000);
     job.getExecutionBuilder().setMediaSegmentCount(FIXTURE_SEGMENT_COUNT);
 
@@ -1267,6 +1273,44 @@ class WorkerMediaSmokeTest {
     assertThat(failure.failure().getFailure())
         .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
     assertThat(failure.uploads().names()).isEmpty();
+  }
+
+  // The fixture's video and AAC track, then a SubRip subtitle and a font attachment.
+  private Path sourceWithSubtitleAndAttachment() throws Exception {
+    copyMedia();
+    var subtitles = root.resolve("subtitles.srt");
+    Files.writeString(subtitles, "1\n00:00:00,000 --> 00:00:02,000\nHello\n");
+    var font = root.resolve("font.ttf");
+    Files.write(font, new byte[] {0, 1, 0, 0});
+    var source = root.resolve("subtitle-and-attachment.mkv");
+    runFfmpeg(
+        List.of(
+            "-i",
+            root.resolve("movie.mkv").toString(),
+            "-i",
+            subtitles.toString(),
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a:0",
+            "-map",
+            "0:a:0",
+            "-map",
+            "1:s:0",
+            "-c",
+            "copy",
+            "-c:s",
+            "srt",
+            "-attach",
+            font.toString(),
+            "-metadata:s:t",
+            "mimetype=application/x-truetype-font"),
+        source);
+    var streams = probeExecutor().probe(source, requestBuilder().build()).result().getMedia();
+    assertThat(streams.getStreamsList())
+        .extracting(ProbeStreamInfo::getCodecType)
+        .containsExactly("video", "audio", "audio", "subtitle", "attachment");
+    return source;
   }
 
   // The fixture's video and 48 kHz AAC track, then its audio again as a 44.1 kHz AC-3 track.
