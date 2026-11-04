@@ -329,11 +329,11 @@ public class FfmpegCommandBuilder {
       cmd.addAll(List.of("-map", "-0:s"));
     }
 
-    // A negative map undoes the maps before it that it matches, so a named subtitle, data or
-    // attachment stream maps nothing and the producer refuses the output without a sound track,
-    // where FFmpeg would fail writing it.
+    // A negative map undoes the maps before it that it matches, so a named subtitle, data,
+    // attachment or cover art stream maps nothing and the producer refuses the output without a
+    // sound track, where FFmpeg would fail writing it. The chosen video stream is never cover art.
     if (namesAudioStream) {
-      cmd.addAll(List.of("-map", "-0:d", "-map", "-0:t"));
+      cmd.addAll(List.of("-map", "-0:d", "-map", "-0:t", "-map", "-0:disp:attached_pic"));
     }
   }
 

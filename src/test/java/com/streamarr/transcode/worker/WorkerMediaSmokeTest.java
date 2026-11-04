@@ -1241,15 +1241,18 @@ class WorkerMediaSmokeTest {
     "TRANSCODE_MODE_REMUX, 0, SUBTITLE_MODE_EXCLUDE",
     "TRANSCODE_MODE_REMUX, 3, SUBTITLE_MODE_HLS",
     "TRANSCODE_MODE_REMUX, 4, SUBTITLE_MODE_EXCLUDE",
+    "TRANSCODE_MODE_REMUX, 5, SUBTITLE_MODE_EXCLUDE",
     "TRANSCODE_MODE_REMUX, 9, SUBTITLE_MODE_EXCLUDE",
     "TRANSCODE_MODE_FULL_TRANSCODE, 0, SUBTITLE_MODE_EXCLUDE",
     "TRANSCODE_MODE_FULL_TRANSCODE, 3, SUBTITLE_MODE_HLS",
     "TRANSCODE_MODE_FULL_TRANSCODE, 4, SUBTITLE_MODE_EXCLUDE",
+    "TRANSCODE_MODE_FULL_TRANSCODE, 5, SUBTITLE_MODE_EXCLUDE",
     "TRANSCODE_MODE_FULL_TRANSCODE, 9, SUBTITLE_MODE_EXCLUDE"
   })
   @DisplayName(
       "Should report an invalid specification and upload nothing when the stream that the job names"
-          + " as its audio is the video, a subtitle, an attachment or no stream of a real source")
+          + " as its audio is a video, subtitle, attachment or cover art stream, or no stream, of a"
+          + " real source")
   void
       shouldReportAnInvalidSpecificationAndUploadNothingWhenTheStreamThatTheJobNamesAsItsAudioIsNotAnAudioStreamOfARealSource(
           TranscodeMode mode, int streamIndex, SubtitleMode subtitleMode) throws Exception {
@@ -1275,13 +1278,16 @@ class WorkerMediaSmokeTest {
     assertThat(failure.uploads().names()).isEmpty();
   }
 
-  // The fixture's video and AAC track, then a SubRip subtitle and a font attachment.
+  // The fixture's video and AAC track, then a SubRip subtitle, a font attachment and cover art,
+  // which FFmpeg reads from Matroska as a video stream with the attached picture disposition.
   private Path sourceWithSubtitleAndAttachment() throws Exception {
     copyMedia();
     var subtitles = root.resolve("subtitles.srt");
     Files.writeString(subtitles, "1\n00:00:00,000 --> 00:00:02,000\nHello\n");
     var font = root.resolve("font.ttf");
     Files.write(font, new byte[] {0, 1, 0, 0});
+    var cover = root.resolve("cover.png");
+    runFfmpeg(List.of("-f", "lavfi", "-i", "color=red:s=64x64", "-frames:v", "1"), cover);
     var source = root.resolve("subtitle-and-attachment.mkv");
     runFfmpeg(
         List.of(
@@ -1303,13 +1309,17 @@ class WorkerMediaSmokeTest {
             "srt",
             "-attach",
             font.toString(),
-            "-metadata:s:t",
-            "mimetype=application/x-truetype-font"),
+            "-metadata:s:t:0",
+            "mimetype=application/x-truetype-font",
+            "-attach",
+            cover.toString(),
+            "-metadata:s:t:1",
+            "mimetype=image/png"),
         source);
     var streams = probeExecutor().probe(source, requestBuilder().build()).result().getMedia();
     assertThat(streams.getStreamsList())
         .extracting(ProbeStreamInfo::getCodecType)
-        .containsExactly("video", "audio", "audio", "subtitle", "attachment");
+        .containsExactly("video", "audio", "audio", "subtitle", "attachment", "video");
     return source;
   }
 

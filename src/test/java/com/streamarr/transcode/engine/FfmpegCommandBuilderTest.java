@@ -1597,10 +1597,10 @@ class FfmpegCommandBuilderTest {
   @ParameterizedTest(name = "{0}")
   @EnumSource(SubtitleMode.class)
   @DisplayName(
-      "Should drop a subtitle, data or attachment stream that the job names as its audio when the"
-          + " job names its audio stream")
+      "Should drop a subtitle, data, attachment or attached picture stream that the job names as its"
+          + " audio when the job names its audio stream")
   void
-      shouldDropASubtitleDataOrAttachmentStreamThatTheJobNamesAsItsAudioWhenTheJobNamesItsAudioStream(
+      shouldDropASubtitleDataAttachmentOrAttachedPictureStreamThatTheJobNamesAsItsAudioWhenTheJobNamesItsAudioStream(
           SubtitleMode subtitleMode) {
     var decision =
         decision(TranscodeMode.REMUX)
@@ -1614,7 +1614,18 @@ class FfmpegCommandBuilderTest {
 
     assertThat(cmd)
         .containsSequence(
-            "-map", "0:0", "-map", "0:4?", "-map", "-0:s", "-map", "-0:d", "-map", "-0:t");
+            "-map",
+            "0:0",
+            "-map",
+            "0:4?",
+            "-map",
+            "-0:s",
+            "-map",
+            "-0:d",
+            "-map",
+            "-0:t",
+            "-map",
+            "-0:disp:attached_pic");
   }
 
   @Test
@@ -1624,7 +1635,7 @@ class FfmpegCommandBuilderTest {
 
     assertThat(cmd)
         .containsSequence("-map", "0:0", "-map", "0:a:0", "-map", "-0:s", "-map_metadata")
-        .doesNotContain("-0:d", "-0:t");
+        .doesNotContain("-0:d", "-0:t", "-0:disp:attached_pic");
   }
 
   @Test
