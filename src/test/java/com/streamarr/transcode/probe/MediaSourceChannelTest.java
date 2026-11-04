@@ -37,7 +37,7 @@ class MediaSourceChannelTest {
     var outside = Files.write(mediaRoot.resolve("secret"), new byte[] {4, 5, 6});
     var source = Files.createSymbolicLink(mediaRoot.resolve("movie.mp4"), outside);
 
-    assertThatThrownBy(() -> MediaSourceChannel.openForReading(source).close())
+    assertThatThrownBy(() -> MediaSourceChannel.openForReading(source))
         .isInstanceOf(IOException.class);
   }
 }

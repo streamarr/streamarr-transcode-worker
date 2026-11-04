@@ -31,9 +31,9 @@ record LandlockPolicy(
     @NonNull Path temporaryDirectory,
     @NonNull List<Path> devices) {
 
-  // ld.so.cache, fontconfig's configuration and the OpenCL and Vulkan loaders' lists live in /etc;
-  // the NVIDIA driver reads its parameters and the process's own maps in /proc, and PCI, NUMA and
-  // module facts in /sys; x264 and x265 read the overcommit setting in /proc.
+  // FFmpeg reads ld.so.cache, fontconfig's configuration and the OpenCL and Vulkan loader lists
+  // from /etc. The NVIDIA driver reads its parameters and the process's own maps from /proc, and
+  // PCI, NUMA and module facts from /sys. x264 and x265 read the overcommit setting from /proc.
   private static final List<Path> SYSTEM_READ_ONLY =
       List.of(Path.of("/etc"), Path.of("/proc"), Path.of("/sys"), Path.of("/var/cache/fontconfig"));
 

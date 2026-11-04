@@ -77,8 +77,8 @@ class LandlockPackagingTest {
   @Test
   @DisplayName("Should test the helper's rules when CI verifies the build tooling")
   void shouldTestTheHelpersRulesWhenCiVerifiesTheBuildTooling() throws IOException {
-    assertThat(stepNamed(steps("tooling"), "Verify the Landlock helper").get("run").toString())
-        .isEqualTo("node --test buildpacks/landlock/test/*.test.mjs");
+    assertThat(stepNamed(steps("tooling"), "Verify the Landlock helper").get("run"))
+        .hasToString("node --test buildpacks/landlock/test/*.test.mjs");
   }
 
   @SuppressWarnings("unchecked")

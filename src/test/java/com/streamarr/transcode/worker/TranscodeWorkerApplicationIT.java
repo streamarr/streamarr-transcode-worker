@@ -285,8 +285,7 @@ class TranscodeWorkerApplicationIT {
         .as("every tool runs through landlock-exec with the source root readable")
         .isNotEmpty()
         .allSatisfy(
-            command -> assertThat(command).contains("--read-pinned " + tempDir + " ", " -- "));
-    assertThat(confined)
+            command -> assertThat(command).contains("--read-pinned " + tempDir + " ", " -- "))
         .anyMatch(command -> command.endsWith(" -- " + ffprobe + " -version"))
         .anyMatch(command -> command.contains(ffprobe.toString()) && command.endsWith("movie.mkv"))
         .anyMatch(command -> command.contains(" -- " + tempDir.resolve("ffmpeg") + " "));

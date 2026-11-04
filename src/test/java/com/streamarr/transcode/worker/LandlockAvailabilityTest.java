@@ -34,8 +34,11 @@ class LandlockAvailabilityTest {
   void shouldAskForANewerKernelWhenLandlockExecReportsEnosys() throws Exception {
     var helper =
         helper(
-            "echo 'landlock-exec: Landlock is unavailable: landlock_create_ruleset: ENOSYS:"
-                + " Function not implemented' >&2\nexit 2\n");
+            """
+            echo 'landlock-exec: Landlock is unavailable: landlock_create_ruleset: ENOSYS: \
+            Function not implemented' >&2
+            exit 2
+            """);
 
     var availability = LandlockAvailability.check(helper.toString());
 
@@ -53,8 +56,11 @@ class LandlockAvailabilityTest {
   void shouldAskForTheLsmBootParameterWhenLandlockExecReportsEopnotsupp() throws Exception {
     var helper =
         helper(
-            "echo 'landlock-exec: Landlock is unavailable: landlock_create_ruleset: EOPNOTSUPP:"
-                + " Operation not supported' >&2\nexit 2\n");
+            """
+            echo 'landlock-exec: Landlock is unavailable: landlock_create_ruleset: EOPNOTSUPP: \
+            Operation not supported' >&2
+            exit 2
+            """);
 
     var availability = LandlockAvailability.check(helper.toString());
 
@@ -72,8 +78,11 @@ class LandlockAvailabilityTest {
   void shouldNameTheSeccompProfileWhenLandlockExecReportsAnotherRefusal() throws Exception {
     var helper =
         helper(
-            "echo 'landlock-exec: Landlock is unavailable: landlock_create_ruleset: EPERM:"
-                + " Operation not permitted' >&2\nexit 2\n");
+            """
+            echo 'landlock-exec: Landlock is unavailable: landlock_create_ruleset: EPERM: \
+            Operation not permitted' >&2
+            exit 2
+            """);
 
     var availability = LandlockAvailability.check(helper.toString());
 

@@ -21,7 +21,7 @@ sealed interface LandlockAvailability {
     Process process;
     try {
       process = new ProcessBuilder(landlockExecPath, "--abi").start();
-    } catch (IOException e) {
+    } catch (IOException _) {
       return new Unavailable(
           "landlock-exec is not available to the transcode worker: " + landlockExecPath,
           "Run the worker image, which carries landlock-exec, or compile it with"
