@@ -544,6 +544,54 @@ class FfprobeExecutorBitrateScanTest {
 
   @Test
   @DisplayName(
+      "Should list the chunk from the file's start when the listing of the packets taken finds"
+          + " that the seek missed the chunk's start before its last packet")
+  void shouldListTheChunkFromTheFilesStartWhenTheRelistingFindsTheSeekMissedTheStartEarly() {
+    // The audio's first packet after the seek, at 21 s, follows the chunk's start at 20.5 s. The
+    // first listing loses it, so it stops at the audio at 40.5 s, its 5th packet. Listed again,
+    // the audio at 21 s, the 2nd packet, shows that the seek missed the start, and the video at
+    // 11 s that the listing still prints must not hide it.
+    var afterTheSeek =
+        """
+        stream_index=0|pts=10500|dts=10500|duration=500|size=900|flags=K__
+        stream_index=1|pts=21000|dts=21000|duration=250|size=9|flags=K__
+        stream_index=0|pts=11000|dts=11000|duration=500|size=100|flags=___
+        stream_index=0|pts=20500|dts=20500|duration=500|size=1001|flags=K__
+        stream_index=0|pts=40500|dts=40500|duration=500|size=1002|flags=K__
+        stream_index=1|pts=40500|dts=40500|duration=250|size=11|flags=K__
+        """;
+    var lost =
+        afterTheSeek
+            .lines()
+            .filter(line -> !line.contains("|pts=21000|"))
+            .reduce("", (lines, line) -> lines + line + "\n");
+    var fromTheFileStart =
+        """
+        stream_index=0|pts=500|dts=500|duration=500|size=800|flags=K__
+        stream_index=1|pts=20750|dts=20750|duration=250|size=10|flags=K__
+        stream_index=0|pts=20500|dts=20500|duration=500|size=1001|flags=K__
+        stream_index=1|pts=21000|dts=21000|duration=250|size=9|flags=K__
+        stream_index=0|pts=40500|dts=40500|duration=500|size=1002|flags=K__
+        stream_index=1|pts=40500|dts=40500|duration=250|size=11|flags=K__
+        """;
+    var ffprobe =
+        keptAacSource()
+            .listing("10.500000", afterTheSeek)
+            .listing(FROM_FILE_START, fromTheFileStart)
+            .firstListing(lost)
+            .build();
+
+    var report = ffprobe.executor().probe(SOURCE, request(TWENTY_SECOND_KEYFRAMES.chunk(1, 2)));
+
+    assertThat(intervalCounts(report.streamMeasurementParts()))
+        .containsExactly(
+            Map.entry(0, counts(List.of(1001L), List.of(1L))),
+            Map.entry(1, counts(List.of(10L + 9), List.of(2L))));
+    assertThat(ffprobe.listingStarts()).containsExactly("10.500000", "10.500000", FROM_FILE_START);
+  }
+
+  @Test
+  @DisplayName(
       "Should report an execution failure when the listing of the packets that a stopped listing"
           + " took exits with an error")
   void shouldReportAnExecutionFailureWhenTheListingOfThePacketsTakenExitsWithAnError() {
