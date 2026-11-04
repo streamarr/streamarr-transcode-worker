@@ -27,7 +27,6 @@ final class HevcSampleRewrite implements SampleRewrite {
   // user_data_registered_itu_t_t35 (ITU-T H.265 D.2.6); HDR10+ registers country code 0xB5,
   // provider code 0x003C, provider-oriented code 0x0001 and application identifier 4.
   private static final int REGISTERED_USER_DATA = 4;
-  private static final int SCALABLE_NESTING = 133;
   private static final byte[] HDR10_PLUS_PREFIX = {(byte) 0xB5, 0x00, 0x3C, 0x00, 0x01, 0x04};
   private static final int RBSP_STOP_BYTE = 0x80;
 
@@ -99,7 +98,7 @@ final class HevcSampleRewrite implements SampleRewrite {
     if (messages.stream().anyMatch(message -> nestsHdr10Plus(payload, message))) {
       throw new FragmentedMp4Exception(
           FragmentedMp4Exception.Reason.OUTPUT_MISMATCH,
-          "a scalable nesting SEI message holds HDR10+, which the copy cannot strip");
+          "an SEI message nests HDR10+, which the copy cannot strip");
     }
 
     var kept = messages.stream().filter(message -> !isHdr10Plus(payload, message)).toList();
@@ -171,11 +170,11 @@ final class HevcSampleRewrite implements SampleRewrite {
         && holdsAt(rbsp, message.payloadStart(), message.end(), HDR10_PLUS_PREFIX);
   }
 
-  // A scalable nesting message hides its nested messages behind bit-level fields. Removing one of
-  // them would mean rewriting those fields, so the copy refuses any nesting message whose payload
-  // holds HDR10+'s registration anywhere.
+  // A nesting message, such as scalable nesting (payload type 133), hides its nested messages
+  // behind bit-level fields. Removing one of them would mean rewriting those fields, so the copy
+  // refuses any other message whose payload holds HDR10+'s registration anywhere.
   private static boolean nestsHdr10Plus(byte[] rbsp, Message message) {
-    if (message.type() != SCALABLE_NESTING) {
+    if (isHdr10Plus(rbsp, message)) {
       return false;
     }
 

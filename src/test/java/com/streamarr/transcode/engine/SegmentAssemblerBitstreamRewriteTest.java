@@ -32,6 +32,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * The assembler applies the sample rewrites that a copy lists to every video sample that it
@@ -274,15 +275,17 @@ class SegmentAssemblerBitstreamRewriteTest {
             List.of(TEMPORAL_DELIMITER, CONTENT_LIGHT_LEVEL_METADATA, FRAME)));
   }
 
-  @Test
+  @ParameterizedTest(name = "payload type {0}")
+  @ValueSource(ints = {133, 157, 159, 162, 214})
   @DisplayName(
-      "Should refuse a fragment as an output mismatch when a scalable nesting SEI message holds"
-          + " HDR10+ that the copy strips")
-  void shouldRefuseAFragmentWhenAScalableNestingSeiMessageHoldsHdr10PlusThatTheCopyStrips()
+      "Should refuse a fragment as an output mismatch when a nesting SEI message holds HDR10+ that"
+          + " the copy strips")
+  void shouldRefuseAFragmentWhenANestingSeiMessageHoldsHdr10PlusThatTheCopyStrips(int payloadType)
       throws IOException {
-    // scalable_nesting (payload type 133, ITU-T H.265 D.2.24) whose flags byte precedes a nested
-    // HDR10+ message.
-    var nesting = "850B" + "C0" + HDR10_PLUS_MESSAGE;
+    // The five SEI payload types of ITU-T H.265 that nest other SEI messages: scalable, regional,
+    // MCTS extraction information, bitstream partition and processing-order nesting. Each holds a
+    // flags byte, then a nested HDR10+ message.
+    var nesting = HexFormat.of().toHexDigits((byte) payloadType) + "0B" + "C0" + HDR10_PLUS_MESSAGE;
     var keyframe = sample(aud(), seiOf(nesting), slice(0));
     var output =
         Mp4Stream.read(
