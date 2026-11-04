@@ -484,17 +484,20 @@ class WorkerImageIT {
   void shouldStopTheMediaProcessGracefullyWhenTheContainerReceivesTermination() throws Exception {
     copyMedia();
     // Nothing a confined tool writes outlives the worker, which removes its scratch directory at
-    // shutdown, so the wrapper's evidence leaves through a named pipe that a reader holds open
-    // before the stop begins. The wrapper keeps the pipe open until it exits: q arrives when it is
-    // read, e only when the wrapper exits by itself, since a destroy runs no exit trap.
+    // shutdown, so the wrapper's evidence leaves through a named pipe that a reader holds open. The
+    // wrapper opens the pipe as the job starts, which waits for that reader, and says so with a
+    // file, so the stop begins only once the pipe is connected. It keeps the pipe open until it
+    // exits: q arrives when it is read, e only when the wrapper exits by itself, since a destroy
+    // runs no exit trap.
     var script =
         scriptedFfmpeg(
             """
+        exec 3>"$TMPDIR/graceful-stop"
+        : >"$TMPDIR/graceful-stop-open"
         read -r -n 1 command
         if [[ $command != q ]]; then
           exit 71
         fi
-        exec 3>"$TMPDIR/graceful-stop"
         printf q >&3
         trap 'printf e >&3' EXIT
         exit 0
@@ -502,9 +505,12 @@ class WorkerImageIT {
     try (var image = ImageFixture.builder().media(media).ffmpegPath(script).build()) {
       image.accept();
       var request = fixtureJobBuilder(TranscodeMode.TRANSCODE_MODE_REMUX).build();
+      var evidence = image.evidenceThroughPipe("graceful-stop");
       var started = JobAttemptStarted.parseFrom(image.command("start-job", request.toByteArray()));
       assertThat(started.getJobAttemptId()).isEqualTo(request.getJobAttemptId());
-      var evidence = image.evidenceThroughPipe("graceful-stop");
+      await()
+          .atMost(Duration.ofSeconds(30))
+          .until(() -> image.inScratch("test -e", "graceful-stop-open").getExitCode() == 0);
 
       image
           .worker
@@ -760,7 +766,8 @@ class WorkerImageIT {
 
     // Makes a named pipe of the given name in the scratch directory and reads it to its end on
     // another thread, so that whatever a wrapper writes there reaches the test even after the
-    // worker has removed the directory. A wrapper's open of the pipe waits for this reader.
+    // worker has removed the directory. A wrapper's open of the pipe waits for this reader, so a
+    // wrapper that opens it before the stop makes the stop independent of the reader's start.
     private CompletableFuture<String> evidenceThroughPipe(String file) throws Exception {
       var made =
           worker.execInContainer(
