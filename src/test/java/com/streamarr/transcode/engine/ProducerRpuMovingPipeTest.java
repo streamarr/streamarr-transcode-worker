@@ -483,6 +483,34 @@ class ProducerRpuMovingPipeTest {
     assertThat(encode.wasTerminated()).isTrue();
   }
 
+  // A hung FFmpeg ignores termination and writes nothing, so the reader never reaches the end of
+  // its output, where the producer's own grace period starts.
+  @Test
+  @DisplayName(
+      "Should end the encoding FFmpeg forcibly after the grace period, and fail the attempt as a"
+          + " truncated copy, when that FFmpeg ignores the termination that the cut copy sends")
+  void
+      shouldEndTheEncodingFfmpegForciblyAfterTheGracePeriodAndFailTheAttemptAsATruncatedCopyWhenThatFfmpegIgnoresTheTerminationThatTheCutCopySends() {
+    var copy =
+        ScriptedProcess.builder()
+            .output(Arrays.copyOf(COPIED_SOURCE, COPIED_SOURCE.length - 1))
+            .build();
+    var encode =
+        encodingFfmpeg()
+            .pauseAfter(0)
+            .ignoresTermination(true)
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+
+    var producer = producerOf(copy, encode).gracePeriod(Duration.ofMillis(200)).start();
+
+    var failure = failureOf(producer);
+    assertThat(failure.reason()).isEqualTo(ProducerFailure.TRUNCATED_OUTPUT);
+    assertThat(failure.detail()).startsWith("The copy of the source cannot be passed");
+    assertThat(encode.wasTerminated()).isTrue();
+    assertThat(encode.wasDestroyedForcibly()).isTrue();
+  }
+
   @Test
   @DisplayName(
       "Should fail the attempt with the copying FFmpeg's error output, not the terminated encoding"

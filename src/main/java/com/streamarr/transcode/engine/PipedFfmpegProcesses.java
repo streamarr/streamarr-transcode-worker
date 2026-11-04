@@ -125,7 +125,7 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
     } catch (FragmentedMp4Exception e) {
       refusedCopy.set(Optional.of(e));
       copy.destroy();
-      encode.toHandle().destroy();
+      endTheEncodingFfmpeg();
     }
 
     endInput(encoded);
@@ -139,7 +139,7 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
     }
 
     failedReadOfTheCopy.set(Optional.of(failure));
-    encode.toHandle().destroy();
+    endTheEncodingFfmpeg();
   }
 
   // A copy of whole units says nothing of how the copying FFmpeg exits, and the encoding FFmpeg
@@ -151,7 +151,7 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
         .thenAccept(
             exited -> {
               if (exited.exitValue() != 0) {
-                encode.toHandle().destroy();
+                endTheEncodingFfmpeg();
               }
             });
   }
@@ -161,9 +161,26 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
   private void failTransferUnexpectedly(Throwable failure) {
     unexpectedTransferFailure.set(Optional.of(failure));
     copy.destroy();
-    encode.toHandle().destroy();
+    endTheEncodingFfmpeg();
     endInput(encode.getOutputStream());
     log.error("The transfer of the copy of the source failed unexpectedly", failure);
+  }
+
+  // A failed copy ends the encoding FFmpeg while the producer may still wait on its output, which
+  // a hung FFmpeg that ignores termination keeps open. So the copy's failure gives it the grace
+  // period and then ends it forcibly, as the producer does after its own termination.
+  private void endTheEncodingFfmpeg() {
+    var handle = encode.toHandle();
+    handle.destroy();
+    handle
+        .onExit()
+        .completeOnTimeout(handle, gracePeriod.toNanos(), TimeUnit.NANOSECONDS)
+        .thenAccept(
+            ended -> {
+              if (ended.isAlive()) {
+                ended.destroyForcibly();
+              }
+            });
   }
 
   private static void endInput(OutputStream encoded) {
