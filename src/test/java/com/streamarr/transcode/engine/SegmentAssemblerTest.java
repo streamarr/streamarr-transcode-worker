@@ -68,6 +68,7 @@ class SegmentAssemblerTest {
             .maximumSegmentBytes(written.length)
             .encodedFrameRate(Optional.empty())
             .videoDecision(copy)
+            .paddedAudioEnd(Optional.empty())
             .build();
 
     assertThatThrownBy(() -> assembler.accept(new InitializationSegment(written)))
