@@ -63,6 +63,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.testcontainers.containers.BindMode;
+import org.testcontainers.containers.Container;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.output.Slf4jLogConsumer;
 import org.testcontainers.containers.startupcheck.StartupCheckStrategy;
@@ -330,7 +331,7 @@ class WorkerImageIT {
           arguments+=("$argument")
           previous=$argument
         done
-        printf '%s\\0' "${arguments[@]}" > /tmp/ffmpeg-arguments
+        printf '%s\\0' "${arguments[@]}" > "$TMPDIR/ffmpeg-arguments"
         exec ffmpeg "${arguments[@]}"
         """);
     Files.setPosixFilePermissions(script, PosixFilePermissions.fromString("rwxr-xr-x"));
@@ -353,10 +354,10 @@ class WorkerImageIT {
       "Should probe and stream a Unicode source key when the image runs with its default locale")
   void shouldProbeAndStreamUnicodeSourceKeyWhenImageRunsWithItsDefaultLocale() throws Exception {
     copyMedia(UNICODE_KEY);
-    var ffmpeg = recordingExecutable("ffmpeg");
+    // FFmpeg runs unwrapped: with both tools wrapped, the Landlock policy would list no directory
+    // holding the real ones. The uploaded segment proves FFmpeg opened the source by its name.
     var ffprobe = recordingExecutable("ffprobe");
-    try (var image =
-        ImageFixture.builder().media(media).ffmpegPath(ffmpeg).ffprobePath(ffprobe).build()) {
+    try (var image = ImageFixture.builder().media(media).ffprobePath(ffprobe).build()) {
       image.accept();
       var probeRequest = requestBuilder().setSource(sourceBuilder().setRelativeKey(UNICODE_KEY));
 
@@ -379,7 +380,6 @@ class WorkerImageIT {
 
       assertThat(completed.getJobAttemptId()).isEqualTo(job.getJobAttemptId());
       assertThat(image.command("segment", new byte[0])).isNotEmpty();
-      assertThat(image.recordedArguments("ffmpeg")).contains("/media/" + UNICODE_KEY);
     }
   }
 
@@ -449,7 +449,7 @@ class WorkerImageIT {
         script,
         """
         #!/bin/bash
-        printf '%%s\\0' "$@" > /tmp/%s-arguments
+        printf '%%s\\0' "$@" > "$TMPDIR/%s-arguments"
         exec %s "$@"
         """
             .formatted(name, name));
@@ -483,12 +483,14 @@ class WorkerImageIT {
   @DisplayName("Should stop the media process gracefully when the container receives termination")
   void shouldStopTheMediaProcessGracefullyWhenTheContainerReceivesTermination() throws Exception {
     copyMedia();
+    // Landlock leaves the wrapper nothing to write that outlives the worker, so the proof is the
+    // stop report the worker sends before it disconnects, which only its stop path produces. That
+    // FFmpeg quits on the q the stop writes is proven with the exit status the next test records.
     var script =
         scriptedFfmpeg(
             """
         read -r -n 1 command
         if [[ $command == q ]]; then
-          printf q > /tmp/worker-image-graceful-stop
           exit 0
         fi
         exit 71
@@ -506,9 +508,8 @@ class WorkerImageIT {
           .withTimeout(10)
           .exec();
 
-      var marker = media.resolve("graceful-stop");
-      image.worker.copyFileFromContainer("/tmp/worker-image-graceful-stop", marker.toString());
-      assertThat(Files.readString(marker)).isEqualTo("q");
+      var stopped = JobAttemptStopped.parseFrom(image.command("stopped", new byte[0]));
+      assertThat(stopped.getJobAttemptId()).isEqualTo(request.getJobAttemptId());
       assertThat(image.worker.getCurrentContainerInfo().getState().getExitCodeLong())
           .isIn(0L, 143L);
       assertThat(new String(image.command("disconnected", new byte[0]), StandardCharsets.UTF_8))
@@ -526,13 +527,13 @@ class WorkerImageIT {
     // FFmpeg reads the source at its native rate, so it is still remuxing when the stop arrives. It
     // runs as this wrapper's child, and the wrapper records its exit status, which a forced kill of
     // the wrapper would never write.
-    var exitFile = "/tmp/worker-image-ffmpeg-exit";
+    var exitFile = "worker-image-ffmpeg-exit";
     var script =
         scriptedFfmpeg(
             """
         ffmpeg -re "$@"
         status=$?
-        printf '%%s' "$status" > %s
+        printf '%%s' "$status" > "$TMPDIR/%s"
         exit "$status"
         """
                 .formatted(exitFile));
@@ -540,14 +541,14 @@ class WorkerImageIT {
       image.accept();
       var request = fixtureJobBuilder(TranscodeMode.TRANSCODE_MODE_REMUX).build();
       image.command("job-awaiting-acknowledgement", request.toByteArray());
-      assertThat(image.worker.execInContainer("test", "-e", exitFile).getExitCode())
+      assertThat(image.inScratch("test -e", exitFile).getExitCode())
           .as("FFmpeg was still running when the stop was sent")
           .isNotZero();
 
       var stopped = JobAttemptStopped.parseFrom(image.command("stop-job", request.toByteArray()));
 
       assertThat(stopped.getJobAttemptId()).isEqualTo(request.getJobAttemptId());
-      var exitStatus = image.worker.execInContainer("cat", exitFile);
+      var exitStatus = image.inScratch("cat", exitFile);
       assertThat(exitStatus.getExitCode())
           .as("the wrapper recorded FFmpeg's exit, so no forced kill ended it")
           .isZero();
@@ -745,9 +746,15 @@ class WorkerImageIT {
       return response.body();
     }
 
+    // A confined tool writes only in the worker's scratch directory, which the worker creates
+    // under /tmp with a name of its own, so a file there is reached through the shell's glob.
+    private Container.ExecResult inScratch(String command, String file) throws Exception {
+      return worker.execInContainer("/bin/sh", "-c", command + " /tmp/*/" + file);
+    }
+
     // Read as base64 so no charset on the exec path can alter the recorded filename bytes.
     private List<String> recordedArguments(String executable) throws Exception {
-      var recorded = worker.execInContainer("base64", "-w0", "/tmp/" + executable + "-arguments");
+      var recorded = inScratch("base64 -w0", executable + "-arguments");
       assertThat(recorded.getExitCode()).as(recorded.getStderr()).isZero();
       var arguments =
           new String(
