@@ -19,26 +19,34 @@ final class Mp4MovieBox {
   private static final long MAXIMUM_MOVIE_BOX_BYTES = 256L << 20;
   private static final int BOX_HEADER_BYTES = 8;
   private static final int LARGE_BOX_HEADER_BYTES = 16;
+  private static final String MOVIE_BOX = "moov";
 
   private Mp4MovieBox() {}
 
   /** The payload of the file's movie box. */
   static ByteBuffer read(FileChannel channel) throws IOException {
+    var movie = scanThroughMovieBox(channel).movie().orElseThrow(() -> malformed(MOVIE_BOX));
+    return payload(channel, movie.position(), movie.header());
+  }
+
+  // Walks the file's top-level boxes up to the first movie box and keeps only the boxes that the
+  // readers need, so a file of many small boxes takes no more memory than a file of few.
+  private static TopLevelScan scanThroughMovieBox(FileChannel channel) throws IOException {
     var size = channel.size();
     long position = 0;
     while (position + BOX_HEADER_BYTES <= size) {
       var header =
           ContainerFileBytes.read(
               channel, position, (int) Math.min(LARGE_BOX_HEADER_BYTES, size - position));
-      var box = BoxHeader.read(header, size - position);
-      if ("moov".equals(box.type())) {
-        return payload(channel, position, box);
+      var box = new TopLevelBox(position, BoxHeader.read(header, size - position));
+      if (MOVIE_BOX.equals(box.header().type())) {
+        return new TopLevelScan(Optional.of(box));
       }
 
-      position += box.size();
+      position += box.header().size();
     }
 
-    throw malformed("moov");
+    return new TopLevelScan(Optional.empty());
   }
 
   /** The payload of the first child box of the given type. */
@@ -115,6 +123,10 @@ final class Mp4MovieBox {
   }
 
   record Box(String type, ByteBuffer payload) {}
+
+  private record TopLevelBox(long position, BoxHeader header) {}
+
+  private record TopLevelScan(Optional<TopLevelBox> movie) {}
 
   private record BoxHeader(String type, long size, int headerSize) {
 
