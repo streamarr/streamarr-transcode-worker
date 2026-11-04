@@ -93,6 +93,7 @@ import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.HexFormat;
@@ -199,6 +200,18 @@ class WorkerMediaSmokeTest {
 
   // The sample-entry sources span segments 0 and 1 at a 1 s period, with a keyframe every second.
   private static final int SAMPLE_ENTRY_SOURCE_SECONDS = 2;
+
+  // ffprobe prints each time rounded to the microsecond, so the difference of two printed times
+  // can be one microsecond off. A picture that took another's time moves a whole frame.
+  private static final Comparator<BigDecimal> WITHIN_PRINTED_ROUNDING =
+      (left, right) -> {
+        if (left.subtract(right).abs().compareTo(new BigDecimal("0.000001")) <= 0) {
+          return 0;
+        }
+
+        return left.compareTo(right);
+      };
+
   private static final String DOLBY_VISION_FIXTURE = "dolby-vision-8.2-dvh1.mp4";
   // The fixture's 10-bit base layer: Main 10 at level 2.0 in the Main tier.
   private static final String DOLBY_VISION_BASE_LAYER_CODEC_STRING = "hvc1.2.4.L60.90";
@@ -2460,6 +2473,84 @@ class WorkerMediaSmokeTest {
         .containsEntry("codec_tag_string", "hvc1");
   }
 
+  // When FFmpeg's DASH muxer flushes each fragment, the mp4 muxer gives a fragment's first sample
+  // the previous fragment's end time. After an open-GOP keyframe, that is the time of a leading
+  // picture, decoded after the keyframe but shown before it, so two pictures share one
+  // presentation time and none shows at the keyframe's. Chromium can then drop the fragment.
+  @ParameterizedTest(name = "{0} source")
+  @ValueSource(strings = {"mp4", "mkv", "ts"})
+  @DisplayName(
+      "Should keep every presentation time of the source when a worker copies open-GOP HEVC whose"
+          + " keyframes have leading pictures")
+  void shouldKeepEveryPresentationTimeOfTheSourceWhenAWorkerCopiesOpenGopHevc(String container)
+      throws Exception {
+    var source = openGopHevcSource(container);
+    var sourcePackets = fromTheFirstKeyframe(videoPackets(source));
+    assertThat(keyframesFollowedByLeadingPictures(sourcePackets))
+        .as("keyframes after the first whose next picture in decode order shows before them")
+        .isPositive();
+
+    var copiedPackets = fromTheFirstKeyframe(videoPackets(copiedMedia(source, "hvc1.1.6.L30.90")));
+
+    assertThat(copiedPackets)
+        .extracting(VideoPacket::presentationTime)
+        .doesNotHaveDuplicates()
+        .usingElementComparator(WITHIN_PRINTED_ROUNDING)
+        .containsExactlyElementsOf(presentationTimes(sourcePackets));
+    assertThat(presentationTimes(keyframesOf(copiedPackets)))
+        .usingElementComparator(WITHIN_PRINTED_ROUNDING)
+        .containsExactlyElementsOf(presentationTimes(keyframesOf(sourcePackets)));
+  }
+
+  // libx265 at 29.97 fps, whose open GOPs make each keyframe after the first a CRA picture with
+  // B-frames as leading pictures.
+  private Path openGopHevcSource(String container) throws Exception {
+    var source = root.resolve("open-gop-hevc." + container);
+    runFfmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=64x36:rate=30000/1001:duration=" + SAMPLE_ENTRY_SOURCE_SECONDS,
+            "-c:v",
+            "libx265",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+            "-x265-params",
+            "keyint=10:min-keyint=10:scenecut=0:bframes=4:open-gop=1:log-level=error"),
+        source);
+    return source;
+  }
+
+  // The packets in decode order, timed from the first keyframe: the copy moves its whole timeline
+  // by the source's frame reordering, which shifts every picture alike.
+  private static List<VideoPacket> fromTheFirstKeyframe(List<VideoPacket> packets) {
+    var firstKeyframe = packets.getFirst();
+    assertThat(firstKeyframe.keyframe())
+        .as("the first packet in decode order is a keyframe")
+        .isTrue();
+    return packets.stream()
+        .map(packet -> packet.onTimelineStartingAt(firstKeyframe.presentationTime()))
+        .toList();
+  }
+
+  private static long keyframesFollowedByLeadingPictures(List<VideoPacket> packets) {
+    return IntStream.range(1, packets.size() - 1)
+        .filter(index -> packets.get(index).keyframe())
+        .filter(index -> packets.get(index + 1).showsBefore(packets.get(index)))
+        .count();
+  }
+
+  private static List<VideoPacket> keyframesOf(List<VideoPacket> packets) {
+    return packets.stream().filter(VideoPacket::keyframe).toList();
+  }
+
+  private static List<BigDecimal> presentationTimes(List<VideoPacket> packets) {
+    return packets.stream().map(VideoPacket::presentationTime).toList();
+  }
+
   // Sources whose parameter sets travel only in the samples, under the sample entry that the
   // source names: hev1 and avc3 as GPAC wrote them, and dvhe and dvav renamed from them.
   @ParameterizedTest(name = "{1} source")
@@ -4642,6 +4733,10 @@ class WorkerMediaSmokeTest {
     private VideoPacket onTimelineStartingAt(BigDecimal startTime) {
       return new VideoPacket(
           presentationTime.subtract(startTime), decodeTime.subtract(startTime), keyframe);
+    }
+
+    private boolean showsBefore(VideoPacket other) {
+      return presentationTime.compareTo(other.presentationTime) < 0;
     }
   }
 
