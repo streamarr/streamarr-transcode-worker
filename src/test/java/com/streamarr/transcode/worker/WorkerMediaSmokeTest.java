@@ -676,6 +676,141 @@ class WorkerMediaSmokeTest {
   }
 
   @ParameterizedTest(name = "{0}")
+  @MethodSource("mp4SourceFactCases")
+  @DisplayName(
+      "Should report the sample entry and the major brand that an MP4 or MOV file stores when a"
+          + " worker probes a real file")
+  void shouldReportTheSampleEntryAndMajorBrandThatAnMp4OrMovFileStoresWhenAWorkerProbesARealFile(
+      Mp4SourceFactCase sourceCase) throws Exception {
+    var source = root.resolve(sourceCase.fileName());
+    runFfmpeg(videoSourceArguments(sourceCase.codec(), sourceCase.muxerArguments()), source);
+
+    var media = probeExecutor().probe(source, keyframeRequest()).result().getMedia();
+
+    assertThat(media.getStreams(0).getSampleEntry()).isEqualTo(sourceCase.sampleEntry());
+    assertThat(media.getContainer().getMajorBrand()).isEqualTo(sourceCase.majorBrand());
+  }
+
+  // FFmpeg's mp4 muxer writes hev1 for HEVC unless the tag option names hvc1. Its mov muxer writes
+  // the QuickTime brand, whose last two characters are spaces.
+  static Stream<Mp4SourceFactCase> mp4SourceFactCases() {
+    return Stream.of(
+        Mp4SourceFactCase.builder()
+            .fileName("source-facts-h264.mp4")
+            .codec("libx264")
+            .muxerArguments(List.of())
+            .sampleEntry("avc1")
+            .majorBrand("isom")
+            .build(),
+        Mp4SourceFactCase.builder()
+            .fileName("source-facts-hevc.mp4")
+            .codec("libx265")
+            .muxerArguments(List.of())
+            .sampleEntry("hev1")
+            .majorBrand("isom")
+            .build(),
+        Mp4SourceFactCase.builder()
+            .fileName("source-facts-hvc1.mp4")
+            .codec("libx265")
+            .muxerArguments(List.of("-tag:v", "hvc1"))
+            .sampleEntry("hvc1")
+            .majorBrand("isom")
+            .build(),
+        Mp4SourceFactCase.builder()
+            .fileName("source-facts-hvc1.mov")
+            .codec("libx265")
+            .muxerArguments(List.of("-tag:v", "hvc1"))
+            .sampleEntry("hvc1")
+            .majorBrand("qt  ")
+            .build(),
+        Mp4SourceFactCase.builder()
+            .fileName("source-facts-mp42.mp4")
+            .codec("libx264")
+            .muxerArguments(List.of("-brand", "mp42"))
+            .sampleEntry("avc1")
+            .majorBrand("mp42")
+            .build());
+  }
+
+  @Builder
+  private record Mp4SourceFactCase(
+      String fileName,
+      String codec,
+      List<String> muxerArguments,
+      String sampleEntry,
+      String majorBrand) {
+
+    @Override
+    public String toString() {
+      return String.join(" ", muxerArguments) + " " + codec + " in " + fileName;
+    }
+  }
+
+  // FFmpeg cannot write the Dolby Vision sample entries without a Dolby Vision stream, so each
+  // case renames the sample entry that FFmpeg wrote.
+  @ParameterizedTest(name = "{1} renamed {2}")
+  @CsvSource({"libx265, hev1, dvh1, hvc1.", "libx264, avc1, dvav, avc1."})
+  @DisplayName(
+      "Should report the Dolby Vision sample entry apart from the copy's codec string when an MP4"
+          + " file stores one")
+  void shouldReportTheDolbyVisionSampleEntryApartFromTheCopysCodecStringWhenAnMp4FileStoresOne(
+      String codec, String written, String renamed, String codecStringPrefix) throws Exception {
+    var writtenSource = root.resolve("written-" + written + ".mp4");
+    runFfmpeg(videoSourceArguments(codec, List.of()), writtenSource);
+    var source =
+        withSampleEntry(
+            Files.readAllBytes(writtenSource), written, renamed, renamed + "-source.mp4");
+
+    var video = probeExecutor().probe(source, keyframeRequest()).result().getMedia().getStreams(0);
+
+    assertThat(video.getSampleEntry()).isEqualTo(renamed);
+    assertThat(video.getCodecString()).startsWith(codecStringPrefix);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"mkv", "ts"})
+  @DisplayName(
+      "Should report no sample entry and no major brand when a real file of another container"
+          + " holds video copied from an MP4 file")
+  void shouldReportNoSampleEntryAndNoMajorBrandWhenAnotherContainerHoldsVideoCopiedFromAnMp4File(
+      String container) throws Exception {
+    var mp4 = root.resolve("remuxed-from.mp4");
+    runFfmpeg(videoSourceArguments("libx265", List.of("-tag:v", "hvc1")), mp4);
+    // A copy keeps the MP4 file's major_brand as an ordinary tag of the new container.
+    var source = root.resolve("remuxed." + container);
+    runFfmpeg(List.of("-i", mp4.toString(), "-c", "copy"), source);
+
+    var media = probeExecutor().probe(source, keyframeRequest()).result().getMedia();
+
+    assertThat(media.getStreams(0).hasSampleEntry()).isFalse();
+    assertThat(media.getContainer().hasMajorBrand()).isFalse();
+  }
+
+  // A one-second 64x36 picture track, encoded with the given codec and written with the given
+  // muxer arguments.
+  private static List<String> videoSourceArguments(String codec, List<String> muxerArguments) {
+    var arguments =
+        new ArrayList<>(
+            List.of(
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=64x36:rate=24:duration=1",
+                "-c:v",
+                codec,
+                "-preset",
+                "ultrafast",
+                "-pix_fmt",
+                "yuv420p"));
+    if ("libx265".equals(codec)) {
+      arguments.addAll(List.of("-x265-params", "log-level=error"));
+    }
+
+    arguments.addAll(muxerArguments);
+    return arguments;
+  }
+
+  @ParameterizedTest(name = "{0}")
   @ValueSource(
       strings = {
         "mp4-bframes-editlist.mp4",

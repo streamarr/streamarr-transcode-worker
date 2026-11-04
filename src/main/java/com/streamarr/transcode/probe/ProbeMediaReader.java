@@ -22,6 +22,7 @@ final class ProbeMediaReader {
     var container = ProbeContainerInfo.newBuilder();
     var format = root.path("format");
     text(format, "format_name").ifPresent(container::setFormat);
+    Mp4SourceFacts.majorBrand(format).ifPresent(container::setMajorBrand);
     number(format, "bit_rate", Long::parseLong).ifPresent(container::setBitrateBitsPerSecond);
     number(format, "duration", Double::parseDouble)
         .filter(value -> Double.isFinite(value) && value >= 0)
@@ -47,6 +48,7 @@ final class ProbeMediaReader {
           .ifPresent(parsedStream::setBitrateBitsPerSecond);
       if ("video".equals(parsedStream.getCodecType())) {
         CopiedPacketBytes.of(stream, formatName).ifPresent(parsedStream::setCopyKeepsPacketBytes);
+        Mp4SourceFacts.sampleEntry(stream, formatName).ifPresent(parsedStream::setSampleEntry);
       }
 
       parsed.add(parsedStream);
