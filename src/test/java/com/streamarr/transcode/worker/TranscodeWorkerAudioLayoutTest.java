@@ -36,6 +36,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 import lombok.Builder;
 import org.junit.jupiter.api.AfterEach;
@@ -335,6 +336,43 @@ class TranscodeWorkerAudioLayoutTest {
         .containsExactly(EstablishWorkerSessionRequest.EventCase.JOB_ATTEMPT_STOPPED);
     ffprobe.awaitKilled();
     assertThat(launcher.hasLaunchedAny()).isFalse();
+  }
+
+  @Test
+  @DisplayName(
+      "Should refuse a copy beyond the copies that the worker's heap holds without starting ffprobe"
+          + " when another copy's ffprobe reads its audio stream")
+  void shouldRefuseACopyBeyondTheCopiesThatTheWorkersHeapHoldsWhenAnotherCopysFfprobeReadsItsAudio()
+      throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var ffprobe = new SilentFfprobe();
+    var reading = layoutJob(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO, 2);
+    var beyond = layoutJob(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO, 2);
+    // Beside a 512 MiB reserve and the two slots' 512 MiB, 1280 MiB hold one copy of 256 MiB.
+    var worker =
+        workerBuilder(tempDir)
+            .runtime(runtime)
+            .engine(engine(launcher))
+            .ffprobe(ffprobe.executor())
+            .maximumHeapBytes(1280L * 1024 * 1024)
+            .build();
+    worker.start("localhost", 1);
+    closeAfterTest(worker);
+    var connection = runtime.connection();
+    var start = deliverOnItsOwnThread(() -> startVariant(connection, reading));
+    ffprobe.awaitLaunched();
+    start.get(5, TimeUnit.SECONDS);
+
+    startVariant(connection, beyond);
+
+    assertFailedAs(connection, JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED);
+    assertThat(
+            connection.events().stream()
+                .filter(EstablishWorkerSessionRequest::hasJobAttemptFailed)
+                .map(event -> event.getJobAttemptFailed().getJobAttemptId()))
+        .containsExactly(beyond.getJobAttemptId());
+    assertThat(ffprobe.launches()).isOne();
+    assertThat(worker.copyFullness()).isEqualTo(1.0);
   }
 
   @Test
@@ -659,6 +697,7 @@ class TranscodeWorkerAudioLayoutTest {
 
     private final CompletableFuture<Void> launched = new CompletableFuture<>();
     private final CompletableFuture<Void> killed = new CompletableFuture<>();
+    private final AtomicInteger launches = new AtomicInteger();
 
     FfprobeExecutor executor() {
       return new FfprobeExecutor(
@@ -675,9 +714,14 @@ class TranscodeWorkerAudioLayoutTest {
               silentProcesses.add(process);
             }
 
+            launches.incrementAndGet();
             launched.complete(null);
             return new KillSignalling(process, killed);
           });
+    }
+
+    int launches() {
+      return launches.get();
     }
 
     void awaitLaunched() throws Exception {

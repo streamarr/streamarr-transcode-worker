@@ -80,6 +80,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Stream;
 import lombok.Builder;
 import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
@@ -176,7 +177,7 @@ public final class TranscodeWorker implements AutoCloseable {
       return 1;
     }
 
-    return (double) attemptsInUse(true) / maximumCopies;
+    return (double) placesInUse(true) / maximumCopies;
   }
 
   /**
@@ -396,6 +397,10 @@ public final class TranscodeWorker implements AutoCloseable {
       return;
     }
 
+    if (refuseWhenFull(command.getJob())) {
+      return;
+    }
+
     var searchProgress = new KeyframeSearchProgress();
     var reading =
         Thread.ofVirtual()
@@ -552,24 +557,7 @@ public final class TranscodeWorker implements AutoCloseable {
   private synchronized AttemptStart startAttempt(
       StartVariantCommand command, ChosenAudio chosenAudio, Optional<Duration> readPosition) {
     var job = command.getJob();
-    // Encodes take the advertised slots, and copies the places that the heap holds. Only active
-    // attempts hold either: the server freed a stopped attempt's slot when it sent the stop, and
-    // the worker's memory budgets charge its producer until it has released its segments.
-    var copiesVideo = WorkerVariantJobMapper.copiesVideo(job);
-    var kind = "encodes";
-    var capacity = configuration.availableSlots();
-    if (copiesVideo) {
-      kind = "copies";
-      capacity = maximumCopies;
-    }
-
-    if (attemptsInUse(copiesVideo) >= capacity) {
-      log.warn(
-          "Refusing job attempt {}: the worker already runs the {} {} that it can",
-          fromProto(job.getJobAttemptId()),
-          capacity,
-          kind);
-      reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED);
+    if (refuseWhenFull(job)) {
       return new Refused();
     }
 
@@ -602,7 +590,7 @@ public final class TranscodeWorker implements AutoCloseable {
           engine.startProducer(
               request,
               (segment, cancellation) -> deliverToServer(job, segment, cancellation),
-              memoryBudgetFor(copiesVideo));
+              memoryBudgetFor(WorkerVariantJobMapper.copiesVideo(job)));
     } catch (InvalidJobSpecificationException | UnadvertisedCodecFamilyException e) {
       log.warn("Refusing job attempt {}: {}", fromProto(job.getJobAttemptId()), e.getMessage());
       reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
@@ -647,10 +635,39 @@ public final class TranscodeWorker implements AutoCloseable {
     return memoryBudget;
   }
 
-  // Holds this monitor. The active attempts that copy the video, or those that do not.
-  private long attemptsInUse(boolean copiesVideo) {
-    return activeAttempts.values().stream()
-        .filter(attempt -> WorkerVariantJobMapper.copiesVideo(attempt.job()) == copiesVideo)
+  // Holds this monitor. Encodes take the advertised slots, and copies the places that the heap
+  // holds. Only active attempts and audio reads hold either: the server freed a stopped attempt's
+  // slot when it sent the stop, and the worker's memory budgets charge its producer until it has
+  // released its segments. A refused job is reported as a startup failure.
+  private boolean refuseWhenFull(VariantJob job) {
+    var copiesVideo = WorkerVariantJobMapper.copiesVideo(job);
+    var kind = "encodes";
+    var capacity = configuration.availableSlots();
+    if (copiesVideo) {
+      kind = "copies";
+      capacity = maximumCopies;
+    }
+
+    if (placesInUse(copiesVideo) < capacity) {
+      return false;
+    }
+
+    log.warn(
+        "Refusing job attempt {}: the worker already runs the {} {} that it can",
+        fromProto(job.getJobAttemptId()),
+        capacity,
+        kind);
+    reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED);
+    return true;
+  }
+
+  // Holds this monitor. The active attempts and audio reads that copy the video, or those that do
+  // not.
+  private long placesInUse(boolean copiesVideo) {
+    var attempts = activeAttempts.values().stream().map(ActiveAttempt::job);
+    var reads = pendingReads.values().stream().map(PendingRead::job);
+    return Stream.concat(attempts, reads)
+        .filter(job -> WorkerVariantJobMapper.copiesVideo(job) == copiesVideo)
         .count();
   }
 
