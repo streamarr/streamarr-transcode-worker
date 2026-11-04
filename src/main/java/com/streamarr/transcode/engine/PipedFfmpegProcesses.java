@@ -20,9 +20,10 @@ import lombok.extern.slf4j.Slf4j;
  * through {@link FragmentedMp4RpuMover}, with the source's audio, which it reads from the source
  * itself. The copying FFmpeg also writes the framecrc of the copy's video packets to a {@link
  * VideoTimingChannel}, from which the mover restores each video sample's duration. The encoding
- * FFmpeg writes the attempt's output and the framecrc of the source's streams. A stop asks the
- * copying FFmpeg to quit, and the encoding FFmpeg then finishes at the end of its input;
- * termination and destruction end both.
+ * FFmpeg writes the attempt's output and the framecrc of the source's streams. It reads the
+ * source's audio up to the source's end whatever happens to the copy, so a stop, a copy that the
+ * mover refuses and a transfer that fails unexpectedly terminate it. A stop also asks the copying
+ * FFmpeg to quit; termination and destruction end both.
  */
 @Slf4j
 final class PipedFfmpegProcesses implements FfmpegProcess {
@@ -103,7 +104,9 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
   // The copy ends when the copying FFmpeg exits, and the end of the encoding FFmpeg's input lets it
   // finish. Once the encoding FFmpeg stops reading, or the mover refuses the copy, the copying
   // FFmpeg could only block on a full pipe, so it is asked to terminate. A failure is recorded
-  // before the encoding FFmpeg's input ends, so that its exit never settles the attempt first.
+  // before the encoding FFmpeg's input ends, so that its exit never settles the attempt first. A
+  // refusal that decides the attempt also terminates the encoding FFmpeg, whose exit then decides
+  // nothing; a copy that ends inside a unit leaves it to finish, as its exit decides first.
   private void transferCopy() {
     var encoded = encode.getOutputStream();
     try (InputStream copied = copy.getInputStream()) {
@@ -114,15 +117,20 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
     } catch (FragmentedMp4Exception e) {
       refusedCopy.set(Optional.of(e));
       copy.destroy();
+      if (!endsEarly(e)) {
+        encode.toHandle().destroy();
+      }
     }
 
     endInput(encoded);
   }
 
-  // As in transferCopy, the failure is set before the encoding FFmpeg's input ends.
+  // As in transferCopy, the failure is set before the encoding FFmpeg's input ends, and decides
+  // the attempt.
   private void failTransferUnexpectedly(Throwable failure) {
     unexpectedTransferFailure.set(Optional.of(failure));
     copy.destroy();
+    encode.toHandle().destroy();
     endInput(encode.getOutputStream());
     log.error("The transfer of the copy of the source failed unexpectedly", failure);
   }
@@ -151,6 +159,7 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
   }
 
   // The encoding FFmpeg reads media from its standard input, so only the copying FFmpeg takes q.
+  // FFmpeg treats termination as it treats q, and the attempt discards what follows a stop.
   @Override
   public void requestQuit() {
     try {
@@ -159,6 +168,8 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
       input.flush();
     } catch (IOException _) {
       // The copying FFmpeg has already closed its input; the exit wait observes it ending.
+    } finally {
+      encode.toHandle().destroy();
     }
   }
 

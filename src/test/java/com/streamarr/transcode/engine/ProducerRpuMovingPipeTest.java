@@ -239,12 +239,13 @@ class ProducerRpuMovingPipeTest {
     assertThat(failure.detail()).contains("END_OF_VIDEO_TIMING");
   }
 
+  // The encoding FFmpeg reads the source's audio itself, so the end of its input from the copy
+  // would not end it before the end of the source's audio.
   @Test
   @DisplayName(
-      "Should ask the copying FFmpeg to quit, and let the encoding FFmpeg finish on the end of its"
-          + " input, when the attempt is stopped")
-  void
-      shouldAskTheCopyingFfmpegToQuitAndLetTheEncodingFfmpegFinishOnTheEndOfItsInputWhenTheAttemptIsStopped() {
+      "Should ask the copying FFmpeg to quit, and the encoding FFmpeg to terminate, when the attempt"
+          + " is stopped")
+  void shouldAskTheCopyingFfmpegToQuitAndTheEncodingFfmpegToTerminateWhenTheAttemptIsStopped() {
     var copy =
         ScriptedProcess.builder()
             .output(COPIED_SOURCE)
@@ -260,8 +261,7 @@ class ProducerRpuMovingPipeTest {
 
     assertThat(producer.outcome()).isCompletedWithValue(new Stopped());
     assertThat(copy.stdinText()).isEqualTo("q");
-    assertThat(videoSamplesOf(encode.stdinBytes())).isEqualTo(videoSamplesOf(MOVED_SOURCE));
-    assertThat(encode.hasInputEnded()).isTrue();
+    assertThat(encode.wasTerminated()).isTrue();
     assertThat(copy.wasDestroyedForcibly()).isFalse();
     assertThat(encode.wasDestroyedForcibly()).isFalse();
   }
@@ -443,8 +443,10 @@ class ProducerRpuMovingPipeTest {
   @Test
   @DisplayName(
       "Should fail the attempt as a copy unit too large for the mover, not as output over the"
-          + " segment cap, when the copy writes a fragment larger than the mover reads")
-  void shouldFailTheAttemptAsACopyUnitTooLargeForTheMoverWhenTheCopyWritesAnOversizedFragment() {
+          + " segment cap, and end the encoding FFmpeg, when the copy writes a fragment larger than"
+          + " the mover reads")
+  void
+      shouldFailTheAttemptAsACopyUnitTooLargeForTheMoverAndEndTheEncodingFfmpegWhenTheCopyWritesAnOversizedFragment() {
     var copy =
         ScriptedProcess.builder()
             .output(concat(initializationSegment(), IsoBoxes.header(32L * 1024 * 1024 + 1, "moof")))
@@ -455,6 +457,9 @@ class ProducerRpuMovingPipeTest {
     var producer = producerOf(copy, encode).start();
 
     assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.COPY_UNIT_TOO_LARGE);
+    assertThat(encode.wasTerminated())
+        .as("the encoding FFmpeg, which would read the source's audio to its end")
+        .isTrue();
   }
 
   @Test
@@ -498,10 +503,10 @@ class ProducerRpuMovingPipeTest {
 
   @Test
   @DisplayName(
-      "Should fail the attempt as an unexpected error, and end the copying FFmpeg, when passing the"
-          + " copy on throws unexpectedly")
+      "Should fail the attempt as an unexpected error, and end both FFmpegs, when passing the copy"
+          + " on throws unexpectedly")
   void
-      shouldFailTheAttemptAsAnUnexpectedErrorAndEndTheCopyingFfmpegWhenPassingTheCopyOnThrowsUnexpectedly() {
+      shouldFailTheAttemptAsAnUnexpectedErrorAndEndBothFfmpegsWhenPassingTheCopyOnThrowsUnexpectedly() {
     var copy =
         ScriptedProcess.builder()
             .output(COPIED_SOURCE)
@@ -518,6 +523,9 @@ class ProducerRpuMovingPipeTest {
     assertThat(failure.detail()).contains("defect in the copy's transfer");
     assertThat(copy.wasTerminated()).isTrue();
     assertThat(encode.hasInputEnded()).isTrue();
+    assertThat(encode.wasTerminated())
+        .as("the encoding FFmpeg, which would read the source's audio to its end")
+        .isTrue();
   }
 
   @Test
