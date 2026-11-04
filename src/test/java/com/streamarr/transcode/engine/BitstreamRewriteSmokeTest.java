@@ -152,7 +152,9 @@ class BitstreamRewriteSmokeTest {
     var builder = new FfmpegCommandBuilder("ffmpeg", FRAGMENTATION_TARGET);
     var named = new HashSet<String>();
     for (var rewrites :
-        List.of(Set.<BitstreamRewrite>of(), EnumSet.allOf(BitstreamRewrite.class))) {
+        List.of(
+            Set.<BitstreamRewrite>of(),
+            EnumSet.of(BitstreamRewrite.STRIP_DOLBY_VISION, BitstreamRewrite.STRIP_HDR10_PLUS))) {
       for (var codecString : List.of(CODEC_STRING, "avc1.64001F", "av01.0.08M.08")) {
         for (var keepsPacketBytes : List.of(false, true)) {
           var copy =

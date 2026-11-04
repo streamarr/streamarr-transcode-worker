@@ -116,6 +116,48 @@ class SegmentAssemblerBitstreamRewriteTest {
     assertThat(delivered.video()).containsExactly(hex(keyframe));
   }
 
+  // A profile 5 copy keeps Dolby Vision and strips HDR10+ by default (ADR 0036), and its samples
+  // follow the record's lengths under the dvh1 entry that the initialization rewrite writes.
+  @Test
+  @DisplayName(
+      "Should strip HDR10+ from the samples when the copy plans a dvh1 output and strips HDR10+")
+  void shouldStripHdr10PlusFromTheSamplesWhenTheCopyPlansADvh1Output() throws IOException {
+    var keyframe = sample(aud(), seiOf(HDR10_PLUS_MESSAGE), slice(0), rpu(0));
+    var profile5 =
+        PlannedCopyOutput.DolbyVisionOutput.builder()
+            .profile(5)
+            .level(6)
+            .baseLayerCompatibilityId(0)
+            .sampleEntry(PlannedCopyOutput.SampleEntry.DVH1)
+            .build();
+    var copy =
+        VideoDecisionFixtures.copyBuilder()
+            .codecString("dvh1.05.06")
+            .plannedOutput(
+                Optional.of(
+                    PlannedCopyOutput.builder()
+                        .dynamicRange(
+                            new VideoDynamicRange(
+                                VideoDynamicRange.CompatibleBase.NONE,
+                                VideoDynamicRange.Presence.ABSENT,
+                                new VideoDynamicRange.DolbyVision.Unspecified()))
+                        .dolbyVision(Optional.of(profile5))
+                        .build()))
+            .bitstreamRewrites(
+                Set.of(
+                    BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD,
+                    BitstreamRewrite.STRIP_HDR10_PLUS))
+            .build();
+
+    var delivered =
+        deliveredSamples(
+            copy,
+            HEVC_SEGMENT,
+            fragmentBuilder().startsWithKeyframe(true).video(0, keyframe).build());
+
+    assertThat(delivered.video()).containsExactly(hex(sample(aud(), slice(0), rpu(0))));
+  }
+
   @Test
   @DisplayName(
       "Should deliver every sample of a fragment whose first video sample keeps its bytes when the"
@@ -230,7 +272,8 @@ class SegmentAssemblerBitstreamRewriteTest {
     var copy =
         VideoDecisionFixtures.copyBuilder()
             .codecString(AV1_CODEC_STRING)
-            .bitstreamRewrites(EnumSet.allOf(BitstreamRewrite.class))
+            .bitstreamRewrites(
+                EnumSet.of(BitstreamRewrite.STRIP_DOLBY_VISION, BitstreamRewrite.STRIP_HDR10_PLUS))
             .build();
 
     var delivered =
@@ -271,7 +314,7 @@ class SegmentAssemblerBitstreamRewriteTest {
             List.of(
                 TEMPORAL_DELIMITER, DOLBY_VISION_METADATA, CONTENT_LIGHT_LEVEL_METADATA, FRAME)),
         Arguments.of(
-            EnumSet.allOf(BitstreamRewrite.class),
+            EnumSet.of(BitstreamRewrite.STRIP_DOLBY_VISION, BitstreamRewrite.STRIP_HDR10_PLUS),
             List.of(TEMPORAL_DELIMITER, CONTENT_LIGHT_LEVEL_METADATA, FRAME)));
   }
 

@@ -7,6 +7,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Applies the sample rewrites that a copy lists to the video samples of each fragment. Each rewrite
@@ -30,7 +31,8 @@ final class VideoSampleRewrite {
   }
 
   /**
-   * The rewrite of the copy's samples; empty when the decision lists no bitstream rewrite.
+   * The rewrite of the copy's samples; empty when the decision lists no bitstream rewrite of
+   * samples.
    *
    * @throws FragmentedMp4Exception with {@link Reason#OUTPUT_MISMATCH} when the copy lists a
    *     rewrite for video that is neither HEVC nor AV1, or when the av1C record holds a metadata
@@ -38,7 +40,15 @@ final class VideoSampleRewrite {
    *     no usable NAL unit length, or the av1C record's OBUs cannot be read
    */
   static Optional<VideoSampleRewrite> of(VideoDecision decision, InitializationSegment segment) {
-    if (!(decision instanceof VideoDecision.Copy copy) || copy.bitstreamRewrites().isEmpty()) {
+    if (!(decision instanceof VideoDecision.Copy copy)) {
+      return Optional.empty();
+    }
+
+    var sampleRewrites =
+        copy.bitstreamRewrites().stream()
+            .filter(BitstreamRewrite::rewritesSamples)
+            .collect(Collectors.toUnmodifiableSet());
+    if (sampleRewrites.isEmpty()) {
       return Optional.empty();
     }
 
@@ -46,15 +56,14 @@ final class VideoSampleRewrite {
     var sampleEntry = CodecConfigurationReader.firstVideoSampleEntryOf(segment).orElseThrow();
     SampleRewrite rewrite =
         switch (sampleEntry.type()) {
-          case "hvc1", "hev1" ->
+          case "hvc1", "hev1", "dvh1" ->
               new HevcSampleRewrite(
-                  CodecConfigurationReader.nalUnitLengthSizeOf(sampleEntry),
-                  copy.bitstreamRewrites());
-          case "av01" -> av1Rewrite(sampleEntry, copy.bitstreamRewrites());
+                  CodecConfigurationReader.nalUnitLengthSizeOf(sampleEntry), sampleRewrites);
+          case "av01" -> av1Rewrite(sampleEntry, sampleRewrites);
           default ->
               throw mismatch(
                   "the copy lists "
-                      + copy.bitstreamRewrites()
+                      + sampleRewrites
                       + " for a "
                       + sampleEntry.type()
                       + " sample entry, which carries no such content");

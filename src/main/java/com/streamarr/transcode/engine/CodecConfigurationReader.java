@@ -3,19 +3,21 @@ package com.streamarr.transcode.engine;
 import com.streamarr.transcode.engine.TrackCodec.Audio;
 import com.streamarr.transcode.engine.TrackCodec.Video;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 
 /**
  * Builds each track's RFC 6381 codec string from the sample entry and the decoder configuration
  * record that an initialization segment declares: {@code avcC} (ISO/IEC 14496-15 5.3.2), {@code
- * hvcC} (ISO/IEC 14496-15 8.3.2), {@code av1C} (AV1 ISOBMFF binding 2.3) and {@code esds} (ISO/IEC
- * 14496-1 7.2.6). Hexadecimal digits are uppercase, and every digit is ASCII whatever the default
- * locale.
+ * hvcC} (ISO/IEC 14496-15 8.3.2), with the Dolby Vision configuration record for {@code dvh1},
+ * {@code av1C} (AV1 ISOBMFF binding 2.3) and {@code esds} (ISO/IEC 14496-1 7.2.6). Hexadecimal
+ * digits are uppercase, and every digit is ASCII whatever the default locale.
  */
 final class CodecConfigurationReader {
 
@@ -35,6 +37,8 @@ final class CodecConfigurationReader {
   // lengthSizeMinusOne sits in the low 2 bits of the last field before the arrays.
   private static final int HVCC_LENGTH_SIZE_FIELD = HVCC_FIELDS_BEFORE_ARRAYS - 1;
   private static final Set<Integer> HEVC_PARAMETER_SET_TYPES = Set.of(32, 33, 34);
+  // The NAL unit types of prefix and suffix SEI messages (ITU-T H.265 table 7-1).
+  private static final Set<Integer> HEVC_SEI_TYPES = Set.of(39, 40);
   private static final int MPEG4_AUDIO = 0x40;
   private static final int ES_DESCRIPTOR = 0x03;
   private static final int DECODER_CONFIG_DESCRIPTOR = 0x04;
@@ -82,6 +86,7 @@ final class CodecConfigurationReader {
     return switch (sampleEntry.type()) {
       case "avc1", "avc3" -> avc(sampleEntry.type(), children.requiredChild("avcC").fields());
       case "hvc1", "hev1" -> hevc(sampleEntry.type(), children.requiredChild("hvcC").fields());
+      case "dvh1" -> dolbyVisionHevc(children);
       case "av01" -> av1(children.requiredChild("av1C").fields());
       default -> new Video(sampleEntry.type(), Optional.empty());
     };
@@ -89,8 +94,9 @@ final class CodecConfigurationReader {
 
   /**
    * Whether the decoder configuration record holds every parameter set that the sample entry
-   * promises it holds: {@code avc1} promises an SPS and a PPS, and {@code hvc1} a VPS, an SPS and a
-   * PPS. Every other sample entry lets the samples carry its parameter sets, so it promises none.
+   * promises it holds: {@code avc1} promises an SPS and a PPS, and {@code hvc1} and {@code dvh1} a
+   * VPS, an SPS and a PPS. Every other sample entry lets the samples carry its parameter sets, so
+   * it promises none.
    *
    * @throws FragmentedMp4Exception when the record is missing or ends before its parameter sets do
    */
@@ -98,11 +104,50 @@ final class CodecConfigurationReader {
     var children = sampleEntry.after(VISUAL_SAMPLE_ENTRY_BYTES);
     return switch (sampleEntry.type()) {
       case "avc1" -> avcHoldsParameterSets(children.requiredChild("avcC").fields());
-      case "hvc1" ->
+      case "hvc1", "dvh1" ->
           hevcArrayTypes(children.requiredChild("hvcC").fields())
               .containsAll(HEVC_PARAMETER_SET_TYPES);
       default -> true;
     };
+  }
+
+  /**
+   * The transfer characteristics (ITU-T H.273 table 3) that a visual sample entry's {@code nclx}
+   * colr box declares (ISO/IEC 14496-12 12.1.5); empty when it holds no such box.
+   *
+   * @throws FragmentedMp4Exception when the colr box ends before its transfer does
+   */
+  static OptionalInt transferCharacteristicsOf(BoxView sampleEntry) {
+    return sampleEntry.after(VISUAL_SAMPLE_ENTRY_BYTES).children("colr").stream()
+        .map(BoxView::fields)
+        .filter(colr -> colr.fourcc().equals("nclx"))
+        .mapToInt(colr -> colr.skip(2).u16())
+        .findFirst();
+  }
+
+  /**
+   * The SEI NAL units of an HEVC sample entry's hvcC, prefix and suffix alike, in the order of its
+   * arrays, each without a length.
+   *
+   * @throws FragmentedMp4Exception when the hvcC is missing or ends before its arrays do
+   */
+  static List<byte[]> seiNalUnitsOf(BoxView hevcSampleEntry) {
+    var hvcC = hevcSampleEntry.after(VISUAL_SAMPLE_ENTRY_BYTES).requiredChild("hvcC").fields();
+    hvcC.skip(HVCC_FIELDS_BEFORE_ARRAYS);
+    var arrays = hvcC.u8();
+    var units = new ArrayList<byte[]>();
+    for (var array = 0; array < arrays; array++) {
+      var type = hvcC.u8() & 0x3F;
+      var nalUnits = hvcC.u16();
+      for (var nalUnit = 0; nalUnit < nalUnits; nalUnit++) {
+        var unit = hvcC.bytes(hvcC.u16());
+        if (HEVC_SEI_TYPES.contains(type)) {
+          units.add(unit);
+        }
+      }
+    }
+
+    return List.copyOf(units);
   }
 
   /**
@@ -226,6 +271,23 @@ final class CodecConfigurationReader {
             level,
             constraintSuffix(constraints));
     return new Video(codecString, Optional.of(new PictureFormat(bitDepth, chroma)));
+  }
+
+  // Dolby's codec string for dvh1 names the profile and level of the Dolby Vision configuration
+  // record as two decimal digits each, such as dvh1.05.06; the hvcC gives the picture format.
+  private static Video dolbyVisionHevc(BoxView children) {
+    var hevc = hevc("dvh1", children.requiredChild("hvcC").fields());
+    var configuration =
+        DolbyVisionRecord.recordsAmong(children.children()).stream()
+            .findFirst()
+            .orElseThrow(
+                () ->
+                    FragmentedMp4Exception.malformed(
+                        "dvh1 holds no Dolby Vision configuration record"));
+    var codecString =
+        String.format(
+            Locale.ROOT, "dvh1.%02d.%02d", configuration.profile(), configuration.level());
+    return new Video(codecString, hevc.pictureFormat());
   }
 
   private static String profileSpace(int space) {

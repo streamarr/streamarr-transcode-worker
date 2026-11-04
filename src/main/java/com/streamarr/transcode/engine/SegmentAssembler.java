@@ -17,14 +17,14 @@ import lombok.NonNull;
 
 /**
  * Assembles the units a producer reads, in arrival order, into the segments it delivers: the
- * initialization segment as it arrives, without the SEI messages of its HEVC records, and each
- * media segment, rebuilt as one {@code moof} and one {@code mdat}, its video samples rewritten as
- * the copy's bitstream rewrites list. A media segment holds the video of the fragments its grouper
- * groups and the audio samples that start inside its interval, whichever fragment carried them. It
- * closes once its grouper has closed it and an audio sample of a later segment has arrived or the
- * video has run a margin past its end, at once when the movie has no sound track, or when the
- * output ends. No segment takes audio past its interval, not even the last when the audio outlasts
- * the video.
+ * initialization segment, its HEVC records holding only the static HDR metadata that the copy
+ * plans, and each media segment, rebuilt as one {@code moof} and one {@code mdat}, its video
+ * samples rewritten as the copy's bitstream rewrites list. A media segment holds the video of the
+ * fragments its grouper groups and the audio samples that start inside its interval, whichever
+ * fragment carried them. It closes once its grouper has closed it and an audio sample of a later
+ * segment has arrived or the video has run a margin past its end, at once when the movie has no
+ * sound track, or when the output ends. No segment takes audio past its interval, not even the last
+ * when the audio outlasts the video.
  */
 final class SegmentAssembler {
 
@@ -70,21 +70,23 @@ final class SegmentAssembler {
    * the open segment and every segment awaiting audio, and the assembler reports them with the
    * failure that ends the output once they are delivered.
    *
-   * @throws FragmentedMp4Exception when the initialization segment declares other video than the
-   *     decision, when a video sample that the copy rewrites cannot be read, when the grouper
-   *     refuses the fragment, when it holds a short video sample or an audio sample that starts
-   *     before the one before it, or when a segment it closes is larger than the segment cap once
-   *     rebuilt, after which nothing is delivered, not even the segments it would close
+   * @throws FragmentedMp4Exception when the initialization segment it delivers declares other video
+   *     than the decision, when a video sample that the copy rewrites cannot be read, when the
+   *     grouper refuses the fragment, when it holds a short video sample or an audio sample that
+   *     starts before the one before it, or when the rewritten initialization segment or a segment
+   *     it closes is larger than the segment cap once rebuilt, after which nothing is delivered,
+   *     not even the segments it would close
    */
   Closing accept(@NonNull Mp4Unit unit) {
     return switch (unit) {
       case InitializationSegment initializationSegment -> {
-        VideoOutputCheck.requireMatch(videoDecision, initializationSegment);
-        sampleRewrite = VideoSampleRewrite.of(videoDecision, initializationSegment);
+        var delivered = InitializationSegmentRewrite.rewrite(videoDecision, initializationSegment);
+        requireWithinTheCap(delivered);
+        VideoOutputCheck.requireMatch(videoDecision, delivered);
+        sampleRewrite = VideoSampleRewrite.of(videoDecision, delivered);
         yield Closing.of(
             List.of(
-                new ClosedSegment.Initialization(
-                    HevcRecordSeiRemoval.removeSeiMessages(initializationSegment))));
+                new ClosedSegment.Initialization(delivered, initializationSegment.bytes().length)));
       }
       case Fragment fragment -> closingOf(checkedForShortSamples(rewritten(fragment)));
     };
@@ -138,6 +140,18 @@ final class SegmentAssembler {
     grouper.discardOpenFragments();
     awaitingAudio.clear();
     audio.discard();
+  }
+
+  // The reader admitted the segment as FFmpeg wrote it, before the rewrite could lengthen it.
+  private void requireWithinTheCap(InitializationSegment delivered) {
+    if (delivered.bytes().length > maximumSegmentBytes) {
+      throw new FragmentedMp4Exception(
+          Reason.EXCEEDS_SEGMENT_CAP,
+          "the rewritten initialization segment takes "
+              + delivered.bytes().length
+              + " bytes, over the segment cap of "
+              + maximumSegmentBytes);
+    }
   }
 
   private Fragment rewritten(Fragment fragment) {

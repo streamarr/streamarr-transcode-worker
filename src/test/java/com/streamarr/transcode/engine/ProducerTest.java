@@ -95,6 +95,16 @@ class ProducerTest {
   private static final String HVCC_VPS_ARRAY = "A0000100024001";
   private static final String HVCC_SPS_PPS_ARRAYS = "A1000100024201" + "A2000100024401";
   private static final String HVC1_RECORD_CODEC_STRING = "hvc1.1.6.L90.90";
+  // Dolby Vision configuration records (Dolby's ISO BMFF spec 3.2): version 1.0, then the profile
+  // (7 bits), level (6 bits), RPU, enhancement-layer and base-layer flags,
+  // bl_signal_compatibility_id (4 bits) and dv_md_compression (2 bits), then reserved zeros.
+  private static final String RECORD_RESERVED = "00".repeat(19);
+  // Profile 5, level 6, an RPU and a base layer, compatibility 0, compression 0.
+  private static final String PROFILE_5_LEVEL_6_RECORD = "01000A3500" + RECORD_RESERVED;
+  // Profile 8, level 6, an RPU and a base layer, compatibility 1, compression 0.
+  private static final String PROFILE_8_LEVEL_6_PQ_RECORD = "0100103510" + RECORD_RESERVED;
+  // Profile 8, level 6, an RPU and a base layer, compatibility 6, compression 3 (extended).
+  private static final String PROFILE_8_COMPATIBILITY_6_RECORD = "010010356C" + RECORD_RESERVED;
   private static final byte[] HVC1_PARAMETER_SET_RECORD =
       HexFormat.of().parseHex(HVCC_FIELDS + "03" + HVCC_VPS_ARRAY + HVCC_SPS_PPS_ARRAYS);
 
@@ -2252,6 +2262,294 @@ class ProducerTest {
         IsoBoxes.largeSizeBox(
             "hvc1", IsoBoxes.concat(new byte[78], IsoBoxes.box("hvcC", HVC1_PARAMETER_SET_RECORD)));
     assertThat(sink.contentOf("init.mp4")).isEqualTo(hevcInitializationSegment(expectedEntry));
+  }
+
+  // FFmpeg writes neither message into the record of an HDR10 copy whose source keeps them in its
+  // samples, and the record it builds from a first sample holds that sample's own SEI message.
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("plannedStaticMetadata")
+  @DisplayName(
+      "Should deliver each static HDR message that the copy plans as its own SEI NAL unit in the"
+          + " hvc1 record, and no other SEI message, when the copy plans static HDR metadata")
+  void shouldDeliverEachPlannedStaticHdrMessageAsItsOwnSeiNalUnitInTheHvc1Record(
+      PlannedStaticMetadata planned) {
+    var output =
+        IsoBoxes.concat(
+            hevcInitializationSegment(hvc1Entry(recordWithSeiArray(39))), keyframeFragment(0, 1));
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer =
+        producerOfOneSecondSegments(process).videoDecision(hdr10Copy(planned.output())).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(sink.contentOf("init.mp4"))
+        .isEqualTo(hevcInitializationSegment(hvc1Entry(recordWithStaticSei(planned.seiUnits()))));
+  }
+
+  static Stream<PlannedStaticMetadata> plannedStaticMetadata() {
+    var both =
+        PlannedCopyOutputs.pqOutputBuilder()
+            .masteringDisplay(Optional.of(PlannedCopyOutputs.MASTERING_DISPLAY))
+            .contentLightLevel(Optional.of(PlannedCopyOutputs.CONTENT_LIGHT_LEVEL))
+            .build();
+    return Stream.of(
+        new PlannedStaticMetadata(
+            "both messages",
+            both,
+            List.of(
+                PlannedCopyOutputs.MASTERING_DISPLAY_SEI,
+                PlannedCopyOutputs.CONTENT_LIGHT_LEVEL_SEI)),
+        new PlannedStaticMetadata(
+            "only the mastering display",
+            PlannedCopyOutputs.pqOutputBuilder()
+                .masteringDisplay(Optional.of(PlannedCopyOutputs.MASTERING_DISPLAY))
+                .build(),
+            List.of(PlannedCopyOutputs.MASTERING_DISPLAY_SEI)),
+        new PlannedStaticMetadata(
+            "only the content light level",
+            PlannedCopyOutputs.pqOutputBuilder()
+                .contentLightLevel(Optional.of(PlannedCopyOutputs.CONTENT_LIGHT_LEVEL))
+                .build(),
+            List.of(PlannedCopyOutputs.CONTENT_LIGHT_LEVEL_SEI)),
+        new PlannedStaticMetadata(
+            "neither message", PlannedCopyOutputs.pqOutputBuilder().build(), List.of()));
+  }
+
+  // The planned output of an HDR10 copy and the SEI NAL units its record holds, in order.
+  record PlannedStaticMetadata(String name, PlannedCopyOutput output, List<byte[]> seiUnits) {
+
+    @Override
+    public String toString() {
+      return name;
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should deliver the same initialization segment from attempts whose FFmpeg records hold"
+          + " different SEI messages when the copy plans static HDR metadata")
+  void shouldDeliverTheSameInitializationSegmentWhenTheFfmpegRecordsHoldDifferentSeiMessages() {
+    var planned =
+        PlannedCopyOutputs.pqOutputBuilder()
+            .masteringDisplay(Optional.of(PlannedCopyOutputs.MASTERING_DISPLAY))
+            .contentLightLevel(Optional.of(PlannedCopyOutputs.CONTENT_LIGHT_LEVEL))
+            .build();
+    var delivered = new ArrayList<byte[]>();
+    for (var seiNalUnitType : List.of(39, 40)) {
+      var attemptSink = new RecordingSegmentSink();
+      var output =
+          IsoBoxes.concat(
+              hevcInitializationSegment(hvc1Entry(recordWithSeiArray(seiNalUnitType))),
+              keyframeFragment(0, 1));
+      var producer =
+          producerOfOneSecondSegments(ScriptedProcess.builder().output(output).build())
+              .sink(attemptSink)
+              .videoDecision(hdr10Copy(planned))
+              .start();
+      assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+      delivered.add(attemptSink.contentOf("init.mp4"));
+    }
+
+    assertThat(delivered.getFirst()).isEqualTo(delivered.getLast());
+  }
+
+  // The pinned FFmpeg writes no record into the hvc1 entry of a profile 5 copy, whatever the
+  // source's sample entry.
+  @Test
+  @DisplayName(
+      "Should deliver a dvh1 sample entry with the planned profile 5 record when the copy plans a"
+          + " dvh1 output and normalizes the record")
+  void shouldDeliverADvh1SampleEntryWithThePlannedProfile5RecordWhenTheCopyNormalizesTheRecord() {
+    var output =
+        IsoBoxes.concat(
+            hevcInitializationSegment(hvc1Entry(HVC1_PARAMETER_SET_RECORD)),
+            keyframeFragment(0, 1));
+    var process = ScriptedProcess.builder().output(output).build();
+    var copy =
+        dolbyVisionCopy(
+                "dvh1.05.06",
+                PlannedCopyOutput.DolbyVisionOutput.builder()
+                    .profile(5)
+                    .level(6)
+                    .baseLayerCompatibilityId(0)
+                    .sampleEntry(PlannedCopyOutput.SampleEntry.DVH1)
+                    .build())
+            .bitstreamRewrites(Set.of(BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD))
+            .build();
+
+    var producer = producerOfOneSecondSegments(process).videoDecision(copy).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(sink.contentOf("init.mp4"))
+        .isEqualTo(
+            hevcInitializationSegment(
+                hevcEntryWithRecord("dvh1", "dvcC", PROFILE_5_LEVEL_6_RECORD)));
+  }
+
+  @Test
+  @DisplayName(
+      "Should replace the source's record with compatibility 1 and compression 0 when the copy"
+          + " normalizes a profile 8 record with compatibility 6")
+  void shouldReplaceTheSourcesRecordWhenTheCopyNormalizesAProfile8RecordWithCompatibility6() {
+    var output =
+        IsoBoxes.concat(
+            hevcInitializationSegment(
+                hevcEntryWithRecord("hvc1", "dvvC", PROFILE_8_COMPATIBILITY_6_RECORD)),
+            keyframeFragment(0, 1));
+    var process = ScriptedProcess.builder().output(output).build();
+    var copy =
+        dolbyVisionCopy(
+                HVC1_RECORD_CODEC_STRING,
+                PlannedCopyOutput.DolbyVisionOutput.builder()
+                    .profile(8)
+                    .level(6)
+                    .baseLayerCompatibilityId(1)
+                    .sampleEntry(PlannedCopyOutput.SampleEntry.HVC1)
+                    .build())
+            .bitstreamRewrites(Set.of(BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD))
+            .build();
+
+    var producer = producerOfOneSecondSegments(process).videoDecision(copy).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(sink.contentOf("init.mp4"))
+        .isEqualTo(
+            hevcInitializationSegment(
+                hevcEntryWithRecord("hvc1", "dvvC", PROFILE_8_LEVEL_6_PQ_RECORD)));
+  }
+
+  @Test
+  @DisplayName(
+      "Should deliver the source's record unchanged when the copy plans a Dolby Vision output"
+          + " without normalizing the record")
+  void shouldDeliverTheSourcesRecordUnchangedWhenTheCopyPlansDolbyVisionWithoutNormalizing() {
+    var entry = hevcEntryWithRecord("hvc1", "dvvC", PROFILE_8_LEVEL_6_PQ_RECORD);
+    var output = IsoBoxes.concat(hevcInitializationSegment(entry), keyframeFragment(0, 1));
+    var process = ScriptedProcess.builder().output(output).build();
+    var copy =
+        dolbyVisionCopy(
+                HVC1_RECORD_CODEC_STRING,
+                PlannedCopyOutput.DolbyVisionOutput.builder()
+                    .profile(8)
+                    .level(6)
+                    .baseLayerCompatibilityId(1)
+                    .sampleEntry(PlannedCopyOutput.SampleEntry.HVC1)
+                    .build())
+            .build();
+
+    var producer = producerOfOneSecondSegments(process).videoDecision(copy).start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(sink.contentOf("init.mp4")).isEqualTo(hevcInitializationSegment(entry));
+  }
+
+  // The rewrite can make the initialization segment longer than the bytes that the reader reserved
+  // for it, so the delivery must reserve the growth before it releases the whole segment.
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("copiesWhoseInitializationSegmentGrows")
+  @DisplayName(
+      "Should release every byte it reserved when the rewrite makes the initialization segment"
+          + " longer than FFmpeg wrote it")
+  void shouldReleaseEveryReservedByteWhenTheRewriteMakesTheInitializationSegmentLonger(
+      GrowingCopy growingCopy) {
+    var workerBudget = SegmentMemoryBudget.forSlots(1);
+    var output =
+        IsoBoxes.concat(
+            hevcInitializationSegment(hvc1Entry(HVC1_PARAMETER_SET_RECORD)),
+            keyframeFragment(0, 1));
+    var process = ScriptedProcess.builder().output(output).build();
+
+    var producer =
+        producerOfOneSecondSegments(process)
+            .memoryBudget(workerBudget)
+            .videoDecision(growingCopy.copy())
+            .start();
+
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(sink.contentOf("init.mp4"))
+        .as("the delivered initialization segment")
+        .hasSizeGreaterThan(hevcInitializationSegment(hvc1Entry(HVC1_PARAMETER_SET_RECORD)).length);
+    assertReleasesEveryReservedByte(workerBudget);
+  }
+
+  static Stream<GrowingCopy> copiesWhoseInitializationSegmentGrows() {
+    return Stream.of(
+        new GrowingCopy(
+            "static HDR metadata",
+            hdr10Copy(
+                PlannedCopyOutputs.pqOutputBuilder()
+                    .masteringDisplay(Optional.of(PlannedCopyOutputs.MASTERING_DISPLAY))
+                    .contentLightLevel(Optional.of(PlannedCopyOutputs.CONTENT_LIGHT_LEVEL))
+                    .build())),
+        new GrowingCopy(
+            "a normalized Dolby Vision record",
+            dolbyVisionCopy(
+                    HVC1_RECORD_CODEC_STRING,
+                    PlannedCopyOutput.DolbyVisionOutput.builder()
+                        .profile(8)
+                        .level(6)
+                        .baseLayerCompatibilityId(1)
+                        .sampleEntry(PlannedCopyOutput.SampleEntry.HVC1)
+                        .build())
+                .bitstreamRewrites(Set.of(BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD))
+                .build()));
+  }
+
+  // A copy whose rewritten initialization segment is longer than FFmpeg's.
+  record GrowingCopy(String name, VideoDecision.Copy copy) {
+
+    @Override
+    public String toString() {
+      return name;
+    }
+  }
+
+  private static VideoDecision.Copy.CopyBuilder dolbyVisionCopy(
+      String codecString, PlannedCopyOutput.DolbyVisionOutput dolbyVision) {
+    return VideoDecisionFixtures.copyBuilder()
+        .codecString(codecString)
+        .plannedOutput(
+            Optional.of(
+                PlannedCopyOutputs.pqOutputBuilder()
+                    .dolbyVision(Optional.of(dolbyVision))
+                    .build()));
+  }
+
+  // An HEVC sample entry of the type, with the parameter-set record, a pasp box and the Dolby
+  // Vision record.
+  private static byte[] hevcEntryWithRecord(String type, String recordType, String recordHex) {
+    return IsoBoxes.box(
+        type,
+        new byte[78],
+        IsoBoxes.box("hvcC", HVC1_PARAMETER_SET_RECORD),
+        IsoBoxes.box("pasp", IsoBoxes.u32(1), IsoBoxes.u32(1)),
+        IsoBoxes.box(recordType, HexFormat.of().parseHex(recordHex)));
+  }
+
+  private static VideoDecision.Copy hdr10Copy(PlannedCopyOutput planned) {
+    return VideoDecisionFixtures.copyBuilder()
+        .codecString(HVC1_RECORD_CODEC_STRING)
+        .plannedOutput(Optional.of(planned))
+        .build();
+  }
+
+  // The parameter-set record followed by one prefix SEI array that holds the NAL units, if any.
+  private static byte[] recordWithStaticSei(List<byte[]> seiUnits) {
+    if (seiUnits.isEmpty()) {
+      return HVC1_PARAMETER_SET_RECORD;
+    }
+
+    var array = new ByteArrayOutputStream();
+    array.write(39);
+    array.writeBytes(IsoBoxes.u16(seiUnits.size()));
+    for (var unit : seiUnits) {
+      array.writeBytes(IsoBoxes.u16(unit.length));
+      array.writeBytes(unit);
+    }
+
+    return IsoBoxes.concat(
+        HexFormat.of().parseHex(HVCC_FIELDS + "04" + HVCC_VPS_ARRAY + HVCC_SPS_PPS_ARRAYS),
+        array.toByteArray());
   }
 
   // The audio sample entry declares fewer bytes than its own header, or more than its stsd holds.

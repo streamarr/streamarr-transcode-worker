@@ -48,7 +48,7 @@ class RequiredComponentTest {
         Arguments.of("audio", (ThrowingCallable) () -> new MovieTracks(Optional.empty(), null)),
         Arguments.of("fragment", (ThrowingCallable) () -> new CarriedSample(null, SAMPLE)),
         Arguments.of("sample", (ThrowingCallable) () -> new CarriedSample(EMPTY_FRAGMENT, null)),
-        Arguments.of("segment", (ThrowingCallable) () -> new ClosedSegment.Initialization(null)),
+        Arguments.of("segment", (ThrowingCallable) () -> new ClosedSegment.Initialization(null, 0)),
         Arguments.of("fragments", (ThrowingCallable) () -> new MediaSegment(0, null, List.of())),
         Arguments.of("videoSamples", (ThrowingCallable) () -> new MediaSegment(0, List.of(), null)),
         Arguments.of("segments", (ThrowingCallable) () -> new GroupingOutcome.SegmentsClosed(null)),

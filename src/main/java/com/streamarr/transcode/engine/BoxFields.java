@@ -62,6 +62,14 @@ final class BoxFields {
     return buffer.remaining();
   }
 
+  /** The next bytes, copied. */
+  byte[] bytes(int count) {
+    require(count);
+    var bytes = new byte[count];
+    buffer.get(bytes);
+    return bytes;
+  }
+
   BoxFields skip(int bytes) {
     require(bytes);
     buffer.position(buffer.position() + bytes);
