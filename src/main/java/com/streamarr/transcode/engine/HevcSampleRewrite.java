@@ -3,6 +3,7 @@ package com.streamarr.transcode.engine;
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -26,6 +27,7 @@ final class HevcSampleRewrite implements SampleRewrite {
   // user_data_registered_itu_t_t35 (ITU-T H.265 D.2.6); HDR10+ registers country code 0xB5,
   // provider code 0x003C, provider-oriented code 0x0001 and application identifier 4.
   private static final int REGISTERED_USER_DATA = 4;
+  private static final int SCALABLE_NESTING = 133;
   private static final byte[] HDR10_PLUS_PREFIX = {(byte) 0xB5, 0x00, 0x3C, 0x00, 0x01, 0x04};
   private static final int RBSP_STOP_BYTE = 0x80;
 
@@ -94,6 +96,12 @@ final class HevcSampleRewrite implements SampleRewrite {
   private static Optional<ByteBuffer> withoutHdr10Plus(ByteBuffer unit) {
     var payload = unescaped(unit.slice(NAL_UNIT_HEADER_BYTES, unit.remaining() - 2));
     var messages = messagesOf(payload);
+    if (messages.stream().anyMatch(message -> nestsHdr10Plus(payload, message))) {
+      throw new FragmentedMp4Exception(
+          FragmentedMp4Exception.Reason.OUTPUT_MISMATCH,
+          "a scalable nesting SEI message holds HDR10+, which the copy cannot strip");
+    }
+
     var kept = messages.stream().filter(message -> !isHdr10Plus(payload, message)).toList();
     if (kept.size() == messages.size()) {
       return Optional.of(unit);
@@ -159,18 +167,33 @@ final class HevcSampleRewrite implements SampleRewrite {
   }
 
   private static boolean isHdr10Plus(byte[] rbsp, Message message) {
-    if (message.type() != REGISTERED_USER_DATA
-        || message.end() - message.payloadStart() < HDR10_PLUS_PREFIX.length) {
+    return message.type() == REGISTERED_USER_DATA
+        && holdsAt(rbsp, message.payloadStart(), message.end(), HDR10_PLUS_PREFIX);
+  }
+
+  // A scalable nesting message hides its nested messages behind bit-level fields. Removing one of
+  // them would mean rewriting those fields, so the copy refuses any nesting message whose payload
+  // holds HDR10+'s registration anywhere.
+  private static boolean nestsHdr10Plus(byte[] rbsp, Message message) {
+    if (message.type() != SCALABLE_NESTING) {
       return false;
     }
 
-    for (var index = 0; index < HDR10_PLUS_PREFIX.length; index++) {
-      if (rbsp[message.payloadStart() + index] != HDR10_PLUS_PREFIX[index]) {
-        return false;
+    for (var start = message.payloadStart(); start < message.end(); start++) {
+      if (holdsAt(rbsp, start, message.end(), HDR10_PLUS_PREFIX)) {
+        return true;
       }
     }
 
-    return true;
+    return false;
+  }
+
+  private static boolean holdsAt(byte[] rbsp, int start, int end, byte[] expected) {
+    if (end - start < expected.length) {
+      return false;
+    }
+
+    return Arrays.equals(rbsp, start, start + expected.length, expected, 0, expected.length);
   }
 
   // Removes each emulation prevention byte, the 0x03 that follows two zero bytes.

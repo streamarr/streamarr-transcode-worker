@@ -246,6 +246,32 @@ class SegmentAssemblerBitstreamRewriteTest {
             List.of(TEMPORAL_DELIMITER, CONTENT_LIGHT_LEVEL_METADATA, FRAME)));
   }
 
+  @Test
+  @DisplayName(
+      "Should refuse a fragment as an output mismatch when a scalable nesting SEI message holds"
+          + " HDR10+ that the copy strips")
+  void shouldRefuseAFragmentWhenAScalableNestingSeiMessageHoldsHdr10PlusThatTheCopyStrips()
+      throws IOException {
+    // scalable_nesting (payload type 133, ITU-T H.265 D.2.24) whose flags byte precedes a nested
+    // HDR10+ message.
+    var nesting = "850B" + "C0" + HDR10_PLUS_MESSAGE;
+    var keyframe = sample(aud(), seiOf(nesting), slice(0));
+    var output =
+        Mp4Stream.read(
+            Mp4Stream.readerOf(
+                concat(
+                    bytesOfInitializationSegment(HEVC_SEGMENT),
+                    fragmentBuilder().startsWithKeyframe(true).video(0, keyframe).build())));
+    var assembler = assemblerFor(copyOf(HEVC_CODEC_STRING, BitstreamRewrite.STRIP_HDR10_PLUS));
+    assembler.accept(output.initializationSegment());
+    var fragment = output.fragments().getFirst();
+
+    assertThatThrownBy(() -> assembler.accept(fragment))
+        .isInstanceOfSatisfying(
+            FragmentedMp4Exception.class,
+            exception -> assertThat(exception.getReason()).isEqualTo(Reason.OUTPUT_MISMATCH));
+  }
+
   @ParameterizedTest(name = "{0}")
   @MethodSource("av1RecordsThatHoldAStrippedObu")
   @DisplayName(

@@ -46,7 +46,8 @@ final class FragmentedMp4Exception extends RuntimeException {
     SHORT_VIDEO_SAMPLE,
     /**
      * The initialization segment declares video other than the job's video decision, or video whose
-     * decoder configuration record cannot be read.
+     * decoder configuration record cannot be read, or the output holds content that the copy's
+     * bitstream rewrites strip but the worker cannot remove.
      */
     OUTPUT_MISMATCH,
     /**
