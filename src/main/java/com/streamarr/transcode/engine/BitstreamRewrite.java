@@ -12,8 +12,8 @@ public enum BitstreamRewrite {
    */
   STRIP_DOLBY_VISION(true),
   /**
-   * Removes every HDR10+ message: in HEVC, each ITU-T T.35 SEI message of HDR10+, keeping the other
-   * messages of its NAL unit; in AV1, every ITU-T T.35 metadata OBU of HDR10+.
+   * Removes every HDR10+ message: in HEVC and H.264, each ITU-T T.35 SEI message of HDR10+, keeping
+   * the other messages of its NAL unit; in AV1, every ITU-T T.35 metadata OBU of HDR10+.
    */
   STRIP_HDR10_PLUS(true),
   /**

@@ -3,7 +3,7 @@ package com.streamarr.transcode.engine;
 import java.nio.ByteBuffer;
 
 /** Rewrites the bytes of one video sample of a codec as the copy's bitstream rewrites list. */
-sealed interface SampleRewrite permits HevcSampleRewrite, Av1SampleRewrite {
+sealed interface SampleRewrite permits NalUnitSampleRewrite, Av1SampleRewrite {
 
   /**
    * The sample without what the rewrites strip, or the same buffer when they strip nothing from it.

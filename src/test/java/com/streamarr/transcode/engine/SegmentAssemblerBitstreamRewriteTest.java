@@ -49,6 +49,12 @@ class SegmentAssemblerBitstreamRewriteTest {
   private static final String AV1_SEGMENT = "libsvtav1-1080p30.mp4";
   private static final String AV1_CODEC_STRING = "av01.0.08M.08";
   private static final byte[] AUDIO_SAMPLE = {0x21, 0x10, 0x05};
+  private static final String H264_SEGMENT = "libx264-1080p30.mp4";
+  private static final String H264_CODEC_STRING = "avc1.640028";
+  // H.264 NAL unit headers (ITU-T H.264 table 7-1): an SEI NAL unit, and an IDR slice with
+  // nal_ref_idc 3.
+  private static final String H264_SEI = "06";
+  private static final String H264_IDR_SLICE = "65";
 
   // HDR10+ (ITU-T T.35, country 0xB5, provider 0x003C, provider-oriented code 0x0001,
   // application 4), and a user-data-unregistered message whose payload holds 00 00 01, which its
@@ -371,20 +377,26 @@ class SegmentAssemblerBitstreamRewriteTest {
             exception -> assertThat(exception.getReason()).isEqualTo(Reason.OUTPUT_MISMATCH));
   }
 
+  // FFmpeg copies the source's metadata OBUs into av1C's configOBUs, which the AV1 binding permits.
   @ParameterizedTest(name = "{0}")
   @MethodSource("av1RecordsThatHoldAStrippedObu")
   @DisplayName(
-      "Should refuse the initialization segment as an output mismatch when its av1C holds a"
-          + " metadata OBU that the copy strips")
-  void shouldRefuseTheInitializationSegmentWhenItsAv1CHoldsAMetadataObuThatTheCopyStrips(
-      String description, BitstreamRewrite rewrite, String configurationObus) {
+      "Should deliver the av1C without the metadata OBUs that the copy strips and with every other"
+          + " OBU when its av1C holds a metadata OBU that the copy strips")
+  void shouldDeliverTheAv1CWithoutTheMetadataObusThatTheCopyStripsWhenItsAv1CHoldsOne(
+      String description, BitstreamRewrite rewrite, String configurationObus, String keptObus) {
     var assembler = assemblerFor(copyOf(AV1_CODEC_STRING, rewrite));
-    var segment = av1SegmentWithConfigurationObus(configurationObus);
 
-    assertThatThrownBy(() -> assembler.accept(segment))
+    var closed =
+        assembler.accept(av1SegmentWithConfigurationObus(configurationObus)).closedSegments();
+
+    assertThat(closed)
+        .singleElement()
         .isInstanceOfSatisfying(
-            FragmentedMp4Exception.class,
-            exception -> assertThat(exception.getReason()).isEqualTo(Reason.OUTPUT_MISMATCH));
+            ClosedSegment.Initialization.class,
+            delivered ->
+                assertThat(delivered.segment().bytes())
+                    .isEqualTo(av1SegmentWithConfigurationObus(keptObus).bytes()));
   }
 
   static Stream<Arguments> av1RecordsThatHoldAStrippedObu() {
@@ -392,8 +404,45 @@ class SegmentAssemblerBitstreamRewriteTest {
         Arguments.of(
             "a Dolby Vision RPU",
             BitstreamRewrite.STRIP_DOLBY_VISION,
-            CONTENT_LIGHT_LEVEL_METADATA + DOLBY_VISION_METADATA),
-        Arguments.of("HDR10+", BitstreamRewrite.STRIP_HDR10_PLUS, HDR10_PLUS_METADATA));
+            CONTENT_LIGHT_LEVEL_METADATA + DOLBY_VISION_METADATA,
+            CONTENT_LIGHT_LEVEL_METADATA),
+        Arguments.of("HDR10+", BitstreamRewrite.STRIP_HDR10_PLUS, HDR10_PLUS_METADATA, ""));
+  }
+
+  @Test
+  @DisplayName(
+      "Should refuse the initialization segment as a malformed box when the copy strips av1C's"
+          + " configOBUs and one of them cannot be read")
+  void shouldRefuseTheInitializationSegmentAsMalformedWhenAnAv1CConfigurationObuCannotBeRead() {
+    var assembler = assemblerFor(copyOf(AV1_CODEC_STRING, BitstreamRewrite.STRIP_HDR10_PLUS));
+    // A metadata OBU whose size runs past the record.
+    var segment = av1SegmentWithConfigurationObus("2A0904B5");
+
+    assertThatThrownBy(() -> assembler.accept(segment))
+        .isInstanceOfSatisfying(
+            FragmentedMp4Exception.class,
+            exception -> assertThat(exception.getReason()).isEqualTo(Reason.MALFORMED_BOX));
+  }
+
+  // The record's codec fields fit in 3 bytes, so the output check reads it; it holds no configOBUs.
+  @Test
+  @DisplayName(
+      "Should deliver the av1C unchanged when the copy strips av1C's configOBUs and the record ends"
+          + " before them")
+  void shouldDeliverTheAv1CUnchangedWhenTheRecordEndsBeforeItsConfigurationObus() {
+    var assembler = assemblerFor(copyOf(AV1_CODEC_STRING, BitstreamRewrite.STRIP_HDR10_PLUS));
+    var av1C = IsoBoxes.box("av1C", HexFormat.of().parseHex("81080C"));
+    var segment =
+        new InitializationSegment(
+            HevcCopies.initializationSegment(IsoBoxes.box("av01", new byte[78], av1C)));
+
+    var closed = assembler.accept(segment).closedSegments();
+
+    assertThat(closed)
+        .singleElement()
+        .isInstanceOfSatisfying(
+            ClosedSegment.Initialization.class,
+            delivered -> assertThat(delivered.segment().bytes()).isEqualTo(segment.bytes()));
   }
 
   @Test
@@ -408,18 +457,53 @@ class SegmentAssemblerBitstreamRewriteTest {
     assertThat(assembler.accept(segment).closedSegments()).hasSize(1);
   }
 
+  // H.264 carries no Dolby Vision that a copy strips: ADR 0036 never strips profile 9.
   @Test
   @DisplayName(
-      "Should refuse the initialization segment as an output mismatch when the copy lists a"
-          + " rewrite for H.264 video")
-  void shouldRefuseTheInitializationSegmentAsAnOutputMismatchWhenTheCopyListsARewriteForH264() {
-    var assembler = assemblerFor(copyOf("avc1.640028", BitstreamRewrite.STRIP_DOLBY_VISION));
-    var segment = new InitializationSegment(bytesOfInitializationSegment("libx264-1080p30.mp4"));
+      "Should refuse the initialization segment as an output mismatch when the copy strips Dolby"
+          + " Vision from H.264 video")
+  void
+      shouldRefuseTheInitializationSegmentAsAnOutputMismatchWhenTheCopyStripsDolbyVisionFromH264() {
+    var assembler = assemblerFor(copyOf(H264_CODEC_STRING, BitstreamRewrite.STRIP_DOLBY_VISION));
+    var segment = new InitializationSegment(bytesOfInitializationSegment(H264_SEGMENT));
 
     assertThatThrownBy(() -> assembler.accept(segment))
         .isInstanceOfSatisfying(
             FragmentedMp4Exception.class,
             exception -> assertThat(exception.getReason()).isEqualTo(Reason.OUTPUT_MISMATCH));
+  }
+
+  // An H.264 SEI NAL unit (ITU-T H.264 7.3.2.3) holds its messages in the same syntax as HEVC's,
+  // after a 1-byte header of type 6.
+  @Test
+  @DisplayName(
+      "Should remove only the HDR10+ message of an H.264 SEI NAL unit when the copy strips HDR10+"
+          + " from H.264 video")
+  void shouldRemoveOnlyTheHdr10PlusMessageOfAnH264SeiNalUnitWhenTheCopyStripsHdr10Plus()
+      throws IOException {
+    var slice = h264NalUnit(H264_IDR_SLICE + "88840021");
+    var keyframe =
+        sample(
+            h264NalUnit(H264_SEI + HDR10_PLUS_MESSAGE + UNREGISTERED_MESSAGE_ESCAPED + RBSP_STOP),
+            slice);
+    var picture = sample(h264NalUnit(H264_SEI + HDR10_PLUS_MESSAGE + RBSP_STOP), slice);
+
+    var delivered =
+        deliveredSamples(
+            copyOf(H264_CODEC_STRING, BitstreamRewrite.STRIP_HDR10_PLUS),
+            H264_SEGMENT,
+            fragmentBuilder().startsWithKeyframe(true).video(0, keyframe, picture).build());
+
+    assertThat(delivered.video())
+        .containsExactly(
+            hex(sample(h264NalUnit(H264_SEI + UNREGISTERED_MESSAGE_ESCAPED + RBSP_STOP), slice)),
+            hex(slice));
+  }
+
+  // An H.264 NAL unit after the 4-byte length that libx264's avcC declares.
+  private static byte[] h264NalUnit(String hex) {
+    var unit = HexFormat.of().parseHex(hex);
+    return concat(IsoBoxes.u32(unit.length), unit);
   }
 
   @ParameterizedTest(name = "{0}")

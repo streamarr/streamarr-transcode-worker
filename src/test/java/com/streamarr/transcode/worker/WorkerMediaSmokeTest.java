@@ -34,6 +34,7 @@ import build.buf.gen.streamarr.transcode.v1.KeyframePositionSource;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositions;
 import build.buf.gen.streamarr.transcode.v1.KeyframesUnavailable;
 import build.buf.gen.streamarr.transcode.v1.KeyframesUnavailableReason;
+import build.buf.gen.streamarr.transcode.v1.MasteringDisplayColorVolume;
 import build.buf.gen.streamarr.transcode.v1.Presence;
 import build.buf.gen.streamarr.transcode.v1.ProbeAttemptResult;
 import build.buf.gen.streamarr.transcode.v1.ProbeFailure;
@@ -2578,10 +2579,82 @@ class WorkerMediaSmokeTest {
     }
   }
 
-  // libx265 writes the HDR10 SEI messages into the record and in front of every keyframe. The
-  // filter removes the parameter sets (types 32 to 34) and prefix SEI messages (type 39) from the
-  // samples, and keeps the record.
+  // The job carries the probed static values, as the server sends them for a copy with a PQ output
+  // (ADR 0036). The locked FFmpeg writes neither message into the copy's record, so every message
+  // there comes from the job.
+  @Test
+  @DisplayName(
+      "Should deliver the job's static HDR metadata as SEI messages in the hvc1 record, keep it in"
+          + " front of every keyframe and declare PQ when a worker copies HDR10 with a planned PQ"
+          + " output")
+  void
+      shouldDeliverTheJobsStaticHdrMetadataInTheHvc1RecordAndKeepItInTheSamplesWhenAWorkerCopiesHdr10WithAPlannedPqOutput()
+          throws Exception {
+    var source = hdr10Source();
+    var job = sampleEntryCopyJob(source, HDR10_CODEC_STRING);
+    var video = job.getDecisionBuilder().getVideoBuilder();
+    video.setOutputDynamicRange(
+        VideoDynamicRange.newBuilder()
+            .setCompatibleBase(CompatibleBase.COMPATIBLE_BASE_PQ)
+            .setHdr10Plus(Presence.PRESENCE_ABSENT)
+            .setDolbyVisionAbsent(DolbyVisionAbsent.getDefaultInstance()));
+    HDR10_MASTERING_DISPLAY.writeTo(video.getMasteringDisplayBuilder());
+    video
+        .getContentLightLevelBuilder()
+        .setMaxContentLightLevel(HDR10_CONTENT_LIGHT_LEVEL.maxContentLightLevel())
+        .setMaxFrameAverageLightLevel(HDR10_CONTENT_LIGHT_LEVEL.maxPictureAverageLightLevel());
+
+    var uploads = execute(engine(realCapabilities()), root, job.build());
+
+    assertThat(uploads.names()).containsExactlyElementsOf(uploadNames(SAMPLE_ENTRY_SOURCE_SECONDS));
+    var media = playable(uploads.contentOf(uploads.names()));
+    assertDecodes(media);
+    assertThat(videoStreamFields(media, "codec_tag_string,color_transfer"))
+        .containsExactlyInAnyOrderEntriesOf(
+            Map.of("codec_tag_string", "hvc1", "color_transfer", "smpte2084"));
+    var recordNalUnits = hevcRecordNalUnits(uploads.segments().get("init.mp4"));
+    assertThat(recordNalUnits)
+        .as("the NAL unit types of the delivered record")
+        .extracting(WorkerMediaSmokeTest::hevcNalUnitType)
+        .containsExactly(HEVC_VPS, HEVC_SPS, HEVC_PPS, HEVC_PREFIX_SEI, HEVC_PREFIX_SEI);
+    var masteringDisplay = seiMessages(List.of(recordNalUnits.get(3)));
+    var contentLightLevel = seiMessages(List.of(recordNalUnits.get(4)));
+    assertThat(masteringDisplay).containsOnlyKeys(HEVC_MASTERING_DISPLAY_SEI);
+    assertThat(MasteringDisplayColourVolume.of(masteringDisplay.get(HEVC_MASTERING_DISPLAY_SEI)))
+        .isEqualTo(HDR10_MASTERING_DISPLAY);
+    assertThat(contentLightLevel).containsOnlyKeys(HEVC_CONTENT_LIGHT_LEVEL_SEI);
+    assertThat(ContentLightLevel.of(contentLightLevel.get(HEVC_CONTENT_LIGHT_LEVEL_SEI)))
+        .isEqualTo(HDR10_CONTENT_LIGHT_LEVEL);
+    for (var segment : uploads.names().subList(1, uploads.names().size())) {
+      var bytes = uploads.segments().get(segment);
+      assertThat(seiMessages(nalUnitsOfFirstPicture(bytes, firstSampleOffset(bytes))))
+          .as("the SEI messages in front of the keyframe of %s", segment)
+          .containsKeys(HEVC_MASTERING_DISPLAY_SEI, HEVC_CONTENT_LIGHT_LEVEL_SEI);
+    }
+  }
+
+  // The filter removes the parameter sets (types 32 to 34) and prefix SEI messages (type 39) from
+  // the samples of libx265's HDR10 stream, and keeps the record.
   private Path hdr10SourceWithStaticMetadataOnlyInItsRecord() throws Exception {
+    var encoded = hdr10Source();
+    var source = root.resolve("hdr10.mp4");
+    runFfmpeg(
+        List.of(
+            "-i",
+            encoded.toString(),
+            "-c",
+            "copy",
+            "-bsf:v",
+            "filter_units=remove_types=32|33|34|39",
+            "-tag:v",
+            "hvc1"),
+        source);
+    return source;
+  }
+
+  // libx265's PQ stream with HDR10 static metadata, which it writes into the record and in front of
+  // every keyframe.
+  private Path hdr10Source() throws Exception {
     var encoded = root.resolve("hdr10-encoded.mp4");
     runFfmpeg(
         List.of(
@@ -2602,19 +2675,7 @@ class WorkerMediaSmokeTest {
                 + ":max-cll="
                 + HDR10_CONTENT_LIGHT_LEVEL.x265Parameter()),
         encoded);
-    var source = root.resolve("hdr10.mp4");
-    runFfmpeg(
-        List.of(
-            "-i",
-            encoded.toString(),
-            "-c",
-            "copy",
-            "-bsf:v",
-            "filter_units=remove_types=32|33|34|39",
-            "-tag:v",
-            "hvc1"),
-        source);
-    return source;
+    return encoded;
   }
 
   // The NAL units of every array of the first hvcC record (ISO/IEC 14496-15, 8.3.3.1.2).
@@ -2749,6 +2810,15 @@ class WorkerMediaSmokeTest {
           Short.toUnsignedInt(fields.getShort()),
           Integer.toUnsignedLong(fields.getInt()),
           Integer.toUnsignedLong(fields.getInt()));
+    }
+
+    // The contract names each primary; the SEI message lists them as green, blue and red.
+    private void writeTo(MasteringDisplayColorVolume.Builder contract) {
+      contract.getGreenBuilder().setX(primaries.get(0)).setY(primaries.get(1));
+      contract.getBlueBuilder().setX(primaries.get(2)).setY(primaries.get(3));
+      contract.getRedBuilder().setX(primaries.get(4)).setY(primaries.get(5));
+      contract.getWhitePointBuilder().setX(whitePointX).setY(whitePointY);
+      contract.setMaxLuminance((int) maxLuminance).setMinLuminance((int) minLuminance);
     }
 
     private String x265Parameter() {

@@ -218,6 +218,8 @@ public final class TranscodeWorker implements AutoCloseable {
     var capabilities = WorkerCapabilities.newBuilder();
     capabilities.addProbeVersions(FfprobeExecutor.PROBE_VERSION);
     capabilities.addMeasurementVersions(FfprobeExecutor.MEASUREMENT_VERSION);
+    capabilities.addAllBitstreamRewrites(BitstreamRewrites.declared());
+    capabilities.addAllVideoCopyFeatures(PlannedCopies.declaredFeatures());
     engine.workerVerifiedEncoders().stream()
         .map(WorkerVideoEncoders::toProto)
         .forEach(capabilities::addVideoEncoders);
