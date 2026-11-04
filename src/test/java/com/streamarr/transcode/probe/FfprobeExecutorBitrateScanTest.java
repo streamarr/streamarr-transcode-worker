@@ -503,6 +503,47 @@ class FfprobeExecutorBitrateScanTest {
 
   @Test
   @DisplayName(
+      "Should fail the chunk as invalid media when a demuxer error lost packets that its listing"
+          + " of the packets taken reads")
+  void shouldFailTheChunkAsInvalidMediaWhenADemuxerErrorLostPacketsThatTheRelistingReads() {
+    // The audio trails the video in the file, so its last packets in the chunk follow the end
+    // keyframe. The first listing loses the audio at 1.125 and 1.375 s and stops at 2.625 s, its
+    // 13th packet. Listed again, the 13th packet is the audio at 2.125 s, before the chunk's end.
+    var audioAfterTheVideo =
+        """
+        stream_index=0|pts=500|dts=500|duration=500|size=1000|flags=K__
+        stream_index=1|pts=375|dts=375|duration=250|size=10|flags=K__
+        stream_index=0|pts=1000|dts=1000|duration=500|size=200|flags=___
+        stream_index=1|pts=625|dts=625|duration=250|size=11|flags=K__
+        stream_index=1|pts=875|dts=875|duration=250|size=12|flags=K__
+        stream_index=0|pts=1500|dts=1500|duration=500|size=1001|flags=K__
+        stream_index=1|pts=1125|dts=1125|duration=250|size=13|flags=K__
+        stream_index=1|pts=1375|dts=1375|duration=250|size=14|flags=K__
+        stream_index=0|pts=2000|dts=2000|duration=500|size=201|flags=___
+        stream_index=1|pts=1625|dts=1625|duration=250|size=15|flags=K__
+        stream_index=1|pts=1875|dts=1875|duration=250|size=16|flags=K__
+        stream_index=0|pts=2500|dts=2500|duration=500|size=1002|flags=K__
+        stream_index=1|pts=2125|dts=2125|duration=250|size=17|flags=K__
+        stream_index=1|pts=2375|dts=2375|duration=250|size=18|flags=K__
+        stream_index=1|pts=2625|dts=2625|duration=250|size=19|flags=K__
+        stream_index=0|pts=3000|dts=3000|duration=500|size=202|flags=___
+        """;
+    var lost =
+        audioAfterTheVideo
+            .lines()
+            .filter(line -> !line.contains("|pts=1125|") && !line.contains("|pts=1375|"))
+            .reduce("", (lines, line) -> lines + line + "\n");
+    var ffprobe =
+        keptAacSource().listing(FROM_FILE_START, audioAfterTheVideo).firstListing(lost).build();
+
+    var report = ffprobe.executor().probe(SOURCE, request(POSITIONS.chunk(0, 2)));
+
+    assertThat(report.result().getFailure()).isEqualTo(ProbeFailure.PROBE_FAILURE_INVALID_MEDIA);
+    assertThat(report.streamMeasurementParts()).isEmpty();
+  }
+
+  @Test
+  @DisplayName(
       "Should report an execution failure when the listing of the packets that a stopped listing"
           + " took exits with an error")
   void shouldReportAnExecutionFailureWhenTheListingOfThePacketsTakenExitsWithAnError() {
@@ -1855,7 +1896,8 @@ class FfprobeExecutorBitrateScanTest {
    * more than that count. When {@code demuxerErrorAtPacket} names a packet of the listing, counted
    * from 1, its read logs a demuxer error, and ffprobe reads it when the listing prints the packet
    * before it: ffprobe reads one packet past those it prints, and past the last one reads the
-   * file's end.
+   * file's end. When {@code firstListing} is given, the first listing prints it in place of its
+   * start's listing and logs a demuxer error, as a read error that lost packets would.
    */
   @Builder
   record ScriptedSource(
@@ -1870,6 +1912,7 @@ class FfprobeExecutorBitrateScanTest {
       @Singular Map<String, String> listings,
       String listingDiagnostics,
       Integer demuxerErrorAtPacket,
+      String firstListing,
       int listingExitCode,
       List<ProbeCommand> commands,
       List<String> listingStarts) {
@@ -1924,14 +1967,16 @@ class FfprobeExecutorBitrateScanTest {
       var packetCount = readInterval.substring(readInterval.indexOf('%') + 1);
       listingStarts.add(start);
       assertThat(listings).as("a listing from %s", start).containsKey(start);
-      var lines = listings.get(start).lines().toList();
+      var isLosingPackets = firstListing != null && listingStarts.size() == 1;
+      var listing = isLosingPackets ? firstListing : listings.get(start);
+      var lines = listing.lines().toList();
       var printed = lines.size();
       if (!packetCount.isEmpty()) {
         printed = Math.min(printed, Integer.parseInt(packetCount.replace("+#", "")));
       }
 
       var diagnostics = listingDiagnostics == null ? "" : listingDiagnostics;
-      if (demuxerErrorAtPacket != null && demuxerErrorAtPacket <= printed + 1) {
+      if (isLosingPackets || demuxerErrorAtPacket != null && demuxerErrorAtPacket <= printed + 1) {
         diagnostics += "[matroska,webm @ 0x5582] File ended prematurely at pos. 169438\n";
       }
 

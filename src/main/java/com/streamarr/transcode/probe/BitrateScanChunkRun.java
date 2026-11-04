@@ -568,7 +568,8 @@ final class BitrateScanChunkRun {
    * listing took, so that ffprobe stops by itself rather than when the reader stops it. ffprobe
    * reads one packet past those that it prints and then exits, so the relisting reads no further
    * than the packet after the one that stopped the first listing. Its packets and its demuxer
-   * errors come from the same read.
+   * errors come from the same read. The first listing's error stands unless the relisting stops
+   * too: an error that lost packets leaves the count short of the chunk's packets.
    */
   private Listed relist(ProbedSource probed, ChunkPackets packets, List<String> arguments)
       throws ExecutionException, InterruptedException {
@@ -583,7 +584,7 @@ final class BitrateScanChunkRun {
       throw new PacketScanException("ffprobe's relisting exited with code " + exitCode);
     }
 
-    return new Listed(packets, exitCode, diagnostics.isFailed());
+    return new Listed(packets, exitCode, diagnostics.isFailed() || !packets.isStoppedEarly());
   }
 
   /** The listing's arguments; a packet count ends the listing after that many packets. */
