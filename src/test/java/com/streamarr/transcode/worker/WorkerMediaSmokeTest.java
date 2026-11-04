@@ -5436,19 +5436,10 @@ class WorkerMediaSmokeTest {
     assertThat(decodedPictures(replacementSegment).getFirst().md5())
         .as("segment 3's first picture, the picture held from 25.958 s")
         .isEqualTo(decodedPictures(startSegment).getFirst().md5());
-    var listedStart = 30 * replaced.audioTrack().timescale();
-    assertThat(replaced.samplesOf(replaced.audioTrack()).getFirst().presentationTime())
-        .as("the replacement's audio opens on the listed start")
-        .isEqualTo(listedStart);
-    var before = Mp4Samples.read(startAttempt.contentOf(List.of("init.mp4", segmentName(2))));
-    var lastAudioBefore = before.samplesOf(before.audioTrack()).getLast();
-    assertThat(lastAudioBefore.end())
-        .as("the start attempt's segment 2 audio reaches the listed start, by less than a frame")
-        .isGreaterThanOrEqualTo(listedStart)
-        .isLessThan(listedStart + lastAudioBefore.duration());
+    assertAudioJoinsOnSegment3sStart(startAttempt, replaced);
   }
 
-  // With the server's keyframe positions 20 s and 21 s, the 44.1 kHz source's AAC and AC-3 audio
+  // With the server's keyframe positions 20 s and 21 s, the 48 kHz source's AAC and AC-3 audio
   // starts 9 s and 8 s of whole frames before 30 s.
   @ParameterizedTest(name = "{0}, keyframe {1}")
   @CsvSource({"ac3,", "eac3,", "libopus,", "flac,", "alac,", "aac, 20", "ac3, 21"})
@@ -5474,6 +5465,13 @@ class WorkerMediaSmokeTest {
         execute(engine(softwareCapabilities()), source.getParent(), replacementJob.build());
 
     var replaced = Mp4Samples.read(replacement.contentOf(List.of("init.mp4", segmentName(3))));
+    assertAudioJoinsOnSegment3sStart(startAttempt, replaced);
+  }
+
+  // Segment 3's listed start, 30 s, opens the replacement's audio with a frame, and the start
+  // attempt's segment 2 audio reaches that start, by less than a frame, so the junction has no gap.
+  private static void assertAudioJoinsOnSegment3sStart(
+      MediaUploads startAttempt, Mp4Samples.Movie replaced) {
     var listedStart = 30 * replaced.audioTrack().timescale();
     assertThat(replaced.samplesOf(replaced.audioTrack()).getFirst().presentationTime())
         .as("the replacement's audio opens on the listed start")
