@@ -92,6 +92,8 @@ public final class TranscodeWorker implements AutoCloseable {
   private static final Duration PROBE_SUMMARY_INTERVAL = Duration.ofMinutes(1);
   private static final Duration PROBE_CAPACITY_REFRESH_INTERVAL = Duration.ofSeconds(1);
   private static final Duration JOB_ATTEMPT_PROGRESS_INTERVAL = Duration.ofSeconds(1);
+  // The heap that the worker keeps for everything besides FFmpeg's output.
+  private static final long HEAP_RESERVE_BYTES = 512L * 1024 * 1024;
 
   private final TranscodeWorkerConfiguration configuration;
   private final FfmpegTranscodeEngine engine;
@@ -100,6 +102,8 @@ public final class TranscodeWorker implements AutoCloseable {
   private final FfprobeExecutor ffprobe;
   private final WorkerRuntime runtime;
   private final SegmentMemoryBudget memoryBudget;
+  private final int maximumCopies;
+  private final SegmentMemoryBudget copyMemoryBudget;
   private final ProbeSummary probeSummary;
   private final ProbeCapacities probeCapacities;
   private final Map<UUID, ActiveAttempt> activeAttempts = new HashMap<>();
@@ -122,6 +126,7 @@ public final class TranscodeWorker implements AutoCloseable {
       @NonNull FfprobeExecutor ffprobe,
       @NonNull WorkerRuntime runtime,
       ProbeSummary probeSummary,
+      long maximumHeapBytes,
       @NonNull MonotonicClock clock) {
     this.configuration = configuration;
     this.engine = engine;
@@ -135,12 +140,31 @@ public final class TranscodeWorker implements AutoCloseable {
             .onChange(this::sendProbeCapacityChange)
             .build();
     memoryBudget = SegmentMemoryBudget.forSlots(configuration.availableSlots());
+    maximumCopies = copiesWithin(maximumHeapBytes, configuration.availableSlots());
+    copyMemoryBudget = SegmentMemoryBudget.forCopies(maximumCopies);
+    log.info(
+        "The worker runs up to {} copies at once: what its {} MiB heap holds after the encodes'"
+            + " memory and a reserve",
+        maximumCopies,
+        maximumHeapBytes / (1024 * 1024));
     sources = new WorkerMediaSourceResolver(configuration.sourceNamespaces());
     jobMapper = new WorkerVariantJobMapper(sources);
   }
 
+  /**
+   * A builder for a worker that connects over gRPC and holds the copies that fit in the JVM's
+   * maximum heap, which the JVM sizes from the container's memory limit.
+   */
   public static TranscodeWorkerBuilder builder() {
-    return new TranscodeWorkerBuilder().runtime(new GrpcWorkerRuntime());
+    return new TranscodeWorkerBuilder()
+        .runtime(new GrpcWorkerRuntime())
+        .maximumHeapBytes(Runtime.getRuntime().maxMemory());
+  }
+
+  // Copies hold FFmpeg's output in the heap, beside the encodes' memory and the reserve.
+  private static int copiesWithin(long heapBytes, int slots) {
+    var copyBytes = heapBytes - HEAP_RESERVE_BYTES - slots * SegmentMemoryBudget.PRODUCER_BYTES;
+    return Math.clamp(copyBytes / SegmentMemoryBudget.PRODUCER_BYTES, 0, Integer.MAX_VALUE);
   }
 
   /**
@@ -516,15 +540,23 @@ public final class TranscodeWorker implements AutoCloseable {
   private synchronized AttemptStart startAttempt(
       StartVariantCommand command, ChosenAudio chosenAudio, Optional<Duration> readPosition) {
     var job = command.getJob();
-    // Only active attempts that do not copy the video hold a slot: the server freed a stopped
-    // attempt's slot when it sent the stop, and the worker's memory budget charges its producer
-    // until it has released its segments.
+    // Encodes take the advertised slots, and copies the places that the heap holds. Only active
+    // attempts hold either: the server freed a stopped attempt's slot when it sent the stop, and
+    // the worker's memory budgets charge its producer until it has released its segments.
     var copiesVideo = WorkerVariantJobMapper.copiesVideo(job);
-    if (!copiesVideo && slotsInUse() >= configuration.availableSlots()) {
+    var kind = "encodes";
+    var capacity = configuration.availableSlots();
+    if (copiesVideo) {
+      kind = "copies";
+      capacity = maximumCopies;
+    }
+
+    if (attemptsInUse(copiesVideo) >= capacity) {
       log.warn(
-          "Refusing job attempt {}: all {} advertised slots are occupied",
+          "Refusing job attempt {}: the worker already runs the {} {} that it can",
           fromProto(job.getJobAttemptId()),
-          configuration.availableSlots());
+          capacity,
+          kind);
       reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED);
       return new Refused();
     }
@@ -593,21 +625,20 @@ public final class TranscodeWorker implements AutoCloseable {
         : Optional.empty();
   }
 
-  // Encodes share the slots' memory. A copy takes no slot, so it brings its own producer's budget:
-  // copies beyond the slots that shared the slots' memory could each hold part of a segment and
-  // wait for room that none of them can free.
+  // Encodes share the slots' memory and copies their own, so a copy never waits for room that
+  // only an encode can free.
   private SegmentMemoryBudget memoryBudgetFor(boolean copiesVideo) {
     if (copiesVideo) {
-      return SegmentMemoryBudget.forSlots(1);
+      return copyMemoryBudget;
     }
 
     return memoryBudget;
   }
 
-  // Holds this monitor.
-  private long slotsInUse() {
+  // Holds this monitor. The active attempts that copy the video, or those that do not.
+  private long attemptsInUse(boolean copiesVideo) {
     return activeAttempts.values().stream()
-        .filter(attempt -> !WorkerVariantJobMapper.copiesVideo(attempt.job()))
+        .filter(attempt -> WorkerVariantJobMapper.copiesVideo(attempt.job()) == copiesVideo)
         .count();
   }
 
