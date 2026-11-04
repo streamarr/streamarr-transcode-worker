@@ -2855,23 +2855,10 @@ class FfmpegCommandBuilderTest {
       "Should pad in the copying FFmpeg and hold the frame after the encode's start trim when a"
           + " profile 5 encode holds and pads")
   void shouldPadInTheCopyAndHoldAfterTheStartTrimWhenAProfile5EncodeHoldsAndPads() {
-    var decision =
-        decision(TranscodeMode.FULL_TRANSCODE)
-            .videoDecision(
-                profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE)
-                    .holdsLastFrameToAdvertisedEnd(true)
-                    .build())
-            .audioDecision(paddedAac())
-            .build();
     var pipe =
         rpuMovingPipe(
             builder.buildPipeline(
-                job(
-                    request(decision)
-                        .advertisedEnd(Optional.of(Duration.ofSeconds(66)))
-                        .startSequenceNumber(10)
-                        .build(),
-                    "libx264")));
+                job(heldAndPaddedProfile5().startSequenceNumber(10).build(), "libx264")));
 
     assertThat(pipe.copyCommand())
         .containsSequence("-ss", "54", "-noaccurate_seek", "-i")
@@ -2889,6 +2876,22 @@ class FfmpegCommandBuilderTest {
         .endsWith(
             ",fps=24000/1001:eof_action=pass,tpad=stop=-1:stop_mode=clone,trim=start_pts=1295:end_pts=1583");
     assertThat(pipe.encodeCommand()).doesNotContain("-af");
+  }
+
+  // The copy keeps the pictures that the source's own markings, such as an MP4 edit list, place
+  // before zero, which the FFmpeg that decodes the source would discard.
+  @Test
+  @DisplayName(
+      "Should trim the encode of the copy at zero after the hold when a profile 5 encode that holds"
+          + " the last frame starts at zero")
+  void shouldTrimTheEncodeOfTheCopyAtZeroAfterTheHoldWhenAProfile5EncodeThatHoldsStartsAtZero() {
+    var pipe =
+        rpuMovingPipe(builder.buildPipeline(job(heldAndPaddedProfile5().build(), "libx264")));
+
+    assertThat(videoFilter(pipe.encodeCommand()))
+        .startsWith("scale=")
+        .endsWith(
+            ",fps=24000/1001:eof_action=pass,tpad=stop=-1:stop_mode=clone,trim=start=0:end_pts=1583");
   }
 
   @Test
@@ -2921,6 +2924,20 @@ class FfmpegCommandBuilderTest {
                 + ":channel_layouts=stereo,apad,asetpts='if(isnan(PTS),0/TB+N/SR/TB,PTS)',atrim=start=0:end=67",
             "-c:a",
             "libopus");
+  }
+
+  // A profile 5 encode whose RPU starts its sample, which holds the last frame and pads its AAC
+  // audio up to an advertised end of 66 s.
+  private static TranscodeRequest.TranscodeRequestBuilder heldAndPaddedProfile5() {
+    var decision =
+        decision(TranscodeMode.FULL_TRANSCODE)
+            .videoDecision(
+                profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE)
+                    .holdsLastFrameToAdvertisedEnd(true)
+                    .build())
+            .audioDecision(paddedAac())
+            .build();
+    return request(decision).advertisedEnd(Optional.of(Duration.ofSeconds(66)));
   }
 
   // An encode that holds the last frame and pads its audio up to an advertised end of 66 s, the
