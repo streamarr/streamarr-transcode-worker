@@ -2578,10 +2578,28 @@ class WorkerMediaSmokeTest {
     }
   }
 
-  // libx265 writes the HDR10 SEI messages into the record and in front of every keyframe. The
-  // filter removes the parameter sets (types 32 to 34) and prefix SEI messages (type 39) from the
-  // samples, and keeps the record.
+  // The filter removes the parameter sets (types 32 to 34) and prefix SEI messages (type 39) from
+  // the samples of libx265's HDR10 stream, and keeps the record.
   private Path hdr10SourceWithStaticMetadataOnlyInItsRecord() throws Exception {
+    var encoded = hdr10Source();
+    var source = root.resolve("hdr10.mp4");
+    runFfmpeg(
+        List.of(
+            "-i",
+            encoded.toString(),
+            "-c",
+            "copy",
+            "-bsf:v",
+            "filter_units=remove_types=32|33|34|39",
+            "-tag:v",
+            "hvc1"),
+        source);
+    return source;
+  }
+
+  // libx265's PQ stream with HDR10 static metadata, which it writes into the record and in front of
+  // every keyframe.
+  private Path hdr10Source() throws Exception {
     var encoded = root.resolve("hdr10-encoded.mp4");
     runFfmpeg(
         List.of(
@@ -2602,19 +2620,7 @@ class WorkerMediaSmokeTest {
                 + ":max-cll="
                 + HDR10_CONTENT_LIGHT_LEVEL.x265Parameter()),
         encoded);
-    var source = root.resolve("hdr10.mp4");
-    runFfmpeg(
-        List.of(
-            "-i",
-            encoded.toString(),
-            "-c",
-            "copy",
-            "-bsf:v",
-            "filter_units=remove_types=32|33|34|39",
-            "-tag:v",
-            "hvc1"),
-        source);
-    return source;
+    return encoded;
   }
 
   // The NAL units of every array of the first hvcC record (ISO/IEC 14496-15, 8.3.3.1.2).
