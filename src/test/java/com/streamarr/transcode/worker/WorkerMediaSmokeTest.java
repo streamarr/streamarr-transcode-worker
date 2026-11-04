@@ -5499,6 +5499,14 @@ class WorkerMediaSmokeTest {
     var replacement =
         execute(engine(softwareCapabilities()), source.getParent(), replacementJob.build());
 
+    assertSegment3OpensWithTheStartAttemptsPictureAndAudio(startAttempt, replacement);
+  }
+
+  // The replacement's segment 3 opens on a keyframe where the start attempt's does, with the same
+  // frame count and first picture, the picture held from 25.958 s, and its audio joins the start
+  // attempt's on segment 3's start.
+  private static void assertSegment3OpensWithTheStartAttemptsPictureAndAudio(
+      MediaUploads startAttempt, MediaUploads replacement) throws Exception {
     var startSegment = startAttempt.contentOf(List.of("init.mp4", segmentName(3)));
     var replacementSegment = replacement.contentOf(List.of("init.mp4", segmentName(3)));
     var started = Mp4Samples.read(startSegment);
@@ -5729,33 +5737,38 @@ class WorkerMediaSmokeTest {
   }
 
   private static List<String> pictureGapArguments(int bFrames) {
-    return List.of(
-        "-f",
-        "lavfi",
-        "-i",
-        "testsrc2=size=64x36:rate=24",
-        "-f",
-        "lavfi",
-        "-i",
-        "sine=frequency=440:sample_rate=48000",
-        "-t",
-        "40",
-        "-vf",
-        "select=not(between(t\\,26\\,31))",
-        "-fps_mode",
-        "passthrough",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "veryfast",
-        "-x264-params",
-        "keyint=100000:min-keyint=1:scenecut=0:bframes=" + bFrames,
-        "-force_key_frames",
-        "0,10,20,31",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "96k");
+    return pictureGapArguments(
+        List.of(
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-x264-params",
+            "keyint=100000:min-keyint=1:scenecut=0:bframes=" + bFrames));
+  }
+
+  // The gap source's pictures, tone and keyframes, with the arguments of its video encoder.
+  private static List<String> pictureGapArguments(List<String> videoEncoder) {
+    var arguments =
+        new ArrayList<>(
+            List.of(
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=64x36:rate=24",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000",
+                "-t",
+                "40",
+                "-vf",
+                "select=not(between(t\\,26\\,31))",
+                "-fps_mode",
+                "passthrough"));
+    arguments.addAll(videoEncoder);
+    arguments.addAll(List.of("-force_key_frames", "0,10,20,31", "-c:a", "aac", "-b:a", "96k"));
+    return arguments;
   }
 
   // The media's decoded pictures in presentation order, each with its presentation time and the
