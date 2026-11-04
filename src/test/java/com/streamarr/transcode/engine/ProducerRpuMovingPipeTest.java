@@ -452,7 +452,7 @@ class ProducerRpuMovingPipeTest {
             .output(concat(initializationSegment(), IsoBoxes.header(32L * 1024 * 1024 + 1, "moof")))
             .exitTiming(ExitTiming.WHEN_TEST_EXITS)
             .build();
-    var encode = encodingFfmpeg().build();
+    var encode = encodingFfmpegReadingTheSourcesAudioUntilTerminated();
 
     var producer = producerOf(copy, encode).start();
 
@@ -519,7 +519,7 @@ class ProducerRpuMovingPipeTest {
             .failReadWith(new IllegalStateException("defect in the copy's transfer"))
             .exitTiming(ExitTiming.WHEN_TEST_EXITS)
             .build();
-    var encode = encodingFfmpeg().build();
+    var encode = encodingFfmpegReadingTheSourcesAudioUntilTerminated();
 
     var producer = producerOf(copy, encode).start();
 
@@ -817,8 +817,10 @@ class ProducerRpuMovingPipeTest {
   }
 
   // The encoding FFmpeg reads the source's audio itself, so the end of the copy does not end it.
+  // It writes nothing, because a termination that cut its output inside a box would fail the
+  // attempt as malformed output before its exit decides.
   private static ScriptedProcess encodingFfmpegReadingTheSourcesAudioUntilTerminated() {
-    return encodingFfmpeg().exitTiming(ExitTiming.WHEN_TEST_EXITS).build();
+    return encodingFfmpeg().output(new byte[0]).exitTiming(ExitTiming.WHEN_TEST_EXITS).build();
   }
 
   // The copying FFmpeg's stand-in writes the framecrc of the copied source's video, whatever the
