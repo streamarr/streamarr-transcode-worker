@@ -48,9 +48,21 @@ class TranscodeWorkerSettingsTest {
     assertThat(settings.controlPlaneHost()).isEqualTo("streamarr-server");
     assertThat(settings.controlPlanePort()).isEqualTo(9090);
     assertThat(settings.ffmpegPath()).isEqualTo("ffmpeg");
+    assertThat(settings.landlockExecPath()).isEqualTo("landlock-exec");
     assertThat(worker.workerId()).isEqualTo(WORKER_ID);
     assertThat(worker.availableSlots()).isEqualTo(1);
     assertThat(worker.sourceNamespaces()).containsEntry(SOURCE_NAMESPACE_ID, Path.of("/media"));
+  }
+
+  @Test
+  @DisplayName("Should take the configured landlock-exec path when the environment names one")
+  void shouldTakeTheConfiguredLandlockExecPathWhenTheEnvironmentNamesOne() {
+    var environment = new HashMap<>(requiredEnvironment());
+    environment.put("TRANSCODE_WORKER_LANDLOCK_EXEC_PATH", "/opt/landlock/landlock-exec");
+
+    var settings = TranscodeWorkerSettings.fromEnvironment(environment);
+
+    assertThat(settings.landlockExecPath()).isEqualTo("/opt/landlock/landlock-exec");
   }
 
   @Test

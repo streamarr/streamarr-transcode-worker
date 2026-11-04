@@ -62,6 +62,19 @@ class LandlockPackagingTest {
   }
 
   @Test
+  @DisplayName("Should build the helper before the smoke tests run when CI exercises real FFmpeg")
+  void shouldBuildTheHelperBeforeTheSmokeTestsRunWhenCiExercisesRealFfmpeg() throws IOException {
+    var steps = steps("smoke");
+    var helper = stepNamed(steps, "Build the Landlock helper");
+    var smoke = stepNamed(steps, "Exercise the worker with real media processes");
+
+    assertThat(steps.indexOf(helper)).isLessThan(steps.indexOf(smoke));
+    assertThat(helper.get("run").toString())
+        .contains("buildpacks/landlock/bin/compile", "GITHUB_PATH");
+    assertThat(smoke.get("run").toString()).contains("WorkerLandlockSmokeTest");
+  }
+
+  @Test
   @DisplayName("Should test the helper's rules when CI verifies the build tooling")
   void shouldTestTheHelpersRulesWhenCiVerifiesTheBuildTooling() throws IOException {
     assertThat(stepNamed(steps("tooling"), "Verify the Landlock helper").get("run").toString())

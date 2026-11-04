@@ -264,6 +264,46 @@ class TranscodeWorkerApplicationIT {
   }
 
   @Test
+  @DisplayName("Should refuse startup when the host offers no Landlock")
+  void shouldRefuseStartupWhenTheHostOffersNoLandlock() throws Exception {
+    try (var controlPlane = WorkerApplicationControlPlane.builder().build()) {
+      var fixture =
+          ApplicationFixture.builder()
+              .port(controlPlane.port())
+              .ffprobe(versionOnlyFfprobe())
+              .build();
+      var processBuilder = applicationProcess(fixture);
+      landlockExecReporting(
+          "echo 'landlock-exec: Landlock is unavailable: landlock_create_ruleset: ENOSYS:"
+              + " Function not implemented' >&2; exit 2");
+      try (var worker = start(processBuilder)) {
+        assertStartupRefusedBeforeContact(worker, controlPlane, "Landlock");
+      }
+    }
+  }
+
+  @Test
+  @DisplayName("Should refuse startup when landlock-exec is missing")
+  void shouldRefuseStartupWhenLandlockExecIsMissing() throws Exception {
+    try (var controlPlane = WorkerApplicationControlPlane.builder().build()) {
+      var fixture =
+          ApplicationFixture.builder()
+              .port(controlPlane.port())
+              .ffprobe(versionOnlyFfprobe())
+              .build();
+      var processBuilder = applicationProcess(fixture);
+      processBuilder
+          .environment()
+          .put(
+              "TRANSCODE_WORKER_LANDLOCK_EXEC_PATH",
+              tempDir.resolve("missing-landlock-exec").toString());
+      try (var worker = start(processBuilder)) {
+        assertStartupRefusedBeforeContact(worker, controlPlane, "Landlock");
+      }
+    }
+  }
+
+  @Test
   @DisplayName("Should register its encoders when FFmpeg writes more than a pipe holds")
   void shouldRegisterItsEncodersWhenFfmpegWritesMoreThanAPipeHolds() throws Exception {
     try (var controlPlane = WorkerApplicationControlPlane.builder().build()) {
@@ -449,6 +489,7 @@ class TranscodeWorkerApplicationIT {
         """
             .formatted(FRAGMENTED_MP4_MUXER_HELP));
     Files.setPosixFilePermissions(ffmpeg, PosixFilePermissions.fromString("rwx------"));
+    landlockExecReporting("echo 4");
     var command = new ArrayList<String>();
     command.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());
     ManagementFactory.getRuntimeMXBean().getInputArguments().stream()
@@ -477,6 +518,27 @@ class TranscodeWorkerApplicationIT {
                 Map.entry("TRANSCODE_WORKER_FFMPEG_PATH", ffmpeg.toString()),
                 Map.entry("TRANSCODE_WORKER_FFPROBE_PATH", fixture.ffprobe().toString())));
     return process;
+  }
+
+  // A landlock-exec on PATH that answers --abi as the report says and otherwise runs the tool as
+  // it is, so the scripted tools run on any operating system.
+  private Path landlockExecReporting(String abiReport) throws Exception {
+    var helper = tempDir.resolve("landlock-exec");
+    Files.writeString(
+        helper,
+        """
+        #!/bin/sh
+        if [ "$1" = --abi ]; then
+          %s
+          exit $?
+        fi
+        while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done
+        shift
+        exec "$@"
+        """
+            .formatted(abiReport));
+    Files.setPosixFilePermissions(helper, PosixFilePermissions.fromString("rwx------"));
+    return helper;
   }
 
   private WorkerApplicationProcess start(ProcessBuilder processBuilder) throws IOException {

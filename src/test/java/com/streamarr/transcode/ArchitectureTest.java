@@ -43,6 +43,8 @@ class ArchitectureTest {
         .doNotHaveSimpleName("WorkerActuatorConfiguration")
         .and()
         .doNotHaveSimpleName("SessionAcceptanceTimeoutFailureAnalyzer")
+        .and()
+        .doNotHaveSimpleName("LandlockUnavailableFailureAnalyzer")
         .should()
         .dependOnClassesThat()
         .resideInAPackage("org.springframework..")

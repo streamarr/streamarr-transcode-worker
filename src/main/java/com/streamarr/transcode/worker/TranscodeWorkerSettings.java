@@ -15,6 +15,7 @@ record TranscodeWorkerSettings(
     int controlPlanePort,
     String ffmpegPath,
     String ffprobePath,
+    String landlockExecPath,
     Duration fragmentationTarget,
     Duration encoderStallTimeout,
     TranscodeWorkerConfiguration workerConfiguration) {
@@ -73,6 +74,7 @@ record TranscodeWorkerSettings(
         .controlPlanePort(port(environment, PREFIX + "CONTROL_PLANE_PORT", 9090))
         .ffmpegPath(optional(environment, PREFIX + "FFMPEG_PATH", "ffmpeg"))
         .ffprobePath(optional(environment, PREFIX + "FFPROBE_PATH", "ffprobe"))
+        .landlockExecPath(optional(environment, PREFIX + "LANDLOCK_EXEC_PATH", "landlock-exec"))
         .fragmentationTarget(fragmentationTarget(environment, PREFIX + "FRAGMENTATION_TARGET"))
         .encoderStallTimeout(
             positiveDuration(

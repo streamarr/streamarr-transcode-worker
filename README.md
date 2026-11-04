@@ -34,6 +34,8 @@ To run Streamarr with a worker, see the server's [Distributed Transcoding](https
 
 To build and run the worker from source, see [Developer Setup](docs/dev-setup.md).
 
+The worker runs on Linux 5.13 or later with [Landlock](https://docs.kernel.org/userspace-api/landlock.html) among the enabled security modules, which `cat /sys/kernel/security/lsm` lists; most distribution kernels enable it, and a kernel built with Landlock but without it in that list needs `landlock` added to the `lsm=` boot parameter. Docker's default seccomp profile allows Landlock. Every FFmpeg and ffprobe the worker starts runs under a Landlock policy that lets it read the media roots and nothing else outside the runtime, so a soft link swapped into the media library after the worker's check leads to a file FFmpeg cannot open. A worker on a host without Landlock refuses to start and names the fix.
+
 ## Capacity
 
 Each worker grants the server a separate capacity for each kind of work, as [ADR 0032](https://github.com/streamarr/streamarr-adr/blob/main/adr/0032-media-file-probe-results-are-persisted.adoc#probe-capacity) decides. The server never sends work beyond a granted capacity.
@@ -57,7 +59,7 @@ Background probes, keyframe packet scans and bitrate scan chunks run at nice 19,
 
 ## Architecture
 
-The worker runs as a separate Java service. It connects to the server over gRPC, reads files from a shared media library, reads FFmpeg's fragmented MP4 output from a pipe, and uploads each HLS media segment back to the server. Workers can run alongside the server or on other machines.
+The worker runs as a separate Java service. It connects to the server over gRPC, reads files from a shared media library, reads FFmpeg's fragmented MP4 output from a pipe, and uploads each HLS media segment back to the server. Workers can run alongside the server or on other machines. FFmpeg and ffprobe run through `landlock-exec`, a static helper the [Landlock buildpack](buildpacks/landlock/README.md) compiles into the image, which confines each tool and whatever it starts to the media roots, the runtime's own files, the worker's temporary directory and the GPU device nodes, and denies every TCP connection.
 
 The server owns the worker protocol; this repository consumes its published Java SDK. See the [Architecture Decision Records](https://github.com/streamarr/streamarr-adr) for the design rationale.
 

@@ -114,8 +114,12 @@ jobs:
           java-version: '25'
           cache: maven
       - uses: ./.github/actions/setup-ffmpeg
+      - name: Build the Landlock helper
+        run: |
+          buildpacks/landlock/bin/compile "${RUNNER_TEMP}/landlock/landlock-exec"
+          echo "${RUNNER_TEMP}/landlock" >>"${GITHUB_PATH}"
       - name: Exercise the worker with real media processes
-        run: ./mvnw -B test -Dtest=WorkerMediaSmokeTest,WorkerBitrateScanSmokeTest,DownmixLimiterSmokeTest,BitstreamRewriteSmokeTest,HdrCopySmokeTest -Dsurefire.excludedGroups=
+        run: ./mvnw -B test -Dtest=WorkerMediaSmokeTest,WorkerBitrateScanSmokeTest,DownmixLimiterSmokeTest,BitstreamRewriteSmokeTest,HdrCopySmokeTest,WorkerLandlockSmokeTest -Dsurefire.excludedGroups=
 
   image:
     name: Verify ${{ matrix.architecture }} worker image

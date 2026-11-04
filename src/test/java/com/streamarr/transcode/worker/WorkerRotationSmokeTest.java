@@ -23,7 +23,6 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
-import java.util.function.UnaryOperator;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Timeout;
@@ -55,8 +54,8 @@ class WorkerRotationSmokeTest {
             .runtime(runtime)
             .ffprobe(
                 FfprobeExecutor.forBinaries(
-                    Path.of("ffprobe"), Path.of("ffmpeg"), UnaryOperator.identity()))
-            .engine(engine(new ProcessBuilderLauncher(UnaryOperator.identity())))
+                    Path.of("ffprobe"), Path.of("ffmpeg"), HostConfinement.forMedia()))
+            .engine(engine(new ProcessBuilderLauncher(HostConfinement.forMedia())))
             .build()) {
       worker.start("localhost", 1);
       var connection = runtime.connection();

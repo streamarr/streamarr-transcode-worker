@@ -40,6 +40,15 @@ Replace the media path with your own directory. The server and worker must use t
 
 FFmpeg and ffprobe must be on `PATH`, or configured with the executable paths below. The worker checks both before connecting to the server. Keep source media read-only: the worker writes no media files, because it reads FFmpeg's output from a pipe.
 
+The worker runs only on Linux 5.13 or later with Landlock enabled, and runs every FFmpeg and ffprobe through `landlock-exec`, the helper the [Landlock buildpack](../buildpacks/landlock/README.md) compiles into the image. Outside the image, compile it once with a C compiler and put it on `PATH` or name it in `TRANSCODE_WORKER_LANDLOCK_EXEC_PATH`:
+
+```sh
+buildpacks/landlock/bin/compile target/landlock/landlock-exec
+export PATH="$PWD/target/landlock:$PATH"
+```
+
+The worker checks the kernel's Landlock ABI through `landlock-exec --abi` before its FFmpeg checks and refuses to start on a host without Landlock, naming what to change: a newer kernel, `landlock` in the `lsm=` boot parameter (`cat /sys/kernel/security/lsm` lists the enabled modules), or a seccomp profile that allows the three `landlock_*` system calls, as Docker's default profile does. Development on macOS runs the tests, not the worker.
+
 ### Configuration
 
 Settings are read from the environment at startup. The three variables in the example above are required; these settings are optional:
@@ -52,6 +61,7 @@ Settings are read from the environment at startup. The three variables in the ex
 | `TRANSCODE_WORKER_PROBE_CAPACITY` | unset: adaptive | Fixes the background probe capacity at this positive integer and turns its adaptation off. Unset, the worker adapts the capacity from 1 to the cores available to the JVM, which follow container CPU limits and `-XX:ActiveProcessorCount`. The playback probe capacity stays 2, and keyframe packet scans keep their own capacity. A probe that arrives while its capacity has no free unit fails with `PROBE_FAILURE_NO_FREE_CAPACITY` before ffprobe starts, and the server keeps it queued |
 | `TRANSCODE_WORKER_FFMPEG_PATH` | `ffmpeg` | FFmpeg executable |
 | `TRANSCODE_WORKER_FFPROBE_PATH` | `ffprobe` | ffprobe executable |
+| `TRANSCODE_WORKER_LANDLOCK_EXEC_PATH` | `landlock-exec` | The `landlock-exec` helper that runs FFmpeg and ffprobe under Landlock. The image carries it on `PATH` |
 | `TRANSCODE_WORKER_FRAGMENTATION_TARGET` | `250ms` | Fragmentation target: the media duration after which FFmpeg starts a new fragment at the next packet: a whole number with a unit from `ns` to `h`, such as `1s` or `500ms`. Keep it well below the segment period. A shorter target lets the worker close a segment sooner after its boundary |
 | `TRANSCODE_WORKER_ENCODER_STALL_TIMEOUT` | `30s` | How long FFmpeg may write nothing to its output while the worker reads it. The worker then fails the job attempt and asks FFmpeg to terminate, destroying it once the grace period a stop allows has passed, because a hung FFmpeg can ignore the request. Time spent waiting for the server does not count. Keep it above the time FFmpeg needs to write its first fragment. A positive duration in the same format |
 | `TRANSCODE_WORKER_UPLOAD_READINESS_TIMEOUT` | `30s` | How long a segment upload waits for the server to accept its next message before the job attempt fails. A positive duration in the same format |
@@ -96,11 +106,13 @@ Use the server's [Distributed Transcoding](https://github.com/streamarr/streamar
 ./mvnw verify
 ```
 
-Smoke tests use real FFmpeg and ffprobe to exercise probing, corrupt-media handling, remuxing, transcoding, and segment uploads through the pipe, including runs of more than a thousand segments through libx264, libx265 and libsvtav1. With both executables on `PATH`, run:
+Smoke tests use real FFmpeg and ffprobe to exercise probing, corrupt-media handling, remuxing, transcoding, and segment uploads through the pipe, including runs of more than a thousand segments through libx264, libx265 and libsvtav1. On Linux they run both tools under the worker's Landlock policy, as the worker does, and `WorkerLandlockSmokeTest` proves that a soft link swapped into the media root after the worker's check leads to a file neither tool can open. With both executables and `landlock-exec` on `PATH`, run:
 
 ```sh
-./mvnw test -Dtest=WorkerMediaSmokeTest -Dsurefire.excludedGroups=
+./mvnw test -Dtest=WorkerMediaSmokeTest,WorkerBitrateScanSmokeTest,WorkerLandlockSmokeTest -Dsurefire.excludedGroups=
 ```
+
+`node --test buildpacks/landlock/test/*.test.mjs` compiles `landlock-exec` and proves what it allows and denies.
 
 Smoke and image tests are excluded from normal builds. See [Image Validation](image-validation.md) to build and test the container with Docker and `pack`. CI runs media tests with the [locked FFmpeg runtime](../buildpacks/ffmpeg/README.md).
 

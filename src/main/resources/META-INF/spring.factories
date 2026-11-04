@@ -1,2 +1,3 @@
 org.springframework.boot.diagnostics.FailureAnalyzer=\
-com.streamarr.transcode.worker.SessionAcceptanceTimeoutFailureAnalyzer
+com.streamarr.transcode.worker.SessionAcceptanceTimeoutFailureAnalyzer,\
+com.streamarr.transcode.worker.LandlockUnavailableFailureAnalyzer

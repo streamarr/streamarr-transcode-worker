@@ -111,7 +111,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
-import java.util.function.UnaryOperator;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -1885,7 +1884,7 @@ class WorkerMediaSmokeTest {
             engine(
                 softwareCapabilities(),
                 capturingCommands(
-                    withX264ThreadsOfOne(new ProcessBuilderLauncher(UnaryOperator.identity())),
+                    withX264ThreadsOfOne(new ProcessBuilderLauncher(HostConfinement.forMedia())),
                     aheadCommands)),
             rpusAhead.getParent(),
             profile5Job(rpusAhead, layout.placement(), startSequenceNumber).build());
@@ -1894,7 +1893,7 @@ class WorkerMediaSmokeTest {
             engine(
                 softwareCapabilities(),
                 capturingCommands(
-                    withX264ThreadsOfOne(new ProcessBuilderLauncher(UnaryOperator.identity())),
+                    withX264ThreadsOfOne(new ProcessBuilderLauncher(HostConfinement.forMedia())),
                     behindCommands)),
             rpusBehind.getParent(),
             profile5Job(
@@ -2225,7 +2224,7 @@ class WorkerMediaSmokeTest {
         execute(
             engine(
                 softwareCapabilities(),
-                withX264ThreadsOfOne(new ProcessBuilderLauncher(UnaryOperator.identity()))),
+                withX264ThreadsOfOne(new ProcessBuilderLauncher(HostConfinement.forMedia()))),
             source.getParent(),
             job.build());
     withProfile5Source(job, DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE);
@@ -2237,7 +2236,7 @@ class WorkerMediaSmokeTest {
             engine(
                 softwareCapabilities(),
                 capturingCommands(
-                    withX264ThreadsOfOne(new ProcessBuilderLauncher(UnaryOperator.identity())),
+                    withX264ThreadsOfOne(new ProcessBuilderLauncher(HostConfinement.forMedia())),
                     commands)),
             source.getParent(),
             job.build());
@@ -3140,7 +3139,7 @@ class WorkerMediaSmokeTest {
         .setTargetSegmentDurationSeconds(1)
         .setOutputFrameRate(Fraction.newBuilder().setNumerator(24_000).setDenominator(1001))
         .setMediaSegmentCount(LONG_SOURCE_SECONDS);
-    ProcessLauncher launcher = new ProcessBuilderLauncher(UnaryOperator.identity());
+    ProcessLauncher launcher = new ProcessBuilderLauncher(HostConfinement.forMedia());
     if (codecFamily.equals("av1")) {
       launcher = withSvtAv1ParallelismOfOne(launcher);
     }
@@ -3214,7 +3213,7 @@ class WorkerMediaSmokeTest {
     var source = seekableSource("mkv");
     var job = presetJob(source, "av1");
     var commands = new CopyOnWriteArrayList<List<String>>();
-    ProcessLauncher launcher = new ProcessBuilderLauncher(UnaryOperator.identity());
+    ProcessLauncher launcher = new ProcessBuilderLauncher(HostConfinement.forMedia());
     launcher = withSvtAv1ParallelismOfOne(capturingCommands(launcher, commands));
 
     var uploads =
@@ -3488,7 +3487,8 @@ class WorkerMediaSmokeTest {
     var source = oneFramePerSecondSource();
     var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_REMUX);
     job.getExecutionBuilder().setMediaSegmentCount(ONE_FRAME_PER_SECOND_SEGMENT_COUNT);
-    var launcher = new TeeingProcessLauncher(new ProcessBuilderLauncher(UnaryOperator.identity()));
+    var launcher =
+        new TeeingProcessLauncher(new ProcessBuilderLauncher(HostConfinement.forMedia()));
 
     var uploads =
         execute(engine(softwareCapabilities(), launcher), source.getParent(), job.build());
@@ -3515,7 +3515,8 @@ class WorkerMediaSmokeTest {
     var fromStart = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
     var replacement = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
     replacement.getExecutionBuilder().setStartSequenceNumber(REPLACEMENT_START_SEQUENCE_NUMBER);
-    var launcher = new TeeingProcessLauncher(new ProcessBuilderLauncher(UnaryOperator.identity()));
+    var launcher =
+        new TeeingProcessLauncher(new ProcessBuilderLauncher(HostConfinement.forMedia()));
 
     var fromStartUploads =
         execute(engine(softwareCapabilities(), launcher), source.getParent(), fromStart.build());
@@ -4036,7 +4037,8 @@ class WorkerMediaSmokeTest {
           + " audio ends long before the video")
   void shouldUploadAMediaSegmentAfterTheAudiosEndWhileFfmpegsOutputContinues() throws Exception {
     var source = audioEndsLongBeforeVideoSource();
-    var launcher = new TeeingProcessLauncher(new ProcessBuilderLauncher(UnaryOperator.identity()));
+    var launcher =
+        new TeeingProcessLauncher(new ProcessBuilderLauncher(HostConfinement.forMedia()));
     var unwithheld = audioEndsLongBeforeVideoJob(source);
     var unwithheldUploads =
         execute(engine(softwareCapabilities(), launcher), source.getParent(), unwithheld.build());
@@ -4078,7 +4080,8 @@ class WorkerMediaSmokeTest {
   void shouldUploadEveryMediaSegmentWithoutTheAudioEncodersLastFramesWhenTheAudioEndsLongBeforeIt()
       throws Exception {
     var source = audioEndsLongBeforeVideoSource();
-    var launcher = new TeeingProcessLauncher(new ProcessBuilderLauncher(UnaryOperator.identity()));
+    var launcher =
+        new TeeingProcessLauncher(new ProcessBuilderLauncher(HostConfinement.forMedia()));
     var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
     job.getExecutionBuilder().setMediaSegmentCount(AUDIO_ENDS_LONG_BEFORE_VIDEO_SEGMENT_COUNT);
 
@@ -4111,7 +4114,8 @@ class WorkerMediaSmokeTest {
   void shouldUploadOnlyTheAudioOfItsOwnIntervalWhenAStreamCopyStartsWhereTheVideoEnds()
       throws Exception {
     var source = videoEndsBeforeAudioSource();
-    var launcher = new TeeingProcessLauncher(new ProcessBuilderLauncher(UnaryOperator.identity()));
+    var launcher =
+        new TeeingProcessLauncher(new ProcessBuilderLauncher(HostConfinement.forMedia()));
     var job = videoEndsBeforeAudioJob(source, TranscodeMode.TRANSCODE_MODE_REMUX);
     job.getExecutionBuilder().setStartSequenceNumber(VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT);
 
@@ -4146,7 +4150,8 @@ class WorkerMediaSmokeTest {
   void shouldUploadTheSegmentThatHoldsTheVideosEndWithOnlyItsOwnAudioWhenAnEncodeReadsTheTail()
       throws Exception {
     var source = videoEndsBeforeAudioSource();
-    var launcher = new TeeingProcessLauncher(new ProcessBuilderLauncher(UnaryOperator.identity()));
+    var launcher =
+        new TeeingProcessLauncher(new ProcessBuilderLauncher(HostConfinement.forMedia()));
     var job = videoEndsBeforeAudioJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
 
     var uploads =
@@ -4214,7 +4219,8 @@ class WorkerMediaSmokeTest {
     var source = seekableSource(container);
     var job = seekableSourceJob(source, mode);
     job.getExecutionBuilder().setStartSequenceNumber(startSequenceNumber);
-    var launcher = new TeeingProcessLauncher(new ProcessBuilderLauncher(UnaryOperator.identity()));
+    var launcher =
+        new TeeingProcessLauncher(new ProcessBuilderLauncher(HostConfinement.forMedia()));
 
     var uploads =
         execute(engine(softwareCapabilities(), launcher), source.getParent(), job.build());
@@ -4761,7 +4767,7 @@ class WorkerMediaSmokeTest {
   }
 
   private static FfmpegTranscodeEngine engine(TranscodeCapabilityService capabilities) {
-    return engine(capabilities, new ProcessBuilderLauncher(UnaryOperator.identity()));
+    return engine(capabilities, new ProcessBuilderLauncher(HostConfinement.forMedia()));
   }
 
   private static FfmpegTranscodeEngine engine(
@@ -5005,7 +5011,7 @@ class WorkerMediaSmokeTest {
 
   private static FfprobeExecutor probeExecutor() {
     return FfprobeExecutor.forBinaries(
-        Path.of("ffprobe"), Path.of("ffmpeg"), UnaryOperator.identity());
+        Path.of("ffprobe"), Path.of("ffmpeg"), HostConfinement.forMedia());
   }
 
   private static ProbeRequest packetScanRequest() {
@@ -5141,9 +5147,12 @@ class WorkerMediaSmokeTest {
         runFfmpeg(List.of("-ss", "1", "-i", basePath, "-c", "copy"), output);
         yield output;
       }
+      // The tools reach only the media roots, so a recorded fixture is read from one.
       default -> {
         assertThat(resource).as("fixture %s", fixture).isNotNull();
-        yield Path.of(resource.toURI());
+        var output = root.resolve(fixture);
+        Files.copy(Path.of(resource.toURI()), output, StandardCopyOption.REPLACE_EXISTING);
+        yield output;
       }
     };
   }
