@@ -2,6 +2,7 @@ package com.streamarr.transcode.engine;
 
 import com.streamarr.transcode.engine.AttemptOutcome.Failed;
 import com.streamarr.transcode.engine.FfmpegProcess.ProcessStarter;
+import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -24,8 +25,8 @@ import lombok.extern.slf4j.Slf4j;
  * FFmpeg writes the attempt's output and the framecrc of the source's streams. It reads the
  * source's audio up to the source's end whatever happens to the copy, so a stop, a copy that the
  * mover refuses or that ends inside a unit, a copying FFmpeg that exits with an error after a copy
- * of whole units, and a transfer that fails unexpectedly terminate it. A stop also asks the copying
- * FFmpeg to quit; termination and destruction end both.
+ * of whole units, a failed read of the copy and a transfer that fails unexpectedly terminate it. A
+ * stop also asks the copying FFmpeg to quit; termination and destruction end both.
  */
 @Slf4j
 final class PipedFfmpegProcesses implements FfmpegProcess {
@@ -38,6 +39,8 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
   private final StderrDrainer encodeErrorOutput;
   private final VideoTimingChannel videoTimings;
   private final Duration gracePeriod;
+  private final AtomicReference<Optional<IOException>> failedReadOfTheCopy =
+      new AtomicReference<>(Optional.empty());
   private final AtomicReference<Optional<IOException>> transferFailure =
       new AtomicReference<>(Optional.empty());
   private final AtomicReference<Optional<FragmentedMp4Exception>> refusedCopy =
@@ -108,16 +111,17 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
   // finish. Once the encoding FFmpeg stops reading, or the mover refuses the copy, the copying
   // FFmpeg could only block on a full pipe, so it is asked to terminate. A failure is recorded
   // before the encoding FFmpeg's input ends, so that its exit never settles the attempt first. A
-  // refusal, a copy that ends inside a unit included, also terminates the encoding FFmpeg, whose
-  // exit then decides nothing.
+  // refusal, a copy that ends inside a unit included, and a failed read of the copy also terminate
+  // the encoding FFmpeg, whose exit then decides nothing. A failed write means that the encoding
+  // FFmpeg closed its input, so its own exit decides.
   private void transferCopy() {
     var encoded = encode.getOutputStream();
-    try (InputStream copied = copy.getInputStream()) {
+    var copied = new CopyReading(copy.getInputStream());
+    try (copied) {
       FragmentedMp4RpuMover.copy(copied, videoTimings, encoded);
       endTheEncodingFfmpegIfTheCopyingFfmpegFails();
     } catch (IOException e) {
-      transferFailure.set(Optional.of(e));
-      copy.destroy();
+      failTransfer(e, copied.hasFailed());
     } catch (FragmentedMp4Exception e) {
       refusedCopy.set(Optional.of(e));
       copy.destroy();
@@ -125,6 +129,17 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
     }
 
     endInput(encoded);
+  }
+
+  private void failTransfer(IOException failure, boolean readingTheCopyFailed) {
+    copy.destroy();
+    if (!readingTheCopyFailed) {
+      transferFailure.set(Optional.of(failure));
+      return;
+    }
+
+    failedReadOfTheCopy.set(Optional.of(failure));
+    encode.toHandle().destroy();
   }
 
   // A copy of whole units says nothing of how the copying FFmpeg exits, and the encoding FFmpeg
@@ -239,11 +254,12 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
   /**
    * The copy's failures that end the encoding FFmpeg decide first, because that FFmpeg's exit then
    * only follows its termination: a transfer that failed unexpectedly, a copy that the mover
-   * refused, then a copying FFmpeg that exited with an error after a copy of whole units. The
-   * copying FFmpeg's error explains a copy that ended inside a unit, so it decides before that end.
-   * The encoding FFmpeg's exit decides next, as a single FFmpeg's would. A copy that did not reach
-   * the encoding FFmpeg whole, or a copying FFmpeg that exited with an error, fails an attempt
-   * whose encoding FFmpeg exited cleanly, since its output then lacks the rest of the source.
+   * refused, a failed read of the copy, then a copying FFmpeg that exited with an error after a
+   * copy of whole units. The copying FFmpeg's error explains a copy that ended inside a unit, so it
+   * decides before that end. The encoding FFmpeg's exit decides next, as a single FFmpeg's would. A
+   * copy that did not reach the encoding FFmpeg whole, or a copying FFmpeg that exited with an
+   * error, fails an attempt whose encoding FFmpeg exited cleanly, since its output then lacks the
+   * rest of the source.
    */
   @Override
   public AttemptOutcome outcomeAtExit(AttemptOutcome outcomeOnCleanExit) {
@@ -260,6 +276,7 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
         .get()
         .map(failure -> new Failed(ProducerFailure.UNEXPECTED_ERROR, failure.toString()))
         .or(() -> refusedCopy.get().map(this::failureOfTheRefusedCopy))
+        .or(() -> failedReadOfTheCopy.get().map(PipedFfmpegProcesses::unreadableCopy))
         .or(this::failureOfTheCopyingFfmpegAfterAWholeCopy);
   }
 
@@ -293,12 +310,14 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
   private Optional<Failed> failureOfTheCopyAfterACleanEncode() {
     return transferFailure
         .get()
-        .map(
-            failure ->
-                new Failed(
-                    ProducerFailure.OUTPUT_UNREADABLE,
-                    "The copy of the source did not reach the FFmpeg that encodes it: " + failure))
+        .map(PipedFfmpegProcesses::unreadableCopy)
         .or(this::failureOfTheCopyingFfmpeg);
+  }
+
+  private static Failed unreadableCopy(IOException failure) {
+    return new Failed(
+        ProducerFailure.OUTPUT_UNREADABLE,
+        "The copy of the source did not reach the FFmpeg that encodes it: " + failure);
   }
 
   private Optional<Failed> failureOfTheCopyingFfmpeg() {
@@ -350,5 +369,40 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
     copyErrorOutput.close();
     encodeErrorOutput.close();
     videoTimings.close();
+  }
+
+  // A failed read comes from the copying FFmpeg's side of the transfer, and a failed write from the
+  // encoding FFmpeg's, so the transfer tells them apart.
+  private static final class CopyReading extends FilterInputStream {
+
+    private volatile boolean failed;
+
+    private CopyReading(InputStream copy) {
+      super(copy);
+    }
+
+    boolean hasFailed() {
+      return failed;
+    }
+
+    @Override
+    public int read() throws IOException {
+      try {
+        return super.read();
+      } catch (IOException e) {
+        failed = true;
+        throw e;
+      }
+    }
+
+    @Override
+    public int read(byte[] buffer, int offset, int length) throws IOException {
+      try {
+        return super.read(buffer, offset, length);
+      } catch (IOException e) {
+        failed = true;
+        throw e;
+      }
+    }
   }
 }

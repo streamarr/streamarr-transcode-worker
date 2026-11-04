@@ -647,17 +647,17 @@ class ProducerRpuMovingPipeTest {
 
   @Test
   @DisplayName(
-      "Should fail the attempt as unreadable output when reading the copy fails and the encoding"
-          + " FFmpeg exits cleanly")
+      "Should fail the attempt as unreadable output, and terminate the encoding FFmpeg, when reading"
+          + " the copy fails")
   void
-      shouldFailTheAttemptAsUnreadableOutputWhenReadingTheCopyFailsAndTheEncodingFfmpegExitsCleanly() {
+      shouldFailTheAttemptAsUnreadableOutputAndTerminateTheEncodingFfmpegWhenReadingTheCopyFails() {
     var copy =
         ScriptedProcess.builder()
             .output(COPIED_SOURCE)
             .failReadAfter(initializationSegment().length)
             .exitTiming(ExitTiming.WHEN_TEST_EXITS)
             .build();
-    var encode = encodingFfmpeg().build();
+    var encode = encodingFfmpegReadingTheSourcesAudioUntilTerminated();
 
     var producer = producerOf(copy, encode).start();
 
@@ -666,6 +666,7 @@ class ProducerRpuMovingPipeTest {
     assertThat(failure.detail())
         .contains("did not reach the FFmpeg that encodes it", "scripted read failure");
     assertThat(encode.hasInputEnded()).isTrue();
+    assertThat(encode.wasTerminated()).isTrue();
   }
 
   // A stop terminates the encoding FFmpeg, and a transfer that then meets its closed pipe
