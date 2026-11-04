@@ -633,7 +633,8 @@ class ProducerRpuMovingPipeTest {
             .exitCode(1)
             .stderr("Error reading the source: Input/output error\n")
             .build();
-    var encode = encodingFfmpeg().exitCode(1).stderr("Conversion failed!\n").build();
+    var encode =
+        encodingFfmpeg().output(new byte[0]).exitCode(1).stderr("Conversion failed!\n").build();
 
     var producer = producerOf(copy, encode).start();
 
