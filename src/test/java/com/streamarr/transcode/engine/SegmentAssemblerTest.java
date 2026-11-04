@@ -63,7 +63,7 @@ class SegmentAssemblerTest {
             .build();
     var assembler =
         SegmentAssembler.builder()
-            .periodSeconds(1)
+            .intervals(SegmentIntervals.onPlainGrid(1))
             .startSequenceNumber(0)
             .maximumSegmentBytes(written.length)
             .encodedFrameRate(Optional.empty())
