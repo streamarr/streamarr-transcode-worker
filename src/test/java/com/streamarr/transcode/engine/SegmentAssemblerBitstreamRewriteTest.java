@@ -115,6 +115,34 @@ class SegmentAssemblerBitstreamRewriteTest {
     assertThat(delivered.video()).containsExactly(hex(keyframe));
   }
 
+  @Test
+  @DisplayName(
+      "Should deliver every sample of a fragment whose first video sample keeps its bytes when the"
+          + " copy rewrites a later one")
+  void shouldDeliverEverySampleOfAFragmentWhoseFirstVideoSampleKeepsItsBytes() throws IOException {
+    var kept = sample(aud(), slice(0));
+    var rewritten =
+        sample(aud(), seiOf(HDR10_PLUS_MESSAGE + UNREGISTERED_MESSAGE_ESCAPED), slice(1));
+    var last = sample(aud(), slice(2));
+    var fragment =
+        fragmentBuilder()
+            .startsWithKeyframe(true)
+            .video(0, kept, rewritten, last)
+            .audio(0, AUDIO_SAMPLE, new byte[] {0x21, 0x11})
+            .build();
+
+    var delivered =
+        deliveredSamples(
+            copyOf(HEVC_CODEC_STRING, BitstreamRewrite.STRIP_HDR10_PLUS), HEVC_SEGMENT, fragment);
+
+    assertThat(delivered.video())
+        .containsExactly(
+            hex(kept),
+            hex(sample(aud(), seiOf(UNREGISTERED_MESSAGE_ESCAPED), slice(1))),
+            hex(last));
+    assertThat(delivered.audio()).containsExactly(hex(AUDIO_SAMPLE), "2111");
+  }
+
   @ParameterizedTest(name = "{0}")
   @MethodSource("seiNalUnitsAndWhatAnHdr10PlusStripKeeps")
   @DisplayName(

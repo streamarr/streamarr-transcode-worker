@@ -1,22 +1,22 @@
 package com.streamarr.transcode.engine;
 
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
-import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
-import java.util.stream.IntStream;
 
 /**
  * Applies the sample rewrites that a copy lists to the video samples of each fragment. Each rewrite
  * reads every NAL unit or OBU of every video sample and refuses a sample that it cannot read, so no
  * stripped content passes inside one. A fragment whose video samples keep their bytes passes
- * unchanged. Any other fragment gets a new {@code mdat} that holds every sample of its tracks back
- * to back, in their order in the old one, and samples that point into it; its other boxes stay as
- * read, because a media segment writes its own {@code moof}.
+ * unchanged. In any other fragment, the samples from the first rewritten one on move down inside
+ * the fragment's own {@code mdat} array, back to back in their old order, and get new positions and
+ * sizes. The array keeps its length and its header, which nothing reads again: a media segment
+ * writes its own {@code moof} and {@code mdat} from the samples. A rewrite therefore holds no more
+ * memory than one rewritten sample beside the fragment that the producer already admitted.
  */
 final class VideoSampleRewrite {
 
@@ -81,23 +81,44 @@ final class VideoSampleRewrite {
    * The fragment with its video samples rewritten.
    *
    * @throws FragmentedMp4Exception with {@link Reason#MALFORMED_BOX} when a video sample cannot be
-   *     read
+   *     read, or two samples share bytes of the {@code mdat}
    */
   Fragment rewrite(Fragment fragment) {
-    var original =
-        fragment.videoSamples().stream().map(sample -> bytesOf(fragment, sample)).toList();
-    var rewritten = original.stream().map(sampleRewrite::rewrite).toList();
-    var changed =
-        IntStream.range(0, rewritten.size())
-            .anyMatch(index -> rewritten.get(index) != original.get(index));
-    if (!changed) {
+    var mdat = fragment.mediaDataBox();
+    var video = new ArrayList<>(fragment.videoSamples());
+    var audio = new ArrayList<>(fragment.audioSamples());
+    var write = -1;
+    for (var each : inMediaDataOrder(fragment)) {
+      var original = bytesOf(mdat, each.sample());
+      var bytes = each.video() ? sampleRewrite.rewrite(original) : original;
+      if (write < 0 && bytes == original) {
+        continue;
+      }
+
+      if (write < 0) {
+        write = each.sample().mediaDataPosition();
+      }
+
+      requireRoomAt(write, each.sample(), bytes);
+      copy(bytes, mdat, write);
+      var moved = withPlacement(each.sample(), write, bytes.remaining());
+      (each.video() ? video : audio).set(each.index(), moved);
+      write += bytes.remaining();
+    }
+
+    if (write < 0) {
       return fragment;
     }
 
-    return rebuilt(fragment, rewritten);
+    return Fragment.builder()
+        .boxes(fragment.boxes())
+        .tracks(fragment.tracks())
+        .videoSamples(video)
+        .audioSamples(audio)
+        .build();
   }
 
-  private static Fragment rebuilt(Fragment fragment, List<ByteBuffer> rewrittenVideo) {
+  private static List<Placed> inMediaDataOrder(Fragment fragment) {
     var placed = new ArrayList<Placed>();
     for (var index = 0; index < fragment.videoSamples().size(); index++) {
       placed.add(new Placed(true, index, fragment.videoSamples().get(index)));
@@ -108,29 +129,26 @@ final class VideoSampleRewrite {
     }
 
     placed.sort(Comparator.comparingInt(each -> each.sample().mediaDataPosition()));
-    var mdat = fragment.mediaDataBox();
-    var headerLength = BoxHeader.read(new BoxFields("mdat", ByteBuffer.wrap(mdat))).length();
-    var body = new ByteArrayOutputStream(mdat.length);
-    var video = new ArrayList<>(fragment.videoSamples());
-    var audio = new ArrayList<>(fragment.audioSamples());
-    for (var each : placed) {
-      var bytes =
-          each.video()
-              ? rewrittenVideo.get(each.index())
-              : bytesOf(mdat, each.sample()).duplicate();
-      var moved = withPlacement(each.sample(), headerLength + body.size(), bytes.remaining());
-      body.write(bytes.array(), bytes.arrayOffset() + bytes.position(), bytes.remaining());
-      (each.video() ? video : audio).set(each.index(), moved);
-    }
+    return placed;
+  }
 
-    var boxes = new ArrayList<>(fragment.boxes());
-    boxes.set(boxes.size() - 1, mdatOf(mdat, headerLength, body.toByteArray()));
-    return Fragment.builder()
-        .boxes(boxes)
-        .tracks(fragment.tracks())
-        .videoSamples(video)
-        .audioSamples(audio)
-        .build();
+  // Each sample moves down to where the samples before it end, which is never past where it starts:
+  // every rewrite only removes bytes, and FFmpeg writes no two samples over the same bytes.
+  private static void requireRoomAt(int write, Sample sample, ByteBuffer bytes) {
+    if (write > sample.mediaDataPosition() || bytes.remaining() > sample.size()) {
+      throw FragmentedMp4Exception.malformed(
+          "a rewritten sample at mdat position "
+              + sample.mediaDataPosition()
+              + " cannot move to position "
+              + write);
+    }
+  }
+
+  // System.arraycopy copies as if through a temporary array, so a sample may move onto bytes that
+  // it overlaps.
+  private static void copy(ByteBuffer bytes, byte[] mdat, int position) {
+    System.arraycopy(
+        bytes.array(), bytes.arrayOffset() + bytes.position(), mdat, position, bytes.remaining());
   }
 
   private static Sample withPlacement(Sample sample, int mediaDataPosition, int size) {
@@ -142,17 +160,6 @@ final class VideoSampleRewrite {
         .flags(sample.flags())
         .mediaDataPosition(mediaDataPosition)
         .build();
-  }
-
-  // The old mdat's header, with its 32-bit or 64-bit size changed to fit the new body.
-  private static byte[] mdatOf(byte[] old, int headerLength, byte[] body) {
-    var box = ByteBuffer.allocate(headerLength + body.length);
-    box.put(old, 0, headerLength).put(body);
-    if (headerLength == BoxHeader.LARGE_LENGTH) {
-      return box.putLong(BoxHeader.COMPACT_LENGTH, box.capacity()).array();
-    }
-
-    return box.putInt(0, box.capacity()).array();
   }
 
   private static ByteBuffer bytesOf(Fragment fragment, Sample sample) {
