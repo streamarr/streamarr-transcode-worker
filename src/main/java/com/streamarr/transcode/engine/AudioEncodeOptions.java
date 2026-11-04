@@ -123,23 +123,36 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
       ChannelStage.Downmix downmix) {
     var output = audio.channelLayout().orElseThrow();
     var filters = new ArrayList<String>();
-    rate.ifPresent(target -> filters.add(resample(target)));
+    var downmixRate = limitedRate(encoder, source, rate);
+    downmixRate.ifPresent(target -> filters.add(resample(target)));
     var matrix = downmix.matrix(source.loRoLevels());
     var depth = writtenDepth(audio, source);
     var quantizesSummedChannels =
         encoder == Encoder.LOSSLESS
-            && rate.isEmpty()
+            && downmixRate.isEmpty()
             && !losesPrecision(source, depth)
             && DownmixFilter.onlySummedChannelsChange(matrix);
-    var writtenRate = rate.isPresent() ? OptionalInt.of(rate.orElseThrow()) : source.sampleRate();
+    var writtenRate =
+        downmixRate.isPresent() ? OptionalInt.of(downmixRate.orElseThrow()) : source.sampleRate();
     filters.add(
         DownmixFilter.of(
             output,
             matrix,
-            limiterFor(encoder, writtenRate, output),
+            limiterFor(encoder, writtenRate),
             quantizesSummedChannels ? Optional.of(quantizer(depth)) : Optional.empty()));
     filters.add(formatStage(encoder, audio, source, Optional.empty(), !quantizesSummedChannels));
     return filters;
+  }
+
+  // The limiter's copies need the rate that the downmix runs at. A lossy encode can choose that
+  // rate when the probe gave none.
+  private static Optional<Integer> limitedRate(
+      Encoder encoder, SourceAudio source, Optional<Integer> rate) {
+    if (rate.isPresent() || source.sampleRate().isPresent() || encoder == Encoder.LOSSLESS) {
+      return rate;
+    }
+
+    return Optional.of(LOSSY_SAMPLE_RATE);
   }
 
   // The summed channels leave floating point at the written depth with TPDF dither.
@@ -164,13 +177,12 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
   }
 
   // The true-peak limiter reads its copies at the rate that the downmix runs at.
-  private static DownmixLimiter limiterFor(
-      Encoder encoder, OptionalInt sampleRate, SpeakerLayout output) {
+  private static DownmixLimiter limiterFor(Encoder encoder, OptionalInt sampleRate) {
     if (encoder == Encoder.LOSSLESS) {
       return DownmixLimiter.forLossless(sampleRate);
     }
 
-    return DownmixLimiter.forLossy(output);
+    return DownmixLimiter.forLossy(sampleRate);
   }
 
   static String resample(int sampleRate) {

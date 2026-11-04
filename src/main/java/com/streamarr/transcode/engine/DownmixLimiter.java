@@ -9,10 +9,10 @@ import java.util.stream.IntStream;
 import lombok.NonNull;
 
 /**
- * The ceiling that ADR 0050's limiter keeps a downmix's summed channels below: −1 dBTP for FLAC and
- * ALAC, −3 dBFS for a lossy stereo or mono downmix, and −1 dBFS for a lossy downmix to more than
- * two channels. Each limiter uses 5 ms attack and 50 ms release settings, adds no make-up gain and
- * removes its own delay.
+ * The true-peak ceiling that ADR 0050's limiter keeps a downmix's summed channels below: −1 dBTP
+ * for FLAC and ALAC, and −3 dBTP for every lossy downmix, whose coding can raise the decoded peaks.
+ * Each limiter uses 5 ms attack and 50 ms release settings, adds no make-up gain and removes its
+ * own delay.
  */
 sealed interface DownmixLimiter {
 
@@ -22,7 +22,7 @@ sealed interface DownmixLimiter {
 
   /**
    * The filter chains whose labelled outputs the limiters of a downmix with this many limited
-   * groups read, or empty when a limiter reads nothing but its group.
+   * groups read.
    */
   Optional<String> sources(int groups);
 
@@ -32,31 +32,22 @@ sealed interface DownmixLimiter {
    */
   String limit(int group, int channels, String input, String output);
 
-  static DownmixLimiter forLossy(SpeakerLayout output) {
-    return new SamplePeak(output.channelCount() <= 2 ? MINUS_3_DBFS : MINUS_1_DBFS);
+  static DownmixLimiter forLossy(OptionalInt sampleRate) {
+    return new TruePeak(MINUS_3_DBFS, rateOf(sampleRate));
   }
 
   static DownmixLimiter forLossless(OptionalInt sampleRate) {
-    return new TruePeak(
-        MINUS_1_DBFS,
-        sampleRate.orElseThrow(
-            () -> new IllegalStateException("A true-peak limiter needs the source sample rate")));
+    return new TruePeak(MINUS_1_DBFS, rateOf(sampleRate));
+  }
+
+  // The copies' impulse responses run at the group's rate, which FFmpeg would otherwise resample.
+  private static int rateOf(OptionalInt sampleRate) {
+    return sampleRate.orElseThrow(
+        () -> new IllegalStateException("A true-peak limiter needs the source sample rate"));
   }
 
   private static String alimiter(String limit) {
     return "alimiter=limit=" + limit + LIMITER_TIMING;
-  }
-
-  record SamplePeak(@NonNull String limit) implements DownmixLimiter {
-    @Override
-    public Optional<String> sources(int groups) {
-      return Optional.empty();
-    }
-
-    @Override
-    public String limit(int group, int channels, String input, String output) {
-      return "[" + input + "]" + alimiter(limit) + "[" + output + "]";
-    }
   }
 
   /**

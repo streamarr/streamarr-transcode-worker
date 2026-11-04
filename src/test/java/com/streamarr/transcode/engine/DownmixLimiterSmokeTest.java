@@ -37,9 +37,9 @@ import org.junit.jupiter.params.provider.ValueSource;
 @Tag("SmokeTest")
 class DownmixLimiterSmokeTest {
 
-  private static final double CEILING = 0.891251;
   // The Annex 2 filter read every two-stage output in the research within 0.0013 dB of −1 dBTP.
-  private static final double WITHIN_A_HUNDREDTH_OF_THE_CEILING_DB = -0.99;
+  private static final double CEILING = 0.891251;
+  private static final double LOSSY_CEILING = 0.707946;
   // A float32 step at the ceiling, for the samples that leave the limiter through a float stage.
   private static final double FLOAT_STEP = 6e-8;
   private static final List<Integer> RATES = List.of(22_050, 44_100, 48_000, 96_000);
@@ -124,6 +124,50 @@ class DownmixLimiterSmokeTest {
     var output = limitLossless(source, job, sampleRate);
 
     assertHeldAtTheCeiling(output, source.length, job);
+  }
+
+  static Stream<Arguments> lossyCases() {
+    return Stream.of(44_100, 48_000)
+        .flatMap(
+            rate ->
+                Arrays.stream(Job.values())
+                    .flatMap(
+                        job ->
+                            Stream.of(Placement.MIDDLE, Placement.END)
+                                .map(placement -> Arguments.of(rate, job, placement))));
+  }
+
+  @ParameterizedTest(name = "{0} Hz, {1}, {2}")
+  @MethodSource("lossyCases")
+  @DisplayName(
+      "Should hold the bounded burst within a hundredth of a decibel of -3 dBTP when an AAC encode"
+          + " downmixes it")
+  void shouldHoldTheBoundedBurstWithinAHundredthOfADecibelOfMinus3DbtpWhenAnAacEncodeDownmixesIt(
+      int sampleRate, Job job, Placement placement) throws Exception {
+    var burst = new double[SEED_97_BURST.length][];
+    Arrays.setAll(burst, sample -> repeated(SEED_97_BURST[sample], FIVE_POINT_ONE_SUMMED.length));
+    var source = placed(burst, job, placement, sampleRate);
+    var audio =
+        AudioDecision.builder()
+            .mode(AudioMode.TRANSCODE)
+            .codec("aac")
+            .channels(job.output.channelCount())
+            .bitrate(384_000)
+            .channelLayout(Optional.of(job.output))
+            .build();
+    var sourceAudio =
+        SourceAudio.builder()
+            .codec("flac")
+            .channels(job.source.channelCount())
+            .channelLayout(Optional.of(job.source.name()))
+            .sampleRate(OptionalInt.of(sampleRate))
+            .build();
+    var options = AudioEncodeOptions.of(audio, sourceAudio).outputOptions();
+    var filter = options.get(options.indexOf("-af") + 1);
+
+    var output = run(source, job.source.name(), filter, sampleRate, job.output.channelCount());
+
+    assertHeldAt(output, source.length, job, LOSSY_CEILING);
   }
 
   static Stream<Arguments> searchedBurstCases() {
@@ -327,14 +371,21 @@ class DownmixLimiterSmokeTest {
   }
 
   private static void assertHeldAtTheCeiling(double[][] output, int frames, Job job) {
+    assertHeldAt(output, frames, job, CEILING);
+  }
+
+  // Every limited channel keeps its frames, reads within a hundredth of a decibel of the ceiling
+  // on the Annex 2 filter, and keeps its samples at or below the ceiling.
+  private static void assertHeldAt(double[][] output, int frames, Job job, double ceiling) {
+    var withinAHundredth = AnnexTwoMeter.decibels(ceiling) + 0.01;
     for (var channel : job.limited()) {
       assertThat(output[channel]).as("frames of channel %d", channel).hasSize(frames);
       assertThat(AnnexTwoMeter.truePeakDb(output[channel]))
           .as("Annex 2 reading of channel %d, dBTP", channel)
-          .isLessThanOrEqualTo(WITHIN_A_HUNDREDTH_OF_THE_CEILING_DB);
+          .isLessThanOrEqualTo(withinAHundredth);
       assertThat(peakOf(output[channel]))
           .as("sample peak of channel %d", channel)
-          .isLessThanOrEqualTo(CEILING + FLOAT_STEP);
+          .isLessThanOrEqualTo(ceiling + FLOAT_STEP);
     }
   }
 
