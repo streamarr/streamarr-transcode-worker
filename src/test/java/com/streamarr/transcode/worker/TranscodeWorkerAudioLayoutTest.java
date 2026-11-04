@@ -36,6 +36,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
+import lombok.Builder;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -126,6 +127,93 @@ class TranscodeWorkerAudioLayoutTest {
     assertThat(launcher.command(fromProto(job.getJobAttemptId()))).containsSubsequence("-ac", "2");
   }
 
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("readAudioStreams")
+  @DisplayName(
+      "Should encode from the depth, rate, profile and layout that ffprobe reads when the job names"
+          + " no rate or depth")
+  void shouldEncodeFromTheDepthRateProfileAndLayoutThatFfprobeReadsWhenTheJobNamesNoRateOrDepth(
+      ReadAudioStream read) throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = layoutJob(read.outputLayout(), read.outputChannels()).toBuilder();
+    job.getDecisionBuilder().getAudioBuilder().setCodec("flac");
+
+    var connection = start(launcher, ffprobeAnswering(read.ffprobeOutput()), job.build());
+
+    assertThat(eventsOf(connection))
+        .containsExactly(EstablishWorkerSessionRequest.EventCase.JOB_ATTEMPT_STARTED);
+    assertThat(launcher.command(fromProto(job.getJobAttemptId())))
+        .containsSubsequence("-af", read.audioFilter())
+        .containsSubsequence("-frame_size:a", read.flacFrameSize());
+  }
+
+  // ADR 0043: a 16-bit lossless track writes 16 bits and a 24-bit one 24 bits, DTS-HD MA counts as
+  // lossless, and FLAC frames hold the sample rate divided by 20. FFmpeg decodes a stream that
+  // states no layout in its default layout for the channel count, which for 6 channels is 5.1.
+  static Stream<ReadAudioStream> readAudioStreams() {
+    var tunedResampler = "filter_size=128:phase_shift=14:cutoff=0.95:kaiser_beta=14";
+    return Stream.of(
+        ReadAudioStream.builder()
+            .description("16-bit FLAC at 44.1 kHz")
+            .ffprobeOutput(
+                """
+                {"streams":[{"index":1,"codec_name":"flac","codec_type":"audio","sample_fmt":"s16",
+                  "sample_rate":"44100","channels":2,"channel_layout":"stereo",
+                  "bits_per_sample":0,"bits_per_raw_sample":"16"}]}
+                """)
+            .outputLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO)
+            .outputChannels(2)
+            .audioFilter("aresample=osf=s16:" + tunedResampler)
+            .flacFrameSize("2205")
+            .build(),
+        ReadAudioStream.builder()
+            .description("24-bit DTS-HD MA 5.1(side)")
+            .ffprobeOutput(
+                """
+                {"streams":[{"index":1,"codec_name":"dts","profile":"DTS-HD MA",
+                  "codec_type":"audio","sample_fmt":"s32p","sample_rate":"48000","channels":6,
+                  "channel_layout":"5.1(side)","bits_per_sample":0,"bits_per_raw_sample":"24"}]}
+                """)
+            .outputLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_FIVE_POINT_ONE_SIDE)
+            .outputChannels(6)
+            .audioFilter("aresample=osf=s32:" + tunedResampler)
+            .flacFrameSize("2400")
+            .build(),
+        ReadAudioStream.builder()
+            .description("6-channel 24-bit PCM without a layout")
+            .ffprobeOutput(
+                """
+                {"streams":[{"index":1,"codec_name":"pcm_s24le","codec_type":"audio",
+                  "sample_fmt":"s32","sample_rate":"48000","channels":6,
+                  "bits_per_sample":24,"bits_per_raw_sample":"24"}]}
+                """)
+            .outputLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_FIVE_POINT_ONE_SIDE)
+            .outputChannels(6)
+            .audioFilter(
+                "aresample=osf=s32:"
+                    + tunedResampler
+                    + ",channelmap=map=FL-FL|FR-FR|FC-FC|LFE-LFE|BL-SL|BR-SR"
+                    + ":channel_layout=5.1(side)")
+            .flacFrameSize("2400")
+            .build());
+  }
+
+  /** An audio stream as ffprobe prints it, the FLAC encode that the job names, and its options. */
+  @Builder
+  private record ReadAudioStream(
+      String description,
+      String ffprobeOutput,
+      AudioChannelLayout outputLayout,
+      int outputChannels,
+      String audioFilter,
+      String flacFrameSize) {
+
+    @Override
+    public String toString() {
+      return description;
+    }
+  }
+
   @Test
   @DisplayName("Should fail the attempt at startup when ffprobe cannot read the audio stream")
   void shouldFailTheAttemptAtStartupWhenFfprobeCannotReadTheAudioStream() throws Exception {
@@ -162,6 +250,29 @@ class TranscodeWorkerAudioLayoutTest {
 
     assertThat(eventsOf(connection))
         .containsExactly(EstablishWorkerSessionRequest.EventCase.JOB_ATTEMPT_STOPPED);
+    ffprobe.awaitKilled();
+    assertThat(launcher.hasLaunchedAny()).isFalse();
+  }
+
+  @Test
+  @DisplayName(
+      "Should end ffprobe and start no FFmpeg when the session ends while ffprobe reads the audio stream")
+  void shouldEndFfprobeAndStartNoFfmpegWhenTheSessionEndsWhileFfprobeReadsTheAudioStream()
+      throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var ffprobe = new SilentFfprobe();
+    var connection = connect(launcher, ffprobe.executor(), workerConfigurationBuilder());
+    var start =
+        deliverOnItsOwnThread(
+            () ->
+                startVariant(
+                    connection, layoutJob(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO, 2)));
+    ffprobe.awaitLaunched();
+    start.get(5, TimeUnit.SECONDS);
+
+    connection.fail("control connection lost while ffprobe reads the audio stream");
+
+    // The default read timeout is 30 s, so only the session's end can kill ffprobe this soon.
     ffprobe.awaitKilled();
     assertThat(launcher.hasLaunchedAny()).isFalse();
   }
