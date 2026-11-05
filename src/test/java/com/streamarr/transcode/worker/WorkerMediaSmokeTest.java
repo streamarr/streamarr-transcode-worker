@@ -30,6 +30,7 @@ import build.buf.gen.streamarr.transcode.v1.Fraction;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptCompleted;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailed;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
+import build.buf.gen.streamarr.transcode.v1.JobAttemptProgress;
 import build.buf.gen.streamarr.transcode.v1.KeyframePacketScanReason;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositionSource;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositions;
@@ -84,15 +85,18 @@ import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.grpc.stub.StreamObserver;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -112,7 +116,11 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -276,6 +284,10 @@ class WorkerMediaSmokeTest {
   private static final Duration DEFAULT_FRAGMENTATION_TARGET = Duration.ofMillis(250);
 
   private static final Duration JOB_LIMIT = Duration.ofMinutes(5);
+  // How long the server waits for an attempt's progress before it replaces the attempt's producer.
+  private static final Duration SERVER_STALL_THRESHOLD = Duration.ofSeconds(10);
+  // About three times the 256 kb/s of the audio that makes up nearly all of a source's bytes.
+  private static final int THRICE_THE_SOURCES_BYTE_RATE = 96 * 1024;
 
   // The interlaced sources hold three 3 s segments of 29.97 fps frames, each weaving two fields.
   // An encoded replacement attempt for segment 2 seeks to segment 1, past the source's start.
@@ -4654,6 +4666,160 @@ class WorkerMediaSmokeTest {
     return source;
   }
 
+  // FFmpeg reads the source through a named pipe at about three times real time, as from a slow
+  // mount, so copying the 60 s of audio after the video's end takes about 20 s, twice the server's
+  // stall threshold. Segment 1 runs from 6 s to the end and stays open throughout, so no upload
+  // shows that the copy advances. FFmpeg's muxer holds up to 10 s of audio while it waits for more
+  // video, which pauses the output for about 3 s once the video ends.
+  @Test
+  @DisplayName(
+      "Should report progress throughout the audio after the video's end when a copy's video ends"
+          + " long before its audio")
+  void shouldReportProgressThroughoutTheAudioAfterTheVideosEndWhenACopysVideoEndsLongBefore()
+      throws Exception {
+    var source = videoEndsLongBeforeAudioSource();
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_REMUX);
+    job.getExecutionBuilder().setMediaSegmentCount(2).addAllSegmentStartSlots(List.of(0, 1));
+
+    try (var pipe =
+        new PacedSourcePipe(root.resolve("source-pipe"), THRICE_THE_SOURCES_BYTE_RATE)) {
+      var engine = engine(softwareCapabilities(), pipe.feeding(new ProcessBuilderLauncher()));
+
+      var completion = executeToCompletion(engine, source.getParent(), job.build());
+
+      assertThat(completion.uploads().names()).containsExactlyElementsOf(uploadNames(2));
+      assertThat(completion.progress()).isNotEmpty();
+      assertThat(completion.longestSilence())
+          .as("the longest time without a progress report before the attempt completed")
+          .isLessThan(SERVER_STALL_THRESHOLD);
+      assertThat(completion.progress().getLast().outputEnd())
+          .as("the latest output end reported; the video ends at 10 s and the audio at 70 s")
+          .isGreaterThanOrEqualTo(Duration.ofSeconds(50));
+    }
+  }
+
+  // 10 s of a still grey picture in H.264 at 64x36 and 24 fps with a keyframe every 2 s, which
+  // takes almost no bytes, and 70 s of stereo pink noise in AAC at 256 kb/s. The muxer interleaves
+  // strictly by time: by default it writes the encoder's last video packets up to 10 s of audio
+  // later, so the file would hold video until about its 20 s of audio.
+  private static synchronized Path videoEndsLongBeforeAudioSource() throws Exception {
+    var source = seekableSources.resolve("video-ends-long-before-audio.mkv");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "color=c=gray:size=64x36:rate=24:duration=10",
+              "-f",
+              "lavfi",
+              "-i",
+              "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5:duration=70",
+              "-c:v",
+              "libx264",
+              "-pix_fmt",
+              "yuv444p",
+              "-g",
+              "48",
+              "-keyint_min",
+              "48",
+              "-c:a",
+              "aac",
+              "-ac",
+              "2",
+              "-b:a",
+              "256k",
+              "-max_interleave_delta",
+              "0"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  /**
+   * Feeds FFmpeg its source through a named pipe, in place of the path that its command reads, at a
+   * steady number of bytes a second, as a slow mount would serve it.
+   */
+  private static final class PacedSourcePipe implements AutoCloseable {
+
+    private static final int WRITES_PER_SECOND = 20;
+
+    private final Path pipe;
+    private final int bytesPerWrite;
+    private final ScheduledExecutorService writer =
+        Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().daemon().factory());
+    private volatile FileChannel output;
+
+    private PacedSourcePipe(Path pipe, int bytesPerSecond) throws Exception {
+      var mkfifo = new ProcessBuilder("mkfifo", pipe.toString()).start();
+      assertThat(mkfifo.waitFor()).isZero();
+      this.pipe = pipe;
+      this.bytesPerWrite = bytesPerSecond / WRITES_PER_SECOND;
+    }
+
+    private ProcessLauncher feeding(ProcessLauncher launcher) {
+      return (command, jobAttemptId) -> {
+        var input = command.indexOf("-i") + 1;
+        assertThat(input).as("the command reads an input").isPositive();
+        startWriting(readSource(Path.of(command.get(input))));
+        var adjusted = new ArrayList<>(command);
+        adjusted.set(input, pipe.toString());
+        return launcher.launch(adjusted, jobAttemptId);
+      };
+    }
+
+    private static byte[] readSource(Path source) {
+      try {
+        return Files.readAllBytes(source);
+      } catch (IOException e) {
+        throw new UncheckedIOException(e);
+      }
+    }
+
+    // Opened for reading as well as writing, the pipe opens at once on Linux, even when FFmpeg
+    // never opens its end, and a write that waits on a full pipe ends when close() interrupts it.
+    private void startWriting(byte[] source) {
+      try {
+        output = FileChannel.open(pipe, StandardOpenOption.READ, StandardOpenOption.WRITE);
+      } catch (IOException e) {
+        throw new UncheckedIOException(e);
+      }
+
+      var written = new AtomicInteger();
+      writer.scheduleAtFixedRate(
+          () -> writeNext(source, written), 0, 1_000 / WRITES_PER_SECOND, TimeUnit.MILLISECONDS);
+    }
+
+    private void writeNext(byte[] source, AtomicInteger written) {
+      try {
+        var length = Math.min(bytesPerWrite, source.length - written.get());
+        var block = ByteBuffer.wrap(source, written.getAndAdd(length), length);
+        while (block.hasRemaining()) {
+          output.write(block);
+        }
+
+        if (written.get() == source.length) {
+          output.close();
+          writer.shutdown();
+        }
+      } catch (IOException e) {
+        throw new UncheckedIOException(e);
+      }
+    }
+
+    @Override
+    public void close() throws Exception {
+      writer.shutdownNow();
+      if (output != null) {
+        output.close();
+      }
+
+      assertThat(writer.awaitTermination(5, TimeUnit.SECONDS)).as("the writer stopped").isTrue();
+    }
+  }
+
   @ParameterizedTest(name = "from segment {0}")
   @ValueSource(ints = {0, 11})
   @DisplayName(
@@ -6083,11 +6249,38 @@ class WorkerMediaSmokeTest {
       assertThat(report.getJobAttemptId()).isEqualTo(job.getJobAttemptId());
       return new CompletedExecution(
           report,
-          new MediaUploads(List.copyOf(controlPlane.names), Map.copyOf(controlPlane.segments)));
+          new MediaUploads(List.copyOf(controlPlane.names), Map.copyOf(controlPlane.segments)),
+          List.copyOf(controlPlane.progress),
+          controlPlane.completedAt.get());
     }
   }
 
-  private record CompletedExecution(JobAttemptCompleted report, MediaUploads uploads) {}
+  private record CompletedExecution(
+      JobAttemptCompleted report,
+      MediaUploads uploads,
+      List<TimedProgress> progress,
+      long completedAtNanos) {
+
+    // The longest time between two progress reports, or between the last one and the completion.
+    Duration longestSilence() {
+      var times = new ArrayList<Long>();
+      progress.forEach(report -> times.add(report.receivedAtNanos()));
+      times.add(completedAtNanos);
+      return IntStream.range(1, times.size())
+          .mapToObj(index -> Duration.ofNanos(times.get(index) - times.get(index - 1)))
+          .max(Comparator.naturalOrder())
+          .orElseThrow();
+    }
+  }
+
+  // A progress report and when the control plane received it, on System.nanoTime.
+  private record TimedProgress(long receivedAtNanos, JobAttemptProgress report) {
+
+    Duration outputEnd() {
+      var end = report.getOutputEnd();
+      return Duration.ofSeconds(end.getSeconds(), end.getNanos());
+    }
+  }
 
   private static SourceStreamEnd streamEnd(int streamIndex, Duration endTime) {
     var streamEnd = SourceStreamEnd.newBuilder().setStreamIndex(streamIndex);
@@ -6686,7 +6879,9 @@ class WorkerMediaSmokeTest {
 
     private final CompletableFuture<WorkerRegistration> registration = new CompletableFuture<>();
     private final CompletableFuture<JobAttemptCompleted> completed = new CompletableFuture<>();
+    private final AtomicLong completedAt = new AtomicLong();
     private final CompletableFuture<JobAttemptFailed> failed = new CompletableFuture<>();
+    private final List<TimedProgress> progress = new CopyOnWriteArrayList<>();
     private final Map<String, byte[]> segments = new ConcurrentHashMap<>();
     private final List<String> names = new CopyOnWriteArrayList<>();
     private final Server server;
@@ -6727,7 +6922,12 @@ class WorkerMediaSmokeTest {
             registration.complete(message.getRegistration());
           }
 
+          if (message.hasJobAttemptProgress()) {
+            progress.add(new TimedProgress(System.nanoTime(), message.getJobAttemptProgress()));
+          }
+
           if (message.hasJobAttemptCompleted()) {
+            completedAt.set(System.nanoTime());
             completed.complete(message.getJobAttemptCompleted());
           }
 

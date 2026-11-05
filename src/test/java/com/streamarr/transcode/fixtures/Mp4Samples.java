@@ -2,7 +2,9 @@ package com.streamarr.transcode.fixtures;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -81,6 +83,25 @@ public final class Mp4Samples {
 
     public boolean hasAudio() {
       return tracks.values().stream().anyMatch(Track::isAudio);
+    }
+
+    /**
+     * The latest presentation time plus duration among the video and audio samples, each in its own
+     * track's timescale, rounded down to the nanosecond.
+     */
+    public Duration latestSampleEnd() {
+      return tracks.values().stream()
+          .filter(track -> track.isVideo() || track.isAudio())
+          .flatMap(track -> samplesOf(track).stream().map(sample -> endOf(sample, track)))
+          .max(Comparator.naturalOrder())
+          .orElseThrow();
+    }
+
+    private static Duration endOf(Sample sample, Track track) {
+      var end = sample.presentationTime() + sample.duration();
+      return Duration.ofSeconds(
+          end / track.timescale(),
+          end % track.timescale() * Duration.ofSeconds(1).toNanos() / track.timescale());
     }
 
     /** Every sample of the track, in decode order. */

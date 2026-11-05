@@ -467,11 +467,35 @@ class ProducerTest {
         .contains(Duration.ofSeconds(1));
   }
 
+  // 20 s of video and 23.5 s of audio, encoded: four audio-only fragments end the output.
   @Test
   @DisplayName(
-      "Should take nothing for how far the output reached when the producer has read no video"
-          + " sample")
-  void shouldTakeNothingForHowFarTheOutputReachedWhenTheProducerHasReadNoVideoSample() {
+      "Should take the end of the latest audio sample as how far the output reached when FFmpeg"
+          + " writes audio alone after the video ends")
+  void shouldTakeTheLatestAudioSampleEndAsHowFarTheOutputReachedWhenAudioOutlastsTheVideo() {
+    var recording = recording("06-encode-audio-tail.fmp4");
+    var output = bytesOf(recording.file());
+    var beforeTheLastFragment = startOfTheLastFragment(output);
+    var process =
+        ScriptedProcess.builder().output(output).pauseAfter(beforeTheLastFragment).build();
+
+    var producer = producerFor(process, recording).start();
+
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
+    assertThat(producer.takeAdvancedOutputEnd())
+        .as("three audio-only fragments past the video's end at 20 s")
+        .contains(Mp4Samples.read(Arrays.copyOf(output, beforeTheLastFragment)).latestSampleEnd());
+    process.resume();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT);
+    assertThat(producer.takeAdvancedOutputEnd())
+        .as("the last audio-only fragment ends at the audio's end")
+        .contains(Mp4Samples.read(output).latestSampleEnd());
+  }
+
+  @Test
+  @DisplayName(
+      "Should take nothing for how far the output reached when the producer has read no sample")
+  void shouldTakeNothingForHowFarTheOutputReachedWhenTheProducerHasReadNoSample() {
     var initializationSegment = IsoBoxes.concat(IsoBoxes.ftyp(), IsoBoxes.videoAndAudioMoov());
     var output =
         IsoBoxes.concat(
@@ -4121,6 +4145,14 @@ class ProducerTest {
             });
     var firstPrerollFragment = Math.toIntExact(recording.initializationSegment().byteLength());
     return endOfFragmentAt(recorded, firstPrerollFragment) + 10;
+  }
+
+  private static int startOfTheLastFragment(byte[] output) {
+    return TopLevelBoxes.of(output).stream()
+        .filter(box -> box.type().equals("moof"))
+        .reduce((_, later) -> later)
+        .orElseThrow()
+        .start();
   }
 
   // Where the mdat that follows the moof at this offset ends.

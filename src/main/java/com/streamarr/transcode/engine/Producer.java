@@ -12,6 +12,7 @@ import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.UUID;
@@ -62,7 +63,7 @@ public final class Producer {
   static final long BUDGET_BYTES = 2 * MAXIMUM_SEGMENT_BYTES;
 
   private static final long NANOSECONDS_PER_SECOND = Duration.ofSeconds(1).toNanos();
-  private static final Duration BEFORE_ANY_VIDEO = Duration.ofSeconds(Long.MIN_VALUE);
+  private static final Duration BEFORE_ANY_SAMPLE = Duration.ofSeconds(Long.MIN_VALUE);
 
   private final FfmpegProcess ffmpeg;
   private final FragmentedMp4Reader reader;
@@ -80,9 +81,9 @@ public final class Producer {
   private final int startSequenceNumber;
   private final CompletableFuture<AttemptOutcome> outcome = new CompletableFuture<>();
   private final Object lock = new Object();
-  // The latest video sample end that the reader has read, and the latest one taken.
-  private final AtomicReference<Duration> outputEnd = new AtomicReference<>(BEFORE_ANY_VIDEO);
-  private final AtomicReference<Duration> takenOutputEnd = new AtomicReference<>(BEFORE_ANY_VIDEO);
+  // The latest video or audio sample end that the reader has read, and the latest one taken.
+  private final AtomicReference<Duration> outputEnd = new AtomicReference<>(BEFORE_ANY_SAMPLE);
+  private final AtomicReference<Duration> takenOutputEnd = new AtomicReference<>(BEFORE_ANY_SAMPLE);
 
   // Guarded by lock. The first outcome decided is the only one the producer settles.
   private Optional<AttemptOutcome> decision = Optional.empty();
@@ -201,11 +202,11 @@ public final class Producer {
   }
 
   /**
-   * The end of the latest video sample that the producer has read from FFmpeg's output, its
-   * presentation time plus its duration on the output's timeline, when it lies later than the end
-   * that the previous call took; empty before any video sample and while the output has not
-   * advanced. The producer reads each fragment as FFmpeg writes it, so the end advances inside a
-   * media segment that has not closed.
+   * The end of the latest video or audio sample that the producer has read from FFmpeg's output,
+   * its presentation time plus its duration on the output's timeline, when it lies later than the
+   * end that the previous call took; empty before any sample and while the output has not advanced.
+   * The producer reads each fragment as FFmpeg writes it, so the end advances inside a media
+   * segment that has not closed, and while FFmpeg writes audio alone after the video's end.
    */
   public Optional<Duration> takeAdvancedOutputEnd() {
     var end = outputEnd.get();
@@ -225,13 +226,20 @@ public final class Producer {
     return second;
   }
 
+  // Audio counts as well as video: when the video ends first, FFmpeg writes the rest of the audio
+  // in fragments without video, and the output still advances.
   private void advanceOutputEnd(Mp4Unit unit) {
-    if (!(unit instanceof Fragment fragment) || fragment.videoSamples().isEmpty()) {
+    if (!(unit instanceof Fragment fragment)) {
       return;
     }
 
-    var timescale = fragment.tracks().video().orElseThrow().timescale();
-    fragment.videoSamples().stream()
+    var tracks = fragment.tracks();
+    tracks.video().ifPresent(video -> advanceOutputEnd(fragment.videoSamples(), video.timescale()));
+    tracks.audio().ifPresent(audio -> advanceOutputEnd(fragment.audioSamples(), audio.timescale()));
+  }
+
+  private void advanceOutputEnd(List<Sample> samples, long timescale) {
+    samples.stream()
         .mapToLong(sample -> sample.presentationTime() + sample.duration())
         .max()
         .ifPresent(end -> outputEnd.accumulateAndGet(durationOf(end, timescale), Producer::later));
