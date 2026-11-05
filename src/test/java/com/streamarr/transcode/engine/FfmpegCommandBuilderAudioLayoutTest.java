@@ -726,18 +726,44 @@ class FfmpegCommandBuilderAudioLayoutTest {
       assertThat(padded).containsSubsequence("-ch_layout", layout);
     }
 
-    @Test
+    // A replacement from segment 10 starts at 60 s and seeks one 6 s period earlier, so the
+    // encoder's input starts the whole frames that fit in 6 s before 60 s, less their priming.
+    @ParameterizedTest(name = "{0} {1}")
+    @CsvSource(
+        delimiter = ';',
+        value = {
+          "aac; stereo; 1024; 0",
+          "eac3; 5.1; 1536; 1280",
+          "opus; 5.1; SR/50; SR*27/2000",
+          "flac; stereo; 2400; 0"
+        })
     @DisplayName(
-        "Should trim the encoded audio at the attempt's start after the named layout's filters"
-            + " when an encode that holds the last frame seeks")
-    void shouldTrimTheAudioAfterTheNamedLayoutsFiltersWhenAHoldingEncodeSeeks() {
-      var audio = encode("aac", "stereo");
+        "Should start a frame of the encoder that the named layout's options run on the first"
+            + " segment's start, after the layout's filters, when an encoded replacement holds the"
+            + " last frame")
+    void shouldStartAFrameOfTheNamedLayoutsEncoderOnTheFirstSegmentWhenAReplacementHolds(
+        String codec, String layout, String samplesPerFrame, String lead) {
+      var audio = encode(codec, layout);
       var held = VideoDecisionFixtures.encodeBuilder().holdsLastFrameToAdvertisedEnd(true).build();
 
-      var unheld = encodeCommand(audio, VideoDecisionFixtures.encodeBuilder().build());
-      var holding = encodeCommand(audio, held);
+      var cmd = encodeCommand(audio, held);
 
-      assertThat(audioFilter(holding)).isEqualTo(audioFilter(unheld) + ",atrim=start=54");
+      var shift =
+          "round(("
+              + lead
+              + "+floor(6*SR/("
+              + samplesPerFrame
+              + "))*("
+              + samplesPerFrame
+              + "))/SR/TB)";
+      assertThat(audioFilter(cmd))
+          .isEqualTo(
+              audioFilter(command(audio, source("dts", "5.1(side)")))
+                  + ",asetpts='PTS+"
+                  + shift
+                  + "',atrim=start=60,asetpts='PTS-"
+                  + shift
+                  + "'");
     }
 
     private List<String> encodeCommand(AudioDecision audio, VideoDecision video) {
@@ -761,11 +787,11 @@ class FfmpegCommandBuilderAudioLayoutTest {
   }
 
   @ParameterizedTest(name = "stream {0}")
-  @CsvSource({"'', a:0, 0:a:0", "2, 2, 0:2?"})
+  @CsvSource({"'', a:0, 1:a:0", "2, 2, 1:2?"})
   @DisplayName(
-      "Should encode the named layout of the job's audio stream in the source copy when the job"
-          + " moves Dolby Vision RPUs")
-  void shouldEncodeTheNamedLayoutOfTheJobsAudioStreamInTheSourceCopyWhenTheJobMovesDolbyVisionRpus(
+      "Should encode the named layout of the job's audio stream from the source input of the"
+          + " encode, and none in the source copy, when the job moves Dolby Vision RPUs")
+  void shouldEncodeTheNamedLayoutOfTheJobsAudioStreamFromTheEncodesSourceInputWhenItMovesRpus(
       String streamIndex, String specifier, String map) {
     var audio =
         encodeBuilder("opus", "5.1")
@@ -801,8 +827,9 @@ class FfmpegCommandBuilderAudioLayoutTest {
             builder.buildPipeline(
                 TranscodeJob.builder().request(request).videoEncoder("libx265").build());
 
-    assertThat(pipeline.copyCommand())
-        .containsSubsequence("-drc_scale:" + specifier, "0", "-i")
+    assertThat(pipeline.copyCommand()).doesNotContain("-drc_scale:" + specifier, "-c:a");
+    assertThat(pipeline.encodeCommand())
+        .containsSubsequence("pipe:0", "-drc_scale:" + specifier, "0", "-i", "/media/movie.mkv")
         .containsSequence("-map", map)
         .containsSubsequence("-c:a", "libopus", "-af")
         .containsSubsequence("-ch_layout", "5.1");

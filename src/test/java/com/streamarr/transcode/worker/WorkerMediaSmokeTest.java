@@ -30,6 +30,7 @@ import build.buf.gen.streamarr.transcode.v1.Fraction;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptCompleted;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailed;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
+import build.buf.gen.streamarr.transcode.v1.JobAttemptProgress;
 import build.buf.gen.streamarr.transcode.v1.KeyframePacketScanReason;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositionSource;
 import build.buf.gen.streamarr.transcode.v1.KeyframePositions;
@@ -84,15 +85,18 @@ import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.grpc.stub.StreamObserver;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -112,7 +116,11 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -132,6 +140,7 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 @Tag("SmokeTest")
@@ -228,6 +237,8 @@ class WorkerMediaSmokeTest {
   // The profile 5 sources span three 2 s segments, with a keyframe every second.
   private static final int PROFILE_5_PERIOD_SECONDS = 2;
   private static final int PROFILE_5_SEGMENT_COUNT = 3;
+  private static final int LARGE_PICTURE_SOURCE_SECONDS = 24;
+  private static final int LARGE_PICTURE_REPLACEMENT_START_SEQUENCE_NUMBER = 7;
   private static final int DISPLAY_SOURCE_HEIGHT = 180;
   private static final int ACCESS_UNIT_DELIMITER = 35;
   // An HEVC NAL unit of type 62, as a Dolby Vision RPU, whose payload FFmpeg cannot parse as one.
@@ -276,6 +287,10 @@ class WorkerMediaSmokeTest {
   private static final Duration DEFAULT_FRAGMENTATION_TARGET = Duration.ofMillis(250);
 
   private static final Duration JOB_LIMIT = Duration.ofMinutes(5);
+  // How long the server waits for an attempt's progress before it replaces the attempt's producer.
+  private static final Duration SERVER_STALL_THRESHOLD = Duration.ofSeconds(10);
+  // About three times the 256 kb/s of the audio that makes up nearly all of a source's bytes.
+  private static final int THRICE_THE_SOURCES_BYTE_RATE = 96 * 1024;
 
   // The interlaced sources hold three 3 s segments of 29.97 fps frames, each weaving two fields.
   // An encoded replacement attempt for segment 2 seeks to segment 1, past the source's start.
@@ -307,6 +322,7 @@ class WorkerMediaSmokeTest {
   @TempDir static Path tenBitSources;
   @TempDir static Path irregularKeyframeSources;
   @TempDir static Path rpuLayoutSources;
+  @TempDir static Path largePictureSources;
   @TempDir static Path interlacedSources;
 
   // The seven audio dispositions of probe version 7, by the names that ffprobe prints.
@@ -2115,6 +2131,90 @@ class WorkerMediaSmokeTest {
           .as(name)
           .containsExactlyElementsOf(packetsOf(fromRpusBehind, name));
     }
+  }
+
+  // The copy of a profile 5 source carries only the source's video, so its MP4 muxer writes each
+  // packet as it comes. A copy that also carried audio wrote nothing until the audio's first
+  // sample, and its first fragment then held every picture that the demuxer read before that
+  // sample. Without the server's keyframe position, the replacement reads from 18 s, one period
+  // before its first segment, and the MP4 demuxer lands on the keyframe at 10 s: 8 s of pictures,
+  // 63.8 MB on the pinned FFmpeg, over the 32 MiB that the mover reads. The decode time of the
+  // keyframe at 20 s, which B-frames follow, lies before its presentation time, so a seek there
+  // also lands on the keyframe at 10 s: 79.0 MB.
+  @ParameterizedTest(name = "server's keyframe presented by {0}")
+  @NullSource
+  @ValueSource(strings = "20.5")
+  @DisplayName(
+      "Should upload what one FFmpeg encodes when the copy of a profile 5 MP4 source with B-frames"
+          + " reads more pictures before its seek than the mover reads in one fragment")
+  void
+      shouldUploadWhatOneFfmpegEncodesWhenTheCopyOfAProfile5Mp4SourceWithBFramesReadsMorePicturesBeforeItsSeekThanTheMoverReadsInOneFragment(
+          BigDecimal keyframePresentedBy) throws Exception {
+    var source = largePictureHevcSource();
+    var job = largePictureJob(source);
+    if (keyframePresentedBy != null) {
+      setSeekPosition(
+          job.getExecutionBuilder(),
+          decodeTimeOfTheLastKeyframePresentedBy(source, keyframePresentedBy));
+    }
+
+    assertEncodeOfTheCopyUploadsWhatOneFfmpegEncodes(source, job);
+  }
+
+  // A full encode of the large-picture source from segment 7, at 21 s on a 3 s period.
+  private static VariantJob.Builder largePictureJob(Path source) {
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
+    withVideo(job, forcedSoftwareEncode("h264", TINY_VARIANT_LEVELS.get("h264")));
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setMode(AudioMode.AUDIO_MODE_TRANSCODE)
+        .setCodec("aac")
+        .setChannels(1)
+        .setBitrateBitsPerSecond(64_000);
+    job.getVariantBuilder().setWidth(64).setHeight(36).setBitrateBitsPerSecond(100_000);
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(SLOT_SECONDS)
+        .setMediaSegmentCount(LARGE_PICTURE_SOURCE_SECONDS / SLOT_SECONDS)
+        .setStartSequenceNumber(LARGE_PICTURE_REPLACEMENT_START_SEQUENCE_NUMBER);
+    return job;
+  }
+
+  // 24 s of 512x288 10-bit HEVC at 24 fps whose lossless noise makes each picture about 330 KB,
+  // with 3 B-frames and keyframes only at 0, 10 and 20 s, and a 440 Hz tone, in MP4.
+  private static synchronized Path largePictureHevcSource() throws Exception {
+    return buildFixtureOnce(
+        largePictureSources.resolve("large-pictures.mp4"),
+        output ->
+            runFfmpeg(
+                List.of(
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc2=size=512x288:rate=24,noise=alls=100:allf=t+u",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=frequency=440:sample_rate=48000",
+                    "-t",
+                    String.valueOf(LARGE_PICTURE_SOURCE_SECONDS),
+                    "-pix_fmt",
+                    "yuv420p10le",
+                    "-c:v",
+                    "libx265",
+                    "-x265-params",
+                    "lossless=1:keyint=100000:min-keyint=1:scenecut=0:bframes=3:log-level=error",
+                    "-forced-idr",
+                    "1",
+                    "-force_key_frames",
+                    "0,10,20",
+                    "-tag:v",
+                    "hvc1",
+                    "-c:a",
+                    "aac",
+                    "-b:a",
+                    "96k"),
+                output));
   }
 
   static Stream<Arguments> rpuLayoutsAudioCodecsAndStarts() {
@@ -4649,6 +4749,160 @@ class WorkerMediaSmokeTest {
     return source;
   }
 
+  // FFmpeg reads the source through a named pipe at about three times real time, as from a slow
+  // mount, so copying the 60 s of audio after the video's end takes about 20 s, twice the server's
+  // stall threshold. Segment 1 runs from 6 s to the end and stays open throughout, so no upload
+  // shows that the copy advances. FFmpeg's muxer holds up to 10 s of audio while it waits for more
+  // video, which pauses the output for about 3 s once the video ends.
+  @Test
+  @DisplayName(
+      "Should report progress throughout the audio after the video's end when a copy's video ends"
+          + " long before its audio")
+  void shouldReportProgressThroughoutTheAudioAfterTheVideosEndWhenACopysVideoEndsLongBefore()
+      throws Exception {
+    var source = videoEndsLongBeforeAudioSource();
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_REMUX);
+    job.getExecutionBuilder().setMediaSegmentCount(2).addAllSegmentStartSlots(List.of(0, 1));
+
+    try (var pipe =
+        new PacedSourcePipe(root.resolve("source-pipe"), THRICE_THE_SOURCES_BYTE_RATE)) {
+      var engine = engine(softwareCapabilities(), pipe.feeding(new ProcessBuilderLauncher()));
+
+      var completion = executeToCompletion(engine, source.getParent(), job.build());
+
+      assertThat(completion.uploads().names()).containsExactlyElementsOf(uploadNames(2));
+      assertThat(completion.progress()).isNotEmpty();
+      assertThat(completion.longestSilence())
+          .as("the longest time without a progress report before the attempt completed")
+          .isLessThan(SERVER_STALL_THRESHOLD);
+      assertThat(completion.progress().getLast().outputEnd())
+          .as("the latest output end reported; the video ends at 10 s and the audio at 70 s")
+          .isGreaterThanOrEqualTo(Duration.ofSeconds(50));
+    }
+  }
+
+  // 10 s of a still grey picture in H.264 at 64x36 and 24 fps with a keyframe every 2 s, which
+  // takes almost no bytes, and 70 s of stereo pink noise in AAC at 256 kb/s. The muxer interleaves
+  // strictly by time: by default it writes the encoder's last video packets up to 10 s of audio
+  // later, so the file would hold video until about its 20 s of audio.
+  private static synchronized Path videoEndsLongBeforeAudioSource() throws Exception {
+    var source = seekableSources.resolve("video-ends-long-before-audio.mkv");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "color=c=gray:size=64x36:rate=24:duration=10",
+              "-f",
+              "lavfi",
+              "-i",
+              "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5:duration=70",
+              "-c:v",
+              "libx264",
+              "-pix_fmt",
+              "yuv444p",
+              "-g",
+              "48",
+              "-keyint_min",
+              "48",
+              "-c:a",
+              "aac",
+              "-ac",
+              "2",
+              "-b:a",
+              "256k",
+              "-max_interleave_delta",
+              "0"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  /**
+   * Feeds FFmpeg its source through a named pipe, in place of the path that its command reads, at a
+   * steady number of bytes a second, as a slow mount would serve it.
+   */
+  private static final class PacedSourcePipe implements AutoCloseable {
+
+    private static final int WRITES_PER_SECOND = 20;
+
+    private final Path pipe;
+    private final int bytesPerWrite;
+    private final ScheduledExecutorService writer =
+        Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().daemon().factory());
+    private volatile FileChannel output;
+
+    private PacedSourcePipe(Path pipe, int bytesPerSecond) throws Exception {
+      var mkfifo = new ProcessBuilder("mkfifo", pipe.toString()).start();
+      assertThat(mkfifo.waitFor()).isZero();
+      this.pipe = pipe;
+      this.bytesPerWrite = bytesPerSecond / WRITES_PER_SECOND;
+    }
+
+    private ProcessLauncher feeding(ProcessLauncher launcher) {
+      return (command, jobAttemptId) -> {
+        var input = command.indexOf("-i") + 1;
+        assertThat(input).as("the command reads an input").isPositive();
+        startWriting(readSource(Path.of(command.get(input))));
+        var adjusted = new ArrayList<>(command);
+        adjusted.set(input, pipe.toString());
+        return launcher.launch(adjusted, jobAttemptId);
+      };
+    }
+
+    private static byte[] readSource(Path source) {
+      try {
+        return Files.readAllBytes(source);
+      } catch (IOException e) {
+        throw new UncheckedIOException(e);
+      }
+    }
+
+    // Opened for reading as well as writing, the pipe opens at once on Linux, even when FFmpeg
+    // never opens its end, and a write that waits on a full pipe ends when close() interrupts it.
+    private void startWriting(byte[] source) {
+      try {
+        output = FileChannel.open(pipe, StandardOpenOption.READ, StandardOpenOption.WRITE);
+      } catch (IOException e) {
+        throw new UncheckedIOException(e);
+      }
+
+      var written = new AtomicInteger();
+      writer.scheduleAtFixedRate(
+          () -> writeNext(source, written), 0, 1_000 / WRITES_PER_SECOND, TimeUnit.MILLISECONDS);
+    }
+
+    private void writeNext(byte[] source, AtomicInteger written) {
+      try {
+        var length = Math.min(bytesPerWrite, source.length - written.get());
+        var block = ByteBuffer.wrap(source, written.getAndAdd(length), length);
+        while (block.hasRemaining()) {
+          output.write(block);
+        }
+
+        if (written.get() == source.length) {
+          output.close();
+          writer.shutdown();
+        }
+      } catch (IOException e) {
+        throw new UncheckedIOException(e);
+      }
+    }
+
+    @Override
+    public void close() throws Exception {
+      writer.shutdownNow();
+      if (output != null) {
+        output.close();
+      }
+
+      assertThat(writer.awaitTermination(5, TimeUnit.SECONDS)).as("the writer stopped").isTrue();
+    }
+  }
+
   @ParameterizedTest(name = "from segment {0}")
   @ValueSource(ints = {0, 11})
   @DisplayName(
@@ -5204,6 +5458,657 @@ class WorkerMediaSmokeTest {
         .as("the 12 s merged segment 2 keeps the encoder's keyframes after its first")
         .filteredOn(Mp4Samples.Sample::isSync)
         .hasSizeGreaterThan(1);
+  }
+
+  @Test
+  @DisplayName(
+      "Should show the source's moving pictures after a gap between pictures when an encode from"
+          + " the start reads an MP4 that gives the picture after the gap the gap's duration")
+  void shouldShowTheSourcesMovingPicturesAfterAPictureGapWhenAnEncodeReadsAnMp4WithBFrames()
+      throws Exception {
+    var source = pictureGapSource(PictureGapSource.MP4_WITH_B_FRAMES);
+
+    var uploads =
+        execute(engine(softwareCapabilities()), source.getParent(), pictureGapJob(source).build());
+
+    // FFmpeg's constant-rate conversion repeated the picture after the gap for the 5.083 s that
+    // the MP4 gives as its duration, and showed 4 distinct pictures in these 5 s.
+    var afterTheGap =
+        decodedPictures(uploads.contentOf(List.of("init.mp4", segmentName(3)))).stream()
+            .filter(
+                picture -> picture.isWithin(Duration.ofMillis(31_200), Duration.ofMillis(36_200)))
+            .toList();
+    assertThat(afterTheGap).as("5 s of pictures at 24 fps").hasSize(120);
+    assertThat(afterTheGap.stream().map(DecodedPicture::md5).distinct().count())
+        .as("the distinct pictures of the source's moving test pattern")
+        .isGreaterThan(afterTheGap.size() / 2);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(PictureGapSource.class)
+  @DisplayName(
+      "Should open the replacement's first segment on its listed start with the start attempt's"
+          + " picture and frame count, and its audio on that start, when an encode reads from the"
+          + " server's keyframe before a gap between pictures")
+  void
+      shouldOpenTheReplacementWithTheStartAttemptsPictureWhenAnEncodeReadsFromTheKeyframeBeforeAGap(
+          PictureGapSource shape) throws Exception {
+    var source = pictureGapSource(shape);
+    var startAttempt =
+        execute(engine(softwareCapabilities()), source.getParent(), pictureGapJob(source).build());
+    var replacementJob = pictureGapJob(source);
+    replacementJob.getExecutionBuilder().setStartSequenceNumber(3).setSeekPositionSeconds(30);
+    setSeekPosition(
+        replacementJob.getExecutionBuilder(),
+        decodeTimeOfTheLastKeyframePresentedBy(source, new BigDecimal("29.5")));
+
+    var replacement =
+        execute(engine(softwareCapabilities()), source.getParent(), replacementJob.build());
+
+    assertSegment3OpensWithTheStartAttemptsPictureAndAudio(startAttempt, replacement);
+  }
+
+  // An attempt that encodes a profile 5 source reads the server's keyframe position as every other
+  // encoded replacement does. Read from one period early instead, 27 s, inside the gap, the MP4
+  // demuxer landed on the keyframe after the gap, whose decode time lies before 27 s, and the
+  // replacement lost the picture held from 25.958 s. Both attempts run libx264 on one thread, as
+  // the encode of the copy feeds it frames at its own pace.
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"mp4", "mkv", "ts"})
+  @DisplayName(
+      "Should open a profile 5 replacement's first segment with the start attempt's picture, frame"
+          + " count and audio when it reads from the server's keyframe before a gap between"
+          + " pictures longer than a period")
+  void
+      shouldOpenAProfile5ReplacementWithTheStartAttemptsPictureWhenItReadsFromTheServersKeyframeBeforeAGapLongerThanAPeriod(
+          String container) throws Exception {
+    var source = hevcPictureGapSource(container);
+    var engine = engine(softwareCapabilities(), withX264ThreadsOfOne(new ProcessBuilderLauncher()));
+    var startAttempt = execute(engine, source.getParent(), profile5PictureGapJob(source).build());
+    var replacementJob = profile5PictureGapJob(source);
+    replacementJob.getExecutionBuilder().setStartSequenceNumber(3).setSeekPositionSeconds(30);
+    setSeekPosition(
+        replacementJob.getExecutionBuilder(),
+        decodeTimeOfTheLastKeyframePresentedBy(source, new BigDecimal("29.5")));
+
+    var replacement = execute(engine, source.getParent(), replacementJob.build());
+
+    assertSegment3OpensWithTheStartAttemptsPictureAndAudio(startAttempt, replacement);
+  }
+
+  // The gap job for a Dolby Vision profile 5 source whose RPUs may start samples, which the worker
+  // encodes from a copy of its video. The source holds no RPU, so the mover leaves every sample as
+  // it is.
+  private static VariantJob.Builder profile5PictureGapJob(Path source) {
+    var job = pictureGapJob(source);
+    withProfile5Source(job, DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE);
+    return job;
+  }
+
+  // The replacement's segment 3 opens on a keyframe where the start attempt's does, with the same
+  // frame count and first picture, the picture held from 25.958 s, and its audio joins the start
+  // attempt's on segment 3's start.
+  private static void assertSegment3OpensWithTheStartAttemptsPictureAndAudio(
+      MediaUploads startAttempt, MediaUploads replacement) throws Exception {
+    var startSegment = startAttempt.contentOf(List.of("init.mp4", segmentName(3)));
+    var replacementSegment = replacement.contentOf(List.of("init.mp4", segmentName(3)));
+    var started = Mp4Samples.read(startSegment);
+    var replaced = Mp4Samples.read(replacementSegment);
+    var startedVideo = started.samplesOf(started.videoTrack());
+    var replacedVideo = replaced.samplesOf(replaced.videoTrack());
+    assertThat(replacedVideo.getFirst().isSync()).as("the segment opens at a keyframe").isTrue();
+    assertThat(replacedVideo.getFirst().presentationTime())
+        .as("the replacement's segment 3 opens where the start attempt's does")
+        .isEqualTo(startedVideo.getFirst().presentationTime());
+    assertThat(replacedVideo).as("segment 3's frames").hasSameSizeAs(startedVideo);
+    assertThat(decodedPictures(replacementSegment).getFirst().md5())
+        .as("segment 3's first picture, the picture held from 25.958 s")
+        .isEqualTo(decodedPictures(startSegment).getFirst().md5());
+    assertAudioJoinsOnSegment3sStart(startAttempt, replaced);
+  }
+
+  // With the server's keyframe positions 20 s and 21 s, the 48 kHz source's AAC and AC-3 audio
+  // starts 9 s and 8 s of whole frames before 30 s. A job that names stereo encodes Opus with
+  // libopus and FLAC in frames of 2,400 samples.
+  @ParameterizedTest(name = "{0}, keyframe {1}, named stereo {2}")
+  @CsvSource({
+    "ac3,, false",
+    "eac3,, false",
+    "libopus,, false",
+    "flac,, false",
+    "alac,, false",
+    "aac, 20, false",
+    "ac3, 21, false",
+    "opus,, true",
+    "flac,, true",
+    "aac, 20, true"
+  })
+  @DisplayName(
+      "Should open the replacement's audio with a frame on its first segment's start and leave no"
+          + " gap after the start attempt's audio when an encoded replacement attempt encodes its"
+          + " audio")
+  void shouldOpenTheReplacementsAudioOnItsFirstSegmentsStartWhenAnEncodedReplacementEncodesAudio(
+      String codec, BigDecimal keyframePosition, boolean namedStereo) throws Exception {
+    var source = pictureGapSource(PictureGapSource.MP4_WITHOUT_B_FRAMES);
+    var startAttempt =
+        execute(
+            engine(softwareCapabilities()),
+            source.getParent(),
+            namingStereoWhen(namedStereo, pictureGapAudioJob(source, codec)).build());
+
+    var replacement =
+        execute(
+            engine(softwareCapabilities()),
+            source.getParent(),
+            namingStereoWhen(
+                    namedStereo, pictureGapAudioReplacementJob(source, codec, keyframePosition))
+                .build());
+
+    var replaced = Mp4Samples.read(replacement.contentOf(List.of("init.mp4", segmentName(3))));
+    assertAudioJoinsOnSegment3sStart(startAttempt, replaced);
+  }
+
+  // FLAC and ALAC are lossless, so the replacement's audio decodes to the start attempt's samples
+  // only when its frames carry the source's samples from the listed start on, at the times that
+  // the start attempt gives them. Timestamps alone would also pass audio taken from a frame
+  // earlier.
+  @ParameterizedTest(name = "{0}, keyframe {1}")
+  @CsvSource({"flac,", "alac,", "flac, 20"})
+  @DisplayName(
+      "Should decode the replacement's audio from its first segment's start to the start attempt's"
+          + " samples when an encoded replacement attempt encodes lossless audio")
+  void
+      shouldDecodeTheReplacementsAudioToTheStartAttemptsSamplesWhenAReplacementEncodesLosslessAudio(
+          String codec, BigDecimal keyframePosition) throws Exception {
+    var source = pictureGapSource(PictureGapSource.MP4_WITHOUT_B_FRAMES);
+    var startAttempt =
+        execute(
+            engine(softwareCapabilities()),
+            source.getParent(),
+            pictureGapAudioJob(source, codec).build());
+
+    var replacement =
+        execute(
+            engine(softwareCapabilities()),
+            source.getParent(),
+            pictureGapAudioReplacementJob(source, codec, keyframePosition).build());
+
+    assertThat(
+            decodedAudioFrom30To36Seconds(
+                replacement.contentOf(List.of("init.mp4", segmentName(3)))))
+        .as("the MD5 of the replacement's decoded samples from 30 s to 36 s")
+        .isEqualTo(
+            decodedAudioFrom30To36Seconds(
+                startAttempt.contentOf(List.of("init.mp4", segmentName(2), segmentName(3)))));
+  }
+
+  // White noise in eight 24-bit channels at 96 kHz leaves FLAC nothing to compress, about 2.3 MB of
+  // audio a second. The source's only keyframe lies 96 s before the replacement's first segment,
+  // so audio encoded from a second after that keyframe, or copied from it, would fill the first
+  // fragment far past the producer's 128 MiB cap before the first picture. Without the server's
+  // keyframe position, the seek one period early lands on that keyframe too, also for an attempt
+  // that holds the last frame and so starts its video and audio at that seek.
+  @ParameterizedTest(name = "{0}, keyframe position {1}, holds the last frame: {2}")
+  @CsvSource({
+    "TRANSCODE_MODE_FULL_TRANSCODE, 0, false",
+    "TRANSCODE_MODE_VIDEO_TRANSCODE, 0, false",
+    "TRANSCODE_MODE_VIDEO_TRANSCODE, , false",
+    "TRANSCODE_MODE_FULL_TRANSCODE, , true",
+    "TRANSCODE_MODE_VIDEO_TRANSCODE, , true"
+  })
+  @DisplayName(
+      "Should complete an encoded replacement attempt of high-bitrate lossless audio, encoded or"
+          + " copied, when the keyframe its seek reads lies far before its first segment")
+  void shouldCompleteAReplacementOfHighBitrateLosslessAudioWhenTheKeyframeLiesFarBeforeIt(
+      TranscodeMode mode, BigDecimal keyframePosition, boolean holdsLastFrame) throws Exception {
+    var source = oneKeyframeEightChannelNoiseSource();
+    var job = seekableSourceJob(source, mode);
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setCodec("flac")
+        .setChannels(8)
+        .setBitrateBitsPerSecond(0);
+    job.getExecutionBuilder().setMediaSegmentCount(17).setStartSequenceNumber(16);
+    job.getExecutionBuilder().getAdvertisedEndBuilder().setSeconds(102);
+    job.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(holdsLastFrame);
+    if (keyframePosition != null) {
+      setSeekPosition(job.getExecutionBuilder(), keyframePosition);
+    }
+
+    var completion =
+        executeToCompletion(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(completion.uploads().names()).contains(segmentName(16));
+  }
+
+  // The replacement decodes its video from a keyframe far before its first segment at 24 s: the
+  // server's keyframe at zero, or, without it, the keyframe that its seek one period early reads.
+  // FFmpeg's whole output must start the copied audio at or after 18 s, one period before that
+  // segment, and its copied packets in segment 4 must match the start attempt's, which one FFmpeg
+  // reads from one input, on that attempt's timeline. The replacement reads its audio from the
+  // input that its video seeks: the source input of one FFmpeg, or of the encode of a profile 5
+  // copy. The MPEG-TS sources start at 11.4 s, and their audio starts 0.5 s after their video.
+  @ParameterizedTest(name = "{0} with {1}, {2}, keyframe position {3}")
+  @CsvSource({
+    "mp4, aac, libx264, 0",
+    "mkv, flac, libx264, 0",
+    "ts, aac, libx264, 0",
+    "ts, ac3, libx264, 0",
+    "mp4, aac, libx264,",
+    "mkv, flac, libx265, 0",
+    "ts, ac3, libx265, 0",
+    "mkv, flac, libx265,"
+  })
+  @DisplayName(
+      "Should start the copied audio one period before the first segment and copy the start"
+          + " attempt's packets at its times when an encoded replacement's keyframe lies far back")
+  void shouldStartTheCopiedAudioOnePeriodBackAndMatchTheStartAttemptWhenTheKeyframeLiesFarBack(
+      String container, String codec, String videoEncoder, BigDecimal keyframePosition)
+      throws Exception {
+    var source = oneKeyframeDelayedAudioSource(container, codec, videoEncoder);
+    var startAttempt =
+        execute(engine(softwareCapabilities()), source.getParent(), copiedAudioJob(source, codec));
+    var replacementJob = copiedAudioJob(source, codec).toBuilder();
+    replacementJob.getExecutionBuilder().setStartSequenceNumber(4);
+    if (keyframePosition != null) {
+      setSeekPosition(replacementJob.getExecutionBuilder(), keyframePosition);
+    }
+
+    if (videoEncoder.equals("libx265")) {
+      withProfile5Source(
+          replacementJob, DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE);
+    }
+
+    var launcher = new TeeingProcessLauncher(new ProcessBuilderLauncher());
+
+    var replacement =
+        execute(
+            engine(softwareCapabilities(), launcher), source.getParent(), replacementJob.build());
+
+    var output = Mp4Samples.read(launcher.outputOf(fromProto(replacementJob.getJobAttemptId())));
+    assertThat(output.samplesOf(output.audioTrack()).getFirst().presentationTime())
+        .as("the start of FFmpeg's first copied audio packet")
+        .isGreaterThanOrEqualTo(18 * output.audioTrack().timescale());
+    var replaced = Mp4Samples.read(replacement.contentOf(List.of("init.mp4", segmentName(4))));
+    var started = Mp4Samples.read(startAttempt.contentOf(List.of("init.mp4", segmentName(4))));
+    assertThat(replaced.samplesOf(replaced.audioTrack()))
+        .as("the replacement's copied audio packets in segment 4")
+        .isNotEmpty()
+        .isEqualTo(started.samplesOf(started.audioTrack()));
+  }
+
+  // A job that encodes the source's video and copies its audio over five 6 s segments.
+  private static VariantJob copiedAudioJob(Path source, String codec) {
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE);
+    job.getDecisionBuilder().getAudioBuilder().setCodec(codec).setBitrateBitsPerSecond(0);
+    job.getExecutionBuilder().setMediaSegmentCount(5);
+    return job.build();
+  }
+
+  // 30 s of video from the encoder whose only keyframe is its first picture, and stereo pink noise
+  // in the codec from 0.5 s on. An MPEG-TS source starts 10 s after the muxer's own start.
+  private static synchronized Path oneKeyframeDelayedAudioSource(
+      String container, String codec, String videoEncoder) throws Exception {
+    var source =
+        seekableSources.resolve(
+            "one-keyframe-" + videoEncoder + "-delayed-" + codec + "." + container);
+    if (!generatedSeekableSources.contains(source)) {
+      var arguments =
+          new ArrayList<>(
+              List.of(
+                  "-f",
+                  "lavfi",
+                  "-i",
+                  "testsrc=size=64x36:rate=24:duration=30",
+                  "-itsoffset",
+                  "0.5",
+                  "-f",
+                  "lavfi",
+                  "-i",
+                  "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5:duration=29.5,"
+                      + "aformat=channel_layouts=stereo",
+                  "-c:v",
+                  videoEncoder));
+      arguments.addAll(
+          switch (videoEncoder) {
+            case "libx265" -> List.of("-x265-params", "keyint=-1:scenecut=0:log-level=error");
+            default -> List.of("-x264-params", "keyint=infinite:scenecut=0");
+          });
+      arguments.addAll(List.of("-c:a", codec));
+      arguments.addAll(
+          switch (container) {
+            case "ts" -> List.of("-output_ts_offset", "10");
+            default -> List.<String>of();
+          });
+      runFfmpeg(arguments, source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // 102 s of H.264 whose only keyframe is its first picture, and independent white noise in eight
+  // 24-bit FLAC channels at 96 kHz.
+  private static synchronized Path oneKeyframeEightChannelNoiseSource() throws Exception {
+    var source = seekableSources.resolve("one-keyframe-eight-channel-noise.mkv");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24",
+              "-f",
+              "lavfi",
+              "-i",
+              "aevalsrc=random(0)*2-1|random(1)*2-1|random(2)*2-1|random(3)*2-1"
+                  + "|random(4)*2-1|random(5)*2-1|random(6)*2-1|random(7)*2-1:s=96000:c=7.1",
+              "-t",
+              "102",
+              "-c:v",
+              "libx264",
+              "-x264-params",
+              "keyint=infinite:scenecut=0",
+              "-c:a",
+              "flac",
+              "-sample_fmt",
+              "s32",
+              "-bits_per_raw_sample",
+              "24"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // The encode of a profile 5 source's copy reads the audio from the source, a second input beside
+  // the copy's video, so its FLAC frames carry the source's samples at the start attempt's times
+  // only when that input's seek and timestamps match the single FFmpeg's.
+  @ParameterizedTest(name = "keyframe {0}")
+  @NullSource
+  @ValueSource(strings = "20")
+  @DisplayName(
+      "Should decode a profile 5 replacement's audio from its first segment's start to the start"
+          + " attempt's samples when the encode of the source's copy reads lossless audio from the"
+          + " source")
+  void
+      shouldDecodeAProfile5ReplacementsAudioToTheStartAttemptsSamplesWhenTheEncodeOfTheCopyReadsLosslessAudioFromTheSource(
+          BigDecimal keyframePosition) throws Exception {
+    var source = hevcPictureGapSource("mp4");
+    var startJob = pictureGapAudioJob(source, "flac");
+    withProfile5Source(startJob, DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE);
+    var startAttempt =
+        execute(engine(softwareCapabilities()), source.getParent(), startJob.build());
+    var replacementJob = pictureGapAudioReplacementJob(source, "flac", keyframePosition);
+    withProfile5Source(
+        replacementJob, DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE);
+
+    var replacement =
+        execute(engine(softwareCapabilities()), source.getParent(), replacementJob.build());
+
+    assertThat(
+            decodedAudioFrom30To36Seconds(
+                replacement.contentOf(List.of("init.mp4", segmentName(3)))))
+        .as("the MD5 of the replacement's decoded samples from 30 s to 36 s")
+        .isEqualTo(
+            decodedAudioFrom30To36Seconds(
+                startAttempt.contentOf(List.of("init.mp4", segmentName(2), segmentName(3)))));
+  }
+
+  // The job, naming the stereo layout for its audio when namedStereo holds.
+  private static VariantJob.Builder namingStereoWhen(boolean namedStereo, VariantJob.Builder job) {
+    if (namedStereo) {
+      job.getDecisionBuilder()
+          .getAudioBuilder()
+          .setChannelLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO);
+    }
+
+    return job;
+  }
+
+  // A job that encodes the gap source's audio into this codec from the start.
+  private static VariantJob.Builder pictureGapAudioJob(Path source, String codec) {
+    var job = pictureGapJob(source);
+    job.getDecisionBuilder().getAudioBuilder().setCodec(codec);
+    return job;
+  }
+
+  // That job's replacement attempt from segment 3, which carries the server's keyframe position
+  // when one is given.
+  private static VariantJob.Builder pictureGapAudioReplacementJob(
+      Path source, String codec, BigDecimal keyframePosition) {
+    var job = pictureGapAudioJob(source, codec);
+    job.getExecutionBuilder().setStartSequenceNumber(3).setSeekPositionSeconds(30);
+    if (keyframePosition != null) {
+      setSeekPosition(job.getExecutionBuilder(), keyframePosition);
+    }
+
+    return job;
+  }
+
+  // The MD5 of the media's decoded audio samples from 30 s to 36 s on the media's own timeline.
+  private static String decodedAudioFrom30To36Seconds(byte[] media) throws Exception {
+    var file = Files.createTempFile(longSources, "decoded", ".mp4");
+    Files.write(file, media);
+    return runToCompletion(
+            List.of(
+                "ffmpeg",
+                "-nostdin",
+                "-v",
+                "error",
+                "-copyts",
+                "-i",
+                file.toString(),
+                "-map",
+                "0:a:0",
+                "-af",
+                "atrim=start=30:end=36",
+                "-f",
+                "md5",
+                "-"))
+        .strip();
+  }
+
+  // Segment 3's listed start, 30 s, opens the replacement's audio with a frame, and the start
+  // attempt's segment 2 audio reaches that start, by less than a frame, so the junction has no gap.
+  private static void assertAudioJoinsOnSegment3sStart(
+      MediaUploads startAttempt, Mp4Samples.Movie replaced) {
+    var listedStart = 30 * replaced.audioTrack().timescale();
+    assertThat(replaced.samplesOf(replaced.audioTrack()).getFirst().presentationTime())
+        .as("the replacement's audio opens on the listed start")
+        .isEqualTo(listedStart);
+    var before = Mp4Samples.read(startAttempt.contentOf(List.of("init.mp4", segmentName(2))));
+    var lastAudioBefore = before.samplesOf(before.audioTrack()).getLast();
+    assertThat(lastAudioBefore.end())
+        .as("the start attempt's segment 2 audio reaches the listed start, by less than a frame")
+        .isGreaterThanOrEqualTo(listedStart)
+        .isLessThan(listedStart + lastAudioBefore.duration());
+  }
+
+  // The decode time, as the worker's keyframe probe reports it, of the last keyframe that
+  // presents at or before the time: the keyframe that the server sends an encoded replacement
+  // attempt whose first segment starts 0.5 s after that time.
+  private static BigDecimal decodeTimeOfTheLastKeyframePresentedBy(Path source, BigDecimal time)
+      throws Exception {
+    var keyframe =
+        videoPacketsOnZeroBasedTimeline(source).stream()
+            .filter(VideoPacket::keyframe)
+            .filter(packet -> packet.presentationTime().compareTo(time) <= 0)
+            .max(Comparator.comparing(VideoPacket::presentationTime))
+            .orElseThrow();
+    return probedDecodeTime(source, keyframe);
+  }
+
+  // A source whose pictures stop at 25.958 s and resume at 31.042 s, cut on the list [0, 3, 6, 10]
+  // of 3 s slots: segment 3 starts at 30 s inside the gap, and the gap covers all of slot 9.
+  private static VariantJob.Builder pictureGapJob(Path source) {
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getExecutionBuilder()
+        .setTargetSegmentDurationSeconds(SLOT_SECONDS)
+        .setMediaSegmentCount(TEN_SECOND_KEYFRAME_SEGMENT_STARTS.size())
+        .addAllSegmentStartSlots(TEN_SECOND_KEYFRAME_SEGMENT_STARTS);
+    return job;
+  }
+
+  private enum PictureGapSource {
+    // libx264's B-frames give the keyframe after the gap a decode time 5 s before its presentation
+    // time, and the MP4 muxer gives the picture after the gap the gap's 5.083 s duration.
+    MP4_WITH_B_FRAMES("gap.mp4"),
+    MP4_WITHOUT_B_FRAMES("gap-without-b-frames.mp4"),
+    MATROSKA("gap.mkv"),
+    MPEG_TS("gap.ts");
+
+    private final String fileName;
+
+    PictureGapSource(String fileName) {
+      this.fileName = fileName;
+    }
+  }
+
+  // 40 s of a moving test pattern at 24 fps and a 440 Hz tone. Every picture in [26 s, 31 s) is
+  // dropped and the stream keeps variable-rate timestamps, so the picture at 25.958 s lasts until
+  // 31.042 s. Keyframes lie at 0, 10 and 20 s and on the first picture after the gap. The Matroska
+  // and MPEG-TS sources carry the B-frame MP4's streams unchanged.
+  private static synchronized Path pictureGapSource(PictureGapSource shape) throws Exception {
+    var withBFrames = seekableSources.resolve(PictureGapSource.MP4_WITH_B_FRAMES.fileName);
+    if (!generatedSeekableSources.contains(withBFrames)) {
+      runFfmpeg(pictureGapArguments(2), withBFrames);
+      generatedSeekableSources.add(withBFrames);
+    }
+
+    var source = seekableSources.resolve(shape.fileName);
+    if (generatedSeekableSources.contains(source)) {
+      return source;
+    }
+
+    switch (shape) {
+      case MP4_WITHOUT_B_FRAMES -> runFfmpeg(pictureGapArguments(0), source);
+      case MATROSKA, MPEG_TS ->
+          runFfmpeg(List.of("-i", withBFrames.toString(), "-map", "0", "-c", "copy"), source);
+      case MP4_WITH_B_FRAMES -> throw new IllegalStateException("generated above");
+    }
+
+    generatedSeekableSources.add(source);
+    return source;
+  }
+
+  private static List<String> pictureGapArguments(int bFrames) {
+    return pictureGapArguments(
+        List.of(
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-x264-params",
+            "keyint=100000:min-keyint=1:scenecut=0:bframes=" + bFrames));
+  }
+
+  // The gap source's pictures, tone and keyframes, with the arguments of its video encoder.
+  private static List<String> pictureGapArguments(List<String> videoEncoder) {
+    var arguments =
+        new ArrayList<>(
+            List.of(
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=64x36:rate=24",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000",
+                "-t",
+                "40",
+                "-vf",
+                "select=not(between(t\\,26\\,31))",
+                "-fps_mode",
+                "passthrough"));
+    arguments.addAll(videoEncoder);
+    arguments.addAll(List.of("-force_key_frames", "0,10,20,31", "-c:a", "aac", "-b:a", "96k"));
+    return arguments;
+  }
+
+  // The gap source's pictures and tone as 10-bit HEVC from libx265 with 2 B-frames, in MP4, and
+  // that MP4's streams unchanged in Matroska and MPEG-TS.
+  private static synchronized Path hevcPictureGapSource(String container) throws Exception {
+    var mp4 =
+        buildFixtureOnce(
+            seekableSources.resolve("gap-hevc.mp4"),
+            output ->
+                runFfmpeg(
+                    pictureGapArguments(
+                        List.of(
+                            "-pix_fmt",
+                            "yuv420p10le",
+                            "-c:v",
+                            "libx265",
+                            "-x265-params",
+                            "keyint=100000:min-keyint=1:scenecut=0:bframes=2:log-level=error",
+                            "-forced-idr",
+                            "1",
+                            "-tag:v",
+                            "hvc1")),
+                    output));
+    if (container.equals("mp4")) {
+      return mp4;
+    }
+
+    return buildFixtureOnce(
+        seekableSources.resolve("gap-hevc." + container),
+        output -> runFfmpeg(List.of("-i", mp4.toString(), "-map", "0", "-c", "copy"), output));
+  }
+
+  // The media's decoded pictures in presentation order, each with its presentation time and the
+  // MD5 of its picture.
+  private static List<DecodedPicture> decodedPictures(byte[] media) throws Exception {
+    var file = Files.createTempFile(longSources, "decoded", ".mp4");
+    Files.write(file, media);
+    var lines =
+        runToCompletion(
+                List.of(
+                    "ffmpeg",
+                    "-nostdin",
+                    "-v",
+                    "error",
+                    "-copyts",
+                    "-i",
+                    file.toString(),
+                    "-map",
+                    "0:v:0",
+                    "-fps_mode",
+                    "passthrough",
+                    "-f",
+                    "framemd5",
+                    "-"))
+            .lines()
+            .toList();
+    var timeBase =
+        lines.stream()
+            .filter(line -> line.startsWith("#tb 0: "))
+            .map(line -> line.substring("#tb 0: ".length()).split("/"))
+            .findFirst()
+            .orElseThrow();
+    return lines.stream()
+        .filter(line -> !line.startsWith("#") && !line.isBlank())
+        .map(line -> line.split(",\\s*"))
+        .map(
+            fields ->
+                new DecodedPicture(
+                    Duration.ofNanos(
+                        new BigDecimal(fields[1])
+                            .multiply(new BigDecimal(timeBase[0]))
+                            .movePointRight(9)
+                            .divide(new BigDecimal(timeBase[1]), 0, RoundingMode.HALF_EVEN)
+                            .longValueExact()),
+                    fields[5]))
+        .toList();
+  }
+
+  private record DecodedPicture(Duration presentationTime, String md5) {
+
+    private boolean isWithin(Duration from, Duration until) {
+      return presentationTime.compareTo(from) >= 0 && presentationTime.compareTo(until) < 0;
+    }
   }
 
   // Segment N's listed interval in ticks of the timescale; segment 0 keeps the AAC priming frame
@@ -6078,11 +6983,38 @@ class WorkerMediaSmokeTest {
       assertThat(report.getJobAttemptId()).isEqualTo(job.getJobAttemptId());
       return new CompletedExecution(
           report,
-          new MediaUploads(List.copyOf(controlPlane.names), Map.copyOf(controlPlane.segments)));
+          new MediaUploads(List.copyOf(controlPlane.names), Map.copyOf(controlPlane.segments)),
+          List.copyOf(controlPlane.progress),
+          controlPlane.completedAt.get());
     }
   }
 
-  private record CompletedExecution(JobAttemptCompleted report, MediaUploads uploads) {}
+  private record CompletedExecution(
+      JobAttemptCompleted report,
+      MediaUploads uploads,
+      List<TimedProgress> progress,
+      long completedAtNanos) {
+
+    // The longest time between two progress reports, or between the last one and the completion.
+    Duration longestSilence() {
+      var times = new ArrayList<Long>();
+      progress.forEach(report -> times.add(report.receivedAtNanos()));
+      times.add(completedAtNanos);
+      return IntStream.range(1, times.size())
+          .mapToObj(index -> Duration.ofNanos(times.get(index) - times.get(index - 1)))
+          .max(Comparator.naturalOrder())
+          .orElseThrow();
+    }
+  }
+
+  // A progress report and when the control plane received it, on System.nanoTime.
+  private record TimedProgress(long receivedAtNanos, JobAttemptProgress report) {
+
+    Duration outputEnd() {
+      var end = report.getOutputEnd();
+      return Duration.ofSeconds(end.getSeconds(), end.getNanos());
+    }
+  }
 
   private static SourceStreamEnd streamEnd(int streamIndex, Duration endTime) {
     var streamEnd = SourceStreamEnd.newBuilder().setStreamIndex(streamIndex);
@@ -6675,7 +7607,9 @@ class WorkerMediaSmokeTest {
 
     private final CompletableFuture<WorkerRegistration> registration = new CompletableFuture<>();
     private final CompletableFuture<JobAttemptCompleted> completed = new CompletableFuture<>();
+    private final AtomicLong completedAt = new AtomicLong();
     private final CompletableFuture<JobAttemptFailed> failed = new CompletableFuture<>();
+    private final List<TimedProgress> progress = new CopyOnWriteArrayList<>();
     private final Map<String, byte[]> segments = new ConcurrentHashMap<>();
     private final List<String> names = new CopyOnWriteArrayList<>();
     private final Server server;
@@ -6716,7 +7650,12 @@ class WorkerMediaSmokeTest {
             registration.complete(message.getRegistration());
           }
 
+          if (message.hasJobAttemptProgress()) {
+            progress.add(new TimedProgress(System.nanoTime(), message.getJobAttemptProgress()));
+          }
+
           if (message.hasJobAttemptCompleted()) {
+            completedAt.set(System.nanoTime());
             completed.complete(message.getJobAttemptCompleted());
           }
 

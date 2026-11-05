@@ -15,11 +15,12 @@ import java.util.regex.Pattern;
  * copies them, as its second output, to a framecrc that it writes there: a header whose {@code #tb}
  * lines name each stream's time base, then one record for each packet with its presentation time
  * and duration on the attempt's zero-based timeline. FFmpeg's stream mapping names the source
- * stream of each of that output's streams. FFmpeg writes each record at once, but its log can write
- * part of a line before it, so a record is read wherever it ends a line. FFmpeg writes the input's
- * metadata, which the source controls, before the stream mapping and the framecrc only after it.
- * That metadata can print the mapping's header itself, so each header discards what was read before
- * it, and the last one, FFmpeg's own, leaves only what follows the real mapping.
+ * stream of each of that output's streams, from whichever input of that FFmpeg reads the source.
+ * FFmpeg writes each record at once, but its log can write part of a line before it, so a record is
+ * read wherever it ends a line. FFmpeg writes the inputs' metadata, which the source controls,
+ * before the stream mapping and the framecrc only after it. That metadata can print the mapping's
+ * header itself, so each header discards what was read before it, and the last one, FFmpeg's own,
+ * leaves only what follows the real mapping.
  */
 final class SourceStreamObservation {
 
@@ -33,7 +34,7 @@ final class SourceStreamObservation {
   // What framecrc prints for a time the packet does not carry: FFmpeg's AV_NOPTS_VALUE.
   private static final long NO_TIME = Long.MIN_VALUE;
   private static final Pattern MAPPING =
-      Pattern.compile("Stream #0:(\\d{1,9}) -> #(\\d{1,9}):(\\d{1,9})\\b");
+      Pattern.compile("Stream #\\d{1,9}:(\\d{1,9}) -> #(\\d{1,9}):(\\d{1,9})\\b");
   private static final int KEYFRAME = 0x1;
   // AV_PKT_FLAG_DISCARD: the demuxer marks a packet that no decoder presents, as an MP4 edit list
   // cuts it away.
