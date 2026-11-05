@@ -34,14 +34,19 @@ DEFAULT_IMAGE='streamarr/streamarr-transcode-worker:0.1.0-SNAPSHOT@sha256:a11de4
 DEFAULT_TIME_LIMIT_S=1200
 GPU_RUN_ARGS=(--gpus all -e "NVIDIA_DRIVER_CAPABILITIES=compute,video,utility")
 
-# The job every recording runs: 6 s segments, the worker's default 250 ms fragmentation target, a
-# 24000/1001 output frame rate and a 35 s source, which the server advertises as 6 media segments.
+# The job every recording runs: 6 s slots, the worker's default 250 ms fragmentation target, a
+# 24000/1001 output frame rate and a 35 s source, which covers 6 slots. Its segment list starts the
+# 5 media segments at slots 0, 1, 2, 3 and 5, so segment 3 is a merged segment from 18 s to 30 s:
+# the worker forces keyframes only at the listed starts, and the GOP places the one at 24 s.
 PERIOD=6
 FRAME_RATE=24000/1001
 FRAGMENTATION_TARGET_US=250000
 SOURCE_SECONDS=35
-MEDIA_SEGMENT_COUNT=6
-# A replacement attempt for segment 3 seeks one period early, to 12 s, as the worker's does.
+SLOT_COUNT=6
+SEGMENT_START_SLOTS=(0 1 2 3 5)
+MEDIA_SEGMENT_COUNT=${#SEGMENT_START_SLOTS[@]}
+# A replacement attempt for segment 3 seeks one slot before its listed start, to 12 s, as the
+# worker's does.
 REPLACEMENT_START=3
 # The forced keyframe time that the missed-keyframe recording leaves out.
 SKIPPED_FORCED_TIME=18
@@ -154,13 +159,19 @@ rung_field() {
   printf '%s\n' "$LADDER" | awk -v rung="$1" -v field="$2" '$1 == rung { print $field }'
 }
 
+# segment_start <segment>: the listed start of that segment, in seconds.
+segment_start() {
+  printf '%s' "$((SEGMENT_START_SLOTS[$1] * PERIOD))"
+}
+
 # forced_times <first segment> [skipped time]: the forced keyframe times the worker passes, every
-# boundary from the attempt's first segment to the last advertised one, without the skipped time.
+# listed start from the attempt's first segment to the last one, without the skipped time.
 forced_times() {
-  local segment times=""
+  local segment time times=""
   for ((segment = $1; segment < MEDIA_SEGMENT_COUNT; segment++)); do
-    if [[ "$((segment * PERIOD))" != "${2:-}" ]]; then
-      times="${times:+$times,}$((segment * PERIOD))"
+    time=$(segment_start "$segment")
+    if [[ "$time" != "${2:-}" ]]; then
+      times="${times:+$times,}$time"
     fi
   done
   printf '%s' "$times"
@@ -194,7 +205,7 @@ plan_recording() {
     extended-missed) skipped=$SKIPPED_FORCED_TIME ;;
   esac
   if ((start > 0)); then
-    seek=(-ss "$(((start - 1) * PERIOD))")
+    seek=(-ss "$(($(segment_start "$start") - PERIOD))")
   fi
   local times
   times=$(forced_times "$start" "$skipped")
@@ -209,6 +220,7 @@ tier=${tier[1]:-}
 expectedCodecString=$codec_string
 startSequenceNumber=$start
 mediaSegmentCount=$MEDIA_SEGMENT_COUNT
+segmentStartSlots=$(IFS=,; printf '%s' "${SEGMENT_START_SLOTS[*]}")
 gopFrames=$gop
 forcedKeyframeTimes=$times
 skippedForcedTime=$skipped
@@ -454,9 +466,9 @@ set -euo pipefail
 cd /work
 ffmpeg -version | head -n 1 > ffmpeg-version
 # The source: 1920x1080 testsrc2 at $FRAME_RATE, $SOURCE_SECONDS s, cut to SMPTE bars from 3.5 s to
-# 4.5 s and from 27.5 s to 28.5 s, so that the encoder sees scene cuts inside segments 0 and 4. No
-# cut falls between 12 s and the extended GOP after it, where the missed-keyframe recording looks for
-# the keyframe the GOP places.
+# 4.5 s and from 27.5 s to 28.5 s, so that the encoder sees scene cuts inside segment 0 and inside
+# the merged segment 3, after the keyframe the GOP places there. No cut falls between 12 s and the
+# extended GOP after it, where the missed-keyframe recording looks for the keyframe the GOP places.
 ffmpeg -hide_banner -nostdin -loglevel error -y \\
   -f lavfi -i testsrc2=size=1920x1080:rate=$FRAME_RATE:duration=$SOURCE_SECONDS \\
   -f lavfi -i smptehdbars=size=1920x1080:rate=$FRAME_RATE:duration=$SOURCE_SECONDS \\
@@ -465,8 +477,8 @@ ffmpeg -hide_banner -nostdin -loglevel error -y \\
 duration=\$(ffprobe -v error -show_entries format=duration -of csv=p=0 source.mp4)
 millis=\$(awk -v seconds="\$duration" 'BEGIN { printf "%d", seconds * 1000 }')
 count=\$(((millis + $PERIOD * 1000 - 1) / ($PERIOD * 1000)))
-if [ "\$count" != $MEDIA_SEGMENT_COUNT ]; then
-  echo "the source lasts \$duration s, which the server advertises as \$count media segments, not $MEDIA_SEGMENT_COUNT" >&2
+if [ "\$count" != $SLOT_COUNT ]; then
+  echo "the source lasts \$duration s, which covers \$count slots of $PERIOD s, not $SLOT_COUNT" >&2
   exit 5
 fi
 for args in out/*.args; do

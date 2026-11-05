@@ -29,6 +29,10 @@ default.
 
 ## What is recorded
 
+Every job carries a segment list on 6 s slots that starts its 5 media segments at slots 0, 1, 2, 3
+and 5. Segment 3 is therefore a merged segment from 18 s to 30 s. As the worker does, each recording
+forces keyframes only at the listed starts, so the GOP places the keyframe at 24 s.
+
 For each encoder and each rung of the default ladder (1080p, 720p, 480p and 360p), five encodes run:
 
 | Recording | What it runs |

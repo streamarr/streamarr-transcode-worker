@@ -96,6 +96,22 @@ class NvencRecorderCommandsTest {
     assertThat(plannedRecordings()).extracting(PlannedRecording::name).isEqualTo(expected);
   }
 
+  @Test
+  @DisplayName(
+      "Should plan one segment list with a merged segment for every recording when the recorder"
+          + " runs with its defaults")
+  void
+      shouldPlanOneSegmentListWithAMergedSegmentForEveryRecordingWhenTheRecorderRunsWithItsDefaults() {
+    var recordings = plannedRecordings();
+
+    assertThat(recordings)
+        .extracting(NvencRecorderCommandsTest::segmentStartSlotsOf)
+        .containsOnly(List.of(0L, 1L, 2L, 3L, 5L));
+    assertThat(recordings)
+        .extracting(recording -> recording.job().get("mediaSegmentCount"))
+        .containsOnly("5");
+  }
+
   private static List<String> workerCommandFor(PlannedRecording recording) {
     var pipeline =
         new FfmpegCommandBuilder("ffmpeg", WORKER_FRAGMENTATION_TARGET)
@@ -137,6 +153,7 @@ class NvencRecorderCommandsTest {
             .sourcePath(Path.of("/work/source.mp4"))
             .startSequenceNumber(Integer.parseInt(job.get("startSequenceNumber")))
             .mediaSegmentCount(Integer.parseInt(job.get("mediaSegmentCount")))
+            .segmentStartSlots(segmentStartSlotsOf(recording))
             .targetSegmentDuration(6)
             .outputFrameRate(Optional.of(new OutputFrameRate(24_000, 1001)))
             .transcodeDecision(decision)
@@ -145,6 +162,12 @@ class NvencRecorderCommandsTest {
             .bitrate(Long.parseLong(job.get("bitrate")))
             .build();
     return TranscodeJob.builder().request(request).videoEncoder(encoder).build();
+  }
+
+  private static List<Long> segmentStartSlotsOf(PlannedRecording recording) {
+    return Arrays.stream(recording.job().get("segmentStartSlots").split(","))
+        .map(Long::valueOf)
+        .toList();
   }
 
   private static Optional<VideoCodecTier> tierOf(String tier) {
