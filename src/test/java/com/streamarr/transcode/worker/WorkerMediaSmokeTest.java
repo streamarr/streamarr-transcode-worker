@@ -106,7 +106,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.OptionalDouble;
 import java.util.OptionalInt;
 import java.util.Set;
 import java.util.UUID;
@@ -4095,7 +4094,9 @@ class WorkerMediaSmokeTest {
   private static final String LFE_TONE = "0.1*sin(2*PI*50*t)";
   private static final double LOSSY_TONE_TOLERANCE_DB = 0.5;
   private static final double LOSSLESS_TONE_TOLERANCE_DB = 0.05;
-  private static final double AAC_192K_CEILING_DBTP = -2.0;
+  // A measured result for this tone, not a bound: each lossy codec at 192 kb/s decoded it near −3
+  // dBTP, and a limiter that reads only samples let AAC through above 0 dBTP.
+  private static final double LOSSY_192K_CEILING_DBTP = -2.0;
   // ADR 0050: the Annex 2 filter reads a FLAC or ALAC downmix no more than 0.01 dB above −1 dBTP.
   private static final double LOSSLESS_CEILING_DBTP = -1.0 + 0.01;
   private static final int MATRIX_SOURCE_SAMPLES = MATRIX_SOURCE_SECONDS * MATRIX_SAMPLE_RATE;
@@ -4202,19 +4203,12 @@ class WorkerMediaSmokeTest {
 
     var delivered = decodedDownmix(source, downmix);
 
-    var ceiling =
-        switch (downmix.codec()) {
-          case "aac" -> OptionalDouble.of(AAC_192K_CEILING_DBTP);
-          case "flac", "alac" -> OptionalDouble.of(LOSSLESS_CEILING_DBTP);
-          default -> OptionalDouble.empty();
-        };
+    var ceiling = downmix.isLossless() ? LOSSLESS_CEILING_DBTP : LOSSY_192K_CEILING_DBTP;
     for (var side = 0; side < 2; side++) {
       assertThat(samplePeak(delivered[side])).as("side %d's sample peak", side).isLessThan(1.0);
-      if (ceiling.isPresent()) {
-        assertThat(AnnexTwoMeter.truePeakDb(delivered[side]))
-            .as("side %d's true peak, dBTP", side)
-            .isLessThan(ceiling.getAsDouble());
-      }
+      assertThat(AnnexTwoMeter.truePeakDb(delivered[side]))
+          .as("side %d's true peak, dBTP", side)
+          .isLessThan(ceiling);
     }
   }
 
@@ -4334,9 +4328,9 @@ class WorkerMediaSmokeTest {
 
   static Stream<Arguments> signalledLevelsOutputsAndStarts() {
     return Stream.of(
-            SignalledLevels.ac3(0.5),
-            SignalledLevels.eac3(0.594604, 0.5),
-            SignalledLevels.eac3(0.5, 0.707107))
+            new SignalledLevels("ac3", 0.594604, 0.5),
+            new SignalledLevels("eac3", 0.594604, 0.5),
+            new SignalledLevels("eac3", 0.5, MINUS_3_DB_LEVEL))
         .flatMap(
             levels ->
                 Stream.of("stereo", "mono")
@@ -4346,31 +4340,33 @@ class WorkerMediaSmokeTest {
                                 .map(start -> Arguments.of(levels, layout, start))));
   }
 
-  /**
-   * An AC-3 or E-AC-3 track whose first frame signals these Lo/Ro levels, written with the
-   * encoder's options. FFmpeg's E-AC-3 encoder writes no centre or surround mix level from
-   * center_mixlev or surround_mixlev, so an E-AC-3 track signals them through its Lo/Ro levels.
-   */
-  record SignalledLevels(String codec, double centre, double surround, List<String> options) {
+  private static final double MINUS_3_DB_LEVEL = 0.707107;
 
-    // AC-3 always signals a centre level; FFmpeg's encoder writes 0.595 unless told otherwise.
-    static SignalledLevels ac3(double surround) {
-      return new SignalledLevels(
-          "ac3", 0.594604, surround, List.of("-surround_mixlev", String.valueOf(surround)));
+  /**
+   * The Lo/Ro levels that an AC-3 or E-AC-3 track signals. FFmpeg's E-AC-3 encoder writes no centre
+   * or surround mix level from center_mixlev or surround_mixlev, so an E-AC-3 track signals them
+   * through its Lo/Ro levels.
+   */
+  record SignalledLevels(String codec, double centre, double surround) {
+
+    List<String> encoderOptions() {
+      var centreLevel = String.valueOf(centre);
+      var surroundLevel = String.valueOf(surround);
+      if ("ac3".equals(codec)) {
+        return List.of("-center_mixlev", centreLevel, "-surround_mixlev", surroundLevel);
+      }
+
+      return List.of(
+          "-dmix_mode", "loro", "-loro_cmixlev", centreLevel, "-loro_surmixlev", surroundLevel);
     }
 
-    static SignalledLevels eac3(double centre, double surround) {
-      return new SignalledLevels(
-          "eac3",
-          centre,
-          surround,
-          List.of(
-              "-dmix_mode",
-              "loro",
-              "-loro_cmixlev",
-              String.valueOf(centre),
-              "-loro_surmixlev",
-              String.valueOf(surround)));
+    // Levels that differ from these in both the centre and the surrounds.
+    SignalledLevels others() {
+      return new SignalledLevels(codec, otherThan(centre), otherThan(surround));
+    }
+
+    private static double otherThan(double level) {
+      return Double.compare(level, MINUS_3_DB_LEVEL) == 0 ? 0.5 : MINUS_3_DB_LEVEL;
     }
 
     @Override
@@ -4453,8 +4449,18 @@ class WorkerMediaSmokeTest {
   }
 
   // The seekable source's video, and an AC-3 or E-AC-3 5.1(side) track of 18 s that holds a tone
-  // of its own in each channel except the LFE.
-  private static Path signalledLevelsSource(SignalledLevels levels) throws Exception {
+  // of its own in each channel except the LFE. Its frames signal the levels up to the replacement
+  // attempt's segment and other levels from there on, so an attempt that read the levels where it
+  // seeks would mix differently from an attempt from the start.
+  private static synchronized Path signalledLevelsSource(SignalledLevels levels) throws Exception {
+    var name =
+        String.format(
+            Locale.ROOT, "%s-c%.3f-s%.3f", levels.codec(), levels.centre(), levels.surround());
+    var source = seekableSources.resolve("matrix-levels-" + name + ".mkv");
+    if (generatedSeekableSources.contains(source)) {
+      return source;
+    }
+
     var tones = new HashMap<String, String>();
     LEVEL_TONES.forEach(
         (speaker, frequency) -> tones.put(speaker, "0.1*sin(2*PI*" + frequency + "*t)"));
@@ -4464,13 +4470,35 @@ class WorkerMediaSmokeTest {
                 .channels(tones)
                 .seconds(SEEKABLE_SOURCE_SECONDS)
                 .build());
-    var options = new ArrayList<>(List.of("-c:a", levels.codec(), "-b:a", "640k"));
-    options.addAll(levels.options());
-    return reencodedAudio(
-        tonal,
-        String.format(
-            Locale.ROOT, "%s-c%.3f-s%.3f", levels.codec(), levels.centre(), levels.surround()),
-        options);
+    var seek = String.valueOf(REPLACEMENT_START_SEQUENCE_NUMBER * MATRIX_SEGMENT_SECONDS);
+    var head = seekableSources.resolve(name + "-head." + levels.codec());
+    runFfmpeg(levelsEncode(List.of("-i", tonal.toString(), "-t", seek), levels), head);
+    var tail = seekableSources.resolve(name + "-tail." + levels.codec());
+    runFfmpeg(levelsEncode(List.of("-ss", seek, "-i", tonal.toString()), levels.others()), tail);
+    runFfmpeg(
+        List.of(
+            "-i",
+            tonal.toString(),
+            "-i",
+            "concat:" + head + "|" + tail,
+            "-map",
+            "0:v",
+            "-map",
+            "1:a",
+            "-c",
+            "copy"),
+        source);
+    generatedSeekableSources.add(source);
+    return source;
+  }
+
+  // The input's audio as a raw AC-3 or E-AC-3 stream whose frames signal the levels.
+  private static List<String> levelsEncode(List<String> input, SignalledLevels levels) {
+    var arguments = new ArrayList<>(input);
+    arguments.addAll(List.of("-map", "0:a", "-c:a", levels.codec(), "-b:a", "640k"));
+    arguments.addAll(levels.encoderOptions());
+    arguments.addAll(List.of("-f", levels.codec()));
+    return arguments;
   }
 
   private static MatrixSource.MatrixSourceBuilder everyChannel(
