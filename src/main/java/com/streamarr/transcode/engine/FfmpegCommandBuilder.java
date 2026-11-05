@@ -200,6 +200,7 @@ public class FfmpegCommandBuilder {
       copiedAudio =
           AudioDecision.builder()
               .mode(audio.mode())
+              .streamIndex(audio.streamIndex())
               .codec("libopus")
               .channels(audio.channels())
               .bitrate(audio.bitrate())
@@ -256,8 +257,9 @@ public class FfmpegCommandBuilder {
             "pipe:0",
             "-map",
             "0:v:0"));
-    if (decision.audioDecision().mode() != AudioMode.NONE) {
-      cmd.addAll(List.of("-map", "0:a:0"));
+    var audio = decision.audioDecision();
+    if (audio.mode() != AudioMode.NONE) {
+      cmd.addAll(List.of("-map", audioMap(audio, "a:0")));
     }
   }
 
@@ -317,13 +319,33 @@ public class FfmpegCommandBuilder {
 
   private void addStreamSelection(List<String> cmd, TranscodeDecision decision) {
     cmd.addAll(List.of("-map", "0:" + decision.videoDecision().streamIndex()));
-    if (decision.audioDecision().mode() != AudioMode.NONE) {
-      cmd.addAll(List.of("-map", "0:a:0"));
+    var audio = decision.audioDecision();
+    if (audio.mode() != AudioMode.NONE) {
+      cmd.addAll(List.of("-map", audioMap(audio, audio.sourceStreamSpecifier())));
     }
 
-    if (decision.subtitleDecision().mode() == SubtitleMode.EXCLUDE) {
+    var namesAudioStream = audio.mode() != AudioMode.NONE && audio.streamIndex().isPresent();
+    if (decision.subtitleDecision().mode() == SubtitleMode.EXCLUDE || namesAudioStream) {
       cmd.addAll(List.of("-map", "-0:s"));
     }
+
+    // A negative map undoes the maps before it that it matches, so a named subtitle, data,
+    // attachment or cover art stream maps nothing and the producer refuses the output without a
+    // sound track, where FFmpeg would fail writing it. The chosen video stream is never cover art.
+    if (namesAudioStream) {
+      cmd.addAll(List.of("-map", "-0:d", "-map", "-0:t", "-map", "-0:disp:attached_pic"));
+    }
+  }
+
+  // A stream that the job names maps nothing when the source has no stream there, so that the
+  // producer refuses the output that lacks its sound track as the job's error, where FFmpeg would
+  // fail to start. Without a name, FFmpeg fails as before when the source has no audio stream.
+  private static String audioMap(AudioDecision audio, String specifier) {
+    if (audio.streamIndex().isPresent()) {
+      return "0:" + specifier + "?";
+    }
+
+    return "0:" + specifier;
   }
 
   // The copy of the source already starts at zero, so the encode of the copy keeps its timestamps.

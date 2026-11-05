@@ -137,6 +137,8 @@ final class WorkerVariantJobMapper {
         .codec(audio.hasCodec() ? audio.getCodec() : null)
         .channels(audio.getChannels())
         .bitrate(audio.getBitrateBitsPerSecond())
+        .streamIndex(
+            audio.hasStreamIndex() ? OptionalInt.of(audio.getStreamIndex()) : OptionalInt.empty())
         .channelLayout(channelLayout(audio))
         .outputSampleRate(outputSampleRate(audio))
         .outputBitDepth(outputBitDepth(audio))
@@ -187,6 +189,11 @@ final class WorkerVariantJobMapper {
   private static boolean namesLayout(build.buf.gen.streamarr.transcode.v1.AudioDecision audio) {
     return audio.getMode() == AUDIO_MODE_TRANSCODE
         && audio.getChannelLayout() != AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_UNSPECIFIED;
+  }
+
+  /** FFmpeg's specifier of the source stream that the job copies or encodes as its audio. */
+  static String audioStreamSpecifierOf(VariantJob job) {
+    return audio(job.getDecision().getAudio()).sourceStreamSpecifier();
   }
 
   /**

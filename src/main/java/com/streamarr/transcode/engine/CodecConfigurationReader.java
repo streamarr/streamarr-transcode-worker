@@ -63,6 +63,11 @@ final class CodecConfigurationReader {
         .toList();
   }
 
+  /** Whether the {@code moov} declares a sound track. */
+  static boolean declaresSoundTrack(InitializationSegment segment) {
+    return AudioTrack.of(moovOf(segment)).isPresent();
+  }
+
   /**
    * The sample entry of the first video track; empty when the {@code moov} declares no video track.
    * This method does not read the sample entry's decoder configuration record. {@link #videoOf}

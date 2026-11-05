@@ -369,10 +369,7 @@ public final class TranscodeWorker implements AutoCloseable {
       Thread.currentThread().interrupt();
       return new ChosenAudio.Unreadable(e);
     } catch (ExecutionException e) {
-      // The mapper refuses the job for the same reason.
-      return e.getCause() instanceof InvalidJobSpecificationException
-          ? new ChosenAudio.NotRead()
-          : new ChosenAudio.Unreadable(e);
+      return chosenAudioAfter(e, job);
     } catch (TimeoutException e) {
       return new ChosenAudio.Unreadable(e);
     } finally {
@@ -380,14 +377,27 @@ public final class TranscodeWorker implements AutoCloseable {
     }
   }
 
+  // The mapper refuses the job for the same reason. A source without the audio stream that the
+  // job names makes the job invalid; a job that names none fails as it did before names existed.
+  private static ChosenAudio chosenAudioAfter(ExecutionException failure, VariantJob job) {
+    return switch (failure.getCause()) {
+      case InvalidJobSpecificationException _ -> new ChosenAudio.NotRead();
+      case FfprobeExecutor.NotAnAudioStreamException _
+          when job.getDecision().getAudio().hasStreamIndex() ->
+          new ChosenAudio.NotAnAudioStream();
+      case null, default -> new ChosenAudio.Unreadable(failure);
+    };
+  }
+
   private SourceAudio readSourceAudio(VariantJob job)
       throws ExecutionException, InterruptedException {
     var output = WorkerVariantJobMapper.audioLayoutOf(job).orElseThrow();
     var source = sources.resolve(job.getSource());
-    var stream = ffprobe.readChosenAudio(source);
+    var specifier = WorkerVariantJobMapper.audioStreamSpecifierOf(job);
+    var stream = ffprobe.readChosenAudio(source, specifier);
     var levels =
         mixesWithLoRoLevels(stream, output)
-            ? Optional.of(ffprobe.readDownmixLevels(source))
+            ? Optional.of(ffprobe.readDownmixLevels(source, specifier))
             : Optional.<DownmixLevels>empty();
     return ChosenAudio.factsOf(stream, levels);
   }
@@ -429,6 +439,14 @@ public final class TranscodeWorker implements AutoCloseable {
           fromProto(job.getJobAttemptId()),
           configuration.availableSlots());
       reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED);
+      return new Refused();
+    }
+
+    if (chosenAudio instanceof ChosenAudio.NotAnAudioStream) {
+      log.warn(
+          "Refusing job attempt {}: the stream that it names as its audio is not an audio stream",
+          fromProto(job.getJobAttemptId()));
+      reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
       return new Refused();
     }
 
@@ -678,13 +696,14 @@ public final class TranscodeWorker implements AutoCloseable {
   }
 
   // The server does not replace an attempt whose output differs from the job: the same decision on
-  // the same encoder backend produces the same output.
+  // the same encoder backend produces the same output. Nor does it replace one whose job names a
+  // stream that is not an audio stream as its audio.
   private static JobAttemptFailure jobAttemptFailureOf(ProducerFailure reason) {
-    if (reason == ProducerFailure.OUTPUT_MISMATCH) {
-      return JobAttemptFailure.JOB_ATTEMPT_FAILURE_OUTPUT_MISMATCH;
-    }
-
-    return JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED;
+    return switch (reason) {
+      case OUTPUT_MISMATCH -> JobAttemptFailure.JOB_ATTEMPT_FAILURE_OUTPUT_MISMATCH;
+      case NOT_AN_AUDIO_STREAM -> JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION;
+      default -> JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED;
+    };
   }
 
   // Claims the attempt so that its producer's own outcome is never reported, and finishes its stop

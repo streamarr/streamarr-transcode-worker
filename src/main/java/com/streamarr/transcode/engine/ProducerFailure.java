@@ -40,6 +40,12 @@ public enum ProducerFailure {
    */
   OUTPUT_MISMATCH,
   /**
+   * The stream that the job names as its audio is not an audio stream of the source: the
+   * initialization segment declares no sound track, or a second video track, which only an audio
+   * map that names a video stream adds.
+   */
+  NOT_AN_AUDIO_STREAM,
+  /**
    * Reading FFmpeg's standard output failed, or the copy of the source did not reach the FFmpeg
    * that encodes it.
    */
@@ -69,13 +75,13 @@ public enum ProducerFailure {
       case SKIPPED_SEGMENT_NUMBER -> SKIPPED_SEGMENT_NUMBER;
       case SHORT_VIDEO_SAMPLE -> SHORT_VIDEO_SAMPLE;
       case OUTPUT_MISMATCH -> OUTPUT_MISMATCH;
+      case MULTIPLE_VIDEO_TRACKS, NO_SOUND_TRACK -> NOT_AN_AUDIO_STREAM;
       case UNSIZED_BOX,
           MALFORMED_BOX,
           SAMPLE_DATA_OUTSIDE_MDAT,
           MISSING_INITIALIZATION_SEGMENT,
           MISPLACED_INITIALIZATION_SEGMENT,
           UNEXPECTED_BOX,
-          MULTIPLE_VIDEO_TRACKS,
           PRESENTATION_TIME_REGRESSED,
           UNUSABLE_VIDEO_TIMING ->
           MALFORMED_OUTPUT;

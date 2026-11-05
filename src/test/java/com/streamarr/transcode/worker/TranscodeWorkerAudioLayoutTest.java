@@ -69,6 +69,12 @@ class TranscodeWorkerAudioLayoutTest {
         "sample_rate":"96000","channels":2,"channel_layout":"stereo","bits_per_raw_sample":"24"}]}
       """;
 
+  // What the pinned ffprobe prints when no stream matches the specifier.
+  private static final String NO_STREAM =
+      """
+      {"streams":[]}
+      """;
+
   // The pinned FFmpeg's ashowinfo line for an AC-3 frame that signals Lo/Ro levels.
   private static final String AC3_LEVELS =
       "[Parsed_ashowinfo_0 @ 0x1]   side data - downmix: preferred downmix type - unknown Mix"
@@ -118,6 +124,76 @@ class TranscodeWorkerAudioLayoutTest {
                 + "channelmap=map=FL-FL|FR-FR|FC-FC|LFE-LFE|SL-BL|SR-BR:channel_layout=5.1")
         .containsSubsequence("-ch_layout", "5.1")
         .doesNotContain("-ac");
+  }
+
+  @Test
+  @DisplayName(
+      "Should read, mix and encode the audio stream that the job names when it names a layout")
+  void shouldReadMixAndEncodeTheAudioStreamThatTheJobNamesWhenItNamesALayout() throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = layoutJob(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO, 2).toBuilder();
+    job.getDecisionBuilder().getAudioBuilder().setStreamIndex(2);
+    var secondAc3Track = AC3_SIDE_SURROUND.replace("\"index\":1", "\"index\":2");
+
+    var connection = start(launcher, ffprobeAnswering(secondAc3Track, AC3_LEVELS), job.build());
+
+    assertThat(eventsOf(connection))
+        .containsExactly(EstablishWorkerSessionRequest.EventCase.JOB_ATTEMPT_STARTED);
+    assertThat(probeCommands)
+        .extracting(ProbeCommand::arguments)
+        .satisfiesExactly(
+            ffprobe -> assertThat(ffprobe).containsSubsequence("-select_streams", "2"),
+            ffmpeg -> assertThat(ffmpeg).containsSubsequence("-map", "0:2", "-frames:a", "1"));
+    assertThat(launcher.command(fromProto(job.getJobAttemptId())))
+        .containsSubsequence("-drc_scale:2", "0", "-target_level:2", "-31", "-i")
+        .containsSequence("-map", "0:2?")
+        .doesNotContain("-drc_scale:a:0", "0:a:0");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("readsOfNoAudioStream")
+  @DisplayName(
+      "Should refuse the job as an invalid specification and start no FFmpeg when the stream that"
+          + " the job names is not an audio stream")
+  void
+      shouldRefuseTheJobAsAnInvalidSpecificationAndStartNoFfmpegWhenTheStreamThatTheJobNamesIsNotAnAudioStream(
+          String description, String ffprobeOutput) throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+    var job = layoutJob(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO, 2).toBuilder();
+    job.getDecisionBuilder().getAudioBuilder().setStreamIndex(2);
+
+    var connection = start(launcher, ffprobeAnswering(ffprobeOutput), job.build());
+
+    assertFailedAs(connection, JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
+    assertThat(launcher.hasLaunchedAny()).isFalse();
+  }
+
+  static Stream<Arguments> readsOfNoAudioStream() {
+    return Stream.of(
+        Arguments.of(
+            "a subtitle stream",
+            """
+            {"streams":[{"index":2,"codec_name":"subrip","codec_type":"subtitle"}]}
+            """),
+        Arguments.of("no stream", NO_STREAM));
+  }
+
+  @Test
+  @DisplayName(
+      "Should fail the attempt at startup when the source has no audio stream and the job names"
+          + " none")
+  void shouldFailTheAttemptAtStartupWhenTheSourceHasNoAudioStreamAndTheJobNamesNone()
+      throws Exception {
+    var launcher = ScriptedProcessLauncher.running();
+
+    var connection =
+        start(
+            launcher,
+            ffprobeAnswering(NO_STREAM),
+            layoutJob(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO, 2));
+
+    assertFailedAs(connection, JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED);
+    assertThat(launcher.hasLaunchedAny()).isFalse();
   }
 
   @Test

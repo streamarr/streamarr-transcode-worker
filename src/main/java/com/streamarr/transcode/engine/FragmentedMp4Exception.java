@@ -34,6 +34,8 @@ final class FragmentedMp4Exception extends RuntimeException {
     /** A top-level box other than the {@code moof} and {@code mdat} pair of the next fragment. */
     UNEXPECTED_BOX,
     MULTIPLE_VIDEO_TRACKS,
+    /** The job names its audio stream, but the initialization segment declares no sound track. */
+    NO_SOUND_TRACK,
     SKIPPED_SEGMENT_NUMBER,
     /**
      * A keyframe, or an audio sample, starts before the one of its track that arrived before it.

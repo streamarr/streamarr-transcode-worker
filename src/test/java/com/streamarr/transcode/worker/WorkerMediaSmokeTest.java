@@ -9,6 +9,7 @@ import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.start;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variantJobBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.assertj.core.api.Assertions.within;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -44,6 +45,7 @@ import build.buf.gen.streamarr.transcode.v1.ProbeMediaInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
+import build.buf.gen.streamarr.transcode.v1.SubtitleMode;
 import build.buf.gen.streamarr.transcode.v1.TranscodeExecution;
 import build.buf.gen.streamarr.transcode.v1.TranscodeMode;
 import build.buf.gen.streamarr.transcode.v1.TranscodeWorkerServiceGrpc;
@@ -1190,6 +1192,165 @@ class WorkerMediaSmokeTest {
               assertThat(video.getWidth()).isEqualTo(320);
               assertThat(video.getHeight()).isEqualTo(180);
             });
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"TRANSCODE_MODE_UNSPECIFIED", "UNRECOGNIZED"},
+      mode = EnumSource.Mode.EXCLUDE)
+  @DisplayName("Should upload the second audio track when the job names it")
+  void shouldUploadTheSecondAudioTrackWhenTheJobNamesIt(TranscodeMode mode) throws Exception {
+    var source = sourceWithTwoAudioTracks();
+    var probe = probeExecutor().probe(source, requestBuilder().build()).result().getMedia();
+    assertThat(probe.getStreamsList())
+        .extracting(ProbeStreamInfo::getCodec, ProbeStreamInfo::getSampleRateHz)
+        .containsExactly(tuple("h264", 0), tuple("aac", 48_000), tuple("ac3", 44_100));
+    var audioCodec = audioModeOf(mode) == AudioMode.AUDIO_MODE_COPY ? "ac3" : "aac";
+    var job = variantJobBuilder(mode);
+    withVideo(job, h264VideoFor(mode, FIXTURE));
+    job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setMode(audioModeOf(mode))
+        .setCodec(audioCodec)
+        .setChannels(2)
+        .setBitrateBitsPerSecond(128_000)
+        .setStreamIndex(2);
+    job.getVariantBuilder().setWidth(320).setHeight(180).setBitrateBitsPerSecond(500_000);
+    job.getExecutionBuilder().setMediaSegmentCount(FIXTURE_SEGMENT_COUNT);
+
+    var uploads = execute(engine(softwareCapabilities()), root, job.build());
+
+    assertThat(uploads.names()).containsExactlyElementsOf(uploadNames(FIXTURE_SEGMENT_COUNT));
+    var media = playable(uploads.contentOf(uploads.names()));
+    assertDecodes(media);
+    // Only the second track holds 44.1 kHz audio, and the AAC encoder keeps the source's rate.
+    assertThat(streams(media))
+        .filteredOn(stream -> "audio".equals(stream.getCodecType()))
+        .singleElement()
+        .satisfies(
+            audio -> {
+              assertThat(audio.getCodec()).isEqualTo(audioCodec);
+              assertThat(audio.getSampleRateHz()).isEqualTo(44_100);
+            });
+  }
+
+  @ParameterizedTest(name = "{0} naming stream {1} with subtitles {2}")
+  @CsvSource({
+    "TRANSCODE_MODE_REMUX, 0, SUBTITLE_MODE_EXCLUDE",
+    "TRANSCODE_MODE_REMUX, 3, SUBTITLE_MODE_HLS",
+    "TRANSCODE_MODE_REMUX, 4, SUBTITLE_MODE_EXCLUDE",
+    "TRANSCODE_MODE_REMUX, 5, SUBTITLE_MODE_EXCLUDE",
+    "TRANSCODE_MODE_REMUX, 9, SUBTITLE_MODE_EXCLUDE",
+    "TRANSCODE_MODE_FULL_TRANSCODE, 0, SUBTITLE_MODE_EXCLUDE",
+    "TRANSCODE_MODE_FULL_TRANSCODE, 3, SUBTITLE_MODE_HLS",
+    "TRANSCODE_MODE_FULL_TRANSCODE, 4, SUBTITLE_MODE_EXCLUDE",
+    "TRANSCODE_MODE_FULL_TRANSCODE, 5, SUBTITLE_MODE_EXCLUDE",
+    "TRANSCODE_MODE_FULL_TRANSCODE, 9, SUBTITLE_MODE_EXCLUDE"
+  })
+  @DisplayName(
+      "Should report an invalid specification and upload nothing when the stream that the job names"
+          + " as its audio is a video, subtitle, attachment or cover art stream, or no stream, of a"
+          + " real source")
+  void
+      shouldReportAnInvalidSpecificationAndUploadNothingWhenTheStreamThatTheJobNamesAsItsAudioIsNotAnAudioStreamOfARealSource(
+          TranscodeMode mode, int streamIndex, SubtitleMode subtitleMode) throws Exception {
+    var source = sourceWithSubtitleAndAttachment();
+    var job = variantJobBuilder(mode);
+    withVideo(job, h264VideoFor(mode, FIXTURE));
+    job.getSourceBuilder().setRelativeKey(source.getFileName().toString());
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setMode(audioModeOf(mode))
+        .setCodec("aac")
+        .setChannels(2)
+        .setBitrateBitsPerSecond(128_000)
+        .setStreamIndex(streamIndex);
+    job.getDecisionBuilder().getSubtitleBuilder().setMode(subtitleMode);
+    job.getVariantBuilder().setWidth(320).setHeight(180).setBitrateBitsPerSecond(500_000);
+    job.getExecutionBuilder().setMediaSegmentCount(FIXTURE_SEGMENT_COUNT);
+
+    var failure = executeExpectingFailure(engine(softwareCapabilities()), root, job.build());
+
+    assertThat(failure.failure().getFailure())
+        .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION);
+    assertThat(failure.uploads().names()).isEmpty();
+  }
+
+  // The fixture's video and AAC track, then a SubRip subtitle, a font attachment and cover art,
+  // which FFmpeg reads from Matroska as a video stream with the attached picture disposition.
+  private Path sourceWithSubtitleAndAttachment() throws Exception {
+    copyMedia();
+    var subtitles = root.resolve("subtitles.srt");
+    Files.writeString(subtitles, "1\n00:00:00,000 --> 00:00:02,000\nHello\n");
+    var font = root.resolve("font.ttf");
+    Files.write(font, new byte[] {0, 1, 0, 0});
+    var cover = root.resolve("cover.png");
+    runFfmpeg(List.of("-f", "lavfi", "-i", "color=red:s=64x64", "-frames:v", "1"), cover);
+    var source = root.resolve("subtitle-and-attachment.mkv");
+    runFfmpeg(
+        List.of(
+            "-i",
+            root.resolve("movie.mkv").toString(),
+            "-i",
+            subtitles.toString(),
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a:0",
+            "-map",
+            "0:a:0",
+            "-map",
+            "1:s:0",
+            "-c",
+            "copy",
+            "-c:s",
+            "srt",
+            "-attach",
+            font.toString(),
+            "-metadata:s:t:0",
+            "mimetype=application/x-truetype-font",
+            "-attach",
+            cover.toString(),
+            "-metadata:s:t:1",
+            "mimetype=image/png"),
+        source);
+    var streams = probeExecutor().probe(source, requestBuilder().build()).result().getMedia();
+    assertThat(streams.getStreamsList())
+        .extracting(ProbeStreamInfo::getCodecType)
+        .containsExactly("video", "audio", "audio", "subtitle", "attachment", "video");
+    return source;
+  }
+
+  // The fixture's video and 48 kHz AAC track, then its audio again as a 44.1 kHz AC-3 track.
+  private Path sourceWithTwoAudioTracks() throws Exception {
+    copyMedia();
+    var source = root.resolve("two-audio-tracks.mkv");
+    runFfmpeg(
+        List.of(
+            "-i",
+            root.resolve("movie.mkv").toString(),
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a:0",
+            "-map",
+            "0:a:0",
+            "-c:v",
+            "copy",
+            "-c:a:0",
+            "copy",
+            "-c:a:1",
+            "ac3",
+            "-ar:a:1",
+            "44100",
+            "-metadata:s:a:0",
+            "language=eng",
+            "-metadata:s:a:1",
+            "language=jpn"),
+        source);
+    return source;
   }
 
   private Path sourceWithCoverArtBeforeVideo() throws Exception {

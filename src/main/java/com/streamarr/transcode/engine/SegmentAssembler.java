@@ -36,6 +36,7 @@ final class SegmentAssembler {
   private final long maximumSegmentBytes;
   private final Optional<OutputFrameRate> encodedFrameRate;
   private final VideoDecision videoDecision;
+  private final boolean requiresSoundTrack;
   // Set by the initialization segment, which the reader returns before any fragment.
   private Optional<VideoSampleRewrite> sampleRewrite = Optional.empty();
 
@@ -48,6 +49,7 @@ final class SegmentAssembler {
    *     that the assembler refuses a fragment holding a video sample shorter than half a frame;
    *     empty when the attempt copies the video, whose sample durations follow the source
    * @param videoDecision the video that the initialization segment must declare
+   * @param requiresSoundTrack whether the initialization segment must declare a sound track
    */
   @Builder
   private SegmentAssembler(
@@ -55,7 +57,8 @@ final class SegmentAssembler {
       int startSequenceNumber,
       long maximumSegmentBytes,
       @NonNull Optional<OutputFrameRate> encodedFrameRate,
-      @NonNull VideoDecision videoDecision) {
+      @NonNull VideoDecision videoDecision,
+      boolean requiresSoundTrack) {
     var intervals = SegmentIntervals.onPlainGrid(periodSeconds);
     this.grouper = new SegmentGrouper(intervals, startSequenceNumber, maximumSegmentBytes);
     this.audio = new AudioSampleQueue(intervals, startSequenceNumber);
@@ -63,6 +66,7 @@ final class SegmentAssembler {
     this.maximumSegmentBytes = maximumSegmentBytes;
     this.encodedFrameRate = encodedFrameRate;
     this.videoDecision = videoDecision;
+    this.requiresSoundTrack = requiresSoundTrack;
   }
 
   /**
@@ -70,18 +74,19 @@ final class SegmentAssembler {
    * the open segment and every segment awaiting audio, and the assembler reports them with the
    * failure that ends the output once they are delivered.
    *
-   * @throws FragmentedMp4Exception when the initialization segment it delivers declares other video
-   *     than the decision, when a video sample that the copy rewrites cannot be read, when the
-   *     grouper refuses the fragment, when it holds a short video sample or an audio sample that
-   *     starts before the one before it, or when the rewritten initialization segment or a segment
-   *     it closes is larger than the segment cap once rebuilt, after which nothing is delivered,
-   *     not even the segments it would close
+   * @throws FragmentedMp4Exception when the initialization segment it delivers declares no sound
+   *     track that it requires or other video than the decision, when a video sample that the copy
+   *     rewrites cannot be read, when the grouper refuses the fragment, when it holds a short video
+   *     sample or an audio sample that starts before the one before it, or when the rewritten
+   *     initialization segment or a segment it closes is larger than the segment cap once rebuilt,
+   *     after which nothing is delivered, not even the segments it would close
    */
   Closing accept(@NonNull Mp4Unit unit) {
     return switch (unit) {
       case InitializationSegment initializationSegment -> {
         var delivered = InitializationSegmentRewrite.rewrite(videoDecision, initializationSegment);
         requireWithinTheCap(delivered);
+        requireSoundTrack(delivered);
         VideoOutputCheck.requireMatch(videoDecision, delivered);
         sampleRewrite = VideoSampleRewrite.of(videoDecision, delivered);
         yield Closing.of(
@@ -90,6 +95,13 @@ final class SegmentAssembler {
       }
       case Fragment fragment -> closingOf(checkedForShortSamples(rewritten(fragment)));
     };
+  }
+
+  private void requireSoundTrack(InitializationSegment segment) {
+    if (requiresSoundTrack && !CodecConfigurationReader.declaresSoundTrack(segment)) {
+      throw new FragmentedMp4Exception(
+          Reason.NO_SOUND_TRACK, "the initialization segment declares no sound track");
+    }
   }
 
   /**

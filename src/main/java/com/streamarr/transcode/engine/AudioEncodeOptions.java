@@ -56,17 +56,18 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
       outputOptions.addAll(flacFrameSize(rate, source));
     }
 
-    return new AudioEncodeOptions(decoderOptions(source), outputOptions);
+    return new AudioEncodeOptions(decoderOptions(audio, source), outputOptions);
   }
 
   // ADR 0043: no dynamic range compression, and the dialogue normalization that a hardware
   // decoder applies to the copy.
-  private static List<String> decoderOptions(SourceAudio source) {
+  private static List<String> decoderOptions(AudioDecision audio, SourceAudio source) {
     if (!isDolbyDigital(source)) {
       return List.of();
     }
 
-    return List.of("-drc_scale:a:0", "0", "-target_level:a:0", "-31");
+    var stream = audio.sourceStreamSpecifier();
+    return List.of("-drc_scale:" + stream, "0", "-target_level:" + stream, "-31");
   }
 
   static boolean isDolbyDigital(SourceAudio source) {
