@@ -2,6 +2,7 @@ package com.streamarr.transcode.worker;
 
 import build.buf.gen.streamarr.transcode.v1.SegmentUploadLimitReached;
 import com.google.rpc.Code;
+import com.streamarr.transcode.engine.MonotonicClock;
 import io.grpc.protobuf.StatusProto;
 import java.time.Duration;
 import java.util.Comparator;
@@ -26,14 +27,19 @@ final class SegmentUploadLimit {
   private static final long LONGEST_REOPEN_DELAY_NANOS = Duration.ofSeconds(1).toNanos();
 
   private final long limit;
+  private final MonotonicClock clock;
   // Guarded by this monitor. In the order the segments first asked for a call.
   private final Queue<Turn> queue = new PriorityQueue<>(Comparator.comparingLong(Turn::arrival));
   private long arrivals;
   private int openCalls;
 
-  /** A limit of this many calls, read as the contract's unsigned 32-bit count. */
-  SegmentUploadLimit(int unsignedLimit) {
+  /**
+   * A limit of this many calls, read as the contract's unsigned 32-bit count, whose waits and
+   * delays the clock times.
+   */
+  SegmentUploadLimit(int unsignedLimit, MonotonicClock clock) {
     limit = Integer.toUnsignedLong(unsignedLimit);
+    this.clock = clock;
   }
 
   /**
@@ -76,7 +82,7 @@ final class SegmentUploadLimit {
     // Guarded by the limit's monitor.
     private boolean cancelled;
     private boolean holdsCall;
-    private long reopenTime = System.nanoTime();
+    private long reopenTime = clock.nanoTime();
     private long reopenDelayNanos = FIRST_REOPEN_DELAY_NANOS;
     private OptionalLong refusalDeadline = OptionalLong.empty();
     private long arrival;
@@ -102,7 +108,7 @@ final class SegmentUploadLimit {
 
         arrival = arrivals++;
         queue.add(this);
-        awaitCallInQueue(System.nanoTime() + timeout.toNanos());
+        awaitCallInQueue(clock.nanoTime() + timeout.toNanos());
         return this;
       }
     }
@@ -128,7 +134,7 @@ final class SegmentUploadLimit {
 
         holdsCall = false;
         openCalls--;
-        var now = System.nanoTime();
+        var now = clock.nanoTime();
         if (refusalDeadline.isEmpty()) {
           refusalDeadline = OptionalLong.of(now + timeout.toNanos());
         }
@@ -162,7 +168,7 @@ final class SegmentUploadLimit {
 
     // Holds the limit's monitor.
     private void awaitAdmission(long deadline) throws InterruptedException, TimeoutException {
-      var now = System.nanoTime();
+      var now = clock.nanoTime();
       while (!cancelled && !admits(this, now)) {
         var remaining = deadline - now;
         if (remaining <= 0) {
@@ -171,7 +177,7 @@ final class SegmentUploadLimit {
 
         TimeUnit.NANOSECONDS.timedWait(
             SegmentUploadLimit.this, Math.min(remaining, nanosUntilReopenTime(now)));
-        now = System.nanoTime();
+        now = clock.nanoTime();
       }
 
       if (cancelled) {

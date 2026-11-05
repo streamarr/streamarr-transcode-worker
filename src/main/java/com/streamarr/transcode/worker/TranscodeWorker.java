@@ -107,6 +107,7 @@ public final class TranscodeWorker implements AutoCloseable {
   private final SegmentMemoryBudget copyMemoryBudget;
   private final ProbeSummary probeSummary;
   private final ProbeCapacities probeCapacities;
+  private final MonotonicClock clock;
   // Changed under this monitor, and concurrent so that copyFullness reads them without it: a start
   // holds the monitor while it resolves the source and launches FFmpeg, which a stalled mount can
   // block.
@@ -117,7 +118,7 @@ public final class TranscodeWorker implements AutoCloseable {
   private ManagedChannel channel;
   private StreamObserver<EstablishWorkerSessionRequest> requests;
   private WorkerSessionAccepted workerSession;
-  private volatile SegmentUploadLimit uploadLimit = new SegmentUploadLimit(0);
+  private volatile SegmentUploadLimit uploadLimit;
   private WorkerProbeSession probeSession;
   private ScheduledExecutorService sessionTimers;
   private Optional<GrantedCapacities> sentCapacities = Optional.empty();
@@ -137,6 +138,8 @@ public final class TranscodeWorker implements AutoCloseable {
     this.engine = engine;
     this.ffprobe = ffprobe;
     this.runtime = runtime;
+    this.clock = clock;
+    uploadLimit = new SegmentUploadLimit(0, clock);
     this.probeSummary = probeSummary == null ? new ProbeSummary(clock) : probeSummary;
     this.probeCapacities =
         ProbeCapacities.builder()
@@ -1271,7 +1274,7 @@ public final class TranscodeWorker implements AutoCloseable {
     public void onNext(EstablishWorkerSessionResponse response) {
       if (response.hasSessionAccepted()) {
         workerSession = response.getSessionAccepted();
-        uploadLimit = new SegmentUploadLimit(workerSession.getSegmentUploadLimit());
+        uploadLimit = new SegmentUploadLimit(workerSession.getSegmentUploadLimit(), clock);
         sessionAccepted = true;
         accepted.complete(workerSession);
         return;
