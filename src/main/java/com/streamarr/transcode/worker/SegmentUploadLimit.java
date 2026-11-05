@@ -166,22 +166,22 @@ final class SegmentUploadLimit {
       return now - reopenTime >= 0;
     }
 
-    // Holds the limit's monitor.
+    // Holds the limit's monitor. A turn that a call's end admits only after its deadline still
+    // times out.
     private void awaitAdmission(long deadline) throws InterruptedException, TimeoutException {
       var now = clock.nanoTime();
-      while (!cancelled && !admits(this, now)) {
-        var remaining = deadline - now;
-        if (remaining <= 0) {
-          throw new TimeoutException("The segment found no upload call that the server accepts");
-        }
-
+      while (!cancelled && deadline - now > 0 && !admits(this, now)) {
         TimeUnit.NANOSECONDS.timedWait(
-            SegmentUploadLimit.this, Math.min(remaining, nanosUntilReopenTime(now)));
+            SegmentUploadLimit.this, Math.min(deadline - now, nanosUntilReopenTime(now)));
         now = clock.nanoTime();
       }
 
       if (cancelled) {
         throw new CancellationException("The job attempt stopped");
+      }
+
+      if (deadline - now <= 0) {
+        throw new TimeoutException("The segment found no upload call that the server accepts");
       }
     }
 

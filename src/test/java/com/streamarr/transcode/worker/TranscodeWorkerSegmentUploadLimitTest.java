@@ -201,6 +201,48 @@ class TranscodeWorkerSegmentUploadLimitTest {
 
   @Test
   @DisplayName(
+      "Should fail the attempt as a transcode failure without opening an upload when an upload"
+          + " ends only after the queued segment's acknowledgement timeout")
+  void shouldFailTheAttemptWithoutOpeningAnUploadWhenAnUploadEndsOnlyAfterTheQueuedSegmentsTimeout()
+      throws Exception {
+    var runtime = ScriptedWorkerRuntime.withSegmentUploadLimit(1);
+    var holding = variantJobBuilder().build();
+    var queued = variantJobBuilder().build();
+    // The queued segment waits on the clock's reading of its timeout, so the clock can pass that
+    // timeout while the segment still waits, and the end of the holding upload then wakes it.
+    var clock = new SteppedClock();
+    var configuration =
+        configurationBuilder().uploadAcknowledgementTimeout(Duration.ofMinutes(5)).build();
+
+    try (var worker =
+        worker(
+            WorkerSetup.builder()
+                .runtime(runtime)
+                .launcher(writingTheRecording())
+                .configuration(configuration)
+                .clock(clock)
+                .build())) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.withholdAcknowledgements();
+      startVariant(connection, holding);
+      promptly().until(() -> connection.uploadsAwaitingAcknowledgement() == 1);
+      startVariant(connection, queued);
+      promptly().until(() -> worker.queuedSegmentUploads() == 1);
+      clock.advance(Duration.ofMinutes(6));
+
+      connection.acknowledgeAwaitingUploads();
+
+      promptly().until(() -> terminalEventOf(connection, queued).isPresent());
+      assertThat(terminalEventOf(connection, queued)).contains(EventCase.JOB_ATTEMPT_FAILED);
+      assertThat(failureOf(connection, queued))
+          .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
+      assertThat(uploadsOf(connection, queued)).isEmpty();
+    }
+  }
+
+  @Test
+  @DisplayName(
       "Should stop the attempt without opening an upload when it stops while its segment waits"
           + " for an upload")
   void shouldStopTheAttemptWithoutOpeningAnUploadWhenItStopsWhileItsSegmentWaitsForAnUpload()
