@@ -9,6 +9,7 @@ import build.buf.gen.streamarr.transcode.v1.VariantJob;
 import com.streamarr.transcode.engine.AudioDecision;
 import com.streamarr.transcode.engine.AudioMode;
 import com.streamarr.transcode.engine.EncoderPreset;
+import com.streamarr.transcode.engine.ExactSegmentStarts;
 import com.streamarr.transcode.engine.OutputFrameRate;
 import com.streamarr.transcode.engine.SourceAudio;
 import com.streamarr.transcode.engine.SpeakerLayout;
@@ -17,6 +18,7 @@ import com.streamarr.transcode.engine.SubtitleMode;
 import com.streamarr.transcode.engine.TranscodeDecision;
 import com.streamarr.transcode.engine.TranscodeMode;
 import com.streamarr.transcode.engine.TranscodeRequest;
+import java.math.BigInteger;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
@@ -30,6 +32,7 @@ final class WorkerVariantJobMapper {
   private static final int AAC_MAXIMUM_CHANNELS = 6;
   private static final Set<String> LOSSLESS_ENCODERS = Set.of("flac", "alac");
   private static final Set<Integer> OUTPUT_BIT_DEPTHS = Set.of(16, 24);
+  private static final BigInteger NANOSECONDS_PER_SECOND = BigInteger.valueOf(1_000_000_000L);
 
   private final WorkerMediaSourceResolver sourceResolver;
 
@@ -41,9 +44,11 @@ final class WorkerVariantJobMapper {
    * @throws InvalidJobSpecificationException when the job names no transcode, audio or subtitle
    *     mode, when its video decision is missing, contradicts the rest of the job, or lacks a value
    *     that the worker forces or checks, or when it holds the last frame or pads its audio without
-   *     encoding that stream or without a positive advertised end, or when its segment list is not
-   *     empty and does not hold one start slot for each media segment, from 0 and strictly
-   *     increasing, or when its advertised end does not lie after the last listed segment's start
+   *     encoding that stream or without a positive advertised end, or when its segment list, in
+   *     exact ticks or else in slots, is not empty and does not hold one start for each media
+   *     segment, from 0 and strictly increasing, or when its exact starts come without a positive
+   *     time base or a time base without exact starts, or when its advertised end does not lie
+   *     after the last listed segment's start
    */
   TranscodeRequest map(VariantJob job) {
     return map(job, Optional.empty());
@@ -75,17 +80,70 @@ final class WorkerVariantJobMapper {
         .startSequenceNumber(execution.getStartSequenceNumber())
         .mediaSegmentCount(execution.getMediaSegmentCount())
         .segmentStartSlots(segmentStartSlots(execution))
+        .exactSegmentStarts(exactSegmentStarts(execution))
         .seekPosition(seekPosition(execution))
         .sourceAudio(sourceAudio)
         .advertisedEnd(advertisedEnd(job))
         .build();
   }
 
-  // The contract's slots are uint32, which Java reads as int, so they compare as unsigned values.
+  // A job that carries exact segment starts groups on them alone, and its slot list goes unread.
   private static List<Long> segmentStartSlots(TranscodeExecution execution) {
+    if (carriesExactSegmentStarts(execution)) {
+      return List.of();
+    }
+
+    return segmentStartSlotsInSlots(execution);
+  }
+
+  // The contract's slots are uint32, which Java reads as int, so they compare as unsigned values.
+  private static List<Long> segmentStartSlotsInSlots(TranscodeExecution execution) {
     var slots = execution.getSegmentStartSlotsList().stream().map(Integer::toUnsignedLong).toList();
     requireSegmentList(slots, execution.getMediaSegmentCount(), "slot");
     return slots;
+  }
+
+  private static boolean carriesExactSegmentStarts(TranscodeExecution execution) {
+    return execution.getSegmentStartTicksCount() > 0 || execution.hasSegmentStartTimeBase();
+  }
+
+  // The contract's ticks are uint64, which Java reads as long; a tick count past a signed 64-bit
+  // value reads as negative, and the worker refuses it rather than compare it as unsigned.
+  private static Optional<ExactSegmentStarts> exactSegmentStarts(TranscodeExecution execution) {
+    if (!carriesExactSegmentStarts(execution)) {
+      return Optional.empty();
+    }
+
+    var ticks = execution.getSegmentStartTicksList();
+    if (ticks.isEmpty() || !execution.hasSegmentStartTimeBase()) {
+      throw new InvalidJobSpecificationException(
+          "The exact segment starts and their time base come together, got "
+              + ticks.size()
+              + " starts and "
+              + (execution.hasSegmentStartTimeBase() ? "a" : "no")
+              + " time base");
+    }
+
+    if (ticks.stream().anyMatch(tick -> tick < 0)) {
+      throw new InvalidJobSpecificationException(
+          "The exact segment starts hold a tick count past a signed 64-bit value");
+    }
+
+    requireSegmentList(ticks, execution.getMediaSegmentCount(), "tick");
+    var timeBase = execution.getSegmentStartTimeBase();
+    if (timeBase.getNumerator() == 0 || timeBase.getDenominator() == 0) {
+      throw new InvalidJobSpecificationException(
+          "The exact segment starts' time base needs a positive numerator and denominator, got "
+              + Integer.toUnsignedString(timeBase.getNumerator())
+              + "/"
+              + Integer.toUnsignedString(timeBase.getDenominator()));
+    }
+
+    return Optional.of(
+        new ExactSegmentStarts(
+            ticks,
+            Integer.toUnsignedLong(timeBase.getNumerator()),
+            Integer.toUnsignedLong(timeBase.getDenominator())));
   }
 
   // A non-empty segment list holds one start for each media segment, from 0 and strictly
@@ -158,23 +216,65 @@ final class WorkerVariantJobMapper {
     return Optional.of(advertisedEnd);
   }
 
-  // The last listed segment's audio ends at the advertised end, which must follow its start.
+  // The last listed segment's audio ends at the advertised end, which must follow its start. The
+  // mapping has checked the list's shape before it reads the advertised end.
   private static void requireAfterTheLastListedStart(
       Duration advertisedEnd, TranscodeExecution execution) {
-    var slots = execution.getSegmentStartSlotsList();
-    if (slots.isEmpty()) {
+    var lastStart = lastListedStart(execution);
+    if (lastStart.isEmpty() || lastStart.get().endsBefore(advertisedEnd)) {
       return;
     }
 
-    var lastStart =
-        Duration.ofSeconds(
-            Integer.toUnsignedLong(slots.getLast()) * execution.getTargetSegmentDurationSeconds());
-    if (advertisedEnd.compareTo(lastStart) <= 0) {
-      throw new InvalidJobSpecificationException(
-          "The advertised end "
-              + advertisedEnd
-              + " does not lie after the last listed segment's start at "
-              + lastStart);
+    throw new InvalidJobSpecificationException(
+        "The advertised end "
+            + advertisedEnd
+            + " does not lie after the last listed segment's start at "
+            + lastStart.get());
+  }
+
+  private static Optional<ListedStart> lastListedStart(TranscodeExecution execution) {
+    var ticks = execution.getSegmentStartTicksList();
+    if (!ticks.isEmpty()) {
+      var timeBase = execution.getSegmentStartTimeBase();
+      return Optional.of(
+          new ListedStart(
+              ticks.getLast(),
+              Integer.toUnsignedLong(timeBase.getNumerator()),
+              Integer.toUnsignedLong(timeBase.getDenominator())));
+    }
+
+    var slots = execution.getSegmentStartSlotsList();
+    if (slots.isEmpty()) {
+      return Optional.empty();
+    }
+
+    return Optional.of(
+        new ListedStart(
+            Integer.toUnsignedLong(slots.getLast()),
+            execution.getTargetSegmentDurationSeconds(),
+            1));
+  }
+
+  // A listed start of ticks that each last numerator / denominator seconds; a slot is one tick of
+  // a time base whose ticks each last one period.
+  private record ListedStart(long ticks, long numerator, long denominator) {
+
+    // Compares by cross-multiplication in nanoseconds, so that neither time is rounded.
+    boolean endsBefore(Duration end) {
+      var endNanoseconds =
+          BigInteger.valueOf(end.getSeconds())
+              .multiply(NANOSECONDS_PER_SECOND)
+              .add(BigInteger.valueOf(end.getNano()));
+      var start =
+          BigInteger.valueOf(ticks)
+              .multiply(BigInteger.valueOf(numerator))
+              .multiply(NANOSECONDS_PER_SECOND);
+      return start.compareTo(endNanoseconds.multiply(BigInteger.valueOf(denominator))) < 0;
+    }
+
+    @Override
+    public String toString() {
+      return ticks + " x " + numerator + "/" + denominator + " s";
     }
   }
 
