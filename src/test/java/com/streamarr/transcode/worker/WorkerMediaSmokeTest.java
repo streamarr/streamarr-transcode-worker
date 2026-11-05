@@ -4660,7 +4660,7 @@ class WorkerMediaSmokeTest {
   private record ToneFit(double cosine, double sine) {
 
     static ToneFit of(double[] samples, int frequency) {
-      assertThat(samples.length).isGreaterThanOrEqualTo(MATRIX_READ_FROM + MATRIX_READ_LENGTH);
+      assertThat(samples).hasSizeGreaterThanOrEqualTo(MATRIX_READ_FROM + MATRIX_READ_LENGTH);
       var cosine = 0.0;
       var sine = 0.0;
       for (var n = MATRIX_READ_FROM; n < MATRIX_READ_FROM + MATRIX_READ_LENGTH; n++) {
