@@ -6135,8 +6135,8 @@ class WorkerMediaSmokeTest {
   }
 
   // SVT-AV1's output bytes differ from run to run under its production threading. At a level of
-  // parallelism of one (lp=1) each stage has one thread and one picture in flight, so two encodes
-  // of the same input write the same bytes, which a comparison with a reference encode needs.
+  // parallelism of one (lp=1), two encodes of the same input write the same bytes, which a
+  // comparison with a reference encode needs.
   private static ProcessLauncher withSvtAv1ParallelismOfOne(ProcessLauncher launcher) {
     return (command, jobAttemptId) -> {
       var parameters = command.indexOf("-svtav1-params") + 1;
