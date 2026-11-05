@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Locale;
 import java.util.Optional;
 import org.assertj.core.api.SoftAssertions;
@@ -46,6 +47,70 @@ class NvencRecordingsTest {
           .assertThat(passesTheWorkersCheck(recording))
           .as("the worker's output check of %s", recording.get("name").asString())
           .isEqualTo(recording.get("outputCheck").get("passes").asBoolean());
+    }
+
+    softly.assertAll();
+  }
+
+  @Test
+  @DisplayName(
+      "Should show the keyframes ADR 0037 asks of a keyframe-verified encoder in every extended"
+          + " recording when the worker marks an NVENC encoder keyframe-verified")
+  void
+      shouldShowTheKeyframesAdr0037AsksOfAKeyframeVerifiedEncoderInEveryExtendedRecordingWhenTheWorkerMarksAnNvencEncoderKeyframeVerified()
+          throws IOException {
+    var results = RESULTS.resolve("recordings.json");
+    assumeTrue(
+        Files.exists(results),
+        "no NVENC recordings yet: run src/test/fmp4-recorder/record-nvenc.sh on an NVIDIA GPU host");
+    var document = JsonMapper.builder().build().readTree(results.toFile());
+    var verified = new ArrayList<JsonNode>();
+    for (var recording : document.get("recordings")) {
+      if (FfmpegCommandBuilder.isKeyframeVerified(recording.get("plan").get("encoder").asString())
+          && recording.get("plan").get("recipe").asString().equals("extended")) {
+        verified.add(recording);
+      }
+    }
+
+    assertThat(verified).as("the extended recordings of keyframe-verified encoders").isNotEmpty();
+    var softly = new SoftAssertions();
+    for (var recording : verified) {
+      var name = recording.get("name").asString();
+      var verdicts = recording.get("verdicts");
+      softly
+          .assertThat(verdicts.get("everyForcedKeyframeIsASyncSample").asBoolean())
+          .as("every forced keyframe of %s is a sync sample", name)
+          .isTrue();
+      softly
+          .assertThat(verdicts.get("everyForcedKeyframeStartsAClosedGop").asBoolean())
+          .as("every forced keyframe of %s starts a closed GOP", name)
+          .isTrue();
+      softly
+          .assertThat(recording.get("outputCheck").get("passes").asBoolean())
+          .as("the output check of %s", name)
+          .isTrue();
+      var gopRestart = verdicts.get("gopRestart");
+      if (!gopRestart.isNull()) {
+        softly
+            .assertThat(gopRestart.get("restartsAtForcedKeyframe").asBoolean())
+            .as("the GOP count of %s restarts at the forced keyframe", name)
+            .isTrue();
+        softly
+            .assertThat(gopRestart.path("nextKeyframeStartsClosedGop").asBoolean(false))
+            .as("the keyframe the GOP of %s places for the missed one starts a closed GOP", name)
+            .isTrue();
+      }
+    }
+
+    var verifiedNames =
+        verified.stream().map(recording -> recording.get("name").asString()).toList();
+    for (var pair : document.get("initializationSegmentPairs")) {
+      if (verifiedNames.contains(pair.get("replacement").asString())) {
+        softly
+            .assertThat(pair.get("identical").asBoolean())
+            .as("the initialization segment of %s", pair.get("replacement").asString())
+            .isTrue();
+      }
     }
 
     softly.assertAll();

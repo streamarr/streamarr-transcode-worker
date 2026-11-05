@@ -102,6 +102,8 @@ function gopRestart(facts, order, { forcedKeyframeTimes, gopFrames, skippedForce
     expectedKeyframe: expected,
     nextKeyframe: actual,
     restartsAtForcedKeyframe: expected !== null && actual === expected,
+    // ADR 0037 asks that the keyframe the GOP places for a missed one also start a closed GOP.
+    nextKeyframeStartsClosedGop: next >= 0 && keyframe(facts, order[next]).startsClosedGop,
   };
 }
 
@@ -395,6 +397,7 @@ export function summary(document) {
       `closed-gop=${verdicts.everyForcedKeyframeStartsAClosedGop}`,
       `extra=${verdicts.extraKeyframes.length}`,
       `gop-restart=${verdicts.gopRestart?.restartsAtForcedKeyframe ?? '-'}`,
+      `gop-restart-closed-gop=${verdicts.gopRestart?.nextKeyframeStartsClosedGop ?? '-'}`,
       `init-identical=${pairs.get(name) ?? '-'}`,
       `output-check=${check.passes} (${check.codecString})`,
     ].join(' '),

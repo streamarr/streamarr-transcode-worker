@@ -11,7 +11,8 @@ rung, for both encoders, with `-bf 3 -rc-lookahead 20`:
 
 - every forced keyframe is a sync sample and an IDR picture with no leading pictures
 - in the missed-keyframe recording, the next keyframe lands one extended GOP after the forced
-  keyframe at 12 s, so the GOP count restarts at a forced keyframe
+  keyframe at 12 s, so the GOP count restarts at a forced keyframe, and that keyframe is also an IDR
+  picture with no leading pictures
 - each replacement attempt's delivered initialization segment is byte-identical to its first
   attempt's
 - every initialization segment passes the output check with the job's codec string
@@ -83,7 +84,8 @@ The verdicts are:
 - whether every forced keyframe is an IDR picture with no leading pictures, which starts a closed GOP
 - each keyframe the encoder adds, and whether the GOP placed it
 - for the missed-keyframe recording, whether the next keyframe lands one GOP after the forced keyframe
-  at 12 s, which shows that the GOP count restarted there
+  at 12 s, which shows that the GOP count restarted there, and whether that keyframe starts a closed
+  GOP
 - whether each initialization segment passes the codec, codec profile and level check of worker #25
 
 `initializationSegmentPairs` compares each replacement attempt's initialization segment, as the
@@ -94,7 +96,9 @@ the driver version and the GPU's compute capability.
 
 CI derives every result again without FFmpeg or a GPU. `nvenc-recordings.test.mjs` re-reads the
 committed initialization segments and re-derives every verdict from the committed facts.
-`NvencRecordingsTest` runs the worker's own output check over each initialization segment. The same
+`NvencRecordingsTest` runs the worker's own output check over each initialization segment, and
+fails while an encoder that `FfmpegCommandBuilder` marks keyframe-verified has an extended recording
+that does not show every verdict above. The same
 check runs by hand:
 
 ```

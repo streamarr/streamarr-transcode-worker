@@ -471,7 +471,8 @@
           "forcedKeyframeBefore": 288288,
           "expectedKeyframe": 433433,
           "nextKeyframe": 433433,
-          "restartsAtForcedKeyframe": true
+          "restartsAtForcedKeyframe": true,
+          "nextKeyframeStartsClosedGop": true
         }
       },
       "outputCheck": {
@@ -1652,7 +1653,8 @@
           "forcedKeyframeBefore": 288288,
           "expectedKeyframe": 433433,
           "nextKeyframe": 433433,
-          "restartsAtForcedKeyframe": true
+          "restartsAtForcedKeyframe": true,
+          "nextKeyframeStartsClosedGop": true
         }
       },
       "outputCheck": {
@@ -2885,7 +2887,8 @@
           "forcedKeyframeBefore": 288288,
           "expectedKeyframe": 433433,
           "nextKeyframe": 433433,
-          "restartsAtForcedKeyframe": true
+          "restartsAtForcedKeyframe": true,
+          "nextKeyframeStartsClosedGop": true
         }
       },
       "outputCheck": {
@@ -4066,7 +4069,8 @@
           "forcedKeyframeBefore": 288288,
           "expectedKeyframe": 433433,
           "nextKeyframe": 433433,
-          "restartsAtForcedKeyframe": true
+          "restartsAtForcedKeyframe": true,
+          "nextKeyframeStartsClosedGop": true
         }
       },
       "outputCheck": {
@@ -5199,7 +5203,8 @@
           "forcedKeyframeBefore": 288288,
           "expectedKeyframe": 433433,
           "nextKeyframe": 433433,
-          "restartsAtForcedKeyframe": true
+          "restartsAtForcedKeyframe": true,
+          "nextKeyframeStartsClosedGop": true
         }
       },
       "outputCheck": {
@@ -6390,7 +6395,8 @@
           "forcedKeyframeBefore": 288288,
           "expectedKeyframe": 433433,
           "nextKeyframe": 433433,
-          "restartsAtForcedKeyframe": true
+          "restartsAtForcedKeyframe": true,
+          "nextKeyframeStartsClosedGop": true
         }
       },
       "outputCheck": {
@@ -7633,7 +7639,8 @@
           "forcedKeyframeBefore": 288288,
           "expectedKeyframe": 433433,
           "nextKeyframe": 433433,
-          "restartsAtForcedKeyframe": true
+          "restartsAtForcedKeyframe": true,
+          "nextKeyframeStartsClosedGop": true
         }
       },
       "outputCheck": {
@@ -8824,7 +8831,8 @@
           "forcedKeyframeBefore": 288288,
           "expectedKeyframe": 433433,
           "nextKeyframe": 433433,
-          "restartsAtForcedKeyframe": true
+          "restartsAtForcedKeyframe": true,
+          "nextKeyframeStartsClosedGop": true
         }
       },
       "outputCheck": {

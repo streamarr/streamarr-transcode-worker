@@ -278,7 +278,18 @@ describe('keyframe verdicts', () => {
       expectedKeyframe: 19 * FRAME,
       nextKeyframe: 19 * FRAME,
       restartsAtForcedKeyframe: true,
+      nextKeyframeStartsClosedGop: true,
     });
+  });
+
+  it('Should find that the keyframe the GOP places for a missed one opens its GOP when the encoder writes a CRA picture there', () => {
+    const frames = inOrder([0, 10, 19]);
+    frames[19][2] = 21;
+
+    const verdicts = keyframeVerdicts(tenFrameFacts(frames), plan({ forcedKeyframeTimes: [0, 1], skippedForcedTime: 2 }));
+
+    assert.equal(verdicts.gopRestart.restartsAtForcedKeyframe, true);
+    assert.equal(verdicts.gopRestart.nextKeyframeStartsClosedGop, false);
   });
 
   it('Should find that the GOP count does not restart when the next keyframe after a missed one lands one GOP after the first frame', () => {
@@ -296,6 +307,7 @@ describe('keyframe verdicts', () => {
       expectedKeyframe: null,
       nextKeyframe: null,
       restartsAtForcedKeyframe: false,
+      nextKeyframeStartsClosedGop: false,
     });
   });
 
@@ -541,8 +553,8 @@ describe('analysis and offline check', () => {
     assert.deepEqual(
       summary(document).map((line) => line.replace(/\s+/g, ' ')),
       [
-        'hevc_nvenc-1080p-first sync=true closed-gop=true extra=0 gop-restart=- init-identical=- output-check=true (hvc1.1.6.L120.90)',
-        'hevc_nvenc-1080p-replacement sync=true closed-gop=true extra=0 gop-restart=- init-identical=true output-check=true (hvc1.1.6.L120.90)',
+        'hevc_nvenc-1080p-first sync=true closed-gop=true extra=0 gop-restart=- gop-restart-closed-gop=- init-identical=- output-check=true (hvc1.1.6.L120.90)',
+        'hevc_nvenc-1080p-replacement sync=true closed-gop=true extra=0 gop-restart=- gop-restart-closed-gop=- init-identical=true output-check=true (hvc1.1.6.L120.90)',
       ],
     );
   });
