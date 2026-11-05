@@ -1310,11 +1310,115 @@ class FfmpegCommandBuilderTest {
   void shouldWriteFragmentedMp4ToStandardOutputWhenBuildingCommand() {
     var cmd = command(request(TranscodeMode.REMUX).build(), "copy");
 
-    assertThat(cmd)
+    assertThat(cmd.subList(0, cmd.indexOf("pipe:1") + 1))
         .containsSequence("-f", "mp4")
         .containsSequence("-movflags", "cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont")
-        .doesNotContain("-min_frag_duration", "-max_delay")
-        .endsWith("pipe:1");
+        .doesNotContain("-min_frag_duration", "-max_delay");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({"REMUX, copy", "FULL_TRANSCODE, libx264"})
+  @DisplayName(
+      "Should copy the chosen streams' packets, from the keyframe the seek reads, to a framecrc on"
+          + " standard error as the second output when building a command")
+  void shouldCopyTheChosenStreamsPacketsToAFramecrcOnStandardErrorAsTheSecondOutput(
+      TranscodeMode mode, String videoEncoder) {
+    var cmd = command(request(mode).startSequenceNumber(5).build(), videoEncoder);
+
+    assertThat(cmd.subList(cmd.indexOf("pipe:1") + 1, cmd.size()))
+        .containsExactly(
+            "-map",
+            "0:0",
+            "-map",
+            "0:a:0",
+            "-c",
+            "copy",
+            "-copypriorss",
+            "1",
+            "-map_metadata",
+            "-1",
+            "-map_chapters",
+            "-1",
+            "-f",
+            "framecrc",
+            "-flush_packets",
+            "1",
+            "pipe:2");
+  }
+
+  // FFmpeg writes each output's metadata to its error output, where the worker reads the framecrc.
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({"REMUX, copy", "FULL_TRANSCODE, libx264"})
+  @DisplayName(
+      "Should copy no metadata or chapters of the source into the framecrc of the chosen streams"
+          + " when building a command")
+  void shouldCopyNoMetadataOrChaptersIntoTheFramecrcOfTheChosenStreamsWhenBuildingACommand(
+      TranscodeMode mode, String videoEncoder) {
+    var cmd = command(request(mode).build(), videoEncoder);
+
+    assertThat(cmd.subList(cmd.indexOf("pipe:1") + 1, cmd.size()))
+        .containsSequence("-map_metadata", "-1", "-map_chapters", "-1");
+  }
+
+  @Test
+  @DisplayName(
+      "Should copy no metadata or chapters of the source into the framecrc of the copy's video"
+          + " when a Dolby Vision profile 5 source's RPUs may start samples")
+  void shouldCopyNoMetadataOrChaptersIntoTheFramecrcOfTheCopysVideoWhenAProfile5RpuStartsSamples() {
+    var pipe =
+        rpuMovingPipe(
+            builder.buildPipeline(
+                job(
+                    request(encoding(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE)))
+                        .build(),
+                    "libx264")));
+
+    var copy = pipe.copyCommandWritingVideoTimingTo("unix:/tmp/sts1/v");
+    assertThat(copy.subList(copy.indexOf("pipe:2") + 1, copy.size()))
+        .containsSequence("-map_metadata", "-1", "-map_chapters", "-1");
+  }
+
+  @Test
+  @DisplayName(
+      "Should copy only the chosen video stream's packets to the framecrc when the job carries no"
+          + " audio")
+  void shouldCopyOnlyTheChosenVideoStreamsPacketsToTheFramecrcWhenTheJobCarriesNoAudio() {
+    var cmd =
+        command(
+            request(decision(TranscodeMode.REMUX).audioDecision(NO_AUDIO).build()).build(), "copy");
+
+    assertThat(cmd.subList(cmd.indexOf("pipe:1") + 1, cmd.size()))
+        .startsWith("-map", "0:0", "-c", "copy");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @CsvSource({"REMUX, copy", "FULL_TRANSCODE, libx264"})
+  @DisplayName(
+      "Should copy the audio stream that the job names to the framecrc, and no other kind of"
+          + " stream, when the job names its audio stream")
+  void shouldCopyTheAudioStreamThatTheJobNamesToTheFramecrcWhenTheJobNamesItsAudioStream(
+      TranscodeMode mode, String videoEncoder) {
+    var decision =
+        decision(mode).audioDecision(audio(mode).streamIndex(OptionalInt.of(2)).build()).build();
+
+    var cmd = command(request(decision).build(), videoEncoder);
+
+    assertThat(cmd.subList(cmd.indexOf("pipe:1") + 1, cmd.size()))
+        .startsWith(
+            "-map",
+            "0:0",
+            "-map",
+            "0:2?",
+            "-map",
+            "-0:s",
+            "-map",
+            "-0:d",
+            "-map",
+            "-0:t",
+            "-map",
+            "-0:disp:attached_pic",
+            "-c",
+            "copy");
   }
 
   @Test
@@ -1337,7 +1441,7 @@ class FfmpegCommandBuilderTest {
     assertThat(cmd)
         .doesNotContain("-start_number")
         .noneMatch(argument -> argument.startsWith("-hls_"))
-        .endsWith("pipe:1");
+        .contains("pipe:1");
   }
 
   @Test
@@ -1721,8 +1825,29 @@ class FfmpegCommandBuilderTest {
                 "pipe:1",
                 "-map",
                 "0:0",
+                "-map",
+                "0:a:0",
+                "-c",
+                "copy",
+                "-copypriorss",
+                "1",
+                "-map_metadata",
+                "-1",
+                "-map_chapters",
+                "-1",
+                "-f",
+                "framecrc",
+                "-flush_packets",
+                "1",
+                "pipe:2",
+                "-map",
+                "0:0",
                 "-c:v",
                 "copy",
+                "-map_metadata",
+                "-1",
+                "-map_chapters",
+                "-1",
                 "-f",
                 "framecrc",
                 "-flush_packets",
@@ -1757,7 +1882,8 @@ class FfmpegCommandBuilderTest {
 
   // One FFmpeg's command, changed only where ADR 0013 makes the encode of the copy differ: it reads
   // the copy's fragmented MP4 on its standard input at once, keeps the copy's timestamps, trims its
-  // video at the attempt's start, and copies the AAC that the copy encoded.
+  // video at the attempt's start, copies the AAC that the copy encoded, and leaves the framecrc of
+  // the source's streams to the copy, which reads the source.
   private static List<String> asTheEncodeOfTheCopy(List<String> oneFfmpeg) {
     var expected =
         new ArrayList<>(
@@ -1776,7 +1902,8 @@ class FfmpegCommandBuilderTest {
                 "0:v:0",
                 "-map",
                 "0:a:0"));
-    expected.addAll(oneFfmpeg.subList(oneFfmpeg.indexOf("-map_metadata"), oneFfmpeg.size()));
+    expected.addAll(
+        oneFfmpeg.subList(oneFfmpeg.indexOf("-map_metadata"), oneFfmpeg.indexOf("pipe:1") + 1));
     expected.remove("-start_at_zero");
     expected.set(expected.indexOf("-vf") + 1, "trim=start=0," + videoFilter(oneFfmpeg));
     var audio = expected.indexOf("-c:a");
@@ -1799,11 +1926,15 @@ class FfmpegCommandBuilderTest {
 
     assertThat(pipe.copyCommandWritingVideoTimingTo("unix:/tmp/sts1/v"))
         .endsWith(
-            "pipe:1",
+            "pipe:2",
             "-map",
             "0:2",
             "-c:v",
             "copy",
+            "-map_metadata",
+            "-1",
+            "-map_chapters",
+            "-1",
             "-f",
             "framecrc",
             "-flush_packets",

@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -272,6 +273,11 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
     } catch (IOException _) {
       // Nothing read after the attempt's outcome was decided matters.
     }
+  }
+
+  @Override
+  public List<ObservedSourceStream> observedSourceStreams() {
+    return copyErrorOutput.observedSourceStreams();
   }
 
   @Override

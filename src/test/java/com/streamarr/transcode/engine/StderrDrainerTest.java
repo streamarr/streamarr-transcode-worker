@@ -11,6 +11,7 @@ import java.io.PipedInputStream;
 import java.io.PipedOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
@@ -29,6 +30,38 @@ class StderrDrainerTest {
 
   // The open stream never ends, so any wait expires; a short one keeps the test fast.
   private static final Duration UNTIL_TIMEOUT = Duration.ofMillis(50);
+
+  @Test
+  @DisplayName(
+      "Should keep the framecrc of the source's streams out of the recent output and return the"
+          + " streams it shows when the stream closes")
+  void shouldKeepTheFramecrcOutOfTheRecentOutputAndReturnTheStreamsItShowsWhenTheStreamCloses() {
+    var errorOutput =
+        """
+        Stream mapping:
+          Stream #0:3 -> #1:0 (copy)
+        #tb 0: 1/1000
+        0,     5000,     5000,       40,     1000, 0x0a1b2c3d
+        [out#1/framecrc @ 0x7f8] video:1KiB audio:0KiB
+        """;
+
+    try (var drainer =
+        new StderrDrainer(new ByteArrayInputStream(errorOutput.getBytes(StandardCharsets.UTF_8)))) {
+      assertThat(drainer.observedSourceStreams())
+          .containsExactly(
+              ObservedSourceStream.builder()
+                  .sourceIndex(3)
+                  .lastStart(Duration.ofSeconds(5))
+                  .end(Duration.ofMillis(5_040))
+                  .lastKeyframeStart(Optional.of(Duration.ofSeconds(5)))
+                  .build());
+      assertThat(drainer.awaitRecentOutput(UNTIL_END_OF_STREAM))
+          .containsExactly(
+              "Stream mapping:",
+              "  Stream #0:3 -> #1:0 (copy)",
+              "[out#1/framecrc @ 0x7f8] video:1KiB audio:0KiB");
+    }
+  }
 
   @Test
   @DisplayName("Should return every line written when the stream closes")

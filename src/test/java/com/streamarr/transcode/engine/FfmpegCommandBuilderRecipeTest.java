@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Stream;
+import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -77,9 +78,9 @@ class FfmpegCommandBuilderRecipeTest {
     var pipeline = builder.buildPipeline(jobRecordedAs(recording));
 
     assertThat(pipeline)
-        .isEqualTo(
-            new FfmpegPipeline.SingleProcess(
-                withoutFixtureOnlyAdditions(recording.ffmpegArguments())));
+        .asInstanceOf(InstanceOfAssertFactories.type(FfmpegPipeline.SingleProcess.class))
+        .extracting(single -> fragmentedMp4OutputOf(single.command()))
+        .isEqualTo(withoutFixtureOnlyAdditions(recording.ffmpegArguments()));
   }
 
   @Test
@@ -176,6 +177,12 @@ class FfmpegCommandBuilderRecipeTest {
       case ENCODE -> TranscodeMode.VIDEO_TRANSCODE;
       case COPY -> TranscodeMode.REMUX;
     };
+  }
+
+  // A recording keeps FFmpeg's fragmented MP4 alone. The framecrc of the source's streams, which
+  // the command writes to its error output as its second output, leaves those bytes unchanged.
+  private static List<String> fragmentedMp4OutputOf(List<String> command) {
+    return command.subList(0, command.indexOf("pipe:1") + 1);
   }
 
   private static List<String> withoutFixtureOnlyAdditions(List<String> recorded) {

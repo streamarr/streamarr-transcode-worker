@@ -31,6 +31,10 @@ import org.junit.jupiter.api.io.TempDir;
 @DisplayName("Process Builder Launcher Tests")
 class ProcessBuilderLauncherTest {
 
+  // A scripted FFmpeg writes no framecrc of the source's streams.
+  private static final SourceEnd NOTHING_READ_FROM_THE_SOURCE =
+      new SourceEnd(List.of(), Optional.empty());
+
   private static final Duration OUTCOME_LIMIT = Duration.ofSeconds(10);
 
   @TempDir Path tempDir;
@@ -62,7 +66,9 @@ class ProcessBuilderLauncherTest {
 
     var producer = producerRunning("cat \"$0\"", recordingFile.toString()).start();
 
-    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT).isEqualTo(new Completed(0));
+    assertThat(producer.outcome())
+        .succeedsWithin(OUTCOME_LIMIT)
+        .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
     assertCarriesTheRecordedSamples(sink.acceptedBytes(), recording(ENCODED_RECORDING));
   }
 

@@ -89,5 +89,11 @@ sealed interface FfmpegProcess permits SingleFfmpegProcess, PipedFfmpegProcesses
   /** Reads FFmpeg's output to the end, which lets FFmpeg flush its last fragment and exit. */
   void discardRemainingOutput();
 
+  /**
+   * What the exited FFmpeg read of the chosen source streams, from the framecrc that the FFmpeg
+   * that reads the source writes to its error output.
+   */
+  List<ObservedSourceStream> observedSourceStreams();
+
   void stopDrainingErrorOutput();
 }

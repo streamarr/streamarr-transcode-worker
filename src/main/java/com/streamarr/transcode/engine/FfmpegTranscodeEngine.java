@@ -60,6 +60,8 @@ public class FfmpegTranscodeEngine {
             .jobAttemptId(request.attemptId())
             .periodSeconds(request.targetSegmentDuration())
             .startSequenceNumber(request.startSequenceNumber())
+            .mediaSegmentCount(request.mediaSegmentCount())
+            .copiesAudio(request.transcodeDecision().audioDecision().mode() == AudioMode.COPY)
             .gracePeriod(GRACE_PERIOD)
             .stallTimeout(encoderStallTimeout)
             .encodedFrameRate(encodedFrameRateOf(request))

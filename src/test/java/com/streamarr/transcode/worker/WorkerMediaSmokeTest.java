@@ -44,6 +44,8 @@ import build.buf.gen.streamarr.transcode.v1.ProbeKeyframes;
 import build.buf.gen.streamarr.transcode.v1.ProbeMediaInfo;
 import build.buf.gen.streamarr.transcode.v1.ProbeRequest;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
+import build.buf.gen.streamarr.transcode.v1.SourceEndedEarly;
+import build.buf.gen.streamarr.transcode.v1.SourceStreamEnd;
 import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
 import build.buf.gen.streamarr.transcode.v1.SubtitleMode;
 import build.buf.gen.streamarr.transcode.v1.TranscodeExecution;
@@ -242,6 +244,13 @@ class WorkerMediaSmokeTest {
   // 84 s of audio in 6 s segments; the 64 s of video end inside segment 10.
   private static final int VIDEO_ENDS_BEFORE_AUDIO_SEGMENT_COUNT = 14;
   private static final int VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT = 10;
+  // The video stream, 0, ends at 64 s and the audio stream, 1, at 84 s.
+  private static final int VIDEO_ENDS_BEFORE_AUDIO_AUDIO_INDEX = 1;
+  private static final List<SourceStreamEnd> VIDEO_ENDS_BEFORE_AUDIO_STREAM_ENDS =
+      List.of(streamEnd(0, Duration.ofSeconds(64)), streamEnd(1, Duration.ofSeconds(84)));
+  // The 90 s that the truncated source's index promises, in 6 s segments.
+  private static final int TRUNCATED_SOURCE_INDEXED_SEGMENT_COUNT = 15;
+  private static final Duration ONE_FRAME_AT_24_FPS = Duration.ofNanos(1_000_000_000L / 24 + 1);
   // 1,764 s of audio in 6 s segments after the same 64 s of video.
   private static final int LONG_AUDIO_AFTER_VIDEO_SEGMENT_COUNT = 294;
   // The seekable sources' 6 s period at their 24 fps.
@@ -3524,9 +3533,10 @@ class WorkerMediaSmokeTest {
     };
   }
 
-  // The worker's arguments between "ffmpeg -y" and its pipe:1 output, without its -preset option.
+  // The worker's arguments between "ffmpeg -y" and its pipe:1 output, without its -preset option
+  // and without the framecrc of the source's streams that follows that output.
   private static List<String> svtAv1ArgumentsWithoutPreset(List<String> command) {
-    var arguments = new ArrayList<>(command.subList(2, command.size() - 1));
+    var arguments = new ArrayList<>(command.subList(2, command.indexOf("pipe:1")));
     var preset = arguments.indexOf("-preset");
     assertThat(preset).as("the position of the worker's -preset option").isNotNegative();
     assertThat(arguments.subList(preset, preset + 2)).containsExactly("-preset", "10");
@@ -4436,6 +4446,329 @@ class WorkerMediaSmokeTest {
             ffmpegAudio.stream().filter(packet -> interval.holds(packet.pts())).toList());
   }
 
+  @ParameterizedTest(name = "{0} from segment {1}")
+  @CsvSource({
+    "TRANSCODE_MODE_REMUX, 0",
+    "TRANSCODE_MODE_REMUX, 11",
+    "TRANSCODE_MODE_FULL_TRANSCODE, 0",
+    "TRANSCODE_MODE_FULL_TRANSCODE, 11"
+  })
+  @DisplayName(
+      "Should complete reporting that the source ended in the segment that holds the video's end,"
+          + " with audio after it, when an attempt that holds no frame reads video that ends"
+          + " before the audio")
+  void shouldCompleteReportingTheSourceEndedEarlyWhenAnAttemptReadsVideoThatEndsBeforeTheAudio(
+      TranscodeMode mode, int startSequenceNumber) throws Exception {
+    var source = videoEndsBeforeAudioSource();
+    var job = videoEndsBeforeAudioJob(source, mode);
+    job.getExecutionBuilder().setStartSequenceNumber(startSequenceNumber);
+
+    var completion =
+        executeToCompletion(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(completion.report().getSourceEndedEarly())
+        .isEqualTo(
+            SourceEndedEarly.newBuilder()
+                .setLastSegmentWithSourceMedia(VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT)
+                .addStreamIndexesWithMediaAfterLastSegment(VIDEO_ENDS_BEFORE_AUDIO_AUDIO_INDEX)
+                .build());
+    assertThat(completion.report().getStreamEndsList())
+        .containsExactlyInAnyOrderElementsOf(VIDEO_ENDS_BEFORE_AUDIO_STREAM_ENDS);
+    assertThat(completion.uploads().names())
+        .doesNotContainAnyElementsOf(
+            IntStream.range(
+                    VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT + 1,
+                    VIDEO_ENDS_BEFORE_AUDIO_SEGMENT_COUNT)
+                .mapToObj(WorkerMediaSmokeTest::segmentName)
+                .toList());
+  }
+
+  // The source's video edit ends at 5.9 s, inside segment 0, while its video samples and its audio
+  // run to 10 s. The demuxer flags the video packets after the edit for discarding, so no picture
+  // reaches segment 1, and the attempt from segment 1 delivers nothing.
+  @Test
+  @DisplayName(
+      "Should complete reporting that the source ended in the segment where the video's edit ends,"
+          + " with audio after it, when an attempt after that edit reads packets that it cuts away")
+  void shouldCompleteReportingTheSourceEndedWhereTheVideosEditEndsWhenAnAttemptReadsPacketsAfterIt()
+      throws Exception {
+    var source = videoEditEndingBeforeItsSamplesSource();
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getExecutionBuilder().setMediaSegmentCount(2).setStartSequenceNumber(1);
+
+    var completion =
+        executeToCompletion(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(completion.report().getSourceEndedEarly())
+        .isEqualTo(
+            SourceEndedEarly.newBuilder()
+                .setLastSegmentWithSourceMedia(0)
+                .addStreamIndexesWithMediaAfterLastSegment(1)
+                .build());
+  }
+
+  // 10 s of H.264 at 64x36 and 24 fps with a keyframe every 2 s, and a 10 s tone, in MP4 whose
+  // video edit ends at 5.9 s.
+  private static synchronized Path videoEditEndingBeforeItsSamplesSource() throws Exception {
+    var source = seekableSources.resolve("video-edit-ending-before-its-samples.mp4");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24:duration=10",
+              "-f",
+              "lavfi",
+              "-i",
+              "sine=frequency=440:sample_rate=48000:duration=10",
+              "-c:v",
+              "libx264",
+              "-g",
+              "48",
+              "-c:a",
+              "aac"),
+          source);
+      endTheFirstTracksEditAt5900Milliseconds(source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // Shortens the first edit of the first track, a version 0 elst entry, to 5,900 ticks of FFmpeg's
+  // 1 ms movie timescale.
+  private static void endTheFirstTracksEditAt5900Milliseconds(Path mp4) throws IOException {
+    var bytes = Files.readAllBytes(mp4);
+    var position = 0;
+    var end = bytes.length;
+    for (var type : List.of("moov", "trak", "edts", "elst")) {
+      position = childOf(bytes, position, end, type);
+      end = position + ByteBuffer.wrap(bytes, position, 4).getInt();
+      position += 8;
+    }
+
+    assertThat(bytes[position]).as("the elst version").isZero();
+    ByteBuffer.wrap(bytes).putInt(position + 8, 5_900);
+    Files.write(mp4, bytes);
+  }
+
+  // The source's one picture starts at 0 s and lasts 20 s. The encode repeats it at 24 fps up to
+  // 20 s, so segment 3, from 18 s to 24 s, holds the video's end, whether the attempt starts at 0
+  // and delivers it or starts after the end and delivers nothing.
+  @ParameterizedTest(name = "from segment {0}")
+  @ValueSource(ints = {0, 5})
+  @DisplayName(
+      "Should complete reporting the segment where the video's last frame ends when an encode reads"
+          + " a last frame that spans several segments")
+  void shouldCompleteReportingTheSegmentWhereTheVideosLastFrameEndsWhenItSpansSeveralSegments(
+      int startSequenceNumber) throws Exception {
+    var source = oneTwentySecondPictureSource();
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getExecutionBuilder().setMediaSegmentCount(6).setStartSequenceNumber(startSequenceNumber);
+
+    var completion =
+        executeToCompletion(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(completion.report().getSourceEndedEarly().getLastSegmentWithSourceMedia())
+        .isEqualTo(3);
+  }
+
+  // One H.264 picture at 64x36 that lasts 20 s, and 20 s of a 440 Hz tone.
+  private static synchronized Path oneTwentySecondPictureSource() throws Exception {
+    var source = seekableSources.resolve("one-twenty-second-picture.mp4");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "color=c=red:s=64x36:r=1/20:d=20",
+              "-f",
+              "lavfi",
+              "-i",
+              "sine=frequency=440:sample_rate=48000:duration=20",
+              "-c:v",
+              "libx264",
+              "-c:a",
+              "aac"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // The source's one FLAC packet runs from 0 s to 7.5 s, past the end of segment 0 at 6 s, and its
+  // video ends at 5 s. The encode converts the packet over its whole duration, and its AAC after
+  // 6 s has no segment to go in, as no video opens segment 1.
+  @Test
+  @DisplayName(
+      "Should complete listing the audio after the last segment when an encode reads an audio packet"
+          + " that crosses the end of the segment that holds the video's end")
+  void shouldCompleteListingTheAudioAfterTheLastSegmentWhenAnEncodedAudioPacketCrossesItsEnd()
+      throws Exception {
+    var source = audioPacketAcrossTheVideosLastSegmentEndSource();
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getExecutionBuilder().setMediaSegmentCount(2);
+
+    var completion =
+        executeToCompletion(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(completion.report().getSourceEndedEarly())
+        .isEqualTo(
+            SourceEndedEarly.newBuilder()
+                .setLastSegmentWithSourceMedia(0)
+                .addStreamIndexesWithMediaAfterLastSegment(1)
+                .build());
+  }
+
+  // 5 s of H.264 at 64x36 and 24 fps, and a 440 Hz tone at 8 kHz for 7.5 s in one FLAC frame.
+  private static synchronized Path audioPacketAcrossTheVideosLastSegmentEndSource()
+      throws Exception {
+    var source = seekableSources.resolve("audio-packet-across-the-videos-last-segment-end.mkv");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24:duration=5",
+              "-f",
+              "lavfi",
+              "-i",
+              "sine=frequency=440:sample_rate=8000:duration=7.5",
+              "-c:v",
+              "libx264",
+              "-c:a",
+              "flac",
+              "-frame_size",
+              "60000"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  @ParameterizedTest(name = "from segment {0}")
+  @ValueSource(ints = {0, 11})
+  @DisplayName(
+      "Should complete reporting each stream's end and no early end when an encode holds the last"
+          + " frame of video that ends before the audio it pads")
+  void shouldCompleteReportingEachStreamsEndAndNoEarlyEndWhenAnEncodeHoldsAndPadsToTheEnd(
+      int startSequenceNumber) throws Exception {
+    var source = videoEndsBeforeAudioSource();
+    var job = videoEndsBeforeAudioJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    paddedTo(job, VIDEO_ENDS_BEFORE_AUDIO_SEGMENT_COUNT);
+    job.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
+    job.getExecutionBuilder().setStartSequenceNumber(startSequenceNumber);
+
+    var completion =
+        executeToCompletion(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(completion.report().hasSourceEndedEarly()).isFalse();
+    assertThat(completion.report().getStreamEndsList())
+        .containsExactlyInAnyOrderElementsOf(VIDEO_ENDS_BEFORE_AUDIO_STREAM_ENDS);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"TRANSCODE_MODE_REMUX", "TRANSCODE_MODE_FULL_TRANSCODE"})
+  @DisplayName(
+      "Should report the source's own stream ends and early end when the source's metadata carries"
+          + " text shaped like the framecrc of its streams")
+  void shouldReportTheSourcesOwnStreamEndsWhenItsMetadataCarriesFramecrcShapedText(
+      TranscodeMode mode) throws Exception {
+    var source = videoEndsBeforeAudioSourceWithFramecrcShapedMetadata();
+    var job = videoEndsBeforeAudioJob(source, mode);
+    job.getExecutionBuilder().setStartSequenceNumber(11);
+
+    var completion =
+        executeToCompletion(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(completion.report().getStreamEndsList())
+        .containsExactlyInAnyOrderElementsOf(VIDEO_ENDS_BEFORE_AUDIO_STREAM_ENDS);
+    assertThat(completion.report().getSourceEndedEarly())
+        .isEqualTo(
+            SourceEndedEarly.newBuilder()
+                .setLastSegmentWithSourceMedia(VIDEO_ENDS_BEFORE_AUDIO_LAST_VIDEO_SEGMENT)
+                .addStreamIndexesWithMediaAfterLastSegment(VIDEO_ENDS_BEFORE_AUDIO_AUDIO_INDEX)
+                .build());
+  }
+
+  // The source's last frame starts at 5.983 s, inside segment 0, but FFmpeg's conversion to 24 fps
+  // can place the output's last frame at 6 s, inside segment 1.
+  @Test
+  @DisplayName(
+      "Should report the last uploaded segment as the last with source media when an encode's"
+          + " frame-rate conversion moves the source's last frame into the next segment")
+  void shouldReportTheLastUploadedSegmentWhenFrameRateConversionMovesTheLastFrameIntoTheNext()
+      throws Exception {
+    var source = sixtyFramesPerSecondEndingBeforeABoundarySource();
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getExecutionBuilder().setMediaSegmentCount(3);
+
+    var completion =
+        executeToCompletion(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    var lastUploaded =
+        completion.uploads().names().stream()
+            .filter(name -> name.startsWith("segment"))
+            .map(name -> Integer.parseInt(name.substring("segment".length(), name.indexOf('.'))))
+            .max(Comparator.naturalOrder())
+            .orElseThrow();
+    assertThat(completion.report().getSourceEndedEarly().getLastSegmentWithSourceMedia())
+        .isEqualTo(lastUploaded);
+    assertThat(
+            completion
+                .report()
+                .getSourceEndedEarly()
+                .getStreamIndexesWithMediaAfterLastSegmentList())
+        .as("the audio runs on to 15 s, past every uploaded segment")
+        .containsExactly(1);
+  }
+
+  // The truncated source's index promises 90 s, its data holds less, and its probe would say 90 s.
+  @Test
+  @DisplayName(
+      "Should upload every advertised segment and report the segment where the source's data ends"
+          + " when an encode holds and pads a source truncated before its index's end")
+  void shouldUploadEverySegmentAndReportWhereTheDataEndsWhenAnEncodeHoldsAndPadsATruncatedSource()
+      throws Exception {
+    var source = truncatedSource();
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    paddedTo(job, TRUNCATED_SOURCE_INDEXED_SEGMENT_COUNT);
+    job.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(true);
+
+    var completion =
+        executeToCompletion(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(completion.uploads().names())
+        .containsExactlyElementsOf(uploadNames(TRUNCATED_SOURCE_INDEXED_SEGMENT_COUNT));
+    var report = completion.report();
+    var lastSegment = report.getSourceEndedEarly().getLastSegmentWithSourceMedia();
+    assertThat(report.getSourceEndedEarly().getStreamIndexesWithMediaAfterLastSegmentList())
+        .as("a held encode carries every source sample")
+        .isEmpty();
+    assertThat(lastSegment).isBetween(1, TRUNCATED_SOURCE_INDEXED_SEGMENT_COUNT - 2);
+    assertThat(report.getStreamEndsList())
+        .extracting(SourceStreamEnd::getStreamIndex)
+        .containsExactlyInAnyOrder(0, 1);
+    var latestEnd =
+        report.getStreamEndsList().stream()
+            .map(
+                end ->
+                    Duration.ofSeconds(end.getEndTime().getSeconds(), end.getEndTime().getNanos()))
+            .max(Comparator.naturalOrder())
+            .orElseThrow();
+    assertThat(latestEnd)
+        .as("the end of the last source sample, which starts inside segment %d", lastSegment)
+        .isGreaterThan(Duration.ofSeconds(lastSegment * 6L))
+        .isLessThanOrEqualTo(Duration.ofSeconds((lastSegment + 1) * 6L).plus(ONE_FRAME_AT_24_FPS));
+  }
+
   // With no audio frame to read, the mp4 muxer cannot write the AC-3 or E-AC-3 sample entry: FFmpeg
   // logs that it cannot write the moov before the first packet, writes the moov's header with no
   // size, and still exits 0.
@@ -4966,6 +5299,35 @@ class WorkerMediaSmokeTest {
     return source;
   }
 
+  // The source whose video ends before its audio, with a title that names a time base no stream
+  // has, a comment that reads as a packet of stream 0 ending far past the source's end, and a tag
+  // whose name prints FFmpeg's stream mapping header on a line of its own before a packet's record.
+  // FFmpeg writes all three to its error output among its logs, where the framecrc goes too.
+  private static synchronized Path videoEndsBeforeAudioSourceWithFramecrcShapedMetadata()
+      throws Exception {
+    var source = seekableSources.resolve("video-ends-before-audio-framecrc-metadata-tags.mp4");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-i",
+              videoEndsBeforeAudioSource().toString(),
+              "-c",
+              "copy",
+              "-movflags",
+              "use_metadata_tags",
+              "-metadata",
+              "title=Sample #tb 0: 1/1000000000",
+              "-metadata",
+              "comment=0, 999999999, 999999999, 1, 1000, 0x0a1b2c3d",
+              "-metadata",
+              "x\nStream mapping:\nrecord=0, 888888888, 888888888, 1, 1000, 0x0a1b2c3d"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
   // Pads the encoded audio up to the end of the job's last advertised segment of 6 s.
   private static void paddedTo(VariantJob.Builder job, int segmentCount) {
     job.getExecutionBuilder().setMediaSegmentCount(segmentCount);
@@ -5144,6 +5506,70 @@ class WorkerMediaSmokeTest {
         .setChannelLayout(AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO)
         .setBitrateBitsPerSecond(192_000);
     return job;
+  }
+
+  // H.264 at 64x36 and 60 fps, 360 frames whose last starts at 5.983 s, and 15 s of pink noise.
+  private static synchronized Path sixtyFramesPerSecondEndingBeforeABoundarySource()
+      throws Exception {
+    var source = seekableSources.resolve("sixty-fps-ending-before-a-boundary.mp4");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=60:duration=5.99",
+              "-f",
+              "lavfi",
+              "-i",
+              "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5:duration=15",
+              "-c:v",
+              "libx264",
+              "-g",
+              "120",
+              "-c:a",
+              "aac"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // H.264 at 64x36 and 24 fps with a keyframe every 2 s, and pink noise, both for 90 s, with the
+  // index at the front and only the first half of the file: FFmpeg reads the streams to where the
+  // data stops, partway through, and exits cleanly.
+  private static synchronized Path truncatedSource() throws Exception {
+    var source = seekableSources.resolve("truncated.mp4");
+    if (!generatedSeekableSources.contains(source)) {
+      var whole = seekableSources.resolve("whole-before-truncation.mp4");
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24:duration=90",
+              "-f",
+              "lavfi",
+              "-i",
+              "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5:duration=90",
+              "-c:v",
+              "libx264",
+              "-g",
+              "48",
+              "-keyint_min",
+              "48",
+              "-c:a",
+              "aac",
+              "-movflags",
+              "+faststart"),
+          whole);
+      var bytes = Files.readAllBytes(whole);
+      Files.write(source, Arrays.copyOf(bytes, bytes.length / 2));
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
   }
 
   private static VariantJob.Builder surroundAudioEndsBeforeVideoJob(Path source) {
@@ -5479,6 +5905,17 @@ class WorkerMediaSmokeTest {
   private MediaUploads execute(
       FfmpegTranscodeEngine engine, Path sourceRoot, VariantJob job, Consumer<String> uploadStarted)
       throws Exception {
+    return executeToCompletion(engine, sourceRoot, job, uploadStarted).uploads();
+  }
+
+  private CompletedExecution executeToCompletion(
+      FfmpegTranscodeEngine engine, Path sourceRoot, VariantJob job) throws Exception {
+    return executeToCompletion(engine, sourceRoot, job, _ -> {});
+  }
+
+  private CompletedExecution executeToCompletion(
+      FfmpegTranscodeEngine engine, Path sourceRoot, VariantJob job, Consumer<String> uploadStarted)
+      throws Exception {
     try (var controlPlane = new MediaControlPlane(uploadStarted);
         var worker = workerBuilder(sourceRoot).engine(engine).ffprobe(probeExecutor()).build()) {
       worker.start("127.0.0.1", controlPlane.port());
@@ -5489,11 +5926,20 @@ class WorkerMediaSmokeTest {
                   StartVariantCommand.newBuilder().setTarget(registeredWorker).setJob(job))
               .build());
 
-      assertThat(controlPlane.completed.get(JOB_LIMIT.toSeconds(), TimeUnit.SECONDS))
-          .extracting(JobAttemptCompleted::getJobAttemptId)
-          .isEqualTo(job.getJobAttemptId());
-      return new MediaUploads(List.copyOf(controlPlane.names), Map.copyOf(controlPlane.segments));
+      var report = controlPlane.completed.get(JOB_LIMIT.toSeconds(), TimeUnit.SECONDS);
+      assertThat(report.getJobAttemptId()).isEqualTo(job.getJobAttemptId());
+      return new CompletedExecution(
+          report,
+          new MediaUploads(List.copyOf(controlPlane.names), Map.copyOf(controlPlane.segments)));
     }
+  }
+
+  private record CompletedExecution(JobAttemptCompleted report, MediaUploads uploads) {}
+
+  private static SourceStreamEnd streamEnd(int streamIndex, Duration endTime) {
+    var streamEnd = SourceStreamEnd.newBuilder().setStreamIndex(streamIndex);
+    streamEnd.getEndTimeBuilder().setSeconds(endTime.getSeconds()).setNanos(endTime.getNano());
+    return streamEnd.build();
   }
 
   private FailedExecution executeExpectingFailure(

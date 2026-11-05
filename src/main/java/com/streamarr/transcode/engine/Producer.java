@@ -13,6 +13,7 @@ import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.BooleanSupplier;
@@ -71,6 +72,8 @@ public final class Producer {
   private final StallWatchdog watchdog;
   private final ProductionTimer productionTimer;
   private final String threadName;
+  private final SourceEndRule sourceEndRule;
+  private final int startSequenceNumber;
   private final CompletableFuture<AttemptOutcome> outcome = new CompletableFuture<>();
   private final Object lock = new Object();
 
@@ -78,7 +81,7 @@ public final class Producer {
   private Optional<AttemptOutcome> decision = Optional.empty();
   private Optional<Delivery> deliveryInFlight = Optional.empty();
   private long readerHeldBytes;
-  private boolean mediaSegmentDelivered;
+  private OptionalInt lastDeliveredMediaSegment = OptionalInt.empty();
 
   private Producer(FfmpegProcess ffmpeg, Settings settings) {
     this.ffmpeg = ffmpeg;
@@ -92,6 +95,8 @@ public final class Producer {
     this.sink = settings.sink();
     this.memoryBudget = settings.memoryBudget();
     this.threadName = "producer-" + settings.jobAttemptId();
+    this.sourceEndRule = settings.sourceEndRule();
+    this.startSequenceNumber = settings.startSequenceNumber();
   }
 
   /**
@@ -112,6 +117,10 @@ public final class Producer {
    *     stream, before it delivers anything, when it declares none
    * @param paddedAudioEnd the advertised end of an attempt that pads its audio with silence, at or
    *     after which the producer delivers no audio sample; empty for any other attempt
+   * @param mediaSegmentCount the variant's advertised media segments, against whose last one the
+   *     producer reports whether the source ended early
+   * @param copiesAudio whether the attempt copies the source's audio packets, which the producer
+   *     places whole in the segment whose interval holds their start
    * @param memoryBudget the worker's segment memory, which every producer of the worker shares
    * @param clock the clock that times each media segment's production
    * @throws TranscodeException when FFmpeg cannot be started
@@ -123,6 +132,8 @@ public final class Producer {
       @NonNull UUID jobAttemptId,
       int periodSeconds,
       int startSequenceNumber,
+      int mediaSegmentCount,
+      boolean copiesAudio,
       @NonNull Duration gracePeriod,
       @NonNull Duration stallTimeout,
       @NonNull Optional<OutputFrameRate> encodedFrameRate,
@@ -149,6 +160,14 @@ public final class Producer {
             .memoryBudget(memoryBudget)
             .stallTimeout(stallTimeout)
             .clock(clock)
+            .sourceEndRule(
+                SourceEndRule.builder()
+                    .periodSeconds(periodSeconds)
+                    .mediaSegmentCount(mediaSegmentCount)
+                    .video(videoDecision)
+                    .copiesAudio(copiesAudio)
+                    .build())
+            .startSequenceNumber(startSequenceNumber)
             .build();
     var ffmpeg =
         FfmpegProcess.builder()
@@ -676,40 +695,51 @@ public final class Producer {
       return;
     }
 
-    endDelivery(segment instanceof ProducedSegment.Media);
+    var acceptedMediaSegment = OptionalInt.empty();
+    if (segment instanceof ProducedSegment.Media media) {
+      acceptedMediaSegment = OptionalInt.of(media.sequenceNumber());
+    }
+
+    endDelivery(acceptedMediaSegment);
   }
 
   // The failure is decided before the delivery ends, so the reader, waiting to hand off its next
   // segment, cannot complete the attempt in between.
   private void failDelivery(Failed failure) {
     var decided = tryDecide(failure);
-    endDelivery(false);
+    endDelivery(OptionalInt.empty());
     if (decided) {
       ffmpeg.endForcibly();
       settle(failure);
     }
   }
 
-  private void endDelivery(boolean mediaSegmentAccepted) {
+  private void endDelivery(OptionalInt acceptedMediaSegment) {
     long deliveredBytes;
     synchronized (lock) {
       deliveredBytes = deliveryInFlight.map(Delivery::heldBytes).orElse(0L);
       deliveryInFlight = Optional.empty();
-      mediaSegmentDelivered |= mediaSegmentAccepted;
+      if (acceptedMediaSegment.isPresent()) {
+        lastDeliveredMediaSegment = acceptedMediaSegment;
+      }
+
       lock.notifyAll();
     }
 
     memoryBudget.release(deliveredBytes);
   }
 
+  // An attempt that starts after every source sample has no media segment to deliver.
   private AttemptOutcome outcomeOfCompleteOutput() {
+    var observedSourceStreams = ffmpeg.observedSourceStreams();
     synchronized (lock) {
-      if (!mediaSegmentDelivered) {
+      var sourceEnd = sourceEndRule.reportOn(observedSourceStreams, lastDeliveredMediaSegment);
+      if (lastDeliveredMediaSegment.isEmpty() && !sourceEnd.endsBefore(startSequenceNumber)) {
         return new Failed(
             ProducerFailure.NO_MEDIA_SEGMENT, "FFmpeg exited cleanly without a media segment");
       }
 
-      return new Completed(assembler.droppedLateAudioSampleCount());
+      return new Completed(assembler.droppedLateAudioSampleCount(), sourceEnd);
     }
   }
 
@@ -769,5 +799,7 @@ public final class Producer {
       SegmentSink sink,
       SegmentMemoryBudget memoryBudget,
       Duration stallTimeout,
-      MonotonicClock clock) {}
+      MonotonicClock clock,
+      SourceEndRule sourceEndRule,
+      int startSequenceNumber) {}
 }

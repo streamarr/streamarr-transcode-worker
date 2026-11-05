@@ -16,6 +16,8 @@ import build.buf.gen.streamarr.transcode.v1.ProbeCapacityChanged;
 import build.buf.gen.streamarr.transcode.v1.ProbeStreamInfo;
 import build.buf.gen.streamarr.transcode.v1.SegmentContentType;
 import build.buf.gen.streamarr.transcode.v1.SegmentUploadMetadata;
+import build.buf.gen.streamarr.transcode.v1.SourceEndedEarly;
+import build.buf.gen.streamarr.transcode.v1.SourceStreamEnd;
 import build.buf.gen.streamarr.transcode.v1.StartProbeCommand;
 import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
 import build.buf.gen.streamarr.transcode.v1.StopVariantCommand;
@@ -43,6 +45,7 @@ import com.streamarr.transcode.engine.Producer;
 import com.streamarr.transcode.engine.ProducerFailure;
 import com.streamarr.transcode.engine.SegmentMemoryBudget;
 import com.streamarr.transcode.engine.SourceAudio;
+import com.streamarr.transcode.engine.SourceEnd;
 import com.streamarr.transcode.engine.Speaker;
 import com.streamarr.transcode.engine.SpeakerLayout;
 import com.streamarr.transcode.engine.TranscodeRequest;
@@ -663,15 +666,15 @@ public final class TranscodeWorker implements AutoCloseable {
 
   private static EstablishWorkerSessionRequest reportOf(VariantJob job, AttemptOutcome outcome) {
     return switch (outcome) {
-      case Completed(var droppedLateAudioSampleCount) ->
-          completion(job, droppedLateAudioSampleCount);
+      case Completed(var droppedLateAudioSampleCount, var sourceEnd) ->
+          completion(job, droppedLateAudioSampleCount, sourceEnd);
       case Failed(var reason, var detail) -> transcodeFailure(job, reason, detail);
       case Stopped _ -> jobAttemptStopped(job.getJobAttemptId());
     };
   }
 
   private static EstablishWorkerSessionRequest completion(
-      VariantJob job, long droppedLateAudioSampleCount) {
+      VariantJob job, long droppedLateAudioSampleCount, SourceEnd sourceEnd) {
     if (droppedLateAudioSampleCount > 0) {
       log.info(
           "Variant {} of stream session {} dropped {} audio samples that arrived after their media"
@@ -681,7 +684,7 @@ public final class TranscodeWorker implements AutoCloseable {
           droppedLateAudioSampleCount);
     }
 
-    return jobAttemptCompleted(job.getJobAttemptId());
+    return jobAttemptCompleted(job.getJobAttemptId(), sourceEnd);
   }
 
   private static EstablishWorkerSessionRequest transcodeFailure(
@@ -808,9 +811,31 @@ public final class TranscodeWorker implements AutoCloseable {
     return EstablishWorkerSessionRequest.newBuilder().setJobAttemptStarted(started).build();
   }
 
-  private static EstablishWorkerSessionRequest jobAttemptCompleted(Uuid jobAttemptId) {
-    return EstablishWorkerSessionRequest.newBuilder()
-        .setJobAttemptCompleted(JobAttemptCompleted.newBuilder().setJobAttemptId(jobAttemptId))
+  private static EstablishWorkerSessionRequest jobAttemptCompleted(
+      Uuid jobAttemptId, SourceEnd sourceEnd) {
+    var completed = JobAttemptCompleted.newBuilder().setJobAttemptId(jobAttemptId);
+    sourceEnd.streamEnds().stream()
+        .map(TranscodeWorker::sourceStreamEnd)
+        .forEach(completed::addStreamEnds);
+    sourceEnd
+        .endedEarly()
+        .map(TranscodeWorker::sourceEndedEarly)
+        .ifPresent(completed::setSourceEndedEarly);
+    return EstablishWorkerSessionRequest.newBuilder().setJobAttemptCompleted(completed).build();
+  }
+
+  private static SourceStreamEnd sourceStreamEnd(SourceEnd.StreamEnd streamEnd) {
+    return SourceStreamEnd.newBuilder()
+        .setStreamIndex(streamEnd.streamIndex())
+        .setEndTime(protoDuration(streamEnd.endTime()))
+        .build();
+  }
+
+  private static SourceEndedEarly sourceEndedEarly(SourceEnd.EndedEarly endedEarly) {
+    return SourceEndedEarly.newBuilder()
+        .setLastSegmentWithSourceMedia(endedEarly.lastSegmentWithSourceMedia())
+        .addAllStreamIndexesWithMediaAfterLastSegment(
+            endedEarly.streamIndexesWithMediaAfterLastSegment())
         .build();
   }
 

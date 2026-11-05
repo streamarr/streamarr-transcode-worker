@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /** A job attempt's FFmpeg that runs as one process. */
@@ -95,6 +96,11 @@ final class SingleFfmpegProcess implements FfmpegProcess {
     } catch (IOException _) {
       // Nothing read after the attempt's outcome was decided matters.
     }
+  }
+
+  @Override
+  public List<ObservedSourceStream> observedSourceStreams() {
+    return errorOutput.observedSourceStreams();
   }
 
   @Override
