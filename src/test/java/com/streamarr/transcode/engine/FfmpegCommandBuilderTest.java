@@ -1560,23 +1560,81 @@ class FfmpegCommandBuilderTest {
         .containsSequence("-c:a", "copy", "-copypriorss:a", "0");
   }
 
-  @ParameterizedTest(name = "keyframe at {0} s")
-  @ValueSource(ints = {54, 57})
+  // The demuxer can still land on a keyframe before the seek's target, as without the server's
+  // keyframe position, so the copy drops the packets before that target.
+  @ParameterizedTest(name = "keyframe position {0}")
+  @MethodSource("keyframePositionsWithinOnePeriodOfSegment10")
   @DisplayName(
-      "Should copy the audio from the source's only input when the server's keyframe position lies"
+      "Should copy the audio from the source's only input from its seek's target when the seek lies"
           + " at most one segment period before the first segment's start")
-  void shouldCopyTheAudioFromTheSourcesOnlyInputWhenTheServersKeyframeLiesWithinOnePeriod(
-      int keyframeSeconds) {
+  void shouldCopyTheAudioFromTheSourcesOnlyInputFromItsSeeksTargetWhenTheSeekLiesWithinOnePeriod(
+      Optional<Duration> keyframePosition) {
     var cmd =
         command(
             request(TranscodeMode.VIDEO_TRANSCODE)
                 .startSequenceNumber(10)
-                .seekPosition(Optional.of(Duration.ofSeconds(keyframeSeconds)))
+                .seekPosition(keyframePosition)
+                .build(),
+            "libx264");
+
+    assertThat(cmd.stream().filter("-i"::equals)).hasSize(1);
+    assertThat(cmd)
+        .containsSequence("-map", "0:a:0")
+        .containsSequence("-c:a", "copy", "-copypriorss:a", "0")
+        .doesNotContain("-isync");
+  }
+
+  static Stream<Optional<Duration>> keyframePositionsWithinOnePeriodOfSegment10() {
+    return Stream.of(
+        Optional.empty(), Optional.of(Duration.ofSeconds(54)), Optional.of(Duration.ofSeconds(57)));
+  }
+
+  // An attempt that holds the last frame encodes its video from its seek, and the mp4 muxer holds
+  // every picture until the audio has a packet, so its audio starts at that seek too.
+  @Test
+  @DisplayName(
+      "Should copy the audio from the source's only input from the keyframe its seek reads when an"
+          + " encode that holds the last frame carries a keyframe position far before its first"
+          + " segment")
+  void shouldCopyTheAudioFromTheKeyframeItsSeekReadsWhenAHoldingEncodesKeyframeLiesFarBack() {
+    var decision =
+        decision(TranscodeMode.VIDEO_TRANSCODE)
+            .videoDecision(
+                VideoDecisionFixtures.encodeBuilder().holdsLastFrameToAdvertisedEnd(true).build())
+            .build();
+    var cmd =
+        command(
+            request(decision)
+                .advertisedEnd(Optional.of(Duration.ofSeconds(66)))
+                .startSequenceNumber(10)
+                .seekPosition(Optional.of(Duration.ZERO))
                 .build(),
             "libx264");
 
     assertThat(cmd.stream().filter("-i"::equals)).hasSize(1);
     assertThat(cmd).containsSequence("-map", "0:a:0").doesNotContain("-isync", "-copypriorss:a");
+  }
+
+  @Test
+  @DisplayName(
+      "Should start the encoder's input a second after the server's keyframe position when an"
+          + " encode that holds the last frame carries a position far before its first segment")
+  void shouldStartTheEncodersInputASecondAfterTheKeyframeWhenAHoldingEncodesKeyframeLiesFarBack() {
+    var decision =
+        decision(TranscodeMode.FULL_TRANSCODE)
+            .videoDecision(
+                VideoDecisionFixtures.encodeBuilder().holdsLastFrameToAdvertisedEnd(true).build())
+            .build();
+    var cmd =
+        command(
+            request(decision)
+                .advertisedEnd(Optional.of(Duration.ofSeconds(66)))
+                .startSequenceNumber(10)
+                .seekPosition(Optional.of(Duration.ZERO))
+                .build(),
+            "libx264");
+
+    assertThat(cmd).containsSequence("-af", aacStereoFromTheFirstSegment("60", "59"));
   }
 
   // The encode of a profile 5 copy already reads the source as its second input, from the server's
@@ -2721,7 +2779,16 @@ class FfmpegCommandBuilderTest {
     assertThat(pipe.encodeCommand())
         .containsSequence("pipe:0", "-ss", "12", "-noaccurate_seek", "-i", "/media/movie.mkv")
         .containsSequence("-map", "0:v:0", "-map", "1:a:0")
-        .containsSequence("-c:a", "copy", "-bsf:a", "aac_adtstoasc", "-b:a", "0", "-r:v:0");
+        .containsSequence(
+            "-c:a",
+            "copy",
+            "-copypriorss:a",
+            "0",
+            "-bsf:a",
+            "aac_adtstoasc",
+            "-b:a",
+            "0",
+            "-r:v:0");
   }
 
   @Test

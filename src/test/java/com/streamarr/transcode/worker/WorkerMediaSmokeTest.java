@@ -5650,16 +5650,19 @@ class WorkerMediaSmokeTest {
   // White noise in eight 24-bit channels at 96 kHz leaves FLAC nothing to compress, about 2.3 MB of
   // audio a second. The source's only keyframe lies 96 s before the replacement's first segment,
   // so audio encoded from a second after that keyframe, or copied from it, would fill the first
-  // fragment far past the producer's 128 MiB cap before the first picture.
-  @ParameterizedTest(name = "{0}")
-  @EnumSource(
-      value = TranscodeMode.class,
-      names = {"TRANSCODE_MODE_FULL_TRANSCODE", "TRANSCODE_MODE_VIDEO_TRANSCODE"})
+  // fragment far past the producer's 128 MiB cap before the first picture. Without the server's
+  // keyframe position, the seek one period early lands on that keyframe too.
+  @ParameterizedTest(name = "{0}, keyframe position {1}")
+  @CsvSource({
+    "TRANSCODE_MODE_FULL_TRANSCODE, 0",
+    "TRANSCODE_MODE_VIDEO_TRANSCODE, 0",
+    "TRANSCODE_MODE_VIDEO_TRANSCODE,"
+  })
   @DisplayName(
       "Should complete an encoded replacement attempt of high-bitrate lossless audio, encoded or"
-          + " copied, when the server's keyframe lies far before its first segment")
+          + " copied, when the keyframe its seek reads lies far before its first segment")
   void shouldCompleteAReplacementOfHighBitrateLosslessAudioWhenTheKeyframeLiesFarBeforeIt(
-      TranscodeMode mode) throws Exception {
+      TranscodeMode mode, BigDecimal keyframePosition) throws Exception {
     var source = oneKeyframeEightChannelNoiseSource();
     var job = seekableSourceJob(source, mode);
     job.getDecisionBuilder()
@@ -5668,7 +5671,9 @@ class WorkerMediaSmokeTest {
         .setChannels(8)
         .setBitrateBitsPerSecond(0);
     job.getExecutionBuilder().setMediaSegmentCount(17).setStartSequenceNumber(16);
-    setSeekPosition(job.getExecutionBuilder(), BigDecimal.ZERO);
+    if (keyframePosition != null) {
+      setSeekPosition(job.getExecutionBuilder(), keyframePosition);
+    }
 
     var completion =
         executeToCompletion(engine(softwareCapabilities()), source.getParent(), job.build());
