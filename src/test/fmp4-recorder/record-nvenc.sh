@@ -30,7 +30,7 @@ SCRIPT_NAME=${0##*/}
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPOSITORY="$(cd "$HERE/../../.." && pwd)"
 
-DEFAULT_IMAGE='streamarr/streamarr-transcode-worker:0.1.0-SNAPSHOT@sha256:a11de4631250ce3bb120a734998ecb84bcd9d507a43a5aceb236e892908be481'
+DEFAULT_IMAGE='streamarr/streamarr-transcode-worker:0.1.0-SNAPSHOT@sha256:5e933a5afc4012301e5005130e6456d4ef840af057e4d463130cdb6bde77ac09'
 DEFAULT_TIME_LIMIT_S=1200
 GPU_RUN_ARGS=(--gpus all -e "NVIDIA_DRIVER_CAPABILITIES=compute,video,utility")
 # The analysis runs in this image, which holds the Node release in buildpacks/ffmpeg/.nvmrc, so the
