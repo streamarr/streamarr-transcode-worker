@@ -56,9 +56,9 @@ final class SourceStreamObservation {
       return true;
     }
 
-    var record = RECORD.matcher(line);
-    if (record.find()) {
-      readRecord(record);
+    var recordMatch = RECORD.matcher(line);
+    if (recordMatch.find()) {
+      readRecord(recordMatch);
       return true;
     }
 
@@ -102,21 +102,21 @@ final class SourceStreamObservation {
 
   // A packet without a presentation time, as a raw H.264 or HEVC stream's, counts at its decode
   // time, which lies at most the reordering delay before it.
-  private void readRecord(Matcher record) {
+  private void readRecord(Matcher recordMatch) {
     try {
-      var stream = Integer.parseInt(record.group(1));
-      var start = Long.parseLong(record.group(3));
+      var stream = Integer.parseInt(recordMatch.group(1));
+      var start = Long.parseLong(recordMatch.group(3));
       if (start == NO_TIME) {
-        start = Long.parseLong(record.group(2));
+        start = Long.parseLong(recordMatch.group(2));
       }
 
       if (start == NO_TIME) {
         return;
       }
 
-      var end = Math.addExact(start, Long.parseLong(record.group(4)));
+      var end = Math.addExact(start, Long.parseLong(recordMatch.group(4)));
       var keyframe =
-          Optional.ofNullable(record.group(5))
+          Optional.ofNullable(recordMatch.group(5))
               .map(flags -> (Integer.parseUnsignedInt(flags, 16) & KEYFRAME) != 0)
               .orElse(true);
       packets.merge(stream, Packets.of(start, end, keyframe), Packets::andThen);

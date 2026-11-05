@@ -83,6 +83,8 @@ public class FfmpegCommandBuilder {
   // it adds a keyframe at each scene cut, inside a segment.
   private static final String CLOSED_GOP_X265_PARAMETERS = "no-scenecut=1:no-open-gop=1";
 
+  private static final String FLUSH_PACKETS = "-flush_packets";
+
   // A negative map undoes the maps before it that it matches, so a named subtitle, data,
   // attachment or cover art stream maps nothing and the producer refuses the output without a
   // sound track, where FFmpeg would fail writing it. The chosen video stream is never cover art.
@@ -103,7 +105,7 @@ public class FfmpegCommandBuilder {
           "1",
           "-movie_timescale",
           "1000000",
-          "-flush_packets",
+          FLUSH_PACKETS,
           "1",
           "pipe:1");
 
@@ -278,8 +280,7 @@ public class FfmpegCommandBuilder {
     }
 
     cmd.addAll(
-        List.of(
-            "-c", "copy", "-copypriorss", "1", "-f", "framecrc", "-flush_packets", "1", "pipe:2"));
+        List.of("-c", "copy", "-copypriorss", "1", "-f", "framecrc", FLUSH_PACKETS, "1", "pipe:2"));
   }
 
   // The copy's muxer replaces each video packet's duration with the gap to the next packet's
@@ -295,7 +296,7 @@ public class FfmpegCommandBuilder {
             "copy",
             "-f",
             "framecrc",
-            "-flush_packets",
+            FLUSH_PACKETS,
             "1"));
   }
 
