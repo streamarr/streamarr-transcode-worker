@@ -9,6 +9,7 @@ import com.streamarr.transcode.fixtures.Mp4Samples.Sample;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -17,11 +18,14 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.IntStream;
 import java.util.stream.Stream;
+import lombok.Builder;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -35,18 +39,22 @@ import org.junit.jupiter.params.provider.ValueSource;
 /**
  * Runs the producer over the FFmpeg on {@code PATH}, the locked build in CI, to check the
  * initialization segment of a copy whose output the server planned. The sources are synthetic
- * libx265 streams at 64x36 and 24 fps with a keyframe every second: one PQ stream whose samples
- * carry the mastering display and content light level messages, written by libx265 from the values
- * of {@link PlannedCopyOutputs}.
+ * streams at 64x36 and 24 fps with a keyframe every second: libx265 PQ and HLG streams, the PQ
+ * stream's samples carrying the mastering display and content light level messages that libx265
+ * writes from the values of {@link PlannedCopyOutputs}, and SVT-AV1 PQ and HLG streams whose every
+ * temporal unit carries an RPU in an ITU-T T.35 metadata OBU, as a Dolby Vision AV1 stream does.
  */
 @Tag("SmokeTest")
 @DisplayName("HDR Copy Smoke Tests")
 class HdrCopySmokeTest {
 
   private static final int SOURCE_SECONDS = 4;
+  private static final int FRAME_RATE = 24;
   private static final int PERIOD_SECONDS = 1;
   // libx265's 64x36 Main 10 at level 1.0 in the Main tier.
   private static final String CODEC_STRING = "hvc1.2.4.L30.90";
+  // SVT-AV1's 64x36 Main 10-bit at level 2.0 in the Main tier.
+  private static final String AV1_CODEC_STRING = "av01.0.00M.10";
   private static final Duration OUTCOME_LIMIT = Duration.ofSeconds(60);
   private static final Duration FRAGMENTATION_TARGET = Duration.ofMillis(250);
   private static final int PREFIX_SEI = 39;
@@ -58,20 +66,38 @@ class HdrCopySmokeTest {
   private static final int HLG_TRANSFER = 18;
   private static final String PROFILE_5_CODEC_STRING = "dvh1.05.01";
   // The first 5 bytes of Dolby Vision records at level 1 with an RPU and a base layer: profile 5
-  // with compatibility 0, profile 8 with compatibility 1, and profile 8 with compatibility 6 and
-  // compression 3.
+  // with compatibility 0, profile 8 with compatibility 1, 4, and 6 with compression 3, and profile
+  // 10 with compatibility 1 and 4.
   private static final String PROFILE_5_LEVEL_1 = "01000A0D00";
   private static final String PROFILE_8_LEVEL_1_PQ = "0100100D10";
+  private static final String PROFILE_8_COMPATIBILITY_4 = "0100100D40";
   private static final String PROFILE_8_COMPATIBILITY_6 = "0100100D6C";
+  private static final String PROFILE_10_LEVEL_1_PQ = "0100140D10";
+  private static final String PROFILE_10_COMPATIBILITY_4 = "0100140D40";
+  // AV1 6.2.2 and 6.7.1: the OBU types, and the metadata type of ITU-T T.35.
+  private static final int OBU_FRAME_HEADER = 3;
+  private static final int OBU_METADATA = 5;
+  private static final int OBU_FRAME = 6;
+  private static final String METADATA_TYPE_ITUT_T35 = "04";
+  // Dolby's T.35 registration: country code 0xB5, provider code 0x003B and provider-oriented code
+  // 0x00000800.
+  private static final String DOLBY_VISION_T35 = "B5003B00000800";
+  // The OBU header, its size byte, the metadata type and the registration come before the number.
+  private static final int RPU_NUMBER_OFFSET = 10;
+  private static final int IVF_FRAME_HEADER_BYTES = 12;
   private static final List<String> SAMPLE_ENTRY_PATH =
       List.of("moov", "trak", "mdia", "minf", "stbl", "stsd");
 
   @TempDir static Path root;
   private static Path hdr10;
   private static Path hlg;
+  private static Path av1Pq;
+  private static Path av1Hlg;
 
   @BeforeAll
   static void writeTheSources() throws Exception {
+    av1Pq = av1Encoded("av1-pq", PQ_TRANSFER);
+    av1Hlg = av1Encoded("av1-hlg", HLG_TRANSFER);
     hlg = encoded("hlg", "arib-std-b67", "");
     hdr10 =
         encoded(
@@ -283,6 +309,128 @@ class HdrCopySmokeTest {
     assertThat(recordFieldsOf(initialization)).isEqualTo(new RecordFields("dvvC", 8, 1, 1, 0));
   }
 
+  // The playlist's CODECS names the delivered sample entry, and its SUPPLEMENTAL-CODECS names the
+  // delivered record's profile, level and compatible base.
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("dolbyVisionCopies")
+  @DisplayName(
+      "Should deliver the sample entry and Dolby Vision record that the playlist's codec strings"
+          + " name when the copy plans a Dolby Vision output")
+  void shouldDeliverTheEntryAndRecordThatThePlaylistNamesWhenTheCopyPlansDolbyVision(
+      DolbyVisionCopy dolbyVision) {
+    var initialization = copied(dolbyVision.source(), dolbyVision.copy(), 0);
+
+    assertThat(new PlaylistCodecs(codecsOf(initialization), supplementalCodecsOf(initialization)))
+        .isEqualTo(dolbyVision.playlist());
+  }
+
+  // ADR 0037: every job attempt of a variant writes the same initialization segment.
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("dolbyVisionCopies")
+  @DisplayName(
+      "Should deliver the same initialization segment from attempts that start at segment 0 and"
+          + " segment 2 when the copy plans a Dolby Vision output")
+  void shouldDeliverTheSameInitializationFromSegments0And2WhenTheCopyPlansDolbyVision(
+      DolbyVisionCopy dolbyVision) {
+    var fromStart = copiedSink(dolbyVision.source(), dolbyVision.copy(), 0);
+    var replacement = copiedSink(dolbyVision.source(), dolbyVision.copy(), 2);
+
+    assertThat(replacement.acceptedNames())
+        .as("the replacement's deliveries")
+        .containsExactly("init.mp4", "segment2.m4s", "segment3.m4s");
+    assertThat(replacement.contentOf("init.mp4")).isEqualTo(fromStart.contentOf("init.mp4"));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("av1DolbyVisionCopies")
+  @DisplayName(
+      "Should keep each temporal unit's RPU in front of its frame when the copy plans a profile 10"
+          + " output")
+  void shouldKeepEachTemporalUnitsRpuInFrontOfItsFrameWhenTheCopyPlansAProfile10Output(
+      DolbyVisionCopy dolbyVision) {
+    var sink = copiedSink(dolbyVision.source(), dolbyVision.copy(), 0);
+
+    var movie = Mp4Samples.read(sink.acceptedBytes());
+    assertThat(movie.samplesOf(movie.videoTrack()))
+        .extracting(sample -> rpusInFrontOfTheFrame(sample.data()))
+        .containsExactlyElementsOf(
+            IntStream.range(0, SOURCE_SECONDS * FRAME_RATE).mapToObj(List::of).toList());
+  }
+
+  static Stream<DolbyVisionCopy> dolbyVisionCopies() throws Exception {
+    return Stream.of(
+        DolbyVisionCopy.builder()
+            .name("profile 5 under dvh1 from hev1")
+            .source(withDolbyVisionRecord(hdr10, "hev1", "dvcC", PROFILE_5_LEVEL_1))
+            .copy(profile5Copy().keepsPacketBytes(false).build())
+            .playlist(new PlaylistCodecs(PROFILE_5_CODEC_STRING, Optional.empty()))
+            .build(),
+        DolbyVisionCopy.builder()
+            .name("profile 5 under dvh1 from dvh1")
+            .source(withDolbyVisionRecord(hdr10, "dvh1", "dvcC", PROFILE_5_LEVEL_1))
+            .copy(profile5Copy().build())
+            .playlist(new PlaylistCodecs(PROFILE_5_CODEC_STRING, Optional.empty()))
+            .build(),
+        DolbyVisionCopy.builder()
+            .name("profile 8.1 under hvc1")
+            .source(withDolbyVisionRecord(hdr10, "hvc1", "dvvC", PROFILE_8_LEVEL_1_PQ))
+            .copy(profile8Copy(PlannedCopyOutputs.pq(), 1).build())
+            .playlist(new PlaylistCodecs(CODEC_STRING, Optional.of("dvh1.08.01/db1p")))
+            .build(),
+        DolbyVisionCopy.builder()
+            .name("profile 8.1 under hvc1 normalized from compatibility 6 in MPEG-TS")
+            .source(
+                remuxedToMpegTs(
+                    withDolbyVisionRecord(hdr10, "hvc1", "dvvC", PROFILE_8_COMPATIBILITY_6)))
+            .copy(
+                profile8Copy(PlannedCopyOutputs.pq(), 1)
+                    .keepsPacketBytes(false)
+                    .bitstreamRewrites(Set.of(BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD))
+                    .build())
+            .playlist(new PlaylistCodecs(CODEC_STRING, Optional.of("dvh1.08.01/db1p")))
+            .build(),
+        DolbyVisionCopy.builder()
+            .name("profile 8.4 under hvc1")
+            .source(withDolbyVisionRecord(hlg, "hvc1", "dvvC", PROFILE_8_COMPATIBILITY_4))
+            .copy(profile8Copy(PlannedCopyOutputs.hlg(), 4).build())
+            .playlist(new PlaylistCodecs(CODEC_STRING, Optional.of("dvh1.08.01/db4h")))
+            .build(),
+        DolbyVisionCopy.builder()
+            .name("profile 10.1 under av01")
+            .source(withDolbyVisionRecord(av1Pq, "av01", "dvvC", PROFILE_10_LEVEL_1_PQ))
+            .copy(profile10Copy(PlannedCopyOutputs.pq(), 1).build())
+            .playlist(new PlaylistCodecs(AV1_CODEC_STRING, Optional.of("dav1.10.01/db1p")))
+            .build(),
+        DolbyVisionCopy.builder()
+            .name("profile 10.4 under av01")
+            .source(withDolbyVisionRecord(av1Hlg, "av01", "dvvC", PROFILE_10_COMPATIBILITY_4))
+            .copy(profile10Copy(PlannedCopyOutputs.hlg(), 4).build())
+            .playlist(new PlaylistCodecs(AV1_CODEC_STRING, Optional.of("dav1.10.01/db4h")))
+            .build());
+  }
+
+  static Stream<DolbyVisionCopy> av1DolbyVisionCopies() throws Exception {
+    return dolbyVisionCopies()
+        .filter(dolbyVision -> dolbyVision.copy().codecString().startsWith("av01"));
+  }
+
+  /**
+   * A Dolby Vision copy of a source, and the CODECS and SUPPLEMENTAL-CODECS of the playlist that
+   * announces it.
+   */
+  @Builder
+  record DolbyVisionCopy(
+      String name, Path source, VideoDecision.Copy copy, PlaylistCodecs playlist) {
+
+    @Override
+    public String toString() {
+      return name;
+    }
+  }
+
+  /** A playlist's CODECS and, for a copy on a compatible base, its SUPPLEMENTAL-CODECS. */
+  record PlaylistCodecs(String codecs, Optional<String> supplementalCodecs) {}
+
   /** A Dolby Vision record's box type, profile, level, compatibility id and compression. */
   record RecordFields(String type, int profile, int level, int compatibility, int compression) {}
 
@@ -339,6 +487,30 @@ class HdrCopySmokeTest {
                     .dynamicRange(range)
                     .dolbyVision(Optional.of(dolbyVision))
                     .build()));
+  }
+
+  private static VideoDecision.Copy.CopyBuilder profile5Copy() {
+    return dolbyVisionCopy(
+            PROFILE_5_CODEC_STRING,
+            PlannedCopyOutputs.pq(),
+            dolbyVisionOutput(5, 0, PlannedCopyOutput.SampleEntry.DVH1))
+        .bitstreamRewrites(Set.of(BitstreamRewrite.NORMALIZE_DOLBY_VISION_RECORD));
+  }
+
+  private static VideoDecision.Copy.CopyBuilder profile8Copy(
+      VideoDynamicRange range, int compatibility) {
+    return dolbyVisionCopy(
+        CODEC_STRING,
+        range,
+        dolbyVisionOutput(8, compatibility, PlannedCopyOutput.SampleEntry.HVC1));
+  }
+
+  private static VideoDecision.Copy.CopyBuilder profile10Copy(
+      VideoDynamicRange range, int compatibility) {
+    return dolbyVisionCopy(
+        AV1_CODEC_STRING,
+        range,
+        dolbyVisionOutput(10, compatibility, PlannedCopyOutput.SampleEntry.AV01));
   }
 
   // x265 takes the primaries as G, B, R and the white point, then the luminances.
@@ -409,6 +581,145 @@ class HdrCopySmokeTest {
     return muxed;
   }
 
+  // An SVT-AV1 stream with an RPU in front of each temporal unit's frame, muxed into an av01 entry.
+  private static Path av1Encoded(String name, int transfer) throws Exception {
+    var ivf = root.resolve(name + ".ivf");
+    runFfmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=64x36:rate=" + FRAME_RATE + ":duration=" + SOURCE_SECONDS,
+            "-c:v",
+            "libsvtav1",
+            "-preset",
+            "8",
+            "-pix_fmt",
+            "yuv420p10le",
+            "-svtav1-params",
+            "keyint="
+                + FRAME_RATE
+                + ":scd=0:color-primaries=9:matrix-coefficients=9"
+                + ":transfer-characteristics="
+                + transfer,
+            "-f",
+            "ivf"),
+        ivf);
+    var withRpus = root.resolve(name + "-rpus.ivf");
+    Files.write(withRpus, withRpuObus(Files.readAllBytes(ivf)));
+    var muxed = root.resolve(name + ".mp4");
+    runFfmpeg(List.of("-i", withRpus.toString(), "-c", "copy"), muxed);
+    return muxed;
+  }
+
+  // IVF: a file header whose length sits at byte 6, then each frame's 4-byte little-endian size,
+  // 8-byte timestamp and temporal unit. Each temporal unit gets an RPU that carries its number.
+  private static byte[] withRpuObus(byte[] ivf) {
+    var reading = ByteBuffer.wrap(ivf).order(ByteOrder.LITTLE_ENDIAN);
+    var headerLength = Short.toUnsignedInt(reading.getShort(6));
+    var rebuilt = new ByteArrayOutputStream();
+    rebuilt.write(ivf, 0, headerLength);
+    reading.position(headerLength);
+    for (var number = 0; reading.remaining() >= IVF_FRAME_HEADER_BYTES; number++) {
+      var temporalUnit = new byte[reading.getInt()];
+      var timestamp = reading.getLong();
+      reading.get(temporalUnit);
+      var frameStart = firstFrame(ByteBuffer.wrap(temporalUnit)).start();
+      var withRpu =
+          IsoBoxes.concat(
+              Arrays.copyOfRange(temporalUnit, 0, frameStart),
+              rpuObu(number),
+              Arrays.copyOfRange(temporalUnit, frameStart, temporalUnit.length));
+      rebuilt.writeBytes(
+          ByteBuffer.allocate(IVF_FRAME_HEADER_BYTES)
+              .order(ByteOrder.LITTLE_ENDIAN)
+              .putInt(withRpu.length)
+              .putLong(timestamp)
+              .array());
+      rebuilt.writeBytes(withRpu);
+    }
+
+    return rebuilt.toByteArray();
+  }
+
+  // A metadata OBU with its size field that holds Dolby's T.35 registration and the number. A copy
+  // passes an RPU's bytes on unread, so the number stands for the RPU's payload.
+  private static byte[] rpuObu(int number) {
+    var payload =
+        HexFormat.of()
+            .parseHex(METADATA_TYPE_ITUT_T35 + DOLBY_VISION_T35 + "%04X".formatted(number) + "80");
+    return IsoBoxes.concat(new byte[] {OBU_METADATA << 3 | 0x02, (byte) payload.length}, payload);
+  }
+
+  // The numbers of the RPUs in front of the first frame of a delivered temporal unit.
+  private static List<Integer> rpusInFrontOfTheFrame(ByteBuffer temporalUnit) {
+    var numbers = new ArrayList<Integer>();
+    for (var obu : obusOf(temporalUnit)) {
+      if (obu.isFrame()) {
+        return numbers;
+      }
+
+      if (obu.type() == OBU_METADATA) {
+        var number = Short.toUnsignedInt(ByteBuffer.wrap(obu.bytes()).getShort(RPU_NUMBER_OFFSET));
+        assertThat(obu.bytes()).as("the RPU numbered %d", number).isEqualTo(rpuObu(number));
+        numbers.add(number);
+      }
+    }
+
+    throw new AssertionError("the temporal unit holds no frame");
+  }
+
+  private static Obu firstFrame(ByteBuffer temporalUnit) {
+    return obusOf(temporalUnit).stream()
+        .filter(Obu::isFrame)
+        .findFirst()
+        .orElseThrow(() -> new AssertionError("the temporal unit holds no frame"));
+  }
+
+  // The OBUs of a temporal unit (AV1 5.3), each with its header and size field.
+  private static List<Obu> obusOf(ByteBuffer temporalUnit) {
+    var reading = temporalUnit.duplicate();
+    var obus = new ArrayList<Obu>();
+    while (reading.hasRemaining()) {
+      var start = reading.position();
+      var header = Byte.toUnsignedInt(reading.get());
+      assertThat(header & 0x02).as("the OBU's has_size_field").isNotZero();
+      if ((header & 0x04) != 0) {
+        reading.get();
+      }
+
+      var size = leb128(reading);
+      reading.position(reading.position() + size);
+      var bytes = new byte[reading.position() - start];
+      reading.get(start, bytes);
+      obus.add(new Obu((header >> 3) & 0x0F, start - temporalUnit.position(), bytes));
+    }
+
+    return obus;
+  }
+
+  // An unsigned value, 7 bits a byte, least significant first (AV1 4.10.5).
+  private static int leb128(ByteBuffer reading) {
+    var value = 0;
+    var shift = 0;
+    int octet;
+    do {
+      octet = Byte.toUnsignedInt(reading.get());
+      value |= (octet & 0x7F) << shift;
+      shift += 7;
+    } while ((octet & 0x80) != 0);
+
+    return value;
+  }
+
+  /** An OBU's type, its offset in its temporal unit, and its bytes from its header on. */
+  private record Obu(int type, int start, byte[] bytes) {
+
+    boolean isFrame() {
+      return type == OBU_FRAME_HEADER || type == OBU_FRAME;
+    }
+  }
+
   private static AttemptOutcome outcomeOf(Path source, VideoDecision.Copy copy) throws Exception {
     var producer =
         engine()
@@ -462,7 +773,7 @@ class HdrCopySmokeTest {
       if (top.type().equals("moov")) {
         assertThat(passedMdat).as("the moov follows the mdat").isTrue();
         body = appended(top, SAMPLE_ENTRY_PATH.subList(1, SAMPLE_ENTRY_PATH.size()), configuration);
-        body = renamedSampleEntry(body, sampleEntryType);
+        body = withSampleEntryType(body, sampleEntryType);
       }
 
       rebuilt.writeBytes(box(top.type(), body));
@@ -512,9 +823,19 @@ class HdrCopySmokeTest {
   private static int fieldsOf(String type) {
     return switch (type) {
       case "stsd" -> 8;
-      case "hvc1", "hev1", "dvh1" -> 78;
+      case "hvc1", "hev1", "dvh1", "av01" -> 78;
       default -> 0;
     };
+  }
+
+  // An AV1 source keeps the av01 entry that FFmpeg writes; an HEVC source's hvc1 entry takes the
+  // type.
+  private static byte[] withSampleEntryType(byte[] moov, String type) {
+    if (type.equals("av01")) {
+      return moov;
+    }
+
+    return renamedSampleEntry(moov, type);
   }
 
   // The moov body with its hvc1 sample entry's type replaced; the type takes the same 4 bytes.
@@ -610,6 +931,11 @@ class HdrCopySmokeTest {
   }
 
   private static TranscodeRequest request(Path source, VideoDecision.Copy copy, int firstSegment) {
+    var codecFamily = "hevc";
+    if (copy.codecString().startsWith("av01")) {
+      codecFamily = "av1";
+    }
+
     var seek = Optional.<Duration>empty();
     if (firstSegment > 0) {
       seek = Optional.of(Duration.ofSeconds((long) firstSegment * PERIOD_SECONDS));
@@ -622,7 +948,7 @@ class HdrCopySmokeTest {
         .transcodeDecision(
             TranscodeDecision.builder()
                 .transcodeMode(TranscodeMode.REMUX)
-                .videoCodecFamily("hevc")
+                .videoCodecFamily(codecFamily)
                 .videoDecision(copy)
                 .audioDecision(AudioDecision.builder().mode(AudioMode.NONE).build())
                 .subtitleDecision(SubtitleDecisions.EXCLUDED)
@@ -634,6 +960,104 @@ class HdrCopySmokeTest {
         .mediaSegmentCount(SOURCE_SECONDS / PERIOD_SECONDS)
         .seekPosition(seek)
         .build();
+  }
+
+  // The codec string that the delivered sample entry and its configuration records name: for hvc1
+  // the HEVC string of ISO/IEC 14496-15 E.3, for av01 the AV1 string of the AV1 ISOBMFF binding's
+  // codecs parameter, and for dvh1 the Dolby Vision string of its record.
+  private static String codecsOf(byte[] initialization) {
+    var entry = sampleEntry(initialization);
+    return switch (entry.type()) {
+      case "hvc1" -> hevcCodecsOf(child(entry, 78, "hvcC"));
+      case "av01" -> av1CodecsOf(child(entry, 78, "av1C"));
+      case "dvh1" -> dolbyVisionCodecsOf("dvh1", recordFieldsOf(initialization));
+      default -> throw new AssertionError("no codec string for a " + entry.type() + " entry");
+    };
+  }
+
+  // A base entry's Dolby Vision string with the brand of its compatible base; a dvh1 entry names
+  // Dolby Vision in its CODECS and takes none.
+  private static Optional<String> supplementalCodecsOf(byte[] initialization) {
+    var entry = sampleEntry(initialization).type();
+    if (entry.equals("dvh1")) {
+      return Optional.empty();
+    }
+
+    var record = recordFieldsOf(initialization);
+    var brand =
+        switch (record.compatibility()) {
+          case 1 -> "db1p";
+          case 4 -> "db4h";
+          default -> throw new AssertionError("no brand for compatibility " + record);
+        };
+    var dolbyVisionEntry =
+        switch (entry) {
+          case "hvc1" -> "dvh1";
+          case "av01" -> "dav1";
+          default -> throw new AssertionError("no Dolby Vision entry for " + entry);
+        };
+    return Optional.of(dolbyVisionCodecsOf(dolbyVisionEntry, record) + "/" + brand);
+  }
+
+  private static String dolbyVisionCodecsOf(String entry, RecordFields record) {
+    return "%s.%02d.%02d".formatted(entry, record.profile(), record.level());
+  }
+
+  // The profile space and profile, the reversed compatibility flags, the tier and level, then the
+  // constraint bytes up to the last nonzero one.
+  private static String hevcCodecsOf(byte[] hvcC) {
+    var reading = ByteBuffer.wrap(hvcC, 1, hvcC.length - 1);
+    var profileFields = Byte.toUnsignedInt(reading.get());
+    var compatibility = Integer.reverse(reading.getInt());
+    var constraints = new byte[6];
+    reading.get(constraints);
+    var level = Byte.toUnsignedInt(reading.get());
+    var space = List.of("", "A", "B", "C").get(profileFields >> 6);
+    var tier = "L";
+    if ((profileFields & 0x20) != 0) {
+      tier = "H";
+    }
+
+    var codecs =
+        new StringBuilder(
+            "hvc1.%s%d.%s.%s%d"
+                .formatted(
+                    space,
+                    profileFields & 0x1F,
+                    Integer.toHexString(compatibility).toUpperCase(Locale.ROOT),
+                    tier,
+                    level));
+    var last = constraints.length;
+    while (last > 0 && constraints[last - 1] == 0) {
+      last--;
+    }
+
+    for (var index = 0; index < last; index++) {
+      codecs.append(".%02X".formatted(constraints[index]));
+    }
+
+    return codecs.toString();
+  }
+
+  // The profile, level and tier, then the bit depth.
+  private static String av1CodecsOf(byte[] av1C) {
+    var profile = Byte.toUnsignedInt(av1C[1]) >> 5;
+    var flags = Byte.toUnsignedInt(av1C[2]);
+    var tier = "M";
+    if ((flags & 0x80) != 0) {
+      tier = "H";
+    }
+
+    var bitDepth = 8;
+    if ((flags & 0x40) != 0) {
+      bitDepth = 10;
+    }
+
+    if (bitDepth == 10 && profile == 2 && (flags & 0x20) != 0) {
+      bitDepth = 12;
+    }
+
+    return "av01.%d.%02d%s.%02d".formatted(profile, av1C[1] & 0x1F, tier, bitDepth);
   }
 
   // The messages of each SEI NAL unit in the hvcC of the delivered sample entry, in order.
