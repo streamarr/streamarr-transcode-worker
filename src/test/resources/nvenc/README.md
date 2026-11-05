@@ -1,9 +1,26 @@
 # NVENC recordings (worker #56)
 
 These recordings show how `h264_nvenc` and `hevc_nvenc` handle the worker's FFmpeg recipe. They
-decide whether an NVENC encoder joins ADR 0037's list of keyframe-verified encoders. Until a run on
-an NVIDIA GPU host commits them, this directory holds only this file, and the tests that read the
-recordings are skipped.
+decide whether an NVENC encoder joins ADR 0037's list of keyframe-verified encoders.
+
+## Results
+
+The committed recordings ran on an RTX 5090 (compute capability 12.0) with NVIDIA driver
+615.78.08, in the pinned worker image with FFmpeg 8.1.3. `recordings.json` names the image. At every
+rung, for both encoders, with `-bf 3 -rc-lookahead 20`:
+
+- every forced keyframe is a sync sample and an IDR picture with no leading pictures
+- in the missed-keyframe recording, the next keyframe lands one extended GOP after the forced
+  keyframe at 12 s, so the GOP count restarts at a forced keyframe
+- each replacement attempt's delivered initialization segment is byte-identical to its first
+  attempt's
+- every initialization segment passes the output check with the job's codec string
+- the encoders add an IDR picture with no leading pictures at each scene cut (3.5 s, 4.5 s, 27.5 s
+  and 28.5 s; at 1080p and 720p only at 4.5 s and 28.5 s), because the lookahead enables NVENC's
+  scene-cut detection. The producer tolerates extra keyframes, and none displaced a forced keyframe.
+
+Before choosing those options, 1080p recordings with the encoders' default B-frames and lookahead,
+and with `-bf 3 -rc-lookahead 0`, showed the same keyframe verdicts without the scene-cut keyframes.
 
 ## Recording
 
