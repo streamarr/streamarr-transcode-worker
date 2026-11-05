@@ -4089,15 +4089,21 @@ class WorkerMediaSmokeTest {
   private static final String DIALOGUE_TONE = "0.1*sin(2*PI*1000*t)";
   private static final double DIALOGUE_SIDE_DB = 20 * Math.log10(0.1 * Math.sqrt(0.5));
   private static final String LOUD_TONE = "0.501187*sin(2*PI*1000*t)";
+  // A quarter of the sample rate at 45°, so that every sample lies 3 dB below the tone's peak and
+  // a limiter that reads only samples lets the sum pass its ceiling between them.
+  private static final String INTERSAMPLE_LOUD_TONE = "0.501187*sin(2*PI*12000*t+PI/4)";
   private static final String LFE_TONE = "0.1*sin(2*PI*50*t)";
   private static final double LOSSY_TONE_TOLERANCE_DB = 0.5;
   private static final double LOSSLESS_TONE_TOLERANCE_DB = 0.05;
   private static final double AAC_192K_CEILING_DBTP = -2.0;
   // ADR 0050: the Annex 2 filter reads a FLAC or ALAC downmix no more than 0.01 dB above −1 dBTP.
   private static final double LOSSLESS_CEILING_DBTP = -1.0 + 0.01;
+  private static final int MATRIX_SOURCE_SAMPLES = MATRIX_SOURCE_SECONDS * MATRIX_SAMPLE_RATE;
   private static final int CLICK_POSITION = 120_017;
+  private static final int LAST_CLICK_POSITION = MATRIX_SOURCE_SAMPLES - 1;
   private static final double CLICK_AMPLITUDE = 0.5;
-  private static final String CLICK = CLICK_AMPLITUDE + "*eq(n," + CLICK_POSITION + ")";
+  private static final String CLICKS =
+      CLICK_AMPLITUDE + "*(eq(n," + CLICK_POSITION + ")+eq(n," + LAST_CLICK_POSITION + "))";
   private static final String ONE_SIXTEEN_BIT_STEP = "1/32768";
   private static final double MIX_LEVEL_TOLERANCE_DB = 0.1;
   private static final Map<String, Integer> LEVEL_TONES =
@@ -4190,7 +4196,9 @@ class WorkerMediaSmokeTest {
           + " stereo sums a -6 dBFS tone in every channel")
   void shouldDecodeNoSampleAboveFullScaleAndHoldTheCodecsCeilingWhenADownmixSumsALoudTone(
       String layout, Downmix downmix) throws Exception {
-    var source = matrixSourceFile(loudSource(layout, 24));
+    var source =
+        matrixSourceFile(
+            everyChannel("intersample-loud-" + layout, layout, INTERSAMPLE_LOUD_TONE).build());
 
     var delivered = decodedDownmix(source, downmix);
 
@@ -4236,7 +4244,8 @@ class WorkerMediaSmokeTest {
           + " in the matrix")
   void shouldKeepTheLimitedToneASineWhenA16BitSourcesChannelsSumAboveFullScaleInTheMatrix(
       String codec) throws Exception {
-    var source = matrixSourceFile(loudSource("5.1", 16));
+    var source =
+        matrixSourceFile(everyChannel("loud-16-bit", "5.1", LOUD_TONE).bitDepth(16).build());
 
     var delivered = decodedDownmix(source, Downmix.to(codec, "stereo").atBits(16));
 
@@ -4286,35 +4295,41 @@ class WorkerMediaSmokeTest {
   @ParameterizedTest(name = "5.1 to {0}")
   @MethodSource("clickDownmixes")
   @DisplayName(
-      "Should keep a centre click at its sample position and write every sample when a downmix"
-          + " steps 5.1 to stereo")
-  void shouldKeepACentreClickAtItsSamplePositionAndWriteEverySampleWhenADownmixSteps51ToStereo(
-      Downmix downmix) throws Exception {
+      "Should keep each centre click at its sample position, the source's last sample included,"
+          + " when a downmix steps 5.1 to stereo")
+  void shouldKeepEachCentreClickAtItsSamplePositionWhenADownmixSteps51ToStereo(Downmix downmix)
+      throws Exception {
     var source =
-        matrixSourceFile(matrixSource("click-5.1", "5.1").channels(Map.of("FC", CLICK)).build());
+        matrixSourceFile(matrixSource("clicks-5.1", "5.1").channels(Map.of("FC", CLICKS)).build());
 
     var delivered =
-        decodedFromMediaTimeZero(deliveredMedia(downmixJob(source, downmix), "click"), 2);
+        decodedFromMediaTimeZero(deliveredMedia(downmixJob(source, downmix), "clicks"), 2);
 
+    var halfway = MATRIX_SOURCE_SAMPLES / 2;
     for (var side = 0; side < 2; side++) {
-      assertThat(peakPosition(delivered[side]))
-          .as("side %d's peak", side)
+      assertThat(peakPosition(delivered[side], 0, halfway))
+          .as("side %d's first click", side)
           .isEqualTo(CLICK_POSITION);
-      if (downmix.isLossless()) {
-        assertThat(delivered[side][CLICK_POSITION])
-            .as("side %d's click", side)
-            .isCloseTo(CLICK_AMPLITUDE * Math.sqrt(0.5), within(1e-6));
-      }
+      assertThat(peakPosition(delivered[side], halfway, delivered[side].length))
+          .as("side %d's click on the source's last sample", side)
+          .isEqualTo(LAST_CLICK_POSITION);
     }
 
     // A lossy codec writes whole frames, so its last frame may run past the source's last sample.
-    var sourceSamples = MATRIX_SOURCE_SECONDS * MATRIX_SAMPLE_RATE;
-    if (downmix.isLossless()) {
-      assertThat(delivered[0]).hasSize(sourceSamples);
+    if (!downmix.isLossless()) {
+      assertThat(delivered[0]).hasSizeGreaterThanOrEqualTo(MATRIX_SOURCE_SAMPLES);
       return;
     }
 
-    assertThat(delivered[0]).hasSizeGreaterThanOrEqualTo(sourceSamples);
+    assertThat(delivered[0]).hasSize(MATRIX_SOURCE_SAMPLES);
+    for (var side = 0; side < 2; side++) {
+      assertThat(
+              new double[] {delivered[side][CLICK_POSITION], delivered[side][LAST_CLICK_POSITION]})
+          .as("side %d's clicks", side)
+          .containsExactly(
+              new double[] {CLICK_AMPLITUDE * Math.sqrt(0.5), CLICK_AMPLITUDE * Math.sqrt(0.5)},
+              within(1e-6));
+    }
   }
 
   static Stream<Arguments> signalledLevelsOutputsAndStarts() {
@@ -4458,13 +4473,11 @@ class WorkerMediaSmokeTest {
         options);
   }
 
-  private static MatrixSource loudSource(String layout, int bitDepth) {
+  private static MatrixSource.MatrixSourceBuilder everyChannel(
+      String name, String layout, String tone) {
     var channels = new HashMap<String, String>();
-    SpeakerLayout.named(layout).speakers().forEach(s -> channels.put(s.name(), LOUD_TONE));
-    return matrixSource("loud-" + layout + "-" + bitDepth, layout)
-        .channels(channels)
-        .bitDepth(bitDepth)
-        .build();
+    SpeakerLayout.named(layout).speakers().forEach(s -> channels.put(s.name(), tone));
+    return matrixSource(name, layout).channels(channels);
   }
 
   private static synchronized Path matrixSourceFile(MatrixSource spec) throws Exception {
@@ -4636,8 +4649,8 @@ class WorkerMediaSmokeTest {
     return Arrays.stream(samples).map(Math::abs).max().orElseThrow();
   }
 
-  private static int peakPosition(double[] samples) {
-    return IntStream.range(0, samples.length)
+  private static int peakPosition(double[] samples, int from, int to) {
+    return IntStream.range(from, to)
         .reduce((a, b) -> Math.abs(samples[b]) > Math.abs(samples[a]) ? b : a)
         .orElseThrow();
   }
