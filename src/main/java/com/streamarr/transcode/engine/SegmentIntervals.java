@@ -4,7 +4,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
-import java.util.function.Predicate;
+import java.util.function.IntPredicate;
 import lombok.NonNull;
 
 /**
@@ -101,20 +101,8 @@ final class SegmentIntervals {
       return Math.floorDiv(presentationTime, periodSeconds * timescale);
     }
 
-    // The last listed segment whose start lies at or before the time; segment 0 starts at 0.
-    var low = 0;
-    var high = starts.length - 1;
-    while (low < high) {
-      var middle = (low + high + 1) >>> 1;
-      if (startsAtOrBefore(starts[middle], presentationTime, timescale)) {
-        low = middle;
-        continue;
-      }
-
-      high = middle - 1;
-    }
-
-    return low;
+    return lastSegmentWhoseStart(
+        index -> startsAtOrBefore(starts[index], presentationTime, timescale));
   }
 
   /**
@@ -126,7 +114,7 @@ final class SegmentIntervals {
       return time.floorIn(slotsOf(periodSeconds));
     }
 
-    return lastSegmentWhoseStart(start -> start.compareTo(time) <= 0);
+    return lastSegmentWhoseStart(index -> startTimeOf(index).compareTo(time) <= 0);
   }
 
   /**
@@ -138,16 +126,16 @@ final class SegmentIntervals {
       return time.ceilIn(slotsOf(periodSeconds)) - 1;
     }
 
-    return lastSegmentWhoseStart(start -> start.compareTo(time) < 0);
+    return lastSegmentWhoseStart(index -> startTimeOf(index).compareTo(time) < 0);
   }
 
   // The last listed segment whose start passes the test, which segment 0's start, 0, passes.
-  private long lastSegmentWhoseStart(Predicate<MediaTime> test) {
+  private long lastSegmentWhoseStart(IntPredicate test) {
     var low = 0;
     var high = starts.length - 1;
     while (low < high) {
       var middle = (low + high + 1) >>> 1;
-      if (test.test(startTimeOf(middle))) {
+      if (test.test(middle)) {
         low = middle;
         continue;
       }
