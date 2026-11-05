@@ -374,25 +374,14 @@ class TranscodeWorkerSegmentUploadLimitTest {
 
   @Test
   @DisplayName(
-      "Should fail the attempt as a transcode failure, having paced its uploads, when the server"
-          + " refuses the segment at the worker's segment upload limit for the acknowledgement"
-          + " timeout")
-  void shouldFailTheAttemptHavingPacedItsUploadsWhenServerRefusesItAtTheWorkersLimitThroughout()
+      "Should fail the attempt as a transcode failure when the server refuses the segment at the"
+          + " worker's segment upload limit for an acknowledgement timeout from its first refusal")
+  void shouldFailTheAttemptWhenServerRefusesTheSegmentAtTheLimitForTheAcknowledgementTimeout()
       throws Exception {
     var runtime = ScriptedWorkerRuntime.withSegmentUploadLimit(2);
     var job = variantJobBuilder().build();
-    // Longer than the longest delay between the segment's uploads, so only a timeout counted from
-    // its first refusal can end its wait.
-    var configuration =
-        configurationBuilder().uploadAcknowledgementTimeout(Duration.ofSeconds(2)).build();
 
-    try (var worker =
-        worker(
-            WorkerSetup.builder()
-                .runtime(runtime)
-                .launcher(writingTheRecording())
-                .configuration(configuration)
-                .build())) {
+    try (var worker = workerWithATimeoutBeyondTheLongestDelayBetweenUploads(runtime)) {
       worker.start("localhost", 1);
       var connection = runtime.connection();
       connection.refuseUploadsAtTheWorkersLimit();
@@ -403,10 +392,44 @@ class TranscodeWorkerSegmentUploadLimitTest {
       assertThat(terminalEventOf(connection, job)).contains(EventCase.JOB_ATTEMPT_FAILED);
       assertThat(failureOf(connection, job))
           .isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED);
-      // Opening the call again at once would open thousands within the timeout.
-      assertThat(connection.uploads()).hasSizeLessThanOrEqualTo(10);
       assertThat(worker.queuedSegmentUploads()).isZero();
     }
+  }
+
+  @Test
+  @DisplayName(
+      "Should wait between the uploads of a refused segment when the server keeps refusing it at"
+          + " the worker's segment upload limit")
+  void shouldWaitBetweenTheUploadsOfARefusedSegmentWhenServerKeepsRefusingItAtTheWorkersLimit()
+      throws Exception {
+    var runtime = ScriptedWorkerRuntime.withSegmentUploadLimit(2);
+    var job = variantJobBuilder().build();
+
+    try (var worker = workerWithATimeoutBeyondTheLongestDelayBetweenUploads(runtime)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.refuseUploadsAtTheWorkersLimit();
+
+      startVariant(connection, job);
+
+      promptly().until(() -> terminalEventOf(connection, job).isPresent());
+      // Opening the call again at once would open thousands within the timeout.
+      assertThat(connection.uploads()).hasSizeBetween(2, 10);
+    }
+  }
+
+  // Only a timeout counted from a segment's first refusal can end the segment's wait, because each
+  // delay between its uploads is shorter than the acknowledgement timeout.
+  private TranscodeWorker workerWithATimeoutBeyondTheLongestDelayBetweenUploads(
+      ScriptedWorkerRuntime runtime) {
+    var configuration =
+        configurationBuilder().uploadAcknowledgementTimeout(Duration.ofSeconds(2)).build();
+    return worker(
+        WorkerSetup.builder()
+            .runtime(runtime)
+            .launcher(writingTheRecording())
+            .configuration(configuration)
+            .build());
   }
 
   @Test
