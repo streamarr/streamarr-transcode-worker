@@ -16,6 +16,7 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 import lombok.Builder;
@@ -60,6 +61,9 @@ public final class Producer {
   // One segment awaiting acceptance and one assembling.
   static final long BUDGET_BYTES = 2 * MAXIMUM_SEGMENT_BYTES;
 
+  private static final long NANOSECONDS_PER_SECOND = Duration.ofSeconds(1).toNanos();
+  private static final Duration BEFORE_ANY_VIDEO = Duration.ofSeconds(Long.MIN_VALUE);
+
   private final FfmpegProcess ffmpeg;
   private final FragmentedMp4Reader reader;
 
@@ -76,6 +80,9 @@ public final class Producer {
   private final int startSequenceNumber;
   private final CompletableFuture<AttemptOutcome> outcome = new CompletableFuture<>();
   private final Object lock = new Object();
+  // The latest video sample end that the reader has read, and the latest one taken.
+  private final AtomicReference<Duration> outputEnd = new AtomicReference<>(BEFORE_ANY_VIDEO);
+  private final AtomicReference<Duration> takenOutputEnd = new AtomicReference<>(BEFORE_ANY_VIDEO);
 
   // Guarded by lock. The first outcome decided is the only one the producer settles.
   private Optional<AttemptOutcome> decision = Optional.empty();
@@ -191,6 +198,50 @@ public final class Producer {
 
   long pid() {
     return ffmpeg.pid();
+  }
+
+  /**
+   * The end of the latest video sample that the producer has read from FFmpeg's output, its
+   * presentation time plus its duration on the output's timeline, when it lies later than the end
+   * that the previous call took; empty before any video sample and while the output has not
+   * advanced. The producer reads each fragment as FFmpeg writes it, so the end advances inside a
+   * media segment that has not closed.
+   */
+  public Optional<Duration> takeAdvancedOutputEnd() {
+    var end = outputEnd.get();
+    var taken = takenOutputEnd.getAndAccumulate(end, Producer::later);
+    if (end.compareTo(taken) <= 0) {
+      return Optional.empty();
+    }
+
+    return Optional.of(end);
+  }
+
+  private static Duration later(Duration first, Duration second) {
+    if (first.compareTo(second) >= 0) {
+      return first;
+    }
+
+    return second;
+  }
+
+  private void advanceOutputEnd(Mp4Unit unit) {
+    if (!(unit instanceof Fragment fragment) || fragment.videoSamples().isEmpty()) {
+      return;
+    }
+
+    var timescale = fragment.tracks().video().orElseThrow().timescale();
+    fragment.videoSamples().stream()
+        .mapToLong(sample -> sample.presentationTime() + sample.duration())
+        .max()
+        .ifPresent(end -> outputEnd.accumulateAndGet(durationOf(end, timescale), Producer::later));
+  }
+
+  // A 32-bit timescale keeps the remainder's nanoseconds within a signed 64-bit value.
+  private static Duration durationOf(long ticks, long timescale) {
+    return Duration.ofSeconds(
+        Math.floorDiv(ticks, timescale),
+        Math.floorMod(ticks, timescale) * NANOSECONDS_PER_SECOND / timescale);
   }
 
   /** Completes once with the attempt's outcome, after FFmpeg has exited. */
@@ -500,6 +551,7 @@ public final class Producer {
       return Optional.of(closeLastSegments(closedSegments));
     }
 
+    advanceOutputEnd(unit.orElseThrow());
     return closeSegmentsOf(unit.orElseThrow(), closedSegments);
   }
 

@@ -324,8 +324,10 @@ class TranscodeWorkerUploadProtocolIT {
             failure.complete(request.getJobAttemptFailed());
           }
 
-          // Every job attempt event after the start ends the attempt.
-          if (!request.hasJobAttemptStarted() && !request.hasProbeCapacityChanged()) {
+          // Every job attempt event after the start ends the attempt, apart from progress reports.
+          if (!request.hasJobAttemptStarted()
+              && !request.hasProbeCapacityChanged()
+              && !request.hasJobAttemptProgress()) {
             endAttempt(request.getEventCase());
           }
         }

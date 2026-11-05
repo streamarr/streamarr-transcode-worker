@@ -38,6 +38,7 @@ import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionRequest.EventC
 import build.buf.gen.streamarr.transcode.v1.FieldOrder;
 import build.buf.gen.streamarr.transcode.v1.Fraction;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
+import build.buf.gen.streamarr.transcode.v1.JobAttemptProgress;
 import build.buf.gen.streamarr.transcode.v1.Presence;
 import build.buf.gen.streamarr.transcode.v1.SegmentContentType;
 import build.buf.gen.streamarr.transcode.v1.SourceEndedEarly;
@@ -2059,6 +2060,116 @@ class TranscodeWorkerJobAttemptTest {
 
   @Test
   @DisplayName(
+      "Should report how far the attempt's output reached when FFmpeg pauses inside a media"
+          + " segment that has not closed")
+  void shouldReportHowFarTheAttemptsOutputReachedWhenFfmpegPausesInsideAnOpenMediaSegment()
+      throws Exception {
+    var output = bytesOf(ENCODED_RECORDING);
+    var pause = endOfFragment(output, 1);
+    var launcher =
+        new ScriptedProcessLauncher(
+            _ -> ScriptedProcess.builder().output(output).pauseAfter(pause).build());
+    var job = variantJobBuilder().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+
+      await().atMost(EVENT_LIMIT).until(() -> !progressReportsOf(connection).isEmpty());
+      assertThat(progressReportsOf(connection))
+          .singleElement()
+          .satisfies(
+              progress -> {
+                assertThat(progress.getJobAttemptId()).isEqualTo(job.getJobAttemptId());
+                assertThat(progress.getOutputEnd())
+                    .isEqualTo(endOfTheLastVideoSampleIn(Arrays.copyOf(output, pause)));
+                assertThat(progress.getKeyframeSearchBytesRead()).isZero();
+              });
+      assertThat(connection.uploads())
+          .extracting(upload -> upload.metadata().getSegmentName())
+          .as("segment 0 has not closed")
+          .containsExactly("init.mp4");
+    }
+  }
+
+  // The test holds the worker's monitor, which the progress timer takes before each report, for
+  // 1.5 s after the first report, so a report falls due while it waits. FFmpeg's output advances
+  // during the wait and again once the monitor is free. A timer that keeps its original times
+  // sends the next report half a second after the delayed one.
+  @Test
+  @DisplayName(
+      "Should leave at least a second between an attempt's progress reports when the worker delays"
+          + " a report")
+  void shouldLeaveAtLeastASecondBetweenAnAttemptsProgressReportsWhenTheWorkerDelaysAReport()
+      throws Exception {
+    var output = bytesOf(ENCODED_RECORDING);
+    var launcher =
+        new ScriptedProcessLauncher(
+            _ ->
+                ScriptedProcess.builder()
+                    .output(output)
+                    .pauseAfter(endOfFragment(output, 1))
+                    .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+                    .build());
+    var job = variantJobBuilder().build();
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job);
+      awaitProgressReports(connection, 1);
+
+      synchronized (worker) {
+        launcher.process(fromProto(job.getJobAttemptId())).resume();
+        await().pollDelay(Duration.ofMillis(1_500)).atMost(EVENT_LIMIT).until(() -> true);
+      }
+
+      var delayed = awaitProgressReports(connection, 2);
+      var next = awaitProgressReports(connection, 3);
+      assertThat(Duration.ofNanos(next - delayed))
+          .as("the time between the delayed report and the next one")
+          .isGreaterThanOrEqualTo(Duration.ofMillis(900));
+      launcher.process(fromProto(job.getJobAttemptId())).exit();
+    }
+  }
+
+  // When the connection held this many progress reports, read every 5 ms.
+  private static long awaitProgressReports(ScriptedWorkerRuntime.Connection connection, int count) {
+    await()
+        .pollInterval(Duration.ofMillis(5))
+        .atMost(EVENT_LIMIT)
+        .until(() -> progressReportsOf(connection).size() >= count);
+    return System.nanoTime();
+  }
+
+  private static List<JobAttemptProgress> progressReportsOf(
+      ScriptedWorkerRuntime.Connection connection) {
+    return connection.events().stream()
+        .filter(EstablishWorkerSessionRequest::hasJobAttemptProgress)
+        .map(EstablishWorkerSessionRequest::getJobAttemptProgress)
+        .toList();
+  }
+
+  // The latest presentation time plus duration among the output's video samples, as a contract
+  // Duration.
+  @SuppressWarnings("checkstyle:fullyQualifiedName")
+  private static com.google.protobuf.Duration endOfTheLastVideoSampleIn(byte[] output) {
+    var movie = Mp4Samples.read(output);
+    var timescale = movie.videoTrack().timescale();
+    var end =
+        movie.samplesOf(movie.videoTrack()).stream()
+            .mapToLong(sample -> sample.presentationTime() + sample.duration())
+            .max()
+            .orElseThrow();
+    return com.google.protobuf.Duration.newBuilder()
+        .setSeconds(end / timescale)
+        .setNanos(Math.toIntExact(end % timescale * 1_000_000_000L / timescale))
+        .build();
+  }
+
+  @Test
+  @DisplayName(
       "Should fail the attempt as over the segment cap and end FFmpeg when FFmpeg writes a"
           + " fragment larger than the segment cap")
   void
@@ -2761,14 +2872,15 @@ class TranscodeWorkerJobAttemptTest {
         .filter(
             eventCase ->
                 eventCase != EventCase.REGISTRATION
-                    && eventCase != EventCase.PROBE_CAPACITY_CHANGED)
+                    && eventCase != EventCase.PROBE_CAPACITY_CHANGED
+                    && eventCase != EventCase.JOB_ATTEMPT_PROGRESS)
         .toList();
   }
 
   private static EstablishWorkerSessionRequest lastEvent(
       ScriptedWorkerRuntime.Connection connection) {
     return connection.events().stream()
-        .filter(event -> !event.hasProbeCapacityChanged())
+        .filter(event -> !event.hasProbeCapacityChanged() && !event.hasJobAttemptProgress())
         .toList()
         .getLast();
   }

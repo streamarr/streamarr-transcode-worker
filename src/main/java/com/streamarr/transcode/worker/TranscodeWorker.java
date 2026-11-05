@@ -10,6 +10,7 @@ import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptCompleted;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailed;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
+import build.buf.gen.streamarr.transcode.v1.JobAttemptProgress;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptStarted;
 import build.buf.gen.streamarr.transcode.v1.JobAttemptStopped;
 import build.buf.gen.streamarr.transcode.v1.ProbeCapacityChanged;
@@ -89,6 +90,7 @@ public final class TranscodeWorker implements AutoCloseable {
   private static final int UPLOAD_MESSAGE_BYTES = 64 * 1024;
   private static final Duration PROBE_SUMMARY_INTERVAL = Duration.ofMinutes(1);
   private static final Duration PROBE_CAPACITY_REFRESH_INTERVAL = Duration.ofSeconds(1);
+  private static final Duration JOB_ATTEMPT_PROGRESS_INTERVAL = Duration.ofSeconds(1);
 
   private final TranscodeWorkerConfiguration configuration;
   private final FfmpegTranscodeEngine engine;
@@ -107,7 +109,7 @@ public final class TranscodeWorker implements AutoCloseable {
   private StreamObserver<EstablishWorkerSessionRequest> requests;
   private WorkerSessionAccepted workerSession;
   private WorkerProbeSession probeSession;
-  private ScheduledExecutorService probeTimers;
+  private ScheduledExecutorService sessionTimers;
   private Optional<GrantedCapacities> sentCapacities = Optional.empty();
   private CompletableFuture<Void> disconnected;
   private final AtomicReference<WorkerResponseObserver> responseObserver = new AtomicReference<>();
@@ -178,18 +180,24 @@ public final class TranscodeWorker implements AutoCloseable {
             .capacities(probeCapacities)
             .summary(probeSummary)
             .build();
-    probeTimers =
+    sessionTimers =
         Executors.newSingleThreadScheduledExecutor(
-            Thread.ofVirtual().name("probe-timers").factory());
-    probeTimers.scheduleAtFixedRate(
+            Thread.ofVirtual().name("session-timers").factory());
+    sessionTimers.scheduleAtFixedRate(
         this::logProbeSummary,
         PROBE_SUMMARY_INTERVAL.toMillis(),
         PROBE_SUMMARY_INTERVAL.toMillis(),
         TimeUnit.MILLISECONDS);
-    probeTimers.scheduleAtFixedRate(
+    sessionTimers.scheduleAtFixedRate(
         probeCapacities::reopenKeyframePacketScansWhenIdle,
         PROBE_CAPACITY_REFRESH_INTERVAL.toMillis(),
         PROBE_CAPACITY_REFRESH_INTERVAL.toMillis(),
+        TimeUnit.MILLISECONDS);
+    // A fixed delay keeps a second between reports even after the monitor delayed one.
+    sessionTimers.scheduleWithFixedDelay(
+        this::reportJobAttemptProgress,
+        JOB_ATTEMPT_PROGRESS_INTERVAL.toMillis(),
+        JOB_ATTEMPT_PROGRESS_INTERVAL.toMillis(),
         TimeUnit.MILLISECONDS);
     disconnected = new CompletableFuture<>();
     var observer = new WorkerResponseObserver(accepted, probeSession);
@@ -654,6 +662,33 @@ public final class TranscodeWorker implements AutoCloseable {
     return UploadSegmentRequest.newBuilder().setData(data).build();
   }
 
+  // Reports how far each active attempt's output has reached since its previous report, so the
+  // server sees progress inside a long merged segment before it closes. An attempt leaves the
+  // active attempts under this monitor before its outcome is reported, so no report follows it.
+  private synchronized void reportJobAttemptProgress() {
+    activeAttempts
+        .values()
+        .forEach(
+            attempt ->
+                attempt
+                    .producer()
+                    .takeAdvancedOutputEnd()
+                    .ifPresent(
+                        end ->
+                            tryReport(jobAttemptProgress(attempt.job().getJobAttemptId(), end))));
+  }
+
+  // The worker runs no search for a held encode's last keyframe, so it reports no search bytes.
+  private static EstablishWorkerSessionRequest jobAttemptProgress(
+      Uuid jobAttemptId, Duration outputEnd) {
+    return EstablishWorkerSessionRequest.newBuilder()
+        .setJobAttemptProgress(
+            JobAttemptProgress.newBuilder()
+                .setJobAttemptId(jobAttemptId)
+                .setOutputEnd(protoDuration(outputEnd)))
+        .build();
+  }
+
   // Reports the producer's outcome unless a stop or the session's end has already claimed it.
   private synchronized void settleAttempt(ActiveAttempt attempt, AttemptOutcome outcome) {
     var job = attempt.job();
@@ -950,8 +985,8 @@ public final class TranscodeWorker implements AutoCloseable {
     }
 
     probeSession.shutdown();
-    probeTimers.shutdownNow();
-    probeTimers = null;
+    sessionTimers.shutdownNow();
+    sessionTimers = null;
     var attempts = claimActiveAttempts();
     try {
       if (requests != null) {
