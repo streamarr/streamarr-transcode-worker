@@ -4483,6 +4483,52 @@ class WorkerMediaSmokeTest {
                 .toList());
   }
 
+  // The source's one picture starts at 0 s and lasts 20 s. The encode repeats it at 24 fps up to
+  // 20 s, so segment 3, from 18 s to 24 s, holds the video's end, whether the attempt starts at 0
+  // and delivers it or starts after the end and delivers nothing.
+  @ParameterizedTest(name = "from segment {0}")
+  @ValueSource(ints = {0, 5})
+  @DisplayName(
+      "Should complete reporting the segment where the video's last frame ends when an encode reads"
+          + " a last frame that spans several segments")
+  void shouldCompleteReportingTheSegmentWhereTheVideosLastFrameEndsWhenItSpansSeveralSegments(
+      int startSequenceNumber) throws Exception {
+    var source = oneTwentySecondPictureSource();
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getExecutionBuilder().setMediaSegmentCount(6).setStartSequenceNumber(startSequenceNumber);
+
+    var completion =
+        executeToCompletion(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(completion.report().getSourceEndedEarly().getLastSegmentWithSourceMedia())
+        .isEqualTo(3);
+  }
+
+  // One H.264 picture at 64x36 that lasts 20 s, and 20 s of a 440 Hz tone.
+  private static synchronized Path oneTwentySecondPictureSource() throws Exception {
+    var source = seekableSources.resolve("one-twenty-second-picture.mp4");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "color=c=red:s=64x36:r=1/20:d=20",
+              "-f",
+              "lavfi",
+              "-i",
+              "sine=frequency=440:sample_rate=48000:duration=20",
+              "-c:v",
+              "libx264",
+              "-c:a",
+              "aac"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
   // The source's one FLAC packet runs from 0 s to 7.5 s, past the end of segment 0 at 6 s, and its
   // video ends at 5 s. The encode converts the packet over its whole duration, and its AAC after
   // 6 s has no segment to go in, as no video opens segment 1.

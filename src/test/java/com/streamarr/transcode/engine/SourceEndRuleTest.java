@@ -48,6 +48,27 @@ class SourceEndRuleTest {
         .isEqualTo(new SourceEnd(BOTH_ENDS, Optional.of(new EndedEarly(10, List.of(AUDIO_INDEX)))));
   }
 
+  // The last frame starts at 0 s and lasts 20 s. The encode repeats it at the output rate up to its
+  // end, so its encoded frames reach segment 3, from 18 s to 24 s.
+  @Test
+  @DisplayName(
+      "Should report the segment where the video's last frame ends when an encode that holds no"
+          + " frame and delivered no segment reads a last frame that spans several segments")
+  void shouldReportTheSegmentWhereTheLastFrameEndsWhenAnUndeliveredEncodesLastFrameSpansSegments() {
+    var video =
+        videoEndingAt64Seconds()
+            .lastStart(Duration.ZERO)
+            .end(Duration.ofSeconds(20))
+            .lastKeyframeStart(Optional.of(Duration.ZERO))
+            .build();
+
+    var report =
+        ruleFor(VideoDecisionFixtures.encodeBuilder().streamIndex(VIDEO_INDEX).build())
+            .reportOn(List.of(video), NOTHING_DELIVERED);
+
+    assertThat(report.endedEarly()).contains(new EndedEarly(3, List.of()));
+  }
+
   @Test
   @DisplayName(
       "Should report the segment of the video's last keyframe, listing only the audio, when a stream"

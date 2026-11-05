@@ -15,11 +15,12 @@ import lombok.NonNull;
  * that holds no frame delivers only source samples, so its last delivered media segment is the last
  * one that holds source media. Before it delivers any, the last segment is the one whose interval
  * holds the start of the last keyframe that a stream copy reads, as a copy opens its segments only
- * at keyframes, or of the last video frame that an encode reads. An encode that holds the last
- * frame carries every stream's samples to the advertised end, so the latest of them decides: the
- * last instant that the video's or encoded audio's last sample covers, as the encode converts each
- * sample over its whole duration, or the start of the last copied audio packet, which the producer
- * places whole by its start.
+ * at keyframes, or the last instant that the last video frame an encode reads covers, as the encode
+ * repeats that frame at the output rate up to its end. An encode that holds the last frame carries
+ * every stream's samples to the advertised end, so the latest of them decides: the last instant
+ * that the video's or encoded audio's last sample covers, as the encode converts each sample over
+ * its whole duration, or the start of the last copied audio packet, which the producer places whole
+ * by its start.
  *
  * <p>The segment that holds the video's last keyframe or frame carries every video sample after it,
  * so only the audio can have source media after the last segment: encoded audio whose last sample
@@ -58,7 +59,7 @@ record SourceEndRule(
       case VideoDecision.Copy _ ->
           videoStream.flatMap(ObservedSourceStream::lastKeyframeStart).map(this::segmentAt);
       case VideoDecision.Encode _ ->
-          videoStream.map(ObservedSourceStream::lastStart).map(this::segmentAt);
+          videoStream.map(SourceEndRule::lastCoveredInstant).map(this::segmentAt);
     };
   }
 
