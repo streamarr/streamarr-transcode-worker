@@ -256,9 +256,9 @@ class RecordedFfmpegOutputTest {
   })
   @DisplayName(
       "Should open every segment on the start-0 attempt's frame when an encoded replacement attempt"
-          + " seeks one period early")
+          + " decodes from one period early")
   void
-      shouldOpenEverySegmentOnTheStartZeroAttemptsFrameWhenAnEncodedReplacementAttemptSeeksOnePeriodEarly(
+      shouldOpenEverySegmentOnTheStartZeroAttemptsFrameWhenAnEncodedReplacementAttemptDecodesFromOnePeriodEarly(
           String replacementAttempt, String startZeroAttempt) throws IOException {
     var replacementAttemptCuts = cutPoints(group(recording(replacementAttempt)));
     var startZeroAttemptCuts = cutPoints(group(recording(startZeroAttempt)));
@@ -275,17 +275,18 @@ class RecordedFfmpegOutputTest {
         "13-x265-cfr-seek30.fmp4"
       })
   @DisplayName(
-      "Should start at the seek point and discard that period when an encoded replacement attempt"
-          + " seeks one period before its first segment")
+      "Should start at its first segment's boundary with no preroll when an encoded replacement"
+          + " attempt decodes from one period before that segment")
   void
-      shouldStartAtTheSeekPointAndDiscardThatPeriodWhenAnEncodedReplacementAttemptSeeksOnePeriodBeforeItsFirstSegment(
+      shouldStartAtItsFirstSegmentsBoundaryWithNoPrerollWhenAnEncodedReplacementAttemptDecodesFromOnePeriodBefore(
           String file) throws IOException {
     var grouping = group(recording(file));
     var firstFragment = grouping.units().fragments().getFirst();
 
-    // 24.024 s and 30.030 s: frames 576 and 720, the first frames at or after the seek point (24 s)
-    // and the first segment's boundary (30 s) on the 23.976 fps grid from zero.
-    assertThat(firstFragment.videoStart()).contains(new VideoStart(576_576, 24_000, true));
+    // 30.030 s: frame 720, the first frame at or after the first segment's boundary (30 s) on the
+    // 23.976 fps grid from zero.
+    assertThat(firstFragment.videoStart()).contains(new VideoStart(720_720, 24_000, true));
+    assertThat(grouping.delivered().getFirst().fragments().getFirst()).isSameAs(firstFragment);
     assertThat(grouping.delivered().getFirst().sequenceNumber()).isEqualTo(5);
     assertThat(firstVideoPresentationTime(grouping.delivered().getFirst())).isEqualTo(720_720);
   }

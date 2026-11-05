@@ -951,10 +951,10 @@ class ProducerTest {
         "13-x265-cfr-seek30.fmp4"
       })
   @DisplayName(
-      "Should discard the period before the first segment and deliver that segment from its"
-          + " boundary when an encoded replacement attempt seeks one period early")
+      "Should deliver the first segment from its boundary with nothing discarded when an encoded"
+          + " replacement attempt decodes from one period early")
   void
-      shouldDiscardThePeriodBeforeTheFirstSegmentAndDeliverThatSegmentFromItsBoundaryWhenAnEncodedReplacementAttemptSeeksOnePeriodEarly(
+      shouldDeliverTheFirstSegmentFromItsBoundaryWithNothingDiscardedWhenAnEncodedReplacementAttemptDecodesFromOnePeriodEarly(
           String file) throws IOException {
     var recording = recording(file);
     var process = ScriptedProcess.builder().output(bytesOf(file)).build();
@@ -964,9 +964,7 @@ class ProducerTest {
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
         .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
-    assertThat(recording.discardedPreroll())
-        .extracting(SegmentSummary::number)
-        .containsExactly(recording.startSequenceNumber() - 1);
+    assertThat(recording.discardedPreroll()).isEmpty();
     assertThat(sink.acceptedNames())
         .startsWith("init.mp4", "segment5.m4s")
         .doesNotContain("segment4.m4s");
@@ -3462,10 +3460,10 @@ class ProducerTest {
   @Test
   @DisplayName(
       "Should fail the attempt as an encoder stall when FFmpeg writes nothing while the producer"
-          + " discards the preroll of an encoded replacement attempt")
+          + " discards the preroll of a stream-copy replacement attempt")
   void
-      shouldFailTheAttemptAsAnEncoderStallWhenFfmpegWritesNothingWhileTheProducerDiscardsThePrerollOfAnEncodedReplacementAttempt() {
-    var recording = recording("09-svtav1-vfr-seek30.fmp4");
+      shouldFailTheAttemptAsAnEncoderStallWhenFfmpegWritesNothingWhileTheProducerDiscardsThePrerollOfAStreamCopyReplacementAttempt() {
+    var recording = recording("07-copy-seek30.fmp4");
     var recorded = bytesOf(recording.file());
     var process =
         ScriptedProcess.builder()
@@ -4141,7 +4139,7 @@ class ProducerTest {
         .satisfies(
             preroll -> {
               assertThat(preroll.firstFragmentIndex()).isZero();
-              assertThat(preroll.fragmentCount()).isGreaterThan(2);
+              assertThat(preroll.fragmentCount()).isGreaterThanOrEqualTo(2);
             });
     var firstPrerollFragment = Math.toIntExact(recording.initializationSegment().byteLength());
     return endOfFragmentAt(recorded, firstPrerollFragment) + 10;
