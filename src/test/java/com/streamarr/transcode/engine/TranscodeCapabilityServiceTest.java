@@ -8,6 +8,7 @@ import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import lombok.Builder;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -640,6 +641,45 @@ class TranscodeCapabilityServiceTest {
     service.detectCapabilities();
 
     assertThat(service.workerVerifiedEncoders()).isEmpty();
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep a withdrawn hardware encoder withdrawn when it fails again while its recheck runs")
+  void shouldKeepAWithdrawnHardwareEncoderWithdrawnWhenItFailsAgainWhileItsRecheckRuns() {
+    var nvenc =
+        EncoderBackend.builder()
+            .codecFamily(CodecFamily.H264)
+            .encoder("h264_nvenc")
+            .hardware(true)
+            .build();
+    var outputs =
+        Map.of(
+            "ffmpeg", createProcess("ffmpeg version 7.0", 0),
+            "hwaccels", createProcess("Hardware acceleration methods:\ncuda\n", 0),
+            "encoders", createProcess("V....D h264_nvenc NVENC H.264 encoder", 0));
+    var duringRecheck = new AtomicReference<Runnable>(() -> {});
+    var service =
+        new TranscodeCapabilityService(
+            "ffmpeg",
+            command -> {
+              if (command.command().contains("h264_nvenc")) {
+                duringRecheck.get().run();
+              }
+
+              return resolveProcess(command, outputs);
+            });
+    service.detectCapabilities();
+    service.withdraw(nvenc);
+    duringRecheck.set(() -> service.withdraw(nvenc));
+
+    var changed = service.recheckWithdrawnEncoders();
+
+    assertThat(changed).isFalse();
+    assertThat(service.hasWithdrawnEncoders()).isTrue();
+    assertThat(service.workerVerifiedEncoders())
+        .extracting(encoder -> encoder.backend().encoder())
+        .doesNotContain("h264_nvenc");
   }
 
   private static EncoderBackend softwareBackend(CodecFamily codecFamily, String encoder) {

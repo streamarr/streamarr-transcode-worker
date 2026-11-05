@@ -10,6 +10,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumMap;
 import java.util.EnumSet;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -49,8 +50,9 @@ public class TranscodeCapabilityService {
   private Set<String> detectedHardwareEncoders = Set.of();
   private Set<CodecFamily> softwareEncoderFamilies = Set.of();
   // The hardware encoders that failed during a stream and have not passed their test encode since
-  // (ADR 0044). The worker offers the software encoder of their families instead.
-  private final Set<String> withdrawnHardwareEncoders = new HashSet<>();
+  // (ADR 0044), each with its failures since then, so a recheck that a newer failure overtook does
+  // not offer it again. The worker offers the software encoder of their families instead.
+  private final Map<String, Long> withdrawnHardwareEncoders = new HashMap<>();
 
   public TranscodeCapabilityService(String ffmpegPath, ProcessFactory processFactory) {
     this.ffmpegPath = ffmpegPath;
@@ -140,7 +142,8 @@ public class TranscodeCapabilityService {
    * the next usable encoder (ADR 0044). Returns whether the offered encoders changed.
    */
   public synchronized boolean withdraw(EncoderBackend failed) {
-    if (!failed.hardware() || !withdrawnHardwareEncoders.add(failed.encoder())) {
+    if (!failed.hardware()
+        || withdrawnHardwareEncoders.merge(failed.encoder(), 1L, Long::sum) > 1) {
       return false;
     }
 
@@ -158,27 +161,30 @@ public class TranscodeCapabilityService {
    * Returns whether the offered encoders changed.
    */
   public boolean recheckWithdrawnEncoders() {
-    Set<String> withdrawn;
+    Map<String, Long> withdrawn;
     synchronized (this) {
-      withdrawn = Set.copyOf(withdrawnHardwareEncoders);
+      withdrawn = Map.copyOf(withdrawnHardwareEncoders);
     }
 
-    var passed = withdrawn.stream().filter(this::canEncodeCpuFrames).toList();
-    if (passed.isEmpty()) {
-      return false;
-    }
-
+    var passed =
+        withdrawn.entrySet().stream().filter(entry -> canEncodeCpuFrames(entry.getKey())).toList();
     synchronized (this) {
-      passed.forEach(withdrawnHardwareEncoders::remove);
+      var offeredAgain =
+          passed.stream()
+              .filter(entry -> withdrawnHardwareEncoders.remove(entry.getKey(), entry.getValue()))
+              .count();
+      if (offeredAgain == 0) {
+        return false;
+      }
+
       resolveOfferedEncoders();
+      return true;
     }
-
-    return true;
   }
 
   private void resolveOfferedEncoders() {
     var offered = new HashSet<>(detectedHardwareEncoders);
-    offered.removeAll(withdrawnHardwareEncoders);
+    offered.removeAll(withdrawnHardwareEncoders.keySet());
     encoders = resolveEncoders(offered, softwareEncoderFamilies);
     log.info("Offered encoder backends: {}", encoders.values());
   }
