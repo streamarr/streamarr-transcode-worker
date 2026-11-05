@@ -677,7 +677,7 @@
       "plan": {
         "encoder": "h264_nvenc",
         "rung": "1080p",
-        "recipe": "worker",
+        "recipe": "floored",
         "startSequenceNumber": 0,
         "gopFrames": 143,
         "forcedKeyframeTimes": [0, 6, 12, 18, 30],
@@ -937,7 +937,7 @@
       "plan": {
         "encoder": "h264_nvenc",
         "rung": "1080p",
-        "recipe": "worker",
+        "recipe": "floored",
         "startSequenceNumber": 3,
         "gopFrames": 143,
         "forcedKeyframeTimes": [18, 30],
@@ -1871,7 +1871,7 @@
       "plan": {
         "encoder": "h264_nvenc",
         "rung": "360p",
-        "recipe": "worker",
+        "recipe": "floored",
         "startSequenceNumber": 0,
         "gopFrames": 143,
         "forcedKeyframeTimes": [0, 6, 12, 18, 30],
@@ -2157,7 +2157,7 @@
       "plan": {
         "encoder": "h264_nvenc",
         "rung": "360p",
-        "recipe": "worker",
+        "recipe": "floored",
         "startSequenceNumber": 3,
         "gopFrames": 143,
         "forcedKeyframeTimes": [18, 30],
@@ -3104,7 +3104,7 @@
       "plan": {
         "encoder": "h264_nvenc",
         "rung": "480p",
-        "recipe": "worker",
+        "recipe": "floored",
         "startSequenceNumber": 0,
         "gopFrames": 143,
         "forcedKeyframeTimes": [0, 6, 12, 18, 30],
@@ -3390,7 +3390,7 @@
       "plan": {
         "encoder": "h264_nvenc",
         "rung": "480p",
-        "recipe": "worker",
+        "recipe": "floored",
         "startSequenceNumber": 3,
         "gopFrames": 143,
         "forcedKeyframeTimes": [18, 30],
@@ -4272,7 +4272,7 @@
       "plan": {
         "encoder": "h264_nvenc",
         "rung": "720p",
-        "recipe": "worker",
+        "recipe": "floored",
         "startSequenceNumber": 0,
         "gopFrames": 143,
         "forcedKeyframeTimes": [0, 6, 12, 18, 30],
@@ -4532,7 +4532,7 @@
       "plan": {
         "encoder": "h264_nvenc",
         "rung": "720p",
-        "recipe": "worker",
+        "recipe": "floored",
         "startSequenceNumber": 3,
         "gopFrames": 143,
         "forcedKeyframeTimes": [18, 30],
@@ -5407,7 +5407,7 @@
       "plan": {
         "encoder": "hevc_nvenc",
         "rung": "1080p",
-        "recipe": "worker",
+        "recipe": "floored",
         "startSequenceNumber": 0,
         "gopFrames": 143,
         "forcedKeyframeTimes": [0, 6, 12, 18, 30],
@@ -5669,7 +5669,7 @@
       "plan": {
         "encoder": "hevc_nvenc",
         "rung": "1080p",
-        "recipe": "worker",
+        "recipe": "floored",
         "startSequenceNumber": 3,
         "gopFrames": 143,
         "forcedKeyframeTimes": [18, 30],
@@ -6611,7 +6611,7 @@
       "plan": {
         "encoder": "hevc_nvenc",
         "rung": "360p",
-        "recipe": "worker",
+        "recipe": "floored",
         "startSequenceNumber": 0,
         "gopFrames": 143,
         "forcedKeyframeTimes": [0, 6, 12, 18, 30],
@@ -6899,7 +6899,7 @@
       "plan": {
         "encoder": "hevc_nvenc",
         "rung": "360p",
-        "recipe": "worker",
+        "recipe": "floored",
         "startSequenceNumber": 3,
         "gopFrames": 143,
         "forcedKeyframeTimes": [18, 30],
@@ -7854,7 +7854,7 @@
       "plan": {
         "encoder": "hevc_nvenc",
         "rung": "480p",
-        "recipe": "worker",
+        "recipe": "floored",
         "startSequenceNumber": 0,
         "gopFrames": 143,
         "forcedKeyframeTimes": [0, 6, 12, 18, 30],
@@ -8142,7 +8142,7 @@
       "plan": {
         "encoder": "hevc_nvenc",
         "rung": "480p",
-        "recipe": "worker",
+        "recipe": "floored",
         "startSequenceNumber": 3,
         "gopFrames": 143,
         "forcedKeyframeTimes": [18, 30],
@@ -9032,7 +9032,7 @@
       "plan": {
         "encoder": "hevc_nvenc",
         "rung": "720p",
-        "recipe": "worker",
+        "recipe": "floored",
         "startSequenceNumber": 0,
         "gopFrames": 143,
         "forcedKeyframeTimes": [0, 6, 12, 18, 30],
@@ -9294,7 +9294,7 @@
       "plan": {
         "encoder": "hevc_nvenc",
         "rung": "720p",
-        "recipe": "worker",
+        "recipe": "floored",
         "startSequenceNumber": 3,
         "gopFrames": 143,
         "forcedKeyframeTimes": [18, 30],

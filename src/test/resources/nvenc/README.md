@@ -56,15 +56,16 @@ For each encoder and each rung of the default ladder (1080p, 720p, 480p and 360p
 
 | Recording | What it runs |
 |---|---|
-| `ENCODER-RUNG-first` | The worker's command for the job from the start, with the GOP the worker passes today (143 frames) |
-| `ENCODER-RUNG-replacement` | The worker's command for a replacement attempt of segment 3, which seeks to 12 s |
-| `ENCODER-RUNG-extended-first` | The first attempt with the GOP a keyframe-verified encoder gets (145 frames) |
-| `ENCODER-RUNG-extended-replacement` | The replacement attempt with that GOP |
-| `ENCODER-RUNG-extended-missed` | The first attempt with that GOP and without the forced keyframe at 18 s |
+| `ENCODER-RUNG-first` | The job from the start with the floored GOP of an encoder that is not keyframe-verified (143 frames) |
+| `ENCODER-RUNG-replacement` | A replacement attempt of segment 3, which seeks to 12 s, with that GOP |
+| `ENCODER-RUNG-extended-first` | The worker's command for the job from the start, with the extended GOP of a keyframe-verified encoder (145 frames) |
+| `ENCODER-RUNG-extended-replacement` | The worker's command for the replacement attempt |
+| `ENCODER-RUNG-extended-missed` | The first attempt with the extended GOP and without the forced keyframe at 18 s |
 
-`NvencRecorderCommandsTest` runs `record-nvenc.sh --print-commands`. It requires each command to equal
-the worker's own command for the same job, apart from quiet logging. The extended recordings may
-differ only in the GOP and the forced keyframe times.
+`NvencRecorderCommandsTest` runs `record-nvenc.sh --print-commands`. It requires the
+`extended-first` and `extended-replacement` commands to equal the worker's own command for the same
+job, apart from quiet logging. Every other recording may differ from it only in the GOP and the
+forced keyframe times.
 
 For each recording, `recordings.json` keeps:
 

@@ -39,33 +39,35 @@ class NvencRecorderCommandsTest {
   private static final AudioDecision NO_AUDIO =
       AudioDecision.builder().mode(AudioMode.NONE).codec(null).channels(0).bitrate(0L).build();
 
-  static Stream<PlannedRecording> recordingsOfTheWorkersRecipe() {
-    return plannedRecordings().stream().filter(recording -> recording.recipe().equals("worker"));
+  // The worker gives both NVENC encoders the extended GOP, so the extended recordings that force
+  // every listed start run the worker's own command.
+  static Stream<PlannedRecording> recordingsOfTheWorkersCommand() {
+    return plannedRecordings().stream().filter(PlannedRecording::runsTheWorkersCommand);
   }
 
-  static Stream<PlannedRecording> recordingsOfTheExtendedGop() {
-    return plannedRecordings().stream().filter(recording -> recording.recipe().equals("extended"));
+  static Stream<PlannedRecording> recordingsThatDepartFromTheWorkersCommand() {
+    return plannedRecordings().stream().filter(recording -> !recording.runsTheWorkersCommand());
   }
 
   @ParameterizedTest(name = "{0}")
-  @MethodSource("recordingsOfTheWorkersRecipe")
+  @MethodSource("recordingsOfTheWorkersCommand")
   @DisplayName(
       "Should plan the worker's own command, without the recording's logging options, when a"
-          + " recording follows the worker's recipe")
+          + " recording takes the extended GOP and forces every listed start")
   void
-      shouldPlanTheWorkersOwnCommandWithoutTheRecordingsLoggingOptionsWhenARecordingFollowsTheWorkersRecipe(
+      shouldPlanTheWorkersOwnCommandWithoutTheRecordingsLoggingOptionsWhenARecordingTakesTheExtendedGopAndForcesEveryListedStart(
           PlannedRecording recording) {
     assertThat(recording.argumentsWithoutRecordingOnlyOptions())
         .isEqualTo(workerCommandFor(recording));
   }
 
   @ParameterizedTest(name = "{0}")
-  @MethodSource("recordingsOfTheExtendedGop")
+  @MethodSource("recordingsThatDepartFromTheWorkersCommand")
   @DisplayName(
       "Should differ from the worker's command only in the GOP and the forced keyframe times when a"
-          + " recording takes the extended GOP")
+          + " recording takes the floored GOP or leaves a forced keyframe out")
   void
-      shouldDifferFromTheWorkersCommandOnlyInTheGopAndTheForcedKeyframeTimesWhenARecordingTakesTheExtendedGop(
+      shouldDifferFromTheWorkersCommandOnlyInTheGopAndTheForcedKeyframeTimesWhenARecordingTakesTheFlooredGopOrLeavesAForcedKeyframeOut(
           PlannedRecording recording) {
     var expected = new ArrayList<>(workerCommandFor(recording));
     replaceValue(expected, "-g:v:0", recording.job().get("gopFrames"));
@@ -222,8 +224,8 @@ class NvencRecorderCommandsTest {
       return new PlannedRecording(lines.getFirst().substring(2), job, arguments);
     }
 
-    String recipe() {
-      return job.get("recipe");
+    boolean runsTheWorkersCommand() {
+      return job.get("recipe").equals("extended") && job.get("skippedForcedTime").isEmpty();
     }
 
     List<String> argumentsWithoutRecordingOnlyOptions() {

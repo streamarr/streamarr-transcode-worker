@@ -1161,7 +1161,7 @@ class FfmpegCommandBuilderTest {
   }
 
   @ParameterizedTest(name = "{0}")
-  @ValueSource(strings = {"libx264", "libsvtav1", "libx265"})
+  @ValueSource(strings = {"libx264", "libsvtav1", "libx265", "h264_nvenc", "hevc_nvenc"})
   @DisplayName(
       "Should lengthen the GOP one frame past the rounded-up period when the encoder is verified")
   void shouldLengthenTheGopOneFramePastTheRoundedUpPeriodWhenTheEncoderIsVerified(String encoder) {
@@ -1178,7 +1178,7 @@ class FfmpegCommandBuilderTest {
   @ParameterizedTest(name = "{0}")
   @ValueSource(
       strings = {
-        "h264_nvenc",
+        "av1_nvenc",
         "hevc_qsv",
         "av1_amf",
         "h264_vaapi",
@@ -1235,7 +1235,7 @@ class FfmpegCommandBuilderTest {
   @ParameterizedTest(name = "{0}")
   @CsvSource({
     "libsvtav1, 145",
-    "h264_nvenc, 143",
+    "h264_nvenc, 145",
     "hevc_qsv, 143",
     "av1_amf, 143",
     "hevc_rkmpp, 143"

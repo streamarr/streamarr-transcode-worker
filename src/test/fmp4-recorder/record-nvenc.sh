@@ -5,9 +5,10 @@
 # piece and the script exits with status 3 without recording anything.
 #
 # For each NVENC encoder and each rung of the default ladder it encodes a synthetic source with the
-# worker's own arguments, from the start and as a replacement attempt that seeks, under the GOP the
-# worker passes today and under the longer GOP a keyframe-verified encoder gets. One more recording
-# leaves a forced keyframe time out. nvenc-recordings.mjs then derives, from the recordings alone:
+# worker's own arguments, from the start and as a replacement attempt that seeks, under the floored
+# GOP an encoder that is not keyframe-verified gets and under the extended GOP a keyframe-verified
+# encoder gets, which the worker passes both NVENC encoders. One more recording leaves a forced
+# keyframe time out. nvenc-recordings.mjs then derives, from the recordings alone:
 #   - whether every forced keyframe is a sync sample
 #   - whether every forced keyframe is an IDR picture with no leading pictures (a closed GOP)
 #   - whether the GOP count restarts at a forced keyframe
@@ -189,12 +190,12 @@ level_name() {
 
 # plan_recording <encoder> <rung> <variant>: sets NAME, META (the job, one key=value per line) and
 # COMMAND (the worker's FFmpeg command for that job, with the quiet, non-interactive logging that
-# only the recording adds). The variants: first and replacement follow the worker's recipe;
-# extended-first, extended-replacement and extended-missed take the extended GOP instead, and
-# extended-missed also leaves SKIPPED_FORCED_TIME out of the forced keyframe times.
+# only the recording adds). The variants: first and replacement take the floored GOP;
+# extended-first, extended-replacement and extended-missed take the extended GOP, as the worker
+# does, and extended-missed also leaves SKIPPED_FORCED_TIME out of the forced keyframe times.
 plan_recording() {
   local encoder=$1 rung=$2 variant=$3
-  local height bitrate level codec_string tag profile tier=() start=0 gop=$GOP_FLOORED recipe=worker
+  local height bitrate level codec_string tag profile tier=() start=0 gop=$GOP_FLOORED recipe=floored
   local skipped="" replaces="" seek=()
   height=$(rung_field "$rung" 2)
   bitrate=$(rung_field "$rung" 3)

@@ -29,11 +29,12 @@ public class FfmpegCommandBuilder {
   private static final String LEVEL_OPTION = "-level:v";
   private static final EncoderTraits UNLISTED_ENCODER = traits().build();
   private static final EncoderTraits FIXED_GOP = traits().fixedGop(true).build();
-  // NVENC is not keyframe-verified until recordings show its forced keyframes (worker #56).
-  // The B-frames and lookahead under which the RTX 5090 recordings showed every forced keyframe as
-  // an IDR picture with no leading pictures (src/test/resources/nvenc).
+  // The RTX 5090 recordings (src/test/resources/nvenc) show every forced keyframe as an IDR
+  // picture with no leading pictures under these B-frames and lookahead, and the GOP count
+  // restarting there.
   private static final EncoderTraits NVENC =
       traits()
+          .keyframeVerified(true)
           .fixedGop(true)
           .frameTypeOptions(List.of("-bf", "3", "-rc-lookahead", "20"))
           .codecProfileForcing(CodecProfileForcing.NVENC)
@@ -47,8 +48,8 @@ public class FfmpegCommandBuilder {
   // What the command passes each encoder differently; an encoder not listed has none of it. A
   // keyframe-verified encoder's recordings show every forced keyframe as a sync sample that starts
   // a closed GOP, with its GOP count restarting there (ADR 0037 as amended;
-  // src/test/resources/fmp4/README.md, "Verified encoders"); the hardware encoders are not
-  // keyframe-verified yet.
+  // src/test/resources/fmp4/README.md, "Verified encoders"); of the hardware encoders, only
+  // h264_nvenc and hevc_nvenc are keyframe-verified.
   private static final Map<String, EncoderTraits> ENCODER_TRAITS =
       Map.ofEntries(
           Map.entry(

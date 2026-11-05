@@ -165,10 +165,10 @@ class TranscodeWorkerControlPlaneIT {
 
   @Test
   @DisplayName(
-      "Should advertise h264_nvenc as not keyframe-verified and force the job's codec profile and"
-          + " level on it when NVENC passes its test encode")
+      "Should advertise h264_nvenc as keyframe-verified and force the job's codec profile and level"
+          + " on it when NVENC passes its test encode")
   void
-      shouldAdvertiseH264NvencAsNotKeyframeVerifiedAndForceTheJobsCodecProfileAndLevelOnItWhenNvencPassesItsTestEncode()
+      shouldAdvertiseH264NvencAsKeyframeVerifiedAndForceTheJobsCodecProfileAndLevelOnItWhenNvencPassesItsTestEncode()
           throws Exception {
     var service = new ControllableWorkerService();
     var launcher = ScriptedProcessLauncher.running();
@@ -191,7 +191,7 @@ class TranscodeWorkerControlPlaneIT {
               workerVerifiedEncoder(
                   backend(VideoCodecFamily.VIDEO_CODEC_FAMILY_H264, "h264_nvenc")
                       .setKind(EncoderKind.ENCODER_KIND_HARDWARE),
-                  false));
+                  true));
       service.sendStart(service.registeredWorker(), encode);
       service.awaitStarted(encode);
       assertThat(launcher.command(fromProto(encode.getJobAttemptId())))

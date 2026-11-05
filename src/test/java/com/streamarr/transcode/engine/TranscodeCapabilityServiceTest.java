@@ -441,8 +441,8 @@ class TranscodeCapabilityServiceTest {
   @ParameterizedTest(name = "{0} resolves to {1}")
   @CsvSource({"h264, h264_nvenc", "hevc, hevc_nvenc"})
   @DisplayName(
-      "Should resolve the NVENC encoder, not keyframe-verified, when it passes its test encode")
-  void shouldResolveTheNvencEncoderNotKeyframeVerifiedWhenItPassesItsTestEncode(
+      "Should resolve the NVENC encoder as keyframe-verified when it passes its test encode")
+  void shouldResolveTheNvencEncoderAsKeyframeVerifiedWhenItPassesItsTestEncode(
       String codecFamily, String nvencEncoder) {
     var outputs =
         Map.of(
@@ -468,7 +468,7 @@ class TranscodeCapabilityServiceTest {
             .build();
     assertThat(service.resolveEncoder(codecFamily)).contains(nvenc);
     assertThat(service.workerVerifiedEncoders())
-        .contains(WorkerVerifiedEncoder.builder().backend(nvenc).keyframeVerified(false).build());
+        .contains(WorkerVerifiedEncoder.builder().backend(nvenc).keyframeVerified(true).build());
   }
 
   @Test
@@ -567,7 +567,7 @@ class TranscodeCapabilityServiceTest {
                         .encoder("h264_nvenc")
                         .hardware(true)
                         .build())
-                .keyframeVerified(false)
+                .keyframeVerified(true)
                 .build(),
             WorkerVerifiedEncoder.builder()
                 .backend(softwareBackend(CodecFamily.HEVC, "libx265"))
