@@ -4483,6 +4483,58 @@ class WorkerMediaSmokeTest {
                 .toList());
   }
 
+  // The source's one FLAC packet runs from 0 s to 7.5 s, past the end of segment 0 at 6 s, and its
+  // video ends at 5 s. The encode converts the packet over its whole duration, and its AAC after
+  // 6 s has no segment to go in, as no video opens segment 1.
+  @Test
+  @DisplayName(
+      "Should complete listing the audio after the last segment when an encode reads an audio packet"
+          + " that crosses the end of the segment that holds the video's end")
+  void shouldCompleteListingTheAudioAfterTheLastSegmentWhenAnEncodedAudioPacketCrossesItsEnd()
+      throws Exception {
+    var source = audioPacketAcrossTheVideosLastSegmentEndSource();
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getExecutionBuilder().setMediaSegmentCount(2);
+
+    var completion =
+        executeToCompletion(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(completion.report().getSourceEndedEarly())
+        .isEqualTo(
+            SourceEndedEarly.newBuilder()
+                .setLastSegmentWithSourceMedia(0)
+                .addStreamIndexesWithMediaAfterLastSegment(1)
+                .build());
+  }
+
+  // 5 s of H.264 at 64x36 and 24 fps, and a 440 Hz tone at 8 kHz for 7.5 s in one FLAC frame.
+  private static synchronized Path audioPacketAcrossTheVideosLastSegmentEndSource()
+      throws Exception {
+    var source = seekableSources.resolve("audio-packet-across-the-videos-last-segment-end.mkv");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24:duration=5",
+              "-f",
+              "lavfi",
+              "-i",
+              "sine=frequency=440:sample_rate=8000:duration=7.5",
+              "-c:v",
+              "libx264",
+              "-c:a",
+              "flac",
+              "-frame_size",
+              "60000"),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
   @ParameterizedTest(name = "from segment {0}")
   @ValueSource(ints = {0, 11})
   @DisplayName(

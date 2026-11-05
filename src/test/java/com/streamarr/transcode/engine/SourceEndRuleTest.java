@@ -8,9 +8,13 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 @Tag("UnitTest")
 @DisplayName("Source End Rule Tests")
@@ -188,6 +192,38 @@ class SourceEndRuleTest {
     var report = rule.reportOn(List.of(video, audio), NOTHING_DELIVERED);
 
     assertThat(report.endedEarly()).contains(new EndedEarly(0, List.of()));
+  }
+
+  // The last audio packet runs from 65.9 s to 66.02 s, across the end of segment 10 at 66 s. An
+  // encode converts it over its whole duration, so its encoded audio after 66 s has no delivered
+  // segment; a copy places the packet whole in segment 10 by its start.
+  @ParameterizedTest(name = "copies audio: {0}")
+  @MethodSource("audioAfterTheLastSegmentByAudioMode")
+  @DisplayName(
+      "Should list the audio after the last segment only when it encodes the audio when the audio's"
+          + " last packet crosses the end of the segment that holds the video's end")
+  void shouldListTheAudioAfterTheLastSegmentOnlyWhenEncodedWhenItsLastPacketCrossesThatSegmentsEnd(
+      boolean copiesAudio, List<Integer> streamsWithMediaAfter) {
+    var audio =
+        audioEndingAt84Seconds()
+            .lastStart(Duration.ofMillis(65_900))
+            .end(Duration.ofMillis(66_020))
+            .build();
+    var rule =
+        SourceEndRule.builder()
+            .periodSeconds(6)
+            .mediaSegmentCount(14)
+            .video(VideoDecisionFixtures.encodeBuilder().streamIndex(VIDEO_INDEX).build())
+            .copiesAudio(copiesAudio)
+            .build();
+
+    var report = rule.reportOn(List.of(VIDEO_ENDING_AT_64_SECONDS, audio), NOTHING_DELIVERED);
+
+    assertThat(report.endedEarly()).contains(new EndedEarly(10, streamsWithMediaAfter));
+  }
+
+  static Stream<Arguments> audioAfterTheLastSegmentByAudioMode() {
+    return Stream.of(Arguments.of(false, List.of(AUDIO_INDEX)), Arguments.of(true, List.of()));
   }
 
   @Test

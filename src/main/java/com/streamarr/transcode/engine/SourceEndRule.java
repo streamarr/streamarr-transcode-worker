@@ -22,7 +22,8 @@ import lombok.NonNull;
  * places whole by its start.
  *
  * <p>The segment that holds the video's last keyframe or frame carries every video sample after it,
- * so only the audio can have source media after the last segment.
+ * so only the audio can have source media after the last segment: encoded audio whose last sample
+ * covers an instant at or after that segment's end, or copied audio whose last packet starts there.
  */
 @Builder
 record SourceEndRule(
@@ -66,7 +67,7 @@ record SourceEndRule(
     var streamsWithMediaAfter =
         streams.stream()
             .filter(stream -> stream.sourceIndex() != video.streamIndex())
-            .filter(stream -> stream.lastStart().compareTo(segmentEnd) >= 0)
+            .filter(stream -> lastSourceInstant(stream).compareTo(segmentEnd) >= 0)
             .map(ObservedSourceStream::sourceIndex)
             .sorted()
             .toList();
