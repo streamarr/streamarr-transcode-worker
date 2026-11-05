@@ -55,8 +55,7 @@ class NvencRecordingsTest {
       "Should show the keyframes ADR 0037 asks of a keyframe-verified encoder in every extended"
           + " recording when the worker marks an NVENC encoder keyframe-verified")
   void
-      shouldShowTheKeyframesAdr0037AsksOfAKeyframeVerifiedEncoderInEveryExtendedRecordingWhenTheWorkerMarksAnNvencEncoderKeyframeVerified()
-          throws IOException {
+      shouldShowTheKeyframesAdr0037AsksOfAKeyframeVerifiedEncoderInEveryExtendedRecordingWhenTheWorkerMarksAnNvencEncoderKeyframeVerified() {
     var document = committedRecordings();
     var verified = new ArrayList<JsonNode>();
     for (var recording : document.get("recordings")) {
@@ -115,8 +114,7 @@ class NvencRecordingsTest {
       "Should hold every extended recording at every default-ladder rung, with its replacement pair"
           + " and its GOP restart, when the worker marks an NVENC encoder keyframe-verified")
   void
-      shouldHoldEveryExtendedRecordingAtEveryDefaultLadderRungWithItsReplacementPairAndItsGopRestartWhenTheWorkerMarksAnNvencEncoderKeyframeVerified()
-          throws IOException {
+      shouldHoldEveryExtendedRecordingAtEveryDefaultLadderRungWithItsReplacementPairAndItsGopRestartWhenTheWorkerMarksAnNvencEncoderKeyframeVerified() {
     var document = committedRecordings();
     var recorded = new ArrayList<String>();
     var withGopRestart = new ArrayList<String>();
@@ -146,7 +144,7 @@ class NvencRecordingsTest {
         .containsAll(required.stream().map(prefix -> prefix + "-extended-missed").toList());
   }
 
-  private static JsonNode committedRecordings() throws IOException {
+  private static JsonNode committedRecordings() {
     var results = RESULTS.resolve("recordings.json");
     assertThat(results)
         .as("the recordings of record-nvenc.sh, which a keyframe-verified NVENC encoder needs")

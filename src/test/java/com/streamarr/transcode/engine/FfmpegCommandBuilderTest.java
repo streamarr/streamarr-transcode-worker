@@ -614,7 +614,7 @@ class FfmpegCommandBuilderTest {
   void shouldLeaveBFramesAndLookaheadToTheEncoderWhenTheEncoderIsNotNvenc(String encoder) {
     var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), encoder);
 
-    assertThat(cmd).doesNotContain("-bf", "-rc-lookahead");
+    assertThat(cmd).isNotEmpty().doesNotContain("-bf", "-rc-lookahead");
   }
 
   @ParameterizedTest(name = "{0}")
