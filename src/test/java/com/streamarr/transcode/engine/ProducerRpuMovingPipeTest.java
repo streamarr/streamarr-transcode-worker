@@ -400,6 +400,25 @@ class ProducerRpuMovingPipeTest {
     assertThat(copy.wasTerminated()).isTrue();
   }
 
+  // The mover's own 32 MiB cap on what it reads of the copy says nothing about the segment cap of
+  // the output, which a plain-grid fallback would not change.
+  @Test
+  @DisplayName(
+      "Should fail the attempt as a copy unit too large for the mover, not as output over the"
+          + " segment cap, when the copy writes a fragment larger than the mover reads")
+  void shouldFailTheAttemptAsACopyUnitTooLargeForTheMoverWhenTheCopyWritesAnOversizedFragment() {
+    var copy =
+        ScriptedProcess.builder()
+            .output(concat(initializationSegment(), IsoBoxes.header(32L * 1024 * 1024 + 1, "moof")))
+            .exitTiming(ExitTiming.WHEN_TEST_EXITS)
+            .build();
+    var encode = encodingFfmpeg().build();
+
+    var producer = producerOf(copy, encode).start();
+
+    assertThat(failureOf(producer).reason()).isEqualTo(ProducerFailure.COPY_UNIT_TOO_LARGE);
+  }
+
   @Test
   @DisplayName(
       "Should fail the attempt as a truncated output when the copy ends inside a box and both"

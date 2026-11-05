@@ -259,9 +259,16 @@ final class PipedFfmpegProcesses implements FfmpegProcess {
     return ProducerFailure.of(failure.getReason()) == ProducerFailure.TRUNCATED_OUTPUT;
   }
 
+  // The mover reads the copy within its own cap, so a copy over it is not output over the
+  // segment cap.
   private static Failed refusal(FragmentedMp4Exception failure) {
+    var reason = ProducerFailure.of(failure.getReason());
+    if (reason == ProducerFailure.SEGMENT_CAP_EXCEEDED) {
+      reason = ProducerFailure.COPY_UNIT_TOO_LARGE;
+    }
+
     return new Failed(
-        ProducerFailure.of(failure.getReason()),
+        reason,
         "The copy of the source cannot be passed to the FFmpeg that encodes it: "
             + failure.getMessage());
   }

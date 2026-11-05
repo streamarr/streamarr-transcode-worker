@@ -699,13 +699,28 @@ public final class TranscodeWorker implements AutoCloseable {
   }
 
   // The server does not replace an attempt whose output differs from the job: the same decision on
-  // the same encoder backend produces the same output. Nor does it replace one whose job names a
-  // stream that is not an audio stream as its audio.
+  // the same encoder backend produces the same output. Nor one whose job names a stream that is not
+  // an audio stream as its audio. Nor one whose output outgrew the segment cap: in a stream session
+  // with merged segments every replacement repeats it, so the server falls back to an encode on the
+  // plain grid instead.
   private static JobAttemptFailure jobAttemptFailureOf(ProducerFailure reason) {
     return switch (reason) {
       case OUTPUT_MISMATCH -> JobAttemptFailure.JOB_ATTEMPT_FAILURE_OUTPUT_MISMATCH;
       case NOT_AN_AUDIO_STREAM -> JobAttemptFailure.JOB_ATTEMPT_FAILURE_INVALID_SPECIFICATION;
-      default -> JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED;
+      case SEGMENT_CAP_EXCEEDED -> JobAttemptFailure.JOB_ATTEMPT_FAILURE_SEGMENT_CAP_EXCEEDED;
+      case PROCESS_EXITED_WITH_ERROR,
+          COPY_UNIT_TOO_LARGE,
+          NO_MEDIA_SEGMENT,
+          SEGMENT_NOT_ACCEPTED,
+          TRUNCATED_OUTPUT,
+          SKIPPED_SEGMENT_NUMBER,
+          SHORT_VIDEO_SAMPLE,
+          MALFORMED_OUTPUT,
+          OUTPUT_UNREADABLE,
+          ENCODER_STALLED,
+          PROCESS_DID_NOT_EXIT,
+          UNEXPECTED_ERROR ->
+          JobAttemptFailure.JOB_ATTEMPT_FAILURE_TRANSCODE_FAILED;
     };
   }
 
