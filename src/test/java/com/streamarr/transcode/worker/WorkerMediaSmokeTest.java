@@ -4307,6 +4307,540 @@ class WorkerMediaSmokeTest {
     return decoded;
   }
 
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("keptThreeAndFourChannelLayouts")
+  @DisplayName(
+      "Should keep each tone's level in its own channel when a 3- or 4-channel source encodes in"
+          + " its own layout")
+  void shouldKeepEachTonesLevelInItsOwnChannelWhenAThreeOrFourChannelSourceKeepsItsLayout(
+      ToneEncode encode) throws Exception {
+    var delivered = deliveredToneEncode(encode);
+
+    assertTonesLandAtTheirGains(encode, delivered);
+  }
+
+  static Stream<ToneEncode> keptThreeAndFourChannelLayouts() {
+    var aac = Stream.of(keptLayout("3.0", "aac"), keptLayout("4.0", "aac"));
+    var dolbyDigital =
+        Stream.of("ac3", "eac3")
+            .flatMap(
+                codec ->
+                    Stream.of(
+                        keptLayout("2.1", codec),
+                        keptLayout("3.0", codec),
+                        keptLayout("4.0", codec),
+                        // A/52 has one 2/2 mode, which FFmpeg's decoder reports as quad(side).
+                        ToneEncode.builder()
+                            .sourceLayout("quad")
+                            .tones(ToneSet.REAR_PAIR_IN_OPPOSITE_PHASE)
+                            .codec(codec)
+                            .outputLayout("quad")
+                            .decodedLayout("quad(side)")
+                            .routes(
+                                List.of(
+                                    route("FL", "FL", 1.0),
+                                    route("FR", "FR", 1.0),
+                                    route("BL", "SL", 1.0),
+                                    route("BR", "SR", 1.0)))
+                            .build(),
+                        keptLayout("quad(side)", codec)));
+    return Stream.concat(aac, dolbyDigital);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("threeAndFourChannelStereoSteps")
+  @DisplayName(
+      "Should mix each tone into the stereo pair at ADR 0050's gain when a 3- or 4-channel source"
+          + " encodes in stereo")
+  void shouldMixEachToneIntoTheStereoPairWhenAThreeOrFourChannelSourceEncodesInStereo(
+      ToneEncode encode) throws Exception {
+    var delivered = deliveredToneEncode(encode);
+
+    assertTonesLandAtTheirGains(encode, delivered);
+  }
+
+  // AAC carries neither 2.1 nor quad without channel configuration 0, and AC-3 and E-AC-3 do not
+  // carry 3.0(back) or 3.1 (ADR 0050), so the job names stereo for them.
+  static Stream<ToneEncode> threeAndFourChannelStereoSteps() {
+    var aac =
+        Stream.of("2.1", "3.0(back)", "3.1", "quad", "quad(side)")
+            .map(layout -> steppedToStereo(layout, "aac"));
+    var dolbyDigital =
+        Stream.of("ac3", "eac3")
+            .flatMap(
+                codec ->
+                    Stream.of("3.0(back)", "3.1").map(layout -> steppedToStereo(layout, codec)));
+    return Stream.concat(aac, dolbyDigital);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("sevenPointZeroFolds")
+  @DisplayName(
+      "Should fold each 7.0 surround into its own side's surround at -3 dB and write no"
+          + " low-frequency channel when the job names a 5.0 layout")
+  void shouldFoldEach70SurroundIntoItsOwnSidesSurroundWhenTheJobNamesA50Layout(ToneEncode encode)
+      throws Exception {
+    var delivered = deliveredToneEncode(encode);
+
+    assertTonesLandAtTheirGains(encode, delivered);
+  }
+
+  static Stream<ToneEncode> sevenPointZeroFolds() {
+    return Stream.of(
+        sevenPointZeroFold("aac", "5.0"),
+        sevenPointZeroFold("ac3", "5.0(side)"),
+        sevenPointZeroFold("eac3", "5.0(side)"),
+        sevenPointZeroFold("opus", "5.0"));
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep each 7.0 tone in its own channel and decode the added low-frequency channel as"
+          + " silence when Opus pads 7.0 to 7.1")
+  void shouldKeepEach70ToneInItsOwnChannelAndDecodeSilentLfeWhenOpusPads70To71() throws Exception {
+    var encode =
+        ToneEncode.builder()
+            .sourceLayout("7.0")
+            .tones(ToneSet.OWN_TONE_IN_EACH_CHANNEL)
+            .codec("opus")
+            .outputLayout("7.1")
+            .decodedLayout("7.1")
+            .routes(keptRoutes("7.0"))
+            .build();
+
+    var delivered = deliveredToneEncode(encode);
+
+    assertTonesLandAtTheirGains(encode, delivered);
+    var output = SpeakerLayout.named("7.1");
+    assertThat(decodedChannels(delivered, 8)[output.speakers().indexOf(Speaker.LFE)])
+        .as("the added low-frequency channel")
+        .containsOnly(0);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("sixPointOneEncodes")
+  @DisplayName(
+      "Should mix the 6.1 back centre into each surround at 0.7071 when the job names a 5.1 layout")
+  void shouldMixThe61BackCentreIntoEachSurroundWhenTheJobNamesA51Layout(ToneEncode encode)
+      throws Exception {
+    var delivered = deliveredToneEncode(encode);
+
+    assertTonesLandAtTheirGains(encode, delivered);
+  }
+
+  static Stream<ToneEncode> sixPointOneEncodes() {
+    return Stream.of(
+        sixPointOneTo51("ac3", "5.1(side)"),
+        sixPointOneTo51("eac3", "5.1(side)"),
+        sixPointOneTo51("aac", "5.1"));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("aacToneEncodes")
+  @DisplayName(
+      "Should write the AAC channel configuration of the channel count, never 0, when AAC encodes"
+          + " a named layout")
+  void shouldWriteTheAacChannelConfigurationOfTheChannelCountWhenAacEncodesANamedLayout(
+      ToneEncode encode) throws Exception {
+    var delivered = deliveredToneEncode(encode);
+
+    assertThat(aacChannelConfiguration(delivered))
+        .isEqualTo(SpeakerLayout.named(encode.outputLayout()).channelCount());
+  }
+
+  static Stream<ToneEncode> aacToneEncodes() {
+    return Stream.of(
+            keptThreeAndFourChannelLayouts(),
+            threeAndFourChannelStereoSteps(),
+            sevenPointZeroFolds(),
+            sixPointOneEncodes())
+        .flatMap(encodes -> encodes)
+        .filter(encode -> "aac".equals(encode.codec()));
+  }
+
+  // ADR 0050's −3 dB, at which a downmix mixes one channel into another.
+  private static final double MINUS_3_DB = Math.sqrt(0.5);
+  // Every tone peaks at −20 dBFS, so that no sum of the matrix reaches the lossy limiter's −3 dBFS.
+  private static final double TONE_AMPLITUDE = 0.1;
+  // A tone that a channel does not hold reads at least 40 dB below the source's tones.
+  private static final double ABSENT_TONE_AMPLITUDE = TONE_AMPLITUDE / 100;
+  private static final double WITHIN_1_DB = Math.pow(10, 1.0 / 20);
+  private static final int TONE_SAMPLE_RATE = 48_000;
+  // Each tone is read over whole seconds after each codec's start-up, so that the tones, all at
+  // whole hertz, do not read into each other.
+  private static final int TONE_READ_FROM_SECOND = 1;
+  private static final int TONE_READ_SECONDS = 4;
+
+  private static final Map<String, AudioChannelLayout> CONTRACT_LAYOUTS =
+      Map.ofEntries(
+          Map.entry("stereo", AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO),
+          Map.entry("2.1", AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_TWO_POINT_ONE),
+          Map.entry("3.0", AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_THREE_POINT_ZERO),
+          Map.entry("4.0", AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_FOUR_POINT_ZERO),
+          Map.entry("quad", AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_QUAD),
+          Map.entry("quad(side)", AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_QUAD_SIDE),
+          Map.entry("5.0", AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_FIVE_POINT_ZERO),
+          Map.entry("5.0(side)", AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_FIVE_POINT_ZERO_SIDE),
+          Map.entry("5.1", AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_FIVE_POINT_ONE),
+          Map.entry("5.1(side)", AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_FIVE_POINT_ONE_SIDE),
+          Map.entry("7.1", AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_SEVEN_POINT_ONE));
+
+  // ADR 0050's stereo matrix of each 3- and 4-channel layout that some codec does not carry: the
+  // centre, a surround and, without surrounds, the low-frequency channel each mix into their side
+  // or both sides at −3 dB. A back centre mixes into each side's surround at −3 dB, so it reaches
+  // each side at −6 dB.
+  private static final Map<String, List<Route>> STEREO_ROUTES =
+      Map.of(
+          "2.1",
+          withFronts(route("LFE", "FL", MINUS_3_DB), route("LFE", "FR", MINUS_3_DB)),
+          "3.0(back)",
+          withFronts(
+              route("BC", "FL", MINUS_3_DB * MINUS_3_DB),
+              route("BC", "FR", MINUS_3_DB * MINUS_3_DB)),
+          "3.1",
+          withFronts(
+              route("FC", "FL", MINUS_3_DB),
+              route("FC", "FR", MINUS_3_DB),
+              route("LFE", "FL", MINUS_3_DB),
+              route("LFE", "FR", MINUS_3_DB)),
+          "quad",
+          withFronts(route("BL", "FL", MINUS_3_DB), route("BR", "FR", MINUS_3_DB)),
+          "quad(side)",
+          withFronts(route("SL", "FL", MINUS_3_DB), route("SR", "FR", MINUS_3_DB)));
+
+  /** A source channel's sine tone at whole hertz; a negative amplitude is the opposite phase. */
+  private record Tone(int frequency, double amplitude) {
+
+    private static Tone of(int frequency) {
+      return new Tone(frequency, TONE_AMPLITUDE);
+    }
+
+    private static Tone inOppositePhase(int frequency) {
+      return new Tone(frequency, -TONE_AMPLITUDE);
+    }
+  }
+
+  /** The tone of each source channel, by the name that FFmpeg gives the channel. */
+  private enum ToneSet {
+    // The rear pair shares one tone in opposite phase, so a fold of the pair into one channel
+    // cancels it, and a swap of its sides reads negative.
+    REAR_PAIR_IN_OPPOSITE_PHASE(
+        Map.of(
+            "FL", Tone.of(400),
+            "FR", Tone.of(600),
+            "FC", Tone.of(800),
+            "LFE", Tone.of(50),
+            "BC", Tone.of(1200),
+            "BL", Tone.of(1000),
+            "BR", Tone.inOppositePhase(1000),
+            "SL", Tone.of(1000),
+            "SR", Tone.inOppositePhase(1000))),
+    OWN_TONE_IN_EACH_CHANNEL(
+        Map.of(
+            "FL", Tone.of(400),
+            "FR", Tone.of(600),
+            "FC", Tone.of(800),
+            "LFE", Tone.of(50),
+            "BC", Tone.of(1200),
+            "BL", Tone.of(1000),
+            "BR", Tone.of(1100),
+            "SL", Tone.of(1300),
+            "SR", Tone.of(1400)));
+
+    private final Map<String, Tone> tones;
+
+    ToneSet(Map<String, Tone> tones) {
+      this.tones = tones;
+    }
+  }
+
+  /** A source channel that reaches an output channel at a gain. */
+  private record Route(String from, String to, double gain) {}
+
+  /**
+   * An encode of a toned source in the layout that the job names, the layout that FFmpeg decodes
+   * the output as, and every gain at which a source channel reaches an output channel.
+   */
+  @Builder
+  record ToneEncode(
+      String sourceLayout,
+      ToneSet tones,
+      String codec,
+      String outputLayout,
+      String decodedLayout,
+      List<Route> routes) {
+    @Override
+    public String toString() {
+      return sourceLayout + " to " + codec + " " + outputLayout;
+    }
+  }
+
+  private static Route route(String from, String to, double gain) {
+    return new Route(from, to, gain);
+  }
+
+  private static List<Route> withFronts(Route... routes) {
+    return Stream.concat(
+            Stream.of(route("FL", "FL", 1.0), route("FR", "FR", 1.0)), Stream.of(routes))
+        .toList();
+  }
+
+  private static List<Route> keptRoutes(String layout) {
+    return SpeakerLayout.named(layout).speakers().stream()
+        .map(speaker -> route(speaker.name(), speaker.name(), 1.0))
+        .toList();
+  }
+
+  private static ToneEncode keptLayout(String layout, String codec) {
+    return ToneEncode.builder()
+        .sourceLayout(layout)
+        .tones(ToneSet.REAR_PAIR_IN_OPPOSITE_PHASE)
+        .codec(codec)
+        .outputLayout(layout)
+        .decodedLayout(layout)
+        .routes(keptRoutes(layout))
+        .build();
+  }
+
+  private static ToneEncode steppedToStereo(String layout, String codec) {
+    return ToneEncode.builder()
+        .sourceLayout(layout)
+        .tones(ToneSet.REAR_PAIR_IN_OPPOSITE_PHASE)
+        .codec(codec)
+        .outputLayout("stereo")
+        .decodedLayout("stereo")
+        .routes(STEREO_ROUTES.get(layout))
+        .build();
+  }
+
+  // 7.0 is FL FR FC BL BR SL SR: the back and side channel of each side mix into its surround.
+  private static ToneEncode sevenPointZeroFold(String codec, String layout) {
+    var leftSurround = surroundOf(layout, "L");
+    var rightSurround = surroundOf(layout, "R");
+    return ToneEncode.builder()
+        .sourceLayout("7.0")
+        .tones(ToneSet.OWN_TONE_IN_EACH_CHANNEL)
+        .codec(codec)
+        .outputLayout(layout)
+        .decodedLayout(layout)
+        .routes(
+            List.of(
+                route("FL", "FL", 1.0),
+                route("FR", "FR", 1.0),
+                route("FC", "FC", 1.0),
+                route("BL", leftSurround, MINUS_3_DB),
+                route("SL", leftSurround, MINUS_3_DB),
+                route("BR", rightSurround, MINUS_3_DB),
+                route("SR", rightSurround, MINUS_3_DB)))
+        .build();
+  }
+
+  // 6.1 is FL FR FC LFE BC SL SR: each side channel keeps its level in the surround of its side,
+  // and the back centre mixes into both surrounds.
+  private static ToneEncode sixPointOneTo51(String codec, String layout) {
+    var leftSurround = surroundOf(layout, "L");
+    var rightSurround = surroundOf(layout, "R");
+    return ToneEncode.builder()
+        .sourceLayout("6.1")
+        .tones(ToneSet.OWN_TONE_IN_EACH_CHANNEL)
+        .codec(codec)
+        .outputLayout(layout)
+        .decodedLayout(layout)
+        .routes(
+            List.of(
+                route("FL", "FL", 1.0),
+                route("FR", "FR", 1.0),
+                route("FC", "FC", 1.0),
+                route("LFE", "LFE", 1.0),
+                route("SL", leftSurround, 1.0),
+                route("SR", rightSurround, 1.0),
+                route("BC", leftSurround, MINUS_3_DB),
+                route("BC", rightSurround, MINUS_3_DB)))
+        .build();
+  }
+
+  // The surround of the side, L or R, that the 5-channel or 6-channel layout names: its side
+  // channel in AC-3's and E-AC-3's layouts, and its back channel in AAC's and Opus's.
+  private static String surroundOf(String layout, String side) {
+    var sideSurround = "S" + side;
+    if (SpeakerLayout.named(layout).has(Speaker.valueOf(sideSurround))) {
+      return sideSurround;
+    }
+
+    return "B" + side;
+  }
+
+  // The job encodes the toned source's audio in the named layout and copies its video; the
+  // delivered file is the job's initialization segment and its one media segment.
+  private Path deliveredToneEncode(ToneEncode encode) throws Exception {
+    var source = tonedSource(encode.sourceLayout(), encode.tones());
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    var output = SpeakerLayout.named(encode.outputLayout());
+    job.getDecisionBuilder()
+        .getAudioBuilder()
+        .setCodec(encode.codec())
+        .setChannels(output.channelCount())
+        .setBitrateBitsPerSecond(384_000)
+        .setChannelLayout(CONTRACT_LAYOUTS.get(encode.outputLayout()));
+    job.getExecutionBuilder().setMediaSegmentCount(1);
+
+    var uploads = execute(engine(realCapabilities()), seekableSources, job.build());
+
+    var delivered = root.resolve(("tones-" + encode).replaceAll("[ ()]", "_") + ".mp4");
+    Files.write(delivered, uploads.contentOf(uploadNames(1)));
+    return delivered;
+  }
+
+  // The file decodes in the expected layout, and each source tone reads in each output channel at
+  // the sum of its routes' gains within 1 dB, in the source's phase, or not at all.
+  private void assertTonesLandAtTheirGains(ToneEncode encode, Path delivered) throws Exception {
+    var output = SpeakerLayout.named(encode.decodedLayout());
+    // ffprobe's CSV ends an AC-3 or E-AC-3 stream's fields with an empty one.
+    assertThat(
+            ffprobe(
+                    List.of("-select_streams", "a:0", "-show_entries", "stream=channel_layout"),
+                    delivered)
+                .split(",")[0])
+        .as("decoded layout")
+        .isEqualTo(output.name());
+    var tones = encode.tones().tones;
+    var frequencies =
+        SpeakerLayout.named(encode.sourceLayout()).speakers().stream()
+            .map(speaker -> tones.get(speaker.name()).frequency())
+            .distinct()
+            .toList();
+    var channels = decodedChannelsFromZero(delivered, output.channelCount());
+    for (var index = 0; index < output.channelCount(); index++) {
+      var speaker = output.speakers().get(index).name();
+      for (var frequency : frequencies) {
+        var routes =
+            encode.routes().stream()
+                .filter(route -> route.to().equals(speaker))
+                .filter(route -> tones.get(route.from()).frequency() == frequency)
+                .toList();
+        var read = toneAmplitude(channels[index], frequency);
+        var description = String.format(Locale.ROOT, "%d Hz in %s", frequency, speaker);
+        if (routes.isEmpty()) {
+          assertThat(Math.abs(read)).as(description).isLessThan(ABSENT_TONE_AMPLITUDE);
+          continue;
+        }
+
+        var expected =
+            routes.stream()
+                .mapToDouble(route -> route.gain() * tones.get(route.from()).amplitude())
+                .sum();
+        assertThat(read / expected)
+            .as("%s, read %.5f against %.5f", description, read, expected)
+            .isBetween(1 / WITHIN_1_DB, WITHIN_1_DB);
+      }
+    }
+  }
+
+  // Each channel of the file's first audio stream from media time zero, decoded to 32-bit samples
+  // in FFmpeg's order. The encoder's priming samples, which the worker writes before zero, are left
+  // out, so that the decoded samples line up with the source's. Without -copyts, FFmpeg would move
+  // the file's first sample to zero.
+  private int[][] decodedChannelsFromZero(Path file, int channels) throws Exception {
+    var pcm = root.resolve(file.getFileName() + ".from-zero.s32");
+    runFfmpeg(
+        List.of(
+            "-copyts",
+            "-i",
+            file.toString(),
+            "-map",
+            "0:a:0",
+            "-af",
+            "atrim=start=0",
+            "-f",
+            "s32le"),
+        pcm);
+    var samples = ByteBuffer.wrap(Files.readAllBytes(pcm)).order(ByteOrder.LITTLE_ENDIAN);
+    var frames = samples.remaining() / Integer.BYTES / channels;
+    var decoded = new int[channels][frames];
+    for (var frame = 0; frame < frames; frame++) {
+      for (var channel = 0; channel < channels; channel++) {
+        decoded[channel][frame] = samples.getInt();
+      }
+    }
+
+    return decoded;
+  }
+
+  // The tone's amplitude in the decoded channel, signed by its phase against the source's tone of
+  // that frequency.
+  private static double toneAmplitude(int[] channel, int frequency) {
+    var from = TONE_READ_FROM_SECOND * TONE_SAMPLE_RATE;
+    var frames = TONE_READ_SECONDS * TONE_SAMPLE_RATE;
+    var sum = 0.0;
+    for (var frame = from; frame < from + frames; frame++) {
+      var time = (double) frame / TONE_SAMPLE_RATE;
+      sum += channel[frame] / FULL_SCALE * Math.sin(2 * Math.PI * frequency * time);
+    }
+
+    return 2 * sum / frames;
+  }
+
+  // The channel configuration of the file's AAC, from the ADTS header that FFmpeg writes for it
+  // (ISO/IEC 14496-3, 1.A.2.2.1): 0 means that a program config element names the channels.
+  private int aacChannelConfiguration(Path delivered) throws Exception {
+    var adts = root.resolve(delivered.getFileName() + ".aac");
+    runFfmpeg(
+        List.of("-i", delivered.toString(), "-map", "0:a:0", "-c:a", "copy", "-f", "adts"), adts);
+    var header = Files.readAllBytes(adts);
+    return ((header[2] & 0x01) << 2) | ((header[3] & 0xC0) >> 6);
+  }
+
+  // The seekable source's video, and 6 s of 24-bit FLAC in the layout, each channel holding its
+  // tone of the set.
+  private static synchronized Path tonedSource(String layout, ToneSet tones) throws Exception {
+    var name = "tones-" + layout + "-" + tones.name().toLowerCase(Locale.ROOT);
+    var source = seekableSources.resolve(name.replaceAll("[()]", "_") + ".mkv");
+    if (generatedSeekableSources.contains(source)) {
+      return source;
+    }
+
+    var expressions =
+        SpeakerLayout.named(layout).speakers().stream()
+            .map(speaker -> tones.tones.get(speaker.name()))
+            .map(
+                tone ->
+                    String.format(
+                        Locale.ROOT, "%s*sin(2*PI*%d*t)", tone.amplitude(), tone.frequency()))
+            .collect(Collectors.joining("|"));
+    runFfmpeg(
+        List.of(
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=64x36:rate=24",
+            "-f",
+            "lavfi",
+            "-i",
+            "aevalsrc=exprs="
+                + expressions
+                + ":channel_layout="
+                + layout
+                + ":sample_rate="
+                + TONE_SAMPLE_RATE,
+            "-map",
+            "0:v",
+            "-map",
+            "1:a",
+            "-t",
+            "6",
+            "-c:v",
+            "libx264",
+            "-g",
+            "48",
+            "-c:a",
+            "flac",
+            "-sample_fmt",
+            "s32"),
+        source);
+    generatedSeekableSources.add(source);
+    return source;
+  }
+
   @Test
   @DisplayName(
       "Should upload a media segment after the audio's end while FFmpeg's output continues when the"
