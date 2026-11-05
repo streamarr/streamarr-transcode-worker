@@ -317,18 +317,18 @@ public final class TranscodeWorker implements AutoCloseable {
 
   private void recheckWithdrawnEncoders() {
     if (engine.hasWithdrawnEncoders() && engine.recheckWithdrawnEncoders()) {
-      tryReport(videoEncodersChanged());
+      reportVideoEncodersChanged();
     }
   }
 
-  // Reads the encoders under the worker monitor that orders every message, so the last change sent
-  // always lists the encoders that the worker offers now.
-  private synchronized EstablishWorkerSessionRequest videoEncodersChanged() {
+  // Reads and sends the encoders under the worker monitor that orders every message, so the last
+  // change sent always lists the encoders that the worker offers now.
+  private synchronized void reportVideoEncodersChanged() {
     var changed = VideoEncodersChanged.newBuilder();
     engine.workerVerifiedEncoders().stream()
         .map(WorkerVideoEncoders::toProto)
         .forEach(changed::addVideoEncoders);
-    return EstablishWorkerSessionRequest.newBuilder().setVideoEncodersChanged(changed).build();
+    tryReport(EstablishWorkerSessionRequest.newBuilder().setVideoEncodersChanged(changed).build());
   }
 
   // Reads the capacities under the worker monitor that orders every message, so the last message
@@ -989,7 +989,7 @@ public final class TranscodeWorker implements AutoCloseable {
         encoder.encoder(),
         fault);
     if (fault == HardwareEncoderFault.FAILED && engine.withdraw(encoder)) {
-      tryReport(videoEncodersChanged());
+      reportVideoEncodersChanged();
     }
 
     reportFailure(attempt.job(), JobAttemptFailure.JOB_ATTEMPT_FAILURE_HARDWARE_ENCODER_FAILED);
