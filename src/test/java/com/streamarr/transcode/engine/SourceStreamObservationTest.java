@@ -135,6 +135,32 @@ class SourceStreamObservationTest {
                 .build());
   }
 
+  // The encode of a Dolby Vision profile 5 source's copy reads the copy's video as input 0 and the
+  // source as input 1.
+  @Test
+  @DisplayName(
+      "Should observe each copied stream's source index when the framecrc copies the streams of the"
+          + " FFmpeg's second input")
+  void shouldObserveEachCopiedStreamsSourceIndexWhenTheFramecrcCopiesTheStreamsOfTheSecondInput() {
+    readAll(
+        """
+        Stream mapping:
+          Stream #0:0 -> #0:0 (hevc (native) -> h264 (libx264))
+          Stream #1:1 -> #0:1 (aac (native) -> aac (native))
+          Stream #1:2 -> #1:0 (copy)
+          Stream #1:1 -> #1:1 (copy)
+        """
+            + HEADER
+            + """
+            0,        0,          0,       40,     1000, 0x0a1b2c3d
+            1,        0,          0,     1024,      300, 0x0a1b2c3d
+            """);
+
+    assertThat(observation.streams())
+        .extracting(ObservedSourceStream::sourceIndex)
+        .containsExactly(2, 1);
+  }
+
   @Test
   @DisplayName(
       "Should observe a record when part of a log line precedes it on the same line of the error"
