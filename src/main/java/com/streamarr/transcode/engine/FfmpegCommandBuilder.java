@@ -345,12 +345,12 @@ public class FfmpegCommandBuilder {
   }
 
   // ADR 0043 reads each track of an encoded replacement attempt from at most one segment period
-  // before its first segment. A filter cannot trim copied packets, so when the attempt's seek lies
-  // further back, the copied audio comes from an input of its own, seeked to that point. FFmpeg
-  // seeks an input before it knows which streams are mapped, so the demuxer seeks on the video and
-  // can land on an earlier keyframe; the copy drops the packets before the seek's target. -isync
-  // puts the input on the source input's timeline, because -start_at_zero shifts an MPEG-TS input
-  // by the earliest start of the streams it maps.
+  // before its first segment. When the attempt's seek lies further back, the copied audio comes
+  // from an input of its own, seeked to that point, as the encode of a profile 5 copy reads its
+  // audio from an input of its own. FFmpeg seeks an input before it knows which streams are
+  // mapped, so the demuxer seeks on the video and can land on an earlier keyframe; the copy drops
+  // the packets before that point. -isync puts the input on the source input's timeline, because
+  // -start_at_zero shifts an MPEG-TS input by the earliest start of the streams it maps.
   private static void addCopiedAudioInput(
       List<String> cmd, TranscodeRequest request, EncoderInput input) {
     copiedAudioSeek(request)
@@ -374,26 +374,25 @@ public class FfmpegCommandBuilder {
     return input.sourceInputIndex();
   }
 
-  // One segment period before the first segment's start, when the attempt's copied audio starts
-  // within a period of that start and its seek lies before that point. Empty otherwise.
+  // Where the copied audio's own input seeks: its copy's start, when the attempt's seek lies
+  // before it. Empty otherwise.
   private static Optional<Duration> copiedAudioSeek(TranscodeRequest request) {
-    if (!copiesAudioWithinOnePeriod(request)) {
+    return copiedAudioStart(request)
+        .filter(start -> start.compareTo(inputSeekPosition(request)) > 0);
+  }
+
+  // An attempt that encodes video from a later segment starts its copied audio one segment period
+  // before that segment. One that holds the last frame encodes its video from its seek instead,
+  // and the mp4 muxer holds every picture until the audio has a packet, so its audio starts at that
+  // seek too. Empty for any other attempt.
+  private static Optional<Duration> copiedAudioStart(TranscodeRequest request) {
+    if (request.transcodeDecision().audioDecision().mode() != AudioMode.COPY
+        || holdsLastFrame(request)) {
       return Optional.empty();
     }
 
     return firstSegmentStartOfAnEncode(request)
-        .map(start -> start.minus(Duration.ofSeconds(request.targetSegmentDuration())))
-        .filter(seek -> seek.compareTo(inputSeekPosition(request)) > 0);
-  }
-
-  // An attempt that encodes video from a later segment starts its copied audio at most one period
-  // before that segment. One that holds the last frame encodes its video from its seek instead,
-  // and the mp4 muxer holds every picture until the audio has a packet, so its audio starts at that
-  // seek too.
-  private static boolean copiesAudioWithinOnePeriod(TranscodeRequest request) {
-    return request.transcodeDecision().audioDecision().mode() == AudioMode.COPY
-        && firstSegmentStartOfAnEncode(request).isPresent()
-        && !holdsLastFrame(request);
+        .map(start -> start.minus(Duration.ofSeconds(request.targetSegmentDuration())));
   }
 
   private void addSourceInput(List<String> cmd, TranscodeRequest request) {
@@ -669,7 +668,7 @@ public class FfmpegCommandBuilder {
     }
 
     if (audio.mode() == AudioMode.COPY) {
-      cmd.addAll(copiedAudioArgs(audio.codec(), copiesAudioWithinOnePeriod(request)));
+      cmd.addAll(copiedAudioArgs(audio.codec(), copiedAudioStart(request)));
       return;
     }
 
@@ -860,16 +859,23 @@ public class FfmpegCommandBuilder {
   // FFmpeg expressions of the sample rate SR.
   private record AudioFrames(String samples, String lead) {}
 
-  private static List<String> copiedAudioArgs(String codec, boolean startsAtTheSeeksTarget) {
+  private static List<String> copiedAudioArgs(String codec, Optional<Duration> start) {
     var args = new ArrayList<>(List.of("-c:a", "copy"));
-    if (startsAtTheSeeksTarget) {
-      args.addAll(List.of("-copypriorss:a", "0"));
-    }
-
+    var filters = new ArrayList<String>();
+    // The noise filter drops each packet whose expression is not zero. It sees the packets on the
+    // attempt's timeline, after -start_at_zero, where -copypriorss would compare them with the seek
+    // less the source's start time. It runs first, so that the AAC filter takes its configuration
+    // from the first packet kept.
+    start.ifPresent(
+        position -> filters.add("noise=drop='lt(pts*tb," + seekArgument(position) + ")'"));
     // delay_moov stops the mp4 muxer from inserting this filter itself, and a copy of the ADTS
     // AAC that MPEG-TS sources carry fails without it. Raw AAC passes through unchanged.
     if ("aac".equals(codec)) {
-      args.addAll(List.of("-bsf:a", "aac_adtstoasc"));
+      filters.add("aac_adtstoasc");
+    }
+
+    if (!filters.isEmpty()) {
+      args.addAll(List.of("-bsf:a", String.join(",", filters)));
     }
 
     // The mp4 muxer writes a copied stream's bitrate into the initialization segment's esds and

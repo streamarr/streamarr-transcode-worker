@@ -1517,18 +1517,23 @@ class FfmpegCommandBuilderTest {
 
   @Test
   @DisplayName(
-      "Should copy the audio untrimmed when an encoded replacement attempt copies the source's"
-          + " audio")
-  void shouldCopyTheAudioUntrimmedWhenAnEncodedReplacementAttemptCopiesTheSourcesAudio() {
+      "Should copy the audio without an audio filter when an encoded replacement attempt copies the"
+          + " source's audio")
+  void
+      shouldCopyTheAudioWithoutAnAudioFilterWhenAnEncodedReplacementAttemptCopiesTheSourcesAudio() {
     var cmd =
         command(request(TranscodeMode.VIDEO_TRANSCODE).startSequenceNumber(5).build(), "libx264");
 
     assertThat(cmd).doesNotContain("-af").containsSequence("-c:a", "copy");
   }
 
+  // The bitstream filters of an AAC copy that starts one 6 s period before segment 10 at 60 s: the
+  // noise filter drops each packet that starts before 54 s.
+  private static final String AAC_COPY_FROM_54_SECONDS = "noise=drop='lt(pts*tb,54)',aac_adtstoasc";
+
   // ADR 0043 reads each track of an encoded replacement attempt from one segment period before its
-  // first segment. A filter cannot trim copied packets, so the copied audio comes from a second
-  // input of the source whose seek targets that point, and the copy drops the packets before it.
+  // first segment. When the keyframe lies further back, the copied audio comes from a second input
+  // of the source whose seek targets that point, and the copy drops the packets before it.
   @Test
   @DisplayName(
       "Should copy the audio from a second input of the source seeked one segment period before the"
@@ -1557,7 +1562,7 @@ class FfmpegCommandBuilderTest {
             "0:0",
             "-map",
             "1:a:0")
-        .containsSequence("-c:a", "copy", "-copypriorss:a", "0");
+        .containsSequence("-c:a", "copy", "-bsf:a", AAC_COPY_FROM_54_SECONDS, "-b:a", "0");
   }
 
   // The demuxer can still land on a keyframe before the seek's target, as without the server's
@@ -1580,7 +1585,7 @@ class FfmpegCommandBuilderTest {
     assertThat(cmd.stream().filter("-i"::equals)).hasSize(1);
     assertThat(cmd)
         .containsSequence("-map", "0:a:0")
-        .containsSequence("-c:a", "copy", "-copypriorss:a", "0")
+        .containsSequence("-c:a", "copy", "-bsf:a", AAC_COPY_FROM_54_SECONDS, "-b:a", "0")
         .doesNotContain("-isync");
   }
 
@@ -1612,7 +1617,10 @@ class FfmpegCommandBuilderTest {
             "libx264");
 
     assertThat(cmd.stream().filter("-i"::equals)).hasSize(1);
-    assertThat(cmd).containsSequence("-map", "0:a:0").doesNotContain("-isync", "-copypriorss:a");
+    assertThat(cmd)
+        .containsSequence("-map", "0:a:0")
+        .containsSequence("-c:a", "copy", "-bsf:a", "aac_adtstoasc", "-b:a", "0")
+        .doesNotContain("-isync");
   }
 
   @Test
@@ -1673,7 +1681,7 @@ class FfmpegCommandBuilderTest {
             "0:v:0",
             "-map",
             "2:a:0")
-        .containsSequence("-c:a", "copy", "-copypriorss:a", "0");
+        .containsSequence("-c:a", "copy", "-bsf:a", AAC_COPY_FROM_54_SECONDS, "-b:a", "0");
   }
 
   @Test
@@ -2782,10 +2790,8 @@ class FfmpegCommandBuilderTest {
         .containsSequence(
             "-c:a",
             "copy",
-            "-copypriorss:a",
-            "0",
             "-bsf:a",
-            "aac_adtstoasc",
+            "noise=drop='lt(pts*tb,12)',aac_adtstoasc",
             "-b:a",
             "0",
             "-r:v:0");
