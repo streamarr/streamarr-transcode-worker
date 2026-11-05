@@ -76,6 +76,33 @@ class SourceStreamObservationTest {
                 .build());
   }
 
+  // An MP4 edit list that ends the video before its last samples makes the demuxer flag those
+  // samples' packets for discarding (AV_PKT_FLAG_DISCARD, 0x4): no decoder presents them.
+  @Test
+  @DisplayName(
+      "Should leave packets flagged for discarding out of a stream's last start, end and last"
+          + " keyframe when the framecrc copies packets that an edit list cuts away")
+  void shouldLeaveDiscardedPacketsOutWhenTheFramecrcCopiesPacketsThatAnEditListCutsAway() {
+    readAll(
+        MAPPING
+            + HEADER
+            + """
+            0,        0,          0,       40,     1000, 0x0a1b2c3d
+            0,       40,         40,       40,      300, 0x0a1b2c3d, F=0x0
+            0,       80,         80,       40,      300, 0x0a1b2c3d, F=0x4
+            0,      120,        120,       40,      900, 0x0a1b2c3d, F=0x5
+            """);
+
+    assertThat(observation.streams())
+        .containsExactly(
+            ObservedSourceStream.builder()
+                .sourceIndex(2)
+                .lastStart(Duration.ofMillis(40))
+                .end(Duration.ofMillis(80))
+                .lastKeyframeStart(Optional.of(Duration.ZERO))
+                .build());
+  }
+
   // A metadata tag's name can hold line breaks, which FFmpeg prints unchanged, so the input's
   // metadata can print the stream mapping's header before the real one.
   @Test

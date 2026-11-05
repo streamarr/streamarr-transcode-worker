@@ -4483,6 +4483,76 @@ class WorkerMediaSmokeTest {
                 .toList());
   }
 
+  // The source's video edit ends at 5.9 s, inside segment 0, while its video samples and its audio
+  // run to 10 s. The demuxer flags the video packets after the edit for discarding, so no picture
+  // reaches segment 1, and the attempt from segment 1 delivers nothing.
+  @Test
+  @DisplayName(
+      "Should complete reporting that the source ended in the segment where the video's edit ends,"
+          + " with audio after it, when an attempt after that edit reads packets that it cuts away")
+  void shouldCompleteReportingTheSourceEndedWhereTheVideosEditEndsWhenAnAttemptReadsPacketsAfterIt()
+      throws Exception {
+    var source = videoEditEndingBeforeItsSamplesSource();
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    job.getExecutionBuilder().setMediaSegmentCount(2).setStartSequenceNumber(1);
+
+    var completion =
+        executeToCompletion(engine(softwareCapabilities()), source.getParent(), job.build());
+
+    assertThat(completion.report().getSourceEndedEarly())
+        .isEqualTo(
+            SourceEndedEarly.newBuilder()
+                .setLastSegmentWithSourceMedia(0)
+                .addStreamIndexesWithMediaAfterLastSegment(1)
+                .build());
+  }
+
+  // 10 s of H.264 at 64x36 and 24 fps with a keyframe every 2 s, and a 10 s tone, in MP4 whose
+  // video edit ends at 5.9 s.
+  private static synchronized Path videoEditEndingBeforeItsSamplesSource() throws Exception {
+    var source = seekableSources.resolve("video-edit-ending-before-its-samples.mp4");
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24:duration=10",
+              "-f",
+              "lavfi",
+              "-i",
+              "sine=frequency=440:sample_rate=48000:duration=10",
+              "-c:v",
+              "libx264",
+              "-g",
+              "48",
+              "-c:a",
+              "aac"),
+          source);
+      endTheFirstTracksEditAt5900Milliseconds(source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
+  }
+
+  // Shortens the first edit of the first track, a version 0 elst entry, to 5,900 ticks of FFmpeg's
+  // 1 ms movie timescale.
+  private static void endTheFirstTracksEditAt5900Milliseconds(Path mp4) throws IOException {
+    var bytes = Files.readAllBytes(mp4);
+    var position = 0;
+    var end = bytes.length;
+    for (var type : List.of("moov", "trak", "edts", "elst")) {
+      position = childOf(bytes, position, end, type);
+      end = position + ByteBuffer.wrap(bytes, position, 4).getInt();
+      position += 8;
+    }
+
+    assertThat(bytes[position]).as("the elst version").isZero();
+    ByteBuffer.wrap(bytes).putInt(position + 8, 5_900);
+    Files.write(mp4, bytes);
+  }
+
   // The source's one picture starts at 0 s and lasts 20 s. The encode repeats it at 24 fps up to
   // 20 s, so segment 3, from 18 s to 24 s, holds the video's end, whether the attempt starts at 0
   // and delivers it or starts after the end and delivers nothing.

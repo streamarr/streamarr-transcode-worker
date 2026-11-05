@@ -35,6 +35,9 @@ final class SourceStreamObservation {
   private static final Pattern MAPPING =
       Pattern.compile("Stream #0:(\\d{1,9}) -> #(\\d{1,9}):(\\d{1,9})\\b");
   private static final int KEYFRAME = 0x1;
+  // AV_PKT_FLAG_DISCARD: the demuxer marks a packet that no decoder presents, as an MP4 edit list
+  // cuts it away.
+  private static final int DISCARD = 0x4;
   private static final long NANOS_PER_SECOND = 1_000_000_000L;
   private static final int SOURCE_STREAMS_OUTPUT = 1;
   private static final String MAPPING_HEADER = "Stream mapping:";
@@ -118,9 +121,18 @@ final class SourceStreamObservation {
   }
 
   // A packet without a presentation time, as a raw H.264 or HEVC stream's, counts at its decode
-  // time, which lies at most the reordering delay before it.
+  // time, which lies at most the reordering delay before it. A packet flagged for discarding is
+  // no source sample.
   private void readRecord(Matcher recordMatch) {
     try {
+      var flags =
+          Optional.ofNullable(recordMatch.group(5))
+              .map(value -> Integer.parseUnsignedInt(value, 16))
+              .orElse(KEYFRAME);
+      if ((flags & DISCARD) != 0) {
+        return;
+      }
+
       var stream = Integer.parseInt(recordMatch.group(1));
       var start = Long.parseLong(recordMatch.group(3));
       if (start == NO_TIME) {
@@ -132,11 +144,7 @@ final class SourceStreamObservation {
       }
 
       var end = Math.addExact(start, Long.parseLong(recordMatch.group(4)));
-      var keyframe =
-          Optional.ofNullable(recordMatch.group(5))
-              .map(flags -> (Integer.parseUnsignedInt(flags, 16) & KEYFRAME) != 0)
-              .orElse(true);
-      packets.merge(stream, Packets.of(start, end, keyframe), Packets::andThen);
+      packets.merge(stream, Packets.of(start, end, (flags & KEYFRAME) != 0), Packets::andThen);
     } catch (ArithmeticException | NumberFormatException _) {
       // A packet whose times do not fit 64 bits names no position on the attempt's timeline.
     }
