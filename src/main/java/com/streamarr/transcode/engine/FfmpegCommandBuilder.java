@@ -320,7 +320,8 @@ public class FfmpegCommandBuilder {
     cmd.addAll(List.of(ffmpegPath, "-y"));
     if (input == EncoderInput.SOURCE) {
       addSourceInput(cmd, request);
-      addStreamSelection(cmd, decision);
+      addCopiedAudioInput(cmd, request, input);
+      addStreamSelection(cmd, decision, audioInputIndex(request, input));
       return;
     }
 
@@ -338,8 +339,51 @@ public class FfmpegCommandBuilder {
             "-i",
             "pipe:0"));
     addSourceInput(cmd, request);
+    addCopiedAudioInput(cmd, request, input);
     cmd.addAll(List.of("-map", "0:v:0"));
-    addAudioStreamSelection(cmd, decision.audioDecision(), source);
+    addAudioStreamSelection(cmd, decision.audioDecision(), audioInputIndex(request, input));
+  }
+
+  // ADR 0043 reads each track of an encoded replacement attempt from at most one segment period
+  // before its first segment. A filter cannot trim copied packets, so when the server's keyframe
+  // lies further back, the copied audio comes from an input of its own, seeked to that point.
+  // FFmpeg seeks an input before it knows which streams are mapped, so the demuxer seeks on the
+  // video and can land on that same keyframe; the copy then drops the packets before the seek's
+  // target (-copypriorss 0). -isync puts the input on the source input's timeline, because
+  // -start_at_zero shifts an MPEG-TS input by the earliest start of the streams it maps.
+  private static void addCopiedAudioInput(
+      List<String> cmd, TranscodeRequest request, EncoderInput input) {
+    copiedAudioSeek(request)
+        .ifPresent(
+            seek ->
+                cmd.addAll(
+                    List.of(
+                        "-isync",
+                        String.valueOf(input.sourceInputIndex()),
+                        "-ss",
+                        seekArgument(seek),
+                        "-i",
+                        request.sourcePath().toString())));
+  }
+
+  private static int audioInputIndex(TranscodeRequest request, EncoderInput input) {
+    if (copiedAudioSeek(request).isPresent()) {
+      return input.sourceInputIndex() + 1;
+    }
+
+    return input.sourceInputIndex();
+  }
+
+  // One segment period before the first segment's start, when an attempt that encodes video from
+  // a later segment copies the audio and its seek lies before that. Empty otherwise.
+  private static Optional<Duration> copiedAudioSeek(TranscodeRequest request) {
+    if (request.transcodeDecision().audioDecision().mode() != AudioMode.COPY) {
+      return Optional.empty();
+    }
+
+    return firstSegmentStartOfAnEncode(request)
+        .map(start -> start.minus(Duration.ofSeconds(request.targetSegmentDuration())))
+        .filter(seek -> seek.compareTo(inputSeekPosition(request)) > 0);
   }
 
   private void addSourceInput(List<String> cmd, TranscodeRequest request) {
@@ -440,10 +484,10 @@ public class FfmpegCommandBuilder {
     return request.transcodeDecision().transcodeMode().encodesVideo();
   }
 
-  private void addStreamSelection(List<String> cmd, TranscodeDecision decision) {
+  private void addStreamSelection(List<String> cmd, TranscodeDecision decision, int audioInput) {
     cmd.addAll(List.of("-map", "0:" + decision.videoDecision().streamIndex()));
     var audio = decision.audioDecision();
-    addAudioStreamSelection(cmd, audio, 0);
+    addAudioStreamSelection(cmd, audio, audioInput);
     if (decision.subtitleDecision().mode() == SubtitleMode.EXCLUDE && !namesAudioStream(audio)) {
       cmd.addAll(List.of("-map", "-0:s"));
     }
@@ -615,7 +659,7 @@ public class FfmpegCommandBuilder {
     }
 
     if (audio.mode() == AudioMode.COPY) {
-      cmd.addAll(copiedAudioArgs(audio.codec()));
+      cmd.addAll(copiedAudioArgs(audio.codec(), copiedAudioSeek(request).isPresent()));
       return;
     }
 
@@ -804,8 +848,12 @@ public class FfmpegCommandBuilder {
   // FFmpeg expressions of the sample rate SR.
   private record AudioFrames(String samples, String lead) {}
 
-  private static List<String> copiedAudioArgs(String codec) {
+  private static List<String> copiedAudioArgs(String codec, boolean dropsPacketsBeforeTheSeek) {
     var args = new ArrayList<>(List.of("-c:a", "copy"));
+    if (dropsPacketsBeforeTheSeek) {
+      args.addAll(List.of("-copypriorss:a", "0"));
+    }
+
     // delay_moov stops the mp4 muxer from inserting this filter itself, and a copy of the ADTS
     // AAC that MPEG-TS sources carry fails without it. Raw AAC passes through unchanged.
     if ("aac".equals(codec)) {

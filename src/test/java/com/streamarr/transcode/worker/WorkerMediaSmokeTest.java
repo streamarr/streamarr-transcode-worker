@@ -5649,16 +5649,19 @@ class WorkerMediaSmokeTest {
 
   // White noise in eight 24-bit channels at 96 kHz leaves FLAC nothing to compress, about 2.3 MB of
   // audio a second. The source's only keyframe lies 96 s before the replacement's first segment,
-  // so audio decoded from a second after that keyframe would fill the first fragment far past the
-  // producer's 128 MiB cap before the first picture.
-  @Test
+  // so audio encoded from a second after that keyframe, or copied from it, would fill the first
+  // fragment far past the producer's 128 MiB cap before the first picture.
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"TRANSCODE_MODE_FULL_TRANSCODE", "TRANSCODE_MODE_VIDEO_TRANSCODE"})
   @DisplayName(
-      "Should complete an encoded replacement attempt of high-bitrate lossless audio when the"
-          + " server's keyframe lies far before its first segment")
-  void shouldCompleteAReplacementOfHighBitrateLosslessAudioWhenTheKeyframeLiesFarBeforeIt()
-      throws Exception {
+      "Should complete an encoded replacement attempt of high-bitrate lossless audio, encoded or"
+          + " copied, when the server's keyframe lies far before its first segment")
+  void shouldCompleteAReplacementOfHighBitrateLosslessAudioWhenTheKeyframeLiesFarBeforeIt(
+      TranscodeMode mode) throws Exception {
     var source = oneKeyframeEightChannelNoiseSource();
-    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_FULL_TRANSCODE);
+    var job = seekableSourceJob(source, mode);
     job.getDecisionBuilder()
         .getAudioBuilder()
         .setCodec("flac")
@@ -5671,6 +5674,76 @@ class WorkerMediaSmokeTest {
         executeToCompletion(engine(softwareCapabilities()), source.getParent(), job.build());
 
     assertThat(completion.uploads().names()).contains(segmentName(16));
+  }
+
+  // The replacement copies its audio from a second input of the source, seeked one period before
+  // its first segment, while it decodes the video from the server's keyframe at zero. Its copied
+  // packets in segment 4 match the start attempt's, which reads both streams from one input, only
+  // when both inputs lie on that attempt's timeline. The MPEG-TS sources start at 1.4 s, and their
+  // audio starts 0.5 s after their video.
+  @ParameterizedTest(name = "{0} with {1}")
+  @CsvSource({"mp4, aac", "mkv, flac", "ts, aac", "ts, ac3"})
+  @DisplayName(
+      "Should copy the start attempt's audio packets at its times when an encoded replacement copies"
+          + " the audio from a second input because the server's keyframe lies far back")
+  void shouldCopyTheStartAttemptsAudioPacketsWhenAReplacementCopiesTheAudioFromASecondInput(
+      String container, String codec) throws Exception {
+    var source = oneKeyframeDelayedAudioSource(container, codec);
+    var startAttempt =
+        execute(engine(softwareCapabilities()), source.getParent(), copiedAudioJob(source, codec));
+    var replacementJob = copiedAudioJob(source, codec).toBuilder();
+    replacementJob.getExecutionBuilder().setStartSequenceNumber(4);
+    setSeekPosition(replacementJob.getExecutionBuilder(), BigDecimal.ZERO);
+
+    var replacement =
+        execute(engine(softwareCapabilities()), source.getParent(), replacementJob.build());
+
+    var replaced = Mp4Samples.read(replacement.contentOf(List.of("init.mp4", segmentName(4))));
+    var started = Mp4Samples.read(startAttempt.contentOf(List.of("init.mp4", segmentName(4))));
+    assertThat(replaced.samplesOf(replaced.audioTrack()))
+        .as("the replacement's copied audio packets in segment 4")
+        .isNotEmpty()
+        .isEqualTo(started.samplesOf(started.audioTrack()));
+  }
+
+  // A job that encodes the source's video and copies its audio over five 6 s segments.
+  private static VariantJob copiedAudioJob(Path source, String codec) {
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE);
+    job.getDecisionBuilder().getAudioBuilder().setCodec(codec).setBitrateBitsPerSecond(0);
+    job.getExecutionBuilder().setMediaSegmentCount(5);
+    return job.build();
+  }
+
+  // 30 s of H.264 whose only keyframe is its first picture, and stereo pink noise in the codec from
+  // 0.5 s on.
+  private static synchronized Path oneKeyframeDelayedAudioSource(String container, String codec)
+      throws Exception {
+    var source = seekableSources.resolve("one-keyframe-delayed-" + codec + "." + container);
+    if (!generatedSeekableSources.contains(source)) {
+      runFfmpeg(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "testsrc=size=64x36:rate=24:duration=30",
+              "-itsoffset",
+              "0.5",
+              "-f",
+              "lavfi",
+              "-i",
+              "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5:duration=29.5,"
+                  + "aformat=channel_layouts=stereo",
+              "-c:v",
+              "libx264",
+              "-x264-params",
+              "keyint=infinite:scenecut=0",
+              "-c:a",
+              codec),
+          source);
+      generatedSeekableSources.add(source);
+    }
+
+    return source;
   }
 
   // 102 s of H.264 whose only keyframe is its first picture, and independent white noise in eight

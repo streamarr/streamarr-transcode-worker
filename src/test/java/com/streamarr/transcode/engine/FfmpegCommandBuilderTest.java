@@ -1526,6 +1526,172 @@ class FfmpegCommandBuilderTest {
     assertThat(cmd).doesNotContain("-af").containsSequence("-c:a", "copy");
   }
 
+  // ADR 0043 reads each track of an encoded replacement attempt from one segment period before its
+  // first segment. A filter cannot trim copied packets, so the copied audio comes from a second
+  // input of the source whose seek targets that point, and the copy drops the packets before it.
+  @Test
+  @DisplayName(
+      "Should copy the audio from a second input of the source seeked one segment period before the"
+          + " first segment's start when the server's keyframe position lies further back")
+  void
+      shouldCopyTheAudioFromASecondInputSeekedOnePeriodBackWhenTheServersKeyframeLiesFurtherBack() {
+    var cmd =
+        command(
+            request(TranscodeMode.VIDEO_TRANSCODE)
+                .startSequenceNumber(10)
+                .seekPosition(Optional.of(Duration.ZERO))
+                .build(),
+            "libx264");
+
+    assertThat(cmd)
+        .containsSequence(
+            "-i",
+            "/media/movie.mkv",
+            "-isync",
+            "0",
+            "-ss",
+            "54",
+            "-i",
+            "/media/movie.mkv",
+            "-map",
+            "0:0",
+            "-map",
+            "1:a:0")
+        .containsSequence("-c:a", "copy", "-copypriorss:a", "0");
+  }
+
+  @ParameterizedTest(name = "keyframe at {0} s")
+  @ValueSource(ints = {54, 57})
+  @DisplayName(
+      "Should copy the audio from the source's only input when the server's keyframe position lies"
+          + " at most one segment period before the first segment's start")
+  void shouldCopyTheAudioFromTheSourcesOnlyInputWhenTheServersKeyframeLiesWithinOnePeriod(
+      int keyframeSeconds) {
+    var cmd =
+        command(
+            request(TranscodeMode.VIDEO_TRANSCODE)
+                .startSequenceNumber(10)
+                .seekPosition(Optional.of(Duration.ofSeconds(keyframeSeconds)))
+                .build(),
+            "libx264");
+
+    assertThat(cmd.stream().filter("-i"::equals)).hasSize(1);
+    assertThat(cmd).containsSequence("-map", "0:a:0").doesNotContain("-isync", "-copypriorss:a");
+  }
+
+  // The encode of a profile 5 copy already reads the source as its second input, from the server's
+  // keyframe position, so the copied audio comes from a third input, synchronized as the copy is.
+  @Test
+  @DisplayName(
+      "Should copy the audio from a third input of the source seeked one segment period before the"
+          + " first segment's start when a profile 5 replacement's keyframe position lies further"
+          + " back")
+  void shouldCopyTheAudioFromAThirdInputWhenAProfile5ReplacementsKeyframeLiesFurtherBack() {
+    var request =
+        request(
+                decision(TranscodeMode.VIDEO_TRANSCODE)
+                    .videoDecision(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE).build())
+                    .build())
+            .startSequenceNumber(10)
+            .seekPosition(Optional.of(Duration.ofSeconds(30)))
+            .build();
+
+    var pipe = rpuMovingPipe(builder.buildPipeline(job(request, "libx264")));
+
+    assertThat(pipe.encodeCommand())
+        .containsSequence(
+            "-ss",
+            "30",
+            "-noaccurate_seek",
+            "-i",
+            "/media/movie.mkv",
+            "-isync",
+            "1",
+            "-ss",
+            "54",
+            "-i",
+            "/media/movie.mkv",
+            "-map",
+            "0:v:0",
+            "-map",
+            "2:a:0")
+        .containsSequence("-c:a", "copy", "-copypriorss:a", "0");
+  }
+
+  @Test
+  @DisplayName(
+      "Should copy the audio stream that the job names from the second input of the source, and"
+          + " drop a named stream of another type from there, when the server's keyframe position"
+          + " lies more than one segment period back")
+  void
+      shouldCopyTheAudioStreamThatTheJobNamesFromTheSecondInputWhenTheServersKeyframeLiesFurtherBack() {
+    var decision =
+        decision(TranscodeMode.VIDEO_TRANSCODE)
+            .audioDecision(copiedAudioBuilder("aac").streamIndex(OptionalInt.of(3)).build())
+            .build();
+
+    var cmd =
+        command(
+            request(decision)
+                .startSequenceNumber(10)
+                .seekPosition(Optional.of(Duration.ZERO))
+                .build(),
+            "libx264");
+
+    assertThat(cmd.subList(0, cmd.indexOf("pipe:1")))
+        .containsSequence(
+            "-map",
+            "0:0",
+            "-map",
+            "1:3?",
+            "-map",
+            "-1:s",
+            "-map",
+            "-1:d",
+            "-map",
+            "-1:t",
+            "-map",
+            "-1:disp:attached_pic")
+        .doesNotContain("1:a:0", "-0:s");
+  }
+
+  @Test
+  @DisplayName(
+      "Should copy the audio stream that the job names from the third input of the source, and drop"
+          + " a named stream of another type from there, when a profile 5 replacement's keyframe"
+          + " position lies more than one segment period back")
+  void
+      shouldCopyTheAudioStreamThatTheJobNamesFromTheThirdInputWhenAProfile5ReplacementsKeyframeLiesFurtherBack() {
+    var request =
+        request(
+                decision(TranscodeMode.VIDEO_TRANSCODE)
+                    .videoDecision(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE).build())
+                    .audioDecision(copiedAudioBuilder("ac3").streamIndex(OptionalInt.of(3)).build())
+                    .build())
+            .startSequenceNumber(10)
+            .seekPosition(Optional.of(Duration.ofSeconds(30)))
+            .build();
+
+    var pipe = rpuMovingPipe(builder.buildPipeline(job(request, "libx264")));
+
+    var encode = pipe.encodeCommand();
+    assertThat(encode.subList(0, encode.indexOf("pipe:1")))
+        .containsSequence(
+            "-map",
+            "0:v:0",
+            "-map",
+            "2:3?",
+            "-map",
+            "-2:s",
+            "-map",
+            "-2:d",
+            "-map",
+            "-2:t",
+            "-map",
+            "-2:disp:attached_pic")
+        .doesNotContain("2:a:0", "1:3?");
+  }
+
   @ParameterizedTest
   @EnumSource(
       value = TranscodeMode.class,
