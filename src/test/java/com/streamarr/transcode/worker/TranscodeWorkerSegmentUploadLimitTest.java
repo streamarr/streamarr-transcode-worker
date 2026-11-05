@@ -19,7 +19,9 @@ import build.buf.gen.streamarr.transcode.v1.JobAttemptFailure;
 import build.buf.gen.streamarr.transcode.v1.SegmentUploadMetadata;
 import build.buf.gen.streamarr.transcode.v1.Uuid;
 import build.buf.gen.streamarr.transcode.v1.VariantJob;
+import com.streamarr.transcode.engine.MonotonicClock;
 import com.streamarr.transcode.fakes.ScriptedProcessLauncher;
+import com.streamarr.transcode.fixtures.SteppedClock;
 import com.streamarr.transcode.worker.support.ScriptedWorkerRuntime;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -339,6 +341,45 @@ class TranscodeWorkerSegmentUploadLimitTest {
 
   @Test
   @DisplayName(
+      "Should open the refused segment's upload again without waiting out the delay between its"
+          + " uploads when another of the worker's uploads ends")
+  void shouldOpenTheRefusedSegmentsUploadAgainWithoutWaitingOutItsDelayWhenAnotherUploadEnds()
+      throws Exception {
+    var runtime = ScriptedWorkerRuntime.withSegmentUploadLimit(2);
+    var holding = variantJobBuilder().build();
+    var refused = variantJobBuilder().build();
+    // The clock stands still, so the delay after the refusal never passes, and only the end of
+    // the holding upload can open the refused segment's upload again.
+    var clock = new SteppedClock();
+
+    try (var worker =
+        worker(
+            WorkerSetup.builder()
+                .runtime(runtime)
+                .launcher(writingTheRecording())
+                .clock(clock)
+                .build())) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.withholdAcknowledgements();
+      startVariant(connection, holding);
+      promptly().until(() -> connection.uploadsAwaitingAcknowledgement() == 1);
+      startVariant(connection, refused);
+      promptly().until(() -> connection.uploadsAwaitingAcknowledgement() == 2);
+      firstUploadOf(connection, refused).refuseAtTheWorkersLimit();
+      promptly().until(() -> worker.queuedSegmentUploads() == 1);
+      assertThat(uploadsOf(connection, refused)).hasSize(1);
+
+      connection.acknowledgeAwaitingUploads();
+
+      promptly().until(() -> uploadsOf(connection, refused).size() == 2);
+      assertThat(uploadsOf(connection, refused).getLast().wasRefused()).isFalse();
+      assertThat(firstUploadOf(connection, holding).wasRefused()).isFalse();
+    }
+  }
+
+  @Test
+  @DisplayName(
       "Should upload a refused segment once the server accepts it when the other refused upload is"
           + " stopped")
   void shouldUploadARefusedSegmentOnceTheServerAcceptsItWhenTheOtherRefusedUploadIsStopped()
@@ -546,7 +587,8 @@ class TranscodeWorkerSegmentUploadLimitTest {
   private record WorkerSetup(
       ScriptedWorkerRuntime runtime,
       ScriptedProcessLauncher launcher,
-      TranscodeWorkerConfiguration configuration) {}
+      TranscodeWorkerConfiguration configuration,
+      MonotonicClock clock) {}
 
   private TranscodeWorker worker(WorkerSetup setup) {
     var configuration = setup.configuration();
@@ -554,11 +596,17 @@ class TranscodeWorkerSegmentUploadLimitTest {
       configuration = configurationBuilder().build();
     }
 
+    var clock = setup.clock();
+    if (clock == null) {
+      clock = MonotonicClock.system();
+    }
+
     return workerBuilder(tempDir)
         .runtime(setup.runtime())
         .engine(engine(setup.launcher()))
         .configuration(configuration)
         .maximumHeapBytes(TWELVE_COPY_HEAP_BYTES)
+        .clock(clock)
         .build();
   }
 
@@ -604,10 +652,15 @@ class TranscodeWorkerSegmentUploadLimitTest {
 
   private static ScriptedWorkerRuntime.UploadCall firstUploadOf(
       ScriptedWorkerRuntime.Connection connection, VariantJob job) {
+    return uploadsOf(connection, job).getFirst();
+  }
+
+  // The job's uploads, in the order the worker opened them.
+  private static List<ScriptedWorkerRuntime.UploadCall> uploadsOf(
+      ScriptedWorkerRuntime.Connection connection, VariantJob job) {
     return connection.uploads().stream()
         .filter(upload -> upload.metadata().getJobAttemptId().equals(job.getJobAttemptId()))
-        .findFirst()
-        .orElseThrow();
+        .toList();
   }
 
   // The names of the job's segments that the server accepted, in the order the worker opened them.
