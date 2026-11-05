@@ -396,7 +396,7 @@ class FfmpegCommandBuilderTest {
 
     var cmd = command(request(encoding(encode)).height(720).build(), encoder);
 
-    assertThat(cmd).noneMatch(FfmpegCommandBuilderTest::movesFramesToTheGpu);
+    assertThat(cmd).isNotEmpty().noneMatch(FfmpegCommandBuilderTest::movesFramesToTheGpu);
     assertThat(videoFilter(cmd))
         .isEqualTo("scale=-2:720" + BT709_LIMITED_SCALE_OPTIONS + ",format=yuv420p");
   }
@@ -415,7 +415,7 @@ class FfmpegCommandBuilderTest {
 
     var cmd = command(request(encoding(encode)).height(720).build(), encoder);
 
-    assertThat(cmd).noneMatch(FfmpegCommandBuilderTest::movesFramesToTheGpu);
+    assertThat(cmd).isNotEmpty().noneMatch(FfmpegCommandBuilderTest::movesFramesToTheGpu);
     assertThat(videoFilter(cmd))
         .isEqualTo(
             "scale=-2:720,tonemapx=tonemap=mobius:peak=100:desat=0:t=bt709:m=bt709:p=bt709:r=tv:"
