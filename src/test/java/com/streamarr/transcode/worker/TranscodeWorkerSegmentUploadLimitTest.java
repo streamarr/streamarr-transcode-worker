@@ -422,6 +422,46 @@ class TranscodeWorkerSegmentUploadLimitTest {
 
   @Test
   @DisplayName(
+      "Should open the uploads of two refused segments again without waiting out their delays when"
+          + " two of the worker's other uploads end together")
+  void shouldOpenTwoRefusedSegmentsUploadsAgainWithoutWaitingOutTheirDelaysWhenTwoUploadsEnd()
+      throws Exception {
+    var runtime = ScriptedWorkerRuntime.withSegmentUploadLimit(4);
+    var holding = List.of(variantJobBuilder().build(), variantJobBuilder().build());
+    var refused = List.of(variantJobBuilder().build(), variantJobBuilder().build());
+    // The clock stands still, so only the ends of the two holding uploads can open the refused
+    // segments' uploads again, one for each end.
+    var clock = new SteppedClock();
+
+    try (var worker =
+        worker(
+            WorkerSetup.builder()
+                .runtime(runtime)
+                .launcher(writingTheRecording())
+                .clock(clock)
+                .build())) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.withholdAcknowledgements();
+      holding.forEach(job -> startVariant(connection, job));
+      promptly().until(() -> connection.uploadsAwaitingAcknowledgement() == 2);
+      refused.forEach(job -> startVariant(connection, job));
+      promptly().until(() -> connection.uploadsAwaitingAcknowledgement() == 4);
+      refused.forEach(job -> firstUploadOf(connection, job).refuseAtTheWorkersLimit());
+      promptly().until(() -> worker.queuedSegmentUploads() == 2);
+
+      connection.acknowledgeAwaitingUploads();
+
+      promptly()
+          .until(() -> refused.stream().allMatch(job -> uploadsOf(connection, job).size() == 2));
+      assertThat(refused)
+          .allSatisfy(
+              job -> assertThat(uploadsOf(connection, job).getLast().wasRefused()).isFalse());
+    }
+  }
+
+  @Test
+  @DisplayName(
       "Should upload a refused segment once the server accepts it when the other refused upload is"
           + " stopped")
   void shouldUploadARefusedSegmentOnceTheServerAcceptsItWhenTheOtherRefusedUploadIsStopped()

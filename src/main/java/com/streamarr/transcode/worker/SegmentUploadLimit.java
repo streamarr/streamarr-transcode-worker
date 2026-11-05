@@ -212,19 +212,21 @@ final class SegmentUploadLimit {
 
         holdsCall = false;
         openCalls--;
-        reopenTheFrontOfTheQueueNow();
+        reopenTheEarliestDelayedTurnNow();
         SegmentUploadLimit.this.notifyAll();
       }
     }
   }
 
-  // Holds this monitor. The end of one of the worker's calls can free a place on the server, so a
-  // refused segment at the front of the queue opens its call again without waiting out its delay.
-  // The delay stays for a place that frees without such an end.
-  private void reopenTheFrontOfTheQueueNow() {
-    var front = queue.peek();
-    if (front != null) {
-      front.reopenTime = clock.nanoTime();
-    }
+  // Holds this monitor. The end of one of the worker's calls can free a place on the server, so the
+  // earliest refused segment that still waits out its delay opens its call again without waiting
+  // it out. Each end reopens a different segment, even when several end before any reopened
+  // segment resumes. The delay stays for a place that frees without such an end.
+  private void reopenTheEarliestDelayedTurnNow() {
+    var now = clock.nanoTime();
+    queue.stream()
+        .filter(turn -> !turn.isPastItsReopenTime(now))
+        .min(Comparator.comparingLong(Turn::arrival))
+        .ifPresent(turn -> turn.reopenTime = now);
   }
 }
