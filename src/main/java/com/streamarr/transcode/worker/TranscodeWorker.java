@@ -641,14 +641,17 @@ public final class TranscodeWorker implements AutoCloseable {
   // Holds this monitor. Encodes take the advertised slots, and copies the places that the heap
   // holds. Only active attempts and audio reads hold either: the server freed a stopped attempt's
   // slot when it sent the stop, and the worker's memory budgets charge its producer until it has
-  // released its segments. A refused job is reported as a startup failure.
+  // released its segments. A refused copy is reported as a full copy cap, and a refused encode as
+  // a startup failure.
   private boolean refuseWhenFull(VariantJob job) {
     var copiesVideo = WorkerVariantJobMapper.copiesVideo(job);
     var kind = "encodes";
     var capacity = configuration.availableSlots();
+    var refusal = JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED;
     if (copiesVideo) {
       kind = "copies";
       capacity = maximumCopies;
+      refusal = JobAttemptFailure.JOB_ATTEMPT_FAILURE_COPY_CAP_REACHED;
     }
 
     if (placesInUse(copiesVideo) < capacity) {
@@ -660,7 +663,7 @@ public final class TranscodeWorker implements AutoCloseable {
         fromProto(job.getJobAttemptId()),
         capacity,
         kind);
-    reportFailure(job, JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED);
+    reportFailure(job, refusal);
     return true;
   }
 

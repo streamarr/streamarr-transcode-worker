@@ -340,9 +340,9 @@ class TranscodeWorkerAudioLayoutTest {
 
   @Test
   @DisplayName(
-      "Should refuse a copy beyond the copies that the worker's heap holds without starting ffprobe"
-          + " when another copy's ffprobe reads its audio stream")
-  void shouldRefuseACopyBeyondTheCopiesThatTheWorkersHeapHoldsWhenAnotherCopysFfprobeReadsItsAudio()
+      "Should refuse a copy as a full copy cap when another copy's ffprobe holds the last copy"
+          + " place")
+  void shouldRefuseACopyAsAFullCopyCapWhenAnotherCopysFfprobeHoldsTheLastCopyPlace()
       throws Exception {
     var launcher = ScriptedProcessLauncher.running();
     var ffprobe = new SilentFfprobe();
@@ -365,7 +365,7 @@ class TranscodeWorkerAudioLayoutTest {
 
     startVariant(connection, beyond);
 
-    assertFailedAs(connection, JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED);
+    assertFailedAs(connection, JobAttemptFailure.JOB_ATTEMPT_FAILURE_COPY_CAP_REACHED);
     assertThat(
             connection.events().stream()
                 .filter(EstablishWorkerSessionRequest::hasJobAttemptFailed)

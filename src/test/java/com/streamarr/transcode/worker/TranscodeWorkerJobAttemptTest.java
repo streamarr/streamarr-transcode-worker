@@ -548,9 +548,9 @@ class TranscodeWorkerJobAttemptTest {
   @ParameterizedTest
   @CsvSource({"1279, 0", "1280, 1", "1535, 1", "1536, 2"})
   @DisplayName(
-      "Should refuse a copy beyond the copies that the worker's heap holds as a startup failure and"
-          + " still start an encode")
-  void shouldRefuseACopyBeyondTheCopiesThatTheWorkersHeapHoldsAndStillStartAnEncode(
+      "Should refuse a copy as a full copy cap and still start an encode when the worker's heap"
+          + " holds no more copies")
+  void shouldRefuseACopyAsAFullCopyCapAndStillStartAnEncodeWhenTheWorkersHeapHoldsNoMoreCopies(
       int heapMiB, int heldCopies) throws Exception {
     var launcher = ScriptedProcessLauncher.running();
     var held = IntStream.range(0, heldCopies).mapToObj(_ -> variantJobBuilder().build()).toList();
@@ -571,7 +571,7 @@ class TranscodeWorkerJobAttemptTest {
       expected.add(EventCase.JOB_ATTEMPT_STARTED);
       assertThat(eventsOf(connection)).containsExactlyElementsOf(expected);
       var refusal = failureOf(connection, beyond);
-      assertThat(refusal).isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_STARTUP_FAILED);
+      assertThat(refusal).isEqualTo(JobAttemptFailure.JOB_ATTEMPT_FAILURE_COPY_CAP_REACHED);
       assertThat(launcher.hasLaunched(fromProto(beyond.getJobAttemptId()))).isFalse();
       assertThat(launcher.hasLaunched(fromProto(encode.getJobAttemptId()))).isTrue();
     }
