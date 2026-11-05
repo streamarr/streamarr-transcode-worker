@@ -1,5 +1,6 @@
 package com.streamarr.transcode.worker;
 
+import static com.streamarr.transcode.fixtures.RecordingFixtures.ENCODED_RECORDING;
 import static com.streamarr.transcode.fixtures.RemoteWorkerFixtures.engine;
 import static com.streamarr.transcode.protocol.ProtoUuid.fromProto;
 import static com.streamarr.transcode.protocol.ProtoUuid.toProto;
@@ -7,6 +8,7 @@ import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.startVa
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.variantJobBuilder;
 import static com.streamarr.transcode.worker.support.WorkerProbeFixtures.workerBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 import build.buf.gen.streamarr.transcode.v1.EstablishWorkerSessionResponse;
 import build.buf.gen.streamarr.transcode.v1.StartVariantCommand;
@@ -263,6 +265,41 @@ class WorkerHealthServerIT {
 
       assertThat(response.statusCode()).isEqualTo(200);
       assertThat(response.body()).contains("\"value\":" + fullness);
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should report a segment that waits for an upload as a queued segment upload when the"
+          + " upload limit is reached")
+  void shouldReportASegmentThatWaitsForAnUploadAsAQueuedSegmentUploadWhenTheUploadLimitIsReached()
+      throws Exception {
+    Files.writeString(directory.resolve("movie.mkv"), "media");
+    var runtime = ScriptedWorkerRuntime.withSegmentUploadLimit(1);
+    try (var worker =
+            workerBuilder(directory)
+                .runtime(runtime)
+                .engine(engine(ScriptedProcessLauncher.writing(ENCODED_RECORDING)))
+                .maximumHeapBytes(1536 * MIB)
+                .build();
+        var application = healthApplication(worker);
+        var client = HttpClient.newHttpClient()) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      connection.withholdUploadReadiness();
+      startVariant(connection, variantJobBuilder().build());
+      // The producers deliver on their own threads, which offer no hook.
+      await().atMost(Duration.ofSeconds(10)).until(() -> connection.uploads().size() == 1);
+      startVariant(connection, variantJobBuilder().build());
+      await().atMost(Duration.ofSeconds(10)).until(() -> worker.queuedSegmentUploads() == 1);
+
+      var response =
+          health(
+              client,
+              endpoint(application, "/actuator/metrics/streamarr.worker.queued_segment_uploads"));
+
+      assertThat(response.statusCode()).isEqualTo(200);
+      assertThat(response.body()).contains("\"value\":1.0");
     }
   }
 

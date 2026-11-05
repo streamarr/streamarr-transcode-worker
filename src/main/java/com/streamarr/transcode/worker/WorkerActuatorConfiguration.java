@@ -25,4 +25,18 @@ class WorkerActuatorConfiguration {
                     + " holds none")
             .register(registry);
   }
+
+  // Shows when the server's limit of upload calls from one worker holds its segments back.
+  @Bean
+  MeterBinder queuedSegmentUploadsGauge(TranscodeWorker worker) {
+    return registry ->
+        Gauge.builder(
+                "streamarr.worker.queued_segment_uploads",
+                worker,
+                TranscodeWorker::queuedSegmentUploads)
+            .description(
+                "The segments that wait for one of the upload calls that the server accepts from"
+                    + " the worker at once")
+            .register(registry);
+  }
 }

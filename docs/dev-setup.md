@@ -80,7 +80,7 @@ Spring Boot Actuator serves `/actuator/health/liveness` and `/actuator/health/re
 
 `/actuator/metrics/streamarr.worker.copy_fullness` reports the share of the copies that the worker's heap holds that run now, from 0 to 1, and 1 when the heap holds none. An autoscaler can read it, for example KEDA's Metrics API scaler with `valueLocation: measurements.0.value`, to add workers before copies are refused.
 
-When the server accepts the worker session, it states how many upload calls it accepts from the worker at once. A segment beyond them waits, in the order the segments became ready, for a call to end; the job attempt fails when none ends within the upload acknowledgement timeout, and a stop or the session's end cancels the wait. A server that states no limit lets every segment open its call at once.
+When the server accepts the worker session, it states how many upload calls it accepts from the worker at once. A segment beyond them waits, in the order the segments became ready, for a call to end; the job attempt fails when none ends within the upload acknowledgement timeout, and a stop or the session's end cancels the wait. A server that states no limit lets every segment open its call at once. `/actuator/metrics/streamarr.worker.queued_segment_uploads` reports the segments that wait.
 
 At startup the worker waits for the server to accept its session, so the two can start in either order. Losing the server session stops active work and exits the worker process. A deployment supervisor should restart it. During shutdown, the worker asks each FFmpeg process to quit and waits for it to exit.
 
