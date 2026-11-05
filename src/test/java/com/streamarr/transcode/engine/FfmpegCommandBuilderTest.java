@@ -1527,9 +1527,10 @@ class FfmpegCommandBuilderTest {
     assertThat(cmd).doesNotContain("-af").containsSequence("-c:a", "copy");
   }
 
-  // The bitstream filters of an AAC copy that starts one 6 s period before segment 10 at 60 s: the
-  // noise filter drops each packet that starts before 54 s.
-  private static final String AAC_COPY_FROM_54_SECONDS = "noise=drop='lt(pts*tb,54)',aac_adtstoasc";
+  // The bitstream filters of an AAC copy that starts at 54 s: the noise filter drops each packet
+  // until the first keyframe packet that starts at or after 54 s, and keeps every later packet.
+  private static final String AAC_COPY_FROM_54_SECONDS =
+      "noise=drop='eq(st(0,ld(0)+gte(pts*tb,54)*key),0)',aac_adtstoasc";
 
   // ADR 0043 reads each track of an encoded replacement attempt from one segment period before its
   // first segment. When the keyframe lies further back, the copied audio comes from a second input
@@ -1592,6 +1593,35 @@ class FfmpegCommandBuilderTest {
   static Stream<Optional<Duration>> keyframePositionsWithinOnePeriodOfSegment10() {
     return Stream.of(
         Optional.empty(), Optional.of(Duration.ofSeconds(54)), Optional.of(Duration.ofSeconds(57)));
+  }
+
+  // An attempt that holds the last frame encodes its video from its seek, and the mp4 muxer holds
+  // every picture until the audio has a packet, so its audio starts at that seek too. The seek can
+  // land on an earlier keyframe, so the copy drops the audio before it.
+  @Test
+  @DisplayName(
+      "Should copy the audio from the source's only input from its seek when an encode that holds"
+          + " the last frame seeks after the source's start")
+  void shouldCopyTheAudioFromTheSourcesOnlyInputFromItsSeekWhenAHoldingEncodeSeeksAfterTheStart() {
+    var decision =
+        decision(TranscodeMode.VIDEO_TRANSCODE)
+            .videoDecision(
+                VideoDecisionFixtures.encodeBuilder().holdsLastFrameToAdvertisedEnd(true).build())
+            .build();
+    var cmd =
+        command(
+            request(decision)
+                .advertisedEnd(Optional.of(Duration.ofSeconds(66)))
+                .startSequenceNumber(10)
+                .seekPosition(Optional.of(Duration.ofSeconds(54)))
+                .build(),
+            "libx264");
+
+    assertThat(cmd.stream().filter("-i"::equals)).hasSize(1);
+    assertThat(cmd)
+        .containsSequence("-map", "0:a:0")
+        .containsSequence("-c:a", "copy", "-bsf:a", AAC_COPY_FROM_54_SECONDS, "-b:a", "0")
+        .doesNotContain("-isync");
   }
 
   // An attempt that holds the last frame encodes its video from its seek, and the mp4 muxer holds
@@ -2791,7 +2821,7 @@ class FfmpegCommandBuilderTest {
             "-c:a",
             "copy",
             "-bsf:a",
-            "noise=drop='lt(pts*tb,12)',aac_adtstoasc",
+            "noise=drop='eq(st(0,ld(0)+gte(pts*tb,12)*key),0)',aac_adtstoasc",
             "-b:a",
             "0",
             "-r:v:0");

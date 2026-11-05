@@ -5651,18 +5651,21 @@ class WorkerMediaSmokeTest {
   // audio a second. The source's only keyframe lies 96 s before the replacement's first segment,
   // so audio encoded from a second after that keyframe, or copied from it, would fill the first
   // fragment far past the producer's 128 MiB cap before the first picture. Without the server's
-  // keyframe position, the seek one period early lands on that keyframe too.
-  @ParameterizedTest(name = "{0}, keyframe position {1}")
+  // keyframe position, the seek one period early lands on that keyframe too, also for an attempt
+  // that holds the last frame and so starts its video and audio at that seek.
+  @ParameterizedTest(name = "{0}, keyframe position {1}, holds the last frame: {2}")
   @CsvSource({
-    "TRANSCODE_MODE_FULL_TRANSCODE, 0",
-    "TRANSCODE_MODE_VIDEO_TRANSCODE, 0",
-    "TRANSCODE_MODE_VIDEO_TRANSCODE,"
+    "TRANSCODE_MODE_FULL_TRANSCODE, 0, false",
+    "TRANSCODE_MODE_VIDEO_TRANSCODE, 0, false",
+    "TRANSCODE_MODE_VIDEO_TRANSCODE, , false",
+    "TRANSCODE_MODE_FULL_TRANSCODE, , true",
+    "TRANSCODE_MODE_VIDEO_TRANSCODE, , true"
   })
   @DisplayName(
       "Should complete an encoded replacement attempt of high-bitrate lossless audio, encoded or"
           + " copied, when the keyframe its seek reads lies far before its first segment")
   void shouldCompleteAReplacementOfHighBitrateLosslessAudioWhenTheKeyframeLiesFarBeforeIt(
-      TranscodeMode mode, BigDecimal keyframePosition) throws Exception {
+      TranscodeMode mode, BigDecimal keyframePosition, boolean holdsLastFrame) throws Exception {
     var source = oneKeyframeEightChannelNoiseSource();
     var job = seekableSourceJob(source, mode);
     job.getDecisionBuilder()
@@ -5671,6 +5674,8 @@ class WorkerMediaSmokeTest {
         .setChannels(8)
         .setBitrateBitsPerSecond(0);
     job.getExecutionBuilder().setMediaSegmentCount(17).setStartSequenceNumber(16);
+    job.getExecutionBuilder().getAdvertisedEndBuilder().setSeconds(102);
+    job.getDecisionBuilder().getVideoBuilder().setHoldLastFrameToAdvertisedEnd(holdsLastFrame);
     if (keyframePosition != null) {
       setSeekPosition(job.getExecutionBuilder(), keyframePosition);
     }

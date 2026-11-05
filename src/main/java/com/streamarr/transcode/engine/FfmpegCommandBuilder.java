@@ -386,9 +386,12 @@ public class FfmpegCommandBuilder {
   // and the mp4 muxer holds every picture until the audio has a packet, so its audio starts at that
   // seek too. Empty for any other attempt.
   private static Optional<Duration> copiedAudioStart(TranscodeRequest request) {
-    if (request.transcodeDecision().audioDecision().mode() != AudioMode.COPY
-        || holdsLastFrame(request)) {
+    if (request.transcodeDecision().audioDecision().mode() != AudioMode.COPY) {
       return Optional.empty();
+    }
+
+    if (holdsLastFrame(request)) {
+      return encodingStart(request);
     }
 
     return firstSegmentStartOfAnEncode(request)
@@ -864,10 +867,15 @@ public class FfmpegCommandBuilder {
     var filters = new ArrayList<String>();
     // The noise filter drops each packet whose expression is not zero. It sees the packets on the
     // attempt's timeline, after -start_at_zero, where -copypriorss would compare them with the seek
-    // less the source's start time. It runs first, so that the AAC filter takes its configuration
+    // less the source's start time. Register 0 counts the keyframe packets at or after the start,
+    // so the copy starts at a keyframe packet, as FFmpeg's own copy does: a TrueHD copy builds its
+    // dmlp box from its first packet, which must be a major sync. Every packet of the other copied
+    // codecs is a keyframe. The filter runs first, so that the AAC filter takes its configuration
     // from the first packet kept.
     start.ifPresent(
-        position -> filters.add("noise=drop='lt(pts*tb," + seekArgument(position) + ")'"));
+        position ->
+            filters.add(
+                "noise=drop='eq(st(0,ld(0)+gte(pts*tb," + seekArgument(position) + ")*key),0)'"));
     // delay_moov stops the mp4 muxer from inserting this filter itself, and a copy of the ADTS
     // AAC that MPEG-TS sources carry fails without it. Raw AAC passes through unchanged.
     if ("aac".equals(codec)) {
