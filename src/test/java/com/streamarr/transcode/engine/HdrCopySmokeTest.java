@@ -1000,12 +1000,12 @@ class HdrCopySmokeTest {
       return Optional.empty();
     }
 
-    var record = recordFieldsOf(initialization);
+    var configuration = recordFieldsOf(initialization);
     var brand =
-        switch (record.compatibility()) {
+        switch (configuration.compatibility()) {
           case 1 -> "db1p";
           case 4 -> "db4h";
-          default -> throw new AssertionError("no brand for compatibility " + record);
+          default -> throw new AssertionError("no brand for compatibility " + configuration);
         };
     var dolbyVisionEntry =
         switch (entry) {
@@ -1013,11 +1013,11 @@ class HdrCopySmokeTest {
           case "av01" -> "dav1";
           default -> throw new AssertionError("no Dolby Vision entry for " + entry);
         };
-    return Optional.of(dolbyVisionCodecsOf(dolbyVisionEntry, record) + "/" + brand);
+    return Optional.of(dolbyVisionCodecsOf(dolbyVisionEntry, configuration) + "/" + brand);
   }
 
-  private static String dolbyVisionCodecsOf(String entry, RecordFields record) {
-    return "%s.%02d.%02d".formatted(entry, record.profile(), record.level());
+  private static String dolbyVisionCodecsOf(String entry, RecordFields configuration) {
+    return "%s.%02d.%02d".formatted(entry, configuration.profile(), configuration.level());
   }
 
   // The profile space and profile, the reversed compatibility flags, the tier and level, then the
