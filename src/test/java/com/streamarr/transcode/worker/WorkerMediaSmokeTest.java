@@ -5690,9 +5690,9 @@ class WorkerMediaSmokeTest {
   // server's keyframe at zero, or, without it, the keyframe that its seek one period early reads.
   // FFmpeg's whole output must start the copied audio at or after 18 s, one period before that
   // segment, and its copied packets in segment 4 must match the start attempt's, which one FFmpeg
-  // reads from one input, on that attempt's timeline. The far keyframe makes the audio come from
-  // an input of its own: a second input of one FFmpeg, or a third input of the encode of a profile
-  // 5 copy. The MPEG-TS sources start at 11.4 s, and their audio starts 0.5 s after their video.
+  // reads from one input, on that attempt's timeline. The replacement reads its audio from the
+  // input that its video seeks: the source input of one FFmpeg, or of the encode of a profile 5
+  // copy. The MPEG-TS sources start at 11.4 s, and their audio starts 0.5 s after their video.
   @ParameterizedTest(name = "{0} with {1}, {2}, keyframe position {3}")
   @CsvSource({
     "mp4, aac, libx264, 0",

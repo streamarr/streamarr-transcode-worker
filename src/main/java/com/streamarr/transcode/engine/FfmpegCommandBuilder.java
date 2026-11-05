@@ -320,8 +320,7 @@ public class FfmpegCommandBuilder {
     cmd.addAll(List.of(ffmpegPath, "-y"));
     if (input == EncoderInput.SOURCE) {
       addSourceInput(cmd, request);
-      addCopiedAudioInput(cmd, request, input);
-      addStreamSelection(cmd, decision, audioInputIndex(request, input));
+      addStreamSelection(cmd, decision);
       return;
     }
 
@@ -339,52 +338,17 @@ public class FfmpegCommandBuilder {
             "-i",
             "pipe:0"));
     addSourceInput(cmd, request);
-    addCopiedAudioInput(cmd, request, input);
     cmd.addAll(List.of("-map", "0:v:0"));
-    addAudioStreamSelection(cmd, decision.audioDecision(), audioInputIndex(request, input));
+    addAudioStreamSelection(cmd, decision.audioDecision(), source);
   }
 
   // ADR 0043 reads each track of an encoded replacement attempt from at most one segment period
-  // before its first segment. When the attempt's seek lies further back, the copied audio comes
-  // from an input of its own, seeked to that point, as the encode of a profile 5 copy reads its
-  // audio from an input of its own. FFmpeg seeks an input before it knows which streams are
-  // mapped, so the demuxer seeks on the video and can land on an earlier keyframe; the copy drops
-  // the packets before that point. -isync puts the input on the source input's timeline, because
-  // -start_at_zero shifts an MPEG-TS input by the earliest start of the streams it maps.
-  private static void addCopiedAudioInput(
-      List<String> cmd, TranscodeRequest request, EncoderInput input) {
-    copiedAudioSeek(request)
-        .ifPresent(
-            seek ->
-                cmd.addAll(
-                    List.of(
-                        "-isync",
-                        String.valueOf(input.sourceInputIndex()),
-                        "-ss",
-                        seekArgument(seek),
-                        "-i",
-                        request.sourcePath().toString())));
-  }
-
-  private static int audioInputIndex(TranscodeRequest request, EncoderInput input) {
-    if (copiedAudioSeek(request).isPresent()) {
-      return input.sourceInputIndex() + 1;
-    }
-
-    return input.sourceInputIndex();
-  }
-
-  // Where the copied audio's own input seeks: its copy's start, when the attempt's seek lies
-  // before it. Empty otherwise.
-  private static Optional<Duration> copiedAudioSeek(TranscodeRequest request) {
-    return copiedAudioStart(request)
-        .filter(start -> start.compareTo(inputSeekPosition(request)) > 0);
-  }
-
-  // An attempt that encodes video from a later segment starts its copied audio one segment period
-  // before that segment. One that holds the last frame encodes its video from its seek instead,
-  // and the mp4 muxer holds every picture until the audio has a packet, so its audio starts at that
-  // seek too. Empty for any other attempt.
+  // before its first segment. A filter cannot trim copied packets, so the copy drops the packets
+  // before that point, however far back the keyframe that the seek reads lies: an attempt that
+  // encodes video from a later segment starts its copied audio one segment period before that
+  // segment. One that holds the last frame encodes its video from its seek instead, and the mp4
+  // muxer holds every picture until the audio has a packet, so its audio starts at that seek too.
+  // Empty for any other attempt.
   private static Optional<Duration> copiedAudioStart(TranscodeRequest request) {
     if (request.transcodeDecision().audioDecision().mode() != AudioMode.COPY) {
       return Optional.empty();
@@ -496,10 +460,10 @@ public class FfmpegCommandBuilder {
     return request.transcodeDecision().transcodeMode().encodesVideo();
   }
 
-  private void addStreamSelection(List<String> cmd, TranscodeDecision decision, int audioInput) {
+  private void addStreamSelection(List<String> cmd, TranscodeDecision decision) {
     cmd.addAll(List.of("-map", "0:" + decision.videoDecision().streamIndex()));
     var audio = decision.audioDecision();
-    addAudioStreamSelection(cmd, audio, audioInput);
+    addAudioStreamSelection(cmd, audio, 0);
     if (decision.subtitleDecision().mode() == SubtitleMode.EXCLUDE && !namesAudioStream(audio)) {
       cmd.addAll(List.of("-map", "-0:s"));
     }

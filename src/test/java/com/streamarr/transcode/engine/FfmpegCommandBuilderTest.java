@@ -1532,48 +1532,15 @@ class FfmpegCommandBuilderTest {
   private static final String AAC_COPY_FROM_54_SECONDS =
       "noise=drop='eq(st(0,ld(0)+gte(pts*tb,54)*key),0)',aac_adtstoasc";
 
-  // ADR 0043 reads each track of an encoded replacement attempt from one segment period before its
-  // first segment. When the keyframe lies further back, the copied audio comes from a second input
-  // of the source whose seek targets that point, and the copy drops the packets before it.
-  @Test
-  @DisplayName(
-      "Should copy the audio from a second input of the source seeked one segment period before the"
-          + " first segment's start when the server's keyframe position lies further back")
-  void
-      shouldCopyTheAudioFromASecondInputSeekedOnePeriodBackWhenTheServersKeyframeLiesFurtherBack() {
-    var cmd =
-        command(
-            request(TranscodeMode.VIDEO_TRANSCODE)
-                .startSequenceNumber(10)
-                .seekPosition(Optional.of(Duration.ZERO))
-                .build(),
-            "libx264");
-
-    assertThat(cmd)
-        .containsSequence(
-            "-i",
-            "/media/movie.mkv",
-            "-isync",
-            "0",
-            "-ss",
-            "54",
-            "-i",
-            "/media/movie.mkv",
-            "-map",
-            "0:0",
-            "-map",
-            "1:a:0")
-        .containsSequence("-c:a", "copy", "-bsf:a", AAC_COPY_FROM_54_SECONDS, "-b:a", "0");
-  }
-
-  // The demuxer can still land on a keyframe before the seek's target, as without the server's
-  // keyframe position, so the copy drops the packets before that target.
+  // ADR 0043 reads each track of an encoded replacement attempt from at most one segment period
+  // before its first segment. A filter cannot trim copied packets, so the copy drops the packets
+  // before that point, however far back the keyframe that the seek reads lies.
   @ParameterizedTest(name = "keyframe position {0}")
-  @MethodSource("keyframePositionsWithinOnePeriodOfSegment10")
+  @MethodSource("keyframePositionsBeforeSegment10")
   @DisplayName(
-      "Should copy the audio from the source's only input from its seek's target when the seek lies"
-          + " at most one segment period before the first segment's start")
-  void shouldCopyTheAudioFromTheSourcesOnlyInputFromItsSeeksTargetWhenTheSeekLiesWithinOnePeriod(
+      "Should copy the audio from the source's only input and drop its packets before one segment"
+          + " period before the first segment's start whatever the keyframe position")
+  void shouldCopyTheAudioFromTheSourcesOnlyInputAndDropItsPacketsBeforeOnePeriodBack(
       Optional<Duration> keyframePosition) {
     var cmd =
         command(
@@ -1585,14 +1552,17 @@ class FfmpegCommandBuilderTest {
 
     assertThat(cmd.stream().filter("-i"::equals)).hasSize(1);
     assertThat(cmd)
-        .containsSequence("-map", "0:a:0")
+        .containsSequence("-map", "0:0", "-map", "0:a:0")
         .containsSequence("-c:a", "copy", "-bsf:a", AAC_COPY_FROM_54_SECONDS, "-b:a", "0")
         .doesNotContain("-isync");
   }
 
-  static Stream<Optional<Duration>> keyframePositionsWithinOnePeriodOfSegment10() {
+  static Stream<Optional<Duration>> keyframePositionsBeforeSegment10() {
     return Stream.of(
-        Optional.empty(), Optional.of(Duration.ofSeconds(54)), Optional.of(Duration.ofSeconds(57)));
+        Optional.empty(),
+        Optional.of(Duration.ZERO),
+        Optional.of(Duration.ofSeconds(54)),
+        Optional.of(Duration.ofSeconds(57)));
   }
 
   // An attempt that holds the last frame encodes its video from its seek, and the mp4 muxer holds
@@ -1675,94 +1645,20 @@ class FfmpegCommandBuilderTest {
     assertThat(cmd).containsSequence("-af", aacStereoFromTheFirstSegment("60", "59"));
   }
 
-  // The encode of a profile 5 copy already reads the source as its second input, from the server's
-  // keyframe position, so the copied audio comes from a third input, synchronized as the copy is.
+  // The encode of a profile 5 copy reads the source's audio from its second input, seeked to the
+  // server's keyframe position as the copy is, and drops the packets before one segment period
+  // before the first segment.
   @Test
   @DisplayName(
-      "Should copy the audio from a third input of the source seeked one segment period before the"
-          + " first segment's start when a profile 5 replacement's keyframe position lies further"
-          + " back")
-  void shouldCopyTheAudioFromAThirdInputWhenAProfile5ReplacementsKeyframeLiesFurtherBack() {
+      "Should copy the audio from the source input of the encode and drop its packets before one"
+          + " segment period before the first segment's start when a profile 5 replacement's"
+          + " keyframe position lies further back")
+  void
+      shouldCopyTheAudioFromTheSourceInputOfTheEncodeWhenAProfile5ReplacementsKeyframeLiesFarBack() {
     var request =
         request(
                 decision(TranscodeMode.VIDEO_TRANSCODE)
                     .videoDecision(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE).build())
-                    .build())
-            .startSequenceNumber(10)
-            .seekPosition(Optional.of(Duration.ofSeconds(30)))
-            .build();
-
-    var pipe = rpuMovingPipe(builder.buildPipeline(job(request, "libx264")));
-
-    assertThat(pipe.encodeCommand())
-        .containsSequence(
-            "-ss",
-            "30",
-            "-noaccurate_seek",
-            "-i",
-            "/media/movie.mkv",
-            "-isync",
-            "1",
-            "-ss",
-            "54",
-            "-i",
-            "/media/movie.mkv",
-            "-map",
-            "0:v:0",
-            "-map",
-            "2:a:0")
-        .containsSequence("-c:a", "copy", "-bsf:a", AAC_COPY_FROM_54_SECONDS, "-b:a", "0");
-  }
-
-  @Test
-  @DisplayName(
-      "Should copy the audio stream that the job names from the second input of the source, and"
-          + " drop a named stream of another type from there, when the server's keyframe position"
-          + " lies more than one segment period back")
-  void
-      shouldCopyTheAudioStreamThatTheJobNamesFromTheSecondInputWhenTheServersKeyframeLiesFurtherBack() {
-    var decision =
-        decision(TranscodeMode.VIDEO_TRANSCODE)
-            .audioDecision(copiedAudioBuilder("aac").streamIndex(OptionalInt.of(3)).build())
-            .build();
-
-    var cmd =
-        command(
-            request(decision)
-                .startSequenceNumber(10)
-                .seekPosition(Optional.of(Duration.ZERO))
-                .build(),
-            "libx264");
-
-    assertThat(cmd.subList(0, cmd.indexOf("pipe:1")))
-        .containsSequence(
-            "-map",
-            "0:0",
-            "-map",
-            "1:3?",
-            "-map",
-            "-1:s",
-            "-map",
-            "-1:d",
-            "-map",
-            "-1:t",
-            "-map",
-            "-1:disp:attached_pic")
-        .doesNotContain("1:a:0", "-0:s");
-  }
-
-  @Test
-  @DisplayName(
-      "Should copy the audio stream that the job names from the third input of the source, and drop"
-          + " a named stream of another type from there, when a profile 5 replacement's keyframe"
-          + " position lies more than one segment period back")
-  void
-      shouldCopyTheAudioStreamThatTheJobNamesFromTheThirdInputWhenAProfile5ReplacementsKeyframeLiesFurtherBack() {
-    var request =
-        request(
-                decision(TranscodeMode.VIDEO_TRANSCODE)
-                    .videoDecision(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE).build())
-                    .audioDecision(copiedAudioBuilder("ac3").streamIndex(OptionalInt.of(3)).build())
                     .build())
             .startSequenceNumber(10)
             .seekPosition(Optional.of(Duration.ofSeconds(30)))
@@ -1771,21 +1667,20 @@ class FfmpegCommandBuilderTest {
     var pipe = rpuMovingPipe(builder.buildPipeline(job(request, "libx264")));
 
     var encode = pipe.encodeCommand();
-    assertThat(encode.subList(0, encode.indexOf("pipe:1")))
+    assertThat(encode.stream().filter("-i"::equals)).hasSize(2);
+    assertThat(encode)
         .containsSequence(
+            "-ss",
+            "30",
+            "-noaccurate_seek",
+            "-i",
+            "/media/movie.mkv",
             "-map",
             "0:v:0",
             "-map",
-            "2:3?",
-            "-map",
-            "-2:s",
-            "-map",
-            "-2:d",
-            "-map",
-            "-2:t",
-            "-map",
-            "-2:disp:attached_pic")
-        .doesNotContain("2:a:0", "1:3?");
+            "1:a:0")
+        .containsSequence("-c:a", "copy", "-bsf:a", AAC_COPY_FROM_54_SECONDS, "-b:a", "0")
+        .doesNotContain("2:a:0");
   }
 
   @ParameterizedTest
