@@ -117,6 +117,7 @@ public final class TranscodeWorker implements AutoCloseable {
   private ManagedChannel channel;
   private StreamObserver<EstablishWorkerSessionRequest> requests;
   private WorkerSessionAccepted workerSession;
+  private volatile SegmentUploadLimit uploadLimit = new SegmentUploadLimit(0);
   private WorkerProbeSession probeSession;
   private ScheduledExecutorService sessionTimers;
   private Optional<GrantedCapacities> sentCapacities = Optional.empty();
@@ -181,6 +182,14 @@ public final class TranscodeWorker implements AutoCloseable {
     }
 
     return (double) placesInUse(true) / maximumCopies;
+  }
+
+  /**
+   * The segments that wait for one of the upload calls that the server accepts from the worker at
+   * once to end.
+   */
+  public int queuedSegmentUploads() {
+    return uploadLimit.queued();
   }
 
   /**
@@ -738,9 +747,22 @@ public final class TranscodeWorker implements AutoCloseable {
     var upload =
         new SegmentUpload(
             configuration.uploadReadinessTimeout(), configuration.uploadAcknowledgementTimeout());
-    var metadataBuilder = openUpload(job, upload);
+    var turn = uploadLimit.turn();
     cancellation.onCancel(
-        () -> upload.cancel(new CancellationException("The job attempt stopped")));
+        () -> {
+          turn.cancel();
+          upload.cancel(new CancellationException("The job attempt stopped"));
+        });
+    // A segment that waits for its turn stays the producer's delivery in flight, so its bytes stay
+    // charged to the memory budgets.
+    try (var _ = turn.await(configuration.uploadAcknowledgementTimeout())) {
+      sendSegment(openUpload(job, upload), upload, segment);
+    }
+  }
+
+  private static void sendSegment(
+      SegmentUploadMetadata.Builder metadataBuilder, SegmentUpload upload, ProducedSegment segment)
+      throws InterruptedException, ExecutionException, TimeoutException {
     metadataBuilder
         .setSegmentName(segment.name())
         .setContentType(SegmentContentType.SEGMENT_CONTENT_TYPE_VIDEO_MP4)
@@ -1216,6 +1238,7 @@ public final class TranscodeWorker implements AutoCloseable {
     public void onNext(EstablishWorkerSessionResponse response) {
       if (response.hasSessionAccepted()) {
         workerSession = response.getSessionAccepted();
+        uploadLimit = new SegmentUploadLimit(workerSession.getSegmentUploadLimit());
         sessionAccepted = true;
         accepted.complete(workerSession);
         return;
@@ -1306,7 +1329,7 @@ public final class TranscodeWorker implements AutoCloseable {
     }
 
     @Override
-    public void beforeStart(ClientCallStreamObserver<UploadSegmentRequest> call) {
+    public synchronized void beforeStart(ClientCallStreamObserver<UploadSegmentRequest> call) {
       this.call = call;
       call.setOnReadyHandler(this::signalReadiness);
     }
@@ -1388,9 +1411,13 @@ public final class TranscodeWorker implements AutoCloseable {
       return nanosUntilAcknowledgementDeadline(System.nanoTime());
     }
 
+    // A stop before the call opens has no call to cancel; the producer then never sends on it.
     private synchronized void cancel(Throwable failure) {
       response.completeExceptionally(failure);
-      call.cancel("Segment upload failed", failure);
+      if (call != null) {
+        call.cancel("Segment upload failed", failure);
+      }
+
       notifyAll();
     }
 

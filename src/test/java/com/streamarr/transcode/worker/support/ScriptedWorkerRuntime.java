@@ -33,13 +33,31 @@ import java.util.function.BooleanSupplier;
 
 public final class ScriptedWorkerRuntime implements WorkerRuntime {
 
+  private final int segmentUploadLimit;
   private Connection connection;
   private QueuedProbeExecutor probes;
+
+  /** A runtime whose server accepts the worker session without a segment upload limit. */
+  public ScriptedWorkerRuntime() {
+    this(0);
+  }
+
+  private ScriptedWorkerRuntime(int segmentUploadLimit) {
+    this.segmentUploadLimit = segmentUploadLimit;
+  }
+
+  /**
+   * A runtime whose server accepts the worker session with this many upload calls at once; 0 states
+   * no limit.
+   */
+  public static ScriptedWorkerRuntime withSegmentUploadLimit(int segmentUploadLimit) {
+    return new ScriptedWorkerRuntime(segmentUploadLimit);
+  }
 
   @Override
   public ManagedChannel openChannel(
       TranscodeWorkerConfiguration configuration, InetSocketAddress address) {
-    connection = new Connection();
+    connection = new Connection(segmentUploadLimit);
     return connection;
   }
 
@@ -61,11 +79,16 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
 
   public static final class Connection extends ManagedChannel {
 
-    private final SessionCall call = new SessionCall();
+    private final SessionCall call;
     private final List<UploadCall> uploads = new CopyOnWriteArrayList<>();
     private final UploadReadiness readiness = new UploadReadiness();
+    private final OpenUploads openUploads = new OpenUploads();
     private volatile boolean acknowledgementsWithheld;
     private boolean shutdown;
+
+    private Connection(int segmentUploadLimit) {
+      call = new SessionCall(segmentUploadLimit);
+    }
 
     /**
      * The worker's registration. The scripted session accepts the registration as the worker sends
@@ -105,6 +128,27 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
       acknowledgementsWithheld = true;
     }
 
+    /** Acknowledges every upload that awaits its acknowledgement now, and withholds later ones. */
+    public void acknowledgeAwaitingUploads() {
+      uploads.forEach(UploadCall::acknowledgeWhenAwaited);
+    }
+
+    /** Stops withholding acknowledgements and acknowledges every upload that awaits one. */
+    public void releaseAcknowledgements() {
+      acknowledgementsWithheld = false;
+      acknowledgeAwaitingUploads();
+    }
+
+    /** The number of uploads that the worker sent whole and that await their acknowledgement. */
+    public long uploadsAwaitingAcknowledgement() {
+      return uploads.stream().filter(UploadCall::awaitsAcknowledgement).count();
+    }
+
+    /** The most upload calls open at once: started, and neither answered nor cancelled. */
+    public int mostUploadsOpenAtOnce() {
+      return openUploads.most();
+    }
+
     /** The number of messages the worker has sent on all its upload calls. */
     public int uploadMessageCount() {
       return uploads.stream().mapToInt(upload -> upload.messages.size()).sum();
@@ -142,7 +186,7 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     @Override
     public <Q, R> ClientCall<Q, R> newCall(MethodDescriptor<Q, R> method, CallOptions options) {
       if (method.equals(TranscodeWorkerServiceGrpc.getUploadSegmentMethod())) {
-        var upload = new UploadCall(readiness, () -> acknowledgementsWithheld);
+        var upload = new UploadCall(readiness, openUploads, () -> acknowledgementsWithheld);
         uploads.add(upload);
         return typed(upload);
       }
@@ -195,8 +239,13 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     private final CompletableFuture<WorkerRegistration> registration = new CompletableFuture<>();
     private final ConcurrentLinkedQueue<EstablishWorkerSessionRequest> events =
         new ConcurrentLinkedQueue<>();
+    private final int segmentUploadLimit;
     private Listener<EstablishWorkerSessionResponse> responses;
     private volatile boolean refusing;
+
+    private SessionCall(int segmentUploadLimit) {
+      this.segmentUploadLimit = segmentUploadLimit;
+    }
 
     @Override
     public void start(Listener<EstablishWorkerSessionResponse> listener, Metadata headers) {
@@ -216,7 +265,8 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
             EstablishWorkerSessionResponse.newBuilder()
                 .setSessionAccepted(
                     WorkerSessionAccepted.newBuilder()
-                        .setWorkerSessionId(toProto(UUID.randomUUID())))
+                        .setWorkerSessionId(toProto(UUID.randomUUID()))
+                        .setSegmentUploadLimit(segmentUploadLimit))
                 .build());
       }
     }
@@ -273,6 +323,26 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     }
   }
 
+  // The upload calls open now, and the most that were open at once.
+  private static final class OpenUploads {
+
+    private int open;
+    private int most;
+
+    private synchronized void opened() {
+      open++;
+      most = Math.max(most, open);
+    }
+
+    private synchronized void closed() {
+      open--;
+    }
+
+    private synchronized int most() {
+      return most;
+    }
+  }
+
   /**
    * A segment upload that records what the worker sent and acknowledges every byte. Like a gRPC
    * call, a cancelled upload closes with {@code CANCELLED} and is never acknowledged.
@@ -281,6 +351,7 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
       extends ClientCall<UploadSegmentRequest, UploadSegmentResponse> {
 
     private final UploadReadiness readiness;
+    private final OpenUploads openUploads;
     private final BooleanSupplier acknowledgementsWithheld;
     private final List<UploadSegmentRequest> messages = new CopyOnWriteArrayList<>();
     private volatile Listener<UploadSegmentResponse> responses;
@@ -288,8 +359,12 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     private boolean cancelled;
     private boolean halfClosed;
 
-    private UploadCall(UploadReadiness readiness, BooleanSupplier acknowledgementsWithheld) {
+    private UploadCall(
+        UploadReadiness readiness,
+        OpenUploads openUploads,
+        BooleanSupplier acknowledgementsWithheld) {
       this.readiness = readiness;
+      this.openUploads = openUploads;
       this.acknowledgementsWithheld = acknowledgementsWithheld;
     }
 
@@ -323,6 +398,7 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
     @Override
     public void start(Listener<UploadSegmentResponse> listener, Metadata headers) {
       responses = listener;
+      openUploads.opened();
     }
 
     @Override
@@ -356,7 +432,21 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
         halfClosed = true;
       }
 
-      if (acknowledgementsWithheld.getAsBoolean() || !tryClose()) {
+      if (acknowledgementsWithheld.getAsBoolean()) {
+        return;
+      }
+
+      acknowledge();
+    }
+
+    private void acknowledgeWhenAwaited() {
+      if (awaitsAcknowledgement()) {
+        acknowledge();
+      }
+    }
+
+    private void acknowledge() {
+      if (!tryClose()) {
         return;
       }
 
@@ -384,6 +474,7 @@ public final class ScriptedWorkerRuntime implements WorkerRuntime {
       }
 
       closed = true;
+      openUploads.closed();
       return true;
     }
   }
