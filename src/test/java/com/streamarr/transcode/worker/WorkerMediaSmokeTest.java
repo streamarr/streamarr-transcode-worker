@@ -4320,30 +4320,20 @@ class WorkerMediaSmokeTest {
   }
 
   static Stream<ToneEncode> keptThreeAndFourChannelLayouts() {
-    var aac = Stream.of(keptLayout("3.0", "aac"), keptLayout("4.0", "aac"));
+    var aac = Stream.of("3.0", "4.0").map(layout -> keptLayout(layout, "aac").build());
     var dolbyDigital =
         Stream.of("ac3", "eac3")
             .flatMap(
                 codec ->
-                    Stream.of(
-                        keptLayout("2.1", codec),
-                        keptLayout("3.0", codec),
-                        keptLayout("4.0", codec),
-                        // A/52 has one 2/2 mode, which FFmpeg's decoder reports as quad(side).
-                        ToneEncode.builder()
-                            .sourceLayout("quad")
-                            .tones(ToneSet.REAR_PAIR_IN_OPPOSITE_PHASE)
-                            .codec(codec)
-                            .outputLayout("quad")
-                            .decodedLayout("quad(side)")
-                            .routes(
-                                List.of(
-                                    route("FL", "FL", 1.0),
-                                    route("FR", "FR", 1.0),
-                                    route("BL", "SL", 1.0),
-                                    route("BR", "SR", 1.0)))
-                            .build(),
-                        keptLayout("quad(side)", codec)));
+                    Stream.concat(
+                        Stream.of("2.1", "3.0", "4.0")
+                            .map(layout -> keptLayout(layout, codec).build()),
+                        Arrays.stream(ToneSet.values())
+                            .flatMap(
+                                tones ->
+                                    Stream.of(
+                                        quadAsQuadSide(codec).tones(tones).build(),
+                                        keptLayout("quad(side)", codec).tones(tones).build()))));
     return Stream.concat(aac, dolbyDigital);
   }
 
@@ -4359,18 +4349,24 @@ class WorkerMediaSmokeTest {
     assertTonesLandAtTheirGains(encode, delivered);
   }
 
-  // AAC carries neither 2.1 nor quad without channel configuration 0, and AC-3 and E-AC-3 do not
-  // carry 3.0(back) or 3.1 (ADR 0050), so the job names stereo for them.
+  // Of these layouts, AAC carries only 3.0 and 4.0, and AC-3 and E-AC-3 carry all but 3.0(back)
+  // and 3.1 (ADR 0050), so the job names stereo for the rest.
   static Stream<ToneEncode> threeAndFourChannelStereoSteps() {
     var aac =
-        Stream.of("2.1", "3.0(back)", "3.1", "quad", "quad(side)")
-            .map(layout -> steppedToStereo(layout, "aac"));
+        Stream.of("2.1", "3.0(back)", "3.1").map(layout -> steppedToStereo(layout, "aac").build());
+    var aacQuads =
+        Arrays.stream(ToneSet.values())
+            .flatMap(
+                tones ->
+                    Stream.of("quad", "quad(side)")
+                        .map(layout -> steppedToStereo(layout, "aac").tones(tones).build()));
     var dolbyDigital =
         Stream.of("ac3", "eac3")
             .flatMap(
                 codec ->
-                    Stream.of("3.0(back)", "3.1").map(layout -> steppedToStereo(layout, codec)));
-    return Stream.concat(aac, dolbyDigital);
+                    Stream.of("3.0(back)", "3.1")
+                        .map(layout -> steppedToStereo(layout, codec).build()));
+    return Stream.of(aac, aacQuads, dolbyDigital).flatMap(encodes -> encodes);
   }
 
   @ParameterizedTest(name = "{0}")
@@ -4523,7 +4519,9 @@ class WorkerMediaSmokeTest {
   /** The tone of each source channel, by the name that FFmpeg gives the channel. */
   private enum ToneSet {
     // The rear pair shares one tone in opposite phase, so a fold of the pair into one channel
-    // cancels it, and a swap of its sides reads negative.
+    // cancels it, and a swap of its sides reads negative. A matrix that mixes the pair's
+    // difference into each side reads the same as one that keeps each rear channel on its side,
+    // so the cases that move a rear pair also run with the next set.
     REAR_PAIR_IN_OPPOSITE_PHASE(
         Map.of(
             "FL", Tone.of(400),
@@ -4571,7 +4569,7 @@ class WorkerMediaSmokeTest {
       List<Route> routes) {
     @Override
     public String toString() {
-      return sourceLayout + " to " + codec + " " + outputLayout;
+      return sourceLayout + " to " + codec + " " + outputLayout + ", " + tones;
     }
   }
 
@@ -4591,26 +4589,36 @@ class WorkerMediaSmokeTest {
         .toList();
   }
 
-  private static ToneEncode keptLayout(String layout, String codec) {
+  private static ToneEncode.ToneEncodeBuilder keptLayout(String layout, String codec) {
     return ToneEncode.builder()
         .sourceLayout(layout)
         .tones(ToneSet.REAR_PAIR_IN_OPPOSITE_PHASE)
         .codec(codec)
         .outputLayout(layout)
         .decodedLayout(layout)
-        .routes(keptRoutes(layout))
-        .build();
+        .routes(keptRoutes(layout));
   }
 
-  private static ToneEncode steppedToStereo(String layout, String codec) {
+  // A/52 has one 2/2 mode, which FFmpeg's decoder reports as quad(side).
+  private static ToneEncode.ToneEncodeBuilder quadAsQuadSide(String codec) {
+    return keptLayout("quad", codec)
+        .decodedLayout("quad(side)")
+        .routes(
+            List.of(
+                route("FL", "FL", 1.0),
+                route("FR", "FR", 1.0),
+                route("BL", "SL", 1.0),
+                route("BR", "SR", 1.0)));
+  }
+
+  private static ToneEncode.ToneEncodeBuilder steppedToStereo(String layout, String codec) {
     return ToneEncode.builder()
         .sourceLayout(layout)
         .tones(ToneSet.REAR_PAIR_IN_OPPOSITE_PHASE)
         .codec(codec)
         .outputLayout("stereo")
         .decodedLayout("stereo")
-        .routes(STEREO_ROUTES.get(layout))
-        .build();
+        .routes(STEREO_ROUTES.get(layout));
   }
 
   // 7.0 is FL FR FC BL BR SL SR: the back and side channel of each side mix into its surround.
