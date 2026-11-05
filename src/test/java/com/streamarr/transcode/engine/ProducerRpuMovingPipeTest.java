@@ -780,6 +780,7 @@ class ProducerRpuMovingPipeTest {
         .stallTimeout(Duration.ofMinutes(1))
         .encodedFrameRate(Optional.of(recording.source().videoFrameRate()))
         .videoDecision(VideoDecisionFixtures.forRecording(recording))
+        .paddedAudioEnd(Optional.empty())
         .periodSeconds(recording.period())
         .startSequenceNumber(recording.startSequenceNumber())
         .memoryBudget(SegmentMemoryBudget.forSlots(1))

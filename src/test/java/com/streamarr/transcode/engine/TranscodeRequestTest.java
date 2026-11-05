@@ -60,6 +60,58 @@ class TranscodeRequestTest {
   }
 
   @Test
+  @DisplayName(
+      "Should reject the request when an encode holds the last frame without an advertised end")
+  void shouldRejectTheRequestWhenAnEncodeHoldsTheLastFrameWithoutAnAdvertisedEnd() {
+    var request =
+        request(TranscodeMode.FULL_TRANSCODE)
+            .encoderPreset(EncoderPreset.FASTER)
+            .transcodeDecision(
+                TranscodeDecision.builder()
+                    .transcodeMode(TranscodeMode.FULL_TRANSCODE)
+                    .videoDecision(
+                        VideoDecisionFixtures.encodeBuilder()
+                            .holdsLastFrameToAdvertisedEnd(true)
+                            .build())
+                    .build());
+
+    assertThatIllegalArgumentException()
+        .isThrownBy(request::build)
+        .withMessageContaining("advertised end");
+  }
+
+  @Test
+  @DisplayName(
+      "Should reject the request when its audio pads with silence without an advertised end")
+  void shouldRejectTheRequestWhenItsAudioPadsWithSilenceWithoutAnAdvertisedEnd() {
+    var request =
+        request(TranscodeMode.AUDIO_TRANSCODE)
+            .transcodeDecision(
+                TranscodeDecision.builder()
+                    .transcodeMode(TranscodeMode.AUDIO_TRANSCODE)
+                    .videoDecision(VideoDecisionFixtures.forMode(TranscodeMode.AUDIO_TRANSCODE))
+                    .audioDecision(
+                        AudioDecision.builder()
+                            .mode(AudioMode.TRANSCODE)
+                            .codec("aac")
+                            .padsWithSilenceToAdvertisedEnd(true)
+                            .build())
+                    .build());
+
+    assertThatIllegalArgumentException()
+        .isThrownBy(request::build)
+        .withMessageContaining("advertised end");
+  }
+
+  @Test
+  @DisplayName("Should carry no advertised end when the request is built without one")
+  void shouldCarryNoAdvertisedEndWhenTheRequestIsBuiltWithoutOne() {
+    var request = request(TranscodeMode.REMUX).build();
+
+    assertThat(request.advertisedEnd()).isEmpty();
+  }
+
+  @Test
   @DisplayName("Should reject the request when its seek position is null")
   void shouldRejectTheRequestWhenItsSeekPositionIsNull() {
     var builder = request(TranscodeMode.REMUX);

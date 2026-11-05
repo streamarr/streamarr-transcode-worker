@@ -59,6 +59,17 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
     return new AudioEncodeOptions(decoderOptions(audio, source), outputOptions);
   }
 
+  /**
+   * These options with {@code filter} after the encode's own filters, in its one filter chain:
+   * FFmpeg keeps only the last {@code -af} that an output names.
+   */
+  AudioEncodeOptions withTrailingFilter(String filter) {
+    var options = new ArrayList<>(outputOptions);
+    var chain = options.indexOf("-af") + 1;
+    options.set(chain, options.get(chain) + "," + filter);
+    return new AudioEncodeOptions(inputOptions, options);
+  }
+
   // ADR 0043: no dynamic range compression, and the dialogue normalization that a hardware
   // decoder applies to the copy.
   private static List<String> decoderOptions(AudioDecision audio, SourceAudio source) {
@@ -193,7 +204,9 @@ record AudioEncodeOptions(@NonNull List<String> inputOptions, @NonNull List<Stri
     return "aresample=osr=" + sampleRate + ":" + TUNED_RESAMPLER;
   }
 
-  // The format stage dithers FLAC or ALAC when it writes samples that a downmix mixed.
+  // The format stage dithers FLAC or ALAC when it writes samples that a downmix mixed. Without a
+  // target rate, its resampler takes the rate that FFmpeg negotiates with the encoder, so a rate
+  // conversion that the encoder needs runs here, before any padding that follows the chain.
   private static String formatStage(
       Encoder encoder,
       AudioDecision audio,

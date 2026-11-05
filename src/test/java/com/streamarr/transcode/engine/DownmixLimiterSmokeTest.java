@@ -10,6 +10,7 @@ import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -17,6 +18,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Random;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
@@ -394,6 +396,84 @@ class DownmixLimiterSmokeTest {
 
     assertThat(packets.getFirst()[0]).as("first timestamp").isEqualTo(10L * sampleRate);
     assertThat(packets.stream().mapToLong(packet -> packet[1]).sum()).isEqualTo(sampleRate);
+  }
+
+  @Test
+  @DisplayName(
+      "Should keep every limited sample and write digital silence after them when a dithered FLAC"
+          + " downmix pads its audio")
+  void shouldKeepEveryLimitedSampleAndWriteDigitalSilenceAfterThemWhenAFlacDownmixPads()
+      throws Exception {
+    var sampleRate = 48_000;
+    var source = placed(seed97Burst(), placing(Job.STEREO, Placement.END, sampleRate));
+    var audio =
+        AudioDecision.builder()
+            .mode(AudioMode.TRANSCODE)
+            .codec("flac")
+            .channels(2)
+            .bitrate(0)
+            .channelLayout(Optional.of(Job.STEREO.output));
+    var sourceAudio =
+        SourceAudio.builder()
+            .codec("pcm_f64le")
+            .channels(6)
+            .channelLayout(Optional.of("5.1"))
+            .sampleFormat(Optional.of("dbl"))
+            .sampleRate(OptionalInt.of(sampleRate))
+            .build();
+
+    var unpadded = run(source, filtering(Job.STEREO, encodeFilter(audio, sourceAudio), sampleRate));
+    var padded =
+        run(
+            source,
+            filtering(
+                Job.STEREO,
+                encodeFilter(audio.padsWithSilenceToAdvertisedEnd(true), sourceAudio),
+                sampleRate));
+
+    assertHeldAtTheCeiling(unpadded, sampleRate, Job.STEREO);
+    for (var channel = 0; channel < 2; channel++) {
+      assertThat(padded[channel])
+          .as("frames of channel %d, up to one second past the advertised end", channel)
+          .hasSize(3 * sampleRate);
+      assertThat(Arrays.copyOf(padded[channel], sampleRate))
+          .as("limited samples of channel %d", channel)
+          .containsExactly(unpadded[channel]);
+      assertThat(Arrays.copyOfRange(padded[channel], sampleRate, 3 * sampleRate))
+          .as("silence of channel %d", channel)
+          .containsOnly(0.0);
+    }
+  }
+
+  // The -af chain that the worker's command for an audio encode of the source names, padded up to
+  // an advertised end two seconds in when the decision pads.
+  private static String encodeFilter(
+      AudioDecision.AudioDecisionBuilder audio, SourceAudio sourceAudio) {
+    var decision =
+        TranscodeDecision.builder()
+            .transcodeMode(TranscodeMode.AUDIO_TRANSCODE)
+            .videoCodecFamily("h264")
+            .videoDecision(VideoDecisionFixtures.forMode(TranscodeMode.AUDIO_TRANSCODE))
+            .audioDecision(audio.build())
+            .subtitleDecision(SubtitleDecisions.EXCLUDED)
+            .build();
+    var request =
+        TranscodeRequest.builder()
+            .sessionId(UUID.randomUUID())
+            .sourcePath(Path.of("/media/movie.mkv"))
+            .targetSegmentDuration(6)
+            .mediaSegmentCount(1)
+            .transcodeDecision(decision)
+            .sourceAudio(Optional.of(sourceAudio))
+            .advertisedEnd(Optional.of(Duration.ofSeconds(2)))
+            .build();
+    var job = TranscodeJob.builder().request(request).videoEncoder("copy").build();
+    var command =
+        ((FfmpegPipeline.SingleProcess)
+                new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1)).buildPipeline(job))
+            .command();
+    assertThat(command).containsOnlyOnce("-af");
+    return command.get(command.indexOf("-af") + 1);
   }
 
   private String stereoFilter(int sampleRate) {

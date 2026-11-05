@@ -612,6 +612,7 @@ class SegmentAssemblerBitstreamRewriteTest {
         .maximumSegmentBytes(Mp4Stream.SEGMENT_CAP)
         .encodedFrameRate(Optional.empty())
         .videoDecision(decision)
+        .paddedAudioEnd(Optional.empty())
         .build();
   }
 

@@ -1,6 +1,7 @@
 package com.streamarr.transcode.engine;
 
 import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
+import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -19,12 +20,15 @@ import java.util.stream.Stream;
  * their segment. A keyframe fragment does not show how far the audio has arrived: FFmpeg can write
  * one without audio past a boundary and the audio before that boundary in the fragment after it.
  * While the audio lasts, an audio sample shows it; once the audio ends, only the video does ({@link
- * VideoProgress}).
+ * VideoProgress}). An attempt that pads its audio with silence drops each sample that starts at or
+ * after the advertised end: FFmpeg runs the padding past that end, so that the encoder writes the
+ * frame that holds it whole.
  */
 final class AudioSampleQueue {
 
   private final SegmentIntervals intervals;
   private final int startSequenceNumber;
+  private final Optional<Duration> paddedAudioEnd;
   // Every held sample and its segment number, in arrival order, which is decode order.
   private final Deque<Queued> held = new ArrayDeque<>();
   private long firstOpenNumber;
@@ -34,9 +38,15 @@ final class AudioSampleQueue {
   private long lastPresentationTime = Long.MIN_VALUE;
   private long droppedLateSampleCount;
 
-  AudioSampleQueue(SegmentIntervals intervals, int startSequenceNumber) {
+  /**
+   * @param paddedAudioEnd the advertised end of an attempt that pads its audio with silence; empty
+   *     for any other attempt
+   */
+  AudioSampleQueue(
+      SegmentIntervals intervals, int startSequenceNumber, Optional<Duration> paddedAudioEnd) {
     this.intervals = intervals;
     this.startSequenceNumber = startSequenceNumber;
+    this.paddedAudioEnd = paddedAudioEnd;
     this.firstOpenNumber = startSequenceNumber;
   }
 
@@ -108,10 +118,16 @@ final class AudioSampleQueue {
     held.clear();
   }
 
-  // Holds the sample for its segment unless it is preroll or late; false when it drops it.
+  // Holds the sample for its segment unless it is preroll, late or padding past the advertised end;
+  // false when it drops it.
   private boolean tryHold(Fragment fragment, Sample sample) {
     requireNoRegression(sample);
-    var number = numberOf(sample.presentationTime(), audioTimescaleOf(fragment));
+    var timescale = audioTimescaleOf(fragment);
+    if (startsAtOrAfterThePaddedEnd(sample.presentationTime(), timescale)) {
+      return false;
+    }
+
+    var number = numberOf(sample.presentationTime(), timescale);
     if (number < 0 && startSequenceNumber == 0) {
       number = 0;
     }
@@ -127,6 +143,19 @@ final class AudioSampleQueue {
 
     held.addLast(new Queued(number, new CarriedSample(fragment, sample)));
     return true;
+  }
+
+  private boolean startsAtOrAfterThePaddedEnd(long presentationTime, long timescale) {
+    return paddedAudioEnd
+        .filter(end -> presentationTime >= firstTickAtOrAfter(end, timescale))
+        .isPresent();
+  }
+
+  // The nanoseconds of a Duration times a 32-bit timescale stay within a signed 64-bit value.
+  private static long firstTickAtOrAfter(Duration time, long timescale) {
+    var wholeSeconds = Math.multiplyExact(time.getSeconds(), timescale);
+    return Math.addExact(
+        wholeSeconds, Math.ceilDiv(time.getNano() * timescale, Duration.ofSeconds(1).toNanos()));
   }
 
   private void requireNoRegression(Sample sample) {

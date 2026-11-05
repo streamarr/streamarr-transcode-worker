@@ -75,7 +75,8 @@ final class VideoDecisions {
   private static VideoDecision.Copy copy(build.buf.gen.streamarr.transcode.v1.VideoDecision video) {
     if (carriesEncodeValues(video)) {
       throw new InvalidJobSpecificationException(
-          "A stream copy carries a codec profile, tier, level or deinterlace instruction");
+          "A stream copy carries a codec profile, tier, level, deinterlace instruction or"
+              + " instruction to hold the last frame");
     }
 
     if (video.hasSourceDynamicRange()) {
@@ -103,7 +104,8 @@ final class VideoDecisions {
             != build.buf.gen.streamarr.transcode.v1.VideoCodecTier
                 .VIDEO_CODEC_TIER_UNSPECIFIED_VALUE
         || video.hasLevel()
-        || video.hasDeinterlace();
+        || video.hasDeinterlace()
+        || video.getHoldLastFrameToAdvertisedEnd();
   }
 
   @SuppressWarnings("checkstyle:fullyQualifiedName")
@@ -158,6 +160,7 @@ final class VideoDecisions {
         .outputDynamicRange(outputDynamicRange)
         .sourcePacketsCarryPresentationTimes(video.getSourcePacketsCarryPresentationTimes())
         .deinterlace(deinterlace(video))
+        .holdsLastFrameToAdvertisedEnd(video.getHoldLastFrameToAdvertisedEnd())
         .build();
   }
 

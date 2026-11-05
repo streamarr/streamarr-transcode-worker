@@ -11,6 +11,10 @@ import lombok.NonNull;
  * that layout; without it, the encode writes FFmpeg's default layout for {@code channels}. Such an
  * encode writes {@code outputSampleRate} and, for FLAC or ALAC, {@code outputBitDepth}; each absent
  * value follows the source.
+ *
+ * @param padsWithSilenceToAdvertisedEnd whether an encode of the audio appends digital silence
+ *     after the stream's last source sample up to the request's advertised end, and encodes only
+ *     silence when the attempt starts after that sample
  */
 @Builder
 public record AudioDecision(
@@ -21,7 +25,8 @@ public record AudioDecision(
     @NonNull OptionalInt streamIndex,
     @NonNull Optional<SpeakerLayout> channelLayout,
     @NonNull OptionalInt outputSampleRate,
-    @NonNull OptionalInt outputBitDepth) {
+    @NonNull OptionalInt outputBitDepth,
+    boolean padsWithSilenceToAdvertisedEnd) {
 
   /**
    * FFmpeg's specifier of the source stream that the job copies or encodes: its index, or {@code

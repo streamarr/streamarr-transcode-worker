@@ -38,8 +38,9 @@ final class WorkerVariantJobMapper {
 
   /**
    * @throws InvalidJobSpecificationException when the job names no transcode, audio or subtitle
-   *     mode, or when its video decision is missing, contradicts the rest of the job, or lacks a
-   *     value that the worker forces or checks
+   *     mode, when its video decision is missing, contradicts the rest of the job, or lacks a value
+   *     that the worker forces or checks, or when it holds the last frame or pads its audio without
+   *     encoding that stream or without a positive advertised end
    */
   TranscodeRequest map(VariantJob job) {
     return map(job, Optional.empty());
@@ -72,7 +73,33 @@ final class WorkerVariantJobMapper {
         .mediaSegmentCount(execution.getMediaSegmentCount())
         .seekPosition(seekPosition(execution))
         .sourceAudio(sourceAudio)
+        .advertisedEnd(advertisedEnd(job))
         .build();
+  }
+
+  // The worker reads the advertised end only from a job that holds the last frame or pads audio.
+  private static Optional<Duration> advertisedEnd(VariantJob job) {
+    var decision = job.getDecision();
+    var holds = decision.getVideo().getHoldLastFrameToAdvertisedEnd();
+    var pads = decision.getAudio().getPadWithSilenceToAdvertisedEnd();
+    if (!holds && !pads) {
+      return Optional.empty();
+    }
+
+    var execution = job.getExecution();
+    if (!execution.hasAdvertisedEnd()) {
+      throw new InvalidJobSpecificationException(
+          "A job that holds the last frame or pads its audio requires the advertised end");
+    }
+
+    var end = execution.getAdvertisedEnd();
+    var advertisedEnd = Duration.ofSeconds(end.getSeconds(), end.getNanos());
+    if (!advertisedEnd.isPositive()) {
+      throw new InvalidJobSpecificationException(
+          "The advertised end must be positive, got: " + advertisedEnd);
+    }
+
+    return Optional.of(advertisedEnd);
   }
 
   private static Optional<OutputFrameRate> outputFrameRate(VariantJob job) {
@@ -132,8 +159,15 @@ final class WorkerVariantJobMapper {
 
   @SuppressWarnings("checkstyle:fullyQualifiedName")
   private static AudioDecision audio(build.buf.gen.streamarr.transcode.v1.AudioDecision audio) {
+    var mode = audioMode(audio.getMode());
+    var pads = audio.getPadWithSilenceToAdvertisedEnd();
+    if (pads && mode != AudioMode.TRANSCODE) {
+      throw new InvalidJobSpecificationException(
+          "Only an audio encode pads with silence, and the job's audio mode is " + mode);
+    }
+
     return AudioDecision.builder()
-        .mode(audioMode(audio.getMode()))
+        .mode(mode)
         .codec(audio.hasCodec() ? audio.getCodec() : null)
         .channels(audio.getChannels())
         .bitrate(audio.getBitrateBitsPerSecond())
@@ -142,6 +176,7 @@ final class WorkerVariantJobMapper {
         .channelLayout(channelLayout(audio))
         .outputSampleRate(outputSampleRate(audio))
         .outputBitDepth(outputBitDepth(audio))
+        .padsWithSilenceToAdvertisedEnd(pads)
         .build();
   }
 

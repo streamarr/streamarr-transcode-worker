@@ -4,6 +4,7 @@ import com.streamarr.transcode.engine.FragmentedMp4Exception.Reason;
 import com.streamarr.transcode.engine.GroupingOutcome.NothingClosed;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentNumberSkipped;
 import com.streamarr.transcode.engine.GroupingOutcome.SegmentsClosed;
+import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -50,6 +51,8 @@ final class SegmentAssembler {
    *     empty when the attempt copies the video, whose sample durations follow the source
    * @param videoDecision the video that the initialization segment must declare
    * @param requiresSoundTrack whether the initialization segment must declare a sound track
+   * @param paddedAudioEnd the advertised end of an attempt that pads its audio with silence, at or
+   *     after which the assembler drops every audio sample; empty for any other attempt
    */
   @Builder
   private SegmentAssembler(
@@ -58,10 +61,11 @@ final class SegmentAssembler {
       long maximumSegmentBytes,
       @NonNull Optional<OutputFrameRate> encodedFrameRate,
       @NonNull VideoDecision videoDecision,
-      boolean requiresSoundTrack) {
+      boolean requiresSoundTrack,
+      @NonNull Optional<Duration> paddedAudioEnd) {
     var intervals = SegmentIntervals.onPlainGrid(periodSeconds);
     this.grouper = new SegmentGrouper(intervals, startSequenceNumber, maximumSegmentBytes);
-    this.audio = new AudioSampleQueue(intervals, startSequenceNumber);
+    this.audio = new AudioSampleQueue(intervals, startSequenceNumber, paddedAudioEnd);
     this.video = new VideoProgress(intervals);
     this.maximumSegmentBytes = maximumSegmentBytes;
     this.encodedFrameRate = encodedFrameRate;
