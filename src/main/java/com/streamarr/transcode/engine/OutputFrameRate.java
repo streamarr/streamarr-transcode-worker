@@ -36,7 +36,7 @@ public record OutputFrameRate(long numerator, long denominator) {
    * The presentation time, rounded down to whole microseconds, of the first frame on this rate's
    * grid from zero that presents at or after the start.
    */
-  long firstFrameAtOrAfterInMicroseconds(SegmentStart start) {
+  long firstFrameAtOrAfterInMicroseconds(MediaTime start) {
     var startNumerator =
         BigInteger.valueOf(start.ticks())
             .multiply(BigInteger.valueOf(start.timeBase().numerator()))

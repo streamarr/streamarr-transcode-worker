@@ -51,9 +51,9 @@ class StderrDrainerTest {
           .containsExactly(
               ObservedSourceStream.builder()
                   .sourceIndex(3)
-                  .lastStart(Duration.ofSeconds(5))
-                  .end(Duration.ofMillis(5_040))
-                  .lastKeyframeStart(Optional.of(Duration.ofSeconds(5)))
+                  .lastStart(MediaTime.of(Duration.ofSeconds(5)))
+                  .end(MediaTime.of(Duration.ofMillis(5_040)))
+                  .lastKeyframeStart(Optional.of(MediaTime.of(Duration.ofSeconds(5))))
                   .build());
       assertThat(drainer.awaitRecentOutput(UNTIL_END_OF_STREAM))
           .containsExactly(

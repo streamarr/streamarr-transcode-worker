@@ -57,9 +57,9 @@ class SourceEndRuleTest {
   void shouldReportTheSegmentWhereTheLastFrameEndsWhenAnUndeliveredEncodesLastFrameSpansSegments() {
     var video =
         videoEndingAt64Seconds()
-            .lastStart(Duration.ZERO)
-            .end(Duration.ofSeconds(20))
-            .lastKeyframeStart(Optional.of(Duration.ZERO))
+            .lastStart(MediaTime.of(Duration.ZERO))
+            .end(MediaTime.of(Duration.ofSeconds(20)))
+            .lastKeyframeStart(Optional.of(MediaTime.of(Duration.ZERO)))
             .build();
 
     var report =
@@ -75,7 +75,9 @@ class SourceEndRuleTest {
           + " copy that delivered no segment reads frames after it in a later interval")
   void shouldReportTheSegmentOfTheVideosLastKeyframeWhenAStreamCopyReadsFramesAfterIt() {
     var video =
-        videoEndingAt64Seconds().lastKeyframeStart(Optional.of(Duration.ofMillis(59_000))).build();
+        videoEndingAt64Seconds()
+            .lastKeyframeStart(Optional.of(MediaTime.of(Duration.ofMillis(59_000))))
+            .build();
 
     var report =
         ruleFor(copy()).reportOn(List.of(video, AUDIO_ENDING_AT_84_SECONDS), NOTHING_DELIVERED);
@@ -89,7 +91,9 @@ class SourceEndRuleTest {
           + " its listed end, when a stream copy's job carries a segment list")
   void shouldReportTheMergedSegmentThatHoldsTheVideosLastKeyframeWhenAStreamCopysJobCarriesAList() {
     var video =
-        videoEndingAt64Seconds().lastKeyframeStart(Optional.of(Duration.ofMillis(59_000))).build();
+        videoEndingAt64Seconds()
+            .lastKeyframeStart(Optional.of(MediaTime.of(Duration.ofMillis(59_000))))
+            .build();
     // 6 s slots: segment 8 spans slots 8 and 9, from 48 s to 60 s.
     var rule =
         SourceEndRule.builder()
@@ -127,8 +131,8 @@ class SourceEndRuleTest {
   void shouldDecideFromTheSourcesStreamsWhenAnEncodeHoldsTheLastFrame() {
     var audio =
         audioEndingAt84Seconds()
-            .lastStart(Duration.ofMillis(71_989))
-            .end(Duration.ofSeconds(72))
+            .lastStart(MediaTime.of(Duration.ofMillis(71_989)))
+            .end(MediaTime.of(Duration.ofSeconds(72)))
             .build();
 
     var report =
@@ -157,8 +161,8 @@ class SourceEndRuleTest {
   void shouldReportTheLatestStreamsSegmentAndListNoneWhenAHeldEncodesSourceEndsEarly() {
     var audio =
         audioEndingAt84Seconds()
-            .lastStart(Duration.ofMillis(71_989))
-            .end(Duration.ofSeconds(72))
+            .lastStart(MediaTime.of(Duration.ofMillis(71_989)))
+            .end(MediaTime.of(Duration.ofSeconds(72)))
             .build();
 
     var report =
@@ -175,9 +179,9 @@ class SourceEndRuleTest {
   void shouldReportTheSegmentWhereTheLastFrameEndsWhenAHeldEncodesFinalFrameSpansABoundary() {
     var video =
         videoEndingAt64Seconds()
-            .lastStart(Duration.ofMillis(5_500))
-            .end(Duration.ofMillis(6_500))
-            .lastKeyframeStart(Optional.of(Duration.ofMillis(5_500)))
+            .lastStart(MediaTime.of(Duration.ofMillis(5_500)))
+            .end(MediaTime.of(Duration.ofMillis(6_500)))
+            .lastKeyframeStart(Optional.of(MediaTime.of(Duration.ofMillis(5_500))))
             .build();
 
     var report = ruleFor(held()).reportOn(List.of(video), NOTHING_DELIVERED);
@@ -192,13 +196,13 @@ class SourceEndRuleTest {
   void shouldReportTheSegmentWhereTheLastFrameStartsWhenItEndsOnABoundaryOrLastsNoTime() {
     var endingOnTheBoundary =
         videoEndingAt64Seconds()
-            .lastStart(Duration.ofMillis(5_958))
-            .end(Duration.ofSeconds(6))
+            .lastStart(MediaTime.of(Duration.ofMillis(5_958)))
+            .end(MediaTime.of(Duration.ofSeconds(6)))
             .build();
     var lastingNoTime =
         audioEndingAt84Seconds()
-            .lastStart(Duration.ofMillis(5_000))
-            .end(Duration.ofMillis(5_000))
+            .lastStart(MediaTime.of(Duration.ofMillis(5_000)))
+            .end(MediaTime.of(Duration.ofMillis(5_000)))
             .build();
 
     var report =
@@ -215,14 +219,14 @@ class SourceEndRuleTest {
   void shouldReportTheSegmentWhereTheLastCopiedAudioPacketStartsWhenItCrossesABoundary() {
     var video =
         videoEndingAt64Seconds()
-            .lastStart(Duration.ofMillis(958))
-            .end(Duration.ofSeconds(1))
-            .lastKeyframeStart(Optional.of(Duration.ZERO))
+            .lastStart(MediaTime.of(Duration.ofMillis(958)))
+            .end(MediaTime.of(Duration.ofSeconds(1)))
+            .lastKeyframeStart(Optional.of(MediaTime.of(Duration.ZERO)))
             .build();
     var audio =
         audioEndingAt84Seconds()
-            .lastStart(Duration.ofMillis(5_994))
-            .end(Duration.ofMillis(6_015))
+            .lastStart(MediaTime.of(Duration.ofMillis(5_994)))
+            .end(MediaTime.of(Duration.ofMillis(6_015)))
             .build();
     var rule =
         SourceEndRule.builder()
@@ -249,8 +253,8 @@ class SourceEndRuleTest {
       boolean copiesAudio, List<Integer> streamsWithMediaAfter) {
     var audio =
         audioEndingAt84Seconds()
-            .lastStart(Duration.ofMillis(65_900))
-            .end(Duration.ofMillis(66_020))
+            .lastStart(MediaTime.of(Duration.ofMillis(65_900)))
+            .end(MediaTime.of(Duration.ofMillis(66_020)))
             .build();
     var rule =
         SourceEndRule.builder()
@@ -276,9 +280,9 @@ class SourceEndRuleTest {
   void shouldReportNoEarlyEndWhenAStreamCopysLastKeyframeLiesInTheLastSegment() {
     var video =
         videoEndingAt64Seconds()
-            .lastStart(Duration.ofMillis(83_958))
-            .end(Duration.ofSeconds(84))
-            .lastKeyframeStart(Optional.of(Duration.ofSeconds(78)))
+            .lastStart(MediaTime.of(Duration.ofMillis(83_958)))
+            .end(MediaTime.of(Duration.ofSeconds(84)))
+            .lastKeyframeStart(Optional.of(MediaTime.of(Duration.ofSeconds(78))))
             .build();
 
     var report =
@@ -320,7 +324,10 @@ class SourceEndRuleTest {
       "Should report no early end when the source's last sample starts before the timeline's zero")
   void shouldReportNoEarlyEndWhenTheSourcesLastSampleStartsBeforeZero() {
     var audio =
-        audioEndingAt84Seconds().lastStart(Duration.ofMillis(-21)).end(Duration.ZERO).build();
+        audioEndingAt84Seconds()
+            .lastStart(MediaTime.of(Duration.ofMillis(-21)))
+            .end(MediaTime.of(Duration.ZERO))
+            .build();
 
     var report = ruleFor(held()).reportOn(List.of(audio), NOTHING_DELIVERED);
 
@@ -343,18 +350,18 @@ class SourceEndRuleTest {
   private static ObservedSourceStream.ObservedSourceStreamBuilder videoEndingAt64Seconds() {
     return ObservedSourceStream.builder()
         .sourceIndex(VIDEO_INDEX)
-        .lastStart(Duration.ofMillis(63_958))
-        .end(Duration.ofSeconds(64))
-        .lastKeyframeStart(Optional.of(Duration.ofSeconds(60)));
+        .lastStart(MediaTime.of(Duration.ofMillis(63_958)))
+        .end(MediaTime.of(Duration.ofSeconds(64)))
+        .lastKeyframeStart(Optional.of(MediaTime.of(Duration.ofSeconds(60))));
   }
 
   // Audio whose last frame starts inside segment 13, the last of 14.
   private static ObservedSourceStream.ObservedSourceStreamBuilder audioEndingAt84Seconds() {
     return ObservedSourceStream.builder()
         .sourceIndex(AUDIO_INDEX)
-        .lastStart(Duration.ofMillis(83_989))
-        .end(Duration.ofSeconds(84))
-        .lastKeyframeStart(Optional.of(Duration.ofMillis(83_989)));
+        .lastStart(MediaTime.of(Duration.ofMillis(83_989)))
+        .end(MediaTime.of(Duration.ofSeconds(84)))
+        .lastKeyframeStart(Optional.of(MediaTime.of(Duration.ofMillis(83_989))));
   }
 
   // 14 segments of 6 s: the last advertised segment, 13, runs from 78 s to 84 s.

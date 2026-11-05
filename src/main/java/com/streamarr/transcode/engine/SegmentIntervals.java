@@ -131,12 +131,12 @@ final class SegmentIntervals {
   }
 
   /** Where segment {@code number}'s interval starts on the zero-based timeline, exactly. */
-  SegmentStart startTimeOf(long number) {
+  MediaTime startTimeOf(long number) {
     if (isPlainGrid()) {
-      return new SegmentStart(number, slotsOf(periodSeconds));
+      return new MediaTime(number, slotsOf(periodSeconds));
     }
 
-    return new SegmentStart(starts[Math.toIntExact(number)], startTimeBase);
+    return new MediaTime(starts[Math.toIntExact(number)], startTimeBase);
   }
 
   private static long firstTickAtOrAfter(long start, TimeBase timeBase, long timescale) {

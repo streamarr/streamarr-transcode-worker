@@ -1,7 +1,5 @@
 package com.streamarr.transcode.engine;
 
-import java.math.BigInteger;
-import java.time.Duration;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -52,7 +50,6 @@ final class SourceStreamObservation {
   // AV_PKT_FLAG_DISCARD: the demuxer marks a packet that no decoder presents, as an MP4 edit list
   // cuts it away.
   private static final int DISCARD = 0x4;
-  private static final long NANOS_PER_SECOND = 1_000_000_000L;
   private static final int SOURCE_STREAMS_OUTPUT = 1;
   private static final String MAPPING_HEADER = "Stream mapping:";
 
@@ -145,7 +142,7 @@ final class SourceStreamObservation {
         .build();
   }
 
-  private static Duration earlier(Duration first, Duration second) {
+  private static MediaTime earlier(MediaTime first, MediaTime second) {
     if (second.compareTo(first) < 0) {
       return second;
     }
@@ -206,29 +203,25 @@ final class SourceStreamObservation {
     }
   }
 
+  // A stream whose times do not fit a signed 64-bit count of nanoseconds stays unobserved.
   private static Optional<ObservedSourceStream> observed(
       int sourceIndex, TimeBase timeBase, Packets read) {
+    var stream =
+        ObservedSourceStream.builder()
+            .sourceIndex(sourceIndex)
+            .lastStart(new MediaTime(read.lastStart(), timeBase))
+            .end(new MediaTime(read.end(), timeBase))
+            .lastKeyframeStart(
+                read.lastKeyframeStart().map(start -> new MediaTime(start, timeBase)))
+            .build();
     try {
-      return Optional.of(
-          ObservedSourceStream.builder()
-              .sourceIndex(sourceIndex)
-              .lastStart(durationOf(timeBase, read.lastStart()))
-              .end(durationOf(timeBase, read.end()))
-              .lastKeyframeStart(read.lastKeyframeStart().map(start -> durationOf(timeBase, start)))
-              .build());
+      stream.lastStart().truncatedToNanoseconds();
+      stream.end().truncatedToNanoseconds();
+      stream.lastKeyframeStart().ifPresent(MediaTime::truncatedToNanoseconds);
+      return Optional.of(stream);
     } catch (ArithmeticException _) {
       return Optional.empty();
     }
-  }
-
-  // Truncates to the nanosecond; throws ArithmeticException when the time does not fit.
-  private static Duration durationOf(TimeBase timeBase, long ticks) {
-    var nanos =
-        BigInteger.valueOf(ticks)
-            .multiply(BigInteger.valueOf(timeBase.numerator()))
-            .multiply(BigInteger.valueOf(NANOS_PER_SECOND))
-            .divide(BigInteger.valueOf(timeBase.denominator()));
-    return Duration.ofNanos(nanos.longValueExact());
   }
 
   private record Packets(long lastStart, long end, Optional<Long> lastKeyframeStart) {

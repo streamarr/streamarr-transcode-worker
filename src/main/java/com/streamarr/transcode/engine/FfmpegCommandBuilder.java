@@ -501,7 +501,7 @@ public class FfmpegCommandBuilder {
   private static Duration inputSeekStart(TranscodeRequest request) {
     var firstSegment = (long) request.startSequenceNumber();
     var firstSegmentStart =
-        request.segmentIntervals().startTimeOf(firstSegment).roundedDownToNanoseconds();
+        request.segmentIntervals().startTimeOf(firstSegment).truncatedToNanoseconds();
     var mode = request.transcodeDecision().transcodeMode();
     if (!mode.encodesVideo() || firstSegment == 0) {
       return firstSegmentStart;
@@ -536,7 +536,7 @@ public class FfmpegCommandBuilder {
         request
             .segmentIntervals()
             .startTimeOf(request.startSequenceNumber())
-            .roundedDownToNanoseconds());
+            .truncatedToNanoseconds());
   }
 
   private static boolean encodesVideo(TranscodeRequest request) {
@@ -1177,7 +1177,7 @@ public class FfmpegCommandBuilder {
   // frame
   // when it lies on the start or less than a microsecond after it, and no earlier frame lies within
   // a microsecond of it.
-  private static String forcedKeyframeTime(SegmentStart start, OutputFrameRate frameRate) {
+  private static String forcedKeyframeTime(MediaTime start, OutputFrameRate frameRate) {
     var microseconds =
         start
             .wholeMicroseconds()

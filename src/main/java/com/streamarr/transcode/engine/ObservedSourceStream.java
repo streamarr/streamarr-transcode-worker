@@ -1,12 +1,12 @@
 package com.streamarr.transcode.engine;
 
-import java.time.Duration;
 import java.util.Optional;
 import lombok.Builder;
 import lombok.NonNull;
 
 /**
- * What FFmpeg read of one chosen source stream, on the attempt's zero-based timeline.
+ * What FFmpeg read of one chosen source stream, on the attempt's zero-based timeline, in ticks of
+ * the stream's time base.
  *
  * @param sourceIndex the stream's index within the source container
  * @param lastStart the latest presentation time of a sample it read
@@ -17,6 +17,6 @@ import lombok.NonNull;
 @Builder
 record ObservedSourceStream(
     int sourceIndex,
-    @NonNull Duration lastStart,
-    @NonNull Duration end,
-    @NonNull Optional<Duration> lastKeyframeStart) {}
+    @NonNull MediaTime lastStart,
+    @NonNull MediaTime end,
+    @NonNull Optional<MediaTime> lastKeyframeStart) {}

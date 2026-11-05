@@ -37,7 +37,11 @@ record SourceEndRule(
 
   SourceEnd reportOn(List<ObservedSourceStream> streams, OptionalInt lastDeliveredMediaSegment) {
     var ends =
-        streams.stream().map(stream -> new StreamEnd(stream.sourceIndex(), stream.end())).toList();
+        streams.stream()
+            .map(
+                stream ->
+                    new StreamEnd(stream.sourceIndex(), stream.end().truncatedToNanoseconds()))
+            .toList();
     var endedEarly =
         lastSegmentWithSourceMedia(streams, lastDeliveredMediaSegment)
             .filter(segment -> segment >= 0 && segment < mediaSegmentCount - 1L)
@@ -62,7 +66,10 @@ record SourceEndRule(
         streams.stream().filter(stream -> stream.sourceIndex() == video.streamIndex()).findFirst();
     return switch (video) {
       case VideoDecision.Copy _ ->
-          videoStream.flatMap(ObservedSourceStream::lastKeyframeStart).map(this::segmentAt);
+          videoStream
+              .flatMap(ObservedSourceStream::lastKeyframeStart)
+              .map(MediaTime::truncatedToNanoseconds)
+              .map(this::segmentAt);
       case VideoDecision.Encode _ ->
           videoStream.map(SourceEndRule::lastCoveredInstant).map(this::segmentAt);
     };
@@ -83,7 +90,7 @@ record SourceEndRule(
 
   private Duration lastSourceInstant(ObservedSourceStream stream) {
     if (copiesAudio && stream.sourceIndex() != video.streamIndex()) {
-      return stream.lastStart();
+      return stream.lastStart().truncatedToNanoseconds();
     }
 
     return lastCoveredInstant(stream);
@@ -91,9 +98,10 @@ record SourceEndRule(
 
   // The last nanosecond that the stream's last sample covers; its start when it lasts no time.
   private static Duration lastCoveredInstant(ObservedSourceStream stream) {
-    var beforeEnd = stream.end().minusNanos(1);
-    if (beforeEnd.compareTo(stream.lastStart()) < 0) {
-      return stream.lastStart();
+    var lastStart = stream.lastStart().truncatedToNanoseconds();
+    var beforeEnd = stream.end().truncatedToNanoseconds().minusNanos(1);
+    if (beforeEnd.compareTo(lastStart) < 0) {
+      return lastStart;
     }
 
     return beforeEnd;
