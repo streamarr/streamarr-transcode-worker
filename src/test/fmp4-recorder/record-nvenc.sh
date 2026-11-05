@@ -57,6 +57,9 @@ SKIPPED_FORCED_TIME=18
 # ceil(P x fps) + 1, the GOP a keyframe-verified encoder gets (ADR 0037 as amended).
 GOP_FLOORED=143
 GOP_EXTENDED=145
+# The B-frames and lookahead the worker passes both NVENC encoders.
+B_FRAMES=3
+LOOKAHEAD_FRAMES=20
 
 # The default ladder (QualityLadderService in streamarr-server) for a 1920x1080 source at
 # 23.976 fps: rung, height, bitrate, then the level and codec string of an H.264 High and an HEVC
@@ -234,6 +237,7 @@ replaces=$replaces"
     -vf "scale=-2:$height:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p"
     -b:v "$bitrate" -maxrate "$bitrate" -bufsize "$((bitrate * 2))"
     -r:v:0 "$FRAME_RATE" -forced-idr 1 -force_key_frames:0 "$times" -g:v:0 "$gop" -keyint_min:v:0 "$gop"
+    -bf "$B_FRAMES" -rc-lookahead "$LOOKAHEAD_FRAMES"
     -f mp4 -movflags cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont
     -frag_duration "$FRAGMENTATION_TARGET_US" pipe:1
     -map 0:0 -c copy -copypriorss 1 -map_metadata -1 -map_chapters -1 -f framecrc -flush_packets 1 pipe:2)

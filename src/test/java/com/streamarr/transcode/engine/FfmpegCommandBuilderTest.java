@@ -532,6 +532,27 @@ class FfmpegCommandBuilderTest {
   }
 
   @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"h264_nvenc", "hevc_nvenc"})
+  @DisplayName(
+      "Should pass three B-frames and a 20-frame lookahead when an H.264 or HEVC NVENC encoder"
+          + " encodes")
+  void shouldPassThreeBFramesAndA20FrameLookaheadWhenAnH264OrHevcNvencEncoderEncodes(
+      String encoder) {
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), encoder);
+
+    assertThat(cmd).containsSequence("-bf", "3", "-rc-lookahead", "20");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"libx264", "libx265", "libsvtav1", "av1_nvenc", "hevc_qsv"})
+  @DisplayName("Should leave B-frames and lookahead to the encoder when the encoder is not NVENC")
+  void shouldLeaveBFramesAndLookaheadToTheEncoderWhenTheEncoderIsNotNvenc(String encoder) {
+    var cmd = command(request(TranscodeMode.FULL_TRANSCODE).build(), encoder);
+
+    assertThat(cmd).doesNotContain("-bf", "-rc-lookahead");
+  }
+
+  @ParameterizedTest(name = "{0}")
   @ValueSource(strings = {"av1_nvenc", "h264_videotoolbox", "h264_qsv", "h264_vaapi"})
   @DisplayName(
       "Should leave the codec profile and level to the encoder when a hardware encoder the worker"

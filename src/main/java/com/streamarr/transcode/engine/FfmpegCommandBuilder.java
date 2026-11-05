@@ -30,8 +30,14 @@ public class FfmpegCommandBuilder {
   private static final EncoderTraits UNLISTED_ENCODER = traits().build();
   private static final EncoderTraits FIXED_GOP = traits().fixedGop(true).build();
   // NVENC is not keyframe-verified until recordings show its forced keyframes (worker #56).
+  // The B-frames and lookahead under which the RTX 5090 recordings showed every forced keyframe as
+  // an IDR picture with no leading pictures (src/test/resources/nvenc).
   private static final EncoderTraits NVENC =
-      traits().fixedGop(true).codecProfileForcing(CodecProfileForcing.NVENC).build();
+      traits()
+          .fixedGop(true)
+          .frameTypeOptions(List.of("-bf", "3", "-rc-lookahead", "20"))
+          .codecProfileForcing(CodecProfileForcing.NVENC)
+          .build();
   // QSV and VAAPI take nv12 from system memory and refuse yuv420p.
   private static final String NV12 = "nv12";
   private static final EncoderTraits QSV =
@@ -1085,6 +1091,8 @@ public class FfmpegCommandBuilder {
     if (traitsOf(job).fixedGop()) {
       cmd.addAll(List.of("-keyint_min:v:0", gopSize));
     }
+
+    cmd.addAll(traitsOf(job).frameTypeOptions());
   }
 
   private static int gopFrameCount(TranscodeJob job) {
@@ -1208,11 +1216,13 @@ public class FfmpegCommandBuilder {
       boolean closesGopsByX265Parameters,
       boolean capsBitrateOnlyInCrfMode,
       @NonNull String eightBitPixelFormat,
+      @NonNull List<String> frameTypeOptions,
       @NonNull CodecProfileForcing codecProfileForcing) {}
 
   private static EncoderTraits.EncoderTraitsBuilder traits() {
     return EncoderTraits.builder()
         .eightBitPixelFormat(DEFAULT_EIGHT_BIT_PIXEL_FORMAT)
+        .frameTypeOptions(List.of())
         .codecProfileForcing(CodecProfileForcing.NONE);
   }
 
