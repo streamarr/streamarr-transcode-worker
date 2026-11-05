@@ -27,6 +27,7 @@ import build.buf.gen.streamarr.transcode.v1.UploadSegmentRequest;
 import build.buf.gen.streamarr.transcode.v1.UploadSegmentResponse;
 import build.buf.gen.streamarr.transcode.v1.Uuid;
 import build.buf.gen.streamarr.transcode.v1.VariantJob;
+import build.buf.gen.streamarr.transcode.v1.VideoEncodersChanged;
 import build.buf.gen.streamarr.transcode.v1.WorkerCapabilities;
 import build.buf.gen.streamarr.transcode.v1.WorkerIdentity;
 import build.buf.gen.streamarr.transcode.v1.WorkerRegistration;
@@ -40,6 +41,7 @@ import com.streamarr.transcode.engine.AttemptOutcome.Stopped;
 import com.streamarr.transcode.engine.DeliveryCancellation;
 import com.streamarr.transcode.engine.EncoderBackend;
 import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
+import com.streamarr.transcode.engine.HardwareEncoderFault;
 import com.streamarr.transcode.engine.MonotonicClock;
 import com.streamarr.transcode.engine.NoKeyframeBeforeReadBackException;
 import com.streamarr.transcode.engine.ProducedSegment;
@@ -246,6 +248,12 @@ public final class TranscodeWorker implements AutoCloseable {
         PROBE_CAPACITY_REFRESH_INTERVAL.toMillis(),
         PROBE_CAPACITY_REFRESH_INTERVAL.toMillis(),
         TimeUnit.MILLISECONDS);
+    // The test encode of a withdrawn hardware encoder runs off the worker monitor (ADR 0044).
+    sessionTimers.scheduleWithFixedDelay(
+        this::recheckWithdrawnEncoders,
+        configuration.hardwareEncoderRecheckInterval().toMillis(),
+        configuration.hardwareEncoderRecheckInterval().toMillis(),
+        TimeUnit.MILLISECONDS);
     // A fixed delay keeps a second between reports even after the monitor delayed one.
     sessionTimers.scheduleWithFixedDelay(
         this::reportJobAttemptProgress,
@@ -287,6 +295,9 @@ public final class TranscodeWorker implements AutoCloseable {
     engine.workerVerifiedEncoders().stream()
         .map(WorkerVideoEncoders::toProto)
         .forEach(capabilities::addVideoEncoders);
+    engine.softwareEncoders().stream()
+        .map(WorkerVideoEncoders::toProto)
+        .forEach(capabilities::addSoftwareVideoEncoders);
     configuration.sourceNamespaces().keySet().stream()
         .map(ProtoUuid::toProto)
         .forEach(capabilities::addSourceNamespaceIds);
@@ -302,6 +313,22 @@ public final class TranscodeWorker implements AutoCloseable {
             .setKeyframePacketScanCapacity(granted.keyframePacketScanCapacity())
             .setBackgroundProbeCapacityControl(granted.backgroundProbeCapacityControl());
     return EstablishWorkerSessionRequest.newBuilder().setRegistration(registration).build();
+  }
+
+  private void recheckWithdrawnEncoders() {
+    if (engine.hasWithdrawnEncoders() && engine.recheckWithdrawnEncoders()) {
+      tryReport(videoEncodersChanged());
+    }
+  }
+
+  // Reads the encoders under the worker monitor that orders every message, so the last change sent
+  // always lists the encoders that the worker offers now.
+  private synchronized EstablishWorkerSessionRequest videoEncodersChanged() {
+    var changed = VideoEncodersChanged.newBuilder();
+    engine.workerVerifiedEncoders().stream()
+        .map(WorkerVideoEncoders::toProto)
+        .forEach(changed::addVideoEncoders);
+    return EstablishWorkerSessionRequest.newBuilder().setVideoEncodersChanged(changed).build();
   }
 
   // Reads the capacities under the worker monitor that orders every message, so the last message
@@ -593,17 +620,19 @@ public final class TranscodeWorker implements AutoCloseable {
       return new Refused();
     }
 
-    TranscodeRequest request;
+    Optional<EncoderBackend> encoder;
     Producer producer;
     try {
       var mapped = jobMapper.map(job, sourceAudioOf(chosenAudio));
-      request =
+      var request =
           readPosition
               .map(position -> mapped.toBuilder().seekPosition(Optional.of(position)).build())
               .orElse(mapped);
+      encoder = engine.encoderBackendOf(request);
       producer =
           engine.startProducer(
               request,
+              encoder,
               (segment, cancellation) -> deliverToServer(job, segment, cancellation),
               memoryBudgetFor(WorkerVariantJobMapper.copiesVideo(job)));
     } catch (InvalidJobSpecificationException | UnadvertisedCodecFamilyException e) {
@@ -616,13 +645,13 @@ public final class TranscodeWorker implements AutoCloseable {
       return new Refused();
     }
 
-    var attempt = new ActiveAttempt(job, producer);
+    var attempt = new ActiveAttempt(job, producer, encoder);
     var jobAttemptId = fromProto(job.getJobAttemptId());
     activeAttempts.put(jobAttemptId, attempt);
     probeCapacities.jobAttemptStarted(jobAttemptId);
     producer.outcome().whenComplete((_, _) -> probeCapacities.jobAttemptEnded(jobAttemptId));
     try {
-      send(jobAttemptStarted(job.getJobAttemptId(), engine.encoderBackendOf(request)));
+      send(jobAttemptStarted(job.getJobAttemptId(), encoder));
     } catch (RuntimeException e) {
       logStartupFailure(job, e);
       claim(attempt);
@@ -938,7 +967,32 @@ public final class TranscodeWorker implements AutoCloseable {
       return;
     }
 
-    tryReport(reportOf(job, outcome));
+    var hardwareFault =
+        attempt.encoder().flatMap(encoder -> HardwareEncoderFault.of(encoder, outcome));
+    if (hardwareFault.isEmpty()) {
+      tryReport(reportOf(job, outcome));
+      return;
+    }
+
+    reportHardwareEncoderFailure(attempt, hardwareFault.get());
+  }
+
+  // A refusal at the session limit keeps the encoder offered. A failed encoder is withdrawn first,
+  // so the server already knows the encoders that the worker offers when it places the fallback
+  // (ADR 0044).
+  private void reportHardwareEncoderFailure(ActiveAttempt attempt, HardwareEncoderFault fault) {
+    var encoder = attempt.encoder().orElseThrow();
+    log.warn(
+        "Variant {} of stream session {} lost its hardware encoder {}: {}",
+        attempt.job().getVariant().getVariantLabel(),
+        fromProto(attempt.job().getStreamSessionId()),
+        encoder.encoder(),
+        fault);
+    if (fault == HardwareEncoderFault.FAILED && engine.withdraw(encoder)) {
+      tryReport(videoEncodersChanged());
+    }
+
+    reportFailure(attempt.job(), JobAttemptFailure.JOB_ATTEMPT_FAILURE_HARDWARE_ENCODER_FAILED);
   }
 
   private static EstablishWorkerSessionRequest reportOf(VariantJob job, AttemptOutcome outcome) {
@@ -1477,7 +1531,8 @@ public final class TranscodeWorker implements AutoCloseable {
 
   private record ClosedSession(WorkerProbeSession probes, List<Producer> attempts) {}
 
-  private record ActiveAttempt(VariantJob job, Producer producer) {}
+  private record ActiveAttempt(
+      VariantJob job, Producer producer, Optional<EncoderBackend> encoder) {}
 
   private record ClaimedStop(
       ActiveAttempt attempt, StreamObserver<EstablishWorkerSessionRequest> session) {}

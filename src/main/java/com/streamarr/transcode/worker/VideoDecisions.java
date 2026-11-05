@@ -161,6 +161,7 @@ final class VideoDecisions {
         .sourcePacketsCarryPresentationTimes(video.getSourcePacketsCarryPresentationTimes())
         .deinterlace(deinterlace(video))
         .holdsLastFrameToAdvertisedEnd(video.getHoldLastFrameToAdvertisedEnd())
+        .softwareEncoder(video.getSoftwareEncoder())
         .build();
   }
 

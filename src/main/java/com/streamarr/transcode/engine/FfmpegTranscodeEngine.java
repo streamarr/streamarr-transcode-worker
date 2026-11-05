@@ -49,8 +49,21 @@ public class FfmpegTranscodeEngine {
    */
   public Producer startProducer(
       TranscodeRequest request, SegmentSink sink, SegmentMemoryBudget memoryBudget) {
+    return startProducer(request, encoderBackendOf(request), sink, memoryBudget);
+  }
+
+  /**
+   * Starts FFmpeg for the job attempt on the encoder backend that {@link #encoderBackendOf}
+   * resolved for it, so that a hardware encoder withdrawn meanwhile cannot change the encoder that
+   * the attempt reports.
+   */
+  public Producer startProducer(
+      TranscodeRequest request,
+      Optional<EncoderBackend> encoderBackend,
+      SegmentSink sink,
+      SegmentMemoryBudget memoryBudget) {
     requireAvailableFfmpeg();
-    var videoEncoder = encoderBackendOf(request).map(EncoderBackend::encoder).orElse("copy");
+    var videoEncoder = encoderBackend.map(EncoderBackend::encoder).orElse("copy");
     var job = TranscodeJob.builder().request(request).videoEncoder(videoEncoder).build();
     var pipeline = commandBuilder.buildPipeline(job);
     log.debug("FFmpeg command for job attempt {}: {}", request.attemptId(), pipeline.commandLine());
@@ -131,24 +144,59 @@ public class FfmpegTranscodeEngine {
   /**
    * The encoder backend that the job attempt runs; empty when it copies the video.
    *
+   * @throws TranscodeException when FFmpeg is unavailable
    * @throws UnadvertisedCodecFamilyException when the job attempt encodes a codec family that the
    *     worker does not advertise
    */
   public Optional<EncoderBackend> encoderBackendOf(TranscodeRequest request) {
+    requireAvailableFfmpeg();
     if (!request.transcodeDecision().transcodeMode().encodesVideo()) {
       return Optional.empty();
     }
 
     var codecFamily = request.transcodeDecision().videoCodecFamily();
+    var resolved =
+        asksForTheSoftwareEncoder(request)
+            ? capabilityService.resolveSoftwareEncoder(codecFamily)
+            : capabilityService.resolveEncoder(codecFamily);
     return Optional.of(
-        capabilityService
-            .resolveEncoder(codecFamily)
-            .orElseThrow(() -> new UnadvertisedCodecFamilyException(codecFamily)));
+        resolved.orElseThrow(() -> new UnadvertisedCodecFamilyException(codecFamily)));
+  }
+
+  private static boolean asksForTheSoftwareEncoder(TranscodeRequest request) {
+    return request.transcodeDecision().videoDecision() instanceof VideoDecision.Encode encode
+        && encode.softwareEncoder();
   }
 
   /** The encoder backends that this engine runs, one for each codec family it can encode. */
   public List<WorkerVerifiedEncoder> workerVerifiedEncoders() {
     return capabilityService.workerVerifiedEncoders();
+  }
+
+  /** The software encoder of each codec family that a job can ask for (ADR 0044). */
+  public List<WorkerVerifiedEncoder> softwareEncoders() {
+    return capabilityService.softwareEncoders();
+  }
+
+  /**
+   * Stops offering a hardware encoder that failed during a stream. Returns whether the encoders
+   * that this engine runs changed.
+   */
+  public boolean withdraw(EncoderBackend failed) {
+    return capabilityService.withdraw(failed);
+  }
+
+  /** Whether a withdrawn hardware encoder waits for its test encode to pass again. */
+  public boolean hasWithdrawnEncoders() {
+    return capabilityService.hasWithdrawnEncoders();
+  }
+
+  /**
+   * Offers again each withdrawn hardware encoder whose test encode passes. Returns whether the
+   * encoders that this engine runs changed.
+   */
+  public boolean recheckWithdrawnEncoders() {
+    return capabilityService.recheckWithdrawnEncoders();
   }
 
   private static boolean namesItsAudioStream(TranscodeRequest request) {

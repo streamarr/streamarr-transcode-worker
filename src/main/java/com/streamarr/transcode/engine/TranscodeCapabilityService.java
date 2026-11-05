@@ -42,9 +42,15 @@ public class TranscodeCapabilityService {
   private HardwareEncodingCapability hardwareEncodingCapability =
       HardwareEncodingCapability.builder().available(false).encoders(Set.of()).build();
 
-  // Each codec family's worker-verified encoder, resolved once after detection, so that every job
-  // of a codec family runs the backend that registration advertises.
-  private Map<CodecFamily, WorkerVerifiedEncoder> encoders = Map.of();
+  // Each codec family's worker-verified encoder, resolved after detection and again whenever a
+  // hardware encoder is withdrawn or restored, so that every job of a codec family runs the backend
+  // that the worker offers.
+  private volatile Map<CodecFamily, WorkerVerifiedEncoder> encoders = Map.of();
+  private Set<String> detectedHardwareEncoders = Set.of();
+  private Set<CodecFamily> softwareEncoderFamilies = Set.of();
+  // The hardware encoders that failed during a stream and have not passed their test encode since
+  // (ADR 0044). The worker offers the software encoder of their families instead.
+  private final Set<String> withdrawnHardwareEncoders = new HashSet<>();
 
   public TranscodeCapabilityService(String ffmpegPath, ProcessFactory processFactory) {
     this.ffmpegPath = ffmpegPath;
@@ -76,7 +82,9 @@ public class TranscodeCapabilityService {
             .encoders(hwEncoders)
             .accelerator(accelerator)
             .build();
-    encoders = resolveEncoders(hwEncoders, detectSoftwareEncoders());
+    detectedHardwareEncoders = hwEncoders;
+    softwareEncoderFamilies = detectSoftwareEncoders();
+    encoders = resolveEncoders(hwEncoders, softwareEncoderFamilies);
 
     log.info(
         "FFmpeg capabilities: GPU={}, encoders={}, accelerator={}, encoder backends={}",
@@ -106,6 +114,73 @@ public class TranscodeCapabilityService {
    */
   public Optional<EncoderBackend> resolveEncoder(String codecFamily) {
     return CodecFamily.named(codecFamily).map(encoders::get).map(WorkerVerifiedEncoder::backend);
+  }
+
+  /**
+   * The software encoder of each codec family whose software encoder passed its test encode, which
+   * a job that asks for the software encoder runs (ADR 0044).
+   */
+  public List<WorkerVerifiedEncoder> softwareEncoders() {
+    return softwareEncoderFamilies.stream()
+        .sorted()
+        .map(TranscodeCapabilityService::softwareBackend)
+        .map(TranscodeCapabilityService::workerVerified)
+        .toList();
+  }
+
+  /** The codec family's software encoder; empty when it did not pass its test encode. */
+  public Optional<EncoderBackend> resolveSoftwareEncoder(String codecFamily) {
+    return CodecFamily.named(codecFamily)
+        .filter(softwareEncoderFamilies::contains)
+        .map(TranscodeCapabilityService::softwareBackend);
+  }
+
+  /**
+   * Stops offering a hardware encoder that failed during a stream, so its codec family resolves to
+   * the next usable encoder (ADR 0044). Returns whether the offered encoders changed.
+   */
+  public synchronized boolean withdraw(EncoderBackend failed) {
+    if (!failed.hardware() || !withdrawnHardwareEncoders.add(failed.encoder())) {
+      return false;
+    }
+
+    resolveOfferedEncoders();
+    return true;
+  }
+
+  /** Whether a withdrawn hardware encoder waits for its test encode to pass again. */
+  public synchronized boolean hasWithdrawnEncoders() {
+    return !withdrawnHardwareEncoders.isEmpty();
+  }
+
+  /**
+   * Runs the test encode of every withdrawn hardware encoder and offers again each one that passes.
+   * Returns whether the offered encoders changed.
+   */
+  public boolean recheckWithdrawnEncoders() {
+    Set<String> withdrawn;
+    synchronized (this) {
+      withdrawn = Set.copyOf(withdrawnHardwareEncoders);
+    }
+
+    var passed = withdrawn.stream().filter(this::canEncodeCpuFrames).toList();
+    if (passed.isEmpty()) {
+      return false;
+    }
+
+    synchronized (this) {
+      passed.forEach(withdrawnHardwareEncoders::remove);
+      resolveOfferedEncoders();
+    }
+
+    return true;
+  }
+
+  private void resolveOfferedEncoders() {
+    var offered = new HashSet<>(detectedHardwareEncoders);
+    offered.removeAll(withdrawnHardwareEncoders);
+    encoders = resolveEncoders(offered, softwareEncoderFamilies);
+    log.info("Offered encoder backends: {}", encoders.values());
   }
 
   private static Map<CodecFamily, WorkerVerifiedEncoder> resolveEncoders(

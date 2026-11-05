@@ -75,6 +75,8 @@ public sealed interface VideoDecision {
    * @param holdsLastFrameToAdvertisedEnd whether the encode repeats the last picture its filters
    *     produce from the source up to the request's advertised end, also when the attempt starts
    *     after the source's last frame
+   * @param softwareEncoder whether the encode runs on the codec family's software encoder, which
+   *     the server asks for after a hardware encoder failed (ADR 0044)
    */
   @Builder
   record Encode(
@@ -88,7 +90,8 @@ public sealed interface VideoDecision {
       @NonNull VideoDynamicRange outputDynamicRange,
       boolean sourcePacketsCarryPresentationTimes,
       @NonNull Optional<Deinterlace> deinterlace,
-      boolean holdsLastFrameToAdvertisedEnd)
+      boolean holdsLastFrameToAdvertisedEnd,
+      boolean softwareEncoder)
       implements VideoDecision {
 
     // Lombok builder default — its generated setter assigns it
