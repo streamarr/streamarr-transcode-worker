@@ -169,6 +169,22 @@ final class SegmentIntervals {
     return new MediaTime(starts[Math.toIntExact(number)], startTimeBase);
   }
 
+  /**
+   * The shortest interval between two consecutive listed starts, or one period when that is shorter
+   * or the grid is plain.
+   */
+  MediaTime shortestInterval() {
+    var shortest = new MediaTime(1, slotsOf(periodSeconds));
+    for (var index = 1; index < starts.length; index++) {
+      var interval = new MediaTime(starts[index] - starts[index - 1], startTimeBase);
+      if (interval.compareTo(shortest) < 0) {
+        shortest = interval;
+      }
+    }
+
+    return shortest;
+  }
+
   private static long firstTickAtOrAfter(long start, TimeBase timeBase, long timescale) {
     return Math.ceilDiv(
         Math.multiplyExact(Math.multiplyExact(start, timeBase.numerator()), timescale),

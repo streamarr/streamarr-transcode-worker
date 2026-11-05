@@ -1115,8 +1115,9 @@ public class FfmpegCommandBuilder {
     }
 
     // Rounded down, never up: an encoder that ignores the forced keyframe then still places a
-    // keyframe inside every segment interval, often two, and never skips a segment.
-    return frameRate.wholeFramesIn(request.targetSegmentDuration());
+    // keyframe inside every segment interval, often two, and never skips a segment. Exact starts
+    // can lie closer than a period, down to 2 s apart, so their shortest interval decides.
+    return frameRate.wholeFramesIn(request.segmentIntervals().shortestInterval());
   }
 
   private void addForcedKeyframeArgs(

@@ -1125,6 +1125,50 @@ class FfmpegCommandBuilderTest {
     assertThat(cmd).containsSubsequence("-ss", "3.54", "-i");
   }
 
+  @Test
+  @DisplayName(
+      "Should round the GOP down to whole frames in the shortest exact interval when the list ends"
+          + " before the last exact start")
+  void shouldRoundTheGopDownToWholeFramesInTheShortestExactIntervalWhenTheListEndsBeforeTheLast() {
+    var cmd = command(longExactStartRequest().build(), "libx264");
+
+    assertThat(forcedKeyframeTimes(cmd)).hasSizeLessThan(131_072).doesNotEndWith(",67390.698");
+    // 48 frames at 24000/1001 fps last 2.002 s, the shortest interval, past the list's end.
+    assertThat(cmd).containsSequence("-g:v:0", "48");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"h264_vaapi", "h264_videotoolbox"})
+  @DisplayName(
+      "Should round the GOP down to whole frames in the shortest exact interval when the encoder is"
+          + " not verified")
+  void shouldRoundTheGopDownToWholeFramesInTheShortestExactIntervalWhenTheEncoderIsNotVerified(
+      String encoder) {
+    var request =
+        exactStartRequest()
+            .mediaSegmentCount(3)
+            .exactSegmentStarts(
+                Optional.of(new ExactSegmentStarts(List.of(0L, 303_300L, 483_480L), 1, 90_000)));
+
+    var cmd = command(request.build(), encoder);
+
+    assertThat(cmd).containsSequence("-g:v:0", "48");
+  }
+
+  // 20,000 exact starts 3.37 s apart, whose list passes the longest argument, with one interval of
+  // 2.002 s near the end.
+  private static TranscodeRequest.TranscodeRequestBuilder longExactStartRequest() {
+    var ticks = new ArrayList<Long>();
+    for (var segment = 0L; segment < 20_000; segment++) {
+      ticks.add(segment * 303_300);
+    }
+
+    ticks.set(19_999, ticks.get(19_998) + 180_180);
+    return exactStartRequest()
+        .mediaSegmentCount(ticks.size())
+        .exactSegmentStarts(Optional.of(new ExactSegmentStarts(ticks, 1, 90_000)));
+  }
+
   // Source keyframes at 3.54 s, 6.666... s and 10 s in an MPEG-TS source's 1/90000 time base.
   private static TranscodeRequest.TranscodeRequestBuilder exactStartRequest() {
     return request(TranscodeMode.FULL_TRANSCODE)

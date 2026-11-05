@@ -61,6 +61,10 @@ public record OutputFrameRate(long numerator, long denominator) {
     return quotient[0];
   }
 
+  int wholeFramesIn(MediaTime duration) {
+    return Math.toIntExact(duration.floorIn(new TimeBase(denominator, numerator)));
+  }
+
   int wholeFramesIn(int seconds) {
     return frameNumerator(seconds).divide(BigInteger.valueOf(denominator)).intValueExact();
   }
