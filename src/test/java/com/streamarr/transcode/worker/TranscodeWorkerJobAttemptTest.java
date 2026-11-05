@@ -2083,13 +2083,49 @@ class TranscodeWorkerJobAttemptTest {
               progress -> {
                 assertThat(progress.getJobAttemptId()).isEqualTo(job.getJobAttemptId());
                 assertThat(progress.getOutputEnd())
-                    .isEqualTo(endOfTheLastVideoSampleIn(Arrays.copyOf(output, pause)));
+                    .isEqualTo(latestSampleEndIn(Arrays.copyOf(output, pause)));
                 assertThat(progress.getKeyframeSearchBytesRead()).isZero();
               });
       assertThat(connection.uploads())
           .extracting(upload -> upload.metadata().getSegmentName())
           .as("segment 0 has not closed")
           .containsExactly("init.mp4");
+    }
+  }
+
+  // 20 s of video and 23.5 s of audio, with keyframes at 0 s, 6 s, 12 s and 18 s: the audio-only
+  // fragments 20 to 23 end the output.
+  @Test
+  @DisplayName(
+      "Should report how far the attempt's output reached when FFmpeg writes audio alone after the"
+          + " video ends")
+  void shouldReportHowFarTheAttemptsOutputReachedWhenFfmpegWritesAudioAloneAfterTheVideoEnds()
+      throws Exception {
+    var output = bytesOf("06-encode-audio-tail.fmp4");
+    var pause = endOfFragment(output, 22);
+    var launcher =
+        new ScriptedProcessLauncher(
+            _ -> ScriptedProcess.builder().output(output).pauseAfter(pause).build());
+    var job = variantJobBuilder(TranscodeMode.TRANSCODE_MODE_VIDEO_TRANSCODE);
+    job.getExecutionBuilder()
+        .setOutputFrameRate(Fraction.newBuilder().setNumerator(24_000).setDenominator(1001))
+        .setMediaSegmentCount(4);
+
+    try (var worker = worker(launcher)) {
+      worker.start("localhost", 1);
+      var connection = runtime.connection();
+      startVariant(connection, job.build());
+
+      var audioEnd = latestSampleEndIn(Arrays.copyOf(output, pause));
+      await()
+          .atMost(EVENT_LIMIT)
+          .untilAsserted(
+              () ->
+                  assertThat(progressReportsOf(connection))
+                      .last()
+                      .extracting(JobAttemptProgress::getOutputEnd)
+                      .as("the third audio-only fragment ends past the video's end at 20 s")
+                      .isEqualTo(audioEnd));
     }
   }
 
@@ -2151,20 +2187,14 @@ class TranscodeWorkerJobAttemptTest {
         .toList();
   }
 
-  // The latest presentation time plus duration among the output's video samples, as a contract
-  // Duration.
+  // The latest presentation time plus duration among the output's video and audio samples, as a
+  // contract Duration.
   @SuppressWarnings("checkstyle:fullyQualifiedName")
-  private static com.google.protobuf.Duration endOfTheLastVideoSampleIn(byte[] output) {
-    var movie = Mp4Samples.read(output);
-    var timescale = movie.videoTrack().timescale();
-    var end =
-        movie.samplesOf(movie.videoTrack()).stream()
-            .mapToLong(sample -> sample.presentationTime() + sample.duration())
-            .max()
-            .orElseThrow();
+  private static com.google.protobuf.Duration latestSampleEndIn(byte[] output) {
+    var end = Mp4Samples.read(output).latestSampleEnd();
     return com.google.protobuf.Duration.newBuilder()
-        .setSeconds(end / timescale)
-        .setNanos(Math.toIntExact(end % timescale * 1_000_000_000L / timescale))
+        .setSeconds(end.getSeconds())
+        .setNanos(end.getNano())
         .build();
   }
 
