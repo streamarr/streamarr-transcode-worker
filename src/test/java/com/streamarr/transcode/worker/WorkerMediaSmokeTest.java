@@ -5676,24 +5676,36 @@ class WorkerMediaSmokeTest {
     assertThat(completion.uploads().names()).contains(segmentName(16));
   }
 
-  // The replacement copies its audio from a second input of the source, seeked one period before
-  // its first segment, while it decodes the video from the server's keyframe at zero. Its copied
-  // packets in segment 4 match the start attempt's, which reads both streams from one input, only
-  // when both inputs lie on that attempt's timeline. The MPEG-TS sources start at 1.4 s, and their
-  // audio starts 0.5 s after their video.
-  @ParameterizedTest(name = "{0} with {1}")
-  @CsvSource({"mp4, aac", "mkv, flac", "ts, aac", "ts, ac3"})
+  // The replacement copies its audio from an input of its own, seeked one period before its first
+  // segment, while it decodes the video from the server's keyframe at zero: a second input of one
+  // FFmpeg, or a third input of the encode of a profile 5 copy. Its copied packets in segment 4
+  // match the start attempt's, which one FFmpeg reads from one input, only when every input lies on
+  // that attempt's timeline. The MPEG-TS sources start at 1.4 s, and their audio starts 0.5 s after
+  // their video.
+  @ParameterizedTest(name = "{0} with {1}, {2}")
+  @CsvSource({
+    "mp4, aac, libx264",
+    "mkv, flac, libx264",
+    "ts, aac, libx264",
+    "ts, ac3, libx264",
+    "mkv, flac, libx265",
+    "ts, ac3, libx265"
+  })
   @DisplayName(
       "Should copy the start attempt's audio packets at its times when an encoded replacement copies"
-          + " the audio from a second input because the server's keyframe lies far back")
-  void shouldCopyTheStartAttemptsAudioPacketsWhenAReplacementCopiesTheAudioFromASecondInput(
-      String container, String codec) throws Exception {
-    var source = oneKeyframeDelayedAudioSource(container, codec);
+          + " the audio from an input of its own because the server's keyframe lies far back")
+  void shouldCopyTheStartAttemptsAudioPacketsWhenAReplacementCopiesTheAudioFromAnInputOfItsOwn(
+      String container, String codec, String videoEncoder) throws Exception {
+    var source = oneKeyframeDelayedAudioSource(container, codec, videoEncoder);
     var startAttempt =
         execute(engine(softwareCapabilities()), source.getParent(), copiedAudioJob(source, codec));
     var replacementJob = copiedAudioJob(source, codec).toBuilder();
     replacementJob.getExecutionBuilder().setStartSequenceNumber(4);
     setSeekPosition(replacementJob.getExecutionBuilder(), BigDecimal.ZERO);
+    if (videoEncoder.equals("libx265")) {
+      withProfile5Source(
+          replacementJob, DolbyVisionRpuPlacement.DOLBY_VISION_RPU_PLACEMENT_STARTS_SAMPLE);
+    }
 
     var replacement =
         execute(engine(softwareCapabilities()), source.getParent(), replacementJob.build());
@@ -5714,32 +5726,37 @@ class WorkerMediaSmokeTest {
     return job.build();
   }
 
-  // 30 s of H.264 whose only keyframe is its first picture, and stereo pink noise in the codec from
-  // 0.5 s on.
-  private static synchronized Path oneKeyframeDelayedAudioSource(String container, String codec)
-      throws Exception {
-    var source = seekableSources.resolve("one-keyframe-delayed-" + codec + "." + container);
+  // 30 s of video from the encoder whose only keyframe is its first picture, and stereo pink noise
+  // in the codec from 0.5 s on.
+  private static synchronized Path oneKeyframeDelayedAudioSource(
+      String container, String codec, String videoEncoder) throws Exception {
+    var source =
+        seekableSources.resolve(
+            "one-keyframe-" + videoEncoder + "-delayed-" + codec + "." + container);
     if (!generatedSeekableSources.contains(source)) {
-      runFfmpeg(
-          List.of(
-              "-f",
-              "lavfi",
-              "-i",
-              "testsrc=size=64x36:rate=24:duration=30",
-              "-itsoffset",
-              "0.5",
-              "-f",
-              "lavfi",
-              "-i",
-              "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5:duration=29.5,"
-                  + "aformat=channel_layouts=stereo",
-              "-c:v",
-              "libx264",
-              "-x264-params",
-              "keyint=infinite:scenecut=0",
-              "-c:a",
-              codec),
-          source);
+      var arguments =
+          new ArrayList<>(
+              List.of(
+                  "-f",
+                  "lavfi",
+                  "-i",
+                  "testsrc=size=64x36:rate=24:duration=30",
+                  "-itsoffset",
+                  "0.5",
+                  "-f",
+                  "lavfi",
+                  "-i",
+                  "anoisesrc=color=pink:sample_rate=48000:amplitude=0.5:duration=29.5,"
+                      + "aformat=channel_layouts=stereo",
+                  "-c:v",
+                  videoEncoder));
+      arguments.addAll(
+          switch (videoEncoder) {
+            case "libx265" -> List.of("-x265-params", "keyint=-1:scenecut=0:log-level=error");
+            default -> List.of("-x264-params", "keyint=infinite:scenecut=0");
+          });
+      arguments.addAll(List.of("-c:a", codec));
+      runFfmpeg(arguments, source);
       generatedSeekableSources.add(source);
     }
 
