@@ -55,7 +55,7 @@ DET=(-threads 1)
 # scale number 10 for SVT-AV1, and veryfast for libx265. Each encode forces the codec profile, tier
 # and level that a job carries. For 64x36 at 23.976 fps these are H.264 1.0, AV1 2.0 and H.265 1.0.
 # H.264 and HEVC encodes carry the playable sample entry of ADR 0013's tag rule: avc1 and hvc1.
-SDR_VIDEO_FILTER=scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p
+SDR_VIDEO_FILTER=scale=-2:36:out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709,format=yuv420p,fps=$FPS:eof_action=pass
 X264=(-c:v libx264 -preset faster -tag:v avc1 -profile:v high -level:v 10 -vf "$SDR_VIDEO_FILTER" -b:v 6000 -maxrate 6000 -bufsize 12000)
 SVT=(-c:v libsvtav1 -preset 10 -level:v 20 -vf "$SDR_VIDEO_FILTER" -crf 35 -maxrate 6000 -svtav1-params mbr-overshoot-pct=0:lp=1)
 X265=(-c:v libx265 -preset veryfast -tag:v hvc1 -profile:v main -vf "$SDR_VIDEO_FILTER" -b:v 6000 -maxrate 6000 -bufsize 12000)
@@ -65,6 +65,16 @@ X265=(-c:v libx265 -preset veryfast -tag:v hvc1 -profile:v main -vf "$SDR_VIDEO_
 # passing a second option.
 X265_PARAMS=(-x265-params no-scenecut=1:no-open-gop=1:level-idc=10:high-tier=0:pools=none:frame-threads=1:log-level=error)
 AAC=(-c:a aac -ac 1 -b:a 8k)
+# An encoded replacement attempt from segment 5 decodes from its seek without FFmpeg's exact seek
+# (run's decode-only) and encodes its video from 30 s on: fps's frame 720 is the first frame at or
+# after 30 s. Its encoded audio starts the whole AAC frames that fit in 6 s before 30 s, so that a
+# frame starts on 30 s.
+FROM_SEGMENT_5_VIDEO_FILTER="$SDR_VIDEO_FILTER,trim=start_pts=720"
+X264_FROM_SEGMENT_5=(-c:v libx264 -preset faster -tag:v avc1 -profile:v high -level:v 10 -vf "$FROM_SEGMENT_5_VIDEO_FILTER" -b:v 6000 -maxrate 6000 -bufsize 12000)
+SVT_FROM_SEGMENT_5=(-c:v libsvtav1 -preset 10 -level:v 20 -vf "$FROM_SEGMENT_5_VIDEO_FILTER" -crf 35 -maxrate 6000 -svtav1-params mbr-overshoot-pct=0:lp=1)
+X265_FROM_SEGMENT_5=(-c:v libx265 -preset veryfast -tag:v hvc1 -profile:v main -vf "$FROM_SEGMENT_5_VIDEO_FILTER" -b:v 6000 -maxrate 6000 -bufsize 12000)
+AAC_SHIFT_FROM_SEGMENT_5="round((0+floor(6*SR/(1024))*(1024))/SR/TB)"
+AAC_FROM_SEGMENT_5=(-af "aformat=sample_fmts=fltp:sample_rates=96000|88200|64000|48000|44100|32000|24000|22050|16000|12000|11025|8000|7350:channel_layouts=mono,asetpts='PTS+$AAC_SHIFT_FROM_SEGMENT_5',atrim=start=30,asetpts='PTS-$AAC_SHIFT_FROM_SEGMENT_5'" "${AAC[@]}")
 # The worker declares a copied stream's bitrate unknown (-b:a 0): the mp4 muxer would otherwise write
 # the demuxer's measurement, which a seek into an MPEG-TS source changes, into the initialization segment.
 # A copy of the H.264 sources carries avc1, with its record built from Annex B parameter sets, and
@@ -121,24 +131,24 @@ fill_boundaries() {  # LIST ARGS...
   done
 }
 
-# run KIND NAME [start=N] [hls-start=N] [seek=S] [duration=D] [skip=T] [hls-recipe] [video] SRC -- CODEC/KEYFRAME ARGS...
+# run KIND NAME [start=N] [seek=S] [decode-only] [duration=D] [skip=T] [hls-recipe] [video] SRC -- CODEC/KEYFRAME ARGS...
 #   KIND pipe: ADR 0037's recipe to pipe:1, recorded as out/NAME.fmp4, its command line one argument per
 #              line in out/NAME.args and the media segment count it forces keyframes up to in out/NAME.count
 #   KIND hls:  the HLS muxer (fMP4 segments) into hls/NAME/; "hls-recipe" swaps in the HLS recipe's common
 #              flags (no -start_at_zero, -max_delay), "video" maps the video stream only.
 #   start=N     the start sequence number: the first forced keyframe time, and the HLS muxer's -start_number.
-#   hls-start=N the HLS muxer's -start_number instead: the preroll's number when the recorded attempt seeks one period early.
+#   decode-only reads from the seek without FFmpeg's exact seek (-noaccurate_seek), as an encoded replacement attempt does.
 #   duration=D  reads only the source's first D seconds.
 #   skip=T      leaves the time T out of the forced keyframe times.
 run() {
   local kind=$1 name=$2; shift 2
-  local start=0 seek=() common=("${COMMON_PIPE[@]}") maps=(-map 0:0 -map 0:a:0)
-  local duration=() seconds="" skip="" hls_start_number=""
+  local start=0 seek=() decode_only=() common=("${COMMON_PIPE[@]}") maps=(-map 0:0 -map 0:a:0)
+  local duration=() seconds="" skip=""
   while [ "$1" != "--" ] && [ $# -gt 1 ]; do
     case "$1" in
       start=*) start=${1#start=} ;;
-      hls-start=*) hls_start_number=${1#hls-start=} ;;
       seek=*) seek=(-ss "${1#seek=}") ;;
+      decode-only) decode_only=(-noaccurate_seek) ;;
       duration=*) seconds=${1#duration=}; duration=(-t "$seconds") ;;
       skip=*) skip=${1#skip=} ;;
       hls-recipe) common=("${COMMON_HLS[@]}") ;;
@@ -152,18 +162,17 @@ run() {
   fill_boundaries "$(boundaries "$start" "$count" "$skip")" "$@"
   if [ "$kind" = pipe ]; then
     # -map -0:s: the worker excludes subtitle streams; these sources have none.
-    local command=("${FF[@]}" -y "${seek[@]}" "${duration[@]}" -i "$src" "${maps[@]}" -map -0:s "${common[@]}" \
+    local command=("${FF[@]}" -y "${seek[@]}" "${decode_only[@]}" "${duration[@]}" -i "$src" "${maps[@]}" -map -0:s "${common[@]}" \
       "${ARGS_WITH_BOUNDARIES[@]}" "${DET[@]}" -f mp4 -movflags "$MOVFLAGS" -frag_duration "$FRAG_US" pipe:1)
     printf '%s\n' "${command[@]}" > "out/$name.args"
     echo "$count" > "out/$name.count"
     "${command[@]}" > "out/$name.fmp4" 2> "logs/$name.log"
     return
   fi
-  hls_start_number=${hls_start_number:-$start}
-  local start_number=(); [ "$hls_start_number" -gt 0 ] && start_number=(-start_number "$hls_start_number")
+  local start_number=(); [ "$start" -gt 0 ] && start_number=(-start_number "$start")
   mkdir -p "hls/$name"
   local status=0
-  "${FF[@]}" -y "${seek[@]}" "${duration[@]}" -i "$src" "${maps[@]}" "${common[@]}" "${ARGS_WITH_BOUNDARIES[@]}" "${DET[@]}" \
+  "${FF[@]}" -y "${seek[@]}" "${decode_only[@]}" "${duration[@]}" -i "$src" "${maps[@]}" "${common[@]}" "${ARGS_WITH_BOUNDARIES[@]}" "${DET[@]}" \
     -f hls -hls_time "$P" -hls_list_size 0 -hls_flags temp_file "${start_number[@]}" \
     -hls_segment_type fmp4 -hls_fmp4_init_filename init.mp4 -hls_segment_options movflags=+frag_discont \
     -hls_segment_filename "hls/$name/segment%d.m4s" "hls/$name/stream.m3u8" 2> "logs/hls-$name.log" || status=$?
@@ -240,12 +249,12 @@ done
 
 # ------------------------------------------------------------------ 1. constant 23.976 fps libx264 encode, and an encoded seek
 run pipe 01-encode-cfr src/cfr.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}"
-# The replacement attempt for segment 5 (a job seeking to 30 s) is an encode, so it seeks one period
-# early, to 24 s, and segment 4 is its preroll.
-run pipe 01-encode-cfr-seek30 start=5 seek=24 src/cfr.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}"
+# The replacement attempt for segment 5 (a job seeking to 30 s) is an encode without the server's
+# keyframe position, so it reads from one period early, 24 s, and encodes from 30 s on.
+run pipe 01-encode-cfr-seek30 start=5 seek=24 decode-only src/cfr.mp4 -- "${X264_FROM_SEGMENT_5[@]}" "${AAC_FROM_SEGMENT_5[@]}" "${KEY_X264_PIPE[@]}"
 run hls 01-encode-cfr.hls-recipe hls-recipe src/cfr.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_HLS[@]}"
 run hls 01-encode-cfr.video-only video src/cfr.mp4 -- "${X264[@]}" "${KEY_X264_PIPE[@]}"
-run hls 01-encode-cfr-seek30.video-only video start=5 hls-start=4 seek=24 src/cfr.mp4 -- "${X264[@]}" "${KEY_X264_PIPE[@]}"
+run hls 01-encode-cfr-seek30.video-only video start=5 seek=24 decode-only src/cfr.mp4 -- "${X264_FROM_SEGMENT_5[@]}" "${KEY_X264_PIPE[@]}"
 run hls 01-encode-cfr.pipe-keyframes-with-audio src/cfr.mp4 -- "${X264[@]}" "${AAC[@]}" "${KEY_X264_PIPE[@]}"
 
 # ------------------------------------------------------------------ 2. stream copy, irregular keyframes
@@ -292,10 +301,10 @@ run hls 07-copy-start0.video-only video src/cfr.mp4 -- "${COPY_PIPE[@]}"
 
 # ------------------------------------------------------------------ 9. irregular VFR source through SVT-AV1, with and without a seek
 run pipe 09-svtav1-vfr src/vfr.mp4 -- "${SVT[@]}" "${AAC[@]}" "${KEY_SVT_PIPE[@]}"
-run pipe 09-svtav1-vfr-seek30 start=5 seek=24 src/vfr.mp4 -- "${SVT[@]}" "${AAC[@]}" "${KEY_SVT_PIPE[@]}"
+run pipe 09-svtav1-vfr-seek30 start=5 seek=24 decode-only src/vfr.mp4 -- "${SVT_FROM_SEGMENT_5[@]}" "${AAC_FROM_SEGMENT_5[@]}" "${KEY_SVT_PIPE[@]}"
 run hls 09-svtav1-vfr.hls-recipe hls-recipe src/vfr.mp4 -- "${SVT[@]}" "${AAC[@]}" "${KEY_SVT_HLS[@]}"
 run hls 09-svtav1-vfr.video-only video src/vfr.mp4 -- "${SVT[@]}" "${KEY_SVT_PIPE[@]}"
-run hls 09-svtav1-vfr-seek30.video-only video start=5 hls-start=4 seek=24 src/vfr.mp4 -- "${SVT[@]}" "${KEY_SVT_PIPE[@]}"
+run hls 09-svtav1-vfr-seek30.video-only video start=5 seek=24 decode-only src/vfr.mp4 -- "${SVT_FROM_SEGMENT_5[@]}" "${KEY_SVT_PIPE[@]}"
 run hls 09-svtav1-vfr.pipe-keyframes-with-audio src/vfr.mp4 -- "${SVT[@]}" "${AAC[@]}" "${KEY_SVT_PIPE[@]}"
 
 # ------------------------------------------------------------------ 10. keyframe gap wider than the period
@@ -315,8 +324,8 @@ run hls 12-svtav1-cfr-missed-forced-keyframe.video-only video duration=30 skip=1
 # ------------------------------------------------------------------ 13. libx265 under the keyframe-verified GOP, from the start, after a seek and with a missed forced keyframe, and under the floored GOP
 run pipe 13-x265-cfr src/cfr.mp4 -- "${X265[@]}" "${AAC[@]}" "${KEY_X265_PIPE[@]}"
 run hls 13-x265-cfr.video-only video src/cfr.mp4 -- "${X265[@]}" "${KEY_X265_PIPE[@]}"
-run pipe 13-x265-cfr-seek30 start=5 seek=24 src/cfr.mp4 -- "${X265[@]}" "${AAC[@]}" "${KEY_X265_PIPE[@]}"
-run hls 13-x265-cfr-seek30.video-only video start=5 hls-start=4 seek=24 src/cfr.mp4 -- "${X265[@]}" "${KEY_X265_PIPE[@]}"
+run pipe 13-x265-cfr-seek30 start=5 seek=24 decode-only src/cfr.mp4 -- "${X265_FROM_SEGMENT_5[@]}" "${AAC_FROM_SEGMENT_5[@]}" "${KEY_X265_PIPE[@]}"
+run hls 13-x265-cfr-seek30.video-only video start=5 seek=24 decode-only src/cfr.mp4 -- "${X265_FROM_SEGMENT_5[@]}" "${KEY_X265_PIPE[@]}"
 run pipe 13-x265-cfr-missed-forced-keyframe duration=30 skip=18 src/cfr.mp4 -- "${X265[@]}" "${AAC[@]}" "${KEY_X265_PIPE[@]}"
 run hls 13-x265-cfr-missed-forced-keyframe.video-only video duration=30 skip=18 src/cfr.mp4 -- "${X265[@]}" "${KEY_X265_PIPE[@]}"
 run pipe 13-x265-cfr-floored-gop duration=30 src/cfr.mp4 -- "${X265[@]}" "${AAC[@]}" "${KEY_X265_PIPE_FLOORED[@]}"

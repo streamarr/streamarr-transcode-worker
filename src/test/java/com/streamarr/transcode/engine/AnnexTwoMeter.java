@@ -5,7 +5,7 @@ package com.streamarr.transcode.engine;
  * and independent of the worker's resource. It reads every phase of the full convolution, the ring
  * after the last sample included, so that no instant near either end of a file goes unread.
  */
-final class AnnexTwoMeter {
+public final class AnnexTwoMeter {
 
   /** Table 2: the four phases of the order-48 interpolating filter, twelve taps each. */
   static final double[][] PHASES = {
@@ -34,7 +34,7 @@ final class AnnexTwoMeter {
   private AnnexTwoMeter() {}
 
   /** The largest magnitude that any phase of the filter reads from the samples, in dBTP. */
-  static double truePeakDb(double[] samples) {
+  public static double truePeakDb(double[] samples) {
     var peak = 0.0;
     for (var phase : PHASES) {
       for (var out = 0; out < samples.length + phase.length - 1; out++) {

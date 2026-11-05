@@ -41,6 +41,8 @@ class FfmpegCommandBuilderTest {
           + "|16000|12000|11025|8000|7350:channel_layouts=stereo,";
   private static final String BT709_LIMITED_SCALE_OPTIONS =
       ":out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709";
+  // The request's output frame rate, on whose grid every encode places its pictures.
+  private static final String FRAME_GRID = ",fps=24000/1001:eof_action=pass";
 
   private final FfmpegCommandBuilder builder =
       new FfmpegCommandBuilder("ffmpeg", Duration.ofSeconds(1));
@@ -237,7 +239,7 @@ class FfmpegCommandBuilderTest {
         Arguments.of(
             "scale filter",
             new String[] {
-              "-vf", "scale=-2:1080" + BT709_LIMITED_SCALE_OPTIONS + ",format=yuv420p"
+              "-vf", "scale=-2:1080" + BT709_LIMITED_SCALE_OPTIONS + ",format=yuv420p" + FRAME_GRID
             }),
         Arguments.of("forced IDR", new String[] {"-forced-idr", "1"}),
         Arguments.of("audio downmix to stereo", new String[] {"-ac", "2"}));
@@ -267,7 +269,8 @@ class FfmpegCommandBuilderTest {
             "libx264");
 
     assertThat(cmd)
-        .contains("-vf", "scale=-2:720" + BT709_LIMITED_SCALE_OPTIONS + ",format=yuv420p")
+        .contains(
+            "-vf", "scale=-2:720" + BT709_LIMITED_SCALE_OPTIONS + ",format=yuv420p" + FRAME_GRID)
         .contains("-b:v", "3000000")
         .contains("-bufsize", "6000000");
   }
@@ -296,7 +299,7 @@ class FfmpegCommandBuilderTest {
     var cmd = command(request(TranscodeMode.FULL_TRANSCODE).height(720).build(), encoder);
 
     assertThat(videoFilter(cmd))
-        .isEqualTo("scale=-2:720" + BT709_LIMITED_SCALE_OPTIONS + ",format=yuv420p");
+        .isEqualTo("scale=-2:720" + BT709_LIMITED_SCALE_OPTIONS + ",format=yuv420p" + FRAME_GRID);
   }
 
   @ParameterizedTest(name = "{0}")
@@ -307,7 +310,30 @@ class FfmpegCommandBuilderTest {
     var cmd = command(request(TranscodeMode.VIDEO_TRANSCODE).height(720).build(), encoder);
 
     assertThat(videoFilter(cmd))
-        .isEqualTo("scale=-2:720" + BT709_LIMITED_SCALE_OPTIONS + ",format=nv12");
+        .isEqualTo("scale=-2:720" + BT709_LIMITED_SCALE_OPTIONS + ",format=nv12" + FRAME_GRID);
+  }
+
+  @ParameterizedTest(name = "{0}/{1} fps, {2}")
+  @CsvSource({
+    "24, 1, FULL_TRANSCODE",
+    "24000, 1001, VIDEO_TRANSCODE",
+    "30000, 1001, FULL_TRANSCODE",
+    "60, 1, VIDEO_TRANSCODE"
+  })
+  @DisplayName(
+      "Should place the pictures on the output frame rate's grid by their presentation times and"
+          + " keep the last one when an attempt encodes video")
+  void shouldPlaceThePicturesOnTheOutputFrameRatesGridWhenAnAttemptEncodesVideo(
+      long numerator, long denominator, TranscodeMode mode) {
+    var cmd =
+        command(
+            request(mode)
+                .outputFrameRate(Optional.of(new OutputFrameRate(numerator, denominator)))
+                .build(),
+            "libx264");
+
+    assertThat(videoFilter(cmd))
+        .endsWith(",format=yuv420p,fps=" + numerator + "/" + denominator + ":eof_action=pass");
   }
 
   @ParameterizedTest(name = "{0} to {1}, {2}")
@@ -326,7 +352,8 @@ class FfmpegCommandBuilderTest {
     assertThat(videoFilter(cmd))
         .isEqualTo(
             "scale=-2:720,tonemapx=tonemap=mobius:peak=100:desat=0:t=bt709:m=bt709:p=bt709:r=tv:"
-                + "format=yuv420p,sidedata=mode=delete:type=AMBIENT_VIEWING_ENVIRONMENT");
+                + "format=yuv420p,sidedata=mode=delete:type=AMBIENT_VIEWING_ENVIRONMENT"
+                + FRAME_GRID);
   }
 
   private static Stream<Arguments> toneMappedConversions() {
@@ -347,7 +374,7 @@ class FfmpegCommandBuilderTest {
     var cmd = command(request(encoding(encode)).height(720).build(), encoder);
 
     assertThat(videoFilter(cmd))
-        .isEqualTo("scale=-2:720" + BT709_LIMITED_SCALE_OPTIONS + ",format=yuv420p");
+        .isEqualTo("scale=-2:720" + BT709_LIMITED_SCALE_OPTIONS + ",format=yuv420p" + FRAME_GRID);
   }
 
   private static Stream<Arguments> conversionsWithoutToneMapping() {
@@ -882,13 +909,18 @@ class FfmpegCommandBuilderTest {
 
   @Test
   @DisplayName(
-      "Should seek one slot before its first listed segment when an encoded replacement attempt"
-          + " starts at a merged segment")
+      "Should read from one slot before its first listed segment and trim at that segment's start"
+          + " when an encoded replacement attempt starts at a merged segment without a keyframe"
+          + " position")
   void
-      shouldSeekOneSlotBeforeItsFirstListedSegmentWhenAnEncodedReplacementStartsAtAMergedSegment() {
+      shouldReadFromOneSlotBeforeItsFirstListedSegmentWhenAnEncodedReplacementStartsAtAMergedSegment() {
     var cmd = command(mergedSegmentRequest().startSequenceNumber(3).build(), "libx264");
 
-    assertThat(cmd).as("segment 3 starts at slot 10, 30 s").containsSubsequence("-ss", "27", "-i");
+    assertThat(cmd)
+        .as("segment 3 starts at slot 10, 30 s")
+        .containsSequence("-ss", "27", "-noaccurate_seek", "-i")
+        .containsSequence("-af", aacStereoFromTheFirstSegment("30", "3"));
+    assertThat(videoFilter(cmd)).endsWith(FRAME_GRID + ",trim=start_pts=720");
   }
 
   // Keyframes 10 s apart on 3 s slots: the segments start at 0 s, 9 s, 18 s and 30 s.
@@ -998,8 +1030,9 @@ class FfmpegCommandBuilderTest {
     "libx265, 21371"
   })
   @DisplayName(
-      "Should give a replacement attempt the start attempt's encoder arguments apart from its seek"
-          + " and forced keyframes when the list from the first segment does or does not fit")
+      "Should give a replacement attempt the start attempt's encoder arguments apart from its seek,"
+          + " its start trims and its forced keyframes when the list from the first segment does or"
+          + " does not fit")
   void shouldGiveAReplacementAttemptTheStartAttemptsEncoderArgumentsWhetherOrNotTheListFits(
       String encoder, int mediaSegmentCount) {
     // libx265 writes its settings, the GOP among them, into the initialization segment.
@@ -1015,19 +1048,23 @@ class FfmpegCommandBuilderTest {
                 .build(),
             encoder);
 
-    assertThat(withoutSeekAndForcedKeyframes(replacementAttempt))
-        .containsExactlyElementsOf(withoutSeekAndForcedKeyframes(startAttempt));
+    assertThat(withoutTheStartsSeekTrimsAndForcedKeyframes(replacementAttempt))
+        .containsExactlyElementsOf(withoutTheStartsSeekTrimsAndForcedKeyframes(startAttempt));
   }
 
-  private static List<String> withoutSeekAndForcedKeyframes(List<String> cmd) {
+  private static List<String> withoutTheStartsSeekTrimsAndForcedKeyframes(List<String> cmd) {
     var remaining = new ArrayList<>(cmd);
-    for (var option : List.of("-ss", "-force_key_frames:0")) {
+    remaining.remove("-noaccurate_seek");
+    for (var option : List.of("-ss", "-af", "-force_key_frames:0")) {
       var index = remaining.indexOf(option);
       if (index >= 0) {
         remaining.subList(index, index + 2).clear();
       }
     }
 
+    var videoFilter = remaining.indexOf("-vf") + 1;
+    remaining.set(
+        videoFilter, remaining.get(videoFilter).replaceFirst(",trim=start_pts=\\d+$", ""));
     return remaining;
   }
 
@@ -1168,13 +1205,482 @@ class FfmpegCommandBuilderTest {
       value = TranscodeMode.class,
       names = {"VIDEO_TRANSCODE", "FULL_TRANSCODE"})
   @DisplayName(
-      "Should seek one period before its first segment when an encoded replacement attempt starts"
-          + " mid-stream")
-  void shouldSeekOnePeriodBeforeItsFirstSegmentWhenAnEncodedReplacementAttemptStartsMidStream(
-      TranscodeMode mode) {
+      "Should read from one period before its first segment without FFmpeg's exact seek when an"
+          + " encoded replacement attempt carries no keyframe position")
+  void
+      shouldReadFromOnePeriodBeforeItsFirstSegmentWhenAnEncodedReplacementCarriesNoKeyframePosition(
+          TranscodeMode mode) {
     var cmd = command(request(mode).startSequenceNumber(5).build(), "libsvtav1");
 
-    assertThat(cmd).containsSubsequence("-ss", "24", "-i");
+    assertThat(cmd).containsSequence("-ss", "24", "-noaccurate_seek", "-i");
+  }
+
+  @ParameterizedTest
+  @EnumSource(
+      value = TranscodeMode.class,
+      names = {"VIDEO_TRANSCODE", "FULL_TRANSCODE"})
+  @DisplayName(
+      "Should read from the server's keyframe position without FFmpeg's exact seek when an encoded"
+          + " replacement attempt carries one")
+  void shouldReadFromTheServersKeyframePositionWhenAnEncodedReplacementAttemptCarriesOne(
+      TranscodeMode mode) {
+    var request =
+        request(mode)
+            .startSequenceNumber(5)
+            .seekPosition(Optional.of(Duration.ofNanos(19_916_666_667L)))
+            .build();
+
+    var cmd = command(request, "libx264");
+
+    assertThat(cmd).containsSequence("-ss", "19.916667", "-noaccurate_seek", "-i");
+  }
+
+  @Test
+  @DisplayName(
+      "Should trim the converted pictures at the first segment's start, not at the keyframe, when an"
+          + " encoded replacement attempt carries the server's keyframe position")
+  void
+      shouldTrimTheConvertedPicturesAtTheFirstSegmentsStartWhenAnAttemptCarriesAKeyframePosition() {
+    var request =
+        request(TranscodeMode.FULL_TRANSCODE)
+            .startSequenceNumber(5)
+            .seekPosition(Optional.of(Duration.ofNanos(19_916_666_667L)))
+            .build();
+
+    var cmd = command(request, "libx264");
+
+    assertThat(videoFilter(cmd))
+        .as("frame 720, the first at or after segment 5's start of 30 s at 23.976 fps")
+        .endsWith(FRAME_GRID + ",trim=start_pts=720");
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("firstFramesOnOrAfterTheFirstSegmentsStart")
+  @DisplayName(
+      "Should trim the converted pictures at the first frame on or after the first segment's start"
+          + " when an encoded replacement attempt decodes from an earlier keyframe")
+  void
+      shouldTrimTheConvertedPicturesAtTheFirstFrameOnOrAfterTheFirstSegmentsStartWhenAnEncodedReplacementDecodesFromAnEarlierKeyframe(
+          FirstFrameCase firstFrameCase) {
+    var cmd =
+        command(
+            request(TranscodeMode.FULL_TRANSCODE)
+                .outputFrameRate(Optional.of(firstFrameCase.frameRate()))
+                .startSequenceNumber(firstFrameCase.startSequenceNumber())
+                .build(),
+            "libx264");
+
+    assertThat(videoFilter(cmd))
+        .endsWith(
+            ",format=yuv420p,fps="
+                + firstFrameCase.frameRate().ffmpegArgument()
+                + ":eof_action=pass,trim=start_pts="
+                + firstFrameCase.firstFrame());
+  }
+
+  // Each first segment starts at a whole second, 6 s apart: 30 s for segment 5, 6 s for segment 1.
+  // At a fractional rate the first frame at or after it is the frame count rounded up.
+  static Stream<FirstFrameCase> firstFramesOnOrAfterTheFirstSegmentsStart() {
+    return Stream.of(
+        FirstFrameCase.builder()
+            .frameRate(new OutputFrameRate(24, 1))
+            .startSequenceNumber(5)
+            .firstFrame(720)
+            .build(),
+        FirstFrameCase.builder()
+            .frameRate(new OutputFrameRate(24_000, 1001))
+            .startSequenceNumber(5)
+            .firstFrame(720)
+            .build(),
+        FirstFrameCase.builder()
+            .frameRate(new OutputFrameRate(30_000, 1001))
+            .startSequenceNumber(5)
+            .firstFrame(900)
+            .build(),
+        FirstFrameCase.builder()
+            .frameRate(new OutputFrameRate(25, 1))
+            .startSequenceNumber(1)
+            .firstFrame(150)
+            .build(),
+        FirstFrameCase.builder()
+            .frameRate(new OutputFrameRate(24_000, 1001))
+            .startSequenceNumber(1)
+            .firstFrame(144)
+            .build());
+  }
+
+  @Builder
+  private record FirstFrameCase(
+      OutputFrameRate frameRate, int startSequenceNumber, long firstFrame) {
+    @Override
+    public String toString() {
+      return frameRate.ffmpegArgument() + " fps from segment " + startSequenceNumber;
+    }
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("audioEncoders")
+  @DisplayName(
+      "Should start the encoder's input a whole number of frames, less its priming, before the"
+          + " first segment's start, from its seek, when an encoded replacement attempt without the"
+          + " server's keyframe position encodes its audio")
+  void shouldStartAnEncodedAudioFrameOnTheFirstSegmentsStartWhenAnEncodedReplacementAttemptSeeks(
+      AudioEncoderCase encoder) {
+    var cmd = command(encodedAudioFromSegment5(encoder.codec()), "libx264");
+
+    var shift =
+        "round(("
+            + encoder.lead()
+            + "+floor(6*SR/("
+            + encoder.samplesPerFrame()
+            + "))*("
+            + encoder.samplesPerFrame()
+            + "))/SR/TB)";
+    assertThat(cmd)
+        .containsSequence(
+            "-af",
+            encoder.input()
+                + "asetpts='PTS+"
+                + shift
+                + "',atrim=start=30,asetpts='PTS-"
+                + shift
+                + "'",
+            "-c:a",
+            encoder.codec());
+  }
+
+  // Each encoder's frame and the lead of its first input sample over its first frame without
+  // priming, in samples at its sample rate SR, as the pinned FFmpeg writes them. The input is the
+  // stereo conversion each encoder takes; FFmpeg chooses ALAC's. A FLAC frame is the longest FLAC
+  // block size that lasts at most 105 ms, as FFmpeg's FLAC encoder chooses it.
+  static Stream<AudioEncoderCase> audioEncoders() {
+    return Stream.of(
+        AudioEncoderCase.builder()
+            .codec("aac")
+            .input(AAC_STEREO_INPUT)
+            .samplesPerFrame("1024")
+            .lead("0")
+            .build(),
+        AudioEncoderCase.builder()
+            .codec("ac3")
+            .input(
+                "aformat=sample_fmts=fltp:sample_rates=48000|44100|32000:channel_layouts=stereo,")
+            .samplesPerFrame("1536")
+            .lead("1280")
+            .build(),
+        AudioEncoderCase.builder()
+            .codec("eac3")
+            .input(
+                "aformat=sample_fmts=fltp:sample_rates=48000|44100|32000:channel_layouts=stereo,")
+            .samplesPerFrame("1536")
+            .lead("1280")
+            .build(),
+        AudioEncoderCase.builder()
+            .codec("opus")
+            .input("aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,")
+            .samplesPerFrame("960")
+            .lead("840")
+            .build(),
+        AudioEncoderCase.builder()
+            .codec("libopus")
+            .input(
+                "aformat=sample_fmts=s16|flt:sample_rates=48000|24000|16000|12000|8000"
+                    + ":channel_layouts=stereo,")
+            .samplesPerFrame("SR/50")
+            .lead("SR*27/2000")
+            .build(),
+        AudioEncoderCase.builder()
+            .codec("alac")
+            .input("")
+            .samplesPerFrame("4096")
+            .lead("0")
+            .build(),
+        AudioEncoderCase.builder()
+            .codec("flac")
+            .input("aformat=sample_fmts=s16|s32:channel_layouts=stereo,")
+            .samplesPerFrame(
+                "if(gte(trunc(SR*105/1000),32768),32768,if(gte(trunc(SR*105/1000),16384),16384,"
+                    + "if(gte(trunc(SR*105/1000),8192),8192,if(gte(trunc(SR*105/1000),4608),4608,"
+                    + "if(gte(trunc(SR*105/1000),4096),4096,if(gte(trunc(SR*105/1000),2304),2304,"
+                    + "if(gte(trunc(SR*105/1000),2048),2048,if(gte(trunc(SR*105/1000),1152),1152,"
+                    + "if(gte(trunc(SR*105/1000),1024),1024,if(gte(trunc(SR*105/1000),576),576,"
+                    + "if(gte(trunc(SR*105/1000),512),512,if(gte(trunc(SR*105/1000),256),256,"
+                    + "192))))))))))))")
+            .lead("0")
+            .build());
+  }
+
+  @Builder
+  private record AudioEncoderCase(String codec, String input, String samplesPerFrame, String lead) {
+    @Override
+    public String toString() {
+      return codec;
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "Should trim the encoded audio at the seek when an encoded replacement attempt encodes its"
+          + " audio with an encoder whose frames the worker does not know")
+  void shouldTrimTheEncodedAudioAtTheSeekWhenTheWorkerDoesNotKnowTheAudioEncodersFrames() {
+    var cmd = command(encodedAudioFromSegment5("libmp3lame"), "libx264");
+
+    assertThat(cmd).containsSequence("-af", "atrim=start=24", "-c:a", "libmp3lame");
+  }
+
+  @Test
+  @DisplayName(
+      "Should start the encoder's input on the first segment's start less its priming when the"
+          + " server's keyframe lies less than a second before that start")
+  void shouldStartTheEncodersInputOnTheFirstSegmentsStartWhenTheKeyframeLiesWithinASecond() {
+    var cmd =
+        command(
+            request(TranscodeMode.FULL_TRANSCODE)
+                .startSequenceNumber(5)
+                .seekPosition(Optional.of(Duration.ofMillis(29_500)))
+                .build(),
+            "libx264");
+
+    assertThat(cmd).containsSequence("-af", aacStereoFromTheFirstSegment("30", "0"));
+  }
+
+  @Test
+  @DisplayName(
+      "Should start the encoder's input a second after the server's keyframe position, in whole"
+          + " frames before the first segment's start, when an encoded replacement attempt carries"
+          + " a position less than a segment period and a second before that start")
+  void shouldStartTheEncodersInputASecondAfterTheServersKeyframePositionWhenAnAttemptCarriesIt() {
+    var cmd =
+        command(
+            request(TranscodeMode.FULL_TRANSCODE)
+                .startSequenceNumber(5)
+                .seekPosition(Optional.of(Duration.ofSeconds(26)))
+                .build(),
+            "libx264");
+
+    assertThat(cmd).containsSequence("-af", aacStereoFromTheFirstSegment("30", "3"));
+  }
+
+  // ADR 0043 decodes each encoded track from one segment period before the attempt's first
+  // segment, so that the audio the attempt discards stays within a period however far back the
+  // keyframe lies.
+  @Test
+  @DisplayName(
+      "Should start the encoder's input whole frames within one segment period before the first"
+          + " segment's start when the server's keyframe position lies further back")
+  void shouldStartTheEncodersInputWithinOneSegmentPeriodWhenTheServersKeyframeLiesFurtherBack() {
+    var cmd =
+        command(
+            request(TranscodeMode.FULL_TRANSCODE)
+                .startSequenceNumber(10)
+                .seekPosition(Optional.of(Duration.ZERO))
+                .build(),
+            "libx264");
+
+    assertThat(cmd).containsSequence("-af", aacStereoFromTheFirstSegment("60", "6"));
+  }
+
+  private static TranscodeRequest encodedAudioFromSegment5(String codec) {
+    return request(
+            decision(TranscodeMode.FULL_TRANSCODE)
+                .audioDecision(
+                    AudioDecision.builder()
+                        .mode(AudioMode.TRANSCODE)
+                        .codec(codec)
+                        .channels(2)
+                        .bitrate(128_000L)
+                        .build())
+                .build())
+        .startSequenceNumber(5)
+        .build();
+  }
+
+  // The AAC stereo audio of an encoded replacement attempt whose first segment starts at start:
+  // the encoder's input starts the whole frames that fit in framesAhead seconds before that start.
+  private static String aacStereoFromTheFirstSegment(String start, String framesAhead) {
+    var shift = aacShift(framesAhead);
+    return AAC_STEREO_INPUT
+        + "asetpts='PTS+"
+        + shift
+        + "',atrim=start="
+        + start
+        + ",asetpts='PTS-"
+        + shift
+        + "'";
+  }
+
+  // The whole 1,024-sample frames of FFmpeg's AAC encoder that fit in framesAhead seconds, whose
+  // first frame is all priming.
+  private static String aacShift(String framesAhead) {
+    return "round((0+floor(" + framesAhead + "*SR/(1024))*(1024))/SR/TB)";
+  }
+
+  @Test
+  @DisplayName(
+      "Should copy the audio without an audio filter when an encoded replacement attempt copies the"
+          + " source's audio")
+  void
+      shouldCopyTheAudioWithoutAnAudioFilterWhenAnEncodedReplacementAttemptCopiesTheSourcesAudio() {
+    var cmd =
+        command(request(TranscodeMode.VIDEO_TRANSCODE).startSequenceNumber(5).build(), "libx264");
+
+    assertThat(cmd).doesNotContain("-af").containsSequence("-c:a", "copy");
+  }
+
+  // The bitstream filters of an AAC copy that starts at 54 s: the noise filter drops each packet
+  // until the first keyframe packet that starts at or after 54 s, and keeps every later packet.
+  private static final String AAC_COPY_FROM_54_SECONDS =
+      "noise=drop='eq(st(0,ld(0)+gte(pts*tb,54)*key),0)',aac_adtstoasc";
+
+  // ADR 0043 reads each track of an encoded replacement attempt from at most one segment period
+  // before its first segment. A filter cannot trim copied packets, so the copy drops the packets
+  // before that point, however far back the keyframe that the seek reads lies.
+  @ParameterizedTest(name = "keyframe position {0}")
+  @MethodSource("keyframePositionsBeforeSegment10")
+  @DisplayName(
+      "Should copy the audio from the source's only input and drop its packets before one segment"
+          + " period before the first segment's start whatever the keyframe position")
+  void shouldCopyTheAudioFromTheSourcesOnlyInputAndDropItsPacketsBeforeOnePeriodBack(
+      Optional<Duration> keyframePosition) {
+    var cmd =
+        command(
+            request(TranscodeMode.VIDEO_TRANSCODE)
+                .startSequenceNumber(10)
+                .seekPosition(keyframePosition)
+                .build(),
+            "libx264");
+
+    assertThat(cmd.stream().filter("-i"::equals)).hasSize(1);
+    assertThat(cmd)
+        .containsSequence("-map", "0:0", "-map", "0:a:0")
+        .containsSequence("-c:a", "copy", "-bsf:a", AAC_COPY_FROM_54_SECONDS, "-b:a", "0")
+        .doesNotContain("-isync");
+  }
+
+  static Stream<Optional<Duration>> keyframePositionsBeforeSegment10() {
+    return Stream.of(
+        Optional.empty(),
+        Optional.of(Duration.ZERO),
+        Optional.of(Duration.ofSeconds(54)),
+        Optional.of(Duration.ofSeconds(57)));
+  }
+
+  // An attempt that holds the last frame encodes its video from its seek, and the mp4 muxer holds
+  // every picture until the audio has a packet, so its audio starts at that seek too. The seek can
+  // land on an earlier keyframe, so the copy drops the audio before it.
+  @Test
+  @DisplayName(
+      "Should copy the audio from the source's only input from its seek when an encode that holds"
+          + " the last frame seeks after the source's start")
+  void shouldCopyTheAudioFromTheSourcesOnlyInputFromItsSeekWhenAHoldingEncodeSeeksAfterTheStart() {
+    var decision =
+        decision(TranscodeMode.VIDEO_TRANSCODE)
+            .videoDecision(
+                VideoDecisionFixtures.encodeBuilder().holdsLastFrameToAdvertisedEnd(true).build())
+            .build();
+    var cmd =
+        command(
+            request(decision)
+                .advertisedEnd(Optional.of(Duration.ofSeconds(66)))
+                .startSequenceNumber(10)
+                .seekPosition(Optional.of(Duration.ofSeconds(54)))
+                .build(),
+            "libx264");
+
+    assertThat(cmd.stream().filter("-i"::equals)).hasSize(1);
+    assertThat(cmd)
+        .containsSequence("-map", "0:a:0")
+        .containsSequence("-c:a", "copy", "-bsf:a", AAC_COPY_FROM_54_SECONDS, "-b:a", "0")
+        .doesNotContain("-isync");
+  }
+
+  // An attempt that holds the last frame encodes its video from its seek, and the mp4 muxer holds
+  // every picture until the audio has a packet, so its audio starts at that seek too.
+  @Test
+  @DisplayName(
+      "Should copy the audio from the source's only input from the keyframe its seek reads when an"
+          + " encode that holds the last frame carries a keyframe position far before its first"
+          + " segment")
+  void shouldCopyTheAudioFromTheKeyframeItsSeekReadsWhenAHoldingEncodesKeyframeLiesFarBack() {
+    var decision =
+        decision(TranscodeMode.VIDEO_TRANSCODE)
+            .videoDecision(
+                VideoDecisionFixtures.encodeBuilder().holdsLastFrameToAdvertisedEnd(true).build())
+            .build();
+    var cmd =
+        command(
+            request(decision)
+                .advertisedEnd(Optional.of(Duration.ofSeconds(66)))
+                .startSequenceNumber(10)
+                .seekPosition(Optional.of(Duration.ZERO))
+                .build(),
+            "libx264");
+
+    assertThat(cmd.stream().filter("-i"::equals)).hasSize(1);
+    assertThat(cmd)
+        .containsSequence("-map", "0:a:0")
+        .containsSequence("-c:a", "copy", "-bsf:a", "aac_adtstoasc", "-b:a", "0")
+        .doesNotContain("-isync");
+  }
+
+  @Test
+  @DisplayName(
+      "Should start the encoder's input a second after the server's keyframe position when an"
+          + " encode that holds the last frame carries a position far before its first segment")
+  void shouldStartTheEncodersInputASecondAfterTheKeyframeWhenAHoldingEncodesKeyframeLiesFarBack() {
+    var decision =
+        decision(TranscodeMode.FULL_TRANSCODE)
+            .videoDecision(
+                VideoDecisionFixtures.encodeBuilder().holdsLastFrameToAdvertisedEnd(true).build())
+            .build();
+    var cmd =
+        command(
+            request(decision)
+                .advertisedEnd(Optional.of(Duration.ofSeconds(66)))
+                .startSequenceNumber(10)
+                .seekPosition(Optional.of(Duration.ZERO))
+                .build(),
+            "libx264");
+
+    assertThat(cmd).containsSequence("-af", aacStereoFromTheFirstSegment("60", "59"));
+  }
+
+  // The encode of a profile 5 copy reads the source's audio from its second input, seeked to the
+  // server's keyframe position as the copy is, and drops the packets before one segment period
+  // before the first segment.
+  @Test
+  @DisplayName(
+      "Should copy the audio from the source input of the encode and drop its packets before one"
+          + " segment period before the first segment's start when a profile 5 replacement's"
+          + " keyframe position lies further back")
+  void
+      shouldCopyTheAudioFromTheSourceInputOfTheEncodeWhenAProfile5ReplacementsKeyframeLiesFarBack() {
+    var request =
+        request(
+                decision(TranscodeMode.VIDEO_TRANSCODE)
+                    .videoDecision(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE).build())
+                    .build())
+            .startSequenceNumber(10)
+            .seekPosition(Optional.of(Duration.ofSeconds(30)))
+            .build();
+
+    var pipe = rpuMovingPipe(builder.buildPipeline(job(request, "libx264")));
+
+    var encode = pipe.encodeCommand();
+    assertThat(encode.stream().filter("-i"::equals)).hasSize(2);
+    assertThat(encode)
+        .containsSequence(
+            "-ss",
+            "30",
+            "-noaccurate_seek",
+            "-i",
+            "/media/movie.mkv",
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0")
+        .containsSequence("-c:a", "copy", "-bsf:a", AAC_COPY_FROM_54_SECONDS, "-b:a", "0")
+        .doesNotContain("2:a:0");
   }
 
   @ParameterizedTest
@@ -1190,6 +1696,7 @@ class FfmpegCommandBuilderTest {
     assertThat(cmd)
         .doesNotContain("-ss")
         .containsSequence("-force_key_frames:0", "6,12,18,24,30,36,42,48,54,60");
+    assertThat(videoFilter(cmd)).endsWith(FRAME_GRID + ",trim=start_pts=144");
   }
 
   @ParameterizedTest
@@ -1253,33 +1760,6 @@ class FfmpegCommandBuilderTest {
     var cmd = command(request, "copy");
 
     assertThat(cmd).isNotEmpty().doesNotContain("-ss");
-  }
-
-  @ParameterizedTest
-  @EnumSource(
-      value = TranscodeMode.class,
-      names = {"VIDEO_TRANSCODE", "FULL_TRANSCODE"})
-  @DisplayName("Should keep the period-based seek when an encoded job carries no position")
-  void shouldKeepThePeriodBasedSeekWhenAnEncodedJobCarriesNoPosition(TranscodeMode mode) {
-    var request = request(mode).startSequenceNumber(5).seekPosition(Optional.empty()).build();
-
-    var cmd = command(request, "libx264");
-
-    assertThat(cmd).containsSubsequence("-ss", "24", "-i");
-  }
-
-  @Test
-  @DisplayName("Should keep the period-based seek when an encoded job carries a keyframe position")
-  void shouldKeepThePeriodBasedSeekWhenAnEncodedJobCarriesAKeyframePosition() {
-    var request =
-        request(TranscodeMode.FULL_TRANSCODE)
-            .startSequenceNumber(5)
-            .seekPosition(Optional.of(Duration.ofMillis(29_196)))
-            .build();
-
-    var cmd = command(request, "libx264");
-
-    assertThat(cmd).containsSubsequence("-ss", "24", "-i");
   }
 
   @Test
@@ -1416,7 +1896,7 @@ class FfmpegCommandBuilderTest {
                     "libx264")));
 
     var copy = pipe.copyCommandWritingVideoTimingTo("unix:/tmp/sts1/v");
-    assertThat(copy.subList(copy.indexOf("pipe:2") + 1, copy.size()))
+    assertThat(copy.subList(copy.indexOf("pipe:1") + 1, copy.size()))
         .containsSequence("-map_metadata", "-1", "-map_chapters", "-1");
   }
 
@@ -1571,7 +2051,8 @@ class FfmpegCommandBuilderTest {
         .isNotEmpty()
         .contains("-c:v", "libx264")
         .contains("-c:a", "copy")
-        .contains("-vf", "scale=-2:1080" + BT709_LIMITED_SCALE_OPTIONS + ",format=yuv420p")
+        .contains(
+            "-vf", "scale=-2:1080" + BT709_LIMITED_SCALE_OPTIONS + ",format=yuv420p" + FRAME_GRID)
         .doesNotContain("-ac");
     assertThat(audioBitrate(cmd)).isEqualTo("0");
   }
@@ -1807,11 +2288,11 @@ class FfmpegCommandBuilderTest {
 
   @Test
   @DisplayName(
-      "Should copy the source into fragmented MP4 on the copy's standard output and its video"
-          + " timing as framecrc when a Dolby Vision profile 5 sample starts with the RPU of the"
-          + " picture before")
+      "Should copy only the source's video, with the timestamps its demuxer reads, into fragmented"
+          + " MP4 on the copy's standard output and its video timing as framecrc when a Dolby Vision"
+          + " profile 5 sample starts with the RPU of the picture before")
   void
-      shouldCopyTheSourceIntoFragmentedMp4OnTheCopysStandardOutputAndItsVideoTimingAsFramecrcWhenADolbyVisionProfile5SampleStartsWithTheRpuOfThePictureBefore() {
+      shouldCopyOnlyTheSourcesVideoWithTheTimestampsItsDemuxerReadsIntoFragmentedMp4AndItsVideoTimingAsFramecrcWhenADolbyVisionProfile5SampleStartsWithTheRpuOfThePictureBefore() {
     var request =
         request(encoding(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE)))
             .height(720)
@@ -1828,10 +2309,6 @@ class FfmpegCommandBuilderTest {
                 "/media/movie.mkv",
                 "-map",
                 "0:0",
-                "-map",
-                "0:a:0",
-                "-map",
-                "-0:s",
                 "-map_metadata",
                 "-1",
                 "-map_chapters",
@@ -1839,7 +2316,6 @@ class FfmpegCommandBuilderTest {
                 "-copyts",
                 "-avoid_negative_ts",
                 "disabled",
-                "-start_at_zero",
                 "-max_muxing_queue_size",
                 "128",
                 "-max_interleave_delta",
@@ -1848,12 +2324,6 @@ class FfmpegCommandBuilderTest {
                 "copy",
                 "-strict",
                 "unofficial",
-                "-c:a",
-                "aac",
-                "-ac",
-                "2",
-                "-b:a",
-                "128k",
                 "-f",
                 "mp4",
                 "-movflags",
@@ -1865,23 +2335,6 @@ class FfmpegCommandBuilderTest {
                 "-flush_packets",
                 "1",
                 "pipe:1",
-                "-map",
-                "0:0",
-                "-map",
-                "0:a:0",
-                "-c",
-                "copy",
-                "-copypriorss",
-                "1",
-                "-map_metadata",
-                "-1",
-                "-map_chapters",
-                "-1",
-                "-f",
-                "framecrc",
-                "-flush_packets",
-                "1",
-                "pipe:2",
                 "-map",
                 "0:0",
                 "-c:v",
@@ -1898,11 +2351,11 @@ class FfmpegCommandBuilderTest {
 
   @Test
   @DisplayName(
-      "Should encode the copy read from standard input as one FFmpeg encodes the source, trimmed at"
-          + " the start and copying the copy's audio, when a Dolby Vision profile 5 sample starts"
+      "Should encode the copy's video read from standard input and the source's audio as one FFmpeg"
+          + " encodes the source, trimmed at the start, when a Dolby Vision profile 5 sample starts"
           + " with the RPU of the picture before")
   void
-      shouldEncodeTheCopyReadFromStandardInputAsOneFfmpegEncodesTheSourceTrimmedAtTheStartAndCopyingTheCopysAudioWhenADolbyVisionProfile5SampleStartsWithTheRpuOfThePictureBefore() {
+      shouldEncodeTheCopysVideoReadFromStandardInputAndTheSourcesAudioAsOneFfmpegEncodesTheSourceTrimmedAtTheStartWhenADolbyVisionProfile5SampleStartsWithTheRpuOfThePictureBefore() {
     var request =
         request(encoding(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE)))
             .height(720)
@@ -1922,10 +2375,11 @@ class FfmpegCommandBuilderTest {
     assertThat(pipe.encodeCommand()).isEqualTo(asTheEncodeOfTheCopy(oneFfmpeg));
   }
 
-  // One FFmpeg's command, changed only where ADR 0013 makes the encode of the copy differ: it reads
-  // the copy's fragmented MP4 on its standard input at once, keeps the copy's timestamps, trims its
-  // video at the attempt's start, copies the AAC that the copy encoded, and leaves the framecrc of
-  // the source's streams to the copy, which reads the source.
+  // One FFmpeg's command, changed only where the encode of the copy differs: it reads the copy's
+  // fragmented MP4 on its standard input at once as input 0, and shifts that input's timestamps by
+  // the source's start, as -start_at_zero shifts the source's; it reads the source's audio from the
+  // source as input 1, seeked as one FFmpeg seeks it; it trims its video at the attempt's start;
+  // and its framecrc of the source's streams copies them from input 1.
   private static List<String> asTheEncodeOfTheCopy(List<String> oneFfmpeg) {
     var expected =
         new ArrayList<>(
@@ -1936,21 +2390,18 @@ class FfmpegCommandBuilderTest {
                 "1",
                 "-fpsprobesize",
                 "0",
+                "-isync",
+                "1",
                 "-f",
                 "mp4",
                 "-i",
-                "pipe:0",
-                "-map",
-                "0:v:0",
-                "-map",
-                "0:a:0"));
-    expected.addAll(
-        oneFfmpeg.subList(oneFfmpeg.indexOf("-map_metadata"), oneFfmpeg.indexOf("pipe:1") + 1));
-    expected.remove("-start_at_zero");
+                "pipe:0"));
+    expected.addAll(oneFfmpeg.subList(oneFfmpeg.indexOf("-y") + 1, oneFfmpeg.indexOf("-i") + 2));
+    expected.addAll(List.of("-map", "0:v:0", "-map", "1:a:0"));
+    expected.addAll(oneFfmpeg.subList(oneFfmpeg.indexOf("-map_metadata"), oneFfmpeg.size()));
     expected.set(expected.indexOf("-vf") + 1, "trim=start=0," + videoFilter(oneFfmpeg));
-    var audio = expected.indexOf("-c:a");
-    expected.subList(audio, audio + 6).clear();
-    expected.addAll(audio, List.of("-c:a", "copy", "-bsf:a", "aac_adtstoasc", "-b:a", "0"));
+    var sourceStreams = expected.subList(expected.indexOf("pipe:1") + 1, expected.size());
+    sourceStreams.replaceAll(argument -> argument.replaceFirst("^0:", "1:"));
     return expected;
   }
 
@@ -1968,7 +2419,7 @@ class FfmpegCommandBuilderTest {
 
     assertThat(pipe.copyCommandWritingVideoTimingTo("unix:/tmp/sts1/v"))
         .endsWith(
-            "pipe:2",
+            "pipe:1",
             "-map",
             "0:2",
             "-c:v",
@@ -2150,10 +2601,11 @@ class FfmpegCommandBuilderTest {
 
   @Test
   @DisplayName(
-      "Should seek the copy and encode its audio there when a replacement attempt encodes a profile"
-          + " 5 source whose RPU starts its sample")
+      "Should seek the copy and the encode's source input alike, and encode the source's audio in"
+          + " the encode, when a replacement attempt encodes a profile 5 source whose RPU starts its"
+          + " sample")
   void
-      shouldSeekTheCopyAndEncodeItsAudioThereWhenAReplacementAttemptEncodesAProfile5SourceWhoseRpuStartsItsSample() {
+      shouldSeekTheCopyAndTheEncodesSourceInputAlikeAndEncodeTheSourcesAudioInTheEncodeWhenAReplacementAttemptEncodesAProfile5SourceWhoseRpuStartsItsSample() {
     var request =
         request(encoding(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE)))
             .startSequenceNumber(3)
@@ -2162,16 +2614,72 @@ class FfmpegCommandBuilderTest {
     var pipe = rpuMovingPipe(builder.buildPipeline(job(request, "libx264")));
 
     assertThat(pipe.copyCommand())
-        .containsSequence("ffmpeg", "-y", "-ss", "12", "-i", "/media/movie.mkv", "-map", "0:0")
-        .containsSequence("-c:a", "aac", "-ac", "2", "-b:a", "128k", "-f", "mp4");
+        .containsSequence(
+            "ffmpeg",
+            "-y",
+            "-ss",
+            "12",
+            "-noaccurate_seek",
+            "-i",
+            "/media/movie.mkv",
+            "-map",
+            "0:0",
+            "-map_metadata")
+        .doesNotContain("-c:a", "0:a:0");
+    assertThat(pipe.encodeCommand())
+        .containsSequence(
+            "-i",
+            "pipe:0",
+            "-ss",
+            "12",
+            "-noaccurate_seek",
+            "-i",
+            "/media/movie.mkv",
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0")
+        .containsSequence(
+            "-af",
+            aacStereoFromTheFirstSegment("18", "6"),
+            "-c:a",
+            "aac",
+            "-ac",
+            "2",
+            "-b:a",
+            "128k");
+  }
+
+  // The keyframe at 15.5 s lies 2.5 s before the first segment's start at 18 s, so the audio
+  // encoder's input starts the whole frames that fit in the 1.5 s from a second after it.
+  @Test
+  @DisplayName(
+      "Should read the copy and the encode's source input from the server's keyframe position when"
+          + " a replacement attempt that encodes a profile 5 source whose RPU starts its sample"
+          + " carries it")
+  void
+      shouldReadTheCopyAndTheEncodesSourceInputFromTheServersKeyframePositionWhenAProfile5ReplacementAttemptCarriesIt() {
+    var request =
+        request(encoding(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE)))
+            .startSequenceNumber(3)
+            .seekPosition(Optional.of(Duration.ofMillis(15_500)))
+            .build();
+
+    var pipe = rpuMovingPipe(builder.buildPipeline(job(request, "libx264")));
+
+    assertThat(pipe.copyCommand()).containsSequence("-ss", "15.5", "-noaccurate_seek", "-i");
+    assertThat(pipe.encodeCommand())
+        .containsSequence("pipe:0", "-ss", "15.5", "-noaccurate_seek", "-i")
+        .containsSequence("-af", aacStereoFromTheFirstSegment("18", "1.5"));
   }
 
   @Test
   @DisplayName(
-      "Should trim the encode's video at the seek without seeking the copy again when a replacement"
-          + " attempt encodes a profile 5 source whose RPU starts its sample")
+      "Should trim the encode's converted pictures at the first segment's start without seeking the"
+          + " copy again when a replacement attempt encodes a profile 5 source whose RPU starts its"
+          + " sample")
   void
-      shouldTrimTheEncodesVideoAtTheSeekWithoutSeekingTheCopyAgainWhenAReplacementAttemptEncodesAProfile5SourceWhoseRpuStartsItsSample() {
+      shouldTrimTheEncodesConvertedPicturesAtTheFirstSegmentsStartWhenAReplacementAttemptEncodesAProfile5SourceWhoseRpuStartsItsSample() {
     var request =
         request(encoding(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE)))
             .height(720)
@@ -2180,17 +2688,18 @@ class FfmpegCommandBuilderTest {
 
     var pipe = rpuMovingPipe(builder.buildPipeline(job(request, "libx264")));
 
-    assertThat(pipe.encodeCommand()).doesNotContain("-ss", "-start_at_zero");
-    assertThat(videoFilter(pipe.encodeCommand()))
-        .isEqualTo("trim=start=12,scale=-2:720," + TONE_MAPPED_TO_SDR);
+    var encode = pipe.encodeCommand();
+    assertThat(encode.subList(0, encode.indexOf("pipe:0"))).doesNotContain("-ss");
+    assertThat(videoFilter(encode))
+        .isEqualTo("scale=-2:720," + TONE_MAPPED_TO_SDR + FRAME_GRID + ",trim=start_pts=432");
   }
 
   @Test
   @DisplayName(
-      "Should copy the copied source's audio untrimmed when the encode of a profile 5 source whose"
-          + " RPU starts its sample seeks")
+      "Should copy the source's audio in the encode, from the encode's source input, when the"
+          + " encode of a profile 5 source whose RPU starts its sample seeks and copies audio")
   void
-      shouldCopyTheCopiedSourcesAudioUntrimmedWhenTheEncodeOfAProfile5SourceWhoseRpuStartsItsSampleSeeks() {
+      shouldCopyTheSourcesAudioInTheEncodeFromTheEncodesSourceInputWhenTheEncodeOfAProfile5SourceWhoseRpuStartsItsSampleSeeksAndCopiesAudio() {
     var decision =
         decision(TranscodeMode.VIDEO_TRANSCODE)
             .videoDecision(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE).build())
@@ -2199,21 +2708,27 @@ class FfmpegCommandBuilderTest {
 
     var pipe = rpuMovingPipe(builder.buildPipeline(job(request, "libx264")));
 
-    assertThat(pipe.copyCommand())
-        .containsSequence("-c:a", "copy", "-bsf:a", "aac_adtstoasc", "-b:a", "0", "-f", "mp4");
+    assertThat(pipe.copyCommand()).doesNotContain("-c:a", "0:a:0");
     assertThat(pipe.encodeCommand())
-        .containsSequence("-map", "0:v:0", "-map", "0:a:0")
-        .containsSequence("-c:a", "copy", "-bsf:a", "aac_adtstoasc", "-b:a", "0", "-r:v:0")
-        .doesNotContain("-ss");
+        .containsSequence("pipe:0", "-ss", "12", "-noaccurate_seek", "-i", "/media/movie.mkv")
+        .containsSequence("-map", "0:v:0", "-map", "1:a:0")
+        .containsSequence(
+            "-c:a",
+            "copy",
+            "-bsf:a",
+            "noise=drop='eq(st(0,ld(0)+gte(pts*tb,12)*key),0)',aac_adtstoasc",
+            "-b:a",
+            "0",
+            "-r:v:0");
   }
 
   @Test
   @DisplayName(
-      "Should copy the audio stream that the job names into the copy of the source, and take the"
-          + " copy's only audio stream from there, when the encode of a profile 5 source whose RPU"
-          + " starts its sample names one")
+      "Should map the audio stream that the job names from the source input of the encode, and no"
+          + " audio into the copy, when the encode of a profile 5 source whose RPU starts its sample"
+          + " names one")
   void
-      shouldCopyTheAudioStreamThatTheJobNamesIntoTheCopyOfTheSourceAndTakeTheCopysOnlyAudioStreamFromThereWhenTheEncodeOfAProfile5SourceWhoseRpuStartsItsSampleNamesOne() {
+      shouldMapTheAudioStreamThatTheJobNamesFromTheSourceInputOfTheEncodeWhenTheEncodeOfAProfile5SourceWhoseRpuStartsItsSampleNamesOne() {
     var decision =
         decision(TranscodeMode.VIDEO_TRANSCODE)
             .videoDecision(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE).build())
@@ -2222,10 +2737,23 @@ class FfmpegCommandBuilderTest {
 
     var pipe = rpuMovingPipe(builder.buildPipeline(job(request(decision).build(), "libx264")));
 
-    assertThat(pipe.copyCommand())
-        .containsSequence("-map", "0:0", "-map", "0:3?", "-map", "-0:s")
-        .doesNotContain("0:a:0");
-    assertThat(pipe.encodeCommand()).containsSequence("-map", "0:v:0", "-map", "0:a:0?");
+    assertThat(pipe.copyCommand()).doesNotContain("0:3?", "0:a:0", "-c:a");
+    var encode = pipe.encodeCommand();
+    assertThat(encode.subList(0, encode.indexOf("pipe:1")))
+        .containsSequence(
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:3?",
+            "-map",
+            "-1:s",
+            "-map",
+            "-1:d",
+            "-map",
+            "-1:t",
+            "-map",
+            "-1:disp:attached_pic")
+        .doesNotContain("1:a:0");
   }
 
   @Test
@@ -2243,17 +2771,17 @@ class FfmpegCommandBuilderTest {
     var pipe = rpuMovingPipe(builder.buildPipeline(job(request(decision).build(), "libx264")));
 
     assertThat(pipe.copyCommand()).doesNotContain("0:a:0");
-    assertThat(pipe.encodeCommand()).doesNotContain("0:a:0", "-c:a");
+    assertThat(pipe.encodeCommand()).doesNotContain("0:a:0", "1:a:0", "-c:a");
   }
 
   @ParameterizedTest(name = "{0}")
   @NullSource
   @ValueSource(strings = {"aac", "ac3", "eac3", "flac", "alac", "opus"})
   @DisplayName(
-      "Should copy the audio into the copy of the source, and copy it from there, whatever the"
-          + " codec, when the encode of a profile 5 source whose RPU starts its sample copies audio")
+      "Should copy the source's audio in the encode, and none into the copy, whatever the codec,"
+          + " when the encode of a profile 5 source whose RPU starts its sample copies audio")
   void
-      shouldCopyTheAudioIntoTheCopyOfTheSourceAndCopyItFromThereWhateverTheCodecWhenTheEncodeOfAProfile5SourceWhoseRpuStartsItsSampleCopiesAudio(
+      shouldCopyTheSourcesAudioInTheEncodeAndNoneIntoTheCopyWhateverTheCodecWhenTheEncodeOfAProfile5SourceWhoseRpuStartsItsSampleCopiesAudio(
           String audioCodec) {
     var decision =
         decision(TranscodeMode.VIDEO_TRANSCODE)
@@ -2263,11 +2791,9 @@ class FfmpegCommandBuilderTest {
 
     var pipe = rpuMovingPipe(builder.buildPipeline(job(request(decision).build(), "libx264")));
 
-    assertThat(pipe.copyCommand())
-        .containsSequence("-map", "0:a:0")
-        .containsSequence("-c:a", "copy");
+    assertThat(pipe.copyCommand()).doesNotContain("-c:a", "0:a:0");
     assertThat(pipe.encodeCommand())
-        .containsSequence("-map", "0:a:0")
+        .containsSequence("-map", "1:a:0")
         .containsSequence("-c:a", "copy");
     assertThat(pipe.encodeCommand().contains("aac_adtstoasc"))
         .as("only a copy of AAC passes through aac_adtstoasc")
@@ -2277,10 +2803,10 @@ class FfmpegCommandBuilderTest {
   @ParameterizedTest(name = "{0} as {1}")
   @CsvSource({"aac, aac", "ac3, ac3", "eac3, eac3", "flac, flac", "alac, alac", "opus, libopus"})
   @DisplayName(
-      "Should encode the audio in the copy of the source, with libopus for Opus, when the encode of"
-          + " a profile 5 source whose RPU starts its sample encodes audio")
+      "Should encode the source's audio in the encode of the copy, with libopus for Opus, when the"
+          + " encode of a profile 5 source whose RPU starts its sample encodes audio")
   void
-      shouldEncodeTheAudioInTheCopyOfTheSourceWithLibopusForOpusWhenTheEncodeOfAProfile5SourceWhoseRpuStartsItsSampleEncodesAudio(
+      shouldEncodeTheSourcesAudioInTheEncodeOfTheCopyWithLibopusForOpusWhenTheEncodeOfAProfile5SourceWhoseRpuStartsItsSampleEncodesAudio(
           String audioCodec, String encoder) {
     var decision =
         decision(TranscodeMode.FULL_TRANSCODE)
@@ -2296,8 +2822,10 @@ class FfmpegCommandBuilderTest {
 
     var pipe = rpuMovingPipe(builder.buildPipeline(job(request(decision).build(), "libx264")));
 
-    assertThat(pipe.copyCommand()).containsSequence("-c:a", encoder, "-ac", "2", "-b:a", "128k");
-    assertThat(pipe.encodeCommand()).containsSequence("-c:a", "copy").doesNotContain("-ac");
+    assertThat(pipe.copyCommand()).doesNotContain("-c:a");
+    assertThat(pipe.encodeCommand())
+        .containsSequence("-map", "1:a:0")
+        .containsSequence("-c:a", encoder, "-ac", "2", "-b:a", "128k");
   }
 
   // --- Held last frame and silence padding up to the advertised end ---
@@ -2319,7 +2847,7 @@ class FfmpegCommandBuilderTest {
 
   @Test
   @DisplayName(
-      "Should decode from the keyframe its seek reads and trim the start after the hold when an"
+      "Should decode from the keyframe its seek reads and trim at that seek after the hold when an"
           + " encode that holds the last frame seeks")
   void shouldTrimTheStartAfterTheHoldWhenAnEncodeThatHoldsTheLastFrameSeeks() {
     var cmd =
@@ -2331,7 +2859,7 @@ class FfmpegCommandBuilderTest {
         .isEqualTo(
             "scale=-2:1080"
                 + BT709_LIMITED_SCALE_OPTIONS
-                + ",format=yuv420p,fps=24000/1001:eof_action=pass,tpad=stop=-1:stop_mode=clone,trim=start=54:end_pts=1583");
+                + ",format=yuv420p,fps=24000/1001:eof_action=pass,tpad=stop=-1:stop_mode=clone,trim=start_pts=1295:end_pts=1583");
   }
 
   @Test
@@ -2360,32 +2888,44 @@ class FfmpegCommandBuilderTest {
                     .filter()
                 + ",scale=")
         .endsWith(
-            ",format=yuv420p,fps=24000/1001:eof_action=pass,tpad=stop=-1:stop_mode=clone,trim=start=54:end_pts=1583");
+            ",format=yuv420p,fps=24000/1001:eof_action=pass,tpad=stop=-1:stop_mode=clone,trim=start_pts=1295:end_pts=1583");
   }
 
-  @ParameterizedTest
-  @CsvSource({"0, 0", "10, 54"})
+  @Test
   @DisplayName(
       "Should append digital silence that starts where the attempt starts and runs past the"
           + " advertised end when an encode pads its audio")
-  void shouldAppendSilenceFromTheAttemptsStartPastTheAdvertisedEndWhenAnEncodePadsItsAudio(
-      int startSequenceNumber, String start) {
-    var cmd =
-        command(
-            heldAndPadded(TranscodeMode.FULL_TRANSCODE)
-                .startSequenceNumber(startSequenceNumber)
-                .build(),
-            "libx264");
+  void shouldAppendSilenceFromTheAttemptsStartPastTheAdvertisedEndWhenAnEncodePadsItsAudio() {
+    var cmd = command(heldAndPadded(TranscodeMode.FULL_TRANSCODE).build(), "libx264");
 
     assertThat(cmd)
         .containsSequence(
             "-af",
             AAC_STEREO_INPUT
-                + "apad,asetpts='if(isnan(PTS),"
-                + start
-                + "/TB+N/SR/TB,PTS)',atrim=start="
-                + start
-                + ":end=67",
+                + "apad,asetpts='if(isnan(PTS),0/TB+N/SR/TB,PTS)',atrim=start=0:end=67",
+            "-c:a",
+            "aac");
+  }
+
+  @Test
+  @DisplayName(
+      "Should append digital silence from the first segment's start within the shifted audio when"
+          + " an encoded replacement attempt pads its audio")
+  void shouldAppendSilenceFromTheFirstSegmentsStartWhenAnEncodedReplacementAttemptPadsItsAudio() {
+    var cmd =
+        command(
+            heldAndPadded(TranscodeMode.FULL_TRANSCODE).startSequenceNumber(10).build(), "libx264");
+
+    assertThat(cmd)
+        .containsSequence(
+            "-af",
+            AAC_STEREO_INPUT
+                + "asetpts='PTS+"
+                + aacShift("6")
+                + "',apad,asetpts='if(isnan(PTS),60/TB+N/SR/TB,PTS)',atrim=start=60"
+                + ",asetpts='PTS-"
+                + aacShift("6")
+                + "',atrim=end=67",
             "-c:a",
             "aac");
   }
@@ -2499,61 +3039,71 @@ class FfmpegCommandBuilderTest {
                 .build(),
             "libx264");
 
-    assertThat(cmd).containsSequence("-af", "atrim=start=54", "-c:a", "aac");
+    assertThat(cmd).containsSequence("-af", aacStereoFromTheFirstSegment("60", "6"), "-c:a", "aac");
   }
 
   @Test
   @DisplayName(
-      "Should hold no frame, pad no audio and keep FFmpeg's exact seek when an encode carries no"
-          + " early-end instruction")
-  void shouldHoldNoFramePadNoAudioAndKeepTheExactSeekWhenAnEncodeCarriesNoEarlyEndInstruction() {
+      "Should hold no frame and pad no audio when an encode carries no early-end instruction")
+  void shouldHoldNoFrameAndPadNoAudioWhenAnEncodeCarriesNoEarlyEndInstruction() {
     var cmd =
         command(request(TranscodeMode.FULL_TRANSCODE).startSequenceNumber(10).build(), "libx264");
 
-    assertThat(cmd).doesNotContain("-noaccurate_seek", "-af");
-    assertThat(videoFilter(cmd)).doesNotContain("tpad", "trim");
+    assertThat(cmd).isNotEmpty().noneMatch(argument -> argument.contains("apad"));
+    assertThat(videoFilter(cmd)).doesNotContain("tpad", "end_pts");
   }
 
   @Test
   @DisplayName(
-      "Should pad in the copying FFmpeg and hold the frame after the encode's start trim when a"
-          + " profile 5 encode holds and pads")
-  void shouldPadInTheCopyAndHoldAfterTheStartTrimWhenAProfile5EncodeHoldsAndPads() {
-    var decision =
-        decision(TranscodeMode.FULL_TRANSCODE)
-            .videoDecision(
-                profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE)
-                    .holdsLastFrameToAdvertisedEnd(true)
-                    .build())
-            .audioDecision(paddedAac())
-            .build();
+      "Should pad the source's audio in the encode and hold the frame after the encode's start trim"
+          + " when a profile 5 encode holds and pads")
+  void
+      shouldPadTheSourcesAudioInTheEncodeAndHoldAfterTheStartTrimWhenAProfile5EncodeHoldsAndPads() {
     var pipe =
         rpuMovingPipe(
             builder.buildPipeline(
-                job(
-                    request(decision)
-                        .advertisedEnd(Optional.of(Duration.ofSeconds(66)))
-                        .startSequenceNumber(10)
-                        .build(),
-                    "libx264")));
+                job(heldAndPaddedProfile5().startSequenceNumber(10).build(), "libx264")));
 
     assertThat(pipe.copyCommand())
         .containsSequence("-ss", "54", "-noaccurate_seek", "-i")
+        .doesNotContain("-af");
+    assertThat(pipe.encodeCommand())
+        .containsSequence("pipe:0", "-ss", "54", "-noaccurate_seek", "-i")
         .containsSequence(
             "-af",
             AAC_STEREO_INPUT
-                + "apad,asetpts='if(isnan(PTS),54/TB+N/SR/TB,PTS)',atrim=start=54:end=67");
+                + "asetpts='PTS+"
+                + aacShift("6")
+                + "',apad,asetpts='if(isnan(PTS),60/TB+N/SR/TB,PTS)',atrim=start=60"
+                + ",asetpts='PTS-"
+                + aacShift("6")
+                + "',atrim=end=67");
     assertThat(videoFilter(pipe.encodeCommand()))
         .startsWith("scale=")
         .endsWith(
-            ",fps=24000/1001:eof_action=pass,tpad=stop=-1:stop_mode=clone,trim=start=54:end_pts=1583");
-    assertThat(pipe.encodeCommand()).doesNotContain("-af");
+            ",fps=24000/1001:eof_action=pass,tpad=stop=-1:stop_mode=clone,trim=start_pts=1295:end_pts=1583");
+  }
+
+  // The copy keeps the pictures that the source's own markings, such as an MP4 edit list, place
+  // before zero, which the FFmpeg that decodes the source would discard.
+  @Test
+  @DisplayName(
+      "Should trim the encode of the copy at zero after the hold when a profile 5 encode that holds"
+          + " the last frame starts at zero")
+  void shouldTrimTheEncodeOfTheCopyAtZeroAfterTheHoldWhenAProfile5EncodeThatHoldsStartsAtZero() {
+    var pipe =
+        rpuMovingPipe(builder.buildPipeline(job(heldAndPaddedProfile5().build(), "libx264")));
+
+    assertThat(videoFilter(pipe.encodeCommand()))
+        .startsWith("scale=")
+        .endsWith(
+            ",fps=24000/1001:eof_action=pass,tpad=stop=-1:stop_mode=clone,trim=start=0:end_pts=1583");
   }
 
   @Test
   @DisplayName(
-      "Should pad the libopus audio of the copying FFmpeg when a profile 5 encode pads Opus audio")
-  void shouldPadTheLibopusAudioOfTheCopyingFfmpegWhenAProfile5EncodePadsOpusAudio() {
+      "Should pad the libopus audio of the encoding FFmpeg when a profile 5 encode pads Opus audio")
+  void shouldPadTheLibopusAudioOfTheEncodingFfmpegWhenAProfile5EncodePadsOpusAudio() {
     var decision =
         decision(TranscodeMode.FULL_TRANSCODE)
             .videoDecision(profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE).build())
@@ -2573,13 +3123,28 @@ class FfmpegCommandBuilderTest {
                     request(decision).advertisedEnd(Optional.of(Duration.ofSeconds(66))).build(),
                     "libx264")));
 
-    assertThat(pipe.copyCommand())
+    assertThat(pipe.copyCommand()).doesNotContain("-af");
+    assertThat(pipe.encodeCommand())
         .containsSequence(
             "-af",
             "aformat=sample_fmts=s16|flt:sample_rates=48000|24000|16000|12000|8000"
                 + ":channel_layouts=stereo,apad,asetpts='if(isnan(PTS),0/TB+N/SR/TB,PTS)',atrim=start=0:end=67",
             "-c:a",
             "libopus");
+  }
+
+  // A profile 5 encode whose RPU starts its sample, which holds the last frame and pads its AAC
+  // audio up to an advertised end of 66 s.
+  private static TranscodeRequest.TranscodeRequestBuilder heldAndPaddedProfile5() {
+    var decision =
+        decision(TranscodeMode.FULL_TRANSCODE)
+            .videoDecision(
+                profile5Encode(DolbyVisionRpuPlacement.STARTS_SAMPLE)
+                    .holdsLastFrameToAdvertisedEnd(true)
+                    .build())
+            .audioDecision(paddedAac())
+            .build();
+    return request(decision).advertisedEnd(Optional.of(Duration.ofSeconds(66)));
   }
 
   // An encode that holds the last frame and pads its audio up to an advertised end of 66 s, the

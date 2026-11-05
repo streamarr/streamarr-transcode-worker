@@ -467,11 +467,35 @@ class ProducerTest {
         .contains(Duration.ofSeconds(1));
   }
 
+  // 20 s of video and 23.5 s of audio, encoded: four audio-only fragments end the output.
   @Test
   @DisplayName(
-      "Should take nothing for how far the output reached when the producer has read no video"
-          + " sample")
-  void shouldTakeNothingForHowFarTheOutputReachedWhenTheProducerHasReadNoVideoSample() {
+      "Should take the end of the latest audio sample as how far the output reached when FFmpeg"
+          + " writes audio alone after the video ends")
+  void shouldTakeTheLatestAudioSampleEndAsHowFarTheOutputReachedWhenAudioOutlastsTheVideo() {
+    var recording = recording("06-encode-audio-tail.fmp4");
+    var output = bytesOf(recording.file());
+    var beforeTheLastFragment = startOfTheLastFragment(output);
+    var process =
+        ScriptedProcess.builder().output(output).pauseAfter(beforeTheLastFragment).build();
+
+    var producer = producerFor(process, recording).start();
+
+    assertThat(process.pauseReached()).succeedsWithin(OUTCOME_LIMIT);
+    assertThat(producer.takeAdvancedOutputEnd())
+        .as("three audio-only fragments past the video's end at 20 s")
+        .contains(Mp4Samples.read(Arrays.copyOf(output, beforeTheLastFragment)).latestSampleEnd());
+    process.resume();
+    assertThat(producer.outcome()).succeedsWithin(OUTCOME_LIMIT);
+    assertThat(producer.takeAdvancedOutputEnd())
+        .as("the last audio-only fragment ends at the audio's end")
+        .contains(Mp4Samples.read(output).latestSampleEnd());
+  }
+
+  @Test
+  @DisplayName(
+      "Should take nothing for how far the output reached when the producer has read no sample")
+  void shouldTakeNothingForHowFarTheOutputReachedWhenTheProducerHasReadNoSample() {
     var initializationSegment = IsoBoxes.concat(IsoBoxes.ftyp(), IsoBoxes.videoAndAudioMoov());
     var output =
         IsoBoxes.concat(
@@ -927,10 +951,10 @@ class ProducerTest {
         "13-x265-cfr-seek30.fmp4"
       })
   @DisplayName(
-      "Should discard the period before the first segment and deliver that segment from its"
-          + " boundary when an encoded replacement attempt seeks one period early")
+      "Should deliver the first segment from its boundary with nothing discarded when an encoded"
+          + " replacement attempt decodes from one period early")
   void
-      shouldDiscardThePeriodBeforeTheFirstSegmentAndDeliverThatSegmentFromItsBoundaryWhenAnEncodedReplacementAttemptSeeksOnePeriodEarly(
+      shouldDeliverTheFirstSegmentFromItsBoundaryWithNothingDiscardedWhenAnEncodedReplacementAttemptDecodesFromOnePeriodEarly(
           String file) throws IOException {
     var recording = recording(file);
     var process = ScriptedProcess.builder().output(bytesOf(file)).build();
@@ -940,9 +964,7 @@ class ProducerTest {
     assertThat(producer.outcome())
         .succeedsWithin(OUTCOME_LIMIT)
         .isEqualTo(new Completed(0, NOTHING_READ_FROM_THE_SOURCE));
-    assertThat(recording.discardedPreroll())
-        .extracting(SegmentSummary::number)
-        .containsExactly(recording.startSequenceNumber() - 1);
+    assertThat(recording.discardedPreroll()).isEmpty();
     assertThat(sink.acceptedNames())
         .startsWith("init.mp4", "segment5.m4s")
         .doesNotContain("segment4.m4s");
@@ -3438,10 +3460,10 @@ class ProducerTest {
   @Test
   @DisplayName(
       "Should fail the attempt as an encoder stall when FFmpeg writes nothing while the producer"
-          + " discards the preroll of an encoded replacement attempt")
+          + " discards the preroll of a stream-copy replacement attempt")
   void
-      shouldFailTheAttemptAsAnEncoderStallWhenFfmpegWritesNothingWhileTheProducerDiscardsThePrerollOfAnEncodedReplacementAttempt() {
-    var recording = recording("09-svtav1-vfr-seek30.fmp4");
+      shouldFailTheAttemptAsAnEncoderStallWhenFfmpegWritesNothingWhileTheProducerDiscardsThePrerollOfAStreamCopyReplacementAttempt() {
+    var recording = recording("07-copy-seek30.fmp4");
     var recorded = bytesOf(recording.file());
     var process =
         ScriptedProcess.builder()
@@ -4117,10 +4139,18 @@ class ProducerTest {
         .satisfies(
             preroll -> {
               assertThat(preroll.firstFragmentIndex()).isZero();
-              assertThat(preroll.fragmentCount()).isGreaterThan(2);
+              assertThat(preroll.fragmentCount()).isGreaterThanOrEqualTo(2);
             });
     var firstPrerollFragment = Math.toIntExact(recording.initializationSegment().byteLength());
     return endOfFragmentAt(recorded, firstPrerollFragment) + 10;
+  }
+
+  private static int startOfTheLastFragment(byte[] output) {
+    return TopLevelBoxes.of(output).stream()
+        .filter(box -> box.type().equals("moof"))
+        .reduce((_, later) -> later)
+        .orElseThrow()
+        .start();
   }
 
   // Where the mdat that follows the moof at this offset ends.

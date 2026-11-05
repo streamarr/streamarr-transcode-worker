@@ -85,12 +85,6 @@ public class FfmpegCommandBuilder {
 
   private static final String FLUSH_PACKETS = "-flush_packets";
 
-  // A negative map undoes the maps before it that it matches, so a named subtitle, data,
-  // attachment or cover art stream maps nothing and the producer refuses the output without a
-  // sound track, where FFmpeg would fail writing it. The chosen video stream is never cover art.
-  private static final List<String> NON_AUDIO_STREAM_EXCLUSIONS =
-      List.of("-map", "-0:d", "-map", "-0:t", "-map", "-0:disp:attached_pic");
-
   // The copy of the source that the encode of a profile 5 source reads: fragmented MP4, whose
   // muxer writes each packet as soon as it has one and whose movie timescale keeps every timestamp
   // the source's demuxer reads. skip_trailer stops the muxer from keeping an index entry of every
@@ -132,6 +126,8 @@ public class FfmpegCommandBuilder {
   private static final Map<Integer, String> DEFAULT_CHANNEL_LAYOUTS =
       Map.of(1, "mono", 2, STEREO, 6, "5.1", 8, "7.1");
 
+  private static final String LIBOPUS = "libopus";
+
   private static final Map<Integer, String> AC3_CHANNEL_LAYOUTS =
       Map.of(1, "mono", 2, STEREO, 6, "5.1(side)");
 
@@ -148,17 +144,55 @@ public class FfmpegCommandBuilder {
           AudioEncoderInput.of("fltp", "48000|44100|32000", AC3_CHANNEL_LAYOUTS),
           "opus",
           AudioEncoderInput.of("fltp", "48000", Map.of(1, "mono", 2, STEREO)),
-          "libopus",
+          LIBOPUS,
           AudioEncoderInput.of("s16|flt", "48000|24000|16000|12000|8000", DEFAULT_CHANNEL_LAYOUTS),
           "flac",
           new AudioEncoderInput("s16|s32", Optional.empty(), DEFAULT_CHANNEL_LAYOUTS));
+
+  // Each encoder's frame and the lead of its first input sample over its first frame without
+  // priming, in samples at its sample rate SR, as the pinned FFmpeg writes them: FFmpeg's AAC
+  // encoder primes a whole frame of 1,024 samples, AC-3 and E-AC-3 256 of 1,536, FFmpeg's opus
+  // encoder 120 of 960, and libopus 6.5 ms of 20 ms. ALAC and FLAC prime nothing. FFmpeg's FLAC
+  // encoder frames the longest FLAC block size that lasts at most 105 ms.
+  private static final Map<String, AudioFrames> AUDIO_ENCODER_FRAMES =
+      Map.of(
+          "aac",
+          new AudioFrames("1024", "0"),
+          "ac3",
+          new AudioFrames("1536", "1280"),
+          "eac3",
+          new AudioFrames("1536", "1280"),
+          "opus",
+          new AudioFrames("960", "840"),
+          LIBOPUS,
+          new AudioFrames("SR/50", "SR*27/2000"),
+          "alac",
+          new AudioFrames("4096", "0"),
+          "flac",
+          new AudioFrames(longestBlockWithin105Milliseconds(), "0"));
+
+  // How long after the server's keyframe position an encoded replacement attempt's audio starts at
+  // the latest: a margin for a demuxer that delivers its first audio sample after the keyframe it
+  // seeks to.
+  private static final Duration AUDIO_AFTER_THE_KEYFRAME = Duration.ofSeconds(1);
+
+  private static String longestBlockWithin105Milliseconds() {
+    var sizes = List.of(32768, 16384, 8192, 4608, 4096, 2304, 2048, 1152, 1024, 576, 512, 256);
+    var blockSize = new StringBuilder();
+    for (var size : sizes) {
+      blockSize.append("if(gte(trunc(SR*105/1000),").append(size).append("),").append(size);
+      blockSize.append(',');
+    }
+
+    return blockSize.append("192").append(")".repeat(sizes.size())).toString();
+  }
 
   // The longest argument Linux passes to a program: MAX_ARG_STRLEN, 32 pages, holds the argument
   // and its terminating NUL, and a page is at least 4 KiB.
   private static final int LONGEST_ARGUMENT_BYTES = 32 * 4096 - 1;
 
   public FfmpegPipeline buildPipeline(TranscodeJob job) {
-    if (needsRpuMove(job)) {
+    if (needsRpuMove(job.request())) {
       return new FfmpegPipeline.RpuMovingPipe(
           buildSourceCopyCommand(job), buildCommand(job, EncoderInput.COPY_OF_THE_SOURCE));
     }
@@ -169,8 +203,8 @@ public class FfmpegCommandBuilder {
   // Dolby Vision profiles 5 and 10.0 have no compatible base, and of those only profile 5 is
   // HEVC, so only its picture needs the RPU that FFmpeg's HEVC decoder skips when the RPU starts a
   // sample. A job whose mode copies the video decodes nothing, whatever its video decision.
-  private static boolean needsRpuMove(TranscodeJob job) {
-    var decision = job.request().transcodeDecision();
+  private static boolean needsRpuMove(TranscodeRequest request) {
+    var decision = request.transcodeDecision();
     if (!decision.transcodeMode().encodesVideo()) {
       return false;
     }
@@ -219,7 +253,7 @@ public class FfmpegCommandBuilder {
     var mode = decision.transcodeMode();
 
     addInputAndStreamSelection(cmd, job, input);
-    addCommonFlags(cmd, input);
+    addCommonFlags(cmd);
     addCodecArgs(cmd, job, input);
 
     if (mode.encodesVideo()) {
@@ -228,61 +262,39 @@ public class FfmpegCommandBuilder {
     }
 
     addFragmentedMp4Output(cmd);
-    if (input == EncoderInput.SOURCE) {
-      addSourceStreamsOutput(cmd, decision);
-    }
-
+    addSourceStreamsOutput(cmd, decision, input);
     return List.copyOf(cmd);
   }
 
-  // The copy seeks as the single command would and keeps the timestamps that command reads, so
-  // the encode of the copy reads them unchanged. The copy encodes audio that the job encodes, as
-  // it decodes every source codec, and the seek trims that audio exactly as it trims the single
-  // command's. FFmpeg's opus encoder is experimental, so the copy names libopus. The mp4 muxer
-  // keeps a Dolby Vision configuration record only when the compliance is unofficial.
+  // The copy reads the source's video with the single command's seek and keeps the timestamps that
+  // the source's demuxer reads, which the encode of the copy shifts as the single command's
+  // -start_at_zero shifts its own. The copy carries no audio: the mp4 muxer writes nothing until
+  // every track has a sample, so audio would hold back every picture read before its first sample,
+  // and the encode of the copy reads the audio from the source itself. The mp4 muxer keeps a Dolby
+  // Vision configuration record only when the compliance is unofficial.
   private List<String> buildSourceCopyCommand(TranscodeJob job) {
-    var cmd = new ArrayList<String>();
-    var audio = job.request().transcodeDecision().audioDecision();
-    addInputArgs(cmd, job.request());
-    addStreamSelection(cmd, job.request().transcodeDecision());
-    addCommonFlags(cmd, EncoderInput.SOURCE);
+    var request = job.request();
+    var video = request.transcodeDecision().videoDecision();
+    var cmd = new ArrayList<>(List.of(ffmpegPath, "-y"));
+    addSeekArgs(cmd, request);
+    cmd.addAll(List.of("-i", request.sourcePath().toString(), "-map", "0:" + video.streamIndex()));
+    addTimestampFlags(cmd);
+    addMuxingFlags(cmd);
     cmd.addAll(List.of("-c:v", "copy", "-strict", "unofficial"));
-    var copiedAudio = audio;
-    if (audio.mode() == AudioMode.TRANSCODE && "opus".equals(audio.codec())) {
-      copiedAudio =
-          AudioDecision.builder()
-              .mode(audio.mode())
-              .streamIndex(audio.streamIndex())
-              .codec("libopus")
-              .channels(audio.channels())
-              .bitrate(audio.bitrate())
-              .channelLayout(audio.channelLayout())
-              .outputSampleRate(audio.outputSampleRate())
-              .padsWithSilenceToAdvertisedEnd(audio.padsWithSilenceToAdvertisedEnd())
-              .build();
-    }
-
-    addAudioArgs(cmd, copiedAudio, job.request());
-
     cmd.addAll(SOURCE_COPY_OUTPUT);
-    addSourceStreamsOutput(cmd, job.request().transcodeDecision());
-    addVideoTimingOutput(cmd, job.request().transcodeDecision().videoDecision());
+    addVideoTimingOutput(cmd, video);
     return List.copyOf(cmd);
   }
 
-  // The FFmpeg that reads the source copies the chosen streams' packets, from the keyframe its
-  // seek reads on, to a framecrc on its error output, its second output: the worker reads there
-  // where each stream's last source sample ends. FFmpeg writes each record at once, so that no log
-  // line splits it.
-  private static void addSourceStreamsOutput(List<String> cmd, TranscodeDecision decision) {
-    cmd.addAll(List.of("-map", "0:" + decision.videoDecision().streamIndex()));
-    var audio = decision.audioDecision();
-    addAudioStreamSelection(cmd, audio);
-    if (namesAudioStream(audio)) {
-      cmd.addAll(List.of("-map", "-0:s"));
-      cmd.addAll(NON_AUDIO_STREAM_EXCLUSIONS);
-    }
-
+  // The FFmpeg that encodes copies the chosen source streams' packets, from the keyframe its seek
+  // reads on, to a framecrc on its error output, its second output: the worker reads there where
+  // each stream's last source sample ends. FFmpeg writes each record at once, so that no log line
+  // splits it.
+  private static void addSourceStreamsOutput(
+      List<String> cmd, TranscodeDecision decision, EncoderInput input) {
+    var source = input.sourceInputIndex();
+    cmd.addAll(List.of("-map", source + ":" + decision.videoDecision().streamIndex()));
+    addAudioStreamSelection(cmd, decision.audioDecision(), source);
     cmd.addAll(List.of("-c", "copy", "-copypriorss", "1"));
     cmd.addAll(NO_SOURCE_METADATA);
     cmd.addAll(List.of("-f", "framecrc", FLUSH_PACKETS, "1", "pipe:2"));
@@ -298,75 +310,98 @@ public class FfmpegCommandBuilder {
     cmd.addAll(List.of("-f", "framecrc", FLUSH_PACKETS, "1"));
   }
 
-  // The copy holds only the chosen video stream and the audio. FFmpeg reads no commands from its
-  // standard input while it reads media there.
+  // The encode of the copy reads the copy's video on its standard input, where FFmpeg reads no
+  // commands while it reads media, and the source's audio from the source, seeked as the single
+  // command seeks it. -isync shifts the copy's timestamps by the difference between the two inputs'
+  // start times: with -start_at_zero, both then lie on the single command's timeline.
   private void addInputAndStreamSelection(List<String> cmd, TranscodeJob job, EncoderInput input) {
-    var decision = job.request().transcodeDecision();
+    var request = job.request();
+    var decision = request.transcodeDecision();
+    cmd.addAll(List.of(ffmpegPath, "-y"));
     if (input == EncoderInput.SOURCE) {
-      addInputArgs(cmd, job.request());
+      addSourceInput(cmd, request);
       addStreamSelection(cmd, decision);
       return;
     }
 
+    var source = input.sourceInputIndex();
     cmd.addAll(
         List.of(
-            ffmpegPath,
-            "-y",
             "-analyzeduration",
             "1",
             "-fpsprobesize",
             "0",
+            "-isync",
+            String.valueOf(source),
             "-f",
             "mp4",
             "-i",
-            "pipe:0",
-            "-map",
-            "0:v:0"));
-    var audio = decision.audioDecision();
-    if (audio.mode() != AudioMode.NONE) {
-      cmd.addAll(List.of("-map", audioMap(audio, "a:0")));
-    }
+            "pipe:0"));
+    addSourceInput(cmd, request);
+    cmd.addAll(List.of("-map", "0:v:0"));
+    addAudioStreamSelection(cmd, decision.audioDecision(), source);
   }
 
-  private void addInputArgs(List<String> cmd, TranscodeRequest request) {
-    cmd.add(ffmpegPath);
-    cmd.add("-y");
-
-    var seekPosition = inputSeekPosition(request);
-    if (seekPosition.isPositive()) {
-      cmd.addAll(List.of("-ss", seekArgument(seekPosition)));
-      addHeldFrameSeekArgs(cmd, request);
+  // ADR 0043 reads each track of an encoded replacement attempt from at most one segment period
+  // before its first segment. A filter cannot trim copied packets, so the copy drops the packets
+  // before that point, however far back the keyframe that the seek reads lies: an attempt that
+  // encodes video from a later segment starts its copied audio one segment period before that
+  // segment. One that holds the last frame encodes its video from its seek instead, and the mp4
+  // muxer holds every picture until the audio has a packet, so its audio starts at that seek too.
+  // Empty for any other attempt.
+  private static Optional<Duration> copiedAudioStart(TranscodeRequest request) {
+    if (request.transcodeDecision().audioDecision().mode() != AudioMode.COPY) {
+      return Optional.empty();
     }
 
+    if (holdsLastFrame(request)) {
+      return encodingStart(request);
+    }
+
+    return firstSegmentStartOfAnEncode(request)
+        .map(start -> start.minus(Duration.ofSeconds(request.targetSegmentDuration())));
+  }
+
+  private void addSourceInput(List<String> cmd, TranscodeRequest request) {
+    addSeekArgs(cmd, request);
     encodeInNamedLayout(request.transcodeDecision().audioDecision(), request.sourceAudio())
         .ifPresent(options -> cmd.addAll(options.inputOptions()));
     cmd.addAll(List.of("-i", request.sourcePath().toString()));
   }
 
-  // An attempt that holds the last frame decodes from the keyframe its seek reads and trims
-  // its start after the hold, as the encode of the copy of the source does, so that an attempt
-  // that starts after the video's last frame still has that frame to repeat. Its encoded audio
-  // is trimmed at the same position.
-  private static void addHeldFrameSeekArgs(List<String> cmd, TranscodeRequest request) {
-    if (holdsLastFrame(request)) {
+  private static void addSeekArgs(List<String> cmd, TranscodeRequest request) {
+    var seekPosition = inputSeekPosition(request);
+    if (seekPosition.isPositive()) {
+      cmd.addAll(List.of("-ss", seekArgument(seekPosition)));
+      addDecodeOnlySeekArgs(cmd, request);
+    }
+  }
+
+  // An encode decodes every picture from the keyframe its seek reads, and its filters trim them at
+  // the first segment's start after the frame-rate conversion. FFmpeg's exact seek trims before
+  // every filter instead, which drops the picture that the conversion repeats across a gap between
+  // pictures up to that start.
+  private static void addDecodeOnlySeekArgs(List<String> cmd, TranscodeRequest request) {
+    if (encodesVideo(request)) {
       cmd.add("-noaccurate_seek");
     }
   }
 
-  // A stream copy that carries the server's keyframe position seeks to that position: the decode
-  // time of the keyframe that starts the copy's first segment. An MPEG-TS seek reads from the last
-  // packet whose decode time is at or before the target, so a seek to the segment's boundary skips
-  // that keyframe when its decode time lies far enough before the boundary. The seek can still
-  // read from an earlier keyframe: for a stream with B-frames, FFmpeg moves the target 3/23 s
-  // earlier unless the container seeks by presentation time, as Matroska and MPEG-TS do not. The
-  // producer discards what the attempt reads before its first segment as preroll.
+  // A job that carries the server's keyframe position seeks to that position. A stream copy's
+  // keyframe starts the copy's first segment, and the server sends its decode time. An encode's
+  // keyframe is the last one whose presentation time lies at or before the first segment's start
+  // minus 0.5 s, so that the encode decodes the picture that fills that start. For an encode, the
+  // server sends that keyframe's presentation time from an MP4 or MOV source and its decode time
+  // from a Matroska, MPEG-TS or any other source. An MP4 demuxer seeks by presentation time, so a
+  // decode time before the keyframe's presentation time reads from the keyframe before it, a whole
+  // GOP earlier. An MPEG-TS seek reads from the last packet whose decode time is at or before the
+  // target, so a seek to the segment's boundary skips that keyframe when its decode time lies far
+  // enough before the boundary. The seek can still read from an earlier keyframe: for a stream
+  // with B-frames, FFmpeg moves the target 3/23 s earlier unless the container seeks by
+  // presentation time, as Matroska and MPEG-TS do not. The producer discards what a copy reads
+  // before its first segment as preroll.
   private static Duration inputSeekPosition(TranscodeRequest request) {
-    var copiesVideo = !request.transcodeDecision().transcodeMode().encodesVideo();
-    if (copiesVideo && request.seekPosition().isPresent()) {
-      return request.seekPosition().orElseThrow();
-    }
-
-    return Duration.ofSeconds(inputSeekSeconds(request));
+    return request.seekPosition().orElseGet(() -> Duration.ofSeconds(inputSeekSeconds(request)));
   }
 
   // FFmpeg reads microseconds. Rounding up keeps the target at or after the server's position.
@@ -378,11 +413,12 @@ public class FfmpegCommandBuilder {
         .toPlainString();
   }
 
-  // An encoded replacement attempt seeks one period before its first segment's start, and the
-  // producer discards that period as preroll: a seek to the start itself can drop the frame an
-  // earlier attempt repeated there from a variable-frame-rate source, and lands after the start on
-  // an MPEG-TS source. A stream copy without the server's keyframe position seeks to its first
-  // segment's start.
+  // An encoded replacement attempt without the server's keyframe position reads from one period
+  // before its first segment's start. That reaches the picture that fills the start unless a gap
+  // between pictures covers the whole period, or unless the demuxer lands after the start, as an
+  // MPEG-TS demuxer can, and as an MP4 demuxer does for a target inside a gap whose next keyframe
+  // carries a decode time inside it. A stream copy without the server's keyframe position seeks to
+  // its first segment's start.
   private static long inputSeekSeconds(TranscodeRequest request) {
     var firstSegment = (long) request.startSequenceNumber();
     var firstSegmentStart = request.segmentIntervals().startOf(firstSegment, 1);
@@ -394,22 +430,66 @@ public class FfmpegCommandBuilder {
     return firstSegmentStart - request.targetSegmentDuration();
   }
 
+  // Where an attempt that encodes video from a later segment starts encoding video: its first
+  // segment's start, as it decodes from its seek up to there. An attempt that holds the last frame
+  // starts at its seek instead, where the demuxer delivers a picture. tpad repeats the last
+  // picture only after the demuxer reaches the end of the whole source, so a start after that
+  // picture would hold back every encoded frame until the demuxer had read all of the audio. The
+  // producer discards what that attempt encodes before its first segment as preroll. Empty for any
+  // other attempt.
+  private static Optional<Duration> encodingStart(TranscodeRequest request) {
+    if (holdsLastFrame(request)) {
+      return firstSegmentStartOfAnEncode(request)
+          .map(_ -> inputSeekPosition(request))
+          .filter(Duration::isPositive);
+    }
+
+    return firstSegmentStartOfAnEncode(request);
+  }
+
+  private static Optional<Duration> firstSegmentStartOfAnEncode(TranscodeRequest request) {
+    if (!encodesVideo(request) || request.startSequenceNumber() == 0) {
+      return Optional.empty();
+    }
+
+    return Optional.of(
+        Duration.ofSeconds(request.segmentIntervals().startOf(request.startSequenceNumber(), 1)));
+  }
+
+  private static boolean encodesVideo(TranscodeRequest request) {
+    return request.transcodeDecision().transcodeMode().encodesVideo();
+  }
+
   private void addStreamSelection(List<String> cmd, TranscodeDecision decision) {
     cmd.addAll(List.of("-map", "0:" + decision.videoDecision().streamIndex()));
     var audio = decision.audioDecision();
-    addAudioStreamSelection(cmd, audio);
-    if (decision.subtitleDecision().mode() == SubtitleMode.EXCLUDE || namesAudioStream(audio)) {
+    addAudioStreamSelection(cmd, audio, 0);
+    if (decision.subtitleDecision().mode() == SubtitleMode.EXCLUDE && !namesAudioStream(audio)) {
       cmd.addAll(List.of("-map", "-0:s"));
-    }
-
-    if (namesAudioStream(audio)) {
-      cmd.addAll(NON_AUDIO_STREAM_EXCLUSIONS);
     }
   }
 
-  private static void addAudioStreamSelection(List<String> cmd, AudioDecision audio) {
-    if (audio.mode() != AudioMode.NONE) {
-      cmd.addAll(List.of("-map", audioMap(audio, audio.sourceStreamSpecifier())));
+  // A negative map undoes the maps before it that it matches, so a named subtitle, data,
+  // attachment or cover art stream maps nothing and the producer refuses the output without a
+  // sound track, where FFmpeg would fail writing it. The chosen video stream is never cover art.
+  private static void addAudioStreamSelection(List<String> cmd, AudioDecision audio, int input) {
+    if (audio.mode() == AudioMode.NONE) {
+      return;
+    }
+
+    cmd.addAll(List.of("-map", audioMap(audio, input)));
+    if (namesAudioStream(audio)) {
+      var exclusion = "-" + input + ":";
+      cmd.addAll(
+          List.of(
+              "-map",
+              exclusion + "s",
+              "-map",
+              exclusion + "d",
+              "-map",
+              exclusion + "t",
+              "-map",
+              exclusion + "disp:attached_pic"));
     }
   }
 
@@ -420,16 +500,22 @@ public class FfmpegCommandBuilder {
   // A stream that the job names maps nothing when the source has no stream there, so that the
   // producer refuses the output that lacks its sound track as the job's error, where FFmpeg would
   // fail to start. Without a name, FFmpeg fails as before when the source has no audio stream.
-  private static String audioMap(AudioDecision audio, String specifier) {
+  private static String audioMap(AudioDecision audio, int input) {
+    var map = input + ":" + audio.sourceStreamSpecifier();
     if (audio.streamIndex().isPresent()) {
-      return "0:" + specifier + "?";
+      return map + "?";
     }
 
-    return "0:" + specifier;
+    return map;
   }
 
-  // The copy of the source already starts at zero, so the encode of the copy keeps its timestamps.
-  private void addCommonFlags(List<String> cmd, EncoderInput input) {
+  private static void addCommonFlags(List<String> cmd) {
+    addTimestampFlags(cmd);
+    cmd.add("-start_at_zero");
+    addMuxingFlags(cmd);
+  }
+
+  private static void addTimestampFlags(List<String> cmd) {
     cmd.addAll(
         List.of(
             "-map_metadata",
@@ -439,10 +525,9 @@ public class FfmpegCommandBuilder {
             "-copyts",
             "-avoid_negative_ts",
             "disabled"));
-    if (input == EncoderInput.SOURCE) {
-      cmd.add("-start_at_zero");
-    }
+  }
 
+  private static void addMuxingFlags(List<String> cmd) {
     cmd.addAll(
         List.of(
             "-max_muxing_queue_size",
@@ -466,35 +551,36 @@ public class FfmpegCommandBuilder {
     PlayableSampleEntry.ofEncoder(job.videoEncoder())
         .ifPresent(entry -> cmd.addAll(tagArgs(entry)));
     cmd.addAll(forcedCodecProfileArgs(job));
-    addScaleAndBitrateArgs(cmd, job, trimStart(job.request(), input));
-    if (input == EncoderInput.COPY_OF_THE_SOURCE) {
-      addAudioOfTheCopyArgs(cmd, decision.audioDecision());
-      return;
-    }
-
-    addAudioArgs(cmd, decision.audioDecision(), job.request());
+    addScaleAndBitrateArgs(cmd, job, input);
+    addAudioArgs(cmd, encodedAudio(decision.audioDecision(), input), job.request());
   }
 
-  // The copy carries the job's output audio, which the encode of the copy copies untrimmed.
-  private static void addAudioOfTheCopyArgs(List<String> cmd, AudioDecision audio) {
-    if (audio.mode() != AudioMode.NONE) {
-      cmd.addAll(copiedAudioArgs(audio.codec()));
-    }
-  }
-
-  // The FFmpeg that decodes the source discards the frames before its seek, and, through the
-  // source's own markings, such as an MP4 edit list, those before its start. The stream copy keeps
-  // every packet from the keyframe at or before its seek, which the FFmpeg that reads the copy
-  // would decode and keep, so the encode of the copy trims its video at the attempt's start,
-  // seeking or not: after -start_at_zero, nothing else lies before zero. An attempt that holds the
-  // last frame and seeks keeps the frames before its seek too.
-  private static Optional<String> trimStart(TranscodeRequest request, EncoderInput input) {
+  // FFmpeg's opus encoder is experimental, so the encode of the copy names libopus.
+  private static AudioDecision encodedAudio(AudioDecision audio, EncoderInput input) {
     if (input == EncoderInput.SOURCE
-        && !(holdsLastFrame(request) && inputSeekPosition(request).isPositive())) {
-      return Optional.empty();
+        || audio.mode() != AudioMode.TRANSCODE
+        || !"opus".equals(audio.codec())) {
+      return audio;
     }
 
-    return Optional.of(seekArgument(inputSeekPosition(request)));
+    return AudioDecision.builder()
+        .mode(audio.mode())
+        .streamIndex(audio.streamIndex())
+        .codec(LIBOPUS)
+        .channels(audio.channels())
+        .bitrate(audio.bitrate())
+        .channelLayout(audio.channelLayout())
+        .outputSampleRate(audio.outputSampleRate())
+        .padsWithSilenceToAdvertisedEnd(audio.padsWithSilenceToAdvertisedEnd())
+        .build();
+  }
+
+  // The FFmpeg that decodes the source discards, through the source's own markings, such as an
+  // MP4 edit list, the frames before zero. The stream copy keeps them, so the encode of the copy
+  // of an attempt from zero trims its video at zero: after -start_at_zero, nothing else lies
+  // before zero. An attempt that holds the last frame trims after the hold.
+  private static boolean trimsTheCopyAtZero(TranscodeRequest request, EncoderInput input) {
+    return input == EncoderInput.COPY_OF_THE_SOURCE && encodingStart(request).isEmpty();
   }
 
   // A copy of H.264 or HEVC gets the codec family's playable sample entry. The mp4 muxer drops a
@@ -549,7 +635,7 @@ public class FfmpegCommandBuilder {
     }
 
     if (audio.mode() == AudioMode.COPY) {
-      cmd.addAll(copiedAudioArgs(audio.codec()));
+      cmd.addAll(copiedAudioArgs(audio.codec(), copiedAudioStart(request)));
       return;
     }
 
@@ -557,7 +643,7 @@ public class FfmpegCommandBuilder {
     if (namedLayout.isPresent()) {
       var options = namedLayout.orElseThrow();
       cmd.addAll(
-          timingFilter(audio, request)
+          timingFilter(audio, request, framesOf(options))
               .map(options::withTrailingFilter)
               .orElse(options)
               .outputOptions());
@@ -580,9 +666,16 @@ public class FfmpegCommandBuilder {
     return Optional.of(AudioEncodeOptions.of(audio, sourceAudio.orElseThrow()));
   }
 
+  // The padding and the frame-aligned shift read the sample rate that the encoder takes, so the
+  // conversion to the encoder's input runs before them.
   private static Optional<String> audioFilter(AudioDecision audio, TranscodeRequest request) {
-    var timing = timingFilter(audio, request);
-    if (!audio.padsWithSilenceToAdvertisedEnd()) {
+    var frames = framesOf(audio.codec());
+    var timing = timingFilter(audio, request, frames);
+    var shifts =
+        firstSegmentStartOfAnEncode(request)
+            .flatMap(_ -> frameAlignedShift(frames, request))
+            .isPresent();
+    if (!audio.padsWithSilenceToAdvertisedEnd() && !shifts) {
       return timing;
     }
 
@@ -593,30 +686,114 @@ public class FfmpegCommandBuilder {
   // When the attempt reads no source sample, FFmpeg sets the filters up with the stream's own
   // sample rate and layout, as for a decoded one, and apad's silence carries no timestamps, so
   // asetpts starts it at the attempt's start. atrim drops the silence before the start and ends
-  // the padding. An attempt that holds the last frame trims the start of its encoded audio itself,
-  // as its seek no longer does. In a named layout's encode these filters follow its own: its
-  // resampler and limiter meet the end of the source instead of silence, its dither never reaches
-  // the silence, and no conversion replaces its layout with FFmpeg's default for the channel count.
-  private static Optional<String> timingFilter(AudioDecision audio, TranscodeRequest request) {
-    var start = seekArgument(inputSeekPosition(request));
+  // the padding. An attempt that encodes video from a later segment trims its encoded audio
+  // itself, as its seek no longer does. The padding ends after the shift back, on the attempt's own
+  // times. In a named layout's encode these filters follow its own: its resampler and limiter meet
+  // the end of the source instead of silence, its dither never reaches the silence, and no
+  // conversion replaces its layout with FFmpeg's default for the channel count.
+  private static Optional<String> timingFilter(
+      AudioDecision audio, TranscodeRequest request, Optional<AudioFrames> frames) {
+    var trimStart = audioTrimStart(frames, request);
+    var start = seekArgument(trimStart.orElseGet(() -> inputSeekPosition(request)));
+    var shift =
+        firstSegmentStartOfAnEncode(request).flatMap(_ -> frameAlignedShift(frames, request));
+    var shiftForward = shift.map(samples -> "asetpts='PTS+" + samples + "',").orElse("");
+    var shiftBack = shift.map(samples -> ",asetpts='PTS-" + samples + "'").orElse("");
     if (audio.padsWithSilenceToAdvertisedEnd()) {
       var end =
           seekArgument(
               request.advertisedEnd().orElseThrow().plus(PADDED_AUDIO_RUN_PAST_ADVERTISED_END));
+      var endTrim = shift.map(_ -> shiftBack + ",atrim=end=" + end).orElse(":end=" + end);
       return Optional.of(
-          "apad,asetpts='if(isnan(PTS),"
+          shiftForward
+              + "apad,asetpts='if(isnan(PTS),"
               + start
               + "/TB+N/SR/TB,PTS)',atrim=start="
               + start
-              + ":end="
-              + end);
+              + endTrim);
     }
 
-    if (holdsLastFrame(request) && inputSeekPosition(request).isPositive()) {
-      return Optional.of("atrim=start=" + start);
+    return trimStart.map(_ -> shiftForward + "atrim=start=" + start + shiftBack);
+  }
+
+  // Where an attempt that encodes video from a later segment trims its encoded audio: at the first
+  // segment's start, between the shifts that align the encoder's frames on it, or, for an encoder
+  // whose frames the worker does not know, where the audio's reach back from that start ends.
+  private static Optional<Duration> audioTrimStart(
+      Optional<AudioFrames> frames, TranscodeRequest request) {
+    var firstSegmentStart = firstSegmentStartOfAnEncode(request);
+    if (frames.isPresent()) {
+      return firstSegmentStart;
     }
 
-    return Optional.empty();
+    return firstSegmentStart.map(start -> start.minus(audioReach(request)));
+  }
+
+  // The encoder's first frame without priming starts on the first segment's start when its input
+  // starts the frame's lead, plus whole frames, before that start. The trim between the two shifts
+  // cuts the input there, at a time that depends on the sample rate the encoder takes, and so
+  // follows the conversion to that rate. Each shift is a whole number of ticks, so that the two
+  // cancel. The whole frames reach back to where the demuxer has delivered audio: the seek's
+  // target, when a seek without the server's keyframe position lands on a keyframe at or before it,
+  // or a second after the server's keyframe position, and no more than one segment period. Every
+  // frame from the first segment's start on then starts where the attempt that encodes from the
+  // start writes one, give or take less than a frame, and with no gap. The expressions are quoted,
+  // as a FLAC frame's holds commas. Empty for an encoder whose frames the worker does not know.
+  private static Optional<String> frameAlignedShift(
+      Optional<AudioFrames> frames, TranscodeRequest request) {
+    var seconds = seekArgument(audioReach(request));
+    return frames.map(
+        encoderFrames ->
+            "round(("
+                + encoderFrames.lead()
+                + "+floor("
+                + seconds
+                + "*SR/("
+                + encoderFrames.samples()
+                + "))*("
+                + encoderFrames.samples()
+                + "))/SR/TB)");
+  }
+
+  private static Optional<AudioFrames> framesOf(String encoder) {
+    return Optional.ofNullable(AUDIO_ENCODER_FRAMES.get(encoder));
+  }
+
+  // A named layout's encode runs libopus for Opus, and FLAC frames of the size its options set.
+  private static Optional<AudioFrames> framesOf(AudioEncodeOptions options) {
+    var frames = framesOf(options.encoder());
+    var frameSize = options.frameSize();
+    if (frameSize.isEmpty()) {
+      return frames;
+    }
+
+    return frames.map(
+        encoderFrames ->
+            new AudioFrames(String.valueOf(frameSize.getAsInt()), encoderFrames.lead()));
+  }
+
+  // How far before the first segment's start an encoded replacement attempt's audio starts: at
+  // most one segment period, so that the audio the producer discards before the first picture
+  // stays small however far back the server's keyframe lies. An attempt that holds the last frame
+  // encodes its video from its seek, and its audio reaches back as far, so that the mp4 muxer holds
+  // back no pictures until the audio's first packet.
+  private static Duration audioReach(TranscodeRequest request) {
+    var firstSegmentStart = firstSegmentStartOfAnEncode(request).orElseThrow();
+    var reach = firstSegmentStart.minus(inputSeekPosition(request));
+    if (request.seekPosition().isPresent()) {
+      reach = reach.minus(AUDIO_AFTER_THE_KEYFRAME);
+    }
+
+    if (reach.isNegative()) {
+      return Duration.ZERO;
+    }
+
+    var period = Duration.ofSeconds(request.targetSegmentDuration());
+    if (reach.compareTo(period) > 0 && !holdsLastFrame(request)) {
+      return period;
+    }
+
+    return reach;
   }
 
   // Empty for an encoder not listed: FFmpeg then converts the padded audio before the encoder.
@@ -646,12 +823,31 @@ public class FfmpegCommandBuilder {
     }
   }
 
-  private static List<String> copiedAudioArgs(String codec) {
+  // FFmpeg expressions of the sample rate SR.
+  private record AudioFrames(String samples, String lead) {}
+
+  private static List<String> copiedAudioArgs(String codec, Optional<Duration> start) {
     var args = new ArrayList<>(List.of("-c:a", "copy"));
+    var filters = new ArrayList<String>();
+    // The noise filter drops each packet whose expression is not zero. It sees the packets on the
+    // attempt's timeline, after -start_at_zero, where -copypriorss would compare them with the seek
+    // less the source's start time. Register 0 counts the keyframe packets at or after the start,
+    // so the copy starts at a keyframe packet, as FFmpeg's own copy does: a TrueHD copy builds its
+    // dmlp box from its first packet, which must be a major sync. Every packet of the other copied
+    // codecs is a keyframe. The filter runs first, so that the AAC filter takes its configuration
+    // from the first packet kept.
+    start.ifPresent(
+        position ->
+            filters.add(
+                "noise=drop='eq(st(0,ld(0)+gte(pts*tb," + seekArgument(position) + ")*key),0)'"));
     // delay_moov stops the mp4 muxer from inserting this filter itself, and a copy of the ADTS
     // AAC that MPEG-TS sources carry fails without it. Raw AAC passes through unchanged.
     if ("aac".equals(codec)) {
-      args.addAll(List.of("-bsf:a", "aac_adtstoasc"));
+      filters.add("aac_adtstoasc");
+    }
+
+    if (!filters.isEmpty()) {
+      args.addAll(List.of("-bsf:a", String.join(",", filters)));
     }
 
     // The mp4 muxer writes a copied stream's bitrate into the initialization segment's esds and
@@ -663,8 +859,7 @@ public class FfmpegCommandBuilder {
     return List.copyOf(args);
   }
 
-  private void addScaleAndBitrateArgs(
-      List<String> cmd, TranscodeJob job, Optional<String> trimStart) {
+  private void addScaleAndBitrateArgs(List<String> cmd, TranscodeJob job, EncoderInput input) {
     var request = job.request();
     // Every variant is 8-bit 4:2:0: an encoder otherwise keeps a 10-bit or 4:4:4 source's format,
     // and few hardware decoders accept 10-bit H.264.
@@ -674,19 +869,18 @@ public class FfmpegCommandBuilder {
             : ":out_color_matrix=bt709:out_range=tv:out_primaries=bt709:out_transfer=bt709";
     // The deinterlacer runs first, so that no filter mixes the two fields of a frame. The held
     // picture is the last one the filters produce from the source, and no filter sees it again.
-    var heldFrame = heldFrameFilter(request, trimStart);
     var videoFilter =
         deinterlaceFilter(job)
-            + trimStart
-                .filter(_ -> heldFrame.isEmpty())
-                .map(start -> "trim=start=" + start + ",")
-                .orElse("")
+            + trimBeforeTheScale(request, input)
             + "scale=-2:"
             + request.height()
             + colorConversion
             + ","
             + videoFormat(job)
-            + heldFrame.map(filter -> "," + filter).orElse("");
+            + ","
+            + frameGridFilter(request)
+            + heldFrameFilter(request)
+            + trimAfterTheFrameGrid(request, input).map(trim -> ",trim=" + trim).orElse("");
     cmd.addAll(List.of("-vf", videoFilter));
     var bitrate = String.valueOf(request.bitrate());
     // SVT-AV1 supports a bitrate cap only in CRF mode. Its default CRF is 35.
@@ -703,28 +897,60 @@ public class FfmpegCommandBuilder {
             "-bufsize", String.valueOf(request.bitrate() * 2)));
   }
 
-  // fps puts the pictures on the output's frame grid, which -r then keeps, so that tpad repeats
-  // the last picture at the output frame rate. At the end of its input fps passes on the pictures
-  // it holds: rounding there drops the last picture when its slot on the grid is where the input
-  // ends, as for a picture whose duration the source does not give. fps counts presentation times
-  // in frames, so trim
-  // ends at the first frame of that grid at or after the advertised end, which a time in seconds
-  // would round to the nearest frame; a picture keeps its full duration. Empty unless the attempt
-  // holds the last frame.
-  private static Optional<String> heldFrameFilter(
-      TranscodeRequest request, Optional<String> trimStart) {
-    if (!holdsLastFrame(request)) {
+  // fps places each picture on the output's frame grid by its presentation time alone, and -r
+  // then keeps that grid. FFmpeg's constant-rate conversion behind -r also reads each frame's
+  // duration: an MP4 written by a B-frame encoder can give the picture after a gap between pictures
+  // the gap's duration, and that conversion then repeated the picture for the gap's length and
+  // dropped the source's pictures behind it. At the end of its input fps passes on the picture it
+  // holds: rounding there drops the last picture when its slot on the grid is where the input
+  // ends, as for a picture whose duration the source does not give.
+  private static String frameGridFilter(TranscodeRequest request) {
+    return "fps=" + request.outputFrameRate().orElseThrow().ffmpegArgument() + ":eof_action=pass";
+  }
+
+  // fps counts presentation times in frames, so the trim starts and ends on that grid: at the
+  // first frame at or after the encoding start, as the forced keyframe does at a segment's start,
+  // and at the first frame at or after the advertised end, after tpad has repeated the last picture
+  // up to it. A time in seconds would round to the nearest frame instead. The trim follows the
+  // hold, so that an attempt that starts after the video's last frame still has that frame to
+  // repeat.
+  private static Optional<String> trimAfterTheFrameGrid(
+      TranscodeRequest request, EncoderInput input) {
+    var frameRate = request.outputFrameRate().orElseThrow();
+    var options = new ArrayList<String>();
+    encodingStart(request)
+        .ifPresent(start -> options.add("start_pts=" + frameRate.framesStartingBefore(start)));
+    if (holdsLastFrame(request) && trimsTheCopyAtZero(request, input)) {
+      options.add("start=0");
+    }
+
+    if (holdsLastFrame(request)) {
+      options.add(
+          "end_pts=" + frameRate.framesStartingBefore(request.advertisedEnd().orElseThrow()));
+    }
+
+    if (options.isEmpty()) {
       return Optional.empty();
     }
 
-    var frameRate = request.outputFrameRate().orElseThrow();
-    return Optional.of(
-        "fps="
-            + frameRate.ffmpegArgument()
-            + ":eof_action=pass,tpad=stop=-1:stop_mode=clone,trim="
-            + trimStart.map(start -> "start=" + start + ":").orElse("")
-            + "end_pts="
-            + frameRate.framesStartingBefore(request.advertisedEnd().orElseThrow()));
+    return Optional.of(String.join(":", options));
+  }
+
+  private static String trimBeforeTheScale(TranscodeRequest request, EncoderInput input) {
+    if (!trimsTheCopyAtZero(request, input) || holdsLastFrame(request)) {
+      return "";
+    }
+
+    return "trim=start=0,";
+  }
+
+  // tpad repeats the last picture at the output frame rate.
+  private static String heldFrameFilter(TranscodeRequest request) {
+    if (!holdsLastFrame(request)) {
+      return "";
+    }
+
+    return ",tpad=stop=-1:stop_mode=clone";
   }
 
   private static boolean holdsLastFrame(TranscodeRequest request) {
@@ -758,8 +984,8 @@ public class FfmpegCommandBuilder {
         };
   }
 
-  // The rate the frame-count GOP is computed from; without -fps_mode FFmpeg then emits the
-  // constant-rate frames the GOP counts, and -copyts keeps a seek's first timestamp.
+  // The rate the frame-count GOP is computed from. The fps filter already emits frames at this
+  // rate, -r without -fps_mode keeps them, and -copyts keeps a seek's first timestamp.
   private static void addFrameRateArgs(List<String> cmd, TranscodeRequest request) {
     cmd.addAll(List.of("-r:v:0", request.outputFrameRate().orElseThrow().ffmpegArgument()));
   }
@@ -955,9 +1181,22 @@ public class FfmpegCommandBuilder {
 
   private record ForcedKeyframes(@NonNull String times, boolean reachesLastBoundary) {}
 
-  /** What the encoding FFmpeg reads: the source, or the copy of it that the worker passes on. */
+  /**
+   * What the encoding FFmpeg reads its video from: the source, or the copy of the source's video
+   * that the worker passes on, beside the source, which it then reads as its second input.
+   */
   private enum EncoderInput {
-    SOURCE,
-    COPY_OF_THE_SOURCE
+    SOURCE(0),
+    COPY_OF_THE_SOURCE(1);
+
+    private final int sourceInputIndex;
+
+    EncoderInput(int sourceInputIndex) {
+      this.sourceInputIndex = sourceInputIndex;
+    }
+
+    int sourceInputIndex() {
+      return sourceInputIndex;
+    }
   }
 }
