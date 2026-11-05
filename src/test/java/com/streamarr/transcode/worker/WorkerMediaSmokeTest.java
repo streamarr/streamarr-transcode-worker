@@ -63,6 +63,7 @@ import build.buf.gen.streamarr.transcode.v1.VideoDynamicRange;
 import build.buf.gen.streamarr.transcode.v1.VideoMode;
 import build.buf.gen.streamarr.transcode.v1.WorkerRegistration;
 import build.buf.gen.streamarr.transcode.v1.WorkerSessionAccepted;
+import com.streamarr.transcode.engine.AnnexTwoMeter;
 import com.streamarr.transcode.engine.FfmpegCommandBuilder;
 import com.streamarr.transcode.engine.FfmpegTranscodeEngine;
 import com.streamarr.transcode.engine.ProcessBuilderLauncher;
@@ -109,6 +110,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -4168,6 +4170,616 @@ class WorkerMediaSmokeTest {
     runFfmpeg(arguments, source);
     generatedSeekableSources.add(source);
     return source;
+  }
+
+  // ADR 0050's downmix matrix: each source writes expressions into named channels of the seekable
+  // source's audio, and every other channel is silent.
+  private static final int MATRIX_SAMPLE_RATE = 48_000;
+  private static final int MATRIX_SOURCE_SECONDS = 6;
+  private static final int MATRIX_SEGMENT_SECONDS = 6;
+  // Every tone below completes whole cycles in this window, so each reading excludes the others.
+  private static final int MATRIX_READ_FROM = MATRIX_SAMPLE_RATE;
+  private static final int MATRIX_READ_LENGTH = 4 * MATRIX_SAMPLE_RATE;
+  private static final String DIALOGUE_TONE = "0.1*sin(2*PI*1000*t)";
+  private static final double DIALOGUE_SIDE_DB = 20 * Math.log10(0.1 * Math.sqrt(0.5));
+  private static final String LOUD_TONE = "0.501187*sin(2*PI*1000*t)";
+  // A quarter of the sample rate at 45°, so that every sample lies 3 dB below the tone's peak and
+  // a limiter that reads only samples lets the sum pass its ceiling between them.
+  private static final String INTERSAMPLE_LOUD_TONE = "0.501187*sin(2*PI*12000*t+PI/4)";
+  private static final String LFE_TONE = "0.1*sin(2*PI*50*t)";
+  private static final double LOSSY_TONE_TOLERANCE_DB = 0.5;
+  private static final double LOSSLESS_TONE_TOLERANCE_DB = 0.05;
+  // A measured result for this tone, not a bound: each lossy codec at 192 kb/s decoded it near −3
+  // dBTP, and a limiter that reads only samples let AAC through above 0 dBTP.
+  private static final double LOSSY_192K_CEILING_DBTP = -2.0;
+  // ADR 0050: the Annex 2 filter reads a FLAC or ALAC downmix no more than 0.01 dB above −1 dBTP.
+  private static final double LOSSLESS_CEILING_DBTP = -1.0 + 0.01;
+  private static final int MATRIX_SOURCE_SAMPLES = MATRIX_SOURCE_SECONDS * MATRIX_SAMPLE_RATE;
+  private static final int CLICK_POSITION = 120_017;
+  private static final int LAST_CLICK_POSITION = MATRIX_SOURCE_SAMPLES - 1;
+  private static final double CLICK_AMPLITUDE = 0.5;
+  private static final String CLICKS =
+      CLICK_AMPLITUDE + "*(eq(n," + CLICK_POSITION + ")+eq(n," + LAST_CLICK_POSITION + "))";
+  private static final String ONE_SIXTEEN_BIT_STEP = "1/32768";
+  private static final double MIX_LEVEL_TOLERANCE_DB = 0.1;
+  private static final Map<String, Integer> LEVEL_TONES =
+      Map.of("FL", 250, "FR", 350, "FC", 450, "SL", 550, "SR", 650);
+
+  /** A stereo or mono downmix in one codec, at the written depth when the job names one. */
+  record Downmix(String codec, String layout, OptionalInt bitDepth) {
+
+    static Downmix to(String codec, String layout) {
+      return new Downmix(codec, layout, OptionalInt.empty());
+    }
+
+    Downmix atBits(int depth) {
+      return new Downmix(codec, layout, OptionalInt.of(depth));
+    }
+
+    boolean isLossless() {
+      return "flac".equals(codec) || "alac".equals(codec);
+    }
+
+    AudioChannelLayout contractLayout() {
+      return "mono".equals(layout)
+          ? AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_MONO
+          : AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_STEREO;
+    }
+
+    @Override
+    public String toString() {
+      var depth = bitDepth.isPresent() ? " " + bitDepth.getAsInt() + "-bit" : "";
+      return codec + depth + " " + layout;
+    }
+  }
+
+  /**
+   * FLAC audio in the layout at the depth, whose named channels hold FFmpeg expressions of time
+   * {@code t} and sample number {@code n}.
+   */
+  @Builder
+  record MatrixSource(
+      String name, String layout, Map<String, String> channels, int bitDepth, int seconds) {}
+
+  private static MatrixSource.MatrixSourceBuilder matrixSource(String name, String layout) {
+    return MatrixSource.builder()
+        .name(name)
+        .layout(layout)
+        .bitDepth(24)
+        .seconds(MATRIX_SOURCE_SECONDS);
+  }
+
+  static Stream<Downmix> stereoDownmixes() {
+    return Stream.of(
+        Downmix.to("aac", "stereo"),
+        Downmix.to("ac3", "stereo"),
+        Downmix.to("eac3", "stereo"),
+        Downmix.to("flac", "stereo").atBits(16),
+        Downmix.to("alac", "stereo").atBits(16));
+  }
+
+  static Stream<Arguments> surroundSourcesAndStereoDownmixes() {
+    return Stream.of("5.1", "7.1")
+        .flatMap(layout -> stereoDownmixes().map(downmix -> Arguments.of(layout, downmix)));
+  }
+
+  @ParameterizedTest(name = "{0} to {1}")
+  @MethodSource("surroundSourcesAndStereoDownmixes")
+  @DisplayName(
+      "Should write the dialogue at -3 dB on each side when a downmix to stereo carries a centre"
+          + " tone")
+  void shouldWriteTheDialogueAtMinus3DbOnEachSideWhenADownmixToStereoCarriesACentreTone(
+      String layout, Downmix downmix) throws Exception {
+    var source =
+        matrixSourceFile(
+            matrixSource("dialogue-" + layout, layout)
+                .channels(Map.of("FC", DIALOGUE_TONE))
+                .build());
+
+    var delivered = decodedDownmix(source, downmix);
+
+    for (var side = 0; side < 2; side++) {
+      assertThat(decibels(toneAmplitude(delivered[side], 1000)))
+          .as("side %d of the dialogue, dBFS", side)
+          .isCloseTo(DIALOGUE_SIDE_DB, within(LOSSY_TONE_TOLERANCE_DB));
+    }
+  }
+
+  @ParameterizedTest(name = "{0} to {1}")
+  @MethodSource("surroundSourcesAndStereoDownmixes")
+  @DisplayName(
+      "Should decode no sample above full scale and hold the codec's ceiling when a downmix to"
+          + " stereo sums a -6 dBFS tone in every channel")
+  void shouldDecodeNoSampleAboveFullScaleAndHoldTheCodecsCeilingWhenADownmixSumsALoudTone(
+      String layout, Downmix downmix) throws Exception {
+    var source =
+        matrixSourceFile(
+            everyChannel("intersample-loud-" + layout, layout, INTERSAMPLE_LOUD_TONE).build());
+
+    var delivered = decodedDownmix(source, downmix);
+
+    var ceiling = downmix.isLossless() ? LOSSLESS_CEILING_DBTP : LOSSY_192K_CEILING_DBTP;
+    for (var side = 0; side < 2; side++) {
+      assertThat(samplePeak(delivered[side])).as("side %d's sample peak", side).isLessThan(1.0);
+      assertThat(AnnexTwoMeter.truePeakDb(delivered[side]))
+          .as("side %d's true peak, dBTP", side)
+          .isLessThan(ceiling);
+    }
+  }
+
+  @ParameterizedTest(name = "2.1 to {0}")
+  @MethodSource("stereoDownmixes")
+  @DisplayName(
+      "Should write the LFE tone at -3 dB on both sides when a downmix steps 2.1 to stereo")
+  void shouldWriteTheLfeToneAtMinus3DbOnBothSidesWhenADownmixSteps21ToStereo(Downmix downmix)
+      throws Exception {
+    var source =
+        matrixSourceFile(matrixSource("lfe-2.1", "2.1").channels(Map.of("LFE", LFE_TONE)).build());
+
+    var delivered = decodedDownmix(source, downmix);
+
+    var tolerance = downmix.isLossless() ? LOSSLESS_TONE_TOLERANCE_DB : LOSSY_TONE_TOLERANCE_DB;
+    for (var side = 0; side < 2; side++) {
+      assertThat(decibels(toneAmplitude(delivered[side], 50)))
+          .as("side %d of the LFE tone, dBFS", side)
+          .isCloseTo(DIALOGUE_SIDE_DB, within(tolerance));
+    }
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = {"flac", "alac"})
+  @DisplayName(
+      "Should keep the limited tone a sine when a 16-bit source's channels sum above full scale"
+          + " in the matrix")
+  void shouldKeepTheLimitedToneASineWhenA16BitSourcesChannelsSumAboveFullScaleInTheMatrix(
+      String codec) throws Exception {
+    var source =
+        matrixSourceFile(everyChannel("loud-16-bit", "5.1", LOUD_TONE).bitDepth(16).build());
+
+    var delivered = decodedDownmix(source, Downmix.to(codec, "stereo").atBits(16));
+
+    for (var side = 0; side < 2; side++) {
+      assertThat(decibels(residualBesideTone(delivered[side], 1000)))
+          .as("side %d's residual beside the limited tone, dB", side)
+          .isLessThan(-40.0);
+    }
+  }
+
+  @ParameterizedTest(name = "{0}-bit source")
+  @ValueSource(ints = {16, 24})
+  @DisplayName(
+      "Should dither the summed side when a 16-bit FLAC downmix writes a level between two steps")
+  void shouldDitherTheSummedSideWhenA16BitFlacDownmixWritesALevelBetweenTwoSteps(int bitDepth)
+      throws Exception {
+    var source =
+        matrixSourceFile(
+            matrixSource("one-step-surround-" + bitDepth, "5.1")
+                .channels(Map.of("BL", ONE_SIXTEEN_BIT_STEP))
+                .bitDepth(bitDepth)
+                .build());
+    var job = downmixJob(source, Downmix.to("flac", "stereo").atBits(16));
+
+    var delivered = deliveredMedia(job, "one-step-surround-" + bitDepth);
+
+    // 5.1 is FL FR FC LFE BL BR; the left side holds 0.7071 of one 16-bit step, which rounding
+    // writes as 1 in every sample and TPDF dither spreads around it.
+    var settled = 4_800;
+    var left = decodedChannels(delivered, 2)[0];
+    var steps = Arrays.stream(left, settled, left.length - settled).map(s -> s >> 16).toArray();
+    assertThat(Arrays.stream(steps).distinct().count()).as("distinct steps").isGreaterThan(2);
+    assertThat(Arrays.stream(steps).average().orElseThrow())
+        .as("mean step")
+        .isCloseTo(Math.sqrt(0.5), within(0.05));
+  }
+
+  static Stream<Downmix> clickDownmixes() {
+    return Stream.of(
+        Downmix.to("aac", "stereo"),
+        Downmix.to("ac3", "stereo"),
+        Downmix.to("eac3", "stereo"),
+        Downmix.to("flac", "stereo"),
+        Downmix.to("alac", "stereo"));
+  }
+
+  @ParameterizedTest(name = "5.1 to {0}")
+  @MethodSource("clickDownmixes")
+  @DisplayName(
+      "Should keep each centre click at its sample position, the source's last sample included,"
+          + " when a downmix steps 5.1 to stereo")
+  void shouldKeepEachCentreClickAtItsSamplePositionWhenADownmixSteps51ToStereo(Downmix downmix)
+      throws Exception {
+    var source =
+        matrixSourceFile(matrixSource("clicks-5.1", "5.1").channels(Map.of("FC", CLICKS)).build());
+
+    var delivered =
+        decodedFromMediaTimeZero(deliveredMedia(downmixJob(source, downmix), "clicks"), 2);
+
+    var halfway = MATRIX_SOURCE_SAMPLES / 2;
+    for (var side = 0; side < 2; side++) {
+      assertThat(peakPosition(delivered[side], 0, halfway))
+          .as("side %d's first click", side)
+          .isEqualTo(CLICK_POSITION);
+      assertThat(peakPosition(delivered[side], halfway, delivered[side].length))
+          .as("side %d's click on the source's last sample", side)
+          .isEqualTo(LAST_CLICK_POSITION);
+    }
+
+    // A lossy codec writes whole frames, so its last frame may run past the source's last sample.
+    if (!downmix.isLossless()) {
+      assertThat(delivered[0]).hasSizeGreaterThanOrEqualTo(MATRIX_SOURCE_SAMPLES);
+      return;
+    }
+
+    assertThat(delivered[0]).hasSize(MATRIX_SOURCE_SAMPLES);
+    for (var side = 0; side < 2; side++) {
+      assertThat(
+              new double[] {delivered[side][CLICK_POSITION], delivered[side][LAST_CLICK_POSITION]})
+          .as("side %d's clicks", side)
+          .containsExactly(
+              new double[] {CLICK_AMPLITUDE * Math.sqrt(0.5), CLICK_AMPLITUDE * Math.sqrt(0.5)},
+              within(1e-6));
+    }
+  }
+
+  static Stream<Arguments> signalledLevelsOutputsAndStarts() {
+    return Stream.of(
+            new SignalledLevels("ac3", 0.594604, 0.5),
+            new SignalledLevels("eac3", 0.594604, 0.5),
+            new SignalledLevels("eac3", 0.5, MINUS_3_DB_LEVEL))
+        .flatMap(
+            levels ->
+                Stream.of("stereo", "mono")
+                    .flatMap(
+                        layout ->
+                            Stream.of(0, REPLACEMENT_START_SEQUENCE_NUMBER)
+                                .map(start -> Arguments.of(levels, layout, start))));
+  }
+
+  private static final double MINUS_3_DB_LEVEL = 0.707107;
+
+  /**
+   * The Lo/Ro levels that an AC-3 or E-AC-3 track signals. FFmpeg's E-AC-3 encoder writes no centre
+   * or surround mix level from center_mixlev or surround_mixlev, so an E-AC-3 track signals them
+   * through its Lo/Ro levels.
+   */
+  record SignalledLevels(String codec, double centre, double surround) {
+
+    List<String> encoderOptions() {
+      var centreLevel = String.valueOf(centre);
+      var surroundLevel = String.valueOf(surround);
+      if ("ac3".equals(codec)) {
+        return List.of("-center_mixlev", centreLevel, "-surround_mixlev", surroundLevel);
+      }
+
+      return List.of(
+          "-dmix_mode", "loro", "-loro_cmixlev", centreLevel, "-loro_surmixlev", surroundLevel);
+    }
+
+    // Levels that differ from these in both the centre and the surrounds.
+    SignalledLevels others() {
+      return new SignalledLevels(codec, otherThan(centre), otherThan(surround));
+    }
+
+    private static double otherThan(double level) {
+      return Double.compare(level, MINUS_3_DB_LEVEL) == 0 ? 0.5 : MINUS_3_DB_LEVEL;
+    }
+
+    @Override
+    public String toString() {
+      return String.format(Locale.ROOT, "%s centre %.3f surround %.3f", codec, centre, surround);
+    }
+  }
+
+  @ParameterizedTest(name = "{0}, {1}, from segment {2}")
+  @MethodSource("signalledLevelsOutputsAndStarts")
+  @DisplayName(
+      "Should mix the centre and surrounds at the levels that the first frame signals when an"
+          + " attempt downmixes AC-3 or E-AC-3 from the start or from a seek")
+  void shouldMixTheCentreAndSurroundsAtTheSignalledLevelsWhenAnAttemptDownmixesFromAStartOrSeek(
+      SignalledLevels levels, String layout, int startSequenceNumber) throws Exception {
+    var source = signalledLevelsSource(levels);
+    var job = downmixJob(source, Downmix.to("flac", layout));
+    job.getExecutionBuilder()
+        .setMediaSegmentCount(SEEKABLE_SOURCE_SECONDS / MATRIX_SEGMENT_SECONDS)
+        .setStartSequenceNumber(startSequenceNumber);
+
+    var deliveredFile = deliveredMedia(job, "levels-" + layout + "-" + startSequenceNumber);
+
+    var decoder = List.of("-drc_scale", "0", "-target_level", "-31");
+    var sourceChannels = decodedFloatChannels(source, 6, decoder);
+    var outputChannels = "mono".equals(layout) ? 1 : 2;
+    var delivered = decodedFloatChannels(deliveredFile, outputChannels, List.of());
+    var expected = expectedLevelGains(levels, layout);
+    for (var output = 0; output < outputChannels; output++) {
+      var gains = toneGains(delivered[output], sourceChannels);
+      for (var speaker : LEVEL_TONES.keySet()) {
+        assertToneGain(
+            speaker + " in output channel " + output,
+            gains.get(speaker),
+            expected.get(output).getOrDefault(speaker, 0.0));
+      }
+    }
+  }
+
+  // Each source channel's tone in the output channel, over the same tone in the source channel.
+  private static Map<String, Double> toneGains(double[] output, double[][] sourceChannels) {
+    var sourceSpeakers = SpeakerLayout.named("5.1(side)").speakers();
+    var gains = new HashMap<String, Double>();
+    LEVEL_TONES.forEach(
+        (speaker, frequency) ->
+            gains.put(
+                speaker,
+                toneAmplitude(output, frequency)
+                    / toneAmplitude(
+                        sourceChannels[sourceSpeakers.indexOf(Speaker.valueOf(speaker))],
+                        frequency)));
+    return gains;
+  }
+
+  // A tone that the matrix leaves out of the channel must read at least 40 dB below its source.
+  private static void assertToneGain(String tone, double gain, double expectedGain) {
+    if (expectedGain == 0.0) {
+      assertThat(gain).as(tone).isLessThan(0.01);
+      return;
+    }
+
+    assertThat(decibels(gain))
+        .as("%s, dB", tone)
+        .isCloseTo(decibels(expectedGain), within(MIX_LEVEL_TOLERANCE_DB));
+  }
+
+  // ADR 0050's Lo/Ro matrix at the signalled levels; mono is 0.7071 × (left + right).
+  private static List<Map<String, Double>> expectedLevelGains(
+      SignalledLevels levels, String layout) {
+    var left = Map.of("FL", 1.0, "FC", levels.centre(), "SL", levels.surround());
+    var right = Map.of("FR", 1.0, "FC", levels.centre(), "SR", levels.surround());
+    if ("stereo".equals(layout)) {
+      return List.of(left, right);
+    }
+
+    var mono = new HashMap<String, Double>();
+    left.forEach((speaker, gain) -> mono.merge(speaker, Math.sqrt(0.5) * gain, Double::sum));
+    right.forEach((speaker, gain) -> mono.merge(speaker, Math.sqrt(0.5) * gain, Double::sum));
+    return List.of(mono);
+  }
+
+  // The seekable source's video, and an AC-3 or E-AC-3 5.1(side) track of 18 s that holds a tone
+  // of its own in each channel except the LFE. Its frames signal the levels up to the replacement
+  // attempt's segment and other levels from there on, so an attempt that read the levels where it
+  // seeks would mix differently from an attempt from the start.
+  private static synchronized Path signalledLevelsSource(SignalledLevels levels) throws Exception {
+    var name =
+        String.format(
+            Locale.ROOT, "%s-c%.3f-s%.3f", levels.codec(), levels.centre(), levels.surround());
+    var source = seekableSources.resolve("matrix-levels-" + name + ".mkv");
+    if (generatedSeekableSources.contains(source)) {
+      return source;
+    }
+
+    var tones = new HashMap<String, String>();
+    LEVEL_TONES.forEach(
+        (speaker, frequency) -> tones.put(speaker, "0.1*sin(2*PI*" + frequency + "*t)"));
+    var tonal =
+        matrixSourceFile(
+            matrixSource("level-tones", "5.1(side)")
+                .channels(tones)
+                .seconds(SEEKABLE_SOURCE_SECONDS)
+                .build());
+    var seek = String.valueOf(REPLACEMENT_START_SEQUENCE_NUMBER * MATRIX_SEGMENT_SECONDS);
+    var head = seekableSources.resolve(name + "-head." + levels.codec());
+    runFfmpeg(levelsEncode(List.of("-i", tonal.toString(), "-t", seek), levels), head);
+    var tail = seekableSources.resolve(name + "-tail." + levels.codec());
+    runFfmpeg(levelsEncode(List.of("-ss", seek, "-i", tonal.toString()), levels.others()), tail);
+    runFfmpeg(
+        List.of(
+            "-i",
+            tonal.toString(),
+            "-i",
+            "concat:" + head + "|" + tail,
+            "-map",
+            "0:v",
+            "-map",
+            "1:a",
+            "-c",
+            "copy"),
+        source);
+    generatedSeekableSources.add(source);
+    return source;
+  }
+
+  // The input's audio as a raw AC-3 or E-AC-3 stream whose frames signal the levels.
+  private static List<String> levelsEncode(List<String> input, SignalledLevels levels) {
+    var arguments = new ArrayList<>(input);
+    arguments.addAll(List.of("-map", "0:a", "-c:a", levels.codec(), "-b:a", "640k"));
+    arguments.addAll(levels.encoderOptions());
+    arguments.addAll(List.of("-f", levels.codec()));
+    return arguments;
+  }
+
+  private static MatrixSource.MatrixSourceBuilder everyChannel(
+      String name, String layout, String tone) {
+    var channels = new HashMap<String, String>();
+    SpeakerLayout.named(layout).speakers().forEach(s -> channels.put(s.name(), tone));
+    return matrixSource(name, layout).channels(channels);
+  }
+
+  private static synchronized Path matrixSourceFile(MatrixSource spec) throws Exception {
+    var source = seekableSources.resolve("matrix-" + spec.name() + ".mkv");
+    if (generatedSeekableSources.contains(source)) {
+      return source;
+    }
+
+    var speakers = SpeakerLayout.named(spec.layout()).speakers();
+    var arguments = new ArrayList<>(List.of("-f", "lavfi", "-i", "testsrc=size=64x36:rate=24"));
+    var joined = new StringBuilder();
+    for (var channel = 0; channel < speakers.size(); channel++) {
+      var expression = spec.channels().getOrDefault(speakers.get(channel).name(), "0");
+      arguments.addAll(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              "aevalsrc=exprs='" + expression + "':sample_rate=" + MATRIX_SAMPLE_RATE));
+      joined.append("[").append(channel + 1).append(":a]");
+    }
+
+    // Without a map, join places each mono input, whose one channel is FC, by that name first.
+    var map =
+        IntStream.range(0, speakers.size())
+            .mapToObj(channel -> channel + ".0-" + speakers.get(channel))
+            .collect(Collectors.joining("|"));
+    joined
+        .append("join=inputs=")
+        .append(speakers.size())
+        .append(":channel_layout=")
+        .append(spec.layout())
+        .append(":map=")
+        .append(map);
+    arguments.addAll(
+        List.of(
+            "-filter_complex",
+            joined + "[audio]",
+            "-map",
+            "0:v",
+            "-map",
+            "[audio]",
+            "-t",
+            String.valueOf(spec.seconds()),
+            "-c:v",
+            "libx264",
+            "-g",
+            "48",
+            "-c:a",
+            "flac",
+            "-sample_fmt",
+            spec.bitDepth() == 16 ? "s16" : "s32"));
+    runFfmpeg(arguments, source);
+    generatedSeekableSources.add(source);
+    return source;
+  }
+
+  private static VariantJob.Builder downmixJob(Path source, Downmix downmix) {
+    var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
+    var audio =
+        job.getDecisionBuilder()
+            .getAudioBuilder()
+            .setCodec(downmix.codec())
+            .setChannels(SpeakerLayout.named(downmix.layout()).channelCount())
+            .setChannelLayout(downmix.contractLayout())
+            .setBitrateBitsPerSecond(192_000);
+    downmix.bitDepth().ifPresent(audio::setOutputBitDepth);
+    job.getExecutionBuilder().setMediaSegmentCount(1);
+    return job;
+  }
+
+  // Every upload of the job, as one file.
+  private Path deliveredMedia(VariantJob.Builder job, String name) throws Exception {
+    var uploads = execute(engine(realCapabilities()), seekableSources, job.build());
+    var execution = job.getExecution();
+    assertThat(uploads.names())
+        .containsExactlyElementsOf(
+            Stream.concat(
+                    Stream.of("init.mp4"),
+                    IntStream.range(
+                            execution.getStartSequenceNumber(), execution.getMediaSegmentCount())
+                        .mapToObj(number -> "segment" + number + ".m4s"))
+                .toList());
+    var delivered = root.resolve(name + "-" + job.getDecision().getAudio().getCodec() + ".mp4");
+    Files.write(delivered, uploads.contentOf(uploads.names()));
+    return delivered;
+  }
+
+  private double[][] decodedDownmix(Path source, Downmix downmix) throws Exception {
+    var delivered = deliveredMedia(downmixJob(source, downmix), "downmix");
+    return decodedFloatChannels(
+        delivered, SpeakerLayout.named(downmix.layout()).channelCount(), List.of());
+  }
+
+  // Each channel of the file's first audio stream in 64-bit floating point, which keeps a decoded
+  // sample above full scale.
+  private double[][] decodedFloatChannels(Path file, int channels, List<String> decoderOptions)
+      throws Exception {
+    var arguments = new ArrayList<>(decoderOptions);
+    arguments.addAll(List.of("-i", file.toString(), "-map", "0:a:0"));
+    return decodedFloat(arguments, channels, file.getFileName() + ".f64");
+  }
+
+  // The decoded samples from media time zero on: the worker writes a lossy encoder's priming
+  // before time zero, which -copyts keeps there for atrim to remove.
+  private double[][] decodedFromMediaTimeZero(Path file, int channels) throws Exception {
+    return decodedFloat(
+        List.of("-copyts", "-i", file.toString(), "-map", "0:a:0", "-af", "atrim=start=0"),
+        channels,
+        file.getFileName() + ".from-zero.f64");
+  }
+
+  private double[][] decodedFloat(List<String> arguments, int channels, String name)
+      throws Exception {
+    var pcm = root.resolve(name);
+    var command = new ArrayList<>(arguments);
+    command.addAll(List.of("-c:a", "pcm_f64le", "-f", "f64le"));
+    runFfmpeg(command, pcm);
+    var samples =
+        ByteBuffer.wrap(Files.readAllBytes(pcm)).order(ByteOrder.LITTLE_ENDIAN).asDoubleBuffer();
+    var frames = samples.remaining() / channels;
+    var decoded = new double[channels][frames];
+    for (var frame = 0; frame < frames; frame++) {
+      for (var channel = 0; channel < channels; channel++) {
+        decoded[channel][frame] = samples.get();
+      }
+    }
+
+    return decoded;
+  }
+
+  // The tone's peak amplitude over the read window, from its in-phase and quadrature sums.
+  private static double toneAmplitude(double[] samples, int frequency) {
+    var fit = ToneFit.of(samples, frequency);
+    return Math.hypot(fit.cosine(), fit.sine());
+  }
+
+  // The RMS of the read window once the fitted tone is removed, over the tone's RMS.
+  private static double residualBesideTone(double[] samples, int frequency) {
+    var fit = ToneFit.of(samples, frequency);
+    var residual = 0.0;
+    for (var n = MATRIX_READ_FROM; n < MATRIX_READ_FROM + MATRIX_READ_LENGTH; n++) {
+      var phase = 2 * Math.PI * frequency * n / MATRIX_SAMPLE_RATE;
+      var difference = samples[n] - fit.cosine() * Math.cos(phase) - fit.sine() * Math.sin(phase);
+      residual += difference * difference;
+    }
+
+    var toneRms = Math.hypot(fit.cosine(), fit.sine()) * Math.sqrt(0.5);
+    return Math.sqrt(residual / MATRIX_READ_LENGTH) / toneRms;
+  }
+
+  private record ToneFit(double cosine, double sine) {
+
+    static ToneFit of(double[] samples, int frequency) {
+      assertThat(samples).hasSizeGreaterThanOrEqualTo(MATRIX_READ_FROM + MATRIX_READ_LENGTH);
+      var cosine = 0.0;
+      var sine = 0.0;
+      for (var n = MATRIX_READ_FROM; n < MATRIX_READ_FROM + MATRIX_READ_LENGTH; n++) {
+        var phase = 2 * Math.PI * frequency * n / MATRIX_SAMPLE_RATE;
+        cosine += samples[n] * Math.cos(phase);
+        sine += samples[n] * Math.sin(phase);
+      }
+
+      return new ToneFit(2 * cosine / MATRIX_READ_LENGTH, 2 * sine / MATRIX_READ_LENGTH);
+    }
+  }
+
+  private static double samplePeak(double[] samples) {
+    return Arrays.stream(samples).map(Math::abs).max().orElseThrow();
+  }
+
+  private static int peakPosition(double[] samples, int from, int to) {
+    return IntStream.range(from, to)
+        .reduce((a, b) -> Math.abs(samples[b]) > Math.abs(samples[a]) ? b : a)
+        .orElseThrow();
+  }
+
+  private static double decibels(double linear) {
+    return 20 * Math.log10(linear);
   }
 
   @Test
