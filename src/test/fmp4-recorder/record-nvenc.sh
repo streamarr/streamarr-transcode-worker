@@ -221,7 +221,8 @@ replaces=$replaces"
     -b:v "$bitrate" -maxrate "$bitrate" -bufsize "$((bitrate * 2))"
     -r:v:0 "$FRAME_RATE" -forced-idr 1 -force_key_frames:0 "$times" -g:v:0 "$gop" -keyint_min:v:0 "$gop"
     -f mp4 -movflags cmaf+delay_moov+skip_trailer+frag_keyframe+frag_discont
-    -frag_duration "$FRAGMENTATION_TARGET_US" pipe:1)
+    -frag_duration "$FRAGMENTATION_TARGET_US" pipe:1
+    -map 0:0 -c copy -copypriorss 1 -map_metadata -1 -map_chapters -1 -f framecrc -flush_packets 1 pipe:2)
 }
 
 VARIANTS="first replacement extended-first extended-replacement extended-missed"
@@ -471,7 +472,12 @@ fi
 for args in out/*.args; do
   name=\$(basename "\$args" .args)
   mapfile -t command < "\$args"
-  "\${command[@]}" > "out/\$name.fmp4" 2> "logs/\$name.log" || { echo "\$name failed:" >&2; tail -n 5 "logs/\$name.log" >&2; exit 4; }
+  # The log also holds the source's framecrc, which the worker's second output writes there.
+  "\${command[@]}" > "out/\$name.fmp4" 2> "logs/\$name.log" || {
+    echo "\$name failed:" >&2
+    grep -v -e '^#' -e '^[0-9]*,' "logs/\$name.log" | tail -n 5 >&2
+    exit 4
+  }
 done
 CONTAINER
 
