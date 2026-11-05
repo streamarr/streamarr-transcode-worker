@@ -40,6 +40,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -72,6 +73,7 @@ class TranscodeWorkerHardwareEncoderFailureTest {
   // Whether NVENC passes its test encode, which the worker runs at startup and while NVENC is
   // withdrawn.
   private final AtomicBoolean nvencPassesItsTestEncode = new AtomicBoolean(true);
+  private final AtomicInteger failedNvencTestEncodes = new AtomicInteger();
 
   @BeforeEach
   void setUp() throws Exception {
@@ -214,6 +216,8 @@ class TranscodeWorkerHardwareEncoderFailureTest {
       nvencPassesItsTestEncode.set(false);
       startVariant(connection, encodeJob());
       awaitEventCount(connection, EventCase.JOB_ATTEMPT_FAILED, 1);
+      var rechecked = failedNvencTestEncodes.get() + 2;
+      await().atMost(EVENT_LIMIT).until(() -> failedNvencTestEncodes.get() >= rechecked);
       var next = encodeJob();
 
       startVariant(connection, next);
@@ -268,6 +272,7 @@ class TranscodeWorkerHardwareEncoderFailureTest {
 
   private int testEncodeExitCode(List<String> arguments) {
     if (arguments.contains("h264_nvenc") && !nvencPassesItsTestEncode.get()) {
+      failedNvencTestEncodes.incrementAndGet();
       return 1;
     }
 
