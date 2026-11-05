@@ -273,11 +273,12 @@ public class TranscodeCapabilityService {
     }
 
     try {
-      // Match the command builder's CPU scaling path. Compiled encoders may need unavailable
-      // devices.
-      var process =
-          processFactory.start(
-              ffmpegReadingExitStatusOnly(
+      // Match the command builder's CPU scaling path and the B-frame and lookahead options every
+      // encode passes: an encoder opens only if the GPU supports them, and compiled encoders may
+      // need unavailable devices.
+      var arguments =
+          new ArrayList<>(
+              List.of(
                   "-nostdin",
                   "-v",
                   "quiet",
@@ -291,10 +292,11 @@ public class TranscodeCapabilityService {
                   "1",
                   "-an",
                   "-c:v",
-                  encoder,
-                  "-f",
-                  "null",
-                  "-"));
+                  encoder));
+      arguments.addAll(FfmpegCommandBuilder.frameTypeOptions(encoder));
+      arguments.addAll(List.of("-f", "null", "-"));
+      var process =
+          processFactory.start(ffmpegReadingExitStatusOnly(arguments.toArray(String[]::new)));
       try {
         return process.waitFor(10, TimeUnit.SECONDS) && process.exitValue() == 0;
       } finally {

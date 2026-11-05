@@ -1182,6 +1182,11 @@ public class FfmpegCommandBuilder {
     };
   }
 
+  /** The B-frame and lookahead options that every encode with the encoder passes. */
+  static List<String> frameTypeOptions(String encoder) {
+    return traitsOf(encoder).frameTypeOptions();
+  }
+
   /** Whether the command forces the job's codec profile, tier and level on the encoder. */
   static boolean forcesCodecProfile(String encoder) {
     return traitsOf(encoder).codecProfileForcing() != CodecProfileForcing.NONE;

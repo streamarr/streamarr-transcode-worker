@@ -374,6 +374,38 @@ class TranscodeCapabilityServiceTest {
   }
 
   @Test
+  @DisplayName(
+      "Should resolve libx265 when hevc_nvenc encodes a frame but refuses the B-frames and"
+          + " lookahead that every NVENC job passes")
+  void
+      shouldResolveLibx265WhenHevcNvencEncodesAFrameButRefusesTheBFramesAndLookaheadThatEveryNvencJobPasses() {
+    // A GPU whose HEVC encoder has no B-frames encodes a frame with the encoder's defaults, and
+    // FFmpeg refuses to open it with -bf 3.
+    var outputs =
+        Map.of(
+            "ffmpeg", createProcess("ffmpeg version 8.1.3", 0),
+            "hwaccels", createProcess("Hardware acceleration methods:\ncuda\n", 0),
+            "encoders",
+                createProcess(
+                    "V....D hevc_nvenc           NVIDIA NVENC hevc encoder (codec hevc)\n", 0));
+    var service =
+        new TranscodeCapabilityService(
+            "ffmpeg",
+            command -> {
+              if (command.command().contains("hevc_nvenc") && command.command().contains("-bf")) {
+                return createProcess("", 1);
+              }
+
+              return resolveProcess(command, outputs);
+            });
+
+    service.detectCapabilities();
+
+    assertThat(service.getHardwareEncodingCapability().encoders()).isEmpty();
+    assertThat(service.resolveEncoder("hevc")).map(EncoderBackend::encoder).contains("libx265");
+  }
+
+  @Test
   @DisplayName("Should detect NVENC capability when NVENC encoders are available")
   void shouldDetectNvencCapabilityWhenNvencEncodersAreAvailable() {
     var encoderOutput =

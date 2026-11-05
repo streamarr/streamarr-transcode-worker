@@ -297,7 +297,8 @@ gpu_hint() {
     *OpenEncodeSessionEx* | *"out of memory"*)
       printf 'a free NVENC session: the GPU refused one, so another process may hold every session the driver allows' ;;
     *"No capable devices"* | *"No NVENC capable devices"*)
-      printf 'an NVENC-capable GPU for this codec' ;;
+      # FFmpeg also says this when the GPU cannot take the B-frames or the lookahead.
+      printf 'an NVENC-capable GPU for this codec that takes -bf %s and -rc-lookahead %s' "$B_FRAMES" "$LOOKAHEAD_FRAMES" ;;
     *) printf 'unknown; see the output above' ;;
   esac
 }
@@ -453,7 +454,7 @@ GPU_INFO=$(head -n 1 "$WORK/gpu")
 for encoder in $ENCODERS; do
   if ! capture one-frame docker "${DOCKER_RUN[@]}" --entrypoint /cnb/lifecycle/launcher "$IMAGE" \
     ffmpeg -nostdin -hide_banner -v error -f lavfi -i color=size=320x240:rate=24 -frames:v 1 \
-    -c:v "$encoder" -f null -; then
+    -c:v "$encoder" -bf "$B_FRAMES" -rc-lookahead "$LOOKAHEAD_FRAMES" -f null -; then
     gpu_failed "a one-frame $encoder encode" "$(cat "$WORK/one-frame")"
   fi
 done
