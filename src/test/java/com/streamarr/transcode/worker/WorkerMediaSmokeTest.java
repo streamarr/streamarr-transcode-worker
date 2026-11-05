@@ -4539,7 +4539,11 @@ class WorkerMediaSmokeTest {
     }
   }
 
-  /** The tone of each source channel, by the name that FFmpeg gives the channel. */
+  /**
+   * The tone of each source channel, by the name that FFmpeg gives the channel. Every tone lies
+   * below 120 Hz, inside the low-frequency channel's band, so that a tone mixed into that channel
+   * reads there too.
+   */
   private enum ToneSet {
     // The rear pair shares one tone in opposite phase, so a fold of the pair into one channel
     // cancels it, and a swap of its sides reads negative. A matrix that mixes the pair's
@@ -4547,26 +4551,26 @@ class WorkerMediaSmokeTest {
     // so the cases that move a rear pair also run with the next set.
     REAR_PAIR_IN_OPPOSITE_PHASE(
         Map.of(
-            "FL", Tone.of(400),
-            "FR", Tone.of(600),
-            "FC", Tone.of(800),
+            "FL", Tone.of(60),
+            "FR", Tone.of(70),
+            "FC", Tone.of(80),
             "LFE", Tone.of(50),
-            "BC", Tone.of(1200),
-            "BL", Tone.of(1000),
-            "BR", Tone.inOppositePhase(1000),
-            "SL", Tone.of(1000),
-            "SR", Tone.inOppositePhase(1000))),
+            "BC", Tone.of(90),
+            "BL", Tone.of(100),
+            "BR", Tone.inOppositePhase(100),
+            "SL", Tone.of(100),
+            "SR", Tone.inOppositePhase(100))),
     OWN_TONE_IN_EACH_CHANNEL(
         Map.of(
-            "FL", Tone.of(400),
-            "FR", Tone.of(600),
-            "FC", Tone.of(800),
+            "FL", Tone.of(60),
+            "FR", Tone.of(70),
+            "FC", Tone.of(80),
             "LFE", Tone.of(50),
-            "BC", Tone.of(1200),
-            "BL", Tone.of(1000),
-            "BR", Tone.of(1100),
-            "SL", Tone.of(1300),
-            "SR", Tone.of(1400)));
+            "BC", Tone.of(90),
+            "BL", Tone.of(100),
+            "BR", Tone.of(105),
+            "SL", Tone.of(110),
+            "SR", Tone.of(115)));
 
     private final Map<String, Tone> tones;
 
