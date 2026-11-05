@@ -85,17 +85,18 @@ import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.grpc.stub.StreamObserver;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.OutputStream;
 import java.io.UncheckedIOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -120,7 +121,6 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -4750,6 +4750,7 @@ class WorkerMediaSmokeTest {
     private final int bytesPerWrite;
     private final ScheduledExecutorService writer =
         Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().daemon().factory());
+    private volatile FileChannel output;
 
     private PacedSourcePipe(Path pipe, int bytesPerSecond) throws Exception {
       var mkfifo = new ProcessBuilder("mkfifo", pipe.toString()).start();
@@ -4777,28 +4778,30 @@ class WorkerMediaSmokeTest {
       }
     }
 
-    // The first write opens the pipe, which waits until FFmpeg opens it to read.
+    // Opened for reading as well as writing, the pipe opens at once on Linux, even when FFmpeg
+    // never opens its end, and a write that waits on a full pipe ends when close() interrupts it.
     private void startWriting(byte[] source) {
+      try {
+        output = FileChannel.open(pipe, StandardOpenOption.READ, StandardOpenOption.WRITE);
+      } catch (IOException e) {
+        throw new UncheckedIOException(e);
+      }
+
       var written = new AtomicInteger();
-      var output = new AtomicReference<OutputStream>();
       writer.scheduleAtFixedRate(
-          () -> writeNext(source, written, output),
-          0,
-          1_000 / WRITES_PER_SECOND,
-          TimeUnit.MILLISECONDS);
+          () -> writeNext(source, written), 0, 1_000 / WRITES_PER_SECOND, TimeUnit.MILLISECONDS);
     }
 
-    private void writeNext(
-        byte[] source, AtomicInteger written, AtomicReference<OutputStream> output) {
+    private void writeNext(byte[] source, AtomicInteger written) {
       try {
-        if (output.get() == null) {
-          output.set(Files.newOutputStream(pipe));
+        var length = Math.min(bytesPerWrite, source.length - written.get());
+        var block = ByteBuffer.wrap(source, written.getAndAdd(length), length);
+        while (block.hasRemaining()) {
+          output.write(block);
         }
 
-        var length = Math.min(bytesPerWrite, source.length - written.get());
-        output.get().write(source, written.getAndAdd(length), length);
         if (written.get() == source.length) {
-          output.get().close();
+          output.close();
           writer.shutdown();
         }
       } catch (IOException e) {
@@ -4807,8 +4810,13 @@ class WorkerMediaSmokeTest {
     }
 
     @Override
-    public void close() {
+    public void close() throws Exception {
       writer.shutdownNow();
+      if (output != null) {
+        output.close();
+      }
+
+      assertThat(writer.awaitTermination(5, TimeUnit.SECONDS)).as("the writer stopped").isTrue();
     }
   }
 
