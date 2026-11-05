@@ -4407,8 +4407,7 @@ class WorkerMediaSmokeTest {
     var delivered = deliveredToneEncode(encode);
 
     assertTonesLandAtTheirGains(encode, delivered);
-    var output = SpeakerLayout.named("7.1");
-    assertThat(decodedChannels(delivered, 8)[output.speakers().indexOf(Speaker.LFE)])
+    assertThat(decodedChannelFromZero(delivered, "LFE"))
         .as("the added low-frequency channel")
         .containsOnly(0);
   }
@@ -4441,7 +4440,7 @@ class WorkerMediaSmokeTest {
     var delivered = deliveredToneEncode(encode);
 
     assertThat(aacChannelConfiguration(delivered))
-        .isEqualTo(SpeakerLayout.named(encode.outputLayout()).channelCount());
+        .isEqualTo(LAYOUT_CHANNELS.get(encode.outputLayout()).size());
   }
 
   static Stream<ToneEncode> aacToneEncodes() {
@@ -4480,6 +4479,27 @@ class WorkerMediaSmokeTest {
           Map.entry("5.1", AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_FIVE_POINT_ONE),
           Map.entry("5.1(side)", AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_FIVE_POINT_ONE_SIDE),
           Map.entry("7.1", AudioChannelLayout.AUDIO_CHANNEL_LAYOUT_SEVEN_POINT_ONE));
+
+  // The channels of each layout that these tests name, by the names that `ffmpeg -layouts` lists.
+  // The tests address every channel by its name, through join and pan, so this order does not
+  // matter and the worker's own channel order cannot hide a moved channel.
+  private static final Map<String, List<String>> LAYOUT_CHANNELS =
+      Map.ofEntries(
+          Map.entry("stereo", List.of("FL", "FR")),
+          Map.entry("2.1", List.of("FL", "FR", "LFE")),
+          Map.entry("3.0", List.of("FL", "FR", "FC")),
+          Map.entry("3.0(back)", List.of("FL", "FR", "BC")),
+          Map.entry("3.1", List.of("FL", "FR", "FC", "LFE")),
+          Map.entry("4.0", List.of("FL", "FR", "FC", "BC")),
+          Map.entry("quad", List.of("FL", "FR", "BL", "BR")),
+          Map.entry("quad(side)", List.of("FL", "FR", "SL", "SR")),
+          Map.entry("5.0", List.of("FL", "FR", "FC", "BL", "BR")),
+          Map.entry("5.0(side)", List.of("FL", "FR", "FC", "SL", "SR")),
+          Map.entry("5.1", List.of("FL", "FR", "FC", "LFE", "BL", "BR")),
+          Map.entry("5.1(side)", List.of("FL", "FR", "FC", "LFE", "SL", "SR")),
+          Map.entry("6.1", List.of("FL", "FR", "FC", "LFE", "BC", "SL", "SR")),
+          Map.entry("7.0", List.of("FL", "FR", "FC", "BL", "BR", "SL", "SR")),
+          Map.entry("7.1", List.of("FL", "FR", "FC", "LFE", "BL", "BR", "SL", "SR")));
 
   // ADR 0050's stereo matrix of each 3- and 4-channel layout that some codec does not carry: the
   // centre, a surround and, without surrounds, the low-frequency channel each mix into their side
@@ -4584,8 +4604,8 @@ class WorkerMediaSmokeTest {
   }
 
   private static List<Route> keptRoutes(String layout) {
-    return SpeakerLayout.named(layout).speakers().stream()
-        .map(speaker -> route(speaker.name(), speaker.name(), 1.0))
+    return LAYOUT_CHANNELS.get(layout).stream()
+        .map(channel -> route(channel, channel, 1.0))
         .toList();
   }
 
@@ -4671,7 +4691,7 @@ class WorkerMediaSmokeTest {
   // channel in AC-3's and E-AC-3's layouts, and its back channel in AAC's and Opus's.
   private static String surroundOf(String layout, String side) {
     var sideSurround = "S" + side;
-    if (SpeakerLayout.named(layout).has(Speaker.valueOf(sideSurround))) {
+    if (LAYOUT_CHANNELS.get(layout).contains(sideSurround)) {
       return sideSurround;
     }
 
@@ -4683,11 +4703,10 @@ class WorkerMediaSmokeTest {
   private Path deliveredToneEncode(ToneEncode encode) throws Exception {
     var source = tonedSource(encode.sourceLayout(), encode.tones());
     var job = seekableSourceJob(source, TranscodeMode.TRANSCODE_MODE_AUDIO_TRANSCODE);
-    var output = SpeakerLayout.named(encode.outputLayout());
     job.getDecisionBuilder()
         .getAudioBuilder()
         .setCodec(encode.codec())
-        .setChannels(output.channelCount())
+        .setChannels(LAYOUT_CHANNELS.get(encode.outputLayout()).size())
         .setBitrateBitsPerSecond(384_000)
         .setChannelLayout(CONTRACT_LAYOUTS.get(encode.outputLayout()));
     job.getExecutionBuilder().setMediaSegmentCount(1);
@@ -4702,7 +4721,6 @@ class WorkerMediaSmokeTest {
   // The file decodes in the expected layout, and each source tone reads in each output channel at
   // the sum of its routes' gains within 1 dB, in the source's phase, or not at all.
   private void assertTonesLandAtTheirGains(ToneEncode encode, Path delivered) throws Exception {
-    var output = SpeakerLayout.named(encode.decodedLayout());
     // ffprobe's CSV ends an AC-3 or E-AC-3 stream's fields with an empty one.
     assertThat(
             ffprobe(
@@ -4710,23 +4728,22 @@ class WorkerMediaSmokeTest {
                     delivered)
                 .split(",")[0])
         .as("decoded layout")
-        .isEqualTo(output.name());
+        .isEqualTo(encode.decodedLayout());
     var tones = encode.tones().tones;
     var frequencies =
-        SpeakerLayout.named(encode.sourceLayout()).speakers().stream()
-            .map(speaker -> tones.get(speaker.name()).frequency())
+        LAYOUT_CHANNELS.get(encode.sourceLayout()).stream()
+            .map(channel -> tones.get(channel).frequency())
             .distinct()
             .toList();
-    var channels = decodedChannelsFromZero(delivered, output.channelCount());
-    for (var index = 0; index < output.channelCount(); index++) {
-      var speaker = output.speakers().get(index).name();
+    for (var speaker : LAYOUT_CHANNELS.get(encode.decodedLayout())) {
+      var samples = decodedChannelFromZero(delivered, speaker);
       for (var frequency : frequencies) {
         var routes =
             encode.routes().stream()
                 .filter(route -> route.to().equals(speaker))
                 .filter(route -> tones.get(route.from()).frequency() == frequency)
                 .toList();
-        var read = toneAmplitude(channels[index], frequency);
+        var read = toneAmplitude(samples, frequency);
         var description = String.format(Locale.ROOT, "%d Hz in %s", frequency, speaker);
         if (routes.isEmpty()) {
           assertThat(Math.abs(read)).as(description).isLessThan(ABSENT_TONE_AMPLITUDE);
@@ -4744,12 +4761,12 @@ class WorkerMediaSmokeTest {
     }
   }
 
-  // Each channel of the file's first audio stream from media time zero, decoded to 32-bit samples
-  // in FFmpeg's order. The encoder's priming samples, which the worker writes before zero, are left
-  // out, so that the decoded samples line up with the source's. Without -copyts, FFmpeg would move
-  // the file's first sample to zero.
-  private int[][] decodedChannelsFromZero(Path file, int channels) throws Exception {
-    var pcm = root.resolve(file.getFileName() + ".from-zero.s32");
+  // The file's channel of FFmpeg's name, decoded to 32-bit samples from media time zero. The
+  // encoder's priming samples, which the worker writes before zero, are left out, so that the
+  // decoded samples line up with the source's. Without -copyts, FFmpeg would move the file's first
+  // sample to zero.
+  private int[] decodedChannelFromZero(Path file, String channel) throws Exception {
+    var pcm = root.resolve(file.getFileName() + "." + channel + ".s32");
     runFfmpeg(
         List.of(
             "-copyts",
@@ -4758,19 +4775,14 @@ class WorkerMediaSmokeTest {
             "-map",
             "0:a:0",
             "-af",
-            "atrim=start=0",
+            "atrim=start=0,pan=mono|c0=" + channel,
             "-f",
             "s32le"),
         pcm);
-    var samples = ByteBuffer.wrap(Files.readAllBytes(pcm)).order(ByteOrder.LITTLE_ENDIAN);
-    var frames = samples.remaining() / Integer.BYTES / channels;
-    var decoded = new int[channels][frames];
-    for (var frame = 0; frame < frames; frame++) {
-      for (var channel = 0; channel < channels; channel++) {
-        decoded[channel][frame] = samples.getInt();
-      }
-    }
-
+    var samples =
+        ByteBuffer.wrap(Files.readAllBytes(pcm)).order(ByteOrder.LITTLE_ENDIAN).asIntBuffer();
+    var decoded = new int[samples.remaining()];
+    samples.get(decoded);
     return decoded;
   }
 
@@ -4807,33 +4819,41 @@ class WorkerMediaSmokeTest {
       return source;
     }
 
-    var expressions =
-        SpeakerLayout.named(layout).speakers().stream()
-            .map(speaker -> tones.tones.get(speaker.name()))
-            .map(
-                tone ->
-                    String.format(
-                        Locale.ROOT, "%s*sin(2*PI*%d*t)", tone.amplitude(), tone.frequency()))
-            .collect(Collectors.joining("|"));
-    runFfmpeg(
+    // Each channel's tone joins the layout at the channel's name, not at a position.
+    var channels = LAYOUT_CHANNELS.get(layout);
+    var arguments = new ArrayList<>(List.of("-f", "lavfi", "-i", "testsrc=size=64x36:rate=24"));
+    var map = new ArrayList<String>();
+    for (var input = 0; input < channels.size(); input++) {
+      var tone = tones.tones.get(channels.get(input));
+      arguments.addAll(
+          List.of(
+              "-f",
+              "lavfi",
+              "-i",
+              String.format(
+                  Locale.ROOT,
+                  "aevalsrc=exprs=%s*sin(2*PI*%d*t):sample_rate=%d",
+                  tone.amplitude(),
+                  tone.frequency(),
+                  TONE_SAMPLE_RATE)));
+      map.add(input + ".0-" + channels.get(input));
+    }
+
+    var join =
+        "join=inputs=%d:channel_layout=%s:map=%s"
+            .formatted(channels.size(), layout, String.join("|", map));
+    arguments.addAll(
         List.of(
-            "-f",
-            "lavfi",
-            "-i",
-            "testsrc=size=64x36:rate=24",
-            "-f",
-            "lavfi",
-            "-i",
-            "aevalsrc=exprs="
-                + expressions
-                + ":channel_layout="
-                + layout
-                + ":sample_rate="
-                + TONE_SAMPLE_RATE,
+            "-filter_complex",
+            Stream.iterate(1, input -> input <= channels.size(), input -> input + 1)
+                    .map(input -> "[" + input + ":a]")
+                    .collect(Collectors.joining())
+                + join
+                + "[audio]",
             "-map",
             "0:v",
             "-map",
-            "1:a",
+            "[audio]",
             "-t",
             "6",
             "-c:v",
@@ -4843,8 +4863,8 @@ class WorkerMediaSmokeTest {
             "-c:a",
             "flac",
             "-sample_fmt",
-            "s32"),
-        source);
+            "s32"));
+    runFfmpeg(arguments, source);
     generatedSeekableSources.add(source);
     return source;
   }
