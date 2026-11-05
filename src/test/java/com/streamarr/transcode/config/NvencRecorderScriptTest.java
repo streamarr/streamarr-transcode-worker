@@ -17,7 +17,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 /**
  * Runs src/test/fmp4-recorder/record-nvenc.sh against scripted uname, node and docker executables,
- * so that its time limit and cleanup are checked without Docker or a GPU.
+ * so that its preflight, time limit and cleanup are checked without Docker or a GPU.
  */
 @Tag("UnitTest")
 @DisplayName("NVENC Recorder Script Tests")
@@ -110,36 +110,64 @@ class NvencRecorderScriptTest {
     assertPreviousResultsKept(results);
   }
 
+  @Test
+  @DisplayName(
+      "Should publish the analysis of the pinned Node image when the host's Node is another"
+          + " version")
+  void shouldPublishTheAnalysisOfThePinnedNodeImageWhenTheHostsNodeIsAnotherVersion()
+      throws Exception {
+    var bin = recordingBin(nodeVersionInTooling());
+    executable(
+        bin.resolve("node"),
+        """
+        case "$2" in
+          analyze) echo host > "$4/recordings.json" ;;
+          *) echo v26.11.1 ;;
+        esac
+        """);
+    var results = Files.createDirectory(temporaryDirectory.resolve("results"));
+
+    var status = runToTheEnd(bin, "--results-dir", results.toString());
+
+    assertThat(status).as("the recorder's exit status").isZero();
+    assertThat(Files.readString(results.resolve("recordings.json"))).isEqualTo("analysis\n");
+    var pinnedNodeImage = " node:" + nodeVersionInTooling() + "@sha256:";
+    assertThat(Files.readAllLines(temporaryDirectory.resolve("docker.log")))
+        .as("the Docker calls")
+        .anyMatch(call -> call.contains(pinnedNodeImage) && call.contains(" analyze "));
+  }
+
+  @Test
+  @DisplayName(
+      "Should skip with status 3 and record nothing when the pinned Node image holds another Node"
+          + " version than the tooling pin")
+  void
+      shouldSkipWithStatus3AndRecordNothingWhenThePinnedNodeImageHoldsAnotherNodeVersionThanTheToolingPin()
+          throws Exception {
+    var bin = recordingBin("24.0.0");
+    var results = Files.createDirectory(temporaryDirectory.resolve("results"));
+
+    var status = runToTheEnd(bin, "--results-dir", results.toString());
+
+    assertThat(status).as("the preflight's exit status").isEqualTo(3);
+    assertThat(Files.readAllLines(temporaryDirectory.resolve("docker.log")))
+        .as("the Docker calls")
+        .noneMatch(call -> call.contains("/work/record.sh") || call.contains(" analyze "));
+    try (var left = Files.list(results)) {
+      assertThat(left).as("what the recorder left in its results directory").isEmpty();
+    }
+  }
+
   /**
    * Runs the recorder to the point where it publishes, over previous results, with every other step
    * succeeding and the given mv, and returns the results directory. The recorder gets a symbolic
    * link to that directory, as --results-dir may name one.
    */
   private Path stopWhilePublishing(String mv) throws Exception {
-    var bin = Files.createDirectory(temporaryDirectory.resolve("bin"));
+    var bin = recordingBin(nodeVersionInTooling());
     var results = Files.createDirectory(temporaryDirectory.resolve("results"));
     Files.writeString(results.resolve("recordings.json"), "previous");
     Files.writeString(results.resolve("previous.init.mp4"), "previous");
-    executable(bin.resolve("uname"), "echo Linux");
-    executable(
-        bin.resolve("node"),
-        """
-        case "$2" in
-          analyze) echo replacement > "$4/recordings.json" ;;
-          *) echo v24.0.0 ;;
-        esac
-        """);
-    // Every Docker call succeeds; the recording run writes the FFmpeg version into its work mount.
-    executable(
-        bin.resolve("docker"),
-        """
-        [ "$1" = run ] || exit 0
-        for argument in "$@"; do
-          case "$argument" in
-            *:/work) echo "ffmpeg version 0" > "${argument%:/work}/ffmpeg-version" ;;
-          esac
-        done
-        """);
     executable(bin.resolve("mv"), mv);
 
     var link = Files.createSymbolicLink(temporaryDirectory.resolve("results-link"), results);
@@ -148,6 +176,40 @@ class NvencRecorderScriptTest {
 
     assertThat(status).as("the exit status of a stopped recorder").isEqualTo(124);
     return results;
+  }
+
+  /**
+   * A bin directory whose uname reports Linux and whose docker logs every call and succeeds: the
+   * pinned Node image reports that Node version, the recording run writes the FFmpeg version into
+   * its work mount, and the analysis writes its results file there.
+   */
+  private Path recordingBin(String nodeVersion) throws IOException {
+    var bin = Files.createDirectory(temporaryDirectory.resolve("bin"));
+    var dockerLog = temporaryDirectory.resolve("docker.log");
+    executable(bin.resolve("uname"), "echo Linux");
+    executable(
+        bin.resolve("docker"),
+        """
+        echo "$*" >> '%s'
+        [ "$1" = run ] || exit 0
+        work=""
+        for argument in "$@"; do
+          case "$argument" in
+            *:/work) work=${argument%%:/work} ;;
+          esac
+        done
+        case " $* " in
+          *" node --version "*) echo v%s ;;
+          *" analyze "*) echo analysis > "$work/results/recordings.json" ;;
+          *) [ -z "$work" ] || echo "ffmpeg version 0" > "$work/ffmpeg-version" ;;
+        esac
+        """
+            .formatted(dockerLog, nodeVersion));
+    return bin;
+  }
+
+  private static String nodeVersionInTooling() throws IOException {
+    return Files.readString(Path.of("buildpacks", "ffmpeg", ".nvmrc")).strip();
   }
 
   private static void assertPreviousResultsKept(Path results) throws IOException {
@@ -167,7 +229,6 @@ class NvencRecorderScriptTest {
     var dockerLog = temporaryDirectory.resolve("docker.log");
     var results = Files.createDirectory(temporaryDirectory.resolve("results"));
     executable(bin.resolve("uname"), "echo Linux");
-    executable(bin.resolve("node"), "echo v24.0.0");
     executable(
         bin.resolve("docker"), String.join("\n", "echo \"$*\" >> '" + dockerLog + "'", docker));
 

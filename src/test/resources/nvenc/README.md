@@ -8,7 +8,9 @@ recordings are skipped.
 ## Recording
 
 The recordings need an NVIDIA GPU host: Linux, an NVIDIA GPU, its driver, the NVIDIA Container
-Toolkit, Docker, and Node (the major in `buildpacks/ffmpeg/.nvmrc`). From the repository root:
+Toolkit and Docker. The analysis runs in a digest-pinned `node:24.20.0` image, so the host needs no
+Node; the preflight checks that the image holds the release in `buildpacks/ffmpeg/.nvmrc`. From the
+repository root:
 
 ```
 src/test/fmp4-recorder/record-nvenc.sh

@@ -33,6 +33,9 @@ REPOSITORY="$(cd "$HERE/../../.." && pwd)"
 DEFAULT_IMAGE='streamarr/streamarr-transcode-worker:0.1.0-SNAPSHOT@sha256:a11de4631250ce3bb120a734998ecb84bcd9d507a43a5aceb236e892908be481'
 DEFAULT_TIME_LIMIT_S=1200
 GPU_RUN_ARGS=(--gpus all -e "NVIDIA_DRIVER_CAPABILITIES=compute,video,utility")
+# The analysis runs in this image, which holds the Node release in buildpacks/ffmpeg/.nvmrc, so the
+# host needs no Node of its own.
+NODE_IMAGE='node:24.20.0@sha256:be23f54a88d34e8824c741b19b91064094f92c1c97b194144bfc8b50d67258e2'
 
 # The job every recording runs: 6 s slots, the worker's default 250 ms fragmentation target, a
 # 24000/1001 output frame rate and a 35 s source, which covers 6 slots. Its segment list starts the
@@ -74,8 +77,9 @@ Records h264_nvenc and hevc_nvenc under the worker's FFmpeg recipe on an NVIDIA 
 writes recordings.json and one initialization segment per recording into the results directory.
 Commit them to src/test/resources/nvenc; CI then derives every verdict again without FFmpeg.
 
-Needs: Linux, an NVIDIA GPU with its driver, the NVIDIA Container Toolkit, Docker, and Node
-$(node_major_wanted) (the major in buildpacks/ffmpeg/.nvmrc). Without them the preflight names the
+Needs: Linux, an NVIDIA GPU with its driver, the NVIDIA Container Toolkit and Docker. The analysis
+runs in $NODE_IMAGE,
+which must hold the Node release in buildpacks/ffmpeg/.nvmrc. Without them the preflight names the
 missing piece and exits with status 3.
 
 Flags:
@@ -99,10 +103,8 @@ die() {
   exit 2
 }
 
-node_major_wanted() {
-  local version
-  version=$(cat "$REPOSITORY/buildpacks/ffmpeg/.nvmrc")
-  printf '%s' "${version%%.*}"
+node_version_wanted() {
+  cat "$REPOSITORY/buildpacks/ffmpeg/.nvmrc"
 }
 
 IMAGE="${WORKER_IMAGE:-$DEFAULT_IMAGE}"
@@ -303,9 +305,6 @@ gpu_failed() {
 
 [[ "$(uname -s)" == Linux ]] || skip "this host runs $(uname -s); the recordings need Linux with an NVIDIA GPU"
 command -v docker >/dev/null 2>&1 || skip "Docker is not on PATH"
-command -v node >/dev/null 2>&1 || skip "Node $(node_major_wanted) is not on PATH (the analysis runs on the host)"
-NODE_MAJOR=$(node --version | sed 's/^v//; s/\..*//')
-[[ "$NODE_MAJOR" == "$(node_major_wanted)" ]] || skip "Node $(node_major_wanted) is needed, and node is version $NODE_MAJOR"
 
 # ---------------------------------------------------------------------------------------------
 # Work directory, time limit and cleanup, in place before the first Docker call
@@ -426,11 +425,12 @@ capture() {
 }
 
 # Every container: no network, no capabilities, no privilege gain, a read-only root filesystem
-# with a small /tmp, the GPU, the host user's ids so the files it writes stay the user's, and a
-# label so that cleanup finds exactly this run's containers.
-DOCKER_RUN=(run --rm --network none --cap-drop ALL --security-opt no-new-privileges
+# with a small /tmp, the host user's ids so the files it writes stay the user's, and a label so
+# that cleanup finds exactly this run's containers. The worker image's containers also get the GPU.
+CONTAINER_RUN=(run --rm --network none --cap-drop ALL --security-opt no-new-privileges
   --read-only --tmpfs "/tmp:rw,noexec,nosuid,size=64m" --label "streamarr.nvenc-recorder=$RUN_ID"
-  --user "$(id -u):$(id -g)" "${GPU_RUN_ARGS[@]}")
+  --user "$(id -u):$(id -g)")
+DOCKER_RUN=("${CONTAINER_RUN[@]}" "${GPU_RUN_ARGS[@]}")
 
 # ---------------------------------------------------------------------------------------------
 # GPU preflight
@@ -452,8 +452,16 @@ for encoder in $ENCODERS; do
     gpu_failed "a one-frame $encoder encode" "$(cat "$WORK/one-frame")"
   fi
 done
-printf 'preflight: GPU driver %s, compute capability %s; %s encode one frame\n' \
-  "${GPU_INFO%%,*}" "${GPU_INFO#*, }" "${ENCODERS// /, }"
+
+capture node-image docker image inspect "$NODE_IMAGE" || capture node-image docker pull "$NODE_IMAGE" ||
+  skip "cannot pull $NODE_IMAGE"
+capture node-version docker "${CONTAINER_RUN[@]}" "$NODE_IMAGE" node --version ||
+  skip "Node does not run in $NODE_IMAGE"
+NODE_VERSION=$(head -n 1 "$WORK/node-version")
+[[ "$NODE_VERSION" == "v$(node_version_wanted)" ]] ||
+  skip "$NODE_IMAGE holds Node $NODE_VERSION, and buildpacks/ffmpeg/.nvmrc names $(node_version_wanted)"
+printf 'preflight: GPU driver %s, compute capability %s; %s encode one frame; Node %s\n' \
+  "${GPU_INFO%%,*}" "${GPU_INFO#*, }" "${ENCODERS// /, }" "$NODE_VERSION"
 
 write_recording() {
   printf '%s\n' "${COMMAND[@]}" >"$WORK/out/$NAME.args"
@@ -511,7 +519,8 @@ run_child docker "${DOCKER_RUN[@]}" -v "$WORK:/work" --entrypoint /cnb/lifecycle
 } >"$WORK/environment"
 
 mkdir "$WORK/results"
-run_child node "$HERE/nvenc-recordings.mjs" analyze "$WORK" "$WORK/results"
+run_child docker "${CONTAINER_RUN[@]}" -v "$HERE:/recorder:ro" -v "$WORK:/work" "$NODE_IMAGE" \
+  node /recorder/nvenc-recordings.mjs analyze /work /work/results
 # The old results move aside only once every recording and its analysis have succeeded, and
 # cleanup puts them back unless every new result is in place.
 mkdir "$WORK/previous"
